@@ -1,0 +1,9 @@
+# Build artefacts from `make`. The prebuilt hex under prebuilt/ is kept in
+# git deliberately so users can flash without a toolchain.
+*.o
+*.lst
+*.elf
+*.map
+*.lss
+*.bin
+/twiboot.hex
