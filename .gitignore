@@ -11,5 +11,7 @@
 *.o
 *.elf
 *.bin
-*.hex
+# Build-time .hex files live under .pio/ which is already ignored. The
+# UnitBootloader/prebuilt/ hex is intentionally checked in, so don't
+# blanket-ignore *.hex here.
 .claude/
