@@ -36,7 +36,10 @@ if errorlevel 1 goto :fail
 
 echo.
 echo === Done. Twiboot is installed on this Nano. ===
-echo     Continue with 2-flash-unit-firmware.bat to install the Unit sketch.
+echo     The Unit sketch is NOT flashed via ICSP — the master will push it
+echo     over I2C automatically on first boot. Set this Nano's DIP switches,
+echo     repeat for the next Nano, then run 2-flash-master.bat when all
+echo     Nanos are done.
 echo.
 pause
 exit /b 0

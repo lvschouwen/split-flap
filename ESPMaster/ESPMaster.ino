@@ -280,8 +280,17 @@ void setup() {
     loadValuesFromFileSystem();
 
     //Scan the I2C bus so we know how many units actually answered. Result is
-    //exposed via /settings so the UI can warn about a mismatch.
+    //exposed via /settings so the UI can warn about a mismatch. The probe
+    //also distinguishes bootloader-mode vs sketch-mode units so the next
+    //step can auto-install the bundled firmware on any blank units.
     probeI2cBus();
+
+    //If any unit is sitting in its twiboot bootloader with no app installed,
+    //stream the /unit-firmware.hex that shipped in the master's LittleFS to
+    //it. This is what makes a fresh build come alive with only one ICSP
+    //per Nano (twiboot only — the Unit sketch is delivered over I2C on
+    //first boot of the master).
+    autoInstallFirmwareToBootloaderUnits();
 
 #if OTA_ENABLE == true
     SerialPrintln("OTA is enabled! Yay!");

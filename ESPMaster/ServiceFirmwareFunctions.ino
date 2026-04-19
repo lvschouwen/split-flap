@@ -322,3 +322,77 @@ void abortFirmwareFlash(const String& reason) {
   SerialPrintln(reason);
   firmwareFlashInProgress = false;
 }
+
+// Streams a .hex file stored on LittleFS through the same
+// begin/feed/finish pipeline used by the HTTP upload endpoint. Used by
+// the auto-install-to-bootloaders path on boot.
+bool flashUnitFromLittleFS(uint8_t i2cAddress, const char* path, String& resultMsg) {
+  if (!LittleFS.exists(path)) {
+    resultMsg = String("Bundled firmware not found on LittleFS: ") + path;
+    return false;
+  }
+  File f = LittleFS.open(path, "r");
+  if (!f) {
+    resultMsg = String("Failed to open ") + path;
+    return false;
+  }
+
+  String beginError;
+  if (!beginFirmwareFlash(i2cAddress, beginError)) {
+    resultMsg = beginError;
+    f.close();
+    return false;
+  }
+
+  uint8_t buf[256];
+  while (f.available()) {
+    int n = f.readBytes((char*)buf, sizeof(buf));
+    if (n <= 0) break;
+    if (!feedFirmwareChunk(buf, (size_t)n)) {
+      resultMsg = String("Parse error during local flash: ") + flashErrorMsg;
+      abortFirmwareFlash("LittleFS firmware parse error");
+      f.close();
+      return false;
+    }
+  }
+  f.close();
+  return finishFirmwareFlash(resultMsg);
+}
+
+// Called from setup() after probeI2cBus() has populated detectedUnitStates.
+// For every unit the probe flagged as being in bootloader mode, stream the
+// bundled unit-firmware.hex from LittleFS. Best-effort: one failure doesn't
+// abort the others.
+extern int detectedUnitStates[];
+
+void autoInstallFirmwareToBootloaderUnits() {
+#if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
+  const char* path = "/unit-firmware.hex";
+  if (!LittleFS.exists(path)) {
+    SerialPrintln("No bundled /unit-firmware.hex on LittleFS; skipping auto-install.");
+    return;
+  }
+
+  int flashedCount = 0;
+  for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    if (detectedUnitStates[unitIndex] != 2 /* bootloader */) continue;
+
+    int i2cAddress = toI2cAddress(unitIndex);
+    SerialPrint("Auto-flashing unit at 0x");
+    SerialPrint(String(i2cAddress, HEX));
+    SerialPrintln(" from /unit-firmware.hex");
+
+    String result;
+    bool ok = flashUnitFromLittleFS((uint8_t)i2cAddress, path, result);
+    SerialPrint(ok ? "  [ok] " : "  [FAILED] ");
+    SerialPrintln(result);
+    if (ok) flashedCount++;
+  }
+
+  if (flashedCount > 0) {
+    SerialPrint("Auto-install complete: ");
+    SerialPrint(flashedCount);
+    SerialPrintln(" unit(s) updated.");
+  }
+#endif
+}

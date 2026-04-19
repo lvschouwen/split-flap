@@ -16,23 +16,30 @@ You need:
 
 ## Order of operations
 
+**Only one ICSP flash per Nano — twiboot only.** The Unit sketch is bundled inside the master's LittleFS and gets pushed to each Nano over I2C the first time the master sees a Nano sitting in bootloader mode with no sketch installed.
+
 For **each Nano**:
 
 1. Wire the Arduino-as-ISP programmer to the Nano's ICSP header.
 2. Set the Nano's DIP switches to its address (see table below).
-3. Edit `config.bat` on your first run — set `ISP_PORT=COMx` to your programmer's port.
-4. Run **`1-flash-unit-bootloader.bat`** — installs twiboot + sets fuses.
-5. Run **`2-flash-unit-firmware.bat`** — installs the Unit sketch.
-6. Disconnect the programmer. Move on to the next Nano.
+3. Run **`1-flash-unit-bootloader.bat`** — installs the patched twiboot (reads DIPs, stays alive on empty flash) and sets fuses. Script prompts for the COM port.
+4. Disconnect the programmer. Move on to the next Nano.
 
 After **all** Nanos are done:
 
-7. Wire the USB-to-UART adapter to the ESP-01 (GPIO0 → GND for programming, then to VCC for run mode after the flash).
-8. Edit `config.bat` — set `ESP_PORT=COMx` to the USB-to-UART adapter's port.
-9. Run **`3-flash-master.bat`** — writes master firmware + LittleFS web UI.
-10. Remove GPIO0-to-GND, power-cycle the ESP into normal mode.
-11. From your phone/laptop: connect to the WiFi network named **"Split-Flap-AP"** (no password). Your device should auto-open a captive portal; if not, browse to `http://192.168.4.1/`. Enter your home WiFi credentials.
-12. The master reboots onto your WiFi. Look up its IP on your router and browse to it for the dashboard.
+5. Wire the USB-to-UART adapter to the ESP-01 (GPIO0 → GND for programming, then to VCC / floating for run mode after the flash).
+6. Run **`2-flash-master.bat`** — writes master firmware + LittleFS (which contains the bundled `unit-firmware.hex`). Script prompts for the COM port.
+7. Remove GPIO0-to-GND, power-cycle the ESP into normal mode.
+8. Connect to the `Split-Flap-AP` WiFi network (no password). A captive portal should open; if not, browse to `http://192.168.4.1/`. Enter your home WiFi credentials.
+9. The master reboots onto your WiFi. Look up its IP on your router and browse to it for the dashboard.
+
+**On that first boot** with all Nanos powered up, the master:
+
+- Scans the I2C bus, logs which units it finds and whether each one is in bootloader or sketch mode.
+- For every unit in bootloader mode, it streams the bundled firmware over I2C automatically.
+- You can watch the whole thing scroll by in the **Log** section at the bottom of the dashboard.
+
+End state: every Nano is running the Unit sketch, responding at its DIP-derived I2C address, and the display is live. Future firmware updates happen through the **Unit Firmware (I2C OTA)** card on the dashboard.
 
 ## DIP switch addresses
 
@@ -85,15 +92,14 @@ Open the Log section. If it says `I2C scan complete. Detected 0/N expected units
 ```
 flashing/
 ├── README.md                          (this file)
-├── config.bat                         (you edit — COM ports, tool paths)
-├── 1-flash-unit-bootloader.bat        (per-Nano, one-time)
-├── 2-flash-unit-firmware.bat          (per-Nano, one-time)
-├── 3-flash-master.bat                 (one-time, after all Nanos done)
+├── config.bat                         (override tool paths if needed)
+├── 1-flash-unit-bootloader.bat        (per-Nano, one-time — twiboot only)
+├── 2-flash-master.bat                 (one-time, after all Nanos done)
 └── prebuilt/
-    ├── twiboot-atmega328p-16mhz.hex   (I2C bootloader for the Nanos)
-    ├── unit-firmware.hex              (Unit.ino compiled)
+    ├── twiboot-atmega328p-16mhz.hex   (DIP-aware I2C bootloader)
+    ├── unit-firmware.hex              (reference copy — master's LittleFS has its own)
     ├── master-firmware.bin            (ESPMaster.ino compiled)
-    └── master-littlefs.bin            (web UI filesystem image)
+    └── master-littlefs.bin            (web UI + bundled unit firmware)
 ```
 
-All four `.hex` / `.bin` files are built from the current `master` branch of the repo.
+The `unit-firmware.hex` in `prebuilt/` is the same file that's bundled inside `master-littlefs.bin`. It's kept as a standalone copy for reference / manual debugging only — you don't flash it via ICSP anymore.
