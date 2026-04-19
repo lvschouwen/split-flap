@@ -106,9 +106,17 @@ void showMessage(String message, int flapSpeed) {
   }
 
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    //Skip slots the boot-time bus probe did not find a sketch-running unit on.
+    //Writing to absent addresses causes isDisplayMoving() to stall and, more
+    //importantly, means users with fewer than UNITS_AMOUNT physical units
+    //no longer deadlock the event loop.
+    if (detectedUnitStates[unitIndex] != 1) {
+      continue;
+    }
+
     char currentLetter = message[unitIndex];
     int currentLetterPosition = translateLettertoInt(currentLetter);
-    
+
     SerialPrint("Unit Nr.: ");
     SerialPrint(unitIndex);
     SerialPrint(" Letter: ");
@@ -157,18 +165,19 @@ void writeToUnit(int unitIndex, int letter, int flapSpeed) {
   Wire.endTransmission(); //send values to unit
 }
 
-//Checks if unit in display is currently moving
+//Checks if unit in display is currently moving. Only queries units the boot
+//probe confirmed are running the sketch; a silent read (-1) from such a unit
+//is treated as "idle" rather than "sleeping" so the master never deadlocks
+//on a transiently unresponsive (or physically absent) unit.
 bool isDisplayMoving() {
-  //Request all units moving state and write to array
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    if (detectedUnitStates[unitIndex] != 1) {
+      displayState[unitIndex] = 0;
+      continue;
+    }
     displayState[unitIndex] = checkIfMoving(unitIndex);
     if (displayState[unitIndex] == 1) {
       SerialPrintln("A unit in the display is busy");
-      return true;
-    } 
-    //If unit is not available through i2c
-    else if (displayState[unitIndex] == -1) {
-      SerialPrintln("A unit in the display is sleeping");
       return true;
     }
   }
