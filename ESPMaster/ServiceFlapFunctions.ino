@@ -3,8 +3,22 @@
 // I2C_ADDRESS_BASE in Unit/Unit.ino.
 #define I2C_ADDRESS_BASE 1
 
+// Command opcodes understood by Unit.ino's receiveLetter(). Values >=
+// FLAP_AMOUNT are reserved for commands (valid letter indices are 0..44).
+// Must stay in sync with Unit/Unit.ino's CMD_* constants.
+#define UNIT_CMD_ENTER_BOOTLOADER 0x80
+
 static int toI2cAddress(int unitIndex) {
   return I2C_ADDRESS_BASE + unitIndex;
+}
+
+//Send the enter-bootloader opcode to a specific unit by I2C address. The
+//unit triggers a watchdog reset and comes up in twiboot listening on 0x29
+//for ~1 s. Returns Wire.endTransmission()'s status (0 = success).
+int rebootUnitToBootloader(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write(UNIT_CMD_ENTER_BOOTLOADER);
+  return Wire.endTransmission();
 }
 
 //Shows a new message on the display

@@ -10,6 +10,7 @@
 #include <Stepper.h>
 #include <EEPROM.h>
 #include <avr/sleep.h>
+#include <avr/wdt.h>
 
 // Pins of I2C adress switch
 #define ADRESSSW1 6
@@ -22,6 +23,21 @@
 // ESPMaster/ServiceFlapFunctions.ino defines the same constant and must stay
 // in sync.
 #define I2C_ADDRESS_BASE 1
+
+// EEPROM layout:
+//   0..1  int  calibration offset (legacy, set by EEPROM_Write_Offset sketch)
+//   2     byte identity magic — if == EEPROM_ID_MAGIC_VALUE, byte 3 is valid
+//   3     byte I2C address (1..126) assigned by the position wizard (future)
+// Slots 4+ reserved.
+#define EEPROM_ADDR_ID_MAGIC   2
+#define EEPROM_ADDR_I2C_ADDR   3
+#define EEPROM_ID_MAGIC_VALUE  0xA5
+
+// I2C "receive" namespace: the first byte is a letter index (0..FLAP_AMOUNT-1)
+// for normal display commands, or a command opcode (>= FLAP_AMOUNT) for
+// control commands. Keep opcodes away from letter indices to stay backwards
+// compatible with older masters that only know about letters.
+#define CMD_ENTER_BOOTLOADER   0x80
 
 //constants stepper
 #define STEPPERPIN1 11
@@ -55,12 +71,23 @@ int calOffset;       //Offset for calibration in steps, stored in EEPROM, gets r
 int receivedNumber = 0;
 int i2cAddress;
 
+// Set by the I2C receive handler when an enter-bootloader command arrives;
+// the main loop then triggers a watchdog reset (doing the reset from inside
+// the Wire ISR is risky — we want the I2C transaction to finish cleanly).
+volatile bool pendingBootloader = false;
+
 //sleep globals
 const unsigned long WAIT_TIME = 2000;    //wait time before sleep routine gets executed again in milliseconds
 unsigned long previousMillis = 0;       //stores last time sleep was interrupted
 
 //setup
 void setup() {
+  // Defensive: twiboot disables the watchdog at init3 before jumping here, but
+  // if anything (including our own enterBootloader path) left it armed, clear
+  // the reset flag and disable the WDT so we don't reset-loop.
+  MCUSR &= ~(1 << WDRF);
+  wdt_disable();
+
   // i2c adress switch
   pinMode(ADRESSSW1, INPUT_PULLUP);
   pinMode(ADRESSSW2, INPUT_PULLUP);
@@ -100,6 +127,19 @@ void setup() {
 }
 
 void loop() {
+  //If an enter-bootloader command arrived, give Wire a beat to finish any
+  //in-flight transaction, then let the watchdog reset us. Twiboot takes over
+  //from there and the master can push a new sketch over I2C.
+  if (pendingBootloader) {
+#ifdef SERIAL_ENABLE
+    Serial.println("Rebooting into twiboot via watchdog");
+    Serial.flush();
+#endif
+    delay(10);
+    wdt_enable(WDTO_15MS);
+    while (true) {}
+  }
+
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= WAIT_TIME) {
     byte old_ADCSRA = ADCSRA;
@@ -214,14 +254,29 @@ void rotateToLetter(int toLetter) {
 }
 
 void receiveLetter(int numBytes) {
-  int receiveArray[2]; //array for received bytes
+  if (numBytes <= 0) return;
 
-  for (int i = 0; i < numBytes; i++) {
-    receiveArray[i] = Wire.read();
+  int firstByte = Wire.read();
+  int remaining = numBytes - 1;
+
+  // First byte >= FLAP_AMOUNT is a command opcode, not a letter index.
+  if (firstByte >= AMOUNTFLAPS) {
+    while (remaining-- > 0) Wire.read();  // drain any args
+    switch ((uint8_t)firstByte) {
+      case CMD_ENTER_BOOTLOADER:
+        pendingBootloader = true;
+        break;
+      default:
+        break;  // unknown opcode -> ignore
+    }
+    return;
   }
-  //Write received bytes to correct variables
-  receivedNumber = receiveArray[0];
-  stepperSpeed = receiveArray[1];
+
+  // Normal letter + speed path (stays byte-compatible with older masters).
+  receivedNumber = firstByte;
+  if (remaining > 0) {
+    stepperSpeed = Wire.read();
+  }
 }
 
 void requestEvent() {
@@ -236,9 +291,20 @@ void requestEvent() {
   */
 }
 
-//returns the I2C address of the unit. DIP reads 0-15, offset by I2C_ADDRESS_BASE
-//so we skip the reserved 0x00 general-call address.
+//Returns the I2C address of the unit. EEPROM takes precedence (set by the
+//position wizard, once implemented) so the physical DIP switches don't need
+//to be unique after first setup; empty/invalid EEPROM falls back to
+//I2C_ADDRESS_BASE + DIP.
 int getaddress() {
+  uint8_t magic = EEPROM.read(EEPROM_ADDR_ID_MAGIC);
+  if (magic == EEPROM_ID_MAGIC_VALUE) {
+    uint8_t stored = EEPROM.read(EEPROM_ADDR_I2C_ADDR);
+    //Reject obviously bad values. Address 0 is reserved general-call, 127 is
+    //reserved too; anything else in 1..126 is plausible.
+    if (stored >= 1 && stored <= 126) {
+      return stored;
+    }
+  }
   int dipValue = !digitalRead(ADRESSSW4) + (!digitalRead(ADRESSSW3) * 2) + (!digitalRead(ADRESSSW2) * 4) + (!digitalRead(ADRESSSW1) * 8);
   return I2C_ADDRESS_BASE + dipValue;
 }
