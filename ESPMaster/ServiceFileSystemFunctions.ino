@@ -1,3 +1,5 @@
+#include "ESPMaster.h"
+
 //Initialize LittleFS
 void initialiseFileSystem() {
   if (!LittleFS.begin()) {

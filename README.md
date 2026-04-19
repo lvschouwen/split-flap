@@ -58,6 +58,39 @@ Also the code has been refactored to try facilitate easier development:
 
 3D-files here on [Printables](https://www.prusaprinters.org/prints/69464-split-flap-display)!
 
+## Building the firmware
+
+The project is built with [PlatformIO](https://platformio.org/). You no longer need the Arduino IDE — `pio` handles dependencies, builds, and flashing from the command line.
+
+Install PlatformIO Core (once):
+
+```bash
+pip install -U platformio
+```
+
+Each of the three sketches has its own `platformio.ini` in its folder. From the folder, run:
+
+```bash
+pio run                   # build
+pio run -t upload         # flash firmware
+pio run -t uploadfs       # flash the LittleFS contents (ESPMaster only)
+pio device monitor        # serial monitor at 115200 baud
+```
+
+For the Unit and EEPROM_Write_Offset sketches, if upload fails because of the old bootloader on your Nano, use the `*_old_bootloader` env:
+
+```bash
+pio run -e unit_old_bootloader -t upload
+```
+
+Host-side unit tests for the ESPMaster string helpers live in `ESPMaster/test/` and run with:
+
+```bash
+cd ESPMaster && pio test -e native
+```
+
+If you'd rather stay with the Arduino IDE, the sketches are still compatible — each `*.ino` file sits next to its `platformio.ini` and opens as a normal sketch. The pinned library versions are documented in each `platformio.ini`.
+
 ## General
 
 The display's electronics use 1 x ESP01 (ESP8266) as the main hub and up to 16 Arduinos as receivers. The ESP handles the web interface and communicates to the units via I2C. Each unit is resposible for setting the zero position of the drum on startup and displaying any letter the main hub send its way.
@@ -79,7 +112,13 @@ Options to potentially get boards created for you:
 
 Each split-flap unit consists of an Arduino Nano mounted on a custom PCB. It controls a 28BYJ-48 stepper motor via a ULN2003 driver chip. The drum with the flaps is homed with a KY003 hall sensor and a magnet mounted to the drum.
 
-Upload the Arduino sketch `Unit.ino` in the unit folder to each unit's arduino nano. Before that set the offset with the `EEPROM_Write_Offset.ino` sketch.
+Flash each unit's Nano from the `Unit/` folder:
+
+```bash
+pio run -t upload
+```
+
+Before that, set the per-unit calibration offset by flashing `EEPROM_Write_Offset/` (see [Set Zero Position Offset](#set-zero-position-offset) below).
 
 Inside `Unit.ino`, there is a setting for testing the units so that a few letters are cycled through to ensure what is shown is what you expect. At the top of the file once you have opened the project, you will find a line that is commented out:
 
@@ -88,7 +127,7 @@ Inside `Unit.ino`, there is a setting for testing the units so that a few letter
 #define TEST_ENABLE    	// uncomment for test mode where the unit will cycle a series of test letters.
 ```
 
-> Note: If you experience any problems uploading the unit sketch, you may have to change your `Processor` to use the old bootloader, called `ATmega328p (Old Bootloader)`.
+> Note: If upload fails, your Nano may have the old bootloader. Use `pio run -e unit_old_bootloader -t upload` instead.
 
 Remove the comment characters to help with your testing for the next step of Setting the Zero Position Offset.
 
@@ -110,22 +149,9 @@ This is how my 10 units are set, 1 means switch is in the up-position:
 
 #### Pre-requisites
 
-To upload the sketch to the ESP you need to install a few things to your arduino IDE.
+Library versions are pinned in [`ESPMaster/platformio.ini`](./ESPMaster/platformio.ini) and installed automatically when you run `pio run`. You no longer need to install them manually.
 
-- Install the ESP8266 board to your Arduino IDE. You can follow [this tutorial](https://randomnerdtutorials.com/how-to-install-esp8266-board-arduino-ide/)
-- Install the arduino ESP8266 littleFS plugin to use the file system of the ESP, you can follow [this tutorial](https://randomnerdtutorials.com/install-esp8266-nodemcu-littlefs-arduino/)
-- Install the following libraries via Library Manager:
-  - [ArduinoJSON](https://github.com/bblanchon/ArduinoJson) - Version: 7.0.4
-  - [ESPAsyncWebSrv](https://github.com/dvarrel/ESPAsyncWebSrv) - Version: 1.2.7
-    - Dependencies which should be installed automatically:
-      - [ESPAsyncTCP](https://github.com/dvarrel/ESPAsyncTCP)
-      - [AsyncTCP](https://github.com/dvarrel/AsyncTCP)
-  - [NTPClient](https://github.com/arduino-libraries/NTPClient) - Version: 3.2.1
-  - [ezTime](https://github.com/ropg/ezTime) - Version: 0.8.3
-  - [LinkedList](https://github.com/ivanseidel/LinkedList) - Version: 1.3.3
-  - [WiFiManager](https://github.com/tzapu/WiFiManager) - Version: 2.0.17
-
-To upload sketches to the ESP8266 you can either use an [Arduino Uno](https://create.arduino.cc/projecthub/pratikdesai/how-to-program-esp8266-esp-01-module-with-arduino-uno-598166) or you can buy a dedicated programmer. It is highly recommend getting a programmer as it makes uploading programs onto the ESP8266 much faster.
+To flash the ESP8266 you can either use an [Arduino Uno](https://create.arduino.cc/projecthub/pratikdesai/how-to-program-esp8266-esp-01-module-with-arduino-uno-598166) as a programmer or buy a dedicated programmer. A dedicated programmer is much faster.
 
 > Note: Be wary of ESP8266 programmers that are available which allow USB connection to your PC which may not have programming abilities. Typically extra switches are available so that the ESP8266 can be put in programming mode, although you can modify the programmer through a simple solder job to allow it to enter programming mode. Examples can be found in the customer reviews of [Amazon](https://www.amazon.co.uk/gp/product/B078J7LDLY/ref=ppx_yo_dt_b_search_asin_title?ie=UTF8&th=1).
 
@@ -133,15 +159,13 @@ To upload sketches to the ESP8266 you can either use an [Arduino Uno](https://cr
 
 #### Uploading the Static Assets via LittleFS
 
-There are static files located [here](./ESPMaster/data/) in the `data` folder of ESPMaster which will need to be uploaded. These make up the website that will be accessible on your WiFi so you can update the Split-Flap display.
+The static files in [`ESPMaster/data/`](./ESPMaster/data/) make up the web interface. From the `ESPMaster/` folder:
 
-Open the sketch `ESPMaster.ino` in the `ESPMaster` folder, change your board to "Generic ESP8266 Module", choose the correct COM-port and click:
+```bash
+pio run -t uploadfs
+```
 
-> Tools -> ESP8266 LittleFS Data Upload
-
-This uploads the website onto the ESP8266's file system.
-
-**NOTE:** No sketch has been uploaded yet! Only the static files. At the time of writing, this will also only work on an older version of Arduino IDE < version 2. The latest Arduino IDE broke support for Plugins such as the LittleFS plugin.
+This uploads the website onto the ESP8266's file system. Sketch upload is a separate step (below).
 
 #### Updating Settings of the Sketch
 
@@ -205,13 +229,18 @@ Code has been added to be able to set a Static IP Address on device. To do this:
 
 #### Sketch Upload
 
-So far we've only uploaded static files to the ESP8266. You now need to `Upload` the sketch to the ESP8266. Click on Upload and the ESP8266 will be upadted with the sketch and you are done. Stick the ESP8266 onto the first unit's PCB and navigate to the IP-address the ESP8266 is getting assigned from your router.
+Once the LittleFS upload is done, flash the sketch itself from the `ESPMaster/` folder:
+
+```bash
+pio run -t upload
+```
+
+The ESP8266 will reboot running the new sketch. Stick it onto the first unit's PCB and navigate to the IP-address the ESP8266 is getting assigned from your router.
 
 ### Common Problems
 
-- If the ESP is not talking to the units correctly, check the `UNITSAMOUNT` in the `ESPMaster.ino`. The amount of units connected has to match.
-- ESP Serial debugging must be set to "false" for ESP01 to communicate to Nanos over I2C.
-- Ensure you upload the sketch and the LittleFS sketch upload to the ESP8266.
-- When the system is powered, your Hall Sensor should only light up when a magnet is nearby.
-- Ensure you are running an older version of Arduino IDE to be able to upload static files to the device. You will need a version prior to version 2.x.
+- If the ESP is not talking to the units correctly, check `UNITS_AMOUNT` in `ESPMaster/ESPMaster.ino`. It must match the number of physical units you have connected.
+- `SERIAL_ENABLE` must stay `false` for the ESP-01 to communicate with the Nanos over I2C (serial and I2C share the same pins on the ESP-01).
+- Remember to run both `pio run -t uploadfs` (static files) and `pio run -t upload` (sketch) on first setup.
+- When the system is powered, your hall sensor should only light up when a magnet is nearby.
 - User [@beroliv](https://github.com/beroliv) has reported having issues with WiFi connections. One solution they have proposed is soldering a wire to the antenna to be able to extend its range by creating an antenna. Here is the [link](https://www.stall.biz/project/verbesserte-wlan-konnektivitaet-mit-externen-antennen-fuer-wiffi-weatherman-und-andere-module-mit-esp8266/) (in German but Google Translate does a good job for other languages) they provided to detail the solution. Please take care when carrying out this solution. Thank you for the information [@beroliv](https://github.com/beroliv)!

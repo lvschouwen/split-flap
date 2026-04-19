@@ -87,6 +87,8 @@
 #include <WiFiUdp.h>
 #include <Wire.h>
 #include "Classes.h"
+#include "ESPMaster.h"
+#include "HelpersSerialHandling.h"
 #include "LittleFS.h"
 /* .------------------------------------------------------------------------------------. */
 /* |  ___           __ _                    _    _       ___     _   _   _              | */

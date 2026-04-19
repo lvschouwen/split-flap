@@ -1,0 +1,14 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Editor
+.vscode/
+.idea/
+
+# Generated
+*.o
+*.elf
+*.bin
+*.hex
