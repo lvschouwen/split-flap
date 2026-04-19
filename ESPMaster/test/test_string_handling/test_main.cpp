@@ -31,8 +31,9 @@ static void test_isNumber_rejects_letters() {
   TEST_ASSERT_FALSE(isNumber(String("abc")));
   TEST_ASSERT_FALSE(isNumber(String("12a")));
 }
-// NOTE: isNumber("") currently returns true — a bug tracked in issue #1.
-// The assertion for empty-string rejection will be re-added once #1 lands.
+static void test_isNumber_rejects_empty() {
+  TEST_ASSERT_FALSE(isNumber(String("")));
+}
 
 // convertSpeed: maps 1..100 -> MIN_SPEED..MAX_SPEED (1..12)
 static void test_convertSpeed_endpoints() {
@@ -82,11 +83,31 @@ static void test_centerString_odd_remainder() {
   TEST_ASSERT_EQUAL_STRING("   HEY    ", s.c_str());
 }
 
+// Overflow guard: a message longer than UNITS_AMOUNT must not spin the padding
+// loop forever (it used to, because `UNITS_AMOUNT - message.length()` wrapped
+// in unsigned arithmetic). It should truncate cleanly instead.
+static void test_centerString_longer_than_display() {
+  String s = centerString(String("ABCDEFGHIJKL"));
+  TEST_ASSERT_EQUAL_INT(UNITS_AMOUNT, (int)s.length());
+  TEST_ASSERT_EQUAL_STRING("ABCDEFGHIJ", s.c_str());
+}
+static void test_leftString_longer_than_display() {
+  String s = leftString(String("ABCDEFGHIJKL"));
+  TEST_ASSERT_EQUAL_INT(UNITS_AMOUNT, (int)s.length());
+  TEST_ASSERT_EQUAL_STRING("ABCDEFGHIJ", s.c_str());
+}
+static void test_rightString_longer_than_display() {
+  String s = rightString(String("ABCDEFGHIJKL"));
+  TEST_ASSERT_EQUAL_INT(UNITS_AMOUNT, (int)s.length());
+  TEST_ASSERT_EQUAL_STRING("ABCDEFGHIJ", s.c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_isNumber_accepts_positive_integer);
   RUN_TEST(test_isNumber_accepts_negative_integer);
   RUN_TEST(test_isNumber_rejects_letters);
+  RUN_TEST(test_isNumber_rejects_empty);
   RUN_TEST(test_convertSpeed_endpoints);
   RUN_TEST(test_createRepeatingString_length_matches_units);
   RUN_TEST(test_cleanString_uppercases);
@@ -94,5 +115,8 @@ int main(int, char**) {
   RUN_TEST(test_rightString_pads_left);
   RUN_TEST(test_centerString_even_padding);
   RUN_TEST(test_centerString_odd_remainder);
+  RUN_TEST(test_centerString_longer_than_display);
+  RUN_TEST(test_leftString_longer_than_display);
+  RUN_TEST(test_rightString_longer_than_display);
   return UNITY_END();
 }

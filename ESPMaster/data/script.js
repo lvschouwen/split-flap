@@ -288,7 +288,7 @@ function setCountdownDate(dateUnix) {
 		if (countdownDate >= currentDate) {
 			currentCountdownDate.value = convertDateToString(countdownDate);
 
-			if (countdownDate - currentDate < 24000) {
+			if (countdownDate - currentDate < 24 * 60 * 60 * 1000) {
 				currentCountdownDate.min = convertDateToString(nextDayDate);
 				return;
 			}
@@ -354,9 +354,9 @@ function showScheduledMessages(scheduledMessages) {
 	//Closest to being shown first
 	scheduledMessages = scheduledMessages.sort((a, b) => a.scheduledDateTimeUnix - b.scheduledDateTimeUnix);
 
-	for (var scheduledMessageIndex = 0; scheduledMessageIndex < scheduledMessages.length; scheduledMessageIndex++) {
-		var scheduledMessage = scheduledMessages[scheduledMessageIndex];
+	var container = document.getElementById("containerScheduledMessages");
 
+	scheduledMessages.forEach(function(scheduledMessage) {
 		//Create a container for a message
 		var messageElement = document.createElement("div");
 		messageElement.className = "message";
@@ -365,23 +365,34 @@ function showScheduledMessages(scheduledMessages) {
 		var timeElement = document.createElement("div");
 		timeElement.className = "time";
 		timeElement.innerText = new Date((scheduledMessage.scheduledDateTimeUnix * 1000) + (timezoneOffset * 60000)).toString().slice(0, -34);
-		
-		//Create a element to show the indefinite...ness...
-		var message = `<b>Message:</b> ${scheduledMessage.message.trim() == "" ? "<Blank>" : scheduledMessage.message}` 
-		var isIndefinitely = `<b>Shown Indefinitely:</b> ${scheduledMessage.showIndefinitely ? "Yes" : "No"}`;
 
-		//Create a element to show the text
+		//Create a element to show the text. Build via DOM + textContent so user
+		//message text can't inject HTML (previously interpolated into innerHTML).
 		var textElement = document.createElement("div");
 		textElement.className = "text";
-		textElement.innerHTML = `${message}<br>${isIndefinitely}`;
 
-		//Create a remove button
+		var messageLabel = document.createElement("b");
+		messageLabel.textContent = "Message:";
+		var displayMessage = scheduledMessage.message.trim() == "" ? "<Blank>" : scheduledMessage.message;
+		textElement.appendChild(messageLabel);
+		textElement.appendChild(document.createTextNode(" " + displayMessage));
+		textElement.appendChild(document.createElement("br"));
+
+		var indefiniteLabel = document.createElement("b");
+		indefiniteLabel.textContent = "Shown Indefinitely:";
+		textElement.appendChild(indefiniteLabel);
+		textElement.appendChild(document.createTextNode(" " + (scheduledMessage.showIndefinitely ? "Yes" : "No")));
+
+		//Create a remove button. Use addEventListener so message text isn't
+		//interpolated into an onclick attribute string.
 		var actionElement = document.createElement("div");
 		var actionButtonElement = document.createElement("span");
 		actionElement.className = "action";
 		actionButtonElement.className = "remove-button";
 		actionButtonElement.innerText = "Remove";
-		actionButtonElement.setAttribute('onclick', `deleteScheduledMessage(${scheduledMessage.scheduledDateTimeUnix}, '${scheduledMessage.message}')`);
+		actionButtonElement.addEventListener('click', function() {
+			deleteScheduledMessage(scheduledMessage.scheduledDateTimeUnix, scheduledMessage.message);
+		});
 		actionElement.appendChild(actionButtonElement);
 
 		//Add all the elements to the message
@@ -389,10 +400,8 @@ function showScheduledMessages(scheduledMessages) {
 		messageElement.appendChild(textElement);
 		messageElement.appendChild(actionElement);
 
-		//Append to the message container
-		var container = document.getElementById("containerScheduledMessages");
 		container.appendChild(messageElement);
-	}
+	});
 }
 
 function showContent() {

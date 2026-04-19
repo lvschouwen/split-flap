@@ -49,7 +49,7 @@ void initWiFi() {
 #else
   SerialPrintln("Setting up WiFi Direct");
 
-  if (wifiDirectSsid != "" && wifiDirectPassword != "") {
+  if (strlen(wifiDirectSsid) > 0 && strlen(wifiDirectPassword) > 0) {
     int maxAttemptsCount = 0;
     
 #if WIFI_STATIC_IP == true
