@@ -64,7 +64,26 @@ This writes `twiboot.hex` to flash and sets `LFUSE=0xFF`, `HFUSE=0xDC`, `EFUSE=0
 
 ### Option 2: Arduino-as-ISP
 
-Use a spare Arduino Uno/Nano as the programmer:
+Use a spare Arduino Uno/Nano as the programmer. Three steps before avrdude will work:
+
+**1. Upload the `ArduinoISP` sketch to the spare Arduino.** It ships with the Arduino IDE — **File → Examples → 11.ArduinoISP → ArduinoISP** — upload it normally via the spare's USB port. LED 9 should pulse (heartbeat) once it's running.
+
+**2. Add a 10 µF reset-disable capacitor.** On Uno/Nano, opening the USB-serial port auto-resets the board — right when avrdude needs the programmer to stay running. Prevent this with an electrolytic capacitor between **RESET and GND of the programmer** (not the target): `+` leg to RESET, `-` leg to GND. Install the cap *after* uploading ArduinoISP. Without it, avrdude usually fails on the first command with `not in sync`.
+
+**3. Wire the programmer to the target Nano's ICSP header:**
+
+| Programmer pin | Target pin |
+| -------------- | ---------- |
+| D11 (MOSI)     | MOSI       |
+| D12 (MISO)     | MISO       |
+| D13 (SCK)      | SCK        |
+| D10            | RESET      |
+| GND            | GND        |
+| 5V             | VCC        |
+
+The target's MOSI/MISO/SCK are available on the 6-pin ICSP header *or* on D11/D12/D13. Power the programmer via its own USB; the target draws 5 V through the wiring.
+
+**4. Run avrdude** (substitute your programmer's serial port):
 
 ```bash
 AVRDUDE_PROG="-c stk500v1 -P /dev/ttyACM0 -b 19200" make install
@@ -97,10 +116,7 @@ avrdude -c usbasp -p m328p -U lfuse:w:0xff:m -U hfuse:w:0xdc:m -U efuse:w:0xfd:m
 
 **Arduino-as-ISP on Windows:**
 
-1. In Arduino IDE: **File → Examples → 11.ArduinoISP → ArduinoISP**, upload to a spare Uno/Nano.
-2. Wire the programmer to the target Nano's ICSP header: MOSI↔MOSI, MISO↔MISO, SCK↔SCK, **pin 10 on the programmer → RESET on the target**, GND↔GND, 5V↔5V.
-3. Find the programmer's COM port in Device Manager.
-4. Run (substitute your port):
+Prep the programmer exactly as in [Option 2 above](#option-2-arduino-as-isp): upload the `ArduinoISP` sketch, add the 10 µF reset-disable cap, wire programmer-to-target per the pin table. Then find the programmer's COM port in Device Manager and run (substituting your port):
 
 ```
 avrdude -c stk500v1 -P COM4 -b 19200 -p m328p -U flash:w:UnitBootloader\prebuilt\twiboot-atmega328p-16mhz.hex
