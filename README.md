@@ -139,11 +139,22 @@ A simple sketch has been written to set the offset. Upload the `EEPROM_Write_Off
 
 #### Set Unit Address
 
-Every units address is set by a DIP switch. They need to be set ascending from zero in binary.
-This is how my 10 units are set, 1 means switch is in the up-position:
-| Unit 1 | Unit 2 | Unit 3 | Unit 4 | Unit 5 | Unit 6 | Unit 7 | Unit 8 | Unit 9 | Unit 10 |
-| ------ | ------ | ------ | ------ | ------ | ------ | ------ | ------ | ------ | ------- |
-| 0000   | 0001   | 0010   | 0011   | 0100   | 0101   | 0110   | 0111   | 1000   | 1001    |
+Every unit's address is set by a DIP switch. Set them ascending from zero in binary — the firmware offsets the DIP value by 1 before calling `Wire.begin()` so the first unit lands on I2C address `0x01` (I2C address `0x00` is the reserved general-call address and cannot be used).
+
+| Unit | DIP  | I2C address |
+| ---- | ---- | ----------- |
+| 1    | 0000 | 0x01        |
+| 2    | 0001 | 0x02        |
+| 3    | 0010 | 0x03        |
+| 4    | 0011 | 0x04        |
+| 5    | 0100 | 0x05        |
+| 6    | 0101 | 0x06        |
+| 7    | 0110 | 0x07        |
+| 8    | 0111 | 0x08        |
+| 9    | 1000 | 0x09        |
+| 10   | 1001 | 0x0A        |
+
+`1` means the switch is in the up position. The master scans the bus at boot and logs which addresses responded (viewable via `pio device monitor` when `SERIAL_ENABLE` is true on the master, or via the `/settings` endpoint).
 
 ### ESP01/ESP8266
 

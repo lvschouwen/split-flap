@@ -12,3 +12,4 @@
 *.elf
 *.bin
 *.hex
+.claude/
