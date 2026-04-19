@@ -341,7 +341,6 @@ void setup() {
       SerialPrintln("Request to Remove Scheduled Message Received");
       
       if (request->hasParam(PARAM_ID)) {
-        bool removedScheduledMessage = false;
         String idValue = request->getParam(PARAM_ID)->value();
 
         if (isNumber(idValue)) {
@@ -371,8 +370,9 @@ void setup() {
 
       bool submissionError = false;
       
-      long newMessageScheduleDateTimeUnixValue;
-      bool newMessageScheduleEnabledValue, newMessageScheduleShowIndefinitely;
+      long newMessageScheduleDateTimeUnixValue = 0;
+      bool newMessageScheduleEnabledValue = false;
+      bool newMessageScheduleShowIndefinitely = false;
       String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue, newCountdownToDateUnixValue;
       
       int params = request->params();
@@ -458,7 +458,7 @@ void setup() {
       //If there was an error, report back to check what has been input
       if (submissionError) {
         SerialPrintln("Finished Processing Request with Error");
-        request->redirect("/?invalid-submission=" + true);
+        request->redirect("/?invalid-submission=true");
       }
       else {
         SerialPrintln("Finished Processing Request Successfully");
@@ -529,8 +529,8 @@ void setup() {
       html += "<p>Open your Arduino IDE and select the new port in \"Tools\" menu and upload the your sketch as normal!</p>";
       html += "<p>After you have carried out your update, the system will automatically be rebooted. You can go to the main home page after this time by clicking the button below or going to '/'.</p>";
       html += "<p>You can take the system out of this mode by clicking the button to reboot below or going to '/reboot'.</p>";
-      html += "<p><a href=\"http://" + ip.toString() + "\")\">Home</a></p>";
-      html += "<p><a href=\"http://" + ip.toString() + "/reboot\")\">Reboot</a></p>";
+      html += "<p><a href=\"http://" + ip.toString() + "\">Home</a></p>";
+      html += "<p><a href=\"http://" + ip.toString() + "/reboot\">Reboot</a></p>";
       html += "</font>";
       html += "</div>";
 
@@ -541,7 +541,7 @@ void setup() {
         ArduinoOTA.setHostname("Split-Flap-OTA");
 
         //If there is a password set, disabled by default for ease
-        if (otaPassword != "") {
+        if (strlen(otaPassword) > 0) {
           ArduinoOTA.setPassword(otaPassword);
         }
         

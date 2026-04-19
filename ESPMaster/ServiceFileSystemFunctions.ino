@@ -50,11 +50,10 @@ String readFile(fs::FS &fs, const char * path, String defaultValue) {
     return String();
   }
 
-  String fileContent;
-  while (file.available()) {
-    fileContent = file.readStringUntil('\n');
-    break;
-  }
+  //readString pulls the whole file; readStringUntil('\n') would truncate
+  //multi-line blobs like the scheduled-messages JSON.
+  String fileContent = file.readString();
+  file.close();
   return fileContent;
 }
 
@@ -70,8 +69,10 @@ void writeFile(fs::FS &fs, const char * path, const char * message) {
   
   if (file.print(message)) {
     SerialPrintln("- File written");
-  } 
+  }
   else {
     SerialPrintln("- Write failed");
   }
+
+  file.close();
 }

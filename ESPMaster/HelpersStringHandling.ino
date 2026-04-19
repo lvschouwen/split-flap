@@ -4,6 +4,12 @@ String cleanString(String message);
 
 //Aligns string on center of array and fills empty chars with spaces
 String centerString(String message) {
+  //Overflow-safe: if the message is already at or over the display width,
+  //truncate rather than wrap int/unsigned subtraction into a huge loop.
+  if (message.length() >= (unsigned int)UNITS_AMOUNT) {
+    return cleanString(message.substring(0, UNITS_AMOUNT));
+  }
+
   //Takes care of the left side
   int leftSpaceAmount = (UNITS_AMOUNT -  message.length()) / 2;
   for (int spaceIndex = 0; spaceIndex < leftSpaceAmount; spaceIndex++) {
@@ -16,7 +22,7 @@ String centerString(String message) {
   }
 
   message = cleanString(message);
-  
+
   return message;
 }
 
@@ -31,6 +37,10 @@ String createRepeatingString(char character) {
 
 //Aligns string on right side of array and fills empty chars with spaces
 String rightString(String message) {
+  if (message.length() >= (unsigned int)UNITS_AMOUNT) {
+    return cleanString(message.substring(0, UNITS_AMOUNT));
+  }
+
   int rightSpaceAmount = (UNITS_AMOUNT - message.length());
   for (int spaceIndex = 0; spaceIndex < rightSpaceAmount; spaceIndex++) {
     message = " " + message;
@@ -43,6 +53,10 @@ String rightString(String message) {
 
 //Aligns string on left side of array and fills empty chars with spaces
 String leftString(String message) {
+  if (message.length() >= (unsigned int)UNITS_AMOUNT) {
+    return cleanString(message.substring(0, UNITS_AMOUNT));
+  }
+
   int leftSpaceAmount = (UNITS_AMOUNT - message.length());
   for (int spaceIndex = 0; spaceIndex < leftSpaceAmount; spaceIndex++) {
     message = message + " ";
@@ -199,10 +213,16 @@ LList<String> processSentenceToLines(String sentence) {
 
 //Used for ensuring a string is a number
 bool isNumber(String str) {
+  //Empty string is not a number; strtol would leave endPtr at the input
+  //start which also points at '\0', causing a false positive.
+  if (str.length() == 0) {
+    return false;
+  }
+
   char* endPtr;
 
   //10 specifies base 10 (decimal)
-  strtol(str.c_str(), &endPtr, 10);  
+  strtol(str.c_str(), &endPtr, 10);
 
   //Check if the conversion reached the end of the string
   return (*endPtr == '\0');

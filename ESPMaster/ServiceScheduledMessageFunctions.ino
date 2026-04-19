@@ -57,7 +57,9 @@ bool removeScheduledMessage(long scheduledDateTimeUnix) {
 void checkScheduledMessages() {   
   //Iterate over the current bunch of scheduled messages. If we find one where the current time exceeds when we should show
   //the message, then we need to show that message immediately
-  unsigned long currentTimeUnix = timezone.now();
+  //`ScheduledDateTimeUnix` is declared `long` in Classes.h; match the type to
+  //avoid signed/unsigned comparison surprises.
+  long currentTimeUnix = timezone.now();
   for(int scheduledMessageIndex = 0; scheduledMessageIndex < scheduledMessages.size(); scheduledMessageIndex++) {
     ScheduledMessage scheduledMessage = scheduledMessages[scheduledMessageIndex];
 

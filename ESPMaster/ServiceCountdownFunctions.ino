@@ -18,7 +18,7 @@ void checkCountdown() {
     String daysText = String(days) + (days == 1 ? " day" : " days");
     if (daysText.length() > UNITS_AMOUNT) {
       SerialPrintln("Days Text was too long, cutting down to just the number...");
-      daysText = "" + days;
+      daysText = String(days);
     }
 
     if (inputText != daysText) {
