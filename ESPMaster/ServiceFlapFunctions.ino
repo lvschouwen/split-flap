@@ -1,3 +1,12 @@
+// I2C address 0x00 is reserved (general call); offset every unit's address so
+// the master's 0-based unit index maps to 0x01..0x10. Must match
+// I2C_ADDRESS_BASE in Unit/Unit.ino.
+#define I2C_ADDRESS_BASE 1
+
+static int toI2cAddress(int unitIndex) {
+  return I2C_ADDRESS_BASE + unitIndex;
+}
+
 //Shows a new message on the display
 void showText(String message) {  
   showText(message, 0);
@@ -118,11 +127,11 @@ int translateLettertoInt(char letterchar) {
   return -1;
 }
 
-//Write letter position and speed in rpm to single unit
-void writeToUnit(int address, int letter, int flapSpeed) {
+//Write letter position and speed in rpm to single unit (by 0-based unit index).
+void writeToUnit(int unitIndex, int letter, int flapSpeed) {
   int sendArray[2] = {letter, flapSpeed}; //Array with values to send to unit
 
-  Wire.beginTransmission(address);
+  Wire.beginTransmission(toI2cAddress(unitIndex));
 
   //Write values to send to slave in buffer
   for (unsigned int index = 0; index < sizeof sendArray / sizeof sendArray[0]; index++) {
@@ -154,21 +163,50 @@ bool isDisplayMoving() {
   return false;
 }
 
-//Checks if single unit is moving
-int checkIfMoving(int address) {
+//Checks if single unit is moving (by 0-based unit index).
+int checkIfMoving(int unitIndex) {
+  int i2cAddress = toI2cAddress(unitIndex);
   int active;
-  Wire.requestFrom(address, ANSWER_SIZE, 1);
+  Wire.requestFrom(i2cAddress, ANSWER_SIZE, 1);
   active = Wire.read();
 
-  SerialPrint(address);
+  SerialPrint(i2cAddress);
   SerialPrint(":");
   SerialPrintln(active);
 
   if (active == -1) {
     SerialPrintln("Try to wake up unit");
-    Wire.beginTransmission(address);
+    Wire.beginTransmission(i2cAddress);
     Wire.endTransmission();
   }
-  
+
   return active;
+}
+
+//Scans the I2C bus once for responders in the range reserved for units.
+//Populates `detectedUnitCount` and `detectedUnitAddresses` for the /settings
+//endpoint and logs the result over serial. No-op when SERIAL_ENABLE is true
+//(I2C is disabled in that mode) or UNIT_CALLS_DISABLE is true.
+int detectedUnitCount = 0;
+int detectedUnitAddresses[UNITS_AMOUNT];
+
+void probeI2cBus() {
+#if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
+  SerialPrintln("Scanning I2C bus for units...");
+  detectedUnitCount = 0;
+  for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    int i2cAddress = toI2cAddress(unitIndex);
+    Wire.beginTransmission(i2cAddress);
+    if (Wire.endTransmission() == 0) {
+      detectedUnitAddresses[detectedUnitCount++] = i2cAddress;
+      SerialPrint("- unit responding at 0x");
+      SerialPrintln(String(i2cAddress, HEX));
+    }
+  }
+  SerialPrint("I2C scan complete. Detected ");
+  SerialPrint(detectedUnitCount);
+  SerialPrint("/");
+  SerialPrint(UNITS_AMOUNT);
+  SerialPrintln(" expected units.");
+#endif
 }

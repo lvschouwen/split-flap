@@ -276,6 +276,10 @@ void setup() {
     initialiseFileSystem();
     loadValuesFromFileSystem();
 
+    //Scan the I2C bus so we know how many units actually answered. Result is
+    //exposed via /settings so the UI can warn about a mismatch.
+    probeI2cBus();
+
 #if OTA_ENABLE == true
     SerialPrintln("OTA is enabled! Yay!");
 #endif
@@ -738,6 +742,10 @@ String getCurrentSettingValues() {
 
   document["timezoneOffset"] = timezone.getOffset();
   document["unitCount"] = UNITS_AMOUNT;
+  document["detectedUnitCount"] = detectedUnitCount;
+  for (int i = 0; i < detectedUnitCount; i++) {
+    document["detectedUnitAddresses"][i] = detectedUnitAddresses[i];
+  }
   document["alignment"] = alignment;
   document["flapSpeed"] = flapSpeed;
   document["deviceMode"] = deviceMode;

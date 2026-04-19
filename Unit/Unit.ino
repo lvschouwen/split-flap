@@ -17,6 +17,12 @@
 #define ADRESSSW3 4
 #define ADRESSSW4 3
 
+// I2C address 0x00 is reserved (general call); offset every unit's address so
+// DIP "0000" maps to 0x01 and DIP "1111" maps to 0x10. The master's
+// ESPMaster/ServiceFlapFunctions.ino defines the same constant and must stay
+// in sync.
+#define I2C_ADDRESS_BASE 1
+
 //constants stepper
 #define STEPPERPIN1 11
 #define STEPPERPIN2 10
@@ -230,10 +236,11 @@ void requestEvent() {
   */
 }
 
-//returns the adress of the unit as int from 0-15
+//returns the I2C address of the unit. DIP reads 0-15, offset by I2C_ADDRESS_BASE
+//so we skip the reserved 0x00 general-call address.
 int getaddress() {
-  int address = !digitalRead(ADRESSSW4) + (!digitalRead(ADRESSSW3) * 2) + (!digitalRead(ADRESSSW2) * 4) + (!digitalRead(ADRESSSW1) * 8);
-  return address;
+  int dipValue = !digitalRead(ADRESSSW4) + (!digitalRead(ADRESSSW3) * 2) + (!digitalRead(ADRESSSW2) * 4) + (!digitalRead(ADRESSSW1) * 8);
+  return I2C_ADDRESS_BASE + dipValue;
 }
 
 //gets magnet sensor offset from EEPROM in steps
