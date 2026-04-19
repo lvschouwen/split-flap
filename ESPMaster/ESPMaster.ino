@@ -233,9 +233,12 @@ void setup() {
   //Setup so we can see serial messages
   Serial.begin(SERIAL_BAUDRATE);
 #else
-  //For ESP01 only
-  Wire.begin(1, 3); 
-  
+  //For ESP01 only. Wire buffer size is bumped to 256 via the -D
+  //I2C_BUFFER_LENGTH=256 build flag so that a full twiboot flash page
+  //(128 bytes + 4-byte header) fits in one transmission during firmware
+  //OTA. Default ESP8266 Wire buffer is only 128 bytes.
+  Wire.begin(1, 3);
+
   //De-activate I2C if debugging the ESP, otherwise serial does not work
   //Wire.begin(D1, D2); //For NodeMCU testing only SDA=D1 and SCL=D2
 #endif
@@ -338,10 +341,50 @@ void setup() {
       isPendingReboot = true;
     });
     
-    //Debug endpoint: tells a unit to reboot into its twiboot bootloader. Once
-    //Phase 3 of #10 lands this will be wrapped by the real firmware upload
-    //flow; for now it's curl-able so the full reboot-into-bootloader path can
-    //be tested end-to-end. GET /unit/reboot?address=0x01
+    //POST /firmware/unit?address=0x01 with a multipart body field named
+    //"firmware" containing a compiled Unit.ino .hex file. The ESP reboots
+    //that unit into twiboot, streams the HEX page-by-page over I2C, then
+    //tells twiboot to jump back into the new sketch. Watch /log for
+    //progress — the page writes are logged as they happen.
+    webServer.on("/firmware/unit", HTTP_POST,
+      [](AsyncWebServerRequest * request) {
+        String result;
+        if (finishFirmwareFlash(result)) {
+          request->send(200, "text/plain", result);
+        } else {
+          request->send(500, "text/plain", result);
+        }
+      },
+      [](AsyncWebServerRequest * request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+        if (index == 0) {
+          if (!request->hasParam("address")) {
+            abortFirmwareFlash("Missing address parameter");
+            return;
+          }
+          long addr = strtol(request->getParam("address")->value().c_str(), nullptr, 0);
+          if (addr < 1 || addr > 126) {
+            abortFirmwareFlash("Address out of range 1..126");
+            return;
+          }
+          String error;
+          if (!beginFirmwareFlash((uint8_t)addr, error)) {
+            abortFirmwareFlash(error);
+            return;
+          }
+        }
+
+        if (firmwareFlashInProgress && len > 0) {
+          if (!feedFirmwareChunk(data, len)) {
+            abortFirmwareFlash("HEX parse error");
+          }
+        }
+      }
+    );
+
+    //Debug endpoint: tells a unit to reboot into its twiboot bootloader.
+    //GET /unit/reboot?address=0x01 — useful without a HEX file to sanity-
+    //check the enter-bootloader path (unit should disappear briefly and
+    //twiboot show up on 0x29).
     webServer.on("/unit/reboot", HTTP_GET, [](AsyncWebServerRequest * request) {
       if (!request->hasParam("address")) {
         request->send(400, "text/plain", "Missing 'address' query param (e.g. /unit/reboot?address=0x01)");
@@ -742,6 +785,13 @@ void loop() {
     delay(1);
   }
 #endif
+
+  //Don't touch the I2C bus while a unit firmware flash is in flight — the
+  //Wire bus is owned by ServiceFirmwareFunctions for the duration.
+  if (firmwareFlashInProgress) {
+    delay(1);
+    return;
+  }
 
   //ezTime library sync
   events(); 

@@ -15,3 +15,4 @@
 # UnitBootloader/prebuilt/ hex is intentionally checked in, so don't
 # blanket-ignore *.hex here.
 .claude/
+flashing/prebuilt/

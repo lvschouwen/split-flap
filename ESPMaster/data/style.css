@@ -374,4 +374,27 @@ input[type=datetime-local] {
 	word-break: break-word;
 	border-radius: 4px;
 }
+
+.firmware-status {
+	font-family: ui-monospace, Menlo, Consolas, monospace;
+	font-size: 0.9rem;
+	padding: 0.6em 0.9em;
+	border-radius: 4px;
+	text-align: left;
+}
+
+.firmware-status.pending {
+	background: #334;
+	color: #ddd;
+}
+
+.firmware-status.success {
+	background: #2e4a2e;
+	color: #cfe;
+}
+
+.firmware-status.error {
+	background: #542828;
+	color: #fcc;
+}
   

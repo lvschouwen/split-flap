@@ -102,6 +102,7 @@ function loadPage() {
 		setCountdownDate((Date.now() / 1000) + (24 * 60 * 60));
 		showHideResetWifiSettingsAction(false);
 		showHideOtaUpdateAction(false);
+		populateFirmwareTargets([1, 2, 3]);
 		showScheduledMessages([
 			{
 				"scheduledDateTimeUnix": 1690134480,
@@ -131,6 +132,7 @@ function loadPage() {
 				setLastReceivedMessage(responseObject.lastTimeReceivedMessageDateTime);
 				showHideResetWifiSettingsAction(responseObject.wifiSettingsResettable);
 				showHideOtaUpdateAction(responseObject.otaEnabled);
+				populateFirmwareTargets(responseObject.detectedUnitAddresses);
 				
 				if (responseObject.scheduledMessages) {
 					showScheduledMessages(responseObject.scheduledMessages);
@@ -412,6 +414,93 @@ function showContent() {
 	elementContent.classList.remove("hidden");
 
 	initLogPanel();
+	initFirmwareUpload();
+}
+
+//Populates the firmware target dropdown from the I2C bus probe results.
+function populateFirmwareTargets(addresses) {
+	var select = document.getElementById("selectFirmwareTarget");
+	if (!select) return;
+	while (select.firstChild) select.removeChild(select.firstChild);
+
+	if (!addresses || addresses.length === 0) {
+		var opt = document.createElement("option");
+		opt.value = "";
+		opt.textContent = "— no units detected —";
+		select.appendChild(opt);
+		select.disabled = true;
+		return;
+	}
+
+	select.disabled = false;
+	addresses.forEach(function (addr) {
+		var opt = document.createElement("option");
+		var hex = addr.toString(16).padStart(2, "0");
+		opt.value = "0x" + hex;
+		opt.textContent = "Unit at 0x" + hex;
+		select.appendChild(opt);
+	});
+}
+
+//Firmware OTA: streams a .hex upload to the master, which pushes it over
+//I2C to the target unit via twiboot. Progress lines land in the /log ring
+//buffer — open the Log panel below to watch them live.
+function initFirmwareUpload() {
+	var form = document.getElementById("firmwareForm");
+	if (!form) return;
+
+	form.addEventListener("submit", function (event) {
+		event.preventDefault();
+
+		var select = document.getElementById("selectFirmwareTarget");
+		var fileInput = document.getElementById("inputFirmwareFile");
+		var submitButton = document.getElementById("buttonFirmwareSubmit");
+		var status = document.getElementById("firmwareStatus");
+
+		var address = select.value;
+		var file = fileInput.files[0];
+		if (!address || !file) return;
+
+		var confirmFlash = confirm(
+			"Flash " + file.name + " (" + file.size + " bytes) to " + address + "?\n\n" +
+			"The target unit will reboot into its bootloader and receive the new firmware " +
+			"over I2C. If the upload fails mid-way, the unit will stay in bootloader mode " +
+			"waiting for a retry — it won't come back up on its own."
+		);
+		if (!confirmFlash) return;
+
+		submitButton.disabled = true;
+		select.disabled = true;
+		fileInput.disabled = true;
+		status.className = "firmware-status pending";
+		status.classList.remove("hidden");
+		status.textContent = "Uploading and flashing… watch the Log panel for per-page progress.";
+
+		var formData = new FormData();
+		formData.append("firmware", file);
+
+		var xhr = new XMLHttpRequest();
+		xhr.open("POST", "/firmware/unit?address=" + encodeURIComponent(address));
+		xhr.onreadystatechange = function () {
+			if (xhr.readyState !== 4) return;
+
+			submitButton.disabled = false;
+			select.disabled = false;
+			fileInput.disabled = false;
+
+			if (xhr.status === 200) {
+				status.className = "firmware-status success";
+				status.textContent = "✔ " + xhr.responseText;
+			} else if (xhr.status === 0) {
+				status.className = "firmware-status error";
+				status.textContent = "✘ Upload failed — lost connection to master. The unit may be stuck in bootloader mode; check the Log panel.";
+			} else {
+				status.className = "firmware-status error";
+				status.textContent = "✘ HTTP " + xhr.status + ": " + xhr.responseText;
+			}
+		};
+		xhr.send(formData);
+	});
 }
 
 //Log panel: polls GET /log every 2s while the <details> is open.
