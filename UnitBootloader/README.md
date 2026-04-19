@@ -80,6 +80,46 @@ avrdude -c usbasp -p m328p -U flash:w:prebuilt/twiboot-atmega328p-16mhz.hex
 avrdude -c usbasp -p m328p -U lfuse:w:0xff:m -U hfuse:w:0xdc:m -U efuse:w:0xfd:m
 ```
 
+### Windows
+
+You're flashing a bootloader, so it has to go through the Nano's ICSP header — the USB-serial port on the Nano itself only lets you flash *sketches* via the existing optiboot. You still need a USBasp or a second Arduino running Arduino-as-ISP (same as on Linux/macOS). Native Windows works fine; there's no reason to use WSL2 for this (WSL2 can't see USB devices without `usbipd-win`, which is extra setup for a one-off task).
+
+**USBasp on Windows:**
+
+1. Install the libusb driver for the USBasp using [Zadig](https://zadig.akeo.ie/): plug the USBasp in, open Zadig, **Options → List All Devices**, select the USBasp, install the `libusb-win32` driver. One-time.
+2. Get `avrdude.exe`. Either grab an official [avrdude Windows release](https://github.com/avrdudes/avrdude/releases) or reuse Arduino IDE's bundled copy under `%LocalAppData%\Arduino15\packages\arduino\tools\avrdude\<version>\bin\avrdude.exe`.
+3. From the repo root (cmd or PowerShell):
+
+```
+avrdude -c usbasp -p m328p -U flash:w:UnitBootloader\prebuilt\twiboot-atmega328p-16mhz.hex
+avrdude -c usbasp -p m328p -U lfuse:w:0xff:m -U hfuse:w:0xdc:m -U efuse:w:0xfd:m
+```
+
+**Arduino-as-ISP on Windows:**
+
+1. In Arduino IDE: **File → Examples → 11.ArduinoISP → ArduinoISP**, upload to a spare Uno/Nano.
+2. Wire the programmer to the target Nano's ICSP header: MOSI↔MOSI, MISO↔MISO, SCK↔SCK, **pin 10 on the programmer → RESET on the target**, GND↔GND, 5V↔5V.
+3. Find the programmer's COM port in Device Manager.
+4. Run (substitute your port):
+
+```
+avrdude -c stk500v1 -P COM4 -b 19200 -p m328p -U flash:w:UnitBootloader\prebuilt\twiboot-atmega328p-16mhz.hex
+avrdude -c stk500v1 -P COM4 -b 19200 -p m328p -U lfuse:w:0xff:m -U hfuse:w:0xdc:m -U efuse:w:0xfd:m
+```
+
+**WSL2 alternative (optional):**
+
+If you'd rather use the Linux toolchain, install `usbipd-win` and forward the USB device into WSL:
+
+```
+winget install usbipd
+usbipd list
+usbipd bind --busid X-Y
+usbipd attach --wsl --busid X-Y
+```
+
+Then use the Linux `make install` / `make fuses` flow from inside WSL. Works, but more moving parts than just running avrdude on Windows.
+
 ## Verifying the install
 
 After flashing the bootloader but before flashing the split-flap unit sketch, power-cycle the Nano. You should see the status LED behave according to twiboot's boot-window pattern (LED on during the ~1 s boot window, off when jumping to — non-existent, for now — sketch).
