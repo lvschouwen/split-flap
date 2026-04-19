@@ -410,4 +410,55 @@ function showContent() {
 
 	elementInitialLoading.classList.add("hidden");
 	elementContent.classList.remove("hidden");
+
+	initLogPanel();
+}
+
+//Log panel: polls GET /log every 2s while the <details> is open.
+function initLogPanel() {
+	var details = document.getElementById("logDetails");
+	var pre = document.getElementById("logContent");
+	if (!details || !pre) return;
+
+	var pollHandle = null;
+
+	function fetchLog() {
+		fetch('/log', { cache: 'no-store' })
+			.then(function (r) { return r.ok ? r.text() : ''; })
+			.then(function (text) {
+				//Preserve scroll-lock-to-bottom UX: if the user was already at the
+				//bottom, stay pinned there as new content arrives.
+				var atBottom = (pre.scrollTop + pre.clientHeight) >= (pre.scrollHeight - 8);
+				pre.textContent = text;
+				if (atBottom) pre.scrollTop = pre.scrollHeight;
+			})
+			.catch(function () { /* network hiccups shouldn't blow up the UI */ });
+	}
+
+	function startPolling() {
+		if (pollHandle !== null) return;
+		fetchLog();
+		pollHandle = setInterval(fetchLog, 2000);
+	}
+
+	function stopPolling() {
+		if (pollHandle === null) return;
+		clearInterval(pollHandle);
+		pollHandle = null;
+	}
+
+	details.addEventListener('toggle', function () {
+		if (details.open) startPolling();
+		else stopPolling();
+	});
+
+	//Also stop polling if the tab is hidden — no point waking the ESP for updates nobody's reading.
+	document.addEventListener('visibilitychange', function () {
+		if (document.hidden) stopPolling();
+		else if (details.open) startPolling();
+	});
+
+	if (localDevelopment) {
+		pre.textContent = "Starting Split-Flap...\nScanning I2C bus for units...\n- unit responding at 0x01\n- unit responding at 0x02\nI2C scan complete. Detected 2/10 expected units.\n";
+	}
 }
