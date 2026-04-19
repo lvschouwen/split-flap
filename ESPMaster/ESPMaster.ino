@@ -338,6 +338,31 @@ void setup() {
       isPendingReboot = true;
     });
     
+    //Debug endpoint: tells a unit to reboot into its twiboot bootloader. Once
+    //Phase 3 of #10 lands this will be wrapped by the real firmware upload
+    //flow; for now it's curl-able so the full reboot-into-bootloader path can
+    //be tested end-to-end. GET /unit/reboot?address=0x01
+    webServer.on("/unit/reboot", HTTP_GET, [](AsyncWebServerRequest * request) {
+      if (!request->hasParam("address")) {
+        request->send(400, "text/plain", "Missing 'address' query param (e.g. /unit/reboot?address=0x01)");
+        return;
+      }
+      String addressValue = request->getParam("address")->value();
+      long parsedAddress = strtol(addressValue.c_str(), nullptr, 0);
+      if (parsedAddress < 1 || parsedAddress > 126) {
+        request->send(400, "text/plain", "Address must be 1..126");
+        return;
+      }
+      int status = rebootUnitToBootloader((int)parsedAddress);
+      if (status == 0) {
+        request->send(200, "text/plain", "Reboot command sent. Unit should be in twiboot at 0x29 for ~1s.");
+      } else {
+        String body = "Wire.endTransmission returned ";
+        body += status;
+        request->send(502, "text/plain", body);
+      }
+    });
+
     webServer.on("/reset-units", HTTP_GET, [](AsyncWebServerRequest * request) {
       SerialPrintln("Request to Reset Units Received");
       

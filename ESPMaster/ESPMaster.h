@@ -16,3 +16,7 @@ void writeFile(fs::FS& fs, const char* path, const char* message);
 // alphabetical concatenation order, so needs the forward declaration).
 extern int detectedUnitCount;
 extern int detectedUnitAddresses[];
+
+// Defined in ServiceFlapFunctions.ino; called from the /unit/reboot endpoint
+// handler registered in ESPMaster.ino (earlier in the concat order).
+int rebootUnitToBootloader(int i2cAddress);
