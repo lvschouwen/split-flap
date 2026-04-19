@@ -1,3 +1,7 @@
+// Forward declarations so this file compiles as a standalone translation
+// unit (the Arduino IDE's preprocessor would otherwise auto-generate these).
+String cleanString(String message);
+
 //Aligns string on center of array and fills empty chars with spaces
 String centerString(String message) {
   //Takes care of the left side
