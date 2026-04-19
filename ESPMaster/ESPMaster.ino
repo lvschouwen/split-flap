@@ -312,6 +312,12 @@ void setup() {
       SerialPrintln("Request for Health Check Received");
       request->send(200, "text/plain", "Healthy");
     });
+
+    webServer.on("/log", HTTP_GET, [](AsyncWebServerRequest * request) {
+      //Don't SerialPrintln here; every log request would otherwise stamp
+      //itself into the buffer on every poll and drown out real activity.
+      request->send(200, "text/plain", webLogRead());
+    });
     
     webServer.on("/reboot", HTTP_GET, [](AsyncWebServerRequest * request) {
       SerialPrintln("Request to Reboot Received");
