@@ -26,11 +26,15 @@ echo.
 echo Make sure the ESP is in PROGRAMMING MODE (GPIO0 tied to GND at boot).
 echo.
 
+REM --before no_reset / --after no_reset because most cheap USB-UART adapters
+REM don't have DTR/RTS wired to the ESP's RESET/GPIO0 lines. You put the ESP
+REM in programming mode manually (jumper GPIO0 to GND, power-cycle) before
+REM running this; after it finishes, remove the jumper and power-cycle to boot.
 "%PYTHON%" "%ESPTOOL%" ^
   --chip esp8266 ^
   --port %ESP_PORT% ^
   --baud 115200 ^
-  --before default_reset --after hard_reset ^
+  --before no_reset --after no_reset ^
   write_flash ^
   0x0      "%~dp0prebuilt\master-firmware.bin" ^
   0xBB000  "%~dp0prebuilt\master-littlefs.bin"
