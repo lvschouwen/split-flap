@@ -290,6 +290,12 @@ void setup() {
     //they get a second chance.
     autoInstallFirmwareToBootloaderUnits();
 
+    //Auto-update any sketch-running unit whose firmware rev doesn't match
+    //the bundled one. Runs once after the settled probe so a single stale
+    //unit mixed into a fresh-flashed display self-heals without a
+    //manual "Flash all unit(s)" click. Issue #32.
+    autoUpdateOutdatedUnits();
+
 #if USE_MULTICAST == true
   if (MDNS.begin(mdnsName)) {
       SerialPrintln("mDNS responder started");
@@ -477,6 +483,106 @@ void setup() {
         body += status;
         request->send(502, "text/plain", body);
       }
+    });
+
+    //Interactive calibration endpoints (issue #32). All four share the
+    //same preconditions: valid I2C address in the 1..126 range, and the
+    //unit must be a sketch-running responder (we don't expose these to
+    //units in bootloader mode or missing entirely). Guarded against the
+    //firmware-flash window so we don't collide on the Wire bus.
+    auto parseCalibrationAddress = [](AsyncWebServerRequest * request, int &outAddr) -> bool {
+      if (firmwareFlashInProgress) {
+        request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
+        return false;
+      }
+      if (!request->hasParam("address")) {
+        request->send(400, "text/plain", "Missing 'address' query param");
+        return false;
+      }
+      long parsed = strtol(request->getParam("address")->value().c_str(), nullptr, 0);
+      if (parsed < 1 || parsed > 126) {
+        request->send(400, "text/plain", "Address must be 1..126");
+        return false;
+      }
+      int unitIndex = (int)parsed - 1;  // I2C_ADDRESS_BASE == 1
+      if (unitIndex < 0 || unitIndex >= UNITS_AMOUNT ||
+          detectedUnitStates[unitIndex] != 1) {
+        request->send(404, "text/plain", "No sketch-running unit at that address");
+        return false;
+      }
+      outAddr = (int)parsed;
+      return true;
+    };
+
+    webServer.on("/unit/offset", HTTP_GET, [parseCalibrationAddress](AsyncWebServerRequest * request) {
+      int addr = 0;
+      if (!parseCalibrationAddress(request, addr)) return;
+      int16_t offset = 0;
+      if (!readUnitOffset(addr, offset)) {
+        request->send(502, "text/plain", "Unit did not return a valid offset (firmware may predate #32)");
+        return;
+      }
+      String body = "{\"offset\":";
+      body += offset;
+      body += "}";
+      request->send(200, "application/json", body);
+    });
+
+    webServer.on("/unit/offset", HTTP_POST, [parseCalibrationAddress](AsyncWebServerRequest * request) {
+      int addr = 0;
+      if (!parseCalibrationAddress(request, addr)) return;
+      if (!request->hasParam("value")) {
+        request->send(400, "text/plain", "Missing 'value' query param");
+        return;
+      }
+      long parsed = strtol(request->getParam("value")->value().c_str(), nullptr, 0);
+      if (parsed < -32768 || parsed > 32767) {
+        request->send(400, "text/plain", "Value must fit in int16 (-32768..32767)");
+        return;
+      }
+      int status = writeUnitOffset(addr, (int16_t)parsed);
+      if (status != 0) {
+        String body = "Wire.endTransmission returned ";
+        body += status;
+        request->send(502, "text/plain", body);
+        return;
+      }
+      request->send(200, "text/plain", "Offset written");
+    });
+
+    webServer.on("/unit/jog", HTTP_POST, [parseCalibrationAddress](AsyncWebServerRequest * request) {
+      int addr = 0;
+      if (!parseCalibrationAddress(request, addr)) return;
+      if (!request->hasParam("steps")) {
+        request->send(400, "text/plain", "Missing 'steps' query param");
+        return;
+      }
+      long parsed = strtol(request->getParam("steps")->value().c_str(), nullptr, 0);
+      if (parsed < -127 || parsed > 127) {
+        request->send(400, "text/plain", "Steps must be -127..127");
+        return;
+      }
+      int status = jogUnit(addr, (int)parsed);
+      if (status != 0) {
+        String body = "Wire.endTransmission returned ";
+        body += status;
+        request->send(502, "text/plain", body);
+        return;
+      }
+      request->send(200, "text/plain", "Jogged");
+    });
+
+    webServer.on("/unit/home", HTTP_POST, [parseCalibrationAddress](AsyncWebServerRequest * request) {
+      int addr = 0;
+      if (!parseCalibrationAddress(request, addr)) return;
+      int status = homeUnit(addr);
+      if (status != 0) {
+        String body = "Wire.endTransmission returned ";
+        body += status;
+        request->send(502, "text/plain", body);
+        return;
+      }
+      request->send(200, "text/plain", "Home requested");
     });
 
     //GET /reflash-units — forces every sketch-running unit into its twiboot

@@ -397,4 +397,52 @@ input[type=datetime-local] {
 	background: #542828;
 	color: #fcc;
 }
+
+.calibration-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5em;
+	align-items: center;
+	padding: 0.35em 0;
+	border-bottom: 1px solid #eee;
+}
+
+.calibration-row:last-child {
+	border-bottom: none;
+}
+
+.calibration-label {
+	font-family: ui-monospace, Menlo, Consolas, monospace;
+	min-width: 6em;
+	font-weight: bold;
+}
+
+.calibration-expect {
+	font-family: ui-monospace, Menlo, Consolas, monospace;
+	min-width: 8em;
+}
+
+.calibration-warn {
+	color: #a60;
+	font-size: 0.85rem;
+}
+
+.calibration-reality {
+	width: 2.5em;
+	text-align: center;
+	font-family: ui-monospace, Menlo, Consolas, monospace;
+	font-size: 1.1rem;
+}
+
+.calibration-offset {
+	width: 5em;
+	text-align: right;
+	font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+#calibrationAdvanced summary {
+	cursor: pointer;
+	padding: 0.5em 0;
+	font-weight: bold;
+}
   

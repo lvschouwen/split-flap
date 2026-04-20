@@ -5,6 +5,14 @@ const localDevelopment = false;
 var unitCount = 0;
 var timezoneOffset = 0;
 
+//Mirrors ESPMaster.ino's char letters[] byte-for-byte. Index 0 is blank.
+//ä/ö/ü are stored as $ & # (wire encoding); user-facing inputs go through
+//translateLetterToIndex() which normalizes Unicode umlauts to those ASCII
+//glyphs before lookup, so users can type either form.
+const CALIBRATION_LETTERS = [' ','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z','$','&','#','0','1','2','3','4','5','6','7','8','9',':','.','-','?','!'];
+const CALIBRATION_STEPS_PER_FLAP = 2038 / 45;
+var calibrationUnits = [];  //[{address, versionStatus}]
+
 //Used for submission!
 const form = document.getElementById('form');
 form.onsubmit = function () {
@@ -91,6 +99,11 @@ function loadPage() {
 		setLastReceivedMessage(new Date().toLocaleString());
 		showHideResetWifiSettingsAction(false);
 		showHideOtaUpdateAction(false);
+		setCalibrationUnits([
+			{address: 1, versionStatus: 0},
+			{address: 2, versionStatus: 0},
+			{address: 3, versionStatus: 1},
+		]);
 		showScheduledMessages([
 			{
 				"scheduledDateTimeUnix": 1690134480,
@@ -119,6 +132,22 @@ function loadPage() {
 				setLastReceivedMessage(responseObject.lastTimeReceivedMessageDateTime);
 				showHideResetWifiSettingsAction(responseObject.wifiSettingsResettable);
 				showHideOtaUpdateAction(responseObject.otaEnabled);
+
+				//Calibration panel is keyed off detectedUnitAddresses — a sketch-
+				//running unit that didn't reply to CMD_GET_VERSION predates #28
+				//and also predates the calibration opcodes, so we filter it out.
+				var calUnits = [];
+				var addresses = responseObject.detectedUnitAddresses || [];
+				var versionStatuses = responseObject.detectedUnitVersionStatus || [];
+				for (var i = 0; i < addresses.length; i++) {
+					var addr = addresses[i];
+					var unitIndex = addr - 1;
+					calUnits.push({
+						address: addr,
+						versionStatus: versionStatuses[unitIndex]
+					});
+				}
+				setCalibrationUnits(calUnits);
 
 				if (responseObject.scheduledMessages) {
 					showScheduledMessages(responseObject.scheduledMessages);
@@ -501,4 +530,374 @@ function initLogPanel() {
 	if (localDevelopment) {
 		pre.textContent = "Starting Split-Flap...\nScanning I2C bus for units...\n- unit responding at 0x01\n- unit responding at 0x02\nI2C scan complete. Detected 2/10 expected units.\n";
 	}
+}
+
+//Calibration panel (issue #32). Builds a per-unit row with Expect/Reality
+//inputs plus an Advanced <details> with raw jog & offset controls.
+function removeAllChildren(element) {
+	while (element.firstChild) element.removeChild(element.firstChild);
+}
+
+function setCalibrationUnits(units) {
+	calibrationUnits = units || [];
+	var card = document.getElementById("calibrationCard");
+	var container = document.getElementById("containerCalibrationUnits");
+	var advancedContainer = document.getElementById("containerCalibrationAdvanced");
+	if (!card || !container || !advancedContainer) return;
+
+	removeAllChildren(container);
+	removeAllChildren(advancedContainer);
+
+	if (calibrationUnits.length === 0) {
+		card.classList.add("hidden");
+		return;
+	}
+	card.classList.remove("hidden");
+
+	//Populate the shared <datalist> (one copy, referenced by every Reality
+	//input) and the test-letter <select>. Skip blank (index 0) for the
+	//datalist — "expect blank" is ambiguous to eyeball. Default to "A".
+	var datalist = document.getElementById("calibrationLetters");
+	var select = document.getElementById("selectCalibrationLetter");
+	if (datalist && datalist.children.length === 0) {
+		for (var i = 0; i < CALIBRATION_LETTERS.length; i++) {
+			var opt = document.createElement("option");
+			opt.value = CALIBRATION_LETTERS[i];
+			datalist.appendChild(opt);
+		}
+	}
+	if (select && select.children.length === 0) {
+		for (var j = 1; j < CALIBRATION_LETTERS.length; j++) {
+			var sopt = document.createElement("option");
+			sopt.value = CALIBRATION_LETTERS[j];
+			sopt.textContent = CALIBRATION_LETTERS[j];
+			select.appendChild(sopt);
+		}
+		select.value = "A";
+	}
+
+	calibrationUnits.forEach(function(unit) {
+		container.appendChild(buildCalibrationRow(unit, false));
+		advancedContainer.appendChild(buildCalibrationRow(unit, true));
+	});
+}
+
+function buildCalibrationRow(unit, advanced) {
+	var row = document.createElement("div");
+	row.className = "calibration-row";
+	row.dataset.address = unit.address;
+
+	var label = document.createElement("span");
+	label.className = "calibration-label";
+	label.textContent = "Unit " + formatHexAddress(unit.address);
+	row.appendChild(label);
+
+	//Version-outdated or unknown units can still try the opcodes — older
+	//firmware will silently drop them. Flag visually so the user isn't
+	//surprised when nothing happens.
+	if (unit.versionStatus !== 0) {
+		var warn = document.createElement("span");
+		warn.className = "calibration-warn";
+		warn.textContent = unit.versionStatus === 1 ? "(outdated fw)" : "(fw unknown)";
+		row.appendChild(warn);
+	}
+
+	if (advanced) {
+		buildAdvancedControls(row, unit);
+	} else {
+		buildExpectRealityControls(row);
+	}
+	return row;
+}
+
+function buildExpectRealityControls(row) {
+	var expect = document.createElement("span");
+	expect.className = "calibration-expect";
+	expect.textContent = "Expect: —";
+	row.appendChild(expect);
+
+	var realityLabel = document.createElement("span");
+	realityLabel.textContent = "Reality: ";
+	row.appendChild(realityLabel);
+
+	var reality = document.createElement("input");
+	reality.type = "text";
+	reality.maxLength = 1;
+	reality.className = "calibration-reality";
+	reality.setAttribute("list", "calibrationLetters");
+	reality.autocomplete = "off";
+	row.appendChild(reality);
+}
+
+function buildAdvancedControls(row, unit) {
+	var offsetLabel = document.createElement("span");
+	offsetLabel.textContent = "offset ";
+	row.appendChild(offsetLabel);
+
+	var offsetInput = document.createElement("input");
+	offsetInput.type = "number";
+	offsetInput.className = "calibration-offset";
+	offsetInput.value = "";
+	offsetInput.placeholder = "?";
+	offsetInput.step = "1";
+	row.appendChild(offsetInput);
+
+	appendButton(row, "Read", function() { readCalibrationOffset(row); });
+	appendButton(row, "Save", function() { saveCalibrationOffset(row); });
+	appendButton(row, "Home", function() { homeCalibrationUnit(unit.address); });
+
+	var jogLabel = document.createElement("span");
+	jogLabel.textContent = " Jog: ";
+	row.appendChild(jogLabel);
+
+	[-10, -1, 1, 10].forEach(function(n) {
+		appendButton(row, (n > 0 ? "+" : "") + n, function() {
+			jogCalibrationUnit(unit.address, n);
+		});
+	});
+}
+
+function appendButton(parent, label, handler) {
+	var btn = document.createElement("input");
+	btn.type = "button";
+	btn.value = label;
+	btn.addEventListener("click", handler);
+	parent.appendChild(btn);
+}
+
+function formatHexAddress(addr) {
+	return "0x" + addr.toString(16).padStart(2, "0").toUpperCase();
+}
+
+function getSelectedCalibrationLetter() {
+	var select = document.getElementById("selectCalibrationLetter");
+	return select ? select.value : "A";
+}
+
+function translateLetterToIndex(ch) {
+	if (!ch) return -1;
+	//Normalize to the ASCII wire encoding used by ESPMaster.ino's letters[].
+	//Users may type either Ä or $; both resolve to index 27.
+	if (ch === 'ä' || ch === 'Ä') ch = '$';
+	else if (ch === 'ö' || ch === 'Ö') ch = '&';
+	else if (ch === 'ü' || ch === 'Ü') ch = '#';
+	else ch = ch.toUpperCase();
+	return CALIBRATION_LETTERS.indexOf(ch);
+}
+
+//"Send to all" submits the main form with the chosen letter repeated
+//unitCount times. Reuses the existing showMessage path — simpler than a
+//dedicated endpoint and keeps device state consistent with what the user
+//sees elsewhere.
+function sendCalibrationLetter() {
+	var letter = getSelectedCalibrationLetter();
+	showCalibrationStatus("Sending '" + letter + "' to all detected units…", "pending");
+
+	//Build a padded string of `letter` repeated unitCount times — the
+	//master's showMessage() iterates by unit index; shorter messages leave
+	//tail units unchanged.
+	var padded = "";
+	for (var i = 0; i < unitCount; i++) padded += letter;
+
+	var form = new FormData();
+	form.append("alignment", document.querySelector('input[name="alignment"]:checked').value);
+	form.append("flapSpeed", document.getElementById("rangeFlapSpeed").value);
+	form.append("deviceMode", "text");
+	form.append("inputText", padded);
+	form.append("scheduledDateTimeUnix", "0");
+
+	var xhr = new XMLHttpRequest();
+	xhr.open("POST", "/");
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState !== 4) return;
+		if (xhr.status >= 200 && xhr.status < 400) {
+			showCalibrationStatus("Sent '" + letter + "'. Fill Reality for each unit and click Apply All.", "success");
+			document.querySelectorAll("#containerCalibrationUnits .calibration-expect").forEach(function(el) {
+				el.textContent = "Expect: " + letter;
+			});
+		} else {
+			showCalibrationStatus("Failed to send test letter: HTTP " + xhr.status, "error");
+		}
+	};
+	xhr.send(form);
+}
+
+function homeAllCalibrationUnits() {
+	showCalibrationStatus("Re-homing all detected units…", "pending");
+	var remaining = calibrationUnits.length;
+	if (remaining === 0) {
+		showCalibrationStatus("No units detected.", "error");
+		return;
+	}
+	var failures = 0;
+	calibrationUnits.forEach(function(unit) {
+		postCalibration("/unit/home", { address: unit.address }, function(ok) {
+			if (!ok) failures++;
+			remaining--;
+			if (remaining === 0) {
+				if (failures === 0) {
+					showCalibrationStatus("Re-homed " + calibrationUnits.length + " unit(s).", "success");
+				} else {
+					showCalibrationStatus("Re-homed with " + failures + " failure(s).", "error");
+				}
+			}
+		});
+	});
+}
+
+function homeCalibrationUnit(address) {
+	postCalibration("/unit/home", { address: address }, function(ok) {
+		showCalibrationStatus(ok
+			? "Homed " + formatHexAddress(address)
+			: "Home failed for " + formatHexAddress(address), ok ? "success" : "error");
+	});
+}
+
+function jogCalibrationUnit(address, steps) {
+	postCalibration("/unit/jog", { address: address, steps: steps }, function(ok) {
+		showCalibrationStatus(ok
+			? "Jogged " + formatHexAddress(address) + " by " + steps + " step(s)"
+			: "Jog failed for " + formatHexAddress(address), ok ? "success" : "error");
+	});
+}
+
+function readCalibrationOffset(row) {
+	var address = parseInt(row.dataset.address, 10);
+	var xhr = new XMLHttpRequest();
+	xhr.open("GET", "/unit/offset?address=" + address);
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState !== 4) return;
+		if (xhr.status === 200) {
+			try {
+				var data = JSON.parse(xhr.responseText);
+				row.querySelector(".calibration-offset").value = data.offset;
+				showCalibrationStatus("Read offset " + data.offset + " from " + formatHexAddress(address), "success");
+			} catch (e) {
+				showCalibrationStatus("Unparseable offset response from " + formatHexAddress(address), "error");
+			}
+		} else {
+			showCalibrationStatus("Read offset failed for " + formatHexAddress(address) + ": HTTP " + xhr.status, "error");
+		}
+	};
+	xhr.send();
+}
+
+function saveCalibrationOffset(row) {
+	var address = parseInt(row.dataset.address, 10);
+	var input = row.querySelector(".calibration-offset");
+	var value = parseInt(input.value, 10);
+	if (isNaN(value)) {
+		showCalibrationStatus("Offset for " + formatHexAddress(address) + " is not a number", "error");
+		return;
+	}
+	postCalibration("/unit/offset", { address: address, value: value }, function(ok) {
+		showCalibrationStatus(ok
+			? "Saved offset " + value + " to " + formatHexAddress(address)
+			: "Save offset failed for " + formatHexAddress(address), ok ? "success" : "error");
+	});
+}
+
+//Apply All flow: for every row with a filled Reality input, compute the
+//corrective offset, write it, then trigger a re-home. Runs one unit at a
+//time (no concurrent I2C). Rows with empty Reality are skipped.
+function applyCalibrationAll() {
+	var expectLetter = getSelectedCalibrationLetter();
+	var expectIndex = translateLetterToIndex(expectLetter);
+	if (expectIndex < 0) {
+		showCalibrationStatus("Invalid test letter '" + expectLetter + "'", "error");
+		return;
+	}
+	var rows = Array.prototype.slice.call(document.querySelectorAll("#containerCalibrationUnits .calibration-row"));
+	var pending = rows
+		.map(function(row) {
+			var reality = row.querySelector(".calibration-reality").value.trim();
+			if (!reality) return null;
+			var realityIndex = translateLetterToIndex(reality);
+			if (realityIndex < 0) return { error: "Invalid Reality '" + reality + "'", row: row };
+			return { row: row, realityIndex: realityIndex };
+		})
+		.filter(function(x) { return x !== null; });
+
+	if (pending.length === 0) {
+		showCalibrationStatus("Fill at least one Reality input first.", "error");
+		return;
+	}
+	var invalid = pending.filter(function(p) { return p.error; });
+	if (invalid.length > 0) {
+		showCalibrationStatus(invalid[0].error, "error");
+		return;
+	}
+
+	showCalibrationStatus("Applying corrections to " + pending.length + " unit(s)…", "pending");
+	applyCalibrationNext(pending, 0, expectIndex);
+}
+
+function applyCalibrationNext(pending, index, expectIndex) {
+	if (index >= pending.length) {
+		showCalibrationStatus("Applied " + pending.length + " correction(s). Check displays and re-apply if still off.", "success");
+		return;
+	}
+	var entry = pending[index];
+	var address = parseInt(entry.row.dataset.address, 10);
+
+	//Pull current offset, compute correction, write, re-home.
+	var xhr = new XMLHttpRequest();
+	xhr.open("GET", "/unit/offset?address=" + address);
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState !== 4) return;
+		if (xhr.status !== 200) {
+			showCalibrationStatus("Read offset failed for " + formatHexAddress(address) + " — aborting", "error");
+			return;
+		}
+		var currentOffset;
+		try {
+			currentOffset = JSON.parse(xhr.responseText).offset;
+		} catch (e) {
+			showCalibrationStatus("Unparseable offset for " + formatHexAddress(address), "error");
+			return;
+		}
+		//new_offset = current − (reality − expect) × steps_per_flap.
+		//Rationale: if the drum shows reality = expect + 1 flap, it
+		//over-rotated by one flap, so stop one flap earlier.
+		var delta = entry.realityIndex - expectIndex;
+		var correction = Math.round(delta * CALIBRATION_STEPS_PER_FLAP);
+		var newOffset = currentOffset - correction;
+
+		postCalibration("/unit/offset", { address: address, value: newOffset }, function(ok) {
+			if (!ok) {
+				showCalibrationStatus("Save offset failed for " + formatHexAddress(address), "error");
+				return;
+			}
+			postCalibration("/unit/home", { address: address }, function(homeOk) {
+				if (!homeOk) {
+					showCalibrationStatus("Re-home failed for " + formatHexAddress(address), "error");
+					return;
+				}
+				entry.row.querySelector(".calibration-reality").value = "";
+				applyCalibrationNext(pending, index + 1, expectIndex);
+			});
+		});
+	};
+	xhr.send();
+}
+
+function postCalibration(path, params, callback) {
+	var query = Object.keys(params).map(function(k) {
+		return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
+	}).join("&");
+	var xhr = new XMLHttpRequest();
+	xhr.open("POST", path + "?" + query);
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState !== 4) return;
+		callback(xhr.status >= 200 && xhr.status < 400);
+	};
+	xhr.send();
+}
+
+function showCalibrationStatus(message, kind) {
+	var el = document.getElementById("calibrationStatus");
+	if (!el) return;
+	el.className = "firmware-status " + (kind || "");
+	el.classList.remove("hidden");
+	el.textContent = message;
 }

@@ -8,6 +8,10 @@
 // Must stay in sync with Unit/Unit.ino's CMD_* constants.
 #define UNIT_CMD_ENTER_BOOTLOADER 0x80
 #define UNIT_CMD_GET_VERSION      0x81
+#define UNIT_CMD_GET_OFFSET       0x82
+#define UNIT_CMD_SET_OFFSET       0x83
+#define UNIT_CMD_JOG              0x84
+#define UNIT_CMD_HOME             0x85
 
 static int toI2cAddress(int unitIndex) {
   return I2C_ADDRESS_BASE + unitIndex;
@@ -19,6 +23,56 @@ static int toI2cAddress(int unitIndex) {
 int rebootUnitToBootloader(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write(UNIT_CMD_ENTER_BOOTLOADER);
+  return Wire.endTransmission();
+}
+
+//Interactive calibration helpers (issue #32). All four talk to opcodes that
+//only post-#28 firmware understands; older units silently drop the write
+//(opcode namespace is reserved) but return their 1-byte status on read, so
+//readUnitOffset() flags that as failure via `got != 2`.
+
+//Reads the unit's current calOffset (int16 LE). Returns true on success;
+//out is untouched on failure.
+bool readUnitOffset(int i2cAddress, int16_t &out) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)UNIT_CMD_GET_OFFSET);
+  if (Wire.endTransmission() != 0) return false;
+  delay(2);  //give the slave time to flip pendingOffsetResponse before clocking
+  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)2);
+  if (got != 2) {
+    while (Wire.available()) Wire.read();
+    return false;
+  }
+  uint8_t lo = Wire.read();
+  uint8_t hi = Wire.read();
+  out = (int16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+  return true;
+}
+
+//Writes a new calOffset to the unit's EEPROM. Does NOT re-home. Returns
+//Wire.endTransmission() status (0 = success).
+int writeUnitOffset(int i2cAddress, int16_t value) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)UNIT_CMD_SET_OFFSET);
+  Wire.write((uint8_t)((uint16_t)value & 0xFF));
+  Wire.write((uint8_t)(((uint16_t)value >> 8) & 0xFF));
+  return Wire.endTransmission();
+}
+
+//Nudges the drum without re-homing. Steps clamped to int8 range.
+int jogUnit(int i2cAddress, int steps) {
+  if (steps > 127) steps = 127;
+  if (steps < -127) steps = -127;
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)UNIT_CMD_JOG);
+  Wire.write((uint8_t)(int8_t)steps);
+  return Wire.endTransmission();
+}
+
+//Triggers a full calibrate(true) on the unit and parks it at blank.
+int homeUnit(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)UNIT_CMD_HOME);
   return Wire.endTransmission();
 }
 

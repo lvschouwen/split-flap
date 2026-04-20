@@ -133,6 +133,32 @@
 				</div>
 			</div>
 
+			<div id="calibrationCard" class="card-grid hidden">
+				<div class="card card-full">
+					<p class="card-title">Calibration</p>
+					<p style="font-size: 0.95rem; color: #aaa;">
+						Send a test letter to every detected unit, then type what each drum is <em>actually</em> showing. Apply All writes the corrected offset to each unit and re-homes it. Repeat until every Reality matches Expect.
+					</p>
+					<p>
+						<label for="selectCalibrationLetter">Test letter:</label>
+						<select id="selectCalibrationLetter" autocomplete="off"></select>
+						<input type="button" value="Send to all" onclick="sendCalibrationLetter()" />
+						<input type="button" value="Re-home all" onclick="homeAllCalibrationUnits()" />
+						<input type="button" value="Apply All" onclick="applyCalibrationAll()" class="remove-button" />
+					</p>
+					<datalist id="calibrationLetters"></datalist>
+					<div id="containerCalibrationUnits"></div>
+					<details id="calibrationAdvanced">
+						<summary>Advanced: raw jog &amp; offset</summary>
+						<p style="font-size: 0.9rem; color: #aaa;">
+							Nudge a single unit a handful of steps at a time, or set its offset directly. Jog does not persist; Save writes to EEPROM. Use for fine half-flap tuning if the Reality flow isn't landing exactly.
+						</p>
+						<div id="containerCalibrationAdvanced"></div>
+					</details>
+					<p id="calibrationStatus" class="firmware-status hidden"></p>
+				</div>
+			</div>
+
 			<form>
 				<div class="card-grid">
 					<div class="card card-full">

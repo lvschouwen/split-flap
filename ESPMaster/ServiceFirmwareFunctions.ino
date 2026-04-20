@@ -313,6 +313,45 @@ void autoInstallFirmwareToBootloaderUnits() {
 #endif
 }
 
+// Reboots every sketch-running unit whose firmware version the probe flagged
+// as OUTDATED (status == 1) into twiboot, then re-probes and runs the usual
+// PROGMEM auto-install path. Does nothing if no unit is outdated. Called at
+// boot after the settled probe — so a display that boots up with one stale
+// unit mixed in gets everyone on the same firmware without user action.
+// See issue #32 (the user asked for this alongside interactive calibration).
+//
+// Safe re-entry: after auto-install the probe will be refreshed to report
+// the freshly flashed rev, which matches BUNDLED_UNIT_REV, so versionStatus
+// flips to 0 and a subsequent call is a no-op.
+extern int detectedUnitVersionStatus[];
+
+void autoUpdateOutdatedUnits() {
+#if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
+  int queued = 0;
+  for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    if (detectedUnitStates[unitIndex] != 1) continue;           // skip silent/bootloader
+    if (detectedUnitVersionStatus[unitIndex] != 1) continue;    // skip ok/unknown
+    int addr = toI2cAddress(unitIndex);
+    SerialPrint("Unit at 0x");
+    SerialPrint(String(addr, HEX));
+    SerialPrintln(" is OUTDATED — queuing auto-update");
+    if (rebootUnitToBootloader(addr) == 0) {
+      queued++;
+    }
+  }
+  if (queued == 0) return;
+
+  SerialPrint("Queued ");
+  SerialPrint(queued);
+  SerialPrintln(" unit(s) for auto-update; waiting for twiboot");
+  //Give the Nanos time to reset + twiboot init. 500 ms matches
+  //enterBootloaderAllDetected()'s reprobe delay.
+  delay(500);
+  probeI2cBus();
+  autoInstallFirmwareToBootloaderUnits();
+#endif
+}
+
 // Sends CMD_ENTER_BOOTLOADER to every unit the probe currently sees running
 // the sketch (state == 1). With reprobeAfter=true, waits ~500 ms for their
 // watchdog resets + twiboot init and re-runs probeI2cBus() so a subsequent
