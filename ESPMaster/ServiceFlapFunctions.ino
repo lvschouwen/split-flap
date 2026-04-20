@@ -153,11 +153,29 @@ void showMessage(String message, int flapSpeed) {
   SerialPrintln("Unit Calls are disabled for debugging. Will delay to simulate calls...");
   delay(2000);
 #else
-  //Wait while display is still moving
+  //Wait while display is still moving, with a hard timeout so a physically
+  //stuck unit (status byte pegged at 1) doesn't deadlock the event loop.
+  //Rate-limit the log line to once per 5 s — previously this spammed /log
+  //at ~10 Hz. Abortable via /stop (issue #35).
+  abortCurrentShow = false;
   SerialPrintln("Unit calls are enabled. Will display message");
+  unsigned long waitStart = millis();
+  unsigned long lastWaitLog = 0;
   while (isDisplayMoving()) {
-    SerialPrintln("Waiting for display to stop");
-    delay(500);
+    if (abortCurrentShow) {
+      SerialPrintln("Show aborted by user (entry wait)");
+      return;
+    }
+    unsigned long elapsed = millis() - waitStart;
+    if (elapsed > 30000) {
+      SerialPrintln("Wait timed out after 30s — assuming a unit is stuck, continuing anyway");
+      break;
+    }
+    if (millis() - lastWaitLog > 5000) {
+      SerialPrintln("Waiting for display to stop");
+      lastWaitLog = millis();
+    }
+    delay(100);
   }
 
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
@@ -185,9 +203,24 @@ void showMessage(String message, int flapSpeed) {
     }
   }
 
-  //Wait for the display to stop moving before exit
+  //Wait for the display to stop moving before exit. Same timeout + rate
+  //limit + abort behavior as the entry wait above.
+  waitStart = millis();
+  lastWaitLog = 0;
   while (isDisplayMoving()) {
-    SerialPrintln("Waiting for display to stop now message is display");
+    if (abortCurrentShow) {
+      SerialPrintln("Show aborted by user (exit wait)");
+      return;
+    }
+    unsigned long elapsed = millis() - waitStart;
+    if (elapsed > 30000) {
+      SerialPrintln("Exit wait timed out after 30s — assuming a unit is stuck, continuing anyway");
+      break;
+    }
+    if (millis() - lastWaitLog > 5000) {
+      SerialPrintln("Waiting for display to stop");
+      lastWaitLog = millis();
+    }
     delay(100);
   }
 #endif
@@ -232,28 +265,27 @@ bool isDisplayMoving() {
     }
     displayState[unitIndex] = checkIfMoving(unitIndex);
     if (displayState[unitIndex] == 1) {
-      SerialPrintln("A unit in the display is busy");
+      //Don't log per-iteration — the caller's rate-limited wait loop
+      //already reports "waiting for display to stop" every 5s. This used
+      //to fire ~10×/s and drowned out everything else (issue #35).
       return true;
     }
   }
 
-  SerialPrintln("Display is standing still");
   return false;
 }
 
-//Checks if single unit is moving (by 0-based unit index).
+//Checks if single unit is moving (by 0-based unit index). Called ~10×/s
+//from isDisplayMoving() — must be quiet on /log when nothing is wrong.
 int checkIfMoving(int unitIndex) {
   int i2cAddress = toI2cAddress(unitIndex);
   int active;
   Wire.requestFrom(i2cAddress, ANSWER_SIZE, 1);
   active = Wire.read();
 
-  SerialPrint(i2cAddress);
-  SerialPrint(":");
-  SerialPrintln(active);
-
   if (active == -1) {
-    SerialPrintln("Try to wake up unit");
+    //Wake-up ping: empty transmission pulses the TWI peripheral. Log once
+    //(the caller throttles its own wait-log), not per iteration.
     Wire.beginTransmission(i2cAddress);
     Wire.endTransmission();
   }
