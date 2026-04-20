@@ -45,6 +45,22 @@
 // ignores unknown opcodes and keeps returning its 1-byte rotation status, so
 // the master detects "short response" as "unknown version".
 #define CMD_GET_VERSION        0x81
+// Interactive calibration opcodes (issue #32). All heavy work (EEPROM write,
+// motor moves) is deferred to loop() via `pending*` flags — doing it inside
+// the Wire ISR stalls the bus and can drop follow-up transactions.
+// CMD_GET_OFFSET: next I2C read returns 2 bytes (int16 LE calOffset).
+#define CMD_GET_OFFSET         0x82
+// CMD_SET_OFFSET: master writes opcode + 2 bytes (int16 LE); unit persists to
+// EEPROM and updates the in-memory calOffset. Does NOT re-home.
+#define CMD_SET_OFFSET         0x83
+// CMD_JOG: master writes opcode + 1 signed byte (-127..+127); unit nudges
+// the drum that many steps without re-homing. Used by "Advanced" calibration
+// to fine-tune half-flap misalignment.
+#define CMD_JOG                0x84
+// CMD_HOME: master writes opcode (no args); unit runs full calibrate(true)
+// and parks at position 0 (blank). Used to preview the effect of a new
+// offset immediately, without waiting for the next letter change.
+#define CMD_HOME               0x85
 
 //constants stepper
 #define STEPPERPIN1 11
@@ -64,7 +80,12 @@ unsigned long lastRotation = 0;
 //globals
 int displayedLetter = 0; //currently shown letter
 int desiredLetter = 0; //letter to be shown
-const String letters[] = {" ", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "Ä", "Ö", "Ü", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":", ".", "-", "?", "!"};
+//Must match ESPMaster.ino's letters[] and script.js's CALIBRATION_LETTERS
+//byte-for-byte. ä/ö/ü are stored as $ & # (wire encoding); the web UI
+//translates user input before sending. Letters are only displayed for
+//serial debug / TEST_ENABLE; the actual rotation is index-based, so
+//changing these strings never changes what the physical drum shows.
+const String letters[] = {" ", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "$", "&", "#", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":", ".", "-", "?", "!"};
 Stepper stepper(STEPS, STEPPERPIN1, STEPPERPIN3, STEPPERPIN2, STEPPERPIN4); //stepper setup
 bool lastInd1 = false; //store last status of phase
 bool lastInd2 = false; //store last status of phase
@@ -87,6 +108,17 @@ volatile bool pendingBootloader = false;
 // the rotation-status byte. Flag set by receiveLetter() on CMD_GET_VERSION,
 // cleared after the response is sent so subsequent reads fall back to status.
 volatile bool pendingVersionResponse = false;
+
+// Interactive calibration flags (issue #32). Each is set from inside the
+// Wire ISR by receiveLetter(); loop() drains the non-response ones and
+// requestEvent() drains pendingOffsetResponse. The motor/EEPROM work
+// cannot run inside the ISR — EEPROM writes take ~7 ms per 2 bytes and
+// stepping blocks for tens of ms per step.
+volatile bool    pendingOffsetResponse = false;   // consumed by requestEvent
+volatile bool    pendingOffsetWrite    = false;   // loop() persists + updates
+volatile int16_t pendingOffsetValue    = 0;
+volatile bool    pendingHome           = false;   // loop() re-homes
+volatile int8_t  pendingJogSteps       = 0;       // loop() steps + clears
 
 //sleep globals
 //Sleep mode is SLEEP_MODE_IDLE: CPU clock stops, peripheral clocks (including
@@ -155,6 +187,54 @@ void loop() {
     delay(10);
     wdt_enable(WDTO_15MS);
     while (true) {}
+  }
+
+  // Interactive calibration: drain the flags set by receiveLetter(). Snapshot
+  // with interrupts disabled so a second command arriving mid-handler can't
+  // interleave. The motor + EEPROM work then runs with interrupts back on so
+  // the Wire ISR can still ACK follow-up transactions.
+  if (pendingOffsetWrite) {
+    noInterrupts();
+    int16_t v = pendingOffsetValue;
+    pendingOffsetWrite = false;
+    interrupts();
+    calOffset = v;
+    EEPROM.put(eeAddress, calOffset);
+#ifdef SERIAL_ENABLE
+    Serial.print("CalOffset updated to ");
+    Serial.println(calOffset);
+#endif
+    previousMillis = millis();  // keep awake briefly for follow-up commands
+  }
+  if (pendingHome) {
+    noInterrupts();
+    pendingHome = false;
+    interrupts();
+#ifdef SERIAL_ENABLE
+    Serial.println("Home requested");
+#endif
+    calibrate(true);
+    // Park at blank — don't immediately rotate back to the last displayed
+    // letter when the main letter-diff check runs below.
+    receivedNumber = 0;
+    displayedLetter = 0;
+    previousMillis = millis();
+  }
+  if (pendingJogSteps != 0) {
+    noInterrupts();
+    int8_t steps = pendingJogSteps;
+    pendingJogSteps = 0;
+    interrupts();
+#ifdef SERIAL_ENABLE
+    Serial.print("Jog ");
+    Serial.println(steps);
+#endif
+    startMotor();
+    stepper.setSpeed(stepperSpeed);
+    stepper.step(ROTATIONDIRECTION * (int)steps);
+    delay(50);
+    stopMotor();
+    previousMillis = millis();
   }
 
   unsigned long currentMillis = millis();
@@ -268,7 +348,6 @@ void receiveLetter(int numBytes) {
 
   // First byte >= AMOUNTFLAPS is a command opcode, not a letter index.
   if (firstByte >= AMOUNTFLAPS) {
-    while (remaining-- > 0) Wire.read();  // drain any args
     switch ((uint8_t)firstByte) {
       case CMD_ENTER_BOOTLOADER:
         pendingBootloader = true;
@@ -276,9 +355,31 @@ void receiveLetter(int numBytes) {
       case CMD_GET_VERSION:
         pendingVersionResponse = true;
         break;
+      case CMD_GET_OFFSET:
+        pendingOffsetResponse = true;
+        break;
+      case CMD_SET_OFFSET:
+        if (remaining >= 2) {
+          uint8_t lo = (uint8_t)Wire.read();
+          uint8_t hi = (uint8_t)Wire.read();
+          remaining -= 2;
+          pendingOffsetValue = (int16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+          pendingOffsetWrite = true;
+        }
+        break;
+      case CMD_JOG:
+        if (remaining >= 1) {
+          pendingJogSteps = (int8_t)Wire.read();
+          remaining--;
+        }
+        break;
+      case CMD_HOME:
+        pendingHome = true;
+        break;
       default:
         break;  // unknown opcode -> ignore
     }
+    while (remaining-- > 0) Wire.read();  // drain any extra args
     return;
   }
 
@@ -302,6 +403,14 @@ void requestEvent() {
     for (uint8_t i = 0; i < 8 && GIT_REV[i] != '\0'; i++) buf[i] = GIT_REV[i];
     Wire.write(buf, 8);
     pendingVersionResponse = false;
+    return;
+  }
+  if (pendingOffsetResponse) {
+    // Send exactly 2 bytes: int16 calOffset, little-endian.
+    uint16_t raw = (uint16_t)calOffset;
+    uint8_t buf[2] = { (uint8_t)(raw & 0xFF), (uint8_t)((raw >> 8) & 0xFF) };
+    Wire.write(buf, 2);
+    pendingOffsetResponse = false;
     return;
   }
   Wire.write(currentlyrotating); //send unit status to master
