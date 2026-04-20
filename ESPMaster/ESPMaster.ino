@@ -374,6 +374,14 @@ void setup() {
             SerialPrint("Master OTA complete, ");
             SerialPrint(index + len);
             SerialPrintln(" bytes written");
+            //Push every sketch-running unit into its twiboot bootloader
+            //before we reboot. When the new master comes up and probes
+            //the bus it'll find them in bootloader state and auto-flash
+            //them from the (possibly updated) PROGMEM bundle.
+            int rebooted = enterBootloaderAllDetected(false);
+            SerialPrint("Queued ");
+            SerialPrint(rebooted);
+            SerialPrintln(" unit(s) for bootloader on next boot");
           } else {
             SerialPrint("Update.end failed: ");
             SerialPrintln(Update.getErrorString());
@@ -405,6 +413,20 @@ void setup() {
         body += status;
         request->send(502, "text/plain", body);
       }
+    });
+
+    //GET /reflash-units — forces every sketch-running unit into its twiboot
+    //bootloader and then re-runs the PROGMEM auto-install. Use after a master
+    //OTA that ships a new bundled unit firmware if the chained reboot didn't
+    //catch every unit, or to manually refresh units without a master reboot.
+    webServer.on("/reflash-units", HTTP_GET, [](AsyncWebServerRequest * request) {
+      SerialPrintln("Request to Reflash Units Received");
+      int rebooted = enterBootloaderAllDetected(true);
+      autoInstallFirmwareToBootloaderUnits();
+      String body = String("Requested bootloader entry on ") + rebooted +
+                    " unit(s); re-probed and triggered PROGMEM auto-install. " +
+                    "Watch the Log panel for per-unit results.";
+      request->send(200, "text/plain", body);
     });
 
     webServer.on("/reset-units", HTTP_GET, [](AsyncWebServerRequest * request) {

@@ -298,6 +298,27 @@ function showHideOtaUpdateAction(isOtaEnabled) {
 	}
 }
 
+//Pushes every detected sketch-running unit into its twiboot bootloader and
+//asks the master to re-flash them from the PROGMEM bundle. Blocks while the
+//master works (I2C flashing is serial); progress lines land in /log.
+function reflashAllUnits() {
+	if (!confirm("Force every detected unit into its bootloader and re-flash from the bundled unit firmware?\n\nLetters will freeze for a few seconds while each unit reboots + gets rewritten. Watch the Log panel for per-unit progress.")) {
+		return false;
+	}
+	var xhr = new XMLHttpRequest();
+	xhr.open("GET", "/reflash-units");
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState !== 4) return;
+		if (xhr.status === 200) {
+			showBannerMessage(xhr.responseText, 5000);
+		} else {
+			showBannerMessage("Reflash request failed: HTTP " + xhr.status, 5000);
+		}
+	};
+	xhr.send();
+	return false;
+}
+
 //Formats and displays all scheduled messages in a "nice" format
 function showScheduledMessages(scheduledMessages) {
 	var elementMessageCount = document.getElementById("spanScheduledMessageCount");

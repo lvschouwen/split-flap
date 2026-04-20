@@ -312,3 +312,25 @@ void autoInstallFirmwareToBootloaderUnits() {
   }
 #endif
 }
+
+// Sends CMD_ENTER_BOOTLOADER to every unit the probe currently sees running
+// the sketch (state == 1). With reprobeAfter=true, waits ~500 ms for their
+// watchdog resets + twiboot init and re-runs probeI2cBus() so a subsequent
+// autoInstallFirmwareToBootloaderUnits() will catch them. Returns the
+// number of units that ACKed the reboot command.
+int enterBootloaderAllDetected(bool reprobeAfter) {
+  int rebooted = 0;
+  for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    if (detectedUnitStates[unitIndex] != 1) continue;
+    int addr = toI2cAddress(unitIndex);
+    if (rebootUnitToBootloader(addr) == 0) {
+      rebooted++;
+    }
+  }
+  if (rebooted > 0 && reprobeAfter) {
+    //Watchdog reset (~15 ms) + twiboot init. 500 ms is generous.
+    delay(500);
+    probeI2cBus();
+  }
+  return rebooted;
+}

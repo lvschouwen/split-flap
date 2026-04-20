@@ -24,3 +24,5 @@ extern volatile bool firmwareFlashInProgress;
 bool beginFirmwareFlash(uint8_t i2cAddress, String& error);
 bool finishFirmwareFlash(String& resultMsg);
 void abortFirmwareFlash(const String& reason);
+void autoInstallFirmwareToBootloaderUnits();
+int enterBootloaderAllDetected(bool reprobeAfter);
