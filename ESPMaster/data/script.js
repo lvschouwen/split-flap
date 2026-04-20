@@ -37,26 +37,14 @@ form.onsubmit = function () {
 	}
 	else {
 		const deviceMode = document.querySelector('input[name="deviceMode"]:checked').value;
-		const tzOffset = timezoneOffset * 60000;
 
-		switch(deviceMode) {
-			case "text":
-				//Convert characters which don't translate directly, replaces ä, ö, ü with unused unicode characters #, $, &
-				var inputTextValue = document.getElementById('inputText').value;
-				inputTextValue = inputTextValue.replace(/ä/gi, '$');
-				inputTextValue = inputTextValue.replace(/ö/gi, '&');
-				inputTextValue = inputTextValue.replace(/ü/gi, '#');
-				document.getElementById('inputText').value = inputTextValue;
-
-				//Set the hidden date time to UNIX
-				var currentScheduledDateTimeText = document.getElementById('inputScheduledDateTime').value;
-
-				//Take into account the timezone offset when we generate the unix timestamp
-				var currentScheduledDateTime = new Date(currentScheduledDateTimeText);
-				var time = Math.floor((currentScheduledDateTime.getTime() - tzOffset) / 1000);
-				document.getElementById('inputHiddenScheduledDateTimeUnix').value = time;
-
-				break;
+		if (deviceMode === "text") {
+			//Convert characters which don't translate directly, replaces ä, ö, ü with unused unicode characters #, $, &
+			var inputTextValue = document.getElementById('inputText').value;
+			inputTextValue = inputTextValue.replace(/ä/gi, '$');
+			inputTextValue = inputTextValue.replace(/ö/gi, '&');
+			inputTextValue = inputTextValue.replace(/ü/gi, '#');
+			document.getElementById('inputText').value = inputTextValue;
 		}
 	}
 }
@@ -71,8 +59,6 @@ function loadPage() {
 	if (urlParams.get('invalid-submission') === "true") {
 		showBannerMessage(`
 			Something went wrong during submission. Feel free to try again, ensure that you have entered valid information.
-			<br>
-			Ensure things like dates provided for schedules are in the future.
 		`);
 	}
 	else if (urlParams.get('is-resetting-units') === "true") {
@@ -83,13 +69,6 @@ function loadPage() {
 		`);
 	}
 	
-	//Set date time fields to be a minimum of todays date/time add 1 minute
-	var tzOffset = timezoneOffset * 60000;
-	document.querySelectorAll('input[type="datetime-local"]').forEach((dateTimeElement) => {
-		var currentDateTime = convertDateToString((new Date(Date.now() - tzOffset + 60000)));
-		dateTimeElement.value = dateTimeElement.min = currentDateTime;
-	});
-
 	if (localDevelopment) {
 		setSpeed("80");
 		setSavedMode("text");
@@ -103,13 +82,6 @@ function loadPage() {
 			{address: 1, versionStatus: 0},
 			{address: 2, versionStatus: 0},
 			{address: 3, versionStatus: 1},
-		]);
-		showScheduledMessages([
-			{
-				"scheduledDateTimeUnix": 1690134480,
-				"message": "Test Message 1",
-				"showIndefinitely": false
-			},
 		]);
 
 		setTimeout(function() {
@@ -148,10 +120,6 @@ function loadPage() {
 					});
 				}
 				setCalibrationUnits(calUnits);
-
-				if (responseObject.scheduledMessages) {
-					showScheduledMessages(responseObject.scheduledMessages);
-				}
 
 				showContent();
 			}
@@ -195,25 +163,6 @@ function addNewline() {
 	inputTextElement.value = textWithNewline;
 
 	updateCharacterCount();
-}
-
-//Send message to delete a message
-function deleteScheduledMessage(id, message) {
-	var confirmDeletion = confirm(`Delete Message '${message}'?`);
-	if (!confirmDeletion) {
-		return false;
-	}
-
-	var xhr = new XMLHttpRequest();
-	xhr.onreadystatechange = function () {
-		//Reload the page
-		if (this.readyState == 4 && this.status == 202) {
-			window.location.reload();
-		}
-	};
-
-	xhr.open("DELETE", `/scheduled-message/remove?id=${id}`, true);
-	xhr.send();
 }
 
 //Updates slider value while sliding
@@ -307,19 +256,6 @@ function setLastReceivedMessage(time) {
 	document.getElementById("labelLastMessageReceived").innerHTML = timeMessage;
 }
 
-//Used for scheduling messages
-function showHideScheduledMessageInput() {
-	var scheduleOptionsElement = document.getElementById("divScheduleOptions");
-	var checkboxScheduled = document.getElementById("inputCheckboxScheduleEnabled");
-
-	if (checkboxScheduled.checked) {
-		scheduleOptionsElement.classList.remove("hidden")
-	}
-	else {
-		scheduleOptionsElement.classList.add("hidden")
-	}
-}
-
 function showHideResetWifiSettingsAction(isWifiApMode) {
 	if (!isWifiApMode) {
 		var linkActionResetWifi = document.getElementById("linkActionResetWifi");
@@ -376,63 +312,6 @@ function reflashAllUnits() {
 	return false;
 }
 
-//Formats and displays all scheduled messages in a "nice" format
-function showScheduledMessages(scheduledMessages) {
-	var elementMessageCount = document.getElementById("spanScheduledMessageCount");
-	elementMessageCount.innerText = scheduledMessages.length;
-
-	//Closest to being shown first
-	scheduledMessages = scheduledMessages.sort((a, b) => a.scheduledDateTimeUnix - b.scheduledDateTimeUnix);
-
-	var container = document.getElementById("containerScheduledMessages");
-
-	scheduledMessages.forEach(function(scheduledMessage) {
-		//Create a container for a message
-		var messageElement = document.createElement("div");
-		messageElement.className = "message";
-
-		//Create a element to show the time
-		var timeElement = document.createElement("div");
-		timeElement.className = "time";
-		timeElement.innerText = new Date((scheduledMessage.scheduledDateTimeUnix * 1000) + (timezoneOffset * 60000)).toString().slice(0, -34);
-
-		//Create a element to show the text. Build via DOM + textContent so user
-		//message text can't inject HTML (previously interpolated into innerHTML).
-		var textElement = document.createElement("div");
-		textElement.className = "text";
-
-		var messageLabel = document.createElement("b");
-		messageLabel.textContent = "Message:";
-		var displayMessage = scheduledMessage.message.trim() == "" ? "<Blank>" : scheduledMessage.message;
-		textElement.appendChild(messageLabel);
-		textElement.appendChild(document.createTextNode(" " + displayMessage));
-		textElement.appendChild(document.createElement("br"));
-
-		var indefiniteLabel = document.createElement("b");
-		indefiniteLabel.textContent = "Shown Indefinitely:";
-		textElement.appendChild(indefiniteLabel);
-		textElement.appendChild(document.createTextNode(" " + (scheduledMessage.showIndefinitely ? "Yes" : "No")));
-
-		//Create a remove button. Use addEventListener so message text isn't
-		//interpolated into an onclick attribute string.
-		var actionElement = document.createElement("div");
-		var actionButtonElement = document.createElement("span");
-		actionElement.className = "action";
-		actionButtonElement.className = "remove-button";
-		actionButtonElement.innerText = "Remove";
-		actionButtonElement.addEventListener('click', function() {
-			deleteScheduledMessage(scheduledMessage.scheduledDateTimeUnix, scheduledMessage.message);
-		});
-		actionElement.appendChild(actionButtonElement);
-
-		//Add all the elements to the message
-		messageElement.appendChild(timeElement);
-		messageElement.appendChild(textElement);
-		messageElement.appendChild(actionElement);
-
-		container.appendChild(messageElement);
-	});
-}
 
 function showContent() {
 	var elementInitialLoading = document.getElementById("initialLoading");
@@ -725,7 +604,6 @@ function sendCalibrationLetter() {
 	form.append("flapSpeed", document.getElementById("rangeFlapSpeed").value);
 	form.append("deviceMode", "text");
 	form.append("inputText", padded);
-	form.append("scheduledDateTimeUnix", "0");
 
 	var xhr = new XMLHttpRequest();
 	xhr.open("POST", "/");

@@ -198,48 +198,7 @@ input[type=datetime-local] {
 	padding-right: 5%;
 }
 
-.scheduled-messages {
-	width: 100%;
-	padding-bottom: 5px;
-}
-
-.scheduled-messages .message:last-child {
-	padding-bottom: 0;
-}
-
-.message {
-	padding: 5px;
-	margin: 5px;
-	display: flex;
-	align-content: center;
-    align-items: stretch;
-}
-
-.message .time {
-	padding: 5px;
-	width: calc(30% - 10px);
-	background-color: #FFB96D;
-	display: flex;
-	align-items: center;
-    justify-content: center;
-}
-
-.message .text {
-	text-align: left;
-	padding: 5px;
-	width: calc(50% - 10px);
-	background-color: #fff;
-}
-
-.message .action {
-	text-align: right;
-	width: calc(20% - 10px);
-	display: flex;
-	justify-content: end;
-}
-
-.message .action .remove-button {
-	width: 90px;
+.remove-button {
 	padding: 5px 10px;
 	border: none;
 	color: #FEFCFB;
@@ -249,14 +208,11 @@ input[type=datetime-local] {
 	font-size: 16px;
 	border-radius: 4px;
 	transition-duration: 0.4s;
-	justify-content: center;
-	align-items: center;
-	display: flex;
+	cursor: pointer;
 }
 
-.message .action .remove-button:hover {
+.remove-button:hover {
 	background-color: #FFB96D;
-	cursor: pointer;
 }
 
 .actions {
@@ -270,31 +226,6 @@ input[type=datetime-local] {
 	justify-content: center;
 	align-items: center;
 	height: 35px;
-}
-
-@media (max-width: 700px) {
-	.message {
-		flex-wrap: wrap;
-		padding-bottom: 20px;
-		border-bottom: 1px solid #F8880E;
-	}
-
-	.message:last-child {
-		border-bottom: none;
-	}
-
-	.message .time {
-		width: 100%;
-	}
-
-	.message .text {
-		width: 100%;
-	}
-	
-	.message .action {
-		width: 100%;
-		justify-content: center;
-	}
 }
 
 /* Loading Processing CSS from https://loading.io/css/ */

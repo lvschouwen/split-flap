@@ -20,7 +20,6 @@ void initialiseFileSystem() {
     writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  ALIGNMENT_MODE_LEFT);
     writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  "80");
     writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, DEVICE_MODE_TEXT);
-    writeSettingString(OFF_SCHEDMSGS,  LEN_SCHEDMSGS,  "[]");
     writeSettingMagic();
     EEPROM.commit();
   }
@@ -33,25 +32,13 @@ void loadValuesFromFileSystem() {
   flapSpeed           = readSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED);
   deviceMode          = readSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE);
 
-  String scheduledMessagesJson = readSettingString(OFF_SCHEDMSGS, LEN_SCHEDMSGS);
-  if (scheduledMessagesJson.length() > 0 && scheduledMessagesJson != "[]") {
-    SerialPrintln("Loading Scheduled Messages");
-    readScheduledMessagesFromJson(scheduledMessagesJson);
-  }
-
   SerialPrintln("Loaded Settings:");
   SerialPrintln("   Alignment: " + alignment);
   SerialPrintln("   Flap Speed: " + flapSpeed);
   SerialPrintln("   Device Mode: " + deviceMode);
-  SerialPrint("   Scheduled Message Count: ");
-  SerialPrintln(scheduledMessages.size());
 }
 
 // Called from the web server handlers whenever a setting changes.
 void saveAlignment()    { writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  alignment);           EEPROM.commit(); }
 void saveFlapSpeed()    { writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  flapSpeed);           EEPROM.commit(); }
 void saveDeviceMode()   { writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, deviceMode);          EEPROM.commit(); }
-void saveScheduledMessagesJson(const String& json) {
-  writeSettingString(OFF_SCHEDMSGS, LEN_SCHEDMSGS, json);
-  EEPROM.commit();
-}

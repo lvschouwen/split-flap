@@ -13,8 +13,11 @@
 //   25     8      alignment ("left"/"center"/"right")
 //   33     4      flapSpeed (decimal int)
 //   37     20     deviceMode
-//   57     1975   scheduledMessages JSON
+//   57     1975   RESERVED (formerly scheduledMessages JSON, removed with #38)
 //   2032            end of blob
+//
+// Reserved slots keep existing EEPROM blobs (same SETTINGS_VERSION) valid —
+// no migration required when features are removed.
 
 #pragma once
 
@@ -26,9 +29,6 @@
 
 #define OFF_MAGIC                 0
 #define OFF_VERSION               4
-// Formerly countdownToDateUnix; slot kept reserved so existing EEPROM blobs
-// (same SETTINGS_VERSION) keep their alignment/flapSpeed/deviceMode/sched
-// messages valid across the #26 upgrade.
 #define OFF_RESERVED_1            5
 #define LEN_RESERVED_1            20
 #define OFF_ALIGNMENT             25
@@ -37,8 +37,8 @@
 #define LEN_FLAPSPEED             4
 #define OFF_DEVICEMODE            37
 #define LEN_DEVICEMODE            20
-#define OFF_SCHEDMSGS             57
-#define LEN_SCHEDMSGS             1975
+#define OFF_RESERVED_2            57
+#define LEN_RESERVED_2            1975
 
 inline String readSettingString(int offset, int maxLen) {
   String out;

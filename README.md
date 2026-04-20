@@ -38,13 +38,11 @@ This project has built on the original project to add extra features such as:
     - Version Number running
     - How many characters/lines are in the textbox for text
     - Add newline button (as typing `\n` is a pain on a mobile keyboard)
-- Message Scheduling
-  - Ability to send a message and display it at a later date.
-  - Options for when a scheduled message being shown
-    - If the clock was in another mode, such as `Clock` mode, it will show the message for a duration (changable via updating `scheduledMessageDisplayTimeMillis` in `ESPMaster.ino`), then return to that mode afterwards
-    - A checkbox on the UI is presented ("Show Indefinitely") that when checked, will show a message and leave it on the display
 - Web OTA
   - Upload a new `firmware.bin` from the browser; the ESP reboots into it.
+  - Optional `?md5=<hex>` query param verifies image integrity before eboot commits it.
+  - Size-checks the upload against the sketch slot before writing a single byte.
+  - Recovery SoftAP (`split-flap-recovery`) comes up after 3 consecutive failed boots so a bad firmware can always be reflashed without USB.
   - Also pushes the bundled unit firmware to every Nano it detects on the bus, so unit updates ride along with master updates.
 - I2C OTA for unit firmware
   - Master ships a compiled Unit sketch in PROGMEM and auto-installs it on any Nano sitting in twiboot (the [patched bootloader](./UnitBootloader/README.md) is flashed once per unit via ICSP).
