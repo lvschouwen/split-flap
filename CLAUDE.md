@@ -58,7 +58,7 @@ Unit-side: `SERIAL_ENABLE` and `TEST_ENABLE` (cycles a fixed character sequence 
 
 - Editing `.ino` siblings in `ESPMaster/` is editing one translation unit — declarations and `#define`s from `ESPMaster.ino` are visible everywhere, and order of concatenation is alphabetical by file name. The Arduino preprocessor auto-prototypes plain functions but falls over on templates (`<typeprefixerror>`) and on signatures with namespace-qualified references like `fs::FS&`; add those prototypes manually (header file) rather than relying on auto-prototyping.
 - The LittleFS upload is a **separate step** from the sketch upload; forgetting it leaves the web UI serving nothing.
-- The ESP-01 has very little RAM; be conservative adding libraries or large JSON payloads. `ArduinoJson` is already pinned to 7.0.4.
+- The ESP-01 has very little RAM; be conservative adding libraries or large JSON payloads. `ArduinoJson` is already pinned to 7.4.3.
 - `#define WEBSERVER_H` before `<WiFiManager.h>` is a deliberate workaround — don't "clean up" that include order.
 - `LinkedList` is wrapped in a `LL` namespace in `Classes.h` to avoid a known conflict; use `LList<T>` / `LNode<T>` aliases rather than the raw type.
 - Test files `#include` the `.ino` sources directly to exercise real code. This means any sibling `.ino` must be compilable standalone in the native env — add explicit forward declarations at the top of a file (e.g. `String cleanString(String);` in `HelpersStringHandling.ino`) if functions are used before their definition in the same file.
