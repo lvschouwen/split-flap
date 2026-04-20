@@ -787,6 +787,12 @@ String getCurrentSettingValues() {
   for (int i = 0; i < detectedUnitCount; i++) {
     document["detectedUnitAddresses"][i] = detectedUnitAddresses[i];
   }
+  // Per-unit firmware version, indexed by unit slot (0..UNITS_AMOUNT-1) so the
+  // UI can show a badge per address even for silent units. See issue #28.
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    document["detectedUnitVersionStatus"][i] = detectedUnitVersionStatus[i];
+    document["detectedUnitVersions"][i] = detectedUnitVersions[i];
+  }
   document["alignment"] = alignment;
   document["flapSpeed"] = flapSpeed;
   document["deviceMode"] = deviceMode;

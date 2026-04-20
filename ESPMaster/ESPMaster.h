@@ -11,6 +11,13 @@
 // alphabetical concatenation order, so needs the forward declaration).
 extern int detectedUnitCount;
 extern int detectedUnitAddresses[];
+// Per-unit firmware status, populated alongside detectedUnitAddresses.
+//   0 = ok (unit reported the same rev the master was built with)
+//   1 = outdated (unit reported a different rev)
+//   2 = unknown (unit didn't reply with a valid 8-byte rev — older firmware)
+extern int detectedUnitVersionStatus[];
+// 8 chars + null terminator. Empty string when no valid version was returned.
+extern char detectedUnitVersions[][9];
 
 // Defined in ServiceFlapFunctions.ino; called from the /unit/reboot endpoint
 // handler registered in ESPMaster.ino (earlier in the concat order).

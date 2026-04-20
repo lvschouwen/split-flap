@@ -7,6 +7,7 @@
 // FLAP_AMOUNT are reserved for commands (valid letter indices are 0..44).
 // Must stay in sync with Unit/Unit.ino's CMD_* constants.
 #define UNIT_CMD_ENTER_BOOTLOADER 0x80
+#define UNIT_CMD_GET_VERSION      0x81
 
 static int toI2cAddress(int unitIndex) {
   return I2C_ADDRESS_BASE + unitIndex;
@@ -212,6 +213,42 @@ int checkIfMoving(int unitIndex) {
 int detectedUnitCount = 0;
 int detectedUnitAddresses[UNITS_AMOUNT];
 int detectedUnitStates[UNITS_AMOUNT];
+// Version-check state, populated after each successful sketch-mode detection.
+// Status codes match the comment in ESPMaster.h: 0=ok, 1=outdated, 2=unknown.
+int detectedUnitVersionStatus[UNITS_AMOUNT];
+char detectedUnitVersions[UNITS_AMOUNT][9];
+
+// Asks a sketch-mode unit for its firmware GIT_REV via CMD_GET_VERSION. Writes
+// up to 8 printable ASCII bytes into `out` (null-terminated). Returns true iff
+// the unit returned 8 bytes that look like a valid rev (all printable).
+// Old firmware that doesn't know the opcode will still ACK the write (the
+// opcode namespace silently drops unknowns) but its requestEvent returns only
+// the 1-byte rotation status, so `got != 8` — we flag that as "unknown".
+static bool readUnitVersion(int i2cAddress, char *out) {
+  out[0] = '\0';
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)UNIT_CMD_GET_VERSION);
+  if (Wire.endTransmission() != 0) return false;
+  // Give the slave a moment to flip its pending-version flag before we clock.
+  delay(2);
+  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)8);
+  if (got != 8) {
+    while (Wire.available()) Wire.read();
+    return false;
+  }
+  uint8_t buf[8];
+  for (uint8_t i = 0; i < 8; i++) buf[i] = Wire.read();
+  // Copy to out, stopping at first null; reject if any non-printable non-null.
+  uint8_t len = 0;
+  for (; len < 8; len++) {
+    if (buf[len] == 0) break;
+    if (buf[len] < 32 || buf[len] > 126) return false;
+  }
+  if (len == 0) return false;
+  for (uint8_t i = 0; i < len; i++) out[i] = (char)buf[i];
+  out[len] = '\0';
+  return true;
+}
 
 // Writes twiboot's CMD_ACCESS_MEMORY + CHIPINFO request, reads the 8-byte
 // chipinfo response and checks whether the signature matches the ATmega328P.
@@ -242,6 +279,8 @@ void probeI2cBus() {
   detectedUnitCount = 0;
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
     detectedUnitStates[unitIndex] = 0;  // silent by default
+    detectedUnitVersionStatus[unitIndex] = 2;  // unknown by default
+    detectedUnitVersions[unitIndex][0] = '\0';
     int i2cAddress = toI2cAddress(unitIndex);
     Wire.beginTransmission(i2cAddress);
     if (Wire.endTransmission() != 0) continue;
@@ -252,7 +291,29 @@ void probeI2cBus() {
 
     SerialPrint("- unit at 0x");
     SerialPrint(String(i2cAddress, HEX));
-    SerialPrintln(inBootloader ? " is in BOOTLOADER mode" : " is running sketch");
+    if (inBootloader) {
+      SerialPrintln(" is in BOOTLOADER mode");
+      continue;
+    }
+    SerialPrint(" is running sketch");
+
+    // Compare against the master's own GIT_REV. The bundled unit firmware is
+    // expected to be built from the same commit — if they differ, the unit is
+    // running an older image and should be reflashed. Old firmware that
+    // predates CMD_GET_VERSION returns a short response and is flagged
+    // "unknown".
+    if (readUnitVersion(i2cAddress, detectedUnitVersions[unitIndex])) {
+      // Master's GIT_REV may be longer than 8 chars; unit truncates to 8, so
+      // compare only the leading 8 chars.
+      bool match = (strncmp(detectedUnitVersions[unitIndex], espVersion, 8) == 0);
+      detectedUnitVersionStatus[unitIndex] = match ? 0 : 1;
+      SerialPrint(match ? " (fw " : " (fw OUTDATED ");
+      SerialPrint(detectedUnitVersions[unitIndex]);
+      SerialPrintln(")");
+    } else {
+      detectedUnitVersionStatus[unitIndex] = 2;
+      SerialPrintln(" (fw UNKNOWN — likely predates version opcode)");
+    }
   }
   SerialPrint("I2C scan complete. Detected ");
   SerialPrint(detectedUnitCount);
