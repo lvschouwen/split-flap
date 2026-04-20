@@ -187,7 +187,7 @@ bool alignmentUpdated = false;
 bool isPendingReboot = false;
 bool isPendingUnitsReset = false;
 bool isWifiConfigured = false;
-LList<ScheduledMessage> scheduledMessages;
+std::vector<ScheduledMessage> scheduledMessages;
 Timezone timezone; 
 
 //Create AsyncWebServer object on port 80

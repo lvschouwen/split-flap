@@ -82,7 +82,7 @@ int convertSpeed(String flapSpeed) {
   return flapSpeedInt;
 }
 
-LList<String> processSentenceToLines(String sentence) {    
+std::vector<String> processSentenceToLines(String sentence) {
   SerialPrintln("Processing Sentence to lines");
   
   //Remove trailing and preceding whitespace
@@ -115,7 +115,7 @@ LList<String> processSentenceToLines(String sentence) {
   }
     
   // Split the string into substrings based on spaces
-  LList<String> words; 
+  std::vector<String> words;
   while (sentence.length() > 0)
   {
     //Find the next space
@@ -125,20 +125,20 @@ LList<String> processSentenceToLines(String sentence) {
     //Else, process the part of the string
     if (indexOfSpace == -1)
     {
-      words.add(sentence);
+      words.push_back(sentence);
       break;
     }
     else
     {
-      words.add(sentence.substring(0, indexOfSpace));
+      words.push_back(sentence.substring(0, indexOfSpace));
       sentence = sentence.substring(indexOfSpace + 1);
     }
   }
 
   //Now process the words into lines where possible
-  LList<String> lines;
+  std::vector<String> lines;
   String inProgressLine;
-  while(words.size() != 0) 
+  while(!words.empty())
   {
     //Always get the first word
     String wordItem = words[0];
@@ -147,7 +147,7 @@ LList<String> processSentenceToLines(String sentence) {
     int indexOfFirstNewline = wordItem.indexOf('\n');
 
     //If the first characeter is not a newline see if we can fit it on the current line, otherwise don't bother
-    if (indexOfFirstNewline != 0) 
+    if (indexOfFirstNewline != 0)
     {
       //Determine the word length up till the first newline as to see if it will fit on the current line
       int wordLength = indexOfFirstNewline == -1 ? wordItem.length() : indexOfFirstNewline;
@@ -155,7 +155,7 @@ LList<String> processSentenceToLines(String sentence) {
       //If we cannot fit everything on the same line, start a new line
       if (inProgressLine != "" && inProgressLine.length() + wordLength + 1 > UNITS_AMOUNT)
       {
-          lines.add(inProgressLine);
+          lines.push_back(inProgressLine);
           inProgressLine = "";
       }
 
@@ -174,7 +174,7 @@ LList<String> processSentenceToLines(String sentence) {
 
       if (wordItemLetter == '\n')
       {
-        lines.add(inProgressLine);
+        lines.push_back(inProgressLine);
         inProgressLine = "";
       }
       else
@@ -183,27 +183,27 @@ LList<String> processSentenceToLines(String sentence) {
         if (inProgressLine.length() == UNITS_AMOUNT - 1 && letterIndex < currentWordLength - 1)
         {
           inProgressLine = inProgressLine + "-";
-          lines.add(inProgressLine);
+          lines.push_back(inProgressLine);
           inProgressLine = "";
         }
 
         //Business as usual, add the letter onto the in progress line
         inProgressLine = inProgressLine + wordItemLetter;
         if (inProgressLine.length() == UNITS_AMOUNT)
-        {  
-          lines.add(inProgressLine);
+        {
+          lines.push_back(inProgressLine);
           inProgressLine = "";
         }
       }
     }
-    
+
     //Remove now we've processed that word
-    words.remove(0);
-    
+    words.erase(words.begin());
+
     //Don't forgot the last processed item...
-    if (words.size() == 0 && inProgressLine != "")
+    if (words.empty() && inProgressLine != "")
     {
-      lines.add(inProgressLine);
+      lines.push_back(inProgressLine);
       inProgressLine = "";
     }
   }

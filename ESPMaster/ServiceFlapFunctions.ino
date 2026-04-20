@@ -35,7 +35,7 @@ void showText(String message, int delayMillis) {
     SerialPrintln("New Message: " + messageDisplay);
     SerialPrintln("Alignment Updated: " + alignmentUpdatedDisplay);
   
-    LList<String> messageLines = processSentenceToLines(message);
+    std::vector<String> messageLines = processSentenceToLines(message);
 
     if (messageLines.size() > 1) {
       SerialPrintln("Showing a split down message");

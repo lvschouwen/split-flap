@@ -19,7 +19,7 @@ void addScheduledMessage(String scheduledText, long scheduledDateTimeUnix, bool 
 
     if (scheduledDateTimeUnix == scheduledMessage.ScheduledDateTimeUnix) {
       SerialPrintln("Removing Existing Scheduled Message due to be shown, it will be replaced");
-      scheduledMessages.remove(scheduledMessageIndex);
+      scheduledMessages.erase(scheduledMessages.begin() + scheduledMessageIndex);
       break;
     }
   }
@@ -27,7 +27,7 @@ void addScheduledMessage(String scheduledText, long scheduledDateTimeUnix, bool 
   //Add the new scheduled message with the new value
   if (scheduledDateTimeUnix > timezone.now()) {
     SerialPrintln("Adding new Scheduled Message");
-    scheduledMessages.add({scheduledText, scheduledDateTimeUnix, showIndefinitely});
+    scheduledMessages.push_back({scheduledText, scheduledDateTimeUnix, showIndefinitely});
   }
   else {
     SerialPrintln("Not adding Scheduled Message as it is in the past");
@@ -42,8 +42,8 @@ bool removeScheduledMessage(long scheduledDateTimeUnix) {
 
     if (scheduledDateTimeUnix == scheduledMessage.ScheduledDateTimeUnix) {
       SerialPrintln("Deleting Scheduled Message due to be shown: " + scheduledMessage.Message);
-      scheduledMessages.remove(scheduledMessageIndex);
-      
+      scheduledMessages.erase(scheduledMessages.begin() + scheduledMessageIndex);
+
       writeScheduledMessagesToFile();
 
       return true;
@@ -77,7 +77,7 @@ void checkScheduledMessages() {
         showText(scheduledMessage.Message, scheduledMessageDisplayTimeMillis);
       }      
 
-      scheduledMessages.remove(scheduledMessageIndex);
+      scheduledMessages.erase(scheduledMessages.begin() + scheduledMessageIndex);
       writeScheduledMessagesToFile();
       break;
     }
