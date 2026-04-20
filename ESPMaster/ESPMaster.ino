@@ -348,6 +348,23 @@ void setup() {
       isPendingReboot = true;
     });
     
+    //GET /debug/ota — dumps the flash-layout numbers the Update class cares
+    //about so we can tell from a browser whether web OTA should work at all.
+    webServer.on("/debug/ota", HTTP_GET, [](AsyncWebServerRequest * request) {
+      uint32_t freeSpace    = ESP.getFreeSketchSpace();
+      uint32_t maxSketch    = (freeSpace - 0x1000) & 0xFFFFF000;
+      String body;
+      body += "sketchSize        = "; body += ESP.getSketchSize();         body += "\n";
+      body += "freeSketchSpace   = "; body += freeSpace;                   body += "\n";
+      body += "maxSketchSpace    = "; body += maxSketch;                   body += " (what Update.begin uses)\n";
+      body += "flashChipSize     = "; body += ESP.getFlashChipSize();      body += "\n";
+      body += "flashChipRealSize = "; body += ESP.getFlashChipRealSize();  body += "\n";
+      body += "sketchMD5         = "; body += ESP.getSketchMD5();          body += "\n";
+      body += "coreVersion       = "; body += ESP.getCoreVersion();        body += "\n";
+      body += "version           = "; body += espVersion;                  body += "\n";
+      request->send(200, "text/plain", body);
+    });
+
     //POST /firmware/master — web OTA for the ESP itself. Receives a .bin
     //via multipart upload, flashes via the ESP8266 Update class, reboots.
     //Usable because the eagle.flash.1m.ld (no-FS) layout leaves ~1 MB for
@@ -359,6 +376,10 @@ void setup() {
           String msg = String("Master OTA failed: ") + Update.getErrorString();
           SerialPrintln(msg);
           request->send(500, "text/plain", msg);
+        } else if (!Update.isFinished()) {
+          String msg = "Master OTA incomplete: Update.isFinished() == false after final chunk";
+          SerialPrintln(msg);
+          request->send(500, "text/plain", msg);
         } else {
           request->send(200, "text/plain", "Master firmware flashed; rebooting…");
           isPendingReboot = true;
@@ -366,22 +387,30 @@ void setup() {
       },
       [](AsyncWebServerRequest * request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
         if (index == 0) {
-          SerialPrint("Master OTA starting: ");
-          SerialPrintln(filename);
-          uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+          uint32_t freeSpace = ESP.getFreeSketchSpace();
+          uint32_t maxSketchSpace = (freeSpace - 0x1000) & 0xFFFFF000;
+          SerialPrint("Master OTA starting: "); SerialPrintln(filename);
+          SerialPrint("  freeSketchSpace = "); SerialPrintln(freeSpace);
+          SerialPrint("  maxSketchSpace  = "); SerialPrintln(maxSketchSpace);
           Update.runAsync(true);
           if (!Update.begin(maxSketchSpace, U_FLASH)) {
             SerialPrint("Update.begin failed: ");
+            Update.printError(Serial);
             SerialPrintln(Update.getErrorString());
+          } else {
+            SerialPrintln("Update.begin ok — streaming chunks");
           }
         }
         if (!Update.hasError() && len > 0) {
-          if (Update.write(data, len) != len) {
-            SerialPrint("Update.write failed: ");
-            SerialPrintln(Update.getErrorString());
+          size_t written = Update.write(data, len);
+          if (written != len) {
+            SerialPrint("Update.write short: wrote "); SerialPrint(written);
+            SerialPrint(" of "); SerialPrint(len);
+            SerialPrint(" — err: "); SerialPrintln(Update.getErrorString());
           }
         }
         if (final) {
+          SerialPrint("Final chunk: total "); SerialPrint(index + len); SerialPrintln(" bytes");
           if (Update.end(true)) {
             SerialPrint("Master OTA complete, ");
             SerialPrint(index + len);
