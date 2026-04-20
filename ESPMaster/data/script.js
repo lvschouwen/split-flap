@@ -481,6 +481,10 @@ function initLogPanel() {
 		else stopPolling();
 	});
 
+	//<details open> doesn't fire the toggle event on load, so kick off
+	//polling manually if the panel starts expanded.
+	if (details.open) startPolling();
+
 	//Also stop polling if the tab is hidden — no point waking the ESP for updates nobody's reading.
 	document.addEventListener('visibilitychange', function () {
 		if (document.hidden) stopPolling();
