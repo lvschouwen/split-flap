@@ -1,6 +1,6 @@
 # Split-Flap
 
-[![Build ESP Master Sketch](https://github.com/JonnyBooker/split-flap/actions/workflows/build-esp-master.yml/badge.svg)](https://github.com/JonnyBooker/split-flap/actions/workflows/build-esp-master.yml) [![Build EEPROM Write Sketch](https://github.com/JonnyBooker/split-flap/actions/workflows/build-eeprom-write.yml/badge.svg)](https://github.com/JonnyBooker/split-flap/actions/workflows/build-eeprom-write.yml) [![Build Arduino Unit Sketch](https://github.com/JonnyBooker/split-flap/actions/workflows/build-unit.yml/badge.svg)](https://github.com/JonnyBooker/split-flap/actions/workflows/build-unit.yml)
+[![Build](https://github.com/lvschouwen/split-flap/actions/workflows/build.yml/badge.svg)](https://github.com/lvschouwen/split-flap/actions/workflows/build.yml)
 
 ![Split Flap Display](./Images/Split-Flap.jpg)
 
@@ -43,8 +43,11 @@ This project has built on the original project to add extra features such as:
   - Options for when a scheduled message being shown
     - If the clock was in another mode, such as `Clock` mode, it will show the message for a duration (changable via updating `scheduledMessageDisplayTimeMillis` in `ESPMaster.ino`), then return to that mode afterwards
     - A checkbox on the UI is presented ("Show Indefinitely") that when checked, will show a message and leave it on the display
-- Arduino OTA
-  - Over the Air updates to the display
+- Web OTA
+  - Upload a new `firmware.bin` from the browser; the ESP reboots into it.
+  - Also pushes the bundled unit firmware to every Nano it detects on the bus, so unit updates ride along with master updates.
+- I2C OTA for unit firmware
+  - Master ships a compiled Unit sketch in PROGMEM and auto-installs it on any Nano sitting in twiboot (the [patched bootloader](./UnitBootloader/README.md) is flashed once per unit via ICSP).
 - Updated `README.md` to add scenarios of problems encountered
 
 Also the code has been refactored to try facilitate easier development:
@@ -70,10 +73,11 @@ Each of the three sketches has its own `platformio.ini` in its folder. From the 
 
 ```bash
 pio run                   # build
-pio run -t upload         # flash firmware
-pio run -t uploadfs       # flash the LittleFS contents (ESPMaster only)
+pio run -t upload         # flash firmware over USB
 pio device monitor        # serial monitor at 115200 baud
 ```
+
+The web UI and the bundled unit firmware are compiled into the master's PROGMEM at build time by `ESPMaster/build_assets.py` (no separate filesystem flash step).
 
 For the Unit and EEPROM_Write_Offset sketches, if upload fails because of the old bootloader on your Nano, use the `*_old_bootloader` env:
 
@@ -87,7 +91,7 @@ Host-side unit tests for the ESPMaster string helpers live in `ESPMaster/test/` 
 cd ESPMaster && pio test -e native
 ```
 
-If you'd rather stay with the Arduino IDE, the sketches are still compatible — each `*.ino` file sits next to its `platformio.ini` and opens as a normal sketch. The pinned library versions are documented in each `platformio.ini`.
+Arduino IDE is **not** supported for the master sketch any more: the PROGMEM asset generation runs as a PlatformIO pre-build step, and the build flags / lib dependencies are managed through `platformio.ini`. The Unit and EEPROM_Write_Offset sketches are simple enough to still open in the IDE, but the PlatformIO flow is the supported path for every part of the project.
 
 ## General
 
@@ -166,49 +170,53 @@ To flash the ESP8266 you can either use an [Arduino Uno](https://create.arduino.
 
 > Alternatively, you can get a dedicated programmer from Amazon such as [this one](https://www.amazon.co.uk/dp/B083QHJW21). This is also available on [AliExpress](https://www.aliexpress.com/item/1005001793822720.html?spm=a2g0o.detail.0.0.48622aefV0Zv89&mp=1) if you are willing to wait a while for it.
 
-#### Uploading the Static Assets via LittleFS
+#### Web assets live in PROGMEM — no LittleFS upload
 
-The static files in [`ESPMaster/data/`](./ESPMaster/data/) make up the web interface. From the `ESPMaster/` folder:
+The files in [`ESPMaster/data/`](./ESPMaster/data/) (HTML/JS/CSS, favicon, bundled `unit-firmware.hex`) are gzipped and compiled directly into the master's binary by the `ESPMaster/build_assets.py` pre-build script. That means:
 
-```bash
-pio run -t uploadfs
-```
-
-This uploads the website onto the ESP8266's file system. Sketch upload is a separate step (below).
+- **No separate `pio run -t uploadfs` step.** Just `pio run -t upload` and the whole thing lands in flash.
+- The bundled `unit-firmware.hex` is what the master auto-installs to any Nano it finds in twiboot on boot (see [Unit firmware updates](#unit-firmware-updates-via-master)).
 
 #### Updating Settings of the Sketch
 
 There are several options in the Sketch you can modify to customise or change the behaviour of the display. These are marked in the code as "Configurable".
 
-By default, the system will run in an "Access Point" mode where you will be able to connect to the display and put in WiFi credentials directly. This means if you WiFi changes, you don't have to re-upload a new sketch. Screenshot of the WiFi setup portal:
+By default, the system runs in **captive-portal mode** (`WIFI_USE_DIRECT false`). On first boot the master exposes a `Split-Flap-AP` access point; connect, pick your real network, done.
 
 ![Screenshot WiFi Portal](./Images/Access-Point-Screenshot.jpg)
 
-Alternatively, you can specify credentials directly. You can go ahead and change the credentials in these variables:
-
-```c++
-const char* wifiDirectSsid = "";
-const char* wifiDirectPassword = "";
-```
-
-You will also need to change the WiFi Mode in the code via changing this variable to `true`:
+Alternatively, for a direct-connect firmware that skips the portal entirely, set:
 
 ```c++
 //Option to either direct connect to a WiFi Network or setup a AP to configure WiFi. Default: false (puts device in AP mode)
-#define WIFI_USE_DIRECT false
+#define WIFI_USE_DIRECT true
 ```
 
-You will also want to change the `timezoneString` to your time zone. You can find the TZ database names here: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+…and provide credentials in a **gitignored** local header so they never land in a public commit:
 
-You can also modify the date and clock format easily by using this table: https://github.com/ropg/ezTime#datetime
+```bash
+cp ESPMaster/WifiCredentials.h.example ESPMaster/WifiCredentials.h
+# edit WifiCredentials.h with your real SSID / password
+```
+
+The template sets the expected `wifiDirectSsid` / `wifiDirectPassword` globals; the real file is in `.gitignore`. If `WIFI_USE_DIRECT` is `true` but `WifiCredentials.h` is missing, the build still compiles (with a warning) — it just won't join a network.
+
+For the clock mode, set `timezonePosix` in `ESPMaster.ino` to a POSIX TZ string. Common examples:
+
+| Region | POSIX TZ |
+| --- | --- |
+| UK (Europe/London) | `GMT0BST,M3.5.0/1,M10.5.0` |
+| Central Europe | `CET-1CEST,M3.5.0,M10.5.0/3` |
+| US Eastern | `EST5EDT,M3.2.0,M11.1.0` |
+
+Full list: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
+
+`clockFormat` uses [`strftime(3)`](https://en.cppreference.com/w/c/chrono/strftime) conversion specifiers (`%H:%M`, `%I:%M%p`, etc).
 
 There are several helper `define` variables to help during debugging/running:
 
 - **SERIAL_ENABLE**
-  - Use this to enable Serial output lines for tracking executing code
-- **OTA_ENABLE**
-  - Use this to enable OTA updates from the Arduino IDE
-  - Subsequently, you can set a password for OTA via the `otaPassword` variable
+  - Use this to enable Serial output lines for tracking executing code. Must stay `false` on the ESP-01 for I2C to work (serial + I2C share the same pins).
 - **UNIT_CALLS_DISABLE**
   - Use this to disable the communication with the Arduino Nano Units. This will mean you can check code over function for the ESP module.
 
@@ -238,18 +246,41 @@ Code has been added to be able to set a Static IP Address on device. To do this:
 
 #### Sketch Upload
 
-Once the LittleFS upload is done, flash the sketch itself from the `ESPMaster/` folder:
+Flash the sketch from the `ESPMaster/` folder:
 
 ```bash
 pio run -t upload
 ```
 
-The ESP8266 will reboot running the new sketch. Stick it onto the first unit's PCB and navigate to the IP-address the ESP8266 is getting assigned from your router.
+The ESP8266 will reboot running the new sketch. Stick it onto the first unit's PCB and navigate to the IP-address the ESP8266 is getting assigned from your router. The build also drops a self-describing copy of the binary next to `firmware.bin`:
+
+```
+ESPMaster/.pio/build/espmaster/firmware-<short-git-rev>.bin
+```
+
+…which is the artifact you'd typically archive or push via the web OTA flow below.
+
+### Web OTA
+
+Once the master is on WiFi, subsequent flashes don't need a USB cable:
+
+- Go to the master's web UI → **Master Firmware (OTA)** card → upload the new `firmware-<rev>.bin`. The ESP reboots into the new sketch.
+- The same OTA flow also queues every detected unit for its twiboot bootloader right before the reboot, so after the master comes back up it auto-pushes the bundled unit firmware to each one. In one step the whole display is updated.
+- If you need to force just the units to re-flash (e.g. you changed `Unit.ino` and regenerated `ESPMaster/data/unit-firmware.hex` but the master is unchanged), click **Flash all unit(s)** under Actions.
+
+### Unit firmware updates via master
+
+The master ships with a copy of the compiled Unit sketch in PROGMEM (see `ESPMaster/data/unit-firmware.hex`, regenerated by the package script from the current `Unit/` build). Any Nano the master probes and finds sitting in twiboot — typically a freshly ICSP-flashed one with no sketch — gets that bundled image automatically on boot. Combined with the web OTA flow above this means:
+
+1. Rebuild `Unit/` after code changes.
+2. Copy the resulting `Unit/.pio/build/unit/firmware.hex` over `ESPMaster/data/unit-firmware.hex` (the `flashing/package-flasher.sh` script does this as part of a release).
+3. Rebuild master + OTA it.
+4. Master reboots, probes, auto-flashes every unit.
 
 ### Common Problems
 
-- If the ESP is not talking to the units correctly, check `UNITS_AMOUNT` in `ESPMaster/ESPMaster.ino`. It must match the number of physical units you have connected.
+- If the ESP is not talking to the units correctly, check `UNITS_AMOUNT` in `ESPMaster/ESPMaster.ino`. It must match the number of physical units you have connected. The web UI's "Units: N / 10" field shows how many of the expected `UNITS_AMOUNT` the boot-time probe actually found.
 - `SERIAL_ENABLE` must stay `false` for the ESP-01 to communicate with the Nanos over I2C (serial and I2C share the same pins on the ESP-01).
-- Remember to run both `pio run -t uploadfs` (static files) and `pio run -t upload` (sketch) on first setup.
+- `pio run -t upload` is the only flash step now — no separate filesystem upload. Web assets and the bundled unit firmware are baked into the master binary at build time.
 - When the system is powered, your hall sensor should only light up when a magnet is nearby.
 - User [@beroliv](https://github.com/beroliv) has reported having issues with WiFi connections. One solution they have proposed is soldering a wire to the antenna to be able to extend its range by creating an antenna. Here is the [link](https://www.stall.biz/project/verbesserte-wlan-konnektivitaet-mit-externen-antennen-fuer-wiffi-weatherman-und-andere-module-mit-esp8266/) (in German but Google Translate does a good job for other languages) they provided to detail the solution. Please take care when carrying out this solution. Thank you for the information [@beroliv](https://github.com/beroliv)!

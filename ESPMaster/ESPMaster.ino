@@ -95,11 +95,15 @@
 */
 //WiFi credentials for WIFI_USE_DIRECT == true live in a gitignored local
 //header so the public repo doesn't leak them. Copy WifiCredentials.h.example
-//to WifiCredentials.h and fill in your SSID / password. With captive-portal
-//mode (WIFI_USE_DIRECT == false) the creds aren't used so leave them empty.
-#if WIFI_USE_DIRECT == true
+//to WifiCredentials.h and fill in your SSID / password. If the file is
+//missing (fresh checkout, CI) we fall back to empty strings so the build
+//still compiles — the device just won't connect until you provide creds.
+#if WIFI_USE_DIRECT == true && __has_include("WifiCredentials.h")
   #include "WifiCredentials.h"
 #else
+  #if WIFI_USE_DIRECT == true
+    #warning "WIFI_USE_DIRECT is true but WifiCredentials.h is missing — copy WifiCredentials.h.example to fill it in."
+  #endif
   const char* wifiDirectSsid = "";
   const char* wifiDirectPassword = "";
 #endif
