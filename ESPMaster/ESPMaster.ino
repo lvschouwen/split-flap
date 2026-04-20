@@ -235,6 +235,18 @@ void setup() {
   SerialPrintln("..............Split Flap Display Starting..............");
   SerialPrintln("#######################################################");
 
+  //Early-boot I2C scan — run before WiFi/NTP so we fall inside twiboot's
+  //~1-second boot window. On simultaneous power-cycle the Nanos come up in
+  //twiboot first and only jump to their sketch after TIMEOUT_MS; if we waited
+  //for WiFi + NTP (up to 20 s combined) they'd be long gone and we'd never
+  //catch old-firmware units that need updating. The 200 ms delay gives the
+  //Nanos' TWI hardware time to come up after their reset.
+  //See issue #30.
+  SerialPrintln("Early I2C scan (twiboot window)...");
+  delay(200);
+  probeI2cBus();
+  autoInstallFirmwareToBootloaderUnits();
+
   //Load and read all the things
   initWiFi();
   
@@ -266,16 +278,16 @@ void setup() {
     initialiseFileSystem();
     loadValuesFromFileSystem();
 
-    //Scan the I2C bus so we know how many units actually answered. Result is
-    //exposed via /settings so the UI can warn about a mismatch. The probe
-    //also distinguishes bootloader-mode vs sketch-mode units so the next
-    //step can auto-install the bundled firmware on any blank units.
+    //Re-scan the I2C bus now that WiFi/NTP are up and any early-boot
+    //auto-install has settled. This refreshes /settings with the final
+    //post-install state — including firmware versions for newly installed
+    //units, which couldn't be queried yet during the first scan.
+    SerialPrintln("Settled I2C scan (post-WiFi)...");
     probeI2cBus();
-
-    //If any unit is sitting in its twiboot bootloader with no app installed,
-    //stream the PROGMEM-embedded Unit.ino binary to it. This is what makes a
-    //fresh build come alive with only one ICSP per Nano (twiboot only — the
-    //Unit sketch is delivered over I2C on first boot of the master).
+    //autoInstallFirmwareToBootloaderUnits() was already called from the
+    //early-boot path — any still-in-bootloader units here are either a)
+    //new arrivals during boot, or b) failed on the early pass. Re-run so
+    //they get a second chance.
     autoInstallFirmwareToBootloaderUnits();
 
 #if USE_MULTICAST == true
