@@ -27,7 +27,7 @@
 #define UNIT_CALLS_DISABLE  false   //Option to disable the call to the units so can just debug the ESP with no connections
 #define UNITS_AMOUNT        10      //Amount of connected units !IMPORTANT TO BE SET CORRECTLY!
 #define SERIAL_BAUDRATE     115200  //Serial debugging BAUD rate
-#define WIFI_USE_DIRECT     false   //Option to either direct connect to a WiFi Network or setup a AP to configure WiFi. Setting to false will setup as a AP.
+#define WIFI_USE_DIRECT     true    //Option to either direct connect to a WiFi Network or setup a AP to configure WiFi. Setting to false will setup as a AP.
 #define USE_MULTICAST       false    //Option to broadcast a ".local" URL on your local network default split-flap.local. You can change the name under configurable settings.
 
 /*
@@ -93,9 +93,16 @@
 /*
   Settings you can feel free to change to customise how your display works.
 */
-//Used if connecting via "WIFI_USE_DIRECT" of "true" - Otherwise, leave blank
-const char* wifiDirectSsid = "";
-const char* wifiDirectPassword = "";
+//WiFi credentials for WIFI_USE_DIRECT == true live in a gitignored local
+//header so the public repo doesn't leak them. Copy WifiCredentials.h.example
+//to WifiCredentials.h and fill in your SSID / password. With captive-portal
+//mode (WIFI_USE_DIRECT == false) the creds aren't used so leave them empty.
+#if WIFI_USE_DIRECT == true
+  #include "WifiCredentials.h"
+#else
+  const char* wifiDirectSsid = "";
+  const char* wifiDirectPassword = "";
+#endif
 
 // timezonePosix: POSIX TZ string for the local timezone. Leave empty for UTC.
 // Examples:

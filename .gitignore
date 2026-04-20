@@ -13,6 +13,7 @@
 *.bin
 ESPMaster/WebAssets.h
 ESPMaster/BuildVersion.h
+ESPMaster/WifiCredentials.h
 
 # Python
 __pycache__/
