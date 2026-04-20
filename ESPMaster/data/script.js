@@ -334,6 +334,27 @@ function showHideOtaUpdateAction(isOtaEnabled) {
 	}
 }
 
+//Aborts the running showMessage wait loop, homes every detected unit, and
+//clears inputText so the master's event loop doesn't re-issue the previous
+//message. Used when a unit gets physically stuck mid-rotation (issue #35).
+function stopDisplay() {
+	if (!confirm("Stop the display? All detected units will re-home to blank and the current message will be cleared.")) {
+		return false;
+	}
+	var xhr = new XMLHttpRequest();
+	xhr.open("POST", "/stop");
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState !== 4) return;
+		if (xhr.status === 200) {
+			showBannerMessage(xhr.responseText, 5000);
+		} else {
+			showBannerMessage("Stop request failed: HTTP " + xhr.status, 5000);
+		}
+	};
+	xhr.send();
+	return false;
+}
+
 //Pushes every detected sketch-running unit into its twiboot bootloader and
 //asks the master to re-flash them from the PROGMEM bundle. Blocks while the
 //master works (I2C flashing is serial); progress lines land in /log.

@@ -37,6 +37,9 @@ int  homeUnit(int i2cAddress);
 // flash is active. flashUnitFromProgmem() is the only caller of the
 // begin/finish helpers now that the HEX upload path is gone.
 extern volatile bool firmwareFlashInProgress;
+// Abort flag for the showMessage wait loop. Set by POST /stop, consumed
+// (and cleared) by showMessage(). Defined in ESPMaster.ino. Issue #35.
+extern volatile bool abortCurrentShow;
 bool beginFirmwareFlash(uint8_t i2cAddress, String& error);
 bool finishFirmwareFlash(String& resultMsg);
 void abortFirmwareFlash(const String& reason);

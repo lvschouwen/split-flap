@@ -195,6 +195,12 @@ bool alignmentUpdated = false;
 bool isPendingReboot = false;
 bool isPendingUnitsReset = false;
 bool isWifiConfigured = false;
+
+//Set by POST /stop to break out of the wait loop inside showMessage() when
+//a unit gets physically stuck and its status byte pegs at "rotating"
+//forever. Checked every ~100 ms; cleared at the start of each new
+//showMessage. Issue #35.
+volatile bool abortCurrentShow = false;
 std::vector<ScheduledMessage> scheduledMessages;
 
 //Create AsyncWebServer object on port 80
@@ -583,6 +589,35 @@ void setup() {
         return;
       }
       request->send(200, "text/plain", "Home requested");
+    });
+
+    //POST /stop — user-visible kill-switch (issue #35). Aborts any running
+    //showMessage() wait loop, sends CMD_HOME to every detected sketch-
+    //running unit (so every drum parks at blank), and clears the in-memory
+    //text so the event loop doesn't immediately re-send the previous
+    //message. Safe to call when nothing is happening; it's idempotent.
+    webServer.on("/stop", HTTP_POST, [](AsyncWebServerRequest * request) {
+      if (firmwareFlashInProgress) {
+        request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
+        return;
+      }
+      SerialPrintln("Request to Stop Received");
+      abortCurrentShow = true;
+      int homed = 0;
+      for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+        if (detectedUnitStates[unitIndex] != 1) continue;
+        int addr = unitIndex + 1;  // I2C_ADDRESS_BASE == 1, defined in ServiceFlapFunctions.ino
+        if (homeUnit(addr) == 0) homed++;
+      }
+      //Prevent the event loop from re-issuing showText() with the previous
+      //content. Clearing both inputText and lastWrittenText makes the
+      //showText("" vs "") comparison a no-op.
+      inputText = "";
+      lastWrittenText = "";
+      String body = "Stop requested; homed ";
+      body += homed;
+      body += " unit(s).";
+      request->send(200, "text/plain", body);
     });
 
     //GET /reflash-units — forces every sketch-running unit into its twiboot
