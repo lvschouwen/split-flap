@@ -82,6 +82,7 @@
 #include "ESPMaster.h"
 #include "HelpersSerialHandling.h"
 #include "WebAssets.h"
+#include "BuildVersion.h"
 /* .------------------------------------------------------------------------------------. */
 /* |  ___           __ _                    _    _       ___     _   _   _              | */
 /* | / __|___ _ _  / _(_)__ _ _  _ _ _ __ _| |__| |___  / __|___| |_| |_(_)_ _  __ _ ___| */
@@ -143,8 +144,10 @@ IPAddress wifiPrimaryDns(8, 8, 8, 8);
   Used for normal running of the system so changing things here might make things 
   behave a little strange.
 */
-//The current version of code to display on the UI
-const char* espVersion = "2.2.0";
+//Build tag shown in the web UI. Injected at compile time by
+//build_assets.py (generates BuildVersion.h). Falls back to "unknown"
+//if the build environment isn't a git checkout.
+const char* espVersion = GIT_REV;
 
 //All the letters on the units that we have to be displayed. You can change these if it so pleases at your own risk
 const char letters[] = {' ', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '$', '&', '#', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', '.', '-', '?', '!'};

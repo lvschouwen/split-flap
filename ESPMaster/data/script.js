@@ -87,7 +87,7 @@ function loadPage() {
 		setSavedMode("text");
 		setAlignment("left");
 		setVersion("Development")
-		setUnitCount("10");
+		setUnitCount(10, 3);
 		setLastReceivedMessage(new Date().toLocaleString());
 		showHideResetWifiSettingsAction(false);
 		showHideOtaUpdateAction(false);
@@ -115,7 +115,7 @@ function loadPage() {
 				setSavedMode(responseObject.deviceMode);
 				setAlignment(responseObject.alignment);
 				setVersion(responseObject.version);
-				setUnitCount(responseObject.unitCount);
+				setUnitCount(responseObject.unitCount, responseObject.detectedUnitCount);
 				setLastReceivedMessage(responseObject.lastTimeReceivedMessageDateTime);
 				showHideResetWifiSettingsAction(responseObject.wifiSettingsResettable);
 				showHideOtaUpdateAction(responseObject.otaEnabled);
@@ -248,10 +248,17 @@ function setVersion(version) {
 	document.getElementById("labelVersion").innerHTML = version;
 }
 
-//Sets the version on the UI just for awareness
-function setUnitCount(count) {
-	document.getElementById("labelUnits").innerHTML = count;
-	unitCount = count;
+//Shows "<detected> / <max>" in the units label. The JS global
+//`unitCount` (used by the input line-count calculation below) tracks
+//the compile-time max so breaking text into lines stays consistent
+//regardless of how many units the master actually saw on the bus.
+function setUnitCount(total, detected) {
+	var label = String(total);
+	if (detected !== undefined && detected !== null) {
+		label = detected + " / " + total;
+	}
+	document.getElementById("labelUnits").textContent = label;
+	unitCount = total;
 }
 
 function convertDateToString(dateTime) {

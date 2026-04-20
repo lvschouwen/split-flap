@@ -12,6 +12,7 @@
 *.elf
 *.bin
 ESPMaster/WebAssets.h
+ESPMaster/BuildVersion.h
 
 # Python
 __pycache__/
