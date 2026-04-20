@@ -181,31 +181,6 @@
 
 			<div class="card-grid">
 				<div class="card card-full">
-					<p class="card-title">Unit Firmware (I2C OTA)</p>
-					<p style="font-size: 0.95rem; color: #aaa;">
-						Push a compiled <code>Unit.ino</code> <code>.hex</code> to a single unit over the I2C bus via its twiboot bootloader. Watch the Log section below for live progress.
-					</p>
-					<form id="firmwareForm">
-						<p>
-							<label for="selectFirmwareTarget">Target unit:</label>
-							<select id="selectFirmwareTarget" required>
-								<option value="">— no units detected —</option>
-							</select>
-						</p>
-						<p>
-							<label for="inputFirmwareFile">Firmware file (.hex):</label>
-							<input type="file" id="inputFirmwareFile" accept=".hex,application/octet-stream" required />
-						</p>
-						<p>
-							<button type="submit" id="buttonFirmwareSubmit" class="remove-button">Flash Unit</button>
-						</p>
-						<p id="firmwareStatus" class="firmware-status hidden"></p>
-					</form>
-				</div>
-			</div>
-
-			<div class="card-grid">
-				<div class="card card-full">
 					<details id="logDetails">
 						<summary class="card-title">Log</summary>
 						<pre id="logContent" class="log-pane"></pre>

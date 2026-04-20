@@ -39,7 +39,7 @@ After **all** Nanos are done:
 - For every unit in bootloader mode, it streams the bundled firmware over I2C automatically.
 - You can watch the whole thing scroll by in the **Log** section at the bottom of the dashboard.
 
-End state: every Nano is running the Unit sketch, responding at its DIP-derived I2C address, and the display is live. Future firmware updates happen through the **Unit Firmware (I2C OTA)** card on the dashboard.
+End state: every Nano is running the Unit sketch, responding at its DIP-derived I2C address, and the display is live. Future unit firmware updates ride along with master firmware updates — the master's bundled `unit-firmware.hex` gets pushed to any Nano it later finds in bootloader mode (use the **Master Firmware (OTA)** card to flash a new master build, and if you also need to refresh the units, force them into bootloader first).
 
 ## DIP switch addresses
 
@@ -65,7 +65,7 @@ Each Nano needs a unique address, assigned by its DIP switches:
 In the web UI:
 
 - **Log section** (bottom of the page): shows live master-side logs including the I2C bus scan on startup. You should see every unit responding there.
-- **Unit Firmware (I2C OTA)** section: future unit firmware updates go here. Pick a target, upload a new `Unit.ino.hex`, done.
+- **Master Firmware (OTA)** section: upload a new `firmware.bin` to update the ESP itself. The master also bundles the unit sketch in PROGMEM and auto-flashes any Nano it sees in bootloader mode, so updating the master is the normal way to push a new unit build.
 
 ## Troubleshooting
 

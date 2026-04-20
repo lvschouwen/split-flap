@@ -343,46 +343,6 @@ void setup() {
       isPendingReboot = true;
     });
     
-    //POST /firmware/unit?address=0x01 with a multipart body field named
-    //"firmware" containing a compiled Unit.ino .hex file. The ESP reboots
-    //that unit into twiboot, streams the HEX page-by-page over I2C, then
-    //tells twiboot to jump back into the new sketch. Watch /log for
-    //progress — the page writes are logged as they happen.
-    webServer.on("/firmware/unit", HTTP_POST,
-      [](AsyncWebServerRequest * request) {
-        String result;
-        if (finishFirmwareFlash(result)) {
-          request->send(200, "text/plain", result);
-        } else {
-          request->send(500, "text/plain", result);
-        }
-      },
-      [](AsyncWebServerRequest * request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-        if (index == 0) {
-          if (!request->hasParam("address")) {
-            abortFirmwareFlash("Missing address parameter");
-            return;
-          }
-          long addr = strtol(request->getParam("address")->value().c_str(), nullptr, 0);
-          if (addr < 1 || addr > 126) {
-            abortFirmwareFlash("Address out of range 1..126");
-            return;
-          }
-          String error;
-          if (!beginFirmwareFlash((uint8_t)addr, error)) {
-            abortFirmwareFlash(error);
-            return;
-          }
-        }
-
-        if (firmwareFlashInProgress && len > 0) {
-          if (!feedFirmwareChunk(data, len)) {
-            abortFirmwareFlash("HEX parse error");
-          }
-        }
-      }
-    );
-
     //POST /firmware/master — web OTA for the ESP itself. Receives a .bin
     //via multipart upload, flashes via the ESP8266 Update class, reboots.
     //Usable because the eagle.flash.1m.ld (no-FS) layout leaves ~1 MB for
