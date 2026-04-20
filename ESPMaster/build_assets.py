@@ -138,5 +138,21 @@ try:
     _project_dir = pathlib.Path(env["PROJECT_DIR"])  # noqa: F821
     build_version_header(_project_dir)
     build_header(_project_dir)
+
+    # Post-build: drop a copy of firmware.bin next to itself with the git
+    # rev in the filename so shipping / archiving is self-describing.
+    _rev, _dirty = git_short_rev(_project_dir)
+    _tag = f"{_rev}-dirty" if _dirty else _rev
+
+    def _stamp_firmware_filename(source, target, env):  # noqa: F821
+        import shutil
+        bin_path = pathlib.Path(str(target[0]))
+        stamped = bin_path.with_name(f"firmware-{_tag}.bin")
+        shutil.copyfile(bin_path, stamped)
+        print(f"[build_assets] copied {bin_path.name} -> {stamped.name}")
+
+    env.AddPostAction(  # noqa: F821
+        "$BUILD_DIR/${PROGNAME}.bin", _stamp_firmware_filename
+    )
 except NameError:
     pass
