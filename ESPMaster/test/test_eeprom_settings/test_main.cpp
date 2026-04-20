@@ -47,11 +47,11 @@ static void test_layout_slots_are_contiguous_and_non_overlapping() {
   TEST_ASSERT_EQUAL_INT(LEN_RESERVED_1, OFF_ALIGNMENT  - OFF_RESERVED_1);
   TEST_ASSERT_EQUAL_INT(LEN_ALIGNMENT,  OFF_FLAPSPEED  - OFF_ALIGNMENT);
   TEST_ASSERT_EQUAL_INT(LEN_FLAPSPEED,  OFF_DEVICEMODE - OFF_FLAPSPEED);
-  TEST_ASSERT_EQUAL_INT(LEN_DEVICEMODE, OFF_SCHEDMSGS  - OFF_DEVICEMODE);
+  TEST_ASSERT_EQUAL_INT(LEN_DEVICEMODE, OFF_RESERVED_2 - OFF_DEVICEMODE);
 }
 
 static void test_layout_fits_in_configured_eeprom_size() {
-  int endOfBlob = OFF_SCHEDMSGS + LEN_SCHEDMSGS;
+  int endOfBlob = OFF_RESERVED_2 + LEN_RESERVED_2;
   TEST_ASSERT_LESS_OR_EQUAL_INT(SETTINGS_EEPROM_SIZE, endOfBlob);
 }
 
@@ -107,15 +107,10 @@ static void test_all_slots_roundtrip_independently() {
   writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  String("right"));
   writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  String("80"));
   writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, String("clock"));
-  writeSettingString(OFF_SCHEDMSGS,  LEN_SCHEDMSGS,
-    String("[{\"scheduledDateTimeUnix\":1,\"message\":\"HI\"}]"));
 
   TEST_ASSERT_EQUAL_STRING("right",      readSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT).c_str());
   TEST_ASSERT_EQUAL_STRING("80",         readSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED).c_str());
   TEST_ASSERT_EQUAL_STRING("clock",      readSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE).c_str());
-  TEST_ASSERT_EQUAL_STRING(
-    "[{\"scheduledDateTimeUnix\":1,\"message\":\"HI\"}]",
-    readSettingString(OFF_SCHEDMSGS, LEN_SCHEDMSGS).c_str());
 }
 
 static void test_readSettingString_stops_at_NUL() {

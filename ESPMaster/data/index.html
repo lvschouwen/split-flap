@@ -83,21 +83,6 @@
 									<input type="button" value="+ Newline" onclick="addNewline()"/>
 								</span>
 							</p>
-
-							<p>
-								<label for="inputCheckboxScheduleEnabled">Schedule Message?</label>
-								<input type="checkbox" id="inputCheckboxScheduleEnabled" name="scheduleEnabled"	onchange="showHideScheduledMessageInput()" />
-								<div id="divScheduleOptions" class="hidden">
-									<p>
-										<label for="scheduledDateTime">Show Indefinitely?</label>
-										<input type="checkbox" id="inputCheckboxShowIndefinitely" name="scheduleShowIndefinitely" />
-									</p>
-									<p>
-										<input type="datetime-local" id="inputScheduledDateTime" name="scheduleDateTime">
-										<input type="hidden" id="inputHiddenScheduledDateTimeUnix" name="scheduledDateTimeUnix" value="0" />
-									</p>
-								</div>
-							</p>				
 						</div>
 
 						<p>
@@ -161,17 +146,6 @@
 					<p id="calibrationStatus" class="firmware-status hidden"></p>
 				</div>
 			</div>
-
-			<form>
-				<div class="card-grid">
-					<div class="card card-full">
-						<p class="card-title">Scheduled Messages (<span id="spanScheduledMessageCount">0</span>)</p>
-
-						<div id="containerScheduledMessages" class="scheduled-messages">
-						</div>
-					</div>
-				</div>
-			</form>
 
 			<div class="card-grid">
 				<div class="card card-full">

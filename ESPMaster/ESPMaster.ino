@@ -78,7 +78,6 @@
 #include <time.h>
 #include <WiFiUdp.h>
 #include <Wire.h>
-#include "Classes.h"
 #include "ESPMaster.h"
 #include "HelpersSerialHandling.h"
 #include "WebAssets.h"
@@ -124,9 +123,6 @@ const char* timezoneServer = "";
 //  https://en.cppreference.com/w/c/chrono/strftime
 const char* clockFormat = "%H:%M";   //Examples: %H:%M -> 21:19, %I:%M%p -> 09:19PM
 
-//How long to show a message for when a scheduled message is shown for
-const int scheduledMessageDisplayTimeMillis = 7500;
-
 //Name to broadcast when USE_MULTICAST is enabled. Default is split-flap.local. Be mindful to choose something
 //unique to your local network. if running more than one display you'll need a unique name for each. 
 const char* mdnsName = "split-flap";
@@ -170,10 +166,6 @@ const char* PARAM_ALIGNMENT = "alignment";
 const char* PARAM_FLAP_SPEED = "flapSpeed";
 const char* PARAM_DEVICEMODE = "deviceMode";
 const char* PARAM_INPUT_TEXT = "inputText";
-const char* PARAM_SCHEDULE_ENABLED = "scheduleEnabled";
-const char* PARAM_SCHEDULE_DATE_TIME = "scheduledDateTimeUnix";
-const char* PARAM_SCHEDULE_SHOW_INDEFINITELY = "scheduleShowIndefinitely";
-const char* PARAM_ID = "id";
 
 //Device Modes
 const char* DEVICE_MODE_TEXT = "text";
@@ -201,7 +193,31 @@ bool isWifiConfigured = false;
 //forever. Checked every ~100 ms; cleared at the start of each new
 //showMessage. Issue #35.
 volatile bool abortCurrentShow = false;
-std::vector<ScheduledMessage> scheduledMessages;
+
+//Recovery mode + boot-loop protection (issue #37). Counter lives in RTC user
+//memory (survives warm restart, cleared on cold power cycle). Every boot
+//increments; a loop that runs cleanly for HEALTHY_BOOT_MS clears it. If the
+//counter reaches RECOVERY_BOOT_THRESHOLD, the device skips the main app and
+//brings up a minimal "split-flap-recovery" SoftAP that only accepts a master
+//firmware upload.
+struct RtcBootState {
+  uint32_t magic;
+  uint32_t bootCounter;
+};
+static const uint32_t RTC_BOOT_MAGIC = 0xC0FFEE42UL;
+static const uint32_t RTC_BOOT_OFFSET_BLOCKS = 0;
+static const uint32_t RECOVERY_BOOT_THRESHOLD = 3;
+static const unsigned long HEALTHY_BOOT_MS = 30000UL;
+
+bool isRecoveryMode = false;
+bool healthyBootMarked = false;
+
+//Master OTA rejection state — set in the upload handler when the content
+//length exceeds the sketch slot or the caller-supplied MD5 is malformed.
+//Post-handler reads it to return 413/400 instead of the generic 500.
+static bool otaRejected = false;
+static int otaRejectionStatus = 0;
+static String otaRejectionReason;
 
 //Create AsyncWebServer object on port 80
 AsyncWebServer webServer(80);
@@ -214,6 +230,185 @@ DNSServer       dnsServer;
 AsyncWiFiManager wifiManager(&webServer, &dnsServer);
 bool isPendingWifiReset = false;
 #endif
+
+//Read boot state from RTC user memory. Returns a zeroed state if the magic
+//doesn't match (fresh power-on, corruption, or the ESP8266 core has been
+//using the block for something else).
+RtcBootState readBootStateRtc() {
+  RtcBootState state;
+  ESP.rtcUserMemoryRead(RTC_BOOT_OFFSET_BLOCKS,
+                        reinterpret_cast<uint32_t*>(&state),
+                        sizeof(state));
+  if (state.magic != RTC_BOOT_MAGIC) {
+    state.magic = RTC_BOOT_MAGIC;
+    state.bootCounter = 0;
+  }
+  return state;
+}
+
+void writeBootStateRtc(RtcBootState state) {
+  ESP.rtcUserMemoryWrite(RTC_BOOT_OFFSET_BLOCKS,
+                         reinterpret_cast<uint32_t*>(&state),
+                         sizeof(state));
+}
+
+void clearBootCounterRtc() {
+  writeBootStateRtc({RTC_BOOT_MAGIC, 0});
+}
+
+//Registers POST /firmware/master. Shared between main mode and recovery mode
+//so the upload path (MD5 verify, size check, gated reboot) is identical.
+//In recovery mode we skip the I2C unit-reboot hook since the bus may be
+//unreachable — that's precisely why the device is in recovery.
+void registerMasterFirmwareEndpoint() {
+  webServer.on("/firmware/master", HTTP_POST,
+    [](AsyncWebServerRequest * request) {
+      if (otaRejected) {
+        int status = otaRejectionStatus;
+        String reason = otaRejectionReason;
+        otaRejected = false;
+        otaRejectionStatus = 0;
+        otaRejectionReason = String();
+        request->send(status, "text/plain", reason);
+        return;
+      }
+      if (Update.hasError()) {
+        String msg = String("Master OTA failed: ") + Update.getErrorString();
+        SerialPrintln(msg);
+        request->send(500, "text/plain", msg);
+      } else if (!Update.isFinished()) {
+        String msg = "Master OTA incomplete: Update.isFinished() == false after final chunk";
+        SerialPrintln(msg);
+        request->send(500, "text/plain", msg);
+      } else {
+        //Single source of truth: reboot only when the updater considers the
+        //image committed AND no error was latched along the way.
+        request->send(200, "text/plain", "Master firmware flashed; rebooting…");
+        //A fresh firmware should start with a clean boot counter — otherwise
+        //the very first post-flash boot could tip us back into recovery.
+        clearBootCounterRtc();
+        isPendingReboot = true;
+      }
+    },
+    [](AsyncWebServerRequest * request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+      if (index == 0) {
+        otaRejected = false;
+        otaRejectionStatus = 0;
+        otaRejectionReason = String();
+
+        uint32_t freeSpace = ESP.getFreeSketchSpace();
+        uint32_t maxSketchSpace = (freeSpace - 0x1000) & 0xFFFFF000;
+        size_t contentLen = request->contentLength();
+        SerialPrint("Master OTA starting: "); SerialPrintln(filename);
+        SerialPrint("  freeSketchSpace = "); SerialPrintln(freeSpace);
+        SerialPrint("  maxSketchSpace  = "); SerialPrintln(maxSketchSpace);
+        SerialPrint("  contentLength   = "); SerialPrintln(contentLen);
+
+        if (contentLen > 0 && contentLen > maxSketchSpace) {
+          otaRejected = true;
+          otaRejectionStatus = 413;
+          otaRejectionReason = String("Firmware too large: ") + contentLen +
+                               " bytes > maxSketchSpace " + maxSketchSpace;
+          SerialPrintln(otaRejectionReason);
+          return;
+        }
+
+        Update.runAsync(true);
+        if (!Update.begin(maxSketchSpace, U_FLASH)) {
+          SerialPrint("Update.begin failed: ");
+          SerialPrintln(Update.getErrorString());
+          return;
+        }
+
+        //MD5 is optional but strongly recommended — eboot's built-in checksum
+        //only catches the staged image getting corrupted in flash, not a
+        //truncated/partially-uploaded image landing on top of a trusted boot.
+        if (request->hasParam("md5")) {
+          String md5 = request->getParam("md5")->value();
+          md5.toLowerCase();
+          if (md5.length() != 32) {
+            otaRejected = true;
+            otaRejectionStatus = 400;
+            otaRejectionReason = "md5 query param must be a 32-char hex digest";
+            SerialPrintln(otaRejectionReason);
+            Update.end(false);
+            return;
+          }
+          if (!Update.setMD5(md5.c_str())) {
+            otaRejected = true;
+            otaRejectionStatus = 400;
+            otaRejectionReason = "Update.setMD5 rejected '" + md5 + "'";
+            SerialPrintln(otaRejectionReason);
+            Update.end(false);
+            return;
+          }
+          SerialPrint("MD5 expected: "); SerialPrintln(md5);
+        }
+        SerialPrintln("Update.begin ok — streaming chunks");
+      }
+      if (otaRejected) return;
+      if (!Update.hasError() && len > 0) {
+        size_t written = Update.write(data, len);
+        if (written != len) {
+          SerialPrint("Update.write short: wrote "); SerialPrint(written);
+          SerialPrint(" of "); SerialPrint(len);
+          SerialPrint(" — err: "); SerialPrintln(Update.getErrorString());
+        }
+      }
+      if (final) {
+        SerialPrint("Final chunk: total "); SerialPrint(index + len); SerialPrintln(" bytes");
+        if (Update.end(true)) {
+          SerialPrint("Master OTA complete, ");
+          SerialPrint(index + len);
+          SerialPrintln(" bytes written");
+          if (!isRecoveryMode) {
+            //Push every sketch-running unit into its twiboot bootloader
+            //before we reboot. When the new master comes up and probes
+            //the bus it'll find them in bootloader state and auto-flash
+            //them from the (possibly updated) PROGMEM bundle.
+            int rebooted = enterBootloaderAllDetected(false);
+            SerialPrint("Queued ");
+            SerialPrint(rebooted);
+            SerialPrintln(" unit(s) for bootloader on next boot");
+          }
+        } else {
+          SerialPrint("Update.end failed: ");
+          SerialPrintln(Update.getErrorString());
+        }
+      }
+    }
+  );
+}
+
+//Minimal recovery SoftAP: serves a single upload form and the OTA endpoint.
+//No WiFi client, no I2C traffic, no persistence — just enough to let the
+//user reflash a working image without dragging out the USB cable.
+void enterRecoveryMode() {
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("split-flap-recovery");
+  SerialPrint("Recovery SoftAP IP: ");
+  SerialPrintln(WiFi.softAPIP().toString());
+
+  webServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
+    String html =
+      "<!doctype html><html><head><title>Split-Flap Recovery</title>"
+      "<meta name='viewport' content='width=device-width, initial-scale=1'/>"
+      "<style>body{font-family:sans-serif;max-width:480px;margin:2em auto;padding:1em}"
+      "button{padding:.5em 1em}</style></head><body>"
+      "<h1>Split-Flap Recovery</h1>"
+      "<p>Device entered recovery after repeated failed boots. "
+      "Upload a known-good <code>firmware.bin</code> to recover.</p>"
+      "<form method='post' action='/firmware/master' enctype='multipart/form-data'>"
+      "<p><input type='file' name='firmware' accept='.bin' required/></p>"
+      "<p><button type='submit'>Flash firmware</button></p>"
+      "</form></body></html>";
+    request->send(200, "text/html", html);
+  });
+  registerMasterFirmwareEndpoint();
+  webServer.begin();
+  SerialPrintln("Recovery web server ready");
+}
 
 /* .-----------------------------------------------. */
 /* | ___          _          ___     _             | */
@@ -240,6 +435,25 @@ void setup() {
   SerialPrintln("#######################################################");
   SerialPrintln("..............Split Flap Display Starting..............");
   SerialPrintln("#######################################################");
+
+  //Increment the RTC boot counter before anything else can crash. The main
+  //loop will clear it again once HEALTHY_BOOT_MS of uptime proves the sketch
+  //is behaving. See issue #37.
+  RtcBootState bootState = readBootStateRtc();
+  bootState.bootCounter++;
+  writeBootStateRtc(bootState);
+  SerialPrint("RTC boot counter: ");
+  SerialPrintln(bootState.bootCounter);
+
+  if (bootState.bootCounter >= RECOVERY_BOOT_THRESHOLD) {
+    SerialPrintln("#######################################################");
+    SerialPrintln("RECOVERY MODE: 3+ consecutive boots without a healthy");
+    SerialPrintln("loop. Bringing up split-flap-recovery SoftAP for reflash.");
+    SerialPrintln("#######################################################");
+    isRecoveryMode = true;
+    enterRecoveryMode();
+    return;
+  }
 
   //Early-boot I2C scan — run before WiFi/NTP so we fall inside twiboot's
   //~1-second boot window. On simultaneous power-cycle the Nanos come up in
@@ -405,66 +619,9 @@ void setup() {
     //Usable because the eagle.flash.1m.ld (no-FS) layout leaves ~1 MB for
     //sketch+staging — the 443 KB firmware has room for another 443 KB
     //staged image below _FS_start (which is 0xFB000 with no FS).
-    webServer.on("/firmware/master", HTTP_POST,
-      [](AsyncWebServerRequest * request) {
-        if (Update.hasError()) {
-          String msg = String("Master OTA failed: ") + Update.getErrorString();
-          SerialPrintln(msg);
-          request->send(500, "text/plain", msg);
-        } else if (!Update.isFinished()) {
-          String msg = "Master OTA incomplete: Update.isFinished() == false after final chunk";
-          SerialPrintln(msg);
-          request->send(500, "text/plain", msg);
-        } else {
-          request->send(200, "text/plain", "Master firmware flashed; rebooting…");
-          isPendingReboot = true;
-        }
-      },
-      [](AsyncWebServerRequest * request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-        if (index == 0) {
-          uint32_t freeSpace = ESP.getFreeSketchSpace();
-          uint32_t maxSketchSpace = (freeSpace - 0x1000) & 0xFFFFF000;
-          SerialPrint("Master OTA starting: "); SerialPrintln(filename);
-          SerialPrint("  freeSketchSpace = "); SerialPrintln(freeSpace);
-          SerialPrint("  maxSketchSpace  = "); SerialPrintln(maxSketchSpace);
-          Update.runAsync(true);
-          if (!Update.begin(maxSketchSpace, U_FLASH)) {
-            SerialPrint("Update.begin failed: ");
-            Update.printError(Serial);
-            SerialPrintln(Update.getErrorString());
-          } else {
-            SerialPrintln("Update.begin ok — streaming chunks");
-          }
-        }
-        if (!Update.hasError() && len > 0) {
-          size_t written = Update.write(data, len);
-          if (written != len) {
-            SerialPrint("Update.write short: wrote "); SerialPrint(written);
-            SerialPrint(" of "); SerialPrint(len);
-            SerialPrint(" — err: "); SerialPrintln(Update.getErrorString());
-          }
-        }
-        if (final) {
-          SerialPrint("Final chunk: total "); SerialPrint(index + len); SerialPrintln(" bytes");
-          if (Update.end(true)) {
-            SerialPrint("Master OTA complete, ");
-            SerialPrint(index + len);
-            SerialPrintln(" bytes written");
-            //Push every sketch-running unit into its twiboot bootloader
-            //before we reboot. When the new master comes up and probes
-            //the bus it'll find them in bootloader state and auto-flash
-            //them from the (possibly updated) PROGMEM bundle.
-            int rebooted = enterBootloaderAllDetected(false);
-            SerialPrint("Queued ");
-            SerialPrint(rebooted);
-            SerialPrintln(" unit(s) for bootloader on next boot");
-          } else {
-            SerialPrint("Update.end failed: ");
-            SerialPrintln(Update.getErrorString());
-          }
-        }
-      }
-    );
+    //Handler lives in registerMasterFirmwareEndpoint() so recovery mode
+    //can mount the same upload path on a minimal SoftAP. See issue #37.
+    registerMasterFirmwareEndpoint();
 
     //Debug endpoint: tells a unit to reboot into its twiboot bootloader.
     //GET /unit/reboot?address=0x01 — useful without a HEX file to sanity-
@@ -643,44 +800,13 @@ void setup() {
       request->redirect("/?is-resetting-units=true");
     });
 
-    webServer.on("/scheduled-message/remove", HTTP_DELETE, [](AsyncWebServerRequest * request) {
-      SerialPrintln("Request to Remove Scheduled Message Received");
-      
-      if (request->hasParam(PARAM_ID)) {
-        String idValue = request->getParam(PARAM_ID)->value();
-
-        if (isNumber(idValue)) {
-          long parsedIdValue = atol(idValue.c_str());
-          bool removed = removeScheduledMessage(parsedIdValue);
-          
-          if (removed) {
-            request->send(202, "text/plain", "Removed");
-          }
-          else {
-            request->send(400, "text/plain", "Unable to find message with ID specified. Id: " + idValue);
-          }
-        }
-        else {
-          SerialPrintln("Invalid Delete Scheduled Message ID Received");
-          request->send(400, "text/plain", "Invalid ID value");
-        }
-      } 
-      else {
-          SerialPrintln("Delete Scheduled Message Received with no ID");
-          request->send(400, "text/plain", "No ID specified");
-      }
-    });
-
     webServer.on("/", HTTP_POST, [](AsyncWebServerRequest * request) {
-      SerialPrintln("Request Post of Form Received");    
+      SerialPrintln("Request Post of Form Received");
 
       bool submissionError = false;
-      
-      long newMessageScheduleDateTimeUnixValue = 0;
-      bool newMessageScheduleEnabledValue = false;
-      bool newMessageScheduleShowIndefinitely = false;
+
       String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue;
-      
+
       int params = request->params();
       for (int paramIndex = 0; paramIndex < params; paramIndex++) {
         AsyncWebParameter* p = request->getParam(paramIndex);
@@ -692,7 +818,7 @@ void setup() {
               newAlignmentValue = receivedValue;
             }
             else {
-              SerialPrintln("Alignment provided was not valid. Value: " + receivedValue); 
+              SerialPrintln("Alignment provided was not valid. Value: " + receivedValue);
               submissionError = true;
             }
           }
@@ -701,10 +827,10 @@ void setup() {
           if (p->name() == PARAM_DEVICEMODE) {
             String receivedValue = p->value();
             if (receivedValue == DEVICE_MODE_TEXT || receivedValue == DEVICE_MODE_CLOCK) {
-              newDeviceModeValue = receivedValue;          
+              newDeviceModeValue = receivedValue;
             }
             else {
-              SerialPrintln("Device Mode provided was not valid. Invalid Value: " + receivedValue); 
+              SerialPrintln("Device Mode provided was not valid. Invalid Value: " + receivedValue);
               submissionError = true;
             }
           }
@@ -718,35 +844,6 @@ void setup() {
           if (p->name() == PARAM_INPUT_TEXT) {
             newInputTextValue = p->value().c_str();
           }
-
-          //HTTP POST Schedule Enabled
-          if (p->name() == PARAM_SCHEDULE_ENABLED) {
-            String newMessageScheduleEnabledString = p->value().c_str();
-            newMessageScheduleEnabledValue = newMessageScheduleEnabledString == "on" ?
-              true : 
-              false;
-          }
-          
-          //HTTP POST Schedule Show Indefinitely
-          if (p->name() == PARAM_SCHEDULE_SHOW_INDEFINITELY) {
-            String newMessageScheduleShowIndefinitelyString = p->value().c_str();
-            newMessageScheduleShowIndefinitely = newMessageScheduleShowIndefinitelyString == "on" ?
-              true : 
-              false;
-          }
-
-          //HTTP POST Schedule Seconds
-          if (p->name() == PARAM_SCHEDULE_DATE_TIME) {
-            String receivedValue = p->value().c_str();
-            if (isNumber(receivedValue)) {
-              newMessageScheduleDateTimeUnixValue = atol(receivedValue.c_str());
-            }
-            else {
-              SerialPrintln("Schedule date time provided was not valid. Invalid Value: " + receivedValue); 
-              submissionError = true;
-            }
-          }
-
         }
       }
 
@@ -777,25 +874,17 @@ void setup() {
           SerialPrintln("Flap Speed Updated: " + flapSpeed);
         }
 
-        //If its a new scheduled message, add it to the backlog and proceed, don't want to change device mode
-        //Else, we do want to change the device mode and clear out the input text
-        if (newMessageScheduleEnabledValue) {
-          addAndPersistScheduledMessage(newInputTextValue, newMessageScheduleDateTimeUnixValue, newMessageScheduleShowIndefinitely);
-          SerialPrintln("New Scheduled Message added");
+        //Only if device mode has changed
+        if (deviceMode != newDeviceModeValue) {
+          deviceMode = newDeviceModeValue;
+
+          saveDeviceMode();
+          SerialPrintln("Device Mode Set: " + deviceMode);
         }
-        else {
-          //Only if device mode has changed
-          if (deviceMode != newDeviceModeValue) {
-            deviceMode = newDeviceModeValue;
 
-            saveDeviceMode();
-            SerialPrintln("Device Mode Set: " + deviceMode);
-          }
-
-          //Only if we are showing text
-          if (deviceMode == DEVICE_MODE_TEXT) {
-            inputText = newInputTextValue;
-          }
+        //Only if we are showing text
+        if (deviceMode == DEVICE_MODE_TEXT) {
+          inputText = newInputTextValue;
         }
 
         //Redirect so that we don't have the "re-submit form" problem in browser for refresh
@@ -854,9 +943,30 @@ void loop() {
   if (isPendingReboot) {
     SerialPrintln("Rebooting Now... Fairwell!");
     SerialPrintln("#######################################################");
-    delay(100);
+    //Longer pause so AsyncWebServer can flush the 200 OK body to the client
+    //before the restart yanks the TCP socket (issue #37). 100 ms was enough
+    //on localhost but often cost the response on real networks.
+    delay(500);
 
     ESP.restart();
+    return;
+  }
+
+  //Once the sketch has been running cleanly for long enough, clear the RTC
+  //boot counter so future cold resets start from zero. This is the signal
+  //that the currently-running firmware actually works (issue #37). Skipped
+  //in recovery mode: we want a user-visible flash (or a new firmware that
+  //runs cleanly) to exit, not just 30 s of the recovery SoftAP being up.
+  if (!healthyBootMarked && !isRecoveryMode && millis() >= HEALTHY_BOOT_MS) {
+    clearBootCounterRtc();
+    healthyBootMarked = true;
+    SerialPrintln("Healthy boot — RTC boot counter cleared");
+  }
+
+  //In recovery mode the AsyncWebServer handles every incoming request; the
+  //main loop has nothing to do besides yield back to the scheduler.
+  if (isRecoveryMode) {
+    delay(10);
     return;
   }
 
@@ -918,8 +1028,6 @@ void loop() {
   if (currentMillis - previousMillis >= 1000) {
     previousMillis = currentMillis;
 
-    checkScheduledMessages();
-
     //Mode Selection
     if (deviceMode == DEVICE_MODE_TEXT) {
       showText(inputText);
@@ -952,14 +1060,6 @@ String getCurrentSettingValues() {
   document["version"] = espVersion;
   document["lastTimeReceivedMessageDateTime"] = lastReceivedMessageDateTime;
   document["lastWrittenText"] = lastWrittenText;
-
-  for(int scheduledMessageIndex = 0; scheduledMessageIndex < scheduledMessages.size(); scheduledMessageIndex++) {
-    ScheduledMessage scheduledMessage = scheduledMessages[scheduledMessageIndex];
-    
-    document["scheduledMessages"][scheduledMessageIndex]["scheduledDateTimeUnix"] = scheduledMessage.ScheduledDateTimeUnix;
-    document["scheduledMessages"][scheduledMessageIndex]["message"] = scheduledMessage.Message;
-    document["scheduledMessages"][scheduledMessageIndex]["showIndefinitely"] = scheduledMessage.ShowIndefinitely;
-  }
 
   document["otaEnabled"] = false;
   document["isInOtaMode"] = false;
