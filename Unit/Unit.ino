@@ -26,7 +26,7 @@
 #define I2C_ADDRESS_BASE 1
 
 // EEPROM layout:
-//   0..1  int  calibration offset (legacy, set by EEPROM_Write_Offset sketch)
+//   0..1  int  calibration offset (set via master web-UI calibration)
 //   2     byte identity magic — if == EEPROM_ID_MAGIC_VALUE, byte 3 is valid
 //   3     byte I2C address (1..126) assigned by the position wizard (future)
 // Slots 4+ reserved.

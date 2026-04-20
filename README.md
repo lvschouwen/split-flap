@@ -77,7 +77,7 @@ pio device monitor        # serial monitor at 115200 baud
 
 The web UI and the bundled unit firmware are compiled into the master's PROGMEM at build time by `ESPMaster/build_assets.py` (no separate filesystem flash step).
 
-For the Unit and EEPROM_Write_Offset sketches, if upload fails because of the old bootloader on your Nano, use the `*_old_bootloader` env:
+For the Unit sketch, if upload fails because of the old bootloader on your Nano, use the `*_old_bootloader` env:
 
 ```bash
 pio run -e unit_old_bootloader -t upload
@@ -89,7 +89,7 @@ Host-side unit tests for the ESPMaster string helpers live in `ESPMaster/test/` 
 cd ESPMaster && pio test -e native
 ```
 
-Arduino IDE is **not** supported for the master sketch any more: the PROGMEM asset generation runs as a PlatformIO pre-build step, and the build flags / lib dependencies are managed through `platformio.ini`. The Unit and EEPROM_Write_Offset sketches are simple enough to still open in the IDE, but the PlatformIO flow is the supported path for every part of the project.
+Arduino IDE is **not** supported for the master sketch any more: the PROGMEM asset generation runs as a PlatformIO pre-build step, and the build flags / lib dependencies are managed through `platformio.ini`. The Unit sketch is simple enough to still open in the IDE, but the PlatformIO flow is the supported path for every part of the project.
 
 ## General
 
@@ -118,9 +118,9 @@ Flash each unit's Nano from the `Unit/` folder:
 pio run -t upload
 ```
 
-Before that, set the per-unit calibration offset by flashing `EEPROM_Write_Offset/` (see [Set Zero Position Offset](#set-zero-position-offset) below).
+Each unit's hall-sensor-to-blank-flap step offset is stored in the Nano's EEPROM and is calibrated from the master's web UI after flashing — see [Set Zero Position Offset](#set-zero-position-offset) below.
 
-Inside `Unit.ino`, there is a setting for testing the units so that a few letters are cycled through to ensure what is shown is what you expect. At the top of the file once you have opened the project, you will find a line that is commented out:
+Inside `Unit.ino`, there is a setting for serial debugging and a test-cycle mode. At the top of the file you'll find two commented-out lines:
 
 ```c++
 #define SERIAL_ENABLE   // uncomment for serial debug communication
@@ -129,13 +129,18 @@ Inside `Unit.ino`, there is a setting for testing the units so that a few letter
 
 > Note: If upload fails, your Nano may have the old bootloader. Use `pio run -e unit_old_bootloader -t upload` instead.
 
-Remove the comment characters to help with your testing for the next step of Setting the Zero Position Offset.
-
 #### Set Zero Position Offset
 
-The zero position (or blank flaps position in this case) is attained by driving the stepper to the hall sensor and step a few steps forward. This offset is individual to every unit and needs to be saved to the arduino nano's EEPROM.
+The zero position (blank-flaps position) is attained by driving the stepper to the hall sensor and stepping a few steps forward. This offset is individual to every unit and is stored in the Nano's EEPROM.
 
-A simple sketch has been written to set the offset. Upload the `EEPROM_Write_Offset.ino` sketch and open the serial monitor with 115200 baudrate. It will tell you the current offset and you can enter a new offset. It should be around 100 but yours may vary. You may need to upload the `Unit.ino` sketch with the `TEST_ENABLE` flag uncommented and see if the offset is correct. Repeat until the blank flap is showing every time the unit homes.
+Calibrate from the master's web UI — no reflashing required:
+
+1. Open the **Calibration** card on the dashboard.
+2. Pick a test letter; the master sends it to every unit.
+3. For each unit, type what the drum is *actually* showing.
+4. Click **Apply All**. The master reads each unit's current offset, computes the corrective delta, writes EEPROM, and re-homes — all over I2C.
+
+For half-flap fine tuning, expand the **Advanced** section for raw offset + jog controls.
 
 #### Set Unit Address
 
