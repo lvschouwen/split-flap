@@ -12,31 +12,20 @@ void initWiFi() {
   SerialPrintln("WiFi Static IP Configured");
 #endif
 
-  wifiManager.setTitle("Split-Flap Setup");
-  wifiManager.setHostname("Split-Flap");
-  wifiManager.setDarkMode(true);
-  wifiManager.setShowInfoUpdate(false);
-  wifiManager.setConfigPortalBlocking(true);
+  //ESPAsyncWiFiManager exposes a subset of tzapu's config API; the rest
+  //(title/hostname/dark mode/menu/blocking flag) isn't configurable here.
+  //WiFi.setAutoReconnect() is an ESP8266-core call, still honored.
+  WiFi.hostname("Split-Flap");
+  WiFi.setAutoReconnect(true);
   wifiManager.setConfigPortalTimeout(wifiConnectTimeoutSeconds);
-  wifiManager.setConnectTimeout(120);    
-  wifiManager.setWiFiAutoReconnect(true);
+  wifiManager.setConnectTimeout(120);
   wifiManager.setSaveConfigCallback([]() {
-    //Sadly, if we've had to open up the WiFi manager portal to set the WiFi configuration up
-    //then a soft reset is necessary. There looks to be issues with the ESP and running
-    //a webserver alongside the WiFiManager. Some reading around this issue here suggests it is
-    //not possible to fix:
-    //https://github.com/tzapu/WiFiManager/issues/1579
-    
-    //Suggestion to fix is reset the device:
-    //https://github.com/rancilio-pid/clevercoffee/issues/323#issuecomment-1587344185
-
+    //Reboot after the portal saves new credentials so the async server
+    //can rebind cleanly to the STA interface. Historical note: tzapu's
+    //sync portal had a similar gotcha (issues/1579).
     SerialPrintln("New WiFi configuration saved. Will need to reboot device to let webserver work...");
     isPendingReboot = true;
   });
-  
-  //Set the menu options
-  std::vector<const char *> menu = { "wifi", "info" ,"param", "sep", "restart", "exit" };
-  wifiManager.setMenu(menu);
 
   SerialPrintln("Attempting to connect to WiFi... Will fallback to AP mode to allow configuring of WiFi if fails...");
   if(wifiManager.autoConnect("Split-Flap-AP")) {

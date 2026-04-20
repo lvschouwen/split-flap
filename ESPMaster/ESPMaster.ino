@@ -65,9 +65,8 @@
 //WiFi Setup Library if we use that mode
 //Specifically put here in this order to avoid conflict with other libraries
 #if WIFI_USE_DIRECT == false
-//Needed in order to be compatible with WiFiManager: https://github.com/me-no-dev/ESPAsyncWebServer/issues/418#issuecomment-667976368
-#define WEBSERVER_H
-#include <WiFiManager.h>
+#include <DNSServer.h>
+#include <ESPAsyncWiFiManager.h>
 #endif
 
 #include <Arduino.h>
@@ -187,9 +186,12 @@ std::vector<ScheduledMessage> scheduledMessages;
 //Create AsyncWebServer object on port 80
 AsyncWebServer webServer(80);
 
-//Used for creating a Access Point to allow WiFi setup
+//Used for creating a Access Point to allow WiFi setup. ESPAsyncWiFiManager
+//reuses the AsyncWebServer above for its captive portal so we don't carry
+//a second (sync) HTTP server in the binary.
 #if WIFI_USE_DIRECT == false
-WiFiManager wifiManager;
+DNSServer       dnsServer;
+AsyncWiFiManager wifiManager(&webServer, &dnsServer);
 bool isPendingWifiReset = false;
 #endif
 
