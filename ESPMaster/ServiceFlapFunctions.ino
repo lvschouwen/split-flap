@@ -86,20 +86,20 @@ void showText(String message, int delayMillis) {
     String messageDisplay = message == "" ? "<Blank>" : message;
     String alignmentUpdatedDisplay = alignmentUpdated ? "Yes" : "No";
 
-    SerialPrintln("Showing new Message");
+    SerialPrintln(F("Showing new Message"));
     SerialPrintln("New Message: " + messageDisplay);
     SerialPrintln("Alignment Updated: " + alignmentUpdatedDisplay);
   
     std::vector<String> messageLines = processSentenceToLines(message);
 
     if (messageLines.size() > 1) {
-      SerialPrintln("Showing a split down message");
+      SerialPrintln(F("Showing a split down message"));
     
       //Iterate over all the message lines we've got
       for (int linesIndex = 0; linesIndex < messageLines.size(); linesIndex++) {
         String line = messageLines[linesIndex];
 
-        SerialPrint("-- Message Line: ");
+        SerialPrint(F("-- Message Line: "));
         SerialPrintln(line);
 
         showMessage(line, convertSpeed(flapSpeed));
@@ -128,7 +128,7 @@ void showText(String message, int delayMillis) {
     //Alignment definitely has not changed now
     alignmentUpdated = false;
     
-    SerialPrintln("Done showing message");
+    SerialPrintln(F("Done showing message"));
   }
 }
 
@@ -145,12 +145,12 @@ void showMessage(String message, int flapSpeed) {
     message = centerString(message);
   }
 
-  SerialPrint("Showing Aligned Message: \"");
+  SerialPrint(F("Showing Aligned Message: \""));
   SerialPrint(message);
-  SerialPrintln("\"");
+  SerialPrintln(F("\""));
 
 #if UNIT_CALLS_DISABLE == true
-  SerialPrintln("Unit Calls are disabled for debugging. Will delay to simulate calls...");
+  SerialPrintln(F("Unit Calls are disabled for debugging. Will delay to simulate calls..."));
   delay(2000);
 #else
   //Wait while display is still moving, with a hard timeout so a physically
@@ -158,21 +158,21 @@ void showMessage(String message, int flapSpeed) {
   //Rate-limit the log line to once per 5 s — previously this spammed /log
   //at ~10 Hz. Abortable via /stop (issue #35).
   abortCurrentShow = false;
-  SerialPrintln("Unit calls are enabled. Will display message");
+  SerialPrintln(F("Unit calls are enabled. Will display message"));
   unsigned long waitStart = millis();
   unsigned long lastWaitLog = 0;
   while (isDisplayMoving()) {
     if (abortCurrentShow) {
-      SerialPrintln("Show aborted by user (entry wait)");
+      SerialPrintln(F("Show aborted by user (entry wait)"));
       return;
     }
     unsigned long elapsed = millis() - waitStart;
     if (elapsed > 30000) {
-      SerialPrintln("Wait timed out after 30s — assuming a unit is stuck, continuing anyway");
+      SerialPrintln(F("Wait timed out after 30s — assuming a unit is stuck, continuing anyway"));
       break;
     }
     if (millis() - lastWaitLog > 5000) {
-      SerialPrintln("Waiting for display to stop");
+      SerialPrintln(F("Waiting for display to stop"));
       lastWaitLog = millis();
     }
     delay(100);
@@ -190,11 +190,11 @@ void showMessage(String message, int flapSpeed) {
     char currentLetter = message[unitIndex];
     int currentLetterPosition = translateLettertoInt(currentLetter);
 
-    SerialPrint("Unit Nr.: ");
+    SerialPrint(F("Unit Nr.: "));
     SerialPrint(unitIndex);
-    SerialPrint(" Letter: ");
+    SerialPrint(F(" Letter: "));
     SerialPrint(message[unitIndex]);
-    SerialPrint(" Letter position: ");
+    SerialPrint(F(" Letter position: "));
     SerialPrintln(currentLetterPosition);
 
     //only write to unit if char exists in letter array
@@ -209,16 +209,16 @@ void showMessage(String message, int flapSpeed) {
   lastWaitLog = 0;
   while (isDisplayMoving()) {
     if (abortCurrentShow) {
-      SerialPrintln("Show aborted by user (exit wait)");
+      SerialPrintln(F("Show aborted by user (exit wait)"));
       return;
     }
     unsigned long elapsed = millis() - waitStart;
     if (elapsed > 30000) {
-      SerialPrintln("Exit wait timed out after 30s — assuming a unit is stuck, continuing anyway");
+      SerialPrintln(F("Exit wait timed out after 30s — assuming a unit is stuck, continuing anyway"));
       break;
     }
     if (millis() - lastWaitLog > 5000) {
-      SerialPrintln("Waiting for display to stop");
+      SerialPrintln(F("Waiting for display to stop"));
       lastWaitLog = millis();
     }
     delay(100);
@@ -245,7 +245,7 @@ void writeToUnit(int unitIndex, int letter, int flapSpeed) {
 
   //Write values to send to slave in buffer
   for (unsigned int index = 0; index < sizeof sendArray / sizeof sendArray[0]; index++) {
-    SerialPrint("sendArray: ");
+    SerialPrint(F("sendArray: "));
     SerialPrintln(sendArray[index]);
 
     Wire.write(sendArray[index]);
@@ -361,7 +361,7 @@ bool isUnitInBootloader(int i2cAddress) {
 
 void probeI2cBus() {
 #if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
-  SerialPrintln("Scanning I2C bus for units...");
+  SerialPrintln(F("Scanning I2C bus for units..."));
   detectedUnitCount = 0;
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
     detectedUnitStates[unitIndex] = 0;  // silent by default
@@ -375,13 +375,13 @@ void probeI2cBus() {
     detectedUnitStates[unitIndex] = inBootloader ? 2 : 1;
     detectedUnitAddresses[detectedUnitCount++] = i2cAddress;
 
-    SerialPrint("- unit at 0x");
+    SerialPrint(F("- unit at 0x"));
     SerialPrint(String(i2cAddress, HEX));
     if (inBootloader) {
-      SerialPrintln(" is in BOOTLOADER mode");
+      SerialPrintln(F(" is in BOOTLOADER mode"));
       continue;
     }
-    SerialPrint(" is running sketch");
+    SerialPrint(F(" is running sketch"));
 
     // Compare against the bundled unit firmware's rev (BUNDLED_UNIT_REV),
     // NOT the master's own GIT_REV. Because unit-firmware.hex is checked in,
@@ -396,16 +396,16 @@ void probeI2cBus() {
       detectedUnitVersionStatus[unitIndex] = match ? 0 : 1;
       SerialPrint(match ? " (fw " : " (fw OUTDATED ");
       SerialPrint(detectedUnitVersions[unitIndex]);
-      SerialPrintln(")");
+      SerialPrintln(F(")"));
     } else {
       detectedUnitVersionStatus[unitIndex] = 2;
-      SerialPrintln(" (fw UNKNOWN — likely predates version opcode)");
+      SerialPrintln(F(" (fw UNKNOWN — likely predates version opcode)"));
     }
   }
-  SerialPrint("I2C scan complete. Detected ");
+  SerialPrint(F("I2C scan complete. Detected "));
   SerialPrint(detectedUnitCount);
-  SerialPrint("/");
+  SerialPrint(F("/"));
   SerialPrint(UNITS_AMOUNT);
-  SerialPrintln(" expected units.");
+  SerialPrintln(F(" expected units."));
 #endif
 }

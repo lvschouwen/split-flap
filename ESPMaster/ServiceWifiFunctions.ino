@@ -5,11 +5,11 @@ void initWiFi() {
   WiFi.mode(WIFI_STA);
 
 #if WIFI_USE_DIRECT == false
-  SerialPrintln("Setting up WiFi AP Setup Mode");
+  SerialPrintln(F("Setting up WiFi AP Setup Mode"));
 
 #if WIFI_STATIC_IP == true
   wifiManager.setSTAStaticIPConfig(wifiDeviceStaticIp, wifiRouterGateway, wifiSubnet, wifiPrimaryDns);
-  SerialPrintln("WiFi Static IP Configured");
+  SerialPrintln(F("WiFi Static IP Configured"));
 #endif
 
   //ESPAsyncWiFiManager exposes a subset of tzapu's config API; the rest
@@ -23,35 +23,35 @@ void initWiFi() {
     //Reboot after the portal saves new credentials so the async server
     //can rebind cleanly to the STA interface. Historical note: tzapu's
     //sync portal had a similar gotcha (issues/1579).
-    SerialPrintln("New WiFi configuration saved. Will need to reboot device to let webserver work...");
+    SerialPrintln(F("New WiFi configuration saved. Will need to reboot device to let webserver work..."));
     isPendingReboot = true;
   });
 
-  SerialPrintln("Attempting to connect to WiFi... Will fallback to AP mode to allow configuring of WiFi if fails...");
+  SerialPrintln(F("Attempting to connect to WiFi... Will fallback to AP mode to allow configuring of WiFi if fails..."));
   if(wifiManager.autoConnect("Split-Flap-AP")) {
-    SerialPrint("Successfully Connected to WiFi. IP Address: ");
+    SerialPrint(F("Successfully Connected to WiFi. IP Address: "));
     SerialPrintln(WiFi.localIP());
 
     isWifiConfigured = true;
   }
   
 #else
-  SerialPrintln("Setting up WiFi Direct");
+  SerialPrintln(F("Setting up WiFi Direct"));
 
   if (strlen(wifiDirectSsid) > 0 && strlen(wifiDirectPassword) > 0) {
     int maxAttemptsCount = 0;
     
 #if WIFI_STATIC_IP == true
     if (WiFi.config(wifiDeviceStaticIp, wifiRouterGateway, wifiSubnet, wifiPrimaryDns)) {
-      SerialPrintln("WiFi Static IP Configuration Success");
+      SerialPrintln(F("WiFi Static IP Configuration Success"));
     }
     else {
-      SerialPrintln("WiFi Static IP Configuration could not take place");
+      SerialPrintln(F("WiFi Static IP Configuration could not take place"));
     }
 #endif
     
     WiFi.begin(wifiDirectSsid, wifiDirectPassword);
-    SerialPrint("Connecting");
+    SerialPrint(F("Connecting"));
 
     while (WiFi.status() != WL_CONNECTED && maxAttemptsCount != wifiConnectTimeoutSeconds) {
       if (maxAttemptsCount % 10 == 0) {
@@ -68,7 +68,7 @@ void initWiFi() {
 
     //If we reached the max timeout
     if (maxAttemptsCount != wifiConnectTimeoutSeconds) {
-      SerialPrint("Successfully Connected to WiFi. IP Address: ");
+      SerialPrint(F("Successfully Connected to WiFi. IP Address: "));
       SerialPrintln(WiFi.localIP());
 
       isWifiConfigured = true;
