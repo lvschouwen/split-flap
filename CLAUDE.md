@@ -33,7 +33,9 @@ pio test -e native           # host-side unit tests (ESPMaster only)
 - **Unit** — env `unit` (board `nanoatmega328new`, new bootloader) or `unit_old_bootloader` (board `nanoatmega328`, old bootloader fallback).
 - **EEPROM_Write_Offset** — same pattern as Unit; two envs for new/old bootloader.
 
-Native test env (`ESPMaster/platformio.ini` → `[env:native]`): compiles pure-logic files for the host using `fabiobatsilva/ArduinoFake` (provides `String`, `Print`, etc.) plus the LinkedList library. Tests live in `ESPMaster/test/test_*/test_main.cpp` and are discovered automatically. `ArduinoFake` stubs `map()` as a fakeit mock — each test's `setUp()` must wire in the real Arduino formula via `When(Method(ArduinoFake(Function), map)).AlwaysDo(...)`, otherwise calling `map()` aborts.
+Native test env (`ESPMaster/platformio.ini` → `[env:native]`): compiles pure-logic files for the host using `fabiobatsilva/ArduinoFake` (provides `String`, `Print`, etc.) plus the LinkedList library. Tests live in `ESPMaster/test/test_*/test_main.cpp` and are discovered automatically. `ArduinoFake` stubs `map()` as a fakeit mock — each test's `setUp()` must wire in the real Arduino formula via `When(Method(ArduinoFake(Function), map)).AlwaysDo(...)`, otherwise calling `map()` aborts. Other ArduinoFake-mocked globals (e.g. `EEPROM`) are accessed via the `ArduinoFake(EEPROM)` helper macro and should be re-wired in `setUp()` with `When(Method(...)).AlwaysDo([](...) { ... })`.
+
+Python-side tests live in `ESPMaster/tests/` and cover `build_assets.py` helpers. Run with `python -m pytest tests/` from the `ESPMaster` directory.
 
 CI: `.github/workflows/build.yml` matrix-builds all three envs + runs the native test env.
 

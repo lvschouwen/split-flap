@@ -106,9 +106,17 @@ void showMessage(String message, int flapSpeed) {
   }
 
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    //Skip slots the boot-time bus probe did not find a sketch-running unit on.
+    //Writing to absent addresses causes isDisplayMoving() to stall and, more
+    //importantly, means users with fewer than UNITS_AMOUNT physical units
+    //no longer deadlock the event loop.
+    if (detectedUnitStates[unitIndex] != 1) {
+      continue;
+    }
+
     char currentLetter = message[unitIndex];
     int currentLetterPosition = translateLettertoInt(currentLetter);
-    
+
     SerialPrint("Unit Nr.: ");
     SerialPrint(unitIndex);
     SerialPrint(" Letter: ");
@@ -157,18 +165,19 @@ void writeToUnit(int unitIndex, int letter, int flapSpeed) {
   Wire.endTransmission(); //send values to unit
 }
 
-//Checks if unit in display is currently moving
+//Checks if unit in display is currently moving. Only queries units the boot
+//probe confirmed are running the sketch; a silent read (-1) from such a unit
+//is treated as "idle" rather than "sleeping" so the master never deadlocks
+//on a transiently unresponsive (or physically absent) unit.
 bool isDisplayMoving() {
-  //Request all units moving state and write to array
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    if (detectedUnitStates[unitIndex] != 1) {
+      displayState[unitIndex] = 0;
+      continue;
+    }
     displayState[unitIndex] = checkIfMoving(unitIndex);
     if (displayState[unitIndex] == 1) {
       SerialPrintln("A unit in the display is busy");
-      return true;
-    } 
-    //If unit is not available through i2c
-    else if (displayState[unitIndex] == -1) {
-      SerialPrintln("A unit in the display is sleeping");
       return true;
     }
   }
@@ -198,24 +207,52 @@ int checkIfMoving(int unitIndex) {
 }
 
 //Scans the I2C bus once for responders in the range reserved for units.
-//Populates `detectedUnitCount` and `detectedUnitAddresses` for the /settings
-//endpoint and logs the result over serial. No-op when SERIAL_ENABLE is true
-//(I2C is disabled in that mode) or UNIT_CALLS_DISABLE is true.
+//Populates detectedUnitCount, detectedUnitAddresses, and detectedUnitStates
+//(0 = silent, 1 = sketch, 2 = bootloader).
 int detectedUnitCount = 0;
 int detectedUnitAddresses[UNITS_AMOUNT];
+int detectedUnitStates[UNITS_AMOUNT];
+
+// Writes twiboot's CMD_ACCESS_MEMORY + CHIPINFO request, reads the 8-byte
+// chipinfo response and checks whether the signature matches the ATmega328P.
+// Safe to call against a sketch-running unit: the patched Unit.ino ignores
+// writes of length != 2, so probing doesn't rotate the drum as a side effect.
+bool isUnitInBootloader(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)0x02);  // CMD_ACCESS_MEMORY
+  Wire.write((uint8_t)0x00);  // MEMTYPE_CHIPINFO
+  Wire.write((uint8_t)0x00);
+  Wire.write((uint8_t)0x00);
+  if (Wire.endTransmission(false) != 0) return false;
+  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)8);
+  if (got < 3) {
+    while (Wire.available()) Wire.read();
+    return false;
+  }
+  uint8_t sig0 = Wire.read();
+  uint8_t sig1 = Wire.read();
+  uint8_t sig2 = Wire.read();
+  while (Wire.available()) Wire.read();
+  return (sig0 == 0x1E && sig1 == 0x95 && sig2 == 0x0F);
+}
 
 void probeI2cBus() {
 #if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
   SerialPrintln("Scanning I2C bus for units...");
   detectedUnitCount = 0;
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    detectedUnitStates[unitIndex] = 0;  // silent by default
     int i2cAddress = toI2cAddress(unitIndex);
     Wire.beginTransmission(i2cAddress);
-    if (Wire.endTransmission() == 0) {
-      detectedUnitAddresses[detectedUnitCount++] = i2cAddress;
-      SerialPrint("- unit responding at 0x");
-      SerialPrintln(String(i2cAddress, HEX));
-    }
+    if (Wire.endTransmission() != 0) continue;
+
+    bool inBootloader = isUnitInBootloader(i2cAddress);
+    detectedUnitStates[unitIndex] = inBootloader ? 2 : 1;
+    detectedUnitAddresses[detectedUnitCount++] = i2cAddress;
+
+    SerialPrint("- unit at 0x");
+    SerialPrint(String(i2cAddress, HEX));
+    SerialPrintln(inBootloader ? " is in BOOTLOADER mode" : " is running sketch");
   }
   SerialPrint("I2C scan complete. Detected ");
   SerialPrint(detectedUnitCount);

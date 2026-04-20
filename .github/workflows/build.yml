@@ -68,3 +68,10 @@ jobs:
       - name: Run native tests
         working-directory: ESPMaster
         run: pio test -e native
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run Python tests
+        working-directory: ESPMaster
+        run: python -m pytest tests/

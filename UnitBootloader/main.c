@@ -37,6 +37,18 @@
 #define TWI_ADDRESS             0x29
 #endif
 
+/* Split-flap patch: DIP-switch-derived I2C address.
+ * With this on, the bootloader reads the same 4 DIP pins the sketch does
+ * (ADRESSSW1..4 = PD6, PD5, PD4, PD3) and listens on I2C address
+ * I2C_ADDRESS_BASE + dipValue. Lets multiple Nanos sit empty in bootloader
+ * mode on the same bus without address collisions on 0x29.
+ *
+ * Compile with -DI2C_ADDRESS_BASE=1 (matches Unit.ino); setting it to 0
+ * falls back to the stock hardcoded TWI_ADDRESS. */
+#ifndef I2C_ADDRESS_BASE
+#define I2C_ADDRESS_BASE        0
+#endif
+
 #ifndef F_CPU
 #define F_CPU                   8000000ULL  /* default — overridden per-MCU via CFLAGS_TARGET */
 #endif
@@ -187,6 +199,14 @@ const static uint8_t chipinfo[8] = {
 
 static uint8_t boot_timeout = TIMER_MSEC2IRQCNT(TIMEOUT_MS);
 static uint8_t cmd = CMD_WAIT;
+
+/* Split-flap patch: stay-alive-on-empty-flash.
+ * If the application section is blank (first instruction word reads as
+ * 0xFFFF, which is what an erased AVR flash byte pair looks like), we
+ * never count the boot window down — the bootloader just waits for the
+ * master to push a sketch over I2C. Set once at startup to avoid touching
+ * flash from the timer ISR on every tick. */
+static uint8_t app_installed = 1;
 
 /* flash buffer */
 static uint8_t buf[SPM_PAGESIZE];
@@ -747,15 +767,20 @@ static void TIMER0_OVF_vect(void)
     /* blink LED while running */
     LED_GN_TOGGLE();
 
-    /* count down for app-boot */
-    if (boot_timeout > 1)
+    /* count down for app-boot — but only if an application is actually
+     * installed. A blank flash stays in bootloader indefinitely so the
+     * master can push firmware over I2C. */
+    if (app_installed)
     {
-        boot_timeout--;
-    }
-    else if (boot_timeout == 1)
-    {
-        /* trigger app-boot */
-        cmd = CMD_BOOT_APPLICATION;
+        if (boot_timeout > 1)
+        {
+            boot_timeout--;
+        }
+        else if (boot_timeout == 1)
+        {
+            /* trigger app-boot */
+            cmd = CMD_BOOT_APPLICATION;
+        }
     }
 } /* TIMER0_OVF_vect */
 
@@ -823,6 +848,15 @@ int main(void)
     appvect_save[1] = pgm_read_byte_near(APPVECT_ADDR + 1);
 #endif /* (VIRTUAL_BOOT_SECTION) */
 
+    /* Split-flap patch: decide whether an application is installed. An erased
+     * flash byte reads as 0xFF, so an all-0xFFFF first word means no sketch
+     * here. Keep boot_timeout from ever tripping in that case so the master
+     * can push firmware whenever it's ready. */
+    if (pgm_read_word_near(0) == 0xFFFF)
+    {
+        app_installed = 0;
+    }
+
     /* timer0: running with F_CPU/1024 */
 #if defined (TCCR0)
     TCCR0 = (1<<CS02) | (1<<CS00);
@@ -833,8 +867,24 @@ int main(void)
 #endif
 
 #if defined (TWCR)
+    /* Split-flap patch: DIP-derived address so empty Nanos can coexist on
+     * the bus. ADRESSSW pins on the Unit PCB are PD3..PD6 (Arduino pins
+     * 3..6). Pullups enabled, active-low. ADRESSSW4 (PD3) is LSB. */
+#  if (I2C_ADDRESS_BASE > 0) && defined (__AVR_ATmega328P__)
+    DDRD  &= (uint8_t)~((1<<3) | (1<<4) | (1<<5) | (1<<6));
+    PORTD |= (uint8_t)((1<<3) | (1<<4) | (1<<5) | (1<<6));
+    /* small settle for the pullups to pull high */
+    for (volatile uint8_t i = 0; i < 50; i++) { asm volatile ("nop"); }
+    uint8_t dip = 0;
+    if (!(PIND & (1<<3))) dip |= 1;
+    if (!(PIND & (1<<4))) dip |= 2;
+    if (!(PIND & (1<<5))) dip |= 4;
+    if (!(PIND & (1<<6))) dip |= 8;
+    TWAR = ((I2C_ADDRESS_BASE + dip) << 1);
+#  else
     /* TWI init: set address, auto ACKs */
     TWAR = (TWI_ADDRESS<<1);
+#  endif
     TWCR = (1<<TWEA) | (1<<TWEN);
 #elif defined (USICR)
     USI_PIN_INIT();

@@ -259,7 +259,7 @@ void receiveLetter(int numBytes) {
   int firstByte = Wire.read();
   int remaining = numBytes - 1;
 
-  // First byte >= FLAP_AMOUNT is a command opcode, not a letter index.
+  // First byte >= AMOUNTFLAPS is a command opcode, not a letter index.
   if (firstByte >= AMOUNTFLAPS) {
     while (remaining-- > 0) Wire.read();  // drain any args
     switch ((uint8_t)firstByte) {
@@ -272,11 +272,17 @@ void receiveLetter(int numBytes) {
     return;
   }
 
-  // Normal letter + speed path (stays byte-compatible with older masters).
-  receivedNumber = firstByte;
-  if (remaining > 0) {
-    stepperSpeed = Wire.read();
+  // Legacy letter+speed protocol is exactly 2 bytes. Anything else is a
+  // probe (the master's bootloader-detection write hits this code path)
+  // or a malformed command — drain and ignore so we don't accidentally
+  // rotate the drum to a random letter when probed.
+  if (numBytes != 2) {
+    while (remaining-- > 0) Wire.read();
+    return;
   }
+
+  receivedNumber = firstByte;
+  stepperSpeed   = Wire.read();
 }
 
 void requestEvent() {

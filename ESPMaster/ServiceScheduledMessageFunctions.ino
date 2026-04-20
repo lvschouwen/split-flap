@@ -121,13 +121,13 @@ void readScheduledMessagesFromJson(String scheduledMessagesJson) {
   }
 }
 
-//Convert the scheduled messages to a JSON document and save to file
+//Convert the scheduled messages to a JSON document and save to EEPROM
 void writeScheduledMessagesToFile() {
   if (scheduledMessages.size()) {
     JsonDocument scheduledMessagesDocument;
     for(int scheduledMessageIndex = 0; scheduledMessageIndex < scheduledMessages.size(); scheduledMessageIndex++) {
       ScheduledMessage scheduledMessage = scheduledMessages[scheduledMessageIndex];
-      
+
       scheduledMessagesDocument[scheduledMessageIndex]["scheduledDateTimeUnix"] = scheduledMessage.ScheduledDateTimeUnix;
       scheduledMessagesDocument[scheduledMessageIndex]["message"] = scheduledMessage.Message;
       scheduledMessagesDocument[scheduledMessageIndex]["showIndefinitely"] = scheduledMessage.ShowIndefinitely;
@@ -135,15 +135,15 @@ void writeScheduledMessagesToFile() {
 
     String scheduledMessagesJson;
     serializeJson(scheduledMessagesDocument, scheduledMessagesJson);
-    writeFile(LittleFS, scheduledMessagesPath, scheduledMessagesJson.c_str());
+    saveScheduledMessagesJson(scheduledMessagesJson);
   }
   else {
-    SerialPrintln("No Scheduled Messages Left - Writing Empty to File");
+    SerialPrintln("No Scheduled Messages Left - Writing Empty to EEPROM");
     writeEmptyScheduledMessagesToFile();
   }
 }
 
-//Write an empty array to the schedule messages file, used in case something goes terribly wrong
+//Persist an empty array; used when JSON parse fails or the list is cleared
 void writeEmptyScheduledMessagesToFile() {
-  writeFile(LittleFS, scheduledMessagesPath, "[]");
+  saveScheduledMessagesJson("[]");
 }

@@ -61,7 +61,10 @@ AVRDUDE_MCU=m328p -F
 AVRDUDE_FUSES=lfuse:w:0xff:m hfuse:w:0xdc:m efuse:w:0xfd:m
 
 BOOTLOADER_START=0x7C00
-CFLAGS_TARGET=-DF_CPU=16000000ULL -DTIMER_IRQFREQ_MS=16
+# I2C_ADDRESS_BASE=1: read the DIP switches and listen on I2C address
+# I2C_ADDRESS_BASE + dipValue instead of the stock hardcoded TWI_ADDRESS.
+# This has to match Unit.ino's I2C_ADDRESS_BASE.
+CFLAGS_TARGET=-DF_CPU=16000000ULL -DTIMER_IRQFREQ_MS=16 -DI2C_ADDRESS_BASE=1
 endif
 
 ifeq ($(MCU), attiny85)
