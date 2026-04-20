@@ -25,7 +25,7 @@ void addScheduledMessage(String scheduledText, long scheduledDateTimeUnix, bool 
   }
 
   //Add the new scheduled message with the new value
-  if (scheduledDateTimeUnix > timezone.now()) {
+  if (scheduledDateTimeUnix > (long)time(nullptr)) {
     SerialPrintln("Adding new Scheduled Message");
     scheduledMessages.push_back({scheduledText, scheduledDateTimeUnix, showIndefinitely});
   }
@@ -59,7 +59,7 @@ void checkScheduledMessages() {
   //the message, then we need to show that message immediately
   //`ScheduledDateTimeUnix` is declared `long` in Classes.h; match the type to
   //avoid signed/unsigned comparison surprises.
-  long currentTimeUnix = timezone.now();
+  long currentTimeUnix = (long)time(nullptr);
   for(int scheduledMessageIndex = 0; scheduledMessageIndex < scheduledMessages.size(); scheduledMessageIndex++) {
     ScheduledMessage scheduledMessage = scheduledMessages[scheduledMessageIndex];
 

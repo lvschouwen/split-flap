@@ -5,7 +5,7 @@ void checkCountdown() {
     long countdownInSeconds = atol(countdownToDateUnix.c_str());
 
     //Work out how long left
-    long currentTimeSeconds = timezone.now();
+    long currentTimeSeconds = (long)time(nullptr);
     long differenceSeconds = countdownInSeconds - currentTimeSeconds;
     long hours = differenceSeconds / 60 / 60;
 

@@ -76,7 +76,7 @@
 #include <ESPAsyncWebSrv.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
-#include <ezTime.h>
+#include <time.h>
 #include <WiFiUdp.h>
 #include <Wire.h>
 #include "Classes.h"
@@ -97,22 +97,22 @@
 const char* wifiDirectSsid = "";
 const char* wifiDirectPassword = "";
 
-//Change this to your timezone, use the TZ database name
-//https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-const char* timezoneString = "Europe/London";
-// timezonePosix: Defines time zone rules in POSIX format. Empty here, so no custom rules are applied.
-// Example for Central European Time: const char* timezonePosix = "CET-1CEST,M3.5.0,M10.5.0/3";
+// timezonePosix: POSIX TZ string for the local timezone. Leave empty for UTC.
+// Examples:
+//   "CET-1CEST,M3.5.0,M10.5.0/3"  Central European Time with DST
+//   "GMT0BST,M3.5.0/1,M10.5.0"    UK (Europe/London)
+//   "EST5EDT,M3.2.0,M11.1.0"      US Eastern Time
+// Full list: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
 const char* timezonePosix = "";
 
-// timezoneServer: Specifies the NTP server for time sync. Empty here, so it defaults to "pool.ntp.org".
-// Example: const char* timezoneServer = "pool.ntp.org";
+// timezoneServer: NTP server for time sync. Empty defaults to "pool.ntp.org".
 const char* timezoneServer = "";
 
 
-//If you want to have a different date or clock format change these two
-//Complete table with every char: https://github.com/ropg/ezTime#getting-date-and-time
-const char* dateFormat = "d.m.Y"; //Examples: d.m.Y -> 11.09.2021, D M y -> SAT SEP 21
-const char* clockFormat = "H:i"; //Examples: H:i -> 21:19, h:ia -> 09:19PM
+//Date / clock format strings. strftime(3) conversion specifiers:
+//  https://en.cppreference.com/w/c/chrono/strftime
+const char* dateFormat = "%d.%m.%Y"; //Examples: %d.%m.%Y -> 11.09.2021, %a %b %y -> Sat Sep 21
+const char* clockFormat = "%H:%M";   //Examples: %H:%M -> 21:19, %I:%M%p -> 09:19PM
 
 //How long to show a message for when a scheduled message is shown for
 const int scheduledMessageDisplayTimeMillis = 7500;
@@ -188,7 +188,6 @@ bool isPendingReboot = false;
 bool isPendingUnitsReset = false;
 bool isWifiConfigured = false;
 std::vector<ScheduledMessage> scheduledMessages;
-Timezone timezone; 
 
 //Create AsyncWebServer object on port 80
 AsyncWebServer webServer(80);
@@ -232,26 +231,25 @@ void setup() {
   //wifiManager.resetSettings();
 
   if (isWifiConfigured && !isPendingReboot) {
-    //ezTime initialization
+    //Time sync via ESP8266 core + libc time.h
+    const char* tz  = (strlen(timezonePosix) > 0) ? timezonePosix : "UTC0";
+    const char* ntp = (strlen(timezoneServer) > 0) ? timezoneServer : "pool.ntp.org";
+    configTime(tz, ntp);
 
-    if (strlen(timezoneServer) > 0) {  // Check if timezoneServer is not empty
-      setServer(timezoneServer);
-    } else {
-      SerialPrintln("No timezone server specified, skipping setServer()");
+    SerialPrint("Waiting for NTP sync (tz=");
+    SerialPrint(tz);
+    SerialPrint(", server=");
+    SerialPrint(ntp);
+    SerialPrintln(")");
+
+    time_t nowSec = 0;
+    for (int i = 0; i < 100 && nowSec < 1000000000L; i++) {
+      delay(100);
+      nowSec = time(nullptr);
     }
-    
-    waitForSync();
-    timezone.setLocation(timezoneString);
 
-    if (strlen(timezonePosix) > 0) {  // Check if timezonePosix is not empty
-      timezone.setPosix(timezonePosix);
-    } else {
-      SerialPrintln("No timezone Posix specified, skipping setPosix()");
-    }
-    setDebug(DEBUG);  // if you want to see the communication to the server and the logs 
-
-    SerialPrintln("Current time: ");
-    SerialPrintln(timezone.dateTime());
+    SerialPrint("Current time: ");
+    SerialPrintln(formatDateTime("%Y-%m-%d %H:%M:%S"));
     
     //Load various variables
     initialiseFileSystem();
@@ -549,7 +547,7 @@ void setup() {
       else {
         SerialPrintln("Finished Processing Request Successfully");
 
-        lastReceivedMessageDateTime = timezone.dateTime("d M y H:i:s");
+        lastReceivedMessageDateTime = formatDateTime("%d %b %y %H:%M:%S");
 
         //Only if a new alignment value
         if (alignment != newAlignmentValue) {
@@ -712,9 +710,6 @@ void loop() {
     return;
   }
 
-  //ezTime library sync
-  events(); 
-  
   //Process every second
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= 1000) {
@@ -728,11 +723,11 @@ void loop() {
       showText(inputText);
     } 
     else if (deviceMode == DEVICE_MODE_DATE) {
-      showText(timezone.dateTime(dateFormat));
-    } 
+      showText(formatDateTime(dateFormat));
+    }
     else if (deviceMode == DEVICE_MODE_CLOCK) {
-      showText(timezone.dateTime(clockFormat));
-    } 
+      showText(formatDateTime(clockFormat));
+    }
   }
 }
 
@@ -740,7 +735,7 @@ void loop() {
 String getCurrentSettingValues() {
   JsonDocument document;
 
-  document["timezoneOffset"] = timezone.getOffset();
+  document["timezoneOffset"] = getTimezoneOffsetMinutes();
   document["unitCount"] = UNITS_AMOUNT;
   document["detectedUnitCount"] = detectedUnitCount;
   for (int i = 0; i < detectedUnitCount; i++) {
@@ -775,4 +770,28 @@ String getCurrentSettingValues() {
   serializeJson(document, jsonString);
 
   return jsonString;
+}
+
+//Format the current local time via strftime. Replaces ezTime's
+//timezone.dateTime(fmt); format tokens are the standard strftime ones.
+String formatDateTime(const char* fmt) {
+  time_t nowSec = time(nullptr);
+  struct tm tmInfo;
+  localtime_r(&nowSec, &tmInfo);
+  char buf[64];
+  strftime(buf, sizeof(buf), fmt, &tmInfo);
+  return String(buf);
+}
+
+//Returns the current UTC offset in minutes (east of UTC is positive).
+//Matches what ezTime's Timezone::getOffset() used to return — the JS
+//frontend multiplies this by 60000 to get a millisecond offset.
+long getTimezoneOffsetMinutes() {
+  time_t nowSec = time(nullptr);
+  struct tm utcTm;
+  gmtime_r(&nowSec, &utcTm);
+  //Treat the UTC-broken-down time as if it were local; the delta from the
+  //real epoch is the local offset.
+  time_t asLocal = mktime(&utcTm);
+  return (long)((nowSec - asLocal) / 60);
 }
