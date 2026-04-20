@@ -109,9 +109,8 @@ const char* timezonePosix = "";
 const char* timezoneServer = "";
 
 
-//Date / clock format strings. strftime(3) conversion specifiers:
+//Clock format string. strftime(3) conversion specifiers:
 //  https://en.cppreference.com/w/c/chrono/strftime
-const char* dateFormat = "%d.%m.%Y"; //Examples: %d.%m.%Y -> 11.09.2021, %a %b %y -> Sat Sep 21
 const char* clockFormat = "%H:%M";   //Examples: %H:%M -> 21:19, %I:%M%p -> 09:19PM
 
 //How long to show a message for when a scheduled message is shown for
@@ -161,14 +160,11 @@ const char* PARAM_INPUT_TEXT = "inputText";
 const char* PARAM_SCHEDULE_ENABLED = "scheduleEnabled";
 const char* PARAM_SCHEDULE_DATE_TIME = "scheduledDateTimeUnix";
 const char* PARAM_SCHEDULE_SHOW_INDEFINITELY = "scheduleShowIndefinitely";
-const char* PARAM_COUNTDOWN_DATE = "countdownDateTimeUnix";
 const char* PARAM_ID = "id";
 
 //Device Modes
 const char* DEVICE_MODE_TEXT = "text";
 const char* DEVICE_MODE_CLOCK = "clock";
-const char* DEVICE_MODE_DATE = "date";
-const char* DEVICE_MODE_COUNTDOWN = "countdown";
 
 //Alignment options
 const char* ALIGNMENT_MODE_LEFT = "left";
@@ -180,7 +176,6 @@ String alignment = "";
 String flapSpeed = "";
 String inputText = "";
 String deviceMode = "";
-String countdownToDateUnix = "";
 String lastWrittenText = "";
 String lastReceivedMessageDateTime = "";
 bool alignmentUpdated = false;
@@ -457,7 +452,7 @@ void setup() {
       long newMessageScheduleDateTimeUnixValue = 0;
       bool newMessageScheduleEnabledValue = false;
       bool newMessageScheduleShowIndefinitely = false;
-      String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue, newCountdownToDateUnixValue;
+      String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue;
       
       int params = request->params();
       for (int paramIndex = 0; paramIndex < params; paramIndex++) {
@@ -478,7 +473,7 @@ void setup() {
           //HTTP POST device mode value
           if (p->name() == PARAM_DEVICEMODE) {
             String receivedValue = p->value();
-            if (receivedValue == DEVICE_MODE_TEXT || receivedValue == DEVICE_MODE_CLOCK || receivedValue == DEVICE_MODE_DATE || receivedValue == DEVICE_MODE_COUNTDOWN) {
+            if (receivedValue == DEVICE_MODE_TEXT || receivedValue == DEVICE_MODE_CLOCK) {
               newDeviceModeValue = receivedValue;          
             }
             else {
@@ -525,19 +520,8 @@ void setup() {
             }
           }
 
-          //HTTP POST Countdown Seconds
-          if (p->name() == PARAM_COUNTDOWN_DATE) {
-            String receivedValue = p->value().c_str();
-            if (isNumber(receivedValue)) {
-              newCountdownToDateUnixValue = receivedValue;
-            }
-            else {
-              SerialPrintln("Countdown date provided was not valid. Invalid Value: " + receivedValue); 
-              submissionError = true;
-            }
-          }
         }
-      }    
+      }
 
       //If there was an error, report back to check what has been input
       if (submissionError) {
@@ -564,14 +548,6 @@ void setup() {
 
           saveFlapSpeed();
           SerialPrintln("Flap Speed Updated: " + flapSpeed);
-        }
-
-        //Only if countdown date has changed
-        if (countdownToDateUnix != newCountdownToDateUnixValue) {
-          countdownToDateUnix = newCountdownToDateUnixValue;
-
-          saveCountdown();
-          SerialPrintln("Countdown Date Time Unix Updated: " + countdownToDateUnix);
         }
 
         //If its a new scheduled message, add it to the backlog and proceed, don't want to change device mode
@@ -716,14 +692,10 @@ void loop() {
     previousMillis = currentMillis;
 
     checkScheduledMessages();
-    checkCountdown();
 
     //Mode Selection
-    if (deviceMode == DEVICE_MODE_TEXT || deviceMode == DEVICE_MODE_COUNTDOWN) { 
+    if (deviceMode == DEVICE_MODE_TEXT) {
       showText(inputText);
-    } 
-    else if (deviceMode == DEVICE_MODE_DATE) {
-      showText(formatDateTime(dateFormat));
     }
     else if (deviceMode == DEVICE_MODE_CLOCK) {
       showText(formatDateTime(clockFormat));
@@ -747,7 +719,6 @@ String getCurrentSettingValues() {
   document["version"] = espVersion;
   document["lastTimeReceivedMessageDateTime"] = lastReceivedMessageDateTime;
   document["lastWrittenText"] = lastWrittenText;
-  document["countdownToDateUnix"] = atol(countdownToDateUnix.c_str());
 
   for(int scheduledMessageIndex = 0; scheduledMessageIndex < scheduledMessages.size(); scheduledMessageIndex++) {
     ScheduledMessage scheduledMessage = scheduledMessages[scheduledMessageIndex];

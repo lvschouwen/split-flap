@@ -24,8 +24,6 @@ This project has built on the original project to add extra features such as:
 - Message Splittng
   - If a message is longer then the number of units there are, the message will be split up and displayed in sequence with a delay between each message
   - Also messages can be split up by adding a `\n`
-- Countdown Mode
-  - Countdown in days to a specified date
 - Added ability to setup WiFi connection on device
   - The device will set itself up as a Access Point (AP) on first start. You will be able to connect to this network and a web portal will be provided where you can setup the WiFi network you want to connect to
   - If the device was to lose connection, it should retry and if all else fails, it will open up the web portal again to change the WiFi settings if necessary

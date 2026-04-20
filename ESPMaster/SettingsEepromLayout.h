@@ -9,7 +9,7 @@
 //   offset size   field
 //   0      4      MAGIC (0x5F1A70BE) - "has the blob been written"
 //   4      1      VERSION (1) - bump + migrate on struct changes
-//   5      20     countdownToDateUnix
+//   5      20     RESERVED (formerly countdownToDateUnix, removed with #26)
 //   25     8      alignment ("left"/"center"/"right")
 //   33     4      flapSpeed (decimal int)
 //   37     20     deviceMode
@@ -26,8 +26,11 @@
 
 #define OFF_MAGIC                 0
 #define OFF_VERSION               4
-#define OFF_COUNTDOWN             5
-#define LEN_COUNTDOWN             20
+// Formerly countdownToDateUnix; slot kept reserved so existing EEPROM blobs
+// (same SETTINGS_VERSION) keep their alignment/flapSpeed/deviceMode/sched
+// messages valid across the #26 upgrade.
+#define OFF_RESERVED_1            5
+#define LEN_RESERVED_1            20
 #define OFF_ALIGNMENT             25
 #define LEN_ALIGNMENT             8
 #define OFF_FLAPSPEED             33

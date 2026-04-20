@@ -17,7 +17,6 @@ void initialiseFileSystem() {
 
   if (readSettingMagic() != SETTINGS_MAGIC || EEPROM.read(OFF_VERSION) != SETTINGS_VERSION) {
     SerialPrintln("Settings EEPROM blank/stale — initialising with defaults");
-    writeSettingString(OFF_COUNTDOWN,  LEN_COUNTDOWN,  "0");
     writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  ALIGNMENT_MODE_LEFT);
     writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  "80");
     writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, DEVICE_MODE_TEXT);
@@ -30,7 +29,6 @@ void initialiseFileSystem() {
 }
 
 void loadValuesFromFileSystem() {
-  countdownToDateUnix = readSettingString(OFF_COUNTDOWN,  LEN_COUNTDOWN);
   alignment           = readSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT);
   flapSpeed           = readSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED);
   deviceMode          = readSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE);
@@ -45,13 +43,11 @@ void loadValuesFromFileSystem() {
   SerialPrintln("   Alignment: " + alignment);
   SerialPrintln("   Flap Speed: " + flapSpeed);
   SerialPrintln("   Device Mode: " + deviceMode);
-  SerialPrintln("   Countdown to Date UNIX: " + countdownToDateUnix);
   SerialPrint("   Scheduled Message Count: ");
   SerialPrintln(scheduledMessages.size());
 }
 
 // Called from the web server handlers whenever a setting changes.
-void saveCountdown()    { writeSettingString(OFF_COUNTDOWN,  LEN_COUNTDOWN,  countdownToDateUnix); EEPROM.commit(); }
 void saveAlignment()    { writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  alignment);           EEPROM.commit(); }
 void saveFlapSpeed()    { writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  flapSpeed);           EEPROM.commit(); }
 void saveDeviceMode()   { writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, deviceMode);          EEPROM.commit(); }

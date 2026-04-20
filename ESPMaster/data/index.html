@@ -65,16 +65,6 @@
 						</p>
 
 						<p>
-							<input onchange="setDeviceModeTab(this.value)" type="radio" id="modeDate" name="deviceMode" value="date" />
-							<label for="modeDate">Date Mode</label>
-						</p>
-
-						<p>
-							<input onchange="setDeviceModeTab(this.value)" type="radio" id="modeCountdown" name="deviceMode" value="countdown" />
-							<label for="modeCountdown">Countdown Mode</label>
-						</p>
-
-						<p>
 							<input onchange="setDeviceModeTab(this.value)" type="radio" id="modeText" name="deviceMode" value="text" />
 							<label for="modeText">Text Mode</label>
 						</p>
@@ -110,15 +100,6 @@
 							</p>				
 						</div>
 
-						<div id="tab-countdown" class="tab hidden">
-							<p>
-								<label for="inputCountdownDateTime">Countdown End Date</label>
-								<br>
-								<input type="date" id="inputCountdownDateTime" name="countdownDateTime">
-								<input type="hidden" id="inputHiddenCountdownDateTimeUnix" name="countdownDateTimeUnix" value="0" />
-							</p>
-						</div>
-		
 						<p>
 							<div id="containerSubmit">
 								<input type="submit" value="Submit" />

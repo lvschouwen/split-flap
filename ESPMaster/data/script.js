@@ -49,16 +49,6 @@ form.onsubmit = function () {
 				document.getElementById('inputHiddenScheduledDateTimeUnix').value = time;
 
 				break;
-			case "countdown":
-				//Set the hidden date time to UNIX
-				var currentCountdownDateTimeText = document.getElementById('inputCountdownDateTime').value;
-
-				//Take into account the timezone offset when we generate the unix timestamp
-				var currentCountdownDateTime = new Date(currentCountdownDateTimeText);
-				var time = Math.floor((currentCountdownDateTime.getTime() - tzOffset) / 1000);
-				document.getElementById('inputHiddenCountdownDateTimeUnix').value = time;
-
-				break;
 		}
 	}
 }
@@ -74,7 +64,7 @@ function loadPage() {
 		showBannerMessage(`
 			Something went wrong during submission. Feel free to try again, ensure that you have entered valid information.
 			<br>
-			Ensure things like dates provided for schedules/countdowns are in the future.
+			Ensure things like dates provided for schedules are in the future.
 		`);
 	}
 	else if (urlParams.get('is-resetting-units') === "true") {
@@ -99,7 +89,6 @@ function loadPage() {
 		setVersion("Development")
 		setUnitCount("10");
 		setLastReceivedMessage(new Date().toLocaleString());
-		setCountdownDate((Date.now() / 1000) + (24 * 60 * 60));
 		showHideResetWifiSettingsAction(false);
 		showHideOtaUpdateAction(false);
 		showScheduledMessages([
@@ -127,7 +116,6 @@ function loadPage() {
 				setAlignment(responseObject.alignment);
 				setVersion(responseObject.version);
 				setUnitCount(responseObject.unitCount);
-				setCountdownDate(responseObject.countdownToDateUnix);
 				setLastReceivedMessage(responseObject.lastTimeReceivedMessageDateTime);
 				showHideResetWifiSettingsAction(responseObject.wifiSettingsResettable);
 				showHideOtaUpdateAction(responseObject.otaEnabled);
@@ -211,14 +199,8 @@ function setSavedMode(mode) {
 		case "text":
 			document.getElementById("modeText").checked = true;
 			break;
-		case "date":
-			document.getElementById("modeDate").checked = true;
-			break;
 		case "clock":
 			document.getElementById("modeClock").checked = true;
-			break;
-		case "countdown":
-			document.getElementById("modeCountdown").checked = true;
 			break;
 	}
 
@@ -270,36 +252,6 @@ function setVersion(version) {
 function setUnitCount(count) {
 	document.getElementById("labelUnits").innerHTML = count;
 	unitCount = count;
-}
-
-//Sets the version on the UI just for awareness
-function setCountdownDate(dateUnix) {
-	//Set date fields to be a minimum of tomorrows date
-	var currentCountdownDate = document.getElementById('inputCountdownDateTime');
-	var tzOffset = timezoneOffset * 60000;
-
-	var currentDate = (new Date(Date.now() - tzOffset));
-	var nextDayDate = new Date();
-	nextDayDate.setDate(currentDate.getDate() + 1);
-
-	//If one has been set and it is not exceeded
-	if (dateUnix !== 0) {
-		var countdownDate = new Date(dateUnix * 1000);
-		if (countdownDate >= currentDate) {
-			currentCountdownDate.value = convertDateToString(countdownDate);
-
-			if (countdownDate - currentDate < 24 * 60 * 60 * 1000) {
-				currentCountdownDate.min = convertDateToString(nextDayDate);
-				return;
-			}
-		}
-	}
-	else {
-		//Set date fields to be a minimum of tomorrows date	
-		currentCountdownDate.value = convertDateToString(nextDayDate);
-	}
-
-	currentCountdownDate.min = convertDateToString(nextDayDate);
 }
 
 function convertDateToString(dateTime) {
