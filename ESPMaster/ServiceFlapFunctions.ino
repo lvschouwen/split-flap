@@ -6,12 +6,28 @@
 // Command opcodes understood by Unit.ino's receiveLetter(). Values >=
 // FLAP_AMOUNT are reserved for commands (valid letter indices are 0..44).
 // Must stay in sync with Unit/Unit.ino's CMD_* constants.
+//
+// Opcodes are organized into semantic bands (issue #47):
+//   0x80..0x8F  queries — write opcode, follow with requestFrom
+//   0x90..0x9F  mutations — write opcode + args, no read follow-up
+//
+// 0x80 (ENTER_BOOTLOADER) and 0x81 (GET_VERSION) are fixed forever across
+// protocol bumps because they are the cross-generation recovery path.
 #define UNIT_CMD_ENTER_BOOTLOADER 0x80
 #define UNIT_CMD_GET_VERSION      0x81
 #define UNIT_CMD_GET_OFFSET       0x82
-#define UNIT_CMD_SET_OFFSET       0x83
-#define UNIT_CMD_JOG              0x84
-#define UNIT_CMD_HOME             0x85
+#define UNIT_CMD_GET_STATUS       0x83
+#define UNIT_CMD_HOME             0x90
+#define UNIT_CMD_JOG              0x91
+#define UNIT_CMD_REBOOT           0x92
+#define UNIT_CMD_SET_OFFSET       0x93
+
+// General-call broadcast address — a write to 0x00 reaches every unit with
+// TWGCE enabled. By convention the master only ever broadcasts CMD_HOME
+// (see broadcastHome()); units treat received opcodes the same whether
+// addressed individually or via general call, so other opcodes on broadcast
+// would produce unintended side effects.
+#define I2C_GENERAL_CALL_ADDRESS  0x00
 
 static int toI2cAddress(int unitIndex) {
   return I2C_ADDRESS_BASE + unitIndex;
@@ -74,6 +90,50 @@ int homeUnit(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)UNIT_CMD_HOME);
   return Wire.endTransmission();
+}
+
+//Triggers a soft watchdog reset on the unit (stays in sketch mode; twiboot
+//times out with no master activity and jumps to the sketch). Use to recover
+//a unit that looks wedged without a full reflash. Issue #47.
+int rebootUnit(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)UNIT_CMD_REBOOT);
+  return Wire.endTransmission();
+}
+
+//Broadcasts CMD_HOME to every unit on the bus in a single transaction via
+//the I2C general-call address. Replaces loops that previously sent HOME to
+//each detected unit one at a time. Issue #47.
+int broadcastHome() {
+  Wire.beginTransmission((uint8_t)I2C_GENERAL_CALL_ADDRESS);
+  Wire.write((uint8_t)UNIT_CMD_HOME);
+  return Wire.endTransmission();
+}
+
+//Reads the 8-byte health/status payload via CMD_GET_STATUS (issue #47).
+//Returns true on success. Short replies (old firmware predating this
+//opcode) or Wire failures return false without touching `out`.
+bool readUnitStatus(int i2cAddress, UnitStatus& out) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)UNIT_CMD_GET_STATUS);
+  if (Wire.endTransmission() != 0) return false;
+  delay(2);  //give the slave time to flip pendingStatusResponse before clocking
+  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)8);
+  if (got != 8) {
+    while (Wire.available()) Wire.read();
+    return false;
+  }
+  uint8_t buf[8];
+  for (uint8_t i = 0; i < 8; i++) buf[i] = Wire.read();
+  out.flags                 = buf[0];
+  out.mcusrAtBoot           = buf[1];
+  out.lifetimeBrownoutCount = buf[2];
+  out.lifetimeWatchdogCount = buf[3];
+  out.uptimeSeconds         = ((uint16_t)buf[4] << 8) | (uint16_t)buf[5];
+  out.badCommandCount       = buf[6];
+  //Byte 7 is last-homing-step / 16 (saturating); decode by reversing.
+  out.lastHomingStepCount   = (uint16_t)buf[7] << 4;
+  return true;
 }
 
 //Shows a new message on the display

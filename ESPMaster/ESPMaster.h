@@ -32,6 +32,29 @@ int  writeUnitOffset(int i2cAddress, int16_t value);
 int  jogUnit(int i2cAddress, int steps);
 int  homeUnit(int i2cAddress);
 
+// Unit health / diagnostics (issue #47). Populated by readUnitStatus() from
+// the 8-byte CMD_GET_STATUS reply. Mirrors the layout documented in
+// Unit.ino's requestEvent().
+struct UnitStatus {
+  uint8_t  flags;                    // bit0 moving, bit1 last-home-failed, bit2 hall-never-triggered
+  uint8_t  mcusrAtBoot;              // BORF / WDRF / EXTRF / PORF / JTRF snapshot
+  uint8_t  lifetimeBrownoutCount;    // saturating
+  uint8_t  lifetimeWatchdogCount;    // saturating
+  uint16_t uptimeSeconds;            // saturating
+  uint8_t  badCommandCount;          // saturating
+  uint16_t lastHomingStepCount;      // decoded from byte 7 * 16
+};
+// Reads the 8-byte status payload from a sketch-running unit. Returns true
+// on success. On short reply (old firmware predating CMD_GET_STATUS) or
+// Wire error, returns false and `out` is untouched.
+bool readUnitStatus(int i2cAddress, UnitStatus& out);
+
+// Broadcasts CMD_HOME to the I2C general-call address (0x00). Every unit
+// with TWGCE enabled will run calibrate(true). Replaces N-unit sequential
+// home loops used by the Stop button and the reset-calibration flow.
+int  broadcastHome();
+int  rebootUnit(int i2cAddress);     // soft WDT reset, stays in sketch mode
+
 // Firmware flashing (ServiceFirmwareFunctions.ino). `firmwareFlashInProgress`
 // is checked by the main loop so we don't step on the Wire bus while a
 // flash is active. flashUnitFromProgmem() is the only caller of the

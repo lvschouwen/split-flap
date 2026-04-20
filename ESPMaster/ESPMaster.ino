@@ -748,10 +748,10 @@ void setup() {
     });
 
     //POST /stop — user-visible kill-switch (issue #35). Aborts any running
-    //showMessage() wait loop, sends CMD_HOME to every detected sketch-
-    //running unit (so every drum parks at blank), and clears the in-memory
-    //text so the event loop doesn't immediately re-send the previous
-    //message. Safe to call when nothing is happening; it's idempotent.
+    //showMessage() wait loop, broadcasts CMD_HOME to every unit in one I2C
+    //transaction (issue #47 — previously N sequential sends), and clears
+    //the in-memory text so the event loop doesn't immediately re-send the
+    //previous message. Safe to call when nothing is happening; idempotent.
     webServer.on("/stop", HTTP_POST, [](AsyncWebServerRequest * request) {
       if (firmwareFlashInProgress) {
         request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
@@ -759,20 +759,18 @@ void setup() {
       }
       SerialPrintln(F("Request to Stop Received"));
       abortCurrentShow = true;
-      int homed = 0;
-      for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
-        if (detectedUnitStates[unitIndex] != 1) continue;
-        int addr = unitIndex + 1;  // I2C_ADDRESS_BASE == 1, defined in ServiceFlapFunctions.ino
-        if (homeUnit(addr) == 0) homed++;
-      }
+      int broadcastStatus = broadcastHome();
       //Prevent the event loop from re-issuing showText() with the previous
       //content. Clearing both inputText and lastWrittenText makes the
       //showText("" vs "") comparison a no-op.
       inputText = "";
       lastWrittenText = "";
-      String body = "Stop requested; homed ";
-      body += homed;
-      body += " unit(s).";
+      String body;
+      if (broadcastStatus == 0) {
+        body = F("Stop requested; homed all units via broadcast.");
+      } else {
+        body = String(F("Stop requested; broadcast Wire.endTransmission returned ")) + broadcastStatus;
+      }
       request->send(200, "text/plain", body);
     });
 

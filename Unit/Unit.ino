@@ -26,41 +26,53 @@
 #define I2C_ADDRESS_BASE 1
 
 // EEPROM layout:
-//   0..1  int  calibration offset (set via master web-UI calibration)
-//   2     byte identity magic — if == EEPROM_ID_MAGIC_VALUE, byte 3 is valid
-//   3     byte I2C address (1..126) assigned by the position wizard (future)
-// Slots 4+ reserved.
-#define EEPROM_ADDR_ID_MAGIC   2
-#define EEPROM_ADDR_I2C_ADDR   3
-#define EEPROM_ID_MAGIC_VALUE  0xA5
+//   0..1  int   calibration offset (set via master web-UI calibration)
+//   2     byte  identity magic — if == EEPROM_ID_MAGIC_VALUE, byte 3 is valid
+//   3     byte  I2C address (1..126) assigned by the position wizard (future)
+//   4     byte  lifetime brownout-reset count (saturating)  (issue #47)
+//   5     byte  lifetime watchdog-reset count (saturating)  (issue #47)
+// Slots 6+ reserved.
+#define EEPROM_ADDR_ID_MAGIC      2
+#define EEPROM_ADDR_I2C_ADDR      3
+#define EEPROM_ADDR_BROWNOUT_CNT  4
+#define EEPROM_ADDR_WATCHDOG_CNT  5
+#define EEPROM_ID_MAGIC_VALUE     0xA5
 
-// I2C "receive" namespace: the first byte is a letter index (0..FLAP_AMOUNT-1)
-// for normal display commands, or a command opcode (>= FLAP_AMOUNT) for
+// I2C "receive" namespace: the first byte is a letter index (0..AMOUNTFLAPS-1)
+// for normal display commands, or a command opcode (>= AMOUNTFLAPS) for
 // control commands. Keep opcodes away from letter indices to stay backwards
 // compatible with older masters that only know about letters.
-#define CMD_ENTER_BOOTLOADER   0x80
-// CMD_GET_VERSION: master sends this opcode; the next I2C read from the unit
-// returns 8 bytes of ASCII (GIT_REV, null-padded). Lets the master flag units
-// running outdated firmware. See issue #28. Older firmware (pre-issue-#28)
-// ignores unknown opcodes and keeps returning its 1-byte rotation status, so
-// the master detects "short response" as "unknown version".
-#define CMD_GET_VERSION        0x81
-// Interactive calibration opcodes (issue #32). All heavy work (EEPROM write,
-// motor moves) is deferred to loop() via `pending*` flags — doing it inside
-// the Wire ISR stalls the bus and can drop follow-up transactions.
-// CMD_GET_OFFSET: next I2C read returns 2 bytes (int16 LE calOffset).
-#define CMD_GET_OFFSET         0x82
-// CMD_SET_OFFSET: master writes opcode + 2 bytes (int16 LE); unit persists to
-// EEPROM and updates the in-memory calOffset. Does NOT re-home.
-#define CMD_SET_OFFSET         0x83
-// CMD_JOG: master writes opcode + 1 signed byte (-127..+127); unit nudges
-// the drum that many steps without re-homing. Used by "Advanced" calibration
-// to fine-tune half-flap misalignment.
-#define CMD_JOG                0x84
-// CMD_HOME: master writes opcode (no args); unit runs full calibrate(true)
-// and parks at position 0 (blank). Used to preview the effect of a new
-// offset immediately, without waiting for the next letter change.
-#define CMD_HOME               0x85
+//
+// Opcodes are organized into semantic bands (issue #47):
+//   0x80..0x8F  queries — master writes opcode, follows with requestFrom
+//   0x90..0x9F  mutations — master writes opcode + args, no read follow-up
+//
+// Two opcodes are "forever stable" across protocol bumps because they are
+// the cross-generation recovery path:
+//   0x80  CMD_ENTER_BOOTLOADER — how a new master updates an old unit
+//   0x81  CMD_GET_VERSION      — how the master detects outdated firmware
+// Do not renumber these.
+
+// --- Lifecycle & cross-version-stable opcodes ---
+#define CMD_ENTER_BOOTLOADER   0x80  // trigger watchdog reset into twiboot
+
+// --- 0x8X queries ---
+#define CMD_GET_VERSION        0x81  // next read: 8 bytes GIT_REV (null-padded)
+#define CMD_GET_OFFSET         0x82  // next read: 2 bytes int16 LE calOffset
+// CMD_GET_STATUS: next read returns 8 bytes of health/diag data, see
+// requestEvent() for layout. Introduced in issue #47. Old firmware that
+// doesn't know this opcode falls back to the default 1-byte currentlyrotating
+// reply; master detects "short response" as "status unsupported".
+#define CMD_GET_STATUS         0x83
+
+// --- 0x9X mutations ---
+// All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT
+// reset) to loop() via `pending*` flags — doing it inside the Wire ISR
+// stalls the bus and can drop follow-up transactions.
+#define CMD_HOME               0x90  // no args; unit runs full calibrate(true)
+#define CMD_JOG                0x91  // +1 signed byte (-127..+127)
+#define CMD_REBOOT             0x92  // no args; soft watchdog reset (stays in sketch)
+#define CMD_SET_OFFSET         0x93  // +2 bytes int16 LE; persist to EEPROM
 
 //constants stepper
 #define STEPPERPIN1 11
@@ -120,6 +132,17 @@ volatile int16_t pendingOffsetValue    = 0;
 volatile bool    pendingHome           = false;   // loop() re-homes
 volatile int8_t  pendingJogSteps       = 0;       // loop() steps + clears
 
+// Health / diagnostics state returned by CMD_GET_STATUS (issue #47).
+volatile bool     pendingStatusResponse     = false;  // consumed by requestEvent
+uint8_t           savedMcusr                = 0;      // snapshot of MCUSR at boot
+uint8_t           lifetimeBrownoutCount     = 0;      // mirror of EEPROM slot 4
+uint8_t           lifetimeWatchdogCount     = 0;      // mirror of EEPROM slot 5
+uint8_t           badCommandCount           = 0;      // saturating, malformed I2C receives since boot
+bool              statusLastHomeFailed      = false;  // set by calibrate() on timeout
+bool              statusHallNeverTriggered  = false;  // set by calibrate() when hall never read 0
+uint16_t          lastHomingStepCount       = 0;      // steps the last calibrate() took to find hall
+uint16_t          uptimeSeconds             = 0;      // saturating; updated from loop()
+
 //sleep globals
 //Sleep mode is SLEEP_MODE_IDLE: CPU clock stops, peripheral clocks (including
 //TWI) keep running so the unit can still ACK I2C transactions while asleep.
@@ -131,11 +154,28 @@ unsigned long previousMillis = 0;       //stores last time sleep was interrupted
 
 //setup
 void setup() {
-  // Defensive: twiboot disables the watchdog at init3 before jumping here, but
-  // if anything (including our own enterBootloader path) left it armed, clear
-  // the reset flag and disable the WDT so we don't reset-loop.
-  MCUSR &= ~(1 << WDRF);
+  // Capture MCUSR *before* clearing — it tells us why we last reset
+  // (brownout / watchdog / external / power-on / jtag). Kept around for
+  // CMD_GET_STATUS byte 1, and used right now to bump the lifetime
+  // reset counters in EEPROM. See issue #47.
+  savedMcusr = MCUSR;
+  MCUSR = 0;
   wdt_disable();
+
+  // Lifetime reset counters: persist across power cycles so a unit with
+  // chronic power issues (brownouts) can be diagnosed even if the master
+  // only polls once. Saturating at 255 — once we're there the signal is
+  // already loud enough.
+  lifetimeBrownoutCount = EEPROM.read(EEPROM_ADDR_BROWNOUT_CNT);
+  lifetimeWatchdogCount = EEPROM.read(EEPROM_ADDR_WATCHDOG_CNT);
+  if (savedMcusr & (1 << BORF) && lifetimeBrownoutCount < 0xFF) {
+    lifetimeBrownoutCount++;
+    EEPROM.update(EEPROM_ADDR_BROWNOUT_CNT, lifetimeBrownoutCount);
+  }
+  if (savedMcusr & (1 << WDRF) && lifetimeWatchdogCount < 0xFF) {
+    lifetimeWatchdogCount++;
+    EEPROM.update(EEPROM_ADDR_WATCHDOG_CNT, lifetimeWatchdogCount);
+  }
 
   // i2c adress switch
   pinMode(ADRESSSW1, INPUT_PULLUP);
@@ -158,6 +198,10 @@ void setup() {
 
   //I2C function assignment
   Wire.begin(i2cAddress); //i2c address of this unit
+  // Enable general-call (I2C broadcast to address 0x00) reception so the
+  // master can HOME every unit in a single transaction — see issue #47.
+  // Wire.begin() sets TWAR = (addr << 1) and clears TWGCE; set it *after*.
+  TWAR |= (1 << TWGCE);
   Wire.onReceive(receiveLetter);//call-function for transfered letter via i2c
   Wire.onRequest(requestEvent); //call-funtion if master requests unit state
 
@@ -238,6 +282,13 @@ void loop() {
   }
 
   unsigned long currentMillis = millis();
+
+  // Uptime counter for CMD_GET_STATUS (issue #47). Saturating at 18 h 12 min;
+  // the master is expected to poll more often than that. Cheap arithmetic,
+  // fine to recompute every loop iteration.
+  uint32_t secondsSinceBoot = currentMillis / 1000UL;
+  uptimeSeconds = (secondsSinceBoot > 0xFFFFUL) ? 0xFFFF : (uint16_t)secondsSinceBoot;
+
   if (currentMillis - previousMillis >= WAIT_TIME) {
     set_sleep_mode(SLEEP_MODE_IDLE);
     sleep_enable();
@@ -350,6 +401,13 @@ void receiveLetter(int numBytes) {
   if (firstByte >= AMOUNTFLAPS) {
     switch ((uint8_t)firstByte) {
       case CMD_ENTER_BOOTLOADER:
+      case CMD_REBOOT:
+        // Both trigger a watchdog reset. CMD_ENTER_BOOTLOADER is the
+        // semantic "hand off to twiboot so the master can push firmware"
+        // (master keeps twiboot alive with continuous pings); CMD_REBOOT
+        // is "just restart the sketch" (master does nothing, twiboot
+        // times out after ~250 ms, sketch runs). Mechanically identical
+        // from the unit's side — only master follow-up behavior differs.
         pendingBootloader = true;
         break;
       case CMD_GET_VERSION:
@@ -358,6 +416,9 @@ void receiveLetter(int numBytes) {
       case CMD_GET_OFFSET:
         pendingOffsetResponse = true;
         break;
+      case CMD_GET_STATUS:
+        pendingStatusResponse = true;
+        break;
       case CMD_SET_OFFSET:
         if (remaining >= 2) {
           uint8_t lo = (uint8_t)Wire.read();
@@ -365,18 +426,23 @@ void receiveLetter(int numBytes) {
           remaining -= 2;
           pendingOffsetValue = (int16_t)((uint16_t)lo | ((uint16_t)hi << 8));
           pendingOffsetWrite = true;
+        } else if (badCommandCount < 0xFF) {
+          badCommandCount++;
         }
         break;
       case CMD_JOG:
         if (remaining >= 1) {
           pendingJogSteps = (int8_t)Wire.read();
           remaining--;
+        } else if (badCommandCount < 0xFF) {
+          badCommandCount++;
         }
         break;
       case CMD_HOME:
         pendingHome = true;
         break;
       default:
+        if (badCommandCount < 0xFF) badCommandCount++;
         break;  // unknown opcode -> ignore
     }
     while (remaining-- > 0) Wire.read();  // drain any extra args
@@ -386,8 +452,10 @@ void receiveLetter(int numBytes) {
   // Legacy letter+speed protocol is exactly 2 bytes. Anything else is a
   // probe (the master's bootloader-detection write hits this code path)
   // or a malformed command — drain and ignore so we don't accidentally
-  // rotate the drum to a random letter when probed.
+  // rotate the drum to a random letter when probed. Single-byte empty
+  // transmissions are the master's standard bus-scan probe, not errors.
   if (numBytes != 2) {
+    if (numBytes > 2 && badCommandCount < 0xFF) badCommandCount++;
     while (remaining-- > 0) Wire.read();
     return;
   }
@@ -411,6 +479,43 @@ void requestEvent() {
     uint8_t buf[2] = { (uint8_t)(raw & 0xFF), (uint8_t)((raw >> 8) & 0xFF) };
     Wire.write(buf, 2);
     pendingOffsetResponse = false;
+    return;
+  }
+  if (pendingStatusResponse) {
+    // Issue #47. 8-byte health/diag payload. Master parses into UnitStatus;
+    // old masters that don't know CMD_GET_STATUS never send it, so this
+    // branch won't fire for them.
+    //
+    //   byte 0   status flag bitfield
+    //             bit 0  currentlyrotating
+    //             bit 1  last home FAILED (hit 3*STEPS without marker)
+    //             bit 2  hall never triggered during last home
+    //             bit 3  reserved (stuck drum, future)
+    //             bits 4-7 reserved
+    //   byte 1   savedMcusr — current-boot reset-cause snapshot
+    //   byte 2   lifetime brownout reset count (EEPROM, saturating)
+    //   byte 3   lifetime watchdog reset count (EEPROM, saturating)
+    //   byte 4-5 uptime in seconds (uint16 big-endian, saturating)
+    //   byte 6   bad I2C command count since boot (saturating)
+    //   byte 7   last homing step count / 16 (saturating uint8)
+    uint8_t flags = 0;
+    if (currentlyrotating)          flags |= (1 << 0);
+    if (statusLastHomeFailed)       flags |= (1 << 1);
+    if (statusHallNeverTriggered)   flags |= (1 << 2);
+    uint8_t lastHomeScaled = (lastHomingStepCount >> 4);
+    if (lastHomeScaled > 0xFF) lastHomeScaled = 0xFF;
+    uint8_t buf[8] = {
+      flags,
+      savedMcusr,
+      lifetimeBrownoutCount,
+      lifetimeWatchdogCount,
+      (uint8_t)((uptimeSeconds >> 8) & 0xFF),
+      (uint8_t)(uptimeSeconds & 0xFF),
+      badCommandCount,
+      lastHomeScaled,
+    };
+    Wire.write(buf, 8);
+    pendingStatusResponse = false;
     return;
   }
   Wire.write(currentlyrotating); //send unit status to master
@@ -451,10 +556,19 @@ int calibrate(bool initialCalibration) {
 #endif
   currentlyrotating = 1; //set active state to active
   bool reachedMarker = false;
+  // Track whether the hall sensor ever read 0 (magnet detected) during this
+  // homing attempt. Stays true only if hall was 0 from step 0 OR we stepped
+  // through to find it. If we time out with hall stuck at 1, the status bit
+  // tells the master "magnet fell off / bad KY-003 / wiring issue".
+  // Issue #47.
+  bool hallSawMagnet = false;
   stepper.setSpeed(stepperSpeed);
   int i = 0;
   while (!reachedMarker) {
     int currentHallValue = digitalRead(HALLPIN);
+    if (currentHallValue == 0) {
+      hallSawMagnet = true;
+    }
     if (currentHallValue == 1 && i == 0) { //already in zero position move out a bit and do the calibration {
       //not reached yet
       i = 50;
@@ -473,6 +587,9 @@ int calibrate(bool initialCalibration) {
 #ifdef SERIAL_ENABLE
       Serial.println("revolver calibrated");
 #endif
+      statusLastHomeFailed = false;
+      statusHallNeverTriggered = !hallSawMagnet;
+      lastHomingStepCount = (uint16_t)i;
       //Only stop motor for initial calibration
       if (initialCalibration) {
         stopMotor();
@@ -487,6 +604,9 @@ int calibrate(bool initialCalibration) {
 #ifdef SERIAL_ENABLE
       Serial.println("calibration revolver failed");
 #endif
+      statusLastHomeFailed = true;
+      statusHallNeverTriggered = !hallSawMagnet;
+      lastHomingStepCount = (uint16_t)i;
       stopMotor();
       return -1;
     }
