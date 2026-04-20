@@ -6,20 +6,21 @@
 //      patched twiboot listens on the unit's DIP-derived address (not stock
 //      0x29), so every twiboot call targets `addr` directly.
 //   2. feedFirmwareChunk(data, len): called for each chunk of the uploaded
-//      Intel HEX file. Parses line-by-line, accumulates into 128-byte pages,
-//      flushes each full page to twiboot as it completes.
+//      Intel HEX file. Delegates to HexFlashParser, which accumulates into
+//      128-byte pages and calls the producePageToTwiboot callback on each
+//      completed page.
 //   3. finishFirmwareFlash(): flush any trailing page, exit the bootloader,
 //      verify the unit came back up at its normal address.
 //
 // Twiboot protocol: see the comment in UnitBootloader/main.c around line 150.
 //
-// IMPORTANT: Arduino preprocessor auto-generates function prototypes and
-// puts them ABOVE every #include. That means custom types can't appear in
-// any function signature or the build breaks with "<type> not declared".
-// Anything that needs to be stateful is stored in file-static globals
-// rather than passed via parameters.
+// The Intel-HEX -> page-buffer pipeline lives in HexFlashParser.h so the
+// host-side test env can exercise it against an in-memory capture callback.
+// That header is deliberately Wire-free.
 
-#define TWIBOOT_PAGE_SIZE       128
+#include "HexFlashParser.h"
+
+#define TWIBOOT_PAGE_SIZE       HEX_PAGE_SIZE
 // ATmega328p flash is 32KB. Bootloader sits at 0x7C00; the rest is the app
 // section we're allowed to write. Addresses past this should be refused.
 #define TWIBOOT_APP_MAX         0x7C00
@@ -29,22 +30,13 @@
 
 volatile bool firmwareFlashInProgress = false;
 
-// File-scope state for the currently-running flash. All flash helpers read
-// and write these directly — no custom structs in function signatures (see
-// header comment).
-static uint8_t  flashPageBuf[TWIBOOT_PAGE_SIZE];
-static uint16_t flashCurrentPageAddr = 0;
-static bool     flashPageHasData     = false;
-static uint32_t flashTotalBytesWritten = 0;
-static uint32_t flashTotalHexBytesSeen = 0;
+// Parser + page-assembler state for the currently-running flash.
+static HexFlashState flashState;
 static uint8_t  flashTargetI2cAddress = 0;
 // Address used when talking to twiboot. Our DIP-patched bootloader listens on
 // the unit's own I2C address (I2C_ADDRESS_BASE + DIP), so this is always set
 // to the target unit's address at the start of a flash.
 static uint8_t  twibootAddr           = 0;
-static String   flashErrorMsg         = "";
-static char     flashLineBuf[64];
-static int      flashLineLen          = 0;
 
 // --- Twiboot I2C client --------------------------------------------------
 
@@ -62,7 +54,7 @@ static int twibootExit() {
 }
 
 // Queries twiboot chipinfo and checks it matches the ATmega328P. Populates
-// `flashErrorMsg` on mismatch.
+// `flashState.errorMsg` on mismatch.
 static bool twibootVerifyChip() {
   Wire.beginTransmission(twibootAddr);
   Wire.write((uint8_t)0x02);  // CMD_ACCESS_MEMORY
@@ -70,12 +62,12 @@ static bool twibootVerifyChip() {
   Wire.write((uint8_t)0x00);
   Wire.write((uint8_t)0x00);
   if (Wire.endTransmission(false) != 0) {
-    flashErrorMsg = "Wire endTransmission failed reading chipinfo";
+    flashState.errorMsg = "Wire endTransmission failed reading chipinfo";
     return false;
   }
   uint8_t got = Wire.requestFrom(twibootAddr, (uint8_t)8);
   if (got != 8) {
-    flashErrorMsg = String("Chipinfo read returned ") + got + " bytes, expected 8";
+    flashState.errorMsg = String("Chipinfo read returned ") + got + " bytes, expected 8";
     return false;
   }
   uint8_t sig0 = Wire.read(), sig1 = Wire.read(), sig2 = Wire.read();
@@ -84,44 +76,31 @@ static bool twibootVerifyChip() {
   Wire.read(); Wire.read();  // eeprom size, unused
 
   if (sig0 != 0x1E || sig1 != 0x95 || sig2 != 0x0F) {
-    flashErrorMsg = String("Unexpected chip signature ") + String(sig0, HEX) + " " +
+    flashState.errorMsg = String("Unexpected chip signature ") + String(sig0, HEX) + " " +
                     String(sig1, HEX) + " " + String(sig2, HEX);
     return false;
   }
   if (pageSize != TWIBOOT_PAGE_SIZE) {
-    flashErrorMsg = String("Unexpected page size ") + pageSize;
+    flashState.errorMsg = String("Unexpected page size ") + pageSize;
     return false;
   }
   return true;
 }
 
 // Writes exactly one page (SPM_PAGESIZE = 128 bytes on ATmega328p).
-static int twibootWriteFlashPage(uint16_t flashAddr) {
+static int twibootWriteFlashPage(uint16_t flashAddr, const uint8_t* page) {
   Wire.beginTransmission(twibootAddr);
   Wire.write((uint8_t)0x02);  // CMD_ACCESS_MEMORY
   Wire.write((uint8_t)0x01);  // MEMTYPE_FLASH
   Wire.write((uint8_t)((flashAddr >> 8) & 0xFF));
   Wire.write((uint8_t)(flashAddr & 0xFF));
   for (int i = 0; i < TWIBOOT_PAGE_SIZE; i++) {
-    Wire.write(flashPageBuf[i]);
+    Wire.write(page[i]);
   }
   return Wire.endTransmission();
 }
 
-// --- Intel HEX parser + page assembler -----------------------------------
-
-static int hexNibble(char c) {
-  if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-  return -1;
-}
-
-static int hexByte(char hi, char lo) {
-  int h = hexNibble(hi), l = hexNibble(lo);
-  if (h < 0 || l < 0) return -1;
-  return (h << 4) | l;
-}
+// --- Page flush callback (Wire side) -------------------------------------
 
 // Spin-poll twiboot with CMD_WAIT until it ACKs again (meaning its async
 // flash-write finished) or we give up. Clock stretching is disabled in our
@@ -136,87 +115,31 @@ static bool twibootWaitReady(uint16_t timeoutMs) {
   return false;
 }
 
-static bool flushPageIfReady() {
-  if (!flashPageHasData) return true;
+// HexPageFlushFn callback: drains one completed 128-byte page to twiboot.
+// Matches the signature in HexFlashParser.h so it can be wired into
+// hexFeedChunk / hexFlushFinal.
+static bool producePageToTwiboot(const uint8_t* page, uint16_t addr, void* /*ctx*/) {
   SerialPrint("Writing page 0x");
-  SerialPrintln(String(flashCurrentPageAddr, HEX));
+  SerialPrintln(String(addr, HEX));
 
   // Make sure twiboot is ready before hitting it with a 132-byte burst.
   if (!twibootWaitReady(100)) {
-    flashErrorMsg = String("twiboot not ready before page 0x") + String(flashCurrentPageAddr, HEX);
+    flashState.errorMsg = String("twiboot not ready before page 0x") + String(addr, HEX);
     return false;
   }
 
-  int status = twibootWriteFlashPage(flashCurrentPageAddr);
+  int status = twibootWriteFlashPage(addr, page);
   if (status != 0) {
-    flashErrorMsg = String("twibootWriteFlashPage failed at 0x") + String(flashCurrentPageAddr, HEX) +
-                    " status=" + String(status);
+    flashState.errorMsg = String("twibootWriteFlashPage failed at 0x") + String(addr, HEX) +
+                          " status=" + String(status);
     return false;
   }
 
   // Wait for the async SPM cycle to finish. ~4.5 ms typical; 50 ms is
   // generous and still keeps the whole flash under a few seconds.
   if (!twibootWaitReady(50)) {
-    flashErrorMsg = String("twiboot stuck busy after page 0x") + String(flashCurrentPageAddr, HEX);
+    flashState.errorMsg = String("twiboot stuck busy after page 0x") + String(addr, HEX);
     return false;
-  }
-
-  flashTotalBytesWritten += TWIBOOT_PAGE_SIZE;
-  memset(flashPageBuf, 0xFF, TWIBOOT_PAGE_SIZE);
-  flashPageHasData = false;
-  return true;
-}
-
-// Parses one complete Intel HEX record. Returns true on parse OK (and
-// possibly EOF), false on error (with flashErrorMsg set).
-static bool parseHexLine(const char* line, int len) {
-  if (len < 11 || line[0] != ':') {
-    flashErrorMsg = "Invalid HEX line";
-    return false;
-  }
-
-  int byteCount  = hexByte(line[1], line[2]);
-  int addrHi     = hexByte(line[3], line[4]);
-  int addrLo     = hexByte(line[5], line[6]);
-  int recordType = hexByte(line[7], line[8]);
-  if (byteCount < 0 || addrHi < 0 || addrLo < 0 || recordType < 0) {
-    flashErrorMsg = "Malformed HEX header";
-    return false;
-  }
-
-  uint16_t baseAddr = ((uint16_t)addrHi << 8) | addrLo;
-
-  if (recordType == 0x01) return true;      // EOF
-  if (recordType != 0x00) return true;      // 02/04 extended-address, ignored for 32KB targets
-
-  if (len < 9 + byteCount * 2 + 2) {
-    flashErrorMsg = "HEX data record truncated";
-    return false;
-  }
-
-  for (int i = 0; i < byteCount; i++) {
-    int b = hexByte(line[9 + i * 2], line[9 + i * 2 + 1]);
-    if (b < 0) {
-      flashErrorMsg = "Bad HEX data byte";
-      return false;
-    }
-
-    uint16_t addr = baseAddr + i;
-    if (addr >= TWIBOOT_APP_MAX) {
-      flashErrorMsg = String("Address 0x") + String(addr, HEX) + " past app section";
-      return false;
-    }
-
-    uint16_t pageBase   = addr & ~((uint16_t)TWIBOOT_PAGE_SIZE - 1);
-    uint8_t  pageOffset = addr & (TWIBOOT_PAGE_SIZE - 1);
-
-    if (flashPageHasData && pageBase != flashCurrentPageAddr) {
-      if (!flushPageIfReady()) return false;
-    }
-
-    flashCurrentPageAddr     = pageBase;
-    flashPageBuf[pageOffset] = (uint8_t)b;
-    flashPageHasData         = true;
   }
 
   return true;
@@ -272,19 +195,13 @@ bool beginFirmwareFlash(uint8_t i2cAddress, String& error) {
   SerialPrintln(String(i2cAddress, HEX));
 
   if (!twibootVerifyChip()) {
-    error = flashErrorMsg;
+    error = flashState.errorMsg;
     return false;
   }
   SerialPrintln("Chip signature OK (ATmega328P, page=128)");
 
-  memset(flashPageBuf, 0xFF, TWIBOOT_PAGE_SIZE);
-  flashCurrentPageAddr     = 0;
-  flashPageHasData         = false;
-  flashTotalBytesWritten   = 0;
-  flashTotalHexBytesSeen   = 0;
+  hexInitState(flashState, TWIBOOT_APP_MAX, FIRMWARE_MAX_HEX_BYTES);
   flashTargetI2cAddress    = i2cAddress;
-  flashErrorMsg            = "";
-  flashLineLen             = 0;
 
   firmwareFlashInProgress = true;
   return true;
@@ -293,32 +210,10 @@ bool beginFirmwareFlash(uint8_t i2cAddress, String& error) {
 bool feedFirmwareChunk(const uint8_t* data, size_t len) {
   if (!firmwareFlashInProgress) return false;
 
-  flashTotalHexBytesSeen += len;
-  if (flashTotalHexBytesSeen > FIRMWARE_MAX_HEX_BYTES) {
-    flashErrorMsg = "HEX upload exceeded size limit";
+  if (!hexFeedChunk(flashState, data, len, producePageToTwiboot, nullptr)) {
+    SerialPrint("Firmware chunk error: ");
+    SerialPrintln(flashState.errorMsg);
     return false;
-  }
-
-  for (size_t i = 0; i < len; i++) {
-    char c = (char)data[i];
-    if (c == '\n' || c == '\r') {
-      if (flashLineLen > 0) {
-        bool ok = parseHexLine(flashLineBuf, flashLineLen);
-        flashLineLen = 0;
-        if (!ok) {
-          SerialPrint("Firmware chunk error: ");
-          SerialPrintln(flashErrorMsg);
-          return false;
-        }
-      }
-    } else {
-      if (flashLineLen < (int)sizeof(flashLineBuf) - 1) {
-        flashLineBuf[flashLineLen++] = c;
-      } else {
-        flashErrorMsg = "HEX line exceeds internal buffer";
-        return false;
-      }
-    }
   }
   return true;
 }
@@ -331,8 +226,8 @@ bool finishFirmwareFlash(String& resultMsg) {
 
   uint8_t targetAddr = flashTargetI2cAddress;
 
-  if (!flushPageIfReady()) {
-    resultMsg = String("Failed flushing final page: ") + flashErrorMsg;
+  if (!hexFlushFinal(flashState, producePageToTwiboot, nullptr)) {
+    resultMsg = String("Failed flushing final page: ") + flashState.errorMsg;
     firmwareFlashInProgress = false;
     return false;
   }
@@ -344,7 +239,7 @@ bool finishFirmwareFlash(String& resultMsg) {
     return false;
   }
 
-  uint32_t bytesWritten = flashTotalBytesWritten;
+  uint32_t bytesWritten = flashState.totalBytesWritten;
   firmwareFlashInProgress = false;
 
   // Give the new sketch a couple of seconds to boot, then verify it
@@ -370,9 +265,9 @@ void abortFirmwareFlash(const String& reason) {
   firmwareFlashInProgress = false;
 }
 
-// Streams the PROGMEM-embedded unit firmware to twiboot by copying
-// 128-byte pages into flashPageBuf and calling flushPageIfReady() (which
-// handles the clock-stretch-off wait/retry).
+// Streams the PROGMEM-embedded unit firmware to twiboot one 128-byte page
+// at a time, driving producePageToTwiboot directly (bypassing the HEX
+// parser since the PROGMEM blob is already a raw binary image).
 bool flashUnitFromProgmem(uint8_t i2cAddress, String& resultMsg) {
   String beginError;
   if (!beginFirmwareFlash(i2cAddress, beginError)) {
@@ -381,15 +276,16 @@ bool flashUnitFromProgmem(uint8_t i2cAddress, String& resultMsg) {
   }
 
   size_t pageCount = UNIT_FIRMWARE_BIN_LEN / TWIBOOT_PAGE_SIZE;
+  uint8_t pageBuf[TWIBOOT_PAGE_SIZE];
   for (size_t pageIndex = 0; pageIndex < pageCount; pageIndex++) {
-    memcpy_P(flashPageBuf, UNIT_FIRMWARE_BIN + pageIndex * TWIBOOT_PAGE_SIZE, TWIBOOT_PAGE_SIZE);
-    flashCurrentPageAddr = (uint16_t)(pageIndex * TWIBOOT_PAGE_SIZE);
-    flashPageHasData     = true;
-    if (!flushPageIfReady()) {
-      resultMsg = String("PROGMEM flash failed: ") + flashErrorMsg;
+    memcpy_P(pageBuf, UNIT_FIRMWARE_BIN + pageIndex * TWIBOOT_PAGE_SIZE, TWIBOOT_PAGE_SIZE);
+    uint16_t addr = (uint16_t)(pageIndex * TWIBOOT_PAGE_SIZE);
+    if (!producePageToTwiboot(pageBuf, addr, nullptr)) {
+      resultMsg = String("PROGMEM flash failed: ") + flashState.errorMsg;
       abortFirmwareFlash("PROGMEM flash page error");
       return false;
     }
+    flashState.totalBytesWritten += TWIBOOT_PAGE_SIZE;
   }
 
   return finishFirmwareFlash(resultMsg);
