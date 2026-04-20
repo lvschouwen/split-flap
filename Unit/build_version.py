@@ -44,6 +44,13 @@ def build_version_header(project_dir: pathlib.Path) -> None:
     )
     print(f"[build_version] wrote {output.name}  GIT_REV={tag}")
 
+    # Sidecar: the master's build_assets.py reads this to know which rev the
+    # bundled unit-firmware.hex was built at (see issue #31). Whoever copies
+    # firmware.hex -> ESPMaster/data/unit-firmware.hex should copy this too.
+    rev_out = project_dir / ".pio" / "build" / "unit" / "firmware.rev"
+    rev_out.parent.mkdir(parents=True, exist_ok=True)
+    rev_out.write_text(tag + "\n")
+
 
 try:
     Import("env")  # noqa: F821 (PlatformIO SCons env)

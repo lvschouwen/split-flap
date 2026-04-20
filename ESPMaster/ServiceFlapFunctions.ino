@@ -297,15 +297,16 @@ void probeI2cBus() {
     }
     SerialPrint(" is running sketch");
 
-    // Compare against the master's own GIT_REV. The bundled unit firmware is
-    // expected to be built from the same commit — if they differ, the unit is
-    // running an older image and should be reflashed. Old firmware that
-    // predates CMD_GET_VERSION returns a short response and is flagged
-    // "unknown".
+    // Compare against the bundled unit firmware's rev (BUNDLED_UNIT_REV),
+    // NOT the master's own GIT_REV. Because unit-firmware.hex is checked in,
+    // the commit that updates it also bumps the master's rev — so using
+    // master's rev would always flag fresh installs as OUTDATED. See #31.
+    // Old firmware that predates CMD_GET_VERSION returns a short response
+    // and is flagged "unknown".
     if (readUnitVersion(i2cAddress, detectedUnitVersions[unitIndex])) {
-      // Master's GIT_REV may be longer than 8 chars; unit truncates to 8, so
-      // compare only the leading 8 chars.
-      bool match = (strncmp(detectedUnitVersions[unitIndex], espVersion, 8) == 0);
+      // BUNDLED_UNIT_REV may be longer than 8 chars; unit truncates to 8,
+      // so compare only the leading 8 chars.
+      bool match = (strncmp(detectedUnitVersions[unitIndex], BUNDLED_UNIT_REV, 8) == 0);
       detectedUnitVersionStatus[unitIndex] = match ? 0 : 1;
       SerialPrint(match ? " (fw " : " (fw OUTDATED ");
       SerialPrint(detectedUnitVersions[unitIndex]);
