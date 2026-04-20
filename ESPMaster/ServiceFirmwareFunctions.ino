@@ -119,7 +119,7 @@ static bool twibootWaitReady(uint16_t timeoutMs) {
 
 // Drains one 128-byte page to twiboot.
 static bool producePageToTwiboot(const uint8_t* page, uint16_t addr) {
-  SerialPrint("Writing page 0x");
+  SerialPrint(F("Writing page 0x"));
   SerialPrintln(String(addr, HEX));
 
   // Make sure twiboot is ready before hitting it with a 132-byte burst.
@@ -153,7 +153,7 @@ bool beginFirmwareFlash(uint8_t i2cAddress, String& error) {
     return false;
   }
 
-  SerialPrint("Firmware flash starting, target 0x");
+  SerialPrint(F("Firmware flash starting, target 0x"));
   SerialPrintln(String(i2cAddress, HEX));
 
   // Our DIP-patched twiboot listens on the unit's own address, so that's
@@ -171,12 +171,12 @@ bool beginFirmwareFlash(uint8_t i2cAddress, String& error) {
       error = String("Unit did not ack enter-bootloader (Wire status ") + rebootStatus + ")";
       return false;
     }
-    SerialPrintln("Sent enter-bootloader opcode; waiting for twiboot");
+    SerialPrintln(F("Sent enter-bootloader opcode; waiting for twiboot"));
 
     // Watchdog reset (~15ms) + twiboot init. 500ms is generous.
     delay(500);
   } else {
-    SerialPrintln("Unit already in bootloader; skipping reboot");
+    SerialPrintln(F("Unit already in bootloader; skipping reboot"));
   }
 
   bool bootloaderLive = false;
@@ -191,14 +191,14 @@ bool beginFirmwareFlash(uint8_t i2cAddress, String& error) {
     error = String("Twiboot not responding on 0x") + String(i2cAddress, HEX);
     return false;
   }
-  SerialPrint("Twiboot responding on 0x");
+  SerialPrint(F("Twiboot responding on 0x"));
   SerialPrintln(String(i2cAddress, HEX));
 
   if (!twibootVerifyChip()) {
     error = flashState.errorMsg;
     return false;
   }
-  SerialPrintln("Chip signature OK (ATmega328P, page=128)");
+  SerialPrintln(F("Chip signature OK (ATmega328P, page=128)"));
 
   flashState.errorMsg          = "";
   flashState.totalBytesWritten = 0;
@@ -244,7 +244,7 @@ bool finishFirmwareFlash(String& resultMsg) {
 }
 
 void abortFirmwareFlash(const String& reason) {
-  SerialPrint("Aborting firmware flash: ");
+  SerialPrint(F("Aborting firmware flash: "));
   SerialPrintln(reason);
   firmwareFlashInProgress = false;
 }
@@ -287,11 +287,11 @@ void autoInstallFirmwareToBootloaderUnits() {
     if (detectedUnitStates[unitIndex] != 2 /* bootloader */) continue;
 
     int i2cAddress = toI2cAddress(unitIndex);
-    SerialPrint("Auto-flashing unit at 0x");
+    SerialPrint(F("Auto-flashing unit at 0x"));
     SerialPrint(String(i2cAddress, HEX));
-    SerialPrint(" from PROGMEM (");
+    SerialPrint(F(" from PROGMEM ("));
     SerialPrint(UNIT_FIRMWARE_BIN_LEN);
-    SerialPrintln(" bytes)");
+    SerialPrintln(F(" bytes)"));
 
     String result;
     bool ok = flashUnitFromProgmem((uint8_t)i2cAddress, result);
@@ -306,9 +306,9 @@ void autoInstallFirmwareToBootloaderUnits() {
   }
 
   if (flashedCount > 0) {
-    SerialPrint("Auto-install complete: ");
+    SerialPrint(F("Auto-install complete: "));
     SerialPrint(flashedCount);
-    SerialPrintln(" unit(s) updated.");
+    SerialPrintln(F(" unit(s) updated."));
   }
 #endif
 }
@@ -332,18 +332,18 @@ void autoUpdateOutdatedUnits() {
     if (detectedUnitStates[unitIndex] != 1) continue;           // skip silent/bootloader
     if (detectedUnitVersionStatus[unitIndex] != 1) continue;    // skip ok/unknown
     int addr = toI2cAddress(unitIndex);
-    SerialPrint("Unit at 0x");
+    SerialPrint(F("Unit at 0x"));
     SerialPrint(String(addr, HEX));
-    SerialPrintln(" is OUTDATED — queuing auto-update");
+    SerialPrintln(F(" is OUTDATED — queuing auto-update"));
     if (rebootUnitToBootloader(addr) == 0) {
       queued++;
     }
   }
   if (queued == 0) return;
 
-  SerialPrint("Queued ");
+  SerialPrint(F("Queued "));
   SerialPrint(queued);
-  SerialPrintln(" unit(s) for auto-update; waiting for twiboot");
+  SerialPrintln(F(" unit(s) for auto-update; waiting for twiboot"));
   //Give the Nanos time to reset + twiboot init. 500 ms matches
   //enterBootloaderAllDetected()'s reprobe delay.
   delay(500);

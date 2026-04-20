@@ -16,7 +16,7 @@ void initialiseFileSystem() {
   EEPROM.begin(SETTINGS_EEPROM_SIZE);
 
   if (readSettingMagic() != SETTINGS_MAGIC || EEPROM.read(OFF_VERSION) != SETTINGS_VERSION) {
-    SerialPrintln("Settings EEPROM blank/stale — initialising with defaults");
+    SerialPrintln(F("Settings EEPROM blank/stale — initialising with defaults"));
     writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  ALIGNMENT_MODE_LEFT);
     writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  "80");
     writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, DEVICE_MODE_TEXT);
@@ -24,7 +24,7 @@ void initialiseFileSystem() {
     EEPROM.commit();
   }
 
-  SerialPrintln("Settings EEPROM ready");
+  SerialPrintln(F("Settings EEPROM ready"));
 }
 
 void loadValuesFromFileSystem() {
@@ -32,7 +32,7 @@ void loadValuesFromFileSystem() {
   flapSpeed           = readSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED);
   deviceMode          = readSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE);
 
-  SerialPrintln("Loaded Settings:");
+  SerialPrintln(F("Loaded Settings:"));
   SerialPrintln("   Alignment: " + alignment);
   SerialPrintln("   Flap Speed: " + flapSpeed);
   SerialPrintln("   Device Mode: " + deviceMode);

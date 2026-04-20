@@ -70,7 +70,6 @@
 #endif
 
 #include <Arduino.h>
-#include <ArduinoJson.h>
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebSrv.h>
 #include <ESP8266WiFi.h>
@@ -299,10 +298,10 @@ void registerMasterFirmwareEndpoint() {
         uint32_t freeSpace = ESP.getFreeSketchSpace();
         uint32_t maxSketchSpace = (freeSpace - 0x1000) & 0xFFFFF000;
         size_t contentLen = request->contentLength();
-        SerialPrint("Master OTA starting: "); SerialPrintln(filename);
-        SerialPrint("  freeSketchSpace = "); SerialPrintln(freeSpace);
-        SerialPrint("  maxSketchSpace  = "); SerialPrintln(maxSketchSpace);
-        SerialPrint("  contentLength   = "); SerialPrintln(contentLen);
+        SerialPrint(F("Master OTA starting: ")); SerialPrintln(filename);
+        SerialPrint(F("  freeSketchSpace = ")); SerialPrintln(freeSpace);
+        SerialPrint(F("  maxSketchSpace  = ")); SerialPrintln(maxSketchSpace);
+        SerialPrint(F("  contentLength   = ")); SerialPrintln(contentLen);
 
         if (contentLen > 0 && contentLen > maxSketchSpace) {
           otaRejected = true;
@@ -315,7 +314,7 @@ void registerMasterFirmwareEndpoint() {
 
         Update.runAsync(true);
         if (!Update.begin(maxSketchSpace, U_FLASH)) {
-          SerialPrint("Update.begin failed: ");
+          SerialPrint(F("Update.begin failed: "));
           SerialPrintln(Update.getErrorString());
           return;
         }
@@ -342,37 +341,37 @@ void registerMasterFirmwareEndpoint() {
             Update.end(false);
             return;
           }
-          SerialPrint("MD5 expected: "); SerialPrintln(md5);
+          SerialPrint(F("MD5 expected: ")); SerialPrintln(md5);
         }
-        SerialPrintln("Update.begin ok — streaming chunks");
+        SerialPrintln(F("Update.begin ok — streaming chunks"));
       }
       if (otaRejected) return;
       if (!Update.hasError() && len > 0) {
         size_t written = Update.write(data, len);
         if (written != len) {
-          SerialPrint("Update.write short: wrote "); SerialPrint(written);
-          SerialPrint(" of "); SerialPrint(len);
-          SerialPrint(" — err: "); SerialPrintln(Update.getErrorString());
+          SerialPrint(F("Update.write short: wrote ")); SerialPrint(written);
+          SerialPrint(F(" of ")); SerialPrint(len);
+          SerialPrint(F(" — err: ")); SerialPrintln(Update.getErrorString());
         }
       }
       if (final) {
-        SerialPrint("Final chunk: total "); SerialPrint(index + len); SerialPrintln(" bytes");
+        SerialPrint(F("Final chunk: total ")); SerialPrint(index + len); SerialPrintln(F(" bytes"));
         if (Update.end(true)) {
-          SerialPrint("Master OTA complete, ");
+          SerialPrint(F("Master OTA complete, "));
           SerialPrint(index + len);
-          SerialPrintln(" bytes written");
+          SerialPrintln(F(" bytes written"));
           if (!isRecoveryMode) {
             //Push every sketch-running unit into its twiboot bootloader
             //before we reboot. When the new master comes up and probes
             //the bus it'll find them in bootloader state and auto-flash
             //them from the (possibly updated) PROGMEM bundle.
             int rebooted = enterBootloaderAllDetected(false);
-            SerialPrint("Queued ");
+            SerialPrint(F("Queued "));
             SerialPrint(rebooted);
-            SerialPrintln(" unit(s) for bootloader on next boot");
+            SerialPrintln(F(" unit(s) for bootloader on next boot"));
           }
         } else {
-          SerialPrint("Update.end failed: ");
+          SerialPrint(F("Update.end failed: "));
           SerialPrintln(Update.getErrorString());
         }
       }
@@ -387,7 +386,7 @@ void enterRecoveryMode() {
   WiFi.persistent(false);
   WiFi.mode(WIFI_AP);
   WiFi.softAP("split-flap-recovery");
-  SerialPrint("Recovery SoftAP IP: ");
+  SerialPrint(F("Recovery SoftAP IP: "));
   SerialPrintln(WiFi.softAPIP().toString());
 
   webServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
@@ -407,7 +406,7 @@ void enterRecoveryMode() {
   });
   registerMasterFirmwareEndpoint();
   webServer.begin();
-  SerialPrintln("Recovery web server ready");
+  SerialPrintln(F("Recovery web server ready"));
 }
 
 /* .-----------------------------------------------. */
@@ -431,10 +430,10 @@ void setup() {
   //De-activate I2C if debugging the ESP, otherwise serial does not work
   //Wire.begin(D1, D2); //For NodeMCU testing only SDA=D1 and SCL=D2
 #endif
-  SerialPrintln("");
-  SerialPrintln("#######################################################");
-  SerialPrintln("..............Split Flap Display Starting..............");
-  SerialPrintln("#######################################################");
+  SerialPrintln(F(""));
+  SerialPrintln(F("#######################################################"));
+  SerialPrintln(F("..............Split Flap Display Starting.............."));
+  SerialPrintln(F("#######################################################"));
 
   //Increment the RTC boot counter before anything else can crash. The main
   //loop will clear it again once HEALTHY_BOOT_MS of uptime proves the sketch
@@ -442,14 +441,14 @@ void setup() {
   RtcBootState bootState = readBootStateRtc();
   bootState.bootCounter++;
   writeBootStateRtc(bootState);
-  SerialPrint("RTC boot counter: ");
+  SerialPrint(F("RTC boot counter: "));
   SerialPrintln(bootState.bootCounter);
 
   if (bootState.bootCounter >= RECOVERY_BOOT_THRESHOLD) {
-    SerialPrintln("#######################################################");
-    SerialPrintln("RECOVERY MODE: 3+ consecutive boots without a healthy");
-    SerialPrintln("loop. Bringing up split-flap-recovery SoftAP for reflash.");
-    SerialPrintln("#######################################################");
+    SerialPrintln(F("#######################################################"));
+    SerialPrintln(F("RECOVERY MODE: 3+ consecutive boots without a healthy"));
+    SerialPrintln(F("loop. Bringing up split-flap-recovery SoftAP for reflash."));
+    SerialPrintln(F("#######################################################"));
     isRecoveryMode = true;
     enterRecoveryMode();
     return;
@@ -462,7 +461,7 @@ void setup() {
   //catch old-firmware units that need updating. The 200 ms delay gives the
   //Nanos' TWI hardware time to come up after their reset.
   //See issue #30.
-  SerialPrintln("Early I2C scan (twiboot window)...");
+  SerialPrintln(F("Early I2C scan (twiboot window)..."));
   delay(200);
   probeI2cBus();
   autoInstallFirmwareToBootloaderUnits();
@@ -479,11 +478,11 @@ void setup() {
     const char* ntp = (strlen(timezoneServer) > 0) ? timezoneServer : "pool.ntp.org";
     configTime(tz, ntp);
 
-    SerialPrint("Waiting for NTP sync (tz=");
+    SerialPrint(F("Waiting for NTP sync (tz="));
     SerialPrint(tz);
-    SerialPrint(", server=");
+    SerialPrint(F(", server="));
     SerialPrint(ntp);
-    SerialPrintln(")");
+    SerialPrintln(F(")"));
 
     time_t nowSec = 0;
     for (int i = 0; i < 100 && nowSec < 1000000000L; i++) {
@@ -491,7 +490,7 @@ void setup() {
       nowSec = time(nullptr);
     }
 
-    SerialPrint("Current time: ");
+    SerialPrint(F("Current time: "));
     SerialPrintln(formatDateTime("%Y-%m-%d %H:%M:%S"));
     
     //Load various variables
@@ -502,7 +501,7 @@ void setup() {
     //auto-install has settled. This refreshes /settings with the final
     //post-install state — including firmware versions for newly installed
     //units, which couldn't be queried yet during the first scan.
-    SerialPrintln("Settled I2C scan (post-WiFi)...");
+    SerialPrintln(F("Settled I2C scan (post-WiFi)..."));
     probeI2cBus();
     //autoInstallFirmwareToBootloaderUnits() was already called from the
     //early-boot path — any still-in-bootloader units here are either a)
@@ -518,9 +517,9 @@ void setup() {
 
 #if USE_MULTICAST == true
   if (MDNS.begin(mdnsName)) {
-      SerialPrintln("mDNS responder started");
+      SerialPrintln(F("mDNS responder started"));
     } else {
-      SerialPrintln("Error setting up MDNS responder!");
+      SerialPrintln(F("Error setting up MDNS responder!"));
     }
 #endif
 
@@ -531,7 +530,7 @@ void setup() {
     //Tell the browser to revalidate every navigation so an OTA that
     //swaps the UI doesn't leave stale HTML/JS in the tab cache.
     webServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
-      SerialPrintln("Request Home Page Received");
+      SerialPrintln(F("Request Home Page Received"));
       AsyncWebServerResponse *resp = request->beginResponse_P(200, "text/html", INDEX_HTML_GZ, INDEX_HTML_GZ_LEN);
       resp->addHeader("Content-Encoding", "gzip");
       resp->addHeader("Cache-Control", "no-cache");
@@ -560,7 +559,7 @@ void setup() {
     });
 
     webServer.on("/settings", HTTP_GET, [](AsyncWebServerRequest * request) {
-      SerialPrintln("Request for Settings Received");
+      SerialPrintln(F("Request for Settings Received"));
       
       String json = getCurrentSettingValues();
       request->send(200, "application/json", json);
@@ -568,7 +567,7 @@ void setup() {
     });
     
     webServer.on("/health", HTTP_GET, [](AsyncWebServerRequest * request) {
-      SerialPrintln("Request for Health Check Received");
+      SerialPrintln(F("Request for Health Check Received"));
       request->send(200, "text/plain", "Healthy");
     });
 
@@ -579,7 +578,7 @@ void setup() {
     });
     
     webServer.on("/reboot", HTTP_GET, [](AsyncWebServerRequest * request) {
-      SerialPrintln("Request to Reboot Received");
+      SerialPrintln(F("Request to Reboot Received"));
       
       //Create HTML page to explain the system is rebooting
       IPAddress ip = WiFi.localIP();
@@ -758,7 +757,7 @@ void setup() {
         request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
         return;
       }
-      SerialPrintln("Request to Stop Received");
+      SerialPrintln(F("Request to Stop Received"));
       abortCurrentShow = true;
       int homed = 0;
       for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
@@ -782,7 +781,7 @@ void setup() {
     //OTA that ships a new bundled unit firmware if the chained reboot didn't
     //catch every unit, or to manually refresh units without a master reboot.
     webServer.on("/reflash-units", HTTP_GET, [](AsyncWebServerRequest * request) {
-      SerialPrintln("Request to Reflash Units Received");
+      SerialPrintln(F("Request to Reflash Units Received"));
       int rebooted = enterBootloaderAllDetected(true);
       autoInstallFirmwareToBootloaderUnits();
       String body = String("Requested bootloader entry on ") + rebooted +
@@ -792,7 +791,7 @@ void setup() {
     });
 
     webServer.on("/reset-units", HTTP_GET, [](AsyncWebServerRequest * request) {
-      SerialPrintln("Request to Reset Units Received");
+      SerialPrintln(F("Request to Reset Units Received"));
       
       //This will be picked up in the loop
       isPendingUnitsReset = true;
@@ -801,7 +800,7 @@ void setup() {
     });
 
     webServer.on("/", HTTP_POST, [](AsyncWebServerRequest * request) {
-      SerialPrintln("Request Post of Form Received");
+      SerialPrintln(F("Request Post of Form Received"));
 
       bool submissionError = false;
 
@@ -849,11 +848,11 @@ void setup() {
 
       //If there was an error, report back to check what has been input
       if (submissionError) {
-        SerialPrintln("Finished Processing Request with Error");
+        SerialPrintln(F("Finished Processing Request with Error"));
         request->redirect("/?invalid-submission=true");
       }
       else {
-        SerialPrintln("Finished Processing Request Successfully");
+        SerialPrintln(F("Finished Processing Request Successfully"));
 
         lastReceivedMessageDateTime = formatDateTime("%d %b %y %H:%M:%S");
 
@@ -894,7 +893,7 @@ void setup() {
 
 #if WIFI_USE_DIRECT == false
     webServer.on("/reset-wifi", HTTP_GET, [](AsyncWebServerRequest * request) {
-      SerialPrintln("Request to Reset WiFi Received");
+      SerialPrintln(F("Request to Reset WiFi Received"));
       
       IPAddress ip = WiFi.localIP();
       
@@ -915,18 +914,18 @@ void setup() {
     delay(250);
     webServer.begin();
 
-    SerialPrintln("Split Flap Ready!");
-    SerialPrintln("#######################################################");
+    SerialPrintln(F("Split Flap Ready!"));
+    SerialPrintln(F("#######################################################"));
   }
   else {
     if (isPendingReboot) {
-      SerialPrintln("Reboot is pending to be able to continue device function. Hold please...");
-      SerialPrintln("#######################################################");
+      SerialPrintln(F("Reboot is pending to be able to continue device function. Hold please..."));
+      SerialPrintln(F("#######################################################"));
     }
     else {
-      SerialPrintln("Unable to connect to WiFi... Not starting web server");
-      SerialPrintln("Please hard restart your device to try connect again");
-      SerialPrintln("#######################################################");
+      SerialPrintln(F("Unable to connect to WiFi... Not starting web server"));
+      SerialPrintln(F("Please hard restart your device to try connect again"));
+      SerialPrintln(F("#######################################################"));
     }
   }
 }
@@ -941,8 +940,8 @@ void setup() {
 void loop() {
   //Reboot in here as if we restart within a request handler, no response is returned
   if (isPendingReboot) {
-    SerialPrintln("Rebooting Now... Fairwell!");
-    SerialPrintln("#######################################################");
+    SerialPrintln(F("Rebooting Now... Fairwell!"));
+    SerialPrintln(F("#######################################################"));
     //Longer pause so AsyncWebServer can flush the 200 OK body to the client
     //before the restart yanks the TCP socket (issue #37). 100 ms was enough
     //on localhost but often cost the response on real networks.
@@ -960,7 +959,7 @@ void loop() {
   if (!healthyBootMarked && !isRecoveryMode && millis() >= HEALTHY_BOOT_MS) {
     clearBootCounterRtc();
     healthyBootMarked = true;
-    SerialPrintln("Healthy boot — RTC boot counter cleared");
+    SerialPrintln(F("Healthy boot — RTC boot counter cleared"));
   }
 
   //In recovery mode the AsyncWebServer handles every incoming request; the
@@ -973,7 +972,7 @@ void loop() {
 #if WIFI_USE_DIRECT == false
   //Clear off the WiFi Manager Settings
   if (isPendingWifiReset) {
-    SerialPrintln("Removing WiFi settings");
+    SerialPrintln(F("Removing WiFi settings"));
     wifiManager.resetSettings();
     delay(100);
 
@@ -999,7 +998,7 @@ void loop() {
   }
 
   if (isPendingUnitsReset) {
-    SerialPrintln("Reseting Units now...");
+    SerialPrintln(F("Reseting Units now..."));
 
     //Blank out the message
     String blankOutText1 = createRepeatingString('-');
@@ -1013,7 +1012,7 @@ void loop() {
     //We did a reset!
     isPendingUnitsReset = false;
 
-    SerialPrintln("Done Units Reset!");
+    SerialPrintln(F("Done Units Reset!"));
   }
   
   //Don't touch the I2C bus while a unit firmware flash is in flight — the
@@ -1038,42 +1037,87 @@ void loop() {
   }
 }
 
-//Gets all the currently stored calues from memory in a JSON object
+//Appends a JSON-encoded string literal (including the surrounding quotes)
+//to `out`. Handles the escape sequences that can legitimately appear in
+//user-provided text (quotes, backslashes, control chars). Good enough for
+//the fixed shape of /settings — ArduinoJson would be overkill given we only
+//serialize, never parse.
+static void appendJsonString(String& out, const String& value) {
+  out += '"';
+  for (unsigned int i = 0; i < value.length(); i++) {
+    char c = value[i];
+    switch (c) {
+      case '"':  out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\b': out += "\\b";  break;
+      case '\f': out += "\\f";  break;
+      case '\n': out += "\\n";  break;
+      case '\r': out += "\\r";  break;
+      case '\t': out += "\\t";  break;
+      default:
+        if ((unsigned char)c < 0x20) {
+          char buf[8];
+          snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+          out += buf;
+        } else {
+          out += c;
+        }
+    }
+  }
+  out += '"';
+}
+
+//Gets all the currently stored values from memory as a JSON string.
+//Hand-rolled to avoid pulling in the ArduinoJson library (~30 KB) for a
+//fixed-shape serializer that never needs to parse (issue #40).
 String getCurrentSettingValues() {
-  JsonDocument document;
+  String out;
+  out.reserve(512);
+  out += '{';
 
-  document["timezoneOffset"] = getTimezoneOffsetMinutes();
-  document["unitCount"] = UNITS_AMOUNT;
-  document["detectedUnitCount"] = detectedUnitCount;
+  out += F("\"timezoneOffset\":");          out += getTimezoneOffsetMinutes();
+  out += F(",\"unitCount\":");              out += UNITS_AMOUNT;
+  out += F(",\"detectedUnitCount\":");      out += detectedUnitCount;
+
+  out += F(",\"detectedUnitAddresses\":[");
   for (int i = 0; i < detectedUnitCount; i++) {
-    document["detectedUnitAddresses"][i] = detectedUnitAddresses[i];
+    if (i) out += ',';
+    out += detectedUnitAddresses[i];
   }
-  // Per-unit firmware version, indexed by unit slot (0..UNITS_AMOUNT-1) so the
-  // UI can show a badge per address even for silent units. See issue #28.
-  for (int i = 0; i < UNITS_AMOUNT; i++) {
-    document["detectedUnitVersionStatus"][i] = detectedUnitVersionStatus[i];
-    document["detectedUnitVersions"][i] = detectedUnitVersions[i];
-  }
-  document["alignment"] = alignment;
-  document["flapSpeed"] = flapSpeed;
-  document["deviceMode"] = deviceMode;
-  document["version"] = espVersion;
-  document["lastTimeReceivedMessageDateTime"] = lastReceivedMessageDateTime;
-  document["lastWrittenText"] = lastWrittenText;
+  out += ']';
 
-  document["otaEnabled"] = false;
-  document["isInOtaMode"] = false;
+  //Per-unit firmware version, indexed by unit slot (0..UNITS_AMOUNT-1) so
+  //the UI can show a badge per address even for silent units (issue #28).
+  out += F(",\"detectedUnitVersionStatus\":[");
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    if (i) out += ',';
+    out += detectedUnitVersionStatus[i];
+  }
+  out += F("],\"detectedUnitVersions\":[");
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    if (i) out += ',';
+    appendJsonString(out, detectedUnitVersions[i]);
+  }
+  out += ']';
+
+  out += F(",\"alignment\":");                       appendJsonString(out, alignment);
+  out += F(",\"flapSpeed\":");                       appendJsonString(out, flapSpeed);
+  out += F(",\"deviceMode\":");                      appendJsonString(out, deviceMode);
+  out += F(",\"version\":");                         appendJsonString(out, String(espVersion));
+  out += F(",\"lastTimeReceivedMessageDateTime\":"); appendJsonString(out, lastReceivedMessageDateTime);
+  out += F(",\"lastWrittenText\":");                 appendJsonString(out, lastWrittenText);
+
+  out += F(",\"otaEnabled\":false");
+  out += F(",\"isInOtaMode\":false");
 
 #if WIFI_USE_DIRECT == false
-  document["wifiSettingsResettable"] = true;
+  out += F(",\"wifiSettingsResettable\":true");
 #else
-  document["wifiSettingsResettable"] = false;
+  out += F(",\"wifiSettingsResettable\":false");
 #endif
-  
-  String jsonString;
-  serializeJson(document, jsonString);
 
-  return jsonString;
+  out += '}';
+  return out;
 }
 
 //Format the current local time via strftime. Replaces ezTime's
