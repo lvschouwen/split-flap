@@ -50,7 +50,7 @@
 
 //constants others
 #define BAUDRATE 115200
-#define ROTATIONDIRECTION -1 //-1 for reverse direction
+#define ROTATIONDIRECTION 1 //-1 for reverse direction (swap if the drum rotates the wrong way)
 #define OVERHEATINGTIMEOUT 2 //timeout in seconds to avoid overheating of stepper. After starting rotation, the counter will start. Stepper won't move again until timeout is passed
 unsigned long lastRotation = 0;
 
