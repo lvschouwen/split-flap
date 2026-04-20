@@ -77,6 +77,11 @@ int i2cAddress;
 volatile bool pendingBootloader = false;
 
 //sleep globals
+//Sleep mode is SLEEP_MODE_IDLE: CPU clock stops, peripheral clocks (including
+//TWI) keep running so the unit can still ACK I2C transactions while asleep.
+//SLEEP_MODE_PWR_DOWN was tried originally but it clock-gates TWI, which made
+//the master see spurious -1 reads whenever a unit happened to be sleeping
+//during a poll — see issue #22.
 const unsigned long WAIT_TIME = 2000;    //wait time before sleep routine gets executed again in milliseconds
 unsigned long previousMillis = 0;       //stores last time sleep was interrupted
 
@@ -142,27 +147,17 @@ void loop() {
 
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= WAIT_TIME) {
-    byte old_ADCSRA = ADCSRA;
-    // disable ADC
-    ADCSRA = 0;
-    set_sleep_mode (SLEEP_MODE_PWR_DOWN);
+    set_sleep_mode(SLEEP_MODE_IDLE);
     sleep_enable();
 #ifdef SERIAL_ENABLE
     digitalWrite (LED_BUILTIN, LOW); // shuts off LED when starting to sleep, for debugging
 #endif
-    sleep_cpu ();
+    sleep_cpu();
 #ifdef SERIAL_ENABLE
     digitalWrite (LED_BUILTIN, HIGH); // turns on LED when waking up, for debugging
 #endif
     sleep_disable();
     previousMillis = currentMillis; //reset sleep counter
-    ADCSRA = old_ADCSRA;
-
-    // release TWI bus
-    TWCR = bit(TWEN) | bit(TWIE) | bit(TWEA) | bit(TWINT);
-
-    // turn it back on again
-    Wire.begin (i2cAddress);
   }  // end of time to sleep
 
   //check if new letter was received through i2c
