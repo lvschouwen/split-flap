@@ -415,6 +415,7 @@ function showContent() {
 
 	initLogPanel();
 	initFirmwareUpload();
+	initMasterFirmwareUpload();
 }
 
 //Populates the firmware target dropdown from the I2C bus probe results.
@@ -494,6 +495,61 @@ function initFirmwareUpload() {
 			} else if (xhr.status === 0) {
 				status.className = "firmware-status error";
 				status.textContent = "✘ Upload failed — lost connection to master. The unit may be stuck in bootloader mode; check the Log panel.";
+			} else {
+				status.className = "firmware-status error";
+				status.textContent = "✘ HTTP " + xhr.status + ": " + xhr.responseText;
+			}
+		};
+		xhr.send(formData);
+	});
+}
+
+//Master firmware OTA: streams a .bin upload to /firmware/master, which
+//flashes the ESP itself via the Update class and reboots.
+function initMasterFirmwareUpload() {
+	var form = document.getElementById("masterFirmwareForm");
+	if (!form) return;
+
+	form.addEventListener("submit", function (event) {
+		event.preventDefault();
+
+		var fileInput = document.getElementById("inputMasterFirmwareFile");
+		var submitButton = document.getElementById("buttonMasterFirmwareSubmit");
+		var status = document.getElementById("masterFirmwareStatus");
+
+		var file = fileInput.files[0];
+		if (!file) return;
+
+		var confirmFlash = confirm(
+			"Flash " + file.name + " (" + file.size + " bytes) to the master?\n\n" +
+			"The ESP reboots into the new firmware on success. On failure, " +
+			"the current firmware continues to run."
+		);
+		if (!confirmFlash) return;
+
+		submitButton.disabled = true;
+		fileInput.disabled = true;
+		status.className = "firmware-status pending";
+		status.classList.remove("hidden");
+		status.textContent = "Uploading master firmware…";
+
+		var formData = new FormData();
+		formData.append("firmware", file);
+
+		var xhr = new XMLHttpRequest();
+		xhr.open("POST", "/firmware/master");
+		xhr.onreadystatechange = function () {
+			if (xhr.readyState !== 4) return;
+
+			submitButton.disabled = false;
+			fileInput.disabled = false;
+
+			if (xhr.status === 200) {
+				status.className = "firmware-status success";
+				status.textContent = "✔ " + xhr.responseText + " The master will be offline ~15 s while rebooting.";
+			} else if (xhr.status === 0) {
+				status.className = "firmware-status error";
+				status.textContent = "✘ Upload failed — lost connection to master.";
 			} else {
 				status.className = "firmware-status error";
 				status.textContent = "✘ HTTP " + xhr.status + ": " + xhr.responseText;
