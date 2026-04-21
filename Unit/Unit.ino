@@ -73,6 +73,12 @@
 #define CMD_JOG                0x91  // +1 signed byte (-127..+127)
 #define CMD_REBOOT             0x92  // no args; soft watchdog reset (stays in sketch)
 #define CMD_SET_OFFSET         0x93  // +2 bytes int16 LE; persist to EEPROM
+// Provisioning wizard opcodes (issue #56). Address is read by getaddress()
+// at boot with EEPROM taking precedence over DIP — so burning the EEPROM
+// address makes the DIP switch irrelevant. Clearing reverts to DIP.
+#define CMD_SET_I2C_ADDRESS    0x94  // +1 byte new I2C address (1..126); persist magic+addr to EEPROM, reboot
+#define CMD_CLEAR_I2C_ADDRESS  0x95  // no args; clear EEPROM magic, reboot → falls back to DIP
+#define CMD_IDENTIFY           0x96  // no args; non-blocking LED_BUILTIN blink (~3 s) so human can locate the flap
 
 //constants stepper
 #define STEPPERPIN1 11
@@ -132,6 +138,16 @@ volatile int16_t pendingOffsetValue    = 0;
 volatile bool    pendingHome           = false;   // loop() re-homes
 volatile int8_t  pendingJogSteps       = 0;       // loop() steps + clears
 
+// Provisioning flags (issue #56). EEPROM writes and reboots can't run from
+// the Wire ISR — defer to loop() like every other mutation. identifyStartMs
+// is a plain unsigned long because it's only written by loop() once the
+// pendingIdentify flag is consumed; 0 means "not currently identifying".
+volatile bool    pendingSetAddress      = false;
+volatile uint8_t pendingAddressValue    = 0;
+volatile bool    pendingClearAddress    = false;
+volatile bool    pendingIdentify        = false;
+unsigned long    identifyStartMs        = 0;
+
 // Health / diagnostics state returned by CMD_GET_STATUS (issue #47).
 volatile bool     pendingStatusResponse     = false;  // consumed by requestEvent
 uint8_t           savedMcusr                = 0;      // snapshot of MCUSR at boot
@@ -185,6 +201,12 @@ void setup() {
 
   //hall sensor
   pinMode(HALLPIN, INPUT);
+
+  // Onboard LED drives CMD_IDENTIFY blink (issue #56). Without OUTPUT mode
+  // digitalWrite only toggles the pull-up, so pre-existing SERIAL_ENABLE
+  // debug LED uses were effectively no-ops. Harmless to set unconditionally.
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
 
   i2cAddress = getaddress(); //get I2C Address and save in variable
 
@@ -281,7 +303,68 @@ void loop() {
     previousMillis = millis();
   }
 
+  // Provisioning wizard (issue #56). Both address-mutation paths reboot the
+  // Nano via the existing pendingBootloader mechanism — getaddress() re-reads
+  // EEPROM on the next boot, so the master sees the unit disappear then
+  // reappear at the new (or DIP-derived) address. CMD_REBOOT uses the same
+  // reset mechanism; twiboot times out after ~250 ms and the sketch runs.
+  if (pendingSetAddress) {
+    noInterrupts();
+    uint8_t v = pendingAddressValue;
+    pendingSetAddress = false;
+    interrupts();
+    // Reject reserved addresses: 0 is general call, 127 is reserved.
+    if (v >= 1 && v <= 126) {
+      EEPROM.update(EEPROM_ADDR_I2C_ADDR, v);
+      EEPROM.update(EEPROM_ADDR_ID_MAGIC, EEPROM_ID_MAGIC_VALUE);
+#ifdef SERIAL_ENABLE
+      Serial.print("I2C address burned to EEPROM: 0x");
+      Serial.println(v, HEX);
+#endif
+      pendingBootloader = true;
+    } else if (badCommandCount < 0xFF) {
+      badCommandCount++;
+    }
+  }
+  if (pendingClearAddress) {
+    noInterrupts();
+    pendingClearAddress = false;
+    interrupts();
+    // Anything != EEPROM_ID_MAGIC_VALUE makes getaddress() fall back to DIP.
+    EEPROM.update(EEPROM_ADDR_ID_MAGIC, 0xFF);
+#ifdef SERIAL_ENABLE
+    Serial.println("EEPROM I2C address cleared, falling back to DIP on reboot");
+#endif
+    pendingBootloader = true;
+  }
+  if (pendingIdentify) {
+    noInterrupts();
+    pendingIdentify = false;
+    interrupts();
+    // Reserve 0 as the "not identifying" sentinel; in the unlikely case
+    // millis() returns exactly 0 here, bump to 1 so the blink runs.
+    identifyStartMs = millis();
+    if (identifyStartMs == 0) identifyStartMs = 1;
+#ifdef SERIAL_ENABLE
+    Serial.println("Identify");
+#endif
+  }
+
   unsigned long currentMillis = millis();
+
+  // Non-blocking identify blink (issue #56). 4 Hz for 3 s, then LED off.
+  // Reset the sleep timer while blinking so SLEEP_MODE_IDLE doesn't stall
+  // the blink (CPU clock stops in idle sleep, so the toggles would pause).
+  if (identifyStartMs != 0) {
+    previousMillis = currentMillis;
+    unsigned long elapsed = currentMillis - identifyStartMs;
+    if (elapsed >= 3000) {
+      digitalWrite(LED_BUILTIN, LOW);
+      identifyStartMs = 0;
+    } else {
+      digitalWrite(LED_BUILTIN, ((elapsed / 125) & 1) == 0 ? HIGH : LOW);
+    }
+  }
 
   // Uptime counter for CMD_GET_STATUS (issue #47). Saturating at 18 h 12 min;
   // the master is expected to poll more often than that. Cheap arithmetic,
@@ -440,6 +523,21 @@ void receiveLetter(int numBytes) {
         break;
       case CMD_HOME:
         pendingHome = true;
+        break;
+      case CMD_SET_I2C_ADDRESS:
+        if (remaining >= 1) {
+          pendingAddressValue = (uint8_t)Wire.read();
+          remaining--;
+          pendingSetAddress = true;
+        } else if (badCommandCount < 0xFF) {
+          badCommandCount++;
+        }
+        break;
+      case CMD_CLEAR_I2C_ADDRESS:
+        pendingClearAddress = true;
+        break;
+      case CMD_IDENTIFY:
+        pendingIdentify = true;
         break;
       default:
         if (badCommandCount < 0xFF) badCommandCount++;
