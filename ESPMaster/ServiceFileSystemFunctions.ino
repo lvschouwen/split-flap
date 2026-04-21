@@ -23,7 +23,10 @@ void initialiseFileSystem() {
     writeSettingString(OFF_ALIGNMENT,        LEN_ALIGNMENT,        ALIGNMENT_MODE_LEFT);
     writeSettingString(OFF_FLAPSPEED,        LEN_FLAPSPEED,        "80");
     writeSettingString(OFF_DEVICEMODE,       LEN_DEVICEMODE,       DEVICE_MODE_TEXT);
-    writeSettingString(OFF_TIMEZONE,         LEN_TIMEZONE,         "");
+    //Default TZ to CE(S)T so a wipe+reflash yields a correctly-clocked
+    //device without needing a web-UI round-trip. Falls through to the
+    //compile-time `timezonePosix` const if this slot is ever empty (#53).
+    writeSettingString(OFF_TIMEZONE,         LEN_TIMEZONE,         "CET-1CEST,M3.5.0,M10.5.0/3");
     writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, "");
     writeSettingMagic();
     EEPROM.commit();

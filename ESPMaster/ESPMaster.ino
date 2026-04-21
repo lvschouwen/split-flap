@@ -109,13 +109,15 @@
 #endif
 
 // timezonePosix: build-time DEFAULT POSIX TZ string. Overridden at runtime
-// by the web UI setting (persisted to EEPROM). Leave empty for UTC.
+// by the web UI setting (persisted to EEPROM). Also baked into the fresh-
+// init EEPROM value (see #53) so a wipe+reflash yields a correctly-clocked
+// device without needing web-UI setup.
 // Examples:
-//   "CET-1CEST,M3.5.0,M10.5.0/3"  Central European Time with DST
+//   "CET-1CEST,M3.5.0,M10.5.0/3"  Central European Time with DST (default)
 //   "GMT0BST,M3.5.0/1,M10.5.0"    UK (Europe/London)
 //   "EST5EDT,M3.2.0,M11.1.0"      US Eastern Time
 // Full list: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
-const char* timezonePosix = "";
+const char* timezonePosix = "CET-1CEST,M3.5.0,M10.5.0/3";
 
 // timezoneServer: NTP server for time sync. Empty defaults to "pool.ntp.org".
 const char* timezoneServer = "";
@@ -1182,8 +1184,12 @@ String getCurrentSettingValues() {
   out += F(",\"deviceMode\":");                      appendJsonString(out, deviceMode);
   out += F(",\"timezonePosix\":");                   appendJsonString(out, timezonePosixSetting);
   out += F(",\"version\":");                         appendJsonString(out, String(espVersion));
-  //OTA failure diagnostics (#52). These four fields let a remote flasher
-  //tell a genuine revert apart from a same-version false-alarm.
+  //OTA failure diagnostics (#52). These fields let a remote flasher tell a
+  //genuine revert apart from a same-version false-alarm. `sketchMd5` is the
+  //MD5 of the running sketch as read from flash (via ESP.getSketchMD5(),
+  //cached by core on first call) — unambiguous identity check independent
+  //of GIT_REV strings, added in #53.
+  out += F(",\"sketchMd5\":");                       appendJsonString(out, ESP.getSketchMD5());
   out += F(",\"intendedVersion\":");                 appendJsonString(out, intendedVersionEeprom);
   out += F(",\"otaReverted\":");                     out += (otaReverted ? F("true") : F("false"));
   out += F(",\"lastResetReason\":");                 appendJsonString(out, lastResetReason);
