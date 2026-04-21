@@ -46,6 +46,12 @@ This project has built on the original project to add extra features such as:
   - Also pushes the bundled unit firmware to every Nano it detects on the bus, so unit updates ride along with master updates.
 - I2C OTA for unit firmware
   - Master ships a compiled Unit sketch in PROGMEM and auto-installs it on any Nano sitting in twiboot (the [patched bootloader](./UnitBootloader/README.md) is flashed once per unit via ICSP).
+- MQTT + Home Assistant integration
+  - Opt-in: leave the broker host blank in the web UI and MQTT stays off (zero runtime cost).
+  - When enabled, publishes master state (current message, IP, uptime, RSSI, free heap) and per-unit diagnostics (uptime, reset cause, brownout/watchdog counts, bad-cmd count, moving/home-failed flags) on a retained topic tree.
+  - Home Assistant auto-discovery creates one master device + one device per detected unit, with the per-unit diagnostics tucked away under HA's diagnostic entity category.
+  - Command topics (master-scoped): `cmd/message`, `cmd/stop`, `cmd/home_all`, plus per-unit `cmd/unit/<addr>/home` and `cmd/unit/<addr>/reboot`. The master is the only MQTT client — units are never MQTT-addressable, and the destructive bootloader command is deliberately not exposed over MQTT.
+  - Live firmware log streams to `<base>/log` while MQTT is connected; pre-connect log is captured in a small ring and flushed on every reconnect so you don't miss boot output.
 - Updated `README.md` to add scenarios of problems encountered
 
 Also the code has been refactored to try facilitate easier development:

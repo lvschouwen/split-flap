@@ -3,17 +3,20 @@
 #include <Arduino.h>
 #ifndef UNIT_TEST
 #include "WebLog.h"
+#include "MqttLogTap.h"
 #endif
 
 // Centralised serial output so each call site doesn't need its own
 // `#if SERIAL_ENABLE` guard. Templates live in a header because the
 // Arduino sketch preprocessor can't auto-prototype templates correctly.
 //
-// Output is also mirrored to the in-RAM web log ring buffer (exposed at
-// GET /log) so you can see firmware activity from the UI without needing
-// a USB-serial connection. The web-log tap runs regardless of
-// SERIAL_ENABLE; it's skipped in the native test environment so the
-// sketch logic stays linkable there.
+// Output fans out to three sinks (#50):
+//   1. USB serial if SERIAL_ENABLE (usually off — I2C shares the pins).
+//   2. The in-RAM ring buffer (WebLog.h), used for pre-MQTT-connect
+//      buffering. Flushed to MQTT on every MQTT reconnect.
+//   3. The live MQTT log tap — publishes each newline-terminated line to
+//      <base>/log when MQTT is connected. No-op otherwise.
+// The native test env skips 2 and 3 so the sketch logic stays linkable.
 
 template <typename T>
 void SerialPrint(T value) {
@@ -22,6 +25,7 @@ void SerialPrint(T value) {
 #endif
 #ifndef UNIT_TEST
   webLogPrinter.print(value);
+  mqttLogTap.print(value);
 #endif
 }
 
@@ -34,7 +38,9 @@ void SerialPrintf(const char* message, T value) {
   char buf[96];
   int n = snprintf(buf, sizeof(buf), message, value);
   if (n > 0) {
-    webLogAppend(buf, n > (int)sizeof(buf) - 1 ? (int)sizeof(buf) - 1 : n);
+    size_t clamped = (n > (int)sizeof(buf) - 1) ? sizeof(buf) - 1 : (size_t)n;
+    webLogAppend(buf, clamped);
+    mqttLogTap.write((const uint8_t*)buf, clamped);
   }
 #endif
 }
@@ -46,5 +52,6 @@ void SerialPrintln(T value) {
 #endif
 #ifndef UNIT_TEST
   webLogPrinter.println(value);
+  mqttLogTap.println(value);
 #endif
 }

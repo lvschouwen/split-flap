@@ -25,7 +25,12 @@
 */
 #define SERIAL_ENABLE       false   //Option to enable serial debug messages. "true" Will disable I2C communications to allow serial monitoring.
 #define UNIT_CALLS_DISABLE  false   //Option to disable the call to the units so can just debug the ESP with no connections
-#define UNITS_AMOUNT        10      //Amount of connected units !IMPORTANT TO BE SET CORRECTLY!
+//Maximum supported units. Bounded by the unit-side 4-bit DIP-switch scheme
+//(Unit/Unit.ino:538): 16 possible addresses = 16 units. Users with fewer
+//physical units are unaffected — probeI2cBus() only acts on addresses that
+//actually reply (#51). Cost of the full 16 vs. a smaller number: ~150 B
+//static RAM (per-unit state arrays + detectedUnitVersions[][9]).
+#define UNITS_AMOUNT        16
 #define SERIAL_BAUDRATE     115200  //Serial debugging BAUD rate
 #define WIFI_USE_DIRECT     true    //Option to either direct connect to a WiFi Network or setup a AP to configure WiFi. Setting to false will setup as a AP.
 #define USE_MULTICAST       false    //Option to broadcast a ".local" URL on your local network default split-flap.local. You can change the name under configurable settings.
@@ -169,6 +174,10 @@ const char* PARAM_FLAP_SPEED = "flapSpeed";
 const char* PARAM_DEVICEMODE = "deviceMode";
 const char* PARAM_INPUT_TEXT = "inputText";
 const char* PARAM_TIMEZONE   = "timezone";
+const char* PARAM_MQTT_HOST  = "mqttHost";
+const char* PARAM_MQTT_PORT  = "mqttPort";
+const char* PARAM_MQTT_USER  = "mqttUser";
+const char* PARAM_MQTT_PASS  = "mqttPass";
 
 //Device Modes
 const char* DEVICE_MODE_TEXT = "text";
@@ -188,12 +197,23 @@ String deviceMode = "";
 //back to compile-time `timezonePosix`, which in turn falls back to "UTC0".
 //Issue #48.
 String timezonePosixSetting = "";
+//MQTT broker config (web-UI settings, persisted to EEPROM). mqttHostSetting
+//empty -> MQTT fully disabled; no connection attempts, zero heap cost.
+//mqttPortSetting is stored as a decimal string so writeSettingString() keeps
+//working; parsed to uint16_t at connect. Issue #50.
+String mqttHostSetting = "";
+String mqttPortSetting = "";
+String mqttUserSetting = "";
+String mqttPassSetting = "";
 String lastWrittenText = "";
 String lastReceivedMessageDateTime = "";
 bool alignmentUpdated = false;
 bool isPendingReboot = false;
 bool isPendingUnitsReset = false;
 bool isWifiConfigured = false;
+//Set when the MQTT config changes via POST /; consumed by ServiceMqttFunctions
+//on the next loop tick (disconnect + reconnect with new creds). Issue #50.
+bool isPendingMqttReconfig = false;
 
 //Set by POST /stop to break out of the wait loop inside showMessage() when
 //a unit gets physically stuck and its status byte pegs at "rotating"
@@ -516,6 +536,19 @@ void setup() {
     //manual "Flash all unit(s)" click. Issue #32.
     autoUpdateOutdatedUnits();
 
+    //MQTT connect kicks off here so it runs in the background while the
+    //webServer endpoints register; by the time setup() returns, the
+    //connect attempt is either done or retrying via mqttServiceLoop().
+    //No-op if mqttHostSetting is empty. Issue #50.
+    mqttInit();
+
+    //Full per-unit diagnostic dump on boot — once everything's settled.
+    //Lands on Serial (via HelpersSerialHandling) and, once MQTT is up, in
+    //the log topic too. Gives you a visible snapshot of each unit's reset
+    //cause / brownout / WDT lifetime counters at every power cycle without
+    //needing the web UI. Issue #50.
+    dumpAllUnitStatusSerial(/*compact=*/false);
+
 #if USE_MULTICAST == true
   if (MDNS.begin(mdnsName)) {
       SerialPrintln(F("mDNS responder started"));
@@ -572,12 +605,6 @@ void setup() {
       request->send(200, "text/plain", "Healthy");
     });
 
-    webServer.on("/log", HTTP_GET, [](AsyncWebServerRequest * request) {
-      //Don't SerialPrintln here; every log request would otherwise stamp
-      //itself into the buffer on every poll and drown out real activity.
-      request->send(200, "text/plain", webLogRead());
-    });
-    
     webServer.on("/reboot", HTTP_GET, [](AsyncWebServerRequest * request) {
       SerialPrintln(F("Request to Reboot Received"));
       
@@ -759,6 +786,11 @@ void setup() {
         return;
       }
       SerialPrintln(F("Request to Stop Received"));
+      //Snapshot every unit's diagnostics the moment the user hits the
+      //physical kill-switch. Usually the reason they reached for /stop is
+      //something misbehaving — this captures the evidence before the
+      //broadcast home wipes away whatever state the units were in. #50.
+      dumpAllUnitStatusSerial(/*compact=*/false);
       abortCurrentShow = true;
       int broadcastStatus = broadcastHome();
       //Prevent the event loop from re-issuing showText() with the previous
@@ -805,6 +837,15 @@ void setup() {
 
       String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue, newTimezoneValue;
       bool timezoneProvided = false;
+      //MQTT: each field is tracked independently so users can change one
+      //(e.g. rotate the password) without retyping the others. Password is
+      //write-only from the UI — we detect "not submitted" vs "submitted empty"
+      //via the *Provided flag so an empty submission doesn't wipe a stored
+      //password the user never intended to clear. Issue #50.
+      String newMqttHostValue, newMqttPortValue, newMqttUserValue, newMqttPassValue;
+      bool mqttHostProvided = false, mqttPortProvided = false;
+      bool mqttUserProvided = false, mqttPassProvided = false;
+      bool mqttConfigChanged = false;
 
       int params = request->params();
       for (int paramIndex = 0; paramIndex < params; paramIndex++) {
@@ -863,6 +904,63 @@ void setup() {
               submissionError = true;
             }
           }
+
+          //HTTP POST MQTT host — allowed chars are the intersection of valid
+          //hostname (RFC 1123) and IPv4 characters. Keep it permissive on
+          //punctuation so users can paste hosts like 'mqtt.local' or '10.0.0.5'.
+          //Empty is fine — explicitly disables MQTT.
+          if (p->name() == PARAM_MQTT_HOST) {
+            String receivedValue = p->value();
+            bool valid = (int)receivedValue.length() < LEN_MQTT_HOST;
+            for (size_t i = 0; valid && i < receivedValue.length(); i++) {
+              char c = receivedValue[i];
+              bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                     || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_';
+              if (!ok) valid = false;
+            }
+            if (valid) { newMqttHostValue = receivedValue; mqttHostProvided = true; }
+            else       { SerialPrintln("MQTT host invalid: " + receivedValue); submissionError = true; }
+          }
+
+          //HTTP POST MQTT port — must parse as 1..65535.
+          if (p->name() == PARAM_MQTT_PORT) {
+            String receivedValue = p->value();
+            long asInt = receivedValue.toInt();
+            if (receivedValue.length() > 0 && receivedValue.length() < LEN_MQTT_PORT && asInt >= 1 && asInt <= 65535) {
+              newMqttPortValue = receivedValue;
+              mqttPortProvided = true;
+            } else {
+              SerialPrintln("MQTT port invalid: " + receivedValue);
+              submissionError = true;
+            }
+          }
+
+          //HTTP POST MQTT username — printable ASCII, bounded length.
+          if (p->name() == PARAM_MQTT_USER) {
+            String receivedValue = p->value();
+            bool valid = (int)receivedValue.length() < LEN_MQTT_USER;
+            for (size_t i = 0; valid && i < receivedValue.length(); i++) {
+              char c = receivedValue[i];
+              if (c < 0x20 || c > 0x7E) valid = false;
+            }
+            if (valid) { newMqttUserValue = receivedValue; mqttUserProvided = true; }
+            else       { SerialPrintln(F("MQTT user invalid")); submissionError = true; }
+          }
+
+          //HTTP POST MQTT password — printable ASCII, bounded length. Empty
+          //string here means "user submitted an empty password" (intent to
+          //clear). Absence of the param means "no change" — handled below
+          //via the mqttPassProvided flag.
+          if (p->name() == PARAM_MQTT_PASS) {
+            String receivedValue = p->value();
+            bool valid = (int)receivedValue.length() < LEN_MQTT_PASS;
+            for (size_t i = 0; valid && i < receivedValue.length(); i++) {
+              char c = receivedValue[i];
+              if (c < 0x20 || c > 0x7E) valid = false;
+            }
+            if (valid) { newMqttPassValue = receivedValue; mqttPassProvided = true; }
+            else       { SerialPrintln(F("MQTT password invalid (non-printable or too long)")); submissionError = true; }
+          }
         }
       }
 
@@ -909,6 +1007,22 @@ void setup() {
           saveTimezone();
           applyTimezoneAndNtp();
           SerialPrintln("Timezone Updated: " + (timezonePosixSetting.length() ? timezonePosixSetting : String("(default)")));
+        }
+
+        //MQTT config persistence (#50). Each field is independent; *Provided
+        //flags distinguish "not submitted" from "submitted empty". Password
+        //is write-only from the UI — absence leaves the stored value alone.
+        if (mqttHostProvided && mqttHostSetting != newMqttHostValue) { mqttHostSetting = newMqttHostValue; mqttConfigChanged = true; }
+        if (mqttPortProvided && mqttPortSetting != newMqttPortValue) { mqttPortSetting = newMqttPortValue; mqttConfigChanged = true; }
+        if (mqttUserProvided && mqttUserSetting != newMqttUserValue) { mqttUserSetting = newMqttUserValue; mqttConfigChanged = true; }
+        if (mqttPassProvided && mqttPassSetting != newMqttPassValue) { mqttPassSetting = newMqttPassValue; mqttConfigChanged = true; }
+        if (mqttConfigChanged) {
+          saveMqttConfig();
+          //Trigger MQTT reconnect with the new config on the next loop tick.
+          //Flag is consumed by ServiceMqttFunctions; safe to set even if the
+          //service isn't wired yet (will be a no-op until then).
+          isPendingMqttReconfig = true;
+          SerialPrintln("MQTT config updated (host=" + (mqttHostSetting.length() ? mqttHostSetting : String("(disabled)")) + ")");
         }
 
         //Only if we are showing text
@@ -1052,6 +1166,26 @@ void loop() {
     return;
   }
 
+  //MQTT reconnect + reconfig handling. Keeps an always-available link to
+  //HA while the rest of the loop runs on its 1 Hz cadence. Free-runs —
+  //own internal backoff. Issue #50.
+  mqttServiceLoop();
+
+  //Periodic per-unit serial status tick — independent of MQTT so you still
+  //get visible diagnostics when the broker is down or never configured.
+  //15 min is long enough to keep serial readable but short enough that
+  //a random glance at the USB console (display down for debugging) shows
+  //current-ish state. Issue #50.
+  {
+    static uint32_t lastUnitStatusDumpMs = 0;
+    const uint32_t UNIT_STATUS_DUMP_INTERVAL_MS = 15UL * 60UL * 1000UL;
+    uint32_t nowMs = millis();
+    if ((nowMs - lastUnitStatusDumpMs) >= UNIT_STATUS_DUMP_INTERVAL_MS) {
+      lastUnitStatusDumpMs = nowMs;
+      dumpAllUnitStatusSerial(/*compact=*/true);
+    }
+  }
+
   //Process every second
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= 1000) {
@@ -1134,6 +1268,14 @@ String getCurrentSettingValues() {
   out += F(",\"flapSpeed\":");                       appendJsonString(out, flapSpeed);
   out += F(",\"deviceMode\":");                      appendJsonString(out, deviceMode);
   out += F(",\"timezonePosix\":");                   appendJsonString(out, timezonePosixSetting);
+  //MQTT echo: host/port/user round-trip so the settings page pre-fills what
+  //was saved. mqttPass is deliberately NOT echoed — treat as write-only
+  //from the UI's perspective (issue #50). Presence is signalled via a bool
+  //so the UI can tell "no password set" from "password set, hidden".
+  out += F(",\"mqttHost\":");                        appendJsonString(out, mqttHostSetting);
+  out += F(",\"mqttPort\":");                        appendJsonString(out, mqttPortSetting);
+  out += F(",\"mqttUser\":");                        appendJsonString(out, mqttUserSetting);
+  out += F(",\"mqttPassSet\":");                     out += (mqttPassSetting.length() ? F("true") : F("false"));
   out += F(",\"version\":");                         appendJsonString(out, String(espVersion));
   out += F(",\"lastTimeReceivedMessageDateTime\":"); appendJsonString(out, lastReceivedMessageDateTime);
   out += F(",\"lastWrittenText\":");                 appendJsonString(out, lastWrittenText);

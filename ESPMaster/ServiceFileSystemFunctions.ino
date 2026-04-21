@@ -24,6 +24,10 @@ void initialiseFileSystem() {
     writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  "80");
     writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, DEVICE_MODE_TEXT);
     writeSettingString(OFF_TIMEZONE,   LEN_TIMEZONE,   "");
+    writeSettingString(OFF_MQTT_HOST,  LEN_MQTT_HOST,  "");
+    writeSettingString(OFF_MQTT_PORT,  LEN_MQTT_PORT,  "1883");
+    writeSettingString(OFF_MQTT_USER,  LEN_MQTT_USER,  "");
+    writeSettingString(OFF_MQTT_PASS,  LEN_MQTT_PASS,  "");
     writeSettingMagic();
     EEPROM.commit();
   } else if (ver < SETTINGS_VERSION) {
@@ -36,6 +40,15 @@ void initialiseFileSystem() {
     //so readSettingString() returns empty (-> UTC fallback) instead of
     //whatever garbage was left there by earlier firmwares (#48).
     if (ver < 2) writeSettingString(OFF_TIMEZONE, LEN_TIMEZONE, "");
+    //v2 -> v3: MQTT slots carved from former RESERVED_2. Zero them so
+    //empty host reads as "" (-> MQTT disabled), and seed the default port
+    //so users who enable MQTT don't have to remember 1883 (#50).
+    if (ver < 3) {
+      writeSettingString(OFF_MQTT_HOST, LEN_MQTT_HOST, "");
+      writeSettingString(OFF_MQTT_PORT, LEN_MQTT_PORT, "1883");
+      writeSettingString(OFF_MQTT_USER, LEN_MQTT_USER, "");
+      writeSettingString(OFF_MQTT_PASS, LEN_MQTT_PASS, "");
+    }
     EEPROM.write(OFF_VERSION, SETTINGS_VERSION);
     EEPROM.commit();
   }
@@ -48,12 +61,21 @@ void loadValuesFromFileSystem() {
   flapSpeed            = readSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED);
   deviceMode           = readSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE);
   timezonePosixSetting = readSettingString(OFF_TIMEZONE,   LEN_TIMEZONE);
+  mqttHostSetting      = readSettingString(OFF_MQTT_HOST,  LEN_MQTT_HOST);
+  mqttPortSetting      = readSettingString(OFF_MQTT_PORT,  LEN_MQTT_PORT);
+  mqttUserSetting      = readSettingString(OFF_MQTT_USER,  LEN_MQTT_USER);
+  mqttPassSetting      = readSettingString(OFF_MQTT_PASS,  LEN_MQTT_PASS);
 
   SerialPrintln(F("Loaded Settings:"));
   SerialPrintln("   Alignment: " + alignment);
   SerialPrintln("   Flap Speed: " + flapSpeed);
   SerialPrintln("   Device Mode: " + deviceMode);
   SerialPrintln("   Timezone: " + (timezonePosixSetting.length() ? timezonePosixSetting : String("(default)")));
+  //Don't log mqttPass — the log (eventually streamed to MQTT) must not echo
+  //the broker password back out. Host/port/user are fine.
+  SerialPrintln("   MQTT: " + (mqttHostSetting.length()
+    ? (mqttHostSetting + ":" + mqttPortSetting + (mqttUserSetting.length() ? String(" user=") + mqttUserSetting : String("")))
+    : String("(disabled)")));
 }
 
 // Called from the web server handlers whenever a setting changes.
@@ -61,6 +83,15 @@ void saveAlignment()    { writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  ali
 void saveFlapSpeed()    { writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  flapSpeed);            EEPROM.commit(); }
 void saveDeviceMode()   { writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, deviceMode);           EEPROM.commit(); }
 void saveTimezone()     { writeSettingString(OFF_TIMEZONE,   LEN_TIMEZONE,   timezonePosixSetting); EEPROM.commit(); }
+//All four MQTT slots commit together — avoids a partially-applied config
+//(e.g. new host with stale password) if the ESP browns out mid-save.
+void saveMqttConfig() {
+  writeSettingString(OFF_MQTT_HOST, LEN_MQTT_HOST, mqttHostSetting);
+  writeSettingString(OFF_MQTT_PORT, LEN_MQTT_PORT, mqttPortSetting);
+  writeSettingString(OFF_MQTT_USER, LEN_MQTT_USER, mqttUserSetting);
+  writeSettingString(OFF_MQTT_PASS, LEN_MQTT_PASS, mqttPassSetting);
+  EEPROM.commit();
+}
 
 //Resolve effective POSIX TZ: runtime EEPROM setting wins, else the
 //compile-time `timezonePosix` const, else "UTC0". Called at boot and

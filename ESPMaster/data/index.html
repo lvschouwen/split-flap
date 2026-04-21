@@ -62,6 +62,30 @@
 								<select id="selectTimezone" name="timezone" autocomplete="off"></select>
 							</p>
 						</div>
+
+						<div style="margin-top: 2em;">
+							<p class="card-title" style="font-size: 1.2rem; margin: 0;">MQTT / Home Assistant</p>
+							<p style="font-size: 0.9rem; color: #aaa; margin: 0.3em 0 0.6em 0;">
+								Empty host disables MQTT. Password is write-only — leave blank to keep the stored one.
+							</p>
+							<p>
+								<label for="inputMqttHost">Broker host</label>
+								<input type="text" id="inputMqttHost" name="mqttHost" autocomplete="off" maxlength="63" placeholder="mqtt.local or 10.0.0.5" />
+							</p>
+							<p>
+								<label for="inputMqttPort">Broker port</label>
+								<input type="number" id="inputMqttPort" name="mqttPort" autocomplete="off" min="1" max="65535" value="1883" />
+							</p>
+							<p>
+								<label for="inputMqttUser">Username <span style="color: #aaa;">(optional)</span></label>
+								<input type="text" id="inputMqttUser" name="mqttUser" autocomplete="off" maxlength="31" />
+							</p>
+							<p>
+								<label for="inputMqttPass">Password <span style="color: #aaa;">(optional; write-only)</span></label>
+								<input type="password" id="inputMqttPass" name="mqttPass" autocomplete="new-password" maxlength="63" placeholder="" />
+								<span id="labelMqttPassStored" class="count hidden" style="color: #7a7;">Password stored</span>
+							</p>
+						</div>
 					</div>
 
 					<div class="card">
@@ -173,14 +197,6 @@
 				</div>
 			</div>
 
-			<div class="card-grid">
-				<div class="card card-full">
-					<details id="logDetails" open>
-						<summary class="card-title">Log</summary>
-						<pre id="logContent" class="log-pane"></pre>
-					</details>
-				</div>
-			</div>
 		</div>
 	</div>
 	<script src="script.js" /></script>

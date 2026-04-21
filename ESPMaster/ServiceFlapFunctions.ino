@@ -110,6 +110,51 @@ int broadcastHome() {
   return Wire.endTransmission();
 }
 
+//Dumps per-unit diagnostics from readUnitStatus() to Serial (and, through
+//SerialPrint*, to the MQTT log topic once task #10 is wired). Called at
+//boot after the I2C probe, from POST /stop, and on a long-interval tick
+//from the main loop. `compact=false` renders a multi-line block per unit
+//(boot / /stop paths); `compact=true` renders a single-line summary per
+//unit (periodic tick, keeps serial readable). Issue #50.
+void dumpAllUnitStatusSerial(bool compact) {
+  SerialPrintln(F("--- Unit status dump ---"));
+  bool any = false;
+  for (int i = 0; i < detectedUnitCount; i++) {
+    int addr = detectedUnitAddresses[i];
+    if (detectedUnitStates[i] != 1) continue;  //skip bootloader/silent
+    any = true;
+
+    UnitStatus s;
+    if (!readUnitStatus(addr, s)) {
+      SerialPrint(F("U")); SerialPrint(addr); SerialPrintln(F(" (no status reply)"));
+      continue;
+    }
+
+    if (compact) {
+      SerialPrint(F("U"));         SerialPrint(addr);
+      SerialPrint(F(" up="));      SerialPrint((uint32_t)s.uptimeSeconds);
+      SerialPrint(F("s wdt="));    SerialPrint((uint32_t)s.lifetimeWatchdogCount);
+      SerialPrint(F(" bo="));      SerialPrint((uint32_t)s.lifetimeBrownoutCount);
+      SerialPrint(F(" badCmd="));  SerialPrint((uint32_t)s.badCommandCount);
+      SerialPrint(F(" moving="));  SerialPrint((s.flags & 0x01) ? 1 : 0);
+      SerialPrint(F(" hF="));      SerialPrintln((s.flags & 0x02) ? 1 : 0);
+    } else {
+      SerialPrint(F("Unit 0x")); SerialPrintln(String(addr, HEX));
+      SerialPrint(F("  uptime (s)       = ")); SerialPrintln((uint32_t)s.uptimeSeconds);
+      SerialPrint(F("  MCUSR at boot    = 0x")); SerialPrintln(String(s.mcusrAtBoot, HEX));
+      SerialPrint(F("  lifetime BO      = ")); SerialPrintln((uint32_t)s.lifetimeBrownoutCount);
+      SerialPrint(F("  lifetime WDT     = ")); SerialPrintln((uint32_t)s.lifetimeWatchdogCount);
+      SerialPrint(F("  bad I2C cmds     = ")); SerialPrintln((uint32_t)s.badCommandCount);
+      SerialPrint(F("  last homing steps= ")); SerialPrintln((uint32_t)s.lastHomingStepCount);
+      SerialPrint(F("  moving           = ")); SerialPrintln((s.flags & 0x01) ? 1 : 0);
+      SerialPrint(F("  last home failed = ")); SerialPrintln((s.flags & 0x02) ? 1 : 0);
+      SerialPrint(F("  hall untriggered = ")); SerialPrintln((s.flags & 0x04) ? 1 : 0);
+    }
+  }
+  if (!any) SerialPrintln(F("(no sketch-mode units responded)"));
+  SerialPrintln(F("--- end ---"));
+}
+
 //Reads the 8-byte health/status payload via CMD_GET_STATUS (issue #47).
 //Returns true on success. Short replies (old firmware predating this
 //opcode) or Wire failures return false without touching `out`.

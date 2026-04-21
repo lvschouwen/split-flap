@@ -48,7 +48,11 @@ static void test_layout_slots_are_contiguous_and_non_overlapping() {
   TEST_ASSERT_EQUAL_INT(LEN_ALIGNMENT,  OFF_FLAPSPEED  - OFF_ALIGNMENT);
   TEST_ASSERT_EQUAL_INT(LEN_FLAPSPEED,  OFF_DEVICEMODE - OFF_FLAPSPEED);
   TEST_ASSERT_EQUAL_INT(LEN_DEVICEMODE, OFF_TIMEZONE   - OFF_DEVICEMODE);
-  TEST_ASSERT_EQUAL_INT(LEN_TIMEZONE,   OFF_RESERVED_2 - OFF_TIMEZONE);
+  TEST_ASSERT_EQUAL_INT(LEN_TIMEZONE,   OFF_MQTT_HOST  - OFF_TIMEZONE);
+  TEST_ASSERT_EQUAL_INT(LEN_MQTT_HOST,  OFF_MQTT_PORT  - OFF_MQTT_HOST);
+  TEST_ASSERT_EQUAL_INT(LEN_MQTT_PORT,  OFF_MQTT_USER  - OFF_MQTT_PORT);
+  TEST_ASSERT_EQUAL_INT(LEN_MQTT_USER,  OFF_MQTT_PASS  - OFF_MQTT_USER);
+  TEST_ASSERT_EQUAL_INT(LEN_MQTT_PASS,  OFF_RESERVED_2 - OFF_MQTT_PASS);
 }
 
 static void test_layout_fits_in_configured_eeprom_size() {
@@ -109,11 +113,34 @@ static void test_all_slots_roundtrip_independently() {
   writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  String("80"));
   writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, String("clock"));
   writeSettingString(OFF_TIMEZONE,   LEN_TIMEZONE,   String("CET-1CEST,M3.5.0,M10.5.0/3"));
+  writeSettingString(OFF_MQTT_HOST,  LEN_MQTT_HOST,  String("mqtt.local"));
+  writeSettingString(OFF_MQTT_PORT,  LEN_MQTT_PORT,  String("8883"));
+  writeSettingString(OFF_MQTT_USER,  LEN_MQTT_USER,  String("splitflap"));
+  writeSettingString(OFF_MQTT_PASS,  LEN_MQTT_PASS,  String("hunter2"));
 
   TEST_ASSERT_EQUAL_STRING("right",                       readSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT).c_str());
   TEST_ASSERT_EQUAL_STRING("80",                          readSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED).c_str());
   TEST_ASSERT_EQUAL_STRING("clock",                       readSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE).c_str());
   TEST_ASSERT_EQUAL_STRING("CET-1CEST,M3.5.0,M10.5.0/3",  readSettingString(OFF_TIMEZONE,   LEN_TIMEZONE).c_str());
+  TEST_ASSERT_EQUAL_STRING("mqtt.local",                  readSettingString(OFF_MQTT_HOST,  LEN_MQTT_HOST).c_str());
+  TEST_ASSERT_EQUAL_STRING("8883",                        readSettingString(OFF_MQTT_PORT,  LEN_MQTT_PORT).c_str());
+  TEST_ASSERT_EQUAL_STRING("splitflap",                   readSettingString(OFF_MQTT_USER,  LEN_MQTT_USER).c_str());
+  TEST_ASSERT_EQUAL_STRING("hunter2",                     readSettingString(OFF_MQTT_PASS,  LEN_MQTT_PASS).c_str());
+}
+
+//Longest realistic broker hostname we'd expect (RFC 1123 labels up to 63 chars
+//per component, plus dots) — make sure LEN_MQTT_HOST covers a typical FQDN.
+//Most home-assistant-on-LAN setups use much shorter hosts, but if someone
+//points at "mqtt.broker.some-long-subdomain.internal.example.com" we don't
+//want silent truncation.
+static void test_mqtt_host_slot_fits_reasonable_fqdn() {
+  const char* fqdn = "mqtt.broker.some-long-subdomain.internal.example.com";
+  TEST_ASSERT_TRUE(strlen(fqdn) + 1 <= LEN_MQTT_HOST);
+}
+
+//Largest port is "65535\0" = 6 chars — LEN_MQTT_PORT must hold it.
+static void test_mqtt_port_slot_fits_max_uint16() {
+  TEST_ASSERT_TRUE(strlen("65535") + 1 <= LEN_MQTT_PORT);
 }
 
 // --- migration -----------------------------------------------------------
@@ -158,6 +185,8 @@ int main(int, char**) {
   RUN_TEST(test_writeSettingString_pads_remainder_with_NUL);
   RUN_TEST(test_writeSettingString_truncates_overlong_input);
   RUN_TEST(test_all_slots_roundtrip_independently);
+  RUN_TEST(test_mqtt_host_slot_fits_reasonable_fqdn);
+  RUN_TEST(test_mqtt_port_slot_fits_max_uint16);
   RUN_TEST(test_timezone_slot_fits_longest_common_posix_tz);
   RUN_TEST(test_readSettingString_stops_at_NUL);
   RUN_TEST(test_writeSettingString_does_not_touch_neighbouring_slots);

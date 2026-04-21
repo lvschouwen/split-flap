@@ -49,6 +49,12 @@ struct UnitStatus {
 // Wire error, returns false and `out` is untouched.
 bool readUnitStatus(int i2cAddress, UnitStatus& out);
 
+// Pretty-prints UnitStatus for every sketch-mode unit to Serial (which
+// also lands in the MQTT log topic via the web log ring + sink). Called
+// at boot, on POST /stop, and on a long-interval tick from loop().
+// Defined in ServiceFlapFunctions.ino. Issue #50.
+void dumpAllUnitStatusSerial(bool compact);
+
 // Broadcasts CMD_HOME to the I2C general-call address (0x00). Every unit
 // with TWGCE enabled will run calibrate(true). Replaces N-unit sequential
 // home loops used by the Stop button and the reset-calibration flow.
@@ -72,3 +78,20 @@ void autoInstallFirmwareToBootloaderUnits();
 // Defined in ServiceFirmwareFunctions.ino; called from setup().
 void autoUpdateOutdatedUnits();
 int enterBootloaderAllDetected(bool reprobeAfter);
+
+// MQTT service (ServiceMqttFunctions.ino, issue #50). All functions no-op if
+// mqttHostSetting is empty (MQTT disabled) — safe to call unconditionally.
+//
+// mqttInit():          called once from setup() after settings load. Registers
+//                      event handlers and kicks off the first connect attempt.
+// mqttServiceLoop():   pumped from loop(); handles reconnect backoff and the
+//                      isPendingMqttReconfig flag.
+// mqttIsConnected():   true only after onConnect fires.
+void mqttInit();
+void mqttServiceLoop();
+bool mqttIsConnected();
+
+// Pre-connect log ring flush. Called from mqttInit() after connect completes;
+// drains the WebLog ring into the `log` topic, then resets it. Defined in
+// ServiceMqttFunctions.ino. Safe no-op when MQTT is disabled or disconnected.
+void mqttFlushLogRing();

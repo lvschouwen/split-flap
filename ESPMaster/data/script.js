@@ -39,7 +39,7 @@ const form = document.getElementById('form');
 form.onsubmit = function () {
 	//Show loading icon
 	var containerSubmit = document.getElementById('containerSubmit');
-	
+
 	const loadingIconContainer = document.createElement("div");
 	loadingIconContainer.className = "lds-facebook";
 
@@ -49,11 +49,20 @@ form.onsubmit = function () {
 
 	containerSubmit.replaceWith(loadingIconContainer);
 
+	//If the MQTT password field is empty, disable it before submission so the
+	//browser omits the param entirely. The server treats absence as "no
+	//change" (keeps stored pass), but presence-with-empty-value as "clear".
+	//Matches the write-only semantics advertised next to the field. #50.
+	var passInput = document.getElementById("inputMqttPass");
+	if (passInput && passInput.value === "") {
+		passInput.disabled = true;
+	}
+
 	if (localDevelopment) {
 		setTimeout(function() {
 			location.reload();
 		}, 3000);
-		
+
 		return false;
 	}
 	else {
@@ -96,6 +105,7 @@ function loadPage() {
 		setAlignment("left");
 		populateTimezoneOptions();
 		setTimezone("");
+		setMqttConfig("", "1883", "", false);
 		setVersion("Development")
 		setUnitCount(10, 3);
 		setLastReceivedMessage(new Date().toLocaleString());
@@ -124,6 +134,12 @@ function loadPage() {
 				setAlignment(responseObject.alignment);
 				populateTimezoneOptions();
 				setTimezone(responseObject.timezonePosix || "");
+				setMqttConfig(
+					responseObject.mqttHost || "",
+					responseObject.mqttPort || "1883",
+					responseObject.mqttUser || "",
+					!!responseObject.mqttPassSet
+				);
 				setVersion(responseObject.version);
 				setUnitCount(responseObject.unitCount, responseObject.detectedUnitCount);
 				setLastReceivedMessage(responseObject.lastTimeReceivedMessageDateTime);
@@ -263,6 +279,21 @@ function setTimezone(tz) {
 	select.value = tz;
 }
 
+//Populates the MQTT form fields from /settings. Password is never echoed
+//back from the server — instead we get a boolean `passStored` that drives
+//the "Password stored" hint so the user can tell whether leaving the field
+//blank preserves something or not. Issue #50.
+function setMqttConfig(host, port, user, passStored) {
+	var hostInput = document.getElementById("inputMqttHost");
+	var portInput = document.getElementById("inputMqttPort");
+	var userInput = document.getElementById("inputMqttUser");
+	var passHint  = document.getElementById("labelMqttPassStored");
+	if (hostInput) hostInput.value = host;
+	if (portInput) portInput.value = port;
+	if (userInput) userInput.value = user;
+	if (passHint) passHint.classList.toggle("hidden", !passStored);
+}
+
 //Sets alignment by checking corresponding radio button
 function setAlignment(alignment) {
 	switch (alignment) {
@@ -377,7 +408,6 @@ function showContent() {
 	elementInitialLoading.classList.add("hidden");
 	elementContent.classList.remove("hidden");
 
-	initLogPanel();
 	initMasterFirmwareUpload();
 }
 
@@ -434,59 +464,6 @@ function initMasterFirmwareUpload() {
 		};
 		xhr.send(formData);
 	});
-}
-
-//Log panel: polls GET /log every 2s while the <details> is open.
-function initLogPanel() {
-	var details = document.getElementById("logDetails");
-	var pre = document.getElementById("logContent");
-	if (!details || !pre) return;
-
-	var pollHandle = null;
-
-	function fetchLog() {
-		fetch('/log', { cache: 'no-store' })
-			.then(function (r) { return r.ok ? r.text() : ''; })
-			.then(function (text) {
-				//Preserve scroll-lock-to-bottom UX: if the user was already at the
-				//bottom, stay pinned there as new content arrives.
-				var atBottom = (pre.scrollTop + pre.clientHeight) >= (pre.scrollHeight - 8);
-				pre.textContent = text;
-				if (atBottom) pre.scrollTop = pre.scrollHeight;
-			})
-			.catch(function () { /* network hiccups shouldn't blow up the UI */ });
-	}
-
-	function startPolling() {
-		if (pollHandle !== null) return;
-		fetchLog();
-		pollHandle = setInterval(fetchLog, 2000);
-	}
-
-	function stopPolling() {
-		if (pollHandle === null) return;
-		clearInterval(pollHandle);
-		pollHandle = null;
-	}
-
-	details.addEventListener('toggle', function () {
-		if (details.open) startPolling();
-		else stopPolling();
-	});
-
-	//<details open> doesn't fire the toggle event on load, so kick off
-	//polling manually if the panel starts expanded.
-	if (details.open) startPolling();
-
-	//Also stop polling if the tab is hidden — no point waking the ESP for updates nobody's reading.
-	document.addEventListener('visibilitychange', function () {
-		if (document.hidden) stopPolling();
-		else if (details.open) startPolling();
-	});
-
-	if (localDevelopment) {
-		pre.textContent = "Starting Split-Flap...\nScanning I2C bus for units...\n- unit responding at 0x01\n- unit responding at 0x02\nI2C scan complete. Detected 2/10 expected units.\n";
-	}
 }
 
 //Calibration panel (issue #32). Builds a per-unit row with Expect/Reality
