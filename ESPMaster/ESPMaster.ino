@@ -454,15 +454,35 @@ void registerMasterFirmwareEndpoint() {
   );
 }
 
-//Minimal recovery SoftAP: serves a single upload form and the OTA endpoint.
-//No WiFi client, no I2C traffic, no persistence — just enough to let the
-//user reflash a working image without dragging out the USB cable.
+//Minimal recovery mode: serves a single upload form and the OTA endpoint.
+//No I2C traffic, no persistence — just enough to let the user reflash a
+//working image without dragging out the USB cable. When the hardcoded-WiFi
+//path is compiled in, we join the normal LAN so the device reappears on
+//its familiar IP and the remote flasher doesn't have to switch SSIDs (#53).
+//SoftAP remains the fallback when WiFi is unavailable or not compiled in.
 void enterRecoveryMode() {
+#if WIFI_USE_DIRECT == true
+  SerialPrintln(F("Recovery: attempting hardcoded WiFi first..."));
+  initWiFi();
+  if (isWifiConfigured) {
+    SerialPrint(F("Recovery on LAN IP: "));
+    SerialPrintln(WiFi.localIP().toString());
+  } else {
+    SerialPrintln(F("Recovery: WiFi direct failed — falling back to SoftAP"));
+    WiFi.disconnect();
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP("split-flap-recovery");
+    SerialPrint(F("Recovery SoftAP IP: "));
+    SerialPrintln(WiFi.softAPIP().toString());
+  }
+#else
   WiFi.persistent(false);
   WiFi.mode(WIFI_AP);
   WiFi.softAP("split-flap-recovery");
   SerialPrint(F("Recovery SoftAP IP: "));
   SerialPrintln(WiFi.softAPIP().toString());
+#endif
 
   webServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
     String html =
@@ -713,7 +733,23 @@ void setup() {
       request->send(200, "text/html", html);
       isPendingReboot = true;
     });
-    
+
+    //Remote recovery trigger (#53). Writes bootCounter = threshold to RTC
+    //so the next boot enters recovery mode (SoftAP or, when WIFI_USE_DIRECT
+    //is compiled in, the hardcoded WiFi). Escape hatch for when an OTA
+    //finishes at the HTTP level but the next boot crashes on something we
+    //can't reach remotely — flipping into recovery gives back a clean,
+    //minimal upload endpoint without pulling the device off the wall.
+    webServer.on("/firmware/recover-mark", HTTP_POST, [](AsyncWebServerRequest * request) {
+      SerialPrintln(F("Remote recovery mark requested — next boot -> recovery mode"));
+      RtcBootState state = readBootStateRtc();
+      state.bootCounter = RECOVERY_BOOT_THRESHOLD;
+      writeBootStateRtc(state);
+      request->send(202, "text/plain", "Recovery marker set; rebooting into recovery mode…");
+      isPendingReboot = true;
+    });
+
+
     //GET /debug/ota — dumps the flash-layout numbers the Update class cares
     //about so we can tell from a browser whether web OTA should work at all.
     webServer.on("/debug/ota", HTTP_GET, [](AsyncWebServerRequest * request) {
