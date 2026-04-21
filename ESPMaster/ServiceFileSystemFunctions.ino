@@ -20,14 +20,15 @@ void initialiseFileSystem() {
 
   if (magic != SETTINGS_MAGIC || ver > SETTINGS_VERSION) {
     SerialPrintln(F("Settings EEPROM blank/stale — initialising with defaults"));
-    writeSettingString(OFF_ALIGNMENT,        LEN_ALIGNMENT,        ALIGNMENT_MODE_LEFT);
-    writeSettingString(OFF_FLAPSPEED,        LEN_FLAPSPEED,        "80");
-    writeSettingString(OFF_DEVICEMODE,       LEN_DEVICEMODE,       DEVICE_MODE_TEXT);
+    writeSettingString(OFF_ALIGNMENT,         LEN_ALIGNMENT,         ALIGNMENT_MODE_LEFT);
+    writeSettingString(OFF_FLAPSPEED,         LEN_FLAPSPEED,         "80");
+    writeSettingString(OFF_DEVICEMODE,        LEN_DEVICEMODE,        DEVICE_MODE_TEXT);
     //Default TZ to CE(S)T so a wipe+reflash yields a correctly-clocked
     //device without needing a web-UI round-trip. Falls through to the
     //compile-time `timezonePosix` const if this slot is ever empty (#53).
-    writeSettingString(OFF_TIMEZONE,         LEN_TIMEZONE,         "CET-1CEST,M3.5.0,M10.5.0/3");
-    writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, "");
+    writeSettingString(OFF_TIMEZONE,          LEN_TIMEZONE,          "CET-1CEST,M3.5.0,M10.5.0/3");
+    writeSettingString(OFF_INTENDED_VERSION,  LEN_INTENDED_VERSION,  "");
+    writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, "");
     writeSettingMagic();
     EEPROM.commit();
   } else if (ver < SETTINGS_VERSION) {
@@ -45,6 +46,10 @@ void initialiseFileSystem() {
     //string (-> "no intended version recorded yet", not an OTA revert
     //false-positive against whatever garbage was in RESERVED_2). See #52.
     if (ver < 3) writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, "");
+    //v3 -> v4: OFF_LAST_FLASH_RESULT carved from former RESERVED_2. Zero
+    //so a fresh post-migration /settings reports lastFlashResult="" (no
+    //prior attempt recorded) rather than garbage. See #53.
+    if (ver < 4) writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, "");
     EEPROM.write(OFF_VERSION, SETTINGS_VERSION);
     EEPROM.commit();
   }
@@ -80,6 +85,17 @@ void saveIntendedVersion(const String& v) {
 }
 String readIntendedVersion() {
   return readSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION);
+}
+
+// Record the outcome of the most recent master-OTA attempt. Written by the
+// boot-time RTC-cookie check: "ok" (new sketchMD5 != pre-flash cookie) or
+// "reverted" (same sketchMD5 post-reboot -> eboot rejected the copy). See #53.
+void saveLastFlashResult(const String& v) {
+  writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, v);
+  EEPROM.commit();
+}
+String readLastFlashResult() {
+  return readSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT);
 }
 
 //Resolve effective POSIX TZ: runtime EEPROM setting wins, else the

@@ -197,16 +197,24 @@ bool isPendingReboot = false;
 bool isPendingUnitsReset = false;
 bool isWifiConfigured = false;
 
-//OTA failure diagnostics (#52). Captured at boot; exposed via /settings so
-//the flasher can tell a silent revert apart from a clean reboot.
-//  lastResetReason    — ESP.getResetReason() at the top of setup()
+//OTA failure diagnostics (#52, extended in #53). Captured at boot; exposed
+//via /settings so the flasher can tell a silent revert apart from a clean
+//reboot.
+//  lastResetReason       — ESP.getResetReason() at the top of setup()
 //  intendedVersionEeprom — GIT_REV we told the device to become via /firmware/master?v=
-//  otaReverted        — true iff intendedVersionEeprom is non-empty AND differs from
-//                       the running GIT_REV (i.e. the upload "took" from the handler's
-//                       perspective but the new image isn't actually running now).
+//  otaReverted           — true iff intendedVersionEeprom is non-empty AND
+//                          differs from the running GIT_REV (i.e. the upload
+//                          "took" from the handler's perspective but the new
+//                          image isn't actually running now).
+//  lastFlashResult       — resolved on boot from the pre-flash RTC cookie:
+//                          "" = no flash attempt pending / unrelated boot,
+//                          "ok" = new sketch MD5 differs from cookie (flash took),
+//                          "reverted" = MD5 matches cookie (eboot rejected the
+//                          staged image). See #53.
 String lastResetReason = "";
 String intendedVersionEeprom = "";
 bool otaReverted = false;
+String lastFlashResult = "";
 
 //Set by POST /stop to break out of the wait loop inside showMessage() when
 //a unit gets physically stuck and its status byte pegs at "rotating"
@@ -220,11 +228,22 @@ volatile bool abortCurrentShow = false;
 //counter reaches RECOVERY_BOOT_THRESHOLD, the device skips the main app and
 //brings up a minimal "split-flap-recovery" SoftAP that only accepts a master
 //firmware upload.
+//Layout extended in #53: preFlashSketchMd5 is a 32-hex-char + NUL + pad
+//cookie written by the OTA upload handler just before ESP.restart(). On
+//next boot we read it back and compare to the running ESP.getSketchMD5();
+//a match means eboot silently reverted the staged image. Size rounded to
+//a multiple of 4 so rtcUserMemoryRead/Write remain block-aligned.
+#define PRE_FLASH_MD5_LEN 36
 struct RtcBootState {
   uint32_t magic;
   uint32_t bootCounter;
+  char     preFlashSketchMd5[PRE_FLASH_MD5_LEN];
 };
-static const uint32_t RTC_BOOT_MAGIC = 0xC0FFEE42UL;
+//Magic bumped to V2 when the struct gained preFlashSketchMd5 (#53). Old
+//firmware's RTC state (magic 0xC0FFEE42) no longer matches, so
+//readBootStateRtc() zero-inits the whole struct — correct, because we
+//can't trust the extra bytes sitting past where the old firmware wrote.
+static const uint32_t RTC_BOOT_MAGIC = 0xC0FFEE43UL;
 static const uint32_t RTC_BOOT_OFFSET_BLOCKS = 0;
 static const uint32_t RECOVERY_BOOT_THRESHOLD = 3;
 static const unsigned long HEALTHY_BOOT_MS = 30000UL;
@@ -251,17 +270,18 @@ AsyncWiFiManager wifiManager(&webServer, &dnsServer);
 bool isPendingWifiReset = false;
 #endif
 
-//Read boot state from RTC user memory. Returns a zeroed state if the magic
-//doesn't match (fresh power-on, corruption, or the ESP8266 core has been
-//using the block for something else).
+//Read boot state from RTC user memory. Returns a fully-zeroed state with a
+//fresh magic if the stored magic doesn't match (cold power-on, corruption,
+//ESP8266 core using the block for something else, or a firmware upgrade
+//that bumped the magic — see #53).
 RtcBootState readBootStateRtc() {
   RtcBootState state;
   ESP.rtcUserMemoryRead(RTC_BOOT_OFFSET_BLOCKS,
                         reinterpret_cast<uint32_t*>(&state),
                         sizeof(state));
   if (state.magic != RTC_BOOT_MAGIC) {
+    memset(&state, 0, sizeof(state));
     state.magic = RTC_BOOT_MAGIC;
-    state.bootCounter = 0;
   }
   return state;
 }
@@ -273,7 +293,24 @@ void writeBootStateRtc(RtcBootState state) {
 }
 
 void clearBootCounterRtc() {
-  writeBootStateRtc({RTC_BOOT_MAGIC, 0});
+  RtcBootState state = readBootStateRtc();
+  state.bootCounter = 0;
+  writeBootStateRtc(state);
+}
+
+//Set the pre-flash cookie used by the boot-time revert detector (#53).
+//Called from the /firmware/master success path just before ESP.restart().
+//Caller passes the *current* ESP.getSketchMD5() so that, after reboot,
+//setup() can compare: if the running MD5 still matches this cookie, the
+//new image didn't take (eboot silently reverted). RTC memory survives
+//a warm restart, which is exactly the eboot-revert failure path.
+void setPreFlashCookieRtc(const String& sketchMd5) {
+  RtcBootState state = readBootStateRtc();
+  size_t copy = sketchMd5.length();
+  if (copy >= PRE_FLASH_MD5_LEN) copy = PRE_FLASH_MD5_LEN - 1;
+  memcpy(state.preFlashSketchMd5, sketchMd5.c_str(), copy);
+  state.preFlashSketchMd5[copy] = '\0';
+  writeBootStateRtc(state);
 }
 
 //Registers POST /firmware/master. Shared between main mode and recovery mode
@@ -304,6 +341,11 @@ void registerMasterFirmwareEndpoint() {
         //Single source of truth: reboot only when the updater considers the
         //image committed AND no error was latched along the way.
         request->send(200, "text/plain", "Master firmware flashed; rebooting…");
+        //Stash the *current* running sketch MD5 in RTC memory as a "pre-flash
+        //cookie". On next boot, if the running MD5 still matches this cookie,
+        //the new image didn't take (eboot silently reverted) and the boot
+        //code will record lastFlashResult="reverted" in EEPROM. See #53.
+        setPreFlashCookieRtc(ESP.getSketchMD5());
         //A fresh firmware should start with a clean boot counter — otherwise
         //the very first post-flash boot could tip us back into recovery.
         clearBootCounterRtc();
@@ -518,6 +560,32 @@ void setup() {
     //the web UI) takes effect on this boot's configTime() call. Issue #48.
     initialiseFileSystem();
     loadValuesFromFileSystem();
+
+    //Pre-flash RTC cookie check (#53). If the OTA handler stashed the
+    //pre-reboot sketch MD5 in RTC, we resolve the outcome here:
+    //   cookie present AND running MD5 == cookie  -> eboot REVERTED
+    //   cookie present AND running MD5 != cookie  -> flash OK
+    //Write the verdict to EEPROM so /settings can surface it even after
+    //another reboot, then clear the cookie so a later unrelated warm
+    //reboot doesn't re-trigger the check.
+    RtcBootState bootStateNow = readBootStateRtc();
+    if (bootStateNow.preFlashSketchMd5[0] != '\0') {
+      String runningMd5 = ESP.getSketchMD5();
+      bool reverted = (runningMd5 == bootStateNow.preFlashSketchMd5);
+      SerialPrint(F("Pre-flash cookie resolved: "));
+      SerialPrint(reverted ? F("reverted") : F("ok"));
+      SerialPrint(F(" (cookie="));
+      SerialPrint(bootStateNow.preFlashSketchMd5);
+      SerialPrint(F(", running="));
+      SerialPrint(runningMd5);
+      SerialPrintln(F(")"));
+      saveLastFlashResult(reverted ? "reverted" : "ok");
+      memset(bootStateNow.preFlashSketchMd5, 0, PRE_FLASH_MD5_LEN);
+      writeBootStateRtc(bootStateNow);
+    }
+    //Load the most-recent resolved result (may be "" if no flash has ever
+    //happened on this EEPROM blob) for /settings.
+    lastFlashResult = readLastFlashResult();
 
     //OTA revert detection (#52). If the last `/firmware/master` call
     //persisted an intended GIT_REV and we're now running a *different* rev,
@@ -1190,6 +1258,7 @@ String getCurrentSettingValues() {
   //cached by core on first call) — unambiguous identity check independent
   //of GIT_REV strings, added in #53.
   out += F(",\"sketchMd5\":");                       appendJsonString(out, ESP.getSketchMD5());
+  out += F(",\"lastFlashResult\":");                 appendJsonString(out, lastFlashResult);
   out += F(",\"intendedVersion\":");                 appendJsonString(out, intendedVersionEeprom);
   out += F(",\"otaReverted\":");                     out += (otaReverted ? F("true") : F("false"));
   out += F(",\"lastResetReason\":");                 appendJsonString(out, lastResetReason);

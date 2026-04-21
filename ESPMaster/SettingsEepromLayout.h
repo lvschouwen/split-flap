@@ -8,14 +8,17 @@
 // Layout (all strings are null-terminated, zero-padded to their slot):
 //   offset size   field
 //   0      4      MAGIC (0x5F1A70BE) - "has the blob been written"
-//   4      1      VERSION (3) - bump + migrate on struct changes
+//   4      1      VERSION (4) - bump + migrate on struct changes
 //   5      20     RESERVED (formerly countdownToDateUnix, removed with #26)
 //   25     8      alignment ("left"/"center"/"right")
 //   33     4      flapSpeed (decimal int)
 //   37     20     deviceMode
 //   57     40     timezonePosix (POSIX TZ string; empty -> UTC) - added in v2 (#48)
 //   97     24     intendedVersion (GIT_REV of most-recently-uploaded firmware) - v3 (#52)
-//   121    1911   RESERVED (formerly scheduledMessages JSON, removed with #38)
+//   121    16     lastFlashResult ("" / "ok" / "reverted") - set on boot when an
+//                 RTC-cookie flash attempt is resolved; exposed in /settings so
+//                 remote flashers can spot a silent eboot revert - v4 (#53)
+//   137    1895   RESERVED (formerly scheduledMessages JSON, removed with #38)
 //   2032            end of blob
 //
 // Reserved slots keep existing EEPROM blobs (same SETTINGS_VERSION) valid —
@@ -29,7 +32,7 @@
 
 #define SETTINGS_EEPROM_SIZE      2048
 #define SETTINGS_MAGIC            0x5F1A70BEUL
-#define SETTINGS_VERSION          3
+#define SETTINGS_VERSION          4
 
 #define OFF_MAGIC                 0
 #define OFF_VERSION               4
@@ -45,8 +48,10 @@
 #define LEN_TIMEZONE              40
 #define OFF_INTENDED_VERSION      97
 #define LEN_INTENDED_VERSION      24
-#define OFF_RESERVED_2            121
-#define LEN_RESERVED_2            1911
+#define OFF_LAST_FLASH_RESULT     121
+#define LEN_LAST_FLASH_RESULT     16
+#define OFF_RESERVED_2            137
+#define LEN_RESERVED_2            1895
 
 inline String readSettingString(int offset, int maxLen) {
   String out;

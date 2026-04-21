@@ -44,18 +44,25 @@ void tearDown() {}
 static void test_layout_slots_are_contiguous_and_non_overlapping() {
   TEST_ASSERT_EQUAL_INT(4, OFF_VERSION - OFF_MAGIC);
   TEST_ASSERT_EQUAL_INT(1, OFF_RESERVED_1 - OFF_VERSION);
-  TEST_ASSERT_EQUAL_INT(LEN_RESERVED_1,        OFF_ALIGNMENT         - OFF_RESERVED_1);
-  TEST_ASSERT_EQUAL_INT(LEN_ALIGNMENT,         OFF_FLAPSPEED         - OFF_ALIGNMENT);
-  TEST_ASSERT_EQUAL_INT(LEN_FLAPSPEED,         OFF_DEVICEMODE        - OFF_FLAPSPEED);
-  TEST_ASSERT_EQUAL_INT(LEN_DEVICEMODE,        OFF_TIMEZONE          - OFF_DEVICEMODE);
-  TEST_ASSERT_EQUAL_INT(LEN_TIMEZONE,          OFF_INTENDED_VERSION  - OFF_TIMEZONE);
-  TEST_ASSERT_EQUAL_INT(LEN_INTENDED_VERSION,  OFF_RESERVED_2        - OFF_INTENDED_VERSION);
+  TEST_ASSERT_EQUAL_INT(LEN_RESERVED_1,        OFF_ALIGNMENT          - OFF_RESERVED_1);
+  TEST_ASSERT_EQUAL_INT(LEN_ALIGNMENT,         OFF_FLAPSPEED          - OFF_ALIGNMENT);
+  TEST_ASSERT_EQUAL_INT(LEN_FLAPSPEED,         OFF_DEVICEMODE         - OFF_FLAPSPEED);
+  TEST_ASSERT_EQUAL_INT(LEN_DEVICEMODE,        OFF_TIMEZONE           - OFF_DEVICEMODE);
+  TEST_ASSERT_EQUAL_INT(LEN_TIMEZONE,          OFF_INTENDED_VERSION   - OFF_TIMEZONE);
+  TEST_ASSERT_EQUAL_INT(LEN_INTENDED_VERSION,  OFF_LAST_FLASH_RESULT  - OFF_INTENDED_VERSION);
+  TEST_ASSERT_EQUAL_INT(LEN_LAST_FLASH_RESULT, OFF_RESERVED_2         - OFF_LAST_FLASH_RESULT);
 }
 
-static void test_settings_version_is_3() {
+static void test_settings_version_is_4() {
   // Locks the current schema version so a migration addition without a
   // version bump trips here.
-  TEST_ASSERT_EQUAL_INT(3, SETTINGS_VERSION);
+  TEST_ASSERT_EQUAL_INT(4, SETTINGS_VERSION);
+}
+
+static void test_last_flash_result_slot_fits_known_values() {
+  // "reverted" is the longest value we emit (8 chars + NUL = 9). Leave
+  // headroom for future labels like "upload-aborted" (15+NUL).
+  TEST_ASSERT_GREATER_OR_EQUAL_INT(16, LEN_LAST_FLASH_RESULT);
 }
 
 static void test_intended_version_slot_fits_git_rev_plus_dirty_suffix() {
@@ -156,6 +163,36 @@ static void test_intended_version_empty_after_zero_fill_migration() {
   TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION).c_str());
 }
 
+static void test_last_flash_result_roundtrip() {
+  writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, String("reverted"));
+  TEST_ASSERT_EQUAL_STRING("reverted", readSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT).c_str());
+
+  writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, String("ok"));
+  TEST_ASSERT_EQUAL_STRING("ok", readSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT).c_str());
+}
+
+static void test_last_flash_result_write_does_not_touch_intended_version_or_reserved_2() {
+  // Fence-post: writing the new slot must not spill into the intended-version
+  // slot (ends at OFF_LAST_FLASH_RESULT-1) or the RESERVED_2 region.
+  g_eepromStorage[OFF_LAST_FLASH_RESULT - 1]                         = 0xAB;
+  g_eepromStorage[OFF_LAST_FLASH_RESULT + LEN_LAST_FLASH_RESULT]     = 0xCD;
+
+  writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, String("ok"));
+
+  TEST_ASSERT_EQUAL_UINT8(0xAB, g_eepromStorage[OFF_LAST_FLASH_RESULT - 1]);
+  TEST_ASSERT_EQUAL_UINT8(0xCD, g_eepromStorage[OFF_LAST_FLASH_RESULT + LEN_LAST_FLASH_RESULT]);
+}
+
+static void test_last_flash_result_empty_after_zero_fill_migration() {
+  // v3 -> v4 migration zeros the new slot. Same check pattern as the
+  // v2 -> v3 intended-version migration above.
+  for (int i = 0; i < LEN_LAST_FLASH_RESULT; i++) {
+    g_eepromStorage[OFF_LAST_FLASH_RESULT + i] = 0xFF;
+  }
+  writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, String(""));
+  TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT).c_str());
+}
+
 // --- migration -----------------------------------------------------------
 
 static void test_timezone_slot_fits_longest_common_posix_tz() {
@@ -191,8 +228,9 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_layout_slots_are_contiguous_and_non_overlapping);
   RUN_TEST(test_layout_fits_in_configured_eeprom_size);
-  RUN_TEST(test_settings_version_is_3);
+  RUN_TEST(test_settings_version_is_4);
   RUN_TEST(test_intended_version_slot_fits_git_rev_plus_dirty_suffix);
+  RUN_TEST(test_last_flash_result_slot_fits_known_values);
   RUN_TEST(test_fresh_eeprom_reads_as_unset_magic);
   RUN_TEST(test_writeSettingMagic_sets_magic_and_version);
   RUN_TEST(test_stale_magic_is_not_accepted);
@@ -202,6 +240,9 @@ int main(int, char**) {
   RUN_TEST(test_all_slots_roundtrip_independently);
   RUN_TEST(test_intended_version_write_does_not_touch_timezone_or_reserved_2);
   RUN_TEST(test_intended_version_empty_after_zero_fill_migration);
+  RUN_TEST(test_last_flash_result_roundtrip);
+  RUN_TEST(test_last_flash_result_write_does_not_touch_intended_version_or_reserved_2);
+  RUN_TEST(test_last_flash_result_empty_after_zero_fill_migration);
   RUN_TEST(test_timezone_slot_fits_longest_common_posix_tz);
   RUN_TEST(test_readSettingString_stops_at_NUL);
   RUN_TEST(test_writeSettingString_does_not_touch_neighbouring_slots);
