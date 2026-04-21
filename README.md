@@ -204,15 +204,9 @@ cp ESPMaster/WifiCredentials.h.example ESPMaster/WifiCredentials.h
 
 The template sets the expected `wifiDirectSsid` / `wifiDirectPassword` globals; the real file is in `.gitignore`. If `WIFI_USE_DIRECT` is `true` but `WifiCredentials.h` is missing, the build still compiles (with a warning) — it just won't join a network.
 
-For the clock mode, set `timezonePosix` in `ESPMaster.ino` to a POSIX TZ string. Common examples:
+For the clock mode, set the timezone from the **web UI → General card → Timezone dropdown**. The selection is persisted to EEPROM and applied immediately without reboot. The compile-time `timezonePosix` in `ESPMaster.ino` is kept only as a build-time default for the first boot on a fresh EEPROM.
 
-| Region | POSIX TZ |
-| --- | --- |
-| UK (Europe/London) | `GMT0BST,M3.5.0/1,M10.5.0` |
-| Central Europe | `CET-1CEST,M3.5.0,M10.5.0/3` |
-| US Eastern | `EST5EDT,M3.2.0,M11.1.0` |
-
-Full list: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
+Dropdown covers common zones (Europe, Americas, Asia, Oceania). If you need a zone that isn't listed, edit `TIMEZONE_OPTIONS` in `ESPMaster/data/script.js` and re-upload. POSIX TZ strings sourced from: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
 
 `clockFormat` uses [`strftime(3)`](https://en.cppreference.com/w/c/chrono/strftime) conversion specifiers (`%H:%M`, `%I:%M%p`, etc).
 

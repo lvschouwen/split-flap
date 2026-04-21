@@ -10,6 +10,27 @@ var timezoneOffset = 0;
 //translateLetterToIndex() which normalizes Unicode umlauts to those ASCII
 //glyphs before lookup, so users can type either form.
 const CALIBRATION_LETTERS = [' ','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z','$','&','#','0','1','2','3','4','5','6','7','8','9',':','.','-','?','!'];
+
+//Curated POSIX TZ strings for the timezone dropdown (issue #48). Kept
+//intentionally short — the ESP-01 serves this page from PROGMEM and the
+//flash budget is tight. Add zones sparingly. Strings sourced from:
+//https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
+const TIMEZONE_OPTIONS = [
+	{ value: "",                               label: "UTC" },
+	{ value: "GMT0BST,M3.5.0/1,M10.5.0",       label: "Europe/London" },
+	{ value: "CET-1CEST,M3.5.0,M10.5.0/3",     label: "Europe/Amsterdam (CET/CEST)" },
+	{ value: "EET-2EEST,M3.5.0/3,M10.5.0/4",   label: "Europe/Helsinki (EET/EEST)" },
+	{ value: "EST5EDT,M3.2.0,M11.1.0",         label: "America/New_York" },
+	{ value: "CST6CDT,M3.2.0,M11.1.0",         label: "America/Chicago" },
+	{ value: "MST7MDT,M3.2.0,M11.1.0",         label: "America/Denver" },
+	{ value: "PST8PDT,M3.2.0,M11.1.0",         label: "America/Los_Angeles" },
+	{ value: "<-03>3",                         label: "America/Sao_Paulo" },
+	{ value: "JST-9",                          label: "Asia/Tokyo" },
+	{ value: "CST-8",                          label: "Asia/Shanghai" },
+	{ value: "IST-5:30",                       label: "Asia/Kolkata" },
+	{ value: "<+04>-4",                        label: "Asia/Dubai" },
+	{ value: "AEST-10AEDT,M10.1.0,M4.1.0/3",   label: "Australia/Sydney" }
+];
 const CALIBRATION_STEPS_PER_FLAP = 2038 / 45;
 var calibrationUnits = [];  //[{address, versionStatus}]
 
@@ -73,6 +94,8 @@ function loadPage() {
 		setSpeed("80");
 		setSavedMode("text");
 		setAlignment("left");
+		populateTimezoneOptions();
+		setTimezone("");
 		setVersion("Development")
 		setUnitCount(10, 3);
 		setLastReceivedMessage(new Date().toLocaleString());
@@ -99,6 +122,8 @@ function loadPage() {
 				setSpeed(responseObject.flapSpeed);
 				setSavedMode(responseObject.deviceMode);
 				setAlignment(responseObject.alignment);
+				populateTimezoneOptions();
+				setTimezone(responseObject.timezonePosix || "");
 				setVersion(responseObject.version);
 				setUnitCount(responseObject.unitCount, responseObject.detectedUnitCount);
 				setLastReceivedMessage(responseObject.lastTimeReceivedMessageDateTime);
@@ -204,6 +229,38 @@ function setDeviceModeTab(mode) {
 function setSpeed(speed) {
 	document.getElementById("rangeFlapSpeedValue").innerHTML = speed + " %";
 	document.getElementById("rangeFlapSpeed").value = speed;
+}
+
+//Builds the timezone <select> options once from TIMEZONE_OPTIONS. Idempotent
+//so loadPage() can safely call it on every refresh.
+function populateTimezoneOptions() {
+	var select = document.getElementById("selectTimezone");
+	if (!select || select.children.length > 0) return;
+	TIMEZONE_OPTIONS.forEach(function(tz) {
+		var opt = document.createElement("option");
+		opt.value = tz.value;
+		opt.textContent = tz.label;
+		select.appendChild(opt);
+	});
+}
+
+//Selects the POSIX TZ currently persisted on the master. If the stored
+//value isn't in our dropdown (e.g. set via a compile-time `timezonePosix`
+//fallback, or ported from an older firmware), we surface it as a disabled
+//"Custom" option so the user sees what's live without losing it on submit.
+function setTimezone(tz) {
+	var select = document.getElementById("selectTimezone");
+	if (!select) return;
+	var match = Array.prototype.find.call(select.options, function(opt) { return opt.value === tz; });
+	if (match) {
+		select.value = tz;
+		return;
+	}
+	var custom = document.createElement("option");
+	custom.value = tz;
+	custom.textContent = "Custom: " + tz;
+	select.insertBefore(custom, select.firstChild);
+	select.value = tz;
 }
 
 //Sets alignment by checking corresponding radio button

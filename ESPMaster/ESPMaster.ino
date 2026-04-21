@@ -78,6 +78,8 @@
 #include <WiFiUdp.h>
 #include <Wire.h>
 #include "ESPMaster.h"
+#include <EEPROM.h>
+#include "SettingsEepromLayout.h"
 #include "HelpersSerialHandling.h"
 #include "WebAssets.h"
 #include "BuildVersion.h"
@@ -106,7 +108,8 @@
   const char* wifiDirectPassword = "";
 #endif
 
-// timezonePosix: POSIX TZ string for the local timezone. Leave empty for UTC.
+// timezonePosix: build-time DEFAULT POSIX TZ string. Overridden at runtime
+// by the web UI setting (persisted to EEPROM). Leave empty for UTC.
 // Examples:
 //   "CET-1CEST,M3.5.0,M10.5.0/3"  Central European Time with DST
 //   "GMT0BST,M3.5.0/1,M10.5.0"    UK (Europe/London)
@@ -165,6 +168,7 @@ const char* PARAM_ALIGNMENT = "alignment";
 const char* PARAM_FLAP_SPEED = "flapSpeed";
 const char* PARAM_DEVICEMODE = "deviceMode";
 const char* PARAM_INPUT_TEXT = "inputText";
+const char* PARAM_TIMEZONE   = "timezone";
 
 //Device Modes
 const char* DEVICE_MODE_TEXT = "text";
@@ -180,6 +184,10 @@ String alignment = "";
 String flapSpeed = "";
 String inputText = "";
 String deviceMode = "";
+//Runtime POSIX TZ string (web-UI setting, persisted to EEPROM). Empty falls
+//back to compile-time `timezonePosix`, which in turn falls back to "UTC0".
+//Issue #48.
+String timezonePosixSetting = "";
 String lastWrittenText = "";
 String lastReceivedMessageDateTime = "";
 bool alignmentUpdated = false;
@@ -473,16 +481,13 @@ void setup() {
   //wifiManager.resetSettings();
 
   if (isWifiConfigured && !isPendingReboot) {
-    //Time sync via ESP8266 core + libc time.h
-    const char* tz  = (strlen(timezonePosix) > 0) ? timezonePosix : "UTC0";
-    const char* ntp = (strlen(timezoneServer) > 0) ? timezoneServer : "pool.ntp.org";
-    configTime(tz, ntp);
+    //Load persisted settings first so the runtime timezone (if set via
+    //the web UI) takes effect on this boot's configTime() call. Issue #48.
+    initialiseFileSystem();
+    loadValuesFromFileSystem();
 
-    SerialPrint(F("Waiting for NTP sync (tz="));
-    SerialPrint(tz);
-    SerialPrint(F(", server="));
-    SerialPrint(ntp);
-    SerialPrintln(F(")"));
+    //Time sync via ESP8266 core + libc time.h
+    applyTimezoneAndNtp();
 
     time_t nowSec = 0;
     for (int i = 0; i < 100 && nowSec < 1000000000L; i++) {
@@ -492,10 +497,6 @@ void setup() {
 
     SerialPrint(F("Current time: "));
     SerialPrintln(formatDateTime("%Y-%m-%d %H:%M:%S"));
-    
-    //Load various variables
-    initialiseFileSystem();
-    loadValuesFromFileSystem();
 
     //Re-scan the I2C bus now that WiFi/NTP are up and any early-boot
     //auto-install has settled. This refreshes /settings with the final
@@ -802,7 +803,8 @@ void setup() {
 
       bool submissionError = false;
 
-      String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue;
+      String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue, newTimezoneValue;
+      bool timezoneProvided = false;
 
       int params = request->params();
       for (int paramIndex = 0; paramIndex < params; paramIndex++) {
@@ -841,6 +843,26 @@ void setup() {
           if (p->name() == PARAM_INPUT_TEXT) {
             newInputTextValue = p->value().c_str();
           }
+
+          //HTTP POST timezone POSIX TZ string (issue #48).
+          //Accept empty (= UTC fallback) or a printable-ASCII string
+          //short enough to fit the EEPROM slot; anything longer/weirder
+          //is rejected rather than silently truncated.
+          if (p->name() == PARAM_TIMEZONE) {
+            String receivedValue = p->value();
+            bool valid = (int)receivedValue.length() < LEN_TIMEZONE;
+            for (size_t i = 0; valid && i < receivedValue.length(); i++) {
+              char c = receivedValue[i];
+              if (c < 0x20 || c > 0x7E) valid = false;
+            }
+            if (valid) {
+              newTimezoneValue = receivedValue;
+              timezoneProvided = true;
+            } else {
+              SerialPrintln("Timezone provided was not valid. Value: " + receivedValue);
+              submissionError = true;
+            }
+          }
         }
       }
 
@@ -877,6 +899,16 @@ void setup() {
 
           saveDeviceMode();
           SerialPrintln("Device Mode Set: " + deviceMode);
+        }
+
+        //Only if a new timezone value was submitted and it changed.
+        //Re-apply configTime() so the clock picks up the new zone on
+        //its next tick — no reboot required. Issue #48.
+        if (timezoneProvided && timezonePosixSetting != newTimezoneValue) {
+          timezonePosixSetting = newTimezoneValue;
+          saveTimezone();
+          applyTimezoneAndNtp();
+          SerialPrintln("Timezone Updated: " + (timezonePosixSetting.length() ? timezonePosixSetting : String("(default)")));
         }
 
         //Only if we are showing text
@@ -1101,6 +1133,7 @@ String getCurrentSettingValues() {
   out += F(",\"alignment\":");                       appendJsonString(out, alignment);
   out += F(",\"flapSpeed\":");                       appendJsonString(out, flapSpeed);
   out += F(",\"deviceMode\":");                      appendJsonString(out, deviceMode);
+  out += F(",\"timezonePosix\":");                   appendJsonString(out, timezonePosixSetting);
   out += F(",\"version\":");                         appendJsonString(out, String(espVersion));
   out += F(",\"lastTimeReceivedMessageDateTime\":"); appendJsonString(out, lastReceivedMessageDateTime);
   out += F(",\"lastWrittenText\":");                 appendJsonString(out, lastWrittenText);

@@ -8,16 +8,19 @@
 // Layout (all strings are null-terminated, zero-padded to their slot):
 //   offset size   field
 //   0      4      MAGIC (0x5F1A70BE) - "has the blob been written"
-//   4      1      VERSION (1) - bump + migrate on struct changes
+//   4      1      VERSION (2) - bump + migrate on struct changes
 //   5      20     RESERVED (formerly countdownToDateUnix, removed with #26)
 //   25     8      alignment ("left"/"center"/"right")
 //   33     4      flapSpeed (decimal int)
 //   37     20     deviceMode
-//   57     1975   RESERVED (formerly scheduledMessages JSON, removed with #38)
+//   57     40     timezonePosix (POSIX TZ string; empty -> UTC) - added in v2 (#48)
+//   97     1935   RESERVED (formerly scheduledMessages JSON, removed with #38)
 //   2032            end of blob
 //
 // Reserved slots keep existing EEPROM blobs (same SETTINGS_VERSION) valid —
-// no migration required when features are removed.
+// no migration required when features are removed. When a new slot is
+// carved from a RESERVED region, bump SETTINGS_VERSION and handle the
+// migration in initialiseFileSystem().
 
 #pragma once
 
@@ -25,7 +28,7 @@
 
 #define SETTINGS_EEPROM_SIZE      2048
 #define SETTINGS_MAGIC            0x5F1A70BEUL
-#define SETTINGS_VERSION          1
+#define SETTINGS_VERSION          2
 
 #define OFF_MAGIC                 0
 #define OFF_VERSION               4
@@ -37,8 +40,10 @@
 #define LEN_FLAPSPEED             4
 #define OFF_DEVICEMODE            37
 #define LEN_DEVICEMODE            20
-#define OFF_RESERVED_2            57
-#define LEN_RESERVED_2            1975
+#define OFF_TIMEZONE              57
+#define LEN_TIMEZONE              40
+#define OFF_RESERVED_2            97
+#define LEN_RESERVED_2            1935
 
 inline String readSettingString(int offset, int maxLen) {
   String out;

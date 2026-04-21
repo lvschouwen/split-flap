@@ -47,7 +47,8 @@ static void test_layout_slots_are_contiguous_and_non_overlapping() {
   TEST_ASSERT_EQUAL_INT(LEN_RESERVED_1, OFF_ALIGNMENT  - OFF_RESERVED_1);
   TEST_ASSERT_EQUAL_INT(LEN_ALIGNMENT,  OFF_FLAPSPEED  - OFF_ALIGNMENT);
   TEST_ASSERT_EQUAL_INT(LEN_FLAPSPEED,  OFF_DEVICEMODE - OFF_FLAPSPEED);
-  TEST_ASSERT_EQUAL_INT(LEN_DEVICEMODE, OFF_RESERVED_2 - OFF_DEVICEMODE);
+  TEST_ASSERT_EQUAL_INT(LEN_DEVICEMODE, OFF_TIMEZONE   - OFF_DEVICEMODE);
+  TEST_ASSERT_EQUAL_INT(LEN_TIMEZONE,   OFF_RESERVED_2 - OFF_TIMEZONE);
 }
 
 static void test_layout_fits_in_configured_eeprom_size() {
@@ -107,10 +108,21 @@ static void test_all_slots_roundtrip_independently() {
   writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  String("right"));
   writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  String("80"));
   writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, String("clock"));
+  writeSettingString(OFF_TIMEZONE,   LEN_TIMEZONE,   String("CET-1CEST,M3.5.0,M10.5.0/3"));
 
-  TEST_ASSERT_EQUAL_STRING("right",      readSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT).c_str());
-  TEST_ASSERT_EQUAL_STRING("80",         readSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED).c_str());
-  TEST_ASSERT_EQUAL_STRING("clock",      readSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE).c_str());
+  TEST_ASSERT_EQUAL_STRING("right",                       readSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT).c_str());
+  TEST_ASSERT_EQUAL_STRING("80",                          readSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED).c_str());
+  TEST_ASSERT_EQUAL_STRING("clock",                       readSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE).c_str());
+  TEST_ASSERT_EQUAL_STRING("CET-1CEST,M3.5.0,M10.5.0/3",  readSettingString(OFF_TIMEZONE,   LEN_TIMEZONE).c_str());
+}
+
+// --- migration -----------------------------------------------------------
+
+static void test_timezone_slot_fits_longest_common_posix_tz() {
+  // Check the longest POSIX TZ string we plan to ship in the dropdown.
+  // Sydney is the longest at ~28 chars: "AEST-10AEDT,M10.1.0,M4.1.0/3"
+  const char* sydney = "AEST-10AEDT,M10.1.0,M4.1.0/3";
+  TEST_ASSERT_TRUE(strlen(sydney) + 1 <= LEN_TIMEZONE);
 }
 
 static void test_readSettingString_stops_at_NUL() {
@@ -146,6 +158,7 @@ int main(int, char**) {
   RUN_TEST(test_writeSettingString_pads_remainder_with_NUL);
   RUN_TEST(test_writeSettingString_truncates_overlong_input);
   RUN_TEST(test_all_slots_roundtrip_independently);
+  RUN_TEST(test_timezone_slot_fits_longest_common_posix_tz);
   RUN_TEST(test_readSettingString_stops_at_NUL);
   RUN_TEST(test_writeSettingString_does_not_touch_neighbouring_slots);
   return UNITY_END();
