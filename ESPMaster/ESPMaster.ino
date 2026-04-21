@@ -258,6 +258,16 @@ static bool otaRejected = false;
 static int otaRejectionStatus = 0;
 static String otaRejectionReason;
 
+//WiFi TX power management during OTA upload (#60). ESP-01 has no onboard
+//regulator; simultaneous WiFi RX + flash writes can sag VCC below brownout
+//and corrupt the staged image. Dropping TX power for the upload phase
+//reduces peak current without breaking LAN connectivity (10 dBm ≈ 10 mW,
+//still plenty for same-LAN / same-router reach). Does NOT help the eboot
+//copy-at-boot phase — that runs with no WiFi active.
+static bool otaTxPowerReduced = false;
+static constexpr float OTA_TX_POWER_DBM = 10.0f;
+static constexpr float DEFAULT_TX_POWER_DBM = 20.5f;
+
 //Create AsyncWebServer object on port 80
 AsyncWebServer webServer(80);
 
@@ -320,6 +330,14 @@ void setPreFlashCookieRtc(const String& sketchMd5) {
 void registerMasterFirmwareEndpoint() {
   webServer.on("/firmware/master", HTTP_POST,
     [](AsyncWebServerRequest * request) {
+      //Restore TX power on every exit path. Upload handler dropped it for
+      //the write storm (#60). On the success path we reboot anyway, so
+      //this is moot there, but restoring before we send the 200 gives the
+      //response the best chance of reaching the client.
+      if (otaTxPowerReduced) {
+        WiFi.setOutputPower(DEFAULT_TX_POWER_DBM);
+        otaTxPowerReduced = false;
+      }
       if (otaRejected) {
         int status = otaRejectionStatus;
         String reason = otaRejectionReason;
@@ -357,6 +375,14 @@ void registerMasterFirmwareEndpoint() {
         otaRejected = false;
         otaRejectionStatus = 0;
         otaRejectionReason = String();
+
+        //Reduce WiFi TX before we start writing flash (#60). Restored in
+        //the request handler on every exit path.
+        WiFi.setOutputPower(OTA_TX_POWER_DBM);
+        otaTxPowerReduced = true;
+        SerialPrint(F("WiFi TX reduced to "));
+        SerialPrint(OTA_TX_POWER_DBM);
+        SerialPrintln(F(" dBm for OTA upload"));
 
         uint32_t freeSpace = ESP.getFreeSketchSpace();
         uint32_t maxSketchSpace = (freeSpace - 0x1000) & 0xFFFFF000;
