@@ -44,11 +44,25 @@ void tearDown() {}
 static void test_layout_slots_are_contiguous_and_non_overlapping() {
   TEST_ASSERT_EQUAL_INT(4, OFF_VERSION - OFF_MAGIC);
   TEST_ASSERT_EQUAL_INT(1, OFF_RESERVED_1 - OFF_VERSION);
-  TEST_ASSERT_EQUAL_INT(LEN_RESERVED_1, OFF_ALIGNMENT  - OFF_RESERVED_1);
-  TEST_ASSERT_EQUAL_INT(LEN_ALIGNMENT,  OFF_FLAPSPEED  - OFF_ALIGNMENT);
-  TEST_ASSERT_EQUAL_INT(LEN_FLAPSPEED,  OFF_DEVICEMODE - OFF_FLAPSPEED);
-  TEST_ASSERT_EQUAL_INT(LEN_DEVICEMODE, OFF_TIMEZONE   - OFF_DEVICEMODE);
-  TEST_ASSERT_EQUAL_INT(LEN_TIMEZONE,   OFF_RESERVED_2 - OFF_TIMEZONE);
+  TEST_ASSERT_EQUAL_INT(LEN_RESERVED_1,        OFF_ALIGNMENT         - OFF_RESERVED_1);
+  TEST_ASSERT_EQUAL_INT(LEN_ALIGNMENT,         OFF_FLAPSPEED         - OFF_ALIGNMENT);
+  TEST_ASSERT_EQUAL_INT(LEN_FLAPSPEED,         OFF_DEVICEMODE        - OFF_FLAPSPEED);
+  TEST_ASSERT_EQUAL_INT(LEN_DEVICEMODE,        OFF_TIMEZONE          - OFF_DEVICEMODE);
+  TEST_ASSERT_EQUAL_INT(LEN_TIMEZONE,          OFF_INTENDED_VERSION  - OFF_TIMEZONE);
+  TEST_ASSERT_EQUAL_INT(LEN_INTENDED_VERSION,  OFF_RESERVED_2        - OFF_INTENDED_VERSION);
+}
+
+static void test_settings_version_is_3() {
+  // Locks the current schema version so a migration addition without a
+  // version bump trips here.
+  TEST_ASSERT_EQUAL_INT(3, SETTINGS_VERSION);
+}
+
+static void test_intended_version_slot_fits_git_rev_plus_dirty_suffix() {
+  // Longest realistic rev string: "<8-hex>-dirty" = 14 chars + NUL = 15.
+  // 24 bytes gives comfortable headroom for longer tags (release names etc.)
+  // while still leaving 0 padding.
+  TEST_ASSERT_GREATER_OR_EQUAL_INT(15, LEN_INTENDED_VERSION);
 }
 
 static void test_layout_fits_in_configured_eeprom_size() {
@@ -105,15 +119,41 @@ static void test_writeSettingString_truncates_overlong_input() {
 }
 
 static void test_all_slots_roundtrip_independently() {
-  writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  String("right"));
-  writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  String("80"));
-  writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, String("clock"));
-  writeSettingString(OFF_TIMEZONE,   LEN_TIMEZONE,   String("CET-1CEST,M3.5.0,M10.5.0/3"));
+  writeSettingString(OFF_ALIGNMENT,        LEN_ALIGNMENT,        String("right"));
+  writeSettingString(OFF_FLAPSPEED,        LEN_FLAPSPEED,        String("80"));
+  writeSettingString(OFF_DEVICEMODE,       LEN_DEVICEMODE,       String("clock"));
+  writeSettingString(OFF_TIMEZONE,         LEN_TIMEZONE,         String("CET-1CEST,M3.5.0,M10.5.0/3"));
+  writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, String("9451352-dirty"));
 
-  TEST_ASSERT_EQUAL_STRING("right",                       readSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT).c_str());
-  TEST_ASSERT_EQUAL_STRING("80",                          readSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED).c_str());
-  TEST_ASSERT_EQUAL_STRING("clock",                       readSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE).c_str());
-  TEST_ASSERT_EQUAL_STRING("CET-1CEST,M3.5.0,M10.5.0/3",  readSettingString(OFF_TIMEZONE,   LEN_TIMEZONE).c_str());
+  TEST_ASSERT_EQUAL_STRING("right",                       readSettingString(OFF_ALIGNMENT,        LEN_ALIGNMENT).c_str());
+  TEST_ASSERT_EQUAL_STRING("80",                          readSettingString(OFF_FLAPSPEED,        LEN_FLAPSPEED).c_str());
+  TEST_ASSERT_EQUAL_STRING("clock",                       readSettingString(OFF_DEVICEMODE,       LEN_DEVICEMODE).c_str());
+  TEST_ASSERT_EQUAL_STRING("CET-1CEST,M3.5.0,M10.5.0/3",  readSettingString(OFF_TIMEZONE,         LEN_TIMEZONE).c_str());
+  TEST_ASSERT_EQUAL_STRING("9451352-dirty",               readSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION).c_str());
+}
+
+static void test_intended_version_write_does_not_touch_timezone_or_reserved_2() {
+  // Fence-post check that the new slot sits cleanly between OFF_TIMEZONE
+  // (end) and OFF_RESERVED_2 (start) without spilling into either.
+  g_eepromStorage[OFF_INTENDED_VERSION - 1] = 0xAB;  // last byte of timezone slot
+  g_eepromStorage[OFF_INTENDED_VERSION + LEN_INTENDED_VERSION] = 0xCD;  // first byte of reserved_2
+
+  writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, String("abc"));
+
+  TEST_ASSERT_EQUAL_UINT8(0xAB, g_eepromStorage[OFF_INTENDED_VERSION - 1]);
+  TEST_ASSERT_EQUAL_UINT8(0xCD, g_eepromStorage[OFF_INTENDED_VERSION + LEN_INTENDED_VERSION]);
+}
+
+static void test_intended_version_empty_after_zero_fill_migration() {
+  // v2 -> v3 migration zeros the new slot. With 0x00 at offset 0,
+  // readSettingString must return an empty string (not whatever trailing
+  // garbage sat in RESERVED_2 before the carve).
+  for (int i = 0; i < LEN_INTENDED_VERSION; i++) {
+    g_eepromStorage[OFF_INTENDED_VERSION + i] = 0xFF;
+  }
+  // Apply the migration step as it's written in ServiceFileSystemFunctions.ino.
+  writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, String(""));
+  TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION).c_str());
 }
 
 // --- migration -----------------------------------------------------------
@@ -151,6 +191,8 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_layout_slots_are_contiguous_and_non_overlapping);
   RUN_TEST(test_layout_fits_in_configured_eeprom_size);
+  RUN_TEST(test_settings_version_is_3);
+  RUN_TEST(test_intended_version_slot_fits_git_rev_plus_dirty_suffix);
   RUN_TEST(test_fresh_eeprom_reads_as_unset_magic);
   RUN_TEST(test_writeSettingMagic_sets_magic_and_version);
   RUN_TEST(test_stale_magic_is_not_accepted);
@@ -158,6 +200,8 @@ int main(int, char**) {
   RUN_TEST(test_writeSettingString_pads_remainder_with_NUL);
   RUN_TEST(test_writeSettingString_truncates_overlong_input);
   RUN_TEST(test_all_slots_roundtrip_independently);
+  RUN_TEST(test_intended_version_write_does_not_touch_timezone_or_reserved_2);
+  RUN_TEST(test_intended_version_empty_after_zero_fill_migration);
   RUN_TEST(test_timezone_slot_fits_longest_common_posix_tz);
   RUN_TEST(test_readSettingString_stops_at_NUL);
   RUN_TEST(test_writeSettingString_does_not_touch_neighbouring_slots);

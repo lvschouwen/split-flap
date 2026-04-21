@@ -195,6 +195,17 @@ bool isPendingReboot = false;
 bool isPendingUnitsReset = false;
 bool isWifiConfigured = false;
 
+//OTA failure diagnostics (#52). Captured at boot; exposed via /settings so
+//the flasher can tell a silent revert apart from a clean reboot.
+//  lastResetReason    — ESP.getResetReason() at the top of setup()
+//  intendedVersionEeprom — GIT_REV we told the device to become via /firmware/master?v=
+//  otaReverted        — true iff intendedVersionEeprom is non-empty AND differs from
+//                       the running GIT_REV (i.e. the upload "took" from the handler's
+//                       perspective but the new image isn't actually running now).
+String lastResetReason = "";
+String intendedVersionEeprom = "";
+bool otaReverted = false;
+
 //Set by POST /stop to break out of the wait loop inside showMessage() when
 //a unit gets physically stuck and its status byte pegs at "rotating"
 //forever. Checked every ~100 ms; cleared at the start of each new
@@ -351,6 +362,18 @@ void registerMasterFirmwareEndpoint() {
           }
           SerialPrint(F("MD5 expected: ")); SerialPrintln(md5);
         }
+        //Record the caller-supplied intended version so we can detect a
+        //silent revert on the next boot. Write unconditionally (empty if
+        //the client didn't pass ?v=) so stale values from an earlier flash
+        //don't linger and cause a false-positive "OTA REVERTED". See #52.
+        String intended;
+        if (request->hasParam("v")) {
+          intended = request->getParam("v")->value();
+        }
+        saveIntendedVersion(intended);
+        SerialPrint(F("Intended version recorded: \""));
+        SerialPrint(intended);
+        SerialPrintln(F("\""));
         SerialPrintln(F("Update.begin ok — streaming chunks"));
       }
       if (otaRejected) return;
@@ -443,6 +466,14 @@ void setup() {
   SerialPrintln(F("..............Split Flap Display Starting.............."));
   SerialPrintln(F("#######################################################"));
 
+  //Capture the reset cause for the PREVIOUS reboot before anything else
+  //can touch the RTC. Reported in /settings so a remote flasher can tell
+  //"Software Watchdog" / "Exception" (crash-revert) apart from "External
+  //System" (clean user-triggered reboot). See #52.
+  lastResetReason = ESP.getResetReason();
+  SerialPrint(F("Last reset reason: "));
+  SerialPrintln(lastResetReason);
+
   //Increment the RTC boot counter before anything else can crash. The main
   //loop will clear it again once HEALTHY_BOOT_MS of uptime proves the sketch
   //is behaving. See issue #37.
@@ -485,6 +516,22 @@ void setup() {
     //the web UI) takes effect on this boot's configTime() call. Issue #48.
     initialiseFileSystem();
     loadValuesFromFileSystem();
+
+    //OTA revert detection (#52). If the last `/firmware/master` call
+    //persisted an intended GIT_REV and we're now running a *different* rev,
+    //the new image was staged but didn't stick (eboot rejected it, or it
+    //crashed fast enough to trip recovery and revert to the prior slot).
+    //Empty intendedVersionEeprom = no flash has happened on this EEPROM
+    //yet -> skip the check, not a false-positive.
+    intendedVersionEeprom = readIntendedVersion();
+    otaReverted = (intendedVersionEeprom.length() > 0 &&
+                   intendedVersionEeprom != String(espVersion));
+    if (otaReverted) {
+      SerialPrint(F("OTA REVERTED: intended="));
+      SerialPrint(intendedVersionEeprom);
+      SerialPrint(F(", running="));
+      SerialPrintln(espVersion);
+    }
 
     //Time sync via ESP8266 core + libc time.h
     applyTimezoneAndNtp();
@@ -1135,6 +1182,13 @@ String getCurrentSettingValues() {
   out += F(",\"deviceMode\":");                      appendJsonString(out, deviceMode);
   out += F(",\"timezonePosix\":");                   appendJsonString(out, timezonePosixSetting);
   out += F(",\"version\":");                         appendJsonString(out, String(espVersion));
+  //OTA failure diagnostics (#52). These four fields let a remote flasher
+  //tell a genuine revert apart from a same-version false-alarm.
+  out += F(",\"intendedVersion\":");                 appendJsonString(out, intendedVersionEeprom);
+  out += F(",\"otaReverted\":");                     out += (otaReverted ? F("true") : F("false"));
+  out += F(",\"lastResetReason\":");                 appendJsonString(out, lastResetReason);
+  out += F(",\"bootCounter\":");                     out += String(readBootStateRtc().bootCounter);
+  out += F(",\"recoveryMode\":");                    out += (isRecoveryMode ? F("true") : F("false"));
   out += F(",\"lastTimeReceivedMessageDateTime\":"); appendJsonString(out, lastReceivedMessageDateTime);
   out += F(",\"lastWrittenText\":");                 appendJsonString(out, lastWrittenText);
 

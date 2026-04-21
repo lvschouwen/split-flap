@@ -20,10 +20,11 @@ void initialiseFileSystem() {
 
   if (magic != SETTINGS_MAGIC || ver > SETTINGS_VERSION) {
     SerialPrintln(F("Settings EEPROM blank/stale — initialising with defaults"));
-    writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  ALIGNMENT_MODE_LEFT);
-    writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  "80");
-    writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, DEVICE_MODE_TEXT);
-    writeSettingString(OFF_TIMEZONE,   LEN_TIMEZONE,   "");
+    writeSettingString(OFF_ALIGNMENT,        LEN_ALIGNMENT,        ALIGNMENT_MODE_LEFT);
+    writeSettingString(OFF_FLAPSPEED,        LEN_FLAPSPEED,        "80");
+    writeSettingString(OFF_DEVICEMODE,       LEN_DEVICEMODE,       DEVICE_MODE_TEXT);
+    writeSettingString(OFF_TIMEZONE,         LEN_TIMEZONE,         "");
+    writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, "");
     writeSettingMagic();
     EEPROM.commit();
   } else if (ver < SETTINGS_VERSION) {
@@ -36,6 +37,11 @@ void initialiseFileSystem() {
     //so readSettingString() returns empty (-> UTC fallback) instead of
     //whatever garbage was left there by earlier firmwares (#48).
     if (ver < 2) writeSettingString(OFF_TIMEZONE, LEN_TIMEZONE, "");
+    //v2 -> v3: OFF_INTENDED_VERSION carved from former RESERVED_2. Zero
+    //the slot so the first post-migration boot compares against an empty
+    //string (-> "no intended version recorded yet", not an OTA revert
+    //false-positive against whatever garbage was in RESERVED_2). See #52.
+    if (ver < 3) writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, "");
     EEPROM.write(OFF_VERSION, SETTINGS_VERSION);
     EEPROM.commit();
   }
@@ -61,6 +67,17 @@ void saveAlignment()    { writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  ali
 void saveFlapSpeed()    { writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  flapSpeed);            EEPROM.commit(); }
 void saveDeviceMode()   { writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, deviceMode);           EEPROM.commit(); }
 void saveTimezone()     { writeSettingString(OFF_TIMEZONE,   LEN_TIMEZONE,   timezonePosixSetting); EEPROM.commit(); }
+
+// Persist the caller-supplied intended version at the start of a master OTA
+// upload. Read back on the next boot to detect a silent revert (image
+// rejected by eboot or crashed fast enough to trip recovery). See #52.
+void saveIntendedVersion(const String& v) {
+  writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, v);
+  EEPROM.commit();
+}
+String readIntendedVersion() {
+  return readSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION);
+}
 
 //Resolve effective POSIX TZ: runtime EEPROM setting wins, else the
 //compile-time `timezonePosix` const, else "UTC0". Called at boot and
