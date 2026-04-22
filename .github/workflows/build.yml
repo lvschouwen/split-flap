@@ -65,8 +65,12 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
-      - name: Run native tests
+      - name: Run ESPMaster native tests
         working-directory: firmware/ESPMaster
+        run: pio test -e native
+
+      - name: Run lib/common native tests
+        working-directory: firmware/lib/common
         run: pio test -e native
 
       - name: Install pytest

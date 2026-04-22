@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-An Arduino-based split-flap display. Firmware built with **PlatformIO** — each sketch has its own `platformio.ini` and builds from the CLI. Host-side unit tests for pure-logic helpers live under `firmware/ESPMaster/test/`. CI in `.github/workflows/build.yml` builds all envs and runs the native tests.
+An Arduino-based split-flap display. Firmware built with **PlatformIO** — each sketch has its own `platformio.ini` and builds from the CLI. Host-side unit tests for pure-logic helpers live under `firmware/ESPMaster/test/` (ESP8266) and `firmware/lib/common/test/` (ESP32 cross-MCU helpers). CI in `.github/workflows/build.yml` builds all envs and runs both native test suites.
 
 **Firmware status (2026-04-22):** `firmware/ESPMaster/` (ESP8266) is **frozen** at tag `v-esp8266-final`. Active firmware development moves to the ESP32-S3 + ESP32-H2 stack on the Master v2 Rev B PCB — `firmware/MasterS3/` and `firmware/MasterH2/` (both in progress). See meta issue #58 for the migration plan and `PCB/MASTER_V2/` for the hardware spec.
 
@@ -14,7 +14,7 @@ Sketches that make up the system:
 
 - **`firmware/MasterS3/`** — *In progress (#58, scaffold landed in #63).* ESP32-S3-WROOM-1-N16R8 firmware on the Master v2 Rev B PCB. Standard PlatformIO layout (`src/main.cpp`, no Arduino preprocessor magic). Uses pioarduino fork of `platform-espressif32` for arduino-esp32 v3.x. USB-CDC on boot. Wokwi config + custom TCA9548A chip live at `firmware/MasterS3/wokwi.toml`, `firmware/MasterS3/diagram.json`, `firmware/MasterS3/chips/tca9548a/`.
 - **`firmware/MasterH2/`** — *In progress (#58, scaffold landed in #63).* ESP32-H2-MINI-1-N4 radio coprocessor firmware. Same pioarduino fork. Single sketch, UART link to S3 lands in Phase 3.
-- **`firmware/lib/common/`** — Shared pure-logic helpers consumed by both ESP32 firmwares + native tests (COBS+CRC, protocol, settings, web log). Empty in Phase 2; populated from Phase 3 onward.
+- **`firmware/lib/common/`** — Shared pure-logic helpers consumed by both ESP32 firmwares + native tests. `config.h` (row/unit topology constants), `cobs_crc.{h,cpp}` (COBS + CRC-16/CCITT-FALSE wire codec), `protocol.{h,cpp}` (PING/PONG/LOG messages, 4-byte big-endian header). Its own PlatformIO project with a `native` env — tests in `firmware/lib/common/test/`, run with `pio test -e native`. Pure C++17, no Arduino deps.
 - **`firmware/ESPMaster/`** — *Frozen at `v-esp8266-final`.* ESP8266 (ESP-01) firmware. Hosts the async web UI (baked into `WebAssets.h` PROGMEM at build time by `build_assets.py` — no filesystem on the device), connects to WiFi (via `ESPAsyncWiFiManager` AP flow or direct credentials from `WifiCredentials.h`), runs the NTP-backed clock logic, and pushes characters out over I2C as the bus master. Entry point is `ESPMaster.ino`; feature areas live in sibling `.ino` files which the Arduino/PlatformIO preprocessor concatenates at build time (`ServiceFlapFunctions`, `ServiceWifiFunctions`, `ServiceFileSystemFunctions`, `ServiceFirmwareFunctions`, `ServiceWebLog`, `HelpersStringHandling`). Header-only helpers: `HelpersSerialHandling.h` (templates — can't be auto-prototyped), `WebLog.h` (Print-subclass log ring + API). `ESPMaster.h` declares prototypes for functions with types the Arduino preprocessor can't auto-prototype.
 - **`firmware/Unit/Unit.ino`** — Per-flap Arduino Nano firmware. I2C slave whose address is read from four DIP-switch pins (`ADRESSSW1..4`) and offset by `I2C_ADDRESS_BASE` (currently 1) so DIP 0000 → I2C 0x01 (address 0x00 is reserved for general call). Drives a 28BYJ-48 stepper via ULN2003 (`STEPPERPIN1..4`), homes on a KY-003 hall sensor at `HALLPIN`, and applies a per-unit step offset stored in EEPROM. The character alphabet is a fixed `letters[]` array in the sketch — the master sends an index, not the character. Calibration (offset / jog / home) is driven from the master's web UI over I2C opcodes.
 - **`firmware/UnitBootloader/`** — Vendored + patched [twiboot](https://github.com/orempel/twiboot), an I2C bootloader for the Nanos. Once installed (one-time ICSP flash per unit), the master pushes new unit firmware over I2C from a PROGMEM-bundled hex (no more ICSP cables). See `firmware/UnitBootloader/README.md`.
@@ -37,11 +37,16 @@ Subsequent master flashes happen via OTA — from this repo: `flashing/ota-maste
 - **ESPMaster** — env `espmaster`, board `esp01_1m`. Library versions pinned in `platformio.ini`. Builtin `EEPROM` is in `lib_deps` because PIO's LDF doesn't surface it by default.
 - **Unit** — env `unit` (board `nanoatmega328new`, new bootloader) or `unit_old_bootloader` (board `nanoatmega328`, old bootloader fallback).
 
-Native test env (`firmware/ESPMaster/platformio.ini` → `[env:native]`): compiles pure-logic headers/helpers for the host using `fabiobatsilva/ArduinoFake` (provides `String`, `Print`, etc.). Tests live in `firmware/ESPMaster/test/test_*/test_main.cpp` and are discovered automatically. `ArduinoFake` stubs `map()` as a fakeit mock — each test's `setUp()` must wire in the real Arduino formula via `When(Method(ArduinoFake(Function), map)).AlwaysDo(...)`, otherwise calling `map()` aborts. Other ArduinoFake-mocked globals (e.g. `EEPROM`) are accessed via the `ArduinoFake(EEPROM)` helper macro and should be re-wired in `setUp()` with `When(Method(...)).AlwaysDo([](...) { ... })`.
+Two host-side native test envs:
+
+- `firmware/ESPMaster/platformio.ini` → `[env:native]` — ESP8266 sketch's pure-logic helpers. Uses `fabiobatsilva/ArduinoFake` to stub `String`, `Print`, etc. Tests in `firmware/ESPMaster/test/test_*/test_main.cpp`.
+- `firmware/lib/common/platformio.ini` → `[env:native]` — ESP32 cross-MCU helpers (`cobs_crc`, `protocol`). Pure C++17, no ArduinoFake. Tests in `firmware/lib/common/test/test_*/test_main.cpp`.
+
+The ESPMaster env: `ArduinoFake` stubs `map()` as a fakeit mock — each test's `setUp()` must wire in the real Arduino formula via `When(Method(ArduinoFake(Function), map)).AlwaysDo(...)`, otherwise calling `map()` aborts. Other ArduinoFake-mocked globals (e.g. `EEPROM`) are accessed via the `ArduinoFake(EEPROM)` helper macro and should be re-wired in `setUp()` with `When(Method(...)).AlwaysDo([](...) { ... })`.
 
 Python-side tests live in `firmware/ESPMaster/tests/` and cover `build_assets.py` helpers. Run with `python -m pytest tests/` from the `firmware/ESPMaster` directory.
 
-CI: `.github/workflows/build.yml` matrix-builds the four firmware projects (ESPMaster, Unit, MasterS3, MasterH2) + runs the native test env.
+CI: `.github/workflows/build.yml` matrix-builds the four firmware projects (ESPMaster, Unit, MasterS3, MasterH2) + runs both native test envs (ESPMaster + lib/common).
 
 ## Configuration Knobs Worth Knowing
 
