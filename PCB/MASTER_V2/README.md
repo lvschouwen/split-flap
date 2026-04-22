@@ -29,9 +29,9 @@ Dedicated controller board for the split-flap display. No onboard flap. Drives u
 - **Per-row protection**: 2 A polyfuse (1812L200) + SMBJ5.0A TVS on 5 V + PESD3V3L5UW TVS array on SDA/SCL.
 - **Power input**: USB-C (5 V, ≤ 1.5 A — logic only) + 5.5/2.1 mm barrel jack (external PSU, up to 8 A — rows + logic backfeed).
 - **Power topology**: dual rail. `5V_LOGIC` (USB via LM66100 U2, jack via D_BACKFEED Schottky) feeds the buck. `5V_RAIL` is fed directly from `JACK_5V` and distributes to rows via polyfuses. LM66100 is on the USB path only; high-current jack current never passes through it.
-- **3.3 V rail**: **AP63300WU-7** synchronous buck, 3 A capable, 3.8–32 V input, internally compensated + internal soft-start, 0.8 V reference, fixed 500 kHz. Wider V_IN range chosen to leave ~750 mV margin on jack-only operation (worst-case 5V_LOGIC ≈ 4.55 V after Q1 R_DS(on) + SS14 V_F drops).
+- **3.3 V rail**: **AP63300WU-7** synchronous buck, 3 A capable, 3.8–32 V input, internally compensated + internal soft-start, 0.8 V reference, fixed 500 kHz. The wide 3.8 V V_IN floor is the reason this part was picked over TPS54302DDCR — see "Buck selection rationale" below.
 - **USB protection**: USBLC6-2SC6 ESD array + ferrite bead on VBUS.
-- **Board**: **100 × 70 mm, 4-layer**, controlled impedance on USB diff pair.
+- **Board**: **120 × 80 mm, 4-layer**, controlled impedance on USB diff pair.
 
 ## Block diagram
 
@@ -99,14 +99,53 @@ L2 GND plane uninterrupted. L3 = 5V_RAIL pour + 3V3 island under MCUs.
 | Power input | USB-C 5 V (logic) + 5.5/2.1 mm barrel jack 5 V (rows + logic backfeed) |
 | Logic OR-ing | LM66100DCKR × 1 (USB path only, **not** in high-current path) |
 | Jack-to-logic backfeed | SS14 Schottky, 1 A |
-| 3.3 V | AP63300WU-7 synchronous buck, 3 A, 3.8–32 V V_IN, internally compensated, 500 kHz |
+| 3.3 V | AP63300WU-7 synchronous buck (LCSC C2158012), 3 A, 3.8–32 V V_IN, internally compensated + internal soft-start, fixed 500 kHz |
 | Rails | 5V_LOGIC (buck input) + 5V_RAIL (rows) — distinct nets |
 | USB ESD | USBLC6-2SC6 + BLM18PG471 ferrite |
 | Buttons | BOOT_S3 (S3 GPIO0), RESET_S3 (S3 EN) |
-| LED bar | 19 fixed + 16 addressable RGB, long-edge front-facing. 14 fixed driven by TLC5947DAP (S3 SPI IO4/5/6/7), 3 fixed driven by H2 GPIO11/12/13, 2 rail indicators always-on, 16 SK6812 mini on a single S3 data line (IO21). |
-| Debug | Native USB (S3) + JP_DEBUG_S3 1×4 UART + JP_DEBUG_H2 1×6 UART+EN+BOOT + H2 USB D± test pads |
-| Board | 100 × 70 mm, 4-layer, 1.6 mm FR4 |
+| LED bar | 19 fixed (Everlight 19-217 side-view 1204 SMD) + 16 addressable RGB (SK6812 mini side-emit), long-edge front-facing. 14 fixed driven by TLC5947DAP (S3 SPI IO4/5/6/7), 3 fixed driven by H2 GPIO11/12/13, 2 rail indicators always-on, 16 SK6812 on a single S3 data line (IO21). |
+| Debug | Native USB (S3) + JP_DEBUG_S3 1×4 UART + JP_DEBUG_H2 1×6 UART+EN+BOOT (manual reset, manual boot — no DTR/RTS auto-reset circuit) + H2 USB D± test pads |
+| Board | 120 × 80 mm, 4-layer, 1.6 mm FR4 |
 | Input current ceiling | 8 A total (input spec) |
+
+## Buck selection rationale (design-rationale — not an implementation spec)
+
+Two 3.3 V buck candidates were evaluated for U4:
+
+| Candidate | V_IN min | Compensation | Soft-start | LCSC |
+|---|---|---|---|---|
+| TPS54302DDCR | 4.5 V | internal | external SS cap | C311983 |
+| **AP63300WU-7** (chosen) | **3.8 V** | internal | internal | **C2158012** |
+
+Worst-case jack-only operation feeds U4 from `5V_LOGIC` via the backfeed diode, not from the jack directly:
+
+```
+JACK_IN (5.0 V nom.) ── Q1 AO3401A PMOS (R_DS(on) ~50 mΩ)
+                     │
+                   JACK_5V
+                     │
+                     ├── 5V_RAIL (direct — row polyfuses)
+                     │
+                     └── D_BACKFEED SS14 Schottky
+                                │
+                             5V_LOGIC ── U4 VIN
+```
+
+Drop budget on the logic path, jack-only, at a conservative 500 mA logic draw:
+
+- Q1 R_DS(on) × 500 mA ≈ 25–50 mV
+- SS14 V_F @ 500 mA ≈ 0.4 V (datasheet curve)
+- Cable/connector/board drop allowance: ~50 mV
+- Transient sag during S3 WiFi TX burst (~500 mA pulse into 480 µF input bulk, 22 µF on 5V_LOGIC): up to ~150 mV pk
+
+Steady-state `5V_LOGIC` ≈ 4.5 V. Worst-case transient dip ≈ 4.35 V.
+
+- **TPS54302** (4.5 V min): steady-state margin ≈ 0 mV, transient margin negative. Every WiFi TX burst would glitch the regulator. **Rejected.**
+- **AP63300WU-7** (3.8 V min): steady-state margin ≈ 700 mV, transient margin ≈ 550 mV. **Accepted as final choice.**
+
+AP63300WU-7 also eliminates the external SS cap (internal soft-start), which removes one component and one per-unit tolerance source. Cost delta at LCSC ≤ USD 0.30 per board at qty 10.
+
+**Final implemented buck: AP63300WU-7 (LCSC C2158012).** TPS54302DDCR is not used and is not stocked in the BOM.
 
 ## Bulk capacitance summary
 
@@ -165,28 +204,35 @@ Both modules carry their own PCB antennas and operate in the 2.4 GHz ISM band. *
 
 ### Inter-module RF isolation
 
-- **Minimum antenna-to-antenna edge distance: 30 mm.** Measured between the nearest points of the two keep-out regions.
-- Modules on opposite board edges (S3 top, H2 bottom): ~60 mm achievable on a 70 mm-tall board. Exceeds the 30 mm floor by 2×.
+- **Minimum antenna-to-antenna edge distance: 60 mm.** Measured between the nearest points of the two keep-out regions. Rev B bumped this floor from 30 mm to 60 mm when the board went from 100 × 70 mm to 120 × 80 mm.
+- Modules on **diagonally opposite corners** (S3 top-left, H2 bottom-right): ~115 mm achievable. Exceeds the 60 mm floor by ~2×.
 - No common-mode coupling path: both modules share GND on L2 (required) but with uninterrupted plane between them.
 - **Coexistence note** (firmware, not PCB): S3 WiFi/BT and H2 802.15.4/BLE both occupy 2.4 GHz. Hardware does not arbitrate. Firmware MUST implement TDM — typical approach: S3 operates on WiFi channel 1 (2401–2423 MHz), H2 pinned to 802.15.4 channel 25 or 26 (2475–2480 MHz) to avoid spectral overlap. This is an application-layer constraint; the PCB does not preclude it.
 
-### Antenna placement — REQUIRED orientation
+### Antenna placement — REQUIRED orientation (diagonal opposite corners)
 
 ```
-┌──────────────────── top edge ─────────────────┐
-│  ▓▓▓▓▓▓▓  ← S3 antenna keep-out (15×7)       │
-│  ┌─────────────┐                              │
-│  │  ESP32-S3   │                              │
-│  └─────────────┘                              │
-│                                               │
-│     (remainder of components)                 │
-│                                               │
-│  ┌───────────┐                                │
-│  │ ESP32-H2  │                                │
-│  └───────────┘                                │
-│  ▓▓▓▓▓  ← H2 antenna keep-out (11×6)          │
-└──────────────── bottom edge ──────────────────┘
+┌──────────────────────── top edge (120 mm) ──────────────────────┐
+│ ▓▓▓▓▓                                                           │
+│ ▓ S3▓  ← S3 antenna keep-out 15×7 (top-left corner)             │
+│ ▓▓▓▓▓                                                           │
+│ ┌─────┐                                                         │
+│ │ S3  │            ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒                        │
+│ │MOD  │                                                         │
+│ └─────┘            (mux + row shifters +                        │
+│                     connectors + LED bar)                       │
+│                                              ┌──────┐           │
+│                                              │  H2  │           │
+│                                              │ MOD  │           │
+│                                              └──────┘           │
+│                                              ▓▓▓▓                ← H2 antenna keep-out 11×6
+│                                              ▓H2▓                  (bottom-right corner)
+│                                              ▓▓▓▓               │
+└──────────────────── bottom edge (120 mm) ───────────────────────┘
+Board 120 × 80 mm · antenna edge-to-edge ≈ 115 mm (≥ 60 mm required)
 ```
+
+See `master_v2_mockup.svg` for a rendered placement mockup and `master_v2.kicad_pcb` for the KiCad placement stub with board outline, keep-outs, and mounting-hole positions.
 
 ## Firmware constraints
 
@@ -210,6 +256,11 @@ The board electrically allows illegal operating modes; firmware MUST enforce:
 - [SCHEMATIC.md](./SCHEMATIC.md) — authoritative textual netlist.
 - [master_v2.kicad_sch](./master_v2.kicad_sch) — minimal KiCad container. Layout engineer recaptures from SCHEMATIC.md.
 
+## Placement mockup
+
+- [master_v2_mockup.svg](./master_v2_mockup.svg) — hand-coded top-view mockup with zones, keep-outs, dimensions, and side-panel callouts. Open in a browser.
+- [master_v2.kicad_pcb](./master_v2.kicad_pcb) — KiCad 8 placement stub: 120 × 80 mm board outline, antenna keep-outs, mounting holes, component silhouettes on F.Silkscreen, inter-MCU signal note on Cmts.User. No tracks, no real footprints — recapture on top of this.
+
 ## Pinout
 
 [PINOUT.md](./PINOUT.md) — full ESP32-S3 and ESP32-H2 GPIO tables, strap-pin rules, reserved pins.
@@ -225,7 +276,7 @@ The board electrically allows illegal operating modes; firmware MUST enforce:
    5. ESP32-S3 strap pins: GPIO0 drives only BOOT_S3_BTN. GPIO3, GPIO45, GPIO46 have no copper escape beyond module pad.
    6. ESP32-H2-MINI-1 strap pins: IO2, IO8 tied high via 10 kΩ to 3V3. IO9 pulled high via 10 kΩ to 3V3 with 1 kΩ series from S3 GPIO13 for optional pull-low (download mode).
    7. Inter-MCU link is **UART only**. No SPI nets between S3 and H2. No shared I2C. ERC must confirm `H2_UART_TX`, `H2_UART_RX`, `H2_RESET_N`, `H2_IRQ`, `H2_BOOT_SEL` are the only signal nets crossing between modules.
-   8. Antenna keep-outs (S3 15×7 mm, H2 11×6 mm) clear on all 4 layers; modules oriented on opposite board edges with ≥ 30 mm antenna edge-to-edge separation.
+   8. Antenna keep-outs (S3 15×7 mm, H2 11×6 mm) clear on all 4 layers; modules oriented on **diagonally opposite corners** (S3 top-left, H2 bottom-right) with ≥ 60 mm antenna edge-to-edge separation (~115 mm achieved on 120 × 80 mm).
 3. **Placement review** against §"Layout constraints" below.
 4. **Routing review** against §"Routing constraints" below.
 5. **DRC + impedance report** delivered with gerbers.
@@ -250,12 +301,12 @@ The board electrically allows illegal operating modes; firmware MUST enforce:
 ### Buck (U4 AP63300WU-7 + L_BUCK)
 - C_BUCK_IN within 2 mm of U4 VIN pin on 5V_LOGIC net.
 - L_BUCK within 4 mm of U4 SW pin.
-- SW trace: L1 only, ≤ 6 mm length, ≤ 3 mm² area.
+- **SW node copper stays small.** L1 only, ≤ 6 mm length, ≤ 3 mm² total copper area (U4 SW pad + trace to L_BUCK input pad). Do NOT pour SW into any thermal region — the SW node is a high-dV/dt EMI aggressor.
 - L2 GND under SW node uninterrupted (no L2 cutouts under U4).
 - C_BUCK_OUT_1 within 3 mm of L_BUCK output; C_BUCK_OUT_2 within 5 mm.
 - Feedback divider within 5 mm of U4 FB pin; FB trace flanked by GND pour on L1.
 - No signal routing under L_BUCK or under SW node on any layer.
-- U4 SW pin / thermal copper: ≥ 50 mm² copper area on L1 connected to the SW pad plus GND pour. Stitch vias (≥ 6 × 0.3 mm) from top-layer GND pour under U4 down to L2.
+- **Thermal copper on GND only.** AP63300WU-7 is TSOT-26 with no EPAD; heat must leave through pin 2 (GND) and, secondarily, pin 5 (VIN) pads. Allocate ≥ 50 mm² L1 GND copper under and around U4, stitched to L2 with ≥ 6 × 0.3 mm vias. Pin 5 (VIN) pad may be expanded on the 5V_LOGIC L3 island as a secondary thermal path. **SW pin (pin 1) gets no thermal pour.**
 
 ### USB and USB-C connector
 - USBLC6-2SC6 placement: **≤ 3 mm from USB-C D+/D− pins**. No trace reaches the ESP32-S3 side before passing U1.
@@ -264,7 +315,7 @@ The board electrically allows illegal operating modes; firmware MUST enforce:
 - Cable shield tied to GND through a 1 MΩ resistor in parallel with a 10 nF cap (chassis path).
 
 ### Inter-MCU UART
-- `H2_UART_TX`, `H2_UART_RX`, `H2_RESET_N`, `H2_IRQ`, `H2_BOOT_SEL`: route primarily on L4 referenced to L2 GND. Max length 80 mm (corner-to-corner on 100 × 70 mm board).
+- `H2_UART_TX`, `H2_UART_RX`, `H2_RESET_N`, `H2_IRQ`, `H2_BOOT_SEL`: route primarily on L4 referenced to L2 GND. Max length 150 mm (diagonal corner-to-corner on 120 × 80 mm board).
 - Keep ≥ 5 mm lateral clearance from the buck SW node trace and ≥ 3 mm from the USB diff pair.
 - Series damping resistors (R_H2_RST_SER 1 kΩ, R_H2_BOOT_SER 1 kΩ) on S3 side, within 5 mm of S3 module pad.
 

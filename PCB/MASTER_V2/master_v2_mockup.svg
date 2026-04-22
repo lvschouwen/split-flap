@@ -1,0 +1,555 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Split-Flap Controller Master v2 — Rev B
+  120 x 80 mm 4-layer FR4 carrier PCB (top view)
+  Hand-coded mockup. 1 mm = 5 SVG units. Board origin at SVG (400, 150).
+  Authoritative spec: README.md / SCHEMATIC.md / PINOUT.md / BOM.csv in this directory.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" font-family="'Inter', 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <style><![CDATA[
+      .bg         { fill: #0f1115; }
+      .title      { fill: #f5f5f5; font-size: 22px; font-weight: 700; }
+      .subtitle   { fill: #8b94a3; font-size: 13px; }
+      .panel      { fill: #1a1d24; stroke: #2a2f3a; stroke-width: 1; }
+      .panel-head { fill: #e9ecf1; font-size: 12px; font-weight: 700; letter-spacing: 0.5px; }
+      .panel-text { fill: #c6cbd4; font-size: 10.5px; }
+      .panel-dim  { fill: #8b94a3; font-size: 10px; }
+
+      .board      { fill: #0b5c3a; stroke: #053a25; stroke-width: 1.5; }
+      .board-edge { fill: none; stroke: #fef08a; stroke-width: 0.6; }
+      .silk       { fill: #f5f5f5; font-size: 9px; font-weight: 600; font-family: 'JetBrains Mono', 'Consolas', monospace; }
+      .silk-sm    { fill: #f5f5f5; font-size: 7px; font-family: 'JetBrains Mono', 'Consolas', monospace; }
+      .silk-line  { fill: none; stroke: #f5f5f5; stroke-width: 0.5; opacity: 0.85; }
+      .silk-thin  { fill: none; stroke: #f5f5f5; stroke-width: 0.3; opacity: 0.7; }
+
+      .module     { fill: #1f2937; stroke: #fef08a; stroke-width: 0.8; }
+      .module-lbl { fill: #fef08a; font-size: 9px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+      .module-sub { fill: #c6cbd4; font-size: 7px; font-family: 'JetBrains Mono', monospace; }
+
+      .ic         { fill: #334155; stroke: #f5f5f5; stroke-width: 0.4; }
+      .ic-lbl     { fill: #f5f5f5; font-size: 6.5px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+
+      .conn       { fill: #0b1120; stroke: #60a5fa; stroke-width: 0.6; }
+      .conn-lbl   { fill: #bfdbfe; font-size: 6.5px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+
+      .keepout        { fill: rgba(239, 68, 68, 0.12); stroke: #ef4444; stroke-width: 1.2; stroke-dasharray: 5 3; }
+      .keepout-lbl    { fill: #fecaca; font-size: 8px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+
+      .zone-power { fill: rgba(245, 158, 11, 0.07); stroke: #f59e0b; stroke-width: 0.7; stroke-dasharray: 4 3; }
+      .zone-mcu-s { fill: rgba(239,  68,  68, 0.06); stroke: #ef4444; stroke-width: 0.7; stroke-dasharray: 4 3; }
+      .zone-mcu-h { fill: rgba(168,  85, 247, 0.06); stroke: #a855f7; stroke-width: 0.7; stroke-dasharray: 4 3; }
+      .zone-mux   { fill: rgba( 59, 130, 246, 0.06); stroke: #3b82f6; stroke-width: 0.7; stroke-dasharray: 4 3; }
+      .zone-row   { fill: rgba( 34, 197,  94, 0.06); stroke: #22c55e; stroke-width: 0.7; stroke-dasharray: 4 3; }
+      .zone-led   { fill: rgba(236,  72, 153, 0.06); stroke: #ec4899; stroke-width: 0.7; stroke-dasharray: 4 3; }
+      .zone-dbg   { fill: rgba(148, 163, 184, 0.06); stroke: #94a3b8; stroke-width: 0.7; stroke-dasharray: 4 3; }
+      .zone-lbl   { font-size: 8px; font-weight: 700; font-family: 'JetBrains Mono', monospace; opacity: 0.85; }
+
+      .led        { stroke: #f5f5f5; stroke-width: 0.3; }
+      .led-grn    { fill: #22c55e; }
+      .led-yel    { fill: #eab308; }
+      .led-blu    { fill: #3b82f6; }
+      .led-wht    { fill: #f5f5f5; }
+      .led-org    { fill: #f97316; }
+      .led-red    { fill: #ef4444; }
+      .led-rgb    { fill: #0b1120; stroke: #ec4899; stroke-width: 0.4; }
+
+      .mh         { fill: none; stroke: #fef08a; stroke-width: 0.8; }
+      .mh-fill    { fill: #0f1115; stroke: #fef08a; stroke-width: 0.6; }
+
+      .dim-line   { stroke: #60a5fa; stroke-width: 0.6; fill: none; }
+      .dim-tick   { stroke: #60a5fa; stroke-width: 0.6; }
+      .dim-lbl    { fill: #bfdbfe; font-size: 10px; font-weight: 600; }
+      .dim-lbl-big{ fill: #bfdbfe; font-size: 12px; font-weight: 700; }
+
+      .inter-sig  { stroke: #f472b6; stroke-width: 0.6; stroke-dasharray: 2 2; fill: none; opacity: 0.8; }
+      .inter-lbl  { fill: #fbcfe8; font-size: 7px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+
+      .callout-title    { fill: #f5f5f5; font-size: 12px; font-weight: 700; letter-spacing: 0.4px; }
+      .callout-sub      { fill: #c6cbd4; font-size: 10.5px; }
+      .callout-mono     { fill: #c6cbd4; font-size: 9.5px; font-family: 'JetBrains Mono', monospace; }
+    ]]></style>
+  </defs>
+
+  <!-- ============ Background ============ -->
+  <rect class="bg" width="1400" height="900"/>
+
+  <!-- ============ Title ============ -->
+  <text class="title"    x="700" y="42"  text-anchor="middle">Split-Flap Controller — Master v2 Rev B — 120 × 80 mm, 4-layer FR4 (top view)</text>
+  <text class="subtitle" x="700" y="62"  text-anchor="middle">Diagonal-corner RF placement · S3 antenna top-left · H2 antenna bottom-right · antenna edge-to-edge ≈ 115 mm</text>
+
+  <!-- ============ Board outline ============ -->
+  <!-- Board origin at SVG (400, 150). Scale 5 SVG units per mm. Board 600 × 400 units = 120 × 80 mm. -->
+  <g transform="translate(400,150)">
+
+    <!-- Soldermask -->
+    <rect class="board" x="0" y="0" width="600" height="400" rx="6"/>
+
+    <!-- ===== Zone overlays (behind components) ===== -->
+    <!-- Power zone: left edge, ~0..40 mm x, ~15..65 mm y -->
+    <rect class="zone-power" x="0"   y="70"  width="220" height="260"/>
+    <text class="zone-lbl"   x="10"  y="86"  fill="#fbbf24">POWER ZONE</text>
+
+    <!-- S3 MCU zone: ~0..30 mm x, ~0..35 mm y -->
+    <rect class="zone-mcu-s" x="0"   y="0"   width="260" height="180"/>
+    <text class="zone-lbl"   x="140" y="16"  fill="#fca5a5">MCU ZONE (S3)</text>
+
+    <!-- H2 radio zone: ~80..120 mm x, ~55..80 mm y -->
+    <rect class="zone-mcu-h" x="390" y="250" width="210" height="150"/>
+    <text class="zone-lbl"   x="400" y="266" fill="#d8b4fe">RADIO ZONE (H2)</text>
+
+    <!-- Mux/I2C core zone: center -->
+    <rect class="zone-mux"   x="210" y="180" width="220" height="100"/>
+    <text class="zone-lbl"   x="220" y="196" fill="#93c5fd">I2C CORE</text>
+
+    <!-- Row interface zone: bottom -->
+    <rect class="zone-row"   x="20"  y="320" width="520" height="70"/>
+    <text class="zone-lbl"   x="30"  y="336" fill="#86efac">ROW INTERFACE (J3..J10, XH-4)</text>
+
+    <!-- LED bar zone: top edge clear of S3 keepout -->
+    <rect class="zone-led"   x="140" y="0"   width="460" height="48"/>
+    <text class="zone-lbl"   x="150" y="14"  fill="#f9a8d4">LED BAR — FRONT</text>
+
+    <!-- Debug zone: right edge -->
+    <rect class="zone-dbg"   x="545" y="70"  width="55"  height="180"/>
+    <text class="zone-lbl"   x="547" y="86"  fill="#cbd5e1">DEBUG</text>
+
+    <!-- ===== Antenna keep-outs (on top of zones) ===== -->
+    <!-- S3 antenna keep-out: (0,0) to (15,7) mm = (0,0) to (75,35) -->
+    <rect class="keepout"     x="0"  y="0"  width="75" height="35"/>
+    <text class="keepout-lbl" x="37" y="20" text-anchor="middle">S3 ANTENNA KEEP-OUT</text>
+    <text class="keepout-lbl" x="37" y="30" text-anchor="middle">15 × 7 mm (all 4 layers)</text>
+
+    <!-- H2 antenna keep-out: (109,74) to (120,80) mm = (545,370) to (600,400) -->
+    <rect class="keepout"     x="545" y="370" width="55" height="30"/>
+    <text class="keepout-lbl" x="572" y="384" text-anchor="middle">H2 ANT KEEP-OUT</text>
+    <text class="keepout-lbl" x="572" y="394" text-anchor="middle">11 × 6 mm</text>
+
+    <!-- ===== Mounting holes (3.2 mm M3, dia = 16 units) ===== -->
+    <!-- MH1 (top-left interior, east of S3 keep-out): (24, 5) -->
+    <circle class="mh-fill" cx="120" cy="25"  r="8"/>
+    <circle class="mh-fill" cx="120" cy="25"  r="3"/>
+    <text class="silk-sm"   x="120" y="43"  text-anchor="middle">M3</text>
+    <!-- MH2 (top-right corner): (115, 5) -->
+    <circle class="mh-fill" cx="575" cy="25"  r="8"/>
+    <circle class="mh-fill" cx="575" cy="25"  r="3"/>
+    <text class="silk-sm"   x="575" y="43"  text-anchor="middle">M3</text>
+    <!-- MH3 (bottom-right interior, west of H2 keep-out): (102, 68) -->
+    <circle class="mh-fill" cx="510" cy="340" r="8"/>
+    <circle class="mh-fill" cx="510" cy="340" r="3"/>
+    <text class="silk-sm"   x="510" y="358" text-anchor="middle">M3</text>
+    <!-- MH4 (bottom-left corner): (5, 67) -->
+    <circle class="mh-fill" cx="25"  cy="335" r="8"/>
+    <circle class="mh-fill" cx="25"  cy="335" r="3"/>
+    <text class="silk-sm"   x="25"  y="353" text-anchor="middle">M3</text>
+
+    <!-- ===== ESP32-S3-WROOM-1-N16R8 module ===== -->
+    <!-- Module 18 × 25.5 mm, body (3,0) to (21,25.5) mm = (15,0) to (105,127.5) -->
+    <rect class="module" x="15" y="0" width="90" height="127" rx="2"/>
+    <!-- antenna strip (first 7 mm) -->
+    <rect fill="none" stroke="#fef08a" stroke-width="0.4" stroke-dasharray="2 2" x="15" y="0" width="90" height="35"/>
+    <text class="module-lbl" x="60" y="55"  text-anchor="middle">U5</text>
+    <text class="module-lbl" x="60" y="69"  text-anchor="middle">ESP32-S3</text>
+    <text class="module-sub" x="60" y="80"  text-anchor="middle">WROOM-1</text>
+    <text class="module-sub" x="60" y="90"  text-anchor="middle">N16R8</text>
+    <text class="module-sub" x="60" y="103" text-anchor="middle">16MB + 8MB</text>
+    <text class="module-sub" x="60" y="115" text-anchor="middle">PSRAM</text>
+
+    <!-- ===== ESP32-H2-MINI-1-N4 module ===== -->
+    <!-- Module 13.2 × 16.6 mm, body (106.8,63.4) to (120,80) mm = (534,317) to (600,400) -->
+    <rect class="module" x="534" y="317" width="66" height="83" rx="2"/>
+    <!-- antenna strip (last 6 mm at bottom edge) -->
+    <rect fill="none" stroke="#fef08a" stroke-width="0.4" stroke-dasharray="2 2" x="534" y="370" width="66" height="30"/>
+    <text class="module-lbl" x="567" y="337" text-anchor="middle">U_H2</text>
+    <text class="module-lbl" x="567" y="350" text-anchor="middle">ESP32-H2</text>
+    <text class="module-sub" x="567" y="361" text-anchor="middle">MINI-1-N4</text>
+
+    <!-- ===== TLC5947DAP LED driver ===== -->
+    <!-- HTSSOP-28, ~9.7 x 6.4 mm. Place at (26, 15) center = (130, 75), box (22,12)-(30,18)mm -->
+    <rect class="ic" x="115" y="55" width="40" height="30" rx="1"/>
+    <text class="ic-lbl" x="135" y="72" text-anchor="middle">U_LED</text>
+    <text class="ic-lbl" x="135" y="80" text-anchor="middle">TLC5947</text>
+
+    <!-- ===== SW1 RESET, SW2 BOOT ===== -->
+    <!-- 6 x 6 mm tact, at (26, 22) and (32, 22) -->
+    <rect class="ic" x="115" y="95"  width="30" height="30"/>
+    <text class="ic-lbl" x="130" y="114" text-anchor="middle">RST</text>
+    <rect class="ic" x="150" y="95"  width="30" height="30"/>
+    <text class="ic-lbl" x="165" y="114" text-anchor="middle">BOOT</text>
+
+    <!-- ===== USB-C receptacle (J1) ===== -->
+    <!-- Mouth extends left off-board visualization. Body (0,26)-(9,34) mm = (0,130)-(45,170) -->
+    <rect class="conn" x="0"  y="130" width="45" height="40"/>
+    <text class="conn-lbl" x="22" y="147" text-anchor="middle">J1</text>
+    <text class="conn-lbl" x="22" y="157" text-anchor="middle">USB-C</text>
+    <text class="conn-lbl" x="22" y="167" text-anchor="middle">5V+DATA</text>
+
+    <!-- ===== USBLC6-2SC6 (U1) ===== -->
+    <rect class="ic" x="52" y="132" width="22" height="20"/>
+    <text class="ic-lbl" x="63" y="145" text-anchor="middle">U1</text>
+    <text class="silk-sm" x="63" y="162" text-anchor="middle">USBLC6</text>
+
+    <!-- ===== FB1 ferrite ===== -->
+    <rect class="ic" x="78" y="134" width="14" height="14"/>
+    <text class="ic-lbl" x="85" y="144" text-anchor="middle">FB1</text>
+
+    <!-- ===== LM66100DCKR (U2) ===== -->
+    <rect class="ic" x="96" y="132" width="22" height="20"/>
+    <text class="ic-lbl" x="107" y="145" text-anchor="middle">U2</text>
+    <text class="silk-sm" x="107" y="162" text-anchor="middle">LM66100</text>
+    <text class="silk-sm" x="107" y="170" text-anchor="middle">(USB path only)</text>
+
+    <!-- ===== Barrel jack (J2) ===== -->
+    <rect class="conn" x="0" y="245" width="72" height="48"/>
+    <text class="conn-lbl" x="36" y="262" text-anchor="middle">J2</text>
+    <text class="conn-lbl" x="36" y="272" text-anchor="middle">DC 5.5/2.1</text>
+    <text class="conn-lbl" x="36" y="282" text-anchor="middle">5V / 8A</text>
+
+    <!-- ===== Q1 AO3401 PMOS ===== -->
+    <rect class="ic" x="80" y="250" width="16" height="14"/>
+    <text class="ic-lbl" x="88" y="260" text-anchor="middle">Q1</text>
+
+    <!-- ===== D1 SMAJ5.0CA TVS ===== -->
+    <rect class="ic" x="80" y="270" width="16" height="14"/>
+    <text class="ic-lbl" x="88" y="280" text-anchor="middle">D1</text>
+
+    <!-- ===== SS14 backfeed ===== -->
+    <rect class="ic" x="100" y="260" width="22" height="14"/>
+    <text class="ic-lbl" x="111" y="270" text-anchor="middle">SS14</text>
+
+    <!-- ===== C_BULK_INPUT 470 uF ===== -->
+    <rect class="ic" x="128" y="250" width="22" height="34"/>
+    <text class="ic-lbl" x="139" y="265" text-anchor="middle">CIN</text>
+    <text class="silk-sm" x="139" y="275" text-anchor="middle">470uF</text>
+
+    <!-- ===== U4 AP63300WU-7 buck + L_BUCK ===== -->
+    <!-- U4 TSOT-26 at (28, 38) mm = (140, 190). Body 3 x 3 mm = 15 x 15 -->
+    <rect class="ic" x="155" y="195" width="22" height="22"/>
+    <text class="ic-lbl" x="166" y="209" text-anchor="middle">U4</text>
+    <text class="silk-sm" x="166" y="230" text-anchor="middle">AP63300</text>
+    <!-- L_BUCK 4.7uH at (36, 38) mm = (180, 190). SMD 6x6mm -->
+    <rect class="ic" x="185" y="200" width="28" height="28" rx="2"/>
+    <text class="ic-lbl" x="199" y="217" text-anchor="middle">L1</text>
+    <text class="silk-sm" x="199" y="226" text-anchor="middle">4.7uH</text>
+    <!-- SW node callout -->
+    <line class="silk-thin" x1="177" y1="206" x2="185" y2="214"/>
+    <text class="silk-sm" x="178" y="245" fill="#ef4444">SW node ≤ 3 mm² — no thermal pour</text>
+    <!-- Thermal pour indicator (GND) -->
+    <rect fill="rgba(255, 230, 130, 0.10)" stroke="#fef08a" stroke-width="0.4" stroke-dasharray="2 2"
+          x="140" y="190" width="75" height="50"/>
+    <text class="silk-sm" x="143" y="253" fill="#fef08a">GND thermal pour ≥ 50 mm² stitched to L2</text>
+
+    <!-- ===== TCA9548APWR (U6) ===== -->
+    <!-- TSSOP-24, ~7.8 x 6.4 mm. Center (52, 45) mm = (260, 225). Body 40 x 32 -->
+    <rect class="ic" x="240" y="209" width="40" height="32"/>
+    <text class="ic-lbl" x="260" y="222" text-anchor="middle">U6</text>
+    <text class="ic-lbl" x="260" y="232" text-anchor="middle">TCA9548A</text>
+    <text class="silk-sm" x="260" y="248" text-anchor="middle">0x70</text>
+    <text class="silk-sm" x="260" y="257" text-anchor="middle">MUX_RESET_N</text>
+
+    <!-- ===== 8 × PCA9306DCTR level shifters (U7..U14) ===== -->
+    <!-- VSSOP-8, ~3 x 3 mm. At y=56 mm = 280, x = 7,20,33,46,59,72,85,98 mm -->
+    <g class="ic-lbl">
+      <!-- row 1 -->
+      <rect class="ic" x="28" y="275" width="14" height="14"/><text class="ic-lbl" x="35" y="285" text-anchor="middle">U7</text><text class="silk-sm" x="35" y="300" text-anchor="middle">R1</text>
+      <rect class="ic" x="93" y="275" width="14" height="14"/><text class="ic-lbl" x="100" y="285" text-anchor="middle">U8</text><text class="silk-sm" x="100" y="300" text-anchor="middle">R2</text>
+      <rect class="ic" x="158" y="275" width="14" height="14"/><text class="ic-lbl" x="165" y="285" text-anchor="middle">U9</text><text class="silk-sm" x="165" y="300" text-anchor="middle">R3</text>
+      <rect class="ic" x="223" y="275" width="14" height="14"/><text class="ic-lbl" x="230" y="285" text-anchor="middle">U10</text><text class="silk-sm" x="230" y="300" text-anchor="middle">R4</text>
+      <rect class="ic" x="288" y="275" width="14" height="14"/><text class="ic-lbl" x="295" y="285" text-anchor="middle">U11</text><text class="silk-sm" x="295" y="300" text-anchor="middle">R5</text>
+      <rect class="ic" x="353" y="275" width="14" height="14"/><text class="ic-lbl" x="360" y="285" text-anchor="middle">U12</text><text class="silk-sm" x="360" y="300" text-anchor="middle">R6</text>
+      <rect class="ic" x="418" y="275" width="14" height="14"/><text class="ic-lbl" x="425" y="285" text-anchor="middle">U13</text><text class="silk-sm" x="425" y="300" text-anchor="middle">R7</text>
+      <rect class="ic" x="483" y="275" width="14" height="14"/><text class="ic-lbl" x="490" y="285" text-anchor="middle">U14</text><text class="silk-sm" x="490" y="300" text-anchor="middle">R8</text>
+    </g>
+
+    <!-- ===== Row connectors J3..J10 (XH-4) ===== -->
+    <!-- Each 11 x 8 mm at y = 73 mm = 365, x = 7,20,33,46,59,72,85,98 mm -->
+    <g>
+      <rect class="conn" x="7.5"  y="345" width="55" height="40"/><text class="conn-lbl" x="35"  y="360" text-anchor="middle">J3</text><text class="silk-sm" x="35"  y="370" text-anchor="middle">ROW 1</text>
+      <rect class="conn" x="72.5" y="345" width="55" height="40"/><text class="conn-lbl" x="100" y="360" text-anchor="middle">J4</text><text class="silk-sm" x="100" y="370" text-anchor="middle">ROW 2</text>
+      <rect class="conn" x="137.5"y="345" width="55" height="40"/><text class="conn-lbl" x="165" y="360" text-anchor="middle">J5</text><text class="silk-sm" x="165" y="370" text-anchor="middle">ROW 3</text>
+      <rect class="conn" x="202.5"y="345" width="55" height="40"/><text class="conn-lbl" x="230" y="360" text-anchor="middle">J6</text><text class="silk-sm" x="230" y="370" text-anchor="middle">ROW 4</text>
+      <rect class="conn" x="267.5"y="345" width="55" height="40"/><text class="conn-lbl" x="295" y="360" text-anchor="middle">J7</text><text class="silk-sm" x="295" y="370" text-anchor="middle">ROW 5</text>
+      <rect class="conn" x="332.5"y="345" width="55" height="40"/><text class="conn-lbl" x="360" y="360" text-anchor="middle">J8</text><text class="silk-sm" x="360" y="370" text-anchor="middle">ROW 6</text>
+      <rect class="conn" x="397.5"y="345" width="55" height="40"/><text class="conn-lbl" x="425" y="360" text-anchor="middle">J9</text><text class="silk-sm" x="425" y="370" text-anchor="middle">ROW 7</text>
+      <rect class="conn" x="462.5"y="345" width="55" height="40"/><text class="conn-lbl" x="490" y="360" text-anchor="middle">J10</text><text class="silk-sm" x="490" y="370" text-anchor="middle">ROW 8</text>
+    </g>
+    <!-- Pin order note under J3 exemplar -->
+    <text class="silk-sm" x="12"  y="382" fill="#fbbf24">pin 1 = 5V</text>
+    <text class="silk-sm" x="12"  y="390" fill="#fbbf24">pin 2 = GND</text>
+    <text class="silk-sm" x="12"  y="398" fill="#fbbf24">pin 3 = SDA</text>
+    <text class="silk-sm" x="12"  y="406" fill="#fbbf24">pin 4 = SCL</text>
+
+    <!-- Per-row protection callout (on Row 1 exemplar only) -->
+    <rect fill="none" stroke="#22c55e" stroke-width="0.3" stroke-dasharray="2 2" x="7" y="325" width="55" height="40"/>
+    <text class="silk-sm" x="35" y="334" text-anchor="middle" fill="#86efac">F/TVS/PESD/47uF</text>
+
+    <!-- ===== LED bar — 19 fixed + 16 RGB on the top edge, clear of S3 keepout ===== -->
+    <!-- Fixed LEDs at y=2mm=10, pitch 4mm=20, start at x=30mm=150 -->
+    <g>
+      <rect class="led led-grn" x="146" y="7"  width="8" height="6"/><text class="silk-sm" x="150" y="22" text-anchor="middle">PWR5V</text>
+      <rect class="led led-grn" x="166" y="7"  width="8" height="6"/><text class="silk-sm" x="170" y="22" text-anchor="middle">PWR3V3</text>
+      <rect class="led led-grn" x="186" y="7"  width="8" height="6"/><text class="silk-sm" x="190" y="22" text-anchor="middle">S3HB</text>
+      <rect class="led led-yel" x="206" y="7"  width="8" height="6"/><text class="silk-sm" x="210" y="22" text-anchor="middle">H2HB</text>
+      <rect class="led led-blu" x="226" y="7"  width="8" height="6"/><text class="silk-sm" x="230" y="22" text-anchor="middle">WIFI</text>
+      <rect class="led led-yel" x="246" y="7"  width="8" height="6"/><text class="silk-sm" x="250" y="22" text-anchor="middle">ZB</text>
+      <rect class="led led-blu" x="266" y="7"  width="8" height="6"/><text class="silk-sm" x="270" y="22" text-anchor="middle">BLE</text>
+      <rect class="led led-grn" x="286" y="7"  width="8" height="6"/><text class="silk-sm" x="290" y="22" text-anchor="middle">I2C</text>
+      <rect class="led led-wht" x="306" y="7"  width="8" height="6"/><text class="silk-sm" x="310" y="22" text-anchor="middle">UART</text>
+      <rect class="led led-grn" x="326" y="7"  width="8" height="6"/><text class="silk-sm" x="330" y="22" text-anchor="middle">R1</text>
+      <rect class="led led-grn" x="346" y="7"  width="8" height="6"/><text class="silk-sm" x="350" y="22" text-anchor="middle">R2</text>
+      <rect class="led led-grn" x="366" y="7"  width="8" height="6"/><text class="silk-sm" x="370" y="22" text-anchor="middle">R3</text>
+      <rect class="led led-grn" x="386" y="7"  width="8" height="6"/><text class="silk-sm" x="390" y="22" text-anchor="middle">R4</text>
+      <rect class="led led-grn" x="406" y="7"  width="8" height="6"/><text class="silk-sm" x="410" y="22" text-anchor="middle">R5</text>
+      <rect class="led led-grn" x="426" y="7"  width="8" height="6"/><text class="silk-sm" x="430" y="22" text-anchor="middle">R6</text>
+      <rect class="led led-grn" x="446" y="7"  width="8" height="6"/><text class="silk-sm" x="450" y="22" text-anchor="middle">R7</text>
+      <rect class="led led-grn" x="466" y="7"  width="8" height="6"/><text class="silk-sm" x="470" y="22" text-anchor="middle">R8</text>
+      <rect class="led led-org" x="486" y="7"  width="8" height="6"/><text class="silk-sm" x="490" y="22" text-anchor="middle">OTA</text>
+      <rect class="led led-red" x="506" y="7"  width="8" height="6"/><text class="silk-sm" x="510" y="22" text-anchor="middle">FLT</text>
+    </g>
+
+    <!-- RGB LEDs at y=7mm=35, pitch 3.5mm=17.5, start at x=38mm=190 -->
+    <g>
+      <rect class="led led-rgb" x="186" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="203.5" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="221" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="238.5" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="256" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="273.5" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="291" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="308.5" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="326" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="343.5" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="361" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="378.5" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="396" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="413.5" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="431" y="31" width="7" height="6"/>
+      <rect class="led led-rgb" x="448.5" y="31" width="7" height="6"/>
+      <text class="silk-sm" x="320" y="47" text-anchor="middle" fill="#f9a8d4">16 × SK6812-MINI (software-defined)</text>
+    </g>
+
+    <!-- ===== Debug headers on right edge ===== -->
+    <rect class="conn" x="555" y="110" width="35" height="30"/>
+    <text class="conn-lbl" x="572" y="122" text-anchor="middle">JP_DEBUG</text>
+    <text class="conn-lbl" x="572" y="131" text-anchor="middle">S3 (1×4)</text>
+
+    <rect class="conn" x="555" y="155" width="35" height="45"/>
+    <text class="conn-lbl" x="572" y="167" text-anchor="middle">JP_DEBUG</text>
+    <text class="conn-lbl" x="572" y="176" text-anchor="middle">H2 (1×6)</text>
+    <text class="silk-sm" x="572" y="187" text-anchor="middle" fill="#fbbf24">MANUAL</text>
+    <text class="silk-sm" x="572" y="195" text-anchor="middle" fill="#fbbf24">RESET+BOOT</text>
+
+    <rect class="conn" x="555" y="215" width="35" height="30"/>
+    <text class="conn-lbl" x="572" y="227" text-anchor="middle">JP_DEBUG</text>
+    <text class="conn-lbl" x="572" y="236" text-anchor="middle">I2C (1×4)</text>
+
+    <!-- H2 USB JTAG test pads -->
+    <circle class="mh-fill" cx="558" cy="290" r="3"/>
+    <circle class="mh-fill" cx="568" cy="290" r="3"/>
+    <text class="silk-sm" x="563" y="305" text-anchor="middle" fill="#fde68a">TP_H2_USB_D±</text>
+
+    <!-- ===== Inter-MCU signal lines (UART + control, dashed pink) ===== -->
+    <g>
+      <path class="inter-sig" d="M 105 90 C 200 90 380 180 534 330"/>
+      <path class="inter-sig" d="M 105 100 C 200 100 380 190 534 335"/>
+      <path class="inter-sig" d="M 105 110 C 200 110 380 200 534 345"/>
+      <path class="inter-sig" d="M 105 120 C 200 120 380 210 534 355"/>
+      <path class="inter-sig" d="M 105 130 C 200 130 380 220 534 365"/>
+      <text class="inter-lbl" x="300" y="170" fill="#f9a8d4">H2_UART_TX / RX · H2_RESET_N · H2_IRQ · H2_BOOT_SEL — UART only, no SPI</text>
+    </g>
+
+    <!-- ===== Outer dimension lines ===== -->
+    <!-- horizontal 120 mm -->
+    <line class="dim-line" x1="0"   y1="-30" x2="600" y2="-30"/>
+    <line class="dim-tick" x1="0"   y1="-35" x2="0"   y2="-25"/>
+    <line class="dim-tick" x1="600" y1="-35" x2="600" y2="-25"/>
+    <text class="dim-lbl-big" x="300" y="-38" text-anchor="middle">120 mm</text>
+    <!-- vertical 80 mm -->
+    <line class="dim-line" x1="-25" y1="0"   x2="-25" y2="400"/>
+    <line class="dim-tick" x1="-30" y1="0"   x2="-20" y2="0"/>
+    <line class="dim-tick" x1="-30" y1="400" x2="-20" y2="400"/>
+    <text class="dim-lbl-big" x="-35" y="205" text-anchor="middle" transform="rotate(-90 -35 205)">80 mm</text>
+
+    <!-- ===== Diagonal antenna-separation dimension ===== -->
+    <line class="dim-line" x1="75" y1="35" x2="545" y2="370" stroke="#f472b6"/>
+    <circle cx="75"  cy="35"  r="3" fill="#f472b6"/>
+    <circle cx="545" cy="370" r="3" fill="#f472b6"/>
+    <rect fill="#0f1115" stroke="#f472b6" stroke-width="0.5" x="230" y="195" width="170" height="22" rx="3"/>
+    <text fill="#fbcfe8" font-size="10" font-weight="700" x="315" y="210" text-anchor="middle" font-family="'JetBrains Mono', monospace">
+      antenna edge-to-edge ≈ 115 mm
+    </text>
+
+    <!-- ===== Board corners marker (edge cuts) ===== -->
+    <rect class="board-edge" x="0" y="0" width="600" height="400" rx="6" fill="none"/>
+
+  </g>
+
+  <!-- ============ LEFT callout panels ============ -->
+  <g transform="translate(20, 150)">
+    <!-- POWER ZONE -->
+    <rect class="panel" x="0" y="0" width="360" height="155" rx="4"/>
+    <rect fill="#f59e0b" x="0" y="0" width="4" height="155"/>
+    <text class="panel-head" x="16" y="22">POWER ZONE — LEFT EDGE</text>
+    <text class="panel-text" x="16" y="44">J1  USB-C      GCT USB4105-GF-A (C165948)</text>
+    <text class="panel-text" x="16" y="60">FB1 ferrite    BLM18PG471SN1D   (C1017)</text>
+    <text class="panel-text" x="16" y="76">U1  USB ESD    USBLC6-2SC6      (C7593)</text>
+    <text class="panel-text" x="16" y="92">U2  OR-ing     LM66100DCKR      (C2869734)</text>
+    <text class="panel-text" x="16" y="108">J2  Barrel jack DC-005-2.0      (C49750)</text>
+    <text class="panel-text" x="16" y="124">Q1 +D1+SS14   reverse-pol / TVS / backfeed</text>
+    <text class="panel-text" x="16" y="140">U4  3V3 buck  AP63300WU-7      (C2158012)</text>
+
+    <!-- BUCK RULE -->
+    <rect class="panel" x="0" y="170" width="360" height="110" rx="4"/>
+    <rect fill="#ef4444" x="0" y="170" width="4" height="110"/>
+    <text class="panel-head" x="16" y="192">BUCK LAYOUT RULE</text>
+    <text class="panel-text" x="16" y="214">SW node copper ≤ 3 mm² (EMI aggressor)</text>
+    <text class="panel-text" x="16" y="230">L_BUCK ≤ 4 mm from U4 SW pin</text>
+    <text class="panel-text" x="16" y="246">Thermal pour on GND pin 2 only (≥ 50 mm²)</text>
+    <text class="panel-text" x="16" y="262">VIN pin 5 optional secondary thermal</text>
+    <text class="panel-text" x="16" y="278" fill="#fca5a5">SW pin gets NO thermal pour</text>
+
+    <!-- MCU ZONE (S3) -->
+    <rect class="panel" x="0" y="295" width="360" height="155" rx="4"/>
+    <rect fill="#ef4444" x="0" y="295" width="4" height="155"/>
+    <text class="panel-head" x="16" y="317">MCU ZONE (S3) — TOP LEFT</text>
+    <text class="panel-text" x="16" y="339">U5  ESP32-S3-WROOM-1-N16R8 (C5092449)</text>
+    <text class="panel-text" x="16" y="355">    16 MB flash + 8 MB octal PSRAM</text>
+    <text class="panel-text" x="16" y="371">SW1 RESET_S3, SW2 BOOT_S3 (6×6 tact)</text>
+    <text class="panel-text" x="16" y="387">U_LED TLC5947DAP 24-ch PWM (C43754)</text>
+    <text class="panel-text" x="16" y="403">Native USB on IO19/IO20 via U1 USBLC6</text>
+    <text class="panel-text" x="16" y="419">I2C trunk IO8/IO9 to U6 TCA9548A</text>
+    <text class="panel-text" x="16" y="435">UART1 IO17/IO18 → H2 (921600 8N1)</text>
+  </g>
+
+  <!-- ============ RIGHT callout panels ============ -->
+  <g transform="translate(1020, 150)">
+    <!-- RADIO ZONE (H2) -->
+    <rect class="panel" x="0" y="0" width="360" height="135" rx="4"/>
+    <rect fill="#a855f7" x="0" y="0" width="4" height="135"/>
+    <text class="panel-head" x="16" y="22">RADIO ZONE (H2) — BOTTOM RIGHT</text>
+    <text class="panel-text" x="16" y="44">U_H2 ESP32-H2-MINI-1-N4 (C18203134)</text>
+    <text class="panel-text" x="16" y="60">    RISC-V, Zigbee 3.0 / Thread / BLE 5</text>
+    <text class="panel-text" x="16" y="76">IO4/IO5  UART1 RX/TX ↔ S3</text>
+    <text class="panel-text" x="16" y="92">IO23 U0RXD  ·  IO24 U0TXD (debug)</text>
+    <text class="panel-text" x="16" y="108">IO26/IO27 USB D−/D+ → TP_H2_USB_D±</text>
+    <text class="panel-text" x="16" y="124">IO11 HB · IO12 ZB · IO13 BLE (direct LEDs)</text>
+
+    <!-- I2C CORE -->
+    <rect class="panel" x="0" y="150" width="360" height="135" rx="4"/>
+    <rect fill="#3b82f6" x="0" y="150" width="4" height="135"/>
+    <text class="panel-head" x="16" y="172">I2C CORE — CENTER</text>
+    <text class="panel-text" x="16" y="194">U6  TCA9548APWR  addr 0x70  (C130026)</text>
+    <text class="panel-text" x="16" y="210">U7..U14  PCA9306DCTR VSSOP-8 (C123752)</text>
+    <text class="panel-text" x="16" y="226">3V3 trunk pullups 4.7 kΩ (R_SDA/SCL_MCU)</text>
+    <text class="panel-text" x="16" y="242">5V row pullups 4.7 kΩ (R_SDA/SCL_ROW{n})</text>
+    <text class="panel-text" x="16" y="258">MUX_RESET_N ← S3 IO10 (10 kΩ pullup)</text>
+    <text class="panel-text" x="16" y="274">JP_BYPASS_SDA/SCL 0 Ω DNP near Row 1</text>
+
+    <!-- DEBUG -->
+    <rect class="panel" x="0" y="300" width="360" height="125" rx="4"/>
+    <rect fill="#94a3b8" x="0" y="300" width="4" height="125"/>
+    <text class="panel-head" x="16" y="322">DEBUG &amp; TEST — RIGHT EDGE</text>
+    <text class="panel-text" x="16" y="344">JP_DEBUG_S3   1×4  3V3 GND TX RX</text>
+    <text class="panel-text" x="16" y="360">JP_DEBUG_H2   1×6  +EN +BOOT (manual)</text>
+    <text class="panel-text" x="16" y="376">JP_DEBUG_I2C  1×4  pre-mux 3V3 trunk</text>
+    <text class="panel-text" x="16" y="392">TP_H2_USB_DP/DN  1 mm pads for JTAG</text>
+    <text class="panel-text" x="16" y="410" fill="#fca5a5">NOT auto-reset compatible — see JP_DEBUG_H2</text>
+  </g>
+
+  <!-- ============ BOTTOM callout panels ============ -->
+  <g transform="translate(20, 590)">
+    <!-- ROW INTERFACE -->
+    <rect class="panel" x="0" y="0" width="420" height="155" rx="4"/>
+    <rect fill="#22c55e" x="0" y="0" width="4" height="155"/>
+    <text class="panel-head" x="16" y="22">ROW INTERFACE — BOTTOM EDGE</text>
+    <text class="panel-text" x="16" y="44">J3..J10   JST B4B-XH-A(LF)(SN) 4-pin  (C144394)</text>
+    <text class="panel-text" x="16" y="60">Pin order 5V · GND · SDA · SCL   (NOT 5/SDA/SCL/G)</text>
+    <text class="panel-text" x="16" y="76">F{n}  2 A polyfuse 1812L200  (C181547)</text>
+    <text class="panel-text" x="16" y="92">D_ROW{n} SMBJ5.0A TVS  (C7414)  9.2 V clamp</text>
+    <text class="panel-text" x="16" y="108">U15..U22 PESD3V3L5UW ESD on SDA/SCL  (C14565)</text>
+    <text class="panel-text" x="16" y="124">C_ROW{n} 47 µF 1210 X5R + 100 nF 0603 HF</text>
+    <text class="panel-text" x="16" y="140">8 rows × 16 units = 128 unit ceiling</text>
+  </g>
+
+  <g transform="translate(460, 590)">
+    <!-- LED BAR -->
+    <rect class="panel" x="0" y="0" width="460" height="155" rx="4"/>
+    <rect fill="#ec4899" x="0" y="0" width="4" height="155"/>
+    <text class="panel-head" x="16" y="22">LED BAR — FRONT EDGE (USER-FACING)</text>
+    <text class="panel-text" x="16" y="44">19 side-view Everlight 19-217 series, 1204 pkg, 4 mm pitch</text>
+    <text class="panel-text" x="16" y="60">Driver:  14 via TLC5947 ch0..13  (IO4/5/6/7)</text>
+    <text class="panel-text" x="16" y="76">         3 direct from H2 IO11/12/13 (HB/ZB/BLE)</text>
+    <text class="panel-text" x="16" y="92">         2 always-on rail indicators (5V, 3V3)</text>
+    <text class="panel-text" x="16" y="108">16 × SK6812-MINI-E side-emit RGB, 3.5 mm pitch (C527089)</text>
+    <text class="panel-text" x="16" y="124">Data from S3 IO21 via R_RGB_SER 33 Ω; LEVEL_RGB DNP</text>
+    <text class="panel-text" x="16" y="140">Activity LEDs: 50 ms firmware pulse-stretch</text>
+  </g>
+
+  <g transform="translate(940, 590)">
+    <!-- BOARD SPECS -->
+    <rect class="panel" x="0" y="0" width="440" height="155" rx="4"/>
+    <rect fill="#fef08a" x="0" y="0" width="4" height="155"/>
+    <text class="panel-head" x="16" y="22">BOARD SPECS</text>
+    <text class="panel-text" x="16" y="44">Size      120 × 80 mm</text>
+    <text class="panel-text" x="16" y="60">Stack-up  4-layer, 1.6 mm FR4, Tg 155, ENIG</text>
+    <text class="panel-text" x="16" y="76">          L1 signals · L2 GND · L3 power · L4 signals+GND</text>
+    <text class="panel-text" x="16" y="92">Impedance 90 Ω differential on USB D+/D−</text>
+    <text class="panel-text" x="16" y="108">Min trace/space 0.15 / 0.15 mm · via 0.3/0.6 mm</text>
+    <text class="panel-text" x="16" y="124">Mounting  4× M3 (3.2 mm) clear of antenna KO</text>
+    <text class="panel-text" x="16" y="140">Input ceiling 8 A on 5V_RAIL (barrel jack)</text>
+  </g>
+
+  <!-- ============ RF note bar above board ============ -->
+  <g transform="translate(400, 95)">
+    <rect fill="#1a1d24" stroke="#f472b6" stroke-width="1" x="0" y="0" width="600" height="30" rx="4"/>
+    <text fill="#fbcfe8" font-size="11" font-weight="700" font-family="'JetBrains Mono', monospace"
+          x="300" y="20" text-anchor="middle">
+      RF placement: S3 antenna ↖ top-left corner · H2 antenna ↘ bottom-right corner · ≥ 60 mm edge-to-edge required, ~115 mm achieved
+    </text>
+  </g>
+
+  <!-- ============ Legend ============ -->
+  <g transform="translate(20, 760)">
+    <rect class="panel" x="0" y="0" width="1360" height="120" rx="4"/>
+    <text class="panel-head" x="16" y="22">LEGEND</text>
+
+    <rect fill="none" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="5 3" x="18" y="42" width="22" height="14"/>
+    <text class="panel-text" x="48" y="53">antenna keep-out (cleared L1..L4)</text>
+
+    <rect fill="none" stroke="#f59e0b" stroke-width="0.7" stroke-dasharray="4 3" x="310" y="42" width="22" height="14"/>
+    <text class="panel-text" x="340" y="53">power zone</text>
+
+    <rect fill="none" stroke="#ef4444" stroke-width="0.7" stroke-dasharray="4 3" x="470" y="42" width="22" height="14"/>
+    <text class="panel-text" x="500" y="53">MCU zone (S3)</text>
+
+    <rect fill="none" stroke="#a855f7" stroke-width="0.7" stroke-dasharray="4 3" x="640" y="42" width="22" height="14"/>
+    <text class="panel-text" x="670" y="53">radio zone (H2)</text>
+
+    <rect fill="none" stroke="#3b82f6" stroke-width="0.7" stroke-dasharray="4 3" x="820" y="42" width="22" height="14"/>
+    <text class="panel-text" x="850" y="53">I2C core</text>
+
+    <rect fill="none" stroke="#22c55e" stroke-width="0.7" stroke-dasharray="4 3" x="960" y="42" width="22" height="14"/>
+    <text class="panel-text" x="990" y="53">row interface</text>
+
+    <rect fill="none" stroke="#ec4899" stroke-width="0.7" stroke-dasharray="4 3" x="1110" y="42" width="22" height="14"/>
+    <text class="panel-text" x="1140" y="53">LED bar</text>
+
+    <rect fill="#334155" stroke="#f5f5f5" stroke-width="0.4" x="18"  y="70" width="22" height="10"/>
+    <text class="panel-text" x="48" y="80">IC / passive</text>
+
+    <rect fill="#0b1120" stroke="#60a5fa" stroke-width="0.6" x="180" y="70" width="22" height="10"/>
+    <text class="panel-text" x="212" y="80">connector / header</text>
+
+    <rect fill="#1f2937" stroke="#fef08a" stroke-width="0.8" x="360" y="70" width="22" height="10"/>
+    <text class="panel-text" x="392" y="80">module (ESP32-S3 / H2)</text>
+
+    <circle cx="570" cy="75" r="5" fill="#0f1115" stroke="#fef08a" stroke-width="0.6"/>
+    <text class="panel-text" x="585" y="80">mounting hole (M3, 3.2 mm)</text>
+
+    <line x1="740" y1="75" x2="770" y2="75" stroke="#f472b6" stroke-width="0.6" stroke-dasharray="2 2"/>
+    <text class="panel-text" x="780" y="80">inter-MCU UART + control (5 nets, no SPI)</text>
+
+    <text class="panel-dim" x="16" y="105">Files authoritative over this diagram: README.md · SCHEMATIC.md · PINOUT.md · BOM.csv</text>
+    <text class="panel-dim" x="16" y="115">This SVG is a placement sketch, not a gerber. Component dimensions are illustrative; refer to vendor datasheets for exact footprints.</text>
+  </g>
+</svg>

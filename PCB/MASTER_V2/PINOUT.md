@@ -87,7 +87,7 @@ Module pin numbers per Espressif ESP32-S3-WROOM-1 datasheet.
 | IO10    | 11 | IRQ to S3 | **H2_IRQ** | Output, open-drain | 10 kΩ pullup on S3 side to 3V3 (R_H2_IRQ). Active low. Firmware asserts when async Zigbee/BLE event pending. |
 | IO11    | 12 | LED heartbeat | **LED_H2_HB** | Output | 1 kΩ series → yellow LED (LED_4) → GND. Firmware: 1 Hz blink while main loop is running. Independent of S3 link. |
 | IO12    | 16 | LED Zigbee | **LED_ZIGBEE** | Output | 1 kΩ series → yellow LED (LED_6) → GND. Firmware: off = no network, solid = joined, flicker = radio TX/RX (50 ms pulse-stretch). |
-| IO13    | 17 | LED BLE | **LED_BLE** | Output | 1 kΩ series → light-blue LED (LED_7) → GND. Firmware: off = inactive, solid = advertising/paired, flicker = GATT TX/RX (50 ms pulse-stretch). |
+| IO13    | 17 | LED BLE | **LED_BLE** | Output | 1 kΩ series → blue LED (LED_7) → GND. Firmware: off = inactive, solid = advertising/paired, flicker = GATT TX/RX (50 ms pulse-stretch). |
 | IO14    | 18 | reserved | — | — | No copper escape |
 | IO22    | 13 | reserved | — | — | No copper escape |
 | IO23    | 14 | UART0 RX (debug) | **U0RXD_H2** | Input | To JP_DEBUG_H2 pin 4 + TP_U0RXD_H2. ROM bootloader + log console. |
@@ -156,7 +156,7 @@ Numbered left-to-right as viewed from the front.
 | LED_4  | yellow     | H2 IO11 direct          | `LED_H2_HB`    | H2 heartbeat — 1 Hz pulse, independent of S3 |
 | LED_5  | blue       | S3 via TLC5947 ch1      | `LED_WIFI`     | WiFi: off=no link, solid=connected, flicker=traffic |
 | LED_6  | yellow     | H2 IO12 direct          | `LED_ZIGBEE`   | Zigbee: off=no link, solid=joined, flicker=TX/RX |
-| LED_7  | light-blue | H2 IO13 direct          | `LED_BLE`      | BLE: off=inactive, solid=advertising/paired, flicker=GATT |
+| LED_7  | blue | H2 IO13 direct          | `LED_BLE`      | BLE: off=inactive, solid=advertising/paired, flicker=GATT |
 | LED_8  | green      | S3 via TLC5947 ch2      | `LED_I2C_ACT`  | I2C bus activity — pulse on any transaction |
 | LED_9  | white      | S3 via TLC5947 ch3      | `LED_UART_ACT` | S3↔H2 UART activity — pulse on byte traffic |
 | LED_10 | green      | S3 via TLC5947 ch4      | `LED_ROW_1`    | Row 1 selected — pulse when mux bit 0 is set |

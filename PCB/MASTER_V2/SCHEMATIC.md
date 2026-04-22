@@ -107,9 +107,9 @@ Per-row caps: see §10.
 
 ## 5. 3.3 V regulator — U4 AP63300WU-7 synchronous buck (TSOT-26)
 
-Part: **AP63300WU-7** (Diodes Incorporated). 3.8 V – 32 V input, 3 A, integrated synchronous MOSFETs, internally compensated, 0.803 V feedback reference, **fixed 500 kHz** switching. Internal compensation and internal soft-start — no external COMP or SS network required.
+Part: **AP63300WU-7** (Diodes Incorporated, LCSC C2158012). 3.8 V – 32 V input, 3 A, integrated synchronous MOSFETs, internally compensated, 0.803 V feedback reference, **fixed 500 kHz** switching. Internal compensation and internal soft-start — no external COMP or SS network required.
 
-Input range 3.8 V chosen over TPS54302's 4.5 V specifically to tolerate worst-case jack-only operation: 5.0 V source − AO3401A R_DS(on) drop (~50 mV @ 500 mA) − SS14 V_F (~0.4 V @ 500 mA) = ~4.55 V on 5V_LOGIC. AP63300 has ~750 mV headroom above its 3.8 V minimum; TPS54302 had only ~50 mV above its 4.5 V minimum.
+*(Design rationale, not implementation — retained for handoff context.)* The wider 3.8 V V_IN minimum was the deciding factor over TPS54302DDCR (4.5 V min). Jack-only operation feeds this buck via SS14 backfeed, not directly from the jack. Drop budget at 500 mA logic draw: Q1 R_DS(on) ~50 mV + SS14 V_F ~0.4 V + cable/transient allowance ~0.2 V → steady-state `5V_LOGIC` ≈ 4.5 V with dips to ~4.35 V during S3 WiFi TX bursts. TPS54302 (4.5 V min) would glitch on every burst; AP63300 keeps ≥ 550 mV transient margin. See README §"Buck selection rationale" for the full drop budget.
 
 ### U4 AP63300WU-7 pinout (TSOT-26)
 
@@ -138,7 +138,7 @@ V_OUT = 0.803 V × (1 + 100 kΩ / 31.6 kΩ) = **3.34 V** (nominal 3.3 V ±1 % ty
 ### Layout requirements (MANDATORY)
 
 - L_BUCK and C_BUCK_OUT_1 within 4 mm of U4.
-- SW node copper area ≤ 3 mm².
+- **SW node copper area ≤ 3 mm² total** (U4 SW pad + short trace to L_BUCK input pad). SW is a high-dV/dt EMI aggressor — do NOT expand the SW copper for thermal or any other reason.
 - SW trace on L1 only; L2 GND plane directly beneath, uninterrupted.
 - Feedback divider within 5 mm of U4 pin 3; FB trace flanked by GND pour.
 - BST capacitor within 3 mm of U4 between pins 6 and 1.
@@ -146,7 +146,9 @@ V_OUT = 0.803 V × (1 + 100 kΩ / 31.6 kΩ) = **3.34 V** (nominal 3.3 V ±1 % ty
 
 ### Thermal
 
-- AP63300WU-7 is TSOT-26 with no explicit EPAD. Use ≥ 50 mm² copper area on L1 connected to GND pin (pin 2) and SW pin (pin 1) pour, with ≥ 6 stitching vias (0.3 mm drill) to L2 under the package footprint. Package θ_JA with recommended copper area is ~80 °C/W per Diodes datasheet — at 3 A × (1 − 0.66 efficiency) × V_IN ≈ 1.7 W dissipation worst case, rise ≈ 136 °C is over limit; real workload is ≤ 0.5 A 3V3 typical (S3+H2+mux) = ~0.3 W dissipation, rise ≈ 24 °C. Well within SOA.
+- AP63300WU-7 is TSOT-26 with no explicit EPAD. Heat exits primarily through pin 2 (GND) and secondarily through pin 5 (VIN). Allocate ≥ 50 mm² L1 GND copper under and around U4, stitched to L2 with ≥ 6 × 0.3 mm vias. Pin 5 (VIN) pad copper may be expanded on the 5V_LOGIC L3 island as a secondary thermal path.
+- **SW pin (pin 1) gets NO thermal pour** — its copper stays bounded by the ≤ 3 mm² SW-node rule above. Any attempt to sink heat through SW defeats the EMI constraint and re-introduces radiated noise near the USB diff pair and the antennas.
+- Dissipation budget: real workload is ≤ 0.5 A 3V3 typical (S3+H2+mux) ≈ 0.3 W. With the pin-2 GND copper area above, θ_JA ≈ 80 °C/W per Diodes datasheet → rise ≈ 24 °C. Well within SOA. Worst-case 3 A continuous (not a real workload here) would dissipate ~1.7 W and exceed limits; the board is not specified for that load.
 
 ## 6. ESP32-S3 module — U5 ESP32-S3-WROOM-1-N16R8
 
@@ -220,9 +222,9 @@ Reference: Espressif ESP32-H2-MINI-1 datasheet (N4 variant: 4 MB SPI flash). RIS
 | IO10 | 11 | Output, open-drain | **H2_IRQ** | S3 IO12 (10 kΩ R_H2_IRQ pullup to 3V3 on S3 side) |
 | IO11 | 12 | Output | **LED_H2_HB**  | R_LED_H2_HB 1 kΩ → LED_4 anode (yellow) |
 | IO12 | 16 | Output | **LED_ZIGBEE** | R_LED_ZIGBEE 1 kΩ → LED_6 anode (yellow) |
-| IO13 | 17 | Output | **LED_BLE**    | R_LED_BLE 1 kΩ → LED_7 anode (light-blue) |
-| IO23 | 14 | Output (H2 UART0 TX, debug) | **U0TXD_H2** | JP_DEBUG_H2 pin 3, TP_U0TXD_H2 |
-| IO24 | 15 | Input (H2 UART0 RX, debug) | **U0RXD_H2** | JP_DEBUG_H2 pin 4, TP_U0RXD_H2 |
+| IO13 | 17 | Output | **LED_BLE**    | R_LED_BLE 1 kΩ → LED_7 anode (blue) |
+| IO23 | 14 | Input (H2 UART0 RX, debug) | **U0RXD_H2** | JP_DEBUG_H2 pin 4, TP_U0RXD_H2 |
+| IO24 | 15 | Output (H2 UART0 TX, debug) | **U0TXD_H2** | JP_DEBUG_H2 pin 3, TP_U0TXD_H2 |
 | IO26 | 23 | USB D− (H2 built-in USB Serial/JTAG) | **H2_USB_DN** | TP_H2_USB_DN |
 | IO27 | 22 | USB D+ (H2 built-in USB Serial/JTAG) | **H2_USB_DP** | TP_H2_USB_DP |
 
@@ -233,7 +235,7 @@ Module pin numbers per Espressif ESP32-H2-MINI-1 datasheet rev 1.1+.
 
 ### Decoupling (MANDATORY)
 
-- **C_H2_BULK** 10 µF 10 V X5R 0603 on 3V3_RAIL within 10 mm of module.
+- **C_H2_BULK** 10 µF 10 V X5R 0805 on 3V3_RAIL within 10 mm of module (10 V rating requires 0805 in X5R; 0603 tops out at 6.3 V for this capacitance).
 - Three local decoupling pairs adjacent to module 3V3 entry:
   - **C_H2_DEC1a** 100 nF 0603 X7R + **C_H2_DEC1b** 1 µF 0603 X5R
   - **C_H2_DEC2a** 100 nF 0603 X7R + **C_H2_DEC2b** 1 µF 0603 X5R
@@ -386,7 +388,7 @@ Connected on the row-side of the level shifter, upstream of the connector:
 
 A 35-LED status bar runs along the front-facing long edge of the PCB, in two stacked rows. The 3D-printed case exposes this edge through a slot aligned with the silkscreen label `LED ROW — FRONT`.
 
-Top row: 19 fixed-function side-emit SMD LEDs (1206 right-angle, 4 mm pitch = 72 mm).
+Top row: 19 fixed-function side-view SMD LEDs (Everlight 19-217 series, 1204 package, 4 mm pitch = 72 mm).
 Bottom row: 16 × SK6812-mini RGB side-emit (3.5 mm pitch = 56 mm).
 
 ### 11.1 Fixed row — LED reference, driver, net
@@ -399,7 +401,7 @@ Bottom row: 16 × SK6812-mini RGB side-emit (3.5 mm pitch = 56 mm).
 | LED_4 | yellow     | H2 IO11             | 1 kΩ **R_LED_H2_HB**     | `LED_H2_HB`    | H2 heartbeat |
 | LED_5 | blue       | **U_LED** ch1       | TLC5947                  | `LED_WIFI`     | WiFi link + traffic |
 | LED_6 | yellow     | H2 IO12             | 1 kΩ **R_LED_ZIGBEE**    | `LED_ZIGBEE`   | Zigbee link + TX/RX |
-| LED_7 | light-blue | H2 IO13             | 1 kΩ **R_LED_BLE**       | `LED_BLE`      | BLE state + GATT |
+| LED_7 | blue | H2 IO13             | 1 kΩ **R_LED_BLE**       | `LED_BLE`      | BLE state + GATT |
 | LED_8 | green      | **U_LED** ch2       | TLC5947                  | `LED_I2C_ACT`  | I2C bus activity |
 | LED_9 | white      | **U_LED** ch3       | TLC5947                  | `LED_UART_ACT` | S3↔H2 UART activity |
 | LED_10 | green     | **U_LED** ch4       | TLC5947                  | `LED_ROW_1`    | Row 1 selected |
@@ -492,18 +494,18 @@ Comm-activity LEDs (`LED_WIFI`, `LED_ZIGBEE`, `LED_BLE`, `LED_I2C_ACT`, `LED_UAR
 
 Primary S3 debug is the USB-C connector (native USB Serial/JTAG via S3 GPIO19/20). JP_DEBUG_S3 is secondary/bench access.
 
-### JP_DEBUG_H2 — 1×6 header 2.54 mm (UART0 + EN + BOOT for H2)
+### JP_DEBUG_H2 — 1×6 header 2.54 mm (UART0 + EN + BOOT for H2, manual control only)
 
 | Pin | Net | Notes |
 |---|---|---|
 | 1 | **3V3_RAIL** | power, 0.3 A max |
 | 2 | **GND** | |
-| 3 | **U0TXD_H2** (H2 IO24) | H2 TX |
-| 4 | **U0RXD_H2** (H2 IO23) | H2 RX |
-| 5 | **H2_RESET_N** (H2 EN) | external dongle can assert low to reset |
-| 6 | **H2_BOOT_SEL** (H2 IO9) | external dongle can assert low for UART download |
+| 3 | **U0TXD_H2** (H2 IO24) | H2 TX — to external USB-UART RX |
+| 4 | **U0RXD_H2** (H2 IO23) | H2 RX — from external USB-UART TX |
+| 5 | **H2_RESET_N** (H2 EN) | manual only: jumper-wire a dongle GPIO to this pin and hand-assert low to reset H2 |
+| 6 | **H2_BOOT_SEL** (H2 IO9) | manual only: hand-assert low before reset to enter UART download mode |
 
-Wiring compatible with Espressif ESP-Prog and FTDI-type USB-UART dongles in reset+boot auto-control mode.
+**This header is NOT auto-reset compatible.** No DTR/RTS-to-EN/BOOT control transistor network exists on the PCB. External USB-UART dongles that rely on DTR/RTS auto-reset (esptool `--before default_reset` / Arduino IDE auto-flash) will not cycle EN and BOOT automatically via pins 5/6 — the dongle's DTR/RTS are passive voltage rails as seen from this header. The workflow is manual: externally drive pin 6 low, externally pulse pin 5 low, release, then run esptool with `--before no_reset --after no_reset`. For fully automated programming, drive H2 via S3 (S3 owns H2 EN through R_H2_RST_SER and H2 BOOT_SEL through R_H2_BOOT_SER) or use the H2 native USB-JTAG test pads (TP_H2_USB_DP/DN).
 
 ### H2 USB Serial/JTAG test pads
 
@@ -634,5 +636,5 @@ Firmware rule: mux channel-select register accepts only single-bit values (0x01,
 4. **All IC pinouts MUST be verified against vendor datasheets at capture time.** No approximate pin mappings — §6, §7, §9, §10 tables are authoritative.
 5. **5V_RAIL (row power) and 5V_LOGIC (regulator input) are distinct nets.** Do not short them on PCB.
 6. **D_BACKFEED Schottky is the only connection between JACK_5V and 5V_LOGIC.** Polarity: anode JACK_5V, cathode 5V_LOGIC. Reversal back-drives the buck from logic into row power.
-7. **Antenna keep-outs are hard layout rules.** 15×7 mm under S3 antenna, 11×6 mm under H2 antenna, cleared on all 4 layers. Modules on opposite board edges. ≥ 30 mm antenna edge-to-edge separation.
+7. **Antenna keep-outs are hard layout rules.** 15×7 mm under S3 antenna (top-left corner), 11×6 mm under H2 antenna (bottom-right corner), cleared on all 4 layers. Modules on **diagonally opposite corners**. ≥ 60 mm antenna edge-to-edge separation required (~115 mm achieved on the 120 × 80 mm Rev B board).
 8. **H2 is a slave.** S3 is the sole system controller. H2 cannot drive MUX, row I2C, or power state.

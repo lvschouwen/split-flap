@@ -1,0 +1,431 @@
+(kicad_pcb
+  (version 20231120)
+  (generator "split_flap_hand_crafted")
+  (generator_version "8.0")
+
+  (general
+    (thickness 1.6)
+    (legacy_teardrops no)
+  )
+
+  (paper "A3")
+
+  (title_block
+    (title "Split-Flap Master v2 Rev B - placement mockup")
+    (date "2026-04-22")
+    (rev "B")
+    (company "split-flap")
+    (comment 1 "Authoritative netlist: SCHEMATIC.md alongside.")
+    (comment 2 "BOM: BOM.csv. Pinout: PINOUT.md. Handoff: README.md.")
+    (comment 3 "This file is a PLACEMENT MOCKUP — board outline, antenna keep-outs,")
+    (comment 4 "mounting holes, and silkscreen placeholders only. No tracks, no real")
+    (comment 5 "footprints, no DRC-clean nets. Layout engineer recaptures from scratch.")
+  )
+
+  (layers
+    (0 "F.Cu" signal)
+    (1 "In1.Cu" signal)
+    (2 "In2.Cu" signal)
+    (31 "B.Cu" signal)
+    (32 "B.Adhes" user "B.Adhesive")
+    (33 "F.Adhes" user "F.Adhesive")
+    (34 "B.Paste" user)
+    (35 "F.Paste" user)
+    (36 "B.Silkscreen" user "B.SilkS")
+    (37 "F.Silkscreen" user "F.SilkS")
+    (38 "B.Mask" user)
+    (39 "F.Mask" user)
+    (40 "Dwgs.User" user)
+    (41 "Cmts.User" user)
+    (42 "Eco1.User" user)
+    (43 "Eco2.User" user)
+    (44 "Edge.Cuts" user)
+    (45 "Margin" user)
+    (46 "B.CrtYd" user "B.Courtyard")
+    (47 "F.CrtYd" user "F.Courtyard")
+    (48 "B.Fab" user)
+    (49 "F.Fab" user)
+    (50 "User.1" user "Antenna.Keepout")
+    (51 "User.2" user "Zones")
+  )
+
+  (setup
+    (pad_to_mask_clearance 0)
+    (allow_soldermask_bridges_in_footprints no)
+  )
+
+  (net 0 "")
+
+  ;; ==============================================================
+  ;; BOARD OUTLINE - 120 x 80 mm (Edge.Cuts)
+  ;; Origin (0,0) at top-left.
+  ;; ==============================================================
+
+  (gr_line (start 0 0)    (end 120 0)   (stroke (width 0.15) (type solid)) (layer "Edge.Cuts") (uuid "00000001-0000-0000-0000-000000000001"))
+  (gr_line (start 120 0)  (end 120 80)  (stroke (width 0.15) (type solid)) (layer "Edge.Cuts") (uuid "00000001-0000-0000-0000-000000000002"))
+  (gr_line (start 120 80) (end 0 80)    (stroke (width 0.15) (type solid)) (layer "Edge.Cuts") (uuid "00000001-0000-0000-0000-000000000003"))
+  (gr_line (start 0 80)   (end 0 0)     (stroke (width 0.15) (type solid)) (layer "Edge.Cuts") (uuid "00000001-0000-0000-0000-000000000004"))
+
+  ;; ==============================================================
+  ;; ANTENNA KEEP-OUTS (User.1 / Antenna.Keepout)
+  ;; Must be cleared on all 4 copper layers and both silkscreens
+  ;; in final layout. Drawn here as visible rectangles only.
+  ;; ==============================================================
+
+  ;; S3 antenna keep-out: 15 x 7 mm, top-left corner
+  (gr_rect (start 0 0) (end 15 7)
+    (stroke (width 0.25) (type dash)) (fill none) (layer "User.1")
+    (uuid "00000002-0000-0000-0000-000000000001"))
+  (gr_text "S3 ANTENNA KEEP-OUT 15x7 - no Cu L1..L4"
+    (at 7.5 3.5 0) (layer "User.1")
+    (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center))
+    (uuid "00000002-0000-0000-0000-000000000002"))
+
+  ;; H2 antenna keep-out: 11 x 6 mm, bottom-right corner (109,74) to (120,80)
+  (gr_rect (start 109 74) (end 120 80)
+    (stroke (width 0.25) (type dash)) (fill none) (layer "User.1")
+    (uuid "00000002-0000-0000-0000-000000000003"))
+  (gr_text "H2 ANT KEEP-OUT 11x6"
+    (at 114.5 77 0) (layer "User.1")
+    (effects (font (size 0.6 0.6) (thickness 0.1)) (justify center))
+    (uuid "00000002-0000-0000-0000-000000000004"))
+
+  ;; ==============================================================
+  ;; MOUNTING HOLES (M3, 3.2 mm dia -> 1.6 mm radius)
+  ;; Drawn as Edge.Cuts circular cutouts. Final footprints replace.
+  ;; ==============================================================
+
+  ;; MH1 top-left interior (east of S3 keep-out): (24, 5)
+  (gr_circle (center 24 5) (end 25.6 5)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "Edge.Cuts")
+    (uuid "00000003-0000-0000-0000-000000000001"))
+
+  ;; MH2 top-right corner: (115, 5)
+  (gr_circle (center 115 5) (end 116.6 5)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "Edge.Cuts")
+    (uuid "00000003-0000-0000-0000-000000000002"))
+
+  ;; MH3 bottom-right interior (west of H2 keep-out): (102, 68)
+  (gr_circle (center 102 68) (end 103.6 68)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "Edge.Cuts")
+    (uuid "00000003-0000-0000-0000-000000000003"))
+
+  ;; MH4 bottom-left corner: (5, 67)
+  (gr_circle (center 5 67) (end 6.6 67)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "Edge.Cuts")
+    (uuid "00000003-0000-0000-0000-000000000004"))
+
+  ;; MH labels on silkscreen
+  (gr_text "M3" (at 24 9 0)  (layer "F.Silkscreen") (effects (font (size 0.8 0.8) (thickness 0.12)) (justify center)) (uuid "00000003-0000-0000-0000-000000000011"))
+  (gr_text "M3" (at 115 9 0) (layer "F.Silkscreen") (effects (font (size 0.8 0.8) (thickness 0.12)) (justify center)) (uuid "00000003-0000-0000-0000-000000000012"))
+  (gr_text "M3" (at 102 72 0)(layer "F.Silkscreen") (effects (font (size 0.8 0.8) (thickness 0.12)) (justify center)) (uuid "00000003-0000-0000-0000-000000000013"))
+  (gr_text "M3" (at 5 71 0)  (layer "F.Silkscreen") (effects (font (size 0.8 0.8) (thickness 0.12)) (justify center)) (uuid "00000003-0000-0000-0000-000000000014"))
+
+  ;; ==============================================================
+  ;; COMPONENT SILHOUETTES + REFERENCES (F.Silkscreen)
+  ;; These are placement hints only - real footprints replace them.
+  ;; ==============================================================
+
+  ;; ---- U5 ESP32-S3-WROOM-1-N16R8 (18 x 25.5 mm, body 3..21 x 0..25.5) ----
+  (gr_rect (start 3 0) (end 21 25.5)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "00000004-0000-0000-0000-000000000001"))
+  (gr_text "U5 ESP32-S3-WROOM-1-N16R8"
+    (at 12 13 0) (layer "F.Silkscreen")
+    (effects (font (size 1.0 1.0) (thickness 0.15)) (justify center))
+    (uuid "00000004-0000-0000-0000-000000000002"))
+  ;; S3 antenna hint (first 7 mm of module is antenna zone)
+  (gr_line (start 3 7) (end 21 7)
+    (stroke (width 0.12) (type dash)) (layer "F.Silkscreen")
+    (uuid "00000004-0000-0000-0000-000000000003"))
+
+  ;; ---- U_H2 ESP32-H2-MINI-1-N4 (13.2 x 16.6 mm, body 106.8..120 x 63.4..80) ----
+  (gr_rect (start 106.8 63.4) (end 120 80)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "00000005-0000-0000-0000-000000000001"))
+  (gr_text "U_H2 ESP32-H2-MINI-1-N4"
+    (at 113.4 70 0) (layer "F.Silkscreen")
+    (effects (font (size 0.8 0.8) (thickness 0.12)) (justify center))
+    (uuid "00000005-0000-0000-0000-000000000002"))
+  ;; H2 antenna hint (last 6 mm of module is antenna zone)
+  (gr_line (start 106.8 74) (end 120 74)
+    (stroke (width 0.12) (type dash)) (layer "F.Silkscreen")
+    (uuid "00000005-0000-0000-0000-000000000003"))
+
+  ;; ---- U6 TCA9548APWR (7.8 x 6.4 mm, TSSOP-24) center ~(52, 45) ----
+  (gr_rect (start 48 42) (end 56 48)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "00000006-0000-0000-0000-000000000001"))
+  (gr_text "U6 TCA9548A"
+    (at 52 45 0) (layer "F.Silkscreen")
+    (effects (font (size 0.8 0.8) (thickness 0.12)) (justify center))
+    (uuid "00000006-0000-0000-0000-000000000002"))
+
+  ;; ---- U_LED TLC5947DAP (9.7 x 6.4 mm, HTSSOP-28) ----
+  (gr_rect (start 23 14) (end 33 20)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "00000007-0000-0000-0000-000000000001"))
+  (gr_text "U_LED TLC5947DAP"
+    (at 28 17 0) (layer "F.Silkscreen")
+    (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center))
+    (uuid "00000007-0000-0000-0000-000000000002"))
+
+  ;; ---- U4 AP63300WU-7 buck (TSOT-26) + L_BUCK + SW node + thermal pour hint ----
+  (gr_rect (start 26.5 36.5) (end 30.5 40.5)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "00000008-0000-0000-0000-000000000001"))
+  (gr_text "U4 AP63300"
+    (at 28 38.5 0) (layer "F.Silkscreen")
+    (effects (font (size 0.6 0.6) (thickness 0.1)) (justify center))
+    (uuid "00000008-0000-0000-0000-000000000002"))
+  ;; L_BUCK 4.7uH SMD 6x6
+  (gr_rect (start 33 35) (end 39 41)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "00000008-0000-0000-0000-000000000003"))
+  (gr_text "L_BUCK 4.7uH"
+    (at 36 38 0) (layer "F.Silkscreen")
+    (effects (font (size 0.6 0.6) (thickness 0.1)) (justify center))
+    (uuid "00000008-0000-0000-0000-000000000004"))
+  ;; GND thermal-pour hint under U4 (Dwgs.User, dashed)
+  (gr_rect (start 24 35) (end 40 43)
+    (stroke (width 0.12) (type dash)) (fill none) (layer "Dwgs.User")
+    (uuid "00000008-0000-0000-0000-000000000005"))
+  (gr_text "GND thermal pour >= 50 mm^2 stitched to L2 (SW pin NO pour)"
+    (at 32 44 0) (layer "Dwgs.User")
+    (effects (font (size 0.6 0.6) (thickness 0.1)) (justify center))
+    (uuid "00000008-0000-0000-0000-000000000006"))
+
+  ;; ---- J1 USB-C receptacle (GCT USB4105, ~9 x 7.3 mm) left edge ----
+  (gr_rect (start 0 26) (end 9 33.3)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "00000009-0000-0000-0000-000000000001"))
+  (gr_text "J1 USB-C"
+    (at 4.5 30 0) (layer "F.Silkscreen")
+    (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center))
+    (uuid "00000009-0000-0000-0000-000000000002"))
+
+  ;; ---- U1 USBLC6 ESD (<= 3 mm from USB D+/D- pins) ----
+  (gr_rect (start 10 28) (end 14 32)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "00000009-0000-0000-0000-000000000003"))
+  (gr_text "U1"
+    (at 12 30 0) (layer "F.Silkscreen")
+    (effects (font (size 0.6 0.6) (thickness 0.1)) (justify center))
+    (uuid "00000009-0000-0000-0000-000000000004"))
+
+  ;; ---- U2 LM66100 (USB path only) ----
+  (gr_rect (start 16 28) (end 20 32)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "00000009-0000-0000-0000-000000000005"))
+  (gr_text "U2"
+    (at 18 30 0) (layer "F.Silkscreen")
+    (effects (font (size 0.6 0.6) (thickness 0.1)) (justify center))
+    (uuid "00000009-0000-0000-0000-000000000006"))
+
+  ;; ---- J2 Barrel jack DC-005 (~14.5 x 9.5 mm) ----
+  (gr_rect (start 0 50) (end 14.5 60)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "0000000a-0000-0000-0000-000000000001"))
+  (gr_text "J2 DC JACK"
+    (at 7.25 55 0) (layer "F.Silkscreen")
+    (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center))
+    (uuid "0000000a-0000-0000-0000-000000000002"))
+
+  ;; ---- Q1 / D1 / SS14 reverse-polarity + TVS + backfeed ----
+  (gr_text "Q1 AO3401 / D1 SMAJ5.0CA / SS14"
+    (at 20 55 0) (layer "F.Silkscreen")
+    (effects (font (size 0.6 0.6) (thickness 0.1)) (justify left))
+    (uuid "0000000a-0000-0000-0000-000000000003"))
+
+  ;; ==============================================================
+  ;; 8 x PCA9306DCTR level shifters (U7..U14), VSSOP-8 (3 x 3 mm)
+  ;; Arrayed at y=56, x = 7, 20, 33, 46, 59, 72, 85, 98
+  ;; ==============================================================
+
+  (gr_rect (start 5.5 54.5) (end 8.5 57.5)   (stroke (width 0.1) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000b-0000-0000-0000-000000000001"))
+  (gr_text "U7 R1"  (at 7 56 0)   (layer "F.Silkscreen") (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center)) (uuid "0000000b-0000-0000-0000-000000000002"))
+
+  (gr_rect (start 18.5 54.5) (end 21.5 57.5) (stroke (width 0.1) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000b-0000-0000-0000-000000000003"))
+  (gr_text "U8 R2"  (at 20 56 0)  (layer "F.Silkscreen") (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center)) (uuid "0000000b-0000-0000-0000-000000000004"))
+
+  (gr_rect (start 31.5 54.5) (end 34.5 57.5) (stroke (width 0.1) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000b-0000-0000-0000-000000000005"))
+  (gr_text "U9 R3"  (at 33 56 0)  (layer "F.Silkscreen") (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center)) (uuid "0000000b-0000-0000-0000-000000000006"))
+
+  (gr_rect (start 44.5 54.5) (end 47.5 57.5) (stroke (width 0.1) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000b-0000-0000-0000-000000000007"))
+  (gr_text "U10 R4" (at 46 56 0)  (layer "F.Silkscreen") (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center)) (uuid "0000000b-0000-0000-0000-000000000008"))
+
+  (gr_rect (start 57.5 54.5) (end 60.5 57.5) (stroke (width 0.1) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000b-0000-0000-0000-000000000009"))
+  (gr_text "U11 R5" (at 59 56 0)  (layer "F.Silkscreen") (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center)) (uuid "0000000b-0000-0000-0000-00000000000a"))
+
+  (gr_rect (start 70.5 54.5) (end 73.5 57.5) (stroke (width 0.1) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000b-0000-0000-0000-00000000000b"))
+  (gr_text "U12 R6" (at 72 56 0)  (layer "F.Silkscreen") (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center)) (uuid "0000000b-0000-0000-0000-00000000000c"))
+
+  (gr_rect (start 83.5 54.5) (end 86.5 57.5) (stroke (width 0.1) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000b-0000-0000-0000-00000000000d"))
+  (gr_text "U13 R7" (at 85 56 0)  (layer "F.Silkscreen") (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center)) (uuid "0000000b-0000-0000-0000-00000000000e"))
+
+  (gr_rect (start 96.5 54.5) (end 99.5 57.5) (stroke (width 0.1) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000b-0000-0000-0000-00000000000f"))
+  (gr_text "U14 R8" (at 98 56 0)  (layer "F.Silkscreen") (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center)) (uuid "0000000b-0000-0000-0000-000000000010"))
+
+  ;; ==============================================================
+  ;; Row connectors J3..J10 (XH-4 ~11.5 x 9 mm) at y=73, pitch 13 mm
+  ;; Offset from H2 keep-out by ~11 mm.
+  ;; ==============================================================
+
+  (gr_rect (start 1.5 68.5) (end 12.5 77.5)   (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000c-0000-0000-0000-000000000001"))
+  (gr_text "J3 ROW 1"  (at 7 73 0)   (layer "F.Silkscreen") (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center)) (uuid "0000000c-0000-0000-0000-000000000002"))
+
+  (gr_rect (start 14.5 68.5) (end 25.5 77.5)  (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000c-0000-0000-0000-000000000003"))
+  (gr_text "J4 ROW 2"  (at 20 73 0)  (layer "F.Silkscreen") (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center)) (uuid "0000000c-0000-0000-0000-000000000004"))
+
+  (gr_rect (start 27.5 68.5) (end 38.5 77.5)  (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000c-0000-0000-0000-000000000005"))
+  (gr_text "J5 ROW 3"  (at 33 73 0)  (layer "F.Silkscreen") (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center)) (uuid "0000000c-0000-0000-0000-000000000006"))
+
+  (gr_rect (start 40.5 68.5) (end 51.5 77.5)  (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000c-0000-0000-0000-000000000007"))
+  (gr_text "J6 ROW 4"  (at 46 73 0)  (layer "F.Silkscreen") (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center)) (uuid "0000000c-0000-0000-0000-000000000008"))
+
+  (gr_rect (start 53.5 68.5) (end 64.5 77.5)  (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000c-0000-0000-0000-000000000009"))
+  (gr_text "J7 ROW 5"  (at 59 73 0)  (layer "F.Silkscreen") (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center)) (uuid "0000000c-0000-0000-0000-00000000000a"))
+
+  (gr_rect (start 66.5 68.5) (end 77.5 77.5)  (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000c-0000-0000-0000-00000000000b"))
+  (gr_text "J8 ROW 6"  (at 72 73 0)  (layer "F.Silkscreen") (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center)) (uuid "0000000c-0000-0000-0000-00000000000c"))
+
+  (gr_rect (start 79.5 68.5) (end 90.5 77.5)  (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000c-0000-0000-0000-00000000000d"))
+  (gr_text "J9 ROW 7"  (at 85 73 0)  (layer "F.Silkscreen") (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center)) (uuid "0000000c-0000-0000-0000-00000000000e"))
+
+  (gr_rect (start 92.5 68.5) (end 103.5 77.5) (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000c-0000-0000-0000-00000000000f"))
+  (gr_text "J10 ROW 8" (at 98 73 0)  (layer "F.Silkscreen") (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center)) (uuid "0000000c-0000-0000-0000-000000000010"))
+
+  ;; Pin order note under J3 exemplar (on silkscreen)
+  (gr_text "XH-4: 1=5V  2=GND  3=SDA  4=SCL"
+    (at 40 79 0) (layer "F.Silkscreen")
+    (effects (font (size 0.7 0.7) (thickness 0.1)) (justify left))
+    (uuid "0000000c-0000-0000-0000-000000000020"))
+
+  ;; ==============================================================
+  ;; LED bar (top edge, clear of S3 antenna keep-out)
+  ;; 19 fixed (4 mm pitch) + 16 RGB (3.5 mm pitch)
+  ;; ==============================================================
+
+  (gr_rect (start 28 0) (end 104 3.5)
+    (stroke (width 0.12) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "0000000d-0000-0000-0000-000000000001"))
+  (gr_text "LED BAR - FRONT: 19 fixed + 16 SK6812 RGB"
+    (at 66 2 0) (layer "F.Silkscreen")
+    (effects (font (size 0.7 0.7) (thickness 0.1)) (justify center))
+    (uuid "0000000d-0000-0000-0000-000000000002"))
+
+  (gr_rect (start 36 4) (end 92 7)
+    (stroke (width 0.12) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "0000000d-0000-0000-0000-000000000003"))
+
+  ;; ==============================================================
+  ;; Debug headers (right edge)
+  ;; ==============================================================
+
+  (gr_rect (start 110 20) (end 118 30)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "0000000e-0000-0000-0000-000000000001"))
+  (gr_text "JP_DEBUG_S3"
+    (at 114 25 0) (layer "F.Silkscreen")
+    (effects (font (size 0.6 0.6) (thickness 0.1)) (justify center))
+    (uuid "0000000e-0000-0000-0000-000000000002"))
+
+  (gr_rect (start 110 33) (end 118 48)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "0000000e-0000-0000-0000-000000000003"))
+  (gr_text "JP_DEBUG_H2"
+    (at 114 38 0) (layer "F.Silkscreen")
+    (effects (font (size 0.6 0.6) (thickness 0.1)) (justify center))
+    (uuid "0000000e-0000-0000-0000-000000000004"))
+  (gr_text "MANUAL RST+BOOT"
+    (at 114 44 0) (layer "F.Silkscreen")
+    (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center))
+    (uuid "0000000e-0000-0000-0000-000000000005"))
+
+  (gr_rect (start 110 51) (end 118 61)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "0000000e-0000-0000-0000-000000000006"))
+  (gr_text "JP_DEBUG_I2C"
+    (at 114 56 0) (layer "F.Silkscreen")
+    (effects (font (size 0.6 0.6) (thickness 0.1)) (justify center))
+    (uuid "0000000e-0000-0000-0000-000000000007"))
+
+  ;; H2 USB JTAG test pads
+  (gr_circle (center 111 64) (end 111.6 64) (stroke (width 0.1) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000e-0000-0000-0000-000000000010"))
+  (gr_circle (center 115 64) (end 115.6 64) (stroke (width 0.1) (type solid)) (fill none) (layer "F.Silkscreen") (uuid "0000000e-0000-0000-0000-000000000011"))
+  (gr_text "TP_H2_USB_D+/D-"
+    (at 113 67 0) (layer "F.Silkscreen")
+    (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center))
+    (uuid "0000000e-0000-0000-0000-000000000012"))
+
+  ;; ==============================================================
+  ;; BOOT / RESET buttons next to S3
+  ;; ==============================================================
+
+  (gr_rect (start 22.5 21) (end 28.5 27)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "0000000f-0000-0000-0000-000000000001"))
+  (gr_text "SW1 RST"
+    (at 25.5 24 0) (layer "F.Silkscreen")
+    (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center))
+    (uuid "0000000f-0000-0000-0000-000000000002"))
+
+  (gr_rect (start 30 21) (end 36 27)
+    (stroke (width 0.15) (type solid)) (fill none) (layer "F.Silkscreen")
+    (uuid "0000000f-0000-0000-0000-000000000003"))
+  (gr_text "SW2 BOOT"
+    (at 33 24 0) (layer "F.Silkscreen")
+    (effects (font (size 0.5 0.5) (thickness 0.08)) (justify center))
+    (uuid "0000000f-0000-0000-0000-000000000004"))
+
+  ;; ==============================================================
+  ;; Zone labels (Cmts.User)
+  ;; ==============================================================
+
+  (gr_text "MCU ZONE (S3)"         (at 12 27 0)    (layer "Cmts.User") (effects (font (size 1.2 1.2) (thickness 0.18)) (justify center)) (uuid "00000010-0000-0000-0000-000000000001"))
+  (gr_text "RADIO ZONE (H2)"       (at 92 62 0)    (layer "Cmts.User") (effects (font (size 1.2 1.2) (thickness 0.18)) (justify center)) (uuid "00000010-0000-0000-0000-000000000002"))
+  (gr_text "POWER"                 (at 7 40 0)     (layer "Cmts.User") (effects (font (size 1.2 1.2) (thickness 0.18)) (justify center)) (uuid "00000010-0000-0000-0000-000000000003"))
+  (gr_text "I2C CORE"              (at 52 50 0)    (layer "Cmts.User") (effects (font (size 1.2 1.2) (thickness 0.18)) (justify center)) (uuid "00000010-0000-0000-0000-000000000004"))
+  (gr_text "LEVEL SHIFT + PROTECT" (at 52 60 0)    (layer "Cmts.User") (effects (font (size 1.0 1.0) (thickness 0.15)) (justify center)) (uuid "00000010-0000-0000-0000-000000000005"))
+  (gr_text "LED BAR - FRONT"       (at 66 5 0)     (layer "Cmts.User") (effects (font (size 1.0 1.0) (thickness 0.15)) (justify center)) (uuid "00000010-0000-0000-0000-000000000006"))
+  (gr_text "DEBUG"                 (at 114 15 0)   (layer "Cmts.User") (effects (font (size 1.0 1.0) (thickness 0.15)) (justify center)) (uuid "00000010-0000-0000-0000-000000000007"))
+
+  ;; ==============================================================
+  ;; Inter-MCU signal reminder (Cmts.User, diagonal S3 -> H2)
+  ;; ==============================================================
+
+  (gr_line (start 20 25) (end 110 70)
+    (stroke (width 0.15) (type dash)) (layer "Cmts.User")
+    (uuid "00000011-0000-0000-0000-000000000001"))
+  (gr_text "UART only (TX/RX/RST/IRQ/BOOT) - no SPI between MCUs"
+    (at 65 47 0) (layer "Cmts.User")
+    (effects (font (size 0.8 0.8) (thickness 0.12)) (justify center))
+    (uuid "00000011-0000-0000-0000-000000000002"))
+
+  ;; ==============================================================
+  ;; Antenna-separation dimension marker (Cmts.User)
+  ;; ==============================================================
+
+  (gr_line (start 15 7) (end 109 74)
+    (stroke (width 0.15) (type dash)) (layer "Cmts.User")
+    (uuid "00000012-0000-0000-0000-000000000001"))
+  (gr_text "antenna edge-to-edge ~ 115 mm (>= 60 mm required)"
+    (at 62 41 0) (layer "Cmts.User")
+    (effects (font (size 0.9 0.9) (thickness 0.14)) (justify center))
+    (uuid "00000012-0000-0000-0000-000000000002"))
+
+  ;; ==============================================================
+  ;; General handoff note (Dwgs.User, top of sheet)
+  ;; ==============================================================
+
+  (gr_text "Master v2 Rev B - 120 x 80 mm, 4 layer, 1.6 mm FR4. L1 signal / L2 GND / L3 power / L4 signal+GND. See README.md."
+    (at 60 -5 0) (layer "Dwgs.User")
+    (effects (font (size 1.0 1.0) (thickness 0.15)) (justify center))
+    (uuid "00000013-0000-0000-0000-000000000001"))
+
+  (gr_text "PLACEMENT MOCKUP ONLY - not a gerber. Recapture from SCHEMATIC.md + BOM.csv. Apply all constraints from README.md 'Layout constraints'."
+    (at 60 85 0) (layer "Dwgs.User")
+    (effects (font (size 0.9 0.9) (thickness 0.14)) (justify center))
+    (uuid "00000013-0000-0000-0000-000000000002"))
+
+)
