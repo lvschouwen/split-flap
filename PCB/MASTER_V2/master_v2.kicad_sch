@@ -1,0 +1,36 @@
+(kicad_sch (version 20231120) (generator "split_flap_hand_crafted")
+
+  (uuid "7a9d8e4c-0000-4b11-8f2e-00000000000a")
+
+  (paper "A3")
+
+  (title_block
+    (title "Master v2 - ESP32-S3 + TCA9548A carrier - Rev A")
+    (date "2026-04-22")
+    (rev "A")
+    (company "split-flap")
+    (comment 1 "Authoritative netlist: PCB/MASTER_V2/SCHEMATIC.md")
+    (comment 2 "BOM: PCB/MASTER_V2/BOM.csv")
+    (comment 3 "Pinout: PCB/MASTER_V2/PINOUT.md")
+    (comment 4 "Design and handoff: PCB/MASTER_V2/README.md")
+  )
+
+  (lib_symbols
+  )
+
+  (text "Master v2 - ESP32-S3 + TCA9548A carrier PCB  (Rev A)\n\nContainer file. Authoritative schematic in SCHEMATIC.md alongside.\n\nLayout workflow:\n  1. Recapture schematic in target EDA from SCHEMATIC.md + BOM.csv.\n  2. Pre-layout review checklist (README Handoff workflow).\n  3. Follow layout and routing constraints in README.\n  4. Deliver DRC report + 90 ohm differential impedance report with gerbers.\n\nArchitecture summary:\n  - MCU: ESP32-S3-WROOM-1-N16R8\n  - I2C mux: TCA9548APWR at 0x70, 8 channels\n  - Per-row: PCA9306DCTR + PESD3V3L5UW + SMBJ5.0A + 2A polyfuse + XH-4\n  - Power in: USB-C (logic only) and 5.5/2.1 barrel jack (rows + logic)\n  - Dual rail: 5V_LOGIC (buck input) + 5V_RAIL (row power) - distinct nets\n  - USB path OR-ing: LM66100DCKR x 1 to 5V_LOGIC\n  - Jack-to-logic backfeed: SS14 Schottky\n  - Row power: JACK_5V direct to 5V_RAIL (no LM66100 in high-current path)\n  - 3V3: MP2315SGJ-Z synchronous buck (3A)\n  - USB protection: USBLC6-2SC6 + BLM18PG471 ferrite\n  - Board: 80x60mm, 4-layer stackup JLC04161H-7628 or equivalent\n  - Controlled impedance: 90 ohm differential on USB D+/D-\n\nRow connectors J3..J10 are XH-4, pin-compatible with existing Unit PCBs.\nNo unit-side changes. Firmware must enforce single-channel mux selection\n(register writes 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80 only)."
+    (exclude_from_sim no)
+    (at 25.4 25.4 0)
+    (effects
+      (font
+        (size 2.0 2.0)
+      )
+      (justify left top)
+    )
+    (uuid "7a9d8e4c-0000-4b11-8f2e-00000000000b")
+  )
+
+  (sheet_instances
+    (path "/" (page "1"))
+  )
+)

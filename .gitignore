@@ -30,3 +30,8 @@ __pycache__/
 # blanket-ignore *.hex here.
 .claude/
 flashing/prebuilt/
+
+# PCB design handoff zips (regenerated on demand)
+PCB/*.zip
+# combined.md is a transient concatenation produced by artifacts/build_docs.py
+PCB/MASTER_V2/artifacts/combined.md

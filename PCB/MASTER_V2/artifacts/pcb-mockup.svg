@@ -1,0 +1,368 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Master v2 Rev B — top-down PCB placement mock-up, 100 × 70 mm
+     Scale: 5 px per mm. Board canvas 500×350 px + 60 px legend strip below.
+     THIS IS NOT A ROUTED PCB — it is a placement mental-model for the
+     layout engineer, showing component positions that satisfy the
+     layout constraints in SCHEMATIC.md and README.md §"Layout constraints".
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 560 470"
+     width="1120" height="940"
+     font-family="Helvetica, Arial, sans-serif">
+
+  <style>
+    .title    { font-size: 14px; font-weight: bold; fill: #222; }
+    .subtitle { font-size: 10px; fill: #555; }
+    .board    { fill: #e8f5e9; stroke: #2e7d32; stroke-width: 1.2; }
+    .mod      { fill: #bbdefb; stroke: #1565c0; stroke-width: 0.8; }
+    .modtxt   { font-size: 9px; fill: #0d47a1; font-weight: bold; text-anchor: middle; }
+    .ic       { fill: #ffcdd2; stroke: #c62828; stroke-width: 0.6; }
+    .ictxt    { font-size: 7px; fill: #b71c1c; text-anchor: middle; }
+    .pwr      { fill: #ffe0b2; stroke: #e65100; stroke-width: 0.6; }
+    .pwrtxt   { font-size: 7px; fill: #bf360c; text-anchor: middle; }
+    .conn     { fill: #fff9c4; stroke: #f9a825; stroke-width: 0.8; }
+    .conntxt  { font-size: 8px; fill: #f57f17; text-anchor: middle; font-weight: bold; }
+    .usbc     { fill: #c8e6c9; stroke: #2e7d32; stroke-width: 0.8; }
+    .btn      { fill: #e1bee7; stroke: #6a1b9a; stroke-width: 0.6; }
+    .btntxt   { font-size: 6.5px; fill: #4a148c; text-anchor: middle; }
+    .keepout  { fill: #ffccbc; stroke: #d84315; stroke-width: 0.8; stroke-dasharray: 3 2; fill-opacity: 0.5; }
+    .keepouttxt { font-size: 7px; fill: #bf360c; text-anchor: middle; font-style: italic; }
+    .hdr      { fill: #d7ccc8; stroke: #4e342e; stroke-width: 0.6; }
+    .hdrtxt   { font-size: 6.5px; fill: #3e2723; text-anchor: middle; }
+    .tp       { fill: #ffffff; stroke: #616161; stroke-width: 0.4; }
+    .tptxt    { font-size: 5.5px; fill: #424242; text-anchor: middle; }
+    .axislbl  { font-size: 8px; fill: #666; }
+    .dim      { font-size: 8px; fill: #444; }
+    .legendtxt{ font-size: 8px; fill: #333; }
+    .i2ctrace { stroke: #8B0000; stroke-width: 0.6; stroke-dasharray: 2 1; fill: none; opacity: 0.55; }
+    .uarttrace{ stroke: #006400; stroke-width: 0.6; stroke-dasharray: 2 1; fill: none; opacity: 0.55; }
+    .pwrtrace { stroke: #e65100; stroke-width: 1.2; fill: none; opacity: 0.5; }
+  </style>
+
+  <!-- Title -->
+  <text x="280" y="18" text-anchor="middle" class="title">Master v2 Rev B — PCB placement mock-up (NOT a routed board)</text>
+  <text x="280" y="32" text-anchor="middle" class="subtitle">100 × 70 mm · 4-layer · top-down view · 5 px = 1 mm</text>
+
+  <!-- Dimension labels -->
+  <text x="280" y="48" text-anchor="middle" class="dim">←——— 100 mm ———→</text>
+  <g transform="translate(20,220) rotate(-90)">
+    <text text-anchor="middle" class="dim">←— 70 mm —→</text>
+  </g>
+
+  <!-- Board outline (30,60 → 530,410) = 500×350 px = 100×70 mm -->
+  <rect x="30" y="60" width="500" height="350" rx="8" ry="8" class="board"/>
+
+  <!-- ========== TOP EDGE: ESP32-S3 + USB-C + BOOT/RESET ========== -->
+  <!-- S3 antenna keep-out 15×7 mm = 75×35 px, at top -->
+  <rect x="60" y="64" width="75" height="35" class="keepout"/>
+  <text x="97" y="85" class="keepouttxt">ANT keep-out</text>
+  <text x="97" y="95" class="keepouttxt">S3 · 15×7 mm</text>
+
+  <!-- ESP32-S3-WROOM-1 module body 18×25.5 mm = 90×128 px -->
+  <rect x="50" y="102" width="128" height="90" class="mod"/>
+  <text x="114" y="140" class="modtxt">ESP32-S3-WROOM-1</text>
+  <text x="114" y="152" class="modtxt">N16R8</text>
+  <text x="114" y="164" class="modtxt">U5 · primary MCU</text>
+  <text x="114" y="178" class="modtxt">WiFi + BT + USB</text>
+
+  <!-- S3 boot/reset buttons -->
+  <rect x="184" y="108" width="22" height="22" class="btn"/>
+  <text x="195" y="122" class="btntxt">SW1</text>
+  <text x="195" y="130" class="btntxt">RESET</text>
+  <rect x="184" y="136" width="22" height="22" class="btn"/>
+  <text x="195" y="150" class="btntxt">SW2</text>
+  <text x="195" y="158" class="btntxt">BOOT</text>
+
+  <!-- USB-C connector at top-right corner -->
+  <rect x="410" y="60" width="50" height="30" class="usbc"/>
+  <text x="435" y="78" class="conntxt">J1 USB-C</text>
+  <text x="435" y="88" class="hdrtxt">prog + 5V</text>
+
+  <!-- USBLC6 (U1) + FB1 ferrite near USB-C -->
+  <rect x="395" y="94" width="16" height="10" class="ic"/>
+  <text x="403" y="101" class="ictxt">U1 USBLC6</text>
+  <rect x="413" y="94" width="10" height="10" class="ic"/>
+  <text x="418" y="101" class="ictxt">FB1</text>
+
+  <!-- Barrel jack J2 at top-right beside USB -->
+  <rect x="470" y="60" width="50" height="42" class="conn"/>
+  <text x="495" y="76" class="conntxt">J2</text>
+  <text x="495" y="88" class="hdrtxt">DC 5.5/2.1</text>
+  <text x="495" y="98" class="hdrtxt">≤ 8 A</text>
+
+  <!-- Q1 PMOS + D1 TVS near jack -->
+  <rect x="465" y="106" width="14" height="10" class="pwr"/>
+  <text x="472" y="113" class="pwrtxt">Q1</text>
+  <rect x="482" y="106" width="14" height="10" class="pwr"/>
+  <text x="489" y="113" class="pwrtxt">D1</text>
+  <rect x="499" y="106" width="14" height="10" class="pwr"/>
+  <text x="506" y="113" class="pwrtxt">C470µ</text>
+
+  <!-- ========== CENTER LEFT: Power section (buck + OR-ing) ========== -->
+  <rect x="220" y="100" width="170" height="78" fill="#fff3e0" stroke="#e65100" stroke-width="0.6" stroke-dasharray="3 2"/>
+  <text x="305" y="114" class="pwrtxt" style="font-weight:bold">POWER — 5V_LOGIC + 3V3</text>
+
+  <!-- LM66100 U2 -->
+  <rect x="228" y="120" width="20" height="14" class="pwr"/>
+  <text x="238" y="129" class="pwrtxt">U2</text>
+  <text x="238" y="137" class="pwrtxt">LM66100</text>
+
+  <!-- D_BACKFEED Schottky -->
+  <rect x="254" y="120" width="20" height="14" class="pwr"/>
+  <text x="264" y="129" class="pwrtxt">D_BF</text>
+  <text x="264" y="137" class="pwrtxt">SS14</text>
+
+  <!-- AP63300 U4 + L_BUCK -->
+  <rect x="282" y="120" width="24" height="18" class="pwr"/>
+  <text x="294" y="130" class="pwrtxt">U4</text>
+  <text x="294" y="138" class="pwrtxt">AP63300</text>
+  <text x="294" y="146" class="pwrtxt">TSOT-26</text>
+
+  <rect x="312" y="124" width="18" height="14" class="pwr"/>
+  <text x="321" y="134" class="pwrtxt">L_BUCK</text>
+  <text x="321" y="142" class="pwrtxt">4.7 µH</text>
+
+  <!-- C_BUCK_IN + C_BUCK_OUT -->
+  <rect x="336" y="124" width="14" height="10" class="pwr"/>
+  <text x="343" y="131" class="pwrtxt">22µF</text>
+  <rect x="354" y="124" width="14" height="10" class="pwr"/>
+  <text x="361" y="131" class="pwrtxt">22µF</text>
+  <rect x="372" y="124" width="14" height="10" class="pwr"/>
+  <text x="379" y="131" class="pwrtxt">22µF</text>
+
+  <!-- Power label: 5V_RAIL bulk 220µF near jack path -->
+  <rect x="282" y="150" width="24" height="18" class="pwr"/>
+  <text x="294" y="160" class="pwrtxt">C_BULK</text>
+  <text x="294" y="170" class="pwrtxt">5V 220µF</text>
+
+  <rect x="314" y="150" width="20" height="18" class="pwr"/>
+  <text x="324" y="160" class="pwrtxt">47µF</text>
+  <text x="324" y="170" class="pwrtxt">X5R</text>
+
+  <!-- ========== CENTER: TCA9548A mux ========== -->
+  <rect x="230" y="200" width="100" height="40" class="ic"/>
+  <text x="280" y="217" class="modtxt" style="fill:#b71c1c">U6 TCA9548APWR</text>
+  <text x="280" y="229" class="ictxt">8-ch I2C mux @ 0x70</text>
+  <text x="280" y="237" class="ictxt">TSSOP-24</text>
+
+  <!-- Debug headers -->
+  <rect x="340" y="200" width="60" height="14" class="hdr"/>
+  <text x="370" y="210" class="hdrtxt">JP_DEBUG_I2C (1×4)</text>
+
+  <rect x="340" y="218" width="60" height="14" class="hdr"/>
+  <text x="370" y="228" class="hdrtxt">JP_DEBUG_S3 (1×4 UART)</text>
+
+  <!-- ========== RIGHT SIDE: 8× row connectors (J3..J10) ========== -->
+  <!-- Arranged vertically on right edge, XH-4 THT each ~10×15 mm = 50×75 px footprint
+       but smaller for compact mock-up. Place 8 of them on right edge at y=60..410.
+       We'll use 25×35 px each, spaced 40 px apart, starting y=70. -->
+  <g id="rows">
+    <!-- Row template: body + label + PCA9306 to left + F/C to left -->
+    <!-- Row 1 -->
+    <g>
+      <rect x="494" y="128" width="28" height="20" class="conn"/>
+      <text x="508" y="140" class="conntxt">J3</text>
+      <text x="508" y="148" class="hdrtxt">ROW1</text>
+      <rect x="466" y="130" width="22" height="16" class="ic"/>
+      <text x="477" y="138" class="ictxt">U7</text>
+      <text x="477" y="145" class="ictxt">PCA9306</text>
+      <rect x="446" y="130" width="16" height="8" class="pwr"/>
+      <text x="454" y="136" class="pwrtxt">F1</text>
+      <rect x="446" y="140" width="16" height="8" class="pwr"/>
+      <text x="454" y="146" class="pwrtxt">47µF+TVS</text>
+    </g>
+    <!-- Row 2 -->
+    <g>
+      <rect x="494" y="158" width="28" height="20" class="conn"/>
+      <text x="508" y="170" class="conntxt">J4</text>
+      <text x="508" y="178" class="hdrtxt">ROW2</text>
+      <rect x="466" y="160" width="22" height="16" class="ic"/>
+      <text x="477" y="168" class="ictxt">U8</text>
+      <text x="477" y="175" class="ictxt">PCA9306</text>
+      <rect x="446" y="160" width="16" height="8" class="pwr"/>
+      <text x="454" y="166" class="pwrtxt">F2</text>
+      <rect x="446" y="170" width="16" height="8" class="pwr"/>
+      <text x="454" y="176" class="pwrtxt">47µF+TVS</text>
+    </g>
+    <!-- Row 3 -->
+    <g>
+      <rect x="494" y="188" width="28" height="20" class="conn"/>
+      <text x="508" y="200" class="conntxt">J5</text>
+      <text x="508" y="208" class="hdrtxt">ROW3</text>
+      <rect x="466" y="190" width="22" height="16" class="ic"/>
+      <text x="477" y="198" class="ictxt">U9</text>
+      <text x="477" y="205" class="ictxt">PCA9306</text>
+      <rect x="446" y="190" width="16" height="8" class="pwr"/>
+      <text x="454" y="196" class="pwrtxt">F3</text>
+      <rect x="446" y="200" width="16" height="8" class="pwr"/>
+      <text x="454" y="206" class="pwrtxt">47µF+TVS</text>
+    </g>
+    <!-- Row 4 -->
+    <g>
+      <rect x="494" y="218" width="28" height="20" class="conn"/>
+      <text x="508" y="230" class="conntxt">J6</text>
+      <text x="508" y="238" class="hdrtxt">ROW4</text>
+      <rect x="466" y="220" width="22" height="16" class="ic"/>
+      <text x="477" y="228" class="ictxt">U10</text>
+      <text x="477" y="235" class="ictxt">PCA9306</text>
+      <rect x="446" y="220" width="16" height="8" class="pwr"/>
+      <text x="454" y="226" class="pwrtxt">F4</text>
+      <rect x="446" y="230" width="16" height="8" class="pwr"/>
+      <text x="454" y="236" class="pwrtxt">47µF+TVS</text>
+    </g>
+    <!-- Row 5 -->
+    <g>
+      <rect x="494" y="248" width="28" height="20" class="conn"/>
+      <text x="508" y="260" class="conntxt">J7</text>
+      <text x="508" y="268" class="hdrtxt">ROW5</text>
+      <rect x="466" y="250" width="22" height="16" class="ic"/>
+      <text x="477" y="258" class="ictxt">U11</text>
+      <text x="477" y="265" class="ictxt">PCA9306</text>
+      <rect x="446" y="250" width="16" height="8" class="pwr"/>
+      <text x="454" y="256" class="pwrtxt">F5</text>
+      <rect x="446" y="260" width="16" height="8" class="pwr"/>
+      <text x="454" y="266" class="pwrtxt">47µF+TVS</text>
+    </g>
+    <!-- Row 6 -->
+    <g>
+      <rect x="494" y="278" width="28" height="20" class="conn"/>
+      <text x="508" y="290" class="conntxt">J8</text>
+      <text x="508" y="298" class="hdrtxt">ROW6</text>
+      <rect x="466" y="280" width="22" height="16" class="ic"/>
+      <text x="477" y="288" class="ictxt">U12</text>
+      <text x="477" y="295" class="ictxt">PCA9306</text>
+      <rect x="446" y="280" width="16" height="8" class="pwr"/>
+      <text x="454" y="286" class="pwrtxt">F6</text>
+      <rect x="446" y="290" width="16" height="8" class="pwr"/>
+      <text x="454" y="296" class="pwrtxt">47µF+TVS</text>
+    </g>
+    <!-- Row 7 -->
+    <g>
+      <rect x="494" y="308" width="28" height="20" class="conn"/>
+      <text x="508" y="320" class="conntxt">J9</text>
+      <text x="508" y="328" class="hdrtxt">ROW7</text>
+      <rect x="466" y="310" width="22" height="16" class="ic"/>
+      <text x="477" y="318" class="ictxt">U13</text>
+      <text x="477" y="325" class="ictxt">PCA9306</text>
+      <rect x="446" y="310" width="16" height="8" class="pwr"/>
+      <text x="454" y="316" class="pwrtxt">F7</text>
+      <rect x="446" y="320" width="16" height="8" class="pwr"/>
+      <text x="454" y="326" class="pwrtxt">47µF+TVS</text>
+    </g>
+    <!-- Row 8 -->
+    <g>
+      <rect x="494" y="338" width="28" height="20" class="conn"/>
+      <text x="508" y="350" class="conntxt">J10</text>
+      <text x="508" y="358" class="hdrtxt">ROW8</text>
+      <rect x="466" y="340" width="22" height="16" class="ic"/>
+      <text x="477" y="348" class="ictxt">U14</text>
+      <text x="477" y="355" class="ictxt">PCA9306</text>
+      <rect x="446" y="340" width="16" height="8" class="pwr"/>
+      <text x="454" y="346" class="pwrtxt">F8</text>
+      <rect x="446" y="350" width="16" height="8" class="pwr"/>
+      <text x="454" y="356" class="pwrtxt">47µF+TVS</text>
+    </g>
+  </g>
+
+  <!-- Column label for row block -->
+  <text x="470" y="120" class="conntxt" style="font-size:9px">8× rows → unit chains</text>
+
+  <!-- ========== BOTTOM EDGE: ESP32-H2 + debug ========== -->
+  <!-- H2 antenna keep-out 11×6 mm = 55×30 px at bottom -->
+  <rect x="300" y="376" width="55" height="30" class="keepout"/>
+  <text x="327" y="392" class="keepouttxt">ANT keep-out</text>
+  <text x="327" y="402" class="keepouttxt">H2 · 11×6 mm</text>
+
+  <!-- H2 module 13.2×16.6 mm = 66×83 px -->
+  <rect x="295" y="295" width="66" height="78" class="mod" style="fill:#e1bee7; stroke:#6a1b9a"/>
+  <text x="328" y="322" class="modtxt" style="fill:#4a148c">ESP32-H2-MINI-1</text>
+  <text x="328" y="334" class="modtxt" style="fill:#4a148c">N4 · 4 MB flash</text>
+  <text x="328" y="346" class="modtxt" style="fill:#4a148c">U_H2</text>
+  <text x="328" y="358" class="modtxt" style="fill:#4a148c">Zigbee/Thread/BLE</text>
+
+  <!-- JP_DEBUG_H2 near H2 -->
+  <rect x="368" y="306" width="50" height="18" class="hdr"/>
+  <text x="393" y="316" class="hdrtxt">JP_DEBUG_H2</text>
+  <text x="393" y="322" class="hdrtxt">1×6 UART+EN+BOOT</text>
+
+  <!-- TP_H2_USB pads -->
+  <circle cx="374" cy="332" r="3" class="tp"/>
+  <text x="374" y="344" class="tptxt">TP_H2_USB_DN</text>
+  <circle cx="398" cy="332" r="3" class="tp"/>
+  <text x="398" y="344" class="tptxt">TP_H2_USB_DP</text>
+
+  <!-- H2 decoupling -->
+  <rect x="368" y="352" width="14" height="10" class="pwr"/>
+  <text x="375" y="359" class="pwrtxt">10µF</text>
+  <rect x="386" y="352" width="14" height="10" class="pwr"/>
+  <text x="393" y="359" class="pwrtxt">3× dec</text>
+
+  <!-- ========== INDICATIVE TRACES (for reading only) ========== -->
+  <!-- I2C trunk S3 → mux (SDA/SCL 3V3) -->
+  <path class="i2ctrace" d="M 178 170 Q 210 170 230 215"/>
+  <!-- I2C mux → row 1..8 (schematic-only lines, ortho) -->
+  <path class="i2ctrace" d="M 330 215 L 410 215 L 410 138 L 466 138"/>
+  <path class="i2ctrace" d="M 330 220 L 420 220 L 420 168 L 466 168"/>
+  <path class="i2ctrace" d="M 330 225 L 430 225 L 430 198 L 466 198"/>
+  <path class="i2ctrace" d="M 330 230 L 438 230 L 438 228 L 466 228"/>
+  <path class="i2ctrace" d="M 330 234 L 440 234 L 440 258 L 466 258"/>
+  <path class="i2ctrace" d="M 330 238 L 432 238 L 432 288 L 466 288"/>
+  <path class="i2ctrace" d="M 330 242 L 422 242 L 422 318 L 466 318"/>
+  <path class="i2ctrace" d="M 330 246 L 412 246 L 412 348 L 466 348"/>
+
+  <!-- UART S3 ↔ H2 -->
+  <path class="uarttrace" d="M 178 180 L 200 180 L 200 330 L 295 330"/>
+  <path class="uarttrace" d="M 180 184 L 204 184 L 204 340 L 295 340"/>
+
+  <!-- Power trace 5V_RAIL (jack → row fuses) -->
+  <path class="pwrtrace" d="M 495 140 L 446 140"/>
+  <path class="pwrtrace" d="M 495 140 L 495 348"/>
+  <path class="pwrtrace" d="M 495 170 L 462 170"/>
+  <path class="pwrtrace" d="M 495 200 L 462 200"/>
+  <path class="pwrtrace" d="M 495 230 L 462 230"/>
+  <path class="pwrtrace" d="M 495 260 L 462 260"/>
+  <path class="pwrtrace" d="M 495 290 L 462 290"/>
+  <path class="pwrtrace" d="M 495 320 L 462 320"/>
+
+  <!-- ========== LEGEND ========== -->
+  <g transform="translate(30,425)">
+    <rect x="0" y="0" width="500" height="40" fill="#fafafa" stroke="#bbb" stroke-width="0.5"/>
+    <text x="6" y="12" class="title" style="font-size:10px">Legend</text>
+
+    <rect x="6" y="18" width="12" height="8" class="mod"/>
+    <text x="22" y="25" class="legendtxt">MCU module</text>
+
+    <rect x="90" y="18" width="12" height="8" class="ic"/>
+    <text x="106" y="25" class="legendtxt">IC / level shifter</text>
+
+    <rect x="195" y="18" width="12" height="8" class="pwr"/>
+    <text x="211" y="25" class="legendtxt">Power / passive</text>
+
+    <rect x="290" y="18" width="12" height="8" class="conn"/>
+    <text x="306" y="25" class="legendtxt">Row XH-4 conn</text>
+
+    <rect x="390" y="18" width="12" height="8" class="keepout"/>
+    <text x="406" y="25" class="legendtxt">Antenna keep-out</text>
+
+    <path class="i2ctrace" d="M 6 32 L 30 32"/>
+    <text x="34" y="35" class="legendtxt">I²C (3V3)</text>
+
+    <path class="uarttrace" d="M 90 32 L 114 32"/>
+    <text x="118" y="35" class="legendtxt">S3↔H2 UART</text>
+
+    <path class="pwrtrace" d="M 195 32 L 219 32"/>
+    <text x="223" y="35" class="legendtxt">5V_RAIL power feed</text>
+
+    <rect x="320" y="28" width="12" height="8" class="hdr"/>
+    <text x="336" y="35" class="legendtxt">Debug header</text>
+
+    <circle cx="420" cy="32" r="3" class="tp"/>
+    <text x="426" y="35" class="legendtxt">Test pad</text>
+  </g>
+
+  <!-- Notes block -->
+  <g transform="translate(30,400)" opacity="0.8">
+    <text x="0" y="0" class="subtitle">S3 antenna faces TOP edge · H2 antenna faces BOTTOM edge · antenna-to-antenna distance &gt; 30 mm (here ≈ 60 mm)</text>
+  </g>
+
+</svg>

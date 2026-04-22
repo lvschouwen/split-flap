@@ -108,6 +108,10 @@ Options to potentially get boards created for you:
 
 > Note: Services are offered by these companies to assembly the boards for you. There are surface mounted components to these devices that you might not be able to do yourself like small resistors for instance, which must be flow soldered. It could be worth having the company do this aspect for you.
 
+#### Master v2 Rev B (ESP32-S3 + ESP32-H2, in design)
+
+Next-generation dedicated controller board — ESP32-S3-WROOM-1 (primary) + ESP32-H2-MINI-1 (radio coprocessor, UART-attached for Zigbee/Thread/BLE) + TCA9548A I2C mux. Drives up to 8 rows × 16 units = 128 units. 100 × 70 mm, 4-layer. Handoff-ready design docs (README, BOM, textual schematic, pinout) plus rendered PDFs (docs, block diagram, PCB placement mock-up) live in [`PCB/MASTER_V2/`](./PCB/MASTER_V2/README.md). Layout is deferred to a freelancer or JLCPCB EasyEDA service. Compatible with existing Unit PCBs — no unit-side changes.
+
 ### Unit
 
 Each split-flap unit consists of an Arduino Nano mounted on a custom PCB. It controls a 28BYJ-48 stepper motor via a ULN2003 driver chip. The drum with the flaps is homed with a KY003 hall sensor and a magnet mounted to the drum.
