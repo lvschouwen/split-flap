@@ -228,25 +228,10 @@ volatile bool abortCurrentShow = false;
 //counter reaches RECOVERY_BOOT_THRESHOLD, the device skips the main app and
 //brings up a minimal "split-flap-recovery" SoftAP that only accepts a master
 //firmware upload.
-//Layout extended in #53: preFlashSketchMd5 is a 32-hex-char + NUL + pad
-//cookie written by the OTA upload handler just before ESP.restart(). On
-//next boot we read it back and compare to the running ESP.getSketchMD5();
-//a match means eboot silently reverted the staged image. Size rounded to
-//a multiple of 4 so rtcUserMemoryRead/Write remain block-aligned.
-#define PRE_FLASH_MD5_LEN 36
-struct RtcBootState {
-  uint32_t magic;
-  uint32_t bootCounter;
-  char     preFlashSketchMd5[PRE_FLASH_MD5_LEN];
-};
-//Magic bumped to V2 when the struct gained preFlashSketchMd5 (#53). Old
-//firmware's RTC state (magic 0xC0FFEE42) no longer matches, so
-//readBootStateRtc() zero-inits the whole struct — correct, because we
-//can't trust the extra bytes sitting past where the old firmware wrote.
-static const uint32_t RTC_BOOT_MAGIC = 0xC0FFEE43UL;
-static const uint32_t RTC_BOOT_OFFSET_BLOCKS = 0;
-static const uint32_t RECOVERY_BOOT_THRESHOLD = 3;
-static const unsigned long HEALTHY_BOOT_MS = 30000UL;
+//Layout + pure helpers live in RtcBootState.h so they can be exercised by
+//host-side tests (`pio test -e native`). Hardware-touching read/write
+//wrappers stay here.
+#include "RtcBootState.h"
 
 bool isRecoveryMode = false;
 bool healthyBootMarked = false;
@@ -289,10 +274,7 @@ RtcBootState readBootStateRtc() {
   ESP.rtcUserMemoryRead(RTC_BOOT_OFFSET_BLOCKS,
                         reinterpret_cast<uint32_t*>(&state),
                         sizeof(state));
-  if (state.magic != RTC_BOOT_MAGIC) {
-    memset(&state, 0, sizeof(state));
-    state.magic = RTC_BOOT_MAGIC;
-  }
+  normalizeBootState(state);
   return state;
 }
 
@@ -316,10 +298,7 @@ void clearBootCounterRtc() {
 //a warm restart, which is exactly the eboot-revert failure path.
 void setPreFlashCookieRtc(const String& sketchMd5) {
   RtcBootState state = readBootStateRtc();
-  size_t copy = sketchMd5.length();
-  if (copy >= PRE_FLASH_MD5_LEN) copy = PRE_FLASH_MD5_LEN - 1;
-  memcpy(state.preFlashSketchMd5, sketchMd5.c_str(), copy);
-  state.preFlashSketchMd5[copy] = '\0';
+  setPreFlashMd5(state, sketchMd5.c_str());
   writeBootStateRtc(state);
 }
 
@@ -615,16 +594,32 @@ void setup() {
     //another reboot, then clear the cookie so a later unrelated warm
     //reboot doesn't re-trigger the check.
     RtcBootState bootStateNow = readBootStateRtc();
-    if (bootStateNow.preFlashSketchMd5[0] != '\0') {
+    if (cookieIsPresent(bootStateNow)) {
       String runningMd5 = ESP.getSketchMD5();
-      bool reverted = (runningMd5 == bootStateNow.preFlashSketchMd5);
+      //Build a bounded copy of the cookie for equality + logging. A raw
+      //`String == char*` or `SerialPrint(char*)` would walk until the first
+      //NUL, which if RTC is corrupt could run past the struct. See #53.
+      size_t ckLen = cookieLength(bootStateNow);
+      bool malformed = (ckLen >= PRE_FLASH_MD5_LEN);
+      String cookieStr;
+      if (!malformed) {
+        cookieStr.reserve(ckLen);
+        for (size_t i = 0; i < ckLen; i++) cookieStr += bootStateNow.preFlashSketchMd5[i];
+      }
+      bool reverted = cookieMatchesRunning(bootStateNow, runningMd5.c_str());
       SerialPrint(F("Pre-flash cookie resolved: "));
-      SerialPrint(reverted ? F("reverted") : F("ok"));
+      if (malformed)      SerialPrint(F("malformed"));
+      else if (reverted)  SerialPrint(F("reverted"));
+      else                SerialPrint(F("ok"));
       SerialPrint(F(" (cookie="));
-      SerialPrint(bootStateNow.preFlashSketchMd5);
+      if (malformed) SerialPrint(F("<unterminated>"));
+      else           SerialPrint(cookieStr);
       SerialPrint(F(", running="));
       SerialPrint(runningMd5);
       SerialPrintln(F(")"));
+      //Treat a malformed cookie as "ok" (no evidence of revert) rather than
+      //a false-positive. Clear the slot either way so the next boot gets a
+      //clean state.
       saveLastFlashResult(reverted ? "reverted" : "ok");
       memset(bootStateNow.preFlashSketchMd5, 0, PRE_FLASH_MD5_LEN);
       writeBootStateRtc(bootStateNow);

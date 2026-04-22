@@ -36,6 +36,7 @@
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 #include "SettingsEepromLayout.h"
+#include "RtcBootState.h"
 #include "BuildVersion.h"
 
 #if __has_include("WifiCredentials.h")
@@ -49,35 +50,18 @@
 // How long to wait for WiFi before giving up on a connect attempt.
 static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 30000;
 
-// Clean uptime before we reset the RTC boot counter. Matches ESPMaster's
-// HEALTHY_BOOT_MS so the recovery trip semantics are identical.
-static const unsigned long HEALTHY_BOOT_MS = 30000;
-
 static const uint16_t WEB_PORT = 80;
 
 // --- RTC boot state ---
-// DUPLICATED from ESPMaster.ino (not a header there). Must stay in sync —
-// if the layout or MAGIC diverges, pre-flash cookies won't round-trip
-// between skeleton and full firmware.
-#define PRE_FLASH_MD5_LEN 36
-struct RtcBootState {
-  uint32_t magic;
-  uint32_t bootCounter;
-  char     preFlashSketchMd5[PRE_FLASH_MD5_LEN];
-};
-static const uint32_t RTC_BOOT_MAGIC = 0xC0FFEE43UL;
-static const uint32_t RTC_BOOT_OFFSET_BLOCKS = 0;
-static const uint32_t RECOVERY_BOOT_THRESHOLD = 3;
-
+// Struct, constants, and pure helpers live in ESPMaster/RtcBootState.h and
+// are shared via -I../ESPMaster. Hardware-touching read/write wrappers are
+// kept here (they need ESP.rtcUserMemory*).
 static RtcBootState readBootStateRtc() {
   RtcBootState state;
   ESP.rtcUserMemoryRead(RTC_BOOT_OFFSET_BLOCKS,
                         reinterpret_cast<uint32_t*>(&state),
                         sizeof(state));
-  if (state.magic != RTC_BOOT_MAGIC) {
-    memset(&state, 0, sizeof(state));
-    state.magic = RTC_BOOT_MAGIC;
-  }
+  normalizeBootState(state);
   return state;
 }
 
@@ -95,10 +79,7 @@ static void clearBootCounterRtc() {
 
 static void setPreFlashCookieRtc(const String& sketchMd5) {
   RtcBootState state = readBootStateRtc();
-  size_t copy = sketchMd5.length();
-  if (copy >= PRE_FLASH_MD5_LEN) copy = PRE_FLASH_MD5_LEN - 1;
-  memcpy(state.preFlashSketchMd5, sketchMd5.c_str(), copy);
-  state.preFlashSketchMd5[copy] = '\0';
+  setPreFlashMd5(state, sketchMd5.c_str());
   writeBootStateRtc(state);
 }
 
@@ -147,14 +128,27 @@ static void saveIntendedVersion(const String& v) {
 
 static void resolvePreFlashCookie() {
   RtcBootState state = readBootStateRtc();
-  if (state.preFlashSketchMd5[0] == '\0') return;
+  if (!cookieIsPresent(state)) return;
 
+  // Build a bounded copy of the cookie before logging — a raw Serial.print
+  // on the 36-byte slot or a `String == char*` compare would walk until the
+  // first NUL, which if RTC is corrupt could run past the struct. See #53.
   String runningMd5 = ESP.getSketchMD5();
-  bool reverted = (runningMd5 == state.preFlashSketchMd5);
+  size_t ckLen = cookieLength(state);
+  bool malformed = (ckLen >= PRE_FLASH_MD5_LEN);
+  String cookieStr;
+  if (!malformed) {
+    cookieStr.reserve(ckLen);
+    for (size_t i = 0; i < ckLen; i++) cookieStr += state.preFlashSketchMd5[i];
+  }
+  bool reverted = cookieMatchesRunning(state, runningMd5.c_str());
   Serial.print(F("Pre-flash cookie resolved: "));
-  Serial.print(reverted ? F("reverted") : F("ok"));
+  if (malformed)     Serial.print(F("malformed"));
+  else if (reverted) Serial.print(F("reverted"));
+  else               Serial.print(F("ok"));
   Serial.print(F(" (cookie="));
-  Serial.print(state.preFlashSketchMd5);
+  if (malformed) Serial.print(F("<unterminated>"));
+  else           Serial.print(cookieStr);
   Serial.print(F(", running="));
   Serial.print(runningMd5);
   Serial.println(F(")"));
