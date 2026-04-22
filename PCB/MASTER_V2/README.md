@@ -1,37 +1,23 @@
 # Master v2 — ESP32-S3 + ESP32-H2 + TCA9548A carrier PCB
 
-**Rev B.** Dedicated controller board for the split-flap display. No onboard flap. Drives up to **8 rows × 16 units = 128 units** via a TCA9548A I2C mux, one I2C bus per row. Adds an ESP32-H2-MINI-1 radio coprocessor for Zigbee 3.0 / Thread / BLE, attached to the primary ESP32-S3 over a UART command/response link.
+Dedicated controller board for the split-flap display. No onboard flap. Drives up to **8 rows × 16 units = 128 units** via a TCA9548A I2C mux, one I2C bus per row. Carries an ESP32-H2-MINI-1 radio coprocessor for Zigbee 3.0 / Thread / BLE, attached to the primary ESP32-S3 over a UART command/response link. Status LED bar along the front-facing long edge (19 fixed + 16 addressable RGB).
 
-> **Status**: design-stage, capture-ready. This directory contains handoff artifacts (schematic spec, BOM, pinout, layout constraints). PCB layout is out of scope for this repo — JLCPCB EasyEDA service or a freelance layout engineer takes this brief forward to gerbers.
+> **Status**: design-stage, capture-ready. This directory is the handoff brief (schematic spec, BOM, pinout, layout constraints). PCB layout is out of scope for this repo — JLCPCB EasyEDA service or a freelance layout engineer takes this brief forward to gerbers.
 
 ## Related issues
 
-- [#59](https://github.com/lucasvanschouwen/split-flap/issues/59) — this board
+- [#59](https://github.com/lvschouwen/split-flap/issues/59) — this board
 - [#58](https://github.com/lvschouwen/split-flap/issues/58) — ESP32-S3 + ESP32-H2 firmware port (`firmware/MasterS3/`, `firmware/MasterH2/`)
-- [#55](https://github.com/lucasvanschouwen/split-flap/issues/55) — power distribution (drives input spec)
-- [#54](https://github.com/lucasvanschouwen/split-flap/issues/54) — coil de-energize (per-unit firmware, not PCB)
+- [#64](https://github.com/lvschouwen/split-flap/issues/64) — LED bar + Row 1..8 convention
+- [#55](https://github.com/lvschouwen/split-flap/issues/55) — power distribution (drives input spec)
+- [#54](https://github.com/lvschouwen/split-flap/issues/54) — coil de-energize (per-unit firmware, not PCB)
 
-## Rev A → Rev B diff
+## Conventions
 
-| Area | Rev A | Rev B |
-|---|---|---|
-| Radio coprocessor | — | **ESP32-H2-MINI-1** added (Zigbee/Thread/BLE) |
-| Inter-MCU link | — | **UART1 only** (921600 bps, 8N1, no flow control, command/response) |
-| Buck regulator | MP2315SGJ-Z (SGJ pin 7/8 ambiguity — COMP/SS unclear) | **AP63300WU-7** (TSOT-26, 3.8–32 V V_IN, internally compensated + internal soft-start, fully defined pinout) |
-| Buck compensation | "leave floating" (incorrect — MP2315S needs external RC) | Internal compensation — no COMP/SS network needed |
-| Debug access | S3 native USB + U0 test pads | S3 native USB + **JP_DEBUG_S3** (1×4 UART header) + **JP_DEBUG_H2** (1×6 UART + EN + BOOT_SEL) + H2 USB D±/GND test pads |
-| RF rules | "keep-out under ESP32 antenna" | **Numeric** antenna keep-out (15×7 mm S3, 11×6 mm H2), ≥30 mm antenna edge spacing, opposite-edge placement |
-| BOM | several `VERIFY LCSC` entries | **All LCSC codes committed** — no VERIFY entries |
-| Board size | 80 × 60 mm | **100 × 70 mm** (fits second module + antenna clearance) |
-| Stackup | 4-layer | 4-layer (unchanged — justified below) |
-
-## Compatibility
-
-- **Unit PCBs**: unchanged.
-- **Cables**: unchanged. Existing chains plug into the row XH-4 connectors.
-- **I2C address space**: unchanged (0x01..0x10 per row, 4-bit DIP).
-- **Cap per chain**: 16 units (DIP-switch ceiling).
-- **Firmware API**: backwards-compatible on the S3 side; H2 support is additive.
+- **Rows are one-indexed: Row 1 .. Row 8.** Silkscreen, web UI, logs, BOM, firmware constants. Matches the one-indexed unit labels (unit 1 .. unit 16, DIP 0000 → unit 1 at I2C 0x01). Internal firmware translates to the TCA9548A's 0..7 channel index via `splitflap::rowToChannelIndex(row) = row - 1`.
+- **Capacity: 8 rows × 16 units per row = 128 unit ceiling.**
+- **I2C address space per row**: 0x01..0x10 (4-bit DIP offset by I2C_ADDRESS_BASE = 1).
+- **Cables**: 4-pin JST XH pitch — 5 V, SDA, SCL, GND — from `J{2+n}` on the carrier to the first unit in Row n. Chained unit-to-unit thereafter.
 
 ## Architecture
 
@@ -117,7 +103,7 @@ L2 GND plane uninterrupted. L3 = 5V_RAIL pour + 3V3 island under MCUs.
 | Rails | 5V_LOGIC (buck input) + 5V_RAIL (rows) — distinct nets |
 | USB ESD | USBLC6-2SC6 + BLM18PG471 ferrite |
 | Buttons | BOOT_S3 (S3 GPIO0), RESET_S3 (S3 EN) |
-| LEDs | Power (always-on), WiFi (S3 GPIO4), Activity (S3 GPIO5), Zigbee (S3 GPIO6) |
+| LED bar | 19 fixed + 16 addressable RGB, long-edge front-facing. 14 fixed driven by TLC5947DAP (S3 SPI IO4/5/6/7), 3 fixed driven by H2 GPIO11/12/13, 2 rail indicators always-on, 16 SK6812 mini on a single S3 data line (IO21). |
 | Debug | Native USB (S3) + JP_DEBUG_S3 1×4 UART + JP_DEBUG_H2 1×6 UART+EN+BOOT + H2 USB D± test pads |
 | Board | 100 × 70 mm, 4-layer, 1.6 mm FR4 |
 | Input current ceiling | 8 A total (input spec) |
@@ -209,7 +195,7 @@ The board electrically allows illegal operating modes; firmware MUST enforce:
 - **Single-channel-at-a-time mux selection** (TCA9548A). Channel-select register writes must have exactly one bit set: 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, or 0x80. Multi-bit masks parallel-combine per-row pullups and violate ATmega328P I_OL (3 mA max).
 - **Pre-flight mux select guard** rejects non-power-of-two values.
 - **MUX_RESET_N pulse** (≥ 10 µs low) during I2C bus-stuck recovery.
-- Bank-aware probe: iterate (bank 0..7, address 0x01..0x10) = 128 slots max.
+- Row-aware probe: iterate (row 1..8, address 0x01..0x10) = 128 slots max.
 - **H2 power sequencing**: on S3 boot, hold H2_RESET_N low for ≥ 10 ms, ensure H2_BOOT_SEL high (normal SPI boot), then release H2_RESET_N. Wait ≥ 100 ms for H2 firmware to start. First UART transaction is a hello/version handshake.
 - **H2 OTA**: S3 is the authoritative firmware provider. To reflash H2, S3 pulls H2_BOOT_SEL low, pulses H2_RESET_N, and drives the esptool-compatible UART protocol at 921600 bps to write new H2 firmware to H2's SPI flash. Then S3 releases H2_BOOT_SEL and H2_RESET_N for normal boot.
 - **UART arbitration**: S3 is always master. H2 only transmits in response to a command, or when it asserts H2_IRQ first and S3 replies with a POLL command.
@@ -302,7 +288,7 @@ The board electrically allows illegal operating modes; firmware MUST enforce:
 
 ### Test points
 - 1.0 mm exposed round pad, silkscreen labels per PINOUT.md and SCHEMATIC.md §test-points.
-- TP_MUX_SDA0..7 and TP_MUX_SCL0..7 arranged in a linear row adjacent to TCA9548A for scope probe access.
+- TP_MUX_SDA1..8 and TP_MUX_SCL1..8 arranged in a linear row adjacent to TCA9548A for scope probe access.
 - TP_H2_USB_DP / TP_H2_USB_DN: 1 mm pads near H2 module for optional USB-JTAG access (wire-soldered pigtail or pogo jig).
 
 ### DRC
@@ -334,7 +320,7 @@ The board electrically allows illegal operating modes; firmware MUST enforce:
 1. Flash blinky on S3 GPIO4. Confirm blink.
 2. I2C scan at TP_MCU_SDA/SCL returns 0x70 (TCA9548A), no other address with rows unplugged.
 3. Probe JP_DEBUG with logic analyzer — transaction patterns match ESP32 I2C API.
-4. For each bank (0..7), single-channel select, scan. Probe TP_MUX_SDA{n}/SCL{n} (3.3 V logic) and TP_ROW{n}_SDA/SCL (5 V logic). Both show identical ACK pattern; rise time ≤ 1 µs.
+4. For each row (1..8), single-channel select, scan. Probe TP_MUX_SDA{n}/SCL{n} (3.3 V logic) and TP_ROW{n}_SDA/SCL (5 V logic). Both show identical ACK pattern; rise time ≤ 1 µs.
 5. H2 bring-up: flash H2 factory image via JP_DEBUG_H2 with external USB-UART dongle (3V3, GND, U0TXD, U0RXD, EN, BOOT_SEL). Confirm H2 boots and prints ROM banner on U0TXD at 115200 8N1.
 6. S3 ↔ H2 link: run handshake probe. S3 asserts H2_RESET_N low 10 ms, releases, waits 100 ms, sends `{0x7E, 0x01, 0x00, CRC_H, CRC_L, 0x00}` (COBS-framed PING). H2 replies with PONG frame. TP on S3 GPIO17/18 shows 921600 bps traffic in both directions.
 

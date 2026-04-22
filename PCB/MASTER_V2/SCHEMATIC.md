@@ -162,9 +162,10 @@ Reference: Espressif ESP32-S3-WROOM-1/1U datasheet (N16R8 variant: 16 MB quad fl
 | GPIO | Module pin | Net | Destination |
 |---|---|---|---|
 | IO0  | 27 | **BOOT_S3_BTN** | SW2 terminal 1 (module internal pullup) |
-| IO4  | 4  | **LED_WIFI_DRV** | R_LED_WIFI 1 kΩ → D3 anode |
-| IO5  | 5  | **LED_ACT_DRV** | R_LED_ACT 1 kΩ → D4 anode |
-| IO6  | 6  | **LED_ZB_DRV** | R_LED_ZB 1 kΩ → D5 anode |
+| IO4  | 4  | **TLC_SCK** | TLC5947DAP pin 4 (SCLK) |
+| IO5  | 5  | **TLC_SIN** | TLC5947DAP pin 3 (SIN) |
+| IO6  | 6  | **TLC_XLAT** | TLC5947DAP pin 2 (XLAT) |
+| IO7  | 7  | **TLC_BLANK** | TLC5947DAP pin 1 (BLANK) |
 | IO8  | 8  | **I2C_SDA_3V3** | TCA9548A SDA |
 | IO9  | 9  | **I2C_SCL_3V3** | TCA9548A SCL |
 | IO10 | 10 | **MUX_RESET_N** | TCA9548A /RESET (+ 10 kΩ R_MUX_RST pullup to 3V3) |
@@ -175,6 +176,7 @@ Reference: Espressif ESP32-S3-WROOM-1/1U datasheet (N16R8 variant: 16 MB quad fl
 | IO18 | 18 | **H2_UART_RX** | H2 IO5 (H2's UART1 TX) |
 | IO19 | 23 | **USB_DN** | USBLC6 pins 1/6 |
 | IO20 | 24 | **USB_DP** | USBLC6 pins 3/4 |
+| IO21 | 25 | **RGB_DATA** | SK6812 LED_RGB_1 DIN (via 33 Ω R_RGB_SER) |
 | IO43 | 37 | **U0TXD_S3** | JP_DEBUG_S3 pin 3, TP_U0TXD_S3 |
 | IO44 | 36 | **U0RXD_S3** | JP_DEBUG_S3 pin 4, TP_U0RXD_S3 |
 
@@ -216,6 +218,9 @@ Reference: Espressif ESP32-H2-MINI-1 datasheet (N4 variant: 4 MB SPI flash). RIS
 | IO8  | 9  | Input, strap — tie HIGH | — | 10 kΩ R_H2_STRAP8 → 3V3_RAIL |
 | IO9  | 10 | Input, strap — **H2_BOOT_SEL** | **H2_BOOT_SEL** | 10 kΩ R_H2_STRAP9 → 3V3_RAIL; R_H2_BOOT_SER 1 kΩ from S3 IO13; JP_DEBUG_H2 pin 6 |
 | IO10 | 11 | Output, open-drain | **H2_IRQ** | S3 IO12 (10 kΩ R_H2_IRQ pullup to 3V3 on S3 side) |
+| IO11 | 12 | Output | **LED_H2_HB**  | R_LED_H2_HB 1 kΩ → LED_4 anode (yellow) |
+| IO12 | 16 | Output | **LED_ZIGBEE** | R_LED_ZIGBEE 1 kΩ → LED_6 anode (yellow) |
+| IO13 | 17 | Output | **LED_BLE**    | R_LED_BLE 1 kΩ → LED_7 anode (light-blue) |
 | IO23 | 14 | Output (H2 UART0 TX, debug) | **U0TXD_H2** | JP_DEBUG_H2 pin 3, TP_U0TXD_H2 |
 | IO24 | 15 | Input (H2 UART0 RX, debug) | **U0RXD_H2** | JP_DEBUG_H2 pin 4, TP_U0RXD_H2 |
 | IO26 | 23 | USB D− (H2 built-in USB Serial/JTAG) | **H2_USB_DN** | TP_H2_USB_DN |
@@ -224,7 +229,7 @@ Reference: Espressif ESP32-H2-MINI-1 datasheet (N4 variant: 4 MB SPI flash). RIS
 Module pin numbers per Espressif ESP32-H2-MINI-1 datasheet rev 1.1+.
 
 ### Reserved
-- IO0, IO1, IO3, IO11, IO12, IO13, IO14, IO22, IO25: unused — no copper escape beyond module pad.
+- IO0, IO1, IO3, IO14, IO22, IO25: unused — no copper escape beyond module pad.
 
 ### Decoupling (MANDATORY)
 
@@ -308,14 +313,14 @@ Resolved I2C address: **0x70**.
 
 | Ch | SDA pin / net | SCL pin / net |
 |---|---|---|
-| 0 | pin 5 → **MUX_SDA0** | pin 6 → **MUX_SCL0** |
-| 1 | pin 7 → **MUX_SDA1** | pin 8 → **MUX_SCL1** |
-| 2 | pin 9 → **MUX_SDA2** | pin 10 → **MUX_SCL2** |
-| 3 | pin 11 → **MUX_SDA3** | pin 13 → **MUX_SCL3** |
-| 4 | pin 14 → **MUX_SDA4** | pin 15 → **MUX_SCL4** |
-| 5 | pin 16 → **MUX_SDA5** | pin 17 → **MUX_SCL5** |
-| 6 | pin 18 → **MUX_SDA6** | pin 19 → **MUX_SCL6** |
-| 7 | pin 20 → **MUX_SDA7** | pin 21 → **MUX_SCL7** |
+| 0 | pin 5 → **MUX_SDA1** | pin 6 → **MUX_SCL1** |
+| 1 | pin 7 → **MUX_SDA2** | pin 8 → **MUX_SCL2** |
+| 2 | pin 9 → **MUX_SDA3** | pin 10 → **MUX_SCL3** |
+| 3 | pin 11 → **MUX_SDA4** | pin 13 → **MUX_SCL4** |
+| 4 | pin 14 → **MUX_SDA5** | pin 15 → **MUX_SCL5** |
+| 5 | pin 16 → **MUX_SDA6** | pin 17 → **MUX_SCL6** |
+| 6 | pin 18 → **MUX_SDA7** | pin 19 → **MUX_SCL7** |
+| 7 | pin 20 → **MUX_SDA8** | pin 21 → **MUX_SCL8** |
 
 Each MUX_SDA{n} / MUX_SCL{n}: 4.7 kΩ pullup to 3V3_RAIL (**R_SDA_MUX{n}** / **R_SCL_MUX{n}**).
 
@@ -341,9 +346,9 @@ Each MUX_SDA{n} / MUX_SCL{n}: 4.7 kΩ pullup to 3V3_RAIL (**R_SDA_MUX{n}** / **R
 |---|---|---|
 | 1 | EN | **3V3_RAIL** |
 | 2 | VREF1 | **3V3_RAIL** |
-| 3 | SDA1 | **MUX_SDA{n-1}** |
+| 3 | SDA1 | **MUX_SDA{n}** |
 | 4 | GND | **GND** |
-| 5 | SCL1 | **MUX_SCL{n-1}** |
+| 5 | SCL1 | **MUX_SCL{n}** |
 | 6 | SCL2 | **ROW{n}_SCL_5V** |
 | 7 | VREF2 | **5V_RAIL** |
 | 8 | SDA2 | **ROW{n}_SDA_5V** |
@@ -377,14 +382,102 @@ Connected on the row-side of the level shifter, upstream of the connector:
 | 3 | **ROW{n}_SDA_5V** |
 | 4 | **ROW{n}_SCL_5V** |
 
-## 11. Status LEDs
+## 11. LED bar
 
-| Ref | Color | Driver | Series R | From | To |
-|---|---|---|---|---|---|
-| D2 | red | always-on | 1 kΩ **R_LED_PWR** | 3V3_RAIL | GND |
-| D3 | blue | S3 GPIO4 | 1 kΩ **R_LED_WIFI** | **LED_WIFI_DRV** | GND (cathode) |
-| D4 | green | S3 GPIO5 | 1 kΩ **R_LED_ACT** | **LED_ACT_DRV** | GND (cathode) |
-| D5 | yellow | S3 GPIO6 | 1 kΩ **R_LED_ZB** | **LED_ZB_DRV** | GND (cathode) |
+A 35-LED status bar runs along the front-facing long edge of the PCB, in two stacked rows. The 3D-printed case exposes this edge through a slot aligned with the silkscreen label `LED ROW — FRONT`.
+
+Top row: 19 fixed-function side-emit SMD LEDs (1206 right-angle, 4 mm pitch = 72 mm).
+Bottom row: 16 × SK6812-mini RGB side-emit (3.5 mm pitch = 56 mm).
+
+### 11.1 Fixed row — LED reference, driver, net
+
+| Ref   | Color      | Driver              | Series R / Driver       | Net            | Indicates |
+|-------|------------|---------------------|--------------------------|----------------|-----------|
+| LED_1 | green      | always-on           | 1 kΩ **R_LED_5V**        | `5V_RAIL`      | 5V rail present |
+| LED_2 | green      | always-on           | 1 kΩ **R_LED_3V3**       | `3V3_RAIL`     | 3V3 rail present |
+| LED_3 | green      | **U_LED** ch0       | TLC5947 (constant I)     | `LED_S3_HB`    | S3 heartbeat |
+| LED_4 | yellow     | H2 IO11             | 1 kΩ **R_LED_H2_HB**     | `LED_H2_HB`    | H2 heartbeat |
+| LED_5 | blue       | **U_LED** ch1       | TLC5947                  | `LED_WIFI`     | WiFi link + traffic |
+| LED_6 | yellow     | H2 IO12             | 1 kΩ **R_LED_ZIGBEE**    | `LED_ZIGBEE`   | Zigbee link + TX/RX |
+| LED_7 | light-blue | H2 IO13             | 1 kΩ **R_LED_BLE**       | `LED_BLE`      | BLE state + GATT |
+| LED_8 | green      | **U_LED** ch2       | TLC5947                  | `LED_I2C_ACT`  | I2C bus activity |
+| LED_9 | white      | **U_LED** ch3       | TLC5947                  | `LED_UART_ACT` | S3↔H2 UART activity |
+| LED_10 | green     | **U_LED** ch4       | TLC5947                  | `LED_ROW_1`    | Row 1 selected |
+| LED_11 | green     | **U_LED** ch5       | TLC5947                  | `LED_ROW_2`    | Row 2 selected |
+| LED_12 | green     | **U_LED** ch6       | TLC5947                  | `LED_ROW_3`    | Row 3 selected |
+| LED_13 | green     | **U_LED** ch7       | TLC5947                  | `LED_ROW_4`    | Row 4 selected |
+| LED_14 | green     | **U_LED** ch8       | TLC5947                  | `LED_ROW_5`    | Row 5 selected |
+| LED_15 | green     | **U_LED** ch9       | TLC5947                  | `LED_ROW_6`    | Row 6 selected |
+| LED_16 | green     | **U_LED** ch10      | TLC5947                  | `LED_ROW_7`    | Row 7 selected |
+| LED_17 | green     | **U_LED** ch11      | TLC5947                  | `LED_ROW_8`    | Row 8 selected |
+| LED_18 | orange    | **U_LED** ch12      | TLC5947                  | `LED_OTA`      | OTA in progress |
+| LED_19 | red       | **U_LED** ch13      | TLC5947                  | `LED_FAULT`    | Fault / recovery |
+
+TLC5947 channels 14..23 route to an unpopulated 1×10 header (`JP_LED_EXP`) for future LEDs.
+
+Power LED anode = rail (5V_RAIL or 3V3_RAIL), cathode = GND via series resistor. All other fixed LEDs have anode at the driver output, cathode at GND (TLC5947 is a constant-current sink, so its channels pull the cathode to ~0 V when enabled; the LED anodes tie to 3V3_RAIL).
+
+### 11.2 TLC5947 LED driver — U_LED
+
+**Part:** Texas Instruments TLC5947DAP — HTSSOP-28 (Power-PAD).
+**Function:** 24-channel 12-bit PWM, constant-current sink. Drives 14 of the 19 fixed LEDs (3 rails are hardware-driven, 3 are H2-driven).
+
+| TLC5947 pin | Name  | Net                      | Notes |
+|-------------|-------|--------------------------|-------|
+| 1           | BLANK | **TLC_BLANK** (S3 IO7)   | Active high disables outputs |
+| 2           | XLAT  | **TLC_XLAT** (S3 IO6)    | Latch shift register → PWM |
+| 3           | SIN   | **TLC_SIN** (S3 IO5)     | Serial data in |
+| 4           | SCLK  | **TLC_SCK** (S3 IO4)     | Serial clock, 30 MHz max |
+| 5           | SOUT  | NC                       | For daisy-chain (unused) |
+| 6           | GND   | **GND**                  | |
+| 7           | IREF  | **R_IREF** to GND        | 2.7 kΩ sets ~15 mA per channel |
+| 8           | VCC   | **3V3_RAIL**             | 100 nF + 10 µF decoupling |
+| 9–23        | OUT0–OUT14 | LED cathodes (LED_3, 5, 8, 9, 10..17, 18, 19, + 4 spare) | open-drain constant current |
+| 24–31       | OUT15–OUT22 | `JP_LED_EXP` pins 1–8 | expansion (DNP LEDs) |
+| 32          | OUT23 | `JP_LED_EXP` pin 9       | expansion |
+| (EPAD)      | GND thermal pad | **GND** | stitch 6 vias to L2 |
+
+Decoupling:
+- **C_LED_DEC1** 100 nF 0603 X7R between VCC pin 8 and EPAD, adjacent to U_LED.
+- **C_LED_DEC2** 10 µF 0805 X5R at the VCC fan-out of U_LED.
+
+IREF sets the per-channel current via `I_out = 1.23 V / R_IREF × 20`. R_IREF = 2.7 kΩ → I_out ≈ 9 mA × 20 / current-ratio... (actually TI formula: I_out = 1.23 / R_IREF × 15, at R=2 kΩ → 9.2 mA typical). Target **15 mA** per channel; order exact value from datasheet curve.
+
+### 11.3 RGB strip — 16 × SK6812 mini side-emit
+
+Daisy-chained on a single data line from S3 IO21 (`RGB_DATA`). 800 kHz bitstream, NRZ encoding, GRB colour ordering.
+
+| SK6812 pin | Net                      | Notes |
+|------------|--------------------------|-------|
+| VDD        | **5V_RAIL**              | 5 V supply, 10 nF per LED (C_RGB{1..16}) |
+| VSS        | **GND**                  | |
+| DIN (LED1) | **RGB_DATA** (S3 IO21)   | 3.3 V logic → SK6812 V_IH = 0.7 × VDD = 3.5 V. Marginal; populate **R_RGB_SER** 33 Ω in series to limit reflection and **LEVEL_RGB** 74LVC1T45 3V3→5V translator if logic-level qualification fails on bring-up (DNP by default; jumper JP_RGB_BYPASS shorts out the translator). |
+| DOUT (LED1) | → DIN (LED2)            | daisy-chain |
+| ...        | ...                      | |
+| DOUT (LED16) | NC                      | terminated at last LED |
+
+Decoupling: **C_RGB_BULK** 100 µF 10 V 1210 at the start of the strip; per-LED 100 nF on VDD pin.
+
+### 11.4 H2-direct LEDs
+
+LED_4 (heartbeat), LED_6 (Zigbee), LED_7 (BLE) are driven straight from H2 GPIOs (IO11/12/13) through a 1 kΩ series resistor each. Anode to 3V3_RAIL is not used — active-high GPIO drives the anode; cathode to GND.
+
+| Ref   | H2 GPIO | Net          | Series R          |
+|-------|---------|--------------|-------------------|
+| LED_4 | IO11    | `LED_H2_HB`  | 1 kΩ R_LED_H2_HB  |
+| LED_6 | IO12    | `LED_ZIGBEE` | 1 kΩ R_LED_ZIGBEE |
+| LED_7 | IO13    | `LED_BLE`    | 1 kΩ R_LED_BLE    |
+
+### 11.5 Physical placement
+
+- LEDs 1–19 occupy the upper of two parallel rows along the long edge, 4 mm centre-to-centre, viewed face-up with the LED visible through the case slot.
+- 16 SK6812 occupy the lower row, 3.5 mm centre-to-centre, aligned to the long edge opposite the connector bank.
+- Silkscreen: label the slot `LED ROW — FRONT`, number each LED with its `LED_n` reference for field debug.
+- Keepout: no components or vias within 2 mm of the emission axis of each LED (side-emit — axis is parallel to the board surface, pointing off the long edge).
+
+### 11.6 Activity pulse-stretch
+
+Comm-activity LEDs (`LED_WIFI`, `LED_ZIGBEE`, `LED_BLE`, `LED_I2C_ACT`, `LED_UART_ACT`) use a minimum-50 ms on-time stretch in firmware. Per-byte or per-packet events retrigger a `last_activity_ms` timestamp; the LED output is `(millis() - last_activity_ms) < 50`. Without this, the flicker is too fast for the eye to perceive at link-layer rates.
 
 ## 12. Debug headers and test points
 
@@ -445,22 +538,22 @@ Access via wire-solder pigtail or pogo-pin jig for direct JTAG debug of H2 witho
 | TP_H2_BOOT | H2_BOOT_SEL |
 | TP_H2_USB_DP | H2_USB_DP |
 | TP_H2_USB_DN | H2_USB_DN |
-| TP_MUX_SDA0..7 | MUX_SDA0..7 |
-| TP_MUX_SCL0..7 | MUX_SCL0..7 |
+| TP_MUX_SDA1..8 | MUX_SDA1..8 |
+| TP_MUX_SCL1..8 | MUX_SCL1..8 |
 | TP_ROW1..8_5V | ROW1..8_5V_OUT |
 | TP_ROW1..8_SDA | ROW1..8_SDA_5V |
 | TP_ROW1..8_SCL | ROW1..8_SCL_5V |
 
 ## 13. Mux bypass path
 
-Zero-ohm solder bridges from the S3 I2C bus to TCA9548A channel 0 outputs:
+Zero-ohm solder bridges from the S3 I2C bus direct to the Row 1 level-shifter, bypassing the TCA9548A:
 
-- **JP_BYPASS_SDA** 0 Ω 0402, DNP by default — bridges **I2C_SDA_3V3** → **MUX_SDA0** when populated.
-- **JP_BYPASS_SCL** 0 Ω 0402, DNP by default — bridges **I2C_SCL_3V3** → **MUX_SCL0** when populated.
+- **JP_BYPASS_SDA** 0 Ω 0402, DNP by default — bridges **I2C_SDA_3V3** → **MUX_SDA1** when populated.
+- **JP_BYPASS_SCL** 0 Ω 0402, DNP by default — bridges **I2C_SCL_3V3** → **MUX_SCL1** when populated.
 
 Purpose: isolate TCA9548A failure from PCA9306 failure from cable failure during bring-up.
 
-Operation: populate both jumpers AND hold MUX_RESET_N low (test clip) to force the TCA9548A high-Z. S3 then drives PCA9306 U7 directly → ROW1 XH-4.
+Operation: populate both jumpers AND hold MUX_RESET_N low (test clip) to force the TCA9548A high-Z. S3 then drives the Row 1 PCA9306 level shifter directly → ROW1 XH-4.
 
 Default state: **DNP**. Only populate for diagnostic runs. Remove before deployment.
 
@@ -506,8 +599,8 @@ Per-row polyfuse: 2 A hold.
 |---|---|---|---|---|
 | I2C_SDA_3V3 | 4.7 kΩ to 3V3 | — | S3 GPIO8 | TCA9548A SDA |
 | I2C_SCL_3V3 | 4.7 kΩ to 3V3 | — | S3 GPIO9 | TCA9548A SCL |
-| MUX_SDA0..7 | 4.7 kΩ to 3V3 | — | TCA9548A ch n SDA | PCA9306 SDA1 |
-| MUX_SCL0..7 | 4.7 kΩ to 3V3 | — | TCA9548A ch n SCL | PCA9306 SCL1 |
+| MUX_SDA1..8 | 4.7 kΩ to 3V3 | — | TCA9548A downstream SDA (per row) | PCA9306 SDA1 (Row n) |
+| MUX_SCL1..8 | 4.7 kΩ to 3V3 | — | TCA9548A downstream SCL (per row) | PCA9306 SCL1 (Row n) |
 | ROW{n}_SDA_5V | — | 4.7 kΩ to 5V | PCA9306 SDA2 | J{2+n} pin 3 via PESD |
 | ROW{n}_SCL_5V | — | 4.7 kΩ to 5V | PCA9306 SCL2 | J{2+n} pin 4 via PESD |
 
@@ -525,6 +618,7 @@ Firmware rule: mux channel-select register accepts only single-bit values (0x01,
 | U6 | TCA9548APWR | TSSOP-24 PW | Dot/dimple on one narrow end; pin 1 = A0. **Trap**: RGE (QFN) variant has different pad pattern. Order **only PWR suffix**. | TI SCPS195 |
 | U7..U14 | PCA9306DCTR | VSSOP-8 (DCT suffix) | Dot on pin 1 corner; pin 1 = EN. **Trap**: `PCA9306DP1R` is SOT-23-6 with different pinout — do not substitute. | TI SCPS169 |
 | U15..U22 | PESD3V3L5UW | SOT-363 (SC-88) | Pin 1 marker per Nexperia datasheet. | Nexperia PESD3V3L5UW datasheet |
+| U_LED | TLC5947DAP | HTSSOP-28 (Power-PAD, DAP suffix) | Dot on pin 1 corner; pin 1 = BLANK. **Trap**: non-DAP (TLC5947DBT) is TSSOP without thermal pad — runs hotter. Order **DAP suffix** for our continuous 24-channel drive. | TI SBVS107 |
 | Q1 | AO3401A | SOT-23-3 | Gate = pin 1, source = pin 3, drain = pin 2. | AOS AO3401A datasheet |
 | D1 | SMAJ5.0CA | DO-214AC (SMA) | CA suffix = bidirectional, no polarity. | Littelfuse SMAJ series datasheet |
 | D_ROW1..8 | SMBJ5.0A | DO-214AA (SMB) | A suffix = unidirectional; cathode band to +5 V. | Littelfuse SMBJ series datasheet |
