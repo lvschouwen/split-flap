@@ -15,6 +15,7 @@ ESPMaster/WebAssets.h
 ESPMaster/BuildVersion.h
 ESPMaster/WifiCredentials.h
 Unit/BuildVersion.h
+SkeletonMaster/BuildVersion.h
 
 # Python
 __pycache__/
