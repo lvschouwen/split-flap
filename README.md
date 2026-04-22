@@ -71,13 +71,24 @@ Install PlatformIO Core (once):
 pip install -U platformio
 ```
 
-Each of the three sketches has its own `platformio.ini` in its folder. From the folder, run:
+Each PlatformIO project has its own `platformio.ini` in its folder. Today the active set is:
+
+| Folder | Target | Status |
+|---|---|---|
+| `ESPMaster/` | ESP8266 ESP-01 | Frozen at `v-esp8266-final` (reference / known-good) |
+| `Unit/` | Arduino Nano (per-flap) | Active |
+| `MasterS3/` | ESP32-S3-WROOM-1-N16R8 | In progress (Master v2 Rev B PCB) |
+| `MasterH2/` | ESP32-H2-MINI-1-N4 | In progress (radio coprocessor) |
+
+From the folder, run:
 
 ```bash
 pio run                   # build
 pio run -t upload         # flash firmware over USB
 pio device monitor        # serial monitor at 115200 baud
 ```
+
+The ESP32 projects (`MasterS3/`, `MasterH2/`) use the [pioarduino fork](https://github.com/pioarduino/platform-espressif32) of `platform-espressif32` for arduino-esp32 v3.x (needed for ESP32-H2). First-time `pio run` downloads ~1 GB of toolchains; subsequent builds are fast.
 
 The web UI and the bundled unit firmware are compiled into the master's PROGMEM at build time by `ESPMaster/build_assets.py` (no separate filesystem flash step).
 

@@ -15,7 +15,6 @@ ESPMaster/WebAssets.h
 ESPMaster/BuildVersion.h
 ESPMaster/WifiCredentials.h
 Unit/BuildVersion.h
-SkeletonMaster/BuildVersion.h
 # PlatformIO Arduino preprocessor leaves a transient *.ino.cpp in the
 # project root during builds; harmless but trips the dirty check in
 # build_version.py's git-rev detection.

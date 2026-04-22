@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "author": "Lucas",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-h2-devkitm-1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-led", "id": "led", "top": -100, "left": 100, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r", "top": -40, "left": 100, "attrs": { "value": "1000" } }
+  ],
+  "connections": [
+    [ "esp:GND.1", "led:C", "black", [] ],
+    [ "esp:8",     "r:1",   "red",   [] ],
+    [ "r:2",       "led:A", "red",   [] ],
+    [ "esp:TX",    "$serialMonitor:RX", "", [] ],
+    [ "esp:RX",    "$serialMonitor:TX", "", [] ]
+  ]
+}

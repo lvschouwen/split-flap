@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "author": "Lucas",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-led", "id": "led_wifi", "top": -100, "left": 100, "attrs": { "color": "blue" } },
+    { "type": "wokwi-led", "id": "led_act",  "top": -100, "left": 160, "attrs": { "color": "green" } },
+    { "type": "wokwi-led", "id": "led_zb",   "top": -100, "left": 220, "attrs": { "color": "yellow" } },
+    { "type": "wokwi-resistor", "id": "r_wifi", "top": -40, "left": 100, "attrs": { "value": "1000" } },
+    { "type": "wokwi-resistor", "id": "r_act",  "top": -40, "left": 160, "attrs": { "value": "1000" } },
+    { "type": "wokwi-resistor", "id": "r_zb",   "top": -40, "left": 220, "attrs": { "value": "1000" } }
+  ],
+  "connections": [
+    [ "esp:GND.1",  "led_wifi:C", "black", [] ],
+    [ "esp:4",      "r_wifi:1",   "blue",  [] ],
+    [ "r_wifi:2",   "led_wifi:A", "blue",  [] ],
+    [ "esp:GND.2",  "led_act:C",  "black", [] ],
+    [ "esp:5",      "r_act:1",    "green", [] ],
+    [ "r_act:2",    "led_act:A",  "green", [] ],
+    [ "esp:GND.3",  "led_zb:C",   "black", [] ],
+    [ "esp:6",      "r_zb:1",     "yellow",[] ],
+    [ "r_zb:2",     "led_zb:A",   "yellow",[] ],
+    [ "esp:TX",     "$serialMonitor:RX", "", [] ],
+    [ "esp:RX",     "$serialMonitor:TX", "", [] ]
+  ],
+  "dependencies": {
+    "chip-tca9548a": "file:./chips/tca9548a"
+  }
+}

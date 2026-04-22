@@ -1,0 +1,8 @@
+# Wokwi simulator config for MasterH2.
+# Build with `pio run` first, then open this file in Wokwi (browser or CLI)
+# to flash the resulting binary into the simulated ESP32-H2.
+
+[wokwi]
+version = 1
+firmware = '.pio/build/masterh2/firmware.bin'
+elf      = '.pio/build/masterh2/firmware.elf'

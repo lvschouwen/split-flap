@@ -1,0 +1,8 @@
+# Wokwi simulator config for MasterS3.
+# Build with `pio run` first, then open this file in Wokwi (browser or CLI)
+# to flash the resulting binary into the simulated ESP32-S3.
+
+[wokwi]
+version = 1
+firmware = '.pio/build/masters3/firmware.bin'
+elf      = '.pio/build/masters3/firmware.elf'
