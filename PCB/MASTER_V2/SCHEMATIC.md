@@ -258,6 +258,14 @@ Module pin numbers per Espressif ESP32-H2-MINI-1 datasheet rev 1.1+.
 - Terminal 1 → **BOOT_S3_BTN**
 - Terminal 2 → **GND**
 
+### Debounce / ESD shunt caps
+- **C_SW1_DEB** 100 nF X7R 0603 from **EN_S3_NODE** to **GND**, placed within 2 mm of SW1 terminal 1.
+  Parallels C_ESP_EN (1 µF X5R, §6) — the X7R 0603 has lower ESL and is the shunt path for a fast finger-tap ESD edge, while the 1 µF continues to set the reset-release time constant.
+- **C_SW2_DEB** 100 nF X7R 0603 from **BOOT_S3_BTN** to **GND**, placed within 2 mm of SW2 terminal 1.
+  Nothing else sits on BOOT_S3_BTN (the ESP32-S3 IO0 pin has only its internal pullup), so this cap does both jobs: contact-bounce filter on press, and ESD shunt on finger tap.
+
+Both caps are the same Samsung CL10B104KB8NNNC already used across the board (see §6 module decoupling). No separate BOM line-item risk — single-part consolidation.
+
 No physical buttons for H2 — reset and boot controlled by S3 or JP_DEBUG_H2.
 
 ## 9. TCA9548A mux — U6 TCA9548APWR (TSSOP-24)
@@ -546,18 +554,43 @@ Access via wire-solder pigtail or pogo-pin jig for direct JTAG debug of H2 witho
 | TP_ROW1..8_SDA | ROW1..8_SDA_5V |
 | TP_ROW1..8_SCL | ROW1..8_SCL_5V |
 
+### Silkscreen callouts (MANDATORY — must land on the `F.Silkscreen` layer)
+
+The following labels and markers must appear on the top silkscreen. Each one prevents a specific bring-up foot-gun:
+
+1. **Row connector pin-1 dots** — a small filled dot adjacent to pin 1 of every **J3..J10** (XH-4 row connectors). A reversed cable at assembly MUST NOT short `5V_RAIL` to `MUX_SDA_n`. Pin-1 reference side picked to match the connector's mechanical key so the dot is on the keyed side.
+2. **Mux bypass jumper labels** — next to `JP_BYPASS_SDA` and `JP_BYPASS_SCL`: `MUX BYPASS — DNP DEFAULT`. Add a small arrow or box around the two jumpers as a visual group.
+3. **Strap-pin DO-NOT-CUT stripes** — diagonal-hatch warning stripes on L1 silkscreen adjacent to `R_H2_STRAP9` (IO9 boot-select pullup to 3V3 during cold boot) and any other strap pullups for H2 boot-select / H2 IO8-strap. A cut trace there = H2 enters UART download mode on every cold boot. Label: `STRAP — DO NOT CUT`.
+4. **Polyfuse ref + value** — each of `F_ROW_1..F_ROW_8` gets its designator + `2A` on the silkscreen (`F_ROW_n 2A`). Polyfuse package (1812L200) is large enough for legible silk.
+5. **Debug header pin-1 dots** — filled dot adjacent to pin 1 of `JP_DEBUG_S3` (1×4) and `JP_DEBUG_H2` (1×6). A reversed dongle cable on JP_DEBUG_H2 puts the dongle's 3V3 on GND and vice versa.
+6. **Power input warning sticker** — text block near the board edge between J1 (USB-C) and J2 (barrel): `USB-C 5 V  /  BARREL 5–24 V  ≤ 8 A  —  DO NOT CONNECT BOTH SIMULTANEOUSLY`. Even though the reverse-polarity PMOS + ideal-diode OR-ing (§3, §4) protect the logic domain against both-at-once, the two rails combine on `5V_RAIL` downstream of the OR-ing, and a dirty hot-plug from a different supply voltage has no business landing there.
+7. **Header pin-function labels** — at the line of the existing `JP_DEBUG_S3` and `JP_DEBUG_H2` headers, print the per-pin function in abbreviated form next to each pin (e.g. `3V3 GND TX RX` for JP_DEBUG_S3, `3V3 GND TX RX EN BOOT` for JP_DEBUG_H2). Avoids having to consult this document at a bench probe session.
+
+Visual pass on the mockup (`master_v2_mockup.svg`) should reflect items 1, 2, 3, 6, and 7 — the geometry-anchored ones. Items 4 and 5 are implicit in the per-part footprint silkscreen and shouldn't need explicit mockup layout.
+
 ## 13. Mux bypass path
 
-Zero-ohm solder bridges from the S3 I2C bus direct to the Row 1 level-shifter, bypassing the TCA9548A:
+Direct S3 I2C bus → Row 1 level-shifter path, bypassing the TCA9548A:
 
-- **JP_BYPASS_SDA** 0 Ω 0402, DNP by default — bridges **I2C_SDA_3V3** → **MUX_SDA1** when populated.
-- **JP_BYPASS_SCL** 0 Ω 0402, DNP by default — bridges **I2C_SCL_3V3** → **MUX_SCL1** when populated.
+- **JP_BYPASS_SDA** — bridges **I2C_SDA_3V3** → **MUX_SDA1** when populated.
+- **JP_BYPASS_SCL** — bridges **I2C_SCL_3V3** → **MUX_SCL1** when populated.
+
+### Footprint — 0402 two-pad 0 Ω resistor (NOT a three-pad solder-bridge)
+
+Chose the 0402 resistor pad over a bare three-pad solder bridge because:
+- **P&P-friendly**: if we ever decide to populate by default (unlikely, but it's a lever), assembly is automatic — no manual rework step.
+- **Hot-air reversible**: 0402 0 Ω lifts clean in ~3 s with a hot-air rework station. A three-pad solder bridge, once joined, needs wick + flux and often damages the soldermask.
+- **Unambiguous at assembly**: JLC has a single footprint for "0 Ω 0402, DNP" with a well-defined part (UNI-ROYAL `0402WGF0000TCE` / LCSC `C17168`). Three-pad bridges are free, but the assembly house treats them as "not a component" and we lose traceability.
+
+Cost delta is noise (the resistor is ~\$0.001 and DNP = no placement charge anyway).
+
+### Operation
 
 Purpose: isolate TCA9548A failure from PCA9306 failure from cable failure during bring-up.
 
-Operation: populate both jumpers AND hold MUX_RESET_N low (test clip) to force the TCA9548A high-Z. S3 then drives the Row 1 PCA9306 level shifter directly → ROW1 XH-4.
+Populate both jumpers AND hold MUX_RESET_N low (test clip) to force the TCA9548A high-Z. S3 then drives the Row 1 PCA9306 level shifter directly → ROW1 XH-4.
 
-Default state: **DNP**. Only populate for diagnostic runs. Remove before deployment.
+Default state: **DNP** (see BOM `JP_BYPASS_SDA` / `JP_BYPASS_SCL`). Only populate for diagnostic runs. Remove before deployment.
 
 ## 14. Inter-MCU UART link — specification
 

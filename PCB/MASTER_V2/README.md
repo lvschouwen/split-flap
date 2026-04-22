@@ -251,6 +251,36 @@ The board electrically allows illegal operating modes; firmware MUST enforce:
 
 [BOM.csv](./BOM.csv). JLCPCB PCBA-ready. **All entries have committed LCSC part numbers — no VERIFY stubs.** LCSC stock is order-time; substitutions (same part, different manufacturer) are acceptable if package and electricals match.
 
+### `StockStatus` column (#70 item 1)
+
+The 10th column is order-day scratch space. Every row starts at `UNCHECKED`. On the day before ordering, walk the BOM against JLC's parts library (`https://jlcpcb.com/parts` or the LCSC number already in column 8) and set each row to one of:
+
+- **BASIC** — JLC Basic part (no feeder charge, always in stock).
+- **EXTENDED** — JLC Extended part (one-time ~$5 feeder charge, in stock).
+- **BACKORDER** — Out of stock. Needs an alternate pick OR accept a 1+ week delay. Do not submit the order until every `BACKORDER` row has been resolved.
+- **DNP** — Deliberately Do Not Populate (e.g. `JP_BYPASS_SDA`, `LEVEL_RGB` defaults). Not ordered but listed for placement.
+
+The `StockStatus` values are throwaway per-order: clear them back to `UNCHECKED` if not placing immediately, or overwrite for the next order.
+
+### X5R cap audit (#70 item 2) — 2026-04-22
+
+Intent: catch risky (capacitance × voltage × package) trios before fab — same class of issue that required moving `C_H2_BULK` from 0603 → 0805 in Rev B. Audited every X5R row in the BOM against JLC stock patterns and DC-bias derating:
+
+| Designator(s) | Spec | Verdict | Notes |
+|---|---|---|---|
+| `C_LED_DEC2` | 10 µF 10 V X5R 0805 | PASS | Mainstream JLC Basic part (Samsung CL21A106KQFNNNE). 10 V rating vs 5 V bias → gentle derating. |
+| `C_BUCK_IN` | 22 µF 25 V X5R 1210 | PASS | 1210 package gives plenty of headroom; 25 V vs 5 V bias → ~5 % derating. Samwha CS3225X5R226K250NRL, JLC Extended. |
+| `C_BUCK_OUT_1/2` | 22 µF 25 V X5R 0805 | PASS | Samsung CL21A226MAQNNNE, JLC Basic. DC bias at 3V3 on a 25 V cap is negligible (<5 %). Two in parallel = effective ≥ 40 µF at the buck output, meets AP63300 minimum. |
+| `C_BULK_5V_CER` | 47 µF 10 V X5R 1210 | PASS | Samsung CL32A476KPJNNNE, JLC Basic. 1210 at 10 V / 5 V bias is the standard value; rough derating ~20 % → effective ~37 µF, still sized for target. |
+| `C_ESP_BULK` | 22 µF 25 V X5R 0805 | PASS | Same part as buck output. 3V3 rail bias on 25 V → negligible derating. |
+| `C_ESP_EN`, `C_ESP_DEC{1,2,3}b`, `C_H2_EN`, `C_H2_DEC{1,2}b` | 1 µF 25 V X5R 0603 | PASS | Samsung CL10A105KO8NNNC, JLC Basic, flagship part. No concerns. |
+| `C_H2_BULK` | 10 µF 10 V X5R 0805 | PASS (already fixed) | Was 0603 pre-Rev B; bumped to 0805 in Rev B because 10 µF 10 V X5R 0603 had stock / availability issues at JLC. Current 0805 is CL21A106KQFNNNE, JLC Basic. |
+| `C_ROW1..8` | 47 µF 10 V X5R 1210 | PASS | Same part as `C_BULK_5V_CER`. 8 instances. |
+
+**Conclusion**: no package bumps needed for Rev B beyond `C_H2_BULK` (already done). The "25 V X5R 0603" that triggered the 0603 → 0805 discussion was specifically the 10 µF value — the 1 µF 25 V 0603 used for decoupling and EN debounce is a different size class and ships reliably in 0603.
+
+One soft-risk item carried into the order-day check (#70 item 1): confirm all Samsung `CL10*`, `CL21*`, `CL32*` rows are still JLC Basic (not demoted to Extended). A Basic → Extended move just adds the ~$5/order feeder charge, not a show-stopper — but worth catching.
+
 ## Schematic
 
 - [SCHEMATIC.md](./SCHEMATIC.md) — authoritative textual netlist.
@@ -330,6 +360,23 @@ The board electrically allows illegal operating modes; firmware MUST enforce:
 - PESD3V3L5UW within 5 mm of J{n} pins 3/4 (SDA/SCL).
 - C_ROW{n} (47 µF 1210) and C_ROW{n}_HF (100 nF 0603) within 5 mm of J{n} power pins.
 - Polyfuse F{n} in series in the J{n} 5 V path; ≥ 1.0 mm L1 bridge to L3 island.
+
+#### Polyfuse thermal derating (#70 item 6)
+Part is Littelfuse **1812L200** (I<sub>HOLD</sub>=2.0 A, I<sub>TRIP</sub>=4.0 A at 23 °C). Datasheet derating table (`1812L-datasheet.pdf` §"Thermal Derating"):
+
+| Ambient | I<sub>HOLD</sub> derated |
+|---|---|
+| 23 °C | 2.00 A |
+| 40 °C | 1.68 A |
+| 50 °C | 1.48 A |
+| 60 °C | 1.30 A |
+| 70 °C | 1.12 A |
+
+Expected board-interior ambient with the buck running + 8 row channels at ~150 mA each is **~50 °C**, at which I<sub>HOLD</sub> drops to ~1.48 A. That is still well above the ~150 mA per-row steady-state current (single Nano + stepper idle + LED bar share), so no trip risk in normal operation. But the headroom to I<sub>TRIP</sub> shrinks meaningfully, and peak-of-peaks stepper coil energization can briefly cross 500 mA.
+
+Layout constraint: **each polyfuse must sit on an L1 copper pour of ≥ 50 mm²** on the pin-1 side (the incoming `5V_RAIL` side), acting as a thermal spreader. Do NOT stack polyfuses directly under the buck inductor or the ESP modules — those are the two nearest heat sources on the board. Keep ≥ 5 mm clearance from the buck `L_BUCK` footprint and the ESP32-S3 / H2 module thermal pads.
+
+Validation at bring-up: thermal-cam the polyfuse area with all 8 rows loaded at typical current and confirm < 60 °C polyfuse package temperature under normal operation (i.e. not in trip).
 
 ### Strap pins and module
 - S3 GPIO0 trace to BOOT_S3_BTN ≤ 20 mm, flanked by GND pour.

@@ -273,8 +273,21 @@
       <rect class="conn" x="397.5"y="345" width="55" height="40"/><text class="conn-lbl" x="425" y="360" text-anchor="middle">J9</text><text class="silk-sm" x="425" y="370" text-anchor="middle">ROW 7</text>
       <rect class="conn" x="462.5"y="345" width="55" height="40"/><text class="conn-lbl" x="490" y="360" text-anchor="middle">J10</text><text class="silk-sm" x="490" y="370" text-anchor="middle">ROW 8</text>
     </g>
+    <!-- Pin-1 silkscreen dots (#70 item 4) — mark the keyed side of each J3..J10 so a -->
+    <!-- reversed cable at assembly cannot short 5V_RAIL to MUX_SDA_n. All 8 dots sit -->
+    <!-- at the same relative position (x+5, y+6) = top-left of each connector body. -->
+    <g fill="#fbbf24" stroke="none">
+      <circle cx="12.5"  cy="351" r="2.5"/> <!-- J3 pin 1 -->
+      <circle cx="77.5"  cy="351" r="2.5"/> <!-- J4 pin 1 -->
+      <circle cx="142.5" cy="351" r="2.5"/> <!-- J5 pin 1 -->
+      <circle cx="207.5" cy="351" r="2.5"/> <!-- J6 pin 1 -->
+      <circle cx="272.5" cy="351" r="2.5"/> <!-- J7 pin 1 -->
+      <circle cx="337.5" cy="351" r="2.5"/> <!-- J8 pin 1 -->
+      <circle cx="402.5" cy="351" r="2.5"/> <!-- J9 pin 1 -->
+      <circle cx="467.5" cy="351" r="2.5"/> <!-- J10 pin 1 -->
+    </g>
     <!-- Pin order note under J3 exemplar -->
-    <text class="silk-sm" x="12"  y="382" fill="#fbbf24">pin 1 = 5V</text>
+    <text class="silk-sm" x="12"  y="382" fill="#fbbf24">● = pin 1 (5V)</text>
     <text class="silk-sm" x="12"  y="390" fill="#fbbf24">pin 2 = GND</text>
     <text class="silk-sm" x="12"  y="398" fill="#fbbf24">pin 3 = SDA</text>
     <text class="silk-sm" x="12"  y="406" fill="#fbbf24">pin 4 = SCL</text>
