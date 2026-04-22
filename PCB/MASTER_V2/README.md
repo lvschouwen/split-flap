@@ -7,7 +7,7 @@
 ## Related issues
 
 - [#59](https://github.com/lucasvanschouwen/split-flap/issues/59) — this board
-- [#58](https://github.com/lucasvanschouwen/split-flap/issues/58) — ESP32-S3 firmware port (`ESPMasterS3/`)
+- [#58](https://github.com/lvschouwen/split-flap/issues/58) — ESP32-S3 + ESP32-H2 firmware port (`firmware/MasterS3/`, `firmware/MasterH2/`)
 - [#55](https://github.com/lucasvanschouwen/split-flap/issues/55) — power distribution (drives input spec)
 - [#54](https://github.com/lucasvanschouwen/split-flap/issues/54) — coil de-energize (per-unit firmware, not PCB)
 

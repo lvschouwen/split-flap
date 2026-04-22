@@ -11,10 +11,14 @@
 *.o
 *.elf
 *.bin
-ESPMaster/WebAssets.h
-ESPMaster/BuildVersion.h
-ESPMaster/WifiCredentials.h
-Unit/BuildVersion.h
+firmware/ESPMaster/WebAssets.h
+firmware/ESPMaster/BuildVersion.h
+firmware/ESPMaster/WifiCredentials.h
+firmware/Unit/BuildVersion.h
+# Belt-and-braces: catch generated BuildVersion.h in any firmware project
+# (new or renamed) without needing a .gitignore bump each time.
+firmware/*/BuildVersion.h
+firmware/*/WebAssets.h
 # PlatformIO Arduino preprocessor leaves a transient *.ino.cpp in the
 # project root during builds; harmless but trips the dirty check in
 # build_version.py's git-rev detection.

@@ -98,10 +98,10 @@ For the Unit sketch, if upload fails because of the old bootloader on your Nano,
 pio run -e unit_old_bootloader -t upload
 ```
 
-Host-side unit tests for the ESPMaster string helpers live in `ESPMaster/test/` and run with:
+Host-side unit tests for the ESPMaster string helpers live in `firmware/ESPMaster/test/` and run with:
 
 ```bash
-cd ESPMaster && pio test -e native
+cd firmware/ESPMaster && pio test -e native
 ```
 
 Arduino IDE is **not** supported for the master sketch any more: the PROGMEM asset generation runs as a PlatformIO pre-build step, and the build flags / lib dependencies are managed through `platformio.ini`. The Unit sketch is simple enough to still open in the IDE, but the PlatformIO flow is the supported path for every part of the project.

@@ -14,17 +14,17 @@ PREBUILT_DIR="$FLASHING_DIR/prebuilt"
 ZIP_OUT="/tmp/split-flap-flasher.zip"
 
 echo "=== Building ESPMaster sketch + filesystem ==="
-( cd "$REPO_ROOT/ESPMaster" && pio run -e espmaster && pio run -e espmaster -t buildfs )
+( cd "$REPO_ROOT/firmware/ESPMaster" && pio run -e espmaster && pio run -e espmaster -t buildfs )
 
 echo "=== Building Unit sketch ==="
-( cd "$REPO_ROOT/Unit" && pio run )
+( cd "$REPO_ROOT/firmware/Unit" && pio run )
 
 echo "=== Copying artefacts to flashing/prebuilt/ ==="
 mkdir -p "$PREBUILT_DIR"
-cp "$REPO_ROOT/UnitBootloader/prebuilt/twiboot-atmega328p-16mhz.hex" "$PREBUILT_DIR/"
-cp "$REPO_ROOT/Unit/.pio/build/unit/firmware.hex"                   "$PREBUILT_DIR/unit-firmware.hex"
-cp "$REPO_ROOT/ESPMaster/.pio/build/espmaster/firmware.bin"         "$PREBUILT_DIR/master-firmware.bin"
-cp "$REPO_ROOT/ESPMaster/.pio/build/espmaster/littlefs.bin"         "$PREBUILT_DIR/master-littlefs.bin"
+cp "$REPO_ROOT/firmware/UnitBootloader/prebuilt/twiboot-atmega328p-16mhz.hex" "$PREBUILT_DIR/"
+cp "$REPO_ROOT/firmware/Unit/.pio/build/unit/firmware.hex"                   "$PREBUILT_DIR/unit-firmware.hex"
+cp "$REPO_ROOT/firmware/ESPMaster/.pio/build/espmaster/firmware.bin"         "$PREBUILT_DIR/master-firmware.bin"
+cp "$REPO_ROOT/firmware/ESPMaster/.pio/build/espmaster/littlefs.bin"         "$PREBUILT_DIR/master-littlefs.bin"
 
 echo "=== Packaging to $ZIP_OUT ==="
 STAGING="$(mktemp -d)"
