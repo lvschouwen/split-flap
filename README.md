@@ -17,6 +17,10 @@ Thank you everyone whom has contributed, included in the "main" release or not, 
 
 ---
 
+> **Firmware status (2026-04-22):** The ESP8266 master firmware in `ESPMaster/` is **frozen** at tag `v-esp8266-final` — kept as a reference and a known-working build for existing hardware. Active firmware development moves to the ESP32-S3 + ESP32-H2 stack on the Master v2 Rev B PCB: `MasterS3/` (primary, port in progress) and `MasterH2/` (radio coprocessor, in progress). See meta issue [#58](https://github.com/lvschouwen/split-flap/issues/58) and the PCB design under `PCB/MASTER_V2/`.
+
+---
+
 This project has been forked from the brilliant [Split Flap Project](https://github.com/Dave19171/split-flap) by [David Königsmann](https://github.com/Dave19171). None of this would have been possible without the great foundations that have been put in place.
 
 This project has built on the original project to add extra features such as:

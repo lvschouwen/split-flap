@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [ESPMaster, Unit, SkeletonMaster]
+        project: [ESPMaster, Unit]
     steps:
       - uses: actions/checkout@v4
 
