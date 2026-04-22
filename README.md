@@ -17,7 +17,7 @@ Thank you everyone whom has contributed, included in the "main" release or not, 
 
 ---
 
-> **Firmware status (2026-04-22):** The ESP8266 master firmware in `ESPMaster/` is **frozen** at tag `v-esp8266-final` — kept as a reference and a known-working build for existing hardware. Active firmware development moves to the ESP32-S3 + ESP32-H2 stack on the Master v2 Rev B PCB: `MasterS3/` (primary, port in progress) and `MasterH2/` (radio coprocessor, in progress). See meta issue [#58](https://github.com/lvschouwen/split-flap/issues/58) and the PCB design under `PCB/MASTER_V2/`.
+> **Firmware status (2026-04-22):** The ESP8266 master firmware in `ESPMaster/` is in **maintenance mode** — security and bug fixes accepted, no new features. Known-good build is tagged `v-esp8266-final`. Active feature development is on the ESP32-S3 + ESP32-H2 stack on the Master v2 Rev B PCB: `MasterS3/` (primary, port in progress) and `MasterH2/` (radio coprocessor, in progress). See meta issue [#58](https://github.com/lvschouwen/split-flap/issues/58) and the PCB design under `PCB/MASTER_V2/`.
 
 ---
 
@@ -75,7 +75,7 @@ Each PlatformIO project has its own `platformio.ini` in its folder. Today the ac
 
 | Folder | Target | Status |
 |---|---|---|
-| `ESPMaster/` | ESP8266 ESP-01 | Frozen at `v-esp8266-final` (reference / known-good) |
+| `ESPMaster/` | ESP8266 ESP-01 | Maintenance mode — security + bug fixes only (last known-good tag `v-esp8266-final`) |
 | `Unit/` | Arduino Nano (per-flap) | Active |
 | `MasterS3/` | ESP32-S3-WROOM-1-N16R8 | In progress (Master v2 Rev B PCB) |
 | `MasterH2/` | ESP32-H2-MINI-1-N4 | In progress (radio coprocessor) |

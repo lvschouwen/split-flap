@@ -150,9 +150,11 @@ Once you see `0x29` respond, you're good to proceed to Phase 2 (sketch-side hand
 
 ## Current status vs [issue #10](https://github.com/lvschouwen/split-flap/issues/10)
 
+Issue #10 is closed — core OTA path shipped in [PR #15](https://github.com/lvschouwen/split-flap/pull/15) (commit `940dbd3`).
+
 - [x] Phase 0 — design in the issue body.
-- [x] **Phase 1 — this directory. Vendored twiboot, patched for 16 MHz Nano, `.hex` builds and is checked in. Manual install procedure documented.**
-- [ ] Phase 2 — sketch-side: EEPROM identity + DIP fallback, jump-to-bootloader I2C opcode.
-- [ ] Phase 3 — master-side: twiboot protocol client + firmware-upload endpoint.
-- [ ] Phase 4 — UI page with progress bar.
-- [ ] Phase 5 — EEPROM layout migration (avoid clash with calibration-offset slot).
+- [x] Phase 1 — this directory. Vendored twiboot, patched for 16 MHz Nano, `.hex` builds and is checked in. Manual install procedure documented.
+- [x] Phase 2 — sketch-side: DIP-derived address in the bootloader + jump-to-bootloader I2C opcode in `Unit.ino` (watchdog-reset handshake).
+- [x] Phase 3 — master-side: twiboot protocol client in `ESPMaster/ServiceFirmwareFunctions.ino` (CMD_WAIT ping, page-write, CMD_SWITCH_APPLICATION, chip-ID verify) + `POST /firmware/unit?address=<hex>` upload endpoint + auto-install-from-LittleFS on boot.
+- [x] Phase 4 — web UI: Firmware card on the main page with target dropdown, `.hex` picker, confirmation dialog, and live progress via the existing `/log` tail.
+- [ ] Phase 5 — EEPROM layout migration (avoid clash with calibration-offset slot). Still TODO.
