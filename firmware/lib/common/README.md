@@ -2,16 +2,50 @@
 
 Pure-logic helpers consumed by both `MasterS3/` and `MasterH2/`, plus host-side native tests under `test/`.
 
-Landed (Phase 3a, #66):
+## Layout
 
-- `cobs_crc.{h,cpp}` — COBS framing + CRC-16/CCITT-FALSE. Wire format is `COBS( payload || CRC16-BE(payload) ) 0x00`. `splitflap::frame::encode` / `decode` stack the two into a verified codec.
-- `protocol.{h,cpp}` — S3↔H2 message types (PING / PONG / LOG) and codec. 4-byte header `[version][type][seq_hi][seq_lo]`, with `seq` big-endian.
-- `config.h` — row/unit topology constants (`kMaxRows` = 8, `kMaxUnitsPerRow` = 16, Row 1..Row 8 labeling helpers).
+```
+firmware/lib/common/
+├── library.json          — PIO library manifest (consumed via lib_extra_dirs)
+├── platformio.ini        — host-side native test env
+├── src/
+│   ├── config.h          — row/unit topology constants (kMaxRows, kMaxUnits, ...)
+│   ├── cobs_crc.{h,cpp}  — CRC-16/CCITT-FALSE + COBS + frame codec
+│   ├── frame_reader.{h,cpp} — stateful byte→frame reassembler for UART RX
+│   └── protocol.{h,cpp}  — PING / PONG / LOG message codec
+└── test/
+    ├── test_cobs_crc/    — CRC vector, COBS round-trip, frame encode/decode
+    ├── test_frame_reader/— Reader state machine + recovery
+    ├── test_link_loopback/— end-to-end S3↔H2 codec loopback
+    └── test_protocol/    — proto encode/parse + error paths
+```
 
-Planned in later phases:
+## Wire format
 
-- `settings_layout.{h,cpp}` — Preferences key names (clean break from ESP8266 flat-byte EEPROM).
-- `web_log.{h,cpp}` — Print-subclass log ring (port from ESPMaster).
+```
+  [ COBS( payload || CRC16-BE(payload) ) ] 0x00
+```
+
+CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, no reflect, no xorout). The trailing `0x00` is the only zero byte on the wire, so a receiver can always re-sync by scanning to the next delimiter.
+
+Message header (4 bytes):
+
+```
+  [ version:u8 ][ type:u8 ][ seq_hi:u8 ][ seq_lo:u8 ]
+```
+
+Types: `PING` (0x01), `PONG` (0x02), `LOG` (0x03). Ping/Pong carry no body; Log carries raw text (no null terminator).
+
+## Consumption from firmwares
+
+Both `MasterS3/platformio.ini` and `MasterH2/platformio.ini` declare:
+
+```ini
+lib_extra_dirs = ${PROJECT_DIR}/../lib
+lib_deps = common
+```
+
+PIO then auto-compiles `src/*.cpp` and exposes headers via `#include "cobs_crc.h"` etc.
 
 ## Running the tests
 
@@ -20,6 +54,11 @@ cd firmware/lib/common
 pio test -e native
 ```
 
-Unity is the test framework. Tests live in `test/test_cobs_crc/` and `test/test_protocol/`. The native env compiles the two `.cpp` files under this directory plus each test binary. No Arduino dependency — pure C++17.
+Unity is the test framework. Pure C++17, no Arduino dependency. CI runs this suite alongside the ESPMaster one.
+
+## Planned (later phases)
+
+- `settings_layout.{h,cpp}` — Preferences key names (clean break from ESP8266 flat-byte EEPROM).
+- `web_log.{h,cpp}` — Print-subclass log ring (port from ESPMaster).
 
 See meta issue #58 for the phase plan.

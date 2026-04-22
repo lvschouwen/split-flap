@@ -9,7 +9,7 @@
   ],
   "connections": [
     [ "esp:GND.1", "led:C", "black", [] ],
-    [ "esp:8",     "r:1",   "red",   [] ],
+    [ "esp:11",    "r:1",   "red",   [] ],
     [ "r:2",       "led:A", "red",   [] ],
     [ "esp:TX",    "$serialMonitor:RX", "", [] ],
     [ "esp:RX",    "$serialMonitor:TX", "", [] ]

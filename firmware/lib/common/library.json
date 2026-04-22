@@ -1,0 +1,8 @@
+{
+  "name": "common",
+  "version": "0.1.0",
+  "description": "Shared pure-logic helpers for the split-flap ESP32 firmware stack (MasterS3, MasterH2) and host-side native tests.",
+  "keywords": ["splitflap", "esp32", "cobs", "crc", "uart"],
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}
