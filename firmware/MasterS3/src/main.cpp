@@ -11,6 +11,10 @@
 // (TX=IO17, RX=IO18). Sends PING every 1 s; matches PONG by seq and logs
 // RTT; detects link down within 3 s.
 //
+// Phase 3c (#68): WiFi (STA with AP fallback), async web server on :80,
+// web log ring, minimal dashboard at /. Endpoints: / /settings /log
+// /reboot /wifi /name.
+//
 // H2 control pins (per PINOUT.md §"S3 firmware-visible constraints"):
 //   IO11 H2_RESET_N  — idle INPUT (high-Z). External pullup on H2 EN
 //                      holds it high. Switched OUTPUT low only to reset.
@@ -19,10 +23,10 @@
 //   IO13 H2_BOOT_SEL — idle INPUT (high-Z). External pullup on H2 IO9.
 //                      Switched OUTPUT low only during H2 OTA entry.
 //
-// NOTE: no direct S3 GPIO LED indicator here. S3 indicator LEDs (heartbeat,
-// WiFi, I2C act, UART act, row-select, OTA, fault) are all driven via the
-// TLC5947 on SPI (IO4=SCK, IO5=SIN, IO6=XLAT, IO7=BLANK). TLC5947 driver
-// is a separate phase — link activity must not touch IO4-7 directly.
+// NOTE: no direct S3 GPIO LED indicator here. S3 indicator LEDs are all
+// driven via the TLC5947 on SPI (IO4=SCK, IO5=SIN, IO6=XLAT, IO7=BLANK).
+// TLC5947 driver is a separate phase — link activity must not touch IO4-7
+// directly.
 
 #include <Arduino.h>
 #include <LittleFS.h>
@@ -30,16 +34,18 @@
 
 #include "config.h"
 #include "cobs_crc.h"
+#include "dev_log.h"
 #include "frame_reader.h"
 #include "protocol.h"
+#include "web_server.h"
+#include "wifi_setup.h"
 
 namespace pins {
-// H2 interlink — see PCB/MASTER_V2/PINOUT.md §"Inter-MCU signal summary".
-constexpr uint8_t h2_rst       = 11;  // Output only during reset; idle INPUT.
-constexpr uint8_t h2_irq       = 12;  // Input, external 10 kΩ pullup.
-constexpr uint8_t h2_boot_sel  = 13;  // Output only during OTA entry; idle INPUT.
-constexpr uint8_t h2_uart_tx   = 17;  // S3 UART1 TX → H2 IO4
-constexpr uint8_t h2_uart_rx   = 18;  // S3 UART1 RX ← H2 IO5
+constexpr uint8_t h2_rst       = 11;
+constexpr uint8_t h2_irq       = 12;
+constexpr uint8_t h2_boot_sel  = 13;
+constexpr uint8_t h2_uart_tx   = 17;
+constexpr uint8_t h2_uart_rx   = 18;
 }  // namespace pins
 
 namespace {
@@ -63,18 +69,18 @@ bool     g_link_up           = false;
 
 void initLittleFs() {
   if (LittleFS.begin(true)) {
-    Serial.printf("[S3] LittleFS OK (%u/%u bytes used)\n",
+    devLog.printf("[S3] LittleFS OK (%u/%u bytes used)\n",
                   static_cast<unsigned>(LittleFS.usedBytes()),
                   static_cast<unsigned>(LittleFS.totalBytes()));
   } else {
-    Serial.println("[S3] LittleFS FAIL — mount + format both refused");
+    devLog.println("[S3] LittleFS FAIL — mount + format both refused");
   }
 }
 
 uint32_t bumpBootCounter() {
   Preferences prefs;
   if (!prefs.begin("smoke", false)) {
-    Serial.println("[S3] Preferences FAIL — could not open 'smoke' namespace");
+    devLog.println("[S3] Preferences FAIL — could not open 'smoke' namespace");
     return 0;
   }
   uint32_t count = prefs.getUInt("boots", 0) + 1;
@@ -84,13 +90,8 @@ uint32_t bumpBootCounter() {
 }
 
 void initH2Pins() {
-  // RESET_N and BOOT_SEL stay INPUT (high-Z) during normal operation.
-  // External pullups on the H2 side keep the signals high. Firmware
-  // switches either pin to OUTPUT LOW only during reset / OTA entry,
-  // then returns it to INPUT.
   pinMode(pins::h2_rst, INPUT);
   pinMode(pins::h2_boot_sel, INPUT);
-  // IRQ input — no internal pullup; external 10 kΩ on the S3 side.
   pinMode(pins::h2_irq, INPUT);
 }
 
@@ -113,7 +114,7 @@ void handleFrame() {
   splitflap::proto::Parsed parsed{};
   if (!splitflap::proto::parse(g_reader.payload(), g_reader.payloadLen(),
                                &parsed)) {
-    Serial.println("[S3] protocol parse rejected a frame");
+    devLog.println("[S3] protocol parse rejected a frame");
     return;
   }
 
@@ -123,26 +124,26 @@ void handleFrame() {
       g_last_pong_rx_ms = now;
       if (parsed.seq == g_last_ping_seq) {
         const uint32_t rtt = now - g_last_ping_tx_ms;
-        Serial.printf("[S3] PONG seq=%u rtt=%u ms\n",
+        devLog.printf("[S3] PONG seq=%u rtt=%u ms\n",
                       parsed.seq, static_cast<unsigned>(rtt));
       } else {
-        Serial.printf("[S3] PONG seq=%u (stale — expected %u)\n",
+        devLog.printf("[S3] PONG seq=%u (stale — expected %u)\n",
                       parsed.seq, g_last_ping_seq);
       }
       if (!g_link_up) {
         g_link_up = true;
-        Serial.println("[S3] link UP");
+        devLog.println("[S3] link UP");
       }
       break;
     }
     case splitflap::proto::MsgType::Log: {
-      Serial.printf("[S3] H2-log: %.*s\n",
+      devLog.printf("[S3] H2-log: %.*s\n",
                     static_cast<int>(parsed.body_len),
                     reinterpret_cast<const char*>(parsed.body));
       break;
     }
     case splitflap::proto::MsgType::Ping:
-      Serial.printf("[S3] unexpected PING from H2 seq=%u\n", parsed.seq);
+      devLog.printf("[S3] unexpected PING from H2 seq=%u\n", parsed.seq);
       break;
   }
 }
@@ -155,7 +156,7 @@ void pumpUart() {
     if (ev.kind == splitflap::frame::Reader::Event::Kind::Frame) {
       handleFrame();
     } else if (ev.kind == splitflap::frame::Reader::Event::Kind::Dropped) {
-      Serial.printf("[S3] frame dropped err=%u\n",
+      devLog.printf("[S3] frame dropped err=%u\n",
                     static_cast<unsigned>(ev.err));
     }
   }
@@ -168,7 +169,7 @@ void serviceLink() {
   }
   if (g_link_up && (now - g_last_pong_rx_ms >= kLinkTimeoutMs)) {
     g_link_up = false;
-    Serial.println("[S3] link DOWN");
+    devLog.println("[S3] link DOWN");
   }
 }
 
@@ -178,23 +179,30 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
-  Serial.println("[S3] alive");
-  Serial.printf("[S3] config: kMaxRows=%u, kMaxUnitsPerRow=%u, kMaxUnits=%u\n",
+  devLog.println("[S3] alive");
+  devLog.printf("[S3] config: kMaxRows=%u, kMaxUnitsPerRow=%u, kMaxUnits=%u\n",
                 splitflap::kMaxRows, splitflap::kMaxUnitsPerRow,
                 splitflap::kMaxUnits);
 
   initLittleFs();
-  Serial.printf("[S3] Preferences OK (boot count = %u)\n",
+  devLog.printf("[S3] Preferences OK (boot count = %u)\n",
                 static_cast<unsigned>(bumpBootCounter()));
 
   initH2Pins();
   Serial1.begin(kUartBaud, SERIAL_8N1, pins::h2_uart_rx, pins::h2_uart_tx);
-  Serial.printf("[S3] H2 UART up: %lu 8N1 on rx=%u tx=%u\n",
+  devLog.printf("[S3] H2 UART up: %lu 8N1 on rx=%u tx=%u\n",
                 static_cast<unsigned long>(kUartBaud),
                 pins::h2_uart_rx, pins::h2_uart_tx);
+
+  wifiSetup::begin();
+  webServer::begin();
+
+  devLog.printf("[S3] free heap at idle = %u bytes\n",
+                static_cast<unsigned>(ESP.getFreeHeap()));
 }
 
 void loop() {
   pumpUart();
   serviceLink();
+  wifiSetup::applyPendingReboot();
 }
