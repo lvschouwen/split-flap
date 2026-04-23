@@ -41,7 +41,7 @@ jobs:
         run: pip install --upgrade platformio
 
       - name: Build
-        working-directory: firmware/${{ matrix.project }}
+        working-directory: firmware/v1/${{ matrix.project }}
         run: pio run
 
   test:
@@ -66,16 +66,16 @@ jobs:
         run: pip install --upgrade platformio
 
       - name: Run ESPMaster native tests
-        working-directory: firmware/ESPMaster
+        working-directory: firmware/v1/ESPMaster
         run: pio test -e native
 
       - name: Run lib/common native tests
-        working-directory: firmware/lib/common
+        working-directory: firmware/v1/lib/common
         run: pio test -e native
 
       - name: Install pytest
         run: pip install pytest
 
       - name: Run Python tests
-        working-directory: firmware/ESPMaster
+        working-directory: firmware/v1/ESPMaster
         run: python -m pytest tests/

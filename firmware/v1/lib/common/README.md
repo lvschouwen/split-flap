@@ -5,7 +5,7 @@ Pure-logic helpers consumed by both `MasterS3/` and `MasterH2/`, plus host-side 
 ## Layout
 
 ```
-firmware/lib/common/
+firmware/v1/lib/common/
 ├── library.json          — PIO library manifest (consumed via lib_extra_dirs)
 ├── platformio.ini        — host-side native test env
 ├── src/
@@ -50,7 +50,7 @@ PIO then auto-compiles `src/*.cpp` and exposes headers via `#include "cobs_crc.h
 ## Running the tests
 
 ```bash
-cd firmware/lib/common
+cd firmware/v1/lib/common
 pio test -e native
 ```
 
