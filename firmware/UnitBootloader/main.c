@@ -19,6 +19,7 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/boot.h>
+#include <avr/eeprom.h>
 #include <avr/pgmspace.h>
 
 #define VERSION_STRING          "TWIBOOT v3.2"
@@ -37,17 +38,36 @@
 #define TWI_ADDRESS             0x29
 #endif
 
-/* Split-flap patch: DIP-switch-derived I2C address.
- * With this on, the bootloader reads the same 4 DIP pins the sketch does
- * (ADRESSSW1..4 = PD6, PD5, PD4, PD3) and listens on I2C address
- * I2C_ADDRESS_BASE + dipValue. Lets multiple Nanos sit empty in bootloader
- * mode on the same bus without address collisions on 0x29.
+/* Split-flap patch: EEPROM-first I2C address resolution with DIP fallback.
+ * With I2C_ADDRESS_BASE > 0, the bootloader resolves its listen address
+ * exactly like Unit.ino's getaddress() does:
+ *   1. Read EEPROM slot 2 (identity magic) and slot 3 (address).
+ *   2. If magic == EEPROM_ID_MAGIC_VALUE AND address is in 1..126, use it.
+ *   3. Otherwise read the 4 DIP pins (ADRESSSW1..4 = PD6..PD3) and use
+ *      I2C_ADDRESS_BASE + dipValue.
+ * That way bootloader and sketch always agree on where the unit listens,
+ * so I2C OTA continues to work after the user burns an EEPROM identity
+ * (position wizard, issue #56 / #72).
+ *
+ * Additionally, TWAMR is set from (resolved_address XOR 0x29) so the TWI
+ * hardware ALSO matches the 0x29 broadcast address. On a lone-master bus
+ * with unit addresses in 0x01..0x10, the extra mask bits hit only inert
+ * spurious addresses the master never sends to.
  *
  * Compile with -DI2C_ADDRESS_BASE=1 (matches Unit.ino); setting it to 0
  * falls back to the stock hardcoded TWI_ADDRESS. */
 #ifndef I2C_ADDRESS_BASE
 #define I2C_ADDRESS_BASE        0
 #endif
+
+/* EEPROM identity slots — MUST match Unit.ino. */
+#define EEPROM_ADDR_ID_MAGIC    2
+#define EEPROM_ADDR_I2C_ADDR    3
+#define EEPROM_ID_MAGIC_VALUE   0xA5
+
+/* Broadcast-recovery address. Co-listened via TWAMR so a bricked unit can
+ * always be reflashed even if its identity is scrambled. */
+#define TWI_BROADCAST_ADDRESS   0x29
 
 #ifndef F_CPU
 #define F_CPU                   8000000ULL  /* default — overridden per-MCU via CFLAGS_TARGET */
@@ -867,20 +887,34 @@ int main(void)
 #endif
 
 #if defined (TWCR)
-    /* Split-flap patch: DIP-derived address so empty Nanos can coexist on
-     * the bus. ADRESSSW pins on the Unit PCB are PD3..PD6 (Arduino pins
-     * 3..6). Pullups enabled, active-low. ADRESSSW4 (PD3) is LSB. */
+    /* Split-flap patch: EEPROM-first address resolution, DIP fallback,
+     * and TWAMR-based dual-match with 0x29 broadcast recovery. Matches
+     * Unit.ino's getaddress() exactly so bootloader and sketch listen on
+     * the same address. ADRESSSW pins on the Unit PCB are PD3..PD6
+     * (Arduino pins 3..6). Pullups enabled, active-low. ADRESSSW4 (PD3)
+     * is LSB. */
 #  if (I2C_ADDRESS_BASE > 0) && defined (__AVR_ATmega328P__)
-    DDRD  &= (uint8_t)~((1<<3) | (1<<4) | (1<<5) | (1<<6));
-    PORTD |= (uint8_t)((1<<3) | (1<<4) | (1<<5) | (1<<6));
-    /* small settle for the pullups to pull high */
-    for (volatile uint8_t i = 0; i < 50; i++) { asm volatile ("nop"); }
-    uint8_t dip = 0;
-    if (!(PIND & (1<<3))) dip |= 1;
-    if (!(PIND & (1<<4))) dip |= 2;
-    if (!(PIND & (1<<5))) dip |= 4;
-    if (!(PIND & (1<<6))) dip |= 8;
-    TWAR = ((I2C_ADDRESS_BASE + dip) << 1);
+    uint8_t eepMagic = eeprom_read_byte((uint8_t *)EEPROM_ADDR_ID_MAGIC);
+    uint8_t eepAddr  = eeprom_read_byte((uint8_t *)EEPROM_ADDR_I2C_ADDR);
+    uint8_t unitAddr;
+    if (eepMagic == EEPROM_ID_MAGIC_VALUE && eepAddr >= 1 && eepAddr <= 126) {
+        unitAddr = eepAddr;
+    } else {
+        DDRD  &= (uint8_t)~((1<<3) | (1<<4) | (1<<5) | (1<<6));
+        PORTD |= (uint8_t)((1<<3) | (1<<4) | (1<<5) | (1<<6));
+        /* small settle for the pullups to pull high */
+        for (volatile uint8_t i = 0; i < 50; i++) { asm volatile ("nop"); }
+        uint8_t dip = 0;
+        if (!(PIND & (1<<3))) dip |= 1;
+        if (!(PIND & (1<<4))) dip |= 2;
+        if (!(PIND & (1<<5))) dip |= 4;
+        if (!(PIND & (1<<6))) dip |= 8;
+        unitAddr = I2C_ADDRESS_BASE + dip;
+    }
+    TWAR  = (unitAddr << 1);
+    /* TWAMR bits [7:1] are "don't care" during address match. XOR gives the
+     * minimal mask that makes the hardware match both unitAddr and 0x29. */
+    TWAMR = ((unitAddr ^ TWI_BROADCAST_ADDRESS) << 1);
 #  else
     /* TWI init: set address, auto ACKs */
     TWAR = (TWI_ADDRESS<<1);
@@ -952,3 +986,48 @@ int main(void)
 
     jump_to_app();
 } /* main */
+
+
+/* *************************************************************************
+ * Split-flap self-update hook (issue #72).
+ *
+ * do_spm() is pinned at HOOK_START (0x7F80 for 2 KB BLS on ATmega328P) by
+ * the linker via `--section-start=.hook=$(HOOK_START)` in the Makefile.
+ * A future "bootloader-updater sketch" loaded over I2C OTA can call this
+ * function via a function pointer: the CPU jumps into the BLS, executes
+ * SPM (which is only legal from BLS code on AVR hardware, see ATmega328P
+ * datasheet §28.4), and returns to the app. That lets us patch the BLS
+ * itself over OTA on future revisions without re-ICSPing every unit.
+ *
+ * Calling convention from the app side:
+ *   typedef void (*do_spm_t)(uint16_t addr, uint8_t cmd, uint16_t data);
+ *   do_spm_t do_spm = (do_spm_t)((0x7F80) / 2);  // AVR fn ptr = word addr
+ *   do_spm(addr, (1<<PGERS)|(1<<SPMEN), 0);    // erase page
+ *   do_spm(addr, (1<<SPMEN),           word); // fill one word into page buf
+ *   do_spm(addr, (1<<PGWRT)|(1<<SPMEN), 0);    // commit page to flash
+ *   do_spm(0,    (1<<RWWSRE)|(1<<SPMEN), 0);   // re-enable RWW section
+ *
+ * `cmd` is pass-through to the SPMCSR SPM-control register — choose from
+ * PGERS / PGWRT / RWWSRE / BLBSET plus SPMEN. We trust the caller; this
+ * hook has no validation (keeps size down). Brick risk if the caller
+ * aims at the BLS and power is lost mid-write — mitigate with a WDT
+ * disable + tight loop in the updater sketch.
+ * ************************************************************************* */
+void __attribute__((section(".hook"), used, noinline))
+do_spm(uint16_t addr, uint8_t cmd, uint16_t data)
+{
+    boot_spm_busy_wait();
+
+    if (cmd & (1 << PGERS)) {
+        boot_page_erase(addr);
+    } else if (cmd & (1 << PGWRT)) {
+        boot_page_write(addr);
+    } else if (cmd & (1 << RWWSRE)) {
+        boot_rww_enable();
+    } else {
+        /* Default: word fill into the page buffer. */
+        boot_page_fill(addr, data);
+    }
+
+    boot_spm_busy_wait();
+}
