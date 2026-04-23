@@ -27,11 +27,11 @@ echo.
 if errorlevel 1 goto :fail
 
 echo.
-echo === Setting fuses (LFUSE=0xFF, HFUSE=0xDA, EFUSE=0xFD) ===
+echo === Setting fuses (LFUSE=0xFF, HFUSE=0xDC, EFUSE=0xFD) ===
 echo.
 
 "%AVRDUDE%" -C "%AVRDUDE_CONF%" -c stk500v1 -P %ISP_PORT% -b 19200 -p m328p ^
-  -U lfuse:w:0xff:m -U hfuse:w:0xda:m -U efuse:w:0xfd:m
+  -U lfuse:w:0xff:m -U hfuse:w:0xdc:m -U efuse:w:0xfd:m
 if errorlevel 1 goto :fail
 
 echo.
