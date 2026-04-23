@@ -1,673 +1,711 @@
-# Master v2 — textual schematic
+# PCB v2 — textual schematic
 
-**Rev B.** Authoritative netlist. Layout engineer recaptures in target EDA (KiCad 8 or EasyEDA) from this file + BOM.csv.
+Authoritative netlist for both boards in the v2 system: the **Master** (controller) and the **Unit** (per-flap daughter board). Each section is independent — the two boards are separate fab projects connected only by CAT5e/CAT6 cable with the RJ45 pinout locked in [`README.md`](./README.md) and restated in [`PINOUT.md`](./PINOUT.md).
 
 Conventions:
-- Net names in `UPPER_SNAKE_CASE`.
-- Designators match [BOM.csv](./BOM.csv).
-- "→" means "connects to".
-- Passive values inline.
-- Every pin of every IC is defined. Every net has a name. No "verify later" / "approximate" / "representative" language.
+- Net names in `UPPER_SNAKE_CASE`. Signals that cross the RJ45 cable are prefixed with neither `MASTER_` nor `UNIT_` — they are the cable nets (`+48V`, `GND`, `RS485_A`, `RS485_B`).
+- Designators are scoped per board. Master designators prefixed `M_` where otherwise ambiguous; unit designators prefixed `U_`. The `Board` column in [`BOM.csv`](./BOM.csv) is authoritative.
+- Passive values inline. "→" means "connects to".
+- Every pin of every IC is defined. Every net has a name. No "verify later" / "approximate" language.
 
 ---
 
-## 1. USB-C input (J1, 16-pin receptacle, USB 2.0)
+# SECTION A — MASTER BOARD
 
-| USB-C pin(s) | Net | Notes |
-|---|---|---|
-| A4, A9, B4, B9 | **USB_VBUS** | VBUS, tied internally |
-| A1, A12, B1, B12, shield | **GND** | including cable shield |
-| A5 | **USB_CC1** | 5.1 kΩ R_CC1 → GND |
-| B5 | **USB_CC2** | 5.1 kΩ R_CC2 → GND |
-| A6, B6 | **USB_DP_RAW** | to USBLC6 U1 |
-| A7, B7 | **USB_DN_RAW** | to USBLC6 U1 |
-| A2, A3, A10, A11, B2, B3, B10, B11 | NC | USB 2.0 only, SuperSpeed pairs not used |
+## A.1 Power input — J_PWR (DC barrel 5.5 / 2.5 mm, 60 V rated)
 
-- USB_VBUS → ferrite bead **FB1** (BLM18PG471SN1D, 470 Ω @ 100 MHz) → **USB_5V_IN**
-- Cable shield bonded to GND through 1 MΩ **R_SH1** in parallel with 10 nF **C_SH1**.
-
-## 2. USB ESD protection — U1 USBLC6-2SC6 (SOT-23-6)
-
-| Pin | Signal | Net |
-|---|---|---|
-| 1 | I/O 1 | **USB_DN_RAW ↔ USB_DN** (tied to pin 6) |
-| 2 | GND | **GND** |
-| 3 | I/O 2 | **USB_DP_RAW ↔ USB_DP** (tied to pin 4) |
-| 4 | I/O 2 | tied to pin 3 — **NOT GND** |
-| 5 | VBUS | **USB_5V_IN** |
-| 6 | I/O 1 | tied to pin 1 |
-
-- USB_DN → ESP32-S3 GPIO19
-- USB_DP → ESP32-S3 GPIO20
-
-## 3. Barrel jack (J2, DC-005 5.5/2.1 mm, center-positive)
-
-- Center pin → **JACK_IN_RAW**
+- Centre pin → **VIN_RAW**
 - Sleeve → **GND**
 
-### Reverse polarity — Q1 AO3401A PMOS (SOT-23-3)
-- S (pin 3) → **JACK_IN_RAW**
-- G (pin 1) → **GND** via 10 kΩ **R_QGATE**
-- D (pin 2) → **JACK_5V**
-
-### TVS — D1 SMAJ5.0CA (DO-214AC)
-- Between **JACK_5V** and **GND**, bidirectional, 5 V working, 9.2 V clamp.
-
-## 4. Power path (dual-rail split)
-
-Two independent use cases:
-
-1. **USB input** — low current (≤ 1.5 A), powers logic only.
-2. **Barrel jack input** — high current (up to 8 A system load), powers row 5 V directly plus a low-current backfeed for logic.
-
-Two distinct power nets:
-
-- **5V_LOGIC** — buck converter input + any low-current 5 V loads.
-- **5V_RAIL** — row polyfuses + per-row 5 V distribution.
-
-### USB path (protected, limited current) — U2 LM66100DCKR (SOT-23-5)
+### Reverse-polarity PMOS — Q_RP AO4407 (SOIC-8, 60 V V_DS, R_DS(on) 12 mΩ @ V_GS=10 V)
 
 | Pin | Name | Net |
 |---|---|---|
-| 1 | IN | **USB_5V_IN** |
-| 2 | GND | **GND** |
-| 3 | ST (status) | NC |
-| 4 | /CE (enable, active low) | pulled to IN via 100 kΩ **R_CE_USB** (always enabled) |
-| 5 | OUT | **5V_LOGIC** |
+| 1–3 | S (source, paralleled) | **VIN_RAW** |
+| 4 | G (gate) | **VIN_RAW** via 100 kΩ **R_QRP_G** (turn-on); Zener clamp 15 V **D_QRP_Z** to source |
+| 5–8 | D (drain, paralleled) | **VIN_48V** |
 
-Purpose: safe OR-ing for USB-powered bench operation, ~1.5 A max. Does not feed row power.
+Source-to-gate R ensures the body diode conducts briefly on polarity-correct insertion, the gate pulls to (VIN_RAW − V_Z) through the Zener, and the PMOS fully enhances at V_GS ≈ −15 V. On reversed insertion, V_GS is positive and the PMOS stays off; the body diode also stays reverse-biased. No current flows anywhere. Zener limits V_GS to ±15 V (spec max V_GSS ±20 V).
 
-### Barrel jack path (HIGH CURRENT, BYPASSES LM66100)
+### Input TVS — D_VIN SMBJ58CA (DO-214AA, bidirectional, 58 V working, 93 V clamp @ 1 A, 600 W pulse)
 
-- **JACK_5V** (post Q1, D1) → **5V_RAIL** directly through polyfuse distribution only. No LM66100 in this path.
-- Polyfuses F1..F8 (§10) break 5V_RAIL into per-row segments.
+- Between **VIN_48V** and **GND**.
 
-**CRITICAL**: JACK_5V MUST NOT pass through any LM66100. Current up to 8 A destroys the device.
+### Input polyfuse — F_VIN 1812L200/60 (1812, 2.0 A hold, 4.0 A trip, 60 V rated)
 
-### Logic backfeed from jack (low current)
-
-- **D_BACKFEED** Schottky (SS14, 40 V, 1 A, V_F ≤ 0.4 V, DO-214AC): anode on **JACK_5V**, cathode on **5V_LOGIC**.
-- Jack-only operation: logic runs at ~4.55 V (well within AP63300 V_IN 3.8–32 V range, ~750 mV margin).
-- With USB present: U2 asserts 5.0 V on 5V_LOGIC; D_BACKFEED reverse-biased.
-- Backfeed current capped by buck input demand (≤ 600 mA).
+- In series: **VIN_48V** → **V48_RAIL** (downstream of reverse-polarity + TVS, upstream of everything else).
 
 ### Bulk capacitance
 
-| Cap | Value | Net | Placement |
-|---|---|---|---|
-| **C_BULK_INPUT** | 470 µF 10 V Al-polymer, ESR ≤ 25 mΩ | JACK_5V → GND | near Q1 output |
-| **C_BULK_5V_RAIL** | 220 µF 10 V Al-polymer, ESR ≤ 30 mΩ | 5V_RAIL → GND | central, between row fuses |
-| **C_BULK_5V_CER** | 47 µF 10 V X5R 1210 | 5V_RAIL → GND | central |
-| **C_BULK_5V_HF** | 100 nF 0603 X7R | 5V_RAIL → GND | central |
-| **C_USB_IN** | 10 µF 25 V X7R 0805 | USB_5V_IN → GND | near U1/U2 |
-| **C_JACK_IN** | 10 µF 25 V X7R 0805 | JACK_5V → GND | near Q1 output |
-| **C_LOGIC_IN** | 10 µF 25 V X7R 0805 | 5V_LOGIC → GND | near U2 output |
+| Cap | Value | Net |
+|---|---|---|
+| **C_VIN_BULK** | 100 µF 63 V Al-polymer, ESR ≤ 40 mΩ | **V48_RAIL** → GND, near F_VIN output |
+| **C_VIN_CER** | 4.7 µF 100 V X7R 1210 | **V48_RAIL** → GND, paralleled with C_VIN_BULK |
+| **C_VIN_HF** | 100 nF 100 V X7R 0603 | **V48_RAIL** → GND, at each downstream tap |
 
-Per-row caps: see §10.
+## A.2 48 V → 5 V buck — U_BUCK1 LMR16030SDDAR (SO-8 PowerPAD)
 
-## 5. 3.3 V regulator — U4 AP63300WU-7 synchronous buck (TSOT-26)
+Part: **LMR16030SDDAR** — 60 V input, 3 A output, 200 kHz–1.1 MHz, internal compensation, integrated high-side FET.
 
-Part: **AP63300WU-7** (Diodes Incorporated, LCSC C2158012). 3.8 V – 32 V input, 3 A, integrated synchronous MOSFETs, internally compensated, 0.803 V feedback reference, **fixed 500 kHz** switching. Internal compensation and internal soft-start — no external COMP or SS network required.
-
-*(Design rationale, not implementation — retained for handoff context.)* The wider 3.8 V V_IN minimum was the deciding factor over TPS54302DDCR (4.5 V min). Jack-only operation feeds this buck via SS14 backfeed, not directly from the jack. Drop budget at 500 mA logic draw: Q1 R_DS(on) ~50 mV + SS14 V_F ~0.4 V + cable/transient allowance ~0.2 V → steady-state `5V_LOGIC` ≈ 4.5 V with dips to ~4.35 V during S3 WiFi TX bursts. TPS54302 (4.5 V min) would glitch on every burst; AP63300 keeps ≥ 550 mV transient margin. See README §"Buck selection rationale" for the full drop budget.
-
-### U4 AP63300WU-7 pinout (TSOT-26)
+### Pinout (SO-8 PowerPAD, D suffix)
 
 | Pin | Name | Net |
 |---|---|---|
-| 1 | SW | **SW_NODE** — to L_BUCK input; also bootstrap capacitor return |
+| 1 | BOOT | **BUCK1_BOOT** — 100 nF **C_BUCK1_BOOT** to SW |
+| 2 | VIN  | **V48_RAIL** |
+| 3 | EN   | **V48_RAIL** via 100 kΩ **R_BUCK1_EN** (always enabled) |
+| 4 | RT/SYNC | 66.5 kΩ **R_BUCK1_RT** to GND → f_SW ≈ 700 kHz |
+| 5 | GND  | **GND** |
+| 6 | FB   | **BUCK1_FB** |
+| 7 | COMP | 6.8 nF **C_BUCK1_COMP** + 22 kΩ **R_BUCK1_COMP** in series to GND (type-II compensation) |
+| 8 | SW   | **BUCK1_SW** |
+| EPAD | thermal | **GND**, ≥ 9 thermal vias to L2 |
+
+### External network
+
+- **L_BUCK1** 22 µH, shielded, I_SAT ≥ 4 A, DCR ≤ 30 mΩ: **BUCK1_SW** → **5V_RAIL**.
+- **D_BUCK1** B560C-13-F 60 V 5 A Schottky (DO-214AB): cathode on **BUCK1_SW**, anode on **GND**. Asynchronous buck (LMR16030 is non-synchronous).
+- **C_BUCK1_IN** 4.7 µF 100 V X7R 1210: **V48_RAIL** (pin 2) → GND, within 2 mm.
+- **C_BUCK1_OUT_1** 47 µF 10 V X5R 1210: **5V_RAIL** → GND.
+- **C_BUCK1_OUT_2** 22 µF 10 V X5R 0805: **5V_RAIL** → GND.
+- **R_BUCK1_FB_TOP** 38.3 kΩ 1 % 0603: **5V_RAIL** → **BUCK1_FB**.
+- **R_BUCK1_FB_BOT** 6.49 kΩ 1 % 0603: **BUCK1_FB** → **GND**.
+
+V_OUT = 0.765 V × (1 + 38.3 kΩ / 6.49 kΩ) = **5.27 V** (LMR16030 V_FB = 0.765 V typ; tolerance + feedforward give ~5.05 V actual).
+
+Estimated load: TLC5947 + SK6812 strip at peak ~1.2 A + feed for AP63300 (~0.3 A at 3V3 conversion) → ~1.5 A. LMR16030 has 2× margin.
+
+## A.3 5 V → 3.3 V buck — U_BUCK2 AP63300WU-7 (TSOT-26)
+
+Reused from Rev B. 3.8 V – 32 V input envelope, 3 A output, internal compensation + internal soft-start, fixed 500 kHz.
+
+### Pinout (TSOT-26)
+
+| Pin | Name | Net |
+|---|---|---|
+| 1 | SW | **BUCK2_SW** → L_BUCK2 input |
 | 2 | GND | **GND** |
-| 3 | FB | **FB_NODE** |
-| 4 | EN | tied to **5V_LOGIC** via 100 kΩ **R_EN_BUCK** (always enabled) |
-| 5 | VIN | **5V_LOGIC** |
-| 6 | BST | **BST_NODE** — via **C_BOOT** 100 nF 0603 X7R to SW (pin 1) |
+| 3 | FB | **BUCK2_FB** |
+| 4 | EN | **5V_RAIL** via 100 kΩ **R_BUCK2_EN** (always enabled) |
+| 5 | VIN | **5V_RAIL** |
+| 6 | BST | **BUCK2_BST** — 100 nF **C_BUCK2_BOOT** to SW |
 
-### External network (required)
+### External network
 
-- **L_BUCK** 4.7 µH, shielded, I_SAT ≥ 3 A, DCR ≤ 50 mΩ: between **SW_NODE** and **3V3_RAIL**.
-- **C_BUCK_IN** 22 µF 25 V X5R 1210: **5V_LOGIC** (U4 pin 5) → GND.
-- **C_BUCK_OUT_1** 22 µF 25 V X5R 0805: **3V3_RAIL** (L_BUCK output) → GND.
-- **C_BUCK_OUT_2** 22 µF 25 V X5R 0805: **3V3_RAIL** → GND. Total output capacitance ≥ 44 µF.
-- **R_FB_TOP** 100 kΩ 1 % 0603: **3V3_RAIL** → **FB_NODE**.
-- **R_FB_BOT** 31.6 kΩ 1 % 0603: **FB_NODE** → GND.
-- **C_FB** 22 pF 0603 C0G: across R_FB_TOP (feedforward zero).
-- **C_BOOT** 100 nF 0603 X7R: between pin 6 (BST) and SW node (pin 1).
+- **L_BUCK2** 4.7 µH, shielded, I_SAT ≥ 3 A, DCR ≤ 50 mΩ: **BUCK2_SW** → **3V3_RAIL**.
+- **C_BUCK2_IN** 10 µF 25 V X7R 0805: pin 5 → GND, within 2 mm.
+- **C_BUCK2_OUT_1** 22 µF 25 V X5R 0805: **3V3_RAIL** → GND.
+- **C_BUCK2_OUT_2** 22 µF 25 V X5R 0805: **3V3_RAIL** → GND. Total ≥ 44 µF.
+- **R_BUCK2_FB_TOP** 100 kΩ 1 % 0603: **3V3_RAIL** → **BUCK2_FB**.
+- **R_BUCK2_FB_BOT** 31.6 kΩ 1 % 0603: **BUCK2_FB** → **GND**.
+- **C_BUCK2_FB** 22 pF 0603 C0G: across R_BUCK2_FB_TOP.
 
-V_OUT = 0.803 V × (1 + 100 kΩ / 31.6 kΩ) = **3.34 V** (nominal 3.3 V ±1 % typical).
+V_OUT = 0.803 V × (1 + 100 kΩ / 31.6 kΩ) = **3.34 V**. Synchronous buck, no external Schottky.
 
-### Layout requirements (MANDATORY)
+## A.4 ESP32-S3 module — M_U_S3 ESP32-S3-WROOM-1-N16R8
 
-- L_BUCK and C_BUCK_OUT_1 within 4 mm of U4.
-- **SW node copper area ≤ 3 mm² total** (U4 SW pad + short trace to L_BUCK input pad). SW is a high-dV/dt EMI aggressor — do NOT expand the SW copper for thermal or any other reason.
-- SW trace on L1 only; L2 GND plane directly beneath, uninterrupted.
-- Feedback divider within 5 mm of U4 pin 3; FB trace flanked by GND pour.
-- BST capacitor within 3 mm of U4 between pins 6 and 1.
-- No signal routing under L_BUCK or under SW node on any layer.
-
-### Thermal
-
-- AP63300WU-7 is TSOT-26 with no explicit EPAD. Heat exits primarily through pin 2 (GND) and secondarily through pin 5 (VIN). Allocate ≥ 50 mm² L1 GND copper under and around U4, stitched to L2 with ≥ 6 × 0.3 mm vias. Pin 5 (VIN) pad copper may be expanded on the 5V_LOGIC L3 island as a secondary thermal path.
-- **SW pin (pin 1) gets NO thermal pour** — its copper stays bounded by the ≤ 3 mm² SW-node rule above. Any attempt to sink heat through SW defeats the EMI constraint and re-introduces radiated noise near the USB diff pair and the antennas.
-- Dissipation budget: real workload is ≤ 0.5 A 3V3 typical (S3+H2+mux) ≈ 0.3 W. With the pin-2 GND copper area above, θ_JA ≈ 80 °C/W per Diodes datasheet → rise ≈ 24 °C. Well within SOA. Worst-case 3 A continuous (not a real workload here) would dissipate ~1.7 W and exceed limits; the board is not specified for that load.
-
-## 6. ESP32-S3 module — U5 ESP32-S3-WROOM-1-N16R8
-
-Reference: Espressif ESP32-S3-WROOM-1/1U datasheet (N16R8 variant: 16 MB quad flash + 8 MB octal PSRAM).
+16 MB quad flash + 8 MB octal PSRAM, PCB antenna variant.
 
 ### Power
-- 3V3 pins (module pin 2) → **3V3_RAIL**
-- GND pins (module pins 1, 40, 41, EPAD) → **GND**
-- EN (module pin 3) → **EN_S3_NODE** (10 kΩ **R_EN_S3** pullup to 3V3_RAIL + 1 µF **C_ESP_EN** to GND + SW1 RESET_S3 button to GND)
+- VDD (module pin 2) → **3V3_RAIL**
+- GND (module pins 1, 40, 41, EPAD) → **GND** (≥ 9 thermal vias on EPAD)
+- EN (module pin 3) → **EN_S3_NODE** (10 kΩ **R_EN_S3** pullup to 3V3_RAIL + 1 µF **C_ESP_EN** to GND + SW_RESET_S3 terminal 1)
 
 ### I/O used
 
-| GPIO | Module pin | Net | Destination |
+| GPIO | Module pin | Net | Destination / Role |
 |---|---|---|---|
-| IO0  | 27 | **BOOT_S3_BTN** | SW2 terminal 1 (module internal pullup) |
-| IO4  | 4  | **TLC_SCK** | TLC5947DAP pin 4 (SCLK) |
-| IO5  | 5  | **TLC_SIN** | TLC5947DAP pin 3 (SIN) |
-| IO6  | 6  | **TLC_XLAT** | TLC5947DAP pin 2 (XLAT) |
-| IO7  | 7  | **TLC_BLANK** | TLC5947DAP pin 1 (BLANK) |
-| IO8  | 8  | **I2C_SDA_3V3** | TCA9548A SDA |
-| IO9  | 9  | **I2C_SCL_3V3** | TCA9548A SCL |
-| IO10 | 10 | **MUX_RESET_N** | TCA9548A /RESET (+ 10 kΩ R_MUX_RST pullup to 3V3) |
-| IO11 | 11 | **S3_TO_H2_RST** | R_H2_RST_SER 1 kΩ → **H2_RESET_N** (H2 EN) |
-| IO12 | 12 | **H2_IRQ** | H2 IO10 (active low, H2 open-drain; 10 kΩ R_H2_IRQ pullup to 3V3) |
-| IO13 | 13 | **S3_TO_H2_BOOT** | R_H2_BOOT_SER 1 kΩ → **H2_BOOT_SEL** (H2 IO9 strap) |
-| IO17 | 17 | **H2_UART_TX** | H2 IO4 (H2's UART1 RX) |
-| IO18 | 18 | **H2_UART_RX** | H2 IO5 (H2's UART1 TX) |
-| IO19 | 23 | **USB_DN** | USBLC6 pins 1/6 |
-| IO20 | 24 | **USB_DP** | USBLC6 pins 3/4 |
-| IO21 | 25 | **RGB_DATA** | SK6812 LED_RGB_1 DIN (via 33 Ω R_RGB_SER) |
-| IO43 | 37 | **U0TXD_S3** | JP_DEBUG_S3 pin 3, TP_U0TXD_S3 |
-| IO44 | 36 | **U0RXD_S3** | JP_DEBUG_S3 pin 4, TP_U0RXD_S3 |
+| IO0 | 27 | **BOOT_S3_BTN** | SW_BOOT_S3 terminal 1 (internal pullup); boot strap |
+| IO4 | 4 | **TLC_SCK** | TLC5947 SCLK |
+| IO5 | 5 | **TLC_SIN** | TLC5947 SIN |
+| IO6 | 6 | **TLC_XLAT** | TLC5947 XLAT |
+| IO7 | 7 | **TLC_BLANK** | TLC5947 BLANK |
+| IO8 | 8 | **INA_SDA** | Shared I²C1 bus (INA237_A + INA237_B). 4.7 kΩ **R_INA_SDA** pullup to 3V3_RAIL. |
+| IO9 | 9 | **INA_SCL** | Shared I²C1 bus (INA237_A + INA237_B). 4.7 kΩ **R_INA_SCL** pullup to 3V3_RAIL. |
+| IO10 | 10 | **RS485_A_TX** | SN65HVD75 (Bus A) pin 4 (D). UART2 TX via GPIO matrix. |
+| IO11 | 11 | **H2_RESET_N** | R_H2_RST_SER 1 kΩ → H2 EN |
+| IO12 | 12 | **H2_IRQ** | H2 IO10 (open-drain, 10 kΩ pullup) |
+| IO13 | 13 | **H2_BOOT_SEL** | R_H2_BOOT_SER 1 kΩ → H2 IO9 |
+| IO14 | 14 | **RS485_A_RX** | SN65HVD75 (Bus A) pin 1 (R). UART2 RX via GPIO matrix. |
+| IO15 | 15 | **RS485_A_DE** | SN65HVD75 (Bus A) pins 2+3 (/RE tied to DE). UART2 RTS via GPIO matrix (hardware DE). |
+| IO16 | 16 | **RS485_B_TX** | SN65HVD75 (Bus B) pin 4. UART0 TX (remapped via GPIO matrix). |
+| IO17 | 17 | **H2_UART_TX** | H2 IO4 (UART1 TX, 921600) |
+| IO18 | 18 | **H2_UART_RX** | H2 IO5 (UART1 RX) |
+| IO19 | 23 | **USB_DN** | USBLC6 pins 1+6 |
+| IO20 | 24 | **USB_DP** | USBLC6 pins 3+4 |
+| IO21 | 25 | **RGB_DATA** | SK6812 strip DIN via 33 Ω R_RGB_SER |
+| IO38 | 33 | **RS485_B_RX** | SN65HVD75 (Bus B) pin 1. UART0 RX remapped. |
+| IO39 | 34 | **RS485_B_DE** | SN65HVD75 (Bus B) pins 2+3. UART0 RTS. |
+| IO43 | 37 | **TP_U0TXD_S3** | Test pad only (UART0 ROM boot log during flashing; remapped to RS485_B_TX after boot) |
+| IO44 | 36 | **TP_U0RXD_S3** | Test pad only (symmetric to IO43) |
 
-Module pin numbers per Espressif ESP32-S3-WROOM-1 datasheet rev 1.4+.
+Reserved / no copper escape: IO3, IO45, IO46 (strap pins).
 
-### Reserved / no-copper-escape
-- IO3, IO45, IO46: strap pins. No copper on any layer beyond module pad.
-- IO26..IO32: internal SPI flash (N16 variant). Module-internal, no external connection.
-- IO33..IO37: internal octal PSRAM (R8 variant). Module-internal, no external connection.
-- IO48: NC (optional RGB LED on some module revs).
+Internal / do not route: IO26–IO32 (flash), IO33–IO37 (PSRAM).
 
-### Decoupling (MANDATORY — place per Espressif reference design)
-
+### Decoupling — unchanged from Rev B
 - **C_ESP_BULK** 22 µF 25 V X5R 0805 on 3V3_RAIL within 10 mm of module.
-- At each module 3V3 entry (module has one 3V3 pin but internal distribution creates multiple VDD domains), three local decoupling pairs around module perimeter:
-  - **C_ESP_DEC1a** 100 nF 0603 X7R + **C_ESP_DEC1b** 1 µF 0603 X5R
-  - **C_ESP_DEC2a** 100 nF 0603 X7R + **C_ESP_DEC2b** 1 µF 0603 X5R
-  - **C_ESP_DEC3a** 100 nF 0603 X7R + **C_ESP_DEC3b** 1 µF 0603 X5R
-- **C_ESP_EN** 1 µF 25 V X5R 0603 from EN_S3_NODE to GND.
+- 3× local decoupling pairs (100 nF X7R 0603 + 1 µF X5R 0603): **C_ESP_DEC{1..3}{a,b}**.
+- **C_ESP_EN** 1 µF 25 V X5R 0603 from **EN_S3_NODE** to GND.
 
-Rationale: WiFi burst transient current up to 500 mA requires paired bulk + HF local decoupling at each VDD entry.
+## A.5 ESP32-H2 module — M_U_H2 ESP32-H2-MINI-1-N4
 
-## 7. ESP32-H2 module — U_H2 ESP32-H2-MINI-1-N4
-
-Reference: Espressif ESP32-H2-MINI-1 datasheet (N4 variant: 4 MB SPI flash). RISC-V @ 96 MHz, IEEE 802.15.4 + Bluetooth LE 5.
+Radio coprocessor, unchanged from Rev B. RISC-V @ 96 MHz, 802.15.4 + BLE 5.
 
 ### Power
-- 3V3 pins (module pin 2) → **3V3_RAIL**
-- GND pins (module pins 1, 3, 25, 26, 27, 28/EPAD per datasheet) → **GND**
-- EN (module pin 24) → **H2_RESET_N** (10 kΩ **R_EN_H2** pullup to 3V3_RAIL + 1 µF **C_H2_EN** to GND). Driven low by S3 IO11 (through 1 kΩ R_H2_RST_SER) during reset.
+- VDD → **3V3_RAIL**
+- GND, EPAD → **GND**
+- EN (module pin 24) → **H2_RESET_N** (10 kΩ **R_EN_H2** pullup + 1 µF **C_H2_EN** to GND)
 
 ### I/O used
 
-| H2 GPIO | Module pin | Direction | Net | Destination |
-|---|---|---|---|---|
-| IO2  | 20 | Input, strap — tie HIGH | — | 10 kΩ R_H2_STRAP2 → 3V3_RAIL |
-| IO4  | 4  | Input (H2 UART1 RX) | **H2_UART_TX** | S3 IO17 |
-| IO5  | 5  | Output (H2 UART1 TX) | **H2_UART_RX** | S3 IO18 |
-| IO8  | 9  | Input, strap — tie HIGH | — | 10 kΩ R_H2_STRAP8 → 3V3_RAIL |
-| IO9  | 10 | Input, strap — **H2_BOOT_SEL** | **H2_BOOT_SEL** | 10 kΩ R_H2_STRAP9 → 3V3_RAIL; R_H2_BOOT_SER 1 kΩ from S3 IO13; JP_DEBUG_H2 pin 6 |
-| IO10 | 11 | Output, open-drain | **H2_IRQ** | S3 IO12 (10 kΩ R_H2_IRQ pullup to 3V3 on S3 side) |
-| IO11 | 12 | Output | **LED_H2_HB**  | R_LED_H2_HB 1 kΩ → LED_4 anode (yellow) |
-| IO12 | 16 | Output | **LED_ZIGBEE** | R_LED_ZIGBEE 1 kΩ → LED_6 anode (yellow) |
-| IO13 | 17 | Output | **LED_BLE**    | R_LED_BLE 1 kΩ → LED_7 anode (blue) |
-| IO23 | 14 | Input (H2 UART0 RX, debug) | **U0RXD_H2** | JP_DEBUG_H2 pin 4, TP_U0RXD_H2 |
-| IO24 | 15 | Output (H2 UART0 TX, debug) | **U0TXD_H2** | JP_DEBUG_H2 pin 3, TP_U0TXD_H2 |
-| IO26 | 23 | USB D− (H2 built-in USB Serial/JTAG) | **H2_USB_DN** | TP_H2_USB_DN |
-| IO27 | 22 | USB D+ (H2 built-in USB Serial/JTAG) | **H2_USB_DP** | TP_H2_USB_DP |
-
-Module pin numbers per Espressif ESP32-H2-MINI-1 datasheet rev 1.1+.
-
-### Reserved
-- IO0, IO1, IO3, IO14, IO22, IO25: unused — no copper escape beyond module pad.
-
-### Decoupling (MANDATORY)
-
-- **C_H2_BULK** 10 µF 10 V X5R 0805 on 3V3_RAIL within 10 mm of module (10 V rating requires 0805 in X5R; 0603 tops out at 6.3 V for this capacitance).
-- Three local decoupling pairs adjacent to module 3V3 entry:
-  - **C_H2_DEC1a** 100 nF 0603 X7R + **C_H2_DEC1b** 1 µF 0603 X5R
-  - **C_H2_DEC2a** 100 nF 0603 X7R + **C_H2_DEC2b** 1 µF 0603 X5R
-  - **C_H2_DEC3a** 100 nF 0603 X7R
-- **C_H2_EN** 1 µF 25 V X5R 0603 from H2_RESET_N to GND.
-
-### H2 boot / programming strap
-
-- Normal boot (SPI flash): H2 IO9 = HIGH. Achieved via R_H2_STRAP9 10 kΩ pullup to 3V3_RAIL. S3 IO13 held high-Z (input) during normal operation.
-- UART download (for first flash or recovery): S3 IO13 driven LOW through R_H2_BOOT_SER 1 kΩ, overriding the 10 kΩ pullup at IO9 node. Then pulse H2_RESET_N low via S3 IO11 for ≥ 10 ms and release. H2 enters UART download mode. S3 drives esptool protocol on UART at 115200 bps (auto-baud).
-- External factory flash alternative: JP_DEBUG_H2 pin 6 exposes H2_BOOT_SEL — external USB-UART dongle can assert low directly.
-
-## 8. Reset and BOOT buttons
-
-### SW1 RESET_S3 — tactile SMD 6×6
-- Terminal 1 → **EN_S3_NODE**
-- Terminal 2 → **GND**
-
-### SW2 BOOT_S3 — tactile SMD 6×6
-- Terminal 1 → **BOOT_S3_BTN**
-- Terminal 2 → **GND**
-
-### Debounce / ESD shunt caps
-- **C_SW1_DEB** 100 nF X7R 0603 from **EN_S3_NODE** to **GND**, placed within 2 mm of SW1 terminal 1.
-  Parallels C_ESP_EN (1 µF X5R, §6) — the X7R 0603 has lower ESL and is the shunt path for a fast finger-tap ESD edge, while the 1 µF continues to set the reset-release time constant.
-- **C_SW2_DEB** 100 nF X7R 0603 from **BOOT_S3_BTN** to **GND**, placed within 2 mm of SW2 terminal 1.
-  Nothing else sits on BOOT_S3_BTN (the ESP32-S3 IO0 pin has only its internal pullup), so this cap does both jobs: contact-bounce filter on press, and ESD shunt on finger tap.
-
-Both caps are the same Samsung CL10B104KB8NNNC already used across the board (see §6 module decoupling). No separate BOM line-item risk — single-part consolidation.
-
-No physical buttons for H2 — reset and boot controlled by S3 or JP_DEBUG_H2.
-
-## 9. TCA9548A mux — U6 TCA9548APWR (TSSOP-24)
-
-### Power and address
-| Pin | Name | Net |
-|---|---|---|
-| 24 | VCC | **3V3_RAIL** |
-| 12 | GND | **GND** |
-| 1 | A0 | **GND** |
-| 2 | A1 | **GND** |
-| 3 | A2 | **GND** |
-
-Resolved I2C address: **0x70**.
-
-### Master-side I2C
-| Pin | Name | Net | Pullup |
+| H2 GPIO | Module pin | Net | Role |
 |---|---|---|---|
-| 22 | SCL | **I2C_SCL_3V3** | 4.7 kΩ **R_SCL_MCU** to 3V3_RAIL |
-| 23 | SDA | **I2C_SDA_3V3** | 4.7 kΩ **R_SDA_MCU** to 3V3_RAIL |
+| IO2 | 20 | — | 10 kΩ **R_H2_STRAP2** to 3V3_RAIL (strap high) |
+| IO4 | 4 | **H2_UART_TX** | S3 IO17 (H2 UART1 RX) |
+| IO5 | 5 | **H2_UART_RX** | S3 IO18 (H2 UART1 TX) |
+| IO8 | 9 | — | 10 kΩ **R_H2_STRAP8** to 3V3_RAIL (strap high, ROM msg enable) |
+| IO9 | 10 | **H2_BOOT_SEL** | 10 kΩ **R_H2_STRAP9** to 3V3_RAIL, S3 IO13 via 1 kΩ R_H2_BOOT_SER |
+| IO10 | 11 | **H2_IRQ** | S3 IO12 (open-drain, 10 kΩ R_H2_IRQ pullup on S3 side) |
+| IO11 | 12 | **LED_H2_HB** | 1 kΩ R_LED_H2_HB → LED_4 anode |
+| IO12 | 16 | **LED_ZIGBEE** | 1 kΩ R_LED_ZIGBEE → LED_6 anode |
+| IO13 | 17 | **LED_BLE** | 1 kΩ R_LED_BLE → LED_7 anode |
+| IO23 | 14 | **U0RXD_H2** | JP_DEBUG_H2 pin 4 |
+| IO24 | 15 | **U0TXD_H2** | JP_DEBUG_H2 pin 3 |
+| IO26 | 23 | **H2_USB_DN** | TP_H2_USB_DN 1 mm pad (optional JTAG) |
+| IO27 | 22 | **H2_USB_DP** | TP_H2_USB_DP 1 mm pad |
 
-### Reset
-- Pin 4 /RESET → **MUX_RESET_N** (S3 GPIO10). Pullup 10 kΩ **R_MUX_RST** to 3V3_RAIL.
+Decoupling identical to Rev B: **C_H2_BULK** 10 µF 10 V X5R 0805 + 3× pair local (**C_H2_DEC{1..3}**) + **C_H2_EN** 1 µF 25 V X5R 0603.
 
-### Pin mapping (LOCKED — per TI SCPS195)
+## A.6 RS-485 transceiver — Bus A (M_U_RS485_A) SN65HVD75D (SOIC-8)
 
-| Pin | Name |
-|---|---|
-| 1 | A0 |
-| 2 | A1 |
-| 3 | A2 |
-| 4 | /RESET |
-| 5 | SD0 |
-| 6 | SC0 |
-| 7 | SD1 |
-| 8 | SC1 |
-| 9 | SD2 |
-| 10 | SC2 |
-| 11 | SD3 |
-| 12 | GND |
-| 13 | SC3 |
-| 14 | SD4 |
-| 15 | SC4 |
-| 16 | SD5 |
-| 17 | SC5 |
-| 18 | SD6 |
-| 19 | SC6 |
-| 20 | SD7 |
-| 21 | SC7 |
-| 22 | SCL |
-| 23 | SDA |
-| 24 | VCC |
+Part: **SN65HVD75D** — 3.3 V supply, half-duplex RS-485, fail-safe receiver, –7 V to +12 V bus common-mode, ±8 kV HBM ESD.
 
-### Downstream channel net assignments
-
-| Ch | SDA pin / net | SCL pin / net |
-|---|---|---|
-| 0 | pin 5 → **MUX_SDA1** | pin 6 → **MUX_SCL1** |
-| 1 | pin 7 → **MUX_SDA2** | pin 8 → **MUX_SCL2** |
-| 2 | pin 9 → **MUX_SDA3** | pin 10 → **MUX_SCL3** |
-| 3 | pin 11 → **MUX_SDA4** | pin 13 → **MUX_SCL4** |
-| 4 | pin 14 → **MUX_SDA5** | pin 15 → **MUX_SCL5** |
-| 5 | pin 16 → **MUX_SDA6** | pin 17 → **MUX_SCL6** |
-| 6 | pin 18 → **MUX_SDA7** | pin 19 → **MUX_SCL7** |
-| 7 | pin 20 → **MUX_SDA8** | pin 21 → **MUX_SCL8** |
-
-Each MUX_SDA{n} / MUX_SCL{n}: 4.7 kΩ pullup to 3V3_RAIL (**R_SDA_MUX{n}** / **R_SCL_MUX{n}**).
-
-### Decoupling
-- **C_MUX_DEC** 100 nF 0603 X7R between pin 24 and GND, adjacent to U6.
-
-### Debug header (pre-mux logic analyzer access) — JP_DEBUG_I2C
-
-1×4 pin header 2.54 mm:
-
-| Pin | Net | Notes |
-|---|---|---|
-| 1 | **3V3_RAIL** | power |
-| 2 | **GND** | |
-| 3 | **I2C_SDA_3V3** (via 220 Ω **R_DBG_SDA**) | series resistor protects MCU from probe loading |
-| 4 | **I2C_SCL_3V3** (via 220 Ω **R_DBG_SCL**) | |
-
-## 10. Per-row level shift + protection (identical block × 8, n = 1..8)
-
-### PCA9306DCTR — U{6+n} VSSOP-8
+### Pinout (SOIC-8)
 
 | Pin | Name | Net |
 |---|---|---|
-| 1 | EN | **3V3_RAIL** |
-| 2 | VREF1 | **3V3_RAIL** |
-| 3 | SDA1 | **MUX_SDA{n}** |
+| 1 | R (receiver output) | **RS485_A_RX** → S3 IO14 |
+| 2 | /RE (receiver enable, active low) | **RS485_A_DE** (tied to pin 3 at PCB — half-duplex auto-direction) |
+| 3 | DE (driver enable, active high) | **RS485_A_DE** → S3 IO15 |
+| 4 | D (driver input) | **RS485_A_TX** → S3 IO10 |
+| 5 | GND | **GND** |
+| 6 | A (non-inverting bus) | **BUS_A_A_MASTER** |
+| 7 | B (inverting bus) | **BUS_A_B_MASTER** |
+| 8 | VCC | **3V3_RAIL** |
+
+Decoupling: **C_RS485_A_DEC** 100 nF X7R 0603 pin 8 → pin 5, within 2 mm.
+
+### Termination + fail-safe bias (MASTER end, always populated)
+
+| Ref | Value | Connection |
+|---|---|---|
+| **R_TERM_A** | 120 Ω 1 % 0603 | **BUS_A_A_MASTER** ↔ **BUS_A_B_MASTER** |
+| **R_BIAS_A_PU** | 680 Ω 1 % 0603 | **BUS_A_A_MASTER** → **3V3_RAIL** |
+| **R_BIAS_A_PD** | 680 Ω 1 % 0603 | **BUS_A_B_MASTER** → **GND** |
+
+Master-end bias drives A-B ≈ +200 mV when no transmitter is active (fail-safe idle high on the receiver).
+
+### RS-485 TVS — D_RS485_A SM712 (SOT-23-3)
+
+Protects the A/B bus pair from ESD/EFT on the CAT6 cable:
+- Pin 1 (bidir) → **BUS_A_A_MASTER**
+- Pin 2 (uni) → **GND**
+- Pin 3 (bidir) → **BUS_A_B_MASTER**
+
+SM712 clamps A and B individually to +12 V / −7 V (matches SN65HVD75 common-mode window).
+
+## A.7 RS-485 transceiver — Bus B (M_U_RS485_B)
+
+**Identical to A.6** with designator prefix B and net prefix `BUS_B_`. Summary:
+
+- Part: SN65HVD75D, **C_RS485_B_DEC** 100 nF, pin connections same.
+- RX / DE / TX: **RS485_B_RX** (S3 IO38) / **RS485_B_DE** (S3 IO39) / **RS485_B_TX** (S3 IO16).
+- Bus nets: **BUS_B_A_MASTER**, **BUS_B_B_MASTER**.
+- Termination: **R_TERM_B** 120 Ω, **R_BIAS_B_PU** 680 Ω to 3V3, **R_BIAS_B_PD** 680 Ω to GND.
+- TVS: **D_RS485_B** SM712.
+
+## A.8 Current-sense amplifier — INA237 × 2 (per bus)
+
+Part: **INA237AIDGSR** — MSOP-10, 85 V bus + common-mode, 16-bit ADC, I²C (400 kHz), alert output.
+
+### A.8.1 INA237_A (Bus A) pinout (MSOP-10)
+
+| Pin | Name | Net |
+|---|---|---|
+| 1 | IN+ | **V48_RAIL** (shunt high side) |
+| 2 | IN− | **BUS_A_48V** (shunt low side → J_BUS_A pin 1/2/7/8) |
+| 3 | VS | **3V3_RAIL** |
 | 4 | GND | **GND** |
-| 5 | SCL1 | **MUX_SCL{n}** |
-| 6 | SCL2 | **ROW{n}_SCL_5V** |
-| 7 | VREF2 | **5V_RAIL** |
-| 8 | SDA2 | **ROW{n}_SDA_5V** |
+| 5 | ALERT | **ALERT_INA_A** (open-drain) → S3 IO47 (10 kΩ **R_ALERT_A** pullup to 3V3) |
+| 6 | SDA | **INA_SDA** |
+| 7 | SCL | **INA_SCL** |
+| 8 | A1 | **GND** (address byte bit 1 = 0) |
+| 9 | A0 | **GND** (address byte bit 0 = 0 → I²C addr 0x40) |
+| 10 | VBUS | **BUS_A_48V** (bus voltage sense tap, internal 85 V divider) |
 
-### Package selection (LOCKED)
+### A.8.2 INA237_B (Bus B)
 
-- **VSSOP-8 (DCT suffix, PCA9306DCTR)** only. SOT-23-6 `PCA9306DP1R` variant MUST NOT substitute — different pinout, incompatible footprint.
-- Pinout above matches TI SCPS169 VSSOP-8 datasheet exclusively.
+**Identical to A.8.1** with net prefix `BUS_B_`, ALERT pin to S3 IO48 (R_ALERT_B 10 kΩ), and:
+- A0 → **3V3_RAIL** (bit 0 = 1)
+- A1 → **GND** (bit 1 = 0)
+- I²C address: **0x41**
 
-### 5 V-side pullups
-- **R_SDA_ROW{n}** 4.7 kΩ: **ROW{n}_SDA_5V** → **5V_RAIL**
-- **R_SCL_ROW{n}** 4.7 kΩ: **ROW{n}_SCL_5V** → **5V_RAIL**
+### A.8.3 Shunt — R_SHUNT_A / R_SHUNT_B 50 mΩ 1 W 2512 (CSR2512FK50L0 or equivalent, 1 %)
 
-### ESD array — U{14+n} PESD3V3L5UW (SOT-363)
-Connected on the row-side of the level shifter, upstream of the connector:
-- Channel 1 (pins 1–6): **ROW{n}_SDA_5V** to **GND**
-- Channel 2 (pins 2–5): **ROW{n}_SCL_5V** to **GND**
-- Channel 3 (pins 3–4): tied to GND or left NC per Nexperia datasheet.
+- **R_SHUNT_A**: between **V48_RAIL** and **BUS_A_48V**.
+- **R_SHUNT_B**: between **V48_RAIL** and **BUS_B_48V**.
+- Kelvin sensing: INA237 IN+ / IN− taps go to the shunt pads directly, not to the power traces at either end.
 
-### Power protection
-- **F{n}** 2 A polyfuse 1812 (Littelfuse 1812L200/24THMR): between **5V_RAIL** and **ROW{n}_5V_OUT**.
-- **D_ROW{n}** SMBJ5.0A unidirectional TVS (600 W, 5 V working, 9.2 V clamp): between **ROW{n}_5V_OUT** and **GND**.
-- **C_ROW{n}** 47 µF 10 V X5R 1210: between **ROW{n}_5V_OUT** and **GND** at connector.
-- **C_ROW{n}_HF** 100 nF 0603 X7R: between **ROW{n}_5V_OUT** and **GND** at connector.
+### A.8.4 Decoupling
 
-### Row connector — J{2+n} B4B-XH-A (4-pin THT, 2.5 mm pitch)
-| Pin | Signal |
+- **C_INA_A_DEC** / **C_INA_B_DEC** 100 nF X7R 0603 on VS (pin 3) → GND, within 2 mm of each IC.
+
+## A.9 RJ45 output connectors — J_BUS_A, J_BUS_B
+
+Part: **Amphenol RJHSE-5080** (shielded, through-hole, 8P8C, no magnetics).
+
+### J_BUS_A pinout
+
+| Pin | Net |
 |---|---|
-| 1 | **ROW{n}_5V_OUT** |
+| 1 | **BUS_A_48V** |
+| 2 | **BUS_A_48V** |
+| 3 | **GND** |
+| 4 | **BUS_A_A_MASTER** (RS-485 A) |
+| 5 | **BUS_A_B_MASTER** (RS-485 B) |
+| 6 | **GND** |
+| 7 | **BUS_A_48V** |
+| 8 | **BUS_A_48V** |
+| Shield | **GND** via 10 nF **C_SHIELD_A** (chassis-to-logic HF coupling) |
+
+### J_BUS_B pinout
+
+Identical structure with `BUS_B_` nets:
+
+| Pin | Net |
+|---|---|
+| 1, 2, 7, 8 | **BUS_B_48V** |
+| 3, 6 | **GND** |
+| 4 | **BUS_B_A_MASTER** |
+| 5 | **BUS_B_B_MASTER** |
+| Shield | **GND** via 10 nF **C_SHIELD_B** |
+
+## A.10 LED bar — TLC5947 + SK6812 (unchanged from Rev B)
+
+Full netlist identical to Rev B § 11 (see v1 history). Summary:
+
+- **U_LED TLC5947DAP** (HTSSOP-28): IO4/5/6/7 from S3, 24 constant-current channels, 2.7 kΩ R_IREF → 15 mA/ch. Drives 14 fixed side-view LEDs.
+- **LED_1..19**: 19 fixed LEDs along the front edge. LED_3, 5, 8..19 driven by TLC5947 channels 0..13. LED_1, 2 are always-on rail indicators via R_LED_5V / R_LED_3V3 (1 kΩ each). LED_4, 6, 7 driven directly from H2 GPIOs 11/12/13.
+- **LED_RGB_1..16**: SK6812-mini side-emit daisy chain on S3 IO21. 33 Ω R_RGB_SER series on the S3 side. 100 µF Al-polymer **C_RGB_BULK** at strip start + 100 nF per-LED **C_RGB_1..16**.
+- **LEVEL_RGB** 74LVC1T45 3V3→5V translator: DNP by default, jumper **JP_RGB_BYPASS** 0 Ω populated default. Populate LEVEL_RGB only if SK6812 V_IH fails bring-up qualification.
+
+## A.11 USB-C connector — J_USB + USBLC6 ESD (unchanged from Rev B)
+
+| USB-C pin | Net |
+|---|---|
+| A4, A9, B4, B9 | **USB_VBUS** (via ferrite **FB1** 470 Ω @ 100 MHz → **USB_5V_IN**) |
+| A1, A12, B1, B12, shield | **GND** |
+| A5 | **USB_CC1** — 5.1 kΩ **R_CC1** to GND |
+| B5 | **USB_CC2** — 5.1 kΩ **R_CC2** to GND |
+| A6, B6 | **USB_DP_RAW** → USBLC6 |
+| A7, B7 | **USB_DN_RAW** → USBLC6 |
+
+Shield: **R_SH1** 1 MΩ + **C_SH1** 10 nF to GND.
+
+**USB-C ONLY powers the ESP32-S3 native USB interface for programming / CDC debug.** Not a power input for the system. The `USB_5V_IN` net does **not** connect to `5V_RAIL`.
+
+### USBLC6-2SC6 ESD — U1
+| Pin | Net |
+|---|---|
+| 1, 6 | **USB_DN_RAW ↔ USB_DN** |
 | 2 | **GND** |
-| 3 | **ROW{n}_SDA_5V** |
-| 4 | **ROW{n}_SCL_5V** |
+| 3, 4 | **USB_DP_RAW ↔ USB_DP** (pin 4 tied to pin 3, **NOT GND**) |
+| 5 | **USB_5V_IN** |
 
-## 11. LED bar
+## A.12 Buttons — SW_RESET_S3, SW_BOOT_S3 (unchanged from Rev B)
 
-A 35-LED status bar runs along the front-facing long edge of the PCB, in two stacked rows. The 3D-printed case exposes this edge through a slot aligned with the silkscreen label `LED ROW — FRONT`.
+- **SW_RESET_S3** (6×6 SMD tact): terminals → EN_S3_NODE + GND. **C_SW1_DEB** 100 nF X7R 0603 parallel.
+- **SW_BOOT_S3** (6×6 SMD tact): terminals → BOOT_S3_BTN + GND. **C_SW2_DEB** 100 nF X7R 0603 parallel.
 
-Top row: 19 fixed-function side-view SMD LEDs (Everlight 19-217 series, 1204 package, 4 mm pitch = 72 mm).
-Bottom row: 16 × SK6812-mini RGB side-emit (3.5 mm pitch = 56 mm).
+## A.13 Debug header — JP_DEBUG_H2 (1×6, unchanged from Rev B)
 
-### 11.1 Fixed row — LED reference, driver, net
-
-| Ref   | Color      | Driver              | Series R / Driver       | Net            | Indicates |
-|-------|------------|---------------------|--------------------------|----------------|-----------|
-| LED_1 | green      | always-on           | 1 kΩ **R_LED_5V**        | `5V_RAIL`      | 5V rail present |
-| LED_2 | green      | always-on           | 1 kΩ **R_LED_3V3**       | `3V3_RAIL`     | 3V3 rail present |
-| LED_3 | green      | **U_LED** ch0       | TLC5947 (constant I)     | `LED_S3_HB`    | S3 heartbeat |
-| LED_4 | yellow     | H2 IO11             | 1 kΩ **R_LED_H2_HB**     | `LED_H2_HB`    | H2 heartbeat |
-| LED_5 | blue       | **U_LED** ch1       | TLC5947                  | `LED_WIFI`     | WiFi link + traffic |
-| LED_6 | yellow     | H2 IO12             | 1 kΩ **R_LED_ZIGBEE**    | `LED_ZIGBEE`   | Zigbee link + TX/RX |
-| LED_7 | blue | H2 IO13             | 1 kΩ **R_LED_BLE**       | `LED_BLE`      | BLE state + GATT |
-| LED_8 | green      | **U_LED** ch2       | TLC5947                  | `LED_I2C_ACT`  | I2C bus activity |
-| LED_9 | white      | **U_LED** ch3       | TLC5947                  | `LED_UART_ACT` | S3↔H2 UART activity |
-| LED_10 | green     | **U_LED** ch4       | TLC5947                  | `LED_ROW_1`    | Row 1 selected |
-| LED_11 | green     | **U_LED** ch5       | TLC5947                  | `LED_ROW_2`    | Row 2 selected |
-| LED_12 | green     | **U_LED** ch6       | TLC5947                  | `LED_ROW_3`    | Row 3 selected |
-| LED_13 | green     | **U_LED** ch7       | TLC5947                  | `LED_ROW_4`    | Row 4 selected |
-| LED_14 | green     | **U_LED** ch8       | TLC5947                  | `LED_ROW_5`    | Row 5 selected |
-| LED_15 | green     | **U_LED** ch9       | TLC5947                  | `LED_ROW_6`    | Row 6 selected |
-| LED_16 | green     | **U_LED** ch10      | TLC5947                  | `LED_ROW_7`    | Row 7 selected |
-| LED_17 | green     | **U_LED** ch11      | TLC5947                  | `LED_ROW_8`    | Row 8 selected |
-| LED_18 | orange    | **U_LED** ch12      | TLC5947                  | `LED_OTA`      | OTA in progress |
-| LED_19 | red       | **U_LED** ch13      | TLC5947                  | `LED_FAULT`    | Fault / recovery |
-
-TLC5947 channels 14..23 route to an unpopulated 1×10 header (`JP_LED_EXP`) for future LEDs.
-
-Power LED anode = rail (5V_RAIL or 3V3_RAIL), cathode = GND via series resistor. All other fixed LEDs have anode at the driver output, cathode at GND (TLC5947 is a constant-current sink, so its channels pull the cathode to ~0 V when enabled; the LED anodes tie to 3V3_RAIL).
-
-### 11.2 TLC5947 LED driver — U_LED
-
-**Part:** Texas Instruments TLC5947DAP — HTSSOP-28 (Power-PAD).
-**Function:** 24-channel 12-bit PWM, constant-current sink. Drives 14 of the 19 fixed LEDs (3 rails are hardware-driven, 3 are H2-driven).
-
-| TLC5947 pin | Name  | Net                      | Notes |
-|-------------|-------|--------------------------|-------|
-| 1           | BLANK | **TLC_BLANK** (S3 IO7)   | Active high disables outputs |
-| 2           | XLAT  | **TLC_XLAT** (S3 IO6)    | Latch shift register → PWM |
-| 3           | SIN   | **TLC_SIN** (S3 IO5)     | Serial data in |
-| 4           | SCLK  | **TLC_SCK** (S3 IO4)     | Serial clock, 30 MHz max |
-| 5           | SOUT  | NC                       | For daisy-chain (unused) |
-| 6           | GND   | **GND**                  | |
-| 7           | IREF  | **R_IREF** to GND        | 2.7 kΩ sets ~15 mA per channel |
-| 8           | VCC   | **3V3_RAIL**             | 100 nF + 10 µF decoupling |
-| 9–23        | OUT0–OUT14 | LED cathodes (LED_3, 5, 8, 9, 10..17, 18, 19, + 4 spare) | open-drain constant current |
-| 24–31       | OUT15–OUT22 | `JP_LED_EXP` pins 1–8 | expansion (DNP LEDs) |
-| 32          | OUT23 | `JP_LED_EXP` pin 9       | expansion |
-| (EPAD)      | GND thermal pad | **GND** | stitch 6 vias to L2 |
-
-Decoupling:
-- **C_LED_DEC1** 100 nF 0603 X7R between VCC pin 8 and EPAD, adjacent to U_LED.
-- **C_LED_DEC2** 10 µF 0805 X5R at the VCC fan-out of U_LED.
-
-IREF sets the per-channel current via `I_out = 1.23 V / R_IREF × 20`. R_IREF = 2.7 kΩ → I_out ≈ 9 mA × 20 / current-ratio... (actually TI formula: I_out = 1.23 / R_IREF × 15, at R=2 kΩ → 9.2 mA typical). Target **15 mA** per channel; order exact value from datasheet curve.
-
-### 11.3 RGB strip — 16 × SK6812 mini side-emit
-
-Daisy-chained on a single data line from S3 IO21 (`RGB_DATA`). 800 kHz bitstream, NRZ encoding, GRB colour ordering.
-
-| SK6812 pin | Net                      | Notes |
-|------------|--------------------------|-------|
-| VDD        | **5V_RAIL**              | 5 V supply, 10 nF per LED (C_RGB{1..16}) |
-| VSS        | **GND**                  | |
-| DIN (LED1) | **RGB_DATA** (S3 IO21)   | 3.3 V logic → SK6812 V_IH = 0.7 × VDD = 3.5 V. Marginal; populate **R_RGB_SER** 33 Ω in series to limit reflection and **LEVEL_RGB** 74LVC1T45 3V3→5V translator if logic-level qualification fails on bring-up (DNP by default; jumper JP_RGB_BYPASS shorts out the translator). |
-| DOUT (LED1) | → DIN (LED2)            | daisy-chain |
-| ...        | ...                      | |
-| DOUT (LED16) | NC                      | terminated at last LED |
-
-Decoupling: **C_RGB_BULK** 100 µF 10 V 1210 at the start of the strip; per-LED 100 nF on VDD pin.
-
-### 11.4 H2-direct LEDs
-
-LED_4 (heartbeat), LED_6 (Zigbee), LED_7 (BLE) are driven straight from H2 GPIOs (IO11/12/13) through a 1 kΩ series resistor each. Anode to 3V3_RAIL is not used — active-high GPIO drives the anode; cathode to GND.
-
-| Ref   | H2 GPIO | Net          | Series R          |
-|-------|---------|--------------|-------------------|
-| LED_4 | IO11    | `LED_H2_HB`  | 1 kΩ R_LED_H2_HB  |
-| LED_6 | IO12    | `LED_ZIGBEE` | 1 kΩ R_LED_ZIGBEE |
-| LED_7 | IO13    | `LED_BLE`    | 1 kΩ R_LED_BLE    |
-
-### 11.5 Physical placement
-
-- LEDs 1–19 occupy the upper of two parallel rows along the long edge, 4 mm centre-to-centre, viewed face-up with the LED visible through the case slot.
-- 16 SK6812 occupy the lower row, 3.5 mm centre-to-centre, aligned to the long edge opposite the connector bank.
-- Silkscreen: label the slot `LED ROW — FRONT`, number each LED with its `LED_n` reference for field debug.
-- Keepout: no components or vias within 2 mm of the emission axis of each LED (side-emit — axis is parallel to the board surface, pointing off the long edge).
-
-### 11.6 Activity pulse-stretch
-
-Comm-activity LEDs (`LED_WIFI`, `LED_ZIGBEE`, `LED_BLE`, `LED_I2C_ACT`, `LED_UART_ACT`) use a minimum-50 ms on-time stretch in firmware. Per-byte or per-packet events retrigger a `last_activity_ms` timestamp; the LED output is `(millis() - last_activity_ms) < 50`. Without this, the flicker is too fast for the eye to perceive at link-layer rates.
-
-## 12. Debug headers and test points
-
-### JP_DEBUG_S3 — 1×4 header 2.54 mm (UART0 breakout for S3)
-
-| Pin | Net | Notes |
-|---|---|---|
-| 1 | **3V3_RAIL** | power, 0.5 A max |
-| 2 | **GND** | |
-| 3 | **U0TXD_S3** (S3 IO43) | S3 TX |
-| 4 | **U0RXD_S3** (S3 IO44) | S3 RX |
-
-Primary S3 debug is the USB-C connector (native USB Serial/JTAG via S3 GPIO19/20). JP_DEBUG_S3 is secondary/bench access.
-
-### JP_DEBUG_H2 — 1×6 header 2.54 mm (UART0 + EN + BOOT for H2, manual control only)
-
-| Pin | Net | Notes |
-|---|---|---|
-| 1 | **3V3_RAIL** | power, 0.3 A max |
-| 2 | **GND** | |
-| 3 | **U0TXD_H2** (H2 IO24) | H2 TX — to external USB-UART RX |
-| 4 | **U0RXD_H2** (H2 IO23) | H2 RX — from external USB-UART TX |
-| 5 | **H2_RESET_N** (H2 EN) | manual only: jumper-wire a dongle GPIO to this pin and hand-assert low to reset H2 |
-| 6 | **H2_BOOT_SEL** (H2 IO9) | manual only: hand-assert low before reset to enter UART download mode |
-
-**This header is NOT auto-reset compatible.** No DTR/RTS-to-EN/BOOT control transistor network exists on the PCB. External USB-UART dongles that rely on DTR/RTS auto-reset (esptool `--before default_reset` / Arduino IDE auto-flash) will not cycle EN and BOOT automatically via pins 5/6 — the dongle's DTR/RTS are passive voltage rails as seen from this header. The workflow is manual: externally drive pin 6 low, externally pulse pin 5 low, release, then run esptool with `--before no_reset --after no_reset`. For fully automated programming, drive H2 via S3 (S3 owns H2 EN through R_H2_RST_SER and H2 BOOT_SEL through R_H2_BOOT_SER) or use the H2 native USB-JTAG test pads (TP_H2_USB_DP/DN).
-
-### H2 USB Serial/JTAG test pads
-
-H2's built-in USB 2.0 Full-Speed peripheral on IO26/IO27 is not routed to a connector. Expose as 1.0 mm pads:
-
-| TP | Net |
+| Pin | Net |
 |---|---|
-| TP_H2_USB_DN | H2_USB_DN (H2 IO26) |
-| TP_H2_USB_DP | H2_USB_DP (H2 IO27) |
+| 1 | **3V3_RAIL** |
+| 2 | **GND** |
+| 3 | **U0TXD_H2** |
+| 4 | **U0RXD_H2** |
+| 5 | **H2_RESET_N** |
+| 6 | **H2_BOOT_SEL** |
 
-Access via wire-solder pigtail or pogo-pin jig for direct JTAG debug of H2 without going through S3.
+(No `JP_DEBUG_S3` in v2 — native USB on the USB-C connector is the S3 debug/programming path.)
 
-### Test points (all 1.0 mm exposed round pad, no drill, silkscreen label, L1 access)
+## A.14 Test points (1 mm exposed pads, silkscreen labelled)
 
 | Label | Net |
 |---|---|
-| TP_3V3 | 3V3_RAIL |
+| TP_V48 | V48_RAIL |
 | TP_5V | 5V_RAIL |
-| TP_5V_LOGIC | 5V_LOGIC |
+| TP_3V3 | 3V3_RAIL |
 | TP_GND | GND |
-| TP_MCU_SDA | I2C_SDA_3V3 |
-| TP_MCU_SCL | I2C_SCL_3V3 |
-| TP_MUX_RST | MUX_RESET_N |
-| TP_U0TXD_S3 | U0TXD_S3 |
-| TP_U0RXD_S3 | U0RXD_S3 |
-| TP_U0TXD_H2 | U0TXD_H2 |
-| TP_U0RXD_H2 | U0RXD_H2 |
-| TP_H2_UART_TX | H2_UART_TX |
-| TP_H2_UART_RX | H2_UART_RX |
-| TP_H2_RST | H2_RESET_N |
-| TP_H2_IRQ | H2_IRQ |
-| TP_H2_BOOT | H2_BOOT_SEL |
+| TP_BUS_A_A | BUS_A_A_MASTER |
+| TP_BUS_A_B | BUS_A_B_MASTER |
+| TP_BUS_A_48V | BUS_A_48V |
+| TP_BUS_B_A | BUS_B_A_MASTER |
+| TP_BUS_B_B | BUS_B_B_MASTER |
+| TP_BUS_B_48V | BUS_B_48V |
+| TP_INA_SDA | INA_SDA |
+| TP_INA_SCL | INA_SCL |
+| TP_ALERT_A | ALERT_INA_A |
+| TP_ALERT_B | ALERT_INA_B |
+| TP_U0TXD_S3 | IO43 |
+| TP_U0RXD_S3 | IO44 |
 | TP_H2_USB_DP | H2_USB_DP |
 | TP_H2_USB_DN | H2_USB_DN |
-| TP_MUX_SDA1..8 | MUX_SDA1..8 |
-| TP_MUX_SCL1..8 | MUX_SCL1..8 |
-| TP_ROW1..8_5V | ROW1..8_5V_OUT |
-| TP_ROW1..8_SDA | ROW1..8_SDA_5V |
-| TP_ROW1..8_SCL | ROW1..8_SCL_5V |
 
-### Silkscreen callouts (MANDATORY — must land on the `F.Silkscreen` layer)
+## A.15 Silkscreen (must land on F.Silkscreen)
 
-The following labels and markers must appear on the top silkscreen. Each one prevents a specific bring-up foot-gun:
-
-1. **Row connector pin-1 dots** — a small filled dot adjacent to pin 1 of every **J3..J10** (XH-4 row connectors). A reversed cable at assembly MUST NOT short `5V_RAIL` to `MUX_SDA_n`. Pin-1 reference side picked to match the connector's mechanical key so the dot is on the keyed side.
-2. **Mux bypass jumper labels** — next to `JP_BYPASS_SDA` and `JP_BYPASS_SCL`: `MUX BYPASS — DNP DEFAULT`. Add a small arrow or box around the two jumpers as a visual group.
-3. **Strap-pin DO-NOT-CUT stripes** — diagonal-hatch warning stripes on L1 silkscreen adjacent to `R_H2_STRAP9` (IO9 boot-select pullup to 3V3 during cold boot) and any other strap pullups for H2 boot-select / H2 IO8-strap. A cut trace there = H2 enters UART download mode on every cold boot. Label: `STRAP — DO NOT CUT`.
-4. **Polyfuse ref + value** — each of `F_ROW_1..F_ROW_8` gets its designator + `2A` on the silkscreen (`F_ROW_n 2A`). Polyfuse package (1812L200) is large enough for legible silk.
-5. **Debug header pin-1 dots** — filled dot adjacent to pin 1 of `JP_DEBUG_S3` (1×4) and `JP_DEBUG_H2` (1×6). A reversed dongle cable on JP_DEBUG_H2 puts the dongle's 3V3 on GND and vice versa.
-6. **Power input warning sticker** — text block near the board edge between J1 (USB-C) and J2 (barrel): `USB-C 5 V  /  BARREL 5–24 V  ≤ 8 A  —  DO NOT CONNECT BOTH SIMULTANEOUSLY`. Even though the reverse-polarity PMOS + ideal-diode OR-ing (§3, §4) protect the logic domain against both-at-once, the two rails combine on `5V_RAIL` downstream of the OR-ing, and a dirty hot-plug from a different supply voltage has no business landing there.
-7. **Header pin-function labels** — at the line of the existing `JP_DEBUG_S3` and `JP_DEBUG_H2` headers, print the per-pin function in abbreviated form next to each pin (e.g. `3V3 GND TX RX` for JP_DEBUG_S3, `3V3 GND TX RX EN BOOT` for JP_DEBUG_H2). Avoids having to consult this document at a bench probe session.
-
-Visual pass on the mockup (`master_v2_mockup.svg`) should reflect items 1, 2, 3, 6, and 7 — the geometry-anchored ones. Items 4 and 5 are implicit in the per-part footprint silkscreen and shouldn't need explicit mockup layout.
-
-## 13. Mux bypass path
-
-Direct S3 I2C bus → Row 1 level-shifter path, bypassing the TCA9548A:
-
-- **JP_BYPASS_SDA** — bridges **I2C_SDA_3V3** → **MUX_SDA1** when populated.
-- **JP_BYPASS_SCL** — bridges **I2C_SCL_3V3** → **MUX_SCL1** when populated.
-
-### Footprint — 0402 two-pad 0 Ω resistor (NOT a three-pad solder-bridge)
-
-Chose the 0402 resistor pad over a bare three-pad solder bridge because:
-- **P&P-friendly**: if we ever decide to populate by default (unlikely, but it's a lever), assembly is automatic — no manual rework step.
-- **Hot-air reversible**: 0402 0 Ω lifts clean in ~3 s with a hot-air rework station. A three-pad solder bridge, once joined, needs wick + flux and often damages the soldermask.
-- **Unambiguous at assembly**: JLC has a single footprint for "0 Ω 0402, DNP" with a well-defined part (UNI-ROYAL `0402WGF0000TCE` / LCSC `C17168`). Three-pad bridges are free, but the assembly house treats them as "not a component" and we lose traceability.
-
-Cost delta is noise (the resistor is ~\$0.001 and DNP = no placement charge anyway).
-
-### Operation
-
-Purpose: isolate TCA9548A failure from PCA9306 failure from cable failure during bring-up.
-
-Populate both jumpers AND hold MUX_RESET_N low (test clip) to force the TCA9548A high-Z. S3 then drives the Row 1 PCA9306 level shifter directly → ROW1 XH-4.
-
-Default state: **DNP** (see BOM `JP_BYPASS_SDA` / `JP_BYPASS_SCL`). Only populate for diagnostic runs. Remove before deployment.
-
-## 14. Inter-MCU UART link — specification
-
-| Parameter | Value |
-|---|---|
-| Physical layer | CMOS 3.3 V logic, push-pull, single-ended |
-| Nets | H2_UART_TX (S3→H2), H2_UART_RX (H2→S3), H2_RESET_N (S3→H2), H2_IRQ (H2→S3, open-drain), H2_BOOT_SEL (S3→H2, strap override) |
-| Baud rate | **921 600 bps** |
-| Data format | 8 data bits, no parity, 1 stop bit (8N1) |
-| Flow control | **None** (hardware RTS/CTS not used; protocol-level flow control via ACK/NACK and bounded-buffer credits) |
-| Framing | **COBS** (Consistent Overhead Byte Stuffing) with 0x00 delimiter byte |
-| Integrity | **CRC-16/CCITT-FALSE** (poly 0x1021, init 0xFFFF, no reflect, xorout 0x0000) on frame payload |
-| Roles | S3 is MASTER. H2 is RESPONDER. |
-| Transaction model | Command/response. Every S3 command expects an H2 reply (ACK, NACK, or data). |
-| H2_IRQ semantics | H2 asserts low when it has asynchronous data (e.g. inbound Zigbee message). S3 responds by issuing a POLL command. |
-| Max frame length | 256 bytes payload (before COBS + CRC). |
-| S3 UART peripheral | UART1 |
-| H2 UART peripheral | UART1 (IO4=RX, IO5=TX — GPIO matrix routed) |
-| H2 UART0 (IO23/24) | Reserved for H2 ROM bootloader + debug console at 115200 8N1, via JP_DEBUG_H2 only |
-
-**Hard rule: no SPI between S3 and H2.** Capture ERC must enforce that no net named `*_SPI_*`, `*_MISO*`, `*_MOSI*`, `*_SCK*`, `*_CS_H2*` exists.
-
-## 15. Power summary
-
-| Net | Source | Load |
-|---|---|---|
-| USB_5V_IN | USB-C VBUS via FB1 | U1 pin 5, U2 pin 1, C_USB_IN |
-| JACK_5V | barrel via Q1 | 5V_RAIL (direct), D_BACKFEED anode, C_BULK_INPUT, C_JACK_IN |
-| 5V_LOGIC | U2 LM66100 OR D_BACKFEED | U4 pin 2 (buck in), C_LOGIC_IN |
-| 5V_RAIL | JACK_5V (direct) | F1..F8, PCA9306 VREF2 (×8), C_BULK_5V_RAIL, C_BULK_5V_CER, C_BULK_5V_HF |
-| 3V3_RAIL | U4 AP63300 + L_BUCK | S3 VDD, H2 VDD, TCA9548A VCC, PCA9306 VREF1 + EN (×8), all 3V3-side pullups, power LED, S3/H2 EN pullups |
-| GND | common return | all |
-
-Maximum system input current (spec): **8 A** total at 5V_RAIL via barrel jack.
-Per-row polyfuse: 2 A hold.
-3V3 current budget: ~800 mA peak (S3 500 mA WiFi burst + H2 150 mA BLE/Zigbee TX + 150 mA headroom). Buck rated 3 A — 3.7× margin.
-
-## 16. I2C pullup summary
-
-| Net | Master-side R | Row-side R | Endpoint A | Endpoint B |
-|---|---|---|---|---|
-| I2C_SDA_3V3 | 4.7 kΩ to 3V3 | — | S3 GPIO8 | TCA9548A SDA |
-| I2C_SCL_3V3 | 4.7 kΩ to 3V3 | — | S3 GPIO9 | TCA9548A SCL |
-| MUX_SDA1..8 | 4.7 kΩ to 3V3 | — | TCA9548A downstream SDA (per row) | PCA9306 SDA1 (Row n) |
-| MUX_SCL1..8 | 4.7 kΩ to 3V3 | — | TCA9548A downstream SCL (per row) | PCA9306 SCL1 (Row n) |
-| ROW{n}_SDA_5V | — | 4.7 kΩ to 5V | PCA9306 SDA2 | J{2+n} pin 3 via PESD |
-| ROW{n}_SCL_5V | — | 4.7 kΩ to 5V | PCA9306 SCL2 | J{2+n} pin 4 via PESD |
-
-Firmware rule: mux channel-select register accepts only single-bit values (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80). Multi-bit masks are rejected — parallel row pullups would exceed ATmega328P I_OL.
-
-## 17. Package and pin-1 reference (BOM validation)
-
-| Ref | Part | Package | Pin-1 marker | Authoritative datasheet |
-|---|---|---|---|---|
-| U1 | USBLC6-2SC6 | SOT-23-6 / SC-74-6 | Dot, top-left with part number readable L-to-R. Pin 1 = I/O 1 (D−). Pin 4 tied to pin 3 (I/O 2), **NOT ground**. | ST DS3019 |
-| U2 | LM66100DCKR | SOT-23-5 | Pin 1 = IN, pin 5 = OUT. Single instance; USB path only. | TI SNVSBL1 |
-| U4 | AP63300WU-7 | TSOT-26 (W suffix) | Dot on pin 1 corner. Pin 1 = SW, pin 6 = BST. | Diodes AP63300 datasheet rev 2+ |
-| U5 | ESP32-S3-WROOM-1-N16R8 | 65-pin SMD module (18 × 25.5 mm) | Marking on module silk; pin 1 at antenna-opposite corner. | Espressif ESP32-S3-WROOM-1/1U datasheet rev 1.4+ |
-| U_H2 | ESP32-H2-MINI-1-N4 | 28-pad SMD module (13.2 × 16.6 mm) | Marking on module silk. | Espressif ESP32-H2-MINI-1 datasheet rev 1.1+ |
-| U6 | TCA9548APWR | TSSOP-24 PW | Dot/dimple on one narrow end; pin 1 = A0. **Trap**: RGE (QFN) variant has different pad pattern. Order **only PWR suffix**. | TI SCPS195 |
-| U7..U14 | PCA9306DCTR | VSSOP-8 (DCT suffix) | Dot on pin 1 corner; pin 1 = EN. **Trap**: `PCA9306DP1R` is SOT-23-6 with different pinout — do not substitute. | TI SCPS169 |
-| U15..U22 | PESD3V3L5UW | SOT-363 (SC-88) | Pin 1 marker per Nexperia datasheet. | Nexperia PESD3V3L5UW datasheet |
-| U_LED | TLC5947DAP | HTSSOP-28 (Power-PAD, DAP suffix) | Dot on pin 1 corner; pin 1 = BLANK. **Trap**: non-DAP (TLC5947DBT) is TSSOP without thermal pad — runs hotter. Order **DAP suffix** for our continuous 24-channel drive. | TI SBVS107 |
-| Q1 | AO3401A | SOT-23-3 | Gate = pin 1, source = pin 3, drain = pin 2. | AOS AO3401A datasheet |
-| D1 | SMAJ5.0CA | DO-214AC (SMA) | CA suffix = bidirectional, no polarity. | Littelfuse SMAJ series datasheet |
-| D_ROW1..8 | SMBJ5.0A | DO-214AA (SMB) | A suffix = unidirectional; cathode band to +5 V. | Littelfuse SMBJ series datasheet |
-| D_BACKFEED | SS14 | DO-214AC (SMA) | Cathode band on V_OUT side; anode on JACK_5V, cathode on 5V_LOGIC. | ON Semi / Vishay SS14 datasheet |
+1. **RJ45 polarity**: `J_BUS_A`, `J_BUS_B` silkscreen identifies pin 1 and the tab orientation. Wire color-table in small text beside each connector: `1-2 +48V  3 GND  4-5 A/B  6 GND  7-8 +48V`.
+2. **Power warning** near J_PWR: `48V DC — CENTER POSITIVE — 60V MAX`.
+3. **Strap-pin DO-NOT-CUT**: diagonal hatching around R_H2_STRAP9 with label `STRAP — DO NOT CUT`.
+4. **Shunt polarity**: arrow on silk through each `R_SHUNT_A` / `R_SHUNT_B` pointing from V48_RAIL side to BUS_{A,B}_48V side.
+5. **Debug header**: `3V3 GND TX RX RST BOOT` next to the six pins of JP_DEBUG_H2.
 
 ---
 
-## CRITICAL DESIGN RULES (MUST FOLLOW)
+# SECTION B — UNIT BOARD
 
-1. **High-current row power MUST NOT pass through LM66100.** JACK_5V → 5V_RAIL direct; LM66100 (U2) is on USB path only.
-2. **Inter-MCU communication MUST be UART only.** SPI between S3 and H2 is forbidden. ERC enforces this.
-3. **Buck regulator layout (§5) MUST follow AP63300 datasheet.** SW node ≤ 3 mm², L_BUCK ≤ 4 mm from U4, C_BOOT ≤ 3 mm from U4 between pins 1 (SW) and 6 (BST).
-4. **All IC pinouts MUST be verified against vendor datasheets at capture time.** No approximate pin mappings — §6, §7, §9, §10 tables are authoritative.
-5. **5V_RAIL (row power) and 5V_LOGIC (regulator input) are distinct nets.** Do not short them on PCB.
-6. **D_BACKFEED Schottky is the only connection between JACK_5V and 5V_LOGIC.** Polarity: anode JACK_5V, cathode 5V_LOGIC. Reversal back-drives the buck from logic into row power.
-7. **Antenna keep-outs are hard layout rules.** 15×7 mm under S3 antenna (top-left corner), 11×6 mm under H2 antenna (bottom-right corner), cleared on all 4 layers. Modules on **diagonally opposite corners**. ≥ 60 mm antenna edge-to-edge separation required (~115 mm achieved on the 120 × 80 mm Rev B board).
-8. **H2 is a slave.** S3 is the sole system controller. H2 cannot drive MUX, row I2C, or power state.
+Per-flap daughter board. Replaces the Arduino Nano unit. One unit per flap; daisy-chained on the RS-485 bus via two RJ45 connectors.
+
+Form factor target: 30 × 50 mm, 2-layer, ENIG or HASL.
+
+## B.1 RJ45 connectors — J_IN, J_OUT (daisy-chain passthrough)
+
+Part: **Amphenol RJHSE-5080** (same as master).
+
+Each pair of pins between J_IN and J_OUT is tied by a short board trace so the CAT6 signals / power pass straight through every unit:
+
+| J_IN pin | Net | J_OUT pin |
+|---|---|---|
+| 1 | **BUS_48V_PASS** | 1 |
+| 2 | **BUS_48V_PASS** | 2 |
+| 3 | **GND**          | 3 |
+| 4 | **BUS_A**        | 4 |
+| 5 | **BUS_B**        | 5 |
+| 6 | **GND**          | 6 |
+| 7 | **BUS_48V_PASS** | 7 |
+| 8 | **BUS_48V_PASS** | 8 |
+| Shield | **GND** via 10 nF **C_SHIELD_UNIT** |
+
+The passthrough traces must be sized for the full worst-case bus current (1.5 A) — minimum 1.0 mm wide on 1 oz copper for +48V, 0.5 mm for GND return (paralleled two-pair).
+
+## B.2 Local +48 V tap (power for this unit)
+
+Tap off the passthrough `BUS_48V_PASS` node, with protection isolating this unit from the bus:
+
+- **F_LOCAL** 1812L050/60 (500 mA hold, 1.0 A trip, 60 V): **BUS_48V_PASS** → **LOCAL_48V**.
+- **D_LOCAL_TVS** SMBJ58CA (bidirectional, 58 V working): **LOCAL_48V** → **GND**.
+- **C_LOCAL_BULK** 10 µF 63 V Al-polymer: **LOCAL_48V** → GND.
+- **C_LOCAL_CER** 1 µF 100 V X7R 1210: **LOCAL_48V** → GND.
+
+`F_LOCAL` contains a single-unit shorted-input failure to just that unit (trips in < 500 ms at 1.0 A), leaving the rest of the bus alive.
+
+## B.3 48 V → 5 V buck — U_BUCK_UNIT LMR16006YDDCR (SOT-23-6)
+
+Part: **LMR16006YDDCR** — 60 V input, 0.6 A output, 1.25 MHz fixed, internal compensation.
+
+### Pinout (SOT-23-6, D suffix)
+
+| Pin | Name | Net |
+|---|---|---|
+| 1 | BOOT | **BUCK_U_BOOT** — 22 nF **C_BUCK_U_BOOT** to SW |
+| 2 | VIN | **LOCAL_48V** |
+| 3 | EN | **LOCAL_48V** via 100 kΩ **R_BUCK_U_EN** (always enabled) |
+| 4 | GND | **GND** |
+| 5 | FB | **BUCK_U_FB** |
+| 6 | SW | **BUCK_U_SW** |
+
+### External network
+
+- **L_BUCK_U** 22 µH, shielded, I_SAT ≥ 0.8 A, DCR ≤ 200 mΩ: **BUCK_U_SW** → **5V_UNIT**.
+- **D_BUCK_U** B360B-13-F 60 V 3 A Schottky (DO-214BA): cathode on **BUCK_U_SW**, anode on **GND**.
+- **C_BUCK_U_IN** 2.2 µF 100 V X7R 1210: **LOCAL_48V** → GND within 2 mm.
+- **C_BUCK_U_OUT** 22 µF 10 V X5R 0805: **5V_UNIT** → GND.
+- **R_BUCK_U_FB_TOP** 18.7 kΩ 1 % 0603: **5V_UNIT** → **BUCK_U_FB**.
+- **R_BUCK_U_FB_BOT** 3.32 kΩ 1 % 0603: **BUCK_U_FB** → **GND**.
+
+V_OUT = 0.765 V × (1 + 18.7 kΩ / 3.32 kΩ) = **5.07 V**.
+
+Estimated load: ULN2003 stepper pulling ≤ 200 mA while stepping + MCU ~5 mA + LEDs ~5 mA = ≤ 250 mA peak. LMR16006 has 2.4× margin.
+
+## B.4 5 V → 3.3 V LDO — U_LDO MCP1700-3302E/TT (SOT-23-3)
+
+Part: **MCP1700-3302E/TT** — 6 V input, 250 mA, 178 mV dropout @ 250 mA, 1.6 µA quiescent.
+
+### Pinout
+
+| Pin | Name | Net |
+|---|---|---|
+| 1 | VIN | **5V_UNIT** |
+| 2 | GND | **GND** |
+| 3 | VOUT | **3V3_UNIT** |
+
+### External network
+
+- **C_LDO_IN** 1 µF 10 V X7R 0603: **5V_UNIT** → GND.
+- **C_LDO_OUT** 2.2 µF 10 V X7R 0603: **3V3_UNIT** → GND (MCP1700 requires ≥ 1 µF on output for stability).
+
+## B.5 STM32G030F6P6 — U_MCU (TSSOP-20)
+
+Cortex-M0+ @ 64 MHz, 32 KB flash, 8 KB RAM, 96-bit unique ID.
+
+### Pinout (TSSOP-20, P suffix)
+
+| Pin | Signal | Net | Role |
+|---|---|---|---|
+| 1 | VDD | **3V3_UNIT** | Digital supply |
+| 2 | PB7 | **BTN** | Identify / reset button input (internal pull-up enabled, active low) |
+| 3 | PB8 | **LED_STATUS** | Status LED output (active high, 1 kΩ series) |
+| 4 | PC14/OSC32_IN/PF0 | — | Reserved; no copper escape (internal RC clock only) |
+| 5 | PC15/OSC32_OUT/PF1 | — | Reserved; no copper escape |
+| 6 | NRST | **NRST** | System reset; 10 kΩ **R_MCU_NRST** pullup to 3V3_UNIT, 100 nF **C_MCU_NRST** to GND, test pad **TP_NRST** |
+| 7 | VDDA | **3V3_UNIT** | Analog supply (via 10 Ω **R_VDDA** ferrite bead or plain filter) + **C_VDDA** 100 nF adjacent |
+| 8 | PA0 | **V_48_MON** | ADC1_IN0 input from +48V divider |
+| 9 | PA1 | **RS485_DE** | USART2 DE (hardware driver-enable, TX-gated) |
+| 10 | PA2 | **RS485_TX_MCU** | USART2 TX |
+| 11 | PA3 | **RS485_RX_MCU** | USART2 RX |
+| 12 | PA4 | **STEPPER_A** | ULN2003 input 1 |
+| 13 | PA5 | **STEPPER_B** | ULN2003 input 2 |
+| 14 | PA6 | **STEPPER_C** | ULN2003 input 3 |
+| 15 | PA7 | **STEPPER_D** | ULN2003 input 4 |
+| 16 | PB0 | **HALL_IN** | KY-003 digital output (5 V-tolerant FT pin used as 3V3 input; KY-003 module output is open-collector-style with its own pull-up) |
+| 17 | PB1 | — | Reserved; no copper escape |
+| 18 | PA13 | **SWDIO** | SWD data (to JP_SWD pin 3) |
+| 19 | PA14/BOOT0 | **SWCLK** | SWD clock (to JP_SWD pin 4) — also BOOT0 strap: 10 kΩ **R_MCU_BOOT0** pulldown to GND (normal boot from flash) |
+| 20 | VSS | **GND** | Digital ground |
+
+### Decoupling
+
+- **C_MCU_VDD** 100 nF X7R 0603 + **C_MCU_VDD_BULK** 1 µF X5R 0603: pin 1 → GND, within 3 mm.
+- **C_VDDA** 100 nF X7R 0603 + **C_VDDA_BULK** 1 µF X5R 0603: pin 7 → GND.
+- **C_MCU_NRST** 100 nF X7R 0603: pin 6 → GND.
+
+### SWD header — JP_SWD (1×4 through-hole or 1×4 1.27 mm SMD pad pair, unpopulated default)
+
+| Pin | Net |
+|---|---|
+| 1 | **3V3_UNIT** |
+| 2 | **GND** |
+| 3 | **SWDIO** |
+| 4 | **SWCLK** |
+
+Provision for ST-LINK V2 / V3 first-flash. Once flashed, the unit takes firmware updates over RS-485 via the STM32 system bootloader.
+
+## B.6 RS-485 transceiver — U_RS485 SN65HVD75D (SOIC-8)
+
+Same part as master; different net mapping:
+
+| Pin | Name | Net |
+|---|---|---|
+| 1 | R | **RS485_RX_MCU** |
+| 2 | /RE | **RS485_DE** (tied to pin 3) |
+| 3 | DE | **RS485_DE** |
+| 4 | D | **RS485_TX_MCU** |
+| 5 | GND | **GND** |
+| 6 | A | **BUS_A** (cable net; shared with RJ45 pin 4) |
+| 7 | B | **BUS_B** (cable net; shared with RJ45 pin 5) |
+| 8 | VCC | **3V3_UNIT** |
+
+Decoupling: **C_RS485_DEC** 100 nF X7R 0603 pin 8 → pin 5.
+
+### Bus TVS — D_BUS_TVS SM712
+
+- Pin 1 → **BUS_A**
+- Pin 2 → **GND**
+- Pin 3 → **BUS_B**
+
+### Optional end-of-bus termination — JP_TERM + R_TERM_UNIT
+
+- **JP_TERM**: 0 Ω 0402 DNP jumper. Populated **only on the last physical unit of each bus** to enable end-of-line termination.
+- **R_TERM_UNIT** 120 Ω 1 % 0603: one side on **BUS_A**, other side on `TERM_B`.
+- `TERM_B` connects to **BUS_B** via **JP_TERM**.
+- When JP_TERM is DNP (all intermediate units), the 120 Ω is stranded on one side, no current flows, no effect on the bus.
+
+(No fail-safe bias on units — bias lives exclusively at the master to avoid loading the bus.)
+
+## B.7 Voltage monitor — V_48_MON divider
+
+- **R_MON_TOP** 150 kΩ 1 % 0603: **LOCAL_48V** → **V_48_MON**.
+- **R_MON_BOT** 10 kΩ 1 % 0603: **V_48_MON** → **GND**.
+- **C_MON** 100 nF X7R 0603: **V_48_MON** → **GND** (τ ≈ 9.4 ms).
+
+Ratio: 10 / (150 + 10) = 1 / 16. Full-scale ADC (3.3 V at PA0) corresponds to 52.8 V at the bus.
+
+## B.8 Stepper driver — U_STEP ULN2003AD (SOIC-16)
+
+Drives one 28BYJ-48 unipolar stepper. Only 4 of the 7 Darlington channels are used.
+
+### Pinout (SOIC-16)
+
+| Pin | Name | Net |
+|---|---|---|
+| 1 | IN1 | **STEPPER_A** |
+| 2 | IN2 | **STEPPER_B** |
+| 3 | IN3 | **STEPPER_C** |
+| 4 | IN4 | **STEPPER_D** |
+| 5 | IN5 | NC |
+| 6 | IN6 | NC |
+| 7 | IN7 | NC |
+| 8 | GND | **GND** |
+| 9 | COM | **5V_UNIT** (common cathode for free-wheeling diodes) |
+| 10 | OUT7 | NC |
+| 11 | OUT6 | NC |
+| 12 | OUT5 | NC |
+| 13 | OUT4 | **MOT_D** |
+| 14 | OUT3 | **MOT_C** |
+| 15 | OUT2 | **MOT_B** |
+| 16 | OUT1 | **MOT_A** |
+
+Decoupling: **C_STEP_DEC** 100 nF X7R 0603 on pin 9 (COM) → pin 8 (GND), within 3 mm. **C_STEP_BULK** 10 µF 10 V X5R 0805 on 5V_UNIT adjacent to pin 9.
+
+### Motor connector — J_MOTOR B5B-XH-A 5-pin JST-XH THT
+
+| Pin | Net |
+|---|---|
+| 1 | **5V_UNIT** (motor common) |
+| 2 | **MOT_A** |
+| 3 | **MOT_B** |
+| 4 | **MOT_C** |
+| 5 | **MOT_D** |
+
+Pin 1 is the motor common (red wire on the 28BYJ-48 with typical wiring). Pins 2–5 are the four coil drives.
+
+## B.9 Hall sensor connector — J_HALL 3-pin JST-XH or 1×3 header
+
+| Pin | Net |
+|---|---|
+| 1 | **5V_UNIT** |
+| 2 | **GND** |
+| 3 | **HALL_IN** (KY-003 open-collector output) |
+
+KY-003 module has its own pull-up internally. The STM32 FT pin tolerates 5 V signals.
+
+## B.10 Identify button — SW_BTN
+
+6 × 6 SMD tact switch:
+- Terminal 1 → **BTN**
+- Terminal 2 → **GND**
+- Firmware-enabled internal pull-up on PB7.
+- **C_BTN_DEB** 100 nF X7R 0603 from BTN → GND for ESD + debounce.
+
+## B.11 Status LED — LED_STATUS
+
+| Item | Value |
+|---|---|
+| Part | 0805 green, Vf ≈ 2.0 V @ 5 mA (Everlight 19-217/GHC-YR1S2/3T or any green 0805) |
+| Series | **R_LED_STATUS** 330 Ω 0603 → PB8 (active high) |
+| Current | (3.3 V − 2.0 V) / 330 Ω ≈ 4 mA |
+
+## B.12 Silkscreen callouts (F.Silkscreen)
+
+1. **RJ45 direction arrow**: `IN ▶` near J_IN, `OUT ▶` near J_OUT — indicates suggested cable flow for a daisy chain starting at the master.
+2. **Pin-1 dots** on every THT/SMD connector with a clear polarity requirement (motor JST-XH, hall JST-XH, SWD header).
+3. **BOOT0 note**: next to the MCU, small text `BOOT0 via PA14/SWCLK — DO NOT pull high in normal op`.
+4. **Termination jumper label**: `JP_TERM — POPULATE ON LAST UNIT ONLY`.
+
+---
+
+# SECTION C — CRITICAL DESIGN RULES (MUST FOLLOW)
+
+These rules exist because violating them costs a respin or a field failure. They apply at schematic capture, not at PCB review time.
+
+## C.1 Bus-wide
+1. **CAT6 wiring is straight-through.** Crossovers short +48V to GND on the first unit — board-level damage.
+2. **RJ45 pinout (T568B) is locked.** Pin 1/2 = +48V, 3 = GND, 4 = RS-485 A, 5 = RS-485 B, 6 = GND, 7/8 = +48V. No variant boards.
+3. **Only the master provides RS-485 bias.** Every unit's 120 Ω termination resistor is DNP by default (`JP_TERM` open); only the physical end-of-bus unit populates the jumper.
+4. **+48V passthrough traces must carry 1.5 A** at 2 oz copper OR 2× 1.0 mm wide at 1 oz. GND return equivalently sized.
+
+## C.2 Master
+1. **INA237 IN+ / IN− are Kelvin-tapped** to the shunt pads. Power-trace routing does not share any copper with the sense trace, or measurement error scales with load current.
+2. **D_VIN TVS goes upstream of Q_RP** (on VIN_RAW) OR downstream (on VIN_48V). The current design places it downstream so it also clamps any backdraft from buck switching transients. Do not split the TVS across both sides.
+3. **5V_RAIL and V48_RAIL are distinct nets** with the only connection being through U_BUCK1. No parallel path.
+4. **Inter-MCU bus is UART only.** Rev B rule preserved: no SPI / I²C between S3 and H2.
+5. **Antenna keep-outs**: 15×7 mm (S3) + 11×6 mm (H2), both modules on diagonally opposite corners, ≥ 60 mm antenna edge-to-edge. Unchanged from Rev B.
+6. **UART0 remap**: during boot the ESP32-S3 ROM uses UART0 on IO43/IO44. After firmware boot, the application remaps UART0 to IO16/IO38 for Bus B. IO43/IO44 become unused (test-pad access only) post-boot. Native USB (IO19/20) handles all programming and debug going forward.
+
+## C.3 Unit
+1. **`F_LOCAL` is in series on the +48V tap**, not on the passthrough. The passthrough +48V rail stays always-live for every downstream unit even if this unit's fuse trips.
+2. **`D_LOCAL_TVS` is on the local tap (after `F_LOCAL`), not on the passthrough.** Clamp current must flow through the polyfuse so a surge that exceeds the TVS pulse rating opens the fuse rather than sustaining the clamp into destruction.
+3. **BOOT0 is pulled low via `R_MCU_BOOT0`** at all times. The STM32 system bootloader is entered by firmware request (software reboot into system memory), never by hardware strap.
+4. **`V_48_MON` divider must include `C_MON`**. Without the filter cap, switching noise from the LMR16006 couples into the ADC and the reading is unusable.
+5. **`JP_TERM` is DNP on 63 of 64 units.** The last unit of each bus populates it. If you populate more than one, the bus becomes reflection-noisy and packet loss rises.
+
+---
+
+# SECTION D — NET SUMMARY
+
+## D.1 Master nets
+
+| Net | Source | Load |
+|---|---|---|
+| VIN_RAW | J_PWR centre pin | Q_RP source |
+| VIN_48V | Q_RP drain (post-reverse-protect) | F_VIN, D_VIN |
+| V48_RAIL | F_VIN out | U_BUCK1 VIN, R_SHUNT_A high, R_SHUNT_B high |
+| BUS_A_48V | R_SHUNT_A low | J_BUS_A pins 1/2/7/8 |
+| BUS_B_48V | R_SHUNT_B low | J_BUS_B pins 1/2/7/8 |
+| 5V_RAIL | U_BUCK1 output | TLC5947 VCC, SK6812 strip, U_BUCK2 VIN |
+| 3V3_RAIL | U_BUCK2 output | S3 VDD, H2 VDD, SN65HVD75 VCC × 2, INA237 VS × 2, all 3V3 pullups |
+| GND | common return | all |
+| USB_VBUS | J_USB VBUS | USBLC6 VBUS (NOT connected to 5V_RAIL) |
+| BUS_A_A_MASTER | SN65HVD75_A pin 6 | J_BUS_A pin 4, R_TERM_A, R_BIAS_A_PU, D_RS485_A pin 1 |
+| BUS_A_B_MASTER | SN65HVD75_A pin 7 | J_BUS_A pin 5, R_TERM_A, R_BIAS_A_PD, D_RS485_A pin 3 |
+| BUS_B_A_MASTER | SN65HVD75_B pin 6 | J_BUS_B pin 4, R_TERM_B, R_BIAS_B_PU, D_RS485_B pin 1 |
+| BUS_B_B_MASTER | SN65HVD75_B pin 7 | J_BUS_B pin 5, R_TERM_B, R_BIAS_B_PD, D_RS485_B pin 3 |
+| INA_SDA / INA_SCL | S3 IO8 / IO9 | INA237_A + INA237_B (both on same bus) |
+
+## D.2 Unit nets
+
+| Net | Source | Load |
+|---|---|---|
+| BUS_48V_PASS | J_IN pins 1/2/7/8 ↔ J_OUT pins 1/2/7/8 | (passthrough; branch to F_LOCAL) |
+| GND | J_IN pins 3/6, J_OUT pins 3/6 | all |
+| BUS_A | J_IN pin 4 ↔ J_OUT pin 4 | SN65HVD75 pin 6, TVS, JP_TERM |
+| BUS_B | J_IN pin 5 ↔ J_OUT pin 5 | SN65HVD75 pin 7, TVS, R_TERM_UNIT |
+| LOCAL_48V | F_LOCAL out | D_LOCAL_TVS, C_LOCAL_BULK, U_BUCK_UNIT VIN, R_MON_TOP |
+| 5V_UNIT | U_BUCK_UNIT output | ULN2003 COM pin 9, U_LDO VIN |
+| 3V3_UNIT | U_LDO VOUT | U_MCU VDD+VDDA, SN65HVD75 VCC, LED_STATUS, KY-003 (via J_HALL pin 1 — wait: J_HALL pin 1 is 5V_UNIT for the KY-003 module which is 5V) |
+| V_48_MON | R_MON_TOP / R_MON_BOT midpoint | U_MCU PA0 (ADC1_IN0) |
+| RS485_TX_MCU / _RX_MCU / _DE | U_MCU PA2 / PA3 / PA1 | SN65HVD75 D / R / DE+/RE |
+| STEPPER_{A,B,C,D} | U_MCU PA4..PA7 | ULN2003 IN1..IN4 |
+| MOT_{A,B,C,D} | ULN2003 OUT1..OUT4 | J_MOTOR pins 2..5 |
+| HALL_IN | J_HALL pin 3 (KY-003 open-collector output) | U_MCU PB0 |
+| BTN | SW_BTN | U_MCU PB7 |
+| LED_STATUS | U_MCU PB8 | LED_STATUS anode via R_LED_STATUS |
+| NRST | TP_NRST + R_MCU_NRST + C_MCU_NRST | U_MCU pin 6 |
+| SWDIO / SWCLK | U_MCU PA13 / PA14 | JP_SWD pins 3 / 4 |
+
+---
+
+# SECTION E — PACKAGE AND PIN-1 REFERENCE (BOM validation)
+
+| Ref | Part | Package | Pin-1 marker | Authoritative datasheet |
+|---|---|---|---|---|
+| M_U_S3 | ESP32-S3-WROOM-1-N16R8 | 65-pin SMD module | Marking on module silk; pin 1 at antenna-opposite corner | Espressif ESP32-S3-WROOM-1/1U rev 1.4+ |
+| M_U_H2 | ESP32-H2-MINI-1-N4 | 28-pad SMD module | Module silk marking | Espressif ESP32-H2-MINI-1 rev 1.1+ |
+| M_U_RS485_A / _B | SN65HVD75D | SOIC-8 (D suffix) | Dot on pin 1; pin 1 = R (receiver output) | TI SLLS983 |
+| INA237_A / _B | INA237AIDGSR | MSOP-10 (DGS suffix) | Dot/dimple on pin 1; pin 1 = IN+ | TI SBOSA20 |
+| Q_RP | AO4407 | SOIC-8 | Dot on pin 1; pins 1-3 = S, 4 = G, 5-8 = D | AOS AO4407 datasheet |
+| U_BUCK1 | LMR16030SDDAR | SO-8 PowerPAD (DDA suffix) | Dot on pin 1; pin 1 = BOOT | TI SNVSA88 |
+| U_BUCK2 | AP63300WU-7 | TSOT-26 (W suffix) | Dot on pin 1; pin 1 = SW | Diodes AP63300 rev 2+ |
+| U1 (USB ESD) | USBLC6-2SC6 | SOT-23-6 | Dot on pin 1; pin 1 = I/O 1 (NOT GND) | ST DS3019 |
+| D_VIN | SMBJ58CA | DO-214AA (SMB) | CA suffix = bidirectional, no polarity | Littelfuse SMBJ series |
+| D_LOCAL_TVS | SMBJ58CA | DO-214AA (SMB) | CA = bidir | same |
+| D_RS485_A / _B / D_BUS_TVS | SM712 | SOT-23-3 | Pin 1 / 3 = bus sides, pin 2 = GND | Semtech SM712 |
+| F_VIN | 1812L200/60 | 1812 | No polarity | Littelfuse 1812L series |
+| F_LOCAL | 1812L050/60 | 1812 | No polarity | same |
+| U_BUCK_UNIT | LMR16006YDDCR | SOT-23-6 | Dot on pin 1 | TI SNVSA54 |
+| U_LDO | MCP1700-3302E/TT | SOT-23-3 | Dot on pin 1; pin 1 = VIN | Microchip MCP1700 |
+| U_MCU | STM32G030F6P6 | TSSOP-20 | Dot on pin 1 corner | ST DS12990 |
+| U_STEP | ULN2003AD | SOIC-16 | Dot on pin 1 | TI SLRS027 |
+| J_BUS_A / J_BUS_B / J_IN / J_OUT | RJHSE-5080 | 8P8C THT shielded | Latch on one side identifies pin orientation | Amphenol RJHSE datasheet |
