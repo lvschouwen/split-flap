@@ -54,26 +54,16 @@ ifeq ($(MCU), atmega328p)
 # atmega328p on the Arduino Nano (16MHz external crystal):
 # Fuse L: 0xff (full-swing crystal, longest startup — matches what the stock
 #               optiboot ships with; keeps the 16MHz crystal running)
-# Fuse H: 0xda (1024 word / 2KB bootloader section (BOOTSZ=01), BOOTRST set
-#               so reset vector enters the bootloader first).
-#               Bumped from 0xdc (512 word / 1KB BLS) in #72 to make room for
-#               EEPROM-identity address resolution, TWAMR dual-match, and the
-#               do_spm self-update hook.
+# Fuse H: 0xdc (1024 word / 2KB bootloader section, BOOTRST set so reset vector
+#               enters the bootloader first)
 # Fuse E: 0xfd (BOD at 2.7V)
 AVRDUDE_MCU=m328p -F
-AVRDUDE_FUSES=lfuse:w:0xff:m hfuse:w:0xda:m efuse:w:0xfd:m
+AVRDUDE_FUSES=lfuse:w:0xff:m hfuse:w:0xdc:m efuse:w:0xfd:m
 
-BOOTLOADER_START=0x7800
-# Self-update hook: do_spm lives in its own .hook section pinned 128 bytes
-# below the end of flash (0x8000 - 0x80 = 0x7F80). Future bootloader-updater
-# sketches call it via function pointer to write the BLS from app context
-# (AVR hardware restricts SPM to code executing inside the BLS; this hook
-# runs inside the BLS, so the SPM succeeds).
-HOOK_START=0x7F80
-# I2C_ADDRESS_BASE=1: resolve the unit's I2C address at boot — EEPROM-first
-# (slot 2 magic / slot 3 address, matches Unit.ino) with DIP+offset fallback.
-# Also sets TWAMR so the hardware matches both the unit's address and the
-# 0x29 broadcast-recovery address.
+BOOTLOADER_START=0x7C00
+# I2C_ADDRESS_BASE=1: read the DIP switches and listen on I2C address
+# I2C_ADDRESS_BASE + dipValue instead of the stock hardcoded TWI_ADDRESS.
+# This has to match Unit.ino's I2C_ADDRESS_BASE.
 CFLAGS_TARGET=-DF_CPU=16000000ULL -DTIMER_IRQFREQ_MS=16 -DI2C_ADDRESS_BASE=1
 endif
 
@@ -94,11 +84,6 @@ endif
 CFLAGS = -pipe -g -Os -mmcu=$(MCU) -Wall -fdata-sections -ffunction-sections
 CFLAGS += -Wa,-adhlns=$(*F).lst -DBOOTLOADER_START=$(BOOTLOADER_START) $(CFLAGS_TARGET)
 LDFLAGS = -Wl,-Map,$(@:.elf=.map),--cref,--relax,--gc-sections,--section-start=.text=$(BOOTLOADER_START)
-ifdef HOOK_START
-# --undefined forces the linker to keep do_spm even though only external app
-# code references it — without this, --gc-sections strips the .hook section.
-LDFLAGS += -Wl,--section-start=.hook=$(HOOK_START) -Wl,--undefined=do_spm
-endif
 LDFLAGS += -nostartfiles
 
 # ---------------------------------------------------------------------------
@@ -110,8 +95,8 @@ $(TARGET).elf: $(SOURCE:.c=.o)
 	@echo " Linking file:  $@"
 	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 	@$(OBJDUMP) -h -S $@ > $(@:.elf=.lss)
-	@$(OBJCOPY) -j .text -j .data -j .hook -O ihex $@ $(@:.elf=.hex)
-	@$(OBJCOPY) -j .text -j .data -j .hook -O binary $@ $(@:.elf=.bin)
+	@$(OBJCOPY) -j .text -j .data -O ihex $@ $(@:.elf=.hex)
+	@$(OBJCOPY) -j .text -j .data -O binary $@ $(@:.elf=.bin)
 
 %.o: %.c $(MAKEFILE_LIST)
 	@echo " Building file: $<"
