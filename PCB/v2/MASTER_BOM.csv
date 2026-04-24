@@ -1,0 +1,102 @@
+Designator,Value,MPN,Footprint,LCSC,Qty,Subsystem,EstEUR,Note
+# ==============================================================================
+# Master PCB v2 — consolidated BOM
+# Single-board quantities. For a 5-board prototype run, multiply Qty by 5.
+# Derived from POWER_DESIGN.md + DIGITAL_DESIGN.md.
+# Flag "check" in Note means LCSC stock + part-number match must be verified at BOM freeze.
+# ==============================================================================
+# ------------------------------ ACTIVE ICs ------------------------------------
+U1,LM74700-Q1 ideal-diode controller,LM74700QDBVRQ1,SOT-23-6,C509439,1,Power,1.30,
+U2,48→3V3 sync buck,LMR36015FDDA,HSOIC-8 PowerPAD,C922105,1,Power,2.10,Verify fixed-vs-adjustable variant at capture (P2)
+U3,eFuse Bus 1,TPS259827YFFR,DSBGA-10,C2906816,1,Power,2.50,
+U4,eFuse Bus 2,TPS259827YFFR,DSBGA-10,C2906816,1,Power,2.50,
+U5,eFuse Bus 3,TPS259827YFFR,DSBGA-10,C2906816,1,Power,2.50,
+U6,eFuse Bus 4,TPS259827YFFR,DSBGA-10,C2906816,1,Power,2.50,
+U7,Current monitor Bus 1 (addr 0x40),INA237AIDGSR,VSSOP-10,C2893010,1,Power,1.80,check LCSC — digital doc lists C2897185 as alternate
+U8,Current monitor Bus 2 (addr 0x41),INA237AIDGSR,VSSOP-10,C2893010,1,Power,1.80,
+U9,Current monitor Bus 3 (addr 0x42),INA237AIDGSR,VSSOP-10,C2893010,1,Power,1.80,
+U10,Current monitor Bus 4 (addr 0x43),INA237AIDGSR,VSSOP-10,C2893010,1,Power,1.80,
+U11,ESP32-S3 module 16MB flash 8MB OctPSRAM,ESP32-S3-WROOM-1-N16R8,Module,C2913202,1,Digital,4.50,
+U12,4-UART SPI bridge,MAX14830ETJ+,TQFN-32,C2683133,1,Digital,6.50,
+U13,RS-485 PHY Bus 1,SN65HVD75DR,SOIC-8,C64829,1,Digital,1.30,
+U14,RS-485 PHY Bus 2,SN65HVD75DR,SOIC-8,C64829,1,Digital,1.30,
+U15,RS-485 PHY Bus 3,SN65HVD75DR,SOIC-8,C64829,1,Digital,1.30,
+U16,RS-485 PHY Bus 4,SN65HVD75DR,SOIC-8,C64829,1,Digital,1.30,
+U17,USB D+/- ESD clamp,USBLC6-2SC6,SOT-23-6,C7415,1,Digital,0.30,
+# ------------------------------ TRANSISTORS -----------------------------------
+Q1,Reverse-block N-FET 100V 9mΩ,SQJ148EP-T1_GE3,PowerPAK SO-8,C2836025,1,Power,1.40,check stock
+Q2,FAULT LED inverter,BSS138,SOT-23,C8545,1,Power,0.05,Accepted per P4 — isolates LM74700 FAULT from LED load
+# ------------------------------ DIODES / TVS ----------------------------------
+D1,Input TVS bidir 3kW,SMDJ58CA,DO-214AB (SMC),C145194,1,Power,0.45,
+D2,Secondary surge clamp,SMBJ60A,SMB,C87447,1,Power,0.20,Added per P1 — protects ICs from 93V TVS clamp tail
+D3,RS-485 TVS Bus 1,SM712-02HTG,SOT-23,C169123,1,Digital,0.40,
+D4,RS-485 TVS Bus 2,SM712-02HTG,SOT-23,C169123,1,Digital,0.40,
+D5,RS-485 TVS Bus 3,SM712-02HTG,SOT-23,C169123,1,Digital,0.40,
+D6,RS-485 TVS Bus 4,SM712-02HTG,SOT-23,C169123,1,Digital,0.40,
+# ------------------------------ LEDs ------------------------------------------
+LED1,PWR_48V indicator,LED red 0603,0603,C2286,1,Power,0.03,Hardwired on 48V via 22kΩ
+LED2,PWR_3V3 indicator,LED green 0603,0603,C72043,1,Power,0.03,Hardwired on 3V3 via 680Ω
+LED3,FAULT indicator,LED red 0603,0603,C2286,1,Power,0.03,Driven by BSS138 inverter from PROT_FAULT_OR
+LED4,HEARTBEAT firmware indicator,LED blue 0603,0603,C72041,1,Digital,0.05,ESP32 IO21; encodes liveness + WiFi state
+LED5,BUS_ACT Bus 1,LED green 0603,0603,C72043,1,Digital,0.03,MAX14830 GPIO1
+LED6,BUS_ACT Bus 2,LED green 0603,0603,C72043,1,Digital,0.03,MAX14830 GPIO2
+LED7,BUS_ACT Bus 3,LED green 0603,0603,C72043,1,Digital,0.03,MAX14830 GPIO3
+LED8,BUS_ACT Bus 4,LED green 0603,0603,C72043,1,Digital,0.03,MAX14830 GPIO4
+# ------------------------------ CONNECTORS ------------------------------------
+J1,DC barrel jack 5.5/2.5mm 60V,Generic 60V THT,THT,C134567,1,Power,0.50,check stock + exact footprint
+J2,USB-C 2.0 16-pin SMD,USB-C UFP 16-pin,SMD,C165948,1,Digital,0.80,
+J3,SWD 2×5 1.27mm Cortex-debug,SHR-2x5-1.27,SMD,C72408,1,Digital,0.50,
+J4,RJ45 shielded THT Bus 1,RJHSE-5380 or equiv,THT shielded 8P8C no-magnetics,C150877,1,Digital,1.00,
+J5,RJ45 shielded THT Bus 2,RJHSE-5380 or equiv,THT shielded 8P8C no-magnetics,C150877,1,Digital,1.00,
+J6,RJ45 shielded THT Bus 3,RJHSE-5380 or equiv,THT shielded 8P8C no-magnetics,C150877,1,Digital,1.00,
+J7,RJ45 shielded THT Bus 4,RJHSE-5380 or equiv,THT shielded 8P8C no-magnetics,C150877,1,Digital,1.00,
+# ------------------------------ BUTTONS ---------------------------------------
+SW1,RESET tactile 6×6 SMD 160gf,Tactile 6x6,SMD,C318884,1,Digital,0.05,
+SW2,BOOT tactile 6×6 SMD 160gf,Tactile 6x6,SMD,C318884,1,Digital,0.05,
+# ------------------------------ INDUCTORS / MAGNETICS -------------------------
+L1,Buck inductor 33µH 1.7A shielded,XAL5030-333MEB,5.3×5.3×3.0 shielded,C2834984,1,Power,0.90,
+L2,CM choke Bus 1 600Ω@100MHz 80V 2A,744232601,SMD 4-line,C191126,1,Digital,1.00,
+L3,CM choke Bus 2,744232601,SMD 4-line,C191126,1,Digital,1.00,
+L4,CM choke Bus 3,744232601,SMD 4-line,C191126,1,Digital,1.00,
+L5,CM choke Bus 4,744232601,SMD 4-line,C191126,1,Digital,1.00,
+FB1,VBUS ferrite bead 60Ω@100MHz,BLM18PG600SN1,0603,C1017,1,Digital,0.05,USB VBUS isolation
+# ------------------------------ CRYSTAL ---------------------------------------
+Y1,MAX14830 crystal 3.6864 MHz 18pF,ABLS-3.6864MHZ-B4-T,3.2×2.5 SMD,C70581,1,Digital,0.50,
+# ------------------------------ SHUNT RESISTORS (power sensing) ---------------
+"R_SH1,R_SH2,R_SH3,R_SH4",50mΩ 1% 3W 2512 Kelvin,CSR2512-50 class,2512 Kelvin,C157950,4,Power,0.25,Per-bus current shunt
+# ------------------------------ FIXED RESISTORS (by value, consolidated) ------
+"R1",1MΩ 1%,Generic,0603,C22935,1,Power,0.01,LMR36015 EN divider top
+"R2,R_VBUS_T1,R_VBUS_T2,R_VBUS_T3,R_VBUS_T4",100kΩ 1%,Generic,0603,C25803,5,Power,0.01,EN divider bottom + 4× INA237 VBUS divider top
+"R_ILIM1,R_ILIM2,R_ILIM3,R_ILIM4",11kΩ 1%,Generic,0603,C23186,4,Power,0.01,TPS259827 I_LIM set (1.7A)
+"R_INx_A1..4,R_INx_B1..4",10Ω 100V 1%,Generic,0603,C25076,8,Power,0.01,INA237 input filter series
+"R_LED_48V",22kΩ 1% 250V,Generic 0805,0805,C17673,1,Power,0.02,PWR_48V LED — high-voltage 0805
+"R_LED_3V3,R_LED_FAULT",680Ω 1%,Generic,0603,C23243,2,Power,0.01,PWR_3V3 + FAULT LED series
+"R3,R_EN_PD1..4,R_VBUS_B1..4,R_PF_PULL,R_AL_PULL",10kΩ 1%,Generic,0603,C25804,11,Power,0.01,Q1 G-S bleed + 4× eFuse EN pull-down + 4× INA237 VBUS divider bottom + PROT_FAULT_OR pull-up + TELEM_ALERT_OR pull-up
+"R_TERM1,R_TERM2,R_TERM3,R_TERM4",120Ω 1%,Generic 0805,0805,C22787,4,Digital,0.02,RS-485 termination at master
+"R_BIAS_H1..4,R_BIAS_L1..4",390Ω 1%,Generic,0603,C25104,8,Digital,0.01,RS-485 fail-safe bias (idle differential ~440mV)
+"R_I2C_SDA,R_I2C_SCL",4.7kΩ 0402,Generic,0402,C25900,2,Digital,0.01,I²C pull-ups to 3V3
+"R_MAX_IRQ,R_MAX_RST,R_CS_PU,R_BOOT_PU,R_EN_PU,R_SPARE1..7",10kΩ 0402,Generic,0402,C25744,12,Digital,0.01,MAX14830 IRQ + /RESET + SPI CS idle-high + IO0 + EN + 7× spare-GPIO pull-ups
+"R_CC1,R_CC2",5.1kΩ 1%,Generic,0402,C127584,2,Digital,0.01,USB-C CC1/CC2 pull-downs (UFP role)
+"R_HB,R_ACT1..4",1kΩ 0402,Generic,0402,C11702,5,Digital,0.01,HB + 4× BUS_ACT LED series
+# ------------------------------ CAPACITORS (by value, consolidated) -----------
+"C1,C2",47µF 100V AL-poly,Nichicon PCV series,SMD 10x10,C2843372,2,Power,0.75,V48 bulk input; check stock
+"C3",4.7µF 100V X7R,GRM32ER72A475K,1210,C2832225,1,Power,0.35,V48 HF decap
+"C4",2.2µF 100V X7R,GRM32ER72A225K,1210,C1778,1,Power,0.30,Buck VIN decap
+"C5,C6",22µF 25V X7R,GRM21BR71E225K,0805,C1804,2,Power,0.05,Buck VOUT bulk
+"C7,C8,C_INx_FLT1..4,C_VS1..4",100nF 25V X7R,Generic,0603,C14663,10,Power,0.01,Buck SS + LM74700 CAP + 4× INA237 differential filter + 4× INA237 VS decap
+"C_IN_EF1..4,C_OUT_EF1..4",100nF 100V X7R,Generic,0603,C123498,8,Power,0.02,Per-bus eFuse VIN + VOUT decap (high-voltage-rated)
+"C_DVDT1..4",10nF X7R,Generic,0603,C1588,4,Power,0.01,TPS259827 dV/dt soft-start
+"C_VBUS1..4",100pF C0G,Generic,0603,C1546,4,Power,0.01,INA237 VBUS divider shunt
+"C_VBUS",4.7µF 10V X5R,Generic,0603,C19666,1,Digital,0.03,USB VBUS bulk (isolated from rail)
+"C_BULK_S3",22µF 10V X5R,Generic,0805,C45783,1,Digital,0.04,ESP32 decoupling bulk
+"C_BULK_S3b",10µF 10V X5R,Generic,0805,C15850,1,Digital,0.03,ESP32 decoupling bulk
+"C_DEC_*,C_DEB_EN,C_DEB_BOOT",100nF 25V X7R,Generic,0402,C1525,22,Digital,0.01,Per-IC VDD decoupling (S3 + MAX14830 + SN65HVD75 × 4 + INA237 × 4 + USBLC6) + button debounce (2)
+"C_XTAL1,C_XTAL2",18pF C0G,Generic,0402,C1653,2,Digital,0.01,MAX14830 crystal load caps
+"C_EN_RC",1nF,Generic,0402,C1614,1,Digital,0.01,ESP32 EN RC filter
+# ==============================================================================
+# Cost rollup (per board, approximate):
+#   Power subsystem:   ~€27
+#   Digital subsystem: ~€30
+#   Total components:  ~€57
+# For 5-board prototype + JLC PCBA + shipping, budget ~€85-100/board = ~€450-500 total.
+# ==============================================================================
