@@ -206,9 +206,11 @@ End-of-chain unit sees ≥ 43 V even on a 50 m fully-loaded bus. The LMR16006 ac
 ## Files
 
 - `README.md` (this file) — system architecture handoff brief
-- `SCHEMATIC.md` — authoritative textual netlist for the master and the unit (both on one file, in separate sections)
-- `PINOUT.md` — full GPIO tables for ESP32-S3, ESP32-H2, and STM32G030F6P6; RJ45 pin-to-net table
-- `BOM.csv` — combined bill of materials for both boards (`Board` column distinguishes MASTER vs UNIT)
+- `GPIO_POLICY.md` — frozen rules governing master ESP32-S3 GPIO allocation (allocation order, reserved pins, enforcement). Specific pin numbers pending — see `OPEN_QUESTIONS.md`.
+- `OPEN_QUESTIONS.md` — design decisions still open on v2 (GPIO architecture, power topology, protection class, bias values, layer counts, etc.). Each entry has options + recommendation. Resolve top-to-bottom before schematic respin.
+- `SCHEMATIC.md` — textual netlist for the master and the unit. **Stale with respect to `OPEN_QUESTIONS.md` Q4–Q12, Q14, Q17, Q18**; pending resolution.
+- `PINOUT.md` — full GPIO tables for ESP32-S3, ESP32-H2, STM32G030F6P6, plus RJ45 pin-to-net table. **ESP32-S3 section will be rewritten from scratch once `OPEN_QUESTIONS.md` Q1–Q3 are resolved** — current pin numbers are legacy Rev B carryover, not authoritative.
+- `BOM.csv` — combined bill of materials for both boards (`Board` column distinguishes MASTER vs UNIT). Subject to changes from the open questions.
 - `master_v2.kicad_sch`, `master_v2.kicad_pcb`, `master_v2_mockup.svg` — board-outline scaffolding retained from the Rev B attempt. Board dimensions (120 × 80 mm) are the only re-usable artefact; component placement must be recaptured from the new `SCHEMATIC.md` on top of a fresh layout.
 
 ## Handoff workflow (sequential)
