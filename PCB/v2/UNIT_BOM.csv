@@ -1,0 +1,39 @@
+Designator,Description,MPN,Package,LCSC,Qty,Unit price EUR (proto),Group,Notes
+U1,STM32G030F6P6 MCU,STM32G030F6P6,TSSOP-20,C2888044,1,0.45,IC,Cortex-M0+ 32KB flash
+U2,ULN2003A Darlington array,ULN2003ADR,SOIC-16,C79209,1,0.20,IC,Stepper driver
+U3,AS5600 magnetic encoder,AS5600ASOM,SOIC-8,C78989,1,1.00,IC,Absolute angle sensor I2C 0x36
+U4,SN65HVD75D RS-485 transceiver,SN65HVD75DR,SOIC-8,C143422,1,0.60,IC,3.3V half-duplex
+U5,TPS54308DBV 60V/0.5A sync buck,TPS54308DBVR,SOT-23-6,C123604,1,0.50,IC,48V->12V
+U6,HT7833 3.3V LDO,HT7833,SOT-89-3,C60641,1,0.08,IC,12V->3.3V (check SOT-89 footprint at schematic time)
+D1,SMBJ58CA TVS bidirectional,SMBJ58CA,SMB,C57535,1,0.15,Discrete,48V input transient clamp
+D2,SP0504 4-channel ESD array,SP0504BAATG,SOT-23-6,C79018,1,0.20,Discrete,RJ45 A/B + WAKE_IN/OUT ESD
+LED1,0603 LED green,LTST-C190GKT,0603,C12624,1,0.05,Discrete,Status LED
+J1,RJ45 shielded THT no magnetics IN,RJHSE-5081 or equiv,THT,CHECK STOCK,1,0.80,Connector,Bus IN jack - match master
+J2,RJ45 shielded THT no magnetics OUT,RJHSE-5081 or equiv,THT,CHECK STOCK,1,0.80,Connector,Bus OUT jack - match master
+J3,JST-XH 5-pin vertical,B5B-XH-A,THT 2.5mm,C144395,1,0.10,Connector,Motor cable
+L1,22 uH shielded inductor Isat>=600mA,SWPA4030S220MT,SMD 4x4,C165231,1,0.15,Discrete,Buck inductor
+R_TERM,120 Ohm 1% 0603,RC0603FR-07120RL,0603,C22787,1,0.01,Passive,RS-485 terminator (in series with JMP1)
+JMP1,1x2 2.54mm vertical pin header,TSW-102-07-G-S or equiv,THT 2.54mm,C124378,1,0.03,Connector,Termination enable header
+SHUNT1,Open-top jumper shunt 2.54mm,CJPT-2.54-B,—,C72448,1,0.03,Off-board,Fit ONLY on chain-end unit
+C_IN,10 uF 100V X7R 1210,CGA6P3X7R2A106M250AB,1210,C126830,1,0.20,Passive,Buck input cap
+C_12V,22 uF 25V X7R 0805,CL21B226MAQNNNE,0805,C120000,1,0.08,Passive,Buck output cap
+C_LDO_IN,1 uF 25V X7R 0603,CC0603KRX7R9BB105,0603,C15849,1,0.02,Passive,LDO input cap
+C_LDO_OUT,1 uF 10V X7R 0603,CC0603KRX7R7BB105,0603,C15849,1,0.02,Passive,LDO output cap
+C_BYP,100 nF 16V X7R 0603,CC0603KRX7R7BB104,0603,C14663,10,0.02,Passive,Bypass on every IC VDD
+R_FB_HI,140 kOhm 1% 0603,RC0603FR-07140KL,0603,CHECK STOCK,1,0.01,Passive,Buck feedback top
+R_FB_LO,10 kOhm 1% 0603,RC0603FR-0710KL,0603,C22810,1,0.01,Passive,Buck feedback bottom
+R_I2C,4.7 kOhm 0603,RC0603FR-074K7L,0603,C23162,2,0.01,Passive,I2C pull-ups
+R_WAKE_PD,10 kOhm 0603,RC0603FR-0710KL,0603,C22810,1,0.01,Passive,WAKE_IN pull-down
+R_ULN_PD,10 kOhm 0603,RC0603FR-0710KL,0603,C22810,1,0.01,Passive,ULN2003 IN5-7 tie to GND (or short to GND directly)
+R_LED,1 kOhm 0603,RC0603FR-071KL,0603,C21190,1,0.01,Passive,LED current limit
+R_WAKE_SER,100 Ohm 0603,RC0603FR-07100RL,0603,C22775,2,0.01,Passive,WAKE series protection
+R_BOOT0,10 kOhm 0603,RC0603FR-0710KL,0603,C22810,1,0.01,Passive,BOOT0 pull-down
+,,,,,,,,
+MOTOR,28BYJ-48 12V unipolar stepper (off-board),28BYJ-48-12V,—,CHECK SUPPLIER,1,1.50,Off-board,Supplied separately - plugs into J3
+MAGNET,Diametral magnet 6mm x 2.5mm N35,—,—,CHECK SUPPLIER,1,0.30,Off-board,For AS5600 - glued to shaft end
+,,,,,,,,
+PCB,2-layer 65x35mm 1oz HASL,—,—,JLCPCB,1,0.80,Fab,Per-board at 10-unit prototype run
+PCBA,JLC PCBA assembly,—,—,JLCPCB,1,1.50,Fab,Per-board at 10-unit prototype run
+,,,,,,,,
+,,,,,TOTAL,9.80,,Per-unit all-in at 10-unit prototype (includes motor + magnet + PCB + PCBA + jumper header; shunt only on chain-end)
+,,,,,PROTO_TOTAL,98.03,,10-unit prototype total cost estimate
