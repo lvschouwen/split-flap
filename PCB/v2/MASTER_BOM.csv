@@ -1,92 +1,43 @@
-Designator,Comment,Footprint,LCSC Part #,MPN,Manufacturer,Qty,JLC_Tier,Populate,EstEUR,DatasheetURL,Notes,BomType
-U1,LM74700-Q1 ideal-diode controller,SOT-23-6,C2941042,LM74700QDBVRQ1,Texas Instruments,1,Extended,Y,1.30,https://www.ti.com/product/LM74700-Q1,REVIEW_VERIFIED: LCSC page resolves to TI LM74700QDBVRQ1; old C509439 was wrong,onboard
-U2,LMR36015 48->3V3 sync buck (candidate fixed-output substitute),VQFN-12,C1850344,LMR36015FSC3RNXRQ1,Texas Instruments,1,Extended,Y,2.10,https://www.ti.com/product/LMR36015,REVIEW_PASS2_SUBSTITUTE: original LMR36015AFDDA HSOIC-8 not found cleanly at JLC; JLC C1850344 is TI LMR36015 fixed-3.3V 1.5A 60V synchronous buck in VQFN-12. NOT footprint-compatible with HSOIC-8; if adopted change schematic/footprint and DELETE FB divider (R_FB_TOP/R_FB_BOT). Candidate substitution only - decision gate is open,onboard
-"U3,U4,U5,U6",eFuse 60V adjustable I_LIM per bus,HTSSOP-16-EP,C544399,TPS26600PWPR,Texas Instruments,4,Extended,Y,3.20,https://www.ti.com/product/TPS2660,REVIEW_PASS2_SUBSTITUTE: replaces TPS259827YFFR because TPS25982/TPS25981 families are 24V/30V class - INVALID on 48V rail. TPS26600PWPR is 4.2-60V industrial eFuse/hot-swap and is the correct voltage class for V48. Requires schematic/footprint/current-limit/inrush rework; NOT drop-in. Pin count and pinout differ from TPS259827 DSBGA-10,onboard
-"U3_ALT,U4_ALT,U5_ALT,U6_ALT",DELETED - was TPS25981 fallback (invalid voltage class),WQFN-12 3x3,DELETE,TPS25981QWRPVRQ1,Texas Instruments,4,Manual,DNP,0.00,https://www.ti.com/product/TPS25981,REVIEW_PASS2_DELETE: remove TPS25981QWRPVRQ1 fallback for 48V design; TPS25981/TPS25982 families are NOT valid on V48 (30V abs-max class). If a fallback eFuse footprint is desired use another >=60V eFuse/hot-swap part not TPS25981. Active path is now TPS26600PWPR HTSSOP-16-EP (U3..U6),onboard
-U_POR,3V3 POR supervisor (candidate substitute),SOT-23-3,C132016,TLV803SDBZR,Texas Instruments,1,Extended,Y,0.30,https://www.ti.com/product/TLV803,REVIEW_PASS2_SUBSTITUTE: exact TPS3839L33DBVR not found at JLC. TLV803SDBZR C132016 is a candidate ~2.93V active-low reset supervisor (SOT-23-3). VERIFY before schematic lock: output topology (open-drain vs push-pull); reset delay; threshold tolerance; and boot/eFuse EN gating compatibility with the BAT54 OR-gating scheme. Pinout/package differ from TPS3839L33 SOT-23-5,onboard
-"U7,U8,U9,U10",Current monitor I2C 16-bit (addr 0x40..0x43),VSSOP-10,C2864837,INA237AIDGSR,Texas Instruments,4,Extended,Y,1.80,https://www.ti.com/product/INA237,REVIEW_PASS2_VERIFIED: LCSC C2864837 resolves to TI INA237AIDGSR VSSOP-10. Datasheet supports high-side current/bus sensing up to 85V class - suitable for 48V monitoring with the existing VBUS divider (10k/1k) and common-mode review.,onboard
-U11,ESP32-S3-WROOM-1-N16R8 module,Module,C2913202,ESP32-S3-WROOM-1-N16R8,Espressif,1,Extended,Y,4.50,https://www.espressif.com/sites/default/files/documentation/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf,16MB flash 8MB Octal PSRAM. REVIEW_VERIFIED: JLC part C2913202 resolves to ESP32-S3-WROOM-1-N16R8. Standard PCBA / X-ray requirements may apply,onboard
-U12,4-UART SPI bridge,TQFN-32,MANUAL_FEEDER,MAX14830ETJ+,Maxim/ADI,1,Manual,Y,6.50,https://www.analog.com/media/en/technical-documentation/data-sheets/MAX14830.pdf,VEXT tied to 3V3 with 100nF decoupling. REVIEW_PASS2_UNSOURCEABLE: no clean JLC-stocked ETJ+ path found. Do NOT substitute MAX14830ETM+T C2653202 - it is package-mismatched (ETJ+ = TQFN-32 vs ETM+ = different package). Options: (a) JLC manual-feeder/global-source ETJ+ at additional PCBA cost; (b) replace with two dual-UART SPI bridges after sourcing review; (c) reopen architecture to 2 ESP32-S3 native UART buses (per master REVIEW_STRONG_OPINION). Open architectural decision,onboard
-"U13,U14,U15,U16",RS-485 PHY 3V3 half-duplex,SOIC-8,C57928,SN65HVD75DR,Texas Instruments,4,Extended,Y,1.30,https://www.ti.com/product/SN65HVD75,500 kbaud 8N1. REVIEW_VERIFIED_LCSC: C57928 resolves to TI SN65HVD75DR. Avoid clone/alternate C-numbers unless intentionally second-sourced and SI-tested,onboard
-U17,USB D+/- ESD clamp,SOT-23-6,C7519,USBLC6-2SC6,STMicroelectronics,1,Extended,Y,0.30,https://www.st.com/resource/en/datasheet/usblc6-2.pdf,REVIEW_VERIFIED: C7519 resolves to ST USBLC6-2SC6; old C7415 was wrong,onboard
-Q1,Reverse-block N-FET 100V 9mOhm,PowerPAK SO-8,C727381,SQJ148EP-T1_GE3,Vishay,1,Extended,Y,1.40,https://www.vishay.com/docs/65854/sqj148ep.pdf,REVIEW_PASS2_VERIFY_BEFORE_ORDER: JLC C727381 appears to resolve to Vishay SQJ148EP-T1_GE3 but page metadata/spec summary must be reconciled against the Vishay datasheet before commit. Confirm V_DS=100V Rds(on)=9mOhm package=PowerPAK SO-8 thermal pad and SOA. Do NOT substitute generic 100V N-MOSFET without LM74700 ideal-diode SOA review (Q_g matters for 1k GATE series),onboard
-Q_FAULT_PNP,FAULT LED high-side switch,SOT-23,C8616,MMBT3906,Generic,1,Basic,Y,0.04,,Drives FAULT LED off PROT_FAULT_OR (P4 closed 2026-04-25),onboard
-D1,Input TVS bidir 3kW,DO-214AB SMC,C145194,SMDJ58CA,Littelfuse,1,Extended,Y,0.45,https://www.littelfuse.com/products/tvs-diodes/surface-mount/smdj.aspx,Primary surge clamp at barrel jack,onboard
-D_RAIL,V48_RAIL secondary clamp,SMA,C8678,SMAJ51A,Littelfuse,1,Basic,Y,0.20,,Sole secondary clamp post-Q1 source (P1 closed; R_SERIES+D_SEC chain deleted 2026-04-25),onboard
-"D_POR1,D_POR2,D_POR3,D_POR4",POR EN-gating Schottky,SOT-23,C2480,BAT54,Generic,4,Basic,Y,0.05,,Anode at /RESET cathode at EFUSE_EN_n (polarity corrected 2026-04-25),onboard
-"D3,D4,D5,D6",RS-485 transient suppressor,SOT-23,C169123,SM712-02HTG,Semtech,4,Basic,Y,0.40,https://www.semtech.com/products/protection/sm712,RS-485 rated +/-7V working,onboard
-LED1,PWR_48V red 0603,0603,C2286,Generic LED red,Generic,1,Basic,Y,0.03,,Hardwired on V48_RAIL via 22k,onboard
-LED2,PWR_3V3 green 0603,0603,C72043,Generic LED green,Generic,1,Basic,Y,0.03,,Hardwired on 3V3 via 680R,onboard
-LED3,FAULT red 0603,0603,C2286,Generic LED red,Generic,1,Basic,Y,0.03,,Driven by MMBT3906 from PROT_FAULT_OR,onboard
-LED4,HEARTBEAT blue 0603,0603,C72041,Generic LED blue,Generic,1,Basic,Y,0.05,,ESP32 IO21,onboard
-"LED5,LED6,LED7,LED8",BUS_ACT 1..4 green 0603,0603,C72043,Generic LED green,Generic,4,Basic,Y,0.03,,Active-low sink from MAX14830 GPIO1..4,onboard
-J1,DC barrel jack 5.5/2.5mm 60V,THT,MANUAL_LOCK_FOOTPRINT,Generic 60V THT barrel jack,Generic,1,Manual,Y,0.50,,REVIEW_PASS2_UNSOURCEABLE: lock exact 60V-rated THT barrel jack by mechanical footprint and current rating before layout. Manual/consign acceptable if JLC does not stock a 60V variant. Generic 5.5/2.5mm THT footprint is acceptable as a placeholder only,onboard
-J2,USB-C 2.0 16-pin SMD UFP,SMD,C165948,USB4085 class,GCT,1,Extended,Y,0.80,https://gct.co/connector/usb4085,,onboard
-J3,SWD 2x5 1.27mm Cortex-debug,SMD 2x5,C72408,Generic 2x5 1.27mm header,Generic,1,Basic,Y,0.50,,,onboard
-"J4,J5,J6,J7",RJ45 shielded THT no-magnetics,8P8C THT shielded,MANUAL_LOCK_FOOTPRINT,RJHSE-5380 class,Amphenol,4,Manual,Y,1.00,,REVIEW_PASS2_UNSOURCEABLE: lock exact shielded no-magnet RJ45 SKU consistently with backplane before layout. Generic 8P8C footprint is NOT acceptable - must reflect actual mechanical/shield-pad geometry. Manual/consign acceptable; Amphenol RJHSE-5380 is the placeholder MPN,onboard
-SW1,RESET tactile 6x6 SMD 160gf,SMD,C318884,Generic tactile 6x6,Generic,1,Basic,Y,0.05,,,onboard
-SW2,BOOT tactile 6x6 SMD 160gf,SMD,C318884,Generic tactile 6x6,Generic,1,Basic,Y,0.05,,,onboard
-L1,Buck inductor 33uH 1.7A shielded,5.3x5.3x3.0,C2834984,XAL5030-333MEB,Coilcraft,1,Extended,Y,0.90,https://www.coilcraft.com/getmedia/9d1c8ad0-22fe-4d65-94b7-d68a7bb20e4a/xal50xx.pdf,,onboard
-"L2,L3,L4,L5",CM choke 600 ohm@100MHz 80V 2A,SMD 4-line,GLOBAL_SOURCE,744232601,Wurth Elektronik,4,Manual,Y,1.00,https://www.we-online.com/components/products/datasheet/744232601.pdf,RS-485 A/B common-mode. REVIEW_PASS2_UNSOURCEABLE: exact Wurth 744232601 not found cleanly in JLC search. Global-source/manual-feeder this SI part OR redesign around a JLC-stocked RS-485/CAN common-mode choke after impedance/current/package/footprint review. Old C191126 resolved to Vishay VEMD5510C photodiode (wrong part),onboard
-FB1,VBUS ferrite bead 60 ohm@100MHz,0603,C1017,BLM18PG600SN1,Murata,1,Basic,Y,0.05,,USB VBUS isolation,onboard
-Y1,MAX14830 crystal 3.6864MHz 18pF C_L,3.2x2.5,C70581,ABLS-3.6864MHZ-B4-T,Abracon,1,Extended,Y,0.50,,Verify C_L spec at BOM-finalize for cap value,onboard
-"R_SH1,R_SH2,R_SH3,R_SH4",Shunt 50mOhm 1% 3W 2512 Kelvin,2512 Kelvin,C157950,CSR2512-50 class,Generic,4,Extended,Y,0.25,,,onboard
-R_GATE_LM,LM74700 GATE series,0603,C22929,1k 1%,Generic,1,Basic,Y,0.01,,TI SLUA975 stability vs Q1 Q_g ringing (added 2026-04-25),onboard
-R_GATE_BLEED,Q1 G-S bleed,0603,C25804,10k 1%,Generic,1,Basic,Y,0.01,,,onboard
-R_EN_TOP,LMR36015 EN divider top,0603,C22935,1M 1%,Generic,1,Basic,Y,0.01,,Wakes at ~15V V48_RAIL,onboard
-R_EN_BOT,LMR36015 EN divider bottom,0603,C25803,100k 1%,Generic,1,Basic,Y,0.01,,,onboard
-R_FB_TOP,LMR36015 FB divider top (delete if fixed-output buck),0603,C25803,100k 1%,Generic,1,Basic,Y,0.01,,REVIEW_PASS2_DELETE_IF_FIXED_BUCK: delete this row if U2 is committed to LMR36015FSC3RNXRQ1 (fixed-3.3V variant has internal divider),onboard
-R_FB_BOT,LMR36015 FB divider bottom (delete if fixed-output buck),0603,CHECK,33.2k 1%,Generic,1,Basic,Y,0.01,,REVIEW_PASS2_DELETE_IF_FIXED_BUCK: delete this row if U2 is committed to LMR36015FSC3RNXRQ1 (fixed-3.3V variant has internal divider). Otherwise: JLC Basic 0603 1% 33.2k pick at PCBA quote time,onboard
-"R_ILIM1,R_ILIM2,R_ILIM3,R_ILIM4",eFuse I_LIM ~1.7A,0603,C23186,11k 1%,Generic,4,Basic,Y,0.01,,Verify K_ILIM at fab-time (P3 open),onboard
-"R_EN_PD1,R_EN_PD2,R_EN_PD3,R_EN_PD4",eFuse EN pull-down (fail-safe OFF),0603,C25804,10k 1%,Generic,4,Basic,Y,0.01,,,onboard
-"R_INA_A1,R_INA_A2,R_INA_A3,R_INA_A4",INA237 IN+ series filter,0603,C25076,10R 100V 1%,Generic,4,Basic,Y,0.01,,,onboard
-"R_INB_B1,R_INA_B2,R_INA_B3,R_INA_B4",INA237 IN- series filter,0603,C25076,10R 100V 1%,Generic,4,Basic,Y,0.01,,,onboard
-"R_VBUS_T1,R_VBUS_T2,R_VBUS_T3,R_VBUS_T4",INA237 VBUS divider top,0603,C25804,10k 1%,Generic,4,Basic,Y,0.01,,Was 100k pre-2026-04-25; bumped to preserve INA237 16-bit accuracy,onboard
-"R_VBUS_B1,R_VBUS_B2,R_VBUS_B3,R_VBUS_B4",INA237 VBUS divider bottom,0603,C21190,1k 1%,Generic,4,Basic,Y,0.01,,Was 10k pre-2026-04-25,onboard
-R_LED_48V,PWR_48V LED resistor 0805 250V,0805,C17673,22k 1% 250V WV,Generic,1,Basic,Y,0.02,,High-voltage 0805 for 93V transient,onboard
-R_LED_3V3,PWR_3V3 LED resistor,0603,C23243,680R 1%,Generic,1,Basic,Y,0.01,,,onboard
-R_LED_FAULT,FAULT LED collector resistor,0603,C23243,680R 1%,Generic,1,Basic,Y,0.01,,,onboard
-R_FAULT_BASE,MMBT3906 base resistor on PROT_FAULT_OR,0603,C25804,10k 1%,Generic,1,Basic,Y,0.01,,Added 2026-04-25 (P4 fix),onboard
-R_PF_PULL,PROT_FAULT_OR pull-up,0603,C25804,10k 1%,Generic,1,Basic,Y,0.01,,,onboard
-R_AL_PULL,TELEM_ALERT_OR pull-up,0603,C25804,10k 1%,Generic,1,Basic,Y,0.01,,,onboard
-R_POR_PU,/RESET pull-up to 3V3,0603,C25804,10k 1%,Generic,1,Basic,Y,0.01,,,onboard
-"R_TERM1,R_TERM2,R_TERM3,R_TERM4",RS-485 termination at master,0805,C22787,120R 1%,Generic,4,Basic,Y,0.02,,Master is chain end,onboard
-"R_BIAS_H1,R_BIAS_H2,R_BIAS_H3,R_BIAS_H4",RS-485 failsafe bias high,0603,C21190,1k 1%,Generic,4,Basic,Y,0.01,,Was 390R pre-2026-04-25; 280mV idle differential,onboard
-"R_BIAS_L1,R_BIAS_L2,R_BIAS_L3,R_BIAS_L4",RS-485 failsafe bias low,0603,C21190,1k 1%,Generic,4,Basic,Y,0.01,,,onboard
-"R_I2C_SDA,R_I2C_SCL",I2C pull-ups to 3V3,0402,C25900,4.7k 1%,Generic,2,Basic,Y,0.01,,,onboard
-"R_MAX_IRQ,R_MAX_RST,R_CS_PU,R_BOOT_PU,R_EN_PU",MAX14830 IRQ/RESET + SPI CS + IO0 + EN pull-ups,0402,C25744,10k 1%,Generic,5,Basic,Y,0.01,,,onboard
-"R_SPARE1,R_SPARE2,R_SPARE3,R_SPARE4,R_SPARE5,R_SPARE6,R_SPARE7",Spare-GPIO pull-ups,0402,C25744,10k 1%,Generic,7,Basic,Y,0.01,,,onboard
-"R_CC1,R_CC2",USB-C CC1/CC2 UFP pull-downs,0402,C127584,5.1k 1%,Generic,2,Basic,Y,0.01,,,onboard
-"R_HB,R_ACT1,R_ACT2,R_ACT3,R_ACT4",HB + 4x BUS_ACT LED series,0402,C11702,1k 1%,Generic,5,Basic,Y,0.01,,,onboard
-"C1,C2",V48 bulk input AL-poly,SMD 10x10,C2843372,Nichicon PCV 47uF/100V,Nichicon,2,Manual,Y,0.75,,Check stock,onboard
-C3,V48 HF decap,1210,C2832225,GRM32ER72A475K 4.7uF/100V X7R,Murata,1,Extended,Y,0.35,,,onboard
-C4,Buck VIN decap,1210,C1778,GRM32ER72A225K 2.2uF/100V X7R,Murata,1,Extended,Y,0.30,,,onboard
-"C5,C6",Buck VOUT bulk,0805,C1804,GRM21BR71E225K 22uF/25V X7R,Murata,2,Extended,Y,0.05,,,onboard
-C_BOOT,LMR36015 bootstrap CBOOT-to-SW,0402,C1525,100nF 25V X7R,Generic,1,Basic,Y,0.01,,Mandatory; missing pre-2026-04-25,onboard
-C_SS,LMR36015 SS pin,0603,C14663,100nF 25V X7R,Generic,1,Basic,Y,0.01,,,onboard
-C_CP74700,LM74700 CAP pin,0603,C14663,100nF 25V X7R,Generic,1,Basic,Y,0.01,,,onboard
-"C_INA_FLT1,C_INA_FLT2,C_INA_FLT3,C_INA_FLT4",INA237 differential filter,0603,C14663,100nF 25V X7R,Generic,4,Basic,Y,0.01,,,onboard
-"C_VS1,C_VS2,C_VS3,C_VS4",INA237 VS decap,0603,C14663,100nF 25V X7R,Generic,4,Basic,Y,0.01,,,onboard
-"C_EN_RC1,C_EN_RC2,C_EN_RC3,C_EN_RC4",eFuse EN RC filter,0603,C14663,100nF 25V X7R,Generic,4,Basic,Y,0.01,,,onboard
-"C_IN_EF1,C_IN_EF2,C_IN_EF3,C_IN_EF4",eFuse VIN decap 100V,0603,C123498,100nF 100V X7R,Generic,4,Basic,Y,0.02,,,onboard
-"C_OUT_EF1,C_OUT_EF2,C_OUT_EF3,C_OUT_EF4",eFuse VOUT decap 100V,0603,C123498,100nF 100V X7R,Generic,4,Basic,Y,0.02,,,onboard
-"C_DVDT1,C_DVDT2,C_DVDT3,C_DVDT4",eFuse dV/dt soft-start,0603,C14663,100nF 25V X7R,Generic,4,Basic,Y,0.01,,Bumped 10nF -> 100nF 2026-04-25 for 32-unit bus inrush vs 1.7A trip,onboard
-"C_VBUS1,C_VBUS2,C_VBUS3,C_VBUS4",INA237 VBUS divider shunt,0603,C1546,100pF C0G,Generic,4,Basic,Y,0.01,,,onboard
-C_VBUS_USB,USB VBUS bulk (isolated),0603,C19666,4.7uF 10V X5R,Generic,1,Basic,Y,0.03,,,onboard
-C_BULK_S3a,ESP32 module bulk (per WROOM-1 HW guide),0805,C45783,22uF 10V X5R,Generic,1,Basic,Y,0.04,,Within 5mm of module pin 2 (3V3),onboard
-C_BULK_S3b,ESP32 module bulk,0805,C15850,10uF 10V X5R,Generic,1,Basic,Y,0.03,,Within 5mm of module pin 2,onboard
-C_DEC_S3,ESP32 module 3V3 decoupling,0402,C1525,100nF 25V X7R,Generic,4,Basic,Y,0.01,,Per VDD pad pair on module,onboard
-C_DEC_MAX,MAX14830 decoupling,0402,C1525,100nF 25V X7R,Generic,4,Basic,Y,0.01,,Per VDD pad,onboard
-C_VEXT_MAX,MAX14830 VEXT decoupling,0402,C1525,100nF 25V X7R,Generic,1,Basic,Y,0.01,,Added 2026-04-25,onboard
-C_DEC_HVD,SN65HVD75 decoupling,0402,C1525,100nF 25V X7R,Generic,4,Basic,Y,0.01,,One per PHY,onboard
-C_DEC_USB,USBLC6 decoupling,0402,C1525,100nF 25V X7R,Generic,1,Basic,Y,0.01,,,onboard
-"C_DEB_EN,C_DEB_BOOT",EN + BOOT button debounce,0402,C1525,100nF 25V X7R,Generic,2,Basic,Y,0.01,,,onboard
-C_EN_RC_S3,ESP32 EN RC filter,0402,C1614,1nF 25V X7R,Generic,1,Basic,Y,0.01,,,onboard
-"C_XTAL1,C_XTAL2",MAX14830 crystal load caps,0402,QUOTE_TIME,30pF C0G (assumes 18pF C_L crystal),Generic,2,Basic,Y,0.01,,REVIEW_PASS2_SUBSTITUTE: JLC Basic/Extended 0402 C0G equivalent picked at PCBA quote time after final crystal C_L is locked. DELETE this row entirely if MAX14830 architecture is removed (per U12 manual-feeder decision gate),onboard
-PSU_48V,48V DC PSU 5A,Off-board,N/A,48V/5A medical-grade or industrial brick,Generic,1,Manual,Y,15.00,,Center-positive 5.5/2.5mm output,offboard
-CABLE_BARREL,Barrel-jack pigtail,Off-board,N/A,5.5/2.5mm female + bare leads,Generic,1,Manual,Y,1.50,,Optional if PSU has integrated cable,offboard
-"CABLE_RJ45_1,CABLE_RJ45_2,CABLE_RJ45_3,CABLE_RJ45_4",Shielded CAT5e/6 patch (S/FTP or F/UTP),Off-board,N/A,2-3m straight-through T568B,Generic,4,Manual,Y,3.00,,Master to first case per chain,offboard
-HW_M3_SCREW,M3x10 button-head screw,Off-board,N/A,M3x10,Generic,4,Manual,Y,0.05,,Master mounting,hardware
-HW_M3_STANDOFF,M3 brass standoff 5mm,Off-board,N/A,5mm M3-M3 brass,Generic,4,Manual,Y,0.20,,Master enclosure stand-off,hardware
-PCB_MASTER,Master PCB fab 130x100mm 4L 1.6mm ENIG,Fab,N/A,JLCPCB 4-layer ENIG 1oz outer / 0.5oz inner,JLCPCB,1,Manual,Y,12.00,,Per-board fab cost at qty 5,fab
-PCBA_MASTER,JLC PCBA assembly per board,Fab,N/A,JLC PCBA,JLCPCB,1,Manual,Y,40.00,,Estimated PCBA cost incl. component setup,fab
+ref,qty,value,footprint,mfg_part,notes
+U1,1,ESP32-S3-WROOM-1-N16R8,SMD module,Espressif ESP32-S3-WROOM-1-N16R8,16 MB flash 8 MB PSRAM
+U2,1,12V to 3.3V LDO,SOT-89-5,Holtek HT7833,500 mA fixed 3.3 V output
+U3,1,UART expander,TSSOP-16,NXP SC16IS740IPW,Single-channel UART-to-SPI bridge for Bus 3
+U4,1,RS-485 transceiver Bus 0,SO-8,TI SN65HVD75DR,3.3 V half-duplex
+U5,1,RS-485 transceiver Bus 1,SO-8,TI SN65HVD75DR,
+U6,1,RS-485 transceiver Bus 2,SO-8,TI SN65HVD75DR,
+U7,1,RS-485 transceiver Bus 3,SO-8,TI SN65HVD75DR,Driven by SC16IS740
+U8,1,USB-C ESD,SOT-23-6,STMicro USBLC6-2SC6,
+Y1,1,Crystal 14.7456 MHz,SMD 3.2x2.5,generic,For SC16IS740
+Q1,1,P-FET reverse-block,SOT-23,Alpha & Omega AO3401,
+D1,1,LED green,0805,generic,PWR indicator
+D2,1,LED blue,0805,generic,HEARTBEAT
+D3,1,LED red,0805,generic,FAULT
+D4,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,
+D5,1,RS-485 ESD Bus 0,SOT-23,Semtech SM712-02HTG,
+D6,1,RS-485 ESD Bus 1,SOT-23,Semtech SM712-02HTG,
+D7,1,RS-485 ESD Bus 2,SOT-23,Semtech SM712-02HTG,
+D8,1,RS-485 ESD Bus 3,SOT-23,Semtech SM712-02HTG,
+F1,1,Fuse 1 A slow-blow,5x20mm or PCB holder,generic,Master-only load
+J1,1,Barrel jack,DC-005 2.1 mm,generic,Centre-positive 12 V input
+J2,1,USB-C receptacle,USB-C 16-pin SMD,generic with shielded shell,Programming + debug
+J3,1,Header 1x3 shrouded,2.54 mm indexed,generic,Bus 0 row port: A/B/GND
+J4,1,Header 1x3 shrouded,2.54 mm indexed,generic,Bus 1 row port: A/B/GND
+J5,1,Header 1x3 shrouded,2.54 mm indexed,generic,Bus 2 row port: A/B/GND
+J6,1,Header 1x3 shrouded,2.54 mm indexed,generic,Bus 3 row port: A/B/GND
+J7,1,Header 2x4 debug,2.54 mm,generic,UART/SPI debug breakout
+SW1,1,Tact switch BOOT,SMD 6x6,generic,IO0
+SW2,1,Tact switch RST,SMD 6x6,generic,EN
+C_bulk,1,100 uF / 25 V,Radial THT,generic,Input bulk
+C_in,1,22 uF / 25 V,0805 X7R,generic,LDO input
+C_out,2,10 uF / 10 V,0805 X7R,generic,LDO output
+C_decap_esp,8,100 nF,0603 X7R,generic,ESP32-S3 decoupling
+C_decap_uart,2,100 nF,0603 X7R,generic,SC16IS740 decoupling
+C_xtal,2,18 pF,0603 NP0,generic,Crystal load caps for SC16IS740
+C_usb,2,1 uF / 10 V,0603 X7R,generic,USB rail decoupling
+R_term,4,120 ohm,0805 1%,generic,RS-485 termination per bus
+R_bias_a,4,1 kohm,0805 1%,generic,A bias to 3V3 per bus
+R_bias_b,4,1 kohm,0805 1%,generic,B bias to GND per bus
+R_led,3,1 kohm,0603 1%,generic,LED current limit
+R_cc,2,5.1 kohm,0603 1%,generic,USB-C CC pull-downs
+R_strap,4,10 kohm,0603 1%,generic,ESP32-S3 strap pins + EN pull-up
+R_uart_strap,4,10 kohm,0603 1%,generic,SC16IS740 address/IRQ pulls
