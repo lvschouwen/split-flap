@@ -2,7 +2,7 @@
 
 > **Scope:** board dimensions, layer count, stack-up, placement zones, edge-connector layout, antenna keep-out, mounting holes, copper-pour strategy, differential-pair rules, silkscreen requirements. This is a **placement brief** for a layout engineer (JLCPCB EasyEDA service or a freelancer), not a finished layout.
 >
-> **Binding references (only):** `MASTER_DECISIONS.md`, `POWER_DESIGN.md`, `DIGITAL_DESIGN.md`. Last edited 2026-04-24.
+> **Binding references (only):** `MASTER_DECISIONS.md`, `POWER_DESIGN.md`, `DIGITAL_DESIGN.md`. Last edited 2026-04-25 (post-review revisions; see issue #76).
 
 ---
 
@@ -62,6 +62,8 @@
 
 **Why 0.5 oz inner / 1 oz outer:** JLC's standard 4-layer 1.6 mm stack-up; cheapest option. 1 oz outer is required for the V48 current path on TOP (up to 6.8 A) and the buck switch node.
 
+**V48 distribution rule (locked 2026-04-25):** V48 fan-out lives **on L1 (top, 1 oz) only**. L3 inner pour is signal/GND only — no V48 island. Reason: 0.5 oz inner copper carrying 1.7 A per branch under fault leaves only ~10 °C rise margin, which is borderline once layout-dependent voltage drops accumulate. Keeping V48 on L1 sidesteps the inner-layer thermal question entirely.
+
 **Target impedances** (controlled by the layout engineer against JLC's stack-up calculator, tuned at tape-out):
 - **100 Ω differential** (single-ended 50 Ω) for USB D± on L1 over L2 GND: approx. 0.22 mm trace / 0.15 mm gap, to be confirmed against JLC's impedance calculator for the exact dielectric chosen.
 - **120 Ω differential** for RS-485 A/B on L1 over L2 GND: approx. 0.2 mm trace / 0.3 mm gap, tight pair, to be confirmed.
@@ -118,13 +120,15 @@ Surface finish: **ENIG** (gold). Required because DSBGA-10 (TPS259827) soldering
 
 ## 4. Placement zones
 
-### Zone A — Power input (top-left, ~40 × 35 mm = 1400 mm²)
+### Zone A — Power input (top-left, ~30 × 30 mm = 900 mm²)
 
-**Contents:** J1 barrel jack, D1 SMDJ58CA TVS, D_SEC SMBJ60A secondary clamp, U1 LM74700-Q1, Q1 SQJ148EP, LM74700 passives (C_CP, R_GATE_BLEED), 47 Ω secondary series R.
+**Contents (revised 2026-04-25):** J1 barrel jack, D1 SMDJ58CA TVS, U1 LM74700-Q1 controller, Q1 SQJ148EP N-MOSFET, LM74700 passives (C_CP charge-pump cap, R_GATE_LM 1 kΩ series, R_GATE_BLEED 10 kΩ), **D_RAIL SMAJ51A on V48_RAIL post-Q1 source**. The pre-2026-04-25 RTH1 inrush NTC and D_SEC SMAJ51A secondary clamp on IC V_IN are deleted (#76 audit).
 
-**Placement constraint:** J1 on the left edge. SMDJ58CA **within 5 mm of J1's + pin** (POWER_DESIGN §3a); its GND return is a short dedicated trace straight to the jack shell GND pad — the TVS surge return **must not** flow through the main board GND pour (it will dump 51 A through the reference plane and crash every IC for the surge duration). Q1's drain-source loop area minimized (POWER_DESIGN §3a layout hint).
+**Zone shrunk** from 40 × 35 mm to 30 × 30 mm — 500 mm² freed up by the surge-chain simplification.
 
-**Critical adjacency:** LM74700 within 10 mm of Q1 (gate drive integrity). Secondary clamp between TVS node and LMR36015/LM74700 VIN, in line, not on a stub.
+**Placement constraint:** J1 on the left edge. SMDJ58CA **within 5 mm of J1's + pin** (POWER_DESIGN §3a); its GND return is a short dedicated trace straight to the jack shell GND pad — the TVS surge return **must not** flow through the main board GND pour (it will dump 51 A through the reference plane and crash every IC for the surge duration). Q1's drain-source loop area minimised (POWER_DESIGN §3a layout hint).
+
+**Critical adjacency:** LM74700 within 10 mm of Q1 (gate drive integrity). **D_RAIL within 10 mm of Q1's source pad** — clamps surge tail flowing forward through Q1 body diode.
 
 ### Zone B — Buck converter (top-center, ~25 × 30 mm = 750 mm²)
 
@@ -212,12 +216,12 @@ ESP32-S3-WROOM-1's onboard PCB antenna is on the **short end** of the module. Pe
 - **Count: 4** — one per corner.
 - **Diameter: 3.2 mm plated through-hole (M3 clearance).**
 - **Annular pad: 6.5 mm OD, unconnected** (isolated island of copper on TOP and BOTTOM that does not connect to the GND pour). Avoids ground-loop issues when the board is bolted to a metal chassis. If chassis-bonding is desired, populate a 0 Ω from the pad to GND on a single corner (the "star-ground" corner) at assembly — leave a DNP pad pattern on all 4.
-- **Position (measured from bottom-left corner of the 130 × 100 board):**
-  - MH1: (5, 95)  — top-left
-  - MH2: (125, 95) — top-right
-  - MH3: (5, 5)   — bottom-left
-  - MH4: (125, 5) — bottom-right
-- **Exclusion ring: 2 mm** around each hole (no traces, no components). The plated pad itself is 6.5 mm, so the exclusion zone is effectively 8.5 mm diameter.
+- **Position (revised 2026-04-25, measured from bottom-left corner of the 130 × 100 board):**
+  - MH1: (6, 94)  — top-left
+  - MH2: (124, 94) — top-right
+  - MH3: (6, 22)   — bottom-left (moved inboard from y=5 to clear the 21 mm RJ45 keep-out)
+  - MH4: (124, 22) — bottom-right (same)
+- **Exclusion ring: 2 mm** around each hole (no traces, no components). The plated pad itself is 6.5 mm, so the exclusion zone is effectively 8.5 mm diameter. Corner positions give ≥2 mm board-edge clearance on the exclusion rings (was 0.75 mm pre-2026-04-25).
 - **No 5th center hole** — the 130 × 100 board is stiff enough at 1.6 mm FR-4 without mid-span support, and there's no heavy THT component mid-board to torque a corner.
 
 ---
@@ -234,8 +238,8 @@ ESP32-S3-WROOM-1's onboard PCB antenna is on the **short end** of the module. Pe
 - **No splits** under the diff pair routes — ever.
 - **Single conditional split**: TVS surge-return island (a cutout isolating the SMDJ58CA anode pad's return path and tying it directly to the barrel jack's GND shell pin via a dedicated ≥3 mm-wide trace on L1). Only implement this if the layout engineer's surge-path analysis shows the main plane is otherwise impacted. Default: no split; just a direct L1 trace for TVS return, with L2 untouched.
 
-### L3 (PWR — mixed pour)
-- **V48 poured slab** under zone A / B and extending east under the per-bus column V48 distribution path. Width ≥ 10 mm where all 4 bus currents sum (max 6.8 A fault) = plenty.
+### L3 (PWR — signal/GND only, no V48 pour) — revised 2026-04-25
+- **No V48 island on L3.** V48 distribution is L1 only (1 oz top) per stack-up note in §2.
 - **3V3 poured slab** under zones D (MCU) and E (MAX14830) and the INA237 row. Connected to L1 3V3 islands with ≥ 1 via / cm².
 - **Remainder: GND pour**, stitched to L2 GND via ≥ 1 via / cm² across the whole layer. This gives a second effective GND reference and reduces impedance of the return path for high-frequency signals.
 
@@ -296,16 +300,18 @@ ESP32-S3-WROOM-1's onboard PCB antenna is on the **short end** of the module. Pe
 **Must-have labels (top side):**
 
 - **RJ45 ports:** `BUS 1`, `BUS 2`, `BUS 3`, `BUS 4` above each jack.
-- **RJ45 pinout note:** `48V: pin 4/5 (blue) | RS485 A/B: pin 3/6 (green) | GND: pin 7/8 (brown) | STRAIGHT-THROUGH ONLY` — compact text on the silkscreen inside the per-bus column or as a legend block near the jacks. Rationale: MASTER_DECISIONS lock-in is Mode B and straight-through only; a crossover cable will short V48 to GND.
+- **RJ45 pin-1 indicator (M6 closed 2026-04-25):** silkscreen `1` next to pin-1 of each RJ45, on the same side of all 4 jacks (e.g. all pin-1 on the left when viewed from the cable-entry face).
+- **RJ45 pinout note:** `48V: pin 4/5 (blue) | RS485 A/B: pin 3/6 (green) | GND: pin 7/8 (brown) | T568B STRAIGHT-THROUGH ONLY` — compact text on the silkscreen inside the per-bus column or as a legend block near the jacks. Rationale: MASTER_DECISIONS lock-in is Mode B + T568B (so RS-485 A/B sit on a true twisted pair). A T568A or crossover cable will mis-pair the differential.
 - **Barrel jack:** `48V DC` and a `⊕—●—⊖` polarity symbol (center-positive). Also: `60 V MAX` below for over-voltage warning.
 - **USB-C:** `USB-C` + small `Service / flash` subtitle.
 - **SWD header:** `SWD` + pin-1 triangle marker. Pinout reference card printed near (too dense for the header footprint itself, include on a nearby silkscreen patch).
 - **Buttons:** `BOOT` and `RST` labels next to each button.
 - **LEDs:** individual labels `48V`, `3V3`, `FAULT`, `HB` (HEARTBEAT), `BUS1`..`BUS4` (activity).
 - **Fiducials:** 3× 1 mm copper fiducials (diagonal corners + asymmetric third) for JLC PCBA pick-and-place.
-- **Board title block:** top-right corner — `SPLIT-FLAP MASTER v2 REV A`, git SHA placeholder `{{GIT_SHA}}`, date placeholder `{{DATE}}`.
+- **Board title block:** top-right corner — `SPLIT-FLAP MASTER v2 REV A`, git SHA placeholder `{{GIT_SHA}}`, date placeholder `{{DATE}}`. **Substitute placeholders at gerber-export time** (CI / KiBot pipeline does this automatically; manual export must do it manually). Documented in fab-handoff checklist.
 - **Orientation marker:** `↑ ANTENNA` arrow at the top edge above the ESP32-S3 keep-out, plus `DO NOT ENCLOSE IN METAL WITHIN 15mm` micro-text.
 - **Mounting-hole markings:** `M3` next to each corner hole.
+- **48 V SELV note:** small text near the barrel jack: `48V SELV — touch-safe; no chassis bond required`.
 
 **Bottom-side silkscreen:** minimal — just a git-SHA re-print and `MADE WITH JLCPCB` credit (optional).
 
@@ -313,24 +319,19 @@ ESP32-S3-WROOM-1's onboard PCB antenna is on the **short end** of the module. Pe
 
 ## 10. Open issues
 
-- **M3 — Enclosure form factor.** MASTER_DECISIONS.md does not commit to desktop / DIN-rail / open-frame. **Recommendation: desktop / open-frame with a vented plastic cover.** Rationale:
-  - RS-485 + 48 V + 8 LEDs + USB-C service port argue for a stationary appliance, not a hand-held device.
-  - **Metal enclosure is problematic** for the on-module PCB antenna (§5 keep-out + 15 mm metal clearance). A plastic cover sidesteps this entirely.
-  - DIN-rail mounting adds ~€15 BOM (DIN clips) and imposes a narrower form factor (max ~60 mm wide) which would not fit 4 RJ45 + per-bus clusters cleanly. Rejected unless user specifies otherwise.
-  - The 4-corner M3 mounting pattern (§6) is compatible with either desktop standoffs or DIN-rail adapter plates, so the decision can be deferred to the enclosure vendor.
-  - **User confirmation required.**
+- ~~**M3**~~ **Closed 2026-04-25.** Enclosure: designed-to-fit project-box class (Hammond 1455N family or similar). Plastic cover, no chassis bond required (48 V SELV). 4-corner M3 mounting pattern.
 
 - **M4 — Board thickness.** Proposed 1.6 mm (JLC standard, cheapest). 2.0 mm would add stiffness under the 4× RJ45 insertion forces but costs more. Acceptable at 1.6 mm given the 4-corner mounting and the RJ45 jacks' THT leads anchored through the board.
 
-- **M5 — RJ45 shield tie topology.** DIGITAL_DESIGN §3f says "bonded solid to GND at master." Confirm: direct connection, no ferrite, no hybrid. If cable shielding is not guaranteed on installed cables, a hybrid (100 nF ∥ 1 MΩ) DNP pad pattern can be left for later assembly tuning.
+- ~~**M5**~~ **Closed 2026-04-25.** RJ45 shield: solid bond to GND at master only. Backplane and unit shields float. Single bond point eliminates ground-loop hunting across 32 parallel RC paths.
 
-- **M6 — Connector pin-1 orientation (RJ45).** All 4 jacks should have pin-1 on the same side (e.g. all pin-1 on the left when viewed from the cable-entry face). Silkscreen should show a small `1` next to pin-1 of each jack.
+- ~~**M6**~~ **Closed 2026-04-25.** Pin-1 indicator promoted to silkscreen must-have (§9). All 4 jacks have pin-1 on the same side.
 
-- **M7 — Test points.** None explicitly called out in the three binding docs. Recommend exposing: each PGOOD (×4), each eFuse VOUT, 3V3, V48, GND (multiple), PROT_FAULT_OR, TELEM_ALERT_OR, SPI CS/MOSI/MISO/SCK. Layout engineer to sprinkle 1 mm test pads where space allows. Non-blocking.
+- **M7 — Test points.** Layout engineer to sprinkle 1 mm test pads for: each PGOOD (×4), each eFuse VOUT, 3V3, V48, GND (multiple), PROT_FAULT_OR, TELEM_ALERT_OR, SPI CS/MOSI/MISO/SCK. Non-blocking.
 
 - **M8 — Fiducial count and location.** Three fiducials (diagonal corners + one asymmetric) are the JLC PCBA minimum. Layout engineer to place.
 
-- **M9 — Secondary clamp SMBJ60A placement relative to LM74700 VIN.** POWER_DESIGN P1 requires it between TVS and LM74700/LMR36015 VIN. Mechanical zone A reserved space for it; layout engineer must verify the series-R placement does not create a long stub on the surge path.
+- ~~**M9**~~ **Closed 2026-04-25.** Surge-clamp chain simplified: only `D_RAIL` (SMAJ51A) on V48_RAIL within 10 mm of Q1's source pad. R_SERIES + D_SEC chain is deleted (#76 audit).
 
 - **M10 — Overhanging the ESP32-S3 antenna.** Espressif prefers the module overhanging the PCB edge for best RF. Here we do **not** overhang (fragile, ships break during transport). User may override if an injection-moulded enclosure with antenna pocket is used.
 
@@ -338,4 +339,4 @@ ESP32-S3-WROOM-1's onboard PCB antenna is on the **short end** of the module. Pe
 
 ## 11. Fab-handoff summary (for paste-into-email)
 
-> Master PCB v2 for a split-flap display controller. **130 × 100 mm, 4-layer, 1.6 mm FR-4, ENIG finish, 1 oz outer / 0.5 oz inner.** Stack-up: TOP signal / GND solid / PWR mixed (V48 + 3V3 islands, rest GND) / BOTTOM signal-plus-GND-pour. Four RJ45 shielded THT jacks on one long edge form the bus-output face; barrel DC jack on one short edge, USB-C on the opposite short edge, SWD + buttons + LEDs mid-board. ESP32-S3-WROOM-1 module is placed with its antenna end at the top edge, requiring an 18 × 15 mm copper-free, component-free, via-free keep-out zone extending to the board edge on all 4 layers. Four M3 mounting holes in the corners (3.2 mm plated, isolated pads). V48 nets require ≥ 0.2 mm clearance to signal (≥ 0.4 mm upstream of the secondary clamp); RS-485 A/B pairs routed as 120 Ω differential over solid L2 GND, USB D± as 90 Ω differential. Per-bus clusters (shunt → eFuse → INA237 → SN65HVD75 → CM choke → TVS → RJ45) are arranged as four parallel columns aligned to the RJ45 footprints. Thermal vias specified under LMR36015, SQJ148EP, and each TPS259827 eFuse. Silkscreen must call out bus numbering, RJ45 pinout (Mode B: 48 V on pin 4/5, RS-485 A/B on pin 3/6, GND on pin 7/8), "STRAIGHT-THROUGH ONLY" cable warning, LED labels, and antenna keep-out warning. Electrical design is frozen in `POWER_DESIGN.md` and `DIGITAL_DESIGN.md`; do not substitute parts or change topology. Open issues M3, M5, M6, M10 pending user confirmation before tape-out.
+> Master PCB v2 for a split-flap display controller. **130 × 100 mm, 4-layer, 1.6 mm FR-4, ENIG finish, 1 oz outer / 0.5 oz inner.** Stack-up: TOP signal (V48 distribution lives on L1 only — 1 oz copper) / GND solid / PWR (3V3 island + GND, no V48) / BOTTOM signal-plus-GND-pour. Four RJ45 shielded THT jacks on one long edge form the bus-output face; barrel DC jack on one short edge, USB-C on the opposite short edge, SWD + buttons + LEDs mid-board. ESP32-S3-WROOM-1 module is placed with its antenna end at the top edge, requiring an 18 × 15 mm copper-free, component-free, via-free keep-out zone extending to the board edge on all 4 layers. Four M3 mounting holes at corners (6,94)/(124,94)/(6,22)/(124,22), 3.2 mm plated, isolated pads. V48 nets require ≥ 0.2 mm clearance to signal. RS-485 A/B pairs routed as 120 Ω differential over solid L2 GND, USB D± as 90 Ω differential. Per-bus clusters (shunt → eFuse → INA237 → SN65HVD75 → CM choke → TVS → RJ45) are arranged as four parallel columns aligned to the RJ45 footprints. Surge protection: SMDJ58CA at the barrel jack, ideal-diode LM74700-Q1 + Q1 SQJ148EP, single SMAJ51A on V48_RAIL post-Q1 within 10 mm of Q1 source. Thermal vias specified under LMR36015, SQJ148EP, and each TPS259827 eFuse. Silkscreen must call out bus numbering, RJ45 pinout (T568B Mode B: 48 V on pin 4/5, RS-485 A/B on pin 3/6, GND on pin 7/8), pin-1 indicator on every RJ45, "T568B STRAIGHT-THROUGH ONLY" cable warning, LED labels, antenna keep-out warning, 48V SELV note. Electrical design is frozen in `POWER_DESIGN.md` and `DIGITAL_DESIGN.md`; do not substitute parts or change topology. All previously-open issues except M4, M7, M8, M10 are now closed (2026-04-25).

@@ -4,7 +4,7 @@
 >
 > **Boundary:** Power rails, eFuses, TVS, ideal-diode, hardwired LEDs (PWR_48V / PWR_3V3 / FAULT) are owned by the power subsystem. This doc only surfaces the signals that cross the boundary.
 >
-> **Binding reference:** `MASTER_DECISIONS.md` only. Last edited 2026-04-24.
+> **Binding reference:** `MASTER_DECISIONS.md` only. Last edited 2026-04-25 (post-review revisions; see issue #76).
 
 ---
 
@@ -65,10 +65,10 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 | 1   | (spare)           | -   | 10k PU, test pad | ADC-capable                                 | Reserve. |
 | 2   | (spare)           | -   | 10k PU, test pad | -                                           | Reserve. |
 | 3   | NC (no route)     | X   | -                | **Strap (JTAG sel). No copper escape.**     | Policy: no-route. |
-| 4   | EFUSE_EN1         | O   | none (power side has 10k PD) | default Hi-Z at boot → eFuse OFF | Bus 1 enable, firmware-sequenced. |
-| 5   | EFUSE_EN2         | O   | none (power side has 10k PD) | "                                          | Bus 2 enable. |
-| 6   | EFUSE_EN3         | O   | none (power side has 10k PD) | "                                          | Bus 3 enable. |
-| 7   | EFUSE_EN4         | O   | none (power side has 10k PD) | "                                          | Bus 4 enable. |
+| 4   | EFUSE_EN1         | O   | 10k PD + 100nF RC + POR-Schottky to /RESET (power side) | Held LOW until 3V3 is healthy AND MCU drives high. eFuse cannot turn on at brown-in. | Bus 1 enable, firmware-sequenced. |
+| 5   | EFUSE_EN2         | O   | 10k PD + 100nF RC + POR-Schottky (power side) | "                                          | Bus 2 enable. |
+| 6   | EFUSE_EN3         | O   | 10k PD + 100nF RC + POR-Schottky (power side) | "                                          | Bus 3 enable. |
+| 7   | EFUSE_EN4         | O   | 10k PD + 100nF RC + POR-Schottky (power side) | "                                          | Bus 4 enable. |
 | 8   | I2C_SDA           | IO  | 4k7 ext PU to 3V3 | -                                           | INA237 bank shared bus. |
 | 9   | I2C_SCL           | IO  | 4k7 ext PU to 3V3 | -                                           | INA237 bank shared bus. |
 | 10  | SPI_CS_MAX        | O   | 10k ext PU to 3V3 | Idle-high at boot so MAX14830 stays deselected. | CS to MAX14830. |
@@ -106,10 +106,11 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 
 ### 3a. Module support — decoupling, EN, BOOT
 
-- **Decoupling**: 100 nF 0402 X7R on every VDD pad pair + 1× 10 µF 0805 X5R + 1× 22 µF 0805 X5R bulk adjacent to module 3V3 entry.
+- **Decoupling (revised 2026-04-25 per WROOM-1 hardware design guide)**: bulk = **22 µF X5R 0805 + 10 µF X5R 0805 + 100 nF X7R 0402**, all three placed **within 5 mm of the module's pin 2 (3V3 entry)**. Additional 100 nF X7R 0402 on every other module VDD pad pair. The pre-2026-04-25 spec used a single 22 µF MLCC which has X5R high-Q resonance issues at the buck's 2.1 MHz harmonics — replaced with the WROOM-1 reference cap stack.
 - **EN pin**: 10 kΩ pull-up to 3V3 + 1 nF cap to GND. RESET button SW_RST shorts EN to GND; 100 nF across for contact debounce.
 - **IO0 (BOOT)**: 10 kΩ pull-up to 3V3 (strap = 1 = SPI boot). BOOT button to GND. 100 nF debounce across the switch.
-- **IO3 / IO45 / IO46**: pad-only; no track, no via, no test pad beyond module footprint.
+- **IO3 / IO45 / IO46 strap pads**: module-pad only; no copper escape. Note: WROOM-1 module-internal pulls already set the strap state — these pads exist but are not floating MCU pins. No external connection needed; clarification from #76 audit.
+- **IO19 / IO20 (USB-CDC) layout note**: native USB pins also act as boot-mode straps for USB_JTAG vs UART download. Layout must verify boot mode is unaffected by USB host attach during reset (per ESP32-S3 datasheet §2.4).
 - **Antenna keep-out**: copper, ground pour, and tall components must respect Espressif keep-out. Mechanical agent owns dimensioning.
 
 ### 3b. USB-C
@@ -145,24 +146,27 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 ### 3e. MAX14830 interface
 
 - IC: MAX14830ETJ+ (TQFN-32, C2683133). 3V3 operation.
-- Crystal: 3.6864 MHz fundamental (ABLS-3.6864MHZ-B4-T, C70581), 18 pF load caps (2× 18 pF C0G 0402) XTAL1/XTAL2 to GND.
+- Crystal: 3.6864 MHz fundamental (ABLS-3.6864MHZ-B4-T, C70581). **Load caps must match the crystal's specified C_L** — for an 18 pF C_L crystal: C_load_cap = 2 × (C_L − C_stray) = 2 × (18 − 3) = **30 pF C0G 0402** on each of XTAL1, XTAL2 to GND. Verify crystal C_L spec at BOM-finalize before fixing cap value.
 - SPI wiring: MOSI↔DIN, MISO↔DOUT, SCK↔SCLK, CS↔/CS (IO10). IRQ↔IO14 (open-drain, 10 kΩ PU to 3V3 on digital side).
+- **VEXT pin (I/O level reference) tied to 3V3** with its own 100 nF X7R decoupling cap. Locked 2026-04-25.
 - Decoupling: 100 nF per VDD + 10 µF bulk.
 - /RESET: to 3V3 through 10 kΩ. DNP pad to GND for forced reset.
-- GPIO 0..3 (chip GPIOs): configured as outputs driving BUS_ACT_1..4 LEDs (see §3h). See Open Issue O1.
-- Address straps: A0/A1 tied to GND (only one MAX14830 on SPI).
+- GPIO 0..3 (chip GPIOs): configured as outputs driving BUS_ACT_1..4 LEDs (see §3h).
+- **Mode-select pins (revised 2026-04-25)**: in SPI mode, the MAX14830's mode-select / chip-select pins are determined by datasheet — A0/A1 are NOT address straps in SPI mode (that was the I²C-mode behaviour). Confirm exact pin handling per MAX14830 datasheet §"SPI mode" before tape-out. The pre-2026-04-25 wording "A0/A1 tied to GND" was a hold-over from I²C-mode docs and needs schematic-capture verification.
 
 ### 3f. SN65HVD75D per-bus RS-485 PHY (×4 identical)
 
-- IC: SN65HVD75DR (SOIC-8, C64829).
+- IC: SN65HVD75DR (SOIC-8, C64829). Baud locked to **500 kbaud 8N1**.
 - D (TX in) ← MAX14830 TXn; R (RX out) → MAX14830 RXn.
 - DE + /RE tied together ← MAX14830 per-channel DE output (hardware auto-direction).
 - A / B → common-mode choke (Würth 744232601, C191126, 600 Ω @ 100 MHz) → RJ45.
 - Transient: SM712-02HTG (C169123) across A–GND / B–GND.
 - Termination: 120 Ω 1 % 0805 A↔B, populated (master is chain end).
-- Fail-safe bias: 390 Ω 1 % A→3V3, 390 Ω 1 % B→GND. Idle differential ≈ 440 mV.
-- RJ45 shield: bonded solid to GND at master.
-- RJ45: shielded THT, no magnetics (e.g. Amphenol RJHSE-5380 class).
+- **Fail-safe bias (revised 2026-04-25): 1 kΩ 1 % A→3V3, 1 kΩ 1 % B→GND** (was 390 Ω each leg). Idle differential ≈ 280 mV — comfortably above SN65HVD75 200 mV failsafe threshold; idle current per bus 1.6 mA (was 4.2 mA at 390 Ω → 17 mA across 4 buses).
+- RJ45 shield: bonded **solid to GND at master only**. Unit/backplane RJ45 shields float (locked 2026-04-25 to avoid ground-loop hunting across 32 parallel RC paths).
+- RJ45: shielded THT, no magnetics. Cabling spec: **shielded CAT5e or CAT6 (S/FTP or F/UTP), straight-through, T568B**. Max chain length 32 m total / 3 m per hop / ≤7 V worst-case IR drop.
+- **Wire format**: COBS(payload || CRC16-BE) 0x00 framing per `firmware/lib/common/`. Includes broadcast and batched-update message types (`BROADCAST_SET_POSITION`, `BATCH_UPDATE`) for sync animation across all units, plus a `LOOPBACK` message for end-to-end chain integrity check at boot.
+- **Pin-1 indicator on RJ45**: silkscreen `1` next to pin-1 of every RJ45. Required (M6 closed 2026-04-25).
 
 ### 3g. INA237 telemetry bank + TELEM_ALERT_OR
 
@@ -189,6 +193,16 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 - 3V3 → LED → 1 kΩ → IO21 (sink).
 - No external pull. Firmware owns the pin from reset. Blink pattern per MASTER_DECISIONS.
 
+### 3j. EFUSE_EN POR gating (cross-boundary, owned power-side)
+
+> Mandatory — without this, eFuses can briefly enable during 48 V brown-in before the MCU is alive to sequence them.
+
+- **U_POR**: TPS3839L33DBVR, monitors 3V3, threshold 3.08 V (typ), open-drain /RESET output, asserted LOW when 3V3 is below threshold.
+- **/RESET pull-up**: 10 kΩ to 3V3.
+- **Per-EN gating (×4)**: BAT54 Schottky diode anode-at-EFUSE_EN_n / cathode-at-/RESET. When /RESET is asserted (3V3 unhealthy), each diode forward-biases and pulls its EN line to ≈ 0.3 V — well below the TPS259827 EN threshold (1.35 V typ). When /RESET is released (3V3 healthy), diodes reverse-bias and EN follows the MCU GPIO normally.
+- **Per-EN RC filter**: 100 nF MLCC from each EN to GND, forming τ ≈ 1 ms with the 10 kΩ pull-down. Rejects brown-in supply noise and any sub-millisecond GPIO glitch during boot. Does not slow legitimate enable transitions noticeably (firmware enables buses in sequence with > 10 ms gaps).
+- **Layout**: place U_POR within 5 mm of the LMR36015 V_OUT pin so it senses the same node the digital logic actually runs on. BAT54 diodes near the eFuse EN pins, not near the supervisor.
+
 ---
 
 ## 4. Signal handoff list (power ⇄ digital boundary)
@@ -207,12 +221,12 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 
 ## 5. Open issues
 
-- **O1 — MAX14830 TX-activity LED mirror mode.** Hardware pulse-stretch mode behaviour must be re-checked at datasheet-read time. Firmware mirror is the fallback (ISR sets GPIO on TX non-empty, one-shot timer clears after 20 ms).
-- **O2 — RJ45 pinout for A/B + 48V/GND.** MASTER_DECISIONS is silent on pair assignment. Doc assumes A on pin 4, B on pin 5 (blue pair), 48V/GND on other pairs (owned by power subsystem). **User confirmation required.**
-- **O3 — JTAG nRESET populate vs DNP.** Default: 0 Ω, DNP. User to confirm.
-- **O4 — BUS_ACT LED drive polarity** (sink vs source). Default: sink (active-low). Confirm at capture.
-- **O5 — USB-C shield bonding**. Default: 0 Ω direct to GND. Hybrid DNP option available. Confirm.
-- **O6 — Spare GPIO policy**. 7 spares reserved with 10 kΩ PU + test pads, no pre-assigned role.
+- **O1 — MAX14830 TX-activity LED mirror mode.** Hardware pulse-stretch mode behaviour must be re-checked at datasheet-read time. Firmware mirror is the fallback (ISR sets GPIO on TX non-empty, one-shot timer clears after 20 ms). Non-blocking.
+- ~~**O2**~~ **Closed 2026-04-25.** RJ45 pinout locked in `MASTER_DECISIONS.md`: pin 1/2 = NC reserved, pin 3/6 = RS-485 A/B (T568B green pair, true twisted pair), pin 4/5 = +48V (paralleled), pin 7/8 = GND (paralleled). Cable spec: T568B straight-through only.
+- ~~**O3**~~ **Closed 2026-04-25.** JTAG nRESET stays 0 Ω DNP — populated only when a debugger's nSRST is explicitly needed.
+- ~~**O4**~~ **Closed 2026-04-25.** BUS_ACT LED drive: active-low sink (3V3 → LED → 1 kΩ → MAX_GPIOn).
+- ~~**O5**~~ **Closed 2026-04-25.** USB-C shield bond: 0 Ω direct to GND. Hybrid pad pattern remains DNP for future tuning.
+- **O6 — Spare GPIO policy**. 7 spares reserved with 10 kΩ PU + test pads, no pre-assigned role. Persist.
 
 ---
 
@@ -235,8 +249,8 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 | L_CM1..4 | CM choke 744232601 | C191126 | SMD | 4 | RS-485 pair |
 | TVS_B1..4 | SM712-02HTG | C169123 | SOT-23 | 4 | RS-485 transient |
 | R_TERM1..4 | 120 Ω 1 % 0805 | C22787 | 0805 | 4 | Termination |
-| R_BIAS_H1..4 | 390 Ω 1 % 0603 | C25104 | 0603 | 4 | Fail-safe bias high |
-| R_BIAS_L1..4 | 390 Ω 1 % 0603 | C25104 | 0603 | 4 | Fail-safe bias low |
+| R_BIAS_H1..4 | 1 kΩ 1 % 0603 | C21190 | 0603 | 4 | Fail-safe bias high (revised 2026-04-25 from 390 Ω) |
+| R_BIAS_L1..4 | 1 kΩ 1 % 0603 | C21190 | 0603 | 4 | Fail-safe bias low (revised 2026-04-25 from 390 Ω) |
 | R_I2C_SDA, R_I2C_SCL | 4.7 kΩ 0402 | C25900 | 0402 | 2 | I²C pull-ups |
 | R_ALERT_OR, R_FAULT_OR | 10 kΩ 0402 | C25744 | 0402 | 2 | Wired-OR pull-ups (digital-owned) |
 | R_MAX_IRQ, R_MAX_RST | 10 kΩ 0402 | C25744 | 0402 | 2 | MAX14830 IRQ PU, /RESET PU |
@@ -250,7 +264,8 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 | C_BULK_S3 | 22 µF 10 V X5R 0805 | C45783 | 0805 | 1 | ESP32 bulk |
 | C_BULK_S3b | 10 µF 10 V X5R 0805 | C15850 | 0805 | 1 | ESP32 bulk |
 | C_DEC_* | 100 nF 25 V X7R 0402 | C1525 | 0402 | ~20 | Per-VDD decoupling across all ICs |
-| C_XTAL1..2 | 18 pF C0G 0402 | C1653 | 0402 | 2 | MAX14830 XTAL load |
+| C_XTAL1..2 | 30 pF C0G 0402 (assumes 18 pF C_L crystal) | check | 0402 | 2 | MAX14830 XTAL load — verify against crystal C_L spec |
+| C_VEXT_MAX | 100 nF 25V X7R 0402 | C1525 | 0402 | 1 | MAX14830 VEXT decoupling (added 2026-04-25) |
 | C_DEB_EN, C_DEB_BOOT | 100 nF 0402 | C1525 | 0402 | 2 | EN + BOOT debounce |
 | C_EN_RC | 1 nF 0402 | C1614 | 0402 | 1 | EN RC filter |
 
