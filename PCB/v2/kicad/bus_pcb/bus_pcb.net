@@ -1,0 +1,46 @@
+(export (version "E")
+  (design
+    (source "bus_pcb.kicad_sch")
+    (date "2026-04-25")
+    (tool "splitflap_v2_handoff")
+    (sheet (number "1") (name "/") (tstamps "/")
+      (title_block
+        (title "Bus PCB - splitflap v2")
+        (company "splitflap-v2")
+        (rev "1")
+        (date "2026-04-25"))))
+
+  (components
+    (comp (ref "J_in")
+      (value "Conn_01x04_shrouded")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
+      (libsource (lib "Connector_Generic") (part "Conn_01x04") (description "4-pin shrouded box header, master/chain-in side"))
+      (property (name "LCSC") (value "C124378"))
+      (sheetpath (names "/") (tstamps "/"))
+      (tstamps "44444444-0000-0000-0000-000000000001"))
+
+    (comp (ref "J_out")
+      (value "Conn_01x04_shrouded")
+      (footprint "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
+      (libsource (lib "Connector_Generic") (part "Conn_01x04") (description "4-pin shrouded box header, chain-out/terminator side"))
+      (property (name "LCSC") (value "C124378"))
+      (sheetpath (names "/") (tstamps "/"))
+      (tstamps "44444444-0000-0000-0000-000000000002")))
+
+  (nets
+    (net (code 1) (name "12V")
+      (node (ref "J_in") (pin "1") (pintype "passive"))
+      (node (ref "J_out") (pin "1") (pintype "passive")))
+
+    (net (code 2) (name "GND")
+      (node (ref "J_in") (pin "2") (pintype "passive"))
+      (node (ref "J_out") (pin "2") (pintype "passive")))
+
+    (net (code 3) (name "RS485_A")
+      (node (ref "J_in") (pin "3") (pintype "passive"))
+      (node (ref "J_out") (pin "3") (pintype "passive")))
+
+    (net (code 4) (name "RS485_B")
+      (node (ref "J_in") (pin "4") (pintype "passive"))
+      (node (ref "J_out") (pin "4") (pintype "passive"))))
+)
