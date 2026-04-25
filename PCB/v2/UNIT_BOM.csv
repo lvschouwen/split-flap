@@ -6,25 +6,25 @@ U4,SN65HVD75D RS-485 transceiver,SOIC-8,C57928,SN65HVD75DR,Texas Instruments,1,E
 U5,TPS54360DDA 60V 3A sync buck,HSOP-8 PowerPAD,C44377,TPS54360DDAR,Texas Instruments,1,Extended,Y,1.20,https://www.ti.com/product/TPS54360,Replaces TPS54308DBV (SOT-23-6 had no thermal pad - thermal claim was fiction). REVIEW_VERIFIED: JLC C44377 resolves to TI TPS54360DDAR,onboard
 U6,HT7833 3.3V LDO,SOT-89-3,C50936,HT7833,Holtek,1,Extended,Y,0.08,,12V->3.3V. REVIEW_VERIFIED: JLC C50936 resolves to Holtek HT7833. Old C60641 was wrong,onboard
 D1,SMAJ51A bidirectional TVS,SMA,C8678,SMAJ51A,Littelfuse,1,Basic,Y,0.20,,Replaces SMBJ58CA - matches master rail clamp class,onboard
-D2,SM712 RS-485 ESD/transient array,SOT-23,CHECK,SM712-02HTG,Semtech,1,Basic,Y,0.40,,Replaces SP0504BAATG (would clamp legitimate RS-485 traffic at 5V working). REVIEW_BLOCKER: exact Semtech SM712-02HTG JLC part not verified. Protection-critical; do not silently substitute generic CAN/RS485 ESD diode without checking working voltage and clamp behavior on RS-485 A/B,onboard
+D2,SM712 RS-485 ESD/transient array,SOT-23,C172881,SM712-02HTG,Littelfuse,1,Extended,Y,0.40,,Replaces SP0504BAATG (would clamp legitimate RS-485 traffic at 5V working). REVIEW_PASS2_VERIFIED: JLC C172881 resolves to Littelfuse SM712-02HTG SOT-23. Correct RS-485 class with asymmetric working voltage suitable for A/B protection (-7V/+12V); do NOT substitute generic low-voltage ESD array,onboard
 Q_REV,Reverse-polarity P-FET,SOT-23,C15127,AO3401A,Alpha & Omega,1,Basic,Y,0.10,,Source on input drain on load (corrected 2026-04-25); body diode points input->load. REVIEW_VERIFIED: JLC Basic C15127 resolves to AO3401A P-channel MOSFET. Confirm SOT-23 pinout and reverse-block orientation in schematic,onboard
 D_ZGS,Q_REV gate-source Zener clamp,SOD-123,C8492,BZT52C12,Generic,1,Basic,Y,0.03,,12V Zener keeps Q_REV V_GS within +/-20V abs-max,onboard
 R_GREV,Q_REV gate pull-up to source,0603,C25804,10k 1%,Generic,1,Basic,Y,0.01,,,onboard
 LED1,Status LED,0603,C12624,LTST-C190GKT (green),Lite-On,1,Basic,Y,0.05,,Firmware blink pattern,onboard
-J_BP,Backplane connector 2x3 box header 2.54mm,2x3 2.54mm,CHECK,Generic 2x3 male box header,Generic,1,Basic,Y,0.10,,Mates with backplane socket; pinout: V48/A/V48/B/GND/GND,onboard
+J_BP,Backplane connector 2x3 box header 2.54mm,2x3 2.54mm,QUOTE_TIME,Generic 2x3 male box header,Generic,1,Basic,Y,0.10,,Mates with backplane socket; pinout: V48/A/V48/B/GND/GND. REVIEW_PASS2_SUBSTITUTE: pick only after the mating backplane socket insertion direction shroud/keying and board-to-board height are frozen. A generic C-number before mechanical freeze is false precision,onboard
 J_MOTOR,JST-XH 5-pin vertical,THT 2.5mm,C144395,B5B-XH-A,JST,1,Basic,Y,0.10,,28BYJ-48 motor cable,onboard
-L1,Buck inductor 22uH Isat>=1A shielded,SMD 4x4,CHECK,SWPA4030S220MT or XAL4030-223,Generic,1,Basic,Y,0.18,,Bumped Isat from 600mA to 1A per scottbez1 audit (28BYJ-48 stepping ~300mA peak),onboard
+L1,Buck inductor 22uH Isat>=1A shielded,SMD 4x4,QUOTE_TIME,SWPA4030S220MT or XAL4030-223,Generic,1,Basic,Y,0.18,,Bumped Isat from 600mA to 1A per scottbez1 audit (28BYJ-48 stepping ~300mA peak). REVIEW_PASS2_SUBSTITUTE: use a JLC-stocked shielded 22uH inductor with Isat >=1A (preferably >=1.5A given stepping-current uncertainty) Irms/temp-rise acceptable at measured motor load DCR acceptable and exact footprint verified. Re-check after first-prototype stepping-current measurement (#80 issue 12 / #75 prerequisite),onboard
 C_IN_BUCK,Buck input cap,1210,C126830,10uF 100V X7R,Generic,1,Extended,Y,0.20,,,onboard
-C_OUT_BUCK,Buck output cap,1210,CHECK,22uF 50V X7R,Generic,1,Extended,Y,0.18,,50V chosen for headroom on 12V rail (25V/0805 not acceptable - X7R DC-bias),onboard
+C_OUT_BUCK,Buck output cap,1210,QUOTE_TIME,22uF 50V X7R,Generic,1,Extended,Y,0.18,,50V chosen for headroom on 12V rail (25V/0805 not acceptable - X7R DC-bias). REVIEW_PASS2_SUBSTITUTE: JLC 1210 22uF 50V X7R equivalent picked at quote time with DC-bias curve checked so effective capacitance on the 12V rail is still sane (target >=10uF effective at 12V),onboard
 C_BOOT_BUCK,TPS54360 BOOT-to-SW cap,0402,C1525,100nF 25V X7R,Generic,1,Basic,Y,0.01,,Mandatory per TPS54360 datasheet,onboard
 C_LDO_IN,LDO input cap,0603,C15849,1uF 25V X7R,Generic,1,Basic,Y,0.02,,,onboard
-C_LDO_OUT,LDO output cap,0603,CHECK,1uF 10V X7R,Generic,1,Basic,Y,0.02,,Distinct LCSC from C_LDO_IN (corrected 2026-04-25 - both rows shared C15849),onboard
+C_LDO_OUT,LDO output cap,0603,QUOTE_TIME,1uF 10V X7R,Generic,1,Basic,Y,0.02,,Distinct LCSC from C_LDO_IN (corrected 2026-04-25 - both rows shared C15849). REVIEW_PASS2_SUBSTITUTE: JLC Basic 0603 1uF 10V X7R equivalent picked at PCBA quote time. Preserve distinct row from C_LDO_IN to avoid dupe-LCSC trap,onboard
 "C_BYP_S,C_BYP_M,C_BYP_HV,C_BYP_AS,C_BYP_AS3V3",IC VDD bypass,0603,C14663,100nF 16V X7R,Generic,5,Basic,Y,0.02,,STM32 + AS5600 (2x VDD pads) + SN65HVD75 + TPL7407L,onboard
 C_NRST,STM32 NRST debounce cap,0402,C1525,100nF 25V X7R,Generic,1,Basic,Y,0.01,,Reset hygiene (added 2026-04-25),onboard
 R_NRST_PU,STM32 NRST pull-up,0603,C25804,10k 1%,Generic,1,Basic,Y,0.01,,Reset hygiene,onboard
-R_FB_HI,Buck feedback divider top,0603,CHECK,140k 1%,Generic,1,Basic,Y,0.01,,12V output (V_ref 0.8V),onboard
+R_FB_HI,Buck feedback divider top,0603,QUOTE_TIME,140k 1%,Generic,1,Basic,Y,0.01,,12V output (V_ref 0.8V). REVIEW_PASS2_SUBSTITUTE: JLC Basic 0603 1% resistor equivalent exact value picked at PCBA quote time after final TPS54360 V_ref/divider math is locked,onboard
 R_FB_LO,Buck feedback divider bottom,0603,C22810,10k 1%,Generic,1,Basic,Y,0.01,,,onboard
-R_RT_BUCK,TPS54360 RT/CLK frequency-set,0603,CHECK,200k 1%,Generic,1,Basic,Y,0.01,,Sets ~600 kHz switching,onboard
+R_RT_BUCK,TPS54360 RT/CLK frequency-set,0603,QUOTE_TIME,200k 1%,Generic,1,Basic,Y,0.01,,Sets ~600 kHz switching. REVIEW_PASS2_SUBSTITUTE: JLC Basic 0603 1% resistor equivalent exact value picked at PCBA quote time once switching frequency is locked,onboard
 "R_I2C_SDA,R_I2C_SCL",I2C pull-ups to 3V3,0603,C23162,4.7k 1%,Generic,2,Basic,Y,0.01,,,onboard
 "R_I2C_SER_SDA,R_I2C_SER_SCL",I2C series filter,0603,C22775,100R 1%,Generic,2,Basic,Y,0.01,,Added 2026-04-25 - LP filter against buck-switching coupling (with 100pF shunt),onboard
 "C_I2C_SDA,C_I2C_SCL",I2C shunt cap on AS5600 side,0603,C1546,100pF C0G,Generic,2,Basic,Y,0.01,,Added 2026-04-25 - LP filter (corner ~16 MHz),onboard

@@ -27,10 +27,12 @@
    │                                                  │
    ├──► PWR_48V LED (red) via 22 kΩ                   │
    │                                                  │
-   ├──► R_SHUNT1 50 mΩ ─► TPS259827 #1 ─► RJ45_1 VBUS │ FAULT1 ─┐
-   ├──► R_SHUNT2 50 mΩ ─► TPS259827 #2 ─► RJ45_2 VBUS │ FAULT2 ─┤
-   ├──► R_SHUNT3 50 mΩ ─► TPS259827 #3 ─► RJ45_3 VBUS │ FAULT3 ─┤
-   └──► R_SHUNT4 50 mΩ ─► TPS259827 #4 ─► RJ45_4 VBUS │ FAULT4 ─┤
+   ├──► R_SHUNT1 50 mΩ ─► eFuse #1   ─► RJ45_1 VBUS │ FAULT1 ─┐
+   ├──► R_SHUNT2 50 mΩ ─► eFuse #2   ─► RJ45_2 VBUS │ FAULT2 ─┤
+   ├──► R_SHUNT3 50 mΩ ─► eFuse #3   ─► RJ45_3 VBUS │ FAULT3 ─┤
+   └──► R_SHUNT4 50 mΩ ─► eFuse #4   ─► RJ45_4 VBUS │ FAULT4 ─┤
+          (eFuse = candidate TPS26600PWPR per pass-2;            
+           was TPS259827YFFR — invalid on V48)                   
           │   │   │   │   (each: C_dVdT = 100 nF for  │         │
           │   │   │   │    32-unit ~800 µF inrush     │         │
           │   │   │   │    against 1.7 A trip)        │         │
@@ -61,7 +63,7 @@
 | C_IN48 | V48 bulk (AL-poly) | 47 µF / 100 V Nichicon PCV | C2843372 | 10×10 SMD | 100 V, 105 °C, ESR ~30 mΩ | 0.75 | check |
 | C_IN48x | V48 HF decap | GRM32ER72A475K (4.7 µF / 100 V X7R) | C1778 / C2832225 | 1210 | 100 V rating on unfiltered rail | 0.35 | Extended |
 | C_OUT3V3 | 3V3 output cap | GRM188R71A225K (2.2 µF / 25 V X7R) ×2 | C1804 | 0603 | Low ESR | 0.03 | Basic |
-| U3..U6 | eFuse (×4) | TPS259827YFFR | CHECK | DSBGA-10 | 4.2–60 V, I_LIM adj, EN/FAULT/PGOOD | 2.50 | Extended |
+| U3..U6 | eFuse (×4) | TPS26600PWPR (was TPS259827YFFR — see pass-2 banner) | C544399 | HTSSOP-16-EP | 4.2–60 V, I_LIM adj, EN/FAULT | 3.20 | Extended |
 | U7..U10 | Current monitor (×4) | INA237AIDGSR | CHECK | VSSOP-10 | ±163.84 mV FSR, 16-bit, ALERT, I²C | 1.80 | Extended |
 | R_SH1..4 | Shunt (×4) | CSR2512-50-1% (50 mΩ, 3 W, 2512) | C157950 | 2512 Kelvin | 50 mΩ ±1%, 3 W | 0.25 | Extended |
 | LED1 | PWR_48V | 0603 red, V_F≈1.9 V, I_F=2 mA | C2286 | 0603 | — | 0.02 | Basic |
@@ -100,7 +102,10 @@ All parts that sit on V48_RAIL unfiltered are ≥100 V rated except the LM74700-
 - **Thermal**: P_diss ≈ V_in × I_in × (1−η) ≈ 3.3 × 0.75 × (1/0.85 − 1) ≈ 440 mW at 85 % efficiency. HSOIC PowerPAD: ~40 °C/W with 4 thermal vias into a 10×10 mm pour → ΔT ≈ 18 °C, fine.
 - **Layout hints**: switch-node trace < 10 mm, kept short and narrow; input MLCC GND return to PGND pin via shortest path; feedback trace away from switch node; thermal pad to GND pour via ≥4 vias (0.3 mm drill).
 
-### 3c. Per-bus eFuse (×4, TPS259827YFFR)
+### 3c. Per-bus eFuse (×4, candidate TPS26600PWPR)
+
+> **REVIEW_PASS2_BANNER (2026-04-25):** the section below was written against the pre-pass-2 part `TPS259827YFFR`. Pass-2 review caught that this part — and the `TPS25981QWRPVRQ1` fallback — are 24 V/30 V abs-max class, **not valid on the 48 V bus**. The active part is now the candidate `TPS26600PWPR` (LCSC `C544399`, HTSSOP-16-EP, 4.2–60 V industrial eFuse). The numerical analysis below (R_ILIM, K_ILIM, C_dVdT timing, EN threshold, FAULT I_OL, R_DS(on), thermal) is **historical reference**: every value must be re-derived against the TPS26600 datasheet at schematic capture. Pinout, footprint, and inrush network differ. See `MASTER_DECISIONS.md → BOM / sourcing gates` for the full pivot. The text below is preserved so the design intent is clear, but it is not yet the active design.
+
 
 - **I_LIM set**: datasheet `R_ILIM = K_ILIM / I_LIMIT`. For I_LIM ≈ 1.7 A and K_ILIM ≈ 18400 (A·Ω typ), R_ILIM ≈ **10.8 kΩ → use 11.0 kΩ 1 % 0603**. Confirm K from current datasheet rev — open issue P3.
 - **EN**: driven from ESP32 GPIO through 0 Ω series; **10 kΩ pull-down to GND** on the eFuse side ensures the part is OFF when the MCU is in reset. EN is 5 V-tolerant logic; 3.3 V drive is fine.
@@ -177,7 +182,7 @@ No part sits above 50 % of its rated θ_JA-limited temperature at full steady-st
 
 - ~~**P1**~~ **Resolved 2026-04-25 (issue #76 review).** Surge-clamp chain **simplified**: R_SERIES + D_SEC chain deleted (R_SERIES dissipated 950 W steady — architectural error). Replaced by reliance on LM74700-Q1 native overvoltage protection per TI SLVA936 + single SMAJ51A (D_RAIL) on V48_RAIL. Net BOM saving: ~€0.60.
 - ~~**P2**~~ **Closed 2026-04-25.** `FDDA` is the package code (HSOIC-8 PowerPAD), not fixed/adjustable. Base part is adjustable; FB divider is mandatory. C_BOOT 100 nF added (was missing).
-- **P3 — TPS259827YFFR I_LIM constant (K_ILIM).** Datasheet rev 1.3 lists K ≈ 18400; newer revs differ. Confirm against the rev current at fab time and pick R_ILIM to land 1.6–1.8 A window. (Non-blocking; component value determined at fab.)
+- ~~**P3 — TPS259827YFFR I_LIM constant (K_ILIM).**~~ **Superseded by pass-2 eFuse swap.** TPS259827 is no longer the selected part (invalid voltage class). The TPS26600PWPR I_LIM math must be re-derived from its datasheet at schematic capture; the new R_ILIM target is the same (1.6–1.8 A window) but K_ILIM and the divider topology are different.
 - ~~**P4**~~ **Closed 2026-04-25.** FAULT LED driven via MMBT3906 PNP high-side switch with 10 kΩ base resistor (§3e/§3f). PROT_FAULT_OR sink at fault = 0.66 mA — within LM74700's 1 mA spec.
 - **P5 — Barrel jack surge path return.** If the enclosure is metal, the barrel jack shell must be isolated from chassis or the TVS return path will dump surge through the mechanical shield. Flag to mechanical agent. Default desktop project-box class enclosure assumed (plastic) per MASTER_DECISIONS — non-blocking.
 - ~~**P6**~~ **(new) Closed 2026-04-25.** Per-bus C_dVdT bumped from 10 nF → 100 nF for 32-unit bus inrush against 1.7 A trip.
@@ -211,7 +216,7 @@ R_FB_TOP,100 kΩ 1%,C25803,0603,1,LMR36015 FB divider top (3V3)
 R_FB_BOT,33.2 kΩ 1%,check,0603,1,LMR36015 FB divider bottom (3V3)
 R_GATE_BLEED,10 kΩ 1%,C25804,0603,1,Q1 G–S bleed
 R_SH1..4,50 mΩ 1% 3 W 2512 Kelvin,C157950,2512,4,Per-bus shunt
-U3..U6,TPS259827YFFR,CHECK,DSBGA-10,4,Per-bus eFuse (primary; alternate WQFN-12 footprint also placed) (REVIEW_BLOCKER: DSBGA pre-fab gate; old C2906816 unverified)
+U3..U6,TPS26600PWPR,C544399,HTSSOP-16-EP,4,Per-bus eFuse (REVIEW_PASS2_SUBSTITUTE: replaces TPS259827YFFR — TPS25982 family was 24V/30V class, INVALID on V48. Schematic + footprint + I_LIM + dV/dt rework required - NOT drop-in)
 R_ILIM1..4,11 kΩ 1%,C23186,0603,4,eFuse I_LIM
 C_DVDT1..4,100 nF X7R,C14663,0603,4,eFuse dV/dt — sized for 32-unit bus inrush (was 10 nF)
 C_IN_EF1..4,100 nF / 100 V X7R,C123498,0603,4,eFuse VIN decap

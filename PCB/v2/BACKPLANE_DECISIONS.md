@@ -110,16 +110,46 @@ Decisions:
 - **If board-to-board headers remain**, require **keyed and latching** connectors (not generic 2.54 mm pin headers) **or dual connectors / dowels / brackets** that constrain bending so the connector pins carry only contact load.
 - **Strongly consider short keyed wire harness jumpers or flex/FFC** for segment joints **if mechanical support is uncertain**. A 30–50 mm pre-crimped 6-conductor harness with keyed Molex/JST plug at each end is mechanically forgiving and cheap.
 
-## LAYOUT_CONSTRAINT: backplane pre-layout checklist
+## LAYOUT_CONSTRAINT: backplane pre-layout checklist (pass-2 sharpened)
+
+### Trunk routing + stubs
 
 - **Route RS-485 as a trunk** (continuous A/B pair down the long axis), **not as a star** from the inter-segment connector to each slot.
 - **Per-slot RS-485 stubs ≤ 5 mm** from trunk to slot socket pin. Anything longer kills SI margin at 500 kbaud over 16 stubs.
 - **Continuous GND reference plane** under the A/B pair on the opposite layer for the full segment length. No splits, no via-fence interruptions.
 - **Avoid repeated long unterminated branches.** The trunk + 16 short stubs is the topology; do not introduce intermediate breakouts.
+
+### Termination + debug
+
 - **`R_TERM` placement only on segment-4 (chain-end case PCBA variant).** All other segments DNP. Segment PCBs are identical; differentiation is at PCBA stuffing time.
 - **Optional DNP per-slot debug LED + resistor footprints** if space allows — saves bench debug time at zero cost when not populated.
 - **Test pads at segment IN and segment OUT** for V48, GND, A, B (1 mm SMD), edge-accessible from the back of the case for in-situ probing.
-- **Exact RJ45 footprint and inter-segment 6-pin connector footprint locked before schematic** — generic 8P8C and generic 2×3 are not acceptable. Same RJ45 SKU as master.
+
+### Connectors
+
+- **Exact RJ45 footprint** locked before schematic — same SKU as master, generic 8P8C is **not** acceptable.
+- **Inter-segment 6-pin connector**: lock either a keyed/latching board-to-board connector OR a keyed wire-harness landing footprint, depending on mech-review outcome. **Provide a DNP harness alternative footprint in parallel with the rigid 2×3** if board area allows — this prevents a late mechanical decision from forcing a backplane respin.
+
+### Stackup + DRC class table (pass-2 added)
+
+- **Stackup**: 2-layer FR-4, 1.6 mm, **1 oz / 1 oz copper**, **HASL finish**. Pick the named JLC 2-layer stackup at quote time (e.g. `JLC2L-1H-FR4`) and lock dielectric per the choice.
+- **Fiducials**: 3 (two diagonal corners + asymmetric third), 1 mm copper / 3 mm soldermask, on top side. Per-segment, not per-panel.
+- **Panelization**: 320 × 35 mm segments are long-and-narrow. **V-score along the long axis is preferred** for cleanly singulating panels at JLC. Mouse-bite tabs are a fallback if V-score causes mechanical issues with edge-located pads. Tooling holes 3.2 mm at the panel rails (not on the segment).
+
+| Class | 48 V net | RS-485 | General |
+|---|---|---|---|
+| Trace-to-trace clearance | ≥ 0.40 mm | ≥ 0.15 mm | ≥ 0.15 mm |
+| Trace-to-edge clearance | ≥ 0.50 mm | ≥ 0.30 mm | ≥ 0.30 mm |
+| Board-edge keep-out (any copper) | ≥ 0.50 mm | ≥ 0.30 mm | ≥ 0.30 mm |
+| Min drill | 0.30 mm | 0.30 mm | 0.20 mm |
+| Min annular ring | 0.15 mm | 0.10 mm | 0.10 mm |
+| Silkscreen-to-copper | ≥ 0.10 mm | ≥ 0.10 mm | ≥ 0.10 mm |
+
+### LAYOUT_CONSTRAINT: harness alternative (pass-2)
+
+If board area allows, **provide a DNP keyed-harness landing footprint in parallel with the rigid 2×3 inter-segment connector**. This prevents a late mechanical decision from forcing a backplane respin. The harness footprint should be wire-friendly (e.g. 4-pin Molex Micro-Fit, JST PH, or pre-tinned pad set keyed for a 6-conductor harness) — pick the footprint family at schematic capture time once mech freelancer has weighed in.
+
+If board area does **not** allow both footprints, **freeze the backplane layout schedule until the mech review chooses** — either rigid board-to-board joints with enclosure support fixtures, or keyed harness jumpers. **No backplane layout starts** before this gate.
 
 ## REVIEW_STRONG_OPINION: harness over rigid joints
 

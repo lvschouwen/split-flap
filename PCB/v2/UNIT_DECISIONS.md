@@ -152,17 +152,25 @@ Failsafe bias is provided **at the master only** (1 kΩ each leg); unit and back
 - **U6 — Mounting hole positions.** Determined alongside 3D bracket design (mech freelancer).
 - **U_STEP — Stepping current real-world measurement.** First-prototype task. Re-spec backplane polyfuse sizing if 28BYJ-48 stepping pulls > 300 mA peak.
 
-## AS5600 datum problem (post external review)
+## AS5600 datum problem (pass-2 sharpened)
 
-AS5600 placement is **not a PCB placement note — it is a mechanical datum problem**. The unit is **not layout-ready** until all of the following are explicit and signed off by the mech freelancer (STEP exchange):
+AS5600 placement is **not a PCB placement note — it is a mechanical datum problem**. The unit is **not layout-ready** until the mech freelancer's STEP/dimensioned-drawing hand-off contains **hard numbers**, not a "signoff." Required values (every one explicit, no "TBD"):
 
-- **Magnet diameter and thickness** (currently 6 × 2.5 mm N35; not finalised — see U3).
-- **Motor shaft XY datum** relative to the unit PCB origin (AS5600 IC center).
-- **Allowed AS5600 XY error** vs the motor shaft axis (typical ams spec: ≤ 0.25 mm radial offset for full-resolution operation).
-- **Target air gap** (1.5 mm nominal, allowed 0.5–3 mm) and **min/max guarantee** that the bracket + tolerance stack-up actually delivers.
-- **Board mounting tolerance** within the bracket (M3 hole positions, oversize, locating features).
+| # | Value | Where it lands | Notes |
+|---|---|---|---|
+| 1 | **Motor shaft XY datum** relative to PCB origin | drawing | mm, ±tolerance |
+| 2 | **AS5600 IC package-center coordinate** + tolerance | drawing | nominally on the motor-shaft axis — quote the offset, not "centered" |
+| 3 | **Magnet diameter** | drawing + BOM `MAGNET` row | typ. 6 mm |
+| 4 | **Magnet thickness** | drawing + BOM | typ. 2.5 mm |
+| 5 | **Diametral magnetization requirement** | BOM Notes | explicitly *diametral*, not axial — silent killer if wrong |
+| 6 | **Target air gap** | drawing | nominal, e.g. 1.5 mm |
+| 7 | **Min air gap** + **max air gap** guarantee | drawing | bracket tolerance stack-up must enforce 0.5 mm < gap < 3.0 mm |
+| 8 | **Allowed radial magnet offset** | drawing | typ. ≤ 0.25 mm at full resolution |
+| 9 | **Allowed axial tilt / wobble** (if known) | drawing | shaft + magnet-glue tolerance |
+| 10 | **Board mounting hole tolerance** | drawing | M3 oversize + locating-feature spec |
+| 11 | **Motor connector / harness clearance envelope** | drawing | so JST-XH harness doesn't foul the bracket |
 
-These five must appear in a single dimensioned drawing or STEP file before the unit PCB enters layout. Without them, the electronics can be perfect and the unit can still fail to read absolute angle.
+Without these eleven values explicit in a single dimensioned drawing or STEP exchange, **the unit PCB does not enter layout.** The electronics can be perfect and the unit can still fail to read absolute angle if any one of these is wrong or missing.
 
 ## TPS54360 thermal plan (post external review)
 
@@ -179,16 +187,43 @@ The unit's bring-up depends on:
 - **SWD pogo fixture geometry** documented (4× 1.5 mm pads on 2.54 mm pitch, edge-accessible, oriented for jig insertion direction). Not negotiated at fab time.
 - **Standalone UART test mode pad access** documented — the SWD pads (PA13/PA14) repurposed as UART RX/TX when no SWD master is present. Bring-up jig must be able to drive both modes from the same pogo footprint.
 
-## LAYOUT_CONSTRAINT: unit pre-layout checklist
+## LAYOUT_CONSTRAINT: unit pre-layout checklist (pass-2 sharpened)
 
-- **AS5600 IC center tied to motor shaft datum** with explicit tolerance (per the mech freelancer's STEP).
+### Encoder + sensitive-net layout
+
+- **AS5600 IC center tied to motor shaft datum** with explicit tolerance (per the mech freelancer's STEP — see the 11-value table above).
 - **Magnet gap target** (1.5 mm nominal) and min/max guarantee from the bracket assembly.
-- **Buck switch node** kept compact and **away from AS5600 / I²C traces** — at minimum, keep ≥ 5 mm separation and route AS5600 I²C on the opposite layer with GND pour between.
+- **Buck switch node** kept compact and **away from AS5600 / I²C traces** — keep ≥ 5 mm separation and route AS5600 I²C on the opposite layer with GND pour between.
 - **AS5600 I²C local RC filter (100 Ω series + 100 pF shunt)** placed close to the AS5600 side of the I²C net, not close to the MCU side, so the filter rejects buck-switching coupling at the encoder.
 - **RS-485 ESD (SM712-02HTG)** placed close to the backplane connector entry, not close to the SN65HVD75 — protect the connector entry, not the transceiver.
-- **Test pads** for: 12V (post-buck), 3V3, V48 after reverse-FET, NRST, SWDIO, SWCLK, UART/test-mode RX, UART/test-mode TX, RS-485 A, RS-485 B, RS-485 DE, RS-485 TX, RS-485 RX (where space allows).
+
+### Power + driver layout
+
 - **TPL7407 IN5–IN7 hard-tied to GND** (not via 10 kΩ — false-turn-on risk during MCU reset).
+- **TPS54360 PowerPAD copper / via thermal plan**: thermal pad ≥ 200 mm² ground pour on the bottom layer with ≥ 6× 0.3 mm thermal vias under the package. Top-side relief around the pad to prevent solder-paste pull-off during reflow. Switch-node copper kept compact (≤ 100 mm² to limit EMI radiation).
+
+### Test points + mechanical
+
+- **Test pads** for: 12 V (post-buck), 3V3, V48 after reverse-FET, NRST, SWDIO, SWCLK, UART/test-mode RX, UART/test-mode TX, RS-485 A, RS-485 B, RS-485 DE, RS-485 TX, RS-485 RX (where space allows).
+- **SWD pogo pad geometry**: 4× **1.5 mm round pads** on **2.54 mm pitch**, edge-accessible, oriented so the jig can insert without colliding with the magnet bracket or motor connector. Document the pogo footprint + jig clearance envelope in the layout brief.
 - **Motor connector orientation and pinout** must match the actual 28BYJ-48 harness/motor variant supplied — verified at first-prototype mechanical fit.
+
+### Stackup + DRC class table (pass-2 added)
+
+- **Stackup**: 2-layer FR-4, 1.6 mm, **1 oz outer copper**, **HASL** finish acceptable.
+- **Fiducials**: 3 (two diagonal corners + asymmetric third), 1 mm copper / 3 mm soldermask, on top side. Per-board, not per-panel.
+- **Panelization**: 10-up panel for prototype run. Mouse-bite tabs preferred; V-score acceptable. Tooling holes 3.2 mm at panel rails (not on the board).
+- **Test pad size**: 1 mm round SMD where bench-probe access is needed; 0.5 mm round for compact pogo points.
+
+| Class | 48 V net | RS-485 | I²C / Logic | General |
+|---|---|---|---|---|
+| Trace-to-trace clearance | ≥ 0.40 mm | ≥ 0.15 mm | ≥ 0.15 mm | ≥ 0.15 mm |
+| Trace-to-edge clearance | ≥ 0.50 mm | ≥ 0.30 mm | ≥ 0.30 mm | ≥ 0.30 mm |
+| Min drill | 0.30 mm | 0.30 mm | 0.20 mm | 0.20 mm |
+| Min annular ring | 0.15 mm | 0.10 mm | 0.10 mm | 0.10 mm |
+| Drill-to-copper (other net) | ≥ 0.30 mm | ≥ 0.20 mm | ≥ 0.20 mm | ≥ 0.20 mm |
+| Silkscreen-to-copper | ≥ 0.10 mm | ≥ 0.10 mm | ≥ 0.10 mm | ≥ 0.10 mm |
+| Edge-cuts to copper | ≥ 0.50 mm | ≥ 0.30 mm | ≥ 0.30 mm | ≥ 0.30 mm |
 
 ## REVIEW_STRONG_OPINION: AS5600 alignment is the unit's hardest problem
 

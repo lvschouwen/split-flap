@@ -44,7 +44,7 @@ This board follows the **IEEE 802.3at Mode B pinout convention** for power deliv
 | V48_RAIL clamp | **Single SMAJ51A on V48_RAIL** (post-Q1 source), within 10 mm of Q1, sinking the surge-tail current that flows forward through Q1's body during a SMDJ58CA clamp event. Holds V48_RAIL ≤ ~57 V at low-end tail current — within LMR36015 V_IN abs-max (65 V), TPS259827 V_IN abs-max (60 V transient 65 V), and INA237 V_CM (85 V). |
 | FAULT LED isolation | **BSS138 N-MOSFET inverter** drives FAULT LED from PROT_FAULT_OR, so the wired-OR line sinks only the 10 kΩ pull-up (~0.33 mA) — stays within LM74700's 1 mA FAULT I_OL spec. Locked 2026-04-25 (was open issue P4). |
 | Rail architecture | **Single buck 48V → 3V3** via **LMR36015 (adjustable, FDDA = HSOIC-8 PowerPAD)** (60 V sync buck, 1.5 A, 2.1 MHz). FB divider populated for 3.3 V (P2 resolved: FDDA suffix is package code, base part is adjustable). **C_BOOT = 100 nF / 25 V X7R 0402** mandatory from CBOOT to SW pin within 2 mm. No 5 V rail. Every IC (ESP32-S3, MAX14830, SN65HVD75, INA237) is 3V3-native. USB-VBUS isolated from board rails. |
-| Per-bus protection | **TPS259827YFFR eFuse per bus (×4)**. 60 V rated, adjustable I_LIM (~1.7 A), ENABLE + FAULT + PGOOD. Package = DSBGA-10 (0.4 mm pitch chip-scale). Hard pre-fab gate retained: confirm JLC standard-tier PCBA on DSBGA-10 0.4 mm pitch, else use fallback TPS25981QWRPVRQ1 (WQFN-12 3×3 mm) — layout includes both footprints, choice at BOM-freeze. **C_dVdT per bus = 100 nF** (was 10 nF pre-2026-04-25; bumped to give 28 ms ramp / ~1.4 A inrush against 1.7 A trip on a 32-unit bus with ~800 µF aggregate input cap). |
+| Per-bus protection | **60 V-class eFuse / hot-swap per bus (×4)**. **Candidate: TPS26600PWPR (LCSC C544399, HTSSOP-16-EP)**, 4.2–60 V industrial eFuse with adjustable current limit (~1.7 A target), ENABLE + FAULT, controlled dV/dt inrush. **REVIEW_PASS2 BLOCKER (open):** the pre-pass-2 selection (TPS259827YFFR DSBGA-10 + TPS25981QWRPVRQ1 WQFN-12 fallback) was electrically invalid — TPS25982/TPS25981 families are 24 V/30 V abs-max class, **not valid on the 48 V rail**. The voltage-class error is the real blocker; DSBGA manufacturability was a secondary concern. Switching to TPS26600 requires: schematic rework (different pin layout, different protection-net topology), footprint change (HTSSOP-16-EP vs DSBGA-10/WQFN-12), current-limit network respec (different K_ILIM constant), and inrush network respec (different C_dVdT timing). NOT drop-in. **C_dVdT per bus** target remains the same goal (~28 ms ramp / ~1.4 A inrush vs ~1.7 A trip on a 32-unit bus with ~800 µF aggregate input cap) but the cap value must be re-derived from the TPS26600 datasheet. |
 | Per-bus current telemetry | INA237AIDGSR per bus (×4), 50 mΩ high-side shunt, I²C. Addresses 0x40–0x43. **VBUS divider = 10 kΩ / 1 kΩ** (was 100 kΩ / 10 kΩ pre-2026-04-25; bumped to preserve 16-bit accuracy from INA237 input bias). 8 mW dissipation per bus at 48 V — acceptable. |
 | Per-bus enable sequencing | At master boot, firmware sequences each bus enable serially: assert EFUSE_EN_n, wait for PGOOD, read INA237 settling current (≤ 200 mA after 50 ms = healthy). Refuse to leave bus enabled if INRUSH_NOT_SETTLED. Pattern adopted from scottbez1 Chainlink Base supervisor (#76 audit). |
 
@@ -170,34 +170,76 @@ Most pre-2026-04-25 open items are now resolved by the post-review revision. Rem
 - **M6 closed (RJ45 pin-1 indicator)** — promoted to silkscreen must-have.
 - **M9 closed (surge-clamp chain)** — simplified to single SMAJ51A on V48_RAIL after R_SERIES deletion.
 
-## BOM / sourcing gates from external review
+## BOM / sourcing gates from external review (pass-2 update)
 
 Bound on every part decision below. All notes apply to the master BOM (`MASTER_BOM.csv`) and propagate to schematic-capture and PCBA freeze.
 
-- **C-numbers are not trusted unless marked `REVIEW_VERIFIED`** in the BOM Notes column. Treat any other LCSC entry as advisory only.
-- The following remain **hard `CHECK`** items pending live JLC BOM-uploader verification — do not order without explicit confirmation:
-  - `LMR36015AFDDA` (U2)
-  - `TPS259827YFFR` (U3–U6, primary eFuse)
-  - `TPS25981QWRPVRQ1` (U3_ALT–U6_ALT, fallback eFuse)
-  - `TPS3839L33DBVR` (U_POR) — `TPS3823-33DBVR = C7719` is **not** a blind drop-in; pinout, reset delay, output topology, and boot sequencing differ
-  - `INA237AIDGSR` (U7–U10) — `INA226AIDGSR C49851` is **not** a blind substitute (VBUS/divider/common-mode limits + register map differ)
-  - `MAX14830ETJ+` (U12) — **major BOM/sourcing risk**; `MAX14830ETM+T C2653202` is package-mismatched; do not substitute without footprint/pinout review
-  - `SQJ148EP` (Q1) — old `C2836025` resolved to a different MOSFET; confirm Rds(on), Vds, package, thermal pad, SOA before order
-- **`TPS259827YFFR` DSBGA-10 0.4 mm pitch is a pre-fab JLC PCBA gate**, not a routine detail. Must clear DSBGA acceptance with JLC standard-tier PCBA before tape-out, else swap to the WQFN-12 fallback footprint already placed on the board.
+### Hard blocker — eFuse voltage class (pass-2)
+
+**The pre-pass-2 active eFuse path (TPS259827YFFR + TPS25981QWRPVRQ1) is electrically invalid on a 48 V bus.** Both belong to families rated 24 V/30 V abs-max class — they would instantly exceed abs-max on V48 inrush, let alone steady-state. This is a real "this won't work" finding, not a sourcing issue.
+
+- **Candidate replacement: `TPS26600PWPR` (LCSC `C544399`, HTSSOP-16-EP)** — 4.2–60 V industrial eFuse / hot-swap, adjustable I_LIM, ENABLE + FAULT, programmable dV/dt inrush. Correct voltage class for V48.
+- **Not drop-in.** Requires schematic rework (TPS26600 pin layout differs from TPS259827), footprint change (HTSSOP-16-EP vs DSBGA-10/WQFN-12), current-limit network respec (K_ILIM constant + R_ILIM target), and inrush network respec (C_dVdT timing math from the TPS26600 datasheet).
+- **The DSBGA-10 0.4 mm manufacturability gate is now moot** — the new candidate is HTSSOP-16-EP, a standard JLC PCBA package.
+- If a JLC-stocked 60 V eFuse with simpler integration exists and is found during the BOM-quote pass, swap to it (document why); but do **not** keep the TPS25982/TPS25981 path as the active 48 V solution.
+
+### Other unresolved sourcing items (pass-2)
+
+- **`MAX14830ETJ+` (U12) — major BOM/sourcing risk, unresolved.** No clean JLC-stocked ETJ+ path. `MAX14830ETM+T (C2653202)` is package-mismatched; do **not** substitute. Three open options: (a) JLC manual-feeder/global-source ETJ+ (extra PCBA cost); (b) replace with two dual-UART SPI bridges after sourcing review; (c) reopen architecture to a 2-bus ESP32-S3-native UART master (per the `REVIEW_STRONG_OPINION` below). **Architectural decision required before tape-out.**
+- **`LMR36015AFDDA` (U2) — candidate substitute only.** Pass-2 found `LMR36015FSC3RNXRQ1 (C1850344)` in VQFN-12 (fixed-output 3.3 V). NOT footprint-compatible with HSOIC-8. Adopting it requires schematic + footprint change + deletion of `R_FB_TOP/R_FB_BOT` (fixed variant has internal divider). Decision gate is open.
+- **`TPS3839L33DBVR` (U_POR) — candidate substitute only.** Pass-2 found `TLV803SDBZR (C132016)` SOT-23-3 active-low reset supervisor. Verify output topology (open-drain vs push-pull), reset delay, threshold, and BAT54 OR-gating compatibility before lock. Pinout/package differ.
+- **`INA237AIDGSR` (U7–U10) — RESOLVED pass-2.** `LCSC C2864837` is the verified live JLC part. 85 V common-mode class is suitable for the 48 V monitoring scheme + existing 10 k/1 k VBUS divider.
+- **`SQJ148EP-T1_GE3` (Q1) — verify-before-order.** Pass-2 found `LCSC C727381` that appears to resolve to the Vishay part, but page metadata must be reconciled against the datasheet before commit. Do **not** substitute a generic 100 V N-MOSFET without LM74700 ideal-diode SOA + Q_g review.
+- **`J1` barrel jack, `J4–J7` RJ45, `L2–L5` CM choke** — `MANUAL_LOCK_FOOTPRINT` / `GLOBAL_SOURCE` markers in the BOM. Lock exact MPN by mechanical footprint and current rating before layout. Manual/consign acceptable for these mechanical/SI items; generic footprints are not.
+
+### Standing rules
+
+- **C-numbers are not trusted unless marked `REVIEW_VERIFIED` or `REVIEW_PASS2_VERIFIED`** in the BOM Notes column. Treat any other LCSC entry as advisory only.
 - **If exact parts cannot be sourced, do not silently substitute package variants** — every package change must be re-validated against pinout, footprint, thermal pad, and PCBA process at minimum.
 
-## LAYOUT_CONSTRAINT: master pre-layout checklist
+## LAYOUT_CONSTRAINT: master pre-layout checklist (pass-2 sharpened)
 
-Layout engineer must clear all of these before accepting routing scope:
+Layout engineer must clear all of these before accepting routing scope. Pass-2 added the concrete handoff items previously missing.
 
-- **Stackup + impedance**: exact JLC stackup (4-layer 1.6 mm, 1 oz outer / 0.5 oz inner, ENIG) and controlled-impedance targets (RS-485 differential, USB D+/D−) locked before routing — not negotiated mid-route.
+### Stackup, copper, impedance (pre-routing)
+
+- **Exact JLC stackup name** required before routing — not "4-layer 1.6 mm" alone. Pick the named JLC stackup at quote time (e.g. `JLC04161H-7628`) and lock the dielectric thicknesses + Dk values it implies. The 1 oz outer / 0.5 oz inner spec follows from this choice.
+- **Copper weight per layer** locked: outer 1 oz (35 µm), inner 0.5 oz (17 µm). Adjust V48 trace widths if the JLC quote forces a different stackup.
+- **Impedance targets must include actual trace width / spacing** once the stackup is chosen — RS-485 A/B = 120 Ω differential, USB D+/D− = 90 Ω differential. Run the JLC impedance calculator for the chosen stackup and write the geometry into the layout brief, not a generic "120 Ω".
+
+### Differential + sensitive nets
+
 - **USB D+/D−** routed as 90 Ω differential pair, length-matched, over solid GND reference, with USBLC6-2SC6 in-line at the connector.
-- **RS-485 A/B pair routing** as 120 Ω differential pair, length-matched, on L1 over solid L2 GND, with the Würth 744232601 common-mode choke and SM712 ESD placed close to the RJ45 connector. **Termination + bias resistors close to MAX14830/PHY side or RJ45 side as the SI analysis dictates** — locked before fab.
+- **RS-485 A/B** routed as 120 Ω differential pair, length-matched, on L1 over solid L2 GND, with the Würth 744232601 (or substitute) CM choke and SM712 ESD placed close to the RJ45 connector. **Termination + bias resistors close to the MAX14830/PHY side or the RJ45 side as the SI analysis dictates** — locked before fab.
 - **ESP32-S3 antenna keep-out** (18 × 15 mm, all 4 layers, no copper / no traces / no vias) copied **exactly** onto the mechanical/silkscreen layer and onto the enclosure interior.
 - **RJ45 shield/ESD return strategy** documented on the layout: master is the sole shield-bond point system-wide; downstream RJ45 shields float; ESD return path explicitly identified.
-- **48 V high-current path** width, copper weight, thermal vias, and clearance rules documented for the L1 V48 distribution islands. ≥ 0.4 mm pre-clamp / ≥ 0.2 mm post-clamp creepage. No V48 on inner layers.
-- **Test points** (1 mm SMD pads, edge-accessible where possible) on: V48_IN, V48_RAIL, each eFuse VOUT, each EFUSE_EN_n, each PGOOD_n, INA237 I²C SDA/SCL, MAX14830 SPI MOSI/MISO/SCK/CS, MAX14830 IRQ + RESET, each RS-485 TX/RX/DE, 3V3, multiple GND.
-- **Fiducials** (≥3, diagonal + asymmetric third), tooling holes, PCBA top/bottom-side allocation, and panelization constraints (kikit-friendly tabs + mouse-bites) documented before tape-out.
+
+### High-voltage, fiducials, panelization
+
+- **48 V high-current path**: width per layer, copper weight, thermal vias, and clearance rules documented for the L1 V48 distribution islands. **≥ 0.4 mm pre-clamp / ≥ 0.2 mm post-clamp creepage.** No V48 on inner layers.
+- **Fiducial count and placement**: 3 fiducials minimum (two diagonal corners + asymmetric third), 1 mm copper, 3 mm solder-mask opening, on top side. Add bottom-side fiducials (matching pattern) only if the bottom side has SMD parts requiring PCBA placement.
+- **Panel rails / tooling holes**: 5 mm rail on long edges with 2× 3.2 mm tooling holes per rail. Mouse-bite or V-score policy: prefer V-score for rectangular outline (cleaner edge, kikit-friendly). Document the V-score line in the mech layer.
+
+### Drill, clearance, silkscreen, soldermask (DRC class table)
+
+| Class | 48 V net | RS-485 / USB | Logic | General |
+|---|---|---|---|---|
+| Trace-to-trace clearance | ≥ 0.40 mm pre-clamp / ≥ 0.20 mm post-clamp | ≥ 0.15 mm | ≥ 0.15 mm | ≥ 0.15 mm |
+| Trace-to-edge clearance | ≥ 0.50 mm | ≥ 0.30 mm | ≥ 0.30 mm | ≥ 0.30 mm |
+| Min drill | 0.30 mm | 0.30 mm | 0.20 mm | 0.20 mm |
+| Min annular ring | 0.15 mm | 0.10 mm | 0.10 mm | 0.10 mm |
+| Drill-to-copper (other net) | ≥ 0.30 mm | ≥ 0.20 mm | ≥ 0.20 mm | ≥ 0.20 mm |
+| Silkscreen-to-copper (pad edge) | ≥ 0.10 mm | ≥ 0.10 mm | ≥ 0.10 mm | ≥ 0.10 mm |
+| Soldermask sliver (between pads) | ≥ 0.10 mm | ≥ 0.10 mm | ≥ 0.10 mm | ≥ 0.10 mm |
+| Edge-cuts to copper (any layer) | ≥ 0.50 mm | ≥ 0.30 mm | ≥ 0.30 mm | ≥ 0.30 mm |
+
+### Test points, fiducials, signals
+
+- **Test points** (1 mm SMD pads, edge-accessible where possible) on: V48_IN, V48_RAIL, each eFuse VOUT, each EFUSE_EN_n, each FAULT_n, INA237 I²C SDA/SCL, MAX14830 SPI MOSI/MISO/SCK/CS, MAX14830 IRQ + RESET, each RS-485 TX/RX/DE, 3V3, multiple GND.
+
+### Open architectural decision before routing
+
+- **U12 strategy must be finalised before tape-out**: keep MAX14830 with manual-feeder, swap to two dual-UART bridges, or drop to a 2-bus ESP32-S3-native master. The choice changes the SPI net topology, eFuse count, INA237 count, and overall PCB area. **Layout cannot start until this is locked.**
 
 ## REVIEW_STRONG_OPINION: 4-bus master architecture
 

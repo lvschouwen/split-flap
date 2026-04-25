@@ -199,7 +199,7 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 
 - **U_POR**: TPS3839L33DBVR, monitors 3V3, threshold 3.08 V (typ), open-drain /RESET output, asserted LOW when 3V3 is below threshold.
 - **/RESET pull-up**: 10 kΩ to 3V3.
-- **Per-EN gating (×4)**: BAT54 Schottky diode anode-at-EFUSE_EN_n / cathode-at-/RESET. When /RESET is asserted (3V3 unhealthy), each diode forward-biases and pulls its EN line to ≈ 0.3 V — well below the TPS259827 EN threshold (1.35 V typ). When /RESET is released (3V3 healthy), diodes reverse-bias and EN follows the MCU GPIO normally.
+- **Per-EN gating (×4)**: BAT54 Schottky diode anode-at-EFUSE_EN_n / cathode-at-/RESET. When /RESET is asserted (3V3 unhealthy), each diode forward-biases and pulls its EN line to ≈ 0.3 V — well below the eFuse EN threshold (TPS259827 was 1.35 V typ; **pass-2 note:** confirm the TPS26600PWPR EN threshold at schematic capture, candidate replacement part). When /RESET is released (3V3 healthy), diodes reverse-bias and EN follows the MCU GPIO normally.
 - **Per-EN RC filter**: 100 nF MLCC from each EN to GND, forming τ ≈ 1 ms with the 10 kΩ pull-down. Rejects brown-in supply noise and any sub-millisecond GPIO glitch during boot. Does not slow legitimate enable transitions noticeably (firmware enables buses in sequence with > 10 ms gaps).
 - **Layout**: place U_POR within 5 mm of the LMR36015 V_OUT pin so it senses the same node the digital logic actually runs on. BAT54 diodes near the eFuse EN pins, not near the supervisor.
 

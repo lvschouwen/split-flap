@@ -2,7 +2,9 @@
 
 > **Scope:** board dimensions, layer count, stack-up, placement zones, edge-connector layout, antenna keep-out, mounting holes, copper-pour strategy, differential-pair rules, silkscreen requirements. This is a **placement brief** for a layout engineer (JLCPCB EasyEDA service or a freelancer), not a finished layout.
 >
-> **Binding references (only):** `MASTER_DECISIONS.md`, `POWER_DESIGN.md`, `DIGITAL_DESIGN.md`. Last edited 2026-04-25 (post-review revisions; see issue #76).
+> **Binding references (only):** `MASTER_DECISIONS.md`, `POWER_DESIGN.md`, `DIGITAL_DESIGN.md`. Last edited 2026-04-25 (post-review revisions; see issue #76 + #80 + #82).
+>
+> **REVIEW_PASS2_BANNER (2026-04-25):** the per-bus eFuse part family changed from `TPS259827YFFR` (DSBGA-10) to candidate `TPS26600PWPR` (HTSSOP-16-EP) because TPS25982/TPS25981 are 24V/30V class and **not valid on V48**. Text below that mentions DSBGA-10 / TPS259827 thermal vias / ENIG-for-DSBGA / 2×2 thermal-via array is **historical**: with HTSSOP-16-EP the per-bus thermal-via plan changes (exposed pad on HSOP package, not BGA escape), and ENIG is no longer driven by DSBGA pad-size considerations. ENIG remains chosen for general fine-pitch quality; revisit at schematic capture. See `MASTER_DECISIONS.md → BOM / sourcing gates from external review (pass-2 update)`.
 
 ---
 

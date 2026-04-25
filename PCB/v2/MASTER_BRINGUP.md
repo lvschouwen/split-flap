@@ -62,7 +62,7 @@ Verify in firmware boot log:
 
 Firmware sequences each bus enable in turn:
 1. Set EFUSE_EN_n high.
-2. Wait for PGOOD_n to assert (TPS259827 indicator — exposed as a test pad).
+2. Wait for PGOOD_n to assert (eFuse indicator — exposed as a test pad). **Pass-2 note:** the eFuse part is now candidate `TPS26600PWPR` (was `TPS259827YFFR` — invalid on V48); confirm the PGOOD/FAULT pin number against the TPS26600 datasheet at schematic capture, and update bring-up if the new part exposes only FAULT instead of PGOOD.
 3. Read INA237_n V_BUS reading. Should be ~47.5 V (rail) at the eFuse output.
 4. Read INA237_n current. Should be < 50 mA with no cable plugged in.
 5. If INRUSH_NOT_SETTLED (INA237 still > 200 mA after 50 ms), declare bus-fault and disable the eFuse — log to firmware error queue.

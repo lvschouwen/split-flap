@@ -137,33 +137,37 @@ These are the items still open as of the 2026-04-25 freeze, with severities recl
 
 ### 4.1 Critical — must address before schematic capture or layout release
 
-1. **BOM LCSC numbers known unreliable. Tracked as issue [#75](https://github.com/lvschouwen/split-flap/issues/75). PLEASE DO A FULL BOM VERIFICATION PASS — see §5.** Most active-IC lines still need live re-verification on https://jlcpcb.com/parts. **Severity: Critical (unchanged).**
+1. **Master per-bus eFuse voltage-rating blocker (pass-2).** The selected `TPS259827YFFR` family + `TPS25981QWRPVRQ1` fallback are **electrically invalid on the 48 V bus** — both belong to TPS25982/TPS25981 families rated 24 V/30 V abs-max class, not 60 V. Pass-2 review caught this as a real "this won't work" issue, not a sourcing detail. **Active master eFuse design must move to a ≥60 V eFuse / hot-swap solution.** Candidate: `TPS26600PWPR` (LCSC `C544399`, HTSSOP-16-EP, 4.2–60 V industrial eFuse). Not drop-in: schematic + footprint + current-limit + inrush-network rework required. The DSBGA-10 manufacturability concern is now moot (HTSSOP-16-EP is a standard JLC PCBA package). **This blocks schematic capture and layout release.** **Severity: Critical (new in pass-2).**
 
-2. **OTA-over-RS485 protocol not specified at packet level.** `UNIT_DIGITAL_DESIGN.md` describes the bootloader entry opcode but not packet format, CRC/auth, MTU, NACK/retry, rollback behaviour, dual-bank A/B layout. A corrupted mid-flash unit no longer deadlocks the chain (UID discovery skips it) but still bricks itself until SWD recovery. **Severity: Critical before field use** — not necessarily blocking schematic capture **if SWD recovery is robust on the prototype run**, but blocks field deployment.
+2. **BOM LCSC numbers known unreliable. Tracked as issue [#75](https://github.com/lvschouwen/split-flap/issues/75). PLEASE DO A FULL BOM VERIFICATION PASS — see §5.** Pass-2 closed several `CHECK` rows (`U_INA237 → C2864837`, `D2 SM712 → C172881`, `U_POR → TLV803SDBZR C132016` candidate, `Q1 → C727381` verify-before-order); others remain unresolved. Several rows are now `MANUAL_FEEDER` / `MANUAL_LOCK_FOOTPRINT` / `GLOBAL_SOURCE` rather than CHECK — explicit non-JLC-Basic statuses, not pending verification. **Severity: Critical (unchanged).**
 
-3. **Cable length & signal integrity at 500 kbaud over CAT5e/6 not validated.** No SPICE, no field measurement. Worst case: 2 cases × 32 m chain ≈ 64 m, plus 16 backplane stubs per case (≤5 mm each). With SN65HVD75 slew rate, master-side-only 1 kΩ failsafe bias, and the new 16-stub backplane segments, is the last unit's RX margin still clean? **Severity: Critical before layout release.**
+3. **MAX14830ETJ+ sourcing risk (master U12).** No clean JLC-stocked ETJ+ path. `MAX14830ETM+T` (LCSC `C2653202`) is package-mismatched and must **not** be substituted blindly. Three open options: (a) JLC manual-feeder/global-source ETJ+; (b) replace with two dual-UART SPI bridges after sourcing review; (c) reopen scope to a 2-bus ESP32-S3-native UART master. **Architectural decision required before tape-out.** Layout cannot start until this is locked. **Severity: Critical pre-tape-out (new in pass-2).**
 
-4. **Boot-time eFuse sequencing — hardware watchdog still missing.** TPS3839L33 supervisor + 4× BAT54 hold the eFuses OFF until 3V3 is healthy (P2 closed post-pivot). But if firmware crashes during init, all 4 EN pins stay LOW and the system is locked off. No documented boot state machine, no IWDG forcing EN HIGH on firmware hang. **Severity: Critical.**
+4. **OTA-over-RS485 protocol not specified at packet level.** `UNIT_DIGITAL_DESIGN.md` describes the bootloader entry opcode but not packet format, CRC/auth, MTU, NACK/retry, rollback behaviour, dual-bank A/B layout. A corrupted mid-flash unit no longer deadlocks the chain (UID discovery skips it) but still bricks itself until SWD recovery. **Severity: Critical before field use** — not necessarily blocking schematic capture **if SWD recovery is robust on the prototype run**, but blocks field deployment.
 
-5. **TPS259827YFFR DSBGA-10 0.4 mm pitch — pre-fab manufacturability gate.** Promoted from Medium to Critical by external review. JLC may refuse DSBGA-10 on the standard PCBA tier; the fallback `TPS25981QWRPVRQ1` WQFN-12 footprint is placed but the choice must be made and confirmed with JLC **before tape-out**, not at fab-quote time. **Severity: Critical pre-fab gate.**
+5. **Cable length & signal integrity at 500 kbaud over CAT5e/6 not validated.** No SPICE, no field measurement. Worst case: 2 cases × 32 m chain ≈ 64 m, plus 16 backplane stubs per case (≤5 mm each). With SN65HVD75 slew rate, master-side-only 1 kΩ failsafe bias, and the new 16-stub backplane segments, is the last unit's RX margin still clean? **Severity: Critical before layout release.**
 
-6. **TPS259827 K_ILIM datasheet-rev sensitivity.** K varies across revisions (rev 1.3 lists K ≈ 18400, newer revs differ). R_ILIM choice must land in a 1.6–1.8 A window. Confirm against the live datasheet at fab time. **Severity: Critical if TPS259827 remains selected** — falls to Medium if the WQFN-12 fallback is chosen instead.
+6. **Boot-time eFuse sequencing — hardware watchdog still missing.** TPS3839L33 supervisor (now `TLV803SDBZR` candidate per pass-2) + 4× BAT54 hold the eFuses OFF until 3V3 is healthy. But if firmware crashes during init, all 4 EN pins stay LOW and the system is locked off. No documented boot state machine, no IWDG forcing EN HIGH on firmware hang. **Severity: Critical.**
 
-7. **48 V inlet labelling and human-factor warning.** Promoted from Medium to Critical safety/human-factor item by external review. Real PoE PSEs refuse the cable (safe), but user-error interconnection into a shared patch panel is conceivable. Required mitigations: silkscreen `"PASSIVE 48V — NOT ETHERNET"` at every RJ45 (master + backplane); coloured/keyed cables (yellow/red jackets) preferred over generic CAT5e/CAT6 patch cords; user-facing docs must avoid any "structured cabling" or "patch panel" framing. **Severity: Critical safety.**
+7. **48 V inlet labelling and human-factor warning.** Promoted from Medium to Critical safety/human-factor item by pass-1 external review. Real PoE PSEs refuse the cable (safe), but user-error interconnection into a shared patch panel is conceivable. Required mitigations: silkscreen `"PASSIVE 48V — NOT ETHERNET"` at every RJ45 (master + backplane); coloured/keyed cables (yellow/red jackets) preferred over generic CAT5e/CAT6 patch cords; user-facing docs must avoid any "structured cabling" or "patch panel" framing. **Severity: Critical safety.**
 
-8. **Mechanical freelancer hand-off / AS5600 datum specification.** Promoted from Low to Critical for unit layout by external review. The unit is **not layout-ready** until the mech freelancer has signed off a STEP file specifying: magnet diameter/thickness, motor shaft XY datum vs. AS5600 IC center, allowed AS5600 XY error, target air gap (1.5 mm nominal) with min/max guarantee, board mounting tolerance. Also covers backplane bracket geometry (segment-joint mechanical reliability per `BACKPLANE_DECISIONS.md` post-review section). **Severity: Critical for unit + backplane layout.**
+8. **Mechanical freelancer hand-off / AS5600 datum specification (pass-2 sharpened).** Promoted from Low to Critical for unit layout by pass-1; pass-2 sharpened the gate to **eleven explicit dimensional values** (motor shaft XY datum, AS5600 IC center coord + tolerance, magnet ⌀ + thickness + diametral magnetization spec, target / min / max air gap, allowed radial offset, allowed axial tilt, board mounting tolerance, motor harness clearance envelope). The unit is **not layout-ready** until all eleven are explicit numbers in a single dimensioned drawing or STEP file. Backplane bracket geometry (segment-joint mechanical reliability per `BACKPLANE_DECISIONS.md`) is the parallel gate for backplane layout. **Severity: Critical for unit + backplane layout.**
 
-9. **Factory programming and test-fixture flow for 80-unit prototype run.** New issue from external review. Production of 80 units requires a documented flow: SWD pogo jig (mechanical fixture + electrical), firmware flashing automation, UID capture (per-unit logging of STM32G030 96-bit UID + assigned address + version), per-unit pass/fail acceptance test (home + step + angle? + I²C-to-AS5600 + RS-485 loopback). Without this, the 80-unit run is bench-flashed one at a time with manual logbook entries — fine for 10, infeasible for 80. **Severity: Critical for the 80-unit prototype phase.**
+9. **Factory programming and test-fixture flow for 80-unit prototype run.** New issue from pass-1 external review. Production of 80 units requires a documented flow: SWD pogo jig (mechanical fixture + electrical), firmware flashing automation, UID capture (per-unit logging of STM32G030 96-bit UID + assigned address + version), per-unit pass/fail acceptance test (home + step + angle? + I²C-to-AS5600 + RS-485 loopback). Without this, the 80-unit run is bench-flashed one at a time with manual logbook entries — fine for 10, infeasible for 80. **Severity: Critical for the 80-unit prototype phase.**
 
 ### 4.2 Medium — should be addressed before fab order
 
-10. **Creepage / clearance for 48 V path** for the freelance layout engineer. 48 V is below IEC 61010 Class-2 thresholds (≤60 V) so not a strict safety requirement, but IPC-2221 Class-1 wants ≥0.4 mm on unprotected 48 V nets. Master locks ≥0.4 mm pre-clamp / ≥0.2 mm post-clamp; backplane and unit not yet specified. **Severity: Medium, but specify now** in `BACKPLANE_DECISIONS.md` and `UNIT_DECISIONS.md` so the layout engineer doesn't bounce.
+10. **Creepage / clearance for 48 V path** for the freelance layout engineer. 48 V is below IEC 61010 Class-2 thresholds (≤60 V) so not a strict safety requirement, but IPC-2221 Class-1 wants ≥0.4 mm on unprotected 48 V nets. Master, backplane, and unit DECISIONS docs now carry explicit DRC class tables (pass-2) — `≥0.4 mm pre-clamp / ≥0.2 mm post-clamp`. **Severity: Medium — specified now.**
 
 11. **CE/FCC compliance plan absent.** 48 V + 500 kbaud switching + WiFi master = a product likely needing EMC assessment if ever sold. **Severity: deferrable for personal prototype; Critical before sale.**
 
 12. **Stepping current real-world measurement** on first prototype unit. Buck inductor Isat ≥ 1 A and per-slot polyfuse 0.2 A hold/0.4 A trip both assume ≤300 mA peak. If first prototype shows ≥600 mA peak per phase, both must be re-spec'd (firmware current-limit, larger inductor, larger polyfuse). **Severity: Medium; must happen on first prototype before ordering the 80-unit run.**
 
-13. **RJ45 jack P/N consistency** between master and backplane. Both spec a shielded THT 8P8C no-mag jack. **Severity: Medium but must be locked before footprint/layout** — generic 8P8C footprint is not acceptable for either board.
+13. **RJ45 jack P/N consistency** between master and backplane. Both now `MANUAL_LOCK_FOOTPRINT` per pass-2 BOM update. **Severity: Medium but must be locked before footprint/layout** — generic 8P8C footprint is not acceptable for either board.
+
+14. **U2 master buck — open footprint decision.** Pass-2 candidate substitute `LMR36015FSC3RNXRQ1 C1850344` is fixed-output VQFN-12, not the original adjustable HSOIC-8. Decision gate is open: keep adjustable / FB divider / HSOIC-8 (and re-search JLC for a cleaner LMR36015 variant), or commit to the fixed-output candidate (which deletes `R_FB_TOP/R_FB_BOT`). **Severity: Medium — must be locked before schematic capture.**
+
+15. **U_POR master supervisor — open behaviour-verification.** Pass-2 candidate `TLV803SDBZR C132016` (SOT-23-3) replaces `TPS3839L33DBVR` (SOT-23-5). Output topology, reset delay, threshold, and BAT54 OR-gating compatibility must be verified before lock. **Severity: Medium — verify before schematic capture.**
 
 ### 4.3 Low — v2.1 material
 
@@ -236,7 +240,19 @@ Post-pivot, all three BOMs (`MASTER_BOM.csv`, `BACKPLANE_BOM.csv`, `UNIT_BOM.csv
 
 `Designator, Comment, Footprint, LCSC Part #, MPN, Manufacturer, Qty, JLC_Tier, Populate, EstEUR, DatasheetURL, Notes, BomType`
 
-`Populate` ∈ {`Y`, `DNP`, `END_OF_CHAIN`, `ALT_<group>`}; `BomType` ∈ {`onboard`, `offboard`, `fab`, `hardware`}. Several lines are still flagged `CHECK` in the LCSC column — pending live re-verification.
+`Populate` ∈ {`Y`, `DNP`, `END_OF_CHAIN`, `ALT_<group>`}; `BomType` ∈ {`onboard`, `offboard`, `fab`, `hardware`}. Several lines remain unresolved — but pass-2 split them into explicit categories rather than leaving them all as `CHECK`:
+
+| `LCSC Part #` value | Meaning | Action |
+|---|---|---|
+| `Cxxxxxx` + `REVIEW_VERIFIED` / `REVIEW_PASS2_VERIFIED` note | live JLC part confirmed | safe to upload |
+| `Cxxxxxx` + `REVIEW_PASS2_VERIFY_BEFORE_ORDER` | candidate, page metadata not reconciled | verify against datasheet before commit |
+| `Cxxxxxx` + `REVIEW_PASS2_SUBSTITUTE` | candidate substitute, **not drop-in** | schematic + footprint change required |
+| `MANUAL_FEEDER` | no JLC-stocked path | global-source / manual-feeder at PCBA quote |
+| `MANUAL_LOCK_FOOTPRINT` | mechanical/connector item, lock by footprint | finalize before layout |
+| `GLOBAL_SOURCE` | SI-critical part, not on JLC | global-source at PCBA quote |
+| `QUOTE_TIME` | passive, picked at PCBA quote with constraints | acceptable as-is for the brief |
+| `DELETE` | row to be removed at next BOM revision | architectural change (e.g. eFuse swap) |
+| `CHECK` | still pending verification | should be empty after pass-2 — see §4.1 #1 |
 
 **The MPN column is authoritative**, not the LCSC column. As part of your review, please:
 
@@ -253,6 +269,8 @@ Hand the result back as a corrected BOM excerpt (MPN + correct `Cxxxxxx` + JLC s
 ## 6. Cost / complexity delta summary
 
 > **REVIEW_COST_WARNING:** current cost estimates are directional until the JLC BOM uploader accepts exact C-numbers/packages. Master cost is especially sensitive to MAX14830 availability, eFuse package choice, and current-monitor sourcing. Treat €80/master, €7.50/backplane segment, and €8.90/unit as unverified planning numbers.
+>
+> **REVIEW_PASS2_COST_WARNING:** pass-2 resolves several remaining `CHECK` rows (master `INA237 → C2864837`, unit `D2 SM712 → C172881`) but also surfaced a **master eFuse voltage-rating blocker** that forces a part-family change (`TPS259827YFFR` → `TPS26600PWPR C544399`, ~€3.20/each vs €2.50/each at qty 4 — adds ~€2.80 across the four buses, plus rework cost). The master estimate is **not closed** until: (a) the 60 V eFuse replacement is finalised at schematic capture, and (b) the MAX14830 sourcing / manual-feeder path is decided. Backplane and unit cost estimates remain plausible planning numbers.
 
 | Axis | v1 | v2 (post-pivot) | Delta |
 |---|---|---|---|
