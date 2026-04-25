@@ -99,3 +99,28 @@ Same pinout as master. Case-level RJ45s are **shielded THT** (matches master/RJ4
 - **B2** — Mounting hole exact positions: pending mech freelancer's bracket design.
 - **B3** — Whether to put the terminator on segment-4 or on a separate small "chain-end cap" PCB. Default: segment-4 PCBA stuffing variant. Revisit if cost-of-stuffing-variant exceeds ~€5/segment.
 - **B4** — Optional case-level INA219 current monitor on each backplane segment for telemetry. Per scottbez1 audit, his Chainlink Base does this. Costs ~€0.80 + 1 GPIO on master per case. Defer to v2.1 if telemetry granularity becomes an operational need.
+
+## Segment-joint mechanical reliability (post external review)
+
+**4 × 320 mm segmentation remains accepted.** The structural weak point of the architecture is the **mechanical reliability of rigid segment-to-segment 6-pin board-to-board connectors** under vibration, transport, and thermal cycling. Failure mode: a segment joint that physically pivots on the connector pins puts bending load on the contacts and either fails open (unit drops out of the chain) or fails intermittently (RS-485 errors that look like SI failures).
+
+Decisions:
+
+- **Enclosure must positively support each segment and each inter-segment joint.** Mechanical bracket design (mech freelancer, STEP exchange) must include support fixtures within ≤ 50 mm of every joint so the joint does not carry bending load. This is now a **layout-readiness gate**: backplane is not layout-ready until the bracket geometry is finalised.
+- **If board-to-board headers remain**, require **keyed and latching** connectors (not generic 2.54 mm pin headers) **or dual connectors / dowels / brackets** that constrain bending so the connector pins carry only contact load.
+- **Strongly consider short keyed wire harness jumpers or flex/FFC** for segment joints **if mechanical support is uncertain**. A 30–50 mm pre-crimped 6-conductor harness with keyed Molex/JST plug at each end is mechanically forgiving and cheap.
+
+## LAYOUT_CONSTRAINT: backplane pre-layout checklist
+
+- **Route RS-485 as a trunk** (continuous A/B pair down the long axis), **not as a star** from the inter-segment connector to each slot.
+- **Per-slot RS-485 stubs ≤ 5 mm** from trunk to slot socket pin. Anything longer kills SI margin at 500 kbaud over 16 stubs.
+- **Continuous GND reference plane** under the A/B pair on the opposite layer for the full segment length. No splits, no via-fence interruptions.
+- **Avoid repeated long unterminated branches.** The trunk + 16 short stubs is the topology; do not introduce intermediate breakouts.
+- **`R_TERM` placement only on segment-4 (chain-end case PCBA variant).** All other segments DNP. Segment PCBs are identical; differentiation is at PCBA stuffing time.
+- **Optional DNP per-slot debug LED + resistor footprints** if space allows — saves bench debug time at zero cost when not populated.
+- **Test pads at segment IN and segment OUT** for V48, GND, A, B (1 mm SMD), edge-accessible from the back of the case for in-situ probing.
+- **Exact RJ45 footprint and inter-segment 6-pin connector footprint locked before schematic** — generic 8P8C and generic 2×3 are not acceptable. Same RJ45 SKU as master.
+
+## REVIEW_STRONG_OPINION: harness over rigid joints
+
+Short keyed harness jumpers are mechanically safer than rigid board-to-board segment joints unless the enclosure positively supports each segment and joint. If the bracket spec is not finalised by the time schematic capture starts, default to wire-harness segment joints.

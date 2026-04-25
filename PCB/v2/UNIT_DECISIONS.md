@@ -151,3 +151,45 @@ Failsafe bias is provided **at the master only** (1 kΩ each leg); unit and back
 - **U3 — Diametral magnet P/N + grade.** 6×2.5 mm N35 vs N42. Validate with an AS5600 breakout first. Off-board item.
 - **U6 — Mounting hole positions.** Determined alongside 3D bracket design (mech freelancer).
 - **U_STEP — Stepping current real-world measurement.** First-prototype task. Re-spec backplane polyfuse sizing if 28BYJ-48 stepping pulls > 300 mA peak.
+
+## AS5600 datum problem (post external review)
+
+AS5600 placement is **not a PCB placement note — it is a mechanical datum problem**. The unit is **not layout-ready** until all of the following are explicit and signed off by the mech freelancer (STEP exchange):
+
+- **Magnet diameter and thickness** (currently 6 × 2.5 mm N35; not finalised — see U3).
+- **Motor shaft XY datum** relative to the unit PCB origin (AS5600 IC center).
+- **Allowed AS5600 XY error** vs the motor shaft axis (typical ams spec: ≤ 0.25 mm radial offset for full-resolution operation).
+- **Target air gap** (1.5 mm nominal, allowed 0.5–3 mm) and **min/max guarantee** that the bracket + tolerance stack-up actually delivers.
+- **Board mounting tolerance** within the bracket (M3 hole positions, oversize, locating features).
+
+These five must appear in a single dimensioned drawing or STEP file before the unit PCB enters layout. Without them, the electronics can be perfect and the unit can still fail to read absolute angle.
+
+## TPS54360 thermal plan (post external review)
+
+TPS54360DDA HSOP-8 PowerPAD thermal copper / via plan must be specified **before layout**, not discovered during fab. Decisions:
+
+- Exposed pad copper pour ≥ 200 mm² on the bottom layer with thermal stitching (≥ 6× 0.3 mm vias under the pad on the top, drawing heat to the bottom pour).
+- Top-side copper relief around the pad to prevent solder-paste pull-off during reflow.
+- Switch-node copper kept compact (≤ 100 mm² to limit EMI radiation) and away from AS5600 / I²C traces.
+
+## SWD pogo + standalone UART access (post external review)
+
+The unit's bring-up depends on:
+
+- **SWD pogo fixture geometry** documented (4× 1.5 mm pads on 2.54 mm pitch, edge-accessible, oriented for jig insertion direction). Not negotiated at fab time.
+- **Standalone UART test mode pad access** documented — the SWD pads (PA13/PA14) repurposed as UART RX/TX when no SWD master is present. Bring-up jig must be able to drive both modes from the same pogo footprint.
+
+## LAYOUT_CONSTRAINT: unit pre-layout checklist
+
+- **AS5600 IC center tied to motor shaft datum** with explicit tolerance (per the mech freelancer's STEP).
+- **Magnet gap target** (1.5 mm nominal) and min/max guarantee from the bracket assembly.
+- **Buck switch node** kept compact and **away from AS5600 / I²C traces** — at minimum, keep ≥ 5 mm separation and route AS5600 I²C on the opposite layer with GND pour between.
+- **AS5600 I²C local RC filter (100 Ω series + 100 pF shunt)** placed close to the AS5600 side of the I²C net, not close to the MCU side, so the filter rejects buck-switching coupling at the encoder.
+- **RS-485 ESD (SM712-02HTG)** placed close to the backplane connector entry, not close to the SN65HVD75 — protect the connector entry, not the transceiver.
+- **Test pads** for: 12V (post-buck), 3V3, V48 after reverse-FET, NRST, SWDIO, SWCLK, UART/test-mode RX, UART/test-mode TX, RS-485 A, RS-485 B, RS-485 DE, RS-485 TX, RS-485 RX (where space allows).
+- **TPL7407 IN5–IN7 hard-tied to GND** (not via 10 kΩ — false-turn-on risk during MCU reset).
+- **Motor connector orientation and pinout** must match the actual 28BYJ-48 harness/motor variant supplied — verified at first-prototype mechanical fit.
+
+## REVIEW_STRONG_OPINION: AS5600 alignment is the unit's hardest problem
+
+If AS5600 / magnet alignment is not specified as a drawing with tolerances, the electronics can be perfect and the unit can still fail. Treat the mech freelancer hand-off as a critical-path layout-readiness blocker, not a parallel workstream.

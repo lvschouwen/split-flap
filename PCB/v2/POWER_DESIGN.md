@@ -51,18 +51,18 @@
 | Ref | Function | Part | LCSC | Package | Key params | €/pc | JLC |
 |---|---|---|---|---|---|---|---|
 | D1 | Input TVS | SMDJ58CA | C145194 | DO-214AB (SMC) | Bidir, V_WM=58 V, V_BR=64.4 V, V_C=93 V @ 51 A, 3 kW | 0.45 | Extended |
-| U1 | Ideal-diode ctrl | LM74700-QDBVRQ1 | C509439 | SOT-23-6 | 3.2–65 V, 20 µA I_Q, FAULT open-drain | 1.30 | Extended |
-| Q1 | Reverse-block N-FET | SQJ148EP-T1_GE3 | C2836025 | PowerPAK SO-8 | V_DS=100 V, R_DS(on)=9 mΩ @ V_GS=10 V, Q_g=44 nC | 1.40 | check |
+| U1 | Ideal-diode ctrl | LM74700-QDBVRQ1 | C2941042 | SOT-23-6 | 3.2–65 V, 20 µA I_Q, FAULT open-drain | 1.30 | Extended |
+| Q1 | Reverse-block N-FET | SQJ148EP-T1_GE3 | CHECK | PowerPAK SO-8 | V_DS=100 V, R_DS(on)=9 mΩ @ V_GS=10 V, Q_g=44 nC | 1.40 | check |
 | R_GATE_LM | LM74700 GATE series | 1 kΩ 1% 0603 | C22929 | 0603 | TI SLUA975 stability vs Q_g ringing | 0.01 | Basic |
 | D_RAIL | V48_RAIL clamp | SMAJ51A | C8678 | SMA | Sole secondary clamp post-LM74700 (P1 closed 2026-04-25) | 0.20 | Basic |
-| U2 | 48→3V3 buck | LMR36015AFDDA | C922105 | HSOIC-8 PowerPAD | 4.2–60 V_in, 1.5 A, 2.1 MHz, adjustable FB | 2.10 | Extended |
+| U2 | 48→3V3 buck | LMR36015AFDDA | CHECK | HSOIC-8 PowerPAD | 4.2–60 V_in, 1.5 A, 2.1 MHz, adjustable FB | 2.10 | Extended |
 | C_BOOT | LMR36015 bootstrap | 100 nF / 25 V X7R 0402 | C1525 | 0402 | CBOOT to SW, ≤2 mm placement | 0.01 | Basic |
 | L1 | Buck inductor | XAL5030-333MEB (33 µH, 1.7 A_sat, 245 mΩ) | C2834984 | 5.3×5.3×3.0 mm shielded | I_sat ≥ 1.7 A, DCR ≤ 250 mΩ | 0.90 | Extended |
 | C_IN48 | V48 bulk (AL-poly) | 47 µF / 100 V Nichicon PCV | C2843372 | 10×10 SMD | 100 V, 105 °C, ESR ~30 mΩ | 0.75 | check |
 | C_IN48x | V48 HF decap | GRM32ER72A475K (4.7 µF / 100 V X7R) | C1778 / C2832225 | 1210 | 100 V rating on unfiltered rail | 0.35 | Extended |
 | C_OUT3V3 | 3V3 output cap | GRM188R71A225K (2.2 µF / 25 V X7R) ×2 | C1804 | 0603 | Low ESR | 0.03 | Basic |
-| U3..U6 | eFuse (×4) | TPS259827YFFR | C2906816 | DSBGA-10 | 4.2–60 V, I_LIM adj, EN/FAULT/PGOOD | 2.50 | Extended |
-| U7..U10 | Current monitor (×4) | INA237AIDGSR | C2893010 | VSSOP-10 | ±163.84 mV FSR, 16-bit, ALERT, I²C | 1.80 | Extended |
+| U3..U6 | eFuse (×4) | TPS259827YFFR | CHECK | DSBGA-10 | 4.2–60 V, I_LIM adj, EN/FAULT/PGOOD | 2.50 | Extended |
+| U7..U10 | Current monitor (×4) | INA237AIDGSR | CHECK | VSSOP-10 | ±163.84 mV FSR, 16-bit, ALERT, I²C | 1.80 | Extended |
 | R_SH1..4 | Shunt (×4) | CSR2512-50-1% (50 mΩ, 3 W, 2512) | C157950 | 2512 Kelvin | 50 mΩ ±1%, 3 W | 0.25 | Extended |
 | LED1 | PWR_48V | 0603 red, V_F≈1.9 V, I_F=2 mA | C2286 | 0603 | — | 0.02 | Basic |
 | LED2 | PWR_3V3 | 0603 green, V_F≈2.0 V, I_F=2 mA | C72043 | 0603 | — | 0.02 | Basic |
@@ -193,10 +193,10 @@ Ref,Part,LCSC,Package,Qty,Note
 J1,Barrel jack 5.5/2.5 mm 60 V THT,check,THT,1,Check stock + footprint at BOM-finalize
 D1,SMDJ58CA,C145194,DO-214AB,1,Bidir TVS 58V (primary surge clamp)
 D_RAIL,SMAJ51A,C8678,SMA,1,Sole secondary clamp on V48_RAIL post-Q1 (§3a)
-U1,LM74700-QDBVRQ1,C509439,SOT-23-6,1,Ideal-diode controller
-Q1,SQJ148EP-T1_GE3,C2836025,PowerPAK SO-8,1,100V 9mΩ N-FET
+U1,LM74700-QDBVRQ1,C2941042,SOT-23-6,1,Ideal-diode controller (REVIEW_VERIFIED)
+Q1,SQJ148EP-T1_GE3,CHECK,PowerPAK SO-8,1,100V 9mΩ N-FET (REVIEW_BLOCKER: old C2836025 wrong)
 R_GATE_LM,1 kΩ 1%,C22929,0603,1,LM74700 GATE series for Q_g stability (TI SLUA975)
-U2,LMR36015AFDDA,C922105,HSOIC-8 PowerPAD,1,48→3V3 buck (adjustable; FB divider populated)
+U2,LMR36015AFDDA,CHECK,HSOIC-8 PowerPAD,1,48→3V3 buck (adjustable; FB divider populated) (REVIEW_BLOCKER: old C922105 unverified)
 C_BOOT,100 nF 25V X7R,C1525,0402,1,LMR36015 CBOOT-to-SW (mandatory)
 L1,XAL5030-333MEB,C2834984,5.3×5.3×3.0,1,33 µH 1.7 A shielded
 C_IN48_BULK,Nichicon PCV 47µF/100V,C2843372,SMD 10×10,2,AL-poly input bulk
@@ -211,7 +211,7 @@ R_FB_TOP,100 kΩ 1%,C25803,0603,1,LMR36015 FB divider top (3V3)
 R_FB_BOT,33.2 kΩ 1%,check,0603,1,LMR36015 FB divider bottom (3V3)
 R_GATE_BLEED,10 kΩ 1%,C25804,0603,1,Q1 G–S bleed
 R_SH1..4,50 mΩ 1% 3 W 2512 Kelvin,C157950,2512,4,Per-bus shunt
-U3..U6,TPS259827YFFR,C2906816,DSBGA-10,4,Per-bus eFuse (primary; alternate WQFN-12 footprint also placed)
+U3..U6,TPS259827YFFR,CHECK,DSBGA-10,4,Per-bus eFuse (primary; alternate WQFN-12 footprint also placed) (REVIEW_BLOCKER: DSBGA pre-fab gate; old C2906816 unverified)
 R_ILIM1..4,11 kΩ 1%,C23186,0603,4,eFuse I_LIM
 C_DVDT1..4,100 nF X7R,C14663,0603,4,eFuse dV/dt — sized for 32-unit bus inrush (was 10 nF)
 C_IN_EF1..4,100 nF / 100 V X7R,C123498,0603,4,eFuse VIN decap
@@ -221,7 +221,7 @@ C_EN_RC1..4,100 nF X7R,C14663,0603,4,eFuse EN RC filter (τ ≈ 1 ms)
 U_POR,TPS3839L33DBVR,C70604,SOT-23-5,1,3V3 POR supervisor — open-drain /RESET
 R_POR_PU,10 kΩ 1%,C25804,0603,1,/RESET pull-up
 D_POR1..4,BAT54 small-signal Schottky,C2480,SOT-23,4,Anode at /RESET, cathode at EFUSE_EN_n (polarity corrected 2026-04-25) — pulls EN low when 3V3 unhealthy
-U7..U10,INA237AIDGSR,check,VSSOP-10,4,Current monitor — LCSC pending ChatGPT pass (#75); choose between C2893010 / C2897185
+U7..U10,INA237AIDGSR,CHECK,VSSOP-10,4,Current monitor — LCSC pending ChatGPT pass (#75) (REVIEW_BLOCKER: INA226AIDGSR C49851 not a blind substitute — VBUS divider/CM limits/register map differ)
 R_INx_A1..4,10 Ω / 100 V 1%,C25076,0603,4,INA237 IN+ series filter
 R_INx_B1..4,10 Ω / 100 V 1%,C25076,0603,4,INA237 IN− series filter
 C_INx_FLT1..4,100 nF X7R,C14663,0603,4,INA237 differential filter

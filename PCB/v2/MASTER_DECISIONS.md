@@ -169,3 +169,44 @@ Most pre-2026-04-25 open items are now resolved by the post-review revision. Rem
 - **M5 closed (shield bond)** — master solid bond, unit/backplane float.
 - **M6 closed (RJ45 pin-1 indicator)** — promoted to silkscreen must-have.
 - **M9 closed (surge-clamp chain)** — simplified to single SMAJ51A on V48_RAIL after R_SERIES deletion.
+
+## BOM / sourcing gates from external review
+
+Bound on every part decision below. All notes apply to the master BOM (`MASTER_BOM.csv`) and propagate to schematic-capture and PCBA freeze.
+
+- **C-numbers are not trusted unless marked `REVIEW_VERIFIED`** in the BOM Notes column. Treat any other LCSC entry as advisory only.
+- The following remain **hard `CHECK`** items pending live JLC BOM-uploader verification — do not order without explicit confirmation:
+  - `LMR36015AFDDA` (U2)
+  - `TPS259827YFFR` (U3–U6, primary eFuse)
+  - `TPS25981QWRPVRQ1` (U3_ALT–U6_ALT, fallback eFuse)
+  - `TPS3839L33DBVR` (U_POR) — `TPS3823-33DBVR = C7719` is **not** a blind drop-in; pinout, reset delay, output topology, and boot sequencing differ
+  - `INA237AIDGSR` (U7–U10) — `INA226AIDGSR C49851` is **not** a blind substitute (VBUS/divider/common-mode limits + register map differ)
+  - `MAX14830ETJ+` (U12) — **major BOM/sourcing risk**; `MAX14830ETM+T C2653202` is package-mismatched; do not substitute without footprint/pinout review
+  - `SQJ148EP` (Q1) — old `C2836025` resolved to a different MOSFET; confirm Rds(on), Vds, package, thermal pad, SOA before order
+- **`TPS259827YFFR` DSBGA-10 0.4 mm pitch is a pre-fab JLC PCBA gate**, not a routine detail. Must clear DSBGA acceptance with JLC standard-tier PCBA before tape-out, else swap to the WQFN-12 fallback footprint already placed on the board.
+- **If exact parts cannot be sourced, do not silently substitute package variants** — every package change must be re-validated against pinout, footprint, thermal pad, and PCBA process at minimum.
+
+## LAYOUT_CONSTRAINT: master pre-layout checklist
+
+Layout engineer must clear all of these before accepting routing scope:
+
+- **Stackup + impedance**: exact JLC stackup (4-layer 1.6 mm, 1 oz outer / 0.5 oz inner, ENIG) and controlled-impedance targets (RS-485 differential, USB D+/D−) locked before routing — not negotiated mid-route.
+- **USB D+/D−** routed as 90 Ω differential pair, length-matched, over solid GND reference, with USBLC6-2SC6 in-line at the connector.
+- **RS-485 A/B pair routing** as 120 Ω differential pair, length-matched, on L1 over solid L2 GND, with the Würth 744232601 common-mode choke and SM712 ESD placed close to the RJ45 connector. **Termination + bias resistors close to MAX14830/PHY side or RJ45 side as the SI analysis dictates** — locked before fab.
+- **ESP32-S3 antenna keep-out** (18 × 15 mm, all 4 layers, no copper / no traces / no vias) copied **exactly** onto the mechanical/silkscreen layer and onto the enclosure interior.
+- **RJ45 shield/ESD return strategy** documented on the layout: master is the sole shield-bond point system-wide; downstream RJ45 shields float; ESD return path explicitly identified.
+- **48 V high-current path** width, copper weight, thermal vias, and clearance rules documented for the L1 V48 distribution islands. ≥ 0.4 mm pre-clamp / ≥ 0.2 mm post-clamp creepage. No V48 on inner layers.
+- **Test points** (1 mm SMD pads, edge-accessible where possible) on: V48_IN, V48_RAIL, each eFuse VOUT, each EFUSE_EN_n, each PGOOD_n, INA237 I²C SDA/SCL, MAX14830 SPI MOSI/MISO/SCK/CS, MAX14830 IRQ + RESET, each RS-485 TX/RX/DE, 3V3, multiple GND.
+- **Fiducials** (≥3, diagonal + asymmetric third), tooling holes, PCBA top/bottom-side allocation, and panelization constraints (kikit-friendly tabs + mouse-bites) documented before tape-out.
+
+## REVIEW_STRONG_OPINION: 4-bus master architecture
+
+The 4-bus MAX14830 architecture is technically workable but expensive and sourcing-risky. If 128 units is not a real near-term requirement, a 2-bus ESP32-S3-native UART master is cheaper and easier (no MAX14830, fewer eFuses, fewer INA237s, smaller PCB). Architecture remains locked unless owner reopens scope.
+
+## REVIEW_SAFETY: passive 48 V over RJ45 labelling
+
+Passive 48 V over RJ45 must be labelled as **NOT Ethernet/PoE**. Required:
+
+- Silkscreen at every RJ45: **"PASSIVE 48V — NOT ETHERNET"**.
+- Coloured/keyed cables preferred over generic CAT5e/CAT6 patch cords (e.g. yellow or red jackets) to discourage installation into a shared patch panel.
+- Avoid any patch-panel installation language in user-facing docs. The system uses RJ45 connectors but is **not** a structured-cabling product.

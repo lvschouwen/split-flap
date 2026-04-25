@@ -117,7 +117,7 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 
 - Receptacle: USB-C 2.0-only 16-pin SMD (e.g. GCT USB4085 / LCSC C165948 class — needs both CC1/CC2).
 - CC1, CC2: each 5.1 kΩ to GND (UFP role).
-- D+/D−: route to IO20 / IO19. USBLC6-2SC6 (C7415) ESD clamp on the D± pair close to the connector.
+- D+/D−: route to IO20 / IO19. USBLC6-2SC6 (C7519, REVIEW_VERIFIED — old C7415 was wrong) ESD clamp on the D± pair close to the connector.
 - VBUS handling: VBUS → ferrite bead (BLM18PG600SN1) → 4.7 µF bulk → **NC (not routed to 3V3 rail)**. Test pad post-ferrite.
 - Shield: USB-C shell tied to GND via 0 Ω populated by default. Hybrid (1 MΩ ∥ 10 nF) left as DNP pad.
 
@@ -145,7 +145,7 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 
 ### 3e. MAX14830 interface
 
-- IC: MAX14830ETJ+ (TQFN-32, C2683133). 3V3 operation.
+- IC: MAX14830ETJ+ (TQFN-32, **CHECK** — REVIEW_BLOCKER: old C2683133 unverified, ETJ+ package not cleanly mapped on JLC). 3V3 operation.
 - Crystal: 3.6864 MHz fundamental (ABLS-3.6864MHZ-B4-T, C70581). **Load caps must match the crystal's specified C_L** — for an 18 pF C_L crystal: C_load_cap = 2 × (C_L − C_stray) = 2 × (18 − 3) = **30 pF C0G 0402** on each of XTAL1, XTAL2 to GND. Verify crystal C_L spec at BOM-finalize before fixing cap value.
 - SPI wiring: MOSI↔DIN, MISO↔DOUT, SCK↔SCLK, CS↔/CS (IO10). IRQ↔IO14 (open-drain, 10 kΩ PU to 3V3 on digital side).
 - **VEXT pin (I/O level reference) tied to 3V3** with its own 100 nF X7R decoupling cap. Locked 2026-04-25.
@@ -156,10 +156,10 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 
 ### 3f. SN65HVD75D per-bus RS-485 PHY (×4 identical)
 
-- IC: SN65HVD75DR (SOIC-8, C64829). Baud locked to **500 kbaud 8N1**.
+- IC: SN65HVD75DR (SOIC-8, C57928 REVIEW_VERIFIED_LCSC). Baud locked to **500 kbaud 8N1**.
 - D (TX in) ← MAX14830 TXn; R (RX out) → MAX14830 RXn.
 - DE + /RE tied together ← MAX14830 per-channel DE output (hardware auto-direction).
-- A / B → common-mode choke (Würth 744232601, C191126, 600 Ω @ 100 MHz) → RJ45.
+- A / B → common-mode choke (Würth 744232601, **CHECK** — REVIEW_BLOCKER: old C191126 resolved to Vishay VEMD5510C photodiode, 600 Ω @ 100 MHz) → RJ45.
 - Transient: SM712-02HTG (C169123) across A–GND / B–GND.
 - Termination: 120 Ω 1 % 0805 A↔B, populated (master is chain end).
 - **Fail-safe bias (revised 2026-04-25): 1 kΩ 1 % A→3V3, 1 kΩ 1 % B→GND** (was 390 Ω each leg). Idle differential ≈ 280 mV — comfortably above SN65HVD75 200 mV failsafe threshold; idle current per bus 1.6 mA (was 4.2 mA at 390 Ω → 17 mA across 4 buses).
@@ -170,7 +170,7 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 
 ### 3g. INA237 telemetry bank + TELEM_ALERT_OR
 
-- IC: INA237AIDGSR (VSSOP-10, C2897185). ×4 on shared I²C.
+- IC: INA237AIDGSR (VSSOP-10, **CHECK** — REVIEW_BLOCKER: exact LCSC unverified; INA226 C49851 not a blind substitute). ×4 on shared I²C.
 - Address straps:
   - U_INA1: A1=GND A0=GND → 0x40
   - U_INA2: A1=GND A0=VS   → 0x41
@@ -235,18 +235,18 @@ Legend — **Dir**: I=input, O=output, IO=bidir, USB=native USB PHY, X=not route
 | Ref | Part | LCSC | Package | Qty | Note |
 |---|---|---|---|---|---|
 | U1 | ESP32-S3-WROOM-1-N16R8 | C2913202 | Module | 1 | 16 MB flash, 8 MB Octal PSRAM |
-| U2 | MAX14830ETJ+ | C2683133 | TQFN-32 | 1 | 4-UART SPI bridge |
-| U3..U6 | SN65HVD75DR | C64829 | SOIC-8 | 4 | RS-485 PHY 3V3 |
-| U7..U10 | INA237AIDGSR | C2897185 | VSSOP-10 | 4 | I²C addr 0x40..0x43 |
-| U11 | USBLC6-2SC6 | C7415 | SOT-23-6 | 1 | USB D± ESD |
+| U2 | MAX14830ETJ+ | CHECK | TQFN-32 | 1 | 4-UART SPI bridge (REVIEW_BLOCKER: old C2683133 unverified) |
+| U3..U6 | SN65HVD75DR | C57928 | SOIC-8 | 4 | RS-485 PHY 3V3 (REVIEW_VERIFIED_LCSC) |
+| U7..U10 | INA237AIDGSR | CHECK | VSSOP-10 | 4 | I²C addr 0x40..0x43 (REVIEW_BLOCKER: INA226 C49851 not a substitute) |
+| U11 | USBLC6-2SC6 | C7519 | SOT-23-6 | 1 | USB D± ESD (REVIEW_VERIFIED — old C7415 wrong) |
 | Y1 | 3.6864 MHz XTAL, 18 pF | C70581 | 3.2×2.5 | 1 | MAX14830 clock |
 | J_USB | USB-C 2.0 receptacle 16-pin | C165948 | SMD | 1 | UFP |
 | J_SWD | 2×5 1.27 mm header | C72408 | SMD | 1 | Cortex-debug |
-| J_BUS1..4 | Shielded THT RJ45 no-mag | C150877 | THT | 4 | RS-485 bus ports |
+| J_BUS1..4 | Shielded THT RJ45 no-mag | CHECK | THT | 4 | RS-485 bus ports (REVIEW_BLOCKER: old C150877 wrong; lock exact MPN consistent with backplane before fab) |
 | SW_RST, SW_BOOT | Tactile 6×6 SMD 160 gf | C318884 | SMD | 2 | — |
 | D_HB | LED blue 0603 | C72041 | 0603 | 1 | HEARTBEAT |
 | D_ACT1..4 | LED green 0603 | C72043 | 0603 | 4 | BUS_ACT |
-| L_CM1..4 | CM choke 744232601 | C191126 | SMD | 4 | RS-485 pair |
+| L_CM1..4 | CM choke 744232601 | CHECK | SMD | 4 | RS-485 pair (REVIEW_BLOCKER: old C191126 wrong) |
 | TVS_B1..4 | SM712-02HTG | C169123 | SOT-23 | 4 | RS-485 transient |
 | R_TERM1..4 | 120 Ω 1 % 0805 | C22787 | 0805 | 4 | Termination |
 | R_BIAS_H1..4 | 1 kΩ 1 % 0603 | C21190 | 0603 | 4 | Fail-safe bias high (revised 2026-04-25 from 390 Ω) |
