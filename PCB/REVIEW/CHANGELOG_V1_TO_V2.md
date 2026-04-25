@@ -1,131 +1,205 @@
 # Split-Flap PCB — v1 → v2 Changelog & Review Request
 
-**Prepared for ChatGPT external review, 2026-04-24.**
+**Prepared for ChatGPT external review, 2026-04-25 (post-pivot architecture freeze).**
 **Artifacts bundled alongside this doc:** `pcb_v1.zip`, `pcb_v2.zip`.
 
 ---
 
 ## 0. How to read this package
 
-- `pcb_v1.zip` — the **as-manufactured 2021–2022 design** (EasyEDA JSON source, gerbers, old BOM, old pick-and-place). This is the physical board currently in use.
-- `pcb_v2.zip` — the **new clean-slate redesign**, as of 2026-04-24. Markdown design docs + BOM CSVs. **No schematic capture yet** — next workstream is JLC EasyEDA entry or freelance layout engineer handoff.
-- This changelog — walks you through the architectural delta and summarises the open review questions.
-- `MASTER_DECISIONS.md` and `UNIT_DECISIONS.md` inside the v2 zip are **the sources of truth**; every other doc (`*_DESIGN.md`, `*_BOM.csv`) is derivative and must agree with the decisions files.
+- `pcb_v1.zip` — the **as-manufactured 2021–2022 design** (EasyEDA JSON source, gerbers, old BOM, old pick-and-place). Currently-deployed hardware.
+- `pcb_v2.zip` — the **clean-slate redesign**, post-2026-04-25 architecture freeze. **3-PCB system**: master + backplane (×N) + unit (×16·N). Markdown design docs + BOM CSVs. **No schematic capture yet** — next workstream is JLC EasyEDA Pro entry or freelance layout-engineer hand-off.
+- This changelog — walks the architectural delta and summarises the open review questions.
+- **Sources of truth inside `pcb_v2.zip`:** `MASTER_DECISIONS.md`, `BACKPLANE_DECISIONS.md`, `UNIT_DECISIONS.md`. Every other doc (`*_DESIGN.md`, `*_BOM.csv`, `*_BRINGUP.md`) is derivative and must agree with the decisions files.
 
-**Target prototype run:** 5× master boards + 10× unit boards via JLC PCBA. User fabricates the 3D-printed enclosure themselves.
+**Target prototype run:** 5× master boards + 5 case-sets of 4× backplane segments + 80× unit boards via JLC PCBA. User fabricates the 3D-printed enclosure parts.
 
 ---
 
 ## 1. System at a glance
 
-A split-flap display: one master board (WiFi / web UI / clock logic) driving N unit boards (one per flap), each unit steps a 28BYJ-48 stepper to show a character. v1 was built around an ESP-01 driving Arduino Nanos over I²C from a 5 V supply in a star topology. v2 replaces the bus, the power distribution, the microcontrollers, and the position-sensing strategy.
+A split-flap display: one master controller drives N enclosure cases; each case is a passive backplane PCB with 16 unit-slots; each slot holds a unit PCB driving one 28BYJ-48 stepper to show a character. v1 was an ESP-01 driving up to 16 Arduino Nanos over 5 V I²C in a star topology. v2 replaces every layer except the 45-flap drum mechanics and the 28BYJ-48 motor family.
+
+Topology:
+
+```
+   +----------+
+   |          |   shielded CAT5e/6 (T568B straight-through)
+   |  MASTER  |---<---- RJ45 (V48 + RS-485 A/B + GND) ---->----+
+   |          |                                                |
+   +----------+                                                v
+        |                                            +-------------------+
+        |  4× independent buses                      |  Backplane case   |  16 unit-slots
+        |  (≤2 cases per bus, ≤32 units per bus)     |  4× 320 mm segs   |  per case
+        |                                            +-------------------+
+        |                                                     |
+        |                                            chain-out RJ45
+        |                                                     v
+        |                                            +-------------------+
+        |                                            |  next case        |
+        |                                            +-------------------+
+```
+
+Max system capacity: 4 buses × 2 cases × 16 units = **128 units**.
 
 ---
 
-## 2. Major architectural changes
+## 2. Architectural deltas (v1 → v2)
 
-### 2.1 Communication bus
-**v1:** I²C @ 400 kHz, star topology. Master ESP-01 drives up to 16 Arduino Nano units, each addressed by a 4-bit DIP switch on the unit.
-**v2:** RS-485 @ 500 kbaud, half-duplex, daisy-chained over CAT5e/CAT6. Master has **4 independent buses** driven by a MAX14830 SPI-UART expander, each supporting up to 32 units. Max system capacity: 128 units.
-**Rationale:** I²C with many stubs is capacitance-limited and unreliable at scale; 500 kbaud RS-485 over twisted pair handles long runs cleanly and natively supports daisy-chain. Four independent buses parallelise the screen-update path.
-**New risks:** cable polarity sensitivity (straight-through mandatory — crossover shorts 48 V to GND); no PoE-PSE handshake, so a standard PoE switch will refuse to energise the cable (safe), but user-error interconnection could still damage a real PSE.
+### 2.1 System partitioning *(NEW class of board in v2)*
+**v1:** 2 PCB classes — master + unit. Units daisy-chained inside a case via 2× RJ45 each + ~15 internal patch cables per 16-unit case.
+**v2:** **3 PCB classes** — master + backplane (×N) + unit (×16·N). The backplane is a new passive distribution PCB inside each case: **4 segments × 320 mm = 1280 mm strip**, 16 unit-slots per case via 2×3 box headers. Per-slot resettable polyfuse (nanoSMDC020F-2, 0.2 A hold). Only 2 case-level RJ45s per case (chain-in on segment-1, chain-out on segment-4); units have no RJ45 jacks at all.
+**Why:** dropped 32 RJ45 jacks + 15 patch cables per 16-unit case (~€150 saved per 32-unit display, dramatically cleaner install, better SI without 16 jack-stubs per case).
+**New risks:** segment-to-segment 6-pin board-to-board mating reliability; 1280 mm ≥ JLC's 400 mm standard fab limit forces segmentation; 320 mm V48 + RS-485 trace per segment with ≤5 mm stub per slot needs careful layout; no schematic capture yet to validate segment-to-segment SI.
 
-### 2.2 Power distribution
-**v1:** 5 V barrel jack, 5 V distributed star; per-unit L7805 LDO; 12 V for stepper came from a separate off-PCB module.
-**v2:** **48 V over CAT6 pairs 4/5 + 7/8** (IEEE 802.3at Mode-B convention pinout, passive — no PoE signature). Each unit has a local TPS54308 48→12 V buck + HT7833 12→3.3 V LDO. Master has its own LM74700 ideal diode + LMR36015FDDA sync buck to derive 3.3 V, plus per-bus TPS259827 eFuse and INA237 telemetry for fault isolation.
-**Rationale:** at 48 V the I²R losses on 20–30 m CAT6 runs are ~1/100 of what they'd be at 5 V; eliminates the separate 12 V motor rail; centralises power in one cable.
-**New risks:** single-supply common-mode failure (loss of 48 V = whole system down — accepted trade); inrush on hot-plug briefly drives the TVS (SMDJ58CA) clamp rail to ~93 V, mitigated by a secondary SMBJ60A clamp protecting the master's LMR36015 + INA237.
+### 2.2 Communication bus
+**v1:** I²C @ 400 kHz, star topology, max ~16 units, 4-bit DIP-switch addressing.
+**v2:** **RS-485 @ 500 kbaud, half-duplex**, 4 independent buses on master via **MAX14830ETJ+** SPI-UART bridge. Each bus daisy-chained over **shielded CAT5e/6**. Max 32 m total per chain, 3 m per hop. Per-bus transceiver: **SN65HVD75DR** (3.3 V, 500 kbaud).
+**Termination:** 120 Ω 1% at master end; chain-end backplane has a `R_TERM` 120 Ω footprint populated only on the final case (PCBA stuffing variant).
+**Failsafe bias:** 1 kΩ A→3V3 + 1 kΩ B→GND at master only (bumped from original 390 Ω post-pivot to cut 4-bus idle from 17 mA → 6.4 mA total).
+**Wire format:** COBS(payload ‖ CRC16-BE(payload)) 0x00; 4-byte header `[ver][type][seq_hi][seq_lo]`. Canonical implementation in `firmware/lib/common/`.
+**Cable risk:** crossover wiring shorts V48 to GND — T568B straight-through is mandatory; silkscreen warns at every RJ45.
 
-### 2.3 Master MCU
-**v1:** ESP8266 (ESP-01, 160 MHz single-core, ~42 KB RAM, I²C master, limited GPIO).
-**v2:** ESP32-S3-WROOM-1-N16R8 (240 MHz dual-core, 16 MB flash + 8 MB PSRAM, native USB-C, SPI to MAX14830). Pin budget: 14 assigned / 21 available / 7 spare.
-**Rationale:** ESP8266 cannot run 4 independent UART buses + WiFi + web UI deterministically. S3's second core isolates WiFi; PSRAM absorbs telemetry buffering.
+### 2.3 Power distribution
+**v1:** 5 V barrel jack, 5 V star, per-unit L7805 LDO, separate 12 V brick for stepper.
+**v2:** **48 V over CAT6 pairs 4/5 + 7/8** (IEEE 802.3at Mode-B convention pinout, **passive — no PoE signature**). One inlet, one cable type, end-to-end.
+- **Master:** SMDJ58CA primary TVS → LM74700-Q1 ideal-diode + SQJ148EP N-FET (1 kΩ GATE per TI SLUA975) → SMAJ51A secondary clamp → bulk → LMR36015AFDDA sync buck (with C_BOOT 100 nF) for 3V3; per-bus TPS259827YFFR eFuse + INA237AIDGSR current monitor; TPS3839L33 supervisor + 4× BAT54 hold the eFuses OFF until 3V3 is healthy.
+- **Backplane:** fully passive — 2 mm V48 trace, per-slot polyfuse, 22 µF/100 V bulk per segment.
+- **Unit:** AO3401 P-FET reverse-block → SMAJ51A clamp → **TPS54360DDA** 48→12 V buck (HSOP-8 PowerPAD, 22 µH Isat ≥1 A) → HT7833 LDO 12→3V3.
 
-### 2.4 Unit MCU
-**v1:** ATmega328P-AU (Arduino Nano, 16 MHz, 32 KB flash / 2 KB RAM, I²C slave, address from DIP switch).
-**v2:** STM32G030F6P6 (Cortex-M0+, 64 MHz, 32 KB flash / 8 KB RAM, TSSOP-20). RS-485 UART with hardware DE control (no software RTS bit-banging). I²C master talks to the on-PCB AS5600 encoder.
-**Rationale:** ATmega328P can't simultaneously run I²C slave + stepper control + sensor I/O without saturating the core at full step rate; STM32G030 has headroom and is cheaper at volume.
-**New risks:** vendor lock-in to ST; no hobbyist-friendly bootloader out of the box — v2 uses SWD for factory first-flash, then RS-485 OTA.
+**Why:** at 48 V the I²R loss on 20–30 m CAT6 is ~1/100 of 5 V; eliminates the separate 12 V motor rail; centralises power in one cable.
+**Risk:** common-mode failure (loss of 48 V = whole system down — accepted trade); 32-unit hot-plug aggregate input cap is ~800 µF and inrush must not trip the 1.7 A per-bus eFuse (post-pivot fix: dV/dt cap 10 nF → 100 nF). Cable polarity = catastrophic if reversed (T568B straight-through mandatory).
 
-### 2.5 Position sensing / homing
-**v1:** KY-003 hall-effect switch on the flap carrier, one edge per revolution. Firmware homes by sweeping the motor up to 8 revolutions until the hall pin goes LOW — **takes 10–20 s per unit at boot**.
-**v2:** **AS5600 absolute magnetic encoder** mounted on-PCB, reads absolute angle of a diametral magnet glued to the 28BYJ-48 output shaft. Known position instantly at power-on; closed-loop step-loss detection during operation.
-**Rationale:** eliminates the homing sweep (32-unit commissioning drops from ~5 hr to ~2 min); closed-loop gives real-time stall detection.
-**New risks:** magnet gluing procedure has to hit 0.5–3 mm gap window — mechanical bracket must enforce this; I²C pull-ups now mandatory on every unit.
+### 2.4 Master MCU
+**v1:** ESP8266 (ESP-01, 160 MHz single-core, ~42 KB RAM, I²C master).
+**v2:** **ESP32-S3-WROOM-1-N16R8** (240 MHz dual-core, 16 MB flash + 8 MB PSRAM, native USB-C, SPI to MAX14830). Pin budget: 14 assigned / 21 available / 7 spare.
+**Why:** ESP-01 cannot run 4 UART buses + WiFi + web UI deterministically; second core isolates WiFi, PSRAM absorbs telemetry buffering.
 
-### 2.6 Addressing / enumeration
-**v1:** 4-bit DIP switch per unit → fixed I²C address at boot (DIP `0000` → `0x01`, etc.). Manual, collision-prone if two units set the same, no runtime reconfig.
-**v2:** **Auto-enumeration** via a single-ended wake signal reused on RJ45 pair 1/2 (NC in the passive-PoE Mode-B pinout). Master drives WAKE HIGH; first un-addressed unit claims an address, drives its downstream WAKE_OUT HIGH, cascading down the chain. EEPROM-persisted after first assignment.
-**Rationale:** removes the installer error-surface and the per-unit DIP-switch BOM cost; enables hot-plug.
-**New risks:** WAKE drive style (push-pull vs open-drain) **not yet locked on the master side** — flagged as open-issue U7 in `UNIT_DECISIONS.md`. Unit currently defaults to push-pull with a 10 kΩ pull-down on receive.
+### 2.5 Unit MCU
+**v1:** ATmega328P-AU (Arduino Nano, 16 MHz, 32K/2K, I²C slave, address from DIP).
+**v2:** **STM32G030K6T6** (Cortex-M0+, 64 MHz, 32K/8K, **LQFP-32**). RS-485 USART1 with hardware DE on PA12 (AF1). I²C master to on-PCB AS5600 encoder.
+**Note:** the original 2026-04-24 v2 brief specced STM32G030F6P6 in TSSOP-20; cross-consistency review caught that PA12, PB0, and PB1 (used pins) aren't bonded on TSSOP-20 — escalated to LQFP-32 post-pivot.
 
-### 2.7 OTA firmware update
-**v1:** I²C bootloader (vendored twiboot) — master pushes unit firmware byte-wise over I²C from a PROGMEM hex. Full-system OTA takes ~2 hours for 32 units.
-**v2:** **RS-485 bootloader** — firmware-level, application-provided (no ROM bootloader). 60× faster in principle; designed but not yet implemented. Factory first-flash is via SWD pogo-pin pads.
-**New risks:** if firmware is corrupted mid-OTA a unit is bricked until SWD recovery — bootloader protocol (packet format, rollback/ping-pong banks) **not yet specified at packet level** (see §4 open issues).
+### 2.6 Position sensing / homing
+**v1:** KY-003 hall switch, one edge per revolution, 10–20 s homing sweep at boot per unit.
+**v2:** **AS5600** 12-bit absolute magnetic encoder at I²C 0x36, mounted on-PCB, reads diametral magnet glued to motor shaft (0.5–3 mm gap, 1.5 mm target). Closed-loop step-loss detection during operation. Per-unit I²C RC filter (100 Ω + 100 pF on each line) added post-pivot to reject buck-switching coupling.
+**Why:** kills the ~5 hr commissioning of 32 units; closed-loop catches stalls in real time.
 
-### 2.8 Termination strategy
-**v1:** manual soldered 120 Ω on bus ends during assembly.
-**v2:** Every unit ships with a 2-pin 2.54 mm header and a populated 120 Ω resistor in series. Installer fits a shorting jumper only on the chain-end unit. Master provides its own end of the bus: 120 Ω termination + 2× 390 Ω fail-safe bias (A→3V3, B→GND).
+### 2.7 Stepper driver
+**v1:** ULN2003A bipolar Darlington array.
+**v2:** **TPL7407L** MOSFET array (drop-in pinout, ~0.5 W less heat per unit at 300 mA stepping). Recommended by the scottbez1 audit as the modern equivalent.
 
-### 2.9 Stepper motor
-**v1:** 28BYJ-48 **5 V** variant.
-**v2:** 28BYJ-48 **12 V** variant, unchanged mechanics, different winding. Lower per-phase current (~150 mA → ~70 mA) reduces bus current budget. ULN2003A driver unchanged. Mirrors scottbez1's v2 split-flap choice.
+### 2.8 Stepper motor
+**v1:** 28BYJ-48 **5 V** variant (~150 mA per phase).
+**v2:** 28BYJ-48 **12 V** variant (~70 mA per phase). Same mechanics. Mirrors scottbez1's choice and reduces total bus current budget.
+
+### 2.9 Addressing / enumeration
+**v1:** 4-bit DIP per unit → fixed I²C address (manual, collision-prone, no runtime reconfig).
+**v2:** **Master-driven UID-based binary-tree search over RS-485** (firmware-only). Each unit's STM32G030 96-bit factory UID is its identity. Master broadcasts prefix-match queries; matching units echo their UID; collisions resolved by narrowing the prefix. UID→short-address map persists in NVS. Cold first-ever boot ~5–20 s for 32 units; warm boot ~100 ms.
+**Note:** the 2026-04-24 v2 brief used a single-ended wake pin on RJ45 pin 1. Cross-consistency review caught that the master had no wake driver, no per-port driver circuitry, and no parts on the BOM — units would arrive correctly fabricated but the system would never enumerate. The wake-pin scheme was deleted; **RJ45 pin 1 is now `NC reserved`** system-wide.
+
+### 2.10 OTA firmware update
+**v1:** vendored twiboot I²C bootloader; master pushes unit firmware byte-wise from a PROGMEM hex; ~2 hr per 32 units.
+**v2:** **RS-485 application-provided bootloader** with broadcast frames + batch-update frames + loopback integrity (baked into protocol from day one per scottbez1 audit). Designed but not yet implemented; ~16 s per 32 units projected. Factory first-flash via SWD pogo pads.
+**Risk:** if firmware is corrupted mid-OTA, a unit is bricked until SWD recovery — but unlike the wake-pin scheme this no longer deadlocks the rest of the chain (UID-discovery skips dead nodes). Packet format / dual-bank A/B / rollback semantics still **not specified at packet level** (see §4).
+
+### 2.11 Termination strategy
+**v1:** manually soldered 120 Ω at bus ends.
+**v2:** Master always populates 120 Ω + 1 kΩ bias (each leg). Backplane segment-4 has an `R_TERM` 120 Ω 0805 footprint **DNP by default**; PCBA stuffing variant populates only the chain-end case. Unit boards no longer carry termination (moved to backplane).
 
 ---
 
 ## 3. What intentionally did NOT change
 
-- **Flap count per unit (45)** — same letter/symbol/blank alphabet as v1. No mechanical redesign of the drum.
-- **Motor family (28BYJ-48)** — proven and cheap. NEMA-17 or servo were considered and ruled out (~3× cost, added driver complexity).
-- **ULN2003A Darlington array** — still the right unipolar driver for 28BYJ-48; scottbez1 uses the equivalent MIC5842 (same topology).
-- **Master WiFi module family (Espressif)** — ESP-01 → ESP32-S3 keeps the same ecosystem and PCB-integrated antenna; no external RF design burden.
+- **Flap count per unit (45)** — same letter/symbol/blank alphabet as v1. No drum redesign.
+- **Motor family (28BYJ-48)** — proven and cheap. NEMA-17 / servo were ruled out (~3× cost, added driver complexity). Voltage variant changed (5 V → 12 V) but mechanics identical.
+- **Master WiFi family (Espressif)** — ESP-01 → ESP32-S3 keeps the ecosystem and PCB-integrated antenna; no external RF burden.
 
 ---
 
-## 4. Open issues flagged by internal review
+## 4. Open issues (post-pivot, current)
 
-These are the ones you (ChatGPT) should weigh in on. They are **not** yet addressed in v2 docs.
+These are the items still open as of the 2026-04-25 freeze. Items resolved during the pivot are listed in §4.4 for ChatGPT context.
 
-### 4.1 Critical — needs resolution before schematic capture
+### 4.1 Critical — must address before schematic capture
 
-1. **BOM LCSC part numbers are systemically wrong. Tracked as issue [#75](https://github.com/lvschouwen/split-flap/issues/75). PLEASE DO A FULL BOM VERIFICATION PASS — see §5.**
+1. **BOM LCSC numbers known unreliable. Tracked as issue [#75](https://github.com/lvschouwen/split-flap/issues/75). PLEASE DO A FULL BOM VERIFICATION PASS — see §5.** All three BOMs (master, backplane, unit) have been schema-migrated to a JLC-native column set post-pivot, but most active-IC lines still need live re-verification on https://jlcpcb.com/parts.
 
-2. **WAKE signal drive style not documented on master side.** Unit docs specify push-pull with a 10 kΩ pull-down on receive; master docs are silent on whether it's push-pull or open-drain, and whether there's a pull-up on the master side. A mismatch here causes either contention (two push-pull drivers) or a floating input (open-drain without pull-up). Needs a one-paragraph clarification in `MASTER_DECISIONS.md`.
+2. **OTA-over-RS485 protocol not specified at packet level.** `UNIT_DIGITAL_DESIGN.md` describes the bootloader entry opcode but not packet format, CRC/auth, MTU, NACK/retry, rollback behaviour, dual-bank A/B layout. A corrupted mid-flash unit no longer deadlocks the chain (UID discovery skips it) but still bricks itself until SWD recovery.
 
-3. **RJ45 jack P/N mismatch between master and unit BOMs.** Master BOM lists the RJHSE-5380 family; unit BOM lists RJHSE-5081 "or equiv" with a "CHECK STOCK" flag. They are electrically compatible but should be a single P/N across both boards for sourcing and cable compatibility.
+3. **Cable length & signal integrity at 500 kbaud over CAT5e/6 not validated.** No SPICE, no field measurement. Worst case: 2 cases × 32 m chain ≈ 64 m, plus 16 backplane stubs per case (≤5 mm each). With SN65HVD75 slew rate, master-side-only 1 kΩ failsafe bias, and the new 16-stub backplane segments, is the last unit's RX margin still clean? Design docs give no answer.
 
-4. **OTA-over-RS485 protocol is not specified at packet level.** `UNIT_DIGITAL_DESIGN.md` describes the bootloader entry opcode but not: packet format, CRC/auth, MTU, NACK/retry, rollback behaviour, dual-bank A/B layout. A corrupted mid-flash unit today deadlocks the downstream chain (WAKE_OUT stuck LOW).
-
-5. **Cable length & signal integrity at 500 kbaud over CAT6 not validated.** No analysis, no SPICE, no field measurement. 32 units × ~2–3 m hops = ~100 m total. With SN65HVD75 slew rate and master-side-only bias, is the last unit's receive margin still clean? Design docs give no answer.
+4. **Boot-time eFuse sequencing — hardware watchdog still missing.** TPS3839L33 supervisor + 4× BAT54 hold the eFuses OFF until 3V3 is healthy (P2 closed post-pivot). But if firmware crashes during init, all 4 EN pins stay LOW and the system is locked off. No documented boot state machine, no IWDG forcing EN HIGH on firmware hang.
 
 ### 4.2 Medium — should be addressed before fab order
 
-6. **Boot-time eFuse sequencing + watchdog.** Master's 4× TPS259827 EN pins are direct ESP32-S3 GPIOs. If firmware crashes during GPIO init, all EN pins stay LOW, system is locked. No documented boot state machine, no hardware watchdog forcing EN HIGH on firmware hang.
+5. **TPS259827 K_ILIM datasheet-rev sensitivity.** K varies across revisions (rev 1.3 lists K ≈ 18400, newer revs differ). R_ILIM choice must land in a 1.6–1.8 A window. Confirm against the live datasheet at fab time.
 
-7. **Creepage / clearance for 48 V path not called out** for whoever does the freelance layout. 48 V is below IEC 61010 Class-2 thresholds (≤ 60 V) so it's not a strict safety requirement, but IPC-2221 Class-1 asks for ≥ 0.4 mm on unprotected 48 V nets. Not currently specified.
+6. **TPS259827YFFR DSBGA-10 0.4 mm pitch** is a hard pre-fab gate at JLC PCBA. Confirm at fab-time. Fallback WQFN-12 footprint coexists in case JLC refuses DSBGA on the Basic line.
 
-8. **Unit LDO thermal margin is tight.** `UNIT_POWER_DESIGN.md` puts T_J at ~105 °C at 40 °C ambient (only 20 °C from the 125 °C limit) and assumes θ_JA ~150 °C/W. In a sealed enclosure or at 50 °C ambient the HT7833 will throttle. The 3D-printed enclosure design needs to guarantee convection around the LDO.
+7. **Creepage / clearance for 48 V path** for the freelance layout engineer. 48 V is below IEC 61010 Class-2 thresholds (≤60 V) so not a strict safety requirement, but IPC-2221 Class-1 wants ≥0.4 mm on unprotected 48 V nets. Master locks ≥0.4 mm pre-clamp / ≥0.2 mm post-clamp; backplane and unit not yet specified.
 
-9. **CE/FCC compliance plan absent.** 48 V + 500 kbaud switching + WiFi on the master = a product likely needing EMC assessment if ever sold. No compliance path documented anywhere.
+8. **CE/FCC compliance plan absent.** 48 V + 500 kbaud switching + WiFi master = a product likely needing EMC assessment if ever sold. No compliance path documented.
 
-10. **Product safety label for the 48 V inlet.** Looks like a regular RJ45 — real PoE PSEs will refuse it (safe), but user-error interconnection into a shared patch panel is conceivable. Nothing in the docs today warns the installer.
+9. **Stepping current real-world measurement** on first prototype unit. Buck inductor Isat ≥ 1 A and per-slot polyfuse 0.2 A hold/0.4 A trip both assume ≤300 mA peak. If first prototype shows ≥600 mA peak per phase, both must be re-spec'd (firmware current-limit, larger inductor, larger polyfuse).
+
+10. **RJ45 jack P/N consistency** between master and backplane. Both spec a shielded THT 8P8C no-mag jack but the exact MPN must be locked to a single P/N before fab, for cable compatibility and sourcing.
+
+11. **Product-safety label at the 48 V inlet.** Looks like a regular RJ45. Real PoE PSEs will refuse it (no signature → safe), but user-error interconnection into a shared patch panel is conceivable. No installer warning today.
 
 ### 4.3 Low — v2.1 material
 
-11. **Bring-up / test-fixture procedure not written.** A freelance assembler or field tech receiving a board has no documented: boot sequence, expected LED states, minimal bench test.
-12. **No spares / EOL mitigation plan** (ESP32-S3 module, AS5600, STM32G030).
-13. **Single status LED per unit** — blink-code semantics only exist in user notes, not in any v2 doc.
+12. **No spares / EOL mitigation plan** for ESP32-S3 module, AS5600, STM32G030, or MAX14830.
+13. **Single status LED per unit** — blink-code semantics in user notes only, not in the v2 design docs.
+14. **Backplane per-slot debug LEDs** — adds ~€0.30/slot, would cut bring-up debug time ~50 %; deferred.
+15. **Mech freelancer hand-off** — STEP exchange for AS5600 origin, mounting holes, backplane brackets, master enclosure (Hammond 1455N class) still pending.
+
+### 4.4 Closed during the pivot — for ChatGPT context
+
+Listed only so you don't re-flag them. All resolved between 2026-04-24 and 2026-04-25 across two parallel external audits (a 7-agent multi-perspective review and a scottbez1-architecture comparison):
+
+**Master:**
+- R_SERIES + D_SEC chain dissipating 950 W steady — **deleted**; replaced with single SMAJ51A post-LM74700 per TI SLVA936.
+- C_BOOT 100 nF on LMR36015 — **added** (was missing; would have bricked the high-side gate driver).
+- Per-bus dV/dt 10 nF → **100 nF** (32-unit inrush 12.8 A peak vs. 1.7 A trip).
+- INA237 VBUS divider 100 k/10 k → **10 k/1 k** (high source impedance destroyed 16-bit accuracy).
+- FAULT LED moved to **MMBT3906 PNP** high-side switch (LM74700 FAULT can only sink 1 mA).
+- RS-485 failsafe bias **390 Ω → 1 kΩ** each leg.
+- BAT54 polarity **corrected** on EFUSE_EN POR-gating.
+- LM74700 GATE **1 kΩ series** added per TI SLUA975.
+- Master mounting holes moved to (6, 94)/(124, 94)/(6, 22)/(124, 22) — clears 21 mm RJ45 keep-out.
+
+**Unit:**
+- Buck swap **TPS54308DBV (SOT-23-6, no thermal pad, ≤80 °C/W unachievable) → TPS54360DDA** (HSOP-8 PowerPAD).
+- MCU swap **STM32G030F6P6 TSSOP-20 → STM32G030K6T6 LQFP-32** (TSSOP-20 didn't bond PA12/PB0/PB1).
+- Stepper driver **ULN2003A → TPL7407L** (~0.5 W less heat per unit).
+- ESD swap **SP0504BAATG → SM712-02HTG** (5 V working voltage would fire on legitimate RS-485 traffic).
+- TVS swap **SMBJ58CA → SMAJ51A** (matches master V48_RAIL clamp class).
+- Reverse-polarity P-FET drain/source labels **corrected** (was reversed).
+- Inductor **Isat ≥ 600 mA → ≥ 1 A** (28BYJ-48 stepping pulls ~300 mA peak per phase).
+- AS5600 I²C **RC filter** (100 Ω + 100 pF) added.
+- TPL7407L IN5–IN7 **hard-tied to GND** (was via 10 kΩ; false-turn-on risk).
+- STM32 NRST **conditioning** (100 nF + 10 kΩ) added.
+- SWD pads **resized**: 1.5 mm pads on 2.54 mm pitch (was 2 mm on 1.5 mm — too tight).
+- Unit C_LDO_OUT **distinct LCSC** from C_LDO_IN (was a duplicated LCSC #).
+
+**System-level:**
+- **Backplane PCB introduced** as new third class (this changelog's biggest delta).
+- **Wake-pin scheme deleted** in favour of UID-based discovery (master had no wake driver — system would never have enumerated).
+- **BOM schema unified** to JLC-native across all three BOMs (Designator, Comment, Footprint, LCSC Part #, MPN, Manufacturer, Qty, JLC_Tier, Populate, EstEUR, DatasheetURL, Notes, BomType). Solves the JLC-uploader-rejecting-`#`-comments breakage and the column-mismatch breakage.
+- **Broadcast / batch-update / loopback frames** baked into the RS-485 protocol from day one (RS-485 at 500 kbaud cannot match scottbez1's SPI-shift-register sub-millisecond 108-module update without these).
+- **Standalone unit test mode** — when SWD pogo-jig connects without active SWD master, firmware repurposes PA13/PA14 as UART for `home`, `step <N>`, `angle?`, `id?` commands. Allows single-unit bench bring-up with no master/backplane.
+- **Bring-up procedures written** — `MASTER_BRINGUP.md`, `BACKPLANE_BRINGUP.md`, `UNIT_BRINGUP.md` (closed pre-pivot P11).
 
 ---
 
-## 5. BOM status — **please verify**
+## 5. BOM status — please verify *(highest priority)*
 
-**Skip to this if you're short on time — it's the highest-impact review task.**
+**Skip to here if you're short on time — it's the highest-impact review task.**
 
-Both `PCB/v2/MASTER_BOM.csv` (~50 lines) and `PCB/v2/UNIT_BOM.csv` (~25 lines) were populated with LCSC `Cxxxxxx` part numbers that do **not** match the MPN listed next to them. A Claude-driven spot check against https://jlcpcb.com/parts and https://www.lcsc.com found that out of 18 active ICs spot-checked, **only 2 resolve to the correct part**. Examples confirmed wrong:
+Pre-pivot, ~88 % of the LCSC `Cxxxxxx` part numbers in the v2 BOMs resolved to unrelated components (limit switches instead of LM74700-Q1, photodiodes instead of CM chokes, film caps instead of INA237s, etc.). Examples preserved here so you can sanity-check the failure mode:
 
-| BOM line | MPN as written | Cxxxxxx as written | What LCSC actually returns |
+| BOM line | MPN as written | LCSC as written | What LCSC actually returned |
 |---|---|---|---|
 | U1 master | LM74700-Q1 | C509439 | Hroparts K9-1267QW limit switch |
 | U3–U6 master | TPS259827YFFR eFuse | C2906816 | empty / delisted |
@@ -141,31 +215,44 @@ Both `PCB/v2/MASTER_BOM.csv` (~50 lines) and `PCB/v2/UNIT_BOM.csv` (~25 lines) w
 | U5 unit | TPS54308DBV | C123604 | Silergy SY8113BADC (different pinout + spec) |
 | U2 unit | ULN2003ADR | C79209 | empty page |
 
-The **MPN column is authoritative**, not the LCSC column. Please, as part of your review:
+Post-pivot, all three BOMs (`MASTER_BOM.csv`, `BACKPLANE_BOM.csv`, `UNIT_BOM.csv`) have been **schema-migrated** to a unified JLC-native column set:
 
-1. For every active IC line in both BOMs, look up the correct live LCSC / JLC part number by searching the MPN on https://jlcpcb.com/parts.
-2. Note JLC Basic vs Extended, current stock, and unit price at **qty 5 (master run)** and **qty 10 (unit run)**.
-3. If JLC doesn't carry a given MPN at all, suggest a drop-in substitute — ideally something in JLC's Basic library to cut the extended-part assembly fee.
-4. Re-sum the BOM against the headline cost claims (€85–100/master, €9.80/unit). Flag if those are off by more than 15 %.
-5. Passives (0603 R/C, bulk ceramic) can be treated as "JLC Basic equivalent, pick at PCBA quote time" — no need to hunt individual Cxxxxxx for them.
+`Designator, Comment, Footprint, LCSC Part #, MPN, Manufacturer, Qty, JLC_Tier, Populate, EstEUR, DatasheetURL, Notes, BomType`
 
-Hand the result back as a corrected BOM excerpt (MPN + correct Cxxxxxx + JLC stock + price + Basic/Extended) that can be pasted directly into the CSVs.
+`Populate` ∈ {`Y`, `DNP`, `END_OF_CHAIN`, `ALT_<group>`}; `BomType` ∈ {`onboard`, `offboard`, `fab`, `hardware`}. Several lines are still flagged `CHECK` in the LCSC column — pending live re-verification.
+
+**The MPN column is authoritative**, not the LCSC column. As part of your review, please:
+
+1. For every active IC line in master + backplane + unit BOMs, look up the correct live LCSC / JLC part number by searching the MPN on https://jlcpcb.com/parts.
+2. Note JLC Basic vs. Extended, current stock, and unit price at **qty 5 (master)**, **qty ~20 (backplane segment, 4 per case × 5 cases)**, and **qty ~80 (unit)**.
+3. If JLC doesn't carry the MPN at all, suggest a drop-in substitute — ideally something in JLC's Basic library to cut the extended-part assembly fee.
+4. Re-sum each BOM against the headline cost claims (~€80/master, ~€7.50/backplane segment, ~€8.90/unit). Flag if those are off by more than 15 %.
+5. Passives (0603 R/C, bulk ceramic) can be treated as "JLC Basic equivalent, pick at PCBA quote time" — no need to hunt individual `Cxxxxxx`.
+
+Hand the result back as a corrected BOM excerpt (MPN + correct `Cxxxxxx` + JLC stock + qty-priced + Basic/Extended) that can be pasted directly into the CSVs.
 
 ---
 
 ## 6. Cost / complexity delta summary
 
-| Axis | v1 | v2 | Delta |
+| Axis | v1 | v2 (post-pivot) | Delta |
 |---|---|---|---|
-| **Master unique ICs** | ~5 | ~15 | +3× (4 buses + telemetry) |
-| **Master BOM cost** (est.) | ~€6 | ~€57 claimed (UNVERIFIED — see §5) | +€51 |
-| **Master PCB** | 2-layer, ~100×100 mm | 4-layer ENIG, 130×100 mm | +1 stackup |
-| **Unit BOM cost** (est.) | ~€5 | ~€9.80 claimed | +€4.80 |
-| **Unit PCB** | 1–2 layer, 50×30 mm | 2-layer, 65×35 mm | +30 % area |
-| **Commissioning time / 32 units** | ~5 hr (manual DIP + homing sweeps) | ~2 min (auto-enum + AS5600) | **~150× faster** |
-| **System capacity** | 16 units | 128 units | +8× |
-| **OTA time / 32 units** | ~2 hr (I²C twiboot) | ~16 s (RS-485, projected) | **~450× faster** |
-| **Cable** | JST-XH 4-pin custom | RJ45 + CAT5e/6 commodity | simpler install, cheaper per metre |
+| **PCB classes** | 2 (master, unit) | 3 (master, backplane, unit) | +1 class |
+| **Master unique ICs** | ~5 | ~17 | +3.4× |
+| **Master cost** (qty 5, fab + PCBA + ICs + passives) | ~€6 | ~€80 *(UNVERIFIED — see §5)* | +€74 |
+| **Master PCB** | 2-layer | 4-layer ENIG, 130 × 100 mm | +1 stack-up + ENIG |
+| **Backplane cost** (per case = 4 segments) | n/a | ~€30 (€7.50/segment) | new |
+| **Backplane PCB** | n/a | 2-layer HASL, 320 × 35 mm × 4 segments | new |
+| **Unit cost** (qty 10) | ~€5 | ~€8.90 (excl. €1.50 motor + €0.30 magnet off-board) | +€3.90 |
+| **Unit PCB** | 1–2 layer | 2-layer HASL, 75 × 35 mm | +50 % area |
+| **Patch cables / 32-unit display** | 1 inlet + ~30 internal | 1 inlet + 1 inter-case | −30 cables |
+| **Commissioning / 32 units** | ~5 hr (DIP + homing sweep) | ~10 s (UID + AS5600) | ~1800× faster |
+| **System capacity** | 16 | 128 | 8× |
+| **OTA / 32 units** | ~2 hr (twiboot) | ~16 s (projected) | ~450× faster |
+| **Cable** | JST-XH 4-pin custom | shielded CAT5e/6 commodity | simpler, cheaper/m |
+
+**Total displayed-system cost at 32 units** (1 master + 2 cases × 4 segments + 32 units):
+≈ €80 + (2 × €30) + (32 × €8.90) ≈ **~€425** in PCBs+ICs (BOM unverified — see §5).
 
 ---
 
@@ -174,31 +261,41 @@ Hand the result back as a corrected BOM excerpt (MPN + correct Cxxxxxx + JLC sto
 Please structure your review as:
 
 ### A. BOM verification — **highest priority**
-Corrected LCSC table per §5. If you can only do one thing, do this.
+Corrected LCSC table per §5, across master + backplane + unit. If you can do only one thing, do this.
 
 ### B. Architecture sanity check
-Take the v2 zip. For each of the 9 major changes in §2, tell me:
+For each delta in §2, tell me:
 - does the chosen part / topology actually solve the claimed problem?
-- is there a cheaper / simpler / more robust alternative I should consider at this stage (before schematic capture)?
+- is there a cheaper / simpler / more robust alternative I should consider before schematic capture?
 - any new failure mode the docs haven't flagged?
 
+Particular interest:
+- **The 3-PCB partition** — is the 4×320 mm backplane segmentation correct, or should the case be one full-length flex board, or one stretched panel split differently? Are 6-pin board-to-board headers the right inter-segment connector, or should it be a flex / FFC / wire harness?
+- **The 4-bus master architecture** — is this overkill for a ≤128-unit home-display-scale system? Would 2 buses be enough?
+- **48 V over CAT6 with no PoE signature** — accepted trade or genuine field-failure waiting to happen?
+
 ### C. Open-issue triage
-For each of the 13 open items in §4, give me your view: is it critical, deferrable, or over-thinking? Are there items NOT on my list that should be?
+For each item in §4.1–4.3, give me your view: critical, deferrable, or over-thinking? Anything NOT on the list that should be?
 
 ### D. Layout-readiness verdict
-Is this package enough for a freelance PCB layout engineer, or are there missing pieces (component placement constraints, stackup, controlled-impedance callouts, test-point plan) that a layout engineer would bounce back asking for?
+Is this package enough for a freelance PCB layout engineer, or are there missing pieces (placement constraints, stackup, controlled-impedance callouts, test-point plan, fiducials, panelization) that the engineer would bounce back asking for? **Per-board:**
+- **Master** — 130 × 100 mm, 4-layer ENIG, ESP32-S3 antenna keep-out, controlled-impedance RS-485 + USB.
+- **Backplane** — 320 × 35 mm × 4 segments, 2-layer HASL, mostly-passive, 16 box-headers per segment.
+- **Unit** — 75 × 35 mm, 2-layer HASL, AS5600 origin reference, motor connector + 2×3 box-header.
 
 ### E. Things you'd do differently
-If this were your project, what would you change and why? Keep this section brutal and specific — I'd rather hear "the 4-bus architecture is overkill for a home-display-scale split-flap, drop it to 2 and save €20" than polite hedging.
+Brutal and specific. "The 4-bus architecture is overkill at home-display scale, drop to 2 and save €20" beats polite hedging.
 
 ---
 
 ## 8. Housekeeping
 
-- **I am not asking you to redesign the system.** The architectural decisions in §2 are locked. Feedback on them is welcome but only for clear "here's why this won't work" cases.
-- **I am asking you to validate and sharpen.** BOM correctness, failure-mode completeness, open-issue triage, layout-readiness.
-- **Git repo for context:** https://github.com/lvschouwen/split-flap — branch `pcb-v2-rs485-48v`. Parent meta-issue #73, BOM correction sub-issue #75.
-- **Firmware context (if helpful):** v1 firmware (ESP8266 + Arduino Nano) is frozen at tag `v-esp8266-final`. v2 firmware development is a separate workstream (`firmware/MasterS3/` — in progress). Unit-side v2 firmware doesn't exist yet.
+- **Architectural decisions in §2 are locked** post-pivot. Push back only for clear "this won't work" cases, not stylistic preferences.
+- **I am asking you to validate and sharpen.** BOM correctness, failure-mode completeness, open-issue triage, layout-readiness verdict.
+- **Git repo:** https://github.com/lvschouwen/split-flap — branch `pcb-v2-rs485-48v`. Parent meta-issue **#73**; BOM correction sub-issue **#75**; pivot tracker **#76**.
+- **Firmware context** (skip if reviewing hardware only):
+  - v1 firmware (ESP8266 + Arduino Nano) frozen at tag `v-esp8266-final`.
+  - v2 firmware: `firmware/MasterS3/` (ESP32-S3, in progress) + future `firmware/UnitG030/` (STM32G030, not yet started). RS-485 protocol canonical implementation in `firmware/lib/common/`.
 
 Thanks.
 
@@ -208,103 +305,16 @@ Thanks.
 
 > I'm handing you two zips and a changelog for external review of a PCB v2 redesign of a split-flap display project.
 >
-> - `pcb_v1.zip` — the original 2021 / 2022 design: EasyEDA JSON source, gerbers, old BOM.
-> - `pcb_v2.zip` — the new clean-slate redesign, markdown docs + BOM CSVs. No schematic capture yet.
-> - `CHANGELOG_V1_TO_V2.md` — walks you through every delta, flags open questions, tells you what I want back.
+> - `pcb_v1.zip` — original 2021 / 2022 design: EasyEDA JSON source, gerbers, old BOM. Currently-deployed hardware.
+> - `pcb_v2.zip` — clean-slate redesign at the 2026-04-25 architecture freeze. **3-PCB system**: master + backplane (×N) + unit (×16·N). Markdown design docs + BOM CSVs. **No schematic capture yet** — next workstream is JLC EasyEDA Pro entry or freelance layout engineer hand-off.
+> - `CHANGELOG_V1_TO_V2.md` — walks every delta, flags open questions, tells you what I want back.
 >
-> **Start by reading the changelog**, especially §5 (BOM status) and §7 (what I'd like you to return). The v2 zip's `MASTER_DECISIONS.md` and `UNIT_DECISIONS.md` are the sources of truth; treat other v2 docs as derivative.
+> **Start by reading the changelog**, especially §5 (BOM status) and §7 (what I'd like you to return). Inside the v2 zip, treat `MASTER_DECISIONS.md`, `BACKPLANE_DECISIONS.md`, and `UNIT_DECISIONS.md` as the sources of truth — every other doc (`*_DESIGN.md`, `*_BOM.csv`, `*_BRINGUP.md`) is derivative and must agree with the decisions files.
 >
-> **Highest-priority task: BOM verification.** Most LCSC `Cxxxxxx` part numbers in both BOMs are wrong (they resolve to unrelated components — limit switches, photodiodes, film caps — not the MPN listed next to them). The MPN column is authoritative. For every active IC, please look up the correct live LCSC / JLC part number on https://jlcpcb.com/parts and return a corrected BOM excerpt. Passives can be left as "JLC Basic equivalent, pick at PCBA quote time."
+> **Highest-priority task: BOM verification.** Many LCSC `Cxxxxxx` part numbers in the original BOMs were wrong (resolving to limit switches, photodiodes, film caps — not the MPN listed beside them). Post-pivot all three BOMs have been schema-migrated to a JLC-native column set, but most active-IC lines still need live re-verification. The MPN column is authoritative. For every active IC across master + backplane + unit, please look up the correct live LCSC / JLC part on https://jlcpcb.com/parts and return a corrected BOM excerpt (note JLC Basic vs. Extended, stock, qty 5 / qty ~20 / qty ~80 pricing, and substitutes if JLC doesn't carry the MPN). Passives can be left as "JLC Basic equivalent, pick at PCBA quote time."
 >
 > **Then** do architecture sanity-check, open-issue triage, layout-readiness verdict, and "what you'd do differently" per §7.
 >
-> Architectural decisions in §2 of the changelog are locked — please push back on them only if you're confident they won't work, not for stylistic preferences. The goal is to validate and sharpen, not re-scope.
+> Architectural decisions in §2 of the changelog are locked — please push back only if you're confident they won't work, not for stylistic preferences. The goal is to validate and sharpen, not re-scope.
 >
-> Keep the "what you'd do differently" section brutal and specific. I'd rather hear a strong opinion than polite hedging.
-
----
-
-# Appendix B — 2026-04-25 update (post-review architecture pivot + electrical fixes)
-
-The original 2026-04-24 review bundle (this document above) went out for **two parallel external audits**:
-
-1. **#76 — 7-agent multi-perspective review** of the v2 brief: PCB design (master + unit), product/handoff readiness (master + unit), RS-485 + 48 V link, BOM/sourcing, cross-board consistency. Surfaced ~80 findings ranging from typos to fundamental architectural breaks.
-2. **scottbez1 audit** — 3-agent comparison against the mature open-source [splitflap project by Scott Bezek](https://github.com/scottbez1/splitflap) (108-module display, ~10 years of iteration). Validated the v2 architecture is right for product-scale operation but flagged tactical wins to steal.
-
-The bundled `pcb_v2.zip` has been regenerated to reflect the post-review state. The system architecture has changed in one major way (backplane introduced), three major part swaps were made, and ~50 individual fixes were applied. **The decisions docs and BOMs in v2.zip are the new sources of truth** — read those, not the pre-2026-04-25 narrative in §1–§7 above (which is preserved for historical context but is now superseded where it contradicts the new docs).
-
-## B.1 Architectural change — backplane PCB introduced
-
-**Pre-2026-04-25**: each unit had 2× RJ45 jacks for unit-to-unit daisy-chaining within a case (16 modules per case = 32 RJ45 jacks + 15 patch cables per case).
-
-**Post-2026-04-25**: a new **backplane PCB** lives in each case, distributing V48 + RS-485 to 16 unit-slots via a 2×3 box-header per slot. The backplane is split into 4 segments × 320 mm each (a single 1280 mm board exceeds JLC's standard fab limit). Each unit drops its 2× RJ45s and gains a single 2×3 male pin header that mates with the backplane socket. Only 2 case-level RJ45s remain (chain in / chain out, on the outer-segment ends).
-
-Net per 32-unit display: ~€150 saved (smaller unit PCBs + no internal patch cables); dramatically cleaner install; better signal integrity (no 16 jack-stubs per case). Cost: one new PCB design (the backplane).
-
-The system is now a **3-PCB system**: master + backplane (×N) + unit (×16N). New design-doc set in `pcb_v2.zip`: `BACKPLANE_DECISIONS.md`, `BACKPLANE_DESIGN.md`, `BACKPLANE_MECHANICAL.md`, `BACKPLANE_BOM.csv`, `BACKPLANE_BRINGUP.md`.
-
-## B.2 Critical electrical fixes (master)
-
-- **R_SERIES + D_SEC surge chain deleted.** R_SERIES (47 Ω in series with the main rail) dissipated 950 W steady at 4.5 A — an architectural error. Replaced by reliance on LM74700-Q1 native overvoltage protection per TI app note SLVA936, plus a single SMAJ51A (D_RAIL) clamping V48_RAIL post-Q1.
-- **C_BOOT 100 nF added** on LMR36015 (was missing — would brick high-side gate driver).
-- **Per-bus C_dVdT bumped 10 nF → 100 nF.** At 32-unit bus inrush (~800 µF aggregate input cap), the original 10 nF gave ~12.8 A peak inrush against a 1.7 A trip — master could not bring up a populated chain.
-- **INA237 VBUS divider 100 k/10 k → 10 k/1 k.** High source impedance destroyed the INA237's 16-bit accuracy.
-- **FAULT LED moved to MMBT3906 PNP high-side switch.** Prior topology pulled 2.3 mA on PROT_FAULT_OR; LM74700 FAULT can only sink 1 mA.
-- **RS-485 failsafe bias 390 Ω → 1 kΩ each leg.** Reduces idle current 17 mA → 6.4 mA across 4 buses.
-- **BAT54 polarity corrected** on the EFUSE_EN POR-gating (was reversed).
-- **LM74700 GATE 1 kΩ series resistor added** per TI SLUA975 (Q_g stability).
-- **Master mounting holes moved** to (6,94)/(124,94)/(6,22)/(124,22) — pre-existing positions had 0.75 mm edge clearance and bottom holes collided with the 21 mm RJ45 keep-out.
-
-## B.3 Critical electrical fixes (unit)
-
-- **Buck swap: TPS54308DBV → TPS54360DDA.** TPS54308 is SOT-23-6 with no thermal pad; the prior "≤ 80 °C/W" thermal spec was physically unachievable. TPS54360DDA is HSOP-8 PowerPAD with a real exposed pad.
-- **MCU package swap: STM32G030F6P6 (TSSOP-20) → STM32G030K6T6 (LQFP-32).** Pre-2026-04-25 pin map referenced PA12 / PB0 / PB1 — none of which are bonded on TSSOP-20.
-- **Stepper driver swap: ULN2003A → TPL7407L** (per scottbez1 audit). Drop-in MOSFET array, ~0.5 W less heat per unit at 300 mA stepping.
-- **ESD swap: SP0504BAATG → SM712-02HTG.** SP0504 clamps at 5 V working voltage and would fire on legitimate RS-485 traffic.
-- **TVS swap: SMBJ58CA → SMAJ51A.** Matches master's V48_RAIL clamp class.
-- **Reverse-polarity P-FET drain/source labels corrected** (was reversed pre-2026-04-25).
-- **Inductor Isat ≥ 600 mA → ≥ 1 A** (per scottbez1 audit; 28BYJ-48 stepping pulls ~300 mA peak per phase).
-- **AS5600 I²C RC filter added** (100 Ω + 100 pF per line) to reject buck-switching coupling.
-- **TPL7407L IN5–IN7 hard-tied to GND** (was via 10 kΩ; false-turn-on risk).
-- **STM32 NRST conditioning added** (100 nF + 10 kΩ).
-- **SWD pads sized correctly**: 1.5 mm pads on 2.54 mm pitch (was 2 mm pads on 1.5 mm spacing — too tight).
-- **C_LDO_OUT distinct LCSC from C_LDO_IN** (was C15849 dupe).
-
-## B.4 Discovery / addressing change
-
-Pre-2026-04-25 used a single-ended **wake signal on RJ45 pin 1** to serialise enumeration. Cross-consistency review (#76) caught that the master had no WAKE_OUT GPIO, no per-port driver, and no parts on the BOM — units would arrive correctly fabricated but the system would never enumerate.
-
-**Replaced by master-driven UID-based binary-tree search over RS-485** (firmware-only). Each unit's STM32G030 96-bit factory UID is its identity. Master broadcasts prefix-match queries; matching units echo their UID; collisions resolved by narrowing the prefix. Master persists the UID→address map in NVS. Cold first-ever boot ~5–20 s for 32 units; warm boot ~100 ms. RJ45 pin 1 is `NC reserved` on both master and case-side. No DIP switches, no wake pin.
-
-## B.5 Protocol additions (broadcast frames + loopback integrity)
-
-Per scottbez1 audit, RS-485 at 500 kbaud cannot match Scott's SPI shift-register sub-millisecond 108-module update latency. Solution baked into the v2 protocol from day one: `BROADCAST_SET_POSITION`, `BATCH_UPDATE` (single payload across address range), and a `LOOPBACK` integrity message. Wire format remains COBS(payload || CRC16-BE) 0x00.
-
-## B.6 BOM schema migration (all three boards)
-
-Pre-2026-04-25 master BOM had `#`-prefixed comment lines that broke JLC's BOM uploader, different column schema between master + unit BOMs, no DNI/Populate column, no JLC tier annotation, mixed grouped designators with `..` shorthand.
-
-All three v2 BOMs now use a unified **JLC-native schema**:
-`Designator, Comment, Footprint, LCSC Part #, MPN, Manufacturer, Qty, JLC_Tier, Populate, EstEUR, DatasheetURL, Notes, BomType`
-
-`Populate`: `Y` / `DNP` / `END_OF_CHAIN` / `ALT_<group>`.
-`BomType`: `onboard` / `offboard` / `fab` / `hardware`.
-
-## B.7 Production pipeline + standalone test mode
-
-Adopted from scottbez1's mature workflow: **KiBot + kikit panelize.json + LCSC alt-part fields per part** when the freelancer produces KiCad sources. Solves the "BOM LCSC numbers known-wrong" failure mode mechanically.
-
-**Standalone unit test mode** (also from scottbez1): when the SWD pogo-jig connects without an active SWD master, unit firmware exposes a text protocol on PA13/PA14 repurposed as UART RX/TX. Commands: `home`, `step <N>`, `angle?`, `id?`. Allows single-unit bench bring-up without master/backplane. Documented in `UNIT_BRINGUP.md`.
-
-## B.8 What's still open
-
-- LCSC re-verification across all `CHECK` BOM rows — delegated to ChatGPT BOM pass per #75. **Unchanged from pre-2026-04-25.**
-- DSBGA-10 0.4 mm pitch hard pre-fab gate at JLC — confirm at fab-time.
-- TPS259827 K_ILIM constant verification at fab-time (datasheet rev varies).
-- Stepping current real-world measurement on first prototype unit.
-- Mech freelancer hand-off via STEP exchange for AS5600 origin, mounting holes, backplane brackets.
-- Master enclosure design (designed-to-fit project-box class).
-
-## B.9 What's no longer open
-
-The 2026-04-24 review bundle's Master open issues P1, P2, P4, M3, M5, M6, M9 are all now resolved. Unit open issues U1, U2, U4, U5, U7, U8, U9, U10 are resolved. See per-board DECISIONS docs for the closure rationale.
+> Keep the "what you'd do differently" section brutal and specific. Strong opinions over polite hedging.
