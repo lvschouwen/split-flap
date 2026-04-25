@@ -8,9 +8,23 @@
 ## 0. How to read this package
 
 - `pcb_v1.zip` — the **as-manufactured 2021–2022 design** (EasyEDA JSON source, gerbers, old BOM, old pick-and-place). Currently-deployed hardware.
-- `pcb_v2.zip` — the **clean-slate redesign**, post-2026-04-25 architecture freeze. **3-PCB system**: master + backplane (×N) + unit (×16·N). Markdown design docs + BOM CSVs. **No schematic capture yet** — next workstream is JLC EasyEDA Pro entry or freelance layout-engineer hand-off.
+- `pcb_v2.zip` — the **clean-slate redesign**, post-2026-04-25 architecture freeze. **3-PCB system**: master + backplane (×N) + unit (×16·N). Markdown design briefs + BOM CSVs. **No schematic capture yet** — next workstream is JLC EasyEDA Pro entry or freelance layout-engineer hand-off.
 - This changelog — walks the architectural delta and summarises the open review questions.
-- **Sources of truth inside `pcb_v2.zip`:** `MASTER_DECISIONS.md`, `BACKPLANE_DECISIONS.md`, `UNIT_DECISIONS.md`. Every other doc (`*_DESIGN.md`, `*_BOM.csv`, `*_BRINGUP.md`) is derivative and must agree with the decisions files.
+
+**`pcb_v2.zip` layout** (flattened to 8 files for ChatGPT's upload limit; the in-repo split is 19 per-section files at `PCB/v2/` on the `pcb-v2-rs485-48v` branch):
+
+| File | Contains |
+|---|---|
+| `README.md` | Bundle entry point + system overview + scope |
+| `CONNECTOR_PINOUTS.md` | Single canonical cross-board pinout contract |
+| `MASTER.md` | Master PCB: DECISIONS (source of truth) + POWER + DIGITAL + MECHANICAL + BRINGUP, concatenated with `# Section N — <ORIGINAL>.md` headers |
+| `MASTER_BOM.csv` | JLC-native BOM, master |
+| `BACKPLANE.md` | Backplane PCB: DECISIONS + DESIGN + MECHANICAL + BRINGUP, concatenated |
+| `BACKPLANE_BOM.csv` | JLC-native BOM, backplane segment |
+| `UNIT.md` | Unit PCB: DECISIONS + POWER + DIGITAL + MECHANICAL + BRINGUP, concatenated |
+| `UNIT_BOM.csv` | JLC-native BOM, unit |
+
+**Sources of truth inside each per-board mega-doc** are the `Section 1 — *_DECISIONS.md` blocks; later sections (DESIGN / POWER / DIGITAL / MECHANICAL / BRINGUP) are derivative and must agree with the decisions section.
 
 **Target prototype run:** 5× master boards + 5 case-sets of 4× backplane segments + 80× unit boards via JLC PCBA. User fabricates the 3D-printed enclosure parts.
 
@@ -306,10 +320,10 @@ Thanks.
 > I'm handing you two zips and a changelog for external review of a PCB v2 redesign of a split-flap display project.
 >
 > - `pcb_v1.zip` — original 2021 / 2022 design: EasyEDA JSON source, gerbers, old BOM. Currently-deployed hardware.
-> - `pcb_v2.zip` — clean-slate redesign at the 2026-04-25 architecture freeze. **3-PCB system**: master + backplane (×N) + unit (×16·N). Markdown design docs + BOM CSVs. **No schematic capture yet** — next workstream is JLC EasyEDA Pro entry or freelance layout engineer hand-off.
+> - `pcb_v2.zip` — clean-slate redesign at the 2026-04-25 architecture freeze. **3-PCB system**: master + backplane (×N) + unit (×16·N). 8 files: `README.md`, `CONNECTOR_PINOUTS.md`, three per-board mega-docs (`MASTER.md`, `BACKPLANE.md`, `UNIT.md`), and three BOM CSVs. **No schematic capture yet** — next workstream is JLC EasyEDA Pro entry or freelance layout engineer hand-off.
 > - `CHANGELOG_V1_TO_V2.md` — walks every delta, flags open questions, tells you what I want back.
 >
-> **Start by reading the changelog**, especially §5 (BOM status) and §7 (what I'd like you to return). Inside the v2 zip, treat `MASTER_DECISIONS.md`, `BACKPLANE_DECISIONS.md`, and `UNIT_DECISIONS.md` as the sources of truth — every other doc (`*_DESIGN.md`, `*_BOM.csv`, `*_BRINGUP.md`) is derivative and must agree with the decisions files.
+> **Start by reading the changelog**, especially §5 (BOM status) and §7 (what I'd like you to return). Inside the v2 zip, the per-board mega-docs are concatenations of the original section files; in each one the **`Section 1 — *_DECISIONS.md` block is the source of truth** — every later section (DESIGN / POWER / DIGITAL / MECHANICAL / BRINGUP) is derivative and must agree with the decisions section.
 >
 > **Highest-priority task: BOM verification.** Many LCSC `Cxxxxxx` part numbers in the original BOMs were wrong (resolving to limit switches, photodiodes, film caps — not the MPN listed beside them). Post-pivot all three BOMs have been schema-migrated to a JLC-native column set, but most active-IC lines still need live re-verification. The MPN column is authoritative. For every active IC across master + backplane + unit, please look up the correct live LCSC / JLC part on https://jlcpcb.com/parts and return a corrected BOM excerpt (note JLC Basic vs. Extended, stock, qty 5 / qty ~20 / qty ~80 pricing, and substitutes if JLC doesn't carry the MPN). Passives can be left as "JLC Basic equivalent, pick at PCBA quote time."
 >
