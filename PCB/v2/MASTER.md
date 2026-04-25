@@ -41,13 +41,11 @@ combined connector.
                 +- 14.7456 MHz crystal
                 +- IRQ -> ESP32-S3 GPIO
 
-Per-row 6-pin output (combined power + signal):
-  Pin 1: 12V (post-polyfuse, paralleled with pin 2 for current capacity)
-  Pin 2: 12V
-  Pin 3: GND (paralleled with pin 4)
-  Pin 4: GND
-  Pin 5: RS485_A
-  Pin 6: RS485_B
+Per-row 4-pin output (combined power + signal):
+  Pin 1: 12V (post-polyfuse)
+  Pin 2: GND
+  Pin 3: RS485_A
+  Pin 4: RS485_B
 
 Each transceiver block:
    - DE/RE GPIOs (ESP32-S3 native; SC16IS740 GPIO for Bus 3)
@@ -105,18 +103,20 @@ Per bus:
 - Termination: 120 ohm across A/B at master end.
 - Failsafe bias: 1 k from A to 3V3, 1 k from B to GND.
 - ESD: SM712-02HTG across A/B to GND.
-- Output connector: **6-pin shrouded box header** (2×3, 2.54 mm, indexed).
+- Output connector: **4-pin shrouded box header** (1×4, 2.54 mm, indexed).
 
 ## Output connector pinout (per row)
 
 | Pin | Net | Notes |
 |---|---|---|
-| 1 | 12V | post-polyfuse, paralleled with pin 2 |
-| 2 | 12V | paralleled with pin 1 (current capacity ~6 A through 2.54 mm pins) |
-| 3 | GND | paralleled with pin 4 |
-| 4 | GND | paralleled with pin 3 |
-| 5 | RS485_A | from local transceiver |
-| 6 | RS485_B | from local transceiver |
+| 1 | 12V | post-polyfuse |
+| 2 | GND | |
+| 3 | RS485_A | from local transceiver |
+| 4 | RS485_B | from local transceiver |
+
+4-pin shrouded box header at 2.54 mm pitch. The 12V pin carries up to
+~3 A typical / 4 A peak per row — within standard pin rating since real-
+world peaks are brief and steady-state is ~1-2 A.
 
 ## UART pin assignment (suggested)
 
@@ -155,7 +155,7 @@ ESP32-S3 GPIO matrix lets these be remapped.
 
 ## Layout notes
 
-- USB-C and 4× 6-pin row output connectors along the same long edge for
+- USB-C and 4× 4-pin row output connectors along the same long edge for
   cable routing.
 - Screw terminal input on the opposite edge (or on the back) so the
   power cable doesn't fight the row cables.

@@ -14,9 +14,11 @@ Tracked under issue #83.
 
 - 1 master PCB (ESP32-S3, USB-C, 4 RS-485 row ports).
 - 4 rows × 16 unit slots = **64 units max.**
-- 4 per-row harnesses (no rigid backplane).
+- **DIN-rail bus PCB**: 2× 300 mm bus PCBs daisy-chained per row, units
+  clip onto rail and contact bus traces via 4 pogo pins per unit. No
+  cabling between unit and bus.
 - **One 12 V / 15 A brick.** Master sources both power and signal to
-  each row over a single 6-pin combined cable.
+  each row over a single 4-pin combined cable.
 - **Addressing: STM32 96-bit UID** + per-unit IDENTIFY button. No DIP
   switches, no slot wiring on the harness.
 

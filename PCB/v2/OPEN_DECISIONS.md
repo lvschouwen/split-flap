@@ -9,12 +9,13 @@ firmware-configurable or build-time decisions.
 ## 1. Existing case inventory (deferred — does not block schematic capture)
 
 Master placement is locked to "near the brick", but the brick + master
-location relative to the rows is still undecided. Cable lengths follow
-from that and are cable-assembly concerns, not PCB-schematic concerns.
+location relative to the rows is still undecided. Cable lengths and
+DIN rail mounting positions follow from that.
 
 When the master/brick mounting position is chosen, this becomes a
 build-time spec:
-- Cable lengths from master to each row's harness master-end.
+- Cable lengths from master to each row's first bus PCB.
+- DIN rail mounting position in each row.
 - Cable entry points into row enclosures.
 - Whether all 4 rows are in the same enclosure or split.
 
@@ -35,32 +36,31 @@ build-time spec:
 **Recommendation: 250 kbaud.** Software-changeable later without hardware
 work.
 
-## 3. Master-to-harness cable (deferred with #1)
+## 3. Master-to-bus cable + daisy-chain cable (deferred with #1)
 
-Cable lengths follow from master placement. Hardware spec is fixed:
+Cable lengths follow from master and bus-PCB placement. Hardware spec
+is fixed:
 
-- Master row port: 6-pin shrouded box header on master PCB.
-- Harness master-end: matching 6-pin shrouded female.
-- Cable: 4 active conductors (12V, GND, A, B). 22 AWG minimum on power
-  legs; 24 AWG OK on A/B. Twisted pair on A/B preferred. Custom-built
-  with 4-conductor instrument cable or CAT5e cut-down (1 pair power,
-  1 pair GND parallel, 1 pair A/B twisted, 1 pair spare).
+- Connectors: 4-pin shrouded female on every cable end (matching the
+  4-pin headers on master and bus PCBs).
+- Master cable: 4 conductors (12V, GND, A, B). 22 AWG minimum on power
+  legs.
+- Daisy-chain cable: same 4 conductors, short (~5-15 cm) between the
+  two bus PCBs in each row.
+- Twisted pair on A/B preferred for noise immunity.
 - Lengths: cut and terminated at build time.
 
-## 4. Harness trunk type (deferred — harness assembly, does not block schematic capture)
+## 4. DIN rail and clip mounting hardware (build-time)
 
-**Options**
-- A. Round 4-conductor cable (22 AWG), unit drops T-tapped onto trunk.
-- B. Flat ribbon cable (28 AWG, 1.27 mm pitch), IDC mass-terminated drops.
+- **DIN rail**: standard 35 mm TS35, cut to row length (~600 mm).
+- **Bus PCB mounting**: 2× corner brackets per bus PCB, attaching the
+  PCB inside or alongside the DIN rail channel. Mechanical fit
+  finalized when case mounting position is chosen.
+- **Unit DIN rail clip**: standard 35 mm TS35 plastic clip (bolt-on
+  injection-moulded part) or 3D-printed equivalent. Asymmetric clip
+  geometry provides natural polarisation for the pogo pin pattern.
 
-**Hardware tradeoffs**
-- Round: more rugged, handles higher 12 V current, hand-soldered drops.
-- Ribbon: faster to assemble, limited to short rows (~1 m) due to thinner
-  conductors' 12 V drop.
-
-**Recommendation: round 22 AWG for any row > 1 m. Ribbon for compact
-single-cabinet rows.** Decision happens at harness build, after master
-placement is settled (#1/#3).
+These are build-time selections; no PCB schematic dependency.
 
 ## Resolved decisions (closed; recorded for transparency)
 
@@ -88,8 +88,17 @@ placement is settled (#1/#3).
 - **Termination**: 120 ohm at master per bus + 120 ohm in a terminator
   plug at far end of each row's harness.
 - **Bias**: 1k/1k at master only, per bus.
-- **Unit-to-harness connector**: 4-pin shrouded box header (2x2, 2.54 mm,
-  indexed).
+- **Unit-to-bus contact**: 4 through-hole pogo pins on unit underside,
+  vertical line, ~8 mm pitch, gold-plated tips. Contacts ENIG-plated
+  trace strips on the DIN-rail bus PCB.
+- **Per-row distribution**: 2× 300 mm bus PCBs daisy-chained, both
+  built from the same PCB design (8 boards across 4-row system), each
+  with 4-pin shrouded box header on each end.
+- **All connectors 4-pin shrouded** at 2.54 mm: master row output, bus
+  PCB ends, master cable ends, daisy-chain cable ends. Same family
+  throughout.
+- **Termination**: 120 Ω resistor in a terminator plug that mates with
+  the unused connector on the last bus PCB in each row's chain.
 - **Motor driver**: TPL7407L primary; ULN2003A as PCBA-time substitute
   (footprint shared).
 - **IDENTIFY LED**: dedicated yellow LED + dedicated MCU GPIO.

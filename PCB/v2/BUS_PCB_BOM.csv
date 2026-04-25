@@ -1,0 +1,5 @@
+ref,qty,value,footprint,mfg_part,notes
+J_in,1,Header 1x4 shrouded,2.54 mm indexed,generic,Connector "in" (master side or chain-from-previous)
+J_out,1,Header 1x4 shrouded,2.54 mm indexed,generic,Connector "out" (chain-to-next or terminator end)
+PCB,1,Bus PCB,300 mm x ~30 mm,custom,2-layer FR-4 ENIG plating wide power/GND outside narrow A/B middle
+DIN_clip,2,DIN rail mount,corner brackets,generic,For attaching bus PCB to 35 mm DIN rail TS35

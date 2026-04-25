@@ -11,30 +11,34 @@ No rigid backplane: each row uses a daisy-chain harness or ribbon cable.
 ## System block diagram
 
 ```
-                       1× 12 V / 15 A brick
-                              |
-                              v
-                   +----------------------+
-                   |  Master              |
-                   |  ESP32-S3 + SC16IS740|
-                   |  USB-C               |
-                   |  4x RS-485 PHY       |
-                   |  per-row polyfuse    |
-                   |  4x 6-pin row ports  |
-                   +-+--+--+--+-----------+
-                     |  |  |  |
-                     v  v  v  v
-                   single combined cable per row
-                  (12V/GND/A/B in one 6-pin connector)
-                     |  |  |  |
-                     |  |  |  +---> Row 3 harness ---> 16 units --- [terminator]
-                     |  |  +-----> Row 2 harness ---> 16 units --- [terminator]
-                     |  +--------> Row 1 harness ---> 16 units --- [terminator]
-                     +-----------> Row 0 harness ---> 16 units --- [terminator]
-
-   Master sources both row power and signal from a single 12 V brick.
-   Each row: 12V + GND + A + B daisy-chained through 16 units.
-   Each unit has 1 connector (4-pin), 1 IDENTIFY button, 1 IDENTIFY LED.
+                        1× 12 V / 15 A brick
+                               |
+                               v
+                    +----------------------+
+                    |  Master              |
+                    |  ESP32-S3 + SC16IS740|
+                    |  USB-C               |
+                    |  4x RS-485 PHY       |
+                    |  per-row polyfuse    |
+                    |  4x 4-pin row ports  |
+                    +-+--+--+--+-----------+
+                      |  |  |  |
+                      v  v  v  v
+                4-pin combined cable per row (12V/GND/A/B)
+                      |  |  |  |
+   Per row, the cable plugs into the first of two daisy-chained bus PCBs:
+   
+   Master Row 0 ──► [Bus PCB A0] ──short cable──► [Bus PCB B0] ──► [120R term]
+                          |                              |
+                       8 pogo-pin stations           8 stations
+                          |                              |
+                       Units 0..7 clip on            Units 8..15 clip on
+                       via DIN rail                  via DIN rail
+   
+   ... same topology for Rows 1, 2, 3
+   
+   Each unit: 4 pogo pins on underside (12V/A/B/GND), DIN rail clip,
+              IDENTIFY button + LED. No cable to unit.
 ```
 
 ## Bus topology
@@ -54,7 +58,7 @@ considered.
   worst-case peak (~16 A briefly during simultaneous flap transitions);
   steady-state draw is ~3-5 A.
 - Master internally distributes 12 V to each row via per-row polyfuses
-  (4 A hold each), then out on the row's 6-pin connector alongside the
+  (4 A hold each), then out on the row's 4-pin connector alongside the
   row's RS-485 A/B.
 - Master also taps off ~50 mA for its own 3.3 V logic via on-board LDO.
 - 12 V flows from the master through the combined cable to the
@@ -158,8 +162,10 @@ indicators before the system tries to display anything.
 | Distribution | ~30 patch cables per case | per-row daisy-chain harness |
 | Homing sensor | KY-003 module (discrete) | A1101ELHL on-board hall |
 | Unit ESD on bus | none | SM712-02HTG on RS-485 A/B |
-| Connector to bus | JST-XH chained per unit | 4-pin shrouded box header (1 connector per unit) |
-| Cable from master to row | n/a | single 6-pin combined (12V/GND/A/B) per row |
+| Connector to bus | JST-XH chained per unit | 4 pogo pins on unit underside (no connector) |
+| Distribution within row | n/a | 2× 300 mm DIN-rail bus PCBs daisy-chained, units clip on |
+| Cable from master to row | n/a | single 4-pin combined (12V/GND/A/B) to first bus PCB |
+| Cable between bus PCBs | n/a | short 4-pin daisy-chain cable |
 
 ## Hardware-only comparison to scottbez1
 

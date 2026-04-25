@@ -1,19 +1,19 @@
 # Unit PCB
 
-Per-flap board. Plugs into a row harness via a single 4-pin shrouded
-header. Drives one 28BYJ-48 12 V stepper, homes on an on-board hall
-sensor, talks to its row's master over RS-485. Identifies itself by its
-STM32 96-bit silicon UID, with a manual IDENTIFY button as commissioning
-hardware.
+Per-flap board. Mounts to a 35 mm DIN rail and contacts the row's bus
+PCB via 4 pogo pins on the unit's underside. Drives one 28BYJ-48 12 V
+stepper, homes on an on-board hall sensor, talks to its row's master
+over RS-485. Identifies itself by its STM32 96-bit silicon UID, with a
+manual IDENTIFY button as commissioning hardware.
 
-Unit PCB is **identical across all 64 units**. No backplane, no slot
-wiring, no DIP switches.
+Unit PCB is **identical across all 64 units**. No backplane, no cabling
+to the bus, no DIP switches.
 
 ## Block diagram
 
 ```
-Harness connector (4-pin shrouded, 2x2, indexed)
-   1=12V  2=GND  3=A  4=B
+4 pogo pins (on unit underside, pressing onto bus PCB traces)
+   1=12V  2=A  3=B  4=GND
        |
        +- TVS SMAJ15A (line-to-GND on 12V)
        +- Q1 P-FET reverse-block (AO3401)
@@ -45,46 +45,54 @@ Harness connector (4-pin shrouded, 2x2, indexed)
        |
    [SN65HVD75]
        |
-       +- A/B -> harness pins 3/4
+       +- A/B -> pogo pins 2/3
        +- ESD: SM712-02HTG across A/B to GND
 ```
 
-## MCU
+## Bus contact (pogo pins)
 
-**STM32G030K6T6 (LQFP-32).**
+4 through-hole pogo pins mounted on the unit PCB underside, projecting
+downward to contact the bus PCB beneath the DIN rail.
 
-Hardware-merit reasons:
-- 96-bit unique device ID readable from the `UID_BASE` register
-  (0x1FFF7590), three 32-bit words. Used as the unit's stable network
-  identity. Ports like ATmega328P do not have a manufacturer-baked UID.
-- Hardware DE auto-toggle on USART1 — TX direction control in the UART
-  peripheral, deterministic timing.
-- Native 1.7-3.6 V supply, matches 3.3 V rail directly.
-- 32 KB flash / 8 KB SRAM is comfortable for stepper firmware + RS-485
-  protocol + UID handling.
-- JLC Basic, ~EUR 0.55 per unit.
+| Pogo pin | Net | Position on unit underside |
+|---|---|---|
+| 1 | 12V | top edge (matches outer-top trace on bus PCB) |
+| 2 | RS485_A | upper-middle |
+| 3 | RS485_B | lower-middle |
+| 4 | GND | bottom edge (matches outer-bottom trace on bus PCB) |
 
-This is settled. The previous "STM32 vs ATmega" decision is closed because
-ATmega328P does not have a hardware UID and the IDENTIFY-by-UID flow is
-the addressing mechanism.
+Spacing: ~8 mm between adjacent pin centres, ~24 mm total span.
 
-## IDENTIFY button + LED
-
-- Tact switch (6x6 mm SMD, 50 mA) on the unit board edge, accessible
-  through the case opening.
-- One MCU GPIO with internal pull-up; switch shorts to GND when pressed.
-- Firmware debounces and reports state on next status frame.
-- Dedicated IDENTIFY LED (yellow 0805) driven by its own MCU GPIO so
-  master can pulse it during commissioning ("press the unit whose LED is
-  flashing").
+Pogo pin spec:
+- Through-hole mount, ~1 mm tip diameter, 1-1.5 mm spring travel
+- Gold-plated tips for reliability against ENIG bus PCB pads
+- ~100-250 g spring force per pin
+- Examples: Mill-Max 0907 series, generic R-PT (AliExpress for hobby
+  cost ~€0.30 each) or Mouser-stocked equivalents
 
 ## Power
 
-- Input: 12 V from harness. No second rail. No on-board buck.
-- Reverse protection: P-FET (AO3401) in low-side return.
+- Input: 12 V from bus PCB via pogo pins.
+- Reverse protection: P-FET (AO3401) in low-side return — protects
+  against accidental reversed unit insertion if polarisation fails.
 - Bulk cap: 22 uF + 100 nF on incoming 12 V.
-- 12 V -> 3.3 V: HT7833 LDO. Load ~55 mA worst case. Dissipation ~0.48 W.
+- 12 V → 3.3 V: HT7833 LDO. Load ~55 mA worst case. Dissipation ~0.48 W.
 - Stepper coils: directly on 12 V via the driver.
+
+## MCU
+
+**STM32G030K6T6 (LQFP-32).** Required for the 96-bit silicon UID at
+`UID_BASE` (0x1FFF7590). Hardware DE auto-toggle on USART1. Native
+1.7-3.6 V supply. JLC Basic, ~EUR 0.55.
+
+## IDENTIFY button + LED
+
+- Tact switch (6×6 mm SMD) on the unit board edge, accessible after
+  the unit is clipped onto the rail.
+- One MCU GPIO with internal pull-up; switch shorts to GND when pressed.
+- Firmware debounces and reports state on next status frame.
+- Dedicated yellow IDENTIFY LED (0805) driven by its own MCU GPIO so
+  the master can pulse it during commissioning.
 
 ## Motor driver
 
@@ -92,22 +100,21 @@ the addressing mechanism.
 ~12 mW dissipation per coil-on at 200 mA.
 
 ULN2003A is footprint-compatible (also 16-SOIC) and stays as a PCBA-time
-substitute if TPL7407L availability flips. BOM line is the only difference.
+substitute if TPL7407L availability flips.
 
 ## Hall sensor
 
 - A1101ELHL (Allegro), unipolar latching, 100 G op / 45 G release.
 - SOT-23W, output is open-drain, 10 k pull-up to 3.3 V.
 - Single magnet on the flap drum.
-- Position selected to match v1 PCB's hall coordinate.
 
 ## RS-485 path
 
 - Transceiver: SN65HVD75DR.
 - DE and /RE controlled separately by MCU GPIO.
 - ESD: SM712-02HTG across A/B to GND.
-- No termination resistor on units (only master + far end of harness).
-- No bias on units (only master).
+- No termination on units (only at the master and via terminator plug
+  on the far end of each row).
 
 ## LEDs
 
@@ -118,20 +125,25 @@ substitute if TPL7407L availability flips. BOM line is the only difference.
 ## Test pads
 
 - 5 pads on edge: GND, 3V3, UART_TX, UART_RX, RST.
-- 4 SWD pads (SWDIO, SWCLK, RST, GND) for STM32G030 in-circuit programming
-  + debug.
+- 4 SWD pads (SWDIO, SWCLK, RST, GND) for STM32G030 in-circuit programming.
 
 ## Mechanical
 
-- Outline: ~75 x 35 mm to match v1 envelope. Existing case mechanics drive
-  this — non-negotiable.
-- Mounting holes: same 4 positions as v1.
-- Harness connector: 4-pin shrouded box header on back edge.
-- Stepper output: 4-pin JST-XH on opposite edge.
-- IDENTIFY button: edge-mounted, accessible after case assembly.
+- Outline: ~75 × 35 mm to match v1 envelope. Existing case mechanics
+  drive this.
+- Mounting holes: same 4 positions as v1 (or a DIN rail clip mount if
+  case is being redesigned).
+- DIN rail clip on the back: standard 35 mm TS35 clip (off-the-shelf
+  injection-moulded plastic clip or 3D-printed). Mechanically asymmetric
+  so unit can only mount one way up — provides natural polarization for
+  the pogo pin pattern.
+- Pogo pins: 4× through-hole on the underside, vertical line, ~8 mm
+  spacing, projecting ~3 mm below board.
+- Stepper output: 4-pin JST-XH on opposite edge from DIN rail clip.
+- IDENTIFY button: edge-mounted, accessible after install.
 - Hall sensor: positioned to match v1 magnet path.
 - Stack-up: 2-layer HASL.
 
 ## BOM
 
-See `UNIT_BOM.csv`. All BOM rows now concrete; no TBDs remain.
+See `UNIT_BOM.csv`.

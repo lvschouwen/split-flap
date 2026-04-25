@@ -22,10 +22,10 @@ D12,1,RS-485 ESD Bus 2,SOT-23,Semtech SM712-02HTG,
 D13,1,RS-485 ESD Bus 3,SOT-23,Semtech SM712-02HTG,
 J1,1,Screw terminal 2-pin,5 mm pitch THT,Phoenix MKDS-1.5/2 or generic,12 V/15 A input
 J2,1,USB-C receptacle,USB-C 16-pin SMD,generic with shielded shell,Programming + debug
-J3,1,Header 2x3 shrouded,2.54 mm indexed,generic,Bus 0 row port: 12V/12V/GND/GND/A/B
-J4,1,Header 2x3 shrouded,2.54 mm indexed,generic,Bus 1 row port
-J5,1,Header 2x3 shrouded,2.54 mm indexed,generic,Bus 2 row port
-J6,1,Header 2x3 shrouded,2.54 mm indexed,generic,Bus 3 row port
+J3,1,Header 1x4 shrouded,2.54 mm indexed,generic,Bus 0 row port: 12V/GND/A/B
+J4,1,Header 1x4 shrouded,2.54 mm indexed,generic,Bus 1 row port
+J5,1,Header 1x4 shrouded,2.54 mm indexed,generic,Bus 2 row port
+J6,1,Header 1x4 shrouded,2.54 mm indexed,generic,Bus 3 row port
 J7,1,Header 2x4 debug,2.54 mm,generic,UART/SPI debug breakout
 SW1,1,Tact switch BOOT,SMD 6x6,generic,IO0
 SW2,1,Tact switch RST,SMD 6x6,generic,EN
