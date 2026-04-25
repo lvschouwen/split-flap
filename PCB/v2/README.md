@@ -20,7 +20,7 @@ Tracked under issue #83.
 - **One 12 V / 15 A brick.** Master sources both power and signal to
   each row over a single 4-pin combined cable.
 - **Addressing: STM32 96-bit UID** + per-unit IDENTIFY button. No DIP
-  switches, no slot wiring on the harness.
+  switches, no slot wiring on the bus.
 
 Explicitly **not** in scope: rigid backplanes, DIP switches, 48 V
 distribution, RJ45 power-and-data, MAX14830 SPI-UART bridge, INA237
@@ -34,9 +34,10 @@ product-grade compliance framing.
 | `ARCHITECTURE.md` | System block diagram, voltage and bus flow, addressing |
 | `MASTER.md` | Master PCB design notes |
 | `MASTER_BOM.csv` | Master PCB BOM |
-| `UNIT.md` | Unit PCB design notes |
+| `UNIT.md` | Unit PCB design notes (with pogo pins, DIN rail clip) |
 | `UNIT_BOM.csv` | Unit PCB BOM |
-| `HARNESS.md` | Per-row wiring spec (cable, drops, terminator) + parts list |
+| `BUS_PCB.md` | DIN-rail bus PCB design (2× 300 mm per row, daisy-chained) |
+| `BUS_PCB_BOM.csv` | Bus PCB BOM |
 | `OPEN_DECISIONS.md` | Pending decisions blocking schematic capture |
 
 The RS-485 wire format + opcode set is a firmware concern, not a hardware
