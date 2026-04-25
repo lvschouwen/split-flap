@@ -221,3 +221,90 @@ Thanks.
 > Architectural decisions in §2 of the changelog are locked — please push back on them only if you're confident they won't work, not for stylistic preferences. The goal is to validate and sharpen, not re-scope.
 >
 > Keep the "what you'd do differently" section brutal and specific. I'd rather hear a strong opinion than polite hedging.
+
+---
+
+# Appendix B — 2026-04-25 update (post-review architecture pivot + electrical fixes)
+
+The original 2026-04-24 review bundle (this document above) went out for **two parallel external audits**:
+
+1. **#76 — 7-agent multi-perspective review** of the v2 brief: PCB design (master + unit), product/handoff readiness (master + unit), RS-485 + 48 V link, BOM/sourcing, cross-board consistency. Surfaced ~80 findings ranging from typos to fundamental architectural breaks.
+2. **scottbez1 audit** — 3-agent comparison against the mature open-source [splitflap project by Scott Bezek](https://github.com/scottbez1/splitflap) (108-module display, ~10 years of iteration). Validated the v2 architecture is right for product-scale operation but flagged tactical wins to steal.
+
+The bundled `pcb_v2.zip` has been regenerated to reflect the post-review state. The system architecture has changed in one major way (backplane introduced), three major part swaps were made, and ~50 individual fixes were applied. **The decisions docs and BOMs in v2.zip are the new sources of truth** — read those, not the pre-2026-04-25 narrative in §1–§7 above (which is preserved for historical context but is now superseded where it contradicts the new docs).
+
+## B.1 Architectural change — backplane PCB introduced
+
+**Pre-2026-04-25**: each unit had 2× RJ45 jacks for unit-to-unit daisy-chaining within a case (16 modules per case = 32 RJ45 jacks + 15 patch cables per case).
+
+**Post-2026-04-25**: a new **backplane PCB** lives in each case, distributing V48 + RS-485 to 16 unit-slots via a 2×3 box-header per slot. The backplane is split into 4 segments × 320 mm each (a single 1280 mm board exceeds JLC's standard fab limit). Each unit drops its 2× RJ45s and gains a single 2×3 male pin header that mates with the backplane socket. Only 2 case-level RJ45s remain (chain in / chain out, on the outer-segment ends).
+
+Net per 32-unit display: ~€150 saved (smaller unit PCBs + no internal patch cables); dramatically cleaner install; better signal integrity (no 16 jack-stubs per case). Cost: one new PCB design (the backplane).
+
+The system is now a **3-PCB system**: master + backplane (×N) + unit (×16N). New design-doc set in `pcb_v2.zip`: `BACKPLANE_DECISIONS.md`, `BACKPLANE_DESIGN.md`, `BACKPLANE_MECHANICAL.md`, `BACKPLANE_BOM.csv`, `BACKPLANE_BRINGUP.md`.
+
+## B.2 Critical electrical fixes (master)
+
+- **R_SERIES + D_SEC surge chain deleted.** R_SERIES (47 Ω in series with the main rail) dissipated 950 W steady at 4.5 A — an architectural error. Replaced by reliance on LM74700-Q1 native overvoltage protection per TI app note SLVA936, plus a single SMAJ51A (D_RAIL) clamping V48_RAIL post-Q1.
+- **C_BOOT 100 nF added** on LMR36015 (was missing — would brick high-side gate driver).
+- **Per-bus C_dVdT bumped 10 nF → 100 nF.** At 32-unit bus inrush (~800 µF aggregate input cap), the original 10 nF gave ~12.8 A peak inrush against a 1.7 A trip — master could not bring up a populated chain.
+- **INA237 VBUS divider 100 k/10 k → 10 k/1 k.** High source impedance destroyed the INA237's 16-bit accuracy.
+- **FAULT LED moved to MMBT3906 PNP high-side switch.** Prior topology pulled 2.3 mA on PROT_FAULT_OR; LM74700 FAULT can only sink 1 mA.
+- **RS-485 failsafe bias 390 Ω → 1 kΩ each leg.** Reduces idle current 17 mA → 6.4 mA across 4 buses.
+- **BAT54 polarity corrected** on the EFUSE_EN POR-gating (was reversed).
+- **LM74700 GATE 1 kΩ series resistor added** per TI SLUA975 (Q_g stability).
+- **Master mounting holes moved** to (6,94)/(124,94)/(6,22)/(124,22) — pre-existing positions had 0.75 mm edge clearance and bottom holes collided with the 21 mm RJ45 keep-out.
+
+## B.3 Critical electrical fixes (unit)
+
+- **Buck swap: TPS54308DBV → TPS54360DDA.** TPS54308 is SOT-23-6 with no thermal pad; the prior "≤ 80 °C/W" thermal spec was physically unachievable. TPS54360DDA is HSOP-8 PowerPAD with a real exposed pad.
+- **MCU package swap: STM32G030F6P6 (TSSOP-20) → STM32G030K6T6 (LQFP-32).** Pre-2026-04-25 pin map referenced PA12 / PB0 / PB1 — none of which are bonded on TSSOP-20.
+- **Stepper driver swap: ULN2003A → TPL7407L** (per scottbez1 audit). Drop-in MOSFET array, ~0.5 W less heat per unit at 300 mA stepping.
+- **ESD swap: SP0504BAATG → SM712-02HTG.** SP0504 clamps at 5 V working voltage and would fire on legitimate RS-485 traffic.
+- **TVS swap: SMBJ58CA → SMAJ51A.** Matches master's V48_RAIL clamp class.
+- **Reverse-polarity P-FET drain/source labels corrected** (was reversed pre-2026-04-25).
+- **Inductor Isat ≥ 600 mA → ≥ 1 A** (per scottbez1 audit; 28BYJ-48 stepping pulls ~300 mA peak per phase).
+- **AS5600 I²C RC filter added** (100 Ω + 100 pF per line) to reject buck-switching coupling.
+- **TPL7407L IN5–IN7 hard-tied to GND** (was via 10 kΩ; false-turn-on risk).
+- **STM32 NRST conditioning added** (100 nF + 10 kΩ).
+- **SWD pads sized correctly**: 1.5 mm pads on 2.54 mm pitch (was 2 mm pads on 1.5 mm spacing — too tight).
+- **C_LDO_OUT distinct LCSC from C_LDO_IN** (was C15849 dupe).
+
+## B.4 Discovery / addressing change
+
+Pre-2026-04-25 used a single-ended **wake signal on RJ45 pin 1** to serialise enumeration. Cross-consistency review (#76) caught that the master had no WAKE_OUT GPIO, no per-port driver, and no parts on the BOM — units would arrive correctly fabricated but the system would never enumerate.
+
+**Replaced by master-driven UID-based binary-tree search over RS-485** (firmware-only). Each unit's STM32G030 96-bit factory UID is its identity. Master broadcasts prefix-match queries; matching units echo their UID; collisions resolved by narrowing the prefix. Master persists the UID→address map in NVS. Cold first-ever boot ~5–20 s for 32 units; warm boot ~100 ms. RJ45 pin 1 is `NC reserved` on both master and case-side. No DIP switches, no wake pin.
+
+## B.5 Protocol additions (broadcast frames + loopback integrity)
+
+Per scottbez1 audit, RS-485 at 500 kbaud cannot match Scott's SPI shift-register sub-millisecond 108-module update latency. Solution baked into the v2 protocol from day one: `BROADCAST_SET_POSITION`, `BATCH_UPDATE` (single payload across address range), and a `LOOPBACK` integrity message. Wire format remains COBS(payload || CRC16-BE) 0x00.
+
+## B.6 BOM schema migration (all three boards)
+
+Pre-2026-04-25 master BOM had `#`-prefixed comment lines that broke JLC's BOM uploader, different column schema between master + unit BOMs, no DNI/Populate column, no JLC tier annotation, mixed grouped designators with `..` shorthand.
+
+All three v2 BOMs now use a unified **JLC-native schema**:
+`Designator, Comment, Footprint, LCSC Part #, MPN, Manufacturer, Qty, JLC_Tier, Populate, EstEUR, DatasheetURL, Notes, BomType`
+
+`Populate`: `Y` / `DNP` / `END_OF_CHAIN` / `ALT_<group>`.
+`BomType`: `onboard` / `offboard` / `fab` / `hardware`.
+
+## B.7 Production pipeline + standalone test mode
+
+Adopted from scottbez1's mature workflow: **KiBot + kikit panelize.json + LCSC alt-part fields per part** when the freelancer produces KiCad sources. Solves the "BOM LCSC numbers known-wrong" failure mode mechanically.
+
+**Standalone unit test mode** (also from scottbez1): when the SWD pogo-jig connects without an active SWD master, unit firmware exposes a text protocol on PA13/PA14 repurposed as UART RX/TX. Commands: `home`, `step <N>`, `angle?`, `id?`. Allows single-unit bench bring-up without master/backplane. Documented in `UNIT_BRINGUP.md`.
+
+## B.8 What's still open
+
+- LCSC re-verification across all `CHECK` BOM rows — delegated to ChatGPT BOM pass per #75. **Unchanged from pre-2026-04-25.**
+- DSBGA-10 0.4 mm pitch hard pre-fab gate at JLC — confirm at fab-time.
+- TPS259827 K_ILIM constant verification at fab-time (datasheet rev varies).
+- Stepping current real-world measurement on first prototype unit.
+- Mech freelancer hand-off via STEP exchange for AS5600 origin, mounting holes, backplane brackets.
+- Master enclosure design (designed-to-fit project-box class).
+
+## B.9 What's no longer open
+
+The 2026-04-24 review bundle's Master open issues P1, P2, P4, M3, M5, M6, M9 are all now resolved. Unit open issues U1, U2, U4, U5, U7, U8, U9, U10 are resolved. See per-board DECISIONS docs for the closure rationale.
