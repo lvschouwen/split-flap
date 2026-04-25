@@ -1,7 +1,11 @@
 # Open Decisions
 
-Decisions that block schematic capture. Each one is a hardware choice
-(software is being rewritten; firmware-reuse arguments do not apply).
+Hardware decisions remaining for v2. Software is being rewritten;
+firmware-reuse arguments do not apply.
+
+**Schematic-capture blockers:** #1 (motor driver footprint), #4
+(IDENTIFY LED dedicated vs shared GPIO+LED). Everything else is either
+firmware-configurable or a build-time/cable-assembly decision.
 
 ## 1. Motor driver
 
@@ -18,19 +22,17 @@ Decisions that block schematic capture. Each one is a hardware choice
 **Recommendation: TPL7407L primary, ULN2003A as PCBA-time substitute.**
 Footprint is shared.
 
-## 2. Existing case inventory
+## 2. Existing case inventory + master placement (deferred — does not block schematic capture)
 
-**Action required.** Photograph and measure each row case.
+Master placement is undecided; harness lengths and inter-row cable
+lengths follow from that. Both are cable-assembly concerns, not PCB
+schematic concerns — they can be sized at build time without touching
+the boards.
 
-What we need:
-- Cable entry points for the row harness and 12 V brick.
-- Internal layout to plan harness routing.
-- Position of the master PCB physically in the system.
-- Whether all 4 rows are in the same enclosure, separate enclosures, or
-  some mix.
-
-This drives harness length, cable gauge selection, and master output
-cable length.
+When master placement is chosen, this becomes a build-time spec:
+- Cable entry points for harness and 12 V brick.
+- Inter-row cable lengths from master.
+- Whether all 4 rows are in the same enclosure or split.
 
 ## 3. RS-485 baud rate
 
@@ -64,30 +66,30 @@ work.
 **Recommendation: A (dedicated).** A handful of cents for a far clearer
 commissioning UX. Reverse to B if board area is tight after layout.
 
-## 5. Inter-row cable from master to row harness
+## 5. Inter-row cable from master to row harness (deferred with #2)
 
-The master's 4 row ports are 3-pin (A, B, GND). The harness's master end
-takes 12 V + GND from the row brick separately.
+Master placement is undecided, so cable length is undecided. The
+hardware spec is fixed:
 
-**Decision: master row port is 3-pin shrouded header on master PCB.**
-Cable from master port to harness signal end is 3-conductor shielded
-twisted pair (e.g., a short length of CAT5e or 2-pair instrument cable).
-Length: depends on physical layout — typically 0.3-2 m.
+- Master row port: 3-pin shrouded header on master PCB.
+- Cable: 3-conductor shielded twisted pair (CAT5e cut-down, 2-pair
+  instrument cable, etc.).
+- Lengths: cut and terminated at build time.
 
-## 6. Harness trunk type
+## 6. Harness trunk type (deferred — harness assembly, does not block schematic capture)
 
 **Options**
 - A. Round 4-conductor cable (22 AWG), unit drops T-tapped onto trunk.
 - B. Flat ribbon cable (28 AWG, 1.27 mm pitch), IDC mass-terminated drops.
 
 **Hardware tradeoffs**
-- Round is more rugged, handles higher 12 V current, but each drop is
-  a hand soldering job.
-- Ribbon is faster to assemble (mass-termination tool) but limited to
-  short rows due to 28 AWG wire's 12 V drop.
+- Round: more rugged, handles higher 12 V current, hand-soldered drops.
+- Ribbon: faster to assemble, limited to short rows (~1 m) due to thinner
+  conductors' 12 V drop.
 
 **Recommendation: round 22 AWG for any row > 1 m. Ribbon for compact
-single-cabinet rows.** Final pick depends on case inspection (#2).
+single-cabinet rows.** Decision happens at harness build, after master
+placement is settled (#2/#5).
 
 ## Resolved decisions (closed; recorded for transparency)
 
