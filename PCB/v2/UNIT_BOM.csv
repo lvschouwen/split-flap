@@ -1,31 +1,31 @@
-ref,qty,value,footprint,mfg_part,notes
-U1,1,MCU,LQFP-32,STMicro STM32G030K6T6,Required for 96-bit silicon UID
-U2,1,Stepper driver,SO-16 wide,TI TPL7407L,Footprint accepts ULN2003A as PCBA-time substitute
-U3,1,12V to 3.3V LDO,SOT-89-5,Holtek HT7833,
-U4,1,RS-485 transceiver,SO-8,TI SN65HVD75DR,
-U5,1,Hall sensor,SOT-23W,Allegro A1101ELHL,Unipolar latching 100 G op / 45 G rel
-Q1,1,P-FET reverse-block,SOT-23,Alpha & Omega AO3401,
-D1,1,LED blue,0805,generic,HEARTBEAT
-D2,1,LED red,0805,generic,FAULT
-D3,1,LED yellow,0805,generic,IDENTIFY indicator (dedicated GPIO)
-D4,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,
-D5,1,RS-485 ESD,SOT-23,Semtech SM712-02HTG,
-SW1,1,IDENTIFY tact switch,6x6 SMD,generic,Edge-mounted; commissioning hardware
-PG,4,Pogo pin,Through-hole 1mm tip,Mill-Max 0907 or equivalent,Gold-plated; 1-1.5 mm travel; vertical line on unit underside (12V/A/B/GND)
-DIN_clip,1,DIN rail clip,M3 mount or snap,generic or 3D-printed,Asymmetric for polarization; standard 35 mm TS35
-J2,1,Stepper output,JST-XH 4-pin,JST B4B-XH-A,To 28BYJ-48 motor
-TP,5,Test pads,1.5 mm pad,-,GND/3V3/RX/TX/RST
-TP_DBG,4,SWD pads,1.5 mm pad,-,SWDIO+SWCLK+RST+GND
-C_in,1,22 uF / 25 V,0805 X7R,generic,12 V input bulk
-C_in2,1,100 nF,0603 X7R,generic,12 V input decap
-C_ldo_in,1,10 uF / 25 V,0805 X7R,generic,LDO input
-C_ldo_out,1,10 uF / 10 V,0805 X7R,generic,LDO output
-C_decap,4,100 nF,0603 X7R,generic,MCU + transceiver decoupling
-C_rst,1,100 nF,0603 X7R,generic,STM32 NRST filter
-C_id,1,100 nF,0603 X7R,generic,IDENTIFY button debounce
-R_hall,1,10 kohm,0603 1%,generic,Hall sensor pull-up to 3V3
-R_de,1,1 kohm,0603 1%,generic,DE driver line series
-R_re,1,1 kohm,0603 1%,generic,/RE driver line series
-R_led,3,1 kohm,0603 1%,generic,LED current limit (HB/FAULT/ID)
-R_id,1,10 kohm,0603 1%,generic,IDENTIFY button pull-up to 3V3
-R_rst,1,10 kohm,0603 1%,generic,NRST pull-up
+ref,qty,value,footprint,mfg_part,lcsc_check,notes
+U1,1,STM32G030K6T6,LQFP-32,STMicro STM32G030K6T6,C2040675,Required for 96-bit silicon UID
+U2,1,Stepper driver,SOIC-16W,TI TPL7407L,C383290,Footprint accepts ULN2003A as PCBA-time substitute (LCSC C2358)
+U3,1,12V to 3.3V LDO,SOT-89-5,Holtek HT7833,C70358,
+U4,1,RS-485 transceiver,SOIC-8,TI SN65HVD75DR,C57928,
+U5,1,Hall sensor,SOT-23W,Allegro A1101ELHL,C504318,Unipolar latching 100 G op / 45 G rel
+Q1,1,P-FET reverse-block,SOT-23,Alpha & Omega AO3401,C15127,
+D1,1,LED blue,0805,generic,C2293,HEARTBEAT
+D2,1,LED red,0805,generic,C2286,FAULT
+D3,1,LED yellow,0805,generic,C2298,IDENTIFY indicator (dedicated GPIO)
+D4,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,
+D5,1,RS-485 ESD,SOT-23,Semtech SM712-02HTG,C172881,
+SW1,1,IDENTIFY tact switch,6x6 SMD,generic,C318884,Edge-mounted; commissioning hardware
+PG,4,Pogo pin,Through-hole 1mm tip,Mill-Max 0907 series,n/a (off-shelf),Gold-plated; 1-1.5 mm travel; vertical line on unit underside (12V/A/B/GND)
+DIN_clip,1,DIN rail clip,M3 mount or snap,generic or 3D-printed,n/a,Asymmetric for polarization; standard 35 mm TS35
+J2,1,Stepper output,JST-XH 4-pin,JST B4B-XH-A,C158012,To 28BYJ-48 motor
+TP,5,Test pads,1.5 mm pad,-,n/a,GND/3V3/RX/TX/RST
+TP_DBG,4,SWD pads,1.5 mm pad,-,n/a,SWDIO+SWCLK+RST+GND
+C_in,1,22 uF / 25 V,0805 X7R,generic,C45783,12 V input bulk
+C_in2,1,100 nF,0603 X7R,generic,C14663,12 V input decap
+C_ldo_in,1,10 uF / 25 V,0805 X7R,generic,C19702,LDO input
+C_ldo_out,1,10 uF / 10 V,0805 X7R,generic,C15850,LDO output
+C_decap,4,100 nF,0603 X7R,generic,C14663,MCU + transceiver decoupling
+C_rst,1,100 nF,0603 X7R,generic,C14663,STM32 NRST filter
+C_id,1,100 nF,0603 X7R,generic,C14663,IDENTIFY button debounce
+R_hall,1,10 kohm,0603 1%,generic,C25804,Hall sensor pull-up to 3V3
+R_de,1,1 kohm,0603 1%,generic,C21190,DE driver line series
+R_re,1,1 kohm,0603 1%,generic,C21190,/RE driver line series
+R_led,3,1 kohm,0603 1%,generic,C21190,LED current limit (HB/FAULT/ID)
+R_id,1,10 kohm,0603 1%,generic,C25804,IDENTIFY button pull-up to 3V3
+R_rst,1,10 kohm,0603 1%,generic,C25804,NRST pull-up

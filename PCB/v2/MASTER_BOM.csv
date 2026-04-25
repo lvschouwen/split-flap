@@ -1,47 +1,47 @@
-ref,qty,value,footprint,mfg_part,notes
-U1,1,ESP32-S3-WROOM-1-N16R8,SMD module,Espressif ESP32-S3-WROOM-1-N16R8,16 MB flash 8 MB PSRAM
-U2,1,12V to 3.3V LDO,SOT-89-5,Holtek HT7833,Master logic only ~50 mA load
-U3,1,UART expander,TSSOP-16,NXP SC16IS740IPW,Single-channel UART-to-SPI bridge for Bus 3
-U4,1,RS-485 transceiver Bus 0,SO-8,TI SN65HVD75DR,3.3 V half-duplex
-U5,1,RS-485 transceiver Bus 1,SO-8,TI SN65HVD75DR,
-U6,1,RS-485 transceiver Bus 2,SO-8,TI SN65HVD75DR,
-U7,1,RS-485 transceiver Bus 3,SO-8,TI SN65HVD75DR,Driven by SC16IS740
-U8,1,USB-C ESD,SOT-23-6,STMicro USBLC6-2SC6,
-Y1,1,Crystal 14.7456 MHz,SMD 3.2x2.5,generic,For SC16IS740
-Q1,1,P-FET reverse-block,DPAK / TO-252,Alpha & Omega AOD409 (or NTD2955),Sized for 15 A continuous
-F1,1,Fuse 15 A slow-blow,5x20mm + holder,generic,Master input
-F_row,4,Polyfuse 4 A hold,1812 SMD,Bourns MF-MSMF400-2,Per-row 12 V output protection
-D1,1,LED green,0805,generic,PWR indicator (3V3 hardwired)
-D2,1,LED blue,0805,generic,HEARTBEAT
-D3,1,LED red,0805,generic,FAULT
-D4,4,LED green,0805,generic,ROW0..ROW3 power indicators (post-polyfuse 12V)
-D9,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,Input TVS
-D10,1,RS-485 ESD Bus 0,SOT-23,Semtech SM712-02HTG,
-D11,1,RS-485 ESD Bus 1,SOT-23,Semtech SM712-02HTG,
-D12,1,RS-485 ESD Bus 2,SOT-23,Semtech SM712-02HTG,
-D13,1,RS-485 ESD Bus 3,SOT-23,Semtech SM712-02HTG,
-J1,1,Screw terminal 2-pin,5 mm pitch THT,Phoenix MKDS-1.5/2 or generic,12 V/15 A input
-J2,1,USB-C receptacle,USB-C 16-pin SMD,generic with shielded shell,Programming + debug
-J3,1,Header 1x4 shrouded,2.54 mm indexed,generic,Bus 0 row port: 12V/GND/A/B
-J4,1,Header 1x4 shrouded,2.54 mm indexed,generic,Bus 1 row port
-J5,1,Header 1x4 shrouded,2.54 mm indexed,generic,Bus 2 row port
-J6,1,Header 1x4 shrouded,2.54 mm indexed,generic,Bus 3 row port
-J7,1,Header 2x4 debug,2.54 mm,generic,UART/SPI debug breakout
-SW1,1,Tact switch BOOT,SMD 6x6,generic,IO0
-SW2,1,Tact switch RST,SMD 6x6,generic,EN
-C_bulk,1,470 uF / 25 V,Radial THT,generic,Input bulk
-C_in,1,22 uF / 25 V,0805 X7R,generic,LDO input
-C_out,2,10 uF / 10 V,0805 X7R,generic,LDO output
-C_decap_esp,8,100 nF,0603 X7R,generic,ESP32-S3 decoupling
-C_decap_uart,2,100 nF,0603 X7R,generic,SC16IS740 decoupling
-C_xtal,2,18 pF,0603 NP0,generic,Crystal load caps for SC16IS740
-C_usb,2,1 uF / 10 V,0603 X7R,generic,USB rail decoupling
-C_row,4,10 uF / 25 V,0805 X7R,generic,Per-row output bulk (post-polyfuse)
-R_term,4,120 ohm,0805 1%,generic,RS-485 termination per bus
-R_bias_a,4,1 kohm,0805 1%,generic,A bias to 3V3 per bus
-R_bias_b,4,1 kohm,0805 1%,generic,B bias to GND per bus
-R_led,3,1 kohm,0603 1%,generic,LED current limit (PWR/HB/FAULT)
-R_led_row,4,4.7 kohm,0603 1%,generic,Row PWR LED current limit (12V hardwired)
-R_cc,2,5.1 kohm,0603 1%,generic,USB-C CC pull-downs
-R_strap,4,10 kohm,0603 1%,generic,ESP32-S3 strap pins + EN pull-up
-R_uart_strap,4,10 kohm,0603 1%,generic,SC16IS740 address/IRQ pulls
+ref,qty,value,footprint,mfg_part,lcsc_check,notes
+U1,1,ESP32-S3-WROOM-1-N16R8,SMD module 18x25.5 mm,Espressif ESP32-S3-WROOM-1-N16R8,C2913203,16 MB flash 8 MB PSRAM
+U2,1,12V to 3.3V LDO,SOT-89-5,Holtek HT7833,C70358,Master logic only ~50 mA load
+U3,1,UART expander,TSSOP-16,NXP SC16IS740IPW,C9099,Single-channel UART-to-SPI bridge for Bus 3
+U4,1,RS-485 transceiver Bus 0,SOIC-8,TI SN65HVD75DR,C57928,3.3 V half-duplex
+U5,1,RS-485 transceiver Bus 1,SOIC-8,TI SN65HVD75DR,C57928,
+U6,1,RS-485 transceiver Bus 2,SOIC-8,TI SN65HVD75DR,C57928,
+U7,1,RS-485 transceiver Bus 3,SOIC-8,TI SN65HVD75DR,C57928,Driven by SC16IS740
+U8,1,USB-C ESD,SOT-23-6,STMicro USBLC6-2SC6,C7519,
+Y1,1,Crystal 14.7456 MHz,SMD 3.2x2.5,generic,C12674,For SC16IS740
+Q1,1,P-FET reverse-block,DPAK / TO-252,Alpha & Omega AOD409,C160005,Sized for 15 A continuous; NTD2955 alt
+F1,1,Fuse 15 A slow-blow,5x20mm + holder,generic,n/a,Master input
+F_row,4,Polyfuse 4 A hold,1812 SMD,Bourns MF-MSMF400-2,C162294,Per-row 12 V output protection
+D1,1,LED green,0805,generic,C72043,PWR indicator (3V3 hardwired)
+D2,1,LED blue,0805,generic,C2293,HEARTBEAT
+D3,1,LED red,0805,generic,C2286,FAULT
+D4,4,LED green,0805,generic,C72043,ROW0..ROW3 power indicators (post-polyfuse 12V)
+D9,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,Input TVS
+D10,1,RS-485 ESD Bus 0,SOT-23,Semtech SM712-02HTG,C172881,
+D11,1,RS-485 ESD Bus 1,SOT-23,Semtech SM712-02HTG,C172881,
+D12,1,RS-485 ESD Bus 2,SOT-23,Semtech SM712-02HTG,C172881,
+D13,1,RS-485 ESD Bus 3,SOT-23,Semtech SM712-02HTG,C172881,
+J1,1,Screw terminal 2-pin,5 mm pitch THT,Phoenix MKDS-1.5/2,C18643,12 V/15 A input
+J2,1,USB-C receptacle,USB-C 16-pin SMD,generic with shielded shell,C165948,Programming + debug
+J3,1,Header 1x4 shrouded,2.54 mm indexed,generic,C124378,Bus 0 row port: 12V/GND/A/B
+J4,1,Header 1x4 shrouded,2.54 mm indexed,generic,C124378,Bus 1 row port
+J5,1,Header 1x4 shrouded,2.54 mm indexed,generic,C124378,Bus 2 row port
+J6,1,Header 1x4 shrouded,2.54 mm indexed,generic,C124378,Bus 3 row port
+J7,1,Header 2x4 debug,2.54 mm,generic,C124378,UART/SPI debug breakout
+SW1,1,Tact switch BOOT,SMD 6x6,generic,C318884,IO0
+SW2,1,Tact switch RST,SMD 6x6,generic,C318884,EN
+C_bulk,1,470 uF / 25 V,Radial THT,generic,C107821,Input bulk
+C_in,1,22 uF / 25 V,0805 X7R,generic,C45783,LDO input
+C_out,2,10 uF / 10 V,0805 X7R,generic,C15850,LDO output
+C_decap_esp,8,100 nF,0603 X7R,generic,C14663,ESP32-S3 decoupling
+C_decap_uart,2,100 nF,0603 X7R,generic,C14663,SC16IS740 decoupling
+C_xtal,2,18 pF,0603 NP0,generic,C36760,Crystal load caps for SC16IS740
+C_usb,2,1 uF / 10 V,0603 X7R,generic,C15849,USB rail decoupling
+C_row,4,10 uF / 25 V,0805 X7R,generic,C19702,Per-row output bulk (post-polyfuse)
+R_term,4,120 ohm,0805 1%,generic,C22787,RS-485 termination per bus
+R_bias_a,4,1 kohm,0805 1%,generic,C17513,A bias to 3V3 per bus
+R_bias_b,4,1 kohm,0805 1%,generic,C17513,B bias to GND per bus
+R_led,3,1 kohm,0603 1%,generic,C21190,LED current limit (PWR/HB/FAULT)
+R_led_row,4,4.7 kohm,0603 1%,generic,C25879,Row PWR LED current limit (12V hardwired)
+R_cc,2,5.1 kohm,0603 1%,generic,C25905,USB-C CC pull-downs
+R_strap,4,10 kohm,0603 1%,generic,C25804,ESP32-S3 strap pins + EN pull-up
+R_uart_strap,4,10 kohm,0603 1%,generic,C25804,SC16IS740 IRQ pull-up + reset pull

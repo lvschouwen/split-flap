@@ -38,6 +38,10 @@ product-grade compliance framing.
 | `UNIT_BOM.csv` | Unit PCB BOM |
 | `BUS_PCB.md` | DIN-rail bus PCB design (2× 300 mm per row, daisy-chained) |
 | `BUS_PCB_BOM.csv` | Bus PCB BOM |
+| `EASYEDA_HANDOFF.md` | EasyEDA Pro workflow + per-PCB hand-off package overview |
+| `SCHEMATIC_MASTER.md` | Master PCB schematic + layout spec (EasyEDA-ready) |
+| `SCHEMATIC_UNIT.md` | Unit PCB schematic + layout spec |
+| `SCHEMATIC_BUS.md` | Bus PCB layout spec (custom artwork) |
 | `OPEN_DECISIONS.md` | Pending decisions blocking schematic capture |
 
 The RS-485 wire format + opcode set is a firmware concern, not a hardware
