@@ -13,11 +13,11 @@ Tracked under issue #83.
 | Display capacity | 1 case, 16 units | 4 rows, 64 units |
 | Master | 1 per system | 1 per system, 4 RS-485 row ports |
 | Distribution PCB per row | n/a | none — daisy-chain harness |
-| Power input | 5 V barrel + 12 V brick (dual rail) | own 12 V brick per row + small 12 V brick for master |
+| Power input | 5 V barrel + 12 V brick (dual rail) | single 12 V / 15 A brick into master |
 | Bus | I2C 400 kHz, star, 5 V, single case | 4x RS-485 half-duplex, one bus per row |
 | Distribution | Daisy-chained JST-XH between adjacent units | Per-row daisy-chain harness with trunk + drops |
-| Per-unit fault isolation | none | per-unit P-FET + TVS + on-unit fuse considerations (no per-slot polyfuse, no backplane to host one) |
-| Inter-row cable | n/a (single case) | 3-conductor (A, B, GND) from master to each row's harness master end |
+| Row fault isolation | none | per-row polyfuse on master (4 A hold) |
+| Master-to-row cable | n/a (single case) | single 6-pin combined cable carrying 12V + GND + A + B |
 
 ## Master PCB
 
@@ -26,11 +26,11 @@ Tracked under issue #83.
 | MCU | ESP-01 (ESP8266) | ESP32-S3-WROOM-1-N16R8 |
 | 4th UART for 4 row buses | n/a | SC16IS740 single-channel UART-to-SPI expander |
 | Programming | OTA only (web `/firmware/master`) | USB-C native CDC + OTA |
-| Bus output | 4 wires loose (SDA/SCL/5V/GND) | 4x 3-pin shrouded headers (A/B/GND per bus) |
+| Bus output | 4 wires loose (SDA/SCL/5V/GND) | 4x 6-pin shrouded headers (12V/12V/GND/GND/A/B per row, combined power+signal) |
 | Reverse-polarity protection | none | P-FET (AO3401) |
 | Input TVS | none | SMAJ15A |
 | Bus drive | passive I2C pull-ups | 4x SN65HVD75 transceivers, 120R termination, 1k/1k bias per bus |
-| Power role | acts as power hub for case | signal-only; does not source row power |
+| Power role | acts as power hub for case | sources 12 V to all 4 rows from a single 15 A brick (per-row polyfuse) |
 | Stack-up | 2-layer | 2-layer |
 
 ## Unit PCB
@@ -102,12 +102,11 @@ No DIP switches. No SLOT_ID wiring. No solder jumpers. No backplane.
 
 ## Approximate cost per 4-row (64-unit) system
 
-- Master PCB + parts: ~EUR 14 (4 transceivers, SC16IS740, 4 row ports)
-- 64x unit PCB + parts: ~EUR 4.50/unit -> ~EUR 288
-- 4x 12 V / 5 A row brick: ~EUR 60
-- 1x 12 V / 1 A master brick: ~EUR 8
-- 4x row harness (cable + connectors): ~EUR 8/row -> ~EUR 32
-- **Total: ~EUR 402** for a complete 4-row 64-unit system.
+- Master PCB + parts: ~EUR 18 (4 transceivers, SC16IS740, 4 polyfuses, 4 row ports, 15 A input section)
+- 64× unit PCB + parts: ~EUR 4.50/unit -> ~EUR 288
+- 1× 12 V / 15 A brick: ~EUR 25
+- 4× row harness (cable + connectors): ~EUR 8/row -> ~EUR 32
+- **Total: ~EUR 363** for a complete 4-row 64-unit system.
 
 ## Documents
 

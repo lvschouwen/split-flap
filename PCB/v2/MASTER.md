@@ -1,19 +1,29 @@
 # Master PCB
 
 ESP32-S3 controller. Drives **4 RS-485 buses** (one per row). 64 units
-total. USB-C native programming. Powered by its own small 12 V brick —
-does not source power for the rows.
+total. USB-C native programming. **Sources row power**: takes one 12 V /
+15 A input and outputs 12V + GND + A + B per row on a single 6-pin
+combined connector.
 
 ## Block diagram
 
 ```
-12 V DC jack (small, ~5W)
+12 V / 15 A DC input (screw terminal)
    |
-   +- F1 fuse 1 A
+   +- F1 fuse 15 A slow-blow (5x20 mm)
    +- TVS SMAJ15A
-   +- Q1 P-FET reverse-block (AO3401)
-   +- Cbulk 100 uF + 100 nF
-   +- U1 LDO HT7833 12->3.3 V -> VCC_3V3
+   +- Q1 P-FET reverse-block (AOD409 or NTD2955, DPAK)
+   +- Cbulk 470 uF / 25 V + 100 nF
+   |
+   +-> VBUS_12V_RAIL (wide pour, 5+ mm trace)
+   |        |
+   |        +-> Per-row polyfuses (×4, 4 A hold, 1812 SMD)
+   |        |        |
+   |        |        +-> 12V_ROW0, 12V_ROW1, 12V_ROW2, 12V_ROW3
+   |        |        +-> Each combined into the row's 6-pin output (pins 1+2 doubled)
+   |        |        +-> Per-row PWR LED (post-polyfuse, indicates row 12V present)
+   |        |
+   +- U1 LDO HT7833 12->3.3 V -> VCC_3V3 (master logic)
                                     |
                                     v
    ESP32-S3-WROOM-1-N16R8
@@ -21,34 +31,52 @@ does not source power for the rows.
        +- USB-C (USBLC6 ESD, native CDC)
        +- BOOT button (IO0 -> GND)
        +- RESET button (EN -> GND)
-       +- LEDs: PWR, HEARTBEAT, FAULT
+       +- LEDs: PWR, HEARTBEAT, FAULT, ROW0..ROW3 (7 total)
        |
        +- UART1 -> SN65HVD75 #1 -> Bus 0 (row 0)
        +- UART2 -> SN65HVD75 #2 -> Bus 1 (row 1)
        +- UART0 -> SN65HVD75 #3 -> Bus 2 (row 2)
-       |
-       +- SPI -> SC16IS740 UART expander -> SN65HVD75 #4 -> Bus 3 (row 3)
+       +- SPI -> SC16IS740 -> SN65HVD75 #4 -> Bus 3 (row 3)
                 |
                 +- 14.7456 MHz crystal
                 +- IRQ -> ESP32-S3 GPIO
 
+Per-row 6-pin output (combined power + signal):
+  Pin 1: 12V (post-polyfuse, paralleled with pin 2 for current capacity)
+  Pin 2: 12V
+  Pin 3: GND (paralleled with pin 4)
+  Pin 4: GND
+  Pin 5: RS485_A
+  Pin 6: RS485_B
+
 Each transceiver block:
    - DE/RE GPIOs (ESP32-S3 native; SC16IS740 GPIO for Bus 3)
-   - 120 ohm termination at master end
+   - 120 ohm termination at master end (across A/B)
    - 1k bias to 3V3 (A) + 1k bias to GND (B)
    - SM712 ESD across A/B
-   - 3-pin output connector: A / B / GND
+   - A/B routed to the 6-pin row output connector
 ```
 
 ## Power
 
-- Input: 12 V DC, 2.1 mm barrel jack, centre-positive.
-- Recommended brick: 12 V / 1 A wall wart (master-only).
-- **Master does not power the rows.** Each row has its own brick at the
-  harness master-end.
-- Reverse-polarity: P-FET (AO3401) in low-side return.
-- Fuse: 1 A slow-blow.
-- TVS: SMAJ15A.
+- **Input: 12 V / 15 A from a single SMPS brick.** Sized for 64-unit
+  worst-case peak (~16 A briefly during simultaneous flap transitions);
+  steady-state draw is ~3-5 A.
+- Input connector: **2-pin Phoenix-style screw terminal** (5 mm pitch).
+  Robust, accepts bare-wire or terminated cable from any 12 V brick.
+- Reverse-polarity: P-FET (AOD409 or NTD2955 in DPAK) handles 15 A
+  continuous comfortably.
+- Input fuse: 15 A slow-blow, 5×20 mm holder.
+- TVS: SMAJ15A across input.
+- Bulk: 470 uF / 25 V + 100 nF for inrush smoothing.
+- Per-row protection: 4× polyfuses (4 A hold / 8 A trip, e.g.,
+  Bourns MF-MSMF400-2), one per row 12 V output.
+- 12 V → 3.3 V for master logic: HT7833 LDO, fed Kelvin-style from the
+  input rail (before per-row branches) so master logic stays stable
+  during row inrush.
+
+Master is the only point of power injection in the system. No row
+bricks. No power distribution board.
 
 ## ESP32-S3 module
 
@@ -58,62 +86,59 @@ Each transceiver block:
 
 ## UART expander (4th UART)
 
-ESP32-S3 has 3 native UARTs. The 4th is provided by a **SC16IS740IPW**
-single-channel UART-to-SPI bridge:
-
+- **SC16IS740IPW** single-channel UART-to-SPI bridge.
 - TSSOP-16 package, ~EUR 2.
-- Driven by ESP32-S3 SPI (e.g., SPI2_HOST on IO11/12/13/14).
-- Crystal: 14.7456 MHz (allows clean 250 kbaud / 115200 / 921600
-  derivation).
-- IRQ to ESP32-S3 GPIO for RX-data interrupts.
-- 64-byte FIFO per direction (more headroom than ESP32-S3 native UARTs).
-- Drives Bus 3 (row 3) RS-485 transceiver same as the native buses.
+- Driven by ESP32-S3 SPI (e.g., SPI2_HOST).
+- Crystal: 14.7456 MHz with two 18 pF load caps.
+- IRQ to an ESP32-S3 GPIO.
+- Drives Bus 3 (row 3) RS-485 transceiver.
 
 ## RS-485 paths (×4)
 
-Four identical sub-circuits, one per bus.
+Four identical sub-circuits, one per bus. Each terminates into the same
+6-pin output connector that carries 12 V + GND for that row.
 
 Per bus:
 - Transceiver: SN65HVD75DR (3.3 V, half-duplex).
 - DE/RE controlled separately by GPIO (ESP32-S3 native or SC16IS740 GPIO).
 - TX/RX from the corresponding UART.
-- Termination: 120 ohm across A/B at master end. Populated.
-- Failsafe bias: 1 k from A to 3V3, 1 k from B to GND. Populated.
+- Termination: 120 ohm across A/B at master end.
+- Failsafe bias: 1 k from A to 3V3, 1 k from B to GND.
 - ESD: SM712-02HTG across A/B to GND.
-- Output connector: 3-pin shrouded box header (2.54 mm, indexed).
+- Output connector: **6-pin shrouded box header** (2×3, 2.54 mm, indexed).
 
-Connector pinout per row port:
-| Pin | Net |
-|---|---|
-| 1 | RS485_A |
-| 2 | RS485_B |
-| 3 | GND |
+## Output connector pinout (per row)
+
+| Pin | Net | Notes |
+|---|---|---|
+| 1 | 12V | post-polyfuse, paralleled with pin 2 |
+| 2 | 12V | paralleled with pin 1 (current capacity ~6 A through 2.54 mm pins) |
+| 3 | GND | paralleled with pin 4 |
+| 4 | GND | paralleled with pin 3 |
+| 5 | RS485_A | from local transceiver |
+| 6 | RS485_B | from local transceiver |
 
 ## UART pin assignment (suggested)
 
 | Function | Pin/IO |
 |---|---|
-| UART0 TX | IO43 |
-| UART0 RX | IO44 |
-| UART0 DE/RE | IO42 / IO41 |
-| UART1 TX | IO17 |
-| UART1 RX | IO18 |
-| UART1 DE/RE | IO16 / IO15 |
-| UART2 TX | IO5 |
-| UART2 RX | IO6 |
-| UART2 DE/RE | IO7 / IO4 |
+| UART0 TX/RX/DE/RE | IO43 / IO44 / IO42 / IO41 |
+| UART1 TX/RX/DE/RE | IO17 / IO18 / IO16 / IO15 |
+| UART2 TX/RX/DE/RE | IO5 / IO6 / IO7 / IO4 |
 | SPI MOSI/MISO/SCK/CS to SC16IS740 | IO11 / IO13 / IO12 / IO10 |
 | SC16IS740 IRQ | IO9 |
 | HEARTBEAT LED | IO48 |
 | FAULT LED | IO47 |
+| ROW0..ROW3 PWR LEDs | hardwired to post-polyfuse 12V via current-limited path |
 
 ESP32-S3 GPIO matrix lets these be remapped.
 
 ## LEDs
 
-- D1 PWR (green, hardwired).
-- D2 HEARTBEAT (blue, GPIO-driven).
-- D3 FAULT (red, GPIO-driven).
+- D1 PWR (green, hardwired to 3V3).
+- D2 HEARTBEAT (blue, GPIO).
+- D3 FAULT (red, GPIO).
+- D4-D7 ROW0..ROW3 (4× green, hardwired to per-row post-polyfuse 12V).
 
 ## Test pads
 
@@ -124,18 +149,23 @@ ESP32-S3 GPIO matrix lets these be remapped.
 ## PCB stack-up
 
 - 2-layer HASL.
-- Recommended outline: ~80 x 80 mm (slightly larger than 2-bus version
-  due to 4 transceivers + UART expander). Final size pending freelancer
-  layout.
-- Mounting: 4x M3 corners.
+- Recommended outline: ~100 × 80 mm. Power section needs wide copper
+  pours and the 4× 6-pin output connectors take edge real estate.
+- Mounting: 4× M3 corners.
 
 ## Layout notes
 
-- USB-C, all 4 row output connectors, and the barrel jack along one
-  long edge if possible.
-- TVS as close to the barrel jack as possible.
-- Each transceiver close to its termination resistor and output connector.
-- Continuous GND pour between transceivers to reduce crosstalk.
+- USB-C and 4× 6-pin row output connectors along the same long edge for
+  cable routing.
+- Screw terminal input on the opposite edge (or on the back) so the
+  power cable doesn't fight the row cables.
+- Wide 12 V rail copper from the input through the polyfuses to each
+  row connector. Aim for >5 mm trace width or full-fill pour.
+- Polyfuses placed close to their respective row connectors.
+- TVS at the input within ~10 mm of the screw terminal.
+- Master 3.3 V LDO input tapped Kelvin-style from the post-fuse rail
+  (separate trace, not the high-current pour).
+- Continuous GND pour between transceivers for crosstalk rejection.
 - ESP32-S3 antenna keep-out per WROOM-1 datasheet.
 - SC16IS740 close to the ESP32-S3 SPI pins; crystal close to SC16IS740.
 

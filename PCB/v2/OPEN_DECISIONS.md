@@ -6,16 +6,16 @@ firmware-reuse arguments do not apply.
 **Schematic capture is unblocked.** Remaining items are
 firmware-configurable or build-time decisions.
 
-## 1. Existing case inventory + master placement (deferred — does not block schematic capture)
+## 1. Existing case inventory (deferred — does not block schematic capture)
 
-Master placement is undecided; harness lengths and inter-row cable
-lengths follow from that. Both are cable-assembly concerns, not PCB
-schematic concerns — they can be sized at build time without touching
-the boards.
+Master placement is locked to "near the brick", but the brick + master
+location relative to the rows is still undecided. Cable lengths follow
+from that and are cable-assembly concerns, not PCB-schematic concerns.
 
-When master placement is chosen, this becomes a build-time spec:
-- Cable entry points for harness and 12 V brick.
-- Inter-row cable lengths from master.
+When the master/brick mounting position is chosen, this becomes a
+build-time spec:
+- Cable lengths from master to each row's harness master-end.
+- Cable entry points into row enclosures.
 - Whether all 4 rows are in the same enclosure or split.
 
 ## 2. RS-485 baud rate
@@ -35,14 +35,16 @@ When master placement is chosen, this becomes a build-time spec:
 **Recommendation: 250 kbaud.** Software-changeable later without hardware
 work.
 
-## 3. Inter-row cable from master to row harness (deferred with #1)
+## 3. Master-to-harness cable (deferred with #1)
 
-Master placement is undecided, so cable length is undecided. The
-hardware spec is fixed:
+Cable lengths follow from master placement. Hardware spec is fixed:
 
-- Master row port: 3-pin shrouded header on master PCB.
-- Cable: 3-conductor shielded twisted pair (CAT5e cut-down, 2-pair
-  instrument cable, etc.).
+- Master row port: 6-pin shrouded box header on master PCB.
+- Harness master-end: matching 6-pin shrouded female.
+- Cable: 4 active conductors (12V, GND, A, B). 22 AWG minimum on power
+  legs; 24 AWG OK on A/B. Twisted pair on A/B preferred. Custom-built
+  with 4-conductor instrument cable or CAT5e cut-down (1 pair power,
+  1 pair GND parallel, 1 pair A/B twisted, 1 pair spare).
 - Lengths: cut and terminated at build time.
 
 ## 4. Harness trunk type (deferred — harness assembly, does not block schematic capture)
@@ -65,10 +67,12 @@ placement is settled (#1/#3).
 - **Display capacity**: 4 rows × 16 units = 64 units max.
 - **Master MCU**: ESP32-S3-WROOM-1-N16R8.
 - **Master programming interface**: USB-C native CDC.
-- **Master power**: own 12 V supply, ~5 W. Master does not source row
-  power.
-- **Per-row power**: own 12 V brick per row (~5 A per row, sized to peak
-  16-stepper current).
+- **System power**: single 12 V / 15 A brick into master. Master sources
+  power to all 4 rows via per-row polyfuses (4 A hold each). One cable
+  per row carries 12V + GND + RS-485 A + B in a 6-pin combined
+  connector.
+- **Master placement**: near the brick (high-current input cable kept
+  short).
 - **Bus type**: 4x RS-485 half-duplex. One bus per row.
 - **4th UART**: **SC16IS740 single-channel UART expander** on master,
   driven by SPI. Not MAX14830. No software UART.

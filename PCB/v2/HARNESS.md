@@ -1,138 +1,144 @@
 # Per-Row Harness
 
-One harness per row. Carries 12 V + GND + RS-485 A + B from a row 12 V
-brick at the master end through 16 unit drops to a terminator at the far
-end. No PCB. No backplane.
+One harness per row. Carries 12 V + GND + RS-485 A + B from the master's
+6-pin row output through 16 unit drops to a terminator at the far end.
+**Single combined cable from master to harness — no separate brick at
+the row.**
 
 Four harnesses per 4-row system, one per row.
 
 ## Topology
 
 ```
-   +-----------+        +-----+        +-----+              +-----+        +----+
-   | Row brick |--+     | U0  |        | U1  |    ...       | U15 |        | TR |
-   | 12V/5A    |  |     +-----+        +-----+              +-----+        +----+
-   +-----------+  |        |              |                    |              |
-                  |     +--+--+--+     +--+--+--+   ...   +--+--+--+      [120R]
-                  |     | drop|     ... | drop|       ...      | drop|       |
+   Master row port (6-pin: 12V/12V/GND/GND/A/B)
+        |
+        | combined cable (4 active conductors: 12V, GND, A, B)
+        v
+   +---------+ +-----+        +-----+              +-----+        +----+
+   | Harness |-| U0  |        | U1  |    ...       | U15 |        | TR |
+   | master  | +-----+        +-----+              +-----+        +----+
+   | end     |    |              |                    |              |
+   +---------+ +--+--+--+     +--+--+--+   ...   +--+--+--+      [120R]
+                  | drop|     | drop|       ...      | drop|         |
    ============================ 4-conductor cable trunk =================== ===
-                  ^        ^              ^                    ^              ^
-                  |        |              |                    |              |
-              power +    drop 0        drop 1               drop 15      far-end
-              signal                                                      term
-              entry
-              from
-              master
+                                                                           ^
+                                                                    far-end term
 ```
 
+- Master end of harness: **6-pin shrouded female connector** mating with
+  the master's 6-pin row output. Pins 1+2 (12V) and 3+4 (GND) are
+  paralleled together at the harness end onto the trunk's single 12V
+  and single GND conductor.
 - Trunk: 4-conductor cable carrying 12V, GND, A, B continuously through
   all 16 unit positions.
 - Drops: 4-pin shrouded headers crimped onto the trunk at fixed unit
-  spacing. Each unit plugs into its drop with a short stub cable (or
-  directly).
-- Master end of harness:
-  - 12 V + GND from the row's 12 V brick (through a fuse holder or
-    barrel-jack adapter).
-  - RS-485 A + B from the master's row port (3-pin connector).
-- Far end of harness:
-  - Terminator plug: 120 ohm resistor across A/B in a small connector
-    shell. Plugs into a final 4-pin drop or directly onto the trunk.
+  spacing. Each unit plugs into its drop.
+- Far end of harness: terminator plug (120 ohm across A/B) on the final
+  drop or directly on the trunk.
 
 ## Cable specification
 
+### Master-end combined cable (master to harness)
+
 | Parameter | Spec |
 |---|---|
-| Conductor count | 4 |
-| Conductor function | 12V, GND, A, B |
-| Conductor gauge | 22 AWG minimum (24 AWG acceptable for short rows < 1.5 m) |
-| Insulation | PVC or similar, hobby-rated |
-| Jacketing | Round or flat ribbon |
-| Shielding | optional; bond to GND at master only if present |
+| Conductor count | 4 active (12V, GND, A, B) |
+| Connector ends | 6-pin shrouded female on both ends; pins 1+2 and 3+4 jumpered for current capacity |
+| Conductor gauge | 22 AWG minimum for the 12V/GND legs; 24 AWG fine for A/B |
+| Twisted pair | A/B should be a twisted pair for noise immunity |
+| Cable type options | 4-conductor instrument cable, custom-built CAT5e (1 pair 12V parallel, 1 pair GND parallel, 1 pair A/B twisted, 1 pair spare), 4-conductor speaker wire with twisted-pair signal pair zip-tied alongside |
+| Length | depends on master placement — typical 0.3-2 m. Cut and terminated at build time. |
 
-**Voltage drop budget on 12 V leg:**
-- 16 units × 250 mA peak = 4 A peak (rare, all motors stepping
-  simultaneously).
-- 22 AWG: ~0.053 ohm/m. Round-trip 2 m at 4 A = ~0.4 V drop. Acceptable.
-- 24 AWG: ~0.084 ohm/m. Round-trip 2 m at 4 A = ~0.7 V drop.
-- Above 2 m row length, step up to 20 AWG or feed power at both ends of
-  the harness.
+### Harness trunk (within row, through 16 units)
+
+| Parameter | Spec |
+|---|---|
+| Conductor count | 4 (12V, GND, A, B) |
+| Conductor gauge | 22 AWG minimum |
+| Twisted pair | A/B twisted; power runs alongside |
+| Length | row span + ~0.5 m service loop |
+
+**Voltage drop budget on 12 V leg (combined cable + harness trunk):**
+- 16 units × ~250 mA peak = 4 A peak per row (rare).
+- 22 AWG = ~0.053 ohm/m. For a 1 m master-to-harness cable + 1.5 m
+  harness trunk, total round-trip resistance ~0.27 ohm. At 4 A peak =
+  ~1.1 V drop. Acceptable.
+- For longer total runs, step up to 20 AWG on the power conductors.
 
 ## Unit drop connector
 
 - 4-pin shrouded box header, 2.54 mm pitch, 2x2, indexed (notched).
 - Pinout: 1=12V, 2=GND, 3=A, 4=B.
-- Mating connector: standard 4-pin housing (Dupont-style or shrouded IDC).
-
-For a flat ribbon trunk (1.27 mm pitch): a 4-pin IDC connector
-mass-terminates onto the ribbon. Suitable for short, neat rows.
-
-For a round 4-conductor trunk (e.g., 22 AWG hookup wire): T-tap each unit
-position with a 4-pin "drop" header soldered onto the trunk. Less neat
-but more robust at higher current.
+- Mating connector: standard 4-pin housing.
 
 ## Termination plug
 
 A small connector shell containing a 120 ohm 1% resistor between the A
-and B pins. Plugs into the harness's final unit drop position (or into a
-dedicated terminator drop). 1 plug per row.
-
-## Master end
-
-The master's row output connector (3-pin: A, B, GND) connects to the
-harness signal wires. The harness's 12 V + GND wires connect to the row
-brick (via a barrel-jack adapter or screw-terminal block at the master
-end of the harness).
-
-This means the master's row output cable is **3-conductor** (A, B, GND)
-and runs from master to the master end of each row's harness. The 12 V
-to the harness comes from the row brick at the same point — not from
-the master.
+and B pins. 1 plug per row.
 
 ## Stub length
 
-- The "stub" is the wire from the trunk drop to the unit board's
-  connector.
-- Keep stubs < 30 cm at 250 kbaud. Shorter is better.
+- Stub = wire from trunk drop to unit board's connector.
+- Keep stubs < 30 cm at 250 kbaud.
 - Typical: 5-15 cm pigtail per unit.
 
-## Parts list (per harness)
+## Parts list (per harness, all four rows take same parts)
 
 | Item | Qty | Notes |
 |---|---|---|
-| 4-conductor cable, 22 AWG, suitable length | 1 | Length = row span + ~0.5 m service loop |
-| 4-pin shrouded box header, 2.54 mm | 16 | Drops, one per unit position |
-| 4-pin housing for unit-side cable | 16 | Mating to unit drop |
-| 4-pin housing for trunk-side | 16 | Mating to drop header (or IDC mass-term) |
+| 4-conductor cable for master-to-harness link | 1 | Length per master placement; 22 AWG minimum |
+| 4-conductor cable for harness trunk | 1 | Length = row span + service loop; 22 AWG minimum |
+| 6-pin shrouded female connector for master-side cable end (×2) | 2 | One end into master, one end into harness master-end |
+| 4-pin shrouded box header for unit drops | 16 | One per unit position |
+| 4-pin housing (mating to unit drop) | 16 | Trunk-side T-tap |
+| 4-pin housing for unit-side cable | 16 | Cable from drop to unit (or unit-board connector if drop is plugged directly) |
 | 120 ohm resistor 1% | 1 | Termination |
 | Connector shell for terminator plug | 1 | Holds 120 R across A/B pins |
-| 5 A inline fuse holder + 5 A fuse | 1 | Row power input fuse |
-| Barrel-jack adapter or screw terminal block | 1 | Row brick connection |
-| 3-pin shrouded box header connector | 1 | Mates to master's row port |
 
-(All standard hobby parts; no specific MFGs required.)
+(Standard hobby parts; no specific MFGs required.)
+
+## Master-end connector wiring detail
+
+The 6-pin shrouded connector at the harness master end mates with the
+master's 6-pin output. The 6 pins coming in are:
+
+```
+Pin 1 (12V)  ┐
+             ├──── jumpered together at harness ──► single 12V conductor on trunk
+Pin 2 (12V)  ┘
+
+Pin 3 (GND)  ┐
+             ├──── jumpered together at harness ──► single GND conductor on trunk
+Pin 4 (GND)  ┘
+
+Pin 5 (A)   ──────────────────────────────────────► A conductor on trunk
+Pin 6 (B)   ──────────────────────────────────────► B conductor on trunk
+```
+
+The doubled 12V/GND pins on the connector exist for current-carrying
+capacity through the connector itself (~3 A per pin × 2 pins = ~6 A
+margin per leg). The harness trunk only needs 1 conductor per net
+because the trunk wire is sized for the full 4 A peak.
 
 ## Why no rigid backplane
 
-- A backplane is a 4th PCB design (and × 4 builds for 4 rows).
-- A harness is buildable with off-the-shelf cable + connectors and tooling
-  available to hobbyists (crimper, soldering iron).
-- No mechanical fit issue — harness conforms to whatever the case provides.
-- No PCBA cost for backplanes.
-- One step up from v1's per-unit-cable mess: still cabled, but trunk +
-  drops instead of point-to-point.
+- A backplane is a 4th PCB design (and 4 builds for 4 rows).
+- A harness is buildable with off-the-shelf cable + connectors and
+  hobbyist tools.
+- One step up from v1's per-unit cable mess: still cabled, but
+  trunk + drops instead of point-to-point.
 
 ## When a backplane *would* be preferred
 
 If during build the user discovers that:
 - The case has a cleaner mounting solution that suits a long PCB.
 - 16 hand-crimped IDC drops per row is more tedious than 4 PCBs.
-- The 12 V trunk gauge becomes awkward.
 
-A drop-in passive backplane PCB can be added later that mates to the same
-4-pin unit connector. The unit PCB does not need any change.
+A drop-in passive backplane PCB can be added later that mates to the
+same 4-pin unit connector. The unit PCB does not need any change.
 
 ## BOM
 
 This `HARNESS.md` is the canonical spec. There is no separate
-`HARNESS_BOM.csv` because the harness has no fab-orderable PCB component
-— it is a cable assembly.
+`HARNESS_BOM.csv` because the harness is a cable assembly, not a
+fab-orderable PCB.

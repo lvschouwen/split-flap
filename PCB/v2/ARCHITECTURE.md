@@ -11,29 +11,29 @@ No rigid backplane: each row uses a daisy-chain harness or ribbon cable.
 ## System block diagram
 
 ```
-                       12V brick (small, ~5W)
+                       1× 12 V / 15 A brick
                               |
                               v
                    +----------------------+
                    |  Master              |
-                   |  ESP32-S3            |
+                   |  ESP32-S3 + SC16IS740|
                    |  USB-C               |
-                   |  3 native UARTs      |
-                   |  + SC16IS740 expander|
                    |  4x RS-485 PHY       |
-                   |  4x output ports     |
+                   |  per-row polyfuse    |
+                   |  4x 6-pin row ports  |
                    +-+--+--+--+-----------+
                      |  |  |  |
                      v  v  v  v
-                  Bus0 Bus1 Bus2 Bus3
+                   single combined cable per row
+                  (12V/GND/A/B in one 6-pin connector)
                      |  |  |  |
                      |  |  |  +---> Row 3 harness ---> 16 units --- [terminator]
                      |  |  +-----> Row 2 harness ---> 16 units --- [terminator]
                      |  +--------> Row 1 harness ---> 16 units --- [terminator]
                      +-----------> Row 0 harness ---> 16 units --- [terminator]
 
+   Master sources both row power and signal from a single 12 V brick.
    Each row: 12V + GND + A + B daisy-chained through 16 units.
-   Each row has its own 12V brick connected at the harness's master end.
    Each unit has 1 connector (4-pin), 1 IDENTIFY button, 1 IDENTIFY LED.
 ```
 
@@ -50,17 +50,22 @@ considered.
 
 ## Power flow
 
-- Master has its own 12 V brick (~5 W; ESP32-S3 + 4 transceivers + UART
-  expander).
-- Each row has its own 12 V brick (recommended 12 V / 5 A per row).
-- Master is **not** in the row power path. Master's 4 row output
-  connectors carry only A, B, GND.
-- 12 V flows on the row harness from the row brick at the harness's
-  master end through every unit drop to the terminator end.
+- **Single 12 V / 15 A brick** feeds the master. Sized for 64-unit
+  worst-case peak (~16 A briefly during simultaneous flap transitions);
+  steady-state draw is ~3-5 A.
+- Master internally distributes 12 V to each row via per-row polyfuses
+  (4 A hold each), then out on the row's 6-pin connector alongside the
+  row's RS-485 A/B.
+- Master also taps off ~50 mA for its own 3.3 V logic via on-board LDO.
+- 12 V flows from the master through the combined cable to the
+  harness's master end, then continues through the trunk to every unit.
 
-This separation means:
-- One blown brick takes out one row, not the whole display.
-- Inter-row cable from master to each row's harness is thin: 3 conductors.
+This means:
+- One brick. One master. One cable per row.
+- Per-row polyfuse on the master gives row-level fault isolation: a
+  shorted row recovers automatically without affecting the others.
+- Master physical placement is constrained to "near the brick" (the
+  high-current input cable wants to be short and stiff).
 
 ## Addressing
 
@@ -142,10 +147,10 @@ indicators before the system tries to display anything.
 |---|---|---|
 | Master MCU | ESP-01 (ESP8266) | ESP32-S3-WROOM-1-N16R8 + SC16IS740 UART expander |
 | Master programming | OTA only | USB-C native CDC + OTA |
-| Master power | 5 V to master + shared 12 V brick | 12 V (master only, ~150 mA) |
+| Master power | 5 V to master + shared 12 V brick | one 12 V / 15 A brick to master, master distributes to rows |
 | Display capacity | 1 case, 16 units | 4 rows, 64 units |
 | Bus | I2C 400 kHz, star, 5 V, single case | 4x RS-485 half-duplex, one per row |
-| Per-row power | from master via shared rail | own 12 V brick per row |
+| Row power | from master via shared rail | from master, per-row polyfuse, single combined cable carries 12V + signal |
 | Unit MCU | ATmega328P (Arduino Nano) | STM32G030K6T6 (UID required) |
 | Unit motor | 28BYJ-48 5 V | 28BYJ-48 12 V |
 | Unit power input | 5 V + 12 V dual rail | 12 V single rail |
@@ -154,7 +159,7 @@ indicators before the system tries to display anything.
 | Homing sensor | KY-003 module (discrete) | A1101ELHL on-board hall |
 | Unit ESD on bus | none | SM712-02HTG on RS-485 A/B |
 | Connector to bus | JST-XH chained per unit | 4-pin shrouded box header (1 connector per unit) |
-| Inter-row cable from master | n/a | shielded 3-conductor (A, B, GND) per row |
+| Cable from master to row | n/a | single 6-pin combined (12V/GND/A/B) per row |
 
 ## Hardware-only comparison to scottbez1
 
