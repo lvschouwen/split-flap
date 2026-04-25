@@ -74,11 +74,9 @@ the addressing mechanism.
   through the case opening.
 - One MCU GPIO with internal pull-up; switch shorts to GND when pressed.
 - Firmware debounces and reports state on next status frame.
-- IDENTIFY LED (e.g., yellow 0805) driven by another MCU GPIO so master
-  can pulse it during commissioning ("press the unit whose LED is
+- Dedicated IDENTIFY LED (yellow 0805) driven by its own MCU GPIO so
+  master can pulse it during commissioning ("press the unit whose LED is
   flashing").
-- If board area is tight, the IDENTIFY LED can share with FAULT (different
-  pulse pattern); decision in firmware design.
 
 ## Power
 
@@ -90,15 +88,11 @@ the addressing mechanism.
 
 ## Motor driver
 
-| Aspect | TPL7407L (primary) | ULN2003A (fallback) |
-|---|---|---|
-| Tech | 7-channel low-side N-MOSFET array | 7-channel Darlington array |
-| V_low at 200 mA | ~0.06 V | ~0.9 V |
-| Heat per coil-on | ~12 mW | ~180 mW |
-| Pinout | identical 16-SOIC | identical 16-SOIC |
-| JLC Basic | typically yes | yes |
+**TPL7407L** (primary). 7-channel low-side N-MOSFET array, 16-SOIC.
+~12 mW dissipation per coil-on at 200 mA.
 
-PCB footprint takes both. BOM swap if availability flips.
+ULN2003A is footprint-compatible (also 16-SOIC) and stays as a PCBA-time
+substitute if TPL7407L availability flips. BOM line is the only difference.
 
 ## Hall sensor
 
@@ -119,8 +113,7 @@ PCB footprint takes both. BOM swap if availability flips.
 
 - D1 HEARTBEAT (blue).
 - D2 FAULT (red).
-- D3 IDENTIFY (yellow). Optional — can be merged with FAULT if board
-  area requires.
+- D3 IDENTIFY (yellow). Dedicated GPIO.
 
 ## Test pads
 
@@ -141,4 +134,4 @@ PCB footprint takes both. BOM swap if availability flips.
 
 ## BOM
 
-See `UNIT_BOM.csv`.
+See `UNIT_BOM.csv`. All BOM rows now concrete; no TBDs remain.

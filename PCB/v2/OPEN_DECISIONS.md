@@ -3,26 +3,10 @@
 Hardware decisions remaining for v2. Software is being rewritten;
 firmware-reuse arguments do not apply.
 
-**Schematic-capture blockers:** #1 (motor driver footprint), #4
-(IDENTIFY LED dedicated vs shared GPIO+LED). Everything else is either
-firmware-configurable or a build-time/cable-assembly decision.
+**Schematic capture is unblocked.** Remaining items are
+firmware-configurable or build-time decisions.
 
-## 1. Motor driver
-
-**Options**
-- A. TPL7407L (modern N-MOSFET array)
-- B. ULN2003A (Darlington array)
-
-**Hardware tradeoffs**
-- Pin-compatible 16-SOIC; PCB layout identical.
-- TPL7407L: ~12 mW per coil-on at 200 mA. ULN2003A: ~180 mW.
-- ULN2003A: deepest stock at every distributor; v1 + scottbez1-proven.
-- TPL7407L: JLC Basic, less stable historical availability.
-
-**Recommendation: TPL7407L primary, ULN2003A as PCBA-time substitute.**
-Footprint is shared.
-
-## 2. Existing case inventory + master placement (deferred — does not block schematic capture)
+## 1. Existing case inventory + master placement (deferred — does not block schematic capture)
 
 Master placement is undecided; harness lengths and inter-row cable
 lengths follow from that. Both are cable-assembly concerns, not PCB
@@ -34,7 +18,7 @@ When master placement is chosen, this becomes a build-time spec:
 - Inter-row cable lengths from master.
 - Whether all 4 rows are in the same enclosure or split.
 
-## 3. RS-485 baud rate
+## 2. RS-485 baud rate
 
 **Options**
 - A. 115200 baud
@@ -51,22 +35,7 @@ When master placement is chosen, this becomes a build-time spec:
 **Recommendation: 250 kbaud.** Software-changeable later without hardware
 work.
 
-## 4. IDENTIFY LED — dedicated or shared
-
-**Options**
-- A. Dedicated yellow LED + dedicated GPIO.
-- B. Reuse FAULT LED with a distinctive pulse pattern.
-
-**Hardware tradeoffs**
-- A: 1 extra LED, 1 extra resistor, 1 extra GPIO. ~EUR 0.05.
-- B: shared LED with a software-distinguished pulse pattern. Slight
-  ambiguity if both states active simultaneously, but firmware can
-  arbitrate.
-
-**Recommendation: A (dedicated).** A handful of cents for a far clearer
-commissioning UX. Reverse to B if board area is tight after layout.
-
-## 5. Inter-row cable from master to row harness (deferred with #2)
+## 3. Inter-row cable from master to row harness (deferred with #1)
 
 Master placement is undecided, so cable length is undecided. The
 hardware spec is fixed:
@@ -76,7 +45,7 @@ hardware spec is fixed:
   instrument cable, etc.).
 - Lengths: cut and terminated at build time.
 
-## 6. Harness trunk type (deferred — harness assembly, does not block schematic capture)
+## 4. Harness trunk type (deferred — harness assembly, does not block schematic capture)
 
 **Options**
 - A. Round 4-conductor cable (22 AWG), unit drops T-tapped onto trunk.
@@ -89,7 +58,7 @@ hardware spec is fixed:
 
 **Recommendation: round 22 AWG for any row > 1 m. Ribbon for compact
 single-cabinet rows.** Decision happens at harness build, after master
-placement is settled (#2/#5).
+placement is settled (#1/#3).
 
 ## Resolved decisions (closed; recorded for transparency)
 
@@ -117,6 +86,9 @@ placement is settled (#2/#5).
 - **Bias**: 1k/1k at master only, per bus.
 - **Unit-to-harness connector**: 4-pin shrouded box header (2x2, 2.54 mm,
   indexed).
+- **Motor driver**: TPL7407L primary; ULN2003A as PCBA-time substitute
+  (footprint shared).
+- **IDENTIFY LED**: dedicated yellow LED + dedicated MCU GPIO.
 
 ## Deferred (firmware-only)
 
