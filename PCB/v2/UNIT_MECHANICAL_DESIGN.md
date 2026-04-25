@@ -1,11 +1,11 @@
 # Unit PCB v2 — Mechanical design
 
-Complement to `UNIT_DECISIONS.md` §Mechanical decisions. Placement brief, AS5600 integration, and mounting sketch.
+Complement to `UNIT_DECISIONS.md` §Mechanical decisions. Placement brief, AS5600 integration, and mounting sketch. Last edited 2026-04-25 (#76 backplane pivot).
 
 ## Board specification
 
-- **Dimensions target: 65 × 35 mm** (within 86 × 40 mm hard max).
-- **Layer stack**: 2-layer, 1.6 mm FR-4, 1 oz / 1 oz copper, HASL finish (ENIG only if signal-integrity review flags the RS-485 differential routing).
+- **Dimensions target: 75 × 35 mm** (revised 2026-04-25 from 65 × 35 mm — accommodates LQFP-32 STM32G030 + HSOP-8 PowerPAD TPS54360 + AS5600 ferrous keep-out + motor connector + backplane connector). 80 mm pitch case allows a small mechanical clearance around the unit board.
+- **Layer stack**: 2-layer, 1.6 mm FR-4, 1 oz / 1 oz copper, HASL finish (ENIG only if signal-integrity review flags the RS-485 differential routing — unlikely at 500 kbaud over an internal stub).
 - **Corner treatment**: 1 mm outside radius — pick-and-place friendly, avoids sharp corners snagging bracket walls.
 - **Silkscreen**: white on top; minimal bottom (reference designators only if needed).
 
@@ -13,19 +13,15 @@ Complement to `UNIT_DECISIONS.md` §Mechanical decisions. Placement brief, AS560
 
 ```
  +-------------------------------------------------------------+
- |                                                             |
- | [RJ45 IN]                [AS5600 + magnet keepout 10×10]   |
- |                          [STM32G030]                       |
- |                          [SN65HVD75] [ULN2003A]            |
- | [TVS + ESD]                                                 |
- |                          [Buck + L + C]                    |
- |                          [LDO]                              |
- |                                        [120Ω + JMP hdr 1×2]|
- |                                        [JST-XH 5-pin]      |
- | [RJ45 OUT]                                                  |
- |                                                             |
+ |                  [AS5600 + magnet keepout 10×10]            |
+ |                  [STM32G030 LQFP-32]                        |
+ |  [TPL7407L]                  [SN65HVD75]                    |
+ | [Buck + L + C]                                              |
+ | [LDO]    [TVS + SM712 ESD]                                  |
+ | [JST-XH 5-pin]                  [Backplane 2×3 box header]  |
+ | [SWD pogo pads (4×)]                                        |
  +-------------------------------------------------------------+
-   ← 65 mm →
+   ← 75 mm →
     ↑
    35 mm
     ↓
@@ -33,14 +29,14 @@ Complement to `UNIT_DECISIONS.md` §Mechanical decisions. Placement brief, AS560
 
 ## Key placement rules
 
-1. **RJ45 IN and OUT on opposite short edges.** Cables exit opposing directions → linear daisy-chain routing behind a wall of flap units. No cable-routing gymnastics at assembly time.
-2. **AS5600 IC centered on the "motor axis" reference point.** This point is mechanically defined by the 28BYJ-48 output shaft position on the final assembly. Every other component clusters around this anchor.
-3. **Magnet keepout: 10 × 10 mm copper-free** zone on both layers around the AS5600 IC body. No ferrous material (screws, shielded RJ45 cans, inductor cores) within 5 mm radial of the IC. RJ45 shield cans are the closest potential offender — verify clearance during layout.
-4. **ULN2003 adjacent to JST-XH motor connector.** Short, direct traces to the stepper coils keep noise off the rest of the board.
-5. **Buck IC + inductor tightly grouped**, input cap within 2 mm of VIN, output cap between inductor and VOUT sense. Switch-node loop ≤ 5 mm.
-6. **TVS near RJ45 power pins.** One shared TVS at the midpoint between IN and OUT power pins is acceptable given the low-impedance 48V plane between jacks.
-7. **ESD array ≤ 5 mm from RJ45 data/wake pin entry**, before trace reaches SN65HVD75 or MCU.
-8. **120 Ω terminator + 2-pin 2.54 mm jumper header accessible from top side** after enclosure assembly. Place near the OUT RJ45 edge so the installer can reach it to fit/remove the shunt without disassembling the bracket. Header vertical orientation; shunt clearance ≥ 10 mm above board.
+1. **Backplane connector on the back-edge of the unit PCB.** Single 2×3 box header (2.54 mm pitch) carries V48/V48/GND/GND/A/B from backplane to unit. Unit slides perpendicular into backplane — no cables. Replaces the pre-2026-04-25 IN/OUT RJ45 scheme.
+2. **AS5600 IC origin (0,0) reference point.** Mechanically defined by the 28BYJ-48 output shaft position on the final assembly. **The mechanical bracket is designed by the mech freelancer**, who hands the PCB designer a STEP file showing AS5600-to-shaft alignment. PCB designer hands back a STEP showing AS5600 IC center coordinate + mounting hole positions.
+3. **Magnet keepout: 10 × 10 mm copper-free** zone on both layers around the AS5600 IC body. No ferrous material (screws, inductor cores, motor body) within 5 mm radial of the IC. With the backplane pivot, RJ45 shield cans are no longer on the unit — eliminates the closest pre-2026-04-25 ferrous-clearance concern.
+4. **TPL7407L adjacent to JST-XH motor connector.** Short, direct traces to the stepper coils keep noise off the rest of the board.
+5. **TPS54360DDA buck + inductor tightly grouped**, input cap within 2 mm of VIN, output cap between inductor and VOUT sense. Switch-node loop ≤ 5 mm. **Thermal pad on PowerPAD must connect to ≥ 6 vias into a ≥ 200 mm² bottom GND pour and ≥ 100 mm² top GND pour** (locked spec — TPS54360 in HSOP-8 PowerPAD comfortably hits ≤ 40 °C/W vs the 80 °C/W spec, unlike pre-2026-04-25 TPS54308 which had no thermal pad at all).
+6. **TVS (SMAJ51A) near backplane connector +48 V pin entry.** Within 10 mm.
+7. **ESD array (SM712) ≤ 5 mm from backplane connector A/B pin entry**, before trace reaches SN65HVD75.
+8. **No termination on the unit** (was 120 Ω + jumper pre-2026-04-25). Termination lives on the backplane chain-end segment (PCBA stuffing variant).
 
 ## AS5600 integration
 
@@ -64,8 +60,7 @@ The 28BYJ-48 output shaft is geared 64:1, so its rotation over the AS5600 corres
 
 - **2× M3 isolated through-holes**, diagonally placed near opposite corners.
 - No copper connection to mounting holes (prevents ground-loop issues if bracket is conductive in a later revision).
-- Hole positions coordinated with 3D-printed bracket design (separate mechanical artifact).
-- Alternatively: corner slots/tabs for a snap-in plastic clip — decide when bracket is designed.
+- **Hole positions handed off via STEP exchange with mech freelancer** — they design the bracket-to-PCB interface and the bracket-to-MiddleFrame interface. PCB designer is downstream of bracket geometry. Default during PCB layout: holes on opposite short edges, midline-aligned, ≥ 5 mm from board edge.
 
 ## Motor cable entry
 
@@ -75,13 +70,21 @@ The 28BYJ-48 output shaft is geared 64:1, so its rotation over the AS5600 corres
 
 ## Thermal considerations
 
-| Source | Dissipation | θ_JA | Rise (ambient 40 °C) |
-|---|---|---|---|
-| ULN2003A SOP-16 | ~300 mW (2-phase, 74 mA each, 2 V sat) | ~100 °C/W | ~30 °C |
-| HT7833 LDO SOT-89 | ~435 mW (worst-case logic) | ~150 °C/W | ~65 °C |
-| TPS54308DBV | ~530 mW (85 % eff at 250 mA avg) | ~200 °C/W with thermal vias | ~100 °C |
+| Source | Dissipation | θ_JA (locked) | Rise (ambient 40 °C) | T_J |
+|---|---|---|---|---|
+| TPL7407L SOIC-16 | ~50 mW (MOSFET R_DS(on) ~0.1 Ω × 300² mA) | 95 °C/W | 5 °C | 45 °C |
+| HT7833 LDO SOT-89 | ~435 mW (worst-case logic) | 150 °C/W (with ≥80 mm² pad pour) | 65 °C | 105 °C |
+| TPS54360DDA | ~440 mW (~88 % eff at 300 mA avg) | **≤ 40 °C/W (achievable on HSOP-8 PowerPAD with proper pour)** | 18 °C | **58 °C — comfortable margin** |
 
-**All parts within 125 °C T_J limit at 40 °C ambient.** The buck is the tightest margin — confirm thermal vias (4–8 under the IC + nearby GND pour) during layout review.
+**Buck thermal spec — LOCKED 2026-04-25 with TPS54360DDA:**
+
+- Minimum **6× thermal vias** (0.3 mm drill, 0.6 mm pad) directly under the TPS54360DDA's HSOP-8 PowerPAD thermal pad, dropped to a continuous ground pour on the bottom layer.
+- Bottom-layer GND pour ≥ **200 mm²** contiguous around the thermal-via cluster.
+- Top-layer GND pour around the buck IC ≥ **100 mm²**, connected to the bottom pour through ≥ 4 stitching vias at the perimeter.
+- Both pours must reach all the way to the unit's mounting holes (additional thermal sink into the bracket if metallic).
+- Resulting θ_JA target: **≤ 40 °C/W** (HSOP-8 PowerPAD with proper pour comfortably hits 30–40 °C/W). T_J at 300 mA avg + 40 °C ambient ≈ 58 °C. Massive headroom vs 125 °C abs-max — handles 60 °C ambient with no concern.
+
+**Pre-2026-04-25 design specced TPS54308DBV (SOT-23-6) at "≤ 80 °C/W"** — that target was physically unachievable since SOT-23-6 has no exposed thermal pad (real θ_JA ≈ 165 °C/W → T_J ≈ 140 °C, exceeding abs-max). #76 audit caught the error; TPS54360DDA replacement resolves it.
 
 No heatsinks needed. Natural convection sufficient at the projected duty cycle (flap units are idle most of the time).
 
@@ -94,10 +97,10 @@ No heatsinks needed. Natural convection sufficient at the projected duty cycle (
 
 ## Open issues (non-blocking)
 
-- **M1** — Final mounting-hole positions pending 3D bracket design.
-- **M2** — Exact AS5600-to-RJ45-shield clearance verified during routing — may push RJ45s further from the motor axis center.
-- **M3** — Buck thermal pad sizing + thermal via count pending layout review.
-- **M4** — Enclosure + flap-drum access + cable management — all mechanical-handoff-level, out of PCB scope for this doc.
-- **M5** — LED visibility: whether a light-pipe or just a through-aperture is needed depends on bracket thickness; pass to the mechanical freelancer.
-- **M6** — Whether to break-off tabs or route around for depanelization in the 10-unit prototype run — decide with JLC ordering.
-- **M7** — Termination shunt vertical clearance inside the enclosure: bracket designer must leave ≥ 10 mm above the 2-pin jumper header so the shunt fits and remains removable.
+- **M1** — Final mounting-hole positions pending 3D bracket design (mech freelancer hand-off via STEP).
+- ~~**M2**~~ **Closed 2026-04-25.** With backplane pivot, the unit no longer carries RJ45s — the AS5600-to-RJ45-shield-can clearance concern is eliminated.
+- ~~**M3**~~ **Closed 2026-04-25.** Buck swapped to TPS54360DDA (HSOP-8 PowerPAD). θ_JA ≤ 40 °C/W target with standard pour spec, vs the unachievable ≤ 80 °C/W on TPS54308DBV SOT-23-6.
+- **M4** — Enclosure + flap-drum access + cable management — mech freelancer scope, out of PCB doc.
+- ~~**M5**~~ **Closed 2026-04-25.** LED placement: handed off to mech freelancer with bracket STEP. PCB places LED on the back-edge of the unit so any case-back aperture can see it.
+- **M6** — Panelization for 10-unit prototype: defer to JLC ordering. Break-off tabs preferred for hand-rework.
+- ~~**M7**~~ **Closed 2026-04-25.** Termination moved to backplane; no shunt clearance needed on unit.
