@@ -1,0 +1,104 @@
+# Combined BOM — split-flap v2 hand-off package
+# Three sections: MASTER, UNIT, BUS_PCB. Original CSVs at PCB/v2/{MASTER,UNIT,BUS_PCB}_BOM.csv.
+# Revision: 2026-04-26 (post Gemini + ChatGPT review merge)
+
+###############################################################################
+# MASTER PCB BOM (×1 per system)
+###############################################################################
+ref,qty,value,footprint,mfg_part,lcsc_check,notes
+U1,1,ESP32-S3-WROOM-1-N16R8,SMD module 18x25.5 mm,Espressif ESP32-S3-WROOM-1-N16R8,C2913203,16 MB flash 8 MB PSRAM
+U2,1,12V to 3.3V buck module,SIP-3 (drop-in for L78xx pinout),Mornsun K7803-500R3 (RECOM R-78E3.3-0.5 / CUI V7803-500 alt),C113973 (CHECK),**Switching buck module — NOT a linear LDO**. 12V→3.3V at ~200 mA in SOT-89 LDO would dissipate 1.74 W (rated ~0.5 W) → thermal shutdown. The 3-pin SIP buck is a sealed drop-in.
+U3,1,UART expander,TSSOP-16,NXP SC16IS740IPW,C9099,Single-channel UART-to-SPI bridge for Bus 3
+U4,1,RS-485 transceiver Bus 0,SOIC-8,TI SN65HVD75DR,C57928,3.3 V half-duplex
+U5,1,RS-485 transceiver Bus 1,SOIC-8,TI SN65HVD75DR,C57928,
+U6,1,RS-485 transceiver Bus 2,SOIC-8,TI SN65HVD75DR,C57928,
+U7,1,RS-485 transceiver Bus 3,SOIC-8,TI SN65HVD75DR,C57928,Driven by SC16IS740
+U8,1,USB-C ESD,SOT-23-6,STMicro USBLC6-2SC6,C7519,
+Y1,1,Crystal 14.7456 MHz,SMD 3.2x2.5,generic,C12674,For SC16IS740
+Q1,1,P-FET reverse-block,DPAK / TO-252,Alpha & Omega AOD409,C160005,"Sized for 15 A continuous; NTD2955 alt. AOD409 VGS rated ±20 V (no clamp strictly required) but a 12 V Zener clamp (Z1) parallels the unit Q1 fix and absorbs brick over-voltage."
+Z1,1,Zener 12V 500mW,SOD-123,BZT52C12 (or MMSZ5242B),C8061 (CHECK),"Q1 VGS clamp — cathode → source (+12V_RAIL), anode → gate. Optional on master (AOD409 ±20 V) but recommended for symmetry with unit Q1 + brick over-voltage."
+R_q1g,1,100 ohm,0603 1%,generic,C22775 (CHECK),"Q1 gate series resistor (slows turn-on; isolates Z1 clamp current)"
+R_q1g2,1,10 kohm,0603 1%,generic,C25804,"Q1 gate pull-down to GND (replaces earlier R_q1_gate)"
+F1,1,Fuse 15 A slow-blow,5x20mm + holder,generic,n/a,Master input
+F_row,4,Polyfuse 4 A hold,2920 SMD,Bourns MF-LSMF400/16X-2 (or equiv),C175125 (CHECK),"Per-row 12 V output protection. **2920 (NOT 1812)** — MF-MSMF 1812 family does not support 4 A hold; 2920 is the smallest viable package."
+D1,1,LED green,0805,generic,C72043,PWR indicator (3V3 hardwired)
+D2,1,LED blue,0805,generic,C2293,HEARTBEAT
+D3,1,LED red,0805,generic,C2286,FAULT
+D4,4,LED green,0805,generic,C72043,ROW0..ROW3 power indicators (post-polyfuse 12V)
+D8,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,"Input TVS unidirectional. Cathode (banded) → +12V (post-fuse), anode → GND. Place AFTER F1 fuse so a sustained TVS clamp opens the fuse."
+D9,1,RS-485 ESD Bus 0,SOT-23,Semtech SM712-02HTG,C172881,
+D10,1,RS-485 ESD Bus 1,SOT-23,Semtech SM712-02HTG,C172881,
+D11,1,RS-485 ESD Bus 2,SOT-23,Semtech SM712-02HTG,C172881,
+D12,1,RS-485 ESD Bus 3,SOT-23,Semtech SM712-02HTG,C172881,
+J1,1,Screw terminal 2-pin (>=15 A),7.62 mm pitch THT,KF7.62-2P (or DECA MA231 5mm),C8270,12 V/15 A input. **NOT** Phoenix MKDS 1.5/2 (rated only 8 A). KF7.62-2P is 16 A; DECA MA231-50002M (LCSC C237691) is 15 A 5 mm pitch alt.
+J2,1,USB-C receptacle,USB-C 16-pin SMD,generic with shielded shell,C165948,Programming + debug
+J3,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),"Bus 0 row port: 12V/A/B/GND. JST-VH (≥5 A per pin) — NOT JST-XH (3 A; undersized for 4 A row fuse). Locked across system per OPEN_DECISIONS #4."
+J4,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),Bus 1 row port (same MPN as J3).
+J5,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),Bus 2 row port (same MPN as J3).
+J6,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),Bus 3 row port (same MPN as J3).
+J7,1,Header 2x4 male debug,2.54 mm pitch,generic,C2904 (CHECK 2x4),"UART/SPI debug breakout. Replace earlier C124378 reference (C124378 is 1x40 single-row strip — wrong). If a 2x4 LCSC code is awkward, drop J7 and use labeled test pads on the SPI/UART nets instead."
+SW1,1,Tact switch BOOT,SMD 6x6,generic,C318884,IO0
+SW2,1,Tact switch RST,SMD 6x6,generic,C318884,EN
+C_bulk,1,470 uF / 25 V,Radial THT,generic,C107821,Input bulk
+C_in,1,10 uF / 25 V,1206 X7R,generic,C19702,Buck module input cap (per K7803/R-78E datasheet 4.7-10 uF X7R; 1206 ensures JLC-stocked X7R availability)
+C_out,2,10 uF / 10 V,0805 X7R,generic,C15850,LDO output
+C_decap_esp,8,100 nF,0603 X7R,generic,C14663,ESP32-S3 decoupling
+C_decap_uart,1,100 nF,0603 X7R,generic,C14663,SC16IS740 VDD decoupling (single 3V3 supply at pin 1; no separate VDD_io on SC16IS740IPW)
+C_decap_phy,4,100 nF,0603 X7R,generic,C14663,SN65HVD75 Vcc decoupling — one per PHY (U4/U5/U6/U7) close to pin 8
+C_xtal,2,18 pF,0603 NP0,generic,C36760,Crystal load caps for SC16IS740
+C_usb,2,1 uF / 10 V,0603 X7R,generic,C15849,USB rail decoupling
+C_row,4,10 uF / 25 V,0805 X7R,generic,C19702,Per-row output bulk (post-polyfuse)
+R_term,4,120 ohm,0805 1%,generic,C22787,RS-485 termination per bus
+R_bias_a,4,1 kohm,0805 1%,generic,C17513,A bias to 3V3 per bus
+R_bias_b,4,1 kohm,0805 1%,generic,C17513,B bias to GND per bus
+R_led,3,1 kohm,0603 1%,generic,C21190,LED current limit (PWR/HB/FAULT)
+R_led_row,4,4.7 kohm,0603 1%,generic,C25879,Row PWR LED current limit (12V hardwired)
+R_cc,2,5.1 kohm,0603 1%,generic,C25905,USB-C CC pull-downs
+R_strap,4,10 kohm,0603 1%,generic,C25804,ESP32-S3 strap pins + EN pull-up
+R_uart_strap,4,10 kohm,0603 1%,generic,C25804,SC16IS740 IRQ pull-up + reset pull
+
+###############################################################################
+# UNIT PCB BOM (×64 per system — one per flap unit)
+###############################################################################
+ref,qty,value,footprint,mfg_part,lcsc_check,notes
+U1,1,STM32G030K6T6,LQFP-32,STMicro STM32G030K6T6,C2040675,Required for 96-bit silicon UID
+U2,1,Stepper driver,SOIC-16 (narrow 150 mil body),TI TPL7407L,C383290,**SOIC-16 narrow** — both TPL7407L (C383290) and ULN2003A (C2358) ship in 150 mil narrow SOIC. NOT SOIC-16W (300 mil) — pads will not bridge the IC's leads.
+U3,1,12V to 3.3V LDO,SOT-223,ST LDL1117S33TR (or LM2937IMP-3.3 / AP1117-33),C434348 (CHECK),"**Replaces HT7833** — HT7833 is 6.5 V max VIN, would be destroyed at 12 V. LDL1117S33 is 40 V max VIN, 1.2 A. Dissipation at 55 mA = 0.48 W; SOT-223 with copper pour heatsink (~1 cm² on bottom layer GND tab) holds Tj < 50 °C above ambient."
+U4,1,RS-485 transceiver,SOIC-8,TI SN65HVD75DR,C57928,
+J3,1,Hall sensor connector,JST-XH 3-pin THT,JST B3B-XH-A,C145756,"3-pin header for external hall module on flying lead. **Pinout LOCKED: pin 1 = +3V3, pin 2 = GND, pin 3 = HALL_OUT** (KY-003 native order — v1 cable plugs straight in). Sensor positioned by chassis bracket relative to flap drum magnet."
+Q1,1,P-FET reverse-block,SOT-23,Alpha & Omega AO3401A,C15127,"VGS rated only ±12 V — at 12 V brick the gate-source margin is zero. Z1 12 V Zener clamp REQUIRED to keep AO3401 in spec under brick tolerance + transients."
+Z1,1,Zener 12V 500mW,SOD-123,BZT52C12 (or MMSZ5242B),C8061 (CHECK),"Q1 VGS clamp — cathode → source (PCB-12V), anode → gate node. Required for AO3401A within ±12 V VGS rating."
+R_q1g,1,100 ohm,0603 1%,generic,C22775 (CHECK),"Q1 gate series resistor (slows turn-on; isolates Z1 clamp current)"
+R_q1g2,1,10 kohm,0603 1%,generic,C25804,"Q1 gate pull-down to GND"
+D1,1,LED blue,0805,generic,C2293,HEARTBEAT
+D2,1,LED red,0805,generic,C2286,FAULT
+D3,1,LED yellow,0805,generic,C2298,IDENTIFY indicator (dedicated GPIO)
+D4,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,"Unidirectional. Cathode (banded) → +12V, anode → GND. Reversed = forward-bias = dead short."
+D5,1,RS-485 ESD,SOT-23,Semtech SM712-02HTG,C172881,
+SW1,1,IDENTIFY tact switch,6x6 SMD,generic,C318884,Edge-mounted; commissioning hardware
+PG,4,Pogo pin spring contact,THT drill 1.83 mm pad 2.45 mm,Mill-Max 0906-2-15-20-75-14-11-0,n/a (DigiKey),"Primary: Mill-Max 0906-2 (5 mm free / 1-1.4 mm travel / 1.07 mm Au tip / 2 A / 1M cycles). Backup: 0906-1. LCSC fallback: Xinyangze YZ02015095R-01 (C5157439) with current derate. **4 pins only — no PG_KEY 5th polarization pogo** (collided with PG1; polarization moved to DIN clip)."
+DIN_clip,1,DIN rail clip 35mm TS35,3D-printed (MakerWorld STL),user-supplied STL,n/a,"**Asymmetric clip is the ONLY polarization mechanism** — only one orientation engages the rail. Bolts via 4× M3 holes at unit board (3,3) (3,77) (37,77) (37,3). One printed per unit (64 + spares). MakerWorld STL link in build notes."
+J2,1,Stepper output,JST-XH **5-pin**,JST B5B-XH-A,C158013,To 28BYJ-48 motor — pins 1-4 = TPL7407L OUT1-OUT4 (orange/yellow/pink/blue), pin 5 = +12 V common (red wire). 5-pin avoids 64× hand-splicing the +12 V wire into the chassis harness.
+TP,5,Test pads,1.5 mm pad,-,n/a,GND/3V3/RX/TX/RST
+TP_DBG,4,SWD pads,1.5 mm pad,-,n/a,SWDIO+SWCLK+RST+GND
+C_in,1,22 uF / 25 V,1206 X7R,generic,C45783 (CHECK 1206; 0805 22uF/25V/X7R is unobtainable),12 V input bulk — 1206 required for X7R availability at 22 uF / 25 V; 0805 in this combination is effectively vaporware on JLC
+C_in2,1,100 nF,0603 X7R,generic,C14663,12 V input decap
+C_ldo_in,1,10 uF / 25 V,0805 X7R,generic,C19702,LDO input
+C_ldo_out,1,10 uF / 10 V,0805 X7R,generic,C15850,LDO output
+C_decap,4,100 nF,0603 X7R,generic,C14663,MCU + transceiver decoupling
+C_rst,1,100 nF,0603 X7R,generic,C14663,STM32 NRST filter
+C_id,1,100 nF,0603 X7R,generic,C14663,IDENTIFY button debounce
+R_hall,1,10 kohm,0603 1%,generic,C25804,Hall sensor pull-up to 3V3
+R_de,1,1 kohm,0603 1%,generic,C21190,DE driver line series (PA12 → SN65HVD75 DE; /RE tied to GND so no R_re)
+R_led,3,1 kohm,0603 1%,generic,C21190,LED current limit (HB/FAULT/ID)
+R_id,1,10 kohm,0603 1%,generic,C25804,IDENTIFY button pull-up to 3V3
+R_rst,1,10 kohm,0603 1%,generic,C25804,NRST pull-up
+
+###############################################################################
+# BUS PCB BOM (×8 per system — 2 daisy-chained per row × 4 rows)
+###############################################################################
+ref,qty,value,footprint,mfg_part,lcsc_check,notes
+J_in,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),"Connector ""in"" (master side or chain-from-previous). 3.96 mm pitch, ≥5 A per pin (matches 4 A row fuse). NOT JST-XH (3 A undersized). Locked across system per OPEN_DECISIONS #4."
+J_out,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),"Connector ""out"" (chain-to-next or terminator end). Same MPN as J_in."
+PCB,1,Bus PCB,300 mm x 32 mm,custom,n/a,2-layer FR-4 ENIG plating; 4 traces (12V/A/B/GND) at y = 4 / 12 / 20 / 28 mm from top edge with widened pogo contact zones + isolated PG_KEY ENIG polarization pad (3x3 mm at y = 2 mm) at 8 stations per board. Width 32 mm (was 30) so trace Y-offsets exactly match unit pogo geometry.
+DIN_clip,2,DIN rail mount bracket,corner brackets,generic,n/a,For attaching bus PCB to 35 mm DIN rail TS35 (off-shelf or 3D-printed)

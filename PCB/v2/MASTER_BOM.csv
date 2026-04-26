@@ -1,6 +1,6 @@
 ref,qty,value,footprint,mfg_part,lcsc_check,notes
 U1,1,ESP32-S3-WROOM-1-N16R8,SMD module 18x25.5 mm,Espressif ESP32-S3-WROOM-1-N16R8,C2913203,16 MB flash 8 MB PSRAM
-U2,1,12V to 3.3V LDO,SOT-89-5,Holtek HT7833,C70358,Master logic only ~50 mA load
+U2,1,12V to 3.3V buck module,SIP-3 (drop-in for L78xx pinout),Mornsun K7803-500R3 (RECOM R-78E3.3-0.5 / CUI V7803-500 alt),C113973 (CHECK),**Switching buck module — NOT a linear LDO**. 12V→3.3V at ~200 mA in SOT-89 LDO would dissipate 1.74 W (rated ~0.5 W) → thermal shutdown. The 3-pin SIP buck is a sealed drop-in.
 U3,1,UART expander,TSSOP-16,NXP SC16IS740IPW,C9099,Single-channel UART-to-SPI bridge for Bus 3
 U4,1,RS-485 transceiver Bus 0,SOIC-8,TI SN65HVD75DR,C57928,3.3 V half-duplex
 U5,1,RS-485 transceiver Bus 1,SOIC-8,TI SN65HVD75DR,C57928,
@@ -8,32 +8,35 @@ U6,1,RS-485 transceiver Bus 2,SOIC-8,TI SN65HVD75DR,C57928,
 U7,1,RS-485 transceiver Bus 3,SOIC-8,TI SN65HVD75DR,C57928,Driven by SC16IS740
 U8,1,USB-C ESD,SOT-23-6,STMicro USBLC6-2SC6,C7519,
 Y1,1,Crystal 14.7456 MHz,SMD 3.2x2.5,generic,C12674,For SC16IS740
-Q1,1,P-FET reverse-block,DPAK / TO-252,Alpha & Omega AOD409,C160005,Sized for 15 A continuous; NTD2955 alt
+Q1,1,P-FET reverse-block,DPAK / TO-252,Alpha & Omega AOD409,C160005,"Sized for 15 A continuous; NTD2955 alt. AOD409 VGS rated ±20 V (no clamp strictly required) but a 12 V Zener clamp (Z1) parallels the unit Q1 fix and absorbs brick over-voltage."
+Z1,1,Zener 12V 500mW,SOD-123,BZT52C12 (or MMSZ5242B),C8061 (CHECK),"Q1 VGS clamp — cathode → source (+12V_RAIL), anode → gate. Optional on master (AOD409 ±20 V) but recommended for symmetry with unit Q1 + brick over-voltage."
+R_q1g,1,100 ohm,0603 1%,generic,C22775 (CHECK),"Q1 gate series resistor (slows turn-on; isolates Z1 clamp current)"
+R_q1g2,1,10 kohm,0603 1%,generic,C25804,"Q1 gate pull-down to GND (replaces earlier R_q1_gate)"
 F1,1,Fuse 15 A slow-blow,5x20mm + holder,generic,n/a,Master input
-F_row,4,Polyfuse 4 A hold,1812 SMD,Bourns MF-MSMF400-2,C162294,Per-row 12 V output protection
+F_row,4,Polyfuse 4 A hold,2920 SMD,Bourns MF-LSMF400/16X-2 (or equiv),C175125 (CHECK),"Per-row 12 V output protection. **2920 (NOT 1812)** — MF-MSMF 1812 family does not support 4 A hold; 2920 is the smallest viable package."
 D1,1,LED green,0805,generic,C72043,PWR indicator (3V3 hardwired)
 D2,1,LED blue,0805,generic,C2293,HEARTBEAT
 D3,1,LED red,0805,generic,C2286,FAULT
 D4,4,LED green,0805,generic,C72043,ROW0..ROW3 power indicators (post-polyfuse 12V)
-D8,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,Input TVS (matches schematic refdes D8)
+D8,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,"Input TVS unidirectional. Cathode (banded) → +12V (post-fuse), anode → GND. Place AFTER F1 fuse so a sustained TVS clamp opens the fuse."
 D9,1,RS-485 ESD Bus 0,SOT-23,Semtech SM712-02HTG,C172881,
 D10,1,RS-485 ESD Bus 1,SOT-23,Semtech SM712-02HTG,C172881,
 D11,1,RS-485 ESD Bus 2,SOT-23,Semtech SM712-02HTG,C172881,
 D12,1,RS-485 ESD Bus 3,SOT-23,Semtech SM712-02HTG,C172881,
 J1,1,Screw terminal 2-pin (>=15 A),7.62 mm pitch THT,KF7.62-2P (or DECA MA231 5mm),C8270,12 V/15 A input. **NOT** Phoenix MKDS 1.5/2 (rated only 8 A). KF7.62-2P is 16 A; DECA MA231-50002M (LCSC C237691) is 15 A 5 mm pitch alt.
 J2,1,USB-C receptacle,USB-C 16-pin SMD,generic with shielded shell,C165948,Programming + debug
-J3,1,Header 1x4 shrouded,2.54 mm indexed,generic,C124378,Bus 0 row port: 12V/GND/A/B
-J4,1,Header 1x4 shrouded,2.54 mm indexed,generic,C124378,Bus 1 row port
-J5,1,Header 1x4 shrouded,2.54 mm indexed,generic,C124378,Bus 2 row port
-J6,1,Header 1x4 shrouded,2.54 mm indexed,generic,C124378,Bus 3 row port
-J7,1,Header 2x4 debug,2.54 mm,generic,C124378,UART/SPI debug breakout
+J3,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),"Bus 0 row port: 12V/A/B/GND. JST-VH (≥5 A per pin) — NOT JST-XH (3 A; undersized for 4 A row fuse). Locked across system per OPEN_DECISIONS #4."
+J4,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),Bus 1 row port (same MPN as J3).
+J5,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),Bus 2 row port (same MPN as J3).
+J6,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),Bus 3 row port (same MPN as J3).
+J7,1,Header 2x4 male debug,2.54 mm pitch,generic,C2904 (CHECK 2x4),"UART/SPI debug breakout. Replace earlier C124378 reference (C124378 is 1x40 single-row strip — wrong). If a 2x4 LCSC code is awkward, drop J7 and use labeled test pads on the SPI/UART nets instead."
 SW1,1,Tact switch BOOT,SMD 6x6,generic,C318884,IO0
 SW2,1,Tact switch RST,SMD 6x6,generic,C318884,EN
 C_bulk,1,470 uF / 25 V,Radial THT,generic,C107821,Input bulk
-C_in,1,22 uF / 25 V,0805 X7R,generic,C45783,LDO input
+C_in,1,10 uF / 25 V,1206 X7R,generic,C19702,Buck module input cap (per K7803/R-78E datasheet 4.7-10 uF X7R; 1206 ensures JLC-stocked X7R availability)
 C_out,2,10 uF / 10 V,0805 X7R,generic,C15850,LDO output
 C_decap_esp,8,100 nF,0603 X7R,generic,C14663,ESP32-S3 decoupling
-C_decap_uart,2,100 nF,0603 X7R,generic,C14663,SC16IS740 decoupling (Vsupply + VDD_io)
+C_decap_uart,1,100 nF,0603 X7R,generic,C14663,SC16IS740 VDD decoupling (single 3V3 supply at pin 1; no separate VDD_io on SC16IS740IPW)
 C_decap_phy,4,100 nF,0603 X7R,generic,C14663,SN65HVD75 Vcc decoupling — one per PHY (U4/U5/U6/U7) close to pin 8
 C_xtal,2,18 pF,0603 NP0,generic,C36760,Crystal load caps for SC16IS740
 C_usb,2,1 uF / 10 V,0603 X7R,generic,C15849,USB rail decoupling
