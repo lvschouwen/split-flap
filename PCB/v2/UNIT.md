@@ -17,8 +17,8 @@ to the bus, no DIP switches.
 4 pogo pins (on unit underside, pressing onto bus PCB traces)
    1=12V  2=A  3=B  4=GND
        |
-       +- TVS SMAJ15A (line-to-GND on 12V)
-       +- Q1 P-FET reverse-block (AO3401)
+       +- Q1 P-FET reverse-block (AO3401A) + Z1 10 V Zener gate→source clamp
+       +- D4 TVS SMAJ15A line-to-GND on **post-Q1 PCB-12V rail** (load side)
        +- Cin 22 uF + 100 nF
        |
        +-> VBUS_12V (direct to motor driver)
@@ -29,7 +29,7 @@ to the bus, no DIP switches.
        |        v
        |    5-pin JST-XH -> 28BYJ-48 12 V stepper (4 coils + +12 V on pin 5)
        |
-       +-> U3 LDO LDL1117S33 (SOT-223, 40V max VIN) 12->3.3 V -> VCC_3V3
+       +-> U3 LDO LDL1117S33 (SOT-223, 18V op max / 20V abs max) 12->3.3 V -> VCC_3V3
                                           |
                                           v
    STM32G030K6T6
@@ -82,13 +82,24 @@ Pogo pin spec:
   and bypasses Q1 entirely. Reverse-seating must be prevented
   mechanically (asymmetric DIN clip, see Mechanical) and by the
   master's per-row polyfuse opening on the resulting short. Q1 also
-  has a 12 V Zener (Z1) gate-source clamp — AO3401A is rated only
-  ±12 V VGS, exactly at limit on a 12 V brick without the clamp.
+  has a **10 V** Zener (Z1) gate-source clamp — AO3401A is rated
+  only ±12 V VGS; a **10 V** Zener (BZT52C10) keeps the FET safely
+  inside abs-max even with Zener tolerance (a 12 V Zener +10% =
+  13.2 V puts the FET out of spec — flagged by Gemini + ChatGPT
+  external review 2026-04-26).
 - Bulk cap: 22 µF (1206 X7R) + 100 nF on incoming 12 V.
-- 12 V → 3.3 V: **LDL1117S33TR LDO in SOT-223** (40 V max VIN, 1.2 A).
-  Load ~55 mA worst case; dissipation ~0.48 W; SOT-223 with copper
-  pour heatsink keeps Tj well within rating. **NOT HT7833** (HT7833
-  is 6.5 V max VIN — would be destroyed at 12 V).
+- 12 V → 3.3 V: **LDL1117S33TR LDO in SOT-223** (**18 V op max /
+  20 V abs max**, 1.2 A — earlier doc claimed 40 V; verified against
+  ST datasheet 2026-04-26). Load ~55 mA worst case; dissipation
+  ~0.48 W; SOT-223 with **VOUT-tab** copper pour heatsinking. **The
+  tab is on the 3V3 net, NOT GND** — pouring tab to GND would short
+  3V3 to GND through the internally-tied tab/pin-2 node. **Pinout
+  LOCKED (LM1117 family): pin 1 = GND, pin 2 = VOUT (= tab),
+  pin 3 = VIN.** **NOT HT7833** (HT7833 is 6.5 V max VIN — would be
+  destroyed at 12 V). Optional swap: **LM2937IMP-3.3** (26 V max,
+  same SOT-223, same pinout convention) for more TVS-clamp margin.
+- D4 SMAJ15A TVS placement: **post-Q1 (load-side PCB-12V rail)**.
+  Cathode (banded) → PCB-12V, anode → GND.
 - Stepper coils: directly on 12 V via the driver and J2 pin 5.
 
 ## MCU

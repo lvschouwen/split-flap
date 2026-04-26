@@ -163,10 +163,14 @@ units within the rail channel).
 
 ## Mounting holes
 
-| Hole | Position | Purpose |
+**4 mounting holes along the PCB centreline** (y = 16 mm) — two end-only holes leave a 300 mm strip prone to mid-span sag, which makes pogo contact pressure inconsistent. ChatGPT external review caught the stale 2-hole table; locked to 4 to match `BUS_PCB.md`.
+
+| Hole | Position (x from left edge, y from top edge) | Purpose |
 |---|---|---|
-| MH1 | 8 mm from left edge, on PCB centreline | DIN rail bracket attachment |
-| MH2 | 8 mm from right edge, on PCB centreline | DIN rail bracket attachment |
+| MH1 | x = 8 mm,  y = 16 mm | DIN rail bracket attachment, left end |
+| MH2 | x = 100 mm, y = 16 mm | mid-span anti-sag |
+| MH3 | x = 200 mm, y = 16 mm | mid-span anti-sag |
+| MH4 | x = 292 mm, y = 16 mm | DIN rail bracket attachment, right end |
 
 Hole diameter: 3.2 mm (M3 clearance).
 

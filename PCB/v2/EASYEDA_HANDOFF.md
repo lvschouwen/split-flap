@@ -14,7 +14,9 @@
 
 **From ChatGPT review (corrects/extends Gemini):**
 - **HT7833 dropped from BOTH boards** — 6.5 V max VIN, would be destroyed at 12 V.
-  Master = switching buck (already locked). **Unit = LDL1117S33 SOT-223** (40 V max VIN, 1.2 A).
+  Master = switching buck (already locked). **Unit = LDL1117S33 SOT-223** (**18 V op max /
+  20 V abs max**, 1.2 A — earlier draft claimed 40 V; corrected per ChatGPT review of
+  ST datasheet 2026-04-26). Optional: LM2937IMP-3.3 (26 V max) for more TVS-clamp margin.
 - **SC16IS740 TSSOP-16 pinout rewritten** to correct NXP datasheet map (Gemini's was wrong;
   earlier draft was missing the I²C/SPI mode-select pin entirely).
 - **STM32G030 K-32 pin map rewritten** — pin 20 is PC6 (not PA10); USART1 PA9/PA10/PA12
@@ -23,7 +25,9 @@
   bare FR-4 isn't a hard interlock. **Polarization moved to asymmetric 3D-printed DIN clip**.
 - **Row connector locked to JST-VH 4-pin** (not JST-XH — XH is 3 A, row is fused at 4 A).
 - **SMAJ15A polarity** explicit in spec (cathode → +12V); **master TVS placed AFTER F1 fuse**.
-- **Z1 12 V Zener** added across Q1 VGS on both boards (AO3401A is ±12 V VGS rated).
+- **Z1 10 V Zener (BZT52C10)** added across Q1 VGS on both boards — 10 V (not 12 V) to keep
+  AO3401A safely inside ±12 V VGS abs-max under Zener tolerance. Cross-validated by Gemini
+  + ChatGPT external review 2026-04-26.
 - **F_row polyfuse upsized 1812 → 2920** (1812 family doesn't support 4 A hold).
 - **Bus mounting holes locked to 4** (not 2); bus terminator prose fixed to match table
   (120 Ω across pins 2-3, not 3-4).
@@ -194,8 +198,11 @@ standard library parts.
 - [ ] Master 3V3 rail under load (boot ESP32-S3 + WiFi + all 4 PHYs
       idle): U2 buck module surface temp should stay below 50 °C.
 - [ ] Unit 3V3 rail under load (stepper running, RS-485 active):
-      U3 LDL1117S33 surface temp below 60 °C with the GND-tab pour
-      heatsinking. **Verify HT7833 is NOT used** anywhere (max VIN
+      U3 LDL1117S33 surface temp below 60 °C with the **VOUT-tab pour
+      heatsinking** (tab is on 3V3 net, NOT GND — pouring tab to GND
+      shorts 3V3 to GND through the internally-tied tab/pin-2 node).
+      **LDL1117S33 pinout LOCKED: pin 1 = GND, pin 2 = VOUT (= tab),
+      pin 3 = VIN.** **Verify HT7833 is NOT used** anywhere (max VIN
       6.5 V, would die at 12 V).
 - [ ] **Master J3-J6 row output connectors are JST-VH 4-pin
       (B4P-VH-A, C144392)** — NOT JST-XH (3 A undersized) and NOT
@@ -209,15 +216,20 @@ standard library parts.
       SOIC-16W (300 mil).**
 - [ ] **Bus PCB outline is 300 × 32 mm**. **No PG_KEY ENIG pad** —
       polarization is enforced by the unit's 3D-printed DIN clip.
-- [ ] **Master U2 is a switching buck module (K7803-500R3 / R-78E3.3-0.5
-      / V7803-500), NOT a linear LDO.**
+- [ ] **Master U2 is a switching buck module (K7803-1000R3 / R-78E3.3-1.0
+      / V7803-1000, 1 A version), NOT a linear LDO and NOT the 500 mA
+      version** (500 mA leaves zero headroom at ESP32-S3 WiFi TX peaks).
 - [ ] **Unit U3 is a 12 V-capable LDO in SOT-223 (LDL1117S33TR or
       LM2937-3.3 or AP1117-33), NOT HT7833.**
-- [ ] **Q1 (master + unit) has Z1 12 V Zener clamp gate→source** plus
-      R_q1g 100 Ω series. Required on unit Q1 (AO3401A is only
-      ±12 V VGS rated); recommended on master Q1 for symmetry.
+- [ ] **Q1 (master + unit) has Z1 10 V Zener clamp (BZT52C10) gate→source**
+      plus R_q1g 100 Ω series. **10 V (not 12 V)** to keep AO3401A safely
+      inside ±12 V VGS abs-max under Zener tolerance. Required on unit Q1
+      (AO3401A is only ±12 V VGS rated); recommended on master Q1 for
+      symmetry / BOM commonality.
 - [ ] **D8 / D4 (SMAJ15A) cathode (banded end) → +12V**, anode → GND.
-      **Master D8 is placed AFTER F1 fuse**, before Q1.
+      **Master D8 placement: AFTER F1 fuse**, before Q1.
+      **Unit D4 placement: post-Q1 (load-side PCB-12V rail)** — earlier
+      draft inconsistently said "post-pogo, before Q1"; locked here.
 - [ ] **F_row polyfuses are 2920 package (Bourns MF-LSMF400/16X-2)**,
       NOT 1812 (1812 family does not support 4 A hold).
 - [ ] **Master power input traces are polygon pours**, not narrow
@@ -236,3 +248,14 @@ standard library parts.
       pin 21 PA10, pin 22 PA11 (NC), pin 23 PA12 — **no SYSCFG remap**.
 - [ ] **SC16IS740 pin 8 (I²C/SPI mode select) tied to GND** for SPI
       mode. Floating gives undefined startup behaviour.
+- [ ] **SC16IS740 pin 11 (CTS) tied to GND** — input pin, must have a
+      defined level (auto-flow disabled in firmware so polarity is
+      don't-care, but it cannot float).
+- [ ] **SC16IS740 pin 14 (RESET) pulled HIGH to 3V3 via 10 kΩ.**
+      RESET is **active-LOW** per NXP datasheet — DO NOT tie to GND
+      (that holds the chip in permanent reset). Gemini external review
+      mistakenly claimed active-HIGH; confirmed wrong against NXP
+      `SC16IS740_750_760.pdf` 2026-04-26.
+- [ ] **Master firmware staggers motor steps** on power-up + global
+      commands so peak input current stays under ~12 A. Without
+      staggering, 64 units × 240 mA = 15.36 A trips the 15 A fuse.

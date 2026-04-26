@@ -11,15 +11,15 @@ PCB design.**
 |---|---|---|---|---|
 | U1 | STM32G030K6T6 | LQFP-32 | C2040675 | MCU; required for silicon UID |
 | U2 | TPL7407L | **SOIC-16 (narrow, 150 mil body)** | C383290 | Stepper driver primary; ULN2003A drop-in alt: C2358. **Both parts ship in standard narrow SOIC-16 (150 mil body / 3.9 mm). Do NOT use SOIC-16W (300 mil / 7.5 mm) — pads will not bridge the IC's leads.** |
-| U3 | LDL1117S33TR (or LM2937IMP-3.3) | SOT-223 | C434348 (CHECK) | **12V→3.3V LDO**, 40 V max VIN, 1.2 A. **Replaces HT7833** — HT7833 is rated 6.5 V max VIN and would be destroyed at 12 V. Dissipation at 55 mA load = 0.48 W; SOT-223 with copper pour heatsink handles this comfortably (θJA ~50 °C/W with 1 cm² pad). Alternatives: LM2937IMP-3.3 (TI, 26 V max, SOT-223) or AP1117-33 (40 V max). **Do NOT substitute HT7833 / AMS1117 / MCP1825 — wrong VIN ratings.** |
+| U3 | LDL1117S33TR | SOT-223 | C434348 (CHECK) | **12V→3.3V LDO**, **18 V op max / 20 V abs max** (NOT 40 V — earlier draft was wrong; verified against ST datasheet 2026-04-26 by external review). **Replaces HT7833** (HT7833 is 6.5 V max VIN — destroyed at 12 V). **Pinout (LM1117 family convention) — LOCKED: pin 1 = GND, pin 2 = VOUT (= tab), pin 3 = VIN.** Heatsink copper pour goes on **pin 2 + tab (VOUT, 3V3 net)**, NOT on GND — they're internally tied; pouring tab to GND shorts 3V3 to GND. Dissipation at 55 mA load = 0.48 W; SOT-223 with ~1 cm² VOUT pour holds θJA ~50 °C/W. **Alt for higher TVS-clamp margin: LM2937IMP-3.3** (TI, 26 V max, same SOT-223 footprint, same pinout convention, LCSC C140265). **Do NOT substitute HT7833 / AMS1117 / MCP1825 — wrong VIN ratings.** |
 | U4 | SN65HVD75DR | SOIC-8 | C57928 | RS-485 transceiver |
 | J3 | Hall connector | JST-XH 3-pin male, vertical THT (B3B-XH-A) | C145756 | 3-pin header for external hall sensor module on flying lead. **Pinout LOCKED: pin 1 = +3V3, pin 2 = GND, pin 3 = HALL_OUT** — matches KY-003 module native order so v1's existing flying-lead cable plugs straight in. Different sensor modules adapt at the cable end. |
 | Q1 | AO3401A | SOT-23 | C15127 | P-FET reverse-block. **VGS rated only ±12 V** — at nominal 12 V brick the gate-source margin is zero. Add Z1 12 V Zener clamp gate→source to absorb brick tolerance + transients; see Power section. |
-| Z1 | BZT52C12 (or MMSZ5242B) | SOD-123 | C8061 (CHECK) | 12 V Zener clamp on Q1 VGS — cathode → source, anode → gate. Required to keep AO3401A within VGS ratings under brick tolerance and inrush transients. |
+| Z1 | BZT52C10 (or MMSZ5240B) | SOD-123 | C8062 (CHECK) | **10 V** Zener clamp on Q1 VGS — cathode → source, anode → gate. **10 V (not 12 V)** to give margin against AO3401A's ±12 V VGS abs-max under Zener tolerance (BZT52C12 +10% upper bound = 13.2 V puts the FET out of spec; cross-validated by Gemini + ChatGPT external review 2026-04-26). |
 | D1 | LED blue | 0805 | C2293 | HEARTBEAT |
 | D2 | LED red | 0805 | C2286 | FAULT |
 | D3 | LED yellow | 0805 | C2298 | IDENTIFY |
-| D4 | SMAJ15A | DO-214AC SMA | C167238 | 12V TVS unidirectional. **Polarity: cathode (banded end) → +12V (post-pogo, before Q1), anode → GND.** Wrong-way orientation forward-biases the diode and shorts the rail. |
+| D4 | SMAJ15A | DO-214AC SMA | C167238 | 12V TVS unidirectional. **Placement LOCKED to post-Q1 (load-side PCB-12V rail)** — cathode (banded end) → PCB-12V (post-Q1 source), anode → GND. (Earlier draft said "post-pogo, before Q1"; that contradicted the net diagram below — ChatGPT external review caught it 2026-04-26.) Wrong-way orientation forward-biases and shorts the rail. |
 | D5 | SM712-02HTG | SOT-23 | C172881 | RS-485 ESD |
 | SW1 | Tact switch 6×6 | SMD 6x6x5 | C318884 | IDENTIFY button |
 | PG1-PG4 | Pogo pin spring contact | THT (drill 1.83 mm, pad 2.45 mm) | n/a (DigiKey) | **Primary: Mill-Max 0906-2-15-20-75-14-11-0** (5.00 mm free, 1.0–1.4 mm travel, 1.07 mm Au tip, 2 A continuous, 1 M cycles). **Backup: Mill-Max 0906-1-15-20-75-14-11-0** (same footprint, less travel margin). LCSC carries Mill-Max as a courtesy listing — order from DigiKey and ship to JLC for assembly, or hand-solder. **LCSC-only fallback: Xinyangze YZ02015095R-01 (LCSC C5157439)** — derate to 1 A (parallel two pins on the 12 V rail), 10k mate cycles is fine for hobby. **NOTE: PG_KEY 5th polarization pogo pin REMOVED** — pad spacing collides with PG1, and a spring pogo on bare FR-4 is not a hard mechanical interlock. Polarization is now enforced by an asymmetric 3D-printed DIN clip (see Mechanical section + DIN clip note). |
@@ -55,8 +55,10 @@ Q1 AO3401A (P-FET high-side reverse-block, standard topology):
   drain  ← PG1 (incoming 12V)
   source → PCB-12V rail (load side)
   gate   ── R_q1g 100 Ω series ── (gate node) ── R_q1g2 10 kΩ to GND
-  Z1     12 V Zener: cathode → source (PCB-12V), anode → gate node
-                     (clamps |VGS| at ~12 V to keep AO3401A inside ±12 V rating)
+  Z1     10 V Zener: cathode → source (PCB-12V), anode → gate node
+                     (clamps |VGS| at ~10 V to keep AO3401A safely inside its
+                      ±12 V abs-max — 12 V Zener tolerance can push the FET
+                      out of spec, per external review 2026-04-26)
 
   Same topology + behaviour as the master Q1 — see SCHEMATIC_MASTER.md
   power section for the full rationale. Do NOT pull the gate to +12V;
@@ -70,14 +72,22 @@ D4 SMAJ15A polarity (CRITICAL):
   Reversed orientation forward-biases the diode and shorts the rail.
   Mark on silkscreen with a polarity arrow + verify on first article.
 
-U3 LDL1117S33TR (40 V max VIN, 1.2 A SOT-223):
-   pin 1 (TAB/GND)     → GND (large copper pour for heatsinking)
-   pin 2 (VIN)         ← +12V
-   pin 3 (VOUT)        → 3V3 + C_ldo_out 10 µF + per-IC decoupling
-  Thermal: 0.48 W dissipation at 55 mA load; with ~1 cm² copper pad
-  on the GND tab (θJA ~50 °C/W) the junction sits ~24 °C above
-  ambient — well within the 125 °C Tj limit. **NOT HT7833** (HT7833
-  is 6.5 V max VIN — would be destroyed at 12 V).
+U3 LDL1117S33TR (18 V op max / 20 V abs max, 1.2 A SOT-223):
+   pin 1               → GND
+   pin 2 (VOUT, = tab) → 3V3 + C_ldo_out 10 µF + per-IC decoupling
+                         **Heatsink copper pour goes here on pin 2 + tab**
+   pin 3 (VIN)         ← PCB-12V (post-Q1 source)
+  Pinout LOCKED to LM1117-family convention (pin 1=GND, pin 2=OUT=tab,
+  pin 3=IN). Earlier draft had pin 2/pin 3 swapped AND called the tab
+  "GND" — pouring the tab to GND shorts 3V3 to GND through the
+  internally-tied tab/pin 2 node. ChatGPT external review caught this
+  2026-04-26; verify the freelancer wires it correctly.
+  Thermal: 0.48 W dissipation at 55 mA load; with ~1 cm² VOUT-pour
+  heatsink (θJA ~50 °C/W) the junction sits ~24 °C above ambient —
+  well within the 125 °C Tj limit. **NOT HT7833** (HT7833 is 6.5 V
+  max VIN — would be destroyed at 12 V). VIN max also is **NOT 40 V**
+  (earlier doc was wrong) — for higher TVS-clamp margin substitute
+  LM2937IMP-3.3 (26 V max, same SOT-223, same pinout convention).
 
 PG4 (bottom pogo, GND) ── PCB-GND plane
 ```
@@ -333,11 +343,13 @@ hole pattern. v2 is a chassis drop-in replacement.
   (whatever its width) must be replaced with the narrow SOIC-16
   pattern in EasyEDA — verify against the TPL7407L datasheet
   (TI SLOSEH7) and the ULN2003AD (narrow) datasheet. LDO U3
-  **LDL1117S33TR (SOT-223, 40 V max VIN)** placed near v1's AMS1117
-  position; SOT-223 with the GND tab pulled into a copper pour for
-  heatsinking (~1 cm² on bottom layer). The AMS1117 footprint may
-  need adjustment — both are SOT-223 but the tab/pin order should be
-  cross-checked against the LDL1117 datasheet. MCU U1 STM32G030K
+  **LDL1117S33TR (SOT-223, 18 V op max / 20 V abs max)** placed near
+  v1's AMS1117 position; SOT-223 with the **VOUT tab** (pin 2 + tab,
+  internally tied) pulled into a copper pour for heatsinking
+  (~1 cm² on bottom layer of the 3V3 net — NOT GND). LDL1117 follows
+  the LM1117/AMS1117 pin-order convention (pin 1=GND, pin 2=OUT=tab,
+  pin 3=IN), so the AMS1117 footprint is reusable; verify against the
+  LDL1117 datasheet anyway as part of bring-up. MCU U1 STM32G030K
   LQFP-32, RS-485 transceiver U4 SN65HVD75, Q1 AO3401 + Z1 12 V
   Zener clamp, ESD, decaps — placed wherever leaves a clear ~10 mm
   vertical channel through the long-axis centre for the pogo column.
@@ -457,7 +469,9 @@ in. The 24 mm pogo column fits inside the 40 mm short axis with
    - Place stepper driver U2 (TPL7407L, **SOIC-16 narrow**) near the
      v1 ULN2003A position on the back.
    - Place LDO U3 (LDL1117S33, SOT-223) near v1's AMS1117 position;
-     give the GND tab a generous copper pour for heatsinking.
+     give the **VOUT tab (pin 2 + tab, on the 3V3 net)** a generous
+     copper pour for heatsinking. Tab is NOT GND — pouring it to GND
+     shorts 3V3 to GND.
    - Place RS-485 path (U4 SN65HVD75, D5 SM712) near the pogo pin pads.
    - Place hall connector J3 on a clean edge for cable exit toward
      the chassis hall bracket (matches v1 "Magnet Sensor" XY).

@@ -62,10 +62,17 @@ considered.
 - **Single 12 V / 15 A brick** feeds the master. Sized for 64-unit
   worst-case peak (~16 A briefly during simultaneous flap transitions);
   steady-state draw is ~3-5 A.
+- **Firmware staggering — HARD REQUIREMENT.** 64 units × 240 mA peak
+  = 15.36 A simultaneous-coil current would nuisance-trip the 15 A
+  fuse. Master firmware MUST stagger motor steps so peak input
+  current stays under ~12 A (i.e. ≤50 % units active at once).
+  Flagged by Gemini external review 2026-04-26.
 - Master internally distributes 12 V to each row via per-row polyfuses
   (4 A hold each), then out on the row's 4-pin connector alongside the
   row's RS-485 A/B.
-- Master also taps off ~50 mA for its own 3.3 V logic via on-board LDO.
+- Master also taps off ~500 mA for its own 3.3 V logic via on-board
+  K7803-1000R3 switching buck (1 A version — 500 mA was too tight
+  with ESP32-S3 WiFi peaks).
 - 12 V flows from the master through the combined cable to the
   harness's master end, then continues through the trunk to every unit.
 

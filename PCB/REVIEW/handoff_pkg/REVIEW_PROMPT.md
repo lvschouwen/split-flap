@@ -19,8 +19,8 @@ stay locked**.
 
 In scope (lock these or surface a blocker that prevents locking):
 - System architecture (1 master + 8 bus PCBs daisy-chained 2 per row + 64 units)
-- Every component MPN in the BOMs (consolidated in `BOMS.csv`,
-  per-board originals at `PCB/v2/{MASTER,UNIT,BUS_PCB}_BOM.csv`)
+- Every component MPN in the BOMs (`MASTER_BOM.csv`, `UNIT_BOM.csv`,
+  `BUS_PCB_BOM.csv` — one CSV per board so they parse cleanly)
 - Every footprint (package, drill, pad)
 - Every connector pinout (master row outputs, bus end connectors, unit
   pogo pin contacts, unit J2 stepper, unit J3 hall, debug headers)
@@ -45,7 +45,7 @@ Architecture + design intent:
 - `MASTER.md`, `UNIT.md`, `BUS_PCB.md` — per-board high-level spec
 - `SCHEMATIC_MASTER.md`, `SCHEMATIC_UNIT.md`, `SCHEMATIC_BUS.md` —
   detailed component lists, net assignments, ASCII schematic blocks
-- `BOMS.csv` — consolidated BOM (×1 master, ×64 units, ×8 bus PCBs)
+- `MASTER_BOM.csv` (×1 per system), `UNIT_BOM.csv` (×64), `BUS_PCB_BOM.csv` (×8)
 
 ### How to report findings
 
@@ -68,19 +68,21 @@ qty from 4 to 8" or "swap MPN to ABC123") so we can apply mechanically.
 
 ### Decisions we want validated (please weigh in even if no issue)
 
-1. **K7803-500R3 switching buck on master vs. linear LDO** — chosen
+1. **K7803-1000R3 switching buck on master vs. linear LDO** — chosen
    because 12 V → 3.3 V at ~200 mA in a SOT-89 LDO would dissipate
-   ~1.7 W (rated ~0.5 W). Is the K7803 (or R-78E3.3-0.5 / V7803-500)
-   the right module? Anything we missed about input/output cap sizing
-   or layout?
+   ~1.7 W (rated ~0.5 W). Upgraded from 500 mA → 1 A version after
+   external review (peak 470 mA leaves zero headroom on 500 mA part).
+   Is the K7803-1000R3 (or R-78E3.3-1.0 / V7803-1000) the right
+   module? Anything we missed about input/output cap sizing or layout?
 2. **LDL1117S33 (SOT-223) on unit instead of HT7833** — HT7833 is
    6.5 V max VIN and was destroying parts at 12 V. LDL1117S33 is 40 V
    max VIN, 1.2 A. Dissipation at 55 mA = 0.48 W in SOT-223 with
    ~1 cm² copper pour. Sound choice?
-3. **AO3401A unit Q1 + 12 V Zener clamp (Z1 BZT52C12)** — AO3401A
-   VGS rated only ±12 V, exactly at limit on a nominal 12 V brick. We
-   added Z1 + 100 Ω gate series + 10 kΩ gate pull-down. Is the Zener
-   placement correct (cathode to source/+12V, anode to gate)?
+3. **AO3401A unit Q1 + 10 V Zener clamp (Z1 BZT52C10)** — AO3401A
+   VGS rated only ±12 V; 10 V Zener (not 12 V) keeps the FET safely
+   inside abs-max under Zener tolerance. Plus 100 Ω gate series +
+   10 kΩ gate pull-down. Is the Zener placement correct (cathode to
+   source/+12V, anode to gate)?
 4. **Same Q1 + Z1 topology mirrored on master with AOD409** — AOD409
    is ±20 V VGS so the clamp is not strictly required, but we mirror
    the unit fix for symmetry + brick over-voltage absorbance. OK or

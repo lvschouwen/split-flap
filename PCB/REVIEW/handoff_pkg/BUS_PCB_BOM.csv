@@ -1,0 +1,5 @@
+ref,qty,value,footprint,mfg_part,lcsc_check,notes
+J_in,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),"Connector ""in"" (master side or chain-from-previous). 3.96 mm pitch, ≥5 A per pin (matches 4 A row fuse). NOT JST-XH (3 A undersized). Locked across system per OPEN_DECISIONS #4."
+J_out,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),"Connector ""out"" (chain-to-next or terminator end). Same MPN as J_in."
+PCB,1,Bus PCB,300 mm x 32 mm,custom,n/a,2-layer FR-4 ENIG plating; 4 traces (12V/A/B/GND) at y = 4 / 12 / 20 / 28 mm from top edge with widened pogo contact zones at 8 stations per board. **No PG_KEY pad — polarization is enforced by the unit's asymmetric DIN clip** (see UNIT_BOM.csv DIN_clip). Width 32 mm (was 30) so trace Y-offsets exactly match unit pogo geometry.
+DIN_clip,2,DIN rail mount bracket,corner brackets,generic,n/a,For attaching bus PCB to 35 mm DIN rail TS35 (off-shelf or 3D-printed)

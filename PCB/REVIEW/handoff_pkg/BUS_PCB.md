@@ -96,7 +96,7 @@ over thousands of mating cycles. HASL also works but wears faster.
 | Thickness | 1.6 mm or 2.0 mm for rigidity |
 | Mounting | **4 mounting holes** along centreline at x = 8, 100, 200, 292 mm (M3 clearance) — single-pair end mounts on a 300 mm strip allow mid-span sag and inconsistent pogo-pin contact pressure |
 | Unit pitch | 37 mm (8 stations per board, 16 per row) |
-| Connectors | 4-pin shrouded box header at each end (2.54 mm, indexed) |
+| Connectors | **JST-VH 4-pin male, 3.96 mm pitch THT (B4P-VH-A, LCSC C144392)** at each end — JST-VH ≥5 A per pin matches the 4 A row fuse; mating housing VHR-4N. NOT JST-XH (3 A undersized) and NOT 2.54 mm box header (an earlier draft said this; locked across the system per OPEN_DECISIONS #4). |
 
 DIN rail itself: standard 35 mm TS35, cut to row length (~600 mm). Mounts
 to the case structure with screws through the rail's slotted holes.

@@ -11,7 +11,7 @@ expander, 15 A power input.
 | Ref | Value | Footprint | LCSC# (CHECK) | Notes |
 |---|---|---|---|---|
 | U1 | ESP32-S3-WROOM-1-N16R8 | SMD module 18×25.5 mm | C2913203 | 16 MB flash, 8 MB PSRAM, native USB |
-| U2 | K7803-500R3 (or R-78E3.3-0.5 / V7803-500) | SIP-3 module, drop-in for L78xx pinout (VIN/GND/VOUT) | C113973 (CHECK) | 12V→3.3V **switching buck** module, ≥500 mA. **Do NOT use a linear LDO here** — 12V→3.3V at ~200 mA = 1.74 W in SOT-89 (~0.5 W rated) → thermal shutdown. The 3-pin SIP buck module is a self-contained drop-in replacement; pinout matches an L78xx SIP. |
+| U2 | **K7803-1000R3** (or R-78E3.3-1.0 / V7803-1000) | SIP-3 module, drop-in for L78xx pinout (VIN/GND/VOUT) | C113973 (CHECK 1A version) | 12V→3.3V **switching buck** module, **1 A** (NOT 500 mA — peak load is ESP32-S3 ~400 mA WiFi TX + 4× SN65HVD75 ~60 mA + SC16IS740 ~10 mA = ~470 mA, leaving zero headroom on a 500 mA part; upgrade flagged by Gemini external review 2026-04-26). **Do NOT use a linear LDO here** — 12V→3.3V at ~200 mA = 1.74 W in SOT-89 (~0.5 W rated) → thermal shutdown. The 3-pin SIP buck module is a self-contained drop-in replacement; pinout matches an L78xx SIP. |
 | U3 | SC16IS740IPW | TSSOP-16 | C9099 | Single-channel UART-to-SPI bridge |
 | U4 | SN65HVD75DR | SOIC-8 | C57928 | Bus 0 RS-485 PHY |
 | U5 | SN65HVD75DR | SOIC-8 | C57928 | Bus 1 RS-485 PHY |
@@ -20,7 +20,7 @@ expander, 15 A power input.
 | U8 | USBLC6-2SC6 | SOT-23-6 | C7519 | USB-C ESD |
 | Y1 | 14.7456 MHz crystal | SMD 3.2×2.5 | C12674 | SC16IS740 reference clock |
 | Q1 | AOD409 (or NTD2955) | DPAK / TO-252 | C160005 (AOD409) | P-FET reverse-block, 15 A continuous. **VGS = ±20 V** (no clamp strictly required at 12 V nominal), but a 12 V Zener clamp gate→source is recommended for symmetry with the unit Q1 fix and to absorb brick over-voltage. See Z1 below. |
-| Z1 | BZT52C12 (or MMSZ5242B) | SOD-123 | C8061 (CHECK) | 12 V Zener clamp on Q1 VGS — cathode → source (+12V_RAIL), anode → gate. Optional on master (AOD409 is ±20 V rated) but parallels the unit Q1 fix; cheap insurance against brick over-voltage. |
+| Z1 | BZT52C10 (or MMSZ5240B) | SOD-123 | C8062 (CHECK) | **10 V** Zener clamp on Q1 VGS — cathode → source (+12V_RAIL), anode → gate. **10 V (not 12 V)** for BOM commonality with unit Z1 (unit Z1 must be 10 V to keep AO3401A inside ±12 V VGS abs-max under Zener tolerance; master AOD409 ±20 V tolerates either). |
 | F1 | 15 A fuse 5×20 mm + holder | THT | n/a (off-shelf) | Master input fuse, slow-blow |
 | F_row1 | Polyfuse 4 A hold | **2920 SMD** (NOT 1812) | C175125 (CHECK — Bourns MF-LSMF400/16X-2 or equivalent 2920 4 A 16 V) | row 0. **1812 family does not support 4 A hold; 2920 is the smallest viable package for 4 A.** |
 | F_row2 | same | 2920 | C175125 (CHECK) | row 1 |
@@ -45,7 +45,7 @@ expander, 15 A power input.
 | C_in | 10 µF / 25 V X7R | 1206 | C19702 | Buck module input (per K7803/R-78E datasheet — 4.7–10 µF X7R, 1206 to ensure JLC-stocked X7R availability) |
 | C_out | 10 µF / 10 V X7R | 0805 (×2) | C15850 | Buck module output (datasheet ≥ 10 µF) |
 | C_decap_esp | 100 nF X7R | 0603 (×8) | C14663 | ESP32-S3 module decap |
-| C_decap_uart | 100 nF X7R | 0603 (×2) | C14663 | SC16IS740 decap (Vsupply + VDD_io) |
+| C_decap_uart | 100 nF X7R | 0603 (×1) | C14663 | SC16IS740 VDD decap — single 3V3 supply at pin 1; SC16IS740IPW has **no separate VDD_io** (earlier draft assumed two supplies and was wrong). Place within ~3 mm of pin 1. |
 | C_decap_phy | 100 nF X7R | 0603 (×4) | C14663 | SN65HVD75 Vcc decap — one per PHY (U4–U7), placed within ~3 mm of pin 8 |
 | C_xtal | 18 pF NP0 | 0603 (×2) | C36760 | Crystal load caps |
 | C_usb | 1 µF / 10 V X7R | 0603 (×2) | C15849 | USB rail decap |
@@ -87,7 +87,7 @@ Q1 (P-FET high-side reverse-block, standard topology):
   drain  ← incoming 12V (post-fuse, post-TVS)
   source → PCB-12V_RAIL (load side)
   gate   ── R_q1g 100 Ω series ── (gate node) ── R_q1g2 10 kΩ to GND
-  Z1     12 V Zener: cathode → source, anode → gate (clamps |Vgs| under brick over-voltage)
+  Z1     10 V Zener: cathode → source, anode → gate (clamps |Vgs| under brick over-voltage; 10 V matches unit Z1 for BOM commonality)
 
 How this works:
   - Normal polarity (input = +12 V): body diode (anode = drain = +12 V,
@@ -112,7 +112,7 @@ C_bulk 470 µF (post-Q1 source) ─── PCB-12V_RAIL
 
 J1 pin 2 (-) ── PCB-GND plane
 
-U2 buck module (K7803-500R3 / R-78E3.3-0.5 / V7803-500, SIP-3):
+U2 buck module (**K7803-1000R3** / R-78E3.3-1.0 / V7803-1000, SIP-3, 1 A):
   pin 1 VIN  ← PCB-12V_RAIL (with C_in 10 µF X7R close to pin)
   pin 2 GND  → GND
   pin 3 VOUT → 3V3 + C_out 10 µF + per-IC decoupling
@@ -238,10 +238,10 @@ to interpret the datasheet):**
 | 8 | I²C/SPI mode select | in | **tie to GND for SPI mode** (locked; do not float) |
 | 9 | VSS | gnd | GND |
 | 10 | RTS | out | → U7 DE pin (pin 3); see auto-DE wiring below |
-| 11 | CTS | in | tie to GND (unused — auto-flow disabled in firmware so polarity is don't-care) |
+| 11 | CTS | in | **tie permanently to GND** (do NOT leave floating — input pin must have a defined level; auto-flow control is disabled in firmware so polarity is don't-care, but the pin still needs a hard tie) |
 | 12 | TX | out | → U7 SN65HVD75 pin 4 (D) |
 | 13 | RX | in | ← U7 SN65HVD75 pin 1 (R) |
-| 14 | RESET (active-low) | in | 10 kΩ R_uart_strap pull-up to 3V3 (never pulled low after boot) |
+| 14 | RESET (**active-LOW**) | in | 10 kΩ R_uart_strap pull-up to 3V3 (idle-high = chip out of reset, per NXP datasheet). **Do NOT tie to GND** — that holds the chip in permanent reset. (Gemini external review 2026-04-26 mistakenly claimed this pin is active-HIGH; the NXP SC16IS740/750/760 datasheet confirms active-LOW with the standard overscore notation `RESET`.) |
 | 15 | XTAL1 | in | Y1 14.7456 MHz + 18 pF C_xtal to GND |
 | 16 | XTAL2 | out | Y1 14.7456 MHz + 18 pF C_xtal to GND |
 

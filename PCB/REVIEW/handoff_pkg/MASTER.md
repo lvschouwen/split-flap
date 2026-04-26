@@ -15,7 +15,7 @@ combined connector.
    +- F1 fuse 15 A slow-blow (5x20 mm)
    +- TVS SMAJ15A
    +- Q1 P-FET reverse-block (AOD409 or NTD2955, DPAK)
-   +- Z1 BZT52C12 12 V Zener gate→source clamp on Q1 (+ R_q1g 100 Ω, R_q1g2 10 kΩ)
+   +- Z1 BZT52C10 10 V Zener gate→source clamp on Q1 (+ R_q1g 100 Ω, R_q1g2 10 kΩ)
    +- Cbulk 470 uF / 25 V + 100 nF
    |
    +-> VBUS_12V_RAIL (wide pour, 5+ mm trace)
@@ -26,7 +26,7 @@ combined connector.
    |        |        +-> Each combined into the row's 4-pin output (12V + GND + A + B)
    |        |        +-> Per-row PWR LED (post-polyfuse, indicates row 12V present)
    |        |
-   +- U2 buck module K7803-500R3 12->3.3 V -> VCC_3V3 (master logic; switching, ~85-90% efficient — replaces LDO due to 12V→3.3V dissipation hazard)
+   +- U2 buck module K7803-1000R3 12->3.3 V -> VCC_3V3 (master logic; switching, ~85-90% efficient — replaces LDO due to 12V→3.3V dissipation hazard)
                                     |
                                     v
    ESP32-S3-WROOM-1-N16R8
@@ -66,12 +66,14 @@ Each transceiver block:
 - Input connector: **2-pin Phoenix-style screw terminal** (5 mm pitch).
   Robust, accepts bare-wire or terminated cable from any 12 V brick.
 - Reverse-polarity: P-FET (AOD409 or NTD2955 in DPAK) handles 15 A
-  continuous comfortably. **Z1 BZT52C12 12 V Zener clamp on Q1
+  continuous comfortably. **Z1 BZT52C10 10 V Zener clamp on Q1
   gate→source** (cathode → source/+12V_RAIL, anode → gate). AOD409 is
   ±20 V VGS rated so the clamp is not strictly required, but is
-  included for symmetry with the unit Q1 fix and to absorb brick
-  over-voltage. R_q1g 100 Ω gate series + R_q1g2 10 kΩ gate pull-down
-  to GND complete the topology.
+  included for symmetry with the unit Q1 fix (unit Q1 AO3401A needs
+  10 V to stay safely inside ±12 V VGS abs-max under Zener
+  tolerance — a 12 V Zener +10% = 13.2 V puts the FET out of spec).
+  R_q1g 100 Ω gate series + R_q1g2 10 kΩ gate pull-down to GND
+  complete the topology.
 - Input fuse: 15 A slow-blow, 5×20 mm holder.
 - TVS: SMAJ15A across input.
 - Bulk: 470 uF / 25 V + 100 nF for inrush smoothing.
@@ -79,7 +81,7 @@ Each transceiver block:
   package** — Bourns MF-LSMF400/16X-2 or equivalent; **NOT 1812**,
   which does not support 4 A hold), one per row 12 V output.
 - 12 V → 3.3 V for master logic: **switching buck module
-  (K7803-500R3 / R-78E3.3-0.5 / V7803-500, SIP-3 drop-in for L78xx)**,
+  (K7803-1000R3 / R-78E3.3-0.5 / V7803-500, SIP-3 drop-in for L78xx)**,
   fed Kelvin-style from the input rail (before per-row branches) so
   master logic stays stable during row inrush. **Not** a linear LDO —
   12 V→3.3 V at the master's ~150-250 mA load would dissipate ~1.7 W
@@ -87,6 +89,15 @@ Each transceiver block:
 
 Master is the only point of power injection in the system. No row
 bricks. No power distribution board.
+
+**Firmware staggering — HARD REQUIREMENT.** 64 units × 240 mA peak =
+15.36 A simultaneous-coil-energise current, which would nuisance-trip
+the 15 A input fuse on a full-system reset. Master firmware MUST
+stagger motor steps on power-up and during global commands so that
+peak input current stays below 12 A (~50 % units active at once).
+Flagged by Gemini external review 2026-04-26. Don't uprate the fuse —
+the 4 A row polyfuses give per-row fault isolation that uprating the
+input would defeat.
 
 ## ESP32-S3 module
 
