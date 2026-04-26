@@ -2,7 +2,7 @@
 
 ESP32-S3 controller. Drives **4 RS-485 buses** (one per row). 64 units
 total. USB-C native programming. **Sources row power**: takes one 12 V /
-15 A input and outputs 12V + GND + A + B per row on a single 6-pin
+15 A input and outputs 12V + GND + A + B per row on a single 4-pin
 combined connector.
 
 ## Block diagram
@@ -20,7 +20,7 @@ combined connector.
    |        +-> Per-row polyfuses (×4, 4 A hold, 1812 SMD)
    |        |        |
    |        |        +-> 12V_ROW0, 12V_ROW1, 12V_ROW2, 12V_ROW3
-   |        |        +-> Each combined into the row's 6-pin output (pins 1+2 doubled)
+   |        |        +-> Each combined into the row's 4-pin output (12V + GND + A + B)
    |        |        +-> Per-row PWR LED (post-polyfuse, indicates row 12V present)
    |        |
    +- U1 LDO HT7833 12->3.3 V -> VCC_3V3 (master logic)
@@ -33,10 +33,10 @@ combined connector.
        +- RESET button (EN -> GND)
        +- LEDs: PWR, HEARTBEAT, FAULT, ROW0..ROW3 (7 total)
        |
-       +- UART1 -> SN65HVD75 #1 -> Bus 0 (row 0)
-       +- UART2 -> SN65HVD75 #2 -> Bus 1 (row 1)
-       +- UART0 -> SN65HVD75 #3 -> Bus 2 (row 2)
-       +- SPI -> SC16IS740 -> SN65HVD75 #4 -> Bus 3 (row 3)
+       +- UART1 -> SN65HVD75 #1 -> Bus 0 (row 0; nets RS485_A0 / RS485_B0)
+       +- UART2 -> SN65HVD75 #2 -> Bus 1 (row 1; nets RS485_A1 / RS485_B1)
+       +- UART0 -> SN65HVD75 #3 -> Bus 2 (row 2; nets RS485_A2 / RS485_B2)
+       +- SPI -> SC16IS740 -> SN65HVD75 #4 -> Bus 3 (row 3; nets RS485_A3 / RS485_B3)
                 |
                 +- 14.7456 MHz crystal
                 +- IRQ -> ESP32-S3 GPIO
@@ -52,7 +52,7 @@ Each transceiver block:
    - 120 ohm termination at master end (across A/B)
    - 1k bias to 3V3 (A) + 1k bias to GND (B)
    - SM712 ESD across A/B
-   - A/B routed to the 6-pin row output connector
+   - A/B routed to the 4-pin row output connector
 ```
 
 ## Power
@@ -94,7 +94,7 @@ bricks. No power distribution board.
 ## RS-485 paths (×4)
 
 Four identical sub-circuits, one per bus. Each terminates into the same
-6-pin output connector that carries 12 V + GND for that row.
+4-pin output connector that carries 12 V + GND for that row.
 
 Per bus:
 - Transceiver: SN65HVD75DR (3.3 V, half-duplex).
@@ -150,7 +150,7 @@ ESP32-S3 GPIO matrix lets these be remapped.
 
 - 2-layer HASL.
 - Recommended outline: ~100 × 80 mm. Power section needs wide copper
-  pours and the 4× 6-pin output connectors take edge real estate.
+  pours and the 4× 4-pin output connectors take edge real estate.
 - Mounting: 4× M3 corners.
 
 ## Layout notes

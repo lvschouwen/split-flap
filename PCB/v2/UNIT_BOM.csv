@@ -3,7 +3,7 @@ U1,1,STM32G030K6T6,LQFP-32,STMicro STM32G030K6T6,C2040675,Required for 96-bit si
 U2,1,Stepper driver,SOIC-16W,TI TPL7407L,C383290,Footprint accepts ULN2003A as PCBA-time substitute (LCSC C2358)
 U3,1,12V to 3.3V LDO,SOT-89-5,Holtek HT7833,C70358,
 U4,1,RS-485 transceiver,SOIC-8,TI SN65HVD75DR,C57928,
-U5,1,Hall sensor,SOT-23W,Allegro A1101ELHL,C504318,Unipolar latching 100 G op / 45 G rel
+J3,1,Hall sensor connector,JST-XH 3-pin THT,JST B3B-XH-A,C145756,3-pin header for external hall module (KY-003 or similar) on flying lead; sensor positioned by chassis bracket relative to flap drum magnet path
 Q1,1,P-FET reverse-block,SOT-23,Alpha & Omega AO3401,C15127,
 D1,1,LED blue,0805,generic,C2293,HEARTBEAT
 D2,1,LED red,0805,generic,C2286,FAULT
@@ -11,7 +11,7 @@ D3,1,LED yellow,0805,generic,C2298,IDENTIFY indicator (dedicated GPIO)
 D4,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,
 D5,1,RS-485 ESD,SOT-23,Semtech SM712-02HTG,C172881,
 SW1,1,IDENTIFY tact switch,6x6 SMD,generic,C318884,Edge-mounted; commissioning hardware
-PG,4,Pogo pin,Through-hole 1mm tip,Mill-Max 0907 series,n/a (off-shelf),Gold-plated; 1-1.5 mm travel; vertical line on unit underside (12V/A/B/GND)
+PG,4,Pogo pin spring contact,THT drill 1.83 mm pad 2.45 mm,Mill-Max 0906-2-15-20-75-14-11-0,n/a (DigiKey),Primary: Mill-Max 0906-2 (5 mm free / 1-1.4 mm travel / 1.07 mm Au tip / 2 A / 1M cycles). Backup: 0906-1 (same footprint). LCSC fallback: Xinyangze YZ02015095R-01 (LCSC C5157439) with current derate. Gold-plated tip on ENIG bus pad. Vertical line on unit underside (12V/A/B/GND).
 DIN_clip,1,DIN rail clip,M3 mount or snap,generic or 3D-printed,n/a,Asymmetric for polarization; standard 35 mm TS35
 J2,1,Stepper output,JST-XH 4-pin,JST B4B-XH-A,C158012,To 28BYJ-48 motor
 TP,5,Test pads,1.5 mm pad,-,n/a,GND/3V3/RX/TX/RST
@@ -24,8 +24,7 @@ C_decap,4,100 nF,0603 X7R,generic,C14663,MCU + transceiver decoupling
 C_rst,1,100 nF,0603 X7R,generic,C14663,STM32 NRST filter
 C_id,1,100 nF,0603 X7R,generic,C14663,IDENTIFY button debounce
 R_hall,1,10 kohm,0603 1%,generic,C25804,Hall sensor pull-up to 3V3
-R_de,1,1 kohm,0603 1%,generic,C21190,DE driver line series
-R_re,1,1 kohm,0603 1%,generic,C21190,/RE driver line series
+R_de,1,1 kohm,0603 1%,generic,C21190,DE driver line series (PA12 → SN65HVD75 DE; /RE tied to GND so no R_re)
 R_led,3,1 kohm,0603 1%,generic,C21190,LED current limit (HB/FAULT/ID)
 R_id,1,10 kohm,0603 1%,generic,C25804,IDENTIFY button pull-up to 3V3
 R_rst,1,10 kohm,0603 1%,generic,C25804,NRST pull-up

@@ -2,7 +2,7 @@
 
 Per-flap board. Mounts to a 35 mm DIN rail and contacts the row's bus
 PCB via 4 pogo pins on the unit's underside. Drives one 28BYJ-48 12 V
-stepper, homes on an on-board hall sensor, talks to its row's master
+stepper, homes on an off-board hall sensor (3-pin connector), talks to its row's master
 over RS-485. Identifies itself by its STM32 96-bit silicon UID, with a
 manual IDENTIFY button as commissioning hardware.
 
@@ -33,7 +33,7 @@ to the bus, no DIP switches.
    STM32G030K6T6
        |
        +- 4 GPIO -> motor driver inputs
-       +- 1 GPIO <- A1101ELHL hall sensor (open-drain, 10k pull-up to 3V3)
+       +- 1 GPIO <- J3 (3-pin JST-XH) <- KY-003 hall module on flying lead (open-drain, 10k pull-up to 3V3 on PCB)
        +- 1 GPIO -> DE, 1 GPIO -> /RE  ->  SN65HVD75 RS-485 PHY
        +- USART_TX -> SN65HVD75 D
        +- USART_RX <- SN65HVD75 R
@@ -104,8 +104,12 @@ substitute if TPL7407L availability flips.
 
 ## Hall sensor
 
-- A1101ELHL (Allegro), unipolar latching, 100 G op / 45 G release.
-- SOT-23W, output is open-drain, 10 k pull-up to 3.3 V.
+- **Off-board** module (KY-003 or any 3-pin VCC/GND/OUT hall) on a
+  flying lead — same mechanical pattern as v1.
+- Unit PCB has J3 (3-pin JST-XH male, vertical THT, B3B-XH-A) for the
+  cable + 10 k pull-up resistor on the OUT line to 3V3.
+- Sensor sensitive-face alignment to the flap drum magnet is set by
+  the chassis bracket, not the PCB.
 - Single magnet on the flap drum.
 
 ## RS-485 path
@@ -141,7 +145,8 @@ substitute if TPL7407L availability flips.
   spacing, projecting ~3 mm below board.
 - Stepper output: 4-pin JST-XH on opposite edge from DIN rail clip.
 - IDENTIFY button: edge-mounted, accessible after install.
-- Hall sensor: positioned to match v1 magnet path.
+- Hall connector (J3): on a clean edge for cable exit toward the
+  chassis hall bracket. Magnetic alignment is mechanical, not on-PCB.
 - Stack-up: 2-layer HASL.
 
 ## BOM

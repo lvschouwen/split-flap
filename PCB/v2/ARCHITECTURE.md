@@ -160,7 +160,7 @@ indicators before the system tries to display anything.
 | Unit power input | 5 V + 12 V dual rail | 12 V single rail |
 | Unit address source | 4-bit DIP switch (manual config per unit) | 96-bit UID + IDENTIFY button (commissioning) |
 | Distribution | ~30 patch cables per case | per-row daisy-chain harness |
-| Homing sensor | KY-003 module (discrete) | A1101ELHL on-board hall |
+| Homing sensor | KY-003 module (discrete, flying lead) | KY-003 module (discrete, flying lead via 3-pin connector) — same mechanical alignment path as v1 |
 | Unit ESD on bus | none | SM712-02HTG on RS-485 A/B |
 | Connector to bus | JST-XH chained per unit | 4 pogo pins on unit underside (no connector) |
 | Distribution within row | n/a | 2× 300 mm DIN-rail bus PCBs daisy-chained, units clip on |

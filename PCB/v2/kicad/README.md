@@ -3,13 +3,24 @@
 KiCad netlist files (`.net`) for the PCBs. Pure netlist format
 (components + connections, no schematic graphics).
 
+## ⚠️ STALE — do not use as ground truth
+
+The `unit.net` file references the **superseded PA0/PA1/PA2/PA3 USART2
+pin assignment** that was withdrawn 2026-04-25 in favour of USART1 on
+PA9/PA10/PA12 (with `/RE` tied to GND). It has not been regenerated.
+
+The **`SCHEMATIC_*.md` files are the ground truth.** Treat the `.net`
+files as historical artifacts only. A freelancer should build the
+schematic from `SCHEMATIC_UNIT.md`, `SCHEMATIC_BUS.md`, and
+`SCHEMATIC_MASTER.md` directly rather than importing these netlists.
+
 ## Status
 
 | PCB | File | Notes |
 |---|---|---|
-| Bus PCB | `bus_pcb/bus_pcb.net` | 4 nets, 8 nodes |
-| Unit PCB | `unit/unit.net` | ~30 nets, ~80 nodes |
-| Master PCB | not generated | bigger and more complex; generate on request if needed |
+| Bus PCB | `bus_pcb/bus_pcb.net` | 4 nets, 8 nodes — still matches SCHEMATIC_BUS.md |
+| Unit PCB | `unit/unit.net` | **STALE** — uses old PA0–PA3 USART pinout |
+| Master PCB | not generated | spec is large; never machine-generated |
 
 ## Caveat
 

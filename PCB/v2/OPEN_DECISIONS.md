@@ -50,7 +50,26 @@ is fixed:
 - Twisted pair on A/B preferred for noise immunity.
 - Lengths: cut and terminated at build time.
 
-## 4. DIN rail and clip mounting hardware (build-time)
+## 4. Row connector family — DEFERRED (2026-04-26)
+
+The 4-pin row connector at master + bus PCB ends is currently spec'd
+as "4-pin shrouded box header, 2.54 mm" with **LCSC C124378** in the
+BOMs. C124378 is a generic 1×40 male pin header strip — **it has no
+shroud and no key**, so as-spec'd it would not enforce mating polarity.
+
+Real options to lock at fab time:
+- **A. JST-XH 4-pin** (B4B-XH-A, LCSC C158012) — already used on the
+  unit board for the stepper. Keyed crimp housing. 2.5 mm pitch.
+- **B. 2×2 shrouded box header** (2.54 mm IDC). Standard, IDC-ribbon
+  mating, polarised by shroud notch.
+- **C. Molex KK 1×4** — keyed crimp housing, no shroud.
+
+User decision deferred to build-time (2026-04-26). Freelancer should
+NOT order with C124378 as-listed — flag this back to the user before
+fab order. Recommendation when picked: **A (JST-XH)** for BOM
+consolidation with the existing unit-board stepper connector.
+
+## 5. DIN rail and clip mounting hardware (build-time)
 
 - **DIN rail**: standard 35 mm TS35, cut to row length (~600 mm).
 - **Bus PCB mounting**: 2× corner brackets per bus PCB, attaching the
@@ -69,7 +88,7 @@ These are build-time selections; no PCB schematic dependency.
 - **Master programming interface**: USB-C native CDC.
 - **System power**: single 12 V / 15 A brick into master. Master sources
   power to all 4 rows via per-row polyfuses (4 A hold each). One cable
-  per row carries 12V + GND + RS-485 A + B in a 6-pin combined
+  per row carries 12V + GND + RS-485 A + B in a 4-pin combined
   connector.
 - **Master placement**: near the brick (high-current input cable kept
   short).
@@ -83,7 +102,10 @@ These are build-time selections; no PCB schematic dependency.
   rigid backplane.**
 - **Unit MCU**: STM32G030K6T6 (LQFP-32). Required for hardware UID.
 - **Unit motor**: 28BYJ-48 12 V variant.
-- **Hall sensor**: A1101ELHL on-board.
+- **Hall sensor**: off-board 3-pin module (KY-003 or compatible) on a
+  flying lead, plugged into J3 (JST-XH 3-pin) on the unit PCB. Magnet
+  alignment set by chassis bracket, not the PCB. Matches v1 mechanical
+  approach. Resolves 2026-04-26.
 - **Wiring**: per-row daisy-chain harness, 4 conductors (12V, GND, A, B).
 - **Termination**: 120 ohm at master per bus + 120 ohm in a terminator
   plug at far end of each row's harness.

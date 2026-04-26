@@ -11,7 +11,7 @@ PCB design.**
 | U2 | TPL7407L | SOIC-16W | C383290 | Stepper driver primary; ULN2003A drop-in alt: C2358 |
 | U3 | HT7833 | SOT-89-5 | C70358 | 12V→3.3V LDO 500 mA |
 | U4 | SN65HVD75DR | SOIC-8 | C57928 | RS-485 transceiver |
-| U5 | A1101ELHL | SOT-23W | C504318 | Hall sensor |
+| J3 | Hall connector | JST-XH 3-pin male, vertical THT (B3B-XH-A) | C145756 | 3-pin header for external hall sensor module on flying lead (KY-003 or similar). Sensor positioned mechanically by chassis to align with flap drum magnet — hall NOT on-board (matches v1 mechanical alignment path). |
 | Q1 | AO3401A | SOT-23 | C15127 | P-FET reverse-block |
 | D1 | LED blue | 0805 | C2293 | HEARTBEAT |
 | D2 | LED red | 0805 | C2286 | FAULT |
@@ -19,7 +19,7 @@ PCB design.**
 | D4 | SMAJ15A | DO-214AC SMA | C167238 | 12V TVS |
 | D5 | SM712-02HTG | SOT-23 | C172881 | RS-485 ESD |
 | SW1 | Tact switch 6×6 | SMD 6x6x5 | C318884 | IDENTIFY button |
-| PG1-PG4 | Pogo pin spring contact | THT, 1 mm tip dia | n/a | Mill-Max 0907-0-15-20-75-14-11-0 or generic gold-tip ~3 mm length |
+| PG1-PG4 | Pogo pin spring contact | THT (drill 1.83 mm, pad 2.45 mm) | n/a (DigiKey) | **Primary: Mill-Max 0906-2-15-20-75-14-11-0** (5.00 mm free, 1.0–1.4 mm travel, 1.07 mm Au tip, 2 A continuous, 1 M cycles). **Backup: Mill-Max 0906-1-15-20-75-14-11-0** (same footprint, less travel margin). LCSC carries Mill-Max as a courtesy listing — order from DigiKey and ship to JLC for assembly, or hand-solder. **LCSC-only fallback: Xinyangze YZ02015095R-01 (LCSC C5157439)** — derate to 1 A (parallel two pins on the 12 V rail), 10k mate cycles is fine for hobby. |
 | J2 | JST-XH 4-pin male | THT B4B-XH-A | C158012 | Stepper output |
 | C_in | 22 µF / 25 V X7R | 0805 | C45783 | 12V input bulk |
 | C_in2 | 100 nF X7R | 0603 | C14663 | 12V decap |
@@ -29,8 +29,7 @@ PCB design.**
 | C_rst | 100 nF X7R | 0603 | C14663 | NRST filter |
 | C_id | 100 nF X7R | 0603 | C14663 | IDENTIFY button debounce |
 | R_hall | 10 kΩ 1% | 0603 | C25804 | Hall sensor pull-up |
-| R_de | 1 kΩ 1% | 0603 | C21190 | DE driver line series |
-| R_re | 1 kΩ 1% | 0603 | C21190 | /RE driver line series |
+| R_de | 1 kΩ 1% | 0603 | C21190 | DE driver line series (PA12 → SN65HVD75 DE) |
 | R_led (×3) | 1 kΩ 1% | 0603 | C21190 | LED current limit |
 | R_id | 10 kΩ 1% | 0603 | C25804 | IDENTIFY button pull-up |
 | R_rst | 10 kΩ 1% | 0603 | C25804 | NRST pull-up |
@@ -67,33 +66,81 @@ PG4 (bottom pogo, GND) ── PCB-GND plane
 
 ### MCU (STM32G030K6T6, LQFP-32)
 
-| Pin | Net | Notes |
+**⚠️ Verify pin map against STMicro DS12991 Rev 6 Table 13** ("STM32G030KxT
+LQFP32 pin definition") and Table 14 ("Alternate function") **before
+finalizing the schematic.** Two confirmed constraints to design around:
+
+1. **Hardware DE auto-toggle (RS-485 driver-enable)** is available on:
+   - **USART1_RTS_DE_CK** on **PA12** (AF1)
+   - **USART2_RTS_DE_CK** on **PA1** (AF1)
+   - LPUART1 also exposes hardware DE on selected pins.
+2. **PA9/PA10 are remapped to PA11/PA12 by default on the K-suffix
+   package** — the SYSCFG_CFGR1 PA11_RMP / PA12_RMP bits select which
+   die pad is bonded to the package pins. The freelancer must confirm
+   the remap state required to expose USART1_TX / USART1_RX on the
+   chosen package pins.
+
+**Recommended pin assignment** (preferred — uses hardware DE on PA12
+which has no known conflicts on K-32):
+
+| Function | STM32 signal | Alt. function | Notes |
+|---|---|---|---|
+| UART_TX | USART1_TX (PA9, post-remap) | AF1 | Confirm remap bit in SYSCFG_CFGR1 |
+| UART_RX | USART1_RX (PA10, post-remap) | AF1 | Confirm remap bit |
+| UART_DE | USART1_RTS_DE_CK (PA12) | AF1 | Hardware-toggled DE |
+| (no /RE GPIO) | — | — | Tie SN65HVD75 /RE to GND (always-receive); firmware discards TX echo on RX |
+| STEPPER_IN1..4 | PA4 / PA5 / PA6 / PA7 | GPIO | TPL7407L inputs |
+| HALL_IN | PB0 | GPIO + EXTI | Hall sensor with 10 kΩ pull-up |
+| IDENTIFY_BTN | PA8 | GPIO + EXTI | 10 kΩ pull-up + 100 nF debounce |
+| LED_HEARTBEAT | PB1 | GPIO out | sink-driven |
+| LED_FAULT | PB2 | GPIO out | sink-driven |
+| LED_IDENTIFY | PA15 | GPIO out | sink-driven |
+| SWDIO | PA13 | SYS | Test pad |
+| SWCLK | PA14 | SYS | Test pad |
+| NRST | PF2 | reset | 10 kΩ pull-up + 100 nF + SWD pad |
+
+PA0–PA3 left as NC / spare for now — the freelancer should consult
+DS12991 Table 13 to determine whether any of those pads are bonded to
+other functional pads on the K-suffix package; if they are unbonded
+they can be repurposed for analog test pads or future expansion.
+
+**Why not USART2 on PA0/PA1/PA2?** Earlier drafts of this spec used
+PA0/PA1/PA2/PA3 for USART2 TX/RX/DE/RE. That assignment was withdrawn
+because (a) hardware DE on PA12 (USART1) gives a cleaner BOM-and-ROM
+match for the firmware, and (b) the pad-bonding behavior of PA0–PA3
+on K-suffix packages requires datasheet-level verification that has
+not been completed at spec time. The conservative choice is USART1
+with `/RE` tied to GND.
+
+**Pin-by-pin LQFP-32 map** (verify against DS12991 Table 13):
+
+| Pin | Function | Net |
 |---|---|---|
 | 1 | VDD | 3V3 + 100 nF decap |
 | 2 | PC14/OSC32_IN | NC |
 | 3 | PC15/OSC32_OUT | NC |
-| 4 | PF2/NRST | NRST: 10kΩ pull-up to 3V3, 100nF cap to GND, SWD pad |
-| 5 | PA0 | UART_TX (USART2_TX) → SN65HVD75 D pin (via 1kΩ R_de? or direct) |
-| 6 | PA1 | UART_RX (USART2_RX) ← SN65HVD75 R pin |
-| 7 | PA2 | DE → SN65HVD75 DE pin (via 1kΩ R_de) |
-| 8 | PA3 | /RE → SN65HVD75 /RE pin (via 1kΩ R_re) |
+| 4 | PF2/NRST | NRST: 10 kΩ pull-up + 100 nF + SWD pad |
+| 5 | PA0 | NC (spare) — verify pad bonding |
+| 6 | PA1 | NC (spare) — verify pad bonding |
+| 7 | PA2 | NC (spare) — verify pad bonding |
+| 8 | PA3 | NC (spare) — verify pad bonding |
 | 9 | PA4 | STEPPER_IN1 → U2 pin 1 |
 | 10 | PA5 | STEPPER_IN2 → U2 pin 2 |
 | 11 | PA6 | STEPPER_IN3 → U2 pin 3 |
 | 12 | PA7 | STEPPER_IN4 → U2 pin 4 |
-| 13 | PB0 | HALL_IN ← U5 hall output (with 10kΩ R_hall pull-up to 3V3) |
-| 14 | PB1 | LED_HEARTBEAT → D1 anode (via 1kΩ R_led) |
-| 15 | PB2 | LED_FAULT → D2 anode (via 1kΩ R_led) |
+| 13 | PB0 | HALL_IN ← J3 pin 3 (external hall module OUT, 10 kΩ R_hall pull-up to 3V3) |
+| 14 | PB1 | LED_HEARTBEAT → D1 anode (via 1 kΩ R_led) |
+| 15 | PB2 | LED_FAULT → D2 anode (via 1 kΩ R_led) |
 | 16 | VSS | GND |
 | 17 | VDD | 3V3 + 100 nF decap |
-| 18 | PA8 | LED_IDENTIFY → D3 anode (via 1kΩ R_led) |
-| 19 | PA9 | IDENTIFY_BTN ← SW1 (10kΩ pull-up to 3V3, 100nF debounce cap to GND) |
-| 20 | PA10 | NC (or expansion/test) |
-| 21 | PA11 | NC |
-| 22 | PA12 | NC |
+| 18 | PA8 | IDENTIFY_BTN ← SW1 (10 kΩ pull-up + 100 nF debounce) |
+| 19 | PA9 | UART_TX (USART1_TX, AF1) → SN65HVD75 D (pin 4) |
+| 20 | PA10 | UART_RX (USART1_RX, AF1) ← SN65HVD75 R (pin 1) |
+| 21 | PA11 | NC — bonded to PA9 unless remapped (see SYSCFG note above) |
+| 22 | PA12 | UART_DE (USART1_RTS_DE_CK, AF1) → SN65HVD75 DE (pin 3) via 1 kΩ |
 | 23 | PA13/SWDIO | SWDIO test pad |
 | 24 | PA14/SWCLK | SWCLK test pad |
-| 25 | PA15 | NC |
+| 25 | PA15 | LED_IDENTIFY → D3 anode (via 1 kΩ R_led) |
 | 26 | PB3 | NC |
 | 27 | PB4 | NC |
 | 28 | PB5 | NC |
@@ -102,13 +149,10 @@ PG4 (bottom pogo, GND) ── PCB-GND plane
 | 31 | PB8 | NC |
 | 32 | VSS | GND |
 
-Note: USART2 chosen because it has the hardware DE auto-toggle on
-some STM32G030 packages. **Verify** USART selection against
-STM32G030K6T6 datasheet for hardware DE pin availability — alternative
-is USART1 on PA9/PA10 if needed.
-
-If hardware DE is on USART1 instead, swap UART signals to PA9/PA10
-and free PA0-PA3 for other use; rewire IDENTIFY_BTN to a free pin.
+`/RE` is **not** wired to a GPIO — SN65HVD75 pin 2 is tied permanently
+to GND. The firmware listens to its own TX echo and discards it,
+which is standard half-duplex practice and saves a GPIO + a series
+resistor.
 
 ### TPL7407L (stepper driver, SOIC-16W)
 
@@ -142,14 +186,14 @@ on the unit board internally or assume external splice.
 
 | Pin | Function | Net |
 |---|---|---|
-| 1 | R | UART_RX → MCU PA1 |
-| 2 | RE | /RE ← MCU PA3 (via 1kΩ R_re) |
-| 3 | DE | DE ← MCU PA2 (via 1kΩ R_de) |
-| 4 | D | UART_TX ← MCU PA0 |
+| 1 | R | UART_RX → MCU PA10 (USART1_RX) |
+| 2 | /RE | **tied to GND** (always-receive; firmware discards TX echo) |
+| 3 | DE | DE ← MCU PA12 (USART1_RTS_DE_CK) via 1 kΩ R_de |
+| 4 | D | UART_TX ← MCU PA9 (USART1_TX) |
 | 5 | GND | GND |
 | 6 | A | RS485_A → SM712 pin 1 + PG2 (upper-middle pogo) |
 | 7 | B | RS485_B → SM712 pin 3 + PG3 (lower-middle pogo) |
-| 8 | VCC | 3V3 + 100nF decap |
+| 8 | VCC | 3V3 + 100 nF decap |
 
 ### SM712-02HTG (RS-485 ESD, SOT-23)
 
@@ -159,18 +203,31 @@ on the unit board internally or assume external splice.
 | 2 | GND | GND |
 | 3 | I/O2 | RS485_B |
 
-### A1101ELHL (hall sensor, SOT-23W)
+### Hall sensor connector (J3) — 3-pin JST-XH male, vertical THT
 
 | Pin | Function | Net |
 |---|---|---|
 | 1 | VCC | 3V3 |
 | 2 | GND | GND |
-| 3 | OUT | HALL_IN → MCU PB0 (via 10kΩ R_hall pull-up to 3V3) |
+| 3 | OUT | HALL_IN → MCU PB0 (via 10 kΩ R_hall pull-up to 3V3) |
+
+**Hall sensor lives off-board** on a 3-conductor flying lead (matches
+v1 mechanical alignment path). Choice of sensor module is build-time:
+
+- **KY-003** (open-collector hall module — what v1 uses) — open-drain
+  output works directly with the on-board R_hall pull-up.
+- Any other 3-pin hall module (Allegro A1101 breakout, etc.) with the
+  same VCC/GND/OUT pinout.
+
+The unit PCB does not constrain magnet alignment — that is set by the
+chassis bracket holding the hall module relative to the flap drum.
+The PCB just provides the cable interface and signal conditioning
+(R_hall pull-up, optional debounce capacitor on the OUT line).
 
 ### IDENTIFY button (SW1)
 
 ```
-SW1 pin A ── IDENTIFY_BTN net ──┬── MCU PA9
+SW1 pin A ── IDENTIFY_BTN net ──┬── MCU PA8
                                   ├── R_id 10kΩ ── 3V3
                                   └── C_id 100nF ── GND
 SW1 pin B ── GND
@@ -181,7 +238,7 @@ SW1 pin B ── GND
 ```
 3V3 ── R_led 1kΩ ── D1 anode ── D1 cathode ── MCU PB1 (LED_HEARTBEAT, sinks)
 3V3 ── R_led 1kΩ ── D2 anode ── D2 cathode ── MCU PB2 (LED_FAULT)
-3V3 ── R_led 1kΩ ── D3 anode ── D3 cathode ── MCU PA8 (LED_IDENTIFY)
+3V3 ── R_led 1kΩ ── D3 anode ── D3 cathode ── MCU PA15 (LED_IDENTIFY)
 ```
 
 LEDs sink-driven (MCU pulls low to illuminate). Cathode → MCU GPIO,
@@ -211,8 +268,8 @@ PG4 (bottom, GND) ─── GND net
 |---|---|
 | TP1 | GND |
 | TP2 | 3V3 |
-| TP3 | UART_RX (PA1) |
-| TP4 | UART_TX (PA0) |
+| TP3 | UART_RX (PA10) |
+| TP4 | UART_TX (PA9) |
 | TP5 | NRST |
 
 ## Floorplan (rough placement)
@@ -244,7 +301,7 @@ PG4 (bottom, GND) ─── GND net
    │  │ LQFP │                          │
    │  └──────┘                         │
    │                                  │
-   │  U4 SN65HVD75    U5 A1101 hall   │
+   │  U4 SN65HVD75    J3 hall conn    │
    │                                  │
    │  D1 D2 D3                        │
    │  HB FT ID                        │
@@ -256,9 +313,11 @@ PG4 (bottom, GND) ─── GND net
    M-holes at corners (4× M3 clearance)
 ```
 
-Hall sensor (U5) position: match the v1 PCB's hall coordinate
-relative to the flap drum magnet path. Use v1 Gerber drill file
-(`PCB/v1/Gerber_PCB_Splitflap.zip`) as the alignment reference.
+Hall sensor connector (J3) position: place on the unit PCB edge
+where the 3-conductor flying lead can exit cleanly toward the chassis
+bracket holding the hall module. Mechanical alignment of the hall
+module's sensitive face to the flap drum magnet path is set by the
+chassis bracket, not the PCB — same approach as v1.
 
 ## Pogo pin geometry
 
@@ -303,7 +362,8 @@ onto DIN rail.
      U1 STM32G030K6T6 centrally.
    - Place stepper driver U2 near J2 stepper output.
    - Place RS-485 path (U4, D5) near the pogo pin pads.
-   - Place hall sensor U5 at the v1-matching position.
+   - Place hall connector J3 on a clean edge for cable exit toward
+     the chassis hall bracket.
    - Place IDENTIFY button SW1 on the edge so it's accessible after
      install.
    - Add 4 pogo pin mounting holes (1 mm THT pads, on bottom side

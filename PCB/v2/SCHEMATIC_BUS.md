@@ -122,7 +122,7 @@ opening required** (mask is removed over the entire contact zone).
 | Stations per board | 8 |
 | Pitch (centre-to-centre) | 37 mm |
 | First station from left edge | 18 mm |
-| Last station from right edge | 18 mm (37 mm × 7 = 259 mm + 18 + 18 = 295 mm, fits 300 mm board) |
+| Last station from right edge | 18 mm (margin 18 mm + 7×37 mm = 277 mm last-station X; 300 − 277 − 18 = 5 mm right-edge clearance, comfortable fit) |
 
 Across two daisy-chained boards: 16 stations total at 37 mm pitch =
 600 mm row span.

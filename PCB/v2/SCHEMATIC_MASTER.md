@@ -102,47 +102,62 @@ Per-row PWR LED (×4):
 
 ## ESP32-S3 module (U1)
 
-Wire per Espressif's WROOM-1 reference design. Key connections:
+Wire per Espressif's WROOM-1 datasheet (Table 3-1 "Pin Definitions" of
+the ESP32-S3-WROOM-1 datasheet v1.6). Module is 41-pin + EPAD.
 
-| Module pin | Net | Notes |
+**Pin map (verified against datasheet, 2026-04-25):**
+
+| Module pin | Signal | Net | Notes |
+|---|---|---|---|
+| 1, 40, 41, EPAD | GND | GND | All GND pads tied to plane (only these 4 — earlier doc revisions over-counted) |
+| 2 | 3V3 | 3V3 | + 100 nF + 22 µF decap close to module |
+| 3 | EN | EN | 10 kΩ pull-up to 3V3 + SW2 (RST button to GND) + 1 nF cap to GND |
+| 4 | IO4 | UART2_/RE | → U6 SN65HVD75 pin 2 (/RE) via 1 kΩ |
+| 5 | IO5 | UART2_TX | → U6 SN65HVD75 pin 4 (D) |
+| 6 | IO6 | UART2_RX | ← U6 SN65HVD75 pin 1 (R) |
+| 7 | IO7 | UART2_DE | → U6 SN65HVD75 pin 3 (DE) via 1 kΩ |
+| 8 | IO15 | UART1_/RE | → U5 SN65HVD75 pin 2 |
+| 9 | IO16 | UART1_DE | → U5 SN65HVD75 pin 3 |
+| 10 | IO17 | UART1_TX | → U5 SN65HVD75 pin 4 |
+| 11 | IO18 | UART1_RX | ← U5 SN65HVD75 pin 1 |
+| 12 | IO8 | (spare) | NC |
+| 13 | IO19 | USB_DM | → U8 USBLC6 + USB-C D- |
+| 14 | IO20 | USB_DP | → U8 USBLC6 + USB-C D+ |
+| 15 | IO3 | strap | **Strapping pin** — add 10 kΩ pull-up to 3V3 to keep USB-JTAG functional by default |
+| 16 | IO46 | strap | **Strapping pin — must be LOW at boot.** Add explicit external 10 kΩ pull-down to GND on this pin. Internal pull-down is not always reliable across resets. |
+| 17 | IO9 | SC16IS740_IRQ | ← U3 IRQ pin (open-drain, 10 kΩ pull-up to 3V3) |
+| 18 | IO10 | SC16IS740_CS | → U3 CS pin |
+| 19 | IO11 | SC16IS740_MOSI | → U3 SI pin |
+| 20 | IO12 | SC16IS740_SCK | → U3 SCK pin |
+| 21 | IO13 | SC16IS740_MISO | ← U3 SO pin |
+| 22 | IO14 | (spare) | NC |
+| 23 | IO21 | (spare/test) | NC |
+| 24 | IO47 | LED_FAULT | → D3 cathode (anode → 3V3 via R_led 1 kΩ) |
+| 25 | IO48 | LED_HEARTBEAT | → D2 cathode (anode → 3V3 via R_led 1 kΩ) |
+| 26 | IO45 | strap | Leave default per WROOM-1 datasheet (sets VDD_SPI level — module-internal). For N16R8 the module-internal circuitry pulls IO45 to a defined state. |
+| 27 | IO0 | BOOT | **Strapping pin — must be HIGH at boot.** 10 kΩ pull-up to 3V3 + SW1 (BOOT button to GND). |
+| 28-35 | IO35-IO42 | (spare) | NC (IO35-IO37 are used internally for SPI flash/PSRAM on N16R8 — do not connect externally) |
+| 36 | RXD0 (IO44) | UART0_RX | → U4 SN65HVD75 pin 1 (R) |
+| 37 | TXD0 (IO43) | UART0_TX | → U4 SN65HVD75 pin 4 (D) |
+| 38 | IO2 | UART0_/RE | → U4 SN65HVD75 pin 2 (/RE) via 1 kΩ |
+| 39 | IO1 | UART0_DE | → U4 SN65HVD75 pin 3 (DE) via 1 kΩ |
+
+**UART0 path (Bus 0)**: TXD0/RXD0 share the boot console UART. After
+boot the firmware can either keep them as the application UART (and
+either disable boot console output or accept its presence on the
+RS-485 bus during boot) or remap UART0 to other GPIOs via the GPIO
+matrix. Recommended layout: route IO43/IO44 to U4 transceiver and
+provide test pads so a USB-serial dongle can also tap UART0 during
+bring-up.
+
+**Strap pin summary** (per WROOM-1 datasheet Table 2-4):
+
+| Pin | Required boot state | Implementation |
 |---|---|---|
-| 1, 16, 25, 26, 39, 42 (and pad) | GND | All GND pins tied to plane |
-| 2 | 3V3 | + 100 nF + 22 µF decap close to module |
-| 3 | EN | 10 kΩ pull-up to 3V3 + SW2 (RST button to GND) + 1 nF cap to GND |
-| 4 (IO4) | UART2_/RE | → U6 SN65HVD75 pin 2 (/RE) via 1 kΩ |
-| 5 (IO5) | UART2_TX | → U6 SN65HVD75 pin 4 (D) |
-| 6 (IO6) | UART2_RX | ← U6 SN65HVD75 pin 1 (R) |
-| 7 (IO7) | UART2_DE | → U6 SN65HVD75 pin 3 (DE) via 1 kΩ |
-| 8 (IO15) | UART1_/RE | → U5 SN65HVD75 pin 2 |
-| 9 (IO16) | UART1_DE | → U5 SN65HVD75 pin 3 |
-| 10 (IO17) | UART1_TX | → U5 SN65HVD75 pin 4 |
-| 11 (IO18) | UART1_RX | ← U5 SN65HVD75 pin 1 |
-| 13 (IO19) | USB_DM | → U8 USBLC6 + USB-C D- |
-| 14 (IO20) | USB_DP | → U8 USBLC6 + USB-C D+ |
-| 17 (IO46) | strap | leave default (pull-down to 0 for normal boot) |
-| 18 (IO9) | SC16IS740_IRQ | ← U3 IRQ pin (open-drain, 10 kΩ pull-up to 3V3) |
-| 19 (IO10) | SC16IS740_CS | → U3 CS pin |
-| 20 (IO11) | SC16IS740_MOSI | → U3 SI pin |
-| 21 (IO12) | SC16IS740_SCK | → U3 SCK pin |
-| 22 (IO13) | SC16IS740_MISO | ← U3 SO pin |
-| 24 (IO21) | (spare/test) | NC |
-| 37 (IO47) | LED_FAULT | → D3 cathode (anode → 3V3 via R_led 1 kΩ) |
-| 38 (IO48) | LED_HEARTBEAT | → D2 cathode (anode → 3V3 via R_led 1 kΩ) |
-| 40 (IO45) | strap | leave default per WROOM-1 datasheet (sets VDD_SPI level — module-internal) |
-| 41 (IO0) | BOOT | 10 kΩ pull-up to 3V3 + SW1 (BOOT button to GND) |
-
-UART0 (free pins on the ESP32-S3 GPIO matrix — IO43, IO44 by default
-for boot UART but can be remapped):
-
-| Net | Default GPIO |
-|---|---|
-| UART0_TX | IO43 |
-| UART0_RX | IO44 |
-| UART0_DE | IO42 |
-| UART0_/RE | IO41 |
-
-UART0 connects to U4 SN65HVD75 (Bus 0). If IO43/44 used for boot
-console, can be remapped to other GPIOs at boot via firmware.
+| IO0 | HIGH (SPI boot) | 10 kΩ pull-up + BOOT button to GND |
+| IO3 | HIGH (USB-JTAG enabled) | 10 kΩ pull-up to 3V3 |
+| IO45 | module-internal | leave default (no external pull) |
+| IO46 | LOW | 10 kΩ pull-down to GND (explicit, do not rely on internal) |
 
 ## USB-C (J2 + U8 USBLC6-2SC6)
 
@@ -174,41 +189,74 @@ Add 1 µF decap on the VBUS rail at U8.
 
 ## SC16IS740 (U3) UART expander
 
+**⚠️ Verify pin numbering directly against NXP datasheet Figure 5 +
+Table 4** (`SC16IS740_750_760.pdf`). The TSSOP-16 IPW pinout was not
+extractable as plain text during spec authoring. Confirmed facts (do
+not deviate):
+
+- **Pin 1 = VDD (Vsupply, 3V3 main supply)**
+- **Pin 5 = XTAL1, Pin 6 = XTAL2** (NOT pins 3/4 as some early drafts had)
+- **Pin 15 = VSS (GND)**
+- **Pin 16 = VDD_io (3V3 logic-level supply)**
+- The four SPI signals (CS, SI/MOSI, SO/MISO, SCLK) are 4 consecutive
+  pins; IRQ is one pin; RX/TX/CTS/RTS are 4 consecutive pins; RESET
+  is near the XTAL pins. Pull these from Figure 5.
+
+**Connections (by signal, pin numbers per datasheet Table 4):**
+
+| Signal | Direction | Net |
+|---|---|---|
+| VDD (pin 1) | in | 3V3 + 100 nF decap |
+| XTAL1 (pin 5) | in | Y1 14.7456 MHz + 18 pF C_xtal to GND |
+| XTAL2 (pin 6) | out | Y1 14.7456 MHz + 18 pF C_xtal to GND |
+| VSS (pin 15) | gnd | GND |
+| VDD_io (pin 16) | in | 3V3 + 100 nF decap |
+| RESET (active-low) | in | 10 kΩ R_uart_strap pull-up to 3V3 (never pulled low after boot) |
+| CS | in | ← ESP32-S3 IO10 |
+| SI (MOSI) | in | ← ESP32-S3 IO11 |
+| SO (MISO) | out | → ESP32-S3 IO13 |
+| SCLK | in | ← ESP32-S3 IO12 |
+| IRQ (open-drain, active-low) | out | → ESP32-S3 IO9 with 10 kΩ pull-up to 3V3 |
+| RX | in | ← U7 SN65HVD75 pin 1 (R) |
+| TX | out | → U7 SN65HVD75 pin 4 (D) |
+| CTS | in | tie to GND (unused — auto-flow disabled in firmware so polarity is don't-care, GND keeps it inactive on both polarities) |
+| RTS | out | → U7 DE pin (pin 3); see auto-DE wiring below |
+
+### Bus 3 transceiver (U7) DE/RE wiring — design-correct
+
+Earlier drafts wired RTS to **both** DE and /RE simultaneously. This
+is **incorrect**: DE is active-high and /RE is active-low — one signal
+cannot drive both correctly without an inverter. Corrected wiring:
+
 ```
-U3 SC16IS740IPW (TSSOP-16):
-  pin 1 (Vsupply)  ── 3V3 + 100 nF
-  pin 2 (NC)       ── NC
-  pin 3 (XTAL1)    ── Y1 + 18 pF C_xtal to GND
-  pin 4 (XTAL2)    ── Y1 + 18 pF C_xtal to GND
-  pin 5 (RESET)    ── 10 kΩ R_uart_strap pull-up to 3V3
-  pin 6 (CS)       ← ESP32-S3 IO10
-  pin 7 (SI/MOSI)  ← ESP32-S3 IO11
-  pin 8 (SO/MISO)  → ESP32-S3 IO13
-  pin 9 (SCLK)     ← ESP32-S3 IO12
-  pin 10 (IRQ)     → ESP32-S3 IO9 (open-drain, 10 kΩ pull-up)
-  pin 11 (RX)      ← U7 SN65HVD75 pin 1 (R)
-  pin 12 (TX)      → U7 SN65HVD75 pin 4 (D)
-  pin 13 (CTS)     ── 10 kΩ R_uart_strap pull-up (unused, tie inactive)
-  pin 14 (RTS)     ── (unused, leave NC or use as DE for U7)
-  pin 15 (GND)     ── GND
-  pin 16 (Vdd_io)  ── 3V3 + 100 nF
+U7 (SN65HVD75, Bus 3):
+  pin 1 (R)   → SC16IS740 RX (auto-routed via firmware)
+  pin 2 (/RE) ── tie permanently to GND (always-receive mode)
+  pin 3 (DE)  ← SC16IS740 RTS (auto-driven)
+  pin 4 (D)   ← SC16IS740 TX
+  pin 5 (GND), 6 (A), 7 (B), 8 (Vcc) — see RS-485 path section
 ```
 
-For the 4th RS-485 path (Bus 3) DE control: SC16IS740's RTS pin can
-be configured as auto-RS-485 direction (firmware-set bit). Wire RTS
-(pin 14) to U7 SN65HVD75 DE+/RE pins:
+`/RE` tied low means U7's receiver is **always enabled**. While master
+is transmitting on Bus 3, the master's own UART will hear its own TX
+echo on the RX line — the firmware MUST discard echoed bytes during
+TX windows. This is standard half-duplex RS-485 practice and avoids
+the inverter / extra GPIO that the original wiring would have needed.
 
-```
-U7 (SN65HVD75 Bus 3):
-  pin 1 (R)  → SC16IS740 RX (pin 11)
-  pin 2 (/RE) ── SC16IS740 RTS (pin 14)  -- inverted for /RE
-  pin 3 (DE)  ── SC16IS740 RTS (pin 14)
-  pin 4 (D)  ← SC16IS740 TX (pin 12)
-```
+### Firmware setup for auto-DE on RTS
 
-(If split DE/RE control is preferred, use a separate ESP32-S3 GPIO
-for /RE and tie DE to RTS only. Or invert RTS via a tiny logic gate
-or transistor.)
+The SC16IS740 implements auto-RS-485 direction control via the
+**EFCR (Extra Features Control Register)**:
+- **EFCR bit 4 = 1** → enable auto-RS-485 RTS control. Transmitter
+  asserts RTS while the TX FIFO has data and de-asserts after the
+  last stop bit shifts out.
+- **EFCR bit 5 = 1** → invert RTS polarity so DE goes active-high
+  during TX (which matches the SN65HVD75 DE polarity).
+- **EFR bits 6:7 = 0** → disable hardware flow control (otherwise
+  RTS is repurposed and auto-DE doesn't work).
+
+These are register-level firmware settings; no hardware change. They
+are listed here so the schematic + firmware stay coherent.
 
 ## RS-485 paths (×4 identical sub-circuits)
 
@@ -302,7 +350,9 @@ SW2 (RST button):
 Layout principles:
 - Power input (J1, F1, Q1, TVS, bulk) along the top edge.
 - ESP32-S3 module roughly centred. Antenna keep-out per WROOM-1
-  datasheet (no copper, components, or traces under the antenna area).
+  datasheet section 7.2: **18.6 mm × 5 mm rectangle** under the
+  antenna area extending past the module's PCB edge. No copper,
+  components, traces, or vias inside this rectangle on either layer.
 - 4 RS-485 PHYs in a row, each near its corresponding output
   connector at the bottom edge.
 - Per-row polyfuses near the master power section, distributing 12V
@@ -375,8 +425,9 @@ crosstalk shielding.
 ## Verification checklist
 
 - [ ] All LCSC parts verified in catalogue.
-- [ ] WROOM-1 antenna keep-out present (no copper or components
-      within the keep-out rectangle).
+- [ ] WROOM-1 antenna keep-out present: **18.6 × 5 mm rectangle**
+      extending past the module edge with no copper, components,
+      traces, or vias on either layer.
 - [ ] EN pin (chip enable) has 10 kΩ pull-up + 1 nF cap (per
       Espressif reference).
 - [ ] BOOT button pulls IO0 to GND when pressed.

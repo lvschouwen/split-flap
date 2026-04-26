@@ -59,8 +59,8 @@ are in the **middle** (narrow):
   BOTTOM edge of PCB
 ```
 
-Trace centre-to-centre spacing matches pogo pin pitch on the unit (e.g.,
-8 mm between adjacent traces, ~24 mm total span).
+Trace centre-to-centre spacing matches pogo pin pitch on the unit:
+**8 mm centre-to-centre between adjacent traces**, ~24 mm total span.
 
 The wide 12V/GND outside traces also act as guard rails for the
 differential A/B pair in the middle, giving the bus a clean
@@ -129,8 +129,8 @@ bus PCB trace pitch:
 | Pin | Net | Pogo position |
 |---|---|---|
 | 1 | 12V | top (matches outer-top trace) |
-| 2 | A | upper-middle |
-| 3 | B | lower-middle |
+| 2 | RS485_A | upper-middle |
+| 3 | RS485_B | lower-middle |
 | 4 | GND | bottom (matches outer-bottom trace) |
 
 Spacing: ~8 mm between adjacent pins, ~24 mm total span.
