@@ -68,7 +68,7 @@ expander, 15 A power input.
                 │ Q1, F1, │   row    debug,  ── UART2 ── PHY2 ── J4 (Bus 1)
                 │ TVS,    │   poly-  IO map) ── SPI    ── SC16  ── PHY4 ── J6 (Bus 3)
                 │ Cbulk   │   fuses)            (4th UART expander)
-                │ HT7833  │
+                │ K7803   │
                 +─────────+
 ```
 

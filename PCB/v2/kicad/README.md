@@ -7,7 +7,10 @@ KiCad netlist files (`.net`) for the PCBs. Pure netlist format
 
 The `unit.net` file references the **superseded PA0/PA1/PA2/PA3 USART2
 pin assignment** that was withdrawn 2026-04-25 in favour of USART1 on
-PA9/PA10/PA12 (with `/RE` tied to GND). It has not been regenerated.
+PA9/PA10/PA12 (with `/RE` tied to GND), and still references the
+**HT7833 LDO** that was replaced with **LDL1117S33** on the same date
+(HT7833 = 6.5 V max VIN, would be destroyed at 12 V). It has not been
+regenerated.
 
 The **`SCHEMATIC_*.md` files are the ground truth.** Treat the `.net`
 files as historical artifacts only. A freelancer should build the

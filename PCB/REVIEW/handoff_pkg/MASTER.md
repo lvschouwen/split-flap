@@ -15,11 +15,12 @@ combined connector.
    +- F1 fuse 15 A slow-blow (5x20 mm)
    +- TVS SMAJ15A
    +- Q1 P-FET reverse-block (AOD409 or NTD2955, DPAK)
+   +- Z1 BZT52C12 12 V Zener gate→source clamp on Q1 (+ R_q1g 100 Ω, R_q1g2 10 kΩ)
    +- Cbulk 470 uF / 25 V + 100 nF
    |
    +-> VBUS_12V_RAIL (wide pour, 5+ mm trace)
    |        |
-   |        +-> Per-row polyfuses (×4, 4 A hold, 1812 SMD)
+   |        +-> Per-row polyfuses (×4, 4 A hold, 2920 SMD)
    |        |        |
    |        |        +-> 12V_ROW0, 12V_ROW1, 12V_ROW2, 12V_ROW3
    |        |        +-> Each combined into the row's 4-pin output (12V + GND + A + B)
@@ -65,7 +66,12 @@ Each transceiver block:
 - Input connector: **2-pin Phoenix-style screw terminal** (5 mm pitch).
   Robust, accepts bare-wire or terminated cable from any 12 V brick.
 - Reverse-polarity: P-FET (AOD409 or NTD2955 in DPAK) handles 15 A
-  continuous comfortably.
+  continuous comfortably. **Z1 BZT52C12 12 V Zener clamp on Q1
+  gate→source** (cathode → source/+12V_RAIL, anode → gate). AOD409 is
+  ±20 V VGS rated so the clamp is not strictly required, but is
+  included for symmetry with the unit Q1 fix and to absorb brick
+  over-voltage. R_q1g 100 Ω gate series + R_q1g2 10 kΩ gate pull-down
+  to GND complete the topology.
 - Input fuse: 15 A slow-blow, 5×20 mm holder.
 - TVS: SMAJ15A across input.
 - Bulk: 470 uF / 25 V + 100 nF for inrush smoothing.

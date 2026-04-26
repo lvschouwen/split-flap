@@ -27,7 +27,7 @@ to the bus, no DIP switches.
        |    [TPL7407L primary, ULN2003A footprint-compatible fallback]
        |        |
        |        v
-       |    4-pin JST-XH -> 28BYJ-48 12 V stepper
+       |    5-pin JST-XH -> 28BYJ-48 12 V stepper (4 coils + +12 V on pin 5)
        |
        +-> U3 LDO LDL1117S33 (SOT-223, 40V max VIN) 12->3.3 V -> VCC_3V3
                                           |

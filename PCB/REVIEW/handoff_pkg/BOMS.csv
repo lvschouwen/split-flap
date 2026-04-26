@@ -1,6 +1,11 @@
 # Combined BOM — split-flap v2 hand-off package
 # Three sections: MASTER, UNIT, BUS_PCB. Original CSVs at PCB/v2/{MASTER,UNIT,BUS_PCB}_BOM.csv.
 # Revision: 2026-04-26 (post Gemini + ChatGPT review merge)
+#
+# PROCUREMENT NOTE: the `qty` column is PER-BOARD. To get system totals,
+# multiply each row's qty by the section multiplier in the section header
+# (×1 for MASTER, ×64 for UNIT, ×8 for BUS_PCB). Example: UNIT C_decap qty=4
+# → system total = 4 × 64 = 256 caps. Add 5–10% spares on small passives.
 
 ###############################################################################
 # MASTER PCB BOM (×1 per system)
@@ -76,11 +81,11 @@ D3,1,LED yellow,0805,generic,C2298,IDENTIFY indicator (dedicated GPIO)
 D4,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,"Unidirectional. Cathode (banded) → +12V, anode → GND. Reversed = forward-bias = dead short."
 D5,1,RS-485 ESD,SOT-23,Semtech SM712-02HTG,C172881,
 SW1,1,IDENTIFY tact switch,6x6 SMD,generic,C318884,Edge-mounted; commissioning hardware
-PG,4,Pogo pin spring contact,THT drill 1.83 mm pad 2.45 mm,Mill-Max 0906-2-15-20-75-14-11-0,n/a (DigiKey),"Primary: Mill-Max 0906-2 (5 mm free / 1-1.4 mm travel / 1.07 mm Au tip / 2 A / 1M cycles). Backup: 0906-1. LCSC fallback: Xinyangze YZ02015095R-01 (C5157439) with current derate. **4 pins only — no PG_KEY 5th polarization pogo** (collided with PG1; polarization moved to DIN clip)."
+PG,4,Pogo pin spring contact,THT drill 1.83 mm pad 2.45 mm,Mill-Max 0906-2-15-20-75-14-11-0,n/a (DigiKey),"**Through-hole mount** (NOT SMD). Primary: Mill-Max 0906-2 (5 mm free / 1-1.4 mm travel / 1.07 mm Au tip / 2 A / 1M cycles). Backup: 0906-1. LCSC fallback: Xinyangze YZ02015095R-01 (C5157439) with current derate. **4 pins only — no PG_KEY 5th polarization pogo** (collided with PG1; polarization moved to DIN clip)."
 DIN_clip,1,DIN rail clip 35mm TS35,3D-printed (MakerWorld STL),user-supplied STL,n/a,"**Asymmetric clip is the ONLY polarization mechanism** — only one orientation engages the rail. Bolts via 4× M3 holes at unit board (3,3) (3,77) (37,77) (37,3). One printed per unit (64 + spares). MakerWorld STL link in build notes."
 J2,1,Stepper output,JST-XH **5-pin**,JST B5B-XH-A,C158013,To 28BYJ-48 motor — pins 1-4 = TPL7407L OUT1-OUT4 (orange/yellow/pink/blue), pin 5 = +12 V common (red wire). 5-pin avoids 64× hand-splicing the +12 V wire into the chassis harness.
-TP,5,Test pads,1.5 mm pad,-,n/a,GND/3V3/RX/TX/RST
-TP_DBG,4,SWD pads,1.5 mm pad,-,n/a,SWDIO+SWCLK+RST+GND
+TP,5,Test pads,1.5 mm pad,-,n/a,GND/3V3/RX/TX/RST (pad only — no procurement)
+TP_DBG,4,SWD pads,1.5 mm pad,-,n/a,SWDIO+SWCLK+RST+GND (pad only — no procurement)
 C_in,1,22 uF / 25 V,1206 X7R,generic,C45783 (CHECK 1206; 0805 22uF/25V/X7R is unobtainable),12 V input bulk — 1206 required for X7R availability at 22 uF / 25 V; 0805 in this combination is effectively vaporware on JLC
 C_in2,1,100 nF,0603 X7R,generic,C14663,12 V input decap
 C_ldo_in,1,10 uF / 25 V,0805 X7R,generic,C19702,LDO input
@@ -100,5 +105,5 @@ R_rst,1,10 kohm,0603 1%,generic,C25804,NRST pull-up
 ref,qty,value,footprint,mfg_part,lcsc_check,notes
 J_in,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),"Connector ""in"" (master side or chain-from-previous). 3.96 mm pitch, ≥5 A per pin (matches 4 A row fuse). NOT JST-XH (3 A undersized). Locked across system per OPEN_DECISIONS #4."
 J_out,1,JST-VH 4-pin,THT B4P-VH-A,JST B4P-VH-A,C144392 (CHECK),"Connector ""out"" (chain-to-next or terminator end). Same MPN as J_in."
-PCB,1,Bus PCB,300 mm x 32 mm,custom,n/a,2-layer FR-4 ENIG plating; 4 traces (12V/A/B/GND) at y = 4 / 12 / 20 / 28 mm from top edge with widened pogo contact zones + isolated PG_KEY ENIG polarization pad (3x3 mm at y = 2 mm) at 8 stations per board. Width 32 mm (was 30) so trace Y-offsets exactly match unit pogo geometry.
+PCB,1,Bus PCB,300 mm x 32 mm,custom,n/a,2-layer FR-4 ENIG plating; 4 traces (12V/A/B/GND) at y = 4 / 12 / 20 / 28 mm from top edge with widened pogo contact zones at 8 stations per board. **No PG_KEY pad — polarization is enforced by the unit's asymmetric DIN clip** (see UNIT BOM DIN_clip). Width 32 mm (was 30) so trace Y-offsets exactly match unit pogo geometry.
 DIN_clip,2,DIN rail mount bracket,corner brackets,generic,n/a,For attaching bus PCB to 35 mm DIN rail TS35 (off-shelf or 3D-printed)
