@@ -135,7 +135,7 @@ substitute if TPL7407L availability flips.
 
 ## Mechanical
 
-- Outline: ~75 × 35 mm to match v1 envelope. Existing case mechanics
+- Outline: **80 × 40 mm** identical to v1 (chassis drop-in). Existing case mechanics
   drive this.
 - Mounting holes: same 4 positions as v1 (or a DIN rail clip mount if
   case is being redesigned).

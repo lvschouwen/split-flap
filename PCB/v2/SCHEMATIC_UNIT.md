@@ -276,74 +276,111 @@ PG4 (bottom, GND) ─── GND net
 | TP4 | UART_TX (PA9) |
 | TP5 | NRST |
 
-## Floorplan (rough placement)
+## Floorplan (rough placement) — chassis-compatible with v1
+
+The v2 unit PCB outline is **80 × 40 mm**, identical to v1
+(`PCB/v1/Gerber_PCB_Splitflap.zip`), with the same 4-corner mounting
+hole pattern. v2 is a chassis drop-in replacement.
+
+**Hard placement constraints (preserve v1 chassis cable runs):**
+- **J2 stepper output**: top-left short edge, same XY as v1's
+  "28BYJ-48 Stepper 12V" 3-pin header.
+- **J3 hall sensor connector**: just below J2, same XY as v1's
+  "Magnet Sensor" 3-pin header.
+- **Mounting holes**: 4 corners; exact XY extracted from v1 Gerber
+  drill file (`Gerber_Drill_PTH.DRL` in the v1 zip).
+
+**Layer assignments (preserve v1 heritage):**
+- **Front (top)**: connectors (J2, J3), IDENTIFY button (SW1) on a
+  visible edge, status LEDs (D1/D2/D3), SWD test pads.
+- **Back (bottom)**: stepper driver U2 TPL7407L (drops directly into
+  v1 ULN2003A's SOIC-16W footprint, top-right back). LDO U3 HT7833
+  near v1's AMS1117 position (note: SOT-89-5, **not** SOT-223 —
+  needs a new pad, AMS1117 footprint will not work). MCU U1
+  STM32G030K LQFP-32, RS-485 transceiver U4 SN65HVD75, AO3401, ESD,
+  decaps — placed wherever leaves a clear ~10 mm vertical channel
+  through the long-axis centre for the pogo column.
 
 ```
-                    75 mm
-   +─────────────────────────────────+
-   │                                  │ <-- TOP edge
-   │  Pogo pins (underside, view as below)
-   │  ●  PG1  12V    (top)            │
-   │                                  │
-   │  ●  PG2  A      (upper-middle)   │
-   │  ●  PG3  B      (lower-middle)   │
-   │                                  │
-   │  ●  PG4  GND    (bottom)         │
-   │                                  │
-   +─────────────────────────────────+
-                                       
-   On unit's component side (top):
-   +─────────────────────────────────+
-   │ J2 (motor)                       │
-   │  ●●●●                            │
-   │   |                              │
-   │   v                              │ 35 mm
-   │  U2 TPL7407L                     │
-   │                                  │
-   │  ┌──────┐                         │
-   │  │ U1   │ STM32G030K6T6           │
-   │  │ LQFP │                          │
-   │  └──────┘                         │
-   │                                  │
-   │  U4 SN65HVD75    J3 hall conn    │
-   │                                  │
-   │  D1 D2 D3                        │
-   │  HB FT ID                        │
-   │                                  │
-   │  SW1 IDENTIFY  TP_SWD pads       │
-   │                                  │
-   +─────────────────────────────────+
-   
-   M-holes at corners (4× M3 clearance)
+   ─────────────────────── 80 mm ───────────────────────
+  ┌──○─────────────────────────────────────────────○──┐
+  │ J2 28BYJ-48                                       │
+  │  ●●●                                              │
+  │ J3 hall                            (FRONT side)   │   40 mm
+  │  ●●●                                              │
+  │                                                   │
+  │   SW1 IDENT       (PG column on back layer        │
+  │   D1 D2 D3        directly below — see below)     │
+  │   HB FT ID                                        │
+  │                                                   │
+  │   TP_SWD pads                                     │
+  ├──○─────────────────────────────────────────────○──┤
+
+   ────────────── BACK side (component layer) ──────────
+  ┌──○─────────────────────────────────────────────○──┐
+  │                                                   │
+  │              [U2 TPL7407L SOIC-16W]               │   40 mm
+  │              (kept in v1 ULN2003A spot)           │
+  │                                                   │
+  │   [U1 STM32G030] ●  PG_KEY (y=+14, polarization)  │
+  │                  ●  PG1 12V    (y=+12)            │
+  │   [U4 SN65HVD75] ●  PG2 A      (y= +4)            │
+  │                  ●  PG3 B      (y= -4)            │
+  │   [U3 HT7833]    ●  PG4 GND    (y=-12)            │
+  │   [Q1, D4 TVS,   ↑                                │
+  │    D5 ESD]       column at long-axis CENTRE       │
+  │                  (x = 40 mm)                      │
+  ├──○─────────────────────────────────────────────○──┤
+   ───────────────────── 80 mm ─────────────────────────
+
+  ○ = mounting hole, M3 clearance, position copied from v1
 ```
 
-Hall sensor connector (J3) position: place on the unit PCB edge
-where the 3-conductor flying lead can exit cleanly toward the chassis
-bracket holding the hall module. Mechanical alignment of the hall
-module's sensitive face to the flap drum magnet path is set by the
-chassis bracket, not the PCB — same approach as v1.
+Hall sensor connector (J3) position: matches v1's "Magnet Sensor"
+header. The 3-conductor flying lead exits the same edge it does on
+v1, so existing chassis bracket + cable run is unchanged.
+
+**DIN rail clip on the back** — clips onto the rail with the unit's
+long axis (80 mm) parallel to the rail. The bus PCB sits in the
+rail channel directly above the clip; pogo pins on the back at
+long-axis centre contact the bus PCB's contact stations.
 
 ## Pogo pin geometry
 
-4 through-hole pogo pins on the unit's **bottom layer** projecting
-downward by ~3 mm:
+5 through-hole pogo pins on the unit's **bottom layer**, dead-centre
+on the long axis (`x = 40 mm` on an 80 × 40 mm board, or `x = 0` if
+origin is the board centre). 4 main power/signal pogos in a vertical
+line + 1 polarization key:
 
-| Pin | X position (relative to board centre) | Y position (vertical line) |
-|---|---|---|
-| PG1 (12V) | 0 (centred) | +12 mm (top edge) |
-| PG2 (A) | 0 | +4 mm |
-| PG3 (B) | 0 | -4 mm |
-| PG4 (GND) | 0 | -12 mm (bottom edge) |
+| Pin | X (centred on long axis) | Y (along short axis) | Function |
+|---|---|---|---|
+| PG1 | 0 | +12 mm | 12V |
+| PG2 | 0 |  +4 mm | RS485_A |
+| PG3 | 0 |  -4 mm | RS485_B |
+| PG4 | 0 | -12 mm | GND |
+| PG_KEY | 0 | +14 mm | Polarization (no electrical function) |
 
-Spacing matches bus PCB trace centre-to-centre pitch (8 mm). Pogo
-pin tips contact the bus PCB ENIG-plated zones when unit is clipped
-onto DIN rail.
+Spacing matches bus PCB trace centre-to-centre pitch (8 mm).
+
+**PG_KEY at y=+14 mm** breaks the up/down symmetry: in normal install
+it lands on a matching ENIG keying pad on the bus PCB; if the unit is
+mounted reversed (180° in-plane rotation), PG_KEY lands at y=-14 mm
+on bare FR-4, so the unit physically does not seat — protecting
+against the 12 V → GND short that a symmetric 4-pogo install would
+allow.
+
+**Centred for DIN rail mounting**: the rail runs parallel to the
+unit's long axis, with the rail clip on the back centreline. The bus
+PCB rests in the rail channel directly above the clip; pogo pins
+contact the bus PCB's nearest contact station as the unit is clipped
+in. The 24 mm pogo column fits inside the 40 mm short axis with
+8 mm clearance to each long edge.
 
 ## Fab parameters
 
 | Parameter | Value |
 |---|---|
-| Outline | 75 × 35 mm |
+| Outline | **80 × 40 mm** (matches v1 outline + 4-corner mounting hole pattern; chassis drop-in compatible) |
 | Layer count | 2 |
 | Substrate | FR-4 |
 | Thickness | 1.6 mm |
@@ -361,7 +398,7 @@ onto DIN rail.
    `LED_IDENTIFY`, `NRST`, `UART_TX`, `UART_RX`, `DE`, `/RE`.
 4. Convert to PCB.
 5. PCB editor:
-   - Set outline 75 × 35 mm.
+   - Set outline **80 × 40 mm** (matches v1 — extract exact corner mounting hole XY from v1 Gerber drill file at `PCB/v1/Gerber_PCB_Splitflap.zip` → `Gerber_Drill_PTH.DRL`).
    - Place ESP32-S3 module... wait, this is the *unit* board — place
      U1 STM32G030K6T6 centrally.
    - Place stepper driver U2 near J2 stepper output.
