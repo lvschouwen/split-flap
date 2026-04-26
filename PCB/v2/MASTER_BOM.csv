@@ -15,12 +15,12 @@ D1,1,LED green,0805,generic,C72043,PWR indicator (3V3 hardwired)
 D2,1,LED blue,0805,generic,C2293,HEARTBEAT
 D3,1,LED red,0805,generic,C2286,FAULT
 D4,4,LED green,0805,generic,C72043,ROW0..ROW3 power indicators (post-polyfuse 12V)
-D9,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,Input TVS
-D10,1,RS-485 ESD Bus 0,SOT-23,Semtech SM712-02HTG,C172881,
-D11,1,RS-485 ESD Bus 1,SOT-23,Semtech SM712-02HTG,C172881,
-D12,1,RS-485 ESD Bus 2,SOT-23,Semtech SM712-02HTG,C172881,
-D13,1,RS-485 ESD Bus 3,SOT-23,Semtech SM712-02HTG,C172881,
-J1,1,Screw terminal 2-pin,5 mm pitch THT,Phoenix MKDS-1.5/2,C18643,12 V/15 A input
+D8,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,Input TVS (matches schematic refdes D8)
+D9,1,RS-485 ESD Bus 0,SOT-23,Semtech SM712-02HTG,C172881,
+D10,1,RS-485 ESD Bus 1,SOT-23,Semtech SM712-02HTG,C172881,
+D11,1,RS-485 ESD Bus 2,SOT-23,Semtech SM712-02HTG,C172881,
+D12,1,RS-485 ESD Bus 3,SOT-23,Semtech SM712-02HTG,C172881,
+J1,1,Screw terminal 2-pin (>=15 A),7.62 mm pitch THT,KF7.62-2P (or DECA MA231 5mm),C8270,12 V/15 A input. **NOT** Phoenix MKDS 1.5/2 (rated only 8 A). KF7.62-2P is 16 A; DECA MA231-50002M (LCSC C237691) is 15 A 5 mm pitch alt.
 J2,1,USB-C receptacle,USB-C 16-pin SMD,generic with shielded shell,C165948,Programming + debug
 J3,1,Header 1x4 shrouded,2.54 mm indexed,generic,C124378,Bus 0 row port: 12V/GND/A/B
 J4,1,Header 1x4 shrouded,2.54 mm indexed,generic,C124378,Bus 1 row port
@@ -33,7 +33,8 @@ C_bulk,1,470 uF / 25 V,Radial THT,generic,C107821,Input bulk
 C_in,1,22 uF / 25 V,0805 X7R,generic,C45783,LDO input
 C_out,2,10 uF / 10 V,0805 X7R,generic,C15850,LDO output
 C_decap_esp,8,100 nF,0603 X7R,generic,C14663,ESP32-S3 decoupling
-C_decap_uart,2,100 nF,0603 X7R,generic,C14663,SC16IS740 decoupling
+C_decap_uart,2,100 nF,0603 X7R,generic,C14663,SC16IS740 decoupling (Vsupply + VDD_io)
+C_decap_phy,4,100 nF,0603 X7R,generic,C14663,SN65HVD75 Vcc decoupling — one per PHY (U4/U5/U6/U7) close to pin 8
 C_xtal,2,18 pF,0603 NP0,generic,C36760,Crystal load caps for SC16IS740
 C_usb,2,1 uF / 10 V,0603 X7R,generic,C15849,USB rail decoupling
 C_row,4,10 uF / 25 V,0805 X7R,generic,C19702,Per-row output bulk (post-polyfuse)

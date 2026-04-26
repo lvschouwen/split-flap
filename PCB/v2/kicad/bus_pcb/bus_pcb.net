@@ -32,15 +32,15 @@
       (node (ref "J_in") (pin "1") (pintype "passive"))
       (node (ref "J_out") (pin "1") (pintype "passive")))
 
-    (net (code 2) (name "GND")
+    (net (code 2) (name "RS485_A")
       (node (ref "J_in") (pin "2") (pintype "passive"))
       (node (ref "J_out") (pin "2") (pintype "passive")))
 
-    (net (code 3) (name "RS485_A")
+    (net (code 3) (name "RS485_B")
       (node (ref "J_in") (pin "3") (pintype "passive"))
       (node (ref "J_out") (pin "3") (pintype "passive")))
 
-    (net (code 4) (name "RS485_B")
+    (net (code 4) (name "GND")
       (node (ref "J_in") (pin "4") (pintype "passive"))
       (node (ref "J_out") (pin "4") (pintype "passive"))))
 )

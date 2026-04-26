@@ -1,5 +1,7 @@
 # v2 Architecture
 
+**Revision:** 2026-04-26
+
 ## Target system
 
 One master. Four rows. Sixteen units per row. **64 units total.**
@@ -126,10 +128,10 @@ not depend on collision-handling logic.
 
 | Pin | Net |
 |---|---|
-| 1 | 12V (from row brick, daisy-chained through harness) |
-| 2 | GND |
-| 3 | RS485_A |
-| 4 | RS485_B |
+| 1 | 12V (from master, daisy-chained through bus PCBs) |
+| 2 | RS485_A |
+| 3 | RS485_B |
+| 4 | GND |
 
 The IDENTIFY button is on the unit board itself, not on the connector.
 Pin count is intentionally minimal.

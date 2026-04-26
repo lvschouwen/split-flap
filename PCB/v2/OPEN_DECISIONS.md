@@ -1,5 +1,7 @@
 # Open Decisions
 
+**Revision:** 2026-04-26
+
 Hardware decisions remaining for v2. Software is being rewritten;
 firmware-reuse arguments do not apply.
 

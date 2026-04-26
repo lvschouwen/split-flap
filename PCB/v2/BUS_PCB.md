@@ -1,5 +1,7 @@
 # DIN-Rail Bus PCB
 
+**Revision:** 2026-04-26
+
 Replaces the per-row cable harness with a passive bus PCB mounted in a
 35 mm DIN rail. Each unit clips onto the rail; pogo pins on the unit's
 underside contact the bus PCB's traces. No connectors on the
@@ -92,7 +94,7 @@ over thousands of mating cycles. HASL also works but wears faster.
 | PCB outline | 300 mm × ~30 mm (fits 35 mm DIN rail TS35 channel) |
 | Layer count | 2-layer FR-4 |
 | Thickness | 1.6 mm or 2.0 mm for rigidity |
-| Mounting | Holes aligned to DIN rail mounting positions |
+| Mounting | **4 mounting holes** along centreline at x = 8, 100, 200, 292 mm (M3 clearance) — single-pair end mounts on a 300 mm strip allow mid-span sag and inconsistent pogo-pin contact pressure |
 | Unit pitch | 37 mm (8 stations per board, 16 per row) |
 | Connectors | 4-pin shrouded box header at each end (2.54 mm, indexed) |
 
@@ -107,9 +109,14 @@ pinout on both ends:
 | Pin | Net |
 |---|---|
 | 1 | 12V |
-| 2 | GND |
-| 3 | RS485_A |
-| 4 | RS485_B |
+| 2 | RS485_A |
+| 3 | RS485_B |
+| 4 | GND |
+
+Pin order **12V / A / B / GND** matches the physical top-to-bottom
+trace order on the bus PCB and the pogo-pin order on the unit
+underside. 12 V and GND on opposite ends keeps adjacent-pin shorts
+off the supply rails.
 
 Same connector and pinout on the master side and the daisy-chain side
 means:
@@ -139,21 +146,31 @@ Pogo pins are spring-loaded plungers, deflection range ~1 mm. Through-hole
 mounted on the unit PCB. Tip diameter < trace width to give mating
 tolerance.
 
-## Polarization
+## Polarization (REQUIRED — not optional)
 
 Pogo pin pattern is symmetric top-to-bottom (12V/A/B/GND) — reversed
-mounting would short 12V to GND.
+mounting shorts 12 V to GND through ~50 mΩ contacts at 4 A. The master
+polyfuse trips, but the unit's AO3401 + SMAJ15A may take damage first.
 
-Mitigation:
-- DIN rail clip on the unit is mechanically asymmetric (standard DIN
-  rail clips have a defined "top" and "bottom" side because of how they
-  grip the rail flanges) — natural polarization.
-- Visible "TOP" silkscreen marker on the unit board edge.
-- Optional: an asymmetric 5th pogo pin landing on a polarization pad
-  (no electrical purpose, just keying).
+**Mandatory mechanical key (pick one):**
 
-In practice, the unit's natural geometry (flap drum + motor below,
-electronics above) makes the orientation obvious during install.
+1. **Asymmetric 5th polarization pogo pin** (recommended). Add a 5th
+   THT pogo on the unit and a corresponding ENIG keying pad on the
+   bus PCB, offset to ONE side of the 4-pin power/signal column. The
+   bus PCB has the keying pad on the matching side only — reversed
+   install, the 5th pogo lands on bare FR-4 and the unit physically
+   does not seat. Same Mill-Max 0906-2 part. No electrical function.
+2. **Hard-keyed DIN clip** — pick a DIN clip with an asymmetric snap
+   profile that physically only seats one way. Document the exact
+   clip MPN in `UNIT_BOM.csv`.
+
+Belt-and-braces additions (not standalone — must be paired with #1
+or #2):
+- "TOP" silkscreen marker on the unit board edge.
+- "BOTTOM" silkscreen marker on the bus PCB edge.
+
+Without an enforced mechanical key, **the first wrongly-clipped unit
+will damage itself**.
 
 ## Hot-swap considerations
 
@@ -186,11 +203,30 @@ hardware element.
 | Master cable | ~30 cm (set at build) | 4 (12V/GND/A/B) | 22 AWG or shielded twisted pair |
 | Daisy-chain cable | ~5-15 cm | 4 (12V/GND/A/B) | short, between bus PCBs |
 
-Both cables: 4-pin shrouded female on each end, IDC mass-terminated onto
-4-conductor flat cable, or hand-crimped onto 22 AWG round cable.
+**Cable wiring is straight-through (no twist or flip):**
+`pin 1 ↔ 1, pin 2 ↔ 2, pin 3 ↔ 3, pin 4 ↔ 4`. Both bus-PCB connectors
+share the same pinout, and both ends of any cable are wired identically.
+
+Both cables: 4-pin female on each end (housing TBD per OPEN_DECISIONS
+#4), IDC mass-terminated onto 4-conductor flat cable, or hand-crimped
+onto 22 AWG round cable.
 
 Twisted-pair preferred on A/B for noise immunity, but 4-conductor flat
 cable also works at 250 kbaud over the short lengths involved.
+
+## Terminator plug pinout
+
+The terminator plug on the unused end of the last bus PCB:
+
+| Pin | Net | Wired to |
+|---|---|---|
+| 1 | 12V | NC (do not connect) |
+| 2 | RS485_A | one leg of 120 Ω 1% |
+| 3 | RS485_B | other leg of 120 Ω 1% |
+| 4 | GND | NC (do not connect) |
+
+Pins 1 and 4 must remain unconnected on the terminator plug — wiring
+them to anything (especially each other) shorts +12 V to GND.
 
 ## Why this beats a single 600 mm bus PCB
 

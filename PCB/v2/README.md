@@ -1,5 +1,7 @@
 # PCB v2
 
+**Revision:** 2026-04-26
+
 Hobby-scale redesign of the split-flap display electronics.
 
 Tracked under issue #83.

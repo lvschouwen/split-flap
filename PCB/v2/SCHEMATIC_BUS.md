@@ -1,5 +1,7 @@
 # Bus PCB — Schematic + Layout Specification
 
+**Revision:** 2026-04-26
+
 EasyEDA-ready specification for the DIN-rail bus PCB. Simplest of the
 three boards: 2 connectors, 4 long traces, 16 contact stations,
 mostly hand-drawn artwork.
@@ -23,14 +25,19 @@ Two components only:
 Net wiring:
 
 ```
-J_in.1 (12V)  ─┬─── J_out.1 (12V)    via wide top-edge trace
+J_in.1 (12V) ─┬─── J_out.1 (12V)    via wide top-edge trace
                
-J_in.2 (GND) ─┬─── J_out.2 (GND)     via wide bottom-edge trace
+J_in.2 (A)   ─┬─── J_out.2 (A)      via narrow upper-middle trace
                
-J_in.3 (A)   ─┬─── J_out.3 (A)       via narrow upper-middle trace
+J_in.3 (B)   ─┬─── J_out.3 (B)      via narrow lower-middle trace
                
-J_in.4 (B)   ─┬─── J_out.4 (B)       via narrow lower-middle trace
+J_in.4 (GND) ─┬─── J_out.4 (GND)    via wide bottom-edge trace
 ```
+
+Pin order is **12V / A / B / GND** end-to-end so the 4 pin positions
+match the physical top-to-bottom trace order on the PCB and the
+top-to-bottom pogo-pin order on the unit underside. 12 V and GND on
+opposite ends prevents adjacent-pin shorts from bridging the supply.
 
 That's the whole schematic. No active components, no passives. The
 intelligence is in the layout.
@@ -164,7 +171,8 @@ Hole diameter: 3.2 mm (M3 clearance).
    - Place 2× shrouded 4-pin headers (LCSC search for `C124378` or
      pick any 4-pin 2.54 mm shrouded box header).
    - Wire pins: J_in.1 ↔ J_out.1 (label "12V"), J_in.2 ↔ J_out.2
-     ("GND"), J_in.3 ↔ J_out.3 ("A"), J_in.4 ↔ J_out.4 ("B").
+     ("RS485_A"), J_in.3 ↔ J_out.3 ("RS485_B"), J_in.4 ↔ J_out.4
+     ("GND"). Pin order: 12V / A / B / GND end-to-end.
 3. Convert to PCB.
 4. In PCB editor:
    - Set board outline: 300 × 30 mm.

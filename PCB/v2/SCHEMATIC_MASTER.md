@@ -1,5 +1,7 @@
 # Master PCB — Schematic + Layout Specification
 
+**Revision:** 2026-04-26
+
 EasyEDA-ready spec for the master PCB. **1 of these per system.** Most
 complex board — ESP32-S3 module, 4× RS-485 paths, SC16IS740 UART
 expander, 15 A power input.
@@ -28,8 +30,11 @@ expander, 15 A power input.
 | D3 | LED red | 0805 | C2286 | FAULT |
 | D4-D7 | LED green | 0805 | C72043 | ROW0..ROW3 power indicators |
 | D8 | SMAJ15A | DO-214AC SMA | C167238 | Input TVS |
-| D9-D12 | SM712-02HTG | SOT-23 | C172881 | RS-485 ESD per bus |
-| J1 | Phoenix MKDS 1.5/2 | 5 mm pitch THT | C18643 | 12V/15A input screw terminal |
+| D9 | SM712-02HTG (Bus 0 ESD) | SOT-23 | C172881 | RS-485 ESD across A0/B0 |
+| D10 | SM712-02HTG (Bus 1 ESD) | SOT-23 | C172881 | RS-485 ESD across A1/B1 |
+| D11 | SM712-02HTG (Bus 2 ESD) | SOT-23 | C172881 | RS-485 ESD across A2/B2 |
+| D12 | SM712-02HTG (Bus 3 ESD) | SOT-23 | C172881 | RS-485 ESD across A3/B3 |
+| J1 | Screw terminal 2-pin, **≥15 A continuous** | 7.62 mm pitch THT | C8270 (KF7.62-2P, 16 A) or C237691 (DECA MA231 5 mm 15 A) | 12V/15A input. **Do NOT use Phoenix MKDS 1.5/2 (only 8 A nominal).** Pick a 15+ A terminal block (KF7.62 series is the cheapest LCSC-stocked option). |
 | J2 | USB-C 16-pin SMD | TYPE-C-31-M-12 | C165948 | USB receptacle, shielded |
 | J3-J6 | 4-pin shrouded box header | 1×4 2.54 mm | C124378 | Row outputs |
 | J7 | 2×4 pin header | 2.54 mm | C124378 (or similar) | UART/SPI debug breakout |
@@ -39,7 +44,8 @@ expander, 15 A power input.
 | C_in | 22 µF / 25 V X7R | 0805 | C45783 | LDO input |
 | C_out | 10 µF / 10 V X7R | 0805 (×2) | C15850 | LDO output |
 | C_decap_esp | 100 nF X7R | 0603 (×8) | C14663 | ESP32-S3 module decap |
-| C_decap_uart | 100 nF X7R | 0603 (×2) | C14663 | SC16IS740 decap |
+| C_decap_uart | 100 nF X7R | 0603 (×2) | C14663 | SC16IS740 decap (Vsupply + VDD_io) |
+| C_decap_phy | 100 nF X7R | 0603 (×4) | C14663 | SN65HVD75 Vcc decap — one per PHY (U4–U7), placed within ~3 mm of pin 8 |
 | C_xtal | 18 pF NP0 | 0603 (×2) | C36760 | Crystal load caps |
 | C_usb | 1 µF / 10 V X7R | 0603 (×2) | C15849 | USB rail decap |
 | C_row | 10 µF / 25 V X7R | 0805 (×4) | C19702 | Per-row output bulk (post-polyfuse) |
@@ -74,12 +80,26 @@ J1 pin 1 (+) ──┬── F1 (15 A slow-blow fuse holder + fuse)
                 │
                 └── Q1 source (AOD409 P-FET reverse-block)
                     
-Q1:
-  source ← incoming 12V (post-fuse, post-TVS)
-  drain  → PCB-12V_RAIL
-  gate   ← GND via 10 kΩ pull-down + body diode pulls source through
+Q1 (P-FET high-side reverse-block, standard topology):
+  drain  ← incoming 12V (post-fuse, post-TVS)
+  source → PCB-12V_RAIL (load side)
+  gate   ── 10 kΩ R_q1_gate to GND
+  optional 12 V Zener from gate to source to clamp |Vgs| at startup
 
-C_bulk 470 µF (post-Q1 drain) ─── PCB-12V_RAIL
+How this works:
+  - Normal polarity (input = +12 V): body diode (anode = drain = +12 V,
+    cathode = source = load) conducts from input → load through the
+    diode initially, charging C_bulk. Source rises to ~+11.4 V. Gate
+    is at 0 V → Vgs ≈ -11.4 V → P-FET fully enhanced ON → forward
+    conduction is the low-Rds(on) channel, not the body diode.
+  - Reversed polarity (input = -12 V): source has no path to incoming,
+    sits at ~0 V; gate is also 0 V → Vgs ≈ 0 → FET stays OFF. Body
+    diode (anode at drain = -12 V, cathode at source = 0 V) is
+    reverse-biased — no conduction. Protection works.
+  - The 10 kΩ gate-to-GND resistor is the only gate drive needed; do
+    NOT pull gate to incoming 12 V (that would defeat the protection).
+
+C_bulk 470 µF (post-Q1 source) ─── PCB-12V_RAIL
    |
    ├── HT7833 input (U2 pin 1 + C_in 22 µF)
    ├── F_row1 polyfuse → ROW0_12V → C_row 10 µF → J3 pin 1 + D4 row PWR LED
@@ -163,9 +183,12 @@ bring-up.
 
 ```
 J2 (USB-C receptacle):
-  VBUS (pins A4, A9, B4, B9) ── connected to a 5V test pad (not used
-                                  for power; ESP32-S3 native USB does
-                                  not draw bus power)
+  VBUS (pins A4, A9, B4, B9) ── tied to local **+5V_USB** net which
+                                  feeds U8 USBLC6 pin 5 (Vbus) only.
+                                  Master is powered from J1, NOT from
+                                  USB — do not connect +5V_USB to any
+                                  other circuitry. Provide a labeled
+                                  test pad for bring-up scope access.
   GND  (pins A1, A12, B1, B12) ── GND plane
   D+   (pin A6, B6) ── USB_DP (paralleled with B6 if Type-C)
   D-   (pin A7, B7) ── USB_DM
@@ -178,7 +201,9 @@ U8 USBLC6-2SC6 (ESD across D+/D-):
   pin 2 (GND)    ── GND
   pin 3 (I/O2)   ── USB_DP
   pin 4 (I/O2)   ── USB_DP (yes, repeated, 2 pins for differential)
-  pin 5 (VBUS)   ── 5V (or 3V3, see datasheet)
+  pin 5 (VBUS)   ── USB-C VBUS (USB +5 V rail) + 1 µF C_usb decap to GND.
+                    **Do NOT tie to 3V3.** USBLC6's clamp reference must
+                    be the supply rail being protected (USB +5 V).
   pin 6 (I/O1)   ── USB_DM
 
 ESP32-S3 IO19/IO20 ──┬─ U8 ── USB-C D+/D-
@@ -269,15 +294,15 @@ Master MCU/UART_n ── SN65HVD75_Un (transceiver):
   pin 3 (DE)  ← UART_n DE  (via 1 kΩ R_de)
   pin 4 (D)   ← UART_n TX
   pin 5 (GND) ── GND
-  pin 6 (A)   → RS485_An ── R_term 120 Ω across A/B + R_bias_a 1 kΩ to 3V3 + SM712 + J3/4/5/6 pin 3
-  pin 7 (B)   → RS485_Bn ── R_term 120 Ω across A/B + R_bias_b 1 kΩ to GND + SM712 + J3/4/5/6 pin 4
+  pin 6 (A)   → RS485_An ── R_term 120 Ω across A/B + R_bias_a 1 kΩ to 3V3 + SM712 + J3/4/5/6 pin 2
+  pin 7 (B)   → RS485_Bn ── R_term 120 Ω across A/B + R_bias_b 1 kΩ to GND + SM712 + J3/4/5/6 pin 3
   pin 8 (Vcc) ── 3V3 + 100 nF decap
 
 Output connector J3/4/5/6 (Row n):
   pin 1: ROW_n_12V (post-polyfuse F_rown)
-  pin 2: GND
-  pin 3: RS485_An
-  pin 4: RS485_Bn
+  pin 2: RS485_An
+  pin 3: RS485_Bn
+  pin 4: GND
 ```
 
 SM712-02HTG (4× ESD arrays D9-D12), one per bus:
@@ -418,9 +443,14 @@ crosstalk shielding.
    intend. Default behaviour is GPIO; auto-RS485 is a register bit.
 3. **USB-C VBUS not connected to 5V buck**: Master is powered from
    J1, not USB. Don't accidentally wire VBUS to 5V_RAIL.
-4. **AOD409 P-FET orientation**: Source goes to incoming 12V (post-
-   fuse), drain to PCB-12V_RAIL. Body diode conducts at startup, gate
-   pulls down through the existing path. Verify in EasyEDA's symbol.
+4. **AOD409 P-FET orientation (high-side reverse-block, standard
+   topology)**: **drain** to incoming 12 V (post-fuse), **source** to
+   PCB-12V_RAIL (load). Gate to GND via 10 kΩ. This is the opposite
+   of an earlier draft that swapped source/drain — the corrected
+   topology has the body diode pointing INPUT→LOAD so it conducts on
+   power-up, then the FET enhances ON via Vgs = -V_load. Reversed
+   input keeps the FET off and the body diode reverse-biased. Verify
+   the symbol orientation in EasyEDA matches this description.
 
 ## Verification checklist
 

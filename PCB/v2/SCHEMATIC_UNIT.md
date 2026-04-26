@@ -1,5 +1,7 @@
 # Unit PCB — Schematic + Layout Specification
 
+**Revision:** 2026-04-26
+
 EasyEDA-ready spec for the unit PCB. **64 of these per system; one
 PCB design.**
 
@@ -39,20 +41,22 @@ PCB design.**
 ### Power section
 
 ```
-PG1 (top pogo, 12V) ──┬── D4 SMAJ15A anode (cathode → GND)
-                       │
-                       ├── Q1 source (P-FET, reverse-block in low-side return path*)
-                       │
-                       ├── C_in 22µF
-                       ├── C_in2 100nF
-                       │
-                       ├── U2 TPL7407L pin 9 (COM, common collector/source for motor coils)
-                       │
-                       └── U3 HT7833 input (pin 1 VIN)
+PG1 (top pogo, 12V_IN) ──── Q1 drain (P-FET, high-side reverse-block)
+                              │
+                              Q1 source ── PCB-12V rail ──┬── D4 SMAJ15A anode (cathode → GND)
+                                                           ├── C_in 22 µF
+                                                           ├── C_in2 100 nF
+                                                           ├── U2 TPL7407L pin 9 (COM)
+                                                           └── U3 HT7833 input (pin 1 VIN)
 
-   * Note: AO3401 is P-channel; in this circuit the drain goes to PG4 (GND),
-     source goes to PCB-GND, gate to incoming 12V via 10k pull-up.
-     Body diode conducts at startup, gate enhances when polarity correct.
+Q1 AO3401A (P-FET high-side reverse-block, standard topology):
+  drain  ← PG1 (incoming 12V)
+  source → PCB-12V rail (load side)
+  gate   ── 10 kΩ to GND
+
+  Same topology + behaviour as the master Q1 — see SCHEMATIC_MASTER.md
+  power section for the full rationale. Do NOT pull the gate to +12V;
+  that would defeat the reverse-block.
 
 U3 HT7833:
    pin 1 (VIN)  ← 12V

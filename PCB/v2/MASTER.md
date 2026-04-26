@@ -1,5 +1,7 @@
 # Master PCB
 
+**Revision:** 2026-04-26
+
 ESP32-S3 controller. Drives **4 RS-485 buses** (one per row). 64 units
 total. USB-C native programming. **Sources row power**: takes one 12 V /
 15 A input and outputs 12V + GND + A + B per row on a single 4-pin
@@ -43,9 +45,9 @@ combined connector.
 
 Per-row 4-pin output (combined power + signal):
   Pin 1: 12V (post-polyfuse)
-  Pin 2: GND
-  Pin 3: RS485_A
-  Pin 4: RS485_B
+  Pin 2: RS485_A
+  Pin 3: RS485_B
+  Pin 4: GND
 
 Each transceiver block:
    - DE/RE GPIOs (ESP32-S3 native; SC16IS740 GPIO for Bus 3)
@@ -110,9 +112,15 @@ Per bus:
 | Pin | Net | Notes |
 |---|---|---|
 | 1 | 12V | post-polyfuse |
-| 2 | GND | |
-| 3 | RS485_A | from local transceiver |
-| 4 | RS485_B | from local transceiver |
+| 2 | RS485_A | from local transceiver |
+| 3 | RS485_B | from local transceiver |
+| 4 | GND | |
+
+Pin order is **12V / A / B / GND** (outer-inner-inner-outer) so 12 V
+and GND are on opposite ends of the connector — adjacent-pin shorts
+cannot directly bridge the supply rails. Same pinout on every 4-pin
+row connector in the system (master rows, bus PCB ends, terminator
+plug, daisy-chain cable).
 
 4-pin shrouded box header at 2.54 mm pitch. The 12V pin carries up to
 ~3 A typical / 4 A peak per row — within standard pin rating since real-
