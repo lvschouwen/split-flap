@@ -2,8 +2,8 @@
 
 **Revision:** 2026-04-26
 
-EasyEDA-ready spec for the unit PCB. **64 of these per system; one
-PCB design.**
+Tool-agnostic spec for the unit PCB. **64 of these per system; one
+PCB design.** See `KICAD_HANDOFF.md` for the KiCad 10 build steps.
 
 ## Component list (with LCSC starting points)
 
@@ -341,7 +341,7 @@ hole pattern. v2 is a chassis drop-in replacement.
   (150 mil)** placed near v1's ULN2003A position on the top-right
   back. **The footprint is NOT identical to v1**: v1's footprint
   (whatever its width) must be replaced with the narrow SOIC-16
-  pattern in EasyEDA — verify against the TPL7407L datasheet
+  pattern in KiCad — verify against the TPL7407L datasheet
   (TI SLOSEH7) and the ULN2003AD (narrow) datasheet. LDO U3
   **LDL1117S33TR (SOT-223, 18 V op max / 20 V abs max)** placed near
   v1's AMS1117 position; SOT-223 with the **VOUT tab** (pin 2 + tab,
@@ -449,38 +449,47 @@ in. The 24 mm pogo column fits inside the 40 mm short axis with
 | Surface finish | HASL (cheaper) — pogo pins on bus PCB side, not unit side, so unit doesn't need ENIG |
 | Mounting holes | 4× M3 clearance at corners |
 
-## EasyEDA build steps
+## KiCad 10 build steps
 
-1. Create new EasyEDA Pro project: `splitflap-unit-v2`.
-2. Schematic editor: place all components from LCSC numbers above.
+1. New KiCad project: `splitflap-unit-v2` (under `PCB/v2/kicad/unit/`).
+2. Schematic editor: place all components per the LCSC table at the
+   top of this doc. Add `LCSC` field per part (see
+   `KICAD_HANDOFF.md` § 4 for bulk-edit via Symbol Fields Table).
 3. Wire per the net tables. Use net labels for clarity:
    `12V`, `GND`, `3V3`, `RS485_A`, `RS485_B`, `STEPPER_IN1..4`,
    `HALL_IN`, `IDENTIFY_BTN`, `LED_HEARTBEAT`, `LED_FAULT`,
-   `LED_IDENTIFY`, `NRST`, `UART_TX`, `UART_RX`, `DE`, `/RE`.
-4. Convert to PCB.
-5. PCB editor:
-   - Set outline **80 × 40 mm** (matches v1).
-   - Place 4× M3 mounting holes at the locked v1 coordinates:
-     (3, 3), (3, 77), (37, 77), (37, 3) mm — these are the
-     v1 corner hole positions extracted from
+   `LED_IDENTIFY`, `NRST`, `UART_TX`, `UART_RX`, `DE`. (`/RE` is
+   tied to GND on the SN65HVD75 — no net.)
+4. Run ERC, fix all errors.
+5. Update PCB from Schematic.
+6. PCB editor (place per `LAYOUT_UNIT.md`):
+   - Draw outline **80 × 40 mm** on `Edge.Cuts`.
+   - Place 4× `MountingHole_3.2mm_M3` at the locked v1 coordinates:
+     (3, 3), (3, 77), (37, 77), (37, 3) mm — extracted from
      `PCB/v1/Gerber_PCB_Splitflap.zip` → `Gerber_Drill_NPTH.DRL`.
    - Place U1 STM32G030K6T6 centrally on the back side (near v1
      ATmega328 footprint area).
    - Place stepper driver U2 (TPL7407L, **SOIC-16 narrow**) near the
-     v1 ULN2003A position on the back.
-   - Place LDO U3 (LDL1117S33, SOT-223) near v1's AMS1117 position;
-     give the **VOUT tab (pin 2 + tab, on the 3V3 net)** a generous
-     copper pour for heatsinking. Tab is NOT GND — pouring it to GND
-     shorts 3V3 to GND.
-   - Place RS-485 path (U4 SN65HVD75, D5 SM712) near the pogo pin pads.
-   - Place hall connector J3 on a clean edge for cable exit toward
+     v1 ULN2003A position on the back. Use footprint
+     `Package_SO:SOIC-16_3.9x9.9mm_P1.27mm` (NOT the 7.5 mm wide
+     variant).
+   - Place LDO U3 (LDL1117S33, footprint `SOT-223-3_TabPin2`) near
+     v1's AMS1117 position; assign the **VOUT (pin 2 + tab) net**
+     a generous filled zone for heatsinking. Tab is NOT GND —
+     pouring it to GND shorts 3V3 to GND.
+   - Place RS-485 path (U4 SN65HVD75, D5 SM712) near the pogo pin
+     pads.
+   - Place J3 hall connector on a clean edge for cable exit toward
      the chassis hall bracket (matches v1 "Magnet Sensor" XY).
    - Place IDENTIFY button SW1 on the edge so it's accessible after
      install.
-   - Add 4 pogo pin mounting holes (1.83 mm THT, on bottom side facing
-     down) at PG1..PG4 per the geometry above.
-6. Route signal traces freely; power traces should be reasonably
-   wide (15-20 mil for 12V at low current internal).
-7. Add ground pour on both layers.
-8. Run DRC.
-9. Order: 70 boards (covers 64 + spares).
+   - Place 4 custom pogo pin footprints (1.83 mm drill, 2.45 mm pad,
+     THT) at PG1..PG4 on the bottom layer per the geometry above.
+7. Route per `LAYOUT_UNIT.md`. Power traces 15–20 mil for 12V
+   internal; signal 6 mil; A/B as a loose differential pair.
+8. Add filled zones for GND (both layers) and VOUT-tab heatsink
+   (bottom layer near U3). Press `B` to fill.
+9. DRC: fix all errors.
+10. Plot Gerbers + drill files (`KICAD_HANDOFF.md` § 10).
+11. Order: 70 boards (covers 64 + spares). HASL plating is fine
+    (pogos are on the bus PCB side, not unit side).

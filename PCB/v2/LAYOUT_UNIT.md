@@ -2,7 +2,9 @@
 
 **Revision:** 2026-04-26
 **Companion to:** `SCHEMATIC_UNIT.md` (nets, MPNs, pin maps).
-**Read this when:** placing components and routing in EasyEDA Pro.
+**Read this when:** placing components and routing in KiCad 10. See
+`KICAD_HANDOFF.md` for the tool-specific workflow (project setup,
+libraries, plot/Gerber, JLC integration).
 
 64 of these per system. **Make every decision once, get every unit
 right.** A bug here is replicated 64 times.
@@ -40,7 +42,7 @@ mounts to.
 
 Wait — verify the orientation: v1 board is **80 mm long × 40 mm wide**.
 The hole pattern from the Gerber drill file is referenced to the v1
-80 × 40 outline; v2 keeps the same outline. Let the EasyEDA outline
+80 × 40 outline; v2 keeps the same outline. Let the KiCad outline
 be 80 (long axis = X) × 40 (short axis = Y).
 
 → Holes are at (3, 3), (3, 37), (77, 3), (77, 37) if X is long axis.

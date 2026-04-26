@@ -2,7 +2,9 @@
 
 **Revision:** 2026-04-26
 **Companion to:** `SCHEMATIC_MASTER.md` (nets, MPNs, pin maps).
-**Read this when:** placing components and routing in EasyEDA Pro.
+**Read this when:** placing components and routing in KiCad 10. See
+`KICAD_HANDOFF.md` for the tool-specific workflow (project setup,
+libraries, plot/Gerber, JLC integration).
 
 Most complex of the three boards. ESP32-S3 module + 4 RS-485 PHYs +
 SC16IS740 expander + USB-C + 12 V/15 A power input + 4 row outputs.
@@ -130,8 +132,9 @@ Drill 3.2 mm, NPTH.
 1. **Place mounting holes first** — outline anchors.
 2. **Place ESP32-S3 module roughly central**, antenna pointing
    toward an edge of the PCB. Mark the **18.6 × 5 mm antenna
-   keep-out rectangle** in EasyEDA's "Forbidden Area" tool on
-   BOTH layers, extending past the module's PCB edge.
+   keep-out rectangle** as a KiCad **Rule Area** (Place → Add Rule
+   Area, with "Keep out tracks / vias / pads / copper / footprints"
+   enabled) on BOTH layers, extending past the module's PCB edge.
 3. **Place J1 screw terminal** on the top edge (input side). The
    high-current cable from the brick wants to land here.
 4. **Place F1 fuse holder, D8 TVS, Q1 P-FET, C_bulk** in a tight
@@ -349,11 +352,13 @@ Master is single-side-population — keeps assembly cheap.
 
 ## Layout-time gotchas
 
-- **Don't run signal traces through the antenna keep-out.** EasyEDA
-  won't always flag this — visually inspect the keep-out region on
-  both layers before exporting Gerber.
-- **Don't route the 15 A power path as narrow tracks.** Use polygon
-  pour. EasyEDA's autorouter doesn't know to do this.
+- **Don't run signal traces through the antenna keep-out.** KiCad's
+  Rule Area will block tracks if you set it up correctly, but verify
+  visually on both layers before plotting Gerber — autorouter and
+  manual moves can both break this.
+- **Don't route the 15 A power path as narrow tracks.** Use filled
+  zones (KiCad's "Add Filled Zone" tool). KiCad's pushed-trace
+  router doesn't auto-pour.
 - **Don't tie the USB-C VBUS rail to the master 3V3 or +12V net.**
   USB is for programming/debug only; master is powered from J1.
 - **The K7803 buck module footprint is SIP-3 (3 pins in a line) with

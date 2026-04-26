@@ -2,14 +2,15 @@
 
 **Revision:** 2026-04-26
 
-EasyEDA-ready specification for the DIN-rail bus PCB. Simplest of the
+Tool-agnostic specification for the DIN-rail bus PCB. Simplest of the
 three boards: 2 connectors, 4 long traces, 16 contact stations,
 mostly hand-drawn artwork.
 
 PCB is functionally just routing — there is no real "schematic" in
-the traditional sense. EasyEDA workflow is: draw the connectors in
+the traditional sense. Workflow is: draw the connectors in
 schematic, wire them to net labels, then do all the real work in the
-PCB editor by hand-drawing traces and contact pads.
+PCB editor by hand-drawing traces and contact pads. See
+`KICAD_HANDOFF.md` for the KiCad 10 build steps.
 
 **One PCB design, used 8 times in a 4-row system.**
 
@@ -17,9 +18,9 @@ PCB editor by hand-drawing traces and contact pads.
 
 Two components only:
 
-| Ref | Component | EasyEDA library | LCSC# |
+| Ref | Component | KiCad library | LCSC# |
 |---|---|---|---|
-| J_in | **JST-VH 4-pin male, 3.96 mm pitch THT (B4P-VH-A)** | Connector / JST | **C144392** (CHECK — locked across system per OPEN_DECISIONS #4) |
+| J_in | **JST-VH 4-pin male, 3.96 mm pitch THT (B4P-VH-A)** | `Connector_JST:JST_VH_B4P-VH-A` | **C144392** (CHECK — locked across system per OPEN_DECISIONS #4) |
 | J_out | Same as J_in | same | C144392 |
 
 Net wiring:
@@ -109,8 +110,10 @@ mechanical pitch matching.
 ## Contact pad geometry (custom footprint)
 
 At each of 8 unit positions per board, all 4 traces have a **widened
-contact zone** for the pogo pin to land on. EasyEDA workflow: hand-
-draw these as copper rectangles, no mask covering the pad area.
+contact zone** for the pogo pin to land on. KiCad workflow: draw
+these as Solid Polygon copper on `F.Cu`, with matching mask-clear
+rectangles on `F.Mask` (no mask over the contact area). Assign each
+polygon to its net via Edit → Edit Properties.
 
 | Pad | Y position (from top edge) | Contact zone shape | Connected to | Plating |
 |---|---|---|---|---|
@@ -183,36 +186,40 @@ Hole diameter: 3.2 mm (M3 clearance).
 | Min drill | 0.3 mm |
 | Min annular ring | 0.13 mm |
 
-## EasyEDA build steps
+## KiCad 10 build steps
 
-1. Create new EasyEDA Pro project: `splitflap-bus-v2`.
-2. In schematic editor:
-   - Place 2× JST-VH 4-pin male THT headers (B4P-VH-A,
-     **LCSC C144392** — locked; ≥5 A per pin to match 4 A row fuse).
-   - Wire pins: J_in.1 ↔ J_out.1 (label "12V"), J_in.2 ↔ J_out.2
-     ("RS485_A"), J_in.3 ↔ J_out.3 ("RS485_B"), J_in.4 ↔ J_out.4
-     ("GND"). Pin order: 12V / A / B / GND end-to-end.
-3. Convert to PCB.
-4. In PCB editor:
-   - Set board outline: **300 × 32 mm**.
+1. New KiCad project: `splitflap-bus-v2` (under `PCB/v2/kicad/bus/`).
+2. Schematic editor:
+   - Place 2× JST-VH 4-pin male THT (`Connector_JST:JST_VH_B4P-VH-A`,
+     **LCSC C144392** — locked).
+   - Wire pins with net labels: J_in.1 ↔ J_out.1 (`12V`),
+     J_in.2 ↔ J_out.2 (`RS485_A`), J_in.3 ↔ J_out.3 (`RS485_B`),
+     J_in.4 ↔ J_out.4 (`GND`). Pin order 12V/A/B/GND end-to-end.
+   - Add `LCSC` field per part (see `KICAD_HANDOFF.md` § 4).
+   - Run ERC; fix all errors.
+3. Update PCB from Schematic.
+4. PCB editor:
+   - Draw board outline 300 × 32 mm on `Edge.Cuts`.
    - Place J_in at (10, 16) mm and J_out at (290, 16) mm.
-   - Hand-route each net as a single trace at the specified width.
-     Use the "Track" tool, set width per trace.
-   - Add contact zones at each of 8 station positions (centred at
-     x = 18, 55, 92, 129, 166, 203, 240, 277 mm).
-   - Add **4 mounting holes** along centreline (y = 16 mm) at
-     x = 8, 100, 200, 292 mm — M3 clearance (3.2 mm). Two end-only
+   - Hand-route each net as a single trace using the Route tool
+     (hotkey `X`); set width per trace per `LAYOUT_BUS.md`.
+   - Draw contact zones at each of 8 station positions (centred at
+     x = 18, 55, 92, 129, 166, 203, 240, 277 mm) as Solid Polygon
+     copper on `F.Cu` with matching `F.Mask` rectangles.
+   - Place **4 mounting holes** (`MountingHole_3.2mm_M3`) along
+     centreline (y = 16 mm) at x = 8, 100, 200, 292 mm. Two end-only
      holes leave a 300 mm strip prone to mid-span sag, which makes
      pogo contact pressure inconsistent. Four-hole pattern is the
      locked spec (matches `BUS_PCB.md`).
-   - Add silk screen labels: "0" through "7" near each station, "TOP"
-     above the 12V trace, "BOTTOM" below the GND trace.
-4. In EasyEDA's fab options, set:
-   - Surface finish: ENIG (not HASL).
-   - Layer count: 2.
-   - Thickness: 1.6 mm.
-5. Run DRC, fix any errors.
-6. Export Gerber.
+   - Add bottom-side GND filled zone over the whole board minus 1 mm
+     edge clearance.
+   - Add silk screen labels: "0" through "7" near each station,
+     "TOP" above the 12V trace, "BOTTOM" below the GND trace.
+   - Press `B` to fill all zones.
+5. DRC: fix all errors (`KICAD_HANDOFF.md` § 9 for rule values).
+6. File → Plot → Gerber + Drill (use the JLCPCB preset; see
+   `KICAD_HANDOFF.md` § 10). **ENIG** plating in JLC's order form
+   (NOT HASL — pogo contacts need gold).
 7. Order from JLCPCB. Quantity: 10 (covers 4-row system + spares).
 
 ## Estimated fab cost
@@ -225,7 +232,7 @@ ENIG is the cost premium for pogo reliability — worth it.
 
 The "footprint" for each unit station is just a copper area on layer
 1 with mask opening, drawn manually. No KiCad symbol needed —
-EasyEDA's "Track" + "Solid Region" tools cover it.
+KiCad's Route + Solid Polygon tools cover it.
 
 ## Bus PCB ASCII reference card
 

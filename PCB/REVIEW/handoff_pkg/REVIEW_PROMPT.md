@@ -9,11 +9,10 @@ either reviewer what the other said.
 ## Prompt to paste
 
 You are reviewing the final hardware design for a 64-unit (4 rows × 16
-units/row) split-flap display before it goes to a freelancer for PCB
-layout in EasyEDA Pro. The design is on **2026-04-26** considered locked
-except for PCB layout itself. Your job is to find anything still wrong
-before we hand off — but **also to validate that what is locked should
-stay locked**.
+units/row) split-flap display before PCB layout in **KiCad 10.0**. The
+design is on **2026-04-26** considered locked except for PCB layout
+itself. Your job is to find anything still wrong before layout starts
+— but **also to validate that what is locked should stay locked**.
 
 ### Scope of this review
 

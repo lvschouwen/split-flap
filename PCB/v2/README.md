@@ -8,9 +8,12 @@ Tracked under issue #83.
 
 ## Status
 
-- **Phase:** design (pre-schematic-capture)
-- **Branch:** `pcb-v2-rs485-48v` (will be renamed once architecture stabilises)
-- **Top open decisions:** see `OPEN_DECISIONS.md`.
+- **Phase:** FROZEN (architecture, MPNs, footprints, pinouts locked
+  by issue #86 / commit 060633f). Layout in KiCad 10 is the only
+  remaining work.
+- **Branch:** `pcb-v2-rs485-48v`
+- **Locked decisions:** see `KICAD_HANDOFF.md` § "Locked decisions"
+  and `OPEN_DECISIONS.md`.
 
 ## Scope
 
@@ -40,11 +43,14 @@ product-grade compliance framing.
 | `UNIT_BOM.csv` | Unit PCB BOM |
 | `BUS_PCB.md` | DIN-rail bus PCB design (2× 300 mm per row, daisy-chained) |
 | `BUS_PCB_BOM.csv` | Bus PCB BOM |
-| `EASYEDA_HANDOFF.md` | EasyEDA Pro workflow + per-PCB hand-off package overview |
-| `SCHEMATIC_MASTER.md` | Master PCB schematic + layout spec (EasyEDA-ready) |
-| `SCHEMATIC_UNIT.md` | Unit PCB schematic + layout spec |
-| `SCHEMATIC_BUS.md` | Bus PCB layout spec (custom artwork) |
-| `OPEN_DECISIONS.md` | Pending decisions blocking schematic capture |
+| `KICAD_HANDOFF.md` | KiCad 10 workflow + per-PCB hand-off package overview |
+| `SCHEMATIC_MASTER.md` | Master PCB schematic + connection spec |
+| `SCHEMATIC_UNIT.md` | Unit PCB schematic + connection spec |
+| `SCHEMATIC_BUS.md` | Bus PCB schematic + custom artwork spec |
+| `LAYOUT_MASTER.md` | Master PCB placement + routing guide |
+| `LAYOUT_UNIT.md` | Unit PCB placement + routing guide |
+| `LAYOUT_BUS.md` | Bus PCB placement + routing guide |
+| `OPEN_DECISIONS.md` | Locked decisions + rationale |
 
 The RS-485 wire format + opcode set is a firmware concern, not a hardware
 one. It is being designed alongside the rewritten unit firmware and is
@@ -55,6 +61,8 @@ hardware-only changelog lives at `PCB/REVIEW/CHANGELOG_V1_TO_V2.md`.
 
 ## Hand-off model
 
-The user does not run PCB layout. These docs target a freelance PCB
-designer or JLCPCB EasyEDA importer. Schematic capture and routing are
-done by the implementer using the BOMs + design notes here as the spec.
+User runs PCB layout in **KiCad 10.0** (decision 2026-04-26 after
+external review froze the design). These docs serve as the spec —
+schematic capture and routing happen in KiCad using the BOMs +
+SCHEMATIC_*.md + LAYOUT_*.md as ground truth. See `KICAD_HANDOFF.md`
+for tool-specific workflow.

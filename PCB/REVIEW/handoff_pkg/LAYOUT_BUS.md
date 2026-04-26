@@ -2,7 +2,9 @@
 
 **Revision:** 2026-04-26
 **Companion to:** `SCHEMATIC_BUS.md` (nets, MPNs, contact pad geometry).
-**Read this when:** placing components and routing in EasyEDA Pro.
+**Read this when:** placing components and routing in KiCad 10. See
+`KICAD_HANDOFF.md` for the tool-specific workflow (project setup,
+libraries, plot/Gerber, JLC integration).
 
 This is the simplest of the three boards: 2 connectors, 4 long traces,
 8 contact stations, 4 mounting holes. Most of the work is artwork

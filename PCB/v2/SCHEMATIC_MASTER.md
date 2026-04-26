@@ -2,9 +2,10 @@
 
 **Revision:** 2026-04-26
 
-EasyEDA-ready spec for the master PCB. **1 of these per system.** Most
+Tool-agnostic spec for the master PCB. **1 of these per system.** Most
 complex board — ESP32-S3 module, 4× RS-485 paths, SC16IS740 UART
-expander, 15 A power input.
+expander, 15 A power input. See `KICAD_HANDOFF.md` for the KiCad 10
+build steps.
 
 ## Component list (with LCSC starting points)
 
@@ -119,8 +120,8 @@ U2 buck module (**K7803-1000R3** / R-78E3.3-1.0 / V7803-1000, SIP-3, 1 A):
 
   Switching efficiency: ~85–90 %. Max heat at 200 mA load ≈ 75 mW
   (vs. 1.7 W for the LDO this replaces). Pin order matches the L78xx
-  series so EasyEDA's L78xx footprint can be reused if no library
-  symbol exists for the chosen module. **Verify pin order against the
+  series so KiCad's L78xx SIP-3 footprint can be reused if no
+  library symbol exists for the chosen module. **Verify pin order against the
   selected MPN's datasheet** — Mornsun, RECOM, and CUI all use VIN /
   GND / VOUT but pin numbering can differ.
 
@@ -424,33 +425,45 @@ keep their edges parallel for low loop inductance into C_bulk.
 | Surface finish | HASL (cheaper) |
 | Mounting holes | 4× M3 clearance at corners |
 
-## EasyEDA build steps
+## KiCad 10 build steps
 
-1. Create new EasyEDA Pro project: `splitflap-master-v2`.
+1. New KiCad project: `splitflap-master-v2` (under `PCB/v2/kicad/master/`).
 2. Schematic editor:
-   - Place all components from LCSC numbers.
+   - Place all components from the LCSC table at the top of this doc.
+     ESP32-S3-WROOM-1 needs a custom symbol or Espressif's official
+     KiCad library (https://github.com/espressif/kicad-libraries).
+     SC16IS740 needs a hand-drawn symbol per the locked pinout.
+   - Add `LCSC` field per part (see `KICAD_HANDOFF.md` § 4).
    - Wire per the section-by-section nets above. Use net labels
      liberally — `12V`, `GND`, `3V3`, `ROW0_12V`...`ROW3_12V`,
      `RS485_A0`...`RS485_A3`, `RS485_B0`...`RS485_B3`, `UART0_TX`,
      etc.
    - Group decoupling caps near their ICs.
-3. ERC: fix any unconnected pins.
-4. Convert to PCB.
-5. PCB editor:
-   - Set outline 100 × 80 mm.
-   - Place per the floorplan.
-   - Route 12V power per the trace-width table.
-   - Add solid GND pour on both layers.
-   - Place WROOM-1 antenna keep-out (rectangle on top layer +
-     forbidden region under it).
-6. Run DRC.
-7. Order: 5 boards from JLC.
+3. ERC: fix any unconnected pins (`Inspect → Electrical Rules Checker`).
+4. Update PCB from Schematic.
+5. PCB editor (place per `LAYOUT_MASTER.md`):
+   - Draw outline ~100 × 80 mm on `Edge.Cuts`.
+   - Place per the floorplan zones.
+   - **Mark the WROOM-1 antenna keep-out as a Forbidden Area
+     (Rule Area) on BOTH layers** — 18.6 × 5 mm rectangle past the
+     module's PCB edge, no copper / vias / components / traces
+     allowed inside.
+   - Route 12V power per the trace-width table — use **filled
+     zones** (Add Filled Zone) on both layers for the 15 A path,
+     stitched with vias every ~10 mm.
+   - Add filled zones for GND (both layers) and 3V3 (top layer
+     distribution).
+   - Press `B` to fill all zones.
+6. DRC: fix all errors.
+7. 3D viewer sanity check (View → 3D Viewer).
+8. Plot Gerbers + drill files + BOM + CPL (`KICAD_HANDOFF.md` § 10).
+9. Order: 5 boards from JLC.
 
-## Known design risks (verify in EasyEDA)
+## Known design risks (verify in KiCad)
 
-1. **WROOM-1 footprint orientation**: EasyEDA's WROOM-1 footprint has
-   a specific orientation; verify pin numbering matches the wiring
-   table.
+1. **WROOM-1 footprint orientation**: KiCad's library may not have
+   the ESP32-S3-WROOM-1-N16R8 — use Espressif's official KiCad lib
+   or hand-draw. Verify pin numbering matches the wiring table.
 2. **SC16IS740 RTS-as-DE-control**: Some firmware drivers handle
    auto-DE on RTS; verify in the SC16IS740 datasheet which mode you
    intend. Default behaviour is GPIO; auto-RS485 is a register bit.
@@ -463,7 +476,7 @@ keep their edges parallel for low loop inductance into C_bulk.
    topology has the body diode pointing INPUT→LOAD so it conducts on
    power-up, then the FET enhances ON via Vgs = -V_load. Reversed
    input keeps the FET off and the body diode reverse-biased. Verify
-   the symbol orientation in EasyEDA matches this description.
+   the symbol orientation in KiCad matches this description.
 
 ## Verification checklist
 
