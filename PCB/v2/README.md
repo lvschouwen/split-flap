@@ -51,6 +51,10 @@ product-grade compliance framing.
 | `LAYOUT_UNIT.md` | Unit PCB placement + routing guide |
 | `LAYOUT_BUS.md` | Bus PCB placement + routing guide |
 | `OPEN_DECISIONS.md` | Locked decisions + rationale |
+| `KICAD_GETTING_STARTED.md` | **Beginner**: KiCad 10 install + universal setup, library map, ERC/DRC, plot/Gerber export |
+| `KICAD_HOWTO_BUS.md` | **Beginner**: click-by-click build of the Bus PCB (start here) |
+| `KICAD_HOWTO_UNIT.md` | **Beginner**: build of the Unit PCB (medium hand-holding) |
+| `KICAD_HOWTO_MASTER.md` | **Beginner**: build of the Master PCB (least hand-holding; assumes you've done Bus + Unit) |
 
 The RS-485 wire format + opcode set is a firmware concern, not a hardware
 one. It is being designed alongside the rewritten unit firmware and is
@@ -66,3 +70,16 @@ external review froze the design). These docs serve as the spec —
 schematic capture and routing happen in KiCad using the BOMs +
 SCHEMATIC_*.md + LAYOUT_*.md as ground truth. See `KICAD_HANDOFF.md`
 for tool-specific workflow.
+
+## Building in KiCad (beginner)
+
+If this is your first KiCad project, follow this order:
+
+1. **`KICAD_GETTING_STARTED.md`** — install + universal setup. Read once.
+2. **`KICAD_HOWTO_BUS.md`** — simplest board, full hand-holding.
+3. **`KICAD_HOWTO_UNIT.md`** — most-replicated board (64 instances).
+4. **`KICAD_HOWTO_MASTER.md`** — most complex board.
+
+The howtos reference `SCHEMATIC_*.md`, `LAYOUT_*.md`, and
+`KICAD_HANDOFF.md` for the source-of-truth specs — they walk you
+through KiCad clicks, the spec docs tell you the correct values.
