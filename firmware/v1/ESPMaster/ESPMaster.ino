@@ -562,15 +562,27 @@ void setup() {
     return;
   }
 
-  //Early-boot I2C scan — run before WiFi/NTP so we fall inside twiboot's
-  //~1-second boot window. On simultaneous power-cycle the Nanos come up in
-  //twiboot first and only jump to their sketch after TIMEOUT_MS; if we waited
-  //for WiFi + NTP (up to 20 s combined) they'd be long gone and we'd never
-  //catch old-firmware units that need updating. The 200 ms delay gives the
-  //Nanos' TWI hardware time to come up after their reset.
-  //See issue #30.
-  SerialPrintln(F("Early I2C scan (twiboot window)..."));
-  delay(200);
+  //Early-boot I2C scan — runs before WiFi/NTP so we provision blank-app
+  //units (twiboot's stay-alive-on-empty-flash patch keeps them in the
+  //bootloader indefinitely) without making the user wait for WiFi/NTP.
+  //
+  //We deliberately wait LONGER than twiboot's TIMEOUT_MS (1000 ms) before
+  //probing. Reasoning:
+  //  - Already-installed units exit twiboot to their sketch at ~1000 ms.
+  //    Probing later means we see them in state=1 (sketch) and skip the
+  //    auto-install path. autoUpdateOutdatedUnits() handles version
+  //    upgrades via the proper version-check path.
+  //  - Blank-app units stay in twiboot forever, so a longer delay still
+  //    catches them — they're flashed by autoInstallFirmwareToBootloaderUnits().
+  //
+  //Probing inside the twiboot window is *harmful* for already-installed
+  //units: isUnitInBootloader() sends CMD_ACCESS_MEMORY (0x02), which in
+  //twiboot's first-byte switch falls through to the CMD_WAIT case and
+  //pins boot_timeout=0 — keeping twiboot alive forever and triggering an
+  //unnecessary re-flash on every cold boot. See issue #88.
+  //See also issue #30 for the original "early scan" rationale.
+  SerialPrintln(F("Early I2C scan (post-twiboot window)..."));
+  delay(1500);
   probeI2cBus();
   autoInstallFirmwareToBootloaderUnits();
 
