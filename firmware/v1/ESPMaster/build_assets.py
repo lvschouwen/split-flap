@@ -146,6 +146,19 @@ def build_header(project_dir: pathlib.Path) -> None:
     print(f"  unit-firmware    hex {unit_hex.stat().st_size:>5} -> bin {len(unit_bin):>5}")
 
 
+def flash_size_label(env) -> str:
+    """Derive a short '1m' / '4m' / '4m1m' tag from the env's ldscript so
+    the stamped firmware filename reveals which flash layout it targets.
+    Falls back to the env name if the ldscript doesn't match the standard
+    pattern. Used by the post-build stamper below."""
+    import re
+    ldscript = env.GetProjectOption("board_build.ldscript", "")
+    m = re.search(r"eagle\.flash\.([0-9]+m\d*m?)\.ld", ldscript)
+    if m:
+        return m.group(1)
+    return env["PIOENV"]
+
+
 # PlatformIO invokes this file as a pre-build script, setting up a SCons
 # env and calling Import() as a builtin. Run the build only when invoked
 # that way — plain `import build_assets` (e.g. from pytest) is a no-op.
@@ -156,14 +169,16 @@ try:
     build_header(_project_dir)
 
     # Post-build: drop a copy of firmware.bin next to itself with the git
-    # rev in the filename so shipping / archiving is self-describing.
+    # rev AND flash-size label in the filename so shipping / archiving is
+    # self-describing across the 1 MB / 4 MB variants (issue #92).
     _rev, _dirty = git_short_rev(_project_dir)
     _tag = f"{_rev}-dirty" if _dirty else _rev
+    _size = flash_size_label(env)  # noqa: F821
 
     def _stamp_firmware_filename(source, target, env):  # noqa: F821
         import shutil
         bin_path = pathlib.Path(str(target[0]))
-        stamped = bin_path.with_name(f"firmware-{_tag}.bin")
+        stamped = bin_path.with_name(f"firmware-{_tag}-{_size}.bin")
         shutil.copyfile(bin_path, stamped)
         print(f"[build_assets] copied {bin_path.name} -> {stamped.name}")
 
