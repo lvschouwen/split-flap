@@ -165,7 +165,7 @@ void showText(String message, int delayMillis) {
         showMessage(line, convertSpeed(flapSpeed));
     
         //If the lines index isn't the last, delay showing the next message to give time to read
-        if (linesIndex <= messageLines.size()) {
+        if (linesIndex < (int)messageLines.size() - 1) {
           delay(3000);
         }
       }  
