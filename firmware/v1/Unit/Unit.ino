@@ -263,8 +263,8 @@ void loop() {
     noInterrupts();
     int16_t v = pendingOffsetValue;
     pendingOffsetWrite = false;
-    interrupts();
     calOffset = v;
+    interrupts();
     EEPROM.put(eeAddress, calOffset);
 #ifdef SERIAL_ENABLE
     Serial.print("CalOffset updated to ");
