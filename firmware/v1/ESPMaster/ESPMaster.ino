@@ -28,7 +28,7 @@
 #define UNITS_AMOUNT        10      //Amount of connected units !IMPORTANT TO BE SET CORRECTLY!
 #define SERIAL_BAUDRATE     115200  //Serial debugging BAUD rate
 #define WIFI_USE_DIRECT     true    //Option to either direct connect to a WiFi Network or setup a AP to configure WiFi. Setting to false will setup as a AP.
-#define USE_MULTICAST       false    //Option to broadcast a ".local" URL on your local network default split-flap.local. You can change the name under configurable settings.
+#define USE_MULTICAST       true    //Option to broadcast a ".local" URL on your local network default split-flap.local. You can change the name under configurable settings. On by default since #112 — the begin/update plumbing existed all along and this makes the display findable without knowing its DHCP lease.
 
 /*
   EXPERIMENTAL: Try to use your Router when possible to set a Static IP address for your device to avoid conflicts with other devices
@@ -458,16 +458,12 @@ void registerMasterFirmwareEndpoint() {
           SerialPrint(F("Master OTA complete, "));
           SerialPrint(index + len);
           SerialPrintln(F(" bytes written"));
-          if (!isRecoveryMode) {
-            //Push every sketch-running unit into its twiboot bootloader
-            //before we reboot. When the new master comes up and probes
-            //the bus it'll find them in bootloader state and auto-flash
-            //them from the (possibly updated) PROGMEM bundle.
-            int rebooted = enterBootloaderAllDetected(false);
-            SerialPrint(F("Queued "));
-            SerialPrint(rebooted);
-            SerialPrintln(F(" unit(s) for bootloader on next boot"));
-          }
+          //Units are deliberately NOT pushed into their bootloaders here
+          //(issue #114). The old shotgun predated version detection and
+          //re-flashed every unit on every master OTA even when the bundled
+          //unit rev didn't change. The new master's boot-time
+          //autoUpdateOutdatedUnits() compares each unit's reported rev
+          //against its bundle and flashes exactly the mismatched ones.
         } else {
           SerialPrint(F("Update.end failed: "));
           SerialPrintln(Update.getErrorString());
@@ -986,16 +982,17 @@ void setup() {
       request->send(200, "text/plain", body);
     });
 
-    //GET /reflash-units — forces every sketch-running unit into its twiboot
-    //bootloader and then re-runs the PROGMEM auto-install. Use after a master
-    //OTA that ships a new bundled unit firmware if the chained reboot didn't
-    //catch every unit, or to manually refresh units without a master reboot.
+    //GET /reflash-units — pushes sketch-running units whose firmware rev
+    //does NOT match the bundled one (OUTDATED or UNKNOWN) into twiboot and
+    //re-runs the PROGMEM auto-install. Units already on the bundled rev are
+    //skipped (issue #114) — re-flashing them wastes time and flash cycles.
     webServer.on("/reflash-units", HTTP_GET, [](AsyncWebServerRequest * request) {
       SerialPrintln(F("Request to Reflash Units Received"));
       int rebooted = enterBootloaderAllDetected(true);
       autoInstallFirmwareToBootloaderUnits();
       String body = String("Requested bootloader entry on ") + rebooted +
-                    " unit(s); re-probed and triggered PROGMEM auto-install. " +
+                    " unit(s) not already on the bundled firmware; re-probed " +
+                    "and triggered PROGMEM auto-install. " +
                     "Watch the Log panel for per-unit results.";
       request->send(200, "text/plain", body);
     });
@@ -1163,6 +1160,11 @@ void setup() {
 
     delay(250);
     webServer.begin();
+
+    //Show the freshly acquired IP on the flaps so the display can be found
+    //after any DHCP change (issue #111). Blocks for ~15 s of flap time, but
+    //the web server is already up and serving.
+    showIpAddressOnBoot();
 
     SerialPrintln(F("Split Flap Ready!"));
     SerialPrintln(F("#######################################################"));

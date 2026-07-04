@@ -539,3 +539,26 @@ void probeI2cBus() {
   SerialPrintln(F(" expected units."));
 #endif
 }
+
+//Shows the device's IPv4 address on the flaps at boot, octet by octet
+//(issue #111): "192." -> "168." -> "1." -> "123", 3 s apart, last chunk
+//held 5 s. A trailing dot marks continuation. Chunks are left-aligned on
+//purpose — physical displays can be narrower than UNITS_AMOUNT and
+//centered text would land on absent units. leftString() pads to the full
+//width, which makes showMessage()'s own alignment pass a no-op.
+void showIpAddressOnBoot() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+  IPAddress ip = WiFi.localIP();
+  SerialPrint(F("Showing IP on display: "));
+  SerialPrintln(ip.toString());
+  for (int octet = 0; octet < 4; octet++) {
+    String chunk = String(ip[octet]);
+    if (octet < 3) {
+      chunk += ".";
+    }
+    showMessage(leftString(chunk), convertSpeed(flapSpeed));
+    delay(octet < 3 ? 3000 : 5000);
+  }
+}

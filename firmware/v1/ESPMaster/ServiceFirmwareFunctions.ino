@@ -281,7 +281,13 @@ bool finishFirmwareFlash(String& resultMsg) {
 
   resultMsg = String("Flashed ") + bytesWritten + " bytes to 0x" + String(targetAddr, HEX);
   if (postFlashStatus == 0) {
-    resultMsg += " — unit responding on its normal address";
+    //Full hardware reboot (issue #113): twiboot's exit is a direct
+    //jump_to_app(), not a reset. CMD_REBOOT gives the freshly flashed
+    //sketch a clean watchdog reset (fresh peripherals/MCUSR, DIP + EEPROM
+    //address re-read). The unit drains the flag after its initial homing,
+    //so it homes, resets, and homes once more — slow but canonical.
+    rebootUnit((int)targetAddr);
+    resultMsg += " — unit responding; sent CMD_REBOOT for a clean restart";
     SerialPrintln(resultMsg);
   } else {
     resultMsg += String(" — WARNING: unit not responding post-flash (status ") + postFlashStatus + ")";
@@ -400,7 +406,9 @@ void autoUpdateOutdatedUnits() {
 }
 
 // Sends CMD_ENTER_BOOTLOADER to every unit the probe currently sees running
-// the sketch (state == 1). With reprobeAfter=true, waits ~500 ms for their
+// the sketch (state == 1) on a firmware rev that does NOT match the bundled
+// one — OUTDATED and UNKNOWN both qualify; units already on the bundled rev
+// are skipped (issue #114). With reprobeAfter=true, waits ~500 ms for their
 // watchdog resets + twiboot init and re-runs probeI2cBus() so a subsequent
 // autoInstallFirmwareToBootloaderUnits() will catch them. Returns the
 // number of units that ACKed the reboot command.
@@ -408,6 +416,7 @@ int enterBootloaderAllDetected(bool reprobeAfter) {
   int rebooted = 0;
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
     if (detectedUnitStates[unitIndex] != 1) continue;
+    if (detectedUnitVersionStatus[unitIndex] == 0) continue;  // already on bundled rev (#114)
     int addr = toI2cAddress(unitIndex);
     if (rebootUnitToBootloader(addr) == 0) {
       rebooted++;
