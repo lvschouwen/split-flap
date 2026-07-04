@@ -37,7 +37,7 @@ pio device monitor           # serial at 115200
 pio test -e native           # host-side unit tests (ESPMaster only)
 ```
 
-Subsequent master flashes happen via OTA — from this repo: `flashing/ota-master.sh <fw.bin> http://host:port`. The script computes MD5 locally, POSTs to `/firmware/master`, then polls `/settings` for the `sketchMd5` + `lastFlashResult` verdict and prints SUCCESS, EBOOT SILENT REVERT, or UPLOAD DID NOT REACH HANDLER. Physical re-flash falls back to `esptool` — see issue #53 for the Windows walkthrough.
+Subsequent master flashes happen via OTA — from this repo: `flashing/ota-master.sh <fw.bin> http://host:port`. The script computes MD5 locally, POSTs to `/firmware/master`, then polls `/settings` for the `sketchMd5` + `lastFlashResult` verdict and prints SUCCESS, EBOOT SILENT REVERT, FLASH CONFIG MISMATCH, or UPLOAD DID NOT REACH HANDLER. Physical re-flash falls back to `esptool` — see issue #53 for the Windows walkthrough.
 
 - **ESPMaster** — env `espmaster`, board `esp01_1m`. Library versions pinned in `platformio.ini`. Builtin `EEPROM` is in `lib_deps` because PIO's LDF doesn't surface it by default.
 - **Unit** — env `unit` (board `nanoatmega328new`, new bootloader) or `unit_old_bootloader` (board `nanoatmega328`, old bootloader fallback).
@@ -88,7 +88,7 @@ Master flashes go through `/firmware/master` (HTTP POST `multipart/form-data` + 
 
 - The new firmware reads RTC, compares its own `ESP.getSketchMD5()` against the cookie, and writes `"ok"` (new bits running) or `"reverted"` (same bits → eboot rejected the copy) to the EEPROM `lastFlashResult` slot.
 - `/settings` exposes `sketchMd5`, `lastFlashResult`, `intendedVersion`, `otaReverted`, `lastResetReason`, `bootCounter`, `recoveryMode`.
-- `flashing/ota-master.sh` turns these into a verdict: SUCCESS / EBOOT SILENT REVERT / UPLOAD DID NOT REACH HANDLER / INCONSISTENT.
+- `flashing/ota-master.sh` turns these into a verdict: SUCCESS / EBOOT SILENT REVERT / FLASH CONFIG MISMATCH / UPLOAD DID NOT REACH HANDLER / INCONSISTENT.
 
 **Recovery mode** activates on 3 consecutive unhealthy boots (RTC counter in `RtcBootState`, reset after 30 s of clean uptime). It also accepts a remote trigger: `POST /firmware/recover-mark` writes the counter to the threshold and reboots, so the next boot drops into recovery without physical access. In recovery:
 

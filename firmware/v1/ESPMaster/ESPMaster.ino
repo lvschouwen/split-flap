@@ -380,6 +380,24 @@ void registerMasterFirmwareEndpoint() {
           return;
         }
 
+        //Flash-config mismatch (#92/#94): if the RUNNING image's flash-size
+        //header claims more than the physical chip, Update.begin() will
+        //refuse every upload with the cryptic "Flash config wrong". Detect
+        //it first and tell the operator exactly which USB-reflash variant
+        //breaks the deadlock — nothing sent over the air can.
+        uint32_t flashRealSize   = ESP.getFlashChipRealSize();
+        uint32_t flashHeaderSize = ESP.getFlashChipSize();
+        if (flashRealSize < flashHeaderSize) {
+          otaRejected = true;
+          otaRejectionStatus = 412;
+          otaRejectionReason = String("Flash config mismatch: running firmware header claims ") +
+                               flashHeaderSize + " bytes but chip is " + flashRealSize +
+                               " — OTA is permanently rejected by this build; reflash once over USB with the " +
+                               (flashRealSize >= 4194304 ? "-4m" : "-1m") + " firmware variant";
+          SerialPrintln(otaRejectionReason);
+          return;
+        }
+
         Update.runAsync(true);
         if (!Update.begin(maxSketchSpace, U_FLASH)) {
           SerialPrint(F("Update.begin failed: "));
@@ -1333,6 +1351,9 @@ String getCurrentSettingValues() {
   out += F(",\"lastResetReason\":");                 appendJsonString(out, lastResetReason);
   out += F(",\"bootCounter\":");                     out += String(readBootStateRtc().bootCounter);
   out += F(",\"recoveryMode\":");                    out += (isRecoveryMode ? F("true") : F("false"));
+  //True when the running image's flash-size header exceeds the physical
+  //chip — the state where Update.begin() rejects every OTA (#92/#94).
+  out += F(",\"flashConfigMismatch\":");             out += (ESP.getFlashChipRealSize() < ESP.getFlashChipSize() ? F("true") : F("false"));
   out += F(",\"lastTimeReceivedMessageDateTime\":"); appendJsonString(out, lastReceivedMessageDateTime);
   out += F(",\"lastWrittenText\":");                 appendJsonString(out, lastWrittenText);
 

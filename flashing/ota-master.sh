@@ -106,6 +106,9 @@ trap 'rm -f "$BODY"' EXIT
 #   reverted      eboot silent revert (retryable)
 #   no-handler    HTTP 200 but sketch unchanged and no RTC cookie recorded
 #                 (not retryable — config/network/proxy problem)
+#   flash-config-mismatch  running image's flash header exceeds the physical
+#                 chip; every OTA is refused — needs one USB reflash with the
+#                 matching -1m/-4m variant (not retryable)
 #   upload-failed curl/HTTP-level failure (not retryable)
 #   unreachable   device didn't respond to /settings (not retryable)
 #   inconsistent  unknown post-flash state (not retryable)
@@ -134,6 +137,15 @@ run_attempt() {
 
   echo "HTTP $http_code"
   cat "$BODY"; echo
+
+  # Flash-config mismatch (#92/#94): new firmware rejects with HTTP 412 and
+  # an explanatory body; old firmware leaks the Update class's raw
+  # "Flash config wrong" error. Either way it's terminal — the RUNNING
+  # image refuses every OTA, so classify immediately and don't retry.
+  if grep -qi "flash config" "$BODY"; then
+    LAST_VERDICT="flash-config-mismatch"
+    return
+  fi
 
   if [[ "$http_code" != "200" ]]; then
     LAST_VERDICT="upload-failed"
@@ -216,6 +228,20 @@ for (( attempt=1; attempt<=MAX_ATTEMPTS; attempt++ )); do
        never ran. NOT retrying — this is a reverse-proxy / port-forward /
        routing issue, not a transient hardware sag. Compare the device's
        /log to what the request actually hit.
+MSG
+      exit 3
+      ;;
+    flash-config-mismatch)
+      cat >&2 <<MSG
+
+[fail] FLASH CONFIG MISMATCH — the RUNNING firmware's flash-size header
+       claims a bigger chip than is physically present, so Update.begin()
+       rejects every OTA before reading a single byte. Retrying cannot
+       help and neither can any OTA payload. Reflash ONCE over USB with
+       the variant matching the physical chip:
+         - 1 MB ESP-01      -> firmware-<rev>-1m.bin
+         - 4 MB ESP-12/01M  -> firmware-<rev>-4m.bin
+       OTA works normally again afterwards. See issues #92 / #94.
 MSG
       exit 3
       ;;
