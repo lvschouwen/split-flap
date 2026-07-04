@@ -86,7 +86,7 @@ Master flashes go through `/firmware/master` (HTTP POST `multipart/form-data` + 
 - `WIFI_USE_DIRECT == true` → join hardcoded WiFi, serve a minimal upload form + `/firmware/master` on the normal LAN IP.
 - Otherwise → bring up SoftAP `split-flap-recovery` and serve the same endpoints.
 
-The `RtcBootState` struct holds `magic`, `bootCounter`, and `preFlashSketchMd5[36]`. The magic (`RTC_BOOT_MAGIC`) is checked on read; a mismatch (cold boot, struct change) zero-inits the state.
+The `RtcBootState` struct holds `magic`, `bootCounter`, `bootMode` (quiet OTA mode, #117), `cookieKind` (#118), and `preFlashSketchMd5[36]`. The magic (`RTC_BOOT_MAGIC`) is checked on read; an unknown magic zero-inits the state, but the V3 magic (98ec681-era layout, no `cookieKind`) is migrated in place so a flash performed by pre-#118 firmware still gets a correct verdict on the first post-upgrade boot (#119). On an "ok" verdict the boot check also rewrites `intendedVersion` to the running rev, healing stale values left by environments that couldn't persist `?v=`.
 
 ## Gotchas
 

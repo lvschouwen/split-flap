@@ -45,6 +45,21 @@ struct RtcBootState {
 // could be misread as live fields (e.g. BOOT_MODE_OTA uninvited). A
 // mismatched magic makes normalizeBootState() zero-init the whole struct.
 static const uint32_t RTC_BOOT_MAGIC           = 0xC0FFEE45UL;
+
+// V3 (#117, last shipped in 98ec681): no cookieKind, so the md5 slot sat
+// 4 bytes earlier. Kept only for the in-place migration below — a device
+// flashed BY a V3 firmware carries its pre-flash cookie in this layout,
+// and discarding it (the pre-#119 behavior) left the post-upgrade boot
+// unable to adjudicate the flash, so /settings kept showing whatever
+// stale verdict was in EEPROM.
+static const uint32_t RTC_BOOT_MAGIC_V3        = 0xC0FFEE44UL;
+
+struct RtcBootStateV3 {
+  uint32_t magic;
+  uint32_t bootCounter;
+  uint32_t bootMode;
+  char     preFlashSketchMd5[PRE_FLASH_MD5_LEN];
+};
 // Block 32, NOT 0 (issue #115): the ESP8266 core's Update.end() writes the
 // eboot command (32 blocks / 128 bytes: magic, ACTION_COPY_RAW, args, crc32)
 // at the start of RTC user memory. At offset 0, the post-flash cookie write
@@ -58,8 +73,24 @@ static const unsigned long HEALTHY_BOOT_MS     = 30000UL;
 
 // Zero the whole struct and stamp the current magic when the stored magic
 // doesn't match. Guarantees every field is initialized before downstream
-// code dereferences preFlashSketchMd5 or trusts bootCounter.
+// code dereferences preFlashSketchMd5 or trusts bootCounter. A V3 state
+// is migrated in place instead of zeroed (#119): V3 writers only ever
+// stored the pre-flash sketch MD5 (#118's EXPECTED_MD5 kind didn't exist
+// yet), so a present cookie gets legacy PRE_FLASH semantics.
 inline void normalizeBootState(RtcBootState& state) {
+  if (state.magic == RTC_BOOT_MAGIC_V3) {
+    RtcBootStateV3 old;
+    memcpy(&old, &state, sizeof(old));
+    memset(&state, 0, sizeof(state));
+    state.magic = RTC_BOOT_MAGIC;
+    state.bootCounter = old.bootCounter;
+    state.bootMode = old.bootMode;
+    memcpy(state.preFlashSketchMd5, old.preFlashSketchMd5, PRE_FLASH_MD5_LEN);
+    state.cookieKind = (state.preFlashSketchMd5[0] != '\0')
+                           ? COOKIE_KIND_PRE_FLASH
+                           : COOKIE_KIND_NONE;
+    return;
+  }
   if (state.magic != RTC_BOOT_MAGIC) {
     memset(&state, 0, sizeof(state));
     state.magic = RTC_BOOT_MAGIC;

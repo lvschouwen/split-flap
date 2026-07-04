@@ -159,6 +159,93 @@ static void test_normalize_preserves_state_when_magic_matches() {
   TEST_ASSERT_EQUAL_INT(0, memcmp(state.preFlashSketchMd5, md5, 32));
 }
 
+// --- V3 -> V4 migration (#119) --------------------------------------------
+// A device flashed BY a pre-#118 firmware (98ec681) carries its pre-flash
+// cookie in the V3 layout (no cookieKind, md5 slot 4 bytes earlier).
+// Zero-initing it on the magic mismatch (pre-#119 behavior) left the
+// post-upgrade boot unable to adjudicate the flash, so /settings kept
+// showing whatever stale verdict was in EEPROM.
+
+static RtcBootState makeV3StateBytes(uint32_t bootCounter, uint32_t bootMode,
+                                     const char* md5) {
+  // Build the 48-byte V3 layout inside a V4-sized struct, exactly as
+  // readBootStateRtc() sees it after a 52-byte RTC read on a device last
+  // written by 98ec681-era firmware: trailing 4 bytes are garbage.
+  RtcBootState state;
+  memset(&state, 0xAB, sizeof(state));
+  uint32_t head[3] = { RTC_BOOT_MAGIC_V3, bootCounter, bootMode };
+  memcpy(&state, head, sizeof(head));
+  char slot[PRE_FLASH_MD5_LEN];
+  memset(slot, 0, sizeof(slot));
+  if (md5 != nullptr) {
+    size_t len = strlen(md5);
+    if (len > sizeof(slot) - 1) len = sizeof(slot) - 1;
+    memcpy(slot, md5, len);
+  }
+  memcpy(reinterpret_cast<char*>(&state) + sizeof(head), slot, sizeof(slot));
+  return state;
+}
+
+static void test_normalize_migrates_v3_cookie_to_pre_flash_kind() {
+  const char* md5 = "0123456789abcdef0123456789abcdef";
+  RtcBootState state = makeV3StateBytes(2, BOOT_MODE_NORMAL, md5);
+
+  normalizeBootState(state);
+
+  TEST_ASSERT_EQUAL_UINT32(RTC_BOOT_MAGIC, state.magic);
+  TEST_ASSERT_EQUAL_UINT32(2, state.bootCounter);
+  TEST_ASSERT_EQUAL_UINT32(BOOT_MODE_NORMAL, state.bootMode);
+  TEST_ASSERT_EQUAL_UINT32(COOKIE_KIND_PRE_FLASH, state.cookieKind);
+  TEST_ASSERT_EQUAL_INT(32, (int)cookieLength(state));
+  TEST_ASSERT_EQUAL_INT(0, memcmp(state.preFlashSketchMd5, md5, 33));
+}
+
+static void test_normalize_migrates_v3_empty_cookie_to_kind_none() {
+  RtcBootState state = makeV3StateBytes(1, BOOT_MODE_NORMAL, "");
+
+  normalizeBootState(state);
+
+  TEST_ASSERT_EQUAL_UINT32(RTC_BOOT_MAGIC, state.magic);
+  TEST_ASSERT_EQUAL_UINT32(COOKIE_KIND_NONE, state.cookieKind);
+  TEST_ASSERT_FALSE(cookieIsPresent(state));
+}
+
+static void test_v3_migrated_verdict_new_bits_running_is_ok() {
+  // The #119 scenario: 98ec681 flashes a newer image and stashes ITS OWN
+  // (pre-flash) MD5 in a V3 cookie. The new firmware boots with a
+  // different running MD5 — after migration the verdict must be "ok",
+  // overwriting any stale EEPROM verdict.
+  RtcBootState state = makeV3StateBytes(1, BOOT_MODE_NORMAL,
+                                        "f561594afb6945aea2800f5c02bed3be");
+  normalizeBootState(state);
+  TEST_ASSERT_EQUAL_STRING(
+      "ok", resolveFlashVerdict(state, "d4355ecd9f145d70dbab2114985a19ef"));
+}
+
+static void test_v3_migrated_verdict_old_bits_running_is_reverted() {
+  // True eboot revert across the version boundary must still be caught:
+  // running MD5 == pre-flash cookie -> old bits are still here.
+  const char* md5 = "f561594afb6945aea2800f5c02bed3be";
+  RtcBootState state = makeV3StateBytes(1, BOOT_MODE_NORMAL, md5);
+  normalizeBootState(state);
+  TEST_ASSERT_EQUAL_STRING("reverted", resolveFlashVerdict(state, md5));
+}
+
+static void test_normalize_still_zeros_unknown_magic() {
+  // The V3 carve-out must not weaken the foreign-magic path: anything
+  // that is neither V3 nor V4 still zero-inits.
+  RtcBootState state = makeV3StateBytes(9, BOOT_MODE_OTA, "aabbccdd");
+  state.magic = 0xC0FFEE43UL;  // V2 (#53) — pre-bootMode layout
+
+  normalizeBootState(state);
+
+  TEST_ASSERT_EQUAL_UINT32(RTC_BOOT_MAGIC, state.magic);
+  TEST_ASSERT_EQUAL_UINT32(0, state.bootCounter);
+  TEST_ASSERT_EQUAL_UINT32(BOOT_MODE_NORMAL, state.bootMode);
+  TEST_ASSERT_EQUAL_UINT32(COOKIE_KIND_NONE, state.cookieKind);
+  TEST_ASSERT_FALSE(cookieIsPresent(state));
+}
+
 // --- setPreFlashMd5 -----------------------------------------------------
 
 static void test_setPreFlashMd5_typical_32_char_md5() {
@@ -342,6 +429,11 @@ int main(int, char**) {
   RUN_TEST(test_verdict_malformed_cookie_is_unknown);
   RUN_TEST(test_normalize_zeros_state_when_magic_mismatch);
   RUN_TEST(test_normalize_preserves_state_when_magic_matches);
+  RUN_TEST(test_normalize_migrates_v3_cookie_to_pre_flash_kind);
+  RUN_TEST(test_normalize_migrates_v3_empty_cookie_to_kind_none);
+  RUN_TEST(test_v3_migrated_verdict_new_bits_running_is_ok);
+  RUN_TEST(test_v3_migrated_verdict_old_bits_running_is_reverted);
+  RUN_TEST(test_normalize_still_zeros_unknown_magic);
   RUN_TEST(test_setPreFlashMd5_typical_32_char_md5);
   RUN_TEST(test_setPreFlashMd5_empty_string);
   RUN_TEST(test_setPreFlashMd5_null_pointer);

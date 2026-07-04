@@ -553,6 +553,10 @@ void enterRecoveryMode() {
       "</form></body></html>";
     request->send(200, "text/html", html);
   });
+  //EEPROM must be up before /firmware/master is served from here — the
+  //upload handler persists intendedVersion and stages lastFlashResult="",
+  //and without EEPROM.begin() both writes silently no-op (#119).
+  initialiseFileSystem();
   registerMasterFirmwareEndpoint();
   webServer.begin();
   SerialPrintln(F("Recovery web server ready"));
@@ -614,6 +618,11 @@ void enterOtaMode() {
     String json = getCurrentSettingValues();
     request->send(200, "application/json", json);
   });
+  //EEPROM must be up before /firmware/master is served from here — the
+  //upload handler persists intendedVersion and stages lastFlashResult="",
+  //and without EEPROM.begin() both writes silently no-op (#119). This is
+  //why a quiet-mode flash used to leave a stale intendedVersion behind.
+  initialiseFileSystem();
   registerMasterFirmwareEndpoint();
   webServer.begin();
   SerialPrintln(F("OTA-mode web server ready"));
@@ -758,6 +767,15 @@ void setup() {
         SerialPrint(runningMd5);
         SerialPrintln(F(")"));
         saveLastFlashResult(verdict);
+        //Verdict "ok" proves the flash we're adjudicating took, so the
+        //running rev IS the intended rev. Heal the slot (#119) — it can
+        //hold a stale value when the upload was handled by an environment
+        //that couldn't persist ?v= (a pre-#119 quiet-OTA/recovery boot, or
+        //any pre-#118 firmware), which would otherwise leave a permanent
+        //false "OTA REVERTED" in /settings.
+        if (strcmp(verdict, "ok") == 0) {
+          saveIntendedVersion(String(espVersion));
+        }
         memset(bootStateNow.preFlashSketchMd5, 0, PRE_FLASH_MD5_LEN);
         bootStateNow.cookieKind = COOKIE_KIND_NONE;
         writeBootStateRtc(bootStateNow);
