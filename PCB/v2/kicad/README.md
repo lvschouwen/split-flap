@@ -1,57 +1,45 @@
-# KiCad Netlist Hand-off
+# KiCad Project Directory
 
-KiCad netlist files (`.net`) for the PCBs. Pure netlist format
-(components + connections, no schematic graphics).
+This directory holds the KiCad 10 projects for the three v2 boards.
+The subfolders (`master/`, `unit/`, `bus/`) are created as you work
+through the `KICAD_HOWTO_*.md` walkthroughs — one project per board.
 
-## ⚠️ STALE — do not use as ground truth
+## Netlists removed 2026-07-04 (#102)
 
-The `unit.net` file references the **superseded PA0/PA1/PA2/PA3 USART2
-pin assignment** that was withdrawn 2026-04-25 in favour of USART1 on
-PA9/PA10/PA12 (with `/RE` tied to GND), and still references the
-**HT7833 LDO** that was replaced with **LDL1117S33** on the same date
-(HT7833 = 6.5 V max VIN, would be destroyed at 12 V). It has not been
-regenerated.
+The hand-written `unit/unit.net` and `bus_pcb/bus_pcb.net` netlist
+files were **deleted** in the #102 doc-correction pass. They predated
+the 2026-04-26 review corrections and encoded the rejected pre-review
+design — they contradicted essentially every locked decision.
+Examples of what they still contained:
 
-The **`SCHEMATIC_*.md` files are the ground truth.** Treat the `.net`
-files as historical artifacts only. A freelancer should build the
-schematic from `SCHEMATIC_UNIT.md`, `SCHEMATIC_BUS.md`, and
-`SCHEMATIC_MASTER.md` directly rather than importing these netlists.
+- **HT7833 LDO** on the unit — 6.5 V max VIN, destroyed at 12 V
+  (replaced by LM2937IMP-3.3, LDL1117S33 alternate).
+- **Q1 miswired and not in series** with the 12 V input — no
+  reverse-block function at all.
+- **On-board A1101 hall sensor** — the hall sensor lives on the
+  KY-003-style lead (3.3 V-rated DRV5023/AH3366Q), not on the PCB.
+- **2.54 mm C124378 bus headers** — the row/bus connector is JST-VH
+  3.96 mm (B4P-VH-A).
+- **TestPoint pogo footprints with 0.8 mm drills** — a Mill-Max 0906
+  needs a 1.83 mm drill; the footprint physically cannot fit the part.
 
-## Status
+Because `.net` files are machine-readable, they were the most
+dangerous stale artifact in the repo: an importer would silently
+reproduce the rejected design. Hence deletion rather than a warning
+banner.
 
-| PCB | File | Notes |
-|---|---|---|
-| Bus PCB | `bus_pcb/bus_pcb.net` | 4 nets, 8 nodes — still matches SCHEMATIC_BUS.md |
-| Unit PCB | `unit/unit.net` | **STALE** — uses old PA0–PA3 USART pinout |
-| Master PCB | not generated | spec is large; never machine-generated |
+## Authoritative capture sources
 
-## Caveat
+Schematic capture happens **natively in KiCad 10**, using **official
+KiCad library symbols** (plus the few custom footprints described in
+the HOWTOs). The ground truth to capture from:
 
-These `.net` files were hand-written from the SCHEMATIC_*.md specs.
-They have not been validated against KiCad's parser — there is a
-real chance EasyEDA's importer will reject some fields.
+| Source | Role |
+|---|---|
+| `SCHEMATIC_MASTER.md` / `SCHEMATIC_UNIT.md` / `SCHEMATIC_BUS.md` | Nets, MPNs, pin maps |
+| `MASTER_BOM.csv` / `UNIT_BOM.csv` / `BUS_PCB_BOM.csv` | Parts with LCSC codes |
+| `KICAD_HOWTO_MASTER.md` / `KICAD_HOWTO_UNIT.md` / `KICAD_HOWTO_BUS.md` | Click-by-click capture + layout workflow |
 
-## How to import into EasyEDA Pro
-
-1. Open EasyEDA Pro: https://pro.easyeda.com
-2. Create a new project for the PCB.
-3. `File -> Import -> KiCad...` → select the `.net` file.
-4. EasyEDA imports components + ratsnest into the PCB editor (no
-   schematic — `.net` is a netlist-only format).
-5. Place components + route per the floorplan in the corresponding
-   `SCHEMATIC_*.md`.
-
-## If imports fail
-
-Fall back to manual schematic capture in EasyEDA using the
-`SCHEMATIC_*.md` files as the connection reference. Those are the
-ground truth — connections are unambiguous, just mechanical to wire
-up by hand.
-
-## Why no `.kicad_sch` files
-
-Earlier attempts to hand-write `.kicad_sch` schematic files failed
-KiCad's parser ("Expecting '(' " errors) due to schema differences
-between KiCad versions. The simpler `.net` format avoids most of
-those parsing pitfalls. The schematics live in markdown form
-(`SCHEMATIC_*.md`).
+No master-board netlist was ever generated — the master spec was
+always capture-from-markdown only, and that is now the rule for all
+three boards.

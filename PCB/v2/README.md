@@ -11,13 +11,21 @@ Tracked under issue #83.
 - **Phase:** FROZEN (architecture, MPNs, footprints, pinouts locked
   by issue #86 / commit 060633f). Layout in KiCad 10 is the only
   remaining work.
-- **Branch:** `pcb-v2-rs485-48v`
+- **2026-07-04 review pass (#99–#105):** 2-bus architecture (rows
+  paired on native UART1/UART2, SC16IS740 deleted), unit MCU →
+  STM32G030K8T6, LM2937 LDO + SMAJ13A TVS, hard-gold bus contacts,
+  mandatory power-off insertion. **Layout is now additionally BLOCKED
+  on unit/rail geometry — issue #100.** Motor current re-measurement
+  in #101; master Q1 topology in #103.
+- **Branch:** `pcb-v2-rs485-48v` (branch name is historical — 48 V
+  was evaluated and rejected; the design is 12 V)
 - **Locked decisions:** see `KICAD_HANDOFF.md` § "Locked decisions"
   and `OPEN_DECISIONS.md`.
 
 ## Scope
 
-- 1 master PCB (ESP32-S3, USB-C, 4 RS-485 row ports).
+- 1 master PCB (ESP32-S3, USB-C, 4 row power ports, 2 RS-485 buses —
+  rows paired: Bus A = rows 0+1 on UART1, Bus B = rows 2+3 on UART2).
 - 4 rows × 16 unit slots = **64 units max.**
 - **DIN-rail bus PCB**: 2× 300 mm bus PCBs daisy-chained per row, units
   clip onto rail and contact bus traces via 4 pogo pins per unit. No
@@ -60,8 +68,7 @@ The RS-485 wire format + opcode set is a firmware concern, not a hardware
 one. It is being designed alongside the rewritten unit firmware and is
 intentionally not committed in this directory.
 
-The v1 reference (`PCB/v1/`) is the deployed hardware. The v1->v2
-hardware-only changelog lives at `PCB/REVIEW/CHANGELOG_V1_TO_V2.md`.
+The v1 reference (`PCB/v1/`) is the deployed hardware.
 
 ## Hand-off model
 

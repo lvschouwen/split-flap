@@ -20,7 +20,7 @@ Two components only:
 
 | Ref | Component | KiCad library | LCSC# |
 |---|---|---|---|
-| J_in | **JST-VH 4-pin male, 3.96 mm pitch THT (B4P-VH-A)** | `Connector_JST:JST_VH_B4P-VH-A` | **C144392** (CHECK — locked across system per OPEN_DECISIONS #4) |
+| J_in | **JST-VH 4-pin male, 3.96 mm pitch THT (B4P-VH-A)** | `Connector_JST:JST_VH_B4P-VH-A` | **C144392** (verify per #105 — locked across system per OPEN_DECISIONS #4) |
 | J_out | Same as J_in | same | C144392 |
 
 Net wiring:
@@ -52,7 +52,7 @@ intelligence is in the layout.
 | Substrate | FR-4 |
 | Thickness | 1.6 mm (or 2.0 mm for extra rigidity) |
 | Copper weight | 1 oz on both sides |
-| **Plating** | **ENIG** (required for pogo pin reliability — gold tip on gold pad gives stable contact resistance) |
+| **Plating** | **Hard/thick gold on the contact strips** ("gold fingers": 0.3–0.8 µm Au over ≥2.5 µm Ni, or ENEPIG) — NOT standard thin immersion ENIG. The threat is fretting under stepper vibration, not mating cycles; thin immersion gold wears through and the exposed nickel oxidises |
 | Solder mask | Green, opening over the contact strips |
 | Silk screen | White, mark each contact station "0" through "7" and "TOP" + "BOTTOM" for orientation |
 
@@ -117,10 +117,10 @@ polygon to its net via Edit → Edit Properties.
 
 | Pad | Y position (from top edge) | Contact zone shape | Connected to | Plating |
 |---|---|---|---|---|
-| 12V | 4 mm | 5 × 5 mm rectangle (just expand the trace) | 12V trace | ENIG, no mask |
-| A | 12 mm | 3 × 5 mm rectangle (widen from 1 mm trace) | A trace | ENIG, no mask |
-| B | 20 mm | same as A | B trace | ENIG, no mask |
-| GND | 28 mm | same as 12V | GND trace | ENIG, no mask |
+| 12V | 4 mm | 5 × 5 mm rectangle (just expand the trace) | 12V trace | hard gold, no mask |
+| A | 12 mm | 3 × 5 mm rectangle (widen from 1 mm trace) | A trace | hard gold, no mask |
+| B | 20 mm | same as A | B trace | hard gold, no mask |
+| GND | 28 mm | same as 12V | GND trace | hard gold, no mask |
 
 **No PG_KEY pad.** Earlier drafts (post-Gemini, pre-ChatGPT) added a
 5th isolated ENIG pad at y = 2 mm for a polarization pogo on the unit.
@@ -137,17 +137,26 @@ That approach was withdrawn:
 The widened contact zones give pogo-pin mechanical alignment
 tolerance (~±2 mm) without missing the pad.
 
-Each contact zone is **bare copper with ENIG plating, no solder mask
-opening required** (mask is removed over the entire contact zone).
+Each contact zone is **bare copper with hard/thick gold plating
+(gold fingers or ENEPIG — see § PCB outline + layer stackup), no
+solder mask** (mask is removed over the entire contact zone).
 
 ## Unit station spacing
+
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: the unit outline cannot sit
+> on this 37 mm pitch as documented (80 × 40 mm board = 43 mm
+> overlap; rotated is still 40 > 37 mm with the pogo column parallel
+> to the traces), MH3 collides with station 5, and the end connectors
+> sit inside the station 0/7 unit envelopes. Station pad geometry and
+> unit orientation WILL be redesigned after a dimensioned
+> cross-section + mock-up — do not lay out against these numbers.
 
 | Parameter | Value |
 |---|---|
 | Stations per board | 8 |
 | Pitch (centre-to-centre) | 37 mm |
 | First station from left edge | 18 mm |
-| Last station from right edge | 18 mm (margin 18 mm + 7×37 mm = 277 mm last-station X; 300 − 277 − 18 = 5 mm right-edge clearance, comfortable fit) |
+| Last station from right edge | 23 mm (18 mm + 7×37 mm = 277 mm last-station X; 300 − 277 = 23 mm to the right edge — station row is slightly asymmetric on the board) |
 
 Across two daisy-chained boards: 16 stations total at 37 mm pitch =
 600 mm row span.
@@ -188,7 +197,9 @@ Hole diameter: 3.2 mm (M3 clearance).
 
 ## KiCad 10 build steps
 
-1. New KiCad project: `splitflap-bus-v2` (under `PCB/v2/kicad/bus/`).
+1. New KiCad project: `splitflap-bus-v2` (under `PCB/v2/kicad/bus_pcb/`
+   — the directory already exists; the stale `.net` netlist it held
+   was removed in #102).
 2. Schematic editor:
    - Place 2× JST-VH 4-pin male THT (`Connector_JST:JST_VH_B4P-VH-A`,
      **LCSC C144392** — locked).
@@ -218,15 +229,21 @@ Hole diameter: 3.2 mm (M3 clearance).
    - Press `B` to fill all zones.
 5. DRC: fix all errors (`KICAD_HANDOFF.md` § 9 for rule values).
 6. File → Plot → Gerber + Drill (use the JLCPCB preset; see
-   `KICAD_HANDOFF.md` § 10). **ENIG** plating in JLC's order form
-   (NOT HASL — pogo contacts need gold).
+   `KICAD_HANDOFF.md` § 10). Select **hard/thick gold** for the
+   contact strips in JLC's order form — "gold fingers"
+   (0.3–0.8 µm Au over ≥2.5 µm Ni) or ENEPIG, NOT standard thin
+   ENIG and NOT HASL (fretting under stepper vibration wears through
+   thin immersion gold).
 7. Order from JLCPCB. Quantity: 10 (covers 4-row system + spares).
 
 ## Estimated fab cost
 
-JLC, qty 10, 300×32 mm, 2-layer, 1.6 mm, ENIG, 1 oz copper:
-~EUR 50-70 total (~EUR 5-7 per board). Without ENIG (HASL): ~EUR 25-35.
-ENIG is the cost premium for pogo reliability — worth it.
+JLC, qty 10, 300×32 mm, 2-layer, 1.6 mm, 1 oz copper, hard-gold
+contact strips (gold fingers / ENEPIG): expect a premium over the
+earlier ENIG estimate (~EUR 50-70 total ENIG; hard gold adds a
+per-order surcharge — get a live quote). The plating premium is the
+cost of pogo-contact reliability under stepper vibration — worth it.
+HASL is unsuitable.
 
 ## Custom footprint summary
 

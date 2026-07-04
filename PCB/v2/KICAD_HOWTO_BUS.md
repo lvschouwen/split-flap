@@ -16,6 +16,11 @@ JST-VH connectors, four long traces (12 V / RS485 A / RS485 B / GND),
 and 8 unit-station contact zones. Eight of these boards make a
 4-row × 16-unit display.
 
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: do not place pogo pins /
+> station pads / board outline positions until #100 closes. The
+> schematic side (Steps 0–8) is safe now; the station pad geometry
+> will be redesigned after a physical mock-up.
+
 ---
 
 ## What this board has
@@ -40,9 +45,9 @@ That's it. The "intelligence" is all in the layout.
 2. The **Project Manager** opens.
 3. **File → New Project**.
 4. In the file dialog, navigate to your local copy of the repo →
-   `PCB/v2/kicad/`. There may already be `bus_pcb/` and `unit/`
-   folders from earlier hand-off attempts — **ignore those** (they're
-   stale; see `KICAD_HANDOFF.md` § 2).
+   `PCB/v2/kicad/`. (The stale `bus_pcb.net` / `unit.net` netlists
+   that used to live here were deleted 2026-07-04, #102 — see
+   `kicad/README.md`.)
 5. Click **New Folder** → name it exactly `bus`.
 6. Open the new `bus/` folder.
 7. **Filename**: `splitflap-bus-v2`. Click **Save**.
@@ -403,6 +408,12 @@ on F.Cu spanning most of the board's length.
 
 ## Step 15 — Draw the 8 contact-zone polygons (per station)
 
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: do not place pogo pins /
+> station pads / board outline positions until #100 closes. The
+> station coordinates and pad shapes below are the pre-#100 draft
+> and WILL change after the pogo/station mock-up — treat this step
+> as mechanics-training only until then.
+
 This is the only weird part of the Bus board. We need a widened
 copper area at each unit station so the pogo pins have a tolerance
 margin to land on. There's no KiCad symbol for these — they're just
@@ -468,8 +479,11 @@ landing areas evenly spaced.
 
 ## Step 16 — Open the solder mask over each contact zone
 
-The contact zones need to be **bare ENIG copper** (no green mask) so
-the pogo pin tip can press directly on the gold-plated copper.
+The contact zones need to be **bare gold-plated copper** (no green
+mask) so the pogo pin tip can press directly on the plating. The
+contact strips need **hard/thick gold** — the "gold fingers" process
+or ENEPIG, NOT standard ENIG (standard ENIG's soft ~0.05 µm gold
+wears through under repeated pogo mating) — see the JLC order step.
 
 For each of the 32 contact zones, draw a corresponding rectangle on
 the **F.Mask** layer of identical dimensions (slightly larger if you
@@ -644,14 +658,19 @@ When uploading to JLC, verify:
 - **Material**: FR-4.
 - **Thickness**: 1.6 mm.
 - **PCB color**: green (or anything — solder mask color).
-- **Surface finish**: **ENIG (gold)** — **NOT HASL.** Pogo pins on
-  the unit underside need a hard, reliable contact surface; ENIG
-  gives that. HASL wears out under repeated mating.
+- **Surface finish**: **hard/thick gold on the contact strips** —
+  order the **"gold fingers" process or ENEPIG**, **NOT standard
+  ENIG and NOT HASL.** Pogo tips mate thousands of times; standard
+  ENIG's thin soft gold wears through, HASL is worse. (Corrected
+  from "ENIG" 2026-07-04, #102.) Discuss the gold-finger option
+  with JLC support if the order form doesn't expose it for
+  non-edge-connector pads.
 - **Copper weight**: 1 oz both sides.
 - **Quantity**: 10 (covers 4 rows × 2 boards/row + 2 spares).
 
-JLC's price for ENIG at this size, qty 10, is roughly **EUR 50-70
-total** (~EUR 5-7/board). HASL would be ~half that — pay the premium.
+Hard gold / ENEPIG costs more than the old ENIG quote (which was
+~EUR 50-70 total at qty 10) — pay the premium; the contact strips
+are the one wear surface in the whole system.
 
 ---
 
@@ -674,7 +693,10 @@ item against your KiCad design. The critical ones for this board:
 - [ ] Both connectors are JST-VH 4-pin (B4P-VH-A, C144392), NOT
       JST-XH.
 - [ ] Pin 1 of J_in and J_out maps to 12V.
-- [ ] **ENIG** plating selected in JLC's order form (NOT HASL).
+- [ ] **Hard/thick gold ("gold fingers" process or ENEPIG)** on the
+      contact strips — NOT standard ENIG, NOT HASL.
+- [ ] **Issue #100 closed** and station/pad geometry matches the
+      post-#100 spec — do not order before that.
 - [ ] DRC passes.
 
 ---

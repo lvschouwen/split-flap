@@ -64,10 +64,11 @@ A KiCad "project" is a folder containing 3 files with the same stem:
 `<name>.kicad_pro` (settings), `<name>.kicad_sch` (schematic),
 `<name>.kicad_pcb` (PCB). Plus auto-generated junk like `*-backups/`.
 
-**Don't open the existing `kicad/unit/unit.net` or
-`kicad/bus_pcb/bus_pcb.net` files** — those are stale netlist exports
-from a pre-merge state with the wrong USART pinout and the wrong LDO.
-You'll start each project fresh from the `SCHEMATIC_*.md` ground truth.
+The old `kicad/unit/unit.net` and `kicad/bus_pcb/bus_pcb.net`
+netlist files were **deleted 2026-07-04 (#102)** — they encoded the
+rejected pre-review design (see `kicad/README.md` for the list of
+what was wrong). You'll start each project fresh from the
+`SCHEMATIC_*.md` ground truth.
 
 ---
 
@@ -145,19 +146,19 @@ table — bookmark that page. The most-used entries:
 | LED | `Device:LED` | `LED_SMD:LED_0805_2012Metric` |
 | Generic diode | `Device:D` | per BOM |
 | 10 V Zener (BZT52C10) | `Diode:BZT52C` (or `Device:D_Zener`) | `Diode_SMD:D_SOD-123` |
-| TVS SMAJ15A | `Device:D_TVS` (or `Diode_TVS:SMAJ15A-13-F` if present) | `Diode_SMD:D_SMA` |
-| ESD SM712-02HTG | (custom — hand-draw 3-pin) | `Package_TO_SOT_SMD:SOT-23` |
+| TVS SMAJ15A (master) / SMAJ13A (unit) | `Device:D_TVS` (or the `Diode_TVS:SMAJ*` variants if present) | `Diode_SMD:D_SMA` |
+| ESD SM712-02HTG | `Power_Protection:SM712` (**official symbol** — pinout 1 = I/O1, 2 = I/O2, 3 = GND; do not hand-draw) | `Package_TO_SOT_SMD:SOT-23` |
 | AO3401A P-FET | `Transistor_FET:AO3401A` (or generic P-channel) | `Package_TO_SOT_SMD:SOT-23` |
 | AOD409 P-FET | `Transistor_FET` (generic P-channel, DPAK) | `Package_TO_SOT_SMD:TO-252-2` |
-| LDL1117S33 LDO | `Regulator_Linear:LM1117-3.3` (LM1117 family pinout) | `Package_TO_SOT_SMD:SOT-223-3_TabPin2` |
+| LM2937IMP-3.3 LDO (primary; LDL1117S33 alt) | `Regulator_Linear:LM1117-3.3` (LM1117 family pinout — both parts) | `Package_TO_SOT_SMD:SOT-223-3_TabPin2` (tab = VOUT for both) |
 | K7803-1000R3 buck | (custom — see Master howto) | `Package_TO_SOT_THT:TO-220-3_Vertical` (or any L78xx SIP-3 — verify pin order) |
 | TPL7407L stepper drv | `Driver_Motor:ULN2003A` (footprint-compatible) | `Package_SO:SOIC-16_3.9x9.9mm_P1.27mm` (**narrow!**) |
-| STM32G030K6T6 | `MCU_ST_STM32G0:STM32G030K6Tx` | `Package_QFP:LQFP-32_7x7mm_P0.8mm` |
+| STM32G030K8T6 | `MCU_ST_STM32G0:STM32G030K8Tx` (**official symbol** — verify pins against the ST datasheet; do not hand-draw) | `Package_QFP:LQFP-32_7x7mm_P0.8mm` |
 | ESP32-S3-WROOM-1-N16R8 | `RF_Module:ESP32-S3-WROOM-1` | `RF_Module:ESP32-S3-WROOM-1` |
-| SC16IS740IPW UART expander | (custom — hand-draw) | `Package_SO:TSSOP-16_4.4x5mm_P0.65mm` |
 | SN65HVD75DR RS-485 PHY | `Interface_UART:SN65HVD75D` (or generic 8-pin) | `Package_SO:SOIC-8_3.9x4.9mm_P1.27mm` |
 | USBLC6-2SC6 USB ESD | `Power_Protection:USBLC6-2SC6` | `Package_TO_SOT_SMD:SOT-23-6` |
-| 14.7456 MHz crystal | `Device:Crystal` | `Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm` |
+| AP7361C-33 (master USB bench-power LDO) | `Regulator_Linear` generic (verify pinout vs datasheet) | per `MASTER_BOM.csv` package |
+| BAT60A Schottky (×2, master power-OR) | `Device:D_Schottky` | `Diode_SMD:D_SOD-323` |
 | USB-C 16-pin SMD | `Connector_USB:USB_C_Receptacle_USB2.0_16P` | `Connector_USB:USB_C_Receptacle_GCT_USB4085` |
 | JST-VH 4-pin male THT | `Connector_JST:JST_VH_B4P-VH-A` | `Connector_JST:JST_VH_B4P-VH-A` |
 | JST-XH 5-pin male THT | `Connector_JST:JST_XH_B5B-XH-A` | `Connector_JST:JST_XH_B5B-XH-A` |
@@ -165,14 +166,17 @@ table — bookmark that page. The most-used entries:
 | KF7.62 2-pin screw terminal | `Connector:Screw_Terminal_01x02` (generic) | `TerminalBlock_4Ucon:TerminalBlock_4Ucon_1x02_P3.50mm_Horizontal` (or any 7.62 mm pitch THT footprint matching the BOM part) |
 | Tact switch 6×6 SMD | `Switch:SW_Push` | `Button_Switch_SMD:SW_SPST_B3U-1000P` (or any 6×6 SMD tact) |
 | Mounting hole M3 | (none — placed in PCB editor) | `MountingHole:MountingHole_3.2mm_M3` |
-| Mill-Max pogo 0906-2 | (custom — see Bus howto) | (custom — single hole 1.83 mm drill, 2.45 mm pad) |
+| Mill-Max pogo 0906-2 | (custom — see Unit howto; **placement gated on issue #100**) | (custom — single hole 1.83 mm drill, 2.45 mm pad) |
 
 When you can't find a part: **File → Symbol Editor → File → New
 Symbol** to draw your own. Same for footprints in the Footprint
-Editor. The Bus howto walks you through creating the custom pogo-pin
+Editor. The Unit howto walks you through creating the custom pogo-pin
 footprint as a worked example — once you've done that, drawing the
-SC16IS740 / K7803 / SM712 symbols follows the same pattern (just
-rectangles + named pins).
+K7803 symbol follows the same pattern (just a rectangle + named
+pins). **Do not hand-draw the STM32 or SM712 symbols** — official
+KiCad library symbols exist for both; hand-drawn versions of those
+have already produced wrong pinouts once (superseded 2026-07-04,
+#102).
 
 ### LCSC field for JLC PCBA
 

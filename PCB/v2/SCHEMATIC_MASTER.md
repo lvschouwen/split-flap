@@ -1,28 +1,35 @@
 # Master PCB — Schematic + Layout Specification
 
-**Revision:** 2026-04-26
+**Revision:** 2026-07-04 (#102 doc-correction pass; previous 2026-04-26)
 
 Tool-agnostic spec for the master PCB. **1 of these per system.** Most
-complex board — ESP32-S3 module, 4× RS-485 paths, SC16IS740 UART
-expander, 15 A power input. See `KICAD_HANDOFF.md` for the KiCad 10
-build steps.
+complex board — ESP32-S3 module, 2× RS-485 paths (Bus A = rows 0+1 on
+UART1, Bus B = rows 2+3 on UART2), 15 A power input. See
+`KICAD_HANDOFF.md` for the KiCad 10 build steps.
+
+**Superseded 2026-07-04 (#102):** the earlier 4-bus design (UART0 as a
+bus + SC16IS740 SPI-UART expander for a 4th bus) is deleted. The
+SC16IS740 cannot generate 250 kbaud from a 14.7456 MHz crystal (16×
+divisor = 3.69; nearest is 230,400) and its RTS pin resets
+de-asserted-HIGH, actively driving its bus's RS-485 driver from
+power-on until firmware programs EFCR. SN65HVD75 is 3/20 unit-load
+(213 nodes/bus), so 32 nodes per 2-row bus is trivial.
 
 ## Component list (with LCSC starting points)
 
 | Ref | Value | Footprint | LCSC# (CHECK) | Notes |
 |---|---|---|---|---|
 | U1 | ESP32-S3-WROOM-1-N16R8 | SMD module 18×25.5 mm | C2913203 | 16 MB flash, 8 MB PSRAM, native USB |
-| U2 | **K7803-1000R3** (or R-78E3.3-1.0 / V7803-1000) | SIP-3 module, drop-in for L78xx pinout (VIN/GND/VOUT) | C113973 (CHECK 1A version) | 12V→3.3V **switching buck** module, **1 A** (NOT 500 mA — peak load is ESP32-S3 ~400 mA WiFi TX + 4× SN65HVD75 ~60 mA + SC16IS740 ~10 mA = ~470 mA, leaving zero headroom on a 500 mA part; upgrade flagged by Gemini external review 2026-04-26). **Do NOT use a linear LDO here** — 12V→3.3V at ~200 mA = 1.74 W in SOT-89 (~0.5 W rated) → thermal shutdown. The 3-pin SIP buck module is a self-contained drop-in replacement; pinout matches an L78xx SIP. |
-| U3 | SC16IS740IPW | TSSOP-16 | C9099 | Single-channel UART-to-SPI bridge |
-| U4 | SN65HVD75DR | SOIC-8 | C57928 | Bus 0 RS-485 PHY |
-| U5 | SN65HVD75DR | SOIC-8 | C57928 | Bus 1 RS-485 PHY |
-| U6 | SN65HVD75DR | SOIC-8 | C57928 | Bus 2 RS-485 PHY |
-| U7 | SN65HVD75DR | SOIC-8 | C57928 | Bus 3 RS-485 PHY (driven by SC16IS740) |
+| U2 | **K7803-1000R3** (or R-78E3.3-1.0 / V7803-1000) | SIP-3 module, drop-in for L78xx pinout (VIN/GND/VOUT) | C113973 (CHECK 1A version) | 12V→3.3V **switching buck** module, **1 A** (NOT 500 mA — peak load is ESP32-S3 ~400 mA WiFi TX + 2× SN65HVD75 ~30 mA = ~430 mA, leaving zero headroom on a 500 mA part; upgrade flagged by Gemini external review 2026-04-26). **Do NOT use a linear LDO here** — 12V→3.3V at ~200 mA = 1.74 W in SOT-89 (~0.5 W rated) → thermal shutdown. The 3-pin SIP buck module is a self-contained drop-in replacement; pinout matches an L78xx SIP. |
+| U4 | SN65HVD75DR | SOIC-8 | C57928 | Bus A RS-485 PHY (rows 0+1, UART1) — A/B fan out to J3 + J4 |
+| U5 | SN65HVD75DR | SOIC-8 | C57928 | Bus B RS-485 PHY (rows 2+3, UART2) — A/B fan out to J5 + J6 |
 | U8 | USBLC6-2SC6 | SOT-23-6 | C7519 | USB-C ESD |
-| Y1 | 14.7456 MHz crystal | SMD 3.2×2.5 | C12674 | SC16IS740 reference clock |
-| Q1 | AOD409 (or NTD2955) | DPAK / TO-252 | C160005 (AOD409) | P-FET reverse-block, 15 A continuous. **VGS = ±20 V** (no clamp strictly required at 12 V nominal), but a 12 V Zener clamp gate→source is recommended for symmetry with the unit Q1 fix and to absorb brick over-voltage. See Z1 below. |
+| U9 | AP7361C-33 | SOT-223 | (CHECK) | USB bench-power LDO, 1 A, fed from +5V_USB (added 2026-07-04, #102) |
+| D_or1 | BAT60A Schottky | SOD-323 | (CHECK) | U9 output → 3V3 rail OR-diode (rail ~3.18 V diode-fed — inside ESP32-S3/SN65HVD75 3.0–3.6 V specs) |
+| D_or2 | BAT60A Schottky | SOD-323 | (CHECK) | U2 buck output → 3V3 rail OR-diode; blocks backfeed into the buck when USB-only |
+| Q1 | AOD409 | DPAK / TO-252 | C160005 (AOD409) | P-FET reverse-block. **WARNING (thermally unresolved):** AOD409 is 46 mΩ max at the −10 V VGS the Zener clamp enforces → ~6.6 W at the design's 12 A staggered ceiling, sustained for seconds during global flap cascades — unresolved on 2-layer FR-4. Final reverse-block topology (LM74700-Q1 ideal-diode + N-FET / per-row P-FETs / delete Q1) tracked in **issue #103**. (NTD2955 "alternate" deleted 2026-07-04 (#102) — 0.18 Ω max at −10 V VGS → 26–67 W at 12–15 A; not an equivalent.) A 10 V Zener clamp gate→source (Z1) is included for symmetry with the unit Q1 fix and to absorb brick over-voltage. |
 | Z1 | BZT52C10 (or MMSZ5240B) | SOD-123 | C8062 (CHECK) | **10 V** Zener clamp on Q1 VGS — cathode → source (+12V_RAIL), anode → gate. **10 V (not 12 V)** for BOM commonality with unit Z1 (unit Z1 must be 10 V to keep AO3401A inside ±12 V VGS abs-max under Zener tolerance; master AOD409 ±20 V tolerates either). |
-| F1 | 15 A fuse 5×20 mm + holder | THT | n/a (off-shelf) | Master input fuse, slow-blow |
+| F1 | 15 A fuse 5×20 mm + holder | THT | n/a (off-shelf) | Master input fuse, slow-blow. **Holder MPN required before order — #105.** |
 | F_row1 | Polyfuse 4 A hold | **2920 SMD** (NOT 1812) | C175125 (CHECK — Bourns MF-LSMF400/16X-2 or equivalent 2920 4 A 16 V) | row 0. **1812 family does not support 4 A hold; 2920 is the smallest viable package for 4 A.** |
 | F_row2 | same | 2920 | C175125 (CHECK) | row 1 |
 | F_row3 | same | 2920 | C175125 (CHECK) | row 2 |
@@ -32,45 +39,52 @@ build steps.
 | D3 | LED red | 0805 | C2286 | FAULT |
 | D4-D7 | LED green | 0805 | C72043 | ROW0..ROW3 power indicators |
 | D8 | SMAJ15A | DO-214AC SMA | C167238 | Input TVS unidirectional. **Polarity: cathode (banded end) → +12V_RAIL (post-fuse), anode → GND.** Wrong-way orientation forward-biases and shorts the rail. **Placement: AFTER F1 fuse**, before Q1 — placing it before the fuse leaves no fuse to open during sustained TVS clamp. |
-| D9 | SM712-02HTG (Bus 0 ESD) | SOT-23 | C172881 | RS-485 ESD across A0/B0 |
-| D10 | SM712-02HTG (Bus 1 ESD) | SOT-23 | C172881 | RS-485 ESD across A1/B1 |
-| D11 | SM712-02HTG (Bus 2 ESD) | SOT-23 | C172881 | RS-485 ESD across A2/B2 |
-| D12 | SM712-02HTG (Bus 3 ESD) | SOT-23 | C172881 | RS-485 ESD across A3/B3 |
+| D9 | SM712-02HTG (Bus A ESD) | SOT-23 | C172881 | RS-485 ESD across BUSA_A/BUSA_B |
+| D10 | SM712-02HTG (Bus B ESD) | SOT-23 | C172881 | RS-485 ESD across BUSB_A/BUSB_B |
 | J1 | Screw terminal 2-pin, **≥15 A continuous** | 7.62 mm pitch THT | C8270 (KF7.62-2P, 16 A) or C237691 (DECA MA231 5 mm 15 A) | 12V/15A input. **Do NOT use Phoenix MKDS 1.5/2 (only 8 A nominal).** Pick a 15+ A terminal block (KF7.62 series is the cheapest LCSC-stocked option). |
 | J2 | USB-C 16-pin SMD | TYPE-C-31-M-12 | C165948 | USB receptacle, shielded |
 | J3-J6 | **JST-VH 4-pin male, THT (B4P-VH-A)** | 3.96 mm pitch | **C144392** (CHECK — locked across system per OPEN_DECISIONS #4) | Row outputs (12V/A/B/GND). **JST-VH (≥5 A per pin), NOT JST-XH (3 A)** — row is fused at 4 A so JST-XH is undersized. |
-| J7 | 2×4 pin header (or omit; replace with labeled test pads) | 2.54 mm | C2904 (CHECK — generic 2×4 male shrouded) **or remove and use test pads** | UART/SPI debug breakout. Earlier C124378 reference was wrong (C124378 is a 1×40 single-row strip). If keeping, lock to a real 2×4 LCSC code; otherwise drop J7 in favour of labeled test pads on USART/SPI nets. |
+| J7 | 2×4 pin header (or omit; replace with labeled test pads) | 2.54 mm | C2904 (CHECK — generic 2×4 male shrouded) **or remove and use test pads** | UART debug breakout (SPI breakout deleted with SC16IS740, #102 — IO9–IO13 are spare GPIO). Earlier C124378 reference was wrong (C124378 is a 1×40 single-row strip). If keeping, lock to a real 2×4 LCSC code; otherwise drop J7 in favour of labeled test pads on the UART nets. UART0 (IO43/IO44) test pads MUST stay — debug console. |
 | SW1 | Tact switch 6×6 | SMD | C318884 | BOOT (IO0) |
 | SW2 | Tact switch 6×6 | SMD | C318884 | RST (EN) |
 | C_bulk | 470 µF / 25 V | Radial THT 8×11 mm | C107821 | Input bulk |
 | C_in | 10 µF / 25 V X7R | 1206 | C19702 | Buck module input (per K7803/R-78E datasheet — 4.7–10 µF X7R, 1206 to ensure JLC-stocked X7R availability) |
 | C_out | 10 µF / 10 V X7R | 0805 (×2) | C15850 | Buck module output (datasheet ≥ 10 µF) |
 | C_decap_esp | 100 nF X7R | 0603 (×8) | C14663 | ESP32-S3 module decap |
-| C_decap_uart | 100 nF X7R | 0603 (×1) | C14663 | SC16IS740 VDD decap — single 3V3 supply at pin 1; SC16IS740IPW has **no separate VDD_io** (earlier draft assumed two supplies and was wrong). Place within ~3 mm of pin 1. |
-| C_decap_phy | 100 nF X7R | 0603 (×4) | C14663 | SN65HVD75 Vcc decap — one per PHY (U4–U7), placed within ~3 mm of pin 8 |
-| C_xtal | 18 pF NP0 | 0603 (×2) | C36760 | Crystal load caps |
+| C_esp_bulk | 22 µF / 10 V X7R | 1206 (×1) | (CHECK) | ESP32-S3 module 3V3-pin bulk cap (see pin map — pin 2) |
+| C_decap_phy | 100 nF X7R | 0603 (×2) | C14663 | SN65HVD75 Vcc decap — one per PHY (U4, U5), placed within ~3 mm of pin 8 |
 | C_usb | 1 µF / 10 V X7R | 0603 (×2) | C15849 | USB rail decap |
+| C_ldo | 1 µF / 10 V X7R | 0603 (×2) | C15849 | U9 AP7361C-33 input + output caps (per datasheet) |
 | C_row | 10 µF / 25 V X7R | 0805 (×4) | C19702 | Per-row output bulk (post-polyfuse) |
-| R_term | 120 Ω 1% | 0805 (×4) | C22787 | RS-485 termination per bus |
-| R_bias_a | 1 kΩ 1% | 0805 (×4) | C17513 | A bias to 3V3 per bus |
-| R_bias_b | 1 kΩ 1% | 0805 (×4) | C17513 | B bias to GND per bus |
+| R_bias_a | 1 kΩ 1% | 0805 (×2) | C17513 | A bias to 3V3, one per PHY |
+| R_bias_b | 1 kΩ 1% | 0805 (×2) | C17513 | B bias to GND, one per PHY |
+| R_de_pd | 10 kΩ 1% | 0603 (×2) | C25804 | **DE pull-down to GND, one per PHY — REQUIRED.** SN65HVD75 has no internal pulls and ESP32-S3 GPIOs float during the boot-ROM window; a floating DE can enable a driver and jam a bus. |
+| R_re_pu | 10 kΩ 1% | 0603 (×2) | C25804 | /RE pull-up to 3V3, one per PHY — receivers stay quiet during boot |
 | R_led | 1 kΩ 1% | 0603 (×3) | C21190 | PWR/HB/FAULT LED current limit |
 | R_led_row | 4.7 kΩ 1% | 0603 (×4) | C25879 | Row LED current limit (12V) |
 | R_cc | 5.1 kΩ 1% | 0603 (×2) | C25905 | USB-C CC pull-downs |
 | R_strap | 10 kΩ 1% | 0603 (×4) | C25804 | ESP32-S3 EN pull-up + strap pulls |
-| R_uart_strap | 10 kΩ 1% | 0603 (×4) | C25804 | SC16IS740 IRQ + reset pulls |
+
+**Deleted 2026-07-04 (#102):** U3 SC16IS740IPW, U6/U7 SN65HVD75 (Bus 2/3
+PHYs), Y1 14.7456 MHz crystal + C_xtal 18 pF load caps, C_decap_uart,
+D11/D12 SM712, R_term 120 Ω master termination (×4), R_uart_strap
+(SC16IS740 IRQ/reset pulls). No master termination remains — the master
+is an unterminated mid-bus tap (see RS-485 section).
 
 ## High-level schematic blocks
 
 ```
                  +─────────+
-   12V input ── │ Power   │── 3V3 ── ESP32-S3 ── UART0 ── PHY3 ── J5 (Bus 2)
-                │  in     │── 12V   (USB-C   ── UART1 ── PHY1 ── J3 (Bus 0)
-                │ Q1, F1, │   row    debug,  ── UART2 ── PHY2 ── J4 (Bus 1)
-                │ TVS,    │   poly-  IO map) ── SPI    ── SC16  ── PHY4 ── J6 (Bus 3)
-                │ Cbulk   │   fuses)            (4th UART expander)
+   12V input ── │ Power   │── 3V3 ── ESP32-S3 ── UART1 ── U4 PHY A ── J3 (row 0) + J4 (row 1)
+                │  in     │── 12V   (USB-C    ── UART2 ── U5 PHY B ── J5 (row 2) + J6 (row 3)
+                │ Q1, F1, │   row    debug,   ── UART0 ── debug test pads ONLY (never a bus)
+                │ TVS,    │   poly-  IO map)
+                │ Cbulk   │   fuses)
                 │ K7803   │
                 +─────────+
+
+   USB-C VBUS ── U9 AP7361C-33 LDO ── D_or1 BAT60A ─┐
+   U2 buck output ─────────────────── D_or2 BAT60A ─┴── 3V3 rail (diode-OR; USB bench power)
 ```
 
 ## Power section
@@ -141,24 +155,24 @@ the ESP32-S3-WROOM-1 datasheet v1.6). Module is 41-pin + EPAD.
 | 1, 40, 41, EPAD | GND | GND | All GND pads tied to plane (only these 4 — earlier doc revisions over-counted) |
 | 2 | 3V3 | 3V3 | + 100 nF + 22 µF decap close to module |
 | 3 | EN | EN | 10 kΩ pull-up to 3V3 + SW2 (RST button to GND) + 1 nF cap to GND |
-| 4 | IO4 | UART2_/RE | → U6 SN65HVD75 pin 2 (/RE) via 1 kΩ |
-| 5 | IO5 | UART2_TX | → U6 SN65HVD75 pin 4 (D) |
-| 6 | IO6 | UART2_RX | ← U6 SN65HVD75 pin 1 (R) |
-| 7 | IO7 | UART2_DE | → U6 SN65HVD75 pin 3 (DE) via 1 kΩ |
-| 8 | IO15 | UART1_/RE | → U5 SN65HVD75 pin 2 |
-| 9 | IO16 | UART1_DE | → U5 SN65HVD75 pin 3 |
-| 10 | IO17 | UART1_TX | → U5 SN65HVD75 pin 4 |
-| 11 | IO18 | UART1_RX | ← U5 SN65HVD75 pin 1 |
+| 4 | IO4 | UART2_/RE | → U5 SN65HVD75 pin 2 (/RE) via 1 kΩ + R_re_pu 10 kΩ pull-up to 3V3 |
+| 5 | IO5 | UART2_TX | → U5 SN65HVD75 pin 4 (D) |
+| 6 | IO6 | UART2_RX | ← U5 SN65HVD75 pin 1 (R) |
+| 7 | IO7 | UART2_DE | → U5 SN65HVD75 pin 3 (DE) via 1 kΩ + R_de_pd 10 kΩ pull-down to GND |
+| 8 | IO15 | UART1_/RE | → U4 SN65HVD75 pin 2 (via 1 kΩ + R_re_pu 10 kΩ pull-up to 3V3) |
+| 9 | IO16 | UART1_DE | → U4 SN65HVD75 pin 3 (via 1 kΩ + R_de_pd 10 kΩ pull-down to GND) |
+| 10 | IO17 | UART1_TX | → U4 SN65HVD75 pin 4 |
+| 11 | IO18 | UART1_RX | ← U4 SN65HVD75 pin 1 |
 | 12 | IO8 | (spare) | NC |
 | 13 | IO19 | USB_DM | → U8 USBLC6 + USB-C D- |
 | 14 | IO20 | USB_DP | → U8 USBLC6 + USB-C D+ |
 | 15 | IO3 | strap | **Strapping pin** — add 10 kΩ pull-up to 3V3 to keep USB-JTAG functional by default |
 | 16 | IO46 | strap | **Strapping pin — must be LOW at boot.** Add explicit external 10 kΩ pull-down to GND on this pin. Internal pull-down is not always reliable across resets. |
-| 17 | IO9 | SC16IS740_IRQ | ← U3 IRQ pin (open-drain, 10 kΩ pull-up to 3V3) |
-| 18 | IO10 | SC16IS740_CS | → U3 CS pin |
-| 19 | IO11 | SC16IS740_MOSI | → U3 SI pin |
-| 20 | IO12 | SC16IS740_SCK | → U3 SCK pin |
-| 21 | IO13 | SC16IS740_MISO | ← U3 SO pin |
+| 17 | IO9 | (spare) | NC — freed by SC16IS740 deletion (was IRQ) |
+| 18 | IO10 | (spare) | NC — freed (was SPI CS) |
+| 19 | IO11 | (spare) | NC — freed (was SPI MOSI) |
+| 20 | IO12 | (spare) | NC — freed (was SPI SCK) |
+| 21 | IO13 | (spare) | NC — freed (was SPI MISO) |
 | 22 | IO14 | (spare) | NC |
 | 23 | IO21 | (spare/test) | NC |
 | 24 | IO47 | LED_FAULT | → D3 cathode (anode → 3V3 via R_led 1 kΩ) |
@@ -166,18 +180,18 @@ the ESP32-S3-WROOM-1 datasheet v1.6). Module is 41-pin + EPAD.
 | 26 | IO45 | strap | Leave default per WROOM-1 datasheet (sets VDD_SPI level — module-internal). For N16R8 the module-internal circuitry pulls IO45 to a defined state. |
 | 27 | IO0 | BOOT | **Strapping pin — must be HIGH at boot.** 10 kΩ pull-up to 3V3 + SW1 (BOOT button to GND). |
 | 28-35 | IO35-IO42 | (spare) | NC (IO35-IO37 are used internally for SPI flash/PSRAM on N16R8 — do not connect externally) |
-| 36 | RXD0 (IO44) | UART0_RX | → U4 SN65HVD75 pin 1 (R) |
-| 37 | TXD0 (IO43) | UART0_TX | → U4 SN65HVD75 pin 4 (D) |
-| 38 | IO2 | UART0_/RE | → U4 SN65HVD75 pin 2 (/RE) via 1 kΩ |
-| 39 | IO1 | UART0_DE | → U4 SN65HVD75 pin 3 (DE) via 1 kΩ |
+| 36 | RXD0 (IO44) | UART0_RX | → test pad only (debug console) |
+| 37 | TXD0 (IO43) | UART0_TX | → test pad only (debug console) |
+| 38 | IO2 | (spare) | NC — freed (was UART0_/RE) |
+| 39 | IO1 | (spare) | NC — freed (was UART0_DE) |
 
-**UART0 path (Bus 0)**: TXD0/RXD0 share the boot console UART. After
-boot the firmware can either keep them as the application UART (and
-either disable boot console output or accept its presence on the
-RS-485 bus during boot) or remap UART0 to other GPIOs via the GPIO
-matrix. Recommended layout: route IO43/IO44 to U4 transceiver and
-provide test pads so a USB-serial dongle can also tap UART0 during
-bring-up.
+**UART0 = debug console ONLY, never a bus** (superseded 2026-07-04
+(#102): the earlier design routed UART0 to a Bus-2 RS-485 PHY). The
+ESP32-S3 boot ROM prints on U0TXD at every reset, and that output is
+eFuse-gated (UART_PRINT_CONTROL), not sdkconfig-gated — it cannot be
+suppressed by build configuration, so it must never land on an RS-485
+bus. Route IO43/IO44 to labeled test pads so a USB-serial dongle can
+tap the console during bring-up. Keep the UART0 test pads.
 
 **Strap pin summary** (per WROOM-1 datasheet Table 2-4):
 
@@ -193,10 +207,13 @@ bring-up.
 ```
 J2 (USB-C receptacle):
   VBUS (pins A4, A9, B4, B9) ── tied to local **+5V_USB** net which
-                                  feeds U8 USBLC6 pin 5 (Vbus) only.
-                                  Master is powered from J1, NOT from
-                                  USB — do not connect +5V_USB to any
-                                  other circuitry. Provide a labeled
+                                  feeds U8 USBLC6 pin 5 (Vbus) AND the
+                                  U9 AP7361C-33 bench LDO (see "USB
+                                  bench power" below; added 2026-07-04,
+                                  #102). Do not connect +5V_USB to any
+                                  other circuitry — in particular NOT
+                                  to the U2 buck input (K7803 input
+                                  floor is 6 V). Provide a labeled
                                   test pad for bring-up scope access.
   GND  (pins A1, A12, B1, B12) ── GND plane
   D+   (pin A6, B6) ── USB_DP (paralleled with B6 if Type-C)
@@ -221,105 +238,97 @@ ESP32-S3 IO19/IO20 ──┬─ U8 ── USB-C D+/D-
 Add 1 µF decap on the VBUS rail at U8.
 ```
 
-## SC16IS740 (U3) UART expander — TSSOP-16 pinout LOCKED
+## USB bench power (added 2026-07-04, #102)
 
-**Pin map per NXP datasheet `SC16IS740_750_760.pdf` Figure 5 + Table 4
-(verify on first article — locked here so the freelancer does not need
-to interpret the datasheet):**
-
-| Pin | Signal | Direction | Net |
-|---|---|---|---|
-| 1 | VDD | in | 3V3 + 100 nF decap |
-| 2 | /CS | in | ← ESP32-S3 IO10 |
-| 3 | SI (MOSI) | in | ← ESP32-S3 IO11 |
-| 4 | SO (MISO) | out | → ESP32-S3 IO13 |
-| 5 | SCLK | in | ← ESP32-S3 IO12 |
-| 6 | VSS | gnd | GND |
-| 7 | IRQ (open-drain, active-low) | out | → ESP32-S3 IO9 with 10 kΩ pull-up to 3V3 |
-| 8 | I²C/SPI mode select | in | **tie to GND for SPI mode** (locked; do not float) |
-| 9 | VSS | gnd | GND |
-| 10 | RTS | out | → U7 DE pin (pin 3); see auto-DE wiring below |
-| 11 | CTS | in | **tie permanently to GND** (do NOT leave floating — input pin must have a defined level; auto-flow control is disabled in firmware so polarity is don't-care, but the pin still needs a hard tie) |
-| 12 | TX | out | → U7 SN65HVD75 pin 4 (D) |
-| 13 | RX | in | ← U7 SN65HVD75 pin 1 (R) |
-| 14 | RESET (**active-LOW**) | in | 10 kΩ R_uart_strap pull-up to 3V3 (idle-high = chip out of reset, per NXP datasheet). **Do NOT tie to GND** — that holds the chip in permanent reset. (Gemini external review 2026-04-26 mistakenly claimed this pin is active-HIGH; the NXP SC16IS740/750/760 datasheet confirms active-LOW with the standard overscore notation `RESET`.) |
-| 15 | XTAL1 | in | Y1 14.7456 MHz + 18 pF C_xtal to GND |
-| 16 | XTAL2 | out | Y1 14.7456 MHz + 18 pF C_xtal to GND |
-
-**Important corrections vs. earlier drafts:**
-- Earlier drafts had VDD_io at pin 16 and XTAL at pins 5/6. **Those
-  were wrong** — pins 15/16 are XTAL1/XTAL2, and there is no separate
-  VDD_io on the SC16IS740IPW (single 3V3 supply at pin 1).
-- The I²C/SPI mode select pin (pin 8) was missing entirely in earlier
-  drafts. **Tie pin 8 to GND** to select SPI mode at boot. Floating
-  this pin gives undefined startup behaviour.
-- Pin 6 + pin 9 are both VSS (GND) — connect both to GND plane.
-
-### Bus 3 transceiver (U7) DE/RE wiring — design-correct
-
-Earlier drafts wired RTS to **both** DE and /RE simultaneously. This
-is **incorrect**: DE is active-high and /RE is active-low — one signal
-cannot drive both correctly without an inverter. Corrected wiring:
+As previously drawn, every bench flash required the 12 V brick — VBUS
+fed only the USBLC6 clamp (which stays). Added circuit:
 
 ```
-U7 (SN65HVD75, Bus 3):
-  pin 1 (R)   → SC16IS740 RX (auto-routed via firmware)
-  pin 2 (/RE) ── tie permanently to GND (always-receive mode)
-  pin 3 (DE)  ← SC16IS740 RTS (auto-driven)
-  pin 4 (D)   ← SC16IS740 TX
-  pin 5 (GND), 6 (A), 7 (B), 8 (Vcc) — see RS-485 path section
++5V_USB ── U9 AP7361C-33 (SOT-223, 1 A LDO, C_ldo 1 µF in/out)
+              │
+              └── D_or1 BAT60A Schottky ──┐
+                                          ├── 3V3 rail
+U2 buck VOUT ── D_or2 BAT60A Schottky ────┘
 ```
 
-`/RE` tied low means U7's receiver is **always enabled**. While master
-is transmitting on Bus 3, the master's own UART will hear its own TX
-echo on the RX line — the firmware MUST discard echoed bytes during
-TX windows. This is standard half-duplex RS-485 practice and avoids
-the inverter / extra GPIO that the original wiring would have needed.
+- D_or2 sits in series after the buck output — it blocks backfeed into
+  the buck when running USB-only.
+- Diode-fed, the 3V3 rail sits at ~3.18 V — inside both the ESP32-S3
+  and SN65HVD75 supply specs (3.0–3.6 V).
+- Fine for flashing/debug; do **not** run sustained WiFi TX from a
+  500 mA USB port.
+- **WARNING: do NOT wire VBUS to the buck module input** — the K7803
+  input floor is 6 V.
 
-### Firmware setup for auto-DE on RTS
+## SC16IS740 UART expander — DELETED (superseded 2026-07-04, #102)
 
-The SC16IS740 implements auto-RS-485 direction control via the
-**EFCR (Extra Features Control Register)**:
-- **EFCR bit 4 = 1** → enable auto-RS-485 RTS control. Transmitter
-  asserts RTS while the TX FIFO has data and de-asserts after the
-  last stop bit shifts out.
-- **EFCR bit 5 = 1** → invert RTS polarity so DE goes active-high
-  during TX (which matches the SN65HVD75 DE polarity).
-- **EFR bits 6:7 = 0** → disable hardware flow control (otherwise
-  RTS is repurposed and auto-DE doesn't work).
+Decision history: earlier revisions specified an SC16IS740IPW SPI-UART
+bridge (U3) + 14.7456 MHz crystal (Y1) to provide a 4th UART for a
+4-bus design. **Deleted** because (a) the SC16IS740 cannot generate
+250 kbaud from a 14.7456 MHz crystal — the integer baud divisor is
+14.7456e6/(16×250000) = 3.69, so the nearest achievable rate is
+230,400 baud; (b) its RTS pin resets de-asserted-HIGH, actively driving
+its bus's RS-485 driver from power-on until firmware programs EFCR — a
+pull-down cannot fix a driven pin; and (c) SN65HVD75 is 3/20 unit-load
+(213 nodes/bus), so 32 nodes on a 2-row bus is trivial and only 2 buses
+are needed. The deletion also removes a second firmware driver path, a
+hand-drawn KiCad symbol, a crystal, 2 PHYs and 2 ESD arrays. SPI pins
+IO10–IO13 and IRQ IO9 are freed as spare GPIO.
 
-These are register-level firmware settings; no hardware change. They
-are listed here so the schematic + firmware stay coherent.
+## RS-485 paths (×2 identical sub-circuits)
 
-## RS-485 paths (×4 identical sub-circuits)
-
-Per bus (replace `n` with 0, 1, 2, 3):
+Per bus (`n` = A for Bus A / rows 0+1 / UART1 / U4, or B for Bus B /
+rows 2+3 / UART2 / U5):
 
 ```
-Master MCU/UART_n ── SN65HVD75_Un (transceiver):
+Master UART_n ── SN65HVD75 U4/U5 (transceiver):
   pin 1 (R)   → UART_n RX
-  pin 2 (/RE) ← UART_n /RE (via 1 kΩ R_re)
-  pin 3 (DE)  ← UART_n DE  (via 1 kΩ R_de)
+  pin 2 (/RE) ← UART_n /RE (via 1 kΩ R_re) + R_re_pu 10 kΩ pull-up to 3V3
+  pin 3 (DE)  ← UART_n DE  (via 1 kΩ R_de) + R_de_pd 10 kΩ pull-down to GND
   pin 4 (D)   ← UART_n TX
   pin 5 (GND) ── GND
-  pin 6 (A)   → RS485_An ── R_term 120 Ω across A/B + R_bias_a 1 kΩ to 3V3 + SM712 + J3/4/5/6 pin 2
-  pin 7 (B)   → RS485_Bn ── R_term 120 Ω across A/B + R_bias_b 1 kΩ to GND + SM712 + J3/4/5/6 pin 3
+  pin 6 (A)   → BUSn_A ── R_bias_a 1 kΩ to 3V3 + SM712 + BOTH row connectors pin 2
+  pin 7 (B)   → BUSn_B ── R_bias_b 1 kΩ to GND + SM712 + BOTH row connectors pin 3
   pin 8 (Vcc) ── 3V3 + 100 nF decap
+
+Fan-out — each PHY's A/B nets go to TWO row connectors:
+  U4 (Bus A): J3 (row 0) pins 2/3 + J4 (row 1) pins 2/3
+  U5 (Bus B): J5 (row 2) pins 2/3 + J6 (row 3) pins 2/3
 
 Output connector J3/4/5/6 (Row n):
   pin 1: ROW_n_12V (post-polyfuse F_rown)
-  pin 2: RS485_An
-  pin 3: RS485_Bn
+  pin 2: RS485_A (that row's bus A-line)
+  pin 3: RS485_B (that row's bus B-line)
   pin 4: GND
 ```
 
-SM712-02HTG (4× ESD arrays D9-D12), one per bus:
+**No 120 Ω termination at the master** (master termination resistors
+deleted 2026-07-04, #102). The master is an **unterminated mid-bus
+tap**: each 2-row bus is one linear path from the far end of one row,
+through its bus PCBs and cable, through the master's on-board A/B
+traces, out the other row's cable to that row's far end. The two 120 Ω
+terminator plugs at the two far ends of each bus terminate it (still
+exactly one plug per row, 4 plugs system-wide — unchanged hardware).
+The **failsafe bias (1 k/1 k) stays at the master, one set per PHY**
+(2 sets).
+
+**DE//RE boot-float pulls (added 2026-07-04, #102):** SN65HVD75 has no
+internal pulls and ESP32-S3 GPIOs float during the boot-ROM window — a
+floating DE can enable a driver and jam a bus. **R_de_pd 10 kΩ from
+each DE pin to GND (×2) is REQUIRED.** R_re_pu 10 kΩ pull-ups on both
+/RE lines (×2) are included so receivers stay quiet during boot.
+
+SM712-02HTG (2× ESD arrays D9, D10), one per PHY:
 
 ```
-SM712 pin 1 ── RS485_An
-SM712 pin 2 ── GND
-SM712 pin 3 ── RS485_Bn
+SM712 pin 1 (I/O1) ── BUSn_A
+SM712 pin 2 (I/O2) ── BUSn_B
+SM712 pin 3 (GND)  ── GND
 ```
+
+(Pinout corrected 2026-07-04, #102 — an earlier draft wrongly put GND
+on pin 2. Verify against the Littelfuse datasheet drawing during
+symbol creation.)
 
 ## LEDs (3 master-status, hardwired-12V row indicators)
 
@@ -363,18 +372,18 @@ SW2 (RST button):
    │  │                          │                  │
    │  └─────────────────────────┘                  │
    │                                                │
-   │  U3 SC16IS740   Y1 crystal                    │
+   │  U9 AP7361C + D_or1/D_or2 (USB bench power)    │
    │                                                │
-   │  U4 PHY0  U5 PHY1  U6 PHY2  U7 PHY3            │
-   │  D9       D10      D11      D12  (ESDs)         │
-   │  R_term0  R_term1  R_term2  R_term3            │
-   │  bias0    bias1    bias2    bias3              │
-   │  F_row0   F_row1   F_row2   F_row3 (polyfuses) │
+   │      U4 PHY A            U5 PHY B              │
+   │  D9 ESD, biasA       D10 ESD, biasB            │
+   │  (A/B fan out to     (A/B fan out to           │
+   │   J3 + J4)            J5 + J6)                 │
+   │  F_row1   F_row2   F_row3   F_row4 (polyfuses) │
    │  D4       D5       D6       D7   (row LEDs)    │
    │                                                │
    │  J3       J4       J5       J6                 │ <-- BOTTOM edge
-   │  Bus 0    Bus 1    Bus 2    Bus 3              │ (4-pin shrouded
-   │  out      out      out      out                │  row outputs)
+   │  row 0    row 1    row 2    row 3              │ (4-pin JST-VH
+   │  Bus A    Bus A    Bus B    Bus B              │  row outputs)
    │                                                │
    +─────────────────────────────────────────────+
    M-holes at 4 corners
@@ -386,8 +395,9 @@ Layout principles:
   datasheet section 7.2: **18.6 mm × 5 mm rectangle** under the
   antenna area extending past the module's PCB edge. No copper,
   components, traces, or vias inside this rectangle on either layer.
-- 4 RS-485 PHYs in a row, each near its corresponding output
-  connector at the bottom edge.
+- 2 RS-485 PHYs along the bottom section, each placed between its TWO
+  row output connectors (U4 between J3/J4, U5 between J5/J6) so the
+  A/B fan-out traces stay short.
 - Per-row polyfuses near the master power section, distributing 12V
   through wide traces to each output connector.
 - USB-C and BOOT/RST buttons on the top edge for user access.
@@ -405,7 +415,7 @@ full power path:
 | J1 → F1 → Q1 → C_bulk (12V input, **15 A**) | **Polygon pour on BOTH layers**, stitched with via fence (≥6 vias 0.6 mm drill, 1.0 mm via pad) at every layer transition; minimum local width 250 mil (6.35 mm) where a polygon necking is unavoidable | 15 A on 1 oz copper requires ~325 mil of trace OR a copper pour. A pour is shorter, lower R, and has less ΔT. |
 | C_bulk → per-row polyfuses (12V trunk, ~5 A peak per branch) | **Polygon pour preferred**; if traced, ≥150 mil (3.81 mm) | 5 A per row branch on 1 oz needs ≥110 mil; spec 150 mil for headroom and to keep ΔT < 20 °C |
 | Polyfuse → row output J3-J6 (4 A per row) | **≥120 mil (3.05 mm)**, polygon pour preferred | 4 A on 1 oz needs ~90 mil for 30 °C rise; spec 120 mil for margin |
-| 3V3 to ESP32-S3 / SC16IS740 / PHYs (≤500 mA) | 20 mil (0.5 mm) | Comfortable margin at ≤500 mA |
+| 3V3 to ESP32-S3 / PHYs (≤500 mA) | 20 mil (0.5 mm) | Comfortable margin at ≤500 mA |
 | Signal traces | 6 mil (0.15 mm) | Low current; matches JLC default |
 | RS-485 differential A/B pairs | 10 mil (0.25 mm) routed as a loose pair | Low-speed (250 kbaud) so trace impedance is non-critical |
 
@@ -432,7 +442,6 @@ keep their edges parallel for low loop inductance into C_bulk.
    - Place all components from the LCSC table at the top of this doc.
      ESP32-S3-WROOM-1 needs a custom symbol or Espressif's official
      KiCad library (https://github.com/espressif/kicad-libraries).
-     SC16IS740 needs a hand-drawn symbol per the locked pinout.
    - Add `LCSC` field per part (see `KICAD_HANDOFF.md` § 4).
    - Wire per the section-by-section nets above. Use net labels
      liberally — `12V`, `GND`, `3V3`, `ROW0_12V`...`ROW3_12V`,
@@ -464,11 +473,12 @@ keep their edges parallel for low loop inductance into C_bulk.
 1. **WROOM-1 footprint orientation**: KiCad's library may not have
    the ESP32-S3-WROOM-1-N16R8 — use Espressif's official KiCad lib
    or hand-draw. Verify pin numbering matches the wiring table.
-2. **SC16IS740 RTS-as-DE-control**: Some firmware drivers handle
-   auto-DE on RTS; verify in the SC16IS740 datasheet which mode you
-   intend. Default behaviour is GPIO; auto-RS485 is a register bit.
-3. **USB-C VBUS not connected to 5V buck**: Master is powered from
-   J1, not USB. Don't accidentally wire VBUS to 5V_RAIL.
+2. **SM712 symbol pinout**: pin 1 = I/O1 (A), pin 2 = I/O2 (B),
+   pin 3 = GND. Verify against the Littelfuse datasheet drawing during
+   symbol creation — an earlier draft wrongly put GND on pin 2.
+3. **USB-C VBUS feeds only the USBLC6 clamp + U9 bench LDO**: Master
+   runtime power is from J1. Do NOT wire VBUS to the U2 buck module
+   input (K7803 input floor is 6 V) or to the 12 V rail.
 4. **AOD409 P-FET orientation (high-side reverse-block, standard
    topology)**: **drain** to incoming 12 V (post-fuse), **source** to
    PCB-12V_RAIL (load). Gate to GND via 10 kΩ. This is the opposite
@@ -488,9 +498,17 @@ keep their edges parallel for low loop inductance into C_bulk.
       Espressif reference).
 - [ ] BOOT button pulls IO0 to GND when pressed.
 - [ ] USB-C CC1 and CC2 each have 5.1 kΩ to GND.
-- [ ] All 4 polyfuses sized 4 A hold (Bourns MF-MSMF400 or equivalent).
-- [ ] Row output connectors all 1×4 shrouded box headers, indexed.
-- [ ] SC16IS740 crystal load caps 18 pF NP0.
-- [ ] ESD arrays present on all 4 bus pairs.
-- [ ] Termination + bias resistors all present at master end of every bus.
+- [ ] All 4 polyfuses sized 4 A hold (Bourns MF-LSMF400/16X-2, 2920
+      package — NOT MF-MSMF/1812).
+- [ ] Row output connectors all JST-VH 4-pin (B4P-VH-A, 3.96 mm),
+      keyed/indexed.
+- [ ] ESD arrays (SM712, D9 + D10) present on both bus A/B pairs;
+      SM712 pin 3 = GND (pin 1 = I/O1/A, pin 2 = I/O2/B).
+- [ ] **NO 120 Ω termination at the master** (mid-bus tap); failsafe
+      bias resistors (1 k/1 k) present at the master, one set per PHY.
+- [ ] 10 kΩ DE pull-downs to GND on both PHYs; 10 kΩ /RE pull-ups
+      to 3V3.
+- [ ] UART0 (IO43/IO44) routed to test pads only — never to a PHY.
+- [ ] USB bench power: U9 AP7361C-33 + D_or1/D_or2 BAT60A diode-OR
+      into 3V3; VBUS NOT wired to the buck input.
 - [ ] DRC passes.

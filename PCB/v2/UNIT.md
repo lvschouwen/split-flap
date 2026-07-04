@@ -17,8 +17,9 @@ to the bus, no DIP switches.
 4 pogo pins (on unit underside, pressing onto bus PCB traces)
    1=12V  2=A  3=B  4=GND
        |
+       +- F_unit polyfuse 0.5 A hold / ~1 A trip (1206), in series on the 12 V pogo
        +- Q1 P-FET reverse-block (AO3401A) + Z1 10 V Zener gate→source clamp
-       +- D4 TVS SMAJ15A line-to-GND on **post-Q1 PCB-12V rail** (load side)
+       +- D4 TVS SMAJ13A line-to-GND on **post-Q1 PCB-12V rail** (load side)
        +- Cin 22 uF + 100 nF
        |
        +-> VBUS_12V (direct to motor driver)
@@ -29,13 +30,13 @@ to the bus, no DIP switches.
        |        v
        |    5-pin JST-XH -> 28BYJ-48 12 V stepper (4 coils + +12 V on pin 5)
        |
-       +-> U3 LDO LDL1117S33 (SOT-223, 18V op max / 20V abs max) 12->3.3 V -> VCC_3V3
+       +-> U3 LDO LM2937IMP-3.3 (SOT-223, 26V operating / 60V transient) 12->3.3 V -> VCC_3V3
                                           |
                                           v
-   STM32G030K6T6
+   STM32G030K8T6
        |
        +- 4 GPIO -> motor driver inputs
-       +- 1 GPIO <- J3 (3-pin JST-XH) <- KY-003 hall module on flying lead (open-drain, 10k pull-up to 3V3 on PCB)
+       +- 1 GPIO <- J3 (3-pin JST-XH) <- 3.3 V open-drain hall module on flying lead (DRV5023 / AH3366Q / SS361RT; 10k pull-up to 3V3 on PCB)
        +- 1 GPIO -> DE, 1 GPIO -> /RE  ->  SN65HVD75 RS-485 PHY
        +- USART_TX -> SN65HVD75 D
        +- USART_RX <- SN65HVD75 R
@@ -64,17 +65,27 @@ downward to contact the bus PCB beneath the DIN rail.
 | 4 | GND | bottom edge (matches outer-bottom trace on bus PCB) |
 
 Spacing: ~8 mm between adjacent pin centres, ~24 mm total span.
+(Pogo positions/orientation pending issue #100 — see the warning in
+the Mechanical section.)
 
 Pogo pin spec:
 - Through-hole mount, ~1 mm tip diameter, 1-1.5 mm spring travel
 - Gold-plated tips for reliability against ENIG bus PCB pads
 - ~100-250 g spring force per pin
-- Examples: Mill-Max 0907 series, generic R-PT (AliExpress for hobby
-  cost ~€0.30 each) or Mouser-stocked equivalents
+- Primary: Mill-Max 0906-2-15-20-75-14-11-0; generic R-PT (AliExpress
+  for hobby cost ~€0.30 each) or Mouser-stocked equivalents as fallback
 
 ## Power
 
 - Input: 12 V from bus PCB via pogo pins.
+- **Per-unit input polyfuse F_unit** (0.5 A hold / ~1 A trip, 1206
+  SMD) in series: PG1 (12 V pogo) → F_unit → Q1 → PCB-12V rail. A
+  shorted unit no longer takes down its whole row, and self-identifies
+  (its LEDs go dark).
+- **Hot-swap is prohibited.** Power the row off before inserting or
+  removing a unit. Hot-plugging charges the 22 µF input cap through
+  ~50–100 mΩ of pogo contact resistance ≈ 5–10 V/µs on the rail —
+  the TPL7407L's COM pin abs max is 0.5 V/µs.
 - Reverse-polarity protection: high-side P-FET (AO3401A) on the +12V
   pogo. **Only protects against the brick being wired backward.** It
   does **NOT** protect against a unit clipped onto the rail upside
@@ -84,29 +95,36 @@ Pogo pin spec:
   master's per-row polyfuse opening on the resulting short. Q1 also
   has a **10 V** Zener (Z1) gate-source clamp — AO3401A is rated
   only ±12 V VGS; a **10 V** Zener (BZT52C10) keeps the FET safely
-  inside abs-max even with Zener tolerance (a 12 V Zener +10% =
+  inside abs-max even with Zener tolerance (a BZT52C12 at +10% =
   13.2 V puts the FET out of spec — flagged by Gemini + ChatGPT
   external review 2026-04-26).
 - Bulk cap: 22 µF (1206 X7R) + 100 nF on incoming 12 V.
-- 12 V → 3.3 V: **LDL1117S33TR LDO in SOT-223** (**18 V op max /
-  20 V abs max**, 1.2 A — earlier doc claimed 40 V; verified against
-  ST datasheet 2026-04-26). Load ~55 mA worst case; dissipation
-  ~0.48 W; SOT-223 with **VOUT-tab** copper pour heatsinking. **The
-  tab is on the 3V3 net, NOT GND** — pouring tab to GND would short
-  3V3 to GND through the internally-tied tab/pin-2 node. **Pinout
-  LOCKED (LM1117 family): pin 1 = GND, pin 2 = VOUT (= tab),
-  pin 3 = VIN.** **NOT HT7833** (HT7833 is 6.5 V max VIN — would be
-  destroyed at 12 V). Optional swap: **LM2937IMP-3.3** (26 V max,
-  same SOT-223, same pinout convention) for more TVS-clamp margin.
-- D4 SMAJ15A TVS placement: **post-Q1 (load-side PCB-12V rail)**.
-  Cathode (banded) → PCB-12V, anode → GND.
+- 12 V → 3.3 V: **LM2937IMP-3.3 LDO in SOT-223 — PRIMARY** (26 V
+  operating / 60 V transient; LCSC code CHECK per #105). Load ~55 mA
+  worst case; dissipation ~0.48 W; SOT-223 with **VOUT-tab** copper
+  pour heatsinking. **The tab is on the 3V3 net, NOT GND** — pouring
+  tab to GND would short 3V3 to GND through the internally-tied
+  tab/pin-2 node. **Pinout LOCKED (LM1117 family convention):
+  pin 1 = GND, pin 2 = VOUT (= tab), pin 3 = VIN.** Alternate:
+  **LDL1117S33TR** (18 V op max / 20 V abs max, same SOT-223, same
+  pinout) — demoted from primary because the D4 TVS clamp voltage
+  must stay under the LDO's rating (see D4 below). **NOT HT7833**
+  (HT7833 is 6.5 V max VIN — would be destroyed at 12 V).
+- D4 TVS: **SMAJ13A** (13 V standoff — above 12 V + 5% brick
+  tolerance; VC max 21.5 V, coordinated with the 26 V LM2937 LDO).
+  Supersedes the earlier SMAJ15A, whose VC max of 24.4 V exceeded the
+  LDL1117's 20 V abs max. Placement: **post-Q1 (load-side PCB-12V
+  rail)**. Cathode (banded) → PCB-12V, anode → GND.
 - Stepper coils: directly on 12 V via the driver and J2 pin 5.
 
 ## MCU
 
-**STM32G030K6T6 (LQFP-32).** Required for the 96-bit silicon UID at
-`UID_BASE` (0x1FFF7590). Hardware DE auto-toggle on USART1. Native
-1.7-3.6 V supply. JLC Basic, ~EUR 0.55.
+**STM32G030K8T6 (LQFP-32, 64 KB flash, LCSC C431631).** Required for
+the 96-bit silicon UID at `UID_BASE` (0x1FFF7590). Hardware DE
+auto-toggle on USART1. Native 1.7-3.6 V supply. The K8 (64 KB)
+supersedes the earlier K6T6 (32 KB): deferred OTA-over-RS-485 needs a
+bootloader + A/B app slots, the G0 has no dual-bank flash, and 32 KB
+leaves no headroom. Same LQFP-32 package/pinout.
 
 ## IDENTIFY button + LED
 
@@ -120,15 +138,23 @@ Pogo pin spec:
 ## Motor driver
 
 **TPL7407L** (primary). 7-channel low-side N-MOSFET array, 16-SOIC.
-~12 mW dissipation per coil-on at 200 mA.
+~12 mW dissipation per coil-on at 200 mA. (Motor current figures are
+paper values — bench measurement tracked in #101.)
 
 ULN2003A is footprint-compatible (also 16-SOIC) and stays as a PCBA-time
 substitute if TPL7407L availability flips.
 
 ## Hall sensor
 
-- **Off-board** module (KY-003 or any 3-pin VCC/GND/OUT hall) on a
-  flying lead — same mechanical pattern as v1.
+- **Off-board** 3-pin (VCC/GND/OUT) open-drain hall module on a
+  flying lead — same mechanical pattern as v1 (KY-003-style 3-wire
+  lead).
+- **The sensor must be qualified at 3.3 V.** A genuine KY-003 uses an
+  A3144 (4.5 V minimum supply) and is NOT qualified at 3.3 V. Spec a
+  3.3 V-capable open-drain hall on the same lead: **TI DRV5023,
+  Diodes AH3366Q, or Honeywell SS361RT**. v1 KY-003 modules may work
+  anecdotally at 3.3 V but must be individually bench-verified or
+  replaced.
 - Unit PCB has J3 (3-pin JST-XH male, vertical THT, B3B-XH-A) for the
   cable + 10 k pull-up resistor on the OUT line to 3V3.
 - Sensor sensitive-face alignment to the flap drum magnet is set by
@@ -139,6 +165,9 @@ substitute if TPL7407L availability flips.
 
 - Transceiver: SN65HVD75DR.
 - DE and /RE controlled separately by MCU GPIO.
+- **R_de_pd 10 kΩ pull-down from DE to GND** — the SN65HVD75 has no
+  internal pulls and STM32 GPIOs float as analog inputs during reset;
+  a floating DE can jam the bus.
 - ESD: SM712-02HTG across A/B to GND.
 - No termination on units (only at the master and via terminator plug
   on the far end of each row).
@@ -156,10 +185,24 @@ substitute if TPL7407L availability flips.
 
 ## Mechanical
 
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: the pogo pin positions and
+> the unit's orientation on the rail are pending the #100 mechanical
+> mock-up (the documented 37 mm rail pitch is incompatible with the
+> 80 × 40 board in either orientation). Pogo coordinates elsewhere in
+> this package are written in a superseded coordinate convention and
+> must NOT be captured in KiCad yet. Everything that is not
+> geometry-dependent (netlist, part choices, protection chain) is
+> capture-ready.
+
 - Outline: **80 × 40 mm** identical to v1 (chassis drop-in).
+  **Coordinate convention LOCKED from the v1 Gerber drill file
+  (`Gerber_Drill_NPTH.DRL` ground truth): board 40 mm (X, short
+  axis) × 80 mm (Y, long axis), origin bottom-left.**
 - Mounting holes: 4× M3 clearance at the v1 corner positions
   **(3, 3), (3, 77), (37, 77), (37, 3)** mm — extracted from
   `PCB/v1/Gerber_PCB_Splitflap.zip` → `Gerber_Drill_NPTH.DRL`.
+  Pre-layout check: overlay the v1 drill file on the v2 board in
+  KiCad and confirm the 4 holes coincide.
 - DIN rail clip on the back: **3D-printed asymmetric clip from
   MakerWorld** (one printed per unit). Bolts through the 4 corner M3
   holes. The asymmetric profile is the **only** polarization

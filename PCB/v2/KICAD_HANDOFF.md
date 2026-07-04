@@ -1,12 +1,14 @@
 # KiCad Hand-off Package
 
-**Revision:** 2026-04-26
+**Revision:** 2026-07-04 (#102 doc-correction pass; original 2026-04-26)
 **Tool:** KiCad 10.0 desktop app (free, open source — https://kicad.org)
 **Replaces:** the prior EasyEDA Pro workflow (issue #87 — user switched to KiCad).
 
-**Status: HAND-OFF READY.** Architecture, MPNs, footprints, pinouts
-are FROZEN as of issue #86 (closed by 060633f). Layout is the only
-remaining work.
+**Status: capture-ready, geometry pending.** Architecture, MPNs,
+footprints, pinouts are locked per the 2026-04-26 review + the #102
+correction pass. **Pogo/station geometry is UNRESOLVED (issue #100)**
+— schematic capture can proceed; do not place pogo pins / station
+pads / board outline positions until #100 closes.
 
 ---
 
@@ -29,7 +31,8 @@ rules, verification checklists) lives in:
 | `OPEN_DECISIONS.md` | Locked decisions + rationale |
 
 The schematic specs are tool-agnostic — the same nets/MPNs/footprints
-apply whether you draw them in KiCad, EasyEDA, or by hand.
+apply whatever tool captures them — but KiCad 10 with the official
+library symbols is the workflow.
 
 ---
 
@@ -48,13 +51,15 @@ These came out of internal audit + Gemini + ChatGPT external review
    NOT a linear LDO. SIP-3 footprint, drop-in for L78xx pinout
    (VIN/GND/VOUT). LCSC C113973 (CHECK 1A version).
 
-3. **Unit U3 = LDL1117S33TR** in SOT-223. **18 V op max / 20 V abs
-   max** (NOT 40 V — earlier doc claim was wrong). **Pinout LOCKED
-   to LM1117 family convention: pin 1 = GND, pin 2 = VOUT (= tab),
-   pin 3 = VIN.** Heatsink copper pour goes on **VOUT (pin 2 + tab)**
-   — NOT GND (the tab is internally tied to VOUT; pouring tab to
-   GND shorts 3V3 to GND). Optional alt: LM2937IMP-3.3
-   (LCSC C140265, 26 V max).
+3. **Unit U3 = LM2937IMP-3.3** (LCSC C140265, 26 V max VIN) in
+   SOT-223 — **primary** since 2026-07-04 (#102; the extra VIN
+   margin survives the TVS clamp). **Alternate: LDL1117S33TR**
+   (18 V op max / 20 V abs max — NOT 40 V, earlier doc claim was
+   wrong). **Pinout LOCKED to LM1117 family convention: pin 1 =
+   GND, pin 2 = VOUT (= tab), pin 3 = VIN — applies to BOTH
+   parts.** Heatsink copper pour goes on **VOUT (pin 2 + tab)** —
+   NOT GND (the tab is internally tied to VOUT; pouring tab to GND
+   shorts 3V3 to GND).
 
 4. **Z1 = BZT52C10** (10 V Zener, NOT 12 V). LCSC C8062 (CHECK).
    Both master and unit use the same part for BOM commonality.
@@ -64,22 +69,32 @@ These came out of internal audit + Gemini + ChatGPT external review
 5. **F_row polyfuses = 2920 SMD** (NOT 1812 — 1812 family doesn't
    support 4 A hold). Bourns MF-LSMF400/16X-2.
 
-6. **SC16IS740 TSSOP-16 pinout LOCKED** to NXP datasheet
-   `SC16IS740_750_760.pdf` Figure 5 + Table 4 (see
-   `SCHEMATIC_MASTER.md` § SC16IS740). Pin 14 RESET is
-   **active-LOW** — pulled HIGH to 3V3 via 10 kΩ for normal
-   operation. Pin 8 (mode-sel) tied to GND for SPI mode. Pin 11
-   (CTS) tied to GND.
+6. **2-bus master architecture** *(supersedes the SC16IS740 4-bus
+   design — superseded 2026-07-04, #102)*. The SC16IS740 SPI-UART
+   expander + 14.7456 MHz crystal are **deleted**. 2× SN65HVD75:
+   **Bus A (rows 0+1)** on ESP32-S3 **UART1** (TX/RX/DE//RE =
+   IO17/IO18/IO16/IO15), **Bus B (rows 2+3)** on **UART2**
+   (IO5/IO6/IO7/IO4). **UART0 = console only.** SPI pins IO10–IO13
+   + IRQ IO9 are freed. The master is an **unterminated mid-bus
+   tap**: its 120 Ω termination resistors are deleted; each bus is
+   terminated by the 120 Ω terminator plug at the row's far end.
+   The 1 kΩ/1 kΩ fail-safe bias per PHY stays on the master.
 
-7. **STM32G030 K-suffix LQFP-32 pin map LOCKED**, no SYSCFG remap.
-   Pin 19 = PA9, pin 20 = PC6, pin 21 = PA10, pin 22 = PA11,
-   pin 23 = PA12. USART1 TX/RX/DE go directly at AF1.
+7. **STM32G030K8T6** (64 KB flash, LCSC C431631 — same LQFP-32;
+   upgraded from K6T6 2026-07-04, #102) pin map LOCKED, no SYSCFG
+   remap. Pin 19 = PA9, pin 20 = PC6, pin 21 = PA10, pin 22 = PA11,
+   pin 23 = PA12. USART1 TX/RX/DE go directly at AF1. Capture with
+   the **official KiCad library symbol** and verify pin-for-pin
+   against the ST datasheet — an earlier hand-written pin table was
+   wrong for pins 1–17.
 
 8. **Polarization = asymmetric 3D-printed DIN clip** (MakerWorld
    STL). NO PG_KEY pogo, NO PG_KEY ENIG pad on bus.
 
 9. **Hall connector pinout LOCKED**: J3 pin 1 = +3V3, pin 2 = GND,
-   pin 3 = HALL_OUT (KY-003 native).
+   pin 3 = HALL_OUT (KY-003 native). The sensor on the KY-003-style
+   lead must be a **3.3 V-rated part (DRV5023 or AH3366Q)** —
+   A3144-based modules are not qualified at 3.3 V.
 
 10. **Firmware HARD requirement**: master must stagger motor steps
     on power-up + global commands (peak input current under ~12 A
@@ -104,10 +119,10 @@ PCB/v2/kicad/
 └── bus/       splitflap-bus-v2.kicad_pro + .kicad_sch + .kicad_pcb
 ```
 
-The existing `kicad/unit/unit.net` and `kicad/bus_pcb/bus_pcb.net`
-files are **STALE** (pre-merge state with the wrong USART pinout
-and the HT7833 LDO). Don't import them — start each project fresh
-from the SCHEMATIC_*.md ground truth.
+The old `kicad/unit/unit.net` and `kicad/bus_pcb/bus_pcb.net`
+netlists were **deleted 2026-07-04 (#102)** — they encoded the
+rejected pre-review design (see `kicad/README.md`). Start each
+project fresh from the SCHEMATIC_*.md ground truth.
 
 ### 3. Symbol + footprint libraries
 
@@ -117,19 +132,19 @@ KiCad 10's built-in libraries cover most components. Specifically:
 |---|---|---|
 | Generic R/C/D/LED | `Device` | Use 0603 for resistors, 0805/1206 for caps per BOM |
 | ESP32-S3-WROOM-1-N16R8 | **Custom or Espressif's KiCad lib** | Espressif maintains an official KiCad lib at https://github.com/espressif/kicad-libraries — clone and add as a library path. Or hand-draw. |
-| STM32G030K6T6 | `MCU_ST_STM32G0` | LQFP-32 footprint `Package_QFP:LQFP-32_7x7mm_P0.8mm` |
-| SC16IS740IPW | **Custom** | NXP doesn't ship a KiCad lib. Hand-draw symbol per datasheet pinout (locked in `SCHEMATIC_MASTER.md`). Footprint: `Package_SO:TSSOP-16_4.4x5mm_P0.65mm` |
+| STM32G030K8T6 | `MCU_ST_STM32G0:STM32G030K8Tx` (**official symbol — do not hand-draw**) | LQFP-32 footprint `Package_QFP:LQFP-32_7x7mm_P0.8mm`. Verify pins against the ST datasheet. |
 | SN65HVD75DR | `Interface_UART` or `Driver_FET` | TI provides a symbol; if absent, hand-draw. Footprint: `Package_SO:SOIC-8_3.9x4.9mm_P1.27mm` |
 | TPL7407L | **Custom or generic ULN2003** | TPL7407L pinout is footprint-compatible with ULN2003A — reuse `Driver_Motor:ULN2003A` symbol, but verify the **SOIC-16 NARROW (150 mil)** footprint: `Package_SO:SOIC-16_3.9x9.9mm_P1.27mm`. Do NOT use SOIC-16W (300 mil = `SOIC-16W_7.5x10.3mm_P1.27mm`). |
-| LDL1117S33TR | `Regulator_Linear:LM1117-3.3` symbol works (LM1117 family pinout) | Footprint: `Package_TO_SOT_SMD:SOT-223-3_TabPin2`. **Pin 2 = VOUT = tab, pin 1 = GND, pin 3 = VIN.** |
+| LM2937IMP-3.3 (primary) / LDL1117S33TR (alt) | `Regulator_Linear:LM1117-3.3` symbol works (LM1117 family pinout — both parts) | Footprint: `Package_TO_SOT_SMD:SOT-223-3_TabPin2`. **Pin 2 = VOUT = tab, pin 1 = GND, pin 3 = VIN — for both parts.** |
 | K7803-1000R3 | **Custom** | SIP-3 module. Footprint: any L78xx SIP-3 (e.g., `Package_TO_SOT_THT:TO-220-3_Vertical`) — verify pin order matches K7803 datasheet (VIN/GND/VOUT). |
 | AOD409 P-FET | `Transistor_FET` (P-channel symbol) | Footprint: `Package_TO_SOT_SMD:TO-252-2` (DPAK) |
 | AO3401A P-FET | `Transistor_FET:AO3401A` if present, else generic P-channel symbol | Footprint: `Package_TO_SOT_SMD:SOT-23` |
 | BZT52C10 Zener | `Diode:BZT52C10` if present, else generic Zener | Footprint: `Diode_SMD:D_SOD-123` |
-| SMAJ15A TVS | `Diode_TVS:SMAJ15A-13-F` or generic | Footprint: `Diode_SMD:D_SMA` (DO-214AC) |
-| SM712-02HTG | **Custom** | Hand-draw 3-pin symbol. Footprint: `Package_TO_SOT_SMD:SOT-23` |
+| SMAJ15A TVS (master D8) / SMAJ13A TVS (unit D4) | `Diode_TVS:SMAJ15A-13-F` / equivalent, or generic | Footprint: `Diode_SMD:D_SMA` (DO-214AC) for both |
+| SM712-02HTG | `Power_Protection:SM712` (**official symbol — do not hand-draw**) | Footprint: `Package_TO_SOT_SMD:SOT-23`. **Pinout: 1 = I/O1, 2 = I/O2, 3 = GND** per datasheet — an earlier hand-drawn symbol put GND on pin 2 (wrong; superseded 2026-07-04, #102). |
 | USBLC6-2SC6 | `Power_Protection:USBLC6-2SC6` | Footprint: `Package_TO_SOT_SMD:SOT-23-6` |
-| Crystal 14.7456 MHz | `Device:Crystal` | Footprint: `Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm` |
+| AP7361C-33 (master USB bench-power LDO) | `Regulator_Linear` generic or hand-draw per datasheet | Footprint per BOM package (SOT-223/SOT-89 variant — check `MASTER_BOM.csv`) |
+| BAT60A (×2, master power-OR Schottky) | `Device:D_Schottky` | Footprint: `Diode_SMD:D_SOD-323` |
 | USB-C receptacle | `Connector_USB:USB_C_Receptacle_USB2.0_16P` | KiCad 10 has it. Footprint matches GCT/Amphenol generics. |
 | JST-VH 4-pin | `Connector_JST:JST_VH_B4P-VH-A` | Footprint same name. |
 | JST-XH 5-pin | `Connector_JST:JST_XH_B5B-XH-A` | Footprint same name. |
@@ -159,7 +174,7 @@ For each of the 3 projects (`master`, `unit`, `bus`):
 2. **Schematic capture** following `SCHEMATIC_<board>.md`:
    - Place symbols (use the libraries above).
    - Wire nets — use net labels for clarity (`12V`, `GND`, `3V3`,
-     `RS485_A0`, `UART0_TX`, etc.).
+     `RS485_A`, `UART1_TX`, etc.).
    - Add the `LCSC` field per part.
    - Run **ERC** (Inspect → Electrical Rules Checker). Fix all
      errors. Warnings can usually stay if they're "no_connect"
@@ -186,6 +201,11 @@ For each of the 3 projects (`master`, `unit`, `bus`):
 10. **Plot Gerbers** for JLC (see "Gerber export" below).
 
 ### 6. Custom footprints to draw
+
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: do not place pogo pins /
+> station pads / board outline positions until #100 closes. The
+> footprint drawings below can be prepared, but their placement
+> coordinates will change after the pogo/station mock-up.
 
 These aren't in KiCad's stock libraries:
 
@@ -310,25 +330,26 @@ also works.
 | Unit | 70 | covers 64 + spares |
 | Bus | 10 | covers 8 + spares |
 
-ENIG plating required for the **bus PCB only** (pogo contacts
-need gold). Master + unit are HASL.
+The **bus PCB's contact strips need hard/thick gold** — order the
+"gold fingers" process or ENEPIG, NOT standard ENIG (standard ENIG's
+soft, thin gold wears under repeated pogo mating). Master + unit are
+HASL.
 
 ---
 
 ## Verification checklist before ordering
 
-(Same content as the old EASYEDA_HANDOFF.md verification list —
-this is tool-agnostic, just kept here for completeness.)
+(Carried over from the retired EasyEDA-era hand-off doc — the list
+is tool-agnostic; updated 2026-07-04 (#102) for the 2-bus design.)
 
 - [ ] All LCSC part numbers verified in LCSC catalogue.
 - [ ] DRC passes with no errors.
 - [ ] All component footprints have correct land patterns (compare
       against datasheets — KiCad's library is good but not perfect,
       especially for less common parts).
-- [ ] **Strap pins (ESP32-S3 IO0/IO3/IO45/IO46, SC16IS740 RESET)**
-      have correct boot-state pulls. **IO46 must have an explicit
-      external 10 kΩ pull-down** (do not rely on internal). RESET
-      pulled HIGH to 3V3 (RESET is active-LOW).
+- [ ] **Strap pins (ESP32-S3 IO0/IO3/IO45/IO46)** have correct
+      boot-state pulls. **IO46 must have an explicit external 10 kΩ
+      pull-down** (do not rely on internal).
 - [ ] Test pads accessible (not under components).
 - [ ] Mounting holes don't interfere with traces or components.
 - [ ] Silk screen labels readable (component refs, polarity, pin 1
@@ -346,11 +367,12 @@ this is tool-agnostic, just kept here for completeness.)
 - [ ] Pogo-pin contact resistance per pin: < 100 mΩ at 4 A.
 - [ ] RS-485 idle bias at master end of each bus: A-B should sit at
       a positive differential of ~+100 mV.
-- [ ] Master 3V3 rail under load (boot ESP32-S3 + WiFi + all 4 PHYs
+- [ ] Master 3V3 rail under load (boot ESP32-S3 + WiFi + both PHYs
       idle): U2 buck module surface temp below 50 °C.
 - [ ] Unit 3V3 rail under load (stepper running, RS-485 active):
-      U3 LDL1117S33 surface temp below 60 °C with the **VOUT-tab**
-      pour heatsinking (tab on 3V3 net, NOT GND).
+      U3 LM2937IMP-3.3 (or LDL1117S33 alt) surface temp below 60 °C
+      with the **VOUT-tab** pour heatsinking (tab on 3V3 net, NOT
+      GND — both parts).
 - [ ] **Master J3-J6 row output connectors are JST-VH 4-pin**
       (B4P-VH-A, C144392) — NOT JST-XH (3 A undersized).
 - [ ] **Bus PCB J_in / J_out are JST-VH 4-pin** (B4P-VH-A, C144392).
@@ -363,16 +385,21 @@ this is tool-agnostic, just kept here for completeness.)
 - [ ] **Bus PCB outline is 300 × 32 mm**. **No PG_KEY ENIG pad.**
 - [ ] **Master U2 is K7803-1000R3** switching buck (1 A version),
       NOT 500 mA and NOT a linear LDO.
-- [ ] **Unit U3 is LDL1117S33TR** (or LM2937IMP-3.3 alt), SOT-223,
-      18 V op max. **Pinout: pin 1 = GND, pin 2 = VOUT (= tab),
-      pin 3 = VIN.** **VOUT-tab pour heatsinking** (NOT GND).
+- [ ] **Unit U3 is LM2937IMP-3.3** (or LDL1117S33TR alt), SOT-223.
+      **Pinout: pin 1 = GND, pin 2 = VOUT (= tab), pin 3 = VIN —
+      both parts.** **VOUT-tab pour heatsinking** (NOT GND).
+- [ ] **Unit F_unit 0.5 A polyfuse present, in series with the 12 V
+      input** (per-unit fault isolation).
+- [ ] **Unit R_de_pd 10 kΩ pull-down on the PHY DE pin** (bus stays
+      quiet while the MCU pin is high-Z at reset).
 - [ ] **Q1 (master + unit) has Z1 BZT52C10 (10 V Zener)** clamp
       gate→source plus R_q1g 100 Ω series and R_q1g2 10 kΩ
       pull-down. **10 V (not 12 V)** to keep AO3401A inside ±12 V
       VGS abs-max under Zener tolerance.
-- [ ] **D8 / D4 (SMAJ15A) cathode (banded end) → +12V**, anode →
-      GND. **Master D8 placed AFTER F1 fuse**, before Q1.
-      **Unit D4 placement: post-Q1 (load-side PCB-12V rail)**.
+- [ ] **Master D8 = SMAJ15A, unit D4 = SMAJ13A** — cathode (banded
+      end) → +12V, anode → GND for both. **Master D8 placed AFTER
+      F1 fuse**, before Q1. **Unit D4 placement: post-Q1 (load-side
+      PCB-12V rail)**.
 - [ ] **F_row polyfuses are 2920 package** (Bourns
       MF-LSMF400/16X-2), NOT 1812.
 - [ ] **Master power input is polygon zone** (poured copper) on
@@ -384,14 +411,30 @@ this is tool-agnostic, just kept here for completeness.)
 - [ ] **Unit LEDs are sink-driven**: 3V3 → R_led → anode → cathode
       → MCU GPIO.
 - [ ] **Unit mounting holes** at v1 corner positions (3, 3),
-      (3, 77), (37, 77), (37, 3) mm.
+      (3, 77), (37, 77), (37, 3) mm (X = 40 mm short axis, Y =
+      80 mm long axis, per the v1 drill file convention).
+- [ ] **Overlay v1 `Gerber_Drill_NPTH.DRL` on the unit board** and
+      confirm the 4 M3 holes coincide exactly.
 - [ ] **STM32G030 pin map**: pin 19 PA9, pin 20 PC6 (NC),
       pin 21 PA10, pin 22 PA11 (NC), pin 23 PA12. **No SYSCFG
       remap.**
-- [ ] **SC16IS740 pin 8 (mode-sel) tied to GND** for SPI mode.
-- [ ] **SC16IS740 pin 11 (CTS) tied to GND** — input pin.
-- [ ] **SC16IS740 pin 14 (RESET) pulled HIGH to 3V3 via 10 kΩ.**
-      RESET is **active-LOW** per NXP datasheet — do NOT tie to
-      GND.
+- [ ] **No SC16IS740 / no 14.7456 MHz crystal on the master** —
+      the 4-bus UART-expander design was superseded 2026-07-04
+      (#102) by the 2-bus design (Bus A = UART1, Bus B = UART2,
+      UART0 console only).
+- [ ] **No 120 Ω termination resistors on the master** — the master
+      is an unterminated mid-bus tap; each bus terminates in the
+      120 Ω plug at the row's far end. The 1 kΩ/1 kΩ bias per PHY
+      stays.
+- [ ] **Master: 10 kΩ pull-down on each PHY's DE, 10 kΩ pull-up on
+      each PHY's /RE** (defined bus state during boot/strap).
+- [ ] **Master: 22 µF bulk cap at the ESP32-S3 module 3V3 pin** (in
+      addition to the 100 nF decaps).
+- [ ] **Master USB bench-power OR**: AP7361C-33 LDO from VBUS +
+      2× BAT60A Schottky OR onto 3V3 per `SCHEMATIC_MASTER.md` —
+      bench bring-up without the 12 V supply; no back-feed either
+      direction.
+- [ ] **Bus PCB contact strips ordered as hard/thick gold** ("gold
+      fingers" process or ENEPIG), NOT standard ENIG.
 - [ ] **Master firmware staggers motor steps** so peak input
       current stays under ~12 A.

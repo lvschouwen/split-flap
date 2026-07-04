@@ -10,9 +10,16 @@ vs. Bus — many components, many nets, two-sided placement).
 (the spec — every net, every part), `LAYOUT_UNIT.md` (placement +
 routing rules).
 
-The Unit board is **80 × 40 mm**, **64 of these per system** — every
-mistake here is multiplied 64 times. Take your time on the schematic;
-the PCB is mostly mechanical execution after that.
+The Unit board is **40 × 80 mm** (X = 40 mm short axis, Y = 80 mm
+long axis — the coordinate convention locked from the v1 drill
+file), **64 of these per system** — every mistake here is multiplied
+64 times. Take your time on the schematic; the PCB is mostly
+mechanical execution after that.
+
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: do not place pogo pins /
+> station pads / board outline positions until #100 closes. The
+> schematic capture (Steps 0–2) is safe to do now; the pogo/station
+> pad geometry will be redesigned after a physical mock-up.
 
 ---
 
@@ -20,18 +27,19 @@ the PCB is mostly mechanical execution after that.
 
 | Block | Components | Notes |
 |---|---|---|
-| MCU | U1 STM32G030K6T6 LQFP-32 | Pin map LOCKED — see SCHEMATIC_UNIT § MCU |
+| MCU | U1 STM32G030K8T6 LQFP-32 (64 KB, LCSC C431631) | Pin map LOCKED — see SCHEMATIC_UNIT § MCU; use the **official KiCad symbol** |
 | Stepper driver | U2 TPL7407L SOIC-16 **narrow** | 4 channels drive 28BYJ-48 coils |
-| LDO | U3 LDL1117S33TR SOT-223 | 12 V → 3.3 V; **VOUT is on the tab**, not GND |
-| RS-485 PHY | U4 SN65HVD75 SOIC-8 | half-duplex with hardware DE |
+| LDO | U3 LM2937IMP-3.3 SOT-223 (LDL1117S33 alt) | 12 V → 3.3 V; **VOUT is on the tab**, not GND — both parts |
+| RS-485 PHY | U4 SN65HVD75 SOIC-8 | half-duplex with hardware DE + R_de_pd 10 kΩ DE pull-down |
 | Reverse-block FET | Q1 AO3401A SOT-23 + Z1 BZT52C10 + R_q1g 100 Ω + R_q1g2 10 kΩ | P-FET high-side, **10 V Zener** clamp |
-| Input TVS | D4 SMAJ15A SMA | post-Q1, cathode → +12V |
+| Input polyfuse | F_unit 0.5 A polyfuse | in series with the 12 V input (per-unit fault isolation) |
+| Input TVS | D4 SMAJ13A SMA | post-Q1, cathode → +12V |
 | RS-485 ESD | D5 SM712-02HTG SOT-23 | between U4 and pogo pins |
 | LEDs | D1 (HB blue), D2 (FAULT red), D3 (ID yellow) — 0805 | **sink-driven** |
 | Identify button | SW1 6×6 SMD tact | active-low with debounce cap |
 | Pogo pins | PG1-PG4 THT, 1.83 mm drill, 2.45 mm pad | bottom layer, **no 5th PG_KEY** |
 | Stepper output | J2 JST-XH 5-pin THT | **5-pin** (carries +12V to motor) |
-| Hall input | J3 JST-XH 3-pin THT | KY-003 pinout: VCC/GND/SIG |
+| Hall input | J3 JST-XH 3-pin THT | KY-003 pinout: VCC/GND/SIG; the sensor on the lead must be a **3.3 V-rated part (DRV5023/AH3366Q)** — A3144 modules are not qualified at 3.3 V |
 | Decoupling, pull-ups, etc. | C_in 22µF/1206, decaps 100nF/0603, R_hall/R_id/R_rst/R_led 1kΩ-10kΩ/0603 | see SCHEMATIC_UNIT § Component list |
 
 Read **SCHEMATIC_UNIT.md** end-to-end **before** starting in KiCad.
@@ -45,8 +53,9 @@ prior drafts and would be silent killers if mis-built.
 Same procedure as Bus. Save as `splitflap-unit-v2` under
 `PCB/v2/kicad/unit/`.
 
-Don't import the existing `kicad/unit/unit.net` — it's stale (wrong
-USART pinout, wrong LDO). Start fresh.
+The old `kicad/unit/unit.net` netlist was deleted 2026-07-04 (#102)
+— it encoded the rejected pre-review design. Start fresh from
+`SCHEMATIC_UNIT.md`.
 
 ---
 
@@ -97,18 +106,20 @@ Use these symbols (from `KICAD_HANDOFF.md` § 3 / `KICAD_GETTING_STARTED.md` § 
 
 | Designator | Symbol library | Search |
 |---|---|---|
-| U1 (STM32G030) | `MCU_ST_STM32G0` | `STM32G030K6T` |
+| U1 (STM32G030) | `MCU_ST_STM32G0` | `STM32G030K8T` (**official symbol** — do not hand-draw) |
 | U2 (TPL7407L) | `Driver_Motor` | `ULN2003A` (footprint-compatible — we'll change footprint later) |
-| U3 (LDL1117S33) | `Regulator_Linear` | `LM1117-3.3` |
+| U3 (LM2937IMP-3.3, LDL1117S33 alt) | `Regulator_Linear` | `LM1117-3.3` (same pinout convention for both parts) |
 | U4 (SN65HVD75) | `Interface_UART` | `SN65HVD75` (or generic 8-pin RS-485) |
 | Q1 (AO3401A) | `Transistor_FET` | `AO3401` |
 | Z1 (BZT52C10) | `Diode` | `BZT52C` |
-| D4 (SMAJ15A TVS) | `Diode_TVS` or `Device:D_TVS` | `SMAJ15A` |
-| D5 (SM712 ESD) | (custom — draw 3-pin) | n/a; see step 1c |
+| F_unit (0.5 A polyfuse) | `Device` | `Polyfuse` |
+| D4 (SMAJ13A TVS) | `Diode_TVS` or `Device:D_TVS` | `SMAJ` (any SMA-package TVS symbol; set Value to `SMAJ13A`) |
+| D5 (SM712 ESD) | `Power_Protection:SM712` (**official symbol** — do not hand-draw) | `SM712` |
 | D1-D3 (LEDs) | `Device:LED` | `LED` |
 | R_hall, R_id, R_rst (10k) | `Device:R` | `R` |
 | R_led (×3, 1k) | `Device:R` | `R` |
 | R_de (1k) | `Device:R` | `R` |
+| R_de_pd (10k, DE pull-down) | `Device:R` | `R` |
 | R_q1g (100Ω) | `Device:R` | `R` |
 | R_q1g2 (10k) | `Device:R` | `R` |
 | C_in (22 µF) | `Device:C_Polarized` (or `C`) | `C` |
@@ -123,7 +134,7 @@ Use these symbols (from `KICAD_HANDOFF.md` § 3 / `KICAD_GETTING_STARTED.md` § 
 
 For every placed symbol:
 1. Click → `E` → set the **Value** to match the BOM (e.g. `22u/25V`,
-   `STM32G030K6T6`, `BZT52C10`, etc.).
+   `STM32G030K8T6`, `BZT52C10`, etc.).
 2. Add a custom field **`LCSC`** with the LCSC code from
    `UNIT_BOM.csv`.
 
@@ -131,27 +142,18 @@ Faster bulk method: **Tools → Edit Symbol Fields Table**. Open the
 table, paste-fill the `LCSC` column from `UNIT_BOM.csv`. Saves a lot
 of clicks.
 
-### Custom symbol for SM712-02HTG (D5) (Step 1c)
+### SM712-02HTG (D5) — use the official library symbol (Step 1c)
 
-The SM712 is a 3-pin RS-485 ESD diode and isn't in KiCad's stock
-libraries.
+Press `A`, search `SM712` — use KiCad's official
+**`Power_Protection:SM712`** symbol. Its pinout matches the
+datasheet: **pin 1 = I/O1, pin 2 = I/O2, pin 3 = GND**.
 
-1. **File → Symbol Editor**.
-2. **File → New Library** → name it `splitflap-custom`. Save in
-   project (per-project) scope.
-3. **File → New Symbol** → name `SM712-02HTG`.
-4. Draw a rectangle for the body (e.g. 200 × 100 mil).
-5. Add 3 pins:
-   - Pin 1: name `IO1`, number `1`, electrical type `Bidirectional`.
-   - Pin 2: name `GND`, number `2`, electrical type `Power input`.
-   - Pin 3: name `IO2`, number `3`, electrical type `Bidirectional`.
-6. Set **Reference**: `D`.
-7. Set **Default footprint**: `Package_TO_SOT_SMD:SOT-23`.
-8. Save.
-9. Close Symbol Editor.
+> **Superseded 2026-07-04 (#102):** an earlier revision of this
+> howto had you hand-draw an SM712 symbol with GND on pin 2 — that
+> pinout was **wrong** (GND is pin 3). Do not hand-draw it; use the
+> library symbol and verify against the datasheet.
 
-Back in Eeschema, press `A`, search `SM712`, your custom symbol
-appears under `splitflap-custom`. Place it.
+Default footprint: `Package_TO_SOT_SMD:SOT-23`.
 
 ### Wire it up (Step 1d)
 
@@ -173,23 +175,32 @@ accidentally short them via a generic `+12V` power symbol.
 
 ### Critical wiring details (don't get any of these wrong)
 
-- **U1 (STM32G030) pin map**: PA9 (pin 19) = USART1_TX, **PC6 (pin
-  20) = NC** (PA10 is NOT here — common mistake), PA10 (pin 21) =
-  USART1_RX, PA11 (pin 22) = NC, PA12 (pin 23) = USART1_RTS_DE_CK.
-  No SYSCFG remap.
+- **U1 (STM32G030K8T6) pin map**: PA9 (pin 19) = USART1_TX, **PC6
+  (pin 20) = NC** (PA10 is NOT here — common mistake), PA10 (pin 21)
+  = USART1_RX, PA11 (pin 22) = NC, PA12 (pin 23) = USART1_RTS_DE_CK.
+  No SYSCFG remap. Use the official library symbol and verify the
+  full map against `SCHEMATIC_UNIT.md` § MCU — an earlier
+  hand-written pin table was wrong for pins 1–17.
 - **U3 LDO pinout**: pin 1 = GND, pin 2 = VOUT (= tab), pin 3 = VIN.
-  LM1117 family convention. **The tab (pin 2) is on the 3V3 net,
+  LM1117 family convention — applies to LM2937IMP-3.3 and the
+  LDL1117S33 alternate alike. **The tab (pin 2) is on the 3V3 net,
   NOT GND.**
-- **Q1 reverse-block topology**: drain ← +12V_PG1 (incoming), source
-  → PCB-12V (load), gate via R_q1g 100 Ω in series to the gate node;
-  R_q1g2 10 kΩ from gate node to GND; Z1 cathode to source, anode to
-  gate node. Don't pull the gate to +12V — that defeats the
-  reverse-block.
-- **D4 TVS (SMAJ15A)**: cathode (banded end) → PCB-12V (post-Q1
+- **F_unit polyfuse**: in **series with the incoming 12 V** (between
+  PG1 and Q1's drain, per `SCHEMATIC_UNIT.md`). 0.5 A hold — one
+  shorted unit must not take down the row.
+- **Q1 reverse-block topology**: drain ← +12V_PG1 (incoming, via
+  F_unit), source → PCB-12V (load), gate via R_q1g 100 Ω in series
+  to the gate node; R_q1g2 10 kΩ from gate node to GND; Z1 cathode
+  to source, anode to gate node. Don't pull the gate to +12V — that
+  defeats the reverse-block.
+- **D4 TVS (SMAJ13A)**: cathode (banded end) → PCB-12V (post-Q1
   load-side), anode → GND. Wrong polarity = forward-biased = dead
-  short.
+  short. (Unit TVS is SMAJ13A; the master's input TVS stays
+  SMAJ15A — don't mix them up.)
 - **U4 SN65HVD75**: pin 2 (/RE) **tied to GND** (always-receive;
-  firmware discards TX echo).
+  firmware discards TX echo). **R_de_pd 10 kΩ from pin 3 (DE) to
+  GND** so the transmitter stays off while the MCU pin is high-Z
+  during reset/boot.
 - **LEDs are sink-driven**: 3V3 → R_led 1 kΩ → LED anode → LED
   cathode → MCU GPIO. The MCU sinks current to illuminate. Do NOT
   wire the GPIO to the anode.
@@ -230,10 +241,10 @@ table in `KICAD_GETTING_STARTED.md` § 4.
    150 mil). The default in KiCad's `Driver_Motor:ULN2003A` symbol
    may be the WIDE 7.5 mm body — change it. Wide pads will not bridge
    narrow IC leads, and you'll have 16 cold joints.
-2. **U3 LDL1117S33** → `Package_TO_SOT_SMD:SOT-223-3_TabPin2`. The
-   `_TabPin2` suffix means the heatsink tab is electrically pin 2
-   (VOUT). KiCad has a `_TabPin3` variant for some LDOs — wrong for
-   this part.
+2. **U3 LM2937IMP-3.3 (or LDL1117S33 alt)** →
+   `Package_TO_SOT_SMD:SOT-223-3_TabPin2`. The `_TabPin2` suffix
+   means the heatsink tab is electrically pin 2 (VOUT). KiCad has a
+   `_TabPin3` variant for some LDOs — wrong for both of these parts.
 3. **C_in 22 µF** → `Capacitor_SMD:C_1206_3216Metric` (NOT 0805).
    22 µF / 25 V / X7R / 0805 doesn't exist in JLC stock. 1206 is the
    smallest viable package.
@@ -258,29 +269,38 @@ them yet; first draw the outline and mounting holes.
 
 ## Step 5 — Board outline + mounting holes
 
-### Outline (80 × 40 mm)
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: do not place pogo pins /
+> station pads / board outline positions until #100 closes. The
+> dimensions below are the locked v1-compatible envelope, but hold
+> off committing the outline until the pogo/station mock-up lands.
+
+### Outline (40 × 80 mm — X = short axis, Y = long axis)
 
 1. Layer: `Edge.Cuts`. Grid: 1 mm.
 2. Use `Place → Add Rectangle`. Click corner `(0, 0)` → corner
-   `(80, 40)`. Done.
+   `(40, 80)`. Done.
 
 ### Mounting holes (4× M3 NPTH at v1 corner positions)
 
 `Place → Add Footprint`. Search `MountingHole_3.2mm_M3`. Place at:
 - (3, 3)
-- (77, 3)
-- (3, 37)
-- (77, 37)
+- (3, 77)
+- (37, 77)
+- (37, 3)
 
 These match the v1 chassis bolt pattern AND are where the 3D-printed
-DIN clip bolts onto the back. **Do not change.**
+DIN clip bolts onto the back. **Do not change.** The coordinate
+convention is locked from the v1 drill file — before ordering,
+overlay v1's `Gerber_Drill_NPTH.DRL` on the board and confirm the 4
+M3 holes coincide (see the final checklist).
 
 ---
 
 ## Step 6 — Custom pogo-pin footprint
 
-Same as you did for the Bus board (if you walked through the optional
-custom-footprint creation). If you haven't yet:
+This is the project's worked example of drawing a custom footprint
+(the footprint itself is safe to draw now — only its *placement* is
+gated on issue #100):
 
 1. **File → Footprint Editor**.
 2. **File → New Library** → `splitflap-custom`. Project scope.
@@ -303,22 +323,25 @@ editing the PCB footprint properties.
 
 ## Step 7 — Place pogo pins (the floorplan anchor)
 
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: do not place pogo pins /
+> station pads / board outline positions until #100 closes. The
+> unit-outline-vs-37-mm-station-pitch conflict makes the previously
+> documented pogo coordinates invalid; the pogo/station pad geometry
+> will be redesigned after a physical mock-up. This step is **on
+> hold** — everything below is placement mechanics you'll reuse once
+> #100 locks the coordinates.
+
 The 4 pogo pins are the **mechanical reference** for the back
-floorplan. Place them first.
+floorplan. Once #100 closes, place them first.
 
 All on the **bottom layer (B.Cu)**. They're THT but we want the
 "contact side" to be the bottom (so they project downward toward the
 bus PCB).
 
-1. Select PG1, press `M`, position to **(40, 8)** mm. (Long-axis
-   center = x = 40.)
+1. Select PG1, press `M`, position per the post-#100 spec.
 2. Press `F` to flip to bottom layer (the footprint becomes mirrored
    on B.Cu).
-3. Repeat for PG2 at **(40, 16)**, PG3 at **(40, 24)**, PG4 at
-   **(40, 32)**.
-
-Vertical pogo column at x = 40, y spacing 8 mm. Matches the bus PCB
-trace pitch exactly.
+3. Repeat for PG2–PG4.
 
 ---
 
@@ -326,12 +349,15 @@ trace pitch exactly.
 
 Per `LAYOUT_UNIT.md` § Front (top) layer:
 
-- **J2** (5-pin JST-XH stepper output) — top-left short edge, around
-  (5, 8) — match v1's "28BYJ-48 Stepper" XY.
-- **J3** (3-pin JST-XH hall) — just below J2, around (5, 18) — match
+(Coordinate hints below use the locked convention: X = 40 mm short
+axis, Y = 80 mm long axis.)
+
+- **J2** (5-pin JST-XH stepper output) — top short edge, around
+  (8, 5) — match v1's "28BYJ-48 Stepper" XY.
+- **J3** (3-pin JST-XH hall) — next to J2, around (18, 5) — match
   v1's "Magnet Sensor" XY.
-- **SW1** IDENTIFY button — somewhere on the long edge, accessible
-  after install. (5, 30) is fine.
+- **SW1** IDENTIFY button — accessible after install. (30, 5) is
+  fine.
 - **D1, D2, D3** status LEDs — visible after install, near SW1.
 - **TP_SWD pads + TP1-5 pads** — along an edge for probe access.
 
@@ -348,19 +374,22 @@ placement to flip the component onto B.Cu.
 
 Place these in roughly this order so wiring is clean:
 
-1. **U1** STM32G030 LQFP-32 — central on the back, near the pogo
-   column. Try (50, 20).
+(Same coordinate convention as Step 8; the pogo column position is
+pending #100 — place relative to it once locked.)
+
+1. **U1** STM32G030K8T6 LQFP-32 — central on the back, near the pogo
+   column. Try (20, 50).
 2. **U4** SN65HVD75 SOIC-8 — between U1 and the pogo column, so the
    RS-485 A/B traces from PG2/PG3 stay short (< 30 mm).
 3. **D5** SM712 SOT-23 — adjacent to U4, on the A/B nets (between
    U4 and the pogos).
 4. **U2** TPL7407L SOIC-16 narrow — near v1's ULN2003A position
-   (top-right area of the back, around (60, 12)).
-5. **U3** LDL1117S33 SOT-223 — near v1's AMS1117 position (around
-   (15, 30)). Leave room for a ~1 cm² VOUT pour next to it.
-6. **Q1, Z1, R_q1g, R_q1g2** — group near U3's input (the post-Q1
-   PCB-12V rail).
-7. **D4** SMAJ15A SMA — on the PCB-12V rail (post-Q1), near the
+   (around (12, 60)).
+5. **U3** LM2937IMP-3.3 SOT-223 — near v1's AMS1117 position (around
+   (30, 15)). Leave room for a ~1 cm² VOUT pour next to it.
+6. **F_unit, Q1, Z1, R_q1g, R_q1g2** — group between PG1's 12 V
+   entry and U3's input; F_unit sits first in line, then Q1.
+7. **D4** SMAJ13A SMA — on the PCB-12V rail (post-Q1), near the
    junction where Q1 source feeds C_in / C_in2 / U3 / J2 pin 5.
    **Mark the cathode side with a silk arrow** so the assembler
    doesn't fit it backwards.
@@ -374,7 +403,8 @@ Place these in roughly this order so wiring is clean:
 11. **C_rst, R_rst** on the NRST net near U1 pin 4.
 12. **C_id, R_id** on the IDENTIFY_BTN net near U1 pin 18 (and SW1).
 13. **R_hall** on the HALL_IN net near U1 pin 13 (and J3 pin 3).
-14. **R_de** on the DE net between U1 pin 23 and U4 pin 3.
+14. **R_de** on the DE net between U1 pin 23 and U4 pin 3;
+    **R_de_pd** (10 kΩ to GND) right at U4 pin 3.
 15. **R_led (×3)** between 3V3 and each LED anode.
 
 Don't aim for perfection on first pass. Place, route, see what's
@@ -390,7 +420,7 @@ routing / § Signal routing):
 | Net group | Width | Notes |
 |---|---|---|
 | 12V (PCB-12V rail post-Q1) | 15-20 mil (0.4-0.5 mm) | branches to D4, C_in, C_in2, U2 pin 9, J2 pin 5, U3 pin 3 |
-| 12V (pre-Q1, PG1 → Q1 drain) | 15-20 mil | very short — stay on bottom layer |
+| 12V (pre-Q1, PG1 → F_unit → Q1 drain) | 15-20 mil | very short — stay on bottom layer |
 | 3V3 | 15 mil (0.4 mm) | from U3 pin 2 + tab to U1 VDD pins, U4 pin 8, all 3V3 pull-ups |
 | GND | poured zone both layers | stitched ~10 mm |
 | Stepper coil drives (U2 OUT → J2) | 15 mil | peak ~250 mA per coil |
@@ -432,7 +462,7 @@ Per `LAYOUT_UNIT.md` § Silk screen:
 
 - Designator for every component (KiCad places these automatically;
   move them to readable positions).
-- Polarity arrow on D4 SMAJ15A (cathode = banded → +12V).
+- Polarity arrow on D4 SMAJ13A (cathode = banded → +12V).
 - Pin labels near pogo holes (back side): "PG1 12V", "PG2 A",
   "PG3 B", "PG4 GND".
 - "IDENTIFY" near SW1.
@@ -475,7 +505,7 @@ makes sense for 70 boards).
 | Layers | 2 |
 | Material | FR-4 |
 | Thickness | 1.6 mm |
-| Surface finish | **HASL** is fine — pogo pins are on the **bus PCB** (which is ENIG), not the unit board |
+| Surface finish | **HASL** is fine — the wear-surface contact strips are on the **bus PCB** (hard/thick gold there), not the unit board |
 | Copper weight | 1 oz both sides |
 | Estimated cost | ~EUR 2-3 per board at qty 70 (~EUR 150-200 total) |
 
@@ -490,11 +520,17 @@ Open `LAYOUT_UNIT.md` § "Verification before Gerber" — run through
 every checkbox. The killers (multiplied 64×):
 
 - [ ] **U2 TPL7407L is SOIC-16 narrow (150 mil)**, NOT SOIC-16W.
-- [ ] **U3 LDL1117S33 tab is on 3V3 net**, NOT GND. Verify by
-      clicking the tab in Pcbnew → properties → net should be `+3V3`.
-- [ ] **U3 pinout: pin 1 = GND, pin 2 = VOUT (= tab), pin 3 = VIN.**
+- [ ] **U3 is LM2937IMP-3.3 (LDL1117S33 alt); tab is on 3V3 net**,
+      NOT GND. Verify by clicking the tab in Pcbnew → properties →
+      net should be `+3V3`.
+- [ ] **U3 pinout: pin 1 = GND, pin 2 = VOUT (= tab), pin 3 = VIN —
+      both parts.**
 - [ ] **Q1 gate-source clamp is BZT52C10 (10V)**, NOT BZT52C12.
-- [ ] **D4 SMAJ15A** is post-Q1 (load-side) with cathode → +12V.
+- [ ] **F_unit 0.5 A polyfuse is in series with the 12 V input**
+      (PG1 → F_unit → Q1 drain).
+- [ ] **D4 SMAJ13A** (NOT SMAJ15A — that's the master's input TVS)
+      is post-Q1 (load-side) with cathode → +12V.
+- [ ] **R_de_pd 10 kΩ pull-down present on U4 pin 3 (DE).**
 - [ ] **C_in is 1206 package**, NOT 0805.
 - [ ] **No 5th PG_KEY pogo pin anywhere.**
 - [ ] **U1 pin map**: pin 19 = PA9 (TX), pin 20 = PC6 (NC),
@@ -505,8 +541,13 @@ every checkbox. The killers (multiplied 64×):
 - [ ] **J2 is JST-XH 5-pin**, pin 5 wired to PCB-12V (post-Q1).
 - [ ] **J3 is JST-XH 3-pin**, pin 1 = +3V3, pin 2 = GND, pin 3 =
       HALL_OUT.
-- [ ] All 4 corner mounting holes at v1 positions (3,3) (77,3)
-      (3,37) (77,37) — chassis drop-in.
+- [ ] All 4 corner mounting holes at v1 positions (3,3) (3,77)
+      (37,77) (37,3) — chassis drop-in (X = 40 mm short axis,
+      Y = 80 mm long axis).
+- [ ] **Overlay v1's `Gerber_Drill_NPTH.DRL` on the board** and
+      confirm the 4 M3 holes coincide exactly.
+- [ ] **Issue #100 closed** and pogo positions match the post-#100
+      geometry spec — do not order before that.
 - [ ] DIN clip mounting bolt heads on the back don't interfere
       with pogo pins or any back-layer components (visual check
       in 3D viewer; the clip is bolted from the back through M3
@@ -520,9 +561,10 @@ every checkbox. The killers (multiplied 64×):
 - **More nets** (~30 vs. 4) — schematic is busier.
 - **Two-sided placement** — most components on bottom, connectors
   and user I/O on top. You'll be flipping (`F`) often.
-- **A custom pogo footprint and a custom SM712 symbol** — you've now
-  drawn at least one custom symbol and one custom footprint, so you
-  know how.
+- **A custom pogo footprint** — you've now drawn a custom footprint,
+  so you know how. (Symbols stay official-library: STM32 and SM712
+  hand-drawn symbols are banned after a wrong-pinout incident —
+  superseded 2026-07-04, #102.)
 - **The LDO tab gotcha** — the most common silent failure on this
   board. Verify multiple times: the tab IS pin 2, pin 2 IS VOUT, and
   the **3V3 net** is what touches the tab.

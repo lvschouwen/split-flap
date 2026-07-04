@@ -11,9 +11,11 @@ the three boards.
 (491 lines — read it twice), `LAYOUT_MASTER.md`.
 
 The Master is **~100 × 80 mm**, **1 per system**. It carries the
-ESP32-S3 + 4 RS-485 buses + USB-C + 12 V/15 A input + 4 row outputs.
-The number-one risk is the **antenna keep-out**; the number-two risk
-is the **15 A power path**.
+ESP32-S3 + **2 RS-485 buses** (Bus A serves rows 0+1, Bus B serves
+rows 2+3 — the SC16IS740 4-bus design was superseded 2026-07-04,
+#102) + USB-C + 12 V/15 A input + 4 row outputs. The number-one risk
+is the **antenna keep-out**; the number-two risk is the **15 A power
+path**.
 
 ---
 
@@ -26,8 +28,7 @@ is the **15 A power path**.
 | RF antenna keep-out | no | no | **YES, critical** (18.6 × 5 mm, both layers) |
 | 15 A power path requiring poured copper | no | no | **YES** (J1 → F1 → Q1 → C_bulk → branch point) |
 | Differential pair (USB) | no | no | yes — D+/D- |
-| Multiple-instance routing (4× identical RS-485 path) | no | no | yes — 4 row sub-circuits |
-| SPI bus to UART expander | no | no | yes (ESP32-S3 ↔ SC16IS740) |
+| Multiple-instance routing (2× identical RS-485 path) | no | no | yes — 2 bus sub-circuits, 4 row power branches |
 | 12 V/3.3 V/5 V (USB-VBUS) coexistence | no (just 12 V passthrough) | yes (12 V + 3.3 V) | yes (12 V + 3.3 V + USB-VBUS isolated) |
 | Strap-pin pulls on a module | no | no | yes (ESP32-S3 IO0/3/45/46/EN) |
 
@@ -52,23 +53,27 @@ sheet:
      U2 K7803, C_in, C_out, the 4 polyfuses + C_row + row PWR LEDs)
    - `mcu.kicad_sch` (U1 ESP32-S3 module, all decoupling, all strap
      pulls, BOOT/RST switches, EN cap)
-   - `usb.kicad_sch` (J2 USB-C, U8 USBLC6, R_cc ×2, C_usb)
-   - `uart_expander.kicad_sch` (U3 SC16IS740, Y1 crystal, C_xtal ×2,
-     IRQ pull, RESET pull, mode-sel/CTS ties)
-   - `bus0_rs485.kicad_sch` (U4 PHY, R_term, R_bias_a/b, D9 ESD,
-     C_decap_phy, C_row, F_row, R_led_row, J3 connector — entire
-     bus 0 sub-circuit)
-   - **Copy `bus0_rs485.kicad_sch` 3 more times** as `bus1_*`,
-     `bus2_*`, `bus3_*`. Tweak only the connector designator and net
-     names.
+   - `usb.kicad_sch` (J2 USB-C, U8 USBLC6, R_cc ×2, C_usb, plus the
+     USB bench-power OR: AP7361C-33 LDO + 2× BAT60A Schottkys — see
+     `SCHEMATIC_MASTER.md` § USB bench power)
+   - `busA_rs485.kicad_sch` (U4 PHY, R_bias_a/b, DE/ /RE pulls,
+     D9 ESD, C_decap_phy, plus the TWO row branches it serves: J3 +
+     J4 connectors, each with F_row, C_row, R_led_row + LED —
+     entire Bus A sub-circuit. **No 120 Ω R_term** — the master is
+     an unterminated mid-bus tap.)
+   - **Copy `busA_rs485.kicad_sch` once** as `busB_*` (U5 PHY,
+     J5 + J6). Tweak only designators and net names.
+   *(The former `uart_expander.kicad_sch` sheet — SC16IS740 +
+   14.7456 MHz crystal — was deleted with the 4-bus design,
+   superseded 2026-07-04, #102.)*
 3. Each sheet has its own page. **Hierarchical labels** (`Place →
    Add Hierarchical Label`) are how nets cross sheet boundaries.
-   Top-level nets (`+12V_RAIL`, `+3V3`, `GND`, `UART0_TX`, etc.) get
+   Top-level nets (`+12V_RAIL`, `+3V3`, `GND`, `UART1_TX`, etc.) get
    hierarchical labels in each sheet, and the parent sheet wires
    them between child sheets.
 
 This isn't strictly required — you can do everything on one big
-page — but the hierarchical layout makes the 4× RS-485 repetition
+page — but the hierarchical layout makes the 2× RS-485 repetition
 trivially copy-paste-able and the ERC errors much easier to localize.
 
 If you'd rather flat-page, that's also fine; just be prepared for
@@ -120,7 +125,8 @@ Same procedure as drawing the SM712 symbol in the Unit howto:
 
 - U1 ESP32-S3-WROOM-1 module symbol (`RF_Module:ESP32-S3-WROOM-1`).
 - Decoupling caps: 8× 100 nF/0603 (one within 3 mm of each module
-  Vcc pin).
+  Vcc pin) **plus a 22 µF bulk cap at the module's 3V3 pin** (added
+  in the #102 pass — WiFi TX current spikes).
 - Strap pulls: see `LAYOUT_MASTER.md` § Strap pin pulls table.
   - IO0 (BOOT): 10 kΩ pull-up to 3V3, plus SW1 pull-down to GND.
   - IO3: 10 kΩ pull-up to 3V3.
@@ -133,14 +139,15 @@ Hierarchical-label exposed nets (all module signal pins that talk
 to other sheets):
 - `+3V3`, `GND` (power)
 - USB: `USB_DP`, `USB_DM` (IO19, IO20)
-- SPI to expander: `SPI_CS` (IO10), `SPI_MOSI` (IO11), `SPI_SCK`
-  (IO12), `SPI_MISO` (IO13), `SPI_IRQ` (IO9)
-- UART0 (Bus 0): `UART0_TX` (IO43), `UART0_RX` (IO44), `UART0_DE`
-  (IO1), `UART0_RE` (IO2)
-- UART1 (Bus 1): `UART1_TX` (IO17), `UART1_RX` (IO18), `UART1_DE`
-  (IO16), `UART1_RE` (IO15)
-- UART2 (Bus 2): `UART2_TX` (IO5), `UART2_RX` (IO6), `UART2_DE`
-  (IO7), `UART2_RE` (IO4)
+- UART1 (Bus A, rows 0+1): `UART1_TX` (IO17), `UART1_RX` (IO18),
+  `UART1_DE` (IO16), `UART1_RE` (IO15)
+- UART2 (Bus B, rows 2+3): `UART2_TX` (IO5), `UART2_RX` (IO6),
+  `UART2_DE` (IO7), `UART2_RE` (IO4)
+
+**UART0 (IO43/IO44) is console only** — it goes to no PHY and needs
+no DE//RE. IO9–IO13 (the former SC16IS740 SPI + IRQ pins) are
+**free** since the expander was deleted (superseded 2026-07-04,
+#102) — leave them NC or route to test pads.
 
 ### Sheet: `usb`
 
@@ -148,90 +155,63 @@ to other sheets):
 - U8 USBLC6-2SC6 (`Power_Protection:USBLC6-2SC6`).
 - 2× R_cc (5.1 kΩ/0603) — CC1 and CC2 each pulled down to GND.
 - C_usb (1 µF/0603) on VBUS line near USBLC6 pin 5.
+- **USB bench-power OR (added in the #102 pass)**: AP7361C-33 LDO
+  from VBUS → 3V3, joined to the K7803's 3V3 output through
+  2× BAT60A Schottky OR-diodes, per `SCHEMATIC_MASTER.md` § USB
+  bench power. This lets the board boot from USB alone on the bench.
 - Shield → chassis GND (single point).
 
 Hierarchical: `USB_DP`, `USB_DM` to MCU sheet.
 
-**Do NOT route VBUS to +3V3 or +12V_RAIL** — USB is for
-programming/debug only; the board is powered by J1.
+**Do NOT route VBUS directly to +3V3 or to +12V_RAIL** — VBUS only
+reaches 3V3 through the AP7361C-33 + BAT60A OR path, so neither
+supply back-feeds the other.
 
-### Sheet: `uart_expander`
+*(A `uart_expander` sheet — SC16IS740IPW + 14.7456 MHz crystal +
+its custom symbol walkthrough — used to live here. The 4-bus
+UART-expander design was superseded 2026-07-04 (#102) by the 2-bus
+design; the parts are deleted, and IO9–IO13 on the module are
+freed.)*
 
-- U3 SC16IS740IPW (custom symbol — see below).
-- Y1 14.7456 MHz crystal (`Device:Crystal`,
-  `Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm`).
-- 2× C_xtal 18 pF NP0 (`Capacitor_SMD:C_0603_1608Metric`).
-- C_decap_uart (single 100 nF — pin 1 is the only VDD).
-- R for IRQ pull-up (10 kΩ).
-- R for RESET pull-up (10 kΩ — RESET is **active-LOW**, so HIGH means
-  out-of-reset).
-- Tie pin 8 (mode-sel) and pin 11 (CTS) directly to GND.
+### Sheets: `busA_rs485`, `busB_rs485`
 
-#### Custom symbol for SC16IS740IPW
-
-Same drill as before:
-
-1. Symbol Editor → New Symbol `SC16IS740IPW` in `splitflap-custom`.
-2. Body rectangle.
-3. 16 pins per the NXP datasheet `SC16IS740_750_760.pdf` Figure 5
-   + Table 4. The locked pinout per `SCHEMATIC_MASTER.md` §
-   SC16IS740:
-   | Pin | Name | Type | Connection |
-   |---|---|---|---|
-   | 1 | VDD | Power input | +3V3 (with 100 nF decap) |
-   | 2 | /CS | Input | SPI_CS from MCU |
-   | 3 | SI | Input | SPI_MOSI |
-   | 4 | SO | Output | SPI_MISO |
-   | 5 | SCLK | Input | SPI_SCK |
-   | 6 | NC | NC | — |
-   | 7 | IRQ | Output (open-drain) | SPI_IRQ → MCU (with 10 kΩ pull-up to 3V3) |
-   | 8 | I²C/SPI | Input | **GND (lock SPI mode)** |
-   | 9 | GND | Power input | GND |
-   | 10 | RTS | Output | U7 PHY pin 3 (DE) — auto-RS-485 mode |
-   | 11 | CTS | Input | **GND (input pin can't float)** |
-   | 12 | TX | Output | U7 PHY pin 4 (D) |
-   | 13 | RX | Input | U7 PHY pin 1 (R) |
-   | 14 | RESET | Input | **+3V3 via 10 kΩ (active-LOW)** |
-   | 15 | XTAL2 | Output | Y1 + 18 pF C_xtal to GND |
-   | 16 | XTAL1 | Input | Y1 + 18 pF C_xtal to GND |
-4. Default footprint: `Package_SO:TSSOP-16_4.4x5mm_P0.65mm`.
-
-Hierarchical exposed nets: `SPI_CS`, `SPI_MOSI`, `SPI_MISO`,
-`SPI_SCK`, `SPI_IRQ`, `UART3_TX`, `UART3_RX`, `UART3_DE`.
-
-(UART3_TX = SC16IS740 pin 12 → U7 D; UART3_RX = U7 R → SC16IS740
-pin 13; UART3_DE = SC16IS740 pin 10 → U7 DE.)
-
-### Sheets: `bus0_rs485`, `bus1_rs485`, `bus2_rs485`, `bus3_rs485`
-
-Build bus 0 first, then copy. Each has:
-- U4 (or U5/U6/U7) SN65HVD75DR (`Interface_UART:SN65HVD75D` or
-  generic 8-pin RS-485 transceiver symbol).
-- R_term 120 Ω across A/B (0805).
+Build Bus A first, then copy. Each bus sheet has ONE PHY and TWO row
+branches (Bus A → rows 0+1 via J3/J4; Bus B → rows 2+3 via J5/J6):
+- U4 (or U5) SN65HVD75DR (`Interface_UART:SN65HVD75D` or generic
+  8-pin RS-485 transceiver symbol).
 - R_bias_a 1 kΩ from A to 3V3 (0805).
 - R_bias_b 1 kΩ from B to GND (0805).
-- D9 (or D10/D11/D12) SM712-02HTG ESD (custom symbol from Unit howto).
-- F_row (Bourns 2920 polyfuse) on the row's 12V branch.
-- C_row 10 µF/0805 on the row's 12V branch.
-- D4 (D5/D6/D7) row PWR LED + R_led_row 4.7 kΩ.
+- **NO 120 Ω R_term** — deleted in the #102 pass. The master sits
+  mid-bus (an unterminated tap); each bus is terminated by the
+  120 Ω terminator plug at the row's far end.
+- R_de 1 kΩ in series with DE, plus **R_de_pd 10 kΩ from DE to GND**
+  (transmitter off while the ESP32-S3 pins are high-Z at boot).
+- **10 kΩ pull-up from /RE to 3V3** (receiver disabled during boot
+  glitches; firmware drives /RE low to listen).
+- D9 (or D10) SM712-02HTG ESD (`Power_Protection:SM712` official
+  symbol — pinout 1 = I/O1, 2 = I/O2, 3 = GND).
+- 2× F_row (Bourns 2920 polyfuse), one per row 12V branch.
+- 2× C_row 10 µF/0805, one per row 12V branch.
+- 2× row PWR LED (from D4-D7) + R_led_row 4.7 kΩ each.
 - C_decap_phy 100 nF/0603 within 3 mm of pin 8.
-- J3 (J4/J5/J6) JST-VH 4-pin male THT (`Connector_JST:JST_VH_B4P-VH-A`).
+- J3 + J4 (or J5 + J6) JST-VH 4-pin male THT
+  (`Connector_JST:JST_VH_B4P-VH-A`).
 
-Net wiring:
-- PHY pin 1 (R) ← `UART0_RX` (or UART1/2/3_RX for the other buses).
-- PHY pin 2 (/RE) ← `UART0_RE` (or UART1/2_RE for buses 1-2). For
-  Bus 3 (PHY U7), **pin 2 (/RE) tied to GND** (always-receive); the
-  SC16IS740 only has RTS for DE.
-- PHY pin 3 (DE) ← `UART0_DE` (or UART1/2/3_DE) via 1 kΩ R_de.
-- PHY pin 4 (D) ← `UART0_TX` (or UART1/2/3_TX).
+Net wiring (Bus A shown; Bus B swaps UART1→UART2, U4→U5, J3/J4→J5/J6):
+- PHY pin 1 (R) ← `UART1_RX`.
+- PHY pin 2 (/RE) ← `UART1_RE`, with 10 kΩ pull-up to 3V3.
+- PHY pin 3 (DE) ← `UART1_DE` via 1 kΩ R_de, with R_de_pd 10 kΩ
+  to GND at the pin.
+- PHY pin 4 (D) ← `UART1_TX`.
 - PHY pin 5 → GND.
-- PHY pin 6 (A) → R_term + R_bias_a + D9 pin 1 + connector pin 2.
-- PHY pin 7 (B) → R_term other side + R_bias_b + D9 pin 3 +
-  connector pin 3.
+- PHY pin 6 (A) → R_bias_a + D9 ESD + J3 pin 2 + J4 pin 2 (the two
+  row connectors share the bus A/B pair).
+- PHY pin 7 (B) → R_bias_b + D9 ESD + J3 pin 3 + J4 pin 3.
 - PHY pin 8 (Vcc) → +3V3 (with C_decap_phy).
 
 Connector pinout (J3-J6):
-- Pin 1: ROW0_12V (or ROW1/2/3_12V).
+- Pin 1: ROW0_12V (or ROW1/2/3_12V — each row keeps its own
+  polyfused 12 V branch even though rows pair up on a bus).
 - Pin 2: A.
 - Pin 3: B.
 - Pin 4: GND.
@@ -270,8 +250,7 @@ checks:
 |---|---|---|
 | U1 ESP32-S3 | `RF_Module:ESP32-S3-WROOM-1` | KiCad's footprint includes the antenna keep-out as a courtyard but doesn't enforce no-copper inside. We'll add a Rule Area in step 5. |
 | U2 K7803 | `Package_TO_SOT_THT:TO-220-3_Vertical` | **Verify pin order matches K7803 datasheet** (VIN/GND/VOUT left-to-right). The TO-220 footprint may need a custom variant if the K7803's mechanical drawing differs. |
-| U3 SC16IS740 | `Package_SO:TSSOP-16_4.4x5mm_P0.65mm` | Don't use SOIC-16 or SSOP-16 — TSSOP has 0.65 mm pitch. |
-| U4-U7 SN65HVD75 | `Package_SO:SOIC-8_3.9x4.9mm_P1.27mm` | Standard SOIC-8 narrow (150 mil). |
+| U4-U5 SN65HVD75 | `Package_SO:SOIC-8_3.9x4.9mm_P1.27mm` | Standard SOIC-8 narrow (150 mil). |
 | U8 USBLC6 | `Package_TO_SOT_SMD:SOT-23-6` | SOT-23-6, not SOT-23-3. |
 | Q1 AOD409 | `Package_TO_SOT_SMD:TO-252-2` | DPAK / TO-252. Larger than the unit's AO3401. |
 | F1 fuse holder | (no stock footprint — custom or omit and use through-pad with appropriate spacing) | 5×20 mm THT holder; many vendors. |
@@ -279,7 +258,6 @@ checks:
 | J1 KF7.62 screw terminal | `TerminalBlock:TerminalBlock_*_P7.62mm` | Verify against actual MPN datasheet. |
 | J2 USB-C | `Connector_USB:USB_C_Receptacle_GCT_USB4085` | Or any GCT/Amphenol-compatible 16-pin SMD. |
 | J3-J6 JST-VH 4-pin | `Connector_JST:JST_VH_B4P-VH-A` | Same as Bus board. |
-| Y1 crystal | `Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm` | 4-pin SMD crystal — 2 of the pins are mechanical (case ground). |
 
 ---
 
@@ -394,38 +372,37 @@ during programming.
 
 ---
 
-## Step 9 — Place U3 SC16IS740 + crystal
+## Step 9 — (deleted)
 
-Close to the ESP32-S3 module's SPI pins (IO10-IO13). U3 within
-~50 mm of the module.
-
-Y1 crystal within 3 mm of U3 pins 15/16. The 2 GND case pins of
-the SMD crystal connect directly to GND pour on the bottom layer.
+*(This step used to place the SC16IS740 + 14.7456 MHz crystal.
+Superseded 2026-07-04 (#102) with the 4-bus design — nothing to
+place. Kept as a stub so step numbers below stay stable.)*
 
 ---
 
-## Step 10 — Place 4 PHYs + per-row clusters
+## Step 10 — Place 2 PHYs + per-row clusters
 
-Lay out the 4 RS-485 sub-circuits as 4 vertical "stripes" along the
-bottom half of the board, each ~20 mm wide:
+Lay out the 2 RS-485 sub-circuits along the bottom half of the
+board — each PHY cluster sits between the two row connectors it
+serves:
 
 ```
-+-------+-------+-------+-------+
-| PHY0  | PHY1  | PHY2  | PHY3  |
-| F_row | F_row | F_row | F_row |
-| C_row | C_row | C_row | C_row |
-| R_term| R_term| R_term| R_term|
-| R_bias| R_bias| R_bias| R_bias|
-| D_ESD | D_ESD | D_ESD | D_ESD |
-| LED   | LED   | LED   | LED   |
++---------------+---------------+
+|  PHY A (U4)   |  PHY B (U5)   |
+|  R_bias, ESD  |  R_bias, ESD  |
+|  DE/RE pulls  |  DE/RE pulls  |
+| F_row  F_row  | F_row  F_row  |
+| C_row  C_row  | C_row  C_row  |
+| LED    LED    | LED    LED    |
 +-------+-------+-------+-------+
 | J3    | J4    | J5    | J6    |  ← bottom edge
 +-------+-------+-------+-------+
 ```
 
-Each stripe owns one row connector at the bottom edge. The
-JST-VH 4-pin connectors face downward (cable exit toward the
-chassis).
+Each row connector keeps its own polyfuse/cap/LED branch; each PHY's
+A/B pair fans out to its two connectors. (No R_term to place — the
+master is an unterminated mid-bus tap.) The JST-VH 4-pin connectors
+face downward (cable exit toward the chassis).
 
 ---
 
@@ -473,7 +450,7 @@ electrically isolated by the FET except when the FET is conducting.
 
 10. From U2 pin 3 (VOUT), pour a `+3V3` zone on B.Cu (or F.Cu,
     whichever has clearer space) covering the area near the
-    ESP32-S3, SC16IS740, and 4 PHYs.
+    ESP32-S3 and both PHYs.
 
 ### Per-row ROW0_12V → ROW3_12V
 
@@ -494,15 +471,11 @@ routing. Order:
 
 1. **USB D+/D-** as a differential pair (`6` hotkey for diff-pair
    route). 10 mil width, 10 mil spacing.
-2. **SPI bus** (CS/MOSI/SCK/MISO + IRQ) — 6 mil traces, length
-   under 50 mm.
-3. **UART0/1/2** native ESP32-S3 → PHY0/1/2 — 6 mil signal traces.
-4. **UART3** SC16IS740 → PHY3 — 6 mil. RTS line goes to PHY3 DE
-   pin (auto-RS-485 mode); /RE is **tied to GND directly on the
-   PCB**, NOT driven by RTS.
-5. **RS-485 A/B** at each row connector — coupled diff pair, 10
-   mil. SM712 ESD between PHY and connector.
-6. **Strap pulls + EN cap + BOOT/RST switches** — 6 mil traces, all
+2. **UART1/UART2** native ESP32-S3 → PHY A / PHY B — 6 mil signal
+   traces (TX/RX/DE//RE each).
+3. **RS-485 A/B** from each PHY to its two row connectors — coupled
+   diff pair, 10 mil. SM712 ESD between PHY and connectors.
+4. **Strap pulls + EN cap + BOOT/RST switches** — 6 mil traces, all
    short.
 
 ### Order tip: route the most-constrained nets first
@@ -585,11 +558,20 @@ checkbox. The killers:
       NOT Phoenix MKDS 1.5/2.
 - [ ] **Row connectors J3-J6 are JST-VH 4-pin** (B4P-VH-A,
       C144392), NOT JST-XH.
-- [ ] **SC16IS740: pin 8 GND, pin 11 GND, pin 14 → 3V3 via 10 kΩ.**
+- [ ] **No SC16IS740, no 14.7456 MHz crystal anywhere** — the 4-bus
+      expander design was superseded 2026-07-04 (#102). IO9–IO13
+      are free (NC or test pads).
+- [ ] **Exactly 2 PHYs**: U4 = Bus A on UART1 (IO17/IO18/IO16/IO15),
+      U5 = Bus B on UART2 (IO5/IO6/IO7/IO4). UART0 = console only.
+- [ ] **No 120 Ω termination resistors on the master** — mid-bus
+      tap; termination lives in the far-end terminator plugs. The
+      1 kΩ/1 kΩ bias per PHY IS present.
+- [ ] **Each PHY has R_de_pd 10 kΩ DE→GND and a 10 kΩ /RE→3V3
+      pull-up.**
+- [ ] **22 µF bulk cap at the ESP32-S3 module 3V3 pin.**
 - [ ] **ESP32-S3 IO46 has explicit 10 kΩ pull-down to GND.**
-- [ ] **USB-C VBUS NOT tied to +3V3 or +12V_RAIL.**
-- [ ] **U7 (Bus 3 PHY) /RE tied to GND, DE driven by SC16IS740 RTS
-      via 1 kΩ.** RTS does NOT drive both DE and /RE.
+- [ ] **USB-C VBUS reaches 3V3 ONLY via AP7361C-33 + BAT60A OR
+      diodes** — never tied directly to +3V3 or +12V_RAIL.
 - [ ] **Per-row PWR LEDs use 4.7 kΩ resistor**, NOT 1 kΩ.
 - [ ] **C_in is 1206**, not 0805.
 - [ ] DRC clean.
@@ -599,7 +581,7 @@ checkbox. The killers:
 ## What's harder than the Unit board
 
 - **Hierarchical schematic** is new but pays off — every change to
-  the bus0 sub-circuit can be replicated to bus1/2/3 by careful
+  the busA sub-circuit can be replicated to busB by careful
   copy-paste.
 - **The antenna keep-out** is the single most consequential physical
   constraint on the board. Treat it as load-bearing.
@@ -618,7 +600,8 @@ checkbox. The killers:
 ## After all 3 boards: what to do next
 
 1. **Order all 3 PCBs from JLC** — they'll arrive together in
-   1-2 weeks.
+   1-2 weeks. (Unit + Bus only after issue #100 closes — their
+   pogo/station geometry is unresolved until the mock-up.)
 2. **Hand-solder the Bus board first** (just connectors and 4
    traces — easy first build).
 3. **Test pogo contact** on a single Unit + Bus pair before

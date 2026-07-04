@@ -1,10 +1,22 @@
 # Layout Guide — Bus PCB
 
-**Revision:** 2026-04-26
+**Revision:** 2026-07-04 (review pass #102; original 2026-04-26)
 **Companion to:** `SCHEMATIC_BUS.md` (nets, MPNs, contact pad geometry).
 **Read this when:** placing components and routing in KiCad 10. See
 `KICAD_HANDOFF.md` for the tool-specific workflow (project setup,
 libraries, plot/Gerber, JLC integration).
+
+> **⚠ GEOMETRY UNRESOLVED — issue #100. Do NOT lay out this board yet.**
+> The 2026-07-04 review found the station geometry unbuildable as
+> documented: the unit outline does not fit the 37 mm station pitch in
+> any orientation, MH3 at (200, 16) collides with station 5 at x = 203
+> (screw head inside the unit landing zone), 4-point mounting allows
+> mid-span sag exceeding total pogo travel (continuous backing
+> required), and the end connectors sit inside the station-0/7 unit
+> envelopes. Station positions, contact-zone pattern, mounting scheme
+> and connector placement will all be re-derived from the #100
+> dimensioned cross-section + mock-up. Everything below is retained as
+> the pre-review baseline only.
 
 This is the simplest of the three boards: 2 connectors, 4 long traces,
 8 contact stations, 4 mounting holes. Most of the work is artwork
@@ -21,7 +33,7 @@ This is the simplest of the three boards: 2 connectors, 4 long traces,
 | Substrate | FR-4 |
 | Thickness | 1.6 mm (or 2.0 mm if extra rigidity is desired) |
 | Copper | 1 oz both sides |
-| **Plating** | **ENIG (gold over nickel) — mandatory** for pogo pin reliability. HASL wears too fast. |
+| **Plating** | **Hard/thick gold on the contact strips — mandatory** ("gold fingers" process, 0.3–0.8 µm Au over ≥2.5 µm Ni, or ENEPIG). Standard thin ENIG (0.05–0.1 µm Au) is NOT sufficient: the threat is fretting wear under continuous stepper vibration, not mating cycles (#102). HASL wears fastest of all. |
 | Solder mask | Green; **opening over every contact pad** (mask removed entirely over the pogo landing zone) |
 | Silk screen | White |
 
@@ -78,7 +90,7 @@ from left edge → 23 mm clearance to right edge.
 ## Contact zone shapes (per station)
 
 At each station, 4 widened landing zones, all on top layer, all
-bare ENIG (no mask):
+bare hard gold (no mask):
 
 | Pad | Centre | Shape | Notes |
 |---|---|---|---|
@@ -163,7 +175,8 @@ Stitch via fence around the board perimeter on bottom GND every
 - [ ] Both connectors are JST-VH 4-pin (B4P-VH-A, C144392), NOT
       JST-XH and NOT 2.54 mm box header.
 - [ ] Pin 1 of J_in and J_out maps to 12V (not GND, not A).
-- [ ] ENIG plating selected (NOT HASL) in fab options.
+- [ ] Hard/thick gold ("gold fingers" / ENEPIG) selected for the contact strips in fab options (NOT standard ENIG, NOT HASL) — see #102.
+- [ ] Issue #100 closed and station geometry re-derived before this checklist is used.
 - [ ] DRC passes.
 
 ## Fab order
@@ -172,5 +185,5 @@ Stitch via fence around the board perimeter on bottom GND every
 |---|---|
 | Quantity | 10 (covers 4-row system × 2 boards/row + spares) |
 | Lead time | standard JLC |
-| Surface finish | **ENIG** |
+| Surface finish | **Hard/thick gold on contact strips** ("gold fingers" process or ENEPIG; confirm option with fab — see #102) |
 | Estimated cost | ~EUR 50–70 total at qty 10 |

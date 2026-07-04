@@ -64,6 +64,11 @@ are in the **middle** (narrow):
 Trace centre-to-centre spacing matches pogo pin pitch on the unit:
 **8 mm centre-to-centre between adjacent traces**, ~24 mm total span.
 
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: the station pad pattern and
+> unit orientation will be redesigned after a dimensioned
+> cross-section + mock-up (see § Mechanical). Treat the trace/station
+> geometry here as provisional.
+
 The wide 12V/GND outside traces also act as guard rails for the
 differential A/B pair in the middle, giving the bus a clean
 common-mode reference.
@@ -83,9 +88,13 @@ Trace separation: 2 mm minimum between adjacent traces.
 
 ## Plating
 
-**ENIG (gold over nickel)** on all contact strips. Required for pogo pin
-reliability — gold doesn't oxidise so contact resistance stays stable
-over thousands of mating cycles. HASL also works but wears faster.
+**Hard/thick gold on all contact strips** ("gold fingers":
+0.3–0.8 µm Au over ≥2.5 µm Ni, or ENEPIG) — **not** standard thin
+immersion ENIG (~0.05 µm Au), and not HASL. The threat here is not
+mating-cycle count but **fretting**: micro-motion of the pogo tips
+under continuous stepper vibration wears through thin immersion gold,
+exposes the nickel, and contact resistance climbs as it oxidises.
+Hard gold over a thick nickel barrier survives it.
 
 ## Mechanical
 
@@ -101,9 +110,23 @@ over thousands of mating cycles. HASL also works but wears faster.
 DIN rail itself: standard 35 mm TS35, cut to row length (~600 mm). Mounts
 to the case structure with screws through the rail's slotted holes.
 
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: the mechanical spec above
+> does not work as documented. The 80 × 40 mm unit outline cannot sit
+> on a 37 mm pitch (80 mm along the rail = 43 mm overlap; rotated is
+> still 40 > 37 mm and puts the pogo column parallel to the traces);
+> MH3 (x = 200 mm) collides with station 5 (x = 203 mm); the
+> 4-standoff mounting sags ~1.5 mm under pogo preload — more than the
+> pogo travel, so the board must be continuously backed; and the end
+> connectors sit inside the station 0/7 unit envelopes. Station pad
+> geometry and unit orientation WILL be redesigned after a
+> dimensioned cross-section + mock-up. Do not lay out against these
+> numbers. Do not renumber holes or stations piecemeal.
+
 ## End connectors
 
-Each bus PCB has a **4-pin shrouded box header at each end**. Identical
+Each bus PCB has a **JST-VH 4-pin connector (B4P-VH-A, LCSC C144392 —
+verify per #105; mating housing VHR-4N) at each end**, per the
+Mechanical table above and OPEN_DECISIONS #4. Identical
 pinout on both ends:
 
 | Pin | Net |
@@ -132,7 +155,7 @@ power and signal flow straight through unimpeded.
 
 **Four** pogo pins in a vertical line on the unit's underside,
 matching the bus PCB trace pitch (no 5th polarization pin — see
-Polarization section above):
+Polarization section below):
 
 | Pin | Net | Pogo position |
 |---|---|---|
@@ -146,6 +169,12 @@ Spacing: ~8 mm between adjacent pins, ~24 mm total span.
 Pogo pins are spring-loaded plungers, deflection range ~1 mm. Through-hole
 mounted on the unit PCB. Tip diameter < trace width to give mating
 tolerance.
+
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: station pad geometry and
+> unit orientation will be redesigned after a dimensioned
+> cross-section + mock-up (unit outline does not fit the 37 mm pitch
+> — see § Mechanical). The 4-net pogo order is the electrical
+> contract; the physical pattern is not final.
 
 ## Polarization (REQUIRED — not optional)
 
@@ -173,31 +202,34 @@ own design (3D-printed from a MakerWorld STL — link to be supplied
 in build notes). Clip MPN equivalent: any asymmetric 35 mm TS35 clip
 with a single-orientation rail engagement profile. Verify on first
 article that a reversed unit physically refuses to clip on.
-2. **Hard-keyed DIN clip** — pick a DIN clip with an asymmetric snap
-   profile that physically only seats one way. Document the exact
-   clip MPN in `UNIT_BOM.csv`.
 
-Belt-and-braces additions (not standalone — must be paired with #1
-or #2):
+Belt-and-braces additions (not standalone — must be paired with the
+asymmetric clip):
 - "TOP" silkscreen marker on the unit board edge.
 - "BOTTOM" silkscreen marker on the bus PCB edge.
+
+Issue #104 will additionally introduce an asymmetric contact-pad
+pattern on the bus PCB as an electrical soft-key.
 
 Without an enforced mechanical key, **the first wrongly-clipped unit
 will damage itself**.
 
-## Hot-swap considerations
+## Insertion / removal — POWER OFF ONLY (mandatory)
 
-The bus is live (12 V at up to ~4 A peak per row, RS-485 active). When a
-unit is added or removed:
+Units MUST be inserted and removed with row power off. Hot-swap on a
+live bus is **prohibited**, not merely discouraged (revised
+2026-07-04, #102):
 
-- Pogo pin contact bounces during make/break.
-- 12V make: small inrush as unit's bulk cap (22 µF) charges. Limited by
-  contact resistance (~50 mΩ), peak inrush ~10 A for ~µs. SMAJ15A TVS on
-  the unit catches any kickback.
-- RS-485 bus: brief disturbance during pogo contact bounce. Firmware
-  retransmits on CRC fail; not data-destructive.
-- Recommendation: insert/remove with row power off if practical, or
-  accept brief bus glitches if hot-swap is required.
+- The TPL7407L COM pin tolerates ~0.5 V/µs; hot-plug contact edges
+  are 5–10 V/µs — well past the part's rating.
+- An earlier draft estimated "peak inrush ~10 A for ~µs" charging the
+  unit's 22 µF bulk cap. That was optimistic: the ideal-source peak
+  is tens of amps, through pogo tips rated ~2 A.
+- Pogo contact bounce also glitches the live RS-485 bus during
+  make/break.
+
+Procedure: power the row down (at the master or the brick), swap the
+unit, power back up.
 
 ## Termination
 
@@ -207,6 +239,13 @@ last bus PCB in the chain. Plug shell contains a single 120 Ω 1%
 resistor wired across the **A and B pins** of the connector — that's
 **pin 2 (A) and pin 3 (B)** per the 12V/A/B/GND pinout below. Pins 1
 (12V) and 4 (GND) stay unconnected.
+
+Per the 2-bus architecture (2026-07-04, #102 — see
+`ARCHITECTURE.md`), each bus serves a row pair with the master as an
+**unterminated mid-bus tap**: the plug at each row's far end
+terminates its end of the shared 2-row bus, and there is **no
+termination at the master**. The hardware is unchanged — still one
+plug per row, 4 system-wide.
 
 This means **every bus PCB is identical** — termination is a separate
 hardware element.
@@ -222,9 +261,9 @@ hardware element.
 `pin 1 ↔ 1, pin 2 ↔ 2, pin 3 ↔ 3, pin 4 ↔ 4`. Both bus-PCB connectors
 share the same pinout, and both ends of any cable are wired identically.
 
-Both cables: 4-pin female on each end (housing TBD per OPEN_DECISIONS
-#4), IDC mass-terminated onto 4-conductor flat cable, or hand-crimped
-onto 22 AWG round cable.
+Both cables: 4-pin female on each end (housing VHR-4N per
+OPEN_DECISIONS #4, resolved), IDC mass-terminated onto 4-conductor
+flat cable, or hand-crimped onto 22 AWG round cable.
 
 Twisted-pair preferred on A/B for noise immunity, but 4-conductor flat
 cable also works at 250 kbaud over the short lengths involved.

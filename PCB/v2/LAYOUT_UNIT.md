@@ -24,7 +24,9 @@ right.** A bug here is replicated 64 times.
 | Solder mask | Green |
 | Silk screen | White |
 
-**Origin: top-left corner of the 80 × 40 mm outline.** Y axis points down.
+**Coordinate convention LOCKED from the v1 Gerber drill file
+(`Gerber_Drill_NPTH.DRL` ground truth): board 40 mm (X, short axis) ×
+80 mm (Y, long axis), origin bottom-left.**
 
 ## Mounting holes (LOCKED, 4 holes)
 
@@ -35,25 +37,30 @@ mounts to.
 
 | Hole | Position (mm) |
 |---|---|
-| Top-left | (3, 3) |
-| Top-right | (37, 3) |
-| Bottom-left | (3, 77) |
-| Bottom-right | (37, 77) |
+| Bottom-left | (3, 3) |
+| Bottom-right | (37, 3) |
+| Top-left | (3, 77) |
+| Top-right | (37, 77) |
 
-Wait — verify the orientation: v1 board is **80 mm long × 40 mm wide**.
-The hole pattern from the Gerber drill file is referenced to the v1
-80 × 40 outline; v2 keeps the same outline. Let the KiCad outline
-be 80 (long axis = X) × 40 (short axis = Y).
+Convention (LOCKED from the v1 `Gerber_Drill_NPTH.DRL` ground truth):
+board 40 mm (X, short axis) × 80 mm (Y, long axis), origin
+bottom-left. This is the single coordinate convention used across
+`UNIT.md`, `SCHEMATIC_UNIT.md`, `UNIT_BOM.csv` and this file.
 
-→ Holes are at (3, 3), (3, 37), (77, 3), (77, 37) if X is long axis.
-
-**Pick one convention and stick with it.** The schematic uses the
-"long axis = 80 mm = X axis" convention with hole (3, 3) at one
-corner and (77, 37) at the diagonal opposite. Match that.
+**Pre-layout checklist item:** overlay the v1 drill file on the v2
+board in KiCad and confirm the 4 holes coincide before placing
+anything else.
 
 Drill 3.2 mm (M3 clearance). NPTH.
 
 ## Pogo pins (4 contacts on bottom layer, NO 5th pin)
+
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: the pogo column position and
+> the unit's orientation on the rail are pending the #100 mechanical
+> mock-up (the documented 37 mm rail pitch is incompatible with the
+> 80 × 40 board in either orientation). The coordinates below are
+> written in the superseded "long axis = X" convention and must NOT
+> be captured in KiCad yet.
 
 Through-hole, projecting downward to contact the bus PCB. Pad/drill:
 
@@ -87,18 +94,24 @@ electronic polarization fallback.
 
 ## Component placement zones
 
+> **⚠ GEOMETRY UNRESOLVED — issue #100**: pogo positions and rail
+> orientation in the sketch below are pending the #100 mock-up, and
+> the sketch uses the superseded "long axis = X" convention.
+> Non-geometry placement guidance (grouping, layer assignment,
+> keep-close constraints) still applies.
+
 ```
                           80 mm long axis (X)
    ─────────────────────────────────────────────────────────
   ┌──○────────────────────────────────────────────────○──┐
   │                                                       │
   │ ┌─────┐                                               │
-  │ │ J2  │     LDO U3 (LDL1117S33)                       │
+  │ │ J2  │     LDO U3 (LM2937-3.3)                       │
   │ │ 5p  │     [VOUT-tab pour ~1cm²]                     │
   │ │ XH  │                            FRONT (top) layer  │  40 mm
   │ └─────┘                                               │  short
   │ ┌─────┐                                               │  axis
-  │ │ J3  │     STM32G030K6T6 LQFP-32                     │  (Y)
+  │ │ J3  │     STM32G030K8T6 LQFP-32                     │  (Y)
   │ │ 3p  │                                               │
   │ │ XH  │                                               │
   │ └─────┘                                               │
@@ -117,7 +130,7 @@ electronic polarization fallback.
   │                              ●  PG3 (40, 24)   B       │
   │   Q1 AO3401A                ●  PG4 (40, 32)   GND     │
   │   Z1 BZT52C10               ↑                          │
-  │   D4 SMAJ15A           pogo column at x = 40 mm        │
+  │   D4 SMAJ13A           pogo column at x = 40 mm        │
   │   C_in 22µF, etc.        (long-axis centreline)        │
   │                                                       │
   ├──○────────────────────────────────────────────────○──┤
@@ -142,7 +155,7 @@ electronic polarization fallback.
 
 - **PG1–PG4** pogo pins on the **long-axis centreline (x = 40 mm)**.
   Vertical line, 8 mm spacing.
-- **U1** STM32G030K6T6 LQFP-32: roughly central, near the SN65HVD75.
+- **U1** STM32G030K8T6 LQFP-32: roughly central, near the SN65HVD75.
 - **U4** SN65HVD75 SOIC-8: near the pogo pin column to keep RS-485
   A/B traces short.
 - **D5** SM712 ESD (SOT-23): adjacent to U4, on the A/B nets.
@@ -150,15 +163,17 @@ electronic polarization fallback.
   ULN2003A position on the back. Verify the footprint is **narrow**
   (3.9 mm body) NOT wide (7.5 mm body) — pads will not bridge wide
   IC leads.
-- **U3** LDL1117S33 SOT-223: near v1's AMS1117 position. **VOUT tab**
+- **U3** LM2937IMP-3.3 SOT-223: near v1's AMS1117 position. **VOUT tab**
   (pin 2 + tab, internally tied) gets a ~1 cm² copper pour on the
   bottom layer for heatsinking. **The tab is on the 3V3 net, NOT
   GND** — pouring tab to GND shorts 3V3 to GND through the
   internally-tied tab/pin-2 node.
+- **F_unit** polyfuse (0.5 A hold / ~1 A trip, 1206): in series
+  between PG1 and Q1 drain — first element in the input chain.
 - **Q1** AO3401A (SOT-23) + **Z1** BZT52C10 (SOD-123) + **R_q1g**
   100 Ω + **R_q1g2** 10 kΩ: group these together near the LDO input
   on the post-Q1 PCB-12V rail.
-- **D4** SMAJ15A (DO-214AC SMA): **post-Q1, on the load-side
+- **D4** SMAJ13A (DO-214AC SMA): **post-Q1, on the load-side
   PCB-12V rail**. Cathode (banded) to PCB-12V, anode to GND. Mark
   polarity with silk arrow.
 - **C_in** 22 µF / 25 V (1206 X7R) + **C_in2** 100 nF (0603):
@@ -166,10 +181,11 @@ electronic polarization fallback.
   22 µF/25 V/X7R/0805 is unobtainable on JLC.
 - **C_ldo_in** 10 µF + **C_ldo_out** 10 µF: within 3 mm of LDO
   pins 3 (VIN) and 2 (VOUT) respectively.
-- **C_decap (×4)** 100 nF (0603): one per VDD pin (MCU has 2 — pin 1
-  and pin 17), one for SN65HVD75 pin 8, one spare. Place within
-  3 mm of each VDD/Vcc pin.
-- **C_rst** 100 nF + 10 kΩ pull-up on NRST near the MCU pin 4.
+- **C_decap (×4)** 100 nF (0603): the MCU has a **single** VDD/VDDA
+  supply pin (**pin 4**) — consolidate two decaps there; one for
+  SN65HVD75 pin 8, one spare. Place within 3 mm of each VDD/Vcc pin.
+- **C_rst** 100 nF + 10 kΩ pull-up on NRST near the MCU pin 6
+  (dedicated NRST).
 - **C_id** 100 nF + 10 kΩ pull-up on IDENTIFY button.
 
 ## Component placement order (do this first)
@@ -183,8 +199,8 @@ electronic polarization fallback.
 5. Place U1 STM32G030 centrally on the back, near the pogo column.
 6. Place U4 SN65HVD75 near U1 and near the pogo pin column.
 7. Place U2 TPL7407L on the back, near v1's ULN2003 spot.
-8. Place U3 LDL1117S33 on the back, give it a ~1 cm² VOUT pour.
-9. Group Q1/Z1/R_q1g/R_q1g2/D4/C_in/C_in2 around the LDO input.
+8. Place U3 LM2937IMP-3.3 on the back, give it a ~1 cm² VOUT pour.
+9. Group F_unit/Q1/Z1/R_q1g/R_q1g2/D4/C_in/C_in2 around the LDO input.
 10. Place SWD test pads on the front edge.
 11. Place LEDs on the front edge near silk labels.
 12. Distribute decoupling caps within 3 mm of every VDD/Vcc pin.
@@ -194,8 +210,9 @@ electronic polarization fallback.
 ### 12V net (PCB-12V rail = post-Q1 source)
 
 - Trace width: **15–20 mil (0.4–0.5 mm)** internal — peak motor coil
-  current is ~250 mA, average much lower. Comfortable margin.
-- From PG1 → Q1 drain through a wide pour or trace.
+  current is ~250 mA, average much lower (paper figure — bench
+  measurement tracked in #101). Comfortable margin.
+- From PG1 → F_unit → Q1 drain through a wide pour or trace.
 - From Q1 source → load: branch to D4 cathode, C_in, C_in2,
   TPL7407L pin 9 (COM), J2 pin 5, U3 LDO pin 3 (VIN).
 - Don't run the 12V net under the SN65HVD75 transceiver or the
@@ -204,7 +221,7 @@ electronic polarization fallback.
 ### 3V3 net
 
 - Trace width: **15 mil (0.4 mm)** — peak ~55 mA load.
-- From U3 LDO pin 2 (VOUT) + tab → distribute to U1 VDD pins (1, 17),
+- From U3 LDO pin 2 (VOUT) + tab → distribute to U1 VDD/VDDA (pin 4),
   U4 SN65HVD75 pin 8, R_hall pull-up, R_id pull-up, R_rst pull-up,
   LED anode side.
 - The VOUT pour serves as both heatsink AND distribution — keep it
@@ -229,15 +246,18 @@ electronic polarization fallback.
 ### USART1 (MCU ↔ U4)
 
 - PA9 (TX) → U4 pin 4 (D), PA10 (RX) ← U4 pin 1 (R), PA12 (DE) →
-  U4 pin 3 (DE) via 1 kΩ R_de. **U4 pin 2 (/RE) tied to GND**
-  (always-receive; firmware discards TX echo).
+  U4 pin 3 (DE) via 1 kΩ R_de; **R_de_pd 10 kΩ pull-down to GND on
+  the DE pin** (no internal pulls; keeps DE low while the MCU is in
+  reset). **U4 pin 2 (/RE) tied to GND** (always-receive; firmware
+  discards TX echo).
 - 6 mil signal traces, no special routing needed.
 
 ### Stepper drive (MCU PA4–PA7 → TPL7407L IN1–IN4 → J2 pins 1–4)
 
 - 6 mil signal traces from MCU to U2 inputs.
 - **15 mil (0.4 mm) traces from U2 outputs to J2** — coil current is
-  the highest signal current on the board (~250 mA peak per coil).
+  the highest signal current on the board (~250 mA peak per coil —
+  paper figure, bench measurement tracked in #101).
 - TPL7407L OUT1–OUT4 are pins 16, 15, 14, 13 — match J2 pin 1, 2, 3, 4.
 
 ### Hall sensor (J3 pin 3 → MCU PB0)
@@ -249,7 +269,7 @@ electronic polarization fallback.
 - 6 mil trace; 10 kΩ R_id pull-up to 3V3 + 100 nF C_id debounce
   cap, both close to the MCU pin.
 
-### NRST (PF2)
+### NRST (dedicated pin 6)
 
 - 10 kΩ pull-up to 3V3 + 100 nF cap to GND on the NRST net, close
   to the MCU.
@@ -265,7 +285,7 @@ electronic polarization fallback.
 ## Silk screen
 
 - Refdes for every component.
-- Polarity arrow on D4 SMAJ15A (cathode = banded end → +12V).
+- Polarity arrow on D4 SMAJ13A (cathode = banded end → +12V).
 - "PG1 12V", "PG2 A", "PG3 B", "PG4 GND" near pogo holes (back side).
 - "IDENTIFY" near SW1.
 - LED labels: "HB", "FAULT", "ID".
@@ -288,30 +308,36 @@ electronic polarization fallback.
 
 - [ ] Outline exactly 80 × 40 mm.
 - [ ] 4 mounting holes at v1 corner positions, 3.2 mm drill, NPTH.
-- [ ] 4 pogo pins on **bottom layer** at long-axis centreline,
-      8 mm pitch, **NO 5th PG_KEY pin**.
+- [ ] v1 drill file overlaid on the v2 board in KiCad — the 4 holes
+      coincide.
+- [ ] 4 pogo pins on **bottom layer**, 8 mm pitch, **NO 5th PG_KEY
+      pin** — positions on hold per issue #100 (do not finalize
+      until the mechanical mock-up).
 - [ ] J2 is **5-pin** JST-XH (B5B-XH-A, C158013), pin 5 wired to
       PCB-12V rail (post-Q1).
 - [ ] J3 is 3-pin JST-XH (B3B-XH-A, C145756), pin 1 = +3V3, pin 2 =
       GND, pin 3 = HALL_OUT (KY-003 native).
 - [ ] U2 TPL7407L footprint is SOIC-16 **narrow (150 mil)**, NOT
       SOIC-16W (300 mil).
-- [ ] U3 LDL1117S33 SOT-223 **VOUT (pin 2 + tab) is on the 3V3 net**,
-      with a ~1 cm² copper pour. Tab is NOT GND.
+- [ ] U3 LM2937IMP-3.3 SOT-223 **VOUT (pin 2 + tab) is on the 3V3
+      net**, with a ~1 cm² copper pour. Tab is NOT GND.
 - [ ] Pin 1 of U3 = GND, pin 2 = VOUT (= tab), pin 3 = VIN.
       LM1117 family convention.
-- [ ] Q1 AO3401A: drain at PG1/12V_input, source at PCB-12V_RAIL,
+- [ ] F_unit polyfuse (0.5 A hold, 1206) in series: PG1 → F_unit →
+      Q1 drain (before the reverse-block).
+- [ ] Q1 AO3401A: drain at F_unit output, source at PCB-12V_RAIL,
       gate via R_q1g 100 Ω + R_q1g2 10 kΩ pull-down.
 - [ ] **Z1 is BZT52C10 (10 V), NOT BZT52C12 (12 V)**.
       Cathode → source (PCB-12V), anode → gate node.
-- [ ] D4 SMAJ15A: **post-Q1 (load-side PCB-12V)**, cathode banded →
+- [ ] D4 SMAJ13A: **post-Q1 (load-side PCB-12V)**, cathode banded →
       +12V, anode → GND.
 - [ ] C_in is **1206** package (NOT 0805; 0805 22 µF/25 V/X7R is
       unobtainable on JLC).
 - [ ] All 4 SN65HVD75 / MCU / TPL7407L VDD pins have a 100 nF decap
       within 3 mm.
-- [ ] NRST (PF2) has 10 kΩ pull-up + 100 nF cap.
+- [ ] NRST (dedicated pin 6) has 10 kΩ pull-up + 100 nF cap.
 - [ ] SN65HVD75 /RE (pin 2) tied permanently to GND.
+- [ ] R_de_pd 10 kΩ from the SN65HVD75 DE pin (pin 3) to GND.
 - [ ] LEDs are sink-driven: 3V3 → R_led 1 kΩ → anode → cathode →
       MCU GPIO. (Not source-driven.)
 - [ ] DIN clip mounting holes don't interfere with pogo pin
