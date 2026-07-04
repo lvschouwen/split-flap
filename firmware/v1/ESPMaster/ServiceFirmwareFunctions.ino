@@ -89,6 +89,30 @@ static bool twibootVerifyChip() {
   return true;
 }
 
+// Reads one 128-byte page back for post-write verification (issue #110).
+// Same CMD_ACCESS_MEMORY framing as the write but with no payload, then a
+// repeated-start read — the exact flow twiboot's own host tool uses for
+// verify. Our m328p build has a real boot section (no VIRTUAL_BOOT_SECTION
+// vector patching), so the read returns raw flash and must match the page
+// we sent byte-for-byte.
+static bool twibootReadFlashPage(uint16_t flashAddr, uint8_t* out) {
+  Wire.beginTransmission(twibootAddr);
+  Wire.write((uint8_t)0x02);  // CMD_ACCESS_MEMORY
+  Wire.write((uint8_t)0x01);  // MEMTYPE_FLASH
+  Wire.write((uint8_t)((flashAddr >> 8) & 0xFF));
+  Wire.write((uint8_t)(flashAddr & 0xFF));
+  if (Wire.endTransmission(false) != 0) return false;
+  uint8_t got = Wire.requestFrom(twibootAddr, (uint8_t)TWIBOOT_PAGE_SIZE);
+  if (got != TWIBOOT_PAGE_SIZE) {
+    while (Wire.available()) Wire.read();
+    return false;
+  }
+  for (int i = 0; i < TWIBOOT_PAGE_SIZE; i++) {
+    out[i] = Wire.read();
+  }
+  return true;
+}
+
 // Writes exactly one page (SPM_PAGESIZE = 128 bytes on ATmega328p).
 static int twibootWriteFlashPage(uint16_t flashAddr, const uint8_t* page) {
   Wire.beginTransmission(twibootAddr);
@@ -143,6 +167,29 @@ static bool producePageToTwiboot(const uint8_t* page, uint16_t addr) {
   }
 
   return true;
+}
+
+// Writes one page and reads it back to verify (issue #110), with one rewrite
+// attempt on mismatch. On persistent failure the caller aborts while the
+// unit is still sitting in twiboot — the boot-time auto-install retries
+// later instead of the unit booting a corrupted sketch.
+static bool flashAndVerifyPage(const uint8_t* page, uint16_t addr) {
+  for (int attempt = 0; attempt < 2; attempt++) {
+    if (!producePageToTwiboot(page, addr)) return false;
+
+    uint8_t readBuf[TWIBOOT_PAGE_SIZE];
+    if (!twibootReadFlashPage(addr, readBuf)) {
+      flashState.errorMsg = String("Verify read failed at 0x") + String(addr, HEX);
+      return false;
+    }
+    if (memcmp(readBuf, page, TWIBOOT_PAGE_SIZE) == 0) return true;
+
+    SerialPrint(F("Verify mismatch at page 0x"));
+    SerialPrint(String(addr, HEX));
+    SerialPrintln(attempt == 0 ? F(" — rewriting once") : F(" — giving up"));
+  }
+  flashState.errorMsg = String("Verify mismatch persisted at 0x") + String(addr, HEX);
+  return false;
 }
 
 // --- Public API ----------------------------------------------------------
@@ -263,7 +310,7 @@ bool flashUnitFromProgmem(uint8_t i2cAddress, String& resultMsg) {
   for (size_t pageIndex = 0; pageIndex < pageCount; pageIndex++) {
     memcpy_P(pageBuf, UNIT_FIRMWARE_BIN + pageIndex * TWIBOOT_PAGE_SIZE, TWIBOOT_PAGE_SIZE);
     uint16_t addr = (uint16_t)(pageIndex * TWIBOOT_PAGE_SIZE);
-    if (!producePageToTwiboot(pageBuf, addr)) {
+    if (!flashAndVerifyPage(pageBuf, addr)) {
       resultMsg = String("PROGMEM flash failed: ") + flashState.errorMsg;
       abortFirmwareFlash("PROGMEM flash page error");
       return false;
