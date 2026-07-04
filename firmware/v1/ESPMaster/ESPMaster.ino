@@ -234,6 +234,9 @@ volatile bool abortCurrentShow = false;
 #include "RtcBootState.h"
 
 bool isRecoveryMode = false;
+//Quiet OTA mode (issue #117): user-requested reboot into a minimal
+//wait-for-image environment — no I2C, no NTP wait, no display traffic.
+bool isOtaMode = false;
 
 //Freeze-during-upload state (issue #116). While a master firmware image is
 //streaming in, the loop stops all display/unit work — stepper current +
@@ -539,6 +542,67 @@ void enterRecoveryMode() {
   SerialPrintln(F("Recovery web server ready"));
 }
 
+//Minimal quiet-flash environment (issue #117). Joins WiFi and serves ONLY
+//the upload form, /firmware/master, /settings (so ota-master.sh's verdict
+//polling works unchanged) and an exit endpoint. No I2C probe, no NTP wait,
+//no display writes — the supply stays quiet for the whole upload and the
+//eboot copy that follows. Units keep showing whatever they last displayed.
+void enterOtaMode() {
+#if WIFI_USE_DIRECT == true
+  SerialPrintln(F("OTA mode: joining hardcoded WiFi..."));
+  initWiFi();
+  if (isWifiConfigured) {
+    SerialPrint(F("OTA mode on LAN IP: "));
+    SerialPrintln(WiFi.localIP().toString());
+  } else {
+    SerialPrintln(F("OTA mode: WiFi direct failed — falling back to SoftAP"));
+    WiFi.disconnect();
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP("split-flap-ota");
+    SerialPrint(F("OTA-mode SoftAP IP: "));
+    SerialPrintln(WiFi.softAPIP().toString());
+  }
+#else
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("split-flap-ota");
+  SerialPrint(F("OTA-mode SoftAP IP: "));
+  SerialPrintln(WiFi.softAPIP().toString());
+#endif
+
+  webServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
+    String html =
+      "<!doctype html><html><head><title>Split-Flap OTA Mode</title>"
+      "<meta name='viewport' content='width=device-width, initial-scale=1'/>"
+      "<style>body{font-family:sans-serif;max-width:480px;margin:2em auto;padding:1em}"
+      "button{padding:.5em 1em}</style></head><body>"
+      "<h1>Split-Flap OTA Mode</h1>"
+      "<p>Quiet flash environment — no display or unit activity. "
+      "Upload a <code>firmware.bin</code>, or exit to resume normal operation.</p>"
+      "<form method='post' action='/firmware/master' enctype='multipart/form-data'>"
+      "<p><input type='file' name='firmware' accept='.bin' required/></p>"
+      "<p><button type='submit'>Flash firmware</button></p>"
+      "</form>"
+      "<form method='post' action='/firmware/ota-exit'>"
+      "<p><button type='submit'>Exit OTA mode</button></p>"
+      "</form></body></html>";
+    request->send(200, "text/html", html);
+  });
+  webServer.on("/firmware/ota-exit", HTTP_POST, [](AsyncWebServerRequest * request) {
+    SerialPrintln(F("OTA mode exit requested"));
+    request->send(200, "text/plain", "Leaving OTA mode; rebooting normally…");
+    isPendingReboot = true;  //bootMode already cleared on entry — normal boot
+  });
+  webServer.on("/settings", HTTP_GET, [](AsyncWebServerRequest * request) {
+    String json = getCurrentSettingValues();
+    request->send(200, "application/json", json);
+  });
+  registerMasterFirmwareEndpoint();
+  webServer.begin();
+  SerialPrintln(F("OTA-mode web server ready"));
+}
+
 /* .-----------------------------------------------. */
 /* | ___          _          ___     _             | */
 /* ||   \ _____ _(_)__ ___  / __|___| |_ _  _ _ __ | */
@@ -581,6 +645,22 @@ void setup() {
   writeBootStateRtc(bootState);
   SerialPrint(F("RTC boot counter: "));
   SerialPrintln(bootState.bootCounter);
+
+  //User-requested quiet OTA mode (#117). One-shot: clear the flag (and the
+  //boot counter this entry just bumped) immediately, so any reboot or power
+  //cycle out of OTA mode lands in a normal boot — no way to get stuck.
+  if (bootState.bootMode == BOOT_MODE_OTA) {
+    bootState.bootMode = BOOT_MODE_NORMAL;
+    bootState.bootCounter = 0;
+    writeBootStateRtc(bootState);
+    SerialPrintln(F("#######################################################"));
+    SerialPrintln(F("OTA MODE: quiet flash environment. No I2C, no clock,"));
+    SerialPrintln(F("no display traffic — waiting for a firmware image."));
+    SerialPrintln(F("#######################################################"));
+    isOtaMode = true;
+    enterOtaMode();
+    return;
+  }
 
   if (bootState.bootCounter >= RECOVERY_BOOT_THRESHOLD) {
     SerialPrintln(F("#######################################################"));
@@ -809,6 +889,20 @@ void setup() {
       state.bootCounter = RECOVERY_BOOT_THRESHOLD;
       writeBootStateRtc(state);
       request->send(202, "text/plain", "Recovery marker set; rebooting into recovery mode…");
+      isPendingReboot = true;
+    });
+
+    //Reboot into quiet OTA mode (#117): the next boot serves only the
+    //firmware endpoints — no I2C, no clock, no display traffic — so a
+    //flash happens against the quietest possible supply. One-shot flag:
+    //a reboot or power cycle out of OTA mode always lands in normal boot.
+    webServer.on("/firmware/ota-mode", HTTP_POST, [](AsyncWebServerRequest * request) {
+      SerialPrintln(F("OTA mode requested — next boot -> quiet OTA mode"));
+      RtcBootState state = readBootStateRtc();
+      state.bootMode = BOOT_MODE_OTA;
+      state.bootCounter = 0;
+      writeBootStateRtc(state);
+      request->send(202, "text/plain", "OTA-mode marker set; rebooting into OTA mode…");
       isPendingReboot = true;
     });
 
@@ -1213,7 +1307,7 @@ void loop() {
     //copy runs immediately after reset with no sketch in control — make
     //sure no stepper is energized and sagging the rail during it. Bounded
     //wait; absent/silent units are skipped inside isDisplayMoving().
-    if (!isRecoveryMode) {
+    if (!isRecoveryMode && !isOtaMode) {
       unsigned long parkStart = millis();
       while (isDisplayMoving() && millis() - parkStart < 15000UL) {
         delay(100);
@@ -1236,15 +1330,15 @@ void loop() {
   //that the currently-running firmware actually works (issue #37). Skipped
   //in recovery mode: we want a user-visible flash (or a new firmware that
   //runs cleanly) to exit, not just 30 s of the recovery SoftAP being up.
-  if (!healthyBootMarked && !isRecoveryMode && millis() >= HEALTHY_BOOT_MS) {
+  if (!healthyBootMarked && !isRecoveryMode && !isOtaMode && millis() >= HEALTHY_BOOT_MS) {
     clearBootCounterRtc();
     healthyBootMarked = true;
     SerialPrintln(F("Healthy boot — RTC boot counter cleared"));
   }
 
-  //In recovery mode the AsyncWebServer handles every incoming request; the
-  //main loop has nothing to do besides yield back to the scheduler.
-  if (isRecoveryMode) {
+  //In recovery mode and OTA mode the AsyncWebServer handles every incoming
+  //request; the main loop has nothing to do besides yield to the scheduler.
+  if (isRecoveryMode || isOtaMode) {
     delay(10);
     return;
   }
@@ -1420,7 +1514,7 @@ String getCurrentSettingValues() {
   out += F(",\"lastWrittenText\":");                 appendJsonString(out, lastWrittenText);
 
   out += F(",\"otaEnabled\":false");
-  out += F(",\"isInOtaMode\":false");
+  out += F(",\"isInOtaMode\":");                    out += (isOtaMode ? F("true") : F("false"));
 
 #if WIFI_USE_DIRECT == false
   out += F(",\"wifiSettingsResettable\":true");

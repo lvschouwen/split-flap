@@ -34,10 +34,19 @@ static void test_struct_size_is_multiple_of_4() {
 }
 
 static void test_struct_size_matches_expected_layout() {
-  // 4 (magic) + 4 (bootCounter) + 36 (preFlashSketchMd5) = 44. Locking
-  // this in prevents silent padding changes from an unrelated struct
-  // edit.
-  TEST_ASSERT_EQUAL_INT(44, (int)sizeof(RtcBootState));
+  // 4 (magic) + 4 (bootCounter) + 4 (bootMode) + 36 (preFlashSketchMd5)
+  // = 48. Locking this in prevents silent padding changes from an
+  // unrelated struct edit.
+  TEST_ASSERT_EQUAL_INT(48, (int)sizeof(RtcBootState));
+}
+
+static void test_normalize_defaults_boot_mode_to_normal() {
+  // A zero-initialized state must mean "normal boot" — OTA mode (#117)
+  // may only ever be entered by an explicit BOOT_MODE_OTA write.
+  RtcBootState state;
+  memset(&state, 0xAB, sizeof(state));  // garbage, wrong magic
+  normalizeBootState(state);
+  TEST_ASSERT_EQUAL_UINT32(BOOT_MODE_NORMAL, state.bootMode);
 }
 
 static void test_offset_clears_eboot_command_region() {
@@ -57,10 +66,13 @@ static void test_pre_flash_md5_len_fits_hex_plus_nul() {
   TEST_ASSERT_GREATER_OR_EQUAL_INT(33, (int)PRE_FLASH_MD5_LEN);
 }
 
-static void test_magic_matches_v2_value() {
+static void test_magic_matches_v3_value() {
   // Lock in the RTC magic — bumping it silently would break boot-state
   // compatibility with any device already running the current firmware.
-  TEST_ASSERT_EQUAL_UINT32(0xC0FFEE43UL, RTC_BOOT_MAGIC);
+  // V3 (0xC0FFEE44): struct gained bootMode (#117); without the bump, a
+  // V2 state's stale trailing bytes could read as BOOT_MODE_OTA and boot
+  // the device into OTA mode uninvited.
+  TEST_ASSERT_EQUAL_UINT32(0xC0FFEE44UL, RTC_BOOT_MAGIC);
 }
 
 // --- normalizeBootState -------------------------------------------------
@@ -267,7 +279,8 @@ int main(int, char**) {
   RUN_TEST(test_struct_size_is_multiple_of_4);
   RUN_TEST(test_struct_size_matches_expected_layout);
   RUN_TEST(test_pre_flash_md5_len_fits_hex_plus_nul);
-  RUN_TEST(test_magic_matches_v2_value);
+  RUN_TEST(test_magic_matches_v3_value);
+  RUN_TEST(test_normalize_defaults_boot_mode_to_normal);
   RUN_TEST(test_normalize_zeros_state_when_magic_mismatch);
   RUN_TEST(test_normalize_preserves_state_when_magic_matches);
   RUN_TEST(test_setPreFlashMd5_typical_32_char_md5);

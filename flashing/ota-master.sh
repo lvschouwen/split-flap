@@ -15,13 +15,20 @@
 # are NOT retried — those are config/network/logic bugs that won't resolve
 # by retrying.
 #
-# Usage: ota-master.sh [-n <attempts>] [-v <gitrev>] <firmware.bin> <http://host:port>
+# Usage: ota-master.sh [-n <attempts>] [-v <gitrev>] [-o] <firmware.bin> <http://host:port>
 #
 #   -n <attempts>   max total attempts (default 4)
 #   -v <gitrev>     override the version string sent as ?v=. If omitted,
 #                   derived from a firmware-<rev>.bin stamped filename
 #                   (produced by build_assets.py alongside firmware.bin).
 #                   If neither is available, ?v= is omitted entirely.
+#   -o              quiet OTA mode (#117): before each attempt, POST
+#                   /firmware/ota-mode so the device reboots into a minimal
+#                   wait-for-image environment (no I2C/clock/display traffic
+#                   drawing power), then upload there. The mode flag is
+#                   one-shot on the device — after the flash (or any reboot)
+#                   it returns to normal operation by itself. Requires the
+#                   running firmware to know the endpoint (>= #117).
 #
 # Requires: curl, md5sum, python3
 #
@@ -33,16 +40,18 @@ set -euo pipefail
 
 MAX_ATTEMPTS=4
 OVERRIDE_VERSION=""
+USE_OTA_MODE=0
 
 usage() {
-  echo "usage: $0 [-n <attempts>] [-v <gitrev>] <firmware.bin> <http://host:port>" >&2
+  echo "usage: $0 [-n <attempts>] [-v <gitrev>] [-o] <firmware.bin> <http://host:port>" >&2
   exit 2
 }
 
-while getopts "n:v:h" opt; do
+while getopts "n:v:oh" opt; do
   case "$opt" in
     n) MAX_ATTEMPTS="$OPTARG" ;;
     v) OVERRIDE_VERSION="$OPTARG" ;;
+    o) USE_OTA_MODE=1 ;;
     h|*) usage ;;
   esac
 done
@@ -100,6 +109,27 @@ except Exception:
 
 BODY=$(mktemp)
 trap 'rm -f "$BODY"' EXIT
+
+# Reboot the device into quiet OTA mode (#117) and wait until /settings
+# reports isInOtaMode. The device-side flag is one-shot, so this must run
+# before EVERY attempt (a reverted attempt boots back into normal mode).
+enter_ota_mode() {
+  local attempt_num="$1"
+  echo "[attempt $attempt_num] requesting quiet OTA mode..."
+  if ! curl -fsS --max-time 10 -X POST "$TARGET/firmware/ota-mode" >/dev/null 2>&1; then
+    echo "[attempt $attempt_num] /firmware/ota-mode not accepted — running firmware predates #117; continuing with a normal-mode flash" >&2
+    return
+  fi
+  local deadline=$(( $(date +%s) + 60 ))
+  while (( $(date +%s) < deadline )); do
+    sleep 3
+    if [[ "$(fetch_setting isInOtaMode)" == "True" ]]; then
+      echo "[attempt $attempt_num] device is in OTA mode — display quiet"
+      return
+    fi
+  done
+  echo "[attempt $attempt_num] device did not report OTA mode within 60 s — continuing anyway" >&2
+}
 
 # Run one attempt. Returns a verdict string via the global LAST_VERDICT:
 #   success       new bits are running
@@ -205,6 +235,9 @@ LAST_VERDICT=""
 for (( attempt=1; attempt<=MAX_ATTEMPTS; attempt++ )); do
   echo
   echo "=== OTA attempt $attempt of $MAX_ATTEMPTS ==="
+  if (( USE_OTA_MODE )); then
+    enter_ota_mode "$attempt"
+  fi
   run_attempt "$attempt"
 
   case "$LAST_VERDICT" in

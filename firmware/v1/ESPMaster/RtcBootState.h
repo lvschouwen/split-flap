@@ -13,17 +13,26 @@
 // alignment required by ESP.rtcUserMemoryRead/Write. See #53.
 #define PRE_FLASH_MD5_LEN 36
 
+// Boot-mode values for RtcBootState.bootMode (issue #117). BOOT_MODE_OTA is
+// one-shot: setup() clears it back to NORMAL immediately on entry, so any
+// reboot or power cycle out of OTA mode lands in a normal boot.
+static const uint32_t BOOT_MODE_NORMAL = 0;
+static const uint32_t BOOT_MODE_OTA    = 1;
+
 struct RtcBootState {
   uint32_t magic;
   uint32_t bootCounter;
+  uint32_t bootMode;
   char     preFlashSketchMd5[PRE_FLASH_MD5_LEN];
 };
 
-// Magic bumped to V2 in #53 when the struct gained preFlashSketchMd5.
-// Old firmware's RTC state (magic 0xC0FFEE42) no longer matches, so
-// normalizeBootState() zero-inits the whole struct — correct, because
-// we can't trust the extra bytes sitting past where the old firmware wrote.
-static const uint32_t RTC_BOOT_MAGIC           = 0xC0FFEE43UL;
+// Magic bumped to V2 in #53 when the struct gained preFlashSketchMd5, and
+// to V3 in #117 when it gained bootMode — without the bump, a V2 state's
+// stale trailing bytes could read as BOOT_MODE_OTA and boot the device
+// into OTA mode uninvited. A mismatched magic makes normalizeBootState()
+// zero-init the whole struct — correct, because we can't trust bytes past
+// where the older firmware wrote.
+static const uint32_t RTC_BOOT_MAGIC           = 0xC0FFEE44UL;
 // Block 32, NOT 0 (issue #115): the ESP8266 core's Update.end() writes the
 // eboot command (32 blocks / 128 bytes: magic, ACTION_COPY_RAW, args, crc32)
 // at the start of RTC user memory. At offset 0, the post-flash cookie write
