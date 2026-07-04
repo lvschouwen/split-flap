@@ -234,6 +234,14 @@ volatile bool abortCurrentShow = false;
 #include "RtcBootState.h"
 
 bool isRecoveryMode = false;
+
+//Freeze-during-upload state (issue #116). While a master firmware image is
+//streaming in, the loop stops all display/unit work — stepper current +
+//WiFi TX + flash-write bursts on one small supply is exactly the storm that
+//endangers a flash. masterOtaLastChunkMs lets the loop auto-thaw if the
+//client dies mid-upload and the completion handler never fires.
+volatile bool masterOtaUploadActive = false;
+volatile unsigned long masterOtaLastChunkMs = 0;
 bool healthyBootMarked = false;
 
 //Master OTA rejection state — set in the upload handler when the content
@@ -323,16 +331,19 @@ void registerMasterFirmwareEndpoint() {
         otaRejected = false;
         otaRejectionStatus = 0;
         otaRejectionReason = String();
+        masterOtaUploadActive = false;  //unfreeze the display (#116)
         request->send(status, "text/plain", reason);
         return;
       }
       if (Update.hasError()) {
         String msg = String("Master OTA failed: ") + Update.getErrorString();
         SerialPrintln(msg);
+        masterOtaUploadActive = false;  //unfreeze the display (#116)
         request->send(500, "text/plain", msg);
       } else if (!Update.isFinished()) {
         String msg = "Master OTA incomplete: Update.isFinished() == false after final chunk";
         SerialPrintln(msg);
+        masterOtaUploadActive = false;  //unfreeze the display (#116)
         request->send(500, "text/plain", msg);
       } else {
         //Single source of truth: reboot only when the updater considers the
@@ -350,7 +361,12 @@ void registerMasterFirmwareEndpoint() {
       }
     },
     [](AsyncWebServerRequest * request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+      masterOtaLastChunkMs = millis();
       if (index == 0) {
+        //Freeze the display for the duration of the upload (issue #116).
+        //The loop unfreezes on the completion handler's failure paths or
+        //after 30 s without a chunk; on success the device reboots frozen.
+        masterOtaUploadActive = true;
         otaRejected = false;
         otaRejectionStatus = 0;
         otaRejectionReason = String();
@@ -1192,6 +1208,18 @@ void setup() {
 void loop() {
   //Reboot in here as if we restart within a request handler, no response is returned
   if (isPendingReboot) {
+#if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
+    //Park the display before restarting (issue #116). Eboot's staged-image
+    //copy runs immediately after reset with no sketch in control — make
+    //sure no stepper is energized and sagging the rail during it. Bounded
+    //wait; absent/silent units are skipped inside isDisplayMoving().
+    if (!isRecoveryMode) {
+      unsigned long parkStart = millis();
+      while (isDisplayMoving() && millis() - parkStart < 15000UL) {
+        delay(100);
+      }
+    }
+#endif
     SerialPrintln(F("Rebooting Now... Fairwell!"));
     SerialPrintln(F("#######################################################"));
     //Longer pause so AsyncWebServer can flush the 200 OK body to the client
@@ -1236,6 +1264,19 @@ void loop() {
 #if USE_MULTICAST == true
   MDNS.update();
 #endif
+
+  //Freeze all display/unit activity while a master firmware upload is
+  //streaming in (issue #116). Auto-thaw after 30 s without a chunk so a
+  //client that died mid-upload can't wedge the display forever.
+  if (masterOtaUploadActive) {
+    if (millis() - masterOtaLastChunkMs > 30000UL) {
+      SerialPrintln(F("OTA upload stalled >30 s — resuming normal operation"));
+      masterOtaUploadActive = false;
+    } else {
+      delay(50);
+      return;
+    }
+  }
 
   //Do nothing if WiFi is not configured
   if (!isWifiConfigured) {
