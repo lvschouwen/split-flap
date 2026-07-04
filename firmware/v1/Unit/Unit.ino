@@ -91,6 +91,7 @@
 
 //constants others
 #define BAUDRATE 115200
+#define HOMING_RPM 10 //fixed speed for homing (issue #108). Homing used to run at whatever speed the last message used — a fast message followed by a HOME homed fast, risking overshooting the hall window and inconsistent zero points.
 #define ROTATIONDIRECTION 1 //-1 for reverse direction (swap if the drum rotates the wrong way)
 #define OVERHEATINGTIMEOUT 2 //timeout in seconds to avoid overheating of stepper. After starting rotation, the counter will start. Stepper won't move again until timeout is passed
 unsigned long lastRotation = 0;
@@ -115,7 +116,7 @@ int currentlyrotating = 0; // 1 = drum is currently rotating, 0 = drum is standi
 // (receiveLetter) and read in loop()/rotateToLetter() — volatile for the
 // same reason as the pending* flags (LTO may otherwise cache them). Values
 // fit in the low byte, so the non-atomic 16-bit access is harmless.
-volatile int stepperSpeed = 10; //current speed of stepper, value only for first homing
+volatile int stepperSpeed = 10; //current speed of stepper, from the last letter command; default only matters for a jog before any message (homing uses HOMING_RPM)
 int eeAddress = 0;   //EEPROM address for calibration offset
 int calOffset;       //Offset for calibration in steps, stored in EEPROM, gets read in setup
 volatile int receivedNumber = 0;
@@ -685,7 +686,7 @@ int calibrate(bool initialCalibration) {
   // tells the master "magnet fell off / bad KY-003 / wiring issue".
   // Issue #47.
   bool hallSawMagnet = false;
-  stepper.setSpeed(stepperSpeed);
+  stepper.setSpeed(HOMING_RPM); //fixed speed — never the last message's speed (issue #108). rotateToLetter() re-sets the commanded speed after calibrate(false).
   int i = 0;
   while (!reachedMarker) {
     int currentHallValue = digitalRead(HALLPIN);
