@@ -383,8 +383,9 @@ void registerMasterFirmwareEndpoint() {
         //Flash-config mismatch (#92/#94): if the RUNNING image's flash-size
         //header claims more than the physical chip, Update.begin() will
         //refuse every upload with the cryptic "Flash config wrong". Detect
-        //it first and tell the operator exactly which USB-reflash variant
-        //breaks the deadlock — nothing sent over the air can.
+        //it first and tell the operator to USB-reflash the 1 MB build,
+        //which is the only thing that breaks the deadlock (nothing over
+        //the air can). Fires on legacy images built with a bigger header.
         uint32_t flashRealSize   = ESP.getFlashChipRealSize();
         uint32_t flashHeaderSize = ESP.getFlashChipSize();
         if (flashRealSize < flashHeaderSize) {
@@ -392,8 +393,7 @@ void registerMasterFirmwareEndpoint() {
           otaRejectionStatus = 412;
           otaRejectionReason = String("Flash config mismatch: running firmware header claims ") +
                                flashHeaderSize + " bytes but chip is " + flashRealSize +
-                               " — OTA is permanently rejected by this build; reflash once over USB with the " +
-                               (flashRealSize >= 4194304 ? "-4m" : "-1m") + " firmware variant";
+                               " — OTA is permanently rejected by this build; reflash once over USB with the current firmware build";
           SerialPrintln(otaRejectionReason);
           return;
         }

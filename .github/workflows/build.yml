@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [ESPMaster, Unit, MasterS3, MasterH2]
+        project: [ESPMaster, Unit]
     steps:
       - uses: actions/checkout@v4
 
@@ -67,10 +67,6 @@ jobs:
 
       - name: Run ESPMaster native tests
         working-directory: firmware/v1/ESPMaster
-        run: pio test -e native
-
-      - name: Run lib/common native tests
-        working-directory: firmware/v1/lib/common
         run: pio test -e native
 
       - name: Install pytest

@@ -108,7 +108,7 @@ trap 'rm -f "$BODY"' EXIT
 #                 (not retryable — config/network/proxy problem)
 #   flash-config-mismatch  running image's flash header exceeds the physical
 #                 chip; every OTA is refused — needs one USB reflash with the
-#                 matching -1m/-4m variant (not retryable)
+#                 current 1 MB firmware build (not retryable)
 #   upload-failed curl/HTTP-level failure (not retryable)
 #   unreachable   device didn't respond to /settings (not retryable)
 #   inconsistent  unknown post-flash state (not retryable)
@@ -235,13 +235,11 @@ MSG
       cat >&2 <<MSG
 
 [fail] FLASH CONFIG MISMATCH — the RUNNING firmware's flash-size header
-       claims a bigger chip than is physically present, so Update.begin()
+       claims a bigger chip than the physical 1 MB ESP-01, so Update.begin()
        rejects every OTA before reading a single byte. Retrying cannot
-       help and neither can any OTA payload. Reflash ONCE over USB with
-       the variant matching the physical chip:
-         - 1 MB ESP-01      -> firmware-<rev>-1m.bin
-         - 4 MB ESP-12/01M  -> firmware-<rev>-4m.bin
-       OTA works normally again afterwards. See issues #92 / #94.
+       help and neither can any OTA payload. Reflash ONCE over USB with the
+       current 1 MB firmware build; OTA works normally again afterwards.
+       See issues #92 / #94.
 MSG
       exit 3
       ;;

@@ -170,7 +170,7 @@ try:
 
     # Post-build: drop a copy of firmware.bin next to itself with the git
     # rev AND flash-size label in the filename so shipping / archiving is
-    # self-describing across the 1 MB / 4 MB variants (issue #92).
+    # self-describing.
     _rev, _dirty = git_short_rev(_project_dir)
     _tag = f"{_rev}-dirty" if _dirty else _rev
     _size = flash_size_label(env)  # noqa: F821
