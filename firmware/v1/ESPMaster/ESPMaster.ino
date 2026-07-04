@@ -301,15 +301,19 @@ void clearBootCounterRtc() {
   writeBootStateRtc(state);
 }
 
-//Set the pre-flash cookie used by the boot-time revert detector (#53).
-//Called from the /firmware/master success path just before ESP.restart().
-//Caller passes the *current* ESP.getSketchMD5() so that, after reboot,
-//setup() can compare: if the running MD5 still matches this cookie, the
-//new image didn't take (eboot silently reverted). RTC memory survives
-//a warm restart, which is exactly the eboot-revert failure path.
-void setPreFlashCookieRtc(const String& sketchMd5) {
+//Set the flash-outcome cookie used by the boot-time revert detector
+//(#53, reworked in #118). Called from the /firmware/master success path
+//just before ESP.restart(). With COOKIE_KIND_EXPECTED_MD5 the caller
+//passes the uploaded image's MD5 (from ?md5=) and boot reports "ok" iff
+//the running MD5 matches it — unambiguous even for a same-image reflash.
+//With COOKIE_KIND_PRE_FLASH (md5-less web-form uploads) the caller passes
+//the pre-reboot ESP.getSketchMD5() and a post-boot match means the new
+//image didn't take. RTC memory survives a warm restart, which is exactly
+//the eboot-revert failure path.
+void setFlashCookieRtc(const String& md5, uint32_t kind) {
   RtcBootState state = readBootStateRtc();
-  setPreFlashMd5(state, sketchMd5.c_str());
+  setPreFlashMd5(state, md5.c_str());
+  state.cookieKind = kind;
   writeBootStateRtc(state);
 }
 
@@ -352,11 +356,23 @@ void registerMasterFirmwareEndpoint() {
         //Single source of truth: reboot only when the updater considers the
         //image committed AND no error was latched along the way.
         request->send(200, "text/plain", "Master firmware flashed; rebooting…");
-        //Stash the *current* running sketch MD5 in RTC memory as a "pre-flash
-        //cookie". On next boot, if the running MD5 still matches this cookie,
-        //the new image didn't take (eboot silently reverted) and the boot
-        //code will record lastFlashResult="reverted" in EEPROM. See #53.
-        setPreFlashCookieRtc(ESP.getSketchMD5());
+        //Stash the flash-outcome cookie in RTC (#53/#118). Prefer the
+        //uploaded image's MD5 (?md5= — ota-master.sh always sends it): boot
+        //then reports "ok" iff the running MD5 matches it, which stays
+        //correct even when re-flashing the identical image. Fall back to
+        //the legacy pre-flash-MD5 semantics for md5-less form uploads.
+        if (request->hasParam("md5")) {
+          String expectedMd5 = request->getParam("md5")->value();
+          expectedMd5.toLowerCase();
+          setFlashCookieRtc(expectedMd5, COOKIE_KIND_EXPECTED_MD5);
+        } else {
+          setFlashCookieRtc(ESP.getSketchMD5(), COOKIE_KIND_PRE_FLASH);
+        }
+        //Clear the previous verdict NOW (#118) — if the next boot can't
+        //adjudicate (e.g. the cookie was invalidated by an RtcBootState
+        //magic bump), /settings must show "" (unknown), not a stale
+        //verdict from an earlier flash masquerading as this one's.
+        saveLastFlashResult("");
         //A fresh firmware should start with a clean boot counter — otherwise
         //the very first post-flash boot could tip us back into recovery.
         clearBootCounterRtc();
@@ -708,43 +724,44 @@ void setup() {
     initialiseFileSystem();
     loadValuesFromFileSystem();
 
-    //Pre-flash RTC cookie check (#53). If the OTA handler stashed the
-    //pre-reboot sketch MD5 in RTC, we resolve the outcome here:
-    //   cookie present AND running MD5 == cookie  -> eboot REVERTED
-    //   cookie present AND running MD5 != cookie  -> flash OK
-    //Write the verdict to EEPROM so /settings can surface it even after
-    //another reboot, then clear the cookie so a later unrelated warm
-    //reboot doesn't re-trigger the check.
+    //Flash-outcome cookie check (#53/#118). If the OTA handler stashed a
+    //cookie in RTC, resolveFlashVerdict() decides the outcome according to
+    //the cookie kind (expected-new-MD5 vs legacy pre-flash-MD5 — see
+    //RtcBootState.h). Write the verdict to EEPROM so /settings can surface
+    //it even after another reboot, then clear the cookie so a later
+    //unrelated warm reboot doesn't re-trigger the check. A malformed
+    //cookie resolves to "" (unknown) — which still overwrites the ""
+    //the handler staged, never a stale verdict.
     RtcBootState bootStateNow = readBootStateRtc();
-    if (cookieIsPresent(bootStateNow)) {
+    {
       String runningMd5 = ESP.getSketchMD5();
-      //Build a bounded copy of the cookie for equality + logging. A raw
-      //`String == char*` or `SerialPrint(char*)` would walk until the first
-      //NUL, which if RTC is corrupt could run past the struct. See #53.
-      size_t ckLen = cookieLength(bootStateNow);
-      bool malformed = (ckLen >= PRE_FLASH_MD5_LEN);
-      String cookieStr;
-      if (!malformed) {
-        cookieStr.reserve(ckLen);
-        for (size_t i = 0; i < ckLen; i++) cookieStr += bootStateNow.preFlashSketchMd5[i];
+      const char* verdict = resolveFlashVerdict(bootStateNow, runningMd5.c_str());
+      if (verdict != nullptr) {
+        //Bounded copy of the cookie for logging only. A raw SerialPrint of
+        //the slot would walk until the first NUL, which if RTC is corrupt
+        //could run past the struct. See #53.
+        size_t ckLen = cookieLength(bootStateNow);
+        String cookieStr;
+        if (ckLen < PRE_FLASH_MD5_LEN) {
+          cookieStr.reserve(ckLen);
+          for (size_t i = 0; i < ckLen; i++) cookieStr += bootStateNow.preFlashSketchMd5[i];
+        } else {
+          cookieStr = F("<unterminated>");
+        }
+        SerialPrint(F("Flash cookie resolved: "));
+        SerialPrint(verdict[0] == '\0' ? "unknown" : verdict);
+        SerialPrint(F(" (kind="));
+        SerialPrint(bootStateNow.cookieKind);
+        SerialPrint(F(", cookie="));
+        SerialPrint(cookieStr);
+        SerialPrint(F(", running="));
+        SerialPrint(runningMd5);
+        SerialPrintln(F(")"));
+        saveLastFlashResult(verdict);
+        memset(bootStateNow.preFlashSketchMd5, 0, PRE_FLASH_MD5_LEN);
+        bootStateNow.cookieKind = COOKIE_KIND_NONE;
+        writeBootStateRtc(bootStateNow);
       }
-      bool reverted = cookieMatchesRunning(bootStateNow, runningMd5.c_str());
-      SerialPrint(F("Pre-flash cookie resolved: "));
-      if (malformed)      SerialPrint(F("malformed"));
-      else if (reverted)  SerialPrint(F("reverted"));
-      else                SerialPrint(F("ok"));
-      SerialPrint(F(" (cookie="));
-      if (malformed) SerialPrint(F("<unterminated>"));
-      else           SerialPrint(cookieStr);
-      SerialPrint(F(", running="));
-      SerialPrint(runningMd5);
-      SerialPrintln(F(")"));
-      //Treat a malformed cookie as "ok" (no evidence of revert) rather than
-      //a false-positive. Clear the slot either way so the next boot gets a
-      //clean state.
-      saveLastFlashResult(reverted ? "reverted" : "ok");
-      memset(bootStateNow.preFlashSketchMd5, 0, PRE_FLASH_MD5_LEN);
-      writeBootStateRtc(bootStateNow);
     }
     //Load the most-recent resolved result (may be "" if no flash has ever
     //happened on this EEPROM blob) for /settings.

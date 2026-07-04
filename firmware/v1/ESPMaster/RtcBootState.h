@@ -19,20 +19,32 @@
 static const uint32_t BOOT_MODE_NORMAL = 0;
 static const uint32_t BOOT_MODE_OTA    = 1;
 
+// What the MD5 in the cookie slot means (issue #118):
+//   PRE_FLASH    — the sketch MD5 that was running BEFORE the flash.
+//                  running == cookie  ->  old bits still here -> "reverted".
+//                  Ambiguous for a same-image reflash (legacy semantics,
+//                  used only when the upload carried no ?md5= param).
+//   EXPECTED_MD5 — the MD5 of the uploaded image itself.
+//                  running == cookie  ->  new bits running    -> "ok".
+//                  Unambiguous; used whenever ?md5= is present.
+static const uint32_t COOKIE_KIND_NONE         = 0;
+static const uint32_t COOKIE_KIND_PRE_FLASH    = 1;
+static const uint32_t COOKIE_KIND_EXPECTED_MD5 = 2;
+
 struct RtcBootState {
   uint32_t magic;
   uint32_t bootCounter;
   uint32_t bootMode;
+  uint32_t cookieKind;
   char     preFlashSketchMd5[PRE_FLASH_MD5_LEN];
 };
 
-// Magic bumped to V2 in #53 when the struct gained preFlashSketchMd5, and
-// to V3 in #117 when it gained bootMode — without the bump, a V2 state's
-// stale trailing bytes could read as BOOT_MODE_OTA and boot the device
-// into OTA mode uninvited. A mismatched magic makes normalizeBootState()
-// zero-init the whole struct — correct, because we can't trust bytes past
-// where the older firmware wrote.
-static const uint32_t RTC_BOOT_MAGIC           = 0xC0FFEE44UL;
+// Magic bumped to V2 in #53 when the struct gained preFlashSketchMd5, to V3
+// in #117 when it gained bootMode, and to V4 in #118 when it gained
+// cookieKind — without the bump, an older layout's stale trailing bytes
+// could be misread as live fields (e.g. BOOT_MODE_OTA uninvited). A
+// mismatched magic makes normalizeBootState() zero-init the whole struct.
+static const uint32_t RTC_BOOT_MAGIC           = 0xC0FFEE45UL;
 // Block 32, NOT 0 (issue #115): the ESP8266 core's Update.end() writes the
 // eboot command (32 blocks / 128 bytes: magic, ACTION_COPY_RAW, args, crc32)
 // at the start of RTC user memory. At offset 0, the post-flash cookie write
@@ -87,6 +99,14 @@ inline void setPreFlashMd5(RtcBootState& state, const char* sketchMd5) {
   }
 }
 
+// Resolves the post-boot flash verdict from the cookie (issue #118).
+// Returns:
+//   nullptr    — no cookie present; nothing to judge (don't touch EEPROM)
+//   ""         — cookie malformed; outcome unknown (clears a stale verdict)
+//   "ok"       — the flash took
+//   "reverted" — the old image is still running
+inline const char* resolveFlashVerdict(const RtcBootState& state, const char* runningMd5);
+
 // Length-bounded equality check. A malformed (unterminated) cookie is
 // treated as no-match rather than walking past the slot — closes the
 // read-past-end hazard the raw `String ==` compare would create if RTC
@@ -100,4 +120,15 @@ inline bool cookieMatchesRunning(const RtcBootState& state, const char* runningM
   size_t runLen = strlen(runningMd5);
   if (runLen != cookieLen) return false;
   return memcmp(runningMd5, state.preFlashSketchMd5, cookieLen) == 0;
+}
+
+inline const char* resolveFlashVerdict(const RtcBootState& state, const char* runningMd5) {
+  if (!cookieIsPresent(state)) return nullptr;
+  if (cookieIsMalformed(state)) return "";
+  bool matches = cookieMatchesRunning(state, runningMd5);
+  if (state.cookieKind == COOKIE_KIND_EXPECTED_MD5) {
+    return matches ? "ok" : "reverted";
+  }
+  //COOKIE_KIND_PRE_FLASH (and anything unexpected): legacy semantics.
+  return matches ? "reverted" : "ok";
 }

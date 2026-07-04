@@ -34,10 +34,62 @@ static void test_struct_size_is_multiple_of_4() {
 }
 
 static void test_struct_size_matches_expected_layout() {
-  // 4 (magic) + 4 (bootCounter) + 4 (bootMode) + 36 (preFlashSketchMd5)
-  // = 48. Locking this in prevents silent padding changes from an
-  // unrelated struct edit.
-  TEST_ASSERT_EQUAL_INT(48, (int)sizeof(RtcBootState));
+  // 4 (magic) + 4 (bootCounter) + 4 (bootMode) + 4 (cookieKind)
+  // + 36 (preFlashSketchMd5) = 52. Locking this in prevents silent
+  // padding changes from an unrelated struct edit.
+  TEST_ASSERT_EQUAL_INT(52, (int)sizeof(RtcBootState));
+}
+
+static void test_normalize_defaults_cookie_kind_to_none() {
+  RtcBootState state;
+  memset(&state, 0xAB, sizeof(state));  // garbage, wrong magic
+  normalizeBootState(state);
+  TEST_ASSERT_EQUAL_UINT32(COOKIE_KIND_NONE, state.cookieKind);
+}
+
+// --- resolveFlashVerdict (#118) ------------------------------------------
+// Expected-MD5 cookies (kind 2): running == cookie means the new image IS
+// running -> "ok". Pre-flash cookies (kind 1, legacy / md5-less uploads):
+// running == cookie means the OLD image is still running -> "reverted".
+
+static RtcBootState makeCookieState(uint32_t kind, const char* md5) {
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  state.magic = RTC_BOOT_MAGIC;
+  state.cookieKind = kind;
+  setPreFlashMd5(state, md5);
+  return state;
+}
+
+static void test_verdict_expected_md5_match_is_ok() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_EXPECTED_MD5, "aabbccdd");
+  TEST_ASSERT_EQUAL_STRING("ok", resolveFlashVerdict(s, "aabbccdd"));
+}
+
+static void test_verdict_expected_md5_mismatch_is_reverted() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_EXPECTED_MD5, "aabbccdd");
+  TEST_ASSERT_EQUAL_STRING("reverted", resolveFlashVerdict(s, "11223344"));
+}
+
+static void test_verdict_pre_flash_match_is_reverted() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_PRE_FLASH, "aabbccdd");
+  TEST_ASSERT_EQUAL_STRING("reverted", resolveFlashVerdict(s, "aabbccdd"));
+}
+
+static void test_verdict_pre_flash_mismatch_is_ok() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_PRE_FLASH, "11223344");
+  TEST_ASSERT_EQUAL_STRING("ok", resolveFlashVerdict(s, "aabbccdd"));
+}
+
+static void test_verdict_absent_cookie_is_null() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_NONE, "");
+  TEST_ASSERT_NULL(resolveFlashVerdict(s, "aabbccdd"));
+}
+
+static void test_verdict_malformed_cookie_is_unknown() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_EXPECTED_MD5, "aabbccdd");
+  memset(s.preFlashSketchMd5, 'x', PRE_FLASH_MD5_LEN);  // no NUL in slot
+  TEST_ASSERT_EQUAL_STRING("", resolveFlashVerdict(s, "aabbccdd"));
 }
 
 static void test_normalize_defaults_boot_mode_to_normal() {
@@ -66,13 +118,13 @@ static void test_pre_flash_md5_len_fits_hex_plus_nul() {
   TEST_ASSERT_GREATER_OR_EQUAL_INT(33, (int)PRE_FLASH_MD5_LEN);
 }
 
-static void test_magic_matches_v3_value() {
+static void test_magic_matches_v4_value() {
   // Lock in the RTC magic — bumping it silently would break boot-state
   // compatibility with any device already running the current firmware.
-  // V3 (0xC0FFEE44): struct gained bootMode (#117); without the bump, a
-  // V2 state's stale trailing bytes could read as BOOT_MODE_OTA and boot
-  // the device into OTA mode uninvited.
-  TEST_ASSERT_EQUAL_UINT32(0xC0FFEE44UL, RTC_BOOT_MAGIC);
+  // V3 (0xC0FFEE44): struct gained bootMode (#117). V4 (0xC0FFEE45):
+  // gained cookieKind (#118). Without the bumps, stale trailing bytes
+  // from an older layout could be misread as live fields.
+  TEST_ASSERT_EQUAL_UINT32(0xC0FFEE45UL, RTC_BOOT_MAGIC);
 }
 
 // --- normalizeBootState -------------------------------------------------
@@ -279,8 +331,15 @@ int main(int, char**) {
   RUN_TEST(test_struct_size_is_multiple_of_4);
   RUN_TEST(test_struct_size_matches_expected_layout);
   RUN_TEST(test_pre_flash_md5_len_fits_hex_plus_nul);
-  RUN_TEST(test_magic_matches_v3_value);
+  RUN_TEST(test_magic_matches_v4_value);
   RUN_TEST(test_normalize_defaults_boot_mode_to_normal);
+  RUN_TEST(test_normalize_defaults_cookie_kind_to_none);
+  RUN_TEST(test_verdict_expected_md5_match_is_ok);
+  RUN_TEST(test_verdict_expected_md5_mismatch_is_reverted);
+  RUN_TEST(test_verdict_pre_flash_match_is_reverted);
+  RUN_TEST(test_verdict_pre_flash_mismatch_is_ok);
+  RUN_TEST(test_verdict_absent_cookie_is_null);
+  RUN_TEST(test_verdict_malformed_cookie_is_unknown);
   RUN_TEST(test_normalize_zeros_state_when_magic_mismatch);
   RUN_TEST(test_normalize_preserves_state_when_magic_matches);
   RUN_TEST(test_setPreFlashMd5_typical_32_char_md5);

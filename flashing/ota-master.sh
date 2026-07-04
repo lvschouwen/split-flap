@@ -203,9 +203,18 @@ run_attempt() {
   echo "  lastFlashResult : $last_result"
   echo "  intendedVersion : $intended"
 
-  # Decision matrix — see #53 piece 3 + #60.
-  if [[ "$last_result" == "ok" && "$post_md5" != "$pre_md5" && "$post_md5" != "?" ]]; then
+  # Decision matrix — see #53 piece 3 + #60, reworked in #118.
+  # Primary signal: the device's post-boot sketchMd5 equals the MD5 of the
+  # file we uploaded. That is the strongest possible proof the new bits are
+  # running, independent of the lastFlashResult flag — which firmware
+  # predating #118 false-reports as "reverted" for same-image reflashes
+  # and for flashes that cross an RtcBootState layout bump.
+  if [[ "$post_md5" == "$MD5" ]]; then
     LAST_VERDICT="success"
+    if [[ "$last_result" != "ok" ]]; then
+      echo "  note: device flag says '$last_result' but the running sketchMd5"
+      echo "        matches the uploaded image — trusting the MD5 (#118)."
+    fi
   elif [[ "$last_result" == "reverted" ]]; then
     LAST_VERDICT="reverted"
   elif [[ -z "$last_result" && "$post_md5" == "$pre_md5" && "$post_md5" != "?" ]]; then
