@@ -111,10 +111,14 @@ bool lastInd3 = false; //store last status of phase
 bool lastInd4 = false; //store last status of phase
 float missedSteps = 0; //cummulate steps <1, to compensate via additional step when reaching >1
 int currentlyrotating = 0; // 1 = drum is currently rotating, 0 = drum is standing still
-int stepperSpeed = 10; //current speed of stepper, value only for first homing
+// receivedNumber and stepperSpeed are written from the Wire ISR
+// (receiveLetter) and read in loop()/rotateToLetter() — volatile for the
+// same reason as the pending* flags (LTO may otherwise cache them). Values
+// fit in the low byte, so the non-atomic 16-bit access is harmless.
+volatile int stepperSpeed = 10; //current speed of stepper, value only for first homing
 int eeAddress = 0;   //EEPROM address for calibration offset
 int calOffset;       //Offset for calibration in steps, stored in EEPROM, gets read in setup
-int receivedNumber = 0;
+volatile int receivedNumber = 0;
 int i2cAddress;
 
 // Set by the I2C receive handler when an enter-bootloader command arrives;
@@ -559,7 +563,10 @@ void receiveLetter(int numBytes) {
   }
 
   receivedNumber = firstByte;
-  stepperSpeed   = Wire.read();
+  // Stepper::setSpeed() divides by the speed — a zero byte (bus noise or a
+  // buggy master) would produce a garbage step delay. Clamp to >= 1.
+  int requestedSpeed = Wire.read();
+  stepperSpeed = (requestedSpeed < 1) ? 1 : requestedSpeed;
 }
 
 void requestEvent() {
@@ -600,8 +607,8 @@ void requestEvent() {
     if (currentlyrotating)          flags |= (1 << 0);
     if (statusLastHomeFailed)       flags |= (1 << 1);
     if (statusHallNeverTriggered)   flags |= (1 << 2);
-    uint8_t lastHomeScaled = (lastHomingStepCount >> 4);
-    if (lastHomeScaled > 0xFF) lastHomeScaled = 0xFF;
+    uint16_t lastHomeScaled16 = (lastHomingStepCount >> 4);
+    uint8_t lastHomeScaled = (lastHomeScaled16 > 0xFF) ? 0xFF : (uint8_t)lastHomeScaled16;
     uint8_t buf[8] = {
       flags,
       savedMcusr,
@@ -640,6 +647,12 @@ int getaddress() {
 //gets magnet sensor offset from EEPROM in steps
 void getOffset() {
   EEPROM.get(eeAddress, calOffset);
+  // Fresh EEPROM reads 0xFFFF (-1, harmless); corruption can read anything.
+  // An offset beyond one full revolution is never a legitimate calibration
+  // and would make every homing overshoot by whole turns — treat as unset.
+  if (calOffset < -STEPS || calOffset > STEPS) {
+    calOffset = 0;
+  }
 #ifdef SERIAL_ENABLE
   Serial.print("CalOffset from EEPROM: ");
   Serial.print(calOffset);
