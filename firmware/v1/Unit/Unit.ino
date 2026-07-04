@@ -97,14 +97,19 @@
 unsigned long lastRotation = 0;
 
 //globals
-int displayedLetter = 0; //currently shown letter
-int desiredLetter = 0; //letter to be shown
+//displayedLetter is written from loop context (rotateToLetter/calibrate) and
+//read by requestEvent() in the TWI ISR for CMD_GET_LETTER — volatile for the
+//same LTO-visibility reason as the pending* flags. Values fit in one byte,
+//so the non-atomic int access is harmless (#106).
+volatile int displayedLetter = 0; //currently shown letter
 //Must match ESPMaster.ino's letters[] and script.js's CALIBRATION_LETTERS
 //byte-for-byte. ä/ö/ü are stored as $ & # (wire encoding); the web UI
-//translates user input before sending. Letters are only displayed for
-//serial debug / TEST_ENABLE; the actual rotation is index-based, so
-//changing these strings never changes what the physical drum shows.
-const String letters[] = {" ", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "$", "&", "#", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":", ".", "-", "?", "!"};
+//translates user input before sending. Letters are only used for serial
+//debug prints; the actual rotation is index-based, so changing this string
+//never changes what the physical drum shows. Flash-resident: the previous
+//Arduino String array burned ~350 bytes of the 2 KB SRAM (issue #109).
+const char LETTER_CHARS[] PROGMEM = " ABCDEFGHIJKLMNOPQRSTUVWXYZ$&#0123456789:.-?!";
+static_assert(sizeof(LETTER_CHARS) - 1 == AMOUNTFLAPS, "LETTER_CHARS must have exactly AMOUNTFLAPS entries");
 Stepper stepper(STEPS, STEPPERPIN1, STEPPERPIN3, STEPPERPIN2, STEPPERPIN4); //stepper setup
 bool lastInd1 = false; //store last status of phase
 bool lastInd2 = false; //store last status of phase
@@ -424,7 +429,7 @@ void loop() {
       Serial.print("Value over serial received: ");
       Serial.print(receivedNumber);
       Serial.print(" Letter: ");
-      Serial.print(letters[receivedNumber]);
+      Serial.print((char)pgm_read_byte(&LETTER_CHARS[receivedNumber]));
       Serial.println();
       #endif
     */
@@ -445,7 +450,7 @@ void rotateToLetter(int toLetter) {
     //int amountLetters = sizeof(letters) / sizeof(String);
 #ifdef SERIAL_ENABLE
     Serial.print("go to letter: ");
-    Serial.println(letters[toLetter]);
+    Serial.println((char)pgm_read_byte(&LETTER_CHARS[toLetter]));
 #endif
     //go to letter, but only if available (>-1)
     if (posLetter > -1) { //check if letter exists
@@ -501,7 +506,6 @@ void rotateToLetter(int toLetter) {
 #ifdef SERIAL_ENABLE
       Serial.println("letter unknown, go to space");
 #endif
-      desiredLetter = 0;
     }
   }
 }
@@ -758,7 +762,6 @@ int calibrate(bool initialCalibration) {
     if (i > 3 * STEPS) {
       //seems that there is a problem with the marker or the sensor. turn of the motor to avoid overheating.
       displayedLetter = 0;
-      desiredLetter = 0;
       reachedMarker = true;
 #ifdef SERIAL_ENABLE
       Serial.println("calibration revolver failed");
