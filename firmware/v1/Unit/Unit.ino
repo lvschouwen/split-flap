@@ -158,10 +158,14 @@ uint8_t           savedMcusr                = 0;      // snapshot of MCUSR at bo
 uint8_t           lifetimeBrownoutCount     = 0;      // mirror of EEPROM slot 4
 uint8_t           lifetimeWatchdogCount     = 0;      // mirror of EEPROM slot 5
 uint8_t           badCommandCount           = 0;      // saturating, malformed I2C receives since boot
-bool              statusLastHomeFailed      = false;  // set by calibrate() on timeout
-bool              statusHallNeverTriggered  = false;  // set by calibrate() when hall never read 0
-uint16_t          lastHomingStepCount       = 0;      // steps the last calibrate() took to find hall
-uint16_t          uptimeSeconds             = 0;      // saturating; updated from loop()
+// The four status fields below are written from loop context (calibrate()/
+// loop()) and read by requestEvent() in the TWI ISR — volatile, and the
+// 16-bit ones are written under noInterrupts() so the ISR can't see a
+// torn half-written value (#96, same class as the calOffset fix).
+volatile bool     statusLastHomeFailed      = false;  // set by calibrate() on timeout
+volatile bool     statusHallNeverTriggered  = false;  // set by calibrate() when hall never read 0
+volatile uint16_t lastHomingStepCount       = 0;      // steps the last calibrate() took to find hall
+volatile uint16_t uptimeSeconds             = 0;      // saturating; updated from loop()
 
 //sleep globals
 //Sleep mode is SLEEP_MODE_IDLE: CPU clock stops, peripheral clocks (including
@@ -304,6 +308,11 @@ void loop() {
     stepper.step(ROTATIONDIRECTION * (int)steps);
     delay(50);
     stopMotor();
+    // Count the jog as a rotation for the anti-overheat gate so a display
+    // rotation can't start back-to-back with sustained jogging (#96). Jogs
+    // themselves stay ungated: <=127 steps, human-paced from the
+    // calibration UI — a 2 s inter-jog cooldown would wreck that UX.
+    lastRotation = millis();
     previousMillis = millis();
   }
 
@@ -374,7 +383,10 @@ void loop() {
   // the master is expected to poll more often than that. Cheap arithmetic,
   // fine to recompute every loop iteration.
   uint32_t secondsSinceBoot = currentMillis / 1000UL;
-  uptimeSeconds = (secondsSinceBoot > 0xFFFFUL) ? 0xFFFF : (uint16_t)secondsSinceBoot;
+  uint16_t newUptime = (secondsSinceBoot > 0xFFFFUL) ? 0xFFFF : (uint16_t)secondsSinceBoot;
+  noInterrupts();
+  uptimeSeconds = newUptime;
+  interrupts();
 
   if (currentMillis - previousMillis >= WAIT_TIME) {
     set_sleep_mode(SLEEP_MODE_IDLE);
@@ -680,7 +692,23 @@ int calibrate(bool initialCalibration) {
     if (currentHallValue == 0) {
       hallSawMagnet = true;
     }
-    if (currentHallValue == 1 && i == 0) { //already in zero position move out a bit and do the calibration {
+    if (currentHallValue == 0 && i == 0) {
+      //Started inside the magnet window (e.g. CMD_HOME while parked at the
+      //calibrated zero). Accepting this position as "marker found" would
+      //make the zero point drift with wherever we happened to stop inside
+      //the window — step out until the sensor releases, then clear the
+      //edge, so the marker is always approached from the same side (#96).
+      while (digitalRead(HALLPIN) == 0) {
+        stepper.step(ROTATIONDIRECTION * 1);
+        i++;
+        if (i > 3 * STEPS) break; //hall stuck at 0 — fall through to the failure check below
+      }
+      if (i <= 3 * STEPS) {
+        stepper.step(ROTATIONDIRECTION * 50);
+        i += 50;
+      }
+    }
+    else if (currentHallValue == 1 && i == 0) { //already in zero position move out a bit and do the calibration {
       //not reached yet
       i = 50;
       stepper.step(ROTATIONDIRECTION * 50); //move 50 steps to get out of scope of hall
@@ -698,9 +726,11 @@ int calibrate(bool initialCalibration) {
 #ifdef SERIAL_ENABLE
       Serial.println("revolver calibrated");
 #endif
+      noInterrupts();
       statusLastHomeFailed = false;
       statusHallNeverTriggered = !hallSawMagnet;
       lastHomingStepCount = (uint16_t)i;
+      interrupts();
       //Only stop motor for initial calibration
       if (initialCalibration) {
         stopMotor();
@@ -715,9 +745,11 @@ int calibrate(bool initialCalibration) {
 #ifdef SERIAL_ENABLE
       Serial.println("calibration revolver failed");
 #endif
+      noInterrupts();
       statusLastHomeFailed = true;
       statusHallNeverTriggered = !hallSawMagnet;
       lastHomingStepCount = (uint16_t)i;
+      interrupts();
       stopMotor();
       return -1;
     }
