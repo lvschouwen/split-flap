@@ -358,6 +358,11 @@ input[type=datetime-local] {
 	font-size: 0.85rem;
 }
 
+.calibration-ok {
+	color: #2a7d2a;
+	font-size: 0.85rem;
+}
+
 .calibration-reality {
 	width: 2.5em;
 	text-align: center;

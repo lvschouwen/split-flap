@@ -32,7 +32,7 @@ const TIMEZONE_OPTIONS = [
 	{ value: "AEST-10AEDT,M10.1.0,M4.1.0/3",   label: "Australia/Sydney" }
 ];
 const CALIBRATION_STEPS_PER_FLAP = 2038 / 45;
-var calibrationUnits = [];  //[{address, versionStatus}]
+var calibrationUnits = [];  //[{address, versionStatus, version}]
 
 //Used for submission!
 const form = document.getElementById('form');
@@ -102,9 +102,9 @@ function loadPage() {
 		showHideResetWifiSettingsAction(false);
 		showHideOtaUpdateAction(false);
 		setCalibrationUnits([
-			{address: 1, versionStatus: 0},
-			{address: 2, versionStatus: 0},
-			{address: 3, versionStatus: 1},
+			{address: 1, versionStatus: 0, version: "3ed3938"},
+			{address: 2, versionStatus: 0, version: "3ed3938"},
+			{address: 3, versionStatus: 1, version: "fb91753"},
 		]);
 
 		setTimeout(function() {
@@ -136,12 +136,14 @@ function loadPage() {
 				var calUnits = [];
 				var addresses = responseObject.detectedUnitAddresses || [];
 				var versionStatuses = responseObject.detectedUnitVersionStatus || [];
+				var versions = responseObject.detectedUnitVersions || [];
 				for (var i = 0; i < addresses.length; i++) {
 					var addr = addresses[i];
 					var unitIndex = addr - 1;
 					calUnits.push({
 						address: addr,
-						versionStatus: versionStatuses[unitIndex]
+						versionStatus: versionStatuses[unitIndex],
+						version: versions[unitIndex] || ""
 					});
 				}
 				setCalibrationUnits(calUnits);
@@ -549,15 +551,19 @@ function buildCalibrationRow(unit, advanced) {
 	label.textContent = "Unit " + formatHexAddress(unit.address);
 	row.appendChild(label);
 
-	//Version-outdated or unknown units can still try the opcodes — older
-	//firmware will silently drop them. Flag visually so the user isn't
-	//surprised when nothing happens.
-	if (unit.versionStatus !== 0) {
-		var warn = document.createElement("span");
-		warn.className = "calibration-warn";
-		warn.textContent = unit.versionStatus === 1 ? "(outdated fw)" : "(fw unknown)";
-		row.appendChild(warn);
+	//Version badge. Green = unit is on the bundled firmware (#120). Amber =
+	//outdated/unknown: those units can still try the opcodes — older firmware
+	//will silently drop them — so flag visually so the user isn't surprised
+	//when nothing happens.
+	var badge = document.createElement("span");
+	if (unit.versionStatus === 0) {
+		badge.className = "calibration-ok";
+		badge.textContent = unit.version ? "(fw " + unit.version + ")" : "(fw ok)";
+	} else {
+		badge.className = "calibration-warn";
+		badge.textContent = unit.versionStatus === 1 ? "(outdated fw)" : "(fw unknown)";
 	}
+	row.appendChild(badge);
 
 	if (advanced) {
 		buildAdvancedControls(row, unit);

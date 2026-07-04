@@ -332,6 +332,8 @@ bool flashUnitFromProgmem(uint8_t i2cAddress, String& resultMsg) {
 // PROGMEM-embedded unit binary. Best-effort: one failure doesn't abort the
 // others.
 extern int detectedUnitStates[];
+extern int detectedUnitVersionStatus[];
+extern char detectedUnitVersions[][9];
 
 void autoInstallFirmwareToBootloaderUnits() {
 #if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
@@ -354,6 +356,15 @@ void autoInstallFirmwareToBootloaderUnits() {
       //Just-provisioned unit is now running the sketch. Bump its state so
       //showMessage()/isDisplayMoving() stop skipping it.
       detectedUnitStates[unitIndex] = 1;
+      //The streamed image IS the bundled firmware, page-verified against
+      //PROGMEM during the flash (#110) — refresh the version cache in place
+      //so the UI stops reporting the pre-flash "unknown" until the next
+      //master reboot (#120). Re-reading over I2C here would race the unit's
+      //post-flash CMD_REBOOT cycle and can pin twiboot alive (#88); the
+      //boot-time probe re-confirms for real.
+      strncpy(detectedUnitVersions[unitIndex], BUNDLED_UNIT_REV, 8);
+      detectedUnitVersions[unitIndex][8] = '\0';
+      detectedUnitVersionStatus[unitIndex] = 0;
       flashedCount++;
     }
   }
@@ -373,10 +384,9 @@ void autoInstallFirmwareToBootloaderUnits() {
 // unit mixed in gets everyone on the same firmware without user action.
 // See issue #32 (the user asked for this alongside interactive calibration).
 //
-// Safe re-entry: after auto-install the probe will be refreshed to report
-// the freshly flashed rev, which matches BUNDLED_UNIT_REV, so versionStatus
-// flips to 0 and a subsequent call is a no-op.
-extern int detectedUnitVersionStatus[];
+// Safe re-entry: after auto-install the version cache reports the freshly
+// flashed rev, which matches BUNDLED_UNIT_REV, so versionStatus flips to 0
+// and a subsequent call is a no-op.
 
 void autoUpdateOutdatedUnits() {
 #if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
