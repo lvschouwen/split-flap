@@ -236,6 +236,16 @@ void setup() {
   Wire.onReceive(receiveLetter);//call-function for transfered letter via i2c
   Wire.onRequest(requestEvent); //call-funtion if master requests unit state
 
+  // Runtime watchdog (issue #107): a wedged unit self-recovers instead of
+  // needing a power cycle. 8 s window; loop() kicks it every pass and the
+  // stepping loops in calibrate()/rotateToLetter() kick it per iteration
+  // because low-speed moves legitimately take longer than 8 s. A watchdog
+  // reset lands in twiboot, which times out after ~250 ms and restarts the
+  // sketch — the same path CMD_REBOOT already uses — and bumps the EEPROM
+  // lifetime watchdog counter (#47), so firings are observable via
+  // CMD_GET_STATUS.
+  wdt_enable(WDTO_8S);
+
   getOffset();     //get calibration offset from EEPROM
   calibrate(true); //home stepper after startup
 
@@ -243,6 +253,7 @@ void setup() {
 #ifdef TEST_ENABLE
   int calLetters[10] = {0, 26, 1, 21, 14, 43, 30, 31, 32, 39};
   for (int i = 0; i < 10; i++) {
+    wdt_reset();
     int currentCalLetter = calLetters[i];
     rotateToLetter(currentCalLetter);
     delay(5000);
@@ -251,6 +262,8 @@ void setup() {
 }
 
 void loop() {
+  wdt_reset(); //see wdt_enable(WDTO_8S) in setup() (issue #107)
+
   //If an enter-bootloader command arrived, give Wire a beat to finish any
   //in-flight transaction, then let the watchdog reset us. Twiboot takes over
   //from there and the master can push a new sketch over I2C.
@@ -447,6 +460,7 @@ void rotateToLetter(int toLetter) {
         stepper.setSpeed(stepperSpeed);
         //doing the rotation letterwise
         for (int i = 0; i < diffPosition; i++) {
+          wdt_reset(); //a many-flap move at low speed exceeds the 8 s window (#107)
           float preciseStep = (float)STEPS / (float)AMOUNTFLAPS;
           int roundedStep = (int)preciseStep;
           missedSteps = missedSteps + ((float)preciseStep - (float)roundedStep);
@@ -466,6 +480,7 @@ void rotateToLetter(int toLetter) {
         //startMotor();
         stepper.setSpeed(stepperSpeed);
         for (int i = 0; i < posLetter; i++) {
+          wdt_reset(); //same as the direct-move loop above (#107)
           float preciseStep = (float)STEPS / (float)AMOUNTFLAPS;
           int roundedStep = (int)preciseStep;
           missedSteps = missedSteps + (float)preciseStep - (float)roundedStep;
@@ -689,6 +704,7 @@ int calibrate(bool initialCalibration) {
   stepper.setSpeed(HOMING_RPM); //fixed speed — never the last message's speed (issue #108). rotateToLetter() re-sets the commanded speed after calibrate(false).
   int i = 0;
   while (!reachedMarker) {
+    wdt_reset(); //a full homing at low speed legitimately exceeds the 8 s window (#107)
     int currentHallValue = digitalRead(HALLPIN);
     if (currentHallValue == 0) {
       hallSawMagnet = true;
@@ -700,6 +716,7 @@ int calibrate(bool initialCalibration) {
       //the window — step out until the sensor releases, then clear the
       //edge, so the marker is always approached from the same side (#96).
       while (digitalRead(HALLPIN) == 0) {
+        wdt_reset(); //stepping out of the magnet window can also run long (#107)
         stepper.step(ROTATIONDIRECTION * 1);
         i++;
         if (i > 3 * STEPS) break; //hall stuck at 0 — fall through to the failure check below
