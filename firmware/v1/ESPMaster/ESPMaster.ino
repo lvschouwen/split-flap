@@ -832,6 +832,13 @@ void setup() {
     //check the enter-bootloader path (unit should disappear briefly and
     //twiboot show up on 0x29).
     webServer.on("/unit/reboot", HTTP_GET, [](AsyncWebServerRequest * request) {
+      //Same guard as the calibration endpoints: a stray byte on the Wire
+      //bus mid-flash makes twiboot jump into half-written application
+      //flash (any unknown command byte == CMD_BOOT_APPLICATION). See #95.
+      if (firmwareFlashInProgress) {
+        request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
+        return;
+      }
       if (!request->hasParam("address")) {
         request->send(400, "text/plain", "Missing 'address' query param (e.g. /unit/reboot?address=0x01)");
         return;
@@ -1038,9 +1045,18 @@ void setup() {
             }
           }
 
-          //HTTP POST Flap Speed Slider value
+          //HTTP POST Flap Speed Slider value. The HTML slider enforces
+          //1..100 client-side only — validate here like every other field
+          //so a raw POST can't persist an out-of-range speed (#95).
           if (p->name() == PARAM_FLAP_SPEED) {
-            newFlapSpeedValue = p->value().c_str();
+            String receivedValue = p->value();
+            if (isNumber(receivedValue) && receivedValue.toInt() >= 1 && receivedValue.toInt() <= 100) {
+              newFlapSpeedValue = receivedValue;
+            }
+            else {
+              SerialPrintln("Flap speed provided was not valid. Value: " + receivedValue);
+              submissionError = true;
+            }
           }
 
           //HTTP POST inputText value
@@ -1306,7 +1322,10 @@ static void appendJsonString(String& out, const String& value) {
 //fixed-shape serializer that never needs to parse (issue #40).
 String getCurrentSettingValues() {
   String out;
-  out.reserve(512);
+  //Three per-unit arrays (address, versionStatus, version string) grow with
+  //UNITS_AMOUNT — scale the reservation so big displays don't realloc-churn
+  //the ~40 KB heap (#95). One-shot allocation, freed when the response sends.
+  out.reserve(512 + UNITS_AMOUNT * 24);
   out += '{';
 
   out += F("\"timezoneOffset\":");          out += getTimezoneOffsetMinutes();

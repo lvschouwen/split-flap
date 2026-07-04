@@ -77,8 +77,12 @@ String cleanString(String message) {
 int convertSpeed(String flapSpeed) {
   int flapSpeedInt;
   flapSpeedInt = flapSpeed.toInt();
+  //map() extrapolates outside its input range — clamp first so persisted
+  //out-of-range values (pre-#95 EEPROM blobs) can't produce a speed byte
+  //beyond MIN_SPEED..MAX_SPEED.
+  flapSpeedInt = constrain(flapSpeedInt, 1, 100);
   flapSpeedInt = map(flapSpeedInt, 1, 100, MIN_SPEED, MAX_SPEED);
-  
+
   return flapSpeedInt;
 }
 

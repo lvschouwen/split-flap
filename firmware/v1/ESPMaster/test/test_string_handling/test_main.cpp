@@ -40,6 +40,18 @@ static void test_convertSpeed_endpoints() {
   TEST_ASSERT_EQUAL_INT(MAX_SPEED, convertSpeed(String("100")));
 }
 
+// Out-of-range and garbage input must clamp, never extrapolate (#95).
+// map() extrapolates linearly, so pre-fix "500" produced ~56 — a speed
+// byte far beyond anything the unit stepper can execute.
+static void test_convertSpeed_clamps_out_of_range() {
+  TEST_ASSERT_EQUAL_INT(MAX_SPEED, convertSpeed(String("101")));
+  TEST_ASSERT_EQUAL_INT(MAX_SPEED, convertSpeed(String("500")));
+  TEST_ASSERT_EQUAL_INT(MIN_SPEED, convertSpeed(String("0")));
+  TEST_ASSERT_EQUAL_INT(MIN_SPEED, convertSpeed(String("-50")));
+  TEST_ASSERT_EQUAL_INT(MIN_SPEED, convertSpeed(String("abc")));  // toInt() == 0
+  TEST_ASSERT_EQUAL_INT(MIN_SPEED, convertSpeed(String("")));
+}
+
 // createRepeatingString
 static void test_createRepeatingString_length_matches_units() {
   String s = createRepeatingString('-');
@@ -108,6 +120,7 @@ int main(int, char**) {
   RUN_TEST(test_isNumber_rejects_letters);
   RUN_TEST(test_isNumber_rejects_empty);
   RUN_TEST(test_convertSpeed_endpoints);
+  RUN_TEST(test_convertSpeed_clamps_out_of_range);
   RUN_TEST(test_createRepeatingString_length_matches_units);
   RUN_TEST(test_cleanString_uppercases);
   RUN_TEST(test_leftString_pads_right);
