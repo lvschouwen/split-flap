@@ -24,7 +24,14 @@ struct RtcBootState {
 // normalizeBootState() zero-inits the whole struct — correct, because
 // we can't trust the extra bytes sitting past where the old firmware wrote.
 static const uint32_t RTC_BOOT_MAGIC           = 0xC0FFEE43UL;
-static const uint32_t RTC_BOOT_OFFSET_BLOCKS   = 0;
+// Block 32, NOT 0 (issue #115): the ESP8266 core's Update.end() writes the
+// eboot command (32 blocks / 128 bytes: magic, ACTION_COPY_RAW, args, crc32)
+// at the start of RTC user memory. At offset 0, the post-flash cookie write
+// destroyed that command — eboot found no magic, booted the old image, and
+// every OTA "silently reverted" (while the cookie dutifully reported the
+// revert it had itself caused). State previously stored at offset 0 is
+// ignored after this change; the magic check zero-inits on first boot.
+static const uint32_t RTC_BOOT_OFFSET_BLOCKS   = 32;
 static const uint32_t RECOVERY_BOOT_THRESHOLD  = 3;
 static const unsigned long HEALTHY_BOOT_MS     = 30000UL;
 

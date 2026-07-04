@@ -40,6 +40,17 @@ static void test_struct_size_matches_expected_layout() {
   TEST_ASSERT_EQUAL_INT(44, (int)sizeof(RtcBootState));
 }
 
+static void test_offset_clears_eboot_command_region() {
+  // The ESP8266 core's Update.end() writes the eboot command (magic,
+  // ACTION_COPY_RAW, args, crc32 — 32 blocks / 128 bytes) at the START of
+  // RTC user memory (0x60001200). Writing RtcBootState below block 32
+  // destroys a pending command and makes every OTA silently revert
+  // (issue #115).
+  TEST_ASSERT_GREATER_OR_EQUAL_INT(32, (int)RTC_BOOT_OFFSET_BLOCKS);
+  // And the struct must still fit inside the 512-byte RTC user area.
+  TEST_ASSERT_LESS_OR_EQUAL_INT(512, (int)(RTC_BOOT_OFFSET_BLOCKS * 4 + sizeof(RtcBootState)));
+}
+
 static void test_pre_flash_md5_len_fits_hex_plus_nul() {
   // 32-char MD5 hex + NUL = 33. Slot must have room for that plus
   // alignment padding.
@@ -275,5 +286,6 @@ int main(int, char**) {
   RUN_TEST(test_cookieMatchesRunning_null_running_is_false);
   RUN_TEST(test_cookieMatchesRunning_length_mismatch_is_false);
   RUN_TEST(test_cookieMatchesRunning_unterminated_cookie_is_false);
+  RUN_TEST(test_offset_clears_eboot_command_region);
   return UNITY_END();
 }
