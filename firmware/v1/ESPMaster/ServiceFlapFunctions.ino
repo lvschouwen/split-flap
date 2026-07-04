@@ -1,3 +1,5 @@
+#include "UnitProtocolHelpers.h"
+
 // I2C address 0x00 is reserved (general call); offset every unit's address so
 // the master's 0-based unit index maps to 0x01..0x10. Must match
 // I2C_ADDRESS_BASE in Unit/Unit.ino.
@@ -17,6 +19,7 @@
 #define UNIT_CMD_GET_VERSION      0x81
 #define UNIT_CMD_GET_OFFSET       0x82
 #define UNIT_CMD_GET_STATUS       0x83
+#define UNIT_CMD_GET_LETTER       0x84
 #define UNIT_CMD_HOME             0x90
 #define UNIT_CMD_JOG              0x91
 #define UNIT_CMD_REBOOT           0x92
@@ -32,6 +35,12 @@
 static int toI2cAddress(int unitIndex) {
   return I2C_ADDRESS_BASE + unitIndex;
 }
+
+// Defined later in this file but used inside showMessage(); explicit
+// prototypes because the Arduino preprocessor's auto-prototyping is not
+// relied on for statics (see CLAUDE.md gotchas).
+static bool waitForDisplayToStop();
+static void verifyAndResendLetters(const int* commandedLetters, int flapSpeed);
 
 //Send the enter-bootloader opcode to a specific unit by I2C address. The
 //unit triggers a watchdog reset and comes up in twiboot listening on 0x29
@@ -136,6 +145,27 @@ bool readUnitStatus(int i2cAddress, UnitStatus& out) {
   return true;
 }
 
+//Reads back the unit's currently displayed letter index via CMD_GET_LETTER
+//(issue #106). New firmware replies 2 bytes: index + bitwise complement;
+//old firmware replies with the 1-byte status fallback, so `got != 2` (or a
+//failed complement check) returns false and `out` is untouched.
+bool readUnitDisplayedLetter(int i2cAddress, int &out) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)UNIT_CMD_GET_LETTER);
+  if (Wire.endTransmission() != 0) return false;
+  delay(2);  //give the slave time to flip pendingLetterResponse before clocking
+  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)2);
+  if (got != 2) {
+    while (Wire.available()) Wire.read();
+    return false;
+  }
+  uint8_t value = Wire.read();
+  uint8_t complement = Wire.read();
+  if (!letterReadbackValid(value, complement, FLAP_AMOUNT)) return false;
+  out = value;
+  return true;
+}
+
 //Shows a new message on the display
 void showText(String message) {  
   showText(message, 0);
@@ -215,27 +245,20 @@ void showMessage(String message, int flapSpeed) {
 #else
   //Wait while display is still moving, with a hard timeout so a physically
   //stuck unit (status byte pegged at 1) doesn't deadlock the event loop.
-  //Rate-limit the log line to once per 5 s — previously this spammed /log
-  //at ~10 Hz. Abortable via /stop (issue #35).
+  //Abortable via /stop (issue #35).
   abortCurrentShow = false;
   SerialPrintln(F("Unit calls are enabled. Will display message"));
-  unsigned long waitStart = millis();
-  unsigned long lastWaitLog = 0;
-  while (isDisplayMoving()) {
-    if (abortCurrentShow) {
-      SerialPrintln(F("Show aborted by user (entry wait)"));
-      return;
-    }
-    unsigned long elapsed = millis() - waitStart;
-    if (elapsed > 30000) {
-      SerialPrintln(F("Wait timed out after 30s — assuming a unit is stuck, continuing anyway"));
-      break;
-    }
-    if (millis() - lastWaitLog > 5000) {
-      SerialPrintln(F("Waiting for display to stop"));
-      lastWaitLog = millis();
-    }
-    delay(100);
+  if (!waitForDisplayToStop()) {
+    SerialPrintln(F("Show aborted by user (entry wait)"));
+    return;
+  }
+
+  //Track what was actually commanded per unit so the post-show verification
+  //pass can read it back and re-send on mismatch (issue #106). -1 = slot
+  //not written (absent unit or char missing from the alphabet).
+  int commandedLetters[UNITS_AMOUNT];
+  for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    commandedLetters[unitIndex] = -1;
   }
 
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
@@ -260,21 +283,35 @@ void showMessage(String message, int flapSpeed) {
     //only write to unit if char exists in letter array
     if (currentLetterPosition != -1) {
       writeToUnit(unitIndex, currentLetterPosition, flapSpeed);
+      commandedLetters[unitIndex] = currentLetterPosition;
     }
   }
 
-  //Wait for the display to stop moving before exit. Same timeout + rate
-  //limit + abort behavior as the entry wait above.
-  waitStart = millis();
-  lastWaitLog = 0;
+  //Wait for the display to stop moving, then verify each unit actually
+  //shows what was commanded (issue #106).
+  if (!waitForDisplayToStop()) {
+    SerialPrintln(F("Show aborted by user (exit wait)"));
+    return;
+  }
+  verifyAndResendLetters(commandedLetters, flapSpeed);
+#endif
+}
+
+#if UNIT_CALLS_DISABLE == false
+//Waits until no unit reports rotation, with the /stop abort and a 30 s
+//stuck-unit timeout. Returns false when aborted. Extracted from
+//showMessage() — the same loop now runs at entry, exit, and after the
+//verification re-send (issue #106). Log line rate-limited to once per
+//5 s — this used to spam /log at ~10 Hz (issue #35).
+static bool waitForDisplayToStop() {
+  unsigned long waitStart = millis();
+  unsigned long lastWaitLog = 0;
   while (isDisplayMoving()) {
     if (abortCurrentShow) {
-      SerialPrintln(F("Show aborted by user (exit wait)"));
-      return;
+      return false;
     }
-    unsigned long elapsed = millis() - waitStart;
-    if (elapsed > 30000) {
-      SerialPrintln(F("Exit wait timed out after 30s — assuming a unit is stuck, continuing anyway"));
+    if (millis() - waitStart > 30000) {
+      SerialPrintln(F("Wait timed out after 30s — assuming a unit is stuck, continuing anyway"));
       break;
     }
     if (millis() - lastWaitLog > 5000) {
@@ -283,8 +320,41 @@ void showMessage(String message, int flapSpeed) {
     }
     delay(100);
   }
-#endif
+  return true;
 }
+
+//Closed-loop letter verification (issue #106). Reads back each written
+//unit's displayed letter and re-sends once on mismatch — a corrupted or
+//dropped I2C write no longer leaves the wrong character standing until the
+//next message. Units on pre-#106 firmware reply with the 1-byte status
+//fallback; readUnitDisplayedLetter() returns false and they are skipped.
+static void verifyAndResendLetters(const int* commandedLetters, int flapSpeed) {
+  int resent = 0;
+  for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+    if (commandedLetters[unitIndex] < 0) continue;
+    if (detectedUnitStates[unitIndex] != 1) continue;
+    if (abortCurrentShow) return;
+    int shown;
+    if (!readUnitDisplayedLetter(toI2cAddress(unitIndex), shown)) continue;
+    if (shown == commandedLetters[unitIndex]) continue;
+    SerialPrint(F("Unit "));
+    SerialPrint(unitIndex);
+    SerialPrint(F(" shows letter index "));
+    SerialPrint(shown);
+    SerialPrint(F(" instead of "));
+    SerialPrint(commandedLetters[unitIndex]);
+    SerialPrintln(F(" — re-sending"));
+    writeToUnit(unitIndex, commandedLetters[unitIndex], flapSpeed);
+    resent++;
+  }
+  if (resent > 0) {
+    SerialPrint(F("Letter verification re-sent "));
+    SerialPrint(resent);
+    SerialPrintln(F(" unit(s)"));
+    waitForDisplayToStop();
+  }
+}
+#endif
 
 //Translates char to letter position
 int translateLettertoInt(char letterchar) {

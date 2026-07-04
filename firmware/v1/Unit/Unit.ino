@@ -64,6 +64,12 @@
 // doesn't know this opcode falls back to the default 1-byte currentlyrotating
 // reply; master detects "short response" as "status unsupported".
 #define CMD_GET_STATUS         0x83
+// CMD_GET_LETTER: next read returns 2 bytes — displayedLetter index + its
+// bitwise complement (integrity check). Lets the master verify the drum
+// actually shows what was commanded and re-send on mismatch (issue #106).
+// Old firmware replies with the 1-byte status fallback; master detects
+// "short response" as unsupported, same pattern as CMD_GET_STATUS.
+#define CMD_GET_LETTER         0x84
 
 // --- 0x9X mutations ---
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT
@@ -160,6 +166,7 @@ unsigned long    identifyStartMs        = 0;
 
 // Health / diagnostics state returned by CMD_GET_STATUS (issue #47).
 volatile bool     pendingStatusResponse     = false;  // consumed by requestEvent
+volatile bool     pendingLetterResponse     = false;  // consumed by requestEvent (#106)
 uint8_t           savedMcusr                = 0;      // snapshot of MCUSR at boot
 uint8_t           lifetimeBrownoutCount     = 0;      // mirror of EEPROM slot 4
 uint8_t           lifetimeWatchdogCount     = 0;      // mirror of EEPROM slot 5
@@ -538,6 +545,9 @@ void receiveLetter(int numBytes) {
       case CMD_GET_STATUS:
         pendingStatusResponse = true;
         break;
+      case CMD_GET_LETTER:
+        pendingLetterResponse = true;
+        break;
       case CMD_SET_OFFSET:
         if (remaining >= 2) {
           uint8_t lo = (uint8_t)Wire.read();
@@ -616,6 +626,15 @@ void requestEvent() {
     uint8_t buf[2] = { (uint8_t)(raw & 0xFF), (uint8_t)((raw >> 8) & 0xFF) };
     Wire.write(buf, 2);
     pendingOffsetResponse = false;
+    return;
+  }
+  if (pendingLetterResponse) {
+    // Issue #106. 2 bytes: displayed letter index + bitwise complement so
+    // the master can reject a corrupted read instead of "verifying" noise.
+    uint8_t letter = (uint8_t)displayedLetter;
+    uint8_t buf[2] = { letter, (uint8_t)~letter };
+    Wire.write(buf, 2);
+    pendingLetterResponse = false;
     return;
   }
   if (pendingStatusResponse) {
