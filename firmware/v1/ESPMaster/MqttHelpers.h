@@ -119,3 +119,67 @@ inline bool notificationTick(MqttNotification& n, uint32_t nowMs) {
   }
   return true;
 }
+
+// ---- Topics ----
+inline String mqttTopic(const String& deviceId, const char* suffix) {
+  return String("splitflap/") + deviceId + "/" + suffix;
+}
+
+// ---- Telemetry ----
+// One JSON packet serves all three HA sensors via value_json templates.
+inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap, long rssi, int unitErrors) {
+  return (size_t)mqttSnprintf(buf, bufLen,
+      MQTT_FMT("{\"heap\":%lu,\"rssi\":%ld,\"unitErrors\":%d}"),
+      (unsigned long)freeHeap, rssi, unitErrors);
+}
+
+// ---- HA MQTT Discovery ----
+// One Text entity + three sensors sharing a single device block, so HA
+// groups them under one device. Abbreviated keys (cmd_t, avty_t, uniq_id,
+// stat_t, val_tpl, dev_cla, dev, ids, mf, mdl, sw) are the documented HA
+// discovery short names — they keep payloads well inside the 512-byte
+// assembly buffer.
+enum MqttDiscoveryEntity {
+  DISCOVERY_TEXT = 0,
+  DISCOVERY_HEAP,
+  DISCOVERY_RSSI,
+  DISCOVERY_UNIT_ERRORS,
+  DISCOVERY_ENTITY_COUNT
+};
+
+inline size_t buildDiscoveryTopic(char* buf, size_t bufLen, int entity, const char* deviceId) {
+  switch (entity) {
+    case DISCOVERY_TEXT:        return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/text/%s/config"), deviceId);
+    case DISCOVERY_HEAP:        return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/sensor/%s_heap/config"), deviceId);
+    case DISCOVERY_RSSI:        return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/sensor/%s_rssi/config"), deviceId);
+    case DISCOVERY_UNIT_ERRORS: return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/sensor/%s_unit_errors/config"), deviceId);
+  }
+  if (bufLen > 0) buf[0] = '\0';
+  return 0;
+}
+
+// Shared device block; %s slots are (deviceId, deviceId, fwVersion).
+#define MQTT_DEVICE_BLOCK "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Split-Flap %s\",\"mf\":\"split-flap\",\"mdl\":\"v1 ESPMaster\",\"sw\":\"%s\"}"
+
+inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const char* deviceId, const char* fwVersion) {
+  switch (entity) {
+    case DISCOVERY_TEXT:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Text\",\"cmd_t\":\"splitflap/%s/text/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_text\",\"max\":255," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+    case DISCOVERY_HEAP:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Free heap\",\"stat_t\":\"splitflap/%s/telemetry\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_heap\",\"val_tpl\":\"{{ value_json.heap }}\",\"unit_of_meas\":\"B\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+    case DISCOVERY_RSSI:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"WiFi RSSI\",\"stat_t\":\"splitflap/%s/telemetry\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_rssi\",\"val_tpl\":\"{{ value_json.rssi }}\",\"unit_of_meas\":\"dBm\",\"dev_cla\":\"signal_strength\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+    case DISCOVERY_UNIT_ERRORS:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Unit errors\",\"stat_t\":\"splitflap/%s/telemetry\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_unit_errors\",\"val_tpl\":\"{{ value_json.unitErrors }}\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+  }
+  if (bufLen > 0) buf[0] = '\0';
+  return 0;
+}

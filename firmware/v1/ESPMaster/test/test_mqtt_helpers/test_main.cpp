@@ -123,6 +123,64 @@ static void test_notification_survives_millis_wraparound() {
   TEST_ASSERT_FALSE(notificationTick(n, 55001UL));   // 60.001 s in
 }
 
+// ---- topics / telemetry / discovery ----
+static void test_mqttTopic_builds_expected_paths() {
+  TEST_ASSERT_EQUAL_STRING("splitflap/flappy/text/set", mqttTopic(String("flappy"), "text/set").c_str());
+  TEST_ASSERT_EQUAL_STRING("splitflap/flappy/availability", mqttTopic(String("flappy"), "availability").c_str());
+  TEST_ASSERT_EQUAL_STRING("splitflap/flappy/telemetry", mqttTopic(String("flappy"), "telemetry").c_str());
+}
+static void test_telemetry_payload_exact_shape() {
+  char buf[96];
+  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, -61L, 2);
+  TEST_ASSERT_EQUAL_STRING("{\"heap\":25048,\"rssi\":-61,\"unitErrors\":2}", buf);
+  TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
+}
+static void test_discovery_topics_per_entity() {
+  char buf[64];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_TEXT, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/text/flappy/config", buf);
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_HEAP, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_heap/config", buf);
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_RSSI, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_rssi/config", buf);
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_UNIT_ERRORS, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_unit_errors/config", buf);
+}
+// The discovery payloads are fixed-shape; assert the load-bearing fragments
+// rather than byte-for-byte JSON, so cosmetic edits don't churn tests.
+static void assert_contains(const char* haystack, const char* needle) {
+  if (strstr(haystack, needle) == nullptr) {
+    TEST_FAIL_MESSAGE(needle);
+  }
+}
+static void test_discovery_text_payload_fragments() {
+  char buf[512];
+  size_t n = buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_TEXT, "flappy", "abc1234");
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));  // no truncation
+  TEST_ASSERT_EQUAL_CHAR('{', buf[0]);
+  TEST_ASSERT_EQUAL_CHAR('}', buf[n - 1]);
+  assert_contains(buf, "\"cmd_t\":\"splitflap/flappy/text/set\"");
+  assert_contains(buf, "\"avty_t\":\"splitflap/flappy/availability\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_text\"");
+  assert_contains(buf, "\"ids\":[\"flappy\"]");
+  assert_contains(buf, "\"sw\":\"abc1234\"");
+}
+static void test_discovery_sensor_payload_fragments() {
+  char buf[512];
+  size_t n = buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_HEAP, "flappy", "abc1234");
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/telemetry\"");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.heap }}\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_heap\"");
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_RSSI, "flappy", "abc1234");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.rssi }}\"");
+  assert_contains(buf, "\"dev_cla\":\"signal_strength\"");
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_UNIT_ERRORS, "flappy", "abc1234");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.unitErrors }}\"");
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_clampDwell_passes_through_in_range);
@@ -142,5 +200,10 @@ int main(int, char**) {
   RUN_TEST(test_notification_replacement_resets_deadline);
   RUN_TEST(test_notification_start_clamps_dwell);
   RUN_TEST(test_notification_survives_millis_wraparound);
+  RUN_TEST(test_mqttTopic_builds_expected_paths);
+  RUN_TEST(test_telemetry_payload_exact_shape);
+  RUN_TEST(test_discovery_topics_per_entity);
+  RUN_TEST(test_discovery_text_payload_fragments);
+  RUN_TEST(test_discovery_sensor_payload_fragments);
   return UNITY_END();
 }
