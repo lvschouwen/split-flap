@@ -21,7 +21,9 @@ static AsyncMqttClient mqttClient;
 //Lifecycle state — all millis()-based, no tickers.
 static bool mqttInitialised = false;
 static bool mqttStoppedForOta = false;
-static unsigned long mqttReconnectAtMs = 0;        //0 = no reconnect scheduled
+static volatile bool mqttDisconnectedEvent = false;  //set in LWIP ctx, consumed in loopMqtt
+static bool mqttReconnectPending = false;
+static unsigned long mqttReconnectAtMs = 0;          //valid only while mqttReconnectPending
 static unsigned long mqttReconnectBackoffMs = 2000; //doubles per failure, 30 s cap
 static unsigned long mqttNextTelemetryMs = 0;
 
@@ -48,12 +50,11 @@ static void onMqttConnect(bool sessionPresent) {
   mqttJustConnected = true;
 }
 
-//LWIP context: schedule a retry; never call connect() from here.
+//LWIP context: flag only. Backoff arithmetic and scheduling happen in
+//loopMqtt() — callbacks never compute or connect.
 static void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
   (void)reason;
-  mqttReconnectAtMs = millis() + mqttReconnectBackoffMs;
-  mqttReconnectBackoffMs *= 2;
-  if (mqttReconnectBackoffMs > 30000UL) mqttReconnectBackoffMs = 30000UL;
+  mqttDisconnectedEvent = true;
 }
 
 //LWIP context: copy the chunk into the fixed buffer (truncating past
@@ -62,7 +63,13 @@ static void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
 //subscribed, so no topic dispatch is needed.
 static void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties,
                           size_t len, size_t index, size_t total) {
-  (void)topic; (void)properties;
+  (void)topic;
+  //Retained messages replay on every (re)connect — a retained text/set
+  //would re-trigger the notification after every broker restart or WiFi
+  //blip, forever. Command topics are live-only by convention: drop them.
+  if (properties.retain) {
+    return;
+  }
   for (size_t i = 0; i < len; i++) {
     size_t pos = index + i;
     if (pos >= MQTT_MAX_TEXT_LEN) break;
@@ -124,6 +131,7 @@ void initMqtt() {
   mqttClient.onMessage(onMqttMessage);
 
   mqttInitialised = true;
+  mqttReconnectPending = true;
   mqttReconnectAtMs = millis();  //first connect attempt on the next loop pass
   SerialPrint(F("MQTT: initialised, device id: "));
   SerialPrintln(mqttResolvedDeviceId);
@@ -137,12 +145,22 @@ void loopMqtt() {
     return;
   }
 
-  //Event-driven reconnect (design doc: 2 s -> 30 s exponential backoff),
-  //only while WiFi is up. millis() comparison is wraparound-safe.
-  if (!mqttClient.connected() && mqttReconnectAtMs != 0 &&
+  //Disconnect event → schedule the next attempt with exponential backoff
+  //(2 s -> 30 s cap). Computed here, not in the callback (LWIP ctx).
+  if (mqttDisconnectedEvent) {
+    mqttDisconnectedEvent = false;
+    mqttReconnectPending = true;
+    mqttReconnectAtMs = millis() + mqttReconnectBackoffMs;
+    mqttReconnectBackoffMs *= 2;
+    if (mqttReconnectBackoffMs > 30000UL) mqttReconnectBackoffMs = 30000UL;
+  }
+
+  //Event-driven reconnect, only while WiFi is up. millis() comparison is
+  //wraparound-safe.
+  if (mqttReconnectPending && !mqttClient.connected() &&
       (long)(millis() - mqttReconnectAtMs) >= 0 &&
       WiFi.status() == WL_CONNECTED) {
-    mqttReconnectAtMs = 0;
+    mqttReconnectPending = false;
     SerialPrintln(F("MQTT: connecting to broker..."));
     mqttClient.connect();
   }
@@ -160,6 +178,12 @@ void loopMqtt() {
   if (mqttMessagePending) {
     mqttMessagePending = false;
     String payload(mqttRxBuffer);
+    if (mqttMessagePending) {
+      //A new message finished landing while we were copying — the copy may
+      //interleave old and new bytes. Drop it; the fresh flag reprocesses
+      //the complete new payload on the next pass.
+      return;
+    }
     String text;
     long dwellSeconds = MQTT_TEXT_DWELL_S;
     if (!parseMqttTextPayload(payload, text, dwellSeconds)) {
@@ -195,21 +219,20 @@ bool mqttNotificationTick() {
   return true;
 }
 
-//Upload started (#116 freeze): publish a retained "offline" (a clean
-//DISCONNECT discards the will, so HA would otherwise show a stale "online"
-//through the whole flash) and drop the TCP connection so WiFi bandwidth
-//and heap belong to the upload. Runs in async context — publish/disconnect
-//only enqueue, which is safe there.
+//Upload started (#116 freeze): force-close the MQTT TCP session NOW so
+//nothing MQTT-related is alive during flash writes. Deliberately NOT a
+//graceful disconnect: an abrupt close without a DISCONNECT packet makes
+//the broker fire our registered Last Will — the retained "offline" — so
+//HA availability stays correct without us needing a publish that would
+//only go out if the broker felt like ACKing it mid-upload. Runs in async
+//context; disconnect(true) only tears down, which is safe there.
 void mqttStopForOta() {
   if (!mqttInitialised || mqttStoppedForOta) {
     return;
   }
   mqttStoppedForOta = true;
-  if (mqttClient.connected()) {
-    mqttClient.publish(mqttTopicAvailability.c_str(), 1, true, "offline");
-    mqttClient.disconnect();
-  }
-  SerialPrintln(F("MQTT: stopped for master OTA upload"));
+  mqttClient.disconnect(true);
+  SerialPrintln(F("MQTT: force-closed for master OTA upload"));
 }
 
 //Upload failed or stalled (display thawed): resume MQTT. On the success
@@ -220,6 +243,7 @@ void mqttResumeAfterOta() {
   }
   mqttStoppedForOta = false;
   mqttReconnectBackoffMs = 2000;
+  mqttReconnectPending = true;
   mqttReconnectAtMs = millis();
   SerialPrintln(F("MQTT: resuming after OTA upload ended without reboot"));
 }
