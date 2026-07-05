@@ -92,22 +92,27 @@ inline bool parseMqttTextPayload(const String& payload, String& textOut, long& d
 // clears `active` in place, and the loop's existing lastWrittenText
 // comparison re-flaps the previous clock/text content by itself — no saved
 // mode, no EEPROM, no RTC.
+//
+// Times are uint32_t on purpose: millis() wraps at 2^32 on the ESP8266
+// (32-bit unsigned long), while the native test host has a 64-bit unsigned
+// long — fixed-width types make the wraparound arithmetic identical in
+// both environments.
 struct MqttNotification {
   bool active = false;
   String text;
-  unsigned long deadlineMs = 0;
+  uint32_t deadlineMs = 0;
 };
 
-inline void notificationStart(MqttNotification& n, const String& text, long dwellSeconds, unsigned long nowMs) {
+inline void notificationStart(MqttNotification& n, const String& text, long dwellSeconds, uint32_t nowMs) {
   n.active = true;
   n.text = text;
-  n.deadlineMs = nowMs + (unsigned long)clampDwellSeconds(dwellSeconds) * 1000UL;
+  n.deadlineMs = nowMs + (uint32_t)clampDwellSeconds(dwellSeconds) * 1000UL;
 }
 
-// millis()-wraparound-safe via signed difference of unsigned longs.
-inline bool notificationTick(MqttNotification& n, unsigned long nowMs) {
+// millis()-wraparound-safe via signed difference of fixed-width unsigned.
+inline bool notificationTick(MqttNotification& n, uint32_t nowMs) {
   if (!n.active) return false;
-  if ((long)(nowMs - n.deadlineMs) >= 0) {
+  if ((int32_t)(nowMs - n.deadlineMs) >= 0) {
     n.active = false;
     n.text = "";
     return false;
