@@ -1206,7 +1206,7 @@ git commit -m "feat(flashing): OTA multipart upload + attempt loop (#124)"
 
 **Interfaces:**
 - `ui.py` produces: `enable_ansi() -> None`, `heading(text)`, `ok(text)`, `warn(text)`, `fail(text)`, `say(text)`, `ask(prompt) -> str`, `ask_int(prompt, lo, hi) -> int` (reprompts until valid), `ask_yn(prompt, default=False) -> bool`, `pause(prompt="Press Enter to continue...")`.
-- `main.py` produces: `main() -> None` (menu loop), `MENU: list[tuple[str, callable]]`. Menu handlers for options 2–7 call into `wizard`/`ota`/`esp`/`wiring`; option 1 calls `wizard.run_wizard`.
+- `main.py` produces: `main() -> None` (menu loop). The menu list is function-local by design — its handlers bind to the lazily-imported `wizard` (Task 10), so it cannot exist at module scope. Menu handlers for options 2–7 call into `wizard`/`ota`/`esp`/`wiring`; option 1 calls `wizard.run_wizard`.
 
 - [ ] **Step 1: Write the failing tests** (test the reprompt logic — the only non-trivial part)
 
