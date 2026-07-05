@@ -75,3 +75,10 @@ jobs:
       - name: Run Python tests
         working-directory: firmware/v1/ESPMaster
         run: python -m pytest tests/
+
+      - name: Install flasher deps
+        run: pip install pyserial esptool
+
+      - name: Run flasher tests
+        working-directory: flashing
+        run: python -m pytest flasher/tests/ -v

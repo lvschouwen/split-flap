@@ -1,0 +1,63 @@
+name: Flasher exe
+
+on:
+  push:
+    branches: [master]
+    paths: ['flashing/**', 'firmware/**', '.github/workflows/flasher.yml']
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tools
+        run: pip install platformio pyinstaller esptool pyserial
+
+      - name: Build Unit firmware
+        working-directory: firmware/v1/Unit
+        run: pio run
+
+      - name: Stage unit hex into ESPMaster (order is load-bearing)
+        working-directory: flashing
+        run: python flasher/make_manifest.py stage
+
+      - name: Build ESPMaster firmware
+        working-directory: firmware/v1/ESPMaster
+        run: pio run
+
+      - name: Fetch pinned avrdude
+        shell: bash
+        run: |
+          curl -fsSLo avrdude.zip https://github.com/avrdudes/avrdude/releases/download/v7.3/avrdude-v7.3-windows-x64.zip
+          echo "8b211a0cb3b26a01d4d9f3f5617b113019ac457e78c358bb86044db7f596aea9  avrdude.zip" | sha256sum -c -
+
+      - name: Collect assets + manifest (consistency gate)
+        working-directory: flashing
+        run: python flasher/make_manifest.py collect --avrdude-zip ../avrdude.zip
+
+      - name: Run flasher tests
+        working-directory: flashing
+        run: pip install pytest && python -m pytest flasher/tests/ -v
+
+      - name: Build exe
+        working-directory: flashing
+        run: pyinstaller flasher/flasher.spec
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: split-flap-flasher
+          path: flashing/dist/split-flap-flasher.exe
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" flashing/dist/split-flap-flasher.exe --clobber
