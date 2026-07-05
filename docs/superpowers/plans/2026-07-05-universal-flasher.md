@@ -1750,6 +1750,8 @@ git commit -m "feat(flashing): vendor ArduinoISP hex for programmer bootstrap (#
 
 ### Task 12: `make_manifest.py` — stage / collect / consistency gate
 
+> **Amendment (2026-07-06, during execution):** the Step 3 code below has a defect fixed in commit `cbb3e59`: `git_rev()` must mirror `build_assets.py::git_short_rev` (`git rev-parse --short HEAD` + `-dirty` via porcelain), NOT `git describe` (an old repo tag makes describe-form revs that break `network_verdict` and poison `BUNDLED_UNIT_REV`). `cmd_stage` must byte-copy the Unit build's own `firmware.rev` sidecar, and `consistency_gate` compares the two rev *files*. The committed code is authoritative.
+
 **Files:**
 - Create: `flashing/flasher/make_manifest.py`
 - Test: `flashing/flasher/tests/test_make_manifest.py`
