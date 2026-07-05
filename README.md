@@ -17,7 +17,7 @@ Thank you everyone whom has contributed, included in the "main" release or not, 
 
 ---
 
-> **Firmware status (2026-04-22):** The ESP8266 master firmware in `ESPMaster/` is **frozen** at tag `v-esp8266-final` — kept as a reference and a known-working build for existing hardware. Active firmware development moves to the ESP32-S3 + ESP32-H2 stack on the Master v2 Rev B PCB: `MasterS3/` (primary, port in progress) and `MasterH2/` (radio coprocessor, in progress). See meta issue [#58](https://github.com/lvschouwen/split-flap/issues/58) and the PCB design under `PCB/MASTER_V2/`.
+> **Firmware status:** The shipping firmware is the v1 stack under `firmware/v1/` — the ESP8266 master (`ESPMaster/`) and the Arduino Nano per-flap unit (`Unit/`), both actively maintained. An earlier ESP32-S3 + ESP32-H2 firmware port was removed pending a fresh v2 design; the v2 **PCB** design docs under `PCB/v2/` are kept.
 
 ---
 
@@ -75,10 +75,8 @@ Each PlatformIO project has its own `platformio.ini` in its folder. Today the ac
 
 | Folder | Target | Status |
 |---|---|---|
-| `ESPMaster/` | ESP8266 ESP-01 | Frozen at `v-esp8266-final` (reference / known-good) |
-| `Unit/` | Arduino Nano (per-flap) | Active |
-| `MasterS3/` | ESP32-S3-WROOM-1-N16R8 | In progress (Master v2 Rev B PCB) |
-| `MasterH2/` | ESP32-H2-MINI-1-N4 | In progress (radio coprocessor) |
+| `firmware/v1/ESPMaster/` | ESP8266 ESP-01 | Active |
+| `firmware/v1/Unit/` | Arduino Nano (per-flap) | Active |
 
 From the folder, run:
 
@@ -88,9 +86,7 @@ pio run -t upload         # flash firmware over USB
 pio device monitor        # serial monitor at 115200 baud
 ```
 
-The ESP32 projects (`MasterS3/`, `MasterH2/`) use the [pioarduino fork](https://github.com/pioarduino/platform-espressif32) of `platform-espressif32` for arduino-esp32 v3.x (needed for ESP32-H2). First-time `pio run` downloads ~1 GB of toolchains; subsequent builds are fast.
-
-The web UI and the bundled unit firmware are compiled into the master's PROGMEM at build time by `ESPMaster/build_assets.py` (no separate filesystem flash step).
+The web UI and the bundled unit firmware are compiled into the master's PROGMEM at build time by `firmware/v1/ESPMaster/build_assets.py` (no separate filesystem flash step).
 
 For the Unit sketch, if upload fails because of the old bootloader on your Nano, use the `*_old_bootloader` env:
 
@@ -98,10 +94,10 @@ For the Unit sketch, if upload fails because of the old bootloader on your Nano,
 pio run -e unit_old_bootloader -t upload
 ```
 
-Host-side unit tests for the ESPMaster string helpers live in `firmware/ESPMaster/test/` and run with:
+Host-side unit tests for the ESPMaster string helpers live in `firmware/v1/ESPMaster/test/` and run with:
 
 ```bash
-cd firmware/ESPMaster && pio test -e native
+cd firmware/v1/ESPMaster && pio test -e native
 ```
 
 Arduino IDE is **not** supported for the master sketch any more: the PROGMEM asset generation runs as a PlatformIO pre-build step, and the build flags / lib dependencies are managed through `platformio.ini`. The Unit sketch is simple enough to still open in the IDE, but the PlatformIO flow is the supported path for every part of the project.

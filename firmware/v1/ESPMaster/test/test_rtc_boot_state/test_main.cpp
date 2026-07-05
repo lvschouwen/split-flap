@@ -1,0 +1,455 @@
+// Host-side tests for RtcBootState.h.
+//
+// Pure data-layout + cookie-handling logic from the master's RTC boot
+// state. The hardware-only rtcUserMemoryRead/Write wrappers live in
+// ESPMaster.ino and are out of scope here — this file only exercises
+// the pieces a host compiler can run.
+//
+// Motivation (theory 2 in the #53 crash hunt): the original cookie
+// resolution did a raw `String == char*` compare on the 36-byte slot,
+// which walks until the first NUL. If RTC was ever written by a foreign
+// firmware that happened to match RTC_BOOT_MAGIC, or the magic check
+// hadn't been run before dereference, the compare could read past the
+// struct. These tests lock in the bounded helpers that close that gap.
+
+#include <ArduinoFake.h>
+#include <unity.h>
+
+#include <cstring>
+
+#include "../../RtcBootState.h"
+
+using namespace fakeit;
+
+void setUp() {
+  ArduinoFakeReset();
+}
+void tearDown() {}
+
+// --- layout invariants --------------------------------------------------
+
+static void test_struct_size_is_multiple_of_4() {
+  // rtcUserMemoryRead/Write require block-aligned sizes (4-byte blocks).
+  TEST_ASSERT_EQUAL_INT(0, (int)(sizeof(RtcBootState) % 4));
+}
+
+static void test_struct_size_matches_expected_layout() {
+  // 4 (magic) + 4 (bootCounter) + 4 (bootMode) + 4 (cookieKind)
+  // + 36 (preFlashSketchMd5) = 52. Locking this in prevents silent
+  // padding changes from an unrelated struct edit.
+  TEST_ASSERT_EQUAL_INT(52, (int)sizeof(RtcBootState));
+}
+
+static void test_normalize_defaults_cookie_kind_to_none() {
+  RtcBootState state;
+  memset(&state, 0xAB, sizeof(state));  // garbage, wrong magic
+  normalizeBootState(state);
+  TEST_ASSERT_EQUAL_UINT32(COOKIE_KIND_NONE, state.cookieKind);
+}
+
+// --- resolveFlashVerdict (#118) ------------------------------------------
+// Expected-MD5 cookies (kind 2): running == cookie means the new image IS
+// running -> "ok". Pre-flash cookies (kind 1, legacy / md5-less uploads):
+// running == cookie means the OLD image is still running -> "reverted".
+
+static RtcBootState makeCookieState(uint32_t kind, const char* md5) {
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  state.magic = RTC_BOOT_MAGIC;
+  state.cookieKind = kind;
+  setPreFlashMd5(state, md5);
+  return state;
+}
+
+static void test_verdict_expected_md5_match_is_ok() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_EXPECTED_MD5, "aabbccdd");
+  TEST_ASSERT_EQUAL_STRING("ok", resolveFlashVerdict(s, "aabbccdd"));
+}
+
+static void test_verdict_expected_md5_mismatch_is_reverted() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_EXPECTED_MD5, "aabbccdd");
+  TEST_ASSERT_EQUAL_STRING("reverted", resolveFlashVerdict(s, "11223344"));
+}
+
+static void test_verdict_pre_flash_match_is_reverted() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_PRE_FLASH, "aabbccdd");
+  TEST_ASSERT_EQUAL_STRING("reverted", resolveFlashVerdict(s, "aabbccdd"));
+}
+
+static void test_verdict_pre_flash_mismatch_is_ok() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_PRE_FLASH, "11223344");
+  TEST_ASSERT_EQUAL_STRING("ok", resolveFlashVerdict(s, "aabbccdd"));
+}
+
+static void test_verdict_absent_cookie_is_null() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_NONE, "");
+  TEST_ASSERT_NULL(resolveFlashVerdict(s, "aabbccdd"));
+}
+
+static void test_verdict_malformed_cookie_is_unknown() {
+  RtcBootState s = makeCookieState(COOKIE_KIND_EXPECTED_MD5, "aabbccdd");
+  memset(s.preFlashSketchMd5, 'x', PRE_FLASH_MD5_LEN);  // no NUL in slot
+  TEST_ASSERT_EQUAL_STRING("", resolveFlashVerdict(s, "aabbccdd"));
+}
+
+static void test_normalize_defaults_boot_mode_to_normal() {
+  // A zero-initialized state must mean "normal boot" — OTA mode (#117)
+  // may only ever be entered by an explicit BOOT_MODE_OTA write.
+  RtcBootState state;
+  memset(&state, 0xAB, sizeof(state));  // garbage, wrong magic
+  normalizeBootState(state);
+  TEST_ASSERT_EQUAL_UINT32(BOOT_MODE_NORMAL, state.bootMode);
+}
+
+static void test_offset_clears_eboot_command_region() {
+  // The ESP8266 core's Update.end() writes the eboot command (magic,
+  // ACTION_COPY_RAW, args, crc32 — 32 blocks / 128 bytes) at the START of
+  // RTC user memory (0x60001200). Writing RtcBootState below block 32
+  // destroys a pending command and makes every OTA silently revert
+  // (issue #115).
+  TEST_ASSERT_GREATER_OR_EQUAL_INT(32, (int)RTC_BOOT_OFFSET_BLOCKS);
+  // And the struct must still fit inside the 512-byte RTC user area.
+  TEST_ASSERT_LESS_OR_EQUAL_INT(512, (int)(RTC_BOOT_OFFSET_BLOCKS * 4 + sizeof(RtcBootState)));
+}
+
+static void test_pre_flash_md5_len_fits_hex_plus_nul() {
+  // 32-char MD5 hex + NUL = 33. Slot must have room for that plus
+  // alignment padding.
+  TEST_ASSERT_GREATER_OR_EQUAL_INT(33, (int)PRE_FLASH_MD5_LEN);
+}
+
+static void test_magic_matches_v4_value() {
+  // Lock in the RTC magic — bumping it silently would break boot-state
+  // compatibility with any device already running the current firmware.
+  // V3 (0xC0FFEE44): struct gained bootMode (#117). V4 (0xC0FFEE45):
+  // gained cookieKind (#118). Without the bumps, stale trailing bytes
+  // from an older layout could be misread as live fields.
+  TEST_ASSERT_EQUAL_UINT32(0xC0FFEE45UL, RTC_BOOT_MAGIC);
+}
+
+// --- normalizeBootState -------------------------------------------------
+
+static void test_normalize_zeros_state_when_magic_mismatch() {
+  RtcBootState state;
+  state.magic = 0xDEADBEEFUL;
+  state.bootCounter = 42;
+  memset(state.preFlashSketchMd5, 0xAA, PRE_FLASH_MD5_LEN);
+
+  normalizeBootState(state);
+
+  TEST_ASSERT_EQUAL_UINT32(RTC_BOOT_MAGIC, state.magic);
+  TEST_ASSERT_EQUAL_UINT32(0, state.bootCounter);
+  for (size_t i = 0; i < PRE_FLASH_MD5_LEN; i++) {
+    TEST_ASSERT_EQUAL_UINT8(0, state.preFlashSketchMd5[i]);
+  }
+}
+
+static void test_normalize_preserves_state_when_magic_matches() {
+  RtcBootState state;
+  state.magic = RTC_BOOT_MAGIC;
+  state.bootCounter = 7;
+  memset(state.preFlashSketchMd5, 0, PRE_FLASH_MD5_LEN);
+  const char* md5 = "0123456789abcdef0123456789abcdef";
+  memcpy(state.preFlashSketchMd5, md5, 32);
+
+  normalizeBootState(state);
+
+  TEST_ASSERT_EQUAL_UINT32(RTC_BOOT_MAGIC, state.magic);
+  TEST_ASSERT_EQUAL_UINT32(7, state.bootCounter);
+  TEST_ASSERT_EQUAL_INT(0, memcmp(state.preFlashSketchMd5, md5, 32));
+}
+
+// --- V3 -> V4 migration (#119) --------------------------------------------
+// A device flashed BY a pre-#118 firmware (98ec681) carries its pre-flash
+// cookie in the V3 layout (no cookieKind, md5 slot 4 bytes earlier).
+// Zero-initing it on the magic mismatch (pre-#119 behavior) left the
+// post-upgrade boot unable to adjudicate the flash, so /settings kept
+// showing whatever stale verdict was in EEPROM.
+
+static RtcBootState makeV3StateBytes(uint32_t bootCounter, uint32_t bootMode,
+                                     const char* md5) {
+  // Build the 48-byte V3 layout inside a V4-sized struct, exactly as
+  // readBootStateRtc() sees it after a 52-byte RTC read on a device last
+  // written by 98ec681-era firmware: trailing 4 bytes are garbage.
+  RtcBootState state;
+  memset(&state, 0xAB, sizeof(state));
+  uint32_t head[3] = { RTC_BOOT_MAGIC_V3, bootCounter, bootMode };
+  memcpy(&state, head, sizeof(head));
+  char slot[PRE_FLASH_MD5_LEN];
+  memset(slot, 0, sizeof(slot));
+  if (md5 != nullptr) {
+    size_t len = strlen(md5);
+    if (len > sizeof(slot) - 1) len = sizeof(slot) - 1;
+    memcpy(slot, md5, len);
+  }
+  memcpy(reinterpret_cast<char*>(&state) + sizeof(head), slot, sizeof(slot));
+  return state;
+}
+
+static void test_normalize_migrates_v3_cookie_to_pre_flash_kind() {
+  const char* md5 = "0123456789abcdef0123456789abcdef";
+  RtcBootState state = makeV3StateBytes(2, BOOT_MODE_NORMAL, md5);
+
+  normalizeBootState(state);
+
+  TEST_ASSERT_EQUAL_UINT32(RTC_BOOT_MAGIC, state.magic);
+  TEST_ASSERT_EQUAL_UINT32(2, state.bootCounter);
+  TEST_ASSERT_EQUAL_UINT32(BOOT_MODE_NORMAL, state.bootMode);
+  TEST_ASSERT_EQUAL_UINT32(COOKIE_KIND_PRE_FLASH, state.cookieKind);
+  TEST_ASSERT_EQUAL_INT(32, (int)cookieLength(state));
+  TEST_ASSERT_EQUAL_INT(0, memcmp(state.preFlashSketchMd5, md5, 33));
+}
+
+static void test_normalize_migrates_v3_empty_cookie_to_kind_none() {
+  RtcBootState state = makeV3StateBytes(1, BOOT_MODE_NORMAL, "");
+
+  normalizeBootState(state);
+
+  TEST_ASSERT_EQUAL_UINT32(RTC_BOOT_MAGIC, state.magic);
+  TEST_ASSERT_EQUAL_UINT32(COOKIE_KIND_NONE, state.cookieKind);
+  TEST_ASSERT_FALSE(cookieIsPresent(state));
+}
+
+static void test_v3_migrated_verdict_new_bits_running_is_ok() {
+  // The #119 scenario: 98ec681 flashes a newer image and stashes ITS OWN
+  // (pre-flash) MD5 in a V3 cookie. The new firmware boots with a
+  // different running MD5 — after migration the verdict must be "ok",
+  // overwriting any stale EEPROM verdict.
+  RtcBootState state = makeV3StateBytes(1, BOOT_MODE_NORMAL,
+                                        "f561594afb6945aea2800f5c02bed3be");
+  normalizeBootState(state);
+  TEST_ASSERT_EQUAL_STRING(
+      "ok", resolveFlashVerdict(state, "d4355ecd9f145d70dbab2114985a19ef"));
+}
+
+static void test_v3_migrated_verdict_old_bits_running_is_reverted() {
+  // True eboot revert across the version boundary must still be caught:
+  // running MD5 == pre-flash cookie -> old bits are still here.
+  const char* md5 = "f561594afb6945aea2800f5c02bed3be";
+  RtcBootState state = makeV3StateBytes(1, BOOT_MODE_NORMAL, md5);
+  normalizeBootState(state);
+  TEST_ASSERT_EQUAL_STRING("reverted", resolveFlashVerdict(state, md5));
+}
+
+static void test_normalize_still_zeros_unknown_magic() {
+  // The V3 carve-out must not weaken the foreign-magic path: anything
+  // that is neither V3 nor V4 still zero-inits.
+  RtcBootState state = makeV3StateBytes(9, BOOT_MODE_OTA, "aabbccdd");
+  state.magic = 0xC0FFEE43UL;  // V2 (#53) — pre-bootMode layout
+
+  normalizeBootState(state);
+
+  TEST_ASSERT_EQUAL_UINT32(RTC_BOOT_MAGIC, state.magic);
+  TEST_ASSERT_EQUAL_UINT32(0, state.bootCounter);
+  TEST_ASSERT_EQUAL_UINT32(BOOT_MODE_NORMAL, state.bootMode);
+  TEST_ASSERT_EQUAL_UINT32(COOKIE_KIND_NONE, state.cookieKind);
+  TEST_ASSERT_FALSE(cookieIsPresent(state));
+}
+
+// --- setPreFlashMd5 -----------------------------------------------------
+
+static void test_setPreFlashMd5_typical_32_char_md5() {
+  RtcBootState state;
+  memset(&state, 0xAA, sizeof(state));  // arbitrary non-zero background
+  const char* md5 = "0123456789abcdef0123456789abcdef";
+
+  setPreFlashMd5(state, md5);
+
+  TEST_ASSERT_EQUAL_INT(0, memcmp(state.preFlashSketchMd5, md5, 32));
+  TEST_ASSERT_EQUAL_UINT8(0, state.preFlashSketchMd5[32]);
+  // Tail bytes must be zeroed so a SerialPrint that walks past the NUL
+  // doesn't surface leftover 0xAA fill from before the call.
+  for (size_t i = 33; i < PRE_FLASH_MD5_LEN; i++) {
+    TEST_ASSERT_EQUAL_UINT8(0, state.preFlashSketchMd5[i]);
+  }
+}
+
+static void test_setPreFlashMd5_empty_string() {
+  RtcBootState state;
+  memset(&state, 0xAA, sizeof(state));
+
+  setPreFlashMd5(state, "");
+
+  TEST_ASSERT_EQUAL_UINT8(0, state.preFlashSketchMd5[0]);
+  for (size_t i = 1; i < PRE_FLASH_MD5_LEN; i++) {
+    TEST_ASSERT_EQUAL_UINT8(0, state.preFlashSketchMd5[i]);
+  }
+}
+
+static void test_setPreFlashMd5_null_pointer() {
+  RtcBootState state;
+  memset(&state, 0xAA, sizeof(state));
+
+  setPreFlashMd5(state, nullptr);
+
+  for (size_t i = 0; i < PRE_FLASH_MD5_LEN; i++) {
+    TEST_ASSERT_EQUAL_UINT8(0, state.preFlashSketchMd5[i]);
+  }
+}
+
+static void test_setPreFlashMd5_overlong_input_truncates_and_terminates() {
+  RtcBootState state;
+  memset(&state, 0xAA, sizeof(state));
+  // 50 chars, longer than PRE_FLASH_MD5_LEN (36).
+  const char* tooLong = "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeee";
+
+  setPreFlashMd5(state, tooLong);
+
+  // First 35 bytes match the source, byte 35 is the NUL terminator.
+  TEST_ASSERT_EQUAL_INT(0, memcmp(state.preFlashSketchMd5, tooLong, PRE_FLASH_MD5_LEN - 1));
+  TEST_ASSERT_EQUAL_UINT8(0, state.preFlashSketchMd5[PRE_FLASH_MD5_LEN - 1]);
+}
+
+static void test_setPreFlashMd5_overwrites_longer_prior_content() {
+  // Regression for the leak-past-terminator scenario: writing "abc" after
+  // "defghijklmnop..." must zero the tail so a later SerialPrint walking
+  // until NUL doesn't see "abc\0ghijklmnop...".
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  const char* longFirst = "defghijklmnopqrstuvwxyz0123456789";
+  setPreFlashMd5(state, longFirst);
+
+  setPreFlashMd5(state, "abc");
+
+  TEST_ASSERT_EQUAL_INT(0, memcmp(state.preFlashSketchMd5, "abc", 3));
+  // Everything from index 3 onward must be 0, including the bytes that
+  // used to hold longFirst's tail.
+  for (size_t i = 3; i < PRE_FLASH_MD5_LEN; i++) {
+    TEST_ASSERT_EQUAL_UINT8(0, state.preFlashSketchMd5[i]);
+  }
+}
+
+// --- cookieIsPresent / cookieLength / cookieIsMalformed ----------------
+
+static void test_cookieIsPresent_false_on_zero_state() {
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  TEST_ASSERT_FALSE(cookieIsPresent(state));
+}
+
+static void test_cookieIsPresent_true_when_first_byte_nonzero() {
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  state.preFlashSketchMd5[0] = 'a';
+  TEST_ASSERT_TRUE(cookieIsPresent(state));
+}
+
+static void test_cookieLength_empty_is_zero() {
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  TEST_ASSERT_EQUAL_INT(0, (int)cookieLength(state));
+}
+
+static void test_cookieLength_well_formed_md5_is_32() {
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  setPreFlashMd5(state, "0123456789abcdef0123456789abcdef");
+  TEST_ASSERT_EQUAL_INT(32, (int)cookieLength(state));
+}
+
+static void test_cookieLength_unterminated_returns_slot_size() {
+  // Every byte non-zero, no NUL anywhere. cookieLength must NOT walk
+  // past the slot — it returns PRE_FLASH_MD5_LEN as the "malformed"
+  // sentinel.
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  memset(state.preFlashSketchMd5, 'Z', PRE_FLASH_MD5_LEN);
+  TEST_ASSERT_EQUAL_INT(PRE_FLASH_MD5_LEN, (int)cookieLength(state));
+  TEST_ASSERT_TRUE(cookieIsMalformed(state));
+}
+
+// --- cookieMatchesRunning -----------------------------------------------
+
+static void test_cookieMatchesRunning_exact_match_is_true() {
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  const char* md5 = "0123456789abcdef0123456789abcdef";
+  setPreFlashMd5(state, md5);
+
+  TEST_ASSERT_TRUE(cookieMatchesRunning(state, md5));
+}
+
+static void test_cookieMatchesRunning_different_content_is_false() {
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  setPreFlashMd5(state, "0123456789abcdef0123456789abcdef");
+  const char* different = "ffffffffffffffffffffffffffffffff";
+
+  TEST_ASSERT_FALSE(cookieMatchesRunning(state, different));
+}
+
+static void test_cookieMatchesRunning_empty_cookie_is_false() {
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  TEST_ASSERT_FALSE(cookieMatchesRunning(state, "0123456789abcdef0123456789abcdef"));
+}
+
+static void test_cookieMatchesRunning_null_running_is_false() {
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  setPreFlashMd5(state, "0123456789abcdef0123456789abcdef");
+  TEST_ASSERT_FALSE(cookieMatchesRunning(state, nullptr));
+}
+
+static void test_cookieMatchesRunning_length_mismatch_is_false() {
+  // Running MD5 is a longer string with the cookie as a prefix — a naive
+  // strncmp would return true; bounded compare must check full length.
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  setPreFlashMd5(state, "abcdef");
+  TEST_ASSERT_FALSE(cookieMatchesRunning(state, "abcdefghij"));
+}
+
+static void test_cookieMatchesRunning_unterminated_cookie_is_false() {
+  // Theory 2 core assertion: a 36-byte cookie with no NUL must be treated
+  // as no-match, NOT a read-past-end UB. This is the guarantee the original
+  // `String == char*` compare lacked.
+  RtcBootState state;
+  memset(&state, 0, sizeof(state));
+  memset(state.preFlashSketchMd5, 'Z', PRE_FLASH_MD5_LEN);
+  TEST_ASSERT_FALSE(cookieMatchesRunning(state, "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"));
+  TEST_ASSERT_FALSE(cookieMatchesRunning(state, "running-md5"));
+}
+
+// --- main ---------------------------------------------------------------
+
+int main(int, char**) {
+  UNITY_BEGIN();
+  RUN_TEST(test_struct_size_is_multiple_of_4);
+  RUN_TEST(test_struct_size_matches_expected_layout);
+  RUN_TEST(test_pre_flash_md5_len_fits_hex_plus_nul);
+  RUN_TEST(test_magic_matches_v4_value);
+  RUN_TEST(test_normalize_defaults_boot_mode_to_normal);
+  RUN_TEST(test_normalize_defaults_cookie_kind_to_none);
+  RUN_TEST(test_verdict_expected_md5_match_is_ok);
+  RUN_TEST(test_verdict_expected_md5_mismatch_is_reverted);
+  RUN_TEST(test_verdict_pre_flash_match_is_reverted);
+  RUN_TEST(test_verdict_pre_flash_mismatch_is_ok);
+  RUN_TEST(test_verdict_absent_cookie_is_null);
+  RUN_TEST(test_verdict_malformed_cookie_is_unknown);
+  RUN_TEST(test_normalize_zeros_state_when_magic_mismatch);
+  RUN_TEST(test_normalize_preserves_state_when_magic_matches);
+  RUN_TEST(test_normalize_migrates_v3_cookie_to_pre_flash_kind);
+  RUN_TEST(test_normalize_migrates_v3_empty_cookie_to_kind_none);
+  RUN_TEST(test_v3_migrated_verdict_new_bits_running_is_ok);
+  RUN_TEST(test_v3_migrated_verdict_old_bits_running_is_reverted);
+  RUN_TEST(test_normalize_still_zeros_unknown_magic);
+  RUN_TEST(test_setPreFlashMd5_typical_32_char_md5);
+  RUN_TEST(test_setPreFlashMd5_empty_string);
+  RUN_TEST(test_setPreFlashMd5_null_pointer);
+  RUN_TEST(test_setPreFlashMd5_overlong_input_truncates_and_terminates);
+  RUN_TEST(test_setPreFlashMd5_overwrites_longer_prior_content);
+  RUN_TEST(test_cookieIsPresent_false_on_zero_state);
+  RUN_TEST(test_cookieIsPresent_true_when_first_byte_nonzero);
+  RUN_TEST(test_cookieLength_empty_is_zero);
+  RUN_TEST(test_cookieLength_well_formed_md5_is_32);
+  RUN_TEST(test_cookieLength_unterminated_returns_slot_size);
+  RUN_TEST(test_cookieMatchesRunning_exact_match_is_true);
+  RUN_TEST(test_cookieMatchesRunning_different_content_is_false);
+  RUN_TEST(test_cookieMatchesRunning_empty_cookie_is_false);
+  RUN_TEST(test_cookieMatchesRunning_null_running_is_false);
+  RUN_TEST(test_cookieMatchesRunning_length_mismatch_is_false);
+  RUN_TEST(test_cookieMatchesRunning_unterminated_cookie_is_false);
+  RUN_TEST(test_offset_clears_eboot_command_region);
+  return UNITY_END();
+}
