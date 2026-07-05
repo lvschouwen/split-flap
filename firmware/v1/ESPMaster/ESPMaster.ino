@@ -26,7 +26,6 @@
 #define SERIAL_ENABLE       false   //Option to enable serial debug messages. "true" Will disable I2C communications to allow serial monitoring.
 #define UNITS_AMOUNT        16      //Hardware ceiling: max units the DIP-switch addressing supports (4 bits -> I2C 0x01..0x10). Array bound only — the effective display width is detected at boot from the I2C probe (#123), so one image fits every display size. Do not lower per-display.
 #define SERIAL_BAUDRATE     115200  //Serial debugging BAUD rate
-#define WIFI_USE_DIRECT     true    //Option to either direct connect to a WiFi Network or setup a AP to configure WiFi. Setting to false will setup as a AP.
 #define USE_MULTICAST       true    //Option to broadcast a ".local" URL on your local network default split-flap.local. You can change the name under configurable settings. On by default since #112 — the begin/update plumbing existed all along and this makes the display findable without knowing its DHCP lease.
 
 //MQTT / Home Assistant integration (#121). Default OFF — the whole feature
@@ -93,12 +92,12 @@ struct AsyncMqttClientMessageProperties;
   External library dependencies, not much more to say!
 */
 
-//WiFi Setup Library if we use that mode
+//WiFi setup-portal library (#126: always compiled in — the captive portal
+//is the runtime fallback whenever the SDK-persisted credentials are absent
+//or won't connect, not a build-time either/or anymore).
 //Specifically put here in this order to avoid conflict with other libraries
-#if WIFI_USE_DIRECT == false
 #include <DNSServer.h>
 #include <ESPAsyncWiFiManager.h>
-#endif
 
 #include <Arduino.h>
 #include <ESPAsyncTCP.h>
@@ -125,23 +124,27 @@ struct AsyncMqttClientMessageProperties;
 /*
   Settings you can feel free to change to customise how your display works.
 */
-//WiFi credentials for WIFI_USE_DIRECT == true live in a gitignored local
-//header so the public repo doesn't leak them. Copy WifiCredentials.h.example
-//to WifiCredentials.h and fill in your SSID / password. If the file is
-//missing (fresh checkout, CI) we fall back to empty strings so the build
-//still compiles — the device just won't connect until you provide creds.
-#if WIFI_USE_DIRECT == true && __has_include("WifiCredentials.h")
+//WiFi credentials are NOT normally compiled in (#126). The SDK's flash
+//config sector is the single credential store: the setup portal writes it
+//(ESPAsyncWiFiManager wraps its connect in WiFi.persistent(true)), a bare
+//WiFi.begin() reads it back, and it survives reboots and sketch OTAs.
+//
+//One exception: an optional MIGRATION SEED. Pre-#126 firmware supplied its
+//compiled credentials with persistence OFF (the core default), i.e. RAM
+//only — so a device upgraded over the air may have nothing usable in the
+//SDK sector. If a gitignored WifiCredentials.h is present at build time,
+//initWiFi() tries (and this time persists) its credentials when the stored
+//ones fail, before falling back to the portal. Fresh checkouts and CI
+//build without it; once the seed has persisted, the header can be deleted.
+#if __has_include("WifiCredentials.h")
   #include "WifiCredentials.h"
+  #define WIFI_SEED_AVAILABLE 1
 #else
-  #if WIFI_USE_DIRECT == true
-    #warning "WIFI_USE_DIRECT is true but WifiCredentials.h is missing — copy WifiCredentials.h.example to fill it in."
-  #endif
-  const char* wifiDirectSsid = "";
-  const char* wifiDirectPassword = "";
+  #define WIFI_SEED_AVAILABLE 0
 #endif
 
-//MQTT broker credentials live in a gitignored local header, same pattern as
-//WifiCredentials.h above. Copy MqttCredentials.h.example to
+//MQTT broker credentials live in a gitignored local header. Copy
+//MqttCredentials.h.example to
 //MqttCredentials.h. Missing file → empty broker host → initMqtt() logs and
 //disables itself, the build still compiles (fresh checkout, CI).
 #if MQTT_ENABLE == true
@@ -328,11 +331,9 @@ AsyncWebServer webServer(80);
 //Used for creating a Access Point to allow WiFi setup. ESPAsyncWiFiManager
 //reuses the AsyncWebServer above for its captive portal so we don't carry
 //a second (sync) HTTP server in the binary.
-#if WIFI_USE_DIRECT == false
 DNSServer       dnsServer;
 AsyncWiFiManager wifiManager(&webServer, &dnsServer);
 bool isPendingWifiReset = false;
-#endif
 
 //Read boot state from RTC user memory. Returns a fully-zeroed state with a
 //fresh magic if the stored magic doesn't match (cold power-on, corruption,
@@ -570,35 +571,35 @@ void registerMasterFirmwareEndpoint() {
   );
 }
 
+//Shared SoftAP fallback for recovery / quiet-OTA (#126). persistent(false)
+//BEFORE disconnect(): on the ESP8266 core a persistent disconnect() zeroes
+//the stored station config — the primary credential store.
+void startFallbackSoftAp(const String& apSuffix) {
+  WiFi.persistent(false);
+  WiFi.disconnect();
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP((effectiveDeviceName + apSuffix).c_str());
+  SerialPrint(F("Fallback SoftAP IP: "));
+  SerialPrintln(WiFi.softAPIP().toString());
+}
+
 //Minimal recovery mode: serves a single upload form and the OTA endpoint.
 //No I2C traffic, no persistence — just enough to let the user reflash a
-//working image without dragging out the USB cable. When the hardcoded-WiFi
-//path is compiled in, we join the normal LAN so the device reappears on
-//its familiar IP and the remote flasher doesn't have to switch SSIDs (#53).
-//SoftAP remains the fallback when WiFi is unavailable or not compiled in.
+//working image without dragging out the USB cable. We first try the
+//SDK-persisted WiFi so the device reappears on its familiar LAN IP and the
+//remote flasher doesn't have to switch SSIDs (#53); SoftAP is the fallback.
+//Deliberately NO setup portal here (#126) — recovery stays a minimal
+//upload-only environment.
 void enterRecoveryMode() {
-#if WIFI_USE_DIRECT == true
-  SerialPrintln(F("Recovery: attempting hardcoded WiFi first..."));
-  initWiFi();
-  if (isWifiConfigured) {
+  SerialPrintln(F("Recovery: attempting known WiFi first..."));
+  if (tryJoinKnownWifi(30)) {
+    isWifiConfigured = true;
     SerialPrint(F("Recovery on LAN IP: "));
     SerialPrintln(WiFi.localIP().toString());
   } else {
-    SerialPrintln(F("Recovery: WiFi direct failed — falling back to SoftAP"));
-    WiFi.disconnect();
-    WiFi.persistent(false);
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP((effectiveDeviceName + AP_SUFFIX_RECOVERY).c_str());
-    SerialPrint(F("Recovery SoftAP IP: "));
-    SerialPrintln(WiFi.softAPIP().toString());
+    SerialPrintln(F("Recovery: WiFi unavailable — falling back to SoftAP"));
+    startFallbackSoftAp(AP_SUFFIX_RECOVERY);
   }
-#else
-  WiFi.persistent(false);
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP((effectiveDeviceName + AP_SUFFIX_RECOVERY).c_str());
-  SerialPrint(F("Recovery SoftAP IP: "));
-  SerialPrintln(WiFi.softAPIP().toString());
-#endif
 
   webServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
     String html =
@@ -630,28 +631,15 @@ void enterRecoveryMode() {
 //no display writes — the supply stays quiet for the whole upload and the
 //eboot copy that follows. Units keep showing whatever they last displayed.
 void enterOtaMode() {
-#if WIFI_USE_DIRECT == true
-  SerialPrintln(F("OTA mode: joining hardcoded WiFi..."));
-  initWiFi();
-  if (isWifiConfigured) {
+  SerialPrintln(F("OTA mode: joining known WiFi..."));
+  if (tryJoinKnownWifi(30)) {
+    isWifiConfigured = true;
     SerialPrint(F("OTA mode on LAN IP: "));
     SerialPrintln(WiFi.localIP().toString());
   } else {
-    SerialPrintln(F("OTA mode: WiFi direct failed — falling back to SoftAP"));
-    WiFi.disconnect();
-    WiFi.persistent(false);
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP((effectiveDeviceName + AP_SUFFIX_OTA).c_str());
-    SerialPrint(F("OTA-mode SoftAP IP: "));
-    SerialPrintln(WiFi.softAPIP().toString());
+    SerialPrintln(F("OTA mode: WiFi unavailable — falling back to SoftAP"));
+    startFallbackSoftAp(AP_SUFFIX_OTA);
   }
-#else
-  WiFi.persistent(false);
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP((effectiveDeviceName + AP_SUFFIX_OTA).c_str());
-  SerialPrint(F("OTA-mode SoftAP IP: "));
-  SerialPrintln(WiFi.softAPIP().toString());
-#endif
 
   webServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
     String html =
@@ -1001,8 +989,8 @@ void setup() {
     });
 
     //Remote recovery trigger (#53). Writes bootCounter = threshold to RTC
-    //so the next boot enters recovery mode (SoftAP or, when WIFI_USE_DIRECT
-    //is compiled in, the hardcoded WiFi). Escape hatch for when an OTA
+    //so the next boot enters recovery mode (known WiFi when the SDK has
+    //credentials, SoftAP otherwise). Escape hatch for when an OTA
     //finishes at the HTTP level but the next boot crashes on something we
     //can't reach remotely — flipping into recovery gives back a clean,
     //minimal upload endpoint without pulling the device off the wall.
@@ -1405,7 +1393,6 @@ void setup() {
       }
     });
 
-#if WIFI_USE_DIRECT == false
     webServer.on("/reset-wifi", HTTP_GET, [](AsyncWebServerRequest * request) {
       SerialPrintln(F("Request to Reset WiFi Received"));
       
@@ -1423,7 +1410,6 @@ void setup() {
       request->send(200, "text/html", html);
       isPendingWifiReset = true;
     });
-#endif   
 
     delay(250);
     webServer.begin();
@@ -1504,8 +1490,8 @@ void loop() {
     return;
   }
 
-#if WIFI_USE_DIRECT == false
-  //Clear off the WiFi Manager Settings
+  //Clear off the WiFi Manager Settings — erases the SDK-persisted
+  //credentials, so the next boot lands in the "<deviceName>-setup" portal.
   if (isPendingWifiReset) {
     SerialPrintln(F("Removing WiFi settings"));
     wifiManager.resetSettings();
@@ -1514,7 +1500,6 @@ void loop() {
     isPendingReboot = true;
     return;
   }
-#endif
 
 #if USE_MULTICAST == true
   MDNS.update();
@@ -1692,11 +1677,7 @@ String getCurrentSettingValues() {
   out += F(",\"otaEnabled\":false");
   out += F(",\"isInOtaMode\":");                    out += (isOtaMode ? F("true") : F("false"));
 
-#if WIFI_USE_DIRECT == false
   out += F(",\"wifiSettingsResettable\":true");
-#else
-  out += F(",\"wifiSettingsResettable\":false");
-#endif
 
   out += '}';
   return out;

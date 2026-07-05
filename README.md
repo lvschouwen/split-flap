@@ -199,25 +199,13 @@ The files in [`ESPMaster/data/`](./ESPMaster/data/) (HTML/JS/CSS, favicon, bundl
 
 There are several options in the Sketch you can modify to customise or change the behaviour of the display. These are marked in the code as "Configurable".
 
-By default, the system runs in **captive-portal mode** (`WIFI_USE_DIRECT false`). On first boot the master exposes a `<device-name>-setup` access point (e.g. `split-flap-9a3c1f-setup` — the suffix comes from the ESP's unique chip id); connect, pick your real network, done.
+WiFi needs **no configuration in the code at all**. On first boot (or whenever the stored network can't be reached for ~30 s) the master exposes a `<device-name>-setup` access point (e.g. `split-flap-9a3c1f-setup` — the suffix comes from the ESP's unique chip id); connect, pick your real network, done. The credentials are saved in the ESP8266's own WiFi flash storage, so they survive reboots **and firmware updates** — you configure a display once in its lifetime.
 
 ![Screenshot WiFi Portal](./Images/Access-Point-Screenshot.jpg)
 
-Alternatively, for a direct-connect firmware that skips the portal entirely, set:
+To move a display to a different network, either use **Reset WiFi Settings** in the web UI (the device reboots into the setup portal), or just take it out of range of the old network — after the connection attempt times out, the setup portal comes back on its own.
 
-```c++
-//Option to either direct connect to a WiFi Network or setup a AP to configure WiFi. Default: false (puts device in AP mode)
-#define WIFI_USE_DIRECT true
-```
-
-…and provide credentials in a **gitignored** local header so they never land in a public commit:
-
-```bash
-cp ESPMaster/WifiCredentials.h.example ESPMaster/WifiCredentials.h
-# edit WifiCredentials.h with your real SSID / password
-```
-
-The template sets the expected `wifiDirectSsid` / `wifiDirectPassword` globals; the real file is in `.gitignore`. If `WIFI_USE_DIRECT` is `true` but `WifiCredentials.h` is missing, the build still compiles (with a warning) — it just won't join a network.
+Upgrading over the air from an older build that used a compiled-in `WifiCredentials.h`? Keep that (gitignored) file in place for the build you flash: it acts as a one-time migration seed — its credentials are stored properly on the device the first time the new firmware runs, after which the file can be deleted. Without it, the display simply shows its setup portal once after the upgrade.
 
 For the clock mode, set the timezone from the **web UI → General card → Timezone dropdown**. The selection is persisted to EEPROM and applied immediately without reboot. The compile-time `timezonePosix` in `ESPMaster.ino` is kept only as a build-time default for the first boot on a fresh EEPROM.
 
