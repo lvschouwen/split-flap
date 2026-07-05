@@ -150,7 +150,7 @@ The zero position (blank-flaps position) is attained by driving the stepper to t
 
 Calibrate from the master's web UI — no reflashing required:
 
-1. Open the **Calibration** card on the dashboard.
+1. Open the **Maintenance tab → Calibration** card in the web UI.
 2. Pick a test letter; the master sends it to every unit.
 3. For each unit, type what the drum is *actually* showing.
 4. Click **Apply All**. The master reads each unit's current offset, computes the corrective delta, writes EEPROM, and re-homes — all over I2C.
@@ -203,11 +203,11 @@ WiFi needs **no configuration in the code at all**. On first boot (or whenever t
 
 ![Screenshot WiFi Portal](./Images/Access-Point-Screenshot.jpg)
 
-To move a display to a different network, either use **Reset WiFi Settings** in the web UI (the device reboots into the setup portal), or just take it out of range of the old network — after the connection attempt times out, the setup portal comes back on its own.
+To move a display to a different network, either use **Settings tab → Reset WiFi** in the web UI (the device reboots into the setup portal), or just take it out of range of the old network — after the connection attempt times out, the setup portal comes back on its own.
 
 Upgrading over the air from an older build that used a compiled-in `WifiCredentials.h`? Keep that (gitignored) file in place for the build you flash: it acts as a one-time migration seed — its credentials are stored properly on the device the first time the new firmware runs, after which the file can be deleted. Without it, the display simply shows its setup portal once after the upgrade.
 
-For the clock mode, set the timezone from the **web UI → General card → Timezone dropdown**. The selection is persisted to EEPROM and applied immediately without reboot. The compile-time `timezonePosix` in `ESPMaster.ino` is kept only as a build-time default for the first boot on a fresh EEPROM.
+For the clock mode, set the timezone from the **web UI → Settings tab → Device card → Timezone dropdown**. The selection is persisted to EEPROM and applied immediately without reboot. The compile-time `timezonePosix` in `ESPMaster.ino` is kept only as a build-time default for the first boot on a fresh EEPROM.
 
 Dropdown covers common zones (Europe, Americas, Asia, Oceania). If you need a zone that isn't listed, edit `TIMEZONE_OPTIONS` in `ESPMaster/data/script.js` and re-upload. POSIX TZ strings sourced from: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
 
@@ -220,11 +220,13 @@ There are several helper `define` variables to help during debugging/running:
 
 #### MQTT / Home Assistant
 
-The display can join Home Assistant over MQTT: inbound notification text (shows for a dwell time, then reverts to clock/text mode) plus health telemetry, with automatic HA discovery. Configure it entirely from the **web UI → General card → MQTT Broker** fields (host, port, username, password) — leave the host empty to keep MQTT off. Settings are stored on the device and applied after a reboot; the password is never sent back to the browser.
+The display can join Home Assistant over MQTT: inbound notification text (shows for a dwell time, then reverts to clock/text mode) plus health telemetry, with automatic HA discovery. Configure it entirely from the **web UI → Settings tab → MQTT Broker card** (host, port, username, password) — leave the host empty to keep MQTT off. Settings are stored on the device and applied after a reboot; the password is never sent back to the browser.
+
+If Home Assistant (or any mDNS-advertising broker) is on the same LAN, press **Detect broker**: the display runs a short mDNS scan (`_mqtt._tcp`, then Home Assistant's zeroconf announce) and prefills the host/port fields — you only add the credentials and press Save MQTT. Credentials stay manual by design; create a dedicated Home Assistant user (e.g. `splitflap`) for the display rather than reusing your own login.
 
 #### Device name & running multiple displays
 
-Every network-facing name (mDNS `<name>.local`, DHCP hostname, MQTT client id/topics, and the recovery/OTA/setup AP SSIDs) derives from a single per-device identity. Out of the box it is `split-flap-<hex chip id>` — unique per ESP, so several displays can share one LAN running the **same firmware image** with zero per-device edits. To give a display a friendly name (`kitchen`, `split-flap-livingroom`, …) use the **web UI → General card → Device Name** field: lowercase letters/digits/hyphens, max 24 chars, applied on the next reboot. Leave it empty to return to the chip-id default.
+Every network-facing name (mDNS `<name>.local`, DHCP hostname, MQTT client id/topics, and the recovery/OTA/setup AP SSIDs) derives from a single per-device identity. Out of the box it is `split-flap-<hex chip id>` — unique per ESP, so several displays can share one LAN running the **same firmware image** with zero per-device edits. To give a display a friendly name (`kitchen`, `split-flap-livingroom`, …) use the **web UI → Settings tab → Device card → Device Name** field: lowercase letters/digits/hyphens, max 24 chars, applied on the next reboot. Leave it empty to return to the chip-id default.
 
 Fixed IP addresses are the router's job: use a **DHCP reservation** keyed on the device's MAC address. (The former experimental `WIFI_STATIC_IP` compile-time option was removed — two displays hardcoding the same address is exactly the failure DHCP reservations avoid.)
 
@@ -248,7 +250,7 @@ ESPMaster/.pio/build/espmaster/firmware-<short-git-rev>.bin
 
 Once the master is on WiFi, subsequent flashes don't need a USB cable:
 
-- Go to the master's web UI → **Master Firmware (OTA)** card → upload the new `firmware-<rev>.bin`. The ESP reboots into the new sketch.
+- Go to the master's web UI → **Maintenance tab → Master Firmware (OTA)** card → upload the new `firmware-<rev>.bin`. The ESP reboots into the new sketch.
 - The same OTA flow also queues every detected unit for its twiboot bootloader right before the reboot, so after the master comes back up it auto-pushes the bundled unit firmware to each one. In one step the whole display is updated.
 - If you need to force just the units to re-flash (e.g. you changed `Unit.ino` and regenerated `ESPMaster/data/unit-firmware.hex` but the master is unchanged), click **Flash all unit(s)** under Actions.
 

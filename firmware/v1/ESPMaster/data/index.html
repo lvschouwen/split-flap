@@ -27,10 +27,55 @@
 		<div id="loadedContent" class="hidden">
 			<div id="bannerMessage" class="banner-message hidden"></div>
 
-			<form action="/" method="post" id="form">
+			<nav class="tabbar" id="tabbar">
+				<button type="button" class="tabbar-button" data-tab="display">Display</button>
+				<button type="button" class="tabbar-button" data-tab="settings">Settings</button>
+				<button type="button" class="tabbar-button" data-tab="maintenance">Maintenance</button>
+			</nav>
+
+			<section id="section-display" class="tab-section">
 				<div class="card-grid">
 					<div class="card">
-						<p class="card-title">General</p>
+						<p class="card-title">Message</p>
+						<form action="/" method="post" id="form">
+							<p>
+								<input onchange="setDeviceModeTab(this.value)" type="radio" id="modeText" name="deviceMode" value="text" />
+								<label for="modeText">Text Mode</label>
+								<input onchange="setDeviceModeTab(this.value)" type="radio" id="modeClock" name="deviceMode" value="clock" />
+								<label for="modeClock">Clock Mode</label>
+							</p>
+
+							<div id="tab-text" class="tab">
+								<p>
+									<label for="inputText"></label>
+									<input type="text" id="inputText" name="inputText" onkeyup="updateCharacterCount()" autocomplete="off" maxlength="75" />
+									<span class="count">
+										<label id="labelCharacterCount">0</label> Character(s)
+									</span>
+									<span class="count">
+										<label id="labelLineCount">1</label> line(s)
+									</span>
+									<span>
+										<input type="button" value="+ Newline" onclick="addNewline()"/>
+									</span>
+								</p>
+							</div>
+
+							<p>
+								<div id="containerSubmit">
+									<input type="submit" value="Send to display" />
+								</div>
+							</p>
+						</form>
+						<p>
+							<a id="linkActionStop" href="#" onclick="return stopDisplay();">
+								Stop
+							</a>
+						</p>
+					</div>
+
+					<div class="card">
+						<p class="card-title">Presentation</p>
 						<p style="font-size: 1.2rem;">Text Alignment</p>
 						<div class="alignment-inputs">
 							<p>
@@ -57,15 +102,19 @@
 								<span id="rangeFlapSpeedValue" />80 &percnt;
 							</p>
 						</div>
+						<p style="font-size: 0.85rem; color: #aaa;">
+							Alignment and speed apply immediately and are used for the next flip.
+						</p>
+						<p id="presentationStatus" class="firmware-status hidden"></p>
+					</div>
+				</div>
+			</section>
 
-						<div style="margin-top: 2em;">
-							<label for="selectTimezone">Timezone</label>
-							<p>
-								<select id="selectTimezone" name="timezone" autocomplete="off"></select>
-							</p>
-						</div>
-
-						<div style="margin-top: 2em;">
+			<section id="section-settings" class="tab-section hidden">
+				<div class="card-grid">
+					<div class="card">
+						<p class="card-title">Device</p>
+						<div>
 							<label for="inputDeviceName">Device Name</label>
 							<p>
 								<input type="text" id="inputDeviceName" name="deviceName" autocomplete="off"
@@ -79,147 +128,142 @@
 						</div>
 
 						<div style="margin-top: 2em;">
-							<label for="inputMqttHost">MQTT Broker <span id="labelMqttStatus" style="font-weight: normal;"></span></label>
+							<label for="selectTimezone">Timezone</label>
 							<p>
-								<input type="text" id="inputMqttHost" name="mqttHost" autocomplete="off"
-									maxlength="64" placeholder="Host, e.g. 192.168.1.10 (empty = MQTT off)" />
-							</p>
-							<p>
-								<input type="number" id="inputMqttPort" name="mqttPort" autocomplete="off"
-									min="1" max="65535" placeholder="Port (default 1883)" style="width: 10em;" />
-							</p>
-							<p>
-								<input type="text" id="inputMqttUser" name="mqttUser" autocomplete="off"
-									maxlength="32" placeholder="Username (optional)" />
-							</p>
-							<p>
-								<input type="password" id="inputMqttPassword" name="mqttPassword" autocomplete="new-password"
-									maxlength="64" placeholder="Password" />
-							</p>
-							<p style="font-size: 0.85rem; color: #aaa;">
-								Home Assistant integration: notification text + health telemetry.
-								Leave the password empty to keep the stored one. Applied after a reboot.
+								<select id="selectTimezone" name="timezone" autocomplete="off"></select>
 							</p>
 						</div>
+
+						<p>
+							<input type="button" value="Save Device" class="remove-button" onclick="saveDeviceCard()" />
+						</p>
+						<p id="deviceCardStatus" class="firmware-status hidden"></p>
 					</div>
 
 					<div class="card">
-						<p class="card-title">Modes</p>
+						<p class="card-title">MQTT Broker <span id="labelMqttStatus" style="font-weight: normal;"></span></p>
 						<p>
-							<input onchange="setDeviceModeTab(this.value)" type="radio" id="modeClock" name="deviceMode" value="clock" />
-							<label for="modeClock">Clock Mode</label>
+							<input type="text" id="inputMqttHost" name="mqttHost" autocomplete="off"
+								maxlength="64" placeholder="Host, e.g. 192.168.1.10 (empty = MQTT off)" />
 						</p>
+						<p>
+							<input type="number" id="inputMqttPort" name="mqttPort" autocomplete="off"
+								min="1" max="65535" placeholder="Port (default 1883)" style="width: 10em;" />
+							<input type="button" id="buttonMqttDetect" value="Detect broker" onclick="detectMqttBroker()" />
+						</p>
+						<div id="mqttSuggestions" class="mqtt-suggestions hidden"></div>
+						<p>
+							<input type="text" id="inputMqttUser" name="mqttUser" autocomplete="off"
+								maxlength="32" placeholder="Username (optional)" />
+						</p>
+						<p>
+							<input type="password" id="inputMqttPassword" name="mqttPassword" autocomplete="new-password"
+								maxlength="64" placeholder="Password" />
+						</p>
+						<p style="font-size: 0.85rem; color: #aaa;">
+							Home Assistant integration: notification text + health telemetry.
+							Leave the password empty to keep the stored one. Applied after a reboot.
+						</p>
+						<p>
+							<input type="button" id="buttonMqttSave" value="Save MQTT" class="remove-button" onclick="saveMqttCard()" />
+						</p>
+						<p id="mqttCardStatus" class="firmware-status hidden"></p>
+					</div>
+				</div>
 
-						<p>
-							<input onchange="setDeviceModeTab(this.value)" type="radio" id="modeText" name="deviceMode" value="text" />
-							<label for="modeText">Text Mode</label>
+				<div id="cardWifi" class="card-grid">
+					<div class="card card-full">
+						<p class="card-title">WiFi</p>
+						<p style="font-size: 0.95rem; color: #aaa;">
+							Erases the stored WiFi credentials. The display reboots into its
+							setup portal so you can connect it to another network.
 						</p>
-						
-						<div id="tab-text" class="tab">
-							<p>
-								<label for="inputText"></label>
-								<input type="text" id="inputText" name="inputText" onkeyup="updateCharacterCount()" autocomplete="off" maxlength="75" />
-								<span class="count">
-									<label id="labelCharacterCount">0</label> Character(s)
-								</span>
-								<span class="count">
-									<label id="labelLineCount">1</label> line(s)
-								</span>
-								<span>
-									<input type="button" value="+ Newline" onclick="addNewline()"/>
-								</span>
-							</p>
+						<p>
+							<a id="linkActionResetWifi" href="/reset-wifi" onclick="return confirm('Are you sure you want to Reset WiFi settings?')">
+								Reset WiFi
+							</a>
+						</p>
+					</div>
+				</div>
+			</section>
+
+			<section id="section-maintenance" class="tab-section hidden">
+				<div class="card-grid">
+					<div class="card card-full">
+						<p class="card-title">Units</p>
+						<div class="actions">
+							<a id="linkActionUnitCalibration" href="/reset-units" onclick="return confirm('Are you sure you want to Reset Units?')">
+								Reset Unit Calibration
+							</a>
+							<a id="linkActionReflashUnits" href="#" onclick="return reflashAllUnits();">
+								Flash all unit(s)
+							</a>
 						</div>
-
-						<p>
-							<div id="containerSubmit">
-								<input type="submit" value="Submit" />
-							</div>
-						</p>		
 					</div>
 				</div>
-			</form>
 
-			<div class="card-grid">
-				<div class="card card-full">
-					<p class="card-title">Actions</p>
-
-					<div class="actions">
-						<a id="linkActionStop" href="#" onclick="return stopDisplay();">
-							Stop
-						</a>
-						<a id="linkActionOtaUpdate" href="/ota" onclick="return confirm('Are you sure you want to put device in OTA mode?')">
-							OTA Update
-						</a>
-						<a id="linkActionReboot" href="/reboot" onclick="return confirm('Are you sure you want reboot device?')">
-							Reboot
-						</a>
-						<a id="linkActionUnitCalibration" href="/reset-units" onclick="return confirm('Are you sure you want to Reset Units?')">
-							Reset Unit Calibration
-						</a>
-						<a id="linkActionReflashUnits" href="#" onclick="return reflashAllUnits();">
-							Flash all unit(s)
-						</a>
-						<a id="linkActionResetWifi" href="/reset-wifi" onclick="return confirm('Are you sure you want to Reset WiFi settings?')">
-							Reset WiFi
-						</a>
+				<div id="calibrationCard" class="card-grid hidden">
+					<div class="card card-full">
+						<p class="card-title">Calibration</p>
+						<p style="font-size: 0.95rem; color: #aaa;">
+							Send a test letter to every detected unit, then type what each drum is <em>actually</em> showing. Apply All writes the corrected offset to each unit and re-homes it. Repeat until every Reality matches Expect.
+						</p>
+						<p>
+							<label for="selectCalibrationLetter">Test letter:</label>
+							<select id="selectCalibrationLetter" autocomplete="off"></select>
+							<input type="button" value="Send to all" onclick="sendCalibrationLetter()" />
+							<input type="button" value="Re-home all" onclick="homeAllCalibrationUnits()" />
+							<input type="button" value="Apply All" onclick="applyCalibrationAll()" class="remove-button" />
+						</p>
+						<datalist id="calibrationLetters"></datalist>
+						<div id="containerCalibrationUnits"></div>
+						<details id="calibrationAdvanced">
+							<summary>Advanced: raw jog &amp; offset</summary>
+							<p style="font-size: 0.9rem; color: #aaa;">
+								Nudge a single unit a handful of steps at a time, or set its offset directly. Jog does not persist; Save writes to EEPROM. Use for fine half-flap tuning if the Reality flow isn't landing exactly.
+							</p>
+							<div id="containerCalibrationAdvanced"></div>
+						</details>
+						<p id="calibrationStatus" class="firmware-status hidden"></p>
 					</div>
 				</div>
-			</div>
 
-			<div id="calibrationCard" class="card-grid hidden">
-				<div class="card card-full">
-					<p class="card-title">Calibration</p>
-					<p style="font-size: 0.95rem; color: #aaa;">
-						Send a test letter to every detected unit, then type what each drum is <em>actually</em> showing. Apply All writes the corrected offset to each unit and re-homes it. Repeat until every Reality matches Expect.
-					</p>
-					<p>
-						<label for="selectCalibrationLetter">Test letter:</label>
-						<select id="selectCalibrationLetter" autocomplete="off"></select>
-						<input type="button" value="Send to all" onclick="sendCalibrationLetter()" />
-						<input type="button" value="Re-home all" onclick="homeAllCalibrationUnits()" />
-						<input type="button" value="Apply All" onclick="applyCalibrationAll()" class="remove-button" />
-					</p>
-					<datalist id="calibrationLetters"></datalist>
-					<div id="containerCalibrationUnits"></div>
-					<details id="calibrationAdvanced">
-						<summary>Advanced: raw jog &amp; offset</summary>
-						<p style="font-size: 0.9rem; color: #aaa;">
-							Nudge a single unit a handful of steps at a time, or set its offset directly. Jog does not persist; Save writes to EEPROM. Use for fine half-flap tuning if the Reality flow isn't landing exactly.
+				<div class="card-grid">
+					<div class="card card-full">
+						<p class="card-title">Master Firmware (OTA)</p>
+						<p style="font-size: 0.95rem; color: #aaa;">
+							Upload a compiled <code>firmware.bin</code> to flash the ESP itself. The master reboots into the new firmware on success.
 						</p>
-						<div id="containerCalibrationAdvanced"></div>
-					</details>
-					<p id="calibrationStatus" class="firmware-status hidden"></p>
+						<form id="masterFirmwareForm">
+							<p>
+								<label for="inputMasterFirmwareFile">Firmware file (.bin):</label>
+								<input type="file" id="inputMasterFirmwareFile" accept=".bin,application/octet-stream" required />
+							</p>
+							<p>
+								<button type="submit" id="buttonMasterFirmwareSubmit" class="remove-button">Flash Master</button>
+							</p>
+							<p id="masterFirmwareStatus" class="firmware-status hidden"></p>
+						</form>
+						<div class="actions" style="margin-top: 1em;">
+							<a id="linkActionOtaUpdate" href="/ota" onclick="return confirm('Are you sure you want to put device in OTA mode?')">
+								OTA Update
+							</a>
+							<a id="linkActionReboot" href="/reboot" onclick="return confirm('Are you sure you want reboot device?')">
+								Reboot
+							</a>
+						</div>
+					</div>
 				</div>
-			</div>
 
-			<div class="card-grid">
-				<div class="card card-full">
-					<p class="card-title">Master Firmware (OTA)</p>
-					<p style="font-size: 0.95rem; color: #aaa;">
-						Upload a compiled <code>firmware.bin</code> to flash the ESP itself. The master reboots into the new firmware on success.
-					</p>
-					<form id="masterFirmwareForm">
-						<p>
-							<label for="inputMasterFirmwareFile">Firmware file (.bin):</label>
-							<input type="file" id="inputMasterFirmwareFile" accept=".bin,application/octet-stream" required />
-						</p>
-						<p>
-							<button type="submit" id="buttonMasterFirmwareSubmit" class="remove-button">Flash Master</button>
-						</p>
-						<p id="masterFirmwareStatus" class="firmware-status hidden"></p>
-					</form>
+				<div class="card-grid">
+					<div class="card card-full">
+						<details id="logDetails" open>
+							<summary class="card-title">Log</summary>
+							<pre id="logContent" class="log-pane"></pre>
+						</details>
+					</div>
 				</div>
-			</div>
-
-			<div class="card-grid">
-				<div class="card card-full">
-					<details id="logDetails" open>
-						<summary class="card-title">Log</summary>
-						<pre id="logContent" class="log-pane"></pre>
-					</details>
-				</div>
-			</div>
+			</section>
 		</div>
 	</div>
 	<script src="script.js" /></script>

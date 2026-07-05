@@ -106,6 +106,7 @@ struct AsyncMqttClientMessageProperties;
 #include <EEPROM.h>
 #include "SettingsEepromLayout.h"
 #include "DeviceIdentity.h"
+#include "MdnsDiscovery.h"
 #include "HelpersSerialHandling.h"
 #include "WebAssets.h"
 #include "BuildVersion.h"
@@ -329,6 +330,14 @@ AsyncWebServer webServer(80);
 DNSServer       dnsServer;
 AsyncWiFiManager wifiManager(&webServer, &dnsServer);
 bool isPendingWifiReset = false;
+
+//MQTT broker auto-detect (#129). The async handler only arms the flag —
+//MDNS.queryService() blocks ~1 s per query (up to ~2 s when the fallback
+//query also runs), which must not happen in async_tcp context — and loop()
+//does the work (runPendingMqttDiscovery). The result JSON is cached until
+//the next POST /mqtt/discover re-arms.
+volatile bool mqttDiscoverPending = false;
+String mqttDiscoverResultJson = "";
 
 //Read boot state from RTC user memory. Returns a fully-zeroed state with a
 //fresh magic if the stored magic doesn't match (cold power-on, corruption,
@@ -958,6 +967,31 @@ void setup() {
       request->send(200, "text/plain", "Healthy");
     });
 
+#if USE_MULTICAST == true
+    //MQTT broker auto-detect (#129). POST arms the discovery; the blocking
+    //mDNS queries run from loop() (runPendingMqttDiscovery); GET polls for
+    //the cached result. 409 while a run is already in flight.
+    webServer.on("/mqtt/discover", HTTP_POST, [](AsyncWebServerRequest * request) {
+      SerialPrintln(F("Request for MQTT Broker Discovery Received"));
+      if (mqttDiscoverPending) {
+        request->send(409, "application/json", F("{\"status\":\"pending\"}"));
+        return;
+      }
+      mqttDiscoverResultJson = String();
+      mqttDiscoverPending = true;
+      request->send(202, "application/json", F("{\"status\":\"pending\"}"));
+    });
+    webServer.on("/mqtt/discover", HTTP_GET, [](AsyncWebServerRequest * request) {
+      if (mqttDiscoverPending) {
+        request->send(200, "application/json", F("{\"status\":\"pending\"}"));
+      } else if (mqttDiscoverResultJson.length() > 0) {
+        request->send(200, "application/json", mqttDiscoverResultJson);
+      } else {
+        request->send(200, "application/json", F("{\"status\":\"idle\"}"));
+      }
+    });
+#endif
+
     webServer.on("/log", HTTP_GET, [](AsyncWebServerRequest * request) {
       //Don't SerialPrintln here; every log request would otherwise stamp
       //itself into the buffer on every poll and drown out real activity.
@@ -1235,6 +1269,11 @@ void setup() {
 
       String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue, newTimezoneValue, newDeviceNameValue;
       String newMqttHostValue, newMqttPortValue, newMqttUserValue, newMqttPasswordValue;
+      //Every field is optional (#128): the tabbed UI saves per card, so a
+      //POST carries only the fields of the card that submitted it. A field
+      //that wasn't provided must never be applied — otherwise a partial
+      //save would blank the rest.
+      bool alignmentProvided = false, deviceModeProvided = false, flapSpeedProvided = false, inputTextProvided = false;
       bool timezoneProvided = false;
       bool deviceNameProvided = false;
       bool mqttHostProvided = false, mqttPortProvided = false, mqttUserProvided = false, mqttPasswordProvided = false;
@@ -1248,6 +1287,7 @@ void setup() {
             String receivedValue = p->value();
             if (receivedValue == ALIGNMENT_MODE_LEFT || receivedValue == ALIGNMENT_MODE_CENTER || receivedValue == ALIGNMENT_MODE_RIGHT) {
               newAlignmentValue = receivedValue;
+              alignmentProvided = true;
             }
             else {
               SerialPrintln("Alignment provided was not valid. Value: " + receivedValue);
@@ -1260,6 +1300,7 @@ void setup() {
             String receivedValue = p->value();
             if (receivedValue == DEVICE_MODE_TEXT || receivedValue == DEVICE_MODE_CLOCK) {
               newDeviceModeValue = receivedValue;
+              deviceModeProvided = true;
             }
             else {
               SerialPrintln("Device Mode provided was not valid. Invalid Value: " + receivedValue);
@@ -1274,6 +1315,7 @@ void setup() {
             String receivedValue = p->value();
             if (isNumber(receivedValue) && receivedValue.toInt() >= 1 && receivedValue.toInt() <= 100) {
               newFlapSpeedValue = receivedValue;
+              flapSpeedProvided = true;
             }
             else {
               SerialPrintln("Flap speed provided was not valid. Value: " + receivedValue);
@@ -1284,6 +1326,7 @@ void setup() {
           //HTTP POST inputText value
           if (p->name() == PARAM_INPUT_TEXT) {
             newInputTextValue = p->value().c_str();
+            inputTextProvided = true;
           }
 
           //HTTP POST timezone POSIX TZ string (issue #48).
@@ -1378,18 +1421,28 @@ void setup() {
         }
       }
 
+      //Per-card fetch() saves (#128) send ajax=1 and want a status code
+      //instead of the classic redirect; plain form posts keep the redirect
+      //so old clients behave exactly as before.
+      bool isAjax = request->hasParam("ajax", true);
+
       //If there was an error, report back to check what has been input
       if (submissionError) {
         SerialPrintln(F("Finished Processing Request with Error"));
-        request->redirect("/?invalid-submission=true");
+        if (isAjax) request->send(400, "text/plain", F("invalid"));
+        else request->redirect("/?invalid-submission=true");
       }
       else {
         SerialPrintln(F("Finished Processing Request Successfully"));
 
-        lastReceivedMessageDateTime = formatDateTime("%d %b %y %H:%M:%S");
+        //"Last Received" tracks messages, not settings saves — with per-card
+        //posts (#128) only a message/mode submission stamps it.
+        if (inputTextProvided || deviceModeProvided) {
+          lastReceivedMessageDateTime = formatDateTime("%d %b %y %H:%M:%S");
+        }
 
         //Only if a new alignment value
-        if (alignment != newAlignmentValue) {
+        if (alignmentProvided && alignment != newAlignmentValue) {
           alignment = newAlignmentValue;
           alignmentUpdated = true;
 
@@ -1398,7 +1451,7 @@ void setup() {
         }
 
         //Only if a new flap speed value
-        if (flapSpeed != newFlapSpeedValue) {
+        if (flapSpeedProvided && flapSpeed != newFlapSpeedValue) {
           flapSpeed = newFlapSpeedValue;
 
           saveFlapSpeed();
@@ -1406,7 +1459,7 @@ void setup() {
         }
 
         //Only if device mode has changed
-        if (deviceMode != newDeviceModeValue) {
+        if (deviceModeProvided && deviceMode != newDeviceModeValue) {
           deviceMode = newDeviceModeValue;
 
           saveDeviceMode();
@@ -1452,14 +1505,21 @@ void setup() {
         }
 
         //Only if we are showing text
-        if (deviceMode == DEVICE_MODE_TEXT) {
+        if (inputTextProvided && deviceMode == DEVICE_MODE_TEXT) {
           inputText = newInputTextValue;
         }
 
-        //Redirect so that we don't have the "re-submit form" problem in browser for refresh
-        request->redirect(deviceNameChanged ? "/?device-name-saved=true"
-                          : mqttChanged     ? "/?mqtt-saved=true"
-                                            : "/");
+        if (isAjax) {
+          //"ok-reboot" tells the card that its save needs a reboot to apply.
+          request->send(200, "text/plain",
+                        (deviceNameChanged || mqttChanged) ? F("ok-reboot") : F("ok"));
+        }
+        else {
+          //Redirect so that we don't have the "re-submit form" problem in browser for refresh
+          request->redirect(deviceNameChanged ? "/?device-name-saved=true"
+                            : mqttChanged     ? "/?mqtt-saved=true"
+                                              : "/");
+        }
       }
     });
 
@@ -1625,6 +1685,15 @@ void loop() {
     delay(1);
     return;
   }
+
+#if USE_MULTICAST == true
+  //Deferred MQTT broker discovery (#129). Runs here — never in the async
+  //handler — because MDNS.queryService() blocks ~1 s per query (~2 s worst
+  //case with the home-assistant fallback). Placement after the recovery/
+  //OTA/upload/unit-flash early-returns means a discovery can never stall
+  //those paths.
+  runPendingMqttDiscovery();
+#endif
 
   //MQTT pump (#121): reconnect schedule, inbound notifications, telemetry.
   //No-op when no broker is configured (#57).

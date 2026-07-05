@@ -110,3 +110,46 @@ void initWiFi() {
   SerialPrintln(F("Setup portal timed out with no configuration — rebooting to retry"));
   isPendingReboot = true;
 }
+
+#if USE_MULTICAST == true
+//Deferred worker for the MQTT broker auto-detect endpoint (#129). Armed by
+//POST /mqtt/discover; runs the blocking mDNS queries here in loop() context
+//(~1 s each, ~2 s worst case when the fallback query also runs — bounded,
+//user-triggered, re-entry blocked by the pending flag).
+//_mqtt._tcp answers advertise a broker directly; when there are none, a
+//_home-assistant._tcp answer points at the HA host (Mosquitto add-on case —
+//suggestedBrokerPort() maps that to 1883). Candidate/JSON rules live in
+//MdnsDiscovery.h, natively tested.
+#define MQTT_DISCOVER_MAX_CANDIDATES 4
+
+void runPendingMqttDiscovery() {
+  if (!mqttDiscoverPending) return;
+
+  MdnsBrokerCandidate candidates[MQTT_DISCOVER_MAX_CANDIDATES];
+  size_t candidateCount = 0;
+
+  bool fromHomeAssistant = false;
+  uint32_t answerCount = MDNS.queryService("mqtt", "tcp");
+  if (answerCount == 0) {
+    answerCount = MDNS.queryService("home-assistant", "tcp");
+    fromHomeAssistant = true;
+  }
+
+  for (uint32_t i = 0; i < answerCount && candidateCount < MQTT_DISCOVER_MAX_CANDIDATES; i++) {
+    MdnsBrokerCandidate& candidate = candidates[candidateCount];
+    candidate.name = normalizeMdnsHostname(MDNS.hostname(i));
+    IPAddress answerIp = MDNS.IP(i);
+    candidate.ip = (answerIp.isSet() ? answerIp.toString() : String());
+    candidate.advertisedPort = MDNS.port(i);
+    candidate.fromHomeAssistant = fromHomeAssistant;
+    candidateCount++;
+  }
+  if (answerCount > MQTT_DISCOVER_MAX_CANDIDATES) {
+    SerialPrintln("MQTT discovery: capping " + String(answerCount) + " answers to " + String(MQTT_DISCOVER_MAX_CANDIDATES));
+  }
+
+  mqttDiscoverResultJson = buildDiscoverJson(candidates, candidateCount);
+  mqttDiscoverPending = false;
+  SerialPrintln("MQTT discovery finished: " + String(candidateCount) + " candidate(s)");
+}
+#endif

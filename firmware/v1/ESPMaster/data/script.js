@@ -70,6 +70,215 @@ form.onsubmit = function () {
 	}
 }
 
+//Tab navigation (#128). Three sections on one page; location.hash deep-links
+//a tab and survives refresh. Dispatches "sf-tabchange" so interested panels
+//(the log poller) can react without coupling to the tab code.
+const TAB_NAMES = ["display", "settings", "maintenance"];
+
+function currentTabFromHash() {
+	var name = location.hash.replace("#", "");
+	return TAB_NAMES.indexOf(name) >= 0 ? name : "display";
+}
+
+function showTab(name) {
+	TAB_NAMES.forEach(function(tab) {
+		var section = document.getElementById("section-" + tab);
+		if (section) section.classList.toggle("hidden", tab !== name);
+	});
+	document.querySelectorAll(".tabbar-button").forEach(function(button) {
+		button.classList.toggle("active", button.dataset.tab === name);
+	});
+	document.dispatchEvent(new CustomEvent("sf-tabchange", { detail: name }));
+}
+
+function initTabs() {
+	document.querySelectorAll(".tabbar-button").forEach(function(button) {
+		button.addEventListener("click", function() {
+			location.hash = button.dataset.tab;
+		});
+	});
+	window.addEventListener("hashchange", function() {
+		showTab(currentTabFromHash());
+	});
+	showTab(currentTabFromHash());
+}
+
+//Per-card saves (#128): POST the given fields to / with ajax=1, so the
+//backend answers "ok" / "ok-reboot" / 400 instead of redirecting. Only the
+//posted fields are applied server-side (provided-gating), so each card can
+//save independently.
+function postSettingsFields(fields, callback) {
+	if (localDevelopment) {
+		setTimeout(function() { callback(true, "ok-reboot"); }, 500);
+		return;
+	}
+	var body = new URLSearchParams();
+	Object.keys(fields).forEach(function(key) { body.append(key, fields[key]); });
+	body.append("ajax", "1");
+	fetch("/", { method: "POST", body: body })
+		.then(function(response) {
+			return response.text().then(function(text) {
+				callback(response.ok, text.trim());
+			});
+		})
+		.catch(function() { callback(false, ""); });
+}
+
+function showCardStatus(elementId, message, kind, hideAfterMs) {
+	var el = document.getElementById(elementId);
+	if (!el) return;
+	el.className = "firmware-status " + (kind || "");
+	el.classList.remove("hidden");
+	el.innerHTML = message;
+	if (hideAfterMs) {
+		setTimeout(function() { el.classList.add("hidden"); }, hideAfterMs);
+	}
+}
+
+var REBOOT_NOW_LINK = ' <a href="/reboot" onclick="return confirm(\'Reboot the display now?\')">Reboot now</a>';
+
+function saveDeviceCard() {
+	showCardStatus("deviceCardStatus", "Saving…", "pending");
+	postSettingsFields({
+		deviceName: document.getElementById("inputDeviceName").value,
+		timezone: document.getElementById("selectTimezone").value
+	}, function(ok, result) {
+		if (!ok) showCardStatus("deviceCardStatus", "✘ Save failed — check the device name.", "error");
+		else if (result === "ok-reboot") showCardStatus("deviceCardStatus", "✔ Saved. The device name applies after a reboot." + REBOOT_NOW_LINK, "success");
+		else showCardStatus("deviceCardStatus", "✔ Saved.", "success", 5000);
+	});
+}
+
+//Detect and Save share the MQTT card's fields and status line — while a
+//discovery poll is in flight the save button (and vice versa the detect
+//button) is disabled so the async result can't stomp a save in progress.
+function setMqttCardBusy(busy) {
+	document.getElementById("buttonMqttDetect").disabled = busy;
+	document.getElementById("buttonMqttSave").disabled = busy;
+}
+
+function saveMqttCard() {
+	setMqttCardBusy(true);
+	showCardStatus("mqttCardStatus", "Saving…", "pending");
+	postSettingsFields({
+		mqttHost: document.getElementById("inputMqttHost").value,
+		mqttPort: document.getElementById("inputMqttPort").value,
+		mqttUser: document.getElementById("inputMqttUser").value,
+		mqttPassword: document.getElementById("inputMqttPassword").value
+	}, function(ok, result) {
+		setMqttCardBusy(false);
+		if (!ok) showCardStatus("mqttCardStatus", "✘ Save failed — check host and port.", "error");
+		else if (result === "ok-reboot") showCardStatus("mqttCardStatus", "✔ Saved. MQTT settings apply after a reboot." + REBOOT_NOW_LINK, "success");
+		else showCardStatus("mqttCardStatus", "✔ Saved (no changes).", "success", 5000);
+	});
+}
+
+//Live-apply for the Presentation card (#128): alignment radios post on
+//click, the speed slider on release ("change" fires once per deliberate
+//adjustment — never while dragging, so no EEPROM churn).
+function initLiveApply() {
+	document.querySelectorAll('input[name="alignment"]').forEach(function(radio) {
+		radio.addEventListener("change", function() {
+			postSettingsFields({ alignment: radio.value }, function(ok) {
+				showCardStatus("presentationStatus", ok ? "✔ Alignment saved." : "✘ Alignment save failed.", ok ? "success" : "error", 4000);
+			});
+		});
+	});
+	document.getElementById("rangeFlapSpeed").addEventListener("change", function(event) {
+		postSettingsFields({ flapSpeed: event.target.value }, function(ok) {
+			showCardStatus("presentationStatus", ok ? "✔ Speed saved." : "✘ Speed save failed.", ok ? "success" : "error", 4000);
+		});
+	});
+}
+
+//MQTT broker auto-detect (#129). POST arms the discovery on the master (the
+//blocking mDNS queries run in its loop()), then poll GET until done. The
+//result only prefills the host/port fields — nothing persists until Save.
+function detectMqttBroker() {
+	var suggestions = document.getElementById("mqttSuggestions");
+	setMqttCardBusy(true);
+	suggestions.classList.add("hidden");
+	showCardStatus("mqttCardStatus", "Searching the LAN for a broker…", "pending");
+
+	if (localDevelopment) {
+		setTimeout(function() {
+			handleDiscoverResult({ status: "done", candidates: [
+				{ host: "192.168.1.10", name: "homeassistant", port: 1883, source: "home-assistant" },
+				{ host: "192.168.1.20", name: "mosquitto", port: 1883, source: "mqtt" }
+			]});
+			setMqttCardBusy(false);
+		}, 1000);
+		return;
+	}
+
+	fetch("/mqtt/discover", { method: "POST" })
+		.then(function(response) {
+			if (!response.ok && response.status !== 409) throw new Error();
+			var deadline = Date.now() + 10000;
+			(function poll() {
+				fetch("/mqtt/discover", { cache: "no-store" })
+					.then(function(r) { return r.json(); })
+					.then(function(result) {
+						if (result.status === "done") {
+							handleDiscoverResult(result);
+							setMqttCardBusy(false);
+						}
+						else if (Date.now() > deadline) {
+							showCardStatus("mqttCardStatus", "✘ Discovery timed out.", "error", 5000);
+							setMqttCardBusy(false);
+						}
+						else setTimeout(poll, 500);
+					})
+					.catch(function() {
+						showCardStatus("mqttCardStatus", "✘ Discovery failed.", "error", 5000);
+						setMqttCardBusy(false);
+					});
+			})();
+		})
+		.catch(function() {
+			showCardStatus("mqttCardStatus", "✘ Discovery failed.", "error", 5000);
+			setMqttCardBusy(false);
+		});
+}
+
+//candidate.name/host come off the mDNS wire — escape before they touch the
+//innerHTML-based status line (the suggestion chips use textContent, safe).
+function escapeHtml(value) {
+	return String(value).replace(/[&<>"']/g, function(c) {
+		return "&#" + c.charCodeAt(0) + ";";
+	});
+}
+
+function applyBrokerSuggestion(candidate) {
+	document.getElementById("inputMqttHost").value = candidate.host;
+	document.getElementById("inputMqttPort").value = candidate.port;
+	showCardStatus("mqttCardStatus", "Prefilled " + escapeHtml(candidate.name) + " — add credentials if needed, then Save MQTT.", "success");
+}
+
+function handleDiscoverResult(result) {
+	var candidates = result.candidates || [];
+	var suggestions = document.getElementById("mqttSuggestions");
+	suggestions.innerHTML = "";
+	suggestions.classList.add("hidden");
+
+	if (candidates.length === 0) {
+		showCardStatus("mqttCardStatus", "No broker found on the LAN. Enter the host manually.", "error", 7000);
+		return;
+	}
+	applyBrokerSuggestion(candidates[0]);
+	if (candidates.length > 1) {
+		candidates.forEach(function(candidate) {
+			var chip = document.createElement("button");
+			chip.type = "button";
+			chip.className = "mqtt-suggestion";
+			chip.textContent = candidate.name + " (" + candidate.host + ":" + candidate.port + ")";
+			chip.addEventListener("click", function() { applyBrokerSuggestion(candidate); });
+			suggestions.appendChild(chip);
+		});
+		suggestions.classList.remove("hidden");
+	}
+}
+
 // Retrieve current Split-Flap settings when the page loads/refreshes
 window.addEventListener('load', loadPage);
 
@@ -89,21 +298,10 @@ function loadPage() {
 			It will display different characters in order to carry this out and then go back to the last thing being displayed.
 		`);
 	}
-	else if (urlParams.get('device-name-saved') === "true") {
-		showBannerMessage(`
-			Device name saved. It is applied to the network identity (mDNS, hostname, MQTT, recovery SSID) on the next reboot.
-			<br>
-			<a href="/reboot">Reboot now</a> to apply it.
-		`);
-	}
-	else if (urlParams.get('mqtt-saved') === "true") {
-		showBannerMessage(`
-			MQTT settings saved. They are applied on the next reboot.
-			<br>
-			<a href="/reboot">Reboot now</a> to apply them.
-		`);
-	}
-	
+	//device-name-saved / mqtt-saved banner params are gone (#128): those
+	//fields save via per-card fetch() posts with inline status now, so the
+	//server's non-ajax redirect can no longer carry them from any UI action.
+
 	if (localDevelopment) {
 		setSpeed("80");
 		setSavedMode("text");
@@ -367,8 +565,9 @@ function setLastReceivedMessage(time) {
 
 function showHideResetWifiSettingsAction(isWifiApMode) {
 	if (!isWifiApMode) {
-		var linkActionResetWifi = document.getElementById("linkActionResetWifi");
-		linkActionResetWifi.classList.add("hidden");
+		//Hide the whole WiFi card (#128) — a card with only a hidden link
+		//would render as an empty box on the Settings tab.
+		document.getElementById("cardWifi").classList.add("hidden");
 	}
 }
 
@@ -429,6 +628,8 @@ function showContent() {
 	elementInitialLoading.classList.add("hidden");
 	elementContent.classList.remove("hidden");
 
+	initTabs();
+	initLiveApply();
 	initLogPanel();
 	initMasterFirmwareUpload();
 }
@@ -521,20 +722,27 @@ function initLogPanel() {
 		pollHandle = null;
 	}
 
-	details.addEventListener('toggle', function () {
-		if (details.open) startPolling();
+	//Poll only while the log is actually visible: <details> open, browser
+	//tab in the foreground AND the Maintenance tab active (#128).
+	var onMaintenanceTab = currentTabFromHash() === "maintenance";
+
+	function syncPolling() {
+		if (details.open && !document.hidden && onMaintenanceTab) startPolling();
 		else stopPolling();
+	}
+
+	details.addEventListener('toggle', syncPolling);
+
+	document.addEventListener('sf-tabchange', function (event) {
+		onMaintenanceTab = event.detail === "maintenance";
+		syncPolling();
 	});
 
-	//<details open> doesn't fire the toggle event on load, so kick off
-	//polling manually if the panel starts expanded.
-	if (details.open) startPolling();
+	document.addEventListener('visibilitychange', syncPolling);
 
-	//Also stop polling if the tab is hidden — no point waking the ESP for updates nobody's reading.
-	document.addEventListener('visibilitychange', function () {
-		if (document.hidden) stopPolling();
-		else if (details.open) startPolling();
-	});
+	//<details open> doesn't fire the toggle event on load, so sync once
+	//manually in case the page loads straight onto #maintenance.
+	syncPolling();
 
 	if (localDevelopment) {
 		pre.textContent = "Starting Split-Flap...\nScanning I2C bus for units...\n- unit responding at 0x01\n- unit responding at 0x02\nI2C scan complete. Detected 2/10 expected units.\n";
