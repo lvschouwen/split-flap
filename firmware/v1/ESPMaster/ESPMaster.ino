@@ -30,6 +30,16 @@
 #define WIFI_USE_DIRECT     true    //Option to either direct connect to a WiFi Network or setup a AP to configure WiFi. Setting to false will setup as a AP.
 #define USE_MULTICAST       true    //Option to broadcast a ".local" URL on your local network default split-flap.local. You can change the name under configurable settings. On by default since #112 — the begin/update plumbing existed all along and this makes the display findable without knowing its DHCP lease.
 
+//MQTT / Home Assistant integration (#121). Default OFF — the whole feature
+//is compiled out (zero flash, zero RAM, zero behavior change). Build the
+//`espmaster_mqtt` PlatformIO env (which passes -D MQTT_ENABLE=true) and
+//copy MqttCredentials.h.example to MqttCredentials.h to enable it.
+#ifndef MQTT_ENABLE
+#define MQTT_ENABLE         false
+#endif
+#define MQTT_TELEMETRY_INTERVAL_S 60   //Seconds between MQTT health telemetry publishes
+#define MQTT_MAX_TEXT_LEN         256  //Inbound MQTT payload buffer cap (bytes)
+
 /*
   EXPERIMENTAL: Try to use your Router when possible to set a Static IP address for your device to avoid conflicts with other devices
   on your network. This will try and setup your device with a static IP address of your chosing. See below for more details.
@@ -106,6 +116,23 @@
   #endif
   const char* wifiDirectSsid = "";
   const char* wifiDirectPassword = "";
+#endif
+
+//MQTT broker credentials live in a gitignored local header, same pattern as
+//WifiCredentials.h above. Copy MqttCredentials.h.example to
+//MqttCredentials.h. Missing file → empty broker host → initMqtt() logs and
+//disables itself, the build still compiles (fresh checkout, CI).
+#if MQTT_ENABLE == true
+  #if __has_include("MqttCredentials.h")
+    #include "MqttCredentials.h"
+  #else
+    #warning "MQTT_ENABLE is true but MqttCredentials.h is missing — copy MqttCredentials.h.example to fill it in."
+    const char*    mqttBrokerHost = "";
+    const uint16_t mqttBrokerPort = 1883;
+    const char*    mqttUsername   = "";
+    const char*    mqttPassword   = "";
+    const char*    mqttDeviceId   = "";
+  #endif
 #endif
 
 // timezonePosix: build-time DEFAULT POSIX TZ string. Overridden at runtime
