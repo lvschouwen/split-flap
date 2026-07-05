@@ -1,0 +1,6 @@
+flasher/assets/manifest.json
+flasher/assets/master-firmware.bin
+flasher/assets/unit-firmware.hex
+flasher/assets/twiboot-atmega328p-16mhz.hex
+flasher/assets/avrdude/
+*.session.json
