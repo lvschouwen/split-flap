@@ -47,10 +47,13 @@ Resolution order:
 2. Fallback: `"split-flap-" + String(ESP.getChipId(), HEX)` (e.g. `split-flap-9a3c1f`,
    ≤19 chars).
 
-The magic check is load-bearing: recovery mode brings up its SoftAP
-(`ESPMaster.ino:592/599`) **before** `initialiseFileSystem()` (`:622`), so the
-resolver reads EEPROM directly and must not trust garbage. Invalid EEPROM → chip-id
-default, always safe, still unique.
+Boot order (revised in review follow-up): `initialiseFileSystem()` was hoisted to
+the top of `setup()` — after the RTC boot-counter increment (so a crash in it still
+counts toward the recovery threshold), before the quiet-OTA/recovery dispatch. That
+gives one `EEPROM.begin` + one migration point for every boot path, and the resolver
+runs immediately after it on an already-migrated blob. The magic/version guard stays
+as protection against a corrupt or foreign blob: invalid EEPROM → chip-id default,
+always safe, still unique.
 
 Consumers (constants → resolved name):
 

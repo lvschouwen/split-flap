@@ -609,10 +609,10 @@ void enterRecoveryMode() {
       "</form></body></html>";
     request->send(200, "text/html", html);
   });
-  //EEPROM must be up before /firmware/master is served from here — the
-  //upload handler persists intendedVersion and stages lastFlashResult="",
-  //and without EEPROM.begin() both writes silently no-op (#119).
-  initialiseFileSystem();
+  //EEPROM is already up (initialiseFileSystem() runs at the top of setup(),
+  //before the recovery dispatch) — required before /firmware/master is
+  //served: the upload handler persists intendedVersion and stages
+  //lastFlashResult="", and without EEPROM.begin() both silently no-op (#119).
   registerMasterFirmwareEndpoint();
   webServer.begin();
   SerialPrintln(F("Recovery web server ready"));
@@ -674,25 +674,22 @@ void enterOtaMode() {
     String json = getCurrentSettingValues();
     request->send(200, "application/json", json);
   });
-  //EEPROM must be up before /firmware/master is served from here — the
-  //upload handler persists intendedVersion and stages lastFlashResult="",
-  //and without EEPROM.begin() both writes silently no-op (#119). This is
-  //why a quiet-mode flash used to leave a stale intendedVersion behind.
-  initialiseFileSystem();
+  //EEPROM is already up (initialiseFileSystem() runs at the top of setup(),
+  //before the OTA-mode dispatch) — required before /firmware/master is
+  //served: the upload handler persists intendedVersion and stages
+  //lastFlashResult="" (#119). A quiet-mode flash without EEPROM up used to
+  //leave a stale intendedVersion behind.
   registerMasterFirmwareEndpoint();
   webServer.begin();
   SerialPrintln(F("OTA-mode web server ready"));
 }
 
-//Resolve the per-device network identity (#125). Runs at the very top of
-//setup() — BEFORE the quiet-OTA/recovery dispatch — because those paths
-//bring up their SoftAPs before initialiseFileSystem(), and initWiFi() sets
-//the hostname before it too. Reads EEPROM directly with its own begin();
-//the later initialiseFileSystem() re-begin is harmless (no writes between).
-//The deviceName slot is only trusted on a v5+ blob: on older versions its
-//bytes are pre-migration RESERVED_2 leftovers.
+//Resolve the per-device network identity (#125). Runs right after
+//initialiseFileSystem() at the top of setup() — before the quiet-OTA/
+//recovery dispatch (their SoftAP SSIDs need it) and before initWiFi()
+//(hostname). The blob is already migrated by then, so the magic/version
+//guard is belt-and-suspenders against a corrupt or foreign blob only.
 void resolveDeviceIdentity() {
-  EEPROM.begin(SETTINGS_EEPROM_SIZE);
   uint8_t ver = EEPROM.read(OFF_VERSION);
   bool eepromValid = (readSettingMagic() == SETTINGS_MAGIC) &&
                      (ver >= 5) && (ver <= SETTINGS_VERSION);
@@ -737,10 +734,6 @@ void setup() {
   SerialPrint(F("Last reset reason: "));
   SerialPrintln(lastResetReason);
 
-  //Must precede the quiet-OTA/recovery dispatch below AND initWiFi() —
-  //every path needs the resolved identity for its AP SSID or hostname.
-  resolveDeviceIdentity();
-
   //Increment the RTC boot counter before anything else can crash. The main
   //loop will clear it again once HEALTHY_BOOT_MS of uptime proves the sketch
   //is behaving. See issue #37.
@@ -749,6 +742,16 @@ void setup() {
   writeBootStateRtc(bootState);
   SerialPrint(F("RTC boot counter: "));
   SerialPrintln(bootState.bootCounter);
+
+  //Settings EEPROM comes up once here, for every boot path — the single
+  //begin + migration point. Quiet-OTA/recovery need it for /firmware/
+  //master's intendedVersion/lastFlashResult writes (#119), and the
+  //identity resolver right after needs a migrated blob for the deviceName
+  //slot; its result feeds each mode's AP SSID and initWiFi()'s hostname.
+  //Deliberately AFTER the RTC counter increment above so a crash in here
+  //still counts toward the recovery threshold.
+  initialiseFileSystem();
+  resolveDeviceIdentity();
 
   //User-requested quiet OTA mode (#117). One-shot: clear the flag (and the
   //boot counter this entry just bumped) immediately, so any reboot or power
@@ -809,7 +812,7 @@ void setup() {
   if (isWifiConfigured && !isPendingReboot) {
     //Load persisted settings first so the runtime timezone (if set via
     //the web UI) takes effect on this boot's configTime() call. Issue #48.
-    initialiseFileSystem();
+    //(EEPROM itself came up at the top of setup().)
     loadValuesFromFileSystem();
 
     //Flash-outcome cookie check (#53/#118). If the OTA handler stashed a
