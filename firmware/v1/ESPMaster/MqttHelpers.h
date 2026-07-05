@@ -53,6 +53,9 @@ inline bool parseMqttTextPayload(const String& payload, String& textOut, long& d
   if (cursor >= trimmed.length() || trimmed[cursor] != '"') return false;
 
   String text;
+  // One-shot reservation: worst case the value runs to the end of the
+  // payload. Avoids per-character realloc churn on the ~42 KB ESP-01 heap.
+  text.reserve(trimmed.length() - cursor);
   bool closed = false;
   for (unsigned int i = cursor + 1; i < trimmed.length(); i++) {
     char c = trimmed[i];
