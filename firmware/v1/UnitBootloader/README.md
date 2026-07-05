@@ -30,7 +30,9 @@ Because every unit listens on `0x29` when in bootloader mode, and only one unit 
 4. Master streams the new `.hex` to `0x29`.
 5. When done, bootloader hands off to the new sketch; master goes back to normal operation.
 
-The sketch-side opcode and EEPROM magic-byte handshake are **not yet implemented** — that's [issue #10](https://github.com/lvschouwen/split-flap/issues/10) Phase 2.
+The sketch-side handshake and the master-side flash client shipped long ago:
+the master auto-installs the bundled unit firmware on boot for any Nano it
+sees in bootloader mode, and `/reflash-units` forces a re-push (see issue #10).
 
 ## Building
 
@@ -146,13 +148,17 @@ A quick-and-dirty I2C sanity check (requires an I2C master on the bus):
 i2cdetect -y 1     # should show a device at 0x29 during the boot window
 ```
 
-Once you see `0x29` respond, you're good to proceed to Phase 2 (sketch-side handshake) and Phase 3 (master-side flash client).
+Once you see `0x29` respond, the Nano is ready — the master handles
+everything else (auto-install on its next boot scan).
 
 ## Current status vs [issue #10](https://github.com/lvschouwen/split-flap/issues/10)
 
 - [x] Phase 0 — design in the issue body.
-- [x] **Phase 1 — this directory. Vendored twiboot, patched for 16 MHz Nano, `.hex` builds and is checked in. Manual install procedure documented.**
-- [ ] Phase 2 — sketch-side: EEPROM identity + DIP fallback, jump-to-bootloader I2C opcode.
-- [ ] Phase 3 — master-side: twiboot protocol client + firmware-upload endpoint.
-- [ ] Phase 4 — UI page with progress bar.
-- [ ] Phase 5 — EEPROM layout migration (avoid clash with calibration-offset slot).
+- [x] Phase 1 — this directory. Vendored twiboot, patched for 16 MHz Nano, `.hex` builds and is checked in.
+- [x] Phase 2 — sketch-side: EEPROM identity + DIP fallback, jump-to-bootloader I2C opcode.
+- [x] Phase 3 — master-side: twiboot protocol client, PROGMEM-bundled hex, auto-install on boot + `/reflash-units`.
+- [x] Phase 4 — web UI reflash controls (Maintenance tab).
+- [x] Phase 5 — EEPROM layout versioned in `SettingsEepromLayout.h` (natively tested).
+
+Provisioning a whole display (this bootloader + unit firmware + master) is
+driven by `split-flap-flasher.exe` — see `flashing/README.md`.

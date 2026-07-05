@@ -31,6 +31,13 @@ pio test -e native           # host-side unit tests (ESPMaster only)
 
 Subsequent master flashes happen via OTA — from this repo: `flashing/ota-master.sh <fw.bin> http://host:port`. The script computes MD5 locally, POSTs to `/firmware/master`, then polls `/settings` for the `sketchMd5` + `lastFlashResult` verdict and prints SUCCESS, EBOOT SILENT REVERT, FLASH CONFIG MISMATCH, or UPLOAD DID NOT REACH HANDLER. Physical re-flash falls back to `esptool` — see issue #53 for the Windows walkthrough.
 
+First-time provisioning of a physical display (programmer bootstrap, twiboot
+per Nano, master USB flash, verify) is driven by `split-flap-flasher.exe` —
+a PyInstaller one-file exe built by `.github/workflows/flasher.yml` from
+`flashing/flasher/` (plain Python package, pytest-covered; dev: `python -m
+flasher` from `flashing/` after `make_manifest.py stage`/`collect`; the
+`stage` step MUST run between the Unit and ESPMaster builds).
+
 - **ESPMaster** — env `espmaster`, board `esp01_1m`. Library versions pinned in `platformio.ini`. Builtin `EEPROM` is in `lib_deps` because PIO's LDF doesn't surface it by default.
 - **Unit** — env `unit` (board `nanoatmega328new`, new bootloader) or `unit_old_bootloader` (board `nanoatmega328`, old bootloader fallback).
 
