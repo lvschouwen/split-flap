@@ -46,7 +46,12 @@ def flash_master(port: str, bin_path: str) -> list[str]:
     ]
     if getattr(sys, "frozen", False):
         import esptool
-        esptool.main(args)
+        try:
+            esptool.main(args)
+        except SystemExit as exc:
+            code = exc.code
+            if code not in (None, 0):
+                raise RuntimeError(f"esptool exited with {code}") from exc
     else:
         subprocess.run([sys.executable, "-m", "esptool"] + args, check=True)
     return warnings
