@@ -79,6 +79,50 @@ static void test_parse_empty_text_is_valid() {
   TEST_ASSERT_EQUAL_STRING("", text.c_str());
 }
 
+// ---- MqttNotification state machine ----
+static void test_notification_inactive_by_default() {
+  MqttNotification n;
+  TEST_ASSERT_FALSE(notificationTick(n, 1000UL));
+}
+static void test_notification_active_until_deadline() {
+  MqttNotification n;
+  notificationStart(n, String("DOORBELL"), 60, 10000UL);
+  TEST_ASSERT_TRUE(notificationTick(n, 10000UL));
+  TEST_ASSERT_TRUE(notificationTick(n, 10000UL + 59999UL));
+  TEST_ASSERT_EQUAL_STRING("DOORBELL", n.text.c_str());
+}
+static void test_notification_expires_at_deadline() {
+  MqttNotification n;
+  notificationStart(n, String("DOORBELL"), 60, 10000UL);
+  TEST_ASSERT_FALSE(notificationTick(n, 10000UL + 60000UL));
+  // and stays expired
+  TEST_ASSERT_FALSE(notificationTick(n, 10000UL + 60001UL));
+  TEST_ASSERT_FALSE(n.active);
+}
+static void test_notification_replacement_resets_deadline() {
+  MqttNotification n;
+  notificationStart(n, String("FIRST"), 60, 0UL);
+  notificationStart(n, String("SECOND"), 60, 50000UL);
+  TEST_ASSERT_TRUE(notificationTick(n, 100000UL));  // 60 s past FIRST's start, but SECOND runs to 110 s
+  TEST_ASSERT_EQUAL_STRING("SECOND", n.text.c_str());
+  TEST_ASSERT_FALSE(notificationTick(n, 110000UL));
+}
+static void test_notification_start_clamps_dwell() {
+  MqttNotification n;
+  notificationStart(n, String("X"), 999999, 0UL);
+  TEST_ASSERT_TRUE(notificationTick(n, 3599999UL));   // 3600 s - 1 ms
+  TEST_ASSERT_FALSE(notificationTick(n, 3600000UL));
+}
+static void test_notification_survives_millis_wraparound() {
+  MqttNotification n;
+  // Start 5 s before millis() wraps; a 60 s dwell must stay active across 0.
+  unsigned long nearWrap = 0xFFFFFFFFUL - 5000UL;
+  notificationStart(n, String("WRAP"), 60, nearWrap);
+  TEST_ASSERT_TRUE(notificationTick(n, 0xFFFFFFFFUL));
+  TEST_ASSERT_TRUE(notificationTick(n, 10000UL));    // 15 s in, post-wrap
+  TEST_ASSERT_FALSE(notificationTick(n, 55001UL));   // 60.001 s in
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_clampDwell_passes_through_in_range);
@@ -92,5 +136,11 @@ int main(int, char**) {
   RUN_TEST(test_parse_escaped_newline);
   RUN_TEST(test_parse_malformed_json_returns_false);
   RUN_TEST(test_parse_empty_text_is_valid);
+  RUN_TEST(test_notification_inactive_by_default);
+  RUN_TEST(test_notification_active_until_deadline);
+  RUN_TEST(test_notification_expires_at_deadline);
+  RUN_TEST(test_notification_replacement_resets_deadline);
+  RUN_TEST(test_notification_start_clamps_dwell);
+  RUN_TEST(test_notification_survives_millis_wraparound);
   return UNITY_END();
 }

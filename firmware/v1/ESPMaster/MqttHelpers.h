@@ -85,3 +85,32 @@ inline bool parseMqttTextPayload(const String& payload, String& textOut, long& d
   dwellSecondsOut = clampDwellSeconds(dwellSeconds);
   return true;
 }
+
+// Show-then-revert notification state. The main loop stays declarative: it
+// asks notificationTick() each pass — true means "the notification owns the
+// display, show n.text"; false means normal deviceMode content. Expiry
+// clears `active` in place, and the loop's existing lastWrittenText
+// comparison re-flaps the previous clock/text content by itself — no saved
+// mode, no EEPROM, no RTC.
+struct MqttNotification {
+  bool active = false;
+  String text;
+  unsigned long deadlineMs = 0;
+};
+
+inline void notificationStart(MqttNotification& n, const String& text, long dwellSeconds, unsigned long nowMs) {
+  n.active = true;
+  n.text = text;
+  n.deadlineMs = nowMs + (unsigned long)clampDwellSeconds(dwellSeconds) * 1000UL;
+}
+
+// millis()-wraparound-safe via signed difference of unsigned longs.
+inline bool notificationTick(MqttNotification& n, unsigned long nowMs) {
+  if (!n.active) return false;
+  if ((long)(nowMs - n.deadlineMs) >= 0) {
+    n.active = false;
+    n.text = "";
+    return false;
+  }
+  return true;
+}
