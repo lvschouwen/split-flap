@@ -1463,6 +1463,10 @@ void setup() {
           deviceMode = newDeviceModeValue;
 
           saveDeviceMode();
+          //Explicit mode switch trumps a running MQTT notification (#130):
+          //ask loopMqtt() to cancel it so the new mode shows immediately
+          //instead of after the dwell.
+          mqttRequestNotificationCancel();
           SerialPrintln("Device Mode Set: " + deviceMode);
         }
 

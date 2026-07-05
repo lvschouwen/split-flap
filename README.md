@@ -220,7 +220,7 @@ There are several helper `define` variables to help during debugging/running:
 
 #### MQTT / Home Assistant
 
-The display can join Home Assistant over MQTT: inbound notification text (shows for a dwell time, then reverts to clock/text mode) plus health telemetry, with automatic HA discovery. Configure it entirely from the **web UI → Settings tab → MQTT Broker card** (host, port, username, password) — leave the host empty to keep MQTT off. Settings are stored on the device and applied after a reboot; the password is never sent back to the browser.
+The display can join Home Assistant over MQTT: inbound notification text (shows for a dwell time, then reverts to clock/text mode), a **Mode** select to switch between text and clock from HA (an explicit mode switch also cancels a still-running notification), plus health telemetry — all with automatic HA discovery. Configure it entirely from the **web UI → Settings tab → MQTT Broker card** (host, port, username, password) — leave the host empty to keep MQTT off. Settings are stored on the device and applied after a reboot; the password is never sent back to the browser.
 
 If Home Assistant (or any mDNS-advertising broker) is on the same LAN, press **Detect broker**: the display runs a short mDNS scan (`_mqtt._tcp`, then Home Assistant's zeroconf announce) and prefills the host/port fields — you only add the credentials and press Save MQTT. Credentials stay manual by design; create a dedicated Home Assistant user (e.g. `splitflap`) for the display rather than reusing your own login.
 

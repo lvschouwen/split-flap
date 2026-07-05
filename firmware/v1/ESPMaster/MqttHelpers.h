@@ -109,6 +109,13 @@ inline void notificationStart(MqttNotification& n, const String& text, long dwel
   n.deadlineMs = nowMs + (uint32_t)clampDwellSeconds(dwellSeconds) * 1000UL;
 }
 
+// Explicit mode change cancels an active notification (#130): a user who
+// just switched text/clock wants that NOW, not after the dwell runs out.
+inline void notificationCancel(MqttNotification& n) {
+  n.active = false;
+  n.text = "";
+}
+
 // millis()-wraparound-safe via signed difference of fixed-width unsigned.
 inline bool notificationTick(MqttNotification& n, uint32_t nowMs) {
   if (!n.active) return false;
@@ -118,6 +125,17 @@ inline bool notificationTick(MqttNotification& n, uint32_t nowMs) {
     return false;
   }
   return true;
+}
+
+// ---- Mode command (#130) ----
+// HA's select publishes its option strings verbatim; accept exactly those
+// (after a whitespace trim) and return "" for anything else — invalid
+// payloads are ignored, never coerced.
+inline String parseModeCommand(const String& payload) {
+  String trimmed = payload;
+  trimmed.trim();
+  if (trimmed == "text" || trimmed == "clock") return trimmed;
+  return String("");
 }
 
 // ---- Topics ----
@@ -144,6 +162,7 @@ enum MqttDiscoveryEntity {
   DISCOVERY_HEAP,
   DISCOVERY_RSSI,
   DISCOVERY_UNIT_ERRORS,
+  DISCOVERY_MODE,   // HA select, text/clock (#130)
   DISCOVERY_ENTITY_COUNT
 };
 
@@ -153,6 +172,7 @@ inline size_t buildDiscoveryTopic(char* buf, size_t bufLen, int entity, const ch
     case DISCOVERY_HEAP:        return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/sensor/%s_heap/config"), deviceId);
     case DISCOVERY_RSSI:        return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/sensor/%s_rssi/config"), deviceId);
     case DISCOVERY_UNIT_ERRORS: return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/sensor/%s_unit_errors/config"), deviceId);
+    case DISCOVERY_MODE:        return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/select/%s/config"), deviceId);
   }
   if (bufLen > 0) buf[0] = '\0';
   return 0;
@@ -179,6 +199,10 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Unit errors\",\"stat_t\":\"splitflap/%s/telemetry\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_unit_errors\",\"val_tpl\":\"{{ value_json.unitErrors }}\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+    case DISCOVERY_MODE:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Mode\",\"cmd_t\":\"splitflap/%s/mode/set\",\"stat_t\":\"splitflap/%s/mode\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_mode\",\"ops\":[\"text\",\"clock\"]," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
   }
   if (bufLen > 0) buf[0] = '\0';
   return 0;

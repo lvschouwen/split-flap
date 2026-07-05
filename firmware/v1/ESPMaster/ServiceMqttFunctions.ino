@@ -29,6 +29,20 @@ static volatile bool mqttJustConnected = false;
 static volatile bool mqttMessagePending = false;
 static char mqttRxBuffer[MQTT_MAX_TEXT_LEN + 1];
 
+//Mode command hand-off (#130): same copy-and-flag pattern as the text
+//topic. 16 bytes fits "text"/"clock" with room for junk we'll reject.
+static volatile bool mqttModeCommandPending = false;
+static char mqttModeRxBuffer[16];
+
+//Web-UI mode change → cancel an active notification (#130). The POST
+//handler runs in async context, so it only sets this flag; loopMqtt()
+//does the cancel (same pattern as mqttDiscoveryClearPending).
+static volatile bool mqttNotificationCancelPending = false;
+
+//Last mode published to the retained state topic; "" forces a publish on
+//the first connected loop pass (and after each reconnect reset below).
+static String mqttLastPublishedMode;
+
 //Show-then-revert notification state (MqttHelpers.h).
 static MqttNotification mqttNotification;
 
@@ -44,6 +58,8 @@ static volatile bool mqttDiscoveryClearPending = false;
 //client gets its own stable copies here (#57).
 static String mqttResolvedDeviceId;
 static String mqttTopicSet;
+static String mqttTopicModeSet;
+static String mqttTopicModeState;
 static String mqttTopicAvailability;
 static String mqttTopicTelemetry;
 static String mqttActiveHost;
@@ -64,32 +80,53 @@ static void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
   mqttDisconnectedEvent = true;
 }
 
-//LWIP context: copy the chunk into the fixed buffer (truncating past
-//MQTT_MAX_TEXT_LEN — the display path truncates to the display width
-//anyway) and flag the loop when the final chunk lands. Only one topic is
-//subscribed, so no topic dispatch is needed.
+//LWIP context: copy the chunk into the right fixed buffer (truncating past
+//its capacity — the display path truncates to the display width anyway)
+//and flag the loop when the final chunk lands. Two command topics are
+//subscribed (#130), so dispatch on the topic with a heap-free strcmp.
 static void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties,
                           size_t len, size_t index, size_t total) {
-  (void)topic;
-  //Retained messages replay on every (re)connect — a retained text/set
-  //would re-trigger the notification after every broker restart or WiFi
-  //blip, forever. Command topics are live-only by convention: drop them.
+  //Retained messages replay on every (re)connect — a retained command
+  //would re-trigger after every broker restart or WiFi blip, forever.
+  //Command topics are live-only by convention: drop them.
   if (properties.retain) {
     return;
   }
-  for (size_t i = 0; i < len; i++) {
-    size_t pos = index + i;
-    if (pos >= MQTT_MAX_TEXT_LEN) break;
-    mqttRxBuffer[pos] = payload[i];
+
+  //Mode select command (#130): tiny payload, own buffer + flag.
+  if (strcmp(topic, mqttTopicModeSet.c_str()) == 0) {
+    for (size_t i = 0; i < len; i++) {
+      size_t pos = index + i;
+      if (pos >= sizeof(mqttModeRxBuffer) - 1) break;
+      mqttModeRxBuffer[pos] = payload[i];
+    }
+    if (index + len >= total) {
+      size_t end = total > sizeof(mqttModeRxBuffer) - 1 ? sizeof(mqttModeRxBuffer) - 1 : total;
+      mqttModeRxBuffer[end] = '\0';
+      mqttModeCommandPending = true;
+    }
+    return;
   }
-  if (index + len >= total) {
-    size_t end = total > MQTT_MAX_TEXT_LEN ? MQTT_MAX_TEXT_LEN : total;
-    mqttRxBuffer[end] = '\0';
-    mqttMessagePending = true;
+
+  //Text notification command. Explicit match so a future third
+  //subscription (or an unexpected broker delivery) fails closed instead
+  //of silently landing in the notification path.
+  if (strcmp(topic, mqttTopicSet.c_str()) == 0) {
+    for (size_t i = 0; i < len; i++) {
+      size_t pos = index + i;
+      if (pos >= MQTT_MAX_TEXT_LEN) break;
+      mqttRxBuffer[pos] = payload[i];
+    }
+    if (index + len >= total) {
+      size_t end = total > MQTT_MAX_TEXT_LEN ? MQTT_MAX_TEXT_LEN : total;
+      mqttRxBuffer[end] = '\0';
+      mqttMessagePending = true;
+    }
   }
 }
 
-//Publishes the four retained HA discovery configs. Main loop only — the
+//Publishes the retained HA discovery configs (one per MqttDiscoveryEntity).
+//Main loop only — the
 //buffers are stack-allocated here on the 4 KB cont stack.
 //Truncation guard (Task 3 review): snprintf returns the would-be length;
 //>= bufLen means the buffer was too small (e.g. a very long custom device
@@ -133,6 +170,8 @@ void initMqtt() {
   //default or the EEPROM pretty name. No separate mqttDeviceId knob.
   mqttResolvedDeviceId  = effectiveDeviceName;
   mqttTopicSet          = mqttTopic(mqttResolvedDeviceId, "text/set");
+  mqttTopicModeSet      = mqttTopic(mqttResolvedDeviceId, "mode/set");
+  mqttTopicModeState    = mqttTopic(mqttResolvedDeviceId, "mode");
   mqttTopicAvailability = mqttTopic(mqttResolvedDeviceId, "availability");
   mqttTopicTelemetry    = mqttTopic(mqttResolvedDeviceId, "telemetry");
 
@@ -188,9 +227,23 @@ void loopMqtt() {
     mqttReconnectBackoffMs = 2000;  //healthy connection resets the backoff
     SerialPrintln(F("MQTT: connected"));
     mqttClient.subscribe(mqttTopicSet.c_str(), 0);
+    mqttClient.subscribe(mqttTopicModeSet.c_str(), 0);
     mqttClient.publish(mqttTopicAvailability.c_str(), 1, true, "online");
     publishMqttDiscovery();
     mqttNextTelemetryMs = millis();  //first telemetry immediately
+    mqttLastPublishedMode = "";      //re-assert the retained mode state below
+  }
+
+  //Retained mode state (#130): publish whenever reality differs from what
+  //HA last heard — covers boot, reconnect, HA commands and web-UI changes
+  //without coupling to any of those paths. MUST run before the rename
+  //clear below (like publishMqttDiscovery above): the connect block resets
+  //the tracker, and if this ran after the clear it would immediately
+  //repopulate the just-blanked old state topic in the same pass.
+  if (mqttClient.connected() && deviceMode != mqttLastPublishedMode &&
+      (deviceMode == DEVICE_MODE_TEXT || deviceMode == DEVICE_MODE_CLOCK)) {
+    mqttClient.publish(mqttTopicModeState.c_str(), 0, true, deviceMode.c_str());
+    mqttLastPublishedMode = deviceMode;
   }
 
   //Device renamed (#125): while this run still IS the old MQTT identity,
@@ -205,7 +258,37 @@ void loopMqtt() {
       if (tLen == 0 || tLen >= sizeof(topicBuf)) continue;
       mqttClient.publish(topicBuf, 0, true, "");
     }
+    //Also blank the retained mode state (#130) — without its config it
+    //would just be an orphaned retained message on the old topic.
+    mqttClient.publish(mqttTopicModeState.c_str(), 0, true, "");
     SerialPrintln(F("MQTT: cleared retained discovery configs for old device id (rename)"));
+  }
+
+  //Web-UI mode change (#130): explicit mode switch trumps a running
+  //notification — cancel it so the next 1 s tick re-flaps the new mode.
+  if (mqttNotificationCancelPending) {
+    mqttNotificationCancelPending = false;
+    notificationCancel(mqttNotification);
+  }
+
+  //HA mode select command (#130).
+  if (mqttModeCommandPending) {
+    mqttModeCommandPending = false;
+    String modePayload(mqttModeRxBuffer);
+    if (mqttModeCommandPending) {
+      //Torn copy (new command landed mid-read) — reprocess next pass.
+      return;
+    }
+    String requestedMode = parseModeCommand(modePayload);
+    if (requestedMode.length() == 0) {
+      SerialPrintln("MQTT: ignored invalid mode command: " + modePayload);
+    }
+    else if (requestedMode != deviceMode) {
+      deviceMode = requestedMode;
+      saveDeviceMode();
+      notificationCancel(mqttNotification);
+      SerialPrintln("MQTT: mode set to " + deviceMode);
+    }
   }
 
   if (mqttMessagePending) {
@@ -266,6 +349,16 @@ void mqttStopForOta() {
   mqttStoppedForOta = true;
   mqttClient.disconnect(true);
   SerialPrintln(F("MQTT: force-closed for master OTA upload"));
+}
+
+//Called from the settings POST handler when the device mode changed (#130).
+//Async context: flag only — loopMqtt() cancels the active notification so
+//an explicit mode switch doesn't wait out the dwell.
+void mqttRequestNotificationCancel() {
+  if (!mqttInitialised) {
+    return;
+  }
+  mqttNotificationCancelPending = true;
 }
 
 //Called from the settings POST handler when the device name changed (#125).

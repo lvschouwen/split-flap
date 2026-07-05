@@ -135,6 +135,33 @@ static void test_telemetry_payload_exact_shape() {
   TEST_ASSERT_EQUAL_STRING("{\"heap\":25048,\"rssi\":-61,\"unitErrors\":2}", buf);
   TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
 }
+// ---- parseModeCommand (#130) ----
+static void test_mode_command_accepts_exact_options() {
+  TEST_ASSERT_EQUAL_STRING("text", parseModeCommand(String("text")).c_str());
+  TEST_ASSERT_EQUAL_STRING("clock", parseModeCommand(String("clock")).c_str());
+}
+static void test_mode_command_trims_whitespace() {
+  TEST_ASSERT_EQUAL_STRING("clock", parseModeCommand(String(" clock\n")).c_str());
+}
+static void test_mode_command_rejects_case_variants_and_garbage() {
+  // HA's select publishes the option strings verbatim — anything else is
+  // not from our select and must be ignored, not coerced.
+  TEST_ASSERT_EQUAL_STRING("", parseModeCommand(String("TEXT")).c_str());
+  TEST_ASSERT_EQUAL_STRING("", parseModeCommand(String("Clock")).c_str());
+  TEST_ASSERT_EQUAL_STRING("", parseModeCommand(String("date")).c_str());
+  TEST_ASSERT_EQUAL_STRING("", parseModeCommand(String("")).c_str());
+}
+
+// ---- notificationCancel (#130) ----
+static void test_notification_cancel_mid_dwell() {
+  MqttNotification n;
+  notificationStart(n, String("DOORBELL"), 60, 1000);
+  TEST_ASSERT_TRUE(notificationTick(n, 2000));
+  notificationCancel(n);
+  TEST_ASSERT_FALSE(notificationTick(n, 2000));
+  TEST_ASSERT_EQUAL_STRING("", n.text.c_str());
+}
+
 static void test_discovery_topics_per_entity() {
   char buf[64];
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_TEXT, "flappy");
@@ -181,6 +208,24 @@ static void test_discovery_sensor_payload_fragments() {
   assert_contains(buf, "\"val_tpl\":\"{{ value_json.unitErrors }}\"");
 }
 
+static void test_discovery_mode_select_topic_and_payload() {
+  char buf[512];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_MODE, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/select/flappy/config", buf);
+
+  size_t n = buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_MODE, "flappy", "abc1234");
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_EQUAL_CHAR('{', buf[0]);
+  TEST_ASSERT_EQUAL_CHAR('}', buf[n - 1]);
+  assert_contains(buf, "\"name\":\"Mode\"");
+  assert_contains(buf, "\"cmd_t\":\"splitflap/flappy/mode/set\"");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/mode\"");
+  assert_contains(buf, "\"avty_t\":\"splitflap/flappy/availability\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_mode\"");
+  assert_contains(buf, "\"ops\":[\"text\",\"clock\"]");
+  assert_contains(buf, "\"ids\":[\"flappy\"]");
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_clampDwell_passes_through_in_range);
@@ -202,8 +247,13 @@ int main(int, char**) {
   RUN_TEST(test_notification_survives_millis_wraparound);
   RUN_TEST(test_mqttTopic_builds_expected_paths);
   RUN_TEST(test_telemetry_payload_exact_shape);
+  RUN_TEST(test_mode_command_accepts_exact_options);
+  RUN_TEST(test_mode_command_trims_whitespace);
+  RUN_TEST(test_mode_command_rejects_case_variants_and_garbage);
+  RUN_TEST(test_notification_cancel_mid_dwell);
   RUN_TEST(test_discovery_topics_per_entity);
   RUN_TEST(test_discovery_text_payload_fragments);
   RUN_TEST(test_discovery_sensor_payload_fragments);
+  RUN_TEST(test_discovery_mode_select_topic_and_payload);
   return UNITY_END();
 }
