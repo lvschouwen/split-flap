@@ -1,17 +1,14 @@
 //MQTT / Home Assistant integration (issue #121). Design doc:
 //docs/superpowers/specs/2026-07-05-mqtt-ha-integration-design.md
 //
-//The whole implementation is gated on MQTT_ENABLE (default false in
-//ESPMaster.ino) — the #else branch at the bottom provides no-op stubs so
-//the call sites in ESPMaster.ino compile without their own guards, and
-//--gc-sections drops AsyncMqttClient entirely from the default image.
+//Always compiled in since #57: broker config lives in EEPROM (web UI,
+//applied on reboot) and an empty host leaves everything inert — initMqtt()
+//returns before any client state is touched.
 //
 //Threading model (non-negotiable, see design doc): AsyncMqttClient
 //callbacks run in LWIP/sys context. They ONLY copy bytes and set flags.
 //Everything that touches the display, I2C, Strings-at-scale, or publishes
 //discovery happens in loopMqtt() on the main loop.
-
-#if MQTT_ENABLE == true
 
 #include <AsyncMqttClient.h>
 #include "MqttHelpers.h"
@@ -39,13 +36,19 @@ static MqttNotification mqttNotification;
 //context, so it only sets this flag; loopMqtt() does the actual publishes.
 static volatile bool mqttDiscoveryClearPending = false;
 
-//Topics, resolved once in initMqtt(). AsyncMqttClient stores POINTERS for
-//client id / credentials / will — these Strings must outlive the client,
-//which is why they are globals and never reassigned after init.
+//Topics + broker identity, resolved once in initMqtt(). AsyncMqttClient
+//stores POINTERS for server host / client id / credentials / will — these
+//Strings must outlive the client and never be reassigned after init. The
+//EEPROM-backed mqtt*Setting globals CAN be reassigned mid-run by the web
+//POST handler (persist-now, apply-on-reboot), which is exactly why the
+//client gets its own stable copies here (#57).
 static String mqttResolvedDeviceId;
 static String mqttTopicSet;
 static String mqttTopicAvailability;
 static String mqttTopicTelemetry;
+static String mqttActiveHost;
+static String mqttActiveUser;
+static String mqttActivePassword;
 
 //LWIP context: flag only. Subscribe/discovery/availability happen in
 //loopMqtt() so the 512-byte discovery buffers never live on the sys stack.
@@ -113,10 +116,19 @@ static void publishMqttDiscovery() {
 //Called once from setup(), normal boots only (never quiet-OTA or recovery —
 //setup() returns before reaching the call in those modes).
 void initMqtt() {
-  if (mqttBrokerHost[0] == '\0') {
-    SerialPrintln(F("MQTT: no broker configured (MqttCredentials.h) — MQTT disabled"));
+  if (mqttHostSetting.length() == 0) {
+    SerialPrintln(F("MQTT: no broker configured (web UI, General card) — MQTT disabled"));
     return;
   }
+  //Stable copies for the client (see comment at the declarations).
+  mqttActiveHost     = mqttHostSetting;
+  mqttActiveUser     = mqttUserSetting;
+  mqttActivePassword = mqttPasswordSetting;
+  //The POST handler validated the port (empty or 1..65535); toInt() on an
+  //empty string is 0 -> default 1883.
+  long portValue = mqttPortSetting.toInt();
+  if (portValue < 1 || portValue > 65535) portValue = 1883;
+
   //MQTT identity follows the per-device network identity (#125) — chip-id
   //default or the EEPROM pretty name. No separate mqttDeviceId knob.
   mqttResolvedDeviceId  = effectiveDeviceName;
@@ -124,9 +136,9 @@ void initMqtt() {
   mqttTopicAvailability = mqttTopic(mqttResolvedDeviceId, "availability");
   mqttTopicTelemetry    = mqttTopic(mqttResolvedDeviceId, "telemetry");
 
-  mqttClient.setServer(mqttBrokerHost, mqttBrokerPort);
-  if (mqttUsername[0] != '\0') {
-    mqttClient.setCredentials(mqttUsername, mqttPassword);
+  mqttClient.setServer(mqttActiveHost.c_str(), (uint16_t)portValue);
+  if (mqttActiveUser.length() > 0) {
+    mqttClient.setCredentials(mqttActiveUser.c_str(), mqttActivePassword.c_str());
   }
   mqttClient.setClientId(mqttResolvedDeviceId.c_str());
   mqttClient.setKeepAlive(30);
@@ -280,13 +292,8 @@ void mqttResumeAfterOta() {
   SerialPrintln(F("MQTT: resuming after OTA upload ended without reboot"));
 }
 
-#else  //MQTT_ENABLE == false — no-op stubs so call sites stay guard-free.
-
-void initMqtt() {}
-void loopMqtt() {}
-bool mqttNotificationTick() { return false; }
-void mqttStopForOta() {}
-void mqttResumeAfterOta() {}
-void mqttRequestDiscoveryClear() {}
-
-#endif
+//For /settings — lets the web UI (and the bench-acceptance checklist) see
+//broker connectivity at a glance (#57).
+bool mqttIsConnected() {
+  return mqttInitialised && mqttClient.connected();
+}

@@ -96,6 +96,13 @@ function loadPage() {
 			<a href="/reboot">Reboot now</a> to apply it.
 		`);
 	}
+	else if (urlParams.get('mqtt-saved') === "true") {
+		showBannerMessage(`
+			MQTT settings saved. They are applied on the next reboot.
+			<br>
+			<a href="/reboot">Reboot now</a> to apply them.
+		`);
+	}
 	
 	if (localDevelopment) {
 		setSpeed("80");
@@ -105,6 +112,7 @@ function loadPage() {
 		setTimezone("");
 		setVersion("Development")
 		setDeviceName("", "split-flap-9a3c1f");
+		setMqttSettings("", "", "", false, false);
 		setUnitCount(10, 3);
 		setLastReceivedMessage(new Date().toLocaleString());
 		showHideResetWifiSettingsAction(false);
@@ -134,6 +142,9 @@ function loadPage() {
 				setTimezone(responseObject.timezonePosix || "");
 				setVersion(responseObject.version);
 				setDeviceName(responseObject.deviceName || "", responseObject.effectiveDeviceName || "");
+				setMqttSettings(responseObject.mqttHost || "", responseObject.mqttPort || "",
+					responseObject.mqttUser || "", responseObject.mqttPasswordSet === true,
+					responseObject.mqttConnected === true);
 				setUnitCount(responseObject.unitCount, responseObject.detectedUnitCount);
 				setLastReceivedMessage(responseObject.lastTimeReceivedMessageDateTime);
 				showHideResetWifiSettingsAction(responseObject.wifiSettingsResettable);
@@ -303,6 +314,25 @@ function setDeviceName(storedName, effectiveName) {
 	var input = document.getElementById("inputDeviceName");
 	input.value = storedName;
 	input.placeholder = effectiveName;
+}
+
+//MQTT broker settings (#57). The password is write-only: the server only
+//says whether one is stored, and an empty password field means "keep it".
+function setMqttSettings(host, port, user, passwordSet, connected) {
+	document.getElementById("inputMqttHost").value = host;
+	document.getElementById("inputMqttPort").value = port;
+	document.getElementById("inputMqttUser").value = user;
+
+	var passwordInput = document.getElementById("inputMqttPassword");
+	passwordInput.value = "";
+	passwordInput.placeholder = passwordSet ? "(unchanged)" : "Password";
+
+	var status = document.getElementById("labelMqttStatus");
+	if (!host) {
+		status.textContent = "— off";
+	} else {
+		status.textContent = connected ? "— connected" : "— not connected";
+	}
 }
 
 //Shows "<detected> / <width>" in the units label. The JS global

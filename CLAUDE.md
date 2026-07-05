@@ -24,7 +24,6 @@ Each sketch has its own `platformio.ini`. Run all commands from the sketch folde
 
 ```bash
 pio run                      # build
-pio run -e espmaster_mqtt    # MQTT-enabled variant (#121)
 pio run -t upload            # flash sketch (USB, one-time)
 pio device monitor           # serial at 115200
 pio test -e native           # host-side unit tests (ESPMaster only)
@@ -55,7 +54,7 @@ All live as `#define`s at the top of `ESPMaster.ino`:
 - `USE_MULTICAST` — enables mDNS. The name (and the WiFi hostname, MQTT id/topics, and recovery/OTA/setup AP SSIDs) comes from the per-device identity (#125): the EEPROM `deviceName` if set via the web UI, else `split-flap-<hex chip id>` — unique per device automatically, so multiple displays share one image with no edits. `mdnsName` is only the prefix seed. Resolution happens in `resolveDeviceIdentity()` at the top of `setup()`, right after the single `initialiseFileSystem()` call (which runs before the quiet-OTA/recovery dispatch — one `EEPROM.begin` + migration point for every boot path); pure logic in `DeviceIdentity.h` (natively tested). Static IPs are deliberately unsupported — use DHCP reservation on the router.
 - `OTA_ENABLE` — enables Arduino OTA (separate from the web `/firmware/master` path); set `otaPassword` if used.
 - `FLAP_AMOUNT` / `AMOUNTFLAPS` — hardware-coupled (45). The master's `FLAP_AMOUNT` and the unit's `letters[]` length must agree.
-- `MQTT_ENABLE` — MQTT / Home Assistant integration (#121). Default `false` (fully compiled out). Build the `espmaster_mqtt` env and copy `MqttCredentials.h.example` → `MqttCredentials.h` (gitignored) to enable. Notification-only semantics: HA text shows for a dwell (default 60 s, clamp 5–3600), then reverts; health telemetry every 60 s; zero EEPROM/RTC interaction.
+- MQTT / Home Assistant integration (#121, runtime config #57) is always compiled in and inert until a broker host is set via the web UI (General card; persisted to the v6 EEPROM slots, applied on reboot; password write-only in `/settings`, `mqttConnected` surfaced). The former `MQTT_ENABLE` gate, `espmaster_mqtt` env and `MqttCredentials.h` are gone. Notification-only semantics: HA text shows for a dwell (default 60 s, clamp 5–3600), then reverts; health telemetry every 60 s; zero RTC interaction.
 
 Unit-side: `SERIAL_ENABLE` and `TEST_ENABLE` (cycles a fixed character sequence for homing validation) are commented out by default in `Unit.ino`.
 
@@ -71,6 +70,7 @@ Unit-side: `SERIAL_ENABLE` and `TEST_ENABLE` (cycles a fixed character sequence 
 - `intendedVersion` — `GIT_REV` of the most-recently-uploaded firmware, written by `/firmware/master` from its `?v=` query param. Read at boot; if non-empty and ≠ running `GIT_REV`, the `otaReverted` flag is set and surfaced in `/settings`.
 - `lastFlashResult` — `""` / `"ok"` / `"reverted"`, written by the boot-time RTC-cookie check (see OTA section below). Surfaced in `/settings` so remote flashers can decode the outcome of a prior OTA attempt.
 - `deviceName` — complete per-device network identity (24 chars max, `[a-z0-9-]`, validated in `DeviceIdentity.h`), set via the web UI. Empty = chip-id default `split-flap-<hex>`. Applied on reboot; a rename also asks loopMqtt() to blank the old retained HA discovery configs before the identity switches (#125).
+- `mqttHost` / `mqttPort` / `mqttUser` / `mqttPassword` — runtime MQTT broker config (#57, v6). Empty host = MQTT disabled (the migration default). Set via the web UI, applied on reboot — initMqtt() copies them into its own stable Strings because AsyncMqttClient stores raw pointers. Password is write-only: `/settings` exposes only `mqttPasswordSet`; an empty password submission keeps the stored one.
 
 Native tests (`test/test_eeprom_settings/test_main.cpp`) enforce layout invariants (contiguity, bounds, round-trip, migration zero-fill) so a malformed edit fails `pio test -e native` before it ships.
 
@@ -92,9 +92,9 @@ The `RtcBootState` struct holds `magic`, `bootCounter`, `bootMode` (quiet OTA mo
 ## Gotchas
 
 - Editing `.ino` siblings in `firmware/v1/ESPMaster/` is editing one translation unit — declarations and `#define`s from `ESPMaster.ino` are visible everywhere, and order of concatenation is alphabetical by file name. The Arduino preprocessor auto-prototypes plain functions but falls over on templates (`<typeprefixerror>`) and on signatures with namespace-qualified references like `fs::FS&`; add those prototypes manually (header file) rather than relying on auto-prototyping.
-- The `.ino`→`.cpp` auto-prototype scanner is **preprocessor-blind**: it generates prototypes even for functions inside a disabled `#if` block, so a gated function whose signature uses library types (e.g. the `#if MQTT_ENABLE` AsyncMqttClient callbacks) needs unconditional forward declarations of those types near the top of `ESPMaster.ino` — see the comment block above them there.
+- The `.ino`→`.cpp` auto-prototype scanner inserts its prototype block before the first function-shaped match in the merged file — **before** any sibling file's `#include` has appeared. A function whose signature uses library types defined in a later include (e.g. the AsyncMqttClient callbacks in `ServiceMqttFunctions.ino`) needs forward declarations of those types near the top of `ESPMaster.ino` — see the comment block above them there.
 - The web UI is in PROGMEM (`WebAssets.h`, regenerated by `build_assets.py` on every build), NOT in LittleFS. No separate `uploadfs` step — editing `data/*.html|js|css` is picked up on the next `pio run`.
-- The ESP-01 has very little RAM (~42 KB static free at rest). Be conservative adding libraries or large JSON payloads.
+- The ESP-01 has very little RAM (~37 KB static free at rest since MQTT became always-compiled in #57). Be conservative adding libraries or large JSON payloads.
 - On the async library choice: `dvarrel` forks of `ESPAsyncTCP` + `ESPAsyncWebSrv` are the maintained ESP8266-focused path. `mathieucarbou` is the ESP32 successor; wrong target for ESP-01. Don't "modernize" without measuring.
 - The `<DNSServer.h>` + `<ESPAsyncWiFiManager.h>` includes sit deliberately at the very top of `ESPMaster.ino`'s include block to avoid conflicts with the async web server headers — don't "clean up" that include order.
 - Test files `#include` the `.ino` sources directly to exercise real code. This means any sibling `.ino` must be compilable standalone in the native env — add explicit forward declarations at the top of a file (e.g. `String cleanString(String);` in `HelpersStringHandling.ino`) if functions are used before their definition in the same file.

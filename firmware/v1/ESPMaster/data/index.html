@@ -77,6 +77,30 @@
 								Leave empty for the factory default. Applied after a reboot.
 							</p>
 						</div>
+
+						<div style="margin-top: 2em;">
+							<label for="inputMqttHost">MQTT Broker <span id="labelMqttStatus" style="font-weight: normal;"></span></label>
+							<p>
+								<input type="text" id="inputMqttHost" name="mqttHost" autocomplete="off"
+									maxlength="64" placeholder="Host, e.g. 192.168.1.10 (empty = MQTT off)" />
+							</p>
+							<p>
+								<input type="number" id="inputMqttPort" name="mqttPort" autocomplete="off"
+									min="1" max="65535" placeholder="Port (default 1883)" style="width: 10em;" />
+							</p>
+							<p>
+								<input type="text" id="inputMqttUser" name="mqttUser" autocomplete="off"
+									maxlength="32" placeholder="Username (optional)" />
+							</p>
+							<p>
+								<input type="password" id="inputMqttPassword" name="mqttPassword" autocomplete="new-password"
+									maxlength="64" placeholder="Password" />
+							</p>
+							<p style="font-size: 0.85rem; color: #aaa;">
+								Home Assistant integration: notification text + health telemetry.
+								Leave the password empty to keep the stored one. Applied after a reboot.
+							</p>
+						</div>
 					</div>
 
 					<div class="card">

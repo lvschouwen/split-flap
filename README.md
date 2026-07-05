@@ -218,6 +218,10 @@ There are several helper `define` variables to help during debugging/running:
 - **SERIAL_ENABLE**
   - Use this to enable Serial output lines for tracking executing code. Must stay `false` on the ESP-01 for I2C to work (serial + I2C share the same pins). This also disables all unit calls, so it doubles as the "ESP standalone" debug mode.
 
+#### MQTT / Home Assistant
+
+The display can join Home Assistant over MQTT: inbound notification text (shows for a dwell time, then reverts to clock/text mode) plus health telemetry, with automatic HA discovery. Configure it entirely from the **web UI → General card → MQTT Broker** fields (host, port, username, password) — leave the host empty to keep MQTT off. Settings are stored on the device and applied after a reboot; the password is never sent back to the browser.
+
 #### Device name & running multiple displays
 
 Every network-facing name (mDNS `<name>.local`, DHCP hostname, MQTT client id/topics, and the recovery/OTA/setup AP SSIDs) derives from a single per-device identity. Out of the box it is `split-flap-<hex chip id>` — unique per ESP, so several displays can share one LAN running the **same firmware image** with zero per-device edits. To give a display a friendly name (`kitchen`, `split-flap-livingroom`, …) use the **web UI → General card → Device Name** field: lowercase letters/digits/hyphens, max 24 chars, applied on the next reboot. Leave it empty to return to the chip-id default.

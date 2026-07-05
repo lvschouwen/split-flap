@@ -30,6 +30,10 @@ void initialiseFileSystem() {
     writeSettingString(OFF_INTENDED_VERSION,  LEN_INTENDED_VERSION,  "");
     writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, "");
     writeSettingString(OFF_DEVICE_NAME,       LEN_DEVICE_NAME,       "");
+    writeSettingString(OFF_MQTT_HOST,         LEN_MQTT_HOST,         "");
+    writeSettingString(OFF_MQTT_PORT,         LEN_MQTT_PORT,         "");
+    writeSettingString(OFF_MQTT_USER,         LEN_MQTT_USER,         "");
+    writeSettingString(OFF_MQTT_PASSWORD,     LEN_MQTT_PASSWORD,     "");
     writeSettingMagic();
     EEPROM.commit();
   } else if (ver < SETTINGS_VERSION) {
@@ -55,6 +59,16 @@ void initialiseFileSystem() {
     //migrated device reads an empty name (-> chip-id default identity),
     //not RESERVED_2 leftovers. See #125.
     if (ver < 5) writeSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME, "");
+    //v5 -> v6: MQTT broker config carved from former RESERVED_2 (#57).
+    //Zero all four slots so a migrated device reads an empty host (-> MQTT
+    //stays disabled, matching the pre-#57 compiled-out default), not
+    //RESERVED_2 leftovers.
+    if (ver < 6) {
+      writeSettingString(OFF_MQTT_HOST,     LEN_MQTT_HOST,     "");
+      writeSettingString(OFF_MQTT_PORT,     LEN_MQTT_PORT,     "");
+      writeSettingString(OFF_MQTT_USER,     LEN_MQTT_USER,     "");
+      writeSettingString(OFF_MQTT_PASSWORD, LEN_MQTT_PASSWORD, "");
+    }
     EEPROM.write(OFF_VERSION, SETTINGS_VERSION);
     EEPROM.commit();
   }
@@ -70,6 +84,12 @@ void loadValuesFromFileSystem() {
   //Raw slot value for the web UI / rename detection. The EFFECTIVE identity
   //was already resolved by resolveDeviceIdentity() at the top of setup().
   deviceNameSetting    = readSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME);
+  //MQTT broker config (#57). Empty host = MQTT disabled. Applied by
+  //initMqtt() at boot; web-UI changes require a reboot to take effect.
+  mqttHostSetting      = readSettingString(OFF_MQTT_HOST,     LEN_MQTT_HOST);
+  mqttPortSetting      = readSettingString(OFF_MQTT_PORT,     LEN_MQTT_PORT);
+  mqttUserSetting      = readSettingString(OFF_MQTT_USER,     LEN_MQTT_USER);
+  mqttPasswordSetting  = readSettingString(OFF_MQTT_PASSWORD, LEN_MQTT_PASSWORD);
 
   SerialPrintln(F("Loaded Settings:"));
   SerialPrintln("   Alignment: " + alignment);
@@ -77,6 +97,8 @@ void loadValuesFromFileSystem() {
   SerialPrintln("   Device Mode: " + deviceMode);
   SerialPrintln("   Timezone: " + (timezonePosixSetting.length() ? timezonePosixSetting : String("(default)")));
   SerialPrintln("   Device Name: " + (deviceNameSetting.length() ? deviceNameSetting : String("(chip-id default)")));
+  //Never log the password.
+  SerialPrintln("   MQTT Broker: " + (mqttHostSetting.length() ? mqttHostSetting + ":" + (mqttPortSetting.length() ? mqttPortSetting : String("1883")) : String("(disabled)")));
 }
 
 // Called from the web server handlers whenever a setting changes.
@@ -86,6 +108,14 @@ void saveDeviceMode()   { writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, dev
 void saveTimezone()     { writeSettingString(OFF_TIMEZONE,   LEN_TIMEZONE,   timezonePosixSetting); EEPROM.commit(); }
 //Applied to the live identity on the next reboot — see resolveDeviceIdentity().
 void saveDeviceName()   { writeSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME, deviceNameSetting);  EEPROM.commit(); }
+//MQTT broker config (#57): all four slots in one commit; applied on reboot.
+void saveMqttSettings() {
+  writeSettingString(OFF_MQTT_HOST,     LEN_MQTT_HOST,     mqttHostSetting);
+  writeSettingString(OFF_MQTT_PORT,     LEN_MQTT_PORT,     mqttPortSetting);
+  writeSettingString(OFF_MQTT_USER,     LEN_MQTT_USER,     mqttUserSetting);
+  writeSettingString(OFF_MQTT_PASSWORD, LEN_MQTT_PASSWORD, mqttPasswordSetting);
+  EEPROM.commit();
+}
 
 // Persist the caller-supplied intended version at the start of a master OTA
 // upload. Read back on the next boot to detect a silent revert (image

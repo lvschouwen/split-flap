@@ -78,11 +78,12 @@ int enterBootloaderAllDetected(bool reprobeAfter);
 // telemetry in ServiceMqttFunctions.ino (#121).
 extern int lastShowUnitWriteErrors;
 
-// MQTT / Home Assistant integration (issue #121). Defined in
-// ServiceMqttFunctions.ino; every one of these is a no-op stub when
-// MQTT_ENABLE is false, so call sites need no #if guards.
+// MQTT / Home Assistant integration (issue #121, runtime config #57).
+// Defined in ServiceMqttFunctions.ino; everything is inert until a broker
+// host is configured via the web UI (EEPROM, applied on reboot).
 void initMqtt();
 void loopMqtt();
 bool mqttNotificationTick();
 void mqttStopForOta();
 void mqttResumeAfterOta();
+bool mqttIsConnected();

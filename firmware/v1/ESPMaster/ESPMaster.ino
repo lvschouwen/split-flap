@@ -28,13 +28,10 @@
 #define SERIAL_BAUDRATE     115200  //Serial debugging BAUD rate
 #define USE_MULTICAST       true    //Option to broadcast a ".local" URL on your local network default split-flap.local. You can change the name under configurable settings. On by default since #112 — the begin/update plumbing existed all along and this makes the display findable without knowing its DHCP lease.
 
-//MQTT / Home Assistant integration (#121). Default OFF — the whole feature
-//is compiled out (zero flash, zero RAM, zero behavior change). Build the
-//`espmaster_mqtt` PlatformIO env (which passes -D MQTT_ENABLE=true) and
-//copy MqttCredentials.h.example to MqttCredentials.h to enable it.
-#ifndef MQTT_ENABLE
-#define MQTT_ENABLE         false
-#endif
+//MQTT / Home Assistant integration (#121, runtime config #57). Always
+//compiled in; idle unless a broker host is configured via the web UI
+//(persisted to EEPROM, applied on reboot). The former MQTT_ENABLE build
+//gate and MqttCredentials.h header are gone.
 #define MQTT_TELEMETRY_INTERVAL_S 60   //Seconds between MQTT health telemetry publishes
 #define MQTT_MAX_TEXT_LEN         256  //Inbound MQTT payload buffer cap (bytes)
 
@@ -43,22 +40,20 @@
 //function definition/declaration, then inserts an extern-prototype block
 //right before the very FIRST such match -- entirely blind to #if/#ifdef. It
 //finds the AsyncMqttClient callbacks defined further down in
-//ServiceMqttFunctions.ino (onMqttDisconnect/onMqttMessage) regardless of
-//MQTT_ENABLE, and regardless of whether AsyncMqttClient.h (which defines
-//their parameter types) has textually appeared yet in the file. Without
-//this forward declaration:
-//  - MQTT_ENABLE==false: the phantom prototype's unknown-type parameter
-//    fails to parse -> hard compile error (the real callback bodies don't
-//    exist in this build to ever complete/call it).
-//  - MQTT_ENABLE==true: same parse failure, but WORSE -- GCC's error
-//    recovery treats the unresolved type as an implicit-int guess, so the
-//    phantom prototype and the real later definition become two
-//    *different* declarations of the same name -> "unresolved overloaded
-//    function type" where the real code registers the callback.
+//ServiceMqttFunctions.ino (onMqttDisconnect/onMqttMessage) before
+//AsyncMqttClient.h (which defines their parameter types) has textually
+//appeared in the merged file — the header is included by
+//ServiceMqttFunctions.ino, far below where the generator inserts its
+//prototype block. Without this forward declaration the phantom prototype's
+//unknown-type parameter fails to parse; GCC's error recovery then treats
+//the unresolved type as an implicit-int guess, so the phantom prototype
+//and the real later definition become two *different* declarations of the
+//same name -> "unresolved overloaded function type" where the real code
+//registers the callback.
 //Forward-declaring here (before any #include, so it precedes wherever the
 //generator's textual scan finds its first match) makes the phantom
-//prototype and the real AsyncMqttClient.h definition (included later, only
-//when MQTT_ENABLE==true) refer to the identical type either way. Plain
+//prototype and the real AsyncMqttClient.h definition refer to the
+//identical type. Plain
 //`unsigned char` (not uint8_t) because no header has been included yet;
 //AsyncMqttClient's real enum also has an `unsigned char`-compatible
 //underlying type, so the later full definition is a legal completion, not a
@@ -143,21 +138,9 @@ struct AsyncMqttClientMessageProperties;
   #define WIFI_SEED_AVAILABLE 0
 #endif
 
-//MQTT broker credentials live in a gitignored local header. Copy
-//MqttCredentials.h.example to
-//MqttCredentials.h. Missing file → empty broker host → initMqtt() logs and
-//disables itself, the build still compiles (fresh checkout, CI).
-#if MQTT_ENABLE == true
-  #if __has_include("MqttCredentials.h")
-    #include "MqttCredentials.h"
-  #else
-    #warning "MQTT_ENABLE is true but MqttCredentials.h is missing — copy MqttCredentials.h.example to fill it in."
-    const char*    mqttBrokerHost = "";
-    const uint16_t mqttBrokerPort = 1883;
-    const char*    mqttUsername   = "";
-    const char*    mqttPassword   = "";
-  #endif
-#endif
+//MQTT broker config is runtime now (#57): host/port/user/password live in
+//EEPROM, set via the web UI, applied on reboot. Empty host → initMqtt()
+//logs and disables itself.
 
 // timezonePosix: build-time DEFAULT POSIX TZ string. Overridden at runtime
 // by the web UI setting (persisted to EEPROM). Also baked into the fresh-
@@ -224,6 +207,10 @@ const char* PARAM_DEVICEMODE = "deviceMode";
 const char* PARAM_INPUT_TEXT = "inputText";
 const char* PARAM_TIMEZONE   = "timezone";
 const char* PARAM_DEVICE_NAME = "deviceName";
+const char* PARAM_MQTT_HOST     = "mqttHost";
+const char* PARAM_MQTT_PORT     = "mqttPort";
+const char* PARAM_MQTT_USER     = "mqttUser";
+const char* PARAM_MQTT_PASSWORD = "mqttPassword";
 
 //Device Modes
 const char* DEVICE_MODE_TEXT = "text";
@@ -251,6 +238,14 @@ String timezonePosixSetting = "";
 //and applies on the next reboot — this global never changes mid-run.
 String deviceNameSetting = "";
 String effectiveDeviceName = "";
+//MQTT broker config (#57), loaded from EEPROM. Empty host = MQTT disabled.
+//Changes via the web UI persist immediately but apply on the next reboot —
+//initMqtt() copies them into its own stable Strings at boot (AsyncMqttClient
+//stores raw pointers, so it must never observe these being reassigned).
+String mqttHostSetting = "";
+String mqttPortSetting = "";
+String mqttUserSetting = "";
+String mqttPasswordSetting = "";
 String lastWrittenText = "";
 String lastReceivedMessageDateTime = "";
 bool alignmentUpdated = false;
@@ -1239,8 +1234,10 @@ void setup() {
       bool submissionError = false;
 
       String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue, newTimezoneValue, newDeviceNameValue;
+      String newMqttHostValue, newMqttPortValue, newMqttUserValue, newMqttPasswordValue;
       bool timezoneProvided = false;
       bool deviceNameProvided = false;
+      bool mqttHostProvided = false, mqttPortProvided = false, mqttUserProvided = false, mqttPasswordProvided = false;
 
       int params = request->params();
       for (int paramIndex = 0; paramIndex < params; paramIndex++) {
@@ -1305,6 +1302,62 @@ void setup() {
               timezoneProvided = true;
             } else {
               SerialPrintln("Timezone provided was not valid. Value: " + receivedValue);
+              submissionError = true;
+            }
+          }
+
+          //HTTP POST MQTT broker settings (#57). Host/user: printable
+          //ASCII without spaces, must fit their EEPROM slots; empty host
+          //disables MQTT. Port: empty (default 1883) or 1..65535.
+          //Password is write-only: an empty field means "keep the stored
+          //one", so it is only treated as provided when non-empty.
+          if (p->name() == PARAM_MQTT_HOST || p->name() == PARAM_MQTT_USER) {
+            bool isHost = p->name() == PARAM_MQTT_HOST;
+            String receivedValue = p->value();
+            receivedValue.trim();
+            bool valid = (int)receivedValue.length() < (isHost ? LEN_MQTT_HOST : LEN_MQTT_USER);
+            for (size_t i = 0; valid && i < receivedValue.length(); i++) {
+              char c = receivedValue[i];
+              if (c <= 0x20 || c > 0x7E) valid = false;
+            }
+            if (valid && isHost)       { newMqttHostValue = receivedValue; mqttHostProvided = true; }
+            else if (valid)            { newMqttUserValue = receivedValue; mqttUserProvided = true; }
+            else {
+              SerialPrintln("MQTT " + String(isHost ? "host" : "user") + " provided was not valid. Value: " + receivedValue);
+              submissionError = true;
+            }
+          }
+
+          if (p->name() == PARAM_MQTT_PORT) {
+            String receivedValue = p->value();
+            receivedValue.trim();
+            //Length bound too: "0001883" parses to 1883 but would truncate
+            //to "00018" in the 6-byte slot — reject rather than corrupt.
+            if (receivedValue.length() == 0 ||
+                ((int)receivedValue.length() < LEN_MQTT_PORT &&
+                 isNumber(receivedValue) && receivedValue.toInt() >= 1 && receivedValue.toInt() <= 65535)) {
+              newMqttPortValue = receivedValue;
+              mqttPortProvided = true;
+            }
+            else {
+              SerialPrintln("MQTT port provided was not valid. Value: " + receivedValue);
+              submissionError = true;
+            }
+          }
+
+          if (p->name() == PARAM_MQTT_PASSWORD && p->value().length() > 0) {
+            String receivedValue = p->value();
+            bool valid = (int)receivedValue.length() < LEN_MQTT_PASSWORD;
+            for (size_t i = 0; valid && i < receivedValue.length(); i++) {
+              char c = receivedValue[i];
+              if (c < 0x20 || c > 0x7E) valid = false;
+            }
+            if (valid) {
+              newMqttPasswordValue = receivedValue;
+              mqttPasswordProvided = true;
+            }
+            else {
+              SerialPrintln(F("MQTT password provided was not valid (length/characters)."));
               submissionError = true;
             }
           }
@@ -1383,13 +1436,30 @@ void setup() {
           SerialPrintln("Device Name Updated (reboot to apply): " + (deviceNameSetting.length() ? deviceNameSetting : String("(chip-id default)")));
         }
 
+        //MQTT broker config (#57). Persisted now, applied on the next
+        //reboot — initMqtt() runs once at boot and holds its own stable
+        //copies, so the running client never sees these change under it.
+        //Password is write-only: it only changes when a non-empty value
+        //was submitted.
+        bool mqttChanged = false;
+        if (mqttHostProvided && mqttHostSetting != newMqttHostValue) { mqttHostSetting = newMqttHostValue; mqttChanged = true; }
+        if (mqttPortProvided && mqttPortSetting != newMqttPortValue) { mqttPortSetting = newMqttPortValue; mqttChanged = true; }
+        if (mqttUserProvided && mqttUserSetting != newMqttUserValue) { mqttUserSetting = newMqttUserValue; mqttChanged = true; }
+        if (mqttPasswordProvided && mqttPasswordSetting != newMqttPasswordValue) { mqttPasswordSetting = newMqttPasswordValue; mqttChanged = true; }
+        if (mqttChanged) {
+          saveMqttSettings();
+          SerialPrintln("MQTT settings updated (reboot to apply). Broker: " + (mqttHostSetting.length() ? mqttHostSetting : String("(disabled)")));
+        }
+
         //Only if we are showing text
         if (deviceMode == DEVICE_MODE_TEXT) {
           inputText = newInputTextValue;
         }
 
         //Redirect so that we don't have the "re-submit form" problem in browser for refresh
-        request->redirect(deviceNameChanged ? "/?device-name-saved=true" : "/");
+        request->redirect(deviceNameChanged ? "/?device-name-saved=true"
+                          : mqttChanged     ? "/?mqtt-saved=true"
+                                            : "/");
       }
     });
 
@@ -1557,7 +1627,7 @@ void loop() {
   }
 
   //MQTT pump (#121): reconnect schedule, inbound notifications, telemetry.
-  //No-op when MQTT_ENABLE is false or the broker is unconfigured.
+  //No-op when no broker is configured (#57).
   loopMqtt();
 
   //Process every second
@@ -1655,6 +1725,13 @@ String getCurrentSettingValues() {
   //unset), effectiveDeviceName is what the device actually uses right now.
   out += F(",\"deviceName\":");                      appendJsonString(out, deviceNameSetting);
   out += F(",\"effectiveDeviceName\":");             appendJsonString(out, effectiveDeviceName);
+  //MQTT broker config (#57). The password is write-only: never echoed to
+  //the browser; only whether one is stored.
+  out += F(",\"mqttHost\":");                        appendJsonString(out, mqttHostSetting);
+  out += F(",\"mqttPort\":");                        appendJsonString(out, mqttPortSetting);
+  out += F(",\"mqttUser\":");                        appendJsonString(out, mqttUserSetting);
+  out += F(",\"mqttPasswordSet\":");                 out += (mqttPasswordSetting.length() ? F("true") : F("false"));
+  out += F(",\"mqttConnected\":");                   out += (mqttIsConnected() ? F("true") : F("false"));
   out += F(",\"version\":");                         appendJsonString(out, String(espVersion));
   //OTA failure diagnostics (#52). These fields let a remote flasher tell a
   //genuine revert apart from a same-version false-alarm. `sketchMd5` is the

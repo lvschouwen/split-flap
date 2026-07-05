@@ -51,13 +51,17 @@ static void test_layout_slots_are_contiguous_and_non_overlapping() {
   TEST_ASSERT_EQUAL_INT(LEN_TIMEZONE,          OFF_INTENDED_VERSION   - OFF_TIMEZONE);
   TEST_ASSERT_EQUAL_INT(LEN_INTENDED_VERSION,  OFF_LAST_FLASH_RESULT  - OFF_INTENDED_VERSION);
   TEST_ASSERT_EQUAL_INT(LEN_LAST_FLASH_RESULT, OFF_DEVICE_NAME        - OFF_LAST_FLASH_RESULT);
-  TEST_ASSERT_EQUAL_INT(LEN_DEVICE_NAME,       OFF_RESERVED_2         - OFF_DEVICE_NAME);
+  TEST_ASSERT_EQUAL_INT(LEN_DEVICE_NAME,       OFF_MQTT_HOST          - OFF_DEVICE_NAME);
+  TEST_ASSERT_EQUAL_INT(LEN_MQTT_HOST,         OFF_MQTT_PORT          - OFF_MQTT_HOST);
+  TEST_ASSERT_EQUAL_INT(LEN_MQTT_PORT,         OFF_MQTT_USER          - OFF_MQTT_PORT);
+  TEST_ASSERT_EQUAL_INT(LEN_MQTT_USER,         OFF_MQTT_PASSWORD      - OFF_MQTT_USER);
+  TEST_ASSERT_EQUAL_INT(LEN_MQTT_PASSWORD,     OFF_RESERVED_2         - OFF_MQTT_PASSWORD);
 }
 
-static void test_settings_version_is_5() {
+static void test_settings_version_is_6() {
   // Locks the current schema version so a migration addition without a
   // version bump trips here.
-  TEST_ASSERT_EQUAL_INT(5, SETTINGS_VERSION);
+  TEST_ASSERT_EQUAL_INT(6, SETTINGS_VERSION);
 }
 
 static void test_device_name_slot_fits_max_name_plus_nul() {
@@ -226,6 +230,65 @@ static void test_device_name_empty_after_zero_fill_migration() {
   TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME).c_str());
 }
 
+// --- MQTT broker config slots (#57, v6) -----------------------------------
+
+static void test_mqtt_slots_roundtrip() {
+  writeSettingString(OFF_MQTT_HOST,     LEN_MQTT_HOST,     String("homeassistant.local"));
+  writeSettingString(OFF_MQTT_PORT,     LEN_MQTT_PORT,     String("1883"));
+  writeSettingString(OFF_MQTT_USER,     LEN_MQTT_USER,     String("splitflap"));
+  writeSettingString(OFF_MQTT_PASSWORD, LEN_MQTT_PASSWORD, String("s3cret-Pa55!"));
+
+  TEST_ASSERT_EQUAL_STRING("homeassistant.local", readSettingString(OFF_MQTT_HOST,     LEN_MQTT_HOST).c_str());
+  TEST_ASSERT_EQUAL_STRING("1883",                readSettingString(OFF_MQTT_PORT,     LEN_MQTT_PORT).c_str());
+  TEST_ASSERT_EQUAL_STRING("splitflap",           readSettingString(OFF_MQTT_USER,     LEN_MQTT_USER).c_str());
+  TEST_ASSERT_EQUAL_STRING("s3cret-Pa55!",        readSettingString(OFF_MQTT_PASSWORD, LEN_MQTT_PASSWORD).c_str());
+}
+
+static void test_mqtt_port_slot_fits_max_port() {
+  // "65535" = 5 chars + NUL.
+  TEST_ASSERT_GREATER_OR_EQUAL_INT(6, LEN_MQTT_PORT);
+}
+
+static void test_mqtt_host_write_does_not_touch_device_name_or_port() {
+  // Fence-post: the first new v6 slot must not spill into deviceName
+  // (ends at OFF_MQTT_HOST-1) or the port slot after it.
+  g_eepromStorage[OFF_MQTT_HOST - 1]             = 0xAB;
+  g_eepromStorage[OFF_MQTT_HOST + LEN_MQTT_HOST] = 0xCD;
+
+  writeSettingString(OFF_MQTT_HOST, LEN_MQTT_HOST, String("192.168.1.10"));
+
+  TEST_ASSERT_EQUAL_UINT8(0xAB, g_eepromStorage[OFF_MQTT_HOST - 1]);
+  TEST_ASSERT_EQUAL_UINT8(0xCD, g_eepromStorage[OFF_MQTT_HOST + LEN_MQTT_HOST]);
+}
+
+static void test_mqtt_password_write_does_not_touch_user_or_reserved_2() {
+  // Fence-post: the last new v6 slot must not spill into the RESERVED_2
+  // region that follows it.
+  g_eepromStorage[OFF_MQTT_PASSWORD - 1]                 = 0xAB;
+  g_eepromStorage[OFF_MQTT_PASSWORD + LEN_MQTT_PASSWORD] = 0xCD;
+
+  writeSettingString(OFF_MQTT_PASSWORD, LEN_MQTT_PASSWORD, String("hunter2"));
+
+  TEST_ASSERT_EQUAL_UINT8(0xAB, g_eepromStorage[OFF_MQTT_PASSWORD - 1]);
+  TEST_ASSERT_EQUAL_UINT8(0xCD, g_eepromStorage[OFF_MQTT_PASSWORD + LEN_MQTT_PASSWORD]);
+}
+
+static void test_mqtt_slots_empty_after_zero_fill_migration() {
+  // v5 -> v6 migration zeros all four slots so a migrated device reads an
+  // empty host (-> MQTT stays disabled), not RESERVED_2 leftovers. See #57.
+  for (int i = 0; i < LEN_MQTT_HOST + LEN_MQTT_PORT + LEN_MQTT_USER + LEN_MQTT_PASSWORD; i++) {
+    g_eepromStorage[OFF_MQTT_HOST + i] = 0xFF;
+  }
+  writeSettingString(OFF_MQTT_HOST,     LEN_MQTT_HOST,     String(""));
+  writeSettingString(OFF_MQTT_PORT,     LEN_MQTT_PORT,     String(""));
+  writeSettingString(OFF_MQTT_USER,     LEN_MQTT_USER,     String(""));
+  writeSettingString(OFF_MQTT_PASSWORD, LEN_MQTT_PASSWORD, String(""));
+  TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_MQTT_HOST,     LEN_MQTT_HOST).c_str());
+  TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_MQTT_PORT,     LEN_MQTT_PORT).c_str());
+  TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_MQTT_USER,     LEN_MQTT_USER).c_str());
+  TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_MQTT_PASSWORD, LEN_MQTT_PASSWORD).c_str());
+}
+
 // --- migration -----------------------------------------------------------
 
 static void test_timezone_slot_fits_longest_common_posix_tz() {
@@ -261,13 +324,18 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_layout_slots_are_contiguous_and_non_overlapping);
   RUN_TEST(test_layout_fits_in_configured_eeprom_size);
-  RUN_TEST(test_settings_version_is_5);
+  RUN_TEST(test_settings_version_is_6);
   RUN_TEST(test_intended_version_slot_fits_git_rev_plus_dirty_suffix);
   RUN_TEST(test_last_flash_result_slot_fits_known_values);
   RUN_TEST(test_device_name_slot_fits_max_name_plus_nul);
   RUN_TEST(test_device_name_roundtrip);
   RUN_TEST(test_device_name_write_does_not_touch_last_flash_result_or_reserved_2);
   RUN_TEST(test_device_name_empty_after_zero_fill_migration);
+  RUN_TEST(test_mqtt_slots_roundtrip);
+  RUN_TEST(test_mqtt_port_slot_fits_max_port);
+  RUN_TEST(test_mqtt_host_write_does_not_touch_device_name_or_port);
+  RUN_TEST(test_mqtt_password_write_does_not_touch_user_or_reserved_2);
+  RUN_TEST(test_mqtt_slots_empty_after_zero_fill_migration);
   RUN_TEST(test_fresh_eeprom_reads_as_unset_magic);
   RUN_TEST(test_writeSettingMagic_sets_magic_and_version);
   RUN_TEST(test_stale_magic_is_not_accepted);

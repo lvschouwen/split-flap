@@ -20,7 +20,12 @@
 //                 remote flashers can spot a silent eboot revert - v4 (#53)
 //   137    25     deviceName (complete network identity, 24 chars max + NUL;
 //                 empty -> chip-id default "split-flap-<hex>") - v5 (#125)
-//   162    1870   RESERVED (formerly scheduledMessages JSON, removed with #38)
+//   162    65     mqttHost (broker hostname/IP; empty -> MQTT disabled) - v6 (#57)
+//   227    6      mqttPort (decimal string 1..65535; empty -> 1883) - v6 (#57)
+//   233    33     mqttUser (optional broker auth; empty -> anonymous) - v6 (#57)
+//   266    65     mqttPassword (write-only via web UI, never echoed in
+//                 /settings) - v6 (#57)
+//   331    1701   RESERVED (formerly scheduledMessages JSON, removed with #38)
 //   2032            end of blob
 //
 // Reserved slots keep existing EEPROM blobs (same SETTINGS_VERSION) valid —
@@ -34,7 +39,7 @@
 
 #define SETTINGS_EEPROM_SIZE      2048
 #define SETTINGS_MAGIC            0x5F1A70BEUL
-#define SETTINGS_VERSION          5
+#define SETTINGS_VERSION          6
 
 #define OFF_MAGIC                 0
 #define OFF_VERSION               4
@@ -54,8 +59,16 @@
 #define LEN_LAST_FLASH_RESULT     16
 #define OFF_DEVICE_NAME           137
 #define LEN_DEVICE_NAME           25
-#define OFF_RESERVED_2            162
-#define LEN_RESERVED_2            1870
+#define OFF_MQTT_HOST             162
+#define LEN_MQTT_HOST             65
+#define OFF_MQTT_PORT             227
+#define LEN_MQTT_PORT             6
+#define OFF_MQTT_USER             233
+#define LEN_MQTT_USER             33
+#define OFF_MQTT_PASSWORD         266
+#define LEN_MQTT_PASSWORD         65
+#define OFF_RESERVED_2            331
+#define LEN_RESERVED_2            1701
 
 inline String readSettingString(int offset, int maxLen) {
   String out;

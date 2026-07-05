@@ -44,11 +44,6 @@ jobs:
         working-directory: firmware/v1/${{ matrix.project }}
         run: pio run
 
-      - name: Build ESPMaster (MQTT enabled)
-        if: matrix.project == 'ESPMaster'
-        working-directory: firmware/v1/${{ matrix.project }}
-        run: pio run -e espmaster_mqtt
-
   test:
     name: Native tests
     runs-on: ubuntu-latest
