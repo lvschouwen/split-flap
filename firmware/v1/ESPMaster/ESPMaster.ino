@@ -40,6 +40,34 @@
 #define MQTT_TELEMETRY_INTERVAL_S 60   //Seconds between MQTT health telemetry publishes
 #define MQTT_MAX_TEXT_LEN         256  //Inbound MQTT payload buffer cap (bytes)
 
+//PlatformIO's .ino -> .cpp converter (InoToCPPConverter in pioino.py) scans
+//the WHOLE merged translation unit with a regex for anything shaped like a
+//function definition/declaration, then inserts an extern-prototype block
+//right before the very FIRST such match -- entirely blind to #if/#ifdef. It
+//finds the AsyncMqttClient callbacks defined further down in
+//ServiceMqttFunctions.ino (onMqttDisconnect/onMqttMessage) regardless of
+//MQTT_ENABLE, and regardless of whether AsyncMqttClient.h (which defines
+//their parameter types) has textually appeared yet in the file. Without
+//this forward declaration:
+//  - MQTT_ENABLE==false: the phantom prototype's unknown-type parameter
+//    fails to parse -> hard compile error (the real callback bodies don't
+//    exist in this build to ever complete/call it).
+//  - MQTT_ENABLE==true: same parse failure, but WORSE -- GCC's error
+//    recovery treats the unresolved type as an implicit-int guess, so the
+//    phantom prototype and the real later definition become two
+//    *different* declarations of the same name -> "unresolved overloaded
+//    function type" where the real code registers the callback.
+//Forward-declaring here (before any #include, so it precedes wherever the
+//generator's textual scan finds its first match) makes the phantom
+//prototype and the real AsyncMqttClient.h definition (included later, only
+//when MQTT_ENABLE==true) refer to the identical type either way. Plain
+//`unsigned char` (not uint8_t) because no header has been included yet;
+//AsyncMqttClient's real enum also has an `unsigned char`-compatible
+//underlying type, so the later full definition is a legal completion, not a
+//redefinition conflict.
+enum class AsyncMqttClientDisconnectReason : unsigned char;
+struct AsyncMqttClientMessageProperties;
+
 /*
   EXPERIMENTAL: Try to use your Router when possible to set a Static IP address for your device to avoid conflicts with other devices
   on your network. This will try and setup your device with a static IP address of your chosing. See below for more details.
@@ -370,6 +398,7 @@ void registerMasterFirmwareEndpoint() {
         otaRejectionStatus = 0;
         otaRejectionReason = String();
         masterOtaUploadActive = false;  //unfreeze the display (#116)
+        mqttResumeAfterOta();
         request->send(status, "text/plain", reason);
         return;
       }
@@ -377,11 +406,13 @@ void registerMasterFirmwareEndpoint() {
         String msg = String("Master OTA failed: ") + Update.getErrorString();
         SerialPrintln(msg);
         masterOtaUploadActive = false;  //unfreeze the display (#116)
+        mqttResumeAfterOta();
         request->send(500, "text/plain", msg);
       } else if (!Update.isFinished()) {
         String msg = "Master OTA incomplete: Update.isFinished() == false after final chunk";
         SerialPrintln(msg);
         masterOtaUploadActive = false;  //unfreeze the display (#116)
+        mqttResumeAfterOta();
         request->send(500, "text/plain", msg);
       } else {
         //Single source of truth: reboot only when the updater considers the
@@ -417,6 +448,7 @@ void registerMasterFirmwareEndpoint() {
         //The loop unfreezes on the completion handler's failure paths or
         //after 30 s without a chunk; on success the device reboots frozen.
         masterOtaUploadActive = true;
+        mqttStopForOta();  //publish retained offline + disconnect (#121)
         otaRejected = false;
         otaRejectionStatus = 0;
         otaRejectionReason = String();
@@ -1344,6 +1376,10 @@ void setup() {
 
     SerialPrintln(F("Split Flap Ready!"));
     SerialPrintln(F("#######################################################"));
+
+    //MQTT / Home Assistant integration (#121). Normal boots only — the
+    //quiet-OTA and recovery paths returned out of setup() long before here.
+    initMqtt();
   }
   else {
     if (isPendingReboot) {
@@ -1432,6 +1468,7 @@ void loop() {
     if (millis() - masterOtaLastChunkMs > 30000UL) {
       SerialPrintln(F("OTA upload stalled >30 s — resuming normal operation"));
       masterOtaUploadActive = false;
+      mqttResumeAfterOta();
     } else {
       delay(50);
       return;
@@ -1475,17 +1512,25 @@ void loop() {
     return;
   }
 
+  //MQTT pump (#121): reconnect schedule, inbound notifications, telemetry.
+  //No-op when MQTT_ENABLE is false or the broker is unconfigured.
+  loopMqtt();
+
   //Process every second
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= 1000) {
     previousMillis = currentMillis;
 
-    //Mode Selection
-    if (deviceMode == DEVICE_MODE_TEXT) {
-      showText(inputText);
-    }
-    else if (deviceMode == DEVICE_MODE_CLOCK) {
-      showText(formatDateTime(clockFormat));
+    //Mode Selection. An active MQTT notification (#121) temporarily owns
+    //the display; when it expires the normal mode content re-flaps via
+    //showText's lastWrittenText comparison (show-then-revert).
+    if (!mqttNotificationTick()) {
+      if (deviceMode == DEVICE_MODE_TEXT) {
+        showText(inputText);
+      }
+      else if (deviceMode == DEVICE_MODE_CLOCK) {
+        showText(formatDateTime(clockFormat));
+      }
     }
   }
 }

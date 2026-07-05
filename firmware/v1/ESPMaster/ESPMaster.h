@@ -77,3 +77,12 @@ int enterBootloaderAllDetected(bool reprobeAfter);
 // ESPMaster.ino, updated by ServiceFlapFunctions.ino, published by the MQTT
 // telemetry in ServiceMqttFunctions.ino (#121).
 extern int lastShowUnitWriteErrors;
+
+// MQTT / Home Assistant integration (issue #121). Defined in
+// ServiceMqttFunctions.ino; every one of these is a no-op stub when
+// MQTT_ENABLE is false, so call sites need no #if guards.
+void initMqtt();
+void loopMqtt();
+bool mqttNotificationTick();
+void mqttStopForOta();
+void mqttResumeAfterOta();
