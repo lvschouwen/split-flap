@@ -68,12 +68,6 @@
 enum class AsyncMqttClientDisconnectReason : unsigned char;
 struct AsyncMqttClientMessageProperties;
 
-/*
-  EXPERIMENTAL: Try to use your Router when possible to set a Static IP address for your device to avoid conflicts with other devices
-  on your network. This will try and setup your device with a static IP address of your chosing. See below for more details.
-*/
-#define WIFI_STATIC_IP      false
-
 /* .--------------------------------------------------------. */
 /* | ___         _               ___       __ _             | */
 /* |/ __|_  _ __| |_ ___ _ __   |   \ ___ / _(_)_ _  ___ ___| */
@@ -118,6 +112,7 @@ struct AsyncMqttClientMessageProperties;
 #include "ESPMaster.h"
 #include <EEPROM.h>
 #include "SettingsEepromLayout.h"
+#include "DeviceIdentity.h"
 #include "HelpersSerialHandling.h"
 #include "WebAssets.h"
 #include "BuildVersion.h"
@@ -159,7 +154,6 @@ struct AsyncMqttClientMessageProperties;
     const uint16_t mqttBrokerPort = 1883;
     const char*    mqttUsername   = "";
     const char*    mqttPassword   = "";
-    const char*    mqttDeviceId   = "";
   #endif
 #endif
 
@@ -182,22 +176,12 @@ const char* timezoneServer = "";
 //  https://en.cppreference.com/w/c/chrono/strftime
 const char* clockFormat = "%H:%M";   //Examples: %H:%M -> 21:19, %I:%M%p -> 09:19PM
 
-//Name to broadcast when USE_MULTICAST is enabled. Default is split-flap.local. Be mindful to choose something
-//unique to your local network. if running more than one display you'll need a unique name for each. 
+//Prefix seed for the per-device identity (#125). The effective name every
+//network-facing consumer uses is resolved at boot by resolveDeviceIdentity():
+//the EEPROM deviceName (set via the web UI) if present, else
+//"<mdnsName>-<hex chip id>" — unique per device out of the box, so multiple
+//displays can share one LAN on one firmware image without editing this.
 const char* mdnsName = "split-flap";
-
-#if WIFI_STATIC_IP == true
-//Static IP address for your device. Try take care to not conflict with something else on your network otherwise
-//it is likely to not work
-IPAddress wifiDeviceStaticIp(192, 168, 1, 100);
-
-//Your router details
-IPAddress wifiRouterGateway(192, 168, 1, 1);
-IPAddress wifiSubnet(255, 255, 0, 0);
-
-//DNS Entry. Default: Google DNS
-IPAddress wifiPrimaryDns(8, 8, 8, 8);
-#endif
 
 /* .------------------------------------------------------------. */
 /* | ___         _               ___     _   _   _              | */
@@ -230,6 +214,7 @@ const char* PARAM_FLAP_SPEED = "flapSpeed";
 const char* PARAM_DEVICEMODE = "deviceMode";
 const char* PARAM_INPUT_TEXT = "inputText";
 const char* PARAM_TIMEZONE   = "timezone";
+const char* PARAM_DEVICE_NAME = "deviceName";
 
 //Device Modes
 const char* DEVICE_MODE_TEXT = "text";
@@ -249,6 +234,14 @@ String deviceMode = "";
 //back to compile-time `timezonePosix`, which in turn falls back to "UTC0".
 //Issue #48.
 String timezonePosixSetting = "";
+//Per-device identity (#125). deviceNameSetting mirrors the raw EEPROM slot
+//(may be empty = "use chip-id default"); effectiveDeviceName is resolved
+//once by resolveDeviceIdentity() before any network bring-up and read by
+//every consumer: mDNS, WiFi hostname, MQTT client id / topics, and the
+//recovery / quiet-OTA / captive-portal AP SSIDs. A rename saves to EEPROM
+//and applies on the next reboot — this global never changes mid-run.
+String deviceNameSetting = "";
+String effectiveDeviceName = "";
 String lastWrittenText = "";
 String lastReceivedMessageDateTime = "";
 bool alignmentUpdated = false;
@@ -285,7 +278,7 @@ volatile bool abortCurrentShow = false;
 //memory (survives warm restart, cleared on cold power cycle). Every boot
 //increments; a loop that runs cleanly for HEALTHY_BOOT_MS clears it. If the
 //counter reaches RECOVERY_BOOT_THRESHOLD, the device skips the main app and
-//brings up a minimal "split-flap-recovery" SoftAP that only accepts a master
+//brings up a minimal "<deviceName>-rec" SoftAP that only accepts a master
 //firmware upload.
 //Layout + pure helpers live in RtcBootState.h so they can be exercised by
 //host-side tests (`pio test -e native`). Hardware-touching read/write
@@ -589,14 +582,14 @@ void enterRecoveryMode() {
     WiFi.disconnect();
     WiFi.persistent(false);
     WiFi.mode(WIFI_AP);
-    WiFi.softAP("split-flap-recovery");
+    WiFi.softAP((effectiveDeviceName + AP_SUFFIX_RECOVERY).c_str());
     SerialPrint(F("Recovery SoftAP IP: "));
     SerialPrintln(WiFi.softAPIP().toString());
   }
 #else
   WiFi.persistent(false);
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("split-flap-recovery");
+  WiFi.softAP((effectiveDeviceName + AP_SUFFIX_RECOVERY).c_str());
   SerialPrint(F("Recovery SoftAP IP: "));
   SerialPrintln(WiFi.softAPIP().toString());
 #endif
@@ -616,10 +609,10 @@ void enterRecoveryMode() {
       "</form></body></html>";
     request->send(200, "text/html", html);
   });
-  //EEPROM must be up before /firmware/master is served from here — the
-  //upload handler persists intendedVersion and stages lastFlashResult="",
-  //and without EEPROM.begin() both writes silently no-op (#119).
-  initialiseFileSystem();
+  //EEPROM is already up (initialiseFileSystem() runs at the top of setup(),
+  //before the recovery dispatch) — required before /firmware/master is
+  //served: the upload handler persists intendedVersion and stages
+  //lastFlashResult="", and without EEPROM.begin() both silently no-op (#119).
   registerMasterFirmwareEndpoint();
   webServer.begin();
   SerialPrintln(F("Recovery web server ready"));
@@ -642,14 +635,14 @@ void enterOtaMode() {
     WiFi.disconnect();
     WiFi.persistent(false);
     WiFi.mode(WIFI_AP);
-    WiFi.softAP("split-flap-ota");
+    WiFi.softAP((effectiveDeviceName + AP_SUFFIX_OTA).c_str());
     SerialPrint(F("OTA-mode SoftAP IP: "));
     SerialPrintln(WiFi.softAPIP().toString());
   }
 #else
   WiFi.persistent(false);
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("split-flap-ota");
+  WiFi.softAP((effectiveDeviceName + AP_SUFFIX_OTA).c_str());
   SerialPrint(F("OTA-mode SoftAP IP: "));
   SerialPrintln(WiFi.softAPIP().toString());
 #endif
@@ -681,14 +674,30 @@ void enterOtaMode() {
     String json = getCurrentSettingValues();
     request->send(200, "application/json", json);
   });
-  //EEPROM must be up before /firmware/master is served from here — the
-  //upload handler persists intendedVersion and stages lastFlashResult="",
-  //and without EEPROM.begin() both writes silently no-op (#119). This is
-  //why a quiet-mode flash used to leave a stale intendedVersion behind.
-  initialiseFileSystem();
+  //EEPROM is already up (initialiseFileSystem() runs at the top of setup(),
+  //before the OTA-mode dispatch) — required before /firmware/master is
+  //served: the upload handler persists intendedVersion and stages
+  //lastFlashResult="" (#119). A quiet-mode flash without EEPROM up used to
+  //leave a stale intendedVersion behind.
   registerMasterFirmwareEndpoint();
   webServer.begin();
   SerialPrintln(F("OTA-mode web server ready"));
+}
+
+//Resolve the per-device network identity (#125). Runs right after
+//initialiseFileSystem() at the top of setup() — before the quiet-OTA/
+//recovery dispatch (their SoftAP SSIDs need it) and before initWiFi()
+//(hostname). The blob is already migrated by then, so the magic/version
+//guard is belt-and-suspenders against a corrupt or foreign blob only.
+void resolveDeviceIdentity() {
+  uint8_t ver = EEPROM.read(OFF_VERSION);
+  bool eepromValid = (readSettingMagic() == SETTINGS_MAGIC) &&
+                     (ver >= 5) && (ver <= SETTINGS_VERSION);
+  String stored = eepromValid ? readSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME) : String("");
+  effectiveDeviceName = resolveDeviceName(eepromValid, stored, mdnsName, ESP.getChipId());
+  SerialPrint(F("Device identity: "));
+  SerialPrint(effectiveDeviceName);
+  SerialPrintln(stored.length() ? F(" (from EEPROM)") : F(" (chip-id default)"));
 }
 
 /* .-----------------------------------------------. */
@@ -734,6 +743,16 @@ void setup() {
   SerialPrint(F("RTC boot counter: "));
   SerialPrintln(bootState.bootCounter);
 
+  //Settings EEPROM comes up once here, for every boot path — the single
+  //begin + migration point. Quiet-OTA/recovery need it for /firmware/
+  //master's intendedVersion/lastFlashResult writes (#119), and the
+  //identity resolver right after needs a migrated blob for the deviceName
+  //slot; its result feeds each mode's AP SSID and initWiFi()'s hostname.
+  //Deliberately AFTER the RTC counter increment above so a crash in here
+  //still counts toward the recovery threshold.
+  initialiseFileSystem();
+  resolveDeviceIdentity();
+
   //User-requested quiet OTA mode (#117). One-shot: clear the flag (and the
   //boot counter this entry just bumped) immediately, so any reboot or power
   //cycle out of OTA mode lands in a normal boot — no way to get stuck.
@@ -753,7 +772,7 @@ void setup() {
   if (bootState.bootCounter >= RECOVERY_BOOT_THRESHOLD) {
     SerialPrintln(F("#######################################################"));
     SerialPrintln(F("RECOVERY MODE: 3+ consecutive boots without a healthy"));
-    SerialPrintln(F("loop. Bringing up split-flap-recovery SoftAP for reflash."));
+    SerialPrintln(F("loop. Bringing up recovery SoftAP for reflash."));
     SerialPrintln(F("#######################################################"));
     isRecoveryMode = true;
     enterRecoveryMode();
@@ -793,7 +812,7 @@ void setup() {
   if (isWifiConfigured && !isPendingReboot) {
     //Load persisted settings first so the runtime timezone (if set via
     //the web UI) takes effect on this boot's configTime() call. Issue #48.
-    initialiseFileSystem();
+    //(EEPROM itself came up at the top of setup().)
     loadValuesFromFileSystem();
 
     //Flash-outcome cookie check (#53/#118). If the OTA handler stashed a
@@ -895,7 +914,7 @@ void setup() {
     autoUpdateOutdatedUnits();
 
 #if USE_MULTICAST == true
-  if (MDNS.begin(mdnsName)) {
+  if (MDNS.begin(effectiveDeviceName.c_str())) {
       SerialPrintln(F("mDNS responder started"));
     } else {
       SerialPrintln(F("Error setting up MDNS responder!"));
@@ -1219,8 +1238,9 @@ void setup() {
 
       bool submissionError = false;
 
-      String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue, newTimezoneValue;
+      String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue, newTimezoneValue, newDeviceNameValue;
       bool timezoneProvided = false;
+      bool deviceNameProvided = false;
 
       int params = request->params();
       for (int paramIndex = 0; paramIndex < params; paramIndex++) {
@@ -1288,6 +1308,20 @@ void setup() {
               submissionError = true;
             }
           }
+
+          //HTTP POST device name (#125). Lowercased then validated as a
+          //label safe for mDNS, hostname, MQTT topic segment and SSID at
+          //once. Empty is valid and means "reset to the chip-id default".
+          if (p->name() == PARAM_DEVICE_NAME) {
+            String receivedValue = normalizeDeviceName(p->value());
+            if (receivedValue.length() == 0 || isValidDeviceName(receivedValue)) {
+              newDeviceNameValue = receivedValue;
+              deviceNameProvided = true;
+            } else {
+              SerialPrintln("Device name provided was not valid. Value: " + receivedValue);
+              submissionError = true;
+            }
+          }
         }
       }
 
@@ -1336,13 +1370,26 @@ void setup() {
           SerialPrintln("Timezone Updated: " + (timezonePosixSetting.length() ? timezonePosixSetting : String("(default)")));
         }
 
+        //Device name change (#125). Saved to EEPROM now, applied to
+        //mDNS/hostname/MQTT/AP SSIDs on the next reboot (the redirect tells
+        //the UI to offer one). While we still ARE the old MQTT identity,
+        //ask loopMqtt() to clear the old retained HA discovery configs so
+        //the rename doesn't leave an orphaned device in Home Assistant.
+        bool deviceNameChanged = deviceNameProvided && deviceNameSetting != newDeviceNameValue;
+        if (deviceNameChanged) {
+          mqttRequestDiscoveryClear();
+          deviceNameSetting = newDeviceNameValue;
+          saveDeviceName();
+          SerialPrintln("Device Name Updated (reboot to apply): " + (deviceNameSetting.length() ? deviceNameSetting : String("(chip-id default)")));
+        }
+
         //Only if we are showing text
         if (deviceMode == DEVICE_MODE_TEXT) {
           inputText = newInputTextValue;
         }
 
         //Redirect so that we don't have the "re-submit form" problem in browser for refresh
-        request->redirect("/");
+        request->redirect(deviceNameChanged ? "/?device-name-saved=true" : "/");
       }
     });
 
@@ -1605,6 +1652,10 @@ String getCurrentSettingValues() {
   out += F(",\"flapSpeed\":");                       appendJsonString(out, flapSpeed);
   out += F(",\"deviceMode\":");                      appendJsonString(out, deviceMode);
   out += F(",\"timezonePosix\":");                   appendJsonString(out, timezonePosixSetting);
+  //Per-device identity (#125): deviceName is the raw EEPROM value ("" =
+  //unset), effectiveDeviceName is what the device actually uses right now.
+  out += F(",\"deviceName\":");                      appendJsonString(out, deviceNameSetting);
+  out += F(",\"effectiveDeviceName\":");             appendJsonString(out, effectiveDeviceName);
   out += F(",\"version\":");                         appendJsonString(out, String(espVersion));
   //OTA failure diagnostics (#52). These fields let a remote flasher tell a
   //genuine revert apart from a same-version false-alarm. `sketchMd5` is the

@@ -89,6 +89,13 @@ function loadPage() {
 			It will display different characters in order to carry this out and then go back to the last thing being displayed.
 		`);
 	}
+	else if (urlParams.get('device-name-saved') === "true") {
+		showBannerMessage(`
+			Device name saved. It is applied to the network identity (mDNS, hostname, MQTT, recovery SSID) on the next reboot.
+			<br>
+			<a href="/reboot">Reboot now</a> to apply it.
+		`);
+	}
 	
 	if (localDevelopment) {
 		setSpeed("80");
@@ -97,6 +104,7 @@ function loadPage() {
 		populateTimezoneOptions();
 		setTimezone("");
 		setVersion("Development")
+		setDeviceName("", "split-flap-9a3c1f");
 		setUnitCount(10, 3);
 		setLastReceivedMessage(new Date().toLocaleString());
 		showHideResetWifiSettingsAction(false);
@@ -125,6 +133,7 @@ function loadPage() {
 				populateTimezoneOptions();
 				setTimezone(responseObject.timezonePosix || "");
 				setVersion(responseObject.version);
+				setDeviceName(responseObject.deviceName || "", responseObject.effectiveDeviceName || "");
 				setUnitCount(responseObject.unitCount, responseObject.detectedUnitCount);
 				setLastReceivedMessage(responseObject.lastTimeReceivedMessageDateTime);
 				showHideResetWifiSettingsAction(responseObject.wifiSettingsResettable);
@@ -283,6 +292,17 @@ function setAlignment(alignment) {
 //Sets the version on the UI just for awareness
 function setVersion(version) {
 	document.getElementById("labelVersion").innerHTML = version;
+}
+
+//Per-device identity (#125). Header shows what the device is actually
+//using right now; the form field holds the raw stored value ("" = unset)
+//with the effective name as placeholder so "unset" is self-explanatory.
+function setDeviceName(storedName, effectiveName) {
+	document.getElementById("labelDeviceName").textContent = effectiveName || "N/A";
+
+	var input = document.getElementById("inputDeviceName");
+	input.value = storedName;
+	input.placeholder = effectiveName;
 }
 
 //Shows "<detected> / <max>" in the units label. The JS global

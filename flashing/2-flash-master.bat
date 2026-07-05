@@ -4,7 +4,7 @@ REM to the ESP-01 via your USB-to-UART adapter. The ESP-01 must be in
 REM programming mode (GPIO0 tied low while power/reset is applied).
 REM
 REM After this runs successfully, power-cycle the ESP normally (GPIO0 high),
-REM connect to its "Split-Flap-AP" WiFi network, configure your real WiFi via
+REM connect to its "split-flap-<chipid>-setup" WiFi network, configure your real WiFi via
 REM the captive portal, and the master is live.
 
 setlocal
@@ -43,7 +43,7 @@ if errorlevel 1 goto :fail
 echo.
 echo === Done. Master firmware + web UI installed. ===
 echo  1. Remove GPIO0-GND jumper, power-cycle the ESP.
-echo  2. From phone/laptop: join WiFi network "Split-Flap-AP" (no password).
+echo  2. From phone/laptop: join WiFi network "split-flap-<chipid>-setup" (no password).
 echo  3. Captive portal opens — enter your real WiFi credentials.
 echo  4. Master reboots onto your WiFi. Check your router for its IP and
 echo     browse to http://ITS.IP.ADDRESS/ for the dashboard.

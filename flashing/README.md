@@ -30,7 +30,7 @@ After **all** Nanos are done:
 5. Wire the USB-to-UART adapter to the ESP-01 (GPIO0 → GND for programming, then to VCC / floating for run mode after the flash).
 6. Run **`2-flash-master.bat`** — writes master firmware + LittleFS (which contains the bundled `unit-firmware.hex`). Script prompts for the COM port.
 7. Remove GPIO0-to-GND, power-cycle the ESP into normal mode.
-8. Connect to the `Split-Flap-AP` WiFi network (no password). A captive portal should open; if not, browse to `http://192.168.4.1/`. Enter your home WiFi credentials.
+8. Connect to the `split-flap-<chipid>-setup` WiFi network (no password; exact name shown once you scan — the suffix is the ESP's unique chip id). A captive portal should open; if not, browse to `http://192.168.4.1/`. Enter your home WiFi credentials.
 9. The master reboots onto your WiFi. Look up its IP on your router and browse to it for the dashboard.
 
 **On that first boot** with all Nanos powered up, the master:
@@ -79,7 +79,7 @@ Wiring to the target is wrong (most commonly MOSI/MISO swapped), or the target i
 ESP-01 isn't in programming mode. GPIO0 has to be held LOW at power-up. Some USB-UART adapters can't supply enough current — try powering the ESP externally and connecting only TX/RX/GND to the UART.
 
 **Captive portal doesn't appear**
-Some phones suppress it. Just browse manually to `http://192.168.4.1/` after joining the `Split-Flap-AP` network.
+Some phones suppress it. Just browse manually to `http://192.168.4.1/` after joining the `split-flap-<chipid>-setup` network.
 
 **Master doesn't see units after boot**
 Open the Log section. If it says `I2C scan complete. Detected 0/N expected units.`, check that:

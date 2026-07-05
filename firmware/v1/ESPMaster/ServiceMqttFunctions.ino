@@ -35,6 +35,10 @@ static char mqttRxBuffer[MQTT_MAX_TEXT_LEN + 1];
 //Show-then-revert notification state (MqttHelpers.h).
 static MqttNotification mqttNotification;
 
+//Device-rename hand-off (#125). The settings POST handler runs in async
+//context, so it only sets this flag; loopMqtt() does the actual publishes.
+static volatile bool mqttDiscoveryClearPending = false;
+
 //Topics, resolved once in initMqtt(). AsyncMqttClient stores POINTERS for
 //client id / credentials / will — these Strings must outlive the client,
 //which is why they are globals and never reassigned after init.
@@ -113,7 +117,9 @@ void initMqtt() {
     SerialPrintln(F("MQTT: no broker configured (MqttCredentials.h) — MQTT disabled"));
     return;
   }
-  mqttResolvedDeviceId  = (mqttDeviceId[0] != '\0') ? String(mqttDeviceId) : String(mdnsName);
+  //MQTT identity follows the per-device network identity (#125) — chip-id
+  //default or the EEPROM pretty name. No separate mqttDeviceId knob.
+  mqttResolvedDeviceId  = effectiveDeviceName;
   mqttTopicSet          = mqttTopic(mqttResolvedDeviceId, "text/set");
   mqttTopicAvailability = mqttTopic(mqttResolvedDeviceId, "availability");
   mqttTopicTelemetry    = mqttTopic(mqttResolvedDeviceId, "telemetry");
@@ -173,6 +179,21 @@ void loopMqtt() {
     mqttClient.publish(mqttTopicAvailability.c_str(), 1, true, "online");
     publishMqttDiscovery();
     mqttNextTelemetryMs = millis();  //first telemetry immediately
+  }
+
+  //Device renamed (#125): while this run still IS the old MQTT identity,
+  //blank the old retained HA discovery configs so the post-reboot identity
+  //doesn't leave an orphaned device in Home Assistant. Empty retained
+  //payload = "delete this discovery entry" per the HA MQTT discovery spec.
+  if (mqttDiscoveryClearPending && mqttClient.connected()) {
+    mqttDiscoveryClearPending = false;
+    char topicBuf[96];
+    for (int entity = 0; entity < DISCOVERY_ENTITY_COUNT; entity++) {
+      size_t tLen = buildDiscoveryTopic(topicBuf, sizeof(topicBuf), entity, mqttResolvedDeviceId.c_str());
+      if (tLen == 0 || tLen >= sizeof(topicBuf)) continue;
+      mqttClient.publish(topicBuf, 0, true, "");
+    }
+    SerialPrintln(F("MQTT: cleared retained discovery configs for old device id (rename)"));
   }
 
   if (mqttMessagePending) {
@@ -235,6 +256,17 @@ void mqttStopForOta() {
   SerialPrintln(F("MQTT: force-closed for master OTA upload"));
 }
 
+//Called from the settings POST handler when the device name changed (#125).
+//Async context: flag only — loopMqtt() publishes the empty retained configs
+//on the next main-loop pass. If MQTT is down/disabled the flag is simply
+//never consumed and the stale HA device needs manual cleanup (documented).
+void mqttRequestDiscoveryClear() {
+  if (!mqttInitialised) {
+    return;
+  }
+  mqttDiscoveryClearPending = true;
+}
+
 //Upload failed or stalled (display thawed): resume MQTT. On the success
 //path the device reboots instead, so this never runs there.
 void mqttResumeAfterOta() {
@@ -255,5 +287,6 @@ void loopMqtt() {}
 bool mqttNotificationTick() { return false; }
 void mqttStopForOta() {}
 void mqttResumeAfterOta() {}
+void mqttRequestDiscoveryClear() {}
 
 #endif
