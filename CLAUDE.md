@@ -29,7 +29,7 @@ pio device monitor           # serial at 115200
 pio test -e native           # host-side unit tests (ESPMaster only)
 ```
 
-Subsequent master flashes happen via OTA — from this repo: `flashing/ota-master.sh <fw.bin> http://host:port`. The script computes MD5 locally, POSTs to `/firmware/master`, then polls `/settings` for the `sketchMd5` + `lastFlashResult` verdict and prints SUCCESS, EBOOT SILENT REVERT, FLASH CONFIG MISMATCH, or UPLOAD DID NOT REACH HANDLER. Physical re-flash falls back to `esptool` — see issue #53 for the Windows walkthrough.
+Subsequent master flashes happen via OTA — from this repo: `flashing/ota-master.sh <fw.bin> http://host:port`. The script computes MD5 locally, POSTs to `/firmware/master`, then polls `/settings` for the `sketchMd5` + `lastFlashResult` verdict and prints SUCCESS, EBOOT SILENT REVERT, FLASH CONFIG MISMATCH, or UPLOAD DID NOT REACH HANDLER. Physical re-flash is done from `split-flap-flasher.exe` ("Flash master firmware (USB serial)") — see `flashing/README.md`; the manual `esptool` walkthrough in issue #53 is the fallback.
 
 First-time provisioning of a physical display (programmer bootstrap, twiboot
 per Nano, master USB flash, verify) is driven by `split-flap-flasher.exe` —
