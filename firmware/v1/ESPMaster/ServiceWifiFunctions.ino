@@ -7,15 +7,10 @@ void initWiFi() {
 #if WIFI_USE_DIRECT == false
   SerialPrintln(F("Setting up WiFi AP Setup Mode"));
 
-#if WIFI_STATIC_IP == true
-  wifiManager.setSTAStaticIPConfig(wifiDeviceStaticIp, wifiRouterGateway, wifiSubnet, wifiPrimaryDns);
-  SerialPrintln(F("WiFi Static IP Configured"));
-#endif
-
   //ESPAsyncWiFiManager exposes a subset of tzapu's config API; the rest
   //(title/hostname/dark mode/menu/blocking flag) isn't configurable here.
   //WiFi.setAutoReconnect() is an ESP8266-core call, still honored.
-  WiFi.hostname("Split-Flap");
+  WiFi.hostname(effectiveDeviceName.c_str());
   WiFi.setAutoReconnect(true);
   wifiManager.setConfigPortalTimeout(wifiConnectTimeoutSeconds);
   wifiManager.setConnectTimeout(120);
@@ -28,7 +23,7 @@ void initWiFi() {
   });
 
   SerialPrintln(F("Attempting to connect to WiFi... Will fallback to AP mode to allow configuring of WiFi if fails..."));
-  if(wifiManager.autoConnect("Split-Flap-AP")) {
+  if(wifiManager.autoConnect((effectiveDeviceName + AP_SUFFIX_SETUP).c_str())) {
     SerialPrint(F("Successfully Connected to WiFi. IP Address: "));
     SerialPrintln(WiFi.localIP());
 
@@ -40,16 +35,8 @@ void initWiFi() {
 
   if (strlen(wifiDirectSsid) > 0 && strlen(wifiDirectPassword) > 0) {
     int maxAttemptsCount = 0;
-    
-#if WIFI_STATIC_IP == true
-    if (WiFi.config(wifiDeviceStaticIp, wifiRouterGateway, wifiSubnet, wifiPrimaryDns)) {
-      SerialPrintln(F("WiFi Static IP Configuration Success"));
-    }
-    else {
-      SerialPrintln(F("WiFi Static IP Configuration could not take place"));
-    }
-#endif
-    
+
+    WiFi.hostname(effectiveDeviceName.c_str());
     WiFi.begin(wifiDirectSsid, wifiDirectPassword);
     SerialPrint(F("Connecting"));
 

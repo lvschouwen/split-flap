@@ -50,13 +50,19 @@ static void test_layout_slots_are_contiguous_and_non_overlapping() {
   TEST_ASSERT_EQUAL_INT(LEN_DEVICEMODE,        OFF_TIMEZONE           - OFF_DEVICEMODE);
   TEST_ASSERT_EQUAL_INT(LEN_TIMEZONE,          OFF_INTENDED_VERSION   - OFF_TIMEZONE);
   TEST_ASSERT_EQUAL_INT(LEN_INTENDED_VERSION,  OFF_LAST_FLASH_RESULT  - OFF_INTENDED_VERSION);
-  TEST_ASSERT_EQUAL_INT(LEN_LAST_FLASH_RESULT, OFF_RESERVED_2         - OFF_LAST_FLASH_RESULT);
+  TEST_ASSERT_EQUAL_INT(LEN_LAST_FLASH_RESULT, OFF_DEVICE_NAME        - OFF_LAST_FLASH_RESULT);
+  TEST_ASSERT_EQUAL_INT(LEN_DEVICE_NAME,       OFF_RESERVED_2         - OFF_DEVICE_NAME);
 }
 
-static void test_settings_version_is_4() {
+static void test_settings_version_is_5() {
   // Locks the current schema version so a migration addition without a
   // version bump trips here.
-  TEST_ASSERT_EQUAL_INT(4, SETTINGS_VERSION);
+  TEST_ASSERT_EQUAL_INT(5, SETTINGS_VERSION);
+}
+
+static void test_device_name_slot_fits_max_name_plus_nul() {
+  // #125: device names are capped at 24 chars; slot needs 24 + NUL.
+  TEST_ASSERT_GREATER_OR_EQUAL_INT(25, LEN_DEVICE_NAME);
 }
 
 static void test_last_flash_result_slot_fits_known_values() {
@@ -193,6 +199,33 @@ static void test_last_flash_result_empty_after_zero_fill_migration() {
   TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT).c_str());
 }
 
+static void test_device_name_roundtrip() {
+  writeSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME, String("split-flap-livingroom"));
+  TEST_ASSERT_EQUAL_STRING("split-flap-livingroom", readSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME).c_str());
+}
+
+static void test_device_name_write_does_not_touch_last_flash_result_or_reserved_2() {
+  // Fence-post: writing the new slot must not spill into the last-flash-result
+  // slot (ends at OFF_DEVICE_NAME-1) or the RESERVED_2 region.
+  g_eepromStorage[OFF_DEVICE_NAME - 1]               = 0xAB;
+  g_eepromStorage[OFF_DEVICE_NAME + LEN_DEVICE_NAME] = 0xCD;
+
+  writeSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME, String("kitchen"));
+
+  TEST_ASSERT_EQUAL_UINT8(0xAB, g_eepromStorage[OFF_DEVICE_NAME - 1]);
+  TEST_ASSERT_EQUAL_UINT8(0xCD, g_eepromStorage[OFF_DEVICE_NAME + LEN_DEVICE_NAME]);
+}
+
+static void test_device_name_empty_after_zero_fill_migration() {
+  // v4 -> v5 migration zeros the new slot so a migrated device reads an
+  // empty name (-> chip-id default), not RESERVED_2 leftovers. See #125.
+  for (int i = 0; i < LEN_DEVICE_NAME; i++) {
+    g_eepromStorage[OFF_DEVICE_NAME + i] = 0xFF;
+  }
+  writeSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME, String(""));
+  TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME).c_str());
+}
+
 // --- migration -----------------------------------------------------------
 
 static void test_timezone_slot_fits_longest_common_posix_tz() {
@@ -228,9 +261,13 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_layout_slots_are_contiguous_and_non_overlapping);
   RUN_TEST(test_layout_fits_in_configured_eeprom_size);
-  RUN_TEST(test_settings_version_is_4);
+  RUN_TEST(test_settings_version_is_5);
   RUN_TEST(test_intended_version_slot_fits_git_rev_plus_dirty_suffix);
   RUN_TEST(test_last_flash_result_slot_fits_known_values);
+  RUN_TEST(test_device_name_slot_fits_max_name_plus_nul);
+  RUN_TEST(test_device_name_roundtrip);
+  RUN_TEST(test_device_name_write_does_not_touch_last_flash_result_or_reserved_2);
+  RUN_TEST(test_device_name_empty_after_zero_fill_migration);
   RUN_TEST(test_fresh_eeprom_reads_as_unset_magic);
   RUN_TEST(test_writeSettingMagic_sets_magic_and_version);
   RUN_TEST(test_stale_magic_is_not_accepted);

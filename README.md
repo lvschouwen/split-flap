@@ -46,7 +46,7 @@ This project has built on the original project to add extra features such as:
   - Upload a new `firmware.bin` from the browser; the ESP reboots into it.
   - Optional `?md5=<hex>` query param verifies image integrity before eboot commits it.
   - Size-checks the upload against the sketch slot before writing a single byte.
-  - Recovery SoftAP (`split-flap-recovery`) comes up after 3 consecutive failed boots so a bad firmware can always be reflashed without USB.
+  - Recovery SoftAP (`<device-name>-rec`, e.g. `split-flap-9a3c1f-rec`) comes up after 3 consecutive failed boots so a bad firmware can always be reflashed without USB.
   - Also pushes the bundled unit firmware to every Nano it detects on the bus, so unit updates ride along with master updates.
 - I2C OTA for unit firmware
   - Master ships a compiled Unit sketch in PROGMEM and auto-installs it on any Nano sitting in twiboot (the [patched bootloader](./UnitBootloader/README.md) is flashed once per unit via ICSP).
@@ -199,7 +199,7 @@ The files in [`ESPMaster/data/`](./ESPMaster/data/) (HTML/JS/CSS, favicon, bundl
 
 There are several options in the Sketch you can modify to customise or change the behaviour of the display. These are marked in the code as "Configurable".
 
-By default, the system runs in **captive-portal mode** (`WIFI_USE_DIRECT false`). On first boot the master exposes a `Split-Flap-AP` access point; connect, pick your real network, done.
+By default, the system runs in **captive-portal mode** (`WIFI_USE_DIRECT false`). On first boot the master exposes a `<device-name>-setup` access point (e.g. `split-flap-9a3c1f-setup` — the suffix comes from the ESP's unique chip id); connect, pick your real network, done.
 
 ![Screenshot WiFi Portal](./Images/Access-Point-Screenshot.jpg)
 
@@ -232,29 +232,11 @@ There are several helper `define` variables to help during debugging/running:
 - **UNIT_CALLS_DISABLE**
   - Use this to disable the communication with the Arduino Nano Units. This will mean you can check code over function for the ESP module.
 
-#### Experiments
+#### Device name & running multiple displays
 
-In the main Sketch under "Configurable Defines", an "EXPERIMENTAL" section has been included. This section has been created for features that are things that can be changed and trialled however aren't going to be necessary to be changed for general use.
+Every network-facing name (mDNS `<name>.local`, DHCP hostname, MQTT client id/topics, and the recovery/OTA/setup AP SSIDs) derives from a single per-device identity. Out of the box it is `split-flap-<hex chip id>` — unique per ESP, so several displays can share one LAN running the **same firmware image** with zero per-device edits. To give a display a friendly name (`kitchen`, `split-flap-livingroom`, …) use the **web UI → General card → Device Name** field: lowercase letters/digits/hyphens, max 24 chars, applied on the next reboot. Leave it empty to return to the chip-id default.
 
-##### Static IP Address
-
-A feature request of being able to set a Static IP Address was created by [beroliv](https://github.com/beroliv) (thank you for the suggestion). This was to get around issues whereby in some routers, there was issues in being able to do this.
-
-Code has been added to be able to set a Static IP Address on device. To do this:
-
-1. Set the `WIFI_STATIC_IP` variable to `true` (defaulted to `false`)
-2. Update the following settings as necessary for your needs:
-
-   ```c++
-   IPAddress wifiDeviceStaticIp(192, 168, 1, 100);
-
-   IPAddress wifiRouterGateway(192, 168, 1, 1);
-   IPAddress wifiSubnet(255, 255, 0, 0);
-
-   IPAddress wifiPrimaryDns(8, 8, 8, 8);
-   ```
-
-**Suggestion:** Set your device up with a Static IP via your router if possible and to avoid conflicts on your network, however feel free to run this code if you are not able to. Testing this functionality showed it does work in both AP/Direct WiFi modes.
+Fixed IP addresses are the router's job: use a **DHCP reservation** keyed on the device's MAC address. (The former experimental `WIFI_STATIC_IP` compile-time option was removed — two displays hardcoding the same address is exactly the failure DHCP reservations avoid.)
 
 #### Sketch Upload
 

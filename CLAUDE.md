@@ -53,8 +53,7 @@ All live as `#define`s at the top of `ESPMaster.ino`:
 - `SERIAL_ENABLE` — toggling this to `true` **disables I2C** on the ESP-01 (shared pins). Keep `false` unless deliberately debugging over serial with units disconnected.
 - `UNIT_CALLS_DISABLE` — lets the ESP run standalone for web-UI work.
 - `WIFI_USE_DIRECT` — `false` = WiFiManager captive portal; `true` uses the hard-coded `wifiDirectSsid` / `wifiDirectPassword` from `WifiCredentials.h`. When `true`, recovery mode (see below) also joins the known WiFi instead of bringing up a SoftAP.
-- `USE_MULTICAST` — enables mDNS at `<mdnsName>.local`. Pick a unique `mdnsName` per display if running multiple.
-- `WIFI_STATIC_IP` — experimental; prefer DHCP reservation on the router.
+- `USE_MULTICAST` — enables mDNS. The name (and the WiFi hostname, MQTT id/topics, and recovery/OTA/setup AP SSIDs) comes from the per-device identity (#125): the EEPROM `deviceName` if set via the web UI, else `split-flap-<hex chip id>` — unique per device automatically, so multiple displays share one image with no edits. `mdnsName` is only the prefix seed. Resolution happens in `resolveDeviceIdentity()` at the very top of `setup()` (before the quiet-OTA/recovery dispatch — those paths bring up their APs before `initialiseFileSystem()`, so the resolver does its own guarded EEPROM read); pure logic in `DeviceIdentity.h` (natively tested). Static IPs are deliberately unsupported — use DHCP reservation on the router.
 - `OTA_ENABLE` — enables Arduino OTA (separate from the web `/firmware/master` path); set `otaPassword` if used.
 - `FLAP_AMOUNT` / `AMOUNTFLAPS` — hardware-coupled (45). The master's `FLAP_AMOUNT` and the unit's `letters[]` length must agree.
 - `MQTT_ENABLE` — MQTT / Home Assistant integration (#121). Default `false` (fully compiled out). Build the `espmaster_mqtt` env and copy `MqttCredentials.h.example` → `MqttCredentials.h` (gitignored) to enable. Notification-only semantics: HA text shows for a dwell (default 60 s, clamp 5–3600), then reverts; health telemetry every 60 s; zero EEPROM/RTC interaction.
@@ -72,6 +71,7 @@ Unit-side: `SERIAL_ENABLE` and `TEST_ENABLE` (cycles a fixed character sequence 
 - `timezonePosix` — POSIX TZ string. Fresh-init default is `"CET-1CEST,M3.5.0,M10.5.0/3"` so a wipe+reflash lands on CE(S)T. The web UI overrides at runtime.
 - `intendedVersion` — `GIT_REV` of the most-recently-uploaded firmware, written by `/firmware/master` from its `?v=` query param. Read at boot; if non-empty and ≠ running `GIT_REV`, the `otaReverted` flag is set and surfaced in `/settings`.
 - `lastFlashResult` — `""` / `"ok"` / `"reverted"`, written by the boot-time RTC-cookie check (see OTA section below). Surfaced in `/settings` so remote flashers can decode the outcome of a prior OTA attempt.
+- `deviceName` — complete per-device network identity (24 chars max, `[a-z0-9-]`, validated in `DeviceIdentity.h`), set via the web UI. Empty = chip-id default `split-flap-<hex>`. Applied on reboot; a rename also asks loopMqtt() to blank the old retained HA discovery configs before the identity switches (#125).
 
 Native tests (`test/test_eeprom_settings/test_main.cpp`) enforce layout invariants (contiguity, bounds, round-trip, migration zero-fill) so a malformed edit fails `pio test -e native` before it ships.
 
@@ -86,7 +86,7 @@ Master flashes go through `/firmware/master` (HTTP POST `multipart/form-data` + 
 **Recovery mode** activates on 3 consecutive unhealthy boots (RTC counter in `RtcBootState`, reset after 30 s of clean uptime). It also accepts a remote trigger: `POST /firmware/recover-mark` writes the counter to the threshold and reboots, so the next boot drops into recovery without physical access. In recovery:
 
 - `WIFI_USE_DIRECT == true` → join hardcoded WiFi, serve a minimal upload form + `/firmware/master` on the normal LAN IP.
-- Otherwise → bring up SoftAP `split-flap-recovery` and serve the same endpoints.
+- Otherwise → bring up SoftAP `<deviceName>-rec` (e.g. `split-flap-9a3c1f-rec`) and serve the same endpoints. The quiet-OTA mode AP is `<deviceName>-ota`, the captive portal `<deviceName>-setup`.
 
 The `RtcBootState` struct holds `magic`, `bootCounter`, `bootMode` (quiet OTA mode, #117), `cookieKind` (#118), and `preFlashSketchMd5[36]`. The magic (`RTC_BOOT_MAGIC`) is checked on read; an unknown magic zero-inits the state, but the V3 magic (98ec681-era layout, no `cookieKind`) is migrated in place so a flash performed by pre-#118 firmware still gets a correct verdict on the first post-upgrade boot (#119). On an "ok" verdict the boot check also rewrites `intendedVersion` to the running rev, healing stale values left by environments that couldn't persist `?v=`.
 
