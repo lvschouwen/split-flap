@@ -1,9 +1,13 @@
 # flashing/flasher/flasher.spec
 # Build (Windows, from flashing/): pyinstaller flasher/flasher.spec
+#
+# NOTE: PyInstaller resolves relative Analysis() paths against the .spec
+# file's own directory (flashing/flasher/), NOT the CWD it was invoked
+# from — so these are written relative to flasher/, not flashing/.
 a = Analysis(
-    ["flasher/__main__.py"],
-    pathex=["."],
-    datas=[("flasher/assets", "assets")],
+    ["__main__.py"],
+    pathex=[".."],
+    datas=[("assets", "assets")],
     hiddenimports=["esptool", "serial", "serial.tools.list_ports"],
 )
 pyz = PYZ(a.pure)
