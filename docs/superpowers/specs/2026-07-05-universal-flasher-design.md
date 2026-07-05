@@ -42,8 +42,18 @@ Menu on launch (build rev + date in the banner):
  4. Flash master firmware (USB serial)
  5. Update master firmware (WiFi/OTA)
  6. Check display status
+ 7. Wiring help
  0. Exit
 ```
+
+### Wiring help (option 7, and inline at every hardware step)
+
+The exe carries pin-by-pin ASCII wiring diagrams and shows the relevant one *inside* each wizard step before the "press Enter" — the operator never needs a browser or the repo README at the bench. Diagrams (single source: `wiring.py`, also reused by option 7's standalone browser):
+
+- **Programmer build**: spare Uno/Nano → target Nano ICSP, 6 wires (programmer D10 → target RST, D11 → D11/MOSI, D12 → D12/MISO, D13 → D13/SCK, 5V, GND), plus the 10 µF cap between the *programmer's* RESET and GND (fitted only *after* the ArduinoISP sketch is flashed).
+- **ESP-01 ↔ USB-UART**: 3.3 V only (never 5 V), TX↔RX crossed, CH_PD/EN → 3.3 V, GPIO0 → GND for programming mode, and the remove-jumper/power-cycle sequence.
+- **DIP switches**: per-unit 4-switch pattern rendered visually (`↑↑·· `-style) for the current unit number.
+- **Display assembly**: shared 5 V rail, ESP-01 GPIO1/GPIO3 → SDA/SCL to every Nano, one bus, contiguous DIP addressing from `0x01`.
 
 ### Wizard (option 1)
 
@@ -69,6 +79,7 @@ Options 2–4 reuse the same building blocks standalone. Option 5 is a Python po
 - `ota.py` — upload + verdict logic
 - `assets.py` — resource resolution (`sys._MEIPASS` frozen vs repo paths in dev) + manifest validation
 - `session.py` — resumable state JSON
+- `wiring.py` — ASCII wiring diagrams + DIP pattern rendering (pure, tested)
 - `ui.py` — prompts, colors (Windows ANSI enable)
 
 Dev mode: `python -m flasher` from the repo. The exe is packaging only.
