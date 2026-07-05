@@ -1,4 +1,5 @@
 #include "UnitProtocolHelpers.h"
+#include "DisplayWidth.h"
 
 // I2C address 0x00 is reserved (general call); offset every unit's address so
 // the master's 0-based unit index maps to 0x01..0x10. Must match
@@ -224,6 +225,13 @@ void showText(String message, int delayMillis) {
 
 //Pushes message to units
 void showMessage(String message, int flapSpeed) {
+  //Snapshot the width for this whole call (#123). waitForDisplayToStop()'s
+  //delay() (and even Wire clock-stretch waits) yield to the async web
+  //server, and /reflash-units re-runs probeI2cBus() — which mutates
+  //displayWidth — from its handler. One value for both the alignment pad
+  //and the write-loop bound keeps the call self-consistent.
+  const int width = displayWidth;
+
   //Format string per alignment choice
   if (alignment == ALIGNMENT_MODE_LEFT) {
     message = leftString(message);
@@ -239,10 +247,6 @@ void showMessage(String message, int flapSpeed) {
   SerialPrint(message);
   SerialPrintln(F("\""));
 
-#if UNIT_CALLS_DISABLE == true
-  SerialPrintln(F("Unit Calls are disabled for debugging. Will delay to simulate calls..."));
-  delay(2000);
-#else
   //Wait while display is still moving, with a hard timeout so a physically
   //stuck unit (status byte pegged at 1) doesn't deadlock the event loop.
   //Abortable via /stop (issue #35).
@@ -262,10 +266,12 @@ void showMessage(String message, int flapSpeed) {
   }
 
   int writeErrors = 0;
-  for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+  //Aligned messages are padded to `width`, so slots beyond it hold
+  //nothing to show; they are all probe-silent anyway.
+  for (int unitIndex = 0; unitIndex < width; unitIndex++) {
     //Skip slots the boot-time bus probe did not find a sketch-running unit on.
     //Writing to absent addresses causes isDisplayMoving() to stall and, more
-    //importantly, means users with fewer than UNITS_AMOUNT physical units
+    //importantly, means users with dead or missing units mid-display
     //no longer deadlock the event loop.
     if (detectedUnitStates[unitIndex] != 1) {
       continue;
@@ -299,10 +305,8 @@ void showMessage(String message, int flapSpeed) {
     return;
   }
   verifyAndResendLetters(commandedLetters, flapSpeed);
-#endif
 }
 
-#if UNIT_CALLS_DISABLE == false
 //Waits until no unit reports rotation, with the /stop abort and a 30 s
 //stuck-unit timeout. Returns false when aborted. Extracted from
 //showMessage() — the same loop now runs at entry, exit, and after the
@@ -359,7 +363,6 @@ static void verifyAndResendLetters(const int* commandedLetters, int flapSpeed) {
     waitForDisplayToStop();
   }
 }
-#endif
 
 //Translates char to letter position
 int translateLettertoInt(char letterchar) {
@@ -497,7 +500,7 @@ bool isUnitInBootloader(int i2cAddress) {
 }
 
 void probeI2cBus() {
-#if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
+#if SERIAL_ENABLE == false
   SerialPrintln(F("Scanning I2C bus for units..."));
   detectedUnitCount = 0;
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
@@ -539,20 +542,24 @@ void probeI2cBus() {
       SerialPrintln(F(" (fw UNKNOWN — likely predates version opcode)"));
     }
   }
+  //Derive the effective display width (#123): highest responder + 1, so a
+  //dead unit mid-display keeps its slot; falls back to the ceiling when
+  //nothing responds so a unit-less bench ESP still lays out full-width.
+  displayWidth = computeDisplayWidth(detectedUnitStates, UNITS_AMOUNT);
   SerialPrint(F("I2C scan complete. Detected "));
   SerialPrint(detectedUnitCount);
   SerialPrint(F("/"));
   SerialPrint(UNITS_AMOUNT);
-  SerialPrintln(F(" expected units."));
+  SerialPrint(F(" possible units. Display width: "));
+  SerialPrintln(displayWidth);
 #endif
 }
 
 //Shows the device's IPv4 address on the flaps at boot, octet by octet
 //(issue #111): "192." -> "168." -> "1." -> "123", 3 s apart, last chunk
-//held 5 s. A trailing dot marks continuation. Chunks are left-aligned on
-//purpose — physical displays can be narrower than UNITS_AMOUNT and
-//centered text would land on absent units. leftString() pads to the full
-//width, which makes showMessage()'s own alignment pass a no-op.
+//held 5 s. A trailing dot marks continuation. Chunks are left-aligned so
+//the octets read from a fixed anchor. leftString() pads to displayWidth,
+//which makes showMessage()'s own alignment pass a no-op.
 void showIpAddressOnBoot() {
   if (WiFi.status() != WL_CONNECTED) {
     return;

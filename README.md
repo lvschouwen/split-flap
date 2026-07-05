@@ -228,9 +228,7 @@ Dropdown covers common zones (Europe, Americas, Asia, Oceania). If you need a zo
 There are several helper `define` variables to help during debugging/running:
 
 - **SERIAL_ENABLE**
-  - Use this to enable Serial output lines for tracking executing code. Must stay `false` on the ESP-01 for I2C to work (serial + I2C share the same pins).
-- **UNIT_CALLS_DISABLE**
-  - Use this to disable the communication with the Arduino Nano Units. This will mean you can check code over function for the ESP module.
+  - Use this to enable Serial output lines for tracking executing code. Must stay `false` on the ESP-01 for I2C to work (serial + I2C share the same pins). This also disables all unit calls, so it doubles as the "ESP standalone" debug mode.
 
 #### Device name & running multiple displays
 
@@ -273,7 +271,7 @@ The master ships with a copy of the compiled Unit sketch in PROGMEM (see `ESPMas
 
 ### Common Problems
 
-- If the ESP is not talking to the units correctly, check `UNITS_AMOUNT` in `ESPMaster/ESPMaster.ino`. It must match the number of physical units you have connected. The web UI's "Units: N / 10" field shows how many of the expected `UNITS_AMOUNT` the boot-time probe actually found.
+- The display size is detected automatically at boot: the master probes the I2C bus and derives the display width from the highest responding unit address (1..16, set by each unit's DIP switches). No firmware edit is needed for different display sizes. Address your units contiguously starting at DIP 0000 (I2C 0x01) — a gap mid-display keeps its slot (a dead unit doesn't shift the layout), but a unit parked on a high address with nothing below it widens the display. The web UI's "Units: N / W" field shows detected responders vs the derived width — if a unit is missing there, check its DIP-switch address and wiring.
 - `SERIAL_ENABLE` must stay `false` for the ESP-01 to communicate with the Nanos over I2C (serial and I2C share the same pins on the ESP-01).
 - `pio run -t upload` is the only flash step now — no separate filesystem upload. Web assets and the bundled unit firmware are baked into the master binary at build time.
 - When the system is powered, your hall sensor should only light up when a magnet is nearby.

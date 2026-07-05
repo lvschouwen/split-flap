@@ -336,7 +336,7 @@ extern int detectedUnitVersionStatus[];
 extern char detectedUnitVersions[][9];
 
 void autoInstallFirmwareToBootloaderUnits() {
-#if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
+#if SERIAL_ENABLE == false
   int flashedCount = 0;
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
     if (detectedUnitStates[unitIndex] != 2 /* bootloader */) continue;
@@ -389,7 +389,7 @@ void autoInstallFirmwareToBootloaderUnits() {
 // and a subsequent call is a no-op.
 
 void autoUpdateOutdatedUnits() {
-#if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
+#if SERIAL_ENABLE == false
   int queued = 0;
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
     if (detectedUnitStates[unitIndex] != 1) continue;           // skip silent/bootloader

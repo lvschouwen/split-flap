@@ -24,8 +24,7 @@
   behaviour of your device.
 */
 #define SERIAL_ENABLE       false   //Option to enable serial debug messages. "true" Will disable I2C communications to allow serial monitoring.
-#define UNIT_CALLS_DISABLE  false   //Option to disable the call to the units so can just debug the ESP with no connections
-#define UNITS_AMOUNT        10      //Amount of connected units !IMPORTANT TO BE SET CORRECTLY!
+#define UNITS_AMOUNT        16      //Hardware ceiling: max units the DIP-switch addressing supports (4 bits -> I2C 0x01..0x10). Array bound only — the effective display width is detected at boot from the I2C probe (#123), so one image fits every display size. Do not lower per-display.
 #define SERIAL_BAUDRATE     115200  //Serial debugging BAUD rate
 #define WIFI_USE_DIRECT     true    //Option to either direct connect to a WiFi Network or setup a AP to configure WiFi. Setting to false will setup as a AP.
 #define USE_MULTICAST       true    //Option to broadcast a ".local" URL on your local network default split-flap.local. You can change the name under configurable settings. On by default since #112 — the begin/update plumbing existed all along and this makes the display findable without knowing its DHCP lease.
@@ -202,6 +201,13 @@ const char* espVersion = GIT_REV;
 //All the letters on the units that we have to be displayed. You can change these if it so pleases at your own risk
 const char letters[] = {' ', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '$', '&', '#', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', '.', '-', '?', '!'};
 int displayState[UNITS_AMOUNT];
+//Effective display width in character slots (#123): highest unit index the
+//boot-time I2C probe saw + 1 (a dead unit mid-display keeps its slot).
+//Every text-layout helper targets this instead of the UNITS_AMOUNT ceiling,
+//so a 5-unit display no longer centers text across absent units. Falls back
+//to UNITS_AMOUNT when the probe finds nothing (bench ESP, SERIAL_ENABLE).
+//Set by probeI2cBus(); declared extern in HelpersStringHandling.ino.
+int displayWidth = UNITS_AMOUNT;
 //Units whose most recent letter write failed at the Wire level
 //(endTransmission != 0) during the last showMessage() pass. Surfaced via
 //MQTT health telemetry (#121); harmless standalone counter otherwise.
@@ -1214,6 +1220,12 @@ void setup() {
     //re-runs the PROGMEM auto-install. Units already on the bundled rev are
     //skipped (issue #114) — re-flashing them wastes time and flash cycles.
     webServer.on("/reflash-units", HTTP_GET, [](AsyncWebServerRequest * request) {
+      //Same guard as the calibration endpoints — this handler owns the Wire
+      //bus for a re-probe + flash pass and must not overlap an in-flight one.
+      if (firmwareFlashInProgress) {
+        request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
+        return;
+      }
       SerialPrintln(F("Request to Reflash Units Received"));
       int rebooted = enterBootloaderAllDetected(true);
       autoInstallFirmwareToBootloaderUnits();
@@ -1451,7 +1463,7 @@ void setup() {
 void loop() {
   //Reboot in here as if we restart within a request handler, no response is returned
   if (isPendingReboot) {
-#if SERIAL_ENABLE == false && UNIT_CALLS_DISABLE == false
+#if SERIAL_ENABLE == false
     //Park the display before restarting (issue #116). Eboot's staged-image
     //copy runs immediately after reset with no sketch in control — make
     //sure no stepper is energized and sagging the rail during it. Bounded
@@ -1624,7 +1636,9 @@ String getCurrentSettingValues() {
   out += '{';
 
   out += F("\"timezoneOffset\":");          out += getTimezoneOffsetMinutes();
-  out += F(",\"unitCount\":");              out += UNITS_AMOUNT;
+  //Detected display width (#123), not the UNITS_AMOUNT ceiling — the web
+  //UI's line-count math and repeating-string actions follow the real size.
+  out += F(",\"unitCount\":");              out += displayWidth;
   out += F(",\"detectedUnitCount\":");      out += detectedUnitCount;
 
   out += F(",\"detectedUnitAddresses\":[");

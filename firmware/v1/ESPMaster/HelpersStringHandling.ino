@@ -2,22 +2,27 @@
 // unit (the Arduino IDE's preprocessor would otherwise auto-generate these).
 String cleanString(String message);
 
+// Effective display width in character slots (#123). Defined in
+// ESPMaster.ino (defaults to the UNITS_AMOUNT ceiling, updated by
+// probeI2cBus()); native tests define their own to exercise narrow widths.
+extern int displayWidth;
+
 //Aligns string on center of array and fills empty chars with spaces
 String centerString(String message) {
   //Overflow-safe: if the message is already at or over the display width,
   //truncate rather than wrap int/unsigned subtraction into a huge loop.
-  if (message.length() >= (unsigned int)UNITS_AMOUNT) {
-    return cleanString(message.substring(0, UNITS_AMOUNT));
+  if (message.length() >= (unsigned int)displayWidth) {
+    return cleanString(message.substring(0, displayWidth));
   }
 
   //Takes care of the left side
-  int leftSpaceAmount = (UNITS_AMOUNT -  message.length()) / 2;
+  int leftSpaceAmount = (displayWidth -  message.length()) / 2;
   for (int spaceIndex = 0; spaceIndex < leftSpaceAmount; spaceIndex++) {
     message = " " + message;
   }
 
   //Take care of the right side
-  for(int spaceIndex = message.length(); spaceIndex < UNITS_AMOUNT; spaceIndex++) {
+  for(int spaceIndex = message.length(); spaceIndex < displayWidth; spaceIndex++) {
     message = message + " ";
   }
 
@@ -28,20 +33,20 @@ String centerString(String message) {
 
 String createRepeatingString(char character) {
   String newMessage = "";
-  for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
+  for (int unitIndex = 0; unitIndex < displayWidth; unitIndex++) {
     newMessage.concat(character);
   }
 
-  return newMessage;  
+  return newMessage;
 }
 
 //Aligns string on right side of array and fills empty chars with spaces
 String rightString(String message) {
-  if (message.length() >= (unsigned int)UNITS_AMOUNT) {
-    return cleanString(message.substring(0, UNITS_AMOUNT));
+  if (message.length() >= (unsigned int)displayWidth) {
+    return cleanString(message.substring(0, displayWidth));
   }
 
-  int rightSpaceAmount = (UNITS_AMOUNT - message.length());
+  int rightSpaceAmount = (displayWidth - message.length());
   for (int spaceIndex = 0; spaceIndex < rightSpaceAmount; spaceIndex++) {
     message = " " + message;
   }
@@ -53,11 +58,11 @@ String rightString(String message) {
 
 //Aligns string on left side of array and fills empty chars with spaces
 String leftString(String message) {
-  if (message.length() >= (unsigned int)UNITS_AMOUNT) {
-    return cleanString(message.substring(0, UNITS_AMOUNT));
+  if (message.length() >= (unsigned int)displayWidth) {
+    return cleanString(message.substring(0, displayWidth));
   }
 
-  int leftSpaceAmount = (UNITS_AMOUNT - message.length());
+  int leftSpaceAmount = (displayWidth - message.length());
   for (int spaceIndex = 0; spaceIndex < leftSpaceAmount; spaceIndex++) {
     message = message + " ";
   }
@@ -157,7 +162,7 @@ std::vector<String> processSentenceToLines(String sentence) {
       int wordLength = indexOfFirstNewline == -1 ? wordItem.length() : indexOfFirstNewline;
 
       //If we cannot fit everything on the same line, start a new line
-      if (inProgressLine != "" && inProgressLine.length() + wordLength + 1 > UNITS_AMOUNT)
+      if (inProgressLine != "" && inProgressLine.length() + wordLength + 1 > (unsigned int)displayWidth)
       {
           lines.push_back(inProgressLine);
           inProgressLine = "";
@@ -184,7 +189,7 @@ std::vector<String> processSentenceToLines(String sentence) {
       else
       {
         //If we need to break up the word as its too long, then we need to add a "-"
-        if (inProgressLine.length() == UNITS_AMOUNT - 1 && letterIndex < currentWordLength - 1)
+        if ((int)inProgressLine.length() == displayWidth - 1 && letterIndex < currentWordLength - 1)
         {
           inProgressLine = inProgressLine + "-";
           lines.push_back(inProgressLine);
@@ -193,7 +198,7 @@ std::vector<String> processSentenceToLines(String sentence) {
 
         //Business as usual, add the letter onto the in progress line
         inProgressLine = inProgressLine + wordItemLetter;
-        if (inProgressLine.length() == UNITS_AMOUNT)
+        if ((int)inProgressLine.length() == displayWidth)
         {
           lines.push_back(inProgressLine);
           inProgressLine = "";

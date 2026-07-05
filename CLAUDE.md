@@ -16,7 +16,7 @@ Sketches that make up the system:
 - **`firmware/v1/Unit/Unit.ino`** — Per-flap Arduino Nano firmware. I2C slave whose address is read from four DIP-switch pins (`ADRESSSW1..4`) and offset by `I2C_ADDRESS_BASE` (currently 1) so DIP 0000 → I2C 0x01 (address 0x00 is reserved for general call). Drives a 28BYJ-48 stepper via ULN2003 (`STEPPERPIN1..4`), homes on a KY-003 hall sensor at `HALLPIN`, and applies a per-unit step offset stored in EEPROM. The character alphabet is a fixed `letters[]` array in the sketch — the master sends an index, not the character. Calibration (offset / jog / home) is driven from the master's web UI over I2C opcodes.
 - **`firmware/v1/UnitBootloader/`** — Vendored + patched [twiboot](https://github.com/orempel/twiboot), an I2C bootloader for the Nanos. Once installed (one-time ICSP flash per unit), the master pushes new unit firmware over I2C from a PROGMEM-bundled hex (no more ICSP cables). See `firmware/v1/UnitBootloader/README.md`.
 
-Master/unit contract: I2C index in the `letters[]` table + speed byte, with `ANSWER_SIZE = 1` status byte back. `UNITS_AMOUNT` in `ESPMaster.ino` bounds per-unit state arrays on the master — probe only acts on addresses that actually reply, so setting it higher than the physical unit count is safe.
+Master/unit contract: I2C index in the `letters[]` table + speed byte, with `ANSWER_SIZE = 1` status byte back. `UNITS_AMOUNT` (16) in `ESPMaster.ino` is the DIP-switch hardware ceiling and bounds the per-unit state arrays; the effective display width (`displayWidth`, #123) is derived at each bus probe as highest responder + 1 (fallback: the ceiling when nothing responds) and drives all text layout — one image fits any display size 1..16. Units must be DIP-addressed contiguously from 0x01 for the width to match the physical count; `showMessage()` snapshots the width per call because `/reflash-units` can re-probe (and thus mutate `displayWidth`) from a web handler nested inside its yield points.
 
 ## Build / Flash / Test Workflow (PlatformIO)
 
@@ -49,9 +49,8 @@ CI: `.github/workflows/build.yml` matrix-builds the firmware projects (ESPMaster
 
 All live as `#define`s at the top of `ESPMaster.ino`:
 
-- `UNITS_AMOUNT` — max units the master will track. Sized to the DIP-switch hardware ceiling; safe to leave at the max even with fewer physical units (probe ignores non-responders).
-- `SERIAL_ENABLE` — toggling this to `true` **disables I2C** on the ESP-01 (shared pins). Keep `false` unless deliberately debugging over serial with units disconnected.
-- `UNIT_CALLS_DISABLE` — lets the ESP run standalone for web-UI work.
+- `UNITS_AMOUNT` — hardware ceiling (16 = 4-bit DIP addressing), array bound only. The runtime display width comes from the boot probe (`displayWidth`, pure logic in `DisplayWidth.h`, natively tested); never lower this per-display.
+- `SERIAL_ENABLE` — toggling this to `true` **disables I2C** on the ESP-01 (shared pins) and with it all unit calls — this doubles as the "ESP standalone" web-UI debug mode (the separate `UNIT_CALLS_DISABLE` knob was removed in #123).
 - `WIFI_USE_DIRECT` — `false` = WiFiManager captive portal; `true` uses the hard-coded `wifiDirectSsid` / `wifiDirectPassword` from `WifiCredentials.h`. When `true`, recovery mode (see below) also joins the known WiFi instead of bringing up a SoftAP.
 - `USE_MULTICAST` — enables mDNS. The name (and the WiFi hostname, MQTT id/topics, and recovery/OTA/setup AP SSIDs) comes from the per-device identity (#125): the EEPROM `deviceName` if set via the web UI, else `split-flap-<hex chip id>` — unique per device automatically, so multiple displays share one image with no edits. `mdnsName` is only the prefix seed. Resolution happens in `resolveDeviceIdentity()` at the top of `setup()`, right after the single `initialiseFileSystem()` call (which runs before the quiet-OTA/recovery dispatch — one `EEPROM.begin` + migration point for every boot path); pure logic in `DeviceIdentity.h` (natively tested). Static IPs are deliberately unsupported — use DHCP reservation on the router.
 - `OTA_ENABLE` — enables Arduino OTA (separate from the web `/firmware/master` path); set `otaPassword` if used.

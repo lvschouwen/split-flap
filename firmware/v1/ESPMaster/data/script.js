@@ -305,10 +305,10 @@ function setDeviceName(storedName, effectiveName) {
 	input.placeholder = effectiveName;
 }
 
-//Shows "<detected> / <max>" in the units label. The JS global
-//`unitCount` (used by the input line-count calculation below) tracks
-//the compile-time max so breaking text into lines stays consistent
-//regardless of how many units the master actually saw on the bus.
+//Shows "<detected> / <width>" in the units label. The JS global
+//`unitCount` (used by the input line-count calculation below) tracks the
+//display width the master derived from its bus probe (#123) — highest
+//responding unit + 1 — so line-break math matches the firmware's layout.
 function setUnitCount(total, detected) {
 	var label = String(total);
 	if (detected !== undefined && detected !== null) {
