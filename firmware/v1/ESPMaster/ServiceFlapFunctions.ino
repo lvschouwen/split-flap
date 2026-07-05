@@ -261,6 +261,7 @@ void showMessage(String message, int flapSpeed) {
     commandedLetters[unitIndex] = -1;
   }
 
+  int writeErrors = 0;
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
     //Skip slots the boot-time bus probe did not find a sketch-running unit on.
     //Writing to absent addresses causes isDisplayMoving() to stall and, more
@@ -282,10 +283,14 @@ void showMessage(String message, int flapSpeed) {
 
     //only write to unit if char exists in letter array
     if (currentLetterPosition != -1) {
-      writeToUnit(unitIndex, currentLetterPosition, flapSpeed);
+      if (writeToUnit(unitIndex, currentLetterPosition, flapSpeed) != 0) {
+        writeErrors++;
+      }
       commandedLetters[unitIndex] = currentLetterPosition;
     }
   }
+
+  lastShowUnitWriteErrors = writeErrors;
 
   //Wait for the display to stop moving, then verify each unit actually
   //shows what was commanded (issue #106).
@@ -367,8 +372,10 @@ int translateLettertoInt(char letterchar) {
   return -1;
 }
 
-//Write letter position and speed in rpm to single unit (by 0-based unit index).
-void writeToUnit(int unitIndex, int letter, int flapSpeed) {
+//Write letter position and speed in rpm to single unit (by 0-based unit
+//index). Returns Wire.endTransmission() status (0 = success) so callers
+//can tally bus-level failures (#121).
+int writeToUnit(int unitIndex, int letter, int flapSpeed) {
   int sendArray[2] = {letter, flapSpeed}; //Array with values to send to unit
 
   Wire.beginTransmission(toI2cAddress(unitIndex));
@@ -380,7 +387,7 @@ void writeToUnit(int unitIndex, int letter, int flapSpeed) {
 
     Wire.write(sendArray[index]);
   }
-  Wire.endTransmission(); //send values to unit
+  return Wire.endTransmission(); //send values to unit
 }
 
 //Checks if unit in display is currently moving. Only queries units the boot

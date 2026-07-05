@@ -190,6 +190,10 @@ const char* espVersion = GIT_REV;
 //All the letters on the units that we have to be displayed. You can change these if it so pleases at your own risk
 const char letters[] = {' ', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '$', '&', '#', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', '.', '-', '?', '!'};
 int displayState[UNITS_AMOUNT];
+//Units whose most recent letter write failed at the Wire level
+//(endTransmission != 0) during the last showMessage() pass. Surfaced via
+//MQTT health telemetry (#121); harmless standalone counter otherwise.
+int lastShowUnitWriteErrors = 0;
 unsigned long previousMillis = 0;
 
 //Search for parameter in HTTP POST request

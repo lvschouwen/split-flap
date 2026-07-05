@@ -72,3 +72,8 @@ void autoInstallFirmwareToBootloaderUnits();
 // Defined in ServiceFirmwareFunctions.ino; called from setup().
 void autoUpdateOutdatedUnits();
 int enterBootloaderAllDetected(bool reprobeAfter);
+
+// Wire-level write failures from the last showMessage() pass. Defined in
+// ESPMaster.ino, updated by ServiceFlapFunctions.ino, published by the MQTT
+// telemetry in ServiceMqttFunctions.ino (#121).
+extern int lastShowUnitWriteErrors;
