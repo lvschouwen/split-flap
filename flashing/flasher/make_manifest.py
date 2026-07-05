@@ -20,6 +20,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 UNIT_BUILD = REPO / "firmware/v1/Unit/.pio/build/unit/firmware.hex"
+UNIT_REV_BUILT = REPO / "firmware/v1/Unit/.pio/build/unit/firmware.rev"
 ESP_DATA = REPO / "firmware/v1/ESPMaster/data"
 ESP_BUILD = REPO / "firmware/v1/ESPMaster/.pio/build/espmaster"
 TWIBOOT = REPO / "firmware/v1/UnitBootloader/prebuilt/twiboot-atmega328p-16mhz.hex"
@@ -35,9 +36,17 @@ def _sha256(p: Path) -> str:
 
 
 def git_rev() -> str:
-    out = subprocess.run(["git", "describe", "--always", "--dirty"],
-                         cwd=REPO, capture_output=True, text=True, check=True)
-    return out.stdout.strip()
+    """Master firmware GIT_REV, mirroring
+    firmware/v1/ESPMaster/build_assets.py::git_short_rev exactly:
+    short HEAD hash, plus a '-dirty' suffix if the tree has uncommitted
+    changes. Do NOT use 'git describe' — it picks up old tags and produces
+    a value that never matches the firmware's own GIT_REV.
+    """
+    rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                        cwd=REPO, capture_output=True, text=True, check=True).stdout.strip()
+    dirty = bool(subprocess.run(["git", "status", "--porcelain"],
+                              cwd=REPO, capture_output=True, text=True, check=True).stdout.strip())
+    return f"{rev}-dirty" if dirty else rev
 
 
 def build_manifest(root: Path, rev: str, build_date: str, extra: dict | None = None) -> dict:
@@ -52,27 +61,37 @@ def build_manifest(root: Path, rev: str, build_date: str, extra: dict | None = N
 
 
 def consistency_gate(unit_hex_built: Path, unit_hex_staged: Path,
-                     unit_rev_staged: Path, built_rev: str) -> None:
+                     unit_rev_built: Path, unit_rev_staged: Path) -> None:
     if _sha256(unit_hex_built) != _sha256(unit_hex_staged):
         raise GateError(
             "staged ESPMaster/data/unit-firmware.hex differs from the built Unit hex — "
             "the master would auto-push STALE unit firmware. Run 'stage' then rebuild ESPMaster."
         )
+    built_rev = unit_rev_built.read_text().strip()
     staged_rev = unit_rev_staged.read_text().strip()
-    if staged_rev != built_rev:
-        raise GateError(f"staged unit rev '{staged_rev}' != built rev '{built_rev}'")
+    if built_rev != staged_rev:
+        raise GateError(
+            f"staged unit rev '{staged_rev}' != built unit rev '{built_rev}' — "
+            "run 'stage' then rebuild ESPMaster."
+        )
 
 
 def cmd_stage() -> None:
+    if not UNIT_REV_BUILT.exists():
+        sys.exit(
+            f"error: {UNIT_REV_BUILT} not found — build the Unit sketch first "
+            "('pio run' in firmware/v1/Unit) before staging"
+        )
     shutil.copy2(UNIT_BUILD, ESP_DATA / "unit-firmware.hex")
-    (ESP_DATA / "unit-firmware.rev").write_text(git_rev() + "\n")
-    print(f"staged {UNIT_BUILD} -> {ESP_DATA}/unit-firmware.hex (rev {git_rev()})")
+    shutil.copy2(UNIT_REV_BUILT, ESP_DATA / "unit-firmware.rev")
+    print(f"staged {UNIT_BUILD} -> {ESP_DATA}/unit-firmware.hex")
+    print(f"staged {UNIT_REV_BUILT} -> {ESP_DATA}/unit-firmware.rev")
 
 
 def cmd_collect(avrdude_zip: str | None) -> None:
     rev = git_rev()
     consistency_gate(UNIT_BUILD, ESP_DATA / "unit-firmware.hex",
-                     ESP_DATA / "unit-firmware.rev", rev)
+                     UNIT_REV_BUILT, ESP_DATA / "unit-firmware.rev")
     ASSETS.mkdir(exist_ok=True)
     shutil.copy2(ESP_BUILD / "firmware.bin", ASSETS / "master-firmware.bin")
     shutil.copy2(UNIT_BUILD, ASSETS / "unit-firmware.hex")

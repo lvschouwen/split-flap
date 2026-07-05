@@ -1,6 +1,8 @@
 import hashlib
+import re
+
 import pytest
-from flasher.make_manifest import GateError, build_manifest, consistency_gate
+from flasher.make_manifest import GateError, build_manifest, consistency_gate, git_rev
 
 
 def test_build_manifest_hashes_all_files(tmp_path):
@@ -16,23 +18,32 @@ def test_build_manifest_hashes_all_files(tmp_path):
 
 
 def test_gate_passes_when_consistent(tmp_path):
-    built = tmp_path / "built.hex"; built.write_bytes(b"HEX")
-    staged = tmp_path / "staged.hex"; staged.write_bytes(b"HEX")
-    rev = tmp_path / "unit-firmware.rev"; rev.write_text("abc1234\n")
-    consistency_gate(built, staged, rev, "abc1234")  # no raise
+    built_hex = tmp_path / "built.hex"; built_hex.write_bytes(b"HEX")
+    staged_hex = tmp_path / "staged.hex"; staged_hex.write_bytes(b"HEX")
+    built_rev = tmp_path / "built.rev"; built_rev.write_text("abc1234\n")
+    staged_rev = tmp_path / "staged.rev"; staged_rev.write_text("abc1234\n")
+    consistency_gate(built_hex, staged_hex, built_rev, staged_rev)  # no raise
 
 
 def test_gate_rejects_stale_staged_hex(tmp_path):
-    built = tmp_path / "built.hex"; built.write_bytes(b"NEW")
-    staged = tmp_path / "staged.hex"; staged.write_bytes(b"OLD")
-    rev = tmp_path / "r"; rev.write_text("abc1234")
+    built_hex = tmp_path / "built.hex"; built_hex.write_bytes(b"NEW")
+    staged_hex = tmp_path / "staged.hex"; staged_hex.write_bytes(b"OLD")
+    built_rev = tmp_path / "built.rev"; built_rev.write_text("abc1234")
+    staged_rev = tmp_path / "staged.rev"; staged_rev.write_text("abc1234")
     with pytest.raises(GateError, match="differs"):
-        consistency_gate(built, staged, rev, "abc1234")
+        consistency_gate(built_hex, staged_hex, built_rev, staged_rev)
 
 
 def test_gate_rejects_rev_mismatch(tmp_path):
-    built = tmp_path / "built.hex"; built.write_bytes(b"HEX")
-    staged = tmp_path / "staged.hex"; staged.write_bytes(b"HEX")
-    rev = tmp_path / "r"; rev.write_text("dead999")
-    with pytest.raises(GateError, match="rev"):
-        consistency_gate(built, staged, rev, "abc1234")
+    built_hex = tmp_path / "built.hex"; built_hex.write_bytes(b"HEX")
+    staged_hex = tmp_path / "staged.hex"; staged_hex.write_bytes(b"HEX")
+    built_rev = tmp_path / "built.rev"; built_rev.write_text("abc1234")
+    staged_rev = tmp_path / "staged.rev"; staged_rev.write_text("dead999")
+    with pytest.raises(GateError, match="rev") as exc_info:
+        consistency_gate(built_hex, staged_hex, built_rev, staged_rev)
+    assert "abc1234" in str(exc_info.value)
+    assert "dead999" in str(exc_info.value)
+
+
+def test_git_rev_matches_repo_rev_format():
+    assert re.fullmatch(r"[0-9a-f]{7,12}(-dirty)?", git_rev())
