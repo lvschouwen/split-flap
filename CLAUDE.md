@@ -12,7 +12,7 @@ An Arduino-based split-flap display. Firmware built with **PlatformIO** — each
 
 Sketches that make up the system:
 
-- **`firmware/v1/ESPMaster/`** — ESP8266 (ESP-01) master firmware. Hosts the async web UI (baked into `WebAssets.h` PROGMEM at build time by `build_assets.py` — no filesystem on the device), connects to WiFi (via `ESPAsyncWiFiManager` AP flow or direct credentials from `WifiCredentials.h`), runs the NTP-backed clock logic, and pushes characters out over I2C as the bus master. Entry point is `ESPMaster.ino`; feature areas live in sibling `.ino` files which the Arduino/PlatformIO preprocessor concatenates at build time (`ServiceFlapFunctions`, `ServiceWifiFunctions`, `ServiceFileSystemFunctions`, `ServiceFirmwareFunctions`, `ServiceWebLog`, `HelpersStringHandling`). Header-only helpers: `HelpersSerialHandling.h` (templates — can't be auto-prototyped), `WebLog.h` (Print-subclass log ring + API). `ESPMaster.h` declares prototypes for functions with types the Arduino preprocessor can't auto-prototype.
+- **`firmware/v1/ESPMaster/`** — ESP8266 (ESP-01) master firmware. Hosts the async web UI (baked into `WebAssets.h` PROGMEM at build time by `build_assets.py` — no filesystem on the device), connects to WiFi (via `ESPAsyncWiFiManager` AP flow or direct credentials from `WifiCredentials.h`), runs the NTP-backed clock logic, and pushes characters out over I2C as the bus master. Entry point is `ESPMaster.ino`; feature areas live in sibling `.ino` files which the Arduino/PlatformIO preprocessor concatenates at build time (`ServiceFlapFunctions`, `ServiceWifiFunctions`, `ServiceFileSystemFunctions`, `ServiceFirmwareFunctions`, `ServiceWebLog`, `ServiceMqttFunctions`, `HelpersStringHandling`). Header-only helpers: `HelpersSerialHandling.h` (templates — can't be auto-prototyped), `WebLog.h` (Print-subclass log ring + API), `MqttHelpers.h` (pure MQTT payload/discovery logic, natively tested). `ESPMaster.h` declares prototypes for functions with types the Arduino preprocessor can't auto-prototype.
 - **`firmware/v1/Unit/Unit.ino`** — Per-flap Arduino Nano firmware. I2C slave whose address is read from four DIP-switch pins (`ADRESSSW1..4`) and offset by `I2C_ADDRESS_BASE` (currently 1) so DIP 0000 → I2C 0x01 (address 0x00 is reserved for general call). Drives a 28BYJ-48 stepper via ULN2003 (`STEPPERPIN1..4`), homes on a KY-003 hall sensor at `HALLPIN`, and applies a per-unit step offset stored in EEPROM. The character alphabet is a fixed `letters[]` array in the sketch — the master sends an index, not the character. Calibration (offset / jog / home) is driven from the master's web UI over I2C opcodes.
 - **`firmware/v1/UnitBootloader/`** — Vendored + patched [twiboot](https://github.com/orempel/twiboot), an I2C bootloader for the Nanos. Once installed (one-time ICSP flash per unit), the master pushes new unit firmware over I2C from a PROGMEM-bundled hex (no more ICSP cables). See `firmware/v1/UnitBootloader/README.md`.
 
@@ -24,6 +24,7 @@ Each sketch has its own `platformio.ini`. Run all commands from the sketch folde
 
 ```bash
 pio run                      # build
+pio run -e espmaster_mqtt    # MQTT-enabled variant (#121)
 pio run -t upload            # flash sketch (USB, one-time)
 pio device monitor           # serial at 115200
 pio test -e native           # host-side unit tests (ESPMaster only)
@@ -56,6 +57,7 @@ All live as `#define`s at the top of `ESPMaster.ino`:
 - `WIFI_STATIC_IP` — experimental; prefer DHCP reservation on the router.
 - `OTA_ENABLE` — enables Arduino OTA (separate from the web `/firmware/master` path); set `otaPassword` if used.
 - `FLAP_AMOUNT` / `AMOUNTFLAPS` — hardware-coupled (45). The master's `FLAP_AMOUNT` and the unit's `letters[]` length must agree.
+- `MQTT_ENABLE` — MQTT / Home Assistant integration (#121). Default `false` (fully compiled out). Build the `espmaster_mqtt` env and copy `MqttCredentials.h.example` → `MqttCredentials.h` (gitignored) to enable. Notification-only semantics: HA text shows for a dwell (default 60 s, clamp 5–3600), then reverts; health telemetry every 60 s; zero EEPROM/RTC interaction.
 
 Unit-side: `SERIAL_ENABLE` and `TEST_ENABLE` (cycles a fixed character sequence for homing validation) are commented out by default in `Unit.ino`.
 
@@ -91,6 +93,7 @@ The `RtcBootState` struct holds `magic`, `bootCounter`, `bootMode` (quiet OTA mo
 ## Gotchas
 
 - Editing `.ino` siblings in `firmware/v1/ESPMaster/` is editing one translation unit — declarations and `#define`s from `ESPMaster.ino` are visible everywhere, and order of concatenation is alphabetical by file name. The Arduino preprocessor auto-prototypes plain functions but falls over on templates (`<typeprefixerror>`) and on signatures with namespace-qualified references like `fs::FS&`; add those prototypes manually (header file) rather than relying on auto-prototyping.
+- The `.ino`→`.cpp` auto-prototype scanner is **preprocessor-blind**: it generates prototypes even for functions inside a disabled `#if` block, so a gated function whose signature uses library types (e.g. the `#if MQTT_ENABLE` AsyncMqttClient callbacks) needs unconditional forward declarations of those types near the top of `ESPMaster.ino` — see the comment block above them there.
 - The web UI is in PROGMEM (`WebAssets.h`, regenerated by `build_assets.py` on every build), NOT in LittleFS. No separate `uploadfs` step — editing `data/*.html|js|css` is picked up on the next `pio run`.
 - The ESP-01 has very little RAM (~42 KB static free at rest). Be conservative adding libraries or large JSON payloads.
 - On the async library choice: `dvarrel` forks of `ESPAsyncTCP` + `ESPAsyncWebSrv` are the maintained ESP8266-focused path. `mathieucarbou` is the ESP32 successor; wrong target for ESP-01. Don't "modernize" without measuring.

@@ -885,12 +885,24 @@ static void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProp
 
 //Publishes the four retained HA discovery configs. Main loop only — the
 //buffers are stack-allocated here on the 4 KB cont stack.
+//Truncation guard (Task 3 review): snprintf returns the would-be length;
+//>= bufLen means the buffer was too small (e.g. a very long custom device
+//id) and the JSON/topic is cut mid-string — publishing that would poison
+//HA's retained config, so skip and log instead. Topic buffer is 96 bytes:
+//the longest template (homeassistant/sensor/%s_unit_errors/config) has 40
+//fixed chars, leaving room for device ids up to 55 chars.
 static void publishMqttDiscovery() {
-  char topicBuf[64];
+  char topicBuf[96];
   char payloadBuf[512];
   for (int entity = 0; entity < DISCOVERY_ENTITY_COUNT; entity++) {
-    buildDiscoveryTopic(topicBuf, sizeof(topicBuf), entity, mqttResolvedDeviceId.c_str());
-    buildDiscoveryPayload(payloadBuf, sizeof(payloadBuf), entity, mqttResolvedDeviceId.c_str(), espVersion);
+    size_t tLen = buildDiscoveryTopic(topicBuf, sizeof(topicBuf), entity, mqttResolvedDeviceId.c_str());
+    size_t pLen = buildDiscoveryPayload(payloadBuf, sizeof(payloadBuf), entity, mqttResolvedDeviceId.c_str(), espVersion);
+    if (tLen == 0 || tLen >= sizeof(topicBuf) || pLen == 0 || pLen >= sizeof(payloadBuf)) {
+      SerialPrint(F("MQTT: discovery entity "));
+      SerialPrint(entity);
+      SerialPrintln(F(" skipped — topic/payload would truncate (device id too long?)"));
+      continue;
+    }
     mqttClient.publish(topicBuf, 0, true, payloadBuf);
   }
 }
