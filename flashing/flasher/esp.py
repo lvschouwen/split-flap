@@ -10,8 +10,12 @@ from pathlib import Path
 
 _MAGIC = 0xE9
 _SIZE_NIBBLE_1MB = 0x2
-_MODE_DOUT = 0x3
 _MODES = {0x0: "QIO", 0x1: "QOUT", 0x2: "DIO", 0x3: "DOUT"}
+# QIO, DIO and DOUT are all known-working boot modes on the ESP-01 (the
+# shipped master-firmware.bin is QIO and OTA-updates successfully on target
+# hardware) — only QOUT (rare/unexpected on this part) or a truly unknown
+# mode byte warrant a warning.
+_KNOWN_GOOD_MODES = {0x0, 0x2, 0x3}
 
 
 class ImageError(Exception):
@@ -30,9 +34,9 @@ def validate_image_header(header: bytes) -> list[str]:
             "(esp01_1m) — flashing this would break all future OTA (#92/#94)"
         )
     warnings = []
-    if header[2] != _MODE_DOUT:
+    if header[2] not in _KNOWN_GOOD_MODES:
         mode = _MODES.get(header[2], f"{header[2]:#04x}")
-        warnings.append(f"flash mode is {mode}, expected DOUT — flash may not boot on ESP-01")
+        warnings.append(f"flash mode is {mode}, unexpected on ESP-01 — flash may not boot")
     return warnings
 
 

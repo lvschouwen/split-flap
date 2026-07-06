@@ -76,6 +76,27 @@ def consistency_gate(unit_hex_built: Path, unit_hex_staged: Path,
         )
 
 
+def freshness_gate(master_bin: Path, staged_hex: Path) -> None:
+    """Guard against shipping a master binary that was built BEFORE the
+    currently-staged unit firmware — it would embed a stale unit image even
+    though the byte-for-byte consistency_gate() above passes (that gate only
+    proves the built Unit hex still matches what's staged, not that the
+    master was rebuilt afterwards).
+
+    CI's fixed step order (Unit build -> stage -> ESPMaster build -> collect,
+    see flasher.yml) always satisfies this naturally. This guard exists for
+    manual/dev runs where a rebuild step can be forgotten (e.g. staging fresh
+    unit firmware, then collecting without rebuilding ESPMaster first).
+    """
+    if master_bin.stat().st_mtime < staged_hex.stat().st_mtime:
+        raise GateError(
+            f"{master_bin} is OLDER than the staged {staged_hex.name} — "
+            "ESPMaster was built before this unit firmware was staged, so it "
+            "embeds a stale copy. Rebuild ESPMaster ('pio run' in "
+            "firmware/v1/ESPMaster) after 'stage', then re-run collect."
+        )
+
+
 def cmd_stage() -> None:
     if not UNIT_REV_BUILT.exists():
         sys.exit(
@@ -92,6 +113,7 @@ def cmd_collect(avrdude_zip: str | None) -> None:
     rev = git_rev()
     consistency_gate(UNIT_BUILD, ESP_DATA / "unit-firmware.hex",
                      UNIT_REV_BUILT, ESP_DATA / "unit-firmware.rev")
+    freshness_gate(ESP_BUILD / "firmware.bin", ESP_DATA / "unit-firmware.hex")
     ASSETS.mkdir(exist_ok=True)
     shutil.copy2(ESP_BUILD / "firmware.bin", ASSETS / "master-firmware.bin")
     shutil.copy2(UNIT_BUILD, ASSETS / "unit-firmware.hex")

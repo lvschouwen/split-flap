@@ -1,8 +1,11 @@
 import hashlib
+import os
 import re
+import time
 
 import pytest
-from flasher.make_manifest import GateError, build_manifest, consistency_gate, git_rev
+from flasher.make_manifest import (GateError, build_manifest, consistency_gate,
+                                   freshness_gate, git_rev)
 
 
 def test_build_manifest_hashes_all_files(tmp_path):
@@ -47,3 +50,22 @@ def test_gate_rejects_rev_mismatch(tmp_path):
 
 def test_git_rev_matches_repo_rev_format():
     assert re.fullmatch(r"[0-9a-f]{7,12}(-dirty)?", git_rev())
+
+
+def test_freshness_gate_rejects_master_built_before_staging(tmp_path):
+    staged_hex = tmp_path / "unit-firmware.hex"; staged_hex.write_bytes(b"HEX")
+    master_bin = tmp_path / "firmware.bin"; master_bin.write_bytes(b"BIN")
+    now = time.time()
+    os.utime(master_bin, (now - 100, now - 100))  # master built...
+    os.utime(staged_hex, (now, now))               # ...before unit fw was staged
+    with pytest.raises(GateError, match="OLDER"):
+        freshness_gate(master_bin, staged_hex)
+
+
+def test_freshness_gate_passes_when_master_built_after_staging(tmp_path):
+    staged_hex = tmp_path / "unit-firmware.hex"; staged_hex.write_bytes(b"HEX")
+    master_bin = tmp_path / "firmware.bin"; master_bin.write_bytes(b"BIN")
+    now = time.time()
+    os.utime(staged_hex, (now - 100, now - 100))  # staged first...
+    os.utime(master_bin, (now, now))               # ...then master rebuilt
+    freshness_gate(master_bin, staged_hex)  # no raise

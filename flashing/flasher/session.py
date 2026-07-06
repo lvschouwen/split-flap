@@ -37,3 +37,10 @@ def load_session(path: Path) -> Session | None:
 
 def save_session(s: Session, path: Path) -> None:
     path.write_text(json.dumps(asdict(s), indent=2))
+
+
+def clear_session(path: Path) -> None:
+    """Remove a session file, e.g. after a run completes — so the next
+    'Provision a new display' run doesn't silently reuse a finished session.
+    """
+    path.unlink(missing_ok=True)

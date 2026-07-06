@@ -3,8 +3,8 @@ import time
 
 from flasher import avr, esp, ota, ports, ui, wiring
 from flasher.assets import asset_path
-from flasher.session import (Session, default_session_path, load_session,
-                             next_unit, save_session)
+from flasher.session import (Session, clear_session, default_session_path,
+                             load_session, next_unit, save_session)
 
 
 def network_verdict(settings, expected_n: int, manifest_rev: str):
@@ -12,6 +12,14 @@ def network_verdict(settings, expected_n: int, manifest_rev: str):
 
     Uses detectedUnitCount + detectedUnitAddresses — NOT unitCount, which is
     displayWidth (highest responder + 1) and reads N even with dead units.
+
+    detectedUnitVersionStatus is a slot-indexed array (length UNITS_AMOUNT=16):
+    index i corresponds to unit (i+1) / I2C address (i+1). 0=healthy (running
+    the bundled unit firmware), 1=outdated, 2=unknown (predates the version
+    opcode, OR the unit is still stuck in twiboot bootloader after a failed
+    auto-install, OR silent/absent). A bootloader-stuck unit still shows up in
+    detectedUnitAddresses, so address presence alone is not proof of health —
+    every expected unit must also have status 0.
     """
     if settings is None:
         return False, ["device unreachable — is it on your WiFi? (check router for its IP)"]
@@ -24,6 +32,16 @@ def network_verdict(settings, expected_n: int, manifest_rev: str):
     missing = sorted(expected - addrs)
     if missing:
         problems.append(f"units missing from I2C bus (addresses): {missing}")
+    status = settings.get("detectedUnitVersionStatus", [])
+    bad_units = sorted(
+        n for n in (expected - set(missing))
+        if (status[n - 1] if n - 1 < len(status) else None) != 0
+    )
+    if bad_units:
+        problems.append(
+            "units present but not running current firmware (may still be in "
+            f"bootloader / auto-install pending): {bad_units}"
+        )
     detected = settings.get("detectedUnitCount", 0)
     if detected != expected_n and not missing:
         problems.append(f"detectedUnitCount {detected} != expected {expected_n}")
@@ -103,11 +121,23 @@ def _flash_one_unit(unit_no: int, port: str) -> bool:
     return True
 
 
+def _is_completed_session(session) -> bool:
+    """True for a loaded session whose units are all done (or exhausted from
+    the skip list) — i.e. a prior run finished. Such a session must NOT be
+    silently reused for a fresh 'Provision a new display' run: every unit
+    would appear already flashed and the master would be flashed against the
+    OLD unit count.
+    """
+    return bool(session and session.unit_count and next_unit(session) is None)
+
+
 def run_wizard(manifest) -> None:
     ui.heading("Provision a new display")
     spath = default_session_path()
     session = load_session(spath)
-    if session and session.unit_count and next_unit(session) is not None:
+    if _is_completed_session(session):
+        session = None
+    elif session and session.unit_count and next_unit(session) is not None:
         if ui.ask_yn(f"Resume previous run ({len(session.done)}/{session.unit_count} units done)?",
                      default=True):
             pass
@@ -157,6 +187,11 @@ def run_wizard(manifest) -> None:
            "The master reboots onto your WiFi and auto-installs the unit firmware over I2C.")
     if ui.ask_yn("Verify the live display over the network now?", default=True):
         run_status(manifest, expected_n=session.unit_count)
+
+    # run finished — clear the session so the next "Provision a new display"
+    # starts fresh instead of silently reusing this completed one (see
+    # _is_completed_session above).
+    clear_session(spath)
 
 
 def run_single_unit(manifest) -> None:

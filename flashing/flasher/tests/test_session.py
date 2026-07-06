@@ -1,5 +1,6 @@
 from pathlib import Path
-from flasher.session import Session, load_session, next_unit, save_session
+from flasher.session import (Session, clear_session, load_session, next_unit,
+                             save_session)
 
 
 def test_next_unit_walks_in_order():
@@ -31,3 +32,15 @@ def test_load_missing_or_corrupt_returns_none(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{not json")
     assert load_session(bad) is None
+
+
+def test_clear_session_removes_file(tmp_path):
+    p = tmp_path / "s.json"
+    save_session(Session(unit_count=3, done=[1, 2, 3]), p)
+    assert p.exists()
+    clear_session(p)
+    assert not p.exists()
+
+
+def test_clear_session_missing_file_is_noop(tmp_path):
+    clear_session(tmp_path / "nope.json")  # must not raise

@@ -23,14 +23,14 @@ jobs:
       matrix:
         project: [ESPMaster, Unit]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
       - name: Cache PlatformIO
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.platformio/.cache
@@ -48,14 +48,14 @@ jobs:
     name: Native tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
       - name: Cache PlatformIO
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.platformio/.cache
@@ -77,7 +77,7 @@ jobs:
         run: python -m pytest tests/
 
       - name: Install flasher deps
-        run: pip install pyserial esptool
+        run: pip install pyserial==3.5 esptool==4.8.1
 
       - name: Run flasher tests
         working-directory: flashing

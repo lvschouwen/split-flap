@@ -29,9 +29,27 @@ def test_512kb_header_fatal():
         validate_image_header(hdr(size_freq=0x00))
 
 
-def test_non_dout_mode_is_warning_not_fatal():
-    warnings = validate_image_header(hdr(mode=0x00))  # QIO
-    assert len(warnings) == 1 and "DOUT" in warnings[0]
+def test_qio_mode_no_warning():
+    # shipped master-firmware.bin ships as QIO and boots fine on ESP-01 hardware
+    assert validate_image_header(hdr(mode=0x00)) == []
+
+
+def test_dio_mode_no_warning():
+    assert validate_image_header(hdr(mode=0x02)) == []
+
+
+def test_dout_mode_no_warning():
+    assert validate_image_header(hdr(mode=0x03)) == []
+
+
+def test_qout_mode_is_warning_not_fatal():
+    warnings = validate_image_header(hdr(mode=0x01))  # QOUT — not known-good on ESP-01
+    assert len(warnings) == 1 and "QOUT" in warnings[0]
+
+
+def test_unexpected_mode_value_is_warning():
+    warnings = validate_image_header(hdr(mode=0x07))
+    assert len(warnings) == 1
 
 
 def test_truncated_header_fatal():
@@ -72,14 +90,24 @@ def test_flash_master_dev_path_invokes_esptool_with_exact_args(tmp_path, monkeyp
     )
 
 
-def test_flash_master_valid_header_qio_mode_returns_one_warning(tmp_path, monkeypatch):
+def test_flash_master_qio_mode_no_warning(tmp_path, monkeypatch):
     monkeypatch.setattr("subprocess.run", Mock())
     bin_path = tmp_path / "qio.bin"
-    bin_path.write_bytes(hdr(mode=0x00))  # QIO, not DOUT
+    bin_path.write_bytes(hdr(mode=0x00))  # QIO — shipped image, known-good on ESP-01
 
     warnings = flash_master("/dev/ttyUSB0", str(bin_path))
 
-    assert len(warnings) == 1 and "DOUT" in warnings[0]
+    assert warnings == []
+
+
+def test_flash_master_qout_mode_warns(tmp_path, monkeypatch):
+    monkeypatch.setattr("subprocess.run", Mock())
+    bin_path = tmp_path / "qout.bin"
+    bin_path.write_bytes(hdr(mode=0x01))  # QOUT — not known-good on ESP-01
+
+    warnings = flash_master("/dev/ttyUSB0", str(bin_path))
+
+    assert len(warnings) == 1 and "QOUT" in warnings[0]
 
 
 def test_flash_master_frozen_path_wraps_systemexit_as_runtimeerror(tmp_path, monkeypatch):
