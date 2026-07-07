@@ -472,14 +472,21 @@ void stepFlaps(int flaps) {
 void rotateToLetter(int toLetter) {
   // Defensive bounds check (#136): receiveLetter() already constrains letter
   // indices to 0..AMOUNTFLAPS-1, but a corrupted target must never drive the
-  // step loop below into a runaway motor spin.
+  // step loop below into a runaway motor spin. Kept before the overheat gate so
+  // an invalid target can never latch currentlyrotating = 1 below and leave the
+  // unit reporting busy forever — it just no-ops, staying idle.
   if (toLetter < 0 || toLetter >= AMOUNTFLAPS) {
     return;
   }
 
   // Anti-overheat gate: after a rotation starts, the stepper won't move again
-  // until OVERHEATINGTIMEOUT has passed.
+  // until OVERHEATINGTIMEOUT has passed. While a target is pending but the gate
+  // hasn't cleared, report "busy" so the master's waitForDisplayToStop() waits
+  // for the deferred move instead of running its #106 verify pass against the
+  // stale displayedLetter. loop() keeps re-calling us (displayedLetter !=
+  // receivedNumber) until the gate opens and the move actually runs (#135).
   if (!(lastRotation == 0 || (millis() - lastRotation > OVERHEATINGTIMEOUT * 1000UL))) {
+    currentlyrotating = 1;
     return;
   }
 
