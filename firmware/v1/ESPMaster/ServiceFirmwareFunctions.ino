@@ -26,6 +26,21 @@
 
 volatile bool firmwareFlashInProgress = false;
 
+// Deferred + throttled unit reflash (#138). POST /reflash-units arms
+// reflashUnitsPending; loop() runs runPendingUnitReflash() so the multi-second
+// blocking flash never stalls the async web handler. Units are flashed
+// REFLASH_BATCH_SIZE at a time, waiting for each batch to come back online +
+// finish homing before the next, so a supply shared with the steppers doesn't
+// brown out from too many post-flash homing spikes at once.
+volatile bool reflashUnitsPending = false;
+// True for the whole duration of runPendingUnitReflash() (bootloader entry +
+// throttled flash + every between-batch settle-wait). Every Wire-touching async
+// endpoint checks this so a Jog/Home/Stop/offset request can't inject I2C into
+// a settle window and corrupt an in-flight twiboot flash (#138).
+volatile bool unitReflashRunning = false;
+#define REFLASH_BATCH_SIZE       2
+#define REFLASH_BATCH_SETTLE_MS  15000UL
+
 // Minimal state for an in-flight PROGMEM flash. Previously this was a
 // HexFlashState struct from HexFlashParser.h; that parser has been dropped
 // along with the /firmware/unit web upload (see issue #23).
@@ -338,6 +353,8 @@ extern char detectedUnitVersions[][9];
 void autoInstallFirmwareToBootloaderUnits() {
 #if SERIAL_ENABLE == false
   int flashedCount = 0;
+  int batch[REFLASH_BATCH_SIZE];
+  int batchCount = 0;
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
     if (detectedUnitStates[unitIndex] != 2 /* bootloader */) continue;
 
@@ -366,7 +383,20 @@ void autoInstallFirmwareToBootloaderUnits() {
       detectedUnitVersions[unitIndex][8] = '\0';
       detectedUnitVersionStatus[unitIndex] = 0;
       flashedCount++;
+      batch[batchCount++] = unitIndex;
     }
+
+    //Throttle (#138): once a batch is full, wait for those units to come back
+    //online + finish homing before flashing more, so the post-flash homing
+    //current can't brown out a supply shared with the steppers. Applies to both
+    //the boot-time auto-install and the web /reflash-units path.
+    if (batchCount >= REFLASH_BATCH_SIZE) {
+      waitForReflashedBatchIdle(batch, batchCount, REFLASH_BATCH_SETTLE_MS);
+      batchCount = 0;
+    }
+  }
+  if (batchCount > 0) {
+    waitForReflashedBatchIdle(batch, batchCount, REFLASH_BATCH_SETTLE_MS);
   }
 
   if (flashedCount > 0) {
@@ -438,4 +468,50 @@ int enterBootloaderAllDetected(bool reprobeAfter) {
     probeI2cBus();
   }
   return rebooted;
+}
+
+// Polls a just-flashed batch until every unit answers AND reports not-rotating
+// (homing finished), or the timeout elapses. checkIfMoving() returns 0 idle,
+// 1 rotating, -1 offline/rebooting — so we wait on anything != 0. Bounds the
+// number of units drawing homing current at once (#138).
+static void waitForReflashedBatchIdle(const int* unitIndices, int count, unsigned long timeoutMs) {
+  SerialPrint(F("  waiting for "));
+  SerialPrint(count);
+  SerialPrintln(F(" unit(s) to come online + finish homing..."));
+  delay(1000);  // let finishFirmwareFlash()'s CMD_REBOOT take effect before polling
+  unsigned long start = millis();
+  while (millis() - start < timeoutMs) {
+    bool allIdle = true;
+    for (int k = 0; k < count; k++) {
+      if (checkIfMoving(unitIndices[k]) != 0) { allIdle = false; break; }
+    }
+    if (allIdle) {
+      SerialPrintln(F("  batch online + idle"));
+      return;
+    }
+    delay(100);
+  }
+  SerialPrintln(F("  batch settle timed out — continuing anyway"));
+}
+
+// loop() drains the flag armed by POST /reflash-units (#138). Runs the blocking
+// bootloader-entry + throttled flash here so the async web handler never stalls.
+// autoInstallFirmwareToBootloaderUnits() is itself throttled, so boot-time
+// auto-install and this web path share one paced flash. unitReflashRunning
+// gates every other Wire-touching endpoint for the full duration so nothing
+// injects I2C mid-flash.
+void runPendingUnitReflash() {
+  if (!reflashUnitsPending) return;
+  reflashUnitsPending = false;
+  unitReflashRunning = true;
+
+  SerialPrintln(F("Deferred unit reflash starting (throttled)..."));
+  int rebooted = enterBootloaderAllDetected(true);
+  SerialPrint(F("Sent "));
+  SerialPrint(rebooted);
+  SerialPrintln(F(" sketch unit(s) not on the bundled rev into bootloader"));
+  autoInstallFirmwareToBootloaderUnits();
+
+  unitReflashRunning = false;
+  SerialPrintln(F("Deferred unit reflash complete."));
 }

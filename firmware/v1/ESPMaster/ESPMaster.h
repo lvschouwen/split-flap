@@ -60,6 +60,16 @@ int  rebootUnit(int i2cAddress);     // soft WDT reset, stays in sketch mode
 // flash is active. flashUnitFromProgmem() is the only caller of the
 // begin/finish helpers now that the HEX upload path is gone.
 extern volatile bool firmwareFlashInProgress;
+// Deferred + throttled unit reflash (#138). POST /reflash-units only arms
+// `reflashUnitsPending`; the blocking bootloader-entry + PROGMEM flash runs in
+// loop() via runPendingUnitReflash(), never in the async handler, and paces the
+// flash in small batches so post-flash homing spikes can't brown out a supply
+// shared with the steppers.
+extern volatile bool reflashUnitsPending;
+// Persistent flag: true for the whole duration of runPendingUnitReflash() so
+// every Wire-touching async endpoint can refuse to inject I2C mid-flash (#138).
+extern volatile bool unitReflashRunning;
+void runPendingUnitReflash();
 // Abort flag for the showMessage wait loop. Set by POST /stop, consumed
 // (and cleared) by showMessage(). Defined in ESPMaster.ino. Issue #35.
 extern volatile bool abortCurrentShow;

@@ -1081,7 +1081,7 @@ void setup() {
       //Same guard as the calibration endpoints: a stray byte on the Wire
       //bus mid-flash makes twiboot jump into half-written application
       //flash (any unknown command byte == CMD_BOOT_APPLICATION). See #95.
-      if (firmwareFlashInProgress) {
+      if (firmwareFlashInProgress || unitReflashRunning) {
         request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
         return;
       }
@@ -1111,7 +1111,7 @@ void setup() {
     //units in bootloader mode or missing entirely). Guarded against the
     //firmware-flash window so we don't collide on the Wire bus.
     auto parseCalibrationAddress = [](AsyncWebServerRequest * request, int &outAddr) -> bool {
-      if (firmwareFlashInProgress) {
+      if (firmwareFlashInProgress || unitReflashRunning) {
         request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
         return false;
       }
@@ -1211,7 +1211,7 @@ void setup() {
     //the in-memory text so the event loop doesn't immediately re-send the
     //previous message. Safe to call when nothing is happening; idempotent.
     webServer.on("/stop", HTTP_POST, [](AsyncWebServerRequest * request) {
-      if (firmwareFlashInProgress) {
+      if (firmwareFlashInProgress || unitReflashRunning) {
         request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
         return;
       }
@@ -1239,18 +1239,20 @@ void setup() {
     webServer.on("/reflash-units", HTTP_GET, [](AsyncWebServerRequest * request) {
       //Same guard as the calibration endpoints — this handler owns the Wire
       //bus for a re-probe + flash pass and must not overlap an in-flight one.
-      if (firmwareFlashInProgress) {
-        request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
+      //Defer to loop() (#138): the bootloader entry + PROGMEM flash blocks for
+      //many seconds streaming pages over I2C and must never run in the async
+      //handler. Arm the flag and return immediately; runPendingUnitReflash()
+      //does the throttled work and streams progress to the Log panel.
+      if (firmwareFlashInProgress || reflashUnitsPending || unitReflashRunning) {
+        request->send(503, "text/plain", "Unit firmware flash already in progress — try again in a moment");
         return;
       }
-      SerialPrintln(F("Request to Reflash Units Received"));
-      int rebooted = enterBootloaderAllDetected(true);
-      autoInstallFirmwareToBootloaderUnits();
-      String body = String("Requested bootloader entry on ") + rebooted +
-                    " unit(s) not already on the bundled firmware; re-probed " +
-                    "and triggered PROGMEM auto-install. " +
-                    "Watch the Log panel for per-unit results.";
-      request->send(200, "text/plain", body);
+      SerialPrintln(F("Request to Reflash Units Received — queued for loop()"));
+      reflashUnitsPending = true;
+      request->send(200, "text/plain",
+        "Reflash queued. Units are re-flashed 2 at a time — each pair must come "
+        "back online and finish homing before the next, to limit power draw. "
+        "Watch the Log panel for per-unit progress.");
     });
 
     webServer.on("/reset-units", HTTP_GET, [](AsyncWebServerRequest * request) {
@@ -1698,6 +1700,11 @@ void loop() {
   //those paths.
   runPendingMqttDiscovery();
 #endif
+
+  //Deferred + throttled unit reflash (#138): same rule as MQTT discovery — the
+  //multi-second blocking flash runs here, never in the async handler. Placed
+  //after the firmwareFlashInProgress early-return so it owns the bus cleanly.
+  runPendingUnitReflash();
 
   //MQTT pump (#121): reconnect schedule, inbound notifications, telemetry.
   //No-op when no broker is configured (#57).
