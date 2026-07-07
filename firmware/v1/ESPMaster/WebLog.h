@@ -12,7 +12,7 @@
 // with `-D WEBLOG_DISABLE` if RAM pressure ever forces the issue.
 
 #ifndef WEBLOG_SIZE
-#define WEBLOG_SIZE 4096
+#define WEBLOG_SIZE 2048
 #endif
 
 // `webLogPrinter` is a Print-derived sink so every type Serial can format
