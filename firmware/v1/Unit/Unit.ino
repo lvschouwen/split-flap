@@ -31,12 +31,16 @@
 //   3     byte  I2C address (1..126) assigned by the position wizard (future)
 //   4     byte  lifetime brownout-reset count (saturating)  (issue #47)
 //   5     byte  lifetime watchdog-reset count (saturating)  (issue #47)
-// Slots 6+ reserved.
+//   6     byte  health-counter init magic — if == EEPROM_HEALTH_MAGIC_VALUE,
+//               slots 4/5 are initialised; else they're fresh 0xFF (#139)
+// Slots 7+ reserved.
 #define EEPROM_ADDR_ID_MAGIC      2
 #define EEPROM_ADDR_I2C_ADDR      3
 #define EEPROM_ADDR_BROWNOUT_CNT  4
 #define EEPROM_ADDR_WATCHDOG_CNT  5
+#define EEPROM_ADDR_HEALTH_MAGIC  6
 #define EEPROM_ID_MAGIC_VALUE     0xA5
+#define EEPROM_HEALTH_MAGIC_VALUE 0x5A
 
 // I2C "receive" namespace: the first byte is a letter index (0..AMOUNTFLAPS-1)
 // for normal display commands, or a command opcode (>= AMOUNTFLAPS) for
@@ -208,8 +212,22 @@ void setup() {
   // chronic power issues (brownouts) can be diagnosed even if the master
   // only polls once. Saturating at 255 — once we're there the signal is
   // already loud enough.
-  lifetimeBrownoutCount = EEPROM.read(EEPROM_ADDR_BROWNOUT_CNT);
-  lifetimeWatchdogCount = EEPROM.read(EEPROM_ADDR_WATCHDOG_CNT);
+  //
+  // Fresh/erased AVR EEPROM reads back 0xFF on every byte, which would
+  // masquerade as 255 saturated resets — and the saturating guard below then
+  // pins them there forever (every freshly-provisioned unit reported 255/255,
+  // #139). A dedicated magic byte marks the counter block as initialised; when
+  // it's absent we zero the counters once and stamp the magic.
+  if (EEPROM.read(EEPROM_ADDR_HEALTH_MAGIC) == EEPROM_HEALTH_MAGIC_VALUE) {
+    lifetimeBrownoutCount = EEPROM.read(EEPROM_ADDR_BROWNOUT_CNT);
+    lifetimeWatchdogCount = EEPROM.read(EEPROM_ADDR_WATCHDOG_CNT);
+  } else {
+    lifetimeBrownoutCount = 0;
+    lifetimeWatchdogCount = 0;
+    EEPROM.update(EEPROM_ADDR_BROWNOUT_CNT, 0);
+    EEPROM.update(EEPROM_ADDR_WATCHDOG_CNT, 0);
+    EEPROM.update(EEPROM_ADDR_HEALTH_MAGIC, EEPROM_HEALTH_MAGIC_VALUE);
+  }
   if (savedMcusr & (1 << BORF) && lifetimeBrownoutCount < 0xFF) {
     lifetimeBrownoutCount++;
     EEPROM.update(EEPROM_ADDR_BROWNOUT_CNT, lifetimeBrownoutCount);
