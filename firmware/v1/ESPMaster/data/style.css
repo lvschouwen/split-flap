@@ -30,20 +30,15 @@ a {
 	border: none;
 	color: #FEFCFB;
 	background-color: #F8880E;
-	padding: 15px 15px;
+	padding: 5px 10px;
 	text-align: center;
 	text-decoration: none;
 	display: inline-block;
 	font-size: 16px;
-	width: 120px;
 	margin-right: 10px;
 	border-radius: 4px;
 	transition-duration: 0.4s;
-}
-
-a {
-	padding: 5px;
-	background-color: #F8880E;
+	cursor: pointer;
 }
 
 input[type=submit]:hover,
