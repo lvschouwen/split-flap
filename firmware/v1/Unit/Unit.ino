@@ -122,6 +122,11 @@ bool lastInd2 = false; //store last status of phase
 bool lastInd3 = false; //store last status of phase
 bool lastInd4 = false; //store last status of phase
 float missedSteps = 0; //cummulate steps <1, to compensate via additional step when reaching >1
+// STEPS/AMOUNTFLAPS is non-integer (2038/45 ≈ 45.29). Precompute the whole and
+// fractional parts once — the float division used to run every step inside
+// rotateToLetter, and float division is slow on AVR. See stepFlaps() (#136).
+static const int   STEPS_PER_FLAP_WHOLE = STEPS / AMOUNTFLAPS;
+static const float STEPS_PER_FLAP_FRAC  = (float)STEPS / (float)AMOUNTFLAPS - (float)STEPS_PER_FLAP_WHOLE;
 int currentlyrotating = 0; // 1 = drum is currently rotating, 0 = drum is standing still
 // receivedNumber and stepperSpeed are written from the Wire ISR
 // (receiveLetter) and read in loop()/rotateToLetter() — volatile for the
@@ -445,76 +450,68 @@ void loop() {
   }
 }
 
+//Steps the drum forward by `flaps` flap-positions. Each flap is
+//STEPS_PER_FLAP_WHOLE whole steps plus a fractional remainder accumulated in
+//missedSteps — when it exceeds one step we add a step and subtract, keeping
+//cumulative drift below one flap. Caller must have set the speed and started
+//the motor. Extracted from the two identical loops in rotateToLetter (#136).
+void stepFlaps(int flaps) {
+  for (int i = 0; i < flaps; i++) {
+    wdt_reset(); //a many-flap move at low speed exceeds the 8 s window (#107)
+    int roundedStep = STEPS_PER_FLAP_WHOLE;
+    missedSteps += STEPS_PER_FLAP_FRAC;
+    if (missedSteps > 1) {
+      roundedStep++;
+      missedSteps--;
+    }
+    stepper.step(ROTATIONDIRECTION * roundedStep);
+  }
+}
+
 //rotate to letter
 void rotateToLetter(int toLetter) {
-  if (lastRotation == 0 || (millis() - lastRotation > OVERHEATINGTIMEOUT * 1000)) {
-    lastRotation = millis();
-    //get letter position
-    int posLetter = -1;
-    posLetter = toLetter;
-    int posCurrentLetter = -1;
-    posCurrentLetter = displayedLetter;
-    //int amountLetters = sizeof(letters) / sizeof(String);
-#ifdef SERIAL_ENABLE
-    Serial.print("go to letter: ");
-    Serial.println((char)pgm_read_byte(&LETTER_CHARS[toLetter]));
-#endif
-    //go to letter, but only if available (>-1)
-    if (posLetter > -1) { //check if letter exists
-      //check if letter is on higher index, then no full rotaion is needed
-      if (posLetter >= posCurrentLetter) {
-#ifdef SERIAL_ENABLE
-        Serial.println("direct");
-#endif
-        //go directly to next letter, get steps from current letter to target letter
-        int diffPosition = posLetter - posCurrentLetter;
-        startMotor();
-        stepper.setSpeed(stepperSpeed);
-        //doing the rotation letterwise
-        for (int i = 0; i < diffPosition; i++) {
-          wdt_reset(); //a many-flap move at low speed exceeds the 8 s window (#107)
-          float preciseStep = (float)STEPS / (float)AMOUNTFLAPS;
-          int roundedStep = (int)preciseStep;
-          missedSteps = missedSteps + ((float)preciseStep - (float)roundedStep);
-          if (missedSteps > 1) {
-            roundedStep = roundedStep + 1;
-            missedSteps--;
-          }
-          stepper.step(ROTATIONDIRECTION * roundedStep);
-        }
-      }
-      else {
-        //full rotation is needed, good time for a calibration
-#ifdef SERIAL_ENABLE
-        Serial.println("full rotation incl. calibration");
-#endif
-        calibrate(false); //calibrate revolver and do not stop motor
-        //startMotor();
-        stepper.setSpeed(stepperSpeed);
-        for (int i = 0; i < posLetter; i++) {
-          wdt_reset(); //same as the direct-move loop above (#107)
-          float preciseStep = (float)STEPS / (float)AMOUNTFLAPS;
-          int roundedStep = (int)preciseStep;
-          missedSteps = missedSteps + (float)preciseStep - (float)roundedStep;
-          if (missedSteps > 1) {
-            roundedStep = roundedStep + 1;
-            missedSteps--;
-          }
-          stepper.step(ROTATIONDIRECTION * roundedStep);
-        }
-      }
-      //store new position
-      displayedLetter = toLetter;
-      //rotation is done, stop the motor
-      delay(100); //important to stop rotation before shutting of the motor to avoid rotation after switching off current
-      stopMotor();
-    }
-    else {
-#ifdef SERIAL_ENABLE
-      Serial.println("letter unknown, go to space");
-#endif
-    }
+  // Defensive bounds check (#136): receiveLetter() already constrains letter
+  // indices to 0..AMOUNTFLAPS-1, but a corrupted target must never drive the
+  // step loop below into a runaway motor spin.
+  if (toLetter < 0 || toLetter >= AMOUNTFLAPS) {
+    return;
   }
+
+  // Anti-overheat gate: after a rotation starts, the stepper won't move again
+  // until OVERHEATINGTIMEOUT has passed.
+  if (!(lastRotation == 0 || (millis() - lastRotation > OVERHEATINGTIMEOUT * 1000UL))) {
+    return;
+  }
+
+  lastRotation = millis();
+  int posCurrentLetter = displayedLetter;
+#ifdef SERIAL_ENABLE
+  Serial.print("go to letter: ");
+  Serial.println((char)pgm_read_byte(&LETTER_CHARS[toLetter]));
+#endif
+  //letter on a higher-or-equal index: no full rotation needed, step directly
+  if (toLetter >= posCurrentLetter) {
+#ifdef SERIAL_ENABLE
+    Serial.println("direct");
+#endif
+    startMotor();
+    stepper.setSpeed(stepperSpeed);
+    stepFlaps(toLetter - posCurrentLetter);
+  }
+  else {
+    //full rotation is needed, good time for a calibration
+#ifdef SERIAL_ENABLE
+    Serial.println("full rotation incl. calibration");
+#endif
+    calibrate(false); //calibrate revolver and do not stop motor
+    stepper.setSpeed(stepperSpeed);
+    stepFlaps(toLetter);
+  }
+  //store new position
+  displayedLetter = toLetter;
+  //rotation is done, stop the motor
+  delay(100); //important to stop rotation before shutting of the motor to avoid rotation after switching off current
+  stopMotor();
 }
 
 void receiveLetter(int numBytes) {
