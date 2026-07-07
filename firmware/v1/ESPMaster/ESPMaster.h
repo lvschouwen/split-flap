@@ -32,22 +32,28 @@ int  writeUnitOffset(int i2cAddress, int16_t value);
 int  jogUnit(int i2cAddress, int steps);
 int  homeUnit(int i2cAddress);
 
-// Unit health / diagnostics (issue #47). Populated by readUnitStatus() from
-// the 8-byte CMD_GET_STATUS reply. Mirrors the layout documented in
-// Unit.ino's requestEvent().
-struct UnitStatus {
-  uint8_t  flags;                    // bit0 moving, bit1 last-home-failed, bit2 hall-never-triggered
-  uint8_t  mcusrAtBoot;              // BORF / WDRF / EXTRF / PORF / JTRF snapshot
-  uint8_t  lifetimeBrownoutCount;    // saturating
-  uint8_t  lifetimeWatchdogCount;    // saturating
-  uint16_t uptimeSeconds;            // saturating
-  uint8_t  badCommandCount;          // saturating
-  uint16_t lastHomingStepCount;      // decoded from byte 7 * 16
-};
+// Unit health / diagnostics (issue #47). The UnitStatus struct + pure logic
+// (faulty predicate, faulty count, JSON assembly) live in UnitHealth.h so they
+// are natively testable; this header only declares the Wire-touching + poll
+// pieces that can't be.
+#include "UnitHealth.h"
 // Reads the 8-byte status payload from a sketch-running unit. Returns true
 // on success. On short reply (old firmware predating CMD_GET_STATUS) or
 // Wire error, returns false and `out` is untouched.
 bool readUnitStatus(int i2cAddress, UnitStatus& out);
+
+// Poll cache for the unit-health web card (#45) + MQTT telemetry (#137).
+// Populated by pollUnitHealth() in ServiceFlapFunctions.ino — blocking I2C, so
+// loop() context only (piggybacks the 60 s MQTT telemetry tick, plus an
+// on-demand refresh armed by POST /units/health/refresh). unitHealthJson is the
+// shared payload served verbatim by GET /units/health AND published to the MQTT
+// json_attributes_topic; faultyUnitCount feeds the integer HA alerting sensor.
+extern UnitStatus unitHealth[];
+extern bool       unitHealthValid[];
+extern char       unitHealthJson[];
+extern int        faultyUnitCount;
+extern volatile bool unitHealthRefreshPending;
+void pollUnitHealth();
 
 // Broadcasts CMD_HOME to the I2C general-call address (0x00). Every unit
 // with TWGCE enabled will run calibrate(true). Replaces N-unit sequential

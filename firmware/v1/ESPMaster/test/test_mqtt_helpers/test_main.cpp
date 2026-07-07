@@ -376,6 +376,26 @@ static void test_discovery_control_topics_and_payloads() {
   assert_contains(buf, "\"name\":\"Split-Flap flappy\"");
 }
 
+// #137: the per-unit health sensor carries a state topic (integer faulty count)
+// AND a json_attributes topic (per-unit breakdown), and lands in the diagnostic
+// entity category. It must NOT collide with the pre-existing "Units responding"
+// count entity's _units suffix / units topic.
+static void test_discovery_units_faulty_topic_and_payload() {
+  char buf[512];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_UNITS_FAULTY, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_units_faulty/config", buf);
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_UNITS_FAULTY, "flappy", "abc1234");
+  assert_contains(buf, "\"name\":\"Faulty units\"");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/units_faulty\"");
+  assert_contains(buf, "\"json_attr_t\":\"splitflap/flappy/units/attrs\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_units_faulty\"");
+  assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
+  assert_contains(buf, "\"sw\":\"abc1234\"");
+  // Distinct from the "Units responding" count entity (#132).
+  TEST_ASSERT_TRUE(strcmp("flappy_units_faulty", "flappy_units") != 0);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_clampDwell_passes_through_in_range);
@@ -416,5 +436,6 @@ int main(int, char**) {
   RUN_TEST(test_alignment_command_accepts_options_rejects_rest);
   RUN_TEST(test_restart_command_only_fires_on_press);
   RUN_TEST(test_discovery_control_topics_and_payloads);
+  RUN_TEST(test_discovery_units_faulty_topic_and_payload);
   return UNITY_END();
 }

@@ -632,6 +632,155 @@ function showContent() {
 	initLiveApply();
 	initLogPanel();
 	initMasterFirmwareUpload();
+	initUnitHealth();
+}
+
+//Unit Health card (#45). Reads the master's cached per-unit diagnostics JSON
+//(GET /units/health) and renders a table; Refresh arms a fresh I2C re-poll
+//(POST /units/health/refresh, drained in loop()) then re-fetches. The master
+//never touches the Wire bus from the async handler, so the GET is always the
+//last cached snapshot.
+var unitHealthPollTimer = null;
+
+function initUnitHealth() {
+	//Load the cached snapshot whenever the Maintenance tab becomes active, so
+	//the table is populated without forcing an I2C re-poll on every visit.
+	document.addEventListener('sf-tabchange', function (event) {
+		if (event.detail === "maintenance") loadUnitHealth();
+	});
+	if (currentTabFromHash() === "maintenance") loadUnitHealth();
+	if (localDevelopment) {
+		renderUnitHealth({
+			width: 3, faulty: 1, units: [
+				{ i: 0, a: 1, st: 1, v: 1, fw: 0, up: 3720, br: 0, wd: 0, bc: 0, mc: 1, fl: 0, hs: 720 },
+				{ i: 1, a: 2, st: 1, v: 1, fw: 1, up: 60, br: 2, wd: 1, bc: 4, mc: 4, fl: 2, hs: 2160 },
+				{ i: 2, a: 3, st: 2, v: 0 }
+			]
+		});
+	}
+}
+
+function refreshUnitHealth() {
+	setUnitHealthSummary("Polling units…", "pending");
+	fetch("/units/health/refresh", { method: "POST" })
+		.then(function () {
+			//Give loop() a beat to drain the flag + poll every unit over I2C
+			//(~2 ms + round-trip per unit) before reading the fresh cache.
+			if (unitHealthPollTimer !== null) clearTimeout(unitHealthPollTimer);
+			unitHealthPollTimer = setTimeout(loadUnitHealth, 1200);
+		})
+		.catch(function () { setUnitHealthSummary("Refresh request failed.", "error"); });
+}
+
+function loadUnitHealth() {
+	fetch("/units/health", { cache: "no-store" })
+		.then(function (r) { return r.json(); })
+		.then(renderUnitHealth)
+		.catch(function () { setUnitHealthSummary("Could not load unit health.", "error"); });
+}
+
+function setUnitHealthSummary(text, kind) {
+	var el = document.getElementById("unitHealthSummary");
+	if (!el) return;
+	el.textContent = text;
+	el.className = "firmware-status " + (kind || "");
+}
+
+//MCUSR reset-cause bits on the ATmega328P (Unit.ino byte 1). Decoded here in
+//JS so the device payload stays a single small integer.
+var MCUSR_CAUSES = [
+	[0x01, "Power-on"], [0x02, "External"], [0x04, "Brownout"], [0x08, "Watchdog"], [0x10, "JTAG"]
+];
+function decodeMcusr(mc) {
+	var out = [];
+	for (var i = 0; i < MCUSR_CAUSES.length; i++) {
+		if (mc & MCUSR_CAUSES[i][0]) out.push(MCUSR_CAUSES[i][1]);
+	}
+	return out.length ? out.join(", ") : "—";
+}
+
+function formatUptime(sec) {
+	var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+	if (h > 0) return h + "h " + m + "m";
+	if (m > 0) return m + "m " + s + "s";
+	return s + "s";
+}
+
+var UNIT_STATE_LABELS = { 0: "silent", 1: "sketch", 2: "bootloader" };
+var UNIT_FW_LABELS = { 0: "ok", 1: "OUTDATED", 2: "unknown" };
+
+function unitRowIsFaulty(u) {
+	//Mirror UnitHealth.h's unitStatusIsFaulty(): home-failed / hall-never /
+	//any lifetime brownout or watchdog. Only meaningful for a read unit.
+	if (!u.v) return false;
+	if (u.fl & 0x02) return true;   // last home failed
+	if (u.fl & 0x04) return true;   // hall never triggered
+	if (u.br > 0) return true;
+	if (u.wd > 0) return true;
+	return false;
+}
+
+function homeCellText(u) {
+	if (!u.v) return "—";
+	if (u.fl & 0x02) return "FAILED (" + u.hs + ")";
+	if (u.fl & 0x04) return "no hall";
+	return "OK (" + u.hs + ")";
+}
+
+function appendCell(row, text, cls) {
+	var td = document.createElement("td");
+	td.textContent = text;
+	if (cls) td.className = cls;
+	row.appendChild(td);
+}
+
+function renderUnitHealth(data) {
+	var table = document.getElementById("unitHealthTable");
+	var body = document.getElementById("unitHealthBody");
+	if (!table || !body) return;
+	removeAllChildren(body);
+
+	var units = (data && data.units) || [];
+	var responding = 0;
+	for (var k = 0; k < units.length; k++) {
+		if (units[k].st !== 0) responding++;
+	}
+	var faulty = (data && typeof data.faulty === "number") ? data.faulty : 0;
+	var width = (data && typeof data.width === "number") ? data.width : units.length;
+
+	if (units.length === 0) {
+		table.classList.add("hidden");
+		setUnitHealthSummary("No units detected.", faulty > 0 ? "error" : "");
+		return;
+	}
+	table.classList.remove("hidden");
+
+	for (var idx = 0; idx < units.length; idx++) {
+		var u = units[idx];
+		var row = document.createElement("tr");
+		var bad = unitRowIsFaulty(u);
+		if (bad) row.className = "uh-bad-row";
+		appendCell(row, u.i);
+		appendCell(row, "0x" + ("0" + u.a.toString(16)).slice(-2));
+		appendCell(row, UNIT_STATE_LABELS[u.st] || u.st, u.st === 1 ? "" : "uh-bad");
+		if (u.v) {
+			appendCell(row, UNIT_FW_LABELS[u.fw] || u.fw, u.fw === 0 ? "" : "uh-warn");
+			appendCell(row, formatUptime(u.up));
+			appendCell(row, u.br, u.br > 0 ? "uh-bad" : "");
+			appendCell(row, u.wd, u.wd > 0 ? "uh-bad" : "");
+			appendCell(row, u.bc, u.bc > 0 ? "uh-warn" : "");
+			appendCell(row, homeCellText(u), (u.fl & 0x06) ? "uh-bad" : "");
+			appendCell(row, decodeMcusr(u.mc));
+		} else {
+			//Unread unit (bootloader / silent / pre-#47 firmware): no diagnostics.
+			for (var c = 0; c < 7; c++) appendCell(row, "—");
+		}
+		body.appendChild(row);
+	}
+
+	var summary = responding + "/" + width + " responding";
+	summary += faulty > 0 ? " · " + faulty + " faulty" : " · all healthy";
+	setUnitHealthSummary(summary, faulty > 0 ? "error" : "success");
 }
 
 //Master firmware OTA: streams a .bin upload to /firmware/master, which

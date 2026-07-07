@@ -992,6 +992,25 @@ void setup() {
     });
 #endif
 
+    //Unit health (#45). GET serves the cached JSON snapshot (never touches the
+    //Wire bus from async context); POST arms a re-poll drained in loop() by the
+    //unitHealthRefreshPending block. Same defer pattern as /mqtt/discover.
+    webServer.on("/units/health", HTTP_GET, [](AsyncWebServerRequest * request) {
+      request->send(200, "application/json", unitHealthJson);
+    });
+    webServer.on("/units/health/refresh", HTTP_POST, [](AsyncWebServerRequest * request) {
+      SerialPrintln(F("Request for Unit Health Refresh Received"));
+      //Mirror the Wire-adjacent endpoints: a poll armed mid-flash would silently
+      //no-op in pollUnitHealth(), so refuse it up front rather than returning a
+      //misleading "pending" the client then can't distinguish from a real poll.
+      if (firmwareFlashInProgress || unitReflashRunning) {
+        request->send(503, "application/json", F("{\"status\":\"busy\"}"));
+        return;
+      }
+      unitHealthRefreshPending = true;
+      request->send(202, "application/json", F("{\"status\":\"pending\"}"));
+    });
+
     webServer.on("/log", HTTP_GET, [](AsyncWebServerRequest * request) {
       //Don't SerialPrintln here; every log request would otherwise stamp
       //itself into the buffer on every poll and drown out real activity.
@@ -1705,6 +1724,16 @@ void loop() {
   //multi-second blocking flash runs here, never in the async handler. Placed
   //after the firmwareFlashInProgress early-return so it owns the bus cleanly.
   runPendingUnitReflash();
+
+  //On-demand unit-health refresh (#45): the blocking per-unit CMD_GET_STATUS
+  //poll runs here, never in the async GET/POST handler. POST /units/health/refresh
+  //arms the flag; the MQTT telemetry tick (loopMqtt) also refreshes this same
+  //cache on its 60 s cadence (#137). Placed after the flash early-returns/ reflash
+  //so it owns the bus cleanly.
+  if (unitHealthRefreshPending) {
+    unitHealthRefreshPending = false;
+    pollUnitHealth();
+  }
 
   //MQTT pump (#121): reconnect schedule, inbound notifications, telemetry.
   //No-op when no broker is configured (#57).

@@ -384,6 +384,7 @@ void loopMqtt() {
     //configs they'd be orphaned retained messages on the old id.
     static const char* const stateSuffixes[] = {
       "mode", "text/state", "notification", "width", "units", "speed", "alignment",
+      "units_faulty", "units/attrs",
       "diag/ip", "diag/ssid", "diag/reset", "diag/boots", "diag/ota", "diag/tz"
     };
     for (unsigned i = 0; i < sizeof(stateSuffixes) / sizeof(stateSuffixes[0]); i++) {
@@ -500,6 +501,16 @@ void loopMqtt() {
     if (tn > 0 && tn < sizeof(buf)) {
       mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
     }
+
+    //Per-unit health (#137): refresh the shared cache (also serves the #45 web
+    //card) and publish the integer faulty count + the per-unit attrs. Retained
+    //so HA has the last snapshot after a restart. Blocking I2C, but we're in
+    //loop() on the telemetry tick — same context the web refresh drain uses.
+    pollUnitHealth();
+    char fc[12];
+    snprintf(fc, sizeof(fc), "%d", faultyUnitCount);
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units_faulty").c_str(), 0, true, fc);
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units/attrs").c_str(), 0, true, unitHealthJson);
   }
 }
 

@@ -146,6 +146,61 @@ bool readUnitStatus(int i2cAddress, UnitStatus& out) {
   return true;
 }
 
+//Unit-health poll cache (#45 web card, #137 MQTT telemetry). One snapshot per
+//unit index, rebuilt by pollUnitHealth() from loop() context (blocking I2C).
+//The shared JSON is served verbatim by GET /units/health AND published to the
+//MQTT json_attributes_topic; faultyUnitCount feeds the integer HA sensor.
+//
+//Sized for the worst case (16 valid units, all counters saturated): ~105 bytes
+//per unit + the ~35-byte wrapper ≈ 1683 bytes. 2048 leaves comfortable headroom
+//(a new per-unit field won't tip a full display into the fail-safe path); the
+//builder's truncation guard degrades to an empty units[] rather than emitting a
+//cut JSON if it ever overruns anyway.
+#define UNIT_HEALTH_JSON_CAP 2048
+UnitStatus unitHealth[UNITS_AMOUNT];
+bool       unitHealthValid[UNITS_AMOUNT];
+char       unitHealthJson[UNIT_HEALTH_JSON_CAP] = "{\"width\":0,\"faulty\":0,\"units\":[]}";
+int        faultyUnitCount = 0;
+//Armed at boot so the first loop() pass warms the cache with the real width +
+//per-unit status (probeI2cBus() has already run in setup()), instead of serving
+//the width:0 placeholder until the first MQTT tick or manual refresh (#45).
+volatile bool unitHealthRefreshPending = true;
+
+//Refreshes the unit-health cache: reads CMD_GET_STATUS from every sketch-mode
+//unit, recomputes the faulty count, and rebuilds the shared JSON. Blocking
+//(readUnitStatus does a short per-unit delay + I2C round-trip) so this is
+//loop()-only. Bails while any firmware flash owns the bus (#138 discipline) —
+//the cache simply keeps its previous snapshot until the next poll.
+void pollUnitHealth() {
+  if (firmwareFlashInProgress || unitReflashRunning) {
+    return;
+  }
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    unitHealthValid[i] = false;
+    //Only sketch-running units (state 1) answer CMD_GET_STATUS; a unit in
+    //bootloader (state 2) or silent (0) is left invalid so it renders as a
+    //gap in the table and never counts toward the faulty total.
+    if (detectedUnitStates[i] != 1) continue;
+    UnitStatus s;
+    if (readUnitStatus(toI2cAddress(i), s)) {
+      unitHealth[i] = s;
+      unitHealthValid[i] = true;
+    }
+  }
+  faultyUnitCount = computeFaultyUnitCount(unitHealth, unitHealthValid, UNITS_AMOUNT);
+  const int width = displayWidth;
+  size_t n = buildUnitHealthJson(unitHealthJson, sizeof(unitHealthJson), unitHealth,
+                                 unitHealthValid, detectedUnitStates, detectedUnitVersionStatus,
+                                 width, faultyUnitCount, I2C_ADDRESS_BASE);
+  if (n == 0 || n >= sizeof(unitHealthJson)) {
+    //Would-be-truncated payload (device far wider than expected?): fall back to
+    //a valid headline-only JSON rather than shipping a cut object (mirrors the
+    //MQTT discovery truncation discipline).
+    snprintf(unitHealthJson, sizeof(unitHealthJson),
+             "{\"width\":%d,\"faulty\":%d,\"units\":[]}", width, faultyUnitCount);
+  }
+}
+
 //Reads back the unit's currently displayed letter index via CMD_GET_LETTER
 //(issue #106). New firmware replies 2 bytes: index + bitwise complement;
 //old firmware replies with the 1-byte status fallback, so `got != 2` (or a

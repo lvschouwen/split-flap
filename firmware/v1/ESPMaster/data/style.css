@@ -428,3 +428,43 @@ input[type=datetime-local] {
 	background-color: #F8880E;
 	color: #FEFCFB;
 }
+
+/* Unit Health table (#45) */
+.uh-table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-top: 0.75rem;
+	font-family: ui-monospace, Menlo, Consolas, monospace;
+	font-size: 0.85rem;
+}
+
+.uh-table th,
+.uh-table td {
+	padding: 0.4em 0.6em;
+	text-align: left;
+	white-space: nowrap;
+	border-bottom: 1px solid #333;
+}
+
+.uh-table th {
+	color: #aaa;
+	font-weight: 600;
+	border-bottom: 1px solid #555;
+}
+
+.uh-table tr.uh-bad-row td {
+	background: #3a2222;
+}
+
+.uh-table td.uh-bad {
+	color: #f79;
+	font-weight: 600;
+}
+
+.uh-table td.uh-warn {
+	color: #fc8;
+}
+
+.uh-bad {
+	color: #f79;
+}

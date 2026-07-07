@@ -200,6 +200,30 @@
 					</div>
 				</div>
 
+				<div class="card-grid">
+					<div class="card card-full">
+						<p class="card-title">Unit Health</p>
+						<p style="font-size: 0.95rem; color: #aaa;">
+							Per-unit diagnostics read over I2C: firmware status, uptime, lifetime brownout/watchdog resets, last-home result and reset cause. Rows flagged <span class="uh-bad">red</span> need attention. Refresh re-polls every unit.
+						</p>
+						<p>
+							<input type="button" value="Refresh" onclick="refreshUnitHealth()" />
+							<label id="unitHealthSummary" class="firmware-status" style="margin-left:0.75rem;"></label>
+						</p>
+						<div id="unitHealthTableWrap" style="overflow-x:auto;">
+							<table id="unitHealthTable" class="uh-table hidden">
+								<thead>
+									<tr>
+										<th>#</th><th>Addr</th><th>State</th><th>FW</th><th>Uptime</th>
+										<th>Brown</th><th>WD</th><th>Bad&nbsp;cmd</th><th>Home</th><th>Reset&nbsp;cause</th>
+									</tr>
+								</thead>
+								<tbody id="unitHealthBody"></tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+
 				<div id="calibrationCard" class="card-grid hidden">
 					<div class="card card-full">
 						<p class="card-title">Calibration</p>

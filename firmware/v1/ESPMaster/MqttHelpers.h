@@ -222,6 +222,9 @@ enum MqttDiscoveryEntity {
   DISCOVERY_SPEED,         // HA number, speed/set + speed
   DISCOVERY_ALIGNMENT,     // HA select, alignment/set + alignment
   DISCOVERY_RESTART,       // HA button, restart/set
+  // Per-unit health (#137) — state = integer faulty count for alerting;
+  // json_attributes_topic carries the full per-unit breakdown for drill-down.
+  DISCOVERY_UNITS_FAULTY,
   DISCOVERY_ENTITY_COUNT
 };
 
@@ -251,6 +254,7 @@ inline MqttDiscMeta mqttDiscMeta(int entity) {
     case DISCOVERY_SPEED:        return { "number",        "_speed" };
     case DISCOVERY_ALIGNMENT:    return { "select",        "_alignment" };
     case DISCOVERY_RESTART:      return { "button",        "_restart" };
+    case DISCOVERY_UNITS_FAULTY: return { "sensor",        "_units_faulty" };
   }
   return { nullptr, nullptr };
 }
@@ -333,6 +337,13 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Restart\",\"cmd_t\":\"splitflap/%s/restart/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_restart\",\"pl_prs\":\"PRESS\",\"dev_cla\":\"restart\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+    case DISCOVERY_UNITS_FAULTY:
+      //State is the integer faulty count (great for HA automations); the full
+      //per-unit breakdown rides json_attr_t so it isn't bound by the 255-char
+      //sensor-state limit (#137).
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Faulty units\",\"stat_t\":\"splitflap/%s/units_faulty\",\"json_attr_t\":\"splitflap/%s/units/attrs\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_units_faulty\",\"ent_cat\":\"diagnostic\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
   }
   if (bufLen > 0) buf[0] = '\0';
   return 0;
