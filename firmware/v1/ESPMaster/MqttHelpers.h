@@ -138,6 +138,37 @@ inline String parseModeCommand(const String& payload) {
   return String("");
 }
 
+// ---- Speed / alignment / restart commands (#132 Stage B) ----
+// Flap-speed number: HA publishes the integer as a string. Accept 1..100 (the
+// stored flapSpeed range, matching the web slider); -1 means ignore. Digit-only
+// so a float ("80.0") is rejected, same as the web handler's isNumber() gate.
+inline int parseSpeedCommand(const String& payload) {
+  String trimmed = payload;
+  trimmed.trim();
+  if (trimmed.length() == 0) return -1;
+  for (unsigned int i = 0; i < trimmed.length(); i++) {
+    if (trimmed[i] < '0' || trimmed[i] > '9') return -1;
+  }
+  long v = trimmed.toInt();
+  if (v < 1 || v > 100) return -1;
+  return (int)v;
+}
+
+// Alignment select: accept exactly the option strings (post-trim), "" = ignore.
+inline String parseAlignmentCommand(const String& payload) {
+  String trimmed = payload;
+  trimmed.trim();
+  if (trimmed == "left" || trimmed == "center" || trimmed == "right") return trimmed;
+  return String("");
+}
+
+// Restart button: HA publishes its payload_press verbatim. Only "PRESS" fires.
+inline bool parseRestartCommand(const String& payload) {
+  String trimmed = payload;
+  trimmed.trim();
+  return trimmed == "PRESS";
+}
+
 // ---- Topics ----
 inline String mqttTopic(const String& deviceId, const char* suffix) {
   return String("splitflap/") + deviceId + "/" + suffix;
@@ -187,6 +218,10 @@ enum MqttDiscoveryEntity {
   DISCOVERY_BOOTS,         // diagnostics topic
   DISCOVERY_OTA_REVERTED,  // diagnostics topic, binary problem
   DISCOVERY_TIMEZONE,      // diagnostics topic
+  // Stage B controls (#132) — command/write entities
+  DISCOVERY_SPEED,         // HA number, speed/set + speed
+  DISCOVERY_ALIGNMENT,     // HA select, alignment/set + alignment
+  DISCOVERY_RESTART,       // HA button, restart/set
   DISCOVERY_ENTITY_COUNT
 };
 
@@ -213,6 +248,9 @@ inline MqttDiscMeta mqttDiscMeta(int entity) {
     case DISCOVERY_BOOTS:        return { "sensor",        "_boots" };
     case DISCOVERY_OTA_REVERTED: return { "binary_sensor", "_ota_reverted" };
     case DISCOVERY_TIMEZONE:     return { "sensor",        "_timezone" };
+    case DISCOVERY_SPEED:        return { "number",        "_speed" };
+    case DISCOVERY_ALIGNMENT:    return { "select",        "_alignment" };
+    case DISCOVERY_RESTART:      return { "button",        "_restart" };
   }
   return { nullptr, nullptr };
 }
@@ -283,6 +321,18 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
     case DISCOVERY_BOOTS:        return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_boots",        "Boot counter",        "diag/boots",  nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
     case DISCOVERY_OTA_REVERTED: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_ota_reverted", "OTA reverted",        "diag/ota",    nullptr,                      "problem",     nullptr, "diagnostic", "ON", "OFF");
     case DISCOVERY_TIMEZONE:     return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_timezone",     "Timezone",            "diag/tz",     nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
+    case DISCOVERY_SPEED:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Flap speed\",\"cmd_t\":\"splitflap/%s/speed/set\",\"stat_t\":\"splitflap/%s/speed\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_speed\",\"min\":1,\"max\":100,\"step\":1,\"mode\":\"slider\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+    case DISCOVERY_ALIGNMENT:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Alignment\",\"cmd_t\":\"splitflap/%s/alignment/set\",\"stat_t\":\"splitflap/%s/alignment\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_alignment\",\"ops\":[\"left\",\"center\",\"right\"]," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+    case DISCOVERY_RESTART:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Restart\",\"cmd_t\":\"splitflap/%s/restart/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_restart\",\"pl_prs\":\"PRESS\",\"dev_cla\":\"restart\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
   }
   if (bufLen > 0) buf[0] = '\0';
   return 0;

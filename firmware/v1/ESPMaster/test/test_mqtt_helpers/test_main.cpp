@@ -317,6 +317,65 @@ static void test_all_discovery_entities_wellformed() {
   }
 }
 
+// ---- Stage B control parsers + discovery (#132) ----
+static void test_speed_command_accepts_in_range() {
+  TEST_ASSERT_EQUAL_INT(1, parseSpeedCommand(String("1")));
+  TEST_ASSERT_EQUAL_INT(80, parseSpeedCommand(String("80")));
+  TEST_ASSERT_EQUAL_INT(100, parseSpeedCommand(String("100")));
+  TEST_ASSERT_EQUAL_INT(50, parseSpeedCommand(String("  50\n")));  // trimmed
+}
+static void test_speed_command_rejects_out_of_range_and_garbage() {
+  TEST_ASSERT_EQUAL_INT(-1, parseSpeedCommand(String("0")));
+  TEST_ASSERT_EQUAL_INT(-1, parseSpeedCommand(String("101")));
+  TEST_ASSERT_EQUAL_INT(-1, parseSpeedCommand(String("-5")));
+  TEST_ASSERT_EQUAL_INT(-1, parseSpeedCommand(String("80.0")));   // float rejected
+  TEST_ASSERT_EQUAL_INT(-1, parseSpeedCommand(String("fast")));
+  TEST_ASSERT_EQUAL_INT(-1, parseSpeedCommand(String("")));
+}
+static void test_alignment_command_accepts_options_rejects_rest() {
+  TEST_ASSERT_EQUAL_STRING("left", parseAlignmentCommand(String("left")).c_str());
+  TEST_ASSERT_EQUAL_STRING("center", parseAlignmentCommand(String(" center ")).c_str());
+  TEST_ASSERT_EQUAL_STRING("right", parseAlignmentCommand(String("right")).c_str());
+  TEST_ASSERT_EQUAL_STRING("", parseAlignmentCommand(String("Left")).c_str());
+  TEST_ASSERT_EQUAL_STRING("", parseAlignmentCommand(String("middle")).c_str());
+}
+static void test_restart_command_only_fires_on_press() {
+  TEST_ASSERT_TRUE(parseRestartCommand(String("PRESS")));
+  TEST_ASSERT_TRUE(parseRestartCommand(String(" PRESS\n")));
+  TEST_ASSERT_FALSE(parseRestartCommand(String("press")));
+  TEST_ASSERT_FALSE(parseRestartCommand(String("restart")));
+  TEST_ASSERT_FALSE(parseRestartCommand(String("")));
+}
+static void test_discovery_control_topics_and_payloads() {
+  char buf[512];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_SPEED, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/number/flappy_speed/config", buf);
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_ALIGNMENT, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/select/flappy_alignment/config", buf);
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_RESTART, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/button/flappy_restart/config", buf);
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_SPEED, "flappy", "abc1234");
+  assert_contains(buf, "\"cmd_t\":\"splitflap/flappy/speed/set\"");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/speed\"");
+  assert_contains(buf, "\"min\":1,\"max\":100,\"step\":1");
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_ALIGNMENT, "flappy", "abc1234");
+  assert_contains(buf, "\"cmd_t\":\"splitflap/flappy/alignment/set\"");
+  assert_contains(buf, "\"ops\":[\"left\",\"center\",\"right\"]");
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_RESTART, "flappy", "abc1234");
+  assert_contains(buf, "\"cmd_t\":\"splitflap/flappy/restart/set\"");
+  assert_contains(buf, "\"pl_prs\":\"PRESS\"");
+  assert_contains(buf, "\"dev_cla\":\"restart\"");
+  TEST_ASSERT_NULL(strstr(buf, "stat_t"));  // button has no state topic
+  // Guard the varargs alignment end-to-end: device block must carry the real
+  // id and fw in the right slots (a missing %s arg would corrupt sw here).
+  assert_contains(buf, "\"ids\":[\"flappy\"]");
+  assert_contains(buf, "\"sw\":\"abc1234\"");
+  assert_contains(buf, "\"name\":\"Split-Flap flappy\"");
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_clampDwell_passes_through_in_range);
@@ -352,5 +411,10 @@ int main(int, char**) {
   RUN_TEST(test_discovery_own_topic_fragments);
   RUN_TEST(test_discovery_diagnostics_fragments);
   RUN_TEST(test_all_discovery_entities_wellformed);
+  RUN_TEST(test_speed_command_accepts_in_range);
+  RUN_TEST(test_speed_command_rejects_out_of_range_and_garbage);
+  RUN_TEST(test_alignment_command_accepts_options_rejects_rest);
+  RUN_TEST(test_restart_command_only_fires_on_press);
+  RUN_TEST(test_discovery_control_topics_and_payloads);
   return UNITY_END();
 }

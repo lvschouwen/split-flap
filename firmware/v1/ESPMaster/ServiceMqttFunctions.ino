@@ -34,6 +34,15 @@ static char mqttRxBuffer[MQTT_MAX_TEXT_LEN + 1];
 static volatile bool mqttModeCommandPending = false;
 static char mqttModeRxBuffer[16];
 
+//Control command hand-off (#132 Stage B): same copy-and-flag pattern. Speed
+//holds up to "100"; alignment holds "center"; restart holds "PRESS".
+static volatile bool mqttSpeedCommandPending = false;
+static char mqttSpeedRxBuffer[8];
+static volatile bool mqttAlignmentCommandPending = false;
+static char mqttAlignmentRxBuffer[16];
+static volatile bool mqttRestartCommandPending = false;
+static char mqttRestartRxBuffer[16];
+
 //Web-UI mode change → cancel an active notification (#130). The POST
 //handler runs in async context, so it only sets this flag; loopMqtt()
 //does the cancel (same pattern as mqttDiscoveryClearPending).
@@ -51,6 +60,8 @@ static String mqttLastPublishedText = "\x01";
 static int mqttLastPublishedNotif = -1;
 static int mqttLastPublishedWidth = -1;
 static int mqttLastPublishedUnits = -1;
+static String mqttLastPublishedSpeed = "\x01";      //flap speed (#132 Stage B)
+static String mqttLastPublishedAlignment = "\x01";  //alignment (#132 Stage B)
 
 //Show-then-revert notification state (MqttHelpers.h).
 static MqttNotification mqttNotification;
@@ -69,6 +80,9 @@ static String mqttResolvedDeviceId;
 static String mqttTopicSet;
 static String mqttTopicModeSet;
 static String mqttTopicModeState;
+static String mqttTopicSpeedSet;      //#132 Stage B
+static String mqttTopicAlignmentSet;  //#132 Stage B
+static String mqttTopicRestartSet;    //#132 Stage B
 static String mqttTopicAvailability;
 static String mqttTopicTelemetry;
 static String mqttActiveHost;
@@ -89,10 +103,27 @@ static void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
   mqttDisconnectedEvent = true;
 }
 
+//LWIP context: copy one MQTT chunk into a fixed buffer (truncating past its
+//capacity) and raise `flag` when the final chunk lands. Heap-free byte copy
+//only — safe for the sys-context callback. Shared by the #132 control topics.
+static void mqttCopyChunk(char* buf, size_t bufSize, const char* payload,
+                          size_t len, size_t index, size_t total, volatile bool* flag) {
+  for (size_t i = 0; i < len; i++) {
+    size_t pos = index + i;
+    if (pos >= bufSize - 1) break;
+    buf[pos] = payload[i];
+  }
+  if (index + len >= total) {
+    size_t end = total > bufSize - 1 ? bufSize - 1 : total;
+    buf[end] = '\0';
+    *flag = true;
+  }
+}
+
 //LWIP context: copy the chunk into the right fixed buffer (truncating past
 //its capacity — the display path truncates to the display width anyway)
-//and flag the loop when the final chunk lands. Two command topics are
-//subscribed (#130), so dispatch on the topic with a heap-free strcmp.
+//and flag the loop when the final chunk lands. Several command topics are
+//subscribed (#130, #132), so dispatch on the topic with a heap-free strcmp.
 static void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties,
                           size_t len, size_t index, size_t total) {
   //Retained messages replay on every (re)connect — a retained command
@@ -114,6 +145,22 @@ static void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProp
       mqttModeRxBuffer[end] = '\0';
       mqttModeCommandPending = true;
     }
+    return;
+  }
+
+  //Flap-speed number command (#132).
+  if (strcmp(topic, mqttTopicSpeedSet.c_str()) == 0) {
+    mqttCopyChunk(mqttSpeedRxBuffer, sizeof(mqttSpeedRxBuffer), payload, len, index, total, &mqttSpeedCommandPending);
+    return;
+  }
+  //Alignment select command (#132).
+  if (strcmp(topic, mqttTopicAlignmentSet.c_str()) == 0) {
+    mqttCopyChunk(mqttAlignmentRxBuffer, sizeof(mqttAlignmentRxBuffer), payload, len, index, total, &mqttAlignmentCommandPending);
+    return;
+  }
+  //Restart button command (#132).
+  if (strcmp(topic, mqttTopicRestartSet.c_str()) == 0) {
+    mqttCopyChunk(mqttRestartRxBuffer, sizeof(mqttRestartRxBuffer), payload, len, index, total, &mqttRestartCommandPending);
     return;
   }
 
@@ -196,6 +243,9 @@ void initMqtt() {
   mqttTopicSet          = mqttTopic(mqttResolvedDeviceId, "text/set");
   mqttTopicModeSet      = mqttTopic(mqttResolvedDeviceId, "mode/set");
   mqttTopicModeState    = mqttTopic(mqttResolvedDeviceId, "mode");
+  mqttTopicSpeedSet     = mqttTopic(mqttResolvedDeviceId, "speed/set");
+  mqttTopicAlignmentSet = mqttTopic(mqttResolvedDeviceId, "alignment/set");
+  mqttTopicRestartSet   = mqttTopic(mqttResolvedDeviceId, "restart/set");
   mqttTopicAvailability = mqttTopic(mqttResolvedDeviceId, "availability");
   mqttTopicTelemetry    = mqttTopic(mqttResolvedDeviceId, "telemetry");
 
@@ -252,6 +302,9 @@ void loopMqtt() {
     SerialPrintln(F("MQTT: connected"));
     mqttClient.subscribe(mqttTopicSet.c_str(), 0);
     mqttClient.subscribe(mqttTopicModeSet.c_str(), 0);
+    mqttClient.subscribe(mqttTopicSpeedSet.c_str(), 0);       //#132 Stage B
+    mqttClient.subscribe(mqttTopicAlignmentSet.c_str(), 0);   //#132 Stage B
+    mqttClient.subscribe(mqttTopicRestartSet.c_str(), 0);     //#132 Stage B
     mqttClient.publish(mqttTopicAvailability.c_str(), 1, true, "online");
     publishMqttDiscovery();
     publishMqttDiagnostics();        //retained diagnostics, once per connect (#132)
@@ -262,6 +315,8 @@ void loopMqtt() {
     mqttLastPublishedNotif = -1;
     mqttLastPublishedWidth = -1;
     mqttLastPublishedUnits = -1;
+    mqttLastPublishedSpeed = "\x01";
+    mqttLastPublishedAlignment = "\x01";
   }
 
   //Retained mode state (#130): publish whenever reality differs from what
@@ -302,6 +357,15 @@ void loopMqtt() {
       char n[12]; snprintf(n, sizeof(n), "%d", units);
       mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units").c_str(), 0, true, n);
     }
+    //Control states (#132 Stage B) — mirror HA-set AND web-UI-set changes.
+    if (flapSpeed != mqttLastPublishedSpeed) {
+      mqttLastPublishedSpeed = flapSpeed;
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "speed").c_str(), 0, true, flapSpeed.c_str());
+    }
+    if (alignment != mqttLastPublishedAlignment) {
+      mqttLastPublishedAlignment = alignment;
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "alignment").c_str(), 0, true, alignment.c_str());
+    }
   }
 
   //Device renamed (#125): while this run still IS the old MQTT identity,
@@ -319,7 +383,7 @@ void loopMqtt() {
     //Also blank every retained STATE topic (#130, #132) — without their
     //configs they'd be orphaned retained messages on the old id.
     static const char* const stateSuffixes[] = {
-      "mode", "text/state", "notification", "width", "units",
+      "mode", "text/state", "notification", "width", "units", "speed", "alignment",
       "diag/ip", "diag/ssid", "diag/reset", "diag/boots", "diag/ota", "diag/tz"
     };
     for (unsigned i = 0; i < sizeof(stateSuffixes) / sizeof(stateSuffixes[0]); i++) {
@@ -352,6 +416,54 @@ void loopMqtt() {
       saveDeviceMode();
       notificationCancel(mqttNotification);
       SerialPrintln("MQTT: mode set to " + deviceMode);
+    }
+  }
+
+  //Flap-speed number command (#132 Stage B).
+  if (mqttSpeedCommandPending) {
+    mqttSpeedCommandPending = false;
+    String p(mqttSpeedRxBuffer);
+    if (mqttSpeedCommandPending) return;  //torn copy — reprocess next pass
+    int v = parseSpeedCommand(p);
+    if (v < 0) {
+      SerialPrintln("MQTT: ignored invalid speed command: " + p);
+    }
+    else if (String(v) != flapSpeed) {
+      flapSpeed = String(v);
+      saveFlapSpeed();
+      SerialPrintln("MQTT: flap speed set to " + flapSpeed);
+    }
+  }
+
+  //Alignment select command (#132 Stage B).
+  if (mqttAlignmentCommandPending) {
+    mqttAlignmentCommandPending = false;
+    String p(mqttAlignmentRxBuffer);
+    if (mqttAlignmentCommandPending) return;  //torn copy — reprocess next pass
+    String a = parseAlignmentCommand(p);
+    if (a.length() == 0) {
+      SerialPrintln("MQTT: ignored invalid alignment command: " + p);
+    }
+    else if (a != alignment) {
+      alignment = a;
+      saveAlignment();
+      SerialPrintln("MQTT: alignment set to " + alignment);
+    }
+  }
+
+  //Restart button command (#132 Stage B). Defer to loop()'s reboot dispatcher
+  //(isPendingReboot) like every other reboot trigger — it parks the display
+  //before ESP.restart() so a flap isn't left mid-move/energized during eboot
+  //(#116). Never ESP.restart() inline here. On reboot the dropped TCP socket
+  //fires our retained "offline" LWT; the device republishes online + full
+  //state on the next connect.
+  if (mqttRestartCommandPending) {
+    mqttRestartCommandPending = false;
+    String p(mqttRestartRxBuffer);
+    if (mqttRestartCommandPending) return;  //torn copy — reprocess next pass
+    if (parseRestartCommand(p)) {
+      SerialPrintln(F("MQTT: restart requested via HA button — reboot pending"));
+      isPendingReboot = true;
     }
   }
 
