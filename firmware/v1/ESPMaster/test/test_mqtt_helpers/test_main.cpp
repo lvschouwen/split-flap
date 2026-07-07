@@ -13,6 +13,9 @@ void setUp() {
 }
 void tearDown() {}
 
+// Defined further down; used by several payload/telemetry fragment checks.
+static void assert_contains(const char* haystack, const char* needle);
+
 // ---- clampDwellSeconds ----
 static void test_clampDwell_passes_through_in_range() {
   TEST_ASSERT_EQUAL_INT32(60, clampDwellSeconds(60));
@@ -130,10 +133,17 @@ static void test_mqttTopic_builds_expected_paths() {
   TEST_ASSERT_EQUAL_STRING("splitflap/flappy/telemetry", mqttTopic(String("flappy"), "telemetry").c_str());
 }
 static void test_telemetry_payload_exact_shape() {
-  char buf[96];
-  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, -61L, 2);
-  TEST_ASSERT_EQUAL_STRING("{\"heap\":25048,\"rssi\":-61,\"unitErrors\":2}", buf);
+  char buf[128];
+  //                            heap    frag  rssi  errs uptime  ntp
+  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true);
+  TEST_ASSERT_EQUAL_STRING(
+    "{\"heap\":25048,\"heapFrag\":12,\"rssi\":-61,\"unitErrors\":2,\"uptime\":3600,\"ntp\":1}", buf);
   TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
+}
+static void test_telemetry_ntp_false_renders_zero() {
+  char buf[128];
+  buildTelemetryPayload(buf, sizeof(buf), 1UL, 0, 0L, 0, 0UL, false);
+  assert_contains(buf, "\"ntp\":0");
 }
 // ---- parseModeCommand (#130) ----
 static void test_mode_command_accepts_exact_options() {
@@ -226,6 +236,87 @@ static void test_discovery_mode_select_topic_and_payload() {
   assert_contains(buf, "\"ids\":[\"flappy\"]");
 }
 
+// ---- Stage A sensor expansion (#132) ----
+static void test_discovery_new_topics() {
+  char buf[64];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_HEAP_FRAG, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_heap_frag/config", buf);
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_UPTIME, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_uptime/config", buf);
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_NTP, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/binary_sensor/flappy_ntp/config", buf);
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_NOTIFICATION, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/binary_sensor/flappy_notification/config", buf);
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_OTA_REVERTED, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/binary_sensor/flappy_ota_reverted/config", buf);
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_CURRENT_TEXT, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_text_state/config", buf);
+}
+static void test_discovery_telemetry_backed_fragments() {
+  char buf[512];
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_HEAP_FRAG, "flappy", "abc1234");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/telemetry\"");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.heapFrag }}\"");
+  assert_contains(buf, "\"unit_of_meas\":\"%\"");
+  assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_UPTIME, "flappy", "abc1234");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.uptime }}\"");
+  assert_contains(buf, "\"dev_cla\":\"duration\"");
+  assert_contains(buf, "\"unit_of_meas\":\"s\"");
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_NTP, "flappy", "abc1234");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.ntp }}\"");
+  assert_contains(buf, "\"pl_on\":\"1\",\"pl_off\":\"0\"");
+  assert_contains(buf, "\"dev_cla\":\"connectivity\"");
+}
+static void test_discovery_own_topic_fragments() {
+  char buf[512];
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_CURRENT_TEXT, "flappy", "abc1234");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/text/state\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_text_state\"");
+  TEST_ASSERT_NULL(strstr(buf, "val_tpl"));  // plain payload, no template
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_NOTIFICATION, "flappy", "abc1234");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/notification\"");
+  assert_contains(buf, "\"pl_on\":\"ON\",\"pl_off\":\"OFF\"");
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_WIDTH, "flappy", "abc1234");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/width\"");
+}
+static void test_discovery_diagnostics_fragments() {
+  char buf[512];
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_IP, "flappy", "abc1234");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/diag/ip\"");
+  assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_OTA_REVERTED, "flappy", "abc1234");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/diag/ota\"");
+  assert_contains(buf, "\"dev_cla\":\"problem\"");
+  assert_contains(buf, "\"pl_on\":\"ON\",\"pl_off\":\"OFF\"");
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_TIMEZONE, "flappy", "abc1234");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/diag/tz\"");
+}
+// Every entity must produce a well-formed, non-truncated payload+topic — the
+// generic builder's guard means a too-small buffer would silently return a
+// cut JSON, which the runtime rejects; this asserts none of them get close.
+static void test_all_discovery_entities_wellformed() {
+  char pbuf[512];
+  char tbuf[96];
+  // A long-ish device id to stress the buffers (still <= the 24-char cap +).
+  const char* id = "split-flap-9a3c1f";
+  for (int e = 0; e < DISCOVERY_ENTITY_COUNT; e++) {
+    size_t tn = buildDiscoveryTopic(tbuf, sizeof(tbuf), e, id);
+    size_t pn = buildDiscoveryPayload(pbuf, sizeof(pbuf), e, id, "abcdef0");
+    TEST_ASSERT_TRUE_MESSAGE(tn > 0 && tn < sizeof(tbuf), "topic truncated/empty");
+    TEST_ASSERT_TRUE_MESSAGE(pn > 0 && pn < sizeof(pbuf), "payload truncated/empty");
+    TEST_ASSERT_EQUAL_CHAR('{', pbuf[0]);
+    TEST_ASSERT_EQUAL_CHAR('}', pbuf[pn - 1]);
+    assert_contains(pbuf, "\"ids\":[\"split-flap-9a3c1f\"]");  // device block present
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_clampDwell_passes_through_in_range);
@@ -247,6 +338,7 @@ int main(int, char**) {
   RUN_TEST(test_notification_survives_millis_wraparound);
   RUN_TEST(test_mqttTopic_builds_expected_paths);
   RUN_TEST(test_telemetry_payload_exact_shape);
+  RUN_TEST(test_telemetry_ntp_false_renders_zero);
   RUN_TEST(test_mode_command_accepts_exact_options);
   RUN_TEST(test_mode_command_trims_whitespace);
   RUN_TEST(test_mode_command_rejects_case_variants_and_garbage);
@@ -255,5 +347,10 @@ int main(int, char**) {
   RUN_TEST(test_discovery_text_payload_fragments);
   RUN_TEST(test_discovery_sensor_payload_fragments);
   RUN_TEST(test_discovery_mode_select_topic_and_payload);
+  RUN_TEST(test_discovery_new_topics);
+  RUN_TEST(test_discovery_telemetry_backed_fragments);
+  RUN_TEST(test_discovery_own_topic_fragments);
+  RUN_TEST(test_discovery_diagnostics_fragments);
+  RUN_TEST(test_all_discovery_entities_wellformed);
   return UNITY_END();
 }

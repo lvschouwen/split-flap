@@ -22,3 +22,17 @@ inline int computeDisplayWidth(const int* unitStates, int maxUnits) {
   }
   return width == 0 ? maxUnits : width;
 }
+
+//Number of units that actually answered the probe (state != 0). Differs from
+//computeDisplayWidth() when a unit mid-display is dead: width spans the gap,
+//this counts only the live ones — exactly the "N units responding" telemetry
+//HA wants (#132).
+inline int countRespondingUnits(const int* unitStates, int maxUnits) {
+  int count = 0;
+  for (int i = 0; i < maxUnits; i++) {
+    if (unitStates[i] != 0) {
+      count++;
+    }
+  }
+  return count;
+}

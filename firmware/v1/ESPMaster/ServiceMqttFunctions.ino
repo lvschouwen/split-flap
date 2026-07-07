@@ -43,6 +43,15 @@ static volatile bool mqttNotificationCancelPending = false;
 //the first connected loop pass (and after each reconnect reset below).
 static String mqttLastPublishedMode;
 
+//Event-driven state trackers (#132): publish a retained topic only when the
+//value changes, so HA sees current text / notification / width / units
+//instantly and the broker keeps the last value. Reset on each (re)connect to
+//force a full re-publish. Sentinels are values no real state can take.
+static String mqttLastPublishedText = "\x01";
+static int mqttLastPublishedNotif = -1;
+static int mqttLastPublishedWidth = -1;
+static int mqttLastPublishedUnits = -1;
+
 //Show-then-revert notification state (MqttHelpers.h).
 static MqttNotification mqttNotification;
 
@@ -150,6 +159,21 @@ static void publishMqttDiscovery() {
   }
 }
 
+//Retained, static-ish diagnostics (#132) — published once per connect (they
+//change only on reboot/reconfig). Plain per-field payloads: no JSON escaping,
+//and each HA sensor's stat_t points straight at its own topic.
+static void publishMqttDiagnostics() {
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "diag/ip").c_str(),    0, true, WiFi.localIP().toString().c_str());
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "diag/ssid").c_str(),  0, true, WiFi.SSID().c_str());
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "diag/reset").c_str(), 0, true, lastResetReason.c_str());
+  char n[12];
+  snprintf(n, sizeof(n), "%lu", (unsigned long)readBootStateRtc().bootCounter);
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "diag/boots").c_str(), 0, true, n);
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "diag/ota").c_str(),   0, true, otaReverted ? "ON" : "OFF");
+  String tz = timezonePosixSetting.length() ? timezonePosixSetting : String(timezonePosix);
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "diag/tz").c_str(),    0, true, tz.c_str());
+}
+
 //Called once from setup(), normal boots only (never quiet-OTA or recovery —
 //setup() returns before reaching the call in those modes).
 void initMqtt() {
@@ -230,8 +254,14 @@ void loopMqtt() {
     mqttClient.subscribe(mqttTopicModeSet.c_str(), 0);
     mqttClient.publish(mqttTopicAvailability.c_str(), 1, true, "online");
     publishMqttDiscovery();
+    publishMqttDiagnostics();        //retained diagnostics, once per connect (#132)
     mqttNextTelemetryMs = millis();  //first telemetry immediately
     mqttLastPublishedMode = "";      //re-assert the retained mode state below
+    //Force a fresh publish of all event-driven state on this connection (#132).
+    mqttLastPublishedText = "\x01";
+    mqttLastPublishedNotif = -1;
+    mqttLastPublishedWidth = -1;
+    mqttLastPublishedUnits = -1;
   }
 
   //Retained mode state (#130): publish whenever reality differs from what
@@ -246,6 +276,34 @@ void loopMqtt() {
     mqttLastPublishedMode = deviceMode;
   }
 
+  //Event-driven state (#132): publish retained topics only on change so HA
+  //updates instantly. Cheap compares every pass; a publish only on transition.
+  //MUST run before the rename-clear below, same as the mode state above: the
+  //connect block resets these trackers, so running after the clear would
+  //repopulate the just-blanked old-identity topics in the same pass.
+  if (mqttClient.connected()) {
+    if (lastWrittenText != mqttLastPublishedText) {
+      mqttLastPublishedText = lastWrittenText;
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "text/state").c_str(), 0, true, lastWrittenText.c_str());
+    }
+    int notif = mqttNotification.active ? 1 : 0;
+    if (notif != mqttLastPublishedNotif) {
+      mqttLastPublishedNotif = notif;
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "notification").c_str(), 0, true, notif ? "ON" : "OFF");
+    }
+    if (displayWidth != mqttLastPublishedWidth) {
+      mqttLastPublishedWidth = displayWidth;
+      char n[12]; snprintf(n, sizeof(n), "%d", displayWidth);
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "width").c_str(), 0, true, n);
+    }
+    int units = countRespondingUnits(detectedUnitStates, UNITS_AMOUNT);
+    if (units != mqttLastPublishedUnits) {
+      mqttLastPublishedUnits = units;
+      char n[12]; snprintf(n, sizeof(n), "%d", units);
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units").c_str(), 0, true, n);
+    }
+  }
+
   //Device renamed (#125): while this run still IS the old MQTT identity,
   //blank the old retained HA discovery configs so the post-reboot identity
   //doesn't leave an orphaned device in Home Assistant. Empty retained
@@ -258,9 +316,15 @@ void loopMqtt() {
       if (tLen == 0 || tLen >= sizeof(topicBuf)) continue;
       mqttClient.publish(topicBuf, 0, true, "");
     }
-    //Also blank the retained mode state (#130) — without its config it
-    //would just be an orphaned retained message on the old topic.
-    mqttClient.publish(mqttTopicModeState.c_str(), 0, true, "");
+    //Also blank every retained STATE topic (#130, #132) — without their
+    //configs they'd be orphaned retained messages on the old id.
+    static const char* const stateSuffixes[] = {
+      "mode", "text/state", "notification", "width", "units",
+      "diag/ip", "diag/ssid", "diag/reset", "diag/boots", "diag/ota", "diag/tz"
+    };
+    for (unsigned i = 0; i < sizeof(stateSuffixes) / sizeof(stateSuffixes[0]); i++) {
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, stateSuffixes[i]).c_str(), 0, true, "");
+    }
     SerialPrintln(F("MQTT: cleared retained discovery configs for old device id (rename)"));
   }
 
@@ -316,9 +380,14 @@ void loopMqtt() {
 
   if (mqttClient.connected() && (long)(millis() - mqttNextTelemetryMs) >= 0) {
     mqttNextTelemetryMs = millis() + MQTT_TELEMETRY_INTERVAL_S * 1000UL;
-    char buf[96];
-    buildTelemetryPayload(buf, sizeof(buf), ESP.getFreeHeap(), WiFi.RSSI(), lastShowUnitWriteErrors);
-    mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
+    char buf[128];
+    bool ntpSynced = time(nullptr) > 1600000000L;
+    size_t tn = buildTelemetryPayload(buf, sizeof(buf), ESP.getFreeHeap(), (int)ESP.getHeapFragmentation(),
+                          WiFi.RSSI(), lastShowUnitWriteErrors, millis() / 1000UL, ntpSynced);
+    //Reject a truncated payload (same discipline as the discovery builders).
+    if (tn > 0 && tn < sizeof(buf)) {
+      mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
+    }
   }
 }
 

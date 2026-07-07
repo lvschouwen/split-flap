@@ -144,42 +144,117 @@ inline String mqttTopic(const String& deviceId, const char* suffix) {
 }
 
 // ---- Telemetry ----
-// One JSON packet serves all three HA sensors via value_json templates.
-inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap, long rssi, int unitErrors) {
+// One JSON packet feeds all telemetry-backed HA sensors via value_json
+// templates. CONTINUOUS health metrics only — discrete/interactive state
+// (current text, mode, alignment, speed, notification, display width) and the
+// static diagnostics (ip/ssid/reset/boots/tz/otaReverted) ride their own
+// retained topics, published on-change / on-connect (ServiceMqttFunctions.ino)
+// so HA sees them instantly instead of on this periodic tick (#132).
+inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap, int heapFragPct,
+                                    long rssi, int unitErrors, unsigned long uptimeSec, bool ntpSynced) {
   return (size_t)mqttSnprintf(buf, bufLen,
-      MQTT_FMT("{\"heap\":%lu,\"rssi\":%ld,\"unitErrors\":%d}"),
-      (unsigned long)freeHeap, rssi, unitErrors);
+      MQTT_FMT("{\"heap\":%lu,\"heapFrag\":%d,\"rssi\":%ld,\"unitErrors\":%d,\"uptime\":%lu,\"ntp\":%d}"),
+      (unsigned long)freeHeap, heapFragPct, rssi, unitErrors, uptimeSec, ntpSynced ? 1 : 0);
 }
 
 // ---- HA MQTT Discovery ----
-// One Text entity + three sensors sharing a single device block, so HA
-// groups them under one device. Abbreviated keys (cmd_t, avty_t, uniq_id,
-// stat_t, val_tpl, dev_cla, dev, ids, mf, mdl, sw) are the documented HA
-// discovery short names — they keep payloads well inside the 512-byte
-// assembly buffer.
+// A Text + Mode-select command entity plus a fleet of read-only sensors, all
+// sharing one device block so HA groups them under one device. Abbreviated
+// keys (cmd_t, avty_t, uniq_id, stat_t, val_tpl, dev_cla, unit_of_meas,
+// ent_cat, pl_on, pl_off, dev, ids, mf, mdl, sw) are the documented HA
+// discovery short names — they keep payloads well inside the 512-byte buffer.
+//
+// Enum values are append-only: HA keys retained configs by the topic's
+// object_id, so reordering would orphan entities. Keep DISCOVERY_ENTITY_COUNT
+// last.
 enum MqttDiscoveryEntity {
   DISCOVERY_TEXT = 0,
   DISCOVERY_HEAP,
   DISCOVERY_RSSI,
   DISCOVERY_UNIT_ERRORS,
-  DISCOVERY_MODE,   // HA select, text/clock (#130)
+  DISCOVERY_MODE,          // HA select, text/clock (#130)
+  // Stage A read-only sensors (#132)
+  DISCOVERY_HEAP_FRAG,     // telemetry-backed
+  DISCOVERY_UPTIME,        // telemetry-backed
+  DISCOVERY_NTP,           // telemetry-backed, binary
+  DISCOVERY_CURRENT_TEXT,  // own retained topic
+  DISCOVERY_NOTIFICATION,  // own retained topic, binary
+  DISCOVERY_WIDTH,         // own retained topic
+  DISCOVERY_UNITS,         // own retained topic
+  DISCOVERY_IP,            // diagnostics topic
+  DISCOVERY_SSID,          // diagnostics topic
+  DISCOVERY_RESET,         // diagnostics topic
+  DISCOVERY_BOOTS,         // diagnostics topic
+  DISCOVERY_OTA_REVERTED,  // diagnostics topic, binary problem
+  DISCOVERY_TIMEZONE,      // diagnostics topic
   DISCOVERY_ENTITY_COUNT
 };
 
-inline size_t buildDiscoveryTopic(char* buf, size_t bufLen, int entity, const char* deviceId) {
+// Per-entity HA component + object-id suffix. Single source of truth so the
+// config topic and the payload's uniq_id can never drift apart.
+struct MqttDiscMeta { const char* comp; const char* obj; };
+inline MqttDiscMeta mqttDiscMeta(int entity) {
   switch (entity) {
-    case DISCOVERY_TEXT:        return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/text/%s/config"), deviceId);
-    case DISCOVERY_HEAP:        return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/sensor/%s_heap/config"), deviceId);
-    case DISCOVERY_RSSI:        return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/sensor/%s_rssi/config"), deviceId);
-    case DISCOVERY_UNIT_ERRORS: return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/sensor/%s_unit_errors/config"), deviceId);
-    case DISCOVERY_MODE:        return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/select/%s/config"), deviceId);
+    case DISCOVERY_TEXT:         return { "text",          "" };
+    case DISCOVERY_MODE:         return { "select",        "" };
+    case DISCOVERY_HEAP:         return { "sensor",        "_heap" };
+    case DISCOVERY_RSSI:         return { "sensor",        "_rssi" };
+    case DISCOVERY_UNIT_ERRORS:  return { "sensor",        "_unit_errors" };
+    case DISCOVERY_HEAP_FRAG:    return { "sensor",        "_heap_frag" };
+    case DISCOVERY_UPTIME:       return { "sensor",        "_uptime" };
+    case DISCOVERY_NTP:          return { "binary_sensor", "_ntp" };
+    case DISCOVERY_CURRENT_TEXT: return { "sensor",        "_text_state" };
+    case DISCOVERY_NOTIFICATION: return { "binary_sensor", "_notification" };
+    case DISCOVERY_WIDTH:        return { "sensor",        "_width" };
+    case DISCOVERY_UNITS:        return { "sensor",        "_units" };
+    case DISCOVERY_IP:           return { "sensor",        "_ip" };
+    case DISCOVERY_SSID:         return { "sensor",        "_ssid" };
+    case DISCOVERY_RESET:        return { "sensor",        "_reset" };
+    case DISCOVERY_BOOTS:        return { "sensor",        "_boots" };
+    case DISCOVERY_OTA_REVERTED: return { "binary_sensor", "_ota_reverted" };
+    case DISCOVERY_TIMEZONE:     return { "sensor",        "_timezone" };
   }
-  if (bufLen > 0) buf[0] = '\0';
-  return 0;
+  return { nullptr, nullptr };
+}
+
+// TEXT and MODE keep an empty object suffix (their pre-#132 topics) — no
+// collision, since HA keys the config topic by component too (text/ vs
+// select/). Their uniq_id still carries the _text/_mode suffix in the explicit
+// payload cases below. All new sensors use a distinct _<key> suffix.
+
+inline size_t buildDiscoveryTopic(char* buf, size_t bufLen, int entity, const char* deviceId) {
+  MqttDiscMeta m = mqttDiscMeta(entity);
+  if (!m.comp) { if (bufLen > 0) buf[0] = '\0'; return 0; }
+  return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/%s/%s%s/config"), m.comp, deviceId, m.obj);
 }
 
 // Shared device block; %s slots are (deviceId, deviceId, fwVersion).
 #define MQTT_DEVICE_BLOCK "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Split-Flap %s\",\"mf\":\"split-flap\",\"mdl\":\"v1 ESPMaster\",\"sw\":\"%s\"}"
+
+// Append-with-guard: bail the moment the buffer is full so buf+o never runs
+// past the end. The caller rejects any payload with returned length >= bufLen.
+#define MQTT_DISC_APPEND(...) do { \
+    if (o >= bufLen) return o; \
+    o += (size_t)mqttSnprintf(buf + o, bufLen - o, __VA_ARGS__); \
+  } while (0)
+
+// Generic read-only entity (sensor / binary_sensor). Optional fragments are
+// emitted only when non-null. statSuffix is the topic under splitflap/<id>/.
+// For binary_sensor pass pOn/pOff; for a numeric/string sensor leave them null.
+inline size_t buildEntityDiscovery(char* buf, size_t bufLen, const char* deviceId, const char* fw,
+    const char* objSuffix, const char* name, const char* statSuffix, const char* valTpl,
+    const char* devCla, const char* unit, const char* entCat, const char* pOn, const char* pOff) {
+  size_t o = 0;
+  MQTT_DISC_APPEND(MQTT_FMT("{\"name\":\"%s\",\"stat_t\":\"splitflap/%s/%s\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s%s\""),
+                   name, deviceId, statSuffix, deviceId, deviceId, objSuffix);
+  if (valTpl) MQTT_DISC_APPEND(MQTT_FMT(",\"val_tpl\":\"%s\""), valTpl);
+  if (devCla) MQTT_DISC_APPEND(MQTT_FMT(",\"dev_cla\":\"%s\""), devCla);
+  if (unit)   MQTT_DISC_APPEND(MQTT_FMT(",\"unit_of_meas\":\"%s\""), unit);
+  if (entCat) MQTT_DISC_APPEND(MQTT_FMT(",\"ent_cat\":\"%s\""), entCat);
+  if (pOn)    MQTT_DISC_APPEND(MQTT_FMT(",\"pl_on\":\"%s\",\"pl_off\":\"%s\""), pOn, pOff);
+  MQTT_DISC_APPEND(MQTT_FMT("," MQTT_DEVICE_BLOCK "}"), deviceId, deviceId, fw);
+  return o;
+}
 
 inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const char* deviceId, const char* fwVersion) {
   switch (entity) {
@@ -187,22 +262,27 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Text\",\"cmd_t\":\"splitflap/%s/text/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_text\",\"max\":255," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
-    case DISCOVERY_HEAP:
-      return (size_t)mqttSnprintf(buf, bufLen,
-        MQTT_FMT("{\"name\":\"Free heap\",\"stat_t\":\"splitflap/%s/telemetry\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_heap\",\"val_tpl\":\"{{ value_json.heap }}\",\"unit_of_meas\":\"B\"," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
-    case DISCOVERY_RSSI:
-      return (size_t)mqttSnprintf(buf, bufLen,
-        MQTT_FMT("{\"name\":\"WiFi RSSI\",\"stat_t\":\"splitflap/%s/telemetry\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_rssi\",\"val_tpl\":\"{{ value_json.rssi }}\",\"unit_of_meas\":\"dBm\",\"dev_cla\":\"signal_strength\"," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
-    case DISCOVERY_UNIT_ERRORS:
-      return (size_t)mqttSnprintf(buf, bufLen,
-        MQTT_FMT("{\"name\":\"Unit errors\",\"stat_t\":\"splitflap/%s/telemetry\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_unit_errors\",\"val_tpl\":\"{{ value_json.unitErrors }}\"," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
     case DISCOVERY_MODE:
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Mode\",\"cmd_t\":\"splitflap/%s/mode/set\",\"stat_t\":\"splitflap/%s/mode\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_mode\",\"ops\":[\"text\",\"clock\"]," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+    //                        obj             name                 stat_t          val_tpl                        dev_cla       unit    ent_cat        pOn    pOff
+    case DISCOVERY_HEAP:         return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_heap",         "Free heap",           "telemetry",   "{{ value_json.heap }}",      nullptr,       "B",   nullptr,      nullptr, nullptr);
+    case DISCOVERY_RSSI:         return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_rssi",         "WiFi RSSI",           "telemetry",   "{{ value_json.rssi }}",      "signal_strength", "dBm", nullptr,  nullptr, nullptr);
+    case DISCOVERY_UNIT_ERRORS:  return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_unit_errors",  "Unit errors",         "telemetry",   "{{ value_json.unitErrors }}", nullptr,      nullptr, nullptr,     nullptr, nullptr);
+    case DISCOVERY_HEAP_FRAG:    return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_heap_frag",    "Heap fragmentation",  "telemetry",   "{{ value_json.heapFrag }}",  nullptr,       "%",   "diagnostic", nullptr, nullptr);
+    case DISCOVERY_UPTIME:       return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_uptime",       "Uptime",              "telemetry",   "{{ value_json.uptime }}",    "duration",    "s",   "diagnostic", nullptr, nullptr);
+    case DISCOVERY_NTP:          return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_ntp",          "NTP synced",          "telemetry",   "{{ value_json.ntp }}",       "connectivity", nullptr, "diagnostic", "1", "0");
+    case DISCOVERY_CURRENT_TEXT: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_text_state",   "Current text",        "text/state",  nullptr,                      nullptr,       nullptr, nullptr,     nullptr, nullptr);
+    case DISCOVERY_NOTIFICATION: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_notification", "Notification active", "notification", nullptr,                     nullptr,       nullptr, nullptr,     "ON", "OFF");
+    case DISCOVERY_WIDTH:        return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_width",        "Display width",       "width",       nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
+    case DISCOVERY_UNITS:        return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_units",        "Units responding",    "units",       nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
+    case DISCOVERY_IP:           return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_ip",           "IP address",          "diag/ip",     nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
+    case DISCOVERY_SSID:         return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_ssid",         "WiFi SSID",           "diag/ssid",   nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
+    case DISCOVERY_RESET:        return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_reset",        "Last reset reason",   "diag/reset",  nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
+    case DISCOVERY_BOOTS:        return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_boots",        "Boot counter",        "diag/boots",  nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
+    case DISCOVERY_OTA_REVERTED: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_ota_reverted", "OTA reverted",        "diag/ota",    nullptr,                      "problem",     nullptr, "diagnostic", "ON", "OFF");
+    case DISCOVERY_TIMEZONE:     return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_timezone",     "Timezone",            "diag/tz",     nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
   }
   if (bufLen > 0) buf[0] = '\0';
   return 0;
