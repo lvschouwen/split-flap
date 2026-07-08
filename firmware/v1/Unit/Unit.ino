@@ -131,7 +131,13 @@ float missedSteps = 0; //cummulate steps <1, to compensate via additional step w
 // rotateToLetter, and float division is slow on AVR. See stepFlaps() (#136).
 static const int   STEPS_PER_FLAP_WHOLE = STEPS / AMOUNTFLAPS;
 static const float STEPS_PER_FLAP_FRAC  = (float)STEPS / (float)AMOUNTFLAPS - (float)STEPS_PER_FLAP_WHOLE;
-int currentlyrotating = 0; // 1 = drum is currently rotating, 0 = drum is standing still
+// volatile: read inside the Wire ISR (requestEvent() status/idle byte the
+// master polls) and written all over loop() (startMotor/stopMotor/calibrate
+// and the overheat-gate early return in rotateToLetter). Without it, LTO can
+// serve the ISR a stale 0 and the master's waitForDisplayToStop() concludes
+// idle prematurely (#143). Value is 0/1, so non-atomic 16-bit access is
+// harmless — same rationale as receivedNumber/stepperSpeed below.
+volatile int currentlyrotating = 0; // 1 = drum is currently rotating, 0 = drum is standing still
 // receivedNumber and stepperSpeed are written from the Wire ISR
 // (receiveLetter) and read in loop()/rotateToLetter() — volatile for the
 // same reason as the pending* flags (LTO may otherwise cache them). Values
