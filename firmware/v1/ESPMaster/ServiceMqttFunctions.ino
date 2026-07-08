@@ -43,11 +43,6 @@ static char mqttAlignmentRxBuffer[16];
 static volatile bool mqttRestartCommandPending = false;
 static char mqttRestartRxBuffer[16];
 
-//Web-UI mode change → cancel an active notification (#130). The POST
-//handler runs in async context, so it only sets this flag; loopMqtt()
-//does the cancel (same pattern as mqttDiscoveryClearPending).
-static volatile bool mqttNotificationCancelPending = false;
-
 //Last mode published to the retained state topic; "" forces a publish on
 //the first connected loop pass (and after each reconnect reset below).
 static String mqttLastPublishedMode;
@@ -393,13 +388,6 @@ void loopMqtt() {
     SerialPrintln(F("MQTT: cleared retained discovery configs for old device id (rename)"));
   }
 
-  //Web-UI mode change (#130): explicit mode switch trumps a running
-  //notification — cancel it so the next 1 s tick re-flaps the new mode.
-  if (mqttNotificationCancelPending) {
-    mqttNotificationCancelPending = false;
-    notificationCancel(mqttNotification);
-  }
-
   //HA mode select command (#130).
   if (mqttModeCommandPending) {
     mqttModeCommandPending = false;
@@ -527,6 +515,14 @@ bool mqttNotificationTick() {
   return true;
 }
 
+//Calibration "Send to all" (#165): show a transient test pattern through the
+//same show-then-revert state instead of persistently flipping the device to
+//text mode. Loop() context only — applyPendingSettingsPost() calls it while
+//draining a POST; mqttNotification is loop-owned state.
+void showCalibrationText(const String& text) {
+  calibrationTextStart(mqttNotification, text, millis());
+}
+
 //Upload started (#116 freeze): force-close the MQTT TCP session NOW so
 //nothing MQTT-related is alive during flash writes. Deliberately NOT a
 //graceful disconnect: an abrupt close without a DISCONNECT packet makes
@@ -543,14 +539,13 @@ void mqttStopForOta() {
   SerialPrintln(F("MQTT: force-closed for master OTA upload"));
 }
 
-//Called from the settings POST handler when the device mode changed (#130).
-//Async context: flag only — loopMqtt() cancels the active notification so
-//an explicit mode switch doesn't wait out the dwell.
-void mqttRequestNotificationCancel() {
-  if (!mqttInitialised) {
-    return;
-  }
-  mqttNotificationCancelPending = true;
+//Explicit mode switch or message send trumps a running notification /
+//calibration pattern (#130/#165): cancel so the next 1 s tick re-flaps the
+//new content. Loop() context only (callers sit in applyPendingSettingsPost's
+//drain) — mqttNotification is loop-owned, so cancel directly. Must NOT be
+//gated on mqttInitialised: calibration transients exist without a broker.
+void cancelActiveNotification() {
+  notificationCancel(mqttNotification);
 }
 
 //Called from the settings POST handler when the device name changed (#125).

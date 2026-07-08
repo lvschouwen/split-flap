@@ -238,7 +238,7 @@ void applyPendingSettingsPost() {
     //Explicit mode switch trumps a running MQTT notification (#130):
     //ask loopMqtt() to cancel it so the new mode shows immediately
     //instead of after the dwell.
-    mqttRequestNotificationCancel();
+    cancelActiveNotification();
     SerialPrintln("Device Mode Set: " + deviceMode);
   }
 
@@ -281,6 +281,19 @@ void applyPendingSettingsPost() {
   //that switches to text mode and sets the message in one go works.
   if (pendingSettingsPost.inputTextProvided && deviceMode == DEVICE_MODE_TEXT) {
     inputText = pendingSettingsPost.inputText;
+    //An explicit message send trumps an active notification/calibration
+    //pattern — same intent rule as the #130 mode-change cancel. Without
+    //this a calibration dwell would block the new message for minutes.
+    cancelActiveNotification();
+  }
+
+  //Transient calibration test pattern (#165): owns the display for its
+  //dwell via the notification show-then-revert state, then the normal mode
+  //content re-flaps by itself. Nothing is persisted — a clock display
+  //stays a clock display.
+  if (pendingSettingsPost.calibrationTextProvided) {
+    showCalibrationText(pendingSettingsPost.calibrationText);
+    SerialPrintln("Calibration test pattern (transient): " + pendingSettingsPost.calibrationText);
   }
 
   //Reset for the next post; release the staged String heap while at it
@@ -289,6 +302,7 @@ void applyPendingSettingsPost() {
   pendingSettingsPost.flapSpeedProvided    = false; pendingSettingsPost.flapSpeed    = String();
   pendingSettingsPost.deviceModeProvided   = false; pendingSettingsPost.deviceMode   = String();
   pendingSettingsPost.inputTextProvided    = false; pendingSettingsPost.inputText    = String();
+  pendingSettingsPost.calibrationTextProvided = false; pendingSettingsPost.calibrationText = String();
   pendingSettingsPost.timezoneProvided     = false; pendingSettingsPost.timezone     = String();
   pendingSettingsPost.deviceNameProvided   = false; pendingSettingsPost.deviceName   = String();
   pendingSettingsPost.mqttHostProvided     = false; pendingSettingsPost.mqttHost     = String();

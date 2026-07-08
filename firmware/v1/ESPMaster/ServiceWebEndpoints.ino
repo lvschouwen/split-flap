@@ -391,12 +391,14 @@ void registerWebEndpoints() {
       bool submissionError = false;
 
       String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue, newTimezoneValue, newDeviceNameValue;
+      String newCalibrationTextValue;
       String newMqttHostValue, newMqttPortValue, newMqttUserValue, newMqttPasswordValue;
       //Every field is optional (#128): the tabbed UI saves per card, so a
       //POST carries only the fields of the card that submitted it. A field
       //that wasn't provided must never be applied — otherwise a partial
       //save would blank the rest.
       bool alignmentProvided = false, deviceModeProvided = false, flapSpeedProvided = false, inputTextProvided = false;
+      bool calibrationTextProvided = false;
       bool timezoneProvided = false;
       bool deviceNameProvided = false;
       bool mqttHostProvided = false, mqttPortProvided = false, mqttUserProvided = false, mqttPasswordProvided = false;
@@ -450,6 +452,14 @@ void registerWebEndpoints() {
           if (p->name() == PARAM_INPUT_TEXT) {
             newInputTextValue = p->value().c_str();
             inputTextProvided = true;
+          }
+
+          //HTTP POST transient calibration test pattern (#165). Shown via
+          //the notification show-then-revert state in loop() context —
+          //deviceMode and EEPROM are never touched.
+          if (p->name() == PARAM_CALIBRATION_TEXT) {
+            newCalibrationTextValue = p->value().c_str();
+            calibrationTextProvided = true;
           }
 
           //HTTP POST timezone POSIX TZ string (issue #48).
@@ -558,6 +568,7 @@ void registerWebEndpoints() {
         if (flapSpeedProvided)    { pendingSettingsPost.flapSpeed    = newFlapSpeedValue;    pendingSettingsPost.flapSpeedProvided    = true; }
         if (deviceModeProvided)   { pendingSettingsPost.deviceMode   = newDeviceModeValue;   pendingSettingsPost.deviceModeProvided   = true; }
         if (inputTextProvided)    { pendingSettingsPost.inputText    = newInputTextValue;    pendingSettingsPost.inputTextProvided    = true; }
+        if (calibrationTextProvided) { pendingSettingsPost.calibrationText = newCalibrationTextValue; pendingSettingsPost.calibrationTextProvided = true; }
         if (timezoneProvided)     { pendingSettingsPost.timezone     = newTimezoneValue;     pendingSettingsPost.timezoneProvided     = true; }
         if (deviceNameProvided)   { pendingSettingsPost.deviceName   = newDeviceNameValue;   pendingSettingsPost.deviceNameProvided   = true; }
         if (mqttHostProvided)     { pendingSettingsPost.mqttHost     = newMqttHostValue;     pendingSettingsPost.mqttHostProvided     = true; }

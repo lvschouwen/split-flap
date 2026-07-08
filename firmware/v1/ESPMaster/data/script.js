@@ -1106,11 +1106,16 @@ function translateLetterToIndex(ch) {
 	return CALIBRATION_LETTERS.indexOf(ch);
 }
 
-//"Send to all" submits the main form with the chosen letter repeated
-//unitCount times. Reuses the existing showMessage path — simpler than a
-//dedicated endpoint and keeps device state consistent with what the user
-//sees elsewhere.
+//"Send to all" shows the chosen letter repeated unitCount times as a
+//TRANSIENT pattern (#165): the firmware routes calibrationText through its
+//show-then-revert notification state, so the persisted device mode is never
+//touched — a clock display resumes clocking when the dwell expires (or on
+//any explicit mode change).
 function sendCalibrationLetter() {
+	if (unitCount === 0) {
+		showCalibrationStatus("No units detected.", "error");
+		return;
+	}
 	var letter = getSelectedCalibrationLetter();
 	showCalibrationStatus("Sending '" + letter + "' to all detected units…", "pending");
 
@@ -1121,10 +1126,7 @@ function sendCalibrationLetter() {
 	for (var i = 0; i < unitCount; i++) padded += letter;
 
 	var form = new FormData();
-	form.append("alignment", document.querySelector('input[name="alignment"]:checked').value);
-	form.append("flapSpeed", document.getElementById("rangeFlapSpeed").value);
-	form.append("deviceMode", "text");
-	form.append("inputText", padded);
+	form.append("calibrationText", padded);
 
 	var xhr = new XMLHttpRequest();
 	xhr.open("POST", "/");

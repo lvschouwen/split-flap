@@ -116,6 +116,17 @@ inline void notificationCancel(MqttNotification& n) {
   n.text = "";
 }
 
+// Calibration test pattern (#165): the maintenance tab's "Send to all"
+// rides the same show-then-revert state instead of posting deviceMode=text,
+// so a clock display resumes clocking by itself and nothing hits EEPROM.
+// 10 minutes covers a full expect/reality/apply calibration round; an
+// explicit mode change (web UI or HA) cancels it early via the #130 path.
+#define CALIBRATION_TEXT_DWELL_SECONDS 600L
+
+inline void calibrationTextStart(MqttNotification& n, const String& text, uint32_t nowMs) {
+  notificationStart(n, text, CALIBRATION_TEXT_DWELL_SECONDS, nowMs);
+}
+
 // millis()-wraparound-safe via signed difference of fixed-width unsigned.
 inline bool notificationTick(MqttNotification& n, uint32_t nowMs) {
   if (!n.active) return false;

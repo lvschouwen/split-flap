@@ -123,6 +123,8 @@ extern int lastShowUnitWriteErrors;
 void initMqtt();
 void loopMqtt();
 bool mqttNotificationTick();
+//Transient calibration test pattern (#165) — loop() context only.
+void showCalibrationText(const String& text);
 void mqttStopForOta();
 void mqttResumeAfterOta();
 bool mqttIsConnected();

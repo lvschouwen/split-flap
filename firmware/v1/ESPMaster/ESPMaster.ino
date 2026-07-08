@@ -215,6 +215,9 @@ const char* PARAM_ALIGNMENT = "alignment";
 const char* PARAM_FLAP_SPEED = "flapSpeed";
 const char* PARAM_DEVICEMODE = "deviceMode";
 const char* PARAM_INPUT_TEXT = "inputText";
+//Transient calibration test pattern (#165) — shown via the notification
+//show-then-revert state, never persisted.
+const char* PARAM_CALIBRATION_TEXT = "calibrationText";
 const char* PARAM_TIMEZONE   = "timezone";
 const char* PARAM_DEVICE_NAME = "deviceName";
 const char* PARAM_MQTT_HOST     = "mqttHost";
@@ -275,6 +278,7 @@ struct PendingSettingsPost {
   bool flapSpeedProvided = false;    String flapSpeed;
   bool deviceModeProvided = false;   String deviceMode;
   bool inputTextProvided = false;    String inputText;
+  bool calibrationTextProvided = false; String calibrationText;
   bool timezoneProvided = false;     String timezone;
   bool deviceNameProvided = false;   String deviceName;
   bool mqttHostProvided = false;     String mqttHost;
