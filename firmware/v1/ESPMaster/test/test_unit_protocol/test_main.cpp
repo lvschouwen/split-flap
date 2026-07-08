@@ -20,7 +20,8 @@ void tearDown() {}
 static void test_alphabet_matches_expected() {
   // The canonical 45-char drum alphabet. If this ever legitimately changes,
   // update the drums, script.js AND this expectation together.
-  TEST_ASSERT_EQUAL_STRING(" ABCDEFGHIJKLMNOPQRSTUVWXYZ$&#0123456789:.-?!", SFP_ALPHABET);
+  //Tail is the physical drum order (#177): '!' before '?', '-' last.
+  TEST_ASSERT_EQUAL_STRING(" ABCDEFGHIJKLMNOPQRSTUVWXYZ$&#0123456789:.!?-", SFP_ALPHABET);
 }
 
 static void test_flap_amount_derives_from_alphabet() {

@@ -28,7 +28,9 @@
 // blank. ä/ö/ü are wire-encoded as $ & # (the web UI translates user input
 // before sending). Changing this string changes what every flap must show —
 // keep it in lock-step with the physical flap ordering on the drums.
-#define SFP_ALPHABET " ABCDEFGHIJKLMNOPQRSTUVWXYZ$&#0123456789:.-?!"
+//Tail order is the PHYSICAL drum order: '!' sits before '?', '-' last —
+//verified against hardware (#177). The intuitive ":.-?!" is wrong.
+#define SFP_ALPHABET " ABCDEFGHIJKLMNOPQRSTUVWXYZ$&#0123456789:.!?-"
 
 // Number of flaps per unit, derived from the alphabet so the two can never
 // disagree. Cast to int to match the historical `#define ... 45` type and to
