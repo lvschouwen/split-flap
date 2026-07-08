@@ -198,6 +198,16 @@
 					</div>
 				</div>
 
+				<div class="card" id="provisioningCard">
+					<h2>Provisioning</h2>
+					<p class="note">Each unit can store its I2C address in EEPROM; the DIP switches become a fallback. <b>Burn all</b> locks in the current addresses (do this before DIP switches are ever removed). Changing an address <em>away</em> from its DIP setting breaks that unit's over-I2C reflash until the address is cleared again.</p>
+					<div class="row">
+						<button type="button" class="btn" onclick="burnAllAddresses()">Burn current addresses to EEPROM (all units)</button>
+					</div>
+					<div id="containerProvisioning"></div>
+					<p id="provisioningStatus" class="status hidden"></p>
+				</div>
+
 				<div class="card">
 					<h2>Master firmware <span id="labelVersion" class="pill off">—</span></h2>
 					<p class="note">Upload a compiled <code>firmware.bin</code> to flash the ESP itself. It reboots into the new firmware on success.</p>

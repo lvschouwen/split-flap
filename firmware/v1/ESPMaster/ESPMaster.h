@@ -76,6 +76,8 @@ extern bool       unitHealthValid[];
 extern char       unitHealthJson[];
 extern int        faultyUnitCount;
 extern volatile bool unitHealthRefreshPending;
+extern volatile bool busReprobePending;
+extern volatile bool i2cBusBusy;
 void pollUnitHealth();
 
 // Broadcasts CMD_HOME to the I2C general-call address (0x00). Every unit

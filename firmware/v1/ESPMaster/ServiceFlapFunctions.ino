@@ -82,6 +82,34 @@ int rebootUnit(int i2cAddress) {
   return Wire.endTransmission();
 }
 
+//Provisioning (#56): burn a new I2C address into the unit's EEPROM. The
+//unit re-validates 1..126, writes magic+address, and reboots — it drops off
+//the bus and rejoins at the new address (getaddress() prefers EEPROM over
+//DIP). NOTE: the unit's twiboot keeps listening on the DIP-derived address,
+//so over-I2C reflash only works while EEPROM and DIP agree — the endpoint
+//and UI carry that warning.
+int setUnitAddress(int i2cAddress, uint8_t newAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_SET_I2C_ADDRESS);
+  Wire.write(newAddress);
+  return Wire.endTransmission();
+}
+
+//Clears the EEPROM identity magic; the unit reboots and falls back to its
+//DIP-derived address.
+int clearUnitAddress(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_CLEAR_I2C_ADDRESS);
+  return Wire.endTransmission();
+}
+
+//Non-blocking ~3 s LED blink on the unit so a human can find it physically.
+int identifyUnit(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_IDENTIFY);
+  return Wire.endTransmission();
+}
+
 //Broadcasts CMD_HOME to every unit on the bus in a single transaction via
 //the I2C general-call address. Replaces loops that previously sent HOME to
 //each detected unit one at a time. Issue #47.
@@ -136,6 +164,17 @@ int        faultyUnitCount = 0;
 //per-unit status (probeI2cBus() has already run in setup()), instead of serving
 //the width:0 placeholder until the first MQTT tick or manual refresh (#45).
 volatile bool unitHealthRefreshPending = true;
+//Provisioning (#56): an address change moves a unit on the bus, which only
+//probeI2cBus() can see. POST /units/health/refresh?probe=1 arms this; the
+//loop() drain re-probes before rebuilding the health cache.
+volatile bool busReprobePending = false;
+//True for the whole duration of a loop()-context bus scan (probe / health
+//poll). The synchronous calibration/provisioning endpoints check it: their
+//short Wire transaction must not interleave with a scan's write-then-read
+//pairs (delay(2) inside the scan yields to the network stack). Mirrors the
+//firmwareFlashInProgress pattern — the *Pending flags clear before the
+//blocking work starts, so they can't serve as a busy signal.
+volatile bool i2cBusBusy = false;
 
 //Refreshes the unit-health cache: reads CMD_GET_STATUS from every sketch-mode
 //unit, recomputes the faulty count, and rebuilds the shared JSON. Blocking

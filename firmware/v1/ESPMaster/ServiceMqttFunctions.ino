@@ -494,7 +494,9 @@ void loopMqtt() {
     //card) and publish the integer faulty count + the per-unit attrs. Retained
     //so HA has the last snapshot after a restart. Blocking I2C, but we're in
     //loop() on the telemetry tick — same context the web refresh drain uses.
+    i2cBusBusy = true;
     pollUnitHealth();
+    i2cBusBusy = false;
     char fc[12];
     snprintf(fc, sizeof(fc), "%d", faultyUnitCount);
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units_faulty").c_str(), 0, true, fc);

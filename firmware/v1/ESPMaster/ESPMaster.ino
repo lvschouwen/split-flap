@@ -836,7 +836,15 @@ void loop() {
   //so it owns the bus cleanly.
   if (unitHealthRefreshPending) {
     unitHealthRefreshPending = false;
+    i2cBusBusy = true;
+    //Re-probe first when armed (#56): an address change moved a unit, and
+    //pollUnitHealth() only reads slots the last probe marked sketch-running.
+    if (busReprobePending) {
+      busReprobePending = false;
+      probeI2cBus();
+    }
     pollUnitHealth();
+    i2cBusBusy = false;
   }
 
   //Deferred settings apply (#150): drain the fields staged by POST / —

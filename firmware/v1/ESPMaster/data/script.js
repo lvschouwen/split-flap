@@ -45,6 +45,7 @@ var initialised = false;
 // ===================== board mirror =====================
 
 var mirrorTiles = [];
+var lastHealthUnits = [];
 var mirrorShown = "";
 
 //The device stores umlauts as $ & # on the wire; show the real glyphs.
@@ -557,9 +558,9 @@ function handleDiscoverResult(result) {
 
 var unitHealthPollTimer = null;
 
-function refreshUnitHealth() {
+function refreshUnitHealth(probe) {
 	setUnitHealthSummary("polling…", "off");
-	fetch("/units/health/refresh", { method: "POST" })
+	fetch("/units/health/refresh" + (probe ? "?probe=1" : ""), { method: "POST" })
 		.then(function(r) {
 			if (r.status === 503) {
 				//Busy = a firmware flash owns the bus right now — not an error.
@@ -705,6 +706,134 @@ function renderUnitHealth(data) {
 
 	setUnitHealthSummary(responding + "/" + width + (faulty > 0 ? " · " + faulty + " faulty" : " healthy"),
 		faulty > 0 || responding < width ? "bad" : "ok");
+
+	lastHealthUnits = units;
+	renderProvisioning(units);
+}
+
+// ===================== Maintenance: provisioning (#56) =====================
+
+//Rows come from the health snapshot: only sketch-running units answer the
+//provisioning opcodes. After a mutation the unit reboots and moves on the
+//bus, so the follow-up refresh re-probes (?probe=1).
+function renderProvisioning(units) {
+	var container = document.getElementById("containerProvisioning");
+	removeAllChildren(container);
+	units.forEach(function(u) {
+		if (u.st !== 1) return;
+		var row = document.createElement("div");
+		row.className = "calibration-row";
+
+		var label = document.createElement("span");
+		label.className = "calibration-label";
+		label.textContent = "Unit " + formatHexAddress(u.a);
+		row.appendChild(label);
+
+		var badge = document.createElement("span");
+		badge.className = "calibration-ok";
+		badge.textContent = u.rev ? "(fw " + u.rev + ")" : "";
+		row.appendChild(badge);
+
+		appendButton(row, "Identify", function() { identifyUnitUi(u.a); });
+
+		var addrInput = document.createElement("input");
+		addrInput.type = "number";
+		addrInput.className = "calibration-offset";
+		addrInput.min = "1"; addrInput.max = "16";
+		addrInput.placeholder = "new";
+		row.appendChild(addrInput);
+
+		appendButton(row, "Change…", function() { changeUnitAddressUi(u.a, addrInput); });
+		appendButton(row, "Clear", function() { clearUnitAddressUi(u.a); });
+		container.appendChild(row);
+	});
+}
+
+function showProvisioningStatus(message, kind) {
+	var el = document.getElementById("provisioningStatus");
+	el.className = "status " + (kind || "");
+	el.classList.remove("hidden");
+	el.textContent = message;
+}
+
+//The unit needs ~2-3 s to reboot, re-home enough to answer, and rejoin the
+//bus before a re-probe can see it at its new address.
+function reprobeAfterAddressChange() {
+	setTimeout(function() { refreshUnitHealth(true); }, 3000);
+}
+
+function identifyUnitUi(address) {
+	postCalibration("/unit/identify", { address: address }, function(ok) {
+		showProvisioningStatus(ok
+			? "Unit " + formatHexAddress(address) + " is blinking its LED for ~3 s."
+			: "Identify failed for " + formatHexAddress(address), ok ? "success" : "error");
+	});
+}
+
+function changeUnitAddressUi(address, input) {
+	var value = parseInt(input.value, 10);
+	if (isNaN(value) || value < 1 || value > 16) {
+		showProvisioningStatus("Enter a new address 1..16 first.", "error");
+		return;
+	}
+	if (!confirm("Change unit " + formatHexAddress(address) + " to " + formatHexAddress(value) + "?\n\n" +
+		"The unit reboots and re-homes. If the new address differs from its DIP switches, " +
+		"over-I2C reflash of this unit stops working until the address is cleared.")) return;
+	showProvisioningStatus("Burning address " + formatHexAddress(value) + "…", "pending");
+	postCalibration("/unit/set-address", { address: address, value: value }, function(ok) {
+		if (!ok) {
+			showProvisioningStatus("Address change failed for " + formatHexAddress(address) + " (target in use?).", "error");
+			return;
+		}
+		showProvisioningStatus("Burned. Unit is rebooting — the list refreshes in a moment.", "success");
+		reprobeAfterAddressChange();
+	});
+}
+
+function clearUnitAddressUi(address) {
+	if (!confirm("Clear the EEPROM address of unit " + formatHexAddress(address) + "?\n\n" +
+		"The unit reboots and falls back to its DIP-switch address.")) return;
+	showProvisioningStatus("Clearing…", "pending");
+	postCalibration("/unit/clear-address", { address: address }, function(ok) {
+		if (!ok) {
+			showProvisioningStatus("Clear failed for " + formatHexAddress(address), "error");
+			return;
+		}
+		showProvisioningStatus("Cleared. Unit is rebooting to its DIP address.", "success");
+		reprobeAfterAddressChange();
+	});
+}
+
+//Bulk migration: write each unit's CURRENT address into its own EEPROM.
+//EEPROM == DIP afterwards, so nothing moves and reflash keeps working —
+//this is the prep step for ever removing the DIP switches.
+function burnAllAddresses() {
+	//Live health snapshot, not the /settings-derived calibration list — that
+	//one deliberately freezes while Reality inputs hold text.
+	var targets = lastHealthUnits.filter(function(u) { return u.st === 1; })
+		.map(function(u) { return u.a; });
+	if (targets.length === 0) {
+		showProvisioningStatus("No units detected.", "error");
+		return;
+	}
+	if (!confirm("Burn the current address of all " + targets.length + " unit(s) into their EEPROM?\n\n" +
+		"Each unit reboots and re-homes once — the display blanks briefly.")) return;
+	showProvisioningStatus("Burning 0/" + targets.length + "…", "pending");
+	var done = 0, failures = 0;
+	(function next(i) {
+		if (i >= targets.length) {
+			showProvisioningStatus(failures === 0
+				? "Burned " + done + " unit(s). Addresses are now EEPROM-backed."
+				: "Burned " + done + " with " + failures + " failure(s).", failures ? "error" : "success");
+			reprobeAfterAddressChange();
+			return;
+		}
+		postCalibration("/unit/set-address", { address: targets[i], value: targets[i] }, function(ok) {
+			if (ok) done++; else failures++;
+			showProvisioningStatus("Burning " + (i + 1) + "/" + targets.length + "…", "pending");
+			setTimeout(function() { next(i + 1); }, 250);
+		});
+	})(0);
 }
 
 //Pushes every detected sketch-running unit into its twiboot bootloader and

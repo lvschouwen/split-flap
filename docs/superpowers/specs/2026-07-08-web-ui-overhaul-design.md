@@ -36,7 +36,7 @@ Generalize the transient-text mechanism: POST field `transientText` + optional `
 ## Constraints
 
 - Vanilla JS, no webfonts, no external resources; assets PROGMEM-gzipped by `build_assets.py`.
-- **Size budget: total gzipped assets ≤ 24 KB** (today: 20.2 KB). Sketch must stay comfortably under the ~502 KB OTA ceiling; flag at 490 KB.
+- **Size budget: total gzipped assets ≤ 24 KB** (today: 20.2 KB). Amended post-spec: the #56 provisioning panel (out of this spec's scope) adds ~1.3 KB; ceiling for the combined UI is 25.5 KB. Sketch must stay comfortably under the ~502 KB OTA ceiling; flag at 490 KB.
 - `CALIBRATION_LETTERS` in script.js stays byte-synced with `SFP_ALPHABET` (build-time verify).
 - `/settings` JSON shape unchanged (external consumers: flasher, ota-master.sh).
 - Accessibility: visible focus states, `prefers-reduced-motion` disables flips, semantic controls.

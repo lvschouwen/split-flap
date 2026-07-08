@@ -113,6 +113,11 @@ void registerWebEndpoints() {
         request->send(503, "application/json", F("{\"status\":\"busy\"}"));
         return;
       }
+      //probe=1 (#56): re-scan the bus first — an address change moves a
+      //unit to a slot the last boot-time probe never saw.
+      if (request->hasParam("probe")) {
+        busReprobePending = true;
+      }
       unitHealthRefreshPending = true;
       request->send(202, "application/json", F("{\"status\":\"pending\"}"));
     });
@@ -231,6 +236,10 @@ void registerWebEndpoints() {
         request->send(503, "text/plain", "Unit firmware flash in progress — try again in a moment");
         return false;
       }
+      if (i2cBusBusy) {
+        request->send(503, "text/plain", "Bus scan in progress — try again in a moment");
+        return false;
+      }
       if (!request->hasParam("address")) {
         request->send(400, "text/plain", "Missing 'address' query param");
         return false;
@@ -326,6 +335,72 @@ void registerWebEndpoints() {
         return;
       }
       request->send(200, "text/plain", "Home requested");
+    });
+
+    //Provisioning (#56): EEPROM-stored I2C addresses. The unit reboots after
+    //either mutation and rejoins at its new (or DIP-derived) address — the
+    //client re-probes via /units/health/refresh?probe=1 once it's back.
+    webServer.on("/unit/identify", HTTP_POST, [parseCalibrationAddress](AsyncWebServerRequest * request) {
+      int addr = 0;
+      if (!parseCalibrationAddress(request, addr)) return;
+      int status = identifyUnit(addr);
+      if (status != 0) {
+        String body = "Wire.endTransmission returned ";
+        body += status;
+        request->send(502, "text/plain", body);
+        return;
+      }
+      request->send(200, "text/plain", "Identify blink started (~3 s)");
+    });
+
+    webServer.on("/unit/set-address", HTTP_POST, [parseCalibrationAddress](AsyncWebServerRequest * request) {
+      int addr = 0;
+      if (!parseCalibrationAddress(request, addr)) return;
+      if (!request->hasParam("value")) {
+        request->send(400, "text/plain", "Missing 'value' query param");
+        return;
+      }
+      long parsed = strtol(request->getParam("value")->value().c_str(), nullptr, 0);
+      //The unit accepts 1..126, but every master-side path (probe, health,
+      //the calibration/provisioning endpoints themselves) is bounded to
+      //UNITS_AMOUNT — an address above it would strand the unit beyond all
+      //over-I2C management, recoverable only by ICSP/DIP. Refuse.
+      if (parsed < 1 || parsed > UNITS_AMOUNT) {
+        String msg = "Address must be 1..";
+        msg += UNITS_AMOUNT;
+        msg += " (the master cannot manage units beyond that)";
+        request->send(400, "text/plain", msg);
+        return;
+      }
+      //Moving onto an address something else answered on last probe would
+      //create a bus collision. Burning the unit's CURRENT address (the bulk
+      //migration case) is always allowed.
+      if (parsed != addr &&
+          detectedUnitStates[(int)parsed - 1] != 0) {
+        request->send(409, "text/plain", "Target address is already occupied on the bus");
+        return;
+      }
+      int status = setUnitAddress(addr, (uint8_t)parsed);
+      if (status != 0) {
+        String body = "Wire.endTransmission returned ";
+        body += status;
+        request->send(502, "text/plain", body);
+        return;
+      }
+      request->send(200, "text/plain", "Address burned to EEPROM - unit is rebooting");
+    });
+
+    webServer.on("/unit/clear-address", HTTP_POST, [parseCalibrationAddress](AsyncWebServerRequest * request) {
+      int addr = 0;
+      if (!parseCalibrationAddress(request, addr)) return;
+      int status = clearUnitAddress(addr);
+      if (status != 0) {
+        String body = "Wire.endTransmission returned ";
+        body += status;
+        request->send(502, "text/plain", body);
+        return;
+      }
+      request->send(200, "text/plain", "EEPROM address cleared - unit reboots to its DIP address");
     });
 
     //POST /stop — user-visible kill-switch (issue #35). Aborts any running
