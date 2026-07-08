@@ -12,6 +12,13 @@
   Licensed under GNU: https://github.com/JonnyBooker/split-flap/blob/master/LICENSE
 */
 
+// Single source of truth for the master<->unit I2C contract (opcodes,
+// address base, alphabet, flap count) — shared with firmware/v1/Unit and
+// verified against data/script.js at build time (#149). Pure macros, no
+// system deps, so it is safe this early (before the config block below uses
+// SFP_FLAP_AMOUNT / SFP_ALPHABET).
+#include "SplitFlapProtocol.h"
+
 /* .--------------------------------------------------------------------------------. */
 /* |  ___           __ _                    _    _       ___       __ _             | */
 /* | / __|___ _ _  / _(_)__ _ _  _ _ _ __ _| |__| |___  |   \ ___ / _(_)_ _  ___ ___| */
@@ -73,7 +80,7 @@ struct AsyncMqttClientMessageProperties;
   what your doing.
 */
 #define ANSWER_SIZE         1       //Size of unit's request answer
-#define FLAP_AMOUNT         45      //Amount of Flaps in each unit
+#define FLAP_AMOUNT         SFP_FLAP_AMOUNT  //Amount of Flaps per unit — derived from SFP_ALPHABET (SplitFlapProtocol.h, #149)
 #define MIN_SPEED           1       //Min Speed
 #define MAX_SPEED           12      //Max Speed
 
@@ -185,8 +192,10 @@ const char* mdnsName = "split-flap";
 //if the build environment isn't a git checkout.
 const char* espVersion = GIT_REV;
 
-//All the letters on the units that we have to be displayed. You can change these if it so pleases at your own risk
-const char letters[] = {' ', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '$', '&', '#', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', '.', '-', '?', '!'};
+//The drum's fixed character set — the master sends an index into this table.
+//Sourced from SFP_ALPHABET so master, unit and script.js can never drift
+//(#149). To change the alphabet, edit SplitFlapProtocol.h, not here.
+const char letters[] = SFP_ALPHABET;
 int displayState[UNITS_AMOUNT];
 //Effective display width in character slots (#123): highest unit index the
 //boot-time I2C probe saw + 1 (a dead unit mid-display keeps its slot).

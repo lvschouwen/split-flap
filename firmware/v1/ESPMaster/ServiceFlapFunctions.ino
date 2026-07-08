@@ -1,40 +1,11 @@
 #include "UnitProtocolHelpers.h"
 #include "DisplayWidth.h"
-
-// I2C address 0x00 is reserved (general call); offset every unit's address so
-// the master's 0-based unit index maps to 0x01..0x10. Must match
-// I2C_ADDRESS_BASE in Unit/Unit.ino.
-#define I2C_ADDRESS_BASE 1
-
-// Command opcodes understood by Unit.ino's receiveLetter(). Values >=
-// FLAP_AMOUNT are reserved for commands (valid letter indices are 0..44).
-// Must stay in sync with Unit/Unit.ino's CMD_* constants.
-//
-// Opcodes are organized into semantic bands (issue #47):
-//   0x80..0x8F  queries — write opcode, follow with requestFrom
-//   0x90..0x9F  mutations — write opcode + args, no read follow-up
-//
-// 0x80 (ENTER_BOOTLOADER) and 0x81 (GET_VERSION) are fixed forever across
-// protocol bumps because they are the cross-generation recovery path.
-#define UNIT_CMD_ENTER_BOOTLOADER 0x80
-#define UNIT_CMD_GET_VERSION      0x81
-#define UNIT_CMD_GET_OFFSET       0x82
-#define UNIT_CMD_GET_STATUS       0x83
-#define UNIT_CMD_GET_LETTER       0x84
-#define UNIT_CMD_HOME             0x90
-#define UNIT_CMD_JOG              0x91
-#define UNIT_CMD_REBOOT           0x92
-#define UNIT_CMD_SET_OFFSET       0x93
-
-// General-call broadcast address — a write to 0x00 reaches every unit with
-// TWGCE enabled. By convention the master only ever broadcasts CMD_HOME
-// (see broadcastHome()); units treat received opcodes the same whether
-// addressed individually or via general call, so other opcodes on broadcast
-// would produce unintended side effects.
-#define I2C_GENERAL_CALL_ADDRESS  0x00
+// Opcodes (SFP_CMD_*), I2C address base and alphabet now live in the shared
+// protocol header included by both firmwares — see SplitFlapProtocol.h (#149).
+#include "SplitFlapProtocol.h"
 
 static int toI2cAddress(int unitIndex) {
-  return I2C_ADDRESS_BASE + unitIndex;
+  return SFP_I2C_ADDRESS_BASE + unitIndex;
 }
 
 // Defined later in this file but used inside showMessage(); explicit
@@ -48,7 +19,7 @@ static void verifyAndResendLetters(const int* commandedLetters, int flapSpeed);
 //for ~1 s. Returns Wire.endTransmission()'s status (0 = success).
 int rebootUnitToBootloader(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write(UNIT_CMD_ENTER_BOOTLOADER);
+  Wire.write(SFP_CMD_ENTER_BOOTLOADER);
   return Wire.endTransmission();
 }
 
@@ -61,7 +32,7 @@ int rebootUnitToBootloader(int i2cAddress) {
 //out is untouched on failure.
 bool readUnitOffset(int i2cAddress, int16_t &out) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)UNIT_CMD_GET_OFFSET);
+  Wire.write((uint8_t)SFP_CMD_GET_OFFSET);
   if (Wire.endTransmission() != 0) return false;
   delay(2);  //give the slave time to flip pendingOffsetResponse before clocking
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)2);
@@ -79,7 +50,7 @@ bool readUnitOffset(int i2cAddress, int16_t &out) {
 //Wire.endTransmission() status (0 = success).
 int writeUnitOffset(int i2cAddress, int16_t value) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)UNIT_CMD_SET_OFFSET);
+  Wire.write((uint8_t)SFP_CMD_SET_OFFSET);
   Wire.write((uint8_t)((uint16_t)value & 0xFF));
   Wire.write((uint8_t)(((uint16_t)value >> 8) & 0xFF));
   return Wire.endTransmission();
@@ -90,7 +61,7 @@ int jogUnit(int i2cAddress, int steps) {
   if (steps > 127) steps = 127;
   if (steps < -127) steps = -127;
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)UNIT_CMD_JOG);
+  Wire.write((uint8_t)SFP_CMD_JOG);
   Wire.write((uint8_t)(int8_t)steps);
   return Wire.endTransmission();
 }
@@ -98,7 +69,7 @@ int jogUnit(int i2cAddress, int steps) {
 //Triggers a full calibrate(true) on the unit and parks it at blank.
 int homeUnit(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)UNIT_CMD_HOME);
+  Wire.write((uint8_t)SFP_CMD_HOME);
   return Wire.endTransmission();
 }
 
@@ -107,7 +78,7 @@ int homeUnit(int i2cAddress) {
 //a unit that looks wedged without a full reflash. Issue #47.
 int rebootUnit(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)UNIT_CMD_REBOOT);
+  Wire.write((uint8_t)SFP_CMD_REBOOT);
   return Wire.endTransmission();
 }
 
@@ -115,8 +86,8 @@ int rebootUnit(int i2cAddress) {
 //the I2C general-call address. Replaces loops that previously sent HOME to
 //each detected unit one at a time. Issue #47.
 int broadcastHome() {
-  Wire.beginTransmission((uint8_t)I2C_GENERAL_CALL_ADDRESS);
-  Wire.write((uint8_t)UNIT_CMD_HOME);
+  Wire.beginTransmission((uint8_t)SFP_I2C_GENERAL_CALL_ADDRESS);
+  Wire.write((uint8_t)SFP_CMD_HOME);
   return Wire.endTransmission();
 }
 
@@ -125,7 +96,7 @@ int broadcastHome() {
 //opcode) or Wire failures return false without touching `out`.
 bool readUnitStatus(int i2cAddress, UnitStatus& out) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)UNIT_CMD_GET_STATUS);
+  Wire.write((uint8_t)SFP_CMD_GET_STATUS);
   if (Wire.endTransmission() != 0) return false;
   delay(2);  //give the slave time to flip pendingStatusResponse before clocking
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)8);
@@ -192,7 +163,7 @@ void pollUnitHealth() {
   size_t n = buildUnitHealthJson(unitHealthJson, sizeof(unitHealthJson), unitHealth,
                                  unitHealthValid, detectedUnitStates, detectedUnitVersionStatus,
                                  detectedUnitVersions,
-                                 width, faultyUnitCount, I2C_ADDRESS_BASE);
+                                 width, faultyUnitCount, SFP_I2C_ADDRESS_BASE);
   if (n == 0 || n >= sizeof(unitHealthJson)) {
     //Would-be-truncated payload (device far wider than expected?): fall back to
     //a valid headline-only JSON rather than shipping a cut object (mirrors the
@@ -208,7 +179,7 @@ void pollUnitHealth() {
 //failed complement check) returns false and `out` is untouched.
 bool readUnitDisplayedLetter(int i2cAddress, int &out) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)UNIT_CMD_GET_LETTER);
+  Wire.write((uint8_t)SFP_CMD_GET_LETTER);
   if (Wire.endTransmission() != 0) return false;
   delay(2);  //give the slave time to flip pendingLetterResponse before clocking
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)2);
@@ -509,7 +480,7 @@ char detectedUnitVersions[UNITS_AMOUNT][9];
 static bool readUnitVersion(int i2cAddress, char *out) {
   out[0] = '\0';
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)UNIT_CMD_GET_VERSION);
+  Wire.write((uint8_t)SFP_CMD_GET_VERSION);
   if (Wire.endTransmission() != 0) return false;
   // Give the slave a moment to flip its pending-version flag before we clock.
   delay(2);

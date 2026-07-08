@@ -5,7 +5,8 @@ const localDevelopment = false;
 var unitCount = 0;
 var timezoneOffset = 0;
 
-//Mirrors ESPMaster.ino's char letters[] byte-for-byte. Index 0 is blank.
+//Must match SFP_ALPHABET in shared/SplitFlapProtocol.h byte-for-byte (index 0
+//is blank). build_assets.py verifies this at build time and fails on drift (#149).
 //ä/ö/ü are stored as $ & # (wire encoding); user-facing inputs go through
 //translateLetterToIndex() which normalizes Unicode umlauts to those ASCII
 //glyphs before lookup, so users can type either form.

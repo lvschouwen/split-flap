@@ -16,6 +16,7 @@ Invoked by PlatformIO via `extra_scripts = pre:build_assets.py`.
 
 import gzip
 import pathlib
+import re
 import subprocess
 
 ASSETS = [
@@ -114,7 +115,54 @@ def build_version_header(project_dir: pathlib.Path) -> None:
     print(f"[build_assets] wrote {output.name}  GIT_REV={tag}  BUNDLED_UNIT_REV={unit_rev}")
 
 
+def parse_header_alphabet(header_text: str) -> str:
+    """Extract the SFP_ALPHABET string literal from SplitFlapProtocol.h.
+
+    Raises ValueError if the #define is missing so a botched header edit
+    fails the build loudly instead of silently skipping the drift check.
+    See issue #149.
+    """
+    m = re.search(r'#define\s+SFP_ALPHABET\s+"((?:[^"\\]|\\.)*)"', header_text)
+    if not m:
+        raise ValueError("SFP_ALPHABET #define not found in SplitFlapProtocol.h")
+    return m.group(1)
+
+
+def parse_js_calibration_letters(script_js_text: str) -> str:
+    """Extract data/script.js's CALIBRATION_LETTERS array as a plain string.
+
+    The array is `['<char>', '<char>', ...]`; each element is one character.
+    Returns the concatenation so it can be compared to the header alphabet
+    byte-for-byte. Raises ValueError if the array can't be located.
+    """
+    m = re.search(r"CALIBRATION_LETTERS\s*=\s*\[(.*?)\]", script_js_text, re.DOTALL)
+    if not m:
+        raise ValueError("CALIBRATION_LETTERS array not found in script.js")
+    return "".join(re.findall(r"'([^']*)'", m.group(1)))
+
+
+def verify_js_alphabet(project_dir: pathlib.Path) -> None:
+    """Fail the build if data/script.js's alphabet has drifted from the
+    shared SplitFlapProtocol.h (single source of truth, #149). The C side
+    can't drift because both firmwares #include the header; the JS side has
+    no compiler to enforce it, so this is where CI catches it."""
+    header = project_dir.parent / "shared" / "SplitFlapProtocol.h"
+    script_js = project_dir / "data" / "script.js"
+    header_alphabet = parse_header_alphabet(header.read_text())
+    js_alphabet = parse_js_calibration_letters(script_js.read_text())
+    if header_alphabet != js_alphabet:
+        raise ValueError(
+            "Alphabet drift: script.js CALIBRATION_LETTERS does not match "
+            "SplitFlapProtocol.h SFP_ALPHABET (#149).\n"
+            f"  header: {header_alphabet!r}\n"
+            f"  script: {js_alphabet!r}"
+        )
+    print(f"[build_assets] alphabet OK — script.js matches SFP_ALPHABET ({len(header_alphabet)} chars)")
+
+
 def build_header(project_dir: pathlib.Path) -> None:
+    verify_js_alphabet(project_dir)
+
     data_dir = project_dir / "data"
     output_header = project_dir / "WebAssets.h"
 

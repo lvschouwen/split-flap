@@ -110,3 +110,60 @@ def test_pad_to_page_empty_stays_empty():
 
 def test_pad_to_page_default_page_size_is_128():
     assert len(build_assets.pad_to_page(b"\x00" * 10)) == 128
+
+
+# --- alphabet drift check (#149) ------------------------------------------
+
+EXPECTED_ALPHABET = " ABCDEFGHIJKLMNOPQRSTUVWXYZ$&#0123456789:.-?!"
+
+
+def test_parse_header_alphabet_extracts_literal():
+    header = f'#define SFP_ALPHABET "{EXPECTED_ALPHABET}"\n'
+    assert build_assets.parse_header_alphabet(header) == EXPECTED_ALPHABET
+
+
+def test_parse_header_alphabet_raises_when_missing():
+    with pytest.raises(ValueError):
+        build_assets.parse_header_alphabet("#define SOMETHING_ELSE 1\n")
+
+
+def test_parse_js_calibration_letters_joins_chars():
+    js = "const CALIBRATION_LETTERS = [' ','A','B','$','&','#','?','!'];"
+    assert build_assets.parse_js_calibration_letters(js) == " AB$&#?!"
+
+
+def test_parse_js_calibration_letters_raises_when_missing():
+    with pytest.raises(ValueError):
+        build_assets.parse_js_calibration_letters("const OTHER = [1,2,3];")
+
+
+def test_verify_js_alphabet_passes_on_match(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "SplitFlapProtocol.h").write_text(
+        f'#define SFP_ALPHABET "{EXPECTED_ALPHABET}"\n'
+    )
+    project = tmp_path / "ESPMaster"
+    (project / "data").mkdir(parents=True)
+    js_array = ",".join(f"'{c}'" for c in EXPECTED_ALPHABET)
+    (project / "data" / "script.js").write_text(
+        f"const CALIBRATION_LETTERS = [{js_array}];\n"
+    )
+    build_assets.verify_js_alphabet(project)  # must not raise
+
+
+def test_verify_js_alphabet_fails_on_drift(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "SplitFlapProtocol.h").write_text(
+        f'#define SFP_ALPHABET "{EXPECTED_ALPHABET}"\n'
+    )
+    project = tmp_path / "ESPMaster"
+    (project / "data").mkdir(parents=True)
+    # Drop the trailing '!' so the JS drifts from the header.
+    js_array = ",".join(f"'{c}'" for c in EXPECTED_ALPHABET[:-1])
+    (project / "data" / "script.js").write_text(
+        f"const CALIBRATION_LETTERS = [{js_array}];\n"
+    )
+    with pytest.raises(ValueError, match="drift"):
+        build_assets.verify_js_alphabet(project)
