@@ -8,8 +8,18 @@
 // Layout (all strings are null-terminated, zero-padded to their slot):
 //   offset size   field
 //   0      4      MAGIC (0x5F1A70BE) - "has the blob been written"
-//   4      1      VERSION (5) - bump + migrate on struct changes
-//   5      20     RESERVED (formerly countdownToDateUnix, removed with #26)
+//   4      1      VERSION (7) - bump + migrate on struct changes
+//   5      4      CRC32 over the full payload [OFF_ALIGNMENT, end of blob),
+//                 reserved regions included - v7 (#151). The covered range is
+//                 deliberately version-independent (magic/version/CRC header
+//                 excluded) so OLDER firmware can validate a NEWER blob's CRC
+//                 on the downgrade path (#152). Every save*() recomputes it
+//                 before its EEPROM.commit(); every future migration step
+//                 must end with updateSettingsCrc(). NOTE: bytes 9..24
+//                 (RESERVED_1) sit OUTSIDE the covered range — a future slot
+//                 carved there would be CRC-unprotected; carve from
+//                 RESERVED_2 instead.
+//   9      16     RESERVED (remainder of former countdownToDateUnix, #26)
 //   25     8      alignment ("left"/"center"/"right")
 //   33     4      flapSpeed (decimal int)
 //   37     20     deviceMode
@@ -39,12 +49,14 @@
 
 #define SETTINGS_EEPROM_SIZE      2048
 #define SETTINGS_MAGIC            0x5F1A70BEUL
-#define SETTINGS_VERSION          6
+#define SETTINGS_VERSION          7
 
 #define OFF_MAGIC                 0
 #define OFF_VERSION               4
-#define OFF_RESERVED_1            5
-#define LEN_RESERVED_1            20
+#define OFF_SETTINGS_CRC          5
+#define LEN_SETTINGS_CRC          4
+#define OFF_RESERVED_1            9
+#define LEN_RESERVED_1            16
 #define OFF_ALIGNMENT             25
 #define LEN_ALIGNMENT             8
 #define OFF_FLAPSPEED             33
@@ -106,4 +118,71 @@ inline void writeSettingMagic() {
     EEPROM.write(OFF_MAGIC + i, (uint8_t)((magic >> (i * 8)) & 0xFF));
   }
   EEPROM.write(OFF_VERSION, SETTINGS_VERSION);
+}
+
+// --- payload CRC (#151) ----------------------------------------------------
+
+// CRC32 (reflected, poly 0xEDB88320 — the zlib/PNG polynomial) over the full
+// settings payload. Bitwise, no lookup table: 2 KB × 8 shifts is microseconds
+// on the ESP8266 and runs only at boot + on settings saves.
+inline uint32_t computeSettingsCrc() {
+  uint32_t crc = 0xFFFFFFFFUL;
+  for (int i = OFF_ALIGNMENT; i < OFF_RESERVED_2 + LEN_RESERVED_2; i++) {
+    crc ^= EEPROM.read(i);
+    for (int b = 0; b < 8; b++) {
+      crc = (crc >> 1) ^ (0xEDB88320UL & (0UL - (crc & 1UL)));
+    }
+  }
+  return ~crc;
+}
+
+inline uint32_t readSettingsCrc() {
+  uint32_t crc = 0;
+  for (int i = 0; i < LEN_SETTINGS_CRC; i++) {
+    crc |= ((uint32_t)EEPROM.read(OFF_SETTINGS_CRC + i)) << (i * 8);
+  }
+  return crc;
+}
+
+inline void writeSettingsCrc(uint32_t crc) {
+  for (int i = 0; i < LEN_SETTINGS_CRC; i++) {
+    EEPROM.write(OFF_SETTINGS_CRC + i, (uint8_t)((crc >> (i * 8)) & 0xFF));
+  }
+}
+
+// Recompute + store. Call after any payload write, before EEPROM.commit().
+inline void updateSettingsCrc() {
+  writeSettingsCrc(computeSettingsCrc());
+}
+
+// --- boot-time blob verdict (#151/#152) -------------------------------------
+
+// What initialiseFileSystem() should do with the blob it found. Pure so the
+// decision table is natively testable; the .ino turns the verdict into
+// writes/logging.
+enum SettingsBlobVerdict {
+  SETTINGS_BLOB_BLANK,      // no/foreign magic -> initialise defaults
+  SETTINGS_BLOB_OK,         // current version, CRC valid -> use as-is
+  SETTINGS_BLOB_MIGRATE,    // older version, CRC INVALID -> a genuine pre-v7
+                            // blob (its CRC slot is RESERVED_1 garbage);
+                            // run the migration ladder
+  SETTINGS_BLOB_ADOPT,      // wrong version but CRC VALID -> the payload is
+                            // provably intact: an OTA revert left a newer
+                            // blob (#152), or the version byte alone
+                            // bit-rotted low (a genuine old blob matching
+                            // the CRC is a 2^-32 coincidence). Preserve the
+                            // slots we understand, pin the version.
+  SETTINGS_BLOB_CORRUPT,    // current/newer version with CRC mismatch (torn
+                            // commit, or a torn header masquerading as a
+                            // newer version) -> defaults
+};
+
+inline SettingsBlobVerdict assessSettingsBlob(uint32_t magic, uint8_t ver,
+                                              uint32_t storedCrc, uint32_t computedCrc) {
+  if (magic != SETTINGS_MAGIC)      return SETTINGS_BLOB_BLANK;
+  if (storedCrc == computedCrc) {
+    return (ver == SETTINGS_VERSION) ? SETTINGS_BLOB_OK : SETTINGS_BLOB_ADOPT;
+  }
+  if (ver < SETTINGS_VERSION)       return SETTINGS_BLOB_MIGRATE;
+  return SETTINGS_BLOB_CORRUPT;
 }

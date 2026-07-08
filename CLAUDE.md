@@ -67,9 +67,10 @@ Unit-side: `SERIAL_ENABLE` and `TEST_ENABLE` (cycles a fixed character sequence 
 
 ## EEPROM layout
 
-`SettingsEepromLayout.h` carves the master's ESP8266 EEPROM region into named slots. Every time a new slot is added, bump `SETTINGS_VERSION` and extend the `ver < N` migration ladder in `initialiseFileSystem()` so existing blobs upgrade in place (no user-visible settings loss). The `RESERVED_2` region holds headroom for future slots — shrinking its `LEN` is how new fields are carved. Current slots:
+`SettingsEepromLayout.h` carves the master's ESP8266 EEPROM region into named slots. Every time a new slot is added, bump `SETTINGS_VERSION` and extend the `ver < N` migration ladder in `initialiseFileSystem()` so existing blobs upgrade in place (no user-visible settings loss) — and end the new migration step before the version write so `updateSettingsCrc()` stamps a valid checksum. The `RESERVED_2` region holds headroom for future slots — shrinking its `LEN` is how new fields are carved. Boot-time blob handling is a pure decision table (`assessSettingsBlob()`, natively tested): blank/foreign magic → defaults; valid CRC → adopt, whatever the version byte says (OTA revert #152 or version-byte bit-rot both just pin the version back, slots preserved) — the CRC range `[OFF_ALIGNMENT, end of blob)` is deliberately version-independent so older firmware can validate newer blobs; CRC mismatch at current/newer version → torn write (#151), defaults with a loud log; CRC mismatch at older version → genuine pre-v7 blob, migration ladder. Every `save*()` calls `updateSettingsCrc()` before its `EEPROM.commit()`. Current slots:
 
 - `MAGIC` / `VERSION` — marker + schema version (`SETTINGS_VERSION`).
+- `SETTINGS_CRC` — CRC32 over the full payload, carved from the RESERVED_1 fossil (v7, #151).
 - `alignment` — `"left"` / `"center"` / `"right"`.
 - `flapSpeed` — decimal int as string.
 - `deviceMode` — `"text"` / `"clock"`.

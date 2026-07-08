@@ -12,31 +12,59 @@
 #include <EEPROM.h>
 #include "SettingsEepromLayout.h"
 
+//Full re-initialisation — the blank-EEPROM path, also taken when the CRC
+//says the blob is torn (#151). Every slot gets a sane default.
+void resetSettingsToDefaults() {
+  writeSettingString(OFF_ALIGNMENT,         LEN_ALIGNMENT,         ALIGNMENT_MODE_LEFT);
+  writeSettingString(OFF_FLAPSPEED,         LEN_FLAPSPEED,         "80");
+  writeSettingString(OFF_DEVICEMODE,        LEN_DEVICEMODE,        DEVICE_MODE_TEXT);
+  //Default TZ to CE(S)T so a wipe+reflash yields a correctly-clocked
+  //device without needing a web-UI round-trip. Falls through to the
+  //compile-time `timezonePosix` const if this slot is ever empty (#53).
+  writeSettingString(OFF_TIMEZONE,          LEN_TIMEZONE,          "CET-1CEST,M3.5.0,M10.5.0/3");
+  writeSettingString(OFF_INTENDED_VERSION,  LEN_INTENDED_VERSION,  "");
+  writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, "");
+  writeSettingString(OFF_DEVICE_NAME,       LEN_DEVICE_NAME,       "");
+  writeSettingString(OFF_MQTT_HOST,         LEN_MQTT_HOST,         "");
+  writeSettingString(OFF_MQTT_PORT,         LEN_MQTT_PORT,         "");
+  writeSettingString(OFF_MQTT_USER,         LEN_MQTT_USER,         "");
+  writeSettingString(OFF_MQTT_PASSWORD,     LEN_MQTT_PASSWORD,     "");
+  updateSettingsCrc();
+  writeSettingMagic();
+  EEPROM.commit();
+}
+
 void initialiseFileSystem() {
   EEPROM.begin(SETTINGS_EEPROM_SIZE);
 
   uint32_t magic = readSettingMagic();
   uint8_t  ver   = EEPROM.read(OFF_VERSION);
 
-  if (magic != SETTINGS_MAGIC || ver > SETTINGS_VERSION) {
-    SerialPrintln(F("Settings EEPROM blank/stale — initialising with defaults"));
-    writeSettingString(OFF_ALIGNMENT,         LEN_ALIGNMENT,         ALIGNMENT_MODE_LEFT);
-    writeSettingString(OFF_FLAPSPEED,         LEN_FLAPSPEED,         "80");
-    writeSettingString(OFF_DEVICEMODE,        LEN_DEVICEMODE,        DEVICE_MODE_TEXT);
-    //Default TZ to CE(S)T so a wipe+reflash yields a correctly-clocked
-    //device without needing a web-UI round-trip. Falls through to the
-    //compile-time `timezonePosix` const if this slot is ever empty (#53).
-    writeSettingString(OFF_TIMEZONE,          LEN_TIMEZONE,          "CET-1CEST,M3.5.0,M10.5.0/3");
-    writeSettingString(OFF_INTENDED_VERSION,  LEN_INTENDED_VERSION,  "");
-    writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, "");
-    writeSettingString(OFF_DEVICE_NAME,       LEN_DEVICE_NAME,       "");
-    writeSettingString(OFF_MQTT_HOST,         LEN_MQTT_HOST,         "");
-    writeSettingString(OFF_MQTT_PORT,         LEN_MQTT_PORT,         "");
-    writeSettingString(OFF_MQTT_USER,         LEN_MQTT_USER,         "");
-    writeSettingString(OFF_MQTT_PASSWORD,     LEN_MQTT_PASSWORD,     "");
-    writeSettingMagic();
+  SettingsBlobVerdict verdict = assessSettingsBlob(magic, ver, readSettingsCrc(), computeSettingsCrc());
+
+  if (verdict == SETTINGS_BLOB_BLANK) {
+    SerialPrintln(F("Settings EEPROM blank — initialising with defaults"));
+    resetSettingsToDefaults();
+  } else if (verdict == SETTINGS_BLOB_CORRUPT) {
+    //Torn commit (#151): magic intact but the payload doesn't match its
+    //CRC — most likely a power sag mid-EEPROM.commit(). Garbage settings
+    //must not be trusted; fall back to defaults, loudly.
+    SerialPrintln(F("Settings EEPROM CRC MISMATCH (torn write?) — re-initialising with defaults"));
+    resetSettingsToDefaults();
+  } else if (verdict == SETTINGS_BLOB_ADOPT) {
+    //Version byte disagrees but the CRC proves the payload intact: an OTA
+    //revert left a newer blob (#152), or the version byte alone bit-rotted.
+    //Versions only carve slots out of RESERVED_2 (layout policy: existing
+    //offsets are frozen) and the CRC range is version-independent, so every
+    //slot we understand is valid. Adopt the blob instead of wiping it; just
+    //pin the version so the migration ladder stays coherent.
+    SerialPrint(F("Settings EEPROM version v"));
+    SerialPrint(ver);
+    SerialPrint(F(" with valid CRC — preserving known slots, pinning to v"));
+    SerialPrintln(SETTINGS_VERSION);
+    EEPROM.write(OFF_VERSION, SETTINGS_VERSION);
     EEPROM.commit();
-  } else if (ver < SETTINGS_VERSION) {
+  } else if (verdict == SETTINGS_BLOB_MIGRATE) {
     //Migrate in place, preserving alignment/flapSpeed/deviceMode.
     SerialPrint(F("Settings EEPROM migrating v"));
     SerialPrint(ver);
@@ -69,6 +97,11 @@ void initialiseFileSystem() {
       writeSettingString(OFF_MQTT_USER,     LEN_MQTT_USER,     "");
       writeSettingString(OFF_MQTT_PASSWORD, LEN_MQTT_PASSWORD, "");
     }
+    //v6 -> v7: CRC32 carved from RESERVED_1 (#151). No per-slot zeroing —
+    //the updateSettingsCrc() below stamps the slot with a valid checksum.
+    //Future steps: keep updateSettingsCrc() as the LAST write before the
+    //version byte so a migrated blob always validates on the next boot.
+    updateSettingsCrc();
     EEPROM.write(OFF_VERSION, SETTINGS_VERSION);
     EEPROM.commit();
   }
@@ -101,19 +134,21 @@ void loadValuesFromFileSystem() {
   SerialPrintln("   MQTT Broker: " + (mqttHostSetting.length() ? mqttHostSetting + ":" + (mqttPortSetting.length() ? mqttPortSetting : String("1883")) : String("(disabled)")));
 }
 
-// Called from the web server handlers whenever a setting changes.
-void saveAlignment()    { writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  alignment);            EEPROM.commit(); }
-void saveFlapSpeed()    { writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  flapSpeed);            EEPROM.commit(); }
-void saveDeviceMode()   { writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, deviceMode);           EEPROM.commit(); }
-void saveTimezone()     { writeSettingString(OFF_TIMEZONE,   LEN_TIMEZONE,   timezonePosixSetting); EEPROM.commit(); }
+// Called from the web server handlers whenever a setting changes. Every
+// payload write refreshes the blob CRC before committing (#151).
+void saveAlignment()    { writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  alignment);            updateSettingsCrc(); EEPROM.commit(); }
+void saveFlapSpeed()    { writeSettingString(OFF_FLAPSPEED,  LEN_FLAPSPEED,  flapSpeed);            updateSettingsCrc(); EEPROM.commit(); }
+void saveDeviceMode()   { writeSettingString(OFF_DEVICEMODE, LEN_DEVICEMODE, deviceMode);           updateSettingsCrc(); EEPROM.commit(); }
+void saveTimezone()     { writeSettingString(OFF_TIMEZONE,   LEN_TIMEZONE,   timezonePosixSetting); updateSettingsCrc(); EEPROM.commit(); }
 //Applied to the live identity on the next reboot — see resolveDeviceIdentity().
-void saveDeviceName()   { writeSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME, deviceNameSetting);  EEPROM.commit(); }
+void saveDeviceName()   { writeSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME, deviceNameSetting);  updateSettingsCrc(); EEPROM.commit(); }
 //MQTT broker config (#57): all four slots in one commit; applied on reboot.
 void saveMqttSettings() {
   writeSettingString(OFF_MQTT_HOST,     LEN_MQTT_HOST,     mqttHostSetting);
   writeSettingString(OFF_MQTT_PORT,     LEN_MQTT_PORT,     mqttPortSetting);
   writeSettingString(OFF_MQTT_USER,     LEN_MQTT_USER,     mqttUserSetting);
   writeSettingString(OFF_MQTT_PASSWORD, LEN_MQTT_PASSWORD, mqttPasswordSetting);
+  updateSettingsCrc();
   EEPROM.commit();
 }
 
@@ -122,6 +157,7 @@ void saveMqttSettings() {
 // rejected by eboot or crashed fast enough to trip recovery). See #52.
 void saveIntendedVersion(const String& v) {
   writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, v);
+  updateSettingsCrc();
   EEPROM.commit();
 }
 String readIntendedVersion() {
@@ -133,6 +169,7 @@ String readIntendedVersion() {
 // "reverted" (same sketchMD5 post-reboot -> eboot rejected the copy). See #53.
 void saveLastFlashResult(const String& v) {
   writeSettingString(OFF_LAST_FLASH_RESULT, LEN_LAST_FLASH_RESULT, v);
+  updateSettingsCrc();
   EEPROM.commit();
 }
 String readLastFlashResult() {

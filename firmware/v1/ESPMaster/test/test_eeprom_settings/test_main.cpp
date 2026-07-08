@@ -43,7 +43,8 @@ void tearDown() {}
 
 static void test_layout_slots_are_contiguous_and_non_overlapping() {
   TEST_ASSERT_EQUAL_INT(4, OFF_VERSION - OFF_MAGIC);
-  TEST_ASSERT_EQUAL_INT(1, OFF_RESERVED_1 - OFF_VERSION);
+  TEST_ASSERT_EQUAL_INT(1, OFF_SETTINGS_CRC - OFF_VERSION);
+  TEST_ASSERT_EQUAL_INT(LEN_SETTINGS_CRC,     OFF_RESERVED_1         - OFF_SETTINGS_CRC);
   TEST_ASSERT_EQUAL_INT(LEN_RESERVED_1,        OFF_ALIGNMENT          - OFF_RESERVED_1);
   TEST_ASSERT_EQUAL_INT(LEN_ALIGNMENT,         OFF_FLAPSPEED          - OFF_ALIGNMENT);
   TEST_ASSERT_EQUAL_INT(LEN_FLAPSPEED,         OFF_DEVICEMODE         - OFF_FLAPSPEED);
@@ -58,10 +59,21 @@ static void test_layout_slots_are_contiguous_and_non_overlapping() {
   TEST_ASSERT_EQUAL_INT(LEN_MQTT_PASSWORD,     OFF_RESERVED_2         - OFF_MQTT_PASSWORD);
 }
 
-static void test_settings_version_is_6() {
+static void test_settings_version_is_7() {
   // Locks the current schema version so a migration addition without a
   // version bump trips here.
-  TEST_ASSERT_EQUAL_INT(6, SETTINGS_VERSION);
+  TEST_ASSERT_EQUAL_INT(7, SETTINGS_VERSION);
+}
+
+static void test_crc_slot_carved_from_reserved_1() {
+  // #151: the CRC32 slot is carved in place from the RESERVED_1 fossil at
+  // offset 5, so every pre-existing slot keeps its offset (OFF_ALIGNMENT
+  // must stay at 25 — the whole layout after RESERVED_1 is frozen).
+  TEST_ASSERT_EQUAL_INT(OFF_VERSION + 1, OFF_SETTINGS_CRC);
+  TEST_ASSERT_EQUAL_INT(4, LEN_SETTINGS_CRC);
+  TEST_ASSERT_EQUAL_INT(OFF_SETTINGS_CRC + LEN_SETTINGS_CRC, OFF_RESERVED_1);
+  TEST_ASSERT_EQUAL_INT(25, OFF_RESERVED_1 + LEN_RESERVED_1);
+  TEST_ASSERT_EQUAL_INT(25, OFF_ALIGNMENT);
 }
 
 static void test_device_name_slot_fits_max_name_plus_nul() {
@@ -320,11 +332,149 @@ static void test_writeSettingString_does_not_touch_neighbouring_slots() {
   TEST_ASSERT_EQUAL_UINT8(0xCD, g_eepromStorage[OFF_ALIGNMENT + LEN_ALIGNMENT]);
 }
 
+// --- settings CRC (#151) + downgrade preservation (#152) ------------------
+
+static void test_settings_crc_roundtrip_and_fence_posts() {
+  g_eepromStorage[OFF_SETTINGS_CRC - 1]                    = 0xAB;  // version byte's slot boundary
+  g_eepromStorage[OFF_SETTINGS_CRC + LEN_SETTINGS_CRC]     = 0xCD;  // first byte of RESERVED_1
+  writeSettingsCrc(0x12345678UL);
+  TEST_ASSERT_EQUAL_UINT32(0x12345678UL, readSettingsCrc());
+  TEST_ASSERT_EQUAL_UINT8(0xAB, g_eepromStorage[OFF_SETTINGS_CRC - 1]);
+  TEST_ASSERT_EQUAL_UINT8(0xCD, g_eepromStorage[OFF_SETTINGS_CRC + LEN_SETTINGS_CRC]);
+}
+
+static void test_computeSettingsCrc_covers_first_and_last_payload_byte() {
+  // Coverage is the FULL payload [OFF_ALIGNMENT, end of blob), reserved
+  // regions included — that keeps the covered range version-independent,
+  // which is what lets older firmware validate a newer blob's CRC on the
+  // #152 downgrade path.
+  uint32_t base = computeSettingsCrc();
+
+  g_eepromStorage[OFF_ALIGNMENT] ^= 0x01;
+  TEST_ASSERT_NOT_EQUAL_UINT32(base, computeSettingsCrc());
+  g_eepromStorage[OFF_ALIGNMENT] ^= 0x01;
+  TEST_ASSERT_EQUAL_UINT32(base, computeSettingsCrc());
+
+  g_eepromStorage[OFF_RESERVED_2 + LEN_RESERVED_2 - 1] ^= 0x01;
+  TEST_ASSERT_NOT_EQUAL_UINT32(base, computeSettingsCrc());
+}
+
+static void test_computeSettingsCrc_excludes_header_bytes() {
+  // Magic, version and the CRC slot itself must not feed the CRC — the
+  // downgrade path rewrites the version byte and expects the stored CRC
+  // to stay valid.
+  uint32_t base = computeSettingsCrc();
+  g_eepromStorage[OFF_MAGIC]        ^= 0xFF;
+  g_eepromStorage[OFF_VERSION]      ^= 0xFF;
+  g_eepromStorage[OFF_SETTINGS_CRC] ^= 0xFF;
+  TEST_ASSERT_EQUAL_UINT32(base, computeSettingsCrc());
+}
+
+static void test_updateSettingsCrc_makes_stored_crc_match() {
+  writeSettingString(OFF_ALIGNMENT, LEN_ALIGNMENT, String("center"));
+  updateSettingsCrc();
+  TEST_ASSERT_EQUAL_UINT32(computeSettingsCrc(), readSettingsCrc());
+}
+
+static void test_assess_blank_magic_is_blank() {
+  TEST_ASSERT_EQUAL_INT(SETTINGS_BLOB_BLANK,
+      assessSettingsBlob(0xFFFFFFFFUL, 0xFF, 0, 0));
+}
+
+static void test_assess_current_version_valid_crc_is_ok() {
+  TEST_ASSERT_EQUAL_INT(SETTINGS_BLOB_OK,
+      assessSettingsBlob(SETTINGS_MAGIC, SETTINGS_VERSION, 0xC0FFEEUL, 0xC0FFEEUL));
+}
+
+static void test_assess_current_version_bad_crc_is_corrupt() {
+  // #151: torn commit — magic/version intact, payload garbage.
+  TEST_ASSERT_EQUAL_INT(SETTINGS_BLOB_CORRUPT,
+      assessSettingsBlob(SETTINGS_MAGIC, SETTINGS_VERSION, 0xC0FFEEUL, 0xBADBADUL));
+}
+
+static void test_assess_older_version_bad_crc_is_migrate() {
+  // Pre-v7 blobs have no CRC — the slot holds RESERVED_1 garbage that
+  // (all but certainly) doesn't match, and must not block the ladder.
+  TEST_ASSERT_EQUAL_INT(SETTINGS_BLOB_MIGRATE,
+      assessSettingsBlob(SETTINGS_MAGIC, SETTINGS_VERSION - 1, 0x11UL, 0x22UL));
+  TEST_ASSERT_EQUAL_INT(SETTINGS_BLOB_MIGRATE,
+      assessSettingsBlob(SETTINGS_MAGIC, 1, 0x11UL, 0x22UL));
+}
+
+static void test_assess_older_version_valid_crc_is_adopted_not_migrated() {
+  // A VALID CRC on an "older-version" blob is a 2^-32 coincidence for a
+  // genuine pre-v7 blob — in practice it means a current blob whose version
+  // byte alone bit-rotted low. Running the migration ladder would zero
+  // perfectly good fields; adopt the payload and pin the version instead.
+  TEST_ASSERT_EQUAL_INT(SETTINGS_BLOB_ADOPT,
+      assessSettingsBlob(SETTINGS_MAGIC, SETTINGS_VERSION - 1, 0xC0FFEEUL, 0xC0FFEEUL));
+}
+
+static void test_assess_newer_version_valid_crc_is_adopted() {
+  // #152: OTA revert to older firmware — blob intact, just newer. Must be
+  // preserved, not wiped.
+  TEST_ASSERT_EQUAL_INT(SETTINGS_BLOB_ADOPT,
+      assessSettingsBlob(SETTINGS_MAGIC, SETTINGS_VERSION + 1, 0xC0FFEEUL, 0xC0FFEEUL));
+}
+
+static void test_assess_newer_version_bad_crc_is_corrupt() {
+  // Torn header write can leave version = 0xFF with garbage payload; that
+  // must NOT be mistaken for a genuine downgrade.
+  TEST_ASSERT_EQUAL_INT(SETTINGS_BLOB_CORRUPT,
+      assessSettingsBlob(SETTINGS_MAGIC, 0xFF, 0xC0FFEEUL, 0xBADBADUL));
+}
+
+static void test_torn_write_scenario_detected_end_to_end() {
+  // Build a fully valid blob, then corrupt a single payload byte (power
+  // sag mid-commit). The read-back verdict must be CORRUPT.
+  writeSettingString(OFF_ALIGNMENT,  LEN_ALIGNMENT,  String("center"));
+  writeSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME, String("hallway"));
+  updateSettingsCrc();
+  writeSettingMagic();
+
+  g_eepromStorage[OFF_DEVICE_NAME] ^= 0x40;
+
+  TEST_ASSERT_EQUAL_INT(SETTINGS_BLOB_CORRUPT,
+      assessSettingsBlob(readSettingMagic(), g_eepromStorage[OFF_VERSION],
+                         readSettingsCrc(), computeSettingsCrc()));
+}
+
+static void test_downgrade_scenario_preserves_payload_end_to_end() {
+  // Simulate a blob written by a hypothetical v8 firmware (same CRC
+  // scheme, same frozen offsets): settings present, version newer.
+  writeSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME, String("hallway"));
+  writeSettingString(OFF_MQTT_HOST,   LEN_MQTT_HOST,   String("192.168.1.10"));
+  updateSettingsCrc();
+  writeSettingMagic();
+  g_eepromStorage[OFF_VERSION] = SETTINGS_VERSION + 1;
+
+  TEST_ASSERT_EQUAL_INT(SETTINGS_BLOB_ADOPT,
+      assessSettingsBlob(readSettingMagic(), g_eepromStorage[OFF_VERSION],
+                         readSettingsCrc(), computeSettingsCrc()));
+  // And the slots the older firmware understands are still readable.
+  TEST_ASSERT_EQUAL_STRING("hallway",      readSettingString(OFF_DEVICE_NAME, LEN_DEVICE_NAME).c_str());
+  TEST_ASSERT_EQUAL_STRING("192.168.1.10", readSettingString(OFF_MQTT_HOST,   LEN_MQTT_HOST).c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_layout_slots_are_contiguous_and_non_overlapping);
   RUN_TEST(test_layout_fits_in_configured_eeprom_size);
-  RUN_TEST(test_settings_version_is_6);
+  RUN_TEST(test_settings_version_is_7);
+  RUN_TEST(test_crc_slot_carved_from_reserved_1);
+  RUN_TEST(test_settings_crc_roundtrip_and_fence_posts);
+  RUN_TEST(test_computeSettingsCrc_covers_first_and_last_payload_byte);
+  RUN_TEST(test_computeSettingsCrc_excludes_header_bytes);
+  RUN_TEST(test_updateSettingsCrc_makes_stored_crc_match);
+  RUN_TEST(test_assess_blank_magic_is_blank);
+  RUN_TEST(test_assess_current_version_valid_crc_is_ok);
+  RUN_TEST(test_assess_current_version_bad_crc_is_corrupt);
+  RUN_TEST(test_assess_older_version_bad_crc_is_migrate);
+  RUN_TEST(test_assess_older_version_valid_crc_is_adopted_not_migrated);
+  RUN_TEST(test_assess_newer_version_valid_crc_is_adopted);
+  RUN_TEST(test_assess_newer_version_bad_crc_is_corrupt);
+  RUN_TEST(test_torn_write_scenario_detected_end_to_end);
+  RUN_TEST(test_downgrade_scenario_preserves_payload_end_to_end);
   RUN_TEST(test_intended_version_slot_fits_git_rev_plus_dirty_suffix);
   RUN_TEST(test_last_flash_result_slot_fits_known_values);
   RUN_TEST(test_device_name_slot_fits_max_name_plus_nul);
