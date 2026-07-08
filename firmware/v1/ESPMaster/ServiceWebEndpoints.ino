@@ -4,6 +4,21 @@
 // Called once from setup() after WiFi/NTP come up; prototype in ESPMaster.h.
 // The recovery/quiet-OTA minimal servers are NOT here — they live with their
 // enter*Mode() functions in ServiceBootModes.ino.
+//
+// Async-context rule (#150): these handlers run in async_tcp/LWIP context.
+// They may parse, validate, read state and respond — they must NOT mutate
+// shared Strings, commit EEPROM, call configTime, or hold the Wire bus for
+// long/multi-transaction work. Mutating work is staged behind a flag or
+// struct (pendingSettingsPost, isPendingStop, mqttDiscoverPending,
+// reflashUnitsPending, unitHealthRefreshPending, isPending*) and drained
+// from loop().
+// Deliberate exceptions: the calibration endpoints (/unit/offset, /unit/jog,
+// /unit/home, /unit/reboot) perform ONE short (<10 ms) synchronous I2C
+// transaction in the handler because the HTTP response reports the I2C
+// result; ESP8266's cooperative scheduler never preempts loop() mid-Wire-
+// transaction, and all of them are gated on the firmware-flash window.
+// RTC-memory writes (/firmware/recover-mark, /firmware/ota-mode) are
+// microsecond register writes — no flash involved — and stay inline too.
 
 void registerWebEndpoints() {
     //Web Server Endpoint configuration — all assets served from PROGMEM
@@ -313,20 +328,14 @@ void registerWebEndpoints() {
         return;
       }
       SerialPrintln(F("Request to Stop Received"));
+      //Abort immediately — showMessage's wait loop polls this flag every
+      //~100 ms. The broadcast home + shared-text clears are deferred to the
+      //isPendingStop drain in loop() (#150); the broadcast result lands in
+      //the Log panel instead of this response.
       abortCurrentShow = true;
-      int broadcastStatus = broadcastHome();
-      //Prevent the event loop from re-issuing showText() with the previous
-      //content. Clearing both inputText and lastWrittenText makes the
-      //showText("" vs "") comparison a no-op.
-      inputText = "";
-      lastWrittenText = "";
-      String body;
-      if (broadcastStatus == 0) {
-        body = F("Stop requested; homed all units via broadcast.");
-      } else {
-        body = String(F("Stop requested; broadcast Wire.endTransmission returned ")) + broadcastStatus;
-      }
-      request->send(200, "text/plain", body);
+      isPendingStop = true;
+      request->send(200, "text/plain",
+        "Stop requested; homing all units. See the Log panel for the broadcast result.");
     });
 
     //GET /reflash-units — pushes sketch-running units whose firmware rev
@@ -538,83 +547,31 @@ void registerWebEndpoints() {
       else {
         SerialPrintln(F("Finished Processing Request Successfully"));
 
-        //"Last Received" tracks messages, not settings saves — with per-card
-        //posts (#128) only a message/mode submission stamps it.
-        if (inputTextProvided || deviceModeProvided) {
-          lastReceivedMessageDateTime = formatDateTime("%d %b %y %H:%M:%S");
-        }
-
-        //Only if a new alignment value
-        if (alignmentProvided && alignment != newAlignmentValue) {
-          alignment = newAlignmentValue;
-          alignmentUpdated = true;
-
-          saveAlignment();
-          SerialPrintln("Alignment Updated: " + alignment);
-        }
-
-        //Only if a new flap speed value
-        if (flapSpeedProvided && flapSpeed != newFlapSpeedValue) {
-          flapSpeed = newFlapSpeedValue;
-
-          saveFlapSpeed();
-          SerialPrintln("Flap Speed Updated: " + flapSpeed);
-        }
-
-        //Only if device mode has changed
-        if (deviceModeProvided && deviceMode != newDeviceModeValue) {
-          deviceMode = newDeviceModeValue;
-
-          saveDeviceMode();
-          //Explicit mode switch trumps a running MQTT notification (#130):
-          //ask loopMqtt() to cancel it so the new mode shows immediately
-          //instead of after the dwell.
-          mqttRequestNotificationCancel();
-          SerialPrintln("Device Mode Set: " + deviceMode);
-        }
-
-        //Only if a new timezone value was submitted and it changed.
-        //Re-apply configTime() so the clock picks up the new zone on
-        //its next tick — no reboot required. Issue #48.
-        if (timezoneProvided && timezonePosixSetting != newTimezoneValue) {
-          timezonePosixSetting = newTimezoneValue;
-          saveTimezone();
-          applyTimezoneAndNtp();
-          SerialPrintln("Timezone Updated: " + (timezonePosixSetting.length() ? timezonePosixSetting : String("(default)")));
-        }
-
-        //Device name change (#125). Saved to EEPROM now, applied to
-        //mDNS/hostname/MQTT/AP SSIDs on the next reboot (the redirect tells
-        //the UI to offer one). While we still ARE the old MQTT identity,
-        //ask loopMqtt() to clear the old retained HA discovery configs so
-        //the rename doesn't leave an orphaned device in Home Assistant.
+        //Compute the response verdict now, against the live values — the
+        //apply itself is deferred (#150): shared-String mutation, EEPROM
+        //commits and configTime run in applyPendingSettingsPost() from
+        //loop(), never in this async handler. The drain is atomic wrt
+        //handlers, so these comparisons can't race a half-applied post.
         bool deviceNameChanged = deviceNameProvided && deviceNameSetting != newDeviceNameValue;
-        if (deviceNameChanged) {
-          mqttRequestDiscoveryClear();
-          deviceNameSetting = newDeviceNameValue;
-          saveDeviceName();
-          SerialPrintln("Device Name Updated (reboot to apply): " + (deviceNameSetting.length() ? deviceNameSetting : String("(chip-id default)")));
-        }
+        bool mqttChanged =
+            (mqttHostProvided     && mqttHostSetting     != newMqttHostValue) ||
+            (mqttPortProvided     && mqttPortSetting     != newMqttPortValue) ||
+            (mqttUserProvided     && mqttUserSetting     != newMqttUserValue) ||
+            (mqttPasswordProvided && mqttPasswordSetting != newMqttPasswordValue);
 
-        //MQTT broker config (#57). Persisted now, applied on the next
-        //reboot — initMqtt() runs once at boot and holds its own stable
-        //copies, so the running client never sees these change under it.
-        //Password is write-only: it only changes when a non-empty value
-        //was submitted.
-        bool mqttChanged = false;
-        if (mqttHostProvided && mqttHostSetting != newMqttHostValue) { mqttHostSetting = newMqttHostValue; mqttChanged = true; }
-        if (mqttPortProvided && mqttPortSetting != newMqttPortValue) { mqttPortSetting = newMqttPortValue; mqttChanged = true; }
-        if (mqttUserProvided && mqttUserSetting != newMqttUserValue) { mqttUserSetting = newMqttUserValue; mqttChanged = true; }
-        if (mqttPasswordProvided && mqttPasswordSetting != newMqttPasswordValue) { mqttPasswordSetting = newMqttPasswordValue; mqttChanged = true; }
-        if (mqttChanged) {
-          saveMqttSettings();
-          SerialPrintln("MQTT settings updated (reboot to apply). Broker: " + (mqttHostSetting.length() ? mqttHostSetting : String("(disabled)")));
-        }
-
-        //Only if we are showing text
-        if (inputTextProvided && deviceMode == DEVICE_MODE_TEXT) {
-          inputText = newInputTextValue;
-        }
+        //Stage the accepted fields; loop() drains them. Overlay semantics:
+        //a second card's POST before the drain just adds its own fields.
+        if (alignmentProvided)    { pendingSettingsPost.alignment    = newAlignmentValue;    pendingSettingsPost.alignmentProvided    = true; }
+        if (flapSpeedProvided)    { pendingSettingsPost.flapSpeed    = newFlapSpeedValue;    pendingSettingsPost.flapSpeedProvided    = true; }
+        if (deviceModeProvided)   { pendingSettingsPost.deviceMode   = newDeviceModeValue;   pendingSettingsPost.deviceModeProvided   = true; }
+        if (inputTextProvided)    { pendingSettingsPost.inputText    = newInputTextValue;    pendingSettingsPost.inputTextProvided    = true; }
+        if (timezoneProvided)     { pendingSettingsPost.timezone     = newTimezoneValue;     pendingSettingsPost.timezoneProvided     = true; }
+        if (deviceNameProvided)   { pendingSettingsPost.deviceName   = newDeviceNameValue;   pendingSettingsPost.deviceNameProvided   = true; }
+        if (mqttHostProvided)     { pendingSettingsPost.mqttHost     = newMqttHostValue;     pendingSettingsPost.mqttHostProvided     = true; }
+        if (mqttPortProvided)     { pendingSettingsPost.mqttPort     = newMqttPortValue;     pendingSettingsPost.mqttPortProvided     = true; }
+        if (mqttUserProvided)     { pendingSettingsPost.mqttUser     = newMqttUserValue;     pendingSettingsPost.mqttUserProvided     = true; }
+        if (mqttPasswordProvided) { pendingSettingsPost.mqttPassword = newMqttPasswordValue; pendingSettingsPost.mqttPasswordProvided = true; }
+        pendingSettingsPost.pending = true;
 
         if (isAjax) {
           //"ok-reboot" tells the card that its save needs a reboot to apply.

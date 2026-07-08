@@ -161,3 +161,102 @@ void applyTimezoneAndNtp() {
   SerialPrint(ntp);
   SerialPrintln(F(")"));
 }
+
+//Deferred apply for POST / (#150). The async handler only validates and
+//stages into pendingSettingsPost; every shared-String mutation, EEPROM
+//commit and configTime call happens here in loop() context. No yields
+//inside — the drain is atomic with respect to async handlers, so an
+//overlaying POST can never observe a half-applied state.
+void applyPendingSettingsPost() {
+  if (!pendingSettingsPost.pending) return;
+
+  //"Last Received" tracks messages, not settings saves — with per-card
+  //posts (#128) only a message/mode submission stamps it.
+  if (pendingSettingsPost.inputTextProvided || pendingSettingsPost.deviceModeProvided) {
+    lastReceivedMessageDateTime = formatDateTime("%d %b %y %H:%M:%S");
+  }
+
+  //Only if a new alignment value
+  if (pendingSettingsPost.alignmentProvided && alignment != pendingSettingsPost.alignment) {
+    alignment = pendingSettingsPost.alignment;
+    alignmentUpdated = true;
+
+    saveAlignment();
+    SerialPrintln("Alignment Updated: " + alignment);
+  }
+
+  //Only if a new flap speed value
+  if (pendingSettingsPost.flapSpeedProvided && flapSpeed != pendingSettingsPost.flapSpeed) {
+    flapSpeed = pendingSettingsPost.flapSpeed;
+
+    saveFlapSpeed();
+    SerialPrintln("Flap Speed Updated: " + flapSpeed);
+  }
+
+  //Only if device mode has changed
+  if (pendingSettingsPost.deviceModeProvided && deviceMode != pendingSettingsPost.deviceMode) {
+    deviceMode = pendingSettingsPost.deviceMode;
+
+    saveDeviceMode();
+    //Explicit mode switch trumps a running MQTT notification (#130):
+    //ask loopMqtt() to cancel it so the new mode shows immediately
+    //instead of after the dwell.
+    mqttRequestNotificationCancel();
+    SerialPrintln("Device Mode Set: " + deviceMode);
+  }
+
+  //Only if a new timezone value was submitted and it changed.
+  //Re-apply configTime() so the clock picks up the new zone on
+  //its next tick — no reboot required. Issue #48.
+  if (pendingSettingsPost.timezoneProvided && timezonePosixSetting != pendingSettingsPost.timezone) {
+    timezonePosixSetting = pendingSettingsPost.timezone;
+    saveTimezone();
+    applyTimezoneAndNtp();
+    SerialPrintln("Timezone Updated: " + (timezonePosixSetting.length() ? timezonePosixSetting : String("(default)")));
+  }
+
+  //Device name change (#125). Saved to EEPROM now, applied to
+  //mDNS/hostname/MQTT/AP SSIDs on the next reboot. While we still ARE the
+  //old MQTT identity, ask loopMqtt() to clear the old retained HA discovery
+  //configs so the rename doesn't leave an orphaned device in Home Assistant.
+  if (pendingSettingsPost.deviceNameProvided && deviceNameSetting != pendingSettingsPost.deviceName) {
+    mqttRequestDiscoveryClear();
+    deviceNameSetting = pendingSettingsPost.deviceName;
+    saveDeviceName();
+    SerialPrintln("Device Name Updated (reboot to apply): " + (deviceNameSetting.length() ? deviceNameSetting : String("(chip-id default)")));
+  }
+
+  //MQTT broker config (#57). Persisted now, applied on the next reboot —
+  //initMqtt() runs once at boot and holds its own stable copies, so the
+  //running client never sees these change under it. Password is write-only:
+  //it only changes when a non-empty value was submitted.
+  bool mqttChanged = false;
+  if (pendingSettingsPost.mqttHostProvided && mqttHostSetting != pendingSettingsPost.mqttHost) { mqttHostSetting = pendingSettingsPost.mqttHost; mqttChanged = true; }
+  if (pendingSettingsPost.mqttPortProvided && mqttPortSetting != pendingSettingsPost.mqttPort) { mqttPortSetting = pendingSettingsPost.mqttPort; mqttChanged = true; }
+  if (pendingSettingsPost.mqttUserProvided && mqttUserSetting != pendingSettingsPost.mqttUser) { mqttUserSetting = pendingSettingsPost.mqttUser; mqttChanged = true; }
+  if (pendingSettingsPost.mqttPasswordProvided && mqttPasswordSetting != pendingSettingsPost.mqttPassword) { mqttPasswordSetting = pendingSettingsPost.mqttPassword; mqttChanged = true; }
+  if (mqttChanged) {
+    saveMqttSettings();
+    SerialPrintln("MQTT settings updated (reboot to apply). Broker: " + (mqttHostSetting.length() ? mqttHostSetting : String("(disabled)")));
+  }
+
+  //Only if we are showing text. deviceMode was applied above, so a POST
+  //that switches to text mode and sets the message in one go works.
+  if (pendingSettingsPost.inputTextProvided && deviceMode == DEVICE_MODE_TEXT) {
+    inputText = pendingSettingsPost.inputText;
+  }
+
+  //Reset for the next post; release the staged String heap while at it
+  //(the password in particular shouldn't linger).
+  pendingSettingsPost.alignmentProvided    = false; pendingSettingsPost.alignment    = String();
+  pendingSettingsPost.flapSpeedProvided    = false; pendingSettingsPost.flapSpeed    = String();
+  pendingSettingsPost.deviceModeProvided   = false; pendingSettingsPost.deviceMode   = String();
+  pendingSettingsPost.inputTextProvided    = false; pendingSettingsPost.inputText    = String();
+  pendingSettingsPost.timezoneProvided     = false; pendingSettingsPost.timezone     = String();
+  pendingSettingsPost.deviceNameProvided   = false; pendingSettingsPost.deviceName   = String();
+  pendingSettingsPost.mqttHostProvided     = false; pendingSettingsPost.mqttHost     = String();
+  pendingSettingsPost.mqttPortProvided     = false; pendingSettingsPost.mqttPort     = String();
+  pendingSettingsPost.mqttUserProvided     = false; pendingSettingsPost.mqttUser     = String();
+  pendingSettingsPost.mqttPasswordProvided = false; pendingSettingsPost.mqttPassword = String();
+  pendingSettingsPost.pending = false;
+}

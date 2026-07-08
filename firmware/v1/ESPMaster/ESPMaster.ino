@@ -263,6 +263,27 @@ bool isPendingReboot = false;
 bool isPendingUnitsReset = false;
 bool isWifiConfigured = false;
 
+//Deferred settings apply (#150). The async POST / handler only parses and
+//validates; every accepted field is staged here and applied from loop() by
+//applyPendingSettingsPost() — shared-String mutation, EEPROM commits and
+//configTime must not run in async_tcp context. A second POST arriving
+//before the drain overlays its fields (the provided flags accumulate);
+//`pending` is set last by the handler and cleared by the drain.
+struct PendingSettingsPost {
+  volatile bool pending = false;
+  bool alignmentProvided = false;    String alignment;
+  bool flapSpeedProvided = false;    String flapSpeed;
+  bool deviceModeProvided = false;   String deviceMode;
+  bool inputTextProvided = false;    String inputText;
+  bool timezoneProvided = false;     String timezone;
+  bool deviceNameProvided = false;   String deviceName;
+  bool mqttHostProvided = false;     String mqttHost;
+  bool mqttPortProvided = false;     String mqttPort;
+  bool mqttUserProvided = false;     String mqttUser;
+  bool mqttPasswordProvided = false; String mqttPassword;
+};
+PendingSettingsPost pendingSettingsPost;
+
 //OTA failure diagnostics (#52, extended in #53). Captured at boot; exposed
 //via /settings so the flasher can tell a silent revert apart from a clean
 //reboot.
@@ -287,6 +308,10 @@ String lastFlashResult = "";
 //forever. Checked every ~100 ms; cleared at the start of each new
 //showMessage. Issue #35.
 volatile bool abortCurrentShow = false;
+//Deferred /stop tail (#150): the handler flips abortCurrentShow (polled
+//inside showMessage's wait loop, so the abort is immediate) but the
+//broadcast-home I2C transaction and the shared-text clears run from loop().
+bool isPendingStop = false;
 
 //Recovery mode + boot-loop protection (issue #37). Counter lives in RTC user
 //memory (survives warm restart, cleared on cold power cycle). Every boot
@@ -651,6 +676,15 @@ void setup() {
 void loop() {
   //Reboot in here as if we restart within a request handler, no response is returned
   if (isPendingReboot) {
+    //Flush any settings staged by POST / before restarting (#150). Every
+    //reboot trigger funnels through this branch, and it runs before the
+    //normal drain point further down — without this, a save whose client
+    //was already told "ok"/"ok-reboot" would be lost if a reboot (e.g. the
+    //post-OTA one, set while the upload freeze was skipping the drain)
+    //fires first. isPendingStop is deliberately NOT flushed: the parking
+    //wait below already settles the display, and the text clears are
+    //meaningless across a restart.
+    applyPendingSettingsPost();
 #if SERIAL_ENABLE == false
     //Park the display before restarting (issue #116). Eboot's staged-image
     //copy runs immediately after reset with no sketch in control — make
@@ -758,6 +792,24 @@ void loop() {
     return;
   }
 
+  //Deferred /stop tail (#150): abortCurrentShow was already flipped in the
+  //handler; the bus work + shared-String clears happen here, after the
+  //flash-window early-return so the broadcast owns the Wire bus cleanly.
+  if (isPendingStop) {
+    isPendingStop = false;
+    int broadcastStatus = broadcastHome();
+    if (broadcastStatus == 0) {
+      SerialPrintln(F("Stop: homed all units via broadcast"));
+    } else {
+      SerialPrintln("Stop: broadcast Wire.endTransmission returned " + String(broadcastStatus));
+    }
+    //Prevent the event loop from re-issuing showText() with the previous
+    //content. Clearing both inputText and lastWrittenText makes the
+    //showText("" vs "") comparison a no-op.
+    inputText = "";
+    lastWrittenText = "";
+  }
+
 #if USE_MULTICAST == true
   //Deferred MQTT broker discovery (#129). Runs here — never in the async
   //handler — because MDNS.queryService() blocks ~1 s per query (~2 s worst
@@ -781,6 +833,10 @@ void loop() {
     unitHealthRefreshPending = false;
     pollUnitHealth();
   }
+
+  //Deferred settings apply (#150): drain the fields staged by POST / —
+  //EEPROM commits and configTime run here, never in the async handler.
+  applyPendingSettingsPost();
 
   //MQTT pump (#121): reconnect schedule, inbound notifications, telemetry.
   //No-op when no broker is configured (#57).
