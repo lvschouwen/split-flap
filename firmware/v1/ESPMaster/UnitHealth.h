@@ -80,6 +80,7 @@ inline int computeFaultyUnitCount(const UnitStatus* health, const bool* valid, i
 // (length >= width). `base` is I2C_ADDRESS_BASE so addr == base + index.
 inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitStatus* health,
     const bool* valid, const int* states, const int* fwStatus,
+    const char (*versions)[9],
     int width, int faulty, int base) {
   size_t o = 0;
   UNIT_HEALTH_APPEND("{\"width\":%d,\"faulty\":%d,\"units\":[", width, faulty);
@@ -88,8 +89,11 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitStatus* healt
                        i == 0 ? "" : ",", i, base + i, states[i], valid[i] ? 1 : 0);
     if (valid[i]) {
       const UnitStatus& s = health[i];
-      UNIT_HEALTH_APPEND(",\"fw\":%d,\"up\":%u,\"br\":%u,\"wd\":%u,\"bc\":%u,\"mc\":%u,\"fl\":%u,\"hs\":%u",
-                         fwStatus[i], (unsigned)s.uptimeSeconds, (unsigned)s.lifetimeBrownoutCount,
+      // #140: emit the master's detected unit rev (8-char git short-rev, NUL-
+      // terminated; empty when the version read failed) so HA/web can see which
+      // firmware a unit is actually on during a reflash-mismatch window.
+      UNIT_HEALTH_APPEND(",\"fw\":%d,\"rev\":\"%s\",\"up\":%u,\"br\":%u,\"wd\":%u,\"bc\":%u,\"mc\":%u,\"fl\":%u,\"hs\":%u",
+                         fwStatus[i], versions[i], (unsigned)s.uptimeSeconds, (unsigned)s.lifetimeBrownoutCount,
                          (unsigned)s.lifetimeWatchdogCount, (unsigned)s.badCommandCount,
                          (unsigned)s.mcusrAtBoot, (unsigned)s.flags, (unsigned)s.lastHomingStepCount);
     }
