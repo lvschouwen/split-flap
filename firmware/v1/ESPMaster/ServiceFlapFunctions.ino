@@ -152,10 +152,10 @@ bool readUnitStatus(int i2cAddress, UnitStatus& out) {
 //MQTT json_attributes_topic; faultyUnitCount feeds the integer HA sensor.
 //
 //Sized for the worst case (16 valid units, all counters saturated): ~105 bytes
-//per unit + the ~35-byte wrapper ≈ 1683 bytes. 2048 leaves comfortable headroom
-//(a new per-unit field won't tip a full display into the fail-safe path); the
-//builder's truncation guard degrades to an empty units[] rather than emitting a
-//cut JSON if it ever overruns anyway.
+//per unit + the ~16-byte "rev" field (#140) ≈ 121 bytes/unit + the ~35-byte
+//wrapper ≈ 1971 bytes. 2048 still clears it; the builder's truncation guard
+//degrades to an empty units[] rather than emitting a cut JSON if it ever
+//overruns anyway.
 #define UNIT_HEALTH_JSON_CAP 2048
 UnitStatus unitHealth[UNITS_AMOUNT];
 bool       unitHealthValid[UNITS_AMOUNT];
@@ -191,6 +191,7 @@ void pollUnitHealth() {
   const int width = displayWidth;
   size_t n = buildUnitHealthJson(unitHealthJson, sizeof(unitHealthJson), unitHealth,
                                  unitHealthValid, detectedUnitStates, detectedUnitVersionStatus,
+                                 detectedUnitVersions,
                                  width, faultyUnitCount, I2C_ADDRESS_BASE);
   if (n == 0 || n >= sizeof(unitHealthJson)) {
     //Would-be-truncated payload (device far wider than expected?): fall back to
@@ -520,10 +521,15 @@ static bool readUnitVersion(int i2cAddress, char *out) {
   uint8_t buf[8];
   for (uint8_t i = 0; i < 8; i++) buf[i] = Wire.read();
   // Copy to out, stopping at first null; reject if any non-printable non-null.
+  // Also reject the two JSON-structural characters (" and \): this string is
+  // emitted raw into the unit-health JSON (#140) served over HTTP and MQTT, so
+  // a glitched/unexpected read carrying one of them would break JSON.parse and
+  // Home Assistant's json_attributes. A real git short-rev never contains them.
   uint8_t len = 0;
   for (; len < 8; len++) {
     if (buf[len] == 0) break;
     if (buf[len] < 32 || buf[len] > 126) return false;
+    if (buf[len] == '"' || buf[len] == '\\') return false;
   }
   if (len == 0) return false;
   for (uint8_t i = 0; i < len; i++) out[i] = (char)buf[i];
