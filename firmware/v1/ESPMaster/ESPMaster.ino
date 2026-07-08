@@ -422,18 +422,14 @@ void registerMasterFirmwareEndpoint() {
         //Single source of truth: reboot only when the updater considers the
         //image committed AND no error was latched along the way.
         request->send(200, "text/plain", "Master firmware flashed; rebooting…");
-        //Stash the flash-outcome cookie in RTC (#53/#118). Prefer the
-        //uploaded image's MD5 (?md5= — ota-master.sh always sends it): boot
-        //then reports "ok" iff the running MD5 matches it, which stays
-        //correct even when re-flashing the identical image. Fall back to
-        //the legacy pre-flash-MD5 semantics for md5-less form uploads.
-        if (request->hasParam("md5")) {
-          String expectedMd5 = request->getParam("md5")->value();
-          expectedMd5.toLowerCase();
-          setFlashCookieRtc(expectedMd5, COOKIE_KIND_EXPECTED_MD5);
-        } else {
-          setFlashCookieRtc(ESP.getSketchMD5(), COOKIE_KIND_PRE_FLASH);
-        }
+        //Stash the flash-outcome cookie in RTC (#53/#118) using the uploaded
+        //image's MD5. ?md5= is mandatory now (#144), and this success branch
+        //is only reached when the upload handler accepted it, so the param is
+        //guaranteed present: the next boot reports "ok" iff the running MD5
+        //matches it — correct even when re-flashing the identical image.
+        String expectedMd5 = request->getParam("md5")->value();
+        expectedMd5.toLowerCase();
+        setFlashCookieRtc(expectedMd5, COOKIE_KIND_EXPECTED_MD5);
         //Clear the previous verdict NOW (#118) — if the next boot can't
         //adjudicate (e.g. the cookie was invalidated by an RtcBootState
         //magic bump), /settings must show "" (unknown), not a stale
@@ -507,30 +503,37 @@ void registerMasterFirmwareEndpoint() {
           return;
         }
 
-        //MD5 is optional but strongly recommended — eboot's built-in checksum
-        //only catches the staged image getting corrupted in flash, not a
+        //MD5 is MANDATORY (#144). eboot's built-in checksum only catches the
+        //staged image getting corrupted in flash — it does NOT catch a
         //truncated/partially-uploaded image landing on top of a trusted boot.
-        if (request->hasParam("md5")) {
-          String md5 = request->getParam("md5")->value();
-          md5.toLowerCase();
-          if (md5.length() != 32) {
-            otaRejected = true;
-            otaRejectionStatus = 400;
-            otaRejectionReason = "md5 query param must be a 32-char hex digest";
-            SerialPrintln(otaRejectionReason);
-            Update.end(false);
-            return;
-          }
-          if (!Update.setMD5(md5.c_str())) {
-            otaRejected = true;
-            otaRejectionStatus = 400;
-            otaRejectionReason = "Update.setMD5 rejected '" + md5 + "'";
-            SerialPrintln(otaRejectionReason);
-            Update.end(false);
-            return;
-          }
-          SerialPrint(F("MD5 expected: ")); SerialPrintln(md5);
+        //Reject any upload that doesn't carry a valid 32-hex ?md5= digest.
+        if (!request->hasParam("md5")) {
+          otaRejected = true;
+          otaRejectionStatus = 400;
+          otaRejectionReason = "md5 query param is required";
+          SerialPrintln(otaRejectionReason);
+          Update.end(false);
+          return;
         }
+        String md5 = request->getParam("md5")->value();
+        md5.toLowerCase();
+        if (md5.length() != 32) {
+          otaRejected = true;
+          otaRejectionStatus = 400;
+          otaRejectionReason = "md5 query param must be a 32-char hex digest";
+          SerialPrintln(otaRejectionReason);
+          Update.end(false);
+          return;
+        }
+        if (!Update.setMD5(md5.c_str())) {
+          otaRejected = true;
+          otaRejectionStatus = 400;
+          otaRejectionReason = "Update.setMD5 rejected '" + md5 + "'";
+          SerialPrintln(otaRejectionReason);
+          Update.end(false);
+          return;
+        }
+        SerialPrint(F("MD5 expected: ")); SerialPrintln(md5);
         //Record the caller-supplied intended version so we can detect a
         //silent revert on the next boot. Write unconditionally (empty if
         //the client didn't pass ?v=) so stale values from an earlier flash
@@ -1017,22 +1020,12 @@ void setup() {
       request->send(200, "text/plain", webLogRead());
     });
     
-    webServer.on("/reboot", HTTP_GET, [](AsyncWebServerRequest * request) {
+    //POST, not GET (#145): a state-changing action must not be triggerable by
+    //a drive-by <img src="/reboot"> on the LAN.
+    webServer.on("/reboot", HTTP_POST, [](AsyncWebServerRequest * request) {
       SerialPrintln(F("Request to Reboot Received"));
-      
-      //Create HTML page to explain the system is rebooting
-      IPAddress ip = WiFi.localIP();
-      
-      String html = "<div style='text-align:center'>";
-      html += "<font face='arial'><h1>Split Flap - Rebooting</h1>";
-      html += "<p>Reboot is pending now...<p>";
-      html += "<p>This can take anywhere between 10-20 seconds<p>";
-      html += "<p>You can go to the main home page after this time by clicking the button below or going to '/'.</p>";
-      html += "<p><a href=\"http://" + ip.toString() + "\">Home</a></p>";
-      html += "</font>";
-      html += "</div>";
-      
-      request->send(200, "text/html", html);
+      request->send(200, "text/plain",
+        "Reboot pending — this takes 10-20 seconds. Reload the home page afterwards.");
       isPendingReboot = true;
     });
 
@@ -1096,7 +1089,8 @@ void setup() {
     //GET /unit/reboot?address=0x01 — useful without a HEX file to sanity-
     //check the enter-bootloader path (unit should disappear briefly and
     //twiboot show up on 0x29).
-    webServer.on("/unit/reboot", HTTP_GET, [](AsyncWebServerRequest * request) {
+    //POST, not GET (#145): pushes a unit into its bootloader — state-changing.
+    webServer.on("/unit/reboot", HTTP_POST, [](AsyncWebServerRequest * request) {
       //Same guard as the calibration endpoints: a stray byte on the Wire
       //bus mid-flash makes twiboot jump into half-written application
       //flash (any unknown command byte == CMD_BOOT_APPLICATION). See #95.
@@ -1255,7 +1249,8 @@ void setup() {
     //does NOT match the bundled one (OUTDATED or UNKNOWN) into twiboot and
     //re-runs the PROGMEM auto-install. Units already on the bundled rev are
     //skipped (issue #114) — re-flashing them wastes time and flash cycles.
-    webServer.on("/reflash-units", HTTP_GET, [](AsyncWebServerRequest * request) {
+    //POST, not GET (#145): kicks off a bulk unit reflash — state-changing.
+    webServer.on("/reflash-units", HTTP_POST, [](AsyncWebServerRequest * request) {
       //Same guard as the calibration endpoints — this handler owns the Wire
       //bus for a re-probe + flash pass and must not overlap an in-flight one.
       //Defer to loop() (#138): the bootloader entry + PROGMEM flash blocks for
@@ -1274,13 +1269,16 @@ void setup() {
         "Watch the Log panel for per-unit progress.");
     });
 
-    webServer.on("/reset-units", HTTP_GET, [](AsyncWebServerRequest * request) {
+    //POST, not GET (#145): resets every unit's calibration — state-changing.
+    webServer.on("/reset-units", HTTP_POST, [](AsyncWebServerRequest * request) {
       SerialPrintln(F("Request to Reset Units Received"));
-      
+
       //This will be picked up in the loop
       isPendingUnitsReset = true;
-      
-      request->redirect("/?is-resetting-units=true");
+
+      request->send(200, "text/plain",
+        "Display is resetting/re-calibrating — this takes a few seconds. It shows "
+        "different characters to carry this out, then returns to the last message.");
     });
 
     webServer.on("/", HTTP_POST, [](AsyncWebServerRequest * request) {
@@ -1548,21 +1546,13 @@ void setup() {
       }
     });
 
-    webServer.on("/reset-wifi", HTTP_GET, [](AsyncWebServerRequest * request) {
+    //POST, not GET (#145): erasing WiFi credentials is the sharpest edge — a
+    //drive-by <img src="/reset-wifi"> would have knocked the device offline.
+    webServer.on("/reset-wifi", HTTP_POST, [](AsyncWebServerRequest * request) {
       SerialPrintln(F("Request to Reset WiFi Received"));
-      
-      IPAddress ip = WiFi.localIP();
-      
-      String html = "<div style='text-align:center'>";
-      html += "<font face='arial'><h1>Split Flap - Resetting WiFi</h1>";
-      html += "<p>WiFi Settings have been erased. Device will now reboot...<p>";
-      html += "<p>You will now be able to connect to this device in AP mode to configure the WiFi once more<p>";
-      html += "<p>You can go to the main home page after this time by clicking the button below or going to '/'.</p>";
-      html += "<p><a href=\"http://" + ip.toString() + "\">Home</a></p>";
-      html += "</font>";
-      html += "</div>";
-      
-      request->send(200, "text/html", html);
+      request->send(200, "text/plain",
+        "WiFi credentials erased. The display is rebooting into its setup portal — "
+        "reconnect to the device's setup AP to configure a network.");
       isPendingWifiReset = true;
     });
 

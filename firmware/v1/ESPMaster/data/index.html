@@ -177,7 +177,7 @@
 							setup portal so you can connect it to another network.
 						</p>
 						<p>
-							<a id="linkActionResetWifi" href="/reset-wifi" onclick="return confirm('Are you sure you want to Reset WiFi settings?')">
+							<a id="linkActionResetWifi" href="#" onclick="return postAction('/reset-wifi', 'Are you sure you want to Reset WiFi settings?');">
 								Reset WiFi
 							</a>
 						</p>
@@ -190,7 +190,7 @@
 					<div class="card card-full">
 						<p class="card-title">Units</p>
 						<div class="actions">
-							<a id="linkActionUnitCalibration" href="/reset-units" onclick="return confirm('Are you sure you want to Reset Units?')">
+							<a id="linkActionUnitCalibration" href="#" onclick="return postAction('/reset-units', 'Are you sure you want to Reset Units?');">
 								Reset Unit Calibration
 							</a>
 							<a id="linkActionReflashUnits" href="#" onclick="return reflashAllUnits();">
@@ -270,7 +270,7 @@
 							<a id="linkActionOtaUpdate" href="/ota" onclick="return confirm('Are you sure you want to put device in OTA mode?')">
 								OTA Update
 							</a>
-							<a id="linkActionReboot" href="/reboot" onclick="return confirm('Are you sure you want reboot device?')">
+							<a id="linkActionReboot" href="#" onclick="return postAction('/reboot', 'Are you sure you want reboot device?');">
 								Reboot
 							</a>
 						</div>

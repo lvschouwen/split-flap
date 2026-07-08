@@ -135,7 +135,7 @@ function showCardStatus(elementId, message, kind, hideAfterMs) {
 	}
 }
 
-var REBOOT_NOW_LINK = ' <a href="/reboot" onclick="return confirm(\'Reboot the display now?\')">Reboot now</a>';
+var REBOOT_NOW_LINK = ' <a href="#" onclick="return postAction(\'/reboot\', \'Reboot the display now?\');">Reboot now</a>';
 
 function saveDeviceCard() {
 	showCardStatus("deviceCardStatus", "Saving…", "pending");
@@ -607,13 +607,36 @@ function reflashAllUnits() {
 		return false;
 	}
 	var xhr = new XMLHttpRequest();
-	xhr.open("GET", "/reflash-units");
+	xhr.open("POST", "/reflash-units");
 	xhr.onreadystatechange = function() {
 		if (xhr.readyState !== 4) return;
 		if (xhr.status === 200) {
 			showBannerMessage(xhr.responseText, 5000);
 		} else {
 			showBannerMessage("Reflash request failed: HTTP " + xhr.status, 5000);
+		}
+	};
+	xhr.send();
+	return false;
+}
+
+//POST a state-changing endpoint (#145). These actions used to be GET links,
+//so a drive-by <img src="/reset-wifi"> on the LAN could fire them with no
+//click. POST forces a scripted same-origin request. Confirms first, then
+//shows the server's plain-text response in the banner. Returns false so the
+//host <a> never navigates.
+function postAction(url, confirmMsg) {
+	if (confirmMsg && !confirm(confirmMsg)) {
+		return false;
+	}
+	var xhr = new XMLHttpRequest();
+	xhr.open("POST", url);
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState !== 4) return;
+		if (xhr.status >= 200 && xhr.status < 300) {
+			showBannerMessage(xhr.responseText || "Done", 8000);
+		} else {
+			showBannerMessage("Request failed: HTTP " + xhr.status, 5000);
 		}
 	};
 	xhr.send();
