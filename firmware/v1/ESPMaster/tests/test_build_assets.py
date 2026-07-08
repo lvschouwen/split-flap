@@ -183,3 +183,15 @@ def test_compress_asset_roundtrips():
 
     payload = b"<html>calibration</html>" * 50
     assert gzip.decompress(build_assets.compress_asset(payload)) == payload
+
+
+def test_all_text_io_in_build_assets_pins_utf8():
+    # The Windows CI runner decodes text as cp1252 by default; the web assets
+    # are UTF-8 (…, ·, Ä). Every text read/write must pin the encoding or the
+    # flasher exe build goes red on non-ASCII content.
+    import re
+
+    src = pathlib.Path(build_assets.__file__).read_text(encoding="utf-8")
+    for match in re.finditer(r"read_text\(([^)]*)\)|open\(\s*\"w\"([^)]*)\)", src):
+        args = match.group(1) if match.group(1) is not None else match.group(2)
+        assert "utf-8" in (args or ""), f"unpinned text IO: {match.group(0)}"
