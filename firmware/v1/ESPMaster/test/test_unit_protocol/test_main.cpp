@@ -41,6 +41,14 @@ static void test_opcodes_never_alias_letter_indices() {
   TEST_ASSERT_EQUAL_HEX8(0x81, SFP_CMD_GET_VERSION);
 }
 
+static void test_offset_limit_is_one_drum_revolution() {
+  // ±SFP_OFFSET_LIMIT_STEPS is the SET_OFFSET contract on both sides (#171).
+  // It must stay one 28BYJ-48 revolution (the unit static_asserts it against
+  // its STEPS constant) and must fit the protocol's int16 wire format.
+  TEST_ASSERT_EQUAL_INT(2038, SFP_OFFSET_LIMIT_STEPS);
+  TEST_ASSERT_TRUE(SFP_OFFSET_LIMIT_STEPS <= 32767);
+}
+
 // CMD_GET_LETTER readback: value + bitwise complement, index must be a real
 // flap position (0..FLAP_AMOUNT-1).
 
@@ -68,6 +76,7 @@ int main(int, char**) {
   RUN_TEST(test_alphabet_matches_expected);
   RUN_TEST(test_flap_amount_derives_from_alphabet);
   RUN_TEST(test_opcodes_never_alias_letter_indices);
+  RUN_TEST(test_offset_limit_is_one_drum_revolution);
   RUN_TEST(test_valid_pair_accepted);
   RUN_TEST(test_wrong_complement_rejected);
   RUN_TEST(test_out_of_range_index_rejected_even_with_valid_complement);

@@ -52,6 +52,10 @@
 #define STEPPERPIN3 9
 #define STEPPERPIN4 8
 #define STEPS 2038 //28BYJ-48 stepper, number of steps
+// The protocol's SET_OFFSET bound is defined as one revolution of THIS drum;
+// if the stepper ever changes, SplitFlapProtocol.h must change with it (#171).
+static_assert(STEPS == SFP_OFFSET_LIMIT_STEPS,
+              "SFP_OFFSET_LIMIT_STEPS must equal the drum's steps per revolution");
 #define HALLPIN 7 //Pin of hall sensor
 #define AMOUNTFLAPS SFP_FLAP_AMOUNT  // derived from SFP_ALPHABET (SplitFlapProtocol.h, #149)
 
@@ -100,7 +104,11 @@ volatile int currentlyrotating = 0; // 1 = drum is currently rotating, 0 = drum 
 // fit in the low byte, so the non-atomic 16-bit access is harmless.
 volatile int stepperSpeed = 10; //current speed of stepper, from the last letter command; default only matters for a jog before any message (homing uses HOMING_RPM)
 int eeAddress = 0;   //EEPROM address for calibration offset
-int calOffset;       //Offset for calibration in steps, stored in EEPROM, gets read in setup
+// Read by requestEvent() in the TWI ISR (SFP_CMD_GET_OFFSET reply) — volatile
+// for LTO visibility like every other ISR-shared field here (#143/#173).
+// EEPROM.get/put's templates reject volatile refs: go through a non-volatile
+// local shadow at those two sites (getOffset(), the pendingOffsetWrite drain).
+volatile int calOffset; //Offset for calibration in steps, stored in EEPROM, gets read in setup
 volatile int receivedNumber = 0;
 int i2cAddress;
 
@@ -141,7 +149,12 @@ volatile bool     pendingLetterResponse     = false;  // consumed by requestEven
 uint8_t           savedMcusr                = 0;      // snapshot of MCUSR at boot
 uint8_t           lifetimeBrownoutCount     = 0;      // mirror of EEPROM slot 4
 uint8_t           lifetimeWatchdogCount     = 0;      // mirror of EEPROM slot 5
-uint8_t           badCommandCount           = 0;      // saturating, malformed I2C receives since boot
+// Incremented from BOTH the TWI ISR (receiveLetter) and loop() (the invalid-
+// address branch of the pendingSetAddress drain) and read back in the ISR's
+// status reply — volatile for LTO visibility, and the loop-side RMW must be
+// wrapped in noInterrupts()/interrupts() or a concurrent ISR increment is
+// lost (#172). Single-byte, so the ISR-side increments are atomic as-is.
+volatile uint8_t  badCommandCount           = 0;      // saturating, malformed I2C receives since boot
 // The four status fields below are written from loop context (calibrate()/
 // loop()) and read by requestEvent() in the TWI ISR — volatile, and the
 // 16-bit ones are written under noInterrupts() so the ISR can't see a
@@ -224,6 +237,14 @@ void setup() {
   Serial.println(i2cAddress);
 #endif
 
+  // Read the calibration offset BEFORE the Wire handlers go live (#173):
+  // EEPROM.get into the 2-byte calOffset is not atomic, and requestEvent()
+  // reads calOffset from the TWI ISR — registering first left a boot-time
+  // window where a GET_OFFSET reply could see a torn half-written value
+  // (same class as the #96/#143 fixes). All later writes happen in loop()
+  // under noInterrupts(), so this ordering closes the only unguarded one.
+  getOffset();
+
   //I2C function assignment
   Wire.begin(i2cAddress); //i2c address of this unit
   // Enable general-call (I2C broadcast to address 0x00) reception so the
@@ -243,8 +264,7 @@ void setup() {
   // SFP_CMD_GET_STATUS.
   wdt_enable(WDTO_8S);
 
-  getOffset();     //get calibration offset from EEPROM
-  calibrate(true); //home stepper after startup
+  calibrate(true); //home stepper after startup (offset read earlier, #173)
 
   //test calibration settings
 #ifdef TEST_ENABLE
@@ -284,7 +304,8 @@ void loop() {
     pendingOffsetWrite = false;
     calOffset = v;
     interrupts();
-    EEPROM.put(eeAddress, calOffset);
+    int persisted = v;  //shadow: EEPROM.put can't take the volatile directly
+    EEPROM.put(eeAddress, persisted);
 #ifdef SERIAL_ENABLE
     Serial.print("CalOffset updated to ");
     Serial.println(calOffset);
@@ -346,8 +367,11 @@ void loop() {
       Serial.println(v, HEX);
 #endif
       pendingBootloader = true;
-    } else if (badCommandCount < 0xFF) {
-      badCommandCount++;
+    } else {
+      // Loop-context RMW on an ISR-shared counter — guard it (#172).
+      noInterrupts();
+      if (badCommandCount < 0xFF) badCommandCount++;
+      interrupts();
     }
   }
   if (pendingClearAddress) {
@@ -537,8 +561,17 @@ void receiveLetter(int numBytes) {
           uint8_t lo = (uint8_t)Wire.read();
           uint8_t hi = (uint8_t)Wire.read();
           remaining -= 2;
-          pendingOffsetValue = (int16_t)((uint16_t)lo | ((uint16_t)hi << 8));
-          pendingOffsetWrite = true;
+          int16_t requestedOffset = (int16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+          // Drop out-of-range offsets instead of persisting them (#171):
+          // past ±STEPS the post-homing stepper.step(calOffset) — one
+          // blocking library call — outruns the 8 s watchdog window and
+          // resets the Nano mid-rotation. Mirrors getOffset()'s boot check.
+          if (requestedOffset >= -STEPS && requestedOffset <= STEPS) {
+            pendingOffsetValue = requestedOffset;
+            pendingOffsetWrite = true;
+          } else if (badCommandCount < 0xFF) {
+            badCommandCount++;
+          }
         } else if (badCommandCount < 0xFF) {
           badCommandCount++;
         }
@@ -681,13 +714,15 @@ int getaddress() {
 
 //gets magnet sensor offset from EEPROM in steps
 void getOffset() {
-  EEPROM.get(eeAddress, calOffset);
+  int stored;  //shadow: EEPROM.get can't take the volatile directly
+  EEPROM.get(eeAddress, stored);
   // Fresh EEPROM reads 0xFFFF (-1, harmless); corruption can read anything.
   // An offset beyond one full revolution is never a legitimate calibration
   // and would make every homing overshoot by whole turns — treat as unset.
-  if (calOffset < -STEPS || calOffset > STEPS) {
-    calOffset = 0;
+  if (stored < -STEPS || stored > STEPS) {
+    stored = 0;
   }
+  calOffset = stored;
 #ifdef SERIAL_ENABLE
   Serial.print("CalOffset from EEPROM: ");
   Serial.print(calOffset);

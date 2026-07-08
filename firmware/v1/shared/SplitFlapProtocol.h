@@ -77,11 +77,22 @@
 #define SFP_CMD_JOG                0x91  // +1 signed byte (-127..+127)
 #define SFP_CMD_REBOOT             0x92  // no args; soft watchdog reset (stays in sketch)
 #define SFP_CMD_SET_OFFSET         0x93  // +2 bytes int16 LE; persist to EEPROM
+                                         //     accepted range: ±SFP_OFFSET_LIMIT_STEPS
 // Provisioning wizard opcodes (issue #56). EEPROM address takes precedence
 // over DIP, so burning an EEPROM address makes the DIP switch irrelevant.
 #define SFP_CMD_SET_I2C_ADDRESS    0x94  // +1 byte new I2C address (1..126); persist + reboot
 #define SFP_CMD_CLEAR_I2C_ADDRESS  0x95  // no args; clear EEPROM magic, reboot -> DIP
 #define SFP_CMD_IDENTIFY           0x96  // no args; non-blocking LED_BUILTIN blink (~3 s)
+
+// SET_OFFSET's accepted range (#171). The bound is one full revolution of the
+// unit's 28BYJ-48 drum (its STEPS constant — a static_assert there pins the
+// two together): a larger offset is never a legitimate calibration, and past
+// ~2700 steps the unit's post-homing stepper.step(calOffset) — one blocking
+// library call — outruns its 8 s watchdog window and resets the Nano
+// mid-rotation. Enforced on BOTH sides: the master's /unit/offset rejects
+// out-of-range values with a 400, the unit's SET_OFFSET path drops them and
+// bumps its bad-command counter.
+#define SFP_OFFSET_LIMIT_STEPS     2038
 
 // Opcodes must never collide with a valid letter index. Guard it here so a
 // future alphabet growth (or opcode renumber) fails at compile time on both

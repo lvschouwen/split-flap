@@ -268,8 +268,15 @@ void registerWebEndpoints() {
         return;
       }
       long parsed = strtol(request->getParam("value")->value().c_str(), nullptr, 0);
-      if (parsed < -32768 || parsed > 32767) {
-        request->send(400, "text/plain", "Value must fit in int16 (-32768..32767)");
+      //±one drum revolution (#171): the unit clamps the same bound in its
+      //SET_OFFSET path — past it, its post-homing rotation outruns the 8 s
+      //watchdog. Rejecting here gives the calibration UI a real error
+      //instead of a silently-dropped write.
+      if (parsed < -SFP_OFFSET_LIMIT_STEPS || parsed > SFP_OFFSET_LIMIT_STEPS) {
+        String msg = "Offset must be within +/-";
+        msg += SFP_OFFSET_LIMIT_STEPS;
+        msg += " steps (one revolution)";
+        request->send(400, "text/plain", msg);
         return;
       }
       int status = writeUnitOffset(addr, (int16_t)parsed);
