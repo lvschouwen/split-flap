@@ -260,3 +260,86 @@ void applyPendingSettingsPost() {
   pendingSettingsPost.mqttPasswordProvided = false; pendingSettingsPost.mqttPassword = String();
   pendingSettingsPost.pending = false;
 }
+
+// --- moved from ESPMaster.ino (#174): the /settings JSON builder ---
+
+//Gets all the currently stored values from memory as a JSON string.
+//Hand-rolled to avoid pulling in the ArduinoJson library (~30 KB) for a
+//fixed-shape serializer that never needs to parse (issue #40).
+String getCurrentSettingValues() {
+  String out;
+  //Three per-unit arrays (address, versionStatus, version string) grow with
+  //UNITS_AMOUNT — scale the reservation so big displays don't realloc-churn
+  //the ~40 KB heap (#95). One-shot allocation, freed when the response sends.
+  out.reserve(512 + UNITS_AMOUNT * 24);
+  out += '{';
+
+  out += F("\"timezoneOffset\":");          out += getTimezoneOffsetMinutes();
+  //Detected display width (#123), not the UNITS_AMOUNT ceiling — the web
+  //UI's line-count math and repeating-string actions follow the real size.
+  out += F(",\"unitCount\":");              out += displayWidth;
+  out += F(",\"detectedUnitCount\":");      out += detectedUnitCount;
+
+  out += F(",\"detectedUnitAddresses\":[");
+  for (int i = 0; i < detectedUnitCount; i++) {
+    if (i) out += ',';
+    out += detectedUnitAddresses[i];
+  }
+  out += ']';
+
+  //Per-unit firmware version, indexed by unit slot (0..UNITS_AMOUNT-1) so
+  //the UI can show a badge per address even for silent units (issue #28).
+  out += F(",\"detectedUnitVersionStatus\":[");
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    if (i) out += ',';
+    out += detectedUnitVersionStatus[i];
+  }
+  out += F("],\"detectedUnitVersions\":[");
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    if (i) out += ',';
+    appendJsonString(out, detectedUnitVersions[i]);
+  }
+  out += ']';
+
+  out += F(",\"alignment\":");                       appendJsonString(out, alignment);
+  out += F(",\"flapSpeed\":");                       appendJsonString(out, flapSpeed);
+  out += F(",\"deviceMode\":");                      appendJsonString(out, deviceMode);
+  out += F(",\"timezonePosix\":");                   appendJsonString(out, timezonePosixSetting);
+  //Per-device identity (#125): deviceName is the raw EEPROM value ("" =
+  //unset), effectiveDeviceName is what the device actually uses right now.
+  out += F(",\"deviceName\":");                      appendJsonString(out, deviceNameSetting);
+  out += F(",\"effectiveDeviceName\":");             appendJsonString(out, effectiveDeviceName);
+  //MQTT broker config (#57). The password is write-only: never echoed to
+  //the browser; only whether one is stored.
+  out += F(",\"mqttHost\":");                        appendJsonString(out, mqttHostSetting);
+  out += F(",\"mqttPort\":");                        appendJsonString(out, mqttPortSetting);
+  out += F(",\"mqttUser\":");                        appendJsonString(out, mqttUserSetting);
+  out += F(",\"mqttPasswordSet\":");                 out += (mqttPasswordSetting.length() ? F("true") : F("false"));
+  out += F(",\"mqttConnected\":");                   out += (mqttIsConnected() ? F("true") : F("false"));
+  out += F(",\"version\":");                         appendJsonString(out, String(espVersion));
+  //OTA failure diagnostics (#52). These fields let a remote flasher tell a
+  //genuine revert apart from a same-version false-alarm. `sketchMd5` is the
+  //MD5 of the running sketch as read from flash (via ESP.getSketchMD5(),
+  //cached by core on first call) — unambiguous identity check independent
+  //of GIT_REV strings, added in #53.
+  out += F(",\"sketchMd5\":");                       appendJsonString(out, ESP.getSketchMD5());
+  out += F(",\"lastFlashResult\":");                 appendJsonString(out, lastFlashResult);
+  out += F(",\"intendedVersion\":");                 appendJsonString(out, intendedVersionEeprom);
+  out += F(",\"otaReverted\":");                     out += (otaReverted ? F("true") : F("false"));
+  out += F(",\"lastResetReason\":");                 appendJsonString(out, lastResetReason);
+  out += F(",\"bootCounter\":");                     out += String(readBootStateRtc().bootCounter);
+  out += F(",\"recoveryMode\":");                    out += (isRecoveryMode ? F("true") : F("false"));
+  //True when the running image's flash-size header exceeds the physical
+  //chip — the state where Update.begin() rejects every OTA (#92/#94).
+  out += F(",\"flashConfigMismatch\":");             out += (ESP.getFlashChipRealSize() < ESP.getFlashChipSize() ? F("true") : F("false"));
+  out += F(",\"lastTimeReceivedMessageDateTime\":"); appendJsonString(out, lastReceivedMessageDateTime);
+  out += F(",\"lastWrittenText\":");                 appendJsonString(out, lastWrittenText);
+
+  out += F(",\"otaEnabled\":false");
+  out += F(",\"isInOtaMode\":");                    out += (isOtaMode ? F("true") : F("false"));
+
+  out += F(",\"wifiSettingsResettable\":true");
+
+  out += '}';
+  return out;
+}

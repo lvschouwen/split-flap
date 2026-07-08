@@ -179,6 +179,35 @@ static void test_single_unit_display_width() {
   TEST_ASSERT_EQUAL_STRING("X", centerString(String("X")).c_str());
 }
 
+// appendJsonString — the hand-rolled /settings JSON escaper, natively
+// testable since the #174 move into HelpersStringHandling.ino.
+
+static void test_appendJsonString_plain_text_quoted() {
+  String out;
+  appendJsonString(out, String("hello"));
+  TEST_ASSERT_EQUAL_STRING("\"hello\"", out.c_str());
+}
+
+static void test_appendJsonString_escapes_specials() {
+  String out;
+  appendJsonString(out, String("a\"b\\c\nd\te"));
+  TEST_ASSERT_EQUAL_STRING("\"a\\\"b\\\\c\\nd\\te\"", out.c_str());
+}
+
+static void test_appendJsonString_control_chars_as_unicode() {
+  String out;
+  String in;
+  in += (char)0x01;
+  appendJsonString(out, in);
+  TEST_ASSERT_EQUAL_STRING("\"\\u0001\"", out.c_str());
+}
+
+static void test_appendJsonString_appends_after_existing() {
+  String out = "{\"k\":";
+  appendJsonString(out, String("v"));
+  TEST_ASSERT_EQUAL_STRING("{\"k\":\"v\"", out.c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_isNumber_accepts_positive_integer);
@@ -204,5 +233,9 @@ int main(int, char**) {
   RUN_TEST(test_processSentenceToLines_wraps_at_display_width);
   RUN_TEST(test_processSentenceToLines_hyphenates_at_display_width);
   RUN_TEST(test_single_unit_display_width);
+  RUN_TEST(test_appendJsonString_plain_text_quoted);
+  RUN_TEST(test_appendJsonString_escapes_specials);
+  RUN_TEST(test_appendJsonString_control_chars_as_unicode);
+  RUN_TEST(test_appendJsonString_appends_after_existing);
   return UNITY_END();
 }

@@ -236,3 +236,62 @@ bool isNumber(String str) {
   //Check if the conversion reached the end of the string
   return (*endPtr == '\0');
 }
+// --- moved from ESPMaster.ino (#174): JSON/date/timezone helpers ---
+// Living here makes them part of the natively-tested translation unit
+// (test_string_handling includes this file); <time.h> is explicit so the
+// file stays compilable standalone in the native env.
+#include <time.h>
+
+//Appends a JSON-encoded string literal (including the surrounding quotes)
+//to `out`. Handles the escape sequences that can legitimately appear in
+//user-provided text (quotes, backslashes, control chars). Good enough for
+//the fixed shape of /settings — ArduinoJson would be overkill given we only
+//serialize, never parse.
+static void appendJsonString(String& out, const String& value) {
+  out += '"';
+  for (unsigned int i = 0; i < value.length(); i++) {
+    char c = value[i];
+    switch (c) {
+      case '"':  out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\b': out += "\\b";  break;
+      case '\f': out += "\\f";  break;
+      case '\n': out += "\\n";  break;
+      case '\r': out += "\\r";  break;
+      case '\t': out += "\\t";  break;
+      default:
+        if ((unsigned char)c < 0x20) {
+          char buf[8];
+          snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+          out += buf;
+        } else {
+          out += c;
+        }
+    }
+  }
+  out += '"';
+}
+
+//Format the current local time via strftime. Replaces ezTime's
+//timezone.dateTime(fmt); format tokens are the standard strftime ones.
+String formatDateTime(const char* fmt) {
+  time_t nowSec = time(nullptr);
+  struct tm tmInfo;
+  localtime_r(&nowSec, &tmInfo);
+  char buf[64];
+  strftime(buf, sizeof(buf), fmt, &tmInfo);
+  return String(buf);
+}
+
+//Returns the current UTC offset in minutes (east of UTC is positive).
+//Matches what ezTime's Timezone::getOffset() used to return — the JS
+//frontend multiplies this by 60000 to get a millisecond offset.
+long getTimezoneOffsetMinutes() {
+  time_t nowSec = time(nullptr);
+  struct tm utcTm;
+  gmtime_r(&nowSec, &utcTm);
+  //Treat the UTC-broken-down time as if it were local; the delta from the
+  //real epoch is the local offset.
+  time_t asLocal = mktime(&utcTm);
+  return (long)((nowSec - asLocal) / 60);
+}

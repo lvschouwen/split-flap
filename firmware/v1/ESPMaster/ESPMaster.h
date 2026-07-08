@@ -34,6 +34,16 @@ void enterRecoveryMode();
 void enterOtaMode();
 void resolveDeviceIdentity();
 
+// Movers from the #174 trim. getCurrentSettingValues() now lives in
+// ServiceFileSystemFunctions.ino but is called from ESPMaster.ino (loop)
+// and ServiceBootModes.ino (/settings in quiet-OTA mode) — both EARLIER in
+// the concat order. The date/timezone helpers live in
+// HelpersStringHandling.ino (natively tested); ESPMaster.ino's clock mode
+// calls formatDateTime() before that definition appears.
+String getCurrentSettingValues();     // ServiceFileSystemFunctions.ino
+String formatDateTime(const char* fmt); // HelpersStringHandling.ino
+long getTimezoneOffsetMinutes();      // HelpersStringHandling.ino
+
 // Defined in ServiceFlapFunctions.ino; called from the /unit/reboot endpoint
 // handler registered in ServiceWebEndpoints.ino (later in the concat order).
 int rebootUnitToBootloader(int i2cAddress);
