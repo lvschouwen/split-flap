@@ -22,6 +22,7 @@ import subprocess
 ASSETS = [
     ("index.html", "INDEX_HTML", True),
     ("script.js",  "SCRIPT_JS",  True),
+    ("md5.js",     "MD5_JS",     True),
     ("style.css",  "STYLE_CSS",  True),
     ("favicon.png","FAVICON_PNG",False),
 ]

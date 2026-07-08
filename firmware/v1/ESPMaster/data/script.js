@@ -807,6 +807,17 @@ function renderUnitHealth(data) {
 	setUnitHealthSummary(summary, faulty > 0 ? "error" : "success");
 }
 
+//Derive "&v=<rev>" for /firmware/master from a build-stamped filename
+//(firmware-<rev>[-dirty]-<size>.bin, see build_assets.py). The rev feeds
+//the boot-time silent-revert check (intendedVersion, #52); a renamed file
+//just skips the param — same behaviour as before #160.
+//KEEP IN SYNC: the same regex is inlined in ServiceBootModes.ino's
+//MINIMAL_UPLOAD_FORM (the recovery/quiet-OTA pages can't load this file).
+function firmwareVersionParam(fileName) {
+	var match = fileName.match(/^firmware-([0-9a-f]{7,40}(?:-dirty)?)(?:-[0-9]+m[0-9]*m?)?\.bin$/i);
+	return match ? "&v=" + encodeURIComponent(match[1]) : "";
+}
+
 //Master firmware OTA: streams a .bin upload to /firmware/master, which
 //flashes the ESP itself via the Update class and reboots.
 function initMasterFirmwareUpload() {
@@ -834,31 +845,47 @@ function initMasterFirmwareUpload() {
 		fileInput.disabled = true;
 		status.className = "firmware-status pending";
 		status.classList.remove("hidden");
-		status.textContent = "Uploading master firmware…";
+		status.textContent = "Computing MD5…";
 
-		var formData = new FormData();
-		formData.append("firmware", file);
-
-		var xhr = new XMLHttpRequest();
-		xhr.open("POST", "/firmware/master");
-		xhr.onreadystatechange = function () {
-			if (xhr.readyState !== 4) return;
-
+		//?md5= is mandatory on /firmware/master (#144): hash the image
+		//client-side (SparkMD5, md5.js) so the handler can verify the
+		//upload arrived intact before committing it (#160).
+		var reader = new FileReader();
+		reader.onerror = function () {
 			submitButton.disabled = false;
 			fileInput.disabled = false;
-
-			if (xhr.status === 200) {
-				status.className = "firmware-status success";
-				status.textContent = "✔ " + xhr.responseText + " The master will be offline ~15 s while rebooting.";
-			} else if (xhr.status === 0) {
-				status.className = "firmware-status error";
-				status.textContent = "✘ Upload failed — lost connection to master.";
-			} else {
-				status.className = "firmware-status error";
-				status.textContent = "✘ HTTP " + xhr.status + ": " + xhr.responseText;
-			}
+			status.className = "firmware-status error";
+			status.textContent = "✘ Could not read the selected file.";
 		};
-		xhr.send(formData);
+		reader.onload = function () {
+			var md5 = SparkMD5.ArrayBuffer.hash(reader.result);
+			status.textContent = "Uploading master firmware…";
+
+			var formData = new FormData();
+			formData.append("firmware", file);
+
+			var xhr = new XMLHttpRequest();
+			xhr.open("POST", "/firmware/master?md5=" + md5 + firmwareVersionParam(file.name));
+			xhr.onreadystatechange = function () {
+				if (xhr.readyState !== 4) return;
+
+				submitButton.disabled = false;
+				fileInput.disabled = false;
+
+				if (xhr.status === 200) {
+					status.className = "firmware-status success";
+					status.textContent = "✔ " + xhr.responseText + " The master will be offline ~15 s while rebooting.";
+				} else if (xhr.status === 0) {
+					status.className = "firmware-status error";
+					status.textContent = "✘ Upload failed — lost connection to master.";
+				} else {
+					status.className = "firmware-status error";
+					status.textContent = "✘ HTTP " + xhr.status + ": " + xhr.responseText;
+				}
+			};
+			xhr.send(formData);
+		};
+		reader.readAsArrayBuffer(file);
 	});
 }
 

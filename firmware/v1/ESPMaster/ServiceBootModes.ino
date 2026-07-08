@@ -11,6 +11,17 @@
 //In recovery mode we skip the I2C unit-reboot hook since the bus may be
 //unreachable — that's precisely why the device is in recovery.
 void registerMasterFirmwareEndpoint() {
+  //MD5 helper (SparkMD5, data/md5.js) registered alongside the upload
+  //endpoint so every environment that can flash can also hash (#160):
+  //?md5= is mandatory (#144) and browsers have no native MD5.
+  webServer.on("/md5.js", HTTP_GET, [](AsyncWebServerRequest * request) {
+    AsyncWebServerResponse *resp = request->beginResponse_P(200, "application/javascript", MD5_JS_GZ, MD5_JS_GZ_LEN);
+    resp->addHeader("Content-Encoding", "gzip");
+    //Same no-cache policy as every PROGMEM asset: an OTA that re-vendors
+    //the library must not leave stale JS in the tab cache.
+    resp->addHeader("Cache-Control", "no-cache");
+    request->send(resp);
+  });
   webServer.on("/firmware/master", HTTP_POST,
     [](AsyncWebServerRequest * request) {
       //Restore TX power on every exit path. Upload handler dropped it for
@@ -216,6 +227,41 @@ void startFallbackSoftAp(const String& apSuffix) {
   SerialPrintln(WiFi.softAPIP().toString());
 }
 
+//Shared upload form for the minimal recovery/quiet-OTA pages. A plain HTML
+//form can't flash any more — ?md5= is mandatory on /firmware/master (#144) —
+//so this snippet hashes the file via /md5.js and uploads with XHR, attaching
+//the digest plus ?v= when the filename carries a build-stamped rev (#160).
+//KEEP IN SYNC: the filename regex duplicates script.js's
+//firmwareVersionParam() (these pages can't load script.js; note the extra
+//C-string escaping: \\. here is \. in the JS).
+static const char MINIMAL_UPLOAD_FORM[] PROGMEM =
+  "<form id='fwForm'>"
+  "<p><input type='file' id='fwFile' accept='.bin' required/></p>"
+  "<p><button type='submit' id='fwBtn'>Flash firmware</button></p>"
+  "<p id='fwStatus'></p>"
+  "</form>"
+  "<script src='/md5.js'></script>"
+  "<script>"
+  "document.getElementById('fwForm').addEventListener('submit',function(e){"
+  "e.preventDefault();"
+  "var fi=document.getElementById('fwFile');var f=fi.files[0];if(!f)return;"
+  "var btn=document.getElementById('fwBtn'),st=document.getElementById('fwStatus');"
+  "btn.disabled=true;fi.disabled=true;st.textContent='Computing MD5...';"
+  "var r=new FileReader();"
+  "r.onerror=function(){btn.disabled=false;fi.disabled=false;st.textContent='Could not read the selected file.';};"
+  "r.onload=function(){"
+  "var m=f.name.match(/^firmware-([0-9a-f]{7,40}(?:-dirty)?)(?:-[0-9]+m[0-9]*m?)?\\.bin$/i);"
+  "var url='/firmware/master?md5='+SparkMD5.ArrayBuffer.hash(r.result)+(m?'&v='+encodeURIComponent(m[1]):'');"
+  "st.textContent='Uploading...';"
+  "var fd=new FormData();fd.append('firmware',f);"
+  "var x=new XMLHttpRequest();x.open('POST',url);"
+  "x.onreadystatechange=function(){if(x.readyState!==4)return;btn.disabled=false;fi.disabled=false;"
+  "st.textContent=x.status===200?x.responseText:"
+  "(x.status===0?'Upload failed - lost connection.':'HTTP '+x.status+': '+x.responseText);};"
+  "x.send(fd);};"
+  "r.readAsArrayBuffer(f);});"
+  "</script>";
+
 //Minimal recovery mode: serves a single upload form and the OTA endpoint.
 //No I2C traffic, no persistence — just enough to let the user reflash a
 //working image without dragging out the USB cable. We first try the
@@ -242,11 +288,9 @@ void enterRecoveryMode() {
       "button{padding:.5em 1em}</style></head><body>"
       "<h1>Split-Flap Recovery</h1>"
       "<p>Device entered recovery after repeated failed boots. "
-      "Upload a known-good <code>firmware.bin</code> to recover.</p>"
-      "<form method='post' action='/firmware/master' enctype='multipart/form-data'>"
-      "<p><input type='file' name='firmware' accept='.bin' required/></p>"
-      "<p><button type='submit'>Flash firmware</button></p>"
-      "</form></body></html>";
+      "Upload a known-good <code>firmware.bin</code> to recover.</p>";
+    html += FPSTR(MINIMAL_UPLOAD_FORM);
+    html += "</body></html>";
     request->send(200, "text/html", html);
   });
   //EEPROM is already up (initialiseFileSystem() runs at the top of setup(),
@@ -282,11 +326,9 @@ void enterOtaMode() {
       "button{padding:.5em 1em}</style></head><body>"
       "<h1>Split-Flap OTA Mode</h1>"
       "<p>Quiet flash environment — no display or unit activity. "
-      "Upload a <code>firmware.bin</code>, or exit to resume normal operation.</p>"
-      "<form method='post' action='/firmware/master' enctype='multipart/form-data'>"
-      "<p><input type='file' name='firmware' accept='.bin' required/></p>"
-      "<p><button type='submit'>Flash firmware</button></p>"
-      "</form>"
+      "Upload a <code>firmware.bin</code>, or exit to resume normal operation.</p>";
+    html += FPSTR(MINIMAL_UPLOAD_FORM);
+    html +=
       "<form method='post' action='/firmware/ota-exit'>"
       "<p><button type='submit'>Exit OTA mode</button></p>"
       "</form></body></html>";
