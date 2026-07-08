@@ -135,9 +135,20 @@ void registerMasterFirmwareEndpoint() {
 
         Update.runAsync(true);
         if (!Update.begin(maxSketchSpace, U_FLASH)) {
-          SerialPrint(F("Update.begin failed: "));
-          SerialPrintln(Update.getErrorString());
-          return;
+          //Usual cause: stale updater state from a previous failed or
+          //aborted upload — begin() refuses re-entry while its _size is
+          //still set, without latching an error (#162). end(false) takes
+          //the premature-end path (which does reset), then retry once so
+          //one bad attempt doesn't poison this one.
+          Update.end(false);
+          Update.clearError();
+          if (!Update.begin(maxSketchSpace, U_FLASH)) {
+            otaRejected = true;
+            otaRejectionStatus = 500;
+            otaRejectionReason = String("Update.begin failed: ") + Update.getErrorString();
+            SerialPrintln(otaRejectionReason);
+            return;
+          }
         }
 
         //MD5 is MANDATORY (#144). eboot's built-in checksum only catches the
@@ -209,6 +220,13 @@ void registerMasterFirmwareEndpoint() {
         } else {
           SerialPrint(F("Update.end failed: "));
           SerialPrintln(Update.getErrorString());
+          //The core's md5-mismatch branch of end() latches the error but
+          //skips _reset(), leaving _size > 0 — the next begin() would then
+          //refuse re-entry and report THIS attempt's error against the
+          //retry (#162). A second end(false) takes the premature-end path,
+          //which resets the size state while leaving the latched error
+          //intact for the completion handler's 500 below.
+          Update.end(false);
         }
       }
     }
