@@ -81,8 +81,17 @@ if [[ -n "$OVERRIDE_VERSION" ]]; then
   GIT_REV="$OVERRIDE_VERSION"
 else
   base=$(basename "$FW")
-  if [[ "$base" =~ ^firmware-([a-f0-9]+(-dirty)?)\.bin$ ]]; then
+  # Stamped names are firmware-<rev>[-dirty][-<size>m].bin — e.g.
+  # firmware-ad246be-1m.bin (#167). The size suffix is env metadata, not
+  # part of the rev.
+  if [[ "$base" =~ ^firmware-([a-f0-9]+(-dirty)?)(-[0-9]+m)?\.bin$ ]]; then
     GIT_REV="${BASH_REMATCH[1]}"
+  else
+    # Without a rev the device records intendedVersion="" and the
+    # otaReverted diagnostic goes blind — say so loudly (#167).
+    echo "WARNING: could not derive git rev from filename '$base';" >&2
+    echo "         ?v= will be omitted and revert detection degrades." >&2
+    echo "         Use a stamped firmware-<rev>[-<size>m].bin or pass -v <rev>." >&2
   fi
 fi
 
