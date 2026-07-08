@@ -3,6 +3,7 @@
 // Opcodes (SFP_CMD_*), I2C address base and alphabet now live in the shared
 // protocol header included by both firmwares — see SplitFlapProtocol.h (#149).
 #include "SplitFlapProtocol.h"
+#include "TwibootProtocol.h"
 
 static int toI2cAddress(int unitIndex) {
   return SFP_I2C_ADDRESS_BASE + unitIndex;
@@ -537,8 +538,8 @@ static bool readUnitVersion(int i2cAddress, char *out) {
 // writes of length != 2, so probing doesn't rotate the drum as a side effect.
 bool isUnitInBootloader(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)0x02);  // CMD_ACCESS_MEMORY
-  Wire.write((uint8_t)0x00);  // MEMTYPE_CHIPINFO
+  Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
+  Wire.write((uint8_t)TWIBOOT_MEMTYPE_CHIPINFO);
   Wire.write((uint8_t)0x00);
   Wire.write((uint8_t)0x00);
   if (Wire.endTransmission(false) != 0) return false;
@@ -551,7 +552,7 @@ bool isUnitInBootloader(int i2cAddress) {
   uint8_t sig1 = Wire.read();
   uint8_t sig2 = Wire.read();
   while (Wire.available()) Wire.read();
-  return (sig0 == 0x1E && sig1 == 0x95 && sig2 == 0x0F);
+  return isAtmega328pSignature(sig0, sig1, sig2);
 }
 
 void probeI2cBus() {

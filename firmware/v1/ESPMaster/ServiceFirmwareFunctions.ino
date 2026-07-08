@@ -17,8 +17,8 @@
 // Twiboot protocol: see the comment in UnitBootloader/main.c around line 150.
 
 #include "WebAssets.h"  // for UNIT_FIRMWARE_BIN / UNIT_FIRMWARE_BIN_LEN
+#include "TwibootProtocol.h"
 
-#define TWIBOOT_PAGE_SIZE       128
 // ATmega328p flash is 32KB. Bootloader sits at 0x7C00; the rest is the app
 // section we're allowed to write. Not currently enforced anywhere now that
 // the only input is our own PROGMEM bundle, but kept for reference.
@@ -59,14 +59,14 @@ static uint8_t twibootAddr = 0;
 
 static int twibootPing() {
   Wire.beginTransmission(twibootAddr);
-  Wire.write((uint8_t)0x00);  // CMD_WAIT — resets twiboot's boot-window countdown
+  Wire.write((uint8_t)TWIBOOT_CMD_WAIT);
   return Wire.endTransmission();
 }
 
 static int twibootExit() {
   Wire.beginTransmission(twibootAddr);
-  Wire.write((uint8_t)0x01);  // CMD_SWITCH_APPLICATION
-  Wire.write((uint8_t)0x80);  // BOOTTYPE_APPLICATION
+  Wire.write((uint8_t)TWIBOOT_CMD_SWITCH_APPLICATION);
+  Wire.write((uint8_t)TWIBOOT_BOOTTYPE_APPLICATION);
   return Wire.endTransmission();
 }
 
@@ -74,8 +74,8 @@ static int twibootExit() {
 // `flashState.errorMsg` on mismatch.
 static bool twibootVerifyChip() {
   Wire.beginTransmission(twibootAddr);
-  Wire.write((uint8_t)0x02);  // CMD_ACCESS_MEMORY
-  Wire.write((uint8_t)0x00);  // MEMTYPE_CHIPINFO
+  Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
+  Wire.write((uint8_t)TWIBOOT_MEMTYPE_CHIPINFO);
   Wire.write((uint8_t)0x00);
   Wire.write((uint8_t)0x00);
   if (Wire.endTransmission(false) != 0) {
@@ -92,7 +92,7 @@ static bool twibootVerifyChip() {
   Wire.read(); Wire.read();  // flash size, unused
   Wire.read(); Wire.read();  // eeprom size, unused
 
-  if (sig0 != 0x1E || sig1 != 0x95 || sig2 != 0x0F) {
+  if (!isAtmega328pSignature(sig0, sig1, sig2)) {
     flashState.errorMsg = String("Unexpected chip signature ") + String(sig0, HEX) + " " +
                     String(sig1, HEX) + " " + String(sig2, HEX);
     return false;
@@ -112,8 +112,8 @@ static bool twibootVerifyChip() {
 // we sent byte-for-byte.
 static bool twibootReadFlashPage(uint16_t flashAddr, uint8_t* out) {
   Wire.beginTransmission(twibootAddr);
-  Wire.write((uint8_t)0x02);  // CMD_ACCESS_MEMORY
-  Wire.write((uint8_t)0x01);  // MEMTYPE_FLASH
+  Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
+  Wire.write((uint8_t)TWIBOOT_MEMTYPE_FLASH);
   Wire.write((uint8_t)((flashAddr >> 8) & 0xFF));
   Wire.write((uint8_t)(flashAddr & 0xFF));
   if (Wire.endTransmission(false) != 0) return false;
@@ -131,8 +131,8 @@ static bool twibootReadFlashPage(uint16_t flashAddr, uint8_t* out) {
 // Writes exactly one page (SPM_PAGESIZE = 128 bytes on ATmega328p).
 static int twibootWriteFlashPage(uint16_t flashAddr, const uint8_t* page) {
   Wire.beginTransmission(twibootAddr);
-  Wire.write((uint8_t)0x02);  // CMD_ACCESS_MEMORY
-  Wire.write((uint8_t)0x01);  // MEMTYPE_FLASH
+  Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
+  Wire.write((uint8_t)TWIBOOT_MEMTYPE_FLASH);
   Wire.write((uint8_t)((flashAddr >> 8) & 0xFF));
   Wire.write((uint8_t)(flashAddr & 0xFF));
   for (int i = 0; i < TWIBOOT_PAGE_SIZE; i++) {
