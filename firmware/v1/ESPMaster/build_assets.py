@@ -56,6 +56,13 @@ def pad_to_page(data: bytes, page: int = 128) -> bytes:
     return data + b"\xFF" * (page - remainder)
 
 
+def compress_asset(data: bytes) -> bytes:
+    # mtime=0 keeps the gzip MTIME header field constant so two bakes of the
+    # same source are byte-identical — WebAssets.h, the firmware bin and its
+    # sketchMd5 must be reproducible per commit (#168).
+    return gzip.compress(data, 9, mtime=0)
+
+
 def emit_array(fh, name: str, data: bytes) -> None:
     fh.write(f"const uint8_t {name}[] PROGMEM = {{\n  ")
     for i, b in enumerate(data):
@@ -180,7 +187,7 @@ def build_header(project_dir: pathlib.Path) -> None:
         for filename, varname, gz in ASSETS:
             data = lines_in[filename]
             if gz:
-                data = gzip.compress(data, 9)
+                data = compress_asset(data)
                 varname = varname + "_GZ"
             emit_array(fh, varname, data)
         emit_array(fh, "UNIT_FIRMWARE_BIN", unit_bin)
@@ -189,7 +196,7 @@ def build_header(project_dir: pathlib.Path) -> None:
     for filename, _, gz in ASSETS:
         data = lines_in[filename]
         if gz:
-            print(f"  {filename:<16} gz {len(data):>5} -> {len(gzip.compress(data, 9)):>5}")
+            print(f"  {filename:<16} gz {len(data):>5} -> {len(compress_asset(data)):>5}")
         else:
             print(f"  {filename:<16} raw {len(data):>5}")
     print(f"  unit-firmware    hex {unit_hex.stat().st_size:>5} -> bin {len(unit_bin):>5}")

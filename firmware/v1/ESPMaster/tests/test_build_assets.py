@@ -167,3 +167,19 @@ def test_verify_js_alphabet_fails_on_drift(tmp_path):
     )
     with pytest.raises(ValueError, match="drift"):
         build_assets.verify_js_alphabet(project)
+
+
+def test_compress_asset_zero_mtime_and_deterministic():
+    # #168: the gzip MTIME header field (bytes 4..8, little-endian) must be
+    # zero so two bakes of the same source are byte-identical — otherwise
+    # WebAssets.h, the firmware bin and sketchMd5 differ on every rebuild.
+    out = build_assets.compress_asset(b"hello split-flap")
+    assert out[4:8] == b"\x00\x00\x00\x00"
+    assert out == build_assets.compress_asset(b"hello split-flap")
+
+
+def test_compress_asset_roundtrips():
+    import gzip
+
+    payload = b"<html>calibration</html>" * 50
+    assert gzip.decompress(build_assets.compress_asset(payload)) == payload
