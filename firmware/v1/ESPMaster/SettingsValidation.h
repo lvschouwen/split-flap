@@ -74,6 +74,14 @@ static inline bool isValidMqttPortValue(const String& trimmed, int slotLen) {
          trimmed.toInt() >= 1 && trimmed.toInt() <= 65535;
 }
 
+// Transient-message dwell in seconds (#176). Empty = caller applies the
+// default. Bounds mirror clampDwellSeconds' [5, 3600] so a validated value
+// is never altered by the clamp.
+static inline bool isValidTransientDwellValue(const String& v) {
+  if (v.length() == 0) return true;
+  return settingsIsNumber(v) && v.toInt() >= 5 && v.toInt() <= 3600;
+}
+
 // MQTT password (#57): printable ASCII (spaces OK), must fit the slot.
 // Write-only semantics live in the caller: an EMPTY submission means "keep
 // the stored password" and is never routed here.

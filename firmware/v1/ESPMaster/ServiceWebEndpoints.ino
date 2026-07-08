@@ -391,14 +391,15 @@ void registerWebEndpoints() {
       bool submissionError = false;
 
       String newAlignmentValue, newDeviceModeValue, newFlapSpeedValue, newInputTextValue, newTimezoneValue, newDeviceNameValue;
-      String newCalibrationTextValue;
+      String newTransientTextValue;
+      long newTransientDwellValue = 0;
       String newMqttHostValue, newMqttPortValue, newMqttUserValue, newMqttPasswordValue;
       //Every field is optional (#128): the tabbed UI saves per card, so a
       //POST carries only the fields of the card that submitted it. A field
       //that wasn't provided must never be applied — otherwise a partial
       //save would blank the rest.
       bool alignmentProvided = false, deviceModeProvided = false, flapSpeedProvided = false, inputTextProvided = false;
-      bool calibrationTextProvided = false;
+      bool transientTextProvided = false, transientDwellProvided = false;
       bool timezoneProvided = false;
       bool deviceNameProvided = false;
       bool mqttHostProvided = false, mqttPortProvided = false, mqttUserProvided = false, mqttPasswordProvided = false;
@@ -454,12 +455,29 @@ void registerWebEndpoints() {
             inputTextProvided = true;
           }
 
-          //HTTP POST transient calibration test pattern (#165). Shown via
-          //the notification show-then-revert state in loop() context —
-          //deviceMode and EEPROM are never touched.
-          if (p->name() == PARAM_CALIBRATION_TEXT) {
-            newCalibrationTextValue = p->value().c_str();
-            calibrationTextProvided = true;
+          //HTTP POST transient text (#165/#176): calibration patterns and
+          //timed messages. Shown via the notification show-then-revert
+          //state in loop() context — deviceMode and EEPROM never touched.
+          if (p->name() == PARAM_TRANSIENT_TEXT) {
+            newTransientTextValue = p->value().c_str();
+            transientTextProvided = true;
+          }
+
+          //Optional dwell for the transient (seconds). Empty/absent -> the
+          //600 s default applied in transientTextStart(). A dwell belongs to
+          //the transientText in the SAME post (each transient submission is a
+          //complete request, replacement semantics) — the cross-check below
+          //rejects a dwell that arrives without text.
+          if (p->name() == PARAM_TRANSIENT_DWELL) {
+            String receivedValue = p->value();
+            receivedValue.trim();
+            if (isValidTransientDwellValue(receivedValue)) {
+              newTransientDwellValue = receivedValue.toInt();
+              transientDwellProvided = true;
+            } else {
+              SerialPrintln("Transient dwell provided was not valid. Value: " + receivedValue);
+              submissionError = true;
+            }
           }
 
           //HTTP POST timezone POSIX TZ string (issue #48).
@@ -542,6 +560,12 @@ void registerWebEndpoints() {
       bool isAjax = request->hasParam("ajax", true);
 
       //If there was an error, report back to check what has been input
+      //A dwell belongs to a transientText in the same post — accepting a
+      //text-less dwell and silently dropping it would report a false ok.
+      if (transientDwellProvided && !transientTextProvided) {
+        SerialPrintln(F("Transient dwell provided without transient text."));
+        submissionError = true;
+      }
       if (submissionError) {
         SerialPrintln(F("Finished Processing Request with Error"));
         if (isAjax) request->send(400, "text/plain", F("invalid"));
@@ -568,7 +592,7 @@ void registerWebEndpoints() {
         if (flapSpeedProvided)    { pendingSettingsPost.flapSpeed    = newFlapSpeedValue;    pendingSettingsPost.flapSpeedProvided    = true; }
         if (deviceModeProvided)   { pendingSettingsPost.deviceMode   = newDeviceModeValue;   pendingSettingsPost.deviceModeProvided   = true; }
         if (inputTextProvided)    { pendingSettingsPost.inputText    = newInputTextValue;    pendingSettingsPost.inputTextProvided    = true; }
-        if (calibrationTextProvided) { pendingSettingsPost.calibrationText = newCalibrationTextValue; pendingSettingsPost.calibrationTextProvided = true; }
+        if (transientTextProvided) { pendingSettingsPost.transientText = newTransientTextValue; pendingSettingsPost.transientDwell = newTransientDwellValue; pendingSettingsPost.transientTextProvided = true; }
         if (timezoneProvided)     { pendingSettingsPost.timezone     = newTimezoneValue;     pendingSettingsPost.timezoneProvided     = true; }
         if (deviceNameProvided)   { pendingSettingsPost.deviceName   = newDeviceNameValue;   pendingSettingsPost.deviceNameProvided   = true; }
         if (mqttHostProvided)     { pendingSettingsPost.mqttHost     = newMqttHostValue;     pendingSettingsPost.mqttHostProvided     = true; }

@@ -116,27 +116,37 @@ static void test_notification_start_clamps_dwell() {
   TEST_ASSERT_TRUE(notificationTick(n, 3599999UL));   // 3600 s - 1 ms
   TEST_ASSERT_FALSE(notificationTick(n, 3600000UL));
 }
-static void test_calibration_text_owns_display_for_its_dwell() {
-  // #165: the calibration test pattern rides the same show-then-revert
-  // state — persisted device mode untouched, display reverts on expiry.
+static void test_transient_text_owns_display_for_requested_dwell() {
+  // #165/#176: web transients (calibration pattern, timed messages) ride
+  // the show-then-revert state — persisted mode untouched, auto-revert.
   MqttNotification n;
-  calibrationTextStart(n, String("AAAAA"), 10000UL);
+  transientTextStart(n, String("AAAAA"), 300, 10000UL);
   TEST_ASSERT_TRUE(notificationTick(n, 10000UL));
   TEST_ASSERT_EQUAL_STRING("AAAAA", n.text.c_str());
-  TEST_ASSERT_TRUE(notificationTick(n, 10000UL + CALIBRATION_TEXT_DWELL_SECONDS * 1000UL - 1));
-  TEST_ASSERT_FALSE(notificationTick(n, 10000UL + CALIBRATION_TEXT_DWELL_SECONDS * 1000UL));
+  TEST_ASSERT_TRUE(notificationTick(n, 10000UL + 300 * 1000UL - 1));
+  TEST_ASSERT_FALSE(notificationTick(n, 10000UL + 300 * 1000UL));
 }
-static void test_calibration_text_dwell_within_notification_clamp() {
-  // notificationStart clamps to [5, 3600] — the calibration dwell must sit
-  // inside that window or the deadline silently shrinks/grows.
-  TEST_ASSERT_EQUAL_INT32(CALIBRATION_TEXT_DWELL_SECONDS,
-                          clampDwellSeconds(CALIBRATION_TEXT_DWELL_SECONDS));
+static void test_transient_text_nonpositive_dwell_uses_default() {
+  // Dwell <= 0 = "not provided" — the 600 s default applies.
+  long values[] = {0, -5};
+  for (int i = 0; i < 2; i++) {
+    MqttNotification n;
+    transientTextStart(n, String("AAAAA"), values[i], 10000UL);
+    TEST_ASSERT_TRUE(notificationTick(n, 10000UL + TRANSIENT_TEXT_DEFAULT_DWELL_SECONDS * 1000UL - 1));
+    TEST_ASSERT_FALSE(notificationTick(n, 10000UL + TRANSIENT_TEXT_DEFAULT_DWELL_SECONDS * 1000UL));
+  }
 }
-static void test_calibration_text_cancelled_by_mode_change() {
+static void test_transient_default_dwell_within_notification_clamp() {
+  // notificationStart clamps to [5, 3600] — the default must sit inside
+  // that window or the deadline silently shrinks/grows.
+  TEST_ASSERT_EQUAL_INT32(TRANSIENT_TEXT_DEFAULT_DWELL_SECONDS,
+                          clampDwellSeconds(TRANSIENT_TEXT_DEFAULT_DWELL_SECONDS));
+}
+static void test_transient_text_cancelled_by_mode_change() {
   // Same cancel semantics as an MQTT notification (#130): an explicit mode
-  // change trumps the calibration pattern.
+  // change trumps the transient.
   MqttNotification n;
-  calibrationTextStart(n, String("AAAAA"), 0UL);
+  transientTextStart(n, String("AAAAA"), 300, 0UL);
   notificationCancel(n);
   TEST_ASSERT_FALSE(notificationTick(n, 1UL));
 }
@@ -438,9 +448,10 @@ int main(int, char**) {
   RUN_TEST(test_notification_expires_at_deadline);
   RUN_TEST(test_notification_replacement_resets_deadline);
   RUN_TEST(test_notification_start_clamps_dwell);
-  RUN_TEST(test_calibration_text_owns_display_for_its_dwell);
-  RUN_TEST(test_calibration_text_dwell_within_notification_clamp);
-  RUN_TEST(test_calibration_text_cancelled_by_mode_change);
+  RUN_TEST(test_transient_text_owns_display_for_requested_dwell);
+  RUN_TEST(test_transient_text_nonpositive_dwell_uses_default);
+  RUN_TEST(test_transient_default_dwell_within_notification_clamp);
+  RUN_TEST(test_transient_text_cancelled_by_mode_change);
   RUN_TEST(test_notification_survives_millis_wraparound);
   RUN_TEST(test_mqttTopic_builds_expected_paths);
   RUN_TEST(test_telemetry_payload_exact_shape);

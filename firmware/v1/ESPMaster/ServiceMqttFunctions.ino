@@ -515,12 +515,12 @@ bool mqttNotificationTick() {
   return true;
 }
 
-//Calibration "Send to all" (#165): show a transient test pattern through the
-//same show-then-revert state instead of persistently flipping the device to
-//text mode. Loop() context only — applyPendingSettingsPost() calls it while
-//draining a POST; mqttNotification is loop-owned state.
-void showCalibrationText(const String& text) {
-  calibrationTextStart(mqttNotification, text, millis());
+//Web transient text (#165/#176): calibration patterns and timed messages
+//ride the show-then-revert state instead of persisting a mode change.
+//Loop() context only — applyPendingSettingsPost() calls it while draining
+//a POST; mqttNotification is loop-owned state. dwellSeconds <= 0 -> default.
+void showTransientText(const String& text, long dwellSeconds) {
+  transientTextStart(mqttNotification, text, dwellSeconds, millis());
 }
 
 //Upload started (#116 freeze): force-close the MQTT TCP session NOW so

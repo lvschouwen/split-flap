@@ -116,15 +116,16 @@ inline void notificationCancel(MqttNotification& n) {
   n.text = "";
 }
 
-// Calibration test pattern (#165): the maintenance tab's "Send to all"
-// rides the same show-then-revert state instead of posting deviceMode=text,
+// Web transient text (#165/#176): calibration patterns and timed messages
+// ride the same show-then-revert state instead of persisting a mode change,
 // so a clock display resumes clocking by itself and nothing hits EEPROM.
-// 10 minutes covers a full expect/reality/apply calibration round; an
-// explicit mode change (web UI or HA) cancels it early via the #130 path.
-#define CALIBRATION_TEXT_DWELL_SECONDS 600L
+// dwellSeconds <= 0 means "not provided" -> the 600 s default (a full
+// calibration expect/reality/apply round). An explicit mode change (web UI
+// or HA) cancels early via the #130 path.
+#define TRANSIENT_TEXT_DEFAULT_DWELL_SECONDS 600L
 
-inline void calibrationTextStart(MqttNotification& n, const String& text, uint32_t nowMs) {
-  notificationStart(n, text, CALIBRATION_TEXT_DWELL_SECONDS, nowMs);
+inline void transientTextStart(MqttNotification& n, const String& text, long dwellSeconds, uint32_t nowMs) {
+  notificationStart(n, text, dwellSeconds > 0 ? dwellSeconds : TRANSIENT_TEXT_DEFAULT_DWELL_SECONDS, nowMs);
 }
 
 // millis()-wraparound-safe via signed difference of fixed-width unsigned.

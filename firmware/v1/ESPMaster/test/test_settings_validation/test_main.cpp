@@ -140,8 +140,31 @@ static void test_mqtt_password_rejects_controls_and_overflow() {
   TEST_ASSERT_FALSE(isValidMqttPasswordValue(tooLong, LEN_MQTT_PASSWORD));
 }
 
+// ---- transient dwell (#176) ----
+
+static void test_transient_dwell_accepts_empty_and_valid_range() {
+  // Empty = caller applies the 600 s default.
+  TEST_ASSERT_TRUE(isValidTransientDwellValue(String("")));
+  TEST_ASSERT_TRUE(isValidTransientDwellValue(String("5")));
+  TEST_ASSERT_TRUE(isValidTransientDwellValue(String("600")));
+  TEST_ASSERT_TRUE(isValidTransientDwellValue(String("3600")));
+}
+
+static void test_transient_dwell_rejects_out_of_range_and_garbage() {
+  // Bounds mirror clampDwellSeconds' [5, 3600] so what validates is what
+  // runs — a value the clamp would alter is rejected instead.
+  TEST_ASSERT_FALSE(isValidTransientDwellValue(String("4")));
+  TEST_ASSERT_FALSE(isValidTransientDwellValue(String("0")));
+  TEST_ASSERT_FALSE(isValidTransientDwellValue(String("-60")));
+  TEST_ASSERT_FALSE(isValidTransientDwellValue(String("3601")));
+  TEST_ASSERT_FALSE(isValidTransientDwellValue(String("abc")));
+  TEST_ASSERT_FALSE(isValidTransientDwellValue(String("60s")));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_transient_dwell_accepts_empty_and_valid_range);
+  RUN_TEST(test_transient_dwell_rejects_out_of_range_and_garbage);
   RUN_TEST(test_alignment_accepts_the_three_modes);
   RUN_TEST(test_alignment_rejects_case_empty_and_unknown);
   RUN_TEST(test_device_mode_accepts_text_and_clock);

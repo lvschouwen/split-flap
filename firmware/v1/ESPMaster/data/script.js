@@ -1126,7 +1126,7 @@ function sendCalibrationLetter() {
 	for (var i = 0; i < unitCount; i++) padded += letter;
 
 	var form = new FormData();
-	form.append("calibrationText", padded);
+	form.append("transientText", padded);
 
 	var xhr = new XMLHttpRequest();
 	xhr.open("POST", "/");

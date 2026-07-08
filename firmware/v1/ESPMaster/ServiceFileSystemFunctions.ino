@@ -287,13 +287,14 @@ void applyPendingSettingsPost() {
     cancelActiveNotification();
   }
 
-  //Transient calibration test pattern (#165): owns the display for its
-  //dwell via the notification show-then-revert state, then the normal mode
-  //content re-flaps by itself. Nothing is persisted — a clock display
-  //stays a clock display.
-  if (pendingSettingsPost.calibrationTextProvided) {
-    showCalibrationText(pendingSettingsPost.calibrationText);
-    SerialPrintln("Calibration test pattern (transient): " + pendingSettingsPost.calibrationText);
+  //Transient text (#165/#176): calibration patterns and timed messages own
+  //the display for their dwell via the notification show-then-revert state,
+  //then the normal mode content re-flaps by itself. Nothing is persisted —
+  //a clock display stays a clock display.
+  if (pendingSettingsPost.transientTextProvided) {
+    showTransientText(pendingSettingsPost.transientText, pendingSettingsPost.transientDwell);
+    //Dwell 0 = "not provided" -> showTransientText applies the 600 s default.
+    SerialPrintln("Transient text (dwell " + (pendingSettingsPost.transientDwell > 0 ? String(pendingSettingsPost.transientDwell) + " s" : String("default")) + "): " + pendingSettingsPost.transientText);
   }
 
   //Reset for the next post; release the staged String heap while at it
@@ -302,7 +303,7 @@ void applyPendingSettingsPost() {
   pendingSettingsPost.flapSpeedProvided    = false; pendingSettingsPost.flapSpeed    = String();
   pendingSettingsPost.deviceModeProvided   = false; pendingSettingsPost.deviceMode   = String();
   pendingSettingsPost.inputTextProvided    = false; pendingSettingsPost.inputText    = String();
-  pendingSettingsPost.calibrationTextProvided = false; pendingSettingsPost.calibrationText = String();
+  pendingSettingsPost.transientTextProvided = false; pendingSettingsPost.transientText = String(); pendingSettingsPost.transientDwell = 0;
   pendingSettingsPost.timezoneProvided     = false; pendingSettingsPost.timezone     = String();
   pendingSettingsPost.deviceNameProvided   = false; pendingSettingsPost.deviceName   = String();
   pendingSettingsPost.mqttHostProvided     = false; pendingSettingsPost.mqttHost     = String();
