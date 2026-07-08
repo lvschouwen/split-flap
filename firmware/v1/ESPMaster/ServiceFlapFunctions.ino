@@ -23,26 +23,38 @@ int rebootUnitToBootloader(int i2cAddress) {
   return Wire.endTransmission();
 }
 
-//Interactive calibration helpers (issue #32). All four talk to opcodes that
-//only post-#28 firmware understands; older units silently drop the write
-//(opcode namespace is reserved) but return their 1-byte status on read, so
-//readUnitOffset() flags that as failure via `got != 2`.
+//Delay between an opcode write and the read-back clocking, so the slave's
+//receiveEvent ISR has time to flip its pending*Response flag.
+#define UNIT_RESPONSE_SETTLE_MS 2
+
+//Shared opcode-write-then-read-back transaction behind every readUnit*
+//helper (#154): write the opcode, settle, clock `n` bytes into `buf`.
+//Old firmware that predates an opcode silently drops the write (the opcode
+//namespace is reserved) but answers reads with its 1-byte rotation status,
+//so a short reply means "unsupported" — drain the RX buffer and fail.
+//`buf` holds all `n` bytes only on success.
+static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf, uint8_t n) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write(opcode);
+  if (Wire.endTransmission() != 0) return false;
+  delay(UNIT_RESPONSE_SETTLE_MS);
+  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
+  if (got != n) {
+    while (Wire.available()) Wire.read();
+    return false;
+  }
+  for (uint8_t i = 0; i < n; i++) buf[i] = Wire.read();
+  return true;
+}
+
+//Interactive calibration helpers (issue #32).
 
 //Reads the unit's current calOffset (int16 LE). Returns true on success;
 //out is untouched on failure.
 bool readUnitOffset(int i2cAddress, int16_t &out) {
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_GET_OFFSET);
-  if (Wire.endTransmission() != 0) return false;
-  delay(2);  //give the slave time to flip pendingOffsetResponse before clocking
-  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)2);
-  if (got != 2) {
-    while (Wire.available()) Wire.read();
-    return false;
-  }
-  uint8_t lo = Wire.read();
-  uint8_t hi = Wire.read();
-  out = (int16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+  uint8_t buf[2];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_OFFSET, buf, 2)) return false;
+  out = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
   return true;
 }
 
@@ -123,17 +135,8 @@ int broadcastHome() {
 //Returns true on success. Short replies (old firmware predating this
 //opcode) or Wire failures return false without touching `out`.
 bool readUnitStatus(int i2cAddress, UnitStatus& out) {
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_GET_STATUS);
-  if (Wire.endTransmission() != 0) return false;
-  delay(2);  //give the slave time to flip pendingStatusResponse before clocking
-  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)8);
-  if (got != 8) {
-    while (Wire.available()) Wire.read();
-    return false;
-  }
   uint8_t buf[8];
-  for (uint8_t i = 0; i < 8; i++) buf[i] = Wire.read();
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_STATUS, buf, 8)) return false;
   out.flags                 = buf[0];
   out.mcusrAtBoot           = buf[1];
   out.lifetimeBrownoutCount = buf[2];
@@ -217,19 +220,10 @@ void pollUnitHealth() {
 //old firmware replies with the 1-byte status fallback, so `got != 2` (or a
 //failed complement check) returns false and `out` is untouched.
 bool readUnitDisplayedLetter(int i2cAddress, int &out) {
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_GET_LETTER);
-  if (Wire.endTransmission() != 0) return false;
-  delay(2);  //give the slave time to flip pendingLetterResponse before clocking
-  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)2);
-  if (got != 2) {
-    while (Wire.available()) Wire.read();
-    return false;
-  }
-  uint8_t value = Wire.read();
-  uint8_t complement = Wire.read();
-  if (!letterReadbackValid(value, complement, FLAP_AMOUNT)) return false;
-  out = value;
+  uint8_t buf[2];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_LETTER, buf, 2)) return false;
+  if (!letterReadbackValid(buf[0], buf[1], FLAP_AMOUNT)) return false;
+  out = buf[0];
   return true;
 }
 
@@ -518,18 +512,8 @@ char detectedUnitVersions[UNITS_AMOUNT][9];
 // the 1-byte rotation status, so `got != 8` — we flag that as "unknown".
 static bool readUnitVersion(int i2cAddress, char *out) {
   out[0] = '\0';
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_GET_VERSION);
-  if (Wire.endTransmission() != 0) return false;
-  // Give the slave a moment to flip its pending-version flag before we clock.
-  delay(2);
-  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)8);
-  if (got != 8) {
-    while (Wire.available()) Wire.read();
-    return false;
-  }
   uint8_t buf[8];
-  for (uint8_t i = 0; i < 8; i++) buf[i] = Wire.read();
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VERSION, buf, 8)) return false;
   // Copy to out, stopping at first null; reject if any non-printable non-null.
   // Also reject the two JSON-structural characters (" and \): this string is
   // emitted raw into the unit-health JSON (#140) served over HTTP and MQTT, so
