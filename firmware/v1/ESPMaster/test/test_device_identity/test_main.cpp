@@ -95,7 +95,7 @@ static void test_resolve_falls_back_when_slot_empty() {
 static void test_resolve_falls_back_when_eeprom_invalid() {
   // Bad magic / pre-migration blob: whatever the slot bytes decode to must
   // be ignored -> chip-id default. This is the recovery-mode-before-
-  // initialiseFileSystem() safety property.
+  // initialiseSettings() safety property.
   String got = resolveDeviceName(false, String("kitchen"), "split-flap", 0x9a3c1fUL);
   TEST_ASSERT_EQUAL_STRING("split-flap-9a3c1f", got.c_str());
 }

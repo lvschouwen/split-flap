@@ -180,7 +180,7 @@ static void test_intended_version_empty_after_zero_fill_migration() {
   for (int i = 0; i < LEN_INTENDED_VERSION; i++) {
     g_eepromStorage[OFF_INTENDED_VERSION + i] = 0xFF;
   }
-  // Apply the migration step as it's written in ServiceFileSystemFunctions.ino.
+  // Apply the migration step as it's written in ServiceSettingsFunctions.ino.
   writeSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION, String(""));
   TEST_ASSERT_EQUAL_STRING("", readSettingString(OFF_INTENDED_VERSION, LEN_INTENDED_VERSION).c_str());
 }

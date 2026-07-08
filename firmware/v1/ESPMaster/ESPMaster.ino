@@ -470,7 +470,7 @@ void setup() {
   //slot; its result feeds each mode's AP SSID and initWiFi()'s hostname.
   //Deliberately AFTER the RTC counter increment above so a crash in here
   //still counts toward the recovery threshold.
-  initialiseFileSystem();
+  initialiseSettings();
   resolveDeviceIdentity();
 
   //User-requested quiet OTA mode (#117). One-shot: clear the flag (and the
@@ -533,7 +533,7 @@ void setup() {
     //Load persisted settings first so the runtime timezone (if set via
     //the web UI) takes effect on this boot's configTime() call. Issue #48.
     //(EEPROM itself came up at the top of setup().)
-    loadValuesFromFileSystem();
+    loadSettings();
 
     //Flash-outcome cookie check (#53/#118). If the OTA handler stashed a
     //cookie in RTC, resolveFlashVerdict() decides the outcome according to

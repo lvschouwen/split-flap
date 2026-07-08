@@ -311,7 +311,7 @@ void enterRecoveryMode() {
     html += "</body></html>";
     request->send(200, "text/html", html);
   });
-  //EEPROM is already up (initialiseFileSystem() runs at the top of setup(),
+  //EEPROM is already up (initialiseSettings() runs at the top of setup(),
   //before the recovery dispatch) — required before /firmware/master is
   //served: the upload handler persists intendedVersion and stages
   //lastFlashResult="", and without EEPROM.begin() both silently no-op (#119).
@@ -361,7 +361,7 @@ void enterOtaMode() {
     String json = getCurrentSettingValues();
     request->send(200, "application/json", json);
   });
-  //EEPROM is already up (initialiseFileSystem() runs at the top of setup(),
+  //EEPROM is already up (initialiseSettings() runs at the top of setup(),
   //before the OTA-mode dispatch) — required before /firmware/master is
   //served: the upload handler persists intendedVersion and stages
   //lastFlashResult="" (#119). A quiet-mode flash without EEPROM up used to
@@ -372,7 +372,7 @@ void enterOtaMode() {
 }
 
 //Resolve the per-device network identity (#125). Runs right after
-//initialiseFileSystem() at the top of setup() — before the quiet-OTA/
+//initialiseSettings() at the top of setup() — before the quiet-OTA/
 //recovery dispatch (their SoftAP SSIDs need it) and before initWiFi()
 //(hostname). The blob is already migrated by then, so the magic/version
 //guard is belt-and-suspenders against a corrupt or foreign blob only.

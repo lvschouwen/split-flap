@@ -34,7 +34,7 @@ void resetSettingsToDefaults() {
   EEPROM.commit();
 }
 
-void initialiseFileSystem() {
+void initialiseSettings() {
   EEPROM.begin(SETTINGS_EEPROM_SIZE);
 
   uint32_t magic = readSettingMagic();
@@ -109,7 +109,7 @@ void initialiseFileSystem() {
   SerialPrintln(F("Settings EEPROM ready"));
 }
 
-void loadValuesFromFileSystem() {
+void loadSettings() {
   alignment            = readSettingString(OFF_ALIGNMENT,   LEN_ALIGNMENT);
   flapSpeed            = readSettingString(OFF_FLAPSPEED,   LEN_FLAPSPEED);
   deviceMode           = readSettingString(OFF_DEVICEMODE,  LEN_DEVICEMODE);

@@ -66,7 +66,7 @@ inline String defaultDeviceName(const char* prefix, uint32_t chipId) {
 // Resolution order: stored EEPROM name if the settings blob was readable
 // (magic/version verified by the caller) and the slot holds a valid name;
 // otherwise the chip-id default. eepromValid=false covers the recovery-
-// mode path where the SoftAP comes up before initialiseFileSystem().
+// mode path where the SoftAP comes up before initialiseSettings().
 inline String resolveDeviceName(bool eepromValid, const String& storedName,
                                 const char* prefix, uint32_t chipId) {
   if (eepromValid && isValidDeviceName(storedName)) {

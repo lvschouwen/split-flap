@@ -1,6 +1,6 @@
 // Settings persistence layout on EEPROM.
 //
-// Shared header between ServiceFileSystemFunctions.ino and the host-side
+// Shared header between ServiceSettingsFunctions.ino and the host-side
 // test env. The including TU must already have the global `EEPROM`
 // object (ESP8266 core provides it via <EEPROM.h>; the native test env
 // provides a fake EEPROMClass instance).
@@ -41,7 +41,7 @@
 // Reserved slots keep existing EEPROM blobs (same SETTINGS_VERSION) valid —
 // no migration required when features are removed. When a new slot is
 // carved from a RESERVED region, bump SETTINGS_VERSION and handle the
-// migration in initialiseFileSystem().
+// migration in initialiseSettings().
 
 #pragma once
 
@@ -157,7 +157,7 @@ inline void updateSettingsCrc() {
 
 // --- boot-time blob verdict (#151/#152) -------------------------------------
 
-// What initialiseFileSystem() should do with the blob it found. Pure so the
+// What initialiseSettings() should do with the blob it found. Pure so the
 // decision table is natively testable; the .ino turns the verdict into
 // writes/logging.
 enum SettingsBlobVerdict {
