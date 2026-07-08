@@ -21,8 +21,21 @@ extern int detectedUnitVersionStatus[];
 // 8 chars + null terminator. Empty string when no valid version was returned.
 extern char detectedUnitVersions[][9];
 
+// Boot-mode + identity bring-up moved to ServiceBootModes.ino, and normal-boot
+// web endpoint registration moved to ServiceWebEndpoints.ino (#148). Both files
+// sort AFTER ESPMaster.ino in the alphabetical concat, but setup()/the boot
+// dispatch (in ESPMaster.ino, earlier) call them — so they need forward
+// prototypes here. Signatures are void/String only, so no include-ordering
+// hazard (unlike the RtcBootState helpers, which stayed in ESPMaster.ino).
+void registerWebEndpoints();          // ServiceWebEndpoints.ino
+void registerMasterFirmwareEndpoint(); // ServiceBootModes.ino (shared by main + recovery)
+void startFallbackSoftAp(const String& apSuffix);
+void enterRecoveryMode();
+void enterOtaMode();
+void resolveDeviceIdentity();
+
 // Defined in ServiceFlapFunctions.ino; called from the /unit/reboot endpoint
-// handler registered in ESPMaster.ino (earlier in the concat order).
+// handler registered in ServiceWebEndpoints.ino (later in the concat order).
 int rebootUnitToBootloader(int i2cAddress);
 
 // Interactive calibration helpers (issue #32). Defined in
