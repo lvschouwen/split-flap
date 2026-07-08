@@ -282,16 +282,3 @@ String formatDateTime(const char* fmt) {
   strftime(buf, sizeof(buf), fmt, &tmInfo);
   return String(buf);
 }
-
-//Returns the current UTC offset in minutes (east of UTC is positive).
-//Matches what ezTime's Timezone::getOffset() used to return — the JS
-//frontend multiplies this by 60000 to get a millisecond offset.
-long getTimezoneOffsetMinutes() {
-  time_t nowSec = time(nullptr);
-  struct tm utcTm;
-  gmtime_r(&nowSec, &utcTm);
-  //Treat the UTC-broken-down time as if it were local; the delta from the
-  //real epoch is the local offset.
-  time_t asLocal = mktime(&utcTm);
-  return (long)((nowSec - asLocal) / 60);
-}

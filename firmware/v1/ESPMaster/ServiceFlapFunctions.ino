@@ -27,6 +27,9 @@ int rebootUnitToBootloader(int i2cAddress) {
 //Delay between an opcode write and the read-back clocking, so the slave's
 //receiveEvent ISR has time to flip its pending*Response flag.
 #define UNIT_RESPONSE_SETTLE_MS 2
+//How long waitForDisplayToStop() keeps polling before assuming a unit is
+//physically stuck (status byte pegged at 1) and moving on.
+#define SHOW_STUCK_TIMEOUT_MS 30000UL
 
 //Shared opcode-write-then-read-back transaction behind every readUnit*
 //helper (#154): write the opcode, settle, clock `n` bytes into `buf`.
@@ -368,8 +371,8 @@ void showMessage(String message, int flapSpeed) {
   verifyAndResendLetters(commandedLetters, flapSpeed);
 }
 
-//Waits until no unit reports rotation, with the /stop abort and a 30 s
-//stuck-unit timeout. Returns false when aborted. Extracted from
+//Waits until no unit reports rotation, with the /stop abort and the
+//SHOW_STUCK_TIMEOUT_MS stuck-unit timeout. Returns false when aborted. Extracted from
 //showMessage() — the same loop now runs at entry, exit, and after the
 //verification re-send (issue #106). Log line rate-limited to once per
 //5 s — this used to spam /log at ~10 Hz (issue #35).
@@ -380,8 +383,8 @@ static bool waitForDisplayToStop() {
     if (abortCurrentShow) {
       return false;
     }
-    if (millis() - waitStart > 30000) {
-      SerialPrintln(F("Wait timed out after 30s — assuming a unit is stuck, continuing anyway"));
+    if (millis() - waitStart > SHOW_STUCK_TIMEOUT_MS) {
+      SerialPrintln(F("Display-stop wait timed out — assuming a unit is stuck, continuing anyway"));
       break;
     }
     if (millis() - lastWaitLog > 5000) {
@@ -461,11 +464,9 @@ int writeToUnit(int unitIndex, int letter, int flapSpeed) {
 bool isDisplayMoving() {
   for (int unitIndex = 0; unitIndex < UNITS_AMOUNT; unitIndex++) {
     if (detectedUnitStates[unitIndex] != 1) {
-      displayState[unitIndex] = 0;
       continue;
     }
-    displayState[unitIndex] = checkIfMoving(unitIndex);
-    if (displayState[unitIndex] == 1) {
+    if (checkIfMoving(unitIndex) == 1) {
       //Don't log per-iteration — the caller's rate-limited wait loop
       //already reports "waiting for display to stop" every 5s. This used
       //to fire ~10×/s and drowned out everything else (issue #35).

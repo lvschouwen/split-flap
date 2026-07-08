@@ -196,7 +196,6 @@ const char* espVersion = GIT_REV;
 //Sourced from SFP_ALPHABET so master, unit and script.js can never drift
 //(#149). To change the alphabet, edit SplitFlapProtocol.h, not here.
 const char letters[] = SFP_ALPHABET;
-int displayState[UNITS_AMOUNT];
 //Effective display width in character slots (#123): highest unit index the
 //boot-time I2C probe saw + 1 (a dead unit mid-display keeps its slot).
 //Every text-layout helper targets this instead of the UNITS_AMOUNT ceiling,
@@ -263,8 +262,10 @@ String mqttPasswordSetting = "";
 String lastWrittenText = "";
 String lastReceivedMessageDateTime = "";
 bool alignmentUpdated = false;
-bool isPendingReboot = false;
-bool isPendingUnitsReset = false;
+//Set from async web handlers, drained by loop() — volatile like every other
+//cross-context flag (isPendingStop and isPendingWifiReset likewise, below).
+volatile bool isPendingReboot = false;
+volatile bool isPendingUnitsReset = false;
 bool isWifiConfigured = false;
 
 //Deferred settings apply (#150). The async POST / handler only parses and
@@ -316,7 +317,7 @@ volatile bool abortCurrentShow = false;
 //Deferred /stop tail (#150): the handler flips abortCurrentShow (polled
 //inside showMessage's wait loop, so the abort is immediate) but the
 //broadcast-home I2C transaction and the shared-text clears run from loop().
-bool isPendingStop = false;
+volatile bool isPendingStop = false;
 
 //Recovery mode + boot-loop protection (issue #37). Counter lives in RTC user
 //memory (survives warm restart, cleared on cold power cycle). Every boot
@@ -368,7 +369,7 @@ AsyncWebServer webServer(80);
 //a second (sync) HTTP server in the binary.
 DNSServer       dnsServer;
 AsyncWiFiManager wifiManager(&webServer, &dnsServer);
-bool isPendingWifiReset = false;
+volatile bool isPendingWifiReset = false;
 
 //MQTT broker auto-detect (#129). The async handler only arms the flag —
 //MDNS.queryService() blocks ~1 s per query (up to ~2 s when the fallback

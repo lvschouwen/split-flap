@@ -6,6 +6,24 @@
 // they precede this file in concat order, so calls below resolve fine.
 // Prototypes for the functions here live in ESPMaster.h (called from setup()).
 
+//Serves a gzipped PROGMEM asset (#159). Shared by every static-asset route
+//here and in ServiceWebEndpoints.ino. Cache policy: PROGMEM assets only
+//change via a master OTA, so the browser must revalidate every navigation
+//or an OTA that swaps the UI would leave stale HTML/JS in the tab cache.
+void serveGzipAsset(AsyncWebServerRequest* request, const char* contentType,
+                    const uint8_t* asset, size_t assetLen) {
+  AsyncWebServerResponse *resp = request->beginResponse_P(200, contentType, asset, assetLen);
+  resp->addHeader("Content-Encoding", "gzip");
+  resp->addHeader("Cache-Control", "no-cache");
+  request->send(resp);
+}
+
+//True when the running image's flash-size header claims more than the
+//physical chip — the state where Update.begin() rejects every OTA (#92/#94).
+bool flashConfigMismatch() {
+  return ESP.getFlashChipRealSize() < ESP.getFlashChipSize();
+}
+
 //Registers POST /firmware/master. Shared between main mode and recovery mode
 //so the upload path (MD5 verify, size check, gated reboot) is identical.
 //In recovery mode we skip the I2C unit-reboot hook since the bus may be
@@ -15,12 +33,7 @@ void registerMasterFirmwareEndpoint() {
   //endpoint so every environment that can flash can also hash (#160):
   //?md5= is mandatory (#144) and browsers have no native MD5.
   webServer.on("/md5.js", HTTP_GET, [](AsyncWebServerRequest * request) {
-    AsyncWebServerResponse *resp = request->beginResponse_P(200, "application/javascript", MD5_JS_GZ, MD5_JS_GZ_LEN);
-    resp->addHeader("Content-Encoding", "gzip");
-    //Same no-cache policy as every PROGMEM asset: an OTA that re-vendors
-    //the library must not leave stale JS in the tab cache.
-    resp->addHeader("Cache-Control", "no-cache");
-    request->send(resp);
+    serveGzipAsset(request, "application/javascript", MD5_JS_GZ, MD5_JS_GZ_LEN);
   });
   webServer.on("/firmware/master", HTTP_POST,
     [](AsyncWebServerRequest * request) {
@@ -115,19 +128,16 @@ void registerMasterFirmwareEndpoint() {
           return;
         }
 
-        //Flash-config mismatch (#92/#94): if the RUNNING image's flash-size
-        //header claims more than the physical chip, Update.begin() will
-        //refuse every upload with the cryptic "Flash config wrong". Detect
-        //it first and tell the operator to USB-reflash the 1 MB build,
-        //which is the only thing that breaks the deadlock (nothing over
-        //the air can). Fires on legacy images built with a bigger header.
-        uint32_t flashRealSize   = ESP.getFlashChipRealSize();
-        uint32_t flashHeaderSize = ESP.getFlashChipSize();
-        if (flashRealSize < flashHeaderSize) {
+        //Flash-config mismatch (#92/#94): Update.begin() would refuse every
+        //upload with the cryptic "Flash config wrong". Detect it first and
+        //tell the operator to USB-reflash the 1 MB build, which is the only
+        //thing that breaks the deadlock (nothing over the air can). Fires on
+        //legacy images built with a bigger header.
+        if (flashConfigMismatch()) {
           otaRejected = true;
           otaRejectionStatus = 412;
           otaRejectionReason = String("Flash config mismatch: running firmware header claims ") +
-                               flashHeaderSize + " bytes but chip is " + flashRealSize +
+                               ESP.getFlashChipSize() + " bytes but chip is " + ESP.getFlashChipRealSize() +
                                " — OTA is permanently rejected by this build; reflash once over USB with the current firmware build";
           SerialPrintln(otaRejectionReason);
           return;
@@ -245,6 +255,21 @@ void startFallbackSoftAp(const String& apSuffix) {
   SerialPrintln(WiFi.softAPIP().toString());
 }
 
+//Shared skeleton for the two minimal pages below: everything up to and
+//including the <h1>. The caller appends its intro <p>, MINIMAL_UPLOAD_FORM
+//and the closing tags.
+static String minimalPageStart(const char* title) {
+  String html = "<!doctype html><html><head><title>";
+  html += title;
+  html += "</title>"
+          "<meta name='viewport' content='width=device-width, initial-scale=1'/>"
+          "<style>body{font-family:sans-serif;max-width:480px;margin:2em auto;padding:1em}"
+          "button{padding:.5em 1em}</style></head><body><h1>";
+  html += title;
+  html += "</h1>";
+  return html;
+}
+
 //Shared upload form for the minimal recovery/quiet-OTA pages. A plain HTML
 //form can't flash any more — ?md5= is mandatory on /firmware/master (#144) —
 //so this snippet hashes the file via /md5.js and uploads with XHR, attaching
@@ -299,14 +324,9 @@ void enterRecoveryMode() {
   }
 
   webServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
-    String html =
-      "<!doctype html><html><head><title>Split-Flap Recovery</title>"
-      "<meta name='viewport' content='width=device-width, initial-scale=1'/>"
-      "<style>body{font-family:sans-serif;max-width:480px;margin:2em auto;padding:1em}"
-      "button{padding:.5em 1em}</style></head><body>"
-      "<h1>Split-Flap Recovery</h1>"
-      "<p>Device entered recovery after repeated failed boots. "
-      "Upload a known-good <code>firmware.bin</code> to recover.</p>";
+    String html = minimalPageStart("Split-Flap Recovery");
+    html += "<p>Device entered recovery after repeated failed boots. "
+            "Upload a known-good <code>firmware.bin</code> to recover.</p>";
     html += FPSTR(MINIMAL_UPLOAD_FORM);
     html += "</body></html>";
     request->send(200, "text/html", html);
@@ -337,14 +357,9 @@ void enterOtaMode() {
   }
 
   webServer.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
-    String html =
-      "<!doctype html><html><head><title>Split-Flap OTA Mode</title>"
-      "<meta name='viewport' content='width=device-width, initial-scale=1'/>"
-      "<style>body{font-family:sans-serif;max-width:480px;margin:2em auto;padding:1em}"
-      "button{padding:.5em 1em}</style></head><body>"
-      "<h1>Split-Flap OTA Mode</h1>"
-      "<p>Quiet flash environment — no display or unit activity. "
-      "Upload a <code>firmware.bin</code>, or exit to resume normal operation.</p>";
+    String html = minimalPageStart("Split-Flap OTA Mode");
+    html += "<p>Quiet flash environment — no display or unit activity. "
+            "Upload a <code>firmware.bin</code>, or exit to resume normal operation.</p>";
     html += FPSTR(MINIMAL_UPLOAD_FORM);
     html +=
       "<form method='post' action='/firmware/ota-exit'>"

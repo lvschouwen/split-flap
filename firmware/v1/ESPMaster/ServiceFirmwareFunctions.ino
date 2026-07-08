@@ -40,6 +40,9 @@ volatile bool reflashUnitsPending = false;
 volatile bool unitReflashRunning = false;
 #define REFLASH_BATCH_SIZE       2
 #define REFLASH_BATCH_SETTLE_MS  15000UL
+// Wait after CMD_ENTER_BOOTLOADER before talking to twiboot: watchdog reset
+// (~15 ms) + twiboot init. 500 ms is generous.
+#define TWIBOOT_STARTUP_MS       500
 
 // Minimal state for an in-flight PROGMEM flash. Previously this was a
 // HexFlashState struct from HexFlashParser.h; that parser has been dropped
@@ -234,9 +237,7 @@ bool beginFirmwareFlash(uint8_t i2cAddress, String& error) {
       return false;
     }
     SerialPrintln(F("Sent enter-bootloader opcode; waiting for twiboot"));
-
-    // Watchdog reset (~15ms) + twiboot init. 500ms is generous.
-    delay(500);
+    delay(TWIBOOT_STARTUP_MS);
   } else {
     SerialPrintln(F("Unit already in bootloader; skipping reboot"));
   }
@@ -437,9 +438,7 @@ void autoUpdateOutdatedUnits() {
   SerialPrint(F("Queued "));
   SerialPrint(queued);
   SerialPrintln(F(" unit(s) for auto-update; waiting for twiboot"));
-  //Give the Nanos time to reset + twiboot init. 500 ms matches
-  //enterBootloaderAllDetected()'s reprobe delay.
-  delay(500);
+  delay(TWIBOOT_STARTUP_MS);
   probeI2cBus();
   autoInstallFirmwareToBootloaderUnits();
 #endif
@@ -463,8 +462,7 @@ int enterBootloaderAllDetected(bool reprobeAfter) {
     }
   }
   if (rebooted > 0 && reprobeAfter) {
-    //Watchdog reset (~15 ms) + twiboot init. 500 ms is generous.
-    delay(500);
+    delay(TWIBOOT_STARTUP_MS);
     probeI2cBus();
   }
   return rebooted;

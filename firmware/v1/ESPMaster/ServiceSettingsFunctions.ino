@@ -326,10 +326,9 @@ String getCurrentSettingValues() {
   out.reserve(512 + UNITS_AMOUNT * 24);
   out += '{';
 
-  out += F("\"timezoneOffset\":");          out += getTimezoneOffsetMinutes();
   //Detected display width (#123), not the UNITS_AMOUNT ceiling — the web
   //UI's line-count math and repeating-string actions follow the real size.
-  out += F(",\"unitCount\":");              out += displayWidth;
+  out += F("\"unitCount\":");               out += displayWidth;
   out += F(",\"detectedUnitCount\":");      out += detectedUnitCount;
 
   out += F(",\"detectedUnitAddresses\":[");
@@ -381,13 +380,10 @@ String getCurrentSettingValues() {
   out += F(",\"lastResetReason\":");                 appendJsonString(out, lastResetReason);
   out += F(",\"bootCounter\":");                     out += String(readBootStateRtc().bootCounter);
   out += F(",\"recoveryMode\":");                    out += (isRecoveryMode ? F("true") : F("false"));
-  //True when the running image's flash-size header exceeds the physical
-  //chip — the state where Update.begin() rejects every OTA (#92/#94).
-  out += F(",\"flashConfigMismatch\":");             out += (ESP.getFlashChipRealSize() < ESP.getFlashChipSize() ? F("true") : F("false"));
+  out += F(",\"flashConfigMismatch\":");             out += (flashConfigMismatch() ? F("true") : F("false"));
   out += F(",\"lastTimeReceivedMessageDateTime\":"); appendJsonString(out, lastReceivedMessageDateTime);
   out += F(",\"lastWrittenText\":");                 appendJsonString(out, lastWrittenText);
 
-  out += F(",\"otaEnabled\":false");
   out += F(",\"isInOtaMode\":");                    out += (isOtaMode ? F("true") : F("false"));
 
   out += F(",\"wifiSettingsResettable\":true");
