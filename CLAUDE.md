@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An Arduino-based split-flap display. Firmware built with **PlatformIO** — each sketch has its own `platformio.ini` and builds from the CLI. Host-side unit tests for pure-logic helpers live under `firmware/v1/ESPMaster/test/`. CI in `.github/workflows/build.yml` builds every firmware project and runs the native test suite.
 
-**Firmware status:** the shipping firmware is the v1 stack under `firmware/v1/` — `ESPMaster/` (ESP8266 master) + `Unit/` (Arduino Nano per-flap). This is the actively-maintained firmware. A previous ESP32-S3 + ESP32-H2 firmware port was removed pending a fresh v2 design; the `firmware/v1/` prefix is kept so a future v2 firmware stack can slot in alongside. The v2 **PCB** design docs under `PCB/v2/` are unaffected.
+**Firmware status:** the shipping firmware is the v1 stack under `firmware/v1/` — `ESPMaster/` (ESP8266 master) + `Unit/` (Arduino Nano per-flap). This is the actively-maintained firmware. The v2 stack is being built per the phased plan in epic #183: `firmware/v2/Master/` is the Phase 1 ESP32-S3 port (#58) — an S3 devkit speaking the same I2C protocol to **unchanged v1 units**, plain `.cpp` (no `.ino` concat), console on native USB-CDC. Its `[env:native]` mirrors v1's (same ArduinoFake caveats). The pure-logic headers there are **copies** of their v1 counterparts, not shared includes — v1 stays stable for OTA maintenance while v2 diverges; fix bugs in both if one is found while both trees are alive. The v2 **PCB** design docs under `PCB/v2/` were re-scoped by the same epic (unit board is the only planned custom PCB).
 
 ## Architecture
 

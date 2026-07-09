@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [ESPMaster, Unit]
+        project: [v1/ESPMaster, v1/Unit, v2/Master]
     steps:
       - uses: actions/checkout@v5
 
@@ -41,7 +41,7 @@ jobs:
         run: pip install --upgrade platformio
 
       - name: Build
-        working-directory: firmware/v1/${{ matrix.project }}
+        working-directory: firmware/${{ matrix.project }}
         run: pio run
 
   test:
@@ -67,6 +67,10 @@ jobs:
 
       - name: Run ESPMaster native tests
         working-directory: firmware/v1/ESPMaster
+        run: pio test -e native
+
+      - name: Run v2 Master native tests
+        working-directory: firmware/v2/Master
         run: pio test -e native
 
       - name: Install pytest
