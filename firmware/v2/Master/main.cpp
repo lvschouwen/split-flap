@@ -1,22 +1,17 @@
-// v2 master — Phase 1 scaffold (#184, meta #58, epic #183).
+// v2 master — Phase 1 (#58, epic #183).
 //
-// Boots on an ESP32-S3 devkit, prints an identity banner, and keeps the
-// ported pure-logic headers compiling under the ESP32 Arduino core (they
-// are otherwise only exercised by the native test env).
+// Boots on an ESP32-S3 devkit, loads settings from NVS, prints an identity
+// banner, and keeps the ported pure-logic headers compiling under the ESP32
+// core (they are otherwise only exercised by the native test env).
 
 #include <Arduino.h>
-// SettingsEepromLayout.h uses the EEPROM global without including it (in v1
-// the include comes from ESPMaster.ino's TU). The ESP32 core provides an
-// EEPROM emulation over flash; whether v2 keeps the v1 blob layout on it or
-// moves to NVS is an open Phase 1 decision — see #58.
-#include <EEPROM.h>
 
 #include "DeviceIdentity.h"
 #include "DisplayWidth.h"
 #include "MdnsDiscovery.h"
 #include "MqttHelpers.h"
-#include "SettingsEepromLayout.h"
-#include "SettingsValidation.h"
+#include "NvsSettingsStore.h"
+#include "Settings.h"
 
 // v1 derives its chip id from ESP.getChipId() = last 3 octets of the MAC.
 // The ESP32 core has no getChipId(); take the same last-3-octets slice of
@@ -30,18 +25,33 @@ static uint32_t chipIdFromEfuseMac() {
 
 static const char* MDNS_NAME_PREFIX = "split-flap";
 
+static NvsSettingsStore settingsStore;
+static MasterSettings settings;
+static String deviceName;
+
 void setup() {
   Serial.begin(115200);
   delay(2000);  // native USB-CDC needs a moment before the first prints land
 
-  const String deviceName = defaultDeviceName(MDNS_NAME_PREFIX, chipIdFromEfuseMac());
+  settingsStore.begin();
+  settings = loadSettings(settingsStore);
+  deviceName = resolveDeviceName(true, settings.deviceName, MDNS_NAME_PREFIX,
+                                 chipIdFromEfuseMac());
+
   Serial.println();
-  Serial.println(F("split-flap v2 master — Phase 1 scaffold (#184)"));
+  Serial.println(F("split-flap v2 master — Phase 1 (#58)"));
   Serial.printf("chip: %s rev %d, %d cores @ %d MHz\n", ESP.getChipModel(),
                 ESP.getChipRevision(), ESP.getChipCores(), ESP.getCpuFreqMHz());
   Serial.printf("flash: %u KB, free heap: %u KB\n",
                 ESP.getFlashChipSize() / 1024, ESP.getFreeHeap() / 1024);
   Serial.printf("identity: %s\n", deviceName.c_str());
+  Serial.printf("settings: align=%s speed=%d mode=%s tz=%s\n",
+                settings.alignment.c_str(), settings.flapSpeed,
+                settings.deviceMode.c_str(), settings.timezonePosix.c_str());
+  Serial.printf("mqtt: %s\n",
+                settings.mqttHost.length()
+                    ? (settings.mqttHost + ":" + settings.mqttPort).c_str()
+                    : "(disabled)");
 }
 
 void loop() {

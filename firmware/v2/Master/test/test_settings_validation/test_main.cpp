@@ -6,7 +6,7 @@
 #include <ArduinoFake.h>
 #include <unity.h>
 #include "../../SettingsValidation.h"
-#include "../../SettingsEepromLayout.h"
+#include "../../SettingsLimits.h"
 
 void setUp() {
   ArduinoFakeReset();
