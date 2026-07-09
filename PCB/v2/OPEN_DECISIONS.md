@@ -1,13 +1,14 @@
 # Open Decisions
 
-**Revision:** 2026-04-26
+**Revision:** 2026-07-09
 
 Hardware decisions remaining for v2. Software is being rewritten;
 firmware-reuse arguments do not apply.
 
 **Schematic capture is unblocked.** Layout is **BLOCKED on #100**
-(unit/rail geometry — see item 6). Other remaining items are
-firmware-configurable or build-time decisions.
+(insertion-kinematics mock-up — see item 6; the pogo-vs-card-edge
+question itself was decided 2026-07-09: **card-edge**). Other
+remaining items are firmware-configurable or build-time decisions.
 
 ## 1. Existing case inventory (deferred — does not block schematic capture)
 
@@ -22,26 +23,13 @@ build-time spec:
 - Cable entry points into row enclosures.
 - Whether all 4 rows are in the same enclosure or split.
 
-## 2. RS-485 baud rate
+## 2. RS-485 baud rate — RESOLVED 2026-07-09
 
-**Options**
-- A. 115200 baud
-- B. 250 kbaud (recommended)
-- C. 500 kbaud
-
-**Hardware tradeoffs**
-- All three work cleanly on shielded twisted pair within a hobby
-  installation.
-- 250 kbaud over a daisy-chain harness with short stubs is well within
-  spec for SN65HVD75.
-- Lower baud = more SI margin and easier scope debugging.
-- Since 2026-07-04 (#102) the link is native-UART-only on both ends
-  (SC16IS740 deleted): the expander's integer-divisor clocking
-  constraint is gone, and 250 kbaud divides cleanly (~0.08 % baud
-  error at 64 MHz on the unit side).
-
-**Recommendation: 250 kbaud.** Software-changeable later without hardware
-work.
+**Locked: 250 kbaud.** Software-changeable later without hardware work.
+Well inside the THVD1410's 500 kbps slew-limited rating; more SI margin
+and easier scope debugging than 500 k. Since 2026-07-04 (#102) the link
+is native-UART-only on both ends (SC16IS740 deleted), and 250 kbaud
+divides cleanly (~0.08 % baud error at 64 MHz on the unit side).
 
 ## 3. Master-to-bus cable + daisy-chain cable (deferred with #1)
 
@@ -96,18 +84,18 @@ kicad/*.net files that still carried C124378 were removed in #102.
 
 These are build-time selections; no PCB schematic dependency.
 
-## 6. Unit/rail geometry + station pad pattern — issue #100 (BLOCKER — resolve before layout)
+## 6. Unit/rail insertion kinematics — issue #100 (BLOCKER — resolve before layout)
 
-The documented unit outline is impossible at the 37 mm station pitch:
-an 80 × 40 mm unit board with 80 mm along the rail overlaps its
-neighbours by 43 mm; rotated it is still 40 > 37 mm and puts the pogo
-column parallel to the bus traces. The bus PCB additionally has MH3
-(x = 200 mm) colliding with station 5 (x = 203 mm), a 4-standoff
-mounting that sags ~1.5 mm under pogo preload (more than the pogo
-travel — the board must be continuously backed), and end connectors
-inside the station 0/7 unit envelopes. Station pad geometry and unit
-orientation WILL be redesigned after a dimensioned cross-section +
-physical mock-up.
+**Interface decision made 2026-07-09: card-edge** (see Resolved). The
+mock-up is re-scoped from pogo preload/sag/coplanarity to **insertion
+kinematics**: how the unit's card edge enters the backplane socket
+while the clip engages the DIN rail — 3 stations, one dimensioned
+cross-section (unit PCB → clip → rail → backplane → socket), clip
+keep-out drawing. Not gated on any hardware purchase; needs a 3D
+printer and cardboard. The pogo-era findings (sag under preload,
+Z-stack, strip geometry) are moot; still live are the station-5 screw
+collision and end connectors inside the end-station envelopes, which
+carry over to the backplane layout.
 
 ## 7. Motor current measurement — issue #101
 
@@ -123,24 +111,65 @@ for the topology, and AOD409 is thermally unresolved at ≥12 A. Also
 covers the off-master fuse-block option and polyfuse re-sizing once
 #101 lands.
 
-## 9. Pogo hardening + first-article gate — issue #104
+## 9. First-article gate — issue #104 (shrunk 2026-07-09)
 
-Pogo contact hardening — including an asymmetric contact-pad pattern
-on the bus PCB as an electrical soft-key — plus a first-article
-verification gate before the quantity build.
+The pogo-hardening programme (asymmetric pad pattern, wipe kinematics,
+contact-resistance soak logging) dissolved with the card-edge decision.
+What survives: clip material spec (no PLA; PETG min, prefer ASA/PC),
+reversed-unit-refuses-to-seat check (socket key is the primary
+polarization now), and a short insert/remove + vibration sanity test
+on the first backplane + a few rev A units.
 
 ## 10. LCSC part-number verification — issue #105
 
 All LCSC numbers still marked "CHECK" (C144392 and friends) must be
 verified against the live catalogue before ordering.
 
-## 11. Master J7 debug header — keep or drop
+## 11. Master J7 debug header — RESOLVED 2026-07-09: moot
 
-Whether the master board keeps its J7 debug header. Previously
-untracked; no issue yet.
+The custom master board was cancelled (#103/#178/#181 closed; master =
+S3 devkit + minimal carrier). J7 no longer exists as a decision.
 
 ## Resolved decisions (closed; recorded for transparency)
 
+- **RS-485 transceiver — resolved 2026-07-09 (#179)**: **TI THVD1410**,
+  SOIC-8 (D package) as the production footprint on unit and master
+  carrier. 3–5.5 V supply (one part for the 3.3 V master and the unit),
+  500 kbps slew-limited, true idle/open/short failsafe, ±18 kV IEC
+  61000-4-2 contact on the bus pins. Same SOIC-8 pinout as the
+  superseded SN65HVD75. Consequences: the master 1k/1k failsafe bias is
+  **deleted** (96 mV into the 60 Ω loaded bus was below threshold
+  anyway; the true-failsafe receiver makes it unnecessary), and the
+  SM712 ESD arrays are **deleted** system-wide (integrated ±18 kV
+  exceeds what they added, ~66 parts saved). The 10 kΩ DE pull-downs
+  **stay** (deterministic bus release during MCU reset). Purchase:
+  ~25× THVD1410DR from Mouser (595-THVD1410DR, restock ~2026-07-17) —
+  bench + full-row production stock in one buy.
+- **Unit↔bus interface — resolved 2026-07-09 (#100)**: **card-edge**,
+  g000ze/Split-Flap-Display precedent; pogo-on-strips withdrawn. The
+  unit PCB gets a beveled hard-gold card-edge (standard JLC gold-fingers
+  option — same plating spec previously written for the bus strips);
+  the bus PCB becomes a **backplane carrying one keyed socket per
+  station**. Retires the pogo risk chain (preload, sag, coplanarity,
+  fretting soak test); polarization becomes mechanical via the socket
+  key instead of resting solely on the 3D-printed clip.
+- **Card-edge connector — resolved 2026-07-09**: **2.54 mm dual-row,
+  5 positions (2×5, 10 contacts)**. Net per position, mirrored on both
+  card faces so every net has two contacts: 12V, GND, A, B, spare
+  (routed to a test pad). Polarizing key slot between GND and A;
+  GND fingers longest for first-make; card 1.6 mm. Sockets: Sullins
+  EBC05-class / LCSC generic "card edge 2.54 mm 10P" — verify per #105.
+- **Per-unit MCU re-affirmed 2026-07-09**: scottbez1/splitflap proves
+  108 modules on dumb shift-register chains — considered and declined.
+  UID addressing, self-contained swappable units, per-unit OTA and
+  calibration keep the STM32G030K8 per unit.
+- **Phase 2 vehicle — revised 2026-07-09 (#183)**: protocol development
+  happens on **10× JLC-assembled unit rev A boards**, not dev boards /
+  breakouts (NUCLEO/G030 core boards skipped). Order: #100 mock-up →
+  lock geometry → KiCad capture → JLC. Bench flashing via ST-Link
+  (needed for production programming regardless); SWD + UART test pads
+  already in the unit BOM. #101 (motor current) is measured on a rev A
+  board — real power path including F_unit.
 - **Display capacity**: 4 rows × 16 units = 64 units max.
 - **Master MCU**: ESP32-S3-WROOM-1-N16R8.
 - **Master programming interface**: USB-C native CDC.
@@ -185,14 +214,15 @@ untracked; no issue yet.
   at both far ends of each 2-row bus; the master is an unterminated
   mid-bus tap (its on-board 120 Ω is deleted). Still one plug per
   row, 4 system-wide — hardware unchanged.
-- **Bias**: 1k/1k failsafe at master only, one set per PHY (2 sets).
-- **Unit-to-bus contact**: 4 through-hole pogo pins on unit underside,
-  vertical line, ~8 mm pitch, gold-plated tips. Contacts hard-gold
-  trace strips on the DIN-rail bus PCB (plating spec revised
-  2026-07-04 — see contact-plating entry below; geometry under #100).
-- **Per-row distribution**: 2× 300 mm bus PCBs daisy-chained, both
-  built from the same PCB design (8 boards across 4-row system), each
-  with a JST-VH 4-pin connector (B4P-VH-A) on each end.
+- **Bias — SUPERSEDED 2026-07-09 (#179)**: the 1k/1k failsafe at the
+  master is deleted; the THVD1410's true failsafe replaces it.
+- **Unit-to-bus contact — SUPERSEDED 2026-07-09 (#100)**: the pogo-pin
+  system (4 THT pogos onto hard-gold strips) is withdrawn in favour of
+  the card-edge interface (see 2026-07-09 entries above).
+- **Per-row distribution**: 2× 300 mm backplane PCBs daisy-chained,
+  both built from the same PCB design (8 boards across 4-row system),
+  each with a JST-VH 4-pin connector (B4P-VH-A) on each end — now
+  carrying 8 card-edge sockets each instead of contact strips.
 - **All row power connectors locked to JST-VH 4-pin (B4P-VH-A,
   C144392 — verify per #105)** (3.96 mm pitch, ≥5 A per pin, keyed crimp
   housing): master row output J3-J6, both ends of every bus PCB, both
@@ -216,13 +246,16 @@ untracked; no issue yet.
   drives the bus while its MCU is in reset/boot.
 - **Per-unit fuse (resolved 2026-07-04, #102)**: 0.5 A polyfuse
   F_unit on each unit's 12 V input.
-- **Contact plating (resolved 2026-07-04, #102)**: bus contact strips
-  get hard/thick gold ("gold fingers", 0.3–0.8 µm Au over ≥2.5 µm Ni,
-  or ENEPIG) instead of standard thin ENIG. The threat is fretting
-  under stepper vibration, not mating-cycle count.
+- **Contact plating (resolved 2026-07-04, #102; carrier changed
+  2026-07-09)**: hard/thick gold ("gold fingers", 0.3–0.8 µm Au over
+  ≥2.5 µm Ni, or ENEPIG) — originally specced for the bus strips, now
+  applied to the **unit's card-edge fingers**, where it is the standard
+  JLC gold-fingers option rather than a special order.
 - **Power-off insertion (resolved 2026-07-04, #102)**: units are
   inserted/removed with row power OFF — mandatory. TPL7407L COM is
-  limited to 0.5 V/µs; hot-plug edges are 5–10 V/µs.
+  limited to 0.5 V/µs; hot-plug edges are 5–10 V/µs. (Unchanged by the
+  card-edge switch; GND-first-make finger staggering adds margin, not
+  permission.)
 - **Master USB bench power (resolved 2026-07-04, #102)**: USB 5 V is
   OR-ed with the 12 V-derived rail so the master can be developed and
   flashed from USB without the brick.

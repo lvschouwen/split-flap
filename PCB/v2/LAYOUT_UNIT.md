@@ -1,6 +1,13 @@
 # Layout Guide — Unit PCB
 
 **Revision:** 2026-04-26
+
+> **⚠ AMENDED 2026-07-09 (#179/#100).** U4 is now the THVD1410 (same
+> SOIC-8 pinout), the SM712 ESD array is deleted, and the pogo-pin
+> interface is superseded by a keyed 2×5 card-edge on one board edge
+> (see the banner + CE entry in `SCHEMATIC_UNIT.md`). Pogo geometry
+> below is historical; edge geometry comes from the #100 mock-up.
+
 **Companion to:** `SCHEMATIC_UNIT.md` (nets, MPNs, pin maps).
 **Read this when:** placing components and routing in KiCad 10. See
 `KICAD_HANDOFF.md` for the tool-specific workflow (project setup,

@@ -2,6 +2,13 @@
 
 **Revision:** 2026-04-26
 
+> **⚠ AMENDED 2026-07-09 (#179/#100).** U4 is now the THVD1410 (same
+> SOIC-8 pinout), the SM712 ESD array is deleted, and the pogo-pin
+> interface is superseded by a keyed 2×5 card-edge on one board edge
+> (see the banner + CE entry in `SCHEMATIC_UNIT.md`). Pogo geometry
+> below is historical; edge geometry comes from the #100 mock-up.
+
+
 Per-flap board. Mounts to a 35 mm DIN rail and contacts the row's bus
 PCB via 4 pogo pins on the unit's underside. Drives one 28BYJ-48 12 V
 stepper, homes on an off-board hall sensor (3-pin connector), talks to its row's master

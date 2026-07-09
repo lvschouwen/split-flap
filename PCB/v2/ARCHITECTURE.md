@@ -43,30 +43,30 @@ uses a daisy-chain DIN-rail bus PCB (see `BUS_PCB.md`).
 
    Termination: ONLY the 120R terminator plugs at the far ends
    (still one plug per row, 4 system-wide). No termination at the
-   master. 1k/1k failsafe bias at the master, one set per PHY.
+   master. No failsafe bias — the THVD1410's true idle/open/short
+   failsafe replaces the former 1k/1k bias set (#179, 2026-07-09).
 
-   Per row, the cable plugs into the first of two daisy-chained bus PCBs:
+   Per row, the cable plugs into the first of two daisy-chained backplanes:
 
-   Master Row 0 ──► [Bus PCB A0] ──short cable──► [Bus PCB B0] ──► [120R term]
+   Master Row 0 ──► [Backplane A0] ──short cable──► [Backplane B0] ──► [120R term]
                           |                              |
-                       8 pogo-pin stations           8 stations
+                    8 card-edge sockets             8 sockets
                           |                              |
-                       Units 0..7 clip on            Units 8..15 clip on
-                       via DIN rail                  via DIN rail
+                       Units 0..7 slot in            Units 8..15 slot in
+                       on DIN rail                   on DIN rail
 
    ... same topology for Rows 1, 2, 3
 
-   Each unit: 4 pogo pins on underside (12V/A/B/GND), DIN rail clip,
+   Each unit: 2×5 card-edge (12V/GND/A/B/spare, keyed), DIN rail clip,
               IDENTIFY button + LED. No cable to unit.
 ```
 
-> **⚠ GEOMETRY UNRESOLVED — issue #100**: the documented unit outline
-> cannot sit on the 37 mm station pitch (80 × 40 mm board, 80 mm along
-> the rail = 43 mm overlap; rotated is still 40 > 37 mm and puts the
-> pogo column parallel to the traces), and the bus PCB has
-> mounting/clearance collisions. Station pad geometry and unit
-> orientation WILL be redesigned after a dimensioned cross-section +
-> mock-up. Do not treat the pogo/station geometry as final.
+> **⚠ GEOMETRY PENDING — issue #100**: the interface is decided
+> (card-edge, 2026-07-09) but the insertion kinematics — how the
+> unit's edge enters the socket while the clip engages the rail —
+> plus station geometry and unit orientation come from the #100
+> dimensioned cross-section + mock-up. Do not lay out against any
+> station geometry yet.
 
 ## Bus topology
 
@@ -80,8 +80,9 @@ Physically, each 2-row bus runs far-end-of-row-N ↔ master ↔
 far-end-of-row-N+1: the master is an **unterminated mid-bus tap**.
 Termination is ONLY the two 120 Ω terminator plugs at the two far
 ends (still one plug per row, 4 system-wide — unchanged). The
-master's own 120 Ω termination is deleted; the 1k/1k failsafe bias
-stays at the master, one set per PHY. Baud stays 250 kbaud.
+master's own 120 Ω termination is deleted, and so (2026-07-09, #179)
+is the 1k/1k failsafe bias — the THVD1410's true failsafe receiver
+holds the bus idle state without it. Baud stays 250 kbaud.
 
 **Superseded 2026-07-04 (#102):** an earlier revision used 4 buses
 (one per row); since the ESP32-S3 has only 3 native UARTs, the 4th
@@ -89,9 +90,11 @@ came from an SC16IS740 single-channel SPI-UART expander. The
 SC16IS740 was deleted because: (1) it cannot generate 250 kbaud from
 its 14.7456 MHz crystal — the integer divisor tops out at 230,400
 nearby; (2) its RTS pin resets high, driving the bus at power-on;
-(3) SN65HVD75 is a 3/20 unit-load transceiver (up to 213 nodes), so
-32 units on one bus is trivial. See the superseded 4th-UART entry in
-`OPEN_DECISIONS.md`'s resolved list for the record.
+(3) the transceiver is a fractional unit-load part (up to 200+
+nodes), so 32 units on one bus is trivial — true of both the
+then-planned SN65HVD75 (3/20 UL) and the THVD1410 (1/8 UL, 256
+nodes) that replaced it 2026-07-09 (#179). See the superseded
+4th-UART entry in `OPEN_DECISIONS.md`'s resolved list for the record.
 
 ## Power flow
 
@@ -176,28 +179,31 @@ not depend on collision-handling logic.
 - Backplane wiring of any kind.
 - Firmware-stored EEPROM addresses set during one-off provisioning.
 
-## Unit-to-bus contact (pogo pins)
+## Unit-to-bus contact (card-edge, decided 2026-07-09 — #100)
 
-Units have no connector to the bus. Each unit contacts the DIN-rail
-bus PCB via 4 spring-loaded pogo pins on its underside (see
-`BUS_PCB.md` for the station geometry and contact zones):
+Each unit carries a **2×5 card-edge** (2.54 mm dual-row, beveled,
+hard gold) that slots into a keyed socket on the DIN-rail backplane
+— g000ze/Split-Flap-Display precedent; the earlier pogo-pin system
+is withdrawn. Every net is on both card faces, so each has two
+contacts:
 
-| Pogo | Net |
+| Position | Net |
 |---|---|
-| 1 (top) | 12V (from master, daisy-chained through bus PCBs) |
-| 2 | RS485_A |
-| 3 | RS485_B |
-| 4 (bottom) | GND |
+| 1 | 12V (from master, daisy-chained through backplanes) |
+| 2 | GND — **longest fingers, first-make** |
+| — | polarizing key slot |
+| 3 | RS485_A |
+| 4 | RS485_B |
+| 5 | spare (test pad only) |
 
-The IDENTIFY button is on the unit board itself. Net count is
-intentionally minimal.
+The socket key is the primary polarization (the asymmetric DIN clip
+is secondary). The IDENTIFY button is on the unit board itself. Net
+count is intentionally minimal.
 
-> **⚠ GEOMETRY UNRESOLVED — issue #100**: the unit outline vs the
-> 37 mm station pitch is impossible as currently documented; station
-> pad geometry and unit orientation WILL be redesigned after a
-> dimensioned cross-section + mock-up. The 4-net pogo order above is
-> the electrical contract; do not lay out against the current
-> physical pattern.
+> **⚠ GEOMETRY PENDING — issue #100**: the electrical contract above
+> is locked; the edge position/orientation on the unit outline and
+> the station geometry come from the #100 insertion-kinematics
+> mock-up. Do not lay out against any physical pattern yet.
 
 ## Boot-time chain self-test
 
@@ -222,9 +228,9 @@ indicators before the system tries to display anything.
 | Unit address source | 4-bit DIP switch (manual config per unit) | 96-bit UID + IDENTIFY button (commissioning) |
 | Distribution | ~30 patch cables per case | per-row daisy-chain harness |
 | Homing sensor | KY-003 module (discrete, flying lead) | KY-003 module (discrete, flying lead via 3-pin connector) — same mechanical alignment path as v1 |
-| Unit ESD on bus | none | SM712-02HTG on RS-485 A/B |
-| Connector to bus | JST-XH chained per unit | 4 pogo pins on unit underside (no connector) |
-| Distribution within row | n/a | 2× 300 mm DIN-rail bus PCBs daisy-chained, units clip on |
+| Unit ESD on bus | none | integrated in THVD1410 (±18 kV IEC contact on bus pins) |
+| Connector to bus | JST-XH chained per unit | 2×5 keyed card-edge into backplane socket |
+| Distribution within row | n/a | 2× 300 mm DIN-rail backplanes daisy-chained, units slot in |
 | Cable from master to row | n/a | single 4-pin combined (12V/GND/A/B) to first bus PCB |
 | Cable between bus PCBs | n/a | short 4-pin daisy-chain cable |
 

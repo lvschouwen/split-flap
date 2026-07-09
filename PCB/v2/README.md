@@ -1,6 +1,6 @@
 # PCB v2
 
-**Revision:** 2026-07-08
+**Revision:** 2026-07-09
 
 Hobby-scale redesign of the split-flap display electronics.
 
@@ -8,18 +8,25 @@ Tracked under **epic #183** (phased plan; supersedes #83).
 
 ## Status
 
-- **Phase:** UNFROZEN + re-sequenced (2026-07-08, epic #183). The
-  **architecture stands** — ESP32-S3 master, RS-485 multi-drop,
-  STM32G030K8 per unit with silicon UID + IDENTIFY, single 12 V rail —
-  but execution is now firmware-first and devkit-first:
+- **Phase:** UNFROZEN + re-sequenced (2026-07-08, epic #183; Phase 2/3
+  vehicle revised 2026-07-09). The **architecture stands** — ESP32-S3
+  master, RS-485 multi-drop (THVD1410, #179), STM32G030K8 per unit
+  with silicon UID + IDENTIFY, single 12 V rail, **card-edge
+  unit↔backplane interface** (#100 decision; g000ze precedent):
   1. **Phase 1 (#58):** port the v1 master firmware to an ESP32-S3
-     devkit speaking I2C to the unchanged v1 units.
-  2. **Phase 2:** v2 bus protocol (framing, UID enrollment, IDENTIFY,
-     OTA-over-RS-485, staggering) on RS-485 breakouts + G030 dev
-     boards. Bench measurements #101/#54. Transceiver pick #179.
-  3. **Phase 3:** capture the **unit PCB** — the only planned custom
-     board — gated on the #100 mock-up (pogo vs card-edge interface
-     comparison). Master = devkit on a simple carrier, only if needed.
+     devkit speaking I2C to the unchanged v1 units. Runs in parallel
+     with the mechanical track.
+  2. **Phase 2 (mock-up + capture):** #100 insertion-kinematics
+     mock-up (3 stations, dimensioned cross-section — needs a 3D
+     printer, not hardware) → lock unit outline/edge geometry → KiCad
+     capture of the **unit PCB rev A** → order 10× JLC-assembled.
+     Consolidated parts order (~2026-07-17): 25× THVD1410DR,
+     2–3× 28BYJ-48 12 V, 2–3 card-edge sockets, ST-Link.
+  3. **Phase 3 (protocol on rev A):** v2 bus protocol (framing, UID
+     enrollment, IDENTIFY, OTA-over-RS-485, staggering) developed
+     directly on rev A unit boards in sockets on a scrap backplane —
+     no dev boards or breakouts. Bench measurements #101 (on rev A,
+     real power path) and #54. Then capture the production backplane.
   4. **Phase 4:** build + validate **one row (16 units)**; further
      rows are procurement, not design.
 - **Cancelled with the custom master board** (#103/#178/#181 closed):
@@ -29,10 +36,14 @@ Tracked under **epic #183** (phased plan; supersedes #83).
   `LAYOUT_MASTER.md`, `MASTER_BOM.csv` and `KICAD_HOWTO_MASTER.md`
   are **superseded as build documents** — kept as reference for the
   PHY/bias/ESD sub-circuits, which move onto the carrier.
-- **Open electronics amendments** from the 2026-07-08 core review:
-  #179 (transceiver grade + failsafe bias), #180 (F_unit sizing,
-  gated on #101), #182 (minors). Apply to the unit docs at Phase 3
-  capture.
+- **2026-07-09 decision sweep:** #179 resolved (THVD1410 SOIC-8; master
+  1k/1k bias and all SM712 arrays deleted), #100 interface decided
+  (card-edge, 2×5 keyed 2.54 mm dual-row: 12V/GND/A/B/spare mirrored on
+  both faces, GND first-make), 250 kbaud locked, J7 moot, #104 shrunk
+  to clip spec + seat/vibration sanity. Still open from the 2026-07-08
+  review: #180 (F_unit sizing, gated on #101), #182 items 2–3 (TVS
+  unification, X7R note; item 1 was mooted by the master-board
+  cancellation). Details in `OPEN_DECISIONS.md`.
 - **2026-07-04 review pass (#99–#105, umbrella closed):** 2-bus
   architecture (rows paired on native UART1/UART2, SC16IS740
   deleted), unit MCU → STM32G030K8T6, LM2937 LDO + SMAJ13A TVS,
@@ -45,21 +56,26 @@ Tracked under **epic #183** (phased plan; supersedes #83).
 ## Scope (per epic #183)
 
 - **Unit PCB** — identical across units, 28BYJ-48 12 V + TPL7407L,
-  STM32G030K8T6, RS-485, UID + IDENTIFY. The one custom board.
+  STM32G030K8T6, THVD1410, card-edge fingers, UID + IDENTIFY. The
+  board that matters (rev A ×10 is the Phase 3 protocol vehicle).
+- **Backplane PCB** — passive socket carrier on the DIN rail
+  (2× ~300 mm per row, daisy-chained; redesign of the former bus
+  strip PCB after the #100 mock-up).
 - **Master** — ESP32-S3 devkit (+ minimal carrier if needed: 2× PHY,
-  bias, ESD, connectors, 12→5 V buck).
+  connectors, 12→5 V buck).
 - **Design/validation target: 1 row × 16 units**, one small brick.
   The architecture (2 RS-485 buses, rows paired per PHY) scales to
   4×16 = 64 by repetition — capacity is a procurement event.
-- **Unit↔bus interface:** decided by the #100 mock-up — pogo-on-strips
-  (as documented here) vs card-edge-on-backplane (proposed; see
-  g000ze/Split-Flap-Display precedent).
+- **Unit↔bus interface: card-edge-on-backplane** (decided 2026-07-09;
+  g000ze/Split-Flap-Display precedent). The #100 mock-up now validates
+  insertion kinematics, not the interface choice. The pogo-on-strips
+  system in BUS_PCB.md / the LAYOUT docs is superseded.
 - **Addressing: STM32 96-bit UID** + per-unit IDENTIFY button. No DIP
   switches, no slot wiring on the bus.
 
 Explicitly **not** in scope: custom master PCB with on-board 15 A
-power distribution, rigid backplanes (unless #100 picks card-edge),
-DIP switches, 48 V distribution, RJ45 power-and-data, MAX14830
+power distribution, DIP switches, 48 V distribution, RJ45
+power-and-data, MAX14830
 SPI-UART bridge, INA237 per-bus telemetry, AS5600 absolute encoder,
 128-unit capacity, product-grade compliance framing.
 
@@ -70,10 +86,10 @@ SPI-UART bridge, INA237 per-bus telemetry, AS5600 absolute encoder,
 | `ARCHITECTURE.md` | System block diagram, voltage and bus flow, addressing |
 | `MASTER.md` | Master PCB design notes |
 | `MASTER_BOM.csv` | Master PCB BOM |
-| `UNIT.md` | Unit PCB design notes (with pogo pins, DIN rail clip) |
+| `UNIT.md` | Unit PCB design notes (pogo-era; interface sections superseded by card-edge) |
 | `UNIT_BOM.csv` | Unit PCB BOM |
-| `BUS_PCB.md` | DIN-rail bus PCB design (2× 300 mm per row, daisy-chained) |
-| `BUS_PCB_BOM.csv` | Bus PCB BOM |
+| `BUS_PCB.md` | DIN-rail bus PCB design (pogo-strip era — superseded; backplane redesign after #100 mock-up) |
+| `BUS_PCB_BOM.csv` | Bus PCB BOM (same caveat) |
 | `KICAD_HANDOFF.md` | KiCad 10 workflow + per-PCB hand-off package overview |
 | `SCHEMATIC_MASTER.md` | Master PCB schematic + connection spec |
 | `SCHEMATIC_UNIT.md` | Unit PCB schematic + connection spec |

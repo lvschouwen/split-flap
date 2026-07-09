@@ -1,6 +1,17 @@
 # Layout Guide — Bus PCB
 
 **Revision:** 2026-07-04 (review pass #102; original 2026-04-26)
+
+> **⚠ SUPERSEDED 2026-07-09 (#100 decision: card-edge).** The
+> pogo-strip contact system this document describes is withdrawn. The
+> board becomes a **backplane carrying one keyed 2×5 card-edge socket
+> per station** (2.54 mm dual-row; see SCHEMATIC_UNIT.md CE entry and
+> OPEN_DECISIONS.md 2026-07-09 entries). What carries over: JST-VH
+> J_in/J_out ends, 2× ~300 mm per row daisy-chained, far-end 120 Ω
+> terminator plugs, 4-net bus (12V/GND/A/B). The redesign happens
+> after the #100 insertion-kinematics mock-up; treat the geometry and
+> contact-strip content below as historical reference only.
+
 **Companion to:** `SCHEMATIC_BUS.md` (nets, MPNs, contact pad geometry).
 **Read this when:** placing components and routing in KiCad 10. See
 `KICAD_HANDOFF.md` for the tool-specific workflow (project setup,

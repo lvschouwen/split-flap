@@ -2,6 +2,17 @@
 
 **Revision:** 2026-04-26
 
+> **⚠ SUPERSEDED 2026-07-09 (#100 decision: card-edge).** The
+> pogo-strip contact system this document describes is withdrawn. The
+> board becomes a **backplane carrying one keyed 2×5 card-edge socket
+> per station** (2.54 mm dual-row; see SCHEMATIC_UNIT.md CE entry and
+> OPEN_DECISIONS.md 2026-07-09 entries). What carries over: JST-VH
+> J_in/J_out ends, 2× ~300 mm per row daisy-chained, far-end 120 Ω
+> terminator plugs, 4-net bus (12V/GND/A/B). The redesign happens
+> after the #100 insertion-kinematics mock-up; treat the geometry and
+> contact-strip content below as historical reference only.
+
+
 Replaces the per-row cable harness with a passive bus PCB mounted in a
 35 mm DIN rail. Each unit clips onto the rail; pogo pins on the unit's
 underside contact the bus PCB's traces. No connectors on the

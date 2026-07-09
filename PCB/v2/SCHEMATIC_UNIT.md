@@ -1,9 +1,19 @@
 # Unit PCB — Schematic + Layout Specification
 
-**Revision:** 2026-04-26
+**Revision:** 2026-07-09
 
 Tool-agnostic spec for the unit PCB. **64 of these per system; one
 PCB design.** See `KICAD_HANDOFF.md` for the KiCad 10 build steps.
+
+> **2026-07-09 amendments (decision sweep, #179/#100):**
+> **U4 = THVD1410** (same SOIC-8 pinout as the superseded SN65HVD75;
+> true failsafe, ±18 kV IEC bus ESD) — **D5 SM712 is deleted**, A/B
+> route straight from U4 to the contacts. The **pogo-pin system
+> (PG1–PG4) is superseded by a 2×5 card-edge** (2.54 mm dual-row,
+> 12V/GND/A/B/spare mirrored on both faces, keyed, GND first-make,
+> bevel + hard gold). Where this document says PG1/PG2/PG3/PG4, read
+> the 12V/A/B/GND card-edge fingers; exact edge geometry comes from
+> the #100 insertion-kinematics mock-up.
 
 ## Component list (with LCSC starting points)
 
@@ -12,18 +22,17 @@ PCB design.** See `KICAD_HANDOFF.md` for the KiCad 10 build steps.
 | U1 | STM32G030K8T6 | LQFP-32 | C431631 | MCU; required for silicon UID. **K8 (64 KB flash) supersedes the earlier K6T6 (32 KB)**: deferred OTA-over-RS-485 needs a bootloader + A/B app slots; the G0 has no dual-bank flash; 32 KB has no headroom. Same LQFP-32 package/pinout. **Use the official KiCad library symbol** (`MCU_ST_STM32G0:STM32G030K8Tx`), not a hand-drawn symbol. |
 | U2 | TPL7407L | **SOIC-16 (narrow, 150 mil body)** | C383290 | Stepper driver primary; ULN2003A drop-in alt: C2358. **Both parts ship in standard narrow SOIC-16 (150 mil body / 3.9 mm). Do NOT use SOIC-16W (300 mil / 7.5 mm) — pads will not bridge the IC's leads.** |
 | U3 | LM2937IMP-3.3 | SOT-223 | CHECK per #105 | **12V→3.3V LDO — PRIMARY** (TI, **26 V operating / 60 V transient**). **Pinout (LM1117 family convention) — LOCKED: pin 1 = GND, pin 2 = VOUT (= tab), pin 3 = VIN.** Heatsink copper pour goes on **pin 2 + tab (VOUT, 3V3 net)**, NOT on GND — they're internally tied; pouring tab to GND shorts 3V3 to GND. Dissipation at 55 mA load = 0.48 W; SOT-223 with ~1 cm² VOUT pour holds θJA ~50 °C/W. **Alternate: LDL1117S33TR** (ST, C434348, 18 V op max / 20 V abs max, same SOT-223, same pinout convention) — demoted from primary because D4's clamp voltage must stay under the LDO rating: SMAJ13A's VC max 21.5 V fits the 26 V LM2937, whereas the superseded SMAJ15A's VC max 24.4 V exceeded LDL1117's 20 V abs max. **Do NOT substitute HT7833 / AMS1117 / MCP1825 — wrong VIN ratings** (HT7833 is 6.5 V max VIN — destroyed at 12 V). |
-| U4 | SN65HVD75DR | SOIC-8 | C57928 | RS-485 transceiver |
+| U4 | THVD1410DR | SOIC-8 | CHECK per #105 | RS-485 transceiver — **locked 2026-07-09 (#179)**: 3–5.5 V supply, 500 kbps slew-limited, true idle/open/short failsafe, ±18 kV IEC contact on bus pins. Same SOIC-8 pinout as the superseded SN65HVD75. Deletes D5 (SM712) and the master-side failsafe bias. |
 | J3 | Hall connector | JST-XH 3-pin male, vertical THT (B3B-XH-A) | C145756 | 3-pin header for external hall sensor module on flying lead. **Pinout LOCKED: pin 1 = +3V3, pin 2 = GND, pin 3 = HALL_OUT** — matches KY-003 module native order so v1's existing flying-lead cable plugs straight in. Different sensor modules adapt at the cable end. **Sensor spec: 3.3 V-capable open-drain hall required** (TI DRV5023 / Diodes AH3366Q / Honeywell SS361RT on a KY-003-style 3-wire lead) — a genuine KY-003 carries an A3144 (4.5 V min supply) and is NOT qualified at 3.3 V; v1 modules must be individually bench-verified or replaced. |
 | Q1 | AO3401A | SOT-23 | C15127 | P-FET reverse-block. **VGS rated only ±12 V** — at nominal 12 V brick the gate-source margin is zero. Add Z1 10 V Zener clamp gate→source to absorb brick tolerance + transients; see Power section. |
 | Z1 | BZT52C10 (or MMSZ5240B) | SOD-123 | C8062 (CHECK) | **10 V** Zener clamp on Q1 VGS — cathode → source, anode → gate. **10 V (not 12 V)** to give margin against AO3401A's ±12 V VGS abs-max under Zener tolerance (BZT52C12 +10% upper bound = 13.2 V puts the FET out of spec; cross-validated by Gemini + ChatGPT external review 2026-04-26). |
-| F_unit | Polyfuse 0.5 A hold / ~1 A trip | 1206 SMD | CHECK per #105 | Per-unit input polyfuse, in series: **PG1 (12 V pogo) → F_unit → Q1 → PCB-12V rail**. A shorted unit no longer takes down its whole row, and self-identifies (its LEDs go dark). |
+| F_unit | Polyfuse 0.5 A hold / ~1 A trip | 1206 SMD | CHECK per #105 | Per-unit input polyfuse, in series: **12 V card-edge finger → F_unit → Q1 → PCB-12V rail**. A shorted unit no longer takes down its whole row, and self-identifies (its LEDs go dark). **Sizing under review (#180)** — resize after #101 measures a rev A board (likely 0.75–1 A hold in 1812). |
 | D1 | LED blue | 0805 | C2293 | HEARTBEAT |
 | D2 | LED red | 0805 | C2286 | FAULT |
 | D3 | LED yellow | 0805 | C2298 | IDENTIFY |
 | D4 | SMAJ13A | DO-214AC SMA | CHECK per #105 | 12V-rail TVS unidirectional, **13 V standoff** (above 12 V + 5% brick tolerance), VC max 21.5 V — coordinated with the 26 V LM2937 LDO. **Supersedes SMAJ15A**, whose VC max 24.4 V exceeded LDL1117's 20 V abs max. **Placement LOCKED to post-Q1 (load-side PCB-12V rail)** — cathode (banded end) → PCB-12V (post-Q1 source), anode → GND. (Earlier draft said "post-pogo, before Q1"; that contradicted the net diagram below — ChatGPT external review caught it 2026-04-26.) Wrong-way orientation forward-biases and shorts the rail. |
-| D5 | SM712-02HTG | SOT-23 | C172881 | RS-485 ESD. Pinout: pin 1 = I/O1 (A), pin 2 = I/O2 (B), **pin 3 = GND** — verify against the Littelfuse SM712-02HTG datasheet drawing during symbol creation. |
 | SW1 | Tact switch 6×6 | SMD 6x6x5 | C318884 | IDENTIFY button |
-| PG1-PG4 | Pogo pin spring contact | THT (drill 1.83 mm, pad 2.45 mm) | n/a (DigiKey) | **Primary: Mill-Max 0906-2-15-20-75-14-11-0** (5.00 mm free, 1.0–1.4 mm travel, 1.07 mm Au tip, 2 A continuous, 1 M cycles). **Backup: Mill-Max 0906-1-15-20-75-14-11-0** (same footprint, less travel margin). LCSC carries Mill-Max as a courtesy listing — order from DigiKey and ship to JLC for assembly, or hand-solder. **LCSC-only fallback: Xinyangze YZ02015095R-01 (LCSC C5157439)** — derate to 1 A (fine at the unit's ≤0.3 A draw), 10k mate cycles is fine for hobby. **NOTE: PG_KEY 5th polarization pogo pin REMOVED** — pad spacing collides with PG1, and a spring pogo on bare FR-4 is not a hard mechanical interlock. Polarization is now enforced by an asymmetric 3D-printed DIN clip (see Mechanical section + DIN clip note). |
+| CE | Card-edge fingers 2×5 | PCB feature (beveled edge, hard gold) | n/a | **Locked 2026-07-09 (#100)** — 2.54 mm pitch, 5 positions, fingers mirrored on both card faces (10 contacts): 12V, GND, A, B, spare (spare → test pad). Polarizing key slot between GND and A; **GND fingers longest (first-make)**; 1.6 mm card; hard gold 0.3–0.8 µm Au over ≥2.5 µm Ni (standard JLC gold-fingers option). Replaces PG1–PG4 pogo pins. Edge position/orientation from the #100 mock-up. Mating socket is on the backplane. |
 | J2 | JST-XH **5-pin** male | THT B5B-XH-A | C158013 | Stepper output to 28BYJ-48: pins 1-4 = coil drives from TPL7407L OUT1-OUT4, **pin 5 = +12 V** (carries the 28BYJ-48's red wire from the unit's internal 12 V rail). Avoids 64× hand-splicing the +12 V wire into the chassis harness. |
 | C_in | 22 µF / 25 V X7R | **1206** | C45783 (CHECK: confirm 1206 22 µF/25 V X7R is in JLC stock; 22 µF/25 V/X7R/0805 is effectively unobtainable) | 12V input bulk |
 | C_in2 | 100 nF X7R | 0603 | C14663 | 12V decap |
@@ -33,8 +42,8 @@ PCB design.** See `KICAD_HANDOFF.md` for the KiCad 10 build steps.
 | C_rst | 100 nF X7R | 0603 | C14663 | NRST filter |
 | C_id | 100 nF X7R | 0603 | C14663 | IDENTIFY button debounce |
 | R_hall | 10 kΩ 1% | 0603 | C25804 | Hall sensor pull-up |
-| R_de | 1 kΩ 1% | 0603 | C21190 | DE driver line series (PA12 → SN65HVD75 DE) |
-| R_de_pd | 10 kΩ 1% | 0603 | C25804 | **DE pull-down to GND** — SN65HVD75 has no internal pulls and STM32 GPIOs float as analog inputs during reset; a floating DE can jam the bus |
+| R_de | 1 kΩ 1% | 0603 | C21190 | DE driver line series (PA12 → THVD1410 DE) |
+| R_de_pd | 10 kΩ 1% | 0603 | C25804 | **DE pull-down to GND** — STM32 GPIOs float as analog inputs during reset; a floating DE can jam the bus. Kept even if the THVD1410 has internal biasing (verify datasheet at capture) — an explicit 10 k is deterministic |
 | R_led (×3) | 1 kΩ 1% | 0603 | C21190 | LED current limit |
 | R_id | 10 kΩ 1% | 0603 | C25804 | IDENTIFY button pull-up |
 | R_rst | 10 kΩ 1% | 0603 | C25804 | NRST pull-up |
@@ -44,7 +53,7 @@ PCB design.** See `KICAD_HANDOFF.md` for the KiCad 10 build steps.
 ### Power section
 
 ```
-PG1 (top pogo, 12V_IN) ── F_unit polyfuse (0.5 A hold / ~1 A trip, 1206) ── Q1 drain (P-FET, high-side reverse-block)
+CE 12V finger (12V_IN) ── F_unit polyfuse (0.5 A hold / ~1 A trip, 1206) ── Q1 drain (P-FET, high-side reverse-block)
                               │
                               Q1 source ── PCB-12V rail ──┬── D4 SMAJ13A cathode (banded → +12V; anode → GND)
                                                            ├── C_in 22 µF
@@ -99,8 +108,9 @@ PG4 (bottom pogo, GND) ── PCB-GND plane
 
 **Hot-swap is prohibited.** Power the row off before inserting or
 removing a unit: hot-plugging charges the 22 µF input cap through
-~50–100 mΩ of pogo contact resistance ≈ 5–10 V/µs on the rail —
-the TPL7407L's COM pin abs max is 0.5 V/µs.
+~50–100 mΩ of edge-contact resistance ≈ 5–10 V/µs on the rail —
+the TPL7407L's COM pin abs max is 0.5 V/µs. (GND-first finger
+staggering adds margin, not permission.)
 
 ### MCU (STM32G030K8T6, LQFP-32)
 
@@ -122,7 +132,7 @@ it encodes this pinout.
 | UART_TX | USART1_TX (PA9) | AF1 | Direct, no remap |
 | UART_RX | USART1_RX (PA10) | AF1 | Direct, no remap |
 | UART_DE | USART1_RTS_DE_CK (PA12) | AF1 | Hardware-toggled DE |
-| (no /RE GPIO) | — | — | Tie SN65HVD75 /RE to GND (always-receive); firmware discards TX echo on RX |
+| (no /RE GPIO) | — | — | Tie THVD1410 /RE to GND (always-receive); firmware discards TX echo on RX |
 | STEPPER_IN1..4 | PA4 / PA5 / PA6 / PA7 | GPIO | TPL7407L inputs |
 | HALL_IN | PB0 | GPIO + EXTI | Hall sensor with 10 kΩ pull-up |
 | IDENTIFY_BTN | PA8 | GPIO + EXTI | 10 kΩ pull-up + 100 nF debounce |
@@ -155,11 +165,11 @@ it encodes this pinout.
 | 16 | PB1 | LED_HEARTBEAT → **D1 cathode** (sink); D1 anode → R_led 1 kΩ → 3V3 |
 | 17 | PB2 | LED_FAULT → **D2 cathode** (sink); D2 anode → R_led 1 kΩ → 3V3 |
 | 18 | PA8 | IDENTIFY_BTN ← SW1 (10 kΩ pull-up + 100 nF debounce) |
-| 19 | **PA9** | UART_TX (USART1_TX, AF1) → SN65HVD75 D (pin 4) |
+| 19 | **PA9** | UART_TX (USART1_TX, AF1) → THVD1410 D (pin 4) |
 | 20 | **PC6** | NC (spare) — sits between PA9 and PA10 on K-suffix package |
-| 21 | **PA10** | UART_RX (USART1_RX, AF1) ← SN65HVD75 R (pin 1) |
+| 21 | **PA10** | UART_RX (USART1_RX, AF1) ← THVD1410 R (pin 1) |
 | 22 | **PA11** | NC (spare) — leave unconnected unless deliberately used |
-| 23 | **PA12** | UART_DE (USART1_RTS_DE_CK, AF1) → SN65HVD75 DE (pin 3) via 1 kΩ R_de |
+| 23 | **PA12** | UART_DE (USART1_RTS_DE_CK, AF1) → THVD1410 DE (pin 3) via 1 kΩ R_de |
 | 24 | PA13 (SWDIO) | SWDIO test pad |
 | 25 | PA14 (SWCLK, **also BOOT0**) | SWCLK test pad — nBOOT_SEL option bit must remain 1 (factory default) so BOOT0 is ignored at boot; SWD provisioning of virgin parts works via the empty-check |
 | 26 | PA15 | LED_IDENTIFY → **D3 cathode** (sink); D3 anode → R_led 1 kΩ → 3V3 |
@@ -186,7 +196,7 @@ it encodes this pinout.
   fixed: 3V3 → R_led → anode → cathode → MCU GPIO (sinks low to
   illuminate).
 
-`/RE` is **not** wired to a GPIO — SN65HVD75 pin 2 is tied permanently
+`/RE` is **not** wired to a GPIO — THVD1410 pin 2 is tied permanently
 to GND. The firmware listens to its own TX echo and discards it,
 which is standard half-duplex practice and saves a GPIO + a series
 resistor.
@@ -229,29 +239,21 @@ with its standard 5-pin connector.
 
 (Unused TPL7407L channels IN5-IN7 must be tied to GND, not floating.)
 
-### SN65HVD75 (RS-485 transceiver, SOIC-8)
+### THVD1410 (RS-485 transceiver, SOIC-8)
 
 | Pin | Function | Net |
 |---|---|---|
 | 1 | R | UART_RX → MCU PA10 (USART1_RX) |
 | 2 | /RE | **tied to GND** (always-receive; firmware discards TX echo) |
-| 3 | DE | DE ← MCU PA12 (USART1_RTS_DE_CK) via 1 kΩ R_de; **R_de_pd 10 kΩ pull-down to GND on the DE pin** — SN65HVD75 has no internal pulls and STM32 GPIOs float as analog inputs during reset; a floating DE can jam the bus |
+| 3 | DE | DE ← MCU PA12 (USART1_RTS_DE_CK) via 1 kΩ R_de; **R_de_pd 10 kΩ pull-down to GND on the DE pin** — STM32 GPIOs float as analog inputs during reset; a floating DE can jam the bus. Kept even if the THVD1410 has internal biasing (verify at capture) |
 | 4 | D | UART_TX ← MCU PA9 (USART1_TX) |
 | 5 | GND | GND |
-| 6 | A | RS485_A → SM712 pin 1 + PG2 (upper-middle pogo) |
-| 7 | B | RS485_B → SM712 pin 2 + PG3 (lower-middle pogo) |
+| 6 | A | RS485_A → CE finger A |
+| 7 | B | RS485_B → CE finger B |
 | 8 | VCC | 3V3 + 100 nF decap |
 
-### SM712-02HTG (RS-485 ESD, SOT-23)
-
-| Pin | Function | Net |
-|---|---|---|
-| 1 | I/O1 (A) | RS485_A |
-| 2 | I/O2 (B) | RS485_B |
-| 3 | **GND** | GND |
-
-(An earlier draft had GND on pin 2 — wrong. **Verify against the
-Littelfuse SM712-02HTG datasheet drawing during symbol creation.**)
+No external ESD array on A/B: the THVD1410's bus pins are rated
+±18 kV IEC 61000-4-2 contact — the former D5 SM712 is deleted (#179).
 
 ### Hall sensor connector (J3) — 3-pin JST-XH male, vertical THT
 
@@ -307,20 +309,23 @@ sinks current to GND when the GPIO is driven low. Anode is tied
 through R_led 1 kΩ to 3V3. This matches the pin table above; earlier
 drafts that said "GPIO → anode" were wrong.
 
-### Pogo pins (PG1-PG4, on unit underside)
+### Card-edge fingers (CE, 2×5)
 
 ```
-PG1 (top, 12V)    ─── 12V net (→ Q1 drain, before reverse-block)
-PG2 (upper-mid, A) ─── RS485_A net (to SN65HVD75 pin 6, SM712 pin 1)
-PG3 (lower-mid, B) ─── RS485_B net (to SN65HVD75 pin 7, SM712 pin 2)
-PG4 (bottom, GND) ─── GND net
+Position 1: 12V   ─── 12V net (→ F_unit → Q1 drain)     [both faces]
+Position 2: GND   ─── GND net — LONGEST fingers (first-make) [both faces]
+   — polarizing key slot —
+Position 3: A     ─── RS485_A net (to THVD1410 pin 6)   [both faces]
+Position 4: B     ─── RS485_B net (to THVD1410 pin 7)   [both faces]
+Position 5: spare ─── test pad only                      [both faces]
 ```
 
-**No 5th polarization pogo (PG_KEY removed).** The earlier PG_KEY at
-y = +14 mm collided with PG1 at y = +12 mm (2 mm centre-to-centre with
-2.45 mm pads = physical overlap), and a spring pogo pressing on bare
-FR-4 is not a hard mechanical interlock anyway. Polarization is now
-enforced by an asymmetric 3D-printed DIN clip — see Mechanical section.
+Each net is on both card faces (dual-row socket reads top + bottom),
+so every contact is doubled. The key slot between GND and A makes
+reversed insertion mechanically impossible — the socket key is the
+primary polarization; the asymmetric DIN clip is secondary. Edge
+position/orientation on the board outline comes from the #100
+insertion-kinematics mock-up.
 
 ### SWD test pads
 
@@ -343,14 +348,13 @@ enforced by an asymmetric 3D-printed DIN clip — see Mechanical section.
 
 ## Floorplan (rough placement) — chassis-compatible with v1
 
-> **⚠ GEOMETRY UNRESOLVED — issue #100**: the documented unit/rail
-> geometry is impossible (80 mm along a 37 mm rail pitch; rotated 90°
-> is still 40 > 37 mm and puts the pogo column parallel to the
-> traces). The pogo column position/orientation on the unit underside
-> WILL change after the #100 mechanical mock-up, and the pogo
-> coordinates in this section are written in a superseded coordinate
-> convention — do NOT capture them in KiCad yet. Netlist, part
-> choices, and the protection chain are unaffected and capture-ready.
+> **⚠ GEOMETRY SUPERSEDED — issue #100 (card-edge decided
+> 2026-07-09)**: this floorplan was drawn for the withdrawn pogo
+> system. The unit now mates via a 2×5 card-edge on one board edge;
+> the pogo coordinates below are obsolete and the outline/edge
+> position comes from the #100 insertion-kinematics mock-up — do NOT
+> capture this section in KiCad yet. Netlist, part choices, and the
+> protection chain are unaffected and capture-ready.
 
 The v2 unit PCB outline is **80 × 40 mm**, identical to v1
 (`PCB/v1/Gerber_PCB_Splitflap.zip`), with the same 4-corner mounting
@@ -390,7 +394,7 @@ hole pattern. v2 is a chassis drop-in replacement.
   the LM1117/AMS1117 pin-order convention (pin 1=GND, pin 2=OUT=tab,
   pin 3=IN), so the AMS1117 footprint is reusable; verify against the
   LM2937 datasheet anyway as part of bring-up. MCU U1 STM32G030K
-  LQFP-32, RS-485 transceiver U4 SN65HVD75, F_unit + Q1 AO3401 +
+  LQFP-32, RS-485 transceiver U4 THVD1410, F_unit + Q1 AO3401 +
   Z1 10 V Zener clamp, ESD, decaps — placed wherever leaves a clear ~10 mm
   vertical channel through the long-axis centre for the pogo column.
 
@@ -417,7 +421,7 @@ hole pattern. v2 is a chassis drop-in replacement.
   │            footprint = 150 mil narrow, not v1's)  │
   │                                                   │
   │   [U1 STM32G030] ●  PG1 12V    (y=+12)            │
-  │   [U4 SN65HVD75] ●  PG2 A      (y= +4)            │
+  │   [U4 THVD1410] ●  PG2 A      (y= +4)            │
   │                  ●  PG3 B      (y= -4)            │
   │ [U3 LM2937-3.3   ●  PG4 GND    (y=-12)            │
   │  SOT-223 + pour] ↑                                │
@@ -506,7 +510,7 @@ in. The 24 mm pogo column fits inside the 40 mm short axis with
    `12V`, `GND`, `3V3`, `RS485_A`, `RS485_B`, `STEPPER_IN1..4`,
    `HALL_IN`, `IDENTIFY_BTN`, `LED_HEARTBEAT`, `LED_FAULT`,
    `LED_IDENTIFY`, `NRST`, `UART_TX`, `UART_RX`, `DE`. (`/RE` is
-   tied to GND on the SN65HVD75 — no net.)
+   tied to GND on the THVD1410 — no net.)
 4. Run ERC, fix all errors.
 5. Update PCB from Schematic.
 6. PCB editor (place per `LAYOUT_UNIT.md`):
@@ -527,15 +531,14 @@ in. The 24 mm pogo column fits inside the 40 mm short axis with
      v1's AMS1117 position; assign the **VOUT (pin 2 + tab) net**
      a generous filled zone for heatsinking. Tab is NOT GND —
      pouring it to GND shorts 3V3 to GND.
-   - Place RS-485 path (U4 SN65HVD75, D5 SM712) near the pogo pin
-     pads.
+   - Place RS-485 path (U4 THVD1410) near the card-edge fingers.
    - Place J3 hall connector on a clean edge for cable exit toward
      the chassis hall bracket (matches v1 "Magnet Sensor" XY).
    - Place IDENTIFY button SW1 on the edge so it's accessible after
      install.
-   - Pogo pin footprints (1.83 mm drill, 2.45 mm pad, THT) at
-     PG1..PG4 on the bottom layer — **do NOT capture positions yet;
-     geometry unresolved per issue #100** (see warning above).
+   - Card-edge fingers (2×5, see CE row in the component table) on
+     one board edge — **do NOT capture the edge position/orientation
+     yet; geometry comes from the #100 mock-up** (see warning above).
 7. Route per `LAYOUT_UNIT.md`. Power traces 15–20 mil for 12V
    internal; signal 6 mil; A/B as a loose differential pair.
 8. Add filled zones for GND (both layers) and VOUT-tab heatsink

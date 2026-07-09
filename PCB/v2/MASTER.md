@@ -2,6 +2,15 @@
 
 **Revision:** 2026-07-04 (#102 doc-correction pass; previous 2026-04-26)
 
+> **⚠ PHY AMENDMENTS 2026-07-09 (#179)** — this document is already
+> superseded as a build document (custom master cancelled; see
+> `README.md`), but its PHY sub-circuit moves onto the devkit carrier
+> with these changes: **U4/U5 = THVD1410** (same SOIC-8 pinout as
+> SN65HVD75; 3–5.5 V), **R_bias_a/R_bias_b deleted** (true-failsafe
+> receiver), **D9/D10 SM712 deleted** (±18 kV IEC integrated).
+> C_decap_phy and the 10 kΩ DE pull-downs stay.
+
+
 ESP32-S3 controller. Drives **2 RS-485 buses** (Bus A = rows 0+1 on
 UART1, Bus B = rows 2+3 on UART2; superseded 2026-07-04 (#102): the
 earlier 4-bus / SC16IS740 design is deleted). 64 units total. USB-C
