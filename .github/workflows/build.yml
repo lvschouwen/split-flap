@@ -80,6 +80,10 @@ jobs:
         working-directory: firmware/v1/ESPMaster
         run: python -m pytest tests/
 
+      - name: Run v2 Master Python tests
+        working-directory: firmware/v2/Master
+        run: python -m pytest tests/
+
       - name: Install flasher deps
         run: pip install pyserial==3.5 esptool==4.8.1
 

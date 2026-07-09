@@ -1,10 +1,12 @@
 // v2 master — Phase 1 (#58, epic #183).
 //
 // Boots on an ESP32-S3 devkit, loads settings from NVS, prints an identity
-// banner, and keeps the ported pure-logic headers compiling under the ESP32
-// core (they are otherwise only exercised by the native test env).
+// banner, registers the full v1 web endpoint surface (#186), and keeps the
+// ported pure-logic headers compiling under the ESP32 core (they are
+// otherwise only exercised by the native test env).
 
 #include <Arduino.h>
+#include <ESPAsyncWebServer.h>
 
 #include "DeviceIdentity.h"
 #include "DisplayWidth.h"
@@ -12,6 +14,7 @@
 #include "MqttHelpers.h"
 #include "NvsSettingsStore.h"
 #include "Settings.h"
+#include "WebEndpoints.h"
 
 // v1 derives its chip id from ESP.getChipId() = last 3 octets of the MAC.
 // The ESP32 core has no getChipId(); take the same last-3-octets slice of
@@ -28,6 +31,7 @@ static const char* MDNS_NAME_PREFIX = "split-flap";
 static NvsSettingsStore settingsStore;
 static MasterSettings settings;
 static String deviceName;
+static AsyncWebServer webServer(80);
 
 void setup() {
   Serial.begin(115200);
@@ -52,9 +56,16 @@ void setup() {
                 settings.mqttHost.length()
                     ? (settings.mqttHost + ":" + settings.mqttPort).c_str()
                     : "(disabled)");
+
+  // Routes registered now; webEndpointsStart() (server.begin()) belongs to
+  // the WiFi slice — LWIP isn't up until a network interface exists.
+  webEndpointsInit(webServer, settings, settingsStore, deviceName);
+  Serial.println(F("web endpoints registered (server start pending WiFi slice)"));
 }
 
 void loop() {
+  webEndpointsLoop(settings, settingsStore);
+
   static uint32_t lastTick = 0;
   if (millis() - lastTick >= 5000) {
     lastTick = millis();
