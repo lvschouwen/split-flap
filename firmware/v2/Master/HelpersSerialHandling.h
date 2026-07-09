@@ -11,9 +11,41 @@
 // is mirrored into the in-RAM web log ring (exposed at GET /log). The
 // web-log tap is skipped in the native test environment so included sketch
 // logic stays linkable there.
+//
+// Since the task skeleton (#187) these helpers have genuinely concurrent
+// callers on both cores, and one logical line is several writes (Serial
+// body, Serial CRLF, web-log mirror). A helper-scope mutex keeps lines
+// whole. Lock-order rule: this lock is taken around leaf operations only —
+// nothing inside it may take webStateMutex/snapshotMutex (webLogMutex nests
+// inside it by design, one direction only).
+
+#if defined(ARDUINO_ARCH_ESP32) && !defined(UNIT_TEST)
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+struct SerialPrintLock {
+  // Magic-static init is thread-safe (C++11); tolerate a failed create by
+  // skipping the lock — interleaved output beats a crashed logger.
+  static SemaphoreHandle_t handle() {
+    static SemaphoreHandle_t m = xSemaphoreCreateMutex();
+    return m;
+  }
+  SerialPrintLock() {
+    if (handle()) xSemaphoreTake(handle(), portMAX_DELAY);
+  }
+  ~SerialPrintLock() {
+    if (handle()) xSemaphoreGive(handle());
+  }
+  SerialPrintLock(const SerialPrintLock&) = delete;
+  SerialPrintLock& operator=(const SerialPrintLock&) = delete;
+};
+#else
+struct SerialPrintLock {};  // single-threaded environments: no-op
+#endif
 
 template <typename T>
 void SerialPrint(T value) {
+  SerialPrintLock lock;
   Serial.print(value);
 #ifndef UNIT_TEST
   webLogPrinter.print(value);
@@ -22,6 +54,7 @@ void SerialPrint(T value) {
 
 template <typename T>
 void SerialPrintf(const char* message, T value) {
+  SerialPrintLock lock;
   Serial.printf(message, value);
 #ifndef UNIT_TEST
   char buf[96];
@@ -34,6 +67,7 @@ void SerialPrintf(const char* message, T value) {
 
 template <typename T>
 void SerialPrintln(T value) {
+  SerialPrintLock lock;
   Serial.println(value);
 #ifndef UNIT_TEST
   webLogPrinter.println(value);

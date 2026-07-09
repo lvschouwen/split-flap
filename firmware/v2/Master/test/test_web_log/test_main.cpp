@@ -1,7 +1,11 @@
-// Host-side tests for the v2 web log ring buffer (#186).
+// Host-side tests for the v2 web log ring buffer (#186, #187).
 // The ring is byte-oriented: readers get the last WEBLOG_SIZE bytes of
 // serial-style output, newlines intact, oldest first. A tiny ring size is
 // injected here so wrap behaviour is cheap to exercise.
+//
+// Since #187 the buffer is allocated by webLogInit() via largeAlloc()
+// (PSRAM-preferred on the S3) instead of living in static SRAM; anything
+// logged before init is dropped rather than crashing.
 
 #include <ArduinoFake.h>
 #include <unity.h>
@@ -9,8 +13,26 @@
 #define WEBLOG_SIZE 16
 #include "../../WebLog.cpp"
 
+// setUp deliberately does NOT init: the first test in main() exercises the
+// pre-init guards, everything after runs against an initialized ring
+// (webLogInit() is idempotent, so re-running it in setUp would be fine but
+// would make the pre-init state untestable).
 void setUp() { webLogReset(); }
 void tearDown() {}
+
+// MUST run first (before any webLogInit): logging before init is dropped,
+// not a crash — SerialPrint helpers may fire before setup() reaches init.
+static void test_append_and_read_before_init_are_safe() {
+  webLogAppend("early", 5);
+  TEST_ASSERT_EQUAL_STRING("", webLogRead().c_str());
+}
+
+static void test_init_allocates_ring_and_is_idempotent() {
+  webLogInit();
+  webLogAppend("abc", 3);
+  webLogInit();  // second init must not clobber or leak the ring
+  TEST_ASSERT_EQUAL_STRING("abc", webLogRead().c_str());
+}
 
 static void test_empty_log_reads_empty() {
   TEST_ASSERT_EQUAL_STRING("", webLogRead().c_str());
@@ -62,6 +84,8 @@ static void test_reset_clears_wrapped_state() {
 
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_append_and_read_before_init_are_safe);  // pre-init, keep first
+  RUN_TEST(test_init_allocates_ring_and_is_idempotent);
   RUN_TEST(test_empty_log_reads_empty);
   RUN_TEST(test_short_append_round_trips);
   RUN_TEST(test_null_and_zero_length_appends_are_ignored);

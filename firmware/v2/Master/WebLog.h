@@ -10,9 +10,14 @@
 //
 // Disable the whole feature with `-D WEBLOG_DISABLE` if RAM pressure ever
 // forces the issue (it shouldn't on the S3).
+//
+// The ring is allocated by webLogInit() via largeAlloc() (#187) — PSRAM
+// when the module has it, internal heap otherwise — which is why v2 can
+// afford 32 KB where v1's ESP-01 had to shrink to 2 KB (#133). Call
+// webLogInit() before the first SerialPrint; earlier appends are dropped.
 
 #ifndef WEBLOG_SIZE
-#define WEBLOG_SIZE 4096
+#define WEBLOG_SIZE 32768
 #endif
 
 // `webLogPrinter` is a Print-derived sink so every type Serial can format
@@ -26,6 +31,7 @@ public:
 
 extern WebLogPrinter webLogPrinter;
 
+void webLogInit();
 void webLogAppend(const char* data, size_t len);
 String webLogRead();
 void webLogReset();

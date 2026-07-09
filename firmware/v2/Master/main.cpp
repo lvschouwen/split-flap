@@ -1,9 +1,10 @@
 // v2 master — Phase 1 (#58, epic #183).
 //
 // Boots on an ESP32-S3 devkit, loads settings from NVS, prints an identity
-// banner, registers the full v1 web endpoint surface (#186), and keeps the
-// ported pure-logic headers compiling under the ESP32 core (they are
-// otherwise only exercised by the native test env).
+// banner, registers the full v1 web endpoint surface (#186), and starts the
+// dual-core task skeleton (#187): display domain on core 1, network domain
+// on core 0, queues and snapshot copies in between. setup() is the
+// composition root; loop() survives only as the observability heartbeat.
 
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
@@ -14,7 +15,9 @@
 #include "MqttHelpers.h"
 #include "NvsSettingsStore.h"
 #include "Settings.h"
+#include "Tasks.h"
 #include "WebEndpoints.h"
+#include "WebLog.h"
 
 // v1 derives its chip id from ESP.getChipId() = last 3 octets of the MAC.
 // The ESP32 core has no getChipId(); take the same last-3-octets slice of
@@ -36,6 +39,8 @@ static AsyncWebServer webServer(80);
 void setup() {
   Serial.begin(115200);
   delay(2000);  // native USB-CDC needs a moment before the first prints land
+  webLogInit();  // before the first SerialPrint*, or those lines never
+                 // reach GET /log
 
   settingsStore.begin();
   settings = loadSettings(settingsStore);
@@ -48,6 +53,11 @@ void setup() {
                 ESP.getChipRevision(), ESP.getChipCores(), ESP.getCpuFreqMHz());
   Serial.printf("flash: %u KB, free heap: %u KB\n",
                 ESP.getFlashChipSize() / 1024, ESP.getFreeHeap() / 1024);
+  // First-boot verification that the N16R8 flags match the silicon: an
+  // N16R8 must report ~8 MB here; 0 means the qio_opi/PSRAM flags are wrong
+  // for whatever module is actually fitted.
+  Serial.printf("psram: %u KB (%u KB free)\n", ESP.getPsramSize() / 1024,
+                ESP.getFreePsram() / 1024);
   Serial.printf("identity: %s\n", deviceName.c_str());
   Serial.printf("settings: align=%s speed=%d mode=%s tz=%s\n",
                 settings.alignment.c_str(), settings.flapSpeed,
@@ -61,15 +71,16 @@ void setup() {
   // the WiFi slice — LWIP isn't up until a network interface exists.
   webEndpointsInit(webServer, settings, settingsStore, deviceName);
   Serial.println(F("web endpoints registered (server start pending WiFi slice)"));
+
+  // After webEndpointsInit: netTask drains the web staging and needs its
+  // mutex to exist before the first drain tick.
+  tasksInit(settings, settingsStore);
+  Serial.println(F("task skeleton up: display+clock on core 1, net+mqtt on core 0"));
 }
 
 void loop() {
-  webEndpointsLoop(settings, settingsStore);
-
-  static uint32_t lastTick = 0;
-  if (millis() - lastTick >= 5000) {
-    lastTick = millis();
-    Serial.printf("[%8lu ms] heartbeat, free heap %u KB\n",
-                  (unsigned long)millis(), ESP.getFreeHeap() / 1024);
-  }
+  // All real work lives in the domain tasks (Tasks.cpp); loopTask just
+  // reports. The delay yields core 1 to displayTask between beats.
+  tasksHeartbeatReport();
+  delay(5000);
 }

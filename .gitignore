@@ -35,3 +35,8 @@ flashing/prebuilt/
 
 # PCB design handoff zips (regenerated on demand)
 PCB/*.zip
+
+# pioarduino hybrid-compile artifacts (generated per build, IDF-owned)
+firmware/v2/Master/managed_components/
+firmware/v2/Master/sdkconfig.*
+firmware/v2/Master/.dummy/

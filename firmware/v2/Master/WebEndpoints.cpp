@@ -17,6 +17,7 @@
 #include "HelpersSerialHandling.h"
 #include "PendingSettingsPost.h"
 #include "SettingsJson.h"
+#include "Tasks.h"
 #include "WebAssets.h"
 #include "WebLog.h"
 
@@ -47,11 +48,6 @@ struct WebStateLock {
   WebStateLock(const WebStateLock&) = delete;
   WebStateLock& operator=(const WebStateLock&) = delete;
 };
-
-// Last message accepted via POST / — the display service isn't ported yet,
-// so this is a visible round-trip for the bench (echoed in /settings), not
-// a claim that anything flapped.
-static String lastWrittenText;
 
 static const char* NOT_PORTED_MSG =
     "Not available on the v2 master yet (#58): this endpoint's backing "
@@ -98,6 +94,12 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                       const String& effectiveDeviceName) {
   (void)store;  // handlers never write the store; the loop drain does
   webStateMutex = xSemaphoreCreateMutex();
+  if (webStateMutex == nullptr) {
+    // Boot-time OOM: WebStateLock on a null handle is UB, so fail loudly
+    // instead — abort() panics into the coredump partition.
+    Serial.println(F("FATAL: webStateMutex allocation failed"));
+    abort();
+  }
   liveSettings = &settings;
   effectiveName = effectiveDeviceName;
 
@@ -144,8 +146,10 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       f.mqttPasswordSet = liveSettings->mqttPassword.length() > 0;
       f.lastFlashResult = liveSettings->lastFlashResult;
       f.intendedVersion = liveSettings->intendedVersion;
-      f.lastWrittenText = lastWrittenText;
     }
+    // Display state comes from the display task's snapshot (#187), not from
+    // web-side shadows — the display domain owns what's on the flaps.
+    f.lastWrittenText = String(displaySnapshotGet().currentText);
     f.mqttConnected = false;  // MQTT runtime is a later slice
     f.version = GIT_REV;
     f.sketchMd5 = ESP.getSketchMD5();
@@ -200,6 +204,16 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       SerialPrintln(F("Finished Processing Request with Error"));
       if (isAjax) request->send(400, "text/plain", F("invalid"));
       else request->redirect("/?invalid-submission=true");
+      return;
+    }
+
+    // Message sends become display commands at drain time; report a full
+    // queue now instead of accepting a message that would be dropped. (The
+    // stub worker drains instantly, so this only fires if something wedges.)
+    if (local.inputTextProvided && displayQueueFull()) {
+      SerialPrintln(F("Display command queue full — message rejected."));
+      if (isAjax) request->send(503, "text/plain", F("display busy"));
+      else request->redirect("/?display-busy=true");
       return;
     }
 
@@ -279,18 +293,30 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   {
     WebStateLock lock;
     if (pendingPost.pending) {
-      // Display-bound fields: parsed for wire-contract parity, consumed here
-      // as a visible round-trip until the flap service slice lands.
-      if (pendingPost.inputTextProvided) {
-        lastWrittenText = pendingPost.inputText;
-        SerialPrintln("Message staged (display service not ported yet, #58): " +
-                      lastWrittenText);
-      }
+      // Display-bound fields are read off the post before apply resets it.
+      String messageText = pendingPost.inputText;
+      bool messageProvided = pendingPost.inputTextProvided;
       if (pendingPost.transientTextProvided) {
-        SerialPrintln("Transient text dropped (display service not ported yet, "
+        SerialPrintln("Transient text dropped (mode service not ported yet, "
                       "#58): " + pendingPost.transientText);
       }
+
+      // Settings first, command second: a speed/alignment change riding the
+      // same POST as a message must apply to that message (v1 ordering).
       applySettingsPost(pendingPost, settings, store);
+
+      if (messageProvided) {
+        DisplayCommand cmd = makeShowTextCommand(
+            messageText, settings.alignment, settings.flapSpeed);
+        if (displayEnqueue(cmd)) {
+          SerialPrintln("Message queued for display: " + messageText);
+        } else {
+          // The handler's 503 pre-check makes this a wedged-queue signal,
+          // not a normal path.
+          SerialPrintln("Display queue full at drain — message DROPPED: " +
+                        messageText);
+        }
+      }
     }
     // Small grace period so the HTTP response flushes before the restart.
     rebootDue = pendingReboot && millis() - rebootRequestedAtMs > 750;

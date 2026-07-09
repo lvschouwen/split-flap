@@ -1,0 +1,29 @@
+# Partition table for the v2 master on the N16R8 (16 MB flash), #187.
+#
+# IMMUTABLE AFTER FIRST FLASH: the partition table is only ever written over
+# USB — an OTA can never move or resize partitions. Shaped deliberately:
+#  - offsets are blank on purpose: gen_esp32part auto-places each partition
+#    with the correct alignment (4 KB data, 64 KB app) — hand-computed
+#    offsets are where table bugs come from. Expected placement: nvs 0x9000,
+#    otadata 0x19000, app0 0x20000, app1 0x420000, coredump 0x820000,
+#    storage 0x830000 (verified against the built partitions.bin).
+#  - nvs 64 KB: top of Espressif's recommended 12–64 KB range — wear
+#    leveling spreads erases across pages, and a too-tight NVS that fills
+#    up degrades quickly (ESP-IDF file-system guidance).
+#  - app slots 4 MB each: ~7x the current firmware incl. PROGMEM web assets;
+#    the OTA pair is what actually needs guaranteed room (default_16MB.csv
+#    would give 6.4 MB slots + a 3.4 MB SPIFFS we'd never mount). Bootloader
+#    app rollback (custom_sdkconfig) needs only these two slots + otadata.
+#  - coredump 64 KB: post-mortem backtraces without a debugger attached.
+#  - storage ~7.8 MB: everything left, one spare data partition. Unused
+#    costs nothing; formattable later (LittleFS/FAT) for log archives or
+#    staged unit firmware without touching app offsets. Subtype `spiffs` is
+#    the conventional "generic FS-capable data" marker; nothing mounts it.
+#
+# Name,    Type, SubType,  Offset, Size
+nvs,       data, nvs,      ,       0x10000
+otadata,   data, ota,      ,       0x2000
+app0,      app,  ota_0,    ,       0x400000
+app1,      app,  ota_1,    ,       0x400000
+coredump,  data, coredump, ,       0x10000
+storage,   data, spiffs,   ,       0x7D0000
