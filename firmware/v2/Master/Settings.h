@@ -34,6 +34,8 @@ struct MasterSettings {
   String deviceMode;
   String timezonePosix;
   String deviceName;       // "" = chip-id default via resolveDeviceName()
+  String wifiSsid;         // "" = unprovisioned (boot lands in the portal)
+  String wifiPass;         // "" = open network; never serialized to /settings
   String mqttHost;         // "" = MQTT disabled
   int mqttPort;
   String mqttUser;
@@ -48,6 +50,8 @@ struct MasterSettings {
 #define SETTINGS_KEY_DEVICE_MODE  "deviceMode"
 #define SETTINGS_KEY_TIMEZONE     "tzPosix"
 #define SETTINGS_KEY_DEVICE_NAME  "deviceName"
+#define SETTINGS_KEY_WIFI_SSID    "wifiSsid"
+#define SETTINGS_KEY_WIFI_PASS    "wifiPass"
 #define SETTINGS_KEY_MQTT_HOST    "mqttHost"
 #define SETTINGS_KEY_MQTT_PORT    "mqttPort"
 #define SETTINGS_KEY_MQTT_USER    "mqttUser"
@@ -85,6 +89,20 @@ inline MasterSettings loadSettings(SettingsStore& store) {
   s.deviceName = store.getString(SETTINGS_KEY_DEVICE_NAME, "");
   if (s.deviceName.length() > 0 && !isValidDeviceName(s.deviceName)) {
     s.deviceName = "";  // sentinel: identity falls back to chip-id default
+  }
+
+  // WiFi credentials (#188) sanitize as a pair: a password without a usable
+  // ssid is dead weight (-> both cleared, boot lands in the portal), while a
+  // corrupt password alone keeps the ssid so the join fails fast instead of
+  // erasing a recoverable network name.
+  s.wifiSsid = store.getString(SETTINGS_KEY_WIFI_SSID, "");
+  s.wifiPass = store.getString(SETTINGS_KEY_WIFI_PASS, "");
+  if (s.wifiSsid.length() > 0 && !isValidWifiSsidValue(s.wifiSsid, LEN_WIFI_SSID)) {
+    s.wifiSsid = "";
+  }
+  if (s.wifiSsid.length() == 0 ||
+      !isValidWifiPasswordValue(s.wifiPass, LEN_WIFI_PASSWORD)) {
+    s.wifiPass = "";
   }
 
   s.mqttHost = store.getString(SETTINGS_KEY_MQTT_HOST, "");
@@ -135,6 +153,22 @@ inline void saveIntendedVersion(SettingsStore& store, const String& v) {
 
 inline void saveLastFlashResult(SettingsStore& store, const String& v) {
   store.putString(SETTINGS_KEY_LAST_FLASH, v);
+}
+
+// WiFi credentials (#188): always written as a pair — the portal submits
+// both fields together (an empty password is a real value: open network),
+// so there is no keep-the-stored-secret rule here, unlike MQTT below.
+inline void saveWifiCredentials(SettingsStore& store, const String& ssid,
+                                const String& password) {
+  store.putString(SETTINGS_KEY_WIFI_SSID, ssid);
+  store.putString(SETTINGS_KEY_WIFI_PASS, password);
+}
+
+// /reset-wifi: our NVS namespace is the single credential store (esp_wifi
+// persistence is off), so two key deletes ARE the factory-fresh WiFi state.
+inline void clearWifiCredentials(SettingsStore& store) {
+  store.remove(SETTINGS_KEY_WIFI_SSID);
+  store.remove(SETTINGS_KEY_WIFI_PASS);
 }
 
 // Write-only password: an empty `password` means "keep the stored secret".

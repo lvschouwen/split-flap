@@ -16,4 +16,7 @@ class SettingsStore {
   virtual void putString(const char* key, const String& value) = 0;
   virtual int getInt(const char* key, int def) = 0;
   virtual void putInt(const char* key, int value) = 0;
+  // Deletes the key outright (missing key -> the get* default). /reset-wifi
+  // is two of these, not two empty writes (#188).
+  virtual void remove(const char* key) = 0;
 };

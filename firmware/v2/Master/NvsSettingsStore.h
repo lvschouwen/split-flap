@@ -25,6 +25,7 @@ class NvsSettingsStore : public SettingsStore {
     return prefs_.getInt(key, def);
   }
   void putInt(const char* key, int value) override { prefs_.putInt(key, value); }
+  void remove(const char* key) override { prefs_.remove(key); }
 
  private:
   Preferences prefs_;

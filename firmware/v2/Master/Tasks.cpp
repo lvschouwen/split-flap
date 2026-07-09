@@ -8,6 +8,7 @@
 
 #include "HelpersSerialHandling.h"
 #include "WebEndpoints.h"
+#include "WifiService.h"
 
 // --- static RTOS allocation (memory policy rule 1) ---------------------------
 // Stacks and queue storage are static arrays in internal SRAM: deterministic
@@ -123,8 +124,8 @@ static void clockTaskMain(void*) {
 
 // --- core 0: network domain ----------------------------------------------------
 
-// Drains the web staging (settings posts, pending reboot) that #186 ran from
-// loop(); the WiFi slice adds join/portal supervision here.
+// WiFi join/portal supervision (#188) + the web staging drain (settings
+// posts, pending reboot) that #186 ran from loop().
 struct NetTaskContext {
   MasterSettings* settings;
   SettingsStore* store;
@@ -134,6 +135,7 @@ static void netTaskMain(void* arg) {
   SerialPrintf("netTask up on core %d\n", xPortGetCoreID());
   auto* ctx = static_cast<NetTaskContext*>(arg);
   for (;;) {
+    wifiServiceTick();
     webEndpointsLoop(*ctx->settings, *ctx->store);
     vTaskDelay(pdMS_TO_TICKS(10));
   }

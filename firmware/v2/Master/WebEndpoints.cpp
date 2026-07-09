@@ -20,6 +20,7 @@
 #include "Tasks.h"
 #include "WebAssets.h"
 #include "WebLog.h"
+#include "WifiService.h"
 
 // Staged mutations, owned here; drained by webEndpointsLoop().
 static PendingSettingsPost pendingPost;
@@ -146,6 +147,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       f.mqttPasswordSet = liveSettings->mqttPassword.length() > 0;
       f.lastFlashResult = liveSettings->lastFlashResult;
       f.intendedVersion = liveSettings->intendedVersion;
+      f.wifiSettingsResettable = liveSettings->wifiSsid.length() > 0;
     }
     // Display state comes from the display task's snapshot (#187), not from
     // web-side shadows — the display domain owns what's on the flaps.
@@ -155,7 +157,6 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     f.sketchMd5 = ESP.getSketchMD5();
     f.otaReverted = false;  // boot-verdict logic lands with the OTA slice
     f.lastResetReason = resetReasonString();
-    f.wifiSettingsResettable = false;  // WiFi slice flips this on
     request->send(200, "application/json", buildSettingsJson(f));
   });
 
@@ -252,6 +253,71 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     rebootRequestedAtMs = millis();
   });
 
+  // --- WiFi portal + credentials (#188) -------------------------------------
+  // Handlers stage into WifiService; all radio/NVS work runs in netTask's
+  // wifiServiceTick(). The portal page itself is served unconditionally —
+  // from the LAN it doubles as a "move to another network" page.
+  server.on("/wifi-setup", HTTP_GET, [](AsyncWebServerRequest* request) {
+    serveGzipAsset(request, "text/html", PORTAL_HTML_GZ, PORTAL_HTML_GZ_LEN);
+  });
+
+  server.on("/wifi/scan", HTTP_POST, [](AsyncWebServerRequest* request) {
+    SerialPrintln(F("Request to Scan WiFi Received"));
+    wifiStageScan();
+    request->send(200, "text/plain", F("scanning"));
+  });
+  server.on("/wifi/scan", HTTP_GET, [](AsyncWebServerRequest* request) {
+    String json = wifiScanResultJson();
+    if (json.length() == 0) {
+      request->send(202, "text/plain", F("pending"));
+    } else {
+      request->send(200, "application/json", json);
+    }
+  });
+
+  server.on("/wifi/config", HTTP_POST, [](AsyncWebServerRequest* request) {
+    SerialPrintln(F("Request to Configure WiFi Received"));
+    if (!request->hasParam("ssid", true)) {
+      request->send(400, "text/plain", F("invalid"));
+      return;
+    }
+    String ssid = request->getParam("ssid", true)->value();
+    String pass = request->hasParam("pass", true)
+                      ? request->getParam("pass", true)->value()
+                      : String();
+    if (!isValidWifiSsidValue(ssid, LEN_WIFI_SSID) ||
+        !isValidWifiPasswordValue(pass, LEN_WIFI_PASSWORD)) {
+      SerialPrintln(F("WiFi config rejected: invalid ssid/password"));
+      request->send(400, "text/plain", F("invalid"));
+      return;
+    }
+    wifiStagePortalConfig(ssid, pass);
+    request->send(200, "text/plain", F("ok-reboot"));
+  });
+
+  // POST, not GET (v1 #145): erasing WiFi credentials is the sharpest edge.
+  server.on("/reset-wifi", HTTP_POST, [](AsyncWebServerRequest* request) {
+    SerialPrintln(F("Request to Reset WiFi Received"));
+    request->send(200, "text/plain",
+                  "WiFi credentials erased. The display is rebooting into its "
+                  "setup portal — reconnect to the device's setup AP to "
+                  "configure a network.");
+    wifiStageReset();
+  });
+
+  // Captive-portal hook: while the setup portal is up, the DNS catch-all
+  // funnels every hostname here and this redirect pops the OS sign-in sheet
+  // (/generate_204, /hotspot-detect.html, /connecttest.txt all land in
+  // onNotFound). Outside portal mode: a plain 404, as v1.
+  server.onNotFound([](AsyncWebServerRequest* request) {
+    String redirectUrl = wifiPortalRedirectUrl();  // "" = portal not up
+    if (redirectUrl.length() > 0) {
+      request->redirect(redirectUrl);
+    } else {
+      request->send(404, "text/plain", F("Not found"));
+    }
+  });
+
   // --- v1 endpoints whose services aren't ported yet (#58 slices) ----------
   // Explicit 501s so a bench click yields a clear message instead of a
   // silent 404. Each stub is retired by the slice that ports its service.
@@ -274,10 +340,14 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   registerNotPortedStub(server, "/debug/ota", HTTP_GET);
   registerNotPortedStub(server, "/mqtt/discover", HTTP_GET);
   registerNotPortedStub(server, "/mqtt/discover", HTTP_POST);
-  registerNotPortedStub(server, "/reset-wifi", HTTP_POST);
 }
 
 void webEndpointsStart(AsyncWebServer& server) {
+  // Idempotent: both the portal and the STA-online path call this — the
+  // first netif up wins, a second begin() must not double-register.
+  static bool started = false;
+  if (started) return;
+  started = true;
   server.begin();
   SerialPrintln(F("Web server started"));
 }

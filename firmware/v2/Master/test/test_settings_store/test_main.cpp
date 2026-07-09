@@ -35,6 +35,10 @@ class FakeSettingsStore : public SettingsStore {
     return it == ints_.end() ? def : it->second;
   }
   void putInt(const char* key, int value) override { ints_[key] = value; }
+  void remove(const char* key) override {
+    strings_.erase(key);
+    ints_.erase(key);
+  }
 
   bool hasString(const char* key) const { return strings_.count(key) > 0; }
 
@@ -182,9 +186,81 @@ static void test_out_of_range_port_falls_back_to_default() {
 }
 
 // ---------------------------------------------------------------------------
+// WiFi credentials (#188): our NVS namespace is the single credential store
+// (no SDK-sector persistence on v2) — reset must DELETE the keys, and load
+// must sanitize what buggier firmware may have written.
+// ---------------------------------------------------------------------------
+
+static void test_wifi_defaults_are_unprovisioned() {
+  FakeSettingsStore store;
+  MasterSettings s = loadSettings(store);
+  TEST_ASSERT_EQUAL_STRING("", s.wifiSsid.c_str());
+  TEST_ASSERT_EQUAL_STRING("", s.wifiPass.c_str());
+}
+
+static void test_wifi_credentials_round_trip() {
+  FakeSettingsStore store;
+  saveWifiCredentials(store, String("My Home WiFi"), String("hunter2!"));
+  MasterSettings s = loadSettings(store);
+  TEST_ASSERT_EQUAL_STRING("My Home WiFi", s.wifiSsid.c_str());
+  TEST_ASSERT_EQUAL_STRING("hunter2!", s.wifiPass.c_str());
+}
+
+static void test_wifi_open_network_stores_empty_password() {
+  FakeSettingsStore store;
+  saveWifiCredentials(store, String("cafe-open"), String(""));
+  MasterSettings s = loadSettings(store);
+  TEST_ASSERT_EQUAL_STRING("cafe-open", s.wifiSsid.c_str());
+  TEST_ASSERT_EQUAL_STRING("", s.wifiPass.c_str());
+}
+
+static void test_clear_wifi_credentials_deletes_both_keys() {
+  FakeSettingsStore store;
+  saveWifiCredentials(store, String("HomeNet"), String("hunter2!"));
+  clearWifiCredentials(store);
+  TEST_ASSERT_FALSE(store.hasString(SETTINGS_KEY_WIFI_SSID));
+  TEST_ASSERT_FALSE(store.hasString(SETTINGS_KEY_WIFI_PASS));
+  MasterSettings s = loadSettings(store);
+  TEST_ASSERT_EQUAL_STRING("", s.wifiSsid.c_str());
+  TEST_ASSERT_EQUAL_STRING("", s.wifiPass.c_str());
+}
+
+static void test_invalid_stored_ssid_clears_both_credentials() {
+  // A password without a usable ssid is dead weight — the pair sanitizes
+  // together and the boot lands in the portal.
+  FakeSettingsStore store;
+  String badSsid;
+  for (int i = 0; i < 40; i++) badSsid += 's';  // over the 32-byte ceiling
+  store.putString(SETTINGS_KEY_WIFI_SSID, badSsid);
+  store.putString(SETTINGS_KEY_WIFI_PASS, String("hunter2!"));
+  MasterSettings s = loadSettings(store);
+  TEST_ASSERT_EQUAL_STRING("", s.wifiSsid.c_str());
+  TEST_ASSERT_EQUAL_STRING("", s.wifiPass.c_str());
+}
+
+static void test_invalid_stored_password_clears_password_only() {
+  // Keep the ssid: the join fails fast and the portal shows it prefilled
+  // territory; clearing the pair would erase a recoverable network name.
+  FakeSettingsStore store;
+  store.putString(SETTINGS_KEY_WIFI_SSID, String("HomeNet"));
+  String badPass = "pw";
+  badPass += (char)0x01;
+  store.putString(SETTINGS_KEY_WIFI_PASS, badPass);
+  MasterSettings s = loadSettings(store);
+  TEST_ASSERT_EQUAL_STRING("HomeNet", s.wifiSsid.c_str());
+  TEST_ASSERT_EQUAL_STRING("", s.wifiPass.c_str());
+}
+
+// ---------------------------------------------------------------------------
 
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_wifi_defaults_are_unprovisioned);
+  RUN_TEST(test_wifi_credentials_round_trip);
+  RUN_TEST(test_wifi_open_network_stores_empty_password);
+  RUN_TEST(test_clear_wifi_credentials_deletes_both_keys);
+  RUN_TEST(test_invalid_stored_ssid_clears_both_credentials);
+  RUN_TEST(test_invalid_stored_password_clears_password_only);
   RUN_TEST(test_empty_store_yields_v1_defaults);
   RUN_TEST(test_display_settings_round_trip);
   RUN_TEST(test_identity_and_flash_slots_round_trip);

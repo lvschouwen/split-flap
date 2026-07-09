@@ -161,8 +161,55 @@ static void test_transient_dwell_rejects_out_of_range_and_garbage() {
   TEST_ASSERT_FALSE(isValidTransientDwellValue(String("60s")));
 }
 
+// --- wifi ssid / password (#188) ---------------------------------------------
+
+static void test_wifi_ssid_accepts_lengths_and_spaces() {
+  TEST_ASSERT_TRUE(isValidWifiSsidValue(String("a"), LEN_WIFI_SSID));
+  TEST_ASSERT_TRUE(isValidWifiSsidValue(String("My Home WiFi"), LEN_WIFI_SSID));
+  String max32;
+  for (int i = 0; i < 32; i++) max32 += 's';  // 802.11 SSID ceiling
+  TEST_ASSERT_TRUE(isValidWifiSsidValue(max32, LEN_WIFI_SSID));
+}
+
+static void test_wifi_ssid_rejects_empty_overflow_controls() {
+  // Empty means "unprovisioned" internally — never a valid submission.
+  TEST_ASSERT_FALSE(isValidWifiSsidValue(String(""), LEN_WIFI_SSID));
+  String tooLong;
+  for (int i = 0; i < 33; i++) tooLong += 's';
+  TEST_ASSERT_FALSE(isValidWifiSsidValue(tooLong, LEN_WIFI_SSID));
+  String withControl = "net";
+  withControl += (char)0x1B;
+  TEST_ASSERT_FALSE(isValidWifiSsidValue(withControl, LEN_WIFI_SSID));
+}
+
+static void test_wifi_password_accepts_empty_and_wpa2_lengths() {
+  // Empty = open network. Otherwise WPA2-PSK bounds: 8..63 chars.
+  TEST_ASSERT_TRUE(isValidWifiPasswordValue(String(""), LEN_WIFI_PASSWORD));
+  TEST_ASSERT_TRUE(isValidWifiPasswordValue(String("12345678"), LEN_WIFI_PASSWORD));
+  TEST_ASSERT_TRUE(isValidWifiPasswordValue(String("pass with spaces!"), LEN_WIFI_PASSWORD));
+  String max63;
+  for (int i = 0; i < 63; i++) max63 += 'p';
+  TEST_ASSERT_TRUE(isValidWifiPasswordValue(max63, LEN_WIFI_PASSWORD));
+}
+
+static void test_wifi_password_rejects_short_overflow_controls() {
+  // 1..7 chars can never be a WPA2-PSK — reject at the boundary instead of
+  // letting a doomed join eat the 30 s window and land in the portal.
+  TEST_ASSERT_FALSE(isValidWifiPasswordValue(String("1234567"), LEN_WIFI_PASSWORD));
+  String tooLong;
+  for (int i = 0; i < 64; i++) tooLong += 'p';
+  TEST_ASSERT_FALSE(isValidWifiPasswordValue(tooLong, LEN_WIFI_PASSWORD));
+  String withControl = "password";
+  withControl += (char)0x0A;
+  TEST_ASSERT_FALSE(isValidWifiPasswordValue(withControl, LEN_WIFI_PASSWORD));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_wifi_ssid_accepts_lengths_and_spaces);
+  RUN_TEST(test_wifi_ssid_rejects_empty_overflow_controls);
+  RUN_TEST(test_wifi_password_accepts_empty_and_wpa2_lengths);
+  RUN_TEST(test_wifi_password_rejects_short_overflow_controls);
   RUN_TEST(test_transient_dwell_accepts_empty_and_valid_range);
   RUN_TEST(test_transient_dwell_rejects_out_of_range_and_garbage);
   RUN_TEST(test_alignment_accepts_the_three_modes);

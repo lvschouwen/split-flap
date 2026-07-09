@@ -21,6 +21,7 @@ import subprocess
 
 ASSETS = [
     ("index.html", "INDEX_HTML", True),
+    ("portal.html","PORTAL_HTML",True),
     ("script.js",  "SCRIPT_JS",  True),
     ("md5.js",     "MD5_JS",     True),
     ("style.css",  "STYLE_CSS",  True),

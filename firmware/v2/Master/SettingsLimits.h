@@ -17,3 +17,8 @@
 #define LEN_MQTT_PORT           6
 #define LEN_MQTT_USER          33
 #define LEN_MQTT_PASSWORD      65
+
+// v2-only (#188, no v1 counterpart — v1 keeps credentials in the SDK flash
+// sector): 802.11 SSID ceiling 32 bytes, WPA2-PSK passphrase ceiling 63.
+#define LEN_WIFI_SSID          33
+#define LEN_WIFI_PASSWORD      64

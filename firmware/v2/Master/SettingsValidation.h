@@ -88,3 +88,19 @@ static inline bool isValidTransientDwellValue(const String& v) {
 static inline bool isValidMqttPasswordValue(const String& v, int slotLen) {
   return (int)v.length() < slotLen && settingsIsPrintableAscii(v, 0x20);
 }
+
+// WiFi SSID (#188): 1..32 printable ASCII bytes, spaces allowed. Empty is
+// the internal "unprovisioned" sentinel and never a valid submission.
+static inline bool isValidWifiSsidValue(const String& v, int slotLen) {
+  return v.length() >= 1 && (int)v.length() < slotLen &&
+         settingsIsPrintableAscii(v, 0x20);
+}
+
+// WiFi password (#188): empty (open network) or a WPA2-PSK passphrase —
+// 8..63 printable ASCII chars. 1..7 chars can never be a valid PSK, so it
+// is rejected at the boundary instead of eating the 30 s join window.
+static inline bool isValidWifiPasswordValue(const String& v, int slotLen) {
+  if (v.length() == 0) return true;
+  return v.length() >= 8 && (int)v.length() < slotLen &&
+         settingsIsPrintableAscii(v, 0x20);
+}

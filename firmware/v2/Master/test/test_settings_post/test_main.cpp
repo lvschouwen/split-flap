@@ -34,6 +34,10 @@ class FakeSettingsStore : public SettingsStore {
     ints_[key] = value;
     writes_++;
   }
+  void remove(const char* key) override {
+    strings_.erase(key);
+    ints_.erase(key);
+  }
 
   bool hasString(const char* key) const { return strings_.count(key) > 0; }
   int writeCount() const { return writes_; }

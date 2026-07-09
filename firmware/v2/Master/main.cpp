@@ -18,6 +18,7 @@
 #include "Tasks.h"
 #include "WebEndpoints.h"
 #include "WebLog.h"
+#include "WifiService.h"
 
 // v1 derives its chip id from ESP.getChipId() = last 3 octets of the MAC.
 // The ESP32 core has no getChipId(); take the same last-3-octets slice of
@@ -67,13 +68,20 @@ void setup() {
                     ? (settings.mqttHost + ":" + settings.mqttPort).c_str()
                     : "(disabled)");
 
-  // Routes registered now; webEndpointsStart() (server.begin()) belongs to
-  // the WiFi slice — LWIP isn't up until a network interface exists.
+  // Routes registered now; server.begin() happens from WifiService once a
+  // netif exists (STA join or portal AP) — LWIP isn't up before that.
   webEndpointsInit(webServer, settings, settingsStore, deviceName);
-  Serial.println(F("web endpoints registered (server start pending WiFi slice)"));
+  Serial.println(F("web endpoints registered (server starts with the netif)"));
 
-  // After webEndpointsInit: netTask drains the web staging and needs its
-  // mutex to exist before the first drain tick.
+  // Wiring only — the radio comes up on netTask's first wifiServiceTick(),
+  // keeping every WiFi call on core 0 (#188).
+  wifiServiceInit(webServer, settings, settingsStore, deviceName);
+  Serial.printf("wifi: %s\n", settings.wifiSsid.length()
+                                  ? ("join \"" + settings.wifiSsid + "\"").c_str()
+                                  : "unprovisioned -> setup portal");
+
+  // After webEndpointsInit/wifiServiceInit: netTask ticks both and needs
+  // their mutexes to exist before its first pass.
   tasksInit(settings, settingsStore);
   Serial.println(F("task skeleton up: display+clock on core 1, net+mqtt on core 0"));
 }
