@@ -6,7 +6,8 @@
 #    with the correct alignment (4 KB data, 64 KB app) — hand-computed
 #    offsets are where table bugs come from. Expected placement: nvs 0x9000,
 #    otadata 0x19000, app0 0x20000, app1 0x420000, coredump 0x820000,
-#    storage 0x830000 (verified against the built partitions.bin).
+#    factory 0x830000, storage 0xA30000 (verified against the built
+#    partitions.bin; layout invariants pinned by tests/test_partition_table.py).
 #  - nvs 64 KB: top of Espressif's recommended 12–64 KB range — wear
 #    leveling spreads erases across pages, and a too-tight NVS that fills
 #    up degrades quickly (ESP-IDF file-system guidance).
@@ -15,7 +16,13 @@
 #    would give 6.4 MB slots + a 3.4 MB SPIFFS we'd never mount). Bootloader
 #    app rollback (custom_sdkconfig) needs only these two slots + otadata.
 #  - coredump 64 KB: post-mortem backtraces without a debugger attached.
-#  - storage ~7.8 MB: everything left, one spare data partition. Unused
+#  - factory 2 MB (#193): reserved rescue slot, EMPTY until the rescue app
+#    exists. Placed after coredump so nvs/otadata/app0/app1 offsets are
+#    unchanged from the pre-#193 table. With valid otadata the bootloader
+#    never looks at it; the factory-reset pin (GPIO 4, custom_sdkconfig in
+#    platformio.ini) erases otadata, and an empty factory slot then falls
+#    back to a bootable OTA slot.
+#  - storage ~5.8 MB: everything left, one spare data partition. Unused
 #    costs nothing; formattable later (LittleFS/FAT) for log archives or
 #    staged unit firmware without touching app offsets. Subtype `spiffs` is
 #    the conventional "generic FS-capable data" marker; nothing mounts it.
@@ -26,4 +33,5 @@ otadata,   data, ota,      ,       0x2000
 app0,      app,  ota_0,    ,       0x400000
 app1,      app,  ota_1,    ,       0x400000
 coredump,  data, coredump, ,       0x10000
-storage,   data, spiffs,   ,       0x7D0000
+factory,   app,  factory,  ,       0x200000
+storage,   data, spiffs,   ,       0x5D0000
