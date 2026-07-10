@@ -9,6 +9,7 @@
 #include "BuildVersion.h"
 #include "RescueAssets.h"
 #include "RescueOta.h"
+#include "RescueSlotRecord.h"
 #include "RescueSlots.h"
 
 static String deviceName;
@@ -61,8 +62,44 @@ static SlotProbe probeSlot(esp_partition_subtype_t subtype) {
   return p;
 }
 
+// #200 slot ranking, pinned once in rescueWebInit: Master's NVS confirm
+// records, each accepted only when its sha256 still matches the slot's
+// actual image (a reflash behind the record's back demotes that slot to the
+// stamp fallback). Slot contents can't change under rescue without a reboot
+// — its own upload path reboots — so once is enough.
+static SlotRecord slotRec[2];
+static bool slotRecMatches[2] = {false, false};
+
+static void pinSlotRecord(int idx, const SlotProbe& p, const String& raw) {
+  slotRec[idx] = parseSlotRecord(raw.c_str());
+  // The sha check reads the slot's actual image length, not the whole 4 MB
+  // partition (IDF verifies the appended digest over image_len); the ms
+  // print is the bench check that setup() stays fast.
+  uint32_t shaStart = millis();
+  uint8_t sha[32];
+  slotRecMatches[idx] = p.valid && slotRec[idx].ok &&
+                        esp_partition_get_sha256(p.part, sha) == ESP_OK &&
+                        slotRecordShaMatches(slotRec[idx], sha);
+  if (slotRec[idx].ok) {
+    Serial.printf("rescue: app%d confirm record seq %lu rev %s — %s (sha %lu ms)\n",
+                  idx, (unsigned long)slotRec[idx].seq, slotRec[idx].rev,
+                  slotRecMatches[idx] ? "matches image" : "STALE, ignored",
+                  (unsigned long)(millis() - shaStart));
+  }
+}
+
+static ExitSlotCandidate exitCandidate(const SlotProbe& p, int idx) {
+  ExitSlotCandidate c;
+  c.valid = p.valid;
+  c.stamp = p.stamp;
+  c.confirmed = p.valid && slotRecMatches[idx];
+  c.seq = slotRec[idx].seq;
+  return c;
+}
+
+// slotIdx: OTA slot index for the #200 record fields, -1 for factory.
 static void appendSlotJson(String& out, const SlotProbe& p, const char* label,
-                           bool running) {
+                           bool running, int slotIdx) {
   out += "{\"label\":\"";
   out += label;
   out += "\",\"valid\":";
@@ -77,6 +114,14 @@ static void appendSlotJson(String& out, const SlotProbe& p, const char* label,
     out += ' ';
     out += jsonSanitize(p.desc.time, sizeof(p.desc.time));
     out += '"';
+    // The descriptor version/built are frozen at framework-assembly time
+    // (#200) — the confirm record's rev is the trustworthy per-build label.
+    if (slotIdx >= 0 && slotRecMatches[slotIdx]) {
+      out += ",\"rev\":\"";
+      out += slotRec[slotIdx].rev;  // parse enforces JSON-safe charset
+      out += "\",\"seq\":";
+      out += String((unsigned long)slotRec[slotIdx].seq);
+    }
   }
   out += '}';
 }
@@ -89,8 +134,7 @@ static String statusJson() {
   SlotProbe app0 = probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_0);
   SlotProbe app1 = probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_1);
   SlotProbe factory = probeSlot(ESP_PARTITION_SUBTYPE_APP_FACTORY);
-  int exitSlot =
-      pickExitSlot(app0.valid, app0.stamp, app1.valid, app1.stamp);
+  int exitSlot = pickExitSlot(exitCandidate(app0, 0), exitCandidate(app1, 1));
 
   String out;
   out.reserve(512);
@@ -99,11 +143,11 @@ static String statusJson() {
   out += "\",\"rescue\":\"";
   out += GIT_REV;
   out += "\",\"slots\":[";
-  appendSlotJson(out, app0, "app0", running == app0.part);
+  appendSlotJson(out, app0, "app0", running == app0.part, 0);
   out += ',';
-  appendSlotJson(out, app1, "app1", running == app1.part);
+  appendSlotJson(out, app1, "app1", running == app1.part, 1);
   out += ',';
-  appendSlotJson(out, factory, "factory", running == factory.part);
+  appendSlotJson(out, factory, "factory", running == factory.part, -1);
   out += "],\"exit\":";
   if (exitSlot == 0) {
     out += "\"app0\"";
@@ -126,8 +170,11 @@ static void serveGzipAsset(AsyncWebServerRequest* request,
   request->send(resp);
 }
 
-void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName) {
+void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
+                   const String& slotRec0, const String& slotRec1) {
   deviceName = effectiveDeviceName;
+  pinSlotRecord(0, probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_0), slotRec0);
+  pinSlotRecord(1, probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_1), slotRec1);
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
     serveGzipAsset(request, "text/html", RESCUE_HTML_GZ, RESCUE_HTML_GZ_LEN);
@@ -220,14 +267,15 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName) {
         }
       });
 
-  // Accidental-entry escape: re-arm the newest valid OTA slot and reboot —
-  // no flash write beyond otadata. Also marks the slot ESP_OTA_IMG_NEW
-  // (rollback config), so the exited-to image re-proves itself against the
-  // health gate; it was booting fine before, so that's a free self-test.
+  // Accidental-entry escape: re-arm the most recently confirmed valid OTA
+  // slot (#200 records; stamp fallback) and reboot — no flash write beyond
+  // otadata. Also marks the slot ESP_OTA_IMG_NEW (rollback config), so the
+  // exited-to image re-proves itself against the health gate; it was
+  // booting fine before, so that's a free self-test.
   server.on("/rescue/exit", HTTP_POST, [](AsyncWebServerRequest* request) {
     SlotProbe app0 = probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_0);
     SlotProbe app1 = probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_1);
-    int slot = pickExitSlot(app0.valid, app0.stamp, app1.valid, app1.stamp);
+    int slot = pickExitSlot(exitCandidate(app0, 0), exitCandidate(app1, 1));
     if (slot < 0) {
       request->send(409, "text/plain",
                     F("No valid firmware in either OTA slot — upload an "

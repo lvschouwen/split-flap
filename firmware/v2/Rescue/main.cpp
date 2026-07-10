@@ -44,12 +44,17 @@ void setup() {
   // Read-only NVS peek: begin() fails on a virgin device (namespace never
   // created) — that's fine, empty credentials just mean straight to the AP.
   Preferences prefs;
-  String storedName;
+  String storedName, slotRec0, slotRec1;
   bool nvsOk = prefs.begin("splitflap", /*readOnly=*/true);
   if (nvsOk) {
     storedName = prefs.getString("deviceName", "");
     wifiSsid = prefs.getString("wifiSsid", "");
     wifiPass = prefs.getString("wifiPass", "");
+    // #200: Master's per-slot OTA confirm records — /rescue/exit ranks by
+    // these (the app-descriptor build stamp is constant under pioarduino
+    // hybrid builds and cannot order images).
+    slotRec0 = prefs.getString("slotRec0", "");
+    slotRec1 = prefs.getString("slotRec1", "");
     prefs.end();
   }
   deviceName =
@@ -72,7 +77,7 @@ void setup() {
                                   ? ("join \"" + wifiSsid + "\"").c_str()
                                   : "no stored credentials -> rescue AP");
 
-  rescueWebInit(webServer, deviceName);
+  rescueWebInit(webServer, deviceName, slotRec0, slotRec1);
 }
 
 static void startJoin() {

@@ -77,8 +77,11 @@ function renderStatus(st) {
                         : '<span class="bad">empty/invalid</span>';
     if (s.running) state += ' <span class="muted">(running)</span>';
     if (s.label === st.exit) state += ' <span class="muted">(exit target)</span>';
+    // s.rev = git rev from the firmware's confirm record; the descriptor
+    // version/built freeze at framework-assembly time and can repeat.
+    var version = s.valid ? s.version + (s.rev ? " @" + s.rev : "") : "—";
     rows += "<tr><td>" + esc(s.label) + "</td><td>" + state + "</td><td>" +
-            esc(s.valid ? s.version : "—") + "</td><td>" +
+            esc(version) + "</td><td>" +
             esc(s.valid ? s.built : "—") + "</td></tr>";
   });
   el("slots").innerHTML = rows;

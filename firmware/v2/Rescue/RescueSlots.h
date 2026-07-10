@@ -1,11 +1,12 @@
 #pragma once
-// RescueSlots.h — pure slot-choice logic for POST /rescue/exit (#195).
-// The glue reads esp_app_desc_t for each OTA slot (its date/time fields
-// carry the image's __DATE__/__TIME__); these functions decide which slot
-// an accidental rescue entry boots back into: the newest valid one. With
-// otadata erased there is no "previously running slot" signal left — the
-// build stamp is the best remaining proxy. Natively tested
-// (test/test_rescue_slots).
+// RescueSlots.h — pure slot-choice logic for POST /rescue/exit (#195/#200).
+// Decides which slot an accidental rescue entry boots back into. With
+// otadata erased there is no "previously running slot" signal left; the
+// primary ranking is Master's NVS confirm records (RescueSlotRecord.h —
+// higher seq = ran healthy more recently). The esp_app_desc_t date/time
+// stamp is only a fallback: pioarduino's hybrid compile freezes it at
+// framework-assembly time, so images from the same framework cache all
+// carry the same stamp (#200). Natively tested (test/test_rescue_slots).
 
 #include <stdint.h>
 
@@ -71,13 +72,33 @@ static inline uint64_t parseAppBuildStamp(const char* date, const char* time) {
   return stamp;
 }
 
-// Which OTA slot should /rescue/exit boot: the newest valid one; ties (or
-// two unparseable stamps) fall back to slot 0 deterministically. -1 = no
-// valid slot (the endpoint answers 409 — nothing to exit into).
-static inline int pickExitSlot(bool valid0, uint64_t stamp0, bool valid1,
-                               uint64_t stamp1) {
-  if (valid0 && valid1) return (stamp1 > stamp0) ? 1 : 0;
-  if (valid0) return 0;
-  if (valid1) return 1;
+// One OTA slot as seen by /rescue/exit: descriptor validity + build stamp,
+// plus the #200 NVS confirm record (confirmed = record present AND its
+// sha256 matches the slot's current image).
+struct ExitSlotCandidate {
+  bool valid = false;
+  uint64_t stamp = 0;
+  bool confirmed = false;
+  uint32_t seq = 0;
+};
+
+// Which OTA slot should /rescue/exit boot. Confirm records rank first (the
+// build stamp is frozen at framework-assembly time under pioarduino hybrid
+// builds, so it cannot order images — #200): higher seq = image Master ran
+// healthy most recently. A confirmed slot beats an unconfirmed one
+// (known-good vs pre-#200 firmware or a hand-flashed unknown); with no
+// records the stamp comparison remains as fallback. Ties fall to slot 0
+// deterministically. -1 = no valid slot (the endpoint answers 409 — nothing
+// to exit into).
+static inline int pickExitSlot(const ExitSlotCandidate& s0,
+                               const ExitSlotCandidate& s1) {
+  if (s0.valid && s1.valid) {
+    bool c0 = s0.confirmed, c1 = s1.confirmed;
+    if (c0 && c1) return (s1.seq > s0.seq) ? 1 : 0;
+    if (c0 != c1) return c1 ? 1 : 0;
+    return (s1.stamp > s0.stamp) ? 1 : 0;
+  }
+  if (s0.valid) return 0;
+  if (s1.valid) return 1;
   return -1;
 }
