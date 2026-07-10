@@ -40,8 +40,9 @@ struct MasterSettings {
   int mqttPort;
   String mqttUser;
   String mqttPassword;
-  String intendedVersion;  // written by /firmware/master, read at boot
-  String lastFlashResult;  // "" / "ok" / "reverted"
+  String intendedVersion;  // ?v= diagnostic from /firmware/master (#190);
+                           // the flash VERDICT is synthesized from esp_ota
+                           // state (OtaService), never persisted here
 };
 
 // NVS keys (hard 15-char limit).
@@ -57,10 +58,9 @@ struct MasterSettings {
 #define SETTINGS_KEY_MQTT_USER    "mqttUser"
 #define SETTINGS_KEY_MQTT_PASS    "mqttPass"
 #define SETTINGS_KEY_INTENDED_VER "intendedVer"
-#define SETTINGS_KEY_LAST_FLASH   "lastFlashRes"
 
-// Bounded free-text slots (intendedVersion / lastFlashResult) share one
-// sanitation rule: printable ASCII and shorter than the limit, else default.
+// Bounded free-text sanitation: printable ASCII and shorter than the
+// limit, else default.
 static inline String sanitizeBoundedText(const String& v, int limit,
                                          const char* def) {
   if ((int)v.length() < limit && settingsIsPrintableAscii(v, 0x20)) {
@@ -121,8 +121,6 @@ inline MasterSettings loadSettings(SettingsStore& store) {
 
   s.intendedVersion = sanitizeBoundedText(
       store.getString(SETTINGS_KEY_INTENDED_VER, ""), LEN_INTENDED_VERSION, "");
-  s.lastFlashResult = sanitizeBoundedText(
-      store.getString(SETTINGS_KEY_LAST_FLASH, ""), LEN_LAST_FLASH_RESULT, "");
 
   return s;
 }
@@ -149,10 +147,6 @@ inline void saveDeviceName(SettingsStore& store, const String& v) {
 
 inline void saveIntendedVersion(SettingsStore& store, const String& v) {
   store.putString(SETTINGS_KEY_INTENDED_VER, v);
-}
-
-inline void saveLastFlashResult(SettingsStore& store, const String& v) {
-  store.putString(SETTINGS_KEY_LAST_FLASH, v);
 }
 
 // WiFi credentials (#188): always written as a pair — the portal submits

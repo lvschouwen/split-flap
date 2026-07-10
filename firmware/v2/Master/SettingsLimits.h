@@ -12,7 +12,6 @@
 #define LEN_TIMEZONE           40
 #define LEN_DEVICE_NAME        25
 #define LEN_INTENDED_VERSION   24
-#define LEN_LAST_FLASH_RESULT  16
 #define LEN_MQTT_HOST          65
 #define LEN_MQTT_PORT           6
 #define LEN_MQTT_USER          33

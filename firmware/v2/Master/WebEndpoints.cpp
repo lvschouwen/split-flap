@@ -10,11 +10,13 @@
 #include "WebEndpoints.h"
 
 #include <ESPAsyncWebServer.h>
+#include <Update.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
 #include "BuildVersion.h"
 #include "HelpersSerialHandling.h"
+#include "OtaService.h"
 #include "PendingSettingsPost.h"
 #include "SettingsJson.h"
 #include "Tasks.h"
@@ -26,6 +28,15 @@
 static PendingSettingsPost pendingPost;
 static bool pendingReboot = false;
 static uint32_t rebootRequestedAtMs = 0;
+static String pendingIntendedVersion;  // ?v= from /firmware/master (#190)
+static bool pendingIntendedVersionProvided = false;
+
+// OTA upload rejection state (v1 ServiceBootModes pattern): the upload
+// callback can't respond, so it records the rejection and the completion
+// callback sends it. Both callbacks run in the async_tcp task — same task,
+// no cross-task race, no mutex (uploads are serialized by the TCP stream).
+static int otaRejectionStatus = 0;  // 0 = not rejected
+static String otaRejectionReason;
 
 // Live state the read handlers render. Set once in webEndpointsInit();
 // handlers only ever read (async-context rule). Held as TU-local statics
@@ -145,7 +156,6 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       f.mqttPort = String(liveSettings->mqttPort);
       f.mqttUser = liveSettings->mqttUser;
       f.mqttPasswordSet = liveSettings->mqttPassword.length() > 0;
-      f.lastFlashResult = liveSettings->lastFlashResult;
       f.intendedVersion = liveSettings->intendedVersion;
       f.wifiSettingsResettable = liveSettings->wifiSsid.length() > 0;
     }
@@ -155,7 +165,11 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     f.mqttConnected = false;  // MQTT runtime is a later slice
     f.version = GIT_REV;
     f.sketchMd5 = ESP.getSketchMD5();
-    f.otaReverted = false;  // boot-verdict logic lands with the OTA slice
+    // Verdict synthesized from esp_ota partition state (#190) — v1 wire
+    // vocabulary plus "pending" while the health confirm hasn't run yet.
+    OtaVerdict verdict = otaVerdictSnapshot();
+    f.lastFlashResult = verdict.lastFlashResult;
+    f.otaReverted = verdict.otaReverted;
     f.lastResetReason = resetReasonString();
     request->send(200, "application/json", buildSettingsJson(f));
   });
@@ -318,6 +332,110 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     }
   });
 
+  // --- master OTA (#190) -----------------------------------------------------
+  // v1 wire contract: POST multipart field "firmware" + mandatory ?md5=
+  // (v1 #144) + optional ?v= intended-version diagnostic. Update targets
+  // the inactive A/B slot; the image boots PENDING_VERIFY and OtaService
+  // confirms it once a netif is up (bootloader reverts otherwise).
+  //
+  // Async-context exception (deliberate, v1 precedent): Update.write() runs
+  // right here in the async_tcp task — a firmware stream cannot be staged
+  // through a queue. The handler still never touches settings/NVS/radio;
+  // the ?v= write and the reboot are staged for the netTask drain.
+  server.on(
+      "/firmware/master", HTTP_POST,
+      [](AsyncWebServerRequest* request) {
+        if (otaRejectionStatus != 0) {
+          request->send(otaRejectionStatus, "text/plain", otaRejectionReason);
+          return;
+        }
+        if (Update.hasError()) {
+          request->send(500, "text/plain", String("Master OTA failed: ") +
+                                               Update.errorString());
+          return;
+        }
+        if (!Update.isFinished()) {
+          request->send(500, "text/plain",
+                        F("Master OTA incomplete: upload ended before the "
+                          "image was complete."));
+          return;
+        }
+        request->send(200, "text/plain",
+                      F("Master firmware flashed; rebooting…"));
+        WebStateLock lock;
+        pendingReboot = true;
+        rebootRequestedAtMs = millis();
+      },
+      [](AsyncWebServerRequest* request, String filename, size_t index,
+         uint8_t* data, size_t len, bool final) {
+        if (index == 0) {
+          otaRejectionStatus = 0;
+          otaRejectionReason = "";
+
+          String md5 = request->hasParam("md5")
+                           ? request->getParam("md5")->value()
+                           : String();
+          if (md5.length() == 0) {
+            otaRejectionStatus = 400;
+            otaRejectionReason =
+                "md5 query parameter is required (compute it over the .bin "
+                "and pass ?md5=...)";
+            return;
+          }
+          if (!normalizeOtaMd5(md5)) {
+            otaRejectionStatus = 400;
+            otaRejectionReason = "md5 must be exactly 32 hex characters";
+            return;
+          }
+
+          SerialPrintln("Master OTA upload started (md5 " + md5 + ")");
+          if (Update.isRunning()) {
+            Update.abort();  // stale aborted upload must not wedge this one
+                             // (v1 #162 re-entry class)
+          }
+          if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+            otaRejectionStatus = 500;
+            otaRejectionReason =
+                String("Master OTA could not start: ") + Update.errorString();
+            return;
+          }
+          Update.setMD5(md5.c_str());
+
+          // ?v= staged unconditionally (empty if absent) so a stale value
+          // from an earlier flash can't outlive this one (v1 #52 rationale).
+          String intended = request->hasParam("v")
+                                ? request->getParam("v")->value()
+                                : String();
+          if ((int)intended.length() >= LEN_INTENDED_VERSION) {
+            intended = intended.substring(0, LEN_INTENDED_VERSION - 1);
+          }
+          WebStateLock lock;
+          pendingIntendedVersion = intended;
+          pendingIntendedVersionProvided = true;
+        }
+
+        if (otaRejectionStatus != 0) return;
+
+        if (len > 0 && Update.write(data, len) != len) {
+          // Error is latched inside Update; the completion callback
+          // reports it. Stop consuming flash time on further chunks.
+          return;
+        }
+        if (final) {
+          if (Update.end(true)) {
+            SerialPrintln(F("Master OTA image verified and armed — reboot "
+                            "boots it PENDING_VERIFY"));
+          } else {
+            SerialPrintln(String("Master OTA failed at end: ") +
+                          Update.errorString());
+          }
+        }
+      });
+
+  server.on("/debug/ota", HTTP_GET, [](AsyncWebServerRequest* request) {
+    request->send(200, "application/json", otaDebugJson());
+  });
+
   // --- v1 endpoints whose services aren't ported yet (#58 slices) ----------
   // Explicit 501s so a bench click yields a clear message instead of a
   // silent 404. Each stub is retired by the slice that ports its service.
@@ -334,10 +452,8 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   registerNotPortedStub(server, "/stop", HTTP_POST);
   registerNotPortedStub(server, "/reflash-units", HTTP_POST);
   registerNotPortedStub(server, "/reset-units", HTTP_POST);
-  registerNotPortedStub(server, "/firmware/master", HTTP_POST);
   registerNotPortedStub(server, "/firmware/recover-mark", HTTP_POST);
   registerNotPortedStub(server, "/firmware/ota-mode", HTTP_POST);
-  registerNotPortedStub(server, "/debug/ota", HTTP_GET);
   registerNotPortedStub(server, "/mqtt/discover", HTTP_GET);
   registerNotPortedStub(server, "/mqtt/discover", HTTP_POST);
 }
@@ -386,6 +502,13 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
           SerialPrintln("Display queue full at drain — message DROPPED: " +
                         messageText);
         }
+      }
+    }
+    if (pendingIntendedVersionProvided) {
+      pendingIntendedVersionProvided = false;
+      if (settings.intendedVersion != pendingIntendedVersion) {
+        settings.intendedVersion = pendingIntendedVersion;
+        saveIntendedVersion(store, pendingIntendedVersion);
       }
     }
     // Small grace period so the HTTP response flushes before the restart.

@@ -64,7 +64,6 @@ static void test_empty_store_yields_v1_defaults() {
   TEST_ASSERT_EQUAL_STRING("", s.mqttUser.c_str());
   TEST_ASSERT_EQUAL_STRING("", s.mqttPassword.c_str());
   TEST_ASSERT_EQUAL_STRING("", s.intendedVersion.c_str());
-  TEST_ASSERT_EQUAL_STRING("", s.lastFlashResult.c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -89,12 +88,10 @@ static void test_identity_and_flash_slots_round_trip() {
   FakeSettingsStore store;
   saveDeviceName(store, String("hallway-board"));
   saveIntendedVersion(store, String("4795031"));
-  saveLastFlashResult(store, String("ok"));
 
   MasterSettings s = loadSettings(store);
   TEST_ASSERT_EQUAL_STRING("hallway-board", s.deviceName.c_str());
   TEST_ASSERT_EQUAL_STRING("4795031", s.intendedVersion.c_str());
-  TEST_ASSERT_EQUAL_STRING("ok", s.lastFlashResult.c_str());
 }
 
 static void test_mqtt_config_round_trip() {

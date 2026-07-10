@@ -14,6 +14,7 @@
 #include "MdnsDiscovery.h"
 #include "MqttHelpers.h"
 #include "NvsSettingsStore.h"
+#include "OtaService.h"
 #include "Settings.h"
 #include "Tasks.h"
 #include "WebEndpoints.h"
@@ -67,6 +68,10 @@ void setup() {
                 settings.mqttHost.length()
                     ? (settings.mqttHost + ":" + settings.mqttPort).c_str()
                     : "(disabled)");
+
+  // Snapshot this boot's A/B partition state; a PENDING_VERIFY image is
+  // confirmed by WifiService once a netif is up (#190).
+  otaServiceInit();
 
   // Routes registered now; server.begin() happens from WifiService once a
   // netif exists (STA join or portal AP) — LWIP isn't up before that.

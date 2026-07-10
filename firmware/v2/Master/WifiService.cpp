@@ -8,6 +8,7 @@
 
 #include "DeviceIdentity.h"
 #include "HelpersSerialHandling.h"
+#include "OtaService.h"
 #include "WebEndpoints.h"
 #include "WifiPolicy.h"
 #include "WifiScanJson.h"
@@ -128,6 +129,9 @@ static void startPortal() {
     portalRedirectUrl = "http://" + WiFi.softAPIP().toString() + "/wifi-setup";
   }
   webEndpointsStart(*webServer);  // LWIP is up on the AP netif
+  // A portal boot is a healthy boot (radio + web stack alive) — and the
+  // portal-timeout reboot must not cost us an unconfirmed image (#190).
+  otaHealthConfirm();
   SerialPrintln("WiFi setup portal up: " + apName + " (" +
                 WiFi.softAPIP().toString() + ")");
 }
@@ -135,6 +139,7 @@ static void startPortal() {
 static void startOnline() {
   SerialPrintln("WiFi connected. IP: " + WiFi.localIP().toString());
   webEndpointsStart(*webServer);
+  otaHealthConfirm();  // netif up = health bar met (#190)
   if (MDNS.begin(deviceName.c_str())) {
     MDNS.addService("http", "tcp", 80);
     SerialPrintln("mDNS up: " + deviceName + ".local");
