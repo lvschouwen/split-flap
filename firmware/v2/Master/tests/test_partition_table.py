@@ -145,26 +145,27 @@ def test_rescue_uses_masters_partition_csv():
     assert (RESCUE_INI_PATH.parent / match.group(1)).resolve() == CSV_PATH.resolve()
 
 
-def extract_sdkconfig(ini_text: str) -> str:
-    """Return the custom_sdkconfig block (option lines until the next key)."""
-    match = re.search(
-        r"^custom_sdkconfig\s*=\s*(.*?)(?=^\S|\Z)", ini_text, re.MULTILINE | re.DOTALL
-    )
-    assert match, "custom_sdkconfig missing from platformio.ini"
-    lines = [ln.strip() for ln in match.group(1).splitlines()]
+def read_bootloader_sdkconfig() -> str:
+    """The factory-reset config's source of truth moved in #201: pioarduino
+    never delivers bootloader-side options from Master's custom_sdkconfig
+    (the bootloader ships prebuilt), so it lives in the dedicated
+    firmware/v2/Bootloader project."""
+    path = PROJECT_DIR.parent / "Bootloader" / "sdkconfig.defaults"
+    text = path.read_text()
+    lines = [ln.strip() for ln in text.splitlines()]
     return "\n".join(ln for ln in lines if ln.startswith("CONFIG_"))
 
 
 def test_bootloader_factory_reset_enabled():
-    sdkconfig = extract_sdkconfig(read_ini())
+    sdkconfig = read_bootloader_sdkconfig()
     assert "CONFIG_BOOTLOADER_FACTORY_RESET=y" in sdkconfig
     assert "CONFIG_BOOTLOADER_OTA_DATA_ERASE=y" in sdkconfig
 
 
 def test_factory_reset_pin_is_committable():
-    sdkconfig = extract_sdkconfig(read_ini())
+    sdkconfig = read_bootloader_sdkconfig()
     match = re.search(r"CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET=(\d+)", sdkconfig)
-    assert match, "factory-reset pin not pinned in custom_sdkconfig"
+    assert match, "factory-reset pin not pinned in the Bootloader sdkconfig"
     pin = int(match.group(1))
     # Not the ROM download-mode strap, not the octal-PSRAM pins, not the
     # native-USB data pins the console lives on.
@@ -175,7 +176,18 @@ def test_factory_reset_never_erases_nvs():
     # IDF defaults the data-erase list to "nvs" when factory reset is on, so
     # leaving it unset silently wipes WiFi credentials — the override to an
     # empty list must be explicit.
-    sdkconfig = extract_sdkconfig(read_ini())
+    sdkconfig = read_bootloader_sdkconfig()
     match = re.search(r'CONFIG_BOOTLOADER_DATA_FACTORY_RESET="?([^"\n]*)"?', sdkconfig)
     assert match, "data-erase list must be explicitly emptied (IDF default is nvs)"
     assert "nvs" not in match.group(1), "rescue must keep WiFi credentials"
+
+
+def test_master_keeps_app_side_rollback():
+    # ROLLBACK_ENABLE in Master's custom_sdkconfig is APP-side load-bearing
+    # (esp_ota arms images as NEW only with it) — #201 moved the bootloader
+    # options out, this one must stay.
+    match = re.search(
+        r"^custom_sdkconfig\s*=\s*(.*?)(?=^\S|\Z)", read_ini(), re.MULTILINE | re.DOTALL
+    )
+    assert match, "custom_sdkconfig missing from platformio.ini"
+    assert "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y" in match.group(1)

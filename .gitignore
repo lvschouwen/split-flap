@@ -45,3 +45,10 @@ firmware/v2/*/.dummy/
 # clangd tooling (machine-local: .clangd carries absolute paths; compiledb via `pio run -t compiledb`)
 firmware/v2/*/.clangd
 firmware/v2/*/compile_commands.json
+
+# firmware/v2/Bootloader (#201): sdkconfig.defaults is a SOURCE file there
+# (the firmware/v2/*/sdkconfig.* pattern above targets generated hybrid
+# artifacts) and the dist/ bootloader is a committed build product that
+# use_custom_bootloader.py embeds at 0x0.
+!firmware/v2/Bootloader/sdkconfig.defaults
+!firmware/v2/Bootloader/dist/*.bin

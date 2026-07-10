@@ -1,0 +1,40 @@
+# Bootloader config for the v2 master (#201). Delta vs the stock prebuilt
+# Arduino bootloader: factory reset on GPIO 4 (#193) + INFO logs so the
+# detection message is visible on the bench. Everything else deliberately
+# mirrors stock behavior.
+#
+# DELIBERATELY EXCLUDED (eFuse burners, irreversible at chip level, recorded
+# on #201 as a decision): CONFIG_SECURE_BOOT, CONFIG_SECURE_FLASH_ENC_ENABLED,
+# CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK (also conflicts with the factory slot).
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash geometry — must match the N16R8 module and the Master build
+# (bootloader_qio_80m is what the stock build shipped).
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# A/B rollback (#187/#190): the stock prebuilt bootloader has this and the
+# whole OTA safety story depends on it — losing it here would be a silent
+# regression, so it is pinned explicitly (and by the artifact test).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Factory reset (#193): GPIO 4 held low for 5 s through a reset erases
+# otadata ONLY — the empty data-erase list is load-bearing (IDF defaults it
+# to "nvs" and WiFi credentials must survive a rescue). With otadata gone
+# the bootloader boots the factory slot = the #195 rescue app.
+# GPIO 4 constraints: not GPIO 0 (ROM download strap), not 35/36/37 (octal
+# PSRAM), not 19/20 (native USB console) — and it must stay committable as
+# a physical button on the future master PCB (PCB/v2/). The pin is sampled
+# with the internal pull-up, so the button just shorts it to GND.
+CONFIG_BOOTLOADER_FACTORY_RESET=y
+CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET=4
+CONFIG_BOOTLOADER_FACTORY_RESET_PIN_LOW=y
+CONFIG_BOOTLOADER_HOLD_TIME_GPIO=5
+CONFIG_BOOTLOADER_OTA_DATA_ERASE=y
+CONFIG_BOOTLOADER_DATA_FACTORY_RESET=""
+
+# Stock ships ERROR, which compiles out exactly the messages the bench needs
+# ("Detect a condition of the factory reset"). INFO costs a few ms of boot.
+CONFIG_BOOTLOADER_LOG_LEVEL_INFO=y
