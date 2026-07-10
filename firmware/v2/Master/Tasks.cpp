@@ -18,7 +18,9 @@
 // mark so the numbers get validated (and trimmed) on real hardware.
 
 static constexpr uint32_t DISPLAY_TASK_STACK = 4096;
-static constexpr uint32_t CLOCK_TASK_STACK = 2048;
+// 2048 leaves only ~124 B HWM on real hardware — newlib's first
+// tzset/localtime parse of the POSIX TZ string runs deep in the ticker.
+static constexpr uint32_t CLOCK_TASK_STACK = 4096;
 static constexpr uint32_t NET_TASK_STACK = 4096;
 static constexpr uint32_t MQTT_TASK_STACK = 4096;
 
