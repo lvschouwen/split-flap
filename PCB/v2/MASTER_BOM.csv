@@ -19,6 +19,8 @@ D3,1,LED red,0805,generic,C2286,FAULT
 D4-D7,4,LED green,0805,generic,C72043,ROW0..ROW3 power indicators (post-polyfuse 12V)
 D8,1,12V TVS,DO-214AC SMA,Littelfuse SMAJ15A,C167238,"Input TVS unidirectional. Cathode (banded) → +12V (post-fuse), anode → GND. Place AFTER F1 fuse so a sustained TVS clamp opens the fuse."
 D9,1,RS-485 ESD Bus A,SOT-23,Semtech SM712-02HTG,C172881,"Across BUSA_A/BUSA_B. Pinout: pin 1 = I/O1 (A), pin 2 = I/O2 (B), pin 3 = GND — verify against Littelfuse datasheet drawing during symbol creation (#102)."
+D13,1,Addressable RGB LED (WS2812-class),2020 SMD,WS2812B-2020 (3.3 V-capable variant REQUIRED),(CHECK),"Firmware status LED (#199: portal/join/OTA colors + dim green heartbeat when healthy). Data from GPIO 48 — the devkit's pin, so firmware needs no change (free on the WROOM; NOT 35/36/37, NOT GPIO 4). **Supply constraint: our only rail is 3V3, below the classic 5050 WS2812B's 3.5 V min** — select a 3.3 V-rated 2020-package variant at part selection. Candidate to subsume D2 HEARTBEAT + D3 FAULT (and one R_led) — decide at schematic capture."
+C_ws,1,100 nF,0603 X7R,generic,C14663,D13 WS2812 decoupling — close to its VDD pin
 D10,1,RS-485 ESD Bus B,SOT-23,Semtech SM712-02HTG,C172881,"Across BUSB_A/BUSB_B. Same pinout note as D9. (D11/D12 of the old 4-bus design deleted, #102.)"
 J1,1,Screw terminal 2-pin (>=15 A),7.62 mm pitch THT,KF7.62-2P (or DECA MA231 5mm),C8270,12 V/15 A input. **NOT** Phoenix MKDS 1.5/2 (rated only 8 A). KF7.62-2P is 16 A; DECA MA231-50002M (LCSC C237691) is 15 A 5 mm pitch alt.
 J2,1,USB-C receptacle,USB-C 16-pin SMD,generic with shielded shell,C165948,Programming + debug

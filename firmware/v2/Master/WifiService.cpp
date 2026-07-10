@@ -199,6 +199,8 @@ static void pumpScan() {
 
 // --- the tick -----------------------------------------------------------------
 
+WifiPhase wifiServicePhase() { return policy.phase; }
+
 void wifiServiceTick() {
   if (liveSettings == nullptr) return;  // init hasn't run
 

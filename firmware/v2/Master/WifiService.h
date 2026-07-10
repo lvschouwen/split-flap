@@ -12,6 +12,7 @@
 
 #include "Settings.h"
 #include "SettingsStore.h"
+#include "WifiPolicy.h"
 
 class AsyncWebServer;
 
@@ -23,6 +24,10 @@ void wifiServiceInit(AsyncWebServer& server, MasterSettings& settings,
 // netTask context only: runs the join/portal policy, executes its actions,
 // pumps the portal DNS catch-all and any in-flight scan.
 void wifiServiceTick();
+
+// netTask context only (same task as the tick that mutates it): the
+// policy's current phase, for the status LED (#199).
+WifiPhase wifiServicePhase();
 
 // --- staging + reads for async handlers -------------------------------------
 

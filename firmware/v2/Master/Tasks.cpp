@@ -8,6 +8,7 @@
 
 #include "ClockPolicy.h"
 #include "HelpersSerialHandling.h"
+#include "StatusLed.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
 
@@ -163,6 +164,7 @@ static void netTaskMain(void* arg) {
   for (;;) {
     wifiServiceTick();
     webEndpointsLoop(*ctx->settings, *ctx->store);
+    statusLedTick();
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }

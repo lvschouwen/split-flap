@@ -19,6 +19,7 @@
 #include "NvsSettingsStore.h"
 #include "OtaService.h"
 #include "Settings.h"
+#include "StatusLed.h"
 #include "Tasks.h"
 #include "WebEndpoints.h"
 #include "WebLog.h"
@@ -101,6 +102,7 @@ void setup() {
   settings = loadSettings(settingsStore);
   deviceName = resolveDeviceName(true, settings.deviceName, MDNS_NAME_PREFIX,
                                  chipIdFromEfuseMac());
+  statusLedInit(settings);  // boot white from here on (#199)
 
   Serial.println();
   Serial.println(F("split-flap v2 master — Phase 1 (#58)"));
