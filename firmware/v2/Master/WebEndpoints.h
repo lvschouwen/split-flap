@@ -23,3 +23,18 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                       SettingsStore& store, const String& effectiveDeviceName);
 void webEndpointsStart(AsyncWebServer& server);
 void webEndpointsLoop(MasterSettings& settings, SettingsStore& store);
+
+// What the 1 Hz mode ticker needs from the web domain (#192): the active
+// mode plus the parameters it bakes into DisplayCommands. inputText is the
+// retained runtime message (never persisted, "" until the first POST) that
+// a clock->text mode switch re-shows.
+struct WebContentSnapshot {
+  String deviceMode;
+  String inputText;
+  String alignment;
+  int flapSpeed = 1;
+};
+
+// Mutex-guarded copy for clockTask (core 1) — same snapshot-copy rule as
+// DisplaySnapshot: consumers render from the copy, never from live state.
+WebContentSnapshot webDisplayContentSnapshot();

@@ -6,6 +6,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include "ClockPolicy.h"
 #include "HelpersSerialHandling.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
@@ -107,17 +108,40 @@ static void displayTaskMain(void*) {
   }
 }
 
-// 1 Hz ticker; the NTP slice gives it a time source, the mode plumbing
-// arrives with the clock slice. Logs once a minute so the stub is visibly
-// alive without drowning the web log.
+// 1 Hz mode ticker (#192): re-shows the active mode's content — clock time
+// or the retained message — whenever the display drifts away from it (mode
+// switches, drain messages, minute rollover). The whole decision is the
+// pure decideClockTick(); this loop only gathers snapshots and enqueues.
 static void clockTaskMain(void*) {
   SerialPrintf("clockTask up on core %d\n", xPortGetCoreID());
   TickType_t lastWake = xTaskGetTickCount();
-  uint32_t ticks = 0;
+  String lastQueued;  // in-flight dedup, see ClockPolicy.h contract
   for (;;) {
     vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(1000));
-    if (++ticks % 60 == 0) {
-      SerialPrintln(F("clock: tick (stub — no time source until the NTP slice)"));
+
+    DisplaySnapshot snap = displaySnapshotGet();
+    clockTickObserve(lastQueued, String(snap.currentText));
+
+    WebContentSnapshot content = webDisplayContentSnapshot();
+    time_t now = time(nullptr);
+
+    ClockTickInput in;
+    in.deviceMode = content.deviceMode;
+    in.inputText = content.inputText;
+    in.timeSynced = clockIsTimeSynced(now);
+    in.formattedTime = in.timeSynced ? formatDateTime(now, CLOCK_FORMAT) : "";
+    in.displayBusy = snap.busy;
+    in.displayCurrentText = String(snap.currentText);
+    in.lastQueued = lastQueued;
+
+    ClockTickDecision d = decideClockTick(in);
+    if (d.enqueue) {
+      DisplayCommand cmd =
+          makeShowTextCommand(d.text, content.alignment, content.flapSpeed);
+      if (displayEnqueue(cmd)) {
+        lastQueued = d.text;
+      }
+      // Queue full: dedup state unchanged, the next tick retries.
     }
   }
 }

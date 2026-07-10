@@ -6,6 +6,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "ClockService.h"
 #include "DeviceIdentity.h"
 #include "HelpersSerialHandling.h"
 #include "OtaService.h"
@@ -140,6 +141,7 @@ static void startOnline() {
   SerialPrintln("WiFi connected. IP: " + WiFi.localIP().toString());
   webEndpointsStart(*webServer);
   otaHealthConfirm();  // netif up = health bar met (#190)
+  clockServiceApplyTz(*liveSettings);  // v1 parity: NTP kicked after join
   if (MDNS.begin(deviceName.c_str())) {
     MDNS.addService("http", "tcp", 80);
     SerialPrintln("mDNS up: " + deviceName + ".local");

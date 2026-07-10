@@ -15,6 +15,8 @@
 #include <freertos/semphr.h>
 
 #include "BuildVersion.h"
+#include "ClockPolicy.h"
+#include "ClockService.h"
 #include "HelpersSerialHandling.h"
 #include "OtaService.h"
 #include "PendingSettingsPost.h"
@@ -44,6 +46,12 @@ static String otaRejectionReason;
 // what it captured.
 static MasterSettings* liveSettings = nullptr;
 static String effectiveName;
+
+// Runtime-only message state (#192, v1 parity: never persisted, "" at
+// boot). Written by the drain, read by GET /settings and the clock ticker's
+// webDisplayContentSnapshot() — all under webStateMutex.
+static String currentInputText;
+static String lastMessageStamp;
 
 // Cross-task guard. Unlike v1's single-core cooperative ESP8266, the
 // handlers here run in the async_tcp FreeRTOS task while the drain runs in
@@ -158,6 +166,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       f.mqttPasswordSet = liveSettings->mqttPassword.length() > 0;
       f.intendedVersion = liveSettings->intendedVersion;
       f.wifiSettingsResettable = liveSettings->wifiSsid.length() > 0;
+      f.lastTimeReceivedMessageDateTime = lastMessageStamp;
     }
     // Display state comes from the display task's snapshot (#187), not from
     // web-side shadows — the display domain owns what's on the flaps.
@@ -476,6 +485,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   // NVS writes are legal under a mutex (unlike a portENTER_CRITICAL
   // section). Worst case a handler blocks a few ms behind a flash commit.
   bool rebootDue = false;
+  bool timezoneChanged = false;
   {
     WebStateLock lock;
     if (pendingPost.pending) {
@@ -487,11 +497,25 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
                       "#58): " + pendingPost.transientText);
       }
 
+      // "Last Received" tracks messages/mode switches, not settings saves —
+      // per-card posts (#128) mean only those submissions stamp it.
+      if (messageProvided || pendingPost.deviceModeProvided) {
+        lastMessageStamp = formatDateTime(time(nullptr), CLOCK_STAMP_FORMAT);
+      }
+
       // Settings first, command second: a speed/alignment change riding the
       // same POST as a message must apply to that message (v1 ordering).
+      String timezoneBefore = settings.timezonePosix;
       applySettingsPost(pendingPost, settings, store);
+      timezoneChanged = settings.timezonePosix != timezoneBefore;
 
-      if (messageProvided) {
+      // v1 parity: a posted message only takes effect in text mode, checked
+      // AFTER any mode field riding the same POST. In clock mode it is
+      // silently ignored — never shown, never retained.
+      if (messageProvided && settings.deviceMode == "text") {
+        // Retained in the display domain: ClockPolicy's dedup compares this
+        // against snapshot text, which makeShowTextCommand truncates.
+        currentInputText = truncateForDisplay(messageText);
         DisplayCommand cmd = makeShowTextCommand(
             messageText, settings.alignment, settings.flapSpeed);
         if (displayEnqueue(cmd)) {
@@ -502,6 +526,9 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
           SerialPrintln("Display queue full at drain — message DROPPED: " +
                         messageText);
         }
+      } else if (messageProvided) {
+        SerialPrintln("Message ignored (device in clock mode, v1 parity): " +
+                      messageText);
       }
     }
     if (pendingIntendedVersionProvided) {
@@ -515,9 +542,26 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
     rebootDue = pendingReboot && millis() - rebootRequestedAtMs > 750;
   }
 
+  // Outside the lock: configTzTime takes the LWIP core lock — keep the two
+  // lock domains from ever nesting (v1 #48 parity: TZ applies rebootless).
+  if (timezoneChanged) clockServiceApplyTz(settings);
+
   if (rebootDue) {
     SerialPrintln(F("Rebooting..."));
     Serial.flush();
     ESP.restart();
   }
+}
+
+WebContentSnapshot webDisplayContentSnapshot() {
+  WebContentSnapshot c;
+  // Both are set together in webEndpointsInit(); guard both anyway so this
+  // stays safe if init ordering ever changes.
+  if (webStateMutex == nullptr || liveSettings == nullptr) return c;
+  WebStateLock lock;
+  c.deviceMode = liveSettings->deviceMode;
+  c.inputText = currentInputText;
+  c.alignment = liveSettings->alignment;
+  c.flapSpeed = liveSettings->flapSpeed;
+  return c;
 }

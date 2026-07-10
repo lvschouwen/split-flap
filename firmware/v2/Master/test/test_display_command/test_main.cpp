@@ -41,6 +41,28 @@ static void test_show_text_empty_text_is_valid() {
   TEST_ASSERT_EQUAL_STRING("", cmd.text);
 }
 
+// --- truncateForDisplay (#192 review H1) --------------------------------------
+
+static void test_truncate_for_display_caps_at_units_amount() {
+  String over;
+  for (int i = 0; i < UNITS_AMOUNT + 5; i++) over += 'C';
+  TEST_ASSERT_EQUAL(UNITS_AMOUNT, (int)truncateForDisplay(over).length());
+}
+
+static void test_truncate_for_display_passes_short_text_unchanged() {
+  TEST_ASSERT_EQUAL_STRING("HELLO", truncateForDisplay("HELLO").c_str());
+  TEST_ASSERT_EQUAL_STRING("", truncateForDisplay("").c_str());
+}
+
+static void test_truncate_matches_command_builder_domain() {
+  // ClockPolicy's dedup comparisons only work if this helper yields EXACTLY
+  // what makeShowTextCommand writes into the queue slot.
+  String over;
+  for (int i = 0; i < UNITS_AMOUNT + 5; i++) over += (char)('A' + (i % 26));
+  DisplayCommand cmd = makeShowTextCommand(over, "left", 50);
+  TEST_ASSERT_EQUAL_STRING(cmd.text, truncateForDisplay(over).c_str());
+}
+
 // --- speed clamping (web-side 1..100 scale, v1 slider contract) --------------
 
 static void test_speed_in_range_is_preserved() {
@@ -105,6 +127,9 @@ int main(int, char**) {
   RUN_TEST(test_show_text_is_nul_terminated_at_full_width);
   RUN_TEST(test_show_text_truncates_beyond_units_amount);
   RUN_TEST(test_show_text_empty_text_is_valid);
+  RUN_TEST(test_truncate_for_display_caps_at_units_amount);
+  RUN_TEST(test_truncate_for_display_passes_short_text_unchanged);
+  RUN_TEST(test_truncate_matches_command_builder_domain);
   RUN_TEST(test_speed_in_range_is_preserved);
   RUN_TEST(test_speed_clamped_low);
   RUN_TEST(test_speed_clamped_high);

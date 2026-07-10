@@ -9,6 +9,7 @@
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
 
+#include "ClockService.h"
 #include "DeviceIdentity.h"
 #include "DisplayWidth.h"
 #include "MdnsDiscovery.h"
@@ -72,6 +73,10 @@ void setup() {
   // Snapshot this boot's A/B partition state; a PENDING_VERIFY image is
   // confirmed by WifiService once a netif is up (#190).
   otaServiceInit();
+
+  // TZ correct from the first log line; SNTP starts now and syncs once a
+  // netif exists (startOnline re-applies for the immediate kick, #192).
+  clockServiceApplyTz(settings);
 
   // Routes registered now; server.begin() happens from WifiService once a
   // netif exists (STA join or portal AP) — LWIP isn't up before that.

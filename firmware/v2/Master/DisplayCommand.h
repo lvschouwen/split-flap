@@ -22,6 +22,16 @@ enum class DisplayAlignment : uint8_t { Left = 0, Center, Right };
 // truncated at build time so the queue slot stays fixed-size.
 #define DISPLAY_CMD_TEXT_LEN UNITS_AMOUNT
 
+// The display-domain projection of a text: exactly what makeShowTextCommand
+// puts on the wire. Every String that enters ClockPolicy's dedup
+// comparisons (retained inputText, lastQueued) MUST pass through this, or a
+// longer-than-display message can never equal any snapshot text and the
+// ticker's in-flight marker sticks forever (#192 review H1).
+inline String truncateForDisplay(const String& text) {
+  if (text.length() <= DISPLAY_CMD_TEXT_LEN) return text;
+  return text.substring(0, DISPLAY_CMD_TEXT_LEN);
+}
+
 struct DisplayCommand {
   DisplayOpcode opcode = DisplayOpcode::None;
   DisplayAlignment alignment = DisplayAlignment::Left;
@@ -61,10 +71,9 @@ inline DisplayCommand makeShowTextCommand(const String& text,
   cmd.alignment = displayAlignmentFromString(alignment);
   cmd.speed = (uint8_t)(speed < 1 ? 1 : (speed > 100 ? 100 : speed));
 
-  size_t n = text.length();
-  if (n > DISPLAY_CMD_TEXT_LEN) n = DISPLAY_CMD_TEXT_LEN;
-  memcpy(cmd.text, text.c_str(), n);
-  cmd.text[n] = '\0';
+  String cut = truncateForDisplay(text);
+  memcpy(cmd.text, cut.c_str(), cut.length());
+  cmd.text[cut.length()] = '\0';
   return cmd;
 }
 
