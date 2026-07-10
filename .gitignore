@@ -40,3 +40,7 @@ PCB/*.zip
 firmware/v2/Master/managed_components/
 firmware/v2/Master/sdkconfig.*
 firmware/v2/Master/.dummy/
+
+# clangd tooling (machine-local: .clangd carries absolute paths; compiledb via `pio run -t compiledb`)
+firmware/v2/Master/.clangd
+firmware/v2/Master/compile_commands.json
