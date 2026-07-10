@@ -8,6 +8,8 @@
 
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 
 #include "ClockService.h"
 #include "DeviceIdentity.h"
@@ -33,6 +35,56 @@ static uint32_t chipIdFromEfuseMac() {
 }
 
 static const char* MDNS_NAME_PREFIX = "split-flap";
+
+static const char* otaStateName(esp_ota_img_states_t state) {
+  switch (state) {
+    case ESP_OTA_IMG_NEW:            return "NEW";
+    case ESP_OTA_IMG_PENDING_VERIFY: return "PENDING_VERIFY";
+    case ESP_OTA_IMG_VALID:          return "VALID";
+    case ESP_OTA_IMG_INVALID:        return "INVALID";
+    case ESP_OTA_IMG_ABORTED:        return "ABORTED";
+    default:                         return "UNDEFINED";
+  }
+}
+
+// Boot-time partition diagnostics (#198), serial-only: which A/B slot is
+// running and in what esp_ota state, what otadata will boot next, whether
+// the factory rescue slot holds an image, and the live partition table
+// (must match partitions_splitflap_16MB.csv).
+static void printBootDiagnostics() {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const esp_partition_t* boot = esp_ota_get_boot_partition();
+  esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+  if (running) esp_ota_get_state_partition(running, &state);
+  Serial.printf("boot: running %s @ 0x%06x state=%s, otadata -> %s\n",
+                running ? running->label : "?",
+                running ? running->address : 0, otaStateName(state),
+                boot ? boot->label : "?");
+
+  const esp_partition_t* factory = esp_partition_find_first(
+      ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+  if (factory) {
+    // Erased flash reads 0xFF; any flashed image starts with magic 0xE9.
+    uint8_t magic = 0xFF;
+    esp_partition_read(factory, 0, &magic, 1);
+    Serial.printf("rescue: %s @ 0x%06x (%u KB) — %s\n", factory->label,
+                  factory->address, factory->size / 1024,
+                  magic == 0xE9 ? "image present" : "empty");
+  } else {
+    Serial.println(F("rescue: no factory partition (!)"));
+  }
+
+  Serial.println(F("partition table:"));
+  esp_partition_iterator_t it = esp_partition_find(
+      ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
+  for (; it != NULL; it = esp_partition_next(it)) {
+    const esp_partition_t* p = esp_partition_get(it);
+    Serial.printf("  %-9s %-4s @ 0x%06x %5u KB\n", p->label,
+                  p->type == ESP_PARTITION_TYPE_APP ? "app" : "data",
+                  p->address, p->size / 1024);
+  }
+  esp_partition_iterator_release(it);
+}
 
 static NvsSettingsStore settingsStore;
 static MasterSettings settings;
@@ -69,6 +121,7 @@ void setup() {
                 settings.mqttHost.length()
                     ? (settings.mqttHost + ":" + settings.mqttPort).c_str()
                     : "(disabled)");
+  printBootDiagnostics();
 
   // Snapshot this boot's A/B partition state; a PENDING_VERIFY image is
   // confirmed by WifiService once a netif is up (#190).
