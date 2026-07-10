@@ -14,6 +14,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include <memory>
+
 #include "BuildVersion.h"
 #include "ClockPolicy.h"
 #include "ClockService.h"
@@ -22,6 +24,7 @@
 #include "OtaService.h"
 #include "PendingSettingsPost.h"
 #include "SettingsJson.h"
+#include "SplitFlapProtocol.h"
 #include "Tasks.h"
 #include "WebAssets.h"
 #include "WebLog.h"
@@ -157,7 +160,28 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest* request) {
     SerialPrintln(F("Request for Settings Received"));
     SettingsJsonFields f;
-    f.unitsAmount = UNITS_AMOUNT;  // arrays default per-slot until I2C slice
+    // Bus facts from the display task's snapshot copy (#203) — same values
+    // v1 kept in the probe globals, same /settings wire shape.
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addrs[UNITS_AMOUNT];
+    int fwStatus[UNITS_AMOUNT];
+    String versions[UNITS_AMOUNT];
+    int detected = 0;
+    for (int i = 0; i < UNITS_AMOUNT; i++) {
+      // Same state != 0 predicate countRespondingUnits() derived
+      // snap.detectedUnitCount from — `detected` only orders the addresses.
+      if (snap.units[i].state != 0) {
+        addrs[detected++] = SFP_I2C_ADDRESS_BASE + i;
+      }
+      fwStatus[i] = snap.units[i].fwStatus;
+      versions[i] = snap.units[i].version;
+    }
+    f.unitsAmount = UNITS_AMOUNT;
+    f.unitCount = snap.displayWidth;
+    f.detectedUnitCount = detected;
+    f.detectedUnitAddresses = addrs;
+    f.detectedUnitVersionStatus = fwStatus;
+    f.detectedUnitVersions = versions;
     {
       // Snapshot the shared Strings under the lock; serialize outside it.
       WebStateLock lock;
@@ -177,7 +201,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     }
     // Display state comes from the display task's snapshot (#187), not from
     // web-side shadows — the display domain owns what's on the flaps.
-    f.lastWrittenText = String(displaySnapshotGet().currentText);
+    f.lastWrittenText = String(snap.currentText);
     f.mqttConnected = false;  // MQTT runtime is a later slice
     f.version = GIT_REV;
     f.sketchMd5 = ESP.getSketchMD5();
@@ -561,11 +585,47 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
               rebootRequestedAtMs = millis();
             });
 
+  // --- unit health (#203, v1 #45 wire contract) -----------------------------
+  // GET renders JSON from the snapshot copy — never touches the bus from
+  // async context (the async rule is structural here: only displayTask
+  // holds Wire).
+  server.on("/units/health", HTTP_GET, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    // Heap, not stack: ~2 KB doesn't belong on the async_tcp task stack,
+    // and a static buffer would race concurrent requests.
+    std::unique_ptr<char[]> buf(new char[UNIT_HEALTH_JSON_CAP]);
+    size_t n =
+        buildUnitHealthJson(buf.get(), UNIT_HEALTH_JSON_CAP, snap.units,
+                            snap.displayWidth, snap.faultyUnitCount,
+                            SFP_I2C_ADDRESS_BASE);
+    if (n == 0 || n >= UNIT_HEALTH_JSON_CAP) {
+      // Would-be-truncated payload: fall back to a valid headline-only JSON
+      // rather than shipping a cut object (v1 truncation discipline).
+      snprintf(buf.get(), UNIT_HEALTH_JSON_CAP,
+               "{\"width\":%d,\"faulty\":%d,\"units\":[]}", snap.displayWidth,
+               snap.faultyUnitCount);
+    }
+    request->send(200, "application/json", buf.get());
+  });
+  // POST enqueues a Probe — displayTask re-scans the bus AND re-polls
+  // health in one pass (a probe subsumes v1's plain re-poll; ?probe=1 is
+  // accepted for wire compat but changes nothing). 202 mirrors v1's
+  // "pending"; a full queue reports busy like v1's flash-in-progress 503.
+  server.on("/units/health/refresh", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+              SerialPrintln(F("Request for Unit Health Refresh Received"));
+              if (!displayEnqueue(makeProbeCommand())) {
+                request->send(503, "application/json",
+                              F("{\"status\":\"busy\"}"));
+                return;
+              }
+              request->send(202, "application/json",
+                            F("{\"status\":\"pending\"}"));
+            });
+
   // --- v1 endpoints whose services aren't ported yet (#58 slices) ----------
   // Explicit 501s so a bench click yields a clear message instead of a
   // silent 404. Each stub is retired by the slice that ports its service.
-  registerNotPortedStub(server, "/units/health", HTTP_GET);
-  registerNotPortedStub(server, "/units/health/refresh", HTTP_POST);
   registerNotPortedStub(server, "/unit/offset", HTTP_GET);
   registerNotPortedStub(server, "/unit/offset", HTTP_POST);
   registerNotPortedStub(server, "/unit/jog", HTTP_POST);

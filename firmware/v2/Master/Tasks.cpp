@@ -7,8 +7,10 @@
 #include <freertos/task.h>
 
 #include "ClockPolicy.h"
+#include "FlapFrame.h"
 #include "HelpersSerialHandling.h"
 #include "StatusLed.h"
+#include "UnitBus.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
 
@@ -88,21 +90,56 @@ bool mqttInboxPost(const MqttInboxMessage& msg) {
 
 // --- core 1: display domain ---------------------------------------------------
 
-// Exclusive future owner of I2C/Wire. This slice's worker is the stub: it
-// applies each command's state effects (pure, natively tested) and logs the
-// command instead of driving the bus — the I2C slice replaces the body of
-// the loop, not the queue contract around it.
+// Exclusive owner of I2C/Wire (via UnitBus, #203). Boot: bus up → twiboot
+// settle → probe → health poll → publish. Loop: pure transition
+// (displayApplyCommand) + the hardware work per opcode. Blocking bus
+// operations run right here by design — commands queue behind them, and
+// the published busy flag covers the whole execution.
 static void displayTaskMain(void*) {
   SerialPrintf("displayTask up on core %d\n", xPortGetCoreID());
   DisplaySnapshot local;  // task-private working state; published as copies
+  // Static: ~400 B that would otherwise sit on the task stack forever.
+  static UnitFacts busFacts[UNITS_AMOUNT];
+
+  unitBusInit();
+  // Load-bearing pre-probe delay (v1 #88): probing earlier catches units
+  // still in twiboot's boot window and the CHIPINFO read pins them there.
+  delay(1500);
+  unitBusProbe(busFacts, UNITS_AMOUNT);
+  unitBusPollHealth(busFacts, UNITS_AMOUNT);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+  snapshotPublish(local);
+  SerialPrintf("display: probe done, width %d\n", local.displayWidth);
+
   DisplayCommand cmd;
   for (;;) {
     if (xQueueReceive(displayQueue, &cmd, portMAX_DELAY) != pdTRUE) continue;
     local.busy = true;
     snapshotPublish(local);
     if (displayApplyCommand(local, cmd)) {
-      SerialPrintln("display: " + describeDisplayCommand(cmd) +
-                    " (stub — I2C port is a later #58 slice)");
+      SerialPrintln("display: " + describeDisplayCommand(cmd));
+      switch (cmd.opcode) {
+        case DisplayOpcode::ShowText: {
+          uint8_t letters[UNITS_AMOUNT];
+          flapFrameBuild(cmd.text, local.displayWidth, cmd.alignment,
+                         letters);
+          // Return value = failed unit writes (v1's lastShowUnitWriteErrors,
+          // an MQTT telemetry input) — thread it into the snapshot when the
+          // MQTT slice lands.
+          unitBusShowFrame(local.units, local.displayWidth, letters,
+                           convertSpeedToUnit(cmd.speed));
+          break;
+        }
+        case DisplayOpcode::Probe:
+          // Re-scan + health refresh: an address change moves a unit to a
+          // slot only a probe can see (v1 #56 semantics).
+          unitBusProbe(busFacts, UNITS_AMOUNT);
+          unitBusPollHealth(busFacts, UNITS_AMOUNT);
+          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+          break;
+        default:
+          break;
+      }
     } else {
       SerialPrintln("display: dropped un-executable command");
     }
