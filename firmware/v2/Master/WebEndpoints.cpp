@@ -17,6 +17,7 @@
 #include "BuildVersion.h"
 #include "ClockPolicy.h"
 #include "ClockService.h"
+#include "FactorySlot.h"
 #include "HelpersSerialHandling.h"
 #include "OtaService.h"
 #include "PendingSettingsPost.h"
@@ -39,6 +40,12 @@ static bool pendingIntendedVersionProvided = false;
 // no cross-task race, no mutex (uploads are serialized by the TCP stream).
 static int otaRejectionStatus = 0;  // 0 = not rejected
 static String otaRejectionReason;
+
+// Same pattern for POST /firmware/rescue (#195). Separate state on purpose:
+// a rescue install and a master OTA are different flows and must not read
+// each other's leftovers. (Concurrent uploads remain #191 territory.)
+static int rescueRejectionStatus = 0;
+static String rescueRejectionReason;
 
 // Live state the read handlers render. Set once in webEndpointsInit();
 // handlers only ever read (async-context rule). Held as TU-local statics
@@ -444,6 +451,115 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   server.on("/debug/ota", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send(200, "application/json", otaDebugJson());
   });
+
+  // --- factory rescue slot (#195) --------------------------------------------
+  // Install/refresh the rescue image over WiFi: same wire contract as
+  // /firmware/master (multipart field "firmware" + mandatory ?md5=), target
+  // = the factory partition via FactorySlot's raw esp_partition writes.
+  // Never touches otadata — installing a rescue image does not change what
+  // boots next. Same async-context exception as the master OTA above: the
+  // firmware stream is written right here in the async_tcp task.
+  server.on(
+      "/firmware/rescue", HTTP_POST,
+      [](AsyncWebServerRequest* request) {
+        if (rescueRejectionStatus != 0) {
+          request->send(rescueRejectionStatus, "text/plain",
+                        rescueRejectionReason);
+          return;
+        }
+        String err = factoryWriteError();
+        if (err.length() > 0) {
+          request->send(500, "text/plain", "Rescue install failed: " + err);
+          return;
+        }
+        request->send(200, "text/plain",
+                      F("Rescue image installed into the factory slot. No "
+                        "reboot — POST /firmware/rescue-boot to test it."));
+      },
+      [](AsyncWebServerRequest* request, String filename, size_t index,
+         uint8_t* data, size_t len, bool final) {
+        if (index == 0) {
+          // An install is already streaming: 409 without touching its state.
+          // (The shared rejection flag stalls the in-flight upload too — the
+          // erased header keeps that safe; clean per-request verdicts are
+          // #191 territory.)
+          if (factoryInstallInProgress()) {
+            rescueRejectionStatus = 409;
+            rescueRejectionReason =
+                "another rescue install is in flight — let it finish (a "
+                "dropped one expires after ~30 s) and retry";
+            return;
+          }
+          rescueRejectionStatus = 0;
+          rescueRejectionReason = "";
+
+          String md5 = request->hasParam("md5")
+                           ? request->getParam("md5")->value()
+                           : String();
+          if (md5.length() == 0) {
+            rescueRejectionStatus = 400;
+            rescueRejectionReason =
+                "md5 query parameter is required (compute it over the .bin "
+                "and pass ?md5=...)";
+            return;
+          }
+          if (!normalizeOtaMd5(md5)) {
+            rescueRejectionStatus = 400;
+            rescueRejectionReason = "md5 must be exactly 32 hex characters";
+            return;
+          }
+          if (!factoryWriteBegin(md5)) {
+            rescueRejectionStatus = 500;
+            rescueRejectionReason =
+                "Rescue install could not start: " + factoryWriteError();
+            return;
+          }
+        }
+
+        if (rescueRejectionStatus != 0) return;
+
+        if (len > 0 && !factoryWriteChunk(data, len, index)) {
+          return;  // error latched in FactorySlot; completion reports it
+        }
+        if (final) {
+          factoryWriteEnd();  // completion callback reads factoryWriteError()
+        }
+      });
+
+  // Software entry into the rescue image — and the periodic "prove the
+  // rescue image still boots" test (#195 spec). Guarded so a wall-mounted
+  // device can't be pointed at an empty slot (the bootloader would fall
+  // back to an OTA slot anyway, but the endpoint must stay honest as a
+  // boot test). otadata erase + staged reboot; NVS untouched, so WiFi
+  // credentials survive into rescue (#193 invariant).
+  server.on("/firmware/rescue-boot", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+              if (factoryInstallInProgress()) {
+                request->send(409, "text/plain",
+                              F("A rescue image install is in flight — let "
+                                "it finish, then retry."));
+                return;
+              }
+              if (!factorySlotImageValid()) {
+                request->send(409, "text/plain",
+                              F("Factory slot holds no valid rescue image — "
+                                "POST it to /firmware/rescue first."));
+                return;
+              }
+              if (!rescueBootArm()) {
+                request->send(500, "text/plain",
+                              F("otadata erase failed — rescue boot not "
+                                "armed."));
+                return;
+              }
+              request->send(200, "text/plain",
+                            F("Rebooting into the rescue image… it joins "
+                              "WiFi (or opens <name>-rescue) and serves the "
+                              "recovery page."));
+              WebStateLock lock;
+              pendingReboot = true;
+              rebootRequestedAtMs = millis();
+            });
 
   // --- v1 endpoints whose services aren't ported yet (#58 slices) ----------
   // Explicit 501s so a bench click yields a clear message instead of a

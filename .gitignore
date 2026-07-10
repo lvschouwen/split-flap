@@ -16,6 +16,7 @@
 # needing a .gitignore bump each time.
 firmware/**/BuildVersion.h
 firmware/**/WebAssets.h
+firmware/**/RescueAssets.h
 firmware/**/WifiCredentials.h
 firmware/**/MqttCredentials.h
 # PlatformIO Arduino preprocessor leaves a transient *.ino.cpp in the
@@ -37,10 +38,10 @@ flashing/prebuilt/
 PCB/*.zip
 
 # pioarduino hybrid-compile artifacts (generated per build, IDF-owned)
-firmware/v2/Master/managed_components/
-firmware/v2/Master/sdkconfig.*
-firmware/v2/Master/.dummy/
+firmware/v2/*/managed_components/
+firmware/v2/*/sdkconfig.*
+firmware/v2/*/.dummy/
 
 # clangd tooling (machine-local: .clangd carries absolute paths; compiledb via `pio run -t compiledb`)
-firmware/v2/Master/.clangd
-firmware/v2/Master/compile_commands.json
+firmware/v2/*/.clangd
+firmware/v2/*/compile_commands.json

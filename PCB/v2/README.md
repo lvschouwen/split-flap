@@ -64,8 +64,9 @@ Tracked under **epic #183** (phased plan; supersedes #83).
 - **Master** — ESP32-S3 devkit (+ minimal carrier if needed: 2× PHY,
   connectors, 12→5 V buck). The carrier must expose a **factory-reset
   button on GPIO 4 to GND** (#193: bootloader erases otadata after a
-  5 s hold through reset; internal pull-up, no external parts). GPIO 4
-  is committed in the firmware's bootloader config
+  5 s hold through reset, booting the #195 rescue app from the factory
+  slot; internal pull-up, no external parts). GPIO 4 is committed in
+  the firmware's bootloader config
   (`firmware/v2/Master/platformio.ini`) — don't reassign it.
 - **Design/validation target: 1 row × 16 units**, one small brick.
   The architecture (2 RS-485 buses, rows paired per PHY) scales to

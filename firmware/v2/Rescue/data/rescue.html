@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<!-- Rescue page (#195): the break-glass UI served from the factory slot.
+     Self-contained on purpose — no shared assets with the normal web UI
+     except the vendored SparkMD5 copy at /md5.js (the ?md5= wire contract
+     needs client-side hashing). Fills itself from GET /rescue/status. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>split-flap rescue</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #1c1e22; color: #e8e8e8;
+         max-width: 640px; margin: 0 auto; padding: 1rem; }
+  h1 { font-size: 1.3rem; } h1 span { color: #e2a33d; }
+  .card { background: #26292f; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  .card h2 { font-size: 1rem; margin-top: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid #3a3e46; }
+  .ok { color: #7bc67b; } .bad { color: #d9534f; } .muted { color: #9a9a9a; }
+  button { background: #e2a33d; color: #1c1e22; border: 0; border-radius: 6px;
+           padding: 0.55rem 1.1rem; font-size: 0.95rem; cursor: pointer; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.secondary { background: #3a3e46; color: #e8e8e8; }
+  input[type=file] { margin: 0.5rem 0; max-width: 100%; }
+  #uploadStatus, #exitStatus { margin-top: 0.6rem; font-size: 0.9rem; min-height: 1.2em; }
+  progress { width: 100%; height: 0.7rem; }
+</style>
+</head>
+<body>
+<h1>split-flap <span>rescue</span> <small class="muted" id="ident"></small></h1>
+<p class="muted">Break-glass recovery image running from the factory partition.
+Upload a master firmware <code>.bin</code> to restore the display, or boot
+back into an existing image.</p>
+
+<div class="card">
+  <h2>Installed images</h2>
+  <table id="slots"><tr><td class="muted">loading…</td></tr></table>
+</div>
+
+<div class="card">
+  <h2>Upload master firmware</h2>
+  <p class="muted">Writes to slot <code>app0</code> and reboots into it. The
+  image boots unconfirmed and is rolled back automatically if it fails its
+  health check.</p>
+  <input type="file" id="fw" accept=".bin">
+  <br><button id="uploadBtn" disabled>Flash and reboot</button>
+  <progress id="prog" value="0" max="100" hidden></progress>
+  <div id="uploadStatus"></div>
+</div>
+
+<div class="card">
+  <h2>Exit rescue</h2>
+  <p class="muted">Entered rescue by accident? Boot back into the newest
+  installed firmware without flashing anything.</p>
+  <button id="exitBtn" class="secondary" disabled>Boot normal firmware</button>
+  <div id="exitStatus"></div>
+</div>
+
+<script src="/md5.js"></script>
+<script>
+"use strict";
+var exitTarget = null;
+
+function el(id) { return document.getElementById(id); }
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+  });
+}
+
+function renderStatus(st) {
+  el("ident").textContent = st.name + " · rescue " + st.rescue;
+  var rows = "<tr><th>Slot</th><th>State</th><th>Version</th><th>Built</th></tr>";
+  st.slots.forEach(function (s) {
+    var state = s.valid ? '<span class="ok">valid</span>'
+                        : '<span class="bad">empty/invalid</span>';
+    if (s.running) state += ' <span class="muted">(running)</span>';
+    if (s.label === st.exit) state += ' <span class="muted">(exit target)</span>';
+    rows += "<tr><td>" + esc(s.label) + "</td><td>" + state + "</td><td>" +
+            esc(s.valid ? s.version : "—") + "</td><td>" +
+            esc(s.valid ? s.built : "—") + "</td></tr>";
+  });
+  el("slots").innerHTML = rows;
+  exitTarget = st.exit;
+  el("exitBtn").disabled = !exitTarget;
+}
+
+function loadStatus() {
+  fetch("/rescue/status").then(function (r) { return r.json(); })
+    .then(renderStatus)
+    .catch(function () {
+      el("slots").innerHTML = '<tr><td class="bad">status unavailable</td></tr>';
+    });
+}
+
+el("fw").addEventListener("change", function () {
+  el("uploadBtn").disabled = !el("fw").files.length;
+});
+
+el("uploadBtn").addEventListener("click", function () {
+  var file = el("fw").files[0];
+  if (!file) return;
+  el("uploadBtn").disabled = true;
+  el("uploadStatus").textContent = "hashing…";
+  var reader = new FileReader();
+  reader.onload = function () {
+    var md5 = SparkMD5.ArrayBuffer.hash(reader.result);
+    var form = new FormData();
+    form.append("firmware", file, file.name);
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "/firmware/master?md5=" + md5);
+    el("prog").hidden = false;
+    xhr.upload.onprogress = function (e) {
+      if (e.lengthComputable) el("prog").value = (e.loaded / e.total) * 100;
+    };
+    xhr.onload = function () {
+      if (xhr.status === 200) {
+        el("uploadStatus").innerHTML =
+          '<span class="ok">Flashed — rebooting into the new firmware. ' +
+          "This page will stop responding; reconnect to the display's normal " +
+          "address in ~30 s.</span>";
+      } else {
+        el("uploadStatus").innerHTML =
+          '<span class="bad">Failed (' + xhr.status + "): " +
+          esc(xhr.responseText) + "</span>";
+        el("uploadBtn").disabled = false;
+        el("prog").hidden = true;
+      }
+    };
+    xhr.onerror = function () {
+      el("uploadStatus").innerHTML =
+        '<span class="bad">Upload failed (connection lost).</span>';
+      el("uploadBtn").disabled = false;
+      el("prog").hidden = true;
+    };
+    xhr.send(form);
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+el("exitBtn").addEventListener("click", function () {
+  if (!exitTarget) return;
+  if (!confirm("Boot back into " + exitTarget + "?")) return;
+  el("exitBtn").disabled = true;
+  fetch("/rescue/exit", { method: "POST" }).then(function (r) {
+    return r.text().then(function (t) {
+      el("exitStatus").innerHTML = r.ok
+        ? '<span class="ok">' + esc(t) + "</span>"
+        : '<span class="bad">Failed (' + r.status + "): " + esc(t) + "</span>";
+      el("exitBtn").disabled = r.ok;
+    });
+  }).catch(function () {
+    el("exitStatus").innerHTML = '<span class="bad">Request failed.</span>';
+    el("exitBtn").disabled = false;
+  });
+});
+
+loadStatus();
+</script>
+</body>
+</html>

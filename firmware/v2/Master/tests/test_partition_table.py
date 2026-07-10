@@ -118,6 +118,33 @@ def test_boot_app0_matches_otadata_offset():
     assert int(match.group(1), 0) == load_partitions()["otadata"]["offset"]
 
 
+# --- Rescue project coherence (#195) -----------------------------------------
+# The rescue app shares nothing compiled with Master, but it boots from the
+# same flash: its platformio.ini duplicates the boot_app0 override and points
+# at Master's partition CSV. Pin both copies so a Master-side layout change
+# can't silently drift away from a bench-proven rescue image.
+
+RESCUE_INI_PATH = PROJECT_DIR.parent / "Rescue" / "platformio.ini"
+
+
+def read_rescue_ini() -> str:
+    return RESCUE_INI_PATH.read_text()
+
+
+def test_rescue_boot_app0_matches_otadata_offset():
+    match = re.search(
+        r"board_upload\.arduino\.boot_app0\s*=\s*(0x[0-9A-Fa-f]+)", read_rescue_ini()
+    )
+    assert match, "boot_app0 override missing from Rescue's platformio.ini"
+    assert int(match.group(1), 0) == load_partitions()["otadata"]["offset"]
+
+
+def test_rescue_uses_masters_partition_csv():
+    match = re.search(r"board_build\.partitions\s*=\s*(\S+)", read_rescue_ini())
+    assert match, "partition table missing from Rescue's platformio.ini"
+    assert (RESCUE_INI_PATH.parent / match.group(1)).resolve() == CSV_PATH.resolve()
+
+
 def extract_sdkconfig(ini_text: str) -> str:
     """Return the custom_sdkconfig block (option lines until the next key)."""
     match = re.search(

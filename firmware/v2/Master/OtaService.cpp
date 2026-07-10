@@ -4,6 +4,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "FactorySlot.h"
 #include "HelpersSerialHandling.h"
 
 // Snapshotted once in otaServiceInit() (single-threaded setup); `confirmed`
@@ -103,6 +104,8 @@ String otaDebugJson() {
   out += v.lastFlashResult;  // fixed vocabulary, no escaping needed
   out += "\",\"otaReverted\":";
   out += v.otaReverted ? "true" : "false";
+  out += ",\"factoryValid\":";  // rescue image installed? (#195 bench aid)
+  out += factorySlotImageValid() ? "true" : "false";
   out += '}';
   return out;
 }
