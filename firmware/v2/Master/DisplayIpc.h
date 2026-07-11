@@ -18,6 +18,7 @@
 #include "DisplayCommand.h"
 #include "DisplayWidth.h"
 #include "MaintenancePolicy.h"
+#include "ReflashPlan.h"
 #include "UnitHealth.h"
 
 // Execution result of the LAST maintenance op (#204) — the /unit/op-result
@@ -45,7 +46,19 @@ struct DisplaySnapshot {
   uint8_t faultyUnitCount = 0;
   UnitFacts units[UNITS_AMOUNT];
   MaintResult lastMaint;
+  // Reflash job progress (#205) — published at unit boundaries and settle
+  // transitions while the job runs; the producer gate keys off it.
+  ReflashProgress reflash;
 };
+
+// The producer gate (#205): while a reflash job runs, Stop is the ONLY
+// command allowed into the display queue — it is the cancel. Everything
+// else answers 409 at the web/MQTT boundary, and clockTask skips its tick.
+inline bool displayAcceptsCommand(const DisplaySnapshot& snap,
+                                  DisplayOpcode op) {
+  if (!reflashInProgress(snap.reflash)) return true;
+  return op == DisplayOpcode::Stop;
+}
 
 // Applies one command's state effects to the snapshot. Returns false (no
 // mutation) for commands the worker can't execute. Probe only counts here —
@@ -76,6 +89,7 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
     case DisplayOpcode::SetAddress:
     case DisplayOpcode::ClearAddress:
     case DisplayOpcode::ResetUnits:
+    case DisplayOpcode::ReflashUnits:
       snap.commandsProcessed++;
       return true;
     default:
@@ -169,6 +183,18 @@ inline const char* maintReasonName(MaintReason r) {
     default:
       return "";
   }
+}
+
+// Renders the reflash progress JSON (#205) — spliced into the /units/health
+// payload by the web layer (additive key; v1 clients ignore it). Fits well
+// inside 96 bytes.
+inline void buildReflashJson(char* buf, size_t cap,
+                             const ReflashProgress& p) {
+  snprintf(buf, cap,
+           "{\"state\":\"%s\",\"total\":%u,\"done\":%u,\"failed\":%u,"
+           "\"cur\":%u}",
+           reflashStateName(p.state), (unsigned)p.total, (unsigned)p.done,
+           (unsigned)p.failed, (unsigned)p.currentAddr);
 }
 
 // Renders the op-result JSON for a queried seq from the (mutex-copied)

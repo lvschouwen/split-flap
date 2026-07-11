@@ -175,6 +175,22 @@ static void test_reset_units_bakes_enqueue_time_text_and_show_params() {
   TEST_ASSERT_EQUAL_UINT8(42, cmd.speed);
 }
 
+static void test_reflash_units_bakes_enqueue_time_show_params() {
+  // Same bake-at-enqueue rule as ResetUnits (#205): the job's end-of-run
+  // re-show uses the content of the moment the operator clicked.
+  DisplayCommand cmd = makeReflashUnitsCommand(21, "14:44", "center", 80);
+  TEST_ASSERT_EQUAL(DisplayOpcode::ReflashUnits, cmd.opcode);
+  TEST_ASSERT_EQUAL_UINT32(21, cmd.seq);
+  TEST_ASSERT_EQUAL_STRING("14:44", cmd.text);
+  TEST_ASSERT_EQUAL(DisplayAlignment::Center, cmd.alignment);
+  TEST_ASSERT_EQUAL_UINT8(80, cmd.speed);
+}
+
+static void test_reflash_units_opcode_name() {
+  TEST_ASSERT_EQUAL_STRING("ReflashUnits",
+                           displayOpcodeName(DisplayOpcode::ReflashUnits));
+}
+
 static void test_reset_units_truncates_overlong_text() {
   DisplayCommand cmd =
       makeResetUnitsCommand(12, "0123456789ABCDEFOVERFLOW", "left", 50);
@@ -223,5 +239,7 @@ int main(int, char**) {
   RUN_TEST(test_reset_units_truncates_overlong_text);
   RUN_TEST(test_stop_command_carries_seq_only);
   RUN_TEST(test_describe_names_maintenance_opcodes);
+  RUN_TEST(test_reflash_units_bakes_enqueue_time_show_params);
+  RUN_TEST(test_reflash_units_opcode_name);
   return UNITY_END();
 }

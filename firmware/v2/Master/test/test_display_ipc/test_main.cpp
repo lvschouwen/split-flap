@@ -222,6 +222,60 @@ static void test_invalidate_unit_reads_after_bootloader_reboot() {
   TEST_ASSERT_FALSE(snap.units[2].statusValid);
 }
 
+// --- reflash job (#205): progress in the snapshot + the producer gate ---------
+
+static void test_fresh_snapshot_reflash_is_idle_and_accepts_commands() {
+  DisplaySnapshot snap;
+  TEST_ASSERT_EQUAL(ReflashState::Idle, snap.reflash.state);
+  TEST_ASSERT_TRUE(displayAcceptsCommand(snap, DisplayOpcode::ShowText));
+  TEST_ASSERT_TRUE(displayAcceptsCommand(snap, DisplayOpcode::Jog));
+  TEST_ASSERT_TRUE(displayAcceptsCommand(snap, DisplayOpcode::ReflashUnits));
+}
+
+static void test_gate_blocks_everything_but_stop_while_reflashing() {
+  DisplaySnapshot snap;
+  reflashProgressBegin(snap.reflash, 4);
+  TEST_ASSERT_FALSE(displayAcceptsCommand(snap, DisplayOpcode::ShowText));
+  TEST_ASSERT_FALSE(displayAcceptsCommand(snap, DisplayOpcode::Probe));
+  TEST_ASSERT_FALSE(displayAcceptsCommand(snap, DisplayOpcode::Jog));
+  TEST_ASSERT_FALSE(displayAcceptsCommand(snap, DisplayOpcode::ResetUnits));
+  TEST_ASSERT_FALSE(displayAcceptsCommand(snap, DisplayOpcode::ReflashUnits));
+  TEST_ASSERT_TRUE(displayAcceptsCommand(snap, DisplayOpcode::Stop));
+}
+
+static void test_gate_reopens_after_job_finishes() {
+  DisplaySnapshot snap;
+  reflashProgressBegin(snap.reflash, 4);
+  reflashProgressFinish(snap.reflash, false);
+  TEST_ASSERT_TRUE(displayAcceptsCommand(snap, DisplayOpcode::ShowText));
+}
+
+static void test_reflash_units_command_counts_without_touching_text() {
+  DisplaySnapshot snap;
+  displayApplyCommand(snap, makeShowTextCommand("14:44", "center", 80));
+  DisplayCommand cmd = makeReflashUnitsCommand(7, "14:44", "center", 80);
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, cmd));
+  TEST_ASSERT_EQUAL_STRING("14:44", snap.currentText);
+  TEST_ASSERT_EQUAL(2, snap.commandsProcessed);
+}
+
+static void test_reflash_json_shapes() {
+  char buf[96];
+  ReflashProgress p;
+  buildReflashJson(buf, sizeof(buf), p);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"idle\",\"total\":0,\"done\":0,\"failed\":0,\"cur\":0}",
+      buf);
+  reflashProgressBegin(p, 12);
+  reflashProgressUnitStart(p, 5);
+  reflashProgressUnitResult(p, true);
+  reflashProgressUnitStart(p, 6);
+  buildReflashJson(buf, sizeof(buf), p);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"flashing\",\"total\":12,\"done\":1,\"failed\":0,\"cur\":6}",
+      buf);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_snapshot_defaults);
@@ -242,5 +296,10 @@ int main(int, char**) {
   RUN_TEST(test_offset_fact_defaults_invalid);
   RUN_TEST(test_apply_offset_write_patches_the_fact_in_place);
   RUN_TEST(test_invalidate_unit_reads_after_bootloader_reboot);
+  RUN_TEST(test_fresh_snapshot_reflash_is_idle_and_accepts_commands);
+  RUN_TEST(test_gate_blocks_everything_but_stop_while_reflashing);
+  RUN_TEST(test_gate_reopens_after_job_finishes);
+  RUN_TEST(test_reflash_units_command_counts_without_touching_text);
+  RUN_TEST(test_reflash_json_shapes);
   return UNITY_END();
 }

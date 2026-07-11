@@ -53,6 +53,21 @@ struct UnitFacts {
   bool offsetValid = false;
 };
 
+// fwStatus from a unit's reported rev vs the build's bundled unit rev
+// (#205; v1 compared with strncmp(..., 8) against an 8-char + NUL cache —
+// same semantics here so a "-dirty" sidecar still matches its prefix).
+// Unreadable version or no bundle → 2 (unknown), never a false OUTDATED.
+inline uint8_t unitFwStatusFromRev(const char* version,
+                                   const char* bundledRev) {
+  if (version == nullptr || version[0] == '\0') return 2;
+  if (bundledRev == nullptr || bundledRev[0] == '\0') return 2;
+  for (int i = 0; i < 8; i++) {
+    if (version[i] != bundledRev[i]) return 1;
+    if (version[i] == '\0') break;  // both ended together — match
+  }
+  return 0;
+}
+
 // A unit is "faulty" when its last home failed, its hall sensor never fired
 // during that home, or it has accrued any lifetime brownout/watchdog reset.
 // badCommandCount is surfaced in the UI/attrs but deliberately NOT counted as
