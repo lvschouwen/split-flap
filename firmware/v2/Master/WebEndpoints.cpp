@@ -221,7 +221,6 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
 
   // --- reads ---------------------------------------------------------------
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest* request) {
-    SerialPrintln(F("Request for Settings Received"));
     SettingsJsonFields f;
     // Bus facts from the display task's snapshot copy (#203) — same values
     // v1 kept in the probe globals, same /settings wire shape.
