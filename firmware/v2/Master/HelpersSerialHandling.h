@@ -16,8 +16,10 @@
 // callers on both cores, and one logical line is several writes (Serial
 // body, Serial CRLF, web-log mirror). A helper-scope mutex keeps lines
 // whole. Lock-order rule: this lock is taken around leaf operations only —
-// nothing inside it may take webStateMutex/snapshotMutex (webLogMutex nests
-// inside it by design, one direction only).
+// nothing inside it may take webStateMutex/snapshotMutex. Two leaf mutexes
+// nest inside it by design, one direction only and never held together:
+// webLogMutex and FlashLog's stageMutex (both reached via webLogAppend,
+// which takes them sequentially — see WebLog.cpp / FlashLog.cpp).
 
 #if defined(ARDUINO_ARCH_ESP32) && !defined(UNIT_TEST)
 #include <freertos/FreeRTOS.h>

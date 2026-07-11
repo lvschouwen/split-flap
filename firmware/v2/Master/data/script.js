@@ -207,7 +207,7 @@ window.addEventListener("load", loadPage);
 
 // ===================== views / tabs =====================
 
-var TAB_NAMES = ["home", "settings", "maintenance"];
+var TAB_NAMES = ["home", "settings", "maintenance", "logs"];
 
 function currentTabFromHash() {
 	var name = location.hash.replace("#", "");
@@ -216,7 +216,7 @@ function currentTabFromHash() {
 
 //"setup" is a view but not a tab: the tabbar stays hidden while it's up.
 function showView(name) {
-	["home", "settings", "maintenance", "setup"].forEach(function(view) {
+	["home", "settings", "maintenance", "logs", "setup"].forEach(function(view) {
 		var section = document.getElementById("section-" + view);
 		if (section) section.classList.toggle("on", view === name);
 	});
@@ -930,15 +930,15 @@ function initMasterFirmwareUpload() {
 	});
 }
 
-// ===================== Maintenance: log =====================
+// ===================== Logs tab =====================
 
 //Polls GET /log every 2 s, but only while the log is actually visible:
-//<details> open, browser tab foreground AND the Maintenance view active.
+//<details> open, browser tab foreground AND the Logs view active.
 function initLogPanel() {
 	var details = document.getElementById("logDetails");
 	var pre = document.getElementById("logContent");
 	var pollHandle = null;
-	var onMaintenance = false;
+	var onLogsTab = false;
 
 	function fetchLog() {
 		fetch("/log", { cache: "no-store" })
@@ -953,7 +953,7 @@ function initLogPanel() {
 	}
 
 	function syncPolling() {
-		var want = details.open && !document.hidden && onMaintenance;
+		var want = details.open && !document.hidden && onLogsTab;
 		if (want && pollHandle === null) {
 			fetchLog();
 			pollHandle = setInterval(fetchLog, 2000);
@@ -965,10 +965,50 @@ function initLogPanel() {
 
 	details.addEventListener("toggle", syncPolling);
 	document.addEventListener("sf-tabchange", function(event) {
-		onMaintenance = event.detail === "maintenance";
+		onLogsTab = event.detail === "logs";
 		syncPolling();
 	});
 	document.addEventListener("visibilitychange", syncPolling);
+}
+
+//Flash log (#206): manual load — a file up to 1 MB has no business auto-polling.
+function showFlashLogStatus(message, kind) {
+	var el = document.getElementById("flashLogStatus");
+	el.className = "status " + (kind || "");
+	el.classList.remove("hidden");
+	el.textContent = message;
+}
+
+function loadFlashLog(previous) {
+	var pre = document.getElementById("flashLogContent");
+	showFlashLogStatus("Loading…", "pending");
+	fetch("/log/flash" + (previous ? "?prev=1" : ""), { cache: "no-store" })
+		.then(function(r) {
+			if (!r.ok) return r.text().then(function(t) { throw new Error(t || ("HTTP " + r.status)); });
+			return r.text();
+		})
+		.then(function(text) {
+			pre.textContent = text;
+			pre.classList.remove("hidden");
+			pre.scrollTop = pre.scrollHeight;
+			showFlashLogStatus((previous ? "Previous" : "Current") + " file, " +
+				Math.round(text.length / 1024) + " KB (flushed every ~5 s).", "success");
+		})
+		.catch(function(e) {
+			pre.classList.add("hidden");
+			showFlashLogStatus("Load failed: " + e.message, "error");
+		});
+}
+
+function clearFlashLog() {
+	if (!confirm("Delete the flash log (current + previous file)?")) return;
+	fetch("/log/flash/clear", { method: "POST" })
+		.then(function(r) {
+			if (!r.ok) throw new Error("HTTP " + r.status);
+			document.getElementById("flashLogContent").classList.add("hidden");
+			showFlashLogStatus("Clear queued — files are deleted within a few seconds.", "success");
+		})
+		.catch(function(e) { showFlashLogStatus("Clear failed: " + e.message, "error"); });
 }
 
 // ===================== Maintenance: calibration =====================

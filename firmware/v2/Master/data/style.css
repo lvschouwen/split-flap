@@ -130,6 +130,8 @@ label.small.inline { display: inline; margin: 0 4px 0 0; }
 	font: 600 16px var(--sans); padding: 12px 20px;
 }
 .btn:hover { border-color: var(--muted); }
+/* .btn on an <a> (flash-log Download link): render like the buttons. */
+a.btn { text-decoration: none; display: inline-block; text-align: center; }
 .btn.primary { background: var(--amber); border-color: var(--amber); color: #14100A; }
 .btn.primary:hover { background: #FFC133; }
 .btn.danger { color: var(--warn); }

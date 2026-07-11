@@ -1,6 +1,11 @@
 #include "WebLog.h"
 
 #include "LargeAlloc.h"
+// The flash-log tee is target-only (FlashLog.cpp needs LittleFS); native
+// tests include this .cpp directly, same pattern as HelpersSerialHandling.
+#ifndef UNIT_TEST
+#include "FlashLog.h"
+#endif
 
 #ifndef WEBLOG_DISABLE
 
@@ -73,6 +78,12 @@ void webLogInit() {
 }
 
 void webLogAppend(const char* data, size_t len) {
+  // Tee into the persistent flash log (#206) BEFORE the ring-buffer gate:
+  // a failed ring allocation must not silence the flash log (and vice
+  // versa — flashLogStage gates on its own init state).
+#ifndef UNIT_TEST
+  flashLogStage(data, len);
+#endif
   if (webLogBuffer == nullptr || data == nullptr || len == 0) return;
 
   WEBLOG_LOCK();

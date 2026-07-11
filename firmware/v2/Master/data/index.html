@@ -31,6 +31,7 @@
 			<button type="button" class="tab-btn" data-tab="home">Home</button>
 			<button type="button" class="tab-btn" data-tab="settings">Settings</button>
 			<button type="button" class="tab-btn" data-tab="maintenance">Maintenance</button>
+			<button type="button" class="tab-btn" data-tab="logs">Logs</button>
 		</nav>
 
 		<div id="loadedContent" class="hidden">
@@ -221,11 +222,29 @@
 					</form>
 				</div>
 
+			</section>
+
+			<!-- ============ LOGS ============ -->
+			<section id="section-logs" class="panel">
 				<div class="card">
 					<details id="logDetails" open>
-						<summary>Log</summary>
+						<summary>Live log</summary>
+						<p class="note">The in-RAM ring (last 32 KB of serial output, lost on reboot). Auto-refreshes every 2 s while open.</p>
 						<pre id="logContent" class="log"></pre>
 					</details>
+				</div>
+
+				<div class="card">
+					<h2>Flash log</h2>
+					<p class="note">Persistent copy of the same output on the storage partition — survives reboots and works with USB unplugged. Flushed every ~5 s; rotates at 1&nbsp;MB (current + previous ≈ several weeks of history).</p>
+					<div class="row">
+						<button type="button" class="btn" onclick="loadFlashLog(false)">Load current</button>
+						<button type="button" class="btn" onclick="loadFlashLog(true)">Load previous</button>
+						<a class="btn" href="/log/flash" download="split-flap-log.txt">Download</a>
+						<button type="button" class="btn danger" onclick="clearFlashLog()">Clear…</button>
+					</div>
+					<p id="flashLogStatus" class="status hidden"></p>
+					<pre id="flashLogContent" class="log hidden"></pre>
 				</div>
 			</section>
 

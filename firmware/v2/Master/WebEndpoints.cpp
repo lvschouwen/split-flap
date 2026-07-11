@@ -10,6 +10,7 @@
 #include "WebEndpoints.h"
 
 #include <ESPAsyncWebServer.h>
+#include <LittleFS.h>
 #include <Update.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -20,6 +21,7 @@
 #include "ClockPolicy.h"
 #include "ClockService.h"
 #include "FactorySlot.h"
+#include "FlashLog.h"
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
 #include "OtaService.h"
@@ -284,6 +286,41 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     // Don't SerialPrintln here; every log request would otherwise stamp
     // itself into the buffer on every poll and drown out real activity.
     request->send(200, "text/plain", webLogRead());
+  });
+
+  // --- persistent flash log (#206) ------------------------------------------
+  // Serves the LittleFS log files directly (chunked by the async layer;
+  // esp_littlefs serializes fs access internally, and the flush path
+  // open→append→closes so no write handle is ever shared). Known-benign
+  // race: between the exists() check and the response's real open(), a
+  // rotation or drained clear can remove the file — AsyncFileResponse then
+  // degrades to a 404, so a request racing a rotate occasionally 404s;
+  // retry. ?prev=1 = the rotated file. Content up to the last ~5 s flush.
+  server.on("/log/flash", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (!flashLogAvailable()) {
+      request->send(503, "text/plain",
+                    F("Flash log unavailable (storage mount failed)"));
+      return;
+    }
+    const char* path = request->hasParam("prev") ? flashLogPreviousPath()
+                                                 : flashLogCurrentPath();
+    if (!LittleFS.exists(path)) {
+      request->send(404, "text/plain", F("No flash log yet"));
+      return;
+    }
+    request->send(LittleFS, path, "text/plain");
+  });
+
+  // Clear is staged and drained by netTask's flashLogTick — handlers never
+  // write flash (async rule).
+  server.on("/log/flash/clear", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (!flashLogAvailable()) {
+      request->send(503, "text/plain",
+                    F("Flash log unavailable (storage mount failed)"));
+      return;
+    }
+    flashLogRequestClear();
+    request->send(202, "text/plain", F("Flash log clear queued"));
   });
 
   // --- settings/message form (v1 wire contract) ----------------------------
@@ -940,9 +977,13 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   // lock domains from ever nesting (v1 #48 parity: TZ applies rebootless).
   if (timezoneChanged) clockServiceApplyTz(settings);
 
+  // Flash-log drain (#206): netTask is the single flash writer.
+  flashLogTick(rebootDue);  // force on reboot so the last lines land
+
   if (rebootDue) {
     SerialPrintln(F("Rebooting..."));
     Serial.flush();
+    flashLogTick(true);  // catch the reboot line itself
     ESP.restart();
   }
 }

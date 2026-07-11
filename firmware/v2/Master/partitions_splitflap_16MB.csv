@@ -22,10 +22,13 @@
 #    never looks at it; the factory-reset pin (GPIO 4, custom_sdkconfig in
 #    platformio.ini) erases otadata, and an empty factory slot then falls
 #    back to a bootable OTA slot.
-#  - storage ~5.8 MB: everything left, one spare data partition. Unused
-#    costs nothing; formattable later (LittleFS/FAT) for log archives or
-#    staged unit firmware without touching app offsets. Subtype `spiffs` is
-#    the conventional "generic FS-capable data" marker; nothing mounts it.
+#  - storage ~5.8 MB: everything left, one data partition. Mounted as
+#    LittleFS by FlashLog (#206) for the persistent boot/debug log (2 MB
+#    budget: log.txt + log.prev.txt, 1 MB each); the remaining ~3.8 MB is
+#    free for future tenants (e.g. staged unit firmware) — they share the
+#    SAME filesystem, never carve new partitions. Subtype `spiffs` is the
+#    conventional "generic FS-capable data" marker (LittleFS mounts by
+#    label with SUBTYPE_ANY).
 #
 # Name,    Type, SubType,  Offset, Size
 nvs,       data, nvs,      ,       0x10000

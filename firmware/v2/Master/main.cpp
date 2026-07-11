@@ -14,6 +14,7 @@
 #include "ClockService.h"
 #include "DeviceIdentity.h"
 #include "DisplayWidth.h"
+#include "FlashLog.h"
 #include "MdnsDiscovery.h"
 #include "MqttHelpers.h"
 #include "NvsSettingsStore.h"
@@ -97,6 +98,8 @@ void setup() {
   delay(2000);  // native USB-CDC needs a moment before the first prints land
   webLogInit();  // before the first SerialPrint*, or those lines never
                  // reach GET /log
+  flashLogInit();  // #206: mounts `storage`, writes the boot marker; from
+                   // here every SerialPrint* also lands in /log.txt
 
   settingsStore.begin();
   settings = loadSettings(settingsStore);
