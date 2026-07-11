@@ -53,6 +53,14 @@ static void test_bad_commands_alone_are_not_faulty() {
   TEST_ASSERT_FALSE(unitStatusIsFaulty(s));
 }
 
+static void test_addr_eeprom_flag_alone_is_not_faulty() {
+  // Address source (#215) is informational — an EEPROM-provisioned address is
+  // a provisioning fact, not a hardware fault.
+  UnitStatus s{};
+  s.flags = UNIT_FLAG_ADDR_EEPROM;
+  TEST_ASSERT_FALSE(unitStatusIsFaulty(s));
+}
+
 // --- computeFaultyUnitCount --------------------------------------------------
 
 static void test_faulty_count_only_counts_valid_slots() {
@@ -87,9 +95,47 @@ static void test_health_json_valid_and_bootloader_slots() {
   TEST_ASSERT_EQUAL_STRING(
       "{\"width\":2,\"faulty\":0,\"units\":["
       "{\"i\":0,\"a\":1,\"st\":1,\"v\":1,\"fw\":2,\"rev\":\"abc12345\","
-      "\"up\":1200,\"br\":0,\"wd\":0,\"bc\":0,\"mc\":54,\"fl\":0,\"hs\":720},"
+      "\"up\":1200,\"br\":0,\"wd\":0,\"bc\":0,\"mc\":54,\"fl\":0,\"hs\":720,\"ae\":0},"
       "{\"i\":1,\"a\":2,\"st\":2,\"v\":0}]}",
       buf);
+}
+
+static void test_health_json_addr_eeprom_bit_surfaces_as_ae() {
+  // #215: flags bit 4 (address source = EEPROM) is derived into "ae" so the
+  // UI never has to know the bitfield layout. The raw bit stays in "fl" too.
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].status.flags = UNIT_FLAG_ADDR_EEPROM;
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"fl\":16"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"ae\":1"));
+}
+
+static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
+  // The endpoint splices a ~70 B reflash progress object (#205) into the
+  // same cap-sized buffer — a fully saturated 16-unit payload must leave at
+  // least that much headroom or the endpoint degrades to headline-only.
+  UnitFacts units[16];
+  for (int i = 0; i < 16; i++) {
+    units[i].state = 1;
+    units[i].statusValid = true;
+    units[i].fwStatus = 2;
+    strcpy(units[i].version, "abc12345");
+    units[i].status.flags = 0xFF;
+    units[i].status.mcusrAtBoot = 255;
+    units[i].status.lifetimeBrownoutCount = 255;
+    units[i].status.lifetimeWatchdogCount = 255;
+    units[i].status.uptimeSeconds = 65535;
+    units[i].status.badCommandCount = 255;
+    units[i].status.lastHomingStepCount = 65520;
+  }
+  char buf[UNIT_HEALTH_JSON_CAP];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1);
+  TEST_ASSERT_TRUE(n < sizeof(buf));
+  TEST_ASSERT_TRUE(n + 96 <= UNIT_HEALTH_JSON_CAP);
 }
 
 static void test_health_json_silent_gap_slot() {
@@ -164,8 +210,11 @@ int main(int, char**) {
   RUN_TEST(test_hall_never_flag_is_faulty);
   RUN_TEST(test_brownout_or_watchdog_is_faulty);
   RUN_TEST(test_bad_commands_alone_are_not_faulty);
+  RUN_TEST(test_addr_eeprom_flag_alone_is_not_faulty);
   RUN_TEST(test_faulty_count_only_counts_valid_slots);
   RUN_TEST(test_health_json_valid_and_bootloader_slots);
+  RUN_TEST(test_health_json_addr_eeprom_bit_surfaces_as_ae);
+  RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
   RUN_TEST(test_health_json_silent_gap_slot);
   RUN_TEST(test_health_json_overflow_reports_full);
   RUN_TEST(test_letter_readback_valid_pair);
