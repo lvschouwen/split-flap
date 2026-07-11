@@ -152,10 +152,24 @@ static bool maintRequireLongParam(AsyncWebServerRequest* request,
   return true;
 }
 
+// Producer gate (#205): while a reflash job runs, display-mutating POSTs
+// answer 409 instead of enqueueing — nothing piles up behind the job to
+// burst-drain afterwards. /stop is the ONE exception (it is the cancel)
+// and deliberately does not call this.
+static bool rejectWhileReflashing(AsyncWebServerRequest* request) {
+  if (!reflashInProgress(displaySnapshotGet().reflash)) return false;
+  request->send(409, "text/plain",
+                F("Unit reflash in progress — retry when it finishes"));
+  return true;
+}
+
 // Enqueue-or-503 tail shared by every maintenance POST: the client either
 // gets its correlation seq or an honest busy — never a silently dropped op.
+// Every caller except /stop funnels through here, so the reflash gate
+// lives here too.
 static void maintEnqueue(AsyncWebServerRequest* request,
                          const DisplayCommand& cmd) {
+  if (rejectWhileReflashing(request)) return;
   if (!displayEnqueue(cmd)) {
     request->send(503, "text/plain",
                   F("Display queue full — try again in a moment"));
@@ -357,6 +371,17 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     // Message sends become display commands at drain time; report a full
     // queue now instead of accepting a message that would be dropped. (The
     // stub worker drains instantly, so this only fires if something wedges.)
+    // The reflash gate (#205) applies only to the message part — pure
+    // settings saves don't touch the display queue and stay allowed.
+    if (local.inputTextProvided &&
+        reflashInProgress(displaySnapshotGet().reflash)) {
+      if (isAjax) {
+        request->send(409, "text/plain", F("reflash in progress"));
+      } else {
+        request->redirect("/?display-busy=true");
+      }
+      return;
+    }
     if (local.inputTextProvided && displayQueueFull()) {
       SerialPrintln(F("Display command queue full — message rejected."));
       if (isAjax) request->send(503, "text/plain", F("display busy"));
@@ -501,6 +526,15 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
         if (index == 0) {
           otaRejectionStatus = 0;
           otaRejectionReason = "";
+
+          // Reflash gate (#205): a master OTA reboots the S3 mid-unit-flash
+          // and strands the in-flight unit in twiboot for no reason.
+          if (reflashInProgress(displaySnapshotGet().reflash)) {
+            otaRejectionStatus = 409;
+            otaRejectionReason =
+                "Unit reflash in progress — retry when it finishes";
+            return;
+          }
 
           String md5 = request->hasParam("md5")
                            ? request->getParam("md5")->value()
@@ -691,9 +725,18 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     if (n == 0 || n >= UNIT_HEALTH_JSON_CAP) {
       // Would-be-truncated payload: fall back to a valid headline-only JSON
       // rather than shipping a cut object (v1 truncation discipline).
-      snprintf(buf.get(), UNIT_HEALTH_JSON_CAP,
-               "{\"width\":%d,\"faulty\":%d,\"units\":[]}", snap.displayWidth,
-               snap.faultyUnitCount);
+      n = (size_t)snprintf(buf.get(), UNIT_HEALTH_JSON_CAP,
+                           "{\"width\":%d,\"faulty\":%d,\"units\":[]}",
+                           snap.displayWidth, snap.faultyUnitCount);
+    }
+    // Reflash progress rides the same payload (#205, additive key — the
+    // Maintenance tab already polls this endpoint). Spliced before the
+    // closing brace; the ~70 B worst case fits the cap's slack by design.
+    char reflashJson[80];
+    buildReflashJson(reflashJson, sizeof(reflashJson), snap.reflash);
+    if (n > 0 && n + strlen(reflashJson) + 13 < UNIT_HEALTH_JSON_CAP) {
+      snprintf(buf.get() + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
+               ",\"reflash\":%s}", reflashJson);
     }
     request->send(200, "application/json", buf.get());
   });
@@ -703,6 +746,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // "pending"; a full queue reports busy like v1's flash-in-progress 503.
   server.on("/units/health/refresh", HTTP_POST,
             [](AsyncWebServerRequest* request) {
+              if (rejectWhileReflashing(request)) return;
               if (!displayEnqueue(makeProbeCommand())) {
                 request->send(503, "application/json",
                               F("{\"status\":\"busy\"}"));
@@ -879,10 +923,23 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     request->send(200, "application/json", buf);
   });
 
+  // Bulk unit reflash (#205): pushes every unit not on the bundled rev
+  // through twiboot with the PROGMEM-embedded image. Queue-native like all
+  // maintenance ops — {"seq":N} now, job outcome via /unit/op-result, live
+  // progress in /units/health's reflash object. Text/alignment/speed baked
+  // at enqueue (the job re-shows them; reflashed units homed to blank).
+  server.on("/reflash-units", HTTP_POST, [](AsyncWebServerRequest* request) {
+    SerialPrintln(F("Unit reflash requested from web UI"));
+    DisplaySnapshot snap = displaySnapshotGet();
+    WebContentSnapshot content = webDisplayContentSnapshot();
+    maintEnqueue(request, makeReflashUnitsCommand(
+                              displayNextMaintSeq(), String(snap.currentText),
+                              content.alignment, content.flapSpeed));
+  });
+
   // --- v1 endpoints whose services aren't ported yet (#58 slices) ----------
   // Explicit 501s so a bench click yields a clear message instead of a
   // silent 404. Each stub is retired by the slice that ports its service.
-  registerNotPortedStub(server, "/reflash-units", HTTP_POST);
   registerNotPortedStub(server, "/firmware/recover-mark", HTTP_POST);
   registerNotPortedStub(server, "/firmware/ota-mode", HTTP_POST);
   registerNotPortedStub(server, "/mqtt/discover", HTTP_GET);
