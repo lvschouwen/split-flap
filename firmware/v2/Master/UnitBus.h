@@ -38,3 +38,24 @@ void unitBusPollHealth(UnitFacts* facts, int maxUnits);
 // Returns the number of failed unit writes (v1's writeErrors tally).
 int unitBusShowFrame(const UnitFacts* facts, int width,
                      const uint8_t* letters, int unitSpeed);
+
+// --- calibration + provisioning (#204) — straight v1 ports -------------------
+// All return Wire.endTransmission() status (0 = success) so displayTask can
+// grade the op's MaintResult.
+
+int unitBusWriteOffset(int i2cAddress, int16_t value);  // persists, no re-home
+int unitBusJog(int i2cAddress, int steps);              // ±127, not persisted
+int unitBusHome(int i2cAddress);                        // full calibrate(true)
+int unitBusIdentify(int i2cAddress);                    // ~3 s LED blink
+int unitBusRebootToBootloader(int i2cAddress);          // twiboot @DIP, ~1 s
+int unitBusSetAddress(int i2cAddress, uint8_t newAddress);  // burn + reboot
+int unitBusClearAddress(int i2cAddress);                    // EEPROM → DIP
+int unitBusBroadcastHome();  // general-call CMD_HOME, one transaction (v1 #47)
+
+// Stop-abort signal (#204): the ONE cross-task entry into this module — an
+// atomic flag, not bus state. The /stop handler sets it (only after the
+// Stop command enqueued successfully); every wait loop polls it and returns
+// early; displayTask clears it when Stop executes. The bus itself stays
+// displayTask-exclusive.
+void unitBusRequestAbort();
+void unitBusClearAbort();

@@ -51,6 +51,11 @@ void tasksInit(MasterSettings& settings, SettingsStore& store);
 bool displayEnqueue(const DisplayCommand& cmd);
 bool displayQueueFull();
 
+// Monotonic sequence for maintenance ops (#204): stamp into the command at
+// enqueue, hand to the client, correlate via the snapshot's MaintResult
+// (GET /unit/op-result). Starts at 1 — seq 0 means "nothing executed yet".
+uint32_t displayNextMaintSeq();
+
 // Mutex-guarded copy of the display task's published state. Safe from any
 // task; consumers render from the copy, never from live state.
 DisplaySnapshot displaySnapshotGet();

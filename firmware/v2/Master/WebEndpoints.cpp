@@ -21,11 +21,13 @@
 #include "ClockService.h"
 #include "FactorySlot.h"
 #include "HelpersSerialHandling.h"
+#include "MaintenancePolicy.h"
 #include "OtaService.h"
 #include "PendingSettingsPost.h"
 #include "SettingsJson.h"
 #include "SplitFlapProtocol.h"
 #include "Tasks.h"
+#include "UnitBus.h"
 #include "WebAssets.h"
 #include "WebLog.h"
 #include "WifiService.h"
@@ -101,6 +103,65 @@ static void registerNotPortedStub(AsyncWebServer& server, const char* path,
   server.on(path, method, [](AsyncWebServerRequest* request) {
     request->send(501, "text/plain", NOT_PORTED_MSG);
   });
+}
+
+// --- maintenance endpoint helpers (#204) ---------------------------------------
+
+// v1 parseCalibrationAddress as a seam: policy verdicts come from the pure
+// MaintenancePolicy.h, this only translates request → verdict → response.
+// Validates against the caller's snapshot COPY — a fast, possibly stale
+// view; displayTask re-runs whatever check the queue delay can invalidate.
+static bool maintCheckAddress(AsyncWebServerRequest* request,
+                              const DisplaySnapshot& snap, int& outAddr) {
+  String raw;
+  bool provided = request->hasParam("address");
+  if (provided) raw = request->getParam("address")->value();
+  MaintVerdict verdict = maintValidateAddress(provided ? raw.c_str() : nullptr,
+                                              snap.units, UNITS_AMOUNT,
+                                              outAddr);
+  if (verdict.httpStatus != 200) {
+    request->send(verdict.httpStatus, "text/plain", verdict.message);
+    return false;
+  }
+  return true;
+}
+
+// Required numeric query param (strtol base 0, v1 hex support). Sends the
+// 400 itself so callers just early-return.
+static bool maintRequireLongParam(AsyncWebServerRequest* request,
+                                  const char* name, long& out) {
+  if (!request->hasParam(name)) {
+    String msg = "Missing '";
+    msg += name;
+    msg += "' query param";
+    request->send(400, "text/plain", msg);
+    return false;
+  }
+  String raw = request->getParam(name)->value();
+  char* end = nullptr;
+  out = strtol(raw.c_str(), &end, 0);
+  if (end == raw.c_str()) {
+    String msg = "'";
+    msg += name;
+    msg += "' must be a number";
+    request->send(400, "text/plain", msg);
+    return false;
+  }
+  return true;
+}
+
+// Enqueue-or-503 tail shared by every maintenance POST: the client either
+// gets its correlation seq or an honest busy — never a silently dropped op.
+static void maintEnqueue(AsyncWebServerRequest* request,
+                         const DisplayCommand& cmd) {
+  if (!displayEnqueue(cmd)) {
+    request->send(503, "text/plain",
+                  F("Display queue full — try again in a moment"));
+    return;
+  }
+  char buf[24];
+  snprintf(buf, sizeof(buf), "{\"seq\":%lu}", (unsigned long)cmd.seq);
+  request->send(200, "application/json", buf);
 }
 
 static const char* resetReasonString() {
@@ -623,20 +684,177 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                             F("{\"status\":\"pending\"}"));
             });
 
+  // --- calibration + provisioning (#204, queue-native) ----------------------
+  // Handlers validate against a snapshot copy, enqueue with a fresh seq and
+  // answer {"seq":N}; execution truth arrives via GET /unit/op-result plus
+  // the refreshed health facts. The async rule is upheld throughout: no
+  // handler touches the bus or waits on display work.
+
+  server.on("/unit/offset", HTTP_GET, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    const UnitFacts& unit = snap.units[addr - SFP_I2C_ADDRESS_BASE];
+    if (!unit.offsetValid) {
+      // v1 wording (pre-#32 unit firmware has no GET_OFFSET); also covers
+      // "reads invalidated until the next probe".
+      request->send(502, "text/plain",
+                    F("Unit did not return a valid offset (firmware may "
+                      "predate #32)"));
+      return;
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "{\"offset\":%d}", (int)unit.offset);
+    request->send(200, "application/json", buf);
+  });
+
+  server.on("/unit/offset", HTTP_POST, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    long value = 0;
+    if (!maintRequireLongParam(request, "value", value)) return;
+    MaintVerdict verdict = maintValidateOffset(value);
+    if (verdict.httpStatus != 200) {
+      request->send(verdict.httpStatus, "text/plain", verdict.message);
+      return;
+    }
+    maintEnqueue(request, makeWriteOffsetCommand(displayNextMaintSeq(),
+                                                 (uint8_t)addr,
+                                                 (int16_t)value));
+  });
+
+  server.on("/unit/jog", HTTP_POST, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    long steps = 0;
+    if (!maintRequireLongParam(request, "steps", steps)) return;
+    MaintVerdict verdict = maintValidateJog(steps);
+    if (verdict.httpStatus != 200) {
+      request->send(verdict.httpStatus, "text/plain", verdict.message);
+      return;
+    }
+    maintEnqueue(request, makeJogCommand(displayNextMaintSeq(), (uint8_t)addr,
+                                         (int)steps));
+  });
+
+  server.on("/unit/home", HTTP_POST, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    maintEnqueue(request,
+                 makeHomeCommand(displayNextMaintSeq(), (uint8_t)addr));
+  });
+
+  server.on("/unit/identify", HTTP_POST, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    maintEnqueue(request,
+                 makeIdentifyCommand(displayNextMaintSeq(), (uint8_t)addr));
+  });
+
+  // Debug endpoint, v1 semantics preserved: pushes the unit into twiboot
+  // (~1 s on its DIP-derived address, then back to the sketch). v1 parity:
+  // range check only, no sketch-state gate — it exists precisely for poking
+  // at units the probe view might mislabel. displayTask deliberately does
+  // NOT reprobe afterwards (v1 #88: probing the twiboot window pins the
+  // bootloader alive).
+  server.on("/unit/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
+    long addr = 0;
+    if (!maintRequireLongParam(request, "address", addr)) return;
+    if (addr < 1 || addr > 126) {
+      request->send(400, "text/plain", F("Address must be 1..126"));
+      return;
+    }
+    maintEnqueue(request, makeRebootToBootloaderCommand(displayNextMaintSeq(),
+                                                        (uint8_t)addr));
+  });
+
+  server.on("/unit/set-address", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+              DisplaySnapshot snap = displaySnapshotGet();
+              int addr = 0;
+              if (!maintCheckAddress(request, snap, addr)) return;
+              long target = 0;
+              if (!maintRequireLongParam(request, "value", target)) return;
+              // Fast 409 from the copy; displayTask re-runs the same policy
+              // against live facts right before the burn (authoritative).
+              MaintVerdict verdict = maintValidateSetAddressTarget(
+                  target, addr, snap.units, UNITS_AMOUNT);
+              if (verdict.httpStatus != 200) {
+                request->send(verdict.httpStatus, "text/plain",
+                              verdict.message);
+                return;
+              }
+              maintEnqueue(request,
+                           makeSetAddressCommand(displayNextMaintSeq(),
+                                                 (uint8_t)addr,
+                                                 (uint8_t)target));
+            });
+
+  server.on("/unit/clear-address", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+              DisplaySnapshot snap = displaySnapshotGet();
+              int addr = 0;
+              if (!maintCheckAddress(request, snap, addr)) return;
+              maintEnqueue(request, makeClearAddressCommand(
+                                        displayNextMaintSeq(), (uint8_t)addr));
+            });
+
+  // Blank-out recalibration (v1 semantics: two full-row frames force the
+  // wrap-around re-home, then the enqueue-time text returns). Text comes
+  // from the display snapshot (what is actually showing), alignment/speed
+  // from the settings of this moment — all baked into the command.
+  server.on("/reset-units", HTTP_POST, [](AsyncWebServerRequest* request) {
+    SerialPrintln(F("Request to Reset Units Received"));
+    DisplaySnapshot snap = displaySnapshotGet();
+    WebContentSnapshot content = webDisplayContentSnapshot();
+    maintEnqueue(request, makeResetUnitsCommand(
+                              displayNextMaintSeq(), String(snap.currentText),
+                              content.alignment, content.flapSpeed));
+  });
+
+  // Kill switch (v1 #35). Order is load-bearing (review 2026-07-11): the
+  // abort flag is set BEFORE the enqueue so the queue's happens-before
+  // guarantees displayTask's Stop always finds it set — set-after-enqueue
+  // races an idle displayTask clearing it first, stranding the flag ON for
+  // every future wait. A 503 rolls the flag back (nothing queued to abort).
+  server.on("/stop", HTTP_POST, [](AsyncWebServerRequest* request) {
+    SerialPrintln(F("Request to Stop Received"));
+    DisplayCommand cmd = makeStopCommand(displayNextMaintSeq());
+    unitBusRequestAbort();
+    if (!displayEnqueue(cmd)) {
+      unitBusClearAbort();
+      request->send(503, "text/plain",
+                    F("Display queue full — try again in a moment"));
+      return;
+    }
+    char buf[24];
+    snprintf(buf, sizeof(buf), "{\"seq\":%lu}", (unsigned long)cmd.seq);
+    request->send(200, "application/json", buf);
+  });
+
+  // Execution feedback for the queued ops: pending / ok / failed(+reason) /
+  // expired, rendered from the snapshot's single MaintResult slot.
+  server.on("/unit/op-result", HTTP_GET, [](AsyncWebServerRequest* request) {
+    long seq = 0;
+    if (!maintRequireLongParam(request, "seq", seq)) return;
+    if (seq < 1) {
+      request->send(400, "text/plain", F("seq must be >= 1"));
+      return;
+    }
+    DisplaySnapshot snap = displaySnapshotGet();
+    char buf[96];
+    buildOpResultJson(buf, sizeof(buf), snap.lastMaint, (uint32_t)seq);
+    request->send(200, "application/json", buf);
+  });
+
   // --- v1 endpoints whose services aren't ported yet (#58 slices) ----------
   // Explicit 501s so a bench click yields a clear message instead of a
   // silent 404. Each stub is retired by the slice that ports its service.
-  registerNotPortedStub(server, "/unit/offset", HTTP_GET);
-  registerNotPortedStub(server, "/unit/offset", HTTP_POST);
-  registerNotPortedStub(server, "/unit/jog", HTTP_POST);
-  registerNotPortedStub(server, "/unit/home", HTTP_POST);
-  registerNotPortedStub(server, "/unit/reboot", HTTP_POST);
-  registerNotPortedStub(server, "/unit/identify", HTTP_POST);
-  registerNotPortedStub(server, "/unit/set-address", HTTP_POST);
-  registerNotPortedStub(server, "/unit/clear-address", HTTP_POST);
-  registerNotPortedStub(server, "/stop", HTTP_POST);
   registerNotPortedStub(server, "/reflash-units", HTTP_POST);
-  registerNotPortedStub(server, "/reset-units", HTTP_POST);
   registerNotPortedStub(server, "/firmware/recover-mark", HTTP_POST);
   registerNotPortedStub(server, "/firmware/ota-mode", HTTP_POST);
   registerNotPortedStub(server, "/mqtt/discover", HTTP_GET);

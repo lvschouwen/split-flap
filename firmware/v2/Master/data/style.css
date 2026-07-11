@@ -219,3 +219,11 @@ summary {
 .steps { display: flex; gap: 6px; margin-bottom: 18px; }
 .steps span { flex: 1; height: 3px; border-radius: 2px; background: var(--line); }
 .steps span.done { background: var(--amber); }
+
+/* ---------- maintenance op await (#204) ---------- */
+/* One critical op at a time: while /unit/op-result is being polled, the
+   Maintenance tab's controls lock so a second op can't overwrite the
+   single result slot. */
+.maint-busy button, .maint-busy input, .maint-busy select {
+	pointer-events: none; opacity: 0.55;
+}

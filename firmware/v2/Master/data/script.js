@@ -393,13 +393,29 @@ function initSegControls() {
 	});
 }
 
-//Aborts the running showMessage wait loop, homes every detected unit, and
-//clears inputText so the master doesn't re-issue the previous message (#35).
+//Kill switch (#35): the abort flag skips the in-flight frame's waits, then
+//the queued Stop broadcast-homes every unit and clears the retained text.
+//Awaited (#204): the banner reports the broadcast's real outcome.
 function stopDisplay() {
 	if (!confirm("Stop the display? All detected units re-home to blank and the current message is cleared.")) return;
-	fetch("/stop", { method: "POST" })
-		.then(function(r) { return r.text().then(function(t) { showBanner(t || "Stopped.", 5000); }); })
-		.catch(function() { showBanner("Stop request failed.", 5000); });
+	showBanner("Stopping…", 8000);
+	postCalibrationAwait("/stop", {}, function(ok, reason) {
+		showBanner(ok ? "Stopped — all units homed." : "Stop failed: " + reason, 5000);
+	});
+}
+
+//Blank-out recalibration (#204): '-' row → '.' row forces every drum
+//through its wrap-around re-home, then the current text returns. Queued;
+//fire-and-forget (the effect is watched, not polled).
+function resetUnits() {
+	if (!confirm("Are you sure you want to reset the units?")) return;
+	fetch("/reset-units", { method: "POST" })
+		.then(function(r) {
+			showBanner(r.ok
+				? "Display is resetting/re-calibrating — it blanks out, then the message returns."
+				: "Reset request failed: HTTP " + r.status, 8000);
+		})
+		.catch(function() { showBanner("Reset request failed — no connection.", 5000); });
 }
 
 // ===================== Settings =====================
@@ -714,8 +730,9 @@ function renderUnitHealth(data) {
 // ===================== Maintenance: provisioning (#56) =====================
 
 //Rows come from the health snapshot: only sketch-running units answer the
-//provisioning opcodes. After a mutation the unit reboots and moves on the
-//bus, so the follow-up refresh re-probes (?probe=1).
+//provisioning opcodes. Address mutations are compound display commands —
+//burn, settle through the unit's reboot, reprobe — so by the time the
+//awaited op-result lands, the health facts are already fresh (#204).
 function renderProvisioning(units) {
 	var container = document.getElementById("containerProvisioning");
 	removeAllChildren(container);
@@ -756,12 +773,6 @@ function showProvisioningStatus(message, kind) {
 	el.textContent = message;
 }
 
-//The unit needs ~2-3 s to reboot, re-home enough to answer, and rejoin the
-//bus before a re-probe can see it at its new address.
-function reprobeAfterAddressChange() {
-	setTimeout(function() { refreshUnitHealth(true); }, 3000);
-}
-
 function identifyUnitUi(address) {
 	postCalibration("/unit/identify", { address: address }, function(ok) {
 		showProvisioningStatus(ok
@@ -779,28 +790,34 @@ function changeUnitAddressUi(address, input) {
 	if (!confirm("Change unit " + formatHexAddress(address) + " to " + formatHexAddress(value) + "?\n\n" +
 		"The unit reboots and re-homes. If the new address differs from its DIP switches, " +
 		"over-I2C reflash of this unit stops working until the address is cleared.")) return;
-	showProvisioningStatus("Burning address " + formatHexAddress(value) + "…", "pending");
-	postCalibration("/unit/set-address", { address: address, value: value }, function(ok) {
+	showProvisioningStatus("Burning address " + formatHexAddress(value) + "… (unit reboots, bus re-probes)", "pending");
+	postCalibrationAwait("/unit/set-address", { address: address, value: value }, function(ok, reason) {
 		if (!ok) {
-			showProvisioningStatus("Address change failed for " + formatHexAddress(address) + " (target in use?).", "error");
+			showProvisioningStatus("Address change failed for " + formatHexAddress(address) + ": " + reason, "error");
+			loadUnitHealth();
 			return;
 		}
-		showProvisioningStatus("Burned. Unit is rebooting — the list refreshes in a moment.", "success");
-		reprobeAfterAddressChange();
+		//"ok" means the reprobe SAW the unit answering at its new address —
+		//the facts behind /units/health are already fresh.
+		showProvisioningStatus("Burned & verified — unit answers at " + formatHexAddress(value) + ".", "success");
+		loadUnitHealth();
 	});
 }
 
 function clearUnitAddressUi(address) {
 	if (!confirm("Clear the EEPROM address of unit " + formatHexAddress(address) + "?\n\n" +
-		"The unit reboots and falls back to its DIP-switch address.")) return;
-	showProvisioningStatus("Clearing…", "pending");
-	postCalibration("/unit/clear-address", { address: address }, function(ok) {
+		"The unit reboots and falls back to its DIP-switch address — make sure that " +
+		"address is FREE on the bus, or the unit rejoins into a collision " +
+		"(recoverable by setting the DIP switches and power-cycling).")) return;
+	showProvisioningStatus("Clearing… (unit reboots, bus re-probes)", "pending");
+	postCalibrationAwait("/unit/clear-address", { address: address }, function(ok, reason) {
 		if (!ok) {
-			showProvisioningStatus("Clear failed for " + formatHexAddress(address), "error");
+			showProvisioningStatus("Clear failed for " + formatHexAddress(address) + ": " + reason, "error");
+			loadUnitHealth();
 			return;
 		}
-		showProvisioningStatus("Cleared. Unit is rebooting to its DIP address.", "success");
-		reprobeAfterAddressChange();
+		showProvisioningStatus("Cleared — unit rejoined at its DIP address.", "success");
+		loadUnitHealth();
 	});
 }
 
@@ -817,21 +834,23 @@ function burnAllAddresses() {
 		return;
 	}
 	if (!confirm("Burn the current address of all " + targets.length + " unit(s) into their EEPROM?\n\n" +
-		"Each unit reboots and re-homes once — the display blanks briefly.")) return;
+		"Each unit reboots, re-homes and is re-verified on the bus (~5 s per unit) — the display blanks briefly.")) return;
 	showProvisioningStatus("Burning 0/" + targets.length + "…", "pending");
 	var done = 0, failures = 0;
 	(function next(i) {
 		if (i >= targets.length) {
 			showProvisioningStatus(failures === 0
-				? "Burned " + done + " unit(s). Addresses are now EEPROM-backed."
-				: "Burned " + done + " with " + failures + " failure(s).", failures ? "error" : "success");
-			reprobeAfterAddressChange();
+				? "Burned & verified " + done + " unit(s). Addresses are now EEPROM-backed."
+				: "Burned " + done + " with " + failures + " failure(s) — refresh unit health.", failures ? "error" : "success");
+			loadUnitHealth();
 			return;
 		}
-		postCalibration("/unit/set-address", { address: targets[i], value: targets[i] }, function(ok) {
+		//Awaited per unit: each burn is verified by its own reprobe before
+		//the next starts, so a failure is caught immediately.
+		postCalibrationAwait("/unit/set-address", { address: targets[i], value: targets[i] }, function(ok) {
 			if (ok) done++; else failures++;
 			showProvisioningStatus("Burning " + (i + 1) + "/" + targets.length + "…", "pending");
-			setTimeout(function() { next(i + 1); }, 250);
+			next(i + 1);
 		});
 	})(0);
 }
@@ -1205,10 +1224,10 @@ function saveCalibrationOffset(row) {
 		showCalibrationStatus("Offset for " + formatHexAddress(address) + " is not a number", "error");
 		return;
 	}
-	postCalibration("/unit/offset", { address: address, value: value }, function(ok) {
+	postCalibrationAwait("/unit/offset", { address: address, value: value }, function(ok, reason) {
 		showCalibrationStatus(ok
 			? "Saved offset " + value + " to " + formatHexAddress(address)
-			: "Save offset failed for " + formatHexAddress(address), ok ? "success" : "error");
+			: "Save offset failed for " + formatHexAddress(address) + ": " + reason, ok ? "success" : "error");
 	});
 }
 
@@ -1266,9 +1285,9 @@ function applyCalibrationNext(pending, index, expectIndex) {
 			var correction = Math.round(delta * CALIBRATION_STEPS_PER_FLAP);
 			var newOffset = data.offset - correction;
 
-			postCalibration("/unit/offset", { address: address, value: newOffset }, function(ok) {
+			postCalibrationAwait("/unit/offset", { address: address, value: newOffset }, function(ok, reason) {
 				if (!ok) {
-					showCalibrationStatus("Save offset failed for " + formatHexAddress(address), "error");
+					showCalibrationStatus("Save offset failed for " + formatHexAddress(address) + ": " + reason, "error");
 					return;
 				}
 				postCalibration("/unit/home", { address: address }, function(homeOk) {
@@ -1293,6 +1312,68 @@ function postCalibration(path, params, callback) {
 	fetch(path + "?" + query, { method: "POST" })
 		.then(function(r) { callback(r.ok); })
 		.catch(function() { callback(false); });
+}
+
+//Queue-native execution feedback (#204). Every maintenance POST answers
+//{"seq":N} when the op is queued; the outcome arrives later through
+///unit/op-result. Jog/home/identify stay fire-and-forget (the operator
+//watches the hardware) — EEPROM-mutating ops await the real outcome here.
+//The single result slot serves ONE critical op at a time, so the
+//Maintenance controls lock while a poll is in flight.
+var maintAwaitDepth = 0;
+
+function setMaintenanceBusy(busy) {
+	maintAwaitDepth += busy ? 1 : -1;
+	if (maintAwaitDepth < 0) maintAwaitDepth = 0;
+	var section = document.getElementById("section-maintenance");
+	if (section) section.classList.toggle("maint-busy", maintAwaitDepth > 0);
+}
+
+//callback(ok, reason): ok=true means the op EXECUTED successfully (wire ACK
+//+ postcondition for address ops), not merely that it queued.
+function postCalibrationAwait(path, params, callback) {
+	var query = Object.keys(params).map(function(k) {
+		return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
+	}).join("&");
+	setMaintenanceBusy(true);
+	fetch(path + (query ? "?" + query : ""), { method: "POST" })
+		.then(function(r) {
+			if (!r.ok) return r.text().then(function(t) { throw new Error(t || ("HTTP " + r.status)); });
+			return r.json();
+		})
+		.then(function(data) { pollOpResult(data.seq, 30, callback); })
+		.catch(function(e) {
+			setMaintenanceBusy(false);
+			callback(false, e && e.message ? e.message : "request failed");
+		});
+}
+
+//Address ops settle ~3 s + reprobe before their result lands; 30 × 500 ms
+//also survives a queued show frame ahead of the op.
+function pollOpResult(seq, remaining, callback) {
+	fetch("/unit/op-result?seq=" + seq, { cache: "no-store" })
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(res) {
+			if (res.state === "pending" && remaining > 0) {
+				setTimeout(function() { pollOpResult(seq, remaining - 1, callback); }, 500);
+				return;
+			}
+			setMaintenanceBusy(false);
+			if (res.state === "ok") { callback(true, ""); return; }
+			var reason;
+			if (res.state === "pending") reason = "still queued — display busy; check unit health in a moment";
+			else if (res.state === "expired") reason = "outcome unknown (superseded) — refresh unit health";
+			else reason = (res.reason || "failed") + (res.detail ? " (" + res.detail + ")" : "");
+			callback(false, reason);
+		})
+		.catch(function() {
+			if (remaining > 0) {
+				setTimeout(function() { pollOpResult(seq, remaining - 1, callback); }, 500);
+				return;
+			}
+			setMaintenanceBusy(false);
+			callback(false, "op-result poll failed");
+		});
 }
 
 function showCalibrationStatus(message, kind) {

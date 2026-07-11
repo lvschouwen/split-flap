@@ -45,6 +45,12 @@ struct UnitFacts {
   char version[9] = {0};     // git short-rev; "" when the read failed
   bool statusValid = false;  // status below holds a real CMD_GET_STATUS read
   UnitStatus status{};
+  // Calibration offset (#204): probe-time CMD_GET_OFFSET truth, patched in
+  // place by displayTask after a successful SET_OFFSET. offsetValid stays
+  // false for silent/bootloader units and firmware predating the opcode
+  // (v1 #32), and is dropped when a bootloader reboot invalidates reads.
+  int16_t offset = 0;
+  bool offsetValid = false;
 };
 
 // A unit is "faulty" when its last home failed, its hall sensor never fired

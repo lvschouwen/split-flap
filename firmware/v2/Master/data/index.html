@@ -182,7 +182,7 @@
 					<p class="note">Per-unit diagnostics over I2C: firmware, uptime, lifetime brownout/watchdog resets, last-home result and reset cause.</p>
 					<div class="row">
 						<button type="button" class="btn" onclick="refreshUnitHealth()">Refresh (re-polls every unit)</button>
-						<button type="button" class="btn" onclick="postAction('/reset-units', 'Are you sure you want to reset the units?')">Reset unit calibration</button>
+						<button type="button" class="btn" onclick="resetUnits()">Reset unit calibration</button>
 						<button type="button" class="btn" onclick="reflashAllUnits()">Reflash all units</button>
 					</div>
 					<div class="scroll-x">

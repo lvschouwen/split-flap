@@ -94,6 +94,134 @@ static void test_none_opcode_is_rejected_without_mutation() {
   TEST_ASSERT_EQUAL(1, snap.commandsProcessed);
 }
 
+// --- maintenance transitions (#204) ---------------------------------------------
+
+static void test_maintenance_opcodes_count_and_apply() {
+  DisplaySnapshot snap;
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeWriteOffsetCommand(1, 3, 10)));
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeJogCommand(2, 3, -5)));
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeHomeCommand(3, 3)));
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeIdentifyCommand(4, 3)));
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeRebootToBootloaderCommand(5, 3)));
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeSetAddressCommand(6, 3, 4)));
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeClearAddressCommand(7, 3)));
+  TEST_ASSERT_EQUAL(7, snap.commandsProcessed);
+}
+
+static void test_stop_clears_current_text() {
+  DisplaySnapshot snap;
+  displayApplyCommand(snap, makeShowTextCommand("HELLO", "left", 50));
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeStopCommand(8)));
+  // v1 parity: the retained text clears so the clock/event loop re-sends
+  // fresh content instead of dedup-suppressing forever.
+  TEST_ASSERT_EQUAL_STRING("", snap.currentText);
+}
+
+static void test_reset_units_leaves_current_text_untouched() {
+  DisplaySnapshot snap;
+  displayApplyCommand(snap, makeShowTextCommand("HELLO", "left", 50));
+  TEST_ASSERT_TRUE(
+      displayApplyCommand(snap, makeResetUnitsCommand(9, "HELLO", "left", 50)));
+  // The blank-out frames are execution detail; the re-shown text equals the
+  // baked (enqueue-time) text, so the snapshot text stays truthful as-is.
+  TEST_ASSERT_EQUAL_STRING("HELLO", snap.currentText);
+}
+
+// --- maintenance result slot (the /unit/op-result contract) ----------------------
+
+static void test_fresh_snapshot_has_no_maint_result() {
+  DisplaySnapshot snap;
+  TEST_ASSERT_EQUAL_UINT32(0, snap.lastMaint.seq);
+  TEST_ASSERT_EQUAL(MaintOutcome::Pending, snap.lastMaint.outcome);
+}
+
+static void test_apply_maint_result_fills_the_slot() {
+  DisplaySnapshot snap;
+  DisplayCommand cmd = makeWriteOffsetCommand(42, 3, 100);
+  displayApplyMaintResult(snap, cmd, MaintOutcome::WireFail, MaintReason::None);
+  TEST_ASSERT_EQUAL_UINT32(42, snap.lastMaint.seq);
+  TEST_ASSERT_EQUAL(DisplayOpcode::WriteOffset, snap.lastMaint.opcode);
+  TEST_ASSERT_EQUAL_UINT8(3, snap.lastMaint.addr);
+  TEST_ASSERT_EQUAL(MaintOutcome::WireFail, snap.lastMaint.outcome);
+}
+
+static void test_op_result_query_states() {
+  DisplaySnapshot snap;
+  // Nothing executed yet: any queried seq is still pending.
+  TEST_ASSERT_EQUAL(OpResultState::Pending, opResultQuery(snap.lastMaint, 5));
+  DisplayCommand cmd = makeHomeCommand(5, 3);
+  displayApplyMaintResult(snap, cmd, MaintOutcome::Ok, MaintReason::None);
+  TEST_ASSERT_EQUAL(OpResultState::Found, opResultQuery(snap.lastMaint, 5));
+  // The slot advanced past an older seq: its outcome is gone for good.
+  TEST_ASSERT_EQUAL(OpResultState::Expired, opResultQuery(snap.lastMaint, 4));
+  TEST_ASSERT_EQUAL(OpResultState::Pending, opResultQuery(snap.lastMaint, 6));
+}
+
+static void test_op_result_json_shapes() {
+  DisplaySnapshot snap;
+  char buf[96];
+  buildOpResultJson(buf, sizeof(buf), snap.lastMaint, 5);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"pending\"}", buf);
+  displayApplyMaintResult(snap, makeHomeCommand(5, 3), MaintOutcome::Ok,
+                          MaintReason::None);
+  buildOpResultJson(buf, sizeof(buf), snap.lastMaint, 5);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"ok\"}", buf);
+  buildOpResultJson(buf, sizeof(buf), snap.lastMaint, 4);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"expired\"}", buf);
+  displayApplyMaintResult(snap, makeSetAddressCommand(6, 3, 7),
+                          MaintOutcome::PostconditionFail,
+                          MaintReason::UnitMissingAfterReprobe);
+  buildOpResultJson(buf, sizeof(buf), snap.lastMaint, 6);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"reason\":\"postcondition-fail\","
+      "\"detail\":\"unit-missing-after-reprobe\"}",
+      buf);
+  displayApplyMaintResult(snap, makeJogCommand(7, 3, 5), MaintOutcome::WireFail,
+                          MaintReason::None);
+  buildOpResultJson(buf, sizeof(buf), snap.lastMaint, 7);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"wire-fail\"}",
+                           buf);
+  // Pre-burn exec recheck refused the target (stale web-side view).
+  displayApplyMaintResult(snap, makeSetAddressCommand(8, 3, 5),
+                          MaintOutcome::ExecValidationFail,
+                          MaintReason::TargetAddressOccupied);
+  buildOpResultJson(buf, sizeof(buf), snap.lastMaint, 8);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"reason\":\"exec-validation-fail\","
+      "\"detail\":\"target-address-occupied\"}",
+      buf);
+}
+
+// --- offset facts (#204: probe-time truth, patched on successful write) ----------
+
+static void test_offset_fact_defaults_invalid() {
+  DisplaySnapshot snap;
+  TEST_ASSERT_FALSE(snap.units[0].offsetValid);
+}
+
+static void test_apply_offset_write_patches_the_fact_in_place() {
+  DisplaySnapshot snap;
+  UnitFacts facts[UNITS_AMOUNT];
+  facts[2].state = 1;
+  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT);
+  displayApplyOffsetWrite(snap, 3, -450);
+  TEST_ASSERT_TRUE(snap.units[2].offsetValid);
+  TEST_ASSERT_EQUAL_INT16(-450, snap.units[2].offset);
+}
+
+static void test_invalidate_unit_reads_after_bootloader_reboot() {
+  DisplaySnapshot snap;
+  UnitFacts facts[UNITS_AMOUNT];
+  facts[2].state = 1;
+  facts[2].statusValid = true;
+  facts[2].offset = 10;
+  facts[2].offsetValid = true;
+  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT);
+  displayInvalidateUnitReads(snap, 3);
+  TEST_ASSERT_FALSE(snap.units[2].offsetValid);
+  TEST_ASSERT_FALSE(snap.units[2].statusValid);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_snapshot_defaults);
@@ -104,5 +232,15 @@ int main(int, char**) {
   RUN_TEST(test_unit_facts_all_silent_falls_back_to_ceiling);
   RUN_TEST(test_unit_facts_recompute_faulty_count);
   RUN_TEST(test_none_opcode_is_rejected_without_mutation);
+  RUN_TEST(test_maintenance_opcodes_count_and_apply);
+  RUN_TEST(test_stop_clears_current_text);
+  RUN_TEST(test_reset_units_leaves_current_text_untouched);
+  RUN_TEST(test_fresh_snapshot_has_no_maint_result);
+  RUN_TEST(test_apply_maint_result_fills_the_slot);
+  RUN_TEST(test_op_result_query_states);
+  RUN_TEST(test_op_result_json_shapes);
+  RUN_TEST(test_offset_fact_defaults_invalid);
+  RUN_TEST(test_apply_offset_write_patches_the_fact_in_place);
+  RUN_TEST(test_invalidate_unit_reads_after_bootloader_reboot);
   return UNITY_END();
 }

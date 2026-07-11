@@ -6,6 +6,8 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include <atomic>
+
 #include "ClockPolicy.h"
 #include "FlapFrame.h"
 #include "HelpersSerialHandling.h"
@@ -35,6 +37,12 @@ static constexpr BaseType_t NETWORK_CORE = 0;  // with WiFi/LWIP/AsyncTCP
 
 static constexpr UBaseType_t DISPLAY_QUEUE_DEPTH = 16;
 static constexpr UBaseType_t MQTT_INBOX_DEPTH = 8;
+
+// Settle after an address-mutating burn before the follow-up probe (#204):
+// the unit watchdog-resets THROUGH its twiboot window (~1 s) and probing
+// inside it pins the bootloader (v1 #88) — 3 s clears the window plus the
+// homing start, same margin class as the 1500 ms boot delay.
+static constexpr uint32_t ADDRESS_OP_SETTLE_MS = 3000;
 
 static StaticTask_t displayTaskBuf, clockTaskBuf, netTaskBuf, mqttTaskBuf;
 static StackType_t displayTaskStack[DISPLAY_TASK_STACK];
@@ -83,6 +91,17 @@ bool displayQueueFull() {
   return uxQueueSpacesAvailable(displayQueue) == 0;
 }
 
+// Maintenance-op sequence (#204): ++ first so the first real seq is 1
+// (MaintResult's 0 stays "nothing executed yet"). The 0-skip also keeps the
+// contract intact across a uint32 wrap — unreachable in this device's
+// lifetime, free to guard anyway.
+static std::atomic<uint32_t> maintSeqCounter{0};
+uint32_t displayNextMaintSeq() {
+  uint32_t seq = ++maintSeqCounter;
+  if (seq == 0) seq = ++maintSeqCounter;
+  return seq;
+}
+
 bool mqttInboxPost(const MqttInboxMessage& msg) {
   if (mqttInbox == nullptr) return false;
   return xQueueSend(mqttInbox, &msg, 0) == pdTRUE;
@@ -95,6 +114,21 @@ bool mqttInboxPost(const MqttInboxMessage& msg) {
 // (displayApplyCommand) + the hardware work per opcode. Blocking bus
 // operations run right here by design — commands queue behind them, and
 // the published busy flag covers the whole execution.
+// Probe inhibit after any op that reboots a unit THROUGH its twiboot window
+// (v1 #88 hard rule: the probe's CHIPINFO query pins twiboot alive). Owned
+// by displayTask exclusively; every runtime probe waits this deadline out —
+// including a Probe that was already queued behind a /unit/reboot.
+static uint32_t twibootRiskUntilMs = 0;
+
+static void armTwibootRiskWindow() {
+  twibootRiskUntilMs = millis() + ADDRESS_OP_SETTLE_MS;
+}
+
+static void settleBeforeProbe() {
+  int32_t remaining = (int32_t)(twibootRiskUntilMs - millis());
+  if (remaining > 0) delay((uint32_t)remaining);
+}
+
 static void displayTaskMain(void*) {
   SerialPrintf("displayTask up on core %d\n", xPortGetCoreID());
   DisplaySnapshot local;  // task-private working state; published as copies
@@ -132,11 +166,158 @@ static void displayTaskMain(void*) {
         }
         case DisplayOpcode::Probe:
           // Re-scan + health refresh: an address change moves a unit to a
-          // slot only a probe can see (v1 #56 semantics).
+          // slot only a probe can see (v1 #56 semantics). A refresh queued
+          // right behind a /unit/reboot must not scan into the twiboot
+          // window (review 2026-07-11) — wait the risk deadline out first.
+          settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
           unitBusPollHealth(busFacts, UNITS_AMOUNT);
           displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
           break;
+        // --- calibration + provisioning (#204). Every op grades a
+        // MaintResult; the web layer serves it via /unit/op-result.
+        case DisplayOpcode::WriteOffset: {
+          int status = unitBusWriteOffset(cmd.unitAddress, cmd.value);
+          if (status == 0) {
+            // The only in-place offset mutation — probes own everything else.
+            displayApplyOffsetWrite(local, cmd.unitAddress, cmd.value);
+          }
+          displayApplyMaintResult(
+              local, cmd,
+              status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
+              MaintReason::None);
+          break;
+        }
+        case DisplayOpcode::Jog: {
+          int status = unitBusJog(cmd.unitAddress, cmd.value);
+          displayApplyMaintResult(
+              local, cmd,
+              status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
+              MaintReason::None);
+          break;
+        }
+        case DisplayOpcode::Home: {
+          int status = unitBusHome(cmd.unitAddress);
+          displayApplyMaintResult(
+              local, cmd,
+              status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
+              MaintReason::None);
+          break;
+        }
+        case DisplayOpcode::Identify: {
+          int status = unitBusIdentify(cmd.unitAddress);
+          displayApplyMaintResult(
+              local, cmd,
+              status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
+              MaintReason::None);
+          break;
+        }
+        case DisplayOpcode::RebootToBootloader: {
+          // NO follow-up probe (v1 #88 hard rule): the unit sits in twiboot
+          // ~1 s and the probe's CHIPINFO query would pin it there forever.
+          // Reads for this unit are invalidated until the next probe.
+          int status = unitBusRebootToBootloader(cmd.unitAddress);
+          if (status == 0) {
+            displayInvalidateUnitReads(local, cmd.unitAddress);
+            armTwibootRiskWindow();
+          }
+          displayApplyMaintResult(
+              local, cmd,
+              status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
+              MaintReason::None);
+          break;
+        }
+        case DisplayOpcode::SetAddress: {
+          // Execution-time recheck against LIVE facts: the web handler
+          // validated a snapshot copy that the queue delay made stale.
+          MaintVerdict verdict = maintValidateSetAddressTarget(
+              cmd.value, cmd.unitAddress, local.units, UNITS_AMOUNT);
+          if (verdict.httpStatus != 200) {
+            displayApplyMaintResult(
+                local, cmd, MaintOutcome::ExecValidationFail,
+                verdict.httpStatus == 409 ? MaintReason::TargetAddressOccupied
+                                          : MaintReason::None);
+            break;
+          }
+          int status = unitBusSetAddress(cmd.unitAddress, (uint8_t)cmd.value);
+          if (status != 0) {
+            displayApplyMaintResult(local, cmd, MaintOutcome::WireFail,
+                                    MaintReason::None);
+            break;
+          }
+          // Compound op: settle THROUGH the unit's reboot + twiboot window
+          // (probing inside it pins twiboot — v1 #88), then reprobe so the
+          // published topology is execution-time truth, not a UI timer race.
+          // NOT abort-shortened: the settle is bus safety, not pacing.
+          armTwibootRiskWindow();
+          settleBeforeProbe();
+          unitBusProbe(busFacts, UNITS_AMOUNT);
+          unitBusPollHealth(busFacts, UNITS_AMOUNT);
+          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+          MaintReason reason = MaintReason::None;
+          MaintOutcome outcome = classifySetAddressOutcome(
+              local.units, UNITS_AMOUNT, cmd.value, reason);
+          displayApplyMaintResult(local, cmd, outcome, reason);
+          break;
+        }
+        case DisplayOpcode::ClearAddress: {
+          int countBefore = local.detectedUnitCount;
+          int status = unitBusClearAddress(cmd.unitAddress);
+          if (status != 0) {
+            displayApplyMaintResult(local, cmd, MaintOutcome::WireFail,
+                                    MaintReason::None);
+            break;
+          }
+          armTwibootRiskWindow();
+          settleBeforeProbe();
+          unitBusProbe(busFacts, UNITS_AMOUNT);
+          unitBusPollHealth(busFacts, UNITS_AMOUNT);
+          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+          MaintReason reason = MaintReason::None;
+          MaintOutcome outcome = classifyClearAddressOutcome(
+              countBefore, local.detectedUnitCount, reason);
+          displayApplyMaintResult(local, cmd, outcome, reason);
+          break;
+        }
+        case DisplayOpcode::ResetUnits: {
+          // v1 blank-out sequence: a full row of '-', 2 s, a full row of
+          // '.' — the wrap-around forces each unit's recalibration — then
+          // re-show the text baked at enqueue time.
+          uint8_t letters[UNITS_AMOUNT];
+          char row[UNITS_AMOUNT + 1];
+          int unitSpeed = convertSpeedToUnit(cmd.speed);
+          memset(row, '-', local.displayWidth);
+          row[local.displayWidth] = '\0';
+          flapFrameBuild(row, local.displayWidth, DisplayAlignment::Left,
+                         letters);
+          unitBusShowFrame(local.units, local.displayWidth, letters,
+                           unitSpeed);
+          delay(2000);
+          memset(row, '.', local.displayWidth);
+          row[local.displayWidth] = '\0';
+          flapFrameBuild(row, local.displayWidth, DisplayAlignment::Left,
+                         letters);
+          unitBusShowFrame(local.units, local.displayWidth, letters,
+                           unitSpeed);
+          flapFrameBuild(cmd.text, local.displayWidth, cmd.alignment,
+                         letters);
+          unitBusShowFrame(local.units, local.displayWidth, letters,
+                           unitSpeed);
+          displayApplyMaintResult(local, cmd, MaintOutcome::Ok,
+                                  MaintReason::None);
+          break;
+        }
+        case DisplayOpcode::Stop: {
+          // The abort flag (set by the /stop handler at enqueue) already
+          // short-circuited every wait ahead of us; now park the display.
+          int status = unitBusBroadcastHome();
+          unitBusClearAbort();
+          displayApplyMaintResult(
+              local, cmd,
+              status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
+              MaintReason::None);
+          break;
+        }
         default:
           break;
       }

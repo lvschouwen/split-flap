@@ -121,6 +121,82 @@ static void test_describe_probe_names_opcode() {
   TEST_ASSERT_TRUE(line.indexOf("Probe") >= 0);
 }
 
+// --- maintenance builders (#204) -----------------------------------------------
+// Every op is a POD command built ONLY through these makers: seq is the
+// op-result correlation handle, unitAddress the wire target, value the
+// opcode-disambiguated payload (offset steps / jog steps / new address).
+
+static void test_write_offset_command_bakes_seq_addr_and_negative_value() {
+  DisplayCommand cmd = makeWriteOffsetCommand(7, 3, -1200);
+  TEST_ASSERT_EQUAL(DisplayOpcode::WriteOffset, cmd.opcode);
+  TEST_ASSERT_EQUAL_UINT32(7, cmd.seq);
+  TEST_ASSERT_EQUAL_UINT8(3, cmd.unitAddress);
+  TEST_ASSERT_EQUAL_INT16(-1200, cmd.value);
+}
+
+static void test_jog_command_clamps_to_int8_range() {
+  TEST_ASSERT_EQUAL_INT16(127, makeJogCommand(1, 2, 400).value);
+  TEST_ASSERT_EQUAL_INT16(-127, makeJogCommand(1, 2, -400).value);
+  TEST_ASSERT_EQUAL_INT16(-5, makeJogCommand(1, 2, -5).value);
+  TEST_ASSERT_EQUAL(DisplayOpcode::Jog, makeJogCommand(1, 2, 1).opcode);
+}
+
+static void test_home_and_identify_and_reboot_carry_address_only() {
+  TEST_ASSERT_EQUAL(DisplayOpcode::Home, makeHomeCommand(2, 5).opcode);
+  TEST_ASSERT_EQUAL_UINT8(5, makeHomeCommand(2, 5).unitAddress);
+  TEST_ASSERT_EQUAL(DisplayOpcode::Identify, makeIdentifyCommand(3, 6).opcode);
+  TEST_ASSERT_EQUAL(DisplayOpcode::RebootToBootloader,
+                    makeRebootToBootloaderCommand(4, 7).opcode);
+  TEST_ASSERT_EQUAL_UINT8(7, makeRebootToBootloaderCommand(4, 7).unitAddress);
+}
+
+static void test_set_address_command_carries_target_in_value() {
+  DisplayCommand cmd = makeSetAddressCommand(9, 4, 12);
+  TEST_ASSERT_EQUAL(DisplayOpcode::SetAddress, cmd.opcode);
+  TEST_ASSERT_EQUAL_UINT8(4, cmd.unitAddress);
+  TEST_ASSERT_EQUAL_INT16(12, cmd.value);
+}
+
+static void test_clear_address_command() {
+  DisplayCommand cmd = makeClearAddressCommand(10, 8);
+  TEST_ASSERT_EQUAL(DisplayOpcode::ClearAddress, cmd.opcode);
+  TEST_ASSERT_EQUAL_UINT8(8, cmd.unitAddress);
+}
+
+static void test_reset_units_bakes_enqueue_time_text_and_show_params() {
+  // Senders bake params: the re-show text/alignment/speed are frozen at
+  // enqueue, so a ShowText queued between ResetUnits and its execution
+  // can't leak in and the re-show honors the settings of that moment.
+  DisplayCommand cmd = makeResetUnitsCommand(11, "HELLO", "center", 42);
+  TEST_ASSERT_EQUAL(DisplayOpcode::ResetUnits, cmd.opcode);
+  TEST_ASSERT_EQUAL_UINT32(11, cmd.seq);
+  TEST_ASSERT_EQUAL_STRING("HELLO", cmd.text);
+  TEST_ASSERT_EQUAL(DisplayAlignment::Center, cmd.alignment);
+  TEST_ASSERT_EQUAL_UINT8(42, cmd.speed);
+}
+
+static void test_reset_units_truncates_overlong_text() {
+  DisplayCommand cmd =
+      makeResetUnitsCommand(12, "0123456789ABCDEFOVERFLOW", "left", 50);
+  TEST_ASSERT_EQUAL(DISPLAY_CMD_TEXT_LEN, (int)strlen(cmd.text));
+}
+
+static void test_stop_command_carries_seq_only() {
+  DisplayCommand cmd = makeStopCommand(13);
+  TEST_ASSERT_EQUAL(DisplayOpcode::Stop, cmd.opcode);
+  TEST_ASSERT_EQUAL_UINT32(13, cmd.seq);
+  TEST_ASSERT_EQUAL_UINT8(0, cmd.unitAddress);
+}
+
+static void test_describe_names_maintenance_opcodes() {
+  TEST_ASSERT_TRUE(
+      describeDisplayCommand(makeWriteOffsetCommand(1, 3, -10)).indexOf("WriteOffset") >= 0);
+  TEST_ASSERT_TRUE(
+      describeDisplayCommand(makeSetAddressCommand(1, 3, 4)).indexOf("SetAddress") >= 0);
+  TEST_ASSERT_TRUE(
+      describeDisplayCommand(makeStopCommand(1)).indexOf("Stop") >= 0);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_show_text_sets_opcode_and_copies_text);
@@ -138,5 +214,14 @@ int main(int, char**) {
   RUN_TEST(test_probe_command_carries_no_text);
   RUN_TEST(test_describe_show_text_names_opcode_and_text);
   RUN_TEST(test_describe_probe_names_opcode);
+  RUN_TEST(test_write_offset_command_bakes_seq_addr_and_negative_value);
+  RUN_TEST(test_jog_command_clamps_to_int8_range);
+  RUN_TEST(test_home_and_identify_and_reboot_carry_address_only);
+  RUN_TEST(test_set_address_command_carries_target_in_value);
+  RUN_TEST(test_clear_address_command);
+  RUN_TEST(test_reset_units_bakes_enqueue_time_text_and_show_params);
+  RUN_TEST(test_reset_units_truncates_overlong_text);
+  RUN_TEST(test_stop_command_carries_seq_only);
+  RUN_TEST(test_describe_names_maintenance_opcodes);
   return UNITY_END();
 }

@@ -17,7 +17,21 @@
 
 #include "DisplayCommand.h"
 #include "DisplayWidth.h"
+#include "MaintenancePolicy.h"
 #include "UnitHealth.h"
+
+// Execution result of the LAST maintenance op (#204) — the /unit/op-result
+// contract. A single slot, not a log: it is a best-effort acknowledgement
+// channel for one active critical op (the UI serializes those and disables
+// the Maintenance controls while awaiting); an older seq answering
+// "expired" is the designed overwrite behavior, not data loss.
+struct MaintResult {
+  uint32_t seq = 0;  // 0 = nothing executed yet (real seqs start at 1)
+  DisplayOpcode opcode = DisplayOpcode::None;
+  uint8_t addr = 0;
+  MaintOutcome outcome = MaintOutcome::Pending;
+  MaintReason reason = MaintReason::None;
+};
 
 struct DisplaySnapshot {
   // v1 probe-fallback parity: until a probe answers, assume the ceiling.
@@ -30,6 +44,7 @@ struct DisplaySnapshot {
   uint8_t detectedUnitCount = 0;
   uint8_t faultyUnitCount = 0;
   UnitFacts units[UNITS_AMOUNT];
+  MaintResult lastMaint;
 };
 
 // Applies one command's state effects to the snapshot. Returns false (no
@@ -42,7 +57,25 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
       memcpy(snap.currentText, cmd.text, sizeof(snap.currentText));
       snap.commandsProcessed++;
       return true;
+    case DisplayOpcode::Stop:
+      // v1 parity: clearing the retained text makes the clock/event loop
+      // re-send fresh content instead of dedup-suppressing forever.
+      snap.currentText[0] = '\0';
+      snap.commandsProcessed++;
+      return true;
     case DisplayOpcode::Probe:
+    // Maintenance ops (#204) only count here: their effects arrive at
+    // execution time via displayApplyOffsetWrite / displayApplyUnitFacts /
+    // displayApplyMaintResult. ResetUnits re-shows its baked enqueue-time
+    // text, which equals currentText by construction — nothing to patch.
+    case DisplayOpcode::WriteOffset:
+    case DisplayOpcode::Jog:
+    case DisplayOpcode::Home:
+    case DisplayOpcode::RebootToBootloader:
+    case DisplayOpcode::Identify:
+    case DisplayOpcode::SetAddress:
+    case DisplayOpcode::ClearAddress:
+    case DisplayOpcode::ResetUnits:
       snap.commandsProcessed++;
       return true;
     default:
@@ -66,4 +99,100 @@ inline void displayApplyUnitFacts(DisplaySnapshot& snap,
   snap.displayWidth = (uint8_t)computeDisplayWidth(states, maxUnits);
   snap.detectedUnitCount = (uint8_t)countRespondingUnits(states, maxUnits);
   snap.faultyUnitCount = (uint8_t)computeFaultyUnitCount(snap.units, maxUnits);
+}
+
+// --- maintenance results (#204) --------------------------------------------------
+
+// Publishes a maintenance op's execution outcome into the single result
+// slot. Called by displayTask after the bus work (and its reprobe, for the
+// compound address ops) finished.
+inline void displayApplyMaintResult(DisplaySnapshot& snap,
+                                    const DisplayCommand& cmd,
+                                    MaintOutcome outcome, MaintReason reason) {
+  snap.lastMaint.seq = cmd.seq;
+  snap.lastMaint.opcode = cmd.opcode;
+  snap.lastMaint.addr = cmd.unitAddress;
+  snap.lastMaint.outcome = outcome;
+  snap.lastMaint.reason = reason;
+}
+
+// A successful SET_OFFSET is the only in-place offset mutation; everything
+// else flows through a probe's wholesale fact rewrite.
+inline void displayApplyOffsetWrite(DisplaySnapshot& snap, int i2cAddress,
+                                    int16_t value) {
+  int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
+  if (idx < 0 || idx >= UNITS_AMOUNT) return;
+  snap.units[idx].offset = value;
+  snap.units[idx].offsetValid = true;
+}
+
+// A unit sent into twiboot forgets nothing, but the master must stop
+// serving reads for it until the next probe confirms it is back in sketch.
+inline void displayInvalidateUnitReads(DisplaySnapshot& snap, int i2cAddress) {
+  int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
+  if (idx < 0 || idx >= UNITS_AMOUNT) return;
+  snap.units[idx].offsetValid = false;
+  snap.units[idx].statusValid = false;
+}
+
+// --- /unit/op-result (#204) -------------------------------------------------------
+
+enum class OpResultState : uint8_t { Pending, Found, Expired };
+
+// The seq counter is monotonic, so ordering answers everything: the slot
+// hasn't reached the queried op (pending), holds it (found), or moved past
+// it (expired — the outcome is gone for good; UI treats it as unknown).
+inline OpResultState opResultQuery(const MaintResult& slot, uint32_t seq) {
+  if (slot.seq < seq) return OpResultState::Pending;
+  if (slot.seq == seq && slot.outcome != MaintOutcome::Pending)
+    return OpResultState::Found;
+  if (slot.seq == seq) return OpResultState::Pending;
+  return OpResultState::Expired;
+}
+
+inline const char* maintOutcomeName(MaintOutcome o) {
+  switch (o) {
+    case MaintOutcome::Ok:                 return "ok";
+    case MaintOutcome::WireFail:           return "wire-fail";
+    case MaintOutcome::ExecValidationFail: return "exec-validation-fail";
+    case MaintOutcome::PostconditionFail:  return "postcondition-fail";
+    default:                               return "pending";
+  }
+}
+
+inline const char* maintReasonName(MaintReason r) {
+  switch (r) {
+    case MaintReason::UnitMissingAfterReprobe:
+      return "unit-missing-after-reprobe";
+    case MaintReason::TargetAddressOccupied:
+      return "target-address-occupied";
+    default:
+      return "";
+  }
+}
+
+// Renders the op-result JSON for a queried seq from the (mutex-copied)
+// result slot. Fits well inside 96 bytes.
+inline void buildOpResultJson(char* buf, size_t cap, const MaintResult& slot,
+                              uint32_t seq) {
+  switch (opResultQuery(slot, seq)) {
+    case OpResultState::Pending:
+      snprintf(buf, cap, "{\"state\":\"pending\"}");
+      return;
+    case OpResultState::Expired:
+      snprintf(buf, cap, "{\"state\":\"expired\"}");
+      return;
+    case OpResultState::Found:
+      break;
+  }
+  if (slot.outcome == MaintOutcome::Ok) {
+    snprintf(buf, cap, "{\"state\":\"ok\"}");
+  } else if (slot.reason == MaintReason::None) {
+    snprintf(buf, cap, "{\"state\":\"failed\",\"reason\":\"%s\"}",
+             maintOutcomeName(slot.outcome));
+  } else {
+    snprintf(buf, cap,
+             "{\"state\":\"failed\",\"reason\":\"%s\",\"detail\":\"%s\"}",
+             maintOutcomeName(slot.outcome), maintReasonName(slot.reason));
+  }
 }

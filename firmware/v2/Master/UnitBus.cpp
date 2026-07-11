@@ -9,10 +9,19 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+#include <atomic>
+
 #include "HelpersSerialHandling.h"
+#include "MaintenancePolicy.h"
 #include "SplitFlapProtocol.h"
 #include "TwibootProtocol.h"
 #include "UnitProtocolHelpers.h"
+
+// Stop-abort signal (#204) — see UnitBus.h for the contract.
+static std::atomic<bool> abortRequested{false};
+
+void unitBusRequestAbort() { abortRequested.store(true); }
+void unitBusClearAbort() { abortRequested.store(false); }
 
 // Unit bus pins + clock (rationale in UnitBus.h; S3 pin budget in
 // platformio.ini).
@@ -69,6 +78,16 @@ static bool readUnitStatus(int i2cAddress, UnitStatus& out) {
   out.badCommandCount       = buf[6];
   // Byte 7 is last-homing-step / 16 (saturating); decode by reversing.
   out.lastHomingStepCount   = (uint16_t)buf[7] << 4;
+  return true;
+}
+
+// Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
+// true on success; `out` is untouched on failure (old firmware predating
+// v1 #32 answers short — the drain-and-fail path).
+static bool readUnitOffset(int i2cAddress, int16_t& out) {
+  uint8_t buf[2];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_OFFSET, buf, 2)) return false;
+  out = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
   return true;
 }
 
@@ -165,12 +184,16 @@ static bool isDisplayMoving(const UnitFacts* facts, int width) {
 
 // Waits until no unit reports rotation, with the SHOW_STUCK_TIMEOUT_MS
 // stuck-unit cap. The delay(100) yields displayTask's core between polls.
-// (v1's /stop abort has no v2 counterpart yet — the queue model needs a
-// different cancellation design; deliberately out of slice A.)
+// The abort signal (#204) short-circuits the wait so a queued Stop takes
+// effect promptly instead of sitting out a stuck-unit timeout.
 static void waitForDisplayToStop(const UnitFacts* facts, int width) {
   uint32_t waitStart = millis();
   uint32_t lastWaitLog = 0;
   while (isDisplayMoving(facts, width)) {
+    if (abortRequested.load()) {
+      SerialPrintln(F("Display-stop wait aborted by /stop"));
+      break;
+    }
     if (millis() - waitStart > SHOW_STUCK_TIMEOUT_MS) {
       SerialPrintln(F("Display-stop wait timed out — assuming a unit is stuck, continuing anyway"));
       break;
@@ -232,6 +255,14 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
     } else {
       SerialPrintln(F(" is running sketch (fw UNKNOWN — likely predates version opcode)"));
     }
+    // Offset is a probe-time fact (#204): GET /unit/offset serves from the
+    // snapshot, so every sketch unit's stored offset is read here. Old
+    // firmware (pre-#32) fails the read and stays offsetValid=false.
+    int16_t offset;
+    if (readUnitOffset(i2cAddress, offset)) {
+      facts[unitIndex].offset = offset;
+      facts[unitIndex].offsetValid = true;
+    }
   }
   SerialPrintf("I2C scan complete. Detected %d", detected);
   SerialPrintf("/%d possible units.\n", maxUnits);
@@ -271,4 +302,65 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
   waitForDisplayToStop(facts, width);
   verifyAndResendLetters(facts, width, letters, (uint8_t)unitSpeed);
   return writeErrors;
+}
+
+// --- calibration + provisioning (#204) — straight v1 ports --------------------
+// Payload encodings live in MaintenancePolicy.h so the negative int16/int8
+// wire bytes are asserted natively.
+
+int unitBusWriteOffset(int i2cAddress, int16_t value) {
+  uint8_t payload[2];
+  maintEncodeOffsetLE(value, payload);
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_SET_OFFSET);
+  Wire.write(payload[0]);
+  Wire.write(payload[1]);
+  return Wire.endTransmission();
+}
+
+int unitBusJog(int i2cAddress, int steps) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_JOG);
+  Wire.write(maintEncodeJogByte(steps));
+  return Wire.endTransmission();
+}
+
+int unitBusHome(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_HOME);
+  return Wire.endTransmission();
+}
+
+int unitBusIdentify(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_IDENTIFY);
+  return Wire.endTransmission();
+}
+
+// The unit watchdog-resets into twiboot, which listens ~1 s on the
+// DIP-derived address. HARD RULE (v1 #88): never probe while a unit can be
+// in its twiboot window — the CHIPINFO query pins the bootloader alive.
+int unitBusRebootToBootloader(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_ENTER_BOOTLOADER);
+  return Wire.endTransmission();
+}
+
+int unitBusSetAddress(int i2cAddress, uint8_t newAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_SET_I2C_ADDRESS);
+  Wire.write(newAddress);
+  return Wire.endTransmission();
+}
+
+int unitBusClearAddress(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_CLEAR_I2C_ADDRESS);
+  return Wire.endTransmission();
+}
+
+int unitBusBroadcastHome() {
+  Wire.beginTransmission((uint8_t)SFP_I2C_GENERAL_CALL_ADDRESS);
+  Wire.write((uint8_t)SFP_CMD_HOME);
+  return Wire.endTransmission();
 }

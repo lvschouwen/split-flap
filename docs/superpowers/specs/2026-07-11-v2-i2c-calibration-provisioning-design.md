@@ -60,9 +60,13 @@ a small diff (result polling for critical ops).
   bootloader-detection query (`CMD_ACCESS_MEMORY`) sets twiboot's
   `boot_timeout = 0`, pinning it alive forever. NO auto-probe after
   `RebootToBootloader` (response text says the unit is briefly in
-  twiboot); the 3 s settle in the compound address ops is deliberately
-  longer than the twiboot window for the same reason (same class as slice
-  A's 1500 ms boot delay).
+  twiboot), and — implementation review 2026-07-11 — displayTask owns a
+  probe-inhibit deadline armed by every op that reboots a unit through
+  twiboot (`RebootToBootloader`, the address burns): ANY runtime probe,
+  including one already queued behind a `/unit/reboot`, waits the deadline
+  out first (same class as slice A's 1500 ms boot delay). The settle is
+  bus safety, not pacing — the Stop abort never shortens it, so Stop does
+  not interrupt an in-flight compound maintenance op (only frame waits).
 - **`/stop` regains kill-switch semantics** via one `std::atomic<bool>`
   abort signal: the handler sets it only after Stop enqueues successfully;
   every UnitBus wait loop polls it and returns early (frames between the
@@ -110,11 +114,16 @@ a small diff (result polling for critical ops).
   `ok`, `wire-fail`, `exec-validation-fail`, `postcondition-fail`.
   For compound address ops, `ok` means the post-probe postcondition was
   OBSERVED (unit answers at the expected address), not merely that the
-  EEPROM burn ACKed; `postcondition-fail` reasons distinguish
-  `unit-missing-after-reprobe` / `address-occupied-after-reprobe` (the
-  DIP-collision case after clear-address). `displayApplyCommand` grows the
-  new transitions — `Stop` clears `currentText` (the clock re-sends on its
-  next tick, v1 parity).
+  EEPROM burn ACKed; `postcondition-fail` carries reason
+  `unit-missing-after-reprobe` (covers the DIP-collision case after
+  clear-address — from the master's view indistinguishable from a vanished
+  unit, so no separate reason exists), and `exec-validation-fail` carries
+  `target-address-occupied` when the pre-burn recheck refuses a taken
+  target. `displayApplyCommand` grows the new transitions — `Stop` clears
+  `currentText` (the clock re-sends on its next tick, v1 parity). A Stop
+  issued while another awaited op's result sits in the slot deliberately
+  supersedes it (the earlier poll reports `expired`) — the kill switch is
+  never gated on the single-slot protocol.
 - `Tasks.cpp` displayTask: executes the new opcodes via UnitBus; publishes
   `MaintResult` after each. `ResetUnits` runs entirely in-task: full `'-'`
   row frame → 2 s → `'.'` row frame → re-show the baked text (v1's
@@ -127,8 +136,9 @@ a small diff (result polling for critical ops).
   enqueue (full → 503) → `{"seq":N}`. `GET /unit/offset`: 502 when
   `offsetValid` is false (v1's "firmware may predate #32" case).
 - `data/` UI: `postCalibration` gains an await-result mode (poll
-  `/unit/op-result` at 500 ms, ~10 s cap; `expired` treated as failure)
-  used by the critical ops; Maintenance controls disabled while awaiting.
+  `/unit/op-result` at 500 ms, 15 s cap — covers an address op's settle +
+  reprobe queued behind a show frame; `expired` treated as failure) used
+  by the critical ops; Maintenance controls disabled while awaiting.
   Clear-address confirm dialog warns the unit rejoins at its DIP address —
   ensure it is free. Verify the EEPROM==DIP twiboot warning survived the
   copy (over-I2C reflash only works while EEPROM and DIP agree).
@@ -160,9 +170,10 @@ answers at the new address). UI re-renders from the refreshed health facts.
   limits, both call sites); `displayApplyCommand` for every new opcode
   (Stop text clear, WriteOffset fact patch, MaintResult publication,
   malformed-command rejection); maker helpers' exact wire-byte encoding
-  for negative jog/offset; op-result state machine (pending/ok/expired);
-  abort-flag one-shot semantics (set → waits skip → cleared at Stop).
-  Existing suites stay green.
+  for negative jog/offset; op-result state machine (pending/ok/expired).
+  The abort flag lives in UnitBus.cpp (not native-buildable) — its
+  set → waits-skip → cleared-at-Stop lifecycle is bench-verified via the
+  "Stop interrupts a long show" item below. Existing suites stay green.
 - Bench (E2E tier, combined session with #203's checklist, 5-unit
   display): jog moves one flap and doesn't persist; offset write survives
   a unit power-cycle; re-home parks at blank; identify blinks the right
