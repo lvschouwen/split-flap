@@ -129,6 +129,170 @@ static void settleBeforeProbe() {
   if (remaining > 0) delay((uint32_t)remaining);
 }
 
+// --- unit reflash job (#205) ---------------------------------------------------
+// The one long-running job in the firmware, run INLINE by displayTask (the
+// design's approach A: bus exclusivity stays structural, commands queue
+// behind it — except nothing queues, because the reflashActive gate turns
+// producers away at their boundaries while this runs).
+//
+// The job's internal probes deliberately BYPASS settleBeforeProbe(): the
+// v1 #88 hazard is probing a twiboot unit *without* flashing it (the
+// CHIPINFO query pins the bootloader alive forever); here every pinned
+// unit is immediately flashed and exited, and a FAILED unit is left
+// pinned on purpose — it must not jump to a torn sketch, and the pin
+// keeps it reachable for the retry.
+
+// Which sketch units the pre-flash reboot sweep targets.
+enum class ReflashSweep : uint8_t {
+  OffBundle,     // web job: outdated + unknown revs (v1 #114 semantics)
+  OutdatedOnly,  // boot auto-update: only provably stale revs
+};
+
+// True when a job would have work: something sits in twiboot already, or
+// the sweep predicate matches a sketch unit. Boot uses this to skip the
+// whole job (and its progress churn) on a healthy display.
+static bool reflashHasWork(const DisplaySnapshot& snap, ReflashSweep sweep) {
+  uint8_t addrs[UNITS_AMOUNT];
+  if (reflashCollectFlashTargets(snap.units, UNITS_AMOUNT,
+                                 SFP_I2C_ADDRESS_BASE, addrs) > 0) {
+    return true;
+  }
+  int n = sweep == ReflashSweep::OffBundle
+              ? reflashCollectRebootTargets(snap.units, UNITS_AMOUNT,
+                                            SFP_I2C_ADDRESS_BASE, addrs)
+              : reflashCollectOutdatedTargets(snap.units, UNITS_AMOUNT,
+                                              SFP_I2C_ADDRESS_BASE, addrs);
+  return n > 0;
+}
+
+static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
+                          ReflashSweep sweep) {
+  reflashProgressBegin(local.reflash, 0);  // total known after the rescan
+  snapshotPublish(local);                  // gate closes here
+
+  // With the gate closed, drain whatever slipped into the queue earlier —
+  // it would burst-drain onto a display this job is about to rebuild.
+  // Stop survives (it is the cancel; its abort flag is already set — the
+  // #204 order rule) but is re-sent only AFTER the drain finishes: a
+  // mid-drain re-send would leave commands that sat behind the Stop
+  // running ahead of it after a cancelled job (Codex review finding).
+  // Multiple Stops collapse into one — supersession is the #204 contract.
+  DisplayCommand stale;
+  bool sawStop = false;
+  DisplayCommand stopCmd;
+  while (xQueueReceive(displayQueue, &stale, 0) == pdTRUE) {
+    if (stale.opcode == DisplayOpcode::Stop) {
+      sawStop = true;
+      stopCmd = stale;
+      continue;
+    }
+    SerialPrintln("display: dropped queued command at reflash start: " +
+                  describeDisplayCommand(stale));
+  }
+  if (sawStop) xQueueSend(displayQueue, &stopCmd, 0);
+
+  // Push sweep-matching sketch units into twiboot (v1's
+  // enterBootloaderAllDetected), then wait out the watchdog reset +
+  // twiboot init before talking to anyone.
+  uint8_t addrs[UNITS_AMOUNT];
+  int rebooted = 0;
+  int sweepCount =
+      sweep == ReflashSweep::OffBundle
+          ? reflashCollectRebootTargets(local.units, UNITS_AMOUNT,
+                                        SFP_I2C_ADDRESS_BASE, addrs)
+          : reflashCollectOutdatedTargets(local.units, UNITS_AMOUNT,
+                                          SFP_I2C_ADDRESS_BASE, addrs);
+  for (int i = 0; i < sweepCount; i++) {
+    if (unitBusRebootToBootloader(addrs[i]) == 0) {
+      displayInvalidateUnitReads(local, addrs[i]);
+      rebooted++;
+    }
+  }
+  if (rebooted > 0) {
+    SerialPrintf("reflash: sent %d unit(s) into the bootloader\n", rebooted);
+    delay(TWIBOOT_STARTUP_MS);
+  }
+
+  // Rescan (inhibit bypassed by design, see block comment) to see who
+  // actually sits in twiboot, then plan the flash list from live truth.
+  unitBusProbe(busFacts, UNITS_AMOUNT);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+  uint8_t targets[UNITS_AMOUNT];
+  int total = reflashCollectFlashTargets(local.units, UNITS_AMOUNT,
+                                         SFP_I2C_ADDRESS_BASE, targets);
+  local.reflash.total = (uint8_t)total;
+  snapshotPublish(local);
+  SerialPrintf("reflash: %d unit(s) to flash\n", total);
+
+  const uint8_t* image = webUnitFirmwareBin();
+  size_t imageLen = webUnitFirmwareBinLen();
+  bool cancelled = false;
+  uint8_t batch[REFLASH_BATCH_SIZE];
+  int inBatch = 0;
+  for (int k = 0; k < total; k++) {
+    if (unitBusAbortRequested()) {
+      cancelled = true;
+      break;
+    }
+    uint8_t addr = targets[k];
+    reflashProgressUnitStart(local.reflash, addr);
+    snapshotPublish(local);
+
+    UnitFlashResult r = unitBusFlashUnit(addr, image, imageLen);
+    if (r == UnitFlashResult::Aborted) {
+      reflashProgressUnitResult(local.reflash, false);
+      snapshotPublish(local);
+      cancelled = true;
+      break;
+    }
+    bool ok = (r == UnitFlashResult::Ok);
+    if (!ok) {
+      SerialPrintf("reflash: unit 0x%02x failed (%s)\n", addr,
+                   unitFlashResultName(r));
+    }
+    reflashProgressUnitResult(local.reflash, ok);
+    if (ok) {
+      // Just-flashed unit runs the sketch again; bump the fact so the
+      // batch-idle wait below polls it (the final reprobe rewrites all
+      // facts wholesale anyway).
+      local.units[addr - SFP_I2C_ADDRESS_BASE].state = 1;
+      batch[inBatch++] = addr;
+    }
+    snapshotPublish(local);
+
+    // v1 #138 brownout throttle: once a batch is full, wait for those
+    // units to come back online + finish homing before flashing more.
+    if (inBatch >= REFLASH_BATCH_SIZE) {
+      reflashProgressSettling(local.reflash);
+      snapshotPublish(local);
+      unitBusWaitBatchIdle(batch, inBatch, REFLASH_BATCH_SETTLE_MS);
+      inBatch = 0;
+    }
+  }
+  // Trailing partial batch — reached on plan exhaustion AND on both abort
+  // exits (cpp-review HIGH): the settle is brownout pacing and is never
+  // abort-shortened, so even a cancelled job waits out the homing of the
+  // units it already flashed before the queued Stop broadcast-homes.
+  if (inBatch > 0) {
+    reflashProgressSettling(local.reflash);
+    snapshotPublish(local);
+    unitBusWaitBatchIdle(batch, inBatch, REFLASH_BATCH_SETTLE_MS);
+  }
+
+  // Final reprobe + health poll: published topology and fw grades are
+  // execution-time truth (a failed/cancelled unit shows as bootloader and
+  // stays pinned there — deliberate, see block comment).
+  unitBusProbe(busFacts, UNITS_AMOUNT);
+  unitBusPollHealth(busFacts, UNITS_AMOUNT);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+  reflashProgressFinish(local.reflash, cancelled);
+  snapshotPublish(local);  // gate reopens here
+  SerialPrintf("reflash: %s — %u ok, %u failed of %u\n",
+               reflashStateName(local.reflash.state),
+               (unsigned)local.reflash.done, (unsigned)local.reflash.failed,
+               (unsigned)local.reflash.total);
+}
+
 static void displayTaskMain(void*) {
   SerialPrintf("displayTask up on core %d\n", xPortGetCoreID());
   DisplaySnapshot local;  // task-private working state; published as copies
@@ -143,7 +307,23 @@ static void displayTaskMain(void*) {
   unitBusPollHealth(busFacts, UNITS_AMOUNT);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
   snapshotPublish(local);
-  SerialPrintf("display: probe done, width %d\n", local.displayWidth);
+  if (local.detectedUnitCount == 0) {
+    SerialPrintf("display: no units responding — assuming full width %d\n",
+                 local.displayWidth);
+  } else {
+    SerialPrintf("display: probe done, width %d\n", local.displayWidth);
+  }
+
+  // Boot auto-install + auto-update (#205, full v1 parity): flash any unit
+  // the probe found sitting in twiboot (the recovery path for a failed or
+  // cancelled flash), and push provably-outdated sketch units through the
+  // same job. Runs before the command loop, but the WiFi join is already
+  // racing on core 0 — the job's reflashActive gate turns away whatever
+  // comes up mid-install (web 409s, clock skips).
+  if (reflashHasWork(local, ReflashSweep::OutdatedOnly)) {
+    SerialPrintln(F("reflash: boot auto-install/auto-update starting"));
+    runReflashJob(local, busFacts, ReflashSweep::OutdatedOnly);
+  }
 
   DisplayCommand cmd;
   for (;;) {
@@ -318,6 +498,27 @@ static void displayTaskMain(void*) {
               MaintReason::None);
           break;
         }
+        case DisplayOpcode::ReflashUnits: {
+          // The job closes the gate, drains queue stragglers (Stop
+          // survives), flashes in batches, and reprobes — see runReflashJob.
+          runReflashJob(local, busFacts, ReflashSweep::OffBundle);
+
+          // Baked re-show: reflashed units homed to blank — put the
+          // enqueue-time content back. Skipped on cancel: the queued Stop
+          // right behind us broadcast-homes and clears the text anyway.
+          if (local.reflash.state != ReflashState::Cancelled) {
+            uint8_t letters[UNITS_AMOUNT];
+            flapFrameBuild(cmd.text, local.displayWidth, cmd.alignment,
+                           letters);
+            unitBusShowFrame(local.units, local.displayWidth, letters,
+                             convertSpeedToUnit(cmd.speed));
+            memcpy(local.currentText, cmd.text, sizeof(local.currentText));
+          }
+          MaintReason reason = MaintReason::None;
+          MaintOutcome outcome = classifyReflashOutcome(local.reflash, reason);
+          displayApplyMaintResult(local, cmd, outcome, reason);
+          break;
+        }
         default:
           break;
       }
@@ -341,6 +542,10 @@ static void clockTaskMain(void*) {
     vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(1000));
 
     DisplaySnapshot snap = displaySnapshotGet();
+    // Producer gate (#205): while a reflash runs, skip the whole tick —
+    // nothing queues, nothing burst-drains after, and lastQueued stays
+    // untouched so the first post-job tick re-sends fresh content.
+    if (reflashInProgress(snap.reflash)) continue;
     clockTickObserve(lastQueued, String(snap.currentText));
 
     WebContentSnapshot content = webDisplayContentSnapshot();

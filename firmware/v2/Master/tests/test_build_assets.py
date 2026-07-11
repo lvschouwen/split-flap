@@ -1,9 +1,9 @@
-"""Host-side tests for v2 Master/build_assets.py (#186).
+"""Host-side tests for v2 Master/build_assets.py (#186, #205).
 
-The v2 script is the v1 pipeline minus the unit-firmware bundling, so the
-Intel-HEX/pad_to_page tests stay v1-only. What is covered here: the alphabet
-drift gate (#149) against the v1 shared protocol header the v2 master speaks,
-deterministic gzip (#168), and the UTF-8 pinning guard.
+Covered here: the alphabet drift gate (#149) against the v1 shared protocol
+header the v2 master speaks, deterministic gzip (#168), the UTF-8 pinning
+guard, and — since the reflash slice (#205) — the unit-firmware bundling
+(Intel-HEX parse, page pad, rev sidecar) the v2 script re-grew from v1.
 
 Run with:
     pytest tests/
@@ -87,6 +87,100 @@ def test_real_tree_alphabet_is_in_sync():
     # drifted copy fails in pytest before it fails the firmware build.
     project = pathlib.Path(build_assets.__file__).resolve().parent
     build_assets.verify_js_alphabet(project)
+
+
+# --- unit-firmware bundling (#205) -----------------------------------------
+
+
+def _hex_line(addr: int, data: bytes) -> str:
+    body = bytes([len(data), (addr >> 8) & 0xFF, addr & 0xFF, 0x00]) + data
+    checksum = (-sum(body)) & 0xFF
+    return ":" + (body + bytes([checksum])).hex().upper()
+
+
+def test_parse_intel_hex_applies_data_records(tmp_path):
+    hex_file = tmp_path / "fw.hex"
+    hex_file.write_text(
+        _hex_line(0x0000, b"\x01\x02\x03\x04") + "\n"
+        + _hex_line(0x0004, b"\x05\x06") + "\n"
+        + ":00000001FF\n",
+        encoding="utf-8",
+    )
+    assert build_assets.parse_intel_hex(hex_file) == b"\x01\x02\x03\x04\x05\x06"
+
+
+def test_parse_intel_hex_fills_gaps_with_ff(tmp_path):
+    hex_file = tmp_path / "fw.hex"
+    hex_file.write_text(
+        _hex_line(0x0000, b"\xAA") + "\n"
+        + _hex_line(0x0003, b"\xBB") + "\n"
+        + ":00000001FF\n",
+        encoding="utf-8",
+    )
+    assert build_assets.parse_intel_hex(hex_file) == b"\xAA\xFF\xFF\xBB"
+
+
+def test_parse_intel_hex_stops_at_eof_record(tmp_path):
+    hex_file = tmp_path / "fw.hex"
+    hex_file.write_text(
+        _hex_line(0x0000, b"\x11") + "\n"
+        + ":00000001FF\n"
+        + _hex_line(0x0001, b"\x22") + "\n",
+        encoding="utf-8",
+    )
+    assert build_assets.parse_intel_hex(hex_file) == b"\x11"
+
+
+def test_pad_to_page_pads_partial_page_with_ff():
+    assert build_assets.pad_to_page(b"\x01\x02", page=4) == b"\x01\x02\xFF\xFF"
+
+
+def test_pad_to_page_keeps_exact_multiple():
+    data = b"\x01\x02\x03\x04"
+    assert build_assets.pad_to_page(data, page=4) == data
+
+
+def test_bundled_unit_rev_reads_sidecar(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "unit-firmware.rev").write_text("0fd341f\n", encoding="utf-8")
+    assert build_assets.bundled_unit_rev(tmp_path, fallback="deadbee") == "0fd341f"
+
+
+def test_bundled_unit_rev_falls_back_when_missing(tmp_path):
+    (tmp_path / "data").mkdir()
+    assert build_assets.bundled_unit_rev(tmp_path, fallback="deadbee") == "deadbee"
+
+
+def test_bundled_unit_rev_falls_back_on_empty_sidecar(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "unit-firmware.rev").write_text(" \n", encoding="utf-8")
+    assert build_assets.bundled_unit_rev(tmp_path, fallback="deadbee") == "deadbee"
+
+
+def test_real_tree_has_committed_unit_bundle():
+    # #205: the hex + rev sidecar are committed (v1 pattern) — the build
+    # must never depend on a stage step having run.
+    data = pathlib.Path(build_assets.__file__).resolve().parent / "data"
+    assert (data / "unit-firmware.hex").exists()
+    rev = (data / "unit-firmware.rev").read_text(encoding="utf-8").strip()
+    assert rev, "unit-firmware.rev must carry the built rev"
+
+
+def test_real_tree_bundle_matches_v1_bundle():
+    # Until make_manifest.py stages both trees in one step, the committed v2
+    # bundle must be byte-identical to v1's — the units are unchanged and a
+    # drifted copy means one master auto-pushes stale unit firmware.
+    v2_data = pathlib.Path(build_assets.__file__).resolve().parent / "data"
+    v1_data = (
+        pathlib.Path(build_assets.__file__).resolve().parent.parent.parent
+        / "v1" / "ESPMaster" / "data"
+    )
+    assert (v2_data / "unit-firmware.hex").read_bytes() == (
+        v1_data / "unit-firmware.hex"
+    ).read_bytes()
+    assert (v2_data / "unit-firmware.rev").read_text(encoding="utf-8") == (
+        v1_data / "unit-firmware.rev"
+    ).read_text(encoding="utf-8")
 
 
 # --- deterministic gzip (#168) ---------------------------------------------

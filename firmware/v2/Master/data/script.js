@@ -657,6 +657,9 @@ function removeAllChildren(element) {
 }
 
 function renderUnitHealth(data) {
+	//A (re)loaded page mid-reflash resumes the progress display (#205).
+	if (data && data.reflash) trackReflashProgress(data.reflash);
+
 	var table = document.getElementById("unitHealthTable");
 	var body = document.getElementById("unitHealthBody");
 	removeAllChildren(body);
@@ -855,12 +858,93 @@ function burnAllAddresses() {
 	})(0);
 }
 
-//Pushes every detected sketch-running unit into its twiboot bootloader and
-//asks the master to re-flash them from the PROGMEM bundle.
+//Bulk unit reflash (#205): queue-native job with live progress. The POST
+//answers {"seq":N}; progress rides /units/health's reflash object, polled
+//every 2 s while the job runs. Every display-mutating control answers 409
+//during the job (disabled here to make that visible) — Stop on the Home
+//tab stays live: it doubles as the cancel.
+var reflashPollTimer = null;
+
+function setReflashStatus(text, kind) {
+	var el = document.getElementById("reflashStatus");
+	el.textContent = text;
+	el.className = "pill " + (kind || "off");
+}
+
+function setMaintenanceControlsDisabled(disabled) {
+	var btns = document.querySelectorAll("#section-maintenance button");
+	for (var i = 0; i < btns.length; i++) btns[i].disabled = disabled;
+}
+
+function reflashIsRunning(rf) {
+	return rf.state === "entering" || rf.state === "flashing" || rf.state === "settling";
+}
+
+function reflashProgressLabel(rf) {
+	var counters = rf.done + "/" + rf.total + (rf.failed > 0 ? " (" + rf.failed + " failed)" : "");
+	if (rf.state === "entering") return "entering bootloaders…";
+	if (rf.state === "flashing") return "flashing 0x" + rf.cur.toString(16) + " — " + counters;
+	if (rf.state === "settling") return "units homing — " + counters;
+	return rf.state + " — " + counters;
+}
+
+//Also called from renderUnitHealth() so a page (re)load mid-job resumes
+//the progress display instead of showing enabled controls that 409.
+function trackReflashProgress(rf) {
+	if (reflashIsRunning(rf)) {
+		setMaintenanceControlsDisabled(true);
+		setReflashStatus(reflashProgressLabel(rf), "off");
+		if (reflashPollTimer !== null) clearTimeout(reflashPollTimer);
+		reflashPollTimer = setTimeout(pollReflashProgress, 2000);
+		return true;
+	}
+	return false;
+}
+
+function pollReflashProgress() {
+	reflashPollTimer = null;
+	fetch("/units/health", { cache: "no-store" })
+		.then(function(r) { return r.json(); })
+		.then(function(json) {
+			var rf = json.reflash;
+			if (!rf) {
+				//Key missing (unexpected mid-job): keep watching rather than
+				//stranding the locked controls.
+				reflashPollTimer = setTimeout(pollReflashProgress, 2000);
+				return;
+			}
+			if (trackReflashProgress(rf)) return;
+			//Job over: unlock, grade, and render the job's final reprobe.
+			setMaintenanceControlsDisabled(false);
+			if (rf.state === "done") {
+				setReflashStatus("done — " + rf.done + "/" + rf.total + " flashed", "ok");
+			} else if (rf.state === "cancelled") {
+				setReflashStatus("cancelled — bootloader unit(s) recover at reboot or retry", "bad");
+			} else if (rf.state === "failed") {
+				setReflashStatus(reflashProgressLabel(rf), "bad");
+			}
+			renderUnitHealth(json);
+		})
+		.catch(function() {
+			//Transient poll failure mid-job: keep watching.
+			reflashPollTimer = setTimeout(pollReflashProgress, 2000);
+		});
+}
+
 function reflashAllUnits() {
-	postAction("/reflash-units",
-		"Force every detected unit into its bootloader and re-flash from the bundled unit firmware?\n\n" +
-		"Letters freeze for a few seconds per unit. Watch the Log for progress.");
+	if (!confirm("Push every unit not on the bundled firmware through its bootloader and re-flash it?\n\n" +
+		"Takes a few minutes (2 units at a time, then a homing pause). The display freezes and " +
+		"other controls lock until it finishes. Stop cancels.")) return;
+	fetch("/reflash-units", { method: "POST" })
+		.then(function(r) {
+			if (r.status === 409) { showBanner("A reflash is already running.", 5000); return; }
+			if (!r.ok) { showBanner("Reflash request failed: HTTP " + r.status, 8000); return; }
+			setMaintenanceControlsDisabled(true);
+			setReflashStatus("queued…", "off");
+			if (reflashPollTimer !== null) clearTimeout(reflashPollTimer);
+			reflashPollTimer = setTimeout(pollReflashProgress, 1000);
+		})
+		.catch(function() { showBanner("Request failed — no connection.", 5000); });
 }
 
 // ===================== Maintenance: master firmware =====================

@@ -25,6 +25,9 @@ enum class DisplayOpcode : uint8_t {
   ClearAddress,
   ResetUnits,
   Stop,
+  // Bulk unit reflash over twiboot (#205, slice C) — a long-running job
+  // displayTask executes inline; progress rides the snapshot.
+  ReflashUnits,
 };
 
 enum class DisplayAlignment : uint8_t { Left = 0, Center, Right };
@@ -87,6 +90,7 @@ inline const char* displayOpcodeName(DisplayOpcode op) {
     case DisplayOpcode::ClearAddress:       return "ClearAddress";
     case DisplayOpcode::ResetUnits:         return "ResetUnits";
     case DisplayOpcode::Stop:               return "Stop";
+    case DisplayOpcode::ReflashUnits:       return "ReflashUnits";
     default:                                return "None";
   }
 }
@@ -173,6 +177,19 @@ inline DisplayCommand makeResetUnitsCommand(uint32_t seq,
 
 inline DisplayCommand makeStopCommand(uint32_t seq) {
   return makeMaintCommand(DisplayOpcode::Stop, seq, 0, 0);
+}
+
+// Same bake-at-enqueue rule as ResetUnits (#205): the reflash job's
+// end-of-run re-show uses the content of the moment the operator clicked —
+// reflashed units home to blank, so the job puts the display back itself.
+inline DisplayCommand makeReflashUnitsCommand(uint32_t seq,
+                                              const String& currentText,
+                                              const String& alignment,
+                                              int speed) {
+  DisplayCommand cmd = makeShowTextCommand(currentText, alignment, speed);
+  cmd.opcode = DisplayOpcode::ReflashUnits;
+  cmd.seq = seq;
+  return cmd;
 }
 
 // One log line per executed command — the stub worker's visible output on

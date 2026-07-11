@@ -135,6 +135,28 @@ static void test_atmega328p_signature() {
   TEST_ASSERT_FALSE(isAtmega328pSignature(0xFF, 0xFF, 0xFF));  // bus noise
 }
 
+// --- fw status vs the bundled rev (#205) ---------------------------------------
+
+static void test_fw_status_matches_bundled_rev() {
+  TEST_ASSERT_EQUAL_UINT8(0, unitFwStatusFromRev("26518a1", "26518a1"));
+}
+
+static void test_fw_status_outdated_on_mismatch() {
+  TEST_ASSERT_EQUAL_UINT8(1, unitFwStatusFromRev("0fd341f", "26518a1"));
+}
+
+static void test_fw_status_unknown_on_empty_version_or_bundle() {
+  TEST_ASSERT_EQUAL_UINT8(2, unitFwStatusFromRev("", "26518a1"));
+  TEST_ASSERT_EQUAL_UINT8(2, unitFwStatusFromRev("26518a1", ""));
+}
+
+static void test_fw_status_compares_first_eight_chars_like_v1() {
+  // v1 stored 8 chars + NUL and compared with strncmp(..., 8); a longer
+  // sidecar rev (e.g. "26518a1e-dirty") must still match its 8-char prefix.
+  TEST_ASSERT_EQUAL_UINT8(0, unitFwStatusFromRev("26518a1e", "26518a1e-dirty"));
+  TEST_ASSERT_EQUAL_UINT8(1, unitFwStatusFromRev("26518a1e", "26518a1f-dirty"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_clean_status_is_not_faulty);
@@ -150,5 +172,9 @@ int main(int, char**) {
   RUN_TEST(test_letter_readback_rejects_bad_complement);
   RUN_TEST(test_letter_readback_rejects_out_of_range);
   RUN_TEST(test_atmega328p_signature);
+  RUN_TEST(test_fw_status_matches_bundled_rev);
+  RUN_TEST(test_fw_status_outdated_on_mismatch);
+  RUN_TEST(test_fw_status_unknown_on_empty_version_or_bundle);
+  RUN_TEST(test_fw_status_compares_first_eight_chars_like_v1);
   return UNITY_END();
 }

@@ -53,6 +53,21 @@ struct UnitFacts {
   bool offsetValid = false;
 };
 
+// fwStatus from a unit's reported rev vs the build's bundled unit rev
+// (#205; v1 compared with strncmp(..., 8) against an 8-char + NUL cache —
+// same semantics here so a "-dirty" sidecar still matches its prefix).
+// Unreadable version or no bundle → 2 (unknown), never a false OUTDATED.
+inline uint8_t unitFwStatusFromRev(const char* version,
+                                   const char* bundledRev) {
+  if (version == nullptr || version[0] == '\0') return 2;
+  if (bundledRev == nullptr || bundledRev[0] == '\0') return 2;
+  for (int i = 0; i < 8; i++) {
+    if (version[i] != bundledRev[i]) return 1;
+    if (version[i] == '\0') break;  // both ended together — match
+  }
+  return 0;
+}
+
 // A unit is "faulty" when its last home failed, its hall sensor never fired
 // during that home, or it has accrued any lifetime brownout/watchdog reset.
 // badCommandCount is surfaced in the UI/attrs but deliberately NOT counted as
@@ -77,9 +92,11 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
   return count;
 }
 
-// Worst case (16 valid units, all counters saturated) is ~2 KB — same cap
-// and truncation contract as v1.
-#define UNIT_HEALTH_JSON_CAP 2048
+// Worst case (16 valid units, all counters saturated) is ~2 KB — same
+// truncation contract as v1, cap raised over v1's 2048 for the spliced
+// reflash progress object (#205, ~70 B) so a full display can't push the
+// payload into the headline-only fallback.
+#define UNIT_HEALTH_JSON_CAP 2176
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
