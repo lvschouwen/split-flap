@@ -170,6 +170,21 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   reflashProgressBegin(local.reflash, 0);  // total known after the rescan
   snapshotPublish(local);                  // gate closes here
 
+  // With the gate closed, drain whatever slipped into the queue earlier —
+  // it would burst-drain onto a display this job is about to rebuild.
+  // Stop survives (it is the cancel; its abort flag is already set — the
+  // #204 order rule); anything queued behind a Stop is unreachable-dead
+  // anyway, so the drain ends there.
+  DisplayCommand stale;
+  while (xQueueReceive(displayQueue, &stale, 0) == pdTRUE) {
+    if (stale.opcode == DisplayOpcode::Stop) {
+      xQueueSend(displayQueue, &stale, 0);
+      break;
+    }
+    SerialPrintln("display: dropped queued command at reflash start: " +
+                  describeDisplayCommand(stale));
+  }
+
   // Push sweep-matching sketch units into twiboot (v1's
   // enterBootloaderAllDetected), then wait out the watchdog reset +
   // twiboot init before talking to anyone.
@@ -470,21 +485,8 @@ static void displayTaskMain(void*) {
           break;
         }
         case DisplayOpcode::ReflashUnits: {
-          // Drain commands that slipped into the queue between this job's
-          // enqueue and its execution (the gate only closes when the job
-          // starts): they would burst-drain onto a display the job just
-          // rebuilt. Stop survives — it is the cancel, and its abort flag
-          // is already set (order rule: flag BEFORE enqueue).
-          DisplayCommand stale;
-          while (xQueueReceive(displayQueue, &stale, 0) == pdTRUE) {
-            if (stale.opcode == DisplayOpcode::Stop) {
-              xQueueSend(displayQueue, &stale, 0);
-              break;  // a Stop means nothing else can follow it usefully
-            }
-            SerialPrintln("display: dropped queued command at reflash start: " +
-                          describeDisplayCommand(stale));
-          }
-
+          // The job closes the gate, drains queue stragglers (Stop
+          // survives), flashes in batches, and reprobes — see runReflashJob.
           runReflashJob(local, busFacts, ReflashSweep::OffBundle);
 
           // Baked re-show: reflashed units homed to blank — put the

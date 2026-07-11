@@ -92,9 +92,11 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
   return count;
 }
 
-// Worst case (16 valid units, all counters saturated) is ~2 KB — same cap
-// and truncation contract as v1.
-#define UNIT_HEALTH_JSON_CAP 2048
+// Worst case (16 valid units, all counters saturated) is ~2 KB — same
+// truncation contract as v1, cap raised over v1's 2048 for the spliced
+// reflash progress object (#205, ~70 B) so a full display can't push the
+// payload into the headline-only fallback.
+#define UNIT_HEALTH_JSON_CAP 2176
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.

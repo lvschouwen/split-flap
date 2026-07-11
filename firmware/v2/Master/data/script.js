@@ -907,7 +907,13 @@ function pollReflashProgress() {
 		.then(function(r) { return r.json(); })
 		.then(function(json) {
 			var rf = json.reflash;
-			if (!rf || trackReflashProgress(rf)) return;
+			if (!rf) {
+				//Key missing (unexpected mid-job): keep watching rather than
+				//stranding the locked controls.
+				reflashPollTimer = setTimeout(pollReflashProgress, 2000);
+				return;
+			}
+			if (trackReflashProgress(rf)) return;
 			//Job over: unlock, grade, and render the job's final reprobe.
 			setMaintenanceControlsDisabled(false);
 			if (rf.state === "done") {
