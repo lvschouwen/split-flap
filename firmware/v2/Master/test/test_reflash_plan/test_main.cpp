@@ -52,6 +52,21 @@ static void test_collect_flash_targets_takes_bootloader_units_only() {
   TEST_ASSERT_EQUAL_UINT8(6, addrs[1]);
 }
 
+static void test_collect_outdated_targets_skips_unknown_revs() {
+  // Boot auto-update (v1 semantics): only units PROVABLY outdated get the
+  // forced reboot at every boot — an unreadable rev (2) must not trigger a
+  // reflash cycle each power-up; the operator's web job sweeps those.
+  UnitFacts facts[UNITS_AMOUNT];
+  facts[0].state = 1; facts[0].fwStatus = 1;  // outdated — target
+  facts[1].state = 1; facts[1].fwStatus = 2;  // unknown — skipped at boot
+  facts[2].state = 1; facts[2].fwStatus = 0;  // on bundle — skipped
+  facts[3].state = 2;                         // bootloader — not a reboot target
+  uint8_t addrs[UNITS_AMOUNT];
+  int n = reflashCollectOutdatedTargets(facts, UNITS_AMOUNT, 1, addrs);
+  TEST_ASSERT_EQUAL(1, n);
+  TEST_ASSERT_EQUAL_UINT8(1, addrs[0]);
+}
+
 static void test_batch_constants_match_v1() {
   TEST_ASSERT_EQUAL(2, REFLASH_BATCH_SIZE);
   TEST_ASSERT_EQUAL(15000UL, REFLASH_BATCH_SETTLE_MS);
@@ -188,6 +203,7 @@ int main(int, char**) {
   RUN_TEST(test_needs_reboot_only_for_sketch_units_off_the_bundle);
   RUN_TEST(test_collect_reboot_targets_fills_addresses);
   RUN_TEST(test_collect_flash_targets_takes_bootloader_units_only);
+  RUN_TEST(test_collect_outdated_targets_skips_unknown_revs);
   RUN_TEST(test_batch_constants_match_v1);
   RUN_TEST(test_fresh_progress_is_idle_and_not_in_progress);
   RUN_TEST(test_begin_enters_and_counts);

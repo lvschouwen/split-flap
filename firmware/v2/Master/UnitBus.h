@@ -77,6 +77,13 @@ const char* unitFlashResultName(UnitFlashResult r);
 UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
                                  size_t len);
 
+// Polls a just-flashed batch until every unit answers AND reports
+// not-rotating (post-flash homing finished), or the timeout elapses —
+// bounds how many units draw homing current at once (v1 #138). Bus-safety
+// pacing: deliberately NOT abort-shortened.
+void unitBusWaitBatchIdle(const uint8_t* addrs, int count,
+                          uint32_t timeoutMs);
+
 // Stop-abort signal (#204): the ONE cross-task entry into this module — an
 // atomic flag, not bus state. The /stop handler sets it (only after the
 // Stop command enqueued successfully); every wait loop polls it and returns

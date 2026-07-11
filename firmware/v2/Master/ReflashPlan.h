@@ -35,6 +35,21 @@ inline int reflashCollectRebootTargets(const UnitFacts* facts, int maxUnits,
   return n;
 }
 
+// Boot auto-update predicate (v1 semantics, deliberately narrower than
+// reflashUnitNeedsReboot): only units PROVABLY outdated are force-rebooted
+// at boot — an unreadable rev must not trigger a reflash cycle every
+// power-up. The operator's web job sweeps unknowns too (v1 #114).
+inline int reflashCollectOutdatedTargets(const UnitFacts* facts, int maxUnits,
+                                         int base, uint8_t* outAddrs) {
+  int n = 0;
+  for (int i = 0; i < maxUnits; i++) {
+    if (facts[i].state == 1 && facts[i].fwStatus == 1) {
+      outAddrs[n++] = (uint8_t)(base + i);
+    }
+  }
+  return n;
+}
+
 inline int reflashCollectFlashTargets(const UnitFacts* facts, int maxUnits,
                                       int base, uint8_t* outAddrs) {
   int n = 0;

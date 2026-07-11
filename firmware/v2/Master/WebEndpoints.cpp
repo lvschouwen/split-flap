@@ -991,3 +991,9 @@ WebContentSnapshot webDisplayContentSnapshot() {
   c.flapSpeed = liveSettings->flapSpeed;
   return c;
 }
+
+// Bundled unit firmware accessors (#205) — see WebEndpoints.h for why this
+// TU is the only WebAssets.h includer. On the S3, PROGMEM is flash-mapped
+// and directly readable, so the pointer works as a plain byte buffer.
+const uint8_t* webUnitFirmwareBin() { return UNIT_FIRMWARE_BIN; }
+size_t webUnitFirmwareBinLen() { return UNIT_FIRMWARE_BIN_LEN; }

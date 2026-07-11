@@ -550,6 +550,31 @@ const char* unitFlashResultName(UnitFlashResult r) {
   }
 }
 
+void unitBusWaitBatchIdle(const uint8_t* addrs, int count,
+                          uint32_t timeoutMs) {
+  if (count <= 0) return;
+  SerialPrintf("  waiting for %d unit(s) to come online + finish homing...\n",
+               count);
+  delay(1000);  // let CMD_REBOOT take effect before polling
+  uint32_t start = millis();
+  while (millis() - start < timeoutMs) {
+    bool allIdle = true;
+    for (int k = 0; k < count; k++) {
+      // checkIfMoving takes a unit INDEX; addrs carry bus addresses.
+      if (checkIfMoving(addrs[k] - SFP_I2C_ADDRESS_BASE) != 0) {
+        allIdle = false;
+        break;
+      }
+    }
+    if (allIdle) {
+      SerialPrintln(F("  batch online + idle"));
+      return;
+    }
+    delay(100);
+  }
+  SerialPrintln(F("  batch settle timed out — continuing anyway"));
+}
+
 UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
                                  size_t len) {
   SerialPrintf("Flashing unit at 0x%02x (%u bytes)\n", i2cAddress,

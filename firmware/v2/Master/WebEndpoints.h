@@ -38,3 +38,10 @@ struct WebContentSnapshot {
 // Mutex-guarded copy for clockTask (core 1) — same snapshot-copy rule as
 // DisplaySnapshot: consumers render from the copy, never from live state.
 WebContentSnapshot webDisplayContentSnapshot();
+
+// Bundled unit firmware (#205): the generated WebAssets.h arrays have
+// internal linkage, so only WebEndpoints.cpp includes that header — a
+// second include would duplicate every PROGMEM blob into another TU.
+// displayTask reaches the image through these accessors instead.
+const uint8_t* webUnitFirmwareBin();
+size_t webUnitFirmwareBinLen();
