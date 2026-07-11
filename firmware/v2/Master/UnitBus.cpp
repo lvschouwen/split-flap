@@ -41,7 +41,22 @@ static int toI2cAddress(int unitIndex) {
 }
 
 void unitBusInit() {
-  Wire.begin(UNIT_BUS_SDA_PIN, UNIT_BUS_SCL_PIN, UNIT_BUS_FREQ_HZ);
+  if (!Wire.begin(UNIT_BUS_SDA_PIN, UNIT_BUS_SCL_PIN, UNIT_BUS_FREQ_HZ)) {
+    SerialPrintln(F("I2C unit bus init failed"));
+  }
+}
+
+// IDF 5.5's esp_driver_i2c only clears its bus-level "transaction contains a
+// read" flag when the read's RX path completes — a failed requestFrom
+// (address NACK from a browned-out unit, timeout on a broken bus) leaves it
+// set, and the next zero-length probe then runs the ISR receive handler
+// against a transaction with no read op: the RX FIFO is copied through a
+// NULL data pointer and the master panics (StoreProhibited, #207). Tearing
+// the bus down and rebuilding it destroys the stale driver state, so every
+// failed read must pass through here before the next probe touches the bus.
+static void recoverBusAfterFailedRead() {
+  Wire.end();
+  unitBusInit();
 }
 
 // Shared opcode-write-then-read-back transaction behind every readUnit*
@@ -58,6 +73,7 @@ static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf, uint8_t n) {
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
   if (got != n) {
     while (Wire.available()) Wire.read();
+    recoverBusAfterFailedRead();
     return false;
   }
   for (uint8_t i = 0; i < n; i++) buf[i] = Wire.read();
@@ -138,6 +154,7 @@ static bool isUnitInBootloader(int i2cAddress) {
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)8);
   if (got < 3) {
     while (Wire.available()) Wire.read();
+    recoverBusAfterFailedRead();
     return false;
   }
   uint8_t sig0 = Wire.read();
@@ -164,6 +181,10 @@ static int checkIfMoving(int unitIndex) {
   Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)1);
   int active = Wire.available() ? Wire.read() : -1;
   if (active == -1) {
+    // The failed read must not leave stale driver state behind (#207): the
+    // wake-up ping below is exactly the probe-after-failed-read shape that
+    // panics the master. Recover first, then ping.
+    recoverBusAfterFailedRead();
     // Wake-up ping: empty transmission pulses the TWI peripheral.
     Wire.beginTransmission(i2cAddress);
     Wire.endTransmission();
