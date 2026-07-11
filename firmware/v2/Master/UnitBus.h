@@ -11,6 +11,7 @@
 // pure seams they lean on — FlapFrame, UnitHealth, DisplayWidth — are the
 // natively-tested tier).
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "UnitHealth.h"
@@ -52,10 +53,36 @@ int unitBusSetAddress(int i2cAddress, uint8_t newAddress);  // burn + reboot
 int unitBusClearAddress(int i2cAddress);                    // EEPROM → DIP
 int unitBusBroadcastHome();  // general-call CMD_HOME, one transaction (v1 #47)
 
+// --- unit reflash over twiboot (#205) — straight v1 ports ---------------------
+
+// Outcome of one unit's flash attempt. Any failure after Ok's page stream
+// began leaves the unit sitting in twiboot — boot auto-install or a retry
+// recovers it (v1 failure story); it is never exited onto a torn image.
+enum class UnitFlashResult : uint8_t {
+  Ok = 0,
+  BootloaderSilent,  // twiboot never ACKed a ping at this address
+  ChipMismatch,      // chipinfo signature / page size not an ATmega328P
+  PageFailed,        // write / readback-verify failed after one rewrite
+  ExitFailed,        // SWITCH_APPLICATION not ACKed
+  PostBootSilent,    // sketch did not answer after the exit
+  Aborted,           // /stop during the page stream — unit left in twiboot
+};
+const char* unitFlashResultName(UnitFlashResult r);
+
+// Streams `image` (page-padded, TWIBOOT_PAGE_SIZE multiple) to the unit at
+// `i2cAddress`, which must already be in twiboot (the orchestration's
+// enter-bootloader sweep + rescan guarantees it): ping retry → chipinfo
+// verify → write+readback per page (one rewrite, v1 #110) → exit → post-boot
+// ACK + CMD_REBOOT for a clean watchdog restart (v1 #113).
+UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
+                                 size_t len);
+
 // Stop-abort signal (#204): the ONE cross-task entry into this module — an
 // atomic flag, not bus state. The /stop handler sets it (only after the
 // Stop command enqueued successfully); every wait loop polls it and returns
 // early; displayTask clears it when Stop executes. The bus itself stays
-// displayTask-exclusive.
+// displayTask-exclusive. The reflash orchestration polls it between units
+// and batches via unitBusAbortRequested() (#205).
 void unitBusRequestAbort();
 void unitBusClearAbort();
+bool unitBusAbortRequested();
