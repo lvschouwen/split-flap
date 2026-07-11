@@ -1,10 +1,12 @@
 """Build-side staging + manifest generation (CI and dev).
 
-  stage    copy the freshly built Unit hex + rev sidecar into ESPMaster/data/
-           (MUST run between 'pio run Unit' and 'pio run ESPMaster' —
-           build_assets.py embeds data/unit-firmware.hex, it does NOT pull
-           the Unit build automatically)
-  collect  copy firmware artifacts into flasher/assets/, verify the staged
+  stage    copy the freshly built Unit hex + rev sidecar into BOTH masters'
+           data/ trees — v1 ESPMaster and v2 Master (#205) — so the two
+           bundles can never drift. MUST run between 'pio run Unit' and the
+           master builds — each build_assets.py embeds its own
+           data/unit-firmware.hex, it does NOT pull the Unit build
+           automatically.
+  collect  copy firmware artifacts into flasher/assets/, verify every staged
            hex still equals the built hex (anti-drift gate), write manifest
 
 Usage: python flasher/make_manifest.py stage|collect [--avrdude-zip PATH]
@@ -23,6 +25,11 @@ UNIT_BUILD = REPO / "firmware/v1/Unit/.pio/build/unit/firmware.hex"
 UNIT_REV_BUILT = REPO / "firmware/v1/Unit/.pio/build/unit/firmware.rev"
 ESP_DATA = REPO / "firmware/v1/ESPMaster/data"
 ESP_BUILD = REPO / "firmware/v1/ESPMaster/.pio/build/espmaster"
+V2_MASTER_DATA = REPO / "firmware/v2/Master/data"
+V2_MASTER_BUILD = REPO / "firmware/v2/Master/.pio/build/master"
+# Every tree that embeds the unit bundle (#205). stage writes all of them;
+# collect gates all of them.
+STAGE_DATA_DIRS = [ESP_DATA, V2_MASTER_DATA]
 TWIBOOT = REPO / "firmware/v1/UnitBootloader/prebuilt/twiboot-atmega328p-16mhz.hex"
 ASSETS = Path(__file__).resolve().parent / "assets"
 
@@ -97,23 +104,41 @@ def freshness_gate(master_bin: Path, staged_hex: Path) -> None:
         )
 
 
+def optional_freshness_gate(master_bin: Path, staged_hex: Path) -> None:
+    """freshness_gate() for a master that is not part of this collect's
+    shipped artifacts (the v2 master, #205): a dev machine that never built
+    it must still collect, but a stale existing build fails loudly."""
+    if not master_bin.exists():
+        print(f"note: {master_bin} not built — skipping its freshness gate")
+        return
+    freshness_gate(master_bin, staged_hex)
+
+
+def stage_bundle(unit_hex: Path, unit_rev: Path, data_dirs: list[Path]) -> None:
+    for data_dir in data_dirs:
+        shutil.copy2(unit_hex, data_dir / "unit-firmware.hex")
+        shutil.copy2(unit_rev, data_dir / "unit-firmware.rev")
+        print(f"staged {unit_hex} -> {data_dir}/unit-firmware.hex")
+        print(f"staged {unit_rev} -> {data_dir}/unit-firmware.rev")
+
+
 def cmd_stage() -> None:
     if not UNIT_REV_BUILT.exists():
         sys.exit(
             f"error: {UNIT_REV_BUILT} not found — build the Unit sketch first "
             "('pio run' in firmware/v1/Unit) before staging"
         )
-    shutil.copy2(UNIT_BUILD, ESP_DATA / "unit-firmware.hex")
-    shutil.copy2(UNIT_REV_BUILT, ESP_DATA / "unit-firmware.rev")
-    print(f"staged {UNIT_BUILD} -> {ESP_DATA}/unit-firmware.hex")
-    print(f"staged {UNIT_REV_BUILT} -> {ESP_DATA}/unit-firmware.rev")
+    stage_bundle(UNIT_BUILD, UNIT_REV_BUILT, STAGE_DATA_DIRS)
 
 
 def cmd_collect(avrdude_zip: str | None) -> None:
     rev = git_rev()
-    consistency_gate(UNIT_BUILD, ESP_DATA / "unit-firmware.hex",
-                     UNIT_REV_BUILT, ESP_DATA / "unit-firmware.rev")
+    for data_dir in STAGE_DATA_DIRS:
+        consistency_gate(UNIT_BUILD, data_dir / "unit-firmware.hex",
+                         UNIT_REV_BUILT, data_dir / "unit-firmware.rev")
     freshness_gate(ESP_BUILD / "firmware.bin", ESP_DATA / "unit-firmware.hex")
+    optional_freshness_gate(V2_MASTER_BUILD / "firmware.bin",
+                            V2_MASTER_DATA / "unit-firmware.hex")
     ASSETS.mkdir(exist_ok=True)
     shutil.copy2(ESP_BUILD / "firmware.bin", ASSETS / "master-firmware.bin")
     shutil.copy2(UNIT_BUILD, ASSETS / "unit-firmware.hex")
