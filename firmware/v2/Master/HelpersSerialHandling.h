@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Arduino.h>
+
+#include <cstdarg>
 #ifndef UNIT_TEST
 #include "WebLog.h"
 #endif
@@ -64,6 +66,26 @@ void SerialPrintf(const char* message, T value) {
   if (n > 0) {
     webLogAppend(buf, n > (int)sizeof(buf) - 1 ? (int)sizeof(buf) - 1 : n);
   }
+#endif
+}
+
+// Varargs overload for multi-value lines (#212). An exactly-two-argument
+// call still resolves to the template above (a deduced exact match beats the
+// ellipsis), so existing callers keep their code path.
+inline void SerialPrintf(const char* message, ...)
+    __attribute__((format(printf, 1, 2)));
+inline void SerialPrintf(const char* message, ...) {
+  char buf[192];
+  va_list args;
+  va_start(args, message);
+  int n = vsnprintf(buf, sizeof(buf), message, args);
+  va_end(args);
+  if (n <= 0) return;
+  if (n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;
+  SerialPrintLock lock;
+  Serial.write(reinterpret_cast<const uint8_t*>(buf), (size_t)n);
+#ifndef UNIT_TEST
+  webLogAppend(buf, n);
 #endif
 }
 

@@ -15,6 +15,7 @@
 #include "DeviceIdentity.h"
 #include "DisplayWidth.h"
 #include "FlashLog.h"
+#include "HelpersSerialHandling.h"
 #include "MdnsDiscovery.h"
 #include "MqttHelpers.h"
 #include "NvsSettingsStore.h"
@@ -49,19 +50,20 @@ static const char* otaStateName(esp_ota_img_states_t state) {
   }
 }
 
-// Boot-time partition diagnostics (#198), serial-only: which A/B slot is
-// running and in what esp_ota state, what otadata will boot next, whether
-// the factory rescue slot holds an image, and the live partition table
-// (must match partitions_splitflap_16MB.csv).
+// Boot-time partition diagnostics (#198), tee'd to the web/flash log like
+// the rest of the banner (#212): which A/B slot is running and in what
+// esp_ota state, what otadata will boot next, whether the factory rescue
+// slot holds an image, and the live partition table (must match
+// partitions_splitflap_16MB.csv).
 static void printBootDiagnostics() {
   const esp_partition_t* running = esp_ota_get_running_partition();
   const esp_partition_t* boot = esp_ota_get_boot_partition();
   esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
   if (running) esp_ota_get_state_partition(running, &state);
-  Serial.printf("boot: running %s @ 0x%06x state=%s, otadata -> %s\n",
-                running ? running->label : "?",
-                running ? running->address : 0, otaStateName(state),
-                boot ? boot->label : "?");
+  SerialPrintf("boot: running %s @ 0x%06x state=%s, otadata -> %s\n",
+               running ? running->label : "?",
+               running ? (unsigned)running->address : 0, otaStateName(state),
+               boot ? boot->label : "?");
 
   const esp_partition_t* factory = esp_partition_find_first(
       ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
@@ -69,21 +71,21 @@ static void printBootDiagnostics() {
     // Erased flash reads 0xFF; any flashed image starts with magic 0xE9.
     uint8_t magic = 0xFF;
     esp_partition_read(factory, 0, &magic, 1);
-    Serial.printf("rescue: %s @ 0x%06x (%u KB) — %s\n", factory->label,
-                  factory->address, factory->size / 1024,
-                  magic == 0xE9 ? "image present" : "empty");
+    SerialPrintf("rescue: %s @ 0x%06x (%u KB) — %s\n", factory->label,
+                 (unsigned)factory->address, factory->size / 1024,
+                 magic == 0xE9 ? "image present" : "empty");
   } else {
-    Serial.println(F("rescue: no factory partition (!)"));
+    SerialPrintln(F("rescue: no factory partition (!)"));
   }
 
-  Serial.println(F("partition table:"));
+  SerialPrintln(F("partition table:"));
   esp_partition_iterator_t it = esp_partition_find(
       ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
   for (; it != NULL; it = esp_partition_next(it)) {
     const esp_partition_t* p = esp_partition_get(it);
-    Serial.printf("  %-9s %-4s @ 0x%06x %5u KB\n", p->label,
-                  p->type == ESP_PARTITION_TYPE_APP ? "app" : "data",
-                  p->address, p->size / 1024);
+    SerialPrintf("  %-9s %-4s @ 0x%06x %5u KB\n", p->label,
+                 p->type == ESP_PARTITION_TYPE_APP ? "app" : "data",
+                 (unsigned)p->address, p->size / 1024);
   }
   esp_partition_iterator_release(it);
 }
@@ -107,25 +109,25 @@ void setup() {
                                  chipIdFromEfuseMac());
   statusLedInit(settings);  // boot white from here on (#199)
 
-  Serial.println();
-  Serial.println(F("split-flap v2 master — Phase 1 (#58)"));
-  Serial.printf("chip: %s rev %d, %d cores @ %d MHz\n", ESP.getChipModel(),
-                ESP.getChipRevision(), ESP.getChipCores(), ESP.getCpuFreqMHz());
-  Serial.printf("flash: %u KB, free heap: %u KB\n",
-                ESP.getFlashChipSize() / 1024, ESP.getFreeHeap() / 1024);
+  SerialPrintln(F(""));
+  SerialPrintln(F("split-flap v2 master — Phase 1 (#58)"));
+  SerialPrintf("chip: %s rev %d, %d cores @ %d MHz\n", ESP.getChipModel(),
+               ESP.getChipRevision(), ESP.getChipCores(), ESP.getCpuFreqMHz());
+  SerialPrintf("flash: %u KB, free heap: %u KB\n",
+               ESP.getFlashChipSize() / 1024, ESP.getFreeHeap() / 1024);
   // First-boot verification that the N16R8 flags match the silicon: an
   // N16R8 must report ~8 MB here; 0 means the qio_opi/PSRAM flags are wrong
   // for whatever module is actually fitted.
-  Serial.printf("psram: %u KB (%u KB free)\n", ESP.getPsramSize() / 1024,
-                ESP.getFreePsram() / 1024);
-  Serial.printf("identity: %s\n", deviceName.c_str());
-  Serial.printf("settings: align=%s speed=%d mode=%s tz=%s\n",
-                settings.alignment.c_str(), settings.flapSpeed,
-                settings.deviceMode.c_str(), settings.timezonePosix.c_str());
-  Serial.printf("mqtt: %s\n",
-                settings.mqttHost.length()
-                    ? (settings.mqttHost + ":" + settings.mqttPort).c_str()
-                    : "(disabled)");
+  SerialPrintf("psram: %u KB (%u KB free)\n", ESP.getPsramSize() / 1024,
+               ESP.getFreePsram() / 1024);
+  SerialPrintf("identity: %s\n", deviceName.c_str());
+  SerialPrintf("settings: align=%s speed=%d mode=%s tz=%s\n",
+               settings.alignment.c_str(), settings.flapSpeed,
+               settings.deviceMode.c_str(), settings.timezonePosix.c_str());
+  SerialPrintf("mqtt: %s\n",
+               settings.mqttHost.length()
+                   ? (settings.mqttHost + ":" + settings.mqttPort).c_str()
+                   : "(disabled)");
   printBootDiagnostics();
 
   // Snapshot this boot's A/B partition state; a PENDING_VERIFY image is
@@ -139,19 +141,19 @@ void setup() {
   // Routes registered now; server.begin() happens from WifiService once a
   // netif exists (STA join or portal AP) — LWIP isn't up before that.
   webEndpointsInit(webServer, settings, settingsStore, deviceName);
-  Serial.println(F("web endpoints registered (server starts with the netif)"));
+  SerialPrintln(F("web endpoints registered (server starts with the netif)"));
 
   // Wiring only — the radio comes up on netTask's first wifiServiceTick(),
   // keeping every WiFi call on core 0 (#188).
   wifiServiceInit(webServer, settings, settingsStore, deviceName);
-  Serial.printf("wifi: %s\n", settings.wifiSsid.length()
-                                  ? ("join \"" + settings.wifiSsid + "\"").c_str()
-                                  : "unprovisioned -> setup portal");
+  SerialPrintf("wifi: %s\n", settings.wifiSsid.length()
+                                 ? ("join \"" + settings.wifiSsid + "\"").c_str()
+                                 : "unprovisioned -> setup portal");
 
   // After webEndpointsInit/wifiServiceInit: netTask ticks both and needs
   // their mutexes to exist before its first pass.
   tasksInit(settings, settingsStore);
-  Serial.println(F("task skeleton up: display+clock on core 1, net+mqtt on core 0"));
+  SerialPrintln(F("task skeleton up: display+clock on core 1, net+mqtt on core 0"));
 }
 
 void loop() {
