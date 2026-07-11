@@ -260,6 +260,16 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
     if (Wire.endTransmission() != 0) continue;
 
     bool inBootloader = isUnitInBootloader(i2cAddress);
+    if (!inBootloader) {
+      // A probe ACK alone is not proof of life: IDF's i2c_master_probe
+      // returns OK for outcomes it doesn't map, so a floating bus scans as
+      // a full row of phantom units (#209). Every unit firmware generation
+      // answers the 1-byte rotation-status read, so require it before
+      // trusting the slot (checkIfMoving recovers the bus itself when a
+      // phantom NACKs the read, #207). Bootloader units are exempt: they
+      // are only classified via a successful chipinfo read above.
+      if (checkIfMoving(unitIndex) < 0) continue;
+    }
     facts[unitIndex].state = inBootloader ? 2 : 1;
     detected++;
 
