@@ -250,8 +250,39 @@ static void verifyAndResendLetters(const UnitFacts* facts, int width,
   }
 }
 
+// Canary probe (#213): no unit can exist at these addresses — they sit in
+// I2C's reserved range, far outside the DIP window (0x01..0x10, twiboot
+// included). A healthy bus NACKs both; a floating/held-low bus ACKs every
+// address (the S3 controller samples the dead line as ACK and valid-looking
+// 0x00 data, and IDF's i2c_master_probe maps unmapped outcomes to OK — this
+// beat #209's status-read gate on the bench). Both must ACK to declare the
+// bus lying, so a single glitched probe on a real display can't blank the
+// whole scan. This restores what v1's bit-banged master did for free: its
+// write_start() refused to talk on a line that wasn't idle-high.
+static bool busReadsAsFloating() {
+  static constexpr uint8_t CANARY_ADDRESSES[] = {0x3B, 0x7B};
+  int acks = 0;
+  for (uint8_t address : CANARY_ADDRESSES) {
+    Wire.beginTransmission(address);
+    if (Wire.endTransmission() == 0) acks++;
+  }
+  if (acks == 1) {
+    SerialPrintln(F("I2C canary: one reserved address ACKed — bus suspect, "
+                    "continuing scan"));
+  }
+  return acks == 2;
+}
+
 void unitBusProbe(UnitFacts* facts, int maxUnits) {
   SerialPrintln(F("Scanning I2C bus for units..."));
+  if (busReadsAsFloating()) {
+    for (int unitIndex = 0; unitIndex < maxUnits; unitIndex++) {
+      facts[unitIndex] = UnitFacts{};  // silent
+    }
+    SerialPrintln(F("I2C bus reads as floating (phantom ACKs on reserved "
+                    "addresses) — reporting 0 units"));
+    return;
+  }
   int detected = 0;
   for (int unitIndex = 0; unitIndex < maxUnits; unitIndex++) {
     facts[unitIndex] = UnitFacts{};  // silent, fw unknown, status invalid
