@@ -37,11 +37,11 @@ comparison rev finally exists in the v2 build).
   - clockTask checks its snapshot copy and skips the whole tick while
     active — nothing marked queued, so the first tick after the job
     re-sends fresh time naturally.
-  - Web and MQTT display-mutating producers (message/text, every #204
-    maintenance op EXCEPT `Stop`, `/reset-units`, `/unit/reboot`) check
+  - Web and MQTT display-mutating producers — message/text,
+    `/reset-units`, `/unit/reboot`, and every #204 maintenance op — check
     the snapshot at the boundary and answer **409 "reflash in progress"**
     instead of enqueueing. The UI disables those controls while progress
-    is active. `Stop` is the one deliberate exception — it is the cancel.
+    is active. `Stop` is the ONE exception to the gate — it is the cancel.
   - Read-only surface is untouched: the whole UI, health/progress polling,
     logs, settings pages keep working (netTask/core 0; the snapshot is
     mutex-copied as always).

@@ -260,15 +260,23 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
     }
     snapshotPublish(local);
 
-    // v1 #138 brownout throttle: once a batch is full (or the plan is
-    // exhausted), wait for those units to come back online + finish homing
-    // before flashing more. Bus safety pacing — never abort-shortened.
-    if (inBatch >= REFLASH_BATCH_SIZE || (k == total - 1 && inBatch > 0)) {
+    // v1 #138 brownout throttle: once a batch is full, wait for those
+    // units to come back online + finish homing before flashing more.
+    if (inBatch >= REFLASH_BATCH_SIZE) {
       reflashProgressSettling(local.reflash);
       snapshotPublish(local);
       unitBusWaitBatchIdle(batch, inBatch, REFLASH_BATCH_SETTLE_MS);
       inBatch = 0;
     }
+  }
+  // Trailing partial batch — reached on plan exhaustion AND on both abort
+  // exits (cpp-review HIGH): the settle is brownout pacing and is never
+  // abort-shortened, so even a cancelled job waits out the homing of the
+  // units it already flashed before the queued Stop broadcast-homes.
+  if (inBatch > 0) {
+    reflashProgressSettling(local.reflash);
+    snapshotPublish(local);
+    unitBusWaitBatchIdle(batch, inBatch, REFLASH_BATCH_SETTLE_MS);
   }
 
   // Final reprobe + health poll: published topology and fw grades are
