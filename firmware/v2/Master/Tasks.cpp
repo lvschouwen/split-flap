@@ -173,17 +173,23 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // With the gate closed, drain whatever slipped into the queue earlier —
   // it would burst-drain onto a display this job is about to rebuild.
   // Stop survives (it is the cancel; its abort flag is already set — the
-  // #204 order rule); anything queued behind a Stop is unreachable-dead
-  // anyway, so the drain ends there.
+  // #204 order rule) but is re-sent only AFTER the drain finishes: a
+  // mid-drain re-send would leave commands that sat behind the Stop
+  // running ahead of it after a cancelled job (Codex review finding).
+  // Multiple Stops collapse into one — supersession is the #204 contract.
   DisplayCommand stale;
+  bool sawStop = false;
+  DisplayCommand stopCmd;
   while (xQueueReceive(displayQueue, &stale, 0) == pdTRUE) {
     if (stale.opcode == DisplayOpcode::Stop) {
-      xQueueSend(displayQueue, &stale, 0);
-      break;
+      sawStop = true;
+      stopCmd = stale;
+      continue;
     }
     SerialPrintln("display: dropped queued command at reflash start: " +
                   describeDisplayCommand(stale));
   }
+  if (sawStop) xQueueSend(displayQueue, &stopCmd, 0);
 
   // Push sweep-matching sketch units into twiboot (v1's
   // enterBootloaderAllDetected), then wait out the watchdog reset +

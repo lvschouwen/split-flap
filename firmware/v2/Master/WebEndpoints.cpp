@@ -995,9 +995,17 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
         // Retained in the display domain: ClockPolicy's dedup compares this
         // against snapshot text, which makeShowTextCommand truncates.
         currentInputText = truncateForDisplay(messageText);
-        DisplayCommand cmd = makeShowTextCommand(
-            messageText, settings.alignment, settings.flapSpeed);
-        if (displayEnqueue(cmd)) {
+        // Reflash gate re-check at drain time (#205, Codex review): the
+        // handler's 409 ran when the POST arrived; a job that started in
+        // between must not get a ShowText queued behind it. Dropping is
+        // self-healing — the retained text above is what the 1 Hz mode
+        // ticker re-shows once the job ends.
+        if (reflashInProgress(displaySnapshotGet().reflash)) {
+          SerialPrintln("Message retained, not queued (reflash running): " +
+                        messageText);
+        } else if (displayEnqueue(makeShowTextCommand(
+                       messageText, settings.alignment,
+                       settings.flapSpeed))) {
           SerialPrintln("Message queued for display: " + messageText);
         } else {
           // The handler's 503 pre-check makes this a wedged-queue signal,
