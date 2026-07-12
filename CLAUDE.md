@@ -19,7 +19,7 @@ Two firmware stacks:
 - `firmware/v2/Master/` — S3 master port (plain `.cpp`, console on native USB-CDC)
 - `firmware/v2/Rescue/` — break-glass image for the factory slot (#195)
 - `firmware/v2/Bootloader/` — builds the S3 second-stage bootloader (#201; see its platformio.ini)
-- `flashing/` — `ota-master.sh` (v1 OTA with verdict) + `flasher/` (provisioning exe, built by `flasher.yml`; dev: `python -m flasher`, `make_manifest.py stage` MUST run between the Unit and ESPMaster builds)
+- `flashing/` — `ota-master.sh` (v1 OTA with verdict) + `ota-flash.sh` (v2: fetch latest staged bin from a build server via scp, OTA master or rescue, verdict from `/settings`) + `flasher/` (provisioning exe, built by `flasher.yml`; dev: `python -m flasher`, `make_manifest.py stage` MUST run between the Unit and ESPMaster builds)
 - `PCB/v2/` — design docs (unit board is the only planned custom PCB; GPIO 4 = future reset button)
 - `docs/superpowers/specs/` — design docs per feature
 
