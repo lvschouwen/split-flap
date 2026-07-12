@@ -4,12 +4,12 @@
 // host-side native tests (test/test_device_identity/). The boot-time
 // resolver in ESPMaster.ino reads the EEPROM slot and feeds it through
 // resolveDeviceName(); every network-facing consumer (mDNS, hostname,
-// MQTT client id / topics, recovery / quiet-OTA / captive-portal APs)
-// then reads the single resolved global.
+// MQTT client id / topics, captive-portal AP) then reads the single
+// resolved global.
 //
 // The device name is the COMPLETE identity (not a suffix): "kitchen"
-// yields kitchen.local, hostname kitchen, MQTT id kitchen, recovery AP
-// "kitchen-rec". Empty/invalid/unreadable EEPROM falls back to
+// yields kitchen.local, hostname kitchen, MQTT id kitchen, setup AP
+// "kitchen-setup". Empty/invalid/unreadable EEPROM falls back to
 // "<prefix>-<hex chip id>" which is unique per device and always valid.
 
 #pragma once
@@ -17,18 +17,14 @@
 #include <Arduino.h>
 
 // 24 chars keeps every composed AP SSID inside the 32-byte 802.11 limit
-// given the suffixes below (longest: "-setup", 24 + 6 = 30).
+// given the suffixes composed from the name: "-setup" here (24 + 6 = 30)
+// and the rescue app's "-rescue" (24 + 7 = 31, asserted in its own tree —
+// RescueIdentity.h keeps its own copy of this limit).
 #define DEVICE_NAME_MAX_LEN 24
 
-// AP name suffixes. "-rec" (not "-recovery") so a max-length name still
-// fits: 24 + 9 would be 33 > 32.
-#define AP_SUFFIX_RECOVERY "-rec"
-#define AP_SUFFIX_OTA      "-ota"
-#define AP_SUFFIX_SETUP    "-setup"
+#define AP_SUFFIX_SETUP "-setup"
 
-static_assert(DEVICE_NAME_MAX_LEN + sizeof(AP_SUFFIX_RECOVERY) - 1 <= 32, "recovery SSID would exceed 32 bytes");
-static_assert(DEVICE_NAME_MAX_LEN + sizeof(AP_SUFFIX_OTA) - 1      <= 32, "quiet-OTA SSID would exceed 32 bytes");
-static_assert(DEVICE_NAME_MAX_LEN + sizeof(AP_SUFFIX_SETUP) - 1    <= 32, "captive-portal SSID would exceed 32 bytes");
+static_assert(DEVICE_NAME_MAX_LEN + sizeof(AP_SUFFIX_SETUP) - 1 <= 32, "captive-portal SSID would exceed 32 bytes");
 
 // Lowercase a candidate name. Callers normalize before validating so
 // "Kitchen" just works from the web UI.
