@@ -940,8 +940,8 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // --- v1 endpoints whose services aren't ported yet (#58 slices) ----------
   // Explicit 501s so a bench click yields a clear message instead of a
   // silent 404. Each stub is retired by the slice that ports its service.
-  registerNotPortedStub(server, "/firmware/recover-mark", HTTP_POST);
-  registerNotPortedStub(server, "/firmware/ota-mode", HTTP_POST);
+  // (v1's /firmware/recover-mark and /firmware/ota-mode are retired, not
+  // stubbed: A/B rollback + the rescue app replace those boot modes, #220.)
   registerNotPortedStub(server, "/mqtt/discover", HTTP_GET);
   registerNotPortedStub(server, "/mqtt/discover", HTTP_POST);
 }
