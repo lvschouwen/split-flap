@@ -69,6 +69,12 @@ static inline String sanitizeBoundedText(const String& v, int limit,
   return String(def);
 }
 
+// Shared rule for the ?v= flash diagnostic (#191): the /firmware/master
+// drain and the boot load path must sanitize identically.
+static inline String sanitizeIntendedVersion(const String& v) {
+  return sanitizeBoundedText(v, LEN_INTENDED_VERSION, "");
+}
+
 inline MasterSettings loadSettings(SettingsStore& store) {
   MasterSettings s;
 
@@ -119,8 +125,8 @@ inline MasterSettings loadSettings(SettingsStore& store) {
     s.mqttPassword = "";
   }
 
-  s.intendedVersion = sanitizeBoundedText(
-      store.getString(SETTINGS_KEY_INTENDED_VER, ""), LEN_INTENDED_VERSION, "");
+  s.intendedVersion =
+      sanitizeIntendedVersion(store.getString(SETTINGS_KEY_INTENDED_VER, ""));
 
   return s;
 }

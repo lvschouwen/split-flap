@@ -52,6 +52,14 @@ static bool pendingIntendedVersionProvided = false;
 static int otaRejectionStatus = 0;  // 0 = not rejected
 static String otaRejectionReason;
 
+// Concurrent-upload guard (#191): the request that owns the live Update
+// session. A second overlapping POST must not abort/hijack it — the
+// overlapping request is marked rejected via its _tempObject (freed by the
+// request destructor) and answered 409, and it never touches the shared
+// rejection state above, which belongs to the owner. Same async_tcp task
+// for all callbacks — no lock needed. Compared only, never dereferenced.
+static AsyncWebServerRequest* otaOwnerRequest = nullptr;
+
 // Same pattern for POST /firmware/rescue (#195). Separate state on purpose:
 // a rescue install and a master OTA are different flows and must not read
 // each other's leftovers. (Concurrent uploads remain #191 territory.)
@@ -507,6 +515,17 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   server.on(
       "/firmware/master", HTTP_POST,
       [](AsyncWebServerRequest* request) {
+        // Overlap-rejected upload (#191), or a bodyless POST racing a live
+        // session: answer 409 without touching the owner's shared state,
+        // MQTT freeze or Update session.
+        if (request->_tempObject != nullptr ||
+            (otaOwnerRequest != nullptr && otaOwnerRequest != request)) {
+          request->send(409, "text/plain",
+                        F("Another master OTA upload is already in progress "
+                          "— retry when it finishes"));
+          return;
+        }
+        otaOwnerRequest = nullptr;  // session concluded, whatever the verdict
         if (otaRejectionStatus != 0) {
           request->send(otaRejectionStatus, "text/plain", otaRejectionReason);
           return;
@@ -533,6 +552,14 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       [](AsyncWebServerRequest* request, String filename, size_t index,
          uint8_t* data, size_t len, bool final) {
         if (index == 0) {
+          // Concurrent-upload guard (#191): a live session owns the Update
+          // singleton and the shared rejection state — mark this request
+          // rejected (per-request _tempObject; malloc pairs with the free
+          // in the request destructor) and leave both alone.
+          if (otaOwnerRequest != nullptr && otaOwnerRequest != request) {
+            request->_tempObject = malloc(1);
+            return;
+          }
           otaRejectionStatus = 0;
           otaRejectionReason = "";
 
@@ -578,18 +605,32 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
           mqttStopForOta();
 
           // ?v= staged unconditionally (empty if absent) so a stale value
-          // from an earlier flash can't outlive this one (v1 #52 rationale).
-          String intended = request->hasParam("v")
-                                ? request->getParam("v")->value()
-                                : String();
-          if ((int)intended.length() >= LEN_INTENDED_VERSION) {
-            intended = intended.substring(0, LEN_INTENDED_VERSION - 1);
+          // from an earlier flash can't outlive this one (v1 #52 rationale),
+          // through the same validator as every other settings write (#191).
+          String intended = sanitizeIntendedVersion(
+              request->hasParam("v") ? request->getParam("v")->value()
+                                     : String());
+          {
+            WebStateLock lock;
+            pendingIntendedVersion = intended;
+            pendingIntendedVersionProvided = true;
           }
-          WebStateLock lock;
-          pendingIntendedVersion = intended;
-          pendingIntendedVersionProvided = true;
+
+          // Session is live from here (#191). onDisconnect is the backstop
+          // for a client that dies mid-upload: free the slot; the stale
+          // Update session is aborted by the next upload's begin path above.
+          otaOwnerRequest = request;
+          request->onDisconnect([request]() {
+            if (otaOwnerRequest == request) otaOwnerRequest = nullptr;
+          });
         }
 
+        // Not (or no longer) the live owner (#191): covers overlap-rejected
+        // requests AND stragglers rejected via the shared flag above whose
+        // client keeps streaming — a later legitimate owner resets that
+        // flag, and without this gate their leftover chunks would write
+        // into the new owner's session.
+        if (otaOwnerRequest != request) return;
         if (otaRejectionStatus != 0) return;
 
         if (len > 0 && Update.write(data, len) != len) {
