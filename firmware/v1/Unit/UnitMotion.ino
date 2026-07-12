@@ -3,6 +3,21 @@
 // globals/#defines are visible here (main sketch concatenates first).
 // The blocking step loops here kick the 8 s watchdog per iteration.
 
+//Single funnel for every drum move (#231): steps the motor and folds the
+//magnitude into the revolution odometer. All motion runs in loop context,
+//so the plain-state update is safe; the ISR-visible mirror write must be
+//interrupt-guarded (4 bytes — torn-read class #96) and only happens when a
+//revolution actually completed.
+void stepCounted(int steps) {
+  stepper.step(steps);
+  odometerAddSteps(odometer, steps, STEPS);
+  if (odometer.revolutions != odometerRevolutions) {
+    noInterrupts();
+    odometerRevolutions = odometer.revolutions;
+    interrupts();
+  }
+}
+
 //Steps the drum forward by `flaps` flap-positions. Each flap is
 //STEPS_PER_FLAP_WHOLE whole steps plus a fractional remainder accumulated in
 //missedSteps — when it exceeds one step we add a step and subtract, keeping
@@ -17,7 +32,7 @@ void stepFlaps(int flaps) {
       roundedStep++;
       missedSteps--;
     }
-    stepper.step(ROTATIONDIRECTION * roundedStep);
+    stepCounted(ROTATIONDIRECTION * roundedStep);
   }
 }
 
@@ -121,28 +136,28 @@ int calibrate(bool initialCalibration) {
       //edge, so the marker is always approached from the same side (#96).
       while (digitalRead(HALLPIN) == 0) {
         wdt_reset(); //stepping out of the magnet window can also run long (#107)
-        stepper.step(ROTATIONDIRECTION * 1);
+        stepCounted(ROTATIONDIRECTION * 1);
         i++;
         if (i > 3 * STEPS) break; //hall stuck at 0 — fall through to the failure check below
       }
       if (i <= 3 * STEPS) {
-        stepper.step(ROTATIONDIRECTION * 50);
+        stepCounted(ROTATIONDIRECTION * 50);
         i += 50;
       }
     }
     else if (currentHallValue == 1 && i == 0) { //already in zero position move out a bit and do the calibration {
       //not reached yet
       i = 50;
-      stepper.step(ROTATIONDIRECTION * 50); //move 50 steps to get out of scope of hall
+      stepCounted(ROTATIONDIRECTION * 50); //move 50 steps to get out of scope of hall
     }
     else if (currentHallValue == 1) {
       //not reached yet
-      stepper.step(ROTATIONDIRECTION * 1);
+      stepCounted(ROTATIONDIRECTION * 1);
     }
     else {
       //reached marker, go to calibrated offset position
       reachedMarker = true;
-      stepper.step(ROTATIONDIRECTION * calOffset);
+      stepCounted(ROTATIONDIRECTION * calOffset);
       displayedLetter = 0;
       missedSteps = 0;
 #ifdef SERIAL_ENABLE

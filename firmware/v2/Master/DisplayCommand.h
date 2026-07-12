@@ -23,6 +23,7 @@ enum class DisplayOpcode : uint8_t {
   Identify,
   SetAddress,
   ClearAddress,
+  ResetOdometer,
   ResetUnits,
   Stop,
   // Bulk unit reflash over twiboot (#205, slice C) — a long-running job
@@ -88,6 +89,7 @@ inline const char* displayOpcodeName(DisplayOpcode op) {
     case DisplayOpcode::Identify:           return "Identify";
     case DisplayOpcode::SetAddress:         return "SetAddress";
     case DisplayOpcode::ClearAddress:       return "ClearAddress";
+    case DisplayOpcode::ResetOdometer:      return "ResetOdometer";
     case DisplayOpcode::ResetUnits:         return "ResetUnits";
     case DisplayOpcode::Stop:               return "Stop";
     case DisplayOpcode::ReflashUnits:       return "ReflashUnits";
@@ -159,6 +161,12 @@ inline DisplayCommand makeSetAddressCommand(uint32_t seq, uint8_t addr,
 
 inline DisplayCommand makeClearAddressCommand(uint32_t seq, uint8_t addr) {
   return makeMaintCommand(DisplayOpcode::ClearAddress, seq, addr, 0);
+}
+
+// Physical-rebuild bookkeeping only (#231): zeroes the unit's revolution
+// odometer + its EEPROM ring after a flap swap or motor replacement.
+inline DisplayCommand makeResetOdometerCommand(uint32_t seq, uint8_t addr) {
+  return makeMaintCommand(DisplayOpcode::ResetOdometer, seq, addr, 0);
 }
 
 // The re-show text/alignment/speed are baked at enqueue time (senders bake

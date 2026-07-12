@@ -99,6 +99,16 @@ static bool readUnitStatus(int i2cAddress, UnitStatus& out) {
   return true;
 }
 
+// Reads the unit's revolution odometer via CMD_GET_ODOMETER (#231): 5 bytes,
+// uint32 LE + masked XOR checksum. Old firmware answers the unknown opcode
+// with its 1-byte status fallback + bus padding — odometerReadbackValid
+// rejects that instead of "verifying" garbage as a count.
+static bool readUnitOdometer(int i2cAddress, uint32_t& out) {
+  uint8_t buf[5];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_ODOMETER, buf, 5)) return false;
+  return odometerReadbackValid(buf, out);
+}
+
 // Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
 // true on success; `out` is untouched on failure (old firmware predating
 // v1 #32 answers short — the drain-and-fail path).
@@ -330,6 +340,13 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
       facts[unitIndex].offset = offset;
       facts[unitIndex].offsetValid = true;
     }
+    // Odometer is a probe-time fact like the offset (#231); pre-odometer
+    // firmware fails the checksum and stays odometerValid=false.
+    uint32_t odometer;
+    if (readUnitOdometer(i2cAddress, odometer)) {
+      facts[unitIndex].odometer = odometer;
+      facts[unitIndex].odometerValid = true;
+    }
   }
   SerialPrintf("I2C scan complete. Detected %d", detected);
   SerialPrintf("/%d possible units.\n", maxUnits);
@@ -346,6 +363,14 @@ void unitBusPollHealth(UnitFacts* facts, int maxUnits) {
     if (readUnitStatus(toI2cAddress(i), s)) {
       facts[i].status = s;
       facts[i].statusValid = true;
+    }
+    // Refresh the odometer with the same validity semantics as the status:
+    // reset, then re-read, so a unit that stops answering (or was reflashed
+    // to pre-odometer firmware) doesn't keep serving a stale count (#231).
+    uint32_t odometer;
+    if (readUnitOdometer(toI2cAddress(i), odometer)) {
+      facts[i].odometer = odometer;
+      facts[i].odometerValid = true;
     }
   }
 }
@@ -401,6 +426,12 @@ int unitBusHome(int i2cAddress) {
 int unitBusIdentify(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_IDENTIFY);
+  return Wire.endTransmission();
+}
+
+int unitBusResetOdometer(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_RESET_ODOMETER);
   return Wire.endTransmission();
 }
 

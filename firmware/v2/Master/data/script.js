@@ -624,6 +624,21 @@ function formatUptime(sec) {
 	return s + "s";
 }
 
+//Revolution odometer (#231): compact thousands, one decimal below 100k.
+function formatOdometer(revs) {
+	if (revs < 1000) return "" + revs;
+	if (revs < 100000) return (revs / 1000).toFixed(1) + "k";
+	if (revs < 1000000) return Math.round(revs / 1000) + "k";
+	return (revs / 1000000).toFixed(1) + "M";
+}
+
+//Wear cell: odometer count, flagged units marked (server-side WearPolicy —
+//the flagged list arrives in data.wear).
+function wearCellText(u, wearFlagged) {
+	if (typeof u.odo !== "number") return "—";
+	return formatOdometer(u.odo) + (wearFlagged ? " ⚠" : "");
+}
+
 var UNIT_STATE_LABELS = { 0: "silent", 1: "sketch", 2: "bootloader" };
 var UNIT_FW_LABELS = { 0: "ok", 1: "OUTDATED", 2: "unknown" };
 
@@ -701,8 +716,11 @@ function renderUnitHealth(data) {
 	}
 	table.classList.remove("hidden");
 
+	var wear = (data && data.wear) || { median: 0, flagged: [] };
+
 	for (var idx = 0; idx < units.length; idx++) {
 		var unit = units[idx];
+		var flagged = wear.flagged.indexOf(unit.i) !== -1;
 		var row = document.createElement("tr");
 		if (unitRowIsFaulty(unit)) row.className = "uh-bad-row";
 		appendCell(row, unit.i);
@@ -720,11 +738,27 @@ function renderUnitHealth(data) {
 			//Unread unit (bootloader / silent): no diagnostics.
 			for (var c = 0; c < 7; c++) appendCell(row, "—");
 		}
+		//Wear rides its own valid flag ("odo" present) — a unit can report
+		//status but run pre-odometer firmware (#231).
+		appendCell(row, wearCellText(unit, flagged), flagged ? "uh-bad" : "");
 		body.appendChild(row);
 	}
 
-	setUnitHealthSummary(responding + "/" + width + (faulty > 0 ? " · " + faulty + " faulty" : " healthy"),
-		faulty > 0 || responding < width ? "bad" : "ok");
+	var summary = responding + "/" + width + (faulty > 0 ? " · " + faulty + " faulty" : " healthy");
+	if (wear.flagged.length > 0 && wear.median > 0) {
+		//Name the worst offender with its ratio to the display median.
+		var worst = null;
+		for (var w = 0; w < units.length; w++) {
+			if (wear.flagged.indexOf(units[w].i) === -1) continue;
+			if (worst === null || (units[w].odo || 0) > (worst.odo || 0)) worst = units[w];
+		}
+		if (worst) {
+			summary += " · unit " + (worst.i + 1) + " wear " +
+				(worst.odo / wear.median).toFixed(1) + "× median";
+		}
+	}
+	setUnitHealthSummary(summary,
+		faulty > 0 || responding < width || wear.flagged.length > 0 ? "bad" : "ok");
 
 	lastHealthUnits = units;
 	renderProvisioning(units);
@@ -765,6 +799,7 @@ function renderProvisioning(units) {
 
 		appendButton(row, "Change…", function() { changeUnitAddressUi(u.a, addrInput); });
 		appendButton(row, "Clear", function() { clearUnitAddressUi(u.a); });
+		appendButton(row, "Reset odo…", function() { resetOdometerUi(u.a); });
 		container.appendChild(row);
 	});
 }
@@ -781,6 +816,20 @@ function identifyUnitUi(address) {
 		showProvisioningStatus(ok
 			? "Unit " + formatHexAddress(address) + " is blinking its LED for ~3 s."
 			: "Identify failed for " + formatHexAddress(address), ok ? "success" : "error");
+	});
+}
+
+//Physical-rebuild bookkeeping (#231): the odometer is the unit's wear
+//history — only zero it when the mechanics were actually replaced.
+function resetOdometerUi(address) {
+	if (!confirm("Reset the wear odometer of unit " + formatHexAddress(address) + "?\n\n" +
+		"Only do this after physically rebuilding the unit (flap swap, new motor) — " +
+		"the lifetime revolution count cannot be recovered.")) return;
+	postCalibration("/unit/reset-odometer", { address: address }, function(ok) {
+		showProvisioningStatus(ok
+			? "Odometer of unit " + formatHexAddress(address) + " reset to 0."
+			: "Odometer reset failed for " + formatHexAddress(address), ok ? "success" : "error");
+		if (ok) loadUnitHealth();
 	});
 }
 

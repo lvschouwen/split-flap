@@ -32,6 +32,7 @@
 #include "SplitFlapProtocol.h"
 #include "Tasks.h"
 #include "UnitBus.h"
+#include "WearPolicy.h"
 #include "WebAssets.h"
 #include "WebLog.h"
 #include "WifiService.h"
@@ -783,6 +784,17 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                            "{\"width\":%d,\"faulty\":%d,\"units\":[]}",
                            snap.displayWidth, snap.faultyUnitCount);
     }
+    // Wear assessment rides the same payload (#231, additive key), spliced
+    // before the closing brace like the reflash object below.
+    WearAssessment wear;
+    assessWear(snap.units, snap.displayWidth, wear);
+    char wearJson[96];
+    size_t wearLen = buildWearJson(wear, wearJson, sizeof(wearJson));
+    if (n > 0 && wearLen < sizeof(wearJson) &&
+        n + wearLen + 2 < UNIT_HEALTH_JSON_CAP) {
+      n += (size_t)snprintf(buf.get() + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
+                            ",%s}", wearJson) - 1;
+    }
     // Reflash progress rides the same payload (#205, additive key — the
     // Maintenance tab already polls this endpoint). Spliced before the
     // closing brace; the ~70 B worst case fits the cap's slack by design.
@@ -879,6 +891,17 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     if (!maintCheckAddress(request, snap, addr)) return;
     maintEnqueue(request,
                  makeIdentifyCommand(displayNextMaintSeq(), (uint8_t)addr));
+  });
+
+  // Physical-rebuild bookkeeping (#231): zero the unit's wear odometer after
+  // a flap swap or motor replacement. Same op contract as identify/home.
+  server.on("/unit/reset-odometer", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    maintEnqueue(request, makeResetOdometerCommand(displayNextMaintSeq(),
+                                                   (uint8_t)addr));
   });
 
   // Debug endpoint, v1 semantics preserved: pushes the unit into twiboot

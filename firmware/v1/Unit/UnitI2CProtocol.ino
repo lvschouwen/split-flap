@@ -39,6 +39,9 @@ void receiveLetter(int numBytes) {
       case SFP_CMD_GET_LETTER:
         pendingLetterResponse = true;
         break;
+      case SFP_CMD_GET_ODOMETER:
+        pendingOdometerResponse = true;
+        break;
       case SFP_CMD_SET_OFFSET:
         if (remaining >= 2) {
           uint8_t lo = (uint8_t)Wire.read();
@@ -84,6 +87,9 @@ void receiveLetter(int numBytes) {
         break;
       case SFP_CMD_IDENTIFY:
         pendingIdentify = true;
+        break;
+      case SFP_CMD_RESET_ODOMETER:
+        pendingOdometerReset = true;
         break;
       default:
         if (badCommandCount < 0xFF) badCommandCount++;
@@ -135,6 +141,16 @@ void requestEvent() {
     uint8_t buf[2] = { letter, (uint8_t)~letter };
     Wire.write(buf, 2);
     pendingLetterResponse = false;
+    return;
+  }
+  if (pendingOdometerResponse) {
+    // 5 bytes: uint32 LE revolutions + XOR checksum ^ 0xA5 (#231). Reading
+    // the 4-byte mirror is safe here: this IS the TWI ISR, and loop-side
+    // writers hold interrupts off (UnitMotion.ino stepCounted()).
+    uint8_t buf[ODO_REPLY_LEN];
+    odometerEncodeReply(odometerRevolutions, buf);
+    Wire.write(buf, ODO_REPLY_LEN);
+    pendingOdometerResponse = false;
     return;
   }
   if (pendingStatusResponse) {
