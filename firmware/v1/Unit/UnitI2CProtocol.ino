@@ -147,7 +147,10 @@ void requestEvent() {
     //             bit 1  last home FAILED (hit 3*STEPS without marker)
     //             bit 2  hall never triggered during last home
     //             bit 3  reserved (stuck drum, future)
-    //             bits 4-7 reserved
+    //             bit 4  I2C address source is EEPROM, not DIP (#215) —
+    //                    twiboot still listens on DIP, so a mismatch means
+    //                    over-I2C reflash can't reach this unit
+    //             bits 5-7 reserved
     //   byte 1   savedMcusr — current-boot reset-cause snapshot
     //   byte 2   lifetime brownout reset count (EEPROM, saturating)
     //   byte 3   lifetime watchdog reset count (EEPROM, saturating)
@@ -158,6 +161,7 @@ void requestEvent() {
     if (currentlyrotating)          flags |= (1 << 0);
     if (statusLastHomeFailed)       flags |= (1 << 1);
     if (statusHallNeverTriggered)   flags |= (1 << 2);
+    if (addressFromEeprom)          flags |= (1 << 4);
     uint16_t lastHomeScaled16 = (lastHomingStepCount >> 4);
     uint8_t lastHomeScaled = (lastHomeScaled16 > 0xFF) ? 0xFF : (uint8_t)lastHomeScaled16;
     uint8_t buf[8] = {
@@ -188,6 +192,7 @@ int getaddress() {
     //Reject obviously bad values. Address 0 is reserved general-call, 127 is
     //reserved too; anything else in 1..126 is plausible.
     if (stored >= 1 && stored <= 126) {
+      addressFromEeprom = true;  //GET_STATUS flags bit 4 (#215)
       return stored;
     }
   }

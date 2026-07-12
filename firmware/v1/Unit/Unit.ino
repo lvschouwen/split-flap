@@ -111,6 +111,13 @@ int eeAddress = 0;   //EEPROM address for calibration offset
 volatile int calOffset; //Offset for calibration in steps, stored in EEPROM, gets read in setup
 volatile int receivedNumber = 0;
 int i2cAddress;
+// True when getaddress() returned the EEPROM-provisioned address instead of
+// the DIP-derived one. Surfaced as GET_STATUS flags bit 4 (#215): twiboot only
+// listens on the DIP-derived address, so the master needs to know a unit may
+// be unreachable for over-I2C reflash. Written once in setup() before the
+// Wire handlers register, then only read by the ISR — non-volatile is fine
+// for the same reason as savedMcusr.
+bool addressFromEeprom = false;
 
 // Set by the I2C receive handler when an enter-bootloader command arrives;
 // the main loop then triggers a watchdog reset (doing the reset from inside
