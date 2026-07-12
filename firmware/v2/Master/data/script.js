@@ -952,8 +952,6 @@ function reflashAllUnits() {
 //Derive "&v=<rev>" for /firmware/master from a build-stamped filename
 //(firmware-<rev>[-dirty]-<size>.bin, see build_assets.py). The rev feeds
 //the boot-time silent-revert check (intendedVersion, #52).
-//KEEP IN SYNC: the same regex is inlined in ServiceBootModes.ino's
-//MINIMAL_UPLOAD_FORM (the recovery/quiet-OTA pages can't load this file).
 function firmwareVersionParam(fileName) {
 	var match = fileName.match(/^firmware-([0-9a-f]{7,40}(?:-dirty)?)(?:-[0-9]+m[0-9]*m?)?\.bin$/i);
 	return match ? "&v=" + encodeURIComponent(match[1]) : "";

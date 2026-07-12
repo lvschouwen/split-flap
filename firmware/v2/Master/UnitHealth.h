@@ -30,9 +30,14 @@ struct UnitStatus {
 };
 
 // Status-flag bit positions (must match the v1 Unit.ino requestEvent()).
+// Bit 3 stays reserved for the unit's earmarked stuck-drum use.
 #define UNIT_FLAG_MOVING            (1 << 0)
 #define UNIT_FLAG_LAST_HOME_FAILED  (1 << 1)
 #define UNIT_FLAG_HALL_NEVER        (1 << 2)
+// Address source is EEPROM-provisioned, not DIP (#215). Informational, never
+// a fault — but twiboot only listens on the DIP-derived address, so a set bit
+// on a unit whose DIP differs means over-I2C reflash cannot reach it.
+#define UNIT_FLAG_ADDR_EEPROM       (1 << 4)
 
 // Everything the master knows about one unit slot — the per-unit facts the
 // DisplaySnapshot carries (POD, ~24 B/slot). fwStatus keeps v1's /settings
@@ -92,11 +97,12 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
   return count;
 }
 
-// Worst case (16 valid units, all counters saturated) is ~2 KB — same
+// Worst case (16 valid units, all counters saturated) measures 2047 B — same
 // truncation contract as v1, cap raised over v1's 2048 for the spliced
-// reflash progress object (#205, ~70 B) so a full display can't push the
-// payload into the headline-only fallback.
-#define UNIT_HEALTH_JSON_CAP 2176
+// reflash progress object (#205, ~70 B) and the per-unit "ae" field (#215)
+// so a full display can't push the payload into the headline-only fallback.
+// test_unit_health pins the worst case + headroom against this cap.
+#define UNIT_HEALTH_JSON_CAP 2304
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
@@ -128,12 +134,13 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                        u.statusValid ? 1 : 0);
     if (u.statusValid) {
       const UnitStatus& s = u.status;
-      UNIT_HEALTH_APPEND(",\"fw\":%d,\"rev\":\"%s\",\"up\":%u,\"br\":%u,\"wd\":%u,\"bc\":%u,\"mc\":%u,\"fl\":%u,\"hs\":%u",
+      UNIT_HEALTH_APPEND(",\"fw\":%d,\"rev\":\"%s\",\"up\":%u,\"br\":%u,\"wd\":%u,\"bc\":%u,\"mc\":%u,\"fl\":%u,\"hs\":%u,\"ae\":%u",
                          u.fwStatus, u.version, (unsigned)s.uptimeSeconds,
                          (unsigned)s.lifetimeBrownoutCount,
                          (unsigned)s.lifetimeWatchdogCount,
                          (unsigned)s.badCommandCount, (unsigned)s.mcusrAtBoot,
-                         (unsigned)s.flags, (unsigned)s.lastHomingStepCount);
+                         (unsigned)s.flags, (unsigned)s.lastHomingStepCount,
+                         (s.flags & UNIT_FLAG_ADDR_EEPROM) ? 1u : 0u);
     }
     UNIT_HEALTH_APPEND("}");
   }

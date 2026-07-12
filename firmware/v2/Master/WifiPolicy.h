@@ -10,8 +10,7 @@
 //
 // Once Connected the machine is parked for good: link drops belong to the
 // SDK's auto-reconnect (WiFi.setAutoReconnect(true)), never a portal
-// re-entry. Recovery/quiet-OTA boot modes (later #58 slice) branch BEFORE
-// the first step call — those contexts must never open a portal.
+// re-entry.
 
 #include <stdint.h>
 

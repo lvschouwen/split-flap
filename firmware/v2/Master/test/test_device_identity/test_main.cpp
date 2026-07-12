@@ -110,9 +110,7 @@ static void test_resolve_falls_back_on_garbage_stored_name() {
 static void test_ap_suffixes_fit_ssid_limit_at_max_name_length() {
   // IEEE 802.11 SSIDs cap at 32 bytes. Every composed AP name must fit
   // even for a maximum-length device name.
-  TEST_ASSERT_TRUE(DEVICE_NAME_MAX_LEN + strlen(AP_SUFFIX_RECOVERY) <= 32);
-  TEST_ASSERT_TRUE(DEVICE_NAME_MAX_LEN + strlen(AP_SUFFIX_OTA)      <= 32);
-  TEST_ASSERT_TRUE(DEVICE_NAME_MAX_LEN + strlen(AP_SUFFIX_SETUP)    <= 32);
+  TEST_ASSERT_TRUE(DEVICE_NAME_MAX_LEN + strlen(AP_SUFFIX_SETUP) <= 32);
 }
 
 int main(int, char**) {

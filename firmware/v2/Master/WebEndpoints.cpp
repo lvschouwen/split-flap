@@ -94,10 +94,6 @@ struct WebStateLock {
   WebStateLock& operator=(const WebStateLock&) = delete;
 };
 
-static const char* NOT_PORTED_MSG =
-    "Not available on the v2 master yet (#58): this endpoint's backing "
-    "service hasn't been ported.";
-
 // Serves a gzipped PROGMEM asset (v1 #159). Cache policy: PROGMEM assets
 // only change via a master OTA, so the browser must revalidate every
 // navigation or an OTA that swaps the UI would leave stale HTML/JS behind.
@@ -109,13 +105,6 @@ static void serveGzipAsset(AsyncWebServerRequest* request,
   resp->addHeader("Content-Encoding", "gzip");
   resp->addHeader("Cache-Control", "no-cache");
   request->send(resp);
-}
-
-static void registerNotPortedStub(AsyncWebServer& server, const char* path,
-                                  WebRequestMethod method) {
-  server.on(path, method, [](AsyncWebServerRequest* request) {
-    request->send(501, "text/plain", NOT_PORTED_MSG);
-  });
 }
 
 // --- maintenance endpoint helpers (#204) ---------------------------------------
