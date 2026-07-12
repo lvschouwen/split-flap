@@ -63,9 +63,22 @@ function buildMirror(width) {
 	while (strip.firstChild) strip.removeChild(strip.firstChild);
 	mirrorTiles = [];
 	for (var i = 0; i < width; i++) {
+		//Two-leaf tile (#246): the .top half folds over the hinge carrying
+		//the old glyph while the full-height .char swaps underneath it.
 		var t = document.createElement("div");
 		t.className = "tile";
-		t.textContent = " ";
+		var top = document.createElement("span");
+		top.className = "top";
+		//Full-tile-height inner span, clipped by the half-height leaf, so the
+		//leaf shows exactly the top half of a properly centered glyph.
+		var tg = document.createElement("span");
+		tg.className = "tg";
+		top.appendChild(tg);
+		var ch = document.createElement("span");
+		ch.className = "char";
+		t.appendChild(top);
+		t.appendChild(ch);
+		t._glyph = "";
 		mirror.appendChild(t);
 		mirrorTiles.push(t);
 		strip.appendChild(document.createElement("span"));
@@ -96,15 +109,21 @@ function renderMirror(text) {
 	mirrorTiles.forEach(function(tile, i) {
 		var glyph = wireToGlyph(frame[i]);
 		if (glyph === " ") glyph = " ";
-		if (tile.textContent === glyph) return;
+		if (tile._glyph === glyph) return;
+		tile._glyph = glyph;
 		//Two renders <1 s apart must not interleave: kill this tile's
 		//pending flip before scheduling the new one.
 		(tile._timers || []).forEach(clearTimeout);
+		var topG = tile.firstChild.firstChild, ch = tile.lastChild;
 		tile._timers = [setTimeout(function() {
+			//The .top leaf folds carrying the OLD glyph; the full-height .char
+			//swaps mid-fold, and the leaf takes the new glyph as it snaps back
+			//(animation end, 240 ms). #246.
 			tile.classList.remove("flip");
 			void tile.offsetWidth;
 			tile.classList.add("flip");
-			tile._timers.push(setTimeout(function() { tile.textContent = glyph; }, 120));
+			tile._timers.push(setTimeout(function() { ch.textContent = glyph; }, 110));
+			tile._timers.push(setTimeout(function() { topG.textContent = glyph; }, 240));
 		}, i * 45)];
 	});
 }
@@ -634,11 +653,25 @@ function formatOdometer(revs) {
 	return (revs / 1000000).toFixed(1) + "M";
 }
 
-//Wear cell: odometer count, flagged units marked (server-side WearPolicy —
-//the flagged list arrives in data.wear).
-function wearCellText(u, wearFlagged) {
-	if (typeof u.odo !== "number") return "—";
-	return formatOdometer(u.odo) + (wearFlagged ? " ⚠" : "");
+//Wear cell (#246): relative bar scaled to the display max + the count.
+//Flagged units (server-side WearPolicy — data.wear) go red.
+function appendWearCell(row, u, wearFlagged, maxOdo) {
+	var td = document.createElement("td");
+	if (typeof u.odo !== "number") {
+		td.textContent = "—";
+	} else {
+		var bar = document.createElement("span");
+		bar.className = "wear-bar" + (wearFlagged ? " hot" : "");
+		var fill = document.createElement("i");
+		var pct = maxOdo > 0 ? Math.max(4, Math.round((u.odo / maxOdo) * 100)) : 4;
+		fill.style.width = pct + "%";
+		bar.appendChild(fill);
+		td.appendChild(bar);
+		td.appendChild(document.createTextNode(
+			formatOdometer(u.odo) + (wearFlagged ? " ⚠" : "")));
+		if (wearFlagged) td.className = "uh-bad";
+	}
+	row.appendChild(td);
 }
 
 var UNIT_STATE_LABELS = { 0: "silent", 1: "sketch", 2: "bootloader" };
@@ -719,6 +752,10 @@ function renderUnitHealth(data) {
 	table.classList.remove("hidden");
 
 	var wear = (data && data.wear) || { median: 0, flagged: [] };
+	var maxOdo = 0;
+	for (var m = 0; m < units.length; m++) {
+		if (typeof units[m].odo === "number" && units[m].odo > maxOdo) maxOdo = units[m].odo;
+	}
 
 	for (var idx = 0; idx < units.length; idx++) {
 		var unit = units[idx];
@@ -742,7 +779,7 @@ function renderUnitHealth(data) {
 		}
 		//Wear rides its own valid flag ("odo" present) — a unit can report
 		//status but run pre-odometer firmware (#231).
-		appendCell(row, wearCellText(unit, flagged), flagged ? "uh-bad" : "");
+		appendWearCell(row, unit, flagged, maxOdo);
 		body.appendChild(row);
 	}
 
