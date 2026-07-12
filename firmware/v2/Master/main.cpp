@@ -18,6 +18,7 @@
 #include "HelpersSerialHandling.h"
 #include "MdnsDiscovery.h"
 #include "MqttHelpers.h"
+#include "MqttService.h"
 #include "NvsSettingsStore.h"
 #include "OtaService.h"
 #include "Settings.h"
@@ -105,6 +106,10 @@ void setup() {
 
   settingsStore.begin();
   settings = loadSettings(settingsStore);
+  // Lifetime boot counter (#224): v2's stand-in for v1's RTC counter — it
+  // only feeds the HA diag/boots sensor, so NVS wear-leveled u32 is plenty.
+  uint32_t bootCount = (uint32_t)settingsStore.getInt("bootCount", 0) + 1;
+  settingsStore.putInt("bootCount", (int)bootCount);
   deviceName = resolveDeviceName(true, settings.deviceName, MDNS_NAME_PREFIX,
                                  chipIdFromEfuseMac());
   statusLedInit(settings);  // boot white from here on (#199)
@@ -142,6 +147,11 @@ void setup() {
   // netif exists (STA join or portal AP) — LWIP isn't up before that.
   webEndpointsInit(webServer, settings, settingsStore, deviceName);
   SerialPrintln(F("web endpoints registered (server starts with the netif)"));
+
+  // Stable broker-identity copies + client config (#224); the connection
+  // itself is mqttTask's business once tasksInit() starts it. Must run
+  // after webEndpointsInit (the service reads web-domain snapshots).
+  mqttServiceInit(settings, settingsStore, deviceName, bootCount);
 
   // Wiring only — the radio comes up on netTask's first wifiServiceTick(),
   // keeping every WiFi call on core 0 (#188).

@@ -40,6 +40,9 @@ struct DisplaySnapshot {
   bool busy = false;
   uint32_t commandsProcessed = 0;
   char currentText[DISPLAY_CMD_TEXT_LEN + 1] = {0};
+  // Failed unit writes on the most recent frame show (v1's
+  // lastShowUnitWriteErrors) — an MQTT telemetry input (#224).
+  uint8_t lastShowWriteErrors = 0;
   // Probe/health facts (#203). Derived fields are recomputed by
   // displayApplyUnitFacts(), never patched individually.
   uint8_t detectedUnitCount = 0;

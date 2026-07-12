@@ -25,20 +25,20 @@
 #include "Settings.h"
 #include "SettingsStore.h"
 
-// Inbound MQTT message as copied out of LWIP context (v1's copy+flag rule,
-// now structural): the future MQTT slice's callbacks post here and return;
-// only mqttTask does real work. POD, same reasoning as DisplayCommand.
+// Inbound MQTT message as copied out of callback context (v1's copy+flag
+// rule, now structural): MqttService's onMessage posts here; only mqttTask
+// does real work. POD, same reasoning as DisplayCommand.
 //
-// Sizing: subscribed topics are "<deviceName>/..." — deviceName caps at 24
-// (DeviceIdentity) and v1's longest command suffix is well under the
-// remaining 23. Payloads: inbound is HA text/mode/dwell commands — text is
-// display-width bounded, modes/dwells are tokens; 200 dwarfs all of them
-// (outbound discovery JSON is bigger but never enters this inbox).
-// PRODUCER CONTRACT (MQTT slice): bound-check/truncate BEFORE memcpy into
-// these buffers, and keep them NUL-terminated — mqttInboxPost() copies raw.
+// Sizing (static_asserted in MqttService.cpp): the longest command topic is
+// "splitflap/<24-char name>/alignment/set" = 48 chars + NUL; text/set
+// payloads run to MQTT_MAX_TEXT_LEN (256) + NUL — the v1 wire truncation
+// point (the display path truncates to width anyway). Outbound discovery
+// JSON is bigger but never enters this inbox.
+// PRODUCER CONTRACT: bound-check/truncate BEFORE memcpy into these buffers,
+// and keep them NUL-terminated — mqttInboxPost() copies raw.
 struct MqttInboxMessage {
-  char topic[48] = {0};
-  char payload[200] = {0};
+  char topic[64] = {0};
+  char payload[260] = {0};
 };
 
 // Creates the queues, the snapshot mutex, and all four tasks. Call once

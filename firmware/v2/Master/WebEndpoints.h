@@ -39,6 +39,21 @@ struct WebContentSnapshot {
 // DisplaySnapshot: consumers render from the copy, never from live state.
 WebContentSnapshot webDisplayContentSnapshot();
 
+// MQTT command write path (#224): mqttTask applies validated HA commands
+// under webStateMutex with NVS write-through — the same invariants as the
+// settings drain. Each returns true when the value actually changed.
+bool webMqttApplyMode(const String& mode);
+bool webMqttApplySpeed(int speed);
+bool webMqttApplyAlignment(const String& alignment);
+
+// Stage the standard graceful reboot (drain flushes logs, then restarts) —
+// the HA restart button rides the same dispatcher as POST /reboot.
+void webRequestReboot();
+
+// Mutex-guarded reads for MQTT's retained diagnostics.
+String webTimezoneSnapshot();
+const char* webResetReasonString();
+
 // Bundled unit firmware (#205): the generated WebAssets.h arrays have
 // internal linkage, so only WebEndpoints.cpp includes that header — a
 // second include would duplicate every PROGMEM blob into another TU.
