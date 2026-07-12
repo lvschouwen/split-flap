@@ -58,6 +58,9 @@ static uint32_t mqttNextTelemetryMs = 0;
 static std::atomic<bool> stopForOtaRequested{false};
 static std::atomic<bool> resumeAfterOtaRequested{false};
 static std::atomic<bool> cancelNotificationRequested{false};
+// Web transient dwell request (#219), seconds; 0 = none. The requester
+// pre-applies the 600 s default so 0 stays an unambiguous "no request".
+static std::atomic<long> transientDwellRequested{0};
 static std::atomic<bool> discoveryClearRequested{false};
 static std::atomic<bool> connectedAtomic{false};
 static std::atomic<bool> notifActiveAtomic{false};
@@ -335,10 +338,28 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
 }
 
 void mqttServiceTick() {
-  if (!mqttInitialised) return;
-
-  // Staged cross-task requests first — they must work even while frozen.
+  // Overlay lifecycle runs BEFORE the initialised gate: web transients ride
+  // this overlay on broker-less devices too (#219, v1 rule — calibration
+  // transients exist without a broker). Cancel drains before start; expiry
+  // just releases the clockTask gate — the 1 Hz ticker re-shows the active
+  // mode's content by itself. The overlay is ONE slot with two producers
+  // (this staged web path and the inbox's direct MQTT-text arm): within a
+  // ~10 ms tick window the later writer silently replaces the earlier
+  // dwell/text — v1's single-notification-slot last-write-wins, with the
+  // tick boundary deciding "later" (cpp-review MED, accepted).
   if (cancelNotificationRequested.exchange(false)) cancelNotificationLocal();
+  long transientDwell = transientDwellRequested.exchange(0);
+  if (transientDwell > 0) {
+    transientTextStart(mqttNotification, String(), transientDwell, millis());
+    notifActiveAtomic.store(true);
+  }
+  if (mqttNotification.active &&
+      !notificationTick(mqttNotification, millis())) {
+    notifActiveAtomic.store(false);
+    SerialPrintln(F("Notification/transient expired — reverting"));
+  }
+
+  if (!mqttInitialised) return;
   if (stopForOtaRequested.exchange(false) && !mqttStoppedForOta) {
     mqttStoppedForOta = true;
     mqttFrozenAtMs = millis();
@@ -375,14 +396,6 @@ void mqttServiceTick() {
 
   // Pump the client: socket reads/writes + all callbacks fire in here.
   mqttClient.loop();
-
-  // Notification dwell (v1 mqttNotificationTick): on expiry just release
-  // the clockTask gate — the 1 Hz ticker re-shows the active mode's
-  // content (clock time, or the retained input text) by itself.
-  if (mqttNotification.active && !notificationTick(mqttNotification, millis())) {
-    notifActiveAtomic.store(false);
-    SerialPrintln(F("MQTT: notification expired — reverting"));
-  }
 
   if (mqttDisconnectedEvent) {
     mqttDisconnectedEvent = false;
@@ -530,6 +543,17 @@ bool mqttNotificationActive() { return notifActiveAtomic.load(); }
 // (never-set) overlay harmlessly, and the web drain calls this untangled
 // from MQTT state (v1 cancelActiveNotification rule).
 void mqttCancelNotification() { cancelNotificationRequested.store(true); }
+
+// See MqttService.h (#219). The default is pre-applied here because 0 is
+// the staging atomic's "no request" sentinel.
+void mqttStartNotificationDwell(long dwellSeconds) {
+  transientDwellRequested.store(
+      dwellSeconds > 0 ? dwellSeconds : TRANSIENT_TEXT_DEFAULT_DWELL_SECONDS);
+  // Gate flips from the caller's task, not the tick: the 1 Hz clock ticker
+  // must not sneak a mode re-show in behind the just-queued transient
+  // during the <=10 ms until the tick stamps the deadline.
+  notifActiveAtomic.store(true);
+}
 
 void mqttStopForOta() {
   if (!mqttInitialised) return;

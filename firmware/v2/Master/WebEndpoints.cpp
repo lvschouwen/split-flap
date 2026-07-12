@@ -378,12 +378,12 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       return;
     }
 
-    // Message sends become display commands at drain time; report a full
-    // queue now instead of accepting a message that would be dropped. (The
+    // Message/transient sends become display commands at drain time; report
+    // a full queue now instead of accepting one that would be dropped. (The
     // stub worker drains instantly, so this only fires if something wedges.)
-    // The reflash gate (#205) applies only to the message part — pure
+    // The reflash gate (#205) applies only to the display-bound part — pure
     // settings saves don't touch the display queue and stay allowed.
-    if (local.inputTextProvided &&
+    if ((local.inputTextProvided || local.transientTextProvided) &&
         reflashInProgress(displaySnapshotGet().reflash)) {
       if (isAjax) {
         request->send(409, "text/plain", F("reflash in progress"));
@@ -392,7 +392,8 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       }
       return;
     }
-    if (local.inputTextProvided && displayQueueFull()) {
+    if ((local.inputTextProvided || local.transientTextProvided) &&
+        displayQueueFull()) {
       SerialPrintln(F("Display command queue full — message rejected."));
       if (isAjax) request->send(503, "text/plain", F("display busy"));
       else request->redirect("/?display-busy=true");
@@ -1051,14 +1052,14 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // Display-bound fields are read off the post before apply resets it.
       String messageText = pendingPost.inputText;
       bool messageProvided = pendingPost.inputTextProvided;
-      if (pendingPost.transientTextProvided) {
-        SerialPrintln("Transient text dropped (mode service not ported yet, "
-                      "#58): " + pendingPost.transientText);
-      }
+      String transientText = pendingPost.transientText;
+      long transientDwell = pendingPost.transientDwell;
+      bool transientProvided = pendingPost.transientTextProvided;
+      bool modeProvided = pendingPost.deviceModeProvided;
 
       // "Last Received" tracks messages/mode switches, not settings saves —
       // per-card posts (#128) mean only those submissions stamp it.
-      if (messageProvided || pendingPost.deviceModeProvided) {
+      if (messageProvided || modeProvided) {
         lastMessageStamp = formatDateTime(time(nullptr), CLOCK_STAMP_FORMAT);
       }
 
@@ -1068,10 +1069,16 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       applySettingsPost(pendingPost, settings, store);
       timezoneChanged = settings.timezonePosix != timezoneBefore;
 
-      // Explicit mode switch or message send trumps a running MQTT
-      // notification (v1 #130 rule) — cancel so the next 1 Hz tick (or the
-      // direct enqueue below) flaps the new content, not the overlay.
-      if (pendingPost.deviceModeProvided || messageProvided) {
+      // Explicit mode switch or message send trumps a running notification
+      // (v1 #130 rule) — cancel so the next 1 Hz tick (or the direct
+      // enqueue below) flaps the new content, not the overlay. Reads the
+      // pre-apply capture: applySettingsPost() just reset the post's
+      // provided flags (#219 fix — the reset made this condition dead for
+      // mode switches). Skipped when a transient rides the same POST: its
+      // overlay arm below supersedes the old one anyway, and a staged
+      // cancel draining one tick earlier than the arm would drop the
+      // clockTask gate for a one-frame stray re-show (cpp-review MED).
+      if ((modeProvided || messageProvided) && !transientProvided) {
         mqttCancelNotification();
       }
 
@@ -1103,6 +1110,32 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       } else if (messageProvided) {
         SerialPrintln("Message ignored (device in clock mode, v1 parity): " +
                       messageText);
+      }
+
+      // Transient text (#219, v1 #165/#176): calibration patterns and
+      // clock-mode messages show regardless of mode and revert via the
+      // overlay dwell — nothing persists, a clock display stays a clock
+      // display. Ordering matters twice: after applySettingsPost so an
+      // alignment/speed change riding the same POST applies to this show,
+      // and the overlay arm (which drains behind the #130 cancel above)
+      // keeps the transient alive when that same POST also switched mode.
+      if (transientProvided) {
+        if (reflashInProgress(displaySnapshotGet().reflash)) {
+          SerialPrintln("Transient text dropped (reflash running): " +
+                        transientText);
+        } else if (displayEnqueue(makeShowTextCommand(
+                       transientText, settings.alignment,
+                       settings.flapSpeed))) {
+          mqttStartNotificationDwell(transientDwell);
+          SerialPrintln(
+              "Transient text (dwell " +
+              (transientDwell > 0 ? String(transientDwell) + " s"
+                                  : String("default")) +
+              "): " + transientText);
+        } else {
+          SerialPrintln("Display queue full at drain — transient DROPPED: " +
+                        transientText);
+        }
       }
     }
     if (pendingIntendedVersionProvided) {
