@@ -85,11 +85,12 @@ void unitBusWaitBatchIdle(const uint8_t* addrs, int count,
                           uint32_t timeoutMs);
 
 // Stop-abort signal (#204): the ONE cross-task entry into this module — an
-// atomic flag, not bus state. The /stop handler sets it (only after the
-// Stop command enqueued successfully); every wait loop polls it and returns
-// early; displayTask clears it when Stop executes. The bus itself stays
-// displayTask-exclusive. The reflash orchestration polls it between units
-// and batches via unitBusAbortRequested() (#205).
+// atomic flag, not bus state. The /stop handler sets it BEFORE enqueuing the
+// Stop command and rolls it back if the enqueue 503s (set-after-enqueue races
+// an idle displayTask clearing it first, stranding the flag ON); every wait
+// loop polls it and returns early; displayTask clears it when Stop executes.
+// The bus itself stays displayTask-exclusive. The reflash orchestration polls
+// it between units and batches via unitBusAbortRequested() (#205).
 void unitBusRequestAbort();
 void unitBusClearAbort();
 bool unitBusAbortRequested();
