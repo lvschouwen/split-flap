@@ -87,3 +87,13 @@ no need to re-tag.
 
 `ota-master.sh` remains for Linux-side OTA from a dev checkout:
 `./ota-master.sh <fw.bin> http://host:port`.
+
+`ota-flash.sh` is the v2 (ESP32-S3) counterpart: it fetches the newest
+staged `firmware-<rev>.bin` / `rescue-<rev>.bin` from a build server over
+ssh/scp and uploads it to a running master, with the verdict read back from
+`/settings` (`version` + `otaReverted` — native A/B rollback, no v1 RTC
+machinery). `./ota-flash.sh -s user@buildhost <device-ip>` for the master
+firmware, `-r` for the rescue image, `-a` for both, `-l file.bin` to skip
+the download. Server/dir defaults come from `SPLITFLAP_BIN_HOST` /
+`SPLITFLAP_BIN_DIR` (staging dir defaults to `bench-bins` in the remote
+home).
