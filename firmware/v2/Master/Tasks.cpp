@@ -11,6 +11,7 @@
 #include "ClockPolicy.h"
 #include "FlapFrame.h"
 #include "HelpersSerialHandling.h"
+#include "MqttService.h"
 #include "StatusLed.h"
 #include "UnitBus.h"
 #include "WebEndpoints.h"
@@ -27,7 +28,9 @@ static constexpr uint32_t DISPLAY_TASK_STACK = 4096;
 // tzset/localtime parse of the POSIX TZ string runs deep in the ticker.
 static constexpr uint32_t CLOCK_TASK_STACK = 4096;
 static constexpr uint32_t NET_TASK_STACK = 4096;
-static constexpr uint32_t MQTT_TASK_STACK = 4096;
+// espMqttClient internals + the 512 B discovery build buffers (#224); the
+// heartbeat's HWM column is the trim-down evidence.
+static constexpr uint32_t MQTT_TASK_STACK = 6144;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
 static constexpr UBaseType_t DOMAIN_TASK_PRIORITY = 1;   // everything else
@@ -337,11 +340,11 @@ static void displayTaskMain(void*) {
           uint8_t letters[UNITS_AMOUNT];
           flapFrameBuild(cmd.text, local.displayWidth, cmd.alignment,
                          letters);
-          // Return value = failed unit writes (v1's lastShowUnitWriteErrors,
-          // an MQTT telemetry input) — thread it into the snapshot when the
-          // MQTT slice lands.
-          unitBusShowFrame(local.units, local.displayWidth, letters,
-                           convertSpeedToUnit(cmd.speed));
+          int errs = unitBusShowFrame(local.units, local.displayWidth,
+                                      letters, convertSpeedToUnit(cmd.speed));
+          // v1's lastShowUnitWriteErrors — the MQTT unitErrors telemetry
+          // input (#224).
+          local.lastShowWriteErrors = errs > 0 ? (uint8_t)errs : 0;
           break;
         }
         case DisplayOpcode::Probe:
@@ -546,6 +549,22 @@ static void clockTaskMain(void*) {
     // nothing queues, nothing burst-drains after, and lastQueued stays
     // untouched so the first post-job tick re-sends fresh content.
     if (reflashInProgress(snap.reflash)) continue;
+    // Notification gate (#224): while an MQTT notification owns the
+    // display, don't tick over it — the overlay's expiry releases this
+    // gate and the next tick re-shows the active mode's content (v1
+    // gated loop()'s mode block via mqttNotificationTick()). On the
+    // falling edge, drop the dedup marker: it was frozen at the pre-
+    // notification text, which is exactly the revert target — a stale
+    // match would block the revert forever (cpp-review HIGH).
+    static bool notifWasActive = false;
+    if (mqttNotificationActive()) {
+      notifWasActive = true;
+      continue;
+    }
+    if (notifWasActive) {
+      notifWasActive = false;
+      lastQueued = "";
+    }
     clockTickObserve(lastQueued, String(snap.currentText));
 
     WebContentSnapshot content = webDisplayContentSnapshot();
@@ -592,14 +611,19 @@ static void netTaskMain(void* arg) {
   }
 }
 
-// Blocks on its inbox; nothing posts until the MQTT slice lands its client.
+// MQTT client lifecycle (#224): drain the inbox, then tick the service
+// (client pump, reconnect/backoff, publishers, notification dwell). The
+// 10 ms cadence matches netTask; the service must be initialised in setup()
+// before tasksInit() starts this task.
 static void mqttTaskMain(void*) {
   SerialPrintf("mqttTask up on core %d\n", xPortGetCoreID());
   MqttInboxMessage msg;
   for (;;) {
-    if (xQueueReceive(mqttInbox, &msg, portMAX_DELAY) != pdTRUE) continue;
-    SerialPrintln("mqtt: inbox message dropped (client is a later #58 slice): " +
-                  String(msg.topic));
+    while (xQueueReceive(mqttInbox, &msg, 0) == pdTRUE) {
+      mqttServiceHandleInbox(msg);
+    }
+    mqttServiceTick();
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 

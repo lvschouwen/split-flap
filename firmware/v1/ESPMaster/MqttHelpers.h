@@ -283,7 +283,13 @@ inline size_t buildDiscoveryTopic(char* buf, size_t bufLen, int entity, const ch
 }
 
 // Shared device block; %s slots are (deviceId, deviceId, fwVersion).
-#define MQTT_DEVICE_BLOCK "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Split-Flap %s\",\"mf\":\"split-flap\",\"mdl\":\"v1 ESPMaster\",\"sw\":\"%s\"}"
+// The model string in HA's device registry defaults to the v1 label; the v2
+// master overrides it via build flag (-D MQTT_DEVICE_MODEL=...) so this
+// header stays a byte-identical copy in both trees.
+#ifndef MQTT_DEVICE_MODEL
+#define MQTT_DEVICE_MODEL "v1 ESPMaster"
+#endif
+#define MQTT_DEVICE_BLOCK "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Split-Flap %s\",\"mf\":\"split-flap\",\"mdl\":\"" MQTT_DEVICE_MODEL "\",\"sw\":\"%s\"}"
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload with returned length >= bufLen.
