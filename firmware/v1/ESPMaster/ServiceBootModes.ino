@@ -37,6 +37,17 @@ void registerMasterFirmwareEndpoint() {
   });
   webServer.on("/firmware/master", HTTP_POST,
     [](AsyncWebServerRequest * request) {
+      //Overlap-rejected upload (#191), or a bodyless POST racing a live
+      //session: answer 409 before touching ANY shared state — TX power,
+      //freeze flags, MQTT session and the rejection vars all belong to the
+      //session owner.
+      if (request->_tempObject != nullptr ||
+          (masterOtaOwnerRequest != nullptr && masterOtaOwnerRequest != request)) {
+        request->send(409, "text/plain",
+                      "Another master OTA upload is already in progress — retry when it finishes");
+        return;
+      }
+      masterOtaOwnerRequest = nullptr;  //session concluded, whatever the verdict
       //Restore TX power on every exit path. Upload handler dropped it for
       //the write storm (#60). On the success path we reboot anyway, so
       //this is moot there, but restoring before we send the 200 gives the
@@ -92,7 +103,22 @@ void registerMasterFirmwareEndpoint() {
       }
     },
     [](AsyncWebServerRequest * request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-      masterOtaLastChunkMs = millis();
+      //Concurrent-upload guard (#191): a live session owns the Update
+      //singleton and every shared flag here — mark this request rejected
+      //(per-request _tempObject; malloc pairs with the free in the request
+      //destructor) and leave all of it alone, including the stall watchdog
+      //timestamp below.
+      if (index == 0 && masterOtaOwnerRequest != nullptr && masterOtaOwnerRequest != request) {
+        request->_tempObject = malloc(1);
+        return;
+      }
+      if (request->_tempObject != nullptr) return;  //overlap-rejected chunks (#191)
+      //Only the live session (or an upload-start) feeds the stall watchdog
+      //(#191): a rejected upload trickling its doomed body must not keep the
+      //display frozen past the 30 s auto-thaw.
+      if (index == 0 || masterOtaOwnerRequest == request) {
+        masterOtaLastChunkMs = millis();
+      }
       if (index == 0) {
         //Freeze the display for the duration of the upload (issue #116).
         //The loop unfreezes on the completion handler's failure paths or
@@ -205,7 +231,21 @@ void registerMasterFirmwareEndpoint() {
         SerialPrint(intended);
         SerialPrintln(F("\""));
         SerialPrintln(F("Update.begin ok — streaming chunks"));
+        //Session is live from here (#191); every rejection above already
+        //ran Update.end(false). onDisconnect is the backstop for a client
+        //that dies mid-upload; an abandoned Update session is recovered by
+        //the begin() retry above (#162).
+        masterOtaOwnerRequest = request;
+        request->onDisconnect([request]() {
+          if (masterOtaOwnerRequest == request) masterOtaOwnerRequest = nullptr;
+        });
       }
+      //Not (or no longer) the live owner (#191): covers overlap-rejected
+      //requests AND stragglers rejected via the shared otaRejected flag
+      //whose client keeps streaming — a later legitimate owner resets that
+      //flag, and without this gate their leftover chunks would write into
+      //the new owner's session.
+      if (masterOtaOwnerRequest != request) return;
       if (otaRejected) return;
       if (!Update.hasError() && len > 0) {
         size_t written = Update.write(data, len);

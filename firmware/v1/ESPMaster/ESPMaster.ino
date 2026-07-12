@@ -342,6 +342,12 @@ bool isOtaMode = false;
 //client dies mid-upload and the completion handler never fires.
 volatile bool masterOtaUploadActive = false;
 volatile unsigned long masterOtaLastChunkMs = 0;
+//Concurrent-upload guard (#191): the request owning the live Update session
+//(NULL = none). Compared only, never dereferenced — an overlapping upload is
+//marked rejected via its _tempObject and answered 409 instead of aborting
+//the live session. Declared here (not ServiceBootModes.ino) because the
+//stall watchdog in loop() clears it and this file concatenates first.
+AsyncWebServerRequest* volatile masterOtaOwnerRequest = nullptr;
 bool healthyBootMarked = false;
 
 //Master OTA rejection state — set in the upload handler when the content
@@ -754,6 +760,9 @@ void loop() {
     if (millis() - masterOtaLastChunkMs > 30000UL) {
       SerialPrintln(F("OTA upload stalled >30 s — resuming normal operation"));
       masterOtaUploadActive = false;
+      //Free the session slot too (#191) — the next upload's begin() retry
+      //recovers the abandoned Update session instead of a 409 wedge.
+      masterOtaOwnerRequest = nullptr;
       mqttResumeAfterOta();
     } else {
       delay(50);

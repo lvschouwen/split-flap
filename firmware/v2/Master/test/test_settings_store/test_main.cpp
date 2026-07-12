@@ -249,6 +249,28 @@ static void test_invalid_stored_password_clears_password_only() {
 }
 
 // ---------------------------------------------------------------------------
+// Intended-version sanitation (#191): the /firmware/master ?v= drain and the
+// boot load path share one rule — printable ASCII shorter than
+// LEN_INTENDED_VERSION, else "".
+// ---------------------------------------------------------------------------
+
+static void test_intended_version_passes_clean_rev_string() {
+  TEST_ASSERT_EQUAL_STRING(
+      "47ac69d-dirty", sanitizeIntendedVersion(String("47ac69d-dirty")).c_str());
+}
+
+static void test_overlong_intended_version_falls_back_to_empty() {
+  String longRev;
+  for (int i = 0; i < LEN_INTENDED_VERSION; i++) longRev += 'a';
+  TEST_ASSERT_EQUAL_STRING("", sanitizeIntendedVersion(longRev).c_str());
+}
+
+static void test_unprintable_intended_version_falls_back_to_empty() {
+  TEST_ASSERT_EQUAL_STRING(
+      "", sanitizeIntendedVersion(String("47ac\r\n9d")).c_str());
+}
+
+// ---------------------------------------------------------------------------
 
 int main(int, char**) {
   UNITY_BEGIN();
@@ -270,5 +292,8 @@ int main(int, char**) {
   RUN_TEST(test_unprintable_timezone_falls_back_to_default);
   RUN_TEST(test_invalid_device_name_falls_back_to_chip_default_sentinel);
   RUN_TEST(test_out_of_range_port_falls_back_to_default);
+  RUN_TEST(test_intended_version_passes_clean_rev_string);
+  RUN_TEST(test_overlong_intended_version_falls_back_to_empty);
+  RUN_TEST(test_unprintable_intended_version_falls_back_to_empty);
   return UNITY_END();
 }

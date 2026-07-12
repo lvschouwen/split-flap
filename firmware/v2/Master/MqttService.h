@@ -44,6 +44,13 @@ bool mqttNotificationActive();
 // send trumps it, v1 #130 rule). Staged; the tick applies it.
 void mqttCancelNotification();
 
+// Any task: arm the show-then-revert overlay for web transient text (#219)
+// the caller just queued to the display. The clockTask gate flips
+// immediately in the caller's task; the dwell deadline is stamped by the
+// next tick. dwellSeconds <= 0 -> the 600 s default. Works broker-less
+// (v1 rule: calibration transients exist without a broker).
+void mqttStartNotificationDwell(long dwellSeconds);
+
 // Any task: force-close the session before OTA flash writes begin (#116
 // freeze). Abrupt on purpose — the broker fires the retained "offline" LWT,
 // keeping HA availability truthful without an in-flight publish.
