@@ -97,7 +97,7 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
   return count;
 }
 
-// Worst case (16 valid units, all counters saturated) is ~2.1 KB — same
+// Worst case (16 valid units, all counters saturated) measures 2047 B — same
 // truncation contract as v1, cap raised over v1's 2048 for the spliced
 // reflash progress object (#205, ~70 B) and the per-unit "ae" field (#215)
 // so a full display can't push the payload into the headline-only fallback.
