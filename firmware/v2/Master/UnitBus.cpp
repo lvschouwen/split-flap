@@ -505,14 +505,33 @@ static bool twibootReadFlashPage(int addr, uint16_t flashAddr, uint8_t* out) {
   return true;
 }
 
+// The 132-byte page burst must fit the Wire TX buffer in one transaction —
+// a smaller buffer makes Wire.write() silently drop the page tail and every
+// verify fails (#243). The -DI2C_BUFFER_LENGTH=256 build flag provides it.
+static_assert(I2C_BUFFER_LENGTH >= TWIBOOT_PAGE_SIZE + 4,
+              "Wire buffer too small for a twiboot page write — "
+              "build with -DI2C_BUFFER_LENGTH=256 (#243)");
+
 static int twibootWriteFlashPage(int addr, uint16_t flashAddr,
                                  const uint8_t* page) {
   Wire.beginTransmission((uint8_t)addr);
-  Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
-  Wire.write((uint8_t)TWIBOOT_MEMTYPE_FLASH);
-  Wire.write((uint8_t)((flashAddr >> 8) & 0xFF));
-  Wire.write((uint8_t)(flashAddr & 0xFF));
-  for (int i = 0; i < TWIBOOT_PAGE_SIZE; i++) Wire.write(page[i]);
+  size_t queued = 0;
+  queued += Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
+  queued += Wire.write((uint8_t)TWIBOOT_MEMTYPE_FLASH);
+  queued += Wire.write((uint8_t)((flashAddr >> 8) & 0xFF));
+  queued += Wire.write((uint8_t)(flashAddr & 0xFF));
+  for (int i = 0; i < TWIBOOT_PAGE_SIZE; i++) queued += Wire.write(page[i]);
+  if (queued != TWIBOOT_PAGE_SIZE + 4) {
+    // write() only queues into RAM, so bailing here keeps the truncated
+    // page off the bus. With the 256-byte buffer this can only trip when
+    // Wire's buffer alloc failed at begin() — a state the core's own
+    // endTransmission() early-returns on (mutex left held) too; failing
+    // the flash loudly is the least-bad option.
+    SerialPrintf("twiboot page burst truncated (%u/%u queued) — "
+                 "Wire buffer too small\n",
+                 (unsigned)queued, (unsigned)(TWIBOOT_PAGE_SIZE + 4));
+    return -1;
+  }
   return Wire.endTransmission();
 }
 
