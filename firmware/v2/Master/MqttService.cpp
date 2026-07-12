@@ -108,8 +108,14 @@ static char rxPayload[sizeof(MqttInboxMessage::payload)];
 
 static void onMqttConnect(bool /*sessionPresent*/) { mqttJustConnected = true; }
 
+static volatile uint32_t mqttDropCounter = 0;  // System tab (#245); mqttTask
+                                               // writes, sampler reads (atomic)
+
+uint32_t mqttDropCount() { return mqttDropCounter; }
+
 static void onMqttDisconnect(espMqttClientTypes::DisconnectReason /*reason*/) {
   mqttDisconnectedEvent = true;
+  mqttDropCounter = mqttDropCounter + 1;
 }
 
 static void onMqttMessage(const espMqttClientTypes::MessageProperties& props,

@@ -12,3 +12,7 @@
 // Cross-task safety: newlib's TZ globals are lock-guarded on ESP-IDF, so
 // applying from netTask while clockTask runs localtime_r is safe.
 void clockServiceApplyTz(const MasterSettings& settings);
+
+// Seconds since the last SNTP sync completed, -1 if never (#245). Safe to
+// call from any task.
+int32_t clockNtpAgeS();

@@ -13,6 +13,7 @@
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "StatusLed.h"
+#include "SystemStats.h"
 #include "UnitBus.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
@@ -621,6 +622,7 @@ static void netTaskMain(void* arg) {
     wifiServiceTick();
     webEndpointsLoop(*ctx->settings, *ctx->store);
     statusLedTick();
+    systemStatsTick();  // #245: self-throttled to its 5 s cadence
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }

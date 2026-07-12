@@ -30,6 +30,8 @@
 #include "MdnsDiscovery.h"
 #include "MqttService.h"
 #include "SplitFlapProtocol.h"
+#include "SystemStats.h"
+#include "SystemStatsPolicy.h"
 #include "Tasks.h"
 #include "UnitBus.h"
 #include "WearPolicy.h"
@@ -768,6 +770,19 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // GET renders JSON from the snapshot copy — never touches the bus from
   // async context (the async rule is structural here: only displayTask
   // holds Wire).
+  // System tab (#245): current vitals + ~10 min sparkline history in one
+  // JSON. History is server-side (netTask's sample ring) so a freshly
+  // opened tab has depth immediately; the browser polls at 2 s.
+  server.on("/system/stats", HTTP_GET, [](AsyncWebServerRequest* request) {
+    std::unique_ptr<char[]> buf(new char[SYSTEM_STATS_JSON_CAP]);
+    size_t n = systemStatsJson(buf.get(), SYSTEM_STATS_JSON_CAP);
+    if (n == 0 || n >= SYSTEM_STATS_JSON_CAP) {
+      request->send(500, "text/plain", F("stats unavailable"));
+      return;
+    }
+    request->send(200, "application/json", buf.get());
+  });
+
   server.on("/units/health", HTTP_GET, [](AsyncWebServerRequest* request) {
     DisplaySnapshot snap = displaySnapshotGet();
     // Heap, not stack: ~2 KB doesn't belong on the async_tcp task stack,

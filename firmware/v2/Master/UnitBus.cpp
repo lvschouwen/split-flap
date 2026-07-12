@@ -61,6 +61,24 @@ static void recoverBusAfterFailedRead() {
   unitBusInit();
 }
 
+// Bus transaction counters for the System tab (#245). displayTask is the
+// only writer (sole Wire toucher); netTask's stats sampler reads them —
+// aligned 32-bit reads are atomic on the S3, no lock needed. The ~10 Hz
+// checkIfMoving() idle polls are deliberately NOT counted: they'd drown
+// the signal (real commands + queries) in keep-alive noise.
+static volatile uint32_t busTxCount = 0;
+static volatile uint32_t busErrCount = 0;
+
+uint32_t unitBusTxCount() { return busTxCount; }
+uint32_t unitBusErrCount() { return busErrCount; }
+
+static int countedTransmission() {
+  int status = Wire.endTransmission();
+  busTxCount = busTxCount + 1;
+  if (status != 0) busErrCount = busErrCount + 1;
+  return status;
+}
+
 // Shared opcode-write-then-read-back transaction behind every readUnit*
 // helper (v1 #154): write the opcode, settle, clock `n` bytes into `buf`.
 // Old firmware that predates an opcode silently drops the write (the opcode
@@ -70,11 +88,12 @@ static void recoverBusAfterFailedRead() {
 static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf, uint8_t n) {
   Wire.beginTransmission(i2cAddress);
   Wire.write(opcode);
-  if (Wire.endTransmission() != 0) return false;
+  if (countedTransmission() != 0) return false;
   delay(UNIT_RESPONSE_SETTLE_MS);
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
   if (got != n) {
     while (Wire.available()) Wire.read();
+    busErrCount = busErrCount + 1;  // short/failed read leg (#245)
     recoverBusAfterFailedRead();
     return false;
   }
@@ -183,7 +202,7 @@ static int writeToUnit(int unitIndex, uint8_t letter, uint8_t unitSpeed) {
   Wire.beginTransmission(toI2cAddress(unitIndex));
   Wire.write(letter);
   Wire.write(unitSpeed);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 // Checks if a single unit is moving (1-byte rotation status). Called ~10x/s

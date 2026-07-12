@@ -153,6 +153,7 @@ function applySettings(s) {
 		setCalibrationUnitsFromSettings(s);
 	}
 	setMqttPill(s.mqttHost || "", s.mqttConnected === true);
+	window.lastSettings = s;  // System tab reuses version etc. (#245)
 }
 
 function loadPage() {
@@ -176,6 +177,7 @@ function startUi(s) {
 	initTabs();
 	initSegControls();
 	initLogPanel();
+	initSystemTab();
 	initMasterFirmwareUpload();
 	loadUnitHealth();
 
@@ -207,7 +209,7 @@ window.addEventListener("load", loadPage);
 
 // ===================== views / tabs =====================
 
-var TAB_NAMES = ["home", "settings", "maintenance", "logs"];
+var TAB_NAMES = ["home", "settings", "maintenance", "system", "logs"];
 
 function currentTabFromHash() {
 	var name = location.hash.replace("#", "");
@@ -216,7 +218,7 @@ function currentTabFromHash() {
 
 //"setup" is a view but not a tab: the tabbar stays hidden while it's up.
 function showView(name) {
-	["home", "settings", "maintenance", "logs", "setup"].forEach(function(view) {
+	["home", "settings", "maintenance", "system", "logs", "setup"].forEach(function(view) {
 		var section = document.getElementById("section-" + view);
 		if (section) section.classList.toggle("on", view === name);
 	});
@@ -1098,6 +1100,103 @@ function initLogPanel() {
 	document.addEventListener("sf-tabchange", function(event) {
 		onLogsTab = event.detail === "logs";
 		syncPolling();
+	});
+	document.addEventListener("visibilitychange", syncPolling);
+}
+
+// ===================== System tab (#245) =====================
+//Polls /system/stats at 2 s while the tab is visible; the device keeps
+//~10 min of 5 s samples server-side, so the charts have depth immediately.
+
+function formatBytes(n) {
+	if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+	if (n >= 1024) return Math.round(n / 1024) + " KB";
+	return n + " B";
+}
+
+//Min-max normalized polyline in a 100x28 viewBox. Flat series draw a
+//midline instead of dividing by zero.
+function drawSparkline(svgId, series) {
+	var svg = document.getElementById(svgId);
+	if (!svg) return;
+	removeAllChildren(svg);
+	if (!series || series.length < 2) return;
+	var min = Math.min.apply(null, series), max = Math.max.apply(null, series);
+	var span = max - min;
+	var points = [];
+	for (var i = 0; i < series.length; i++) {
+		var x = (i / (series.length - 1)) * 100;
+		var y = span === 0 ? 14 : 26 - ((series[i] - min) / span) * 24;
+		points.push(x.toFixed(1) + "," + y.toFixed(1));
+	}
+	var line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+	line.setAttribute("points", points.join(" "));
+	svg.appendChild(line);
+}
+
+function setStat(id, text) {
+	var el = document.getElementById(id);
+	if (el) el.textContent = text;
+}
+
+function renderSystemStats(data) {
+	var now = data.now || {}, hist = data.hist || {};
+	document.getElementById("systemStatsStatus").className = "pill ok";
+	document.getElementById("systemStatsStatus").textContent = "live";
+	setStat("statRssi", now.rssi === 0 ? "—" : now.rssi + " dBm");
+	setStat("statHeap", formatBytes(now.heap || 0));
+	setStat("statCpu0", (now.cpu0 || 0) + "%");
+	setStat("statCpu1", (now.cpu1 || 0) + "%");
+	setStat("statTemp", ((now.temp || 0) / 10).toFixed(1) + " °C");
+	setStat("statPsram", formatBytes(now.psram || 0));
+	setStat("statMaxAlloc", "largest block " + formatBytes(now.maxAlloc || 0));
+	setStat("statI2cTx", now.i2cTx);
+	setStat("statI2cErr", now.i2cErr);
+	setStat("statMqttDrops", now.mqttDrops);
+	setStat("statNtpAge", now.ntpAge < 0 ? "never" : formatUptime(now.ntpAge) + " ago");
+	setStat("statUptime", formatUptime(now.uptime || 0));
+	setStat("statReset", now.reset || "—");
+	setStat("statMinHeap", formatBytes(now.minHeap || 0));
+	drawSparkline("sparkRssi", hist.rssi);
+	drawSparkline("sparkHeap", hist.heap);
+	drawSparkline("sparkCpu0", hist.cpu0);
+	drawSparkline("sparkCpu1", hist.cpu1);
+	drawSparkline("sparkTemp", hist.temp);
+}
+
+function initSystemTab() {
+	var pollHandle = null;
+	var onSystemTab = false;
+
+	function fetchStats() {
+		fetch("/system/stats", { cache: "no-store" })
+			.then(function(r) { return r.json(); })
+			.then(renderSystemStats)
+			.catch(function() {
+				var pill = document.getElementById("systemStatsStatus");
+				pill.className = "pill off";
+				pill.textContent = "unreachable";
+			});
+	}
+
+	function syncPolling() {
+		var want = onSystemTab && !document.hidden;
+		if (want && pollHandle === null) {
+			fetchStats();
+			pollHandle = setInterval(fetchStats, 2000);
+		} else if (!want && pollHandle !== null) {
+			clearInterval(pollHandle);
+			pollHandle = null;
+		}
+	}
+
+	document.addEventListener("sf-tabchange", function(event) {
+		onSystemTab = event.detail === "system";
+		syncPolling();
+		//The firmware version already rides /settings — reuse the cached copy.
+		if (onSystemTab && window.lastSettings && window.lastSettings.version) {
+			setStat("statVersion", window.lastSettings.version);
+		}
 	});
 	document.addEventListener("visibilitychange", syncPolling);
 }
