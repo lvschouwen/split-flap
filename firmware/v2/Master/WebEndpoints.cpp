@@ -267,6 +267,11 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     request->send(request->beginResponse(200, "image/png", FAVICON_PNG,
                                          FAVICON_PNG_LEN));
   });
+  // Full IANA→POSIX timezone table (#252), baked from the vendored
+  // posix_tz_db zones.csv; the Settings type-ahead fetches it lazily.
+  server.on("/tz.json", HTTP_GET, [](AsyncWebServerRequest* request) {
+    serveGzipAsset(request, "application/json", TZ_JSON_GZ, TZ_JSON_GZ_LEN);
+  });
 
   // --- reads ---------------------------------------------------------------
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest* request) {

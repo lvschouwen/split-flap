@@ -11,26 +11,6 @@
 //glyphs before lookup, so users can type either form.
 const CALIBRATION_LETTERS = [' ','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z','$','&','#','0','1','2','3','4','5','6','7','8','9',':','.','!','?','-'];
 
-//Curated POSIX TZ strings for the timezone dropdown (issue #48). Kept
-//intentionally short — the ESP-01 serves this page from PROGMEM and the
-//flash budget is tight. Strings sourced from:
-//https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
-const TIMEZONE_OPTIONS = [
-	{ value: "",                               label: "UTC" },
-	{ value: "GMT0BST,M3.5.0/1,M10.5.0",       label: "Europe/London" },
-	{ value: "CET-1CEST,M3.5.0,M10.5.0/3",     label: "Europe/Amsterdam (CET/CEST)" },
-	{ value: "EET-2EEST,M3.5.0/3,M10.5.0/4",   label: "Europe/Helsinki (EET/EEST)" },
-	{ value: "EST5EDT,M3.2.0,M11.1.0",         label: "America/New_York" },
-	{ value: "CST6CDT,M3.2.0,M11.1.0",         label: "America/Chicago" },
-	{ value: "MST7MDT,M3.2.0,M11.1.0",         label: "America/Denver" },
-	{ value: "PST8PDT,M3.2.0,M11.1.0",         label: "America/Los_Angeles" },
-	{ value: "<-03>3",                         label: "America/Sao_Paulo" },
-	{ value: "JST-9",                          label: "Asia/Tokyo" },
-	{ value: "CST-8",                          label: "Asia/Shanghai" },
-	{ value: "IST-5:30",                       label: "Asia/Kolkata" },
-	{ value: "<+04>-4",                        label: "Asia/Dubai" },
-	{ value: "AEST-10AEDT,M10.1.0,M4.1.0/3",   label: "Australia/Sydney" }
-];
 const CALIBRATION_STEPS_PER_FLAP = 2038 / 45;
 
 var unitCount = 0;
@@ -214,7 +194,6 @@ function applySettings(s) {
 	if (!initialised) {
 		document.getElementById("rangeFlapSpeed").value = s.flapSpeed;
 		updateSpeedSlider();
-		populateTimezoneOptions();
 		setTimezone(s.timezonePosix || "");
 		setDeviceName(s.deviceName || "", s.effectiveDeviceName || "");
 		setMqttFields(s.mqttHost || "", s.mqttPort || "", s.mqttUser || "", s.mqttPasswordSet === true);
@@ -507,28 +486,60 @@ function resetUnits() {
 
 // ===================== Settings =====================
 
-function populateTimezoneOptions() {
-	var select = document.getElementById("selectTimezone");
-	if (select.children.length > 0) return;
-	TIMEZONE_OPTIONS.forEach(function(tz) {
-		var opt = document.createElement("option");
-		opt.value = tz.value;
-		opt.textContent = tz.label;
-		select.appendChild(opt);
+//Full IANA timezone table (#252): fetched lazily from /tz.json — baked at
+//build time from the vendored posix_tz_db zones.csv, ~460 zones. Keys are
+//IANA names, values POSIX strings; "UTC" maps to "" (the stored default).
+//The old 14-entry curated list was an ESP-01 flash-budget fossil.
+var tzTable = null;
+
+function loadTimezoneTable(done) {
+	if (tzTable) { done(); return; }
+	fetch("/tz.json")
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(table) {
+			tzTable = table;
+			var list = document.getElementById("tzList");
+			Object.keys(table).forEach(function(name) {
+				var opt = document.createElement("option");
+				opt.value = name;
+				list.appendChild(opt);
+			});
+			done();
+		})
+		.catch(function() { done(); });  //table stays null — raw POSIX mode
+}
+
+//Show the stored POSIX string as its IANA name. Many zones share a POSIX
+//rule, so prefer the name the user actually picked (remembered locally);
+//an unknown POSIX (custom / older firmware) stays visible raw so a save
+//round-trips it unchanged.
+function setTimezone(tzPosix) {
+	loadTimezoneTable(function() {
+		var input = document.getElementById("inputTimezone");
+		if (tzTable) {
+			var remembered = localStorage.getItem("sf-tz-name");
+			if (remembered && tzTable[remembered] === tzPosix) {
+				input.value = remembered;
+				return;
+			}
+			var names = Object.keys(tzTable);
+			for (var i = 0; i < names.length; i++) {
+				if (tzTable[names[i]] === tzPosix) { input.value = names[i]; return; }
+			}
+		}
+		input.value = tzPosix;
 	});
 }
 
-//If the stored POSIX TZ isn't in the dropdown (compile-time fallback or an
-//older firmware), surface it as a "Custom" option so it isn't lost on save.
-function setTimezone(tz) {
-	var select = document.getElementById("selectTimezone");
-	var match = Array.prototype.find.call(select.options, function(opt) { return opt.value === tz; });
-	if (match) { select.value = tz; return; }
-	var custom = document.createElement("option");
-	custom.value = tz;
-	custom.textContent = "Custom: " + tz;
-	select.insertBefore(custom, select.firstChild);
-	select.value = tz;
+//IANA name -> POSIX; any other input is sent as a raw POSIX string (the
+//previous "Custom" option, now just typed directly).
+function timezoneFieldPosix() {
+	var v = document.getElementById("inputTimezone").value.trim();
+	if (tzTable && Object.prototype.hasOwnProperty.call(tzTable, v)) {
+		localStorage.setItem("sf-tz-name", v);
+		return tzTable[v];
+	}
+	return v;
 }
 
 function setDeviceName(storedName, effectiveName) {
@@ -557,7 +568,7 @@ function saveDeviceCard() {
 	showStatus("deviceCardStatus", "Saving…", "pending");
 	postSettingsFields({
 		deviceName: document.getElementById("inputDeviceName").value,
-		timezone: document.getElementById("selectTimezone").value
+		timezone: timezoneFieldPosix()
 	}, function(ok, result) {
 		if (!ok) showStatus("deviceCardStatus", "✘ Save failed — check the device name.", "error");
 		else if (result === "ok-reboot") showStatus("deviceCardStatus", "✔ Saved. The device name applies after a reboot." + REBOOT_NOW_LINK, "success");
