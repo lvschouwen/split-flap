@@ -1121,9 +1121,13 @@ void webDisplayEventsTick() {
   if ((int32_t)(nowMs - nextCheckMs) < 0) return;
   nextCheckMs = nowMs + 100;
 
+  // count() before consuming the change: the library runs onConnect before
+  // inserting the client into its list, so a change landing in that window
+  // must stay unconsumed for the next tick. The resulting duplicate push of
+  // an already-shown text is deduped by the mirror's frame compare.
+  if (sseEvents.count() == 0) return;
   DisplaySnapshot snap = displaySnapshotGet();
   if (!displayEventDue(tracker, snap.currentText)) return;
-  if (sseEvents.count() == 0) return;  // change recorded; nobody listening
   sseEvents.send(buildDisplayEventJson(snap.currentText).c_str(), "display",
                  millis());
 }

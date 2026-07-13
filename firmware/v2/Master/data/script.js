@@ -39,6 +39,12 @@ function wireToGlyph(ch) {
 function buildMirror(width) {
 	var mirror = document.getElementById("mirror");
 	var strip = document.getElementById("healthStrip");
+	//Discarded tiles must not keep riffling against detached DOM nodes —
+	//kill their timers before the rebuild drops the references.
+	mirrorTiles.forEach(function(tile) {
+		(tile._timers || []).forEach(clearTimeout);
+		if (tile._riffle) clearInterval(tile._riffle);
+	});
 	while (mirror.firstChild) mirror.removeChild(mirror.firstChild);
 	while (strip.firstChild) strip.removeChild(strip.firstChild);
 	mirrorTiles = [];
@@ -491,6 +497,11 @@ function resetUnits() {
 //IANA names, values POSIX strings; "UTC" maps to "" (the stored default).
 //The old 14-entry curated list was an ESP-01 flash-budget fossil.
 var tzTable = null;
+//Saving the device card before setTimezone has populated the field must
+//not post the transient empty input (= silently switch the device to
+//UTC) — until then the timezone key is omitted and the server's
+//provided-field gating leaves the stored value alone.
+var tzFieldReady = false;
 
 function loadTimezoneTable(done) {
 	if (tzTable) { done(); return; }
@@ -516,6 +527,7 @@ function loadTimezoneTable(done) {
 function setTimezone(tzPosix) {
 	loadTimezoneTable(function() {
 		var input = document.getElementById("inputTimezone");
+		tzFieldReady = true;
 		if (tzTable) {
 			var remembered = localStorage.getItem("sf-tz-name");
 			if (remembered && tzTable[remembered] === tzPosix) {
@@ -566,10 +578,9 @@ function setMqttPill(host, connected) {
 
 function saveDeviceCard() {
 	showStatus("deviceCardStatus", "Saving…", "pending");
-	postSettingsFields({
-		deviceName: document.getElementById("inputDeviceName").value,
-		timezone: timezoneFieldPosix()
-	}, function(ok, result) {
+	var fields = { deviceName: document.getElementById("inputDeviceName").value };
+	if (tzFieldReady) fields.timezone = timezoneFieldPosix();
+	postSettingsFields(fields, function(ok, result) {
 		if (!ok) showStatus("deviceCardStatus", "✘ Save failed — check the device name.", "error");
 		else if (result === "ok-reboot") showStatus("deviceCardStatus", "✔ Saved. The device name applies after a reboot." + REBOOT_NOW_LINK, "success");
 		else showStatus("deviceCardStatus", "✔ Saved.", "success", 5000);
