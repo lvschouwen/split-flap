@@ -223,14 +223,22 @@ function updateClusterBanner(s) {
 	var clustered = !!s.clusterState && s.clusterState !== "standalone";
 	el.classList.toggle("hidden", !clustered);
 	if (clustered) {
+		//leaderName/leaderHost come off an unauthenticated LAN POST — build
+		//the banner with DOM nodes, never markup strings.
 		var leader = s.clusterLeaderName || s.clusterLeaderHost || "leader";
-		var html = "Clustered — row " + (Number(s.clusterRow) + 1) + " of " + escapeHtml(leader);
-		if (s.clusterState === "local-fallback") html += " (leader unreachable — showing local clock)";
-		else if (s.clusterState === "grace") html += " (waiting for leader)";
-		if (s.clusterLeaderHost) {
-			html += ' · <a href="http://' + escapeHtml(s.clusterLeaderHost) + '/">open leader</a>';
+		var text = "Clustered — row " + (Number(s.clusterRow) + 1) + " of " + leader;
+		if (s.clusterState === "local-fallback") text += " (leader unreachable — showing local clock)";
+		else if (s.clusterState === "grace") text += " (waiting for leader)";
+		el.textContent = text;
+		//Strict hostname[:port] allowlist — anything else gets no link at all.
+		var host = String(s.clusterLeaderHost || "");
+		if (/^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {
+			el.appendChild(document.createTextNode(" · "));
+			var link = document.createElement("a");
+			link.href = "http://" + host + "/";
+			link.textContent = "open leader";
+			el.appendChild(link);
 		}
-		el.innerHTML = html;
 	}
 	["inputText", "buttonSend", "selectDuration"].forEach(function(id) {
 		var control = document.getElementById(id);
