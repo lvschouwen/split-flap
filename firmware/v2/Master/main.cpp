@@ -11,6 +11,7 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 
+#include "BuildVersion.h"  // GIT_REV — boot banner
 #include "ClockService.h"
 #include "DeviceIdentity.h"
 #include "DisplayWidth.h"
@@ -117,7 +118,7 @@ void setup() {
   systemStatsInit();        // #245: before tasksInit() starts netTask
 
   SerialPrintln(F(""));
-  SerialPrintln(F("split-flap v2 master — Phase 1 (#58)"));
+  SerialPrintln(F("split-flap v2 master — " GIT_REV));
   SerialPrintf("chip: %s rev %d, %d cores @ %d MHz\n", ESP.getChipModel(),
                ESP.getChipRevision(), ESP.getChipCores(), ESP.getCpuFreqMHz());
   SerialPrintf("flash: %u KB, free heap: %u KB\n",

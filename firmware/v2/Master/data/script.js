@@ -11,26 +11,6 @@
 //glyphs before lookup, so users can type either form.
 const CALIBRATION_LETTERS = [' ','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z','$','&','#','0','1','2','3','4','5','6','7','8','9',':','.','!','?','-'];
 
-//Curated POSIX TZ strings for the timezone dropdown (issue #48). Kept
-//intentionally short — the ESP-01 serves this page from PROGMEM and the
-//flash budget is tight. Strings sourced from:
-//https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
-const TIMEZONE_OPTIONS = [
-	{ value: "",                               label: "UTC" },
-	{ value: "GMT0BST,M3.5.0/1,M10.5.0",       label: "Europe/London" },
-	{ value: "CET-1CEST,M3.5.0,M10.5.0/3",     label: "Europe/Amsterdam (CET/CEST)" },
-	{ value: "EET-2EEST,M3.5.0/3,M10.5.0/4",   label: "Europe/Helsinki (EET/EEST)" },
-	{ value: "EST5EDT,M3.2.0,M11.1.0",         label: "America/New_York" },
-	{ value: "CST6CDT,M3.2.0,M11.1.0",         label: "America/Chicago" },
-	{ value: "MST7MDT,M3.2.0,M11.1.0",         label: "America/Denver" },
-	{ value: "PST8PDT,M3.2.0,M11.1.0",         label: "America/Los_Angeles" },
-	{ value: "<-03>3",                         label: "America/Sao_Paulo" },
-	{ value: "JST-9",                          label: "Asia/Tokyo" },
-	{ value: "CST-8",                          label: "Asia/Shanghai" },
-	{ value: "IST-5:30",                       label: "Asia/Kolkata" },
-	{ value: "<+04>-4",                        label: "Asia/Dubai" },
-	{ value: "AEST-10AEDT,M10.1.0,M4.1.0/3",   label: "Australia/Sydney" }
-];
 const CALIBRATION_STEPS_PER_FLAP = 2038 / 45;
 
 var unitCount = 0;
@@ -59,6 +39,12 @@ function wireToGlyph(ch) {
 function buildMirror(width) {
 	var mirror = document.getElementById("mirror");
 	var strip = document.getElementById("healthStrip");
+	//Discarded tiles must not keep riffling against detached DOM nodes —
+	//kill their timers before the rebuild drops the references.
+	mirrorTiles.forEach(function(tile) {
+		(tile._timers || []).forEach(clearTimeout);
+		if (tile._riffle) clearInterval(tile._riffle);
+	});
 	while (mirror.firstChild) mirror.removeChild(mirror.firstChild);
 	while (strip.firstChild) strip.removeChild(strip.firstChild);
 	mirrorTiles = [];
@@ -101,30 +87,81 @@ function padForMirror(text, width, alignment) {
 	return out;
 }
 
+//Riffle (#251): a tile travels THROUGH the drum order to its target the
+//way the hardware does (forward-only, wrap-around) instead of folding
+//once. Intermediate steps swap glyphs behind a restarted (partial) fold —
+//rapid flutter — and the final step gets the full #246 two-leaf fold.
+//Step rate follows the configured flap speed; travel is time-capped so a
+//worst-case 44-flap run stays snappy. Honors prefers-reduced-motion.
+var RIFFLE_MAX_TRAVEL_MS = 2500;
+
+function riffleStepMs() {
+	var speed = (window.lastSettings && Number(window.lastSettings.flapSpeed)) || 80;
+	return Math.max(30, 95 - Math.round(speed / 2));  // speed 80 -> 55 ms
+}
+
+function riffleTileTo(tile, wireChar, staggerIndex) {
+	var glyph = wireToGlyph(wireChar);
+	if (glyph === " ") glyph = "\u00a0";
+	if (tile._glyph === glyph) return;
+	tile._glyph = glyph;
+	//Two renders <1 s apart must not interleave: kill this tile's pending
+	//flip/riffle before scheduling the new one.
+	(tile._timers || []).forEach(clearTimeout);
+	if (tile._riffle) { clearInterval(tile._riffle); tile._riffle = null; }
+	var topG = tile.firstChild.firstChild, ch = tile.lastChild;
+
+	var n = CALIBRATION_LETTERS.length;
+	var from = CALIBRATION_LETTERS.indexOf(tile._wire || " ");
+	var to = CALIBRATION_LETTERS.indexOf(wireChar);
+	tile._wire = wireChar;
+	var dist = (from >= 0 && to >= 0) ? (to - from + n) % n : 0;
+	var reduced = window.matchMedia &&
+		window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+	function finalFold() {
+		//The .top leaf folds carrying the OLD glyph; the full-height .char
+		//swaps mid-fold, and the leaf takes the new glyph as it snaps back
+		//(animation end, 240 ms). #246.
+		tile.classList.remove("flip");
+		void tile.offsetWidth;
+		tile.classList.add("flip");
+		tile._timers.push(setTimeout(function() { ch.textContent = glyph; }, 110));
+		tile._timers.push(setTimeout(function() { topG.textContent = glyph; }, 240));
+	}
+
+	tile._timers = [setTimeout(function() {
+		if (dist <= 1 || reduced) { finalFold(); return; }
+		var stepMs = Math.max(25, Math.min(riffleStepMs(),
+			Math.floor(RIFFLE_MAX_TRAVEL_MS / dist)));
+		var at = from;
+		tile._riffle = setInterval(function() {
+			at = (at + 1) % n;
+			if (at === to) {
+				clearInterval(tile._riffle);
+				tile._riffle = null;
+				finalFold();
+				return;
+			}
+			var g = wireToGlyph(CALIBRATION_LETTERS[at]);
+			if (g === " ") g = "\u00a0";
+			//Restarted fold = one partial flap per step: drum flutter.
+			tile.classList.remove("flip");
+			void tile.offsetWidth;
+			tile.classList.add("flip");
+			ch.textContent = g;
+			topG.textContent = g;
+		}, stepMs);
+	}, staggerIndex * 45)];
+}
+
 function renderMirror(text) {
 	if (mirrorTiles.length === 0) return;
 	var frame = padForMirror(text, mirrorTiles.length, currentAlignment);
 	if (frame === mirrorShown) return;
 	mirrorShown = frame;
 	mirrorTiles.forEach(function(tile, i) {
-		var glyph = wireToGlyph(frame[i]);
-		if (glyph === " ") glyph = " ";
-		if (tile._glyph === glyph) return;
-		tile._glyph = glyph;
-		//Two renders <1 s apart must not interleave: kill this tile's
-		//pending flip before scheduling the new one.
-		(tile._timers || []).forEach(clearTimeout);
-		var topG = tile.firstChild.firstChild, ch = tile.lastChild;
-		tile._timers = [setTimeout(function() {
-			//The .top leaf folds carrying the OLD glyph; the full-height .char
-			//swaps mid-fold, and the leaf takes the new glyph as it snaps back
-			//(animation end, 240 ms). #246.
-			tile.classList.remove("flip");
-			void tile.offsetWidth;
-			tile.classList.add("flip");
-			tile._timers.push(setTimeout(function() { ch.textContent = glyph; }, 110));
-			tile._timers.push(setTimeout(function() { topG.textContent = glyph; }, 240));
-		}, i * 45)];
+		riffleTileTo(tile, frame[i], i);
 	});
 }
 
@@ -163,7 +200,6 @@ function applySettings(s) {
 	if (!initialised) {
 		document.getElementById("rangeFlapSpeed").value = s.flapSpeed;
 		updateSpeedSlider();
-		populateTimezoneOptions();
 		setTimezone(s.timezonePosix || "");
 		setDeviceName(s.deviceName || "", s.effectiveDeviceName || "");
 		setMqttFields(s.mqttHost || "", s.mqttPort || "", s.mqttUser || "", s.mqttPasswordSet === true);
@@ -197,6 +233,7 @@ function startUi(s) {
 	initSegControls();
 	initLogPanel();
 	initSystemTab();
+	initDisplayEvents();
 	initMasterFirmwareUpload();
 	loadUnitHealth();
 
@@ -222,6 +259,20 @@ function startUi(s) {
 	healthPollTimer = setInterval(function() {
 		if (!document.hidden) loadUnitHealth();
 	}, 30000);
+}
+
+//SSE display push (#251): the mirror flips the moment displayTask executes
+//a command instead of waiting on the 5 s poll — which stays untouched as
+//the fallback (EventSource reconnects on its own; a dead stream just
+//degrades to polled behavior). onConnect delivers the current text.
+function initDisplayEvents() {
+	if (!window.EventSource) return;
+	var es = new EventSource("/events");
+	es.addEventListener("display", function(event) {
+		try {
+			renderMirror(JSON.parse(event.data).text || "");
+		} catch (e) { /* malformed event — the poll catches up */ }
+	});
 }
 
 window.addEventListener("load", loadPage);
@@ -441,28 +492,73 @@ function resetUnits() {
 
 // ===================== Settings =====================
 
-function populateTimezoneOptions() {
-	var select = document.getElementById("selectTimezone");
-	if (select.children.length > 0) return;
-	TIMEZONE_OPTIONS.forEach(function(tz) {
-		var opt = document.createElement("option");
-		opt.value = tz.value;
-		opt.textContent = tz.label;
-		select.appendChild(opt);
+//Full IANA timezone list (#252): the dropdown is populated lazily from
+///tz.json — baked at build time from the vendored posix_tz_db zones.csv,
+//~460 zones. Option value = POSIX string (wire format), text = IANA name;
+//"UTC" maps to "" (the stored default). Same control as the rest of the
+//UI — the old 14-entry curated list was an ESP-01 flash-budget fossil.
+var tzListLoaded = false;
+//Saving the device card before the list has loaded must not post the
+//transient empty select (= silently switch the device to UTC) — until
+//then the timezone key is omitted and the server's provided-field gating
+//leaves the stored value alone.
+var tzFieldReady = false;
+
+function loadTimezoneOptions(done) {
+	if (tzListLoaded) { done(); return; }
+	fetch("/tz.json")
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(table) {
+			var select = document.getElementById("selectTimezone");
+			Object.keys(table).forEach(function(name) {
+				var opt = document.createElement("option");
+				opt.value = table[name];
+				opt.textContent = name;
+				select.appendChild(opt);
+			});
+			tzListLoaded = true;
+			done();
+		})
+		.catch(function() { done(); });  //list stays empty — custom-only mode
+}
+
+//Select the stored POSIX string. Many zones share a POSIX rule, so prefer
+//the option whose NAME the user actually picked (remembered locally);
+//a stored value not in the list (custom / fetch failed) surfaces as a
+//"Custom" option so it isn't lost on save — v1 behavior.
+function setTimezone(tzPosix) {
+	loadTimezoneOptions(function() {
+		var select = document.getElementById("selectTimezone");
+		tzFieldReady = true;
+		var remembered = localStorage.getItem("sf-tz-name");
+		var fallback = -1;
+		for (var i = 0; i < select.options.length; i++) {
+			if (select.options[i].value !== tzPosix) continue;
+			if (select.options[i].textContent === remembered) {
+				select.selectedIndex = i;
+				return;
+			}
+			if (fallback < 0) fallback = i;
+		}
+		if (fallback >= 0) { select.selectedIndex = fallback; return; }
+		var custom = document.createElement("option");
+		custom.value = tzPosix;
+		custom.textContent = "Custom: " + tzPosix;
+		select.insertBefore(custom, select.firstChild);
+		select.selectedIndex = 0;
 	});
 }
 
-//If the stored POSIX TZ isn't in the dropdown (compile-time fallback or an
-//older firmware), surface it as a "Custom" option so it isn't lost on save.
-function setTimezone(tz) {
+//The selected option's POSIX value; remembers the picked NAME so a shared
+//POSIX rule round-trips to the same zone next load.
+function timezoneFieldPosix() {
 	var select = document.getElementById("selectTimezone");
-	var match = Array.prototype.find.call(select.options, function(opt) { return opt.value === tz; });
-	if (match) { select.value = tz; return; }
-	var custom = document.createElement("option");
-	custom.value = tz;
-	custom.textContent = "Custom: " + tz;
-	select.insertBefore(custom, select.firstChild);
-	select.value = tz;
+	var opt = select.options[select.selectedIndex];
+	if (!opt) return "";
+	if (opt.textContent.indexOf("Custom: ") !== 0) {
+		localStorage.setItem("sf-tz-name", opt.textContent);
+	}
+	return opt.value;
 }
 
 function setDeviceName(storedName, effectiveName) {
@@ -489,10 +585,9 @@ function setMqttPill(host, connected) {
 
 function saveDeviceCard() {
 	showStatus("deviceCardStatus", "Saving…", "pending");
-	postSettingsFields({
-		deviceName: document.getElementById("inputDeviceName").value,
-		timezone: document.getElementById("selectTimezone").value
-	}, function(ok, result) {
+	var fields = { deviceName: document.getElementById("inputDeviceName").value };
+	if (tzFieldReady) fields.timezone = timezoneFieldPosix();
+	postSettingsFields(fields, function(ok, result) {
 		if (!ok) showStatus("deviceCardStatus", "✘ Save failed — check the device name.", "error");
 		else if (result === "ok-reboot") showStatus("deviceCardStatus", "✔ Saved. The device name applies after a reboot." + REBOOT_NOW_LINK, "success");
 		else showStatus("deviceCardStatus", "✔ Saved.", "success", 5000);
@@ -723,13 +818,19 @@ function renderUnitHealth(data) {
 	var width = (data && typeof data.width === "number") ? data.width : units.length;
 
 	//Board header strip: one segment per unit slot, aligned under its tile.
+	//Mid-reflash a unit in bootloader mode is expected, not broken (#249):
+	//yellow instead of red, and the one being written pulses.
+	var rf = (data && data.reflash) || null;
+	var rfActive = rf !== null && reflashIsRunning(rf);
 	var strip = document.getElementById("healthStrip");
 	var silent = [];
 	if (strip.children.length === width) {
 		for (var i = 0; i < width; i++) {
 			var u = units[i];
 			var cls = "";
-			if (!u || u.st !== 1) { cls = "bad"; silent.push(i + 1); }
+			if (rfActive && u && u.st === 2) {
+				cls = (rf.state === "flashing" && rf.cur === u.a) ? "flashing cur" : "flashing";
+			} else if (!u || u.st !== 1) { cls = "bad"; silent.push(i + 1); }
 			else if (unitRowIsFaulty(u) || u.fw === 1) cls = "warn";
 			strip.children[i].className = cls;
 		}
@@ -1001,7 +1102,12 @@ function pollReflashProgress() {
 				reflashPollTimer = setTimeout(pollReflashProgress, 2000);
 				return;
 			}
-			if (trackReflashProgress(rf)) return;
+			if (trackReflashProgress(rf)) {
+				//Same payload carries the mid-job unit facts — keep the
+				//board strip live (yellow) while the job runs (#249).
+				renderUnitHealth(json);
+				return;
+			}
 			//Job over: unlock, grade, and render the job's final reprobe.
 			setMaintenanceControlsDisabled(false);
 			if (rf.state === "done") {
@@ -1186,7 +1292,7 @@ function renderSystemStats(data) {
 	setStat("statCpu1", (now.cpu1 || 0) + "%");
 	setStat("statTemp", ((now.temp || 0) / 10).toFixed(1) + " °C");
 	setStat("statPsram", formatBytes(now.psram || 0));
-	setStat("statMaxAlloc", "largest block " + formatBytes(now.maxAlloc || 0));
+	setStat("statMaxAlloc", "largest contiguous " + formatBytes(now.maxAlloc || 0));
 	setStat("statI2cTx", now.i2cTx);
 	setStat("statI2cErr", now.i2cErr);
 	setStat("statMqttDrops", now.mqttDrops);

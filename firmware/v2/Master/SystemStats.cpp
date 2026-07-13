@@ -20,7 +20,7 @@ static uint32_t prevIdle[2] = {0, 0};
 static uint32_t prevTotalUs = 0;
 static bool cpuPrimed = false;
 
-static SystemStatsRing ring;
+static SystemStatsSampler sampler;
 static SemaphoreHandle_t ringMutex = nullptr;
 static uint32_t nextSampleMs = 0;
 
@@ -35,7 +35,7 @@ void systemStatsInit() {
 void systemStatsTick() {
   uint32_t nowMs = millis();
   if ((int32_t)(nowMs - nextSampleMs) < 0) return;
-  nextSampleMs = nowMs + SYSTEM_STATS_INTERVAL_S * 1000UL;
+  nextSampleMs = nowMs + SYSTEM_STATS_FAST_INTERVAL_S * 1000UL;
 
   SystemSample s;
   s.rssi = WiFi.status() == WL_CONNECTED ? (int16_t)WiFi.RSSI() : 0;
@@ -58,7 +58,7 @@ void systemStatsTick() {
   cpuPrimed = true;
 
   xSemaphoreTake(ringMutex, portMAX_DELAY);
-  systemStatsPush(ring, s);
+  systemStatsIntake(sampler, s);  // dual-rate: latest 1 s, ring 5 s (#251)
   xSemaphoreGive(ringMutex);
 }
 
@@ -74,7 +74,7 @@ size_t systemStatsJson(char* buf, size_t cap) {
            webResetReasonString());
 
   xSemaphoreTake(ringMutex, portMAX_DELAY);
-  size_t n = buildSystemStatsJson(buf, cap, ring, now);
+  size_t n = buildSystemStatsJson(buf, cap, sampler, now);
   xSemaphoreGive(ringMutex);
   return n;
 }

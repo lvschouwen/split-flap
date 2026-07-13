@@ -84,11 +84,15 @@ body {
 }
 .health span.warn { background: var(--amber); opacity: 1; }
 .health span.bad { background: var(--warn); opacity: 1; animation: pulse 1.6s infinite; }
+/* Mid-reflash (#249): bootloader mode is expected — amber; the unit being
+   written pulses faster than the fault pulse. */
+.health span.flashing { background: var(--amber); opacity: 1; }
+.health span.flashing.cur { animation: pulse .8s infinite; }
 @keyframes pulse { 50% { opacity: .4; } }
 .health-note { text-align: center; font-size: 13px; color: var(--muted); margin-top: 8px; font-family: var(--mono); }
 .health-note b { color: var(--amber); font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
-	.tile.flip .top, .health span.bad { animation: none; }
+	.tile.flip .top, .health span.bad, .health span.flashing.cur { animation: none; }
 }
 
 /* ---------- nav: board strip (#246) ---------- */

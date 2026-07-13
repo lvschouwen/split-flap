@@ -130,6 +130,19 @@ verified against the live catalogue before ordering.
 The custom master board was cancelled (#103/#178/#181 closed; master =
 S3 devkit + minimal carrier). J7 no longer exists as a decision.
 
+## 12. Rail V/A monitoring on the devkit carrier — proposed 2026-07-13 (#253)
+
+Add an **INA226** current-shunt monitor (I2C, +2 mΩ shunt) on the
+carrier's 12 V rail, upstream of the row fuses. Rationale: the S3 has
+no on-chip supply sensing, so brownout today is *inferred* from
+unit-side lifetime reset counters (#139) — a rail monitor makes it a
+measurement (live volts/amps tile on the firmware's System tab, and an
+empirical answer to reflash-homing inrush questions like v1 #138 /
+batch sizing #250). Decisions pending: shunt value vs. full-scale
+range at 15 A, whether it shares the unit-bus I2C pins or gets its own,
+and LCSC availability (INA226AIDGSR or the cheaper INA219 if 15 A
+headroom allows an external shunt anyway).
+
 ## Resolved decisions (closed; recorded for transparency)
 
 - **RS-485 transceiver — resolved 2026-07-09 (#179)**: **TI THVD1410**,
