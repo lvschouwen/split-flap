@@ -279,6 +279,76 @@ static void test_reflash_json_shapes() {
       buf);
 }
 
+// --- self-test op (#265) -------------------------------------------------------
+
+static void test_fresh_snapshot_selftest_slot_is_pending() {
+  DisplaySnapshot snap;
+  TEST_ASSERT_EQUAL_UINT32(0, snap.lastSelfTest.seq);
+  TEST_ASSERT_TRUE(snap.lastSelfTest.outcome == SelfTestOutcome::Pending);
+  TEST_ASSERT_FALSE(snap.lastFrameValid);
+}
+
+static void test_selftest_command_counts_without_mutation() {
+  DisplaySnapshot snap;
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeSelfTestCommand(9, 3)));
+  TEST_ASSERT_EQUAL(1, snap.commandsProcessed);
+  TEST_ASSERT_EQUAL_STRING("", snap.currentText);
+}
+
+static void test_apply_selftest_result_fills_the_slot() {
+  DisplaySnapshot snap;
+  SelfTestSlot slot;
+  slot.seq = 5;
+  slot.addr = 3;
+  slot.outcome = SelfTestOutcome::Ok;
+  slot.stepsPerRev = 2041;
+  slot.hallWindowSteps = 90;
+  slot.revTimeMs = 6120;
+  displayApplySelfTestResult(snap, slot);
+  TEST_ASSERT_EQUAL_UINT32(5, snap.lastSelfTest.seq);
+  TEST_ASSERT_EQUAL_UINT16(2041, snap.lastSelfTest.stepsPerRev);
+}
+
+static void test_selftest_json_shapes() {
+  SelfTestSlot slot;
+  char buf[128];
+
+  // Nothing executed yet -> a queried seq is pending.
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"pending\"}", buf);
+
+  // Ok carries the three measurements.
+  slot.seq = 4;
+  slot.outcome = SelfTestOutcome::Ok;
+  slot.stepsPerRev = 2041;
+  slot.hallWindowSteps = 90;
+  slot.revTimeMs = 6120;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"ok\",\"steps_per_rev\":2041,\"hall_window\":90,"
+      "\"rev_time_ms\":6120}",
+      buf);
+
+  // Failure vocabulary.
+  slot.outcome = SelfTestOutcome::Timeout;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"timeout\"}", buf);
+  slot.outcome = SelfTestOutcome::UnitFailed;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"unit-failed\"}",
+                           buf);
+  slot.outcome = SelfTestOutcome::Unsupported;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"unsupported\"}",
+                           buf);
+
+  // An older seq answering for a newer query -> pending; newer slot -> expired.
+  buildSelfTestJson(buf, sizeof(buf), slot, 9);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"pending\"}", buf);
+  buildSelfTestJson(buf, sizeof(buf), slot, 2);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"expired\"}", buf);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_snapshot_defaults);
@@ -304,5 +374,9 @@ int main(int, char**) {
   RUN_TEST(test_gate_reopens_after_job_finishes);
   RUN_TEST(test_reflash_units_command_counts_without_touching_text);
   RUN_TEST(test_reflash_json_shapes);
+  RUN_TEST(test_fresh_snapshot_selftest_slot_is_pending);
+  RUN_TEST(test_selftest_command_counts_without_mutation);
+  RUN_TEST(test_apply_selftest_result_fills_the_slot);
+  RUN_TEST(test_selftest_json_shapes);
   return UNITY_END();
 }

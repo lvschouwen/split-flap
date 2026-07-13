@@ -181,7 +181,7 @@
 
 				<div class="card">
 					<h2>Unit health <span id="unitHealthSummary" class="pill off">—</span></h2>
-					<p class="note">Per-unit diagnostics over I2C: firmware, uptime, lifetime brownout/watchdog resets, last-home result and reset cause.</p>
+					<p class="note">Per-unit diagnostics over I2C: firmware, uptime, lifetime brownout/watchdog resets, last-home result, reset cause and drum drift (measured hall-vs-belief deviations; drifted units silently re-home at idle).</p>
 					<div class="row">
 						<button type="button" class="btn" onclick="refreshUnitHealth()">Refresh (re-polls every unit)</button>
 						<button type="button" class="btn" onclick="resetUnits()">Reset unit calibration</button>
@@ -193,7 +193,7 @@
 							<thead>
 								<tr>
 									<th>#</th><th>Addr</th><th>State</th><th>FW</th><th>Uptime</th>
-									<th>Brown</th><th>WD</th><th>Bad&nbsp;cmd</th><th>Home</th><th>Reset&nbsp;cause</th><th>Wear</th>
+									<th>Brown</th><th>WD</th><th>Bad&nbsp;cmd</th><th>Home</th><th>Reset&nbsp;cause</th><th>Wear</th><th>Drift</th>
 								</tr>
 							</thead>
 							<tbody id="unitHealthBody"></tbody>

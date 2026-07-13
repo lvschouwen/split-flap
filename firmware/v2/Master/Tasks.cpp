@@ -48,6 +48,16 @@ static constexpr UBaseType_t MQTT_INBOX_DEPTH = 8;
 // homing start, same margin class as the 1500 ms boot delay.
 static constexpr uint32_t ADDRESS_OP_SETTLE_MS = 3000;
 
+// Self-test wait (#265): the unit's diagnostic is ~2 revolutions at homing
+// speed (~12-15 s) but can queue behind a slow in-flight move unit-side, so
+// the window is generous — and it re-arms once RUNNING is first observed,
+// so the true worst-case displayTask block is ~2x this constant. Polled at
+// 500 ms; three consecutive invalid replies with none ever valid =
+// firmware predating the opcode.
+static constexpr uint32_t SELF_TEST_TIMEOUT_MS = 45000;
+static constexpr uint32_t SELF_TEST_POLL_MS = 500;
+static constexpr int SELF_TEST_UNSUPPORTED_POLLS = 3;
+
 static StaticTask_t displayTaskBuf, clockTaskBuf, netTaskBuf, mqttTaskBuf;
 static StackType_t displayTaskStack[DISPLAY_TASK_STACK];
 static StackType_t clockTaskStack[CLOCK_TASK_STACK];
@@ -346,6 +356,9 @@ static void displayTaskMain(void*) {
           // v1's lastShowUnitWriteErrors — the MQTT unitErrors telemetry
           // input (#224).
           local.lastShowWriteErrors = errs > 0 ? (uint8_t)errs : 0;
+          // The "intended" side of the displayed==intended check (#264).
+          memcpy(local.lastFrameLetters, letters, sizeof(letters));
+          local.lastFrameValid = true;
           break;
         }
         case DisplayOpcode::Probe:
@@ -382,6 +395,14 @@ static void displayTaskMain(void*) {
         }
         case DisplayOpcode::Home: {
           int status = unitBusHome(cmd.unitAddress);
+          if (status == 0 && local.lastFrameValid) {
+            // The unit parks at blank — keep the intended frame truthful so
+            // the #264 mismatch check doesn't flag the deliberate home.
+            int idx = cmd.unitAddress - SFP_I2C_ADDRESS_BASE;
+            if (idx >= 0 && idx < UNITS_AMOUNT) {
+              local.lastFrameLetters[idx] = 0;
+            }
+          }
           displayApplyMaintResult(
               local, cmd,
               status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
@@ -394,6 +415,88 @@ static void displayTaskMain(void*) {
               local, cmd,
               status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
               MaintReason::None);
+          break;
+        }
+        case DisplayOpcode::SelfTest: {
+          // On-demand diagnostic revolution (#265): start, then poll the
+          // unit's result until a terminal state. A stale terminal from a
+          // PREVIOUS test can still sit in the unit's reply buffer while
+          // this one queues behind an in-flight move — only accept a
+          // terminal state after RUNNING has been observed.
+          SelfTestSlot slot;
+          slot.seq = cmd.seq;
+          slot.addr = cmd.unitAddress;
+          int status = unitBusStartSelfTest(cmd.unitAddress);
+          if (status != 0) {
+            slot.outcome = SelfTestOutcome::WireFail;
+          } else {
+            slot.outcome = SelfTestOutcome::Timeout;
+            bool sawRunning = false;
+            bool everValid = false;
+            bool haveBaseline = false;
+            UnitSelfTestReading baseline{};
+            int badPolls = 0;
+            uint32_t start = millis();
+            while (millis() - start < SELF_TEST_TIMEOUT_MS) {
+              if (unitBusAbortRequested()) {
+                slot.outcome = SelfTestOutcome::Aborted;
+                break;
+              }
+              delay(SELF_TEST_POLL_MS);
+              UnitSelfTestReading r;
+              if (!unitBusReadSelfTest(cmd.unitAddress, r)) {
+                if (!everValid && ++badPolls >= SELF_TEST_UNSUPPORTED_POLLS) {
+                  slot.outcome = SelfTestOutcome::Unsupported;
+                  break;
+                }
+                continue;
+              }
+              everValid = true;
+              if (!haveBaseline) {
+                // First valid reading = the pre-test buffer content. A later
+                // terminal that DIFFERS from it is provably fresh even when
+                // every poll of the RUNNING window was lost to bus glitches
+                // (codex review).
+                haveBaseline = true;
+                baseline = r;
+              }
+              if (r.state == 1) {  // running
+                if (!sawRunning) {
+                  // The test provably started — re-arm the window so time the
+                  // unit spent finishing a prior move doesn't eat the test's
+                  // own budget (codex review).
+                  sawRunning = true;
+                  start = millis();
+                }
+                continue;
+              }
+              bool freshTerminal =
+                  sawRunning ||
+                  (haveBaseline &&
+                   (r.state != baseline.state ||
+                    r.stepsPerRev != baseline.stepsPerRev ||
+                    r.hallWindowSteps != baseline.hallWindowSteps ||
+                    r.revTimeMs != baseline.revTimeMs));
+              if (r.state == 0 || !freshTerminal) continue;  // not started / stale
+              if (r.state == 2) {
+                slot.outcome = SelfTestOutcome::Ok;
+                slot.stepsPerRev = r.stepsPerRev;
+                slot.hallWindowSteps = r.hallWindowSteps;
+                slot.revTimeMs = r.revTimeMs;
+              } else {
+                slot.outcome = SelfTestOutcome::UnitFailed;
+              }
+              break;
+            }
+          }
+          SerialPrintf("display: self-test unit 0x%02x → %s\n",
+                       cmd.unitAddress, selfTestOutcomeName(slot.outcome));
+          displayApplySelfTestResult(local, slot);
+          displayApplyMaintResult(local, cmd,
+                                  slot.outcome == SelfTestOutcome::Ok
+                                      ? MaintOutcome::Ok
+                                      : MaintOutcome::PostconditionFail,
+                                  MaintReason::None);
           break;
         }
         case DisplayOpcode::ResetOdometer: {
@@ -501,6 +604,8 @@ static void displayTaskMain(void*) {
                          letters);
           unitBusShowFrame(local.units, local.displayWidth, letters,
                            unitSpeed);
+          memcpy(local.lastFrameLetters, letters, sizeof(letters));  // #264
+          local.lastFrameValid = true;
           displayApplyMaintResult(local, cmd, MaintOutcome::Ok,
                                   MaintReason::None);
           break;
@@ -509,6 +614,11 @@ static void displayTaskMain(void*) {
           // The abort flag (set by the /stop handler at enqueue) already
           // short-circuited every wait ahead of us; now park the display.
           int status = unitBusBroadcastHome();
+          if (status == 0) {
+            // Every unit parks at blank — the intended frame follows (#264).
+            memset(local.lastFrameLetters, 0, sizeof(local.lastFrameLetters));
+            local.lastFrameValid = true;
+          }
           unitBusClearAbort();
           displayApplyMaintResult(
               local, cmd,
@@ -531,6 +641,8 @@ static void displayTaskMain(void*) {
             unitBusShowFrame(local.units, local.displayWidth, letters,
                              convertSpeedToUnit(cmd.speed));
             memcpy(local.currentText, cmd.text, sizeof(local.currentText));
+            memcpy(local.lastFrameLetters, letters, sizeof(letters));  // #264
+            local.lastFrameValid = true;
           }
           MaintReason reason = MaintReason::None;
           MaintOutcome outcome = classifyReflashOutcome(local.reflash, reason);

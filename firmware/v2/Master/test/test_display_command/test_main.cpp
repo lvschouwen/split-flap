@@ -213,6 +213,20 @@ static void test_describe_names_maintenance_opcodes() {
       describeDisplayCommand(makeStopCommand(1)).indexOf("Stop") >= 0);
 }
 
+// --- self-test op (#265) ---------------------------------------------------
+
+static void test_selftest_command_carries_seq_and_address() {
+  DisplayCommand cmd = makeSelfTestCommand(11, 4);
+  TEST_ASSERT_TRUE(cmd.opcode == DisplayOpcode::SelfTest);
+  TEST_ASSERT_EQUAL_UINT32(11, cmd.seq);
+  TEST_ASSERT_EQUAL_UINT8(4, cmd.unitAddress);
+  TEST_ASSERT_EQUAL_INT16(0, cmd.value);
+}
+
+static void test_selftest_opcode_name() {
+  TEST_ASSERT_EQUAL_STRING("SelfTest", displayOpcodeName(DisplayOpcode::SelfTest));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_show_text_sets_opcode_and_copies_text);
@@ -241,5 +255,7 @@ int main(int, char**) {
   RUN_TEST(test_describe_names_maintenance_opcodes);
   RUN_TEST(test_reflash_units_bakes_enqueue_time_show_params);
   RUN_TEST(test_reflash_units_opcode_name);
+  RUN_TEST(test_selftest_command_carries_seq_and_address);
+  RUN_TEST(test_selftest_opcode_name);
   return UNITY_END();
 }

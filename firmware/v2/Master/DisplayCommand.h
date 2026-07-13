@@ -24,6 +24,10 @@ enum class DisplayOpcode : uint8_t {
   SetAddress,
   ClearAddress,
   ResetOdometer,
+  // On-demand unit self-test (#265): displayTask starts the unit's
+  // diagnostic revolution and polls the result; measurements publish into
+  // the snapshot's SelfTestSlot.
+  SelfTest,
   ResetUnits,
   Stop,
   // Bulk unit reflash over twiboot (#205, slice C) — a long-running job
@@ -90,6 +94,7 @@ inline const char* displayOpcodeName(DisplayOpcode op) {
     case DisplayOpcode::SetAddress:         return "SetAddress";
     case DisplayOpcode::ClearAddress:       return "ClearAddress";
     case DisplayOpcode::ResetOdometer:      return "ResetOdometer";
+    case DisplayOpcode::SelfTest:           return "SelfTest";
     case DisplayOpcode::ResetUnits:         return "ResetUnits";
     case DisplayOpcode::Stop:               return "Stop";
     case DisplayOpcode::ReflashUnits:       return "ReflashUnits";
@@ -167,6 +172,12 @@ inline DisplayCommand makeClearAddressCommand(uint32_t seq, uint8_t addr) {
 // odometer + its EEPROM ring after a flap swap or motor replacement.
 inline DisplayCommand makeResetOdometerCommand(uint32_t seq, uint8_t addr) {
   return makeMaintCommand(DisplayOpcode::ResetOdometer, seq, addr, 0);
+}
+
+// On-demand diagnostic revolution (#265): ~15 s of unit motion displayTask
+// waits out inline (commands queue behind it, like every long op).
+inline DisplayCommand makeSelfTestCommand(uint32_t seq, uint8_t addr) {
+  return makeMaintCommand(DisplayOpcode::SelfTest, seq, addr, 0);
 }
 
 // The re-show text/alignment/speed are baked at enqueue time (senders bake

@@ -769,6 +769,32 @@ function appendWearCell(row, u, wearFlagged, maxOdo) {
 	row.appendChild(td);
 }
 
+//Drift cell (#263/#264): since-boot drift events + the hall-corrected
+//physical-letter check. A mismatch means the drum PHYSICALLY shows a
+//different letter than the master intended; the unit self-corrects at its
+//next idle window (the pending marker).
+function appendDriftCell(row, u) {
+	var td = document.createElement("td");
+	if (typeof u.de !== "number") {
+		td.textContent = "\u2014";
+	} else {
+		var text = "" + u.de;
+		if (u.dp) text += " \u21ba";
+		if (u.mm) {
+			var shows = (typeof u.phys === "number" && CALIBRATION_LETTERS[u.phys]) || "?";
+			text += " \u2717";
+			td.title = "drum shows '" + shows + "', not the intended letter" +
+				(u.ds ? " \u00b7 last drift " + u.ds + " steps" : "");
+			td.className = "uh-bad";
+		} else if (u.de > 0) {
+			td.className = "uh-warn";
+			if (u.ds) td.title = "last drift " + u.ds + " steps";
+		}
+		td.textContent = text;
+	}
+	row.appendChild(td);
+}
+
 var UNIT_STATE_LABELS = { 0: "silent", 1: "sketch", 2: "bootloader" };
 var UNIT_FW_LABELS = { 0: "ok", 1: "OUTDATED", 2: "unknown" };
 
@@ -831,8 +857,9 @@ function renderUnitHealth(data) {
 			if (rfActive && u && u.st === 2) {
 				cls = (rf.state === "flashing" && rf.cur === u.a) ? "flashing cur" : "flashing";
 			} else if (!u || u.st !== 1) { cls = "bad"; silent.push(i + 1); }
-			else if (unitRowIsFaulty(u) || u.fw === 1) cls = "warn";
+			else if (unitRowIsFaulty(u) || u.fw === 1 || u.mm) cls = "warn";
 			strip.children[i].className = cls;
+			strip.children[i].title = (u && u.mm) ? "off-letter \u2014 drum disagrees with the intended frame" : "";
 		}
 	}
 	var note = document.getElementById("healthNote");
@@ -881,6 +908,7 @@ function renderUnitHealth(data) {
 		//Wear rides its own valid flag ("odo" present) — a unit can report
 		//status but run pre-odometer firmware (#231).
 		appendWearCell(row, unit, flagged, maxOdo);
+		appendDriftCell(row, unit);
 		body.appendChild(row);
 	}
 
@@ -897,8 +925,13 @@ function renderUnitHealth(data) {
 				(worst.odo / wear.median).toFixed(1) + "× median";
 		}
 	}
+	var offLetter = [];
+	for (var mmIdx = 0; mmIdx < units.length; mmIdx++) {
+		if (units[mmIdx].mm) offLetter.push(units[mmIdx].i + 1);
+	}
+	if (offLetter.length > 0) summary += " \u00b7 unit " + offLetter.join(", ") + " off-letter";
 	setUnitHealthSummary(summary,
-		faulty > 0 || responding < width || wear.flagged.length > 0 ? "bad" : "ok");
+		faulty > 0 || responding < width || wear.flagged.length > 0 || offLetter.length > 0 ? "bad" : "ok");
 
 	lastHealthUnits = units;
 	renderProvisioning(units);
@@ -940,6 +973,7 @@ function renderProvisioning(units) {
 		appendButton(row, "Change…", function() { changeUnitAddressUi(u.a, addrInput); });
 		appendButton(row, "Clear", function() { clearUnitAddressUi(u.a); });
 		appendButton(row, "Reset odo…", function() { resetOdometerUi(u.a); });
+		appendButton(row, "Self-test", function() { selfTestUnitUi(u.a); });
 		container.appendChild(row);
 	});
 }
@@ -957,6 +991,61 @@ function identifyUnitUi(address) {
 			? "Unit " + formatHexAddress(address) + " is blinking its LED for ~3 s."
 			: "Identify failed for " + formatHexAddress(address), ok ? "success" : "error");
 	});
+}
+
+//On-demand unit self-test (#265): ~15 s diagnostic revolution measuring
+//actual steps/rev (nominal 2038), hall window width and revolution time.
+//Queue-native like every op, but the outcome rides its own endpoint
+//because it carries the measurements. Controls lock while it runs (the
+//single result slot serves one self-test at a time).
+function selfTestUnitUi(address) {
+	showProvisioningStatus("Self-test on unit " + formatHexAddress(address) +
+		" \u2014 about 15 s of motion\u2026", "");
+	setMaintenanceBusy(true);
+	fetch("/unit/self-test?address=" + address, { method: "POST" })
+		.then(function(r) {
+			if (!r.ok) return r.text().then(function(t) { throw new Error(t || ("HTTP " + r.status)); });
+			return r.json();
+		})
+		.then(function(data) { pollSelfTestResult(address, data.seq, 100); })
+		.catch(function(e) {
+			setMaintenanceBusy(false);
+			showProvisioningStatus("Self-test failed to queue: " +
+				(e && e.message ? e.message : "request failed"), "error");
+		});
+}
+
+function pollSelfTestResult(address, seq, remaining) {
+	fetch("/unit/self-test-result?seq=" + seq, { cache: "no-store" })
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(res) {
+			if (res.state === "pending" && remaining > 0) {
+				setTimeout(function() { pollSelfTestResult(address, seq, remaining - 1); }, 1000);
+				return;
+			}
+			setMaintenanceBusy(false);
+			if (res.state === "ok") {
+				var delta = res.steps_per_rev - 2038;
+				showProvisioningStatus("Unit " + formatHexAddress(address) + " self-test: " +
+					res.steps_per_rev + " steps/rev (" + (delta >= 0 ? "+" : "") + delta +
+					" vs nominal), hall window " + res.hall_window + " steps, " +
+					(res.rev_time_ms / 1000).toFixed(1) + " s/rev.", "success");
+			} else if (res.state === "pending") {
+				showProvisioningStatus("Self-test still queued \u2014 display busy; check again in a moment.", "");
+			} else if (res.state === "expired") {
+				showProvisioningStatus("Self-test outcome superseded \u2014 run it again.", "error");
+			} else {
+				showProvisioningStatus("Self-test failed: " + (res.reason || "unknown") + ".", "error");
+			}
+		})
+		.catch(function() {
+			if (remaining > 0) {
+				setTimeout(function() { pollSelfTestResult(address, seq, remaining - 1); }, 1000);
+				return;
+			}
+			setMaintenanceBusy(false);
+			showProvisioningStatus("Self-test result poll failed.", "error");
+		});
 }
 
 //Physical-rebuild bookkeeping (#231): the odometer is the unit's wear
