@@ -22,6 +22,7 @@
 #include "ClockService.h"
 #include "ClusterFollower.h"
 #include "ClusterLayout.h"  // CLUSTER_MAX_MEMBERS / CLUSTER_HOST_MAX_LEN
+#include "ClusterLeader.h"
 #include "DisplayEvents.h"
 #include "FactorySlot.h"
 #include "FlashLog.h"
@@ -1284,6 +1285,59 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     out += '}';
     request->send(200, "application/json", out);
   });
+
+  // --- Cluster leader endpoints (#273) ----------------------------------------
+  // `members` uses the ClusterLeaderPolicy wire format
+  // (`host|row|col|width;…`, empty host = this master's own row; "" =
+  // disable). Validation runs here for the 400; the swap itself (leave
+  // fan-out, NVS persist, runtime reset) runs in clusterTask.
+  server.on("/cluster/config", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (!request->hasParam("members", true)) {
+      request->send(400, "text/plain", F("Missing members"));
+      return;
+    }
+    ClusterConfigVerdict v = clusterLeaderStageConfig(
+        request->getParam("members", true)->value());
+    request->send(v.httpStatus, "text/plain", v.message);
+  });
+
+  server.on("/cluster/status", HTTP_GET, [](AsyncWebServerRequest* request) {
+    ClusterLeaderStatus st = clusterLeaderStatusGet();
+    String out = "{\"enabled\":";
+    out += st.enabled ? "true" : "false";
+    out += ",\"epoch\":";
+    out += String((unsigned long)st.epoch);
+    out += ",\"seq\":";
+    out += String((unsigned long)st.seq);
+    out += ",\"members\":[";
+    for (int i = 0; i < st.memberCount; i++) {
+      const ClusterLeaderMemberStatus& m = st.members[i];
+      if (i) out += ',';
+      out += "{\"host\":";
+      appendJsonString(out, m.host);
+      out += ",\"self\":";
+      out += m.host.length() == 0 ? "true" : "false";
+      out += ",\"row\":";
+      out += m.row;
+      out += ",\"col\":";
+      out += m.col;
+      out += ",\"width\":";
+      out += m.width;
+      out += ",\"joined\":";
+      out += m.joined ? "true" : "false";
+      out += ",\"degraded\":";
+      out += m.degraded ? "true" : "false";
+      out += ",\"failures\":";
+      out += m.failures;
+      out += ",\"rev\":";
+      appendJsonString(out, m.rev);
+      out += ",\"reportedWidth\":";
+      out += m.reportedWidth;
+      out += '}';
+    }
+    out += "]}";
+    request->send(200, "application/json", out);
+  });
 }
 
 void webEndpointsStart(AsyncWebServer& server) {
@@ -1366,8 +1420,12 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // silently ignored — never shown, never retained.
       if (messageProvided && settings.deviceMode == "text") {
         // Retained in the display domain: ClockPolicy's dedup compares this
-        // against snapshot text, which makeShowTextCommand truncates.
-        currentInputText = truncateForDisplay(messageText);
+        // against snapshot text, which makeShowTextCommand truncates. A
+        // LEADING master retains untruncated — the grid holds more than
+        // one row's width, and its ticker path never enters that dedup.
+        currentInputText = clusterLeaderEnabled()
+                               ? messageText
+                               : truncateForDisplay(messageText);
         // Reflash gate re-check at drain time (#205, Codex review): the
         // handler's 409 ran when the POST arrived; a job that started in
         // between must not get a ShowText queued behind it. Dropping is
@@ -1380,6 +1438,13 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
             clusterFollowerViewGet().gated) {
           SerialPrintln("Message retained, not queued (reflash/cluster): " +
                         messageText);
+        } else if (clusterLeaderEnabled()) {
+          // Leader reroute (#273): the LOGICAL text goes to the cluster
+          // layer — it slices the grid, stages our own row, and fans the
+          // rest out from clusterTask.
+          clusterLeaderSubmitText(messageText, settings.alignment,
+                                  settings.flapSpeed);
+          SerialPrintln("Message routed to the cluster grid: " + messageText);
         } else if (displayEnqueue(makeShowTextCommand(
                        messageText, settings.alignment,
                        settings.flapSpeed))) {

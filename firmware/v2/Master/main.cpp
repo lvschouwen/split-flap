@@ -14,6 +14,7 @@
 #include "BuildVersion.h"  // GIT_REV — boot banner
 #include "ClockService.h"
 #include "ClusterFollower.h"
+#include "ClusterLeader.h"
 #include "DeviceIdentity.h"
 #include "DisplayWidth.h"
 #include "FlashLog.h"
@@ -121,6 +122,9 @@ void setup() {
   // boots gated in Grace. Before tasksInit(): netTask ticks the service
   // and clockTask reads its view.
   clusterFollowerInit(settingsStore);
+  // #273: loads the member table if this master leads a cluster wall, and
+  // mints the boot epoch. Before tasksInit() — clusterTask ticks it.
+  clusterLeaderInit(settingsStore, deviceName);
 
   SerialPrintln(F(""));
   SerialPrintln(F("split-flap v2 master — " GIT_REV));

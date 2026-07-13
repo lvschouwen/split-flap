@@ -10,6 +10,7 @@
 
 #include "ClockPolicy.h"
 #include "ClusterFollower.h"
+#include "ClusterLeader.h"
 #include "FlapFrame.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
@@ -33,6 +34,8 @@ static constexpr uint32_t NET_TASK_STACK = 4096;
 // espMqttClient internals + the 512 B discovery build buffers (#224); the
 // heartbeat's HWM column is the trim-down evidence.
 static constexpr uint32_t MQTT_TASK_STACK = 6144;
+// esp_http_client + String assembly for the cluster fan-out (#273).
+static constexpr uint32_t CLUSTER_TASK_STACK = 6144;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
 static constexpr UBaseType_t DOMAIN_TASK_PRIORITY = 1;   // everything else
@@ -59,11 +62,13 @@ static constexpr uint32_t SELF_TEST_TIMEOUT_MS = 45000;
 static constexpr uint32_t SELF_TEST_POLL_MS = 500;
 static constexpr int SELF_TEST_UNSUPPORTED_POLLS = 3;
 
-static StaticTask_t displayTaskBuf, clockTaskBuf, netTaskBuf, mqttTaskBuf;
+static StaticTask_t displayTaskBuf, clockTaskBuf, netTaskBuf, mqttTaskBuf,
+    clusterTaskBuf;
 static StackType_t displayTaskStack[DISPLAY_TASK_STACK];
 static StackType_t clockTaskStack[CLOCK_TASK_STACK];
 static StackType_t netTaskStack[NET_TASK_STACK];
 static StackType_t mqttTaskStack[MQTT_TASK_STACK];
+static StackType_t clusterTaskStack[CLUSTER_TASK_STACK];
 
 static StaticQueue_t displayQueueBuf;
 static uint8_t displayQueueStorage[DISPLAY_QUEUE_DEPTH * sizeof(DisplayCommand)];
@@ -74,7 +79,7 @@ static uint8_t mqttInboxStorage[MQTT_INBOX_DEPTH * sizeof(MqttInboxMessage)];
 static QueueHandle_t mqttInbox = nullptr;
 
 static TaskHandle_t displayTaskHandle, clockTaskHandle, netTaskHandle,
-    mqttTaskHandle;
+    mqttTaskHandle, clusterTaskHandle;
 
 // --- display snapshot (single writer: displayTask) ---------------------------
 
@@ -693,6 +698,33 @@ static void clockTaskMain(void*) {
       notifWasActive = false;
       lastQueued = "";
     }
+    // Leader reroute (#273): with the cluster enabled the ticker's product
+    // becomes LOGICAL grid content handed to the cluster layer — which
+    // dedups, slices, and stages this master's own row on the shared
+    // commitAt clock — so nothing enqueues from here. Overlays still win:
+    // the gates above run first, and the self-row re-show after an overlay
+    // belongs to clusterTask.
+    if (clusterLeaderEnabled()) {
+      WebContentSnapshot leaderContent = webDisplayContentSnapshot();
+      time_t leaderNow = time(nullptr);
+      if (leaderContent.deviceMode == "clock") {
+        // Un-synced clock holds (v1 deviation, same as decideClockTick).
+        if (clockIsTimeSynced(leaderNow)) {
+          clusterLeaderSubmitClock(
+              formatDateTime(leaderNow, CLOCK_FORMAT),
+              formatDateTime(leaderNow, CLUSTER_DATE_FORMAT),
+              leaderContent.alignment, leaderContent.flapSpeed);
+        }
+      } else if (leaderContent.deviceMode == "text" &&
+                 leaderContent.inputText.length() > 0) {
+        clusterLeaderSubmitText(leaderContent.inputText,
+                                leaderContent.alignment,
+                                leaderContent.flapSpeed);
+      }
+      lastQueued = "";  // the ticker owns nothing while leading
+      continue;
+    }
+
     clockTickObserve(lastQueued, String(snap.currentText));
 
     WebContentSnapshot content = webDisplayContentSnapshot();
@@ -780,6 +812,18 @@ static void mqttTaskMain(void*) {
   }
 }
 
+// Leader-side cluster fan-out (#273): ALL outbound cluster HTTP lives in
+// this task (esp_http_client, 1.5 s timeouts) — a dead follower stalls
+// only the fan-out, never netTask. The body is clusterLeaderTick()
+// (ClusterLeader.cpp); disabled clusters make it a no-op read.
+static void clusterTaskMain(void*) {
+  SerialPrintf("clusterTask up on core %d\n", xPortGetCoreID());
+  for (;;) {
+    clusterLeaderTick();
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
 // --- lifecycle -----------------------------------------------------------------
 
 void tasksInit(MasterSettings& settings, SettingsStore& store) {
@@ -811,17 +855,21 @@ void tasksInit(MasterSettings& settings, SettingsStore& store) {
   mqttTaskHandle = xTaskCreateStaticPinnedToCore(
       mqttTaskMain, "mqtt", MQTT_TASK_STACK, nullptr, DOMAIN_TASK_PRIORITY,
       mqttTaskStack, &mqttTaskBuf, NETWORK_CORE);
+  clusterTaskHandle = xTaskCreateStaticPinnedToCore(
+      clusterTaskMain, "cluster", CLUSTER_TASK_STACK, nullptr,
+      DOMAIN_TASK_PRIORITY, clusterTaskStack, &clusterTaskBuf, NETWORK_CORE);
 }
 
 void tasksHeartbeatReport() {
   Serial.printf(
       "[%8lu ms] heap %u KB free (min %u KB), psram %u KB free | stack HWM: "
-      "display %u, clock %u, net %u, mqtt %u, loop %u\n",
+      "display %u, clock %u, net %u, mqtt %u, cluster %u, loop %u\n",
       (unsigned long)millis(), ESP.getFreeHeap() / 1024,
       ESP.getMinFreeHeap() / 1024, ESP.getFreePsram() / 1024,
       (unsigned)uxTaskGetStackHighWaterMark(displayTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(clockTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(netTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(mqttTaskHandle),
+      (unsigned)uxTaskGetStackHighWaterMark(clusterTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 }
