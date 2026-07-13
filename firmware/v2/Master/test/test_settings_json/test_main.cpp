@@ -121,6 +121,26 @@ static void test_unit_arrays_carry_supplied_data() {
   TEST_ASSERT_TRUE(contains(json, "\"detectedUnitVersions\":[\"aa11\",\"bb22\",\"\",\"cc33\"]"));
 }
 
+
+static void test_cluster_fields_carry_membership() {
+  // #272: the UI banner + card gating key off these; "standalone" is the
+  // cluster-disabled default so old UIs simply ignore the block.
+  SettingsJsonFields f;
+  String json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"clusterState\":\"standalone\""));
+  TEST_ASSERT_TRUE(contains(json, "\"clusterRow\":0"));
+
+  f.clusterState = "grace";
+  f.clusterLeaderName = "wall-leader";
+  f.clusterLeaderHost = "192.168.15.22";
+  f.clusterRow = 2;
+  json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"clusterState\":\"grace\""));
+  TEST_ASSERT_TRUE(contains(json, "\"clusterLeaderName\":\"wall-leader\""));
+  TEST_ASSERT_TRUE(contains(json, "\"clusterLeaderHost\":\"192.168.15.22\""));
+  TEST_ASSERT_TRUE(contains(json, "\"clusterRow\":2"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_defaults_produce_v1_shaped_empty_document);
@@ -130,5 +150,6 @@ int main(int, char**) {
   RUN_TEST(test_string_values_are_json_escaped);
   RUN_TEST(test_control_characters_use_unicode_escapes);
   RUN_TEST(test_unit_arrays_carry_supplied_data);
+  RUN_TEST(test_cluster_fields_carry_membership);
   return UNITY_END();
 }

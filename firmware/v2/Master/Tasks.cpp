@@ -9,6 +9,7 @@
 #include <atomic>
 
 #include "ClockPolicy.h"
+#include "ClusterFollower.h"
 #include "FlapFrame.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
@@ -697,9 +698,25 @@ static void clockTaskMain(void*) {
     WebContentSnapshot content = webDisplayContentSnapshot();
     time_t now = time(nullptr);
 
+    // Cluster gate (#272): while this board is a cluster member the leader
+    // owns the content — the ticker's job becomes re-showing the held
+    // segment (restores the wall after transients and reset-units). While a
+    // commitAt render is in flight it stands down entirely so a re-show
+    // can't preempt the synchronized flip. LocalFallback (leader silent ~2
+    // min) shows the follower's OWN clock through the normal clock path.
+    ClusterFollowerView cluster = clusterFollowerViewGet();
+    if (cluster.gated && cluster.renderPending) continue;
+
     ClockTickInput in;
-    in.deviceMode = content.deviceMode;
-    in.inputText = content.inputText;
+    if (cluster.gated && !cluster.forcesLocalClock) {
+      in.deviceMode = "text";
+      in.inputText = cluster.heldSegment;  // "" until a render arrives → no-op
+    } else if (cluster.gated) {
+      in.deviceMode = "clock";
+    } else {
+      in.deviceMode = content.deviceMode;
+      in.inputText = content.inputText;
+    }
     in.timeSynced = clockIsTimeSynced(now);
     in.formattedTime = in.timeSynced ? formatDateTime(now, CLOCK_FORMAT) : "";
     in.displayBusy = snap.busy;
@@ -708,8 +725,14 @@ static void clockTaskMain(void*) {
 
     ClockTickDecision d = decideClockTick(in);
     if (d.enqueue) {
+      // Segment re-shows are pre-positioned by the leader: rendered Left at
+      // the speed the render arrived with, like the original enqueue.
+      bool segmentReshow = cluster.gated && !cluster.forcesLocalClock;
       DisplayCommand cmd =
-          makeShowTextCommand(d.text, content.alignment, content.flapSpeed);
+          segmentReshow
+              ? makeShowTextCommand(d.text, "left", cluster.heldSpeed)
+              : makeShowTextCommand(d.text, content.alignment,
+                                    content.flapSpeed);
       if (displayEnqueue(cmd)) {
         lastQueued = d.text;
       }
@@ -733,6 +756,7 @@ static void netTaskMain(void* arg) {
   for (;;) {
     wifiServiceTick();
     webEndpointsLoop(*ctx->settings, *ctx->store);
+    clusterFollowerServiceTick(*ctx->store);  // #272: decay + NVS + renders
     webDisplayEventsTick();  // #251: SSE push on display text change
     statusLedTick();
     systemStatsTick();  // #245/#251: self-throttled, 1 s fast + 5 s ring

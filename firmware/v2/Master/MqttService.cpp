@@ -13,6 +13,7 @@
 
 #include "BuildVersion.h"  // GIT_REV — the discovery device block's sw field
 #include "ClockPolicy.h"
+#include "ClusterFollower.h"
 #include "DisplayCommand.h"
 #include "DisplayIpc.h"
 #include "HelpersSerialHandling.h"
@@ -269,6 +270,11 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
   String payload(msg.payload);
   switch (classifyMqttCommandTopic(mqttCmdTopics, msg.topic)) {
     case MqttCommand::Mode: {
+      // Cluster gate (#272): mode belongs to the leader while clustered.
+      if (clusterFollowerViewGet().gated) {
+        SerialPrintln("MQTT: mode command dropped (clustered): " + payload);
+        break;
+      }
       String requested = parseModeCommand(payload);
       if (requested.length() == 0) {
         SerialPrintln("MQTT: ignored invalid mode command: " + payload);
@@ -320,6 +326,11 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
       // mutating queues. HA commands are live-only — drop, don't defer.
       if (reflashInProgress(displaySnapshotGet().reflash)) {
         SerialPrintln("MQTT: notification dropped (reflash running): " + text);
+        break;
+      }
+      // Cluster gate (#272): the wall's content belongs to the leader.
+      if (clusterFollowerViewGet().gated) {
+        SerialPrintln("MQTT: notification dropped (clustered): " + text);
         break;
       }
       WebContentSnapshot content = webDisplayContentSnapshot();

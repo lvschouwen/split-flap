@@ -20,6 +20,8 @@
 #include "BuildVersion.h"
 #include "ClockPolicy.h"
 #include "ClockService.h"
+#include "ClusterFollower.h"
+#include "ClusterLayout.h"  // CLUSTER_MAX_MEMBERS / CLUSTER_HOST_MAX_LEN
 #include "DisplayEvents.h"
 #include "FactorySlot.h"
 #include "FlashLog.h"
@@ -327,6 +329,12 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     f.lastFlashResult = verdict.lastFlashResult;
     f.otaReverted = verdict.otaReverted;
     f.lastResetReason = webResetReasonString();
+    // Cluster membership (#272): drives the follower banner + card gating.
+    ClusterFollowerView cluster = clusterFollowerViewGet();
+    f.clusterState = clusterFollowerPhaseName(cluster.phase);
+    f.clusterLeaderName = cluster.leaderName;
+    f.clusterLeaderHost = cluster.leaderHost;
+    f.clusterRow = cluster.row;
     request->send(200, "application/json", buildSettingsJson(f));
   });
 
@@ -421,6 +429,16 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       } else {
         request->redirect("/?display-busy=true");
       }
+      return;
+    }
+    // Cluster producer gate (#272): a clustered follower's text/mode belong
+    // to the leader — 409; the banner explains why. Transients stay allowed
+    // (they are the calibration vehicle — maintenance is local), and so do
+    // pure settings saves.
+    if ((local.inputTextProvided || local.deviceModeProvided) &&
+        clusterFollowerViewGet().gated) {
+      if (isAjax) request->send(409, "text/plain", F("clustered"));
+      else request->redirect("/?clustered=true");
       return;
     }
     if ((local.inputTextProvided || local.transientTextProvided) &&
@@ -1129,6 +1147,143 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     }
     request->send(200, "application/json", json);
   });
+
+  // --- Cluster follower endpoints (#272, epic #270) --------------------------
+  // The LAN wire protocol the leader drives (form-encoded requests, JSON
+  // replies — same conventions as the rest of this API). Handlers stage
+  // into ClusterFollower under its own mutex; NVS writes and the display
+  // enqueue run in netTask's clusterFollowerServiceTick().
+  server.on("/cluster/join", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (!request->hasParam("leaderHost", true) ||
+        !request->hasParam("row", true) || !request->hasParam("epoch", true)) {
+      request->send(400, "text/plain", F("Missing leaderHost/row/epoch"));
+      return;
+    }
+    ClusterJoinRequest req;
+    req.leaderHost = request->getParam("leaderHost", true)->value();
+    req.leaderName = request->hasParam("leaderName", true)
+                         ? request->getParam("leaderName", true)->value()
+                         : req.leaderHost;
+    long row = request->getParam("row", true)->value().toInt();
+    req.epoch = (uint32_t)strtoul(
+        request->getParam("epoch", true)->value().c_str(), nullptr, 10);
+    if (row < 0 || row >= CLUSTER_MAX_MEMBERS) {
+      request->send(400, "text/plain", F("Row out of range"));
+      return;
+    }
+    req.row = (int)row;
+    if (req.leaderHost.length() == 0 ||
+        req.leaderHost.length() > CLUSTER_HOST_MAX_LEN ||
+        !settingsIsPrintableAscii(req.leaderHost, 0x21)) {
+      request->send(400, "text/plain", F("Invalid leaderHost"));
+      return;
+    }
+    if (req.leaderName.length() > CLUSTER_HOST_MAX_LEN ||
+        !settingsIsPrintableAscii(req.leaderName, 0x20)) {
+      request->send(400, "text/plain", F("Invalid leaderName"));
+      return;
+    }
+    clusterFollowerHandleJoin(req);
+    // Handshake reply: identity, firmware rev, width. Width is the boot
+    // probe's result today; #234 refines it — no protocol change.
+    String out = "{\"name\":";
+    appendJsonString(out, effectiveName);
+    out += ",\"rev\":\"" GIT_REV "\",\"width\":";
+    out += (int)displaySnapshotGet().displayWidth;
+    out += ",\"protocol\":1}";
+    request->send(200, "application/json", out);
+  });
+
+  server.on("/cluster/render", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (!request->hasParam("epoch", true) || !request->hasParam("seq", true) ||
+        !request->hasParam("text", true)) {
+      request->send(400, "text/plain", F("Missing epoch/seq/text"));
+      return;
+    }
+    uint32_t epoch = (uint32_t)strtoul(
+        request->getParam("epoch", true)->value().c_str(), nullptr, 10);
+    uint32_t seq = (uint32_t)strtoul(
+        request->getParam("seq", true)->value().c_str(), nullptr, 10);
+    String text = request->getParam("text", true)->value();
+    int speed;
+    if (request->hasParam("speed", true)) {
+      speed = request->getParam("speed", true)->value().toInt();
+      if (speed < 1 || speed > 100) {
+        request->send(400, "text/plain", F("Speed must be 1..100"));
+        return;
+      }
+    } else {
+      WebStateLock lock;
+      speed = liveSettings->flapSpeed;
+    }
+    uint64_t commitAtMs =
+        request->hasParam("commitAtMs", true)
+            ? strtoull(request->getParam("commitAtMs", true)->value().c_str(),
+                       nullptr, 10)
+            : 0ULL;
+    ClusterRenderVerdict v =
+        clusterFollowerHandleRender(epoch, seq, text, speed, commitAtMs);
+    if (v == ClusterRenderVerdict::NotClustered) {
+      request->send(409, "application/json",
+                    F("{\"error\":\"not clustered\"}"));
+      return;
+    }
+    String out = "{\"applied\":";
+    out += (v == ClusterRenderVerdict::Apply) ? "true" : "false";
+    out += ",\"seq\":";
+    out += String((unsigned long)seq);
+    out += '}';
+    request->send(200, "application/json", out);
+  });
+
+  server.on("/cluster/ping", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (!clusterFollowerHandlePing()) {
+      request->send(409, "application/json",
+                    F("{\"error\":\"not clustered\"}"));
+      return;
+    }
+    ClusterFollowerView cv = clusterFollowerViewGet();
+    String out = "{\"state\":";
+    appendJsonString(out, clusterFollowerPhaseName(cv.phase));
+    out += ",\"epoch\":";
+    out += String((unsigned long)cv.epoch);
+    out += ",\"seq\":";
+    out += String((unsigned long)cv.lastSeq);
+    out += '}';
+    request->send(200, "application/json", out);
+  });
+
+  server.on("/cluster/leave", HTTP_POST, [](AsyncWebServerRequest* request) {
+    clusterFollowerHandleLeave();  // idempotent
+    request->send(200, "text/plain", F("ok"));
+  });
+
+  server.on("/cluster/health", HTTP_GET, [](AsyncWebServerRequest* request) {
+    ClusterFollowerView cv = clusterFollowerViewGet();
+    DisplaySnapshot snap = displaySnapshotGet();
+    String out = "{\"state\":";
+    appendJsonString(out, clusterFollowerPhaseName(cv.phase));
+    out += ",\"leaderName\":";
+    appendJsonString(out, cv.leaderName);
+    out += ",\"leaderHost\":";
+    appendJsonString(out, cv.leaderHost);
+    out += ",\"row\":";
+    out += cv.row;
+    out += ",\"epoch\":";
+    out += String((unsigned long)cv.epoch);
+    out += ",\"seq\":";
+    out += String((unsigned long)cv.lastSeq);
+    out += ",\"segment\":";
+    appendJsonString(out, cv.heldSegment);
+    out += ",\"rev\":\"" GIT_REV "\",\"width\":";
+    out += (int)snap.displayWidth;
+    out += ",\"detected\":";
+    out += (int)snap.detectedUnitCount;
+    out += ",\"faulty\":";
+    out += (int)snap.faultyUnitCount;
+    out += '}';
+    request->send(200, "application/json", out);
+  });
 }
 
 void webEndpointsStart(AsyncWebServer& server) {
@@ -1218,8 +1373,12 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
         // between must not get a ShowText queued behind it. Dropping is
         // self-healing — the retained text above is what the 1 Hz mode
         // ticker re-shows once the job ends.
-        if (reflashInProgress(displaySnapshotGet().reflash)) {
-          SerialPrintln("Message retained, not queued (reflash running): " +
+        // Same re-check for the cluster gate (#272): a membership that
+        // arrived between handler and drain must not slip a ShowText in.
+        // (Lock order: webStateMutex → clusterMutex, never the reverse.)
+        if (reflashInProgress(displaySnapshotGet().reflash) ||
+            clusterFollowerViewGet().gated) {
+          SerialPrintln("Message retained, not queued (reflash/cluster): " +
                         messageText);
         } else if (displayEnqueue(makeShowTextCommand(
                        messageText, settings.alignment,

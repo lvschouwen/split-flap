@@ -208,7 +208,37 @@ function applySettings(s) {
 		setCalibrationUnitsFromSettings(s);
 	}
 	setMqttPill(s.mqttHost || "", s.mqttConnected === true);
+	updateClusterBanner(s);
 	window.lastSettings = s;  // System tab reuses version etc. (#245)
+}
+
+//Cluster membership (#272): while this board renders a row of a cluster
+//wall, the leader owns text/mode/clock — show a persistent banner with a
+//link to the leader and disable the content controls (the backend answers
+//409 regardless; maintenance stays live). Everything comes off /settings,
+//so the state survives reboots and poll-recovers after leader changes.
+function updateClusterBanner(s) {
+	var el = document.getElementById("clusterBanner");
+	if (!el) return;
+	var clustered = !!s.clusterState && s.clusterState !== "standalone";
+	el.classList.toggle("hidden", !clustered);
+	if (clustered) {
+		var leader = s.clusterLeaderName || s.clusterLeaderHost || "leader";
+		var html = "Clustered — row " + (Number(s.clusterRow) + 1) + " of " + escapeHtml(leader);
+		if (s.clusterState === "local-fallback") html += " (leader unreachable — showing local clock)";
+		else if (s.clusterState === "grace") html += " (waiting for leader)";
+		if (s.clusterLeaderHost) {
+			html += ' · <a href="http://' + escapeHtml(s.clusterLeaderHost) + '/">open leader</a>';
+		}
+		el.innerHTML = html;
+	}
+	["inputText", "buttonSend", "selectDuration"].forEach(function(id) {
+		var control = document.getElementById(id);
+		if (control) control.disabled = clustered;
+	});
+	document.querySelectorAll("#segMode button").forEach(function(b) {
+		b.disabled = clustered;
+	});
 }
 
 function loadPage() {
