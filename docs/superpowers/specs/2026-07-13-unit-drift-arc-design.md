@@ -26,19 +26,19 @@ Key geometric fact that shapes the design: the drum only rotates forward and let
 
 `DriftState`: `drumPosition` (uint16, steps past the hall edge, mod `STEPS`), `positionKnown`, `driftEvents` (saturating uint8), `lastDriftSteps` (int16), `driftPending`.
 
-Pure functions:
-- `driftAddSteps(state, steps, stepsPerRev)` — advance position mod rev.
-- `driftFoldDeviation(pos, stepsPerRev)` — fold to signed [−rev/2, rev/2).
-- `driftOnHallEdge(state, thresholdSteps)` — deviation vs expected edge (position ≡ 0), event decision, resync position to 0; returns the folded deviation.
-- `driftExpectedCalibrateSteps(displayedLetter, calOffset, ...)` — expected step count for `calibrate()`'s marker search from the current belief (including the 50-step move-out).
-- `driftPhysicalLetter(state, calOffset, stepsPerFlap...)` — 0..44 estimate, 0xFF when `!positionKnown`.
+Pure functions (as shipped):
+- `driftAdvance(state, steps, stepsPerRev)` — advance position mod rev (handles negative jogs).
+- `driftFoldDeviation(pos, stepsPerRev)` — fold to signed [−rev/2, rev/2].
+- `driftObserveEdge(state, stepsPerRev, thresholdSteps)` — deviation vs expected edge (position ≡ 0), event decision, resync position to 0; returns true on a counted event. Used by BOTH observers — calibrate's marker search needs no separate expected-steps function because its stepping flows through the same position counter.
+- `driftMarkSynced(state)` — position freshly synced to the edge.
+- `driftPhysicalLetter(state, calOffset, stepsPerRev, flapAmount)` — nearest-flap 0..44 estimate, 0xFF when `!positionKnown`.
 - `driftEncodeDiagReply(...)` / threshold + wire constants.
 
 ### Integration
 
 - `stepCounted()` (the #231 single motion funnel) also advances `drumPosition`.
 - `stepFlaps()` converts from per-flap chunks to per-step stepping (`Stepper::step(1)` keeps inter-step pacing via its `last_step_time` member; the added `digitalRead` ≈ 4 µs vs ≥ 2 ms/step budget). Each step samples the hall with 2-sample debounce; a 1→0 edge → `driftOnHallEdge`: past threshold → `driftEvents++`, `lastDriftSteps`, `driftPending = true`. Position resyncs to ground truth either way; `displayedLetter` (the belief) is NOT touched — the re-home restores truth.
-- `calibrate()`: on marker found, if `positionKnown` and not the boot calibration, compare measured `i` against `driftExpectedCalibrateSteps()`; past threshold → `driftEvents++` + `lastDriftSteps`. Always: resync `drumPosition = 0` (the subsequent `calOffset` move flows through `stepCounted`), set `positionKnown`, clear `driftPending`.
+- `calibrate()`: on marker found, `driftObserveEdge()` measures the deviation (the search stepping flowed through the position counter); past threshold → `driftEvents++` + `lastDriftSteps`, first-ever sync never counts. Always: resync `drumPosition = 0` (the subsequent `calOffset` move flows through `stepCounted`), set `positionKnown`, clear `driftPending`.
 - `loop()` idle re-home drain (checked before the sleep gate): `driftPending && !currentlyrotating && displayedLetter == receivedNumber && (2 s since last command activity) && (60 s since last auto re-home)` → `calibrate(true)`, clear pending, stamp cooldown; the existing letter-diff check then rotates back to `receivedNumber`. The overheat gate is already satisfied by the 2 s wait. `previousMillis` is refreshed so sleep doesn't race the return move.
 - ISR mirrors (house pattern — volatile, multi-byte updates under `noInterrupts()`): physical-letter estimate, flags, `driftEvents`, clamped `lastDriftSteps`. `SFP_CMD_GET_DIAG` sets `pendingDiagResponse`; `requestEvent()` replies 6 bytes.
 

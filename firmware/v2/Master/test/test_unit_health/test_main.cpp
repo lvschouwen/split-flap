@@ -306,6 +306,23 @@ static void test_health_json_no_mismatch_without_intended_or_position() {
   TEST_ASSERT_NULL(strstr(buf, "\"mm\""));
 }
 
+static void test_health_json_no_mismatch_while_unit_moving() {
+  // A health refresh racing an in-flight rotation (or a self-test's own
+  // restore move) must not flag a spurious, self-resolving mismatch.
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].status.flags = UNIT_FLAG_MOVING;
+  units[0].diagValid = true;
+  units[0].driftFlags = 0x02;  // position known
+  units[0].physLetter = 12;
+  uint8_t intended[1] = {5};
+  char buf[256];
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, intended);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"phys\":12"));
+  TEST_ASSERT_NULL(strstr(buf, "\"mm\""));
+}
+
 static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
   // The endpoint splices a ~70 B reflash progress object (#205) into the
   // same cap-sized buffer — a fully saturated 16-unit payload must leave at
@@ -488,6 +505,7 @@ int main(int, char**) {
   RUN_TEST(test_health_json_phys_omitted_when_position_unknown);
   RUN_TEST(test_health_json_mismatch_against_intended_frame);
   RUN_TEST(test_health_json_no_mismatch_without_intended_or_position);
+  RUN_TEST(test_health_json_no_mismatch_while_unit_moving);
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
   RUN_TEST(test_health_json_combined_splices_fit_cap);
   RUN_TEST(test_health_json_silent_gap_slot);

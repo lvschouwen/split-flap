@@ -188,7 +188,12 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                        u.physLetter != 0xFF;
       if (physKnown) {
         UNIT_HEALTH_APPEND(",\"phys\":%u", (unsigned)u.physLetter);
-        if (intended != nullptr && u.physLetter != intended[i]) {
+        // No mismatch judgment against a rotating drum: a health refresh
+        // racing an in-flight move (or a self-test's own restore rotation)
+        // would flag a spurious, self-resolving "mm" (cpp-review MEDIUM).
+        bool moving =
+            u.statusValid && (u.status.flags & UNIT_FLAG_MOVING);
+        if (!moving && intended != nullptr && u.physLetter != intended[i]) {
           UNIT_HEALTH_APPEND(",\"mm\":1");
         }
       }

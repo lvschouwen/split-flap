@@ -20,7 +20,10 @@
 
 // ~half a flap (2038/45/2). Wider than the hall edge's mechanical
 // repeatability, narrower than a real one-flap slip. One-line tunable if
-// the bench shows false positives.
+// the bench shows false positives. Note the two observers define "the
+// edge" ~1-2 steps apart (calibrate accepts the first low sample, the
+// stepFlaps watch debounces with 2) — irrelevant at this threshold, but
+// revisit if it ever shrinks below ~5.
 #define DRIFT_THRESHOLD_STEPS 23
 
 #define DRIFT_LETTER_UNKNOWN 0xFF

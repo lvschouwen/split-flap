@@ -12,8 +12,10 @@ void stepCounted(int steps) {
   stepper.step(steps);
   odometerAddSteps(odometer, steps, STEPS);
   // Drift position tracking (#263): drumPosition advances along the drum's
-  // physical rotation direction, so the sign is normalised by
-  // ROTATIONDIRECTION (a reversed-wiring build still counts forward).
+  // physical rotation direction. Callers already bake ROTATIONDIRECTION
+  // into `steps`, so multiplying again deliberately CANCELS it (d² = 1) —
+  // physical-forward motion always advances the position regardless of the
+  // wiring direction. Not a bug; do not "fix" to a single multiply.
   driftAdvance(drift, (long)steps * ROTATIONDIRECTION, STEPS);
   if (odometer.revolutions != odometerRevolutions) {
     noInterrupts();
@@ -327,7 +329,9 @@ void runSelfTest() {
   if (!failed) {
     driftMarkSynced(drift);  //we are AT the entering edge
     uint16_t measuredSteps = 0;
-    uint16_t windowSteps = 0;
+    //Seed 1: the entering-edge position itself (where phase 1 stopped) is
+    //inside the window but phase 2 only samples AFTER each step.
+    uint16_t windowSteps = 1;
     unsigned long t0 = millis();
     bool leftWindow = false;
     uint8_t streak = 0;
@@ -379,7 +383,12 @@ void runSelfTest() {
     selfTest.stepsPerRev = 0;
     selfTest.hallWindowSteps = 0;
     selfTest.revTimeMs = 0;
+    //The hall edge was never found: the drum's position is unknowable, so
+    //park instead of letting the letter-diff check "restore" the commanded
+    //letter from a fake blank origin (codex review). The master's next
+    //frame re-sends content deliberately; until then the unit stays put.
     displayedLetter = 0;
+    receivedNumber = 0;
     drift.positionKnown = false;
     drift.driftPending = false;
   }

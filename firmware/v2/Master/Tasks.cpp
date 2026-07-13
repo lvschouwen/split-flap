@@ -50,8 +50,10 @@ static constexpr uint32_t ADDRESS_OP_SETTLE_MS = 3000;
 
 // Self-test wait (#265): the unit's diagnostic is ~2 revolutions at homing
 // speed (~12-15 s) but can queue behind a slow in-flight move unit-side, so
-// the window is generous. Polled at 500 ms; three consecutive invalid
-// replies with none ever valid = firmware predating the opcode.
+// the window is generous — and it re-arms once RUNNING is first observed,
+// so the true worst-case displayTask block is ~2x this constant. Polled at
+// 500 ms; three consecutive invalid replies with none ever valid =
+// firmware predating the opcode.
 static constexpr uint32_t SELF_TEST_TIMEOUT_MS = 45000;
 static constexpr uint32_t SELF_TEST_POLL_MS = 500;
 static constexpr int SELF_TEST_UNSUPPORTED_POLLS = 3;
@@ -431,6 +433,8 @@ static void displayTaskMain(void*) {
             slot.outcome = SelfTestOutcome::Timeout;
             bool sawRunning = false;
             bool everValid = false;
+            bool haveBaseline = false;
+            UnitSelfTestReading baseline{};
             int badPolls = 0;
             uint32_t start = millis();
             while (millis() - start < SELF_TEST_TIMEOUT_MS) {
@@ -448,11 +452,32 @@ static void displayTaskMain(void*) {
                 continue;
               }
               everValid = true;
+              if (!haveBaseline) {
+                // First valid reading = the pre-test buffer content. A later
+                // terminal that DIFFERS from it is provably fresh even when
+                // every poll of the RUNNING window was lost to bus glitches
+                // (codex review).
+                haveBaseline = true;
+                baseline = r;
+              }
               if (r.state == 1) {  // running
-                sawRunning = true;
+                if (!sawRunning) {
+                  // The test provably started — re-arm the window so time the
+                  // unit spent finishing a prior move doesn't eat the test's
+                  // own budget (codex review).
+                  sawRunning = true;
+                  start = millis();
+                }
                 continue;
               }
-              if (r.state == 0 || !sawRunning) continue;  // not started / stale
+              bool freshTerminal =
+                  sawRunning ||
+                  (haveBaseline &&
+                   (r.state != baseline.state ||
+                    r.stepsPerRev != baseline.stepsPerRev ||
+                    r.hallWindowSteps != baseline.hallWindowSteps ||
+                    r.revTimeMs != baseline.revTimeMs));
+              if (r.state == 0 || !freshTerminal) continue;  // not started / stale
               if (r.state == 2) {
                 slot.outcome = SelfTestOutcome::Ok;
                 slot.stepsPerRev = r.stepsPerRev;

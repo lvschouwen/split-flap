@@ -252,6 +252,7 @@ inline void buildReflashJson(char* buf, size_t cap,
 
 inline const char* selfTestOutcomeName(SelfTestOutcome o) {
   switch (o) {
+    case SelfTestOutcome::Ok:          return "ok";
     case SelfTestOutcome::WireFail:    return "wire-fail";
     case SelfTestOutcome::Timeout:     return "timeout";
     case SelfTestOutcome::UnitFailed:  return "unit-failed";
