@@ -63,6 +63,11 @@ static String otaRejectionReason;
 // for all callbacks — no lock needed. Compared only, never dereferenced.
 static AsyncWebServerRequest* otaOwnerRequest = nullptr;
 
+// Upload throughput measurement (#248): decides whether flash erase or the
+// network dominates OTA wall time before any speed work is designed. Owned
+// by the async_tcp task like the session state above.
+static uint32_t otaUploadStartMs = 0;
+
 // Same pattern for POST /firmware/rescue (#195). Separate state on purpose:
 // a rescue install and a master OTA are different flows and must not read
 // each other's leftovers. (Concurrent uploads remain #191 territory.)
@@ -624,6 +629,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
           // for a client that dies mid-upload: free the slot; the stale
           // Update session is aborted by the next upload's begin path above.
           otaOwnerRequest = request;
+          otaUploadStartMs = millis();
           request->onDisconnect([request]() {
             if (otaOwnerRequest == request) otaOwnerRequest = nullptr;
           });
@@ -644,6 +650,14 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
         }
         if (final) {
           if (Update.end(true)) {
+            uint32_t elapsedMs = millis() - otaUploadStartMs;
+            uint32_t totalBytes = (uint32_t)(index + len);
+            if (elapsedMs == 0) elapsedMs = 1;
+            SerialPrintf(
+                "Master OTA received %u bytes in %u ms (%u KB/s)\n",
+                (unsigned)totalBytes, (unsigned)elapsedMs,
+                (unsigned)(((uint64_t)totalBytes * 1000ULL / 1024ULL) /
+                           elapsedMs));
             SerialPrintln(F("Master OTA image verified and armed — reboot "
                             "boots it PENDING_VERIFY"));
           } else {

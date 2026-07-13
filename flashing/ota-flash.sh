@@ -173,6 +173,36 @@ confirm() {
   [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "aborted"; exit 1; }
 }
 
+# One multipart upload attempt; sets HTTP_CODE and CURL_RC. `Expect:` is
+# suppressed: curl's interim "100 continue" used to leak into %{http_code},
+# so a dropped connection printed "HTTP 100000" and was misread as a device
+# rejection (#248).
+upload_bin() {
+  local fw="$1" url="$2"
+  CURL_RC=0
+  HTTP_CODE=$(curl --progress-bar --show-error --max-time 180 \
+    -H 'Expect:' \
+    --output "$BODY" --write-out '%{http_code}' \
+    -F "firmware=@$fw" "$url") || CURL_RC=$?
+}
+
+# Upload with ONE retry on a network-level failure (curl exit 7 refused /
+# 28 timeout / 52 empty reply / 55 send / 56 recv). Bench 2026-07-13: a
+# mid-upload connection reset succeeded on a plain re-run — the device
+# aborts the stale half-session on the next Update.begin, so an immediate
+# retry is safe. HTTP-level rejections are never retried.
+upload_with_retry() {
+  local fw="$1" url="$2"
+  upload_bin "$fw" "$url"
+  case "$CURL_RC" in
+    7|28|52|55|56)
+      echo "[warn] network failure during upload (curl exit $CURL_RC) — retrying once..." >&2
+      sleep 3
+      upload_bin "$fw" "$url"
+      ;;
+  esac
+}
+
 # --- master firmware -------------------------------------------------------
 
 flash_master() {
@@ -204,14 +234,16 @@ flash_master() {
   local url="$TARGET/firmware/master?md5=$md5"
   [[ -n "$rev" ]] && url="$url&v=$rev"
 
-  local http_code
-  http_code=$(curl --progress-bar --show-error --max-time 180 \
-    --output "$BODY" --write-out '%{http_code}' \
-    -F "firmware=@$fw" "$url" || echo "000")
-  echo "HTTP $http_code"
+  upload_with_retry "$fw" "$url"
+  if (( CURL_RC != 0 )); then
+    echo "[fail] upload failed at the network level (curl exit $CURL_RC —" >&2
+    echo "       see curl's message above); the running image is untouched" >&2
+    return 3
+  fi
+  echo "HTTP $HTTP_CODE"
   cat "$BODY"; echo
 
-  if [[ "$http_code" != "200" ]]; then
+  if [[ "$HTTP_CODE" != "200" ]]; then
     echo "[fail] upload rejected — see response above" >&2
     return 3
   fi
@@ -273,14 +305,16 @@ install_rescue() {
   echo "Rev           : ${rev:-<unknown>}"
   confirm
 
-  local http_code
-  http_code=$(curl --progress-bar --show-error --max-time 180 \
-    --output "$BODY" --write-out '%{http_code}' \
-    -F "firmware=@$fw" "$TARGET/firmware/rescue?md5=$md5" || echo "000")
-  echo "HTTP $http_code"
+  upload_with_retry "$fw" "$TARGET/firmware/rescue?md5=$md5"
+  if (( CURL_RC != 0 )); then
+    echo "[fail] upload failed at the network level (curl exit $CURL_RC —" >&2
+    echo "       see curl's message above); the factory slot is untouched" >&2
+    return 3
+  fi
+  echo "HTTP $HTTP_CODE"
   cat "$BODY"; echo
 
-  if [[ "$http_code" == "200" ]]; then
+  if [[ "$HTTP_CODE" == "200" ]]; then
     echo "[ok] SUCCESS — rescue image in the factory slot (no reboot;"
     echo "     POST $TARGET/firmware/rescue-boot to test it)."
     return 0
