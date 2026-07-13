@@ -3,17 +3,22 @@
 // sample ring, CPU-load math and the /system/stats JSON. Natively tested by
 // test_system_stats; the netTask sampler glue lives in SystemStats.cpp.
 //
-// The ring holds ~10 min of 5 s samples so a freshly opened tab shows
-// history immediately (server-side memory, not browser-side). Only the
-// spark-lined series live in the ring; one-shot facts (uptime, counters,
-// reset reason) ride the `now` object.
+// Dual-rate (#251): the sampler ticks every SYSTEM_STATS_FAST_INTERVAL_S and
+// every sample refreshes `latest` (the JSON `now` block — live tiles), but
+// only every SYSTEM_STATS_DECIMATION-th sample lands in the history ring, so
+// the sparklines keep ~10 min of SYSTEM_STATS_INTERVAL_S samples
+// (server-side memory — a freshly opened tab shows history immediately).
+// One-shot facts (uptime, counters, reset reason) ride the `now` object.
 
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
 
-#define SYSTEM_STATS_RING        120  // samples
-#define SYSTEM_STATS_INTERVAL_S  5
+#define SYSTEM_STATS_RING            120  // history samples
+#define SYSTEM_STATS_INTERVAL_S      5    // history cadence (JSON "interval")
+#define SYSTEM_STATS_FAST_INTERVAL_S 1    // sampler tick / `now` freshness
+#define SYSTEM_STATS_DECIMATION \
+  (SYSTEM_STATS_INTERVAL_S / SYSTEM_STATS_FAST_INTERVAL_S)
 
 struct SystemSample {
   int16_t  rssi = 0;       // dBm
@@ -42,6 +47,21 @@ inline const SystemSample* systemStatsAt(const SystemStatsRing& r, uint16_t i) {
   uint16_t start = (uint16_t)((r.next + SYSTEM_STATS_RING - r.count) %
                               SYSTEM_STATS_RING);
   return &r.samples[(start + i) % SYSTEM_STATS_RING];
+}
+
+// The sampler's whole state: decimated history + the newest fast sample.
+struct SystemStatsSampler {
+  SystemStatsRing ring;
+  SystemSample latest;
+  uint8_t decim = 0;  // 0 = the next intake also lands in the ring
+};
+
+// Fast-tick intake (#251): `latest` always refreshes; the ring takes the
+// first sample (so boot has a history point) and every DECIMATION-th after.
+inline void systemStatsIntake(SystemStatsSampler& s, const SystemSample& smp) {
+  s.latest = smp;
+  if (s.decim == 0) systemStatsPush(s.ring, smp);
+  s.decim = (uint8_t)((s.decim + 1) % SYSTEM_STATS_DECIMATION);
 }
 
 // Load % of one core over a sample window, from FreeRTOS run-time-stats
@@ -75,16 +95,15 @@ struct SystemNow {
 
 // {"now":{...},"hist":{"rssi":[...],"heap":[...],"cpu0":[...],"cpu1":[...],
 //  "temp":[...]},"interval":5}
-// `now`'s spark fields mirror the newest ring sample; temp is x10 (the UI
-// divides). Returns the would-be length like snprintf; callers reject >= cap.
+// `now`'s spark fields mirror the newest FAST sample (#251), not the ring;
+// temp is x10 (the UI divides). Returns the would-be length like snprintf;
+// callers reject >= cap.
 inline size_t buildSystemStatsJson(char* buf, size_t cap,
-                                   const SystemStatsRing& r,
+                                   const SystemStatsSampler& smp,
                                    const SystemNow& now) {
   size_t o = 0;
-  const SystemSample* newest =
-      r.count > 0 ? systemStatsAt(r, (uint16_t)(r.count - 1)) : nullptr;
-  SystemSample zero;
-  if (newest == nullptr) newest = &zero;
+  const SystemStatsRing& r = smp.ring;
+  const SystemSample* newest = &smp.latest;
 
   SYSTEM_STATS_APPEND(
       "{\"now\":{\"rssi\":%d,\"heap\":%lu,\"maxAlloc\":%lu,\"psram\":%lu,"

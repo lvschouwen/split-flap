@@ -101,30 +101,81 @@ function padForMirror(text, width, alignment) {
 	return out;
 }
 
+//Riffle (#251): a tile travels THROUGH the drum order to its target the
+//way the hardware does (forward-only, wrap-around) instead of folding
+//once. Intermediate steps swap glyphs behind a restarted (partial) fold —
+//rapid flutter — and the final step gets the full #246 two-leaf fold.
+//Step rate follows the configured flap speed; travel is time-capped so a
+//worst-case 44-flap run stays snappy. Honors prefers-reduced-motion.
+var RIFFLE_MAX_TRAVEL_MS = 2500;
+
+function riffleStepMs() {
+	var speed = (window.lastSettings && Number(window.lastSettings.flapSpeed)) || 80;
+	return Math.max(30, 95 - Math.round(speed / 2));  // speed 80 -> 55 ms
+}
+
+function riffleTileTo(tile, wireChar, staggerIndex) {
+	var glyph = wireToGlyph(wireChar);
+	if (glyph === " ") glyph = "\u00a0";
+	if (tile._glyph === glyph) return;
+	tile._glyph = glyph;
+	//Two renders <1 s apart must not interleave: kill this tile's pending
+	//flip/riffle before scheduling the new one.
+	(tile._timers || []).forEach(clearTimeout);
+	if (tile._riffle) { clearInterval(tile._riffle); tile._riffle = null; }
+	var topG = tile.firstChild.firstChild, ch = tile.lastChild;
+
+	var n = CALIBRATION_LETTERS.length;
+	var from = CALIBRATION_LETTERS.indexOf(tile._wire || " ");
+	var to = CALIBRATION_LETTERS.indexOf(wireChar);
+	tile._wire = wireChar;
+	var dist = (from >= 0 && to >= 0) ? (to - from + n) % n : 0;
+	var reduced = window.matchMedia &&
+		window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+	function finalFold() {
+		//The .top leaf folds carrying the OLD glyph; the full-height .char
+		//swaps mid-fold, and the leaf takes the new glyph as it snaps back
+		//(animation end, 240 ms). #246.
+		tile.classList.remove("flip");
+		void tile.offsetWidth;
+		tile.classList.add("flip");
+		tile._timers.push(setTimeout(function() { ch.textContent = glyph; }, 110));
+		tile._timers.push(setTimeout(function() { topG.textContent = glyph; }, 240));
+	}
+
+	tile._timers = [setTimeout(function() {
+		if (dist <= 1 || reduced) { finalFold(); return; }
+		var stepMs = Math.max(25, Math.min(riffleStepMs(),
+			Math.floor(RIFFLE_MAX_TRAVEL_MS / dist)));
+		var at = from;
+		tile._riffle = setInterval(function() {
+			at = (at + 1) % n;
+			if (at === to) {
+				clearInterval(tile._riffle);
+				tile._riffle = null;
+				finalFold();
+				return;
+			}
+			var g = wireToGlyph(CALIBRATION_LETTERS[at]);
+			if (g === " ") g = "\u00a0";
+			//Restarted fold = one partial flap per step: drum flutter.
+			tile.classList.remove("flip");
+			void tile.offsetWidth;
+			tile.classList.add("flip");
+			ch.textContent = g;
+			topG.textContent = g;
+		}, stepMs);
+	}, staggerIndex * 45)];
+}
+
 function renderMirror(text) {
 	if (mirrorTiles.length === 0) return;
 	var frame = padForMirror(text, mirrorTiles.length, currentAlignment);
 	if (frame === mirrorShown) return;
 	mirrorShown = frame;
 	mirrorTiles.forEach(function(tile, i) {
-		var glyph = wireToGlyph(frame[i]);
-		if (glyph === " ") glyph = " ";
-		if (tile._glyph === glyph) return;
-		tile._glyph = glyph;
-		//Two renders <1 s apart must not interleave: kill this tile's
-		//pending flip before scheduling the new one.
-		(tile._timers || []).forEach(clearTimeout);
-		var topG = tile.firstChild.firstChild, ch = tile.lastChild;
-		tile._timers = [setTimeout(function() {
-			//The .top leaf folds carrying the OLD glyph; the full-height .char
-			//swaps mid-fold, and the leaf takes the new glyph as it snaps back
-			//(animation end, 240 ms). #246.
-			tile.classList.remove("flip");
-			void tile.offsetWidth;
-			tile.classList.add("flip");
-			tile._timers.push(setTimeout(function() { ch.textContent = glyph; }, 110));
-			tile._timers.push(setTimeout(function() { topG.textContent = glyph; }, 240));
-		}, i * 45)];
+		riffleTileTo(tile, frame[i], i);
 	});
 }
 
@@ -197,6 +248,7 @@ function startUi(s) {
 	initSegControls();
 	initLogPanel();
 	initSystemTab();
+	initDisplayEvents();
 	initMasterFirmwareUpload();
 	loadUnitHealth();
 
@@ -222,6 +274,20 @@ function startUi(s) {
 	healthPollTimer = setInterval(function() {
 		if (!document.hidden) loadUnitHealth();
 	}, 30000);
+}
+
+//SSE display push (#251): the mirror flips the moment displayTask executes
+//a command instead of waiting on the 5 s poll — which stays untouched as
+//the fallback (EventSource reconnects on its own; a dead stream just
+//degrades to polled behavior). onConnect delivers the current text.
+function initDisplayEvents() {
+	if (!window.EventSource) return;
+	var es = new EventSource("/events");
+	es.addEventListener("display", function(event) {
+		try {
+			renderMirror(JSON.parse(event.data).text || "");
+		} catch (e) { /* malformed event — the poll catches up */ }
+	});
 }
 
 window.addEventListener("load", loadPage);
