@@ -723,13 +723,19 @@ function renderUnitHealth(data) {
 	var width = (data && typeof data.width === "number") ? data.width : units.length;
 
 	//Board header strip: one segment per unit slot, aligned under its tile.
+	//Mid-reflash a unit in bootloader mode is expected, not broken (#249):
+	//yellow instead of red, and the one being written pulses.
+	var rf = (data && data.reflash) || null;
+	var rfActive = rf !== null && reflashIsRunning(rf);
 	var strip = document.getElementById("healthStrip");
 	var silent = [];
 	if (strip.children.length === width) {
 		for (var i = 0; i < width; i++) {
 			var u = units[i];
 			var cls = "";
-			if (!u || u.st !== 1) { cls = "bad"; silent.push(i + 1); }
+			if (rfActive && u && u.st === 2) {
+				cls = (rf.state === "flashing" && rf.cur === u.a) ? "flashing cur" : "flashing";
+			} else if (!u || u.st !== 1) { cls = "bad"; silent.push(i + 1); }
 			else if (unitRowIsFaulty(u) || u.fw === 1) cls = "warn";
 			strip.children[i].className = cls;
 		}
@@ -1001,7 +1007,12 @@ function pollReflashProgress() {
 				reflashPollTimer = setTimeout(pollReflashProgress, 2000);
 				return;
 			}
-			if (trackReflashProgress(rf)) return;
+			if (trackReflashProgress(rf)) {
+				//Same payload carries the mid-job unit facts — keep the
+				//board strip live (yellow) while the job runs (#249).
+				renderUnitHealth(json);
+				return;
+			}
 			//Job over: unlock, grade, and render the job's final reprobe.
 			setMaintenanceControlsDisabled(false);
 			if (rf.state === "done") {
@@ -1186,7 +1197,7 @@ function renderSystemStats(data) {
 	setStat("statCpu1", (now.cpu1 || 0) + "%");
 	setStat("statTemp", ((now.temp || 0) / 10).toFixed(1) + " °C");
 	setStat("statPsram", formatBytes(now.psram || 0));
-	setStat("statMaxAlloc", "largest block " + formatBytes(now.maxAlloc || 0));
+	setStat("statMaxAlloc", "largest contiguous " + formatBytes(now.maxAlloc || 0));
 	setStat("statI2cTx", now.i2cTx);
 	setStat("statI2cErr", now.i2cErr);
 	setStat("statMqttDrops", now.mqttDrops);
