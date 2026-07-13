@@ -492,66 +492,73 @@ function resetUnits() {
 
 // ===================== Settings =====================
 
-//Full IANA timezone table (#252): fetched lazily from /tz.json — baked at
-//build time from the vendored posix_tz_db zones.csv, ~460 zones. Keys are
-//IANA names, values POSIX strings; "UTC" maps to "" (the stored default).
-//The old 14-entry curated list was an ESP-01 flash-budget fossil.
-var tzTable = null;
-//Saving the device card before setTimezone has populated the field must
-//not post the transient empty input (= silently switch the device to
-//UTC) — until then the timezone key is omitted and the server's
-//provided-field gating leaves the stored value alone.
+//Full IANA timezone list (#252): the dropdown is populated lazily from
+///tz.json — baked at build time from the vendored posix_tz_db zones.csv,
+//~460 zones. Option value = POSIX string (wire format), text = IANA name;
+//"UTC" maps to "" (the stored default). Same control as the rest of the
+//UI — the old 14-entry curated list was an ESP-01 flash-budget fossil.
+var tzListLoaded = false;
+//Saving the device card before the list has loaded must not post the
+//transient empty select (= silently switch the device to UTC) — until
+//then the timezone key is omitted and the server's provided-field gating
+//leaves the stored value alone.
 var tzFieldReady = false;
 
-function loadTimezoneTable(done) {
-	if (tzTable) { done(); return; }
+function loadTimezoneOptions(done) {
+	if (tzListLoaded) { done(); return; }
 	fetch("/tz.json")
 		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
 		.then(function(table) {
-			tzTable = table;
-			var list = document.getElementById("tzList");
+			var select = document.getElementById("selectTimezone");
 			Object.keys(table).forEach(function(name) {
 				var opt = document.createElement("option");
-				opt.value = name;
-				list.appendChild(opt);
+				opt.value = table[name];
+				opt.textContent = name;
+				select.appendChild(opt);
 			});
+			tzListLoaded = true;
 			done();
 		})
-		.catch(function() { done(); });  //table stays null — raw POSIX mode
+		.catch(function() { done(); });  //list stays empty — custom-only mode
 }
 
-//Show the stored POSIX string as its IANA name. Many zones share a POSIX
-//rule, so prefer the name the user actually picked (remembered locally);
-//an unknown POSIX (custom / older firmware) stays visible raw so a save
-//round-trips it unchanged.
+//Select the stored POSIX string. Many zones share a POSIX rule, so prefer
+//the option whose NAME the user actually picked (remembered locally);
+//a stored value not in the list (custom / fetch failed) surfaces as a
+//"Custom" option so it isn't lost on save — v1 behavior.
 function setTimezone(tzPosix) {
-	loadTimezoneTable(function() {
-		var input = document.getElementById("inputTimezone");
+	loadTimezoneOptions(function() {
+		var select = document.getElementById("selectTimezone");
 		tzFieldReady = true;
-		if (tzTable) {
-			var remembered = localStorage.getItem("sf-tz-name");
-			if (remembered && tzTable[remembered] === tzPosix) {
-				input.value = remembered;
+		var remembered = localStorage.getItem("sf-tz-name");
+		var fallback = -1;
+		for (var i = 0; i < select.options.length; i++) {
+			if (select.options[i].value !== tzPosix) continue;
+			if (select.options[i].textContent === remembered) {
+				select.selectedIndex = i;
 				return;
 			}
-			var names = Object.keys(tzTable);
-			for (var i = 0; i < names.length; i++) {
-				if (tzTable[names[i]] === tzPosix) { input.value = names[i]; return; }
-			}
+			if (fallback < 0) fallback = i;
 		}
-		input.value = tzPosix;
+		if (fallback >= 0) { select.selectedIndex = fallback; return; }
+		var custom = document.createElement("option");
+		custom.value = tzPosix;
+		custom.textContent = "Custom: " + tzPosix;
+		select.insertBefore(custom, select.firstChild);
+		select.selectedIndex = 0;
 	});
 }
 
-//IANA name -> POSIX; any other input is sent as a raw POSIX string (the
-//previous "Custom" option, now just typed directly).
+//The selected option's POSIX value; remembers the picked NAME so a shared
+//POSIX rule round-trips to the same zone next load.
 function timezoneFieldPosix() {
-	var v = document.getElementById("inputTimezone").value.trim();
-	if (tzTable && Object.prototype.hasOwnProperty.call(tzTable, v)) {
-		localStorage.setItem("sf-tz-name", v);
-		return tzTable[v];
+	var select = document.getElementById("selectTimezone");
+	var opt = select.options[select.selectedIndex];
+	if (!opt) return "";
+	if (opt.textContent.indexOf("Custom: ") !== 0) {
+		localStorage.setItem("sf-tz-name", opt.textContent);
 	}
-	return v;
+	return opt.value;
 }
 
 function setDeviceName(storedName, effectiveName) {

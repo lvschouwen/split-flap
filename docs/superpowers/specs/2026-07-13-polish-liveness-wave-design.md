@@ -104,10 +104,11 @@ with the full posix_tz_db list (~460 zones):
 - Vendor `zones.csv` (nayarsystems/posix_tz_db) into the repo next to the
   other web sources; `build_assets.py` converts it to gzipped JSON baked
   into `WebAssets.h` as a new ASSETS entry, served at `GET /tz.json`.
-- UI: replace the `<select>` with a text input + filtered suggestion list
-  (type-ahead over IANA names). Display value = IANA name, submitted
-  value = POSIX string — the `/settings` wire contract is unchanged.
-  `tz.json` is fetched lazily the first time the Settings tab opens.
+- UI: keep the `<select>` (bench feedback 2026-07-13: a datalist input
+  looks foreign next to the rest of the UI) but populate it with the full
+  list from `/tz.json`, fetched lazily. Option text = IANA name, value =
+  POSIX string — the `/settings` wire contract is unchanged; the picked
+  name is remembered locally so zones sharing a POSIX rule round-trip.
 - A stored POSIX string not in the table still displays (current
   fallback behavior preserved).
 
