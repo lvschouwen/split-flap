@@ -183,6 +183,42 @@ def test_real_tree_bundle_matches_v1_bundle():
     ).read_text(encoding="utf-8")
 
 
+# --- timezone table (#252) ---------------------------------------------------
+
+
+def test_build_tz_json_maps_iana_to_posix(tmp_path):
+    import json
+
+    csv_file = tmp_path / "zones.csv"
+    csv_file.write_text(
+        '"Europe/Amsterdam","CET-1CEST,M3.5.0,M10.5.0/3"\n"Asia/Tokyo","JST-9"\n',
+        encoding="utf-8",
+    )
+    table = json.loads(build_assets.build_tz_json(csv_file))
+    assert table["Europe/Amsterdam"] == "CET-1CEST,M3.5.0,M10.5.0/3"
+    assert table["Asia/Tokyo"] == "JST-9"
+
+
+def test_build_tz_json_utc_head_entry_is_empty_default(tmp_path):
+    # "" is the firmware's stored UTC default — the table's UTC entry must
+    # round-trip to it, not to a POSIX "UTC0".
+    import json
+
+    csv_file = tmp_path / "zones.csv"
+    csv_file.write_text('"Etc/UTC","UTC0"\n', encoding="utf-8")
+    table = json.loads(build_assets.build_tz_json(csv_file))
+    assert table["UTC"] == ""
+
+
+def test_real_tree_has_vendored_zones_csv():
+    import json
+
+    data = pathlib.Path(build_assets.__file__).resolve().parent / "data"
+    table = json.loads(build_assets.build_tz_json(data / "zones.csv"))
+    assert len(table) > 400
+    assert table["Europe/Amsterdam"] == "CET-1CEST,M3.5.0,M10.5.0/3"
+
+
 # --- deterministic gzip (#168) ---------------------------------------------
 
 

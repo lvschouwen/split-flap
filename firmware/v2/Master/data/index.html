@@ -231,14 +231,14 @@
 			<section id="section-system" class="panel">
 				<div class="card">
 					<h2>Vitals <span class="pill off" id="systemStatsStatus">loading</span></h2>
-					<p class="note">Sampled every 5 s on the device; charts show the last ~10 minutes.</p>
+					<p class="note">Live values, sampled every second on the device; charts show the last ~10 minutes.</p>
 					<div class="stat-grid" id="statGrid">
 						<div class="stat-tile"><span class="stat-label">WiFi RSSI</span><span class="stat-value" id="statRssi">—</span><svg class="spark" id="sparkRssi" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
-						<div class="stat-tile"><span class="stat-label">Free heap</span><span class="stat-value" id="statHeap">—</span><svg class="spark" id="sparkHeap" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
-						<div class="stat-tile"><span class="stat-label">CPU net (core 0)</span><span class="stat-value" id="statCpu0">—</span><svg class="spark" id="sparkCpu0" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
-						<div class="stat-tile"><span class="stat-label">CPU display (core 1)</span><span class="stat-value" id="statCpu1">—</span><svg class="spark" id="sparkCpu1" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
+						<div class="stat-tile"><span class="stat-label">Free heap</span><span class="stat-value" id="statHeap">—</span><span class="stat-sub" id="statMaxAlloc">largest contiguous —</span><svg class="spark" id="sparkHeap" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
+						<div class="stat-tile"><span class="stat-label">CPU core 0</span><span class="stat-value" id="statCpu0">—</span><svg class="spark" id="sparkCpu0" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
+						<div class="stat-tile"><span class="stat-label">CPU core 1</span><span class="stat-value" id="statCpu1">—</span><svg class="spark" id="sparkCpu1" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
 						<div class="stat-tile"><span class="stat-label">Die temp</span><span class="stat-value" id="statTemp">—</span><svg class="spark" id="sparkTemp" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
-						<div class="stat-tile"><span class="stat-label">PSRAM free</span><span class="stat-value" id="statPsram">—</span><span class="stat-sub" id="statMaxAlloc">largest block —</span></div>
+						<div class="stat-tile"><span class="stat-label">PSRAM free</span><span class="stat-value" id="statPsram">—</span></div>
 					</div>
 				</div>
 

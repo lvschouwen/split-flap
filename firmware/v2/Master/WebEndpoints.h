@@ -24,6 +24,10 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
 void webEndpointsStart(AsyncWebServer& server);
 void webEndpointsLoop(MasterSettings& settings, SettingsStore& store);
 
+// SSE display push (#251), netTask only: sends a "display" event when the
+// snapshot's text changes. Change detection pure in DisplayEvents.h.
+void webDisplayEventsTick();
+
 // What the 1 Hz mode ticker needs from the web domain (#192): the active
 // mode plus the parameters it bakes into DisplayCommands. inputText is the
 // retained runtime message (never persisted, "" until the first POST) that

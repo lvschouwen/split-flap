@@ -67,8 +67,10 @@ static void test_collect_outdated_targets_skips_unknown_revs() {
   TEST_ASSERT_EQUAL_UINT8(1, addrs[0]);
 }
 
-static void test_batch_constants_match_v1() {
-  TEST_ASSERT_EQUAL(2, REFLASH_BATCH_SIZE);
+static void test_batch_constants() {
+  // Batch raised 2 → 4 (#250) — bench-gated on the units' lifetime
+  // brownout counters staying flat across a full 16-unit reflash.
+  TEST_ASSERT_EQUAL(4, REFLASH_BATCH_SIZE);
   TEST_ASSERT_EQUAL(15000UL, REFLASH_BATCH_SETTLE_MS);
   TEST_ASSERT_EQUAL(500, TWIBOOT_STARTUP_MS);
 }
@@ -204,7 +206,7 @@ int main(int, char**) {
   RUN_TEST(test_collect_reboot_targets_fills_addresses);
   RUN_TEST(test_collect_flash_targets_takes_bootloader_units_only);
   RUN_TEST(test_collect_outdated_targets_skips_unknown_revs);
-  RUN_TEST(test_batch_constants_match_v1);
+  RUN_TEST(test_batch_constants);
   RUN_TEST(test_fresh_progress_is_idle_and_not_in_progress);
   RUN_TEST(test_begin_enters_and_counts);
   RUN_TEST(test_unit_start_and_results_accumulate);

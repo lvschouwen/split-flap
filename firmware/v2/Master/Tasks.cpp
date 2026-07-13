@@ -733,8 +733,9 @@ static void netTaskMain(void* arg) {
   for (;;) {
     wifiServiceTick();
     webEndpointsLoop(*ctx->settings, *ctx->store);
+    webDisplayEventsTick();  // #251: SSE push on display text change
     statusLedTick();
-    systemStatsTick();  // #245: self-throttled to its 5 s cadence
+    systemStatsTick();  // #245/#251: self-throttled, 1 s fast + 5 s ring
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }

@@ -11,8 +11,10 @@
 
 // v1 #138 brownout throttle: flash at most this many units per batch, then
 // wait for the batch to come back online + finish homing before the next —
-// post-flash homing current on a supply shared with the steppers.
-#define REFLASH_BATCH_SIZE 2
+// post-flash homing current on a supply shared with the steppers. 4 (#250)
+// is bench-gated: a full-display reflash must leave every unit's lifetime
+// brownout counter (#139) flat, else revert to 2.
+#define REFLASH_BATCH_SIZE 4
 #define REFLASH_BATCH_SETTLE_MS 15000UL
 // Wait after CMD_ENTER_BOOTLOADER before talking to twiboot: watchdog reset
 // (~15 ms) + twiboot init. 500 ms is generous (v1 value).
