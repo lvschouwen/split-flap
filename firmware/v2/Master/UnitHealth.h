@@ -70,6 +70,11 @@ struct UnitFacts {
   uint8_t driftEvents = 0;
   int8_t lastDriftSteps = 0;
   bool diagValid = false;
+  // displayed==intended verdict (#264), stamped by displayApplyUnitFacts at
+  // the moment the diag was polled — phys and the standing frame are only
+  // coherent at that instant (#267: render-time comparison produced phantom
+  // mismatches from stale phys vs newer frames).
+  bool mismatch = false;
 };
 
 // driftFlags bit positions (must match the unit's UnitDrift.h encode).
@@ -144,13 +149,8 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 // `base` is SFP_I2C_ADDRESS_BASE so addr == base + index. The version string
 // is emitted raw — UnitBus's readUnitVersion rejects `"` and `\` at the I2C
 // boundary (v1 #140), so it can never break the JSON.
-// `intended` (optional) is the last frame the master actually sent, one
-// letter index per column — when present, a unit whose hall-corrected
-// physical letter disagrees gets "mm":1 (#264). nullptr = no frame truth
-// yet (boot, post-stop), so no mismatch judgments are emitted.
 inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
-                                  int width, int faulty, int base,
-                                  const uint8_t* intended = nullptr) {
+                                  int width, int faulty, int base) {
   size_t o = 0;
   UNIT_HEALTH_APPEND("{\"width\":%d,\"faulty\":%d,\"units\":[", width, faulty);
   for (int i = 0; i < width; i++) {
@@ -188,12 +188,9 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                        u.physLetter != 0xFF;
       if (physKnown) {
         UNIT_HEALTH_APPEND(",\"phys\":%u", (unsigned)u.physLetter);
-        // No mismatch judgment against a rotating drum: a health refresh
-        // racing an in-flight move (or a self-test's own restore rotation)
-        // would flag a spurious, self-resolving "mm" (cpp-review MEDIUM).
-        bool moving =
-            u.statusValid && (u.status.flags & UNIT_FLAG_MOVING);
-        if (!moving && intended != nullptr && u.physLetter != intended[i]) {
+        // Poll-time verdict stamped by displayApplyUnitFacts (#267) — this
+        // layer only serializes it.
+        if (u.mismatch) {
           UNIT_HEALTH_APPEND(",\"mm\":1");
         }
       }

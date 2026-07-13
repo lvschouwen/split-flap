@@ -144,6 +144,20 @@ inline void displayApplyUnitFacts(DisplaySnapshot& snap,
   for (int i = 0; i < maxUnits; i++) {
     snap.units[i] = facts[i];
     states[i] = facts[i].state;
+    // displayed==intended verdict (#264), stamped HERE and only here (#267):
+    // this fold runs right after a diag poll, in displayTask — the polled
+    // phys and lastFrameLetters describe the same instant (frames and polls
+    // are serialized). A render-time comparison would race newer frames
+    // against stale phys and flag phantom mismatches. No verdict against a
+    // rotating drum (self-resolving by definition, cpp-review MEDIUM) or
+    // before any frame exists.
+    UnitFacts& u = snap.units[i];
+    bool physKnown = u.diagValid &&
+                     (u.driftFlags & UNIT_DRIFT_FLAG_POSITION_KNOWN) &&
+                     u.physLetter != 0xFF;
+    bool moving = u.statusValid && (u.status.flags & UNIT_FLAG_MOVING);
+    u.mismatch = physKnown && !moving && snap.lastFrameValid &&
+                 u.physLetter != snap.lastFrameLetters[i];
   }
   snap.displayWidth = (uint8_t)computeDisplayWidth(states, maxUnits);
   snap.detectedUnitCount = (uint8_t)countRespondingUnits(states, maxUnits);

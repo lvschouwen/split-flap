@@ -268,7 +268,9 @@ static void test_health_json_phys_omitted_when_position_unknown() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"de\":0"));
 }
 
-static void test_health_json_mismatch_against_intended_frame() {
+static void test_health_json_emits_stamped_mismatch_only() {
+  // The verdict is stamped by displayApplyUnitFacts at poll time (#267);
+  // this layer only serializes it — and only for a known position.
   UnitFacts units[2];
   for (int i = 0; i < 2; i++) {
     units[i].state = 1;
@@ -276,11 +278,12 @@ static void test_health_json_mismatch_against_intended_frame() {
     units[i].diagValid = true;
     units[i].driftFlags = 0x02;  // position known
   }
-  units[0].physLetter = 7;   // intended 7 → match, no "mm"
-  units[1].physLetter = 12;  // intended 9 → mismatch
-  uint8_t intended[2] = {7, 9};
+  units[0].physLetter = 7;
+  units[0].mismatch = false;
+  units[1].physLetter = 12;
+  units[1].mismatch = true;
   char buf[512];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, intended);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   char* first = strstr(buf, "\"i\":0");
   char* second = strstr(buf, "\"i\":1");
@@ -291,35 +294,17 @@ static void test_health_json_mismatch_against_intended_frame() {
   TEST_ASSERT_NULL(strstr(first, "\"mm\""));
 }
 
-static void test_health_json_no_mismatch_without_intended_or_position() {
+static void test_health_json_no_mismatch_without_position() {
+  // A stale mismatch stamp must never surface once the position is unknown.
   UnitFacts units[1];
   units[0].state = 1;
   units[0].statusValid = true;
   units[0].diagValid = true;
   units[0].driftFlags = 0;     // position unknown
   units[0].physLetter = 0xFF;
-  uint8_t intended[1] = {5};
+  units[0].mismatch = true;
   char buf[256];
-  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, intended);
-  TEST_ASSERT_NULL(strstr(buf, "\"mm\""));
-  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, nullptr);
-  TEST_ASSERT_NULL(strstr(buf, "\"mm\""));
-}
-
-static void test_health_json_no_mismatch_while_unit_moving() {
-  // A health refresh racing an in-flight rotation (or a self-test's own
-  // restore move) must not flag a spurious, self-resolving mismatch.
-  UnitFacts units[1];
-  units[0].state = 1;
-  units[0].statusValid = true;
-  units[0].status.flags = UNIT_FLAG_MOVING;
-  units[0].diagValid = true;
-  units[0].driftFlags = 0x02;  // position known
-  units[0].physLetter = 12;
-  uint8_t intended[1] = {5};
-  char buf[256];
-  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, intended);
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"phys\":12"));
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1);
   TEST_ASSERT_NULL(strstr(buf, "\"mm\""));
 }
 
@@ -347,11 +332,10 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].driftFlags = 0x03;
     units[i].driftEvents = 255;
     units[i].lastDriftSteps = -127;
+    units[i].mismatch = true;  // widest drift block on every unit
   }
-  uint8_t intended[16];
-  for (int i = 0; i < 16; i++) intended[i] = 0;  // mismatch on every unit
   char buf[UNIT_HEALTH_JSON_CAP];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1, intended);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1);
   TEST_ASSERT_TRUE(n < sizeof(buf));
   TEST_ASSERT_TRUE(n + 96 <= UNIT_HEALTH_JSON_CAP);
 }
@@ -382,11 +366,10 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].driftFlags = 0x03;
     units[i].driftEvents = 255;
     units[i].lastDriftSteps = -127;
+    units[i].mismatch = true;
   }
-  uint8_t intended[16];
-  for (int i = 0; i < 16; i++) intended[i] = 0;
   char buf[UNIT_HEALTH_JSON_CAP];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1, intended);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
 
   // Worst wear fragment: 10-digit median, every unit flagged (hand-filled —
@@ -503,9 +486,8 @@ int main(int, char**) {
   RUN_TEST(test_selftest_readback_rejects_garbage_and_bad_state);
   RUN_TEST(test_health_json_diag_fields_emitted_when_valid);
   RUN_TEST(test_health_json_phys_omitted_when_position_unknown);
-  RUN_TEST(test_health_json_mismatch_against_intended_frame);
-  RUN_TEST(test_health_json_no_mismatch_without_intended_or_position);
-  RUN_TEST(test_health_json_no_mismatch_while_unit_moving);
+  RUN_TEST(test_health_json_emits_stamped_mismatch_only);
+  RUN_TEST(test_health_json_no_mismatch_without_position);
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
   RUN_TEST(test_health_json_combined_splices_fit_cap);
   RUN_TEST(test_health_json_silent_gap_slot);

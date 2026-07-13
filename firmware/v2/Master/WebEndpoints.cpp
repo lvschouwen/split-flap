@@ -828,9 +828,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     size_t n =
         buildUnitHealthJson(buf.get(), UNIT_HEALTH_JSON_CAP, snap.units,
                             snap.displayWidth, snap.faultyUnitCount,
-                            SFP_I2C_ADDRESS_BASE,
-                            snap.lastFrameValid ? snap.lastFrameLetters
-                                                : nullptr);
+                            SFP_I2C_ADDRESS_BASE);
     if (n == 0 || n >= UNIT_HEALTH_JSON_CAP) {
       // Would-be-truncated payload: fall back to a valid headline-only JSON
       // rather than shipping a cut object (v1 truncation discipline).

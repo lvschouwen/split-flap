@@ -279,6 +279,52 @@ static void test_reflash_json_shapes() {
       buf);
 }
 
+// --- poll-time mismatch stamping (#264/#267) ------------------------------------
+
+static UnitFacts diagFact(uint8_t phys, bool moving) {
+  UnitFacts f;
+  f.state = 1;
+  f.statusValid = true;
+  f.status.flags = moving ? UNIT_FLAG_MOVING : 0;
+  f.diagValid = true;
+  f.driftFlags = 0x02;  // position known
+  f.physLetter = phys;
+  return f;
+}
+
+static void test_apply_facts_stamps_mismatch_against_poll_time_frame() {
+  DisplaySnapshot snap;
+  snap.lastFrameLetters[0] = 7;
+  snap.lastFrameLetters[1] = 9;
+  snap.lastFrameValid = true;
+  UnitFacts facts[2] = {diagFact(7, false), diagFact(12, false)};
+  displayApplyUnitFacts(snap, facts, 2);
+  TEST_ASSERT_FALSE(snap.units[0].mismatch);  // phys 7 == intended 7
+  TEST_ASSERT_TRUE(snap.units[1].mismatch);   // phys 12 != intended 9
+}
+
+static void test_apply_facts_no_mismatch_before_first_frame() {
+  // Boot probe runs before any ShowText (#267's phantom-flag case): no
+  // frame truth yet, so no verdicts — regardless of phys vs the zeroed
+  // letter array.
+  DisplaySnapshot snap;  // lastFrameValid defaults false
+  UnitFacts facts[1] = {diagFact(12, false)};
+  displayApplyUnitFacts(snap, facts, 1);
+  TEST_ASSERT_FALSE(snap.units[0].mismatch);
+}
+
+static void test_apply_facts_no_mismatch_while_moving_or_unknown() {
+  DisplaySnapshot snap;
+  snap.lastFrameLetters[0] = 5;
+  snap.lastFrameLetters[1] = 5;
+  snap.lastFrameValid = true;
+  UnitFacts facts[2] = {diagFact(12, true), diagFact(0xFF, false)};
+  facts[1].driftFlags = 0;  // position never synced
+  displayApplyUnitFacts(snap, facts, 2);
+  TEST_ASSERT_FALSE(snap.units[0].mismatch);  // rotating: self-resolving
+  TEST_ASSERT_FALSE(snap.units[1].mismatch);  // no position estimate
+}
+
 // --- self-test op (#265) -------------------------------------------------------
 
 static void test_fresh_snapshot_selftest_slot_is_pending() {
@@ -378,5 +424,8 @@ int main(int, char**) {
   RUN_TEST(test_selftest_command_counts_without_mutation);
   RUN_TEST(test_apply_selftest_result_fills_the_slot);
   RUN_TEST(test_selftest_json_shapes);
+  RUN_TEST(test_apply_facts_stamps_mismatch_against_poll_time_frame);
+  RUN_TEST(test_apply_facts_no_mismatch_before_first_frame);
+  RUN_TEST(test_apply_facts_no_mismatch_while_moving_or_unknown);
   return UNITY_END();
 }
