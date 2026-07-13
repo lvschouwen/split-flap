@@ -31,6 +31,7 @@
 			<button type="button" class="tab-btn" data-tab="home">Home</button>
 			<button type="button" class="tab-btn" data-tab="settings">Settings</button>
 			<button type="button" class="tab-btn" data-tab="maintenance">Maintenance</button>
+			<button type="button" class="tab-btn" data-tab="system">System</button>
 			<button type="button" class="tab-btn" data-tab="logs">Logs</button>
 		</nav>
 
@@ -192,7 +193,7 @@
 							<thead>
 								<tr>
 									<th>#</th><th>Addr</th><th>State</th><th>FW</th><th>Uptime</th>
-									<th>Brown</th><th>WD</th><th>Bad&nbsp;cmd</th><th>Home</th><th>Reset&nbsp;cause</th>
+									<th>Brown</th><th>WD</th><th>Bad&nbsp;cmd</th><th>Home</th><th>Reset&nbsp;cause</th><th>Wear</th>
 								</tr>
 							</thead>
 							<tbody id="unitHealthBody"></tbody>
@@ -226,6 +227,42 @@
 			</section>
 
 			<!-- ============ LOGS ============ -->
+			<!-- ============ SYSTEM (#245) ============ -->
+			<section id="section-system" class="panel">
+				<div class="card">
+					<h2>Vitals <span class="pill off" id="systemStatsStatus">loading</span></h2>
+					<p class="note">Sampled every 5 s on the device; charts show the last ~10 minutes.</p>
+					<div class="stat-grid" id="statGrid">
+						<div class="stat-tile"><span class="stat-label">WiFi RSSI</span><span class="stat-value" id="statRssi">—</span><svg class="spark" id="sparkRssi" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
+						<div class="stat-tile"><span class="stat-label">Free heap</span><span class="stat-value" id="statHeap">—</span><svg class="spark" id="sparkHeap" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
+						<div class="stat-tile"><span class="stat-label">CPU net (core 0)</span><span class="stat-value" id="statCpu0">—</span><svg class="spark" id="sparkCpu0" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
+						<div class="stat-tile"><span class="stat-label">CPU display (core 1)</span><span class="stat-value" id="statCpu1">—</span><svg class="spark" id="sparkCpu1" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
+						<div class="stat-tile"><span class="stat-label">Die temp</span><span class="stat-value" id="statTemp">—</span><svg class="spark" id="sparkTemp" viewBox="0 0 100 28" preserveAspectRatio="none"></svg></div>
+						<div class="stat-tile"><span class="stat-label">PSRAM free</span><span class="stat-value" id="statPsram">—</span><span class="stat-sub" id="statMaxAlloc">largest block —</span></div>
+					</div>
+				</div>
+
+				<div class="card">
+					<h2>Links</h2>
+					<div class="kv-rows">
+						<div class="kv"><span>I2C transactions</span><span id="statI2cTx">—</span></div>
+						<div class="kv"><span>I2C errors</span><span id="statI2cErr">—</span></div>
+						<div class="kv"><span>MQTT drops</span><span id="statMqttDrops">—</span></div>
+						<div class="kv"><span>NTP last sync</span><span id="statNtpAge">—</span></div>
+					</div>
+				</div>
+
+				<div class="card">
+					<h2>Firmware</h2>
+					<div class="kv-rows">
+						<div class="kv"><span>Version</span><span id="statVersion">—</span></div>
+						<div class="kv"><span>Uptime</span><span id="statUptime">—</span></div>
+						<div class="kv"><span>Last reset</span><span id="statReset">—</span></div>
+						<div class="kv"><span>Heap low-water</span><span id="statMinHeap">—</span></div>
+					</div>
+				</div>
+			</section>
+
 			<section id="section-logs" class="panel">
 				<div class="card">
 					<details id="logDetails" open>

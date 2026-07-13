@@ -48,6 +48,12 @@ int unitBusWriteOffset(int i2cAddress, int16_t value);  // persists, no re-home
 int unitBusJog(int i2cAddress, int steps);              // ±127, not persisted
 int unitBusHome(int i2cAddress);                        // full calibrate(true)
 int unitBusIdentify(int i2cAddress);                    // ~3 s LED blink
+int unitBusResetOdometer(int i2cAddress);               // zero wear odometer (#231)
+
+// Bus transaction counters (#245): written only by displayTask, safe to
+// read cross-task (aligned 32-bit). Idle rotation polls are not counted.
+uint32_t unitBusTxCount();
+uint32_t unitBusErrCount();
 int unitBusRebootToBootloader(int i2cAddress);          // twiboot @DIP, ~1 s
 int unitBusSetAddress(int i2cAddress, uint8_t newAddress);  // burn + reboot
 int unitBusClearAddress(int i2cAddress);                    // EEPROM → DIP

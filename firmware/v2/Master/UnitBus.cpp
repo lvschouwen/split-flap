@@ -61,6 +61,27 @@ static void recoverBusAfterFailedRead() {
   unitBusInit();
 }
 
+// Bus transaction counters for the System tab (#245). displayTask is the
+// only writer (sole Wire toucher); netTask's stats sampler reads them.
+// Scope: sketch-protocol traffic only — frames, queries and maintenance
+// ops. Deliberately NOT counted: the ~10 Hz checkIfMoving() idle polls
+// (keep-alive noise would drown the signal) and the twiboot reflash
+// page stream (#205 reports its own progress/failures). err counts
+// write AND read-back failures while tx counts write transactions only,
+// so err can legitimately exceed tx under read-heavy failure.
+static std::atomic<uint32_t> busTxCount{0};
+static std::atomic<uint32_t> busErrCount{0};
+
+uint32_t unitBusTxCount() { return busTxCount.load(); }
+uint32_t unitBusErrCount() { return busErrCount.load(); }
+
+static int countedTransmission() {
+  int status = Wire.endTransmission();
+  busTxCount.fetch_add(1);
+  if (status != 0) busErrCount.fetch_add(1);
+  return status;
+}
+
 // Shared opcode-write-then-read-back transaction behind every readUnit*
 // helper (v1 #154): write the opcode, settle, clock `n` bytes into `buf`.
 // Old firmware that predates an opcode silently drops the write (the opcode
@@ -70,11 +91,12 @@ static void recoverBusAfterFailedRead() {
 static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf, uint8_t n) {
   Wire.beginTransmission(i2cAddress);
   Wire.write(opcode);
-  if (Wire.endTransmission() != 0) return false;
+  if (countedTransmission() != 0) return false;
   delay(UNIT_RESPONSE_SETTLE_MS);
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
   if (got != n) {
     while (Wire.available()) Wire.read();
+    busErrCount.fetch_add(1);  // short/failed read leg (#245)
     recoverBusAfterFailedRead();
     return false;
   }
@@ -97,6 +119,16 @@ static bool readUnitStatus(int i2cAddress, UnitStatus& out) {
   // Byte 7 is last-homing-step / 16 (saturating); decode by reversing.
   out.lastHomingStepCount   = (uint16_t)buf[7] << 4;
   return true;
+}
+
+// Reads the unit's revolution odometer via CMD_GET_ODOMETER (#231): 5 bytes,
+// uint32 LE + masked XOR checksum. Old firmware answers the unknown opcode
+// with its 1-byte status fallback + bus padding — odometerReadbackValid
+// rejects that instead of "verifying" garbage as a count.
+static bool readUnitOdometer(int i2cAddress, uint32_t& out) {
+  uint8_t buf[5];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_ODOMETER, buf, 5)) return false;
+  return odometerReadbackValid(buf, out);
 }
 
 // Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
@@ -173,7 +205,7 @@ static int writeToUnit(int unitIndex, uint8_t letter, uint8_t unitSpeed) {
   Wire.beginTransmission(toI2cAddress(unitIndex));
   Wire.write(letter);
   Wire.write(unitSpeed);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 // Checks if a single unit is moving (1-byte rotation status). Called ~10x/s
@@ -330,6 +362,13 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
       facts[unitIndex].offset = offset;
       facts[unitIndex].offsetValid = true;
     }
+    // Odometer is a probe-time fact like the offset (#231); pre-odometer
+    // firmware fails the checksum and stays odometerValid=false.
+    uint32_t odometer;
+    if (readUnitOdometer(i2cAddress, odometer)) {
+      facts[unitIndex].odometer = odometer;
+      facts[unitIndex].odometerValid = true;
+    }
   }
   SerialPrintf("I2C scan complete. Detected %d", detected);
   SerialPrintf("/%d possible units.\n", maxUnits);
@@ -346,6 +385,14 @@ void unitBusPollHealth(UnitFacts* facts, int maxUnits) {
     if (readUnitStatus(toI2cAddress(i), s)) {
       facts[i].status = s;
       facts[i].statusValid = true;
+    }
+    // Refresh the odometer with the same validity semantics as the status:
+    // reset, then re-read, so a unit that stops answering (or was reflashed
+    // to pre-odometer firmware) doesn't keep serving a stale count (#231).
+    uint32_t odometer;
+    if (readUnitOdometer(toI2cAddress(i), odometer)) {
+      facts[i].odometer = odometer;
+      facts[i].odometerValid = true;
     }
   }
 }
@@ -382,26 +429,32 @@ int unitBusWriteOffset(int i2cAddress, int16_t value) {
   Wire.write((uint8_t)SFP_CMD_SET_OFFSET);
   Wire.write(payload[0]);
   Wire.write(payload[1]);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusJog(int i2cAddress, int steps) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_JOG);
   Wire.write(maintEncodeJogByte(steps));
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusHome(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_HOME);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusIdentify(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_IDENTIFY);
-  return Wire.endTransmission();
+  return countedTransmission();
+}
+
+int unitBusResetOdometer(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_RESET_ODOMETER);
+  return countedTransmission();
 }
 
 // The unit watchdog-resets into twiboot, which listens ~1 s on the
@@ -410,26 +463,26 @@ int unitBusIdentify(int i2cAddress) {
 int unitBusRebootToBootloader(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_ENTER_BOOTLOADER);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusSetAddress(int i2cAddress, uint8_t newAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_SET_I2C_ADDRESS);
   Wire.write(newAddress);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusClearAddress(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_CLEAR_I2C_ADDRESS);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusBroadcastHome() {
   Wire.beginTransmission((uint8_t)SFP_I2C_GENERAL_CALL_ADDRESS);
   Wire.write((uint8_t)SFP_CMD_HOME);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 // --- unit reflash over twiboot (#205) — v1 ServiceFirmwareFunctions.ino port --
@@ -532,7 +585,7 @@ static int twibootWriteFlashPage(int addr, uint16_t flashAddr,
                  (unsigned)queued, (unsigned)(TWIBOOT_PAGE_SIZE + 4));
     return -1;
   }
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 // Writes one page and reads it back to verify, with one rewrite attempt on

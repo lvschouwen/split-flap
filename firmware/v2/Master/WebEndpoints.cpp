@@ -30,8 +30,11 @@
 #include "MdnsDiscovery.h"
 #include "MqttService.h"
 #include "SplitFlapProtocol.h"
+#include "SystemStats.h"
+#include "SystemStatsPolicy.h"
 #include "Tasks.h"
 #include "UnitBus.h"
+#include "WearPolicy.h"
 #include "WebAssets.h"
 #include "WebLog.h"
 #include "WifiService.h"
@@ -767,6 +770,19 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // GET renders JSON from the snapshot copy — never touches the bus from
   // async context (the async rule is structural here: only displayTask
   // holds Wire).
+  // System tab (#245): current vitals + ~10 min sparkline history in one
+  // JSON. History is server-side (netTask's sample ring) so a freshly
+  // opened tab has depth immediately; the browser polls at 2 s.
+  server.on("/system/stats", HTTP_GET, [](AsyncWebServerRequest* request) {
+    std::unique_ptr<char[]> buf(new char[SYSTEM_STATS_JSON_CAP]);
+    size_t n = systemStatsJson(buf.get(), SYSTEM_STATS_JSON_CAP);
+    if (n == 0 || n >= SYSTEM_STATS_JSON_CAP) {
+      request->send(500, "text/plain", F("stats unavailable"));
+      return;
+    }
+    request->send(200, "application/json", buf.get());
+  });
+
   server.on("/units/health", HTTP_GET, [](AsyncWebServerRequest* request) {
     DisplaySnapshot snap = displaySnapshotGet();
     // Heap, not stack: ~2 KB doesn't belong on the async_tcp task stack,
@@ -782,6 +798,17 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       n = (size_t)snprintf(buf.get(), UNIT_HEALTH_JSON_CAP,
                            "{\"width\":%d,\"faulty\":%d,\"units\":[]}",
                            snap.displayWidth, snap.faultyUnitCount);
+    }
+    // Wear assessment rides the same payload (#231, additive key), spliced
+    // before the closing brace like the reflash object below.
+    WearAssessment wear;
+    assessWear(snap.units, snap.displayWidth, wear);
+    char wearJson[96];
+    size_t wearLen = buildWearJson(wear, wearJson, sizeof(wearJson));
+    if (n > 0 && wearLen < sizeof(wearJson) &&
+        n + wearLen + 2 < UNIT_HEALTH_JSON_CAP) {
+      n += (size_t)snprintf(buf.get() + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
+                            ",%s}", wearJson) - 1;
     }
     // Reflash progress rides the same payload (#205, additive key — the
     // Maintenance tab already polls this endpoint). Spliced before the
@@ -879,6 +906,17 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     if (!maintCheckAddress(request, snap, addr)) return;
     maintEnqueue(request,
                  makeIdentifyCommand(displayNextMaintSeq(), (uint8_t)addr));
+  });
+
+  // Physical-rebuild bookkeeping (#231): zero the unit's wear odometer after
+  // a flap swap or motor replacement. Same op contract as identify/home.
+  server.on("/unit/reset-odometer", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    maintEnqueue(request, makeResetOdometerCommand(displayNextMaintSeq(),
+                                                   (uint8_t)addr));
   });
 
   // Debug endpoint, v1 semantics preserved: pushes the unit into twiboot

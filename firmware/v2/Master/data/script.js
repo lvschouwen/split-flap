@@ -63,9 +63,22 @@ function buildMirror(width) {
 	while (strip.firstChild) strip.removeChild(strip.firstChild);
 	mirrorTiles = [];
 	for (var i = 0; i < width; i++) {
+		//Two-leaf tile (#246): the .top half folds over the hinge carrying
+		//the old glyph while the full-height .char swaps underneath it.
 		var t = document.createElement("div");
 		t.className = "tile";
-		t.textContent = " ";
+		var top = document.createElement("span");
+		top.className = "top";
+		//Full-tile-height inner span, clipped by the half-height leaf, so the
+		//leaf shows exactly the top half of a properly centered glyph.
+		var tg = document.createElement("span");
+		tg.className = "tg";
+		top.appendChild(tg);
+		var ch = document.createElement("span");
+		ch.className = "char";
+		t.appendChild(top);
+		t.appendChild(ch);
+		t._glyph = "";
 		mirror.appendChild(t);
 		mirrorTiles.push(t);
 		strip.appendChild(document.createElement("span"));
@@ -96,15 +109,21 @@ function renderMirror(text) {
 	mirrorTiles.forEach(function(tile, i) {
 		var glyph = wireToGlyph(frame[i]);
 		if (glyph === " ") glyph = " ";
-		if (tile.textContent === glyph) return;
+		if (tile._glyph === glyph) return;
+		tile._glyph = glyph;
 		//Two renders <1 s apart must not interleave: kill this tile's
 		//pending flip before scheduling the new one.
 		(tile._timers || []).forEach(clearTimeout);
+		var topG = tile.firstChild.firstChild, ch = tile.lastChild;
 		tile._timers = [setTimeout(function() {
+			//The .top leaf folds carrying the OLD glyph; the full-height .char
+			//swaps mid-fold, and the leaf takes the new glyph as it snaps back
+			//(animation end, 240 ms). #246.
 			tile.classList.remove("flip");
 			void tile.offsetWidth;
 			tile.classList.add("flip");
-			tile._timers.push(setTimeout(function() { tile.textContent = glyph; }, 120));
+			tile._timers.push(setTimeout(function() { ch.textContent = glyph; }, 110));
+			tile._timers.push(setTimeout(function() { topG.textContent = glyph; }, 240));
 		}, i * 45)];
 	});
 }
@@ -153,6 +172,7 @@ function applySettings(s) {
 		setCalibrationUnitsFromSettings(s);
 	}
 	setMqttPill(s.mqttHost || "", s.mqttConnected === true);
+	window.lastSettings = s;  // System tab reuses version etc. (#245)
 }
 
 function loadPage() {
@@ -176,6 +196,7 @@ function startUi(s) {
 	initTabs();
 	initSegControls();
 	initLogPanel();
+	initSystemTab();
 	initMasterFirmwareUpload();
 	loadUnitHealth();
 
@@ -207,7 +228,7 @@ window.addEventListener("load", loadPage);
 
 // ===================== views / tabs =====================
 
-var TAB_NAMES = ["home", "settings", "maintenance", "logs"];
+var TAB_NAMES = ["home", "settings", "maintenance", "system", "logs"];
 
 function currentTabFromHash() {
 	var name = location.hash.replace("#", "");
@@ -216,7 +237,7 @@ function currentTabFromHash() {
 
 //"setup" is a view but not a tab: the tabbar stays hidden while it's up.
 function showView(name) {
-	["home", "settings", "maintenance", "logs", "setup"].forEach(function(view) {
+	["home", "settings", "maintenance", "system", "logs", "setup"].forEach(function(view) {
 		var section = document.getElementById("section-" + view);
 		if (section) section.classList.toggle("on", view === name);
 	});
@@ -624,6 +645,35 @@ function formatUptime(sec) {
 	return s + "s";
 }
 
+//Revolution odometer (#231): compact thousands, one decimal below 100k.
+function formatOdometer(revs) {
+	if (revs < 1000) return "" + revs;
+	if (revs < 100000) return (revs / 1000).toFixed(1) + "k";
+	if (revs < 1000000) return Math.round(revs / 1000) + "k";
+	return (revs / 1000000).toFixed(1) + "M";
+}
+
+//Wear cell (#246): relative bar scaled to the display max + the count.
+//Flagged units (server-side WearPolicy — data.wear) go red.
+function appendWearCell(row, u, wearFlagged, maxOdo) {
+	var td = document.createElement("td");
+	if (typeof u.odo !== "number") {
+		td.textContent = "—";
+	} else {
+		var bar = document.createElement("span");
+		bar.className = "wear-bar" + (wearFlagged ? " hot" : "");
+		var fill = document.createElement("i");
+		var pct = maxOdo > 0 ? Math.max(4, Math.round((u.odo / maxOdo) * 100)) : 4;
+		fill.style.width = pct + "%";
+		bar.appendChild(fill);
+		td.appendChild(bar);
+		td.appendChild(document.createTextNode(
+			formatOdometer(u.odo) + (wearFlagged ? " ⚠" : "")));
+		if (wearFlagged) td.className = "uh-bad";
+	}
+	row.appendChild(td);
+}
+
 var UNIT_STATE_LABELS = { 0: "silent", 1: "sketch", 2: "bootloader" };
 var UNIT_FW_LABELS = { 0: "ok", 1: "OUTDATED", 2: "unknown" };
 
@@ -701,8 +751,15 @@ function renderUnitHealth(data) {
 	}
 	table.classList.remove("hidden");
 
+	var wear = (data && data.wear) || { median: 0, flagged: [] };
+	var maxOdo = 0;
+	for (var m = 0; m < units.length; m++) {
+		if (typeof units[m].odo === "number" && units[m].odo > maxOdo) maxOdo = units[m].odo;
+	}
+
 	for (var idx = 0; idx < units.length; idx++) {
 		var unit = units[idx];
+		var flagged = wear.flagged.indexOf(unit.i) !== -1;
 		var row = document.createElement("tr");
 		if (unitRowIsFaulty(unit)) row.className = "uh-bad-row";
 		appendCell(row, unit.i);
@@ -720,11 +777,27 @@ function renderUnitHealth(data) {
 			//Unread unit (bootloader / silent): no diagnostics.
 			for (var c = 0; c < 7; c++) appendCell(row, "—");
 		}
+		//Wear rides its own valid flag ("odo" present) — a unit can report
+		//status but run pre-odometer firmware (#231).
+		appendWearCell(row, unit, flagged, maxOdo);
 		body.appendChild(row);
 	}
 
-	setUnitHealthSummary(responding + "/" + width + (faulty > 0 ? " · " + faulty + " faulty" : " healthy"),
-		faulty > 0 || responding < width ? "bad" : "ok");
+	var summary = responding + "/" + width + (faulty > 0 ? " · " + faulty + " faulty" : " healthy");
+	if (wear.flagged.length > 0 && wear.median > 0) {
+		//Name the worst offender with its ratio to the display median.
+		var worst = null;
+		for (var w = 0; w < units.length; w++) {
+			if (wear.flagged.indexOf(units[w].i) === -1) continue;
+			if (worst === null || (units[w].odo || 0) > (worst.odo || 0)) worst = units[w];
+		}
+		if (worst) {
+			summary += " · unit " + (worst.i + 1) + " wear " +
+				(worst.odo / wear.median).toFixed(1) + "× median";
+		}
+	}
+	setUnitHealthSummary(summary,
+		faulty > 0 || responding < width || wear.flagged.length > 0 ? "bad" : "ok");
 
 	lastHealthUnits = units;
 	renderProvisioning(units);
@@ -765,6 +838,7 @@ function renderProvisioning(units) {
 
 		appendButton(row, "Change…", function() { changeUnitAddressUi(u.a, addrInput); });
 		appendButton(row, "Clear", function() { clearUnitAddressUi(u.a); });
+		appendButton(row, "Reset odo…", function() { resetOdometerUi(u.a); });
 		container.appendChild(row);
 	});
 }
@@ -781,6 +855,20 @@ function identifyUnitUi(address) {
 		showProvisioningStatus(ok
 			? "Unit " + formatHexAddress(address) + " is blinking its LED for ~3 s."
 			: "Identify failed for " + formatHexAddress(address), ok ? "success" : "error");
+	});
+}
+
+//Physical-rebuild bookkeeping (#231): the odometer is the unit's wear
+//history — only zero it when the mechanics were actually replaced.
+function resetOdometerUi(address) {
+	if (!confirm("Reset the wear odometer of unit " + formatHexAddress(address) + "?\n\n" +
+		"Only do this after physically rebuilding the unit (flap swap, new motor) — " +
+		"the lifetime revolution count cannot be recovered.")) return;
+	postCalibration("/unit/reset-odometer", { address: address }, function(ok) {
+		showProvisioningStatus(ok
+			? "Odometer of unit " + formatHexAddress(address) + " reset to 0."
+			: "Odometer reset failed for " + formatHexAddress(address), ok ? "success" : "error");
+		if (ok) loadUnitHealth();
 	});
 }
 
@@ -1049,6 +1137,103 @@ function initLogPanel() {
 	document.addEventListener("sf-tabchange", function(event) {
 		onLogsTab = event.detail === "logs";
 		syncPolling();
+	});
+	document.addEventListener("visibilitychange", syncPolling);
+}
+
+// ===================== System tab (#245) =====================
+//Polls /system/stats at 2 s while the tab is visible; the device keeps
+//~10 min of 5 s samples server-side, so the charts have depth immediately.
+
+function formatBytes(n) {
+	if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+	if (n >= 1024) return Math.round(n / 1024) + " KB";
+	return n + " B";
+}
+
+//Min-max normalized polyline in a 100x28 viewBox. Flat series draw a
+//midline instead of dividing by zero.
+function drawSparkline(svgId, series) {
+	var svg = document.getElementById(svgId);
+	if (!svg) return;
+	removeAllChildren(svg);
+	if (!series || series.length < 2) return;
+	var min = Math.min.apply(null, series), max = Math.max.apply(null, series);
+	var span = max - min;
+	var points = [];
+	for (var i = 0; i < series.length; i++) {
+		var x = (i / (series.length - 1)) * 100;
+		var y = span === 0 ? 14 : 26 - ((series[i] - min) / span) * 24;
+		points.push(x.toFixed(1) + "," + y.toFixed(1));
+	}
+	var line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+	line.setAttribute("points", points.join(" "));
+	svg.appendChild(line);
+}
+
+function setStat(id, text) {
+	var el = document.getElementById(id);
+	if (el) el.textContent = text;
+}
+
+function renderSystemStats(data) {
+	var now = data.now || {}, hist = data.hist || {};
+	document.getElementById("systemStatsStatus").className = "pill ok";
+	document.getElementById("systemStatsStatus").textContent = "live";
+	setStat("statRssi", now.rssi === 0 ? "—" : now.rssi + " dBm");
+	setStat("statHeap", formatBytes(now.heap || 0));
+	setStat("statCpu0", (now.cpu0 || 0) + "%");
+	setStat("statCpu1", (now.cpu1 || 0) + "%");
+	setStat("statTemp", ((now.temp || 0) / 10).toFixed(1) + " °C");
+	setStat("statPsram", formatBytes(now.psram || 0));
+	setStat("statMaxAlloc", "largest block " + formatBytes(now.maxAlloc || 0));
+	setStat("statI2cTx", now.i2cTx);
+	setStat("statI2cErr", now.i2cErr);
+	setStat("statMqttDrops", now.mqttDrops);
+	setStat("statNtpAge", now.ntpAge < 0 ? "never" : formatUptime(now.ntpAge) + " ago");
+	setStat("statUptime", formatUptime(now.uptime || 0));
+	setStat("statReset", now.reset || "—");
+	setStat("statMinHeap", formatBytes(now.minHeap || 0));
+	drawSparkline("sparkRssi", hist.rssi);
+	drawSparkline("sparkHeap", hist.heap);
+	drawSparkline("sparkCpu0", hist.cpu0);
+	drawSparkline("sparkCpu1", hist.cpu1);
+	drawSparkline("sparkTemp", hist.temp);
+}
+
+function initSystemTab() {
+	var pollHandle = null;
+	var onSystemTab = false;
+
+	function fetchStats() {
+		fetch("/system/stats", { cache: "no-store" })
+			.then(function(r) { return r.json(); })
+			.then(renderSystemStats)
+			.catch(function() {
+				var pill = document.getElementById("systemStatsStatus");
+				pill.className = "pill off";
+				pill.textContent = "unreachable";
+			});
+	}
+
+	function syncPolling() {
+		var want = onSystemTab && !document.hidden;
+		if (want && pollHandle === null) {
+			fetchStats();
+			pollHandle = setInterval(fetchStats, 2000);
+		} else if (!want && pollHandle !== null) {
+			clearInterval(pollHandle);
+			pollHandle = null;
+		}
+	}
+
+	document.addEventListener("sf-tabchange", function(event) {
+		onSystemTab = event.detail === "system";
+		syncPolling();
+		//The firmware version already rides /settings — reuse the cached copy.
+		if (onSystemTab && window.lastSettings && window.lastSettings.version) {
+			setStat("statVersion", window.lastSettings.version);
+		}
 	});
 	document.addEventListener("visibilitychange", syncPolling);
 }

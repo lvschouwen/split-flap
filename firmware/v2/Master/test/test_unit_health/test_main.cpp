@@ -12,6 +12,7 @@
 #include "../../TwibootProtocol.h"
 #include "../../UnitHealth.h"
 #include "../../UnitProtocolHelpers.h"
+#include "../../WearPolicy.h"
 #include "SplitFlapProtocol.h"
 
 void setUp() {}
@@ -114,6 +115,47 @@ static void test_health_json_addr_eeprom_bit_surfaces_as_ae() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"ae\":1"));
 }
 
+static void test_health_json_odometer_emitted_when_valid() {
+  // #231: "odo" rides its own valid flag, independent of statusValid —
+  // a unit can report status but run pre-odometer firmware.
+  UnitFacts units[2];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].odometer = 123456;
+  units[0].odometerValid = true;
+  units[1].state = 1;
+  units[1].statusValid = true;  // no odometer -> no "odo" key
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"odo\":123456"));
+  char* second = strstr(buf, "\"i\":1");
+  TEST_ASSERT_NOT_NULL(second);
+  TEST_ASSERT_NULL(strstr(second, "\"odo\""));
+}
+
+// --- odometer readback (SFP_CMD_GET_ODOMETER, #231) --------------------------
+
+static void test_odometer_readback_valid_roundtrip() {
+  uint8_t buf[5] = {0x01, 0x02, 0x03, 0x04,
+                    (uint8_t)((0x01 ^ 0x02 ^ 0x03 ^ 0x04) ^ 0xA5)};
+  uint32_t out = 0;
+  TEST_ASSERT_TRUE(odometerReadbackValid(buf, out));
+  TEST_ASSERT_EQUAL_UINT32(0x04030201UL, out);
+}
+
+static void test_odometer_readback_rejects_old_firmware_garbage() {
+  // Pre-odometer firmware answers the unknown opcode with its 1-byte status
+  // reply + bus padding: all-0xFF, all-0x00 and repeated 0x01 must all fail.
+  uint32_t out;
+  uint8_t ff[5] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  uint8_t zero[5] = {0x00, 0x00, 0x00, 0x00, 0x00};
+  uint8_t busy[5] = {0x01, 0x01, 0x01, 0x01, 0x01};
+  TEST_ASSERT_FALSE(odometerReadbackValid(ff, out));
+  TEST_ASSERT_FALSE(odometerReadbackValid(zero, out));
+  TEST_ASSERT_FALSE(odometerReadbackValid(busy, out));
+}
+
 static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
   // The endpoint splices a ~70 B reflash progress object (#205) into the
   // same cap-sized buffer — a fully saturated 16-unit payload must leave at
@@ -131,11 +173,66 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].status.uptimeSeconds = 65535;
     units[i].status.badCommandCount = 255;
     units[i].status.lastHomingStepCount = 65520;
+    units[i].odometer = 0xFFFFFFFEUL;  // widest possible "odo" field (#231)
+    units[i].odometerValid = true;
   }
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1);
   TEST_ASSERT_TRUE(n < sizeof(buf));
   TEST_ASSERT_TRUE(n + 96 <= UNIT_HEALTH_JSON_CAP);
+}
+
+static void test_health_json_combined_splices_fit_cap() {
+  // WebEndpoints splices BOTH the wear object (#231) and the reflash object
+  // (#205) into the same cap-sized buffer, each before the closing brace.
+  // Rebuild that combination at its worst case with the endpoint's exact
+  // arithmetic: all three keys must survive, or a future growth of any one
+  // piece silently drops the later splice.
+  UnitFacts units[16];
+  for (int i = 0; i < 16; i++) {
+    units[i].state = 1;
+    units[i].statusValid = true;
+    units[i].fwStatus = 2;
+    strcpy(units[i].version, "abc12345");
+    units[i].status.flags = 0xFF;
+    units[i].status.mcusrAtBoot = 255;
+    units[i].status.lifetimeBrownoutCount = 255;
+    units[i].status.lifetimeWatchdogCount = 255;
+    units[i].status.uptimeSeconds = 65535;
+    units[i].status.badCommandCount = 255;
+    units[i].status.lastHomingStepCount = 65520;
+    units[i].odometer = 0xFFFFFFFEUL;
+    units[i].odometerValid = true;
+  }
+  char buf[UNIT_HEALTH_JSON_CAP];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+
+  // Worst wear fragment: 10-digit median, every unit flagged (hand-filled —
+  // assessWear can never flag all 16, but the buffer must survive it).
+  WearAssessment w;
+  w.median = 0xFFFFFFFFUL;
+  for (int i = 0; i < 16; i++) w.flagged[i] = true;
+  w.flaggedCount = 16;
+  char wearJson[96];
+  size_t wearLen = buildWearJson(w, wearJson, sizeof(wearJson));
+  TEST_ASSERT_TRUE(wearLen > 0 && wearLen < sizeof(wearJson));
+  TEST_ASSERT_TRUE(n + wearLen + 2 < UNIT_HEALTH_JSON_CAP);
+  n += (size_t)snprintf(buf + n - 1, UNIT_HEALTH_JSON_CAP - n + 1, ",%s}",
+                        wearJson) - 1;
+
+  // Worst reflash fragment (buildReflashJson's format, saturated fields).
+  const char* reflashJson =
+      "{\"state\":\"flashing\",\"total\":16,\"done\":16,\"failed\":16,\"cur\":127}";
+  TEST_ASSERT_TRUE(n + strlen(reflashJson) + 13 < UNIT_HEALTH_JSON_CAP);
+  snprintf(buf + n - 1, UNIT_HEALTH_JSON_CAP - n + 1, ",\"reflash\":%s}",
+           reflashJson);
+
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"odo\":"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"wear\":{"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"reflash\":{"));
+  TEST_ASSERT_EQUAL_CHAR('}', buf[strlen(buf) - 1]);
+  TEST_ASSERT_TRUE(strlen(buf) < UNIT_HEALTH_JSON_CAP);
 }
 
 static void test_health_json_silent_gap_slot() {
@@ -214,7 +311,11 @@ int main(int, char**) {
   RUN_TEST(test_faulty_count_only_counts_valid_slots);
   RUN_TEST(test_health_json_valid_and_bootloader_slots);
   RUN_TEST(test_health_json_addr_eeprom_bit_surfaces_as_ae);
+  RUN_TEST(test_health_json_odometer_emitted_when_valid);
+  RUN_TEST(test_odometer_readback_valid_roundtrip);
+  RUN_TEST(test_odometer_readback_rejects_old_firmware_garbage);
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
+  RUN_TEST(test_health_json_combined_splices_fit_cap);
   RUN_TEST(test_health_json_silent_gap_slot);
   RUN_TEST(test_health_json_overflow_reports_full);
   RUN_TEST(test_letter_readback_valid_pair);

@@ -69,6 +69,10 @@ jobs:
         working-directory: firmware/v1/ESPMaster
         run: pio test -e native
 
+      - name: Run Unit native tests
+        working-directory: firmware/v1/Unit
+        run: pio test -e native
+
       - name: Run v2 Master native tests
         working-directory: firmware/v2/Master
         run: pio test -e native

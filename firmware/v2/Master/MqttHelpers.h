@@ -237,6 +237,10 @@ enum MqttDiscoveryEntity {
   // Per-unit health (#137) — state = integer faulty count for alerting;
   // json_attributes_topic carries the full per-unit breakdown for drill-down.
   DISCOVERY_UNITS_FAULTY,
+  // Wear warning (#231) — binary problem sensor, ON when any unit wears past
+  // the relative threshold (WearPolicy.h); median + flagged list ride the
+  // units/wear attrs topic.
+  DISCOVERY_UNIT_WEAR,
   DISCOVERY_ENTITY_COUNT
 };
 
@@ -267,6 +271,7 @@ inline MqttDiscMeta mqttDiscMeta(int entity) {
     case DISCOVERY_ALIGNMENT:    return { "select",        "_alignment" };
     case DISCOVERY_RESTART:      return { "button",        "_restart" };
     case DISCOVERY_UNITS_FAULTY: return { "sensor",        "_units_faulty" };
+    case DISCOVERY_UNIT_WEAR:    return { "binary_sensor", "_unit_wear" };
   }
   return { nullptr, nullptr };
 }
@@ -361,6 +366,13 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
       //sensor-state limit (#137).
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Faulty units\",\"stat_t\":\"splitflap/%s/units_faulty\",\"json_attr_t\":\"splitflap/%s/units/attrs\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_units_faulty\",\"ent_cat\":\"diagnostic\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+    case DISCOVERY_UNIT_WEAR:
+      //Binary problem sensor (#231): ON when any unit wears past the relative
+      //threshold. The median + flagged unit list ride a dedicated attrs topic
+      //so an automation can name the offender without parsing units/attrs.
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Unit wear warning\",\"stat_t\":\"splitflap/%s/units_wear\",\"json_attr_t\":\"splitflap/%s/units/wear\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_unit_wear\",\"dev_cla\":\"problem\",\"ent_cat\":\"diagnostic\",\"pl_on\":\"ON\",\"pl_off\":\"OFF\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
   }
   if (bufLen > 0) buf[0] = '\0';

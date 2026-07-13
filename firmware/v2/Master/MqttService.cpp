@@ -17,6 +17,7 @@
 #include "DisplayIpc.h"
 #include "HelpersSerialHandling.h"
 #include "MqttHelpers.h"
+#include "WearPolicy.h"
 #include "MqttLifecyclePolicy.h"
 #include "OtaService.h"
 #include "SplitFlapProtocol.h"
@@ -107,8 +108,14 @@ static char rxPayload[sizeof(MqttInboxMessage::payload)];
 
 static void onMqttConnect(bool /*sessionPresent*/) { mqttJustConnected = true; }
 
+static std::atomic<uint32_t> mqttDropCounter{0};  // System tab (#245);
+                                                  // mqttTask writes, sampler reads
+
+uint32_t mqttDropCount() { return mqttDropCounter.load(); }
+
 static void onMqttDisconnect(espMqttClientTypes::DisconnectReason /*reason*/) {
   mqttDisconnectedEvent = true;
+  mqttDropCounter.fetch_add(1);
 }
 
 static void onMqttMessage(const espMqttClientTypes::MessageProperties& props,
@@ -521,6 +528,21 @@ void mqttServiceTick() {
     snprintf(fc, sizeof(fc), "%d", (int)snap.faultyUnitCount);
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units_faulty").c_str(),
                        0, true, fc);
+    // Wear warning (#231): binary problem state + median/flagged attrs, both
+    // computed from the same snapshot the health payload uses.
+    WearAssessment wear;
+    assessWear(snap.units, snap.displayWidth, wear);
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units_wear").c_str(),
+                       0, true, wear.flaggedCount > 0 ? "ON" : "OFF");
+    char wearAttrs[100];
+    wearAttrs[0] = '{';
+    size_t wn = buildWearJson(wear, wearAttrs + 1, sizeof(wearAttrs) - 2);
+    if (wn > 0 && wn < sizeof(wearAttrs) - 2) {
+      wearAttrs[wn + 1] = '}';
+      wearAttrs[wn + 2] = '\0';
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units/wear").c_str(),
+                         0, true, wearAttrs);
+    }
     // Static, not stack (~2 KB doesn't belong on mqttTask's stack) and not
     // heap (a forever-periodic alloc/free is churn the memory policy
     // forbids). mqttTask-only access, so no guard needed.

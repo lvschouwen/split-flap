@@ -56,6 +56,11 @@ struct UnitFacts {
   // (v1 #32), and is dropped when a bootloader reboot invalidates reads.
   int16_t offset = 0;
   bool offsetValid = false;
+  // Revolution odometer (#231): probe-time CMD_GET_ODOMETER truth, same
+  // lifecycle as offset. odometerValid stays false for silent/bootloader
+  // units and firmware predating the opcode (checksum-rejected replies).
+  uint32_t odometer = 0;
+  bool odometerValid = false;
 };
 
 // fwStatus from a unit's reported rev vs the build's bundled unit rev
@@ -97,12 +102,13 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
   return count;
 }
 
-// Worst case (16 valid units, all counters saturated) measures 2047 B — same
-// truncation contract as v1, cap raised over v1's 2048 for the spliced
-// reflash progress object (#205, ~70 B) and the per-unit "ae" field (#215)
-// so a full display can't push the payload into the headline-only fallback.
-// test_unit_health pins the worst case + headroom against this cap.
-#define UNIT_HEALTH_JSON_CAP 2304
+// Worst case (16 valid units, all counters saturated, 10-digit odometers)
+// measures ~2335 B — same truncation contract as v1, cap raised over v1's
+// 2048 for the spliced reflash progress object (#205, ~70 B), the per-unit
+// "ae" field (#215), the per-unit "odo" field and the spliced wear object
+// (#231, ~45 B) so a full display can't push the payload into the
+// headline-only fallback. test_unit_health pins the worst case + headroom.
+#define UNIT_HEALTH_JSON_CAP 2688
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
@@ -141,6 +147,11 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                          (unsigned)s.badCommandCount, (unsigned)s.mcusrAtBoot,
                          (unsigned)s.flags, (unsigned)s.lastHomingStepCount,
                          (s.flags & UNIT_FLAG_ADDR_EEPROM) ? 1u : 0u);
+    }
+    if (u.odometerValid) {
+      // Rides its own valid flag, independent of statusValid — a unit can
+      // report status but run pre-odometer firmware (#231).
+      UNIT_HEALTH_APPEND(",\"odo\":%lu", (unsigned long)u.odometer);
     }
     UNIT_HEALTH_APPEND("}");
   }

@@ -335,6 +335,26 @@ static void test_discovery_diagnostics_fragments() {
 // Every entity must produce a well-formed, non-truncated payload+topic — the
 // generic builder's guard means a too-small buffer would silently return a
 // cut JSON, which the runtime rejects; this asserts none of them get close.
+// #231: the wear-warning binary sensor alerts when any unit wears past the
+// relative threshold; the median + flagged list ride a dedicated attrs topic
+// (units/wear) so automations can name the offending unit.
+static void test_discovery_unit_wear_topic_and_payload() {
+  char buf[512];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_UNIT_WEAR, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/binary_sensor/flappy_unit_wear/config",
+                           buf);
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_UNIT_WEAR, "flappy",
+                        "abc1234");
+  assert_contains(buf, "\"name\":\"Unit wear warning\"");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/units_wear\"");
+  assert_contains(buf, "\"json_attr_t\":\"splitflap/flappy/units/wear\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_unit_wear\"");
+  assert_contains(buf, "\"dev_cla\":\"problem\"");
+  assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
+  assert_contains(buf, "\"pl_on\":\"ON\"");
+}
+
 static void test_all_discovery_entities_wellformed() {
   char pbuf[512];
   char tbuf[96];
@@ -475,5 +495,6 @@ int main(int, char**) {
   RUN_TEST(test_restart_command_only_fires_on_press);
   RUN_TEST(test_discovery_control_topics_and_payloads);
   RUN_TEST(test_discovery_units_faulty_topic_and_payload);
+  RUN_TEST(test_discovery_unit_wear_topic_and_payload);
   return UNITY_END();
 }

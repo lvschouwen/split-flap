@@ -91,6 +91,7 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
     case DisplayOpcode::Identify:
     case DisplayOpcode::SetAddress:
     case DisplayOpcode::ClearAddress:
+    case DisplayOpcode::ResetOdometer:
     case DisplayOpcode::ResetUnits:
     case DisplayOpcode::ReflashUnits:
       snap.commandsProcessed++;
@@ -143,6 +144,16 @@ inline void displayApplyOffsetWrite(DisplaySnapshot& snap, int i2cAddress,
   snap.units[idx].offsetValid = true;
 }
 
+// A successful RESET_ODOMETER zeroes the unit's count; patch the fact in
+// place like the offset write so the wear view doesn't show the stale
+// count until the next probe (#231).
+inline void displayApplyOdometerReset(DisplaySnapshot& snap, int i2cAddress) {
+  int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
+  if (idx < 0 || idx >= UNITS_AMOUNT) return;
+  snap.units[idx].odometer = 0;
+  snap.units[idx].odometerValid = true;
+}
+
 // A unit sent into twiboot forgets nothing, but the master must stop
 // serving reads for it until the next probe confirms it is back in sketch.
 inline void displayInvalidateUnitReads(DisplaySnapshot& snap, int i2cAddress) {
@@ -150,6 +161,7 @@ inline void displayInvalidateUnitReads(DisplaySnapshot& snap, int i2cAddress) {
   if (idx < 0 || idx >= UNITS_AMOUNT) return;
   snap.units[idx].offsetValid = false;
   snap.units[idx].statusValid = false;
+  snap.units[idx].odometerValid = false;
 }
 
 // --- /unit/op-result (#204) -------------------------------------------------------

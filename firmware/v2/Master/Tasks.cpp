@@ -13,6 +13,7 @@
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "StatusLed.h"
+#include "SystemStats.h"
 #include "UnitBus.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
@@ -395,6 +396,20 @@ static void displayTaskMain(void*) {
               MaintReason::None);
           break;
         }
+        case DisplayOpcode::ResetOdometer: {
+          int status = unitBusResetOdometer(cmd.unitAddress);
+          if (status == 0) {
+            // Patch the fact in place like a successful offset write —
+            // the wear view must not show the stale count until the next
+            // probe (#231).
+            displayApplyOdometerReset(local, cmd.unitAddress);
+          }
+          displayApplyMaintResult(
+              local, cmd,
+              status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
+              MaintReason::None);
+          break;
+        }
         case DisplayOpcode::RebootToBootloader: {
           // NO follow-up probe (v1 #88 hard rule): the unit sits in twiboot
           // ~1 s and the probe's CHIPINFO query would pin it there forever.
@@ -607,6 +622,7 @@ static void netTaskMain(void* arg) {
     wifiServiceTick();
     webEndpointsLoop(*ctx->settings, *ctx->store);
     statusLedTick();
+    systemStatsTick();  // #245: self-throttled to its 5 s cadence
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }

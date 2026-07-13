@@ -70,6 +70,9 @@
 #define SFP_CMD_GET_OFFSET         0x82  // reply: 2 bytes int16 LE calOffset
 #define SFP_CMD_GET_STATUS         0x83  // reply: 8 bytes health/diag (issue #47)
 #define SFP_CMD_GET_LETTER         0x84  // reply: 2 bytes index + ~index (issue #106)
+#define SFP_CMD_GET_ODOMETER       0x85  // reply: 5 bytes — uint32 LE drum
+                                         //     revolutions + XOR checksum ^ 0xA5
+                                         //     (wire format in UnitOdometer.h, #231)
 
 // --- 0x9X mutations ---
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT reset)
@@ -85,6 +88,9 @@
 #define SFP_CMD_SET_I2C_ADDRESS    0x94  // +1 byte new I2C address (1..126); persist + reboot
 #define SFP_CMD_CLEAR_I2C_ADDRESS  0x95  // no args; clear EEPROM magic, reboot -> DIP
 #define SFP_CMD_IDENTIFY           0x96  // no args; non-blocking LED_BUILTIN blink (~3 s)
+#define SFP_CMD_RESET_ODOMETER     0x97  // no args; zero the revolution odometer +
+                                         //     its EEPROM ring — for physical rebuilds
+                                         //     (flap swap, new motor) only (#231)
 
 // SET_OFFSET's accepted range (#171). The bound is one full revolution of the
 // unit's 28BYJ-48 drum (its STEPS constant — a static_assert there pins the

@@ -105,7 +105,10 @@ static void test_maintenance_opcodes_count_and_apply() {
   TEST_ASSERT_TRUE(displayApplyCommand(snap, makeRebootToBootloaderCommand(5, 3)));
   TEST_ASSERT_TRUE(displayApplyCommand(snap, makeSetAddressCommand(6, 3, 4)));
   TEST_ASSERT_TRUE(displayApplyCommand(snap, makeClearAddressCommand(7, 3)));
-  TEST_ASSERT_EQUAL(7, snap.commandsProcessed);
+  // #231 review CRITICAL: displayApplyCommand gates the whole dispatch in
+  // Tasks.cpp — an opcode missing here silently never executes on the bus.
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeResetOdometerCommand(8, 3)));
+  TEST_ASSERT_EQUAL(8, snap.commandsProcessed);
 }
 
 static void test_stop_clears_current_text() {
