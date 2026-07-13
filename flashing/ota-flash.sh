@@ -118,6 +118,26 @@ exit 0
 REMOTE
 }
 
+# Staleness warning (#262): this script lives on the operator machine but
+# evolves in the repo — a stale copy silently misses fixes. Compare against
+# the copy staged next to the bins; warn-only (never blocks a flash, never
+# self-modifies). Soft-fails silently: no staged copy / no ssh = no verdict.
+check_script_freshness() {
+  local remote_md5 local_md5
+  remote_md5=$(ssh "${SSH_OPTS[@]}" -- "$SERVER" bash -s -- "$REMOTE_DIR" <<'REMOTE'
+dir="$1"
+md5sum -- "$dir/ota-flash.sh" 2>/dev/null | awk '{print $1}'
+exit 0
+REMOTE
+  ) || return 0
+  [[ -n "$remote_md5" ]] || return 0
+  local_md5=$(md5sum -- "$0" | awk '{print $1}')
+  if [[ "$remote_md5" != "$local_md5" ]]; then
+    echo "NOTE: this script differs from the copy staged on the build server —"
+    echo "      update with: scp $SERVER:$REMOTE_DIR/ota-flash.sh $0"
+  fi
+}
+
 # Download the newest <prefix>-<rev>.bin; prints the local path.
 fetch_latest() {
   local prefix="$1"
@@ -357,6 +377,7 @@ else
   echo "Source        : $SERVER:$REMOTE_DIR (latest by mtime)"
 fi
 echo "Mode          : $MODE"
+if [[ -n "$SERVER" ]]; then check_script_freshness; fi
 echo
 
 case "$MODE" in

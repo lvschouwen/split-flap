@@ -99,4 +99,7 @@ the download. Server/dir defaults come from `SPLITFLAP_BIN_HOST` /
 home). A network-level upload failure (connection reset, timeout) is
 reported as such — distinct from a device rejection — and retried once
 automatically (#248); the device aborts the stale half-session on the
-next upload's start.
+next upload's start. On every server-backed run the script md5-compares
+itself against `<staging-dir>/ota-flash.sh` and prints the update
+one-liner when the local copy is stale (#262, warn-only) — so keep the
+staged copy fresh alongside the bins.
