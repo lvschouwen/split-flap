@@ -156,6 +156,156 @@ static void test_odometer_readback_rejects_old_firmware_garbage() {
   TEST_ASSERT_FALSE(odometerReadbackValid(busy, out));
 }
 
+// --- diag readback (SFP_CMD_GET_DIAG, #263/#264) ------------------------------
+
+static void test_diag_readback_valid_roundtrip() {
+  // physLetter 7, flags pending|known, 3 events, -30 steps, reserved 0.
+  uint8_t buf[6] = {7, 0x03, 3, (uint8_t)(int8_t)-30, 0, 0};
+  buf[5] = (uint8_t)((buf[0] ^ buf[1] ^ buf[2] ^ buf[3] ^ buf[4]) ^ 0xB7);
+  UnitDiagReading out;
+  TEST_ASSERT_TRUE(diagReadbackValid(buf, 45, out));
+  TEST_ASSERT_EQUAL_UINT8(7, out.physicalLetter);
+  TEST_ASSERT_EQUAL_UINT8(0x03, out.flags);
+  TEST_ASSERT_EQUAL_UINT8(3, out.driftEvents);
+  TEST_ASSERT_EQUAL_INT8(-30, out.lastDriftSteps);
+}
+
+static void test_diag_readback_accepts_unknown_letter_sentinel() {
+  uint8_t buf[6] = {0xFF, 0, 0, 0, 0, 0};
+  buf[5] = (uint8_t)((buf[0] ^ buf[1] ^ buf[2] ^ buf[3] ^ buf[4]) ^ 0xB7);
+  UnitDiagReading out;
+  TEST_ASSERT_TRUE(diagReadbackValid(buf, 45, out));
+  TEST_ASSERT_EQUAL_UINT8(0xFF, out.physicalLetter);
+}
+
+static void test_diag_readback_rejects_old_firmware_garbage() {
+  // Pre-diag firmware answers the unknown opcode with 1-byte status + bus
+  // padding: all-0xFF, all-0x00 and repeated 0x01 must all fail (#106 class).
+  UnitDiagReading out;
+  uint8_t ff[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  uint8_t zero[6] = {0, 0, 0, 0, 0, 0};
+  uint8_t busy[6] = {1, 1, 1, 1, 1, 1};
+  TEST_ASSERT_FALSE(diagReadbackValid(ff, 45, out));
+  TEST_ASSERT_FALSE(diagReadbackValid(zero, 45, out));
+  TEST_ASSERT_FALSE(diagReadbackValid(busy, 45, out));
+}
+
+static void test_diag_readback_rejects_out_of_range_letter() {
+  // Checksum-valid but letter 45 with flapAmount 45 → glitched payload.
+  uint8_t buf[6] = {45, 0x02, 0, 0, 0, 0};
+  buf[5] = (uint8_t)((buf[0] ^ buf[1] ^ buf[2] ^ buf[3] ^ buf[4]) ^ 0xB7);
+  UnitDiagReading out;
+  TEST_ASSERT_FALSE(diagReadbackValid(buf, 45, out));
+}
+
+// --- self-test readback (SFP_CMD_GET_SELF_TEST, #265) --------------------------
+
+static void test_selftest_readback_valid_roundtrip() {
+  uint8_t buf[9] = {2, 0xF9, 0x07, 0x5A, 0x00, 0xE8, 0x17, 0x00, 0};
+  uint8_t x = 0;
+  for (int i = 0; i < 8; i++) x ^= buf[i];
+  buf[8] = (uint8_t)(x ^ 0x5C);
+  UnitSelfTestReading out;
+  TEST_ASSERT_TRUE(selfTestReadbackValid(buf, out));
+  TEST_ASSERT_EQUAL_UINT8(2, out.state);
+  TEST_ASSERT_EQUAL_UINT16(2041, out.stepsPerRev);
+  TEST_ASSERT_EQUAL_UINT16(90, out.hallWindowSteps);
+  TEST_ASSERT_EQUAL_UINT16(6120, out.revTimeMs);
+}
+
+static void test_selftest_readback_rejects_garbage_and_bad_state() {
+  UnitSelfTestReading out;
+  uint8_t ff[9] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  uint8_t zero[9] = {0};
+  zero[8] = 0x01;  // break the checksum too
+  TEST_ASSERT_FALSE(selfTestReadbackValid(ff, out));
+  TEST_ASSERT_FALSE(selfTestReadbackValid(zero, out));
+  // Checksum-valid but state out of the 0..3 vocabulary.
+  uint8_t badState[9] = {9, 0, 0, 0, 0, 0, 0, 0, 0};
+  uint8_t x = 0;
+  for (int i = 0; i < 8; i++) x ^= badState[i];
+  badState[8] = (uint8_t)(x ^ 0x5C);
+  TEST_ASSERT_FALSE(selfTestReadbackValid(badState, out));
+}
+
+// --- health JSON: drift fields + mismatch (#263/#264) --------------------------
+
+static void test_health_json_diag_fields_emitted_when_valid() {
+  UnitFacts units[2];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].diagValid = true;
+  units[0].physLetter = 7;
+  units[0].driftFlags = 0x03;  // pending | position known
+  units[0].driftEvents = 4;
+  units[0].lastDriftSteps = -30;
+  units[1].state = 1;  // no diag read (old firmware): no drift keys at all
+  units[1].statusValid = true;
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"phys\":7"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"de\":4"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"ds\":-30"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"dp\":1"));
+  char* second = strstr(buf, "\"i\":1");
+  TEST_ASSERT_NOT_NULL(second);
+  TEST_ASSERT_NULL(strstr(second, "\"de\""));
+}
+
+static void test_health_json_phys_omitted_when_position_unknown() {
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].diagValid = true;
+  units[0].physLetter = 0xFF;  // DRIFT_LETTER_UNKNOWN
+  units[0].driftFlags = 0;     // position not known
+  units[0].driftEvents = 0;
+  char buf[256];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NULL(strstr(buf, "\"phys\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"de\":0"));
+}
+
+static void test_health_json_mismatch_against_intended_frame() {
+  UnitFacts units[2];
+  for (int i = 0; i < 2; i++) {
+    units[i].state = 1;
+    units[i].statusValid = true;
+    units[i].diagValid = true;
+    units[i].driftFlags = 0x02;  // position known
+  }
+  units[0].physLetter = 7;   // intended 7 → match, no "mm"
+  units[1].physLetter = 12;  // intended 9 → mismatch
+  uint8_t intended[2] = {7, 9};
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, intended);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  char* first = strstr(buf, "\"i\":0");
+  char* second = strstr(buf, "\"i\":1");
+  TEST_ASSERT_NOT_NULL(first);
+  TEST_ASSERT_NOT_NULL(second);
+  TEST_ASSERT_TRUE(strstr(buf, "\"mm\":1") > second);  // only on unit 1
+  first[second - first] = '\0';  // terminate the first slot's substring
+  TEST_ASSERT_NULL(strstr(first, "\"mm\""));
+}
+
+static void test_health_json_no_mismatch_without_intended_or_position() {
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].diagValid = true;
+  units[0].driftFlags = 0;     // position unknown
+  units[0].physLetter = 0xFF;
+  uint8_t intended[1] = {5};
+  char buf[256];
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, intended);
+  TEST_ASSERT_NULL(strstr(buf, "\"mm\""));
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, nullptr);
+  TEST_ASSERT_NULL(strstr(buf, "\"mm\""));
+}
+
 static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
   // The endpoint splices a ~70 B reflash progress object (#205) into the
   // same cap-sized buffer — a fully saturated 16-unit payload must leave at
@@ -175,9 +325,16 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].status.lastHomingStepCount = 65520;
     units[i].odometer = 0xFFFFFFFEUL;  // widest possible "odo" field (#231)
     units[i].odometerValid = true;
+    units[i].diagValid = true;         // widest drift block (#263/#264)
+    units[i].physLetter = 44;
+    units[i].driftFlags = 0x03;
+    units[i].driftEvents = 255;
+    units[i].lastDriftSteps = -127;
   }
+  uint8_t intended[16];
+  for (int i = 0; i < 16; i++) intended[i] = 0;  // mismatch on every unit
   char buf[UNIT_HEALTH_JSON_CAP];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1, intended);
   TEST_ASSERT_TRUE(n < sizeof(buf));
   TEST_ASSERT_TRUE(n + 96 <= UNIT_HEALTH_JSON_CAP);
 }
@@ -203,9 +360,16 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].status.lastHomingStepCount = 65520;
     units[i].odometer = 0xFFFFFFFEUL;
     units[i].odometerValid = true;
+    units[i].diagValid = true;
+    units[i].physLetter = 44;
+    units[i].driftFlags = 0x03;
+    units[i].driftEvents = 255;
+    units[i].lastDriftSteps = -127;
   }
+  uint8_t intended[16];
+  for (int i = 0; i < 16; i++) intended[i] = 0;
   char buf[UNIT_HEALTH_JSON_CAP];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1, intended);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
 
   // Worst wear fragment: 10-digit median, every unit flagged (hand-filled —
@@ -314,6 +478,16 @@ int main(int, char**) {
   RUN_TEST(test_health_json_odometer_emitted_when_valid);
   RUN_TEST(test_odometer_readback_valid_roundtrip);
   RUN_TEST(test_odometer_readback_rejects_old_firmware_garbage);
+  RUN_TEST(test_diag_readback_valid_roundtrip);
+  RUN_TEST(test_diag_readback_accepts_unknown_letter_sentinel);
+  RUN_TEST(test_diag_readback_rejects_old_firmware_garbage);
+  RUN_TEST(test_diag_readback_rejects_out_of_range_letter);
+  RUN_TEST(test_selftest_readback_valid_roundtrip);
+  RUN_TEST(test_selftest_readback_rejects_garbage_and_bad_state);
+  RUN_TEST(test_health_json_diag_fields_emitted_when_valid);
+  RUN_TEST(test_health_json_phys_omitted_when_position_unknown);
+  RUN_TEST(test_health_json_mismatch_against_intended_frame);
+  RUN_TEST(test_health_json_no_mismatch_without_intended_or_position);
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
   RUN_TEST(test_health_json_combined_splices_fit_cap);
   RUN_TEST(test_health_json_silent_gap_slot);

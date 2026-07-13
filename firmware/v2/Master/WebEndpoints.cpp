@@ -791,7 +791,9 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     size_t n =
         buildUnitHealthJson(buf.get(), UNIT_HEALTH_JSON_CAP, snap.units,
                             snap.displayWidth, snap.faultyUnitCount,
-                            SFP_I2C_ADDRESS_BASE);
+                            SFP_I2C_ADDRESS_BASE,
+                            snap.lastFrameValid ? snap.lastFrameLetters
+                                                : nullptr);
     if (n == 0 || n >= UNIT_HEALTH_JSON_CAP) {
       // Would-be-truncated payload: fall back to a valid headline-only JSON
       // rather than shipping a cut object (v1 truncation discipline).
@@ -917,6 +919,35 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     if (!maintCheckAddress(request, snap, addr)) return;
     maintEnqueue(request, makeResetOdometerCommand(displayNextMaintSeq(),
                                                    (uint8_t)addr));
+  });
+
+  // On-demand unit self-test (#265): the unit measures its own mechanics
+  // (steps/rev, hall window, rev time) over ~2 revolutions. Same op
+  // contract as identify/home; the measurements come back via
+  // GET /unit/self-test-result.
+  server.on("/unit/self-test", HTTP_POST, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    maintEnqueue(request,
+                 makeSelfTestCommand(displayNextMaintSeq(), (uint8_t)addr));
+  });
+
+  // Self-test execution feedback: pending / ok(+measurements) /
+  // failed(+reason) / expired, rendered from the snapshot's single
+  // SelfTestSlot — the self-test twin of /unit/op-result.
+  server.on("/unit/self-test-result", HTTP_GET,
+            [](AsyncWebServerRequest* request) {
+    long seq = 0;
+    if (!maintRequireLongParam(request, "seq", seq)) return;
+    if (seq < 1) {
+      request->send(400, "text/plain", F("seq must be >= 1"));
+      return;
+    }
+    DisplaySnapshot snap = displaySnapshotGet();
+    char buf[128];
+    buildSelfTestJson(buf, sizeof(buf), snap.lastSelfTest, (uint32_t)seq);
+    request->send(200, "application/json", buf);
   });
 
   // Debug endpoint, v1 semantics preserved: pushes the unit into twiboot

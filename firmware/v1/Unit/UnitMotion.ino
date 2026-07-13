@@ -11,6 +11,10 @@
 void stepCounted(int steps) {
   stepper.step(steps);
   odometerAddSteps(odometer, steps, STEPS);
+  // Drift position tracking (#263): drumPosition advances along the drum's
+  // physical rotation direction, so the sign is normalised by
+  // ROTATIONDIRECTION (a reversed-wiring build still counts forward).
+  driftAdvance(drift, (long)steps * ROTATIONDIRECTION, STEPS);
   if (odometer.revolutions != odometerRevolutions) {
     noInterrupts();
     odometerRevolutions = odometer.revolutions;
@@ -23,7 +27,19 @@ void stepCounted(int steps) {
 //missedSteps — when it exceeds one step we add a step and subtract, keeping
 //cumulative drift below one flap. Caller must have set the speed and started
 //the motor. Extracted from the two identical loops in rotateToLetter (#136).
+//
+//Steps one at a time with a per-step hall watch (#263): a forward move only
+//sweeps the hall marker when the drum physically slipped (letter 0 sits at
+//the marker and forward moves never wrap past it — any backward target goes
+//through calibrate instead), so an entering edge here is a direct drift
+//observation. Two consecutive low samples debounce the edge; the ~4 us
+//digitalRead per >=2 ms step is noise. Stepper::step(1) keeps its inter-step
+//pacing across calls (last_step_time is a member). driftObserveEdge resyncs
+//the position to the edge (truth for the #264 readback) and past-threshold
+//deviations arm the idle re-home in loop().
 void stepFlaps(int flaps) {
+  bool inWindow = digitalRead(HALLPIN) == 0;  // no re-fire when starting inside
+  uint8_t lowStreak = 0;
   for (int i = 0; i < flaps; i++) {
     wdt_reset(); //a many-flap move at low speed exceeds the 8 s window (#107)
     int roundedStep = STEPS_PER_FLAP_WHOLE;
@@ -32,7 +48,21 @@ void stepFlaps(int flaps) {
       roundedStep++;
       missedSteps--;
     }
-    stepCounted(ROTATIONDIRECTION * roundedStep);
+    for (int s = 0; s < roundedStep; s++) {
+      stepCounted(ROTATIONDIRECTION * 1);
+      if (digitalRead(HALLPIN) == 0) {
+        if (lowStreak < 2) lowStreak++;
+        if (lowStreak == 2 && !inWindow) {
+          inWindow = true;
+          if (driftObserveEdge(drift, STEPS, DRIFT_THRESHOLD_STEPS)) {
+            drift.driftPending = true;
+          }
+        }
+      } else {
+        lowStreak = 0;
+        inWindow = false;
+      }
+    }
   }
 }
 
@@ -157,6 +187,12 @@ int calibrate(bool initialCalibration) {
     else {
       //reached marker, go to calibrated offset position
       reachedMarker = true;
+      //Drift measurement (#263): the search stepping above flowed through
+      //stepCounted, so drumPosition says where the belief expected this
+      //edge — a past-threshold deviation is a measured drift event. The
+      //homing itself IS the correction, so only count; pending clears.
+      driftObserveEdge(drift, STEPS, DRIFT_THRESHOLD_STEPS);
+      drift.driftPending = false;
       stepCounted(ROTATIONDIRECTION * calOffset);
       displayedLetter = 0;
       missedSteps = 0;
@@ -178,6 +214,11 @@ int calibrate(bool initialCalibration) {
       //seems that there is a problem with the marker or the sensor. turn of the motor to avoid overheating.
       displayedLetter = 0;
       reachedMarker = true;
+      //No marker found: the position estimate is meaningless and an auto
+      //re-home would just fail the same way — drop both (#263). The master
+      //sees the fault via statusLastHomeFailed / hallNeverTriggered.
+      drift.positionKnown = false;
+      drift.driftPending = false;
 #ifdef SERIAL_ENABLE
       Serial.println("calibration revolver failed");
 #endif
@@ -221,4 +262,129 @@ void startMotor() {
   digitalWrite(STEPPERPIN2, lastInd2);
   digitalWrite(STEPPERPIN3, lastInd3);
   digitalWrite(STEPPERPIN4, lastInd4);
+}
+
+//Re-encodes the ISR-visible GET_DIAG / GET_SELF_TEST reply buffers from the
+//loop-context drift/selfTest state (#263/#265). The interrupt-guarded copy
+//is the only ISR handshake — requestEvent() streams the buffers verbatim,
+//so it can never see a torn multi-byte value (#96 class). Called once per
+//loop() pass, from setup() before the Wire handlers register (#173), and at
+//runSelfTest's state transitions.
+void driftRefreshReplyBuffers() {
+  uint8_t diag[DRIFT_REPLY_LEN];
+  uint8_t flags = 0;
+  if (drift.driftPending) flags |= DRIFT_FLAG_PENDING;
+  if (drift.positionKnown) flags |= DRIFT_FLAG_POSITION_KNOWN;
+  int16_t offsetShadow = (int16_t)calOffset;  //volatile → local
+  driftEncodeDiagReply(
+      driftPhysicalLetter(drift, offsetShadow, STEPS, AMOUNTFLAPS), flags,
+      drift.driftEvents, drift.lastDriftSteps, diag);
+  uint8_t st[SELFTEST_REPLY_LEN];
+  selfTestEncodeReply(selfTest, st);
+  noInterrupts();
+  for (uint8_t i = 0; i < DRIFT_REPLY_LEN; i++) diagReplyBuf[i] = diag[i];
+  for (uint8_t i = 0; i < SELFTEST_REPLY_LEN; i++) selfTestReplyBuf[i] = st[i];
+  interrupts();
+}
+
+//On-demand diagnostic revolution (#265): sync to the hall entering edge
+//(calibrate's approach rules), then measure one full revolution stepping 1
+//at a time — actual steps/rev, hall window width in steps, wall time. All
+//at HOMING_RPM. Parks at the calibrated zero like calibrate() so the
+//letter-diff check in loop() restores the commanded letter; the 2 s
+//overheat gate gives the motor a breather after the ~2 revolutions of
+//continuous motion. A timeout in either phase reports FAILED and drops the
+//position estimate (same reasoning as calibrate's failure path).
+void runSelfTest() {
+  selfTest.state = SELFTEST_STATE_RUNNING;
+  driftRefreshReplyBuffers();  //publish RUNNING before the ~12 s of motion
+  startMotor();
+  stepper.setSpeed(HOMING_RPM);
+
+  //Phase 1: approach the entering edge from outside the window.
+  long guard = 0;
+  bool failed = false;
+  if (digitalRead(HALLPIN) == 0) {
+    while (digitalRead(HALLPIN) == 0) {
+      wdt_reset();
+      stepCounted(ROTATIONDIRECTION * 1);
+      if (++guard > 3L * STEPS) { failed = true; break; }
+    }
+    if (!failed) {
+      stepCounted(ROTATIONDIRECTION * 50);  //clear the release edge
+      guard += 50;
+    }
+  }
+  while (!failed && digitalRead(HALLPIN) != 0) {
+    wdt_reset();
+    stepCounted(ROTATIONDIRECTION * 1);
+    if (++guard > 3L * STEPS) failed = true;
+  }
+
+  //Phase 2: one measured revolution from the edge. The window width is the
+  //initial hall-low stretch; the revolution completes when the hall goes
+  //low again after leaving it (2-sample debounce on both transitions).
+  if (!failed) {
+    driftMarkSynced(drift);  //we are AT the entering edge
+    uint16_t measuredSteps = 0;
+    uint16_t windowSteps = 0;
+    unsigned long t0 = millis();
+    bool leftWindow = false;
+    uint8_t streak = 0;
+    for (;;) {
+      wdt_reset();
+      stepCounted(ROTATIONDIRECTION * 1);
+      measuredSteps++;
+      if (measuredSteps > (uint16_t)(2 * STEPS)) {  //edge never came back
+        failed = true;
+        break;
+      }
+      int hall = digitalRead(HALLPIN);
+      if (!leftWindow) {
+        if (hall == 0) {
+          windowSteps++;
+          streak = 0;
+        } else if (++streak >= 2) {
+          leftWindow = true;
+          streak = 0;
+        }
+      } else {
+        if (hall == 0) {
+          if (++streak >= 2) break;  //re-entered: revolution complete
+        } else {
+          streak = 0;
+        }
+      }
+    }
+    if (!failed) {
+      unsigned long dt = millis() - t0;
+      selfTest.revTimeMs = dt > 65535UL ? 65535 : (uint16_t)dt;
+      //The break landed on the debounce CONFIRM sample — the true edge was
+      //one step earlier (phase 1 stopped at the first low sample, so both
+      //ends of the measurement use the same edge definition).
+      selfTest.stepsPerRev = measuredSteps - 1;
+      selfTest.hallWindowSteps = windowSteps;
+      selfTest.state = SELFTEST_STATE_OK;
+      //Parked <=2 steps past the entering edge (the debounce confirm) —
+      //well under the drift threshold; re-park at the calibrated zero.
+      driftMarkSynced(drift);
+      stepCounted(ROTATIONDIRECTION * calOffset);
+      displayedLetter = 0;
+      missedSteps = 0;
+      drift.driftPending = false;
+    }
+  }
+  if (failed) {
+    selfTest.state = SELFTEST_STATE_FAILED;
+    selfTest.stepsPerRev = 0;
+    selfTest.hallWindowSteps = 0;
+    selfTest.revTimeMs = 0;
+    displayedLetter = 0;
+    drift.positionKnown = false;
+    drift.driftPending = false;
+  }
+  lastRotation = millis();  //overheat gate before the restore move
+  delay(100);
+  stopMotor();
+  driftRefreshReplyBuffers();  //publish the result before loop() resumes
 }

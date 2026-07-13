@@ -34,6 +34,29 @@ struct MaintResult {
   MaintReason reason = MaintReason::None;
 };
 
+// Execution result of the LAST self-test op (#265) — same single-slot,
+// best-effort contract as MaintResult (the UI serializes self-tests and
+// polls /unit/self-test-result). Carries the unit's three measurements on
+// success.
+enum class SelfTestOutcome : uint8_t {
+  Pending = 0,  // slot default; a real result always overwrites it
+  Ok,
+  WireFail,     // the START write was not ACKed
+  Timeout,      // unit never reported done within the master's window
+  UnitFailed,   // unit reported FAILED (hall/marker problem mid-test)
+  Unsupported,  // every poll answered garbage — firmware predates #265
+  Aborted,      // /stop arrived while waiting
+};
+
+struct SelfTestSlot {
+  uint32_t seq = 0;
+  uint8_t addr = 0;
+  SelfTestOutcome outcome = SelfTestOutcome::Pending;
+  uint16_t stepsPerRev = 0;
+  uint16_t hallWindowSteps = 0;
+  uint16_t revTimeMs = 0;
+};
+
 struct DisplaySnapshot {
   // v1 probe-fallback parity: until a probe answers, assume the ceiling.
   uint8_t displayWidth = UNITS_AMOUNT;
@@ -52,6 +75,13 @@ struct DisplaySnapshot {
   // Reflash job progress (#205) — published at unit boundaries and settle
   // transitions while the job runs; the producer gate keys off it.
   ReflashProgress reflash;
+  SelfTestSlot lastSelfTest;  // single-slot self-test result (#265)
+  // The letter indices of the last frame the master actually put on the
+  // bus (#264) — the "intended" side of the displayed==intended check.
+  // Valid after the first ShowText/Stop/ResetUnits; maintained by
+  // displayTask at every frame-shaping site.
+  uint8_t lastFrameLetters[UNITS_AMOUNT] = {0};
+  bool lastFrameValid = false;
 };
 
 // The producer gate (#205): while a reflash job runs, Stop is the ONLY
@@ -92,6 +122,7 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
     case DisplayOpcode::SetAddress:
     case DisplayOpcode::ClearAddress:
     case DisplayOpcode::ResetOdometer:
+    case DisplayOpcode::SelfTest:
     case DisplayOpcode::ResetUnits:
     case DisplayOpcode::ReflashUnits:
       snap.commandsProcessed++;
@@ -132,6 +163,13 @@ inline void displayApplyMaintResult(DisplaySnapshot& snap,
   snap.lastMaint.addr = cmd.unitAddress;
   snap.lastMaint.outcome = outcome;
   snap.lastMaint.reason = reason;
+}
+
+// Publishes a self-test op's outcome + measurements into its single result
+// slot (#265) — same overwrite contract as displayApplyMaintResult.
+inline void displayApplySelfTestResult(DisplaySnapshot& snap,
+                                       const SelfTestSlot& slot) {
+  snap.lastSelfTest = slot;
 }
 
 // A successful SET_OFFSET is the only in-place offset mutation; everything
@@ -210,6 +248,43 @@ inline void buildReflashJson(char* buf, size_t cap,
            "\"cur\":%u}",
            reflashStateName(p.state), (unsigned)p.total, (unsigned)p.done,
            (unsigned)p.failed, (unsigned)p.currentAddr);
+}
+
+inline const char* selfTestOutcomeName(SelfTestOutcome o) {
+  switch (o) {
+    case SelfTestOutcome::WireFail:    return "wire-fail";
+    case SelfTestOutcome::Timeout:     return "timeout";
+    case SelfTestOutcome::UnitFailed:  return "unit-failed";
+    case SelfTestOutcome::Unsupported: return "unsupported";
+    case SelfTestOutcome::Aborted:     return "aborted";
+    default:                           return "pending";
+  }
+}
+
+// Renders the self-test result JSON for a queried seq (#265) — the same
+// pending / found / expired ordering rules as opResultQuery, from the
+// self-test's own slot. Fits well inside 128 bytes.
+inline void buildSelfTestJson(char* buf, size_t cap, const SelfTestSlot& slot,
+                              uint32_t seq) {
+  if (slot.seq < seq ||
+      (slot.seq == seq && slot.outcome == SelfTestOutcome::Pending)) {
+    snprintf(buf, cap, "{\"state\":\"pending\"}");
+    return;
+  }
+  if (slot.seq > seq) {
+    snprintf(buf, cap, "{\"state\":\"expired\"}");
+    return;
+  }
+  if (slot.outcome == SelfTestOutcome::Ok) {
+    snprintf(buf, cap,
+             "{\"state\":\"ok\",\"steps_per_rev\":%u,\"hall_window\":%u,"
+             "\"rev_time_ms\":%u}",
+             (unsigned)slot.stepsPerRev, (unsigned)slot.hallWindowSteps,
+             (unsigned)slot.revTimeMs);
+    return;
+  }
+  snprintf(buf, cap, "{\"state\":\"failed\",\"reason\":\"%s\"}",
+           selfTestOutcomeName(slot.outcome));
 }
 
 // Renders the op-result JSON for a queried seq from the (mutex-copied)

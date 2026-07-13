@@ -52,3 +52,6 @@ firmware/v2/*/compile_commands.json
 # use_custom_bootloader.py embeds at 0x0.
 !firmware/v2/Bootloader/sdkconfig.defaults
 !firmware/v2/Bootloader/dist/*.bin
+
+# clangd index cache (per-machine, generated)
+firmware/v2/*/.cache/

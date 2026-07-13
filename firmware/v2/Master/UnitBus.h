@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "UnitHealth.h"
+#include "UnitProtocolHelpers.h"
 
 // Wire init on the unit bus pins. SDA=8 / SCL=9 (Arduino-ESP32 S3 defaults),
 // 100 kHz, 3.3 V — electrically a drop-in for the ESP-01. Clear of the
@@ -49,6 +50,11 @@ int unitBusJog(int i2cAddress, int steps);              // ±127, not persisted
 int unitBusHome(int i2cAddress);                        // full calibrate(true)
 int unitBusIdentify(int i2cAddress);                    // ~3 s LED blink
 int unitBusResetOdometer(int i2cAddress);               // zero wear odometer (#231)
+int unitBusStartSelfTest(int i2cAddress);               // ~15 s diagnostic rev (#265)
+
+// Reads the unit's self-test state/result via CMD_GET_SELF_TEST (#265).
+// False on wire failure or a checksum-rejected reply (old firmware).
+bool unitBusReadSelfTest(int i2cAddress, UnitSelfTestReading& out);
 
 // Bus transaction counters (#245): written only by displayTask, safe to
 // read cross-task (aligned 32-bit). Idle rotation polls are not counted.

@@ -73,6 +73,14 @@
 #define SFP_CMD_GET_ODOMETER       0x85  // reply: 5 bytes — uint32 LE drum
                                          //     revolutions + XOR checksum ^ 0xA5
                                          //     (wire format in UnitOdometer.h, #231)
+#define SFP_CMD_GET_DIAG           0x86  // reply: 6 bytes — physical letter,
+                                         //     drift flags/events/magnitude +
+                                         //     XOR checksum ^ 0xB7 (wire format
+                                         //     in UnitDrift.h, #263/#264)
+#define SFP_CMD_GET_SELF_TEST      0x87  // reply: 9 bytes — state + steps/rev,
+                                         //     hall window, rev time (u16 LE) +
+                                         //     XOR checksum ^ 0x5C (wire format
+                                         //     in UnitSelfTest.h, #265)
 
 // --- 0x9X mutations ---
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT reset)
@@ -91,6 +99,9 @@
 #define SFP_CMD_RESET_ODOMETER     0x97  // no args; zero the revolution odometer +
                                          //     its EEPROM ring — for physical rebuilds
                                          //     (flap swap, new motor) only (#231)
+#define SFP_CMD_START_SELF_TEST    0x98  // no args; unit runs the ~2-revolution
+                                         //     diagnostic (#265), reports busy while
+                                         //     running; result via GET_SELF_TEST
 
 // SET_OFFSET's accepted range (#171). The bound is one full revolution of the
 // unit's 28BYJ-48 drum (its STEPS constant — a static_assert there pins the

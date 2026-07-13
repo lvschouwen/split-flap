@@ -42,6 +42,15 @@ void receiveLetter(int numBytes) {
       case SFP_CMD_GET_ODOMETER:
         pendingOdometerResponse = true;
         break;
+      case SFP_CMD_GET_DIAG:
+        pendingDiagResponse = true;
+        break;
+      case SFP_CMD_GET_SELF_TEST:
+        pendingSelfTestResponse = true;
+        break;
+      case SFP_CMD_START_SELF_TEST:
+        pendingSelfTest = true;
+        break;
       case SFP_CMD_SET_OFFSET:
         if (remaining >= 2) {
           uint8_t lo = (uint8_t)Wire.read();
@@ -151,6 +160,20 @@ void requestEvent() {
     odometerEncodeReply(odometerRevolutions, buf);
     Wire.write(buf, ODO_REPLY_LEN);
     pendingOdometerResponse = false;
+    return;
+  }
+  if (pendingDiagResponse) {
+    // 6 bytes, pre-encoded by driftRefreshReplyBuffers() under
+    // noInterrupts() (#263/#264) — stream verbatim, nothing to compute in
+    // ISR context. The volatile cast is safe: writers hold interrupts off.
+    Wire.write((const uint8_t*)diagReplyBuf, DRIFT_REPLY_LEN);
+    pendingDiagResponse = false;
+    return;
+  }
+  if (pendingSelfTestResponse) {
+    // 9 bytes, same pre-encoded-buffer contract as the diag reply (#265).
+    Wire.write((const uint8_t*)selfTestReplyBuf, SELFTEST_REPLY_LEN);
+    pendingSelfTestResponse = false;
     return;
   }
   if (pendingStatusResponse) {

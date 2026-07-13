@@ -61,7 +61,20 @@ struct UnitFacts {
   // units and firmware predating the opcode (checksum-rejected replies).
   uint32_t odometer = 0;
   bool odometerValid = false;
+  // Drift diagnostics (#263/#264): probe/health-poll CMD_GET_DIAG truth.
+  // physLetter is the unit's hall-corrected PHYSICAL letter estimate
+  // (0xFF = position never synced); driftFlags bit0 = re-home pending,
+  // bit1 = position known. diagValid follows the odometer's lifecycle.
+  uint8_t physLetter = 0xFF;
+  uint8_t driftFlags = 0;
+  uint8_t driftEvents = 0;
+  int8_t lastDriftSteps = 0;
+  bool diagValid = false;
 };
+
+// driftFlags bit positions (must match the unit's UnitDrift.h encode).
+#define UNIT_DRIFT_FLAG_PENDING        (1 << 0)
+#define UNIT_DRIFT_FLAG_POSITION_KNOWN (1 << 1)
 
 // fwStatus from a unit's reported rev vs the build's bundled unit rev
 // (#205; v1 compared with strncmp(..., 8) against an 8-char + NUL cache —
@@ -102,13 +115,15 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
   return count;
 }
 
-// Worst case (16 valid units, all counters saturated, 10-digit odometers)
-// measures ~2335 B — same truncation contract as v1, cap raised over v1's
-// 2048 for the spliced reflash progress object (#205, ~70 B), the per-unit
-// "ae" field (#215), the per-unit "odo" field and the spliced wear object
-// (#231, ~45 B) so a full display can't push the payload into the
-// headline-only fallback. test_unit_health pins the worst case + headroom.
-#define UNIT_HEALTH_JSON_CAP 2688
+// Worst case (16 valid units, all counters saturated, 10-digit odometers,
+// full drift blocks) measures ~3020 B — same truncation contract as v1, cap
+// raised over v1's 2048 for the spliced reflash progress object (#205,
+// ~70 B), the per-unit "ae" field (#215), the per-unit "odo" field and the
+// spliced wear object (#231, ~45 B), and the per-unit drift fields
+// phys/de/dp/ds/mm (#263/#264, ~43 B/unit) so a full display can't push the
+// payload into the headline-only fallback. test_unit_health pins the worst
+// case + headroom.
+#define UNIT_HEALTH_JSON_CAP 3456
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
@@ -129,8 +144,13 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 // `base` is SFP_I2C_ADDRESS_BASE so addr == base + index. The version string
 // is emitted raw — UnitBus's readUnitVersion rejects `"` and `\` at the I2C
 // boundary (v1 #140), so it can never break the JSON.
+// `intended` (optional) is the last frame the master actually sent, one
+// letter index per column — when present, a unit whose hall-corrected
+// physical letter disagrees gets "mm":1 (#264). nullptr = no frame truth
+// yet (boot, post-stop), so no mismatch judgments are emitted.
 inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
-                                  int width, int faulty, int base) {
+                                  int width, int faulty, int base,
+                                  const uint8_t* intended = nullptr) {
   size_t o = 0;
   UNIT_HEALTH_APPEND("{\"width\":%d,\"faulty\":%d,\"units\":[", width, faulty);
   for (int i = 0; i < width; i++) {
@@ -152,6 +172,26 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
       // Rides its own valid flag, independent of statusValid — a unit can
       // report status but run pre-odometer firmware (#231).
       UNIT_HEALTH_APPEND(",\"odo\":%lu", (unsigned long)u.odometer);
+    }
+    if (u.diagValid) {
+      // Drift block (#263/#264), own valid flag like "odo": event count +
+      // last magnitude always; "dp" only while a re-home is pending; "phys"
+      // only once the unit has synced to a hall edge; "mm" only when both
+      // the physical estimate and the master's intended frame exist and
+      // disagree.
+      UNIT_HEALTH_APPEND(",\"de\":%u,\"ds\":%d", (unsigned)u.driftEvents,
+                         (int)u.lastDriftSteps);
+      if (u.driftFlags & UNIT_DRIFT_FLAG_PENDING) {
+        UNIT_HEALTH_APPEND(",\"dp\":1");
+      }
+      bool physKnown = (u.driftFlags & UNIT_DRIFT_FLAG_POSITION_KNOWN) &&
+                       u.physLetter != 0xFF;
+      if (physKnown) {
+        UNIT_HEALTH_APPEND(",\"phys\":%u", (unsigned)u.physLetter);
+        if (intended != nullptr && u.physLetter != intended[i]) {
+          UNIT_HEALTH_APPEND(",\"mm\":1");
+        }
+      }
     }
     UNIT_HEALTH_APPEND("}");
   }

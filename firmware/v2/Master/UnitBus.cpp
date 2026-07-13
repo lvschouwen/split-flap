@@ -131,6 +131,30 @@ static bool readUnitOdometer(int i2cAddress, uint32_t& out) {
   return odometerReadbackValid(buf, out);
 }
 
+// Reads the unit's drift diagnostics via CMD_GET_DIAG (#263/#264): 6 bytes,
+// masked XOR checksum + letter range check. Old firmware answers the
+// unknown opcode with its 1-byte status fallback — diagReadbackValid
+// rejects that (#106 class).
+static bool readUnitDiag(int i2cAddress, UnitDiagReading& out) {
+  uint8_t buf[6];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_DIAG, buf, 6)) return false;
+  return diagReadbackValid(buf, (uint8_t)FLAP_AMOUNT, out);
+}
+
+// Folds a diag read into the slot's facts; clears diagValid first so a unit
+// that stops answering (or was reflashed to pre-diag firmware) never keeps
+// serving stale drift numbers.
+static void refreshUnitDiag(UnitFacts& fact, int i2cAddress) {
+  fact.diagValid = false;
+  UnitDiagReading d;
+  if (!readUnitDiag(i2cAddress, d)) return;
+  fact.physLetter = d.physicalLetter;
+  fact.driftFlags = d.flags;
+  fact.driftEvents = d.driftEvents;
+  fact.lastDriftSteps = d.lastDriftSteps;
+  fact.diagValid = true;
+}
+
 // Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
 // true on success; `out` is untouched on failure (old firmware predating
 // v1 #32 answers short — the drain-and-fail path).
@@ -369,6 +393,9 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
       facts[unitIndex].odometer = odometer;
       facts[unitIndex].odometerValid = true;
     }
+    // Drift diagnostics ride the probe too (#263/#264); pre-diag firmware
+    // fails the checksum and stays diagValid=false.
+    refreshUnitDiag(facts[unitIndex], i2cAddress);
   }
   SerialPrintf("I2C scan complete. Detected %d", detected);
   SerialPrintf("/%d possible units.\n", maxUnits);
@@ -394,6 +421,8 @@ void unitBusPollHealth(UnitFacts* facts, int maxUnits) {
       facts[i].odometer = odometer;
       facts[i].odometerValid = true;
     }
+    // Drift diagnostics refresh on the same cadence (#263/#264).
+    refreshUnitDiag(facts[i], toI2cAddress(i));
   }
 }
 
@@ -455,6 +484,20 @@ int unitBusResetOdometer(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_RESET_ODOMETER);
   return countedTransmission();
+}
+
+int unitBusStartSelfTest(int i2cAddress) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_START_SELF_TEST);
+  return countedTransmission();
+}
+
+bool unitBusReadSelfTest(int i2cAddress, UnitSelfTestReading& out) {
+  uint8_t buf[9];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_SELF_TEST, buf, 9)) {
+    return false;
+  }
+  return selfTestReadbackValid(buf, out);
 }
 
 // The unit watchdog-resets into twiboot, which listens ~1 s on the
