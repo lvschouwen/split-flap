@@ -4,23 +4,26 @@
 #include <esp_sntp.h>
 #include <esp_timer.h>
 
+#include <atomic>
+
 #include "HelpersSerialHandling.h"
 
 // v1 timezoneServer parity: compile-time const, no settings knob.
 static const char* NTP_SERVER = "pool.ntp.org";
 
 // NTP sync age for the System tab (#245). The notification callback runs in
-// the SNTP/LWIP task — single aligned-32-bit stores, safe to read cross-task.
-// 0 = never synced (a sync landing in boot-second zero still records 1).
-static volatile uint32_t lastSyncUptimeS = 0;
+// the SNTP/LWIP task; any task reads the age accessor — std::atomic per the
+// codebase's cross-task idiom. 0 = never synced (a sync landing in
+// boot-second zero still records 1).
+static std::atomic<uint32_t> lastSyncUptimeS{0};
 
 static void onSntpSync(struct timeval*) {
   uint32_t nowS = (uint32_t)(esp_timer_get_time() / 1000000LL);
-  lastSyncUptimeS = nowS > 0 ? nowS : 1;
+  lastSyncUptimeS.store(nowS > 0 ? nowS : 1);
 }
 
 int32_t clockNtpAgeS() {
-  uint32_t last = lastSyncUptimeS;
+  uint32_t last = lastSyncUptimeS.load();
   if (last == 0) return -1;
   uint32_t nowS = (uint32_t)(esp_timer_get_time() / 1000000LL);
   return (int32_t)(nowS - last);

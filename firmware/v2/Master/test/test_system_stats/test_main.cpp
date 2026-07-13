@@ -118,7 +118,7 @@ static void test_json_full_ring_fits_cap() {
   now.uptimeS = 4294967295UL; now.minFreeHeap = 4294967295UL;
   now.i2cTx = 4294967295UL; now.i2cErr = 4294967295UL;
   now.mqttDrops = 4294967295UL; now.ntpAgeS = -1;
-  strcpy(now.resetReason, "TASK_WDT_CPU1");
+  strcpy(now.resetReason, "Interrupt watchdog");
   char buf[SYSTEM_STATS_JSON_CAP];
   size_t n = buildSystemStatsJson(buf, sizeof(buf), r, now);
   TEST_ASSERT_TRUE(n > 0);

@@ -108,14 +108,14 @@ static char rxPayload[sizeof(MqttInboxMessage::payload)];
 
 static void onMqttConnect(bool /*sessionPresent*/) { mqttJustConnected = true; }
 
-static volatile uint32_t mqttDropCounter = 0;  // System tab (#245); mqttTask
-                                               // writes, sampler reads (atomic)
+static std::atomic<uint32_t> mqttDropCounter{0};  // System tab (#245);
+                                                  // mqttTask writes, sampler reads
 
-uint32_t mqttDropCount() { return mqttDropCounter; }
+uint32_t mqttDropCount() { return mqttDropCounter.load(); }
 
 static void onMqttDisconnect(espMqttClientTypes::DisconnectReason /*reason*/) {
   mqttDisconnectedEvent = true;
-  mqttDropCounter = mqttDropCounter + 1;
+  mqttDropCounter.fetch_add(1);
 }
 
 static void onMqttMessage(const espMqttClientTypes::MessageProperties& props,

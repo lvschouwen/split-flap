@@ -62,20 +62,23 @@ static void recoverBusAfterFailedRead() {
 }
 
 // Bus transaction counters for the System tab (#245). displayTask is the
-// only writer (sole Wire toucher); netTask's stats sampler reads them —
-// aligned 32-bit reads are atomic on the S3, no lock needed. The ~10 Hz
-// checkIfMoving() idle polls are deliberately NOT counted: they'd drown
-// the signal (real commands + queries) in keep-alive noise.
-static volatile uint32_t busTxCount = 0;
-static volatile uint32_t busErrCount = 0;
+// only writer (sole Wire toucher); netTask's stats sampler reads them.
+// Scope: sketch-protocol traffic only — frames, queries and maintenance
+// ops. Deliberately NOT counted: the ~10 Hz checkIfMoving() idle polls
+// (keep-alive noise would drown the signal) and the twiboot reflash
+// page stream (#205 reports its own progress/failures). err counts
+// write AND read-back failures while tx counts write transactions only,
+// so err can legitimately exceed tx under read-heavy failure.
+static std::atomic<uint32_t> busTxCount{0};
+static std::atomic<uint32_t> busErrCount{0};
 
-uint32_t unitBusTxCount() { return busTxCount; }
-uint32_t unitBusErrCount() { return busErrCount; }
+uint32_t unitBusTxCount() { return busTxCount.load(); }
+uint32_t unitBusErrCount() { return busErrCount.load(); }
 
 static int countedTransmission() {
   int status = Wire.endTransmission();
-  busTxCount = busTxCount + 1;
-  if (status != 0) busErrCount = busErrCount + 1;
+  busTxCount.fetch_add(1);
+  if (status != 0) busErrCount.fetch_add(1);
   return status;
 }
 
@@ -93,7 +96,7 @@ static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf, uint8_t n) {
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
   if (got != n) {
     while (Wire.available()) Wire.read();
-    busErrCount = busErrCount + 1;  // short/failed read leg (#245)
+    busErrCount.fetch_add(1);  // short/failed read leg (#245)
     recoverBusAfterFailedRead();
     return false;
   }
@@ -426,32 +429,32 @@ int unitBusWriteOffset(int i2cAddress, int16_t value) {
   Wire.write((uint8_t)SFP_CMD_SET_OFFSET);
   Wire.write(payload[0]);
   Wire.write(payload[1]);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusJog(int i2cAddress, int steps) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_JOG);
   Wire.write(maintEncodeJogByte(steps));
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusHome(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_HOME);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusIdentify(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_IDENTIFY);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusResetOdometer(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_RESET_ODOMETER);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 // The unit watchdog-resets into twiboot, which listens ~1 s on the
@@ -460,26 +463,26 @@ int unitBusResetOdometer(int i2cAddress) {
 int unitBusRebootToBootloader(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_ENTER_BOOTLOADER);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusSetAddress(int i2cAddress, uint8_t newAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_SET_I2C_ADDRESS);
   Wire.write(newAddress);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusClearAddress(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_CLEAR_I2C_ADDRESS);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 int unitBusBroadcastHome() {
   Wire.beginTransmission((uint8_t)SFP_I2C_GENERAL_CALL_ADDRESS);
   Wire.write((uint8_t)SFP_CMD_HOME);
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 // --- unit reflash over twiboot (#205) — v1 ServiceFirmwareFunctions.ino port --
@@ -582,7 +585,7 @@ static int twibootWriteFlashPage(int addr, uint16_t flashAddr,
                  (unsigned)queued, (unsigned)(TWIBOOT_PAGE_SIZE + 4));
     return -1;
   }
-  return Wire.endTransmission();
+  return countedTransmission();
 }
 
 // Writes one page and reads it back to verify, with one rewrite attempt on
