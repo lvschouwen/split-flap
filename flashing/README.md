@@ -96,4 +96,7 @@ machinery). `./ota-flash.sh -s user@buildhost <device-ip>` for the master
 firmware, `-r` for the rescue image, `-a` for both, `-l file.bin` to skip
 the download. Server/dir defaults come from `SPLITFLAP_BIN_HOST` /
 `SPLITFLAP_BIN_DIR` (staging dir defaults to `bench-bins` in the remote
-home).
+home). A network-level upload failure (connection reset, timeout) is
+reported as such — distinct from a device rejection — and retried once
+automatically (#248); the device aborts the stale half-session on the
+next upload's start.
