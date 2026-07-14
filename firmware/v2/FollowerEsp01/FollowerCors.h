@@ -51,9 +51,15 @@ inline bool followerCorsOriginAllowed(const String& origin) {
 
 // This firmware's served slice of the v2 surface ("/" and the log/stat
 // reads don't exist here; /reboot does — the panel's reboot button).
+// #304 opens /reflash-units too (board-level unit reflash from the wall
+// panel). /firmware/* stays CLOSED, in lockstep with the S3's copy: the
+// ESP-01's firmware is pushed by the S3 relay (stored image streamed
+// server-to-server via clusterTask, #304 2a), never a browser cross-origin
+// POST — so no CORS exception is needed here.
 inline bool followerCorsPathAllowed(const String& path) {
   if (path == "/settings" || path == "/units/health" ||
-      path == "/units/health/refresh" || path == "/reboot") {
+      path == "/units/health/refresh" || path == "/reboot" ||
+      path == "/reflash-units") {
     return true;
   }
   return path.startsWith("/unit/");

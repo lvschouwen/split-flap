@@ -371,6 +371,11 @@ static void test_cors_path_surface_is_the_per_member_one() {
   TEST_ASSERT_TRUE(clusterCorsPathAllowed("/log"));
   TEST_ASSERT_TRUE(clusterCorsPathAllowed("/log/flash"));
   TEST_ASSERT_TRUE(clusterCorsPathAllowed("/reboot"));
+  // #304: board-level unit reflash from the wall panel (any member type).
+  TEST_ASSERT_TRUE(clusterCorsPathAllowed("/reflash-units"));
+  // /firmware/master stays closed here (unlike the ESP-01 follower's copy):
+  // S3 members get their cross-board updates via #276 fleet convergence, so
+  // the wall never browser-uploads to them.
   TEST_ASSERT_FALSE(clusterCorsPathAllowed("/firmware/master"));
   TEST_ASSERT_FALSE(clusterCorsPathAllowed("/cluster/config"));
   TEST_ASSERT_FALSE(clusterCorsPathAllowed("/cluster/promote"));

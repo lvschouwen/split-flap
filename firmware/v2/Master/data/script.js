@@ -2590,9 +2590,19 @@ function openMemberPanel(host, isSelf) {
 
 function memberPanelStatus(panel, message, kind) {
 	var el = panel.querySelector(".member-panel-status");
+	//A poll (self-test / reflash / firmware) can land after the panel was
+	//closed or re-rendered for another member — no status node then, no-op.
+	if (!el) return;
 	el.className = "status member-panel-status " + (kind || "");
 	el.classList.remove("hidden");
 	el.textContent = message;
+}
+
+//Pollers stop when the panel is gone (closed → hidden, or re-rendered so the
+//status node is detached). Guards cross-member status bleed on the bench.
+function memberPanelLive(panel) {
+	return !panel.classList.contains("hidden") &&
+		!!panel.querySelector(".member-panel-status");
 }
 
 function renderMemberPanelBody(panel, base, host, settings, health) {
@@ -2679,6 +2689,17 @@ function renderMemberPanelBody(panel, base, host, settings, health) {
 			.then(function(r) { memberPanelStatus(panel, r.ok ? "Probing — reopen the panel in a few seconds for fresh facts." : "✘ Probe refused (busy?)", r.ok ? "success" : "error"); })
 			.catch(function() { memberPanelStatus(panel, "✘ Probe request failed", "error"); });
 	});
+	opButton("Reflash units…", function() {
+		if (!confirm("Reflash the Nano units of " + (host || "this board") + " from its bundled hex?\n\nUnits go dark ~1 min each (2 at a time); the row is unusable until it finishes.")) return;
+		fetch(base + "/reflash-units", { method: "POST" })
+			.then(function(r) {
+				if (r.status === 409 || r.status === 503) { memberPanelStatus(panel, "✘ A reflash is already running.", "error"); return; }
+				if (!r.ok) { memberPanelStatus(panel, "✘ Reflash refused (HTTP " + r.status + ").", "error"); return; }
+				memberPanelStatus(panel, "Reflash queued…", "success");
+				memberReflashPoll(panel, base);
+			})
+			.catch(function() { memberPanelStatus(panel, "✘ Reflash request failed.", "error"); });
+	}, true);
 	opButton("Reboot board…", function() {
 		if (!confirm("Reboot " + (host || "this board") + "? Its row goes dark for a few seconds; the leader re-joins it automatically.")) return;
 		fetch(base + "/reboot", { method: "POST" })
@@ -2690,6 +2711,29 @@ function renderMemberPanelBody(panel, base, host, settings, health) {
 	var status = document.createElement("div");
 	status.className = "status member-panel-status hidden";
 	panel.appendChild(status);
+}
+
+//Board-level reflash progress: poll the member's /units/health reflash
+//object, reusing the local-board label/running helpers (#205 shape).
+function memberReflashPoll(panel, base) {
+	if (!memberPanelLive(panel)) return;
+	fetch(base + "/units/health", { cache: "no-store" })
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(json) {
+			if (!memberPanelLive(panel)) return;
+			var rf = json.reflash;
+			if (rf && reflashIsRunning(rf)) {
+				memberPanelStatus(panel, reflashProgressLabel(rf), "");
+				setTimeout(function() { memberReflashPoll(panel, base); }, 2000);
+			} else if (rf) {
+				memberPanelStatus(panel, reflashProgressLabel(rf), "success");
+			} else {
+				memberPanelStatus(panel, "Reflash finished.", "success");
+			}
+		})
+		.catch(function() {
+			if (memberPanelLive(panel)) setTimeout(function() { memberReflashPoll(panel, base); }, 2000);
+		});
 }
 
 function renderMemberUnitActions(panel, actions, base, u) {
@@ -2717,12 +2761,122 @@ function renderMemberUnitActions(panel, actions, base, u) {
 			memberPanelStatus(panel, ok ? "Homing unit " + formatHexAddress(u.a) + "." : "✘ Home failed", ok ? "success" : "error");
 		});
 	});
+	actButton("Self-test", function() {
+		memberSelfTest(panel, base, u.a);
+	});
 	actButton("Reset odo…", function() {
 		if (!confirm("Reset the revolution odometer of unit " + formatHexAddress(u.a) + "? Do this only after replacing its drum/motor.")) return;
 		postCalibrationAwait("/unit/reset-odometer", { address: u.a }, function(ok, reason) {
 			memberPanelStatus(panel, ok ? "✔ Odometer reset." : "✘ " + reason, ok ? "success" : "error");
 		}, base);
 	});
+
+	//Jog: relative nudge, fire-and-forget (operator watches the flap).
+	var jogRow = document.createElement("div");
+	jogRow.className = "row";
+	var jogLabel = document.createElement("span");
+	jogLabel.textContent = "Jog steps: ";
+	jogRow.appendChild(jogLabel);
+	var jogInput = document.createElement("input");
+	jogInput.type = "number";
+	jogInput.className = "calibration-offset";
+	jogInput.step = "1";
+	jogInput.placeholder = "±steps";
+	jogRow.appendChild(jogInput);
+	var jogBtn = document.createElement("button");
+	jogBtn.type = "button";
+	jogBtn.className = "btn";
+	jogBtn.textContent = "Jog";
+	jogBtn.addEventListener("click", function() {
+		var n = parseInt(jogInput.value, 10);
+		if (isNaN(n) || n === 0) { memberPanelStatus(panel, "✘ Enter a non-zero step count.", "error"); return; }
+		postCalibration(base + "/unit/jog", { address: u.a, steps: n }, function(ok) {
+			memberPanelStatus(panel, ok ? "Jogged unit " + formatHexAddress(u.a) + " by " + n + " steps." : "✘ Jog failed", ok ? "success" : "error");
+		});
+	});
+	jogRow.appendChild(jogBtn);
+	actions.appendChild(jogRow);
+
+	//Offset: read current, edit, write (EEPROM-mutating → await the outcome).
+	var offRow = document.createElement("div");
+	offRow.className = "row";
+	var offLabel = document.createElement("span");
+	offLabel.textContent = "Offset: ";
+	offRow.appendChild(offLabel);
+	var offInput = document.createElement("input");
+	offInput.type = "number";
+	offInput.className = "calibration-offset";
+	offInput.step = "1";
+	offInput.placeholder = "?";
+	offRow.appendChild(offInput);
+	var offGet = document.createElement("button");
+	offGet.type = "button";
+	offGet.className = "btn";
+	offGet.textContent = "Get";
+	offGet.addEventListener("click", function() {
+		fetch(base + "/unit/offset?address=" + u.a, { cache: "no-store" })
+			.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+			.then(function(data) {
+				offInput.value = data.offset;
+				memberPanelStatus(panel, "Read offset " + data.offset + " from " + formatHexAddress(u.a), "success");
+			})
+			.catch(function() { memberPanelStatus(panel, "✘ Read offset failed for " + formatHexAddress(u.a), "error"); });
+	});
+	offRow.appendChild(offGet);
+	var offSet = document.createElement("button");
+	offSet.type = "button";
+	offSet.className = "btn";
+	offSet.textContent = "Set";
+	offSet.addEventListener("click", function() {
+		var value = parseInt(offInput.value, 10);
+		if (isNaN(value)) { memberPanelStatus(panel, "✘ Enter an offset value first.", "error"); return; }
+		postCalibrationAwait("/unit/offset", { address: u.a, value: value }, function(ok, reason) {
+			memberPanelStatus(panel, ok ? "✔ Saved offset " + value + " to " + formatHexAddress(u.a) : "✘ Save offset failed: " + reason, ok ? "success" : "error");
+		}, base);
+	});
+	offRow.appendChild(offSet);
+	actions.appendChild(offRow);
+}
+
+//Member self-test (#304): mirrors the local selfTestUnitUi flow but reports
+//through the panel status line and targets the member via `base`. The single
+//result slot serves one self-test at a time.
+function memberSelfTest(panel, base, address) {
+	memberPanelStatus(panel, "Self-test on unit " + formatHexAddress(address) + " — about 15 s of motion…", "");
+	fetch(base + "/unit/self-test?address=" + address, { method: "POST" })
+		.then(function(r) {
+			if (!r.ok) return r.text().then(function(t) { throw new Error(t || ("HTTP " + r.status)); });
+			return r.json();
+		})
+		.then(function(data) { memberPollSelfTest(panel, base, address, data.seq, 100); })
+		.catch(function(e) { memberPanelStatus(panel, "✘ Self-test failed to queue: " + (e && e.message ? e.message : "request failed"), "error"); });
+}
+
+function memberPollSelfTest(panel, base, address, seq, remaining) {
+	if (!memberPanelLive(panel)) return;
+	fetch(base + "/unit/self-test-result?seq=" + seq, { cache: "no-store" })
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(res) {
+			if (!memberPanelLive(panel)) return;
+			if (res.state === "pending" && remaining > 0) {
+				setTimeout(function() { memberPollSelfTest(panel, base, address, seq, remaining - 1); }, 1000);
+				return;
+			}
+			if (res.state === "ok") {
+				var delta = res.steps_per_rev - 2038;
+				memberPanelStatus(panel, "Unit " + formatHexAddress(address) + " self-test: " +
+					res.steps_per_rev + " steps/rev (" + (delta >= 0 ? "+" : "") + delta +
+					" vs nominal), hall window " + res.hall_window + " steps, " +
+					(res.rev_time_ms / 1000).toFixed(1) + " s/rev.", "success");
+			} else if (res.state === "pending") {
+				memberPanelStatus(panel, "Self-test still queued — display busy; check again in a moment.", "");
+			} else if (res.state === "expired") {
+				memberPanelStatus(panel, "Self-test outcome superseded — run it again.", "error");
+			} else {
+				memberPanelStatus(panel, "✘ Self-test failed: " + (res.reason || "unknown") + ".", "error");
+			}
+		})
+		.catch(function() { memberPanelStatus(panel, "✘ Self-test result poll failed.", "error"); });
 }
 
 function clusterNextFreeRow() {

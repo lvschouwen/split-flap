@@ -279,7 +279,12 @@ inline bool clusterCorsPathAllowed(const String& path) {
   // device-name edit rides it; the GET just serves the page.
   if (path == "/" || path == "/settings" || path == "/units/health" ||
       path == "/units/health/refresh" || path == "/system/stats" ||
-      path == "/log" || path == "/log/flash" || path == "/reboot") {
+      path == "/log" || path == "/log/flash" || path == "/reboot" ||
+      path == "/reflash-units") {
+    // #304: board-level unit reflash from the wall panel. Note the ESP-01
+    // follower's FollowerCors.h copy additionally opens /firmware/master —
+    // a deliberate divergence: S3 members update via #276 fleet convergence,
+    // so /firmware/* stays closed HERE.
     return true;
   }
   return path.startsWith("/unit/");

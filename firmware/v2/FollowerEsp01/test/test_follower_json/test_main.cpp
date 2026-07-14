@@ -144,18 +144,20 @@ static void test_cors_origin_gate_lan_only() {
 }
 
 static void test_cors_path_gate_matches_served_surface() {
-  // The wall-pane management surface only; /firmware/* and /cluster/* stay
-  // closed (#294 rules copied — fleet convergence and the leader wire are
-  // not browser surfaces).
+  // The wall-pane management surface; /cluster/* stays closed (leader wire,
+  // not a browser surface). #304 opens /reflash-units (board-level unit
+  // reflash from the wall). /firmware/* stays CLOSED, in lockstep with the
+  // S3's clusterCorsPathAllowed copy: the ESP-01's firmware is pushed by the
+  // S3 relay (stored image, server-to-server), not a browser POST.
   TEST_ASSERT_TRUE(followerCorsPathAllowed("/settings"));
   TEST_ASSERT_TRUE(followerCorsPathAllowed("/units/health"));
   TEST_ASSERT_TRUE(followerCorsPathAllowed("/units/health/refresh"));
   TEST_ASSERT_TRUE(followerCorsPathAllowed("/unit/jog"));
   TEST_ASSERT_TRUE(followerCorsPathAllowed("/unit/op-result"));
   TEST_ASSERT_TRUE(followerCorsPathAllowed("/reboot"));
+  TEST_ASSERT_TRUE(followerCorsPathAllowed("/reflash-units"));
   TEST_ASSERT_FALSE(followerCorsPathAllowed("/firmware/master"));
   TEST_ASSERT_FALSE(followerCorsPathAllowed("/cluster/join"));
-  TEST_ASSERT_FALSE(followerCorsPathAllowed("/reflash-units"));
 }
 
 int main(int, char**) {

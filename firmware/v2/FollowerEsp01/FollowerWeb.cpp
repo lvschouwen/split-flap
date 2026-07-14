@@ -667,15 +667,15 @@ void webEndpointsInit(AsyncWebServer& server) {
 
   server.on("/reflash-units", HTTP_POST, [](AsyncWebServerRequest* request) {
     if (opSlotBusy()) {
-      request->send(503, "text/plain",
-                    F("Unit firmware flash already in progress — try again "
-                      "in a moment"));
+      sendWithCors(request, 503, "text/plain",
+                   F("Unit firmware flash already in progress — try again "
+                     "in a moment"));
       return;
     }
     reflashPending = true;
-    request->send(200, "text/plain",
-                  F("Reflash queued. Units are re-flashed 2 at a time — "
-                    "progress in /units/health's reflash object."));
+    sendWithCors(request, 200, "text/plain",
+                 F("Reflash queued. Units are re-flashed 2 at a time — "
+                   "progress in /units/health's reflash object."));
   });
 }
 
