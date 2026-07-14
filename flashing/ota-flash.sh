@@ -20,7 +20,7 @@
 # response is the whole verdict (MD5 is checked device-side before the
 # final sector is committed).
 #
-# Usage: ota-flash.sh [-s user@host] [-d dir] [-r|-a] [-l file.bin] [-y] <device> [<device>...]
+# Usage: ota-flash.sh [-s user@host] [-d dir] [-r|-a] [-p plat] [-l file.bin] [-y] <device> [<device>...]
 #
 #   <device>        IP, hostname, or http://host[:port] of a running board.
 #                   Several devices flash sequentially with a per-device
@@ -32,6 +32,11 @@
 #                   firmware (POST /firmware/rescue)
 #   -a              flash the latest master firmware, then — once the new
 #                   image is confirmed running — install the latest rescue
+#   -p plat         override platform autodetect: esp01 or esp32. Needed for
+#                   the one legitimate mismatch — MIGRATING a board that
+#                   still runs v1 ESPMaster (reports no plat, so it reads as
+#                   an S3 master) onto the #298 follower image via v1's own
+#                   OTA path: ota-flash.sh -p esp01 <ip>
 #   -l file.bin     skip the download and upload this local file (its
 #                   firmware-<rev>/follower-<rev>/rescue-<rev> name still
 #                   supplies the expected rev; not valid with -a)
@@ -43,7 +48,8 @@
 # firmware-<rev>.bin as before. -r/-a are refused for esp01 targets (no
 # factory slot there), and a local file whose prefix contradicts the
 # device's platform is refused — an S3 image POSTed at an ESP-01 (or vice
-# versa) would brick-until-rollback for nothing.
+# versa) would brick-until-rollback for nothing. -p asserts the platform
+# for every listed device when autodetect can't know better (see above).
 #
 # Requires: curl, md5sum, python3, and (unless -l) ssh + scp access to the
 # build server.
@@ -58,18 +64,20 @@ REMOTE_DIR="${SPLITFLAP_BIN_DIR:-bench-bins}"
 MODE="master"
 LOCAL_FILE=""
 ASSUME_YES=0
+PLAT_OVERRIDE=""
 
 usage() {
-  echo "usage: $0 [-s user@host] [-d dir] [-r|-a] [-l file.bin] [-y] <device> [<device>...]" >&2
+  echo "usage: $0 [-s user@host] [-d dir] [-r|-a] [-p esp01|esp32] [-l file.bin] [-y] <device> [<device>...]" >&2
   exit 2
 }
 
-while getopts "s:d:ral:yh" opt; do
+while getopts "s:d:rap:l:yh" opt; do
   case "$opt" in
     s) SERVER="$OPTARG" ;;
     d) REMOTE_DIR="$OPTARG" ;;
     r) MODE="rescue" ;;
     a) MODE="all" ;;
+    p) PLAT_OVERRIDE="$OPTARG" ;;
     l) LOCAL_FILE="$OPTARG" ;;
     y) ASSUME_YES=1 ;;
     h|*) usage ;;
@@ -82,6 +90,11 @@ DEVICES=("$@")
 
 if [[ -n "$LOCAL_FILE" && "$MODE" == "all" ]]; then
   echo "-l flashes a single file; it cannot combine with -a" >&2
+  exit 2
+fi
+if [[ -n "$PLAT_OVERRIDE" && "$PLAT_OVERRIDE" != "esp01" &&
+      "$PLAT_OVERRIDE" != "esp32" ]]; then
+  echo "-p takes esp01 or esp32, got: $PLAT_OVERRIDE" >&2
   exit 2
 fi
 if [[ -z "$LOCAL_FILE" && -z "$SERVER" ]]; then
@@ -433,22 +446,30 @@ run_device() {
   echo "Device        : $TARGET"
 
   # Platform autodetect (#299): esp01 = the #298 follower row; anything
-  # else (incl. pre-#299 firmware without the key) = S3 master.
+  # else (incl. pre-#299 firmware without the key) = S3 master. -p asserts
+  # the platform instead — the v1→follower MIGRATION case: a board still on
+  # v1 ESPMaster reports no plat but flashes the follower image fine over
+  # its own OTA path (same eagle 1m layout, same /firmware/master contract).
   local plat
-  plat="$(fetch_setting plat)"
-  if [[ "$plat" == "?" ]]; then
-    echo "device unreachable at $TARGET" >&2
-    return 3
+  if [[ -n "$PLAT_OVERRIDE" ]]; then
+    plat="$PLAT_OVERRIDE"
+    echo "Platform      : $plat (asserted via -p — autodetect skipped)"
+  else
+    plat="$(fetch_setting plat)"
+    if [[ "$plat" == "?" ]]; then
+      echo "device unreachable at $TARGET" >&2
+      return 3
+    fi
   fi
   local prefix="firmware"
   if [[ "$plat" == "esp01" ]]; then
     prefix="follower"
-    echo "Platform      : esp01 (ESP-01 follower row)"
+    [[ -n "$PLAT_OVERRIDE" ]] || echo "Platform      : esp01 (ESP-01 follower row)"
     if [[ "$MODE" != "master" ]]; then
       echo "an ESP-01 follower has no rescue/factory slot — drop -r/-a for $device" >&2
       return 2
     fi
-  else
+  elif [[ -z "$PLAT_OVERRIDE" ]]; then
     echo "Platform      : ${plat:-esp32} (master)"
   fi
 
