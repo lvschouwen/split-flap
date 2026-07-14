@@ -20,6 +20,7 @@
 #include "BuildVersion.h"
 #include "ClockPolicy.h"
 #include "ClockService.h"
+#include "ClusterDiscovery.h"
 #include "ClusterFollower.h"
 #include "ClusterLayout.h"  // CLUSTER_MAX_MEMBERS / CLUSTER_HOST_MAX_LEN
 #include "ClusterLeader.h"
@@ -98,6 +99,11 @@ static String effectiveName;
 // caches the JSON, the GET answers 202 while pending / 200 from the cache.
 static bool mqttDiscoverPending = false;
 static String mqttDiscoverResultJson;
+
+// Cluster board discovery staging (#274): same POST-arm / netTask-drain /
+// GET-poll contract as the MQTT pair above, browsing _splitflap._tcp.
+static bool clusterDiscoverPending = false;
+static String clusterDiscoverResultJson;
 
 // Runtime-only message state (#192, v1 parity: never persisted, "" at
 // boot). Written by the drain, read by GET /settings and the clock ticker's
@@ -1301,6 +1307,41 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     request->send(v.httpStatus, "text/plain", v.message);
   });
 
+  // Board discovery for the Cluster card (#274): POST arms the staged
+  // flag (re-POST while pending is a no-op — the flag is the re-entry
+  // guard); the blocking MDNS.queryService pass runs from netTask's
+  // drain, never here (/mqtt/discover contract).
+  server.on("/cluster/discover", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+    {
+      WebStateLock lock;
+      if (!clusterDiscoverPending) {
+        clusterDiscoverResultJson = "";
+        clusterDiscoverPending = true;
+      }
+    }
+    request->send(200, "text/plain", F("Board discovery started"));
+  });
+  server.on("/cluster/discover", HTTP_GET,
+            [](AsyncWebServerRequest* request) {
+    bool pending;
+    String json;
+    {
+      WebStateLock lock;
+      pending = clusterDiscoverPending;
+      json = clusterDiscoverResultJson;
+    }
+    if (pending) {
+      request->send(202, "text/plain", F("Discovery running"));
+      return;
+    }
+    if (json.length() == 0) {
+      request->send(404, "text/plain", F("No discovery has run yet"));
+      return;
+    }
+    request->send(200, "application/json", json);
+  });
+
   server.on("/cluster/status", HTTP_GET, [](AsyncWebServerRequest* request) {
     ClusterLeaderStatus st = clusterLeaderStatusGet();
     String out = "{\"enabled\":";
@@ -1542,6 +1583,36 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
     WebStateLock lock;
     mqttDiscoverResultJson = json;
     mqttDiscoverPending = false;
+  }
+
+  // Cluster board discovery (#274): same lock-domain rationale as the MQTT
+  // pass above — mDNS takes LWIP locks, so the blocking query runs out here.
+  bool clusterDiscoverDue;
+  {
+    WebStateLock lock;
+    clusterDiscoverDue = clusterDiscoverPending;
+  }
+  if (clusterDiscoverDue) {
+    ClusterDiscoveredBoard boards[CLUSTER_DISCOVER_MAX_BOARDS];
+    size_t count = 0;
+    int n = MDNS.queryService("splitflap", "tcp");
+    for (int i = 0; i < n && count < CLUSTER_DISCOVER_MAX_BOARDS; i++) {
+      ClusterDiscoveredBoard& b = boards[count++];
+      // TXT name (what the board calls itself) over the answer hostname —
+      // identical today, but the TXT survives mDNS conflict renaming.
+      String txtName = MDNS.txt(i, "name");
+      b.name = txtName.length() > 0 ? txtName
+                                    : normalizeMdnsHostname(MDNS.hostname(i));
+      IPAddress a = MDNS.address(i);
+      b.ip = a == IPAddress() ? String() : a.toString();
+      b.rev = MDNS.txt(i, "rev");
+      b.width = clusterParseTxtWidth(MDNS.txt(i, "width"));
+    }
+    String json = buildClusterDiscoverJson(boards, count, effectiveName);
+    SerialPrintf("Cluster discover: %u board(s)\n", (unsigned)count);
+    WebStateLock lock;
+    clusterDiscoverResultJson = json;
+    clusterDiscoverPending = false;
   }
 
   // Flash-log drain (#206): netTask is the single flash writer.
