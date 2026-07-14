@@ -140,19 +140,32 @@ inline String clusterAlignRow(const String& rowText, int width,
 // row's remainder nor a fresh next row but is wider than the current
 // row's FULL width hard-splits (fills the remainder, spills onward); a
 // word that would fit a row that doesn't exist truncates the rest.
+//
+// Row breaks (#290): the wire's literal "\n" marker (the v1 composer
+// contract — v1 turned it into temporal paging) and a raw newline both
+// force the next row here, uniformly: consecutive/leading breaks leave
+// deliberate blank rows, breaks past the last row truncate the rest.
 inline void clusterWrapRows(const String& text, const ClusterGrid& grid,
                             String* rows) {
   for (int r = 0; r < grid.rows; r++) rows[r] = "";
 
-  const char* p = text.c_str();
-  int n = (int)text.length();
+  String norm = text;
+  norm.replace("\\n", "\n");
+
+  const char* p = norm.c_str();
+  int n = (int)norm.length();
   int i = 0;
   int row = 0;
   while (i < n && row < grid.rows) {
     while (i < n && p[i] == ' ') i++;
     if (i >= n) break;
+    if (p[i] == '\n') {
+      row++;
+      i++;
+      continue;
+    }
     int j = i;
-    while (j < n && p[j] != ' ') j++;
+    while (j < n && p[j] != ' ' && p[j] != '\n') j++;
     int len = j - i;
 
     int width = grid.rowWidth[row];
@@ -160,13 +173,13 @@ inline void clusterWrapRows(const String& text, const ClusterGrid& grid,
     int need = (pos == 0) ? len : pos + 1 + len;
     if (need <= width) {
       if (pos > 0) rows[row] += ' ';
-      rows[row] += text.substring(i, j);
+      rows[row] += norm.substring(i, j);
       i = j;
       continue;
     }
     if (row + 1 < grid.rows && len <= (int)grid.rowWidth[row + 1]) {
       row++;
-      rows[row] = text.substring(i, j);
+      rows[row] = norm.substring(i, j);
       i = j;
       continue;
     }
@@ -187,7 +200,7 @@ inline void clusterWrapRows(const String& text, const ClusterGrid& grid,
       }
       int take = chunkWidth - chunkPos;
       if (take > j - i) take = j - i;
-      rows[row] += text.substring(i, i + take);
+      rows[row] += norm.substring(i, i + take);
       i += take;
       if (i < j) row++;
     }

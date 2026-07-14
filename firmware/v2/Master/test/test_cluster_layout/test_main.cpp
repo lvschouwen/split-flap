@@ -248,6 +248,80 @@ static void test_wide_row_slices_across_side_by_side_members() {
   TEST_ASSERT_EQUAL_STRING(BLANK16, seg[3].c_str());
 }
 
+// --- explicit row breaks (#290): the wire's literal "\n" marker -----------------
+
+static void test_line_break_marker_forces_row_break() {
+  String seg[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_TRUE(layoutGridText("HALLO\\nALLEMAAL", DisplayAlignment::Left,
+                                  makeRows(2, 16), seg));
+  TEST_ASSERT_EQUAL_STRING("HALLO           ", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("ALLEMAAL        ", seg[1].c_str());
+}
+
+static void test_raw_newline_also_breaks_rows() {
+  String seg[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_TRUE(layoutGridText("HALLO\nALLEMAAL", DisplayAlignment::Left,
+                                  makeRows(2, 16), seg));
+  TEST_ASSERT_EQUAL_STRING("HALLO           ", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("ALLEMAAL        ", seg[1].c_str());
+}
+
+static void test_line_break_combines_with_wrap() {
+  String seg[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_TRUE(layoutGridText("HI\\nSPLIT FLAP DISPLAY CLUSTER",
+                                  DisplayAlignment::Left, makeRows(3, 16), seg));
+  TEST_ASSERT_EQUAL_STRING("HI              ", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("SPLIT FLAP      ", seg[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("DISPLAY CLUSTER ", seg[2].c_str());
+}
+
+static void test_double_break_leaves_blank_row() {
+  // Spatial semantics: a blank middle row is deliberate wall content
+  // (differs from v1's temporal paging, which collapsed doubles).
+  String seg[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_TRUE(layoutGridText("TOP\\n\\nBOTTOM", DisplayAlignment::Left,
+                                  makeRows(3, 16), seg));
+  TEST_ASSERT_EQUAL_STRING("TOP             ", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING(BLANK16, seg[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("BOTTOM          ", seg[2].c_str());
+}
+
+static void test_break_past_last_row_truncates() {
+  String seg[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_TRUE(layoutGridText("ONE\\nTWO\\nTHREE", DisplayAlignment::Left,
+                                  makeRows(2, 16), seg));
+  TEST_ASSERT_EQUAL_STRING("ONE             ", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("TWO             ", seg[1].c_str());
+}
+
+static void test_spaces_around_break_are_tidied() {
+  // "HALLO\n ALLEMAAL" (the user's second bench attempt) must not indent
+  // the second row.
+  String seg[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_TRUE(layoutGridText("HALLO \\n ALLEMAAL", DisplayAlignment::Left,
+                                  makeRows(2, 16), seg));
+  TEST_ASSERT_EQUAL_STRING("HALLO           ", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("ALLEMAAL        ", seg[1].c_str());
+}
+
+static void test_break_rows_align_independently() {
+  String seg[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_TRUE(layoutGridText("HI\\nTHERE", DisplayAlignment::Center,
+                                  makeRows(2, 16), seg));
+  TEST_ASSERT_EQUAL_STRING("       HI       ", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("     THERE      ", seg[1].c_str());
+}
+
+static void test_leading_break_blanks_the_top_row() {
+  // Uniform rule: every break advances a row — a leading one deliberately
+  // parks the text on the lower row(s).
+  String seg[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_TRUE(layoutGridText("\\nHALLO", DisplayAlignment::Left,
+                                  makeRows(2, 16), seg));
+  TEST_ASSERT_EQUAL_STRING(BLANK16, seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("HALLO           ", seg[1].c_str());
+}
+
 static void test_mirror_members_get_identical_segments() {
   String seg[CLUSTER_MAX_MEMBERS];
   TEST_ASSERT_TRUE(
@@ -418,6 +492,14 @@ int main(int, char**) {
   RUN_TEST(test_space_runs_collapse_at_wrap);
   RUN_TEST(test_empty_text_blanks_all_segments);
   RUN_TEST(test_wide_row_slices_across_side_by_side_members);
+  RUN_TEST(test_line_break_marker_forces_row_break);
+  RUN_TEST(test_raw_newline_also_breaks_rows);
+  RUN_TEST(test_line_break_combines_with_wrap);
+  RUN_TEST(test_double_break_leaves_blank_row);
+  RUN_TEST(test_break_past_last_row_truncates);
+  RUN_TEST(test_spaces_around_break_are_tidied);
+  RUN_TEST(test_break_rows_align_independently);
+  RUN_TEST(test_leading_break_blanks_the_top_row);
   RUN_TEST(test_mirror_members_get_identical_segments);
   RUN_TEST(test_charset_passes_through_untouched);
   RUN_TEST(test_layout_refuses_invalid_table);
