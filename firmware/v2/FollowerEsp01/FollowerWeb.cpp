@@ -9,8 +9,6 @@
 #include <ESP8266WiFi.h>
 #include <Updater.h>
 
-#include <memory>
-
 #include "BuildVersion.h"
 #include "FollowerBus.h"
 #include "FollowerCluster.h"
@@ -22,8 +20,8 @@
 #include "WearPolicy.h"
 
 volatile bool isPendingReboot = false;
-volatile bool masterOtaUploadActive = false;
-volatile unsigned long masterOtaLastChunkMs = 0;
+static volatile bool masterOtaUploadActive = false;
+static volatile unsigned long masterOtaLastChunkMs = 0;
 
 // --- staged work (handlers set, webLoopTick drains) ---------------------------------
 
@@ -299,10 +297,17 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         }
         String md5 = request->getParam("md5")->value();
         md5.toLowerCase();
-        if (md5.length() != 32 || !Update.setMD5(md5.c_str())) {
+        if (md5.length() != 32) {
           otaRejected = true;
           otaRejectionStatus = 400;
           otaRejectionReason = "md5 query param must be a 32-char hex digest";
+          Update.end(false);
+          return;
+        }
+        if (!Update.setMD5(md5.c_str())) {
+          otaRejected = true;
+          otaRejectionStatus = 400;
+          otaRejectionReason = "Update.setMD5 rejected '" + md5 + "'";
           Update.end(false);
           return;
         }
@@ -479,13 +484,17 @@ void webEndpointsInit(AsyncWebServer& server) {
   // --- unit health (v1/v2 shared wire shape) --------------------------------
 
   server.on("/units/health", HTTP_GET, [](AsyncWebServerRequest* request) {
-    std::unique_ptr<char[]> buf(new char[UNIT_HEALTH_JSON_CAP]);
+    // Static, not per-request heap (v1's ESP-01 RAM tactic — the S3 version
+    // heap-allocates, but ~3.5 KB of new/delete churn per poll fragments
+    // this board's ~40 KB heap). Safe unlocked: handlers run one at a time
+    // in the single LWIP context.
+    static char buf[UNIT_HEALTH_JSON_CAP];
     int faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
-    size_t n = buildUnitHealthJson(buf.get(), UNIT_HEALTH_JSON_CAP, unitFacts,
+    size_t n = buildUnitHealthJson(buf, UNIT_HEALTH_JSON_CAP, unitFacts,
                                    displayWidth, faulty,
                                    SFP_I2C_ADDRESS_BASE);
     if (n == 0 || n >= UNIT_HEALTH_JSON_CAP) {
-      n = (size_t)snprintf(buf.get(), UNIT_HEALTH_JSON_CAP,
+      n = (size_t)snprintf(buf, UNIT_HEALTH_JSON_CAP,
                            "{\"width\":%d,\"faulty\":%d,\"units\":[]}",
                            displayWidth, faulty);
     }
@@ -497,16 +506,16 @@ void webEndpointsInit(AsyncWebServer& server) {
     size_t wearLen = buildWearJson(wear, wearJson, sizeof(wearJson));
     if (n > 0 && wearLen < sizeof(wearJson) &&
         n + wearLen + 2 < UNIT_HEALTH_JSON_CAP) {
-      n += (size_t)snprintf(buf.get() + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
+      n += (size_t)snprintf(buf + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
                             ",%s}", wearJson) - 1;
     }
     char reflashJson[80];
     buildReflashJson(reflashJson, sizeof(reflashJson), reflashProgress);
     if (n > 0 && n + strlen(reflashJson) + 13 < UNIT_HEALTH_JSON_CAP) {
-      snprintf(buf.get() + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
+      snprintf(buf + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
                ",\"reflash\":%s}", reflashJson);
     }
-    sendWithCors(request, 200, "application/json", buf.get());
+    sendWithCors(request, 200, "application/json", buf);
   });
 
   server.on("/units/health/refresh", HTTP_POST,
@@ -671,6 +680,19 @@ void webEndpointsInit(AsyncWebServer& server) {
 }
 
 // --- loop drain ---------------------------------------------------------------------
+
+bool webOtaUploadFrozen() {
+  if (!masterOtaUploadActive) return false;
+  if (millis() - masterOtaLastChunkMs > 30000UL) {
+    SerialPrintln(F("OTA upload stalled >30 s — resuming normal operation"));
+    masterOtaUploadActive = false;
+    // Free the session slot too (v1 #191) — the next upload's begin()
+    // retry recovers the abandoned Update session instead of a 409 wedge.
+    masterOtaOwnerRequest = nullptr;
+    return false;
+  }
+  return true;
+}
 
 static void executeStagedOp() {
   StagedOp op = stagedOp;  // copy, then release the slot at the end

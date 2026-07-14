@@ -81,15 +81,11 @@ void loop() {
   MDNS.update();
 
   // Freeze all display/unit work while a master firmware image streams in
-  // (v1 #116), with the 30 s stalled-upload auto-thaw.
-  if (masterOtaUploadActive) {
-    if (millis() - masterOtaLastChunkMs > 30000UL) {
-      SerialPrintln(F("OTA upload stalled >30 s — resuming"));
-      masterOtaUploadActive = false;
-    } else {
-      delay(50);
-      return;
-    }
+  // (v1 #116); the stalled-upload auto-thaw (incl. freeing the Update
+  // session slot, v1 #191) lives with the session state in FollowerWeb.
+  if (webOtaUploadFrozen()) {
+    delay(50);
+    return;
   }
 
   webLoopTick();      // staged ops / reflash / health refresh

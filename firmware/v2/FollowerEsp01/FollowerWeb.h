@@ -12,10 +12,14 @@
 
 // Cross-context flags (v1 conventions).
 extern volatile bool isPendingReboot;
-extern volatile bool masterOtaUploadActive;
-extern volatile unsigned long masterOtaLastChunkMs;
 
 void webEndpointsInit(AsyncWebServer& server);
+
+// True while a master OTA upload is streaming in — loop() freezes all
+// display/unit work (v1 #116). Owns the 30 s stalled-upload auto-thaw,
+// including freeing the Update session slot (v1 #191: a dangling owner
+// would 409 every later upload forever).
+bool webOtaUploadFrozen();
 
 // loop() drain: staged unit op execution, self-test polling, unit-health
 // refresh (+ probe-inhibit wait), the blocking reflash job.
