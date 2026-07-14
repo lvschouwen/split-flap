@@ -439,18 +439,19 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
 static esp_http_client_handle_t rolloutClient = nullptr;
 static uint32_t rolloutOffset = 0;
 // Running-image facts, computed once per boot on first use (the running
-// slot cannot change under us). latch a hard failure so a broken read
-// doesn't re-verify 2.6 MB every tick.
+// slot cannot change under us). A hard failure latches for the boot so a
+// broken read doesn't re-verify 2.6 MB every tick — atomic because the
+// status snapshot surfaces it from the web task (imageVerifyFailed).
 static const esp_partition_t* rolloutPart = nullptr;
 static uint32_t rolloutImageLen = 0;
 static String rolloutMd5;
-static bool rolloutFactsFailed = false;
+static std::atomic<bool> rolloutFactsFailed{false};
 // Shared flash-read buffer (facts pass + upload pump never overlap).
 static uint8_t rolloutBuf[4096];
 
 static bool rolloutEnsureImageFacts() {
   if (rolloutImageLen > 0) return true;
-  if (rolloutFactsFailed) return false;
+  if (rolloutFactsFailed.load(std::memory_order_relaxed)) return false;
 
   uint32_t t0 = millis();
   const esp_partition_t* part = esp_ota_get_running_partition();
@@ -504,7 +505,10 @@ static bool rolloutOpenUpload(const String& host) {
   String url = clusterRolloutUrl(host, rolloutMd5, GIT_REV);
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
-  cfg.timeout_ms = CLUSTER_ROLLOUT_HTTP_TIMEOUT_MS;
+  // Chunk writes ride the render fan-out's 1.5 s LAN bound so a stalled
+  // follower can never freeze clusterTask beyond the already-accepted
+  // worst case; only the finalize round-trip gets the long budget below.
+  cfg.timeout_ms = CLUSTER_HTTP_TIMEOUT_MS;
   rolloutClient = esp_http_client_init(&cfg);
   if (rolloutClient == nullptr) return false;
 
@@ -539,8 +543,11 @@ static void rolloutPumpUpload() {
             (int)take) {
       rolloutCloseUpload();
       LeaderLock lock;
+      int target = rollout.memberIndex;
       SerialPrintln("cluster: rollout upload to " +
-                    String(table.members[rollout.memberIndex].host) +
+                    ((target >= 0 && target < table.count)
+                         ? String(table.members[target].host)
+                         : String("?")) +
                     " failed mid-stream");
       clusterRolloutUploadFailed(rollout, millis());
       return;
@@ -554,6 +561,12 @@ static void rolloutPumpUpload() {
   }
   if (rolloutOffset < rolloutImageLen) return;  // more ticks to go
 
+  // Finalize: the follower's Update.end() MD5-verifies the whole image
+  // (~1-2 s) before answering — the ONE deliberately long block per
+  // converged member (bounded by the finalize budget; renders resume the
+  // next tick).
+  esp_http_client_set_timeout_ms(rolloutClient,
+                                 CLUSTER_ROLLOUT_FINALIZE_TIMEOUT_MS);
   String trailer = clusterRolloutMultipartTrailer();
   int status = -1;
   if (esp_http_client_write(rolloutClient, trailer.c_str(),
@@ -566,6 +579,11 @@ static void rolloutPumpUpload() {
   LeaderLock lock;
   uint32_t nowMs = millis();
   int target = rollout.memberIndex;
+  if (target < 0 || target >= table.count) {
+    // A config swap raced this finalize inside the same tick — the swap
+    // already reset the rollout; nothing to attribute the verdict to.
+    return;
+  }
   String host(table.members[target].host);
   if (status == 200) {
     SerialPrintln("cluster: " + host +
@@ -635,6 +653,10 @@ static void rolloutServiceTick() {
   // WaitingRejoin: the normal supervision keeps re-joining the rebooted
   // member; the health gate watches the rev it comes back with.
   LeaderLock lock;
+  if (target < 0 || target >= table.count) {
+    clusterRolloutReset(rollout);  // config swap raced the wait — start over
+    return;
+  }
   ClusterRolloutWait wait =
       clusterRolloutCheckWait(rollout, runtimes[target].joined,
                               runtimes[target].rev, GIT_REV, millis());
@@ -712,6 +734,7 @@ ClusterLeaderStatus clusterLeaderStatusGet() {
   }
   st.rolloutSent = rollout.bytesSent;
   st.rolloutTotal = rollout.bytesTotal;
+  st.rolloutImageFailed = rolloutFactsFailed.load(std::memory_order_relaxed);
   return st;
 }
 

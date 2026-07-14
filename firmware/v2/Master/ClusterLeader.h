@@ -51,6 +51,9 @@ struct ClusterLeaderStatus {
   String rolloutHost;    // target member while not idle
   uint32_t rolloutSent = 0;
   uint32_t rolloutTotal = 0;
+  // The running image failed its verify/read pass — convergence is off
+  // until reboot ("idle" alone would read as "nothing to do").
+  bool rolloutImageFailed = false;
 };
 
 // setup(): loads the member table from NVS (invalid → leader disabled,

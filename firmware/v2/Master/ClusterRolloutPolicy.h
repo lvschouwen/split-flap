@@ -37,9 +37,13 @@ static const uint32_t CLUSTER_ROLLOUT_RETRY_HOLDOFF_MS = 30000UL;
 // ~2.6 MB image takes ~6 s while renders/pings keep flowing between ticks.
 static const uint32_t CLUSTER_ROLLOUT_CHUNK_PER_TICK = 49152UL;
 
-// Upload round-trips wait on the follower's flash writes and final MD5
-// verify — the 1.5 s render timeout is far too tight here.
-static const int CLUSTER_ROLLOUT_HTTP_TIMEOUT_MS = 10000;
+// Finalize verdict wait ONLY (trailer + response headers): the follower's
+// Update.end() runs a whole-image MD5 verify (~1-2 s) before it answers.
+// Chunk writes ride the normal 1.5 s LAN timeout instead, so a stalled
+// follower can never freeze the fan-out longer than the render path's own
+// documented worst case — the one finalize round-trip per converged member
+// is the accepted (bounded) stall.
+static const int CLUSTER_ROLLOUT_FINALIZE_TIMEOUT_MS = 10000;
 
 #define CLUSTER_ROLLOUT_BOUNDARY "splitflapClusterRollout"
 
@@ -93,6 +97,13 @@ inline void clusterRolloutStart(ClusterRolloutState& st, int memberIndex,
   st.bytesTotal = totalBytes;
 }
 
+// Progress counters are zeroed on EVERY transition to Idle — stale bytes
+// next to phase "idle" would read as a wedged rollout in the Cluster card.
+inline void clusterRolloutClearProgress(ClusterRolloutState& st) {
+  st.bytesSent = 0;
+  st.bytesTotal = 0;
+}
+
 inline void clusterRolloutBurnAttempt(ClusterRolloutState& st,
                                       uint32_t nowMs) {
   int i = st.memberIndex;
@@ -103,6 +114,7 @@ inline void clusterRolloutBurnAttempt(ClusterRolloutState& st,
   st.phase = ClusterRolloutPhase::Idle;
   st.memberIndex = -1;
   st.holdoffUntilMs = nowMs + CLUSTER_ROLLOUT_RETRY_HOLDOFF_MS;
+  clusterRolloutClearProgress(st);
 }
 
 // Transport failure or non-2xx/409 verdict: counts toward the cap.
@@ -118,6 +130,7 @@ inline void clusterRolloutUploadRejected(ClusterRolloutState& st,
   st.phase = ClusterRolloutPhase::Idle;
   st.memberIndex = -1;
   st.holdoffUntilMs = nowMs + CLUSTER_ROLLOUT_RETRY_HOLDOFF_MS;
+  clusterRolloutClearProgress(st);
 }
 
 // 200 from the follower: image verified and armed, reboot incoming — the
@@ -142,6 +155,7 @@ inline ClusterRolloutWait clusterRolloutCheckWait(ClusterRolloutState& st,
     }
     st.phase = ClusterRolloutPhase::Idle;
     st.memberIndex = -1;
+    clusterRolloutClearProgress(st);
     return ClusterRolloutWait::Converged;
   }
   if (memberJoined && memberRev.length() > 0) {

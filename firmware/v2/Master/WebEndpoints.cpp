@@ -1388,6 +1388,8 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     out += String((unsigned long)st.rolloutSent);
     out += ",\"total\":";
     out += String((unsigned long)st.rolloutTotal);
+    out += ",\"imageVerifyFailed\":";
+    out += st.rolloutImageFailed ? "true" : "false";
     out += "}}";
     request->send(200, "application/json", out);
   });
@@ -1609,12 +1611,20 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
     size_t count = 0;
     int n = MDNS.queryService("splitflap", "tcp");
     for (int i = 0; i < n && count < CLUSTER_DISCOVER_MAX_BOARDS; i++) {
-      ClusterDiscoveredBoard& b = boards[count++];
       // TXT name (what the board calls itself) over the answer hostname —
       // identical today, but the TXT survives mDNS conflict renaming.
       String txtName = MDNS.txt(i, "name");
-      b.name = txtName.length() > 0 ? txtName
-                                    : normalizeMdnsHostname(MDNS.hostname(i));
+      String name = txtName.length() > 0
+                        ? txtName
+                        : normalizeMdnsHostname(MDNS.hostname(i));
+      // Self and nameless answers must not consume result slots — with a
+      // full wall the leader's own advertisement would otherwise crowd out
+      // the last real board (the JSON builder re-filters as backstop).
+      if (name.length() == 0 || name.equalsIgnoreCase(effectiveName)) {
+        continue;
+      }
+      ClusterDiscoveredBoard& b = boards[count++];
+      b.name = name;
       IPAddress a = MDNS.address(i);
       b.ip = a == IPAddress() ? String() : a.toString();
       b.rev = MDNS.txt(i, "rev");

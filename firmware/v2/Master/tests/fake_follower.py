@@ -51,6 +51,7 @@ class FollowerState:
         # Rollout drill state — survives leave() like real flash would.
         self.rebooting = False
         self.ota_busy = False
+        self.ota_in_flight = False  # concurrent-upload guard (real: #191)
         self.uploads = []  # {"size", "md5", "v"} per accepted flash
         self.reset()
 
@@ -222,11 +223,26 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
         into (WebEndpoints.cpp): multipart field "firmware", mandatory
         ?md5=, 409 while another flash owns the target, 200 then reboot."""
         st = self.state
+        # Concurrent-upload guard: the real endpoint's otaOwnerRequest
+        # rejects an overlapping POST with 409 — this ThreadingHTTPServer
+        # must too, or the harness hides overlap bugs the ESP32 would 409.
+        with st.lock:
+            overlapped = st.ota_in_flight
+            st.ota_in_flight = True
+        try:
+            return self._handle_master_ota_locked(overlapped)
+        finally:
+            if not overlapped:  # only the owning request releases the slot
+                with st.lock:
+                    st.ota_in_flight = False
+
+    def _handle_master_ota_locked(self, overlapped):
+        st = self.state
         query = {k: v[0] for k, v in
                  parse_qs(urlparse(self.path).query).items()}
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length else b""
-        if st.ota_busy:
+        if st.ota_busy or overlapped:
             return self._send(
                 409, "Another master OTA upload is already in progress "
                      "— retry when it finishes", "text/plain")

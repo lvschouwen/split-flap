@@ -117,6 +117,30 @@ static void test_rejection_burns_no_attempt() {
   TEST_ASSERT_FALSE(st.blocked[1]);
 }
 
+static void test_every_idle_transition_clears_progress() {
+  // Stale bytes next to phase "idle" would read as a wedged rollout in
+  // the Cluster card.
+  ClusterRolloutState st;
+  clusterRolloutStart(st, 1, 2600000);
+  st.bytesSent = 1000000;
+  clusterRolloutUploadRejected(st, 5000);
+  TEST_ASSERT_EQUAL_UINT32(0, st.bytesSent);
+  TEST_ASSERT_EQUAL_UINT32(0, st.bytesTotal);
+
+  clusterRolloutStart(st, 1, 2600000);
+  st.bytesSent = 1000000;
+  clusterRolloutUploadFailed(st, 90000);
+  TEST_ASSERT_EQUAL_UINT32(0, st.bytesSent);
+  TEST_ASSERT_EQUAL_UINT32(0, st.bytesTotal);
+
+  clusterRolloutStart(st, 1, 2600000);
+  st.bytesSent = 2600000;
+  clusterRolloutUploadDone(st, 200000);
+  clusterRolloutCheckWait(st, true, String(LEADER_REV), LEADER_REV, 210000);
+  TEST_ASSERT_EQUAL_UINT32(0, st.bytesSent);
+  TEST_ASSERT_EQUAL_UINT32(0, st.bytesTotal);
+}
+
 static void test_failure_cap_blocks_member() {
   ClusterRolloutState st;
   for (int i = 0; i < CLUSTER_ROLLOUT_ATTEMPT_CAP; i++) {
@@ -251,6 +275,7 @@ int main(int, char**) {
   RUN_TEST(test_holdoff_gates_candidates);
   RUN_TEST(test_start_tracks_progress_target);
   RUN_TEST(test_rejection_burns_no_attempt);
+  RUN_TEST(test_every_idle_transition_clears_progress);
   RUN_TEST(test_failure_cap_blocks_member);
   RUN_TEST(test_upload_done_waits_for_rejoin);
   RUN_TEST(test_wait_converged_resets_attempts);
