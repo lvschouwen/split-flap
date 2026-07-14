@@ -328,3 +328,6 @@ summary {
 .member-panel .health { justify-content: flex-start; margin-top: 8px; }
 .member-panel .health span { cursor: default; }
 .member-unit-actions { margin-top: 8px; }
+/* Stale follower digest (#294): the leader went silent — the mirrored wall
+   greys out instead of impersonating live state. */
+.mirror.stale { opacity: .45; filter: grayscale(.8); transition: opacity .4s; }

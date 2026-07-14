@@ -99,6 +99,7 @@ function buildMirror(width) {
 	clearMirror();
 	wallWidths = null;
 	wallSource = null;
+	document.getElementById("mirror").classList.remove("stale");
 	var mirror = document.getElementById("mirror");
 	mirror.classList.remove("wall");
 	mirror.style.removeProperty("--wallcols");
@@ -329,10 +330,14 @@ function renderWall(rows) {
 //digest — wall rows, per-row health, member pills — from THIS board's page.
 //Rides the 5 s /settings poll; riffle's per-tile dedup absorbs repaints.
 function wallWidthsFromMembers(members) {
+	//Digest content is only as trustworthy as the LAN — clamp the geometry
+	//(8 rows / 255 units mirror the firmware's own table limits) so a
+	//hostile value can never build a runaway wall and hang this tab.
 	var widths = [];
 	members.forEach(function(m) {
-		var extent = Number(m.col) + Number(m.width);
-		if (!(widths[m.row] >= extent)) widths[m.row] = extent;
+		var row = Number(m.row), extent = Number(m.col) + Number(m.width);
+		if (!(row >= 0 && row < 8) || !(extent >= 1 && extent <= 255)) return;
+		if (!(widths[row] >= extent)) widths[row] = extent;
 	});
 	for (var r = 0; r < widths.length; r++) widths[r] = widths[r] || 0;
 	return widths;
@@ -348,6 +353,7 @@ function pollClusterDigest(s) {
 			if (members.length === 0 || !digest.rows) return;
 			window.lastDigestLeaderHost = (digest.leader || {}).host || s.clusterLeaderHost || "";
 			var widths = wallWidthsFromMembers(members);
+			if (widths.length === 0) return;
 			var selfRow = Number(s.clusterRow);
 			if (!wallWidths || wallSource !== "digest" ||
 				wallWidths.join() !== widths.join() || wallSelfRow !== selfRow) {
@@ -358,6 +364,14 @@ function pollClusterDigest(s) {
 			renderWall(digest.rows);
 			updateWallHealth(members);
 			renderFollowerPills(members);
+			//Stale digest (spec): a silent leader freezes this mirror — grey
+			//it and say how old the picture is instead of looking live.
+			var stale = Number(d.ageMs) > 30000;
+			document.getElementById("mirror").classList.toggle("stale", stale);
+			if (stale) {
+				setBoardStatus("● CLUSTER · last seen " +
+					Math.round(Number(d.ageMs) / 1000) + "s ago", true);
+			}
 		})
 		.catch(function() {});
 }
@@ -2517,6 +2531,9 @@ function renderFollowerPills(members) {
 function openMemberPanel(host, isSelf) {
 	var panel = document.getElementById("clusterMemberPanel");
 	if (!panel) return;
+	//Hosts originate on the LAN wire (digest / status) — the fetch target
+	//gets the same hostname[:port] allowlist as every visible link.
+	if (host !== "" && !/^[A-Za-z0-9.\-]+(:\d+)?$/.test(String(host))) return;
 	removeAllChildren(panel);
 	panel.classList.remove("hidden");
 	var base = isSelf || host === "" ? "" : "http://" + host;

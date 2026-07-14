@@ -114,3 +114,8 @@ struct ClusterConfigVerdict {
   String message;
 };
 ClusterConfigVerdict clusterLeaderStageConfig(const String& membersSpec);
+
+// The stage's validation alone (pure, no staging): #295 promote
+// pre-validates the transformed table BEFORE leaving the dead membership,
+// so the post-leave stage is deterministic and cannot strand the board.
+ClusterConfigVerdict clusterLeaderValidateSpec(const String& membersSpec);

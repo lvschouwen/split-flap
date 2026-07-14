@@ -139,7 +139,10 @@ static int clusterHttpRequest(const String& url, const String& postBody,
     if (written == (int)postBody.length() &&
         esp_http_client_fetch_headers(client) >= 0) {
       status = esp_http_client_get_status_code(client);
-      char buf[257];
+      // 512: the #294 health keys grew the join/ping replies (~180 B worst
+      // case today) — headroom so a truncated reply can't silently drop
+      // health/rev facts.
+      char buf[513];
       int got = esp_http_client_read_response(client, buf, sizeof(buf) - 1);
       if (got > 0) {
         buf[got] = '\0';
@@ -887,7 +890,7 @@ int clusterLeaderMirrorRows(String* rows, int& selfRowOut,
                            displayAlignmentFromString(alignment), rows);
 }
 
-ClusterConfigVerdict clusterLeaderStageConfig(const String& membersSpec) {
+ClusterConfigVerdict clusterLeaderValidateSpec(const String& membersSpec) {
   ClusterMemberTable t;
   if (!clusterTableFromString(membersSpec, t)) {
     return {400, "Malformed members spec"};
@@ -910,10 +913,21 @@ ClusterConfigVerdict clusterLeaderStageConfig(const String& membersSpec) {
     }
     if (selfCount > 1) return {400, "More than one local (empty-host) row"};
   }
+  return {200, t.count > 0 ? "Cluster config staged" : "Cluster disabled"};
+}
+
+ClusterConfigVerdict clusterLeaderStageConfig(const String& membersSpec) {
+  ClusterConfigVerdict verdict = clusterLeaderValidateSpec(membersSpec);
+  if (verdict.httpStatus != 200) return verdict;
   {
     LeaderLock lock;
+    // The single staged slot is last-writer-wins ON PURPOSE (a demote
+    // racing a user edit: whichever intent lands second is the one that
+    // holds) — but a user-originated stage must never inherit a pending
+    // demote's suppress-leave flag (review HIGH), so it resets here.
     configSpec = membersSpec;
     configPending = true;
+    configSuppressLeave = false;
   }
-  return {200, t.count > 0 ? "Cluster config staged" : "Cluster disabled"};
+  return verdict;
 }

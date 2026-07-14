@@ -272,6 +272,40 @@ static void test_promote_rejects_malformed_table() {
   TEST_ASSERT_FALSE(clusterPromoteTransform("not-a-table", 0, "x", out));
 }
 
+// --- digest shape gate (review: the follower re-serves the digest raw) -------------
+
+static void test_digest_shape_accepts_a_real_digest() {
+  ClusterLeaderStatus st = makeStatus();
+  String rows[2] = {"A", "B"};
+  String digest = clusterBuildDigest(1, "L", "10.0.0.9", "|0|0|16", rows, 2, st);
+  TEST_ASSERT_TRUE(clusterDigestShapeOk(digest));
+}
+
+static void test_digest_shape_rejects_trailing_top_level_data() {
+  // `{},"digest":{...}` would inject fields into the /cluster/digest
+  // wrapper the follower splices the raw string into.
+  TEST_ASSERT_FALSE(clusterDigestShapeOk("{},\"digest\":{\"gen\":1}"));
+}
+
+static void test_digest_shape_rejects_unbalanced_and_garbage() {
+  TEST_ASSERT_FALSE(clusterDigestShapeOk(""));
+  TEST_ASSERT_FALSE(clusterDigestShapeOk("not json"));
+  TEST_ASSERT_FALSE(clusterDigestShapeOk("{\"gen\":1"));
+  TEST_ASSERT_FALSE(clusterDigestShapeOk("{\"gen\":1}}"));
+  TEST_ASSERT_FALSE(clusterDigestShapeOk("[1,2]"));  // array, not object
+}
+
+static void test_digest_shape_handles_braces_inside_strings() {
+  TEST_ASSERT_TRUE(clusterDigestShapeOk("{\"rows\":[\"}{\",\"\\\"{\"]}"));
+}
+
+static void test_digest_shape_caps_length() {
+  String big = "{\"pad\":\"";
+  while (big.length() <= CLUSTER_DIGEST_MAX_LEN) big += "xxxxxxxx";
+  big += "\"}";
+  TEST_ASSERT_FALSE(clusterDigestShapeOk(big));
+}
+
 // --- old-leader demote marker (#295) -----------------------------------------------
 
 static void test_join_rejected_other_leader_marker() {
@@ -364,6 +398,11 @@ int main(int, char**) {
   RUN_TEST(test_promote_rejects_self_index_that_is_already_the_leader);
   RUN_TEST(test_promote_rejects_when_leader_row_needs_a_host_it_lacks);
   RUN_TEST(test_promote_rejects_malformed_table);
+  RUN_TEST(test_digest_shape_accepts_a_real_digest);
+  RUN_TEST(test_digest_shape_rejects_trailing_top_level_data);
+  RUN_TEST(test_digest_shape_rejects_unbalanced_and_garbage);
+  RUN_TEST(test_digest_shape_handles_braces_inside_strings);
+  RUN_TEST(test_digest_shape_caps_length);
   RUN_TEST(test_join_rejected_other_leader_marker);
   RUN_TEST(test_cors_allows_private_lan_origins);
   RUN_TEST(test_cors_rejects_public_and_garbage_origins);

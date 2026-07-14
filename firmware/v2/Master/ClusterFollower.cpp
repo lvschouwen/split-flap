@@ -206,16 +206,27 @@ ClusterRenderVerdict clusterFollowerHandleRender(uint32_t epoch, uint32_t seq,
   return verdict;
 }
 
-bool clusterFollowerHandlePing(const String& digest, int youIndex) {
+bool clusterFollowerHandlePing(const String& digest, int youIndex,
+                               const String& remoteIp) {
   ClusterLock lock;
   if (!clusterFollowerContact(policyState, millis())) return false;
-  if (digest.length() > 0) {
+  // Digest trust gate (review CRITICAL): the ping itself is any-LAN
+  // contact (pre-existing), but the digest becomes served-back state and
+  // the #295 promote input — accept it only from the joined leader's IP
+  // (the join always carries WiFi.localIP), only as one balanced JSON
+  // object, and persist the table only when it parses as a valid member
+  // table. Everything else degrades to a plain keep-alive.
+  if (digest.length() > 0 && remoteIp == leaderHost &&
+      clusterDigestShapeOk(digest)) {
     digestRaw = digest;
     digestReceivedMs = millis();
     // The promote inputs persist only on change — the table moves on
     // config edits, not on the 10 s ping cadence.
     String tableSpec = clusterExtractJsonString(digest, "table");
-    if (tableSpec.length() > 0 &&
+    ClusterMemberTable parsed;
+    if (tableSpec.length() > 0 && youIndex >= 0 &&
+        youIndex < CLUSTER_MAX_MEMBERS &&
+        clusterTableFromString(tableSpec, parsed) && parsed.count > 0 &&
         (tableSpec != digestTable || youIndex != digestSelfIndex)) {
       digestTable = tableSpec;
       digestSelfIndex = youIndex;
@@ -225,9 +236,8 @@ bool clusterFollowerHandlePing(const String& digest, int youIndex) {
   return true;
 }
 
-void clusterFollowerHandleLeave() {
-  ClusterLock lock;
-  if (policyState.phase == ClusterFollowerPhase::Standalone) return;
+// Lock HELD by the caller.
+static void followerLeaveLocked() {
   clusterFollowerLeave(policyState);
   leaderName = "";
   leaderHost = "";
@@ -241,6 +251,12 @@ void clusterFollowerHandleLeave() {
   digestSelfIndex = -1;
   tableDirty = true;
   SerialPrintln(F("cluster: left — standalone again"));
+}
+
+void clusterFollowerHandleLeave() {
+  ClusterLock lock;
+  if (policyState.phase == ClusterFollowerPhase::Standalone) return;
+  followerLeaveLocked();
 }
 
 String clusterFollowerDigestGet(uint32_t& ageMsOut) {
@@ -275,15 +291,29 @@ ClusterPromoteVerdict clusterFollowerPromote() {
     oldLeaderHost = leaderHost;
   }
 
-  // Outside the lock: stageConfig takes the leader module's mutex — the
-  // two module locks are never held together (file lock contract).
+  // Outside the lock: the leader module's calls take LeaderLock — the two
+  // module locks are never held together (file lock contract).
   String newSpec;
   if (!clusterPromoteTransform(tableSpec, selfIndex, oldLeaderHost, newSpec)) {
     return {500, "Promote table transform failed"};
   }
-  ClusterConfigVerdict v = clusterLeaderStageConfig(newSpec);
+  // Pre-validate so the post-leave stage below is deterministic — promote
+  // must never leave the membership and THEN fail to become leader.
+  ClusterConfigVerdict v = clusterLeaderValidateSpec(newSpec);
   if (v.httpStatus != 200) return {v.httpStatus, v.message};
-  clusterFollowerHandleLeave();
+
+  // Commit point (review HIGH — promote/reclaim TOCTOU): re-check the
+  // phase and leave in ONE critical section. A leader ping landing after
+  // this wins nothing: the board is Standalone (ping 409s) and about to
+  // lead; the returning old leader demotes on the sticky-leadership 409s.
+  {
+    ClusterLock lock;
+    if (!clusterFollowerCanPromote(policyState)) {
+      return {409, "The leader came back — promote cancelled"};
+    }
+    followerLeaveLocked();
+  }
+  clusterLeaderStageConfig(newSpec);  // pre-validated: cannot fail
   SerialPrintln("cluster: PROMOTED — taking over the wall as leader (" +
                 newSpec + ")");
   return {200, "Promoted — leading now; members join on the next tick"};

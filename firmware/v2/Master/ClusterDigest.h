@@ -230,6 +230,40 @@ inline bool clusterCorsPrivateIpv4(const String& host) {
   return false;
 }
 
+// Digest acceptance gate (review hardening): the follower re-serves the
+// stored digest RAW inside its /cluster/digest wrapper, so the string must
+// be exactly ONE balanced JSON object — trailing top-level data would
+// inject fields into the wrapper. String-aware brace scan, no parser; the
+// glue additionally requires the ping to come from the joined leader's IP.
+#define CLUSTER_DIGEST_MAX_LEN 8192
+
+inline bool clusterDigestShapeOk(const String& digest) {
+  if (digest.length() == 0 || digest.length() > CLUSTER_DIGEST_MAX_LEN) {
+    return false;
+  }
+  if (digest[0] != '{') return false;
+  int depth = 0;
+  bool inString = false, escaped = false;
+  for (unsigned int i = 0; i < digest.length(); i++) {
+    char c = digest[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c == '\\') escaped = true;
+      else if (c == '"') inString = false;
+      continue;
+    }
+    if (c == '"') inString = true;
+    else if (c == '{' || c == '[') depth++;
+    else if (c == '}' || c == ']') {
+      if (--depth < 0) return false;
+      // The root object may only close at the very last character —
+      // anything after it is top-level injection.
+      if (depth == 0 && i != digest.length() - 1) return false;
+    }
+  }
+  return depth == 0 && !inString;
+}
+
 // The per-member surface the CORS gate opens (#294 rung 3): reads +
 // maintenance a wall pane manages on another member's behalf. Deliberately
 // closed: /firmware/* (fleet convergence owns cross-board updates),

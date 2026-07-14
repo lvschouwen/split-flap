@@ -62,9 +62,12 @@ ClusterRenderVerdict clusterFollowerHandleRender(uint32_t epoch, uint32_t seq,
 
 // false = Standalone: the reply tells the leader to re-join. The #294
 // piggybacked digest (raw JSON, RAM-only) and this member's table index
-// ride in; the promote-critical bits (table spec + selfIndex) persist to
-// NVS only when they change, so #295 survives a follower reboot.
-bool clusterFollowerHandlePing(const String& digest, int youIndex);
+// ride in — accepted only when remoteIp matches the joined leaderHost and
+// the digest is one balanced JSON object (it is re-served raw and feeds
+// #295 promote); the promote-critical bits (table spec + selfIndex)
+// persist to NVS only when they change, so #295 survives a reboot.
+bool clusterFollowerHandlePing(const String& digest, int youIndex,
+                               const String& remoteIp);
 
 void clusterFollowerHandleLeave();
 

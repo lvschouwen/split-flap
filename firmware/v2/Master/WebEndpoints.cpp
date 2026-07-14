@@ -11,6 +11,7 @@
 
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
+#include <WiFi.h>  // localIP in the leading-board join refusal (#295)
 #include <Update.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -1230,9 +1231,22 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       request->send(400, "text/plain", F("Invalid leaderName"));
       return;
     }
-    // #295 sticky leadership: while our current leader is demonstrably
-    // alive, a DIFFERENT leader's join is refused with its identity — the
-    // rejected board demotes itself on this marker.
+    // #295 sticky leadership: a board that LEADS a wall never becomes a
+    // row of someone else's — after a promote, the returning old leader's
+    // joins collect this marker (from us and from every claimed member)
+    // and it demotes instead of building a second cluster.
+    if (clusterLeaderEnabled()) {
+      String out = "{\"error\":\"other-leader\",\"leaderHost\":";
+      appendJsonString(out, WiFi.localIP().toString());
+      out += ",\"leaderName\":";
+      appendJsonString(out, effectiveName);
+      out += '}';
+      request->send(409, "application/json", out);
+      return;
+    }
+    // While our current leader is demonstrably alive, a DIFFERENT
+    // leader's join is refused with its identity — the rejected board
+    // demotes itself on this marker.
     if (clusterFollowerJoinWouldConflict(req.leaderHost)) {
       ClusterFollowerView cv = clusterFollowerViewGet();
       String out = "{\"error\":\"other-leader\",\"leaderHost\":";
@@ -1321,7 +1335,8 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     int youIndex = request->hasParam("you", true)
                        ? (int)request->getParam("you", true)->value().toInt()
                        : -1;
-    if (!clusterFollowerHandlePing(digest, youIndex)) {
+    if (!clusterFollowerHandlePing(digest, youIndex,
+                                   request->client()->remoteIP().toString())) {
       request->send(409, "application/json",
                     F("{\"error\":\"not clustered\"}"));
       return;
