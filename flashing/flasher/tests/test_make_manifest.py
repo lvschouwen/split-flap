@@ -1,70 +1,23 @@
-import hashlib
-import os
-import re
-import time
+import subprocess
 
 import pytest
-from flasher.make_manifest import (STAGE_DATA_DIRS, GateError, build_manifest,
-                                   consistency_gate, freshness_gate, git_rev,
-                                   optional_freshness_gate, stage_bundle)
+import flasher.make_manifest as mm
+from flasher.make_manifest import (STAGE_DATA_DIRS, GateError, cmd_gate,
+                                   stage_bundle, staged_rev_gate,
+                                   unit_source_head)
 
 
-def test_build_manifest_hashes_all_files(tmp_path):
-    (tmp_path / "a.bin").write_bytes(b"aaa")
-    (tmp_path / "sub").mkdir()
-    (tmp_path / "sub" / "b.hex").write_bytes(b"bbb")
-    (tmp_path / "manifest.json").write_text("{}")  # must be excluded
-    m = build_manifest(tmp_path, "abc1234", "2026-07-05")
-    assert m["git_rev"] == "abc1234"
-    assert m["assets"]["a.bin"] == hashlib.sha256(b"aaa").hexdigest()
-    assert m["assets"]["sub/b.hex"] == hashlib.sha256(b"bbb").hexdigest()
-    assert "manifest.json" not in m["assets"]
-
-
-def test_gate_passes_when_consistent(tmp_path):
-    built_hex = tmp_path / "built.hex"; built_hex.write_bytes(b"HEX")
-    staged_hex = tmp_path / "staged.hex"; staged_hex.write_bytes(b"HEX")
-    built_rev = tmp_path / "built.rev"; built_rev.write_text("abc1234\n")
-    staged_rev = tmp_path / "staged.rev"; staged_rev.write_text("abc1234\n")
-    consistency_gate(built_hex, staged_hex, built_rev, staged_rev)  # no raise
-
-
-def test_gate_rejects_stale_staged_hex(tmp_path):
-    built_hex = tmp_path / "built.hex"; built_hex.write_bytes(b"NEW")
-    staged_hex = tmp_path / "staged.hex"; staged_hex.write_bytes(b"OLD")
-    built_rev = tmp_path / "built.rev"; built_rev.write_text("abc1234")
-    staged_rev = tmp_path / "staged.rev"; staged_rev.write_text("abc1234")
-    with pytest.raises(GateError, match="differs"):
-        consistency_gate(built_hex, staged_hex, built_rev, staged_rev)
-
-
-def test_gate_rejects_rev_mismatch(tmp_path):
-    built_hex = tmp_path / "built.hex"; built_hex.write_bytes(b"HEX")
-    staged_hex = tmp_path / "staged.hex"; staged_hex.write_bytes(b"HEX")
-    built_rev = tmp_path / "built.rev"; built_rev.write_text("abc1234")
-    staged_rev = tmp_path / "staged.rev"; staged_rev.write_text("dead999")
-    with pytest.raises(GateError, match="rev") as exc_info:
-        consistency_gate(built_hex, staged_hex, built_rev, staged_rev)
-    assert "abc1234" in str(exc_info.value)
-    assert "dead999" in str(exc_info.value)
-
-
-def test_git_rev_matches_repo_rev_format():
-    assert re.fullmatch(r"[0-9a-f]{7,12}(-dirty)?", git_rev())
-
-
-def test_stage_data_dirs_cover_both_masters():
-    # #205: v1 ESPMaster and v2 Master embed the SAME unit bundle; staging
-    # into only one tree lets the other auto-push stale unit firmware.
+def test_stage_data_dirs_target_v2_only():
+    # #283: v1 ESPMaster is frozen — its committed bundle is a fossil of the
+    # last pre-freeze stage. Only the v2 master embeds a live unit bundle.
     tails = {"/".join(p.parts[-3:]) for p in STAGE_DATA_DIRS}
-    assert "v1/ESPMaster/data" in tails
-    assert "v2/Master/data" in tails
+    assert tails == {"v2/Master/data"}
 
 
 def test_stage_bundle_copies_into_every_tree(tmp_path):
     built_hex = tmp_path / "firmware.hex"; built_hex.write_bytes(b"HEX")
     built_rev = tmp_path / "firmware.rev"; built_rev.write_text("abc1234\n")
-    trees = [tmp_path / "v1data", tmp_path / "v2data"]
+    trees = [tmp_path / "a", tmp_path / "b"]
     for t in trees:
         t.mkdir()
     stage_bundle(built_hex, built_rev, trees)
@@ -73,37 +26,108 @@ def test_stage_bundle_copies_into_every_tree(tmp_path):
         assert (t / "unit-firmware.rev").read_text() == "abc1234\n"
 
 
-def test_optional_freshness_gate_skips_missing_bin(tmp_path):
-    # The v2 master bin is not part of the v1 flasher's collect flow — a dev
-    # machine that never built v2 must still be able to collect.
-    staged_hex = tmp_path / "unit-firmware.hex"; staged_hex.write_bytes(b"HEX")
-    optional_freshness_gate(tmp_path / "missing.bin", staged_hex)  # no raise
+# --- rev drift gate ----------------------------------------------------------
+# The Unit binary embeds GIT_REV (build_version.py), so a fresh build can
+# never byte-match the committed bundle. The gate therefore works on revs:
+# the staged .rev must already contain the last commit touching Unit sources.
+
+def _git(repo, *args) -> str:
+    return subprocess.run(["git", *args], cwd=repo, check=True,
+                          capture_output=True, text=True).stdout.strip()
 
 
-def test_optional_freshness_gate_rejects_stale_existing_bin(tmp_path):
-    staged_hex = tmp_path / "unit-firmware.hex"; staged_hex.write_bytes(b"HEX")
-    master_bin = tmp_path / "firmware.bin"; master_bin.write_bytes(b"BIN")
-    now = time.time()
-    os.utime(master_bin, (now - 100, now - 100))
-    os.utime(staged_hex, (now, now))
-    with pytest.raises(GateError, match="OLDER"):
-        optional_freshness_gate(master_bin, staged_hex)
+def _commit(repo, relpath: str, content: str, msg: str) -> str:
+    p = repo / relpath
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", msg)
+    return _git(repo, "rev-parse", "--short", "HEAD")
 
 
-def test_freshness_gate_rejects_master_built_before_staging(tmp_path):
-    staged_hex = tmp_path / "unit-firmware.hex"; staged_hex.write_bytes(b"HEX")
-    master_bin = tmp_path / "firmware.bin"; master_bin.write_bytes(b"BIN")
-    now = time.time()
-    os.utime(master_bin, (now - 100, now - 100))  # master built...
-    os.utime(staged_hex, (now, now))               # ...before unit fw was staged
-    with pytest.raises(GateError, match="OLDER"):
-        freshness_gate(master_bin, staged_hex)
+@pytest.fixture
+def repo(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "t@test")
+    _git(tmp_path, "config", "user.name", "t")
+    _commit(tmp_path, "firmware/v1/Unit/Unit.ino", "v1", "unit code")
+    return tmp_path
 
 
-def test_freshness_gate_passes_when_master_built_after_staging(tmp_path):
-    staged_hex = tmp_path / "unit-firmware.hex"; staged_hex.write_bytes(b"HEX")
-    master_bin = tmp_path / "firmware.bin"; master_bin.write_bytes(b"BIN")
-    now = time.time()
-    os.utime(staged_hex, (now - 100, now - 100))  # staged first...
-    os.utime(master_bin, (now, now))               # ...then master rebuilt
-    freshness_gate(master_bin, staged_hex)  # no raise
+def test_rev_gate_passes_when_staged_at_unit_head(repo):
+    staged = _git(repo, "rev-parse", "--short", "HEAD")
+    staged_rev_gate(staged, repo=repo)  # no raise
+
+
+def test_rev_gate_passes_when_staged_after_unit_head(repo):
+    # Bundle staged from a later tree that already contains the Unit change.
+    staged = _commit(repo, "firmware/v2/Master/data/unit-firmware.rev",
+                     "x", "artifact commit")
+    staged_rev_gate(staged, repo=repo)  # no raise
+
+
+def test_rev_gate_rejects_unit_change_after_staging(repo):
+    staged = _git(repo, "rev-parse", "--short", "HEAD")
+    _commit(repo, "firmware/v1/Unit/Unit.ino", "v2", "unit code moved on")
+    with pytest.raises(GateError, match="changed"):
+        staged_rev_gate(staged, repo=repo)
+
+
+def test_rev_gate_rejects_shared_header_change_after_staging(repo):
+    # ../shared/SplitFlapProtocol.h compiles into the Unit binary too.
+    staged = _git(repo, "rev-parse", "--short", "HEAD")
+    _commit(repo, "firmware/v1/shared/SplitFlapProtocol.h", "v2", "protocol")
+    with pytest.raises(GateError, match="changed"):
+        staged_rev_gate(staged, repo=repo)
+
+
+def test_rev_gate_ignores_unit_test_only_changes(repo):
+    # Host-side test changes don't alter the shipped binary — no re-stage.
+    staged = _git(repo, "rev-parse", "--short", "HEAD")
+    _commit(repo, "firmware/v1/Unit/test/test_main.cpp", "t", "tests only")
+    staged_rev_gate(staged, repo=repo)  # no raise
+
+
+def test_rev_gate_rejects_dirty_staged_rev(repo):
+    staged = _git(repo, "rev-parse", "--short", "HEAD")
+    with pytest.raises(GateError, match="dirty"):
+        staged_rev_gate(f"{staged}-dirty", repo=repo)
+
+
+def test_rev_gate_rejects_unknown_staged_rev(repo):
+    with pytest.raises(GateError, match="not a commit"):
+        staged_rev_gate("dead999", repo=repo)
+
+
+def test_rev_gate_rejects_empty_staged_rev(repo):
+    with pytest.raises(GateError, match="empty"):
+        staged_rev_gate("", repo=repo)
+
+
+def test_unit_source_head_tracks_unit_and_shared(repo):
+    first = _git(repo, "rev-parse", "HEAD")
+    assert unit_source_head(repo) == first
+    _commit(repo, "docs/other.md", "x", "unrelated")
+    assert unit_source_head(repo) == first
+    _commit(repo, "firmware/v1/shared/SplitFlapProtocol.h", "p", "protocol")
+    assert unit_source_head(repo) == _git(repo, "rev-parse", "HEAD")
+
+
+def test_cmd_gate_rejects_missing_rev_sidecar(repo, monkeypatch):
+    data = repo / "firmware/v2/Master/data"
+    data.mkdir(parents=True)
+    monkeypatch.setattr(mm, "REPO", repo)
+    monkeypatch.setattr(mm, "STAGE_DATA_DIRS", [data])
+    with pytest.raises(GateError, match="missing"):
+        cmd_gate()
+
+
+def test_cmd_gate_reads_staged_rev_from_v2_tree(repo, monkeypatch, capsys):
+    staged = _git(repo, "rev-parse", "--short", "HEAD")
+    data = repo / "firmware/v2/Master/data"
+    data.mkdir(parents=True)
+    (data / "unit-firmware.rev").write_text(f"{staged}\n")
+    monkeypatch.setattr(mm, "REPO", repo)
+    monkeypatch.setattr(mm, "STAGE_DATA_DIRS", [data])
+    cmd_gate()  # no raise
+    assert "gate passed" in capsys.readouterr().out

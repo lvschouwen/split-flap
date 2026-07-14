@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [v1/ESPMaster, v1/Unit, v2/Master, v2/Rescue]
+        project: [v1/Unit, v2/Master, v2/Rescue]
     steps:
       - uses: actions/checkout@v5
 
@@ -48,7 +48,10 @@ jobs:
     name: Native tests
     runs-on: ubuntu-latest
     steps:
+      # Full history: the unit-bundle drift gate walks commit ancestry.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:
@@ -65,10 +68,6 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
-      - name: Run ESPMaster native tests
-        working-directory: firmware/v1/ESPMaster
-        run: pio test -e native
-
       - name: Run Unit native tests
         working-directory: firmware/v1/Unit
         run: pio test -e native
@@ -84,10 +83,6 @@ jobs:
       - name: Install pytest
         run: pip install pytest
 
-      - name: Run Python tests
-        working-directory: firmware/v1/ESPMaster
-        run: python -m pytest tests/
-
       - name: Run v2 Master Python tests
         working-directory: firmware/v2/Master
         run: python -m pytest tests/
@@ -102,3 +97,10 @@ jobs:
       - name: Run flasher tests
         working-directory: flashing
         run: python -m pytest flasher/tests/ -v
+
+      # #205 drift gate (previously flasher.yml's collect step): a Unit code
+      # change committed without re-staging the bundle must fail CI, or the
+      # v2 master ships auto-pushing stale unit firmware.
+      - name: Unit bundle drift gate
+        working-directory: flashing
+        run: python flasher/make_manifest.py gate
