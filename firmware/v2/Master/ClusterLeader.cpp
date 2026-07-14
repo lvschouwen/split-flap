@@ -457,6 +457,7 @@ static uint32_t rolloutOffset = 0;
 static const esp_partition_t* rolloutPart = nullptr;
 static uint32_t rolloutImageLen = 0;
 static String rolloutMd5;
+static String rolloutBoundary;  // md5-derived — never occurs in the image (#292)
 static std::atomic<bool> rolloutFactsFailed{false};
 // Shared flash-read buffer (facts pass + upload pump never overlap).
 static uint8_t rolloutBuf[4096];
@@ -498,6 +499,7 @@ static bool rolloutEnsureImageFacts() {
   }
   md5.calculate();
   rolloutMd5 = md5.toString();
+  rolloutBoundary = clusterRolloutBoundary(rolloutMd5);
   rolloutPart = part;
   rolloutImageLen = meta.image_len;
   SerialPrintf("cluster: rollout image ready — %u bytes, md5 %s (%u ms)\n",
@@ -525,12 +527,12 @@ static bool rolloutOpenUpload(const String& host) {
   if (rolloutClient == nullptr) return false;
 
   esp_http_client_set_method(rolloutClient, HTTP_METHOD_POST);
-  esp_http_client_set_header(
-      rolloutClient, "Content-Type",
-      "multipart/form-data; boundary=" CLUSTER_ROLLOUT_BOUNDARY);
-  String preamble = clusterRolloutMultipartPreamble();
+  String contentType = clusterRolloutContentType(rolloutBoundary);
+  esp_http_client_set_header(rolloutClient, "Content-Type",
+                             contentType.c_str());
+  String preamble = clusterRolloutMultipartPreamble(rolloutBoundary);
   int total = (int)preamble.length() + (int)rolloutImageLen +
-              (int)clusterRolloutMultipartTrailer().length();
+              (int)clusterRolloutMultipartTrailer(rolloutBoundary).length();
   if (esp_http_client_open(rolloutClient, total) != ESP_OK ||
       esp_http_client_write(rolloutClient, preamble.c_str(),
                             preamble.length()) != (int)preamble.length()) {
@@ -579,7 +581,7 @@ static void rolloutPumpUpload() {
   // next tick).
   esp_http_client_set_timeout_ms(rolloutClient,
                                  CLUSTER_ROLLOUT_FINALIZE_TIMEOUT_MS);
-  String trailer = clusterRolloutMultipartTrailer();
+  String trailer = clusterRolloutMultipartTrailer(rolloutBoundary);
   int status = -1;
   if (esp_http_client_write(rolloutClient, trailer.c_str(),
                             trailer.length()) == (int)trailer.length() &&

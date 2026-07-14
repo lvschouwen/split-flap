@@ -17,15 +17,27 @@ import pytest
 from fake_follower import make_server
 
 # Must byte-match ClusterRolloutPolicy.h's multipart frame — the pytest twin
-# of test_multipart_frame_matches_upload_contract.
-ROLLOUT_BOUNDARY = "splitflapClusterRollout"
-ROLLOUT_PREAMBLE = (
-    f"--{ROLLOUT_BOUNDARY}\r\n"
-    'Content-Disposition: form-data; name="firmware"; '
-    'filename="firmware.bin"\r\n'
-    "Content-Type: application/octet-stream\r\n\r\n"
-).encode()
-ROLLOUT_TRAILER = f"\r\n--{ROLLOUT_BOUNDARY}--\r\n".encode()
+# of test_multipart_frame_matches_upload_contract. The boundary derives from
+# the image md5 (#292): a fixed boundary constant is embedded in the leader's
+# own image and truncates the transfer on the device parser.
+LEGACY_FIXED_BOUNDARY = "splitflapClusterRollout"  # pre-#292 regression pin
+
+
+def rollout_boundary(image):
+    """Pytest twin of clusterRolloutBoundary() — an image cannot contain
+    its own md5, so the derived delimiter provably never collides."""
+    return "sfr-" + hashlib.md5(image).hexdigest()
+
+
+def rollout_frame(image, boundary):
+    preamble = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="firmware"; '
+        'filename="firmware.bin"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    trailer = f"\r\n--{boundary}--\r\n".encode()
+    return preamble + image + trailer
 
 
 @pytest.fixture()
@@ -185,16 +197,18 @@ def test_applied_renders_are_recorded_for_bench_assertions(follower):
 
 # --- fleet rollout upload contract (#276) ------------------------------------------
 
-def upload(base, image, md5=None, v="1234abc", query=None):
+def upload(base, image, md5=None, v="1234abc", query=None, boundary=None):
     """Stream `image` exactly the way the leader's rollout does."""
-    body = ROLLOUT_PREAMBLE + image + ROLLOUT_TRAILER
+    if boundary is None:
+        boundary = rollout_boundary(image)
+    body = rollout_frame(image, boundary)
     if query is None:
         digest = md5 if md5 is not None else hashlib.md5(image).hexdigest()
         query = f"?md5={digest}&v={v}"
     request = urllib.request.Request(
         base + "/firmware/master" + query, data=body, method="POST",
         headers={"Content-Type":
-                 f"multipart/form-data; boundary={ROLLOUT_BOUNDARY}"})
+                 f"multipart/form-data; boundary={boundary}"})
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, response.read().decode()
@@ -220,6 +234,34 @@ def test_upload_flashes_reboots_and_adopts_leader_rev(follower):
     assert state.rev == "1234abc"  # converged — the rejoin reports it
     assert state.epoch is None  # fresh boot: epoch/seq space forgotten
     assert state.clustered  # membership persists (NVS twin)
+    assert state.uploads[0]["size"] == len(image)
+
+
+def test_upload_boundary_inside_payload_truncates_like_the_device(follower):
+    # #292 regression: the leader's image contains any compile-time boundary
+    # constant as a string literal, and the device parser ends the file field
+    # at the FIRST in-body hit — full-length body, truncated payload, MD5
+    # verdict fails. The strict parser above must reproduce that.
+    base, state = follower
+    image = (b"\xe9head-bytes" +
+             f"\r\n--{LEGACY_FIXED_BOUNDARY}--\r\n".encode() +
+             b"tail-bytes" * 8)
+    status, body = upload(base, image, boundary=LEGACY_FIXED_BOUNDARY)
+    assert status == 500
+    assert "MD5" in body
+    assert state.rev == "abc1234"  # nothing flashed
+
+
+def test_upload_md5_derived_boundary_survives_boundary_like_payload(follower):
+    # Same payload, boundary derived from the image md5 (the #292 fix):
+    # the delimiter provably cannot occur inside the image, transfer lands.
+    base, state = follower
+    image = (b"\xe9head-bytes" +
+             f"\r\n--{LEGACY_FIXED_BOUNDARY}--\r\n".encode() +
+             b"tail-bytes" * 8)
+    status, body = upload(base, image)
+    assert status == 200
+    wait_reboot(state)
     assert state.uploads[0]["size"] == len(image)
 
 

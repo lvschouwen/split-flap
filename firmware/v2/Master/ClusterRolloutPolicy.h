@@ -45,8 +45,6 @@ static const uint32_t CLUSTER_ROLLOUT_CHUNK_PER_TICK = 49152UL;
 // is the accepted (bounded) stall.
 static const int CLUSTER_ROLLOUT_FINALIZE_TIMEOUT_MS = 10000;
 
-#define CLUSTER_ROLLOUT_BOUNDARY "splitflapClusterRollout"
-
 enum class ClusterRolloutPhase : uint8_t { Idle = 0, Uploading, WaitingRejoin };
 
 enum class ClusterRolloutWait : uint8_t {
@@ -186,16 +184,31 @@ inline const char* clusterRolloutPhaseName(ClusterRolloutPhase phase) {
 // --- multipart wire bits -----------------------------------------------------------
 // The follower's EXISTING POST /firmware/master parses multipart field
 // "firmware" with a mandatory ?md5= — zero new follower code (spec).
+//
+// The boundary derives at RUNTIME from the image md5 (#292): the payload is
+// this very firmware image, so any compile-time boundary constant exists
+// inside it as a string literal and the follower's parser ends the file
+// field right there (full-length body, truncated payload, MD5 fail). An
+// image cannot contain its own md5.
 
-inline String clusterRolloutMultipartPreamble() {
-  return String("--" CLUSTER_ROLLOUT_BOUNDARY "\r\n"
-                "Content-Disposition: form-data; name=\"firmware\"; "
-                "filename=\"firmware.bin\"\r\n"
-                "Content-Type: application/octet-stream\r\n\r\n");
+inline String clusterRolloutBoundary(const String& imageMd5) {
+  return "sfr-" + imageMd5;  // 36 chars, inside the RFC 2046 §5.1 cap of 70
 }
 
-inline String clusterRolloutMultipartTrailer() {
-  return String("\r\n--" CLUSTER_ROLLOUT_BOUNDARY "--\r\n");
+inline String clusterRolloutContentType(const String& boundary) {
+  return "multipart/form-data; boundary=" + boundary;
+}
+
+inline String clusterRolloutMultipartPreamble(const String& boundary) {
+  return "--" + boundary +
+         "\r\n"
+         "Content-Disposition: form-data; name=\"firmware\"; "
+         "filename=\"firmware.bin\"\r\n"
+         "Content-Type: application/octet-stream\r\n\r\n";
+}
+
+inline String clusterRolloutMultipartTrailer(const String& boundary) {
+  return "\r\n--" + boundary + "--\r\n";
 }
 
 // ?v= is the endpoint's existing intendedVersion field — the follower

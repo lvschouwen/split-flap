@@ -124,13 +124,19 @@ class FollowerState:
 
 def multipart_payload(body, boundary):
     """Extract the (single) part payload from a multipart/form-data body —
-    the shape the leader's streaming upload produces. None on mismatch."""
+    the shape the leader's streaming upload produces. First-match semantics
+    on the closing delimiter, like the device parser (ESPAsyncWebServer ends
+    the file field at the FIRST in-body boundary hit) — a payload containing
+    its own boundary truncates here exactly like on hardware (#292).
+    None on framing mismatch."""
     delim = ("--" + boundary).encode()
     if not body.startswith(delim):
         return None
     head = body.find(b"\r\n\r\n")
-    tail = body.rfind(b"\r\n" + delim + b"--")
-    if head < 0 or tail < head:
+    if head < 0:
+        return None
+    tail = body.find(b"\r\n" + delim, head + 4)
+    if tail < 0:
         return None
     return body[head + 4:tail]
 

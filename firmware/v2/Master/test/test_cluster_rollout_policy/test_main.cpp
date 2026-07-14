@@ -234,17 +234,30 @@ static void test_reset_clears_everything() {
 
 // --- wire bits -------------------------------------------------------------------
 
+static void test_boundary_is_derived_from_the_image_md5() {
+  // #292: a compile-time boundary constant is embedded in the leader's own
+  // image (.rodata string literal) — and the image IS the payload, so the
+  // follower's parser ends the file field at the first in-body hit. An
+  // image cannot contain its own md5, so the boundary derives from it.
+  String b = clusterRolloutBoundary("195d92d2328ace62f57bcf5edb0c518d");
+  TEST_ASSERT_EQUAL_STRING("sfr-195d92d2328ace62f57bcf5edb0c518d",
+                           b.c_str());
+  TEST_ASSERT_TRUE(b.length() <= 70);  // RFC 2046 §5.1 boundary cap
+}
+
 static void test_multipart_frame_matches_upload_contract() {
   // The follower's /firmware/master parses multipart field "firmware" —
   // the exact strings the streaming client wraps the image in.
-  String pre = clusterRolloutMultipartPreamble();
-  TEST_ASSERT_TRUE(pre.startsWith("--" CLUSTER_ROLLOUT_BOUNDARY "\r\n"));
+  String b = clusterRolloutBoundary("0123456789abcdef0123456789abcdef");
+  String pre = clusterRolloutMultipartPreamble(b);
+  TEST_ASSERT_TRUE(pre.startsWith("--" + b + "\r\n"));
   TEST_ASSERT_TRUE(pre.indexOf("name=\"firmware\"") >= 0);
   TEST_ASSERT_TRUE(pre.indexOf("filename=") >= 0);
   TEST_ASSERT_TRUE(pre.endsWith("\r\n\r\n"));
-  String tail = clusterRolloutMultipartTrailer();
-  TEST_ASSERT_EQUAL_STRING("\r\n--" CLUSTER_ROLLOUT_BOUNDARY "--\r\n",
-                           tail.c_str());
+  TEST_ASSERT_EQUAL_STRING(("\r\n--" + b + "--\r\n").c_str(),
+                           clusterRolloutMultipartTrailer(b).c_str());
+  TEST_ASSERT_EQUAL_STRING(("multipart/form-data; boundary=" + b).c_str(),
+                           clusterRolloutContentType(b).c_str());
 }
 
 static void test_upload_url_carries_md5_and_intended_rev() {
@@ -282,6 +295,7 @@ int main(int, char**) {
   RUN_TEST(test_wait_still_waiting_while_member_down);
   RUN_TEST(test_wait_rollback_burns_attempt);
   RUN_TEST(test_wait_timeout_burns_attempt);
+  RUN_TEST(test_boundary_is_derived_from_the_image_md5);
   RUN_TEST(test_reset_clears_everything);
   RUN_TEST(test_multipart_frame_matches_upload_contract);
   RUN_TEST(test_upload_url_carries_md5_and_intended_rev);
