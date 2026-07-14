@@ -14,6 +14,8 @@
 #include "BuildVersion.h"  // GIT_REV — the discovery device block's sw field
 #include "ClockPolicy.h"
 #include "ClusterFollower.h"
+#include "ClusterLeader.h"
+#include "ClusterMqtt.h"
 #include "DisplayCommand.h"
 #include "DisplayIpc.h"
 #include "HelpersSerialHandling.h"
@@ -27,6 +29,11 @@
 
 #define MQTT_TELEMETRY_INTERVAL_S 60
 #define MQTT_MAX_TEXT_LEN 256
+
+// Cluster surfacing cadence (#277): statusGet copies the member table
+// under the leader mutex — too heavy for every ~10 ms pass, and HA needs
+// nothing faster for supervision state.
+#define MQTT_CLUSTER_INTERVAL_MS 5000
 
 // A frozen session must never outlive a torn upload forever (v1 resumed
 // from loop() when the display thawed; v2's upload callbacks resume on
@@ -100,6 +107,17 @@ static int mqttLastPublishedWidth = -1;
 static int mqttLastPublishedUnits = -1;
 static int mqttLastPublishedSpeed = -1;
 static String mqttLastPublishedAlignment = "\x01";
+
+// Cluster surfacing trackers (#277). mqttLastClusterConfigured starts 0
+// (not a force-sentinel): the discovery config publishes on the 0→1
+// leading transition and blanks on 1→0 — a board that never leads never
+// touches the cluster topics. mqttClusterCapacity caches the grid's total
+// units between 5 s cluster passes for the width publish below.
+static int mqttLastClusterConfigured = 0;
+static int mqttLastClusterState = -1;
+static String mqttLastClusterAttrs = "\x01";
+static uint32_t mqttNextClusterMs = 0;
+static int mqttClusterCapacity = 0;
 
 // Inbound chunk assembly (callback context). MQTT delivers one message at a
 // time per connection, so a single staging pair suffices; payloads past the
@@ -251,11 +269,18 @@ static void publishDiscoveryClear() {
     if (tLen == 0 || tLen >= sizeof(topicBuf)) continue;
     mqttClient.publish(topicBuf, 0, true, "");
   }
+  // The cluster entity (#277) lives outside the shared enum — clear its
+  // config too (blanking a never-set retained topic is harmless).
+  size_t cLen = buildClusterDegradedDiscoveryTopic(
+      topicBuf, sizeof(topicBuf), mqttResolvedDeviceId.c_str());
+  if (cLen > 0 && cLen < sizeof(topicBuf)) {
+    mqttClient.publish(topicBuf, 0, true, "");
+  }
   static const char* const stateSuffixes[] = {
       "mode",     "text/state", "notification", "width",     "units",
       "speed",    "alignment",  "units_faulty", "units/attrs",
       "diag/ip",  "diag/ssid",  "diag/reset",   "diag/boots",
-      "diag/ota", "diag/tz"};
+      "diag/ota", "diag/tz",    "cluster_degraded", "cluster/attrs"};
   for (unsigned i = 0; i < sizeof(stateSuffixes) / sizeof(stateSuffixes[0]);
        i++) {
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, stateSuffixes[i]).c_str(),
@@ -462,9 +487,32 @@ void mqttServiceTick() {
     mqttLastPublishedUnits = -1;
     mqttLastPublishedSpeed = -1;
     mqttLastPublishedAlignment = "\x01";
+    // Cluster (#277): a fresh session re-decides the config transition and
+    // re-publishes state/attrs on the first cluster pass.
+    mqttLastClusterConfigured = 0;
+    mqttLastClusterState = -1;
+    mqttLastClusterAttrs = "\x01";
+    mqttNextClusterMs = millis();
   }
 
   if (!mqttClient.connected()) return;
+
+  // Followers publish availability only while clustered (#277): the wall's
+  // content and this board's vitals belong to the leader's HA device — a
+  // frozen entity beats a misleading one, and commands are already
+  // dropped by the #272 gate. Availability/LWT, discovery and the rename
+  // clear stay live; every state/telemetry publish below stands down.
+  // 1 s cache: the view copy takes the follower mutex.
+  static uint32_t mqttNextGateCheckMs = 0;
+  static bool mqttAvailabilityOnly = false;
+  if ((int32_t)(millis() - mqttNextGateCheckMs) >= 0) {
+    mqttNextGateCheckMs = millis() + 1000;
+    mqttAvailabilityOnly = clusterFollowerViewGet().gated;
+  }
+  if (mqttAvailabilityOnly) {
+    if (discoveryClearRequested.exchange(false)) publishDiscoveryClear();
+    return;
+  }
 
   // Event-driven retained state (v1 #130/#132): publish only on change so
   // HA updates instantly. Cheap compares every pass. MUST run before the
@@ -479,11 +527,16 @@ void mqttServiceTick() {
                        content.deviceMode.c_str());
     mqttLastPublishedMode = content.deviceMode;
   }
-  String writtenText(snap.currentText);
-  if (writtenText != mqttLastPublishedText) {
-    mqttLastPublishedText = writtenText;
-    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "text/state").c_str(),
-                       0, true, writtenText.c_str());
+  // While leading (#277), text/state carries the whole wall (published in
+  // the cluster block below) — the own-row slice alone would be a lie.
+  bool leading = clusterLeaderEnabled();
+  if (!leading) {
+    String writtenText(snap.currentText);
+    if (writtenText != mqttLastPublishedText) {
+      mqttLastPublishedText = writtenText;
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "text/state").c_str(),
+                         0, true, writtenText.c_str());
+    }
   }
   int notif = mqttNotification.active ? 1 : 0;
   if (notif != mqttLastPublishedNotif) {
@@ -491,10 +544,16 @@ void mqttServiceTick() {
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "notification").c_str(),
                        0, true, notif ? "ON" : "OFF");
   }
-  if (snap.displayWidth != mqttLastPublishedWidth) {
-    mqttLastPublishedWidth = snap.displayWidth;
+  // Text capacity = grid size (#277): a leading master's display width IS
+  // the wall. Capacity is the 5 s cluster pass's cached fact, so the first
+  // publish after enabling may briefly show the own width — retained,
+  // self-corrects next pass.
+  int widthValue = (leading && mqttClusterCapacity > 0) ? mqttClusterCapacity
+                                                        : snap.displayWidth;
+  if (widthValue != mqttLastPublishedWidth) {
+    mqttLastPublishedWidth = widthValue;
     char n[12];
-    snprintf(n, sizeof(n), "%d", (int)snap.displayWidth);
+    snprintf(n, sizeof(n), "%d", widthValue);
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "width").c_str(), 0,
                        true, n);
   }
@@ -516,6 +575,78 @@ void mqttServiceTick() {
     mqttLastPublishedAlignment = content.alignment;
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "alignment").c_str(), 0,
                        true, content.alignment.c_str());
+  }
+
+  // Cluster surfacing (#277): degraded sensor + member/rollout attrs +
+  // the wall text/state, 5 s cadence (see MQTT_CLUSTER_INTERVAL_MS).
+  if ((int32_t)(millis() - mqttNextClusterMs) >= 0) {
+    mqttNextClusterMs = millis() + MQTT_CLUSTER_INTERVAL_MS;
+    int leadingNow = leading ? 1 : 0;
+    if (leadingNow != mqttLastClusterConfigured) {
+      char topicBuf[96];
+      size_t tLen = buildClusterDegradedDiscoveryTopic(
+          topicBuf, sizeof(topicBuf), mqttResolvedDeviceId.c_str());
+      if (tLen > 0 && tLen < sizeof(topicBuf)) {
+        if (leadingNow) {
+          char payloadBuf[512];
+          size_t pLen = buildClusterDegradedDiscovery(
+              payloadBuf, sizeof(payloadBuf), mqttResolvedDeviceId.c_str(),
+              mqttFwVersion.c_str());
+          if (pLen > 0 && pLen < sizeof(payloadBuf)) {
+            mqttClient.publish(topicBuf, 0, true, payloadBuf);
+          } else {
+            SerialPrintln(
+                F("MQTT: cluster discovery skipped — would truncate"));
+          }
+        } else {
+          // Leading→standalone: blank the retained config + topics so HA
+          // drops the entity instead of showing it stale, and force the
+          // width/text publishes back onto this board's own facts.
+          mqttClient.publish(topicBuf, 0, true, "");
+          mqttClient.publish(
+              mqttTopic(mqttResolvedDeviceId, "cluster_degraded").c_str(), 0,
+              true, "");
+          mqttClient.publish(
+              mqttTopic(mqttResolvedDeviceId, "cluster/attrs").c_str(), 0,
+              true, "");
+          mqttClusterCapacity = 0;
+          mqttLastPublishedWidth = -1;
+          mqttLastPublishedText = "\x01";
+        }
+      }
+      mqttLastClusterState = -1;
+      mqttLastClusterAttrs = "\x01";
+      mqttLastClusterConfigured = leadingNow;
+    }
+    if (leading) {
+      ClusterLeaderStatus cst = clusterLeaderStatusGet();
+      mqttClusterCapacity = cst.gridCapacity;
+      int degraded = clusterDegraded(cst) ? 1 : 0;
+      if (degraded != mqttLastClusterState) {
+        mqttLastClusterState = degraded;
+        mqttClient.publish(
+            mqttTopic(mqttResolvedDeviceId, "cluster_degraded").c_str(), 0,
+            true, degraded ? "ON" : "OFF");
+      }
+      String attrs = buildClusterAttrsJson(cst);
+      if (attrs != mqttLastClusterAttrs) {
+        mqttLastClusterAttrs = attrs;
+        mqttClient.publish(
+            mqttTopic(mqttResolvedDeviceId, "cluster/attrs").c_str(), 0, true,
+            attrs.c_str());
+      }
+      String rows[CLUSTER_MAX_MEMBERS];
+      int selfRow = 0;
+      int rowCount = clusterLeaderMirrorRows(
+          rows, selfRow, String(snap.currentText), content.alignment);
+      String wall = clusterWallStateText(rows, rowCount);
+      if (rowCount > 0 && wall != mqttLastPublishedText) {
+        mqttLastPublishedText = wall;
+        mqttClient.publish(
+            mqttTopic(mqttResolvedDeviceId, "text/state").c_str(), 0, true,
+            wall.c_str());
+      }
+    }
   }
 
   if (discoveryClearRequested.exchange(false)) publishDiscoveryClear();
