@@ -88,6 +88,17 @@ static void test_discover_json_skips_nameless_answers() {
   TEST_ASSERT_TRUE(json.indexOf("15.50") < 0);
 }
 
+static void test_discover_json_carries_plat_tag_only_when_advertised() {
+  // #297: the ESP-01 follower advertises plat=esp01 in its TXT record; the
+  // scan list tags it. S3 boards advertise no plat — the key stays absent
+  // (the exact-shape test above pins that).
+  ClusterDiscoveredBoard boards[1] = {
+      makeBoard("esp01-row", "192.168.15.93", "abc1234", 8)};
+  boards[0].plat = "esp01";
+  String json = buildClusterDiscoverJson(boards, 1, "leader");
+  TEST_ASSERT_TRUE(json.indexOf("\"plat\":\"esp01\"") >= 0);
+}
+
 static void test_discover_json_escapes_wire_strings() {
   // TXT values come off the wire — a quote must not break the JSON.
   ClusterDiscoveredBoard boards[1] = {
@@ -107,6 +118,7 @@ int main(int, char**) {
   RUN_TEST(test_discover_json_empty);
   RUN_TEST(test_discover_json_filters_self);
   RUN_TEST(test_discover_json_skips_nameless_answers);
+  RUN_TEST(test_discover_json_carries_plat_tag_only_when_advertised);
   RUN_TEST(test_discover_json_escapes_wire_strings);
   return UNITY_END();
 }

@@ -455,6 +455,9 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
       case ClusterLeaderAction::Join:
         m.joined = true;
         m.rev = clusterExtractJsonString(body, "rev");
+        // Absent = same platform as this leader (#297); an ESP-01 row
+        // reports "esp01" and is excluded from firmware convergence.
+        m.plat = clusterExtractJsonString(body, "plat");
         m.reportedWidth = clusterExtractJsonInt(body, "width", 0);
         // The handshake ends with a re-send of the current segment.
         m.renderDirty = segments[item.index].length() > 0;
@@ -476,6 +479,8 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
       clusterParsePingHealth(body, m.health);
       String rev = clusterExtractJsonString(body, "rev");
       if (rev.length() > 0) m.rev = rev;
+      String plat = clusterExtractJsonString(body, "plat");
+      if (plat.length() > 0) m.plat = plat;
       m.reportedWidth = clusterExtractJsonInt(body, "width", m.reportedWidth);
     }
     if (wasDegraded) {
@@ -715,7 +720,8 @@ static void rolloutServiceTick() {
     {
       LeaderLock lock;
       candidate = clusterRolloutNextCandidate(table, runtimes, GIT_REV,
-                                              rollout, millis());
+                                              CLUSTER_LEADER_PLAT, rollout,
+                                              millis());
     }
     if (candidate < 0) return;
     if (!rolloutEnsureImageFacts()) return;
@@ -826,6 +832,7 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
     out.degraded = runtimes[i].degraded;
     out.failures = runtimes[i].failures;
     out.rev = runtimes[i].rev;
+    out.plat = runtimes[i].plat;
     out.reportedWidth = runtimes[i].reportedWidth;
     out.updating = rollout.phase != ClusterRolloutPhase::Idle &&
                    rollout.memberIndex == i;

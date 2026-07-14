@@ -383,6 +383,53 @@ def test_upload_while_busy_is_409(follower):
     wait_reboot(state)
 
 
+# --- ESP-01 platform variant (#297) --------------------------------------------------
+
+@pytest.fixture()
+def esp01_follower():
+    """The #298 dumb-row follower's wire shape: plat=esp01 + vitals on the
+    join/ping replies — the leader must parse plat and NEVER stream its S3
+    image at this member (rollout exclusion pinned natively in
+    test_cluster_rollout_policy; this fixture is the bench drill vehicle)."""
+    server, state = make_server(0, name="esp01-row", rev="abc1234", width=8,
+                                plat="esp01", reboot_secs=0.1)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{port}", state
+    server.shutdown()
+
+
+def test_esp01_join_reply_carries_plat_and_vitals(esp01_follower):
+    base, _ = esp01_follower
+    status, body = join(base)
+    assert status == 200
+    reply = json.loads(body)
+    assert reply["plat"] == "esp01"
+    for key in ("heap", "rssi", "up"):
+        assert isinstance(reply[key], int)
+
+
+def test_esp01_ping_reply_carries_plat_and_vitals(esp01_follower):
+    base, _ = esp01_follower
+    join(base)
+    status, body = post(base, "/cluster/ping")
+    assert status == 200
+    reply = json.loads(body)
+    assert reply["plat"] == "esp01"
+    assert reply["state"] == "clustered"
+    for key in ("heap", "rssi", "up"):
+        assert isinstance(reply[key], int)
+
+
+def test_default_follower_reports_no_plat(follower):
+    # Absent plat = same platform as the leader — the existing exact-shape
+    # join test pins it too; this makes the #297 contract explicit.
+    base, _ = follower
+    _, body = join(base)
+    assert "plat" not in json.loads(body)
+
+
 def test_rollback_drill_keeps_old_rev(follower):
     base, state = follower
     state.rollback = True

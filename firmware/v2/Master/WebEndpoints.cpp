@@ -1737,6 +1737,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       b.ip = a == IPAddress() ? String() : a.toString();
       b.rev = MDNS.txt(i, "rev");
       b.width = clusterParseTxtWidth(MDNS.txt(i, "width"));
+      b.plat = MDNS.txt(i, "plat");  // "" = S3 master (#297)
     }
     String json = buildClusterDiscoverJson(boards, count, effectiveName);
     SerialPrintf("Cluster discover: %u board(s)\n", (unsigned)count);

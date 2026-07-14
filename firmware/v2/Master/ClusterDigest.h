@@ -106,6 +106,11 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
     out += m.failures;
     out += ",\"rev\":";
     appendJsonString(out, m.rev);
+    if (m.plat.length() > 0) {
+      // #297 additive: absent = same platform as the leader (S3 fleet).
+      out += ",\"plat\":";
+      appendJsonString(out, m.plat);
+    }
     out += ",\"reportedWidth\":";
     out += m.reportedWidth;
     if (m.healthValid) {

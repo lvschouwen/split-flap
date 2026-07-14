@@ -33,6 +33,13 @@ static const uint32_t CLUSTER_RETRY_BASE_MS = 1000UL;
 static const uint32_t CLUSTER_RETRY_MAX_MS = 8000UL;
 static const uint8_t CLUSTER_DEGRADED_AFTER_FAILURES = 3;
 
+// This master's own platform tag (#297). Members report theirs via the
+// additive `plat` join/ping-reply key; ABSENT means same-platform (the
+// pre-#297 S3 fleet), so only a foreign non-empty plat changes behavior —
+// today that is the ESP-01 dumb row ("esp01", #298), which the firmware
+// rollout must never stream the S3 image at.
+static const char CLUSTER_LEADER_PLAT[] = "esp32s3";
+
 // Per-row unit health distilled from a #294 ping reply. valid stays false
 // for members that never delivered one (old firmware, not yet pinged) —
 // the UI hides that row's strip instead of reading zeros.
@@ -52,6 +59,7 @@ struct ClusterMemberRuntime {
   uint32_t lastContactMs = 0;  // last successful round-trip
   bool renderDirty = false;    // segment changed since the last acked render
   String rev;                  // follower firmware rev (join + ping replies, #276)
+  String plat;                 // reported platform, "" = same as leader (#297)
   int reportedWidth = 0;       // join-handshake width fact
   ClusterMemberHealth health;  // last #294 ping-reply health
 };

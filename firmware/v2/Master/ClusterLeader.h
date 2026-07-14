@@ -35,6 +35,7 @@ struct ClusterLeaderMemberStatus {
   bool degraded = false;
   int failures = 0;
   String rev;            // follower firmware rev from the join reply
+  String plat;           // reported platform, "" = same as leader (#297)
   int reportedWidth = 0; // join-handshake width fact
   bool updating = false;      // fleet rollout (#276) is converging this member
   bool updateBlocked = false; // rollout gave up (attempt cap) on this member

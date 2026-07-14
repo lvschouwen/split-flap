@@ -65,13 +65,23 @@ struct ClusterRolloutState {
   uint32_t bytesTotal = 0;
 };
 
+// A member on a DIFFERENT platform (#297): its reported plat is non-empty
+// and differs from the leader's own. Absent plat = same platform — the
+// pre-#297 S3 fleet keeps converging unchanged.
+inline bool clusterMemberPlatForeign(const String& memberPlat,
+                                     const char* leaderPlat) {
+  return memberPlat.length() > 0 && memberPlat != leaderPlat;
+}
+
 // First convergence candidate, or -1. Strictly sequential: only while
 // Idle and past the holdoff. A candidate must be reachable (joined), have
 // reported a rev (a pre-rev follower is never guessed at), differ from the
-// leader's rev in EITHER direction, and not be given up on.
+// leader's rev in EITHER direction, be on the leader's own platform (#297
+// — the payload IS the leader's running image), and not be given up on.
 inline int clusterRolloutNextCandidate(const ClusterMemberTable& table,
                                        const ClusterMemberRuntime* runtimes,
                                        const char* leaderRev,
+                                       const char* leaderPlat,
                                        const ClusterRolloutState& st,
                                        uint32_t nowMs) {
   if (st.phase != ClusterRolloutPhase::Idle) return -1;
@@ -81,6 +91,7 @@ inline int clusterRolloutNextCandidate(const ClusterMemberTable& table,
     if (!runtimes[i].joined) continue;
     if (runtimes[i].rev.length() == 0) continue;
     if (runtimes[i].rev == leaderRev) continue;
+    if (clusterMemberPlatForeign(runtimes[i].plat, leaderPlat)) continue;
     if (st.blocked[i]) continue;
     return i;
   }

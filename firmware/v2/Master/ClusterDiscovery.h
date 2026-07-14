@@ -19,6 +19,7 @@ struct ClusterDiscoveredBoard {
   String ip;    // dotted quad, empty when the answer carried none
   String rev;   // TXT rev — firmware short-hash, "" when absent
   int width;    // TXT width — 0 when absent/unparseable ("?" in the UI)
+  String plat;  // TXT plat (#297) — "" = S3 master, "esp01" = dumb row
 };
 
 // TXT values come off the wire: strictly-decimal parse, anything else is 0
@@ -65,6 +66,11 @@ inline String buildClusterDiscoverJson(const ClusterDiscoveredBoard* boards,
     mdnsAppendJsonString(out, b.rev);
     out += ",\"width\":";
     out += String(b.width);
+    if (b.plat.length() > 0) {
+      // #297 additive: only foreign-platform boards advertise a plat tag.
+      out += ",\"plat\":";
+      mdnsAppendJsonString(out, b.plat);
+    }
     out += '}';
   }
   out += "]}";

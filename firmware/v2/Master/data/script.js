@@ -2407,7 +2407,8 @@ function updateClusterFromStatus(st) {
 		var label = clusterStateLabel(saved[i]);
 		pill.className = "pill " + label.kind + " cl-state";
 		pill.textContent = label.text;
-		rev.textContent = saved[i].self ? "" : (saved[i].rev || "—");
+		//plat tag (#297): only foreign-platform members report one.
+		rev.textContent = saved[i].self ? "" : (saved[i].rev || "—") + (saved[i].plat ? " · " + saved[i].plat : "");
 	});
 
 	//Fleet rollout (#276) surfacing: progress while it runs, one success
@@ -2600,10 +2601,24 @@ function renderMemberPanelBody(panel, base, host, settings, health) {
 	meta.className = "note";
 	meta.textContent = (settings.effectiveDeviceName || settings.deviceName || host) +
 		" · fw " + (settings.version || "?") +
+		(settings.plat ? " · " + settings.plat : "") +
 		" · " + (health.units || []).filter(function(u) { return u.st === 1; }).length +
 		"/" + (health.width || 0) + " units responding" +
 		(health.faulty > 0 ? " · " + health.faulty + " flagged" : "");
 	panel.appendChild(meta);
+
+	//ESP-01 vitals (#297): the dumb row's /settings carries heap/rssi/up —
+	//show them when present (an S3 member's /settings has none of these).
+	if (settings.heap !== undefined || settings.rssi !== undefined || settings.up !== undefined) {
+		var vitals = document.createElement("p");
+		vitals.className = "note";
+		var parts = [];
+		if (settings.heap !== undefined) parts.push("heap " + Math.round(settings.heap / 1024) + " KB");
+		if (settings.rssi !== undefined) parts.push("rssi " + settings.rssi + " dBm");
+		if (settings.up !== undefined) parts.push("up " + formatUptime(settings.up));
+		vitals.textContent = parts.join(" · ");
+		panel.appendChild(vitals);
+	}
 
 	//Device name (the one genuinely per-board setting the wall UI owns).
 	var nameRow = document.createElement("div");
@@ -2802,7 +2817,7 @@ function renderClusterSuggestions(boards) {
 	boards.forEach(function(board) {
 		var chip = document.createElement("button");
 		chip.type = "button";
-		chip.textContent = board.name + " (" + board.host + (board.width ? ", " + board.width + " units" : "") + ")";
+		chip.textContent = board.name + " (" + board.host + (board.width ? ", " + board.width + " units" : "") + (board.plat ? ", " + board.plat : "") + ")";
 		chip.addEventListener("click", function() {
 			addClusterBoard(board.host, board.width || 16);
 		});
