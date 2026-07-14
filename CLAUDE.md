@@ -4,11 +4,11 @@ Guidance for Claude Code in this repository. Current state only — history live
 
 ## Project
 
-Arduino-based split-flap display: a master MCU drives per-flap units over I2C. Firmware builds with **PlatformIO** — every project directory has its own `platformio.ini`; run commands from that directory. CI (`.github/workflows/build.yml`) builds all firmware projects and runs every native/pytest suite.
+Arduino-based split-flap display: a master MCU drives per-flap units over I2C. Firmware builds with **PlatformIO** — every project directory has its own `platformio.ini`; run commands from that directory. CI (`.github/workflows/build.yml`) builds every active firmware project (frozen v1/ESPMaster excluded) and runs every native/pytest suite plus the unit-bundle drift gate.
 
 Two firmware stacks:
 
-- **v1 (shipping, actively maintained):** `firmware/v1/ESPMaster` (ESP8266 ESP-01 master) + `firmware/v1/Unit` (Arduino Nano per flap). Kept stable for OTA maintenance.
+- **v1:** `firmware/v1/ESPMaster` (ESP8266 ESP-01 master, **FROZEN** #283 — out of CI and unit-bundle staging, kept as reference; see its README) + `firmware/v1/Unit` (Arduino Nano per flap, **active** — the Nanos stay under the v2 master).
 - **v2 (in progress, epic #183):** `firmware/v2/Master` is the ESP32-S3 port (N16R8 devkit) speaking the same I2C protocol to unchanged v1 units. Pure-logic headers in v2 are **copies** of their v1 counterparts, not shared includes — if a bug is found while both trees are alive, fix it in both.
 
 ## Repository map
@@ -19,7 +19,7 @@ Two firmware stacks:
 - `firmware/v2/Master/` — S3 master port (plain `.cpp`, console on native USB-CDC)
 - `firmware/v2/Rescue/` — break-glass image for the factory slot (#195)
 - `firmware/v2/Bootloader/` — builds the S3 second-stage bootloader (#201; see its platformio.ini)
-- `flashing/` — `ota-master.sh` (v1 OTA with verdict) + `ota-flash.sh` (v2: fetch latest staged bin from a build server via scp, OTA master or rescue, verdict from `/settings`) + `flasher/` (provisioning exe, built by `flasher.yml`; dev: `python -m flasher`, `make_manifest.py stage` MUST run between the Unit and ESPMaster builds)
+- `flashing/` — `ota-flash.sh` (v2: fetch latest staged bin from a build server via scp, OTA master or rescue, verdict from `/settings`) + `ota-master.sh` (legacy v1 OTA; removed at #285) + `flasher/make_manifest.py` (`stage` writes the unit bundle into `firmware/v2/Master/data` — MUST run between the Unit and v2 Master builds; `gate` = the CI anti-drift check). New-board provisioning = esptool merged-factory-bin recipe in `flashing/README.md`; the Windows flasher exe is retired (#284, exe-only modules frozen in place)
 - `PCB/v2/` — design docs (unit board is the only planned custom PCB; GPIO 4 = future reset button)
 - `docs/superpowers/specs/` — design docs per feature
 
@@ -29,11 +29,11 @@ Two firmware stacks:
 pio run                      # build (run in the project dir)
 pio run -t upload            # USB flash (v1 first time; v2 Master devkit)
 pio device monitor           # serial 115200
-pio test -e native           # host-side unit tests (ESPMaster, v2 Master, Rescue)
-python -m pytest tests/      # python-side tests (ESPMaster, v2 Master, Rescue)
+pio test -e native           # host-side unit tests (Unit, v2 Master, Rescue)
+python -m pytest tests/      # python-side tests (v2 Master, Rescue)
 ```
 
-- v1 master re-flash after first install: OTA via `flashing/ota-master.sh <fw.bin> http://host` (prints SUCCESS / EBOOT SILENT REVERT / … verdict) or `split-flap-flasher.exe` over USB.
+- v1 master re-flash after first install: OTA via `flashing/ota-master.sh <fw.bin> http://host` (prints SUCCESS / EBOOT SILENT REVERT / … verdict); the retired v1.1.0 release exe remains downloadable for USB provisioning of legacy v1 hardware.
 - v1 Unit envs: `unit` (new Nano bootloader) / `unit_old_bootloader` (fallback).
 - Native env uses ArduinoFake: `map()` is a fakeit mock — wire the real formula in each test's `setUp()` or calls abort; `EEPROM` etc. re-wire via `ArduinoFake(EEPROM)`.
 - v2 first build on a clean machine is slow (pioarduino hybrid compile downloads IDF). `managed_components/`, `sdkconfig.*`, `.dummy/` in v2 project dirs are generated artifacts (gitignored; exception: `Bootloader/sdkconfig.defaults` is a source file kept by a negation).
@@ -95,7 +95,7 @@ Ported slices, one or two lines each: what it is + issue # + the file(s) whose h
 - **Slot confirm records (#200):** per-slot NVS record stamped on first netif-up so Rescue can rank images (the app-descriptor stamp freezes at framework-assembly time under pioarduino builds). Format + rules in `SlotRecord.h` ↔ parse-only copy `RescueSlotRecord.h`.
 - **I2C unit bus (#203, slice A):** `UnitBus.cpp`/`.h` (sole Wire toucher — Hard rules) — straight port of v1's blocking transactions and timing; pure seams `FlapFrame.h`, `UnitHealth.h`, plus `UnitProtocolHelpers.h`/`TwibootProtocol.h` v1 copies.
 - **Calibration + provisioning (#204, slice B):** every op is a DisplayCommand (`{"seq":N}` → `GET /unit/op-result`); validation pure in `MaintenancePolicy.h`, re-run by displayTask pre-burn; op/abort contracts in `UnitBus.h`, probe-inhibit mechanism in `Tasks.cpp`.
-- **Unit reflash over twiboot (#205, slice C):** bundled unit hex (`data/unit-firmware.hex` + `.rev`; `make_manifest.py stage` writes BOTH master trees, gates enforce no drift) flashed by the one inline `runReflashJob` in `Tasks.cpp`; plan + progress pure in `ReflashPlan.h`; producer gate in Hard rules. `WebAssets.h` is included by `WebEndpoints.cpp` ONLY (a second include duplicates every PROGMEM blob).
+- **Unit reflash over twiboot (#205, slice C):** bundled unit hex (`data/unit-firmware.hex` + `.rev`; `make_manifest.py stage` writes it, CI's `gate` step enforces no drift; v1's committed copy is a frozen fossil since #283) flashed by the one inline `runReflashJob` in `Tasks.cpp`; plan + progress pure in `ReflashPlan.h`; producer gate in Hard rules. `WebAssets.h` is included by `WebEndpoints.cpp` ONLY (a second include duplicates every PROGMEM blob).
 - **MQTT + Home Assistant (#224):** v1's wire contract unchanged (23 discovery entities incl. the #231 wear sensor, LWT, five command topics, same device id) on espMqttClient, owned by mqttTask — detail in `MqttService.h`/`.cpp` headers, pure logic in `MqttHelpers.h` + `MqttLifecyclePolicy.h`. Deviations from v1 (no bus polls from the MQTT loop, NVS boot counter, `MQTT_DEVICE_MODEL` build flag) in spec `2026-07-12-v2-mqtt-ha-slice.md`.
 - **Transient/mode service (#219):** web transients (clock-mode messages, calibration patterns) ride #224's show-then-revert overlay — drain + producer gates in `WebEndpoints.cpp`, overlay lifecycle (broker-less capable, cross-task arm via `mqttStartNotificationDwell`) in `MqttService.cpp`.
 - **Unit wear odometer (#231):** per-unit revolution count read at probe/health-poll (checksummed 5-byte reply — pre-odometer unit fw fails it gracefully); relative-wear flagging pure in `WearPolicy.h`, spliced into `/units/health` + HA wear-warning binary sensor; reset op rides the `{"seq":N}` contract. Unit-side mechanism in `firmware/v1/Unit/UnitOdometer.h`.

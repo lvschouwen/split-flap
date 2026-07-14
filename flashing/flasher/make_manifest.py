@@ -1,117 +1,45 @@
-"""Build-side staging + manifest generation (CI and dev).
+"""Unit-bundle staging + drift gate (CI and dev).
 
-  stage    copy the freshly built Unit hex + rev sidecar into BOTH masters'
-           data/ trees — v1 ESPMaster and v2 Master (#205) — so the two
-           bundles can never drift. MUST run between 'pio run Unit' and the
-           master builds — each build_assets.py embeds its own
-           data/unit-firmware.hex, it does NOT pull the Unit build
-           automatically.
-  collect  copy firmware artifacts into flasher/assets/, verify every staged
-           hex still equals the built hex (anti-drift gate), write manifest
+  stage    copy the freshly built Unit hex + rev sidecar into the v2
+           master's data/ tree (#205) so its build embeds the current unit
+           firmware. MUST run between 'pio run Unit' and the master build —
+           build_assets.py embeds data/unit-firmware.hex as-is, it does NOT
+           pull the Unit build automatically.
+  gate     verify no commit has touched the Unit sources since the staged
+           bundle's rev (anti-drift gate, run by CI): a drifted bundle means
+           the master auto-pushes stale unit firmware to every Nano it
+           reflashes. The gate compares REVS, not bytes — the Unit binary
+           embeds GIT_REV (build_version.py), so a fresh build never
+           byte-matches the committed bundle. Needs full git history
+           (CI checkout with fetch-depth: 0).
 
-Usage: python flasher/make_manifest.py stage|collect [--avrdude-zip PATH]
+firmware/v1/ESPMaster is frozen (#283): its committed bundle is a fossil of
+the last pre-freeze stage and is no longer written or gated here.
+
+Usage: python flasher/make_manifest.py stage|gate
 """
-import hashlib
-import json
 import shutil
 import subprocess
 import sys
-import zipfile
-from datetime import date
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 UNIT_BUILD = REPO / "firmware/v1/Unit/.pio/build/unit/firmware.hex"
 UNIT_REV_BUILT = REPO / "firmware/v1/Unit/.pio/build/unit/firmware.rev"
-ESP_DATA = REPO / "firmware/v1/ESPMaster/data"
-ESP_BUILD = REPO / "firmware/v1/ESPMaster/.pio/build/espmaster"
 V2_MASTER_DATA = REPO / "firmware/v2/Master/data"
-V2_MASTER_BUILD = REPO / "firmware/v2/Master/.pio/build/master"
 # Every tree that embeds the unit bundle (#205). stage writes all of them;
-# collect gates all of them.
-STAGE_DATA_DIRS = [ESP_DATA, V2_MASTER_DATA]
-TWIBOOT = REPO / "firmware/v1/UnitBootloader/prebuilt/twiboot-atmega328p-16mhz.hex"
-ASSETS = Path(__file__).resolve().parent / "assets"
+# gate checks all of them.
+STAGE_DATA_DIRS = [V2_MASTER_DATA]
+# Everything that compiles into the Unit binary; host-side tests don't.
+UNIT_SRC_PATHSPECS = [
+    "firmware/v1/Unit",
+    ":(exclude)firmware/v1/Unit/test",
+    "firmware/v1/shared",
+]
 
 
 class GateError(Exception):
     pass
-
-
-def _sha256(p: Path) -> str:
-    return hashlib.sha256(p.read_bytes()).hexdigest()
-
-
-def git_rev() -> str:
-    """Master firmware GIT_REV, mirroring
-    firmware/v1/ESPMaster/build_assets.py::git_short_rev exactly:
-    short HEAD hash, plus a '-dirty' suffix if the tree has uncommitted
-    changes. Do NOT use 'git describe' — it picks up old tags and produces
-    a value that never matches the firmware's own GIT_REV.
-    """
-    rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                        cwd=REPO, capture_output=True, text=True, check=True).stdout.strip()
-    dirty = bool(subprocess.run(["git", "status", "--porcelain"],
-                              cwd=REPO, capture_output=True, text=True, check=True).stdout.strip())
-    return f"{rev}-dirty" if dirty else rev
-
-
-def build_manifest(root: Path, rev: str, build_date: str, extra: dict | None = None) -> dict:
-    assets = {}
-    for p in sorted(root.rglob("*")):
-        if p.is_file() and p.name != "manifest.json":
-            assets[p.relative_to(root).as_posix()] = _sha256(p)
-    manifest = {"git_rev": rev, "build_date": build_date, "assets": assets}
-    if extra:
-        manifest.update(extra)
-    return manifest
-
-
-def consistency_gate(unit_hex_built: Path, unit_hex_staged: Path,
-                     unit_rev_built: Path, unit_rev_staged: Path) -> None:
-    if _sha256(unit_hex_built) != _sha256(unit_hex_staged):
-        raise GateError(
-            "staged ESPMaster/data/unit-firmware.hex differs from the built Unit hex — "
-            "the master would auto-push STALE unit firmware. Run 'stage' then rebuild ESPMaster."
-        )
-    built_rev = unit_rev_built.read_text().strip()
-    staged_rev = unit_rev_staged.read_text().strip()
-    if built_rev != staged_rev:
-        raise GateError(
-            f"staged unit rev '{staged_rev}' != built unit rev '{built_rev}' — "
-            "run 'stage' then rebuild ESPMaster."
-        )
-
-
-def freshness_gate(master_bin: Path, staged_hex: Path) -> None:
-    """Guard against shipping a master binary that was built BEFORE the
-    currently-staged unit firmware — it would embed a stale unit image even
-    though the byte-for-byte consistency_gate() above passes (that gate only
-    proves the built Unit hex still matches what's staged, not that the
-    master was rebuilt afterwards).
-
-    CI's fixed step order (Unit build -> stage -> ESPMaster build -> collect,
-    see flasher.yml) always satisfies this naturally. This guard exists for
-    manual/dev runs where a rebuild step can be forgotten (e.g. staging fresh
-    unit firmware, then collecting without rebuilding ESPMaster first).
-    """
-    if master_bin.stat().st_mtime < staged_hex.stat().st_mtime:
-        raise GateError(
-            f"{master_bin} is OLDER than the staged {staged_hex.name} — "
-            "ESPMaster was built before this unit firmware was staged, so it "
-            "embeds a stale copy. Rebuild ESPMaster ('pio run' in "
-            "firmware/v1/ESPMaster) after 'stage', then re-run collect."
-        )
-
-
-def optional_freshness_gate(master_bin: Path, staged_hex: Path) -> None:
-    """freshness_gate() for a master that is not part of this collect's
-    shipped artifacts (the v2 master, #205): a dev machine that never built
-    it must still collect, but a stale existing build fails loudly."""
-    if not master_bin.exists():
-        print(f"note: {master_bin} not built — skipping its freshness gate")
-        return
-    freshness_gate(master_bin, staged_hex)
 
 
 def stage_bundle(unit_hex: Path, unit_rev: Path, data_dirs: list[Path]) -> None:
@@ -122,50 +50,78 @@ def stage_bundle(unit_hex: Path, unit_rev: Path, data_dirs: list[Path]) -> None:
         print(f"staged {unit_rev} -> {data_dir}/unit-firmware.rev")
 
 
+def unit_source_head(repo: Path | None = None) -> str:
+    """Full hash of the last commit that touched the Unit firmware sources."""
+    return subprocess.run(
+        ["git", "log", "-1", "--format=%H", "--", *UNIT_SRC_PATHSPECS],
+        cwd=repo or REPO, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def staged_rev_gate(staged_rev: str, repo: Path | None = None) -> None:
+    """The staged bundle's rev must already contain the latest Unit source
+    change, i.e. unit_source_head() is an ancestor of (or equal to) it.
+    Caveat: squash-merging a PR that contains a stage commit rewrites the
+    hash the .rev points to and makes it unresolvable (fails safe)."""
+    repo = repo or REPO
+    if not staged_rev:
+        raise GateError("staged unit-firmware.rev is empty — run 'stage' "
+                        "from a clean Unit build and commit the bundle.")
+    if staged_rev.endswith("-dirty"):
+        raise GateError(
+            f"staged unit rev '{staged_rev}' was built from a dirty tree — "
+            "commit the Unit change first, rebuild clean, then 'stage'."
+        )
+    known = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{staged_rev}^{{commit}}"],
+        cwd=repo, capture_output=True,
+    ).returncode == 0
+    if not known:
+        raise GateError(f"staged unit rev '{staged_rev}' is not a commit in "
+                        "this repo — was the bundle staged from another tree?")
+    head = unit_source_head(repo)
+    if not head:
+        raise GateError("no commit touching the Unit sources is visible — "
+                        "shallow clone? The gate needs full history "
+                        "(fetch-depth: 0).")
+    contained = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", head, staged_rev],
+        cwd=repo, capture_output=True,
+    ).returncode == 0
+    if not contained:
+        raise GateError(
+            f"Unit sources changed ({head[:7]}) after the bundle was staged "
+            f"at {staged_rev} — the master would auto-push STALE unit "
+            "firmware. Rebuild Unit clean, run 'stage', rebuild the v2 "
+            "master, and commit the refreshed bundle."
+        )
+
+
 def cmd_stage() -> None:
     if not UNIT_REV_BUILT.exists():
         sys.exit(
             f"error: {UNIT_REV_BUILT} not found — build the Unit sketch first "
-            "('pio run' in firmware/v1/Unit) before staging"
+            "('pio run' in firmware/v1/Unit)"
         )
     stage_bundle(UNIT_BUILD, UNIT_REV_BUILT, STAGE_DATA_DIRS)
 
 
-def cmd_collect(avrdude_zip: str | None) -> None:
-    rev = git_rev()
+def cmd_gate() -> None:
     for data_dir in STAGE_DATA_DIRS:
-        consistency_gate(UNIT_BUILD, data_dir / "unit-firmware.hex",
-                         UNIT_REV_BUILT, data_dir / "unit-firmware.rev")
-    freshness_gate(ESP_BUILD / "firmware.bin", ESP_DATA / "unit-firmware.hex")
-    optional_freshness_gate(V2_MASTER_BUILD / "firmware.bin",
-                            V2_MASTER_DATA / "unit-firmware.hex")
-    ASSETS.mkdir(exist_ok=True)
-    shutil.copy2(ESP_BUILD / "firmware.bin", ASSETS / "master-firmware.bin")
-    shutil.copy2(UNIT_BUILD, ASSETS / "unit-firmware.hex")
-    shutil.copy2(TWIBOOT, ASSETS / TWIBOOT.name)
-    extra = {}
-    if avrdude_zip:
-        dest = ASSETS / "avrdude"
-        dest.mkdir(exist_ok=True)
-        with zipfile.ZipFile(avrdude_zip) as z:
-            for name in z.namelist():
-                base = Path(name).name
-                if base in ("avrdude.exe", "avrdude.conf"):
-                    (dest / base).write_bytes(z.read(name))
-        extra = {"avrdude_version": Path(avrdude_zip).stem,
-                 "avrdude_source_url": "https://github.com/avrdudes/avrdude/releases"}
-    manifest = build_manifest(ASSETS, rev, date.today().isoformat(), extra)
-    (ASSETS / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(f"manifest written: rev {rev}, {len(manifest['assets'])} assets")
+        sidecar = data_dir / "unit-firmware.rev"
+        if not sidecar.exists():
+            raise GateError(f"{sidecar} is missing — run 'stage' from a "
+                            "clean Unit build and commit the bundle.")
+        staged_rev = sidecar.read_text().strip()
+        staged_rev_gate(staged_rev, repo=REPO)
+        print(f"gate passed: {data_dir / 'unit-firmware.rev'} rev "
+              f"{staged_rev} contains the latest Unit source change")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] not in ("stage", "collect"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("stage", "gate"):
         sys.exit(__doc__)
     if sys.argv[1] == "stage":
         cmd_stage()
     else:
-        zip_arg = None
-        if "--avrdude-zip" in sys.argv:
-            zip_arg = sys.argv[sys.argv.index("--avrdude-zip") + 1]
-        cmd_collect(zip_arg)
+        cmd_gate()

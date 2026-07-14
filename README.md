@@ -17,7 +17,7 @@ Thank you everyone whom has contributed, included in the "main" release or not, 
 
 ---
 
-> **Firmware status:** The shipping firmware is the v1 stack under `firmware/v1/` — the ESP8266 master (`ESPMaster/`) and the Arduino Nano per-flap unit (`Unit/`), both actively maintained. An earlier ESP32-S3 + ESP32-H2 firmware port was removed pending a fresh v2 design; the v2 **PCB** design docs under `PCB/v2/` are kept.
+> **Firmware status:** The active master firmware is the **v2** ESP32-S3 stack under `firmware/v2/Master/` (with `firmware/v2/Rescue/` as its break-glass image); the Arduino Nano per-flap unit firmware (`firmware/v1/Unit/`) stays active underneath it. The v1 ESP8266 master (`firmware/v1/ESPMaster/`) is **frozen** — kept in the repo as reference for legacy hardware, out of CI (see its README). The v2 **PCB** design docs live under `PCB/v2/`.
 
 ---
 
@@ -75,8 +75,10 @@ Each PlatformIO project has its own `platformio.ini` in its folder. Today the ac
 
 | Folder | Target | Status |
 |---|---|---|
-| `firmware/v1/ESPMaster/` | ESP8266 ESP-01 | Active |
+| `firmware/v2/Master/` | ESP32-S3 (master) | Active |
+| `firmware/v2/Rescue/` | ESP32-S3 (rescue slot) | Active |
 | `firmware/v1/Unit/` | Arduino Nano (per-flap) | Active |
+| `firmware/v1/ESPMaster/` | ESP8266 ESP-01 | Frozen — reference only (see its README) |
 
 From the folder, run:
 
@@ -259,7 +261,7 @@ Once the master is on WiFi, subsequent flashes don't need a USB cable:
 The master ships with a copy of the compiled Unit sketch in PROGMEM (see `ESPMaster/data/unit-firmware.hex`, regenerated from the current `Unit/` build). Any Nano the master probes and finds sitting in twiboot — typically a freshly ICSP-flashed one with no sketch — gets that bundled image automatically on boot. Combined with the web OTA flow above this means:
 
 1. Rebuild `Unit/` after code changes.
-2. Copy the resulting `Unit/.pio/build/unit/firmware.hex` over `ESPMaster/data/unit-firmware.hex` (`python flashing/flasher/make_manifest.py stage` does this — see `flashing/README.md`).
+2. Copy the resulting `Unit/.pio/build/unit/firmware.hex` over `ESPMaster/data/unit-firmware.hex` (manual copy — the v1 tree is frozen and `python flashing/flasher/make_manifest.py stage` now stages only `firmware/v2/Master/data`; see `flashing/README.md`).
 3. Rebuild master + OTA it.
 4. Master reboots, probes, auto-flashes every unit.
 

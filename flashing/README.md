@@ -1,32 +1,39 @@
 # Split-Flap — flashing
 
-Everything flash-related now lives in **one tool**: `split-flap-flasher.exe`.
-Download it from the latest GitHub release (or the `split-flap-flasher`
-artifact of the *Flasher exe* workflow), double-click, and follow the menu.
-Windows SmartScreen will warn once (unsigned exe) — "More info → Run anyway".
+The master stack is **v2** (ESP32-S3, `firmware/v2/Master`). Provisioning a
+new display is a two-step: flash the S3 once over USB with a merged factory
+image, then let the running master flash the Nano units itself over I2C.
 
-The exe contains the wizard, esptool, avrdude, and **the firmware images it
-flashes** (built fresh by CI from the same commit — see `manifest.json`
-baked inside). There is nothing else to download and no stale-binaries drift.
+## Provision a new S3 master (merged factory image)
 
-## What it does
+Build both images, merge them, flash once. The merged image contains the
+custom bootloader @ 0x0 (#201), partition table, boot_app0, the app in
+app0, and the Rescue image in the factory-adjacent `rescue` slot @ 0x830000
+— everything a blank board needs.
 
-1. **Provision a new display** — guided cold start: asks how many units
-   (1–16), turns a spare Uno/Nano into an Arduino-as-ISP programmer (no
-   Arduino IDE needed), flashes twiboot to every Nano with signature +
-   fuse verification, flashes the ESP-01 master, then walks assembly,
-   WiFi setup, and a live network verification. Interrupted runs resume.
-2. **Prepare programmer / single unit / master serial** — the same steps
-   standalone, for redoing one piece.
-3. **Update master (WiFi/OTA)** — upload with MD5 + verdict polling
-   (same semantics as `ota-master.sh`).
-4. **Check display status** — `/settings` pretty-print + unit-count verify.
-5. **Wiring help** — every connection diagram (ICSP, ESP-01 UART, DIP,
-   display assembly), also shown inline at each step.
+    # 1. build (unit bundle must be staged first if Unit/ changed — see below)
+    (cd firmware/v2/Master && pio run -e master)
+    (cd firmware/v2/Rescue && pio run -e rescue)
 
-Prerequisite on the bench machine: **nothing** (the exe is self-contained).
-If no COM port appears when you plug something in, install the CH340 driver
-(clone Nanos/adapters) — the tool detects this and shows instructions.
+    # 2. merge (pio's firmware.factory.bin lacks the rescue slot)
+    python3 -m esptool --chip esp32s3 merge_bin -o splitflap-v2.factory.bin \
+        --flash_size 16MB \
+        0x0 firmware/v2/Master/.pio/build/master/firmware.factory.bin \
+        0x830000 firmware/v2/Rescue/.pio/build/rescue/firmware.bin
+
+    # 3. flash (any OS with esptool; use the board's native USB port)
+    python3 -m esptool --chip esp32s3 --port <PORT> erase_flash
+    python3 -m esptool --chip esp32s3 --port <PORT> write_flash 0x0 splitflap-v2.factory.bin
+
+First boot on blank NVS logs one expected `slotRec1 NOT_FOUND` error (#200
+record not stamped yet). Join WiFi via the `<name>-setup` portal, then all
+further master updates ride web OTA (`ota-flash.sh` below or the
+Maintenance tab).
+
+**Units:** Nanos carrying only twiboot get the bundled unit firmware pushed
+automatically when the master probes them; **Flash all unit(s)** /
+`/reflash-units` re-pushes on demand. Only the one-time twiboot ICSP flash
+per Nano happens off-master (see `firmware/v1/UnitBootloader/`).
 
 ## Only one ICSP flash per Nano — twiboot only
 
@@ -51,46 +58,33 @@ contiguously from unit 1.
 | 7    | 0110 | 0x07 | 15   | 1110 | 0x0F |
 | 8    | 0111 | 0x08 | 16   | 1111 | 0x10 |
 
-## Developing the flasher
+## Unit-bundle staging (`make_manifest.py`)
 
-The tool is a plain Python package (`flasher/`). Dev loop on any OS:
+`flasher/make_manifest.py` is the unit-bundle tool and it is load-bearing:
 
     cd flashing
-    pip install pyserial esptool pytest
-    python -m pytest flasher/tests/ -v      # pure-logic tests, no hardware
-    # stage real firmware assets for a live run:
     (cd ../firmware/v1/Unit && pio run)
-    python flasher/make_manifest.py stage
-    (cd ../firmware/v1/ESPMaster && pio run)
-    python flasher/make_manifest.py collect
-    python -m flasher
+    python3 flasher/make_manifest.py stage    # writes firmware/v2/Master/data
+    (cd ../firmware/v2/Master && pio run)     # rebuild so the bake picks it up
+    python3 flasher/make_manifest.py gate     # anti-drift check (CI runs this)
 
-The exe is built by `.github/workflows/flasher.yml` (windows-latest):
-Unit build → stage hex+rev into ESPMaster/data → ESPMaster build →
-manifest + consistency gate → PyInstaller. The gate fails the build if the
-master's embedded unit firmware doesn't match the freshly built Unit hex.
+`stage` writes into the **committed** `firmware/v2/Master/data/unit-firmware.hex`
+and `.rev` — after a Unit code change, commit the refreshed pair alongside
+it (build clean: a `-dirty` rev fails the gate). CI's `gate` step fails the
+build when any commit touches the Unit sources (`firmware/v1/Unit` minus
+`test/`, plus `firmware/v1/shared`) after the staged bundle's rev, because a
+drifted bundle means the master auto-pushes stale unit firmware. The gate
+compares revs, not bytes — the Unit binary embeds its `GIT_REV`
+(`build_version.py`), so a rebuilt hex never byte-matches the committed one.
+One caveat: never squash-merge a PR that contains a stage commit — squashing
+rewrites the hash the committed `.rev` points to and the gate can no longer
+resolve it (fails safe, but permanently red until re-staged).
 
-`make_manifest.py stage` writes into the **committed**
-`firmware/v1/ESPMaster/data/unit-firmware.hex` and `.rev` files — after
-running the dev loop above, `git diff` will show those two files changed.
-That's expected: commit the refreshed hex/rev alongside your `Unit/` code
-change so the master keeps embedding the matching unit firmware.
+## OTA scripts
 
-**Release note:** `.github/workflows/flasher.yml` also triggers on `v*` tag
-pushes, and its release-attach step (`gh release upload`) needs the GitHub
-Release to already exist — `gh release upload` 404s against a tag with no
-release. When cutting a release, create the GitHub Release **first** (or
-immediately after pushing the tag), not after. If the workflow's attach step
-already failed because the release didn't exist yet, just re-run it via
-`workflow_dispatch` ("Flasher exe" workflow) once the release is created —
-no need to re-tag.
-
-`ota-master.sh` remains for Linux-side OTA from a dev checkout:
-`./ota-master.sh <fw.bin> http://host:port`.
-
-`ota-flash.sh` is the v2 (ESP32-S3) counterpart: it fetches the newest
-staged `firmware-<rev>.bin` / `rescue-<rev>.bin` from a build server over
-ssh/scp and uploads it to a running master, with the verdict read back from
+`ota-flash.sh` is the v2 (ESP32-S3) updater: it fetches the newest staged
+`firmware-<rev>.bin` / `rescue-<rev>.bin` from a build server over ssh/scp
+and uploads it to a running master, with the verdict read back from
 `/settings` (`version` + `otaReverted` — native A/B rollback, no v1 RTC
 machinery). `./ota-flash.sh -s user@buildhost <device-ip>` for the master
 firmware, `-r` for the rescue image, `-a` for both, `-l file.bin` to skip
@@ -103,3 +97,22 @@ next upload's start. On every server-backed run the script md5-compares
 itself against `<staging-dir>/ota-flash.sh` and prints the update
 one-liner when the local copy is stale (#262, warn-only) — so keep the
 staged copy fresh alongside the bins.
+
+`ota-master.sh` is the **legacy v1** (ESP8266) OTA uploader from a dev
+checkout: `./ota-master.sh <fw.bin> http://host:port`. It stays until both
+live displays are migrated to S3 masters (#285), then it goes too.
+
+## Legacy: the Windows flasher exe (retired)
+
+The guided provisioning exe (`split-flap-flasher.exe`) is retired (#284) —
+it provisioned the **v1** ESP-01 master, which is frozen (#283). The
+esptool recipe above is the provisioning path now.
+
+- The v1.1.0 release exe remains downloadable for any legacy v1 hardware;
+  no new exe builds (`.github/workflows/flasher.yml` is deleted).
+- The exe-only modules under `flasher/` (`wizard.py`, `ota.py`, `esp.py`,
+  `avr.py`, `assets.py`, `ui.py`, `ports.py`, `session.py`, `wiring.py`,
+  `__main__.py`, `flasher.spec`, `assets-src/`) are frozen in place as
+  reference; their pure-logic tests still run in CI. Only
+  `make_manifest.py` (above) is maintained. The old `collect` subcommand
+  (exe asset packaging) is gone.

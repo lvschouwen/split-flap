@@ -166,23 +166,6 @@ def test_real_tree_has_committed_unit_bundle():
     assert rev, "unit-firmware.rev must carry the built rev"
 
 
-def test_real_tree_bundle_matches_v1_bundle():
-    # Until make_manifest.py stages both trees in one step, the committed v2
-    # bundle must be byte-identical to v1's — the units are unchanged and a
-    # drifted copy means one master auto-pushes stale unit firmware.
-    v2_data = pathlib.Path(build_assets.__file__).resolve().parent / "data"
-    v1_data = (
-        pathlib.Path(build_assets.__file__).resolve().parent.parent.parent
-        / "v1" / "ESPMaster" / "data"
-    )
-    assert (v2_data / "unit-firmware.hex").read_bytes() == (
-        v1_data / "unit-firmware.hex"
-    ).read_bytes()
-    assert (v2_data / "unit-firmware.rev").read_text(encoding="utf-8") == (
-        v1_data / "unit-firmware.rev"
-    ).read_text(encoding="utf-8")
-
-
 # --- timezone table (#252) ---------------------------------------------------
 
 
