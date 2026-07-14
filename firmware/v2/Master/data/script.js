@@ -27,6 +27,11 @@ var initialised = false;
 var mirrorTiles = [];
 var lastHealthUnits = [];
 var mirrorShown = "";
+//Cluster wall (#277): non-null while the SSE stream carries grid rows —
+//the leader's mirror then renders the WHOLE wall, one strip per row.
+var wallWidths = null;
+var wallSelfRow = 0;
+var mirrorRowTiles = [];
 
 //The device stores umlauts as $ & # on the wire; show the real glyphs.
 function wireToGlyph(ch) {
@@ -36,9 +41,40 @@ function wireToGlyph(ch) {
 	return ch;
 }
 
-function buildMirror(width) {
-	var mirror = document.getElementById("mirror");
+//Two-leaf tile (#246): the .top half folds over the hinge carrying
+//the old glyph while the full-height .char swaps underneath it.
+function buildTile() {
+	var t = document.createElement("div");
+	t.className = "tile";
+	var top = document.createElement("span");
+	top.className = "top";
+	//Full-tile-height inner span, clipped by the half-height leaf, so the
+	//leaf shows exactly the top half of a properly centered glyph.
+	var tg = document.createElement("span");
+	tg.className = "tg";
+	top.appendChild(tg);
+	var ch = document.createElement("span");
+	ch.className = "char";
+	t.appendChild(top);
+	t.appendChild(ch);
+	t._glyph = "";
+	return t;
+}
+
+//The health strip tracks THIS board's physical units (never remote wall
+//rows), so it rebuilds from unitCount alone.
+function buildStrip(n) {
 	var strip = document.getElementById("healthStrip");
+	while (strip.firstChild) strip.removeChild(strip.firstChild);
+	for (var i = 0; i < n; i++) strip.appendChild(document.createElement("span"));
+}
+
+function clearMirror() {
+	var mirror = document.getElementById("mirror");
+	//The wall build reparents the health strip under the own row — put it
+	//back before clearing or the rebuild would delete it.
+	var note = document.getElementById("healthNote");
+	note.parentNode.insertBefore(document.getElementById("healthStrip"), note);
 	//Discarded tiles must not keep riffling against detached DOM nodes —
 	//kill their timers before the rebuild drops the references.
 	mirrorTiles.forEach(function(tile) {
@@ -46,30 +82,58 @@ function buildMirror(width) {
 		if (tile._riffle) clearInterval(tile._riffle);
 	});
 	while (mirror.firstChild) mirror.removeChild(mirror.firstChild);
-	while (strip.firstChild) strip.removeChild(strip.firstChild);
 	mirrorTiles = [];
+	mirrorRowTiles = [];
+	mirrorShown = "";
+}
+
+function buildMirror(width) {
+	clearMirror();
+	wallWidths = null;
+	var mirror = document.getElementById("mirror");
+	mirror.classList.remove("wall");
+	mirror.style.removeProperty("--wallcols");
+	document.getElementById("healthStrip").style.removeProperty("width");
 	for (var i = 0; i < width; i++) {
-		//Two-leaf tile (#246): the .top half folds over the hinge carrying
-		//the old glyph while the full-height .char swaps underneath it.
-		var t = document.createElement("div");
-		t.className = "tile";
-		var top = document.createElement("span");
-		top.className = "top";
-		//Full-tile-height inner span, clipped by the half-height leaf, so the
-		//leaf shows exactly the top half of a properly centered glyph.
-		var tg = document.createElement("span");
-		tg.className = "tg";
-		top.appendChild(tg);
-		var ch = document.createElement("span");
-		ch.className = "char";
-		t.appendChild(top);
-		t.appendChild(ch);
-		t._glyph = "";
+		var t = buildTile();
 		mirror.appendChild(t);
 		mirrorTiles.push(t);
-		strip.appendChild(document.createElement("span"));
 	}
-	mirrorShown = "";
+	buildStrip(width);
+}
+
+//Cluster wall (#277): one strip per grid row, every row sharing the tile
+//size of the widest row (--wallcols), left-aligned at col 0. The health
+//strip moves under the own row — it shows this board's units only.
+function buildWall(widths, selfRow) {
+	clearMirror();
+	wallWidths = widths.slice();
+	wallSelfRow = selfRow;
+	var mirror = document.getElementById("mirror");
+	mirror.classList.add("wall");
+	var maxW = Math.max.apply(null, widths);
+	mirror.style.setProperty("--wallcols", maxW);
+	for (var r = 0; r < widths.length; r++) {
+		var rowEl = document.createElement("div");
+		rowEl.className = "mrow";
+		rowEl.style.width = (widths[r] / maxW * 100) + "%";
+		var tiles = [];
+		for (var i = 0; i < widths[r]; i++) {
+			var t = buildTile();
+			rowEl.appendChild(t);
+			tiles.push(t);
+			mirrorTiles.push(t);
+		}
+		mirror.appendChild(rowEl);
+		mirrorRowTiles.push(tiles);
+		if (r === selfRow) {
+			var strip = document.getElementById("healthStrip");
+			strip.style.width = (widths[r] / maxW * 100) + "%";
+			mirror.appendChild(strip);
+		}
+	}
+	buildStrip(unitCount || 0);
+	refreshLiveStatus();
 }
 
 //Pad the way the firmware lays out a single frame: honour the persisted
@@ -165,10 +229,31 @@ function renderMirror(text) {
 	});
 }
 
+//Wall rows arrive pre-positioned (padded, sliced server-side) — render
+//verbatim, no alignment math. Stagger restarts per row so the rows
+//animate in parallel like the physical wall.
+function renderWall(rows) {
+	if (!wallWidths) return;
+	var frame = rows.join("\n");
+	if (frame === mirrorShown) return;
+	mirrorShown = frame;
+	for (var r = 0; r < mirrorRowTiles.length; r++) {
+		var text = String(rows[r] || "").toUpperCase();
+		for (var i = 0; i < mirrorRowTiles[r].length; i++) {
+			riffleTileTo(mirrorRowTiles[r][i], i < text.length ? text[i] : " ", i);
+		}
+	}
+}
+
 function setBoardStatus(text, offline) {
 	var el = document.getElementById("boardStatus");
 	el.textContent = text;
 	el.style.color = offline ? "var(--warn)" : "";
+}
+
+function refreshLiveStatus() {
+	setBoardStatus("● LIVE · " + (wallWidths ? "CLUSTER · " : "") +
+		(currentMode === "clock" ? "CLOCK" : "TEXT"), false);
 }
 
 // ===================== settings poll =====================
@@ -178,11 +263,16 @@ function applySettings(s) {
 	currentAlignment = s.alignment || "left";
 	currentMode = s.deviceMode || "text";
 
-	if (mirrorTiles.length !== unitCount) buildMirror(unitCount);
-	renderMirror(s.lastWrittenText || "");
+	if (!wallWidths) {
+		if (mirrorTiles.length !== unitCount) buildMirror(unitCount);
+		renderMirror(s.lastWrittenText || "");
+	} else if (document.getElementById("healthStrip").children.length !== unitCount) {
+		//SSE built the wall before the first poll delivered unitCount.
+		buildStrip(unitCount);
+	}
 
 	document.getElementById("boardName").textContent = (s.effectiveDeviceName || "split-flap").toUpperCase();
-	setBoardStatus("● LIVE · " + (currentMode === "clock" ? "CLOCK" : "TEXT"), false);
+	refreshLiveStatus();
 	document.getElementById("labelLastMessageReceived").textContent = s.lastTimeReceivedMessageDateTime || "—";
 	setSegValue("segMode", currentMode);
 	setSegValue("segAlignment", currentAlignment);
@@ -310,7 +400,22 @@ function initDisplayEvents() {
 	var es = new EventSource("/events");
 	es.addEventListener("display", function(event) {
 		try {
-			renderMirror(JSON.parse(event.data).text || "");
+			var d = JSON.parse(event.data);
+			if (d.rows && d.rows.length) {
+				var widths = d.rows.map(function(row) { return String(row).length; });
+				var selfRow = d.selfRow || 0;
+				if (!wallWidths || wallWidths.join() !== widths.join() || wallSelfRow !== selfRow) {
+					buildWall(widths, selfRow);
+				}
+				renderWall(d.rows);
+			} else {
+				if (wallWidths) {
+					//Cluster disabled — collapse to the single-row mirror.
+					buildMirror(unitCount || 0);
+					refreshLiveStatus();
+				}
+				renderMirror(d.text || "");
+			}
 		} catch (e) { /* malformed event — the poll catches up */ }
 	});
 }
