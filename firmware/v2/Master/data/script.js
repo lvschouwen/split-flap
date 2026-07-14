@@ -31,6 +31,13 @@ var mirrorShown = "";
 //the leader's mirror then renders the WHOLE wall, one strip per row.
 var wallWidths = null;
 var wallSelfRow = 0;
+//Who built the wall (#294): "sse" = this board leads (rows ride /events),
+//"digest" = this board follows and mirrors the leader's ping-piggybacked
+//digest. Each source owns its own collapse rule in applySettings.
+var wallSource = null;
+//Per-row health strips for rows that are NOT this board's own (#294) —
+//null for the self row (the physical healthStrip covers it).
+var wallRowStrips = [];
 var mirrorRowTiles = [];
 
 //The device stores umlauts as $ & # on the wire; show the real glyphs.
@@ -84,12 +91,15 @@ function clearMirror() {
 	while (mirror.firstChild) mirror.removeChild(mirror.firstChild);
 	mirrorTiles = [];
 	mirrorRowTiles = [];
+	wallRowStrips = [];
 	mirrorShown = "";
 }
 
 function buildMirror(width) {
 	clearMirror();
 	wallWidths = null;
+	wallSource = null;
+	document.getElementById("mirror").classList.remove("stale");
 	var mirror = document.getElementById("mirror");
 	mirror.classList.remove("wall");
 	mirror.style.removeProperty("--wallcols");
@@ -113,6 +123,7 @@ function buildWall(widths, selfRow) {
 	mirror.classList.add("wall");
 	var maxW = Math.max.apply(null, widths);
 	mirror.style.setProperty("--wallcols", maxW);
+	wallRowStrips = [];
 	for (var r = 0; r < widths.length; r++) {
 		var rowEl = document.createElement("div");
 		rowEl.className = "mrow";
@@ -130,10 +141,69 @@ function buildWall(widths, selfRow) {
 			var strip = document.getElementById("healthStrip");
 			strip.style.width = (widths[r] / maxW * 100) + "%";
 			mirror.appendChild(strip);
+			wallRowStrips.push(null);
+		} else {
+			//Remote rows get their own strip (#294), fed by the 5 s
+			///cluster/status poll (leader) or the digest (follower) —
+			//hidden until that row's board reports health.
+			var rs = document.createElement("div");
+			rs.className = "health rowhealth hidden";
+			rs.style.width = (widths[r] / maxW * 100) + "%";
+			for (var c = 0; c < widths[r]; c++) rs.appendChild(document.createElement("span"));
+			mirror.appendChild(rs);
+			wallRowStrips.push(rs);
 		}
 	}
 	buildStrip(unitCount || 0);
 	refreshLiveStatus();
+}
+
+//Row strips from cluster member health (#294): bit i of a member's hex
+//faultMask = its unit at position col+i is faulty (amber, like the local
+//strip's flagged state); an unjoined member's whole span goes red. Rows
+//where nobody reported health keep their strip hidden — absence is
+//"unknown", never "all good". Coincident mirror members merge worst-wins.
+function updateWallHealth(members) {
+	if (!wallWidths || wallRowStrips.length === 0) return;
+	var byRow = {};
+	(members || []).forEach(function(m) {
+		//No self-skip here: on a FOLLOWER pane the digest's self member is
+		//the LEADER's row, which needs its strip. The local pane's own row
+		//is skipped naturally — its wallRowStrips slot is null (the
+		//physical healthStrip owns it).
+		(byRow[m.row] = byRow[m.row] || []).push(m);
+	});
+	for (var r = 0; r < wallRowStrips.length; r++) {
+		var strip = wallRowStrips[r];
+		if (!strip) continue;
+		var rowMembers = (byRow[r] || []).filter(function(m) {
+			return typeof m.faultMask === "string" || !m.joined;
+		});
+		strip.classList.toggle("hidden", rowMembers.length === 0);
+		if (rowMembers.length === 0) continue;
+		var cls = [], titles = [];
+		rowMembers.forEach(function(m) {
+			var mask = parseInt(m.faultMask || "0", 16) || 0;
+			for (var i = 0; i < m.width; i++) {
+				var cell = m.col + i;
+				if (cell >= strip.children.length) break;
+				if (!m.joined) {
+					cls[cell] = "bad";
+					titles[cell] = "board unreachable";
+				} else if ((mask >>> i) & 1) {
+					if (cls[cell] !== "bad") cls[cell] = "warn";
+					titles[cell] = "unit flagged faulty";
+				} else if (cls[cell] === undefined) {
+					cls[cell] = "";
+				}
+				if (m.joined && m.wear && !titles[cell]) titles[cell] = "wear flagged on this row";
+			}
+		});
+		for (var c = 0; c < strip.children.length; c++) {
+			strip.children[c].className = cls[c] || "";
+			strip.children[c].title = titles[c] || "";
+		}
+	}
 }
 
 //Pad the way the firmware lays out a single frame: honour the persisted
@@ -221,6 +291,17 @@ function riffleTileTo(tile, wireChar, staggerIndex) {
 
 function renderMirror(text) {
 	if (mirrorTiles.length === 0) return;
+	if (wallWidths) {
+		//Follower digest wall (#294): the board's own SSE text overlays just
+		//the own row — the leader's digest rows own the rest. Riffle's
+		//per-tile glyph dedup absorbs the digest re-paint of the same text.
+		if (wallSource !== "digest" || wallSelfRow < 0) return;
+		var row = mirrorRowTiles[wallSelfRow];
+		if (!row) return;
+		var overlay = padForMirror(text, row.length, currentAlignment);
+		for (var i = 0; i < row.length; i++) riffleTileTo(row[i], overlay[i], i);
+		return;
+	}
 	var frame = padForMirror(text, mirrorTiles.length, currentAlignment);
 	if (frame === mirrorShown) return;
 	mirrorShown = frame;
@@ -236,13 +317,63 @@ function renderWall(rows) {
 	if (!wallWidths) return;
 	var frame = rows.join("\n");
 	if (frame === mirrorShown) return;
-	mirrorShown = frame;
+	if (wallSource !== "digest") mirrorShown = frame;
 	for (var r = 0; r < mirrorRowTiles.length; r++) {
 		var text = String(rows[r] || "").toUpperCase();
 		for (var i = 0; i < mirrorRowTiles[r].length; i++) {
 			riffleTileTo(mirrorRowTiles[r][i], i < text.length ? text[i] : " ", i);
 		}
 	}
+}
+
+//Follower pane of glass (#294): mirror the leader's ping-piggybacked
+//digest — wall rows, per-row health, member pills — from THIS board's page.
+//Rides the 5 s /settings poll; riffle's per-tile dedup absorbs repaints.
+function wallWidthsFromMembers(members) {
+	//Digest content is only as trustworthy as the LAN — clamp the geometry
+	//(8 rows / 255 units mirror the firmware's own table limits) so a
+	//hostile value can never build a runaway wall and hang this tab.
+	var widths = [];
+	members.forEach(function(m) {
+		var row = Number(m.row), extent = Number(m.col) + Number(m.width);
+		if (!(row >= 0 && row < 8) || !(extent >= 1 && extent <= 255)) return;
+		if (!(widths[row] >= extent)) widths[row] = extent;
+	});
+	for (var r = 0; r < widths.length; r++) widths[r] = widths[r] || 0;
+	return widths;
+}
+
+function pollClusterDigest(s) {
+	fetch("/cluster/digest", { cache: "no-store" })
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(d) {
+			var digest = d.digest || {};
+			var st = digest.status || {};
+			var members = st.members || [];
+			if (members.length === 0 || !digest.rows) return;
+			window.lastDigestLeaderHost = (digest.leader || {}).host || s.clusterLeaderHost || "";
+			var widths = wallWidthsFromMembers(members);
+			if (widths.length === 0) return;
+			var selfRow = Number(s.clusterRow);
+			if (!wallWidths || wallSource !== "digest" ||
+				wallWidths.join() !== widths.join() || wallSelfRow !== selfRow) {
+				buildWall(widths, selfRow);
+				wallSource = "digest";
+				refreshLiveStatus();
+			}
+			renderWall(digest.rows);
+			updateWallHealth(members);
+			renderFollowerPills(members);
+			//Stale digest (spec): a silent leader freezes this mirror — grey
+			//it and say how old the picture is instead of looking live.
+			var stale = Number(d.ageMs) > 30000;
+			document.getElementById("mirror").classList.toggle("stale", stale);
+			if (stale) {
+				setBoardStatus("● CLUSTER · last seen " +
+					Math.round(Number(d.ageMs) / 1000) + "s ago", true);
+			}
+		})
+		.catch(function() {});
 }
 
 function setBoardStatus(text, offline) {
@@ -265,7 +396,14 @@ function applySettings(s) {
 
 	//Collapse fallback (#277): if the SSE stream died and missed the
 	//uncluster transition, the poll is the authority — tear the wall down.
-	if (wallWidths && !s.clusterLeading) buildMirror(unitCount);
+	//Each wall source has its own collapse rule (#294): the SSE wall dies
+	//with leadership, the digest wall with the follower membership.
+	var followerClustered = !!s.clusterState && s.clusterState !== "standalone";
+	if (wallWidths && wallSource !== "digest" && !s.clusterLeading) buildMirror(unitCount);
+	if (wallWidths && wallSource === "digest" && !followerClustered) buildMirror(unitCount);
+	//Follower pane of glass (#294): while clustered, mirror the leader's
+	//digest — the whole wall on THIS board's page, 5 s cadence.
+	if (followerClustered && !s.clusterLeading) pollClusterDigest(s);
 	if (!wallWidths) {
 		if (mirrorTiles.length !== unitCount) buildMirror(unitCount);
 		renderMirror(s.lastWrittenText || "");
@@ -346,6 +484,18 @@ function updateClusterBanner(s) {
 			link.textContent = "open leader";
 			el.appendChild(link);
 		}
+		//#295: a follower that has written the leader off can take over —
+		//it holds the member table from the ping digest.
+		if (s.clusterState === "local-fallback") {
+			el.appendChild(document.createTextNode(" · "));
+			var promote = document.createElement("button");
+			promote.type = "button";
+			promote.className = "btn";
+			promote.id = "buttonClusterPromote";
+			promote.textContent = "Promote this board to leader…";
+			promote.addEventListener("click", promoteCluster);
+			el.appendChild(promote);
+		}
 	}
 	["inputText", "buttonSend", "selectDuration"].forEach(function(id) {
 		var control = document.getElementById(id);
@@ -354,6 +504,28 @@ function updateClusterBanner(s) {
 	document.querySelectorAll("#segMode button").forEach(function(b) {
 		b.disabled = clustered;
 	});
+}
+
+//#295 one-click takeover: the firmware validates (local-fallback + held
+//digest) and stages the transformed member table; the old leader demotes
+//itself via the sticky-leadership join 409 when it returns.
+function promoteCluster() {
+	if (!confirm("Take over as the wall\u2019s leader?\n\nThis board starts driving every member; the old leader joins as a plain member when it comes back.")) return;
+	var button = document.getElementById("buttonClusterPromote");
+	if (button) button.disabled = true;
+	fetch("/cluster/promote", { method: "POST" })
+		.then(function(r) {
+			return r.json().then(function(j) { return { ok: r.ok, message: j.message }; });
+		})
+		.then(function(res) {
+			alert(res.message || (res.ok ? "Promoted." : "Promote failed."));
+			if (res.ok) location.reload();
+			else if (button) button.disabled = false;
+		})
+		.catch(function() {
+			alert("Promote failed \u2014 board unreachable.");
+			if (button) button.disabled = false;
+		});
 }
 
 function loadPage() {
@@ -421,12 +593,17 @@ function initDisplayEvents() {
 			if (d.rows && d.rows.length) {
 				var widths = d.rows.map(function(row) { return String(row).length; });
 				var selfRow = d.selfRow || 0;
-				if (!wallWidths || wallWidths.join() !== widths.join() || wallSelfRow !== selfRow) {
+				if (!wallWidths || wallSource !== "sse" ||
+					wallWidths.join() !== widths.join() || wallSelfRow !== selfRow) {
 					buildWall(widths, selfRow);
+					wallSource = "sse";
 				}
 				renderWall(d.rows);
 			} else {
-				if (wallWidths) {
+				//Rows only ride the stream while this board LEADS — a
+				//follower's own-text events must not collapse its digest
+				//wall (#294); renderMirror overlays just the own row there.
+				if (wallWidths && wallSource === "sse") {
 					//Cluster disabled — collapse to the single-row mirror.
 					buildMirror(unitCount || 0);
 					refreshLiveStatus();
@@ -479,11 +656,11 @@ function initTabs() {
 //backend answers "ok" / "ok-reboot" / 400 instead of redirecting. Only the
 //posted fields are applied server-side (provided-gating), so each card can
 //save independently.
-function postSettingsFields(fields, callback) {
+function postSettingsFields(fields, callback, base) {
 	var body = new URLSearchParams();
 	Object.keys(fields).forEach(function(key) { body.append(key, fields[key]); });
 	body.append("ajax", "1");
-	fetch("/", { method: "POST", body: body })
+	fetch((base || "") + "/", { method: "POST", body: body })
 		.then(function(response) {
 			return response.text().then(function(text) {
 				callback(response.ok, text.trim());
@@ -2010,17 +2187,17 @@ function setMaintenanceBusy(busy) {
 
 //callback(ok, reason): ok=true means the op EXECUTED successfully (wire ACK
 //+ postcondition for address ops), not merely that it queued.
-function postCalibrationAwait(path, params, callback) {
+function postCalibrationAwait(path, params, callback, base) {
 	var query = Object.keys(params).map(function(k) {
 		return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
 	}).join("&");
 	setMaintenanceBusy(true);
-	fetch(path + (query ? "?" + query : ""), { method: "POST" })
+	fetch((base || "") + path + (query ? "?" + query : ""), { method: "POST" })
 		.then(function(r) {
 			if (!r.ok) return r.text().then(function(t) { throw new Error(t || ("HTTP " + r.status)); });
 			return r.json();
 		})
-		.then(function(data) { pollOpResult(data.seq, 30, callback); })
+		.then(function(data) { pollOpResult(data.seq, 30, callback, base); })
 		.catch(function(e) {
 			setMaintenanceBusy(false);
 			callback(false, e && e.message ? e.message : "request failed");
@@ -2029,12 +2206,12 @@ function postCalibrationAwait(path, params, callback) {
 
 //Address ops settle ~3 s + reprobe before their result lands; 30 × 500 ms
 //also survives a queued show frame ahead of the op.
-function pollOpResult(seq, remaining, callback) {
-	fetch("/unit/op-result?seq=" + seq, { cache: "no-store" })
+function pollOpResult(seq, remaining, callback, base) {
+	fetch((base || "") + "/unit/op-result?seq=" + seq, { cache: "no-store" })
 		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
 		.then(function(res) {
 			if (res.state === "pending" && remaining > 0) {
-				setTimeout(function() { pollOpResult(seq, remaining - 1, callback); }, 500);
+				setTimeout(function() { pollOpResult(seq, remaining - 1, callback, base); }, 500);
 				return;
 			}
 			setMaintenanceBusy(false);
@@ -2047,7 +2224,7 @@ function pollOpResult(seq, remaining, callback) {
 		})
 		.catch(function() {
 			if (remaining > 0) {
-				setTimeout(function() { pollOpResult(seq, remaining - 1, callback); }, 500);
+				setTimeout(function() { pollOpResult(seq, remaining - 1, callback, base); }, 500);
 				return;
 			}
 			setMaintenanceBusy(false);
@@ -2131,18 +2308,17 @@ var clusterStatusTimer = null;
 var clusterRolloutSeen = false;
 
 function initClusterCard() {
+	var tabActive = false;
 	document.addEventListener("sf-tabchange", function(event) {
-		var active = event.detail === "settings";
-		if (active && !clusterStatusTimer) {
-			loadClusterStatus();
-			clusterStatusTimer = setInterval(function() {
-				if (!document.hidden) loadClusterStatus();
-			}, 5000);
-		} else if (!active && clusterStatusTimer) {
-			clearInterval(clusterStatusTimer);
-			clusterStatusTimer = null;
-		}
+		tabActive = event.detail === "settings";
+		if (tabActive) loadClusterStatus();
 	});
+	//One steady 5 s timer: the settings tab needs pills/rollout, and the
+	//home tab's wall needs per-row health (#294) while this board leads.
+	clusterStatusTimer = setInterval(function() {
+		if (document.hidden) return;
+		if (tabActive || (wallWidths && wallSource === "sse")) loadClusterStatus();
+	}, 5000);
 }
 
 function setClusterPill(text, kind) {
@@ -2190,6 +2366,9 @@ function clusterStateLabel(m) {
 }
 
 function updateClusterFromStatus(st) {
+	//Wall row strips (#294) — the leader's own SSE wall colors its remote
+	//rows from the same member health the pills use.
+	if (wallSource === "sse") updateWallHealth(st.members || []);
 	var followerVisible = !document.getElementById("clusterFollowerView").classList.contains("hidden");
 	if (!followerVisible) {
 		if (st.enabled) {
@@ -2296,6 +2475,15 @@ function renderClusterMembers() {
 		tr.appendChild(revTd);
 
 		var removeTd = document.createElement("td");
+		var manageButton = document.createElement("button");
+		manageButton.type = "button";
+		manageButton.className = "btn";
+		manageButton.textContent = "⚙";
+		manageButton.title = "Health + maintenance for this board (#294)";
+		manageButton.addEventListener("click", function() {
+			openMemberPanel(member.host, member.host === "");
+		});
+		removeTd.appendChild(manageButton);
 		var removeButton = document.createElement("button");
 		removeButton.type = "button";
 		removeButton.className = "btn";
@@ -2309,6 +2497,216 @@ function renderClusterMembers() {
 		tr.appendChild(removeTd);
 
 		body.appendChild(tr);
+	});
+}
+
+//Member pills on the follower card (#294): the digest carries the same
+//status shape the leader's card reads, so any pane shows the whole wall's
+//members — and opens the same management panel.
+function renderFollowerPills(members) {
+	var box = document.getElementById("clusterFollowerPills");
+	if (!box) return;
+	removeAllChildren(box);
+	members.forEach(function(m) {
+		var pill = document.createElement("button");
+		pill.type = "button";
+		var label = clusterStateLabel(m);
+		pill.className = "pill " + label.kind + " member-pill";
+		//host comes off the LAN wire — text nodes only.
+		pill.textContent = "row " + (Number(m.row) + 1) + " · " +
+			(m.host === "" ? "leader" : m.host) + " · " + label.text;
+		pill.addEventListener("click", function() {
+			//The digest's empty host = the LEADER's own row — reach it via
+			//its host, not ours.
+			openMemberPanel(m.host === "" ? (window.lastDigestLeaderHost || "") : m.host, false);
+		});
+		box.appendChild(pill);
+	});
+}
+
+//Per-member management panel (#294 rung 3): the browser fans out STRAIGHT
+//to the member (CORS-gated on its side; the leader never proxies). Wire
+//strings render as text nodes only. A member on pre-#294 firmware sends no
+//CORS header — the fetch fails and the panel degrades to a plain link.
+function openMemberPanel(host, isSelf) {
+	var panel = document.getElementById("clusterMemberPanel");
+	if (!panel) return;
+	//Hosts originate on the LAN wire (digest / status) — the fetch target
+	//gets the same hostname[:port] allowlist as every visible link.
+	if (host !== "" && !/^[A-Za-z0-9.\-]+(:\d+)?$/.test(String(host))) return;
+	removeAllChildren(panel);
+	panel.classList.remove("hidden");
+	var base = isSelf || host === "" ? "" : "http://" + host;
+
+	var head = document.createElement("div");
+	head.className = "row";
+	var title = document.createElement("h3");
+	title.textContent = isSelf || host === "" ? "This board" : host;
+	head.appendChild(title);
+	var grow = document.createElement("span");
+	grow.className = "grow";
+	head.appendChild(grow);
+	if (base && /^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {
+		var full = document.createElement("a");
+		full.href = "http://" + host + "/";
+		full.target = "_blank";
+		full.rel = "noopener";
+		full.textContent = "open full UI";
+		head.appendChild(full);
+	}
+	var close = document.createElement("button");
+	close.type = "button";
+	close.className = "btn";
+	close.textContent = "✕";
+	close.addEventListener("click", function() {
+		panel.classList.add("hidden");
+		removeAllChildren(panel);
+	});
+	head.appendChild(close);
+	panel.appendChild(head);
+
+	var note = document.createElement("p");
+	note.className = "note";
+	note.textContent = "Loading " + (base ? host : "this board") + "…";
+	panel.appendChild(note);
+
+	Promise.all([
+		fetch(base + "/settings", { cache: "no-store" }).then(function(r) { if (!r.ok) throw new Error(); return r.json(); }),
+		fetch(base + "/units/health", { cache: "no-store" }).then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+	]).then(function(results) {
+		note.remove();
+		renderMemberPanelBody(panel, base, host, results[0], results[1]);
+	}).catch(function() {
+		note.textContent = "Unreachable from this browser — the board may be offline or on pre-#294 firmware without cross-pane management. ";
+		if (base && /^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {
+			var link = document.createElement("a");
+			link.href = "http://" + host + "/";
+			link.textContent = "Open its own page";
+			note.appendChild(link);
+		}
+	});
+}
+
+function memberPanelStatus(panel, message, kind) {
+	var el = panel.querySelector(".member-panel-status");
+	el.className = "status member-panel-status " + (kind || "");
+	el.classList.remove("hidden");
+	el.textContent = message;
+}
+
+function renderMemberPanelBody(panel, base, host, settings, health) {
+	//Identity + firmware line.
+	var meta = document.createElement("p");
+	meta.className = "note";
+	meta.textContent = (settings.effectiveDeviceName || settings.deviceName || host) +
+		" · fw " + (settings.version || "?") +
+		" · " + (health.units || []).filter(function(u) { return u.st === 1; }).length +
+		"/" + (health.width || 0) + " units responding" +
+		(health.faulty > 0 ? " · " + health.faulty + " flagged" : "");
+	panel.appendChild(meta);
+
+	//Device name (the one genuinely per-board setting the wall UI owns).
+	var nameRow = document.createElement("div");
+	nameRow.className = "row";
+	var nameInput = document.createElement("input");
+	nameInput.type = "text";
+	nameInput.maxLength = 32;
+	nameInput.value = settings.deviceName || "";
+	nameInput.placeholder = "device name";
+	nameRow.appendChild(nameInput);
+	var nameSave = document.createElement("button");
+	nameSave.type = "button";
+	nameSave.className = "btn";
+	nameSave.textContent = "Save name";
+	nameSave.addEventListener("click", function() {
+		postSettingsFields({ deviceName: nameInput.value }, function(ok, text) {
+			memberPanelStatus(panel, ok ? "✔ Name saved" + (text === "ok-reboot" ? " — takes effect after its next reboot" : "") : "✘ Save failed", ok ? "success" : "error");
+		}, base);
+	});
+	nameRow.appendChild(nameSave);
+	panel.appendChild(nameRow);
+
+	//Unit strip — same color language as the local board strip; click a
+	//unit for its remote maintenance ops.
+	var strip = document.createElement("div");
+	strip.className = "health member-strip";
+	var actions = document.createElement("div");
+	actions.className = "row member-unit-actions hidden";
+	(health.units || []).forEach(function(u, i) {
+		var cell = document.createElement("span");
+		if (!u || u.st !== 1) cell.className = "bad";
+		else if (unitRowIsFaulty(u) || u.fw === 1 || u.mm) cell.className = "warn";
+		cell.title = "unit " + (i + 1) + (u && u.st === 1 ? "" : " — silent");
+		if (u && u.st === 1) {
+			cell.style.cursor = "pointer";
+			cell.addEventListener("click", function() {
+				renderMemberUnitActions(panel, actions, base, u);
+			});
+		}
+		strip.appendChild(cell);
+	});
+	panel.appendChild(strip);
+	panel.appendChild(actions);
+
+	//Board-level ops.
+	var ops = document.createElement("div");
+	ops.className = "row";
+	function opButton(text, handler, danger) {
+		var b = document.createElement("button");
+		b.type = "button";
+		b.className = "btn" + (danger ? " danger" : "");
+		b.textContent = text;
+		b.addEventListener("click", handler);
+		ops.appendChild(b);
+	}
+	opButton("Re-probe units", function() {
+		fetch(base + "/units/health/refresh", { method: "POST" })
+			.then(function(r) { memberPanelStatus(panel, r.ok ? "Probing — reopen the panel in a few seconds for fresh facts." : "✘ Probe refused (busy?)", r.ok ? "success" : "error"); })
+			.catch(function() { memberPanelStatus(panel, "✘ Probe request failed", "error"); });
+	});
+	opButton("Reboot board…", function() {
+		if (!confirm("Reboot " + (host || "this board") + "? Its row goes dark for a few seconds; the leader re-joins it automatically.")) return;
+		fetch(base + "/reboot", { method: "POST" })
+			.then(function(r) { memberPanelStatus(panel, r.ok ? "Rebooting…" : "✘ Reboot refused", r.ok ? "success" : "error"); })
+			.catch(function() { memberPanelStatus(panel, "Rebooting…", "success"); });
+	}, true);
+	panel.appendChild(ops);
+
+	var status = document.createElement("div");
+	status.className = "status member-panel-status hidden";
+	panel.appendChild(status);
+}
+
+function renderMemberUnitActions(panel, actions, base, u) {
+	removeAllChildren(actions);
+	actions.classList.remove("hidden");
+	var label = document.createElement("span");
+	label.className = "calibration-label";
+	label.textContent = "Unit " + formatHexAddress(u.a) + (u.rev ? " (fw " + u.rev + ")" : "");
+	actions.appendChild(label);
+	function actButton(text, handler) {
+		var b = document.createElement("button");
+		b.type = "button";
+		b.className = "btn";
+		b.textContent = text;
+		b.addEventListener("click", handler);
+		actions.appendChild(b);
+	}
+	actButton("Identify", function() {
+		postCalibration(base + "/unit/identify", { address: u.a }, function(ok) {
+			memberPanelStatus(panel, ok ? "Unit " + formatHexAddress(u.a) + " is blinking its LED." : "✘ Identify failed", ok ? "success" : "error");
+		});
+	});
+	actButton("Home", function() {
+		postCalibration(base + "/unit/home", { address: u.a }, function(ok) {
+			memberPanelStatus(panel, ok ? "Homing unit " + formatHexAddress(u.a) + "." : "✘ Home failed", ok ? "success" : "error");
+		});
+	});
+	actButton("Reset odo…", function() {
+		if (!confirm("Reset the revolution odometer of unit " + formatHexAddress(u.a) + "? Do this only after replacing its drum/motor.")) return;
+		postCalibrationAwait("/unit/reset-odometer", { address: u.a }, function(ok, reason) {
+			memberPanelStatus(panel, ok ? "✔ Odometer reset." : "✘ " + reason, ok ? "success" : "error");
+		}, base);
 	});
 }
 

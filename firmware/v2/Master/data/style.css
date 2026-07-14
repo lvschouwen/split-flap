@@ -316,3 +316,18 @@ summary {
 	.btn { padding: 10px 12px; }
 	.board { padding: 12px 10px 10px; }
 }
+
+/* Single pane of glass (#294): remote wall rows carry their own health
+   strip (same color language as the local strip); member pills open the
+   cross-pane management panel. */
+.mirror.wall .rowhealth { margin-top: 0; justify-content: flex-start; }
+.member-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.member-pill { cursor: pointer; border: 0; font: inherit; }
+.member-panel { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+.member-panel h3 { margin: 0; font-size: 15px; }
+.member-panel .health { justify-content: flex-start; margin-top: 8px; }
+.member-panel .health span { cursor: default; }
+.member-unit-actions { margin-top: 8px; }
+/* Stale follower digest (#294): the leader went silent — the mirrored wall
+   greys out instead of impersonating live state. */
+.mirror.stale { opacity: .45; filter: grayscale(.8); transition: opacity .4s; }

@@ -31,7 +31,9 @@ POST /drill/ota-busy / /drill/ota-free force the 409 transient path.
 import argparse
 import hashlib
 import json
+import math
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -47,6 +49,11 @@ class FollowerState:
         self.width = width
         self.rollback = rollback      # keep the old rev after a "flash"
         self.reboot_secs = reboot_secs
+        # #294 health drills: the advertised fault bitmap (bit i = unit i).
+        self.fault_mask = 0
+        self.wear = False
+        # #295 sticky leadership: the firmware's 25 s contact-fresh window.
+        self.contact_fresh_secs = 25.0
         self.lock = threading.Lock()
         # Rollout drill state — survives leave() like real flash would.
         self.rebooting = False
@@ -65,9 +72,32 @@ class FollowerState:
         self.segment = ""
         self.renders = []  # every APPLIED render, for assertions/bench eyes
         self.muted = False
+        self.last_contact = 0.0
+        # #294 rung 2: the leader's ping-piggybacked digest.
+        self.digest_raw = ""
+        self.digest_received = 0.0
+        self.self_index = -1
+
+    def fault_mask_hex(self):
+        return "%0*X" % (max(1, math.ceil(self.width / 4)), self.fault_mask)
+
+    def health_keys(self):
+        """The #294 additive health keys both the join and ping replies carry."""
+        return {"detected": self.width, "faulty": bin(self.fault_mask).count("1"),
+                "faultMask": self.fault_mask_hex(), "wear": self.wear}
+
+    def join_conflict(self, leader_host):
+        """#295 sticky leadership — the python twin of
+        clusterFollowerJoinConflicts(): reject a DIFFERENT leader only while
+        the current one is demonstrably alive."""
+        with self.lock:
+            if not self.clustered or leader_host == self.leader_host:
+                return False
+            return time.monotonic() - self.last_contact < self.contact_fresh_secs
 
     def join(self, leader_name, leader_host, row, epoch):
         with self.lock:
+            self.last_contact = time.monotonic()
             self.clustered = True
             self.leader_name = leader_name
             self.leader_host = leader_host
@@ -88,15 +118,23 @@ class FollowerState:
             self.epoch = epoch
             self.last_seq = seq
             self.segment = text
+            self.last_contact = time.monotonic()
             self.renders.append(
                 {"epoch": epoch, "seq": seq, "text": text, "speed": speed,
                  "commitAtMs": commit_at_ms}
             )
             return True, False
 
-    def ping(self):
+    def ping(self, digest="", you_index=-1):
         with self.lock:
-            return self.clustered
+            if not self.clustered:
+                return False
+            self.last_contact = time.monotonic()
+            if digest:
+                self.digest_raw = digest
+                self.digest_received = time.monotonic()
+                self.self_index = you_index
+            return True
 
     def leave(self):
         with self.lock:
@@ -177,6 +215,11 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
         if self.path == "/drill/ota-free":
             st.ota_busy = False
             return self._send(200, "ota free", "text/plain")
+        if self.path == "/drill/fault":
+            form = self._form()
+            st.fault_mask = int(form.get("mask", "0"), 16)
+            st.wear = form.get("wear", "0") in ("1", "true")
+            return self._send(200, "fault mask set", "text/plain")
         if st.muted or st.rebooting:
             # Dead-member / mid-reboot drill: hang until the leader's
             # timeout fires.
@@ -191,12 +234,20 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
             missing = [k for k in ("leaderHost", "row", "epoch") if k not in form]
             if missing:
                 return self._send(400, "Missing leaderHost/row/epoch", "text/plain")
+            if st.join_conflict(form["leaderHost"]):
+                # #295 sticky leadership: the current leader is alive — the
+                # joiner must demote on this marker.
+                return self._send(409, json.dumps(
+                    {"error": "other-leader", "leaderHost": st.leader_host,
+                     "leaderName": st.leader_name}))
             st.join(form.get("leaderName", form["leaderHost"]), form["leaderHost"],
                     int(form["row"]), int(form["epoch"]))
             if self.verbose:
                 print(f"[{st.name}] joined by {st.leader_name} as row {st.row}")
-            return self._send(200, json.dumps(
-                {"name": st.name, "rev": st.rev, "width": st.width, "protocol": 1}))
+            reply = {"name": st.name, "rev": st.rev, "width": st.width,
+                     "protocol": 1}
+            reply.update(st.health_keys())
+            return self._send(200, json.dumps(reply))
 
         if self.path == "/cluster/render":
             form = self._form()
@@ -213,10 +264,20 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
                 {"applied": applied, "seq": int(form["seq"])}))
 
         if self.path == "/cluster/ping":
-            if not st.ping():
+            form = self._form()
+            if not st.ping(form.get("digest", ""),
+                           int(form.get("you", "-1"))):
                 return self._send(409, json.dumps({"error": "not clustered"}))
-            return self._send(200, json.dumps(
-                {"state": "clustered", "epoch": st.epoch or 0, "seq": st.last_seq}))
+            reply = {"state": "clustered", "epoch": st.epoch or 0,
+                     "seq": st.last_seq, "width": st.width,
+                     "rev": st.rev}
+            reply.update(st.health_keys())
+            # Key order matches the firmware reply (state/epoch/seq, then
+            # width/detected/faulty/faultMask/wear/rev).
+            ordered = {k: reply[k] for k in
+                       ("state", "epoch", "seq", "width", "detected",
+                        "faulty", "faultMask", "wear", "rev")}
+            return self._send(200, json.dumps(ordered))
 
         if self.path == "/cluster/leave":
             st.leave()
@@ -281,6 +342,14 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
         if (st.muted or st.rebooting) and not self.path.startswith("/drill/"):
             threading.Event().wait(10)
             return
+        if self.path == "/cluster/digest":
+            with st.lock:
+                digest, received = st.digest_raw, st.digest_received
+            if not digest:
+                return self._send(404, json.dumps({"error": "no digest"}))
+            age_ms = int((time.monotonic() - received) * 1000)
+            return self._send(
+                200, '{"ageMs":%d,"digest":%s}' % (age_ms, digest))
         if self.path == "/cluster/health":
             return self._send(200, json.dumps({
                 "state": "clustered" if st.clustered else "standalone",

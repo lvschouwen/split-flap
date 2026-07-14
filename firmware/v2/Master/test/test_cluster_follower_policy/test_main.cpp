@@ -257,6 +257,47 @@ static void test_phase_names_for_health_json() {
       clusterFollowerPhaseName(ClusterFollowerPhase::LocalFallback));
 }
 
+// --- join conflict (#295 sticky leadership) ---------------------------------------
+
+static void test_join_conflict_rejects_foreign_leader_while_clustered_fresh() {
+  ClusterFollowerState st = makeClustered(1000, 42);
+  TEST_ASSERT_TRUE(clusterFollowerJoinConflicts(st, 2000, false));
+}
+
+static void test_join_conflict_allows_same_leader_always() {
+  ClusterFollowerState st = makeClustered(1000, 42);
+  TEST_ASSERT_FALSE(clusterFollowerJoinConflicts(st, 2000, true));
+}
+
+static void test_join_conflict_allows_takeover_once_contact_is_stale() {
+  // The current leader has been silent past the contact-fresh window — a
+  // promoted successor must be able to claim the follower.
+  ClusterFollowerState st = makeClustered(1000, 42);
+  TEST_ASSERT_FALSE(clusterFollowerJoinConflicts(
+      st, 1000 + CLUSTER_CONTACT_FRESH_MS, false));
+}
+
+static void test_join_conflict_never_fires_outside_clustered() {
+  ClusterFollowerState st;
+  clusterFollowerBoot(st, 1000, true);  // Grace
+  TEST_ASSERT_FALSE(clusterFollowerJoinConflicts(st, 1500, false));
+  clusterFollowerLeave(st);  // Standalone
+  TEST_ASSERT_FALSE(clusterFollowerJoinConflicts(st, 1500, false));
+}
+
+// --- promote gate (#295) -----------------------------------------------------------
+
+static void test_promote_allowed_only_in_local_fallback() {
+  ClusterFollowerState st = makeClustered(1000, 42);
+  TEST_ASSERT_FALSE(clusterFollowerCanPromote(st));
+  clusterFollowerTick(st, 1000 + CLUSTER_CONTACT_FRESH_MS);  // Grace
+  TEST_ASSERT_FALSE(clusterFollowerCanPromote(st));
+  clusterFollowerTick(st, 1000 + CLUSTER_GRACE_MS);  // LocalFallback
+  TEST_ASSERT_TRUE(clusterFollowerCanPromote(st));
+  clusterFollowerLeave(st);
+  TEST_ASSERT_FALSE(clusterFollowerCanPromote(st));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_boot_without_membership_is_standalone);
@@ -287,5 +328,10 @@ int main(int, char**) {
   RUN_TEST(test_render_delay_near_future_waits_exactly);
   RUN_TEST(test_render_delay_far_future_clamps);
   RUN_TEST(test_phase_names_for_health_json);
+  RUN_TEST(test_join_conflict_rejects_foreign_leader_while_clustered_fresh);
+  RUN_TEST(test_join_conflict_allows_same_leader_always);
+  RUN_TEST(test_join_conflict_allows_takeover_once_contact_is_stale);
+  RUN_TEST(test_join_conflict_never_fires_outside_clustered);
+  RUN_TEST(test_promote_allowed_only_in_local_fallback);
   return UNITY_END();
 }

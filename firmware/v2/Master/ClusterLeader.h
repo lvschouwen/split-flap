@@ -38,6 +38,14 @@ struct ClusterLeaderMemberStatus {
   int reportedWidth = 0; // join-handshake width fact
   bool updating = false;      // fleet rollout (#276) is converging this member
   bool updateBlocked = false; // rollout gave up (attempt cap) on this member
+  // Per-row unit health (#294): the follower's last ping-reply health, or
+  // the local snapshot for the self row. healthValid false = never
+  // reported (old firmware) — the UI hides the strip, never reads zeros.
+  bool healthValid = false;
+  int faulty = 0;
+  int detected = 0;
+  String faultMask;  // hex bitmap, bit i = unit at position i faulty
+  bool wear = false;
 };
 
 struct ClusterLeaderStatus {
@@ -106,3 +114,8 @@ struct ClusterConfigVerdict {
   String message;
 };
 ClusterConfigVerdict clusterLeaderStageConfig(const String& membersSpec);
+
+// The stage's validation alone (pure, no staging): #295 promote
+// pre-validates the transformed table BEFORE leaving the dead membership,
+// so the post-leave stage is deterministic and cannot strand the board.
+ClusterConfigVerdict clusterLeaderValidateSpec(const String& membersSpec);
