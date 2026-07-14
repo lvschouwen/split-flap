@@ -107,12 +107,23 @@ def test_new_epoch_restarts_the_sequence_space(follower):
     assert state.segment == "REBOOTED LEADER"
 
 
-def test_rejoin_resets_seq_tracking(follower):
+def test_same_epoch_rejoin_preserves_seq_tracking(follower):
     base, _ = follower
     join(base, epoch=7)
     render(base, 7, 50, "BEFORE")
-    join(base, epoch=7)  # leader re-joins after a degraded spell
-    status, body = render(base, 7, 50, "RESENT")
+    join(base, epoch=7)  # leader re-joins after a degraded spell, no reboot
+    status, body = render(base, 7, 50, "STALE RETRY")
+    assert json.loads(body)["applied"] is False
+    status, body = render(base, 7, 51, "FRESH RESEND")
+    assert json.loads(body)["applied"] is True
+
+
+def test_new_epoch_join_resets_seq_tracking(follower):
+    base, _ = follower
+    join(base, epoch=7)
+    render(base, 7, 50, "BEFORE")
+    join(base, epoch=9)  # leader rebooted
+    status, body = render(base, 9, 1, "NEW EPOCH")
     assert json.loads(body)["applied"] is True
 
 

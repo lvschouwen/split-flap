@@ -174,6 +174,13 @@ inline bool clusterTableFromString(const String& stored,
 
     String host = entry.substring(0, p1);
     if (host.length() > CLUSTER_HOST_MAX_LEN) return false;
+    // Hosts become esp_http_client URLs — visible ASCII only (the same bar
+    // the follower holds its leaderHost to at the web boundary).
+    for (unsigned int c = 0; c < host.length(); c++) {
+      if ((unsigned char)host[c] <= 0x20 || (unsigned char)host[c] > 0x7E) {
+        return false;
+      }
+    }
     long row, col, width;
     if (!clusterParseFieldInt(entry.substring(p1 + 1, p2), 0, 255, row) ||
         !clusterParseFieldInt(entry.substring(p2 + 1, p3), 0, 255, col) ||

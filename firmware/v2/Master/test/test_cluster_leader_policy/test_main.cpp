@@ -154,6 +154,8 @@ static void test_malformed_entries_rejected() {
   TEST_ASSERT_FALSE(clusterTableFromString("a|x|0|16", t));        // non-numeric
   TEST_ASSERT_FALSE(clusterTableFromString("a|1|0|300", t));       // width > 255
   TEST_ASSERT_FALSE(clusterTableFromString("a|-1|0|16", t));       // negative
+  TEST_ASSERT_FALSE(clusterTableFromString("a b|1|0|16", t));      // space in host
+  TEST_ASSERT_FALSE(clusterTableFromString("a\tb|1|0|16", t));     // control char
 }
 
 static void test_too_many_entries_rejected() {

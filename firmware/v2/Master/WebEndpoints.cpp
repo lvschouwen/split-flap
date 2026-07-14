@@ -1463,7 +1463,10 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // Transient text (#219, v1 #165/#176): calibration patterns and
       // clock-mode messages show regardless of mode and revert via the
       // overlay dwell — nothing persists, a clock display stays a clock
-      // display. Ordering matters twice: after applySettingsPost so an
+      // display. On a cluster LEADER this stays deliberately local: the
+      // overlay shows on this master's own row only (launch scope is grid
+      // text + cluster clock), and clusterTask's self-row re-show restores
+      // the segment after the dwell. Ordering matters twice: after applySettingsPost so an
       // alignment/speed change riding the same POST applies to this show,
       // and the overlay arm (which drains behind the #130 cancel above)
       // keeps the transient alive when that same POST also switched mode.

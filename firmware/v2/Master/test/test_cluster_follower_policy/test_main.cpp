@@ -168,12 +168,25 @@ static void test_render_after_nvs_boot_applies_without_prior_epoch() {
   TEST_ASSERT_EQUAL(17, st.lastSeq);
 }
 
-static void test_rejoin_resets_seq_tracking() {
+static void test_same_epoch_rejoin_preserves_seq_tracking() {
+  // Leader re-joins after a degraded spell WITHOUT rebooting (same epoch):
+  // a delayed retry of an old render must still be rejected — the leader
+  // mints fresh, higher seqs, so its post-rejoin re-send applies anyway.
   ClusterFollowerState st = makeClustered(1000, 7);
   clusterFollowerAcceptRender(st, 2000, 7, 50);
-  clusterFollowerJoin(st, 3000, 7);  // leader re-joins after degraded
-  TEST_ASSERT_EQUAL(ClusterRenderVerdict::Apply,
+  clusterFollowerJoin(st, 3000, 7);
+  TEST_ASSERT_EQUAL(ClusterRenderVerdict::Duplicate,
                     clusterFollowerAcceptRender(st, 4000, 7, 50));
+  TEST_ASSERT_EQUAL(ClusterRenderVerdict::Apply,
+                    clusterFollowerAcceptRender(st, 5000, 7, 51));
+}
+
+static void test_new_epoch_join_resets_seq_tracking() {
+  ClusterFollowerState st = makeClustered(1000, 7);
+  clusterFollowerAcceptRender(st, 2000, 7, 50);
+  clusterFollowerJoin(st, 3000, 9);  // leader rebooted: fresh epoch
+  TEST_ASSERT_EQUAL(ClusterRenderVerdict::Apply,
+                    clusterFollowerAcceptRender(st, 4000, 9, 1));
 }
 
 static void test_leave_returns_to_standalone() {
@@ -264,7 +277,8 @@ int main(int, char**) {
   RUN_TEST(test_duplicate_still_feeds_the_grace_timer);
   RUN_TEST(test_new_epoch_any_seq_applies);
   RUN_TEST(test_render_after_nvs_boot_applies_without_prior_epoch);
-  RUN_TEST(test_rejoin_resets_seq_tracking);
+  RUN_TEST(test_same_epoch_rejoin_preserves_seq_tracking);
+  RUN_TEST(test_new_epoch_join_resets_seq_tracking);
   RUN_TEST(test_leave_returns_to_standalone);
   RUN_TEST(test_producer_gate_holds_in_every_phase_but_standalone);
   RUN_TEST(test_local_clock_forced_only_in_local_fallback);

@@ -54,8 +54,11 @@ class FollowerState:
             self.leader_name = leader_name
             self.leader_host = leader_host
             self.row = row
-            self.epoch = epoch
-            self.last_seq = 0  # the handshake re-sends the current segment
+            if self.epoch != epoch:
+                # Seq tracking resets only on a NEW epoch — a same-epoch
+                # rejoin must keep rejecting delayed retries of old renders.
+                self.epoch = epoch
+                self.last_seq = 0
 
     def accept_render(self, epoch, seq, text, speed, commit_at_ms):
         """Returns (applied, not_clustered) per ClusterFollowerPolicy."""

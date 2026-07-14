@@ -36,6 +36,9 @@ struct LeaderLock {
   LeaderLock& operator=(const LeaderLock&) = delete;
 };
 
+// Producer gate only — carries NO ordering for the mutex-guarded state
+// below (relaxed loads). Never read table/segments/runtimes off a bare
+// enabledAtomic check; always take LeaderLock.
 static std::atomic<bool> enabledAtomic{false};
 static String leaderDeviceName;          // set once in init, read-only after
 static SettingsStore* leaderStore = nullptr;  // NVS writes: clusterTask only
@@ -255,6 +258,9 @@ static void applyStagedConfig() {
     enabledAtomic.store(nextEnabled);
   }
 
+  // NVS write from clusterTask: safe — the NVS layer is internally
+  // mutex-protected, and the netTask-sole-flash-writer Hard rule governs
+  // the storage LittleFS partition, not the nvs partition.
   leaderStore->putString(CLUSTER_KEY_MEMBERS, nextEnabled ? spec : String(""));
   SerialPrintf("cluster: config applied — %s, %d member(s)\n",
                nextEnabled ? "leading" : "disabled", (int)next.count);
@@ -297,7 +303,7 @@ struct MemberWorkItem {
 // Builds the next round of outbound calls under the lock; the blocking
 // HTTP happens with the mutex RELEASED so submits/status reads never wait
 // on a slow follower.
-static int collectMemberWork(MemberWorkItem* items, const String& selfHost) {
+static int collectMemberWork(MemberWorkItem* items) {
   LeaderLock lock;
   int count = 0;
   uint32_t nowMs = millis();
@@ -313,13 +319,21 @@ static int collectMemberWork(MemberWorkItem* items, const String& selfHost) {
     String host(def.host);
     switch (action) {
       case ClusterLeaderAction::Join:
+        // Resolved only when a join is actually due — a per-tick
+        // WiFi.localIP().toString() would churn the heap ~10x/s for a
+        // value that only changes on DHCP renewal.
         item.url = "http://" + host + "/cluster/join";
         item.body = "leaderName=" + urlEncode(leaderDeviceName) +
-                    "&leaderHost=" + urlEncode(selfHost) +
+                    "&leaderHost=" + urlEncode(WiFi.localIP().toString()) +
                     "&row=" + String((int)def.row) +
                     "&epoch=" + String((unsigned long)epoch);
         break;
       case ClusterLeaderAction::Render:
+        // Seq is minted per POST attempt: an applied-but-timed-out render
+        // retries with a higher seq and re-applies IDENTICAL content (a
+        // visual no-op), while cross-ordered stale renders still lose the
+        // seq race. A stable per-content seq would save that no-op but
+        // couple retry state to content state for no wall-visible gain.
         item.url = "http://" + host + "/cluster/render";
         item.body = "epoch=" + String((unsigned long)epoch) +
                     "&seq=" + String((unsigned long)++seqCounter) +
@@ -397,10 +411,14 @@ void clusterLeaderTick() {
   serviceSelfRow();
 
   // Sequential fan-out (spec: a bad follower strands only itself; renders
-  // carry an absolute commitAt so ordering doesn't skew the flip).
+  // carry an absolute commitAt so ordering doesn't skew the flip). Known
+  // one-tick limit: a member dying exactly during a render fan-out burns
+  // its 1.5 s timeout before later members are reached, so THAT render's
+  // commitAt may already be past for them (they flip immediately, ~1 s
+  // early relative to the wall). Backoff keeps it from repeating; #278
+  // drills it on the bench.
   static MemberWorkItem items[CLUSTER_MAX_MEMBERS];
-  String selfHost = WiFi.localIP().toString();
-  int count = collectMemberWork(items, selfHost);
+  int count = collectMemberWork(items);
   for (int i = 0; i < count; i++) {
     String body;
     int status = clusterHttpRequest(items[i].url, items[i].body, body);

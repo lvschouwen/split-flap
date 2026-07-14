@@ -333,6 +333,10 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
         SerialPrintln("MQTT: notification dropped (clustered): " + text);
         break;
       }
+      // On a cluster LEADER the notification deliberately stays on this
+      // master's own row (launch scope: grid text + cluster clock);
+      // clusterTask's self-row re-show restores the segment after the
+      // dwell.
       WebContentSnapshot content = webDisplayContentSnapshot();
       DisplayCommand cmd =
           makeShowTextCommand(text, content.alignment, content.flapSpeed);

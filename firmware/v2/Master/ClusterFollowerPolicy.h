@@ -63,14 +63,18 @@ inline void clusterFollowerBoot(ClusterFollowerState& st, uint32_t nowMs,
   }
 }
 
-// Accepted POST /cluster/join: adopt the leader's epoch, reset seq
-// tracking (the handshake ends with a re-send of the current segment).
+// Accepted POST /cluster/join. Seq tracking resets ONLY on a new epoch: a
+// same-epoch re-join (leader recovering a degraded member, no reboot) must
+// keep rejecting delayed retries of old renders — the leader mints fresh,
+// higher seqs, so its post-rejoin re-send still applies.
 inline void clusterFollowerJoin(ClusterFollowerState& st, uint32_t nowMs,
                                 uint32_t epoch) {
   st.phase = ClusterFollowerPhase::Clustered;
-  st.epoch = epoch;
-  st.haveEpoch = true;
-  st.lastSeq = 0;
+  if (!st.haveEpoch || epoch != st.epoch) {
+    st.epoch = epoch;
+    st.haveEpoch = true;
+    st.lastSeq = 0;
+  }
   st.lastContactMs = nowMs;
 }
 
