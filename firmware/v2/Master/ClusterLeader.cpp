@@ -4,8 +4,11 @@
 
 #include "ClusterLeader.h"
 
+#include <MD5Builder.h>
 #include <WiFi.h>
 #include <esp_http_client.h>
+#include <esp_image_format.h>
+#include <esp_ota_ops.h>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -13,8 +16,10 @@
 
 #include <atomic>
 
+#include "BuildVersion.h"  // GIT_REV — the cluster's firmware version (#276)
 #include "ClockPolicy.h"  // clockIsTimeSynced
 #include "ClusterFollowerPolicy.h"  // clusterRenderDelayMs (shared math)
+#include "ClusterRolloutPolicy.h"
 #include "DisplayCommand.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"  // mqttNotificationActive — self-row re-show gate
@@ -60,6 +65,13 @@ static uint32_t selfDueMs = 0;
 // Config swap staging (validated at the web boundary, applied here).
 static bool configPending = false;
 static String configSpec;
+// Fleet rollout (#276): sequencing state guarded by leaderMutex (status
+// reads it); the live upload session below is clusterTask-private.
+static ClusterRolloutState rollout;
+
+// Rollout upload session teardown (#276) — defined in the rollout section
+// below; applyStagedConfig needs it before that.
+static void rolloutCloseUpload();
 
 static uint64_t epochNowMs(bool& synced) {
   struct timeval tv;
@@ -231,6 +243,10 @@ static void applyStagedConfig() {
     return;
   }
 
+  // A config swap invalidates any in-flight rollout (member indexes move);
+  // same task as the upload pump, so the teardown is race-free (#276).
+  rolloutCloseUpload();
+
   // Old remote hosts that are not in the new table get a leave.
   String leaveHosts[CLUSTER_MAX_MEMBERS];
   int leaveCount = 0;
@@ -252,6 +268,7 @@ static void applyStagedConfig() {
       runtimes[i] = ClusterMemberRuntime{};
       segments[i] = "";
     }
+    clusterRolloutReset(rollout);
     lastContentKey = "";  // force a fresh submit → renders for everyone
     selfPending = false;
     selfText = "";
@@ -310,6 +327,13 @@ static int collectMemberWork(MemberWorkItem* items) {
   for (int i = 0; i < table.count; i++) {
     const ClusterMemberDef& def = table.members[i];
     if (clusterMemberIsSelf(def)) continue;
+    // While a rollout upload streams to a member, its flash writes hog the
+    // follower's async_tcp task — regular contact would time out and read
+    // as failures. Skip it; the upload round-trip IS the contact (#276).
+    if (rollout.phase == ClusterRolloutPhase::Uploading &&
+        rollout.memberIndex == i) {
+      continue;
+    }
     ClusterLeaderAction action = clusterMemberNextAction(runtimes[i], nowMs);
     if (action == ClusterLeaderAction::None) continue;
 
@@ -403,6 +427,235 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
   }
 }
 
+// --- fleet firmware rollout (#276) ------------------------------------------------
+// Sequencing decisions are pure (ClusterRolloutPolicy.h); this section owns
+// the flash reads and the multipart streaming upload to the follower's
+// EXISTING POST /firmware/master?md5=. Chunked across ticks on purpose:
+// renders/pings to OTHER members keep flowing between chunks. The leader
+// rebooting mid-stream (its own OTA) just kills the upload — the follower's
+// Update session errors out harmlessly and the next boot re-converges.
+
+// clusterTask-private upload session — no lock, only clusterTask touches.
+static esp_http_client_handle_t rolloutClient = nullptr;
+static uint32_t rolloutOffset = 0;
+// Running-image facts, computed once per boot on first use (the running
+// slot cannot change under us). latch a hard failure so a broken read
+// doesn't re-verify 2.6 MB every tick.
+static const esp_partition_t* rolloutPart = nullptr;
+static uint32_t rolloutImageLen = 0;
+static String rolloutMd5;
+static bool rolloutFactsFailed = false;
+// Shared flash-read buffer (facts pass + upload pump never overlap).
+static uint8_t rolloutBuf[4096];
+
+static bool rolloutEnsureImageFacts() {
+  if (rolloutImageLen > 0) return true;
+  if (rolloutFactsFailed) return false;
+
+  uint32_t t0 = millis();
+  const esp_partition_t* part = esp_ota_get_running_partition();
+  esp_partition_pos_t pos = {};
+  esp_image_metadata_t meta = {};
+  if (part != nullptr) {
+    pos.offset = part->address;
+    pos.size = part->size;
+  }
+  // Full silent verify: never ship an image we can't prove is intact —
+  // exact image_len (header + segments + checksum + appended hash) is a
+  // byproduct. ~1-2 s once per boot; renders stall that once.
+  if (part == nullptr ||
+      esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &pos, &meta) != ESP_OK) {
+    SerialPrintln(F("cluster: running image failed verify — rollout disabled"));
+    rolloutFactsFailed = true;
+    return false;
+  }
+
+  MD5Builder md5;
+  md5.begin();
+  for (uint32_t off = 0; off < meta.image_len;) {
+    uint32_t take = meta.image_len - off;
+    if (take > sizeof(rolloutBuf)) take = sizeof(rolloutBuf);
+    if (esp_partition_read(part, off, rolloutBuf, take) != ESP_OK) {
+      SerialPrintln(F("cluster: running image read failed — rollout disabled"));
+      rolloutFactsFailed = true;
+      return false;
+    }
+    md5.add(rolloutBuf, take);
+    off += take;
+  }
+  md5.calculate();
+  rolloutMd5 = md5.toString();
+  rolloutPart = part;
+  rolloutImageLen = meta.image_len;
+  SerialPrintf("cluster: rollout image ready — %u bytes, md5 %s (%u ms)\n",
+               (unsigned)rolloutImageLen, rolloutMd5.c_str(),
+               (unsigned)(millis() - t0));
+  return true;
+}
+
+static void rolloutCloseUpload() {
+  if (rolloutClient == nullptr) return;
+  esp_http_client_close(rolloutClient);
+  esp_http_client_cleanup(rolloutClient);
+  rolloutClient = nullptr;
+}
+
+static bool rolloutOpenUpload(const String& host) {
+  String url = clusterRolloutUrl(host, rolloutMd5, GIT_REV);
+  esp_http_client_config_t cfg = {};
+  cfg.url = url.c_str();
+  cfg.timeout_ms = CLUSTER_ROLLOUT_HTTP_TIMEOUT_MS;
+  rolloutClient = esp_http_client_init(&cfg);
+  if (rolloutClient == nullptr) return false;
+
+  esp_http_client_set_method(rolloutClient, HTTP_METHOD_POST);
+  esp_http_client_set_header(
+      rolloutClient, "Content-Type",
+      "multipart/form-data; boundary=" CLUSTER_ROLLOUT_BOUNDARY);
+  String preamble = clusterRolloutMultipartPreamble();
+  int total = (int)preamble.length() + (int)rolloutImageLen +
+              (int)clusterRolloutMultipartTrailer().length();
+  if (esp_http_client_open(rolloutClient, total) != ESP_OK ||
+      esp_http_client_write(rolloutClient, preamble.c_str(),
+                            preamble.length()) != (int)preamble.length()) {
+    rolloutCloseUpload();
+    return false;
+  }
+  rolloutOffset = 0;
+  return true;
+}
+
+// Streams up to one tick budget; on the final chunk, sends the trailer and
+// settles the verdict into the policy state.
+static void rolloutPumpUpload() {
+  uint32_t budget = CLUSTER_ROLLOUT_CHUNK_PER_TICK;
+  while (budget > 0 && rolloutOffset < rolloutImageLen) {
+    uint32_t take = rolloutImageLen - rolloutOffset;
+    if (take > sizeof(rolloutBuf)) take = sizeof(rolloutBuf);
+    if (take > budget) take = budget;
+    if (esp_partition_read(rolloutPart, rolloutOffset, rolloutBuf, take) !=
+            ESP_OK ||
+        esp_http_client_write(rolloutClient, (const char*)rolloutBuf, take) !=
+            (int)take) {
+      rolloutCloseUpload();
+      LeaderLock lock;
+      SerialPrintln("cluster: rollout upload to " +
+                    String(table.members[rollout.memberIndex].host) +
+                    " failed mid-stream");
+      clusterRolloutUploadFailed(rollout, millis());
+      return;
+    }
+    rolloutOffset += take;
+    budget -= take;
+  }
+  {
+    LeaderLock lock;
+    rollout.bytesSent = rolloutOffset;
+  }
+  if (rolloutOffset < rolloutImageLen) return;  // more ticks to go
+
+  String trailer = clusterRolloutMultipartTrailer();
+  int status = -1;
+  if (esp_http_client_write(rolloutClient, trailer.c_str(),
+                            trailer.length()) == (int)trailer.length() &&
+      esp_http_client_fetch_headers(rolloutClient) >= 0) {
+    status = esp_http_client_get_status_code(rolloutClient);
+  }
+  rolloutCloseUpload();
+
+  LeaderLock lock;
+  uint32_t nowMs = millis();
+  int target = rollout.memberIndex;
+  String host(table.members[target].host);
+  if (status == 200) {
+    SerialPrintln("cluster: " + host +
+                  " flashed — rebooting, waiting for it to rejoin on " GIT_REV);
+    clusterRolloutUploadDone(rollout, nowMs);
+    // The follower reboots in ~750 ms: mark it un-joined now (rev unknown
+    // until the rejoin handshake) and skip the doomed contact attempts so
+    // the reboot window doesn't read as failures → degraded noise.
+    runtimes[target].joined = false;
+    runtimes[target].rev = "";
+    runtimes[target].failures = 0;
+    runtimes[target].nextAttemptMs = nowMs + 5000;
+  } else if (status == 409) {
+    // Its own reflash/OTA owns the flash right now — transient by contract.
+    SerialPrintln("cluster: " + host + " busy (409) — rollout retries later");
+    clusterRolloutUploadRejected(rollout, nowMs);
+  } else {
+    SerialPrintln("cluster: rollout upload to " + host + " failed (status " +
+                  String(status) + ")");
+    clusterRolloutUploadFailed(rollout, nowMs);
+  }
+}
+
+static void rolloutServiceTick() {
+  ClusterRolloutPhase phase;
+  int target;
+  {
+    LeaderLock lock;
+    phase = rollout.phase;
+    target = rollout.memberIndex;
+  }
+
+  if (phase == ClusterRolloutPhase::Idle) {
+    int candidate;
+    {
+      LeaderLock lock;
+      candidate = clusterRolloutNextCandidate(table, runtimes, GIT_REV,
+                                              rollout, millis());
+    }
+    if (candidate < 0) return;
+    if (!rolloutEnsureImageFacts()) return;
+    String host;
+    String fromRev;
+    {
+      LeaderLock lock;
+      clusterRolloutStart(rollout, candidate, rolloutImageLen);
+      host = table.members[candidate].host;
+      fromRev = runtimes[candidate].rev;
+    }
+    // Both directions on purpose (spec): the leader's build wins even over
+    // a NEWER follower — uncluster first to bench-test a follower build.
+    SerialPrintln("cluster: converging " + host + " rev " + fromRev +
+                  " -> " GIT_REV " (leader build wins both directions)");
+    if (!rolloutOpenUpload(host)) {
+      SerialPrintln("cluster: rollout could not reach " + host);
+      LeaderLock lock;
+      clusterRolloutUploadFailed(rollout, millis());
+    }
+    return;
+  }
+
+  if (phase == ClusterRolloutPhase::Uploading) {
+    rolloutPumpUpload();
+    return;
+  }
+
+  // WaitingRejoin: the normal supervision keeps re-joining the rebooted
+  // member; the health gate watches the rev it comes back with.
+  LeaderLock lock;
+  ClusterRolloutWait wait =
+      clusterRolloutCheckWait(rollout, runtimes[target].joined,
+                              runtimes[target].rev, GIT_REV, millis());
+  switch (wait) {
+    case ClusterRolloutWait::Converged:
+      SerialPrintln("cluster: " + String(table.members[target].host) +
+                    " converged on " GIT_REV " — rollout advances");
+      break;
+    case ClusterRolloutWait::RolledBack:
+      SerialPrintln("cluster: " + String(table.members[target].host) +
+                    " came back on its OLD rev (rollback) — attempt burned");
+      break;
+    case ClusterRolloutWait::TimedOut:
+      SerialPrintln("cluster: " + String(table.members[target].host) +
+                    " never rejoined after flashing — attempt burned");
+      break;
+    default:
+      break;
+  }
+}
+
 void clusterLeaderTick() {
   if (leaderMutex == nullptr) return;
   applyStagedConfig();
@@ -424,6 +677,10 @@ void clusterLeaderTick() {
     int status = clusterHttpRequest(items[i].url, items[i].body, body);
     applyMemberResult(items[i], status, body);
   }
+
+  // Fleet firmware convergence (#276) — after the fan-out so renders and
+  // pings always get their tick before an upload chunk does.
+  rolloutServiceTick();
 }
 
 ClusterLeaderStatus clusterLeaderStatusGet() {
@@ -445,7 +702,16 @@ ClusterLeaderStatus clusterLeaderStatusGet() {
     out.failures = runtimes[i].failures;
     out.rev = runtimes[i].rev;
     out.reportedWidth = runtimes[i].reportedWidth;
+    out.updating = rollout.phase != ClusterRolloutPhase::Idle &&
+                   rollout.memberIndex == i;
+    out.updateBlocked = rollout.blocked[i];
   }
+  st.rolloutPhase = clusterRolloutPhaseName(rollout.phase);
+  if (rollout.memberIndex >= 0 && rollout.memberIndex < table.count) {
+    st.rolloutHost = table.members[rollout.memberIndex].host;
+  }
+  st.rolloutSent = rollout.bytesSent;
+  st.rolloutTotal = rollout.bytesTotal;
   return st;
 }
 

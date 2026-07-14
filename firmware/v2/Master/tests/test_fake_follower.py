@@ -1,10 +1,13 @@
 """Pins the fake follower (#278) to the /cluster wire contract the real
 follower implements (WebEndpoints.cpp + ClusterFollowerPolicy.h) — the
-epoch/seq acceptance rules, the 409 not-clustered replies and the join
-handshake shape the leader (#273) depends on."""
+epoch/seq acceptance rules, the 409 not-clustered replies, the join
+handshake shape the leader (#273) depends on, and the /firmware/master
+upload contract the fleet rollout (#276) streams into."""
 
+import hashlib
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlencode
@@ -13,10 +16,22 @@ import pytest
 
 from fake_follower import make_server
 
+# Must byte-match ClusterRolloutPolicy.h's multipart frame — the pytest twin
+# of test_multipart_frame_matches_upload_contract.
+ROLLOUT_BOUNDARY = "splitflapClusterRollout"
+ROLLOUT_PREAMBLE = (
+    f"--{ROLLOUT_BOUNDARY}\r\n"
+    'Content-Disposition: form-data; name="firmware"; '
+    'filename="firmware.bin"\r\n'
+    "Content-Type: application/octet-stream\r\n\r\n"
+).encode()
+ROLLOUT_TRAILER = f"\r\n--{ROLLOUT_BOUNDARY}--\r\n".encode()
+
 
 @pytest.fixture()
 def follower():
-    server, state = make_server(0, name="wall-2", rev="abc1234", width=16)
+    server, state = make_server(0, name="wall-2", rev="abc1234", width=16,
+                                reboot_secs=0.1)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -166,3 +181,78 @@ def test_applied_renders_are_recorded_for_bench_assertions(follower):
     texts = [r["text"] for r in state.renders]
     assert texts == ["A", "B"]
     assert state.renders[0]["commitAtMs"] == 1234567890123
+
+
+# --- fleet rollout upload contract (#276) ------------------------------------------
+
+def upload(base, image, md5=None, v="1234abc", query=None):
+    """Stream `image` exactly the way the leader's rollout does."""
+    body = ROLLOUT_PREAMBLE + image + ROLLOUT_TRAILER
+    if query is None:
+        digest = md5 if md5 is not None else hashlib.md5(image).hexdigest()
+        query = f"?md5={digest}&v={v}"
+    request = urllib.request.Request(
+        base + "/firmware/master" + query, data=body, method="POST",
+        headers={"Content-Type":
+                 f"multipart/form-data; boundary={ROLLOUT_BOUNDARY}"})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, response.read().decode()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode()
+
+
+def wait_reboot(state, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while state.rebooting and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not state.rebooting
+
+
+def test_upload_flashes_reboots_and_adopts_leader_rev(follower):
+    base, state = follower
+    join(base, epoch=7)
+    image = b"\xe9fake-image-bytes" * 100
+    status, body = upload(base, image, v="1234abc")
+    assert status == 200
+    assert "rebooting" in body
+    wait_reboot(state)
+    assert state.rev == "1234abc"  # converged — the rejoin reports it
+    assert state.epoch is None  # fresh boot: epoch/seq space forgotten
+    assert state.clustered  # membership persists (NVS twin)
+    assert state.uploads[0]["size"] == len(image)
+
+
+def test_upload_md5_mismatch_fails_and_keeps_rev(follower):
+    base, state = follower
+    status, body = upload(base, b"payload", md5="0" * 32)
+    assert status == 500
+    assert "MD5" in body
+    assert state.rev == "abc1234"
+    assert not state.rebooting
+
+
+def test_upload_requires_md5(follower):
+    base, _ = follower
+    status, _ = upload(base, b"payload", query="?v=1234abc")
+    assert status == 400
+
+
+def test_upload_while_busy_is_409(follower):
+    base, state = follower
+    post(base, "/drill/ota-busy")
+    status, _ = upload(base, b"payload")
+    assert status == 409
+    post(base, "/drill/ota-free")
+    status, _ = upload(base, b"payload")
+    assert status == 200
+    wait_reboot(state)
+
+
+def test_rollback_drill_keeps_old_rev(follower):
+    base, state = follower
+    state.rollback = True
+    status, _ = upload(base, b"payload", v="1234abc")
+    assert status == 200
+    wait_reboot(state)
+    assert state.rev == "abc1234"  # came back on the OLD rev

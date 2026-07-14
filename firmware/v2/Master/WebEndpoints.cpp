@@ -1374,9 +1374,21 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       appendJsonString(out, m.rev);
       out += ",\"reportedWidth\":";
       out += m.reportedWidth;
+      out += ",\"updating\":";
+      out += m.updating ? "true" : "false";
+      out += ",\"updateBlocked\":";
+      out += m.updateBlocked ? "true" : "false";
       out += '}';
     }
-    out += "]}";
+    out += "],\"rollout\":{\"phase\":";
+    appendJsonString(out, st.rolloutPhase);
+    out += ",\"host\":";
+    appendJsonString(out, st.rolloutHost);
+    out += ",\"sent\":";
+    out += String((unsigned long)st.rolloutSent);
+    out += ",\"total\":";
+    out += String((unsigned long)st.rolloutTotal);
+    out += "}}";
     request->send(200, "application/json", out);
   });
 }

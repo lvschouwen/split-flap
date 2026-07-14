@@ -17,24 +17,41 @@ watch the received segments print live.
 
 Failure injection for degraded-member drills: POST /drill/mute (stop
 answering anything but /drill/*), POST /drill/unmute.
+
+Fleet-rollout drills (#276): the fake also accepts the leader's streamed
+POST /firmware/master?md5=…&v=… (multipart field "firmware"), verifies the
+MD5, then "reboots" (goes silent for --reboot-secs, drops epoch/seq like a
+real boot) and comes back reporting the ?v= rev — so `--rev old0000`
+against a real leader exercises the full converge → rejoin → next-member
+sequence. `--rollback` keeps the old rev after reboot (native-rollback
+drill: the leader must burn an attempt and eventually give up);
+POST /drill/ota-busy / /drill/ota-free force the 409 transient path.
 """
 
 import argparse
+import hashlib
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 
 class FollowerState:
     """The epoch/seq/membership brain of one fake follower — the python
     twin of ClusterFollowerPolicy.h."""
 
-    def __init__(self, name="fake-follower", rev="fake0000", width=16):
+    def __init__(self, name="fake-follower", rev="fake0000", width=16,
+                 rollback=False, reboot_secs=3.0):
         self.name = name
         self.rev = rev
         self.width = width
+        self.rollback = rollback      # keep the old rev after a "flash"
+        self.reboot_secs = reboot_secs
         self.lock = threading.Lock()
+        # Rollout drill state — survives leave() like real flash would.
+        self.rebooting = False
+        self.ota_busy = False
+        self.uploads = []  # {"size", "md5", "v"} per accepted flash
         self.reset()
 
     def reset(self):
@@ -84,6 +101,38 @@ class FollowerState:
         with self.lock:
             self.reset()
 
+    def flash(self, size, md5, leader_rev):
+        """A verified /firmware/master upload landed: record it and mimic
+        the reboot — silent for reboot_secs, epoch/seq forgotten (fresh
+        boot), membership kept (the real follower persists it in NVS),
+        rev switched to the leader's unless the rollback drill is on."""
+        with self.lock:
+            self.uploads.append({"size": size, "md5": md5, "v": leader_rev})
+            self.rebooting = True
+
+        def finish():
+            with self.lock:
+                if not self.rollback and leader_rev:
+                    self.rev = leader_rev
+                self.epoch = None
+                self.last_seq = 0
+                self.rebooting = False
+
+        threading.Timer(self.reboot_secs, finish).start()
+
+
+def multipart_payload(body, boundary):
+    """Extract the (single) part payload from a multipart/form-data body —
+    the shape the leader's streaming upload produces. None on mismatch."""
+    delim = ("--" + boundary).encode()
+    if not body.startswith(delim):
+        return None
+    head = body.find(b"\r\n\r\n")
+    tail = body.rfind(b"\r\n" + delim + b"--")
+    if head < 0 or tail < head:
+        return None
+    return body[head + 4:tail]
+
 
 class FakeFollowerHandler(BaseHTTPRequestHandler):
     # Injected per-server via functools-partial-style subclassing (make_server).
@@ -115,10 +164,20 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
         if self.path == "/drill/unmute":
             st.muted = False
             return self._send(200, "unmuted", "text/plain")
-        if st.muted:
-            # Dead-member drill: hang until the leader's timeout fires.
+        if self.path == "/drill/ota-busy":
+            st.ota_busy = True
+            return self._send(200, "ota busy", "text/plain")
+        if self.path == "/drill/ota-free":
+            st.ota_busy = False
+            return self._send(200, "ota free", "text/plain")
+        if st.muted or st.rebooting:
+            # Dead-member / mid-reboot drill: hang until the leader's
+            # timeout fires.
             threading.Event().wait(10)
             return
+
+        if self.path.startswith("/firmware/master"):
+            return self._handle_master_ota()
 
         if self.path == "/cluster/join":
             form = self._form()
@@ -158,9 +217,46 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
 
         return self._send(404, "not found", "text/plain")
 
+    def _handle_master_ota(self):
+        """The real /firmware/master contract the leader's rollout streams
+        into (WebEndpoints.cpp): multipart field "firmware", mandatory
+        ?md5=, 409 while another flash owns the target, 200 then reboot."""
+        st = self.state
+        query = {k: v[0] for k, v in
+                 parse_qs(urlparse(self.path).query).items()}
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length) if length else b""
+        if st.ota_busy:
+            return self._send(
+                409, "Another master OTA upload is already in progress "
+                     "— retry when it finishes", "text/plain")
+        md5_param = query.get("md5", "").lower()
+        if not md5_param:
+            return self._send(400, "md5 query parameter is required",
+                              "text/plain")
+        content_type = self.headers.get("Content-Type", "")
+        if "boundary=" not in content_type:
+            return self._send(500, "Master OTA failed: not multipart",
+                              "text/plain")
+        boundary = content_type.split("boundary=")[-1].strip()
+        payload = multipart_payload(body, boundary)
+        if payload is None:
+            return self._send(500, "Master OTA failed: bad multipart",
+                              "text/plain")
+        received_md5 = hashlib.md5(payload).hexdigest()
+        if received_md5 != md5_param:
+            return self._send(500, "Master OTA failed: MD5 mismatch",
+                              "text/plain")
+        self._send(200, "Master firmware flashed; rebooting…", "text/plain")
+        if self.verbose:
+            print(f"[{st.name}] flashed {len(payload)} bytes "
+                  f"(md5 {received_md5}) — rebooting")
+        st.flash(len(payload), received_md5, query.get("v", ""))
+        return None
+
     def do_GET(self):
         st = self.state
-        if st.muted and not self.path.startswith("/drill/"):
+        if (st.muted or st.rebooting) and not self.path.startswith("/drill/"):
             threading.Event().wait(10)
             return
         if self.path == "/cluster/health":
@@ -175,10 +271,11 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
 
 
 def make_server(port, name="fake-follower", rev="fake0000", width=16,
-                verbose=False):
+                verbose=False, rollback=False, reboot_secs=3.0):
     """One fake follower on localhost:port. Returns (server, state); run
     server.serve_forever() in a thread; state carries the assertions."""
-    state = FollowerState(name=name, rev=rev, width=width)
+    state = FollowerState(name=name, rev=rev, width=width, rollback=rollback,
+                          reboot_secs=reboot_secs)
 
     class Handler(FakeFollowerHandler):
         pass
@@ -195,13 +292,19 @@ def main():
     parser.add_argument("--base-port", type=int, default=8801)
     parser.add_argument("--width", type=int, default=16)
     parser.add_argument("--rev", default="fake0000")
+    parser.add_argument("--rollback", action="store_true",
+                        help="keep the old rev after a flash (rollback drill)")
+    parser.add_argument("--reboot-secs", type=float, default=3.0,
+                        help="silent-reboot window after a flash")
     args = parser.parse_args()
 
     servers = []
     for i in range(args.count):
         port = args.base_port + i
         server, _ = make_server(port, name=f"fake-row-{i}", rev=args.rev,
-                                width=args.width, verbose=True)
+                                width=args.width, verbose=True,
+                                rollback=args.rollback,
+                                reboot_secs=args.reboot_secs)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         servers.append(server)
         print(f"fake follower “fake-row-{i}” listening on :{port}")

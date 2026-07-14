@@ -1,11 +1,13 @@
 #pragma once
 // ClusterLeader.h — leader-side cluster service (#273, epic #270). The
-// supervision decisions live in ClusterLeaderPolicy.h and the geometry in
-// ClusterLayout.h (both natively tested); this module owns the live member
-// table, the per-member runtimes, the grid content, and the body of
-// clusterTask — the ONLY place outbound cluster HTTP happens
-// (esp_http_client, short LAN timeouts), so a dead follower can never
-// stall netTask's SSE/WiFi/LED ticks.
+// supervision decisions live in ClusterLeaderPolicy.h, the geometry in
+// ClusterLayout.h and the fleet-rollout sequencing in
+// ClusterRolloutPolicy.h (all natively tested); this module owns the live
+// member table, the per-member runtimes, the grid content, the streaming
+// firmware-convergence upload (#276), and the body of clusterTask — the
+// ONLY place outbound cluster HTTP happens (esp_http_client, short LAN
+// timeouts), so a dead follower can never stall netTask's SSE/WiFi/LED
+// ticks.
 //
 // Producer contract (Hard-rule preserving): when clusterLeaderEnabled(),
 // text/clock producers hand LOGICAL grid content to clusterLeaderSubmit*()
@@ -34,6 +36,8 @@ struct ClusterLeaderMemberStatus {
   int failures = 0;
   String rev;            // follower firmware rev from the join reply
   int reportedWidth = 0; // join-handshake width fact
+  bool updating = false;      // fleet rollout (#276) is converging this member
+  bool updateBlocked = false; // rollout gave up (attempt cap) on this member
 };
 
 struct ClusterLeaderStatus {
@@ -42,6 +46,11 @@ struct ClusterLeaderStatus {
   uint32_t seq = 0;
   int memberCount = 0;
   ClusterLeaderMemberStatus members[CLUSTER_MAX_MEMBERS];
+  // Fleet rollout (#276): phase name + live progress for the Cluster card.
+  String rolloutPhase;   // "idle" / "uploading" / "waiting"
+  String rolloutHost;    // target member while not idle
+  uint32_t rolloutSent = 0;
+  uint32_t rolloutTotal = 0;
 };
 
 // setup(): loads the member table from NVS (invalid → leader disabled,
