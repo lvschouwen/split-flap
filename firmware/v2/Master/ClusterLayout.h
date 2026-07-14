@@ -214,6 +214,42 @@ inline bool layoutGridText(const String& text, DisplayAlignment align,
   return true;
 }
 
+// Wall-mirror reconstruction (#277) — the inverse of the slice above:
+// rebuild every full row text from the per-member segments so the leader
+// can push the whole wall over SSE and into HA's text/state. Segments are
+// pre-positioned, so remote slots copy verbatim; every empty-host slot
+// takes `selfRowText` instead (this master's LIVE currentText — a
+// transient/notification may own it, and the display re-applies the
+// alignment lead, so the same lead math runs here). Self slots overlay in
+// a second pass: on a coincident self+remote twin the live text must win
+// over the twin's stale segment. rows[] needs CLUSTER_MAX_MEMBERS
+// entries. Returns the grid's row count, 0 on an invalid table.
+inline int clusterMirrorRows(const ClusterMemberTable& table,
+                             const String* segments, const String& selfRowText,
+                             DisplayAlignment selfAlign, String* rows) {
+  ClusterGrid grid;
+  if (!validateMemberTable(table, grid).ok) return 0;
+
+  for (int r = 0; r < grid.rows; r++) {
+    rows[r] = clusterAlignRow(String(), grid.rowWidth[r],
+                              DisplayAlignment::Left);
+  }
+  for (int pass = 0; pass < 2; pass++) {
+    for (int m = 0; m < table.count; m++) {
+      const ClusterMemberDef& def = table.members[m];
+      bool self = def.host[0] == '\0';
+      if (self != (pass == 1)) continue;
+      String slot = self ? clusterAlignRow(selfRowText, def.width, selfAlign)
+                         : clusterAlignRow(segments[m], def.width,
+                                           DisplayAlignment::Left);
+      for (int c = 0; c < def.width; c++) {
+        rows[def.row].setCharAt((unsigned int)(def.col + c), slot[c]);
+      }
+    }
+  }
+  return grid.rows;
+}
+
 // Cluster clock frame: row 0 time, row 1 date (when the grid has one),
 // rows 2+ blank at launch. Time/date arrive pre-formatted so this stays
 // host-testable (ClockPolicy.h pattern). Returns false on an invalid table.

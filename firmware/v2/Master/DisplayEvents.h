@@ -16,22 +16,62 @@
 
 struct DisplayEventTracker {
   char lastText[DISPLAY_CMD_TEXT_LEN + 1] = {0};
+  String lastRowsKey;  // "" whenever this master isn't leading a cluster
 };
 
-// True when `text` differs from the last observation (which it then
-// becomes). The tracker starts at "" — a boot-time text is a change, and
-// pushing it to zero connected clients is harmless.
-inline bool displayEventDue(DisplayEventTracker& t, const char* text) {
-  if (strncmp(t.lastText, text, DISPLAY_CMD_TEXT_LEN) == 0) return false;
+// Injective join of the wall rows (#277): length-prefixed so row contents
+// can never fake a row boundary. "" for rowCount 0 — the not-leading key.
+inline String displayEventRowsKey(const String* rows, int rowCount) {
+  String key;
+  for (int i = 0; i < rowCount; i++) {
+    key += (int)rows[i].length();
+    key += ':';
+    key += rows[i];
+  }
+  return key;
+}
+
+// True when `text` OR the wall rows differ from the last observation
+// (which they then become). The tracker starts at ""/"" — a boot-time text
+// is a change, and pushing it to zero connected clients is harmless. A
+// cluster-leader row changing while this master's own row didn't is a
+// change too, as is leaving cluster mode (the browser must collapse its
+// wall back to the single-row mirror).
+inline bool displayEventDue(DisplayEventTracker& t, const char* text,
+                            const String& rowsKey) {
+  if (strncmp(t.lastText, text, DISPLAY_CMD_TEXT_LEN) == 0 &&
+      t.lastRowsKey == rowsKey) {
+    return false;
+  }
   strncpy(t.lastText, text, DISPLAY_CMD_TEXT_LEN);
   t.lastText[DISPLAY_CMD_TEXT_LEN] = '\0';
+  t.lastRowsKey = rowsKey;
   return true;
 }
 
+inline bool displayEventDue(DisplayEventTracker& t, const char* text) {
+  return displayEventDue(t, text, String());
+}
+
 // {"text":"..."} with full JSON escaping — display text is user input.
-inline String buildDisplayEventJson(const char* text) {
+// While leading a cluster (#277), the payload adds the reconstructed wall:
+// ,"selfRow":N,"rows":["...", ...] — the browser renders those verbatim
+// (they arrive pre-positioned) and keys the health strip to selfRow.
+inline String buildDisplayEventJson(const char* text,
+                                    const String* rows = nullptr,
+                                    int rowCount = 0, int selfRow = 0) {
   String out = "{\"text\":";
   appendJsonString(out, String(text));
+  if (rows != nullptr && rowCount > 0) {
+    out += ",\"selfRow\":";
+    out += selfRow;
+    out += ",\"rows\":[";
+    for (int i = 0; i < rowCount; i++) {
+      if (i > 0) out += ',';
+      appendJsonString(out, rows[i]);
+    }
+    out += ']';
+  }
   out += '}';
   return out;
 }

@@ -52,6 +52,46 @@ static void test_payload_empty_text() {
   TEST_ASSERT_EQUAL_STRING("{\"text\":\"\"}", json.c_str());
 }
 
+// --- wall mirror rows (#277) — leader-only payload extension ---------------------
+
+static void test_rows_payload_shape() {
+  String rows[2] = {String("AB"), String("C\"D")};
+  String json = buildDisplayEventJson("X", rows, 2, 1);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"text\":\"X\",\"selfRow\":1,\"rows\":[\"AB\",\"C\\\"D\"]}",
+      json.c_str());
+}
+
+static void test_zero_rows_keeps_plain_payload() {
+  String json = buildDisplayEventJson("X", nullptr, 0, 0);
+  TEST_ASSERT_EQUAL_STRING("{\"text\":\"X\"}", json.c_str());
+}
+
+static void test_row_change_alone_is_due() {
+  DisplayEventTracker t;
+  String rows[2] = {String("A"), String("B")};
+  TEST_ASSERT_TRUE(displayEventDue(t, "X", displayEventRowsKey(rows, 2)));
+  TEST_ASSERT_FALSE(displayEventDue(t, "X", displayEventRowsKey(rows, 2)));
+  rows[1] = "CHANGED";  // a follower-only row changed; own text did not
+  TEST_ASSERT_TRUE(displayEventDue(t, "X", displayEventRowsKey(rows, 2)));
+}
+
+static void test_leaving_cluster_mode_is_due() {
+  DisplayEventTracker t;
+  String rows[1] = {String("A")};
+  TEST_ASSERT_TRUE(displayEventDue(t, "X", displayEventRowsKey(rows, 1)));
+  // Cluster disabled: same text, empty rows key — still a push (the
+  // browser must collapse back to the single-row mirror).
+  TEST_ASSERT_TRUE(displayEventDue(t, "X", String()));
+  TEST_ASSERT_FALSE(displayEventDue(t, "X"));  // plain API sees it settled
+}
+
+static void test_rows_key_separates_row_boundaries() {
+  String ab[2] = {String("A"), String("B")};
+  String a_b[1] = {String("A\nB")};
+  TEST_ASSERT_TRUE(displayEventRowsKey(ab, 2) != displayEventRowsKey(a_b, 1));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_first_nonempty_text_is_due_once);
@@ -60,6 +100,11 @@ int main(int, char**) {
   RUN_TEST(test_overlong_text_is_truncated_not_overflowed);
   RUN_TEST(test_payload_shape_and_escaping);
   RUN_TEST(test_payload_empty_text);
+  RUN_TEST(test_rows_payload_shape);
+  RUN_TEST(test_zero_rows_keeps_plain_payload);
+  RUN_TEST(test_row_change_alone_is_due);
+  RUN_TEST(test_leaving_cluster_mode_is_due);
+  RUN_TEST(test_rows_key_separates_row_boundaries);
   UNITY_END();
   return 0;
 }

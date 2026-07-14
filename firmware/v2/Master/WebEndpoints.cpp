@@ -229,6 +229,25 @@ const char* webResetReasonString() {
   }
 }
 
+// Wall-aware /events payload (#277): while leading a cluster, the display
+// event carries every reconstructed grid row; rowsKeyOut feeds the tick's
+// change tracker. Locks run strictly sequentially — the content snapshot
+// (webStateMutex) is taken and RELEASED before the leader mutex, never
+// nested.
+static String sseDisplayPayload(const DisplaySnapshot& snap,
+                                String* rowsKeyOut) {
+  String rows[CLUSTER_MAX_MEMBERS];
+  int selfRow = 0;
+  int rowCount = 0;
+  if (clusterLeaderEnabled()) {
+    WebContentSnapshot content = webDisplayContentSnapshot();
+    rowCount = clusterLeaderMirrorRows(rows, selfRow, String(snap.currentText),
+                                       content.alignment);
+  }
+  if (rowsKeyOut != nullptr) *rowsKeyOut = displayEventRowsKey(rows, rowCount);
+  return buildDisplayEventJson(snap.currentText, rows, rowCount, selfRow);
+}
+
 void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                       SettingsStore& store,
                       const String& effectiveDeviceName) {
@@ -249,9 +268,9 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // A fresh client gets the current display text immediately; every later
   // change is pushed by webDisplayEventsTick() from netTask.
   sseEvents.onConnect([](AsyncEventSourceClient* client) {
-    client->send(
-        buildDisplayEventJson(displaySnapshotGet().currentText).c_str(),
-        "display", millis());
+    DisplaySnapshot snap = displaySnapshotGet();
+    client->send(sseDisplayPayload(snap, nullptr).c_str(), "display",
+                 millis());
   });
   server.addHandler(&sseEvents);
 
@@ -1420,9 +1439,10 @@ void webDisplayEventsTick() {
   // an already-shown text is deduped by the mirror's frame compare.
   if (sseEvents.count() == 0) return;
   DisplaySnapshot snap = displaySnapshotGet();
-  if (!displayEventDue(tracker, snap.currentText)) return;
-  sseEvents.send(buildDisplayEventJson(snap.currentText).c_str(), "display",
-                 millis());
+  String rowsKey;
+  String payload = sseDisplayPayload(snap, &rowsKey);
+  if (!displayEventDue(tracker, snap.currentText, rowsKey)) return;
+  sseEvents.send(payload.c_str(), "display", millis());
 }
 
 void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {

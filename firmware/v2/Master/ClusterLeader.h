@@ -54,6 +54,10 @@ struct ClusterLeaderStatus {
   // The running image failed its verify/read pass — convergence is off
   // until reboot ("idle" alone would read as "nothing to do").
   bool rolloutImageFailed = false;
+  // Derived grid shape (#277): row count + total logical units — the
+  // wall's text capacity as HA surfaces it. 0/0 while not leading.
+  int gridRows = 0;
+  int gridCapacity = 0;
 };
 
 // setup(): loads the member table from NVS (invalid → leader disabled,
@@ -77,6 +81,16 @@ void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
                               const String& alignment, int speed);
 
 ClusterLeaderStatus clusterLeaderStatusGet();
+
+// Wall mirror rows (#277): reconstructed full row texts — segments plus
+// `selfRowText` (this master's live currentText) overlaid on the own-row
+// slot(s) with the display's alignment lead. Any task (mutex-copied).
+// rows[] needs CLUSTER_MAX_MEMBERS entries; selfRowOut gets the own row's
+// index (the browser anchors the health strip there). Returns the grid's
+// row count, 0 while not leading.
+int clusterLeaderMirrorRows(String* rows, int& selfRowOut,
+                            const String& selfRowText,
+                            const String& alignment);
 
 // Web boundary (async task): validate + stage a new member table spec
 // (ClusterLeaderPolicy wire format; "" disables). The swap itself — leave

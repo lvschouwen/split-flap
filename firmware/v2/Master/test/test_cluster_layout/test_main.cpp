@@ -319,6 +319,78 @@ static void test_cluster_date_format_is_v1_stamp_date() {
   TEST_ASSERT_EQUAL_STRING("%d %b %y", CLUSTER_DATE_FORMAT);
 }
 
+// --- wall mirror reconstruction (#277) -------------------------------------------
+
+// Table with the leader's own units at {row 0, col 0} and one follower row.
+static ClusterMemberTable makeSelfPlusFollower() {
+  ClusterMemberTable t = makeRows(2, 16);
+  t.members[0].host[0] = '\0';  // empty host = this board
+  return t;
+}
+
+static void test_mirror_rows_rebuilds_wide_rows_from_segments() {
+  ClusterMemberTable t = makeWide2x32();
+  String seg[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_TRUE(layoutGridText("ABCDEFGHIJKLMNOPQRSTUVWXYZ 123456",
+                                  DisplayAlignment::Left, t, seg));
+  String rows[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_EQUAL(2, clusterMirrorRows(t, seg, "", DisplayAlignment::Left,
+                                         rows));
+  TEST_ASSERT_EQUAL_STRING("ABCDEFGHIJKLMNOPQRSTUVWXYZ      ", rows[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("123456                          ", rows[1].c_str());
+}
+
+static void test_mirror_rows_overlays_self_slot_with_alignment() {
+  ClusterMemberTable t = makeSelfPlusFollower();
+  String seg[CLUSTER_MAX_MEMBERS];
+  seg[1] = "FOLLOWER ROW    ";
+  String rows[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_EQUAL(2, clusterMirrorRows(t, seg, "HI",
+                                         DisplayAlignment::Center, rows));
+  TEST_ASSERT_EQUAL_STRING("       HI       ", rows[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("FOLLOWER ROW    ", rows[1].c_str());
+}
+
+static void test_mirror_rows_self_overlay_beats_coincident_twin() {
+  // Mirror wall where the leader IS one of the twins: the live self text
+  // (a transient may own it) must win over the twin's stale segment.
+  ClusterMemberTable t = makeMirror();
+  t.members[1].host[0] = '\0';  // twin listed AFTER the remote member
+  String seg[CLUSTER_MAX_MEMBERS];
+  seg[0] = "SEGMENT TEXT    ";
+  String rows[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_EQUAL(1, clusterMirrorRows(t, seg, "LIVE",
+                                         DisplayAlignment::Left, rows));
+  TEST_ASSERT_EQUAL_STRING("LIVE            ", rows[0].c_str());
+}
+
+static void test_mirror_rows_blank_segments_render_blanks() {
+  ClusterMemberTable t = makeRows(2, 16);
+  String seg[CLUSTER_MAX_MEMBERS];
+  String rows[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_EQUAL(2, clusterMirrorRows(t, seg, "", DisplayAlignment::Left,
+                                         rows));
+  TEST_ASSERT_EQUAL_STRING(BLANK16, rows[0].c_str());
+  TEST_ASSERT_EQUAL_STRING(BLANK16, rows[1].c_str());
+}
+
+static void test_mirror_rows_overlong_self_text_truncates_to_slot() {
+  ClusterMemberTable t = makeSelfPlusFollower();
+  String seg[CLUSTER_MAX_MEMBERS];
+  String rows[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_EQUAL(2, clusterMirrorRows(t, seg, "ABCDEFGHIJKLMNOPQRSTUV",
+                                         DisplayAlignment::Left, rows));
+  TEST_ASSERT_EQUAL_STRING("ABCDEFGHIJKLMNOP", rows[0].c_str());
+}
+
+static void test_mirror_rows_refuses_invalid_table() {
+  ClusterMemberTable t;
+  String seg[CLUSTER_MAX_MEMBERS];
+  String rows[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_EQUAL(0, clusterMirrorRows(t, seg, "", DisplayAlignment::Left,
+                                         rows));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_valid_2x16_derives_grid);
@@ -355,5 +427,11 @@ int main(int, char**) {
   RUN_TEST(test_clock_wide_row_slices_time_across_members);
   RUN_TEST(test_clock_refuses_invalid_table);
   RUN_TEST(test_cluster_date_format_is_v1_stamp_date);
+  RUN_TEST(test_mirror_rows_rebuilds_wide_rows_from_segments);
+  RUN_TEST(test_mirror_rows_overlays_self_slot_with_alignment);
+  RUN_TEST(test_mirror_rows_self_overlay_beats_coincident_twin);
+  RUN_TEST(test_mirror_rows_blank_segments_render_blanks);
+  RUN_TEST(test_mirror_rows_overlong_self_text_truncates_to_slot);
+  RUN_TEST(test_mirror_rows_refuses_invalid_table);
   return UNITY_END();
 }

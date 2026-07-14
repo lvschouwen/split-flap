@@ -735,7 +735,28 @@ ClusterLeaderStatus clusterLeaderStatusGet() {
   st.rolloutSent = rollout.bytesSent;
   st.rolloutTotal = rollout.bytesTotal;
   st.rolloutImageFailed = rolloutFactsFailed.load(std::memory_order_relaxed);
+  ClusterGrid grid;
+  if (st.enabled && validateMemberTable(table, grid).ok) {
+    st.gridRows = grid.rows;
+    for (int r = 0; r < grid.rows; r++) st.gridCapacity += grid.rowWidth[r];
+  }
   return st;
+}
+
+int clusterLeaderMirrorRows(String* rows, int& selfRowOut,
+                            const String& selfRowText,
+                            const String& alignment) {
+  selfRowOut = 0;
+  if (leaderMutex == nullptr || !enabledAtomic.load()) return 0;
+  LeaderLock lock;
+  for (int i = 0; i < table.count; i++) {
+    if (clusterMemberIsSelf(table.members[i])) {
+      selfRowOut = table.members[i].row;
+      break;
+    }
+  }
+  return clusterMirrorRows(table, segments, selfRowText,
+                           displayAlignmentFromString(alignment), rows);
 }
 
 ClusterConfigVerdict clusterLeaderStageConfig(const String& membersSpec) {
