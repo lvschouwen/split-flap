@@ -39,7 +39,14 @@ static constexpr uint32_t DISPLAY_TASK_STACK = 4096;
 // 2048 leaves only ~124 B HWM on real hardware — newlib's first
 // tzset/localtime parse of the POSIX TZ string runs deep in the ticker.
 static constexpr uint32_t CLOCK_TASK_STACK = 4096;
-static constexpr uint32_t NET_TASK_STACK = 4096;
+// netTask is the heaviest domain task: wifi + web + flashLog + cluster
+// follower + SSE + system-stats all share one loop. 4096 overflowed the
+// canary on real hardware (split-flap-c8a746) inside flashLogTick's
+// LittleFS.open → fopen → esp_flash_read, whose cross-core cache-disable
+// IPC is the deepest chain netTask ever runs; the #294-era SSE/stats work
+// raised the per-iteration floor until the fopen spike no longer fit. The
+// heartbeat HWM column stays the trim-down evidence.
+static constexpr uint32_t NET_TASK_STACK = 8192;
 // espMqttClient internals + the 512 B discovery build buffers (#224); the
 // heartbeat's HWM column is the trim-down evidence.
 static constexpr uint32_t MQTT_TASK_STACK = 6144;
