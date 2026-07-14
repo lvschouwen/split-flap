@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [v1/Unit, v2/Master, v2/Rescue]
+        project: [v1/Unit, v2/Master, v2/Rescue, v2/FollowerEsp01]
     steps:
       - uses: actions/checkout@v5
 
@@ -80,6 +80,10 @@ jobs:
         working-directory: firmware/v2/Rescue
         run: pio test -e native
 
+      - name: Run v2 FollowerEsp01 native tests
+        working-directory: firmware/v2/FollowerEsp01
+        run: pio test -e native
+
       - name: Install pytest
         run: pip install pytest
 
@@ -89,6 +93,10 @@ jobs:
 
       - name: Run v2 Rescue Python tests
         working-directory: firmware/v2/Rescue
+        run: python -m pytest tests/
+
+      - name: Run v2 FollowerEsp01 Python tests
+        working-directory: firmware/v2/FollowerEsp01
         run: python -m pytest tests/
 
       - name: Install flasher deps

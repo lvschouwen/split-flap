@@ -27,9 +27,10 @@ REPO = Path(__file__).resolve().parents[2]
 UNIT_BUILD = REPO / "firmware/v1/Unit/.pio/build/unit/firmware.hex"
 UNIT_REV_BUILT = REPO / "firmware/v1/Unit/.pio/build/unit/firmware.rev"
 V2_MASTER_DATA = REPO / "firmware/v2/Master/data"
-# Every tree that embeds the unit bundle (#205). stage writes all of them;
-# gate checks all of them.
-STAGE_DATA_DIRS = [V2_MASTER_DATA]
+V2_FOLLOWER_ESP01_DATA = REPO / "firmware/v2/FollowerEsp01/data"
+# Every tree that embeds the unit bundle (#205; FollowerEsp01 joined at
+# #298). stage writes all of them; gate checks all of them.
+STAGE_DATA_DIRS = [V2_MASTER_DATA, V2_FOLLOWER_ESP01_DATA]
 # Everything that compiles into the Unit binary; host-side tests don't.
 UNIT_SRC_PATHSPECS = [
     "firmware/v1/Unit",

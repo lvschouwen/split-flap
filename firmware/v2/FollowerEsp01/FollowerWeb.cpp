@@ -1,0 +1,779 @@
+// FollowerWeb.cpp — endpoint glue (#298). Contract + context rules in
+// FollowerWeb.h. The /cluster/* handlers mirror the v2 master's follower
+// endpoints (WebEndpoints.cpp) minus digest/promote; /firmware/master is
+// v1's ESP8266 Update flow trimmed (no RTC verdict cookie — ota-flash.sh's
+// version comparison is the revert detector on this board).
+
+#include "FollowerWeb.h"
+
+#include <ESP8266WiFi.h>
+#include <Updater.h>
+
+#include <memory>
+
+#include "BuildVersion.h"
+#include "FollowerBus.h"
+#include "FollowerCluster.h"
+#include "FollowerConfig.h"
+#include "FollowerCors.h"
+#include "FollowerJson.h"
+#include "FollowerSettings.h"
+#include "FollowerWifi.h"
+#include "WearPolicy.h"
+
+volatile bool isPendingReboot = false;
+volatile bool masterOtaUploadActive = false;
+volatile unsigned long masterOtaLastChunkMs = 0;
+
+// --- staged work (handlers set, webLoopTick drains) ---------------------------------
+
+static volatile bool unitHealthRefreshPending = false;
+static volatile bool reflashPending = false;
+
+struct StagedOp {
+  volatile bool pending = false;
+  uint32_t seq = 0;
+  FollowerOpKind kind = FollowerOpKind::None;
+  uint8_t addr = 0;
+  long arg = 0;
+};
+static StagedOp stagedOp;
+static MaintResult opResult;
+static SelfTestSlot selfTestSlot;
+static uint32_t maintSeqCounter = 0;
+
+// Self-test poll state (the unit measures ~2 revolutions; we poll its
+// GET_SELF_TEST until it stops reporting "running").
+static bool selfTestPolling = false;
+static uint8_t selfTestAddr = 0;
+static uint32_t selfTestPollDeadlineMs = 0;
+static uint32_t selfTestPollLastMs = 0;
+#define SELF_TEST_TIMEOUT_MS 20000UL
+
+// --- OTA session state (v1 #191 conventions) ----------------------------------------
+
+static AsyncWebServerRequest* volatile masterOtaOwnerRequest = nullptr;
+static bool otaRejected = false;
+static int otaRejectionStatus = 0;
+static String otaRejectionReason;
+static bool otaTxPowerReduced = false;
+static constexpr float OTA_TX_POWER_DBM = 10.0f;
+static constexpr float DEFAULT_TX_POWER_DBM = 20.5f;
+
+// --- helpers ------------------------------------------------------------------------
+
+// #294 rung 3 CORS: per-response reflection (the ESP8266 async fork has no
+// middleware). Simple requests only — no preflight handler needed.
+static void sendWithCors(AsyncWebServerRequest* request, int status,
+                         const String& contentType, const String& body) {
+  AsyncWebServerResponse* response =
+      request->beginResponse(status, contentType, body);
+  if (request->hasHeader("Origin") &&
+      followerCorsPathAllowed(request->url())) {
+    const String origin = request->header("Origin");
+    if (followerCorsOriginAllowed(origin)) {
+      response->addHeader("Access-Control-Allow-Origin", origin);
+      response->addHeader("Vary", "Origin");
+    }
+  }
+  request->send(response);
+}
+
+static FollowerVitals vitalsNow() {
+  FollowerVitals v;
+  v.heapBytes = ESP.getFreeHeap();
+  v.rssiDbm = WiFi.RSSI();
+  v.upSeconds = millis() / 1000;
+  return v;
+}
+
+// Health facts snapshot for the join/ping replies (#294 keys).
+static FollowerHealthFacts healthNow(char* maskBuf, size_t maskCap) {
+  FollowerHealthFacts h;
+  h.width = displayWidth;
+  int detected = 0;
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    if (unitFacts[i].state != 0) detected++;
+  }
+  h.detected = detected;
+  h.faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
+  followerFaultMaskHex(unitFacts, displayWidth, maskBuf, maskCap);
+  h.faultMask = maskBuf;
+  WearAssessment wear;
+  assessWear(unitFacts, UNITS_AMOUNT, wear);
+  h.wear = wear.flaggedCount > 0;
+  return h;
+}
+
+// Body form param (the cluster wire posts form-encoded bodies).
+static bool paramString(AsyncWebServerRequest* request, const char* name,
+                        String& out) {
+  if (!request->hasParam(name, true)) return false;
+  out = request->getParam(name, true)->value();
+  return true;
+}
+
+// Required numeric QUERY param (v2 parity: the maintenance ops ride the
+// query string — postCalibration() posts `path?address=..`; strtol base 0
+// keeps v1's hex support). Sends the 400 itself.
+static bool queryRequireLong(AsyncWebServerRequest* request, const char* name,
+                             long& out) {
+  if (!request->hasParam(name)) {
+    String msg = "Missing '";
+    msg += name;
+    msg += "' query param";
+    sendWithCors(request, 400, "text/plain", msg);
+    return false;
+  }
+  String raw = request->getParam(name)->value();
+  char* end = nullptr;
+  out = strtol(raw.c_str(), &end, 0);
+  if (end == raw.c_str()) {
+    String msg = "'";
+    msg += name;
+    msg += "' must be a number";
+    sendWithCors(request, 400, "text/plain", msg);
+    return false;
+  }
+  return true;
+}
+
+// v1's printable-ASCII gate for wire strings that get re-served.
+static bool isPrintableAscii(const String& s, char minChar) {
+  for (unsigned int i = 0; i < s.length(); i++) {
+    if ((unsigned char)s[i] < (unsigned char)minChar ||
+        (unsigned char)s[i] > 0x7E) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Busy gate for the {"seq":N} ops: one staged slot, and the reflash job /
+// a waiting render own the bus first (mutual 409/503 discipline).
+static bool opSlotBusy() {
+  return stagedOp.pending || selfTestPolling || reflashPending ||
+         reflashInProgress(reflashProgress);
+}
+
+static void stageOp(AsyncWebServerRequest* request, FollowerOpKind kind,
+                    uint8_t addr, long arg) {
+  if (opSlotBusy()) {
+    sendWithCors(request, 503, "text/plain",
+                 F("Another unit operation is in progress — try again"));
+    return;
+  }
+  stagedOp.seq = ++maintSeqCounter;
+  stagedOp.kind = kind;
+  stagedOp.addr = addr;
+  stagedOp.arg = arg;
+  stagedOp.pending = true;  // set last (v1 flag-handoff rule)
+  char buf[24];
+  snprintf(buf, sizeof(buf), "{\"seq\":%lu}", (unsigned long)stagedOp.seq);
+  sendWithCors(request, 200, "application/json", buf);
+}
+
+// Query-string address (v2 parity — see queryRequireLong).
+static bool checkAddressParam(AsyncWebServerRequest* request, int& outAddr) {
+  const char* raw = nullptr;
+  String value;
+  if (request->hasParam("address")) {
+    value = request->getParam("address")->value();
+    raw = value.c_str();
+  }
+  MaintVerdict verdict =
+      maintValidateAddress(raw, unitFacts, UNITS_AMOUNT, outAddr);
+  if (verdict.httpStatus != 200) {
+    sendWithCors(request, verdict.httpStatus, "text/plain", verdict.message);
+    return false;
+  }
+  return true;
+}
+
+// --- OTA (v1 registerMasterFirmwareEndpoint, trimmed) --------------------------------
+
+static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
+  server.on("/firmware/master", HTTP_POST,
+    [](AsyncWebServerRequest* request) {
+      if (request->_tempObject != nullptr ||
+          (masterOtaOwnerRequest != nullptr &&
+           masterOtaOwnerRequest != request)) {
+        request->send(409, "text/plain",
+                      "Another master OTA upload is already in progress — "
+                      "retry when it finishes");
+        return;
+      }
+      masterOtaOwnerRequest = nullptr;
+      if (otaTxPowerReduced) {
+        WiFi.setOutputPower(DEFAULT_TX_POWER_DBM);
+        otaTxPowerReduced = false;
+      }
+      if (otaRejected) {
+        int status = otaRejectionStatus;
+        String reason = otaRejectionReason;
+        otaRejected = false;
+        otaRejectionStatus = 0;
+        otaRejectionReason = String();
+        masterOtaUploadActive = false;
+        request->send(status, "text/plain", reason);
+        return;
+      }
+      if (Update.hasError()) {
+        String msg = String("Master OTA failed: ") + Update.getErrorString();
+        masterOtaUploadActive = false;
+        request->send(500, "text/plain", msg);
+      } else if (!Update.isFinished()) {
+        masterOtaUploadActive = false;
+        request->send(500, "text/plain",
+                      "Master OTA incomplete: final chunk missing");
+      } else {
+        request->send(200, "text/plain",
+                      "Master firmware flashed; rebooting…");
+        isPendingReboot = true;
+      }
+    },
+    [](AsyncWebServerRequest* request, String filename, size_t index,
+       uint8_t* data, size_t len, bool final) {
+      // Concurrent-upload guard (v1 #191): one live session owns the
+      // Update singleton; overlaps are marked rejected per-request.
+      if (index == 0 && masterOtaOwnerRequest != nullptr &&
+          masterOtaOwnerRequest != request) {
+        request->_tempObject = malloc(1);
+        return;
+      }
+      if (request->_tempObject != nullptr) return;
+      if (index == 0 || masterOtaOwnerRequest == request) {
+        masterOtaLastChunkMs = millis();
+      }
+      if (index == 0) {
+        // Freeze all display/unit work for the upload (v1 #116): WiFi RX +
+        // flash writes + stepper current on one small supply is the storm
+        // that endangers a flash.
+        masterOtaUploadActive = true;
+        otaRejected = false;
+        otaRejectionStatus = 0;
+        otaRejectionReason = String();
+
+        WiFi.setOutputPower(OTA_TX_POWER_DBM);  // v1 #60 sag guard
+        otaTxPowerReduced = true;
+
+        uint32_t freeSpace = ESP.getFreeSketchSpace();
+        uint32_t maxSketchSpace = (freeSpace - 0x1000) & 0xFFFFF000;
+        size_t contentLen = request->contentLength();
+        if (contentLen > 0 && contentLen > maxSketchSpace) {
+          otaRejected = true;
+          otaRejectionStatus = 413;
+          otaRejectionReason = String("Firmware too large: ") + contentLen +
+                               " bytes > maxSketchSpace " + maxSketchSpace;
+          return;
+        }
+        if (ESP.getFlashChipRealSize() < ESP.getFlashChipSize()) {
+          // v1 #92/#94: Update.begin() would refuse everything.
+          otaRejected = true;
+          otaRejectionStatus = 412;
+          otaRejectionReason =
+              "Flash config mismatch — reflash once over USB";
+          return;
+        }
+        Update.runAsync(true);
+        if (!Update.begin(maxSketchSpace, U_FLASH)) {
+          // Stale updater state from an aborted upload (v1 #162).
+          Update.end(false);
+          Update.clearError();
+          if (!Update.begin(maxSketchSpace, U_FLASH)) {
+            otaRejected = true;
+            otaRejectionStatus = 500;
+            otaRejectionReason =
+                String("Update.begin failed: ") + Update.getErrorString();
+            return;
+          }
+        }
+        // MD5 is MANDATORY (v1 #144): eboot's checksum does not catch a
+        // truncated upload.
+        if (!request->hasParam("md5")) {
+          otaRejected = true;
+          otaRejectionStatus = 400;
+          otaRejectionReason = "md5 query param is required";
+          Update.end(false);
+          return;
+        }
+        String md5 = request->getParam("md5")->value();
+        md5.toLowerCase();
+        if (md5.length() != 32 || !Update.setMD5(md5.c_str())) {
+          otaRejected = true;
+          otaRejectionStatus = 400;
+          otaRejectionReason = "md5 query param must be a 32-char hex digest";
+          Update.end(false);
+          return;
+        }
+        masterOtaOwnerRequest = request;
+        request->onDisconnect([request]() {
+          if (masterOtaOwnerRequest == request) {
+            masterOtaOwnerRequest = nullptr;
+          }
+        });
+      }
+      if (masterOtaOwnerRequest != request) return;
+      if (otaRejected) return;
+      if (!Update.hasError() && len > 0) {
+        Update.write(data, len);
+      }
+      if (final) {
+        if (!Update.end(true)) {
+          // md5-mismatch end() latches the error but skips _reset (v1
+          // #162) — a second end(false) clears the size state.
+          Update.end(false);
+        }
+      }
+    });
+}
+
+// --- endpoint registration ------------------------------------------------------------
+
+void webEndpointsInit(AsyncWebServer& server) {
+  registerMasterFirmwareEndpoint(server);
+
+  server.on("/settings", HTTP_GET, [](AsyncWebServerRequest* request) {
+    FollowerClusterView cv = clusterViewGet();
+    sendWithCors(request, 200, "application/json",
+                 followerSettingsJson(effectiveDeviceName, GIT_REV,
+                                      displayWidth,
+                                      followerPhaseName(cv.phase),
+                                      cv.leaderName, cv.leaderHost, cv.row,
+                                      vitalsNow()));
+  });
+
+  server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
+    isPendingReboot = true;
+    sendWithCors(request, 200, "text/plain", F("Rebooting…"));
+  });
+
+  // --- cluster wire (#272 contract, mirrored from the v2 follower) ----------
+
+  server.on("/cluster/join", HTTP_POST, [](AsyncWebServerRequest* request) {
+    String leaderHost, rowStr, epochStr;
+    if (!paramString(request, "leaderHost", leaderHost) ||
+        !paramString(request, "row", rowStr) ||
+        !paramString(request, "epoch", epochStr)) {
+      request->send(400, "text/plain", F("Missing leaderHost/row/epoch"));
+      return;
+    }
+    String leaderName;
+    if (!paramString(request, "leaderName", leaderName)) {
+      leaderName = leaderHost;
+    }
+    long row = rowStr.toInt();
+    uint32_t epoch = (uint32_t)strtoul(epochStr.c_str(), nullptr, 10);
+    if (row < 0 || row > 255) {
+      request->send(400, "text/plain", F("Row out of range"));
+      return;
+    }
+    if (leaderHost.length() == 0 || leaderHost.length() > FOLLOWER_HOST_MAX ||
+        !isPrintableAscii(leaderHost, 0x21)) {
+      request->send(400, "text/plain", F("Invalid leaderHost"));
+      return;
+    }
+    if (leaderName.length() > FOLLOWER_NAME_MAX ||
+        !isPrintableAscii(leaderName, 0x20)) {
+      request->send(400, "text/plain", F("Invalid leaderName"));
+      return;
+    }
+    // Sticky leadership (#295 semantics): while our leader is demonstrably
+    // alive, a DIFFERENT leader's join is refused with its identity.
+    String curName, curHost;
+    if (clusterJoinWouldConflict(leaderHost, curName, curHost)) {
+      String out = "{\"error\":\"other-leader\",\"leaderHost\":";
+      followerAppendJsonString(out, curHost);
+      out += ",\"leaderName\":";
+      followerAppendJsonString(out, curName);
+      out += '}';
+      request->send(409, "application/json", out);
+      return;
+    }
+    clusterHandleJoin(leaderName, leaderHost, (int)row, epoch);
+    char mask[16];
+    FollowerHealthFacts h = healthNow(mask, sizeof(mask));
+    request->send(200, "application/json",
+                  followerJoinReplyJson(effectiveDeviceName, GIT_REV, h,
+                                        vitalsNow()));
+  });
+
+  server.on("/cluster/render", HTTP_POST, [](AsyncWebServerRequest* request) {
+    String epochStr, seqStr, text;
+    if (!paramString(request, "epoch", epochStr) ||
+        !paramString(request, "seq", seqStr) ||
+        !paramString(request, "text", text)) {
+      request->send(400, "text/plain", F("Missing epoch/seq/text"));
+      return;
+    }
+    uint32_t epoch = (uint32_t)strtoul(epochStr.c_str(), nullptr, 10);
+    uint32_t seq = (uint32_t)strtoul(seqStr.c_str(), nullptr, 10);
+    int speed = 80;
+    String speedStr;
+    if (paramString(request, "speed", speedStr)) {
+      speed = speedStr.toInt();
+      if (speed < 1 || speed > 100) {
+        request->send(400, "text/plain", F("Speed must be 1..100"));
+        return;
+      }
+    }
+    String commitStr;
+    uint64_t commitAtMs = 0;
+    if (paramString(request, "commitAtMs", commitStr)) {
+      commitAtMs = strtoull(commitStr.c_str(), nullptr, 10);
+    }
+    // Segments render verbatim; bound the length like every text producer.
+    if ((int)text.length() > UNITS_AMOUNT) {
+      text = text.substring(0, UNITS_AMOUNT);
+    }
+    FollowerRenderVerdict v =
+        clusterHandleRender(epoch, seq, text, speed, commitAtMs);
+    if (v == FollowerRenderVerdict::NotClustered) {
+      request->send(409, "application/json",
+                    F("{\"error\":\"not clustered\"}"));
+      return;
+    }
+    String out = "{\"applied\":";
+    out += (v == FollowerRenderVerdict::Apply) ? "true" : "false";
+    out += ",\"seq\":";
+    out += String((unsigned long)seq);
+    out += '}';
+    request->send(200, "application/json", out);
+  });
+
+  server.on("/cluster/ping", HTTP_POST, [](AsyncWebServerRequest* request) {
+    // digest=/you= piggyback params are deliberately ignored (#298: never a
+    // takeover candidate — the digest has no consumer here).
+    if (!clusterHandlePing()) {
+      request->send(409, "application/json",
+                    F("{\"error\":\"not clustered\"}"));
+      return;
+    }
+    FollowerClusterView cv = clusterViewGet();
+    char mask[16];
+    FollowerHealthFacts h = healthNow(mask, sizeof(mask));
+    request->send(200, "application/json",
+                  followerPingReplyJson(followerPhaseName(cv.phase), cv.epoch,
+                                        cv.lastSeq, h, vitalsNow(), GIT_REV));
+  });
+
+  server.on("/cluster/leave", HTTP_POST, [](AsyncWebServerRequest* request) {
+    clusterHandleLeave();  // idempotent
+    request->send(200, "text/plain", F("ok"));
+  });
+
+  server.on("/cluster/health", HTTP_GET, [](AsyncWebServerRequest* request) {
+    FollowerClusterView cv = clusterViewGet();
+    int detected = 0;
+    for (int i = 0; i < UNITS_AMOUNT; i++) {
+      if (unitFacts[i].state != 0) detected++;
+    }
+    request->send(200, "application/json",
+                  followerClusterHealthJson(
+                      followerPhaseName(cv.phase), cv.leaderName,
+                      cv.leaderHost, cv.row, cv.epoch, cv.lastSeq,
+                      cv.heldSegment, GIT_REV, displayWidth, detected,
+                      computeFaultyUnitCount(unitFacts, UNITS_AMOUNT)));
+  });
+
+  // --- unit health (v1/v2 shared wire shape) --------------------------------
+
+  server.on("/units/health", HTTP_GET, [](AsyncWebServerRequest* request) {
+    std::unique_ptr<char[]> buf(new char[UNIT_HEALTH_JSON_CAP]);
+    int faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
+    size_t n = buildUnitHealthJson(buf.get(), UNIT_HEALTH_JSON_CAP, unitFacts,
+                                   displayWidth, faulty,
+                                   SFP_I2C_ADDRESS_BASE);
+    if (n == 0 || n >= UNIT_HEALTH_JSON_CAP) {
+      n = (size_t)snprintf(buf.get(), UNIT_HEALTH_JSON_CAP,
+                           "{\"width\":%d,\"faulty\":%d,\"units\":[]}",
+                           displayWidth, faulty);
+    }
+    // Wear + reflash progress splices (v2 additive keys — same payload the
+    // S3 member panel reads).
+    WearAssessment wear;
+    assessWear(unitFacts, UNITS_AMOUNT, wear);
+    char wearJson[96];
+    size_t wearLen = buildWearJson(wear, wearJson, sizeof(wearJson));
+    if (n > 0 && wearLen < sizeof(wearJson) &&
+        n + wearLen + 2 < UNIT_HEALTH_JSON_CAP) {
+      n += (size_t)snprintf(buf.get() + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
+                            ",%s}", wearJson) - 1;
+    }
+    char reflashJson[80];
+    buildReflashJson(reflashJson, sizeof(reflashJson), reflashProgress);
+    if (n > 0 && n + strlen(reflashJson) + 13 < UNIT_HEALTH_JSON_CAP) {
+      snprintf(buf.get() + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
+               ",\"reflash\":%s}", reflashJson);
+    }
+    sendWithCors(request, 200, "application/json", buf.get());
+  });
+
+  server.on("/units/health/refresh", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+              if (reflashPending || reflashInProgress(reflashProgress)) {
+                sendWithCors(request, 503, "application/json",
+                             F("{\"status\":\"busy\"}"));
+                return;
+              }
+              unitHealthRefreshPending = true;
+              sendWithCors(request, 202, "application/json",
+                           F("{\"status\":\"pending\"}"));
+            });
+
+  // --- {"seq":N} maintenance ops (#204 contract subset) ----------------------
+
+  server.on("/unit/offset", HTTP_GET, [](AsyncWebServerRequest* request) {
+    // GET params ride the query string, not the body.
+    const char* raw = nullptr;
+    String value;
+    if (request->hasParam("address")) {
+      value = request->getParam("address")->value();
+      raw = value.c_str();
+    }
+    int addr = 0;
+    MaintVerdict verdict =
+        maintValidateAddress(raw, unitFacts, UNITS_AMOUNT, addr);
+    if (verdict.httpStatus != 200) {
+      sendWithCors(request, verdict.httpStatus, "text/plain",
+                   verdict.message);
+      return;
+    }
+    const UnitFacts& unit = unitFacts[addr - SFP_I2C_ADDRESS_BASE];
+    if (!unit.offsetValid) {
+      sendWithCors(request, 502, "text/plain",
+                   F("Unit did not return a valid offset (firmware may "
+                     "predate #32)"));
+      return;
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "{\"offset\":%d}", (int)unit.offset);
+    sendWithCors(request, 200, "application/json", buf);
+  });
+
+  server.on("/unit/offset", HTTP_POST, [](AsyncWebServerRequest* request) {
+    int addr = 0;
+    if (!checkAddressParam(request, addr)) return;
+    long value = 0;
+    if (!queryRequireLong(request, "value", value)) return;
+    MaintVerdict verdict = maintValidateOffset(value);
+    if (verdict.httpStatus != 200) {
+      sendWithCors(request, verdict.httpStatus, "text/plain",
+                   verdict.message);
+      return;
+    }
+    stageOp(request, FollowerOpKind::WriteOffset, (uint8_t)addr, value);
+  });
+
+  server.on("/unit/jog", HTTP_POST, [](AsyncWebServerRequest* request) {
+    int addr = 0;
+    if (!checkAddressParam(request, addr)) return;
+    long steps = 0;
+    if (!queryRequireLong(request, "steps", steps)) return;
+    MaintVerdict verdict = maintValidateJog(steps);
+    if (verdict.httpStatus != 200) {
+      sendWithCors(request, verdict.httpStatus, "text/plain",
+                   verdict.message);
+      return;
+    }
+    stageOp(request, FollowerOpKind::Jog, (uint8_t)addr, steps);
+  });
+
+  server.on("/unit/home", HTTP_POST, [](AsyncWebServerRequest* request) {
+    int addr = 0;
+    if (!checkAddressParam(request, addr)) return;
+    stageOp(request, FollowerOpKind::Home, (uint8_t)addr, 0);
+  });
+
+  server.on("/unit/identify", HTTP_POST, [](AsyncWebServerRequest* request) {
+    int addr = 0;
+    if (!checkAddressParam(request, addr)) return;
+    stageOp(request, FollowerOpKind::Identify, (uint8_t)addr, 0);
+  });
+
+  server.on("/unit/reset-odometer", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+              int addr = 0;
+              if (!checkAddressParam(request, addr)) return;
+              stageOp(request, FollowerOpKind::ResetOdometer, (uint8_t)addr,
+                      0);
+            });
+
+  server.on("/unit/self-test", HTTP_POST, [](AsyncWebServerRequest* request) {
+    int addr = 0;
+    if (!checkAddressParam(request, addr)) return;
+    stageOp(request, FollowerOpKind::SelfTest, (uint8_t)addr, 0);
+  });
+
+  server.on("/unit/self-test-result", HTTP_GET,
+            [](AsyncWebServerRequest* request) {
+              if (!request->hasParam("seq")) {
+                sendWithCors(request, 400, "text/plain",
+                             F("Missing 'seq' query param"));
+                return;
+              }
+              long seq = request->getParam("seq")->value().toInt();
+              if (seq < 1) {
+                sendWithCors(request, 400, "text/plain",
+                             F("seq must be >= 1"));
+                return;
+              }
+              char buf[128];
+              buildSelfTestJson(buf, sizeof(buf), selfTestSlot,
+                                (uint32_t)seq);
+              sendWithCors(request, 200, "application/json", buf);
+            });
+
+  // v1 debug semantics: range check only, no sketch-state gate. displayTask
+  // equivalent rule: never reprobe right after — the loop's probe-inhibit
+  // deadline (armed at execution) keeps runtime probes out of the twiboot
+  // window (v1 #88).
+  server.on("/unit/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
+    long addr = 0;
+    if (!queryRequireLong(request, "address", addr)) return;
+    if (addr < 1 || addr > 126) {
+      sendWithCors(request, 400, "text/plain", F("Address must be 1..126"));
+      return;
+    }
+    stageOp(request, FollowerOpKind::RebootToBootloader, (uint8_t)addr, 0);
+  });
+
+  server.on("/unit/op-result", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (!request->hasParam("seq")) {
+      sendWithCors(request, 400, "text/plain",
+                   F("Missing 'seq' query param"));
+      return;
+    }
+    long seq = request->getParam("seq")->value().toInt();
+    if (seq < 1) {
+      sendWithCors(request, 400, "text/plain", F("seq must be >= 1"));
+      return;
+    }
+    char buf[96];
+    buildOpResultJson(buf, sizeof(buf), opResult, (uint32_t)seq);
+    sendWithCors(request, 200, "application/json", buf);
+  });
+
+  // --- bulk unit reflash (v1 #138 flow: arm, loop() does the work) -----------
+
+  server.on("/reflash-units", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (opSlotBusy()) {
+      request->send(503, "text/plain",
+                    F("Unit firmware flash already in progress — try again "
+                      "in a moment"));
+      return;
+    }
+    reflashPending = true;
+    request->send(200, "text/plain",
+                  F("Reflash queued. Units are re-flashed 2 at a time — "
+                    "progress in /units/health's reflash object."));
+  });
+}
+
+// --- loop drain ---------------------------------------------------------------------
+
+static void executeStagedOp() {
+  StagedOp op = stagedOp;  // copy, then release the slot at the end
+  int wireStatus = -1;
+  switch (op.kind) {
+    case FollowerOpKind::WriteOffset:
+      wireStatus = busWriteOffset(op.addr, (int16_t)op.arg);
+      if (wireStatus == 0) {
+        // Patch the probe-time fact in place (v2 rule) so GET /unit/offset
+        // reflects the write without a reprobe.
+        UnitFacts& u = unitFacts[op.addr - SFP_I2C_ADDRESS_BASE];
+        u.offset = (int16_t)op.arg;
+        u.offsetValid = true;
+      }
+      break;
+    case FollowerOpKind::Jog:
+      wireStatus = busJog(op.addr, (int)op.arg);
+      break;
+    case FollowerOpKind::Home:
+      wireStatus = busHome(op.addr);
+      break;
+    case FollowerOpKind::Identify:
+      wireStatus = busIdentify(op.addr);
+      break;
+    case FollowerOpKind::ResetOdometer:
+      wireStatus = busResetOdometer(op.addr);
+      if (wireStatus == 0) {
+        UnitFacts& u = unitFacts[op.addr - SFP_I2C_ADDRESS_BASE];
+        u.odometer = 0;
+      }
+      break;
+    case FollowerOpKind::RebootToBootloader:
+      wireStatus = busRebootToBootloader(op.addr);
+      // The unit sits in twiboot for ~1 s — keep every runtime probe out
+      // of that window (v1 #88).
+      busArmProbeInhibit(millis() + 3000);
+      break;
+    case FollowerOpKind::SelfTest:
+      wireStatus = busStartSelfTest(op.addr);
+      selfTestSlot = SelfTestSlot{};
+      selfTestSlot.seq = op.seq;
+      if (wireStatus == 0) {
+        selfTestPolling = true;
+        selfTestAddr = op.addr;
+        selfTestPollDeadlineMs = millis() + SELF_TEST_TIMEOUT_MS;
+        selfTestPollLastMs = millis();
+      } else {
+        selfTestSlot.outcome = SelfTestOutcome::WireFail;
+      }
+      break;
+    default:
+      break;
+  }
+  // The op-result contract answers for every kind; for a self-test, "ok"
+  // means "started" — the measurements land in /unit/self-test-result.
+  opResult.seq = op.seq;
+  opResult.outcome =
+      wireStatus == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail;
+  opResult.reason = MaintReason::None;
+  stagedOp.pending = false;
+}
+
+static void pollSelfTest() {
+  if (!selfTestPolling) return;
+  if (millis() - selfTestPollLastMs < 500) return;
+  selfTestPollLastMs = millis();
+  UnitSelfTestReading reading;
+  if (busReadSelfTest(selfTestAddr, reading)) {
+    if (reading.state == 2 /* ok */) {
+      selfTestSlot.outcome = SelfTestOutcome::Ok;
+      selfTestSlot.stepsPerRev = reading.stepsPerRev;
+      selfTestSlot.hallWindowSteps = reading.hallWindowSteps;
+      selfTestSlot.revTimeMs = reading.revTimeMs;
+      selfTestPolling = false;
+      return;
+    }
+    if (reading.state == 3 /* failed */) {
+      selfTestSlot.outcome = SelfTestOutcome::UnitFailed;
+      selfTestPolling = false;
+      return;
+    }
+    // state 0 (never) right after a start means the unit dropped the
+    // command — old firmware; keep polling until the deadline settles it.
+  }
+  if ((int32_t)(millis() - selfTestPollDeadlineMs) >= 0) {
+    selfTestSlot.outcome = SelfTestOutcome::Timeout;
+    selfTestPolling = false;
+  }
+}
+
+void webLoopTick() {
+  if (reflashPending) {
+    reflashPending = false;
+    busRunReflashJob();
+  }
+  if (stagedOp.pending) executeStagedOp();
+  pollSelfTest();
+  if (unitHealthRefreshPending) {
+    // Probe-inhibit (v1 #88): wait out any twiboot window before scanning.
+    if ((int32_t)(millis() - busProbeInhibitedUntilMs()) >= 0) {
+      unitHealthRefreshPending = false;
+      busProbe();
+      busPollHealth();
+    }
+  }
+}
