@@ -58,6 +58,9 @@ struct SettingsJsonFields {
   String clusterLeaderName;
   String clusterLeaderHost;
   int clusterRow = 0;
+  // Leader side (#277): the browser's wall mirror collapses on the poll
+  // when this drops and the SSE stream missed the transition.
+  bool clusterLeading = false;
 };
 
 // JSON string escaper (v2 copy of v1's HelpersStringHandling.ino version).
@@ -150,6 +153,7 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"clusterLeaderName\":"; appendJsonString(out, f.clusterLeaderName);
   out += ",\"clusterLeaderHost\":"; appendJsonString(out, f.clusterLeaderHost);
   out += ",\"clusterRow\":";        out += f.clusterRow;
+  out += ",\"clusterLeading\":";    appendJsonBool(out, f.clusterLeading);
 
   out += '}';
   return out;

@@ -361,6 +361,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     f.clusterLeaderName = cluster.leaderName;
     f.clusterLeaderHost = cluster.leaderHost;
     f.clusterRow = cluster.row;
+    f.clusterLeading = clusterLeaderEnabled();  // wall-mirror fallback (#277)
     request->send(200, "application/json", buildSettingsJson(f));
   });
 
@@ -1439,6 +1440,22 @@ void webDisplayEventsTick() {
   // an already-shown text is deduped by the mirror's frame compare.
   if (sseEvents.count() == 0) return;
   DisplaySnapshot snap = displaySnapshotGet();
+
+  // Cheap pre-check before paying for the wall reconstruction (mutex +
+  // String churn, every 100 ms otherwise): only rebuild when the own text
+  // changed, the grid generation moved, or leading flipped. The rows-key
+  // due-check below stays authoritative for what actually gets pushed.
+  static uint32_t lastGridGen = 0;
+  static bool lastLeading = false;
+  bool leading = clusterLeaderEnabled();
+  uint32_t gridGen = leading ? clusterLeaderGridGeneration() : 0;
+  if (strncmp(tracker.lastText, snap.currentText, DISPLAY_CMD_TEXT_LEN) == 0 &&
+      leading == lastLeading && gridGen == lastGridGen) {
+    return;
+  }
+  lastLeading = leading;
+  lastGridGen = gridGen;
+
   String rowsKey;
   String payload = sseDisplayPayload(snap, &rowsKey);
   if (!displayEventDue(tracker, snap.currentText, rowsKey)) return;

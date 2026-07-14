@@ -263,6 +263,9 @@ function applySettings(s) {
 	currentAlignment = s.alignment || "left";
 	currentMode = s.deviceMode || "text";
 
+	//Collapse fallback (#277): if the SSE stream died and missed the
+	//uncluster transition, the poll is the authority — tear the wall down.
+	if (wallWidths && !s.clusterLeading) buildMirror(unitCount);
 	if (!wallWidths) {
 		if (mirrorTiles.length !== unitCount) buildMirror(unitCount);
 		renderMirror(s.lastWrittenText || "");
@@ -392,9 +395,10 @@ function startUi(s) {
 }
 
 //SSE display push (#251): the mirror flips the moment displayTask executes
-//a command instead of waiting on the 5 s poll — which stays untouched as
-//the fallback (EventSource reconnects on its own; a dead stream just
-//degrades to polled behavior). onConnect delivers the current text.
+//a command instead of waiting on the 5 s poll. The poll backstops the
+//single-row mirror's CONTENT and the wall's collapse (clusterLeading),
+//but not wall content — a dead stream freezes the remote rows until
+//EventSource auto-reconnects and onConnect resends the full wall (#277).
 function initDisplayEvents() {
 	if (!window.EventSource) return;
 	var es = new EventSource("/events");

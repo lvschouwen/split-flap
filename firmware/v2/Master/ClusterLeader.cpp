@@ -73,6 +73,12 @@ static ClusterRolloutState rollout;
 // below; applyStagedConfig needs it before that.
 static void rolloutCloseUpload();
 
+// Wall-mirror change signal (#277): bumped whenever segments[] change
+// (submit deltas, config swaps) so netTask's SSE tick can skip the mirror
+// reconstruction — mutex + up to 8 String rebuilds — on the ~100 ms
+// cadence when nothing moved. Relaxed: a missed bump is caught next tick.
+static std::atomic<uint32_t> gridGenerationAtomic{0};
+
 static uint64_t epochNowMs(bool& synced) {
   struct timeval tv;
   gettimeofday(&tv, nullptr);
@@ -191,9 +197,11 @@ static void submitGrid(const String& contentKey, bool isClock,
   gridSpeed = speed;
   gridCommitAtMs = synced ? nowE + CLUSTER_COMMIT_LEAD_MS : 0;
 
+  bool anyChanged = false;
   for (int i = 0; i < table.count; i++) {
     if (segs[i] == segments[i]) continue;  // that row didn't change
     segments[i] = segs[i];
+    anyChanged = true;
     if (clusterMemberIsSelf(table.members[i])) {
       selfPending = true;
       selfText = segs[i];
@@ -203,6 +211,9 @@ static void submitGrid(const String& contentKey, bool isClock,
     } else {
       runtimes[i].renderDirty = true;
     }
+  }
+  if (anyChanged) {
+    gridGenerationAtomic.fetch_add(1, std::memory_order_relaxed);
   }
 }
 
@@ -273,6 +284,7 @@ static void applyStagedConfig() {
     selfPending = false;
     selfText = "";
     enabledAtomic.store(nextEnabled);
+    gridGenerationAtomic.fetch_add(1, std::memory_order_relaxed);
   }
 
   // NVS write from clusterTask: safe — the NVS layer is internally
@@ -743,10 +755,17 @@ ClusterLeaderStatus clusterLeaderStatusGet() {
   return st;
 }
 
+uint32_t clusterLeaderGridGeneration() {
+  return gridGenerationAtomic.load(std::memory_order_relaxed);
+}
+
 int clusterLeaderMirrorRows(String* rows, int& selfRowOut,
                             const String& selfRowText,
                             const String& alignment) {
-  selfRowOut = 0;
+  // -1 = no own row: a pure-orchestrator table is legal (config requires
+  // at most one self member, not at least one) and the browser must not
+  // anchor the health strip under someone else's row.
+  selfRowOut = -1;
   if (leaderMutex == nullptr || !enabledAtomic.load()) return 0;
   LeaderLock lock;
   for (int i = 0; i < table.count; i++) {

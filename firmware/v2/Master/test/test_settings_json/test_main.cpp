@@ -139,6 +139,13 @@ static void test_cluster_fields_carry_membership() {
   TEST_ASSERT_TRUE(contains(json, "\"clusterLeaderName\":\"wall-leader\""));
   TEST_ASSERT_TRUE(contains(json, "\"clusterLeaderHost\":\"192.168.15.22\""));
   TEST_ASSERT_TRUE(contains(json, "\"clusterRow\":2"));
+
+  // #277: the poll is the wall mirror's collapse fallback when the SSE
+  // stream misses the uncluster transition.
+  TEST_ASSERT_TRUE(contains(json, "\"clusterLeading\":false"));
+  f.clusterLeading = true;
+  json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"clusterLeading\":true"));
 }
 
 int main(int, char**) {

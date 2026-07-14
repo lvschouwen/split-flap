@@ -86,11 +86,16 @@ ClusterLeaderStatus clusterLeaderStatusGet();
 // `selfRowText` (this master's live currentText) overlaid on the own-row
 // slot(s) with the display's alignment lead. Any task (mutex-copied).
 // rows[] needs CLUSTER_MAX_MEMBERS entries; selfRowOut gets the own row's
-// index (the browser anchors the health strip there). Returns the grid's
-// row count, 0 while not leading.
+// index (the browser anchors the health strip there; -1 = no own row).
+// Returns the grid's row count, 0 while not leading.
 int clusterLeaderMirrorRows(String* rows, int& selfRowOut,
                             const String& selfRowText,
                             const String& alignment);
+
+// Cheap change signal for the SSE tick (#277): increments whenever the
+// segments change (submit deltas, config swaps). Any task, lock-free —
+// compare against the last seen value before paying for MirrorRows.
+uint32_t clusterLeaderGridGeneration();
 
 // Web boundary (async task): validate + stage a new member table spec
 // (ClusterLeaderPolicy wire format; "" disables). The swap itself — leave

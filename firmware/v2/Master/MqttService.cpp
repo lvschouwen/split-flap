@@ -108,12 +108,15 @@ static int mqttLastPublishedUnits = -1;
 static int mqttLastPublishedSpeed = -1;
 static String mqttLastPublishedAlignment = "\x01";
 
-// Cluster surfacing trackers (#277). mqttLastClusterConfigured starts 0
-// (not a force-sentinel): the discovery config publishes on the 0→1
-// leading transition and blanks on 1→0 — a board that never leads never
-// touches the cluster topics. mqttClusterCapacity caches the grid's total
-// units between 5 s cluster passes for the width publish below.
-static int mqttLastClusterConfigured = 0;
+// Cluster surfacing trackers (#277). mqttLastClusterConfigured is -1 on
+// every fresh session: the first cluster pass RECONCILES — publish the
+// discovery config when leading, blank the retained cluster topics when
+// not (a former leader may have disabled/rebooted while the broker was
+// unreachable, leaving a stale retained config only this sweep can
+// remove; blanking never-set retained topics is a broker no-op).
+// mqttClusterCapacity caches the grid's total units between 5 s cluster
+// passes for the width publish below.
+static int mqttLastClusterConfigured = -1;
 static int mqttLastClusterState = -1;
 static String mqttLastClusterAttrs = "\x01";
 static uint32_t mqttNextClusterMs = 0;
@@ -487,9 +490,9 @@ void mqttServiceTick() {
     mqttLastPublishedUnits = -1;
     mqttLastPublishedSpeed = -1;
     mqttLastPublishedAlignment = "\x01";
-    // Cluster (#277): a fresh session re-decides the config transition and
+    // Cluster (#277): a fresh session reconciles the retained config and
     // re-publishes state/attrs on the first cluster pass.
-    mqttLastClusterConfigured = 0;
+    mqttLastClusterConfigured = -1;
     mqttLastClusterState = -1;
     mqttLastClusterAttrs = "\x01";
     mqttNextClusterMs = millis();
@@ -529,6 +532,10 @@ void mqttServiceTick() {
   }
   // While leading (#277), text/state carries the whole wall (published in
   // the cluster block below) — the own-row slice alone would be a lie.
+  // Shared-tracker contract: mqttLastPublishedText/Width track the TOPIC's
+  // last retained value, not a mode — this own-facts path and the wall
+  // path below share them ON PURPOSE (one topic, one dedup), and the
+  // transition branch resets both when ownership flips.
   bool leading = clusterLeaderEnabled();
   if (!leading) {
     String writtenText(snap.currentText);
@@ -599,9 +606,10 @@ void mqttServiceTick() {
                 F("MQTT: cluster discovery skipped — would truncate"));
           }
         } else {
-          // Leading→standalone: blank the retained config + topics so HA
-          // drops the entity instead of showing it stale, and force the
-          // width/text publishes back onto this board's own facts.
+          // Not leading (runtime disable OR the reconcile sweep of a fresh
+          // session): blank the retained config + topics so HA drops the
+          // entity instead of showing it stale, and force the width/text
+          // publishes back onto this board's own facts.
           mqttClient.publish(topicBuf, 0, true, "");
           mqttClient.publish(
               mqttTopic(mqttResolvedDeviceId, "cluster_degraded").c_str(), 0,
@@ -635,6 +643,8 @@ void mqttServiceTick() {
             mqttTopic(mqttResolvedDeviceId, "cluster/attrs").c_str(), 0, true,
             attrs.c_str());
       }
+      // Wall text/state — shares mqttLastPublishedText with the own-facts
+      // path (same topic; see the contract note above the leading gate).
       String rows[CLUSTER_MAX_MEMBERS];
       int selfRow = 0;
       int rowCount = clusterLeaderMirrorRows(

@@ -56,7 +56,8 @@ inline bool displayEventDue(DisplayEventTracker& t, const char* text) {
 // {"text":"..."} with full JSON escaping — display text is user input.
 // While leading a cluster (#277), the payload adds the reconstructed wall:
 // ,"selfRow":N,"rows":["...", ...] — the browser renders those verbatim
-// (they arrive pre-positioned) and keys the health strip to selfRow.
+// (they arrive pre-positioned) and keys the health strip to selfRow
+// (-1 = the leader owns no row; the strip stays below the wall).
 inline String buildDisplayEventJson(const char* text,
                                     const String* rows = nullptr,
                                     int rowCount = 0, int selfRow = 0) {
