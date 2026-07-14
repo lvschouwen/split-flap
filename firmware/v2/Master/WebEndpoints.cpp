@@ -333,6 +333,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       f.flapSpeed = String(liveSettings->flapSpeed);
       f.deviceMode = liveSettings->deviceMode;
       f.timezonePosix = liveSettings->timezonePosix;
+      f.unitCountOverride = liveSettings->unitCountOverride;
       f.deviceName = liveSettings->deviceName;
       f.effectiveDeviceName = effectiveName;
       f.mqttHost = liveSettings->mqttHost;
@@ -1491,8 +1492,16 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // Settings first, command second: a speed/alignment change riding the
       // same POST as a message must apply to that message (v1 ordering).
       String timezoneBefore = settings.timezonePosix;
+      int unitCountBefore = settings.unitCountOverride;
       applySettingsPost(pendingPost, settings, store);
       timezoneChanged = settings.timezonePosix != timezoneBefore;
+
+      // #289 dummy mode: push the changed override to displayTask and queue
+      // a Probe so the width refolds now instead of at the next bus op.
+      if (settings.unitCountOverride != unitCountBefore) {
+        tasksSetUnitCountOverride(settings.unitCountOverride);
+        displayEnqueue(makeProbeCommand());
+      }
 
       // Explicit mode switch or message send trumps a running notification
       // (v1 #130 rule) — cancel so the next 1 Hz tick (or the direct

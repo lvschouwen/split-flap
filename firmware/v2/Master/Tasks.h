@@ -46,6 +46,11 @@ struct MqttInboxMessage {
 // and needs its mutex to exist).
 void tasksInit(MasterSettings& settings, SettingsStore& store);
 
+// #289 dummy mode: push a changed unit-count override to displayTask (0 =
+// auto). Takes effect at the next probe/health fold — the settings drain
+// queues a Probe right after calling this.
+void tasksSetUnitCountOverride(int count);
+
 // Non-blocking enqueue into the display task; false = queue full (callers
 // report, never wait — network context must not block on the display).
 bool displayEnqueue(const DisplayCommand& cmd);

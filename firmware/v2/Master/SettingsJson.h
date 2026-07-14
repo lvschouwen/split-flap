@@ -52,6 +52,10 @@ struct SettingsJsonFields {
   bool isInOtaMode = false;
   bool wifiSettingsResettable = false;
 
+  // #289 dummy mode: the stored override (0 = auto), distinct from the
+  // effective width already carried by unitCount.
+  int unitCountOverride = 0;
+
   // Cluster membership (#272): drives the follower banner + card gating.
   // "standalone" = not clustered (the cluster-disabled default).
   String clusterState = "standalone";
@@ -149,6 +153,7 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"isInOtaMode\":";         appendJsonBool(out, f.isInOtaMode);
   out += ",\"wifiSettingsResettable\":";
   appendJsonBool(out, f.wifiSettingsResettable);
+  out += ",\"unitCountOverride\":"; out += f.unitCountOverride;
   out += ",\"clusterState\":";      appendJsonString(out, f.clusterState);
   out += ",\"clusterLeaderName\":"; appendJsonString(out, f.clusterLeaderName);
   out += ",\"clusterLeaderHost\":"; appendJsonString(out, f.clusterLeaderHost);

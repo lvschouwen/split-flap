@@ -43,6 +43,8 @@ struct MasterSettings {
   String intendedVersion;  // ?v= diagnostic from /firmware/master (#190);
                            // the flash VERDICT is synthesized from esp_ota
                            // state (OtaService), never persisted here
+  int unitCountOverride;   // #289 dummy mode: 0 = auto (probe-derived
+                           // width), 1..UNITS_AMOUNT pins the width
 };
 
 // NVS keys (hard 15-char limit).
@@ -58,6 +60,7 @@ struct MasterSettings {
 #define SETTINGS_KEY_MQTT_USER    "mqttUser"
 #define SETTINGS_KEY_MQTT_PASS    "mqttPass"
 #define SETTINGS_KEY_INTENDED_VER "intendedVer"
+#define SETTINGS_KEY_UNIT_COUNT   "unitCount"
 
 // Bounded free-text sanitation: printable ASCII and shorter than the
 // limit, else default.
@@ -128,6 +131,11 @@ inline MasterSettings loadSettings(SettingsStore& store) {
   s.intendedVersion =
       sanitizeIntendedVersion(store.getString(SETTINGS_KEY_INTENDED_VER, ""));
 
+  s.unitCountOverride = store.getInt(SETTINGS_KEY_UNIT_COUNT, 0);
+  if (s.unitCountOverride < 0 || s.unitCountOverride > UNITS_AMOUNT) {
+    s.unitCountOverride = 0;  // auto
+  }
+
   return s;
 }
 
@@ -153,6 +161,10 @@ inline void saveDeviceName(SettingsStore& store, const String& v) {
 
 inline void saveIntendedVersion(SettingsStore& store, const String& v) {
   store.putString(SETTINGS_KEY_INTENDED_VER, v);
+}
+
+inline void saveUnitCountOverride(SettingsStore& store, int v) {
+  store.putInt(SETTINGS_KEY_UNIT_COUNT, v);
 }
 
 // WiFi credentials (#188): always written as a pair — the portal submits

@@ -274,6 +274,19 @@ function applySettings(s) {
 		buildStrip(unitCount);
 	}
 
+	//#289 dummy mode: reflect the stored override (never while the user is
+	//editing the field).
+	var overrideInput = document.getElementById("inputUnitCountOverride");
+	var overrideValue = s.unitCountOverride || 0;
+	if (overrideInput && document.activeElement !== overrideInput) {
+		overrideInput.value = overrideValue;
+	}
+	var overridePill = document.getElementById("labelWidthOverride");
+	if (overridePill) {
+		overridePill.textContent = overrideValue > 0 ? "pinned: " + overrideValue : "auto";
+		overridePill.className = "pill " + (overrideValue > 0 ? "ok" : "off");
+	}
+
 	document.getElementById("boardName").textContent = (s.effectiveDeviceName || "split-flap").toUpperCase();
 	refreshLiveStatus();
 	document.getElementById("labelLastMessageReceived").textContent = s.lastTimeReceivedMessageDateTime || "—";
@@ -565,6 +578,21 @@ function updateCharacterCount() {
 	document.getElementById("labelCharacterCount").textContent = length;
 	document.getElementById("labelLineCount").textContent =
 		(unitCount ? Math.ceil(length / unitCount) : 1) + text.split("\\n").length - 1;
+}
+
+//#289 dummy mode: pin the display width (0 = auto/probe-derived).
+function saveUnitCountOverride() {
+	var value = parseInt(document.getElementById("inputUnitCountOverride").value, 10);
+	if (isNaN(value) || value < 0 || value > 16) {
+		showStatus("unitCountOverrideStatus", "Enter 0 (auto) or 1-16.", "error", 4000);
+		return;
+	}
+	postSettingsFields({ unitCount: value }, function(ok) {
+		showStatus("unitCountOverrideStatus",
+			ok ? (value > 0 ? "Width pinned to " + value + "." : "Back to auto (probe-derived).")
+			   : "Save failed.",
+			ok ? "success" : "error", 4000);
+	});
 }
 
 function addNewline() {

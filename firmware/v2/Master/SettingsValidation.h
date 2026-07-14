@@ -52,6 +52,13 @@ static inline bool isValidFlapSpeedValue(const String& v) {
   return settingsIsNumber(v) && v.toInt() >= 1 && v.toInt() <= 100;
 }
 
+// Unit-count override (#289, dummy mode): 0 = auto (probe-derived width),
+// 1..UNITS_AMOUNT pins the width for benches without (all of) the units.
+// Caller trims first.
+static inline bool isValidUnitCountOverrideValue(const String& v) {
+  return settingsIsNumber(v) && v.toInt() >= 0 && v.toInt() <= UNITS_AMOUNT;
+}
+
 // POSIX TZ string (#48). Empty = UTC fallback. Printable ASCII (spaces OK)
 // and must fit the EEPROM slot — reject rather than silently truncate.
 static inline bool isValidTimezoneValue(const String& v, int slotLen) {

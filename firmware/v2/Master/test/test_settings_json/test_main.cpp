@@ -148,6 +148,15 @@ static void test_cluster_fields_carry_membership() {
   TEST_ASSERT_TRUE(contains(json, "\"clusterLeading\":true"));
 }
 
+static void test_unit_count_override_field_serializes() {
+  SettingsJsonFields f;
+  String json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"unitCountOverride\":0"));
+  f.unitCountOverride = 8;
+  json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"unitCountOverride\":8"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_defaults_produce_v1_shaped_empty_document);
@@ -158,5 +167,6 @@ int main(int, char**) {
   RUN_TEST(test_control_characters_use_unicode_escapes);
   RUN_TEST(test_unit_arrays_carry_supplied_data);
   RUN_TEST(test_cluster_fields_carry_membership);
+  RUN_TEST(test_unit_count_override_field_serializes);
   return UNITY_END();
 }

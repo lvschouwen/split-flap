@@ -204,6 +204,22 @@ static void test_wifi_password_rejects_short_overflow_controls() {
   TEST_ASSERT_FALSE(isValidWifiPasswordValue(withControl, LEN_WIFI_PASSWORD));
 }
 
+// --- unit-count override (#289) ---------------------------------------------
+
+static void test_unit_count_override_accepts_zero_to_ceiling() {
+  TEST_ASSERT_TRUE(isValidUnitCountOverrideValue("0"));
+  TEST_ASSERT_TRUE(isValidUnitCountOverrideValue("1"));
+  TEST_ASSERT_TRUE(isValidUnitCountOverrideValue("16"));
+}
+
+static void test_unit_count_override_rejects_out_of_range_and_junk() {
+  TEST_ASSERT_FALSE(isValidUnitCountOverrideValue("17"));
+  TEST_ASSERT_FALSE(isValidUnitCountOverrideValue("-1"));
+  TEST_ASSERT_FALSE(isValidUnitCountOverrideValue(""));
+  TEST_ASSERT_FALSE(isValidUnitCountOverrideValue("abc"));
+  TEST_ASSERT_FALSE(isValidUnitCountOverrideValue("1.5"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_wifi_ssid_accepts_lengths_and_spaces);
@@ -228,5 +244,7 @@ int main(int, char**) {
   RUN_TEST(test_mqtt_port_rejects_slot_truncating_zero_padding);
   RUN_TEST(test_mqtt_password_accepts_printables_including_spaces);
   RUN_TEST(test_mqtt_password_rejects_controls_and_overflow);
+  RUN_TEST(test_unit_count_override_accepts_zero_to_ceiling);
+  RUN_TEST(test_unit_count_override_rejects_out_of_range_and_junk);
   return UNITY_END();
 }

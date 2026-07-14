@@ -244,6 +244,17 @@
 				</div>
 
 				<div class="card">
+					<h2>Display width <span id="labelWidthOverride" class="pill off">auto</span></h2>
+					<p class="note">Dummy mode for benches without (all of) the units: pin the display width instead of deriving it from the I2C probe. <b>0 = auto</b> (probe-derived). Real units keep working; missing ones simply show as unreachable.</p>
+					<div class="row">
+						<label class="small inline" for="inputUnitCountOverride">Unit count</label>
+						<input type="number" id="inputUnitCountOverride" min="0" max="16" step="1" value="0">
+						<button type="button" class="btn primary" onclick="saveUnitCountOverride()">Save</button>
+					</div>
+					<p id="unitCountOverrideStatus" class="status hidden"></p>
+				</div>
+
+				<div class="card">
 					<h2>Master firmware <span id="labelVersion" class="pill off">—</span></h2>
 					<p class="note">Upload a compiled <code>firmware.bin</code> to flash the ESP itself. It reboots into the new firmware on success.</p>
 					<form id="masterFirmwareForm">

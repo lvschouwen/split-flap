@@ -395,6 +395,43 @@ static void test_selftest_json_shapes() {
   TEST_ASSERT_EQUAL_STRING("{\"state\":\"expired\"}", buf);
 }
 
+// --- unit-count override (#289, dummy mode) ---------------------------------
+
+static void test_width_override_pins_width_over_probe() {
+  DisplaySnapshot snap;
+  UnitFacts facts[UNITS_AMOUNT];
+  facts[0].state = 1;
+  facts[2].state = 2;  // probe-derived width would be 3
+  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT, 8);
+  TEST_ASSERT_EQUAL(8, snap.displayWidth);
+  // Counts stay probe truth — health reporting is untouched.
+  TEST_ASSERT_EQUAL(2, snap.detectedUnitCount);
+}
+
+static void test_width_override_pins_width_with_no_units() {
+  DisplaySnapshot snap;
+  UnitFacts facts[UNITS_AMOUNT];  // all silent — dummy bench
+  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT, 4);
+  TEST_ASSERT_EQUAL(4, snap.displayWidth);
+  TEST_ASSERT_EQUAL(0, snap.detectedUnitCount);
+}
+
+static void test_width_override_zero_keeps_probe_behavior() {
+  DisplaySnapshot snap;
+  UnitFacts facts[UNITS_AMOUNT];
+  facts[0].state = 1;
+  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT, 0);
+  TEST_ASSERT_EQUAL(1, snap.displayWidth);
+}
+
+static void test_width_override_out_of_range_is_ignored() {
+  DisplaySnapshot snap;
+  UnitFacts facts[UNITS_AMOUNT];
+  facts[0].state = 1;
+  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT, UNITS_AMOUNT + 1);
+  TEST_ASSERT_EQUAL(1, snap.displayWidth);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_snapshot_defaults);
@@ -427,5 +464,9 @@ int main(int, char**) {
   RUN_TEST(test_apply_facts_stamps_mismatch_against_poll_time_frame);
   RUN_TEST(test_apply_facts_no_mismatch_before_first_frame);
   RUN_TEST(test_apply_facts_no_mismatch_while_moving_or_unknown);
+  RUN_TEST(test_width_override_pins_width_over_probe);
+  RUN_TEST(test_width_override_pins_width_with_no_units);
+  RUN_TEST(test_width_override_zero_keeps_probe_behavior);
+  RUN_TEST(test_width_override_out_of_range_is_ignored);
   return UNITY_END();
 }

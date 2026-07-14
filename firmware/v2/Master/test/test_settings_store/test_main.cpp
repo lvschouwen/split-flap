@@ -272,6 +272,29 @@ static void test_unprintable_intended_version_falls_back_to_empty() {
 
 // ---------------------------------------------------------------------------
 
+// --- unit-count override (#289) ---------------------------------------------
+
+static void test_unit_count_override_defaults_to_auto() {
+  FakeSettingsStore store;
+  MasterSettings s = loadSettings(store);
+  TEST_ASSERT_EQUAL_INT(0, s.unitCountOverride);
+}
+
+static void test_unit_count_override_loads_valid_value() {
+  FakeSettingsStore store;
+  saveUnitCountOverride(store, 8);
+  MasterSettings s = loadSettings(store);
+  TEST_ASSERT_EQUAL_INT(8, s.unitCountOverride);
+}
+
+static void test_unit_count_override_sanitizes_out_of_range_to_auto() {
+  FakeSettingsStore store;
+  store.putInt(SETTINGS_KEY_UNIT_COUNT, 99);
+  TEST_ASSERT_EQUAL_INT(0, loadSettings(store).unitCountOverride);
+  store.putInt(SETTINGS_KEY_UNIT_COUNT, -3);
+  TEST_ASSERT_EQUAL_INT(0, loadSettings(store).unitCountOverride);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_wifi_defaults_are_unprovisioned);
@@ -295,5 +318,8 @@ int main(int, char**) {
   RUN_TEST(test_intended_version_passes_clean_rev_string);
   RUN_TEST(test_overlong_intended_version_falls_back_to_empty);
   RUN_TEST(test_unprintable_intended_version_falls_back_to_empty);
+  RUN_TEST(test_unit_count_override_defaults_to_auto);
+  RUN_TEST(test_unit_count_override_loads_valid_value);
+  RUN_TEST(test_unit_count_override_sanitizes_out_of_range_to_auto);
   return UNITY_END();
 }

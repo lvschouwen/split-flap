@@ -8,6 +8,15 @@
 
 #include <atomic>
 
+// #289 dummy mode: the settings-stored unit-count override, seeded by
+// tasksInit() and updated live by the settings drain (netTask). displayTask
+// reads it at every fold; 0 = auto (probe-derived width).
+static std::atomic<int> unitWidthOverride{0};
+
+void tasksSetUnitCountOverride(int count) {
+  unitWidthOverride.store(count, std::memory_order_relaxed);
+}
+
 #include "ClockPolicy.h"
 #include "ClusterFollower.h"
 #include "ClusterLeader.h"
@@ -236,7 +245,8 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // Rescan (inhibit bypassed by design, see block comment) to see who
   // actually sits in twiboot, then plan the flash list from live truth.
   unitBusProbe(busFacts, UNITS_AMOUNT);
-  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
   uint8_t targets[UNITS_AMOUNT];
   int total = reflashCollectFlashTargets(local.units, UNITS_AMOUNT,
                                          SFP_I2C_ADDRESS_BASE, targets);
@@ -304,7 +314,8 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // stays pinned there — deliberate, see block comment).
   unitBusProbe(busFacts, UNITS_AMOUNT);
   unitBusPollHealth(busFacts, UNITS_AMOUNT);
-  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
   reflashProgressFinish(local.reflash, cancelled);
   snapshotPublish(local);  // gate reopens here
   SerialPrintf("reflash: %s — %u ok, %u failed of %u\n",
@@ -325,13 +336,18 @@ static void displayTaskMain(void*) {
   delay(1500);
   unitBusProbe(busFacts, UNITS_AMOUNT);
   unitBusPollHealth(busFacts, UNITS_AMOUNT);
-  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
   snapshotPublish(local);
   if (local.detectedUnitCount == 0) {
     SerialPrintf("display: no units responding — assuming full width %d\n",
                  local.displayWidth);
   } else {
     SerialPrintf("display: probe done, width %d\n", local.displayWidth);
+  }
+  if (unitWidthOverride.load(std::memory_order_relaxed) > 0) {
+    SerialPrintf("display: width pinned to %d (unit-count override)\n",
+                 local.displayWidth);
   }
 
   // Boot auto-install + auto-update (#205, full v1 parity): flash any unit
@@ -375,7 +391,8 @@ static void displayTaskMain(void*) {
           settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
           unitBusPollHealth(busFacts, UNITS_AMOUNT);
-          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
           break;
         // --- calibration + provisioning (#204). Every op grades a
         // MaintResult; the web layer serves it via /unit/op-result.
@@ -560,7 +577,8 @@ static void displayTaskMain(void*) {
           settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
           unitBusPollHealth(busFacts, UNITS_AMOUNT);
-          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
           MaintReason reason = MaintReason::None;
           MaintOutcome outcome = classifySetAddressOutcome(
               local.units, UNITS_AMOUNT, cmd.value, reason);
@@ -579,7 +597,8 @@ static void displayTaskMain(void*) {
           settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
           unitBusPollHealth(busFacts, UNITS_AMOUNT);
-          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
           MaintReason reason = MaintReason::None;
           MaintOutcome outcome = classifyClearAddressOutcome(
               countBefore, local.detectedUnitCount, reason);
@@ -827,6 +846,8 @@ static void clusterTaskMain(void*) {
 // --- lifecycle -----------------------------------------------------------------
 
 void tasksInit(MasterSettings& settings, SettingsStore& store) {
+  unitWidthOverride.store(settings.unitCountOverride,
+                          std::memory_order_relaxed);
   snapshotMutex = xSemaphoreCreateMutex();
   if (snapshotMutex == nullptr) {
     // Boot-time OOM: taking a null handle is UB, so fail loudly instead —
