@@ -209,6 +209,7 @@ function applySettings(s) {
 	}
 	setMqttPill(s.mqttHost || "", s.mqttConnected === true);
 	updateClusterBanner(s);
+	updateClusterFollowerCard(s);
 	window.lastSettings = s;  // System tab reuses version etc. (#245)
 }
 
@@ -271,6 +272,7 @@ function startUi(s) {
 	initSegControls();
 	initLogPanel();
 	initSystemTab();
+	initClusterCard();
 	initDisplayEvents();
 	initMasterFirmwareUpload();
 	loadUnitHealth();
@@ -1977,4 +1979,348 @@ function wizardFinish(savedMqtt) {
 	showBanner(savedMqtt
 		? "Setup complete. Name and MQTT apply after a reboot — Maintenance → Reboot when ready."
 		: "Setup complete. You can name the display or connect MQTT any time under Settings.", 10000);
+}
+
+
+// ===================== cluster card (#274) =====================
+
+//Leader-side member editor + discovery browse. clusterMembers is the
+//editor's source of truth: mirrored once from /cluster/status, then only
+//user edits touch it — the 5 s status poll refreshes state/rev cells only
+//(and only while the editor still mirrors the saved table), so it can
+//never stomp a row mid-edit.
+var clusterMembers = null;
+var clusterStatusTimer = null;
+var clusterRolloutSeen = false;
+
+function initClusterCard() {
+	document.addEventListener("sf-tabchange", function(event) {
+		var active = event.detail === "settings";
+		if (active && !clusterStatusTimer) {
+			loadClusterStatus();
+			clusterStatusTimer = setInterval(function() {
+				if (!document.hidden) loadClusterStatus();
+			}, 5000);
+		} else if (!active && clusterStatusTimer) {
+			clearInterval(clusterStatusTimer);
+			clusterStatusTimer = null;
+		}
+	});
+}
+
+function setClusterPill(text, kind) {
+	var pill = document.getElementById("labelClusterStatus");
+	pill.className = "pill " + kind;
+	pill.textContent = text;
+}
+
+//Follower collapse: driven off the same /settings poll as the banner —
+//while this board is someone's row the leader editor makes no sense here.
+function updateClusterFollowerCard(s) {
+	var followerView = document.getElementById("clusterFollowerView");
+	if (!followerView) return;
+	var clustered = !!s.clusterState && s.clusterState !== "standalone";
+	followerView.classList.toggle("hidden", !clustered);
+	document.getElementById("clusterLeaderView").classList.toggle("hidden", clustered);
+	if (clustered) {
+		//leaderName/leaderHost come off an unauthenticated LAN POST — text
+		//nodes only (same rule as the banner).
+		var leader = s.clusterLeaderName || s.clusterLeaderHost || "the leader";
+		document.getElementById("clusterFollowerLine").textContent =
+			"This board renders row " + (Number(s.clusterRow) + 1) + " of " + leader +
+			" — text, mode and clock come from the leader; maintenance stays local.";
+		//Same health the banner reports: grace/fallback must not read green.
+		if (s.clusterState === "grace") setClusterPill("waiting for leader", "off");
+		else if (s.clusterState === "local-fallback") setClusterPill("leader lost", "bad");
+		else setClusterPill("clustered", "ok");
+	}
+}
+
+function loadClusterStatus() {
+	fetch("/cluster/status", { cache: "no-store" })
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(updateClusterFromStatus)
+		.catch(function() {});
+}
+
+function clusterStateLabel(m) {
+	if (m.updating) return { text: "updating", kind: "off" };
+	if (m.updateBlocked) return { text: "update blocked", kind: "bad" };
+	if (m.self) return { text: "ok", kind: "ok" };
+	if (m.degraded) return { text: "degraded", kind: "bad" };
+	if (m.joined) return { text: "ok", kind: "ok" };
+	return { text: "joining", kind: "off" };
+}
+
+function updateClusterFromStatus(st) {
+	var followerVisible = !document.getElementById("clusterFollowerView").classList.contains("hidden");
+	if (!followerVisible) {
+		if (st.enabled) {
+			var rows = 0;
+			(st.members || []).forEach(function(m) { rows = Math.max(rows, m.row + 1); });
+			setClusterPill("leading · " + rows + " row" + (rows === 1 ? "" : "s"), "ok");
+		} else {
+			setClusterPill("off", "off");
+		}
+	}
+
+	if (clusterMembers === null) {
+		clusterMembers = (st.members || []).map(function(m) {
+			return { host: m.host, row: m.row, col: m.col, width: m.width };
+		});
+		renderClusterMembers();
+	}
+
+	//Live cells refresh only while the editor mirrors the saved table
+	//(same hosts, same order) — rows with unsaved edits show a dash.
+	var saved = st.members || [];
+	var mirrors = clusterMembers.length === saved.length && clusterMembers.every(function(m, i) {
+		return m.host === saved[i].host && m.row === saved[i].row &&
+			m.col === saved[i].col && m.width === saved[i].width;
+	});
+	var body = document.getElementById("clusterMemberBody");
+	Array.prototype.forEach.call(body.rows, function(tr, i) {
+		var pill = tr.querySelector(".cl-state");
+		var rev = tr.querySelector(".cl-rev");
+		if (!mirrors || !saved[i]) {
+			pill.className = "pill off cl-state";
+			pill.textContent = "—";
+			rev.textContent = "";
+			return;
+		}
+		var label = clusterStateLabel(saved[i]);
+		pill.className = "pill " + label.kind + " cl-state";
+		pill.textContent = label.text;
+		rev.textContent = saved[i].self ? "" : (saved[i].rev || "—");
+	});
+
+	//Fleet rollout (#276) surfacing: progress while it runs, one success
+	//line when it finishes, a persistent warning if convergence is dead.
+	var rollout = st.rollout || {};
+	if (rollout.imageVerifyFailed) {
+		showStatus("clusterCardStatus", "⚠ This board’s running image failed its verify pass — automatic follower updates are off until a reboot.", "error");
+	} else if (rollout.phase === "uploading" && rollout.total > 0) {
+		clusterRolloutSeen = true;
+		showStatus("clusterCardStatus", "Updating " + escapeHtml(rollout.host) + " to this board’s firmware — " +
+			Math.floor(rollout.sent * 100 / rollout.total) + "% of " + Math.round(rollout.total / 1024) + " KB…", "pending");
+	} else if (rollout.phase === "waiting") {
+		clusterRolloutSeen = true;
+		showStatus("clusterCardStatus", "Flashed " + escapeHtml(rollout.host) + " — waiting for it to reboot and rejoin…", "pending");
+	} else if (clusterRolloutSeen) {
+		clusterRolloutSeen = false;
+		showStatus("clusterCardStatus", "✔ Firmware update round finished.", "success", 8000);
+	}
+}
+
+function renderClusterMembers() {
+	var table = document.getElementById("clusterMemberTable");
+	var body = document.getElementById("clusterMemberBody");
+	while (body.firstChild) body.removeChild(body.firstChild);
+	table.classList.toggle("hidden", !clusterMembers || clusterMembers.length === 0);
+	if (!clusterMembers) return;
+
+	clusterMembers.forEach(function(member, index) {
+		var tr = document.createElement("tr");
+
+		function numberCell(field, min, max) {
+			var td = document.createElement("td");
+			var input = document.createElement("input");
+			input.type = "number";
+			input.min = min;
+			input.max = max;
+			input.value = member[field];
+			input.addEventListener("change", function() {
+				var value = parseInt(input.value, 10);
+				if (!isNaN(value)) member[field] = value;
+			});
+			td.appendChild(input);
+			return td;
+		}
+
+		tr.appendChild(numberCell("row", 0, 7));
+
+		//Hosts come off the mDNS wire / user input — text nodes only.
+		var hostTd = document.createElement("td");
+		hostTd.textContent = member.host === "" ? "(this board)" : member.host;
+		tr.appendChild(hostTd);
+
+		tr.appendChild(numberCell("col", 0, 254));
+		tr.appendChild(numberCell("width", 1, 255));
+
+		var stateTd = document.createElement("td");
+		var pill = document.createElement("span");
+		pill.className = "pill off cl-state";
+		pill.textContent = "—";
+		stateTd.appendChild(pill);
+		tr.appendChild(stateTd);
+
+		var revTd = document.createElement("td");
+		revTd.className = "cl-rev meta";
+		tr.appendChild(revTd);
+
+		var removeTd = document.createElement("td");
+		var removeButton = document.createElement("button");
+		removeButton.type = "button";
+		removeButton.className = "btn";
+		removeButton.textContent = "✕";
+		removeButton.title = "Remove this member";
+		removeButton.addEventListener("click", function() {
+			clusterMembers.splice(index, 1);
+			renderClusterMembers();
+		});
+		removeTd.appendChild(removeButton);
+		tr.appendChild(removeTd);
+
+		body.appendChild(tr);
+	});
+}
+
+function clusterNextFreeRow() {
+	var used = {};
+	clusterMembers.forEach(function(m) { used[m.row] = true; });
+	var row = 0;
+	while (used[row]) row++;
+	return row;
+}
+
+function addClusterBoard(host, width) {
+	if (clusterMembers === null) clusterMembers = [];
+	var duplicate = clusterMembers.some(function(m) { return m.host === host; });
+	if (duplicate) {
+		showStatus("clusterCardStatus", "✘ " + escapeHtml(host) + " is already in the member table.", "error", 5000);
+		return;
+	}
+	//First member: this board takes row 0 (a wall without the leader's own
+	//row is legal but rarely wanted — remove the row if so).
+	if (clusterMembers.length === 0) {
+		clusterMembers.push({ host: "", row: 0, col: 0, width: unitCount || 16 });
+	}
+	clusterMembers.push({ host: host, row: clusterNextFreeRow(), col: 0, width: width || 16 });
+	renderClusterMembers();
+	showStatus("clusterCardStatus", "Added — adjust row/col/width, then Save cluster.", "success", 6000);
+}
+
+function addClusterManualHost() {
+	var input = document.getElementById("inputClusterManualHost");
+	var host = input.value.trim();
+	//Same hostname[:port] allowlist as the follower banner link.
+	if (!/^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {
+		showStatus("clusterCardStatus", "✘ Enter a hostname, IP, or host:port.", "error", 5000);
+		return;
+	}
+	input.value = "";
+	addClusterBoard(host, 16);
+}
+
+function setClusterCardBusy(busy) {
+	["buttonClusterScan", "buttonClusterManualAdd", "buttonClusterSave", "buttonClusterDisable"].forEach(function(id) {
+		document.getElementById(id).disabled = busy;
+	});
+}
+
+//Board discovery (#274): POST arms the browse on the master (the blocking
+//mDNS query runs in netTask's drain), then poll GET until it answers 200.
+function scanClusterBoards() {
+	var suggestions = document.getElementById("clusterSuggestions");
+	setClusterCardBusy(true);
+	suggestions.classList.add("hidden");
+	showStatus("clusterCardStatus", "Browsing the LAN for split-flap boards…", "pending");
+
+	function fail() {
+		showStatus("clusterCardStatus", "✘ Discovery failed.", "error", 5000);
+		setClusterCardBusy(false);
+	}
+	fetch("/cluster/discover", { method: "POST" })
+		.then(function(response) {
+			if (!response.ok) throw new Error();
+			var deadline = Date.now() + 10000;
+			(function poll() {
+				fetch("/cluster/discover", { cache: "no-store" })
+					.then(function(r) {
+						if (r.status === 202) {
+							if (Date.now() > deadline) { fail(); return null; }
+							setTimeout(poll, 500);
+							return null;
+						}
+						if (!r.ok) throw new Error();
+						return r.json();
+					})
+					.then(function(result) {
+						if (result) {
+							renderClusterSuggestions(result.boards || []);
+							setClusterCardBusy(false);
+						}
+					})
+					.catch(fail);
+			})();
+		})
+		.catch(fail);
+}
+
+function renderClusterSuggestions(boards) {
+	var suggestions = document.getElementById("clusterSuggestions");
+	while (suggestions.firstChild) suggestions.removeChild(suggestions.firstChild);
+	if (boards.length === 0) {
+		showStatus("clusterCardStatus", "No other split-flap boards found (they advertise once online, v2 firmware). Use the manual host field for other subnets.", "error", 9000);
+		return;
+	}
+	boards.forEach(function(board) {
+		var chip = document.createElement("button");
+		chip.type = "button";
+		chip.textContent = board.name + " (" + board.host + (board.width ? ", " + board.width + " units" : "") + ")";
+		chip.addEventListener("click", function() {
+			addClusterBoard(board.host, board.width || 16);
+		});
+		suggestions.appendChild(chip);
+	});
+	suggestions.classList.remove("hidden");
+	showStatus("clusterCardStatus", "Found " + boards.length + " board(s) — click one to add it.", "success", 6000);
+}
+
+function postClusterConfig(spec, doneMessage) {
+	var body = new URLSearchParams();
+	body.append("members", spec);
+	fetch("/cluster/config", { method: "POST", body: body })
+		.then(function(r) {
+			return r.text().then(function(text) {
+				if (!r.ok) {
+					showStatus("clusterCardStatus", "✘ " + escapeHtml(text || "Rejected."), "error");
+					return;
+				}
+				showStatus("clusterCardStatus", doneMessage, "success", 6000);
+				clusterMembers = null;  // re-mirror the applied table
+				setTimeout(loadClusterStatus, 1000);
+			});
+		})
+		.catch(function() { showStatus("clusterCardStatus", "✘ No connection.", "error", 5000); });
+}
+
+function saveClusterCard() {
+	if (!clusterMembers || clusterMembers.length === 0) {
+		showStatus("clusterCardStatus", "✘ Add at least one member first (Scan or a manual host).", "error", 5000);
+		return;
+	}
+	var spec = clusterMembers.map(function(m) {
+		return m.host + "|" + m.row + "|" + m.col + "|" + m.width;
+	}).join(";");
+	showStatus("clusterCardStatus", "Saving…", "pending");
+	postClusterConfig(spec, "✔ Cluster config applied — members join within seconds.");
+}
+
+function disableCluster() {
+	if (!confirm("Disable the cluster? Members revert to standalone (their own clock) after their grace period.")) return;
+	showStatus("clusterCardStatus", "Disabling…", "pending");
+	postClusterConfig("", "✔ Cluster disabled.");
+}
+
+//Follower-side escape hatch. The leader re-joins this board within seconds
+//unless its member table drops the row too — the confirm says so.
+function leaveCluster() {
+	if (!confirm("Leave the cluster? The leader will re-join this board within seconds unless you also remove it from the leader’s member table first.")) return;
+	fetch("/cluster/leave", { method: "POST" })
+		.then(function() {
+			showStatus("clusterCardStatus", "✔ Left the cluster.", "success", 6000);
+			loadPage();
+		})
+		.catch(function() { showStatus("clusterCardStatus", "✘ No connection.", "error", 5000); });
 }

@@ -295,6 +295,12 @@ summary {
 .kv span:first-child { color: var(--muted); }
 .kv span:last-child { font-family: var(--mono); }
 
+/* ---------- cluster card (#274) ---------- */
+#clusterMemberTable { margin-top: 10px; }
+#clusterMemberBody input[type=number] { width: 64px; }
+#clusterMemberBody .btn { padding: 4px 9px; }
+#clusterMemberBody td { white-space: nowrap; }
+
 /* ---------- mobile ---------- */
 @media (max-width: 560px) {
 	.tab-btn { letter-spacing: .04em; font-size: 10px; padding: 10px 2px; }
