@@ -20,6 +20,7 @@
 #include "BuildVersion.h"
 #include "ClockPolicy.h"
 #include "ClockService.h"
+#include "ClusterDigest.h"
 #include "ClusterDiscovery.h"
 #include "ClusterFollower.h"
 #include "ClusterLayout.h"  // CLUSTER_MAX_MEMBERS / CLUSTER_HOST_MAX_LEN
@@ -248,9 +249,27 @@ static String sseDisplayPayload(const DisplaySnapshot& snap,
   return buildDisplayEventJson(snap.currentText, rows, rowCount, selfRow);
 }
 
+// #294 rung 3: reflect LAN-only origins back on the per-member surface so
+// another pane's browser can manage this board. Server-level (one attach
+// point); both gates are pure ClusterDigest.h logic. Simple requests only
+// (form posts / GETs) — no preflight handler needed.
+static AsyncMiddlewareFunction clusterCorsMiddleware(
+    [](AsyncWebServerRequest* request, ArMiddlewareNext next) {
+      next();
+      if (!request->hasHeader("Origin")) return;
+      if (!clusterCorsPathAllowed(request->url())) return;
+      const String& origin = request->header("Origin");
+      if (!clusterCorsOriginAllowed(origin)) return;
+      AsyncWebServerResponse* response = request->getResponse();
+      if (response == nullptr) return;
+      response->addHeader("Access-Control-Allow-Origin", origin);
+      response->addHeader("Vary", "Origin");
+    });
+
 void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                       SettingsStore& store,
                       const String& effectiveDeviceName) {
+  server.addMiddleware(&clusterCorsMiddleware);
   // Handlers never write the store; the loop drain and the mqttTask-called
   // setters below do (both hold webStateMutex).
   webStateMutex = xSemaphoreCreateMutex();
@@ -1211,13 +1230,41 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       request->send(400, "text/plain", F("Invalid leaderName"));
       return;
     }
+    // #295 sticky leadership: while our current leader is demonstrably
+    // alive, a DIFFERENT leader's join is refused with its identity — the
+    // rejected board demotes itself on this marker.
+    if (clusterFollowerJoinWouldConflict(req.leaderHost)) {
+      ClusterFollowerView cv = clusterFollowerViewGet();
+      String out = "{\"error\":\"other-leader\",\"leaderHost\":";
+      appendJsonString(out, cv.leaderHost);
+      out += ",\"leaderName\":";
+      appendJsonString(out, cv.leaderName);
+      out += '}';
+      request->send(409, "application/json", out);
+      return;
+    }
     clusterFollowerHandleJoin(req);
     // Handshake reply: identity, firmware rev, width. Width is the boot
-    // probe's result today; #234 refines it — no protocol change.
+    // probe's result today; #234 refines it — no protocol change. The
+    // #294 health keys ride along (minus width/rev, already present) so
+    // the leader's strip is live from the handshake, not the first ping.
+    DisplaySnapshot snap = displaySnapshotGet();
+    char mask[16];
+    clusterFaultMaskHex(snap.units, snap.displayWidth, mask, sizeof(mask));
+    WearAssessment wear;
+    assessWear(snap.units, snap.displayWidth, wear);
     String out = "{\"name\":";
     appendJsonString(out, effectiveName);
     out += ",\"rev\":\"" GIT_REV "\",\"width\":";
-    out += (int)displaySnapshotGet().displayWidth;
+    out += (int)snap.displayWidth;
+    out += ",\"detected\":";
+    out += (int)snap.detectedUnitCount;
+    out += ",\"faulty\":";
+    out += (int)snap.faultyUnitCount;
+    out += ",\"faultMask\":\"";
+    out += mask;
+    out += "\",\"wear\":";
+    out += wear.flaggedCount > 0 ? "true" : "false";
     out += ",\"protocol\":1}";
     request->send(200, "application/json", out);
   });
@@ -1265,21 +1312,66 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   });
 
   server.on("/cluster/ping", HTTP_POST, [](AsyncWebServerRequest* request) {
-    if (!clusterFollowerHandlePing()) {
+    // #294: the leader piggybacks the cluster digest (+ this member's
+    // table index) on the ping body, and the reply carries this row's
+    // unit health — both additive; either side may predate the other.
+    String digest = request->hasParam("digest", true)
+                        ? request->getParam("digest", true)->value()
+                        : String();
+    int youIndex = request->hasParam("you", true)
+                       ? (int)request->getParam("you", true)->value().toInt()
+                       : -1;
+    if (!clusterFollowerHandlePing(digest, youIndex)) {
       request->send(409, "application/json",
                     F("{\"error\":\"not clustered\"}"));
       return;
     }
     ClusterFollowerView cv = clusterFollowerViewGet();
+    DisplaySnapshot snap = displaySnapshotGet();
+    WearAssessment wear;
+    assessWear(snap.units, snap.displayWidth, wear);
     String out = "{\"state\":";
     appendJsonString(out, clusterFollowerPhaseName(cv.phase));
     out += ",\"epoch\":";
     out += String((unsigned long)cv.epoch);
     out += ",\"seq\":";
     out += String((unsigned long)cv.lastSeq);
+    out += clusterPingHealthJson(snap.units, snap.displayWidth,
+                                 snap.detectedUnitCount, snap.faultyUnitCount,
+                                 wear.flaggedCount > 0, GIT_REV);
     out += '}';
     request->send(200, "application/json", out);
   });
+
+  // #294 rung 2: the stored ping-piggybacked digest — any pane renders the
+  // whole wall from it. 404 = not clustered / nothing held yet (the page
+  // falls back to the standalone view).
+  server.on("/cluster/digest", HTTP_GET, [](AsyncWebServerRequest* request) {
+    uint32_t ageMs = 0;
+    String digest = clusterFollowerDigestGet(ageMs);
+    if (digest.length() == 0) {
+      request->send(404, "application/json", F("{\"error\":\"no digest\"}"));
+      return;
+    }
+    String out = "{\"ageMs\":";
+    out += String((unsigned long)ageMs);
+    out += ",\"digest\":";
+    out += digest;  // raw JSON from the leader — embedded, not escaped
+    out += '}';
+    request->send(200, "application/json", out);
+  });
+
+  // #295: one-click takeover from a follower that has written the leader
+  // off. The staged config swap runs in clusterTask; sticky-leadership
+  // join 409s resolve any promote race.
+  server.on("/cluster/promote", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+              ClusterPromoteVerdict v = clusterFollowerPromote();
+              String out = "{\"message\":";
+              appendJsonString(out, v.message);
+              out += '}';
+              request->send(v.httpStatus, "application/json", out);
+            });
 
   server.on("/cluster/leave", HTTP_POST, [](AsyncWebServerRequest* request) {
     clusterFollowerHandleLeave();  // idempotent
@@ -1364,55 +1456,10 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   });
 
   server.on("/cluster/status", HTTP_GET, [](AsyncWebServerRequest* request) {
-    ClusterLeaderStatus st = clusterLeaderStatusGet();
-    String out = "{\"enabled\":";
-    out += st.enabled ? "true" : "false";
-    out += ",\"epoch\":";
-    out += String((unsigned long)st.epoch);
-    out += ",\"seq\":";
-    out += String((unsigned long)st.seq);
-    out += ",\"members\":[";
-    for (int i = 0; i < st.memberCount; i++) {
-      const ClusterLeaderMemberStatus& m = st.members[i];
-      if (i) out += ',';
-      out += "{\"host\":";
-      appendJsonString(out, m.host);
-      out += ",\"self\":";
-      out += m.host.length() == 0 ? "true" : "false";
-      out += ",\"row\":";
-      out += m.row;
-      out += ",\"col\":";
-      out += m.col;
-      out += ",\"width\":";
-      out += m.width;
-      out += ",\"joined\":";
-      out += m.joined ? "true" : "false";
-      out += ",\"degraded\":";
-      out += m.degraded ? "true" : "false";
-      out += ",\"failures\":";
-      out += m.failures;
-      out += ",\"rev\":";
-      appendJsonString(out, m.rev);
-      out += ",\"reportedWidth\":";
-      out += m.reportedWidth;
-      out += ",\"updating\":";
-      out += m.updating ? "true" : "false";
-      out += ",\"updateBlocked\":";
-      out += m.updateBlocked ? "true" : "false";
-      out += '}';
-    }
-    out += "],\"rollout\":{\"phase\":";
-    appendJsonString(out, st.rolloutPhase);
-    out += ",\"host\":";
-    appendJsonString(out, st.rolloutHost);
-    out += ",\"sent\":";
-    out += String((unsigned long)st.rolloutSent);
-    out += ",\"total\":";
-    out += String((unsigned long)st.rolloutTotal);
-    out += ",\"imageVerifyFailed\":";
-    out += st.rolloutImageFailed ? "true" : "false";
-    out += "}}";
-    request->send(200, "application/json", out);
+    // One wire shape for the leader's status (#273 + #294 health keys),
+    // shared with the ping digest — serializer in ClusterDigest.h.
+    request->send(200, "application/json",
+                  clusterStatusJson(clusterLeaderStatusGet()));
   });
 }
 

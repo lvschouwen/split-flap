@@ -67,6 +67,15 @@ inline String buildClusterAttrsJson(const ClusterLeaderStatus& st) {
     out += m.updateBlocked ? "true" : "false";
     out += ",\"rev\":";
     appendJsonString(out, m.rev);
+    if (m.healthValid) {
+      // #294: per-row unit health — only for members that reported it.
+      out += ",\"faulty\":";
+      out += m.faulty;
+      out += ",\"detected\":";
+      out += m.detected;
+      out += ",\"wear\":";
+      out += m.wear ? "true" : "false";
+    }
     out += '}';
   }
   out += "],\"rollout\":{\"phase\":";

@@ -37,6 +37,7 @@ Follower's `/cluster/ping` reply gains additive keys (source: its own `DisplaySn
 
 - `faultMask`: hex string, fixed width `ceil(width/4)` nibbles; bit *i* set = unit at position *i* (leftmost = 0) unhealthy. Enough for a strip; per-unit *detail* is rung 3's job (browser fetches the member's `/units/health` directly — no new detail wire format).
 - `wear`: the #231 `assessWear` any-unit-flagged bool.
+- The join reply carries the same health keys too (minus the width/rev it already had) — the leader's strip is live from the handshake, not the first ping.
 - Leader: `applyMemberResult` (Ping branch) parses into new `ClusterMemberRuntime` fields (`faulty`, `detected`, `faultMask`, `wear`; `rev` refreshes too — today it's join-only). The leader's own row folds straight from its local snapshot.
 - Surfacing:
   - `GET /cluster/status` members[] gains the same keys → the Cluster card's existing 5 s poll drives **health strips under every row of the wall mirror** (and wear badges on pills). SSE `/events` stays text-only — strips update at poll cadence, deliberately.
@@ -59,7 +60,7 @@ The leader's ping POST body (today empty) gains one form param, `digest=<urlenco
 ```
 
 - `rows` comes from the existing `clusterMirrorRows` (#277); `table` is the NVS member-table wire string verbatim; `gen` increments when any of it changes (drives UI churn gating and lets rung 4 detect table updates).
-- Follower stores the **raw JSON string** mutex-copied (no parsing beyond `gen`) with a receive timestamp; cleared on leave/epoch change.
+- Follower stores the **raw JSON string** mutex-copied with a receive timestamp; cleared on leave. The promote-critical bits — the `table` wire string and this member's index (the ping's `you` param) — additionally persist to NVS *when they change* (config edits, not the 10 s cadence), so a takeover stays possible after a follower reboot.
 - `GET /cluster/digest` → `{"ageMs":…,"digest":<raw>}`; 404 when none held.
 - Follower UI: when clustered and a fresh digest exists, the page renders the **same stacked wall mirror + health strips + member pills** as the leader (read-only, 5 s poll of `/cluster/digest`, wire strings as text nodes only), with the existing banner's leader link for anything write-shaped. Digest older than ~30 s renders greyed ("last seen …").
 - Size: ~1–1.5 KB urlencoded at 6 rows — noise on LAN HTTP; built transiently per round (PSRAM-preferred `String`).
@@ -69,7 +70,7 @@ The leader's ping POST body (today empty) gains one form param, `digest=<urlenco
 The operator's browser fans out directly to member hosts; the leader firmware never proxies (keeps "clusterTask = sole outbound caller" intact, zero leader RAM).
 
 - **CORS policy (pure helper, natively tested):** reflect the request `Origin` back only when its host is an RFC1918 private IPv4 or a `.local` name; otherwise no CORS headers. Methods GET/POST, no credentials, `Access-Control-Max-Age` set. Applied ONLY to the per-member surface below. Rationale: reflection beats `*` — a random internet page's origin never validates, so drive-by reads from outside the LAN stay blocked, while any LAN pane works as origin.
-- **Per-member surface (CORS-enabled):** `GET /settings`, `GET /units/health`, `POST /units/health/refresh`, the `{"seq":N}` maintenance op POSTs + `GET /unit/op-result` (calibrate, offset, unit reboot, wear reset, address burn), `GET /system/stats`, web log read. All form-encoded simple requests — no preflight handler needed beyond the header helper.
+- **Per-member surface (CORS-enabled):** `POST /` (the per-card settings save — device-name edit), `GET /settings`, `GET /units/health`, `POST /units/health/refresh`, the `{"seq":N}` maintenance op POSTs + `GET /unit/op-result` (calibrate, offset, unit reboot, wear reset, address burn), `GET /system/stats`, web log read. All form-encoded simple requests — no preflight handler needed beyond the header helper.
 - **Leader-owned, never per-member (unchanged producer gates):** text, mode, clock, tz, MQTT state, cluster config. **WiFi is off-limits from the wall UI** — remotely re-pointing a member's WiFi can strand it; that stays on the board's own page.
 - **UI:** member pills (on ANY pane — hosts come from `/cluster/status` on the leader, the digest on followers) become buttons; clicking opens an inline panel that fetches the member's `/settings` + `/units/health` and renders the familiar unit grid + maintenance card pointed at that host, plus device name edit and log link. Same DOM-safety rules (text nodes only).
 - Unreachable member / no-CORS old firmware → panel shows "unreachable from this browser — open its page" with a plain link.

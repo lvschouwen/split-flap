@@ -150,6 +150,28 @@ static void test_wall_state_truncates_to_ha_state_limit() {
   TEST_ASSERT_EQUAL(255, (int)out.length());
 }
 
+
+static void test_attrs_json_carries_member_health_when_valid() {
+  // #294: per-member unit health rides the same attributes payload; keys
+  // appear only for members whose ping reply carried health.
+  ClusterLeaderStatus st = makeHealthy();
+  st.members[1].healthValid = true;
+  st.members[1].faulty = 2;
+  st.members[1].detected = 15;
+  st.members[1].wear = true;
+  String json = buildClusterAttrsJson(st);
+  TEST_ASSERT_NOT_NULL(strstr(json.c_str(),
+                              "\"faulty\":2,\"detected\":15,\"wear\":true"));
+  // Member 0 never reported — no health keys inside its object.
+  const char* m0 = strstr(json.c_str(), "\"host\":\"\"");
+  TEST_ASSERT_NOT_NULL(m0);
+  const char* m0end = strchr(m0, '}');
+  TEST_ASSERT_NOT_NULL(m0end);
+  String member0(m0);
+  member0 = member0.substring(0, m0end - m0);
+  TEST_ASSERT_TRUE(member0.indexOf("faulty") < 0);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_disabled_is_never_degraded);
@@ -161,6 +183,7 @@ int main(int, char**) {
   RUN_TEST(test_updating_alone_is_not_degraded);
   RUN_TEST(test_attrs_json_shape);
   RUN_TEST(test_attrs_json_escapes_network_strings);
+  RUN_TEST(test_attrs_json_carries_member_health_when_valid);
   RUN_TEST(test_discovery_topic);
   RUN_TEST(test_discovery_payload_fields);
   RUN_TEST(test_wall_state_joins_rows_with_newlines);

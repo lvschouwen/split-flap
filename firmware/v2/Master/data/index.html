@@ -153,6 +153,7 @@
 					<h2>Cluster <span class="pill off" id="labelClusterStatus">off</span></h2>
 					<div id="clusterFollowerView" class="hidden">
 						<p class="note" id="clusterFollowerLine"></p>
+						<div class="member-pills" id="clusterFollowerPills"></div>
 						<div class="row">
 							<button type="button" class="btn danger" id="buttonClusterLeave" onclick="leaveCluster()">Leave cluster…</button>
 						</div>
@@ -177,6 +178,7 @@
 							<button type="button" class="btn" id="buttonClusterDisable" onclick="disableCluster()">Disable cluster…</button>
 						</div>
 					</div>
+					<div class="member-panel hidden" id="clusterMemberPanel"></div>
 					<p id="clusterCardStatus" class="status hidden"></p>
 				</div>
 

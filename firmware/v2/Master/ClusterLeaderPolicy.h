@@ -33,6 +33,17 @@ static const uint32_t CLUSTER_RETRY_BASE_MS = 1000UL;
 static const uint32_t CLUSTER_RETRY_MAX_MS = 8000UL;
 static const uint8_t CLUSTER_DEGRADED_AFTER_FAILURES = 3;
 
+// Per-row unit health distilled from a #294 ping reply. valid stays false
+// for members that never delivered one (old firmware, not yet pinged) —
+// the UI hides that row's strip instead of reading zeros.
+struct ClusterMemberHealth {
+  bool valid = false;
+  int faulty = 0;
+  int detected = 0;
+  String faultMask;  // hex bitmap, bit i = unit at position i faulty
+  bool wear = false;
+};
+
 struct ClusterMemberRuntime {
   bool joined = false;
   bool degraded = false;
@@ -40,8 +51,9 @@ struct ClusterMemberRuntime {
   uint32_t nextAttemptMs = 0;  // backoff gate for the next HTTP attempt
   uint32_t lastContactMs = 0;  // last successful round-trip
   bool renderDirty = false;    // segment changed since the last acked render
-  String rev;                  // follower firmware rev (join reply, #276)
+  String rev;                  // follower firmware rev (join + ping replies, #276)
   int reportedWidth = 0;       // join-handshake width fact
+  ClusterMemberHealth health;  // last #294 ping-reply health
 };
 
 enum class ClusterLeaderAction : uint8_t { None = 0, Join, Render, Ping };
@@ -118,6 +130,39 @@ inline int clusterExtractJsonInt(const String& body, const char* key, int def) {
   long parsed = strtol(text, &end, 10);
   if (end == text) return def;
   return (int)parsed;
+}
+
+inline bool clusterExtractJsonBool(const String& body, const char* key,
+                                   bool def) {
+  int at = clusterFindJsonKey(body, key);
+  if (at < 0) return def;
+  if (body.startsWith("true", at)) return true;
+  if (body.startsWith("false", at)) return false;
+  return def;
+}
+
+// Distills a #294 ping reply's health keys. faulty + faultMask are the
+// load-bearing pair — a reply without both is a pre-#294 follower and
+// parses to invalid (never to zero faults).
+inline bool clusterParsePingHealth(const String& body,
+                                   ClusterMemberHealth& out) {
+  out = ClusterMemberHealth{};
+  if (clusterFindJsonKey(body, "faulty") < 0) return false;
+  String mask = clusterExtractJsonString(body, "faultMask");
+  if (mask.length() == 0) return false;
+  out.valid = true;
+  out.faulty = clusterExtractJsonInt(body, "faulty", 0);
+  out.detected = clusterExtractJsonInt(body, "detected", 0);
+  out.faultMask = mask;
+  out.wear = clusterExtractJsonBool(body, "wear", false);
+  return true;
+}
+
+// #295 sticky leadership: a join 409 whose body carries this marker means
+// the follower is clustered to a DIFFERENT live leader — this board lost a
+// promote race (or came back from the dead) and must demote.
+inline bool clusterJoinRejectedOtherLeader(const String& body) {
+  return clusterExtractJsonString(body, "error") == "other-leader";
 }
 
 // --- member-table wire format (NVS) ------------------------------------------------

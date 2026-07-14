@@ -66,6 +66,13 @@ def get(base, path):
         return response.status, response.read().decode()
 
 
+def get_allow_error(base, path):
+    try:
+        return get(base, path)
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode()
+
+
 def join(base, epoch=7, row=1):
     return post(base, "/cluster/join",
                 {"leaderName": "wall-leader", "leaderHost": "192.168.15.22",
@@ -91,13 +98,14 @@ def test_ping_before_join_is_409(follower):
     assert status == 409
 
 
-def test_join_reply_carries_identity_rev_width(follower):
+def test_join_reply_carries_identity_rev_width_and_health(follower):
     base, _ = follower
     status, body = join(base)
     assert status == 200
     reply = json.loads(body)
     assert reply == {"name": "wall-2", "rev": "abc1234", "width": 16,
-                     "protocol": 1}
+                     "detected": 16, "faulty": 0, "faultMask": "0000",
+                     "wear": False, "protocol": 1}
 
 
 def test_join_requires_leader_host_row_epoch(follower):
@@ -154,13 +162,97 @@ def test_new_epoch_join_resets_seq_tracking(follower):
     assert json.loads(body)["applied"] is True
 
 
-def test_ping_after_join_reports_clustered_state(follower):
+def test_ping_after_join_reports_clustered_state_and_health(follower):
     base, _ = follower
     join(base, epoch=7)
     render(base, 7, 3, "X")
     status, body = post(base, "/cluster/ping")
     assert status == 200
-    assert json.loads(body) == {"state": "clustered", "epoch": 7, "seq": 3}
+    assert json.loads(body) == {"state": "clustered", "epoch": 7, "seq": 3,
+                                "width": 16, "detected": 16, "faulty": 0,
+                                "faultMask": "0000", "wear": False,
+                                "rev": "abc1234"}
+
+
+def test_fault_drill_shows_up_in_ping_health(follower):
+    # POST /drill/fault flips the advertised fault bitmap so bench drills
+    # can watch the leader's wall strips react without breaking hardware.
+    base, _ = follower
+    join(base)
+    post(base, "/drill/fault", {"mask": "0005"})
+    _, body = post(base, "/cluster/ping")
+    reply = json.loads(body)
+    assert reply["faultMask"] == "0005"
+    assert reply["faulty"] == 2
+
+
+# --- ping digest piggyback (#294 rung 2) --------------------------------------------
+
+def test_digest_404_before_any_ping_carried_one(follower):
+    base, _ = follower
+    join(base)
+    status, _ = get_allow_error(base, "/cluster/digest")
+    assert status == 404
+
+
+def test_ping_digest_is_stored_and_served(follower):
+    base, state = follower
+    join(base)
+    digest = json.dumps({"gen": 3, "leader": {"name": "L", "host": "10.0.0.9"},
+                         "table": "|0|0|16;192.168.15.91|1|0|16",
+                         "rows": ["A", "B"], "status": {"enabled": True}})
+    status, _ = post(base, "/cluster/ping", {"digest": digest, "you": 1})
+    assert status == 200
+    assert state.self_index == 1
+    status, body = get(base, "/cluster/digest")
+    assert status == 200
+    reply = json.loads(body)
+    assert reply["digest"]["gen"] == 3
+    assert reply["digest"]["table"] == "|0|0|16;192.168.15.91|1|0|16"
+    assert reply["ageMs"] >= 0
+
+
+def test_leave_drops_the_stored_digest(follower):
+    base, _ = follower
+    join(base)
+    post(base, "/cluster/ping", {"digest": "{\"gen\":1,\"table\":\"t\"}",
+                                 "you": 0})
+    post(base, "/cluster/leave")
+    status, _ = get_allow_error(base, "/cluster/digest")
+    assert status == 404
+
+
+# --- sticky leadership (#295) --------------------------------------------------------
+
+def test_foreign_join_while_leader_alive_is_409_other_leader(follower):
+    base, _ = follower
+    join(base)  # leaderHost 192.168.15.22, fresh contact
+    status, body = post(base, "/cluster/join",
+                        {"leaderName": "usurper", "leaderHost": "10.9.9.9",
+                         "row": 0, "epoch": 99})
+    assert status == 409
+    reply = json.loads(body)
+    assert reply["error"] == "other-leader"
+    assert reply["leaderHost"] == "192.168.15.22"
+    assert reply["leaderName"] == "wall-leader"
+
+
+def test_same_leader_rejoin_never_conflicts(follower):
+    base, _ = follower
+    join(base, epoch=7)
+    status, _ = join(base, epoch=8)
+    assert status == 200
+
+
+def test_foreign_join_after_leader_silence_is_accepted(follower):
+    base, state = follower
+    join(base)
+    state.contact_fresh_secs = 0.05  # shrink the 25 s window for the test
+    time.sleep(0.1)
+    status, _ = post(base, "/cluster/join",
+                     {"leaderName": "successor", "leaderHost": "10.9.9.9",
+                      "row": 1, "epoch": 99})
+    assert status == 200
 
 
 def test_leave_returns_to_standalone(follower):

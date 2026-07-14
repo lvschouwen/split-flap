@@ -18,7 +18,9 @@
 
 #include "BuildVersion.h"  // GIT_REV — the cluster's firmware version (#276)
 #include "ClockPolicy.h"  // clockIsTimeSynced
+#include "ClusterDigest.h"  // ping piggyback: digest build + health parse (#294)
 #include "ClusterFollowerPolicy.h"  // clusterRenderDelayMs (shared math)
+#include "WearPolicy.h"  // self-row wear fold for the status/digest health
 #include "ClusterRolloutPolicy.h"
 #include "DisplayCommand.h"
 #include "HelpersSerialHandling.h"
@@ -55,6 +57,7 @@ static String segments[CLUSTER_MAX_MEMBERS];
 static uint32_t epoch = 0;
 static uint32_t seqCounter = 0;      // minted per render POST, not per submit
 static int gridSpeed = 80;           // web-scale speed of the last submit
+static String gridAlignment = "left";  // alignment of the last submit
 static uint64_t gridCommitAtMs = 0;  // shared flip deadline of the last submit
 static String lastContentKey;        // submit dedup
 // Leader's own row staging (same commitAt clock the followers get).
@@ -65,6 +68,14 @@ static uint32_t selfDueMs = 0;
 // Config swap staging (validated at the web boundary, applied here).
 static bool configPending = false;
 static String configSpec;
+// #295 demote: a swap staged because another live leader owns our members
+// must NOT leave-fan-out — that would kick them out of the NEW leader's
+// cluster; they are not ours to release.
+static bool configSuppressLeave = false;
+// #294 digest: bumped only when the piggybacked content actually changed
+// (the follower UI gates re-renders on it).
+static uint32_t digestGen = 0;
+static String digestLastBody;
 // Fleet rollout (#276): sequencing state guarded by leaderMutex (status
 // reads it); the live upload session below is clusterTask-private.
 static ClusterRolloutState rollout;
@@ -72,6 +83,9 @@ static ClusterRolloutState rollout;
 // Rollout upload session teardown (#276) — defined in the rollout section
 // below; applyStagedConfig needs it before that.
 static void rolloutCloseUpload();
+// Status fill (leaderMutex held) — defined after the rollout statics it
+// reads; collectMemberWork needs it for the ping digest (#294).
+static void statusFillLocked(ClusterLeaderStatus& st);
 
 // Wall-mirror change signal (#277): bumped whenever segments[] change
 // (submit deltas, config swaps) so netTask's SSE tick can skip the mirror
@@ -195,6 +209,7 @@ static void submitGrid(const String& contentKey, bool isClock,
   }
   lastContentKey = contentKey;
   gridSpeed = speed;
+  gridAlignment = alignment;
   gridCommitAtMs = synced ? nowE + CLUSTER_COMMIT_LEAD_MS : 0;
 
   bool anyChanged = false;
@@ -236,11 +251,14 @@ void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
 // hosts (single best-effort attempt), runtime/segment reset, NVS persist.
 static void applyStagedConfig() {
   String spec;
+  bool suppressLeave;
   {
     LeaderLock lock;
     if (!configPending) return;
     configPending = false;
     spec = configSpec;
+    suppressLeave = configSuppressLeave;
+    configSuppressLeave = false;
   }
 
   ClusterMemberTable next;
@@ -272,7 +290,9 @@ static void applyStagedConfig() {
           break;
         }
       }
-      if (!kept) leaveHosts[leaveCount++] = table.members[i].host;
+      if (!kept && !suppressLeave) {
+        leaveHosts[leaveCount++] = table.members[i].host;
+      }
     }
     table = next;
     for (int i = 0; i < CLUSTER_MAX_MEMBERS; i++) {
@@ -379,8 +399,41 @@ static int collectMemberWork(MemberWorkItem* items) {
         break;
       default:  // Ping
         item.url = "http://" + host + "/cluster/ping";
-        item.body = "";
+        item.body = "";  // digest piggyback attached below, once per round
         break;
+    }
+  }
+
+  // #294 rung 2: the digest rides every outbound ping — built at most once
+  // per round (~10 s cadence per member), gen-bumped only on real change.
+  bool anyPing = false;
+  for (int i = 0; i < count; i++) {
+    if (items[i].action == ClusterLeaderAction::Ping) anyPing = true;
+  }
+  if (anyPing) {
+    ClusterLeaderStatus st;
+    statusFillLocked(st);
+    String mirror[CLUSTER_MAX_MEMBERS];
+    DisplaySnapshot snap = displaySnapshotGet();
+    int rowCount =
+        clusterMirrorRows(table, segments, String(snap.currentText),
+                          displayAlignmentFromString(gridAlignment), mirror);
+    String body = clusterBuildDigest(0, leaderDeviceName,
+                                     WiFi.localIP().toString(),
+                                     clusterTableToString(table), mirror,
+                                     rowCount, st);
+    if (body != digestLastBody) {
+      digestLastBody = body;
+      digestGen++;
+    }
+    // Splice the real gen over the 0 sentinel the comparison body carries.
+    String digest = "{\"gen\":" + String((unsigned long)digestGen) +
+                    body.substring(strlen("{\"gen\":0"));
+    String encoded = urlEncode(digest);
+    for (int i = 0; i < count; i++) {
+      if (items[i].action != ClusterLeaderAction::Ping) continue;
+      items[i].body =
+          "digest=" + encoded + "&you=" + String(items[i].index);
     }
   }
   return count;
@@ -412,6 +465,16 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
       default:
         break;
     }
+    if (item.action != ClusterLeaderAction::Render) {
+      // Join and ping replies carry the #294 health keys; a pre-#294
+      // follower parses to invalid (strip hidden, never zero faults). The
+      // rev refresh keeps the fleet-convergence fact alive across OUR
+      // reboots without waiting for a re-join.
+      clusterParsePingHealth(body, m.health);
+      String rev = clusterExtractJsonString(body, "rev");
+      if (rev.length() > 0) m.rev = rev;
+      m.reportedWidth = clusterExtractJsonInt(body, "width", m.reportedWidth);
+    }
     if (wasDegraded) {
       SerialPrintln("cluster: member " +
                     String(table.members[item.index].host) + " recovered");
@@ -422,11 +485,25 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
   if (status == 409) {
     // The follower answered but rejected: for ping/render that means it
     // lost its membership — fresh join next round, no backoff (the link
-    // is fine). A join 409 doesn't exist in the protocol; treat any other
-    // 4xx/5xx as failure below.
+    // is fine).
     if (item.action != ClusterLeaderAction::Join) {
       clusterMemberOnSuccess(m, nowMs);
       clusterMemberOnNotClustered(m);
+      return;
+    }
+    // A join 409 with the other-leader marker (#295 sticky leadership):
+    // the member belongs to a promoted successor — WE are the stale
+    // leader. Demote: stage a table wipe with the leave fan-out
+    // suppressed (the members are the new leader's to keep).
+    if (clusterJoinRejectedOtherLeader(body)) {
+      SerialPrintln("cluster: member " +
+                    String(table.members[item.index].host) +
+                    " is clustered to another live leader (" +
+                    clusterExtractJsonString(body, "leaderHost") +
+                    ") — DEMOTING, this board joins the wall as a member");
+      configSpec = "";
+      configPending = true;
+      configSuppressLeave = true;
       return;
     }
   }
@@ -719,14 +796,23 @@ void clusterLeaderTick() {
   rolloutServiceTick();
 }
 
-ClusterLeaderStatus clusterLeaderStatusGet() {
-  ClusterLeaderStatus st;
-  if (leaderMutex == nullptr) return st;
-  LeaderLock lock;
+// Fills the status snapshot — leaderMutex HELD by the caller. The self
+// row's health folds straight from the display snapshot (#294); remote
+// rows carry their last ping-reply health (leaderMutex -> snapshotMutex is
+// the allowed lock order).
+static void statusFillLocked(ClusterLeaderStatus& st) {
   st.enabled = enabledAtomic.load();
   st.epoch = epoch;
   st.seq = seqCounter;
   st.memberCount = table.count;
+
+  DisplaySnapshot snap = displaySnapshotGet();
+  char selfMask[16];
+  clusterFaultMaskHex(snap.units, snap.displayWidth, selfMask,
+                      sizeof(selfMask));
+  WearAssessment selfWear;
+  assessWear(snap.units, snap.displayWidth, selfWear);
+
   for (int i = 0; i < table.count; i++) {
     ClusterLeaderMemberStatus& out = st.members[i];
     out.host = table.members[i].host;
@@ -741,6 +827,20 @@ ClusterLeaderStatus clusterLeaderStatusGet() {
     out.updating = rollout.phase != ClusterRolloutPhase::Idle &&
                    rollout.memberIndex == i;
     out.updateBlocked = rollout.blocked[i];
+    if (clusterMemberIsSelf(table.members[i])) {
+      out.rev = GIT_REV;
+      out.healthValid = true;
+      out.faulty = snap.faultyUnitCount;
+      out.detected = snap.detectedUnitCount;
+      out.faultMask = selfMask;
+      out.wear = selfWear.flaggedCount > 0;
+    } else if (runtimes[i].health.valid) {
+      out.healthValid = true;
+      out.faulty = runtimes[i].health.faulty;
+      out.detected = runtimes[i].health.detected;
+      out.faultMask = runtimes[i].health.faultMask;
+      out.wear = runtimes[i].health.wear;
+    }
   }
   st.rolloutPhase = clusterRolloutPhaseName(rollout.phase);
   if (rollout.memberIndex >= 0 && rollout.memberIndex < table.count) {
@@ -754,6 +854,13 @@ ClusterLeaderStatus clusterLeaderStatusGet() {
     st.gridRows = grid.rows;
     for (int r = 0; r < grid.rows; r++) st.gridCapacity += grid.rowWidth[r];
   }
+}
+
+ClusterLeaderStatus clusterLeaderStatusGet() {
+  ClusterLeaderStatus st;
+  if (leaderMutex == nullptr) return st;
+  LeaderLock lock;
+  statusFillLocked(st);
   return st;
 }
 

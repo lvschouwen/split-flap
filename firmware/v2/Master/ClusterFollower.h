@@ -60,7 +60,27 @@ ClusterRenderVerdict clusterFollowerHandleRender(uint32_t epoch, uint32_t seq,
                                                  const String& text, int speed,
                                                  uint64_t commitAtMs);
 
-// false = Standalone: the reply tells the leader to re-join.
-bool clusterFollowerHandlePing();
+// false = Standalone: the reply tells the leader to re-join. The #294
+// piggybacked digest (raw JSON, RAM-only) and this member's table index
+// ride in; the promote-critical bits (table spec + selfIndex) persist to
+// NVS only when they change, so #295 survives a follower reboot.
+bool clusterFollowerHandlePing(const String& digest, int youIndex);
 
 void clusterFollowerHandleLeave();
+
+// The stored digest for GET /cluster/digest ("" = none held); ageMsOut =
+// ms since it arrived.
+String clusterFollowerDigestGet(uint32_t& ageMsOut);
+
+// #295 sticky leadership: true = this join must 409 (clustered to a
+// DIFFERENT leader that is still demonstrably alive).
+bool clusterFollowerJoinWouldConflict(const String& leaderHost);
+
+// #295 promote: LocalFallback + a held digest-table → stage the
+// transformed member table as this board's own leader config and leave the
+// dead membership. The actual swap runs in clusterTask (staged config).
+struct ClusterPromoteVerdict {
+  int httpStatus = 200;
+  String message;
+};
+ClusterPromoteVerdict clusterFollowerPromote();

@@ -139,6 +139,23 @@ inline bool clusterFollowerForcesLocalClock(const ClusterFollowerState& st) {
   return st.phase == ClusterFollowerPhase::LocalFallback;
 }
 
+// #295 sticky leadership: a join from a DIFFERENT leader is rejected only
+// while the current one is demonstrably alive (Clustered with fresh
+// contact). Grace/LocalFallback mean the leader has gone silent — a
+// promoted successor may claim the follower; the same leader always may.
+inline bool clusterFollowerJoinConflicts(const ClusterFollowerState& st,
+                                         uint32_t nowMs, bool sameLeader) {
+  if (sameLeader) return false;
+  if (st.phase != ClusterFollowerPhase::Clustered) return false;
+  return nowMs - st.lastContactMs < CLUSTER_CONTACT_FRESH_MS;
+}
+
+// #295 promote gate: only a follower that has fully written the leader off
+// (LocalFallback) may take over — Grace still expects the leader back.
+inline bool clusterFollowerCanPromote(const ClusterFollowerState& st) {
+  return st.phase == ClusterFollowerPhase::LocalFallback;
+}
+
 // Synchronized flip: ms to wait before enqueueing a render. Unsynced
 // clocks render immediately (spec), past timestamps too; far-future ones
 // clamp to CLUSTER_COMMIT_MAX_DELAY_MS.
