@@ -51,6 +51,20 @@ struct SettingsJsonFields {
   String lastWrittenText;
   bool isInOtaMode = false;
   bool wifiSettingsResettable = false;
+
+  // #289 dummy mode: the stored override (0 = auto), distinct from the
+  // effective width already carried by unitCount.
+  int unitCountOverride = 0;
+
+  // Cluster membership (#272): drives the follower banner + card gating.
+  // "standalone" = not clustered (the cluster-disabled default).
+  String clusterState = "standalone";
+  String clusterLeaderName;
+  String clusterLeaderHost;
+  int clusterRow = 0;
+  // Leader side (#277): the browser's wall mirror collapses on the poll
+  // when this drops and the SSE stream missed the transition.
+  bool clusterLeading = false;
 };
 
 // JSON string escaper (v2 copy of v1's HelpersStringHandling.ino version).
@@ -139,6 +153,12 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"isInOtaMode\":";         appendJsonBool(out, f.isInOtaMode);
   out += ",\"wifiSettingsResettable\":";
   appendJsonBool(out, f.wifiSettingsResettable);
+  out += ",\"unitCountOverride\":"; out += f.unitCountOverride;
+  out += ",\"clusterState\":";      appendJsonString(out, f.clusterState);
+  out += ",\"clusterLeaderName\":"; appendJsonString(out, f.clusterLeaderName);
+  out += ",\"clusterLeaderHost\":"; appendJsonString(out, f.clusterLeaderHost);
+  out += ",\"clusterRow\":";        out += f.clusterRow;
+  out += ",\"clusterLeading\":";    appendJsonBool(out, f.clusterLeading);
 
   out += '}';
   return out;

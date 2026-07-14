@@ -20,6 +20,10 @@
 #include "BuildVersion.h"
 #include "ClockPolicy.h"
 #include "ClockService.h"
+#include "ClusterDiscovery.h"
+#include "ClusterFollower.h"
+#include "ClusterLayout.h"  // CLUSTER_MAX_MEMBERS / CLUSTER_HOST_MAX_LEN
+#include "ClusterLeader.h"
 #include "DisplayEvents.h"
 #include "FactorySlot.h"
 #include "FlashLog.h"
@@ -95,6 +99,11 @@ static String effectiveName;
 // caches the JSON, the GET answers 202 while pending / 200 from the cache.
 static bool mqttDiscoverPending = false;
 static String mqttDiscoverResultJson;
+
+// Cluster board discovery staging (#274): same POST-arm / netTask-drain /
+// GET-poll contract as the MQTT pair above, browsing _splitflap._tcp.
+static bool clusterDiscoverPending = false;
+static String clusterDiscoverResultJson;
 
 // Runtime-only message state (#192, v1 parity: never persisted, "" at
 // boot). Written by the drain, read by GET /settings and the clock ticker's
@@ -220,6 +229,25 @@ const char* webResetReasonString() {
   }
 }
 
+// Wall-aware /events payload (#277): while leading a cluster, the display
+// event carries every reconstructed grid row; rowsKeyOut feeds the tick's
+// change tracker. Locks run strictly sequentially — the content snapshot
+// (webStateMutex) is taken and RELEASED before the leader mutex, never
+// nested.
+static String sseDisplayPayload(const DisplaySnapshot& snap,
+                                String* rowsKeyOut) {
+  String rows[CLUSTER_MAX_MEMBERS];
+  int selfRow = 0;
+  int rowCount = 0;
+  if (clusterLeaderEnabled()) {
+    WebContentSnapshot content = webDisplayContentSnapshot();
+    rowCount = clusterLeaderMirrorRows(rows, selfRow, String(snap.currentText),
+                                       content.alignment);
+  }
+  if (rowsKeyOut != nullptr) *rowsKeyOut = displayEventRowsKey(rows, rowCount);
+  return buildDisplayEventJson(snap.currentText, rows, rowCount, selfRow);
+}
+
 void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                       SettingsStore& store,
                       const String& effectiveDeviceName) {
@@ -240,9 +268,9 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // A fresh client gets the current display text immediately; every later
   // change is pushed by webDisplayEventsTick() from netTask.
   sseEvents.onConnect([](AsyncEventSourceClient* client) {
-    client->send(
-        buildDisplayEventJson(displaySnapshotGet().currentText).c_str(),
-        "display", millis());
+    DisplaySnapshot snap = displaySnapshotGet();
+    client->send(sseDisplayPayload(snap, nullptr).c_str(), "display",
+                 millis());
   });
   server.addHandler(&sseEvents);
 
@@ -305,6 +333,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       f.flapSpeed = String(liveSettings->flapSpeed);
       f.deviceMode = liveSettings->deviceMode;
       f.timezonePosix = liveSettings->timezonePosix;
+      f.unitCountOverride = liveSettings->unitCountOverride;
       f.deviceName = liveSettings->deviceName;
       f.effectiveDeviceName = effectiveName;
       f.mqttHost = liveSettings->mqttHost;
@@ -327,6 +356,13 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     f.lastFlashResult = verdict.lastFlashResult;
     f.otaReverted = verdict.otaReverted;
     f.lastResetReason = webResetReasonString();
+    // Cluster membership (#272): drives the follower banner + card gating.
+    ClusterFollowerView cluster = clusterFollowerViewGet();
+    f.clusterState = clusterFollowerPhaseName(cluster.phase);
+    f.clusterLeaderName = cluster.leaderName;
+    f.clusterLeaderHost = cluster.leaderHost;
+    f.clusterRow = cluster.row;
+    f.clusterLeading = clusterLeaderEnabled();  // wall-mirror fallback (#277)
     request->send(200, "application/json", buildSettingsJson(f));
   });
 
@@ -421,6 +457,16 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       } else {
         request->redirect("/?display-busy=true");
       }
+      return;
+    }
+    // Cluster producer gate (#272): a clustered follower's text/mode belong
+    // to the leader — 409; the banner explains why. Transients stay allowed
+    // (they are the calibration vehicle — maintenance is local), and so do
+    // pure settings saves.
+    if ((local.inputTextProvided || local.deviceModeProvided) &&
+        clusterFollowerViewGet().gated) {
+      if (isAjax) request->send(409, "text/plain", F("clustered"));
+      else request->redirect("/?clustered=true");
       return;
     }
     if ((local.inputTextProvided || local.transientTextProvided) &&
@@ -1129,6 +1175,245 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     }
     request->send(200, "application/json", json);
   });
+
+  // --- Cluster follower endpoints (#272, epic #270) --------------------------
+  // The LAN wire protocol the leader drives (form-encoded requests, JSON
+  // replies — same conventions as the rest of this API). Handlers stage
+  // into ClusterFollower under its own mutex; NVS writes and the display
+  // enqueue run in netTask's clusterFollowerServiceTick().
+  server.on("/cluster/join", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (!request->hasParam("leaderHost", true) ||
+        !request->hasParam("row", true) || !request->hasParam("epoch", true)) {
+      request->send(400, "text/plain", F("Missing leaderHost/row/epoch"));
+      return;
+    }
+    ClusterJoinRequest req;
+    req.leaderHost = request->getParam("leaderHost", true)->value();
+    req.leaderName = request->hasParam("leaderName", true)
+                         ? request->getParam("leaderName", true)->value()
+                         : req.leaderHost;
+    long row = request->getParam("row", true)->value().toInt();
+    req.epoch = (uint32_t)strtoul(
+        request->getParam("epoch", true)->value().c_str(), nullptr, 10);
+    if (row < 0 || row >= CLUSTER_MAX_MEMBERS) {
+      request->send(400, "text/plain", F("Row out of range"));
+      return;
+    }
+    req.row = (int)row;
+    if (req.leaderHost.length() == 0 ||
+        req.leaderHost.length() > CLUSTER_HOST_MAX_LEN ||
+        !settingsIsPrintableAscii(req.leaderHost, 0x21)) {
+      request->send(400, "text/plain", F("Invalid leaderHost"));
+      return;
+    }
+    if (req.leaderName.length() > CLUSTER_HOST_MAX_LEN ||
+        !settingsIsPrintableAscii(req.leaderName, 0x20)) {
+      request->send(400, "text/plain", F("Invalid leaderName"));
+      return;
+    }
+    clusterFollowerHandleJoin(req);
+    // Handshake reply: identity, firmware rev, width. Width is the boot
+    // probe's result today; #234 refines it — no protocol change.
+    String out = "{\"name\":";
+    appendJsonString(out, effectiveName);
+    out += ",\"rev\":\"" GIT_REV "\",\"width\":";
+    out += (int)displaySnapshotGet().displayWidth;
+    out += ",\"protocol\":1}";
+    request->send(200, "application/json", out);
+  });
+
+  server.on("/cluster/render", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (!request->hasParam("epoch", true) || !request->hasParam("seq", true) ||
+        !request->hasParam("text", true)) {
+      request->send(400, "text/plain", F("Missing epoch/seq/text"));
+      return;
+    }
+    uint32_t epoch = (uint32_t)strtoul(
+        request->getParam("epoch", true)->value().c_str(), nullptr, 10);
+    uint32_t seq = (uint32_t)strtoul(
+        request->getParam("seq", true)->value().c_str(), nullptr, 10);
+    String text = request->getParam("text", true)->value();
+    int speed;
+    if (request->hasParam("speed", true)) {
+      speed = request->getParam("speed", true)->value().toInt();
+      if (speed < 1 || speed > 100) {
+        request->send(400, "text/plain", F("Speed must be 1..100"));
+        return;
+      }
+    } else {
+      WebStateLock lock;
+      speed = liveSettings->flapSpeed;
+    }
+    uint64_t commitAtMs =
+        request->hasParam("commitAtMs", true)
+            ? strtoull(request->getParam("commitAtMs", true)->value().c_str(),
+                       nullptr, 10)
+            : 0ULL;
+    ClusterRenderVerdict v =
+        clusterFollowerHandleRender(epoch, seq, text, speed, commitAtMs);
+    if (v == ClusterRenderVerdict::NotClustered) {
+      request->send(409, "application/json",
+                    F("{\"error\":\"not clustered\"}"));
+      return;
+    }
+    String out = "{\"applied\":";
+    out += (v == ClusterRenderVerdict::Apply) ? "true" : "false";
+    out += ",\"seq\":";
+    out += String((unsigned long)seq);
+    out += '}';
+    request->send(200, "application/json", out);
+  });
+
+  server.on("/cluster/ping", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (!clusterFollowerHandlePing()) {
+      request->send(409, "application/json",
+                    F("{\"error\":\"not clustered\"}"));
+      return;
+    }
+    ClusterFollowerView cv = clusterFollowerViewGet();
+    String out = "{\"state\":";
+    appendJsonString(out, clusterFollowerPhaseName(cv.phase));
+    out += ",\"epoch\":";
+    out += String((unsigned long)cv.epoch);
+    out += ",\"seq\":";
+    out += String((unsigned long)cv.lastSeq);
+    out += '}';
+    request->send(200, "application/json", out);
+  });
+
+  server.on("/cluster/leave", HTTP_POST, [](AsyncWebServerRequest* request) {
+    clusterFollowerHandleLeave();  // idempotent
+    request->send(200, "text/plain", F("ok"));
+  });
+
+  server.on("/cluster/health", HTTP_GET, [](AsyncWebServerRequest* request) {
+    ClusterFollowerView cv = clusterFollowerViewGet();
+    DisplaySnapshot snap = displaySnapshotGet();
+    String out = "{\"state\":";
+    appendJsonString(out, clusterFollowerPhaseName(cv.phase));
+    out += ",\"leaderName\":";
+    appendJsonString(out, cv.leaderName);
+    out += ",\"leaderHost\":";
+    appendJsonString(out, cv.leaderHost);
+    out += ",\"row\":";
+    out += cv.row;
+    out += ",\"epoch\":";
+    out += String((unsigned long)cv.epoch);
+    out += ",\"seq\":";
+    out += String((unsigned long)cv.lastSeq);
+    out += ",\"segment\":";
+    appendJsonString(out, cv.heldSegment);
+    out += ",\"rev\":\"" GIT_REV "\",\"width\":";
+    out += (int)snap.displayWidth;
+    out += ",\"detected\":";
+    out += (int)snap.detectedUnitCount;
+    out += ",\"faulty\":";
+    out += (int)snap.faultyUnitCount;
+    out += '}';
+    request->send(200, "application/json", out);
+  });
+
+  // --- Cluster leader endpoints (#273) ----------------------------------------
+  // `members` uses the ClusterLeaderPolicy wire format
+  // (`host|row|col|width;…`, empty host = this master's own row; "" =
+  // disable). Validation runs here for the 400; the swap itself (leave
+  // fan-out, NVS persist, runtime reset) runs in clusterTask.
+  server.on("/cluster/config", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (!request->hasParam("members", true)) {
+      request->send(400, "text/plain", F("Missing members"));
+      return;
+    }
+    ClusterConfigVerdict v = clusterLeaderStageConfig(
+        request->getParam("members", true)->value());
+    request->send(v.httpStatus, "text/plain", v.message);
+  });
+
+  // Board discovery for the Cluster card (#274): POST arms the staged
+  // flag (re-POST while pending is a no-op — the flag is the re-entry
+  // guard); the blocking MDNS.queryService pass runs from netTask's
+  // drain, never here (/mqtt/discover contract).
+  server.on("/cluster/discover", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+    {
+      WebStateLock lock;
+      if (!clusterDiscoverPending) {
+        clusterDiscoverResultJson = "";
+        clusterDiscoverPending = true;
+      }
+    }
+    request->send(200, "text/plain", F("Board discovery started"));
+  });
+  server.on("/cluster/discover", HTTP_GET,
+            [](AsyncWebServerRequest* request) {
+    bool pending;
+    String json;
+    {
+      WebStateLock lock;
+      pending = clusterDiscoverPending;
+      json = clusterDiscoverResultJson;
+    }
+    if (pending) {
+      request->send(202, "text/plain", F("Discovery running"));
+      return;
+    }
+    if (json.length() == 0) {
+      request->send(404, "text/plain", F("No discovery has run yet"));
+      return;
+    }
+    request->send(200, "application/json", json);
+  });
+
+  server.on("/cluster/status", HTTP_GET, [](AsyncWebServerRequest* request) {
+    ClusterLeaderStatus st = clusterLeaderStatusGet();
+    String out = "{\"enabled\":";
+    out += st.enabled ? "true" : "false";
+    out += ",\"epoch\":";
+    out += String((unsigned long)st.epoch);
+    out += ",\"seq\":";
+    out += String((unsigned long)st.seq);
+    out += ",\"members\":[";
+    for (int i = 0; i < st.memberCount; i++) {
+      const ClusterLeaderMemberStatus& m = st.members[i];
+      if (i) out += ',';
+      out += "{\"host\":";
+      appendJsonString(out, m.host);
+      out += ",\"self\":";
+      out += m.host.length() == 0 ? "true" : "false";
+      out += ",\"row\":";
+      out += m.row;
+      out += ",\"col\":";
+      out += m.col;
+      out += ",\"width\":";
+      out += m.width;
+      out += ",\"joined\":";
+      out += m.joined ? "true" : "false";
+      out += ",\"degraded\":";
+      out += m.degraded ? "true" : "false";
+      out += ",\"failures\":";
+      out += m.failures;
+      out += ",\"rev\":";
+      appendJsonString(out, m.rev);
+      out += ",\"reportedWidth\":";
+      out += m.reportedWidth;
+      out += ",\"updating\":";
+      out += m.updating ? "true" : "false";
+      out += ",\"updateBlocked\":";
+      out += m.updateBlocked ? "true" : "false";
+      out += '}';
+    }
+    out += "],\"rollout\":{\"phase\":";
+    appendJsonString(out, st.rolloutPhase);
+    out += ",\"host\":";
+    appendJsonString(out, st.rolloutHost);
+    out += ",\"sent\":";
+    out += String((unsigned long)st.rolloutSent);
+    out += ",\"total\":";
+    out += String((unsigned long)st.rolloutTotal);
+    out += ",\"imageVerifyFailed\":";
+    out += st.rolloutImageFailed ? "true" : "false";
+    out += "}}";
+    request->send(200, "application/json", out);
+  });
 }
 
 void webEndpointsStart(AsyncWebServer& server) {
@@ -1156,9 +1441,26 @@ void webDisplayEventsTick() {
   // an already-shown text is deduped by the mirror's frame compare.
   if (sseEvents.count() == 0) return;
   DisplaySnapshot snap = displaySnapshotGet();
-  if (!displayEventDue(tracker, snap.currentText)) return;
-  sseEvents.send(buildDisplayEventJson(snap.currentText).c_str(), "display",
-                 millis());
+
+  // Cheap pre-check before paying for the wall reconstruction (mutex +
+  // String churn, every 100 ms otherwise): only rebuild when the own text
+  // changed, the grid generation moved, or leading flipped. The rows-key
+  // due-check below stays authoritative for what actually gets pushed.
+  static uint32_t lastGridGen = 0;
+  static bool lastLeading = false;
+  bool leading = clusterLeaderEnabled();
+  uint32_t gridGen = leading ? clusterLeaderGridGeneration() : 0;
+  if (strncmp(tracker.lastText, snap.currentText, DISPLAY_CMD_TEXT_LEN) == 0 &&
+      leading == lastLeading && gridGen == lastGridGen) {
+    return;
+  }
+  lastLeading = leading;
+  lastGridGen = gridGen;
+
+  String rowsKey;
+  String payload = sseDisplayPayload(snap, &rowsKey);
+  if (!displayEventDue(tracker, snap.currentText, rowsKey)) return;
+  sseEvents.send(payload.c_str(), "display", millis());
 }
 
 void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
@@ -1190,8 +1492,16 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // Settings first, command second: a speed/alignment change riding the
       // same POST as a message must apply to that message (v1 ordering).
       String timezoneBefore = settings.timezonePosix;
+      int unitCountBefore = settings.unitCountOverride;
       applySettingsPost(pendingPost, settings, store);
       timezoneChanged = settings.timezonePosix != timezoneBefore;
+
+      // #289 dummy mode: push the changed override to displayTask and queue
+      // a Probe so the width refolds now instead of at the next bus op.
+      if (settings.unitCountOverride != unitCountBefore) {
+        tasksSetUnitCountOverride(settings.unitCountOverride);
+        displayEnqueue(makeProbeCommand());
+      }
 
       // Explicit mode switch or message send trumps a running notification
       // (v1 #130 rule) — cancel so the next 1 Hz tick (or the direct
@@ -1211,16 +1521,31 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // silently ignored — never shown, never retained.
       if (messageProvided && settings.deviceMode == "text") {
         // Retained in the display domain: ClockPolicy's dedup compares this
-        // against snapshot text, which makeShowTextCommand truncates.
-        currentInputText = truncateForDisplay(messageText);
+        // against snapshot text, which makeShowTextCommand truncates. A
+        // LEADING master retains untruncated — the grid holds more than
+        // one row's width, and its ticker path never enters that dedup.
+        currentInputText = clusterLeaderEnabled()
+                               ? messageText
+                               : truncateForDisplay(messageText);
         // Reflash gate re-check at drain time (#205, Codex review): the
         // handler's 409 ran when the POST arrived; a job that started in
         // between must not get a ShowText queued behind it. Dropping is
         // self-healing — the retained text above is what the 1 Hz mode
         // ticker re-shows once the job ends.
-        if (reflashInProgress(displaySnapshotGet().reflash)) {
-          SerialPrintln("Message retained, not queued (reflash running): " +
+        // Same re-check for the cluster gate (#272): a membership that
+        // arrived between handler and drain must not slip a ShowText in.
+        // (Lock order: webStateMutex → clusterMutex, never the reverse.)
+        if (reflashInProgress(displaySnapshotGet().reflash) ||
+            clusterFollowerViewGet().gated) {
+          SerialPrintln("Message retained, not queued (reflash/cluster): " +
                         messageText);
+        } else if (clusterLeaderEnabled()) {
+          // Leader reroute (#273): the LOGICAL text goes to the cluster
+          // layer — it slices the grid, stages our own row, and fans the
+          // rest out from clusterTask.
+          clusterLeaderSubmitText(messageText, settings.alignment,
+                                  settings.flapSpeed);
+          SerialPrintln("Message routed to the cluster grid: " + messageText);
         } else if (displayEnqueue(makeShowTextCommand(
                        messageText, settings.alignment,
                        settings.flapSpeed))) {
@@ -1239,7 +1564,10 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // Transient text (#219, v1 #165/#176): calibration patterns and
       // clock-mode messages show regardless of mode and revert via the
       // overlay dwell — nothing persists, a clock display stays a clock
-      // display. Ordering matters twice: after applySettingsPost so an
+      // display. On a cluster LEADER this stays deliberately local: the
+      // overlay shows on this master's own row only (launch scope is grid
+      // text + cluster clock), and clusterTask's self-row re-show restores
+      // the segment after the dwell. Ordering matters twice: after applySettingsPost so an
       // alignment/speed change riding the same POST applies to this show,
       // and the overlay arm (which drains behind the #130 cancel above)
       // keeps the transient alive when that same POST also switched mode.
@@ -1315,6 +1643,44 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
     WebStateLock lock;
     mqttDiscoverResultJson = json;
     mqttDiscoverPending = false;
+  }
+
+  // Cluster board discovery (#274): same lock-domain rationale as the MQTT
+  // pass above — mDNS takes LWIP locks, so the blocking query runs out here.
+  bool clusterDiscoverDue;
+  {
+    WebStateLock lock;
+    clusterDiscoverDue = clusterDiscoverPending;
+  }
+  if (clusterDiscoverDue) {
+    ClusterDiscoveredBoard boards[CLUSTER_DISCOVER_MAX_BOARDS];
+    size_t count = 0;
+    int n = MDNS.queryService("splitflap", "tcp");
+    for (int i = 0; i < n && count < CLUSTER_DISCOVER_MAX_BOARDS; i++) {
+      // TXT name (what the board calls itself) over the answer hostname —
+      // identical today, but the TXT survives mDNS conflict renaming.
+      String txtName = MDNS.txt(i, "name");
+      String name = txtName.length() > 0
+                        ? txtName
+                        : normalizeMdnsHostname(MDNS.hostname(i));
+      // Self and nameless answers must not consume result slots — with a
+      // full wall the leader's own advertisement would otherwise crowd out
+      // the last real board (the JSON builder re-filters as backstop).
+      if (name.length() == 0 || name.equalsIgnoreCase(effectiveName)) {
+        continue;
+      }
+      ClusterDiscoveredBoard& b = boards[count++];
+      b.name = name;
+      IPAddress a = MDNS.address(i);
+      b.ip = a == IPAddress() ? String() : a.toString();
+      b.rev = MDNS.txt(i, "rev");
+      b.width = clusterParseTxtWidth(MDNS.txt(i, "width"));
+    }
+    String json = buildClusterDiscoverJson(boards, count, effectiveName);
+    SerialPrintf("Cluster discover: %u board(s)\n", (unsigned)count);
+    WebStateLock lock;
+    clusterDiscoverResultJson = json;
+    clusterDiscoverPending = false;
   }
 
   // Flash-log drain (#206): netTask is the single flash writer.

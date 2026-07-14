@@ -6,10 +6,12 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "BuildVersion.h"
 #include "ClockService.h"
 #include "DeviceIdentity.h"
 #include "HelpersSerialHandling.h"
 #include "OtaService.h"
+#include "Tasks.h"
 #include "WebEndpoints.h"
 #include "WifiPolicy.h"
 #include "WifiScanJson.h"
@@ -144,6 +146,15 @@ static void startOnline() {
   clockServiceApplyTz(*liveSettings);  // v1 parity: NTP kicked after join
   if (MDNS.begin(deviceName.c_str())) {
     MDNS.addService("http", "tcp", 80);
+    // Cluster discovery (#274): every v2 master advertises itself so a
+    // leader's Cluster card can browse for candidates. TXT width is the
+    // at-advertise-time hint only (0 if the boot probe hasn't finished);
+    // the join handshake stays the authoritative width fact.
+    MDNS.addService("splitflap", "tcp", 80);
+    MDNS.addServiceTxt("splitflap", "tcp", "name", deviceName.c_str());
+    MDNS.addServiceTxt("splitflap", "tcp", "rev", GIT_REV);
+    MDNS.addServiceTxt("splitflap", "tcp", "width",
+                       String((int)displaySnapshotGet().displayWidth).c_str());
     SerialPrintln("mDNS up: " + deviceName + ".local");
   } else {
     SerialPrintln(F("mDNS start failed"));

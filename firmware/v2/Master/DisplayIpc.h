@@ -135,8 +135,11 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
 // Folds a bus scan's per-unit facts into the snapshot and recomputes the
 // derived fields: width (highest responder + 1, ceiling fallback — #123
 // rules in DisplayWidth.h), responding-unit count, faulty count.
+// widthOverride (#289 dummy mode): 1..maxUnits pins the width regardless of
+// the probe (0/out-of-range = probe-derived); counts stay probe truth.
 inline void displayApplyUnitFacts(DisplaySnapshot& snap,
-                                  const UnitFacts* facts, int maxUnits) {
+                                  const UnitFacts* facts, int maxUnits,
+                                  int widthOverride = 0) {
   // Clamp once: every fixed-size array below is UNITS_AMOUNT-bounded, so a
   // larger caller value must never reach the derive calls either.
   if (maxUnits > UNITS_AMOUNT) maxUnits = UNITS_AMOUNT;
@@ -159,7 +162,9 @@ inline void displayApplyUnitFacts(DisplaySnapshot& snap,
     u.mismatch = physKnown && !moving && snap.lastFrameValid &&
                  u.physLetter != snap.lastFrameLetters[i];
   }
-  snap.displayWidth = (uint8_t)computeDisplayWidth(states, maxUnits);
+  int width = computeDisplayWidth(states, maxUnits);
+  if (widthOverride >= 1 && widthOverride <= maxUnits) width = widthOverride;
+  snap.displayWidth = (uint8_t)width;
   snap.detectedUnitCount = (uint8_t)countRespondingUnits(states, maxUnits);
   snap.faultyUnitCount = (uint8_t)computeFaultyUnitCount(snap.units, maxUnits);
 }

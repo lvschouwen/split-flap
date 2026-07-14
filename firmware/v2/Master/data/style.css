@@ -91,6 +91,15 @@ body {
 @keyframes pulse { 50% { opacity: .4; } }
 .health-note { text-align: center; font-size: 13px; color: var(--muted); margin-top: 8px; font-family: var(--mono); }
 .health-note b { color: var(--amber); font-weight: 600; }
+/* Cluster wall (#277): stacked row strips sharing ONE tile size —
+   --wallcols is the widest row's unit count (86.4cqw/16 = the single-row
+   5.4cqw), rows left-align at col 0, each .mrow width is set inline as
+   its share of the widest row. The health strip rides inside the wall,
+   right under the own row (script.js reparents it). */
+.mirror.wall { flex-direction: column; gap: 6px; }
+.mirror.wall .mrow { display: flex; gap: 4px; }
+.mirror.wall .tile { font-size: clamp(10px, calc(86.4cqw / var(--wallcols)), 46px); }
+.mirror.wall .health { margin-top: 0; justify-content: flex-start; }
 @media (prefers-reduced-motion: reduce) {
 	.tile.flip .top, .health span.bad, .health span.flashing.cur { animation: none; }
 }
@@ -294,6 +303,12 @@ summary {
 .kv { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dotted var(--line); padding: 4px 0; font-variant-numeric: tabular-nums; }
 .kv span:first-child { color: var(--muted); }
 .kv span:last-child { font-family: var(--mono); }
+
+/* ---------- cluster card (#274) ---------- */
+#clusterMemberTable { margin-top: 10px; }
+#clusterMemberBody input[type=number] { width: 64px; }
+#clusterMemberBody .btn { padding: 4px 9px; }
+#clusterMemberBody td { white-space: nowrap; }
 
 /* ---------- mobile ---------- */
 @media (max-width: 560px) {

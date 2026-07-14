@@ -38,6 +38,7 @@
 #define PARAM_MQTT_PORT       "mqttPort"
 #define PARAM_MQTT_USER       "mqttUser"
 #define PARAM_MQTT_PASSWORD   "mqttPassword"
+#define PARAM_UNIT_COUNT      "unitCount"
 
 struct PendingSettingsPost {
   bool pending = false;
@@ -55,6 +56,7 @@ struct PendingSettingsPost {
   String mqttPort;      bool mqttPortProvided = false;
   String mqttUser;      bool mqttUserProvided = false;
   String mqttPassword;  bool mqttPasswordProvided = false;
+  String unitCount;     bool unitCountProvided = false;
 };
 
 enum class SettingsParamResult {
@@ -155,6 +157,17 @@ inline SettingsParamResult stageSettingsParam(PendingSettingsPost& post,
     return SettingsParamResult::Accepted;
   }
 
+  if (name == PARAM_UNIT_COUNT) {
+    String trimmed = rawValue;
+    trimmed.trim();
+    if (!isValidUnitCountOverrideValue(trimmed)) {
+      return SettingsParamResult::Invalid;
+    }
+    post.unitCount = trimmed;
+    post.unitCountProvided = true;
+    return SettingsParamResult::Accepted;
+  }
+
   if (name == PARAM_MQTT_PASSWORD) {
     // Write-only (#57): an empty field means "keep the stored one" and is
     // deliberately NOT treated as provided.
@@ -209,6 +222,7 @@ inline void mergeSettingsPost(PendingSettingsPost& shared,
   if (accepted.mqttPortProvided)   { shared.mqttPort   = accepted.mqttPort;   shared.mqttPortProvided   = true; }
   if (accepted.mqttUserProvided)   { shared.mqttUser   = accepted.mqttUser;   shared.mqttUserProvided   = true; }
   if (accepted.mqttPasswordProvided) { shared.mqttPassword = accepted.mqttPassword; shared.mqttPasswordProvided = true; }
+  if (accepted.unitCountProvided)  { shared.unitCount  = accepted.unitCount;  shared.unitCountProvided  = true; }
   shared.pending = true;
 }
 
@@ -249,6 +263,12 @@ inline void applySettingsPost(PendingSettingsPost& post,
   if (post.deviceNameProvided && settings.deviceName != post.deviceName) {
     settings.deviceName = post.deviceName;
     saveDeviceName(store, settings.deviceName);
+  }
+
+  if (post.unitCountProvided &&
+      settings.unitCountOverride != post.unitCount.toInt()) {
+    settings.unitCountOverride = post.unitCount.toInt();
+    saveUnitCountOverride(store, settings.unitCountOverride);
   }
 
   bool mqttChanged = false;

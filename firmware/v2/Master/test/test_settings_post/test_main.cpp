@@ -375,6 +375,39 @@ static void test_apply_resets_post_including_secrets() {
   TEST_ASSERT_EQUAL_STRING("", post.inputText.c_str());
 }
 
+// --- unit-count override (#289) ---------------------------------------------
+
+static void test_stage_unit_count_accepts_and_trims() {
+  PendingSettingsPost post;
+  TEST_ASSERT_EQUAL((int)SettingsParamResult::Accepted,
+                    (int)stageSettingsParam(post, PARAM_UNIT_COUNT, " 8 "));
+  TEST_ASSERT_TRUE(post.unitCountProvided);
+  TEST_ASSERT_EQUAL_STRING("8", post.unitCount.c_str());
+}
+
+static void test_stage_unit_count_rejects_out_of_range() {
+  PendingSettingsPost post;
+  TEST_ASSERT_EQUAL((int)SettingsParamResult::Invalid,
+                    (int)stageSettingsParam(post, PARAM_UNIT_COUNT, "17"));
+  TEST_ASSERT_EQUAL((int)SettingsParamResult::Invalid,
+                    (int)stageSettingsParam(post, PARAM_UNIT_COUNT, "abc"));
+  TEST_ASSERT_FALSE(post.unitCountProvided);
+}
+
+static void test_apply_persists_unit_count_override() {
+  FakeSettingsStore store;
+  MasterSettings settings = loadSettings(store);
+  PendingSettingsPost post;
+  stageSettingsParam(post, PARAM_UNIT_COUNT, "8");
+  applySettingsPost(post, settings, store);
+  TEST_ASSERT_EQUAL_INT(8, settings.unitCountOverride);
+  TEST_ASSERT_EQUAL_INT(8, loadSettings(store).unitCountOverride);
+  // Back to auto.
+  stageSettingsParam(post, PARAM_UNIT_COUNT, "0");
+  applySettingsPost(post, settings, store);
+  TEST_ASSERT_EQUAL_INT(0, settings.unitCountOverride);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_unknown_param_is_ignored);
@@ -408,5 +441,8 @@ int main(int, char**) {
   RUN_TEST(test_apply_mqtt_keeps_stored_password_when_not_provided);
   RUN_TEST(test_apply_writes_new_password_when_provided);
   RUN_TEST(test_apply_resets_post_including_secrets);
+  RUN_TEST(test_stage_unit_count_accepts_and_trims);
+  RUN_TEST(test_stage_unit_count_rejects_out_of_range);
+  RUN_TEST(test_apply_persists_unit_count_override);
   return UNITY_END();
 }

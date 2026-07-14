@@ -8,7 +8,18 @@
 
 #include <atomic>
 
+// #289 dummy mode: the settings-stored unit-count override, seeded by
+// tasksInit() and updated live by the settings drain (netTask). displayTask
+// reads it at every fold; 0 = auto (probe-derived width).
+static std::atomic<int> unitWidthOverride{0};
+
+void tasksSetUnitCountOverride(int count) {
+  unitWidthOverride.store(count, std::memory_order_relaxed);
+}
+
 #include "ClockPolicy.h"
+#include "ClusterFollower.h"
+#include "ClusterLeader.h"
 #include "FlapFrame.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
@@ -32,6 +43,8 @@ static constexpr uint32_t NET_TASK_STACK = 4096;
 // espMqttClient internals + the 512 B discovery build buffers (#224); the
 // heartbeat's HWM column is the trim-down evidence.
 static constexpr uint32_t MQTT_TASK_STACK = 6144;
+// esp_http_client + String assembly for the cluster fan-out (#273).
+static constexpr uint32_t CLUSTER_TASK_STACK = 6144;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
 static constexpr UBaseType_t DOMAIN_TASK_PRIORITY = 1;   // everything else
@@ -58,11 +71,13 @@ static constexpr uint32_t SELF_TEST_TIMEOUT_MS = 45000;
 static constexpr uint32_t SELF_TEST_POLL_MS = 500;
 static constexpr int SELF_TEST_UNSUPPORTED_POLLS = 3;
 
-static StaticTask_t displayTaskBuf, clockTaskBuf, netTaskBuf, mqttTaskBuf;
+static StaticTask_t displayTaskBuf, clockTaskBuf, netTaskBuf, mqttTaskBuf,
+    clusterTaskBuf;
 static StackType_t displayTaskStack[DISPLAY_TASK_STACK];
 static StackType_t clockTaskStack[CLOCK_TASK_STACK];
 static StackType_t netTaskStack[NET_TASK_STACK];
 static StackType_t mqttTaskStack[MQTT_TASK_STACK];
+static StackType_t clusterTaskStack[CLUSTER_TASK_STACK];
 
 static StaticQueue_t displayQueueBuf;
 static uint8_t displayQueueStorage[DISPLAY_QUEUE_DEPTH * sizeof(DisplayCommand)];
@@ -73,7 +88,7 @@ static uint8_t mqttInboxStorage[MQTT_INBOX_DEPTH * sizeof(MqttInboxMessage)];
 static QueueHandle_t mqttInbox = nullptr;
 
 static TaskHandle_t displayTaskHandle, clockTaskHandle, netTaskHandle,
-    mqttTaskHandle;
+    mqttTaskHandle, clusterTaskHandle;
 
 // --- display snapshot (single writer: displayTask) ---------------------------
 
@@ -230,7 +245,8 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // Rescan (inhibit bypassed by design, see block comment) to see who
   // actually sits in twiboot, then plan the flash list from live truth.
   unitBusProbe(busFacts, UNITS_AMOUNT);
-  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
   uint8_t targets[UNITS_AMOUNT];
   int total = reflashCollectFlashTargets(local.units, UNITS_AMOUNT,
                                          SFP_I2C_ADDRESS_BASE, targets);
@@ -298,7 +314,8 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // stays pinned there — deliberate, see block comment).
   unitBusProbe(busFacts, UNITS_AMOUNT);
   unitBusPollHealth(busFacts, UNITS_AMOUNT);
-  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
   reflashProgressFinish(local.reflash, cancelled);
   snapshotPublish(local);  // gate reopens here
   SerialPrintf("reflash: %s — %u ok, %u failed of %u\n",
@@ -319,13 +336,18 @@ static void displayTaskMain(void*) {
   delay(1500);
   unitBusProbe(busFacts, UNITS_AMOUNT);
   unitBusPollHealth(busFacts, UNITS_AMOUNT);
-  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
   snapshotPublish(local);
   if (local.detectedUnitCount == 0) {
     SerialPrintf("display: no units responding — assuming full width %d\n",
                  local.displayWidth);
   } else {
     SerialPrintf("display: probe done, width %d\n", local.displayWidth);
+  }
+  if (unitWidthOverride.load(std::memory_order_relaxed) > 0) {
+    SerialPrintf("display: width pinned to %d (unit-count override)\n",
+                 local.displayWidth);
   }
 
   // Boot auto-install + auto-update (#205, full v1 parity): flash any unit
@@ -369,7 +391,8 @@ static void displayTaskMain(void*) {
           settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
           unitBusPollHealth(busFacts, UNITS_AMOUNT);
-          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
           break;
         // --- calibration + provisioning (#204). Every op grades a
         // MaintResult; the web layer serves it via /unit/op-result.
@@ -554,7 +577,8 @@ static void displayTaskMain(void*) {
           settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
           unitBusPollHealth(busFacts, UNITS_AMOUNT);
-          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
           MaintReason reason = MaintReason::None;
           MaintOutcome outcome = classifySetAddressOutcome(
               local.units, UNITS_AMOUNT, cmd.value, reason);
@@ -573,7 +597,8 @@ static void displayTaskMain(void*) {
           settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
           unitBusPollHealth(busFacts, UNITS_AMOUNT);
-          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT);
+          displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
           MaintReason reason = MaintReason::None;
           MaintOutcome outcome = classifyClearAddressOutcome(
               countBefore, local.detectedUnitCount, reason);
@@ -692,14 +717,57 @@ static void clockTaskMain(void*) {
       notifWasActive = false;
       lastQueued = "";
     }
+    // Leader reroute (#273): with the cluster enabled the ticker's product
+    // becomes LOGICAL grid content handed to the cluster layer — which
+    // dedups, slices, and stages this master's own row on the shared
+    // commitAt clock — so nothing enqueues from here. Overlays still win:
+    // the gates above run first, and the self-row re-show after an overlay
+    // belongs to clusterTask.
+    if (clusterLeaderEnabled()) {
+      WebContentSnapshot leaderContent = webDisplayContentSnapshot();
+      time_t leaderNow = time(nullptr);
+      if (leaderContent.deviceMode == "clock") {
+        // Un-synced clock holds (v1 deviation, same as decideClockTick).
+        if (clockIsTimeSynced(leaderNow)) {
+          clusterLeaderSubmitClock(
+              formatDateTime(leaderNow, CLOCK_FORMAT),
+              formatDateTime(leaderNow, CLUSTER_DATE_FORMAT),
+              leaderContent.alignment, leaderContent.flapSpeed);
+        }
+      } else if (leaderContent.deviceMode == "text" &&
+                 leaderContent.inputText.length() > 0) {
+        clusterLeaderSubmitText(leaderContent.inputText,
+                                leaderContent.alignment,
+                                leaderContent.flapSpeed);
+      }
+      lastQueued = "";  // the ticker owns nothing while leading
+      continue;
+    }
+
     clockTickObserve(lastQueued, String(snap.currentText));
 
     WebContentSnapshot content = webDisplayContentSnapshot();
     time_t now = time(nullptr);
 
+    // Cluster gate (#272): while this board is a cluster member the leader
+    // owns the content — the ticker's job becomes re-showing the held
+    // segment (restores the wall after transients and reset-units). While a
+    // commitAt render is in flight it stands down entirely so a re-show
+    // can't preempt the synchronized flip. LocalFallback (leader silent ~2
+    // min) shows the follower's OWN clock through the normal clock path.
+    ClusterFollowerView cluster = clusterFollowerViewGet();
+    if (cluster.gated && cluster.renderPending) continue;
+
     ClockTickInput in;
-    in.deviceMode = content.deviceMode;
-    in.inputText = content.inputText;
+    if (cluster.gated && !cluster.forcesLocalClock) {
+      in.deviceMode = "text";
+      in.inputText = cluster.heldSegment;  // "" until a render arrives → no-op
+    } else if (cluster.gated) {
+      in.deviceMode = "clock";
+    } else {
+      in.deviceMode = content.deviceMode;
+      in.inputText = content.inputText;
+    }
     in.timeSynced = clockIsTimeSynced(now);
     in.formattedTime = in.timeSynced ? formatDateTime(now, CLOCK_FORMAT) : "";
     in.displayBusy = snap.busy;
@@ -708,8 +776,14 @@ static void clockTaskMain(void*) {
 
     ClockTickDecision d = decideClockTick(in);
     if (d.enqueue) {
+      // Segment re-shows are pre-positioned by the leader: rendered Left at
+      // the speed the render arrived with, like the original enqueue.
+      bool segmentReshow = cluster.gated && !cluster.forcesLocalClock;
       DisplayCommand cmd =
-          makeShowTextCommand(d.text, content.alignment, content.flapSpeed);
+          segmentReshow
+              ? makeShowTextCommand(d.text, "left", cluster.heldSpeed)
+              : makeShowTextCommand(d.text, content.alignment,
+                                    content.flapSpeed);
       if (displayEnqueue(cmd)) {
         lastQueued = d.text;
       }
@@ -733,6 +807,7 @@ static void netTaskMain(void* arg) {
   for (;;) {
     wifiServiceTick();
     webEndpointsLoop(*ctx->settings, *ctx->store);
+    clusterFollowerServiceTick(*ctx->store);  // #272: decay + NVS + renders
     webDisplayEventsTick();  // #251: SSE push on display text change
     statusLedTick();
     systemStatsTick();  // #245/#251: self-throttled, 1 s fast + 5 s ring
@@ -756,9 +831,23 @@ static void mqttTaskMain(void*) {
   }
 }
 
+// Leader-side cluster fan-out (#273): ALL outbound cluster HTTP lives in
+// this task (esp_http_client, 1.5 s timeouts) — a dead follower stalls
+// only the fan-out, never netTask. The body is clusterLeaderTick()
+// (ClusterLeader.cpp); disabled clusters make it a no-op read.
+static void clusterTaskMain(void*) {
+  SerialPrintf("clusterTask up on core %d\n", xPortGetCoreID());
+  for (;;) {
+    clusterLeaderTick();
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
 // --- lifecycle -----------------------------------------------------------------
 
 void tasksInit(MasterSettings& settings, SettingsStore& store) {
+  unitWidthOverride.store(settings.unitCountOverride,
+                          std::memory_order_relaxed);
   snapshotMutex = xSemaphoreCreateMutex();
   if (snapshotMutex == nullptr) {
     // Boot-time OOM: taking a null handle is UB, so fail loudly instead —
@@ -787,17 +876,21 @@ void tasksInit(MasterSettings& settings, SettingsStore& store) {
   mqttTaskHandle = xTaskCreateStaticPinnedToCore(
       mqttTaskMain, "mqtt", MQTT_TASK_STACK, nullptr, DOMAIN_TASK_PRIORITY,
       mqttTaskStack, &mqttTaskBuf, NETWORK_CORE);
+  clusterTaskHandle = xTaskCreateStaticPinnedToCore(
+      clusterTaskMain, "cluster", CLUSTER_TASK_STACK, nullptr,
+      DOMAIN_TASK_PRIORITY, clusterTaskStack, &clusterTaskBuf, NETWORK_CORE);
 }
 
 void tasksHeartbeatReport() {
   Serial.printf(
       "[%8lu ms] heap %u KB free (min %u KB), psram %u KB free | stack HWM: "
-      "display %u, clock %u, net %u, mqtt %u, loop %u\n",
+      "display %u, clock %u, net %u, mqtt %u, cluster %u, loop %u\n",
       (unsigned long)millis(), ESP.getFreeHeap() / 1024,
       ESP.getMinFreeHeap() / 1024, ESP.getFreePsram() / 1024,
       (unsigned)uxTaskGetStackHighWaterMark(displayTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(clockTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(netTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(mqttTaskHandle),
+      (unsigned)uxTaskGetStackHighWaterMark(clusterTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 }
