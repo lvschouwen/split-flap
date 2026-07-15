@@ -20,9 +20,11 @@
 # response is the whole verdict (MD5 is checked device-side before the
 # final sector is committed).
 #
-# Usage: ota-flash.sh [-s user@host] [-d dir] [-r|-a] [-l file.bin] [-y] <device>
+# Usage: ota-flash.sh [-s user@host] [-d dir] [-r|-a] [-p plat] [-l file.bin] [-y] <device> [<device>...]
 #
-#   <device>        IP, hostname, or http://host[:port] of the running master
+#   <device>        IP, hostname, or http://host[:port] of a running board.
+#                   Several devices flash sequentially with a per-device
+#                   verdict summary (#299) — exit is non-zero if any failed.
 #   -s user@host    build server to fetch from (default: $SPLITFLAP_BIN_HOST)
 #   -d dir          staging directory on the server (default:
 #                   $SPLITFLAP_BIN_DIR, else bench-bins in the remote home)
@@ -30,10 +32,24 @@
 #                   firmware (POST /firmware/rescue)
 #   -a              flash the latest master firmware, then — once the new
 #                   image is confirmed running — install the latest rescue
+#   -p plat         override platform autodetect: esp01 or esp32. Needed for
+#                   the one legitimate mismatch — MIGRATING a board that
+#                   still runs v1 ESPMaster (reports no plat, so it reads as
+#                   an S3 master) onto the #298 follower image via v1's own
+#                   OTA path: ota-flash.sh -p esp01 <ip>
 #   -l file.bin     skip the download and upload this local file (its
-#                   firmware-<rev>/rescue-<rev> name still supplies the
-#                   expected rev; not valid with -a)
+#                   firmware-<rev>/follower-<rev>/rescue-<rev> name still
+#                   supplies the expected rev; not valid with -a)
 #   -y              don't ask for confirmation
+#
+# Platform autodetect (#299): each device's GET /settings is read first —
+# `plat":"esp01"` (the #298 ESP-01 follower row) gets the latest
+# follower-<rev>.bin; anything else is an S3 master and gets
+# firmware-<rev>.bin as before. -r/-a are refused for esp01 targets (no
+# factory slot there), and a local file whose prefix contradicts the
+# device's platform is refused — an S3 image POSTed at an ESP-01 (or vice
+# versa) would brick-until-rollback for nothing. -p asserts the platform
+# for every listed device when autodetect can't know better (see above).
 #
 # Requires: curl, md5sum, python3, and (unless -l) ssh + scp access to the
 # build server.
@@ -48,18 +64,20 @@ REMOTE_DIR="${SPLITFLAP_BIN_DIR:-bench-bins}"
 MODE="master"
 LOCAL_FILE=""
 ASSUME_YES=0
+PLAT_OVERRIDE=""
 
 usage() {
-  echo "usage: $0 [-s user@host] [-d dir] [-r|-a] [-l file.bin] [-y] <device>" >&2
+  echo "usage: $0 [-s user@host] [-d dir] [-r|-a] [-p esp01|esp32] [-l file.bin] [-y] <device> [<device>...]" >&2
   exit 2
 }
 
-while getopts "s:d:ral:yh" opt; do
+while getopts "s:d:rap:l:yh" opt; do
   case "$opt" in
     s) SERVER="$OPTARG" ;;
     d) REMOTE_DIR="$OPTARG" ;;
     r) MODE="rescue" ;;
     a) MODE="all" ;;
+    p) PLAT_OVERRIDE="$OPTARG" ;;
     l) LOCAL_FILE="$OPTARG" ;;
     y) ASSUME_YES=1 ;;
     h|*) usage ;;
@@ -67,11 +85,16 @@ while getopts "s:d:ral:yh" opt; do
 done
 shift $((OPTIND - 1))
 
-DEVICE="${1:-}"
-[[ -n "$DEVICE" ]] || usage
+DEVICES=("$@")
+[[ ${#DEVICES[@]} -ge 1 ]] || usage
 
 if [[ -n "$LOCAL_FILE" && "$MODE" == "all" ]]; then
   echo "-l flashes a single file; it cannot combine with -a" >&2
+  exit 2
+fi
+if [[ -n "$PLAT_OVERRIDE" && "$PLAT_OVERRIDE" != "esp01" &&
+      "$PLAT_OVERRIDE" != "esp32" ]]; then
+  echo "-p takes esp01 or esp32, got: $PLAT_OVERRIDE" >&2
   exit 2
 fi
 if [[ -z "$LOCAL_FILE" && -z "$SERVER" ]]; then
@@ -84,16 +107,22 @@ if [[ "$SERVER" == -* ]]; then
   exit 2
 fi
 
-# Accept a bare IP/hostname or a full http://host[:port].
-if [[ "$DEVICE" =~ ^https?:// ]]; then
-  TARGET="$DEVICE"
-else
-  TARGET="http://$DEVICE"
-fi
-[[ "$TARGET" =~ ^https?://[^/]+$ ]] || {
-  echo "device must be an IP/hostname or http://host[:port] (no trailing path)" >&2
-  exit 2
+# Accept a bare IP/hostname or a full http://host[:port]. Sets the global
+# TARGET every helper below reads; validated up-front for every device so a
+# typo fails before the first board is touched.
+set_target() {
+  local device="$1"
+  if [[ "$device" =~ ^https?:// ]]; then
+    TARGET="$device"
+  else
+    TARGET="http://$device"
+  fi
+  [[ "$TARGET" =~ ^https?://[^/]+$ ]] || {
+    echo "device must be an IP/hostname or http://host[:port] (no trailing path): $device" >&2
+    exit 2
+  }
 }
+for dev in "${DEVICES[@]}"; do set_target "$dev"; done
 
 DOWNLOAD_DIR=""
 cleanup() { [[ -n "$DOWNLOAD_DIR" ]] && rm -rf "$DOWNLOAD_DIR"; rm -f "${BODY:-}"; }
@@ -155,12 +184,12 @@ fetch_latest() {
   echo "$DOWNLOAD_DIR/$(basename "$remote")"
 }
 
-# firmware-<rev>.bin / rescue-<rev>.bin → <rev> (keeps any -dirty suffix so a
+# firmware-/follower-/rescue-<rev>.bin → <rev> (keeps any -dirty suffix so a
 # dirty build is called out in the verdict rather than silently matching).
 rev_from_name() {
   local base
   base=$(basename "$1")
-  if [[ "$base" =~ ^(firmware|rescue)-([a-f0-9]+(-dirty)?)([.-].*)?\.bin$ ]]; then
+  if [[ "$base" =~ ^(firmware|follower|rescue)-([a-f0-9]+(-dirty)?)([.-].*)?\.bin$ ]]; then
     echo "${BASH_REMATCH[2]}"
   fi
 }
@@ -345,7 +374,6 @@ install_rescue() {
 
 # --- main ------------------------------------------------------------------
 
-echo "Device        : $TARGET"
 if [[ -n "$LOCAL_FILE" ]]; then
   [[ -f "$LOCAL_FILE" ]] || { echo "not a file: $LOCAL_FILE" >&2; exit 2; }
   if [[ "$(basename "$LOCAL_FILE")" == *.factory.bin ]]; then
@@ -355,7 +383,9 @@ if [[ -n "$LOCAL_FILE" ]]; then
   fi
   # The filename prefix is the image type — never let it contradict the
   # mode: a master image POSTed to /firmware/rescue would overwrite the
-  # break-glass factory slot with a non-rescue image.
+  # break-glass factory slot with a non-rescue image. The per-device
+  # platform guard below additionally matches firmware- vs follower-
+  # against what each board reports (#299).
   case "$(basename "$LOCAL_FILE")" in
     rescue-*)
       if [[ "$MODE" == "master" ]]; then
@@ -363,37 +393,152 @@ if [[ -n "$LOCAL_FILE" ]]; then
         MODE="rescue"
       fi
       ;;
-    firmware-*)
+    firmware-*|follower-*)
       if [[ "$MODE" == "rescue" ]]; then
-        echo "$(basename "$LOCAL_FILE") is a master image — refusing to" >&2
-        echo "install it into the rescue/factory slot (drop -r, or pass a" >&2
+        echo "$(basename "$LOCAL_FILE") is a master/follower image — refusing" >&2
+        echo "to install it into the rescue/factory slot (drop -r, or pass a" >&2
         echo "rescue-<rev>.bin)" >&2
         exit 2
       fi
       ;;
   esac
-  echo "Source        : local file"
+  echo "Source        : local file ($(basename "$LOCAL_FILE"))"
 else
   echo "Source        : $SERVER:$REMOTE_DIR (latest by mtime)"
 fi
 echo "Mode          : $MODE"
 if [[ -n "$SERVER" ]]; then check_script_freshness; fi
-echo
 
-case "$MODE" in
-  master)
-    FW="${LOCAL_FILE:-$(fetch_latest firmware)}"
-    flash_master "$FW"
-    ;;
-  rescue)
-    FW="${LOCAL_FILE:-$(fetch_latest rescue)}"
-    install_rescue "$FW"
-    ;;
-  all)
-    FW_MASTER=$(fetch_latest firmware)
-    FW_RESCUE=$(fetch_latest rescue)
-    flash_master "$FW_MASTER"
-    echo
-    install_rescue "$FW_RESCUE"
-    ;;
-esac
+# Lazy per-prefix fetch cache (#299): with mixed-platform device lists each
+# bin downloads once, on first need. Runs in the PARENT shell (result via
+# FW_RESULT, never a command substitution) so the cache — and the
+# DOWNLOAD_DIR the EXIT trap cleans — actually persist.
+FW_CACHE_FIRMWARE=""
+FW_CACHE_FOLLOWER=""
+FW_CACHE_RESCUE=""
+FW_RESULT=""
+fetch_cached() {
+  local prefix="$1" cached
+  case "$prefix" in
+    firmware) cached="$FW_CACHE_FIRMWARE" ;;
+    follower) cached="$FW_CACHE_FOLLOWER" ;;
+    rescue)   cached="$FW_CACHE_RESCUE" ;;
+  esac
+  if [[ -z "$cached" ]]; then
+    # Create the download dir here so the fetch subshell inherits it and
+    # the cleanup trap sees it.
+    [[ -n "$DOWNLOAD_DIR" ]] || DOWNLOAD_DIR=$(mktemp -d)
+    cached=$(fetch_latest "$prefix") || return $?
+    case "$prefix" in
+      firmware) FW_CACHE_FIRMWARE="$cached" ;;
+      follower) FW_CACHE_FOLLOWER="$cached" ;;
+      rescue)   FW_CACHE_RESCUE="$cached" ;;
+    esac
+  fi
+  FW_RESULT="$cached"
+}
+
+# One device's full flow: platform detect → image pick/guard → flash.
+run_device() {
+  local device="$1"
+  set_target "$device"
+  echo
+  echo "Device        : $TARGET"
+
+  # Platform autodetect (#299): esp01 = the #298 follower row; anything
+  # else (incl. pre-#299 firmware without the key) = S3 master. -p asserts
+  # the platform instead — the v1→follower MIGRATION case: a board still on
+  # v1 ESPMaster reports no plat but flashes the follower image fine over
+  # its own OTA path (same eagle 1m layout, same /firmware/master contract).
+  local plat
+  if [[ -n "$PLAT_OVERRIDE" ]]; then
+    plat="$PLAT_OVERRIDE"
+    echo "Platform      : $plat (asserted via -p — autodetect skipped)"
+  else
+    plat="$(fetch_setting plat)"
+    if [[ "$plat" == "?" ]]; then
+      echo "device unreachable at $TARGET" >&2
+      return 3
+    fi
+  fi
+  local prefix="firmware"
+  if [[ "$plat" == "esp01" ]]; then
+    prefix="follower"
+    [[ -n "$PLAT_OVERRIDE" ]] || echo "Platform      : esp01 (ESP-01 follower row)"
+    if [[ "$MODE" != "master" ]]; then
+      echo "an ESP-01 follower has no rescue/factory slot — drop -r/-a for $device" >&2
+      return 2
+    fi
+  elif [[ -z "$PLAT_OVERRIDE" ]]; then
+    echo "Platform      : ${plat:-esp32} (master)"
+  fi
+
+  if [[ -n "$LOCAL_FILE" && "$MODE" != "rescue" ]]; then
+    # firmware- vs follower- must match the board (#299) — the wrong image
+    # flashes fine and then rolls back (S3) or bricks-until-reflash (ESP-01).
+    case "$(basename "$LOCAL_FILE")" in
+      follower-*)
+        if [[ "$prefix" != "follower" ]]; then
+          echo "$(basename "$LOCAL_FILE") is an ESP-01 follower image but $device is not an esp01 board" >&2
+          return 2
+        fi
+        ;;
+      firmware-*)
+        if [[ "$prefix" != "firmware" ]]; then
+          echo "$(basename "$LOCAL_FILE") is an S3 master image but $device reports plat=esp01" >&2
+          return 2
+        fi
+        ;;
+    esac
+  fi
+
+  local fw
+  case "$MODE" in
+    master)
+      if [[ -n "$LOCAL_FILE" ]]; then
+        fw="$LOCAL_FILE"
+      else
+        fetch_cached "$prefix" || return 3
+        fw="$FW_RESULT"
+      fi
+      flash_master "$fw"
+      ;;
+    rescue)
+      if [[ -n "$LOCAL_FILE" ]]; then
+        fw="$LOCAL_FILE"
+      else
+        fetch_cached rescue || return 3
+        fw="$FW_RESULT"
+      fi
+      install_rescue "$fw"
+      ;;
+    all)
+      fetch_cached firmware || return 3
+      fw="$FW_RESULT"
+      local fw_rescue
+      fetch_cached rescue || return 3
+      fw_rescue="$FW_RESULT"
+      flash_master "$fw" || return $?
+      echo
+      install_rescue "$fw_rescue"
+      ;;
+  esac
+}
+
+FAILED=0
+RESULTS=()
+for dev in "${DEVICES[@]}"; do
+  if run_device "$dev"; then
+    RESULTS+=("[ok]   $dev")
+  else
+    RESULTS+=("[FAIL] $dev")
+    FAILED=1
+  fi
+done
+
+if [[ ${#DEVICES[@]} -gt 1 ]]; then
+  echo
+  echo "Summary:"
+  for line in "${RESULTS[@]}"; do echo "  $line"; done
+fi
+exit $(( FAILED ? 3 : 0 ))

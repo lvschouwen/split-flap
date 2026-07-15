@@ -17,6 +17,7 @@
 static bool pendingAtBoot = false;
 static bool rolledBack = false;
 static bool confirmed = false;
+static bool confirmInFlight = false;  // claim guard between check and otadata write
 static SemaphoreHandle_t otaStateMutex = nullptr;
 
 struct OtaStateLock {
@@ -46,7 +47,7 @@ void otaServiceInit() {
   rolledBack = esp_ota_get_last_invalid_partition() != nullptr;
 
   if (pendingAtBoot) {
-    Serial.printf("ota: image on %s is PENDING_VERIFY — confirm armed on netif-up\n",
+    Serial.printf("ota: image on %s is PENDING_VERIFY — confirm armed pre-inrush\n",
                   running->label);
   } else if (rolledBack) {
     Serial.println(F("ota: bootloader ROLLED BACK a failed image — running the previous slot"));
@@ -117,8 +118,14 @@ void otaHealthConfirm() {
   bool doConfirm = false;
   {
     OtaStateLock lock;
-    if (pendingAtBoot && !confirmed) {
-      confirmed = true;
+    // Atomically CLAIM the confirm with an in-flight flag so a would-be second
+    // caller is a no-op instead of racing a concurrent otadata write. Callers
+    // are non-overlapping today (setup() finishes before netTask exists), so
+    // this only guards a future one — fail safe, not silently double-write.
+    // `confirmed` itself is latched only once the write succeeds (below), so a
+    // failed pre-inrush write still lets the netif-up fallback retry.
+    if (pendingAtBoot && !confirmed && !confirmInFlight) {
+      confirmInFlight = true;
       doConfirm = true;
     }
   }
@@ -126,16 +133,22 @@ void otaHealthConfirm() {
     // Flash write (otadata) outside the lock: /settings readers must not
     // stall behind it.
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    {
+      OtaStateLock lock;
+      confirmInFlight = false;
+      if (err == ESP_OK) confirmed = true;
+    }
     if (err == ESP_OK) {
-      SerialPrintln(F("OTA image confirmed (netif up) — rollback cancelled"));
+      SerialPrintln(F("OTA image confirmed (pre-inrush) — rollback cancelled"));
     } else {
       SerialPrintln("OTA confirm FAILED: " + String(esp_err_to_name(err)));
-      return;  // don't record an image that may still be rolled back
+      return;  // leave pending; the netif-up fallback call retries
     }
   }
-  // Once per boot, on the first netif-up (same trigger as the confirm, and
-  // netTask is the only caller — no lock needed): also runs on non-pending
-  // boots so a pre-#200 device backfills its record on the next power-up.
+  // Once per boot, on the first caller (setup pre-inrush, then netif-up):
+  // also runs on non-pending boots so a pre-#200 device backfills its record
+  // on the next power-up. Callers are temporally separated (setup finishes
+  // before netTask exists), so the plain static needs no lock.
   static bool recordEnsured = false;
   if (!recordEnsured) {
     recordEnsured = true;

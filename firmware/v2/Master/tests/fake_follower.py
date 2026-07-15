@@ -43,10 +43,15 @@ class FollowerState:
     twin of ClusterFollowerPolicy.h."""
 
     def __init__(self, name="fake-follower", rev="fake0000", width=16,
-                 rollback=False, reboot_secs=3.0):
+                 rollback=False, reboot_secs=3.0, plat=""):
         self.name = name
         self.rev = rev
         self.width = width
+        # #297 platform tag: "" = same platform as the leader (S3 twin);
+        # "esp01" impersonates the #298 dumb row — join/ping replies gain
+        # the plat key + heap/rssi/up vitals, and the leader must never
+        # stream firmware at it.
+        self.plat = plat
         self.rollback = rollback      # keep the old rev after a "flash"
         self.reboot_secs = reboot_secs
         # #294 health drills: the advertised fault bitmap (bit i = unit i).
@@ -83,8 +88,13 @@ class FollowerState:
 
     def health_keys(self):
         """The #294 additive health keys both the join and ping replies carry."""
-        return {"detected": self.width, "faulty": bin(self.fault_mask).count("1"),
+        keys = {"detected": self.width, "faulty": bin(self.fault_mask).count("1"),
                 "faultMask": self.fault_mask_hex(), "wear": self.wear}
+        if self.plat:
+            # #297/#298: foreign-platform rows also report their vitals.
+            keys.update({"plat": self.plat, "heap": 28000, "rssi": -61,
+                         "up": int(time.monotonic())})
+        return keys
 
     def join_conflict(self, leader_host):
         """#295 sticky leadership — the python twin of
@@ -273,10 +283,12 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
                      "rev": st.rev}
             reply.update(st.health_keys())
             # Key order matches the firmware reply (state/epoch/seq, then
-            # width/detected/faulty/faultMask/wear/rev).
-            ordered = {k: reply[k] for k in
-                       ("state", "epoch", "seq", "width", "detected",
-                        "faulty", "faultMask", "wear", "rev")}
+            # width/detected/faulty/faultMask/wear/rev, then the #297
+            # additive plat/vitals block when foreign-platform).
+            keys = ["state", "epoch", "seq", "width", "detected",
+                    "faulty", "faultMask", "wear", "rev"]
+            keys += [k for k in ("plat", "heap", "rssi", "up") if k in reply]
+            ordered = {k: reply[k] for k in keys}
             return self._send(200, json.dumps(ordered))
 
         if self.path == "/cluster/leave":
@@ -362,11 +374,11 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
 
 
 def make_server(port, name="fake-follower", rev="fake0000", width=16,
-                verbose=False, rollback=False, reboot_secs=3.0):
+                verbose=False, rollback=False, reboot_secs=3.0, plat=""):
     """One fake follower on localhost:port. Returns (server, state); run
     server.serve_forever() in a thread; state carries the assertions."""
     state = FollowerState(name=name, rev=rev, width=width, rollback=rollback,
-                          reboot_secs=reboot_secs)
+                          reboot_secs=reboot_secs, plat=plat)
 
     class Handler(FakeFollowerHandler):
         pass
@@ -383,6 +395,10 @@ def main():
     parser.add_argument("--base-port", type=int, default=8801)
     parser.add_argument("--width", type=int, default=16)
     parser.add_argument("--rev", default="fake0000")
+    parser.add_argument("--plat", default="",
+                        help="platform tag (#297): esp01 impersonates the "
+                             "dumb row — the leader must never stream "
+                             "firmware at it")
     parser.add_argument("--rollback", action="store_true",
                         help="keep the old rev after a flash (rollback drill)")
     parser.add_argument("--reboot-secs", type=float, default=3.0,
@@ -395,7 +411,7 @@ def main():
         server, _ = make_server(port, name=f"fake-row-{i}", rev=args.rev,
                                 width=args.width, verbose=True,
                                 rollback=args.rollback,
-                                reboot_secs=args.reboot_secs)
+                                reboot_secs=args.reboot_secs, plat=args.plat)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         servers.append(server)
         print(f"fake follower “fake-row-{i}” listening on :{port}")

@@ -5,9 +5,13 @@
 // ported — decided 2026-07-09): a freshly flashed image boots PENDING_VERIFY
 // and is reverted on the next reset unless confirmed. This TU defers the
 // Arduino core's auto-confirm (strong verifyRollbackLater() -> true) and
-// confirms only once a netif is up — boot + radio + web stack alive is the
-// health bar. The /settings verdict fields are synthesized from esp_ota
-// partition state via the pure OtaStatus.h (natively tested).
+// confirms once the full single-threaded setup() has proven the image doesn't
+// hard-crash — before tasksInit() starts the display/WiFi inrush (#305). The
+// old bar was first-netif-up, but that sits on the far side of the inrush,
+// whose current draw can trip the S3 brownout detector on a verify-boot and
+// roll a good image back over a sag it survives at steady state. The /settings
+// verdict fields are synthesized from esp_ota partition state via the pure
+// OtaStatus.h (natively tested).
 
 #include <Arduino.h>
 
@@ -18,10 +22,11 @@
 // mutex for the cross-task reads below.
 void otaServiceInit();
 
-// netTask context: confirms a pending image (first call wins; later calls
-// no-op). WifiService calls this from both startOnline() and startPortal()
-// — a portal boot is a healthy boot, and the portal-timeout reboot must not
-// cost us an unconfirmed image.
+// Confirms a pending image (first successful call wins; later calls no-op).
+// Primary caller is setup() pre-inrush (#305); WifiService still calls it on
+// netif-up from both startOnline() and startPortal() as a fallback (a portal
+// boot is a healthy boot). Safe from either context — the callers are
+// temporally separated and the shared state is mutex-guarded.
 void otaHealthConfirm();
 
 // Async-handler safe: mutex-guarded snapshot of the synthesized verdict for

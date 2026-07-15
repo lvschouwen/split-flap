@@ -28,6 +28,8 @@
 #include "ClusterLeader.h"
 #include "DisplayEvents.h"
 #include "FactorySlot.h"
+#include "FollowerImagePolicy.h"  // #304 follower-image upload guard
+#include "FollowerImageStore.h"
 #include "FlashLog.h"
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
@@ -87,6 +89,11 @@ static uint32_t otaUploadStartMs = 0;
 // each other's leftovers. (Concurrent uploads remain #191 territory.)
 static int rescueRejectionStatus = 0;
 static String rescueRejectionReason;
+
+// Same pattern again for POST /cluster/follower-firmware (#304) — the stored
+// ESP-01 image upload. Independent of the OTA/rescue flows above.
+static int followerFwRejectStatus = 0;
+static String followerFwRejectReason;
 
 // Live state the read handlers render. Set once in webEndpointsInit();
 // handlers only ever read (async-context rule). Held as TU-local statics
@@ -604,7 +611,8 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // v1 wire contract: POST multipart field "firmware" + mandatory ?md5=
   // (v1 #144) + optional ?v= intended-version diagnostic. Update targets
   // the inactive A/B slot; the image boots PENDING_VERIFY and OtaService
-  // confirms it once a netif is up (bootloader reverts otherwise).
+  // confirms it pre-inrush near the end of setup() (#305), netif-up as
+  // fallback (bootloader reverts otherwise).
   //
   // Async-context exception (deliberate, v1 precedent): Update.write() runs
   // right here in the async_tcp task — a firmware stream cannot be staged
@@ -1476,6 +1484,92 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     request->send(200, "application/json",
                   clusterStatusJson(clusterLeaderStatusGet()));
   });
+
+  // --- ESP-01 follower firmware: store + relay (#304 Part B) ------------------
+  // Upload a follower-<rev>.bin ONCE to the S3 (same-origin — no CORS); it's
+  // held on `storage` LittleFS and streamed on demand to esp01 rows by
+  // clusterTask, so the wall never browser-uploads to a follower (keeps #294's
+  // /firmware/* closed). Same async-context exception as the master OTA: the
+  // stream is accumulated in PSRAM here, MD5-verified, then handed to netTask.
+  // The follower-*.bin prefix guard mirrors ota-flash.sh #299 (an S3 image
+  // bricks the ESP-01).
+  server.on(
+      "/cluster/follower-firmware", HTTP_POST,
+      [](AsyncWebServerRequest* request) {
+        if (followerFwRejectStatus != 0) {
+          int s = followerFwRejectStatus;
+          String r = followerFwRejectReason;
+          followerFwRejectStatus = 0;
+          followerFwRejectReason = "";
+          request->send(s, "text/plain", r);
+          return;
+        }
+        if (!followerImageWriteEnd()) {
+          request->send(500, "text/plain",
+                        "Follower image store failed: " +
+                            followerImageWriteError());
+          return;
+        }
+        request->send(200, "text/plain",
+                      F("Follower image stored — use ‘Update firmware’ "
+                        "on an ESP-01 member to push it."));
+      },
+      [](AsyncWebServerRequest* request, String filename, size_t index,
+         uint8_t* data, size_t len, bool final) {
+        if (index == 0) {
+          followerFwRejectStatus = 0;
+          followerFwRejectReason = "";
+          String rev;
+          if (!followerImageUploadAccepts(filename, rev)) {
+            followerFwRejectStatus = 400;
+            followerFwRejectReason =
+                "expected a follower-<rev>.bin (an S3 image would brick the "
+                "ESP-01)";
+            return;
+          }
+          String md5 = request->hasParam("md5")
+                           ? request->getParam("md5")->value()
+                           : String();
+          if (md5.length() == 0) {
+            followerFwRejectStatus = 400;
+            followerFwRejectReason = "md5 query parameter is required";
+            return;
+          }
+          if (!normalizeOtaMd5(md5)) {
+            followerFwRejectStatus = 400;
+            followerFwRejectReason = "md5 must be exactly 32 hex characters";
+            return;
+          }
+          if (!followerImageWriteBegin(md5, rev)) {
+            followerFwRejectStatus = 409;
+            followerFwRejectReason =
+                "cannot start: " + followerImageWriteError();
+            return;
+          }
+        }
+        if (followerFwRejectStatus != 0) return;
+        if (len > 0 && !followerImageWriteChunk(data, len, index)) {
+          followerFwRejectStatus = 400;
+          followerFwRejectReason =
+              "upload failed: " + followerImageWriteError();
+          return;
+        }
+        // final: the completion handler calls followerImageWriteEnd().
+      });
+
+  // On-demand: stream the stored image to one esp01 member. Validation +
+  // eligibility live in clusterLeaderStageFollowerPush; the file stream runs
+  // on clusterTask (never here). Progress rides GET /cluster/status.
+  server.on("/cluster/member/update", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+    String host = request->hasParam("host", true)
+                      ? request->getParam("host", true)->value()
+                  : request->hasParam("host")
+                      ? request->getParam("host")->value()
+                      : String();
+    ClusterConfigVerdict v = clusterLeaderStageFollowerPush(host);
+    request->send(v.httpStatus, "text/plain", v.message);
+  });
 }
 
 void webEndpointsStart(AsyncWebServer& server) {
@@ -1737,6 +1831,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       b.ip = a == IPAddress() ? String() : a.toString();
       b.rev = MDNS.txt(i, "rev");
       b.width = clusterParseTxtWidth(MDNS.txt(i, "width"));
+      b.plat = MDNS.txt(i, "plat");  // "" = S3 master (#297)
     }
     String json = buildClusterDiscoverJson(boards, count, effectiveName);
     SerialPrintf("Cluster discover: %u board(s)\n", (unsigned)count);
@@ -1747,6 +1842,9 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
 
   // Flash-log drain (#206): netTask is the single flash writer.
   flashLogTick(rebootDue);  // force on reboot so the last lines land
+  // Staged follower-image write (#304): same single-writer discipline — the
+  // async upload handler accumulates in PSRAM, netTask commits it to flash.
+  followerImageFlushTick();
 
   if (rebootDue) {
     SerialPrintln(F("Rebooting..."));

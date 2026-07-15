@@ -106,6 +106,11 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
     out += m.failures;
     out += ",\"rev\":";
     appendJsonString(out, m.rev);
+    if (m.plat.length() > 0) {
+      // #297 additive: absent = same platform as the leader (S3 fleet).
+      out += ",\"plat\":";
+      appendJsonString(out, m.plat);
+    }
     out += ",\"reportedWidth\":";
     out += m.reportedWidth;
     if (m.healthValid) {
@@ -136,6 +141,23 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
   out += String((unsigned long)st.rolloutTotal);
   out += ",\"imageVerifyFailed\":";
   out += st.rolloutImageFailed ? "true" : "false";
+  // #304 Part B: the stored ESP-01 image + the on-demand relay push. The
+  // Cluster card's upload control reads followerImage; the per-member "Update
+  // firmware" button reads followerPush.
+  out += "},\"followerImage\":{\"present\":";
+  out += st.followerImagePresent ? "true" : "false";
+  out += ",\"rev\":";
+  appendJsonString(out, st.followerImageRev);
+  out += "},\"followerPush\":{\"phase\":";
+  appendJsonString(out, st.followerPushPhase);
+  out += ",\"host\":";
+  appendJsonString(out, st.followerPushHost);
+  out += ",\"sent\":";
+  out += String((unsigned long)st.followerPushSent);
+  out += ",\"total\":";
+  out += String((unsigned long)st.followerPushTotal);
+  out += ",\"result\":";
+  appendJsonString(out, st.followerPushResult);
   out += "}}";
   return out;
 }
@@ -274,7 +296,12 @@ inline bool clusterCorsPathAllowed(const String& path) {
   // device-name edit rides it; the GET just serves the page.
   if (path == "/" || path == "/settings" || path == "/units/health" ||
       path == "/units/health/refresh" || path == "/system/stats" ||
-      path == "/log" || path == "/log/flash" || path == "/reboot") {
+      path == "/log" || path == "/log/flash" || path == "/reboot" ||
+      path == "/reflash-units") {
+    // #304: board-level unit reflash from the wall panel. Note the ESP-01
+    // follower's FollowerCors.h copy additionally opens /firmware/master —
+    // a deliberate divergence: S3 members update via #276 fleet convergence,
+    // so /firmware/* stays closed HERE.
     return true;
   }
   return path.startsWith("/unit/");

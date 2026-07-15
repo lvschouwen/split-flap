@@ -56,6 +56,21 @@ static void test_backoff_gate_outranks_everything() {
                     clusterMemberNextAction(m, 1000 + CLUSTER_RETRY_BASE_MS));
 }
 
+// --- reply parsing (#297 platform key) -------------------------------------------
+
+static void test_join_reply_plat_parses_and_defaults_empty() {
+  // #297: absent plat = same platform as the leader (the whole pre-#297 S3
+  // fleet); an ESP-01 row reports "esp01" and the rollout must skip it.
+  ClusterMemberRuntime m;
+  TEST_ASSERT_EQUAL_UINT(0, m.plat.length());
+  String esp01 =
+      "{\"name\":\"row-2\",\"rev\":\"abc1234\",\"width\":8,\"plat\":\"esp01\"}";
+  m.plat = clusterExtractJsonString(esp01, "plat");
+  TEST_ASSERT_EQUAL_STRING("esp01", m.plat.c_str());
+  String s3 = "{\"name\":\"row-2\",\"rev\":\"abc1234\",\"width\":16}";
+  TEST_ASSERT_EQUAL_STRING("", clusterExtractJsonString(s3, "plat").c_str());
+}
+
 // --- failure / recovery ---------------------------------------------------------
 
 static void test_backoff_doubles_and_caps() {
@@ -222,5 +237,6 @@ int main(int, char**) {
   RUN_TEST(test_oversized_host_rejected);
   RUN_TEST(test_self_member_is_empty_host);
   RUN_TEST(test_json_field_extraction);
+  RUN_TEST(test_join_reply_plat_parses_and_defaults_empty);
   return UNITY_END();
 }

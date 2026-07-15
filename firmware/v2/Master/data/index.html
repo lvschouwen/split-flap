@@ -177,6 +177,14 @@
 							<button type="button" class="btn primary" id="buttonClusterSave" onclick="saveClusterCard()">Save cluster</button>
 							<button type="button" class="btn" id="buttonClusterDisable" onclick="disableCluster()">Disable cluster…</button>
 						</div>
+						<div class="row" style="margin-top:10px">
+							<div class="grow">
+								<label class="small">ESP-01 row firmware — stored on this board, pushed to a row from its ⚙ panel</label>
+								<p class="note" id="clusterFollowerFwStored">No follower image stored yet.</p>
+							</div>
+							<input type="file" id="inputClusterFollowerFw" accept=".bin" />
+							<button type="button" class="btn" id="buttonClusterFollowerFwUpload" onclick="uploadFollowerFirmware()">Upload follower-*.bin</button>
+						</div>
 					</div>
 					<div class="member-panel hidden" id="clusterMemberPanel"></div>
 					<p id="clusterCardStatus" class="status hidden"></p>

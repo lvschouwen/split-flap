@@ -35,6 +35,7 @@ struct ClusterLeaderMemberStatus {
   bool degraded = false;
   int failures = 0;
   String rev;            // follower firmware rev from the join reply
+  String plat;           // reported platform, "" = same as leader (#297)
   int reportedWidth = 0; // join-handshake width fact
   bool updating = false;      // fleet rollout (#276) is converging this member
   bool updateBlocked = false; // rollout gave up (attempt cap) on this member
@@ -62,6 +63,17 @@ struct ClusterLeaderStatus {
   // The running image failed its verify/read pass — convergence is off
   // until reboot ("idle" alone would read as "nothing to do").
   bool rolloutImageFailed = false;
+  // On-demand ESP-01 firmware relay (#304 Part B): the stored follower image
+  // + the live on-demand push. followerImage* drive the Cluster card's upload
+  // control; followerPush* mirror the rollout fields for the member panel's
+  // per-row "Update firmware" button.
+  bool followerImagePresent = false;
+  String followerImageRev;
+  String followerPushPhase;   // "idle" / "uploading"
+  String followerPushHost;    // target member while uploading
+  uint32_t followerPushSent = 0;
+  uint32_t followerPushTotal = 0;
+  String followerPushResult;  // last verdict: none / done / failed / rejected
   // Derived grid shape (#277): row count + total logical units — the
   // wall's text capacity as HA surfaces it. 0/0 while not leading.
   int gridRows = 0;
@@ -114,6 +126,12 @@ struct ClusterConfigVerdict {
   String message;
 };
 ClusterConfigVerdict clusterLeaderStageConfig(const String& membersSpec);
+
+// Web boundary (async task): stage an on-demand follower-image push to the
+// given member host (#304 Part B). Validates the host is a known esp01
+// member and a follower image is stored; the file stream to the follower's
+// /firmware/master runs on clusterTask. httpStatus 200 = staged.
+ClusterConfigVerdict clusterLeaderStageFollowerPush(const String& host);
 
 // The stage's validation alone (pure, no staging): #295 promote
 // pre-validates the transformed table BEFORE leaving the dead membership,

@@ -205,6 +205,18 @@ static void test_status_json_keeps_the_277_wire_keys() {
   TEST_ASSERT_TRUE(out.indexOf("\"imageVerifyFailed\":false") >= 0);
 }
 
+static void test_status_json_carries_plat_only_when_reported() {
+  // #297: plat is additive — the S3 fleet never reports one (absent = same
+  // platform as the leader); an ESP-01 member's reported plat surfaces so
+  // the Cluster card can tag the row.
+  ClusterLeaderStatus st = makeStatus();
+  String out = clusterStatusJson(st);
+  TEST_ASSERT_TRUE(out.indexOf("\"plat\"") < 0);
+  st.members[1].plat = "esp01";
+  out = clusterStatusJson(st);
+  TEST_ASSERT_TRUE(out.indexOf("\"plat\":\"esp01\"") >= 0);
+}
+
 // --- digest ----------------------------------------------------------------------
 
 static void test_digest_wraps_status_with_wall_context() {
@@ -359,6 +371,11 @@ static void test_cors_path_surface_is_the_per_member_one() {
   TEST_ASSERT_TRUE(clusterCorsPathAllowed("/log"));
   TEST_ASSERT_TRUE(clusterCorsPathAllowed("/log/flash"));
   TEST_ASSERT_TRUE(clusterCorsPathAllowed("/reboot"));
+  // #304: board-level unit reflash from the wall panel (any member type).
+  TEST_ASSERT_TRUE(clusterCorsPathAllowed("/reflash-units"));
+  // /firmware/master stays closed here (unlike the ESP-01 follower's copy):
+  // S3 members get their cross-board updates via #276 fleet convergence, so
+  // the wall never browser-uploads to them.
   TEST_ASSERT_FALSE(clusterCorsPathAllowed("/firmware/master"));
   TEST_ASSERT_FALSE(clusterCorsPathAllowed("/cluster/config"));
   TEST_ASSERT_FALSE(clusterCorsPathAllowed("/cluster/promote"));
@@ -390,6 +407,7 @@ int main(int, char**) {
   RUN_TEST(test_status_json_carries_member_health);
   RUN_TEST(test_status_json_omits_health_when_invalid);
   RUN_TEST(test_status_json_keeps_the_277_wire_keys);
+  RUN_TEST(test_status_json_carries_plat_only_when_reported);
   RUN_TEST(test_digest_wraps_status_with_wall_context);
   RUN_TEST(test_digest_escapes_leader_name);
   RUN_TEST(test_promote_swaps_self_and_dead_leader);

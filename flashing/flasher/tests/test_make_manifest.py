@@ -9,9 +9,10 @@ from flasher.make_manifest import (STAGE_DATA_DIRS, GateError, cmd_gate,
 
 def test_stage_data_dirs_target_v2_only():
     # #283: v1 ESPMaster is frozen — its committed bundle is a fossil of the
-    # last pre-freeze stage. Only the v2 master embeds a live unit bundle.
+    # last pre-freeze stage. The live unit bundles are the v2 master's and
+    # the ESP-01 follower's (#298).
     tails = {"/".join(p.parts[-3:]) for p in STAGE_DATA_DIRS}
-    assert tails == {"v2/Master/data"}
+    assert tails == {"v2/Master/data", "v2/FollowerEsp01/data"}
 
 
 def test_stage_bundle_copies_into_every_tree(tmp_path):

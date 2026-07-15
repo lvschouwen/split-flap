@@ -2356,6 +2356,59 @@ function loadClusterStatus() {
 		.catch(function() {});
 }
 
+//follower-<rev>[-dirty].bin → "&v=<rev>" (parity with ota-flash.sh; the
+//follower records it as intendedVersion).
+function followerFwVersionParam(fileName) {
+	var m = fileName.match(/^follower-([0-9a-f]{7,40}(?:-dirty)?)/i);
+	return m ? "&v=" + encodeURIComponent(m[1]) : "";
+}
+
+//Upload a follower-*.bin to THIS board's storage (#304 Part B), same-origin
+//(no CORS). Client-side MD5 (SparkMD5) + the follower- prefix guard mirror the
+//master upload / ota-flash.sh #299. The S3 later streams it to esp01 rows.
+function uploadFollowerFirmware() {
+	var input = document.getElementById("inputClusterFollowerFw");
+	var file = input.files[0];
+	if (!file) { showStatus("clusterCardStatus", "✘ Pick a follower-*.bin first.", "error", 5000); return; }
+	if (!/^follower-/i.test(file.name)) {
+		showStatus("clusterCardStatus", "✘ " + escapeHtml(file.name) + " is not a follower-*.bin (an S3 image would brick an ESP-01).", "error", 8000);
+		return;
+	}
+	var btn = document.getElementById("buttonClusterFollowerFwUpload");
+	btn.disabled = true;
+	input.disabled = true;
+	showStatus("clusterCardStatus", "Computing MD5…", "pending");
+	var reader = new FileReader();
+	reader.onerror = function() {
+		btn.disabled = false;
+		input.disabled = false;
+		showStatus("clusterCardStatus", "✘ Could not read the file.", "error", 5000);
+	};
+	reader.onload = function() {
+		var md5 = SparkMD5.ArrayBuffer.hash(reader.result);
+		showStatus("clusterCardStatus", "Uploading follower image (" + Math.round(file.size / 1024) + " KB)…", "pending");
+		var formData = new FormData();
+		formData.append("firmware", file);
+		var xhr = new XMLHttpRequest();
+		xhr.open("POST", "/cluster/follower-firmware?md5=" + md5 + followerFwVersionParam(file.name));
+		xhr.onreadystatechange = function() {
+			if (xhr.readyState !== 4) return;
+			btn.disabled = false;
+			input.disabled = false;
+			if (xhr.status === 200) {
+				showStatus("clusterCardStatus", "✔ " + escapeHtml(xhr.responseText), "success", 8000);
+				loadClusterStatus();
+			} else if (xhr.status === 0) {
+				showStatus("clusterCardStatus", "✘ Upload failed — lost connection.", "error", 6000);
+			} else {
+				showStatus("clusterCardStatus", "✘ HTTP " + xhr.status + ": " + escapeHtml(xhr.responseText), "error", 8000);
+			}
+		};
+		xhr.send(formData);
+	};
+	reader.readAsArrayBuffer(file);
+}
+
 function clusterStateLabel(m) {
 	if (m.updating) return { text: "updating", kind: "off" };
 	if (m.updateBlocked) return { text: "update blocked", kind: "bad" };
@@ -2407,7 +2460,8 @@ function updateClusterFromStatus(st) {
 		var label = clusterStateLabel(saved[i]);
 		pill.className = "pill " + label.kind + " cl-state";
 		pill.textContent = label.text;
-		rev.textContent = saved[i].self ? "" : (saved[i].rev || "—");
+		//plat tag (#297): only foreign-platform members report one.
+		rev.textContent = saved[i].self ? "" : (saved[i].rev || "—") + (saved[i].plat ? " · " + saved[i].plat : "");
 	});
 
 	//Fleet rollout (#276) surfacing: progress while it runs, one success
@@ -2425,6 +2479,22 @@ function updateClusterFromStatus(st) {
 	} else if (clusterRolloutSeen) {
 		clusterRolloutSeen = false;
 		showStatus("clusterCardStatus", "✔ Firmware update round finished.", "success", 8000);
+	}
+
+	//ESP-01 firmware store (#304 Part B): the stored image + live push. Push
+	//progress is mutually exclusive with the rollout above, so it never fights
+	//that status line.
+	var fwStored = document.getElementById("clusterFollowerFwStored");
+	if (fwStored) {
+		var fi = st.followerImage || {};
+		fwStored.textContent = fi.present
+			? "Stored follower image: " + (fi.rev || "unknown rev") + " — push it from a row’s ⚙ panel."
+			: "No follower image stored yet.";
+	}
+	var fp = st.followerPush || {};
+	if (fp.phase === "uploading" && fp.total > 0) {
+		showStatus("clusterCardStatus", "Pushing ESP-01 firmware to " + escapeHtml(fp.host) + " — " +
+			Math.floor(fp.sent * 100 / fp.total) + "% of " + Math.round(fp.total / 1024) + " KB…", "pending");
 	}
 }
 
@@ -2589,9 +2659,19 @@ function openMemberPanel(host, isSelf) {
 
 function memberPanelStatus(panel, message, kind) {
 	var el = panel.querySelector(".member-panel-status");
+	//A poll (self-test / reflash / firmware) can land after the panel was
+	//closed or re-rendered for another member — no status node then, no-op.
+	if (!el) return;
 	el.className = "status member-panel-status " + (kind || "");
 	el.classList.remove("hidden");
 	el.textContent = message;
+}
+
+//Pollers stop when the panel is gone (closed → hidden, or re-rendered so the
+//status node is detached). Guards cross-member status bleed on the bench.
+function memberPanelLive(panel) {
+	return !panel.classList.contains("hidden") &&
+		!!panel.querySelector(".member-panel-status");
 }
 
 function renderMemberPanelBody(panel, base, host, settings, health) {
@@ -2600,10 +2680,24 @@ function renderMemberPanelBody(panel, base, host, settings, health) {
 	meta.className = "note";
 	meta.textContent = (settings.effectiveDeviceName || settings.deviceName || host) +
 		" · fw " + (settings.version || "?") +
+		(settings.plat ? " · " + settings.plat : "") +
 		" · " + (health.units || []).filter(function(u) { return u.st === 1; }).length +
 		"/" + (health.width || 0) + " units responding" +
 		(health.faulty > 0 ? " · " + health.faulty + " flagged" : "");
 	panel.appendChild(meta);
+
+	//ESP-01 vitals (#297): the dumb row's /settings carries heap/rssi/up —
+	//show them when present (an S3 member's /settings has none of these).
+	if (settings.heap !== undefined || settings.rssi !== undefined || settings.up !== undefined) {
+		var vitals = document.createElement("p");
+		vitals.className = "note";
+		var parts = [];
+		if (settings.heap !== undefined) parts.push("heap " + Math.round(settings.heap / 1024) + " KB");
+		if (settings.rssi !== undefined) parts.push("rssi " + settings.rssi + " dBm");
+		if (settings.up !== undefined) parts.push("up " + formatUptime(settings.up));
+		vitals.textContent = parts.join(" · ");
+		panel.appendChild(vitals);
+	}
 
 	//Device name (the one genuinely per-board setting the wall UI owns).
 	var nameRow = document.createElement("div");
@@ -2664,6 +2758,17 @@ function renderMemberPanelBody(panel, base, host, settings, health) {
 			.then(function(r) { memberPanelStatus(panel, r.ok ? "Probing — reopen the panel in a few seconds for fresh facts." : "✘ Probe refused (busy?)", r.ok ? "success" : "error"); })
 			.catch(function() { memberPanelStatus(panel, "✘ Probe request failed", "error"); });
 	});
+	opButton("Reflash units…", function() {
+		if (!confirm("Reflash the Nano units of " + (host || "this board") + " from its bundled hex?\n\nUnits go dark ~1 min each (2 at a time); the row is unusable until it finishes.")) return;
+		fetch(base + "/reflash-units", { method: "POST" })
+			.then(function(r) {
+				if (r.status === 409 || r.status === 503) { memberPanelStatus(panel, "✘ A reflash is already running.", "error"); return; }
+				if (!r.ok) { memberPanelStatus(panel, "✘ Reflash refused (HTTP " + r.status + ").", "error"); return; }
+				memberPanelStatus(panel, "Reflash queued…", "success");
+				memberReflashPoll(panel, base);
+			})
+			.catch(function() { memberPanelStatus(panel, "✘ Reflash request failed.", "error"); });
+	}, true);
 	opButton("Reboot board…", function() {
 		if (!confirm("Reboot " + (host || "this board") + "? Its row goes dark for a few seconds; the leader re-joins it automatically.")) return;
 		fetch(base + "/reboot", { method: "POST" })
@@ -2672,9 +2777,91 @@ function renderMemberPanelBody(panel, base, host, settings, health) {
 	}, true);
 	panel.appendChild(ops);
 
+	//ESP-01 firmware (#304 Part B): push the S3-stored follower image to this
+	//row. Upload the image on Settings → Cluster first; the server refuses
+	//(409) if none is stored. Shown only for esp01 members (S3 members
+	//converge via #276 fleet updates, not this path).
+	if (settings.plat === "esp01") {
+		var fwRow = document.createElement("div");
+		fwRow.className = "row";
+		var fwLabel = document.createElement("span");
+		fwLabel.className = "calibration-label";
+		fwLabel.textContent = "Firmware (esp01)";
+		fwRow.appendChild(fwLabel);
+		var fwBtn = document.createElement("button");
+		fwBtn.type = "button";
+		fwBtn.className = "btn danger";
+		fwBtn.textContent = "Update firmware…";
+		fwBtn.addEventListener("click", function() {
+			if (!confirm("Push the S3-stored ESP-01 firmware to " + (host || "this board") + "?\n\nUpload it on the Settings → Cluster card first. The row goes dark ~15 s while it reboots; the leader re-joins it. On failure the current firmware keeps running.")) return;
+			fetch("/cluster/member/update?host=" + encodeURIComponent(host), { method: "POST" })
+				.then(function(r) {
+					return r.text().then(function(t) {
+						if (!r.ok) { memberPanelStatus(panel, "✘ " + (t || ("HTTP " + r.status)), "error"); return; }
+						memberPanelStatus(panel, "Firmware push queued…", "success");
+						memberFirmwarePushPoll(panel, host);
+					});
+				})
+				.catch(function() { memberPanelStatus(panel, "✘ Push request failed.", "error"); });
+		});
+		fwRow.appendChild(fwBtn);
+		panel.appendChild(fwRow);
+	}
+
 	var status = document.createElement("div");
 	status.className = "status member-panel-status hidden";
 	panel.appendChild(status);
+}
+
+//Firmware push progress: the relay runs on the leader (clusterTask), so poll
+//the leader's own /cluster/status followerPush object. The stage reset
+//lastResult, so a stale terminal verdict can't show before this push starts.
+function memberFirmwarePushPoll(panel, host) {
+	if (!memberPanelLive(panel)) return;
+	fetch("/cluster/status", { cache: "no-store" })
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(st) {
+			if (!memberPanelLive(panel)) return;
+			var fp = st.followerPush || {};
+			if (fp.phase === "uploading") {
+				var pct = fp.total > 0 ? Math.floor(fp.sent * 100 / fp.total) : 0;
+				memberPanelStatus(panel, "Pushing firmware to " + host + " — " + pct + "% of " + Math.round((fp.total || 0) / 1024) + " KB…", "");
+				setTimeout(function() { memberFirmwarePushPoll(panel, host); }, 1500);
+			} else if (fp.result === "done") {
+				memberPanelStatus(panel, "✔ Firmware flashed — the row is rebooting and will rejoin.", "success");
+			} else if (fp.result === "failed" || fp.result === "rejected") {
+				memberPanelStatus(panel, "✘ Firmware push " + fp.result + ".", "error");
+			} else {
+				//staged, clusterTask hasn't picked it up yet.
+				setTimeout(function() { memberFirmwarePushPoll(panel, host); }, 1500);
+			}
+		})
+		.catch(function() {
+			if (memberPanelLive(panel)) setTimeout(function() { memberFirmwarePushPoll(panel, host); }, 1500);
+		});
+}
+
+//Board-level reflash progress: poll the member's /units/health reflash
+//object, reusing the local-board label/running helpers (#205 shape).
+function memberReflashPoll(panel, base) {
+	if (!memberPanelLive(panel)) return;
+	fetch(base + "/units/health", { cache: "no-store" })
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(json) {
+			if (!memberPanelLive(panel)) return;
+			var rf = json.reflash;
+			if (rf && reflashIsRunning(rf)) {
+				memberPanelStatus(panel, reflashProgressLabel(rf), "");
+				setTimeout(function() { memberReflashPoll(panel, base); }, 2000);
+			} else if (rf) {
+				memberPanelStatus(panel, reflashProgressLabel(rf), "success");
+			} else {
+				memberPanelStatus(panel, "Reflash finished.", "success");
+			}
+		})
+		.catch(function() {
+			if (memberPanelLive(panel)) setTimeout(function() { memberReflashPoll(panel, base); }, 2000);
+		});
 }
 
 function renderMemberUnitActions(panel, actions, base, u) {
@@ -2702,12 +2889,122 @@ function renderMemberUnitActions(panel, actions, base, u) {
 			memberPanelStatus(panel, ok ? "Homing unit " + formatHexAddress(u.a) + "." : "✘ Home failed", ok ? "success" : "error");
 		});
 	});
+	actButton("Self-test", function() {
+		memberSelfTest(panel, base, u.a);
+	});
 	actButton("Reset odo…", function() {
 		if (!confirm("Reset the revolution odometer of unit " + formatHexAddress(u.a) + "? Do this only after replacing its drum/motor.")) return;
 		postCalibrationAwait("/unit/reset-odometer", { address: u.a }, function(ok, reason) {
 			memberPanelStatus(panel, ok ? "✔ Odometer reset." : "✘ " + reason, ok ? "success" : "error");
 		}, base);
 	});
+
+	//Jog: relative nudge, fire-and-forget (operator watches the flap).
+	var jogRow = document.createElement("div");
+	jogRow.className = "row";
+	var jogLabel = document.createElement("span");
+	jogLabel.textContent = "Jog steps: ";
+	jogRow.appendChild(jogLabel);
+	var jogInput = document.createElement("input");
+	jogInput.type = "number";
+	jogInput.className = "calibration-offset";
+	jogInput.step = "1";
+	jogInput.placeholder = "±steps";
+	jogRow.appendChild(jogInput);
+	var jogBtn = document.createElement("button");
+	jogBtn.type = "button";
+	jogBtn.className = "btn";
+	jogBtn.textContent = "Jog";
+	jogBtn.addEventListener("click", function() {
+		var n = parseInt(jogInput.value, 10);
+		if (isNaN(n) || n === 0) { memberPanelStatus(panel, "✘ Enter a non-zero step count.", "error"); return; }
+		postCalibration(base + "/unit/jog", { address: u.a, steps: n }, function(ok) {
+			memberPanelStatus(panel, ok ? "Jogged unit " + formatHexAddress(u.a) + " by " + n + " steps." : "✘ Jog failed", ok ? "success" : "error");
+		});
+	});
+	jogRow.appendChild(jogBtn);
+	actions.appendChild(jogRow);
+
+	//Offset: read current, edit, write (EEPROM-mutating → await the outcome).
+	var offRow = document.createElement("div");
+	offRow.className = "row";
+	var offLabel = document.createElement("span");
+	offLabel.textContent = "Offset: ";
+	offRow.appendChild(offLabel);
+	var offInput = document.createElement("input");
+	offInput.type = "number";
+	offInput.className = "calibration-offset";
+	offInput.step = "1";
+	offInput.placeholder = "?";
+	offRow.appendChild(offInput);
+	var offGet = document.createElement("button");
+	offGet.type = "button";
+	offGet.className = "btn";
+	offGet.textContent = "Get";
+	offGet.addEventListener("click", function() {
+		fetch(base + "/unit/offset?address=" + u.a, { cache: "no-store" })
+			.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+			.then(function(data) {
+				offInput.value = data.offset;
+				memberPanelStatus(panel, "Read offset " + data.offset + " from " + formatHexAddress(u.a), "success");
+			})
+			.catch(function() { memberPanelStatus(panel, "✘ Read offset failed for " + formatHexAddress(u.a), "error"); });
+	});
+	offRow.appendChild(offGet);
+	var offSet = document.createElement("button");
+	offSet.type = "button";
+	offSet.className = "btn";
+	offSet.textContent = "Set";
+	offSet.addEventListener("click", function() {
+		var value = parseInt(offInput.value, 10);
+		if (isNaN(value)) { memberPanelStatus(panel, "✘ Enter an offset value first.", "error"); return; }
+		postCalibrationAwait("/unit/offset", { address: u.a, value: value }, function(ok, reason) {
+			memberPanelStatus(panel, ok ? "✔ Saved offset " + value + " to " + formatHexAddress(u.a) : "✘ Save offset failed: " + reason, ok ? "success" : "error");
+		}, base);
+	});
+	offRow.appendChild(offSet);
+	actions.appendChild(offRow);
+}
+
+//Member self-test (#304): mirrors the local selfTestUnitUi flow but reports
+//through the panel status line and targets the member via `base`. The single
+//result slot serves one self-test at a time.
+function memberSelfTest(panel, base, address) {
+	memberPanelStatus(panel, "Self-test on unit " + formatHexAddress(address) + " — about 15 s of motion…", "");
+	fetch(base + "/unit/self-test?address=" + address, { method: "POST" })
+		.then(function(r) {
+			if (!r.ok) return r.text().then(function(t) { throw new Error(t || ("HTTP " + r.status)); });
+			return r.json();
+		})
+		.then(function(data) { memberPollSelfTest(panel, base, address, data.seq, 100); })
+		.catch(function(e) { memberPanelStatus(panel, "✘ Self-test failed to queue: " + (e && e.message ? e.message : "request failed"), "error"); });
+}
+
+function memberPollSelfTest(panel, base, address, seq, remaining) {
+	if (!memberPanelLive(panel)) return;
+	fetch(base + "/unit/self-test-result?seq=" + seq, { cache: "no-store" })
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(res) {
+			if (!memberPanelLive(panel)) return;
+			if (res.state === "pending" && remaining > 0) {
+				setTimeout(function() { memberPollSelfTest(panel, base, address, seq, remaining - 1); }, 1000);
+				return;
+			}
+			if (res.state === "ok") {
+				var delta = res.steps_per_rev - 2038;
+				memberPanelStatus(panel, "Unit " + formatHexAddress(address) + " self-test: " +
+					res.steps_per_rev + " steps/rev (" + (delta >= 0 ? "+" : "") + delta +
+					" vs nominal), hall window " + res.hall_window + " steps, " +
+					(res.rev_time_ms / 1000).toFixed(1) + " s/rev.", "success");
+			} else if (res.state === "pending") {
+				memberPanelStatus(panel, "Self-test still queued — display busy; check again in a moment.", "");
+			} else if (res.state === "expired") {
+				memberPanelStatus(panel, "Self-test outcome superseded — run it again.", "error");
+			} else {
+				memberPanelStatus(panel, "✘ Self-test failed: " + (res.reason || "unknown") + ".", "error");
+			}
+		})
+		.catch(function() { memberPanelStatus(panel, "✘ Self-test result poll failed.", "error"); });
 }
 
 function clusterNextFreeRow() {
@@ -2802,7 +3099,7 @@ function renderClusterSuggestions(boards) {
 	boards.forEach(function(board) {
 		var chip = document.createElement("button");
 		chip.type = "button";
-		chip.textContent = board.name + " (" + board.host + (board.width ? ", " + board.width + " units" : "") + ")";
+		chip.textContent = board.name + " (" + board.host + (board.width ? ", " + board.width + " units" : "") + (board.plat ? ", " + board.plat : "") + ")";
 		chip.addEventListener("click", function() {
 			addClusterBoard(board.host, board.width || 16);
 		});

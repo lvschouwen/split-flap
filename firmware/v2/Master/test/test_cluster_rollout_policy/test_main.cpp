@@ -11,6 +11,7 @@ void setUp() {}
 void tearDown() {}
 
 static const char* LEADER_REV = "1234abc";
+static const char* LEADER_PLAT = "esp32s3";
 
 static ClusterMemberTable makeTable() {
   ClusterMemberTable t;
@@ -42,7 +43,7 @@ static void test_no_candidate_when_all_match() {
   ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
   primeJoined(r, LEADER_REV, LEADER_REV);
   ClusterRolloutState st;
-  TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(t, r, LEADER_REV, st, 1000));
+  TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(t, r, LEADER_REV, LEADER_PLAT, st, 1000));
 }
 
 static void test_mismatch_selects_first_candidate() {
@@ -50,7 +51,7 @@ static void test_mismatch_selects_first_candidate() {
   ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
   primeJoined(r, "0000000", "0000000");
   ClusterRolloutState st;
-  TEST_ASSERT_EQUAL(1, clusterRolloutNextCandidate(t, r, LEADER_REV, st, 1000));
+  TEST_ASSERT_EQUAL(1, clusterRolloutNextCandidate(t, r, LEADER_REV, LEADER_PLAT, st, 1000));
 }
 
 static void test_newer_follower_is_converged_back_too() {
@@ -59,7 +60,7 @@ static void test_newer_follower_is_converged_back_too() {
   ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
   primeJoined(r, LEADER_REV, "fffffff");
   ClusterRolloutState st;
-  TEST_ASSERT_EQUAL(2, clusterRolloutNextCandidate(t, r, LEADER_REV, st, 1000));
+  TEST_ASSERT_EQUAL(2, clusterRolloutNextCandidate(t, r, LEADER_REV, LEADER_PLAT, st, 1000));
 }
 
 static void test_unjoined_and_unknown_rev_are_not_candidates() {
@@ -70,7 +71,7 @@ static void test_unjoined_and_unknown_rev_are_not_candidates() {
   r[2].joined = true;
   r[2].rev = "";  // pre-#273 join reply: rev unknown — don't guess
   ClusterRolloutState st;
-  TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(t, r, LEADER_REV, st, 1000));
+  TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(t, r, LEADER_REV, LEADER_PLAT, st, 1000));
 }
 
 static void test_no_candidate_while_not_idle() {
@@ -79,7 +80,7 @@ static void test_no_candidate_while_not_idle() {
   primeJoined(r, "0000000", "0000000");
   ClusterRolloutState st;
   clusterRolloutStart(st, 1, 1000000);
-  TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(t, r, LEADER_REV, st, 1000));
+  TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(t, r, LEADER_REV, LEADER_PLAT, st, 1000));
 }
 
 static void test_holdoff_gates_candidates() {
@@ -90,11 +91,40 @@ static void test_holdoff_gates_candidates() {
   clusterRolloutStart(st, 1, 1000000);
   clusterRolloutUploadRejected(st, 1000);  // follower busy → holdoff
   TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(
-                            t, r, LEADER_REV, st,
+                            t, r, LEADER_REV, LEADER_PLAT, st,
                             1000 + CLUSTER_ROLLOUT_RETRY_HOLDOFF_MS - 1));
   TEST_ASSERT_EQUAL(1, clusterRolloutNextCandidate(
-                           t, r, LEADER_REV, st,
+                           t, r, LEADER_REV, LEADER_PLAT, st,
                            1000 + CLUSTER_ROLLOUT_RETRY_HOLDOFF_MS));
+}
+
+static void test_foreign_plat_is_never_a_candidate() {
+  // #297: without this the leader streams its S3 image into an ESP-01's
+  // /firmware/master. A member whose reported plat differs from the
+  // leader's own is excluded from convergence entirely — rev mismatch or
+  // not.
+  ClusterMemberTable t = makeTable();
+  ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
+  primeJoined(r, "0000000", "0000000");
+  r[1].plat = "esp01";
+  ClusterRolloutState st;
+  TEST_ASSERT_EQUAL(2, clusterRolloutNextCandidate(t, r, LEADER_REV,
+                                                   LEADER_PLAT, st, 1000));
+  r[2].plat = "esp01";
+  TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(t, r, LEADER_REV,
+                                                    LEADER_PLAT, st, 1000));
+}
+
+static void test_matching_or_absent_plat_is_a_candidate() {
+  // Absent plat = same platform as the leader (pre-#297 S3 fleet, exercised
+  // by every other candidate test); an explicit matching plat converges too.
+  ClusterMemberTable t = makeTable();
+  ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
+  primeJoined(r, "0000000", LEADER_REV);
+  r[1].plat = "esp32s3";
+  ClusterRolloutState st;
+  TEST_ASSERT_EQUAL(1, clusterRolloutNextCandidate(t, r, LEADER_REV,
+                                                   LEADER_PLAT, st, 1000));
 }
 
 // --- phase machine ---------------------------------------------------------------
@@ -155,7 +185,7 @@ static void test_failure_cap_blocks_member() {
   ClusterMemberTable t = makeTable();
   ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
   primeJoined(r, "0000000", LEADER_REV);
-  TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(t, r, LEADER_REV, st,
+  TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(t, r, LEADER_REV, LEADER_PLAT, st,
                                                     5000 + 60000000));
 }
 
@@ -286,6 +316,8 @@ int main(int, char**) {
   RUN_TEST(test_unjoined_and_unknown_rev_are_not_candidates);
   RUN_TEST(test_no_candidate_while_not_idle);
   RUN_TEST(test_holdoff_gates_candidates);
+  RUN_TEST(test_foreign_plat_is_never_a_candidate);
+  RUN_TEST(test_matching_or_absent_plat_is_a_candidate);
   RUN_TEST(test_start_tracks_progress_target);
   RUN_TEST(test_rejection_burns_no_attempt);
   RUN_TEST(test_every_idle_transition_clears_progress);

@@ -16,11 +16,9 @@
 #include "ClusterFollower.h"
 #include "ClusterLeader.h"
 #include "DeviceIdentity.h"
-#include "DisplayWidth.h"
 #include "FlashLog.h"
+#include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
-#include "MdnsDiscovery.h"
-#include "MqttHelpers.h"
 #include "MqttService.h"
 #include "NvsSettingsStore.h"
 #include "OtaService.h"
@@ -107,6 +105,7 @@ void setup() {
                  // reach GET /log
   flashLogInit();  // #206: mounts `storage`, writes the boot marker; from
                    // here every SerialPrint* also lands in /log.txt
+  followerImageStoreInit();  // #304: read the stored ESP-01 image rev/presence
 
   settingsStore.begin();
   settings = loadSettings(settingsStore);
@@ -148,7 +147,8 @@ void setup() {
   printBootDiagnostics();
 
   // Snapshot this boot's A/B partition state; a PENDING_VERIFY image is
-  // confirmed by WifiService once a netif is up (#190).
+  // confirmed pre-inrush at the end of setup() (#305, below), with the
+  // netif-up call in WifiService as a fallback.
   otaServiceInit();
 
   // TZ correct from the first log line; SNTP starts now and syncs once a
@@ -171,6 +171,17 @@ void setup() {
   SerialPrintf("wifi: %s\n", settings.wifiSsid.length()
                                  ? ("join \"" + settings.wifiSsid + "\"").c_str()
                                  : "unprovisioned -> setup portal");
+
+  // #305: confirm a PENDING_VERIFY image HERE — after the whole
+  // single-threaded init sequence proved it doesn't hard-crash, but BEFORE
+  // tasksInit() starts the display unit-move + WiFi-PA inrush. That inrush
+  // can dip the rail past the S3 brownout detector on a post-OTA verify-boot;
+  // confirming at the old netif-up bar (which is on the far side of the
+  // inrush) let the bootloader roll back a perfectly good image over a
+  // millisecond sag it survives at steady state. A hard crash in any init
+  // above still leaves the image unconfirmed and rolls back; the netif-up
+  // call is now a no-op fallback.
+  otaHealthConfirm();
 
   // After webEndpointsInit/wifiServiceInit: netTask ticks both and needs
   // their mutexes to exist before its first pass.
