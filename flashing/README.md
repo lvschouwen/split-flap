@@ -33,7 +33,7 @@ Maintenance tab).
 **Units:** Nanos carrying only twiboot get the bundled unit firmware pushed
 automatically when the master probes them; **Flash all unit(s)** /
 `/reflash-units` re-pushes on demand. Only the one-time twiboot ICSP flash
-per Nano happens off-master (see `firmware/v1/UnitBootloader/`).
+per Nano happens off-master (see `firmware/v2/UnitBootloader/`).
 
 ## Only one ICSP flash per Nano — twiboot only
 
@@ -63,7 +63,7 @@ contiguously from unit 1.
 `flasher/make_manifest.py` is the unit-bundle tool and it is load-bearing:
 
     cd flashing
-    (cd ../firmware/v1/Unit && pio run)
+    (cd ../firmware/v2/Unit && pio run)
     python3 flasher/make_manifest.py stage    # writes firmware/v2/Master/data
     (cd ../firmware/v2/Master && pio run)     # rebuild so the bake picks it up
     python3 flasher/make_manifest.py gate     # anti-drift check (CI runs this)
@@ -71,8 +71,8 @@ contiguously from unit 1.
 `stage` writes into the **committed** `firmware/v2/Master/data/unit-firmware.hex`
 and `.rev` — after a Unit code change, commit the refreshed pair alongside
 it (build clean: a `-dirty` rev fails the gate). CI's `gate` step fails the
-build when any commit touches the Unit sources (`firmware/v1/Unit` minus
-`test/`, plus `firmware/v1/shared`) after the staged bundle's rev, because a
+build when any commit touches the Unit sources (`firmware/v2/Unit` minus
+`test/`, plus `firmware/v2/shared`) after the staged bundle's rev, because a
 drifted bundle means the master auto-pushes stale unit firmware. The gate
 compares revs, not bytes — the Unit binary embeds its `GIT_REV`
 (`build_version.py`), so a rebuilt hex never byte-matches the committed one.

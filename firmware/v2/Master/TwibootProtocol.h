@@ -7,7 +7,7 @@
 // includes; fix bugs in both trees). Slice A (#203) uses only the
 // chipinfo probe (bootloader-mode detection); the flash constants stay so
 // slice C's reflash client lands against the same header. Protocol
-// reference: the command dispatch in firmware/v1/UnitBootloader/main.c.
+// reference: the command dispatch in firmware/v2/UnitBootloader/main.c.
 
 #define TWIBOOT_CMD_WAIT               0x00  // no-op; resets twiboot's boot-window countdown
 #define TWIBOOT_CMD_SWITCH_APPLICATION 0x01  // followed by a boottype byte

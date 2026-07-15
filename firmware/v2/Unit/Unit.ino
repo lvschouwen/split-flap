@@ -15,6 +15,8 @@
 #include "UnitOdometer.h"  // pure revolution-odometer logic (#231)
 #include "UnitDrift.h"     // pure drift-detection logic (#263/#264)
 #include "UnitSelfTest.h"  // pure self-test result + wire encode (#265)
+#include "UnitVitals.h"    // pure supply-Vcc/ram/cmd-pos diag packet (#306)
+#include "BootHomePolicy.h"  // pure staggered boot-home decision (#309)
 // Single source of truth for the master<->unit I2C contract (opcodes, address
 // base, alphabet, flap count), shared with firmware/v1/ESPMaster (#149).
 #include "SplitFlapProtocol.h"
@@ -188,6 +190,19 @@ volatile uint8_t  selfTestReplyBuf[SELFTEST_REPLY_LEN] = {0};
 volatile bool     pendingSelfTest           = false;  // loop() runs the test
 volatile bool     pendingSelfTestResponse   = false;  // consumed by requestEvent
 
+// Supply-Vcc / free-RAM / commanded-position diagnostics (#306). vccMin and
+// freeRamMin are since-boot minima held in loop-context RAM (a brownout/reboot
+// resets them — the persisted lifetimeBrownoutCount records that it happened).
+// vitalsRefreshReplyBuffer() re-encodes the ISR-visible mirror each loop pass
+// under noInterrupts(), exactly like the diag/self-test buffers above, so
+// requestEvent() streams it verbatim and never sees a torn packet (#96 class).
+uint16_t          vitalsVccNow              = 0;       // last sampled rail (mV)
+uint16_t          vitalsVccMin              = 0xFFFF;  // since-boot min (sentinel high)
+uint16_t          vitalsFreeRamMin          = 0xFFFF;  // since-boot min free SRAM
+unsigned long     vitalsLastSampleMs        = 0;       // idle-sample throttle
+volatile uint8_t  vitalsReplyBuf[VITALS_REPLY_LEN] = {0};
+volatile bool     pendingVitalsResponse     = false;  // consumed by requestEvent
+
 // Revolution odometer (#231). `odometer` is loop-context only (every step
 // happens in loop; stepCounted() folds them in). The ISR-visible mirror is
 // what SFP_CMD_GET_ODOMETER replies from — 4 bytes, so loop-side updates
@@ -216,6 +231,29 @@ volatile bool     statusLastHomeFailed      = false;  // set by calibrate() on t
 volatile bool     statusHallNeverTriggered  = false;  // set by calibrate() when hall never read 0
 volatile uint16_t lastHomingStepCount       = 0;      // steps the last calibrate() took to find hall
 volatile uint16_t uptimeSeconds             = 0;      // saturating; updated from loop()
+
+// Staggered boot homing (#309). The unit no longer homes in setup() — it boots
+// UNHOMED/blank and homes on the first trigger, so a whole row's steppers don't
+// spike the shared rail at once (root cause of the #305 verify-boot brownout).
+// `homed` is set by calibrate() on success and read in the TWI ISR (status
+// flags bit 5 -> master hs2), so it is volatile. `masterEverContacted` is set
+// in receiveLetter() (ISR) on any receive and read in loop(); single byte, so
+// atomic. bootHomeAttempted gates the self-home to a single try (a failing hall
+// must not re-home every loop and cook the motor); bootHomeJitterMs is seeded
+// once in setup(). Decision table is pure in BootHomePolicy.h.
+volatile bool     homed                     = false;  // homed at least once since boot
+volatile bool     masterEverContacted       = false;  // any I2C receive since boot
+bool              bootHomeAttempted         = false;  // self-home tried (loop ctx)
+uint16_t          bootHomeJitterMs          = 0;      // 0..BOOT_HOME_JITTER_MAX_MS
+// Rate-limit the trigger-2 home (a letter command while UNHOMED, #309): a unit
+// whose hall never fires would otherwise re-seek a full revolution on EVERY
+// letter (calibrate() has no overheat gate — it would cook the motor). After a
+// homing attempt while unhomed, hold off this long before the next one; a
+// successful home sets `homed` and disables the path entirely. Loop-context.
+unsigned long     lastUnhomedCalibrateMs    = 0;      // 0 = never attempted
+#define UNHOMED_CALIBRATE_COOLDOWN_MS 30000UL
+// Status flag bit surfaced to the master (mirrors UnitHealth.h UNIT_FLAG_HOMED).
+#define UNIT_STATUS_FLAG_HOMED (1 << 5)
 
 //sleep globals
 //Sleep mode is SLEEP_MODE_IDLE: CPU clock stops, peripheral clocks (including
@@ -324,6 +362,10 @@ void setup() {
   // register (#173 ordering rule): a boot-time GET_DIAG must stream a
   // coherent "position unknown" reply, never uninitialised bytes.
   driftRefreshReplyBuffers();
+  // Same for the vitals reply (#306): take a boot Vcc/RAM sample and publish
+  // it so a GET_VITALS right after boot streams a real rail, not zeroes.
+  vitalsSample(false);
+  vitalsRefreshReplyBuffer();
 
   //I2C function assignment
   Wire.begin(i2cAddress); //i2c address of this unit
@@ -344,7 +386,14 @@ void setup() {
   // SFP_CMD_GET_STATUS.
   wdt_enable(WDTO_8S);
 
-  calibrate(true); //home stepper after startup (offset read earlier, #173)
+  // Boot UNHOMED (#309): NO calibrate() here. Homing all units at once spikes
+  // the shared rail and browns out the S3 on a verify-boot (root cause of
+  // #305). loop() homes on the first trigger — a master's SFP_CMD_HOME / a
+  // letter command, or the staggered self-home fallback. Seed the per-unit
+  // jitter from floating-pin ADC noise so coincident boots don't re-synchronize
+  // their self-home deadlines (BootHomePolicy.h).
+  randomSeed(((uint32_t)analogRead(A0) << 16) ^ micros());
+  bootHomeJitterMs = (uint16_t)random(0, (long)BOOT_HOME_JITTER_MAX_MS + 1);
 
   //test calibration settings
 #ifdef TEST_ENABLE
@@ -365,6 +414,7 @@ void loop() {
   // (two small encodes + an interrupt-guarded copy) and unconditional, so
   // every drift/state change from the previous pass is published.
   driftRefreshReplyBuffers();
+  vitalsRefreshReplyBuffer();  // publish latest Vcc/RAM/cmdPos (#306)
 
   //If an enter-bootloader command arrived, give Wire a beat to finish any
   //in-flight transaction, then let the watchdog reset us. Twiboot takes over
@@ -555,6 +605,40 @@ void loop() {
   noInterrupts();
   uptimeSeconds = newUptime;
   interrupts();
+
+  // Staggered boot-home fallback (#309). The unit boots unhomed; if no master
+  // orchestrates a home it self-homes on a deadline — staggered by address when
+  // standalone, or the hard cap when a master is present but silent. Triggers 1
+  // (SFP_CMD_HOME via pendingHome) and 2 (a letter while unhomed, in
+  // rotateToLetter) home through their own paths and set `homed`, disabling
+  // this. Guarded to a single attempt: a unit whose hall never fires must not
+  // re-home every pass (calibrate() has no overheat gate — it would cook the
+  // motor). A later master SFP_CMD_HOME is still an explicit retry.
+  if (!homed && !bootHomeAttempted) {
+    BootHomeInputs bh;
+    bh.homed = homed;
+    bh.masterEverContacted = masterEverContacted;
+    bh.elapsedMs = currentMillis;  // millis() since boot (bootMs ~= 0)
+    bh.dipIndex = (uint8_t)(i2cAddress - SFP_I2C_ADDRESS_BASE);
+    bh.jitterMs = bootHomeJitterMs;
+    if (bootHomeShouldSelfHome(bh)) {
+      bootHomeAttempted = true;
+      calibrate(true);        // sets `homed` on success; parks belief at blank
+      receivedNumber = 0;
+      displayedLetter = 0;
+      previousMillis = millis();
+    }
+  }
+
+  // Idle Vcc/RAM sample (#306), throttled to ~1 Hz so the ADC conversion
+  // (~2 ms with settling) doesn't tax the superloop. Keeps vccNow fresh for a
+  // curl even when the drum hasn't moved; loaded samples from rotateToLetter()
+  // still own the vccMin sag. millis()==0 at boot is fine — the setup() sample
+  // already seeded vccNow, and this just refreshes on the next second.
+  if (currentMillis - vitalsLastSampleMs >= 1000UL) {
+    vitalsLastSampleMs = currentMillis;
+    vitalsSample(false);
+  }
 
   // Silent drift correction (#263): a mid-move hall observation measured
   // the drum off its belief. Re-home at idle only — the display quiet for

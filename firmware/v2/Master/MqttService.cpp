@@ -705,7 +705,7 @@ void mqttServiceTick() {
     static char health[UNIT_HEALTH_JSON_CAP];
     size_t hn = buildUnitHealthJson(health, UNIT_HEALTH_JSON_CAP, snap.units,
                                     snap.displayWidth, snap.faultyUnitCount,
-                                    SFP_I2C_ADDRESS_BASE);
+                                    SFP_I2C_ADDRESS_BASE, millis());
     if (hn > 0 && hn < UNIT_HEALTH_JSON_CAP) {
       mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units/attrs").c_str(),
                          0, true, health);

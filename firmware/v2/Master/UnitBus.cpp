@@ -155,6 +155,27 @@ static void refreshUnitDiag(UnitFacts& fact, int i2cAddress) {
   fact.diagValid = true;
 }
 
+// Reads the unit's supply-Vcc / free-RAM / commanded-position diagnostics via
+// CMD_GET_VITALS (#306): 8 bytes, masked XOR checksum. Pre-vitals firmware
+// answers the unknown opcode with its 1-byte status fallback + bus padding —
+// vitalsReadbackValid rejects that instead of "verifying" garbage (#106 class).
+static bool readUnitVitals(int i2cAddress, UnitVitals& out) {
+  uint8_t buf[VITALS_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VITALS, buf, VITALS_REPLY_LEN)) return false;
+  return vitalsReadbackValid(buf, out);
+}
+
+// Folds a vitals read into the slot; clears vitalsValid first so a unit that
+// stops answering (or was reflashed to pre-vitals firmware) never keeps
+// serving a stale Vcc reading (same discipline as refreshUnitDiag).
+static void refreshUnitVitals(UnitFacts& fact, int i2cAddress) {
+  fact.vitalsValid = false;
+  UnitVitals v;
+  if (!readUnitVitals(i2cAddress, v)) return;
+  fact.vitals = v;
+  fact.vitalsValid = true;
+}
+
 // Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
 // true on success; `out` is untouched on failure (old firmware predating
 // v1 #32 answers short — the drain-and-fail path).
@@ -396,33 +417,46 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
     // Drift diagnostics ride the probe too (#263/#264); pre-diag firmware
     // fails the checksum and stays diagValid=false.
     refreshUnitDiag(facts[unitIndex], i2cAddress);
+    // Supply-Vcc diagnostics ride the probe too (#306); pre-vitals firmware
+    // fails the checksum and stays vitalsValid=false.
+    refreshUnitVitals(facts[unitIndex], i2cAddress);
   }
   SerialPrintf("I2C scan complete. Detected %d", detected);
   SerialPrintf("/%d possible units.\n", maxUnits);
 }
 
+bool unitBusPollHealthOne(UnitFacts* facts, int i) {
+  facts[i].statusValid = false;
+  // Only sketch-running units (state 1) answer CMD_GET_STATUS; a unit in
+  // bootloader (2) or silent (0) is left invalid so it renders as a gap
+  // in the table and never counts toward the faulty total.
+  if (facts[i].state != 1) return false;
+  UnitStatus s;
+  bool ok = readUnitStatus(toI2cAddress(i), s);
+  if (ok) {
+    facts[i].status = s;
+    facts[i].statusValid = true;
+  }
+  // Refresh the odometer with the same validity semantics as the status:
+  // reset, then re-read, so a unit that stops answering (or was reflashed
+  // to pre-odometer firmware) doesn't keep serving a stale count (#231).
+  uint32_t odometer;
+  if (readUnitOdometer(toI2cAddress(i), odometer)) {
+    facts[i].odometer = odometer;
+    facts[i].odometerValid = true;
+  }
+  // Drift diagnostics refresh on the same cadence (#263/#264).
+  refreshUnitDiag(facts[i], toI2cAddress(i));
+  // Supply-Vcc diagnostics refresh on the same cadence (#306).
+  refreshUnitVitals(facts[i], toI2cAddress(i));
+  // ok == the CMD_GET_STATUS read succeeded — the heartbeat liveness signal
+  // (#310); the caller folds it into the miss counter.
+  return ok;
+}
+
 void unitBusPollHealth(UnitFacts* facts, int maxUnits) {
   for (int i = 0; i < maxUnits; i++) {
-    facts[i].statusValid = false;
-    // Only sketch-running units (state 1) answer CMD_GET_STATUS; a unit in
-    // bootloader (2) or silent (0) is left invalid so it renders as a gap
-    // in the table and never counts toward the faulty total.
-    if (facts[i].state != 1) continue;
-    UnitStatus s;
-    if (readUnitStatus(toI2cAddress(i), s)) {
-      facts[i].status = s;
-      facts[i].statusValid = true;
-    }
-    // Refresh the odometer with the same validity semantics as the status:
-    // reset, then re-read, so a unit that stops answering (or was reflashed
-    // to pre-odometer firmware) doesn't keep serving a stale count (#231).
-    uint32_t odometer;
-    if (readUnitOdometer(toI2cAddress(i), odometer)) {
-      facts[i].odometer = odometer;
-      facts[i].odometerValid = true;
-    }
-    // Drift diagnostics refresh on the same cadence (#263/#264).
-    refreshUnitDiag(facts[i], toI2cAddress(i));
+    unitBusPollHealthOne(facts, i);
   }
 }
 

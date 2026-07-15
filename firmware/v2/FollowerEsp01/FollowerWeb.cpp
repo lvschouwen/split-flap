@@ -10,6 +10,7 @@
 #include <Updater.h>
 
 #include "BuildVersion.h"
+#include "ApiIndex.h"
 #include "FollowerBus.h"
 #include "FollowerCluster.h"
 #include "FollowerConfig.h"
@@ -338,6 +339,19 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
 void webEndpointsInit(AsyncWebServer& server) {
   registerMasterFirmwareEndpoint(server);
 
+  // Self-documenting route + terse-key legend index for the headless
+  // operator (#308). Static buffer (BSS) — no per-request heap churn on the
+  // ESP-01, like /units/health.
+  server.on("/api", HTTP_GET, [](AsyncWebServerRequest* request) {
+    static char buf[API_JSON_CAP];
+    size_t n = buildApiJson(buf, API_JSON_CAP);
+    if (n == 0 || n >= API_JSON_CAP) {
+      sendWithCors(request, 500, "text/plain", F("api index unavailable"));
+      return;
+    }
+    sendWithCors(request, 200, "application/json", buf);
+  });
+
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest* request) {
     FollowerClusterView cv = clusterViewGet();
     sendWithCors(request, 200, "application/json",
@@ -473,12 +487,19 @@ void webEndpointsInit(AsyncWebServer& server) {
     for (int i = 0; i < UNITS_AMOUNT; i++) {
       if (unitFacts[i].state != 0) detected++;
     }
+    FollowerClusterDiag diag;
+    diag.msSinceRender = cv.msSinceRender;
+    diag.secsUntilBlank = cv.secsUntilBlank;
+    diag.i2cTx = followerBusTxCount();
+    diag.i2cErr = followerBusErrCount();
+    diag.minHeap = followerMinHeap();
+    diag.sntpSynced = cv.sntpSynced;
     request->send(200, "application/json",
                   followerClusterHealthJson(
                       followerPhaseName(cv.phase), cv.leaderName,
                       cv.leaderHost, cv.row, cv.epoch, cv.lastSeq,
                       cv.heldSegment, GIT_REV, displayWidth, detected,
-                      computeFaultyUnitCount(unitFacts, UNITS_AMOUNT)));
+                      computeFaultyUnitCount(unitFacts, UNITS_AMOUNT), diag));
   });
 
   // --- unit health (v1/v2 shared wire shape) --------------------------------
@@ -492,7 +513,7 @@ void webEndpointsInit(AsyncWebServer& server) {
     int faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
     size_t n = buildUnitHealthJson(buf, UNIT_HEALTH_JSON_CAP, unitFacts,
                                    displayWidth, faulty,
-                                   SFP_I2C_ADDRESS_BASE);
+                                   SFP_I2C_ADDRESS_BASE, millis());
     if (n == 0 || n >= UNIT_HEALTH_JSON_CAP) {
       n = (size_t)snprintf(buf, UNIT_HEALTH_JSON_CAP,
                            "{\"width\":%d,\"faulty\":%d,\"units\":[]}",

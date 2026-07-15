@@ -19,3 +19,7 @@ void systemStatsTick();
 // Any task (async web handler): renders current + history JSON into buf.
 // Returns the would-be length like snprintf; callers reject >= cap.
 size_t systemStatsJson(char* buf, size_t cap);
+
+// Renders just the current-vitals "now" object (no history) for the /status
+// one-shot aggregate (#307). Same would-be-length contract.
+size_t systemStatsNowJson(char* buf, size_t cap);

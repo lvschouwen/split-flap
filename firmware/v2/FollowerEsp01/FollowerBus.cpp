@@ -7,9 +7,11 @@
 
 #include <Wire.h>
 
+#include "BootHomePlan.h"   // pure batched boot-home target selection (#309)
 #include "BuildVersion.h"  // GIT_REV + BUNDLED_UNIT_REV (build_assets.py)
 #include "DisplayWidth.h"
 #include "FollowerConfig.h"
+#include "HeartbeatPolicy.h"  // pure heartbeat miss/schedule logic (#310)
 #include "SplitFlapProtocol.h"
 #include "TwibootProtocol.h"
 #include "UnitAssets.h"  // UNIT_FIRMWARE_BIN (build_assets.py)
@@ -27,6 +29,9 @@ static uint32_t probeInhibitUntilMs = 0;
 
 uint32_t busProbeInhibitedUntilMs() { return probeInhibitUntilMs; }
 void busArmProbeInhibit(uint32_t untilMs) { probeInhibitUntilMs = untilMs; }
+
+// Freshness bookkeeping (miss counter / stale latch / lastSeenMs) is the pure
+// heartbeatApply() in HeartbeatPolicy.h — same as the Master, copy policy.
 
 // Delay between an opcode write and the read-back clocking (v1 value).
 #define UNIT_RESPONSE_SETTLE_MS 2
@@ -47,16 +52,43 @@ void busInit() {
 #endif
 }
 
+// Bus health counters (#306): sketch-protocol read transactions and their
+// failures since boot, surfaced in /cluster/health so a curl-only operator
+// can see a flaky row. Bumped only by queryUnit (twiboot page writes and the
+// bus-scan probe stay out, matching the master's i2cTx/i2cErr semantics).
+static uint32_t busTxCount = 0;
+static uint32_t busErrCount = 0;
+uint32_t followerBusTxCount() { return busTxCount; }
+uint32_t followerBusErrCount() { return busErrCount; }
+
+// Since-boot minimum free heap (#306). ESP8266 has no built-in min-heap
+// accessor, so track it: followerDiagTick() folds the current heap each loop
+// pass, and the getter folds once more in case a tick lagged behind a spike.
+static uint32_t minHeapBytes = 0xFFFFFFFFUL;
+void followerDiagTick() {
+  uint32_t h = ESP.getFreeHeap();
+  if (h < minHeapBytes) minHeapBytes = h;
+}
+uint32_t followerMinHeap() {
+  followerDiagTick();
+  return minHeapBytes;
+}
+
 // Shared opcode-write-then-read-back transaction (v1 #154 helper).
 static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf,
                       uint8_t n) {
+  busTxCount++;
   Wire.beginTransmission(i2cAddress);
   Wire.write(opcode);
-  if (Wire.endTransmission() != 0) return false;
+  if (Wire.endTransmission() != 0) {
+    busErrCount++;
+    return false;
+  }
   delay(UNIT_RESPONSE_SETTLE_MS);
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
   if (got != n) {
     while (Wire.available()) Wire.read();
+    busErrCount++;
     return false;
   }
   for (uint8_t i = 0; i < n; i++) buf[i] = Wire.read();
@@ -93,6 +125,25 @@ static bool readUnitOdometer(int i2cAddress, uint32_t& out) {
     return false;
   }
   return odometerReadbackValid(buf, out);
+}
+
+// Supply-Vcc / free-RAM / commanded-position diagnostics (#306) — same shared
+// UnitVitals.h packet and checksum guard the master reads; pre-vitals firmware
+// fails the checksum and stays vitalsValid=false.
+static bool readUnitVitals(int i2cAddress, UnitVitals& out) {
+  uint8_t buf[VITALS_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VITALS, buf, VITALS_REPLY_LEN)) {
+    return false;
+  }
+  return vitalsReadbackValid(buf, out);
+}
+
+static void refreshUnitVitals(UnitFacts& fact, int i2cAddress) {
+  fact.vitalsValid = false;
+  UnitVitals v;
+  if (!readUnitVitals(i2cAddress, v)) return;
+  fact.vitals = v;
+  fact.vitalsValid = true;
 }
 
 // v1 #140 rule: reject non-printables and the two JSON-structural chars at
@@ -180,6 +231,7 @@ void busProbe() {
       unitFacts[i].odometer = odometer;
       unitFacts[i].odometerValid = true;
     }
+    refreshUnitVitals(unitFacts[i], i2cAddress);
   }
   displayWidth = computeDisplayWidth(states, UNITS_AMOUNT);
   SerialPrint(F("I2C scan complete. Detected "));
@@ -189,24 +241,60 @@ void busProbe() {
 #endif
 }
 
+bool busPollHealthOne(int i) {
+#if SERIAL_ENABLE == false
+  if (unitFacts[i].state != 1) {
+    unitFacts[i].statusValid = false;
+    return false;
+  }
+  UnitStatus s;
+  bool ok = readUnitStatus(toI2cAddress(i), s);
+  if (ok) {
+    unitFacts[i].status = s;
+    unitFacts[i].statusValid = true;
+  } else {
+    unitFacts[i].statusValid = false;
+  }
+  uint32_t odometer;
+  if (readUnitOdometer(toI2cAddress(i), odometer)) {
+    unitFacts[i].odometer = odometer;
+    unitFacts[i].odometerValid = true;
+  }
+  refreshUnitVitals(unitFacts[i], toI2cAddress(i));
+  return ok;  // CMD_GET_STATUS liveness signal for the heartbeat (#310)
+#else
+  (void)i;
+  return false;
+#endif
+}
+
 void busPollHealth() {
 #if SERIAL_ENABLE == false
   if (reflashInProgress(reflashProgress)) return;
+  uint32_t now = millis();
   for (int i = 0; i < UNITS_AMOUNT; i++) {
-    if (unitFacts[i].state != 1) continue;
-    UnitStatus s;
-    if (readUnitStatus(toI2cAddress(i), s)) {
-      unitFacts[i].status = s;
-      unitFacts[i].statusValid = true;
-    } else {
-      unitFacts[i].statusValid = false;
-    }
-    uint32_t odometer;
-    if (readUnitOdometer(toI2cAddress(i), odometer)) {
-      unitFacts[i].odometer = odometer;
-      unitFacts[i].odometerValid = true;
-    }
+    bool ok = busPollHealthOne(i);
+    heartbeatApply(unitFacts[i], ok, now, HEARTBEAT_MISS_THRESHOLD);
   }
+#endif
+}
+
+void followerHeartbeatTick() {
+#if SERIAL_ENABLE == false
+  static uint32_t lastMs = 0;
+  static int slot = 0;
+  uint32_t now = millis();
+  if (now - lastMs < HEARTBEAT_TICK_MS) return;
+  lastMs = now;
+  // Opportunistic + low priority (#310): never touch the bus while a unit may
+  // be in its twiboot window (v1 #88) or a reflash is streaming.
+  if ((int32_t)(now - busProbeInhibitedUntilMs()) < 0) return;
+  if (reflashInProgress(reflashProgress)) return;
+  if (displayWidth <= 0) return;
+  int i = slot;
+  slot = heartbeatNextSlot(slot, displayWidth);
+  bool ok = busPollHealthOne(i);
+  heartbeatApply(unitFacts[i], ok, millis(), HEARTBEAT_MISS_THRESHOLD);
 #endif
 }
 
@@ -549,6 +637,34 @@ static void waitForBatchIdle(const uint8_t* addrs, int count,
   }
 }
 
+// Staggered boot-home (#309): the units boot UNHOMED, so the follower homes
+// the ones that still report unhomed in bounded batches with a rail-settle
+// between them — a whole row's steppers don't spike the shared rail at once
+// (the #305 brownout class). Targets only unhomed sketch units, so it re-homes
+// nothing already good. loop()-blocking (setup() only, like busProbe).
+void followerBootHome() {
+#if SERIAL_ENABLE == false
+  uint8_t targets[UNITS_AMOUNT];
+  int n = bootHomeCollectTargets(unitFacts, displayWidth, SFP_I2C_ADDRESS_BASE,
+                                 targets);
+  if (n == 0) return;
+  SerialPrint(F("boot-home: staggering "));
+  SerialPrint(n);
+  SerialPrintln(F(" unit(s)"));
+  for (int i = 0; i < n; i += BOOT_HOME_BATCH_SIZE) {
+    uint8_t batch[BOOT_HOME_BATCH_SIZE];
+    int batchN = 0;
+    for (int j = i; j < n && batchN < BOOT_HOME_BATCH_SIZE; j++) {
+      busHome(targets[j]);
+      batch[batchN++] = targets[j];
+    }
+    waitForBatchIdle(batch, batchN, BOOT_HOME_BATCH_TIMEOUT_MS);
+    delay(BOOT_HOME_SETTLE_MS);
+  }
+  busPollHealth();  // reflect the now-homed state (also re-stamps freshness)
+#endif
+}
+
 // Flash every bootloader-mode unit in the CURRENT facts, batched. Updates
 // facts in place for successes (v1 #120 rule: the streamed image IS the
 // bundle, page-verified — don't re-read over I2C and risk pinning twiboot).
@@ -621,6 +737,10 @@ void busRunReflashJob() {
   flashBootloaderUnits();
   reflashProgressFinish(reflashProgress, false);
   busPollHealth();
+  // Staggered boot-home of the just-flashed units (#309): a reflashed unit
+  // reboots UNHOMED, so without this the next cluster render would home the
+  // whole row at once — the #305 inrush class. Targets only unhomed units.
+  followerBootHome();
   SerialPrintln(F("Unit reflash complete."));
 #endif
 }

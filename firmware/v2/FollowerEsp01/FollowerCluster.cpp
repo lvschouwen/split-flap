@@ -28,6 +28,11 @@ static uint32_t renderDueMs = 0;
 // row currently shows so blank transitions don't re-flap a blank row.
 static bool rowIsBlank = true;
 
+// millis() when a leader render was last APPLIED (#306 diagnostics). Distinct
+// from policyState.lastContactMs, which any ping also bumps.
+static uint32_t lastRenderMs = 0;
+static bool haveRender = false;
+
 static uint64_t nowEpochMs(bool& synced) {
   time_t t = time(nullptr);
   // SNTP epoch-only sync (spec): anything before ~2001 is the unset RTC.
@@ -144,6 +149,8 @@ FollowerRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
     renderSpeed = speed;
     renderDueMs = millis() + followerRenderDelayMs(commitAtMs, nowMs, synced);
     renderPending = true;
+    lastRenderMs = millis();
+    haveRender = true;
   }
   return verdict;
 }
@@ -173,6 +180,22 @@ FollowerClusterView clusterViewGet() {
   v.epoch = policyState.epoch;
   v.lastSeq = policyState.lastSeq;
   v.heldSegment = heldSegment;
+  // Diagnostics (#306).
+  v.msSinceRender = haveRender ? (int32_t)(millis() - lastRenderMs) : -1;
+  // Total silence blanks the row at lastContactMs + FOLLOWER_GRACE_MS (the
+  // tick cascades Clustered->Grace->Blank on cumulative silence). Only
+  // meaningful while still showing content.
+  if (policyState.phase == FollowerPhase::Clustered ||
+      policyState.phase == FollowerPhase::Grace) {
+    int32_t remainMs =
+        (int32_t)(policyState.lastContactMs + FOLLOWER_GRACE_MS - millis());
+    v.secsUntilBlank = remainMs > 0 ? remainMs / 1000 : 0;
+  } else {
+    v.secsUntilBlank = -1;  // already blank / standalone
+  }
+  bool synced = false;
+  (void)nowEpochMs(synced);
+  v.sntpSynced = synced;
   return v;
 }
 

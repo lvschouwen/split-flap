@@ -3,10 +3,13 @@
  * SplitFlapProtocol.h — single source of truth for the master<->unit contract
  * ###########################################################################
  *
- * Included by BOTH firmwares (they are separate PlatformIO projects — each
- * adds `-I ../shared` to its build so this resolves as a flat include):
- *   - firmware/v1/ESPMaster  (ESP8266 master / I2C bus master)
- *   - firmware/v1/Unit       (Arduino Nano per-flap / I2C slave)
+ * Included by the active firmwares (separate PlatformIO projects — each adds
+ * `-I ../shared` to its build so this resolves as a flat include):
+ *   - firmware/v2/Master        (ESP32-S3 master / I2C bus master)
+ *   - firmware/v2/Unit          (Arduino Nano per-flap / I2C slave)
+ *   - firmware/v2/FollowerEsp01 (ESP-01 cluster row master)
+ * Migrated from firmware/v1/shared at #311. The frozen firmware/v1/ESPMaster
+ * still references it by the old path (dangling — never rebuilt).
  *
  * Before #149 the opcodes, address base and 45-char alphabet were duplicated
  * across the two sketches AND data/script.js, kept in sync by comment only —
@@ -81,6 +84,12 @@
                                          //     hall window, rev time (u16 LE) +
                                          //     XOR checksum ^ 0x5C (wire format
                                          //     in UnitSelfTest.h, #265)
+#define SFP_CMD_GET_VITALS         0x88  // reply: 8 bytes — supply Vcc now/min
+                                         //     (u16 LE mV), last commanded flap
+                                         //     index, min free SRAM (u16 LE) +
+                                         //     XOR checksum ^ 0x3C (wire format
+                                         //     in UnitVitals.h, #306). Frozen v1
+                                         //     ESPMaster never sends it.
 
 // --- 0x9X mutations ---
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT reset)

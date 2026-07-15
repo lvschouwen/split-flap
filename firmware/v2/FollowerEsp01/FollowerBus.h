@@ -30,8 +30,23 @@ void busInit();
 // slot; recomputes displayWidth. Blocking (~2 ms/unit) — loop() only.
 void busProbe();
 
-// CMD_GET_STATUS + odometer refresh for every sketch-mode unit. loop() only.
+// CMD_GET_STATUS + odometer refresh for every sketch-mode unit, plus a
+// heartbeat-freshness stamp per slot (#310). loop() only.
 void busPollHealth();
+
+// Reads one unit's health block (status + odometer + vitals) into unitFacts[i];
+// returns whether CMD_GET_STATUS succeeded — the heartbeat liveness signal
+// (#310). loop() only.
+bool busPollHealthOne(int i);
+
+// One opportunistic heartbeat read per HEARTBEAT_TICK_MS (#310): round-robins
+// one unit, updates its miss counter / stale flag. Self-throttling; skipped in
+// a twiboot window or during a reflash. Called every loop() pass.
+void followerHeartbeatTick();
+
+// Staggered batched boot-home (#309): homes the unhomed sketch units in
+// bounded batches with a rail-settle between them. setup() only (blocking).
+void followerBootHome();
 
 // Renders one pre-positioned segment verbatim: pad/truncate to the probed
 // width, write per-unit letter indexes, wait, verify + resend (v1 #106).
@@ -42,6 +57,14 @@ void busShowSegment(const String& segment, int webSpeed);
 // runtime probes never hit the twiboot window and pin it alive.
 uint32_t busProbeInhibitedUntilMs();
 void busArmProbeInhibit(uint32_t untilMs);
+
+// Diagnostics counters for /cluster/health (#306): sketch-protocol read
+// transactions + failures since boot, and the since-boot minimum free heap.
+// followerDiagTick() folds the current heap into the min each loop pass.
+uint32_t followerBusTxCount();
+uint32_t followerBusErrCount();
+uint32_t followerMinHeap();
+void followerDiagTick();
 
 // Short single-unit ops (loop() executes the staged {"seq":N} op).
 int busWriteOffset(uint8_t i2cAddress, int16_t value);

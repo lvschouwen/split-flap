@@ -105,10 +105,17 @@ static void test_settings_json_shape() {
 // --- /cluster/health ----------------------------------------------------------------
 
 static void test_cluster_health_json_shape() {
+  FollowerClusterDiag d;
+  d.msSinceRender = 4200;
+  d.secsUntilBlank = 95;
+  d.i2cTx = 1000;
+  d.i2cErr = 2;
+  d.minHeap = 21000;
+  d.sntpSynced = true;
   String out = followerClusterHealthJson("grace", "wall-leader",
                                          "192.168.15.22", 2, 7, 3,
                                          "ROW THREE       ", "abc1234", 8, 8,
-                                         0);
+                                         0, d);
   TEST_ASSERT_TRUE(out.indexOf("\"state\":\"grace\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"leaderName\":\"wall-leader\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"leaderHost\":\"192.168.15.22\"") >= 0);
@@ -118,6 +125,13 @@ static void test_cluster_health_json_shape() {
   TEST_ASSERT_TRUE(out.indexOf("\"segment\":\"ROW THREE       \"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"rev\":\"abc1234\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"width\":8") >= 0);
+  // Diagnostics (#306).
+  TEST_ASSERT_TRUE(out.indexOf("\"msSinceRender\":4200") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"secsUntilBlank\":95") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"i2cTx\":1000") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"i2cErr\":2") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"minHeap\":21000") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"sntpSynced\":true") >= 0);
 }
 
 // --- string escaping ----------------------------------------------------------------
@@ -125,9 +139,10 @@ static void test_cluster_health_json_shape() {
 static void test_wire_strings_are_escaped() {
   // Leader name/host come off an unauthenticated LAN POST — a quote must
   // not break the JSON (same rule as every other builder in the fleet).
+  FollowerClusterDiag d;
   String out = followerClusterHealthJson("clustered", "evil\"name",
                                          "10.0.0.9", 0, 1, 1, "X", "r", 1, 1,
-                                         0);
+                                         0, d);
   TEST_ASSERT_TRUE(out.indexOf("evil\\\"name") >= 0);
 }
 

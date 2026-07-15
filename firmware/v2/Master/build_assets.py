@@ -170,10 +170,10 @@ def parse_js_calibration_letters(script_js_text: str) -> str:
 
 
 def shared_protocol_header(project_dir: pathlib.Path) -> pathlib.Path:
-    """The master<->unit protocol contract. Phase 1 (#183) speaks the v1
-    protocol to unchanged v1 units, so the header lives in v1's tree —
-    matching the -I ../../v1/shared include path in platformio.ini."""
-    return project_dir.parent.parent / "v1" / "shared" / "SplitFlapProtocol.h"
+    """The master<->unit protocol contract, shared with the Nano unit
+    firmware. Lives in firmware/v2/shared (migrated from v1 at #311) —
+    matching the -I ../shared include path in platformio.ini."""
+    return project_dir.parent / "shared" / "SplitFlapProtocol.h"
 
 
 def verify_js_alphabet(project_dir: pathlib.Path) -> None:

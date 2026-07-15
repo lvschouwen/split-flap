@@ -90,14 +90,30 @@ void rotateToLetter(int toLetter) {
     return;
   }
 
+  // Trigger 2 (#309): while UNHOMED, this call will force a full calibrate below
+  // (the drum position is unknown). If homing keeps FAILING (dead hall), that
+  // full seek would otherwise re-run on every letter and cook the motor —
+  // calibrate() has no overheat gate. Rate-limit the retries after the first
+  // attempt; a success sets `homed` and skips this path entirely next time.
+  if (!homed) {
+    if (lastUnhomedCalibrateMs != 0 &&
+        millis() - lastUnhomedCalibrateMs < UNHOMED_CALIBRATE_COOLDOWN_MS) {
+      return;  // still cooling down after a failed home — leave the drum idle
+    }
+    lastUnhomedCalibrateMs = millis();
+  }
+
   lastRotation = millis();
   int posCurrentLetter = displayedLetter;
 #ifdef SERIAL_ENABLE
   Serial.print("go to letter: ");
   Serial.println((char)pgm_read_byte(&LETTER_CHARS[toLetter]));
 #endif
-  //letter on a higher-or-equal index: no full rotation needed, step directly
-  if (toLetter >= posCurrentLetter) {
+  //letter on a higher-or-equal index: no full rotation needed, step directly.
+  //But while UNHOMED (#309 boot-home trigger 2) the drum position is unknown —
+  //force the calibrate branch so a driving master that skips an explicit HOME
+  //still gets a homed unit before the first move.
+  if (homed && toLetter >= posCurrentLetter) {
 #ifdef SERIAL_ENABLE
     Serial.println("direct");
 #endif
@@ -116,6 +132,10 @@ void rotateToLetter(int toLetter) {
   }
   //store new position
   displayedLetter = toLetter;
+  //Loaded Vcc sample (#306): the coils are still energised here, so the rail
+  //is at its steady loaded level — the sag the #305 brownout saga chased.
+  //Taken once per move, before the motor de-energises below.
+  vitalsSample(true);
   //rotation is done, stop the motor
   delay(100); //important to stop rotation before shutting of the motor to avoid rotation after switching off current
   stopMotor();
@@ -205,6 +225,7 @@ int calibrate(bool initialCalibration) {
       statusLastHomeFailed = false;
       statusHallNeverTriggered = !hallSawMagnet;
       lastHomingStepCount = (uint16_t)i;
+      homed = true;  // boot-home satisfied (#309); disables the self-home drain
       interrupts();
       //Only stop motor for initial calibration
       if (initialCalibration) {
@@ -286,6 +307,59 @@ void driftRefreshReplyBuffers() {
   noInterrupts();
   for (uint8_t i = 0; i < DRIFT_REPLY_LEN; i++) diagReplyBuf[i] = diag[i];
   for (uint8_t i = 0; i < SELFTEST_REPLY_LEN; i++) selfTestReplyBuf[i] = st[i];
+  interrupts();
+}
+
+//Supply-Vcc diagnostics (#306). Reads the AVR's own rail via the internal
+//1.1V bandgap referenced to AVcc — no external divider, so it works on any
+//unit. ADMUX 0b1110 selects the bandgap channel; the reference needs ~1 ms
+//to settle after the mux switch before a valid conversion. Runs in loop
+//context (never the Wire ISR) — the blocking conversion is ~0.1 ms.
+uint16_t readVccMv() {
+  ADMUX = (1 << REFS0) | 0b1110;  // AVcc ref, 1.1V bandgap as input
+  delay(2);                        // let the bandgap settle
+  ADCSRA |= (1 << ADSC);           // start conversion
+  while (ADCSRA & (1 << ADSC)) {}  // wait (~13 ADC clocks)
+  uint16_t adc = ADC;
+  return unitVccFromAdc(adc);
+}
+
+//Free SRAM = gap between the heap top (__brkval, or __heap_start before any
+//malloc) and the current stack pointer. The classic AVR idiom; a lower value
+//means less headroom before a stack/heap collision.
+uint16_t freeRamBytes() {
+  extern int __heap_start, *__brkval;
+  int v;
+  int top = (__brkval == 0) ? (int)&__heap_start : (int)__brkval;
+  int freeBytes = (int)&v - top;
+  return (freeBytes < 0) ? 0 : (uint16_t)freeBytes;
+}
+
+//Take one Vcc + free-RAM sample and fold the minima. `loaded` distinguishes a
+//mid-move sample (coils energised, the sag we care about) from an idle rail
+//check; both feed the since-boot minimum, so the loaded samples drive vccMin
+//down toward the brownout floor while idle samples keep vccNow fresh.
+void vitalsSample(bool /*loaded*/) {
+  vitalsVccNow = readVccMv();
+  if (vitalsVccNow != 0 && vitalsVccNow < vitalsVccMin) vitalsVccMin = vitalsVccNow;
+  uint16_t fr = freeRamBytes();
+  if (fr < vitalsFreeRamMin) vitalsFreeRamMin = fr;
+}
+
+//Re-encodes the ISR-visible GET_VITALS reply from loop-context state (#306),
+//same interrupt-guarded handshake as driftRefreshReplyBuffers(). Cheap (no
+//ADC — the sampling is throttled separately), so it runs every loop pass and
+//once in setup() before the Wire handlers register.
+void vitalsRefreshReplyBuffer() {
+  UnitVitals v;
+  v.vccNow_mV = vitalsVccNow;
+  v.vccMin_mV = (vitalsVccMin == 0xFFFF) ? vitalsVccNow : vitalsVccMin;
+  v.cmdPos = (uint8_t)(receivedNumber & 0xFF);  // last commanded flap index
+  v.freeRamMin = (vitalsFreeRamMin == 0xFFFF) ? 0 : vitalsFreeRamMin;
+  uint8_t buf[VITALS_REPLY_LEN];
+  vitalsEncodeReply(v, buf);
+  noInterrupts();
+  for (uint8_t i = 0; i < VITALS_REPLY_LEN; i++) vitalsReplyBuf[i] = buf[i];
   interrupts();
 }
 

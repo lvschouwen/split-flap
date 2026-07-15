@@ -142,12 +142,22 @@ inline String followerPingReplyJson(const char* phaseName, uint32_t epoch,
 }
 
 // GET /cluster/health — the v2 follower's shape (leader + member panel).
+struct FollowerClusterDiag {
+  int32_t msSinceRender = -1;
+  int32_t secsUntilBlank = -1;
+  uint32_t i2cTx = 0;
+  uint32_t i2cErr = 0;
+  uint32_t minHeap = 0;
+  bool sntpSynced = false;
+};
+
 inline String followerClusterHealthJson(
     const char* phaseName, const String& leaderName, const String& leaderHost,
     int row, uint32_t epoch, uint32_t seq, const String& segment,
-    const char* rev, int width, int detected, int faulty) {
+    const char* rev, int width, int detected, int faulty,
+    const FollowerClusterDiag& d) {
   String out;
-  out.reserve(256);
+  out.reserve(320);
   out += "{\"state\":\"";
   out += phaseName;
   out += "\",\"leaderName\":";
@@ -170,6 +180,19 @@ inline String followerClusterHealthJson(
   out += detected;
   out += ",\"faulty\":";
   out += faulty;
+  // Follower diagnostics (#306): why a row is blank/stale + bus/heap/clock.
+  out += ",\"msSinceRender\":";
+  out += String((long)d.msSinceRender);
+  out += ",\"secsUntilBlank\":";
+  out += String((long)d.secsUntilBlank);
+  out += ",\"i2cTx\":";
+  out += String((unsigned long)d.i2cTx);
+  out += ",\"i2cErr\":";
+  out += String((unsigned long)d.i2cErr);
+  out += ",\"minHeap\":";
+  out += String((unsigned long)d.minHeap);
+  out += ",\"sntpSynced\":";
+  out += d.sntpSynced ? "true" : "false";
   out += '}';
   return out;
 }

@@ -19,6 +19,12 @@ struct FollowerClusterView {
   uint32_t epoch = 0;
   uint32_t lastSeq = 0;
   String heldSegment;
+  // Diagnostics for /cluster/health (#306) so a curl-only operator can see
+  // WHY a row is blank/stale. -1 = not applicable (no render yet / already
+  // blank/standalone). sntpSynced gates commitAt flip timing.
+  int32_t msSinceRender = -1;
+  int32_t secsUntilBlank = -1;
+  bool sntpSynced = false;
 };
 
 // setup(): EEPROM.begin + membership load; boots the phase machine (Grace

@@ -17,7 +17,7 @@ Thank you everyone whom has contributed, included in the "main" release or not, 
 
 ---
 
-> **Firmware status:** The active master firmware is the **v2** ESP32-S3 stack under `firmware/v2/Master/` (with `firmware/v2/Rescue/` as its break-glass image); the Arduino Nano per-flap unit firmware (`firmware/v1/Unit/`) stays active underneath it. The v1 ESP8266 master (`firmware/v1/ESPMaster/`) is **frozen** — kept in the repo as reference for legacy hardware, out of CI (see its README). The v2 **PCB** design docs live under `PCB/v2/`.
+> **Firmware status:** The active master firmware is the **v2** ESP32-S3 stack under `firmware/v2/Master/` (with `firmware/v2/Rescue/` as its break-glass image); the Arduino Nano per-flap unit firmware (`firmware/v2/Unit/`, migrated from v1 at #311) stays active underneath it. The whole `firmware/v1` tree is **deprecated** — only the ESP8266 master (`firmware/v1/ESPMaster/`) remains there, **frozen**, kept as reference for legacy hardware and out of CI (see its README). The v2 **PCB** design docs live under `PCB/v2/`.
 
 ---
 
@@ -77,7 +77,7 @@ Each PlatformIO project has its own `platformio.ini` in its folder. Today the ac
 |---|---|---|
 | `firmware/v2/Master/` | ESP32-S3 (master) | Active |
 | `firmware/v2/Rescue/` | ESP32-S3 (rescue slot) | Active |
-| `firmware/v1/Unit/` | Arduino Nano (per-flap) | Active |
+| `firmware/v2/Unit/` | Arduino Nano (per-flap) | Active |
 | `firmware/v1/ESPMaster/` | ESP8266 ESP-01 | Frozen — reference only (see its README) |
 
 From the folder, run:
