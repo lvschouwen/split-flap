@@ -24,8 +24,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-UNIT_BUILD = REPO / "firmware/v1/Unit/.pio/build/unit/firmware.hex"
-UNIT_REV_BUILT = REPO / "firmware/v1/Unit/.pio/build/unit/firmware.rev"
+UNIT_BUILD = REPO / "firmware/v2/Unit/.pio/build/unit/firmware.hex"
+UNIT_REV_BUILT = REPO / "firmware/v2/Unit/.pio/build/unit/firmware.rev"
 V2_MASTER_DATA = REPO / "firmware/v2/Master/data"
 V2_FOLLOWER_ESP01_DATA = REPO / "firmware/v2/FollowerEsp01/data"
 # Every tree that embeds the unit bundle (#205; FollowerEsp01 joined at
@@ -33,9 +33,9 @@ V2_FOLLOWER_ESP01_DATA = REPO / "firmware/v2/FollowerEsp01/data"
 STAGE_DATA_DIRS = [V2_MASTER_DATA, V2_FOLLOWER_ESP01_DATA]
 # Everything that compiles into the Unit binary; host-side tests don't.
 UNIT_SRC_PATHSPECS = [
-    "firmware/v1/Unit",
-    ":(exclude)firmware/v1/Unit/test",
-    "firmware/v1/shared",
+    "firmware/v2/Unit",
+    ":(exclude)firmware/v2/Unit/test",
+    "firmware/v2/shared",
 ]
 
 
@@ -102,7 +102,7 @@ def cmd_stage() -> None:
     if not UNIT_REV_BUILT.exists():
         sys.exit(
             f"error: {UNIT_REV_BUILT} not found — build the Unit sketch first "
-            "('pio run' in firmware/v1/Unit)"
+            "('pio run' in firmware/v2/Unit)"
         )
     stage_bundle(UNIT_BUILD, UNIT_REV_BUILT, STAGE_DATA_DIRS)
 

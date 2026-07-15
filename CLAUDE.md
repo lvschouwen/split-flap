@@ -8,14 +8,15 @@ Arduino-based split-flap display: a master MCU drives per-flap units over I2C. F
 
 Two firmware stacks:
 
-- **v1:** `firmware/v1/ESPMaster` (ESP8266 ESP-01 master, **FROZEN** #283 — out of CI and unit-bundle staging, kept as reference; see its README) + `firmware/v1/Unit` (Arduino Nano per flap, **active** — the Nanos stay under the v2 master).
-- **v2 (in progress, epic #183):** `firmware/v2/Master` is the ESP32-S3 port (N16R8 devkit) speaking the same I2C protocol to unchanged v1 units, plus `firmware/v2/FollowerEsp01` — a minimal ESP8266 image turning v1 master hardware into dumb cluster rows (#298). Pure-logic headers in v2 are **copies** of their v1 counterparts, not shared includes — if a bug is found while both trees are alive, fix it in both.
+- **v1 (deprecated, #311):** the whole `firmware/v1` tree is frozen — only `firmware/v1/ESPMaster` remains (ESP8266 ESP-01 master, **FROZEN** #283 — out of CI and unit-bundle staging, kept as reference; see its README). Nothing new lands under `firmware/v1`; its `-I ../shared` include now dangles (never rebuilt). The active Nano unit firmware, its twiboot bootloader and the shared protocol header were migrated to v2 at #311.
+- **v2 (active, epic #183):** `firmware/v2/Master` is the ESP32-S3 port (N16R8 devkit) speaking the same I2C protocol to the Nano units, `firmware/v2/Unit` is the Arduino-Nano per-flap firmware (migrated from v1 at #311; the Nanos stay under the v2 master), and `firmware/v2/FollowerEsp01` is a minimal ESP8266 image turning legacy master hardware into dumb cluster rows (#298). Pure-logic headers are **copies** across the v2 projects (Unit ↔ Master ↔ Follower), not shared includes — if a bug is found in a copied header, fix it in every tree that carries it.
 
 ## Repository map
 
 - `firmware/v1/ESPMaster/` — ESP8266 master: async web UI, WiFi portal, NTP, MQTT/HA, I2C master, OTA + recovery
-- `firmware/v1/Unit/` — Nano unit: stepper + hall homing, I2C slave, EEPROM offset/address
-- `firmware/v1/UnitBootloader/` — vendored+patched twiboot (I2C reflash of units; see its README)
+- `firmware/v2/Unit/` — Nano unit: stepper + hall homing, I2C slave, EEPROM offset/address (migrated from v1 at #311)
+- `firmware/v2/shared/` — `SplitFlapProtocol.h`, the master↔unit I2C contract (`-I ../shared` from `firmware/v2/Unit`)
+- `firmware/v2/UnitBootloader/` — vendored+patched twiboot (I2C reflash of units; see its README)
 - `firmware/v2/Master/` — S3 master port (plain `.cpp`, console on native USB-CDC)
 - `firmware/v2/FollowerEsp01/` — ESP-01 cluster follower "dumb row" (#298): v1 master hardware as a cheap wall row under an S3 leader (own section below)
 - `firmware/v2/Rescue/` — break-glass image for the factory slot (#195)
@@ -35,7 +36,7 @@ python -m pytest tests/      # python-side tests (v2 Master, Rescue, FollowerEsp
 ```
 
 - v1 master re-flash after first install: OTA via `flashing/ota-master.sh <fw.bin> http://host` (prints SUCCESS / EBOOT SILENT REVERT / … verdict); the retired v1.1.0 release exe remains downloadable for USB provisioning of legacy v1 hardware.
-- v1 Unit envs: `unit` (new Nano bootloader) / `unit_old_bootloader` (fallback).
+- Unit envs (`firmware/v2/Unit`): `unit` (new Nano bootloader) / `unit_old_bootloader` (fallback).
 - Native env uses ArduinoFake: `map()` is a fakeit mock — wire the real formula in each test's `setUp()` or calls abort; `EEPROM` etc. re-wire via `ArduinoFake(EEPROM)`.
 - v2 first build on a clean machine is slow (pioarduino hybrid compile downloads IDF). `managed_components/`, `sdkconfig.*`, `.dummy/` in v2 project dirs are generated artifacts (gitignored; exception: `Bootloader/sdkconfig.defaults` is a source file kept by a negation).
 
@@ -99,7 +100,7 @@ Ported slices, one or two lines each: what it is + issue # + the file(s) whose h
 - **Unit reflash over twiboot (#205, slice C):** bundled unit hex (`data/unit-firmware.hex` + `.rev`; `make_manifest.py stage` writes it, CI's `gate` step enforces no drift; v1's committed copy is a frozen fossil since #283) flashed by the one inline `runReflashJob` in `Tasks.cpp`; plan + progress pure in `ReflashPlan.h`; producer gate in Hard rules. `WebAssets.h` is included by `WebEndpoints.cpp` ONLY (a second include duplicates every PROGMEM blob).
 - **MQTT + Home Assistant (#224):** v1's wire contract unchanged (23 discovery entities incl. the #231 wear sensor, LWT, five command topics, same device id) on espMqttClient, owned by mqttTask — detail in `MqttService.h`/`.cpp` headers, pure logic in `MqttHelpers.h` + `MqttLifecyclePolicy.h`. Deviations from v1 (no bus polls from the MQTT loop, NVS boot counter, `MQTT_DEVICE_MODEL` build flag) in spec `2026-07-12-v2-mqtt-ha-slice.md`.
 - **Transient/mode service (#219):** web transients (clock-mode messages, calibration patterns) ride #224's show-then-revert overlay — drain + producer gates in `WebEndpoints.cpp`, overlay lifecycle (broker-less capable, cross-task arm via `mqttStartNotificationDwell`) in `MqttService.cpp`.
-- **Unit wear odometer (#231):** per-unit revolution count read at probe/health-poll (checksummed 5-byte reply — pre-odometer unit fw fails it gracefully); relative-wear flagging pure in `WearPolicy.h`, spliced into `/units/health` + HA wear-warning binary sensor; reset op rides the `{"seq":N}` contract. Unit-side mechanism in `firmware/v1/Unit/UnitOdometer.h`.
+- **Unit wear odometer (#231):** per-unit revolution count read at probe/health-poll (checksummed 5-byte reply — pre-odometer unit fw fails it gracefully); relative-wear flagging pure in `WearPolicy.h`, spliced into `/units/health` + HA wear-warning binary sensor; reset op rides the `{"seq":N}` contract. Unit-side mechanism in `firmware/v2/Unit/UnitOdometer.h`.
 - **System tab (#245):** netTask samples S3 vitals dual-rate (#251: 1 s `now`, 5 s decimated history ring) into a mutex-guarded sampler (`SystemStatsPolicy.h` pure + `SystemStats.cpp` glue); `GET /system/stats` = current + ~10 min history; I2C tx/err counters in `UnitBus.cpp` (sketch-protocol traffic only — idle polls and twiboot excluded), MQTT drops, SNTP sync age (`ClockService.cpp`).
 - **Identity redesign (#246):** two-leaf animated flap mirror + board-strip skin, `data/style.css`/`script.js` only — selectors preserved, no endpoint changes; mockup-gated per the design-confirm rule.
 - **Live display events (#251):** SSE `GET /events` — netTask's `webDisplayEventsTick()` pushes the display text on change (detection pure in `DisplayEvents.h`); the browser mirror riffles through the drum order client-side, with the 5 s `/settings` poll as fallback.

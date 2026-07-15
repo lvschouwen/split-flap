@@ -51,7 +51,7 @@ def repo(tmp_path):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@test")
     _git(tmp_path, "config", "user.name", "t")
-    _commit(tmp_path, "firmware/v1/Unit/Unit.ino", "v1", "unit code")
+    _commit(tmp_path, "firmware/v2/Unit/Unit.ino", "v1", "unit code")
     return tmp_path
 
 
@@ -69,7 +69,7 @@ def test_rev_gate_passes_when_staged_after_unit_head(repo):
 
 def test_rev_gate_rejects_unit_change_after_staging(repo):
     staged = _git(repo, "rev-parse", "--short", "HEAD")
-    _commit(repo, "firmware/v1/Unit/Unit.ino", "v2", "unit code moved on")
+    _commit(repo, "firmware/v2/Unit/Unit.ino", "v2", "unit code moved on")
     with pytest.raises(GateError, match="changed"):
         staged_rev_gate(staged, repo=repo)
 
@@ -77,7 +77,7 @@ def test_rev_gate_rejects_unit_change_after_staging(repo):
 def test_rev_gate_rejects_shared_header_change_after_staging(repo):
     # ../shared/SplitFlapProtocol.h compiles into the Unit binary too.
     staged = _git(repo, "rev-parse", "--short", "HEAD")
-    _commit(repo, "firmware/v1/shared/SplitFlapProtocol.h", "v2", "protocol")
+    _commit(repo, "firmware/v2/shared/SplitFlapProtocol.h", "v2", "protocol")
     with pytest.raises(GateError, match="changed"):
         staged_rev_gate(staged, repo=repo)
 
@@ -85,7 +85,7 @@ def test_rev_gate_rejects_shared_header_change_after_staging(repo):
 def test_rev_gate_ignores_unit_test_only_changes(repo):
     # Host-side test changes don't alter the shipped binary — no re-stage.
     staged = _git(repo, "rev-parse", "--short", "HEAD")
-    _commit(repo, "firmware/v1/Unit/test/test_main.cpp", "t", "tests only")
+    _commit(repo, "firmware/v2/Unit/test/test_main.cpp", "t", "tests only")
     staged_rev_gate(staged, repo=repo)  # no raise
 
 
@@ -110,7 +110,7 @@ def test_unit_source_head_tracks_unit_and_shared(repo):
     assert unit_source_head(repo) == first
     _commit(repo, "docs/other.md", "x", "unrelated")
     assert unit_source_head(repo) == first
-    _commit(repo, "firmware/v1/shared/SplitFlapProtocol.h", "p", "protocol")
+    _commit(repo, "firmware/v2/shared/SplitFlapProtocol.h", "p", "protocol")
     assert unit_source_head(repo) == _git(repo, "rev-parse", "HEAD")
 
 

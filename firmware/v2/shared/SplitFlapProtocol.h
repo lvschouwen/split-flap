@@ -3,10 +3,13 @@
  * SplitFlapProtocol.h — single source of truth for the master<->unit contract
  * ###########################################################################
  *
- * Included by BOTH firmwares (they are separate PlatformIO projects — each
- * adds `-I ../shared` to its build so this resolves as a flat include):
- *   - firmware/v1/ESPMaster  (ESP8266 master / I2C bus master)
- *   - firmware/v1/Unit       (Arduino Nano per-flap / I2C slave)
+ * Included by the active firmwares (separate PlatformIO projects — each adds
+ * `-I ../shared` to its build so this resolves as a flat include):
+ *   - firmware/v2/Master        (ESP32-S3 master / I2C bus master)
+ *   - firmware/v2/Unit          (Arduino Nano per-flap / I2C slave)
+ *   - firmware/v2/FollowerEsp01 (ESP-01 cluster row master)
+ * Migrated from firmware/v1/shared at #311. The frozen firmware/v1/ESPMaster
+ * still references it by the old path (dangling — never rebuilt).
  *
  * Before #149 the opcodes, address base and 45-char alphabet were duplicated
  * across the two sketches AND data/script.js, kept in sync by comment only —

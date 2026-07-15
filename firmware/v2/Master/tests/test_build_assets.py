@@ -47,9 +47,9 @@ def test_parse_js_calibration_letters_raises_when_missing():
 
 
 def _make_tree(tmp_path, alphabet_header: str, alphabet_js: str) -> pathlib.Path:
-    """Recreate the firmware/v1/shared + firmware/v2/Master layout the
+    """Recreate the firmware/v2/shared + firmware/v2/Master layout the
     verify step resolves against (shared_protocol_header)."""
-    shared = tmp_path / "v1" / "shared"
+    shared = tmp_path / "v2" / "shared"
     shared.mkdir(parents=True)
     (shared / "SplitFlapProtocol.h").write_text(
         f'#define SFP_ALPHABET "{alphabet_header}"\n', encoding="utf-8"
@@ -63,10 +63,10 @@ def _make_tree(tmp_path, alphabet_header: str, alphabet_js: str) -> pathlib.Path
     return project
 
 
-def test_shared_protocol_header_points_into_v1_tree(tmp_path):
+def test_shared_protocol_header_points_into_v2_shared(tmp_path):
     project = tmp_path / "v2" / "Master"
     header = build_assets.shared_protocol_header(project)
-    assert header == tmp_path / "v1" / "shared" / "SplitFlapProtocol.h"
+    assert header == tmp_path / "v2" / "shared" / "SplitFlapProtocol.h"
 
 
 def test_verify_js_alphabet_passes_on_match(tmp_path):
