@@ -25,7 +25,8 @@
 static const uint8_t CLUSTER_ROLLOUT_ATTEMPT_CAP = 3;
 
 // Rejoin budget after a successful upload: reboot (~10 s) + PENDING_VERIFY
-// confirm on netif-up + the leader's join backoff ladder fit well inside.
+// confirm (pre-inrush in setup(), #305) + the leader's join backoff ladder
+// fit well inside.
 static const uint32_t CLUSTER_ROLLOUT_REJOIN_TIMEOUT_MS = 120000UL;
 
 // Global pause after a failed/rejected upload before the next candidate is

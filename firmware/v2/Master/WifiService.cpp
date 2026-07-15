@@ -132,8 +132,9 @@ static void startPortal() {
     portalRedirectUrl = "http://" + WiFi.softAPIP().toString() + "/wifi-setup";
   }
   webEndpointsStart(*webServer);  // LWIP is up on the AP netif
-  // A portal boot is a healthy boot (radio + web stack alive) — and the
-  // portal-timeout reboot must not cost us an unconfirmed image (#190).
+  // Fallback confirm (#305 moved the primary to setup() pre-inrush): no-op if
+  // already confirmed, but retries should the pre-inrush otadata write have
+  // failed. A portal boot is a healthy boot (#190).
   otaHealthConfirm();
   SerialPrintln("WiFi setup portal up: " + apName + " (" +
                 WiFi.softAPIP().toString() + ")");
@@ -142,7 +143,7 @@ static void startPortal() {
 static void startOnline() {
   SerialPrintln("WiFi connected. IP: " + WiFi.localIP().toString());
   webEndpointsStart(*webServer);
-  otaHealthConfirm();  // netif up = health bar met (#190)
+  otaHealthConfirm();  // #305 fallback: primary confirm is setup() pre-inrush
   clockServiceApplyTz(*liveSettings);  // v1 parity: NTP kicked after join
   if (MDNS.begin(deviceName.c_str())) {
     MDNS.addService("http", "tcp", 80);

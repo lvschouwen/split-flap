@@ -611,7 +611,8 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // v1 wire contract: POST multipart field "firmware" + mandatory ?md5=
   // (v1 #144) + optional ?v= intended-version diagnostic. Update targets
   // the inactive A/B slot; the image boots PENDING_VERIFY and OtaService
-  // confirms it once a netif is up (bootloader reverts otherwise).
+  // confirms it pre-inrush near the end of setup() (#305), netif-up as
+  // fallback (bootloader reverts otherwise).
   //
   // Async-context exception (deliberate, v1 precedent): Update.write() runs
   // right here in the async_tcp task — a firmware stream cannot be staged
