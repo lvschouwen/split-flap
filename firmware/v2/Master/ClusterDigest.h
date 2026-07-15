@@ -141,6 +141,23 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
   out += String((unsigned long)st.rolloutTotal);
   out += ",\"imageVerifyFailed\":";
   out += st.rolloutImageFailed ? "true" : "false";
+  // #304 Part B: the stored ESP-01 image + the on-demand relay push. The
+  // Cluster card's upload control reads followerImage; the per-member "Update
+  // firmware" button reads followerPush.
+  out += "},\"followerImage\":{\"present\":";
+  out += st.followerImagePresent ? "true" : "false";
+  out += ",\"rev\":";
+  appendJsonString(out, st.followerImageRev);
+  out += "},\"followerPush\":{\"phase\":";
+  appendJsonString(out, st.followerPushPhase);
+  out += ",\"host\":";
+  appendJsonString(out, st.followerPushHost);
+  out += ",\"sent\":";
+  out += String((unsigned long)st.followerPushSent);
+  out += ",\"total\":";
+  out += String((unsigned long)st.followerPushTotal);
+  out += ",\"result\":";
+  appendJsonString(out, st.followerPushResult);
   out += "}}";
   return out;
 }

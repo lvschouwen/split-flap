@@ -4,6 +4,7 @@
 
 #include "ClusterLeader.h"
 
+#include <LittleFS.h>
 #include <MD5Builder.h>
 #include <WiFi.h>
 #include <esp_http_client.h>
@@ -23,6 +24,8 @@
 #include "WearPolicy.h"  // self-row wear fold for the status/digest health
 #include "ClusterRolloutPolicy.h"
 #include "DisplayCommand.h"
+#include "FollowerImagePolicy.h"  // #304 on-demand esp01 firmware relay
+#include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"  // mqttNotificationActive — self-row re-show gate
 #include "ReflashPlan.h"
@@ -79,10 +82,18 @@ static String digestLastBody;
 // Fleet rollout (#276): sequencing state guarded by leaderMutex (status
 // reads it); the live upload session below is clusterTask-private.
 static ClusterRolloutState rollout;
+// On-demand ESP-01 firmware relay (#304 Part B): push the stored
+// /follower-fw.bin to a chosen esp01 row. Guarded by leaderMutex (status
+// reads it); the file-stream session below is clusterTask-private. Mutually
+// exclusive with the #276 auto-rollout — both run on clusterTask.
+static FollowerPushState followerPush;
+static bool followerPushPending = false;  // staged trigger
+static String followerPushHost;           // staged target host
 
 // Rollout upload session teardown (#276) — defined in the rollout section
 // below; applyStagedConfig needs it before that.
 static void rolloutCloseUpload();
+static void followerPushCloseUpload();
 // Status fill (leaderMutex held) — defined after the rollout statics it
 // reads; collectMemberWork needs it for the ping digest (#294).
 static void statusFillLocked(ClusterLeaderStatus& st);
@@ -276,8 +287,10 @@ static void applyStagedConfig() {
   }
 
   // A config swap invalidates any in-flight rollout (member indexes move);
-  // same task as the upload pump, so the teardown is race-free (#276).
+  // same task as the upload pump, so the teardown is race-free (#276). The
+  // on-demand follower push (#304) is torn down the same way.
   rolloutCloseUpload();
+  followerPushCloseUpload();
 
   // Old remote hosts that are not in the new table get a leave.
   String leaveHosts[CLUSTER_MAX_MEMBERS];
@@ -303,6 +316,8 @@ static void applyStagedConfig() {
       segments[i] = "";
     }
     clusterRolloutReset(rollout);
+    followerPush = FollowerPushState{};
+    followerPushPending = false;
     lastContentKey = "";  // force a fresh submit → renders for everyone
     selfPending = false;
     selfText = "";
@@ -367,6 +382,12 @@ static int collectMemberWork(MemberWorkItem* items) {
     // as failures. Skip it; the upload round-trip IS the contact (#276).
     if (rollout.phase == ClusterRolloutPhase::Uploading &&
         rollout.memberIndex == i) {
+      continue;
+    }
+    // Same hazard for the on-demand follower-image push (#304): don't ping a
+    // row whose async_tcp task is busy taking our /firmware/master stream.
+    if (followerPush.phase == FollowerPushPhase::Uploading &&
+        followerPush.memberIndex == i) {
       continue;
     }
     ClusterLeaderAction action = clusterMemberNextAction(runtimes[i], nowMs);
@@ -719,6 +740,8 @@ static void rolloutServiceTick() {
     int candidate;
     {
       LeaderLock lock;
+      // Stand down while an on-demand follower push owns the flash (#304).
+      if (followerPush.phase != FollowerPushPhase::Idle) return;
       candidate = clusterRolloutNextCandidate(table, runtimes, GIT_REV,
                                               CLUSTER_LEADER_PLAT, rollout,
                                               millis());
@@ -778,6 +801,238 @@ static void rolloutServiceTick() {
   }
 }
 
+// --- on-demand ESP-01 firmware relay (#304 Part B) --------------------------------
+// Streams the stored /follower-fw.bin to a chosen esp01 row's EXISTING POST
+// /firmware/master, reusing #276's multipart wire + chunk cadence but sourcing
+// the LittleFS file. clusterTask-private session; mutually exclusive with the
+// auto-rollout (rolloutServiceTick stands down while a push is active, and a
+// push won't start while the rollout is uploading). Facts are recomputed per
+// push — unlike the running slot, the stored file can change between pushes.
+
+static esp_http_client_handle_t fpushClient = nullptr;
+static File fpushFile;
+static uint32_t fpushOffset = 0;
+static uint32_t fpushLen = 0;
+static String fpushMd5;
+static String fpushBoundary;  // md5-derived (#292) — cannot occur in the image
+static String fpushRev;       // stored image rev → the ?v= intendedVersion
+
+static void followerPushCloseUpload() {
+  if (fpushFile) fpushFile.close();
+  if (fpushClient != nullptr) {
+    esp_http_client_close(fpushClient);
+    esp_http_client_cleanup(fpushClient);
+    fpushClient = nullptr;
+  }
+  followerImageReleaseRelay();  // let netTask flush a queued upload
+}
+
+// Size + MD5 over the stored file (reuses rolloutBuf — the auto-rollout and
+// this push never overlap by the mutual-exclusion guards).
+static bool followerPushEnsureFacts() {
+  File f = LittleFS.open(FOLLOWER_IMAGE_PATH, FILE_READ);
+  if (!f) return false;
+  uint32_t len = f.size();
+  if (len == 0) { f.close(); return false; }
+  MD5Builder md5;
+  md5.begin();
+  uint32_t off = 0;
+  while (off < len) {
+    uint32_t take = len - off;
+    if (take > sizeof(rolloutBuf)) take = sizeof(rolloutBuf);
+    if (f.read(rolloutBuf, take) != (int)take) { f.close(); return false; }
+    md5.add(rolloutBuf, take);
+    off += take;
+  }
+  f.close();
+  md5.calculate();
+  fpushMd5 = md5.toString();
+  fpushBoundary = clusterRolloutBoundary(fpushMd5);
+  fpushLen = len;
+  fpushRev = followerImageStoredRev();
+  return true;
+}
+
+static bool followerPushOpenUpload(const String& host) {
+  fpushFile = LittleFS.open(FOLLOWER_IMAGE_PATH, FILE_READ);
+  if (!fpushFile) { followerPushCloseUpload(); return false; }
+  String url = clusterRolloutUrl(host, fpushMd5, fpushRev.c_str());
+  esp_http_client_config_t cfg = {};
+  cfg.url = url.c_str();
+  cfg.timeout_ms = CLUSTER_HTTP_TIMEOUT_MS;
+  fpushClient = esp_http_client_init(&cfg);
+  if (fpushClient == nullptr) { followerPushCloseUpload(); return false; }
+  esp_http_client_set_method(fpushClient, HTTP_METHOD_POST);
+  String contentType = clusterRolloutContentType(fpushBoundary);
+  esp_http_client_set_header(fpushClient, "Content-Type", contentType.c_str());
+  String preamble = clusterRolloutMultipartPreamble(fpushBoundary);
+  int total = (int)preamble.length() + (int)fpushLen +
+              (int)clusterRolloutMultipartTrailer(fpushBoundary).length();
+  if (esp_http_client_open(fpushClient, total) != ESP_OK ||
+      esp_http_client_write(fpushClient, preamble.c_str(), preamble.length()) !=
+          (int)preamble.length()) {
+    followerPushCloseUpload();
+    return false;
+  }
+  fpushOffset = 0;
+  return true;
+}
+
+// caller holds LeaderLock.
+static void followerPushFinishLocked(FollowerPushResult result,
+                                     const String& host, const String& what) {
+  followerPushFinish(followerPush, result);
+  SerialPrintln("cluster: follower-image push to " + host + " " + what);
+}
+
+static void followerPushPump() {
+  uint32_t budget = CLUSTER_ROLLOUT_CHUNK_PER_TICK;
+  while (budget > 0 && fpushOffset < fpushLen) {
+    uint32_t take = fpushLen - fpushOffset;
+    if (take > sizeof(rolloutBuf)) take = sizeof(rolloutBuf);
+    if (take > budget) take = budget;
+    if (fpushFile.read(rolloutBuf, take) != (int)take ||
+        esp_http_client_write(fpushClient, (const char*)rolloutBuf, take) !=
+            (int)take) {
+      followerPushCloseUpload();
+      LeaderLock lock;
+      int t = followerPush.memberIndex;
+      String host = (t >= 0 && t < table.count) ? String(table.members[t].host)
+                                                : String("?");
+      followerPushFinishLocked(FollowerPushResult::Failed, host,
+                               "failed mid-stream");
+      return;
+    }
+    fpushOffset += take;
+    budget -= take;
+  }
+  {
+    LeaderLock lock;
+    followerPush.bytesSent = fpushOffset;
+  }
+  if (fpushOffset < fpushLen) return;  // more ticks to go
+
+  esp_http_client_set_timeout_ms(fpushClient,
+                                 CLUSTER_ROLLOUT_FINALIZE_TIMEOUT_MS);
+  String trailer = clusterRolloutMultipartTrailer(fpushBoundary);
+  int status = -1;
+  if (esp_http_client_write(fpushClient, trailer.c_str(), trailer.length()) ==
+          (int)trailer.length() &&
+      esp_http_client_fetch_headers(fpushClient) >= 0) {
+    status = esp_http_client_get_status_code(fpushClient);
+  }
+  followerPushCloseUpload();
+
+  LeaderLock lock;
+  int target = followerPush.memberIndex;
+  String host = (target >= 0 && target < table.count)
+                    ? String(table.members[target].host) : String("?");
+  if (status == 200) {
+    followerPushFinishLocked(FollowerPushResult::Done, host,
+                             "flashed — rebooting, will rejoin");
+    // Reboot window (~750 ms): mark un-joined so the doomed contacts don't
+    // read as failures → degraded noise (mirrors the rollout).
+    if (target >= 0 && target < table.count) {
+      runtimes[target].joined = false;
+      runtimes[target].rev = "";
+      runtimes[target].failures = 0;
+      runtimes[target].nextAttemptMs = millis() + 5000;
+    }
+  } else if (status == 409) {
+    followerPushFinishLocked(FollowerPushResult::Rejected, host,
+                             "busy (409) — try again shortly");
+  } else {
+    followerPushFinishLocked(FollowerPushResult::Failed, host,
+                             "failed (status " + String(status) + ")");
+  }
+}
+
+static void followerPushServiceTick() {
+  FollowerPushPhase phase;
+  {
+    LeaderLock lock;
+    phase = followerPush.phase;
+  }
+  if (phase == FollowerPushPhase::Uploading) {
+    followerPushPump();
+    return;
+  }
+
+  // Idle: pick up a staged trigger, if any.
+  bool pending;
+  String host;
+  {
+    LeaderLock lock;
+    pending = followerPushPending;
+    host = followerPushHost;
+    if (pending) followerPushPending = false;
+  }
+  if (!pending) return;
+
+  // Never start while the auto-rollout owns the flash, or while an image
+  // upload is still flushing to the file this push would read.
+  {
+    LeaderLock lock;
+    if (rollout.phase != ClusterRolloutPhase::Idle) {
+      followerPushFinish(followerPush, FollowerPushResult::Rejected);
+      SerialPrintln(F("cluster: follower push deferred — auto-rollout busy"));
+      return;
+    }
+  }
+
+  int idx = -1;
+  String plat;
+  {
+    LeaderLock lock;
+    for (int i = 0; i < table.count; i++) {
+      if (clusterMemberIsSelf(table.members[i])) continue;
+      if (host == table.members[i].host) {
+        idx = i;
+        plat = runtimes[i].plat;
+        break;
+      }
+    }
+  }
+  FollowerPushEligibility elig =
+      followerPushEligibility(plat, followerImageStored());
+  if (idx < 0 || elig != FollowerPushEligibility::Eligible) {
+    LeaderLock lock;
+    followerPushFinish(followerPush, FollowerPushResult::Failed);
+    SerialPrintln("cluster: follower push to " + host + " refused: " +
+                  (idx < 0 ? String("unknown member")
+                           : String(followerPushEligibilityReason(elig))));
+    return;
+  }
+
+  // Atomically claim the file against a netTask rewrite BEFORE reading it for
+  // facts — fails if an upload is still accumulating or its flush is pending
+  // (a stale/about-to-change file).
+  if (!followerImageTryClaimRelay()) {
+    LeaderLock lock;
+    followerPushFinish(followerPush, FollowerPushResult::Rejected);
+    SerialPrintln(F("cluster: follower push deferred — image upload flushing"));
+    return;
+  }
+  if (!followerPushEnsureFacts()) {
+    followerImageReleaseRelay();
+    LeaderLock lock;
+    followerPushFinish(followerPush, FollowerPushResult::Failed);
+    SerialPrintln(F("cluster: follower image unreadable — push aborted"));
+    return;
+  }
+  {
+    LeaderLock lock;
+    followerPushStart(followerPush, idx, fpushLen);
+  }
+  SerialPrintln("cluster: pushing follower image rev " + fpushRev + " to " +
+                host + " (" + String(fpushLen) + " bytes)");
+  if (!followerPushOpenUpload(host)) {
+    LeaderLock lock;
+    followerPushFinishLocked(FollowerPushResult::Failed, host,
+                             "could not open upload");
+  }
+}
+
 void clusterLeaderTick() {
   if (leaderMutex == nullptr) return;
   applyStagedConfig();
@@ -803,6 +1058,9 @@ void clusterLeaderTick() {
   // Fleet firmware convergence (#276) — after the fan-out so renders and
   // pings always get their tick before an upload chunk does.
   rolloutServiceTick();
+  // On-demand ESP-01 firmware relay (#304) — mutually exclusive with the
+  // auto-rollout above (each guards on the other's phase).
+  followerPushServiceTick();
 }
 
 // Fills the status snapshot — leaderMutex HELD by the caller. The self
@@ -859,6 +1117,17 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
   st.rolloutSent = rollout.bytesSent;
   st.rolloutTotal = rollout.bytesTotal;
   st.rolloutImageFailed = rolloutFactsFailed.load(std::memory_order_relaxed);
+  // On-demand ESP-01 firmware relay (#304). followerImage* query the store's
+  // own mutex — leaderMutex → imgMutex is a consistent leaf order.
+  st.followerImagePresent = followerImageStored();
+  st.followerImageRev = followerImageStoredRev();
+  st.followerPushPhase = followerPushPhaseName(followerPush.phase);
+  if (followerPush.memberIndex >= 0 && followerPush.memberIndex < table.count) {
+    st.followerPushHost = table.members[followerPush.memberIndex].host;
+  }
+  st.followerPushSent = followerPush.bytesSent;
+  st.followerPushTotal = followerPush.bytesTotal;
+  st.followerPushResult = followerPushResultName(followerPush.lastResult);
   ClusterGrid grid;
   if (st.enabled && validateMemberTable(table, grid).ok) {
     st.gridRows = grid.rows;
@@ -937,4 +1206,56 @@ ClusterConfigVerdict clusterLeaderStageConfig(const String& membersSpec) {
     configSuppressLeave = false;
   }
   return verdict;
+}
+
+ClusterConfigVerdict clusterLeaderStageFollowerPush(const String& host) {
+  ClusterConfigVerdict v;
+  if (leaderMutex == nullptr || !clusterLeaderEnabled()) {
+    v.httpStatus = 409;
+    v.message = "not leading a cluster";
+    return v;
+  }
+  if (host.length() == 0) {
+    v.httpStatus = 400;
+    v.message = "host required";
+    return v;
+  }
+  int idx = -1;
+  String plat;
+  {
+    LeaderLock lock;
+    for (int i = 0; i < table.count; i++) {
+      if (clusterMemberIsSelf(table.members[i])) continue;
+      if (host == table.members[i].host) {
+        idx = i;
+        plat = runtimes[i].plat;
+        break;
+      }
+    }
+  }
+  if (idx < 0) {
+    v.httpStatus = 404;
+    v.message = "unknown member host";
+    return v;
+  }
+  FollowerPushEligibility elig =
+      followerPushEligibility(plat, followerImageStored());
+  if (elig != FollowerPushEligibility::Eligible) {
+    v.httpStatus = 409;
+    v.message = followerPushEligibilityReason(elig);
+    return v;
+  }
+  {
+    LeaderLock lock;
+    if (followerPush.phase != FollowerPushPhase::Idle || followerPushPending) {
+      v.httpStatus = 409;
+      v.message = "a follower push is already in progress";
+      return v;
+    }
+    followerPushPending = true;
+    followerPushHost = host;
+    followerPush.lastResult = FollowerPushResult::None;
+  }
+  v.message = "queued";
+  return v;
 }

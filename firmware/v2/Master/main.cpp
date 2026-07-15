@@ -18,6 +18,7 @@
 #include "DeviceIdentity.h"
 #include "DisplayWidth.h"
 #include "FlashLog.h"
+#include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
 #include "MdnsDiscovery.h"
 #include "MqttHelpers.h"
@@ -107,6 +108,7 @@ void setup() {
                  // reach GET /log
   flashLogInit();  // #206: mounts `storage`, writes the boot marker; from
                    // here every SerialPrint* also lands in /log.txt
+  followerImageStoreInit();  // #304: read the stored ESP-01 image rev/presence
 
   settingsStore.begin();
   settings = loadSettings(settingsStore);

@@ -2356,6 +2356,59 @@ function loadClusterStatus() {
 		.catch(function() {});
 }
 
+//follower-<rev>[-dirty].bin → "&v=<rev>" (parity with ota-flash.sh; the
+//follower records it as intendedVersion).
+function followerFwVersionParam(fileName) {
+	var m = fileName.match(/^follower-([0-9a-f]{7,40}(?:-dirty)?)/i);
+	return m ? "&v=" + encodeURIComponent(m[1]) : "";
+}
+
+//Upload a follower-*.bin to THIS board's storage (#304 Part B), same-origin
+//(no CORS). Client-side MD5 (SparkMD5) + the follower- prefix guard mirror the
+//master upload / ota-flash.sh #299. The S3 later streams it to esp01 rows.
+function uploadFollowerFirmware() {
+	var input = document.getElementById("inputClusterFollowerFw");
+	var file = input.files[0];
+	if (!file) { showStatus("clusterCardStatus", "✘ Pick a follower-*.bin first.", "error", 5000); return; }
+	if (!/^follower-/i.test(file.name)) {
+		showStatus("clusterCardStatus", "✘ " + escapeHtml(file.name) + " is not a follower-*.bin (an S3 image would brick an ESP-01).", "error", 8000);
+		return;
+	}
+	var btn = document.getElementById("buttonClusterFollowerFwUpload");
+	btn.disabled = true;
+	input.disabled = true;
+	showStatus("clusterCardStatus", "Computing MD5…", "pending");
+	var reader = new FileReader();
+	reader.onerror = function() {
+		btn.disabled = false;
+		input.disabled = false;
+		showStatus("clusterCardStatus", "✘ Could not read the file.", "error", 5000);
+	};
+	reader.onload = function() {
+		var md5 = SparkMD5.ArrayBuffer.hash(reader.result);
+		showStatus("clusterCardStatus", "Uploading follower image (" + Math.round(file.size / 1024) + " KB)…", "pending");
+		var formData = new FormData();
+		formData.append("firmware", file);
+		var xhr = new XMLHttpRequest();
+		xhr.open("POST", "/cluster/follower-firmware?md5=" + md5 + followerFwVersionParam(file.name));
+		xhr.onreadystatechange = function() {
+			if (xhr.readyState !== 4) return;
+			btn.disabled = false;
+			input.disabled = false;
+			if (xhr.status === 200) {
+				showStatus("clusterCardStatus", "✔ " + escapeHtml(xhr.responseText), "success", 8000);
+				loadClusterStatus();
+			} else if (xhr.status === 0) {
+				showStatus("clusterCardStatus", "✘ Upload failed — lost connection.", "error", 6000);
+			} else {
+				showStatus("clusterCardStatus", "✘ HTTP " + xhr.status + ": " + escapeHtml(xhr.responseText), "error", 8000);
+			}
+		};
+		xhr.send(formData);
+	};
+	reader.readAsArrayBuffer(file);
+}
+
 function clusterStateLabel(m) {
 	if (m.updating) return { text: "updating", kind: "off" };
 	if (m.updateBlocked) return { text: "update blocked", kind: "bad" };
@@ -2426,6 +2479,22 @@ function updateClusterFromStatus(st) {
 	} else if (clusterRolloutSeen) {
 		clusterRolloutSeen = false;
 		showStatus("clusterCardStatus", "✔ Firmware update round finished.", "success", 8000);
+	}
+
+	//ESP-01 firmware store (#304 Part B): the stored image + live push. Push
+	//progress is mutually exclusive with the rollout above, so it never fights
+	//that status line.
+	var fwStored = document.getElementById("clusterFollowerFwStored");
+	if (fwStored) {
+		var fi = st.followerImage || {};
+		fwStored.textContent = fi.present
+			? "Stored follower image: " + (fi.rev || "unknown rev") + " — push it from a row’s ⚙ panel."
+			: "No follower image stored yet.";
+	}
+	var fp = st.followerPush || {};
+	if (fp.phase === "uploading" && fp.total > 0) {
+		showStatus("clusterCardStatus", "Pushing ESP-01 firmware to " + escapeHtml(fp.host) + " — " +
+			Math.floor(fp.sent * 100 / fp.total) + "% of " + Math.round(fp.total / 1024) + " KB…", "pending");
 	}
 }
 
@@ -2708,9 +2777,68 @@ function renderMemberPanelBody(panel, base, host, settings, health) {
 	}, true);
 	panel.appendChild(ops);
 
+	//ESP-01 firmware (#304 Part B): push the S3-stored follower image to this
+	//row. Upload the image on Settings → Cluster first; the server refuses
+	//(409) if none is stored. Shown only for esp01 members (S3 members
+	//converge via #276 fleet updates, not this path).
+	if (settings.plat === "esp01") {
+		var fwRow = document.createElement("div");
+		fwRow.className = "row";
+		var fwLabel = document.createElement("span");
+		fwLabel.className = "calibration-label";
+		fwLabel.textContent = "Firmware (esp01)";
+		fwRow.appendChild(fwLabel);
+		var fwBtn = document.createElement("button");
+		fwBtn.type = "button";
+		fwBtn.className = "btn danger";
+		fwBtn.textContent = "Update firmware…";
+		fwBtn.addEventListener("click", function() {
+			if (!confirm("Push the S3-stored ESP-01 firmware to " + (host || "this board") + "?\n\nUpload it on the Settings → Cluster card first. The row goes dark ~15 s while it reboots; the leader re-joins it. On failure the current firmware keeps running.")) return;
+			fetch("/cluster/member/update?host=" + encodeURIComponent(host), { method: "POST" })
+				.then(function(r) {
+					return r.text().then(function(t) {
+						if (!r.ok) { memberPanelStatus(panel, "✘ " + (t || ("HTTP " + r.status)), "error"); return; }
+						memberPanelStatus(panel, "Firmware push queued…", "success");
+						memberFirmwarePushPoll(panel, host);
+					});
+				})
+				.catch(function() { memberPanelStatus(panel, "✘ Push request failed.", "error"); });
+		});
+		fwRow.appendChild(fwBtn);
+		panel.appendChild(fwRow);
+	}
+
 	var status = document.createElement("div");
 	status.className = "status member-panel-status hidden";
 	panel.appendChild(status);
+}
+
+//Firmware push progress: the relay runs on the leader (clusterTask), so poll
+//the leader's own /cluster/status followerPush object. The stage reset
+//lastResult, so a stale terminal verdict can't show before this push starts.
+function memberFirmwarePushPoll(panel, host) {
+	if (!memberPanelLive(panel)) return;
+	fetch("/cluster/status", { cache: "no-store" })
+		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+		.then(function(st) {
+			if (!memberPanelLive(panel)) return;
+			var fp = st.followerPush || {};
+			if (fp.phase === "uploading") {
+				var pct = fp.total > 0 ? Math.floor(fp.sent * 100 / fp.total) : 0;
+				memberPanelStatus(panel, "Pushing firmware to " + host + " — " + pct + "% of " + Math.round((fp.total || 0) / 1024) + " KB…", "");
+				setTimeout(function() { memberFirmwarePushPoll(panel, host); }, 1500);
+			} else if (fp.result === "done") {
+				memberPanelStatus(panel, "✔ Firmware flashed — the row is rebooting and will rejoin.", "success");
+			} else if (fp.result === "failed" || fp.result === "rejected") {
+				memberPanelStatus(panel, "✘ Firmware push " + fp.result + ".", "error");
+			} else {
+				//staged, clusterTask hasn't picked it up yet.
+				setTimeout(function() { memberFirmwarePushPoll(panel, host); }, 1500);
+			}
+		})
+		.catch(function() {
+			if (memberPanelLive(panel)) setTimeout(function() { memberFirmwarePushPoll(panel, host); }, 1500);
+		});
 }
 
 //Board-level reflash progress: poll the member's /units/health reflash
