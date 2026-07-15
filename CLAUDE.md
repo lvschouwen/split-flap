@@ -9,7 +9,7 @@ Arduino-based split-flap display: a master MCU drives per-flap units over I2C. F
 Two firmware stacks:
 
 - **v1 (deprecated, #311):** the whole `firmware/v1` tree is frozen — only `firmware/v1/ESPMaster` remains (ESP8266 ESP-01 master, **FROZEN** #283 — out of CI and unit-bundle staging, kept as reference; see its README). Nothing new lands under `firmware/v1`; its `-I ../shared` include now dangles (never rebuilt). The active Nano unit firmware, its twiboot bootloader and the shared protocol header were migrated to v2 at #311.
-- **v2 (active, epic #183):** `firmware/v2/Master` is the ESP32-S3 port (N16R8 devkit) speaking the same I2C protocol to the Nano units, `firmware/v2/Unit` is the Arduino-Nano per-flap firmware (migrated from v1 at #311; the Nanos stay under the v2 master), and `firmware/v2/FollowerEsp01` is a minimal ESP8266 image turning legacy master hardware into dumb cluster rows (#298). Pure-logic headers are **copies** across the v2 projects (Unit ↔ Master ↔ Follower), not shared includes — if a bug is found in a copied header, fix it in every tree that carries it.
+- **v2 (the live stack):** `firmware/v2/Master` is the ESP32-S3 master (N16R8 devkit) speaking the I2C protocol to the Nano units, `firmware/v2/Unit` is the Arduino-Nano per-flap firmware (migrated from v1 at #311; the Nanos stay under the v2 master), and `firmware/v2/FollowerEsp01` is a minimal ESP8266 image turning legacy master hardware into dumb cluster rows (#298). Pure-logic headers are **copies** across the v2 projects (Unit ↔ Master ↔ Follower), not shared includes — if a bug is found in a copied header, fix it in every tree that carries it.
 
 ## Repository map
 
@@ -21,7 +21,7 @@ Two firmware stacks:
 - `firmware/v2/FollowerEsp01/` — ESP-01 cluster follower "dumb row" (#298): v1 master hardware as a cheap wall row under an S3 leader (own section below)
 - `firmware/v2/Rescue/` — break-glass image for the factory slot (#195)
 - `firmware/v2/Bootloader/` — builds the S3 second-stage bootloader (#201; see its platformio.ini)
-- `flashing/` — `ota-flash.sh` (v2: fetch latest staged bin from a build server via scp, OTA master/follower/rescue, verdict from `/settings`; #299: per-device platform autodetect via the `plat` settings key — esp01 targets get `follower-*.bin`, `-r`/`-a` refused there; `-p esp01|esp32` asserts the platform for the v1→follower migration, where the board still reports no plat — plus multi-device fan-out with a verdict summary) + `ota-master.sh` (legacy v1 OTA; removed at #285) + `flasher/make_manifest.py` (`stage` writes the unit bundle into `firmware/v2/Master/data` AND `firmware/v2/FollowerEsp01/data` — MUST run between the Unit build and those builds; `gate` = the CI anti-drift check). New-board provisioning = esptool merged-factory-bin recipe in `flashing/README.md`; the Windows flasher exe is retired (#284, exe-only modules frozen in place)
+- `flashing/` — `ota-flash.sh` (v2: fetch latest staged bin from a build server via scp, OTA master/follower/rescue, verdict from `/settings`; #299: per-device platform autodetect via the `plat` settings key — esp01 targets get `follower-*.bin`, `-r`/`-a` refused there; `-p esp01|esp32` asserts the platform for the v1→follower migration, where the board still reports no plat — plus multi-device fan-out with a verdict summary) + `flasher/make_manifest.py` (`stage` writes the unit bundle into `firmware/v2/Master/data` AND `firmware/v2/FollowerEsp01/data` — MUST run between the Unit build and those builds; `gate` = the CI anti-drift check). New-board provisioning = esptool merged-factory-bin recipe in `flashing/README.md`; the Windows flasher exe is retired (#284, exe-only modules frozen in place)
 - `PCB/v2/` — design docs (unit board is the only planned custom PCB; GPIO 4 = future reset button)
 - `docs/superpowers/specs/` — design docs per feature
 
@@ -29,13 +29,12 @@ Two firmware stacks:
 
 ```bash
 pio run                      # build (run in the project dir)
-pio run -t upload            # USB flash (v1 first time; v2 Master devkit)
+pio run -t upload            # USB flash (Nano unit first time; v2 Master devkit)
 pio device monitor           # serial 115200
 pio test -e native           # host-side unit tests (Unit, v2 Master, Rescue, FollowerEsp01)
 python -m pytest tests/      # python-side tests (v2 Master, Rescue, FollowerEsp01)
 ```
 
-- v1 master re-flash after first install: OTA via `flashing/ota-master.sh <fw.bin> http://host` (prints SUCCESS / EBOOT SILENT REVERT / … verdict); the retired v1.1.0 release exe remains downloadable for USB provisioning of legacy v1 hardware.
 - Unit envs (`firmware/v2/Unit`): `unit` (new Nano bootloader) / `unit_old_bootloader` (fallback).
 - Native env uses ArduinoFake: `map()` is a fakeit mock — wire the real formula in each test's `setUp()` or calls abort; `EEPROM` etc. re-wire via `ArduinoFake(EEPROM)`.
 - v2 first build on a clean machine is slow (pioarduino hybrid compile downloads IDF). `managed_components/`, `sdkconfig.*`, `.dummy/` in v2 project dirs are generated artifacts (gitignored; exception: `Bootloader/sdkconfig.defaults` is a source file kept by a negation).
@@ -46,43 +45,22 @@ python -m pytest tests/      # python-side tests (v2 Master, Rescue, FollowerEsp
 - **Never `pio run -t upload` the Rescue project.** Install it via Master's `POST /firmware/rescue` or `esptool write_flash 0x830000`.
 - **Do NOT port v1's OTA verdict machinery to v2** (RTC cookie / sketchMd5 compare) — the S3's A/B boot makes it obsolete; use `esp_ota_*` state APIs and the core's weak `verifyRollbackLater()`/`verifyOta()` hooks.
 - **v2 web/MQTT code never touches display state directly** — enqueue a `DisplayCommand` (params baked in by the sender), read back mutex-copied `DisplaySnapshot`s.
-- **The partition table (v2) and EEPROM layout (v1) are per-device truth** — change them only via their documented migration/invariant rules (below).
+- **The partition table (S3) and EEPROM layout (Nano unit) are per-device truth** — change them only via their documented migration/invariant rules (below).
 - Bootloader (v2) is immutable over OTA and has no A/B slot — never write it from the running app; changes are per-board USB flashes.
 - **`UnitBus.cpp` is the ONLY Wire toucher on v2, and displayTask its only caller** (SDA 8 / SCL 9, 100 kHz).
 - **Twiboot probe-inhibit (v1 #88): displayTask owns a deadline armed by `/unit/reboot` and address burns — every runtime probe waits it out; never bypass it.** Sole documented exception: the reflash job's internal probes (#205, by design — pinned units are immediately flashed + exited).
 - **Producer gate (#205): while `reflashInProgress(snapshot.reflash)`, every display-mutating producer stands down (web/MQTT 409, clockTask skips, master OTA 409) EXCEPT `/stop`.**
 - **The `storage` partition is ONE shared LittleFS and netTask is its sole flash writer** (producers stage under a mutex) — future storage tenants join it; never carve new partitions.
 
-## v1 — ESPMaster (ESP8266)
+## v1 — ESPMaster (ESP8266, FROZEN reference)
 
-Entry point `ESPMaster.ino`; sibling `.ino` files concatenate into ONE translation unit, alphabetically. Consequences:
+Frozen (#283/#311), out of CI, no longer maintained or deployed — the retirement is complete (no board runs it). Kept in `firmware/v1/ESPMaster/` purely as reference for legacy ESP8266 hardware; see its README. Its `-I ../shared` include dangles now (the shared header moved to v2) — it is never rebuilt. Every mechanism it pioneered (async web UI, WiFi portal, NTP, MQTT/HA, I2C master, OTA + recovery) was ported to the v2 S3 stack below and lives there now. **Do not edit anything under `firmware/v1`.**
 
-- Declarations/`#define`s from `ESPMaster.ino` are visible everywhere; manual prototypes go in `ESPMaster.h` (the Arduino auto-prototyper fails on templates and namespace-qualified refs like `fs::FS&`).
-- The auto-prototype block lands before any sibling's `#include` — types used in function signatures from later includes (e.g. AsyncMqttClient callbacks) need forward declarations near the top of `ESPMaster.ino`.
-- The `<DNSServer.h>` + `<ESPAsyncWiFiManager.h>` includes sit deliberately first in the include block — don't reorder.
-- Native tests `#include` the `.ino` sources directly — every sibling must compile standalone (add forward declarations at file top where needed).
+## Unit (Nano — `firmware/v2/Unit`)
 
-Web UI is baked into PROGMEM (`WebAssets.h`, regenerated from `data/` by `build_assets.py` each build — no filesystem, no uploadfs step). Three hash-routed tabs; per-card saves POST only their own fields with `ajax=1`, and the handler gates every field on a "provided" flag so partial posts can't clobber absent ones.
+The Arduino-Nano per-flap firmware — the one active MCU besides the S3 master; migrated from v1 at #311 and runs unchanged under the v2 master. `Unit.ino` (config, globals, setup/loop) + siblings `UnitI2CProtocol.ino` (TWI ISRs + addressing) and `UnitMotion.ino` (stepper + hall calibration) — a one-TU concat model, main sketch placed first. I2C address: four DIP pins + `I2C_ADDRESS_BASE` (DIP 0000 → 0x01; 0x00 reserved for general call), or EEPROM-provisioned address (#56) with DIP fallback — twiboot still listens on the DIP-derived address, so over-I2C reflash requires EEPROM == DIP. 28BYJ-48 via ULN2003, KY-003 hall homing, per-unit EEPROM step offset clamped to ±`SFP_OFFSET_LIMIT_STEPS` on both protocol sides. Revolution odometer (#231): every drum move funnels through `stepCounted()`; ring policy pure in `UnitOdometer.h` (`pio test -e native` now runs in this dir too), EEPROM layout in the Unit.ino header. Calibration/provisioning driven from the master's web UI. Probe quirk: twiboot pinned alive by `isUnitInBootloader()` probe — 1500 ms pre-probe delay is load-bearing.
 
-Context rules: async handlers stage, `loop()` mutates (e.g. `/mqtt/discover` arms a flag; blocking `MDNS.queryService()` runs from `loop()`). MQTT callbacks are LWIP-context: copy + flag only, all work in `loopMqtt()`. `initMqtt()` must copy config into stable Strings (AsyncMqttClient stores raw pointers); MQTT password is write-only in `/settings`.
-
-WiFi: SDK-persisted credentials are the single store (no compiled-in credentials; gitignored `WifiCredentials.h` is a migration seed only). Normal boot tries them 30 s, then opens the `<deviceName>-setup` portal. `/reset-wifi` erases the sector. Static IPs unsupported — DHCP reservation. **Gotcha:** `WiFi.persistent(false)` must precede `WiFi.disconnect()` or the stored config gets zeroed.
-
-Identity: every network name derives from EEPROM `deviceName`, else `split-flap-<hex chip id>`; resolved in `resolveDeviceIdentity()` right after the single `initialiseSettings()` at the top of `setup()`.
-
-Settings/EEPROM: `SettingsEepromLayout.h` documents the slots; native `test_eeprom_settings` enforces the invariants. New slot ⇒ bump `SETTINGS_VERSION`, extend the migration ladder in `initialiseSettings()` (carve space from `RESERVED_2`), end the migration step **before** the version write. Every `save*()` calls `updateSettingsCrc()` before `EEPROM.commit()`. Boot-time blob handling is the pure `assessSettingsBlob()` decision table; the CRC range is deliberately version-independent.
-
-OTA + recovery: `/firmware/master` (multipart + `?md5=`) → staging slot → pre-flash sketch MD5 stashed in RTC (`RtcBootState`, magic-checked) → next boot writes `lastFlashResult` `"ok"`/`"reverted"`. A silent revert with a good upload is almost always ESP-01 power sag — hardware fix, not firmware. Recovery mode: 3 unhealthy boots (RTC counter) or `POST /firmware/recover-mark`; serves upload-only endpoints on known WiFi or `<deviceName>-rec` AP.
-
-Knobs (top of `ESPMaster.ino`): `UNITS_AMOUNT` (16, DIP ceiling — array bound only; runtime width comes from the boot probe, `DisplayWidth.h`), `SERIAL_ENABLE` (**disables I2C** — shared pins; doubles as ESP-standalone web debug), `USE_MULTICAST` (mDNS), `OTA_ENABLE` (ArduinoOTA), `FLAP_AMOUNT`/`AMOUNTFLAPS` (45, must match the unit's `letters[]` length). ESP-01 has ~37 KB free RAM at rest — be conservative; the `dvarrel` async forks are the right ESP8266 stack (don't "modernize").
-
-Master/unit I2C contract: `letters[]` index + speed byte out, 1 status byte back. Units must be DIP-addressed contiguously from 0x01; `showMessage()` snapshots the width per call because `/reflash-units` can re-probe mid-call.
-
-## v1 — Unit (Nano)
-
-`Unit.ino` (config, globals, setup/loop) + siblings `UnitI2CProtocol.ino` (TWI ISRs + addressing) and `UnitMotion.ino` (stepper + hall calibration) — same one-TU concat model, main sketch placed first. I2C address: four DIP pins + `I2C_ADDRESS_BASE` (DIP 0000 → 0x01; 0x00 reserved for general call), or EEPROM-provisioned address (#56) with DIP fallback — twiboot still listens on the DIP-derived address, so over-I2C reflash requires EEPROM == DIP. 28BYJ-48 via ULN2003, KY-003 hall homing, per-unit EEPROM step offset clamped to ±`SFP_OFFSET_LIMIT_STEPS` on both protocol sides. Revolution odometer (#231): every drum move funnels through `stepCounted()`; ring policy pure in `UnitOdometer.h` (`pio test -e native` now runs in this dir too), EEPROM layout in the Unit.ino header. Calibration/provisioning driven from the master's web UI. Probe quirk: twiboot pinned alive by `isUnitInBootloader()` probe — 1500 ms pre-probe delay is load-bearing.
-
-## v2 — Master (ESP32-S3, epic #183)
+## v2 — Master (ESP32-S3) — THE master stack
 
 Ported slices, one or two lines each: what it is + issue # + the file(s) whose headers carry the mechanism. Specs in `docs/superpowers/specs/`.
 

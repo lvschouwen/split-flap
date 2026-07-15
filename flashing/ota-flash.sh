@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetch the latest staged v2 firmware from the build server and OTA it to a
-# running v2 master (ESP32-S3) — the v2 counterpart of ota-master.sh.
+# running v2 master (ESP32-S3) or ESP-01 follower.
 #
 # "Latest" = the newest firmware-<rev>.bin (or rescue-<rev>.bin with -r) in
 # the build server's staging directory, found over ssh and copied down with

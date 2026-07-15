@@ -98,10 +98,6 @@ itself against `<staging-dir>/ota-flash.sh` and prints the update
 one-liner when the local copy is stale (#262, warn-only) — so keep the
 staged copy fresh alongside the bins.
 
-`ota-master.sh` is the **legacy v1** (ESP8266) OTA uploader from a dev
-checkout: `./ota-master.sh <fw.bin> http://host:port`. It stays until both
-live displays are migrated to S3 masters (#285), then it goes too.
-
 ## Legacy: the Windows flasher exe (retired)
 
 The guided provisioning exe (`split-flap-flasher.exe`) is retired (#284) —
