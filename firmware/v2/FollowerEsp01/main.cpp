@@ -90,6 +90,7 @@ void loop() {
 
   webLoopTick();      // staged ops / reflash / health refresh
   clusterLoopTick();  // phase decay, blanking, due renders
+  followerDiagTick(); // fold current heap into the since-boot min (#306)
 
   delay(2);
 }

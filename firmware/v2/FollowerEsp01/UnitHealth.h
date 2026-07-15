@@ -15,6 +15,7 @@
 #else
   #include <Arduino.h>
 #endif
+#include "UnitVitals.h"  // shared supply-Vcc/ram/cmd-pos diag packet (#306)
 
 // Health / diagnostics snapshot returned by a sketch-running unit's
 // CMD_GET_STATUS reply. Populated by UnitBus.cpp; mirrors the 8-byte layout
@@ -70,6 +71,12 @@ struct UnitFacts {
   uint8_t driftEvents = 0;
   int8_t lastDriftSteps = 0;
   bool diagValid = false;
+  // Supply-Vcc / free-RAM / commanded-position diagnostics (#306):
+  // probe/health-poll CMD_GET_VITALS truth, same lifecycle as the odometer
+  // (checksum-rejected replies from pre-vitals firmware leave vitalsValid
+  // false — the "diagV2" gate in the spec).
+  UnitVitals vitals{};
+  bool vitalsValid = false;
   // displayed==intended verdict (#264), stamped by displayApplyUnitFacts at
   // the moment the diag was polled — phys and the standing frame are only
   // coherent at that instant (#267: render-time comparison produced phantom
@@ -124,11 +131,12 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 // full drift blocks) measures ~3020 B — same truncation contract as v1, cap
 // raised over v1's 2048 for the spliced reflash progress object (#205,
 // ~70 B), the per-unit "ae" field (#215), the per-unit "odo" field and the
-// spliced wear object (#231, ~45 B), and the per-unit drift fields
-// phys/de/dp/ds/mm (#263/#264, ~43 B/unit) so a full display can't push the
-// payload into the headline-only fallback. test_unit_health pins the worst
-// case + headroom.
-#define UNIT_HEALTH_JSON_CAP 3456
+// spliced wear object (#231, ~45 B), the per-unit drift fields
+// phys/de/dp/ds/mm (#263/#264, ~43 B/unit) and the per-unit vitals block
+// vcc/vmin/cp/ram (#306, ~44 B/unit + the headline "vccMin") so a full
+// display can't push the payload into the headline-only fallback.
+// test_unit_health pins the worst case + headroom.
+#define UNIT_HEALTH_JSON_CAP 4224
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
@@ -152,7 +160,21 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                                   int width, int faulty, int base) {
   size_t o = 0;
-  UNIT_HEALTH_APPEND("{\"width\":%d,\"faulty\":%d,\"units\":[", width, faulty);
+  // Headline supply-Vcc floor (#306): the lowest since-boot vccMin any valid
+  // unit has reported — the brownout smoking gun. Omitted when no unit reports
+  // vitals (all pre-vitals firmware) so it never appears as a phantom 0.
+  uint16_t vccMinAll = 0xFFFF;
+  for (int i = 0; i < width; i++) {
+    const UnitVitals& vt = units[i].vitals;
+    if (units[i].vitalsValid && vt.vccMin_mV != 0 && vt.vccMin_mV < vccMinAll) {
+      vccMinAll = vt.vccMin_mV;
+    }
+  }
+  UNIT_HEALTH_APPEND("{\"width\":%d,\"faulty\":%d", width, faulty);
+  if (vccMinAll != 0xFFFF) {
+    UNIT_HEALTH_APPEND(",\"vccMin\":%u", (unsigned)vccMinAll);
+  }
+  UNIT_HEALTH_APPEND(",\"units\":[");
   for (int i = 0; i < width; i++) {
     const UnitFacts& u = units[i];
     UNIT_HEALTH_APPEND("%s{\"i\":%d,\"a\":%d,\"st\":%d,\"v\":%d",
@@ -194,6 +216,15 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
           UNIT_HEALTH_APPEND(",\"mm\":1");
         }
       }
+    }
+    if (u.vitalsValid) {
+      // Supply-Vcc diagnostics (#306), own valid flag like "odo" — a unit can
+      // report status but run pre-vitals firmware. vcc/vmin in mV, cp = last
+      // commanded flap index, ram = since-boot min free SRAM bytes.
+      const UnitVitals& vt = u.vitals;
+      UNIT_HEALTH_APPEND(",\"vcc\":%u,\"vmin\":%u,\"cp\":%u,\"ram\":%u",
+                         (unsigned)vt.vccNow_mV, (unsigned)vt.vccMin_mV,
+                         (unsigned)vt.cmdPos, (unsigned)vt.freeRamMin);
     }
     UNIT_HEALTH_APPEND("}");
   }

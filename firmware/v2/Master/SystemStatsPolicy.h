@@ -93,6 +93,28 @@ struct SystemNow {
     o += (size_t)snprintf(buf + o, cap - o, __VA_ARGS__); \
   } while (0)
 
+// Emits just the "now" object {...} — the current vitals, no history. Shared
+// by buildSystemStatsJson below and /status's one-shot aggregate (#307) so
+// the two can never disagree on the field set. `newest` is the FAST sample;
+// temp is x10 (the UI divides). Returns the would-be length like snprintf.
+inline size_t buildSystemNowJson(char* buf, size_t cap,
+                                 const SystemSample& newest,
+                                 const SystemNow& now) {
+  size_t o = 0;
+  SYSTEM_STATS_APPEND(
+      "{\"rssi\":%d,\"heap\":%lu,\"maxAlloc\":%lu,\"psram\":%lu,"
+      "\"cpu0\":%u,\"cpu1\":%u,\"temp\":%d,\"uptime\":%lu,\"minHeap\":%lu,"
+      "\"i2cTx\":%lu,\"i2cErr\":%lu,\"mqttDrops\":%lu,\"ntpAge\":%ld,"
+      "\"reset\":\"%s\"}",
+      (int)newest.rssi, (unsigned long)newest.freeHeap,
+      (unsigned long)newest.maxAlloc, (unsigned long)newest.psramFree,
+      (unsigned)newest.cpu0, (unsigned)newest.cpu1, (int)newest.tempC10,
+      (unsigned long)now.uptimeS, (unsigned long)now.minFreeHeap,
+      (unsigned long)now.i2cTx, (unsigned long)now.i2cErr,
+      (unsigned long)now.mqttDrops, (long)now.ntpAgeS, now.resetReason);
+  return o;
+}
+
 // {"now":{...},"hist":{"rssi":[...],"heap":[...],"cpu0":[...],"cpu1":[...],
 //  "temp":[...]},"interval":5}
 // `now`'s spark fields mirror the newest FAST sample (#251), not the ring;
@@ -105,17 +127,9 @@ inline size_t buildSystemStatsJson(char* buf, size_t cap,
   const SystemStatsRing& r = smp.ring;
   const SystemSample* newest = &smp.latest;
 
-  SYSTEM_STATS_APPEND(
-      "{\"now\":{\"rssi\":%d,\"heap\":%lu,\"maxAlloc\":%lu,\"psram\":%lu,"
-      "\"cpu0\":%u,\"cpu1\":%u,\"temp\":%d,\"uptime\":%lu,\"minHeap\":%lu,"
-      "\"i2cTx\":%lu,\"i2cErr\":%lu,\"mqttDrops\":%lu,\"ntpAge\":%ld,"
-      "\"reset\":\"%s\"},\"hist\":{",
-      (int)newest->rssi, (unsigned long)newest->freeHeap,
-      (unsigned long)newest->maxAlloc, (unsigned long)newest->psramFree,
-      (unsigned)newest->cpu0, (unsigned)newest->cpu1, (int)newest->tempC10,
-      (unsigned long)now.uptimeS, (unsigned long)now.minFreeHeap,
-      (unsigned long)now.i2cTx, (unsigned long)now.i2cErr,
-      (unsigned long)now.mqttDrops, (long)now.ntpAgeS, now.resetReason);
+  SYSTEM_STATS_APPEND("{\"now\":");
+  if (o < cap) o += buildSystemNowJson(buf + o, cap - o, *newest, now);
+  SYSTEM_STATS_APPEND(",\"hist\":{");
 
   // Series emitters: oldest-first arrays for the sparklines.
   SYSTEM_STATS_APPEND("\"rssi\":[");

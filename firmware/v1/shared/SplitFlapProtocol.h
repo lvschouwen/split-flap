@@ -81,6 +81,12 @@
                                          //     hall window, rev time (u16 LE) +
                                          //     XOR checksum ^ 0x5C (wire format
                                          //     in UnitSelfTest.h, #265)
+#define SFP_CMD_GET_VITALS         0x88  // reply: 8 bytes — supply Vcc now/min
+                                         //     (u16 LE mV), last commanded flap
+                                         //     index, min free SRAM (u16 LE) +
+                                         //     XOR checksum ^ 0x3C (wire format
+                                         //     in UnitVitals.h, #306). Frozen v1
+                                         //     ESPMaster never sends it.
 
 // --- 0x9X mutations ---
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT reset)

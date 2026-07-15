@@ -43,6 +43,14 @@ void busShowSegment(const String& segment, int webSpeed);
 uint32_t busProbeInhibitedUntilMs();
 void busArmProbeInhibit(uint32_t untilMs);
 
+// Diagnostics counters for /cluster/health (#306): sketch-protocol read
+// transactions + failures since boot, and the since-boot minimum free heap.
+// followerDiagTick() folds the current heap into the min each loop pass.
+uint32_t followerBusTxCount();
+uint32_t followerBusErrCount();
+uint32_t followerMinHeap();
+void followerDiagTick();
+
 // Short single-unit ops (loop() executes the staged {"seq":N} op).
 int busWriteOffset(uint8_t i2cAddress, int16_t value);
 int busJog(uint8_t i2cAddress, int steps);

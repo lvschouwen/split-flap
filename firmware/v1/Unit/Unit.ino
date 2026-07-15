@@ -15,6 +15,7 @@
 #include "UnitOdometer.h"  // pure revolution-odometer logic (#231)
 #include "UnitDrift.h"     // pure drift-detection logic (#263/#264)
 #include "UnitSelfTest.h"  // pure self-test result + wire encode (#265)
+#include "UnitVitals.h"    // pure supply-Vcc/ram/cmd-pos diag packet (#306)
 // Single source of truth for the master<->unit I2C contract (opcodes, address
 // base, alphabet, flap count), shared with firmware/v1/ESPMaster (#149).
 #include "SplitFlapProtocol.h"
@@ -188,6 +189,19 @@ volatile uint8_t  selfTestReplyBuf[SELFTEST_REPLY_LEN] = {0};
 volatile bool     pendingSelfTest           = false;  // loop() runs the test
 volatile bool     pendingSelfTestResponse   = false;  // consumed by requestEvent
 
+// Supply-Vcc / free-RAM / commanded-position diagnostics (#306). vccMin and
+// freeRamMin are since-boot minima held in loop-context RAM (a brownout/reboot
+// resets them — the persisted lifetimeBrownoutCount records that it happened).
+// vitalsRefreshReplyBuffer() re-encodes the ISR-visible mirror each loop pass
+// under noInterrupts(), exactly like the diag/self-test buffers above, so
+// requestEvent() streams it verbatim and never sees a torn packet (#96 class).
+uint16_t          vitalsVccNow              = 0;       // last sampled rail (mV)
+uint16_t          vitalsVccMin              = 0xFFFF;  // since-boot min (sentinel high)
+uint16_t          vitalsFreeRamMin          = 0xFFFF;  // since-boot min free SRAM
+unsigned long     vitalsLastSampleMs        = 0;       // idle-sample throttle
+volatile uint8_t  vitalsReplyBuf[VITALS_REPLY_LEN] = {0};
+volatile bool     pendingVitalsResponse     = false;  // consumed by requestEvent
+
 // Revolution odometer (#231). `odometer` is loop-context only (every step
 // happens in loop; stepCounted() folds them in). The ISR-visible mirror is
 // what SFP_CMD_GET_ODOMETER replies from — 4 bytes, so loop-side updates
@@ -324,6 +338,10 @@ void setup() {
   // register (#173 ordering rule): a boot-time GET_DIAG must stream a
   // coherent "position unknown" reply, never uninitialised bytes.
   driftRefreshReplyBuffers();
+  // Same for the vitals reply (#306): take a boot Vcc/RAM sample and publish
+  // it so a GET_VITALS right after boot streams a real rail, not zeroes.
+  vitalsSample(false);
+  vitalsRefreshReplyBuffer();
 
   //I2C function assignment
   Wire.begin(i2cAddress); //i2c address of this unit
@@ -365,6 +383,7 @@ void loop() {
   // (two small encodes + an interrupt-guarded copy) and unconditional, so
   // every drift/state change from the previous pass is published.
   driftRefreshReplyBuffers();
+  vitalsRefreshReplyBuffer();  // publish latest Vcc/RAM/cmdPos (#306)
 
   //If an enter-bootloader command arrived, give Wire a beat to finish any
   //in-flight transaction, then let the watchdog reset us. Twiboot takes over
@@ -555,6 +574,16 @@ void loop() {
   noInterrupts();
   uptimeSeconds = newUptime;
   interrupts();
+
+  // Idle Vcc/RAM sample (#306), throttled to ~1 Hz so the ADC conversion
+  // (~2 ms with settling) doesn't tax the superloop. Keeps vccNow fresh for a
+  // curl even when the drum hasn't moved; loaded samples from rotateToLetter()
+  // still own the vccMin sag. millis()==0 at boot is fine — the setup() sample
+  // already seeded vccNow, and this just refreshes on the next second.
+  if (currentMillis - vitalsLastSampleMs >= 1000UL) {
+    vitalsLastSampleMs = currentMillis;
+    vitalsSample(false);
+  }
 
   // Silent drift correction (#263): a mid-move hall observation measured
   // the drum off its belief. Re-home at idle only — the display quiet for

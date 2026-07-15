@@ -48,6 +48,9 @@ void receiveLetter(int numBytes) {
       case SFP_CMD_GET_SELF_TEST:
         pendingSelfTestResponse = true;
         break;
+      case SFP_CMD_GET_VITALS:
+        pendingVitalsResponse = true;
+        break;
       case SFP_CMD_START_SELF_TEST:
         pendingSelfTest = true;
         break;
@@ -174,6 +177,13 @@ void requestEvent() {
     // 9 bytes, same pre-encoded-buffer contract as the diag reply (#265).
     Wire.write((const uint8_t*)selfTestReplyBuf, SELFTEST_REPLY_LEN);
     pendingSelfTestResponse = false;
+    return;
+  }
+  if (pendingVitalsResponse) {
+    // 8 bytes, pre-encoded by vitalsRefreshReplyBuffer() under noInterrupts()
+    // (#306) — stream verbatim. Un-reflashed masters never send GET_VITALS.
+    Wire.write((const uint8_t*)vitalsReplyBuf, VITALS_REPLY_LEN);
+    pendingVitalsResponse = false;
     return;
   }
   if (pendingStatusResponse) {

@@ -18,6 +18,9 @@
 
 #include <memory>
 
+#include <esp_partition.h>
+
+#include "ApiIndex.h"
 #include "BuildVersion.h"
 #include "ClockPolicy.h"
 #include "ClockService.h"
@@ -274,6 +277,63 @@ static AsyncMiddlewareFunction clusterCorsMiddleware(
       response->addHeader("Vary", "Origin");
     });
 
+// Gathers the full /settings JSON from the display snapshot, live settings and
+// the OTA/cluster/MQTT services. Extracted so both GET /settings and the
+// /status one-shot aggregate (#307) render the identical object.
+static String buildCurrentSettingsJson() {
+  SettingsJsonFields f;
+  DisplaySnapshot snap = displaySnapshotGet();
+  int addrs[UNITS_AMOUNT];
+  int fwStatus[UNITS_AMOUNT];
+  String versions[UNITS_AMOUNT];
+  int detected = 0;
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    if (snap.units[i].state != 0) {
+      addrs[detected++] = SFP_I2C_ADDRESS_BASE + i;
+    }
+    fwStatus[i] = snap.units[i].fwStatus;
+    versions[i] = snap.units[i].version;
+  }
+  f.unitsAmount = UNITS_AMOUNT;
+  f.unitCount = snap.displayWidth;
+  f.detectedUnitCount = detected;
+  f.detectedUnitAddresses = addrs;
+  f.detectedUnitVersionStatus = fwStatus;
+  f.detectedUnitVersions = versions;
+  {
+    WebStateLock lock;
+    f.alignment = liveSettings->alignment;
+    f.flapSpeed = String(liveSettings->flapSpeed);
+    f.deviceMode = liveSettings->deviceMode;
+    f.timezonePosix = liveSettings->timezonePosix;
+    f.unitCountOverride = liveSettings->unitCountOverride;
+    f.deviceName = liveSettings->deviceName;
+    f.effectiveDeviceName = effectiveName;
+    f.mqttHost = liveSettings->mqttHost;
+    f.mqttPort = String(liveSettings->mqttPort);
+    f.mqttUser = liveSettings->mqttUser;
+    f.mqttPasswordSet = liveSettings->mqttPassword.length() > 0;
+    f.intendedVersion = liveSettings->intendedVersion;
+    f.wifiSettingsResettable = liveSettings->wifiSsid.length() > 0;
+    f.lastTimeReceivedMessageDateTime = lastMessageStamp;
+  }
+  f.lastWrittenText = String(snap.currentText);
+  f.mqttConnected = mqttIsConnected();
+  f.version = GIT_REV;
+  f.sketchMd5 = ESP.getSketchMD5();
+  OtaVerdict verdict = otaVerdictSnapshot();
+  f.lastFlashResult = verdict.lastFlashResult;
+  f.otaReverted = verdict.otaReverted;
+  f.lastResetReason = webResetReasonString();
+  ClusterFollowerView cluster = clusterFollowerViewGet();
+  f.clusterState = clusterFollowerPhaseName(cluster.phase);
+  f.clusterLeaderName = cluster.leaderName;
+  f.clusterLeaderHost = cluster.leaderHost;
+  f.clusterRow = cluster.row;
+  f.clusterLeading = clusterLeaderEnabled();
+  return buildSettingsJson(f);
+}
+
 void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                       SettingsStore& store,
                       const String& effectiveDeviceName) {
@@ -330,67 +390,9 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
 
   // --- reads ---------------------------------------------------------------
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest* request) {
-    SettingsJsonFields f;
-    // Bus facts from the display task's snapshot copy (#203) — same values
-    // v1 kept in the probe globals, same /settings wire shape.
-    DisplaySnapshot snap = displaySnapshotGet();
-    int addrs[UNITS_AMOUNT];
-    int fwStatus[UNITS_AMOUNT];
-    String versions[UNITS_AMOUNT];
-    int detected = 0;
-    for (int i = 0; i < UNITS_AMOUNT; i++) {
-      // Same state != 0 predicate countRespondingUnits() derived
-      // snap.detectedUnitCount from — `detected` only orders the addresses.
-      if (snap.units[i].state != 0) {
-        addrs[detected++] = SFP_I2C_ADDRESS_BASE + i;
-      }
-      fwStatus[i] = snap.units[i].fwStatus;
-      versions[i] = snap.units[i].version;
-    }
-    f.unitsAmount = UNITS_AMOUNT;
-    f.unitCount = snap.displayWidth;
-    f.detectedUnitCount = detected;
-    f.detectedUnitAddresses = addrs;
-    f.detectedUnitVersionStatus = fwStatus;
-    f.detectedUnitVersions = versions;
-    {
-      // Snapshot the shared Strings under the lock; serialize outside it.
-      WebStateLock lock;
-      f.alignment = liveSettings->alignment;
-      f.flapSpeed = String(liveSettings->flapSpeed);
-      f.deviceMode = liveSettings->deviceMode;
-      f.timezonePosix = liveSettings->timezonePosix;
-      f.unitCountOverride = liveSettings->unitCountOverride;
-      f.deviceName = liveSettings->deviceName;
-      f.effectiveDeviceName = effectiveName;
-      f.mqttHost = liveSettings->mqttHost;
-      f.mqttPort = String(liveSettings->mqttPort);
-      f.mqttUser = liveSettings->mqttUser;
-      f.mqttPasswordSet = liveSettings->mqttPassword.length() > 0;
-      f.intendedVersion = liveSettings->intendedVersion;
-      f.wifiSettingsResettable = liveSettings->wifiSsid.length() > 0;
-      f.lastTimeReceivedMessageDateTime = lastMessageStamp;
-    }
-    // Display state comes from the display task's snapshot (#187), not from
-    // web-side shadows — the display domain owns what's on the flaps.
-    f.lastWrittenText = String(snap.currentText);
-    f.mqttConnected = mqttIsConnected();
-    f.version = GIT_REV;
-    f.sketchMd5 = ESP.getSketchMD5();
-    // Verdict synthesized from esp_ota partition state (#190) — v1 wire
-    // vocabulary plus "pending" while the health confirm hasn't run yet.
-    OtaVerdict verdict = otaVerdictSnapshot();
-    f.lastFlashResult = verdict.lastFlashResult;
-    f.otaReverted = verdict.otaReverted;
-    f.lastResetReason = webResetReasonString();
-    // Cluster membership (#272): drives the follower banner + card gating.
-    ClusterFollowerView cluster = clusterFollowerViewGet();
-    f.clusterState = clusterFollowerPhaseName(cluster.phase);
-    f.clusterLeaderName = cluster.leaderName;
-    f.clusterLeaderHost = cluster.leaderHost;
-    f.clusterRow = cluster.row;
-    f.clusterLeading = clusterLeaderEnabled();  // wall-mirror fallback (#277)
-    request->send(200, "application/json", buildSettingsJson(f));
+    // Full gather extracted to buildCurrentSettingsJson() so GET /status
+    // renders the identical settings object (#307).
+    request->send(200, "application/json", buildCurrentSettingsJson());
   });
 
   server.on("/health", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -892,6 +894,111 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       return;
     }
     request->send(200, "application/json", buf.get());
+  });
+
+  // Self-documenting route + terse-key legend index for the headless
+  // (curl-only) operator (#307). Static data, heap-rendered per request.
+  server.on("/api", HTTP_GET, [](AsyncWebServerRequest* request) {
+    std::unique_ptr<char[]> buf(new char[API_JSON_CAP]);
+    size_t n = buildApiJson(buf.get(), API_JSON_CAP);
+    if (n == 0 || n >= API_JSON_CAP) {
+      request->send(500, "text/plain", F("api index unavailable"));
+      return;
+    }
+    request->send(200, "application/json", buf.get());
+  });
+
+  // Static hardware/partition inventory (#307). Reuses existing accessors; no
+  // new sampling. bootCount comes from the NVS counter main.cpp bumps.
+  server.on("/system/info", HTTP_GET, [](AsyncWebServerRequest* request) {
+    String out;
+    out.reserve(1024);
+    out += "{\"chip\":\"";
+    out += ESP.getChipModel();
+    out += "\",\"chipRev\":";
+    out += String(ESP.getChipRevision());
+    out += ",\"cores\":";
+    out += String(ESP.getChipCores());
+    out += ",\"cpuMHz\":";
+    out += String(ESP.getCpuFreqMHz());
+    out += ",\"flashKB\":";
+    out += String(ESP.getFlashChipSize() / 1024);
+    out += ",\"psramKB\":";
+    out += String(ESP.getPsramSize() / 1024);
+    out += ",\"rev\":\"";
+    out += GIT_REV;
+    out += "\",\"bundledUnitRev\":\"";
+    out += BUNDLED_UNIT_REV;
+    out += "\",\"sketchMd5\":\"";
+    out += ESP.getSketchMD5();
+    out += "\",\"bootCount\":";
+    out += String(liveStore != nullptr ? liveStore->getInt("bootCount", 0) : 0);
+    out += ",\"resetReason\":\"";
+    out += webResetReasonString();
+    out += "\",\"factoryPresent\":";
+    out += factorySlotPresent() ? "true" : "false";
+    out += ",\"rescueValid\":";  // factory slot holds a bootable rescue image
+    out += factorySlotImageValid() ? "true" : "false";
+    out += ",\"partitions\":[";
+    esp_partition_iterator_t it = esp_partition_find(
+        ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, nullptr);
+    bool first = true;
+    while (it != nullptr) {
+      const esp_partition_t* p = esp_partition_get(it);
+      if (!first) out += ',';
+      first = false;
+      out += "{\"label\":\"";
+      out += p->label;
+      out += "\",\"type\":";
+      out += String(p->type);
+      out += ",\"subtype\":";
+      out += String(p->subtype);
+      out += ",\"offset\":";
+      out += String((unsigned long)p->address);
+      out += ",\"size\":";
+      out += String((unsigned long)p->size);
+      out += '}';
+      it = esp_partition_next(it);
+    }
+    esp_partition_iterator_release(it);
+    out += "]}";
+    request->send(200, "application/json", out);
+  });
+
+  // One-shot aggregate for a single curl (#307): settings + stats.now + units
+  // + cluster + ota, composed from the existing serializers. History stays at
+  // /system/stats to keep this bounded.
+  server.on("/status", HTTP_GET, [](AsyncWebServerRequest* request) {
+    std::unique_ptr<char[]> nowBuf(new char[SYSTEM_STATS_JSON_CAP]);
+    size_t nowN = systemStatsNowJson(nowBuf.get(), SYSTEM_STATS_JSON_CAP);
+    if (nowN >= SYSTEM_STATS_JSON_CAP) nowBuf[0] = '\0';
+
+    DisplaySnapshot snap = displaySnapshotGet();
+    std::unique_ptr<char[]> unitsBuf(new char[UNIT_HEALTH_JSON_CAP]);
+    size_t unitsN =
+        buildUnitHealthJson(unitsBuf.get(), UNIT_HEALTH_JSON_CAP, snap.units,
+                            snap.displayWidth, snap.faultyUnitCount,
+                            SFP_I2C_ADDRESS_BASE);
+    if (unitsN == 0 || unitsN >= UNIT_HEALTH_JSON_CAP) {
+      snprintf(unitsBuf.get(), UNIT_HEALTH_JSON_CAP,
+               "{\"width\":%d,\"faulty\":%d,\"units\":[]}", snap.displayWidth,
+               snap.faultyUnitCount);
+    }
+
+    String out;
+    out.reserve(6144);
+    out += "{\"settings\":";
+    out += buildCurrentSettingsJson();
+    out += ",\"stats\":{\"now\":";
+    out += nowBuf.get();
+    out += "},\"units\":";
+    out += unitsBuf.get();
+    out += ",\"cluster\":";
+    out += clusterStatusJson(clusterLeaderStatusGet());
+    out += ",\"ota\":";
+    out += otaDebugJson();
+    out += "}";
+    request->send(200, "application/json", out);
   });
 
   server.on("/units/health", HTTP_GET, [](AsyncWebServerRequest* request) {

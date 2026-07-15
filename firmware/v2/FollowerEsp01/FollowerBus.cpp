@@ -47,16 +47,43 @@ void busInit() {
 #endif
 }
 
+// Bus health counters (#306): sketch-protocol read transactions and their
+// failures since boot, surfaced in /cluster/health so a curl-only operator
+// can see a flaky row. Bumped only by queryUnit (twiboot page writes and the
+// bus-scan probe stay out, matching the master's i2cTx/i2cErr semantics).
+static uint32_t busTxCount = 0;
+static uint32_t busErrCount = 0;
+uint32_t followerBusTxCount() { return busTxCount; }
+uint32_t followerBusErrCount() { return busErrCount; }
+
+// Since-boot minimum free heap (#306). ESP8266 has no built-in min-heap
+// accessor, so track it: followerDiagTick() folds the current heap each loop
+// pass, and the getter folds once more in case a tick lagged behind a spike.
+static uint32_t minHeapBytes = 0xFFFFFFFFUL;
+void followerDiagTick() {
+  uint32_t h = ESP.getFreeHeap();
+  if (h < minHeapBytes) minHeapBytes = h;
+}
+uint32_t followerMinHeap() {
+  followerDiagTick();
+  return minHeapBytes;
+}
+
 // Shared opcode-write-then-read-back transaction (v1 #154 helper).
 static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf,
                       uint8_t n) {
+  busTxCount++;
   Wire.beginTransmission(i2cAddress);
   Wire.write(opcode);
-  if (Wire.endTransmission() != 0) return false;
+  if (Wire.endTransmission() != 0) {
+    busErrCount++;
+    return false;
+  }
   delay(UNIT_RESPONSE_SETTLE_MS);
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
   if (got != n) {
     while (Wire.available()) Wire.read();
+    busErrCount++;
     return false;
   }
   for (uint8_t i = 0; i < n; i++) buf[i] = Wire.read();
@@ -93,6 +120,25 @@ static bool readUnitOdometer(int i2cAddress, uint32_t& out) {
     return false;
   }
   return odometerReadbackValid(buf, out);
+}
+
+// Supply-Vcc / free-RAM / commanded-position diagnostics (#306) — same shared
+// UnitVitals.h packet and checksum guard the master reads; pre-vitals firmware
+// fails the checksum and stays vitalsValid=false.
+static bool readUnitVitals(int i2cAddress, UnitVitals& out) {
+  uint8_t buf[VITALS_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VITALS, buf, VITALS_REPLY_LEN)) {
+    return false;
+  }
+  return vitalsReadbackValid(buf, out);
+}
+
+static void refreshUnitVitals(UnitFacts& fact, int i2cAddress) {
+  fact.vitalsValid = false;
+  UnitVitals v;
+  if (!readUnitVitals(i2cAddress, v)) return;
+  fact.vitals = v;
+  fact.vitalsValid = true;
 }
 
 // v1 #140 rule: reject non-printables and the two JSON-structural chars at
@@ -180,6 +226,7 @@ void busProbe() {
       unitFacts[i].odometer = odometer;
       unitFacts[i].odometerValid = true;
     }
+    refreshUnitVitals(unitFacts[i], i2cAddress);
   }
   displayWidth = computeDisplayWidth(states, UNITS_AMOUNT);
   SerialPrint(F("I2C scan complete. Detected "));
@@ -206,6 +253,7 @@ void busPollHealth() {
       unitFacts[i].odometer = odometer;
       unitFacts[i].odometerValid = true;
     }
+    refreshUnitVitals(unitFacts[i], toI2cAddress(i));
   }
 #endif
 }

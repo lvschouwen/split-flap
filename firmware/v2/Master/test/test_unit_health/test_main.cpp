@@ -367,6 +367,11 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].driftEvents = 255;
     units[i].lastDriftSteps = -127;
     units[i].mismatch = true;
+    units[i].vitals.vccNow_mV = 65535;
+    units[i].vitals.vccMin_mV = 65535;
+    units[i].vitals.cmdPos = 44;
+    units[i].vitals.freeRamMin = 65535;
+    units[i].vitalsValid = true;
   }
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1);
@@ -397,6 +402,62 @@ static void test_health_json_combined_splices_fit_cap() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"reflash\":{"));
   TEST_ASSERT_EQUAL_CHAR('}', buf[strlen(buf) - 1]);
   TEST_ASSERT_TRUE(strlen(buf) < UNIT_HEALTH_JSON_CAP);
+}
+
+// --- vitals block (#306) ----------------------------------------------------
+
+static void test_health_json_vitals_emitted_when_valid() {
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  strcpy(units[0].version, "abc12345");
+  units[0].vitals.vccNow_mV = 4980;
+  units[0].vitals.vccMin_mV = 4210;
+  units[0].vitals.cmdPos = 17;
+  units[0].vitals.freeRamMin = 384;
+  units[0].vitalsValid = true;
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  // Per-unit fields.
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"vcc\":4980"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"vmin\":4210"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"cp\":17"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"ram\":384"));
+  // Headline aggregate = the single unit's vmin.
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"vccMin\":4210"));
+}
+
+static void test_health_json_headline_vccmin_is_min_across_units() {
+  UnitFacts units[3];
+  for (int i = 0; i < 3; i++) {
+    units[i].state = 1;
+    units[i].statusValid = true;
+    strcpy(units[i].version, "abc12345");
+    units[i].vitalsValid = true;
+    units[i].vitals.vccNow_mV = 5000;
+  }
+  units[0].vitals.vccMin_mV = 4600;
+  units[1].vitals.vccMin_mV = 4100;  // the floor
+  units[2].vitals.vccMin_mV = 4700;
+  char buf[1024];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 3, 0, 1);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"vccMin\":4100"));
+}
+
+static void test_health_json_no_vccmin_without_any_vitals() {
+  // Pre-vitals firmware: no vitalsValid anywhere -> headline omits vccMin
+  // (never a phantom 0) and no per-unit vcc field appears.
+  UnitFacts units[2];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  strcpy(units[0].version, "abc12345");
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NULL(strstr(buf, "\"vccMin\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"vcc\""));
 }
 
 static void test_health_json_silent_gap_slot() {
@@ -490,6 +551,9 @@ int main(int, char**) {
   RUN_TEST(test_health_json_no_mismatch_without_position);
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
   RUN_TEST(test_health_json_combined_splices_fit_cap);
+  RUN_TEST(test_health_json_vitals_emitted_when_valid);
+  RUN_TEST(test_health_json_headline_vccmin_is_min_across_units);
+  RUN_TEST(test_health_json_no_vccmin_without_any_vitals);
   RUN_TEST(test_health_json_silent_gap_slot);
   RUN_TEST(test_health_json_overflow_reports_full);
   RUN_TEST(test_letter_readback_valid_pair);
