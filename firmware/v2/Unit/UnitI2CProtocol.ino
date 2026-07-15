@@ -11,6 +11,11 @@
 void receiveLetter(int numBytes) {
   if (numBytes <= 0) return;
 
+  // Any I2C receive — even a bus-scan probe — proves a master is present, so
+  // the boot-home fallback waits the hard cap instead of self-homing at the
+  // 30 s standalone deadline (#309). Single byte, ISR-atomic.
+  masterEverContacted = true;
+
   int firstByte = Wire.read();
   int remaining = numBytes - 1;
 
@@ -199,7 +204,9 @@ void requestEvent() {
     //             bit 4  I2C address source is EEPROM, not DIP (#215) —
     //                    twiboot still listens on DIP, so a mismatch means
     //                    over-I2C reflash can't reach this unit
-    //             bits 5-7 reserved
+    //             bit 5  homed since boot (#309) — with bit 0 gives the
+    //                    master unhomed/homing/homed (hs2)
+    //             bits 6-7 reserved
     //   byte 1   savedMcusr — current-boot reset-cause snapshot
     //   byte 2   lifetime brownout reset count (EEPROM, saturating)
     //   byte 3   lifetime watchdog reset count (EEPROM, saturating)
@@ -211,6 +218,10 @@ void requestEvent() {
     if (statusLastHomeFailed)       flags |= (1 << 1);
     if (statusHallNeverTriggered)   flags |= (1 << 2);
     if (addressFromEeprom)          flags |= (1 << 4);
+    // Bit 5 = homed since boot (#309). With bit 0 (moving) the master derives
+    // the boot-home state: !homed & !moving = unhomed, !homed & moving = homing,
+    // homed = homed. Lets a curl see a row still waiting out its stagger.
+    if (homed)                      flags |= UNIT_STATUS_FLAG_HOMED;
     uint16_t lastHomeScaled16 = (lastHomingStepCount >> 4);
     uint8_t lastHomeScaled = (lastHomeScaled16 > 0xFF) ? 0xFF : (uint8_t)lastHomeScaled16;
     uint8_t buf[8] = {

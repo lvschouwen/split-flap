@@ -425,30 +425,38 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
   SerialPrintf("/%d possible units.\n", maxUnits);
 }
 
+bool unitBusPollHealthOne(UnitFacts* facts, int i) {
+  facts[i].statusValid = false;
+  // Only sketch-running units (state 1) answer CMD_GET_STATUS; a unit in
+  // bootloader (2) or silent (0) is left invalid so it renders as a gap
+  // in the table and never counts toward the faulty total.
+  if (facts[i].state != 1) return false;
+  UnitStatus s;
+  bool ok = readUnitStatus(toI2cAddress(i), s);
+  if (ok) {
+    facts[i].status = s;
+    facts[i].statusValid = true;
+  }
+  // Refresh the odometer with the same validity semantics as the status:
+  // reset, then re-read, so a unit that stops answering (or was reflashed
+  // to pre-odometer firmware) doesn't keep serving a stale count (#231).
+  uint32_t odometer;
+  if (readUnitOdometer(toI2cAddress(i), odometer)) {
+    facts[i].odometer = odometer;
+    facts[i].odometerValid = true;
+  }
+  // Drift diagnostics refresh on the same cadence (#263/#264).
+  refreshUnitDiag(facts[i], toI2cAddress(i));
+  // Supply-Vcc diagnostics refresh on the same cadence (#306).
+  refreshUnitVitals(facts[i], toI2cAddress(i));
+  // ok == the CMD_GET_STATUS read succeeded — the heartbeat liveness signal
+  // (#310); the caller folds it into the miss counter.
+  return ok;
+}
+
 void unitBusPollHealth(UnitFacts* facts, int maxUnits) {
   for (int i = 0; i < maxUnits; i++) {
-    facts[i].statusValid = false;
-    // Only sketch-running units (state 1) answer CMD_GET_STATUS; a unit in
-    // bootloader (2) or silent (0) is left invalid so it renders as a gap
-    // in the table and never counts toward the faulty total.
-    if (facts[i].state != 1) continue;
-    UnitStatus s;
-    if (readUnitStatus(toI2cAddress(i), s)) {
-      facts[i].status = s;
-      facts[i].statusValid = true;
-    }
-    // Refresh the odometer with the same validity semantics as the status:
-    // reset, then re-read, so a unit that stops answering (or was reflashed
-    // to pre-odometer firmware) doesn't keep serving a stale count (#231).
-    uint32_t odometer;
-    if (readUnitOdometer(toI2cAddress(i), odometer)) {
-      facts[i].odometer = odometer;
-      facts[i].odometerValid = true;
-    }
-    // Drift diagnostics refresh on the same cadence (#263/#264).
-    refreshUnitDiag(facts[i], toI2cAddress(i));
-    // Supply-Vcc diagnostics refresh on the same cadence (#306).
-    refreshUnitVitals(facts[i], toI2cAddress(i));
+    unitBusPollHealthOne(facts, i);
   }
 }
 

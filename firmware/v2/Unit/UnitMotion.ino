@@ -90,14 +90,30 @@ void rotateToLetter(int toLetter) {
     return;
   }
 
+  // Trigger 2 (#309): while UNHOMED, this call will force a full calibrate below
+  // (the drum position is unknown). If homing keeps FAILING (dead hall), that
+  // full seek would otherwise re-run on every letter and cook the motor —
+  // calibrate() has no overheat gate. Rate-limit the retries after the first
+  // attempt; a success sets `homed` and skips this path entirely next time.
+  if (!homed) {
+    if (lastUnhomedCalibrateMs != 0 &&
+        millis() - lastUnhomedCalibrateMs < UNHOMED_CALIBRATE_COOLDOWN_MS) {
+      return;  // still cooling down after a failed home — leave the drum idle
+    }
+    lastUnhomedCalibrateMs = millis();
+  }
+
   lastRotation = millis();
   int posCurrentLetter = displayedLetter;
 #ifdef SERIAL_ENABLE
   Serial.print("go to letter: ");
   Serial.println((char)pgm_read_byte(&LETTER_CHARS[toLetter]));
 #endif
-  //letter on a higher-or-equal index: no full rotation needed, step directly
-  if (toLetter >= posCurrentLetter) {
+  //letter on a higher-or-equal index: no full rotation needed, step directly.
+  //But while UNHOMED (#309 boot-home trigger 2) the drum position is unknown —
+  //force the calibrate branch so a driving master that skips an explicit HOME
+  //still gets a homed unit before the first move.
+  if (homed && toLetter >= posCurrentLetter) {
 #ifdef SERIAL_ENABLE
     Serial.println("direct");
 #endif
@@ -209,6 +225,7 @@ int calibrate(bool initialCalibration) {
       statusLastHomeFailed = false;
       statusHallNeverTriggered = !hallSawMagnet;
       lastHomingStepCount = (uint16_t)i;
+      homed = true;  // boot-home satisfied (#309); disables the self-home drain
       interrupts();
       //Only stop motor for initial calibration
       if (initialCalibration) {

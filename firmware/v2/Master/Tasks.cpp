@@ -17,10 +17,12 @@ void tasksSetUnitCountOverride(int count) {
   unitWidthOverride.store(count, std::memory_order_relaxed);
 }
 
+#include "BootHomePlan.h"
 #include "ClockPolicy.h"
 #include "ClusterFollower.h"
 #include "ClusterLeader.h"
 #include "FlapFrame.h"
+#include "HeartbeatPolicy.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "StatusLed.h"
@@ -163,6 +165,74 @@ static void armTwibootRiskWindow() {
 static void settleBeforeProbe() {
   int32_t remaining = (int32_t)(twibootRiskUntilMs - millis());
   if (remaining > 0) delay((uint32_t)remaining);
+}
+
+// --- heartbeat freshness + batched boot-home (#309/#310) ---------------------
+
+// A full health poll + a freshness stamp for every slot (#310, HeartbeatPolicy).
+// Used by boot, the explicit Probe and every post-op reprobe so a refresh
+// resets the miss counters and makes /units/health "age" truthful immediately
+// after. The read outcome per slot is its statusValid (set by unitBusPollHealth).
+static void pollHealthWithFreshness(UnitFacts* busFacts) {
+  unitBusPollHealth(busFacts, UNITS_AMOUNT);
+  uint32_t now = millis();
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    heartbeatApply(busFacts[i], busFacts[i].statusValid, now,
+                   HEARTBEAT_MISS_THRESHOLD);
+  }
+}
+
+// Batched boot-home (#309). The units boot UNHOMED; home the ones that still
+// report unhomed in bounded batches with a rail-settle between them, so a
+// whole row's steppers don't spike the shared rail at once (the #305
+// verify-boot brownout). Targets only unhomed sketch units, so it serves both
+// a cold boot (home all) and a post-reflash top-up (home just the flashed
+// units) without re-homing good ones. Status-driven waits (homed-or-faulted)
+// come from unitBusWaitBatchIdle; abort (/stop) bails between batches.
+static void runBootHomeSequence(DisplaySnapshot& local, UnitFacts* busFacts) {
+  uint8_t targets[UNITS_AMOUNT];
+  int n = bootHomeCollectTargets(local.units, local.displayWidth,
+                                 SFP_I2C_ADDRESS_BASE, targets);
+  if (n == 0) return;
+  SerialPrintf("boot-home: staggering %d unit(s) in batches of %d\n", n,
+               BOOT_HOME_BATCH_SIZE);
+  for (int i = 0; i < n; i += BOOT_HOME_BATCH_SIZE) {
+    if (unitBusAbortRequested()) break;
+    uint8_t batch[BOOT_HOME_BATCH_SIZE];
+    int batchN = 0;
+    for (int j = i; j < n && batchN < BOOT_HOME_BATCH_SIZE; j++) {
+      unitBusHome(targets[j]);
+      batch[batchN++] = targets[j];
+    }
+    // Status-driven: wait for each commanded unit to report homed-or-faulted
+    // (not moving) before settling the rail for the next batch.
+    unitBusWaitBatchIdle(batch, batchN, BOOT_HOME_BATCH_TIMEOUT_MS);
+    delay(BOOT_HOME_SETTLE_MS);
+  }
+  // Re-poll so the published snapshot reflects the now-homed state.
+  pollHealthWithFreshness(busFacts);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
+  snapshotPublish(local);
+}
+
+// One opportunistic heartbeat read (#310), synthesized by displayTask only on
+// an idle tick — display writes / reflash / an explicit Probe always preempt
+// (they arrive as commands). Round-robins one unit per tick; skipped entirely
+// while a unit may be in its twiboot window (v1 #88: a status read pins the
+// bootloader alive).
+static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
+                          int& slot) {
+  int width = local.displayWidth;
+  if (width <= 0) return;
+  if ((int32_t)(twibootRiskUntilMs - millis()) > 0) return;
+  int i = slot;
+  slot = heartbeatNextSlot(slot, width);
+  bool ok = unitBusPollHealthOne(busFacts, i);
+  heartbeatApply(busFacts[i], ok, millis(), HEARTBEAT_MISS_THRESHOLD);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        unitWidthOverride.load(std::memory_order_relaxed));
+  snapshotPublish(local);
 }
 
 // --- unit reflash job (#205) ---------------------------------------------------
@@ -320,9 +390,15 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // execution-time truth (a failed/cancelled unit shows as bootloader and
   // stays pinned there — deliberate, see block comment).
   unitBusProbe(busFacts, UNITS_AMOUNT);
-  unitBusPollHealth(busFacts, UNITS_AMOUNT);
+  pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         unitWidthOverride.load(std::memory_order_relaxed));
+  // Staggered boot-home of the just-flashed units (#309): a reflashed unit
+  // reboots UNHOMED, so without this the caller's re-show (or the next cluster
+  // render) would home every flashed unit at once — the #305 inrush #309
+  // exists to prevent. Targets only the still-unhomed units; a cancel leaves
+  // the abort flag set so this bails and the queued Stop broadcast-homes.
+  runBootHomeSequence(local, busFacts);
   reflashProgressFinish(local.reflash, cancelled);
   snapshotPublish(local);  // gate reopens here
   SerialPrintf("reflash: %s — %u ok, %u failed of %u\n",
@@ -342,7 +418,7 @@ static void displayTaskMain(void*) {
   // still in twiboot's boot window and the CHIPINFO read pins them there.
   delay(1500);
   unitBusProbe(busFacts, UNITS_AMOUNT);
-  unitBusPollHealth(busFacts, UNITS_AMOUNT);
+  pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         unitWidthOverride.load(std::memory_order_relaxed));
   snapshotPublish(local);
@@ -363,14 +439,28 @@ static void displayTaskMain(void*) {
   // same job. Runs before the command loop, but the WiFi join is already
   // racing on core 0 — the job's reflashActive gate turns away whatever
   // comes up mid-install (web 409s, clock skips).
+  // Staggered boot-home (#309): the units boot UNHOMED, so the master
+  // orchestrates the homing inrush in bounded batches instead of letting the
+  // whole row's steppers spike the shared rail at once (the #305 verify-boot
+  // brownout). runReflashJob ends with its own boot-home of the units it
+  // flashed, so only home here when no boot reflash ran.
   if (reflashHasWork(local, ReflashSweep::OutdatedOnly)) {
     SerialPrintln(F("reflash: boot auto-install/auto-update starting"));
     runReflashJob(local, busFacts, ReflashSweep::OutdatedOnly);
+  } else {
+    runBootHomeSequence(local, busFacts);
   }
 
   DisplayCommand cmd;
+  int heartbeatSlot = 0;  // round-robin cursor for the scheduled poll (#310)
   for (;;) {
-    if (xQueueReceive(displayQueue, &cmd, portMAX_DELAY) != pdTRUE) continue;
+    // Timed wait: a real command preempts (display writes / reflash / Probe);
+    // an idle timeout synthesizes one opportunistic heartbeat read.
+    if (xQueueReceive(displayQueue, &cmd,
+                      pdMS_TO_TICKS(HEARTBEAT_TICK_MS)) != pdTRUE) {
+      heartbeatTick(local, busFacts, heartbeatSlot);
+      continue;
+    }
     local.busy = true;
     snapshotPublish(local);
     if (displayApplyCommand(local, cmd)) {
@@ -397,7 +487,7 @@ static void displayTaskMain(void*) {
           // window (review 2026-07-11) — wait the risk deadline out first.
           settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
-          unitBusPollHealth(busFacts, UNITS_AMOUNT);
+          pollHealthWithFreshness(busFacts);
           displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         unitWidthOverride.load(std::memory_order_relaxed));
           break;
@@ -583,7 +673,7 @@ static void displayTaskMain(void*) {
           armTwibootRiskWindow();
           settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
-          unitBusPollHealth(busFacts, UNITS_AMOUNT);
+          pollHealthWithFreshness(busFacts);
           displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         unitWidthOverride.load(std::memory_order_relaxed));
           MaintReason reason = MaintReason::None;
@@ -603,7 +693,7 @@ static void displayTaskMain(void*) {
           armTwibootRiskWindow();
           settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
-          unitBusPollHealth(busFacts, UNITS_AMOUNT);
+          pollHealthWithFreshness(busFacts);
           displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         unitWidthOverride.load(std::memory_order_relaxed));
           MaintReason reason = MaintReason::None;

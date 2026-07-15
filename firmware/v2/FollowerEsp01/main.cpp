@@ -59,6 +59,15 @@ void setup() {
   delay(250);
   webServer.begin();
 
+  // Staggered boot-home (#309): the units boot UNHOMED, so home the row in
+  // bounded batches instead of letting the leader's first render home the whole
+  // row at once (the #305 power-up brownout class). Run AFTER webServer.begin()
+  // so the ESPAsync stack can answer /cluster/{join,ping} and /settings from
+  // the SDK/LWIP context during followerBootHome()'s delay()s — this is a
+  // single-core board, so a slow homing sweep (bad halls) would otherwise leave
+  // it unreachable. Staged renders that arrive meanwhile wait for loop().
+  followerBootHome();
+
   SerialPrintln(F("ESP-01 follower ready — waiting for a leader"));
   SerialPrintln(F("#######################################################"));
 }
@@ -91,6 +100,7 @@ void loop() {
   webLoopTick();      // staged ops / reflash / health refresh
   clusterLoopTick();  // phase decay, blanking, due renders
   followerDiagTick(); // fold current heap into the since-boot min (#306)
+  followerHeartbeatTick();  // one scheduled unit-health read per tick (#310)
 
   delay(2);
 }

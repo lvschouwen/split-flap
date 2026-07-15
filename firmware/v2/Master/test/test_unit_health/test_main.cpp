@@ -9,6 +9,7 @@
 
 #include <cstring>
 
+#include "../../HeartbeatPolicy.h"
 #include "../../TwibootProtocol.h"
 #include "../../UnitHealth.h"
 #include "../../UnitProtocolHelpers.h"
@@ -91,12 +92,16 @@ static void test_health_json_valid_and_bootloader_slots() {
 
   char buf[512];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0,
-                                 SFP_I2C_ADDRESS_BASE);
+                                 SFP_I2C_ADDRESS_BASE, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  // nowMs=0 and the default lastSeenMs=0 -> age:0; flags 0 -> hs2:0 (unhomed,
+  // not moving). misses/stale omitted (0/false), same emit-when-set contract
+  // as the drift block.
   TEST_ASSERT_EQUAL_STRING(
       "{\"width\":2,\"faulty\":0,\"units\":["
       "{\"i\":0,\"a\":1,\"st\":1,\"v\":1,\"fw\":2,\"rev\":\"abc12345\","
-      "\"up\":1200,\"br\":0,\"wd\":0,\"bc\":0,\"mc\":54,\"fl\":0,\"hs\":720,\"ae\":0},"
+      "\"up\":1200,\"br\":0,\"wd\":0,\"bc\":0,\"mc\":54,\"fl\":0,\"hs\":720,\"ae\":0,"
+      "\"age\":0,\"hs2\":0},"
       "{\"i\":1,\"a\":2,\"st\":2,\"v\":0}]}",
       buf);
 }
@@ -109,10 +114,98 @@ static void test_health_json_addr_eeprom_bit_surfaces_as_ae() {
   units[0].statusValid = true;
   units[0].status.flags = UNIT_FLAG_ADDR_EEPROM;
   char buf[512];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"fl\":16"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"ae\":1"));
+}
+
+static void test_boot_home_state_decode() {
+  // #309: hs2 derives from the status flags — not homed & not moving = unhomed,
+  // not homed & moving = homing, homed = homed (even while moving).
+  TEST_ASSERT_EQUAL_UINT8(0, unitBootHomeState(0));
+  TEST_ASSERT_EQUAL_UINT8(1, unitBootHomeState(UNIT_FLAG_MOVING));
+  TEST_ASSERT_EQUAL_UINT8(2, unitBootHomeState(UNIT_FLAG_HOMED));
+  TEST_ASSERT_EQUAL_UINT8(
+      2, unitBootHomeState(UNIT_FLAG_HOMED | UNIT_FLAG_MOVING));
+}
+
+static void test_health_json_heartbeat_freshness() {
+  // #310/#309: age = nowMs - lastSeenMs; hs2 from the homed/moving bits;
+  // misses/stale emitted only when set (emit-when-nonzero, like the drift keys).
+  UnitFacts units[3];
+  units[0].state = 1; units[0].statusValid = true;  // unhomed, healthy
+  units[0].status.flags = 0; units[0].lastSeenMs = 400;
+  units[1].state = 1; units[1].statusValid = true;  // homing (moving, !homed)
+  units[1].status.flags = UNIT_FLAG_MOVING; units[1].lastSeenMs = 1000;
+  units[2].state = 1; units[2].statusValid = true;  // homed + lost
+  units[2].status.flags = UNIT_FLAG_HOMED; units[2].lastSeenMs = 500;
+  units[2].misses = 3; units[2].stale = true;
+  char buf[1024];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 3, 0, 1, 1400);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"age\":1000,\"hs2\":0"));  // unit0
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"hs2\":1"));               // unit1 homing
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"hs2\":2,\"misses\":3,\"stale\":1"));
+  // A healthy unit never emits misses/stale.
+  char* second = strstr(buf, "\"i\":1");
+  TEST_ASSERT_NOT_NULL(second);
+  *second = '\0';  // truncate to unit0's object
+  TEST_ASSERT_NULL(strstr(buf, "\"stale\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"misses\""));
+}
+
+static void test_freshness_survives_a_real_miss_streak() {
+  // #310 regression guard (cpp-review CRITICAL 2): a lost unit's current read
+  // FAILS (statusValid=false), which is exactly when misses/stale must show.
+  // The freshness keys therefore gate on state==1, NOT statusValid — otherwise
+  // heartbeatApply can never coexist with statusValid=true and the keys are
+  // dead. Drive a real miss streak end-to-end and prove the JSON surfaces it.
+  UnitFacts u;
+  u.state = 1;
+  // A good read first: stamps lastSeenMs, keeps the last-known homed flag.
+  u.statusValid = true;
+  u.status.flags = UNIT_FLAG_HOMED;
+  heartbeatApply(u, true, 1000, HEARTBEAT_MISS_THRESHOLD);
+  TEST_ASSERT_EQUAL_UINT8(0, u.misses);
+  TEST_ASSERT_FALSE(u.stale);
+  // Then three consecutive failed reads — the unit fell off the bus. A failed
+  // read leaves statusValid=false (the condition the buggy gate hid).
+  u.statusValid = false;
+  heartbeatApply(u, false, 4000, HEARTBEAT_MISS_THRESHOLD);
+  heartbeatApply(u, false, 7000, HEARTBEAT_MISS_THRESHOLD);
+  heartbeatApply(u, false, 10000, HEARTBEAT_MISS_THRESHOLD);
+  TEST_ASSERT_EQUAL_UINT8(3, u.misses);
+  TEST_ASSERT_TRUE(u.stale);
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), &u, 1, 0, 1, 13000);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  // The lost unit surfaces stale + misses + last-known hs2 despite the failed
+  // current read; age = now(13000) - lastSeenMs(1000) = 12000.
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"stale\":1"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"misses\":3"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"hs2\":2"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"age\":12000"));
+  // But the status block (fw/rev/up) stays statusValid-gated — absent here.
+  TEST_ASSERT_NULL(strstr(buf, "\"rev\":"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"v\":0"));  // "no current status" marker
+}
+
+static void test_freshness_gap_slot_never_stale() {
+  // A silent gap (state 0) is not a lost unit — heartbeatApply resets it and
+  // buildUnitHealthJson emits no freshness keys for it.
+  UnitFacts u;
+  u.state = 0;
+  u.misses = 9;
+  u.stale = true;  // stale bookkeeping from a prior life must be cleared
+  heartbeatApply(u, false, 5000, HEARTBEAT_MISS_THRESHOLD);
+  TEST_ASSERT_EQUAL_UINT8(0, u.misses);
+  TEST_ASSERT_FALSE(u.stale);
+  char buf[256];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), &u, 1, 0, 1, 6000);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NULL(strstr(buf, "\"stale\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"age\""));
 }
 
 static void test_health_json_odometer_emitted_when_valid() {
@@ -126,7 +219,7 @@ static void test_health_json_odometer_emitted_when_valid() {
   units[1].state = 1;
   units[1].statusValid = true;  // no odometer -> no "odo" key
   char buf[512];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"odo\":123456"));
   char* second = strstr(buf, "\"i\":1");
@@ -242,7 +335,7 @@ static void test_health_json_diag_fields_emitted_when_valid() {
   units[1].state = 1;  // no diag read (old firmware): no drift keys at all
   units[1].statusValid = true;
   char buf[512];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"phys\":7"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"de\":4"));
@@ -262,7 +355,7 @@ static void test_health_json_phys_omitted_when_position_unknown() {
   units[0].driftFlags = 0;     // position not known
   units[0].driftEvents = 0;
   char buf[256];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_NULL(strstr(buf, "\"phys\""));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"de\":0"));
@@ -283,7 +376,7 @@ static void test_health_json_emits_stamped_mismatch_only() {
   units[1].physLetter = 12;
   units[1].mismatch = true;
   char buf[512];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   char* first = strstr(buf, "\"i\":0");
   char* second = strstr(buf, "\"i\":1");
@@ -304,7 +397,7 @@ static void test_health_json_no_mismatch_without_position() {
   units[0].physLetter = 0xFF;
   units[0].mismatch = true;
   char buf[256];
-  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1);
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
   TEST_ASSERT_NULL(strstr(buf, "\"mm\""));
 }
 
@@ -333,9 +426,13 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].driftEvents = 255;
     units[i].lastDriftSteps = -127;
     units[i].mismatch = true;  // widest drift block on every unit
+    units[i].misses = 255;     // widest heartbeat block (#310)
+    units[i].stale = true;
+    units[i].lastSeenMs = 0;   // with the wide nowMs below -> 10-digit "age"
   }
   char buf[UNIT_HEALTH_JSON_CAP];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
+                                 0xFFFFFFFFUL);
   TEST_ASSERT_TRUE(n < sizeof(buf));
   TEST_ASSERT_TRUE(n + 96 <= UNIT_HEALTH_JSON_CAP);
 }
@@ -372,9 +469,13 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].vitals.cmdPos = 44;
     units[i].vitals.freeRamMin = 65535;
     units[i].vitalsValid = true;
+    units[i].misses = 255;     // widest heartbeat block (#310)
+    units[i].stale = true;
+    units[i].lastSeenMs = 0;
   }
   char buf[UNIT_HEALTH_JSON_CAP];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
+                                 0xFFFFFFFFUL);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
 
   // Worst wear fragment: 10-digit median, every unit flagged (hand-filled —
@@ -417,7 +518,7 @@ static void test_health_json_vitals_emitted_when_valid() {
   units[0].vitals.freeRamMin = 384;
   units[0].vitalsValid = true;
   char buf[512];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   // Per-unit fields.
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"vcc\":4980"));
@@ -441,7 +542,7 @@ static void test_health_json_headline_vccmin_is_min_across_units() {
   units[1].vitals.vccMin_mV = 4100;  // the floor
   units[2].vitals.vccMin_mV = 4700;
   char buf[1024];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 3, 0, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 3, 0, 1, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"vccMin\":4100"));
 }
@@ -454,7 +555,7 @@ static void test_health_json_no_vccmin_without_any_vitals() {
   units[0].statusValid = true;
   strcpy(units[0].version, "abc12345");
   char buf[512];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_NULL(strstr(buf, "\"vccMin\""));
   TEST_ASSERT_NULL(strstr(buf, "\"vcc\""));
@@ -463,7 +564,7 @@ static void test_health_json_no_vccmin_without_any_vitals() {
 static void test_health_json_silent_gap_slot() {
   UnitFacts units[1];  // default: state 0, statusValid false
   char buf[128];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_EQUAL_STRING(
       "{\"width\":1,\"faulty\":0,\"units\":[{\"i\":0,\"a\":1,\"st\":0,\"v\":0}]}",
@@ -475,7 +576,7 @@ static void test_health_json_overflow_reports_full() {
   units[0].state = 1;
   units[0].statusValid = true;
   char buf[24];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1);
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 0);
   // Caller contract (v1 parity): n >= cap means "would truncate", the
   // endpoint falls back to a headline-only JSON.
   TEST_ASSERT_TRUE(n >= sizeof(buf));
@@ -536,6 +637,10 @@ int main(int, char**) {
   RUN_TEST(test_faulty_count_only_counts_valid_slots);
   RUN_TEST(test_health_json_valid_and_bootloader_slots);
   RUN_TEST(test_health_json_addr_eeprom_bit_surfaces_as_ae);
+  RUN_TEST(test_boot_home_state_decode);
+  RUN_TEST(test_health_json_heartbeat_freshness);
+  RUN_TEST(test_freshness_survives_a_real_miss_streak);
+  RUN_TEST(test_freshness_gap_slot_never_stale);
   RUN_TEST(test_health_json_odometer_emitted_when_valid);
   RUN_TEST(test_odometer_readback_valid_roundtrip);
   RUN_TEST(test_odometer_readback_rejects_old_firmware_garbage);

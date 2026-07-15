@@ -513,7 +513,7 @@ void webEndpointsInit(AsyncWebServer& server) {
     int faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
     size_t n = buildUnitHealthJson(buf, UNIT_HEALTH_JSON_CAP, unitFacts,
                                    displayWidth, faulty,
-                                   SFP_I2C_ADDRESS_BASE);
+                                   SFP_I2C_ADDRESS_BASE, millis());
     if (n == 0 || n >= UNIT_HEALTH_JSON_CAP) {
       n = (size_t)snprintf(buf, UNIT_HEALTH_JSON_CAP,
                            "{\"width\":%d,\"faulty\":%d,\"units\":[]}",

@@ -33,6 +33,12 @@ void unitBusProbe(UnitFacts* facts, int maxUnits);
 // and never count toward the faulty total.
 void unitBusPollHealth(UnitFacts* facts, int maxUnits);
 
+// Reads one unit's full health block (status + odometer + diag + vitals) into
+// facts[i], same validity semantics as unitBusPollHealth. Returns whether the
+// CMD_GET_STATUS read succeeded — the scheduled-heartbeat liveness signal
+// (#310). A bootloader/silent slot returns false without bus traffic.
+bool unitBusPollHealthOne(UnitFacts* facts, int i);
+
 // Drives one frame onto the flaps: waits for the display to stop, sends
 // letters[0..width-1] to every sketch-mode unit, waits again, then verifies
 // each unit via CMD_GET_LETTER with one resend round (v1 #106 closed loop).

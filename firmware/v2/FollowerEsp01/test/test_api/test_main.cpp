@@ -52,6 +52,10 @@ static void fullyPopulated(UnitFacts& u) {
   u.vitals.cmdPos = 12;
   u.vitals.freeRamMin = 384;
   u.vitalsValid = true;
+  // Heartbeat freshness (#310) populated so age/hs2/misses/stale all emit.
+  u.lastSeenMs = 1000;
+  u.misses = 4;
+  u.stale = true;
 }
 
 static void assertEveryKeyDocumented(const char* json) {
@@ -80,7 +84,7 @@ static void test_legend_covers_all_health_keys() {
   fullyPopulated(units[1]);
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 1,
-                                 SFP_I2C_ADDRESS_BASE);
+                                 SFP_I2C_ADDRESS_BASE, 5000);
   TEST_ASSERT_TRUE(n > 0 && n < UNIT_HEALTH_JSON_CAP);
   assertEveryKeyDocumented(buf);
 }

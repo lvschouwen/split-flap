@@ -39,6 +39,19 @@ struct UnitStatus {
 // a fault — but twiboot only listens on the DIP-derived address, so a set bit
 // on a unit whose DIP differs means over-I2C reflash cannot reach it.
 #define UNIT_FLAG_ADDR_EEPROM       (1 << 4)
+// Homed since boot (#309). With bit 0 (moving) it gives the boot-home state:
+// the unit boots UNHOMED and homes on the first trigger, so a curl can see a
+// row still waiting out its staggered self-home.
+#define UNIT_FLAG_HOMED             (1 << 5)
+
+// Boot-home state (#309) decoded from the status flags for the "hs2" API key:
+//   0 unhomed  — not homed yet, not moving (waiting for a trigger)
+//   1 homing   — not homed yet, moving (first calibrate in progress)
+//   2 homed    — has homed at least once since boot
+inline uint8_t unitBootHomeState(uint8_t flags) {
+  if (flags & UNIT_FLAG_HOMED) return 2;
+  return (flags & UNIT_FLAG_MOVING) ? 1 : 0;
+}
 
 // Everything the master knows about one unit slot — the per-unit facts the
 // DisplaySnapshot carries (POD, ~24 B/slot). fwStatus keeps v1's /settings
@@ -77,6 +90,15 @@ struct UnitFacts {
   // false — the "diagV2" gate in the spec).
   UnitVitals vitals{};
   bool vitalsValid = false;
+  // Heartbeat freshness (#310), maintained by displayTask's scheduled poll.
+  // lastSeenMs is millis() at the last good CMD_GET_STATUS read; misses is the
+  // consecutive-miss counter (NACK/checksum/timeout increments, a good read
+  // resets, saturating); stale latches once misses >= HEARTBEAT_MISS_THRESHOLD
+  // — a unit that fell off the bus. Only tracked for sketch slots (state 1);
+  // gaps reset to 0/false so an empty column never reads as "lost".
+  uint32_t lastSeenMs = 0;
+  uint8_t  misses = 0;
+  bool     stale = false;
   // displayed==intended verdict (#264), stamped by displayApplyUnitFacts at
   // the moment the diag was polled — phys and the standing frame are only
   // coherent at that instant (#267: render-time comparison produced phantom
@@ -132,11 +154,13 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 // raised over v1's 2048 for the spliced reflash progress object (#205,
 // ~70 B), the per-unit "ae" field (#215), the per-unit "odo" field and the
 // spliced wear object (#231, ~45 B), the per-unit drift fields
-// phys/de/dp/ds/mm (#263/#264, ~43 B/unit) and the per-unit vitals block
-// vcc/vmin/cp/ram (#306, ~44 B/unit + the headline "vccMin") so a full
+// phys/de/dp/ds/mm (#263/#264, ~43 B/unit), the per-unit vitals block
+// vcc/vmin/cp/ram (#306, ~44 B/unit + the headline "vccMin") and the per-unit
+// heartbeat-freshness keys age/hs2/misses/stale (#310, ~44 B/unit) so a full
 // display can't push the payload into the headline-only fallback.
-// test_unit_health pins the worst case + headroom.
-#define UNIT_HEALTH_JSON_CAP 4224
+// test_unit_health pins the worst case + headroom (measured ~4495 B for a
+// full 16-unit payload; ~4681 B with the wear + reflash splices).
+#define UNIT_HEALTH_JSON_CAP 5120
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
@@ -158,7 +182,8 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 // is emitted raw — UnitBus's readUnitVersion rejects `"` and `\` at the I2C
 // boundary (v1 #140), so it can never break the JSON.
 inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
-                                  int width, int faulty, int base) {
+                                  int width, int faulty, int base,
+                                  uint32_t nowMs) {
   size_t o = 0;
   // Headline supply-Vcc floor (#306): the lowest since-boot vccMin any valid
   // unit has reported — the brownout smoking gun. Omitted when no unit reports
@@ -225,6 +250,20 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
       UNIT_HEALTH_APPEND(",\"vcc\":%u,\"vmin\":%u,\"cp\":%u,\"ram\":%u",
                          (unsigned)vt.vccNow_mV, (unsigned)vt.vccMin_mV,
                          (unsigned)vt.cmdPos, (unsigned)vt.freeRamMin);
+    }
+    if (u.state == 1) {
+      // Heartbeat freshness (#310): age = ms since the last good scheduled
+      // read, hs2 = boot-home state (0 unhomed / 1 homing / 2 homed, #309).
+      // Gated on state==1, NOT statusValid: a lost unit's current read FAILED
+      // (statusValid=false) yet is exactly when misses/stale must surface —
+      // status.flags/lastSeenMs hold the last-known values. misses/stale ride
+      // an emit-when-nonzero guard so a healthy unit stays lean; stale latches
+      // once misses >= the threshold.
+      UNIT_HEALTH_APPEND(",\"age\":%lu,\"hs2\":%u",
+                         (unsigned long)(nowMs - u.lastSeenMs),
+                         (unsigned)unitBootHomeState(u.status.flags));
+      if (u.misses > 0) UNIT_HEALTH_APPEND(",\"misses\":%u", (unsigned)u.misses);
+      if (u.stale)      UNIT_HEALTH_APPEND(",\"stale\":1");
     }
     UNIT_HEALTH_APPEND("}");
   }

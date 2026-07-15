@@ -30,8 +30,23 @@ void busInit();
 // slot; recomputes displayWidth. Blocking (~2 ms/unit) — loop() only.
 void busProbe();
 
-// CMD_GET_STATUS + odometer refresh for every sketch-mode unit. loop() only.
+// CMD_GET_STATUS + odometer refresh for every sketch-mode unit, plus a
+// heartbeat-freshness stamp per slot (#310). loop() only.
 void busPollHealth();
+
+// Reads one unit's health block (status + odometer + vitals) into unitFacts[i];
+// returns whether CMD_GET_STATUS succeeded — the heartbeat liveness signal
+// (#310). loop() only.
+bool busPollHealthOne(int i);
+
+// One opportunistic heartbeat read per HEARTBEAT_TICK_MS (#310): round-robins
+// one unit, updates its miss counter / stale flag. Self-throttling; skipped in
+// a twiboot window or during a reflash. Called every loop() pass.
+void followerHeartbeatTick();
+
+// Staggered batched boot-home (#309): homes the unhomed sketch units in
+// bounded batches with a rail-settle between them. setup() only (blocking).
+void followerBootHome();
 
 // Renders one pre-positioned segment verbatim: pad/truncate to the probed
 // width, write per-unit letter indexes, wait, verify + resend (v1 #106).
