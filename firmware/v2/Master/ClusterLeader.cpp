@@ -553,7 +553,7 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
         m.renderDirty = segments[item.index].length() > 0;
         SerialPrintln("cluster: member " +
                       String(table.members[item.index].host) + " joined (rev " +
-                      m.rev + ")");
+                      m.rev + (m.hmacKeyValid ? ", authenticated)" : ")"));
         break;
       case ClusterLeaderAction::Render:
         m.renderDirty = false;
@@ -1166,6 +1166,7 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
     out.updating = rollout.phase != ClusterRolloutPhase::Idle &&
                    rollout.memberIndex == i;
     out.updateBlocked = rollout.blocked[i];
+    out.hmac = runtimes[i].hmacKeyValid;  // signing to this member (#313)
     if (clusterMemberIsSelf(table.members[i])) {
       out.rev = GIT_REV;
       out.healthValid = true;

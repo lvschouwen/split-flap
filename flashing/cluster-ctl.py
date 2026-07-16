@@ -187,6 +187,10 @@ def build_member_view(leader, status):
             "phase": "leader" if is_self else None,
             "extra": None,
             "text": None,
+            # #313 wire-auth: leader-signs (from /cluster/status) and
+            # follower-enforces (from the follower's /cluster/health).
+            "hmac_leader": bool(m.get("hmac")),
+            "hmac_follower": None,
         }
         if is_self:
             row["name"] = settings.get("effectiveDeviceName") or settings.get("deviceName")
@@ -222,10 +226,12 @@ def build_member_view(leader, status):
                 row["rev"] = row["rev"] or fs.get("version")
                 row["extra"] = {"minHeap": fmt_heap(fs.get("minHeap"))
                                 if fs.get("minHeap") else None}
-            # The rendered segment for this row lives in /cluster/health.
+            # The rendered segment + the follower's enforcing flag live in
+            # /cluster/health.
             ch = jget(host, "/cluster/health", timeout=3.0) if host else None
             if ch:
                 row["text"] = ch.get("segment")
+                row["hmac_follower"] = ch.get("hmac")
         out.append(row)
     out.sort(key=lambda r: (r["row"] if r["row"] is not None else 99))
     return out, settings, now
@@ -259,8 +265,19 @@ def render_dashboard(leader):
             vit.append(f"up {fmt_uptime(m['up'])}")
         vitstr = ("  " + dim("  ".join(vit))) if vit else ""
         wear = yellow("  ⚠wear") if m["wear"] else ""
+        # Wire-auth badge (non-self rows only — the leader's own row is not a
+        # wire link). Secure = leader signs AND follower enforces.
+        badge = ""
+        if not m["self"]:
+            hl, hf = m.get("hmac_leader"), m.get("hmac_follower")
+            if hl and hf:
+                badge = "  " + green("🔒 HMAC")
+            elif hl or hf:
+                badge = "  " + yellow("⚠ HMAC one-sided")
+            else:
+                badge = "  " + dim("🔓 unauth")
         lines.append(
-            f"{dot} {bold(name):<28} {role:<6} {phase:<11} rev {cyan(rev)}{vitstr}{upd}{wear}")
+            f"{dot} {bold(name):<28} {role:<6} {phase:<11} rev {cyan(rev)}{vitstr}{upd}{wear}{badge}")
         lines.append(
             f"   row{m['row']}  " + health_bar(m["detected"], m["faulty"], m["width"]))
         extra = m.get("extra") or {}

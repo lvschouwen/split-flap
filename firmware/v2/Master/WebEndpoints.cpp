@@ -1688,6 +1688,8 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     out += (int)snap.detectedUnitCount;
     out += ",\"faulty\":";
     out += (int)snap.faultyUnitCount;
+    out += ",\"hmac\":";  // #313 follow-on: enforcing signed leader-wire requests
+    out += clusterFollowerHmacEnforced() ? "true" : "false";
     out += '}';
     request->send(200, "application/json", out);
   });

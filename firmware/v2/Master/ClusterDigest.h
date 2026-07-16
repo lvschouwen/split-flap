@@ -129,6 +129,8 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
     out += m.updating ? "true" : "false";
     out += ",\"updateBlocked\":";
     out += m.updateBlocked ? "true" : "false";
+    out += ",\"hmac\":";  // #313 follow-on: leader is signing to this member
+    out += m.hmac ? "true" : "false";
     out += '}';
   }
   out += "],\"rollout\":{\"phase\":";

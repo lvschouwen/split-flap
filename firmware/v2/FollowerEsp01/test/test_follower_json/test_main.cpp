@@ -112,6 +112,7 @@ static void test_cluster_health_json_shape() {
   d.i2cErr = 2;
   d.minHeap = 21000;
   d.sntpSynced = true;
+  d.hmac = true;
   String out = followerClusterHealthJson("grace", "wall-leader",
                                          "192.168.15.22", 2, 7, 3,
                                          "ROW THREE       ", "abc1234", 8, 8,
@@ -132,6 +133,7 @@ static void test_cluster_health_json_shape() {
   TEST_ASSERT_TRUE(out.indexOf("\"i2cErr\":2") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"minHeap\":21000") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"sntpSynced\":true") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"hmac\":true") >= 0);
 }
 
 // --- string escaping ----------------------------------------------------------------

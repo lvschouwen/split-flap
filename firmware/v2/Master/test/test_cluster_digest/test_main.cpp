@@ -169,6 +169,7 @@ static ClusterLeaderStatus makeStatus() {
   st.members[1].joined = true;
   st.members[1].rev = "abc1234";
   st.members[1].reportedWidth = 16;
+  st.members[1].hmac = true;  // #313 follow-on: leader signs to this member
   st.rolloutPhase = "idle";
   return st;
 }
@@ -202,6 +203,7 @@ static void test_status_json_keeps_the_277_wire_keys() {
   TEST_ASSERT_TRUE(out.indexOf("\"joined\":true") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"updating\":false") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"updateBlocked\":false") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"hmac\":true") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"imageVerifyFailed\":false") >= 0);
 }
 

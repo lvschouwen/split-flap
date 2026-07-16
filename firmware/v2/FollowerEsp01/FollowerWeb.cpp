@@ -628,6 +628,7 @@ void webEndpointsInit(AsyncWebServer& server) {
     diag.i2cErr = followerBusErrCount();
     diag.minHeap = followerMinHeap();
     diag.sntpSynced = cv.sntpSynced;
+    diag.hmac = clusterHmacEnforced();
     request->send(200, "application/json",
                   followerClusterHealthJson(
                       followerPhaseName(cv.phase), cv.leaderName,
