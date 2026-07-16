@@ -50,9 +50,19 @@ struct ClusterJoinRequest {
   String leaderHost;
   int row = 0;
   uint32_t epoch = 0;
+  String key;  // #313 follow-on: 64-char hex wire-auth key ("" = pre-HMAC leader)
 };
 
 void clusterFollowerHandleJoin(const ClusterJoinRequest& req);
+
+// Cluster-wire auth (#313 follow-on). Enforced == a key is held (negotiated
+// at join): every leader-wire request must then carry a valid ts+mac. The
+// web handlers rebuild the canonical message from the wire params and call
+// verify; a false verdict is a 403. When not enforced, the caller falls back
+// to #313 source-IP binding.
+bool clusterFollowerHmacEnforced();
+bool clusterFollowerVerifySigned(const String& canonicalMsg, uint64_t ts,
+                                 const String& macHex);
 
 // Verdict per ClusterFollowerPolicy.h; on Apply the segment is staged for
 // the commitAt-synchronized enqueue (unsynced clock → immediate).

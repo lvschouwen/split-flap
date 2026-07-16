@@ -9,6 +9,7 @@
 
 #include "ClockPolicy.h"  // clockIsTimeSynced
 #include "ClusterDigest.h"  // promote transform + digest field extraction
+#include "ClusterHmac.h"  // cluster-wire auth: key storage + verify (#313 follow-on)
 #include "ClusterLeader.h"  // clusterLeaderStageConfig — the promote handoff
 #include "DisplayCommand.h"
 #include "HelpersSerialHandling.h"
@@ -26,6 +27,12 @@
 // follower reboot; written only when the table actually changes.
 #define CLUSTER_KEY_TABLE       "clTable"
 #define CLUSTER_KEY_SELF_INDEX  "clSelfIdx"
+// Cluster-wire auth key (#313 follow-on): the 64-char hex the leader minted
+// at join. Persisted so a rebooted follower keeps enforcing in Grace.
+#define CLUSTER_KEY_HMAC        "clHmacKey"
+// Persisted replay high-water mark (#313 follow-on HIGH#1): written coarsely so
+// a reboot reloads it instead of resetting to 0 (see ClusterHmac.h rationale).
+#define CLUSTER_KEY_LASTTS      "clHmacTs"
 
 static SemaphoreHandle_t clusterMutex = nullptr;
 
@@ -44,6 +51,21 @@ static int memberRow = 0;
 static String heldSegment;
 static int heldSpeed = 0;
 static bool membershipDirty = false;  // staged NVS persist/clear
+// Cluster-wire auth (#313 follow-on): the negotiated key, held with the
+// membership. hmacKeyValid gates ENFORCEMENT — present ⇒ every leader-wire
+// request must carry a valid ts+mac; absent (pre-HMAC leader) ⇒ fall back to
+// #313 source-IP binding.
+static uint8_t hmacKey[32] = {0};
+static bool hmacKeyValid = false;
+static String hmacKeyHex;  // staged for the NVS persist
+// Monotonic replay high-water mark (#313 follow-on HIGH#1): every accepted
+// signed request must carry a strictly newer ts. Persisted coarsely to NVS
+// (hmacLastPersistedTs tracks the last written value; hmacTsDirty stages the
+// next write) so a reboot reloads it; reset durably on (re)key at join and on
+// leave so a rebooted leader's fresh signing epoch is re-accepted.
+static uint64_t hmacLastAcceptedTs = 0;
+static uint64_t hmacLastPersistedTs = 0;
+static bool hmacTsDirty = false;
 // #294 ping-piggybacked digest: raw JSON held for GET /cluster/digest
 // (RAM-only); the promote-critical table + self index persist via
 // tableDirty when they change (rare — config edits).
@@ -78,6 +100,11 @@ void clusterFollowerInit(SettingsStore& store) {
   memberRow = store.getInt(CLUSTER_KEY_ROW, 0);
   digestTable = store.getString(CLUSTER_KEY_TABLE, "");
   digestSelfIndex = store.getInt(CLUSTER_KEY_SELF_INDEX, -1);
+  hmacKeyHex = store.getString(CLUSTER_KEY_HMAC, "");
+  hmacKeyValid = clusterKeyFromHex(hmacKeyHex, hmacKey);
+  if (!hmacKeyValid) hmacKeyHex = "";
+  hmacLastAcceptedTs = clusterU64FromStr(store.getString(CLUSTER_KEY_LASTTS, "0"));
+  hmacLastPersistedTs = hmacLastAcceptedTs;
   clusterFollowerBoot(policyState, millis(), leaderHost.length() > 0);
   if (policyState.phase == ClusterFollowerPhase::Grace) {
     SerialPrintln("cluster: booted clustered by " + leaderName +
@@ -92,9 +119,12 @@ void clusterFollowerServiceTick(SettingsStore& store) {
   bool clearMembership = false;
   String persistName, persistHost;
   int persistRow = 0;
+  String persistKeyHex;  // "" = remove the key alongside the membership
   bool persistTable = false;
   String persistTableSpec;
   int persistSelfIndex = -1;
+  bool persistTs = false;
+  uint64_t persistTsVal = 0;
 
   // Staged work is decided under the lock; the NVS writes run outside it
   // so a slow flash commit never stalls an async handler on the mutex.
@@ -111,6 +141,7 @@ void clusterFollowerServiceTick(SettingsStore& store) {
         persistName = leaderName;
         persistHost = leaderHost;
         persistRow = memberRow;
+        persistKeyHex = hmacKeyValid ? hmacKeyHex : String();
       } else {
         clearMembership = true;
       }
@@ -120,6 +151,15 @@ void clusterFollowerServiceTick(SettingsStore& store) {
       persistTable = true;
       persistTableSpec = digestTable;
       persistSelfIndex = digestSelfIndex;
+    }
+    // Coarse replay-mark persist: fold the current mark into a membership
+    // write when one is pending, else stage a standalone mark write. On a
+    // leave (clearMembership) the mark key is removed alongside the key.
+    if (hmacTsDirty && !clearMembership) {
+      hmacTsDirty = false;
+      persistTs = true;
+      persistTsVal = hmacLastAcceptedTs;
+      hmacLastPersistedTs = hmacLastAcceptedTs;  // optimistic; drives next gate
     }
     if (renderPending && (int32_t)(millis() - renderDueMs) >= 0) {
       // The reflash producer gate outranks renders too — the job owns the
@@ -134,14 +174,33 @@ void clusterFollowerServiceTick(SettingsStore& store) {
     }
   }
 
+  // ORDER IS LOAD-BEARING: Preferences commits per put, so key and mark are
+  // two independent flash transactions. Write the mark FIRST, then the key —
+  // on a rekey the mark is reset to 0, so a crash between the two writes
+  // leaves {old key + reset mark}, which self-heals (the next join's new key
+  // differs from the persisted old key ⇒ keyChanged re-fires the reset). The
+  // reverse order could strand {new key + stale-high mark}: keyChanged would
+  // be false on retry (key already matches) and the follower would wedge,
+  // rejecting the rebooted leader's fresh lower ts. (Coarse-advance persists
+  // fire alone — no membership write — so this only matters on rekey.)
+  if (persistTs) {
+    store.putString(CLUSTER_KEY_LASTTS, clusterU64ToStr(persistTsVal));
+  }
   if (persistMembership) {
     store.putString(CLUSTER_KEY_LEADER_NAME, persistName);
     store.putString(CLUSTER_KEY_LEADER_HOST, persistHost);
     store.putInt(CLUSTER_KEY_ROW, persistRow);
+    if (persistKeyHex.length() > 0) {
+      store.putString(CLUSTER_KEY_HMAC, persistKeyHex);
+    } else {
+      store.remove(CLUSTER_KEY_HMAC);
+    }
   } else if (clearMembership) {
     store.remove(CLUSTER_KEY_LEADER_NAME);
     store.remove(CLUSTER_KEY_LEADER_HOST);
     store.remove(CLUSTER_KEY_ROW);
+    store.remove(CLUSTER_KEY_HMAC);
+    store.remove(CLUSTER_KEY_LASTTS);
   }
   if (persistTable) {
     if (persistTableSpec.length() > 0) {
@@ -175,12 +234,45 @@ ClusterFollowerView clusterFollowerViewGet() {
 void clusterFollowerHandleJoin(const ClusterJoinRequest& req) {
   ClusterLock lock;
   clusterFollowerJoin(policyState, millis(), req.epoch);
+  // Adopt the negotiated wire-auth key (#313 follow-on). A join with a valid
+  // key turns enforcement ON; a pre-HMAC leader sends none, so we stay on the
+  // #313 source-IP binding. (The key rides the same NVS record — a change
+  // marks the membership dirty below.)
+  uint8_t newKey[32];
+  bool newKeyValid = req.key.length() > 0 && clusterKeyFromHex(req.key, newKey);
+  bool keyChanged = newKeyValid != hmacKeyValid ||
+                    (newKeyValid && memcmp(newKey, hmacKey, 32) != 0);
+  if (newKeyValid) {
+    memcpy(hmacKey, newKey, 32);
+    hmacKeyValid = true;
+    hmacKeyHex = req.key;
+  } else {
+    hmacKeyValid = false;
+    hmacKeyHex = "";
+  }
+  // Fresh key material ⇒ a fresh signing epoch (a leader reboot re-mints):
+  // reset the monotonic mark so post-reboot lower ts values are re-accepted,
+  // and stage a durable reset of the persisted mark so a follower reboot right
+  // after the rekey doesn't reload a stale-high mark and reject the new leader.
+  if (keyChanged) {
+    hmacLastAcceptedTs = 0;
+    hmacLastPersistedTs = 0;
+    hmacTsDirty = true;
+  }
+  // NVS-flood guard (#313): a leader (re)joins on every membership change,
+  // but the follower persists only when a field actually moved — a steady
+  // cluster re-joining does not burn flash on every accepted join.
+  bool changed = leaderName != req.leaderName || leaderHost != req.leaderHost ||
+                 memberRow != req.row || keyChanged;
   leaderName = req.leaderName;
   leaderHost = req.leaderHost;
   memberRow = req.row;
-  membershipDirty = true;
-  SerialPrintln("cluster: joined by " + req.leaderName + " (" + req.leaderHost +
-                ") as row " + String(req.row));
+  if (changed) {
+    membershipDirty = true;
+    SerialPrintln("cluster: joined by " + req.leaderName + " (" +
+                  req.leaderHost + ") as row " + String(req.row) +
+                  (hmacKeyValid ? " [authenticated]" : ""));
+  }
 }
 
 ClusterRenderVerdict clusterFollowerHandleRender(uint32_t epoch, uint32_t seq,
@@ -209,15 +301,17 @@ ClusterRenderVerdict clusterFollowerHandleRender(uint32_t epoch, uint32_t seq,
 bool clusterFollowerHandlePing(const String& digest, int youIndex,
                                const String& remoteIp) {
   ClusterLock lock;
+  // Source-IP binding (#313): only the joined leader keeps us alive. A
+  // foreign LAN host's ping must not refresh the contact-fresh window — that
+  // would mask a dead leader and hold the row hostage. (When Standalone
+  // leaderHost is "", so contact below still 409s the ping.)
+  if (leaderHost.length() > 0 && remoteIp != leaderHost) return false;
   if (!clusterFollowerContact(policyState, millis())) return false;
-  // Digest trust gate (review CRITICAL): the ping itself is any-LAN
-  // contact (pre-existing), but the digest becomes served-back state and
-  // the #295 promote input — accept it only from the joined leader's IP
-  // (the join always carries WiFi.localIP), only as one balanced JSON
-  // object, and persist the table only when it parses as a valid member
-  // table. Everything else degrades to a plain keep-alive.
-  if (digest.length() > 0 && remoteIp == leaderHost &&
-      clusterDigestShapeOk(digest)) {
+  // The digest becomes served-back state and the #295 promote input — the
+  // IP is already bound to the leader above, so accept it only as one
+  // balanced JSON object and persist the table only when it parses as a
+  // valid member table. Everything else degrades to a plain keep-alive.
+  if (digest.length() > 0 && clusterDigestShapeOk(digest)) {
     digestRaw = digest;
     digestReceivedMs = millis();
     // The promote inputs persist only on change — the table moves on
@@ -236,6 +330,27 @@ bool clusterFollowerHandlePing(const String& digest, int youIndex,
   return true;
 }
 
+bool clusterFollowerHmacEnforced() {
+  if (clusterMutex == nullptr) return false;
+  ClusterLock lock;
+  return hmacKeyValid;
+}
+
+bool clusterFollowerVerifySigned(const String& canonicalMsg, uint64_t ts,
+                                 const String& macHex) {
+  if (clusterMutex == nullptr) return false;
+  bool synced = false;
+  uint64_t nowMs = nowEpochMs(synced);  // no lock needed (gettimeofday only)
+  ClusterLock lock;
+  if (!hmacKeyValid) return false;
+  bool ok = clusterHmacAccept(hmacKey, canonicalMsg, ts, macHex, nowMs, synced,
+                              hmacLastAcceptedTs);
+  if (ok && clusterHmacMarkNeedsPersist(hmacLastAcceptedTs, hmacLastPersistedTs)) {
+    hmacTsDirty = true;  // drained in clusterFollowerServiceTick (outside lock)
+  }
+  return ok;
+}
+
 // Lock HELD by the caller.
 static void followerLeaveLocked() {
   clusterFollowerLeave(policyState);
@@ -246,6 +361,11 @@ static void followerLeaveLocked() {
   heldSpeed = 0;
   renderPending = false;
   membershipDirty = true;
+  hmacKeyValid = false;  // #313 follow-on: drop the wire-auth key on leave
+  hmacKeyHex = "";
+  hmacLastAcceptedTs = 0;  // and reset the replay mark alongside the key
+  hmacLastPersistedTs = 0;
+  hmacTsDirty = false;  // clearMembership removes CLUSTER_KEY_LASTTS from NVS
   digestRaw = "";
   digestTable = "";
   digestSelfIndex = -1;

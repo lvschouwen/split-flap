@@ -62,6 +62,13 @@ struct ClusterMemberRuntime {
   String plat;                 // reported platform, "" = same as leader (#297)
   int reportedWidth = 0;       // join-handshake width fact
   ClusterMemberHealth health;  // last #294 ping-reply health
+  // Cluster-wire auth key (#313 follow-on): minted at the first join, sent in
+  // the join body, reused across rejoins, wiped on a config change (runtime
+  // reset) and on reboot — so a leader reboot re-mints + re-distributes via
+  // the join fan-out. Raw 32 bytes (ClusterHmac.h's CLUSTER_HMAC_KEY_LEN); the
+  // crypto lives in the glue, this header stays crypto-free.
+  uint8_t hmacKey[32] = {0};
+  bool hmacKeyValid = false;
 };
 
 enum class ClusterLeaderAction : uint8_t { None = 0, Join, Render, Ping };
@@ -204,9 +211,51 @@ inline bool clusterParseFieldInt(const String& field, long minVal, long maxVal,
   return true;
 }
 
+// SSRF guard (#313): a member host becomes an esp_http_client URL the
+// leader POSTs its running firmware to (join → render → #276 rollout). A
+// public host smuggled into /cluster/config would exfiltrate that image to
+// the internet, so a non-empty host must resolve to the LAN only — a
+// private-IPv4 literal, a `.local` mDNS name, or localhost. Empty host =
+// the leader's own row (never dialed). Mirrors clusterCorsPrivateIpv4 in
+// ClusterDigest.h (kept separate to avoid an include cycle: this header is
+// upstream of ClusterDigest.h).
+inline bool clusterHostPrivateIpv4(const String& host) {
+  int octets[4];
+  int value = 0, digits = 0, index = 0;
+  for (unsigned int i = 0; i <= host.length(); i++) {
+    char c = i < host.length() ? host[i] : '.';
+    if (c == '.') {
+      if (digits == 0 || digits > 3 || index >= 4) return false;
+      octets[index++] = value;
+      value = 0;
+      digits = 0;
+    } else if (c >= '0' && c <= '9') {
+      value = value * 10 + (c - '0');
+      if (value > 255) return false;
+      digits++;
+    } else {
+      return false;
+    }
+  }
+  if (index != 4) return false;
+  if (octets[0] == 10 || octets[0] == 127) return true;
+  if (octets[0] == 192 && octets[1] == 168) return true;
+  if (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) return true;
+  return false;
+}
+
+inline bool clusterHostIsLanTarget(const String& host) {
+  if (host.equalsIgnoreCase("localhost")) return true;
+  String lower = host;
+  lower.toLowerCase();
+  if (lower.endsWith(".local") && host.length() > 6) return true;
+  return clusterHostPrivateIpv4(host);
+}
+
 // Shape-parse of the stored string. Returns false on malformed input
-// (bad field count, non-numeric, out-of-range, oversized host). "" parses
-// to an empty table (cluster disabled) and returns true.
+// (bad field count, non-numeric, out-of-range, oversized host, or a
+// non-LAN host — see clusterHostIsLanTarget). "" parses to an empty table
+// (cluster disabled) and returns true.
 inline bool clusterTableFromString(const String& stored,
                                    ClusterMemberTable& outTable) {
   outTable = ClusterMemberTable{};
@@ -234,6 +283,9 @@ inline bool clusterTableFromString(const String& stored,
         return false;
       }
     }
+    // SSRF guard (#313): a non-empty host must be a LAN target — the leader
+    // streams its firmware there, so a public host is exfiltration bait.
+    if (host.length() > 0 && !clusterHostIsLanTarget(host)) return false;
     long row, col, width;
     if (!clusterParseFieldInt(entry.substring(p1 + 1, p2), 0, 255, row) ||
         !clusterParseFieldInt(entry.substring(p2 + 1, p3), 0, 255, col) ||

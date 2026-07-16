@@ -1,7 +1,8 @@
 // Host-side tests for the follower's EEPROM membership record (#298) — the
 // only on-ESP persisted setting besides WiFi credentials (the `clusteredBy`
-// marker: leader name/host + row, so a reboot lands in Grace, never flashes
-// stale standalone content).
+// marker: leader name/host + row + the #313-follow-on wire-auth key + replay
+// high-water mark, so a reboot lands in Grace still enforcing and does not
+// forgive a captured signed request).
 
 #include <cstring>
 
@@ -12,38 +13,93 @@
 void setUp() {}
 void tearDown() {}
 
-static void test_membership_round_trips() {
+static void test_membership_round_trips_without_key() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
   TEST_ASSERT_TRUE(followerMembershipEncode("wall-leader", "192.168.15.22", 3,
-                                            blob));
+                                            false, nullptr, 0, blob));
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
   uint8_t row = 0;
-  TEST_ASSERT_TRUE(followerMembershipDecode(blob, name, host, row));
+  bool keyValid = true;  // must be cleared to false by decode
+  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
+  uint64_t ts = 999;
+  TEST_ASSERT_TRUE(
+      followerMembershipDecode(blob, name, host, row, keyValid, key, ts));
   TEST_ASSERT_EQUAL_STRING("wall-leader", name);
   TEST_ASSERT_EQUAL_STRING("192.168.15.22", host);
   TEST_ASSERT_EQUAL_UINT8(3, row);
+  TEST_ASSERT_FALSE(keyValid);
+  TEST_ASSERT_EQUAL_UINT64(0, ts);
+}
+
+static void test_membership_round_trips_with_key_and_mark() {
+  uint8_t inKey[FOLLOWER_HMAC_KEY_LEN];
+  for (int i = 0; i < FOLLOWER_HMAC_KEY_LEN; i++) inKey[i] = (uint8_t)(i * 3 + 1);
+  uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
+  // A realistic epoch-ms mark exercises the full 8-byte little-endian field.
+  const uint64_t mark = 1720000123456ULL;
+  TEST_ASSERT_TRUE(followerMembershipEncode("ldr", "10.0.0.9", 1, true, inKey,
+                                            mark, blob));
+  char name[FOLLOWER_NAME_MAX + 1];
+  char host[FOLLOWER_HOST_MAX + 1];
+  uint8_t row = 0;
+  bool keyValid = false;
+  uint8_t outKey[FOLLOWER_HMAC_KEY_LEN];
+  uint64_t ts = 0;
+  TEST_ASSERT_TRUE(
+      followerMembershipDecode(blob, name, host, row, keyValid, outKey, ts));
+  TEST_ASSERT_EQUAL_STRING("ldr", name);
+  TEST_ASSERT_EQUAL_STRING("10.0.0.9", host);
+  TEST_ASSERT_TRUE(keyValid);
+  TEST_ASSERT_EQUAL_MEMORY(inKey, outKey, FOLLOWER_HMAC_KEY_LEN);
+  TEST_ASSERT_EQUAL_UINT64(mark, ts);
 }
 
 static void test_blank_eeprom_decodes_to_no_membership() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  memset(blob, 0xFF, sizeof(blob));  // factory-fresh flash
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
   uint8_t row = 0;
-  TEST_ASSERT_FALSE(followerMembershipDecode(blob, name, host, row));
+  bool keyValid = false;
+  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
+  uint64_t ts = 0;
+  memset(blob, 0xFF, sizeof(blob));  // factory-fresh flash
+  TEST_ASSERT_FALSE(
+      followerMembershipDecode(blob, name, host, row, keyValid, key, ts));
   memset(blob, 0x00, sizeof(blob));
-  TEST_ASSERT_FALSE(followerMembershipDecode(blob, name, host, row));
+  TEST_ASSERT_FALSE(
+      followerMembershipDecode(blob, name, host, row, keyValid, key, ts));
 }
 
 static void test_corrupt_checksum_rejects() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  followerMembershipEncode("leader", "10.0.0.9", 1, blob);
+  followerMembershipEncode("leader", "10.0.0.9", 1, false, nullptr, 0, blob);
   blob[10] ^= 0x40;
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
   uint8_t row = 0;
-  TEST_ASSERT_FALSE(followerMembershipDecode(blob, name, host, row));
+  bool keyValid = false;
+  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
+  uint64_t ts = 0;
+  TEST_ASSERT_FALSE(
+      followerMembershipDecode(blob, name, host, row, keyValid, key, ts));
+}
+
+static void test_mark_change_is_checksum_protected() {
+  // A flipped byte in the lastTs field must fail the checksum too — the mark
+  // is security state, not free-floating.
+  uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
+  followerMembershipEncode("leader", "10.0.0.9", 1, false, nullptr,
+                           1720000000000ULL, blob);
+  blob[FOLLOWER_MEMBERSHIP_LASTTS_OFF] ^= 0x11;
+  char name[FOLLOWER_NAME_MAX + 1];
+  char host[FOLLOWER_HOST_MAX + 1];
+  uint8_t row = 0;
+  bool keyValid = false;
+  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
+  uint64_t ts = 0;
+  TEST_ASSERT_FALSE(
+      followerMembershipDecode(blob, name, host, row, keyValid, key, ts));
 }
 
 static void test_oversized_fields_reject_at_encode() {
@@ -51,35 +107,44 @@ static void test_oversized_fields_reject_at_encode() {
   char longHost[FOLLOWER_HOST_MAX + 8];
   memset(longHost, 'a', sizeof(longHost) - 1);
   longHost[sizeof(longHost) - 1] = '\0';
-  TEST_ASSERT_FALSE(followerMembershipEncode("n", longHost, 0, blob));
+  TEST_ASSERT_FALSE(
+      followerMembershipEncode("n", longHost, 0, false, nullptr, 0, blob));
   char longName[FOLLOWER_NAME_MAX + 8];
   memset(longName, 'b', sizeof(longName) - 1);
   longName[sizeof(longName) - 1] = '\0';
-  TEST_ASSERT_FALSE(followerMembershipEncode(longName, "10.0.0.9", 0, blob));
+  TEST_ASSERT_FALSE(
+      followerMembershipEncode(longName, "10.0.0.9", 0, false, nullptr, 0, blob));
 }
 
 static void test_empty_host_rejects_at_encode() {
   // A membership without a reachable leader host is not a membership
   // (mirrors the v2 follower's leaderHost sentinel rule).
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  TEST_ASSERT_FALSE(followerMembershipEncode("leader", "", 0, blob));
+  TEST_ASSERT_FALSE(
+      followerMembershipEncode("leader", "", 0, false, nullptr, 0, blob));
 }
 
 static void test_clear_makes_blob_undecodable() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  followerMembershipEncode("leader", "10.0.0.9", 1, blob);
+  followerMembershipEncode("leader", "10.0.0.9", 1, false, nullptr, 0, blob);
   followerMembershipClear(blob);
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
   uint8_t row = 0;
-  TEST_ASSERT_FALSE(followerMembershipDecode(blob, name, host, row));
+  bool keyValid = false;
+  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
+  uint64_t ts = 0;
+  TEST_ASSERT_FALSE(
+      followerMembershipDecode(blob, name, host, row, keyValid, key, ts));
 }
 
 int main(int, char**) {
   UNITY_BEGIN();
-  RUN_TEST(test_membership_round_trips);
+  RUN_TEST(test_membership_round_trips_without_key);
+  RUN_TEST(test_membership_round_trips_with_key_and_mark);
   RUN_TEST(test_blank_eeprom_decodes_to_no_membership);
   RUN_TEST(test_corrupt_checksum_rejects);
+  RUN_TEST(test_mark_change_is_checksum_protected);
   RUN_TEST(test_oversized_fields_reject_at_encode);
   RUN_TEST(test_empty_host_rejects_at_encode);
   RUN_TEST(test_clear_makes_blob_undecodable);

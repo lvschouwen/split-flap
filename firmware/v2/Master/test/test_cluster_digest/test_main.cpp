@@ -391,6 +391,24 @@ static void test_cors_rejects_lookalike_ipv4() {
   TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://1921.68.1.1"));
 }
 
+static void test_csrf_gate_blocks_cross_site_post() {
+  // #313: a POST from a public/https page is forgery — refuse.
+  TEST_ASSERT_TRUE(
+      clusterCsrfRejectPost(true, true, "https://192.168.1.5"));  // not http
+  TEST_ASSERT_TRUE(clusterCsrfRejectPost(true, true, "http://evil.example.com"));
+  TEST_ASSERT_TRUE(clusterCsrfRejectPost(true, true, "http://8.8.8.8"));
+}
+
+static void test_csrf_gate_allows_lan_ui_and_server_to_server() {
+  // The board's own LAN web UI carries a LAN origin — allowed.
+  TEST_ASSERT_FALSE(clusterCsrfRejectPost(true, true, "http://192.168.1.5"));
+  TEST_ASSERT_FALSE(clusterCsrfRejectPost(true, true, "http://splitflap.local"));
+  // The leader's esp_http_client sends no Origin header — allowed.
+  TEST_ASSERT_FALSE(clusterCsrfRejectPost(true, false, ""));
+  // Never blocks a GET (safe method), even with a hostile origin.
+  TEST_ASSERT_FALSE(clusterCsrfRejectPost(false, true, "http://evil.example.com"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fault_mask_all_healthy_is_zeroes);
@@ -425,6 +443,8 @@ int main(int, char**) {
   RUN_TEST(test_cors_allows_private_lan_origins);
   RUN_TEST(test_cors_rejects_public_and_garbage_origins);
   RUN_TEST(test_cors_rejects_lookalike_ipv4);
+  RUN_TEST(test_csrf_gate_blocks_cross_site_post);
+  RUN_TEST(test_csrf_gate_allows_lan_ui_and_server_to_server);
   RUN_TEST(test_cors_path_surface_is_the_per_member_one);
   return UNITY_END();
 }

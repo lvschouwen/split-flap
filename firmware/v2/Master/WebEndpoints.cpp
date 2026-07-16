@@ -25,6 +25,7 @@
 #include "ClockPolicy.h"
 #include "ClockService.h"
 #include "ClusterDigest.h"
+#include "ClusterHmac.h"  // #313 follow-on: rebuild canonical msgs for verify
 #include "ClusterDiscovery.h"
 #include "ClusterFollower.h"
 #include "ClusterLayout.h"  // CLUSTER_MAX_MEMBERS / CLUSTER_HOST_MAX_LEN
@@ -86,6 +87,16 @@ static AsyncWebServerRequest* otaOwnerRequest = nullptr;
 // network dominates OTA wall time before any speed work is designed. Owned
 // by the async_tcp task like the session state above.
 static uint32_t otaUploadStartMs = 0;
+
+// Stall watchdog (#313): last time a chunk of the live OTA arrived, stamped
+// per-chunk. A slow-loris that opens /firmware/master and then stops (no
+// preflight, MQTT frozen for the flash) would otherwise wedge OTA + MQTT
+// indefinitely. webEndpointsLoop() (netTask) aborts a session idle past the
+// timeout — the port of the ESP-01 follower's webOtaUploadFrozen(). Written
+// by the async_tcp task, read (and cleared via the session) by netTask; a
+// stalled session has no concurrent writer, so the plain uint32 is safe.
+static uint32_t otaLastChunkMs = 0;
+static const uint32_t OTA_STALL_TIMEOUT_MS = 30000UL;
 
 // Same pattern for POST /firmware/rescue (#195). Separate state on purpose:
 // a rescue install and a master OTA are different flows and must not read
@@ -260,22 +271,48 @@ static String sseDisplayPayload(const DisplaySnapshot& snap,
   return buildDisplayEventJson(snap.currentText, rows, rowCount, selfRow);
 }
 
-// #294 rung 3: reflect LAN-only origins back on the per-member surface so
-// another pane's browser can manage this board. Server-level (one attach
-// point); both gates are pure ClusterDigest.h logic. Simple requests only
-// (form posts / GETs) — no preflight handler needed.
+// #294 rung 3 + #313 CSRF gate. Two jobs, one attach point (both gates are
+// pure ClusterDigest.h logic; simple requests only — form posts / GETs, no
+// preflight handler needed):
+//   1. ENFORCE (#313): a mutating POST carrying a browser Origin that is not
+//      a LAN pane is cross-site forgery — 403 BEFORE the handler runs, so
+//      the whole class of mutating routes (/firmware/master, /reset-wifi,
+//      /cluster/*, …) is covered without a per-route allowlist to drift.
+//      The leader's esp_http_client sends no Origin and passes; the board's
+//      own LAN UI sends a LAN origin and passes.
+//   2. REFLECT (#294): on the per-member management surface, echo the LAN
+//      origin back so another pane's browser can read the response.
 static AsyncMiddlewareFunction clusterCorsMiddleware(
     [](AsyncWebServerRequest* request, ArMiddlewareNext next) {
+      bool hasOrigin = request->hasHeader("Origin");
+      String origin = hasOrigin ? request->header("Origin") : String();
+      if (clusterCsrfRejectPost(request->method() == HTTP_POST, hasOrigin,
+                                origin)) {
+        request->send(403, "text/plain",
+                      F("Cross-origin POST refused (CSRF guard)"));
+        return;  // handler chain stops — next() is never called
+      }
       next();
-      if (!request->hasHeader("Origin")) return;
+      if (!hasOrigin) return;
       if (!clusterCorsPathAllowed(request->url())) return;
-      const String& origin = request->header("Origin");
       if (!clusterCorsOriginAllowed(origin)) return;
       AsyncWebServerResponse* response = request->getResponse();
       if (response == nullptr) return;
       response->addHeader("Access-Control-Allow-Origin", origin);
       response->addHeader("Vary", "Origin");
     });
+
+// #313: the server middleware above fires only at PARSE_REQ_END — AFTER an
+// upload route's onUpload callback has already streamed the body to flash. So
+// the routes that WRITE inside onUpload (master OTA, rescue install, follower
+// image) must gate CSRF INLINE at index==0, before the first write, exactly
+// as the ESP-01 follower does. Returns true when the upload is a forged
+// cross-site POST; the caller marks its own per-request rejection state.
+static bool webUploadCsrfRejected(AsyncWebServerRequest* request) {
+  bool hasOrigin = request->hasHeader("Origin");
+  return clusterCsrfRejectPost(true, hasOrigin,
+                               hasOrigin ? request->header("Origin") : String());
+}
 
 // Gathers the full /settings JSON from the display snapshot, live settings and
 // the OTA/cluster/MQTT services. Extracted so both GET /settings and the
@@ -671,6 +708,15 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
           otaRejectionStatus = 0;
           otaRejectionReason = "";
 
+          // CSRF gate (#313), INLINE before Update.begin: the middleware runs
+          // too late for upload routes (post-body), so a forged cross-site
+          // POST would otherwise flash + arm its image before the 403.
+          if (webUploadCsrfRejected(request)) {
+            otaRejectionStatus = 403;
+            otaRejectionReason = "Cross-origin OTA refused (CSRF guard)";
+            return;
+          }
+
           // Reflash gate (#205): a master OTA reboots the S3 mid-unit-flash
           // and strands the in-flight unit in twiboot for no reason.
           if (reflashInProgress(displaySnapshotGet().reflash)) {
@@ -729,6 +775,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
           // Update session is aborted by the next upload's begin path above.
           otaOwnerRequest = request;
           otaUploadStartMs = millis();
+          otaLastChunkMs = otaUploadStartMs;  // #313 stall watchdog baseline
           request->onDisconnect([request]() {
             if (otaOwnerRequest == request) otaOwnerRequest = nullptr;
           });
@@ -741,6 +788,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
         // into the new owner's session.
         if (otaOwnerRequest != request) return;
         if (otaRejectionStatus != 0) return;
+        otaLastChunkMs = millis();  // #313: progress resets the stall deadline
 
         if (len > 0 && Update.write(data, len) != len) {
           // Error is latched inside Update; the completion callback
@@ -810,6 +858,15 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
           }
           rescueRejectionStatus = 0;
           rescueRejectionReason = "";
+
+          // CSRF gate (#313), INLINE before factoryWriteBegin — the
+          // middleware fires post-body, too late for an upload route.
+          if (webUploadCsrfRejected(request)) {
+            rescueRejectionStatus = 403;
+            rescueRejectionReason = "Cross-origin rescue upload refused (CSRF "
+                                    "guard)";
+            return;
+          }
 
           String md5 = request->hasParam("md5")
                            ? request->getParam("md5")->value()
@@ -1327,6 +1384,11 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     req.leaderName = request->hasParam("leaderName", true)
                          ? request->getParam("leaderName", true)->value()
                          : req.leaderHost;
+    // #313 follow-on: the leader mints a per-member wire-auth key and sends it
+    // here (absent from a pre-HMAC leader → enforcement stays off).
+    req.key = request->hasParam("key", true)
+                  ? request->getParam("key", true)->value()
+                  : String();
     long row = request->getParam("row", true)->value().toInt();
     req.epoch = (uint32_t)strtoul(
         request->getParam("epoch", true)->value().c_str(), nullptr, 10);
@@ -1344,6 +1406,16 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     if (req.leaderName.length() > CLUSTER_HOST_MAX_LEN ||
         !settingsIsPrintableAscii(req.leaderName, 0x20)) {
       request->send(400, "text/plain", F("Invalid leaderName"));
+      return;
+    }
+    // Source-IP binding (#313): a join mints a membership pointing display
+    // and firmware traffic at leaderHost, so the caller must actually BE
+    // leaderHost — the real leader dials from WiFi.localIP(), which is the
+    // exact value it puts in this field. A CSRF'd browser or any other LAN
+    // host cannot satisfy this, so it cannot hijack the row/membership.
+    if (req.leaderHost != request->client()->remoteIP().toString()) {
+      request->send(403, "text/plain",
+                    F("leaderHost must match the caller's address"));
       return;
     }
     // #295 sticky leadership: a board that LEADS a wall never becomes a
@@ -1399,6 +1471,16 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   });
 
   server.on("/cluster/render", HTTP_POST, [](AsyncWebServerRequest* request) {
+    // Source-IP binding (#313): only the joined leader drives this row's
+    // screen. This endpoint is never called by any browser UI (leader wire
+    // only), so a strict bind is safe. Standalone (leaderHost "") falls
+    // through to the handler's NotClustered 409.
+    ClusterFollowerView cv = clusterFollowerViewGet();
+    if (cv.leaderHost.length() > 0 &&
+        cv.leaderHost != request->client()->remoteIP().toString()) {
+      request->send(403, "text/plain", F("render must come from the leader"));
+      return;
+    }
     if (!request->hasParam("epoch", true) || !request->hasParam("seq", true) ||
         !request->hasParam("text", true)) {
       request->send(400, "text/plain", F("Missing epoch/seq/text"));
@@ -1425,6 +1507,24 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
             ? strtoull(request->getParam("commitAtMs", true)->value().c_str(),
                        nullptr, 10)
             : 0ULL;
+    // Wire-auth (#313 follow-on): once a key is negotiated, the render must
+    // carry a valid ts+mac over its exact content — a spoofed-IP host without
+    // the key cannot forge it, and the mac binds the text so it can't be
+    // swapped. Rebuild the canonical message from the wire params.
+    if (clusterFollowerHmacEnforced()) {
+      if (!request->hasParam("ts", true) || !request->hasParam("mac", true)) {
+        request->send(403, "text/plain", F("cluster signature required"));
+        return;
+      }
+      uint64_t ts = strtoull(request->getParam("ts", true)->value().c_str(),
+                             nullptr, 10);
+      String mac = request->getParam("mac", true)->value();
+      String msg = clusterHmacRenderMsg(ts, epoch, seq, text, speed, commitAtMs);
+      if (!clusterFollowerVerifySigned(msg, ts, mac)) {
+        request->send(403, "text/plain", F("bad cluster signature"));
+        return;
+      }
+    }
     ClusterRenderVerdict v =
         clusterFollowerHandleRender(epoch, seq, text, speed, commitAtMs);
     if (v == ClusterRenderVerdict::NotClustered) {
@@ -1450,6 +1550,22 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     int youIndex = request->hasParam("you", true)
                        ? (int)request->getParam("you", true)->value().toInt()
                        : -1;
+    // Wire-auth (#313 follow-on): a keyed follower requires a valid ts+mac
+    // before the digest/you piggyback is trusted or contact is refreshed.
+    if (clusterFollowerHmacEnforced()) {
+      if (!request->hasParam("ts", true) || !request->hasParam("mac", true)) {
+        request->send(403, "text/plain", F("cluster signature required"));
+        return;
+      }
+      uint64_t ts = strtoull(request->getParam("ts", true)->value().c_str(),
+                             nullptr, 10);
+      String mac = request->getParam("mac", true)->value();
+      if (!clusterFollowerVerifySigned(clusterHmacPingMsg(ts, digest, youIndex),
+                                       ts, mac)) {
+        request->send(403, "text/plain", F("bad cluster signature"));
+        return;
+      }
+    }
     if (!clusterFollowerHandlePing(digest, youIndex,
                                    request->client()->remoteIP().toString())) {
       request->send(409, "application/json",
@@ -1504,6 +1620,47 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
             });
 
   server.on("/cluster/leave", HTTP_POST, [](AsyncWebServerRequest* request) {
+    // Combined guard (#313): /cluster/leave has TWO legitimate callers — the
+    // leader's reconfigure fan-out (server-to-server, no Origin, dials from
+    // leaderHost) and the local "Leave" button in the Cluster card (a LAN
+    // browser). So honor a leave from the leader's IP OR from a LAN-origin
+    // browser; a bare non-leader LAN host (no Origin, wrong IP) is refused,
+    // closing the any-host force-leave DoS without breaking the UI button.
+    // (The CSRF middleware has already 403'd any non-LAN browser origin.)
+    ClusterFollowerView cv = clusterFollowerViewGet();
+    bool fromLanBrowser = request->hasHeader("Origin") &&
+                          clusterCorsOriginAllowed(request->header("Origin"));
+    if (clusterFollowerHmacEnforced()) {
+      // Keyed (#313 follow-on): the leader arm becomes a valid SIGNATURE
+      // (beats a spoofed IP); the local Leave button rides the LAN-browser
+      // arm. A bare unsigned non-browser leave is refused.
+      bool signedOk = false;
+      if (request->hasParam("ts", true) && request->hasParam("mac", true)) {
+        uint64_t ts = strtoull(request->getParam("ts", true)->value().c_str(),
+                               nullptr, 10);
+        signedOk = clusterFollowerVerifySigned(
+            clusterHmacLeaveMsg(ts), ts,
+            request->getParam("mac", true)->value());
+      }
+      if (!signedOk && !fromLanBrowser) {
+        request->send(403, "text/plain",
+                      F("leave requires a valid signature or this display's "
+                        "own web UI"));
+        return;
+      }
+    } else {
+      // Pre-HMAC combined guard (#313): the leader's reconfigure fan-out
+      // (no Origin, dials from leaderHost) OR the local browser; a bare
+      // non-leader LAN host is refused (closes the any-host force-leave DoS).
+      bool fromLeader =
+          cv.leaderHost.length() > 0 &&
+          cv.leaderHost == request->client()->remoteIP().toString();
+      if (cv.leaderHost.length() > 0 && !fromLeader && !fromLanBrowser) {
+        request->send(403, "text/plain", F("leave must come from the leader "
+                                           "or this display's own web UI"));
+        return;
+      }
+    }
     clusterFollowerHandleLeave();  // idempotent
     request->send(200, "text/plain", F("ok"));
   });
@@ -1626,6 +1783,16 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
         if (index == 0) {
           followerFwRejectStatus = 0;
           followerFwRejectReason = "";
+          // CSRF gate (#313), INLINE before followerImageWriteBegin — the
+          // middleware fires post-body, too late for an upload route. This
+          // upload is same-origin from the board's own UI, so its LAN Origin
+          // passes; a forged cross-site push is refused.
+          if (webUploadCsrfRejected(request)) {
+            followerFwRejectStatus = 403;
+            followerFwRejectReason =
+                "Cross-origin follower-image upload refused (CSRF guard)";
+            return;
+          }
           String rev;
           if (!followerImageUploadAccepts(filename, rev)) {
             followerFwRejectStatus = 400;
@@ -1728,6 +1895,21 @@ void webDisplayEventsTick() {
 
 void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   if (webStateMutex == nullptr) return;  // init hasn't run
+
+  // OTA stall watchdog (#313): a session that opened /firmware/master and
+  // went silent has frozen MQTT (mqttStopForOta) and holds the Update slot.
+  // If no chunk has landed for the timeout, thaw everything — the next
+  // upload's Update.begin() recovers the abandoned session (v1 #191). Mirror
+  // of the ESP-01 follower's webOtaUploadFrozen(); the stalled peer is parked
+  // in socket-read, not writing flash, so there is no concurrent Update use.
+  if (otaOwnerRequest != nullptr &&
+      millis() - otaLastChunkMs > OTA_STALL_TIMEOUT_MS) {
+    SerialPrintln(F("Master OTA upload stalled >30 s — aborting and resuming "
+                    "normal operation"));
+    if (Update.isRunning()) Update.abort();
+    otaOwnerRequest = nullptr;
+    mqttResumeAfterOta();
+  }
 
   // The whole drain holds the mutex: applySettingsPost mutates the same
   // `settings` Strings GET /settings snapshots from the async task, and its

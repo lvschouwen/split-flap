@@ -12,6 +12,7 @@
 #include "BuildVersion.h"
 #include "ApiIndex.h"
 #include "FollowerBus.h"
+#include "ClusterHmac.h"  // #313 follow-on: rebuild canonical msgs for verify
 #include "FollowerCluster.h"
 #include "FollowerConfig.h"
 #include "FollowerCors.h"
@@ -76,6 +77,23 @@ static void sendWithCors(AsyncWebServerRequest* request, int status,
     }
   }
   request->send(response);
+}
+
+// #313 CSRF gate for the middleware-less ESP8266 fork: call at the top of
+// every mutating handler. Returns true (and answers 403) when the request is
+// a forged cross-site POST — a browser POST whose Origin is not a LAN pane.
+// The leader's server-to-server calls send no Origin and pass; the wall's
+// own LAN UI sends a LAN origin and passes.
+static bool followerRejectCsrf(AsyncWebServerRequest* request) {
+  bool hasOrigin = request->hasHeader("Origin");
+  String origin = hasOrigin ? request->header("Origin") : String();
+  if (followerCsrfRejectPost(request->method() == HTTP_POST, hasOrigin,
+                             origin)) {
+    request->send(403, "text/plain",
+                  F("Cross-origin POST refused (CSRF guard)"));
+    return true;
+  }
+  return false;
 }
 
 static FollowerVitals vitalsNow() {
@@ -245,6 +263,20 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         masterOtaLastChunkMs = millis();
       }
       if (index == 0) {
+        // CSRF gate (#313): reject a forged cross-site upload BEFORE any
+        // flash write or freeze — an attacker can match ?md5= to their own
+        // bytes (MD5 is integrity, not authenticity), so a browser CSRF could
+        // flash hostile firmware. Marked like every other reject so the
+        // completion handler answers 403; no owner/freeze is taken.
+        if (followerCsrfRejectPost(true, request->hasHeader("Origin"),
+                                   request->hasHeader("Origin")
+                                       ? request->header("Origin")
+                                       : String())) {
+          otaRejected = true;
+          otaRejectionStatus = 403;
+          otaRejectionReason = F("Cross-origin OTA refused (CSRF guard)");
+          return;
+        }
         // Freeze all display/unit work for the upload (v1 #116): WiFi RX +
         // flash writes + stepper current on one small supply is the storm
         // that endangers a flash.
@@ -363,6 +395,7 @@ void webEndpointsInit(AsyncWebServer& server) {
   });
 
   server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
     isPendingReboot = true;
     sendWithCors(request, 200, "text/plain", F("Rebooting…"));
   });
@@ -370,6 +403,7 @@ void webEndpointsInit(AsyncWebServer& server) {
   // --- cluster wire (#272 contract, mirrored from the v2 follower) ----------
 
   server.on("/cluster/join", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
     String leaderHost, rowStr, epochStr;
     if (!paramString(request, "leaderHost", leaderHost) ||
         !paramString(request, "row", rowStr) ||
@@ -397,6 +431,14 @@ void webEndpointsInit(AsyncWebServer& server) {
       request->send(400, "text/plain", F("Invalid leaderName"));
       return;
     }
+    // Source-IP binding (#313): the caller must actually BE leaderHost — the
+    // real leader dials from WiFi.localIP(), the exact value it sends here.
+    // Blocks any-LAN-host / CSRF membership hijack.
+    if (leaderHost != request->client()->remoteIP().toString()) {
+      request->send(403, "text/plain",
+                    F("leaderHost must match the caller's address"));
+      return;
+    }
     // Sticky leadership (#295 semantics): while our leader is demonstrably
     // alive, a DIFFERENT leader's join is refused with its identity.
     String curName, curHost;
@@ -409,7 +451,11 @@ void webEndpointsInit(AsyncWebServer& server) {
       request->send(409, "application/json", out);
       return;
     }
-    clusterHandleJoin(leaderName, leaderHost, (int)row, epoch);
+    // #313 follow-on: the leader's per-member wire-auth key (absent from a
+    // pre-HMAC leader → enforcement stays off).
+    String key;
+    paramString(request, "key", key);
+    clusterHandleJoin(leaderName, leaderHost, (int)row, epoch, key);
     char mask[16];
     FollowerHealthFacts h = healthNow(mask, sizeof(mask));
     request->send(200, "application/json",
@@ -418,6 +464,15 @@ void webEndpointsInit(AsyncWebServer& server) {
   });
 
   server.on("/cluster/render", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
+    // Source-IP binding (#313): only the joined leader drives this row. Never
+    // called by a browser UI (leader wire only), so a strict bind is safe.
+    FollowerClusterView rcv = clusterViewGet();
+    if (rcv.leaderHost.length() > 0 &&
+        rcv.leaderHost != request->client()->remoteIP().toString()) {
+      request->send(403, "text/plain", F("render must come from the leader"));
+      return;
+    }
     String epochStr, seqStr, text;
     if (!paramString(request, "epoch", epochStr) ||
         !paramString(request, "seq", seqStr) ||
@@ -441,6 +496,22 @@ void webEndpointsInit(AsyncWebServer& server) {
     if (paramString(request, "commitAtMs", commitStr)) {
       commitAtMs = strtoull(commitStr.c_str(), nullptr, 10);
     }
+    // Wire-auth (#313 follow-on): verify BEFORE truncation — the leader signs
+    // the untruncated segment, so the canonical message must use the raw text.
+    if (clusterHmacEnforced()) {
+      String tsStr, mac;
+      if (!paramString(request, "ts", tsStr) ||
+          !paramString(request, "mac", mac)) {
+        request->send(403, "text/plain", F("cluster signature required"));
+        return;
+      }
+      uint64_t ts = strtoull(tsStr.c_str(), nullptr, 10);
+      String msg = clusterHmacRenderMsg(ts, epoch, seq, text, speed, commitAtMs);
+      if (!clusterVerifySigned(msg, ts, mac)) {
+        request->send(403, "text/plain", F("bad cluster signature"));
+        return;
+      }
+    }
     // Segments render verbatim; bound the length like every text producer.
     if ((int)text.length() > UNITS_AMOUNT) {
       text = text.substring(0, UNITS_AMOUNT);
@@ -461,8 +532,39 @@ void webEndpointsInit(AsyncWebServer& server) {
   });
 
   server.on("/cluster/ping", HTTP_POST, [](AsyncWebServerRequest* request) {
-    // digest=/you= piggyback params are deliberately ignored (#298: never a
-    // takeover candidate — the digest has no consumer here).
+    if (followerRejectCsrf(request)) return;
+    // Source-IP binding (#313): only the joined leader's ping keeps this row
+    // alive — a foreign ping must not refresh the contact-fresh window.
+    FollowerClusterView pcv = clusterViewGet();
+    if (pcv.leaderHost.length() > 0 &&
+        pcv.leaderHost != request->client()->remoteIP().toString()) {
+      request->send(403, "text/plain", F("ping must come from the leader"));
+      return;
+    }
+    // digest=/you= piggyback params have no functional consumer here (#298:
+    // never a takeover candidate) — but the leader's mac binds them (#313
+    // follow-on HIGH#2), so read them back to reconstruct the exact signed
+    // canonical below. Absent ⇒ "" / -1, matching the leader's empty case.
+    String digest;
+    paramString(request, "digest", digest);
+    String youStr;
+    int youIndex = paramString(request, "you", youStr) ? youStr.toInt() : -1;
+    // Wire-auth (#313 follow-on): a keyed follower requires a valid ts+mac
+    // before contact is refreshed.
+    if (clusterHmacEnforced()) {
+      String tsStr, mac;
+      if (!paramString(request, "ts", tsStr) ||
+          !paramString(request, "mac", mac)) {
+        request->send(403, "text/plain", F("cluster signature required"));
+        return;
+      }
+      uint64_t ts = strtoull(tsStr.c_str(), nullptr, 10);
+      if (!clusterVerifySigned(clusterHmacPingMsg(ts, digest, youIndex), ts,
+                               mac)) {
+        request->send(403, "text/plain", F("bad cluster signature"));
+        return;
+      }
+    }
     if (!clusterHandlePing()) {
       request->send(409, "application/json",
                     F("{\"error\":\"not clustered\"}"));
@@ -477,6 +579,38 @@ void webEndpointsInit(AsyncWebServer& server) {
   });
 
   server.on("/cluster/leave", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
+    // leave has two legitimate callers — the leader's reconfigure fan-out and
+    // the wall's local "Leave" button (a LAN browser).
+    FollowerClusterView lcv = clusterViewGet();
+    bool fromLanBrowser = request->hasHeader("Origin") &&
+                          followerCorsOriginAllowed(request->header("Origin"));
+    if (clusterHmacEnforced()) {
+      // Keyed (#313 follow-on): the leader arm becomes a valid SIGNATURE
+      // (beats a spoofed IP); the local Leave button rides the browser arm.
+      bool signedOk = false;
+      String tsStr, mac;
+      if (paramString(request, "ts", tsStr) && paramString(request, "mac", mac)) {
+        uint64_t ts = strtoull(tsStr.c_str(), nullptr, 10);
+        signedOk = clusterVerifySigned(clusterHmacLeaveMsg(ts), ts, mac);
+      }
+      if (!signedOk && !fromLanBrowser) {
+        request->send(403, "text/plain",
+                      F("leave requires a valid signature or this row's web UI"));
+        return;
+      }
+    } else {
+      // Pre-HMAC combined guard (#313): leader IP OR LAN browser; a bare
+      // non-leader LAN host is refused (closes the any-host force-leave DoS).
+      bool fromLeader =
+          lcv.leaderHost.length() > 0 &&
+          lcv.leaderHost == request->client()->remoteIP().toString();
+      if (lcv.leaderHost.length() > 0 && !fromLeader && !fromLanBrowser) {
+        request->send(403, "text/plain",
+                      F("leave must come from the leader or this row's web UI"));
+        return;
+      }
+    }
     clusterHandleLeave();  // idempotent
     request->send(200, "text/plain", F("ok"));
   });
@@ -541,6 +675,7 @@ void webEndpointsInit(AsyncWebServer& server) {
 
   server.on("/units/health/refresh", HTTP_POST,
             [](AsyncWebServerRequest* request) {
+              if (followerRejectCsrf(request)) return;
               if (reflashPending || reflashInProgress(reflashProgress)) {
                 sendWithCors(request, 503, "application/json",
                              F("{\"status\":\"busy\"}"));
@@ -582,6 +717,7 @@ void webEndpointsInit(AsyncWebServer& server) {
   });
 
   server.on("/unit/offset", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
     int addr = 0;
     if (!checkAddressParam(request, addr)) return;
     long value = 0;
@@ -596,6 +732,7 @@ void webEndpointsInit(AsyncWebServer& server) {
   });
 
   server.on("/unit/jog", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
     int addr = 0;
     if (!checkAddressParam(request, addr)) return;
     long steps = 0;
@@ -610,12 +747,14 @@ void webEndpointsInit(AsyncWebServer& server) {
   });
 
   server.on("/unit/home", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
     int addr = 0;
     if (!checkAddressParam(request, addr)) return;
     stageOp(request, FollowerOpKind::Home, (uint8_t)addr, 0);
   });
 
   server.on("/unit/identify", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
     int addr = 0;
     if (!checkAddressParam(request, addr)) return;
     stageOp(request, FollowerOpKind::Identify, (uint8_t)addr, 0);
@@ -623,6 +762,7 @@ void webEndpointsInit(AsyncWebServer& server) {
 
   server.on("/unit/reset-odometer", HTTP_POST,
             [](AsyncWebServerRequest* request) {
+              if (followerRejectCsrf(request)) return;
               int addr = 0;
               if (!checkAddressParam(request, addr)) return;
               stageOp(request, FollowerOpKind::ResetOdometer, (uint8_t)addr,
@@ -630,6 +770,7 @@ void webEndpointsInit(AsyncWebServer& server) {
             });
 
   server.on("/unit/self-test", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
     int addr = 0;
     if (!checkAddressParam(request, addr)) return;
     stageOp(request, FollowerOpKind::SelfTest, (uint8_t)addr, 0);
@@ -659,6 +800,7 @@ void webEndpointsInit(AsyncWebServer& server) {
   // deadline (armed at execution) keeps runtime probes out of the twiboot
   // window (v1 #88).
   server.on("/unit/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
     long addr = 0;
     if (!queryRequireLong(request, "address", addr)) return;
     if (addr < 1 || addr > 126) {
@@ -687,6 +829,7 @@ void webEndpointsInit(AsyncWebServer& server) {
   // --- bulk unit reflash (v1 #138 flow: arm, loop() does the work) -----------
 
   server.on("/reflash-units", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
     if (opSlotBusy()) {
       sendWithCors(request, 503, "text/plain",
                    F("Unit firmware flash already in progress — try again "
