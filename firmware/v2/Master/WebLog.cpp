@@ -1,9 +1,15 @@
 #include "WebLog.h"
 
 #include "LargeAlloc.h"
+#include "LogLinePrefixer.h"
 // The flash-log tee is target-only (FlashLog.cpp needs LittleFS); native
 // tests include this .cpp directly, same pattern as HelpersSerialHandling.
 #ifndef UNIT_TEST
+#include <time.h>
+
+#include <cstdio>
+
+#include "ClockPolicy.h"  // clockIsTimeSynced — same sync cutoff as FlashLog
 #include "FlashLog.h"
 #endif
 
@@ -39,6 +45,28 @@ static size_t webLogHead = 0;
 static bool webLogWrapped = false;
 
 WebLogPrinter webLogPrinter;
+
+#ifndef UNIT_TEST
+// Timestamp prefixer (#318 E). One shared instance: every append arrives
+// under HelpersSerialHandling's SerialPrintLock, so its cross-call line-start
+// state needs no lock of its own.
+static LogLinePrefixer webLogPrefixer;
+
+// "HH:MM:SS" for the current line. Wall-clock once SNTP has synced (epoch
+// past 2020-09), otherwise the uptime — labelled the same way so a boot-time
+// line still sorts and reads sensibly before the clock is set.
+static void webLogStamp(char* buf, size_t n) {
+  time_t now = time(nullptr);
+  struct tm ti;
+  if (clockIsTimeSynced(now) && localtime_r(&now, &ti) != nullptr) {
+    strftime(buf, n, "%H:%M:%S", &ti);
+  } else {
+    unsigned long s = millis() / 1000UL;
+    snprintf(buf, n, "%02lu:%02lu:%02lu", (s / 3600UL) % 100UL,
+             (s / 60UL) % 60UL, s % 60UL);
+  }
+}
+#endif
 
 size_t WebLogPrinter::write(uint8_t b) {
   webLogAppend((const char*)&b, 1);
@@ -77,15 +105,10 @@ void webLogInit() {
 #endif
 }
 
-void webLogAppend(const char* data, size_t len) {
-  // Tee into the persistent flash log (#206) BEFORE the ring-buffer gate:
-  // a failed ring allocation must not silence the flash log (and vice
-  // versa — flashLogStage gates on its own init state).
-#ifndef UNIT_TEST
-  flashLogStage(data, len);
-#endif
+// Copy `data`/`len` into the ring under the lock. Caller has already applied
+// any timestamp expansion.
+static void webLogRingWrite(const char* data, size_t len) {
   if (webLogBuffer == nullptr || data == nullptr || len == 0) return;
-
   WEBLOG_LOCK();
   for (size_t i = 0; i < len; i++) {
     webLogBuffer[webLogHead] = data[i];
@@ -97,6 +120,38 @@ void webLogAppend(const char* data, size_t len) {
   }
   WEBLOG_UNLOCK();
 }
+
+#ifndef UNIT_TEST
+void webLogAppend(const char* data, size_t len) {
+  // Degenerate appends: keep the flash-log passthrough byte-for-byte (the
+  // expander below would dereference a null `data`), then bail.
+  if (data == nullptr || len == 0) {
+    flashLogStage(data, len);
+    return;
+  }
+  // Prefix "HH:MM:SS " to each line (#318 E), then tee the SAME expanded bytes
+  // to both sinks so the flash log (#206) and the RAM ring stay identical.
+  char stamp[9];
+  webLogStamp(stamp, sizeof(stamp));
+  String expanded;
+  expanded.reserve(len + 16);
+  webLogPrefixer.expand(stamp, data, len, expanded);
+  // The flash log (#206) applies its OWN independent per-line stamper
+  // (FlashLog.cpp), so it must get the RAW bytes — handing it the expanded
+  // copy would double-stamp /log/flash. The #318E prefix is for the RAM ring
+  // (GET /log) only, which carried no timestamps before. Flash tee still runs
+  // BEFORE the ring gate so a failed ring allocation can't silence it.
+  flashLogStage(data, len);
+  webLogRingWrite(expanded.c_str(), expanded.length());
+}
+#else
+// Native build: verbatim byte ring, no timestamps and no flash tee (both are
+// target-only). Kept identical to the pre-#318 path so test_web_log's exact
+// byte assertions stay orthogonal to the LogLinePrefixer's own tests.
+void webLogAppend(const char* data, size_t len) {
+  webLogRingWrite(data, len);
+}
+#endif
 
 String webLogRead() {
   String out;

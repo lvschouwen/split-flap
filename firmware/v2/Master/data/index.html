@@ -204,6 +204,16 @@
 
 			<!-- ============ MAINTENANCE ============ -->
 			<section id="section-maintenance" class="panel">
+				<!-- Cluster members (#318 C): only while this board leads a wall —
+				     manage every row's units/firmware from here, same ⚙ panel as
+				     the Settings cluster card. -->
+				<div class="card hidden" id="maintClusterCard">
+					<h2>Cluster members</h2>
+					<p class="note">This board is driving a wall. Each row is a board of its own — open its ⚙ panel to calibrate, reflash or reboot it without leaving this page.</p>
+					<div class="member-pills" id="maintClusterList"></div>
+					<div class="member-panel hidden" id="maintClusterMemberPanel"></div>
+				</div>
+
 				<div class="card" id="calibrationCard">
 					<h2>Calibration</h2>
 					<p class="note">Send a test letter to every unit (shown as a transient — the clock comes back by itself), then type what each drum is <em>actually</em> showing. Apply All writes the corrected offset to each unit and re-homes it.</p>
@@ -315,6 +325,22 @@
 						<div class="kv"><span>Uptime</span><span id="statUptime">—</span></div>
 						<div class="kv"><span>Last reset</span><span id="statReset">—</span></div>
 						<div class="kv"><span>Heap low-water</span><span id="statMinHeap">—</span></div>
+					</div>
+				</div>
+
+				<!-- Cluster members (#318 D): per-row vitals fanned out from each
+				     member's /settings. ESP-01 rows carry heap/rssi/up; an S3 row's
+				     /settings has none, so it shows its rev and a dash. -->
+				<div class="card hidden" id="sysClusterCard">
+					<h2>Cluster members</h2>
+					<p class="note">Live vitals of every row this board drives, read straight from each board.</p>
+					<div class="scroll-x">
+						<table id="sysClusterTable" class="uh-table">
+							<thead>
+								<tr><th>Row</th><th>Host</th><th>FW</th><th>Free&nbsp;heap</th><th>RSSI</th><th>Uptime</th></tr>
+							</thead>
+							<tbody id="sysClusterBody"></tbody>
+						</table>
 					</div>
 				</div>
 			</section>

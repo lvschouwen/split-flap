@@ -21,22 +21,34 @@
 
 #include <Arduino.h>
 
-// Serial-only trimmed copy of v1's HelpersSerialHandling.h — this firmware
-// has no web log (/log is deliberately not served).
+#ifndef UNIT_TEST
+#include "FollowerLog.h"
+#endif
+
+// Trimmed copy of v1's HelpersSerialHandling.h. SERIAL_ENABLE trades I2C for
+// the console (v1 hardware truth), so on a real row Serial is a no-op — but
+// every line is ALSO mirrored into the in-RAM log ring (FollowerLog.h, #318 E)
+// regardless, which is the row's only observability window (GET /log, pulled
+// by the leader). The mirror is skipped in the native test env so the pure
+// policy headers stay linkable without the ring's target-only sink.
 template <typename T>
 inline void SerialPrint(T value) {
 #if SERIAL_ENABLE == true
   Serial.print(value);
-#else
-  (void)value;
 #endif
+#ifndef UNIT_TEST
+  followerLogPrinter.print(value);
+#endif
+  (void)value;  // native (UNIT_TEST, SERIAL_ENABLE off): both bodies compile out
 }
 
 template <typename T>
 inline void SerialPrintln(T value) {
 #if SERIAL_ENABLE == true
   Serial.println(value);
-#else
-  (void)value;
 #endif
+#ifndef UNIT_TEST
+  followerLogPrinter.println(value);
+#endif
+  (void)value;
 }

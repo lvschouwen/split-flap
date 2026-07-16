@@ -394,6 +394,29 @@ void webEndpointsInit(AsyncWebServer& server) {
                                       vitalsNow()));
   });
 
+  // #318 E: the row's in-RAM log, cursor-paged so the leader pulls only new
+  // lines (GET /log?after=<cursor>). Body = "<nextCursor>\n<delta>"; the
+  // leader parses the first line and tees the rest into the fleet log. A
+  // human hitting /log with no cursor gets the whole ring. Deliberately NOT
+  // on the CORS surface — the pull is server-to-server; browsers read the
+  // fleet log from the master's /log/flash.
+  server.on("/log", HTTP_GET, [](AsyncWebServerRequest* request) {
+    uint32_t after = 0;
+    if (request->hasParam("after")) {
+      after = (uint32_t)strtoul(request->getParam("after")->value().c_str(),
+                                nullptr, 10);
+    }
+    String body;
+    body.reserve(FOLLOWER_LOG_SIZE + 16);
+    uint32_t next = followerLogReadSince(after, body);
+    String out;
+    out.reserve(body.length() + 12);
+    out += next;
+    out += '\n';
+    out += body;
+    sendWithCors(request, 200, "text/plain", out);
+  });
+
   server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
     if (followerRejectCsrf(request)) return;
     isPendingReboot = true;

@@ -1874,14 +1874,22 @@ function initSystemTab() {
 			});
 	}
 
+	//Cluster vitals fan out to each row's /settings — slower than the local
+	//2 s stats poll so a wall of boards isn't hammered (#318 D).
+	var clusterVitalsHandle = null;
+
 	function syncPolling() {
 		var want = onSystemTab && !document.hidden;
 		if (want && pollHandle === null) {
 			fetchStats();
 			pollHandle = setInterval(fetchStats, 2000);
+			refreshSysClusterVitals();
+			clusterVitalsHandle = setInterval(refreshSysClusterVitals, 8000);
 		} else if (!want && pollHandle !== null) {
 			clearInterval(pollHandle);
 			pollHandle = null;
+			clearInterval(clusterVitalsHandle);
+			clusterVitalsHandle = null;
 		}
 	}
 
@@ -2419,7 +2427,10 @@ var clusterRolloutSeen = false;
 function initClusterCard() {
 	var tabActive = false;
 	document.addEventListener("sf-tabchange", function(event) {
-		tabActive = event.detail === "settings";
+		//Settings needs the editor pills/rollout; Maintenance (#318 C) and
+		//System (#318 D) need the live member list to render their cards.
+		tabActive = event.detail === "settings" || event.detail === "maintenance" ||
+			event.detail === "system";
 		if (tabActive) loadClusterStatus();
 	});
 	//One steady 5 s timer: the settings tab needs pills/rollout, and the
@@ -2532,6 +2543,8 @@ function updateClusterFromStatus(st) {
 	//needs member count + per-member auth from here.
 	window.lastClusterStatus = st;
 	updateClusterBanner(window.lastSettings || {});
+	//Maintenance-tab member list (#318 C): shown only while leading.
+	renderMaintClusterMembers(st);
 	//Wall row strips (#294) — the leader's own SSE wall colors its remote
 	//rows from the same member health the pills use.
 	if (wallSource === "sse") updateWallHealth(st.members || []);
@@ -2716,12 +2729,99 @@ function renderFollowerPills(members) {
 	});
 }
 
+//Cluster members on the Maintenance tab (#318 C): while this board leads,
+//list every row as a pill that opens the SAME management panel used on the
+//Settings card — calibrate/reflash/reboot any board without leaving the tab.
+function renderMaintClusterMembers(st) {
+	var card = document.getElementById("maintClusterCard");
+	var list = document.getElementById("maintClusterList");
+	if (!card || !list) return;
+	var members = (st && st.enabled) ? (st.members || []) : [];
+	card.classList.toggle("hidden", members.length === 0);
+	removeAllChildren(list);
+	if (members.length === 0) {
+		//Tidy up any panel left open when the wall goes away.
+		var panel = document.getElementById("maintClusterMemberPanel");
+		if (panel) { panel.classList.add("hidden"); removeAllChildren(panel); }
+		return;
+	}
+	members.forEach(function(m) {
+		var pill = document.createElement("button");
+		pill.type = "button";
+		var label = clusterStateLabel(m);
+		pill.className = "pill " + label.kind + " member-pill";
+		//host comes off the LAN wire — text nodes only.
+		pill.textContent = "⚙ row " + (Number(m.row) + 1) + " · " +
+			(m.host === "" ? "this board" : m.host) + " · " + label.text;
+		pill.addEventListener("click", function() {
+			openMemberPanel(m.host, m.host === "" || !!m.self, "maintClusterMemberPanel");
+		});
+		list.appendChild(pill);
+	});
+}
+
+//Cluster members on the System tab (#318 D): a per-row vitals table fanned
+//out to each board's /settings. ESP-01 rows carry heap/rssi/up (#297); an S3
+//row's /settings has none, so it shows its rev and dashes. Called on the
+//System tab's poll cadence off the cached /cluster/status member list.
+function refreshSysClusterVitals() {
+	var card = document.getElementById("sysClusterCard");
+	var body = document.getElementById("sysClusterBody");
+	if (!card || !body) return;
+	var st = window.lastClusterStatus;
+	var members = (st && st.enabled) ? (st.members || []) : [];
+	card.classList.toggle("hidden", members.length === 0);
+	if (members.length === 0) { removeAllChildren(body); return; }
+	removeAllChildren(body);
+	members.forEach(function(m) {
+		var tr = document.createElement("tr");
+		function cell(text) {
+			var td = document.createElement("td");
+			td.textContent = text;
+			tr.appendChild(td);
+			return td;
+		}
+		cell("row " + (Number(m.row) + 1));
+		//host is LAN-wire text — text node only.
+		cell(m.host === "" ? "(this board)" : m.host);
+		var revC = cell(m.rev || "—");
+		var heapC = cell("…");
+		var rssiC = cell("…");
+		var upC = cell("…");
+		body.appendChild(tr);
+
+		var base = (m.self || m.host === "") ? "" : "http://" + m.host;
+		if (base && !/^[A-Za-z0-9.\-]+(:\d+)?$/.test(m.host)) {
+			heapC.textContent = rssiC.textContent = upC.textContent = "—";
+			return;
+		}
+		fetch(base + "/settings", { cache: "no-store" })
+			.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
+			.then(function(s) {
+				if (s.version) revC.textContent = s.version;
+				//Only the ESP-01 dumb row carries these (#297); an S3 member's
+				///settings has none, so its vitals stay dashed.
+				heapC.textContent = s.heap !== undefined ? Math.round(s.heap / 1024) + " KB" : "—";
+				rssiC.textContent = s.rssi !== undefined ? s.rssi + " dBm" : "—";
+				upC.textContent = s.up !== undefined ? formatUptime(s.up) : "—";
+			})
+			.catch(function() {
+				heapC.textContent = "unreachable";
+				rssiC.textContent = "—";
+				upC.textContent = "—";
+			});
+	});
+}
+
 //Per-member management panel (#294 rung 3): the browser fans out STRAIGHT
 //to the member (CORS-gated on its side; the leader never proxies). Wire
 //strings render as text nodes only. A member on pre-#294 firmware sends no
 //CORS header — the fetch fails and the panel degrades to a plain link.
-function openMemberPanel(host, isSelf) {
-	var panel = document.getElementById("clusterMemberPanel");
+function openMemberPanel(host, isSelf, panelId) {
+	//The panel machinery is panel-relative (every sub-fn takes the element),
+	//so the same code drives the Settings card and the Maintenance card (#318
+	//C) — only the container id differs.
+	var panel = document.getElementById(panelId || "clusterMemberPanel");
 	if (!panel) return;
 	//Hosts originate on the LAN wire (digest / status) — the fetch target
 	//gets the same hostname[:port] allowlist as every visible link.
