@@ -1299,6 +1299,10 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                     F("Display queue full — try again in a moment"));
       return;
     }
+    // Cluster propagation (#317): when leading, Stop blanks the WHOLE wall —
+    // the local command above handles this board's own row; blank the
+    // followers in sync (no-op when standalone).
+    clusterLeaderBlankWall();
     char buf[24];
     snprintf(buf, sizeof(buf), "{\"seq\":%lu}", (unsigned long)cmd.seq);
     request->send(200, "application/json", buf);

@@ -466,7 +466,10 @@ function updateClusterBanner(s) {
 	var el = document.getElementById("clusterBanner");
 	if (!el) return;
 	var clustered = !!s.clusterState && s.clusterState !== "standalone";
-	el.classList.toggle("hidden", !clustered);
+	//#317: this board is the LEADER (not itself a follower row) — show a
+	//distinct "leading a wall" banner and relabel the command controls.
+	var leading = !clustered && !!s.clusterLeading;
+	el.classList.toggle("hidden", !clustered && !leading);
 	if (clustered) {
 		//leaderName/leaderHost come off an unauthenticated LAN POST — build
 		//the banner with DOM nodes, never markup strings.
@@ -497,6 +500,7 @@ function updateClusterBanner(s) {
 			el.appendChild(promote);
 		}
 	}
+	if (leading) buildLeadingBanner(el);
 	["inputText", "buttonSend", "selectDuration"].forEach(function(id) {
 		var control = document.getElementById(id);
 		if (control) control.disabled = clustered;
@@ -504,6 +508,40 @@ function updateClusterBanner(s) {
 	document.querySelectorAll("#segMode button").forEach(function(b) {
 		b.disabled = clustered;
 	});
+	applyWallLabels(leading);
+}
+
+//#317: the leader banner — driven off the /settings poll for clusterLeading,
+//with member count + per-member auth taken from the cached /cluster/status.
+//Built with DOM nodes (member hosts/names come off unauthenticated LAN wire).
+function buildLeadingBanner(el) {
+	var st = window.lastClusterStatus || {};
+	var members = st.members || [];
+	var rows = 0;
+	members.forEach(function(m) { rows = Math.max(rows, m.row + 1); });
+	el.textContent = "⚑ Leading — driving a " + rows + "-row wall · " +
+		members.length + " member" + (members.length === 1 ? "" : "s");
+	//Auth summary over the FOLLOWER links only (the leader's own row is not a
+	//wire link). "all" = leader signs to every follower.
+	var followers = members.filter(function(m) { return !m.self; });
+	if (followers.length) {
+		var authed = followers.filter(function(m) { return m.hmac; }).length;
+		el.appendChild(document.createTextNode(" · "));
+		var chip = document.createElement("span");
+		if (authed === followers.length) { chip.className = "pill ok"; chip.textContent = "Auth · all links"; }
+		else if (authed > 0) { chip.className = "pill bad"; chip.textContent = "Auth · " + authed + "/" + followers.length; }
+		else { chip.className = "pill off"; chip.textContent = "Unauthenticated"; }
+		el.appendChild(chip);
+	}
+	el.appendChild(document.createTextNode(" · text, mode and stop apply to the whole wall."));
+}
+
+//#317: relabel the command buttons to signal wall-wide reach while leading.
+function applyWallLabels(leading) {
+	var send = document.getElementById("buttonSend");
+	if (send) send.textContent = leading ? "Send to wall" : "Send";
+	var stop = document.getElementById("buttonStop");
+	if (stop) stop.textContent = leading ? "Stop & blank the wall" : "Stop & blank display";
 }
 
 //#295 one-click takeover: the firmware validates (local-fallback + held
@@ -2419,6 +2457,10 @@ function clusterStateLabel(m) {
 }
 
 function updateClusterFromStatus(st) {
+	//Cache for the leading banner (#317): it runs off the /settings poll but
+	//needs member count + per-member auth from here.
+	window.lastClusterStatus = st;
+	updateClusterBanner(window.lastSettings || {});
 	//Wall row strips (#294) — the leader's own SSE wall colors its remote
 	//rows from the same member health the pills use.
 	if (wallSource === "sse") updateWallHealth(st.members || []);
@@ -2460,8 +2502,17 @@ function updateClusterFromStatus(st) {
 		var label = clusterStateLabel(saved[i]);
 		pill.className = "pill " + label.kind + " cl-state";
 		pill.textContent = label.text;
-		//plat tag (#297): only foreign-platform members report one.
-		rev.textContent = saved[i].self ? "" : (saved[i].rev || "—") + (saved[i].plat ? " · " + saved[i].plat : "");
+		//plat tag (#297) + wire-auth chip (#317): only for non-self members
+		//(the leader's own row is not a wire link). hmac = leader signs to it.
+		rev.textContent = "";
+		if (!saved[i].self) {
+			rev.appendChild(document.createTextNode((saved[i].rev || "—") + (saved[i].plat ? " · " + saved[i].plat : "") + "  "));
+			var authChip = document.createElement("span");
+			authChip.className = "pill " + (saved[i].hmac ? "ok" : "off");
+			authChip.style.fontSize = "10px";
+			authChip.textContent = saved[i].hmac ? "auth" : "no-auth";
+			rev.appendChild(authChip);
+		}
 	});
 
 	//Fleet rollout (#276) surfacing: progress while it runs, one success

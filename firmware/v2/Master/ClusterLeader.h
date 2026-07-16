@@ -101,6 +101,9 @@ void clusterLeaderSubmitText(const String& text, const String& alignment,
                              int speed);
 void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
                               const String& alignment, int speed);
+// #317: blank the follower rows (leader's own row = the local Stop). Leaves
+// lastContentKey so the reroute stays blank until the clock content moves.
+void clusterLeaderBlankWall();
 
 ClusterLeaderStatus clusterLeaderStatusGet();
 

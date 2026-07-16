@@ -275,6 +275,31 @@ void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
              true, timeText, dateText, alignment, speed);
 }
 
+// /stop propagation (#317): blank every FOLLOWER row in sync (the leader's own
+// row is blanked by the local Stop opcode). `lastContentKey` is deliberately
+// NOT touched — so the next clock tick recomputes the SAME content key and
+// submitGrid early-returns, leaving the wall blank until the clock content
+// actually moves (next minute) or a producer sends new text. That mirrors a
+// standalone board's "blank until the clock ticks on" behavior exactly.
+void clusterLeaderBlankWall() {
+  if (!clusterLeaderEnabled()) return;
+  bool synced = false;
+  uint64_t nowE = epochNowMs(synced);
+  LeaderLock lock;
+  gridCommitAtMs = synced ? nowE + CLUSTER_COMMIT_LEAD_MS : 0;
+  bool anyChanged = false;
+  for (int i = 0; i < table.count; i++) {
+    if (clusterMemberIsSelf(table.members[i])) continue;
+    if (segments[i].length() == 0) continue;  // already blank
+    segments[i] = "";
+    runtimes[i].renderDirty = true;
+    anyChanged = true;
+  }
+  if (anyChanged) {
+    gridGenerationAtomic.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
 // --- clusterTask body -----------------------------------------------------------
 
 // Applies a staged member-table swap: leave fan-out to dropped remote
