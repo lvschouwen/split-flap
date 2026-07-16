@@ -42,8 +42,11 @@
 			<section id="section-home" class="panel">
 				<div class="card">
 					<h2>Send a message</h2>
+					<!-- #318: per-row inputs (one per wall row) while leading; the
+					     single box + newline marker below is the standalone path. -->
+					<div id="perRowInputs" class="hidden"></div>
 					<div class="row">
-						<div class="grow">
+						<div class="grow" id="singleInputWrap">
 							<input type="text" id="inputText" maxlength="75" autocomplete="off"
 								placeholder="Type a message…" onkeyup="updateCharacterCount()" />
 						</div>
@@ -55,9 +58,9 @@
 						</select>
 						<button type="button" class="btn primary" id="buttonSend" onclick="sendMessage()">Send</button>
 					</div>
-					<div class="row meta-row">
+					<div class="row meta-row" id="messageMetaRow">
 						<span class="meta"><span id="labelCharacterCount">0</span> chars · <span id="labelLineCount">1</span> line(s)</span>
-						<button type="button" class="btn ghost" onclick="addNewline()">+ Newline</button>
+						<button type="button" class="btn ghost" id="buttonNewline" onclick="addNewline()">+ Newline</button>
 						<span class="grow"></span>
 						<span class="meta">Last received: <span id="labelLastMessageReceived">—</span></span>
 					</div>

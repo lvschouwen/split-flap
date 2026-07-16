@@ -509,6 +509,7 @@ function updateClusterBanner(s) {
 		b.disabled = clustered;
 	});
 	applyWallLabels(leading);
+	updateMessageInputs(leading);
 }
 
 //#317: the leader banner — driven off the /settings poll for clusterLeading,
@@ -542,6 +543,71 @@ function applyWallLabels(leading) {
 	if (send) send.textContent = leading ? "Send to wall" : "Send";
 	var stop = document.getElementById("buttonStop");
 	if (stop) stop.textContent = leading ? "Stop & blank the wall" : "Stop & blank display";
+}
+
+//#318: per-row wall widths from the cached /cluster/status — a row's capacity
+//is the max of (col+width) over its members. Returns [w0,w1,…] or null.
+function clusterRowWidths() {
+	var st = window.lastClusterStatus;
+	if (!st || !st.members || !st.members.length) return null;
+	var widths = {};
+	st.members.forEach(function(m) {
+		var w = (m.col || 0) + (m.width || 0);
+		if (!(m.row in widths) || w > widths[m.row]) widths[m.row] = w;
+	});
+	var maxRow = Math.max.apply(null, Object.keys(widths).map(Number));
+	var arr = [];
+	for (var r = 0; r <= maxRow; r++) arr.push(widths[r] || 0);
+	return arr;
+}
+
+//#318: one input per wall row (maxlength = that row's width) while leading a
+//multi-row wall — replaces the single box + literal-\n marker. The shape
+//string gates rebuilds so typed text survives the /cluster/status poll.
+var perRowShape = null;
+function updateMessageInputs(leading) {
+	var perRow = document.getElementById("perRowInputs");
+	if (!perRow) return;
+	var wrap = document.getElementById("singleInputWrap");
+	var meta = document.getElementById("messageMetaRow");
+	var widths = leading ? clusterRowWidths() : null;
+	var usePerRow = !!(widths && widths.length > 1);
+	if (wrap) wrap.classList.toggle("hidden", usePerRow);
+	if (meta) meta.classList.toggle("hidden", usePerRow);
+	perRow.classList.toggle("hidden", !usePerRow);
+	if (!usePerRow) { perRowShape = null; return; }
+	var shape = widths.join(",");
+	if (shape === perRowShape) return;
+	perRowShape = shape;
+	removeAllChildren(perRow);
+	widths.forEach(function(w, r) {
+		var row = document.createElement("div");
+		row.className = "row";
+		var cell = document.createElement("div");
+		cell.className = "grow";
+		var lbl = document.createElement("label");
+		lbl.className = "small";
+		lbl.textContent = "Row " + r + " · " + w + " wide";
+		var input = document.createElement("input");
+		input.type = "text";
+		input.className = "perrow-input";
+		input.maxLength = w;
+		input.autocomplete = "off";
+		input.placeholder = "up to " + w + " characters";
+		cell.appendChild(lbl);
+		cell.appendChild(input);
+		row.appendChild(cell);
+		perRow.appendChild(row);
+	});
+}
+
+//#318: compose the wall text from the per-row inputs — joined with real
+//newlines, which the grid composer treats as row breaks (#290).
+function perRowCompose() {
+	var inputs = document.querySelectorAll("#perRowInputs .perrow-input");
+	return Array.prototype.map.call(inputs, function(i) {
+		return normalizeUmlauts(i.value);
+	}).join("\n");
 }
 
 //#295 one-click takeover: the firmware validates (local-fallback + held
@@ -757,7 +823,12 @@ function normalizeUmlauts(text) {
 }
 
 function sendMessage() {
-	var text = normalizeUmlauts(document.getElementById("inputText").value);
+	//#318: per-row inputs (leading a multi-row wall) compose the wall text;
+	//otherwise the single box.
+	var perRow = document.getElementById("perRowInputs");
+	var text = (perRow && !perRow.classList.contains("hidden"))
+		? perRowCompose()
+		: normalizeUmlauts(document.getElementById("inputText").value);
 	var dwell = document.getElementById("selectDuration").value;
 	var button = document.getElementById("buttonSend");
 	button.disabled = true;
