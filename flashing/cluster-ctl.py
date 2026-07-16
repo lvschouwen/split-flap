@@ -186,6 +186,7 @@ def build_member_view(leader, status):
             "up": None,
             "phase": "leader" if is_self else None,
             "extra": None,
+            "text": None,
         }
         if is_self:
             row["name"] = settings.get("effectiveDeviceName") or settings.get("deviceName")
@@ -193,6 +194,7 @@ def build_member_view(leader, status):
             row["rssi"] = now.get("rssi")
             row["up"] = now.get("uptime")
             row["rev"] = row["rev"] or settings.get("version")
+            row["text"] = settings.get("lastWrittenText")  # leader's own row
             # The leader is the data-rich node — surface its full vitals.
             u = status.get("units", {})
             temp = now.get("temp")
@@ -220,6 +222,10 @@ def build_member_view(leader, status):
                 row["rev"] = row["rev"] or fs.get("version")
                 row["extra"] = {"minHeap": fmt_heap(fs.get("minHeap"))
                                 if fs.get("minHeap") else None}
+            # The rendered segment for this row lives in /cluster/health.
+            ch = jget(host, "/cluster/health", timeout=3.0) if host else None
+            if ch:
+                row["text"] = ch.get("segment")
         out.append(row)
     out.sort(key=lambda r: (r["row"] if r["row"] is not None else 99))
     return out, settings, now
@@ -271,11 +277,23 @@ def render_dashboard(leader):
             tag = red(rst) if "rown" in rst or "anic" in rst or "atchdog" in rst else dim(rst)
             lines.append(dim("        last reset: ") + tag)
     lines.append("")
-    text = settings.get("lastWrittenText", "")
     mode = settings.get("deviceMode", "?")
     speed = settings.get("flapSpeed", "?")
-    lines.append(dim(f'display: "{text}"  mode={mode}  speed={speed}  '
-                     f'units={settings.get("unitCount")} (override {settings.get("unitCountOverride")})'))
+    lines.append(bold("wall content") + dim(f"   mode={mode}  speed={speed}  "
+                                             f"units={settings.get('unitCount')}"
+                                             f" (override {settings.get('unitCountOverride')})"))
+    # Each row's actually-rendered text, boxed to its width, stacked like the
+    # physical wall — so a 2-row wall reads as two rows here too.
+    for m in members:
+        w = m.get("width") or 0
+        t = m.get("text")
+        who = "S3/leader" if m["self"] else (m.get("plat") or "")
+        if t is None:
+            cell = "│" + " " * w + "│  " + red("(no content — unreachable?)")
+        else:
+            shown = t[:w] if w else t
+            cell = "│" + cyan(shown.ljust(w)) + "│"
+        lines.append(f"  row{m['row']} {cell}  {dim(who)}")
     ota = status.get("ota", {})
     if ota.get("otaReverted"):
         lines.append(red("  ⚠ OTA reverted — last image rolled back"))
@@ -390,6 +408,33 @@ def cmd_authcheck(args):
         print(f"  {mark}  {dim(ln.strip())}")
 
 
+def cmd_log(args):
+    host = resolve_target(args)
+    path = "/log/flash" if args.flash else "/log"
+    st, body = http(host, "GET", path, timeout=8.0)
+    if st != 200:
+        hint = ("  (the ESP-01 has no /log endpoint yet — see issue #316; "
+                "the S3 serves /log and /log/flash)" if st in (404, 500) else "")
+        print(yellow(f"no log from {host}{path} (HTTP {st}){hint}"))
+        return
+    # /log may be plain text or a JSON wrapper — handle both.
+    lines = body.splitlines()
+    try:
+        j = json.loads(body)
+        if isinstance(j, dict):
+            for k in ("log", "lines", "text"):
+                if k in j:
+                    v = j[k]
+                    lines = v if isinstance(v, list) else str(v).splitlines()
+                    break
+    except json.JSONDecodeError:
+        pass
+    tail = lines[-args.n:] if args.n and args.n > 0 else lines
+    print(bold(f"{host}{path}  ({len(lines)} lines, showing {len(tail)})"))
+    for ln in tail:
+        print("  " + str(ln).rstrip())
+
+
 def cmd_ota(args):
     if not os.path.exists(args.bin):
         print(red(f"bin not found: {args.bin}"))
@@ -455,6 +500,12 @@ def main():
     sub.add_parser("leave", help="leave the cluster").set_defaults(fn=cmd_leave)
     sub.add_parser("authcheck",
                    help="scan leader log for HMAC join markers").set_defaults(fn=cmd_authcheck)
+
+    lg = sub.add_parser("log", help="tail a device log (S3 only; --flash = persistent)")
+    lg.add_argument("--flash", action="store_true",
+                    help="persistent /log/flash instead of the RAM /log")
+    lg.add_argument("-n", type=int, default=40, help="last N lines (default 40)")
+    lg.set_defaults(fn=cmd_log)
 
     t = sub.add_parser("text", help="set display text (deviceMode=text)")
     t.add_argument("message")
