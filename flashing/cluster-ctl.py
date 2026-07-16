@@ -105,10 +105,12 @@ def jget(host, path, timeout=6.0):
 # ---- helpers ----------------------------------------------------------------
 
 
-def fmt_uptime(ms):
-    if ms is None:
+def fmt_uptime(seconds):
+    # Both the S3 (/status stats.now `uptime`) and the ESP-01 (/settings `up`)
+    # report uptime in SECONDS.
+    if seconds is None:
         return "?"
-    s = int(ms) // 1000
+    s = int(seconds)
     d, s = divmod(s, 86400)
     h, s = divmod(s, 3600)
     m, _ = divmod(s, 60)
@@ -183,24 +185,41 @@ def build_member_view(leader, status):
             "rssi": None,
             "up": None,
             "phase": "leader" if is_self else None,
+            "extra": None,
         }
         if is_self:
             row["name"] = settings.get("effectiveDeviceName") or settings.get("deviceName")
-            row["heap"] = now.get("heapFree") or now.get("heap")
-            row["up"] = now.get("uptimeMs") or now.get("up")
+            row["heap"] = now.get("heap")
+            row["rssi"] = now.get("rssi")
+            row["up"] = now.get("uptime")
             row["rev"] = row["rev"] or settings.get("version")
+            # The leader is the data-rich node — surface its full vitals.
+            u = status.get("units", {})
+            temp = now.get("temp")
+            row["extra"] = {
+                "temp": f"{temp/10:.1f}C" if temp is not None else None,
+                "psram": fmt_heap(now.get("psram")),
+                "minHeap": fmt_heap(now.get("minHeap")),
+                "cpu": (f"{now.get('cpu0')}/{now.get('cpu1')}%"
+                        if now.get("cpu0") is not None else None),
+                "vccMin": (f"{u.get('vccMin')}mV" if u.get("vccMin") else None),
+                "i2cErr": now.get("i2cErr"),
+                "ntpAge": (fmt_uptime(now.get("ntpAge"))
+                           if now.get("ntpAge") is not None else None),
+                "mqttDrops": now.get("mqttDrops"),
+                "reset": now.get("reset"),
+            }
         else:
             fs = jget(host, "/settings", timeout=3.0) if host else None
             if fs:
                 row["name"] = fs.get("effectiveDeviceName") or fs.get("deviceName")
                 row["heap"] = fs.get("heap")
                 row["rssi"] = fs.get("rssi")
-                # The follower's /settings `up` is uptime SECONDS (ApiIndex);
-                # fmt_uptime wants ms, so normalize.
-                up_s = fs.get("up")
-                row["up"] = up_s * 1000 if up_s is not None else None
+                row["up"] = fs.get("up")  # seconds (ApiIndex)
                 row["phase"] = fs.get("clusterState")
                 row["rev"] = row["rev"] or fs.get("version")
+                row["extra"] = {"minHeap": fmt_heap(fs.get("minHeap"))
+                                if fs.get("minHeap") else None}
         out.append(row)
     out.sort(key=lambda r: (r["row"] if r["row"] is not None else 99))
     return out, settings, now
@@ -238,6 +257,19 @@ def render_dashboard(leader):
             f"{dot} {bold(name):<28} {role:<6} {phase:<11} rev {cyan(rev)}{vitstr}{upd}{wear}")
         lines.append(
             f"   row{m['row']}  " + health_bar(m["detected"], m["faulty"], m["width"]))
+        extra = m.get("extra") or {}
+        labels = [("temp", "temp"), ("cpu", "cpu"), ("psram", "psram free"),
+                  ("minHeap", "minheap"), ("vccMin", "vccMin"),
+                  ("i2cErr", "i2cErr"), ("ntpAge", "ntp-age"),
+                  ("mqttDrops", "mqttDrops")]
+        parts = [f"{lbl} {extra[key]}" for key, lbl in labels
+                 if extra.get(key) is not None]
+        if parts:
+            lines.append(dim("        " + "   ".join(parts)))
+        if extra.get("reset") and extra["reset"] not in ("", "Unknown"):
+            rst = extra["reset"]
+            tag = red(rst) if "rown" in rst or "anic" in rst or "atchdog" in rst else dim(rst)
+            lines.append(dim("        last reset: ") + tag)
     lines.append("")
     text = settings.get("lastWrittenText", "")
     mode = settings.get("deviceMode", "?")
