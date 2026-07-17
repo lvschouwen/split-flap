@@ -61,6 +61,7 @@ struct ClusterMemberRuntime {
   String rev;                  // follower firmware rev (join + ping replies, #276)
   String plat;                 // reported platform, "" = same as leader (#297)
   int reportedWidth = 0;       // join-handshake width fact
+  uint32_t logCursor = 0;      // last ingested byte cursor from GET /log (#318 E)
   ClusterMemberHealth health;  // last #294 ping-reply health
   // Cluster-wire auth key (#313 follow-on): minted at the first join, sent in
   // the join body, reused across rejoins, wiped on a config change (runtime

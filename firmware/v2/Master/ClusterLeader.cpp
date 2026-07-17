@@ -182,6 +182,37 @@ static int clusterHttpRequest(const String& url, const String& postBody,
   return status;
 }
 
+// One blocking GET for a follower's log ring (#318 E). Separate from the POST
+// helper above because the reply is far larger (the ESP-01 ring is 2 KB, vs
+// the ~180 B join/ping replies) — a bigger read buffer, not the 513 B one.
+// Returns -1 on transport failure, else the HTTP status; `outBody` gets the
+// (bounded) reply. clusterTask-only caller, so the read buffer is static.
+static int clusterHttpGetBody(const String& url, String& outBody) {
+  esp_http_client_config_t cfg = {};
+  cfg.url = url.c_str();
+  cfg.timeout_ms = CLUSTER_HTTP_TIMEOUT_MS;
+  cfg.disable_auto_redirect = true;  // #313: never follow a member off-LAN
+  esp_http_client_handle_t client = esp_http_client_init(&cfg);
+  if (client == nullptr) return -1;
+
+  esp_http_client_set_method(client, HTTP_METHOD_GET);
+
+  int status = -1;
+  if (esp_http_client_open(client, 0) == ESP_OK &&
+      esp_http_client_fetch_headers(client) >= 0) {
+    status = esp_http_client_get_status_code(client);
+    static char buf[2200];  // 2 KB follower ring + cursor line + headroom
+    int got = esp_http_client_read_response(client, buf, sizeof(buf) - 1);
+    if (got > 0) {
+      buf[got] = '\0';
+      outBody = buf;
+    }
+  }
+  esp_http_client_close(client);
+  esp_http_client_cleanup(client);
+  return status;
+}
+
 void clusterLeaderInit(SettingsStore& store, const String& deviceName) {
   leaderMutex = xSemaphoreCreateMutex();
   if (leaderMutex == nullptr) {
@@ -273,6 +304,31 @@ void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
   submitGrid("c:" + alignment + ":" + String(speed) + ":" + timeText + "|" +
                  dateText,
              true, timeText, dateText, alignment, speed);
+}
+
+// /stop propagation (#317): blank every FOLLOWER row in sync (the leader's own
+// row is blanked by the local Stop opcode). `lastContentKey` is deliberately
+// NOT touched — so the next clock tick recomputes the SAME content key and
+// submitGrid early-returns, leaving the wall blank until the clock content
+// actually moves (next minute) or a producer sends new text. That mirrors a
+// standalone board's "blank until the clock ticks on" behavior exactly.
+void clusterLeaderBlankWall() {
+  if (!clusterLeaderEnabled()) return;
+  bool synced = false;
+  uint64_t nowE = epochNowMs(synced);
+  LeaderLock lock;
+  gridCommitAtMs = synced ? nowE + CLUSTER_COMMIT_LEAD_MS : 0;
+  bool anyChanged = false;
+  for (int i = 0; i < table.count; i++) {
+    if (clusterMemberIsSelf(table.members[i])) continue;
+    if (segments[i].length() == 0) continue;  // already blank
+    segments[i] = "";
+    runtimes[i].renderDirty = true;
+    anyChanged = true;
+  }
+  if (anyChanged) {
+    gridGenerationAtomic.fetch_add(1, std::memory_order_relaxed);
+  }
 }
 
 // --- clusterTask body -----------------------------------------------------------
@@ -1204,6 +1260,89 @@ bool clusterLeaderRebootHoldSent() {
   return rebootHoldSent.load();
 }
 
+// --- follower log pull (#318 E) --------------------------------------------------
+
+// Interval between log pulls; one member per tick, round-robin. Gentle on
+// purpose — follower logs are event-driven, not high-rate, and the pull is a
+// blocking round-trip on clusterTask like every other outbound call.
+static const uint32_t LOG_PULL_INTERVAL_MS = 20000;
+static uint32_t nextLogPullMs = 0;
+static int logPullRobin = 0;
+
+// Pulls the delta of one ESP-01 row's log and tees it into the master's own
+// log stream so /log/flash shows the whole wall's activity. Scoped to esp01
+// members: they have no serial console (GPIO1/3 are the unit bus) so this is
+// their only observability path (#316). S3 members are directly reachable and
+// keep their own /log + /log/flash, so pulling them would only duplicate.
+static void followerLogPullTick() {
+  uint32_t nowMs = millis();
+  if ((int32_t)(nowMs - nextLogPullMs) < 0) return;
+  nextLogPullMs = nowMs + LOG_PULL_INTERVAL_MS;
+
+  String host;
+  uint32_t cursor = 0;
+  int idx = -1;
+  {
+    LeaderLock lock;
+    int n = table.count;
+    if (n == 0) return;
+    for (int step = 0; step < n; step++) {
+      int i = (logPullRobin + step) % n;
+      const ClusterMemberDef& def = table.members[i];
+      if (clusterMemberIsSelf(def)) continue;
+      if (runtimes[i].plat != "esp01") continue;
+      if (!runtimes[i].joined || runtimes[i].degraded) continue;
+      // Don't poke a row whose async_tcp task is busy taking a firmware
+      // push (#304) — the same reason collectMemberWork skips it.
+      if (followerPush.phase == FollowerPushPhase::Uploading &&
+          followerPush.memberIndex == i) {
+        continue;
+      }
+      host = def.host;
+      cursor = runtimes[i].logCursor;
+      idx = i;
+      logPullRobin = (i + 1) % n;
+      break;
+    }
+  }
+  if (idx < 0) return;  // no eligible ESP-01 row this round
+
+  String body;
+  int status = clusterHttpGetBody(
+      "http://" + host + "/log?after=" + String((unsigned long)cursor), body);
+  if (status != 200) return;
+
+  // Body = "<nextCursor>\n<delta>". Advance the cursor from the first line;
+  // a body without a newline is malformed — leave the cursor and retry.
+  int nl = body.indexOf('\n');
+  if (nl < 0) return;
+  uint32_t next =
+      (uint32_t)strtoul(body.substring(0, nl).c_str(), nullptr, 10);
+
+  {
+    LeaderLock lock;
+    // The table may have moved while the lock was released; only advance the
+    // cursor if this row is still the same host at the same index.
+    if (idx < table.count && String(table.members[idx].host) == host) {
+      runtimes[idx].logCursor = next;
+    }
+  }
+
+  // Tee each delta line, tagged with the row's host. SerialPrintln funnels
+  // through the master's webLogAppend, which stamps the ingest time (#318 E),
+  // so the fleet log carries one coherent clock.
+  int start = nl + 1;
+  int len = (int)body.length();
+  while (start < len) {
+    int end = body.indexOf('\n', start);
+    if (end < 0) end = len;
+    if (end > start) {
+      SerialPrintln("[" + host + "] " + body.substring(start, end));
+    }
+    start = end + 1;
+  }
+}
+
 void clusterLeaderTick() {
   if (leaderMutex == nullptr) return;
   applyStagedConfig();
@@ -1255,6 +1394,9 @@ void clusterLeaderTick() {
   // On-demand ESP-01 firmware relay (#304) — mutually exclusive with the
   // auto-rollout above (each guards on the other's phase).
   followerPushServiceTick();
+  // Pull one ESP-01 row's log into the fleet log (#318 E) — after the pushes
+  // so a firmware stream always wins the tick over a log poll.
+  followerLogPullTick();
 }
 
 // Fills the status snapshot — leaderMutex HELD by the caller. The self
