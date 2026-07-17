@@ -403,9 +403,17 @@ struct MemberWorkItem {
   String body;
 };
 
+// Round-robin cursor for the one-op-per-tick fan-out (#320). clusterTask-
+// private: only collectMemberWork touches it, always under LeaderLock.
+static int fanoutCursor = -1;
+
 // Builds the next round of outbound calls under the lock; the blocking
 // HTTP happens with the mutex RELEASED so submits/status reads never wait
-// on a slow follower.
+// on a slow follower. At most ONE member is contacted per tick (#320): a
+// promote-time catch-up makes every member due at once, and doing them all in
+// one tick — one being a dead host burning the full HTTP timeout — starved
+// core-0 idle past the 5 s task watchdog. clusterFanoutNext round-robins so a
+// stuck dead host can't monopolize the fan-out.
 static int collectMemberWork(MemberWorkItem* items) {
   LeaderLock lock;
   int count = 0;
@@ -413,9 +421,10 @@ static int collectMemberWork(MemberWorkItem* items) {
   // One epoch-ms stamp for every signed request this round (#313 follow-on).
   bool signSynced = false;
   uint64_t signTs = epochNowMs(signSynced);
+
+  bool needsAction[CLUSTER_MAX_MEMBERS] = {false};
   for (int i = 0; i < table.count; i++) {
-    const ClusterMemberDef& def = table.members[i];
-    if (clusterMemberIsSelf(def)) continue;
+    if (clusterMemberIsSelf(table.members[i])) continue;
     // While a rollout upload streams to a member, its flash writes hog the
     // follower's async_tcp task — regular contact would time out and read
     // as failures. Skip it; the upload round-trip IS the contact (#276).
@@ -429,11 +438,16 @@ static int collectMemberWork(MemberWorkItem* items) {
         followerPush.memberIndex == i) {
       continue;
     }
-    ClusterLeaderAction action = clusterMemberNextAction(runtimes[i], nowMs);
-    if (action == ClusterLeaderAction::None) continue;
+    needsAction[i] =
+        clusterMemberNextAction(runtimes[i], nowMs) != ClusterLeaderAction::None;
+  }
 
+  int pick = clusterFanoutNext(fanoutCursor, needsAction, table.count);
+  if (pick >= 0) {
+    const ClusterMemberDef& def = table.members[pick];
+    ClusterLeaderAction action = clusterMemberNextAction(runtimes[pick], nowMs);
     MemberWorkItem& item = items[count++];
-    item.index = i;
+    item.index = pick;
     item.action = action;
     String host(def.host);
     switch (action) {
@@ -444,15 +458,15 @@ static int collectMemberWork(MemberWorkItem* items) {
         item.url = "http://" + host + "/cluster/join";
         // Mint the per-member wire-auth key once (#313 follow-on); reused
         // across rejoins so the key stays stable while the membership does.
-        if (!runtimes[i].hmacKeyValid) {
-          clusterMintKey(runtimes[i].hmacKey);
-          runtimes[i].hmacKeyValid = true;
+        if (!runtimes[pick].hmacKeyValid) {
+          clusterMintKey(runtimes[pick].hmacKey);
+          runtimes[pick].hmacKeyValid = true;
         }
         item.body = "leaderName=" + urlEncode(leaderDeviceName) +
                     "&leaderHost=" + urlEncode(WiFi.localIP().toString()) +
                     "&row=" + String((int)def.row) +
                     "&epoch=" + String((unsigned long)epoch) +
-                    "&key=" + clusterKeyToHex(runtimes[i].hmacKey);
+                    "&key=" + clusterKeyToHex(runtimes[pick].hmacKey);
         break;
       }
       case ClusterLeaderAction::Render: {
@@ -465,17 +479,17 @@ static int collectMemberWork(MemberWorkItem* items) {
         uint32_t seq = ++seqCounter;
         item.body = "epoch=" + String((unsigned long)epoch) +
                     "&seq=" + String((unsigned long)seq) +
-                    "&text=" + urlEncode(segments[i]) +
+                    "&text=" + urlEncode(segments[pick]) +
                     "&speed=" + String(gridSpeed) +
                     "&commitAtMs=" + String((unsigned long long)gridCommitAtMs);
         // Sign the content (#313 follow-on) once a key is negotiated — the
         // canonical fields mirror what the follower reconstructs from the
         // wire params, so a captured mac can't be reused for other text.
-        if (runtimes[i].hmacKeyValid) {
-          String msg = clusterHmacRenderMsg(signTs, epoch, seq, segments[i],
+        if (runtimes[pick].hmacKeyValid) {
+          String msg = clusterHmacRenderMsg(signTs, epoch, seq, segments[pick],
                                             gridSpeed, gridCommitAtMs);
           item.body += "&ts=" + clusterU64ToStr(signTs) + "&mac=" +
-                       clusterHmacSign(runtimes[i].hmacKey, msg);
+                       clusterHmacSign(runtimes[pick].hmacKey, msg);
         }
         break;
       }
