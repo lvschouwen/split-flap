@@ -19,6 +19,7 @@
 #include <memory>
 
 #include <esp_partition.h>
+#include <esp_core_dump.h>  // #319: /coredump crash diagnostics
 
 #include "ApiIndex.h"
 #include "BuildVersion.h"
@@ -476,6 +477,114 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     flashLogRequestClear();
     request->send(202, "text/plain", F("Flash log clear queued"));
   });
+
+  // --- coredump (#319) — remote crash diagnostics --------------------------
+  // The SUMMARY (task name + code addresses + backtrace PCs) carries NO
+  // secrets, so an unauthenticated GET is fine — same posture as /settings,
+  // /log/flash. It is always registered. The RAW image, in contrast, is a
+  // task-stack dump that CAN transiently hold HMAC key material / WiFi-cred
+  // fragments (a key mid-sign on clusterTask's stack); this device has no
+  // auth and CORS-closing does not stop a plain HTTP client, so raw is
+  // compiled out of shipped images and only appears in a build that opts in
+  // with -DCOREDUMP_RAW_ENABLE (deliberately OTA'd to a crashing board).
+  // Read-only; the coredump partition is written solely by the panic handler.
+  server.on("/coredump/summary", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (esp_core_dump_image_check() != ESP_OK) {
+      request->send(404, "application/json", F("{\"present\":false}"));
+      return;
+    }
+    // Zero-init: if a partially-corrupted-but-parseable dump leaves a field
+    // untouched, we echo a deterministic 0, not stale heap bytes.
+    auto* summary =
+        (esp_core_dump_summary_t*)calloc(1, sizeof(esp_core_dump_summary_t));
+    if (summary == nullptr) {
+      request->send(503, "application/json", F("{\"error\":\"oom\"}"));
+      return;
+    }
+    if (esp_core_dump_get_summary(summary) != ESP_OK) {
+      free(summary);
+      request->send(500, "application/json",
+                    F("{\"present\":true,\"error\":\"summary-failed\"}"));
+      return;
+    }
+    char task[17];
+    memcpy(task, summary->exc_task, 16);
+    task[16] = '\0';
+    char hex[11];
+    String out;
+    out.reserve(640);
+    out += F("{\"present\":true,\"rev\":\"" GIT_REV "\",\"task\":");
+    appendJsonString(out, String(task));
+    snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->exc_pc);
+    out += F(",\"pc\":\"");
+    out += hex;
+    out += F("\",\"excCause\":");
+    out += (unsigned)summary->ex_info.exc_cause;
+    snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->ex_info.exc_vaddr);
+    out += F(",\"excVaddr\":\"");
+    out += hex;
+    out += F("\",\"coreDumpVersion\":");
+    out += (unsigned)summary->core_dump_version;
+    out += F(",\"backtraceCorrupted\":");
+    out += summary->exc_bt_info.corrupted ? F("true") : F("false");
+    out += F(",\"backtrace\":[");
+    uint32_t depth = summary->exc_bt_info.depth;
+    if (depth > 16) depth = 16;
+    for (uint32_t i = 0; i < depth; i++) {
+      if (i) out += ',';
+      snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->exc_bt_info.bt[i]);
+      out += '"';
+      out += hex;
+      out += '"';
+    }
+    out += F("]}");
+    free(summary);
+    request->send(200, "application/json", out);
+  });
+
+#ifdef COREDUMP_RAW_ENABLE
+  // Raw ELF coredump for offline `esp-coredump info_corefile` — the fallback
+  // when a summary backtrace reads corrupted. Streamed straight off the
+  // coredump partition (flash READ only, async-safe). Opt-in only (see the
+  // summary comment above): task stacks can leak transient secrets, so this
+  // never ships in a release image.
+  server.on("/coredump/raw", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (esp_core_dump_image_check() != ESP_OK) {
+      request->send(404, "text/plain", F("no coredump"));
+      return;
+    }
+    size_t addr = 0, size = 0;
+    if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) {
+      request->send(500, "text/plain", F("coredump image unavailable"));
+      return;
+    }
+    const esp_partition_t* part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, nullptr);
+    if (part == nullptr) {
+      request->send(500, "text/plain", F("no coredump partition"));
+      return;
+    }
+    // image_get() returns an ABSOLUTE flash address — translate to a
+    // partition-relative offset for esp_partition_read.
+    size_t offset = addr - part->address;
+    AsyncWebServerResponse* response = request->beginChunkedResponse(
+        "application/octet-stream",
+        [part, offset, size](uint8_t* buffer, size_t maxLen,
+                             size_t index) -> size_t {
+          if (index >= size) return 0;
+          size_t remaining = size - index;
+          size_t toRead = remaining < maxLen ? remaining : maxLen;
+          if (esp_partition_read(part, offset + index, buffer, toRead) !=
+              ESP_OK) {
+            return 0;  // abort the stream
+          }
+          return toRead;
+        });
+    response->addHeader("Content-Disposition",
+                        "attachment; filename=\"coredump-" GIT_REV ".elf\"");
+    request->send(response);
+  });
+#endif  // COREDUMP_RAW_ENABLE
 
   // --- settings/message form (v1 wire contract) ----------------------------
   server.on("/", HTTP_POST, [](AsyncWebServerRequest* request) {
@@ -2046,6 +2155,23 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
     }
     // Small grace period so the HTTP response flushes before the restart.
     rebootDue = pendingReboot && millis() - rebootRequestedAtMs > 750;
+  }
+
+  // #321: before an intentional reboot, announce a graceful hold to followers
+  // (once) and wait until clusterTask has fanned it out — so a designated
+  // backup doesn't take over during the reboot window. Bounded (4 s) so a stuck
+  // member can't block the reboot. clusterLeader* take the LEADER lock, so they
+  // run out here, never nested under the WebState lock above.
+  if (rebootDue) {
+    static bool rebootHoldAnnounced = false;
+    if (!rebootHoldAnnounced) {
+      rebootHoldAnnounced = true;
+      clusterLeaderAnnounceRebootHold();
+    }
+    if (!clusterLeaderRebootHoldSent() &&
+        millis() - rebootRequestedAtMs < 4000) {
+      rebootDue = false;  // hold not fanned out yet — hold the reboot
+    }
   }
 
   // Outside the lock: configTzTime takes the LWIP core lock — keep the two

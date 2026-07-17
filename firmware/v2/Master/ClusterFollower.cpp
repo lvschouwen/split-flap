@@ -74,6 +74,15 @@ static uint32_t digestReceivedMs = 0;
 static String digestTable;
 static int digestSelfIndex = -1;
 static bool tableDirty = false;
+// #321 ranked auto-takeover: this board's rank in the leader's `succ` list
+// (-1 = not a designated successor), and the deadline until which an announced
+// leader hold suppresses takeover. Both live under the ClusterLock.
+static int successorRank = -1;
+static uint32_t autoTakeoverHoldUntilMs = 0;
+// Backoff gate for a FAILED auto-promote (netTask-only): the promote-due inputs
+// don't change on a non-gate failure, so without this the attempt would re-fire
+// every ~10 ms service tick (log spam). 0 = no cooldown pending.
+static uint32_t autoPromoteRetryAtMs = 0;
 
 // Single staged render slot — a newer accepted render simply replaces an
 // undelivered older one (seq acceptance upstream keeps ordering honest).
@@ -112,11 +121,14 @@ void clusterFollowerInit(SettingsStore& store) {
   }
 }
 
+static ClusterPromoteVerdict clusterFollowerPromoteImpl(bool autoPath);
+
 void clusterFollowerServiceTick(SettingsStore& store) {
   if (clusterMutex == nullptr) return;
 
   bool persistMembership = false;
   bool clearMembership = false;
+  bool doAutoPromote = false;  // #321: decided under the lock, run after it
   String persistName, persistHost;
   int persistRow = 0;
   String persistKeyHex;  // "" = remove the key alongside the membership
@@ -134,6 +146,14 @@ void clusterFollowerServiceTick(SettingsStore& store) {
       SerialPrintln(String("cluster: phase -> ") +
                     clusterFollowerPhaseName(policyState.phase));
     }
+    // #321: a designated successor takes over once leader silence passes its
+    // ranked threshold (fires in Grace, before the wall blanks). Decided here
+    // under the lock; the promote runs after it releases (it re-locks + takes
+    // the leader mutex, and re-checks this gate — TOCTOU-safe).
+    doAutoPromote = clusterFollowerAutoPromoteDue(
+                        policyState, successorRank, autoTakeoverHoldUntilMs,
+                        millis()) &&
+                    (int32_t)(millis() - autoPromoteRetryAtMs) >= 0;
     if (membershipDirty) {
       membershipDirty = false;
       if (leaderHost.length() > 0) {
@@ -211,6 +231,27 @@ void clusterFollowerServiceTick(SettingsStore& store) {
       store.remove(CLUSTER_KEY_SELF_INDEX);
     }
   }
+
+  // #321: run the ranked auto-takeover outside the lock (it re-locks + takes
+  // the leader mutex). The impl re-checks the gate, so a leader that returned
+  // between the decision and here cleanly no-ops the promote.
+  if (doAutoPromote) {
+    ClusterPromoteVerdict v = clusterFollowerPromoteImpl(true);
+    if (v.httpStatus == 200) {
+      // Took over. Cool down before we could auto-promote AGAIN: if this was a
+      // false positive (a wedged follower that "lost" a still-alive leader),
+      // the leader sticky-demotes us and we rejoin — this stops that from
+      // becoming a 30 s promote<->demote churn (the cooldown survives the
+      // same-leader rejoin, which doesn't reset it).
+      autoPromoteRetryAtMs = millis() + CLUSTER_AUTO_TAKEOVER_COOLDOWN_MS;
+    } else {
+      // Back off so a persistent failure (e.g. no digest held) can't re-fire
+      // every service tick — the promote-due inputs won't change on their own.
+      autoPromoteRetryAtMs = millis() + CLUSTER_AUTO_TAKEOVER_RETRY_MS;
+      SerialPrintln(String("cluster: auto-takeover stood down (") + v.message +
+                    ")");
+    }
+  }
 }
 
 ClusterFollowerView clusterFollowerViewGet() {
@@ -258,6 +299,11 @@ void clusterFollowerHandleJoin(const ClusterJoinRequest& req) {
     hmacLastAcceptedTs = 0;
     hmacLastPersistedTs = 0;
     hmacTsDirty = true;
+    // #321: a new key means a new leader relationship — drop any successor rank
+    // / hold carried over from the previous leader (the new leader's first ping
+    // re-derives them). Correctness-by-construction, not by ping timing.
+    successorRank = -1;
+    autoTakeoverHoldUntilMs = 0;
   }
   // NVS-flood guard (#313): a leader (re)joins on every membership change,
   // but the follower persists only when a field actually moved — a steady
@@ -314,6 +360,20 @@ bool clusterFollowerHandlePing(const String& digest, int youIndex,
   if (digest.length() > 0 && clusterDigestShapeOk(digest)) {
     digestRaw = digest;
     digestReceivedMs = millis();
+    // #321: refresh our auto-takeover rank from the leader's `succ` list vs our
+    // own `you` index — the leader recomputes it as the fleet changes; -1 means
+    // we're not a designated successor (ESP-01/foreign, or absent) → never fire.
+    successorRank = clusterSuccessorRank(
+        clusterExtractJsonString(digest, "succ").c_str(), youIndex);
+    // #321 graceful-reboot hold: a leader about to restart on purpose stamps a
+    // hold (ms) into its (signed) digest — push our takeover deadline past the
+    // reboot window so a planned reboot doesn't look like death. A swapped/
+    // injected hold can't spoof it: the digest is HMAC-signed above (#313).
+    long holdMs = clusterExtractJsonInt(digest, "hold", 0);
+    if (holdMs > 0) {
+      autoTakeoverHoldUntilMs =
+          clusterAutoTakeoverHoldDeadline((uint32_t)holdMs, millis());
+    }
     // The promote inputs persist only on change — the table moves on
     // config edits, not on the 10 s ping cadence.
     String tableSpec = clusterExtractJsonString(digest, "table");
@@ -369,6 +429,8 @@ static void followerLeaveLocked() {
   digestRaw = "";
   digestTable = "";
   digestSelfIndex = -1;
+  successorRank = -1;          // #321: no longer a successor once we leave
+  autoTakeoverHoldUntilMs = 0;
   tableDirty = true;
   SerialPrintln(F("cluster: left — standalone again"));
 }
@@ -394,14 +456,28 @@ bool clusterFollowerJoinWouldConflict(const String& joiningLeaderHost) {
   return clusterFollowerJoinConflicts(policyState, millis(), sameLeader);
 }
 
-ClusterPromoteVerdict clusterFollowerPromote() {
+// Gate for a promote attempt — MUST be evaluated under the ClusterLock. Manual
+// (#295, web button) requires LocalFallback; auto (#321) requires the ranked
+// takeover trigger (rank + staggered silence, no active hold). The commit-point
+// re-check uses this same gate so a leader returning mid-promote cancels it.
+static bool promoteGatePasses(bool autoPath) {
+  return autoPath ? clusterFollowerAutoPromoteDue(policyState, successorRank,
+                                                  autoTakeoverHoldUntilMs,
+                                                  millis())
+                  : clusterFollowerCanPromote(policyState);
+}
+
+static ClusterPromoteVerdict clusterFollowerPromoteImpl(bool autoPath) {
   if (clusterMutex == nullptr) return {500, "cluster service not running"};
   String tableSpec, oldLeaderHost;
   int selfIndex;
   {
     ClusterLock lock;
-    if (!clusterFollowerCanPromote(policyState)) {
-      return {409, "Promote requires local-fallback — the leader is still expected back"};
+    if (!promoteGatePasses(autoPath)) {
+      return {409, autoPath
+                       ? "auto-takeover not due"
+                       : "Promote requires local-fallback — the leader is "
+                         "still expected back"};
     }
     if (digestTable.length() == 0 || digestSelfIndex < 0) {
       return {409, "No cluster digest held — cannot take over"};
@@ -423,18 +499,24 @@ ClusterPromoteVerdict clusterFollowerPromote() {
   if (v.httpStatus != 200) return {v.httpStatus, v.message};
 
   // Commit point (review HIGH — promote/reclaim TOCTOU): re-check the
-  // phase and leave in ONE critical section. A leader ping landing after
+  // gate and leave in ONE critical section. A leader ping landing after
   // this wins nothing: the board is Standalone (ping 409s) and about to
   // lead; the returning old leader demotes on the sticky-leadership 409s.
   {
     ClusterLock lock;
-    if (!clusterFollowerCanPromote(policyState)) {
-      return {409, "The leader came back — promote cancelled"};
+    if (!promoteGatePasses(autoPath)) {
+      return {409, autoPath ? "auto-takeover cancelled — leader returned"
+                            : "The leader came back — promote cancelled"};
     }
     followerLeaveLocked();
   }
   clusterLeaderStageConfig(newSpec);  // pre-validated: cannot fail
-  SerialPrintln("cluster: PROMOTED — taking over the wall as leader (" +
-                newSpec + ")");
+  SerialPrintln(String("cluster: ") +
+                (autoPath ? "AUTO-PROMOTED" : "PROMOTED") +
+                " — taking over the wall as leader (" + newSpec + ")");
   return {200, "Promoted — leading now; members join on the next tick"};
+}
+
+ClusterPromoteVerdict clusterFollowerPromote() {
+  return clusterFollowerPromoteImpl(false);
 }

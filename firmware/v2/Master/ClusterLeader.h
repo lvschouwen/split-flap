@@ -94,6 +94,13 @@ bool clusterLeaderEnabled();
 // self-row staging/re-show, then the sequential HTTP fan-out.
 void clusterLeaderTick();
 
+// #321 graceful-reboot hold: before an intentional restart, announce a hold to
+// followers so a designated backup doesn't take over during the reboot window.
+// No-op when not leading. clusterTask fans it out; the reboot drain waits on
+// clusterLeaderRebootHoldSent() (true immediately when not leading).
+void clusterLeaderAnnounceRebootHold();
+bool clusterLeaderRebootHoldSent();
+
 // Producers hand LOGICAL grid content here when enabled. Identical
 // content dedups internally; changed content re-slices, stamps a shared
 // commitAt (~400 ms out) and marks the affected members dirty.

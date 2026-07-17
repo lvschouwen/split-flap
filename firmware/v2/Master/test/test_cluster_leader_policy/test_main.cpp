@@ -251,6 +251,53 @@ static void test_json_field_extraction() {
   TEST_ASSERT_EQUAL(-1, clusterExtractJsonInt(body, "idth", -1));
 }
 
+// --- one-op-per-tick fan-out round-robin (#320) --------------------------------
+
+static void test_fanout_none_due_returns_negative() {
+  int cursor = -1;
+  bool none[3] = {false, false, false};
+  TEST_ASSERT_EQUAL(-1, clusterFanoutNext(cursor, none, 3));
+  TEST_ASSERT_EQUAL(-1, clusterFanoutNext(cursor, nullptr, 0));
+}
+
+static void test_fanout_serves_one_then_round_robins() {
+  int cursor = -1;
+  bool all[3] = {true, true, true};
+  // One member per call, in order, wrapping — never all at once.
+  TEST_ASSERT_EQUAL(0, clusterFanoutNext(cursor, all, 3));
+  TEST_ASSERT_EQUAL(1, clusterFanoutNext(cursor, all, 3));
+  TEST_ASSERT_EQUAL(2, clusterFanoutNext(cursor, all, 3));
+  TEST_ASSERT_EQUAL(0, clusterFanoutNext(cursor, all, 3));  // wrap
+}
+
+static void test_fanout_skips_members_with_no_due_op() {
+  int cursor = -1;
+  bool some[3] = {true, false, true};
+  TEST_ASSERT_EQUAL(0, clusterFanoutNext(cursor, some, 3));
+  TEST_ASSERT_EQUAL(2, clusterFanoutNext(cursor, some, 3));  // 1 skipped
+  TEST_ASSERT_EQUAL(0, clusterFanoutNext(cursor, some, 3));  // wrap past 1
+}
+
+// The regression that caused #320: a stuck member (a dead host that stays
+// un-joined every tick) must not monopolize the fan-out — the healthy member
+// still gets served every other tick.
+static void test_fanout_stuck_member_does_not_starve_others() {
+  int cursor = -1;
+  bool stuck[2] = {true, true};  // index 0 = dead host, always due
+  TEST_ASSERT_EQUAL(0, clusterFanoutNext(cursor, stuck, 2));
+  TEST_ASSERT_EQUAL(1, clusterFanoutNext(cursor, stuck, 2));  // healthy served
+  TEST_ASSERT_EQUAL(0, clusterFanoutNext(cursor, stuck, 2));
+  TEST_ASSERT_EQUAL(1, clusterFanoutNext(cursor, stuck, 2));  // and again
+}
+
+// A membership shrink can leave the cursor past the new end; it must normalize
+// rather than index out of bounds or skip everyone.
+static void test_fanout_normalizes_stale_cursor() {
+  int cursor = 5;  // stale: count is now 3
+  bool some[3] = {false, true, false};
+  TEST_ASSERT_EQUAL(1, clusterFanoutNext(cursor, some, 3));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_member_needs_join);
@@ -272,5 +319,10 @@ int main(int, char**) {
   RUN_TEST(test_self_member_is_empty_host);
   RUN_TEST(test_json_field_extraction);
   RUN_TEST(test_join_reply_plat_parses_and_defaults_empty);
+  RUN_TEST(test_fanout_none_due_returns_negative);
+  RUN_TEST(test_fanout_serves_one_then_round_robins);
+  RUN_TEST(test_fanout_skips_members_with_no_due_op);
+  RUN_TEST(test_fanout_stuck_member_does_not_starve_others);
+  RUN_TEST(test_fanout_normalizes_stale_cursor);
   return UNITY_END();
 }

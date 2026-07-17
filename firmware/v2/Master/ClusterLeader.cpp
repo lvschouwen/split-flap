@@ -403,9 +403,27 @@ struct MemberWorkItem {
   String body;
 };
 
+// Round-robin cursor for the one-op-per-tick fan-out (#320). clusterTask-
+// private: only collectMemberWork touches it, always under LeaderLock.
+static int fanoutCursor = -1;
+
+// #321 graceful-reboot hold. Before an intentional restart the leader stamps a
+// hold (ms) into its digest and force-pings every member once so a designated
+// backup doesn't take over during the reboot window. rebootHoldMs also rides
+// the normal ping digest while set. Cross-task: the reboot drain waits on
+// rebootHoldSent.
+static const uint32_t CLUSTER_REBOOT_HOLD_MS = 45000;  // < follower clamp (60s)
+static uint32_t rebootHoldMs = 0;
+static std::atomic<bool> rebootHoldPending{false};
+static std::atomic<bool> rebootHoldSent{false};
+
 // Builds the next round of outbound calls under the lock; the blocking
 // HTTP happens with the mutex RELEASED so submits/status reads never wait
-// on a slow follower.
+// on a slow follower. At most ONE member is contacted per tick (#320): a
+// promote-time catch-up makes every member due at once, and doing them all in
+// one tick — one being a dead host burning the full HTTP timeout — starved
+// core-0 idle past the 5 s task watchdog. clusterFanoutNext round-robins so a
+// stuck dead host can't monopolize the fan-out.
 static int collectMemberWork(MemberWorkItem* items) {
   LeaderLock lock;
   int count = 0;
@@ -413,9 +431,10 @@ static int collectMemberWork(MemberWorkItem* items) {
   // One epoch-ms stamp for every signed request this round (#313 follow-on).
   bool signSynced = false;
   uint64_t signTs = epochNowMs(signSynced);
+
+  bool needsAction[CLUSTER_MAX_MEMBERS] = {false};
   for (int i = 0; i < table.count; i++) {
-    const ClusterMemberDef& def = table.members[i];
-    if (clusterMemberIsSelf(def)) continue;
+    if (clusterMemberIsSelf(table.members[i])) continue;
     // While a rollout upload streams to a member, its flash writes hog the
     // follower's async_tcp task — regular contact would time out and read
     // as failures. Skip it; the upload round-trip IS the contact (#276).
@@ -429,11 +448,16 @@ static int collectMemberWork(MemberWorkItem* items) {
         followerPush.memberIndex == i) {
       continue;
     }
-    ClusterLeaderAction action = clusterMemberNextAction(runtimes[i], nowMs);
-    if (action == ClusterLeaderAction::None) continue;
+    needsAction[i] =
+        clusterMemberNextAction(runtimes[i], nowMs) != ClusterLeaderAction::None;
+  }
 
+  int pick = clusterFanoutNext(fanoutCursor, needsAction, table.count);
+  if (pick >= 0) {
+    const ClusterMemberDef& def = table.members[pick];
+    ClusterLeaderAction action = clusterMemberNextAction(runtimes[pick], nowMs);
     MemberWorkItem& item = items[count++];
-    item.index = i;
+    item.index = pick;
     item.action = action;
     String host(def.host);
     switch (action) {
@@ -444,15 +468,15 @@ static int collectMemberWork(MemberWorkItem* items) {
         item.url = "http://" + host + "/cluster/join";
         // Mint the per-member wire-auth key once (#313 follow-on); reused
         // across rejoins so the key stays stable while the membership does.
-        if (!runtimes[i].hmacKeyValid) {
-          clusterMintKey(runtimes[i].hmacKey);
-          runtimes[i].hmacKeyValid = true;
+        if (!runtimes[pick].hmacKeyValid) {
+          clusterMintKey(runtimes[pick].hmacKey);
+          runtimes[pick].hmacKeyValid = true;
         }
         item.body = "leaderName=" + urlEncode(leaderDeviceName) +
                     "&leaderHost=" + urlEncode(WiFi.localIP().toString()) +
                     "&row=" + String((int)def.row) +
                     "&epoch=" + String((unsigned long)epoch) +
-                    "&key=" + clusterKeyToHex(runtimes[i].hmacKey);
+                    "&key=" + clusterKeyToHex(runtimes[pick].hmacKey);
         break;
       }
       case ClusterLeaderAction::Render: {
@@ -465,17 +489,17 @@ static int collectMemberWork(MemberWorkItem* items) {
         uint32_t seq = ++seqCounter;
         item.body = "epoch=" + String((unsigned long)epoch) +
                     "&seq=" + String((unsigned long)seq) +
-                    "&text=" + urlEncode(segments[i]) +
+                    "&text=" + urlEncode(segments[pick]) +
                     "&speed=" + String(gridSpeed) +
                     "&commitAtMs=" + String((unsigned long long)gridCommitAtMs);
         // Sign the content (#313 follow-on) once a key is negotiated — the
         // canonical fields mirror what the follower reconstructs from the
         // wire params, so a captured mac can't be reused for other text.
-        if (runtimes[i].hmacKeyValid) {
-          String msg = clusterHmacRenderMsg(signTs, epoch, seq, segments[i],
+        if (runtimes[pick].hmacKeyValid) {
+          String msg = clusterHmacRenderMsg(signTs, epoch, seq, segments[pick],
                                             gridSpeed, gridCommitAtMs);
           item.body += "&ts=" + clusterU64ToStr(signTs) + "&mac=" +
-                       clusterHmacSign(runtimes[i].hmacKey, msg);
+                       clusterHmacSign(runtimes[pick].hmacKey, msg);
         }
         break;
       }
@@ -503,7 +527,7 @@ static int collectMemberWork(MemberWorkItem* items) {
     String body = clusterBuildDigest(0, leaderDeviceName,
                                      WiFi.localIP().toString(),
                                      clusterTableToString(table), mirror,
-                                     rowCount, st);
+                                     rowCount, st, rebootHoldMs);
     if (body != digestLastBody) {
       digestLastBody = body;
       digestGen++;
@@ -1104,10 +1128,109 @@ static void followerPushServiceTick() {
   }
 }
 
+// #321 reboot-hold delivery. Built once when a reboot is announced, then sent
+// ONE member per clusterLeaderTick (see the tick) — the naive "ping everyone in
+// one call" is the exact core-0-starving burst #320 was written to eliminate
+// (up to 7 dead hosts × the 1.5 s HTTP timeout ≫ the 5 s task watchdog). Non-
+// degraded members are queued FIRST so the reachable rows — the ones that could
+// actually spuriously take over — get the hold within the drain's bounded wait
+// even if some members are dead and burn their timeouts at the tail.
+struct RebootHoldTarget {
+  String host;
+  String body;
+};
+static RebootHoldTarget rebootHoldTargets[CLUSTER_MAX_MEMBERS];
+static int rebootHoldCount = 0;
+static int rebootHoldCursor = 0;
+
+static void rebootHoldBuildTargets() {
+  LeaderLock lock;
+  rebootHoldCount = 0;
+  rebootHoldCursor = 0;
+  if (!clusterLeaderEnabled()) return;
+  ClusterLeaderStatus st;
+  statusFillLocked(st);
+  String mirror[CLUSTER_MAX_MEMBERS];
+  DisplaySnapshot snap = displaySnapshotGet();
+  int rowCount =
+      clusterMirrorRows(table, segments, String(snap.currentText),
+                        displayAlignmentFromString(gridAlignment), mirror);
+  String body =
+      clusterBuildDigest(0, leaderDeviceName, WiFi.localIP().toString(),
+                         clusterTableToString(table), mirror, rowCount, st,
+                         rebootHoldMs);
+  if (body != digestLastBody) {
+    digestLastBody = body;
+    digestGen++;
+  }
+  String digest = "{\"gen\":" + String((unsigned long)digestGen) +
+                  body.substring(strlen("{\"gen\":0"));
+  String encoded = urlEncode(digest);
+  bool synced = false;
+  uint64_t ts = epochNowMs(synced);
+  // Pass 0 = reachable (non-degraded) members, pass 1 = degraded ones.
+  for (int pass = 0; pass < 2; pass++) {
+    for (int i = 0;
+         i < table.count && rebootHoldCount < CLUSTER_MAX_MEMBERS; i++) {
+      if (clusterMemberIsSelf(table.members[i])) continue;
+      if (runtimes[i].degraded != (pass == 1)) continue;
+      RebootHoldTarget& t = rebootHoldTargets[rebootHoldCount++];
+      t.host = table.members[i].host;
+      t.body = "digest=" + encoded + "&you=" + String(i);
+      if (runtimes[i].hmacKeyValid) {
+        String msg = clusterHmacPingMsg(ts, digest, i);
+        t.body += "&ts=" + clusterU64ToStr(ts) + "&mac=" +
+                  clusterHmacSign(runtimes[i].hmacKey, msg);
+      }
+    }
+  }
+}
+
+// Called from the reboot drain (any task) before an intentional restart.
+void clusterLeaderAnnounceRebootHold() {
+  if (leaderMutex == nullptr || !clusterLeaderEnabled()) return;  // no followers
+  {
+    LeaderLock lock;
+    rebootHoldMs = CLUSTER_REBOOT_HOLD_MS;
+  }
+  rebootHoldSent.store(false);
+  rebootHoldPending.store(true);
+}
+
+// True once the hold has been fanned out — or immediately when not leading, so
+// a standalone board never waits.
+bool clusterLeaderRebootHoldSent() {
+  if (leaderMutex == nullptr || !clusterLeaderEnabled()) return true;
+  return rebootHoldSent.load();
+}
+
 void clusterLeaderTick() {
   if (leaderMutex == nullptr) return;
   applyStagedConfig();
   if (!clusterLeaderEnabled()) return;
+
+  // #321: deliver a pending reboot-hold ONE member per tick — watchdog-safe,
+  // same cadence as the normal fan-out (the 100 ms inter-tick vTaskDelay feeds
+  // core-0 idle between every blocking send). While it drains, this tick does
+  // ONLY the hold send so a tail of dead members can never stack two blocking
+  // ops in one tick. The reboot drain waits (bounded) on rebootHoldSent.
+  if (rebootHoldPending.exchange(false)) {
+    rebootHoldBuildTargets();
+    if (rebootHoldCount == 0) rebootHoldSent.store(true);  // nobody to tell
+  }
+  if (rebootHoldCursor < rebootHoldCount) {
+    String resp;
+    clusterHttpRequest(
+        "http://" + rebootHoldTargets[rebootHoldCursor].host + "/cluster/ping",
+        rebootHoldTargets[rebootHoldCursor].body, resp);
+    rebootHoldCursor++;
+    if (rebootHoldCursor >= rebootHoldCount) {
+      rebootHoldSent.store(true);
+      SerialPrintln("cluster: announced reboot-hold to " +
+                    String(rebootHoldCount) + " member(s)");
+    }
+    return;  // one blocking op this tick
+  }
 
   serviceSelfRow();
 

@@ -91,6 +91,33 @@ inline ClusterLeaderAction clusterMemberNextAction(
   return ClusterLeaderAction::None;
 }
 
+// Round-robin fan-out selector (#320). The leader contacts at most ONE member
+// per tick: a promote-time catch-up makes every member due at once (all
+// un-joined after the runtime reset), and if one is a dead host it burns the
+// full HTTP timeout — doing the whole round in a single tick blocks core 0
+// past the 5 s task watchdog (the crash that motivated this). Scanning starts
+// just AFTER the last-served index and wraps, so a member stuck needing the
+// same op every tick (a dead host that never joins) can never starve the
+// healthy ones.
+//
+// `cursor` is the last-served member index (-1 = none served yet, and stale
+// values past `count` are normalized); it is advanced to the returned index.
+// `needsAction[i]` is true when member i has a due op this tick (the caller
+// derives it from clusterMemberNextAction). Returns the chosen index, or -1
+// when none are due (cursor left unchanged so progress resumes next tick).
+inline int clusterFanoutNext(int& cursor, const bool* needsAction, int count) {
+  if (count <= 0 || needsAction == nullptr) return -1;
+  int start = (cursor < 0 || cursor >= count) ? -1 : cursor;
+  for (int step = 1; step <= count; step++) {
+    int i = (start + step) % count;  // start == -1 → first probe is index 0
+    if (needsAction[i]) {
+      cursor = i;
+      return i;
+    }
+  }
+  return -1;
+}
+
 inline void clusterMemberOnSuccess(ClusterMemberRuntime& m, uint32_t nowMs) {
   m.failures = 0;
   m.degraded = false;
