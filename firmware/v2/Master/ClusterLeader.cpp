@@ -21,6 +21,7 @@
 #include "ClockPolicy.h"  // clockIsTimeSynced
 #include "ClusterDigest.h"  // ping piggyback: digest build + health parse (#294)
 #include "ClusterFollowerPolicy.h"  // clusterRenderDelayMs (shared math)
+#include "ClusterHmac.h"  // cluster-wire auth: key mint + request signing
 #include "WearPolicy.h"  // self-row wear fold for the status/digest health
 #include "ClusterRolloutPolicy.h"
 #include "DisplayCommand.h"
@@ -111,6 +112,19 @@ static uint64_t epochNowMs(bool& synced) {
   return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
 }
 
+// Fill a 32-byte cluster-wire auth key from the S3 hardware RNG (#313
+// follow-on). esp_random() is the TRNG once the RF subsystem is up (always,
+// by the time a join fires) — 8 draws for 256 bits.
+static void clusterMintKey(uint8_t key[32]) {
+  for (int i = 0; i < 8; i++) {
+    uint32_t r = esp_random();
+    key[i * 4] = (uint8_t)(r >> 24);
+    key[i * 4 + 1] = (uint8_t)(r >> 16);
+    key[i * 4 + 2] = (uint8_t)(r >> 8);
+    key[i * 4 + 3] = (uint8_t)(r);
+  }
+}
+
 static String urlEncode(const String& value) {
   String out;
   out.reserve(value.length() + 8);
@@ -136,6 +150,8 @@ static int clusterHttpRequest(const String& url, const String& postBody,
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
   cfg.timeout_ms = CLUSTER_HTTP_TIMEOUT_MS;
+  cfg.disable_auto_redirect = true;  // #313: never follow a member's redirect
+                                     // off the LAN (SSRF/exfil hop)
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
   if (client == nullptr) return -1;
 
@@ -294,6 +310,8 @@ static void applyStagedConfig() {
 
   // Old remote hosts that are not in the new table get a leave.
   String leaveHosts[CLUSTER_MAX_MEMBERS];
+  uint8_t leaveKeys[CLUSTER_MAX_MEMBERS][32];
+  bool leaveKeyValid[CLUSTER_MAX_MEMBERS];
   int leaveCount = 0;
   {
     LeaderLock lock;
@@ -307,6 +325,12 @@ static void applyStagedConfig() {
         }
       }
       if (!kept && !suppressLeave) {
+        // Capture the member's auth key BEFORE the runtime reset below so the
+        // leave can be signed (#313 follow-on) — a keyed follower requires it.
+        leaveKeyValid[leaveCount] = runtimes[i].hmacKeyValid;
+        if (runtimes[i].hmacKeyValid) {
+          memcpy(leaveKeys[leaveCount], runtimes[i].hmacKey, 32);
+        }
         leaveHosts[leaveCount++] = table.members[i].host;
       }
     }
@@ -334,7 +358,19 @@ static void applyStagedConfig() {
 
   for (int i = 0; i < leaveCount; i++) {
     String body;
-    clusterHttpRequest("http://" + leaveHosts[i] + "/cluster/leave", "", body);
+    // Sign the leave (#313 follow-on) so a keyed follower honors it; an
+    // un-keyed (pre-HMAC) follower ignores the extra params and falls back to
+    // #313 source-IP acceptance.
+    String post;
+    if (leaveKeyValid[i]) {
+      bool synced = false;
+      uint64_t ts = epochNowMs(synced);
+      String msg = clusterHmacLeaveMsg(ts);
+      post = "ts=" + clusterU64ToStr(ts) + "&mac=" +
+             clusterHmacSign(leaveKeys[i], msg);
+    }
+    clusterHttpRequest("http://" + leaveHosts[i] + "/cluster/leave", post,
+                       body);
     SerialPrintln("cluster: sent leave to " + leaveHosts[i]);
   }
 }
@@ -374,6 +410,9 @@ static int collectMemberWork(MemberWorkItem* items) {
   LeaderLock lock;
   int count = 0;
   uint32_t nowMs = millis();
+  // One epoch-ms stamp for every signed request this round (#313 follow-on).
+  bool signSynced = false;
+  uint64_t signTs = epochNowMs(signSynced);
   for (int i = 0; i < table.count; i++) {
     const ClusterMemberDef& def = table.members[i];
     if (clusterMemberIsSelf(def)) continue;
@@ -398,29 +437,48 @@ static int collectMemberWork(MemberWorkItem* items) {
     item.action = action;
     String host(def.host);
     switch (action) {
-      case ClusterLeaderAction::Join:
+      case ClusterLeaderAction::Join: {
         // Resolved only when a join is actually due — a per-tick
         // WiFi.localIP().toString() would churn the heap ~10x/s for a
         // value that only changes on DHCP renewal.
         item.url = "http://" + host + "/cluster/join";
+        // Mint the per-member wire-auth key once (#313 follow-on); reused
+        // across rejoins so the key stays stable while the membership does.
+        if (!runtimes[i].hmacKeyValid) {
+          clusterMintKey(runtimes[i].hmacKey);
+          runtimes[i].hmacKeyValid = true;
+        }
         item.body = "leaderName=" + urlEncode(leaderDeviceName) +
                     "&leaderHost=" + urlEncode(WiFi.localIP().toString()) +
                     "&row=" + String((int)def.row) +
-                    "&epoch=" + String((unsigned long)epoch);
+                    "&epoch=" + String((unsigned long)epoch) +
+                    "&key=" + clusterKeyToHex(runtimes[i].hmacKey);
         break;
-      case ClusterLeaderAction::Render:
+      }
+      case ClusterLeaderAction::Render: {
         // Seq is minted per POST attempt: an applied-but-timed-out render
         // retries with a higher seq and re-applies IDENTICAL content (a
         // visual no-op), while cross-ordered stale renders still lose the
         // seq race. A stable per-content seq would save that no-op but
         // couple retry state to content state for no wall-visible gain.
         item.url = "http://" + host + "/cluster/render";
+        uint32_t seq = ++seqCounter;
         item.body = "epoch=" + String((unsigned long)epoch) +
-                    "&seq=" + String((unsigned long)++seqCounter) +
+                    "&seq=" + String((unsigned long)seq) +
                     "&text=" + urlEncode(segments[i]) +
                     "&speed=" + String(gridSpeed) +
                     "&commitAtMs=" + String((unsigned long long)gridCommitAtMs);
+        // Sign the content (#313 follow-on) once a key is negotiated — the
+        // canonical fields mirror what the follower reconstructs from the
+        // wire params, so a captured mac can't be reused for other text.
+        if (runtimes[i].hmacKeyValid) {
+          String msg = clusterHmacRenderMsg(signTs, epoch, seq, segments[i],
+                                            gridSpeed, gridCommitAtMs);
+          item.body += "&ts=" + clusterU64ToStr(signTs) + "&mac=" +
+                       clusterHmacSign(runtimes[i].hmacKey, msg);
+        }
         break;
+      }
       default:  // Ping
         item.url = "http://" + host + "/cluster/ping";
         item.body = "";  // digest piggyback attached below, once per round
@@ -458,6 +516,17 @@ static int collectMemberWork(MemberWorkItem* items) {
       if (items[i].action != ClusterLeaderAction::Ping) continue;
       items[i].body =
           "digest=" + encoded + "&you=" + String(items[i].index);
+      // Sign the ping per member (#313 follow-on): its own key, so the
+      // digest/you piggyback rides an authenticated request.
+      int mi = items[i].index;
+      if (runtimes[mi].hmacKeyValid) {
+        // Sign the raw (un-encoded) digest + this member's index too (#313
+        // follow-on HIGH#2): the follower persists them as promote-critical
+        // state, so the mac must bind them against an on-path swap.
+        String msg = clusterHmacPingMsg(signTs, digest, mi);
+        items[i].body += "&ts=" + clusterU64ToStr(signTs) + "&mac=" +
+                         clusterHmacSign(runtimes[mi].hmacKey, msg);
+      }
     }
   }
   return count;
@@ -484,7 +553,7 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
         m.renderDirty = segments[item.index].length() > 0;
         SerialPrintln("cluster: member " +
                       String(table.members[item.index].host) + " joined (rev " +
-                      m.rev + ")");
+                      m.rev + (m.hmacKeyValid ? ", authenticated)" : ")"));
         break;
       case ClusterLeaderAction::Render:
         m.renderDirty = false;
@@ -629,6 +698,7 @@ static bool rolloutOpenUpload(const String& host) {
   // follower can never freeze clusterTask beyond the already-accepted
   // worst case; only the finalize round-trip gets the long budget below.
   cfg.timeout_ms = CLUSTER_HTTP_TIMEOUT_MS;
+  cfg.disable_auto_redirect = true;  // #313: firmware never chases a redirect
   rolloutClient = esp_http_client_init(&cfg);
   if (rolloutClient == nullptr) return false;
 
@@ -860,6 +930,7 @@ static bool followerPushOpenUpload(const String& host) {
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
   cfg.timeout_ms = CLUSTER_HTTP_TIMEOUT_MS;
+  cfg.disable_auto_redirect = true;  // #313: firmware never chases a redirect
   fpushClient = esp_http_client_init(&cfg);
   if (fpushClient == nullptr) { followerPushCloseUpload(); return false; }
   esp_http_client_set_method(fpushClient, HTTP_METHOD_POST);
@@ -1095,6 +1166,7 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
     out.updating = rollout.phase != ClusterRolloutPhase::Idle &&
                    rollout.memberIndex == i;
     out.updateBlocked = rollout.blocked[i];
+    out.hmac = runtimes[i].hmacKeyValid;  // signing to this member (#313)
     if (clusterMemberIsSelf(table.members[i])) {
       out.rev = GIT_REV;
       out.healthValid = true;

@@ -169,6 +169,7 @@ static ClusterLeaderStatus makeStatus() {
   st.members[1].joined = true;
   st.members[1].rev = "abc1234";
   st.members[1].reportedWidth = 16;
+  st.members[1].hmac = true;  // #313 follow-on: leader signs to this member
   st.rolloutPhase = "idle";
   return st;
 }
@@ -202,6 +203,7 @@ static void test_status_json_keeps_the_277_wire_keys() {
   TEST_ASSERT_TRUE(out.indexOf("\"joined\":true") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"updating\":false") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"updateBlocked\":false") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"hmac\":true") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"imageVerifyFailed\":false") >= 0);
 }
 
@@ -391,6 +393,24 @@ static void test_cors_rejects_lookalike_ipv4() {
   TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://1921.68.1.1"));
 }
 
+static void test_csrf_gate_blocks_cross_site_post() {
+  // #313: a POST from a public/https page is forgery — refuse.
+  TEST_ASSERT_TRUE(
+      clusterCsrfRejectPost(true, true, "https://192.168.1.5"));  // not http
+  TEST_ASSERT_TRUE(clusterCsrfRejectPost(true, true, "http://evil.example.com"));
+  TEST_ASSERT_TRUE(clusterCsrfRejectPost(true, true, "http://8.8.8.8"));
+}
+
+static void test_csrf_gate_allows_lan_ui_and_server_to_server() {
+  // The board's own LAN web UI carries a LAN origin — allowed.
+  TEST_ASSERT_FALSE(clusterCsrfRejectPost(true, true, "http://192.168.1.5"));
+  TEST_ASSERT_FALSE(clusterCsrfRejectPost(true, true, "http://splitflap.local"));
+  // The leader's esp_http_client sends no Origin header — allowed.
+  TEST_ASSERT_FALSE(clusterCsrfRejectPost(true, false, ""));
+  // Never blocks a GET (safe method), even with a hostile origin.
+  TEST_ASSERT_FALSE(clusterCsrfRejectPost(false, true, "http://evil.example.com"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fault_mask_all_healthy_is_zeroes);
@@ -425,6 +445,8 @@ int main(int, char**) {
   RUN_TEST(test_cors_allows_private_lan_origins);
   RUN_TEST(test_cors_rejects_public_and_garbage_origins);
   RUN_TEST(test_cors_rejects_lookalike_ipv4);
+  RUN_TEST(test_csrf_gate_blocks_cross_site_post);
+  RUN_TEST(test_csrf_gate_allows_lan_ui_and_server_to_server);
   RUN_TEST(test_cors_path_surface_is_the_per_member_one);
   return UNITY_END();
 }

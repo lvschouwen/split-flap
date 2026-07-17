@@ -92,6 +92,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"i2cErr",       "failed unit-bus reads since boot"},
   {"minHeap",      "since-boot minimum free heap (bytes)"},
   {"sntpSynced",   "1 = SNTP epoch synced (commitAt flips honored)"},
+  {"hmac",         "1 = enforcing signed (HMAC) leader-wire requests (#313)"},
 };
 static const int API_LEGEND_COUNT = (int)(sizeof(API_LEGEND) / sizeof(API_LEGEND[0]));
 

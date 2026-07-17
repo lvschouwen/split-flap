@@ -192,6 +192,38 @@ static void test_oversized_host_rejected() {
   TEST_ASSERT_FALSE(clusterTableFromString(host + "|0|0|16", t));
 }
 
+static void test_public_host_rejected_ssrf() {
+  // #313: a member host is dialed with the leader's firmware — restrict to
+  // LAN targets so a public host can't be smuggled in for exfiltration.
+  ClusterMemberTable t;
+  TEST_ASSERT_FALSE(clusterTableFromString("8.8.8.8|1|0|16", t));      // public IP
+  TEST_ASSERT_FALSE(clusterTableFromString("evil.com|1|0|16", t));     // public name
+  TEST_ASSERT_FALSE(clusterTableFromString("169.254.1.1|1|0|16", t));  // link-local
+  TEST_ASSERT_FALSE(clusterTableFromString("172.32.0.1|1|0|16", t));   // just outside 172.16/12
+  // LAN targets and the empty self-host all pass.
+  TEST_ASSERT_TRUE(clusterTableFromString("|0|0|16", t));
+  TEST_ASSERT_TRUE(clusterTableFromString("10.0.0.4|1|0|16", t));
+  TEST_ASSERT_TRUE(clusterTableFromString("192.168.15.91|1|0|16", t));
+  TEST_ASSERT_TRUE(clusterTableFromString("172.16.5.5|1|0|16", t));
+  TEST_ASSERT_TRUE(clusterTableFromString("wall-3.local|1|0|16", t));
+  TEST_ASSERT_TRUE(clusterTableFromString("localhost|1|0|16", t));
+}
+
+static void test_lan_target_classifier() {
+  TEST_ASSERT_TRUE(clusterHostIsLanTarget("192.168.1.1"));
+  TEST_ASSERT_TRUE(clusterHostIsLanTarget("10.255.0.1"));
+  TEST_ASSERT_TRUE(clusterHostIsLanTarget("172.16.0.1"));
+  TEST_ASSERT_TRUE(clusterHostIsLanTarget("172.31.255.255"));
+  TEST_ASSERT_TRUE(clusterHostIsLanTarget("127.0.0.1"));
+  TEST_ASSERT_TRUE(clusterHostIsLanTarget("Wall-3.LOCAL"));  // case-insensitive
+  TEST_ASSERT_TRUE(clusterHostIsLanTarget("localhost"));
+  TEST_ASSERT_FALSE(clusterHostIsLanTarget("172.15.0.1"));
+  TEST_ASSERT_FALSE(clusterHostIsLanTarget("172.32.0.1"));
+  TEST_ASSERT_FALSE(clusterHostIsLanTarget("8.8.8.8"));
+  TEST_ASSERT_FALSE(clusterHostIsLanTarget(".local"));  // needs a label
+  TEST_ASSERT_FALSE(clusterHostIsLanTarget("attacker.com"));
+}
+
 static void test_self_member_is_empty_host() {
   ClusterMemberDef self;
   self.host[0] = '\0';
@@ -235,6 +267,8 @@ int main(int, char**) {
   RUN_TEST(test_malformed_entries_rejected);
   RUN_TEST(test_too_many_entries_rejected);
   RUN_TEST(test_oversized_host_rejected);
+  RUN_TEST(test_public_host_rejected_ssrf);
+  RUN_TEST(test_lan_target_classifier);
   RUN_TEST(test_self_member_is_empty_host);
   RUN_TEST(test_json_field_extraction);
   RUN_TEST(test_join_reply_plat_parses_and_defaults_empty);

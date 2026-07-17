@@ -49,6 +49,16 @@ inline bool followerCorsOriginAllowed(const String& origin) {
   return followerCorsPrivateIpv4(host);
 }
 
+// CSRF gate (#313), COPY of the master's clusterCsrfRejectPost. A mutating
+// POST carrying an Origin that is not a LAN pane is cross-site forgery —
+// refuse it (the ESP8266 fork has no middleware, so FollowerWeb.cpp calls
+// this at the top of each mutating handler). The leader's server-to-server
+// calls carry no Origin and pass; the board's own LAN UI passes.
+inline bool followerCsrfRejectPost(bool isPost, bool hasOrigin,
+                                   const String& origin) {
+  return isPost && hasOrigin && !followerCorsOriginAllowed(origin);
+}
+
 // This firmware's served slice of the v2 surface ("/" and the log/stat
 // reads don't exist here; /reboot does — the panel's reboot button).
 // #304 opens /reflash-units too (board-level unit reflash from the wall

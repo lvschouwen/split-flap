@@ -149,6 +149,7 @@ struct FollowerClusterDiag {
   uint32_t i2cErr = 0;
   uint32_t minHeap = 0;
   bool sntpSynced = false;
+  bool hmac = false;  // #313 follow-on: enforcing signed leader-wire requests
 };
 
 inline String followerClusterHealthJson(
@@ -193,6 +194,8 @@ inline String followerClusterHealthJson(
   out += String((unsigned long)d.minHeap);
   out += ",\"sntpSynced\":";
   out += d.sntpSynced ? "true" : "false";
+  out += ",\"hmac\":";
+  out += d.hmac ? "true" : "false";
   out += '}';
   return out;
 }

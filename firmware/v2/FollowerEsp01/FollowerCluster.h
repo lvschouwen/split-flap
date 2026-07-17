@@ -39,12 +39,19 @@ void clusterLoopTick();
 bool clusterJoinWouldConflict(const String& joiningLeaderHost,
                               String& currentName, String& currentHost);
 void clusterHandleJoin(const String& leaderName, const String& leaderHost,
-                       int row, uint32_t epoch);
+                       int row, uint32_t epoch, const String& key);
 FollowerRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
                                           const String& text, int speed,
                                           uint64_t commitAtMs);
 bool clusterHandlePing();
 void clusterHandleLeave();
+
+// Cluster-wire auth (#313 follow-on). Enforced == a key is held (negotiated
+// at join): every leader-wire request must then carry a valid ts+mac; the web
+// handlers rebuild the canonical message and call verify, 403 on failure.
+bool clusterHmacEnforced();
+bool clusterVerifySigned(const String& canonicalMsg, uint64_t ts,
+                         const String& macHex);
 
 FollowerClusterView clusterViewGet();
 

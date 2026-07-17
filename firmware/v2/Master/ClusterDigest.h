@@ -129,6 +129,8 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
     out += m.updating ? "true" : "false";
     out += ",\"updateBlocked\":";
     out += m.updateBlocked ? "true" : "false";
+    out += ",\"hmac\":";  // #313 follow-on: leader is signing to this member
+    out += m.hmac ? "true" : "false";
     out += '}';
   }
   out += "],\"rollout\":{\"phase\":";
@@ -319,4 +321,19 @@ inline bool clusterCorsOriginAllowed(const String& origin) {
   lower.toLowerCase();
   if (lower.endsWith(".local") && host.length() > 6) return true;
   return clusterCorsPrivateIpv4(host);
+}
+
+// CSRF gate (#313): the pre-existing CORS logic above only ADDED a response
+// header — it never blocked the request, so any web page a LAN user opened
+// could drive a mutating form-POST (multipart triggers no preflight) at the
+// board. Browsers attach `Origin` to every POST, so the enforced rule is:
+// a state-changing request (POST) that carries an Origin which is NOT a LAN
+// pane is cross-site forgery and must be refused before the handler runs.
+// Server-to-server cluster traffic (the leader's esp_http_client) sends no
+// Origin and passes; the board's own LAN web UI sends a LAN origin and
+// passes; a public/https origin is refused. Method-based, so every mutating
+// POST — present and future — is covered without a path allowlist to drift.
+inline bool clusterCsrfRejectPost(bool isPost, bool hasOrigin,
+                                  const String& origin) {
+  return isPost && hasOrigin && !clusterCorsOriginAllowed(origin);
 }

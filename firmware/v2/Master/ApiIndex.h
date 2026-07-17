@@ -142,6 +142,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"rollout",   "fleet firmware rollout state"},
   {"updating",  "a member firmware push is in flight"},
   {"updateBlocked", "rollout gave up after the attempt cap"},
+  {"hmac",      "leader is signing wire-auth (HMAC) to this member (#313)"},
   {"imageVerifyFailed", "the running image failed self-verify for streaming"},
   {"followerImage", "a stored ESP-01 follower image is present"},
   {"followerPush",  "an ESP-01 follower image push is in flight"},

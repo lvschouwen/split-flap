@@ -112,6 +112,7 @@ static void test_cluster_health_json_shape() {
   d.i2cErr = 2;
   d.minHeap = 21000;
   d.sntpSynced = true;
+  d.hmac = true;
   String out = followerClusterHealthJson("grace", "wall-leader",
                                          "192.168.15.22", 2, 7, 3,
                                          "ROW THREE       ", "abc1234", 8, 8,
@@ -132,6 +133,7 @@ static void test_cluster_health_json_shape() {
   TEST_ASSERT_TRUE(out.indexOf("\"i2cErr\":2") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"minHeap\":21000") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"sntpSynced\":true") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"hmac\":true") >= 0);
 }
 
 // --- string escaping ----------------------------------------------------------------
@@ -175,10 +177,22 @@ static void test_cors_path_gate_matches_served_surface() {
   TEST_ASSERT_FALSE(followerCorsPathAllowed("/cluster/join"));
 }
 
+static void test_csrf_gate_matches_master() {
+  // #313: a mutating POST with a public/https origin is cross-site forgery.
+  TEST_ASSERT_TRUE(followerCsrfRejectPost(true, true, "http://evil.example.com"));
+  TEST_ASSERT_TRUE(followerCsrfRejectPost(true, true, "https://192.168.15.90"));
+  // The board's own LAN UI and server-to-server (no Origin) both pass; GETs
+  // are never blocked.
+  TEST_ASSERT_FALSE(followerCsrfRejectPost(true, true, "http://192.168.15.90"));
+  TEST_ASSERT_FALSE(followerCsrfRejectPost(true, false, ""));
+  TEST_ASSERT_FALSE(followerCsrfRejectPost(false, true, "http://evil.example.com"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_cors_origin_gate_lan_only);
   RUN_TEST(test_cors_path_gate_matches_served_surface);
+  RUN_TEST(test_csrf_gate_matches_master);
   RUN_TEST(test_fault_mask_width_sets_nibble_count);
   RUN_TEST(test_fault_mask_zero_width_is_empty);
   RUN_TEST(test_join_reply_carries_identity_health_plat_vitals);
