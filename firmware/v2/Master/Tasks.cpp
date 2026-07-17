@@ -52,8 +52,12 @@ static constexpr uint32_t NET_TASK_STACK = 8192;
 // espMqttClient internals + the 512 B discovery build buffers (#224); the
 // heartbeat's HWM column is the trim-down evidence.
 static constexpr uint32_t MQTT_TASK_STACK = 6144;
-// esp_http_client + String assembly for the cluster fan-out (#273).
-static constexpr uint32_t CLUSTER_TASK_STACK = 6144;
+// esp_http_client + String assembly for the cluster fan-out (#273). The digest
+// build puts a full ClusterLeaderStatus (8 members x 4 Strings) + String
+// mirror[8] on the stack; at the config-apply/leading peak 6144 left only ~620 B
+// HWM (bench, #321) — bumped to 8192 for margin (also covers the reboot-hold
+// fan-out, which builds the same objects). RAM is plentiful (150 KB+ free heap).
+static constexpr uint32_t CLUSTER_TASK_STACK = 8192;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
 static constexpr UBaseType_t DOMAIN_TASK_PRIORITY = 1;   // everything else
