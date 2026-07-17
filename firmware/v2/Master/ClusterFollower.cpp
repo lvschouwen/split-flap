@@ -237,7 +237,14 @@ void clusterFollowerServiceTick(SettingsStore& store) {
   // between the decision and here cleanly no-ops the promote.
   if (doAutoPromote) {
     ClusterPromoteVerdict v = clusterFollowerPromoteImpl(true);
-    if (v.httpStatus != 200) {
+    if (v.httpStatus == 200) {
+      // Took over. Cool down before we could auto-promote AGAIN: if this was a
+      // false positive (a wedged follower that "lost" a still-alive leader),
+      // the leader sticky-demotes us and we rejoin — this stops that from
+      // becoming a 30 s promote<->demote churn (the cooldown survives the
+      // same-leader rejoin, which doesn't reset it).
+      autoPromoteRetryAtMs = millis() + CLUSTER_AUTO_TAKEOVER_COOLDOWN_MS;
+    } else {
       // Back off so a persistent failure (e.g. no digest held) can't re-fire
       // every service tick — the promote-due inputs won't change on their own.
       autoPromoteRetryAtMs = millis() + CLUSTER_AUTO_TAKEOVER_RETRY_MS;
