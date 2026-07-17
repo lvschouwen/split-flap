@@ -298,6 +298,75 @@ static void test_promote_allowed_only_in_local_fallback() {
   TEST_ASSERT_FALSE(clusterFollowerCanPromote(st));
 }
 
+// --- ranked auto-takeover (#321) -----------------------------------------------
+
+static void test_successor_rank_parses_position() {
+  TEST_ASSERT_EQUAL(0, clusterSuccessorRank("2,3", 2));
+  TEST_ASSERT_EQUAL(1, clusterSuccessorRank("2,3", 3));
+  TEST_ASSERT_EQUAL(0, clusterSuccessorRank("4", 4));
+  TEST_ASSERT_EQUAL(2, clusterSuccessorRank("5,1,3", 3));
+  TEST_ASSERT_EQUAL(-1, clusterSuccessorRank("2,3", 5));   // not a successor
+  TEST_ASSERT_EQUAL(-1, clusterSuccessorRank("", 2));      // no list
+  TEST_ASSERT_EQUAL(-1, clusterSuccessorRank("2,3", -1));  // no self index
+}
+
+// Build a Grace-phase follower whose leader last spoke at t=1000.
+static ClusterFollowerState makeGraceSince1000() {
+  ClusterFollowerState st = makeClustered(1000, 7);
+  clusterFollowerTick(st, 1000 + CLUSTER_CONTACT_FRESH_MS);  // -> Grace
+  return st;
+}
+
+static void test_auto_promote_ignores_non_successor() {
+  ClusterFollowerState st = makeGraceSince1000();
+  // Way past any threshold, but rank -1 (an ESP-01 / foreign board) never fires.
+  TEST_ASSERT_FALSE(clusterFollowerAutoPromoteDue(st, -1, 0, 1000000));
+}
+
+static void test_auto_promote_fires_at_threshold_for_primary() {
+  ClusterFollowerState st = makeGraceSince1000();  // lastContactMs == 1000
+  // rank 0 → threshold = 30 s of silence.
+  TEST_ASSERT_FALSE(clusterFollowerAutoPromoteDue(
+      st, 0, 0, 1000 + CLUSTER_AUTO_TAKEOVER_MS - 1));
+  TEST_ASSERT_TRUE(clusterFollowerAutoPromoteDue(
+      st, 0, 0, 1000 + CLUSTER_AUTO_TAKEOVER_MS));
+}
+
+static void test_auto_promote_staggered_by_rank() {
+  ClusterFollowerState st = makeGraceSince1000();
+  uint32_t primaryFire = 1000 + CLUSTER_AUTO_TAKEOVER_MS;
+  // At the primary's fire time the secondary (rank 1) must NOT yet fire.
+  TEST_ASSERT_FALSE(clusterFollowerAutoPromoteDue(st, 1, 0, primaryFire));
+  // It fires one stagger later.
+  TEST_ASSERT_TRUE(clusterFollowerAutoPromoteDue(
+      st, 1, 0, primaryFire + CLUSTER_AUTO_TAKEOVER_STAGGER_MS));
+}
+
+static void test_auto_promote_suppressed_by_hold() {
+  ClusterFollowerState st = makeGraceSince1000();
+  uint32_t now = 1000 + CLUSTER_AUTO_TAKEOVER_MS + 10000;  // well past threshold
+  uint32_t holdUntil = now + 5000;                          // hold still active
+  TEST_ASSERT_FALSE(clusterFollowerAutoPromoteDue(st, 0, holdUntil, now));
+  // Once the hold expires it fires.
+  TEST_ASSERT_TRUE(clusterFollowerAutoPromoteDue(st, 0, holdUntil, holdUntil));
+}
+
+static void test_auto_promote_not_while_leader_fresh() {
+  // Still Clustered (leader in contact) — never auto-promote, even if the
+  // clock is arbitrarily far ahead.
+  ClusterFollowerState st = makeClustered(1000, 7);
+  TEST_ASSERT_FALSE(clusterFollowerAutoPromoteDue(st, 0, 0, 1000000));
+  // Standalone (no membership) likewise.
+  ClusterFollowerState fresh;
+  TEST_ASSERT_FALSE(clusterFollowerAutoPromoteDue(fresh, 0, 0, 1000000));
+}
+
+static void test_hold_deadline_clamps() {
+  TEST_ASSERT_EQUAL_UINT32(6000, clusterAutoTakeoverHoldDeadline(5000, 1000));
+  TEST_ASSERT_EQUAL_UINT32(1000 + CLUSTER_AUTO_TAKEOVER_HOLD_MAX_MS,
+                           clusterAutoTakeoverHoldDeadline(999999, 1000));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_boot_without_membership_is_standalone);
@@ -333,5 +402,12 @@ int main(int, char**) {
   RUN_TEST(test_join_conflict_allows_takeover_once_contact_is_stale);
   RUN_TEST(test_join_conflict_never_fires_outside_clustered);
   RUN_TEST(test_promote_allowed_only_in_local_fallback);
+  RUN_TEST(test_successor_rank_parses_position);
+  RUN_TEST(test_auto_promote_ignores_non_successor);
+  RUN_TEST(test_auto_promote_fires_at_threshold_for_primary);
+  RUN_TEST(test_auto_promote_staggered_by_rank);
+  RUN_TEST(test_auto_promote_suppressed_by_hold);
+  RUN_TEST(test_auto_promote_not_while_leader_fresh);
+  RUN_TEST(test_hold_deadline_clamps);
   return UNITY_END();
 }

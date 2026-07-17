@@ -31,6 +31,18 @@ static const uint32_t CLUSTER_GRACE_MS = 120000UL;
 // synchronized flip — clamp instead of parking the display.
 static const uint32_t CLUSTER_COMMIT_MAX_DELAY_MS = 5000UL;
 
+// Ranked auto-takeover (#321). A designated-successor S3 self-promotes once the
+// leader has been silent this long — 30 s, deliberately EARLIER than the 120 s
+// LocalFallback manual-promote gate, so the backup claims the wall before the
+// ESP-01 rows blank. Lower-ranked successors wait an extra STAGGER each, so the
+// primary (rank 0) always fires first; if it takes over, its re-join clears
+// everyone's silence and the lower ranks never fire (deterministic, no votes).
+static const uint32_t CLUSTER_AUTO_TAKEOVER_MS = 30000UL;
+static const uint32_t CLUSTER_AUTO_TAKEOVER_STAGGER_MS = 5000UL;
+// A planned leader restart (OTA/reboot/config) announces a hold so nobody takes
+// over during the reboot window; clamped so a bogus value can't wedge takeover.
+static const uint32_t CLUSTER_AUTO_TAKEOVER_HOLD_MAX_MS = 60000UL;
+
 enum class ClusterFollowerPhase : uint8_t {
   Standalone = 0,
   Clustered,
@@ -154,6 +166,59 @@ inline bool clusterFollowerJoinConflicts(const ClusterFollowerState& st,
 // (LocalFallback) may take over — Grace still expects the leader back.
 inline bool clusterFollowerCanPromote(const ClusterFollowerState& st) {
   return st.phase == ClusterFollowerPhase::LocalFallback;
+}
+
+// #321: this follower's rank among the leader's ordered eligible-successor list
+// (member indices, e.g. "2,3"), or -1 if it is not a designated successor (an
+// ESP-01, a foreign-plat board, or absent — the leader excludes those). rank 0
+// is the primary successor.
+inline int clusterSuccessorRank(const char* succCsv, int selfIndex) {
+  if (selfIndex < 0 || succCsv == nullptr) return -1;
+  int rank = 0;
+  const char* p = succCsv;
+  while (*p) {
+    if (*p < '0' || *p > '9') {  // comma / any separator
+      p++;
+      continue;
+    }
+    long v = 0;
+    while (*p >= '0' && *p <= '9') {
+      v = v * 10 + (*p - '0');
+      p++;
+    }
+    if (v == selfIndex) return rank;
+    rank++;
+  }
+  return -1;
+}
+
+// #321 ranked auto-takeover trigger. A designated successor (rank >= 0)
+// self-promotes once leader silence reaches the base delay plus its rank
+// stagger — UNLESS a graceful-reboot hold is still suppressing takeover, or
+// the leader is still fresh (Standalone/Clustered). Independent of the manual
+// LocalFallback gate: this fires during Grace, before the wall goes dark.
+inline bool clusterFollowerAutoPromoteDue(const ClusterFollowerState& st,
+                                          int successorRank,
+                                          uint32_t holdUntilMs, uint32_t nowMs) {
+  if (successorRank < 0) return false;
+  if (st.phase == ClusterFollowerPhase::Standalone ||
+      st.phase == ClusterFollowerPhase::Clustered) {
+    return false;  // no membership, or the leader is still in contact
+  }
+  if ((int32_t)(nowMs - holdUntilMs) < 0) return false;  // hold still active
+  uint32_t threshold = CLUSTER_AUTO_TAKEOVER_MS +
+                       (uint32_t)successorRank * CLUSTER_AUTO_TAKEOVER_STAGGER_MS;
+  return (nowMs - st.lastContactMs) >= threshold;
+}
+
+// #321: absolute deadline until which auto-takeover is suppressed, from a
+// leader's announced hold. Clamped so a hostile/bogus hold can't wedge it.
+inline uint32_t clusterAutoTakeoverHoldDeadline(uint32_t holdMs,
+                                                uint32_t nowMs) {
+  if (holdMs > CLUSTER_AUTO_TAKEOVER_HOLD_MAX_MS) {
+    holdMs = CLUSTER_AUTO_TAKEOVER_HOLD_MAX_MS;
+  }
+  return nowMs + holdMs;
 }
 
 // Synchronized flip: ms to wait before enqueueing a render. Unsynced
