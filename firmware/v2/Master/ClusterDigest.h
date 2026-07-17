@@ -16,6 +16,7 @@
 #include <Arduino.h>
 
 #include "ClusterLeader.h"
+#include "ClusterRolloutPolicy.h"  // clusterMemberPlatForeign (#321 successors)
 #include "SettingsJson.h"  // appendJsonString
 #include "UnitHealth.h"    // UnitFacts + the faulty predicate
 
@@ -170,6 +171,24 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
 // together they are everything a successor needs. gen bumps only when the
 // content changed (the leader compares digests between builds) so the
 // follower UI can gate re-renders cheaply.
+// #321: the leader's ordered eligible-successor list — the member indices of
+// the S3 followers (in table order) that may take over if the leader dies.
+// Self (empty host) and foreign-platform members (ESP-01, #297) are excluded:
+// only another S3 can promote. Rides the digest so each follower learns its
+// own rank by matching its `you` index against this list.
+inline String clusterSuccessorList(const ClusterLeaderStatus& st) {
+  String out;
+  for (int i = 0; i < st.memberCount; i++) {
+    if (st.members[i].host.length() == 0) continue;  // the leader's own row
+    if (clusterMemberPlatForeign(st.members[i].plat, CLUSTER_LEADER_PLAT)) {
+      continue;  // ESP-01 / foreign board — never a takeover candidate
+    }
+    if (out.length()) out += ',';
+    out += String(i);
+  }
+  return out;
+}
+
 inline String clusterBuildDigest(uint32_t gen, const String& leaderName,
                                  const String& leaderHost,
                                  const String& tableSpec, const String* rows,
@@ -190,7 +209,9 @@ inline String clusterBuildDigest(uint32_t gen, const String& leaderName,
     if (i) out += ',';
     appendJsonString(out, rows[i]);
   }
-  out += "],\"status\":";
+  out += "],\"succ\":";
+  appendJsonString(out, clusterSuccessorList(st));
+  out += ",\"status\":";
   out += clusterStatusJson(st);
   out += '}';
   return out;

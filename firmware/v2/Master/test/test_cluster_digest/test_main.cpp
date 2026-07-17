@@ -411,8 +411,43 @@ static void test_csrf_gate_allows_lan_ui_and_server_to_server() {
   TEST_ASSERT_FALSE(clusterCsrfRejectPost(false, true, "http://evil.example.com"));
 }
 
+// #321 eligible-successor list -------------------------------------------------
+
+static void test_successor_list_includes_s3_followers() {
+  ClusterLeaderStatus st = makeStatus();  // member 0 = self, member 1 = S3 peer
+  // Self is excluded; the S3 follower (empty plat = same platform) is index 1.
+  TEST_ASSERT_EQUAL_STRING("1", clusterSuccessorList(st).c_str());
+}
+
+static void test_successor_list_excludes_esp01() {
+  ClusterLeaderStatus st = makeStatus();
+  st.members[1].plat = "esp01";  // foreign — never a takeover candidate
+  TEST_ASSERT_EQUAL_STRING("", clusterSuccessorList(st).c_str());
+}
+
+static void test_successor_list_orders_multiple_s3_by_index() {
+  ClusterLeaderStatus st = makeStatus();
+  st.memberCount = 4;
+  st.members[2].host = "192.168.1.50";
+  st.members[2].plat = "esp32s3";
+  st.members[3].host = "192.168.1.51";
+  st.members[3].plat = "esp01";  // excluded
+  TEST_ASSERT_EQUAL_STRING("1,2", clusterSuccessorList(st).c_str());
+}
+
+static void test_digest_carries_succ_field() {
+  ClusterLeaderStatus st = makeStatus();
+  String rows[1] = {"HELLO"};
+  String d = clusterBuildDigest(3, "wall", "192.168.1.2", "a|0|0|16", rows, 1, st);
+  TEST_ASSERT_TRUE(d.indexOf("\"succ\":\"1\"") >= 0);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_successor_list_includes_s3_followers);
+  RUN_TEST(test_successor_list_excludes_esp01);
+  RUN_TEST(test_successor_list_orders_multiple_s3_by_index);
+  RUN_TEST(test_digest_carries_succ_field);
   RUN_TEST(test_fault_mask_all_healthy_is_zeroes);
   RUN_TEST(test_fault_mask_bit_is_unit_index);
   RUN_TEST(test_fault_mask_width_rounds_nibbles_up);
