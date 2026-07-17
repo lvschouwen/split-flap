@@ -479,11 +479,15 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   });
 
   // --- coredump (#319) — remote crash diagnostics --------------------------
-  // CLOSED same-origin surface: deliberately NOT in clusterCorsPathAllowed, so
-  // a cross-origin browser cannot read the response (a coredump holds live RAM
-  // — HMAC per-member keys + WiFi credentials). GET-only and read-only; the
-  // coredump partition is written solely by the panic handler at crash time,
-  // so reading it from the async task is safe (same as /log/flash).
+  // The SUMMARY (task name + code addresses + backtrace PCs) carries NO
+  // secrets, so an unauthenticated GET is fine — same posture as /settings,
+  // /log/flash. It is always registered. The RAW image, in contrast, is a
+  // task-stack dump that CAN transiently hold HMAC key material / WiFi-cred
+  // fragments (a key mid-sign on clusterTask's stack); this device has no
+  // auth and CORS-closing does not stop a plain HTTP client, so raw is
+  // compiled out of shipped images and only appears in a build that opts in
+  // with -DCOREDUMP_RAW_ENABLE (deliberately OTA'd to a crashing board).
+  // Read-only; the coredump partition is written solely by the panic handler.
   server.on("/coredump/summary", HTTP_GET, [](AsyncWebServerRequest* request) {
     if (esp_core_dump_image_check() != ESP_OK) {
       request->send(404, "application/json", F("{\"present\":false}"));
@@ -536,9 +540,12 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
     request->send(200, "application/json", out);
   });
 
-  // Raw ELF coredump for offline `espcoredump.py info_corefile` — the fallback
+#ifdef COREDUMP_RAW_ENABLE
+  // Raw ELF coredump for offline `esp-coredump info_corefile` — the fallback
   // when a summary backtrace reads corrupted. Streamed straight off the
-  // coredump partition (flash READ only, async-safe).
+  // coredump partition (flash READ only, async-safe). Opt-in only (see the
+  // summary comment above): task stacks can leak transient secrets, so this
+  // never ships in a release image.
   server.on("/coredump/raw", HTTP_GET, [](AsyncWebServerRequest* request) {
     if (esp_core_dump_image_check() != ESP_OK) {
       request->send(404, "text/plain", F("no coredump"));
@@ -575,6 +582,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                         "attachment; filename=\"coredump-" GIT_REV ".elf\"");
     request->send(response);
   });
+#endif  // COREDUMP_RAW_ENABLE
 
   // --- settings/message form (v1 wire contract) ----------------------------
   server.on("/", HTTP_POST, [](AsyncWebServerRequest* request) {

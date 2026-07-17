@@ -70,7 +70,9 @@ static const ApiRoute API_ROUTES[] = {
   {"GET",  "/cluster/discover",       "cluster mDNS scan result"},
   {"POST", "/cluster/follower-firmware", "store an ESP-01 follower image for relay"},
   {"GET",  "/coredump/summary",       "last-crash task + backtrace (closed surface)"},
-  {"GET",  "/coredump/raw",           "raw ELF coredump for offline analysis"},
+#ifdef COREDUMP_RAW_ENABLE
+  {"GET",  "/coredump/raw",           "raw ELF coredump (opt-in debug build only)"},
+#endif
 };
 static const int API_ROUTES_COUNT = (int)(sizeof(API_ROUTES) / sizeof(API_ROUTES[0]));
 
