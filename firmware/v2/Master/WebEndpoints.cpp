@@ -2155,6 +2155,23 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
     rebootDue = pendingReboot && millis() - rebootRequestedAtMs > 750;
   }
 
+  // #321: before an intentional reboot, announce a graceful hold to followers
+  // (once) and wait until clusterTask has fanned it out — so a designated
+  // backup doesn't take over during the reboot window. Bounded (4 s) so a stuck
+  // member can't block the reboot. clusterLeader* take the LEADER lock, so they
+  // run out here, never nested under the WebState lock above.
+  if (rebootDue) {
+    static bool rebootHoldAnnounced = false;
+    if (!rebootHoldAnnounced) {
+      rebootHoldAnnounced = true;
+      clusterLeaderAnnounceRebootHold();
+    }
+    if (!clusterLeaderRebootHoldSent() &&
+        millis() - rebootRequestedAtMs < 4000) {
+      rebootDue = false;  // hold not fanned out yet — hold the reboot
+    }
+  }
+
   // Outside the lock: configTzTime takes the LWIP core lock — keep the two
   // lock domains from ever nesting (v1 #48 parity: TZ applies rebootless).
   if (timezoneChanged) clockServiceApplyTz(settings);

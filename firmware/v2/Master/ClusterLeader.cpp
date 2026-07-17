@@ -407,6 +407,16 @@ struct MemberWorkItem {
 // private: only collectMemberWork touches it, always under LeaderLock.
 static int fanoutCursor = -1;
 
+// #321 graceful-reboot hold. Before an intentional restart the leader stamps a
+// hold (ms) into its digest and force-pings every member once so a designated
+// backup doesn't take over during the reboot window. rebootHoldMs also rides
+// the normal ping digest while set. Cross-task: the reboot drain waits on
+// rebootHoldSent.
+static const uint32_t CLUSTER_REBOOT_HOLD_MS = 45000;  // < follower clamp (60s)
+static uint32_t rebootHoldMs = 0;
+static std::atomic<bool> rebootHoldPending{false};
+static std::atomic<bool> rebootHoldSent{false};
+
 // Builds the next round of outbound calls under the lock; the blocking
 // HTTP happens with the mutex RELEASED so submits/status reads never wait
 // on a slow follower. At most ONE member is contacted per tick (#320): a
@@ -517,7 +527,7 @@ static int collectMemberWork(MemberWorkItem* items) {
     String body = clusterBuildDigest(0, leaderDeviceName,
                                      WiFi.localIP().toString(),
                                      clusterTableToString(table), mirror,
-                                     rowCount, st);
+                                     rowCount, st, rebootHoldMs);
     if (body != digestLastBody) {
       digestLastBody = body;
       digestGen++;
@@ -1118,10 +1128,87 @@ static void followerPushServiceTick() {
   }
 }
 
+// #321: force-ping every member once with the hold-bearing digest so a planned
+// reboot's hold reaches them promptly (the normal fan-out is one-per-tick on a
+// ~10 s cadence — too slow before a reboot). Self-contained + off the hot path;
+// yields between blocking sends so it can't starve core-0 idle (cf. #320).
+static void rebootHoldFanout() {
+  struct Target { String host; String body; };
+  static Target targets[CLUSTER_MAX_MEMBERS];
+  int n = 0;
+  {
+    LeaderLock lock;
+    if (!clusterLeaderEnabled()) return;
+    ClusterLeaderStatus st;
+    statusFillLocked(st);
+    String mirror[CLUSTER_MAX_MEMBERS];
+    DisplaySnapshot snap = displaySnapshotGet();
+    int rowCount =
+        clusterMirrorRows(table, segments, String(snap.currentText),
+                          displayAlignmentFromString(gridAlignment), mirror);
+    String body = clusterBuildDigest(0, leaderDeviceName,
+                                     WiFi.localIP().toString(),
+                                     clusterTableToString(table), mirror,
+                                     rowCount, st, rebootHoldMs);
+    if (body != digestLastBody) {
+      digestLastBody = body;
+      digestGen++;
+    }
+    String digest = "{\"gen\":" + String((unsigned long)digestGen) +
+                    body.substring(strlen("{\"gen\":0"));
+    String encoded = urlEncode(digest);
+    bool synced = false;
+    uint64_t ts = epochNowMs(synced);
+    for (int i = 0; i < table.count && n < CLUSTER_MAX_MEMBERS; i++) {
+      if (clusterMemberIsSelf(table.members[i])) continue;
+      Target& t = targets[n++];
+      t.host = table.members[i].host;
+      t.body = "digest=" + encoded + "&you=" + String(i);
+      if (runtimes[i].hmacKeyValid) {
+        String msg = clusterHmacPingMsg(ts, digest, i);
+        t.body += "&ts=" + clusterU64ToStr(ts) + "&mac=" +
+                  clusterHmacSign(runtimes[i].hmacKey, msg);
+      }
+    }
+  }
+  for (int i = 0; i < n; i++) {
+    String resp;
+    clusterHttpRequest("http://" + targets[i].host + "/cluster/ping",
+                       targets[i].body, resp);
+    vTaskDelay(pdMS_TO_TICKS(1));  // feed core-0 idle between blocking sends
+  }
+  SerialPrintln("cluster: announced reboot-hold to " + String(n) + " member(s)");
+}
+
+// Called from the reboot drain (any task) before an intentional restart.
+void clusterLeaderAnnounceRebootHold() {
+  if (leaderMutex == nullptr || !clusterLeaderEnabled()) return;  // no followers
+  {
+    LeaderLock lock;
+    rebootHoldMs = CLUSTER_REBOOT_HOLD_MS;
+  }
+  rebootHoldSent.store(false);
+  rebootHoldPending.store(true);
+}
+
+// True once the hold has been fanned out — or immediately when not leading, so
+// a standalone board never waits.
+bool clusterLeaderRebootHoldSent() {
+  if (leaderMutex == nullptr || !clusterLeaderEnabled()) return true;
+  return rebootHoldSent.load();
+}
+
 void clusterLeaderTick() {
   if (leaderMutex == nullptr) return;
   applyStagedConfig();
   if (!clusterLeaderEnabled()) return;
+
+  // #321: a pending reboot-hold pre-empts the normal fan-out — send it first
+  // and flag it done so the reboot drain can proceed.
+  if (rebootHoldPending.exchange(false)) {
+    rebootHoldFanout();
+    rebootHoldSent.store(true);
+  }
 
   serviceSelfRow();
 

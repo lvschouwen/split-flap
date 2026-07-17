@@ -192,8 +192,8 @@ inline String clusterSuccessorList(const ClusterLeaderStatus& st) {
 inline String clusterBuildDigest(uint32_t gen, const String& leaderName,
                                  const String& leaderHost,
                                  const String& tableSpec, const String* rows,
-                                 int rowCount,
-                                 const ClusterLeaderStatus& st) {
+                                 int rowCount, const ClusterLeaderStatus& st,
+                                 uint32_t holdMs = 0) {
   String out;
   out.reserve(256 + rowCount * 40 + st.memberCount * 200);
   out += "{\"gen\":";
@@ -211,6 +211,8 @@ inline String clusterBuildDigest(uint32_t gen, const String& leaderName,
   }
   out += "],\"succ\":";
   appendJsonString(out, clusterSuccessorList(st));
+  out += ",\"hold\":";
+  out += String((unsigned long)holdMs);  // #321: 0 unless a reboot is imminent
   out += ",\"status\":";
   out += clusterStatusJson(st);
   out += '}';

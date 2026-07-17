@@ -440,6 +440,15 @@ static void test_digest_carries_succ_field() {
   String rows[1] = {"HELLO"};
   String d = clusterBuildDigest(3, "wall", "192.168.1.2", "a|0|0|16", rows, 1, st);
   TEST_ASSERT_TRUE(d.indexOf("\"succ\":\"1\"") >= 0);
+  TEST_ASSERT_TRUE(d.indexOf("\"hold\":0") >= 0);  // #321: 0 unless rebooting
+}
+
+static void test_digest_carries_hold_when_rebooting() {
+  ClusterLeaderStatus st = makeStatus();
+  String rows[1] = {"HELLO"};
+  String d = clusterBuildDigest(3, "wall", "192.168.1.2", "a|0|0|16", rows, 1, st,
+                                45000);
+  TEST_ASSERT_TRUE(d.indexOf("\"hold\":45000") >= 0);
 }
 
 int main(int, char**) {
@@ -448,6 +457,7 @@ int main(int, char**) {
   RUN_TEST(test_successor_list_excludes_esp01);
   RUN_TEST(test_successor_list_orders_multiple_s3_by_index);
   RUN_TEST(test_digest_carries_succ_field);
+  RUN_TEST(test_digest_carries_hold_when_rebooting);
   RUN_TEST(test_fault_mask_all_healthy_is_zeroes);
   RUN_TEST(test_fault_mask_bit_is_unit_index);
   RUN_TEST(test_fault_mask_width_rounds_nibbles_up);
