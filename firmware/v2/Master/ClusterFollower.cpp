@@ -79,6 +79,10 @@ static bool tableDirty = false;
 // leader hold suppresses takeover. Both live under the ClusterLock.
 static int successorRank = -1;
 static uint32_t autoTakeoverHoldUntilMs = 0;
+// Backoff gate for a FAILED auto-promote (netTask-only): the promote-due inputs
+// don't change on a non-gate failure, so without this the attempt would re-fire
+// every ~10 ms service tick (log spam). 0 = no cooldown pending.
+static uint32_t autoPromoteRetryAtMs = 0;
 
 // Single staged render slot — a newer accepted render simply replaces an
 // undelivered older one (seq acceptance upstream keeps ordering honest).
@@ -147,7 +151,9 @@ void clusterFollowerServiceTick(SettingsStore& store) {
     // under the lock; the promote runs after it releases (it re-locks + takes
     // the leader mutex, and re-checks this gate — TOCTOU-safe).
     doAutoPromote = clusterFollowerAutoPromoteDue(
-        policyState, successorRank, autoTakeoverHoldUntilMs, millis());
+                        policyState, successorRank, autoTakeoverHoldUntilMs,
+                        millis()) &&
+                    (int32_t)(millis() - autoPromoteRetryAtMs) >= 0;
     if (membershipDirty) {
       membershipDirty = false;
       if (leaderHost.length() > 0) {
@@ -232,6 +238,9 @@ void clusterFollowerServiceTick(SettingsStore& store) {
   if (doAutoPromote) {
     ClusterPromoteVerdict v = clusterFollowerPromoteImpl(true);
     if (v.httpStatus != 200) {
+      // Back off so a persistent failure (e.g. no digest held) can't re-fire
+      // every service tick — the promote-due inputs won't change on their own.
+      autoPromoteRetryAtMs = millis() + CLUSTER_AUTO_TAKEOVER_RETRY_MS;
       SerialPrintln(String("cluster: auto-takeover stood down (") + v.message +
                     ")");
     }
@@ -283,6 +292,11 @@ void clusterFollowerHandleJoin(const ClusterJoinRequest& req) {
     hmacLastAcceptedTs = 0;
     hmacLastPersistedTs = 0;
     hmacTsDirty = true;
+    // #321: a new key means a new leader relationship — drop any successor rank
+    // / hold carried over from the previous leader (the new leader's first ping
+    // re-derives them). Correctness-by-construction, not by ping timing.
+    successorRank = -1;
+    autoTakeoverHoldUntilMs = 0;
   }
   // NVS-flood guard (#313): a leader (re)joins on every membership change,
   // but the follower persists only when a field actually moved — a steady

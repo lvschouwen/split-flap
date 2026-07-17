@@ -493,8 +493,10 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
       request->send(404, "application/json", F("{\"present\":false}"));
       return;
     }
+    // Zero-init: if a partially-corrupted-but-parseable dump leaves a field
+    // untouched, we echo a deterministic 0, not stale heap bytes.
     auto* summary =
-        (esp_core_dump_summary_t*)malloc(sizeof(esp_core_dump_summary_t));
+        (esp_core_dump_summary_t*)calloc(1, sizeof(esp_core_dump_summary_t));
     if (summary == nullptr) {
       request->send(503, "application/json", F("{\"error\":\"oom\"}"));
       return;

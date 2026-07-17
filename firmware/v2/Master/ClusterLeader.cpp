@@ -1128,40 +1128,53 @@ static void followerPushServiceTick() {
   }
 }
 
-// #321: force-ping every member once with the hold-bearing digest so a planned
-// reboot's hold reaches them promptly (the normal fan-out is one-per-tick on a
-// ~10 s cadence — too slow before a reboot). Self-contained + off the hot path;
-// yields between blocking sends so it can't starve core-0 idle (cf. #320).
-static void rebootHoldFanout() {
-  struct Target { String host; String body; };
-  static Target targets[CLUSTER_MAX_MEMBERS];
-  int n = 0;
-  {
-    LeaderLock lock;
-    if (!clusterLeaderEnabled()) return;
-    ClusterLeaderStatus st;
-    statusFillLocked(st);
-    String mirror[CLUSTER_MAX_MEMBERS];
-    DisplaySnapshot snap = displaySnapshotGet();
-    int rowCount =
-        clusterMirrorRows(table, segments, String(snap.currentText),
-                          displayAlignmentFromString(gridAlignment), mirror);
-    String body = clusterBuildDigest(0, leaderDeviceName,
-                                     WiFi.localIP().toString(),
-                                     clusterTableToString(table), mirror,
-                                     rowCount, st, rebootHoldMs);
-    if (body != digestLastBody) {
-      digestLastBody = body;
-      digestGen++;
-    }
-    String digest = "{\"gen\":" + String((unsigned long)digestGen) +
-                    body.substring(strlen("{\"gen\":0"));
-    String encoded = urlEncode(digest);
-    bool synced = false;
-    uint64_t ts = epochNowMs(synced);
-    for (int i = 0; i < table.count && n < CLUSTER_MAX_MEMBERS; i++) {
+// #321 reboot-hold delivery. Built once when a reboot is announced, then sent
+// ONE member per clusterLeaderTick (see the tick) — the naive "ping everyone in
+// one call" is the exact core-0-starving burst #320 was written to eliminate
+// (up to 7 dead hosts × the 1.5 s HTTP timeout ≫ the 5 s task watchdog). Non-
+// degraded members are queued FIRST so the reachable rows — the ones that could
+// actually spuriously take over — get the hold within the drain's bounded wait
+// even if some members are dead and burn their timeouts at the tail.
+struct RebootHoldTarget {
+  String host;
+  String body;
+};
+static RebootHoldTarget rebootHoldTargets[CLUSTER_MAX_MEMBERS];
+static int rebootHoldCount = 0;
+static int rebootHoldCursor = 0;
+
+static void rebootHoldBuildTargets() {
+  LeaderLock lock;
+  rebootHoldCount = 0;
+  rebootHoldCursor = 0;
+  if (!clusterLeaderEnabled()) return;
+  ClusterLeaderStatus st;
+  statusFillLocked(st);
+  String mirror[CLUSTER_MAX_MEMBERS];
+  DisplaySnapshot snap = displaySnapshotGet();
+  int rowCount =
+      clusterMirrorRows(table, segments, String(snap.currentText),
+                        displayAlignmentFromString(gridAlignment), mirror);
+  String body =
+      clusterBuildDigest(0, leaderDeviceName, WiFi.localIP().toString(),
+                         clusterTableToString(table), mirror, rowCount, st,
+                         rebootHoldMs);
+  if (body != digestLastBody) {
+    digestLastBody = body;
+    digestGen++;
+  }
+  String digest = "{\"gen\":" + String((unsigned long)digestGen) +
+                  body.substring(strlen("{\"gen\":0"));
+  String encoded = urlEncode(digest);
+  bool synced = false;
+  uint64_t ts = epochNowMs(synced);
+  // Pass 0 = reachable (non-degraded) members, pass 1 = degraded ones.
+  for (int pass = 0; pass < 2; pass++) {
+    for (int i = 0;
+         i < table.count && rebootHoldCount < CLUSTER_MAX_MEMBERS; i++) {
       if (clusterMemberIsSelf(table.members[i])) continue;
-      Target& t = targets[n++];
+      if (runtimes[i].degraded != (pass == 1)) continue;
+      RebootHoldTarget& t = rebootHoldTargets[rebootHoldCount++];
       t.host = table.members[i].host;
       t.body = "digest=" + encoded + "&you=" + String(i);
       if (runtimes[i].hmacKeyValid) {
@@ -1171,13 +1184,6 @@ static void rebootHoldFanout() {
       }
     }
   }
-  for (int i = 0; i < n; i++) {
-    String resp;
-    clusterHttpRequest("http://" + targets[i].host + "/cluster/ping",
-                       targets[i].body, resp);
-    vTaskDelay(pdMS_TO_TICKS(1));  // feed core-0 idle between blocking sends
-  }
-  SerialPrintln("cluster: announced reboot-hold to " + String(n) + " member(s)");
 }
 
 // Called from the reboot drain (any task) before an intentional restart.
@@ -1203,11 +1209,27 @@ void clusterLeaderTick() {
   applyStagedConfig();
   if (!clusterLeaderEnabled()) return;
 
-  // #321: a pending reboot-hold pre-empts the normal fan-out — send it first
-  // and flag it done so the reboot drain can proceed.
+  // #321: deliver a pending reboot-hold ONE member per tick — watchdog-safe,
+  // same cadence as the normal fan-out (the 100 ms inter-tick vTaskDelay feeds
+  // core-0 idle between every blocking send). While it drains, this tick does
+  // ONLY the hold send so a tail of dead members can never stack two blocking
+  // ops in one tick. The reboot drain waits (bounded) on rebootHoldSent.
   if (rebootHoldPending.exchange(false)) {
-    rebootHoldFanout();
-    rebootHoldSent.store(true);
+    rebootHoldBuildTargets();
+    if (rebootHoldCount == 0) rebootHoldSent.store(true);  // nobody to tell
+  }
+  if (rebootHoldCursor < rebootHoldCount) {
+    String resp;
+    clusterHttpRequest(
+        "http://" + rebootHoldTargets[rebootHoldCursor].host + "/cluster/ping",
+        rebootHoldTargets[rebootHoldCursor].body, resp);
+    rebootHoldCursor++;
+    if (rebootHoldCursor >= rebootHoldCount) {
+      rebootHoldSent.store(true);
+      SerialPrintln("cluster: announced reboot-hold to " +
+                    String(rebootHoldCount) + " member(s)");
+    }
+    return;  // one blocking op this tick
   }
 
   serviceSelfRow();

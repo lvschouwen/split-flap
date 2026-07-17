@@ -39,6 +39,8 @@ static const uint32_t CLUSTER_COMMIT_MAX_DELAY_MS = 5000UL;
 // everyone's silence and the lower ranks never fire (deterministic, no votes).
 static const uint32_t CLUSTER_AUTO_TAKEOVER_MS = 30000UL;
 static const uint32_t CLUSTER_AUTO_TAKEOVER_STAGGER_MS = 5000UL;
+// Cooldown after a FAILED auto-promote so it can't re-fire every service tick.
+static const uint32_t CLUSTER_AUTO_TAKEOVER_RETRY_MS = 5000UL;
 // A planned leader restart (OTA/reboot/config) announces a hold so nobody takes
 // over during the reboot window; clamped so a bogus value can't wedge takeover.
 static const uint32_t CLUSTER_AUTO_TAKEOVER_HOLD_MAX_MS = 60000UL;
