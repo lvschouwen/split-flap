@@ -396,6 +396,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // Final reprobe + health poll: published topology and fw grades are
   // execution-time truth (a failed/cancelled unit shows as bootloader and
   // stays pinned there — deliberate, see block comment).
+  wdtFeed();  // #314: no feed between the trailing settle and boot-home otherwise
   unitBusProbe(busFacts, UNITS_AMOUNT);
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
