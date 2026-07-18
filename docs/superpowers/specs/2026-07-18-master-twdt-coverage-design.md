@@ -43,43 +43,46 @@ The five FreeRTOS tasks (created in `Tasks.cpp` via `xTaskCreateStaticPinnedToCo
 
 Each `*TaskMain` calls `esp_task_wdt_add(NULL)` **once** at task start (after local init, before the loop), then `esp_task_wdt_reset()` at the **top of its loop**. clockTask's 1 Hz cadence and its bounded "stand down during a cluster commitAt render" wait (~seconds) are both far under 30 s, so it feeds safely every iteration.
 
-### 3. RAII pause guard — new header `TaskWatchdog.h`
+### 3. Feed-inside pattern — new header `TaskWatchdog.h`
 
-A scope object that unsubscribes the calling task from the TWDT for the duration of a long, self-bounded op, then re-subscribes:
+**Decision (revised after Codex cross-review):** feed the watchdog *inside* long ops rather than unsubscribing around them. The original unsubscribe (`esp_task_wdt_delete`/re-add) approach was rejected because it **blinds the dog to exactly the hang class #314 targets**: the long ops are I2C/network-bound, and this project has a documented history of the IDF I2C driver *wedging* (the 5.5 stale-read crash-loop). If a "self-bounded" transaction's own timeout fails, an unsubscribed task hangs forever undetected. Feeding inside keeps detection live — a wedge between two feed points still trips within ~30 s.
 
-- **ctor:** `esp_task_wdt_delete(NULL)`; record whether it was actually subscribed (delete returned `ESP_OK`).
-- **dtor:** `esp_task_wdt_add(NULL)` **only if** the ctor's delete succeeded — safe against early returns / exceptions, and never double-subscribes.
+`TaskWatchdog.h` holds two thin target-only helpers:
+- `wdtSubscribeSelf()` — `esp_task_wdt_add(NULL)`; treat `ESP_OK` as success, otherwise log `esp_err_to_name(err)`; never fatal. If idempotence matters, gate on `esp_task_wdt_status(NULL)` first.
+- `wdtFeed()` — thin wrapper on `esp_task_wdt_reset()` for the current task, called at loop tops and at progress points inside long loops.
 
-Target-only IDF glue. No pure logic → no native test (consistent with the project rule: host tests cover pure logic only, hardware glue is bench-verified).
+No pure logic → no native test (consistent with the project rule: host tests cover pure logic only, hardware glue is bench-verified).
 
-Rationale for unsubscribe-vs-feed: every long op below is **already individually time-bounded** by its own timeout (I2C hardware transaction timeouts; OTA's #313 per-chunk 30 s stall watchdog; cluster HTTP 1.5 s `esp_http_client` timeouts; `MDNS.queryService` timeout arg). The TWDT's job is to catch the *unbounded* hangs (event-loop deadlock, unreleased mutex, never-waking queue), which occur in the normal loop flow — not inside these bounded ops. So pausing the dog around a bounded op loses no meaningful protection while making false-reboot avoidance a one-line guard.
+### 4. Feed points
 
-### 4. Guard sites
+Call `wdtFeed()` at the top of each of the 5 task loops, plus at these progress points inside long ops so no single inter-feed span approaches 30 s:
 
-Wrap a `WdtPause` around each long op:
+- **`runReflashJob`** (displayTask) — feed at each per-batch (batch size 4) / per-unit boundary. A single unit page-write is I2C-bounded (ms); a driver wedge between boundaries still trips the dog.
+- **self-test poll loops** and **boot-home step sequence** (displayTask) — feed per poll / per homing step.
+- **cluster fan-out** (clusterTask) — feed after each member's HTTP op in `clusterLeaderTick()`. Worst case is up to 8 members × 1.5 s plus a ~10 s rollout/follower-push finalize, which can approach 30 s in one tick, so per-member feeding is **required**, not conditional; it also preserves hang detection for the cluster transport path.
+- **`MDNS.queryService`** (netTask) — **no special handling**: it takes its own timeout arg (< 30 s), so the netTask loop-top `wdtFeed()` already covers it.
 
-- **`runReflashJob`** (displayTask) — streams unit hex over I2C for tens of seconds; the critical one, a false reboot strands a unit in twiboot.
-- **self-test poll loops** and **boot-home `delay()`s** (displayTask).
-- **master OTA flash-write path** and **`MDNS.queryService` scan** (netTask).
-- **cluster #276 firmware-stream / finalize** (clusterTask) — guard **only if** measurement shows a single tick's fan-out can approach 30 s; otherwise each tick returns to the loop (and its `esp_task_wdt_reset()`) well within budget.
+### 5. Out of the subscribed set: OTA / AsyncTCP (deliberate)
 
-### 5. Error handling
+The master OTA write (`Update.write()` in the `/firmware/master` `onUpload` callback, `WebEndpoints.cpp`) runs in the **AsyncTCP task context**, not netTask (a deliberate v1-precedent async exception, noted in-code). AsyncTCP is not one of the 5 subscribed tasks, so the OTA write is **not** directly WDT-watched. This is acceptable: a stuck OTA is already caught by #313's per-chunk 30 s stall watchdog (aborted from `webEndpointsLoop` in netTask), and AsyncTCP starvation still trips the CPU0 idle check. We do not subscribe or feed the AsyncTCP task.
 
-`esp_task_wdt_add` returning `ESP_ERR_INVALID_STATE` (already subscribed) is logged and ignored — never fatal. The guard's conditional re-add prevents double-subscribe.
+## Resolved during cross-review (were open items)
 
-## Open implementation items (resolved during build, not blockers)
+1. **Arduino `loopTask`** does **not** need subscribing: `loop()` is only `tasksHeartbeatReport(); delay(5000)` — non-critical. `webEndpointsLoop()` runs in netTask (already subscribed), not loopTask.
+2. **clusterTask** feeding is **unconditional** (per §4) — a single tick's fan-out can approach 30 s, so it is not left to measurement.
 
-1. **Arduino `loopTask`** runs `webEndpointsLoop()` (incl. #313's OTA stall-abort). Determine whether the framework already WDT-subscribes `loopTask`; if it does real work unwatched, subscribe it as a 6th watched task (same add-at-start / reset-at-top pattern).
-2. **clusterTask worst-case tick** duration → decides whether guard site #4's cluster entry is needed.
+## Config guard (regression protection)
+
+The 30 s timeout lives in the tracked `custom_sdkconfig`, but the *effective* value is in the generated (gitignored) `sdkconfig`. Add a pytest under `tests/` — same spirit as `test_partition_table.py` / `test_custom_bootloader.py` — that asserts `firmware/v2/Master/platformio.ini`'s `custom_sdkconfig` carries `CONFIG_ESP_TASK_WDT_TIMEOUT_S=30` (and that `PANIC=y` is not disabled), so a future edit can't silently drop the override. Runs in CI.
 
 ## Bench verification (E2E gate — via VPN board access)
 
 1. Deliberately hang a subscribed task (behind a debug build flag) → board reboots within ~30 s; reset reason reported as TWDT.
-2. Full master OTA → **no** false reboot mid-flash.
-3. Full 16-unit reflash → no false reboot, no stranded unit.
-4. mDNS discovery scan + cluster fan-out on the live wall → no false reboot.
+2. Full master OTA → **no** false reboot. Specifically validates that netTask (core 0, subscribed) keeps getting scheduled to feed while AsyncTCP streams the image on the same core.
+3. Full 16-unit reflash → no false reboot, no stranded unit (validates the per-batch feeding in `runReflashJob`).
+4. mDNS discovery scan + cluster fan-out on the live wall → no false reboot (validates per-member feeding in `clusterLeaderTick`).
 
-Native tests: **not applicable** (pure IDF glue; no host-testable logic).
+Native tests: the config-guard pytest above. No host test for the IDF glue itself (pure target API; hardware glue is bench-verified per project rule).
 
 ## Out of scope
 
