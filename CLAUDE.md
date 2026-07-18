@@ -39,6 +39,20 @@ python -m pytest tests/      # python-side tests (v2 Master, Rescue, FollowerEsp
 - Native env uses ArduinoFake: `map()` is a fakeit mock — wire the real formula in each test's `setUp()` or calls abort; `EEPROM` etc. re-wire via `ArduinoFake(EEPROM)`.
 - v2 first build on a clean machine is slow (pioarduino hybrid compile downloads IDF). `managed_components/`, `sdkconfig.*`, `.dummy/` in v2 project dirs are generated artifacts (gitignored; exception: `Bootloader/sdkconfig.defaults` is a source file kept by a negation).
 
+## Per-change workflow (overrides the global "stop the app" flow — there is no local app)
+
+The firmware runs on bench hardware reached by OTA over the user's VPN; there is nothing to "stop" before editing. Per change:
+
+1. **Issue first** with `effort:`/`gain:` labels; no private data (public repo). Interactive one-liners may go direct to `master`.
+2. **One branch + PR per session arc**, not per issue — batch related issues onto it. (A stage-commit PR is never squash-merged; bundle drift is history.)
+3. **Build + native tests green** before commit: `pio run` in each touched project dir, `pio test -e native`, `python -m pytest tests/`. Editing v2 firmware source auto-triggers that project's native suite via the local PostToolUse hook (`.claude/hooks/firmware-native-test.sh`). If Unit fw changed: rebuild Unit clean → `make_manifest.py stage` → rebuild Master + FollowerEsp01 (drift gate) → **separate** artifact commit (never amend the bundle in).
+4. **Risk-tiered review** — cpp-reviewer over the combined branch diff; ALWAYS for OTA / boot / flash / concurrency / credentials / cluster-wire, batched otherwise.
+5. **Bench-verify = the E2E tier** — stage the bin to `~/bench-bins/`, `ota-flash.sh` to the board, confirm on hardware. Host tests cover pure logic only; hardware glue is proven on the bench.
+6. **Commit + close issue** — conventional message referencing it; push; confirm the GitHub auto-close fired (it has silently failed — close manually if not).
+7. **Update memory.**
+
+Releases are batched (≤1/day, after the day's commits land) — never version-bump inside a feature/fix commit.
+
 ## Hard rules
 
 - **GPIO 35/36/37 are eaten by octal PSRAM on the S3 — never assign them.** GPIO 4 is reserved (factory-reset button), 19/20 are native USB, 48 is the devkit WS2812.
