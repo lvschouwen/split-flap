@@ -31,6 +31,7 @@
 #include "MqttService.h"  // mqttNotificationActive — self-row re-show gate
 #include "ReflashPlan.h"
 #include "Tasks.h"
+#include "TaskWatchdog.h"
 
 #define CLUSTER_KEY_MEMBERS "clMembers"
 
@@ -1386,17 +1387,21 @@ void clusterLeaderTick() {
     String body;
     int status = clusterHttpRequest(items[i].url, items[i].body, body);
     applyMemberResult(items[i], status, body);
+    wdtFeed();  // #314: up to CLUSTER_MAX_MEMBERS blocking sends in one tick
   }
 
   // Fleet firmware convergence (#276) — after the fan-out so renders and
   // pings always get their tick before an upload chunk does.
   rolloutServiceTick();
+  wdtFeed();  // #314: a #276 firmware chunk write can block
   // On-demand ESP-01 firmware relay (#304) — mutually exclusive with the
   // auto-rollout above (each guards on the other's phase).
   followerPushServiceTick();
+  wdtFeed();  // #314: #304 relay chunk write
   // Pull one ESP-01 row's log into the fleet log (#318 E) — after the pushes
   // so a firmware stream always wins the tick over a log poll.
   followerLogPullTick();
+  wdtFeed();  // #314: #318E log poll
 }
 
 // Fills the status snapshot — leaderMutex HELD by the caller. The self
