@@ -202,6 +202,7 @@ static void runBootHomeSequence(DisplaySnapshot& local, UnitFacts* busFacts) {
   SerialPrintf("boot-home: staggering %d unit(s) in batches of %d\n", n,
                BOOT_HOME_BATCH_SIZE);
   for (int i = 0; i < n; i += BOOT_HOME_BATCH_SIZE) {
+    wdtFeed();  // #314: each batch waits on unit settle — keep the dog fed
     if (unitBusAbortRequested()) break;
     uint8_t batch[BOOT_HOME_BATCH_SIZE];
     int batchN = 0;
@@ -342,6 +343,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   uint8_t batch[REFLASH_BATCH_SIZE];
   int inBatch = 0;
   for (int k = 0; k < total; k++) {
+    wdtFeed();  // #314: I2C page-streaming is the longest displayTask op
     if (unitBusAbortRequested()) {
       cancelled = true;
       break;
@@ -403,6 +405,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // render) would home every flashed unit at once — the #305 inrush #309
   // exists to prevent. Targets only the still-unhomed units; a cancel leaves
   // the abort flag set so this bails and the queued Stop broadcast-homes.
+  wdtFeed();  // #314: boot-home of just-flashed units
   runBootHomeSequence(local, busFacts);
   reflashProgressFinish(local.reflash, cancelled);
   snapshotPublish(local);  // gate reopens here
@@ -566,6 +569,7 @@ static void displayTaskMain(void*) {
             int badPolls = 0;
             uint32_t start = millis();
             while (millis() - start < SELF_TEST_TIMEOUT_MS) {
+              wdtFeed();  // #314: self-test polls the unit until it reports an outcome
               if (unitBusAbortRequested()) {
                 slot.outcome = SelfTestOutcome::Aborted;
                 break;
