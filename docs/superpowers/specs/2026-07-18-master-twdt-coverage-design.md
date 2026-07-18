@@ -61,6 +61,9 @@ Call `wdtFeed()` at the top of each of the 5 task loops, plus at these progress 
 - **self-test poll loops** and **boot-home step sequence** (displayTask) — feed per poll / per homing step.
 - **cluster fan-out** (clusterTask) — feed after each member's HTTP op in `clusterLeaderTick()`. Worst case is up to 8 members × 1.5 s plus a ~10 s rollout/follower-push finalize, which can approach 30 s in one tick, so per-member feeding is **required**, not conditional; it also preserves hang detection for the cluster transport path.
 - **`MDNS.queryService`** (netTask) — **no special handling**: it takes its own timeout arg (< 30 s), so the netTask loop-top `wdtFeed()` already covers it.
+- **shared `UnitBus.cpp` blocking waits called from displayTask** — feed inside their poll loops:
+  - `waitForDisplayToStop()` polls up to `SHOW_STUCK_TIMEOUT_MS` (currently == the 30 s TWDT window) and runs **twice** per `unitBusShowFrame()` (entry + exit), so a jammed flap can block ~60 s. Without a feed this reboot-loops on any stuck flap (a common mechanical failure the code otherwise survives). This constant must stay ≤ the TWDT timeout OR the loop must feed — it now feeds.
+  - `unitBusWaitBatchIdle()` waits `delay(1000)` + up to `REFLASH_BATCH_SETTLE_MS` (~16 s); combined with the trailing settle + reprobe in `runReflashJob` it can cross 30 s mid-reflash (strands a unit in twiboot). Feed inside the poll loop, and also feed before the trailing `unitBusProbe()` in `runReflashJob`.
 
 ### 5. Out of the subscribed set: OTA / AsyncTCP (deliberate)
 
