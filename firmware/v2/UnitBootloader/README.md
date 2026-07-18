@@ -160,5 +160,6 @@ everything else (auto-install on its next boot scan).
 - [x] Phase 4 — web UI reflash controls (Maintenance tab).
 - [x] Phase 5 — EEPROM layout versioned in `SettingsEepromLayout.h` (natively tested).
 
-Provisioning a whole display (this bootloader + unit firmware + master) is
-driven by `split-flap-flasher.exe` — see `flashing/README.md`.
+Provisioning a whole display (this bootloader + unit firmware + master)
+follows the esptool merged-factory-bin recipe in `flashing/README.md`
+(the earlier Windows `split-flap-flasher.exe` was retired at #284).

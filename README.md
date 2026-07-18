@@ -17,151 +17,84 @@ Thank you everyone whom has contributed, included in the "main" release or not, 
 
 ---
 
-> **Firmware status:** The active master firmware is the **v2** ESP32-S3 stack under `firmware/v2/Master/` (with `firmware/v2/Rescue/` as its break-glass image); the Arduino Nano per-flap unit firmware (`firmware/v2/Unit/`, migrated from v1 at #311) stays active underneath it. The whole `firmware/v1` tree is **deprecated** — only the ESP8266 master (`firmware/v1/ESPMaster/`) remains there, **frozen**, kept as reference for legacy hardware and out of CI (see its README). The v2 **PCB** design docs live under `PCB/v2/`.
-
----
-
 This project has been forked from the brilliant [Split Flap Project](https://github.com/Dave19171/split-flap) by [David Königsmann](https://github.com/Dave19171). None of this would have been possible without the great foundations that have been put in place.
-
-This project has built on the original project to add extra features such as:
-
-- Message Splittng
-  - If a message is longer then the number of units there are, the message will be split up and displayed in sequence with a delay between each message
-  - Also messages can be split up by adding a `\n`
-- Added ability to setup WiFi connection on device
-  - The device will set itself up as a Access Point (AP) on first start. You will be able to connect to this network and a web portal will be provided where you can setup the WiFi network you want to connect to
-  - If the device was to lose connection, it should retry and if all else fails, it will open up the web portal again to change the WiFi settings if necessary
-  - Option to be able use direct mode is also possible as previously implemented
-- Reworked UI
-  - Can see messages scheduled to be displayed and option to remove them
-  - Loading indicators
-  - Show hide information to fill out for the mode you select
-  - See extra information on the UI such as:
-    - Last Message Received
-    - Number of Flaps registered
-    - Version Number running
-    - How many characters/lines are in the textbox for text
-    - Add newline button (as typing `\n` is a pain on a mobile keyboard)
-- Web OTA
-  - Upload a new `firmware.bin` from the browser; the ESP reboots into it.
-  - Optional `?md5=<hex>` query param verifies image integrity before eboot commits it.
-  - Size-checks the upload against the sketch slot before writing a single byte.
-  - Recovery SoftAP (`<device-name>-rec`, e.g. `split-flap-9a3c1f-rec`) comes up after 3 consecutive failed boots so a bad firmware can always be reflashed without USB.
-  - Also pushes the bundled unit firmware to every Nano it detects on the bus, so unit updates ride along with master updates.
-- I2C OTA for unit firmware
-  - Master ships a compiled Unit sketch in PROGMEM and auto-installs it on any Nano sitting in twiboot (the [patched bootloader](./UnitBootloader/README.md) is flashed once per unit via ICSP).
-- Updated `README.md` to add scenarios of problems encountered
-
-Also the code has been refactored to try facilitate easier development:
-
-- Changed serial prints to one central location so don't have to declare serial enable checks when a new one is required
-- Renamed files and functions
-- Ping endpoint
-- Updated `data` so can test out project locally without having to call a webserver via a `localDevelopment` flag
 
 3D-files here on [Printables](https://www.prusaprinters.org/prints/69464-split-flap-display)!
 
-## Building the firmware
+---
 
-The project is built with [PlatformIO](https://platformio.org/). You no longer need the Arduino IDE — `pio` handles dependencies, builds, and flashing from the command line.
+## What this is
 
-Install PlatformIO Core (once):
+A mechanical split-flap display driven by an **ESP32-S3 master** that talks over I2C to a chain of **Arduino-Nano flap units** (one Nano per flap drum). The master hosts the web UI, WiFi portal, NTP clock, MQTT/Home-Assistant integration, and pushes both master and unit firmware over the air.
+
+Multiple masters can be joined into a **multi-display cluster** — a wall of N rows driven as one logical display over your LAN, with automatic leader/follower coordination and firmware convergence across the fleet.
+
+> **Release:** the current stack is **v2** (`v2.0.0`, the full port of the original ESP8266 firmware onto the ESP32-S3 plus the cluster feature). See the [releases page](https://github.com/lvschouwen/split-flap/releases) for notes and firmware binaries.
+
+## Firmware layout
+
+Everything is built with [PlatformIO](https://platformio.org/) — no Arduino IDE. Each project has its own `platformio.ini`; run `pio` commands from the project directory.
+
+| Folder | Target | Role |
+|---|---|---|
+| `firmware/v2/Master/` | ESP32-S3-WROOM-1 (N16R8) | **The master.** Web UI, WiFi, NTP, MQTT/HA, I2C unit bus, OTA, cluster leader/follower. |
+| `firmware/v2/Unit/` | Arduino Nano | Per-flap unit: stepper homing, I2C slave, EEPROM offset/address. |
+| `firmware/v2/FollowerEsp01/` | ESP8266 ESP-01 | Optional "dumb row" — turns legacy ESP-01 master hardware into a cheap cluster follower row under an S3 leader. |
+| `firmware/v2/Rescue/` | ESP32-S3 (factory slot) | Break-glass recovery image; installs a good master image when the app slots are bad. |
+| `firmware/v2/Bootloader/` | ESP32-S3 | Custom second-stage bootloader (adds a factory-reset button on GPIO 4). |
+| `firmware/v2/UnitBootloader/` | Arduino Nano | Vendored + patched **twiboot** for reflashing units over I2C (see its README). |
+| `firmware/v1/ESPMaster/` | ESP8266 ESP-01 | **Frozen, deprecated** — the original v1 master, kept as reference only, out of CI (see its README). |
+
+Install PlatformIO Core once:
 
 ```bash
 pip install -U platformio
 ```
 
-Each PlatformIO project has its own `platformio.ini` in its folder. Today the active set is:
-
-| Folder | Target | Status |
-|---|---|---|
-| `firmware/v2/Master/` | ESP32-S3 (master) | Active |
-| `firmware/v2/Rescue/` | ESP32-S3 (rescue slot) | Active |
-| `firmware/v2/Unit/` | Arduino Nano (per-flap) | Active |
-| `firmware/v1/ESPMaster/` | ESP8266 ESP-01 | Frozen — reference only (see its README) |
-
-From the folder, run:
+Then, from a project directory:
 
 ```bash
-pio run                   # build
-pio run -t upload         # flash firmware over USB
-pio device monitor        # serial monitor at 115200 baud
+pio run                  # build
+pio run -t upload        # USB flash (first time / devkit)
+pio device monitor       # serial monitor at 115200 baud
+pio test -e native       # host-side unit tests
+python -m pytest tests/  # python-side tests (where present)
 ```
 
-The web UI and the bundled unit firmware are compiled into the master's PROGMEM at build time by `firmware/v1/ESPMaster/build_assets.py` (no separate filesystem flash step).
+The web UI and the bundled unit firmware are gzipped and compiled into the master binary at build time by `firmware/v2/Master/build_assets.py` — there is no separate filesystem-flash step; `pio run -t upload` lands the whole thing.
 
-For the Unit sketch, if upload fails because of the old bootloader on your Nano, use the `*_old_bootloader` env:
+For a Nano whose upload fails on the stock bootloader, use the fallback env:
 
 ```bash
 pio run -e unit_old_bootloader -t upload
 ```
 
-Host-side unit tests for the ESPMaster string helpers live in `firmware/v1/ESPMaster/test/` and run with:
+## The master (ESP32-S3)
 
-```bash
-cd firmware/v1/ESPMaster && pio test -e native
-```
+The master is an **ESP32-S3-WROOM-1-N16R8 devkit**. It drives the units over I2C (SDA = GPIO 8, SCL = GPIO 9, 100 kHz) and exposes everything through a three-tab web UI.
 
-Arduino IDE is **not** supported for the master sketch any more: the PROGMEM asset generation runs as a PlatformIO pre-build step, and the build flags / lib dependencies are managed through `platformio.ini`. The Unit sketch is simple enough to still open in the IDE, but the PlatformIO flow is the supported path for every part of the project.
+Highlights:
 
-## General
+- **WiFi portal** — on first boot (or when the stored network can't be reached for ~30 s) the master brings up a `<device-name>-setup` access point. Connect, pick your network, done. Credentials live in NVS and survive reboots and firmware updates.
+- **Clock / NTP** — full IANA timezone picker (baked table served at `/tz.json`); the time is set at boot, on WiFi join, and whenever you change the zone.
+- **OTA** — upload a new `firmware-<rev>.bin` from **Maintenance → Master Firmware (OTA)** (mandatory `?md5=` integrity check). The S3's A/B slots mean a bad image rolls back automatically. The same flow can reflash every detected unit right after.
+- **Rescue / factory reset** — hold the GPIO 4 button for 5 s through reset to boot the rescue app from the factory slot, or `POST /firmware/rescue-boot`. WiFi credentials always survive a factory reset.
+- **MQTT / Home Assistant** — see below.
+- **Live vitals** — the System tab shows heap, load, I2C traffic, MQTT state, and NTP sync age; live display changes stream over SSE.
 
-The display's electronics use 1 x ESP01 (ESP8266) as the main hub and up to 16 Arduinos as receivers. The ESP handles the web interface and communicates to the units via I2C. Each unit is resposible for setting the zero position of the drum on startup and displaying any letter the main hub send its way.
+## The units (Arduino Nano)
 
-Assemble everything according to the instruction manual which you can find on [GitHub](./Instructions/SplitFlapInstructions.pdf).
+Each split-flap unit is an Arduino Nano on a custom PCB, driving a **28BYJ-48** 12 V stepper through a **ULN2003** and homing the drum against a **KY-003 hall sensor** + magnet. Per-unit calibration (step offset) and the I2C address live in the Nano's EEPROM.
 
-### PCB
-
-Gerber files are in the `PCB` folder. These are the scehematics for the PCB boards and say, what is needed and where. You need one per unit. Populate components according to the [instruction manual](./Instructions/SplitFlapInstructions.pdf).
-
-Options to potentially get boards created for you:
-
-- [PCB Way](https://www.pcbway.com/)
-- [JLC PCB](https://jlcpcb.com/)
-
-> Note: Services are offered by these companies to assembly the boards for you. There are surface mounted components to these devices that you might not be able to do yourself like small resistors for instance, which must be flow soldered. It could be worth having the company do this aspect for you.
-
-#### Master v2 Rev B (ESP32-S3 + ESP32-H2, in design)
-
-Next-generation dedicated controller board — ESP32-S3-WROOM-1 (primary) + ESP32-H2-MINI-1 (radio coprocessor, UART-attached for Zigbee/Thread/BLE) + TCA9548A I2C mux. Drives up to 8 rows × 16 units = 128 units. 100 × 70 mm, 4-layer. Handoff-ready design docs (README, BOM, textual schematic, pinout) plus rendered PDFs (docs, block diagram, PCB placement mock-up) live in [`PCB/MASTER_V2/`](./PCB/MASTER_V2/README.md). Layout is deferred to a freelancer or JLCPCB EasyEDA service. Compatible with existing Unit PCBs — no unit-side changes.
-
-### Unit
-
-Each split-flap unit consists of an Arduino Nano mounted on a custom PCB. It controls a 28BYJ-48 stepper motor via a ULN2003 driver chip. The drum with the flaps is homed with a KY003 hall sensor and a magnet mounted to the drum.
-
-Flash each unit's Nano from the `Unit/` folder:
+Flash a unit's Nano from `firmware/v2/Unit/`:
 
 ```bash
 pio run -t upload
 ```
 
-Each unit's hall-sensor-to-blank-flap step offset is stored in the Nano's EEPROM and is calibrated from the master's web UI after flashing — see [Set Zero Position Offset](#set-zero-position-offset) below.
+### Set the unit address
 
-Inside `Unit.ino`, there is a setting for serial debugging and a test-cycle mode. At the top of the file you'll find two commented-out lines:
-
-```c++
-#define SERIAL_ENABLE   // uncomment for serial debug communication
-#define TEST_ENABLE    	// uncomment for test mode where the unit will cycle a series of test letters.
-```
-
-> Note: If upload fails, your Nano may have the old bootloader. Use `pio run -e unit_old_bootloader -t upload` instead.
-
-#### Set Zero Position Offset
-
-The zero position (blank-flaps position) is attained by driving the stepper to the hall sensor and stepping a few steps forward. This offset is individual to every unit and is stored in the Nano's EEPROM.
-
-Calibrate from the master's web UI — no reflashing required:
-
-1. Open the **Maintenance tab → Calibration** card in the web UI.
-2. Pick a test letter; the master sends it to every unit.
-3. For each unit, type what the drum is *actually* showing.
-4. Click **Apply All**. The master reads each unit's current offset, computes the corrective delta, writes EEPROM, and re-homes — all over I2C.
-
-For half-flap fine tuning, expand the **Advanced** section for raw offset + jog controls.
-
-#### Set Unit Address
-
-Every unit's address is set by a DIP switch. Set them ascending from zero in binary — the firmware offsets the DIP value by 1 before calling `Wire.begin()` so the first unit lands on I2C address `0x01` (I2C address `0x00` is the reserved general-call address and cannot be used).
+Each unit's address comes from a 4-way DIP switch (the firmware adds 1 so DIP `0000` → I2C `0x01`; address `0x00` is the reserved general-call address). Set them ascending from zero:
 
 | Unit | DIP  | I2C address |
 | ---- | ---- | ----------- |
@@ -170,105 +103,71 @@ Every unit's address is set by a DIP switch. Set them ascending from zero in bin
 | 3    | 0010 | 0x03        |
 | 4    | 0011 | 0x04        |
 | 5    | 0100 | 0x05        |
-| 6    | 0101 | 0x06        |
-| 7    | 0110 | 0x07        |
-| 8    | 0111 | 0x08        |
-| 9    | 1000 | 0x09        |
-| 10   | 1001 | 0x0A        |
+| …    | …    | …           |
 
-`1` means the switch is in the up position. The master scans the bus at boot and logs which addresses responded (viewable via `pio device monitor` when `SERIAL_ENABLE` is true on the master, or via the `/settings` endpoint).
+The master scans the bus at boot and derives the display width from the highest responding address. A dead unit keeps its slot (the layout doesn't shift), but a unit parked on a high address with nothing below it widens the display. The web UI's **Units: N / W** field shows detected responders vs. derived width. A unit count can also be pinned manually (Maintenance → Display width) for headless/dummy setups.
 
-### ESP01/ESP8266
+### Calibrate the zero position
 
-#### Pre-requisites
+The zero (blank-flaps) position is set by homing to the hall sensor and stepping a few steps forward — an offset unique to each unit, stored in EEPROM. Calibrate from the web UI, no reflashing:
 
-Library versions are pinned in [`ESPMaster/platformio.ini`](./ESPMaster/platformio.ini) and installed automatically when you run `pio run`. You no longer need to install them manually.
+1. Open **Maintenance → Calibration**.
+2. Pick a test letter; the master sends it to every unit.
+3. For each unit, type what the drum is *actually* showing.
+4. **Apply All** — the master reads each offset, computes the corrective delta, writes EEPROM, and re-homes, all over I2C.
 
-To flash the ESP8266 you can either use an [Arduino Uno](https://create.arduino.cc/projecthub/pratikdesai/how-to-program-esp8266-esp-01-module-with-arduino-uno-598166) as a programmer or buy a dedicated programmer. A dedicated programmer is much faster.
+Expand **Advanced** for raw offset + jog controls and half-flap fine tuning.
 
-> Note: Be wary of ESP8266 programmers that are available which allow USB connection to your PC which may not have programming abilities. Typically extra switches are available so that the ESP8266 can be put in programming mode, although you can modify the programmer through a simple solder job to allow it to enter programming mode. Examples can be found in the customer reviews of [Amazon](https://www.amazon.co.uk/gp/product/B078J7LDLY/ref=ppx_yo_dt_b_search_asin_title?ie=UTF8&th=1).
+### Reflash units over I2C
 
-> Alternatively, you can get a dedicated programmer from Amazon such as [this one](https://www.amazon.co.uk/dp/B083QHJW21). This is also available on [AliExpress](https://www.aliexpress.com/item/1005001793822720.html?spm=a2g0o.detail.0.0.48622aefV0Zv89&mp=1) if you are willing to wait a while for it.
+Units carry the [patched twiboot bootloader](./firmware/v2/UnitBootloader/README.md) (flashed once per unit via ICSP). The master ships the compiled unit sketch in its own binary and:
 
-#### Web assets live in PROGMEM — no LittleFS upload
+- auto-installs it on any Nano it finds sitting in twiboot (e.g. a freshly ICSP-flashed one), and
+- reflashes every unit on demand via **Maintenance → Actions → Flash all units** (or automatically for out-of-date units after a master OTA).
 
-The files in [`ESPMaster/data/`](./ESPMaster/data/) (HTML/JS/CSS, favicon, bundled `unit-firmware.hex`) are gzipped and compiled directly into the master's binary by the `ESPMaster/build_assets.py` pre-build script. That means:
+## Multi-display cluster
 
-- **No separate `pio run -t uploadfs` step.** Just `pio run -t upload` and the whole thing lands in flash.
-- The bundled `unit-firmware.hex` is what the master auto-installs to any Nano it finds in twiboot on boot (see [Unit firmware updates](#unit-firmware-updates-via-master)).
+Several masters on the same LAN can be joined into one logical wall. One master is the **leader**; the others are **followers** (either full S3 masters or cheap ESP-01 "dumb rows" running `firmware/v2/FollowerEsp01`). The leader wraps/aligns your text across the grid and drives every row in sync; followers render their assigned segment.
 
-#### Updating Settings of the Sketch
+- Configure it from **Settings → Cluster** (member editor, network scan, live status pills, rollout progress).
+- The leader converges follower firmware to its own build automatically (rev mismatch in the join handshake triggers a streamed OTA), so the fleet stays on one image.
+- Leader/follower wire traffic is authenticated (per-member HMAC) and LAN-scoped; if the leader dies, a follower can be promoted.
 
-There are several options in the Sketch you can modify to customise or change the behaviour of the display. These are marked in the code as "Configurable".
+Design details: [`docs/superpowers/specs/2026-07-13-multi-display-cluster-design.md`](./docs/superpowers/specs/2026-07-13-multi-display-cluster-design.md) and the sibling cluster specs.
 
-WiFi needs **no configuration in the code at all**. On first boot (or whenever the stored network can't be reached for ~30 s) the master exposes a `<device-name>-setup` access point (e.g. `split-flap-9a3c1f-setup` — the suffix comes from the ESP's unique chip id); connect, pick your real network, done. The credentials are saved in the ESP8266's own WiFi flash storage, so they survive reboots **and firmware updates** — you configure a display once in its lifetime.
+## MQTT / Home Assistant
 
-![Screenshot WiFi Portal](./Images/Access-Point-Screenshot.jpg)
+The display joins Home Assistant over MQTT with automatic discovery: inbound notification text (shown for a dwell, then reverts), a **Mode** select (text/clock), and health telemetry — including per-unit wear and cluster health when leading. Configure it entirely from **Settings → MQTT Broker** (host, port, username, password); leave the host empty to keep MQTT off. If a broker is advertised over mDNS on your LAN, **Detect broker** prefills host/port. Create a dedicated HA user for the display rather than reusing your own login.
 
-To move a display to a different network, either use **Settings tab → Reset WiFi** in the web UI (the device reboots into the setup portal), or just take it out of range of the old network — after the connection attempt times out, the setup portal comes back on its own.
+## Device name & running multiple displays
 
-Upgrading over the air from an older build that used a compiled-in `WifiCredentials.h`? Keep that (gitignored) file in place for the build you flash: it acts as a one-time migration seed — its credentials are stored properly on the device the first time the new firmware runs, after which the file can be deleted. Without it, the display simply shows its setup portal once after the upgrade.
+Every network-facing name (mDNS `<name>.local`, DHCP hostname, MQTT client id/topics, AP SSIDs) derives from one per-device identity. Out of the box it's `split-flap-<hex chip id>` — unique per board, so several displays can share a LAN running the **same image** with no per-device edits. Set a friendly name in **Settings → Device → Device Name** (lowercase letters/digits/hyphens, ≤24 chars). Use a **DHCP reservation** on the board's MAC for a fixed IP.
 
-For the clock mode, set the timezone from the **web UI → Settings tab → Device card → Timezone dropdown**. The selection is persisted to EEPROM and applied immediately without reboot. The compile-time `timezonePosix` in `ESPMaster.ino` is kept only as a build-time default for the first boot on a fresh EEPROM.
+## Flashing & provisioning
 
-Dropdown covers common zones (Europe, Americas, Asia, Oceania). If you need a zone that isn't listed, edit `TIMEZONE_OPTIONS` in `ESPMaster/data/script.js` and re-upload. POSIX TZ strings sourced from: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
+- **First flash** of an S3 is a USB job (`pio run -t upload`, or the merged factory-bin recipe in [`flashing/README.md`](./flashing/README.md) which lands the custom bootloader + rescue slot in one shot).
+- **Subsequent flashes** go over the air — from the web UI, or scripted with [`flashing/ota-flash.sh`](./flashing/ota-flash.sh) (fetches the latest staged bin, OTAs master/follower/rescue targets, reads the verdict back from `/settings`).
+- The bundled unit firmware is staged into the master (and follower) `data/` dirs by `flashing/flasher/make_manifest.py stage`; CI's `gate` step enforces that it never drifts from the built Unit hex.
 
-`clockFormat` uses [`strftime(3)`](https://en.cppreference.com/w/c/chrono/strftime) conversion specifiers (`%H:%M`, `%I:%M%p`, etc).
+See [`flashing/README.md`](./flashing/README.md) for the full recipe (DIP address table, esptool factory-bin, OTA flags).
 
-There are several helper `define` variables to help during debugging/running:
+## PCB
 
-- **SERIAL_ENABLE**
-  - Use this to enable Serial output lines for tracking executing code. Must stay `false` on the ESP-01 for I2C to work (serial + I2C share the same pins). This also disables all unit calls, so it doubles as the "ESP standalone" debug mode.
+The **currently deployed** hardware uses the original per-unit Arduino-Nano PCB (Gerbers under `PCB/`), one board per unit. Services like [JLCPCB](https://jlcpcb.com/) or [PCBWay](https://www.pcbway.com/) can fabricate and assemble them — some surface-mount parts are best flow-soldered by the fab.
 
-#### MQTT / Home Assistant
+A ground-up **v2 hardware redesign** is documented (not yet built) under [`PCB/v2/`](./PCB/v2/README.md): a custom STM32G030K8 unit board with an RS-485 multidrop bus, card-edge backplane, and silicon-UID addressing, plus a minimal ESP32-S3 master carrier. See `PCB/v2/OPEN_DECISIONS.md` for the locked decisions and open items.
 
-The display can join Home Assistant over MQTT: inbound notification text (shows for a dwell time, then reverts to clock/text mode), a **Mode** select to switch between text and clock from HA (an explicit mode switch also cancels a still-running notification), plus health telemetry — all with automatic HA discovery. Configure it entirely from the **web UI → Settings tab → MQTT Broker card** (host, port, username, password) — leave the host empty to keep MQTT off. Settings are stored on the device and applied after a reboot; the password is never sent back to the browser.
+## Common problems
 
-If Home Assistant (or any mDNS-advertising broker) is on the same LAN, press **Detect broker**: the display runs a short mDNS scan (`_mqtt._tcp`, then Home Assistant's zeroconf announce) and prefills the host/port fields — you only add the credentials and press Save MQTT. Credentials stay manual by design; create a dedicated Home Assistant user (e.g. `splitflap`) for the display rather than reusing your own login.
+- **Display width looks wrong** — check each unit's DIP-switch address and wiring; address contiguously from DIP `0000` (I2C `0x01`). The **Units: N / W** field shows detected vs. derived width.
+- **A unit never homes** — when powered, the KY-003 hall sensor should only light when the magnet passes it. Check the sensor lead and magnet alignment.
+- **Only `pio run -t upload`** is needed to flash — web assets and the bundled unit firmware are baked into the binary; there is no separate filesystem upload.
+- **WiFi range** — user [@beroliv](https://github.com/beroliv) reported ESP8266 WiFi issues on legacy hardware, resolved by soldering an extension wire to the antenna ([writeup, German](https://www.stall.biz/project/verbesserte-wlan-konnektivitaet-mit-externen-antennen-fuer-wiffi-weatherman-und-andere-module-mit-esp8266/)). Take care if you try it.
 
-#### Device name & running multiple displays
+## Going deeper
 
-Every network-facing name (mDNS `<name>.local`, DHCP hostname, MQTT client id/topics, and the recovery/OTA/setup AP SSIDs) derives from a single per-device identity. Out of the box it is `split-flap-<hex chip id>` — unique per ESP, so several displays can share one LAN running the **same firmware image** with zero per-device edits. To give a display a friendly name (`kitchen`, `split-flap-livingroom`, …) use the **web UI → Settings tab → Device card → Device Name** field: lowercase letters/digits/hyphens, max 24 chars, applied on the next reboot. Leave it empty to return to the chip-id default.
+- [`CLAUDE.md`](./CLAUDE.md) — the authoritative map of the current architecture, per-mechanism ownership, and hard invariants.
+- [`docs/superpowers/specs/`](./docs/superpowers/specs/) — a dated design spec per feature.
+- Per-mechanism detail lives in the header comment of the file that owns it.
 
-Fixed IP addresses are the router's job: use a **DHCP reservation** keyed on the device's MAC address. (The former experimental `WIFI_STATIC_IP` compile-time option was removed — two displays hardcoding the same address is exactly the failure DHCP reservations avoid.)
-
-#### Sketch Upload
-
-Flash the sketch from the `ESPMaster/` folder:
-
-```bash
-pio run -t upload
-```
-
-The ESP8266 will reboot running the new sketch. Stick it onto the first unit's PCB and navigate to the IP-address the ESP8266 is getting assigned from your router. The build also drops a self-describing copy of the binary next to `firmware.bin`:
-
-```
-ESPMaster/.pio/build/espmaster/firmware-<short-git-rev>.bin
-```
-
-…which is the artifact you'd typically archive or push via the web OTA flow below.
-
-### Web OTA
-
-Once the master is on WiFi, subsequent flashes don't need a USB cable:
-
-- Go to the master's web UI → **Maintenance tab → Master Firmware (OTA)** card → upload the new `firmware-<rev>.bin`. The ESP reboots into the new sketch.
-- The same OTA flow also queues every detected unit for its twiboot bootloader right before the reboot, so after the master comes back up it auto-pushes the bundled unit firmware to each one. In one step the whole display is updated.
-- If you need to force just the units to re-flash (e.g. you changed `Unit.ino` and regenerated `ESPMaster/data/unit-firmware.hex` but the master is unchanged), click **Flash all unit(s)** under Actions.
-
-### Unit firmware updates via master
-
-The master ships with a copy of the compiled Unit sketch in PROGMEM (see `ESPMaster/data/unit-firmware.hex`, regenerated from the current `Unit/` build). Any Nano the master probes and finds sitting in twiboot — typically a freshly ICSP-flashed one with no sketch — gets that bundled image automatically on boot. Combined with the web OTA flow above this means:
-
-1. Rebuild `Unit/` after code changes.
-2. Copy the resulting `Unit/.pio/build/unit/firmware.hex` over `ESPMaster/data/unit-firmware.hex` (manual copy — the v1 tree is frozen and `python flashing/flasher/make_manifest.py stage` now stages only `firmware/v2/Master/data`; see `flashing/README.md`).
-3. Rebuild master + OTA it.
-4. Master reboots, probes, auto-flashes every unit.
-
-### Common Problems
-
-- The display size is detected automatically at boot: the master probes the I2C bus and derives the display width from the highest responding unit address (1..16, set by each unit's DIP switches). No firmware edit is needed for different display sizes. Address your units contiguously starting at DIP 0000 (I2C 0x01) — a gap mid-display keeps its slot (a dead unit doesn't shift the layout), but a unit parked on a high address with nothing below it widens the display. The web UI's "Units: N / W" field shows detected responders vs the derived width — if a unit is missing there, check its DIP-switch address and wiring.
-- `SERIAL_ENABLE` must stay `false` for the ESP-01 to communicate with the Nanos over I2C (serial and I2C share the same pins on the ESP-01).
-- `pio run -t upload` is the only flash step now — no separate filesystem upload. Web assets and the bundled unit firmware are baked into the master binary at build time.
-- When the system is powered, your hall sensor should only light up when a magnet is nearby.
-- User [@beroliv](https://github.com/beroliv) has reported having issues with WiFi connections. One solution they have proposed is soldering a wire to the antenna to be able to extend its range by creating an antenna. Here is the [link](https://www.stall.biz/project/verbesserte-wlan-konnektivitaet-mit-externen-antennen-fuer-wiffi-weatherman-und-andere-module-mit-esp8266/) (in German but Google Translate does a good job for other languages) they provided to detail the solution. Please take care when carrying out this solution. Thank you for the information [@beroliv](https://github.com/beroliv)!
+Assembly of the mechanical build follows the [instruction manual](./Instructions/SplitFlapInstructions.pdf).
