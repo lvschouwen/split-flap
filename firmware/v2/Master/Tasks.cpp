@@ -465,6 +465,11 @@ static void displayTaskMain(void*) {
     SerialPrintf("wdt: display subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
     wdtFeed();
+#ifdef TWDT_HANG_TEST
+    // #314 bench: after 20 s of normal running, wedge displayTask forever so
+    // the TWDT must reboot within ~30 s. NEVER defined in a shipping build.
+    if (millis() > 20000) { for (;;) { /* no wdtFeed() → dog fires */ } }
+#endif
     // Timed wait: a real command preempts (display writes / reflash / Probe);
     // an idle timeout synthesizes one opportunistic heartbeat read.
     if (xQueueReceive(displayQueue, &cmd,
