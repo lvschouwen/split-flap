@@ -27,6 +27,7 @@ void tasksSetUnitCountOverride(int count) {
 #include "MqttService.h"
 #include "StatusLed.h"
 #include "SystemStats.h"
+#include "TaskWatchdog.h"
 #include "UnitBus.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
@@ -457,7 +458,10 @@ static void displayTaskMain(void*) {
 
   DisplayCommand cmd;
   int heartbeatSlot = 0;  // round-robin cursor for the scheduled poll (#310)
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: display subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
+    wdtFeed();
     // Timed wait: a real command preempts (display writes / reflash / Probe);
     // an idle timeout synthesizes one opportunistic heartbeat read.
     if (xQueueReceive(displayQueue, &cmd,
@@ -794,7 +798,10 @@ static void clockTaskMain(void*) {
   SerialPrintf("clockTask up on core %d\n", xPortGetCoreID());
   TickType_t lastWake = xTaskGetTickCount();
   String lastQueued;  // in-flight dedup, see ClockPolicy.h contract
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: clock subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
+    wdtFeed();
     vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(1000));
 
     DisplaySnapshot snap = displaySnapshotGet();
@@ -905,7 +912,10 @@ struct NetTaskContext {
 static void netTaskMain(void* arg) {
   SerialPrintf("netTask up on core %d\n", xPortGetCoreID());
   auto* ctx = static_cast<NetTaskContext*>(arg);
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: net subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
+    wdtFeed();
     wifiServiceTick();
     webEndpointsLoop(*ctx->settings, *ctx->store);
     clusterFollowerServiceTick(*ctx->store);  // #272: decay + NVS + renders
@@ -923,7 +933,10 @@ static void netTaskMain(void* arg) {
 static void mqttTaskMain(void*) {
   SerialPrintf("mqttTask up on core %d\n", xPortGetCoreID());
   MqttInboxMessage msg;
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: mqtt subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
+    wdtFeed();
     while (xQueueReceive(mqttInbox, &msg, 0) == pdTRUE) {
       mqttServiceHandleInbox(msg);
     }
@@ -938,7 +951,10 @@ static void mqttTaskMain(void*) {
 // (ClusterLeader.cpp); disabled clusters make it a no-op read.
 static void clusterTaskMain(void*) {
   SerialPrintf("clusterTask up on core %d\n", xPortGetCoreID());
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: cluster subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
+    wdtFeed();
     clusterLeaderTick();
     vTaskDelay(pdMS_TO_TICKS(100));
   }
