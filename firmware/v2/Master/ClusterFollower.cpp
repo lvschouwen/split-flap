@@ -11,6 +11,7 @@
 #include "ClusterDigest.h"  // promote transform + digest field extraction
 #include "ClusterHmac.h"  // cluster-wire auth: key storage + verify (#313 follow-on)
 #include "ClusterLeader.h"  // clusterLeaderStageConfig — the promote handoff
+#include "WebEndpoints.h"   // #337: webMqttApplyMode — adopt cluster mode on promote
 #include "DisplayCommand.h"
 #include "HelpersSerialHandling.h"
 #include "ReflashPlan.h"
@@ -27,6 +28,7 @@
 // follower reboot; written only when the table actually changes.
 #define CLUSTER_KEY_TABLE       "clTable"
 #define CLUSTER_KEY_SELF_INDEX  "clSelfIdx"
+#define CLUSTER_KEY_MODE        "clMode"    // #337: cluster deviceMode for promote
 // Cluster-wire auth key (#313 follow-on): the 64-char hex the leader minted
 // at join. Persisted so a rebooted follower keeps enforcing in Grace.
 #define CLUSTER_KEY_HMAC        "clHmacKey"
@@ -73,6 +75,8 @@ static String digestRaw;
 static uint32_t digestReceivedMs = 0;
 static String digestTable;
 static int digestSelfIndex = -1;
+static String digestMode;  // #337: leader's active deviceMode from the digest —
+                           // a promoted successor adopts it so the wall mode survives
 static bool tableDirty = false;
 // #321 ranked auto-takeover: this board's rank in the leader's `succ` list
 // (-1 = not a designated successor), and the deadline until which an announced
@@ -109,6 +113,7 @@ void clusterFollowerInit(SettingsStore& store) {
   memberRow = store.getInt(CLUSTER_KEY_ROW, 0);
   digestTable = store.getString(CLUSTER_KEY_TABLE, "");
   digestSelfIndex = store.getInt(CLUSTER_KEY_SELF_INDEX, -1);
+  digestMode = store.getString(CLUSTER_KEY_MODE, "");  // #337
   hmacKeyHex = store.getString(CLUSTER_KEY_HMAC, "");
   hmacKeyValid = clusterKeyFromHex(hmacKeyHex, hmacKey);
   if (!hmacKeyValid) hmacKeyHex = "";
@@ -135,6 +140,7 @@ void clusterFollowerServiceTick(SettingsStore& store) {
   bool persistTable = false;
   String persistTableSpec;
   int persistSelfIndex = -1;
+  String persistModeVal;  // #337: cluster mode, written with the table
   bool persistTs = false;
   uint64_t persistTsVal = 0;
 
@@ -171,6 +177,7 @@ void clusterFollowerServiceTick(SettingsStore& store) {
       persistTable = true;
       persistTableSpec = digestTable;
       persistSelfIndex = digestSelfIndex;
+      persistModeVal = digestMode;  // #337
     }
     // Coarse replay-mark persist: fold the current mark into a membership
     // write when one is pending, else stage a standalone mark write. On a
@@ -226,9 +233,11 @@ void clusterFollowerServiceTick(SettingsStore& store) {
     if (persistTableSpec.length() > 0) {
       store.putString(CLUSTER_KEY_TABLE, persistTableSpec);
       store.putInt(CLUSTER_KEY_SELF_INDEX, persistSelfIndex);
+      store.putString(CLUSTER_KEY_MODE, persistModeVal);  // #337
     } else {
       store.remove(CLUSTER_KEY_TABLE);
       store.remove(CLUSTER_KEY_SELF_INDEX);
+      store.remove(CLUSTER_KEY_MODE);
     }
   }
 
@@ -386,6 +395,14 @@ bool clusterFollowerHandlePing(const String& digest, int youIndex,
       digestSelfIndex = youIndex;
       tableDirty = true;
     }
+    // #337: the leader's active deviceMode. Kept fresh in RAM every digest so a
+    // live promote adopts the current mode; persisted with the promote-critical
+    // block (below) so a reboot-then-promote still has a reasonable mode.
+    String mode = clusterExtractJsonString(digest, "mode");
+    if (mode.length() > 0 && mode != digestMode) {
+      digestMode = mode;
+      tableDirty = true;  // rides the existing promote-critical NVS write
+    }
   }
   return true;
 }
@@ -469,7 +486,7 @@ static bool promoteGatePasses(bool autoPath) {
 
 static ClusterPromoteVerdict clusterFollowerPromoteImpl(bool autoPath) {
   if (clusterMutex == nullptr) return {500, "cluster service not running"};
-  String tableSpec, oldLeaderHost;
+  String tableSpec, oldLeaderHost, mode;
   int selfIndex;
   {
     ClusterLock lock;
@@ -485,6 +502,7 @@ static ClusterPromoteVerdict clusterFollowerPromoteImpl(bool autoPath) {
     tableSpec = digestTable;
     selfIndex = digestSelfIndex;
     oldLeaderHost = leaderHost;
+    mode = digestMode;  // #337: adopt the cluster mode after taking over
   }
 
   // Outside the lock: the leader module's calls take LeaderLock — the two
@@ -511,6 +529,11 @@ static ClusterPromoteVerdict clusterFollowerPromoteImpl(bool autoPath) {
     followerLeaveLocked();
   }
   clusterLeaderStageConfig(newSpec);  // pre-validated: cannot fail
+  // #337: adopt the cluster's active display mode so the wall resumes as-is.
+  // A clock especially needs THIS board's deviceMode=clock for its clockTask
+  // to drive the grid; without this the successor falls back to its own NVS
+  // mode and the wall changes. Outside every lock (WebStateLock only).
+  if (mode.length() > 0) webMqttApplyMode(mode);
   SerialPrintln(String("cluster: ") +
                 (autoPath ? "AUTO-PROMOTED" : "PROMOTED") +
                 " — taking over the wall as leader (" + newSpec + ")");

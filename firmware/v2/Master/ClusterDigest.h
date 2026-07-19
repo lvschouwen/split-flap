@@ -201,7 +201,7 @@ inline String clusterBuildDigest(uint32_t gen, const String& leaderName,
                                  const String& leaderHost,
                                  const String& tableSpec, const String* rows,
                                  int rowCount, const ClusterLeaderStatus& st,
-                                 uint32_t holdMs = 0) {
+                                 uint32_t holdMs = 0, const String& mode = "") {
   String out;
   out.reserve(256 + rowCount * 40 + st.memberCount * 200);
   out += "{\"gen\":";
@@ -221,6 +221,8 @@ inline String clusterBuildDigest(uint32_t gen, const String& leaderName,
   appendJsonString(out, clusterSuccessorList(st));
   out += ",\"hold\":";
   out += String((unsigned long)holdMs);  // #321: 0 unless a reboot is imminent
+  out += ",\"mode\":";  // #337: leader's active deviceMode — a promoted
+  appendJsonString(out, mode);  // successor adopts it so the wall mode survives
   out += ",\"status\":";
   out += clusterStatusJson(st);
   out += '}';

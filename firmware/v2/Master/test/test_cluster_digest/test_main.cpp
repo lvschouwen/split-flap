@@ -456,6 +456,23 @@ static void test_digest_carries_succ_field() {
   TEST_ASSERT_TRUE(d.indexOf("\"hold\":0") >= 0);  // #321: 0 unless rebooting
 }
 
+// #337: the leader's active deviceMode rides the digest so a promoted
+// successor resumes the cluster mode instead of its own NVS default.
+static void test_digest_carries_mode_field() {
+  ClusterLeaderStatus st = makeStatus();
+  String rows[1] = {"HELLO"};
+  String d = clusterBuildDigest(3, "wall", "192.168.1.2", "a|0|0|16", rows, 1, st,
+                                0, "clock");
+  TEST_ASSERT_TRUE(d.indexOf("\"mode\":\"clock\"") >= 0);
+}
+
+static void test_digest_mode_defaults_empty() {
+  ClusterLeaderStatus st = makeStatus();
+  String rows[1] = {"HELLO"};
+  String d = clusterBuildDigest(3, "wall", "192.168.1.2", "a|0|0|16", rows, 1, st);
+  TEST_ASSERT_TRUE(d.indexOf("\"mode\":\"\"") >= 0);
+}
+
 static void test_digest_carries_hold_when_rebooting() {
   ClusterLeaderStatus st = makeStatus();
   String rows[1] = {"HELLO"};
@@ -471,6 +488,8 @@ int main(int, char**) {
   RUN_TEST(test_successor_list_orders_multiple_s3_by_index);
   RUN_TEST(test_successor_list_prefers_zero_width_backup);
   RUN_TEST(test_digest_carries_succ_field);
+  RUN_TEST(test_digest_carries_mode_field);
+  RUN_TEST(test_digest_mode_defaults_empty);
   RUN_TEST(test_digest_carries_hold_when_rebooting);
   RUN_TEST(test_fault_mask_all_healthy_is_zeroes);
   RUN_TEST(test_fault_mask_bit_is_unit_index);
