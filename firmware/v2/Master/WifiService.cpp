@@ -260,7 +260,12 @@ void wifiServiceTick() {
         break;
       }
       case WifiAction::Reboot:
-        scheduleRestart(F("setup portal timed out — retrying stored WiFi"));
+        // Same action, two origins: a Connected-phase Reboot is the #328
+        // reconnect watchdog (link wedged after an AP power-cycle); otherwise
+        // it is the portal-timeout retry. Distinguish them in the log.
+        scheduleRestart(policy.phase == WifiPhase::Connected
+                            ? F("WiFi link lost too long — rebooting to re-join (#328)")
+                            : F("setup portal timed out — retrying stored WiFi"));
         break;
       case WifiAction::None:
         break;

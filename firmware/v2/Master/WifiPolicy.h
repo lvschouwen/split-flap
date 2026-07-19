@@ -8,15 +8,24 @@
 // and feeds this step function from netTask; everything decision-shaped is
 // natively tested (test/test_wifi_policy).
 //
-// Once Connected the machine is parked for good: link drops belong to the
-// SDK's auto-reconnect (WiFi.setAutoReconnect(true)), never a portal
-// re-entry.
+// Once Connected, brief link drops belong to the SDK's auto-reconnect
+// (WiFi.setAutoReconnect(true)) and never re-open the portal. But that path
+// is known to wedge on the ESP32-S3 after an AP power-cycle (esp_wifi +
+// WiFi.persistent(false) leaves nothing to un-stick the STA), stranding the
+// board off-network until a manual power cycle (#328). So a bounded reconnect
+// watchdog reboots after a sustained outage — the same "router may just have
+// been down" retry the portal-timeout path already uses. We reboot; we still
+// never re-open the portal.
 
 #include <stdint.h>
 
 // v1 timings verbatim (user decision 2026-07-09 on #58).
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000UL;
 static const uint32_t WIFI_PORTAL_TIMEOUT_MS = 300000UL;
+// #328: continuous Connected-phase link loss tolerated before a recovery
+// reboot. Long enough that the SDK auto-reconnect owns transient blips; short
+// enough that an AP-reboot wedge self-heals in ~1.5 min instead of never.
+static const uint32_t WIFI_RECONNECT_TIMEOUT_MS = 90000UL;
 
 enum class WifiPhase : uint8_t { Boot, Joining, Portal, Connected };
 
@@ -32,6 +41,10 @@ enum class WifiAction : uint8_t {
 struct WifiPolicyState {
   WifiPhase phase = WifiPhase::Boot;
   uint32_t deadlineMs = 0;  // end of the current join/portal window
+  // #328: millis() at which a Connected-phase link loss began; 0 = link up
+  // (or not yet tracking). The reconnect watchdog fires on continuous
+  // downtime, so any link-up tick clears it.
+  uint32_t linkDownSinceMs = 0;
 };
 
 // Rollover-safe "now reached deadline": valid while the window length stays
@@ -89,9 +102,28 @@ static inline WifiAction wifiPolicyStep(WifiPolicyState& st, uint32_t nowMs,
     case WifiPhase::Connected:
       // The portal page doubles as a "move to another network" page from
       // the LAN: a validated submission here persists + reboots exactly
-      // like a portal one. Link drops still never re-open the portal.
+      // like a portal one. It wins even mid-outage.
       if (portalSubmitted) {
         return WifiAction::SaveAndReboot;
+      }
+      // Healthy link: clear any armed outage clock and stay parked — the SDK
+      // auto-reconnect owns transient drops.
+      if (linkUp) {
+        st.linkDownSinceMs = 0;
+        return WifiAction::None;
+      }
+      // Link is down. Arm the outage clock on the first down tick (0 is the
+      // sentinel for "up"; nudge an exact-0 timestamp to 1 so it never reads
+      // as unarmed). Reboot only on CONTINUOUS downtime past the window —
+      // any link-up tick above resets it. #328: this un-wedges the S3's
+      // auto-reconnect after an AP power-cycle. We reboot; never re-open the
+      // portal.
+      if (st.linkDownSinceMs == 0) {
+        st.linkDownSinceMs = nowMs ? nowMs : 1;
+      }
+      if (wifiDeadlineReached(nowMs,
+                              st.linkDownSinceMs + WIFI_RECONNECT_TIMEOUT_MS)) {
+        return WifiAction::Reboot;
       }
       return WifiAction::None;
 
