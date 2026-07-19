@@ -2608,11 +2608,14 @@ function updateClusterFromStatus(st) {
 		var label = clusterStateLabel(saved[i]);
 		pill.className = "pill " + label.kind + " cl-state";
 		pill.textContent = label.text;
-		//plat tag (#297) + wire-auth chip (#317): only for non-self members
-		//(the leader's own row is not a wire link). hmac = leader signs to it.
+		//#334: rev + platform for EVERY member incl. (this board). plat is
+		//sent only by ESP-01 (#297) — absent means the S3 fleet, so fall back
+		//to esp32s3. The #317 wire-auth chip stays non-self only (the leader's
+		//own row is not a wire link). hmac = leader signs to it.
 		rev.textContent = "";
+		rev.appendChild(document.createTextNode(
+			(saved[i].rev || "—") + " · " + (saved[i].plat || "esp32s3") + "  "));
 		if (!saved[i].self) {
-			rev.appendChild(document.createTextNode((saved[i].rev || "—") + (saved[i].plat ? " · " + saved[i].plat : "") + "  "));
 			var authChip = document.createElement("span");
 			authChip.className = "pill " + (saved[i].hmac ? "ok" : "off");
 			authChip.style.fontSize = "10px";
