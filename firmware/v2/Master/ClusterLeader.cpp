@@ -1495,7 +1495,11 @@ int clusterLeaderMirrorRows(String* rows, int& selfRowOut,
   LeaderLock lock;
   for (int i = 0; i < table.count; i++) {
     if (clusterMemberIsSelf(table.members[i])) {
-      selfRowOut = table.members[i].row;
+      // #333: a width-0 self member is OFF-GRID — a headless leader (monitor/
+      // backup, no units of its own) renders no row, so leave selfRowOut at
+      // -1. Its `row` is meaningless off-grid and would wrongly anchor the
+      // self health strip under a follower's row.
+      if (table.members[i].width != 0) selfRowOut = table.members[i].row;
       break;
     }
   }

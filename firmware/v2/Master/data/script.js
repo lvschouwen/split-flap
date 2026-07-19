@@ -2688,7 +2688,9 @@ function renderClusterMembers() {
 		tr.appendChild(hostTd);
 
 		tr.appendChild(numberCell("col", 0, 254));
-		tr.appendChild(numberCell("width", 1, 255));
+		//#333 warm-standby: width 0 = an off-grid backup member (no columns,
+		//non-rendering, promote-eligible) — the leader accepts it.
+		tr.appendChild(numberCell("width", 0, 255));
 
 		var stateTd = document.createElement("td");
 		var pill = document.createElement("span");

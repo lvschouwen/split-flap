@@ -178,13 +178,21 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
 // own rank by matching its `you` index against this list.
 inline String clusterSuccessorList(const ClusterLeaderStatus& st) {
   String out;
-  for (int i = 0; i < st.memberCount; i++) {
-    if (st.members[i].host.length() == 0) continue;  // the leader's own row
-    if (clusterMemberPlatForeign(st.members[i].plat, CLUSTER_LEADER_PLAT)) {
-      continue;  // ESP-01 / foreign board — never a takeover candidate
+  // Two passes so a width-0 warm-standby backup (#333 — no row of its own to
+  // lose, spare capacity) outranks the rendering rows: preferred successors
+  // (rank 0) first, then the rendering S3 followers, each in table order.
+  for (int pass = 0; pass < 2; pass++) {
+    const bool wantBackup = (pass == 0);
+    for (int i = 0; i < st.memberCount; i++) {
+      const ClusterLeaderMemberStatus& m = st.members[i];
+      if (m.host.length() == 0) continue;  // the leader's own row
+      if (clusterMemberPlatForeign(m.plat, CLUSTER_LEADER_PLAT)) {
+        continue;  // ESP-01 / foreign board — never a takeover candidate
+      }
+      if ((m.width == 0) != wantBackup) continue;  // this pass's tier only
+      if (out.length()) out += ',';
+      out += String(i);
     }
-    if (out.length()) out += ',';
-    out += String(i);
   }
   return out;
 }

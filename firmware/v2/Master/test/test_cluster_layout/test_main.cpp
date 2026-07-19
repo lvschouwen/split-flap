@@ -91,11 +91,62 @@ static void test_count_over_max_rejected() {
   TEST_ASSERT_FALSE(validateMemberTable(t, grid).ok);
 }
 
-static void test_zero_width_member_rejected() {
+// #333 warm-standby backup: a width-0 member is OFF-GRID — it holds
+// membership (pings, digest, promote rank) but occupies no columns, so it is
+// accepted and never appears in the derived grid (no row, no width).
+static void test_zero_width_member_off_grid() {
+  ClusterGrid grid;
+  ClusterMemberTable t = makeRows(2, 16);  // rows 0,1 each 16 wide
+  t.count = 3;
+  snprintf(t.members[2].host, sizeof(t.members[2].host), "backup.local");
+  t.members[2].row = 0;
+  t.members[2].col = 0;  // coincident with the real row-0 member — no overlap
+  t.members[2].width = 0;
+  ClusterVerdict v = validateMemberTable(t, grid);
+  TEST_ASSERT_TRUE(v.ok);
+  TEST_ASSERT_EQUAL(2, grid.rows);          // backup added no row
+  TEST_ASSERT_EQUAL(16, grid.rowWidth[0]);  // nor widened its row
+  TEST_ASSERT_EQUAL(16, grid.rowWidth[1]);
+}
+
+// #333: a table where EVERY member is off-grid (width 0) renders nothing —
+// reject it rather than "enabling" an empty wall.
+static void test_all_off_grid_table_rejected() {
+  ClusterGrid grid;
+  ClusterMemberTable t = makeRows(1, 16);
+  t.members[0].width = 0;  // the only member is off-grid
+  TEST_ASSERT_FALSE(validateMemberTable(t, grid).ok);
+}
+
+// A backup's row index is off-grid — even past the real rows it neither
+// demands contiguity for the rows it skips nor inflates the grid.
+static void test_zero_width_backup_high_row_ok() {
   ClusterGrid grid;
   ClusterMemberTable t = makeRows(2, 16);
+  t.count = 3;
+  snprintf(t.members[2].host, sizeof(t.members[2].host), "backup.local");
+  t.members[2].row = 6;
+  t.members[2].col = 0;
+  t.members[2].width = 0;
+  ClusterVerdict v = validateMemberTable(t, grid);
+  TEST_ASSERT_TRUE(v.ok);
+  TEST_ASSERT_EQUAL(2, grid.rows);
+}
+
+// A backup slices to an empty segment — the leader's fan-out skips it
+// (renderDirty gates on segment length), so it never renders.
+static void test_zero_width_backup_segment_empty() {
+  ClusterMemberTable t = makeRows(1, 16);
+  t.count = 2;
+  snprintf(t.members[1].host, sizeof(t.members[1].host), "backup.local");
+  t.members[1].row = 0;
+  t.members[1].col = 0;
   t.members[1].width = 0;
-  TEST_ASSERT_FALSE(validateMemberTable(t, grid).ok);
+  String segs[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_TRUE(layoutGridText("HELLO", DisplayAlignment::Left, t, segs));
+  TEST_ASSERT_EQUAL(16, (int)segs[0].length());
+  TEST_ASSERT_TRUE(segs[0].startsWith("HELLO"));
+  TEST_ASSERT_EQUAL_STRING("", segs[1].c_str());
 }
 
 static void test_missing_row_rejected() {
@@ -472,7 +523,10 @@ int main(int, char**) {
   RUN_TEST(test_wide_rows_compose_from_side_by_side_members);
   RUN_TEST(test_empty_table_rejected);
   RUN_TEST(test_count_over_max_rejected);
-  RUN_TEST(test_zero_width_member_rejected);
+  RUN_TEST(test_zero_width_member_off_grid);
+  RUN_TEST(test_all_off_grid_table_rejected);
+  RUN_TEST(test_zero_width_backup_high_row_ok);
+  RUN_TEST(test_zero_width_backup_segment_empty);
   RUN_TEST(test_missing_row_rejected);
   RUN_TEST(test_table_without_row_zero_rejected);
   RUN_TEST(test_row_index_at_member_cap_rejected);
