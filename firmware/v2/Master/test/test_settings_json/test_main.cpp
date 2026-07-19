@@ -175,6 +175,27 @@ static void test_device_role_and_suggestion_serialize() {
   TEST_ASSERT_TRUE(contains(json, "\"headlessSuggested\":true"));
 }
 
+// #335: per-board vitals so S3 cluster members surface in the System-tab
+// panel — same keys/units as the ESP-01 (heap/rssi/up), plus the plat tag.
+static void test_vitals_default_to_esp32s3_plat() {
+  SettingsJsonFields f;
+  String json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"plat\":\"esp32s3\""));
+  TEST_ASSERT_TRUE(contains(json, "\"heap\":0"));
+  TEST_ASSERT_TRUE(contains(json, "\"up\":0"));
+}
+
+static void test_vitals_serialize_values() {
+  SettingsJsonFields f;
+  f.heapBytes = 204800;
+  f.rssiDbm = -57;
+  f.upSeconds = 3600;
+  String json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"heap\":204800"));
+  TEST_ASSERT_TRUE(contains(json, "\"rssi\":-57"));
+  TEST_ASSERT_TRUE(contains(json, "\"up\":3600"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_defaults_produce_v1_shaped_empty_document);
@@ -188,5 +209,7 @@ int main(int, char**) {
   RUN_TEST(test_unit_count_override_field_serializes);
   RUN_TEST(test_device_role_defaults_to_display_and_no_suggestion);
   RUN_TEST(test_device_role_and_suggestion_serialize);
+  RUN_TEST(test_vitals_default_to_esp32s3_plat);
+  RUN_TEST(test_vitals_serialize_values);
   return UNITY_END();
 }

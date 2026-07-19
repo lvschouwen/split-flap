@@ -338,6 +338,12 @@ static String buildCurrentSettingsJson() {
   f.detectedUnitAddresses = addrs;
   f.detectedUnitVersionStatus = fwStatus;
   f.detectedUnitVersions = versions;
+  // #335 per-board vitals — runtime, no settings lock needed. Same source as
+  // the ESP-01 follower (heap bytes / RSSI dBm / uptime seconds); plat keeps
+  // its "esp32s3" default. Lets S3 cluster members show vitals like the ESP-01.
+  f.heapBytes = ESP.getFreeHeap();
+  f.rssiDbm = WiFi.RSSI();
+  f.upSeconds = millis() / 1000;
   {
     WebStateLock lock;
     f.alignment = liveSettings->alignment;

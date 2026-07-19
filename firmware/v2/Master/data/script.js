@@ -2826,8 +2826,8 @@ function refreshSysClusterVitals() {
 			.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
 			.then(function(s) {
 				if (s.version) revC.textContent = s.version;
-				//Only the ESP-01 dumb row carries these (#297); an S3 member's
-				///settings has none, so its vitals stay dashed.
+				//Both S3 (#335) and ESP-01 (#297) rows carry these now; a member
+				//on older firmware omits them and its vitals stay dashed.
 				heapC.textContent = s.heap !== undefined ? Math.round(s.heap / 1024) + " KB" : "—";
 				rssiC.textContent = s.rssi !== undefined ? s.rssi + " dBm" : "—";
 				upC.textContent = s.up !== undefined ? formatUptime(s.up) : "—";

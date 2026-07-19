@@ -63,6 +63,15 @@ struct SettingsJsonFields {
   // effective width already carried by unitCount.
   int unitCountOverride = 0;
 
+  // Per-board vitals (#335) so cluster members surface heap/rssi/uptime in
+  // the System-tab panel — same keys/units as the ESP-01 follower's #297
+  // block. `plat` is this board's platform tag (esp32s3), the S3 counterpart
+  // to the ESP-01's "esp01"; the member UI keys the model label off it.
+  uint32_t heapBytes = 0;
+  int rssiDbm = 0;
+  uint32_t upSeconds = 0;
+  String plat = "esp32s3";  // mirrors ClusterLeaderPolicy.h CLUSTER_LEADER_PLAT
+
   // Cluster membership (#272): drives the follower banner + card gating.
   // "standalone" = not clustered (the cluster-disabled default).
   String clusterState = "standalone";
@@ -168,6 +177,12 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"clusterLeaderHost\":"; appendJsonString(out, f.clusterLeaderHost);
   out += ",\"clusterRow\":";        out += f.clusterRow;
   out += ",\"clusterLeading\":";    appendJsonBool(out, f.clusterLeading);
+  // #335 per-board vitals — same keys/units as the ESP-01 follower so the
+  // cluster member panel renders S3 rows identically.
+  out += ",\"heap\":";              out += String(f.heapBytes);
+  out += ",\"rssi\":";              out += f.rssiDbm;
+  out += ",\"up\":";                out += String(f.upSeconds);
+  out += ",\"plat\":";              appendJsonString(out, f.plat);
 
   out += '}';
   return out;
