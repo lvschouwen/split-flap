@@ -278,6 +278,22 @@
 				</div>
 
 				<div class="card">
+					<h2>Device role <span id="labelDeviceRole" class="pill off">display</span></h2>
+					<p class="note">What this board is for. A master with no flap units on its I2C bus can take a non-display role instead of showing a blank wall row. Detection only <em>suggests</em> — you confirm the role here; it never switches on its own.</p>
+					<div id="deviceRoleSuggestion" class="banner hidden">This master detects no units — it looks unit-less. Pick a headless role below, or leave it as <b>Display</b>.</div>
+					<div class="row" style="margin-top:12px">
+						<div class="seg" id="segDeviceRole">
+							<button type="button" data-value="display">Display</button>
+							<button type="button" data-value="headless-backup">Backup master</button>
+							<button type="button" data-value="headless-monitor">Monitor</button>
+							<button type="button" data-value="headless-spare">Spare</button>
+						</div>
+					</div>
+					<p class="note">Headless role behavior (warm-standby takeover, cluster dashboard, idle spare) ships in a follow-up — for now the board still runs as a display whichever role is set; your choice is saved.</p>
+					<p id="deviceRoleStatus" class="status hidden"></p>
+				</div>
+
+				<div class="card">
 					<h2>Master firmware <span id="labelVersion" class="pill off">—</span></h2>
 					<p class="note">Upload a compiled <code>firmware.bin</code> to flash the ESP itself. It reboots into the new firmware on success.</p>
 					<form id="masterFirmwareForm">

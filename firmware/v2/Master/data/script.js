@@ -425,6 +425,18 @@ function applySettings(s) {
 		overridePill.className = "pill " + (overrideValue > 0 ? "ok" : "off");
 	}
 
+	//#330 headless mode: reflect the stored deviceRole and the unit-less
+	//suggestion. Detection only nudges (banner) — the user picks the role.
+	var role = s.deviceRole || "display";
+	setSegValue("segDeviceRole", role);
+	var rolePill = document.getElementById("labelDeviceRole");
+	if (rolePill) {
+		rolePill.textContent = role === "display" ? "display" : role.replace("headless-", "");
+		rolePill.className = "pill " + (role === "display" ? "off" : "ok");
+	}
+	var roleBanner = document.getElementById("deviceRoleSuggestion");
+	if (roleBanner) roleBanner.classList.toggle("hidden", !s.headlessSuggested);
+
 	document.getElementById("boardName").textContent = (s.effectiveDeviceName || "split-flap").toUpperCase();
 	refreshLiveStatus();
 	document.getElementById("labelLastMessageReceived").textContent = s.lastTimeReceivedMessageDateTime || "—";
@@ -916,6 +928,16 @@ function initSegControls() {
 			currentAlignment = b.dataset.value;
 			postSettingsFields({ alignment: b.dataset.value }, function(ok) {
 				showStatus("displayStatus", ok ? "✔ Alignment saved." : "✘ Alignment save failed.", ok ? "success" : "error", 4000);
+			});
+		});
+	});
+	//#330 headless mode: deviceRole selector — posts only its own field, the
+	//poll loop reflects the device's answer back like the other segments.
+	document.querySelectorAll("#segDeviceRole button").forEach(function(b) {
+		b.addEventListener("click", function() {
+			setSegValue("segDeviceRole", b.dataset.value);
+			postSettingsFields({ deviceRole: b.dataset.value }, function(ok) {
+				showStatus("deviceRoleStatus", ok ? "✔ Role saved." : "✘ Role save failed.", ok ? "success" : "error", 4000);
 			});
 		});
 	});
