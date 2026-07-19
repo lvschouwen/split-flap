@@ -13,8 +13,27 @@
 // reads it at every fold; 0 = auto (probe-derived width).
 static std::atomic<int> unitWidthOverride{0};
 
+// #331 headless mode: true while deviceRole is a headless role. It forces
+// displayWidth 0 (the board renders nothing, no phantom row), overriding the
+// probe ceiling AND the #289 override — passed to displayApplyUnitFacts as
+// the -1 sentinel via effectiveWidthOverride(). Seeded by tasksInit(),
+// pushed live by the settings drain (netTask).
+static std::atomic<bool> deviceRoleHeadless{false};
+
 void tasksSetUnitCountOverride(int count) {
   unitWidthOverride.store(count, std::memory_order_relaxed);
+}
+
+void tasksSetDeviceRole(const String& role) {
+  deviceRoleHeadless.store(isHeadlessRole(role), std::memory_order_relaxed);
+}
+
+// The width-override value handed to displayApplyUnitFacts: -1 (force width 0)
+// while headless, else the #289 unit-count override (0 = auto).
+static int effectiveWidthOverride() {
+  return deviceRoleHeadless.load(std::memory_order_relaxed)
+             ? -1
+             : unitWidthOverride.load(std::memory_order_relaxed);
 }
 
 #include "BootHomePlan.h"
@@ -230,7 +249,7 @@ static void runBootHomeSequence(DisplaySnapshot& local, UnitFacts* busFacts) {
   // Re-poll so the published snapshot reflects the now-homed state.
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
-                        unitWidthOverride.load(std::memory_order_relaxed));
+                        effectiveWidthOverride());
   snapshotPublish(local);
 }
 
@@ -249,7 +268,7 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
   bool ok = unitBusPollHealthOne(busFacts, i);
   heartbeatApply(busFacts[i], ok, millis(), HEARTBEAT_MISS_THRESHOLD);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
-                        unitWidthOverride.load(std::memory_order_relaxed));
+                        effectiveWidthOverride());
   headlessTrack(local);  // #329: idle-tick observation feeds the debounce
   snapshotPublish(local);
 }
@@ -342,7 +361,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // actually sits in twiboot, then plan the flash list from live truth.
   unitBusProbe(busFacts, UNITS_AMOUNT);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
-                        unitWidthOverride.load(std::memory_order_relaxed));
+                        effectiveWidthOverride());
   uint8_t targets[UNITS_AMOUNT];
   int total = reflashCollectFlashTargets(local.units, UNITS_AMOUNT,
                                          SFP_I2C_ADDRESS_BASE, targets);
@@ -411,7 +430,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   unitBusProbe(busFacts, UNITS_AMOUNT);
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
-                        unitWidthOverride.load(std::memory_order_relaxed));
+                        effectiveWidthOverride());
   // Staggered boot-home of the just-flashed units (#309): a reflashed unit
   // reboots UNHOMED, so without this the caller's re-show (or the next cluster
   // render) would home every flashed unit at once — the #305 inrush #309
@@ -439,12 +458,16 @@ static void displayTaskMain(void*) {
   unitBusProbe(busFacts, UNITS_AMOUNT);
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
-                        unitWidthOverride.load(std::memory_order_relaxed));
+                        effectiveWidthOverride());
   headlessTrack(local);  // #329: first (boot) observation
   snapshotPublish(local);
   if (local.detectedUnitCount == 0) {
-    SerialPrintf("display: no units responding — assuming full width %d\n",
-                 local.displayWidth);
+    if (local.displayWidth == 0) {
+      SerialPrintln("display: no units — headless role, display disabled");  // #331
+    } else {
+      SerialPrintf("display: no units responding — assuming full width %d\n",
+                   local.displayWidth);
+    }
   } else {
     SerialPrintf("display: probe done, width %d\n", local.displayWidth);
   }
@@ -509,7 +532,7 @@ static void displayTaskMain(void*) {
           unitBusProbe(busFacts, UNITS_AMOUNT);
           pollHealthWithFreshness(busFacts);
           displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
-                        unitWidthOverride.load(std::memory_order_relaxed));
+                        effectiveWidthOverride());
           headlessTrack(local);  // #329: explicit-probe observation
           break;
         // --- calibration + provisioning (#204). Every op grades a
@@ -696,7 +719,7 @@ static void displayTaskMain(void*) {
           unitBusProbe(busFacts, UNITS_AMOUNT);
           pollHealthWithFreshness(busFacts);
           displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
-                        unitWidthOverride.load(std::memory_order_relaxed));
+                        effectiveWidthOverride());
           MaintReason reason = MaintReason::None;
           MaintOutcome outcome = classifySetAddressOutcome(
               local.units, UNITS_AMOUNT, cmd.value, reason);
@@ -716,7 +739,7 @@ static void displayTaskMain(void*) {
           unitBusProbe(busFacts, UNITS_AMOUNT);
           pollHealthWithFreshness(busFacts);
           displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
-                        unitWidthOverride.load(std::memory_order_relaxed));
+                        effectiveWidthOverride());
           MaintReason reason = MaintReason::None;
           MaintOutcome outcome = classifyClearAddressOutcome(
               countBefore, local.detectedUnitCount, reason);
@@ -966,6 +989,8 @@ static void clusterTaskMain(void*) {
 void tasksInit(MasterSettings& settings, SettingsStore& store) {
   unitWidthOverride.store(settings.unitCountOverride,
                           std::memory_order_relaxed);
+  deviceRoleHeadless.store(isHeadlessRole(settings.deviceRole),
+                           std::memory_order_relaxed);  // #331
   snapshotMutex = xSemaphoreCreateMutex();
   if (snapshotMutex == nullptr) {
     // Boot-time OOM: taking a null handle is UB, so fail loudly instead —

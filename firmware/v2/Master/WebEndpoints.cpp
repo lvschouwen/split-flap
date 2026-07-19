@@ -2058,13 +2058,19 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // same POST as a message must apply to that message (v1 ordering).
       String timezoneBefore = settings.timezonePosix;
       int unitCountBefore = settings.unitCountOverride;
+      String deviceRoleBefore = settings.deviceRole;
       applySettingsPost(pendingPost, settings, store);
       timezoneChanged = settings.timezonePosix != timezoneBefore;
 
-      // #289 dummy mode: push the changed override to displayTask and queue
-      // a Probe so the width refolds now instead of at the next bus op.
+      // #289 dummy mode / #331 headless: push a changed override or deviceRole
+      // to displayTask and queue a Probe so the width refolds now instead of
+      // at the next bus op (a headless role forces displayWidth 0).
       if (settings.unitCountOverride != unitCountBefore) {
         tasksSetUnitCountOverride(settings.unitCountOverride);
+        displayEnqueue(makeProbeCommand());
+      }
+      if (settings.deviceRole != deviceRoleBefore) {
+        tasksSetDeviceRole(settings.deviceRole);
         displayEnqueue(makeProbeCommand());
       }
 

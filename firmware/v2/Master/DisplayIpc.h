@@ -168,7 +168,14 @@ inline void displayApplyUnitFacts(DisplaySnapshot& snap,
                  u.physLetter != snap.lastFrameLetters[i];
   }
   int width = computeDisplayWidth(states, maxUnits);
-  if (widthOverride >= 1 && widthOverride <= maxUnits) width = widthOverride;
+  if (widthOverride == -1) {
+    // #331 headless: deviceRole=headless-* forces displayWidth 0 — the board
+    // renders nothing and reports no phantom row, overriding both the probe
+    // ceiling fallback and the #289 unit-count override.
+    width = 0;
+  } else if (widthOverride >= 1 && widthOverride <= maxUnits) {
+    width = widthOverride;
+  }
   snap.displayWidth = (uint8_t)width;
   snap.detectedUnitCount = (uint8_t)countRespondingUnits(states, maxUnits);
   snap.faultyUnitCount = (uint8_t)computeFaultyUnitCount(snap.units, maxUnits);
