@@ -31,6 +31,7 @@
 #include "MqttService.h"  // mqttNotificationActive — self-row re-show gate
 #include "ReflashPlan.h"
 #include "Tasks.h"
+#include "WebEndpoints.h"  // #337: webDisplayContentSnapshot() — leader's mode
 
 #define CLUSTER_KEY_MEMBERS "clMembers"
 
@@ -481,6 +482,11 @@ static std::atomic<bool> rebootHoldSent{false};
 // core-0 idle past the 5 s task watchdog. clusterFanoutNext round-robins so a
 // stuck dead host can't monopolize the fan-out.
 static int collectMemberWork(MemberWorkItem* items) {
+  // #337: capture the leader's mode for the digest BEFORE taking LeaderLock.
+  // webDisplayContentSnapshot() takes WebStateLock, and the documented order is
+  // WebStateLock -> clusterMutex — nesting it the other way deadlocks against
+  // netTask's settings drain (WebStateLock -> clusterLeaderSubmit*).
+  String leaderMode = webDisplayContentSnapshot().deviceMode;
   LeaderLock lock;
   int count = 0;
   uint32_t nowMs = millis();
@@ -583,7 +589,7 @@ static int collectMemberWork(MemberWorkItem* items) {
     String body = clusterBuildDigest(0, leaderDeviceName,
                                      WiFi.localIP().toString(),
                                      clusterTableToString(table), mirror,
-                                     rowCount, st, rebootHoldMs);
+                                     rowCount, st, rebootHoldMs, leaderMode);
     if (body != digestLastBody) {
       digestLastBody = body;
       digestGen++;
@@ -1200,6 +1206,7 @@ static int rebootHoldCount = 0;
 static int rebootHoldCursor = 0;
 
 static void rebootHoldBuildTargets() {
+  String leaderMode = webDisplayContentSnapshot().deviceMode;  // #337: before the lock
   LeaderLock lock;
   rebootHoldCount = 0;
   rebootHoldCursor = 0;
@@ -1214,7 +1221,7 @@ static void rebootHoldBuildTargets() {
   String body =
       clusterBuildDigest(0, leaderDeviceName, WiFi.localIP().toString(),
                          clusterTableToString(table), mirror, rowCount, st,
-                         rebootHoldMs);
+                         rebootHoldMs, leaderMode);
   if (body != digestLastBody) {
     digestLastBody = body;
     digestGen++;
@@ -1495,7 +1502,11 @@ int clusterLeaderMirrorRows(String* rows, int& selfRowOut,
   LeaderLock lock;
   for (int i = 0; i < table.count; i++) {
     if (clusterMemberIsSelf(table.members[i])) {
-      selfRowOut = table.members[i].row;
+      // #333: a width-0 self member is OFF-GRID — a headless leader (monitor/
+      // backup, no units of its own) renders no row, so leave selfRowOut at
+      // -1. Its `row` is meaningless off-grid and would wrongly anchor the
+      // self health strip under a follower's row.
+      if (table.members[i].width != 0) selfRowOut = table.members[i].row;
       break;
     }
   }

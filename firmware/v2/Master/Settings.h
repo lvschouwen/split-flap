@@ -17,6 +17,7 @@
 #include <Arduino.h>
 
 #include "DeviceIdentity.h"
+#include "HeadlessPolicy.h"
 #include "SettingsLimits.h"
 #include "SettingsStore.h"
 #include "SettingsValidation.h"
@@ -25,6 +26,7 @@
 #define SETTINGS_DEFAULT_ALIGNMENT   "left"
 #define SETTINGS_DEFAULT_FLAP_SPEED  80
 #define SETTINGS_DEFAULT_DEVICE_MODE "text"
+#define SETTINGS_DEFAULT_DEVICE_ROLE DEVICE_ROLE_DISPLAY
 #define SETTINGS_DEFAULT_TIMEZONE    "CET-1CEST,M3.5.0,M10.5.0/3"
 #define SETTINGS_DEFAULT_MQTT_PORT   1883
 
@@ -32,6 +34,8 @@ struct MasterSettings {
   String alignment;
   int flapSpeed;
   String deviceMode;
+  String deviceRole;       // #329 headless mode: display|headless-{backup,
+                           // monitor,spare}. "display" = a unit-driving row.
   String timezonePosix;
   String deviceName;       // "" = chip-id default via resolveDeviceName()
   String wifiSsid;         // "" = unprovisioned (boot lands in the portal)
@@ -51,6 +55,7 @@ struct MasterSettings {
 #define SETTINGS_KEY_ALIGNMENT    "alignment"
 #define SETTINGS_KEY_FLAP_SPEED   "flapSpeed"
 #define SETTINGS_KEY_DEVICE_MODE  "deviceMode"
+#define SETTINGS_KEY_DEVICE_ROLE  "deviceRole"
 #define SETTINGS_KEY_TIMEZONE     "tzPosix"
 #define SETTINGS_KEY_DEVICE_NAME  "deviceName"
 #define SETTINGS_KEY_WIFI_SSID    "wifiSsid"
@@ -89,6 +94,9 @@ inline MasterSettings loadSettings(SettingsStore& store) {
 
   s.deviceMode = store.getString(SETTINGS_KEY_DEVICE_MODE, SETTINGS_DEFAULT_DEVICE_MODE);
   if (!isValidDeviceModeValue(s.deviceMode)) s.deviceMode = SETTINGS_DEFAULT_DEVICE_MODE;
+
+  s.deviceRole = store.getString(SETTINGS_KEY_DEVICE_ROLE, SETTINGS_DEFAULT_DEVICE_ROLE);
+  if (!isValidDeviceRoleValue(s.deviceRole)) s.deviceRole = SETTINGS_DEFAULT_DEVICE_ROLE;
 
   s.timezonePosix = store.getString(SETTINGS_KEY_TIMEZONE, SETTINGS_DEFAULT_TIMEZONE);
   if (!isValidTimezoneValue(s.timezonePosix, LEN_TIMEZONE)) {
@@ -149,6 +157,10 @@ inline void saveFlapSpeed(SettingsStore& store, int v) {
 
 inline void saveDeviceMode(SettingsStore& store, const String& v) {
   store.putString(SETTINGS_KEY_DEVICE_MODE, v);
+}
+
+inline void saveDeviceRole(SettingsStore& store, const String& v) {
+  store.putString(SETTINGS_KEY_DEVICE_ROLE, v);
 }
 
 inline void saveTimezone(SettingsStore& store, const String& v) {

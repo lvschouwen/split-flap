@@ -338,11 +338,22 @@ static String buildCurrentSettingsJson() {
   f.detectedUnitAddresses = addrs;
   f.detectedUnitVersionStatus = fwStatus;
   f.detectedUnitVersions = versions;
+  // #335 per-board vitals — runtime, no settings lock needed. Same source as
+  // the ESP-01 follower (heap bytes / RSSI dBm / uptime seconds); plat keeps
+  // its "esp32s3" default. Lets S3 cluster members show vitals like the ESP-01.
+  f.heapBytes = ESP.getFreeHeap();
+  f.rssiDbm = WiFi.RSSI();
+  f.upSeconds = millis() / 1000;
   {
     WebStateLock lock;
     f.alignment = liveSettings->alignment;
     f.flapSpeed = String(liveSettings->flapSpeed);
     f.deviceMode = liveSettings->deviceMode;
+    f.deviceRole = liveSettings->deviceRole;
+    // #329: nudge only while still on the default display role — detection
+    // suggests, never self-demotes.
+    f.headlessSuggested =
+        headlessShouldSuggest(snap.headlessUnitless, liveSettings->deviceRole);
     f.timezonePosix = liveSettings->timezonePosix;
     f.unitCountOverride = liveSettings->unitCountOverride;
     f.deviceName = liveSettings->deviceName;
@@ -2053,13 +2064,19 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // same POST as a message must apply to that message (v1 ordering).
       String timezoneBefore = settings.timezonePosix;
       int unitCountBefore = settings.unitCountOverride;
+      String deviceRoleBefore = settings.deviceRole;
       applySettingsPost(pendingPost, settings, store);
       timezoneChanged = settings.timezonePosix != timezoneBefore;
 
-      // #289 dummy mode: push the changed override to displayTask and queue
-      // a Probe so the width refolds now instead of at the next bus op.
+      // #289 dummy mode / #331 headless: push a changed override or deviceRole
+      // to displayTask and queue a Probe so the width refolds now instead of
+      // at the next bus op (a headless role forces displayWidth 0).
       if (settings.unitCountOverride != unitCountBefore) {
         tasksSetUnitCountOverride(settings.unitCountOverride);
+        displayEnqueue(makeProbeCommand());
+      }
+      if (settings.deviceRole != deviceRoleBefore) {
+        tasksSetDeviceRole(settings.deviceRole);
         displayEnqueue(makeProbeCommand());
       }
 

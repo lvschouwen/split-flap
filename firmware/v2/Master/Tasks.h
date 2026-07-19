@@ -51,6 +51,11 @@ void tasksInit(MasterSettings& settings, SettingsStore& store);
 // queues a Probe right after calling this.
 void tasksSetUnitCountOverride(int count);
 
+// #331 headless: push a changed deviceRole to displayTask. A headless role
+// forces displayWidth 0 (no display, no phantom row) at the next fold — the
+// settings drain queues a Probe right after calling this.
+void tasksSetDeviceRole(const String& role);
+
 // Non-blocking enqueue into the display task; false = queue full (callers
 // report, never wait — network context must not block on the display).
 bool displayEnqueue(const DisplayCommand& cmd);
