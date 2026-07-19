@@ -22,6 +22,7 @@ void tasksSetUnitCountOverride(int count) {
 #include "ClusterFollower.h"
 #include "ClusterLeader.h"
 #include "FlapFrame.h"
+#include "HeadlessPolicy.h"
 #include "HeartbeatPolicy.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
@@ -171,6 +172,19 @@ static void settleBeforeProbe() {
   if (remaining > 0) delay((uint32_t)remaining);
 }
 
+// No-units detection (#329). displayTask owns this exclusively (single core-1
+// task), so a plain static needs no lock. Fed only at the STEADY observation
+// points — boot probe, explicit Probe, idle heartbeat tick — not the transient
+// maintenance/reflash reprobes, so the streak tracks real bus cadence. Latches
+// headlessUnitless after HEADLESS_ZERO_PROBE_THRESHOLD consecutive 0-unit
+// reads; a single responding unit resets it (never flips a real display).
+static HeadlessDetector headlessDetector;
+
+static void headlessTrack(DisplaySnapshot& local) {
+  local.headlessUnitless =
+      headlessObserveProbe(headlessDetector, local.detectedUnitCount);
+}
+
 // --- heartbeat freshness + batched boot-home (#309/#310) ---------------------
 
 // A full health poll + a freshness stamp for every slot (#310, HeartbeatPolicy).
@@ -236,6 +250,7 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
   heartbeatApply(busFacts[i], ok, millis(), HEARTBEAT_MISS_THRESHOLD);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         unitWidthOverride.load(std::memory_order_relaxed));
+  headlessTrack(local);  // #329: idle-tick observation feeds the debounce
   snapshotPublish(local);
 }
 
@@ -425,6 +440,7 @@ static void displayTaskMain(void*) {
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         unitWidthOverride.load(std::memory_order_relaxed));
+  headlessTrack(local);  // #329: first (boot) observation
   snapshotPublish(local);
   if (local.detectedUnitCount == 0) {
     SerialPrintf("display: no units responding — assuming full width %d\n",
@@ -494,6 +510,7 @@ static void displayTaskMain(void*) {
           pollHealthWithFreshness(busFacts);
           displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         unitWidthOverride.load(std::memory_order_relaxed));
+          headlessTrack(local);  // #329: explicit-probe observation
           break;
         // --- calibration + provisioning (#204). Every op grades a
         // MaintResult; the web layer serves it via /unit/op-result.

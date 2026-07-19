@@ -13,6 +13,8 @@
 
 #include <Arduino.h>
 
+#include "HeadlessPolicy.h"
+
 struct SettingsJsonFields {
   // Bus/probe results. unitsAmount is the per-unit array length (the
   // UNITS_AMOUNT ceiling); null array pointers emit per-slot defaults
@@ -27,6 +29,11 @@ struct SettingsJsonFields {
   String alignment;
   String flapSpeed;  // string-typed on the wire, v1 parity
   String deviceMode;
+  // #329 headless mode: the stored role + the auto-detect nudge. "display"
+  // (default) keeps old UIs unaffected; headlessSuggested drives the "you
+  // look unit-less — pick a role" banner (detection only ever suggests).
+  String deviceRole = DEVICE_ROLE_DISPLAY;
+  bool headlessSuggested = false;
   String timezonePosix;
   String deviceName;           // raw stored value ("" = unset)
   String effectiveDeviceName;  // what the device actually uses right now
@@ -130,6 +137,8 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"alignment\":";           appendJsonString(out, f.alignment);
   out += ",\"flapSpeed\":";           appendJsonString(out, f.flapSpeed);
   out += ",\"deviceMode\":";          appendJsonString(out, f.deviceMode);
+  out += ",\"deviceRole\":";          appendJsonString(out, f.deviceRole);
+  out += ",\"headlessSuggested\":";   appendJsonBool(out, f.headlessSuggested);
   out += ",\"timezonePosix\":";       appendJsonString(out, f.timezonePosix);
   out += ",\"deviceName\":";          appendJsonString(out, f.deviceName);
   out += ",\"effectiveDeviceName\":"; appendJsonString(out, f.effectiveDeviceName);

@@ -157,6 +157,24 @@ static void test_unit_count_override_field_serializes() {
   TEST_ASSERT_TRUE(contains(json, "\"unitCountOverride\":8"));
 }
 
+static void test_device_role_defaults_to_display_and_no_suggestion() {
+  // #329: old UIs are unaffected — role defaults to "display" and the nudge
+  // is off until detection latches on a genuinely unit-less board.
+  SettingsJsonFields f;
+  String json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"deviceRole\":\"display\""));
+  TEST_ASSERT_TRUE(contains(json, "\"headlessSuggested\":false"));
+}
+
+static void test_device_role_and_suggestion_serialize() {
+  SettingsJsonFields f;
+  f.deviceRole = "headless-backup";
+  f.headlessSuggested = true;
+  String json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"deviceRole\":\"headless-backup\""));
+  TEST_ASSERT_TRUE(contains(json, "\"headlessSuggested\":true"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_defaults_produce_v1_shaped_empty_document);
@@ -168,5 +186,7 @@ int main(int, char**) {
   RUN_TEST(test_unit_arrays_carry_supplied_data);
   RUN_TEST(test_cluster_fields_carry_membership);
   RUN_TEST(test_unit_count_override_field_serializes);
+  RUN_TEST(test_device_role_defaults_to_display_and_no_suggestion);
+  RUN_TEST(test_device_role_and_suggestion_serialize);
   return UNITY_END();
 }

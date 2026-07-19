@@ -70,6 +70,11 @@ struct DisplaySnapshot {
   // displayApplyUnitFacts(), never patched individually.
   uint8_t detectedUnitCount = 0;
   uint8_t faultyUnitCount = 0;
+  // #329 headless mode: latched by displayTask's HeadlessDetector after N
+  // consecutive 0-unit probes — NOT derived by displayApplyUnitFacts (a
+  // single probe's 0 must not flip a real display). Drives /settings'
+  // headlessSuggested nudge.
+  bool headlessUnitless = false;
   UnitFacts units[UNITS_AMOUNT];
   MaintResult lastMaint;
   // Reflash job progress (#205) — published at unit boundaries and settle

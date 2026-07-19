@@ -343,6 +343,11 @@ static String buildCurrentSettingsJson() {
     f.alignment = liveSettings->alignment;
     f.flapSpeed = String(liveSettings->flapSpeed);
     f.deviceMode = liveSettings->deviceMode;
+    f.deviceRole = liveSettings->deviceRole;
+    // #329: nudge only while still on the default display role — detection
+    // suggests, never self-demotes.
+    f.headlessSuggested =
+        headlessShouldSuggest(snap.headlessUnitless, liveSettings->deviceRole);
     f.timezonePosix = liveSettings->timezonePosix;
     f.unitCountOverride = liveSettings->unitCountOverride;
     f.deviceName = liveSettings->deviceName;
