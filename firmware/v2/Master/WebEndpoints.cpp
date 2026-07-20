@@ -164,6 +164,9 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                       SettingsStore& store,
                       const String& effectiveDeviceName) {
   server.addMiddleware(&webClusterCorsMiddleware());
+  // #332: seed the leader's self-row role (clusterLeaderInit ran earlier in
+  // setup(), so LeaderLock is safe); the settings drain pushes changes.
+  clusterLeaderSetSelfRole(settings.deviceRole);
   // Handlers never write the store; the loop drain and the mqttTask-called
   // setters below do (both hold webStateMutex).
   webStateMutex = xSemaphoreCreateMutex();
@@ -249,6 +252,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       }
       if (settings.deviceRole != deviceRoleBefore) {
         tasksSetDeviceRole(settings.deviceRole);
+        clusterLeaderSetSelfRole(settings.deviceRole);  // #332 self row
         displayEnqueue(makeProbeCommand());
       }
 

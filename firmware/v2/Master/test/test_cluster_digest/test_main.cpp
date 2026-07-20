@@ -496,6 +496,23 @@ static void test_successor_width0_display_role_ranks_with_spare() {
   TEST_ASSERT_EQUAL_STRING("1,2", clusterSuccessorList(st).c_str());
 }
 
+static void test_successor_tier_table_width_beats_role() {
+  // The admin-configured table width dominates: a width>0 member is a
+  // rendering row (tier 1) REGARDLESS of its self-reported role — nothing
+  // cross-validates the member table against the peer's own deviceRole,
+  // so this intentional precedence must not regress (review MED pin).
+  TEST_ASSERT_EQUAL(1, clusterSuccessorTier("headless-monitor", 8));
+  TEST_ASSERT_EQUAL(1, clusterSuccessorTier("headless-backup", 8));
+  TEST_ASSERT_EQUAL(1, clusterSuccessorTier("headless-spare", 8));
+  TEST_ASSERT_EQUAL(1, clusterSuccessorTier("", 8));
+  // And the width-0 spread for completeness.
+  TEST_ASSERT_EQUAL(0, clusterSuccessorTier("headless-backup", 0));
+  TEST_ASSERT_EQUAL(0, clusterSuccessorTier("", 0));
+  TEST_ASSERT_EQUAL(2, clusterSuccessorTier("headless-spare", 0));
+  TEST_ASSERT_EQUAL(2, clusterSuccessorTier("display", 0));
+  TEST_ASSERT_EQUAL(3, clusterSuccessorTier("headless-monitor", 0));
+}
+
 static void test_successor_monitor_alone_still_listed() {
   ClusterLeaderStatus st = makeStatus();
   st.members[1].width = 0;
@@ -554,6 +571,7 @@ int main(int, char**) {
   RUN_TEST(test_successor_role_tiers_full_order);
   RUN_TEST(test_successor_unknown_role_width0_keeps_backup_tier);
   RUN_TEST(test_successor_width0_display_role_ranks_with_spare);
+  RUN_TEST(test_successor_tier_table_width_beats_role);
   RUN_TEST(test_successor_monitor_alone_still_listed);
   RUN_TEST(test_status_members_carry_role);
   RUN_TEST(test_digest_carries_succ_field);
