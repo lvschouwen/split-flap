@@ -38,6 +38,15 @@ void setup() {
   clusterInit();  // EEPROM membership → Grace/Standalone
 
   if (!rescueActive()) {
+#ifdef RESCUE_CRASH_TEST
+    // #343 bench-drill hook (build with -DRESCUE_CRASH_TEST; never a real
+    // build): simulates a poisoned image dying in a beacon-skipped path —
+    // 3 fast crash cycles, then the beacon engages and the leader
+    // re-pushes the stored image.
+    SerialPrintln(F("RESCUE_CRASH_TEST: crashing this boot on purpose"));
+    delay(100);
+    abort();
+#endif
     // Early I2C scan — deliberately AFTER twiboot's ~1 s window (v1 #88:
     // probing inside it pins the bootloader alive), then provision any
     // blank-app units from the PROGMEM bundle.
