@@ -2559,6 +2559,8 @@ function uploadFollowerFirmware() {
 
 function clusterStateLabel(m) {
 	if (m.updating) return { text: "updating", kind: "off" };
+	//#343: the member is boot-looping and beaconing for a firmware re-push.
+	if (m.rescue) return { text: "rescue", kind: "bad" };
 	if (m.updateBlocked) return { text: "update blocked", kind: "bad" };
 	if (m.self) return { text: "ok", kind: "ok" };
 	if (m.degraded) return { text: "degraded", kind: "bad" };
@@ -2642,7 +2644,9 @@ function updateClusterFromStatus(st) {
 		showStatus("clusterCardStatus", "⚠ This board’s running image failed its verify pass — automatic follower updates are off until a reboot.", "error");
 	} else if (rollout.phase === "uploading" && rollout.total > 0) {
 		clusterRolloutSeen = true;
-		showStatus("clusterCardStatus", "Updating " + escapeHtml(rollout.host) + " to this board’s firmware — " +
+		//#344: src "esp01" = the stored follower image, absent = this board's slot.
+		var rolloutWhat = rollout.src === "esp01" ? "the stored follower firmware" : "this board’s firmware";
+		showStatus("clusterCardStatus", "Updating " + escapeHtml(rollout.host) + " to " + rolloutWhat + " — " +
 			Math.floor(rollout.sent * 100 / rollout.total) + "% of " + Math.round(rollout.total / 1024) + " KB…", "pending");
 	} else if (rollout.phase === "waiting") {
 		clusterRolloutSeen = true;

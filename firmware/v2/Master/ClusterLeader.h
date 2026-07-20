@@ -40,6 +40,7 @@ struct ClusterLeaderMemberStatus {
   int reportedWidth = 0; // join-handshake width fact
   bool updating = false;      // fleet rollout (#276) is converging this member
   bool updateBlocked = false; // rollout gave up (attempt cap) on this member
+  bool rescue = false;        // #343: member is a boot-looping rescue beacon
   bool hmac = false;          // wire-auth key negotiated — leader signs to this
                               // member (#313 follow-on observability)
   // Per-row unit health (#294): the follower's last ping-reply health, or
@@ -66,6 +67,9 @@ struct ClusterLeaderStatus {
   // The running image failed its verify/read pass — convergence is off
   // until reboot ("idle" alone would read as "nothing to do").
   bool rolloutImageFailed = false;
+  // #344: the active rollout streams the STORED follower image at an esp01
+  // row (additive "src":"esp01" on the wire; absent = the S3 slot).
+  bool rolloutFollowerImage = false;
   // On-demand ESP-01 firmware relay (#304 Part B): the stored follower image
   // + the live on-demand push. followerImage* drive the Cluster card's upload
   // control; followerPush* mirror the rollout fields for the member panel's
@@ -116,6 +120,9 @@ void clusterLeaderBlankWall();
 // runtime table never sees it — the self row is not an HTTP peer). Seeded at
 // webEndpointsInit, pushed by the settings drain on change.
 void clusterLeaderSetSelfRole(const String& role);
+// #342: tz for the join body (esp01 clock fallback) — seeded at init,
+// pushed by the settings drain on a tz POST.
+void clusterLeaderSetTz(const String& tzPosix);
 
 ClusterLeaderStatus clusterLeaderStatusGet();
 

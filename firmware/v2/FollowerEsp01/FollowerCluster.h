@@ -39,7 +39,8 @@ void clusterLoopTick();
 bool clusterJoinWouldConflict(const String& joiningLeaderHost,
                               String& currentName, String& currentHost);
 void clusterHandleJoin(const String& leaderName, const String& leaderHost,
-                       int row, uint32_t epoch, const String& key);
+                       int row, uint32_t epoch, const String& key,
+                       const String& tz);
 FollowerRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
                                           const String& text, int speed,
                                           uint64_t commitAtMs);

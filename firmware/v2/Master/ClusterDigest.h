@@ -135,6 +135,10 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
     out += m.updating ? "true" : "false";
     out += ",\"updateBlocked\":";
     out += m.updateBlocked ? "true" : "false";
+    if (m.rescue) {
+      // #343 additive: only a beaconing member carries the key.
+      out += ",\"rescue\":true";
+    }
     out += ",\"hmac\":";  // #313 follow-on: leader is signing to this member
     out += m.hmac ? "true" : "false";
     out += '}';
@@ -149,6 +153,11 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
   out += String((unsigned long)st.rolloutTotal);
   out += ",\"imageVerifyFailed\":";
   out += st.rolloutImageFailed ? "true" : "false";
+  if (st.rolloutFollowerImage) {
+    // #344 additive: this rollout streams the stored esp01 image, not the
+    // leader's S3 slot. Absent = S3 (pre-#344 readers unchanged).
+    out += ",\"src\":\"esp01\"";
+  }
   // #304 Part B: the stored ESP-01 image + the on-demand relay push. The
   // Cluster card's upload control reads followerImage; the per-member "Update
   // firmware" button reads followerPush.

@@ -167,6 +167,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // #332: seed the leader's self-row role (clusterLeaderInit ran earlier in
   // setup(), so LeaderLock is safe); the settings drain pushes changes.
   clusterLeaderSetSelfRole(settings.deviceRole);
+  clusterLeaderSetTz(settings.timezonePosix);  // #342: rides the join body
   // Handlers never write the store; the loop drain and the mqttTask-called
   // setters below do (both hold webStateMutex).
   webStateMutex = xSemaphoreCreateMutex();
@@ -373,7 +374,10 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
 
   // Outside the lock: configTzTime takes the LWIP core lock — keep the two
   // lock domains from ever nesting (v1 #48 parity: TZ applies rebootless).
-  if (timezoneChanged) clockServiceApplyTz(settings);
+  if (timezoneChanged) {
+    clockServiceApplyTz(settings);
+    clusterLeaderSetTz(settings.timezonePosix);  // #342: next join carries it
+  }
 
   // mDNS discovery drains (#224 MQTT, #274 cluster): blocking queries take
   // LWIP locks, so they run out here in netTask, outside webStateMutex.

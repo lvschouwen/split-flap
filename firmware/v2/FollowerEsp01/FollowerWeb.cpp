@@ -17,6 +17,7 @@
 #include "FollowerConfig.h"
 #include "FollowerCors.h"
 #include "FollowerJson.h"
+#include "FollowerRescue.h"  // #343: beacon marker + op lockout
 #include "FollowerSettings.h"
 #include "FollowerWifi.h"
 #include "WearPolicy.h"
@@ -175,6 +176,13 @@ static bool opSlotBusy() {
 
 static void stageOp(AsyncWebServerRequest* request, FollowerOpKind kind,
                     uint8_t addr, long arg) {
+  if (rescueActive()) {
+    // #343: the beacon never touches the bus — flash new firmware first.
+    sendWithCors(request, 409, "text/plain",
+                 F("Rescue beacon active — unit ops disabled until a "
+                   "firmware push"));
+    return;
+  }
   if (opSlotBusy()) {
     sendWithCors(request, 503, "text/plain",
                  F("Another unit operation is in progress — try again"));
@@ -478,12 +486,19 @@ void webEndpointsInit(AsyncWebServer& server) {
     // pre-HMAC leader → enforcement stays off).
     String key;
     paramString(request, "key", key);
-    clusterHandleJoin(leaderName, leaderHost, (int)row, epoch, key);
+    // #342 additive: the leader's POSIX zone for the clock fallback. A bad
+    // value is dropped (not 400) — the join must survive a pre-#342 wire.
+    String tz;
+    paramString(request, "tz", tz);
+    if (tz.length() > FOLLOWER_TZ_MAX || !isPrintableAscii(tz, 0x21)) {
+      tz = "";
+    }
+    clusterHandleJoin(leaderName, leaderHost, (int)row, epoch, key, tz);
     char mask[16];
     FollowerHealthFacts h = healthNow(mask, sizeof(mask));
     request->send(200, "application/json",
                   followerJoinReplyJson(effectiveDeviceName, GIT_REV, h,
-                                        vitalsNow()));
+                                        vitalsNow(), rescueActive()));
   });
 
   server.on("/cluster/render", HTTP_POST, [](AsyncWebServerRequest* request) {
@@ -598,7 +613,8 @@ void webEndpointsInit(AsyncWebServer& server) {
     FollowerHealthFacts h = healthNow(mask, sizeof(mask));
     request->send(200, "application/json",
                   followerPingReplyJson(followerPhaseName(cv.phase), cv.epoch,
-                                        cv.lastSeq, h, vitalsNow(), GIT_REV));
+                                        cv.lastSeq, h, vitalsNow(), GIT_REV,
+                                        rescueActive()));
   });
 
   server.on("/cluster/leave", HTTP_POST, [](AsyncWebServerRequest* request) {
@@ -700,6 +716,11 @@ void webEndpointsInit(AsyncWebServer& server) {
   server.on("/units/health/refresh", HTTP_POST,
             [](AsyncWebServerRequest* request) {
               if (followerRejectCsrf(request)) return;
+              if (rescueActive()) {
+                sendWithCors(request, 409, "application/json",
+                             F("{\"status\":\"rescue\"}"));
+                return;
+              }
               if (reflashPending || reflashInProgress(reflashProgress)) {
                 sendWithCors(request, 503, "application/json",
                              F("{\"status\":\"busy\"}"));
@@ -854,6 +875,12 @@ void webEndpointsInit(AsyncWebServer& server) {
 
   server.on("/reflash-units", HTTP_POST, [](AsyncWebServerRequest* request) {
     if (followerRejectCsrf(request)) return;
+    if (rescueActive()) {
+      sendWithCors(request, 409, "text/plain",
+                   F("Rescue beacon active — reflash disabled until a "
+                     "firmware push"));
+      return;
+    }
     if (opSlotBusy()) {
       sendWithCors(request, 503, "text/plain",
                    F("Unit firmware flash already in progress — try again "

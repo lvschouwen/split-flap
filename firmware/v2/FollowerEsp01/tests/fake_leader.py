@@ -48,11 +48,16 @@ class FakeLeader:
         except urllib.error.HTTPError as error:
             return error.code, error.read().decode()
 
-    def join(self, base, row=0):
-        return self._post(base, "/cluster/join", {
+    def join(self, base, row=0, tz=""):
+        fields = {
             "leaderName": self.leader_name, "leaderHost": self.leader_host,
             "row": row, "epoch": self.epoch,
-        })
+        }
+        if tz:
+            # #342 additive: the leader's POSIX zone — the row persists it
+            # for the dead-leader clock fallback.
+            fields["tz"] = tz
+        return self._post(base, "/cluster/join", fields)
 
     def render(self, base, text, speed=80, commit_lead_ms=400, seq=None):
         """commitAtMs = leader-now + lead, exactly like submitGrid()."""

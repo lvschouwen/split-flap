@@ -20,8 +20,9 @@
 #include "ClusterLeaderPolicy.h"  // ClusterMemberRuntime, table types
 
 // Attempts per member before the rollout gives up on it (surfaced as
-// `updateBlocked` in /cluster/status; cleared by a config swap or leader
-// reboot). 3 matches the degraded-after-3 supervision convention.
+// `updateBlocked` in /cluster/status; cleared by a config swap, a leader
+// reboot, or the member's reported rev changing — #340). 3 matches the
+// degraded-after-3 supervision convention.
 static const uint8_t CLUSTER_ROLLOUT_ATTEMPT_CAP = 3;
 
 // Rejoin budget after a successful upload: reboot (~10 s) + PENDING_VERIFY
@@ -40,11 +41,15 @@ static const uint32_t CLUSTER_ROLLOUT_CHUNK_PER_TICK = 49152UL;
 
 // Finalize verdict wait ONLY (trailer + response headers): the follower's
 // Update.end() runs a whole-image MD5 verify (~1-2 s) before it answers.
-// Chunk writes ride the normal 1.5 s LAN timeout instead, so a stalled
-// follower can never freeze the fan-out longer than the render path's own
-// documented worst case — the one finalize round-trip per converged member
-// is the accepted (bounded) stall.
 static const int CLUSTER_ROLLOUT_FINALIZE_TIMEOUT_MS = 10000;
+
+// Chunk-write socket timeout for the firmware streams (#276 rollout + #304
+// relay) ONLY — ping/render keep their 1.5 s LAN bound. The receiver's
+// early flash-sector erases can stall the socket for seconds (#340: 1.5 s
+// killed streams ~2 s in while a patient manual OTA succeeded); each write
+// is wdtFeed-bracketed and the per-tick pump is wall-clock bounded, so the
+// longer wait never threatens the 30 s TWDT.
+static const int CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS = 8000;
 
 enum class ClusterRolloutPhase : uint8_t { Idle = 0, Uploading, WaitingRejoin };
 
@@ -52,7 +57,9 @@ enum class ClusterRolloutWait : uint8_t {
   Waiting = 0,   // member not back yet, deadline not hit
   Converged,     // rejoined on the leader's rev — success, next member
   RolledBack,    // rejoined on the OLD rev — image rejected, attempt burned
-  TimedOut       // never rejoined inside the budget — attempt burned
+  TimedOut,      // never rejoined inside the budget — attempt burned
+  RescueLooping  // #343: rejoined still beaconing — image didn't take,
+                 // attempt burned (cap stops a poisoned store image)
 };
 
 struct ClusterRolloutState {
@@ -99,12 +106,85 @@ inline int clusterRolloutNextCandidate(const ClusterMemberTable& table,
   return -1;
 }
 
+// #344: esp01 auto-convergence — the SAME sequencing machine (shared state,
+// so the fleet still converges strictly one member at a time and attempts/
+// blocked behave identically), fed by the STORED follower image (#304)
+// instead of the leader's running slot. Scanned only when the S3 scan found
+// nothing. A candidate must report exactly the follower platform (inverse
+// of the #297 guard — never hand the esp01 image to an S3) and a rev that
+// differs from the stored image's rev, both directions like #276.
+inline int clusterFollowerImageNextCandidate(
+    const ClusterMemberTable& table, const ClusterMemberRuntime* runtimes,
+    const char* storedRev, const char* followerPlat,
+    const ClusterRolloutState& st, uint32_t nowMs) {
+  if (st.phase != ClusterRolloutPhase::Idle) return -1;
+  if ((int32_t)(nowMs - st.holdoffUntilMs) < 0) return -1;
+  if (storedRev == nullptr || storedRev[0] == '\0') return -1;
+  for (int i = 0; i < table.count; i++) {
+    if (clusterMemberIsSelf(table.members[i])) continue;
+    if (!runtimes[i].joined) continue;
+    if (runtimes[i].rev.length() == 0) continue;
+    if (runtimes[i].plat != followerPlat) continue;
+    // #343: a rescue beacon needs the stored image back even at the same
+    // rev — its flash is what's in doubt, not its version.
+    if (runtimes[i].rev == storedRev && !runtimes[i].rescue) continue;
+    if (st.blocked[i]) continue;
+    return i;
+  }
+  return -1;
+}
+
 inline void clusterRolloutStart(ClusterRolloutState& st, int memberIndex,
                                 uint32_t totalBytes) {
   st.phase = ClusterRolloutPhase::Uploading;
   st.memberIndex = memberIndex;
   st.bytesSent = 0;
   st.bytesTotal = totalBytes;
+}
+
+// #343 (review HIGH): a RESCUE-triggered push burns its attempt AT START.
+// The rejoin verdict can't be trusted to count it — a poisoned image often
+// joins looking healthy (rescue:0, matching rev) and only crashes after
+// the handshake, which would read as Converged and reset the counter every
+// cycle. Burning up front makes the cap accumulate across whole rescue
+// cycles; clusterRolloutForgiveFollowerTargets is the deliberate reset.
+inline void clusterRolloutStartRescue(ClusterRolloutState& st, int memberIndex,
+                                      uint32_t totalBytes) {
+  clusterRolloutStart(st, memberIndex, totalBytes);
+  if (memberIndex >= 0 && memberIndex < CLUSTER_MAX_MEMBERS) {
+    if (st.attempts[memberIndex] < 255) st.attempts[memberIndex]++;
+    if (st.attempts[memberIndex] >= CLUSTER_ROLLOUT_ATTEMPT_CAP) {
+      st.blocked[memberIndex] = true;  // this push is the last one allowed
+    }
+  }
+}
+
+// #343 (bench-proven follow-up): sustained health forgives give-ups — a
+// heal that lands on the last allowed attempt would otherwise leave
+// blocked latched on a healthy member and refuse its NEXT legit rescue.
+// 10 min of CONTINUOUS joined+non-rescue proves the current image holds
+// (the glue resets the window at every re-join and on every rescue-marked
+// reply, so a crash-looping member never accumulates it — the
+// poisoned-image cap keeps holding).
+static const uint32_t CLUSTER_ROLLOUT_HEALTHY_FORGIVE_MS = 600000UL;
+
+inline bool clusterRolloutHealthyForgiveDue(uint32_t healthySinceMs,
+                                            uint32_t nowMs) {
+  return (uint32_t)(nowMs - healthySinceMs) >=
+         CLUSTER_ROLLOUT_HEALTHY_FORGIVE_MS;
+}
+
+// #343: a NEW stored follower image voids the poisoned-image evidence the
+// rescue give-ups were built on — esp01 members get fresh attempts; S3
+// members (converging from the leader's own slot) are untouched.
+inline void clusterRolloutForgiveFollowerTargets(
+    ClusterRolloutState& st, const ClusterMemberTable& table,
+    const ClusterMemberRuntime* runtimes, const char* followerPlat) {
+  for (int i = 0; i < table.count && i < CLUSTER_MAX_MEMBERS; i++) {
+    if (runtimes[i].plat != followerPlat) continue;
+    st.attempts[i] = 0;
+    st.blocked[i] = false;
+  }
 }
 
 // Progress counters are zeroed on EVERY transition to Idle — stale bytes
@@ -151,15 +231,26 @@ inline void clusterRolloutUploadDone(ClusterRolloutState& st, uint32_t nowMs) {
 }
 
 // The health gate: fed the target member's live supervision facts each
-// tick while WaitingRejoin. Success clears the member's attempts.
+// tick while WaitingRejoin. Success clears the member's attempts — EXCEPT
+// after a rescue-triggered push (#343 review HIGH): its "healthy" rejoin
+// proves only that the handshake ran, not that the crash is gone, so the
+// start-burned attempt stands until a genuine rev change or a new stored
+// image forgives it. A rejoin still carrying the rescue marker means the
+// pushed image didn't cure the boot loop — that outranks a matching rev.
 inline ClusterRolloutWait clusterRolloutCheckWait(ClusterRolloutState& st,
                                                   bool memberJoined,
                                                   const String& memberRev,
+                                                  bool memberRescue,
+                                                  bool rescueTriggered,
                                                   const char* leaderRev,
                                                   uint32_t nowMs) {
   int i = st.memberIndex;
+  if (memberJoined && memberRescue) {
+    clusterRolloutBurnAttempt(st, nowMs);
+    return ClusterRolloutWait::RescueLooping;
+  }
   if (memberJoined && memberRev == leaderRev) {
-    if (i >= 0 && i < CLUSTER_MAX_MEMBERS) {
+    if (!rescueTriggered && i >= 0 && i < CLUSTER_MAX_MEMBERS) {
       st.attempts[i] = 0;
       st.blocked[i] = false;
     }
@@ -177,6 +268,23 @@ inline ClusterRolloutWait clusterRolloutCheckWait(ClusterRolloutState& st,
     return ClusterRolloutWait::TimedOut;
   }
   return ClusterRolloutWait::Waiting;
+}
+
+// #340: a member's reported rev CHANGING re-proves the convergence facts —
+// blocked/attempts were latched against a build the member no longer runs
+// (it converged via manual OTA, or was bench-flashed to something new), so
+// the candidate scan deserves a fresh look. Called wherever the leader
+// records a reported rev. "" -> rev (the rejoin after OUR upload) is NOT a
+// change: forgiving it would defeat the attempt cap that stops a poisoned
+// image flash-looping one board.
+inline void clusterRolloutNoteMemberRev(ClusterRolloutState& st, int i,
+                                        const String& oldRev,
+                                        const String& newRev) {
+  if (i < 0 || i >= CLUSTER_MAX_MEMBERS) return;
+  if (oldRev.length() == 0 || newRev.length() == 0) return;
+  if (oldRev == newRev) return;
+  st.attempts[i] = 0;
+  st.blocked[i] = false;
 }
 
 // Config swaps and aborts: forget everything, including give-ups — the

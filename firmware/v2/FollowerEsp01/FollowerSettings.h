@@ -11,21 +11,26 @@
 
 #define FOLLOWER_NAME_MAX 32
 #define FOLLOWER_HOST_MAX 40
+#define FOLLOWER_TZ_MAX 64
 #define FOLLOWER_HMAC_KEY_LEN 32
 
 // magic u32 LE | row u8 | keyPresent u8 | key[32] | lastTs u64 LE |
-// name[NAME_MAX+1] | host[HOST_MAX+1] | xor checksum. The #313-follow-on key
-// field bumped the magic to 2FFS; the follow-on replay-mark (lastTs, HIGH#1)
-// bumped it again to 3FFS — an old-format record fails to decode and the
-// follower boots standalone (harmless: it re-joins and gets a fresh key).
-#define FOLLOWER_MEMBERSHIP_MAGIC 0x53464633UL  // "3FFS" LE (was 2FFS/1FFS)
+// name[NAME_MAX+1] | host[HOST_MAX+1] | tz[TZ_MAX+1] | xor checksum. The
+// #313-follow-on key field bumped the magic to 2FFS; the follow-on
+// replay-mark (lastTs, HIGH#1) to 3FFS; the #342 clock-fallback tz (the
+// leader's POSIX zone, sent on the join) to 4FFS — an old-format record
+// fails to decode and the follower boots standalone (harmless: it re-joins
+// and gets key + tz fresh).
+#define FOLLOWER_MEMBERSHIP_MAGIC 0x53464634UL  // "4FFS" LE (was 3FFS/2FFS/1FFS)
 #define FOLLOWER_MEMBERSHIP_BLOB_LEN                                       \
   (4 + 1 + 1 + FOLLOWER_HMAC_KEY_LEN + 8 + (FOLLOWER_NAME_MAX + 1) +       \
-   (FOLLOWER_HOST_MAX + 1) + 1)
+   (FOLLOWER_HOST_MAX + 1) + (FOLLOWER_TZ_MAX + 1) + 1)
 #define FOLLOWER_MEMBERSHIP_LASTTS_OFF (4 + 1 + 1 + FOLLOWER_HMAC_KEY_LEN)
 #define FOLLOWER_MEMBERSHIP_NAME_OFF (FOLLOWER_MEMBERSHIP_LASTTS_OFF + 8)
 #define FOLLOWER_MEMBERSHIP_HOST_OFF \
   (FOLLOWER_MEMBERSHIP_NAME_OFF + FOLLOWER_NAME_MAX + 1)
+#define FOLLOWER_MEMBERSHIP_TZ_OFF \
+  (FOLLOWER_MEMBERSHIP_HOST_OFF + FOLLOWER_HOST_MAX + 1)
 
 // XOR of the payload ^ 0x7A: factory-fresh flash (all 0xFF / all 0x00)
 // must never decode as a membership.
@@ -38,15 +43,19 @@ inline uint8_t followerMembershipChecksum(const uint8_t* blob) {
 // Encodes a membership. Rejects (returns false, blob untouched) an empty
 // host — a membership without a reachable leader host is not a membership
 // (v2 follower's leaderHost sentinel rule) — and oversized fields. keyValid
-// carries the #313-follow-on wire-auth key (key32 read only when keyValid).
+// carries the #313-follow-on wire-auth key (key32 read only when keyValid);
+// tz is the leader's POSIX zone for the clock fallback (#342, may be "").
 inline bool followerMembershipEncode(const char* leaderName,
-                                     const char* leaderHost, uint8_t row,
-                                     bool keyValid, const uint8_t* key32,
-                                     uint64_t lastTs, uint8_t* blob) {
+                                     const char* leaderHost, const char* tz,
+                                     uint8_t row, bool keyValid,
+                                     const uint8_t* key32, uint64_t lastTs,
+                                     uint8_t* blob) {
   size_t nameLen = strlen(leaderName);
   size_t hostLen = strlen(leaderHost);
+  size_t tzLen = strlen(tz);
   if (hostLen == 0 || hostLen > FOLLOWER_HOST_MAX) return false;
   if (nameLen > FOLLOWER_NAME_MAX) return false;
+  if (tzLen > FOLLOWER_TZ_MAX) return false;
   memset(blob, 0, FOLLOWER_MEMBERSHIP_BLOB_LEN);
   blob[0] = (uint8_t)(FOLLOWER_MEMBERSHIP_MAGIC & 0xFF);
   blob[1] = (uint8_t)((FOLLOWER_MEMBERSHIP_MAGIC >> 8) & 0xFF);
@@ -60,14 +69,16 @@ inline bool followerMembershipEncode(const char* leaderName,
   }
   memcpy(blob + FOLLOWER_MEMBERSHIP_NAME_OFF, leaderName, nameLen);
   memcpy(blob + FOLLOWER_MEMBERSHIP_HOST_OFF, leaderHost, hostLen);
+  memcpy(blob + FOLLOWER_MEMBERSHIP_TZ_OFF, tz, tzLen);
   blob[FOLLOWER_MEMBERSHIP_BLOB_LEN - 1] = followerMembershipChecksum(blob);
   return true;
 }
 
 // Decodes the blob; false on bad magic/checksum (out params untouched).
-// name/host buffers must hold FOLLOWER_*_MAX + 1; key32 must hold 32 bytes.
+// name/host/tz buffers must hold FOLLOWER_*_MAX + 1; key32 must hold 32
+// bytes.
 inline bool followerMembershipDecode(const uint8_t* blob, char* leaderName,
-                                     char* leaderHost, uint8_t& row,
+                                     char* leaderHost, char* tz, uint8_t& row,
                                      bool& keyValid, uint8_t* key32,
                                      uint64_t& lastTs) {
   uint32_t magic = (uint32_t)blob[0] | ((uint32_t)blob[1] << 8) |
@@ -84,6 +95,8 @@ inline bool followerMembershipDecode(const uint8_t* blob, char* leaderName,
   memcpy(leaderHost, blob + FOLLOWER_MEMBERSHIP_HOST_OFF, FOLLOWER_HOST_MAX);
   leaderHost[FOLLOWER_HOST_MAX] = '\0';
   if (leaderHost[0] == '\0') return false;
+  memcpy(tz, blob + FOLLOWER_MEMBERSHIP_TZ_OFF, FOLLOWER_TZ_MAX);
+  tz[FOLLOWER_TZ_MAX] = '\0';
   row = blob[4];
   keyValid = blob[5] != 0;
   if (key32 != nullptr) memcpy(key32, blob + 6, FOLLOWER_HMAC_KEY_LEN);

@@ -11,6 +11,7 @@
 #include <esp_image_format.h>
 #include <esp_ota_ops.h>
 #include <esp_random.h>
+#include <errno.h>  // #340: lwip socket errno for stream-failure diagnostics
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <sys/time.h>
@@ -59,6 +60,9 @@ static String leaderDeviceName;          // set once in init, read-only after
 // under LeaderLock by statusFillLocked. The runtime table never carries it
 // (the self row is never joined/pinged over HTTP).
 static String leaderSelfRole;
+// #342: the leader's POSIX tz, sent in every join body (clock fallback on
+// esp01 rows). Seeded at init + pushed by the settings drain, like the role.
+static String leaderTzPosix;
 static SettingsStore* leaderStore = nullptr;  // NVS writes: clusterTask only
 
 // All guarded by leaderMutex.
@@ -311,6 +315,15 @@ void clusterLeaderSetSelfRole(const String& role) {
   leaderSelfRole = role;
 }
 
+void clusterLeaderSetTz(const String& tzPosix) {
+  // #342: rides every join body so esp01 rows can clock-fallback when this
+  // leader dies. A live tz change reaches members at their next (re)join —
+  // leader reboot or degraded-recovery — which is fine for an event this
+  // rare; the members keep their last known zone meanwhile.
+  LeaderLock lock;
+  leaderTzPosix = tzPosix;
+}
+
 void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
                               const String& alignment, int speed) {
   submitGrid("c:" + alignment + ":" + String(speed) + ":" + timeText + "|" +
@@ -550,6 +563,10 @@ static int collectMemberWork(MemberWorkItem* items) {
                     "&row=" + String((int)def.row) +
                     "&epoch=" + String((unsigned long)epoch) +
                     "&key=" + clusterKeyToHex(runtimes[pick].hmacKey);
+        if (leaderTzPosix.length() > 0) {
+          // #342 additive: pre-#342 followers ignore unknown params.
+          item.body += "&tz=" + urlEncode(leaderTzPosix);
+        }
         break;
       }
       case ClusterLeaderAction::Render: {
@@ -639,9 +656,16 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
     bool wasDegraded = m.degraded;
     clusterMemberOnSuccess(m, nowMs);
     switch (item.action) {
-      case ClusterLeaderAction::Join:
+      case ClusterLeaderAction::Join: {
         m.joined = true;
-        m.rev = clusterExtractJsonString(body, "rev");
+        // #343: a fresh join means the member was just down or reclaimed —
+        // the continuous-healthy window restarts here.
+        m.healthySinceMs = nowMs;
+        String joinRev = clusterExtractJsonString(body, "rev");
+        // #340: a rev change (manual OTA, bench flash) forgives a rollout
+        // give-up — the blocked latch was pinned to a build that's gone.
+        clusterRolloutNoteMemberRev(rollout, item.index, m.rev, joinRev);
+        m.rev = joinRev;
         // Absent = same platform as this leader (#297); an ESP-01 row
         // reports "esp01" and is excluded from firmware convergence.
         m.plat = clusterExtractJsonString(body, "plat");
@@ -649,6 +673,9 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
         // "" keeps the old width-0-preferred slot (tier 0), "display" at
         // width 0 ranks with spare — so a mixed-rev cluster is unchanged.
         m.role = clusterExtractJsonString(body, "role");
+        // #343 additive: rescue:1 = the member boots as a rescue beacon and
+        // wants the stored follower image re-pushed. Absent = healthy.
+        m.rescue = clusterExtractJsonInt(body, "rescue", 0) != 0;
         m.reportedWidth = clusterExtractJsonInt(body, "width", 0);
         // The handshake ends with a re-send of the current segment.
         m.renderDirty = segments[item.index].length() > 0;
@@ -656,6 +683,7 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
                       String(table.members[item.index].host) + " joined (rev " +
                       m.rev + (m.hmacKeyValid ? ", authenticated)" : ")"));
         break;
+      }
       case ClusterLeaderAction::Render:
         m.renderDirty = false;
         break;
@@ -669,13 +697,21 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
       // reboots without waiting for a re-join.
       clusterParsePingHealth(body, m.health);
       String rev = clusterExtractJsonString(body, "rev");
-      if (rev.length() > 0) m.rev = rev;
+      if (rev.length() > 0) {
+        // #340: same forgiveness on the ping-refresh path — this is how a
+        // stale updateBlocked clears after the member converges without us.
+        clusterRolloutNoteMemberRev(rollout, item.index, m.rev, rev);
+        m.rev = rev;
+      }
       String plat = clusterExtractJsonString(body, "plat");
       if (plat.length() > 0) m.plat = plat;
       // #332: ping refresh keeps a live role change (role picker POST on the
       // member) flowing into the succession tiers without a re-join.
       String role = clusterExtractJsonString(body, "role");
       if (role.length() > 0) m.role = role;
+      // #343: absolute on every reply — a healed boot stops beaconing.
+      m.rescue = clusterExtractJsonInt(body, "rescue", 0) != 0;
+      if (m.rescue) m.healthySinceMs = nowMs;  // beaconing ≠ healthy
       m.reportedWidth = clusterExtractJsonInt(body, "width", m.reportedWidth);
     }
     if (wasDegraded) {
@@ -796,13 +832,14 @@ static void rolloutCloseUpload() {
 }
 
 static bool rolloutOpenUpload(const String& host) {
+  wdtFeed();  // #314: open + preamble write can each block the stream timeout
   String url = clusterRolloutUrl(host, rolloutMd5, GIT_REV);
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
-  // Chunk writes ride the render fan-out's 1.5 s LAN bound so a stalled
-  // follower can never freeze clusterTask beyond the already-accepted
-  // worst case; only the finalize round-trip gets the long budget below.
-  cfg.timeout_ms = CLUSTER_HTTP_TIMEOUT_MS;
+  // #340: chunk writes get the dedicated stream timeout — the receiver's
+  // early flash-sector erases stall the socket past the 1.5 s ping/render
+  // bound; the pump wall-clock-bounds each tick so renders keep flowing.
+  cfg.timeout_ms = CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS;
   cfg.disable_auto_redirect = true;  // #313: firmware never chases a redirect
   rolloutClient = esp_http_client_init(&cfg);
   if (rolloutClient == nullptr) return false;
@@ -828,14 +865,31 @@ static bool rolloutOpenUpload(const String& host) {
 // settles the verdict into the policy state.
 static void rolloutPumpUpload() {
   uint32_t budget = CLUSTER_ROLLOUT_CHUNK_PER_TICK;
+  uint32_t tickStartMs = millis();
   while (budget > 0 && rolloutOffset < rolloutImageLen) {
+    // #340: several writes can stack in one tick and each may now block up
+    // to the stream timeout — feed the TWDT between them (#314) and bound
+    // the tick by wall clock so a slow-but-alive socket can't starve
+    // renders/pings (the stream just resumes next tick).
+    wdtFeed();
+    if (millis() - tickStartMs > (uint32_t)CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS)
+      break;
     uint32_t take = rolloutImageLen - rolloutOffset;
     if (take > sizeof(rolloutBuf)) take = sizeof(rolloutBuf);
     if (take > budget) take = budget;
     if (esp_partition_read(rolloutPart, rolloutOffset, rolloutBuf, take) !=
-            ESP_OK ||
-        esp_http_client_write(rolloutClient, (const char*)rolloutBuf, take) !=
-            (int)take) {
+        ESP_OK) {
+      rolloutCloseUpload();
+      LeaderLock lock;
+      SerialPrintln("cluster: rollout flash read failed at offset " +
+                    String((unsigned)rolloutOffset));
+      clusterRolloutUploadFailed(rollout, millis());
+      return;
+    }
+    int wrote =
+        esp_http_client_write(rolloutClient, (const char*)rolloutBuf, take);
+    if (wrote != (int)take) {
+      int wrErrno = errno;  // capture before close() can clobber it (#340)
       rolloutCloseUpload();
       LeaderLock lock;
       int target = rollout.memberIndex;
@@ -843,7 +897,9 @@ static void rolloutPumpUpload() {
                     ((target >= 0 && target < table.count)
                          ? String(table.members[target].host)
                          : String("?")) +
-                    " failed mid-stream");
+                    " failed mid-stream at " + String((unsigned)rolloutOffset) +
+                    "/" + String((unsigned)rolloutImageLen) + " B (write " +
+                    String(wrote) + ", errno " + String(wrErrno) + ")");
       clusterRolloutUploadFailed(rollout, millis());
       return;
     }
@@ -902,6 +958,22 @@ static void rolloutPumpUpload() {
   }
 }
 
+// --- #344 esp01 auto-convergence -------------------------------------------------
+// The stored follower image (#304) rides the SAME rollout machine: when the
+// S3 scan finds nothing, an esp01 member whose reported rev differs from the
+// stored image's rev converges through the fpush file-source stream below.
+// While rolloutFollowerSource is set, the active rollout streams the fpush
+// globals and the rejoin gate compares against the stored rev, not GIT_REV.
+// Only clusterTask touches these.
+static bool rolloutFollowerSource = false;
+static String rolloutFollowerTargetRev;
+// #343: the active follower push was triggered by the rescue marker (not a
+// rev mismatch) — its attempt was burned at start and a Converged rejoin
+// must not forgive it (review HIGH). Lifecycle mirrors rolloutFollowerSource.
+static bool rolloutRescueTriggered = false;
+static void rolloutTryFollowerImageStart();
+static void followerPushPump();
+
 static void rolloutServiceTick() {
   ClusterRolloutPhase phase;
   int target;
@@ -915,13 +987,34 @@ static void rolloutServiceTick() {
     int candidate;
     {
       LeaderLock lock;
+      rolloutFollowerSource = false;  // self-heal: Idle never streams (#344)
+      rolloutRescueTriggered = false;
+      // #343: sustained health forgives esp01 give-ups — a healed row's
+      // future beacons must be served again (S3 semantics untouched).
+      uint32_t sweepNow = millis();
+      for (int i = 0; i < table.count; i++) {
+        if (rollout.attempts[i] == 0 && !rollout.blocked[i]) continue;
+        if (runtimes[i].plat != FOLLOWER_IMAGE_PLAT) continue;
+        if (!runtimes[i].joined || runtimes[i].rescue) continue;
+        if (!clusterRolloutHealthyForgiveDue(runtimes[i].healthySinceMs,
+                                             sweepNow)) {
+          continue;
+        }
+        rollout.attempts[i] = 0;
+        rollout.blocked[i] = false;
+        SerialPrintln("cluster: " + String(table.members[i].host) +
+                      " healthy long enough — rescue give-ups forgiven");
+      }
       // Stand down while an on-demand follower push owns the flash (#304).
       if (followerPush.phase != FollowerPushPhase::Idle) return;
       candidate = clusterRolloutNextCandidate(table, runtimes, GIT_REV,
                                               CLUSTER_LEADER_PLAT, rollout,
                                               millis());
     }
-    if (candidate < 0) return;
+    if (candidate < 0) {
+      rolloutTryFollowerImageStart();  // #344: esp01 rows converge next
+      return;
+    }
     if (!rolloutEnsureImageFacts()) return;
     String host;
     String fromRev;
@@ -944,7 +1037,8 @@ static void rolloutServiceTick() {
   }
 
   if (phase == ClusterRolloutPhase::Uploading) {
-    rolloutPumpUpload();
+    if (rolloutFollowerSource) followerPushPump();  // #344 file-source stream
+    else rolloutPumpUpload();
     return;
   }
 
@@ -955,13 +1049,25 @@ static void rolloutServiceTick() {
     clusterRolloutReset(rollout);  // config swap raced the wait — start over
     return;
   }
+  // #344: an esp01 convergence rejoins on the STORED image's rev.
+  const char* wantRev =
+      rolloutFollowerSource ? rolloutFollowerTargetRev.c_str() : GIT_REV;
   ClusterRolloutWait wait =
       clusterRolloutCheckWait(rollout, runtimes[target].joined,
-                              runtimes[target].rev, GIT_REV, millis());
+                              runtimes[target].rev, runtimes[target].rescue,
+                              rolloutRescueTriggered, wantRev, millis());
+  if (wait != ClusterRolloutWait::Waiting) {
+    rolloutFollowerSource = false;
+    rolloutRescueTriggered = false;
+  }
   switch (wait) {
     case ClusterRolloutWait::Converged:
       SerialPrintln("cluster: " + String(table.members[target].host) +
-                    " converged on " GIT_REV " — rollout advances");
+                    " converged on " + String(wantRev) + " — rollout advances");
+      break;
+    case ClusterRolloutWait::RescueLooping:
+      SerialPrintln("cluster: " + String(table.members[target].host) +
+                    " rejoined still in rescue — attempt burned");
       break;
     case ClusterRolloutWait::RolledBack:
       SerialPrintln("cluster: " + String(table.members[target].host) +
@@ -1029,12 +1135,14 @@ static bool followerPushEnsureFacts() {
 }
 
 static bool followerPushOpenUpload(const String& host) {
+  wdtFeed();  // #314: open + preamble write can each block the stream timeout
   fpushFile = LittleFS.open(FOLLOWER_IMAGE_PATH, FILE_READ);
   if (!fpushFile) { followerPushCloseUpload(); return false; }
   String url = clusterRolloutUrl(host, fpushMd5, fpushRev.c_str());
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
-  cfg.timeout_ms = CLUSTER_HTTP_TIMEOUT_MS;
+  // #340: firmware stream — same dedicated write timeout as the rollout.
+  cfg.timeout_ms = CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS;
   cfg.disable_auto_redirect = true;  // #313: firmware never chases a redirect
   fpushClient = esp_http_client_init(&cfg);
   if (fpushClient == nullptr) { followerPushCloseUpload(); return false; }
@@ -1054,6 +1162,71 @@ static bool followerPushOpenUpload(const String& host) {
   return true;
 }
 
+// #344: auto-start an esp01 convergence — called from rolloutServiceTick's
+// Idle branch when the S3 scan found nothing (so the two sources share the
+// strictly-sequential machine, attempts and blocked latch).
+static void rolloutTryFollowerImageStart() {
+  if (!followerImageStored()) return;
+  String storedRev = followerImageStoredRev();
+  int candidate;
+  {
+    LeaderLock lock;
+    // #343: a NEW stored image voids the evidence behind rescue give-ups —
+    // esp01 members get fresh attempts before the scan.
+    static String lastStoredRev;
+    if (storedRev != lastStoredRev) {
+      if (lastStoredRev.length() > 0) {
+        clusterRolloutForgiveFollowerTargets(rollout, table, runtimes,
+                                             FOLLOWER_IMAGE_PLAT);
+      }
+      lastStoredRev = storedRev;
+    }
+    candidate = clusterFollowerImageNextCandidate(
+        table, runtimes, storedRev.c_str(), FOLLOWER_IMAGE_PLAT, rollout,
+        millis());
+  }
+  if (candidate < 0) return;
+  // Claim BEFORE reading facts (netTask-rewrite guard, mirrors the manual
+  // push); a pending upload flush simply retries next tick.
+  if (!followerImageTryClaimRelay()) return;
+  if (!followerPushEnsureFacts()) {
+    followerImageReleaseRelay();
+    SerialPrintln(
+        F("cluster: stored follower image unreadable — esp01 convergence "
+          "holds off"));
+    LeaderLock lock;
+    // Idle + memberIndex -1: burns no attempt, just arms the retry holdoff.
+    clusterRolloutUploadFailed(rollout, millis());
+    return;
+  }
+  String host;
+  String fromRev;
+  bool rescuePush;
+  {
+    LeaderLock lock;
+    // #343: rescue-triggered pushes burn their attempt at start (the
+    // rejoin verdict can't be trusted — see ClusterRolloutPolicy.h).
+    rescuePush = runtimes[candidate].rescue;
+    if (rescuePush) clusterRolloutStartRescue(rollout, candidate, fpushLen);
+    else clusterRolloutStart(rollout, candidate, fpushLen);
+    rolloutFollowerSource = true;
+    rolloutRescueTriggered = rescuePush;
+    rolloutFollowerTargetRev = fpushRev;
+    host = table.members[candidate].host;
+    fromRev = runtimes[candidate].rev;
+  }
+  SerialPrintln("cluster: converging esp01 " + host + " rev " + fromRev +
+                " -> " + rolloutFollowerTargetRev +
+                (rescuePush ? " (rescue re-push)" : " (stored follower image)"));
+  if (!followerPushOpenUpload(host)) {
+    SerialPrintln("cluster: esp01 convergence could not reach " + host);
+    LeaderLock lock;
+    clusterRolloutUploadFailed(rollout, millis());
+    rolloutFollowerSource = false;
+    rolloutRescueTriggered = false;
+  }
+}
+
 // caller holds LeaderLock.
 static void followerPushFinishLocked(FollowerPushResult result,
                                      const String& host, const String& what) {
@@ -1061,22 +1234,52 @@ static void followerPushFinishLocked(FollowerPushResult result,
   SerialPrintln("cluster: follower-image push to " + host + " " + what);
 }
 
+// #344: one failure settle point for the file-source stream — the same
+// low-level pump serves the manual push (followerPush state) and the auto
+// esp01 convergence (rollout state). Takes the lock itself.
+static void fpushSettleFailed(const String& what) {
+  LeaderLock lock;
+  if (rolloutFollowerSource) {
+    int t = rollout.memberIndex;
+    String host = (t >= 0 && t < table.count) ? String(table.members[t].host)
+                                              : String("?");
+    SerialPrintln("cluster: esp01 convergence to " + host + " " + what);
+    clusterRolloutUploadFailed(rollout, millis());
+    rolloutFollowerSource = false;
+    rolloutRescueTriggered = false;
+    return;
+  }
+  int t = followerPush.memberIndex;
+  String host = (t >= 0 && t < table.count) ? String(table.members[t].host)
+                                            : String("?");
+  followerPushFinishLocked(FollowerPushResult::Failed, host, what);
+}
+
 static void followerPushPump() {
   uint32_t budget = CLUSTER_ROLLOUT_CHUNK_PER_TICK;
+  uint32_t tickStartMs = millis();
   while (budget > 0 && fpushOffset < fpushLen) {
+    // #340: mirrors rolloutPumpUpload — TWDT feed between long-timeout
+    // writes, wall-clock tick bound, stream resumes next tick.
+    wdtFeed();
+    if (millis() - tickStartMs > (uint32_t)CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS)
+      break;
     uint32_t take = fpushLen - fpushOffset;
     if (take > sizeof(rolloutBuf)) take = sizeof(rolloutBuf);
     if (take > budget) take = budget;
-    if (fpushFile.read(rolloutBuf, take) != (int)take ||
-        esp_http_client_write(fpushClient, (const char*)rolloutBuf, take) !=
-            (int)take) {
+    if (fpushFile.read(rolloutBuf, take) != (int)take) {
       followerPushCloseUpload();
-      LeaderLock lock;
-      int t = followerPush.memberIndex;
-      String host = (t >= 0 && t < table.count) ? String(table.members[t].host)
-                                                : String("?");
-      followerPushFinishLocked(FollowerPushResult::Failed, host,
-                               "failed mid-stream");
+      fpushSettleFailed("file read failed at " + String((unsigned)fpushOffset));
+      return;
+    }
+    int wrote =
+        esp_http_client_write(fpushClient, (const char*)rolloutBuf, take);
+    if (wrote != (int)take) {
+      int wrErrno = errno;  // capture before close() can clobber it (#340)
+      followerPushCloseUpload();
+      fpushSettleFailed("failed mid-stream at " + String((unsigned)fpushOffset) +
+                        "/" + String((unsigned)fpushLen) + " B (write " +
+                        String(wrote) + ", errno " + String(wrErrno) + ")");
       return;
     }
     fpushOffset += take;
@@ -1084,7 +1287,8 @@ static void followerPushPump() {
   }
   {
     LeaderLock lock;
-    followerPush.bytesSent = fpushOffset;
+    if (rolloutFollowerSource) rollout.bytesSent = fpushOffset;  // #344
+    else followerPush.bytesSent = fpushOffset;
   }
   if (fpushOffset < fpushLen) return;  // more ticks to go
 
@@ -1100,6 +1304,40 @@ static void followerPushPump() {
   followerPushCloseUpload();
 
   LeaderLock lock;
+  if (rolloutFollowerSource) {
+    // #344: settle the auto convergence into the rollout machine — the
+    // rejoin health gate takes over on 200, exactly like the S3 stream.
+    uint32_t nowMs = millis();
+    int t = rollout.memberIndex;
+    String h = (t >= 0 && t < table.count) ? String(table.members[t].host)
+                                           : String("?");
+    if (status == 200) {
+      SerialPrintln("cluster: esp01 " + h + " flashed — waiting for rejoin on " +
+                    rolloutFollowerTargetRev);
+      clusterRolloutUploadDone(rollout, nowMs);
+      // rolloutFollowerSource stays set: the wait gate compares the rejoin
+      // rev against the stored image's rev.
+      if (t >= 0 && t < table.count) {
+        runtimes[t].joined = false;
+        runtimes[t].rev = "";
+        runtimes[t].failures = 0;
+        runtimes[t].nextAttemptMs = nowMs + 5000;
+      }
+    } else if (status == 409) {
+      SerialPrintln("cluster: esp01 " + h +
+                    " busy (409) — convergence retries later");
+      clusterRolloutUploadRejected(rollout, nowMs);
+      rolloutFollowerSource = false;
+      rolloutRescueTriggered = false;
+    } else {
+      SerialPrintln("cluster: esp01 convergence to " + h + " failed (status " +
+                    String(status) + ")");
+      clusterRolloutUploadFailed(rollout, nowMs);
+      rolloutFollowerSource = false;
+      rolloutRescueTriggered = false;
+    }
+    return;
+  }
   int target = followerPush.memberIndex;
   String host = (target >= 0 && target < table.count)
                     ? String(table.members[target].host) : String("?");
@@ -1462,6 +1700,7 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
     out.updating = rollout.phase != ClusterRolloutPhase::Idle &&
                    rollout.memberIndex == i;
     out.updateBlocked = rollout.blocked[i];
+    out.rescue = runtimes[i].rescue;  // #343
     out.hmac = runtimes[i].hmacKeyValid;  // signing to this member (#313)
     if (clusterMemberIsSelf(table.members[i])) {
       out.rev = GIT_REV;
@@ -1488,6 +1727,7 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
   st.rolloutSent = rollout.bytesSent;
   st.rolloutTotal = rollout.bytesTotal;
   st.rolloutImageFailed = rolloutFactsFailed.load(std::memory_order_relaxed);
+  st.rolloutFollowerImage = rolloutFollowerSource;  // #344
   // On-demand ESP-01 firmware relay (#304). followerImage* query the store's
   // own mutex — leaderMutex → imgMutex is a consistent leaf order.
   st.followerImagePresent = followerImageStored();

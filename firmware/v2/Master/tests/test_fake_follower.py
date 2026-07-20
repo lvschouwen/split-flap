@@ -473,6 +473,47 @@ def test_default_follower_reports_no_role(follower):
     assert "role" not in json.loads(body)
 
 
+# --- rescue-beacon variant (#343) -----------------------------------------------------
+
+@pytest.fixture()
+def rescue_follower():
+    """An esp01 row that booted as a rescue beacon (#343): join/ping replies
+    carry rescue:1, telling the leader to re-push the stored follower image
+    even when the reported rev already matches it."""
+    server, state = make_server(0, name="rescue-row", rev="abc1234",
+                                width=8, plat="esp01", rescue=True,
+                                reboot_secs=0.1)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{port}", state
+    server.shutdown()
+
+
+def test_rescue_join_reply_carries_marker(rescue_follower):
+    base, _ = rescue_follower
+    status, body = join(base)
+    assert status == 200
+    assert json.loads(body)["rescue"] == 1
+
+
+def test_rescue_ping_reply_carries_marker(rescue_follower):
+    base, _ = rescue_follower
+    join(base)
+    status, body = post(base, "/cluster/ping")
+    assert status == 200
+    reply = json.loads(body)
+    assert reply["rescue"] == 1
+    assert reply["plat"] == "esp01"
+
+
+def test_default_follower_reports_no_rescue(follower):
+    # Absent = healthy — pre-#343 rows never carry the key.
+    base, _ = follower
+    _, body = join(base)
+    assert "rescue" not in json.loads(body)
+
+
 def test_rollback_drill_keeps_old_rev(follower):
     base, state = follower
     state.rollback = True

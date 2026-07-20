@@ -7,12 +7,17 @@
 
 #include "ClusterHmac.h"  // cluster-wire auth: key storage + verify (#313 follow-on)
 #include "FollowerBus.h"
+#include "FollowerClock.h"  // #342: local clock fallback when the leader dies
 #include "FollowerConfig.h"
+#include "FollowerRescue.h"  // #343: rescue beacon never touches the bus
 #include "FollowerSettings.h"
 
 static FollowerClusterState policyState;
 static String leaderName;
 static String leaderHost;
+// #342: the leader's POSIX zone (join body, persisted with the membership)
+// — fuels the Blank-phase clock fallback. "" = pre-#342 leader, no clock.
+static String leaderTz;
 static int memberRow = 0;
 static String heldSegment;
 static int heldSpeed = 80;
@@ -41,6 +46,12 @@ static uint32_t renderDueMs = 0;
 // row currently shows so blank transitions don't re-flap a blank row.
 static bool rowIsBlank = true;
 
+// #342 clock fallback bookkeeping: what's on the row is OUR clock (not
+// leader content), and which minute it shows (repaint only on change —
+// one flap tick per minute, not per loop pass).
+static bool clockShowing = false;
+static int shownClockMinute = -1;
+
 // millis() when a leader render was last APPLIED (#306 diagnostics). Distinct
 // from policyState.lastContactMs, which any ping also bumps.
 static uint32_t lastRenderMs = 0;
@@ -53,6 +64,14 @@ static uint64_t nowEpochMs(bool& synced) {
   return (uint64_t)t * 1000ULL + (millis() % 1000);
 }
 
+// #342: publish the leader's zone to libc so localtime() speaks it. Safe
+// pre-WiFi (it's just the TZ env var); SNTP keeps feeding raw epoch.
+static void applyLeaderTz() {
+  if (leaderTz.length() == 0) return;
+  setenv("TZ", leaderTz.c_str(), 1);
+  tzset();
+}
+
 void clusterInit() {
   EEPROM.begin(FOLLOWER_MEMBERSHIP_BLOB_LEN);
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
@@ -61,9 +80,11 @@ void clusterInit() {
   }
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
+  char tz[FOLLOWER_TZ_MAX + 1];
   uint8_t row = 0;
-  bool stored = followerMembershipDecode(blob, name, host, row, hmacKeyValid,
-                                         hmacKey, hmacLastAcceptedTs);
+  bool stored = followerMembershipDecode(blob, name, host, tz, row,
+                                         hmacKeyValid, hmacKey,
+                                         hmacLastAcceptedTs);
   if (!stored) {
     hmacKeyValid = false;
     hmacLastAcceptedTs = 0;
@@ -72,6 +93,8 @@ void clusterInit() {
   if (stored) {
     leaderName = name;
     leaderHost = host;
+    leaderTz = tz;
+    applyLeaderTz();  // #342: a reboot into a dead-leader window still clocks
     memberRow = row;
     SerialPrint(F("Clustered by "));
     SerialPrint(leaderName);
@@ -84,8 +107,9 @@ static void persistMembership() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
   if (leaderHost.length() == 0 ||
       !followerMembershipEncode(leaderName.c_str(), leaderHost.c_str(),
-                                (uint8_t)memberRow, hmacKeyValid, hmacKey,
-                                hmacLastAcceptedTs, blob)) {
+                                leaderTz.c_str(), (uint8_t)memberRow,
+                                hmacKeyValid, hmacKey, hmacLastAcceptedTs,
+                                blob)) {
     followerMembershipClear(blob);
   }
   for (int i = 0; i < FOLLOWER_MEMBERSHIP_BLOB_LEN; i++) {
@@ -109,16 +133,57 @@ void clusterLoopTick() {
     }
   }
 
+  // Rescue beacon (#343): membership/phase bookkeeping above stays live so
+  // the leader sees us and the marker, but the bus is untouchable — drop
+  // any accepted render unshown (the leader's re-push is the point).
+  if (rescueActive()) {
+    renderPending = false;
+    return;
+  }
+
   // Blank rule: Standalone and Blank show nothing; Grace holds. One blank
-  // frame per transition (rowIsBlank latches).
+  // frame per transition (rowIsBlank latches). #342: a Blank row with a
+  // held membership, a known zone and synced time shows local HH:MM
+  // instead — the wall keeps telling the time while the leader is down.
   if (followerPhaseShowsBlank(policyState.phase)) {
+    bool synced = false;
+    (void)nowEpochMs(synced);
+    if (followerClockEligible(policyState.phase, leaderHost.length() > 0,
+                              leaderTz.length() > 0, synced)) {
+      time_t t = time(nullptr);
+      struct tm lt;
+      localtime_r(&t, &lt);
+      if ((!clockShowing || lt.tm_min != shownClockMinute) &&
+          !renderPending && !reflashInProgress(reflashProgress)) {
+        if (!clockShowing) {
+          SerialPrintln(F("cluster: leader lost — local clock fallback"));
+        }
+        int width = displayWidth > 0 ? displayWidth : UNITS_AMOUNT;
+        char text[UNITS_AMOUNT + 1];
+        followerClockText(lt.tm_hour, lt.tm_min, width, text);
+        busShowSegment(String(text), heldSpeed > 0 ? heldSpeed : 80);
+        clockShowing = true;
+        shownClockMinute = lt.tm_min;
+        rowIsBlank = false;
+      }
+      return;
+    }
     if (!rowIsBlank && !renderPending &&
         !reflashInProgress(reflashProgress)) {
       SerialPrintln(F("cluster: blanking the row"));
       busShowSegment("", heldSpeed > 0 ? heldSpeed : 80);
       rowIsBlank = true;
+      clockShowing = false;
     }
     return;
+  }
+
+  if (clockShowing && !renderPending && !reflashInProgress(reflashProgress)) {
+    // The leader came back but hasn't re-rendered (its segment for this
+    // row is empty): a frozen clock must not pose as leader content.
+    busShowSegment("", heldSpeed > 0 ? heldSpeed : 80);
+    rowIsBlank = true;
+    clockShowing = false;
   }
 
   if (renderPending && (int32_t)(millis() - renderDueMs) >= 0 &&
@@ -130,6 +195,7 @@ void clusterLoopTick() {
     renderPending = false;
     busShowSegment(text, speed);
     rowIsBlank = text.length() == 0;
+    clockShowing = false;  // leader content replaced the fallback (#342)
   }
 }
 
@@ -145,7 +211,7 @@ bool clusterJoinWouldConflict(const String& joiningLeaderHost,
 }
 
 void clusterHandleJoin(const String& name, const String& host, int row,
-                       uint32_t epoch, const String& key) {
+                       uint32_t epoch, const String& key, const String& tz) {
   followerClusterJoin(policyState, millis(), epoch);
   // Adopt the negotiated wire-auth key (#313 follow-on): a valid key turns
   // enforcement ON; a pre-HMAC leader sends none.
@@ -170,10 +236,17 @@ void clusterHandleJoin(const String& name, const String& host, int row,
   // NVS/EEPROM-flood guard (#313, parity with the S3 follower): persist the
   // membership blob only when a field actually moved — a leader re-joining
   // on its cadence must not burn EEPROM on every accepted join.
+  // #342: tz is additive — a pre-#342 leader sends none and an emptied one
+  // keeps the last known zone (a zone is better than a dark row).
+  bool tzChanged = tz.length() > 0 && tz != leaderTz;
   bool changed = leaderName != name || leaderHost != host ||
-                 memberRow != row || keyChanged;
+                 memberRow != row || keyChanged || tzChanged;
   leaderName = name;
   leaderHost = host;
+  if (tzChanged) {
+    leaderTz = tz;
+    applyLeaderTz();
+  }
   memberRow = row;
   if (changed) {
     membershipDirty = true;
@@ -228,6 +301,7 @@ void clusterHandleLeave() {
   followerClusterLeave(policyState);
   leaderName = "";
   leaderHost = "";
+  leaderTz = "";  // #342: the zone leaves with the leader that owned it
   memberRow = 0;
   heldSegment = "";
   renderPending = false;
