@@ -408,6 +408,42 @@ static void test_apply_persists_unit_count_override() {
   TEST_ASSERT_EQUAL_INT(0, settings.unitCountOverride);
 }
 
+// --- device role (#329 headless mode) --------------------------------------
+
+static void test_device_role_defaults_to_display() {
+  FakeSettingsStore store;
+  MasterSettings settings = loadSettings(store);
+  TEST_ASSERT_EQUAL_STRING("display", settings.deviceRole.c_str());
+}
+
+static void test_stage_device_role_accepts_the_headless_roles() {
+  PendingSettingsPost post;
+  TEST_ASSERT_EQUAL(
+      (int)SettingsParamResult::Accepted,
+      (int)stageSettingsParam(post, PARAM_DEVICE_ROLE, "headless-monitor"));
+  TEST_ASSERT_TRUE(post.deviceRoleProvided);
+  TEST_ASSERT_EQUAL_STRING("headless-monitor", post.deviceRole.c_str());
+}
+
+static void test_stage_device_role_rejects_unknown() {
+  PendingSettingsPost post;
+  TEST_ASSERT_EQUAL(
+      (int)SettingsParamResult::Invalid,
+      (int)stageSettingsParam(post, PARAM_DEVICE_ROLE, "backup"));
+  TEST_ASSERT_FALSE(post.deviceRoleProvided);
+}
+
+static void test_apply_persists_device_role() {
+  FakeSettingsStore store;
+  MasterSettings settings = loadSettings(store);
+  PendingSettingsPost post;
+  stageSettingsParam(post, PARAM_DEVICE_ROLE, "headless-backup");
+  applySettingsPost(post, settings, store);
+  TEST_ASSERT_EQUAL_STRING("headless-backup", settings.deviceRole.c_str());
+  TEST_ASSERT_EQUAL_STRING("headless-backup",
+                           loadSettings(store).deviceRole.c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_unknown_param_is_ignored);
@@ -444,5 +480,9 @@ int main(int, char**) {
   RUN_TEST(test_stage_unit_count_accepts_and_trims);
   RUN_TEST(test_stage_unit_count_rejects_out_of_range);
   RUN_TEST(test_apply_persists_unit_count_override);
+  RUN_TEST(test_device_role_defaults_to_display);
+  RUN_TEST(test_stage_device_role_accepts_the_headless_roles);
+  RUN_TEST(test_stage_device_role_rejects_unknown);
+  RUN_TEST(test_apply_persists_device_role);
   return UNITY_END();
 }

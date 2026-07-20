@@ -178,13 +178,21 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
 // own rank by matching its `you` index against this list.
 inline String clusterSuccessorList(const ClusterLeaderStatus& st) {
   String out;
-  for (int i = 0; i < st.memberCount; i++) {
-    if (st.members[i].host.length() == 0) continue;  // the leader's own row
-    if (clusterMemberPlatForeign(st.members[i].plat, CLUSTER_LEADER_PLAT)) {
-      continue;  // ESP-01 / foreign board — never a takeover candidate
+  // Two passes so a width-0 warm-standby backup (#333 — no row of its own to
+  // lose, spare capacity) outranks the rendering rows: preferred successors
+  // (rank 0) first, then the rendering S3 followers, each in table order.
+  for (int pass = 0; pass < 2; pass++) {
+    const bool wantBackup = (pass == 0);
+    for (int i = 0; i < st.memberCount; i++) {
+      const ClusterLeaderMemberStatus& m = st.members[i];
+      if (m.host.length() == 0) continue;  // the leader's own row
+      if (clusterMemberPlatForeign(m.plat, CLUSTER_LEADER_PLAT)) {
+        continue;  // ESP-01 / foreign board — never a takeover candidate
+      }
+      if ((m.width == 0) != wantBackup) continue;  // this pass's tier only
+      if (out.length()) out += ',';
+      out += String(i);
     }
-    if (out.length()) out += ',';
-    out += String(i);
   }
   return out;
 }
@@ -193,7 +201,7 @@ inline String clusterBuildDigest(uint32_t gen, const String& leaderName,
                                  const String& leaderHost,
                                  const String& tableSpec, const String* rows,
                                  int rowCount, const ClusterLeaderStatus& st,
-                                 uint32_t holdMs = 0) {
+                                 uint32_t holdMs = 0, const String& mode = "") {
   String out;
   out.reserve(256 + rowCount * 40 + st.memberCount * 200);
   out += "{\"gen\":";
@@ -213,6 +221,8 @@ inline String clusterBuildDigest(uint32_t gen, const String& leaderName,
   appendJsonString(out, clusterSuccessorList(st));
   out += ",\"hold\":";
   out += String((unsigned long)holdMs);  // #321: 0 unless a reboot is imminent
+  out += ",\"mode\":";  // #337: leader's active deviceMode — a promoted
+  appendJsonString(out, mode);  // successor adopts it so the wall mode survives
   out += ",\"status\":";
   out += clusterStatusJson(st);
   out += '}';

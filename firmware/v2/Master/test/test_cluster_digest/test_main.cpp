@@ -430,9 +430,22 @@ static void test_successor_list_orders_multiple_s3_by_index() {
   st.memberCount = 4;
   st.members[2].host = "192.168.1.50";
   st.members[2].plat = "esp32s3";
+  st.members[2].width = 16;  // rendering row — width now carries meaning (#333)
   st.members[3].host = "192.168.1.51";
   st.members[3].plat = "esp01";  // excluded
   TEST_ASSERT_EQUAL_STRING("1,2", clusterSuccessorList(st).c_str());
+}
+
+// #333: a width-0 warm-standby backup outranks the rendering rows — it has
+// no row of its own to lose, so it is the preferred successor (rank 0).
+static void test_successor_list_prefers_zero_width_backup() {
+  ClusterLeaderStatus st = makeStatus();
+  st.memberCount = 3;
+  st.members[2].host = "192.168.1.50";
+  st.members[2].plat = "";   // same platform (S3)
+  st.members[2].width = 0;   // warm-standby backup
+  // Backup (index 2) leads the rendering follower (index 1).
+  TEST_ASSERT_EQUAL_STRING("2,1", clusterSuccessorList(st).c_str());
 }
 
 static void test_digest_carries_succ_field() {
@@ -441,6 +454,23 @@ static void test_digest_carries_succ_field() {
   String d = clusterBuildDigest(3, "wall", "192.168.1.2", "a|0|0|16", rows, 1, st);
   TEST_ASSERT_TRUE(d.indexOf("\"succ\":\"1\"") >= 0);
   TEST_ASSERT_TRUE(d.indexOf("\"hold\":0") >= 0);  // #321: 0 unless rebooting
+}
+
+// #337: the leader's active deviceMode rides the digest so a promoted
+// successor resumes the cluster mode instead of its own NVS default.
+static void test_digest_carries_mode_field() {
+  ClusterLeaderStatus st = makeStatus();
+  String rows[1] = {"HELLO"};
+  String d = clusterBuildDigest(3, "wall", "192.168.1.2", "a|0|0|16", rows, 1, st,
+                                0, "clock");
+  TEST_ASSERT_TRUE(d.indexOf("\"mode\":\"clock\"") >= 0);
+}
+
+static void test_digest_mode_defaults_empty() {
+  ClusterLeaderStatus st = makeStatus();
+  String rows[1] = {"HELLO"};
+  String d = clusterBuildDigest(3, "wall", "192.168.1.2", "a|0|0|16", rows, 1, st);
+  TEST_ASSERT_TRUE(d.indexOf("\"mode\":\"\"") >= 0);
 }
 
 static void test_digest_carries_hold_when_rebooting() {
@@ -456,7 +486,10 @@ int main(int, char**) {
   RUN_TEST(test_successor_list_includes_s3_followers);
   RUN_TEST(test_successor_list_excludes_esp01);
   RUN_TEST(test_successor_list_orders_multiple_s3_by_index);
+  RUN_TEST(test_successor_list_prefers_zero_width_backup);
   RUN_TEST(test_digest_carries_succ_field);
+  RUN_TEST(test_digest_carries_mode_field);
+  RUN_TEST(test_digest_mode_defaults_empty);
   RUN_TEST(test_digest_carries_hold_when_rebooting);
   RUN_TEST(test_fault_mask_all_healthy_is_zeroes);
   RUN_TEST(test_fault_mask_bit_is_unit_index);

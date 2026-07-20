@@ -425,6 +425,18 @@ function applySettings(s) {
 		overridePill.className = "pill " + (overrideValue > 0 ? "ok" : "off");
 	}
 
+	//#330 headless mode: reflect the stored deviceRole and the unit-less
+	//suggestion. Detection only nudges (banner) — the user picks the role.
+	var role = s.deviceRole || "display";
+	setSegValue("segDeviceRole", role);
+	var rolePill = document.getElementById("labelDeviceRole");
+	if (rolePill) {
+		rolePill.textContent = role === "display" ? "display" : role.replace("headless-", "");
+		rolePill.className = "pill " + (role === "display" ? "off" : "ok");
+	}
+	var roleBanner = document.getElementById("deviceRoleSuggestion");
+	if (roleBanner) roleBanner.classList.toggle("hidden", !s.headlessSuggested);
+
 	document.getElementById("boardName").textContent = (s.effectiveDeviceName || "split-flap").toUpperCase();
 	refreshLiveStatus();
 	document.getElementById("labelLastMessageReceived").textContent = s.lastTimeReceivedMessageDateTime || "—";
@@ -916,6 +928,16 @@ function initSegControls() {
 			currentAlignment = b.dataset.value;
 			postSettingsFields({ alignment: b.dataset.value }, function(ok) {
 				showStatus("displayStatus", ok ? "✔ Alignment saved." : "✘ Alignment save failed.", ok ? "success" : "error", 4000);
+			});
+		});
+	});
+	//#330 headless mode: deviceRole selector — posts only its own field, the
+	//poll loop reflects the device's answer back like the other segments.
+	document.querySelectorAll("#segDeviceRole button").forEach(function(b) {
+		b.addEventListener("click", function() {
+			setSegValue("segDeviceRole", b.dataset.value);
+			postSettingsFields({ deviceRole: b.dataset.value }, function(ok) {
+				showStatus("deviceRoleStatus", ok ? "✔ Role saved." : "✘ Role save failed.", ok ? "success" : "error", 4000);
 			});
 		});
 	});
@@ -2586,11 +2608,14 @@ function updateClusterFromStatus(st) {
 		var label = clusterStateLabel(saved[i]);
 		pill.className = "pill " + label.kind + " cl-state";
 		pill.textContent = label.text;
-		//plat tag (#297) + wire-auth chip (#317): only for non-self members
-		//(the leader's own row is not a wire link). hmac = leader signs to it.
+		//#334: rev + platform for EVERY member incl. (this board). plat is
+		//sent only by ESP-01 (#297) — absent means the S3 fleet, so fall back
+		//to esp32s3. The #317 wire-auth chip stays non-self only (the leader's
+		//own row is not a wire link). hmac = leader signs to it.
 		rev.textContent = "";
+		rev.appendChild(document.createTextNode(
+			(saved[i].rev || "—") + " · " + (saved[i].plat || "esp32s3") + "  "));
 		if (!saved[i].self) {
-			rev.appendChild(document.createTextNode((saved[i].rev || "—") + (saved[i].plat ? " · " + saved[i].plat : "") + "  "));
 			var authChip = document.createElement("span");
 			authChip.className = "pill " + (saved[i].hmac ? "ok" : "off");
 			authChip.style.fontSize = "10px";
@@ -2666,7 +2691,9 @@ function renderClusterMembers() {
 		tr.appendChild(hostTd);
 
 		tr.appendChild(numberCell("col", 0, 254));
-		tr.appendChild(numberCell("width", 1, 255));
+		//#333 warm-standby: width 0 = an off-grid backup member (no columns,
+		//non-rendering, promote-eligible) — the leader accepts it.
+		tr.appendChild(numberCell("width", 0, 255));
 
 		var stateTd = document.createElement("td");
 		var pill = document.createElement("span");
@@ -2799,8 +2826,8 @@ function refreshSysClusterVitals() {
 			.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
 			.then(function(s) {
 				if (s.version) revC.textContent = s.version;
-				//Only the ESP-01 dumb row carries these (#297); an S3 member's
-				///settings has none, so its vitals stay dashed.
+				//Both S3 (#335) and ESP-01 (#297) rows carry these now; a member
+				//on older firmware omits them and its vitals stay dashed.
 				heapC.textContent = s.heap !== undefined ? Math.round(s.heap / 1024) + " KB" : "—";
 				rssiC.textContent = s.rssi !== undefined ? s.rssi + " dBm" : "—";
 				upC.textContent = s.up !== undefined ? formatUptime(s.up) : "—";

@@ -71,12 +71,18 @@ inline ClusterVerdict validateMemberTable(const ClusterMemberTable& table,
   int maxRow = -1;
   for (int i = 0; i < table.count; i++) {
     const ClusterMemberDef& m = table.members[i];
-    if (m.width == 0) return {false, "Member width must be at least 1"};
     if (m.row >= CLUSTER_MAX_MEMBERS) {
       return {false, "Row index beyond the member cap"};
     }
+    // #333 warm-standby: a width-0 member is OFF-GRID — it keeps membership
+    // (pings, digest, promote rank) but claims no columns, so it never tiles
+    // a row. Its row/col are ignored; skip it from every grid computation.
+    if (m.width == 0) continue;
     if (m.row > maxRow) maxRow = m.row;
   }
+  // #333: at least one member must render — an all-off-grid table (every
+  // member width 0) would "enable" a cluster that shows nothing anywhere.
+  if (maxRow == -1) return {false, "No rendering members (all off-grid)"};
 
   // Tile each row left to right: every cursor position must be the start
   // of exactly one member span (coincident mirror twins advance together,
@@ -84,7 +90,7 @@ inline ClusterVerdict validateMemberTable(const ClusterMemberTable& table,
   for (int r = 0; r <= maxRow; r++) {
     int inRow = 0;
     for (int i = 0; i < table.count; i++) {
-      if (table.members[i].row == r) inRow++;
+      if (table.members[i].row == r && table.members[i].width != 0) inRow++;
     }
     if (inRow == 0) return {false, "Rows must be contiguous from 0"};
 
@@ -94,7 +100,7 @@ inline ClusterVerdict validateMemberTable(const ClusterMemberTable& table,
       int span = -1;
       for (int i = 0; i < table.count; i++) {
         const ClusterMemberDef& m = table.members[i];
-        if (m.row != r || m.col != cursor) continue;
+        if (m.row != r || m.col != cursor || m.width == 0) continue;
         if (span != -1 && m.width != span) {
           return {false, "Members overlap"};
         }
