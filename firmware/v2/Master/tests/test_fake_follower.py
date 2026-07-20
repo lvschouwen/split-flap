@@ -430,6 +430,49 @@ def test_default_follower_reports_no_plat(follower):
     assert "plat" not in json.loads(body)
 
 
+# --- deviceRole variant (#332) --------------------------------------------------------
+
+@pytest.fixture()
+def monitor_follower():
+    """An S3 follower reporting deviceRole=headless-monitor: the additive
+    role key on join/ping replies feeds the leader's succession tiers
+    (ordering pinned natively in test_cluster_digest; this fixture is the
+    wire-shape pin + bench drill vehicle)."""
+    server, state = make_server(0, name="monitor-node", rev="abc1234",
+                                width=0, role="headless-monitor",
+                                reboot_secs=0.1)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{port}", state
+    server.shutdown()
+
+
+def test_role_join_reply_carries_role(monitor_follower):
+    base, _ = monitor_follower
+    status, body = join(base)
+    assert status == 200
+    assert json.loads(body)["role"] == "headless-monitor"
+
+
+def test_role_ping_reply_carries_role(monitor_follower):
+    base, _ = monitor_follower
+    join(base)
+    status, body = post(base, "/cluster/ping")
+    assert status == 200
+    reply = json.loads(body)
+    assert reply["role"] == "headless-monitor"
+    assert reply["state"] == "clustered"
+
+
+def test_default_follower_reports_no_role(follower):
+    # Absent role = pre-#332 peer — the leader's tiers keep the old
+    # width-0-preferred rule for it.
+    base, _ = follower
+    _, body = join(base)
+    assert "role" not in json.loads(body)
+
+
 def test_rollback_drill_keeps_old_rev(follower):
     base, state = follower
     state.rollback = True

@@ -635,6 +635,9 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
         // Absent = same platform as this leader (#297); an ESP-01 row
         // reports "esp01" and is excluded from firmware convergence.
         m.plat = clusterExtractJsonString(body, "plat");
+        // Absent = pre-#332 peer; the succession tiers treat "" as the old
+        // width-0-preferred rule so a mixed-rev cluster is unchanged.
+        m.role = clusterExtractJsonString(body, "role");
         m.reportedWidth = clusterExtractJsonInt(body, "width", 0);
         // The handshake ends with a re-send of the current segment.
         m.renderDirty = segments[item.index].length() > 0;
@@ -658,6 +661,10 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
       if (rev.length() > 0) m.rev = rev;
       String plat = clusterExtractJsonString(body, "plat");
       if (plat.length() > 0) m.plat = plat;
+      // #332: ping refresh keeps a live role change (role picker POST on the
+      // member) flowing into the succession tiers without a re-join.
+      String role = clusterExtractJsonString(body, "role");
+      if (role.length() > 0) m.role = role;
       m.reportedWidth = clusterExtractJsonInt(body, "width", m.reportedWidth);
     }
     if (wasDegraded) {
@@ -1439,6 +1446,7 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
     out.failures = runtimes[i].failures;
     out.rev = runtimes[i].rev;
     out.plat = runtimes[i].plat;
+    out.role = runtimes[i].role;
     out.reportedWidth = runtimes[i].reportedWidth;
     out.updating = rollout.phase != ClusterRolloutPhase::Idle &&
                    rollout.memberIndex == i;

@@ -112,6 +112,11 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
       out += ",\"plat\":";
       appendJsonString(out, m.plat);
     }
+    if (m.role.length() > 0) {
+      // #332 additive: absent = pre-#332 peer (treated as "display").
+      out += ",\"role\":";
+      appendJsonString(out, m.role);
+    }
     out += ",\"reportedWidth\":";
     out += m.reportedWidth;
     if (m.healthValid) {
@@ -176,20 +181,33 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
 // Self (empty host) and foreign-platform members (ESP-01, #297) are excluded:
 // only another S3 can promote. Rides the digest so each follower learns its
 // own rank by matching its `you` index against this list.
+// #332: a member's succession tier, from the additive `role` join/ping-reply
+// key. Lower = preferred. Width-0 with role absent keeps the pre-#332
+// preferred-successor slot (a mixed-rev cluster behaves as before
+// convergence); width-0 with role "display" (unit-less display board) ranks
+// with spare — below a real rendering row, never dropped. A monitor is the
+// true last resort: promoting it kills the dashboard, but it still saves a
+// wall whose only surviving S3 it is.
+inline int clusterSuccessorTier(const String& role, int width) {
+  if (width > 0) return 1;  // rendering row (headless roles force width 0)
+  if (role.length() == 0 || role == "headless-backup") return 0;
+  if (role == "headless-monitor") return 3;
+  return 2;  // headless-spare + width-0 "display"
+}
+
 inline String clusterSuccessorList(const ClusterLeaderStatus& st) {
   String out;
-  // Two passes so a width-0 warm-standby backup (#333 — no row of its own to
-  // lose, spare capacity) outranks the rendering rows: preferred successors
-  // (rank 0) first, then the rendering S3 followers, each in table order.
-  for (int pass = 0; pass < 2; pass++) {
-    const bool wantBackup = (pass == 0);
+  // Tiered passes (#333 gave width-0 backups rank 0; #332 splits the width-0
+  // pool by role): backup > rendering rows > spare > monitor, each tier in
+  // table order.
+  for (int tier = 0; tier <= 3; tier++) {
     for (int i = 0; i < st.memberCount; i++) {
       const ClusterLeaderMemberStatus& m = st.members[i];
       if (m.host.length() == 0) continue;  // the leader's own row
       if (clusterMemberPlatForeign(m.plat, CLUSTER_LEADER_PLAT)) {
         continue;  // ESP-01 / foreign board — never a takeover candidate
       }
-      if ((m.width == 0) != wantBackup) continue;  // this pass's tier only
+      if (clusterSuccessorTier(m.role, m.width) != tier) continue;
       if (out.length()) out += ',';
       out += String(i);
     }

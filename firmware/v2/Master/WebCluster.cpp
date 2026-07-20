@@ -162,8 +162,17 @@ void webClusterRegister(AsyncWebServer& server) {
     clusterFaultMaskHex(snap.units, snap.displayWidth, mask, sizeof(mask));
     WearAssessment wear;
     assessWear(snap.units, snap.displayWidth, wear);
+    // #332 additive: our deviceRole feeds the leader's succession tiers
+    // (backup > rendering > spare > monitor). Absent = pre-#332 peer.
+    String selfRole;
+    {
+      WebStateLock lock;
+      if (liveSettings) selfRole = liveSettings->deviceRole;
+    }
     String out = "{\"name\":";
     appendJsonString(out, effectiveName);
+    out += ",\"role\":";
+    appendJsonString(out, selfRole);
     out += ",\"rev\":\"" GIT_REV "\",\"width\":";
     out += (int)snap.displayWidth;
     out += ",\"detected\":";
@@ -293,6 +302,15 @@ void webClusterRegister(AsyncWebServer& server) {
     out += clusterPingHealthJson(snap.units, snap.displayWidth,
                                  snap.detectedUnitCount, snap.faultyUnitCount,
                                  wear.flaggedCount > 0, GIT_REV);
+    // #332 additive: refresh our role every ping so a live role change
+    // reorders the leader's succession tiers without a re-join.
+    String selfRole;
+    {
+      WebStateLock lock;
+      if (liveSettings) selfRole = liveSettings->deviceRole;
+    }
+    out += ",\"role\":";
+    appendJsonString(out, selfRole);
     out += '}';
     request->send(200, "application/json", out);
   });

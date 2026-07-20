@@ -448,6 +448,70 @@ static void test_successor_list_prefers_zero_width_backup() {
   TEST_ASSERT_EQUAL_STRING("2,1", clusterSuccessorList(st).c_str());
 }
 
+// #332: role-aware succession tiers — backup > rendering display rows >
+// spare > monitor. Role rides the join/ping replies (absent = pre-#332 peer
+// or display); a monitor is a true last resort (promoting it kills the
+// dashboard) but still saves an all-ESP-01 wall.
+static void test_successor_role_tiers_full_order() {
+  ClusterLeaderStatus st = makeStatus();
+  st.memberCount = 5;
+  st.members[1].role = "display";  // rendering row, width 16 (fixture)
+  st.members[2].host = "192.168.1.50";
+  st.members[2].plat = "";
+  st.members[2].width = 0;
+  st.members[2].role = "headless-monitor";
+  st.members[3].host = "192.168.1.51";
+  st.members[3].plat = "";
+  st.members[3].width = 0;
+  st.members[3].role = "headless-backup";
+  st.members[4].host = "192.168.1.52";
+  st.members[4].plat = "";
+  st.members[4].width = 0;
+  st.members[4].role = "headless-spare";
+  // backup(3) > rendering(1) > spare(4) > monitor(2)
+  TEST_ASSERT_EQUAL_STRING("3,1,4,2", clusterSuccessorList(st).c_str());
+}
+
+static void test_successor_unknown_role_width0_keeps_backup_tier() {
+  // Pre-#332 peer: width 0, role absent — keeps today's preferred-successor
+  // slot so a mixed-rev cluster behaves exactly as before convergence.
+  ClusterLeaderStatus st = makeStatus();
+  st.memberCount = 3;
+  st.members[2].host = "192.168.1.50";
+  st.members[2].plat = "";
+  st.members[2].width = 0;
+  st.members[2].role = "";
+  TEST_ASSERT_EQUAL_STRING("2,1", clusterSuccessorList(st).c_str());
+}
+
+static void test_successor_width0_display_role_ranks_with_spare() {
+  // A display-role board reporting width 0 (unit-less) must not vanish from
+  // the list — it ranks with spare, below real rendering rows.
+  ClusterLeaderStatus st = makeStatus();
+  st.memberCount = 3;
+  st.members[2].host = "192.168.1.50";
+  st.members[2].plat = "";
+  st.members[2].width = 0;
+  st.members[2].role = "display";
+  TEST_ASSERT_EQUAL_STRING("1,2", clusterSuccessorList(st).c_str());
+}
+
+static void test_successor_monitor_alone_still_listed() {
+  ClusterLeaderStatus st = makeStatus();
+  st.members[1].width = 0;
+  st.members[1].role = "headless-monitor";
+  TEST_ASSERT_EQUAL_STRING("1", clusterSuccessorList(st).c_str());
+}
+
+static void test_status_members_carry_role() {
+  ClusterLeaderStatus st = makeStatus();
+  st.members[1].role = "headless-monitor";
+  String s = clusterStatusJson(st);
+  TEST_ASSERT_TRUE(s.indexOf("\"role\":\"headless-monitor\"") >= 0);
+  // The self row / roleless members emit no role key (additive, like plat).
+  TEST_ASSERT_TRUE(s.indexOf("\"role\":\"\"") < 0);
+}
+
 static void test_digest_carries_succ_field() {
   ClusterLeaderStatus st = makeStatus();
   String rows[1] = {"HELLO"};
@@ -487,6 +551,11 @@ int main(int, char**) {
   RUN_TEST(test_successor_list_excludes_esp01);
   RUN_TEST(test_successor_list_orders_multiple_s3_by_index);
   RUN_TEST(test_successor_list_prefers_zero_width_backup);
+  RUN_TEST(test_successor_role_tiers_full_order);
+  RUN_TEST(test_successor_unknown_role_width0_keeps_backup_tier);
+  RUN_TEST(test_successor_width0_display_role_ranks_with_spare);
+  RUN_TEST(test_successor_monitor_alone_still_listed);
+  RUN_TEST(test_status_members_carry_role);
   RUN_TEST(test_digest_carries_succ_field);
   RUN_TEST(test_digest_carries_mode_field);
   RUN_TEST(test_digest_mode_defaults_empty);

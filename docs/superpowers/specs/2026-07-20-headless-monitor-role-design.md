@@ -45,11 +45,10 @@ today's behavior until the fleet converges. Pure function, natively tested.
 
 ## 3. Digest staleness
 
-- Follower tracks `digestReceivedMs` (millis of last accepted leader ping that
-  carried a digest).
-- Additive `digestAgeMs` in the **follower's `/settings` JSON** (key absent
-  when no digest has ever been received). `GET /cluster/digest` stays byte-raw — its consumers
-  (follower page, #294) are wire-pinned.
+Already served: `GET /cluster/digest` responds `{"ageMs":N,"digest":{...}}` on
+master today (predates this spec — discovered during #338 bench). No wire
+change; the monitor UI reads the existing `ageMs`. The original plan to add
+`digestAgeMs` to `/settings` is DROPPED.
 
 ## 4. Monitor UI (`data/script.js` + `data/style.css` only)
 
@@ -68,8 +67,9 @@ follower stand-down behavior).
 
 - Native: successor-tier table (all role mixes, mixed-rev fallback), role
   parse/serialize round-trip, `/settings` `digestAgeMs` emission.
-- Pytest: `fake_follower` gains a `role` knob; assert the leader's digest
-  `succ` order for a 3-role synthetic cluster (pins the wire key both ways).
+- Pytest: `fake_follower` gains a `role` knob in its join/ping replies (pins
+  the wire key follower-side; the leader's succ ordering is pure C++ and is
+  asserted in the native tier tests — pytest has no leader to drive).
 - Remote bench (no hands needed): set .20's role through the UI POST per role,
   curl the leader digest, assert `succ` reorder live; monitor-page smoke via
   browser fan-out against the real fleet.
