@@ -457,6 +457,11 @@ static void displayTaskMain(void*) {
   static UnitFacts busFacts[UNITS_AMOUNT];
 
   unitBusInit();
+  // Subscribe BEFORE the boot probe/reflash/boot-home block: those ops carry
+  // wdtFeed() calls that are silent no-ops for an unsubscribed task, and a
+  // wedged I2C transaction on the cold first scan must still trip the dog.
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: display subscribe -> %s\n", esp_err_to_name(e));
   // Load-bearing pre-probe delay (v1 #88): probing earlier catches units
   // still in twiboot's boot window and the CHIPINFO read pins them there.
   delay(1500);
@@ -501,8 +506,6 @@ static void displayTaskMain(void*) {
 
   DisplayCommand cmd;
   int heartbeatSlot = 0;  // round-robin cursor for the scheduled poll (#310)
-  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
-    SerialPrintf("wdt: display subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
     wdtFeed();
 #ifdef TWDT_HANG_TEST

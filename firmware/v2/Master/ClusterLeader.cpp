@@ -1394,7 +1394,7 @@ void clusterLeaderTick() {
     String body;
     int status = clusterHttpRequest(items[i].url, items[i].body, body);
     applyMemberResult(items[i], status, body);
-    wdtFeed();  // #314: up to CLUSTER_MAX_MEMBERS blocking sends in one tick
+    wdtFeed();  // #314: bounds the blocking send (one member per tick, #320)
   }
 
   // Fleet firmware convergence (#276) — after the fan-out so renders and
