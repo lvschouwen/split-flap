@@ -2481,9 +2481,15 @@ function updateClusterFollowerCard(s) {
 		//leaderName/leaderHost come off an unauthenticated LAN POST — text
 		//nodes only (same rule as the banner).
 		var leader = s.clusterLeaderName || s.clusterLeaderHost || "the leader";
+		//#332: a monitor renders nothing — its wall mirror above IS the
+		//product. Other roles keep the row wording.
 		document.getElementById("clusterFollowerLine").textContent =
-			"This board renders row " + (Number(s.clusterRow) + 1) + " of " + leader +
-			" — text, mode and clock come from the leader; maintenance stays local.";
+			s.deviceRole === "headless-monitor"
+			? "This board monitors " + leader + "'s wall — the mirror above is " +
+			  "the live dashboard (greyed when the leader goes silent). It " +
+			  "promotes only as a last resort."
+			: "This board renders row " + (Number(s.clusterRow) + 1) + " of " + leader +
+			  " — text, mode and clock come from the leader; maintenance stays local.";
 		//Same health the banner reports: grace/fallback must not read green.
 		if (s.clusterState === "grace") setClusterPill("waiting for leader", "off");
 		else if (s.clusterState === "local-fallback") setClusterPill("leader lost", "bad");
@@ -2613,8 +2619,13 @@ function updateClusterFromStatus(st) {
 		//to esp32s3. The #317 wire-auth chip stays non-self only (the leader's
 		//own row is not a wire link). hmac = leader signs to it.
 		rev.textContent = "";
+		//#332: headless role tag (succession tier driver) — absent or
+		//"display" stays untagged; wire strings are text nodes ONLY.
+		var roleTag = saved[i].role && saved[i].role !== "display"
+			? " · " + saved[i].role.replace("headless-", "") : "";
 		rev.appendChild(document.createTextNode(
-			(saved[i].rev || "—") + " · " + (saved[i].plat || "esp32s3") + "  "));
+			(saved[i].rev || "—") + " · " + (saved[i].plat || "esp32s3") +
+			roleTag + "  "));
 		if (!saved[i].self) {
 			var authChip = document.createElement("span");
 			authChip.className = "pill " + (saved[i].hmac ? "ok" : "off");

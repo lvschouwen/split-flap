@@ -54,6 +54,11 @@ struct LeaderLock {
 // enabledAtomic check; always take LeaderLock.
 static std::atomic<bool> enabledAtomic{false};
 static String leaderDeviceName;          // set once in init, read-only after
+// #332: this board's own deviceRole for the self row of /cluster/status —
+// seeded at webEndpointsInit, pushed by the settings drain (netTask), read
+// under LeaderLock by statusFillLocked. The runtime table never carries it
+// (the self row is never joined/pinged over HTTP).
+static String leaderSelfRole;
 static SettingsStore* leaderStore = nullptr;  // NVS writes: clusterTask only
 
 // All guarded by leaderMutex.
@@ -299,6 +304,11 @@ void clusterLeaderSubmitText(const String& text, const String& alignment,
                              int speed) {
   submitGrid("t:" + alignment + ":" + String(speed) + ":" + text, false, text,
              "", alignment, speed);
+}
+
+void clusterLeaderSetSelfRole(const String& role) {
+  LeaderLock lock;
+  leaderSelfRole = role;
 }
 
 void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
@@ -635,6 +645,10 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
         // Absent = same platform as this leader (#297); an ESP-01 row
         // reports "esp01" and is excluded from firmware convergence.
         m.plat = clusterExtractJsonString(body, "plat");
+        // Absent = pre-#332 peer. NOT the same as an explicit "display":
+        // "" keeps the old width-0-preferred slot (tier 0), "display" at
+        // width 0 ranks with spare — so a mixed-rev cluster is unchanged.
+        m.role = clusterExtractJsonString(body, "role");
         m.reportedWidth = clusterExtractJsonInt(body, "width", 0);
         // The handshake ends with a re-send of the current segment.
         m.renderDirty = segments[item.index].length() > 0;
@@ -658,6 +672,10 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
       if (rev.length() > 0) m.rev = rev;
       String plat = clusterExtractJsonString(body, "plat");
       if (plat.length() > 0) m.plat = plat;
+      // #332: ping refresh keeps a live role change (role picker POST on the
+      // member) flowing into the succession tiers without a re-join.
+      String role = clusterExtractJsonString(body, "role");
+      if (role.length() > 0) m.role = role;
       m.reportedWidth = clusterExtractJsonInt(body, "width", m.reportedWidth);
     }
     if (wasDegraded) {
@@ -1439,6 +1457,7 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
     out.failures = runtimes[i].failures;
     out.rev = runtimes[i].rev;
     out.plat = runtimes[i].plat;
+    out.role = runtimes[i].role;
     out.reportedWidth = runtimes[i].reportedWidth;
     out.updating = rollout.phase != ClusterRolloutPhase::Idle &&
                    rollout.memberIndex == i;
@@ -1446,6 +1465,9 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
     out.hmac = runtimes[i].hmacKeyValid;  // signing to this member (#313)
     if (clusterMemberIsSelf(table.members[i])) {
       out.rev = GIT_REV;
+      // #332: the self row is never joined/pinged, so its runtime role stays
+      // empty — inject our live deviceRole like GIT_REV above (review MED).
+      out.role = leaderSelfRole;
       out.healthValid = true;
       out.faulty = snap.faultyUnitCount;
       out.detected = snap.detectedUnitCount;

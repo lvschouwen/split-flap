@@ -60,6 +60,7 @@ struct ClusterMemberRuntime {
   bool renderDirty = false;    // segment changed since the last acked render
   String rev;                  // follower firmware rev (join + ping replies, #276)
   String plat;                 // reported platform, "" = same as leader (#297)
+  String role;                 // reported deviceRole, "" = pre-#332 peer (#332)
   int reportedWidth = 0;       // join-handshake width fact
   uint32_t logCursor = 0;      // last ingested byte cursor from GET /log (#318 E)
   ClusterMemberHealth health;  // last #294 ping-reply health

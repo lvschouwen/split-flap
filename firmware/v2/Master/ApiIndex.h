@@ -143,6 +143,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"degraded",  "member marked degraded"},
   {"failures",  "consecutive contact failures"},
   {"plat",      "member platform (esp01/esp32; absent = leader's)"},
+  {"role",      "member deviceRole (#332 tiers; absent = pre-#332 peer, keeps the old width-0-preferred slot)"},
   {"rollout",   "fleet firmware rollout state"},
   {"updating",  "a member firmware push is in flight"},
   {"updateBlocked", "rollout gave up after the attempt cap"},

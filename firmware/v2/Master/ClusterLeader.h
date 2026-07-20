@@ -36,6 +36,7 @@ struct ClusterLeaderMemberStatus {
   int failures = 0;
   String rev;            // follower firmware rev from the join reply
   String plat;           // reported platform, "" = same as leader (#297)
+  String role;           // reported deviceRole, "" = pre-#332 peer (#332)
   int reportedWidth = 0; // join-handshake width fact
   bool updating = false;      // fleet rollout (#276) is converging this member
   bool updateBlocked = false; // rollout gave up (attempt cap) on this member
@@ -111,6 +112,10 @@ void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
 // #317: blank the follower rows (leader's own row = the local Stop). Leaves
 // lastContentKey so the reroute stays blank until the clock content moves.
 void clusterLeaderBlankWall();
+// #332: this board's own deviceRole for the /cluster/status self row (the
+// runtime table never sees it — the self row is not an HTTP peer). Seeded at
+// webEndpointsInit, pushed by the settings drain on change.
+void clusterLeaderSetSelfRole(const String& role);
 
 ClusterLeaderStatus clusterLeaderStatusGet();
 
