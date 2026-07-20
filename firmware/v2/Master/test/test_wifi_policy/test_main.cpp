@@ -123,16 +123,73 @@ static void test_config_submitted_while_connected_saves_and_reboots() {
                     wifiPolicyStep(st, 90000, true, true, true));
 }
 
-static void test_link_drop_after_connect_never_reopens_portal() {
-  // v1 parity: WiFi.setAutoReconnect(true) owns reconnection; the policy
-  // stays parked in Connected no matter what the link reports.
-  WifiPolicyState st;
+// Convenience: reach Connected phase with a link, ready for drop tests.
+static void connect(WifiPolicyState& st) {
   quietStep(st, 1000, true);
   wifiPolicyStep(st, 2000, true, true, false);  // -> Connected
-  TEST_ASSERT_EQUAL(WifiAction::None, quietStep(st, 500000, true));
+}
+
+static void test_brief_link_drop_after_connect_does_not_reboot() {
+  // The SDK auto-reconnect owns transient drops: within the reconnect window
+  // the policy stays parked in Connected, no reboot.
+  WifiPolicyState st;
+  connect(st);
   TEST_ASSERT_EQUAL(WifiAction::None,
-                    quietStep(st, 500000 + WIFI_PORTAL_TIMEOUT_MS, true));
+                    wifiPolicyStep(st, 2000 + WIFI_RECONNECT_TIMEOUT_MS - 1,
+                                   false, true, false));
   TEST_ASSERT_EQUAL(WifiPhase::Connected, st.phase);
+}
+
+static void test_sustained_link_drop_after_connect_reboots() {
+  // #328: a continuous outage past the reconnect window means the SDK is
+  // wedged — reboot to re-run the join. Never re-open the portal.
+  WifiPolicyState st;
+  connect(st);
+  // First down tick arms the outage clock (link went down at t=2000).
+  TEST_ASSERT_EQUAL(WifiAction::None, quietStep(st, 3000, true));
+  WifiAction a =
+      wifiPolicyStep(st, 3000 + WIFI_RECONNECT_TIMEOUT_MS, false, true, false);
+  TEST_ASSERT_EQUAL(WifiAction::Reboot, a);
+  TEST_ASSERT_EQUAL(WifiPhase::Connected, st.phase);  // reboot, not portal
+}
+
+static void test_link_recovery_resets_reconnect_watchdog() {
+  // A drop that recovers before the window must not carry over: the outage
+  // clock resets on link-up, so a later brief drop starts fresh.
+  WifiPolicyState st;
+  connect(st);
+  quietStep(st, 3000, true);                                  // down, arm clock
+  TEST_ASSERT_EQUAL(WifiAction::None,
+                    wifiPolicyStep(st, 60000, true, true, false));  // recovered
+  // A fresh drop 89 s later is still within a new window — no reboot.
+  quietStep(st, 61000, true);
+  TEST_ASSERT_EQUAL(WifiAction::None,
+                    wifiPolicyStep(st, 61000 + WIFI_RECONNECT_TIMEOUT_MS - 1,
+                                   false, true, false));
+  TEST_ASSERT_EQUAL(WifiPhase::Connected, st.phase);
+}
+
+static void test_reconnect_watchdog_survives_millis_rollover() {
+  // Outage clock armed just before the uint32 wrap; the deadline lands past
+  // it. Signed-difference math must hold the window across the seam.
+  WifiPolicyState st;
+  connect(st);
+  const uint32_t nearWrap = 0xFFFFFF00u;
+  TEST_ASSERT_EQUAL(WifiAction::None, quietStep(st, nearWrap, true));  // arm
+  const uint32_t afterWrap = nearWrap + WIFI_RECONNECT_TIMEOUT_MS;     // wrapped
+  TEST_ASSERT_TRUE(afterWrap < nearWrap);                             // sanity
+  TEST_ASSERT_EQUAL(WifiAction::None, quietStep(st, afterWrap - 1, true));
+  TEST_ASSERT_EQUAL(WifiAction::Reboot, quietStep(st, afterWrap, true));
+}
+
+static void test_config_submitted_while_disconnected_still_saves_and_reboots() {
+  // A "move to another network" submission must win even mid-outage — the
+  // reconnect watchdog must not shadow a staged credential change.
+  WifiPolicyState st;
+  connect(st);
+  quietStep(st, 3000, true);  // link down, watchdog armed
+  TEST_ASSERT_EQUAL(WifiAction::SaveAndReboot,
+                    wifiPolicyStep(st, 4000, false, true, true));
 }
 
 // --- millis() rollover -----------------------------------------------------------
@@ -167,7 +224,11 @@ int main(int, char**) {
   RUN_TEST(test_portal_timeout_reboots_to_retry);
   RUN_TEST(test_portal_submission_wins_over_simultaneous_timeout);
   RUN_TEST(test_config_submitted_while_connected_saves_and_reboots);
-  RUN_TEST(test_link_drop_after_connect_never_reopens_portal);
+  RUN_TEST(test_brief_link_drop_after_connect_does_not_reboot);
+  RUN_TEST(test_sustained_link_drop_after_connect_reboots);
+  RUN_TEST(test_link_recovery_resets_reconnect_watchdog);
+  RUN_TEST(test_reconnect_watchdog_survives_millis_rollover);
+  RUN_TEST(test_config_submitted_while_disconnected_still_saves_and_reboots);
   RUN_TEST(test_join_timeout_survives_millis_rollover);
   return UNITY_END();
 }

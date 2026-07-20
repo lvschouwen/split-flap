@@ -3,6 +3,7 @@
 #include <DNSServer.h>
 #include <ESPmDNS.h>
 #include <WiFi.h>
+#include <atomic>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -49,6 +50,33 @@ struct StageLock {
   StageLock& operator=(const StageLock&) = delete;
 };
 
+// #328 supplement — event-driven STA re-kick, on top of the policy watchdog.
+// WiFi.setAutoReconnect(true) is supposed to own reconnection, but its esp_wifi
+// handler can give up or wedge after an AP power-cycle. This re-issues a
+// connect on every STA disconnect while we intend to be online, throttled so it
+// neither floods the log nor fights the driver's own retries. It recovers most
+// drops in seconds; the WifiPolicy watchdog reboot stays the guaranteed backstop
+// if even this cannot. Runs in the Arduino event task (not netTask): the reads
+// "do we want the link up?" answer from an atomic that netTask publishes each
+// tick — same cross-task discipline as the stageMutex-guarded fields, without a
+// lock the driver's event task must never block on.
+static const uint32_t WIFI_RECONNECT_KICK_MS = 5000;
+static uint32_t lastReconnectKickMs = 0;                 // event-task-private
+static std::atomic<bool> staReconnectWanted{false};      // netTask -> event task
+
+static void onWifiStaEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED) return;
+  // Only re-kick when a live association is what we want (Connected, no reboot
+  // pending). Portal/Boot/Joining leave STA retries to WifiPolicy.
+  if (!staReconnectWanted.load(std::memory_order_relaxed)) return;
+  uint32_t now = millis();
+  if (now - lastReconnectKickMs < WIFI_RECONNECT_KICK_MS) return;
+  lastReconnectKickMs = now;
+  SerialPrintf("wifi: STA disconnected (reason %u) — re-issuing connect\n",
+               (unsigned)info.wifi_sta_disconnected.reason);
+  WiFi.reconnect();
+}
+
 void wifiServiceInit(AsyncWebServer& server, MasterSettings& settings,
                      SettingsStore& store, const String& effectiveDeviceName) {
   stageMutex = xSemaphoreCreateMutex();
@@ -60,6 +88,8 @@ void wifiServiceInit(AsyncWebServer& server, MasterSettings& settings,
   liveSettings = &settings;
   settingsStore = &store;
   deviceName = effectiveDeviceName;
+  // #328: supplement setAutoReconnect with the event-driven re-kick above.
+  WiFi.onEvent(onWifiStaEvent, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 }
 
 void wifiStagePortalConfig(const String& ssid, const String& pass) {
@@ -260,7 +290,12 @@ void wifiServiceTick() {
         break;
       }
       case WifiAction::Reboot:
-        scheduleRestart(F("setup portal timed out — retrying stored WiFi"));
+        // Same action, two origins: a Connected-phase Reboot is the #328
+        // reconnect watchdog (link wedged after an AP power-cycle); otherwise
+        // it is the portal-timeout retry. Distinguish them in the log.
+        scheduleRestart(policy.phase == WifiPhase::Connected
+                            ? F("WiFi link lost too long — rebooting to re-join (#328)")
+                            : F("setup portal timed out — retrying stored WiFi"));
         break;
       case WifiAction::None:
         break;
@@ -271,4 +306,10 @@ void wifiServiceTick() {
     Serial.flush();
     ESP.restart();
   }
+
+  // #328: publish the event-task re-kick gate (atomic hand-off) — we only want
+  // the STA-disconnect handler firing while Connected and not mid-reboot.
+  staReconnectWanted.store(
+      policy.phase == WifiPhase::Connected && !restartPending,
+      std::memory_order_relaxed);
 }

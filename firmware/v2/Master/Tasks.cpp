@@ -47,6 +47,7 @@ static int effectiveWidthOverride() {
 #include "MqttService.h"
 #include "StatusLed.h"
 #include "SystemStats.h"
+#include "TaskWatchdog.h"
 #include "UnitBus.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
@@ -234,6 +235,7 @@ static void runBootHomeSequence(DisplaySnapshot& local, UnitFacts* busFacts) {
   SerialPrintf("boot-home: staggering %d unit(s) in batches of %d\n", n,
                BOOT_HOME_BATCH_SIZE);
   for (int i = 0; i < n; i += BOOT_HOME_BATCH_SIZE) {
+    wdtFeed();  // #314: each batch waits on unit settle — keep the dog fed
     if (unitBusAbortRequested()) break;
     uint8_t batch[BOOT_HOME_BATCH_SIZE];
     int batchN = 0;
@@ -375,6 +377,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   uint8_t batch[REFLASH_BATCH_SIZE];
   int inBatch = 0;
   for (int k = 0; k < total; k++) {
+    wdtFeed();  // #314: I2C page-streaming is the longest displayTask op
     if (unitBusAbortRequested()) {
       cancelled = true;
       break;
@@ -427,6 +430,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // Final reprobe + health poll: published topology and fw grades are
   // execution-time truth (a failed/cancelled unit shows as bootloader and
   // stays pinned there — deliberate, see block comment).
+  wdtFeed();  // #314: no feed between the trailing settle and boot-home otherwise
   unitBusProbe(busFacts, UNITS_AMOUNT);
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
@@ -436,6 +440,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // render) would home every flashed unit at once — the #305 inrush #309
   // exists to prevent. Targets only the still-unhomed units; a cancel leaves
   // the abort flag set so this bails and the queued Stop broadcast-homes.
+  wdtFeed();  // #314: boot-home of just-flashed units
   runBootHomeSequence(local, busFacts);
   reflashProgressFinish(local.reflash, cancelled);
   snapshotPublish(local);  // gate reopens here
@@ -452,6 +457,11 @@ static void displayTaskMain(void*) {
   static UnitFacts busFacts[UNITS_AMOUNT];
 
   unitBusInit();
+  // Subscribe BEFORE the boot probe/reflash/boot-home block: those ops carry
+  // wdtFeed() calls that are silent no-ops for an unsubscribed task, and a
+  // wedged I2C transaction on the cold first scan must still trip the dog.
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: display subscribe -> %s\n", esp_err_to_name(e));
   // Load-bearing pre-probe delay (v1 #88): probing earlier catches units
   // still in twiboot's boot window and the CHIPINFO read pins them there.
   delay(1500);
@@ -497,6 +507,12 @@ static void displayTaskMain(void*) {
   DisplayCommand cmd;
   int heartbeatSlot = 0;  // round-robin cursor for the scheduled poll (#310)
   for (;;) {
+    wdtFeed();
+#ifdef TWDT_HANG_TEST
+    // #314 bench: after 20 s of normal running, wedge displayTask forever so
+    // the TWDT must reboot within ~30 s. NEVER defined in a shipping build.
+    if (millis() > 20000) { for (;;) { /* no wdtFeed() → dog fires */ } }
+#endif
     // Timed wait: a real command preempts (display writes / reflash / Probe);
     // an idle timeout synthesizes one opportunistic heartbeat read.
     if (xQueueReceive(displayQueue, &cmd,
@@ -602,6 +618,7 @@ static void displayTaskMain(void*) {
             int badPolls = 0;
             uint32_t start = millis();
             while (millis() - start < SELF_TEST_TIMEOUT_MS) {
+              wdtFeed();  // #314: self-test polls the unit until it reports an outcome
               if (unitBusAbortRequested()) {
                 slot.outcome = SelfTestOutcome::Aborted;
                 break;
@@ -834,7 +851,10 @@ static void clockTaskMain(void*) {
   SerialPrintf("clockTask up on core %d\n", xPortGetCoreID());
   TickType_t lastWake = xTaskGetTickCount();
   String lastQueued;  // in-flight dedup, see ClockPolicy.h contract
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: clock subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
+    wdtFeed();
     vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(1000));
 
     DisplaySnapshot snap = displaySnapshotGet();
@@ -945,7 +965,10 @@ struct NetTaskContext {
 static void netTaskMain(void* arg) {
   SerialPrintf("netTask up on core %d\n", xPortGetCoreID());
   auto* ctx = static_cast<NetTaskContext*>(arg);
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: net subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
+    wdtFeed();
     wifiServiceTick();
     webEndpointsLoop(*ctx->settings, *ctx->store);
     clusterFollowerServiceTick(*ctx->store);  // #272: decay + NVS + renders
@@ -963,7 +986,10 @@ static void netTaskMain(void* arg) {
 static void mqttTaskMain(void*) {
   SerialPrintf("mqttTask up on core %d\n", xPortGetCoreID());
   MqttInboxMessage msg;
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: mqtt subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
+    wdtFeed();
     while (xQueueReceive(mqttInbox, &msg, 0) == pdTRUE) {
       mqttServiceHandleInbox(msg);
     }
@@ -978,7 +1004,10 @@ static void mqttTaskMain(void*) {
 // (ClusterLeader.cpp); disabled clusters make it a no-op read.
 static void clusterTaskMain(void*) {
   SerialPrintf("clusterTask up on core %d\n", xPortGetCoreID());
+  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
+    SerialPrintf("wdt: cluster subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
+    wdtFeed();
     clusterLeaderTick();
     vTaskDelay(pdMS_TO_TICKS(100));
   }

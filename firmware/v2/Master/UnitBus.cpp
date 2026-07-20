@@ -15,6 +15,7 @@
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
 #include "SplitFlapProtocol.h"
+#include "TaskWatchdog.h"  // wdtFeed() (#314)
 #include "TwibootProtocol.h"
 #include "UnitProtocolHelpers.h"
 
@@ -35,7 +36,10 @@ static constexpr uint32_t UNIT_BUS_FREQ_HZ = 100000;
 // receiveEvent ISR has time to flip its pending*Response flag.
 static constexpr uint32_t UNIT_RESPONSE_SETTLE_MS = 2;
 // How long waitForDisplayToStop() keeps polling before assuming a unit is
-// physically stuck (status byte pegged at 1) and moving on.
+// physically stuck (status byte pegged at 1) and moving on. This and any
+// other display stuck-timeout must stay <= the TWDT timeout, OR the poll
+// loop must feed the watchdog itself (it does, #314) — a jammed flap is a
+// mechanical condition this code deliberately survives, not a reboot cause.
 static constexpr uint32_t SHOW_STUCK_TIMEOUT_MS = 30000;
 
 static int toI2cAddress(int unitIndex) {
@@ -290,6 +294,7 @@ static void waitForDisplayToStop(const UnitFacts* facts, int width) {
   uint32_t waitStart = millis();
   uint32_t lastWaitLog = 0;
   while (isDisplayMoving(facts, width)) {
+    wdtFeed();  // #314: feed the TWDT through a legitimate stuck-flap wait
     if (abortRequested.load()) {
       SerialPrintln(F("Display-stop wait aborted by /stop"));
       break;
@@ -707,6 +712,7 @@ void unitBusWaitBatchIdle(const uint8_t* addrs, int count,
   delay(1000);  // let CMD_REBOOT take effect before polling
   uint32_t start = millis();
   while (millis() - start < timeoutMs) {
+    wdtFeed();  // #314: feed the TWDT through the batch-settle poll
     bool allIdle = true;
     for (int k = 0; k < count; k++) {
       // checkIfMoving takes a unit INDEX; addrs carry bus addresses.
