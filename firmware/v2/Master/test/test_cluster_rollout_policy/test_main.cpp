@@ -166,7 +166,7 @@ static void test_every_idle_transition_clears_progress() {
   clusterRolloutStart(st, 1, 2600000);
   st.bytesSent = 2600000;
   clusterRolloutUploadDone(st, 200000);
-  clusterRolloutCheckWait(st, true, String(LEADER_REV), false, LEADER_REV, 210000);
+  clusterRolloutCheckWait(st, true, String(LEADER_REV), false, false, LEADER_REV, 210000);
   TEST_ASSERT_EQUAL_UINT32(0, st.bytesSent);
   TEST_ASSERT_EQUAL_UINT32(0, st.bytesTotal);
 }
@@ -208,7 +208,7 @@ static void test_wait_converged_resets_attempts() {
   clusterRolloutUploadDone(st, 10000);
   TEST_ASSERT_EQUAL(
       (int)ClusterRolloutWait::Converged,
-      (int)clusterRolloutCheckWait(st, true, String(LEADER_REV), false, LEADER_REV,
+      (int)clusterRolloutCheckWait(st, true, String(LEADER_REV), false, false, LEADER_REV,
                                    20000));
   TEST_ASSERT_EQUAL(ClusterRolloutPhase::Idle, st.phase);
   TEST_ASSERT_EQUAL_UINT8(0, st.attempts[1]);
@@ -220,7 +220,7 @@ static void test_wait_still_waiting_while_member_down() {
   clusterRolloutStart(st, 1, 1000);
   clusterRolloutUploadDone(st, 10000);
   TEST_ASSERT_EQUAL((int)ClusterRolloutWait::Waiting,
-                    (int)clusterRolloutCheckWait(st, false, String(""), false,
+                    (int)clusterRolloutCheckWait(st, false, String(""), false, false,
                                                  LEADER_REV, 20000));
   TEST_ASSERT_EQUAL(ClusterRolloutPhase::WaitingRejoin, st.phase);
 }
@@ -233,7 +233,7 @@ static void test_wait_rollback_burns_attempt() {
   clusterRolloutUploadDone(st, 10000);
   TEST_ASSERT_EQUAL(
       (int)ClusterRolloutWait::RolledBack,
-      (int)clusterRolloutCheckWait(st, true, String("0000000"), false, LEADER_REV,
+      (int)clusterRolloutCheckWait(st, true, String("0000000"), false, false, LEADER_REV,
                                    20000));
   TEST_ASSERT_EQUAL(ClusterRolloutPhase::Idle, st.phase);
   TEST_ASSERT_EQUAL_UINT8(1, st.attempts[1]);
@@ -245,7 +245,7 @@ static void test_wait_timeout_burns_attempt() {
   clusterRolloutUploadDone(st, 10000);
   uint32_t after = 10000 + CLUSTER_ROLLOUT_REJOIN_TIMEOUT_MS;
   TEST_ASSERT_EQUAL((int)ClusterRolloutWait::TimedOut,
-                    (int)clusterRolloutCheckWait(st, false, String(""), false,
+                    (int)clusterRolloutCheckWait(st, false, String(""), false, false,
                                                  LEADER_REV, after));
   TEST_ASSERT_EQUAL(ClusterRolloutPhase::Idle, st.phase);
   TEST_ASSERT_EQUAL_UINT8(1, st.attempts[1]);
@@ -455,9 +455,68 @@ static void test_rescue_rejoin_burns_attempt() {
   clusterRolloutUploadDone(st, 10000);
   TEST_ASSERT_EQUAL((int)ClusterRolloutWait::RescueLooping,
                     (int)clusterRolloutCheckWait(st, true, String("1111111"),
-                                                 true, "1111111", 20000));
+                                                 true, false, "1111111",
+                                                 20000));
   TEST_ASSERT_EQUAL(ClusterRolloutPhase::Idle, st.phase);
   TEST_ASSERT_EQUAL_UINT8(1, st.attempts[1]);
+}
+
+static void test_rescue_cycle_accumulates_attempts_across_convergences() {
+  // Review HIGH: a poisoned image often joins looking healthy (rescue:0,
+  // matching rev — the crash comes AFTER the handshake), so the verdict
+  // can't be trusted to burn the attempt. A rescue-triggered push burns
+  // it AT START and a rescue-triggered convergence must NOT clear it —
+  // otherwise the leader re-pushes the same bad image forever.
+  ClusterRolloutState st;
+  for (int cycle = 0; cycle < CLUSTER_ROLLOUT_ATTEMPT_CAP; cycle++) {
+    clusterRolloutStartRescue(st, 2, 1000);
+    clusterRolloutUploadDone(st, 10000);
+    TEST_ASSERT_EQUAL(
+        (int)ClusterRolloutWait::Converged,
+        (int)clusterRolloutCheckWait(st, true, String("1111111"), false, true,
+                                     "1111111", 20000));
+  }
+  TEST_ASSERT_EQUAL_UINT8(CLUSTER_ROLLOUT_ATTEMPT_CAP, st.attempts[2]);
+  TEST_ASSERT_TRUE(st.blocked[2]);
+  // Blocked now gates the candidate scan even while the beacon flags.
+  ClusterMemberTable t = makeTable();
+  ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
+  primeJoined(r, LEADER_REV, "1111111");
+  r[2].plat = "esp01";
+  r[2].rescue = true;
+  TEST_ASSERT_EQUAL(-1, clusterFollowerImageNextCandidate(t, r, "1111111",
+                                                          "esp01", st, 90000));
+}
+
+static void test_non_rescue_convergence_still_clears_attempts() {
+  // A plain rev-mismatch convergence keeps the old forgiveness.
+  ClusterRolloutState st;
+  clusterRolloutStart(st, 1, 1000);
+  clusterRolloutUploadFailed(st, 100);
+  clusterRolloutStart(st, 1, 1000);
+  clusterRolloutUploadDone(st, 10000);
+  TEST_ASSERT_EQUAL(
+      (int)ClusterRolloutWait::Converged,
+      (int)clusterRolloutCheckWait(st, true, String(LEADER_REV), false, false,
+                                   LEADER_REV, 20000));
+  TEST_ASSERT_EQUAL_UINT8(0, st.attempts[1]);
+}
+
+static void test_new_stored_image_forgives_esp01_giveups() {
+  // A NEW stored image voids the poisoned-image evidence: esp01 members
+  // get fresh attempts; S3 members' state is untouched.
+  ClusterRolloutState st;
+  st.attempts[1] = 2;
+  st.attempts[2] = CLUSTER_ROLLOUT_ATTEMPT_CAP;
+  st.blocked[2] = true;
+  ClusterMemberTable t = makeTable();
+  ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
+  primeJoined(r, LEADER_REV, "1111111");
+  r[2].plat = "esp01";
+  clusterRolloutForgiveFollowerTargets(st, t, r, "esp01");
+  TEST_ASSERT_EQUAL_UINT8(2, st.attempts[1]);  // S3 member untouched
+  TEST_ASSERT_EQUAL_UINT8(0, st.attempts[2]);
+  TEST_ASSERT_FALSE(st.blocked[2]);
 }
 
 static void test_phase_names() {
@@ -504,6 +563,9 @@ int main(int, char**) {
   RUN_TEST(test_rescue_member_is_candidate_despite_matching_rev);
   RUN_TEST(test_rescue_never_unlocks_the_s3_rollout);
   RUN_TEST(test_rescue_rejoin_burns_attempt);
+  RUN_TEST(test_rescue_cycle_accumulates_attempts_across_convergences);
+  RUN_TEST(test_non_rescue_convergence_still_clears_attempts);
+  RUN_TEST(test_new_stored_image_forgives_esp01_giveups);
   RUN_TEST(test_phase_names);
   return UNITY_END();
 }

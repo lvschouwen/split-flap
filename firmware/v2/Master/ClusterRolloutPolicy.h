@@ -142,6 +142,36 @@ inline void clusterRolloutStart(ClusterRolloutState& st, int memberIndex,
   st.bytesTotal = totalBytes;
 }
 
+// #343 (review HIGH): a RESCUE-triggered push burns its attempt AT START.
+// The rejoin verdict can't be trusted to count it — a poisoned image often
+// joins looking healthy (rescue:0, matching rev) and only crashes after
+// the handshake, which would read as Converged and reset the counter every
+// cycle. Burning up front makes the cap accumulate across whole rescue
+// cycles; clusterRolloutForgiveFollowerTargets is the deliberate reset.
+inline void clusterRolloutStartRescue(ClusterRolloutState& st, int memberIndex,
+                                      uint32_t totalBytes) {
+  clusterRolloutStart(st, memberIndex, totalBytes);
+  if (memberIndex >= 0 && memberIndex < CLUSTER_MAX_MEMBERS) {
+    if (st.attempts[memberIndex] < 255) st.attempts[memberIndex]++;
+    if (st.attempts[memberIndex] >= CLUSTER_ROLLOUT_ATTEMPT_CAP) {
+      st.blocked[memberIndex] = true;  // this push is the last one allowed
+    }
+  }
+}
+
+// #343: a NEW stored follower image voids the poisoned-image evidence the
+// rescue give-ups were built on — esp01 members get fresh attempts; S3
+// members (converging from the leader's own slot) are untouched.
+inline void clusterRolloutForgiveFollowerTargets(
+    ClusterRolloutState& st, const ClusterMemberTable& table,
+    const ClusterMemberRuntime* runtimes, const char* followerPlat) {
+  for (int i = 0; i < table.count && i < CLUSTER_MAX_MEMBERS; i++) {
+    if (runtimes[i].plat != followerPlat) continue;
+    st.attempts[i] = 0;
+    st.blocked[i] = false;
+  }
+}
+
 // Progress counters are zeroed on EVERY transition to Idle — stale bytes
 // next to phase "idle" would read as a wedged rollout in the Cluster card.
 inline void clusterRolloutClearProgress(ClusterRolloutState& st) {
@@ -186,13 +216,17 @@ inline void clusterRolloutUploadDone(ClusterRolloutState& st, uint32_t nowMs) {
 }
 
 // The health gate: fed the target member's live supervision facts each
-// tick while WaitingRejoin. Success clears the member's attempts. A rejoin
-// still carrying the rescue marker (#343) means the pushed image didn't
-// cure the boot loop — that outranks a matching rev.
+// tick while WaitingRejoin. Success clears the member's attempts — EXCEPT
+// after a rescue-triggered push (#343 review HIGH): its "healthy" rejoin
+// proves only that the handshake ran, not that the crash is gone, so the
+// start-burned attempt stands until a genuine rev change or a new stored
+// image forgives it. A rejoin still carrying the rescue marker means the
+// pushed image didn't cure the boot loop — that outranks a matching rev.
 inline ClusterRolloutWait clusterRolloutCheckWait(ClusterRolloutState& st,
                                                   bool memberJoined,
                                                   const String& memberRev,
                                                   bool memberRescue,
+                                                  bool rescueTriggered,
                                                   const char* leaderRev,
                                                   uint32_t nowMs) {
   int i = st.memberIndex;
@@ -201,7 +235,7 @@ inline ClusterRolloutWait clusterRolloutCheckWait(ClusterRolloutState& st,
     return ClusterRolloutWait::RescueLooping;
   }
   if (memberJoined && memberRev == leaderRev) {
-    if (i >= 0 && i < CLUSTER_MAX_MEMBERS) {
+    if (!rescueTriggered && i >= 0 && i < CLUSTER_MAX_MEMBERS) {
       st.attempts[i] = 0;
       st.blocked[i] = false;
     }

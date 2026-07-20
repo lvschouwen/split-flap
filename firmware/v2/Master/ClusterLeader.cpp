@@ -828,6 +828,7 @@ static void rolloutCloseUpload() {
 }
 
 static bool rolloutOpenUpload(const String& host) {
+  wdtFeed();  // #314: open + preamble write can each block the stream timeout
   String url = clusterRolloutUrl(host, rolloutMd5, GIT_REV);
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
@@ -962,6 +963,10 @@ static void rolloutPumpUpload() {
 // Only clusterTask touches these.
 static bool rolloutFollowerSource = false;
 static String rolloutFollowerTargetRev;
+// #343: the active follower push was triggered by the rescue marker (not a
+// rev mismatch) — its attempt was burned at start and a Converged rejoin
+// must not forgive it (review HIGH). Lifecycle mirrors rolloutFollowerSource.
+static bool rolloutRescueTriggered = false;
 static void rolloutTryFollowerImageStart();
 static void followerPushPump();
 
@@ -979,6 +984,7 @@ static void rolloutServiceTick() {
     {
       LeaderLock lock;
       rolloutFollowerSource = false;  // self-heal: Idle never streams (#344)
+      rolloutRescueTriggered = false;
       // Stand down while an on-demand follower push owns the flash (#304).
       if (followerPush.phase != FollowerPushPhase::Idle) return;
       candidate = clusterRolloutNextCandidate(table, runtimes, GIT_REV,
@@ -1029,8 +1035,11 @@ static void rolloutServiceTick() {
   ClusterRolloutWait wait =
       clusterRolloutCheckWait(rollout, runtimes[target].joined,
                               runtimes[target].rev, runtimes[target].rescue,
-                              wantRev, millis());
-  if (wait != ClusterRolloutWait::Waiting) rolloutFollowerSource = false;
+                              rolloutRescueTriggered, wantRev, millis());
+  if (wait != ClusterRolloutWait::Waiting) {
+    rolloutFollowerSource = false;
+    rolloutRescueTriggered = false;
+  }
   switch (wait) {
     case ClusterRolloutWait::Converged:
       SerialPrintln("cluster: " + String(table.members[target].host) +
@@ -1106,6 +1115,7 @@ static bool followerPushEnsureFacts() {
 }
 
 static bool followerPushOpenUpload(const String& host) {
+  wdtFeed();  // #314: open + preamble write can each block the stream timeout
   fpushFile = LittleFS.open(FOLLOWER_IMAGE_PATH, FILE_READ);
   if (!fpushFile) { followerPushCloseUpload(); return false; }
   String url = clusterRolloutUrl(host, fpushMd5, fpushRev.c_str());
@@ -1141,6 +1151,16 @@ static void rolloutTryFollowerImageStart() {
   int candidate;
   {
     LeaderLock lock;
+    // #343: a NEW stored image voids the evidence behind rescue give-ups —
+    // esp01 members get fresh attempts before the scan.
+    static String lastStoredRev;
+    if (storedRev != lastStoredRev) {
+      if (lastStoredRev.length() > 0) {
+        clusterRolloutForgiveFollowerTargets(rollout, table, runtimes,
+                                             FOLLOWER_IMAGE_PLAT);
+      }
+      lastStoredRev = storedRev;
+    }
     candidate = clusterFollowerImageNextCandidate(
         table, runtimes, storedRev.c_str(), FOLLOWER_IMAGE_PLAT, rollout,
         millis());
@@ -1161,21 +1181,29 @@ static void rolloutTryFollowerImageStart() {
   }
   String host;
   String fromRev;
+  bool rescuePush;
   {
     LeaderLock lock;
-    clusterRolloutStart(rollout, candidate, fpushLen);
+    // #343: rescue-triggered pushes burn their attempt at start (the
+    // rejoin verdict can't be trusted — see ClusterRolloutPolicy.h).
+    rescuePush = runtimes[candidate].rescue;
+    if (rescuePush) clusterRolloutStartRescue(rollout, candidate, fpushLen);
+    else clusterRolloutStart(rollout, candidate, fpushLen);
     rolloutFollowerSource = true;
+    rolloutRescueTriggered = rescuePush;
     rolloutFollowerTargetRev = fpushRev;
     host = table.members[candidate].host;
     fromRev = runtimes[candidate].rev;
   }
   SerialPrintln("cluster: converging esp01 " + host + " rev " + fromRev +
-                " -> " + rolloutFollowerTargetRev + " (stored follower image)");
+                " -> " + rolloutFollowerTargetRev +
+                (rescuePush ? " (rescue re-push)" : " (stored follower image)"));
   if (!followerPushOpenUpload(host)) {
     SerialPrintln("cluster: esp01 convergence could not reach " + host);
     LeaderLock lock;
     clusterRolloutUploadFailed(rollout, millis());
     rolloutFollowerSource = false;
+    rolloutRescueTriggered = false;
   }
 }
 
@@ -1198,6 +1226,7 @@ static void fpushSettleFailed(const String& what) {
     SerialPrintln("cluster: esp01 convergence to " + host + " " + what);
     clusterRolloutUploadFailed(rollout, millis());
     rolloutFollowerSource = false;
+    rolloutRescueTriggered = false;
     return;
   }
   int t = followerPush.memberIndex;
@@ -1279,11 +1308,13 @@ static void followerPushPump() {
                     " busy (409) — convergence retries later");
       clusterRolloutUploadRejected(rollout, nowMs);
       rolloutFollowerSource = false;
+      rolloutRescueTriggered = false;
     } else {
       SerialPrintln("cluster: esp01 convergence to " + h + " failed (status " +
                     String(status) + ")");
       clusterRolloutUploadFailed(rollout, nowMs);
       rolloutFollowerSource = false;
+      rolloutRescueTriggered = false;
     }
     return;
   }
