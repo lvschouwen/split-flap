@@ -59,7 +59,7 @@ String webTimezoneSnapshot();
 const char* webResetReasonString();
 
 // Bundled unit firmware (#205): the generated WebAssets.h arrays have
-// internal linkage, so only WebEndpoints.cpp includes that header — a
+// internal linkage, so only WebContent.cpp includes that header (#338) — a
 // second include would duplicate every PROGMEM blob into another TU.
 // displayTask reaches the image through these accessors instead.
 const uint8_t* webUnitFirmwareBin();
