@@ -11,6 +11,7 @@
 #include <esp_image_format.h>
 #include <esp_ota_ops.h>
 #include <esp_random.h>
+#include <errno.h>  // #340: lwip socket errno for stream-failure diagnostics
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <sys/time.h>
@@ -639,9 +640,13 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
     bool wasDegraded = m.degraded;
     clusterMemberOnSuccess(m, nowMs);
     switch (item.action) {
-      case ClusterLeaderAction::Join:
+      case ClusterLeaderAction::Join: {
         m.joined = true;
-        m.rev = clusterExtractJsonString(body, "rev");
+        String joinRev = clusterExtractJsonString(body, "rev");
+        // #340: a rev change (manual OTA, bench flash) forgives a rollout
+        // give-up — the blocked latch was pinned to a build that's gone.
+        clusterRolloutNoteMemberRev(rollout, item.index, m.rev, joinRev);
+        m.rev = joinRev;
         // Absent = same platform as this leader (#297); an ESP-01 row
         // reports "esp01" and is excluded from firmware convergence.
         m.plat = clusterExtractJsonString(body, "plat");
@@ -656,6 +661,7 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
                       String(table.members[item.index].host) + " joined (rev " +
                       m.rev + (m.hmacKeyValid ? ", authenticated)" : ")"));
         break;
+      }
       case ClusterLeaderAction::Render:
         m.renderDirty = false;
         break;
@@ -669,7 +675,12 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
       // reboots without waiting for a re-join.
       clusterParsePingHealth(body, m.health);
       String rev = clusterExtractJsonString(body, "rev");
-      if (rev.length() > 0) m.rev = rev;
+      if (rev.length() > 0) {
+        // #340: same forgiveness on the ping-refresh path — this is how a
+        // stale updateBlocked clears after the member converges without us.
+        clusterRolloutNoteMemberRev(rollout, item.index, m.rev, rev);
+        m.rev = rev;
+      }
       String plat = clusterExtractJsonString(body, "plat");
       if (plat.length() > 0) m.plat = plat;
       // #332: ping refresh keeps a live role change (role picker POST on the
@@ -799,10 +810,10 @@ static bool rolloutOpenUpload(const String& host) {
   String url = clusterRolloutUrl(host, rolloutMd5, GIT_REV);
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
-  // Chunk writes ride the render fan-out's 1.5 s LAN bound so a stalled
-  // follower can never freeze clusterTask beyond the already-accepted
-  // worst case; only the finalize round-trip gets the long budget below.
-  cfg.timeout_ms = CLUSTER_HTTP_TIMEOUT_MS;
+  // #340: chunk writes get the dedicated stream timeout — the receiver's
+  // early flash-sector erases stall the socket past the 1.5 s ping/render
+  // bound; the pump wall-clock-bounds each tick so renders keep flowing.
+  cfg.timeout_ms = CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS;
   cfg.disable_auto_redirect = true;  // #313: firmware never chases a redirect
   rolloutClient = esp_http_client_init(&cfg);
   if (rolloutClient == nullptr) return false;
@@ -828,14 +839,31 @@ static bool rolloutOpenUpload(const String& host) {
 // settles the verdict into the policy state.
 static void rolloutPumpUpload() {
   uint32_t budget = CLUSTER_ROLLOUT_CHUNK_PER_TICK;
+  uint32_t tickStartMs = millis();
   while (budget > 0 && rolloutOffset < rolloutImageLen) {
+    // #340: several writes can stack in one tick and each may now block up
+    // to the stream timeout — feed the TWDT between them (#314) and bound
+    // the tick by wall clock so a slow-but-alive socket can't starve
+    // renders/pings (the stream just resumes next tick).
+    wdtFeed();
+    if (millis() - tickStartMs > (uint32_t)CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS)
+      break;
     uint32_t take = rolloutImageLen - rolloutOffset;
     if (take > sizeof(rolloutBuf)) take = sizeof(rolloutBuf);
     if (take > budget) take = budget;
     if (esp_partition_read(rolloutPart, rolloutOffset, rolloutBuf, take) !=
-            ESP_OK ||
-        esp_http_client_write(rolloutClient, (const char*)rolloutBuf, take) !=
-            (int)take) {
+        ESP_OK) {
+      rolloutCloseUpload();
+      LeaderLock lock;
+      SerialPrintln("cluster: rollout flash read failed at offset " +
+                    String((unsigned)rolloutOffset));
+      clusterRolloutUploadFailed(rollout, millis());
+      return;
+    }
+    int wrote =
+        esp_http_client_write(rolloutClient, (const char*)rolloutBuf, take);
+    if (wrote != (int)take) {
+      int wrErrno = errno;  // capture before close() can clobber it (#340)
       rolloutCloseUpload();
       LeaderLock lock;
       int target = rollout.memberIndex;
@@ -843,7 +871,9 @@ static void rolloutPumpUpload() {
                     ((target >= 0 && target < table.count)
                          ? String(table.members[target].host)
                          : String("?")) +
-                    " failed mid-stream");
+                    " failed mid-stream at " + String((unsigned)rolloutOffset) +
+                    "/" + String((unsigned)rolloutImageLen) + " B (write " +
+                    String(wrote) + ", errno " + String(wrErrno) + ")");
       clusterRolloutUploadFailed(rollout, millis());
       return;
     }
@@ -1034,7 +1064,8 @@ static bool followerPushOpenUpload(const String& host) {
   String url = clusterRolloutUrl(host, fpushMd5, fpushRev.c_str());
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
-  cfg.timeout_ms = CLUSTER_HTTP_TIMEOUT_MS;
+  // #340: firmware stream — same dedicated write timeout as the rollout.
+  cfg.timeout_ms = CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS;
   cfg.disable_auto_redirect = true;  // #313: firmware never chases a redirect
   fpushClient = esp_http_client_init(&cfg);
   if (fpushClient == nullptr) { followerPushCloseUpload(); return false; }
@@ -1063,20 +1094,41 @@ static void followerPushFinishLocked(FollowerPushResult result,
 
 static void followerPushPump() {
   uint32_t budget = CLUSTER_ROLLOUT_CHUNK_PER_TICK;
+  uint32_t tickStartMs = millis();
   while (budget > 0 && fpushOffset < fpushLen) {
+    // #340: mirrors rolloutPumpUpload — TWDT feed between long-timeout
+    // writes, wall-clock tick bound, stream resumes next tick.
+    wdtFeed();
+    if (millis() - tickStartMs > (uint32_t)CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS)
+      break;
     uint32_t take = fpushLen - fpushOffset;
     if (take > sizeof(rolloutBuf)) take = sizeof(rolloutBuf);
     if (take > budget) take = budget;
-    if (fpushFile.read(rolloutBuf, take) != (int)take ||
-        esp_http_client_write(fpushClient, (const char*)rolloutBuf, take) !=
-            (int)take) {
+    if (fpushFile.read(rolloutBuf, take) != (int)take) {
       followerPushCloseUpload();
       LeaderLock lock;
       int t = followerPush.memberIndex;
       String host = (t >= 0 && t < table.count) ? String(table.members[t].host)
                                                 : String("?");
       followerPushFinishLocked(FollowerPushResult::Failed, host,
-                               "failed mid-stream");
+                               "file read failed at " +
+                                   String((unsigned)fpushOffset));
+      return;
+    }
+    int wrote =
+        esp_http_client_write(fpushClient, (const char*)rolloutBuf, take);
+    if (wrote != (int)take) {
+      int wrErrno = errno;  // capture before close() can clobber it (#340)
+      followerPushCloseUpload();
+      LeaderLock lock;
+      int t = followerPush.memberIndex;
+      String host = (t >= 0 && t < table.count) ? String(table.members[t].host)
+                                                : String("?");
+      followerPushFinishLocked(
+          FollowerPushResult::Failed, host,
+          "failed mid-stream at " + String((unsigned)fpushOffset) + "/" +
+              String((unsigned)fpushLen) + " B (write " + String(wrote) +
+              ", errno " + String(wrErrno) + ")");
       return;
     }
     fpushOffset += take;

@@ -20,8 +20,9 @@
 #include "ClusterLeaderPolicy.h"  // ClusterMemberRuntime, table types
 
 // Attempts per member before the rollout gives up on it (surfaced as
-// `updateBlocked` in /cluster/status; cleared by a config swap or leader
-// reboot). 3 matches the degraded-after-3 supervision convention.
+// `updateBlocked` in /cluster/status; cleared by a config swap, a leader
+// reboot, or the member's reported rev changing — #340). 3 matches the
+// degraded-after-3 supervision convention.
 static const uint8_t CLUSTER_ROLLOUT_ATTEMPT_CAP = 3;
 
 // Rejoin budget after a successful upload: reboot (~10 s) + PENDING_VERIFY
@@ -40,11 +41,15 @@ static const uint32_t CLUSTER_ROLLOUT_CHUNK_PER_TICK = 49152UL;
 
 // Finalize verdict wait ONLY (trailer + response headers): the follower's
 // Update.end() runs a whole-image MD5 verify (~1-2 s) before it answers.
-// Chunk writes ride the normal 1.5 s LAN timeout instead, so a stalled
-// follower can never freeze the fan-out longer than the render path's own
-// documented worst case — the one finalize round-trip per converged member
-// is the accepted (bounded) stall.
 static const int CLUSTER_ROLLOUT_FINALIZE_TIMEOUT_MS = 10000;
+
+// Chunk-write socket timeout for the firmware streams (#276 rollout + #304
+// relay) ONLY — ping/render keep their 1.5 s LAN bound. The receiver's
+// early flash-sector erases can stall the socket for seconds (#340: 1.5 s
+// killed streams ~2 s in while a patient manual OTA succeeded); each write
+// is wdtFeed-bracketed and the per-tick pump is wall-clock bounded, so the
+// longer wait never threatens the 30 s TWDT.
+static const int CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS = 8000;
 
 enum class ClusterRolloutPhase : uint8_t { Idle = 0, Uploading, WaitingRejoin };
 
@@ -177,6 +182,23 @@ inline ClusterRolloutWait clusterRolloutCheckWait(ClusterRolloutState& st,
     return ClusterRolloutWait::TimedOut;
   }
   return ClusterRolloutWait::Waiting;
+}
+
+// #340: a member's reported rev CHANGING re-proves the convergence facts —
+// blocked/attempts were latched against a build the member no longer runs
+// (it converged via manual OTA, or was bench-flashed to something new), so
+// the candidate scan deserves a fresh look. Called wherever the leader
+// records a reported rev. "" -> rev (the rejoin after OUR upload) is NOT a
+// change: forgiving it would defeat the attempt cap that stops a poisoned
+// image flash-looping one board.
+inline void clusterRolloutNoteMemberRev(ClusterRolloutState& st, int i,
+                                        const String& oldRev,
+                                        const String& newRev) {
+  if (i < 0 || i >= CLUSTER_MAX_MEMBERS) return;
+  if (oldRev.length() == 0 || newRev.length() == 0) return;
+  if (oldRev == newRev) return;
+  st.attempts[i] = 0;
+  st.blocked[i] = false;
 }
 
 // Config swaps and aborts: forget everything, including give-ups — the

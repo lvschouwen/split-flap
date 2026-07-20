@@ -299,6 +299,59 @@ static void test_upload_url_carries_md5_and_intended_rev() {
           .c_str());
 }
 
+// --- #340 stream hardening -------------------------------------------------------
+
+static void test_rev_change_forgives_blocked_member() {
+  ClusterRolloutState st;
+  for (int i = 0; i < CLUSTER_ROLLOUT_ATTEMPT_CAP; i++) {
+    clusterRolloutStart(st, 1, 1000);
+    clusterRolloutUploadFailed(st, 5000);
+  }
+  TEST_ASSERT_TRUE(st.blocked[1]);
+  // The member converged by other means (manual OTA, bench flash): its
+  // reported rev moved, so blocked is latched against facts that no longer
+  // exist — forgive and let the candidate scan re-decide.
+  clusterRolloutNoteMemberRev(st, 1, String("0000000"), String(LEADER_REV));
+  TEST_ASSERT_FALSE(st.blocked[1]);
+  TEST_ASSERT_EQUAL_UINT8(0, st.attempts[1]);
+}
+
+static void test_unknown_to_known_rev_is_not_a_change() {
+  // A rejoin after OUR upload goes "" -> rev; forgiving that would defeat
+  // the attempt cap (a poisoned image could flash-loop the same board).
+  ClusterRolloutState st;
+  clusterRolloutStart(st, 1, 1000);
+  clusterRolloutUploadFailed(st, 100);
+  clusterRolloutNoteMemberRev(st, 1, String(""), String("0000000"));
+  TEST_ASSERT_EQUAL_UINT8(1, st.attempts[1]);
+}
+
+static void test_same_rev_refresh_changes_nothing() {
+  ClusterRolloutState st;
+  clusterRolloutStart(st, 1, 1000);
+  clusterRolloutUploadFailed(st, 100);
+  clusterRolloutNoteMemberRev(st, 1, String("0000000"), String("0000000"));
+  TEST_ASSERT_EQUAL_UINT8(1, st.attempts[1]);
+}
+
+static void test_note_rev_ignores_out_of_range_index() {
+  ClusterRolloutState st;
+  clusterRolloutNoteMemberRev(st, -1, String("a"), String("b"));
+  clusterRolloutNoteMemberRev(st, CLUSTER_MAX_MEMBERS, String("a"), String("b"));
+  for (int i = 0; i < CLUSTER_MAX_MEMBERS; i++) {
+    TEST_ASSERT_FALSE(st.blocked[i]);
+  }
+}
+
+static void test_stream_timeout_sits_between_lan_and_finalize() {
+  // Chunk writes must outlast a follower's flash-sector-erase stall (the
+  // 1.5 s ping/render bound is too tight — #340) but never exceed the
+  // finalize budget that is the design's accepted worst-case stall.
+  TEST_ASSERT_GREATER_THAN(1500, CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS);
+  TEST_ASSERT_LESS_OR_EQUAL(CLUSTER_ROLLOUT_FINALIZE_TIMEOUT_MS,
+                            CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS);
+}
+
 static void test_phase_names() {
   TEST_ASSERT_EQUAL_STRING("idle",
                            clusterRolloutPhaseName(ClusterRolloutPhase::Idle));
@@ -331,6 +384,11 @@ int main(int, char**) {
   RUN_TEST(test_reset_clears_everything);
   RUN_TEST(test_multipart_frame_matches_upload_contract);
   RUN_TEST(test_upload_url_carries_md5_and_intended_rev);
+  RUN_TEST(test_rev_change_forgives_blocked_member);
+  RUN_TEST(test_unknown_to_known_rev_is_not_a_change);
+  RUN_TEST(test_same_rev_refresh_changes_nothing);
+  RUN_TEST(test_note_rev_ignores_out_of_range_index);
+  RUN_TEST(test_stream_timeout_sits_between_lan_and_finalize);
   RUN_TEST(test_phase_names);
   return UNITY_END();
 }
