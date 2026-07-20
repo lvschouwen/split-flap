@@ -120,6 +120,9 @@ void clusterLeaderBlankWall();
 // runtime table never sees it — the self row is not an HTTP peer). Seeded at
 // webEndpointsInit, pushed by the settings drain on change.
 void clusterLeaderSetSelfRole(const String& role);
+// #342: tz for the join body (esp01 clock fallback) — seeded at init,
+// pushed by the settings drain on a tz POST.
+void clusterLeaderSetTz(const String& tzPosix);
 
 ClusterLeaderStatus clusterLeaderStatusGet();
 

@@ -60,6 +60,9 @@ static String leaderDeviceName;          // set once in init, read-only after
 // under LeaderLock by statusFillLocked. The runtime table never carries it
 // (the self row is never joined/pinged over HTTP).
 static String leaderSelfRole;
+// #342: the leader's POSIX tz, sent in every join body (clock fallback on
+// esp01 rows). Seeded at init + pushed by the settings drain, like the role.
+static String leaderTzPosix;
 static SettingsStore* leaderStore = nullptr;  // NVS writes: clusterTask only
 
 // All guarded by leaderMutex.
@@ -312,6 +315,15 @@ void clusterLeaderSetSelfRole(const String& role) {
   leaderSelfRole = role;
 }
 
+void clusterLeaderSetTz(const String& tzPosix) {
+  // #342: rides every join body so esp01 rows can clock-fallback when this
+  // leader dies. A live tz change reaches members at their next (re)join —
+  // leader reboot or degraded-recovery — which is fine for an event this
+  // rare; the members keep their last known zone meanwhile.
+  LeaderLock lock;
+  leaderTzPosix = tzPosix;
+}
+
 void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
                               const String& alignment, int speed) {
   submitGrid("c:" + alignment + ":" + String(speed) + ":" + timeText + "|" +
@@ -551,6 +563,10 @@ static int collectMemberWork(MemberWorkItem* items) {
                     "&row=" + String((int)def.row) +
                     "&epoch=" + String((unsigned long)epoch) +
                     "&key=" + clusterKeyToHex(runtimes[pick].hmacKey);
+        if (leaderTzPosix.length() > 0) {
+          // #342 additive: pre-#342 followers ignore unknown params.
+          item.body += "&tz=" + urlEncode(leaderTzPosix);
+        }
         break;
       }
       case ClusterLeaderAction::Render: {

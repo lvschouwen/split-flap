@@ -486,7 +486,14 @@ void webEndpointsInit(AsyncWebServer& server) {
     // pre-HMAC leader → enforcement stays off).
     String key;
     paramString(request, "key", key);
-    clusterHandleJoin(leaderName, leaderHost, (int)row, epoch, key);
+    // #342 additive: the leader's POSIX zone for the clock fallback. A bad
+    // value is dropped (not 400) — the join must survive a pre-#342 wire.
+    String tz;
+    paramString(request, "tz", tz);
+    if (tz.length() > FOLLOWER_TZ_MAX || !isPrintableAscii(tz, 0x21)) {
+      tz = "";
+    }
+    clusterHandleJoin(leaderName, leaderHost, (int)row, epoch, key, tz);
     char mask[16];
     FollowerHealthFacts h = healthNow(mask, sizeof(mask));
     request->send(200, "application/json",
