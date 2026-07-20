@@ -43,7 +43,8 @@ class FollowerState:
     twin of ClusterFollowerPolicy.h."""
 
     def __init__(self, name="fake-follower", rev="fake0000", width=16,
-                 rollback=False, reboot_secs=3.0, plat="", role=""):
+                 rollback=False, reboot_secs=3.0, plat="", role="",
+                 rescue=False):
         self.name = name
         self.rev = rev
         self.width = width
@@ -55,6 +56,9 @@ class FollowerState:
         # the plat key + heap/rssi/up vitals, and the leader must never
         # stream firmware at it.
         self.plat = plat
+        # #343 rescue-beacon marker: emitted as rescue:1 on join/ping —
+        # the leader re-pushes the stored follower image, same-rev included.
+        self.rescue = rescue
         self.rollback = rollback      # keep the old rev after a "flash"
         self.reboot_secs = reboot_secs
         # #294 health drills: the advertised fault bitmap (bit i = unit i).
@@ -263,6 +267,8 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
                 # #332: firmware emits role between name and rev; key order
                 # is irrelevant to the leader's extractor, kept simple here.
                 reply["role"] = st.role
+            if st.rescue:
+                reply["rescue"] = 1  # #343: additive, absent while healthy
             reply.update(st.health_keys())
             return self._send(200, json.dumps(reply))
 
@@ -294,9 +300,12 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
             # additive plat/vitals block when foreign-platform).
             if st.role:
                 reply["role"] = st.role  # #332: trails the health block
+            if st.rescue:
+                reply["rescue"] = 1  # #343: additive, absent while healthy
             keys = ["state", "epoch", "seq", "width", "detected",
                     "faulty", "faultMask", "wear", "rev"]
-            keys += [k for k in ("plat", "heap", "rssi", "up", "role")
+            keys += [k for k in ("plat", "heap", "rssi", "up", "role",
+                                 "rescue")
                      if k in reply]
             ordered = {k: reply[k] for k in keys}
             return self._send(200, json.dumps(ordered))
@@ -385,11 +394,12 @@ class FakeFollowerHandler(BaseHTTPRequestHandler):
 
 def make_server(port, name="fake-follower", rev="fake0000", width=16,
                 verbose=False, rollback=False, reboot_secs=3.0, plat="",
-                role=""):
+                role="", rescue=False):
     """One fake follower on localhost:port. Returns (server, state); run
     server.serve_forever() in a thread; state carries the assertions."""
     state = FollowerState(name=name, rev=rev, width=width, rollback=rollback,
-                          reboot_secs=reboot_secs, plat=plat, role=role)
+                          reboot_secs=reboot_secs, plat=plat, role=role,
+                          rescue=rescue)
 
     class Handler(FakeFollowerHandler):
         pass
@@ -413,6 +423,9 @@ def main():
     parser.add_argument("--role", default="",
                         help="deviceRole tag (#332): feeds the leader's "
                              "succession tiers; empty = pre-#332 peer")
+    parser.add_argument("--rescue", action="store_true",
+                        help="rescue-beacon marker (#343): the leader must "
+                             "re-push the stored follower image")
     parser.add_argument("--rollback", action="store_true",
                         help="keep the old rev after a flash (rollback drill)")
     parser.add_argument("--reboot-secs", type=float, default=3.0,
@@ -426,7 +439,7 @@ def main():
                                 width=args.width, verbose=True,
                                 rollback=args.rollback,
                                 reboot_secs=args.reboot_secs, plat=args.plat,
-                                role=args.role)
+                                role=args.role, rescue=args.rescue)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         servers.append(server)
         print(f"fake follower “fake-row-{i}” listening on :{port}")

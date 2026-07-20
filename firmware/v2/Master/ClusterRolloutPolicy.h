@@ -57,7 +57,9 @@ enum class ClusterRolloutWait : uint8_t {
   Waiting = 0,   // member not back yet, deadline not hit
   Converged,     // rejoined on the leader's rev — success, next member
   RolledBack,    // rejoined on the OLD rev — image rejected, attempt burned
-  TimedOut       // never rejoined inside the budget — attempt burned
+  TimedOut,      // never rejoined inside the budget — attempt burned
+  RescueLooping  // #343: rejoined still beaconing — image didn't take,
+                 // attempt burned (cap stops a poisoned store image)
 };
 
 struct ClusterRolloutState {
@@ -123,7 +125,9 @@ inline int clusterFollowerImageNextCandidate(
     if (!runtimes[i].joined) continue;
     if (runtimes[i].rev.length() == 0) continue;
     if (runtimes[i].plat != followerPlat) continue;
-    if (runtimes[i].rev == storedRev) continue;
+    // #343: a rescue beacon needs the stored image back even at the same
+    // rev — its flash is what's in doubt, not its version.
+    if (runtimes[i].rev == storedRev && !runtimes[i].rescue) continue;
     if (st.blocked[i]) continue;
     return i;
   }
@@ -182,13 +186,20 @@ inline void clusterRolloutUploadDone(ClusterRolloutState& st, uint32_t nowMs) {
 }
 
 // The health gate: fed the target member's live supervision facts each
-// tick while WaitingRejoin. Success clears the member's attempts.
+// tick while WaitingRejoin. Success clears the member's attempts. A rejoin
+// still carrying the rescue marker (#343) means the pushed image didn't
+// cure the boot loop — that outranks a matching rev.
 inline ClusterRolloutWait clusterRolloutCheckWait(ClusterRolloutState& st,
                                                   bool memberJoined,
                                                   const String& memberRev,
+                                                  bool memberRescue,
                                                   const char* leaderRev,
                                                   uint32_t nowMs) {
   int i = st.memberIndex;
+  if (memberJoined && memberRescue) {
+    clusterRolloutBurnAttempt(st, nowMs);
+    return ClusterRolloutWait::RescueLooping;
+  }
   if (memberJoined && memberRev == leaderRev) {
     if (i >= 0 && i < CLUSTER_MAX_MEMBERS) {
       st.attempts[i] = 0;

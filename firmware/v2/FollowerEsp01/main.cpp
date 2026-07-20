@@ -15,6 +15,7 @@
 #include "FollowerBus.h"
 #include "FollowerCluster.h"
 #include "FollowerConfig.h"
+#include "FollowerRescue.h"
 #include "FollowerWeb.h"
 #include "FollowerWifi.h"
 
@@ -29,16 +30,22 @@ void setup() {
   SerialPrintln(F(".........Split Flap ESP-01 Follower Starting..........."));
   SerialPrintln(F("#######################################################"));
 
+  // Boot-rescue tally (#343) FIRST — everything after this line is what a
+  // crash-looping image never reaches.
+  rescueBootInit();
+
   busInit();
   clusterInit();  // EEPROM membership → Grace/Standalone
 
-  // Early I2C scan — deliberately AFTER twiboot's ~1 s window (v1 #88:
-  // probing inside it pins the bootloader alive), then provision any
-  // blank-app units from the PROGMEM bundle.
-  SerialPrintln(F("Early I2C scan (post-twiboot window)..."));
-  delay(1500);
-  busProbe();
-  busAutoInstallBootloaderUnits();
+  if (!rescueActive()) {
+    // Early I2C scan — deliberately AFTER twiboot's ~1 s window (v1 #88:
+    // probing inside it pins the bootloader alive), then provision any
+    // blank-app units from the PROGMEM bundle.
+    SerialPrintln(F("Early I2C scan (post-twiboot window)..."));
+    delay(1500);
+    busProbe();
+    busAutoInstallBootloaderUnits();
+  }
 
   wifiInit(webServer);
   if (!isWifiConfigured) {
@@ -48,33 +55,43 @@ void setup() {
 
   wifiServicesInit(displayWidth);
 
-  // Settled pass (v1 flow): re-probe, catch stragglers, self-heal any unit
-  // not on the bundled rev, then warm the health facts.
-  busProbe();
-  busAutoInstallBootloaderUnits();
-  busAutoUpdateOutdatedUnits();
-  busPollHealth();
+  if (!rescueActive()) {
+    // Settled pass (v1 flow): re-probe, catch stragglers, self-heal any unit
+    // not on the bundled rev, then warm the health facts.
+    busProbe();
+    busAutoInstallBootloaderUnits();
+    busAutoUpdateOutdatedUnits();
+    busPollHealth();
+  }
 
   webEndpointsInit(webServer);
   delay(250);
   webServer.begin();
 
-  // Staggered boot-home (#309): the units boot UNHOMED, so home the row in
-  // bounded batches instead of letting the leader's first render home the whole
-  // row at once (the #305 power-up brownout class). Run AFTER webServer.begin()
-  // so the ESPAsync stack can answer /cluster/{join,ping} and /settings from
-  // the SDK/LWIP context during followerBootHome()'s delay()s — this is a
-  // single-core board, so a slow homing sweep (bad halls) would otherwise leave
-  // it unreachable. Staged renders that arrive meanwhile wait for loop().
-  followerBootHome();
+  if (!rescueActive()) {
+    // Staggered boot-home (#309): the units boot UNHOMED, so home the row in
+    // bounded batches instead of letting the leader's first render home the whole
+    // row at once (the #305 power-up brownout class). Run AFTER webServer.begin()
+    // so the ESPAsync stack can answer /cluster/{join,ping} and /settings from
+    // the SDK/LWIP context during followerBootHome()'s delay()s — this is a
+    // single-core board, so a slow homing sweep (bad halls) would otherwise leave
+    // it unreachable. Staged renders that arrive meanwhile wait for loop().
+    followerBootHome();
+  }
 
-  SerialPrintln(F("ESP-01 follower ready — waiting for a leader"));
+  SerialPrintln(rescueActive()
+                    ? F("ESP-01 follower in RESCUE BEACON — OTA/cluster wire only")
+                    : F("ESP-01 follower ready — waiting for a leader"));
   SerialPrintln(F("#######################################################"));
 }
 
 void loop() {
   if (isPendingReboot) {
     SerialPrintln(F("Rebooting now..."));
+    // Deliberate restart (operator /reboot or a completed firmware upload):
+    // zero the bad-boot tally so the next image gets fresh chances — this is
+    // also the rescue beacon's one exit (#343).
+    rescueMarkHealthy();
     // Let AsyncWebServer flush the response before the restart yanks the
     // socket (v1 #37 value).
     delay(500);
@@ -97,10 +114,13 @@ void loop() {
     return;
   }
 
-  webLoopTick();      // staged ops / reflash / health refresh
-  clusterLoopTick();  // phase decay, blanking, due renders
+  rescueHealthyTick();  // #343: a stable minute proves this boot good
+  if (!rescueActive()) {
+    webLoopTick();            // staged ops / reflash / health refresh
+    followerHeartbeatTick();  // one scheduled unit-health read per tick (#310)
+  }
+  clusterLoopTick();  // phase decay, blanking, due renders (bus-gated in rescue)
   followerDiagTick(); // fold current heap into the since-boot min (#306)
-  followerHeartbeatTick();  // one scheduled unit-health read per tick (#310)
 
   delay(2);
 }

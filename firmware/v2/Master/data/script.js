@@ -2559,6 +2559,8 @@ function uploadFollowerFirmware() {
 
 function clusterStateLabel(m) {
 	if (m.updating) return { text: "updating", kind: "off" };
+	//#343: the member is boot-looping and beaconing for a firmware re-push.
+	if (m.rescue) return { text: "rescue", kind: "bad" };
 	if (m.updateBlocked) return { text: "update blocked", kind: "bad" };
 	if (m.self) return { text: "ok", kind: "ok" };
 	if (m.degraded) return { text: "degraded", kind: "bad" };

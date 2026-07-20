@@ -40,6 +40,7 @@ struct ClusterLeaderMemberStatus {
   int reportedWidth = 0; // join-handshake width fact
   bool updating = false;      // fleet rollout (#276) is converging this member
   bool updateBlocked = false; // rollout gave up (attempt cap) on this member
+  bool rescue = false;        // #343: member is a boot-looping rescue beacon
   bool hmac = false;          // wire-auth key negotiated — leader signs to this
                               // member (#313 follow-on observability)
   // Per-row unit health (#294): the follower's last ping-reply health, or

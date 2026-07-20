@@ -55,7 +55,7 @@ static void test_fault_mask_zero_width_is_empty() {
 
 static void test_join_reply_carries_identity_health_plat_vitals() {
   String out = followerJoinReplyJson("esp01-row", "abc1234", makeHealth(),
-                                     makeVitals());
+                                     makeVitals(), false);
   TEST_ASSERT_TRUE(out.indexOf("\"name\":\"esp01-row\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"rev\":\"abc1234\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"width\":8") >= 0);
@@ -68,13 +68,26 @@ static void test_join_reply_carries_identity_health_plat_vitals() {
   TEST_ASSERT_TRUE(out.indexOf("\"rssi\":-61") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"up\":1200") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"protocol\":1") >= 0);
+  // #343: the rescue marker is strictly additive — absent while healthy.
+  TEST_ASSERT_TRUE(out.indexOf("rescue") < 0);
+}
+
+static void test_join_and_ping_replies_carry_rescue_marker() {
+  // #343: a beacon boot advertises rescue:1 so the leader re-pushes the
+  // stored follower image (same-rev included).
+  String join = followerJoinReplyJson("esp01-row", "abc1234", makeHealth(),
+                                      makeVitals(), true);
+  TEST_ASSERT_TRUE(join.indexOf("\"rescue\":1") >= 0);
+  String ping = followerPingReplyJson("grace", 7, 3, makeHealth(),
+                                      makeVitals(), "abc1234", true);
+  TEST_ASSERT_TRUE(ping.indexOf("\"rescue\":1") >= 0);
 }
 
 // --- ping reply -------------------------------------------------------------------
 
 static void test_ping_reply_carries_state_and_health_and_plat() {
   String out = followerPingReplyJson("clustered", 7, 3, makeHealth(),
-                                     makeVitals(), "abc1234");
+                                     makeVitals(), "abc1234", false);
   TEST_ASSERT_TRUE(out.startsWith("{\"state\":\"clustered\",\"epoch\":7,\"seq\":3"));
   TEST_ASSERT_TRUE(out.indexOf("\"faultMask\":\"05\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"rev\":\"abc1234\"") >= 0);
@@ -196,6 +209,7 @@ int main(int, char**) {
   RUN_TEST(test_fault_mask_width_sets_nibble_count);
   RUN_TEST(test_fault_mask_zero_width_is_empty);
   RUN_TEST(test_join_reply_carries_identity_health_plat_vitals);
+  RUN_TEST(test_join_and_ping_replies_carry_rescue_marker);
   RUN_TEST(test_ping_reply_carries_state_and_health_and_plat);
   RUN_TEST(test_settings_json_shape);
   RUN_TEST(test_cluster_health_json_shape);

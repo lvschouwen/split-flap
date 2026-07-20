@@ -166,7 +166,7 @@ static void test_every_idle_transition_clears_progress() {
   clusterRolloutStart(st, 1, 2600000);
   st.bytesSent = 2600000;
   clusterRolloutUploadDone(st, 200000);
-  clusterRolloutCheckWait(st, true, String(LEADER_REV), LEADER_REV, 210000);
+  clusterRolloutCheckWait(st, true, String(LEADER_REV), false, LEADER_REV, 210000);
   TEST_ASSERT_EQUAL_UINT32(0, st.bytesSent);
   TEST_ASSERT_EQUAL_UINT32(0, st.bytesTotal);
 }
@@ -208,7 +208,7 @@ static void test_wait_converged_resets_attempts() {
   clusterRolloutUploadDone(st, 10000);
   TEST_ASSERT_EQUAL(
       (int)ClusterRolloutWait::Converged,
-      (int)clusterRolloutCheckWait(st, true, String(LEADER_REV), LEADER_REV,
+      (int)clusterRolloutCheckWait(st, true, String(LEADER_REV), false, LEADER_REV,
                                    20000));
   TEST_ASSERT_EQUAL(ClusterRolloutPhase::Idle, st.phase);
   TEST_ASSERT_EQUAL_UINT8(0, st.attempts[1]);
@@ -220,7 +220,7 @@ static void test_wait_still_waiting_while_member_down() {
   clusterRolloutStart(st, 1, 1000);
   clusterRolloutUploadDone(st, 10000);
   TEST_ASSERT_EQUAL((int)ClusterRolloutWait::Waiting,
-                    (int)clusterRolloutCheckWait(st, false, String(""),
+                    (int)clusterRolloutCheckWait(st, false, String(""), false,
                                                  LEADER_REV, 20000));
   TEST_ASSERT_EQUAL(ClusterRolloutPhase::WaitingRejoin, st.phase);
 }
@@ -233,7 +233,7 @@ static void test_wait_rollback_burns_attempt() {
   clusterRolloutUploadDone(st, 10000);
   TEST_ASSERT_EQUAL(
       (int)ClusterRolloutWait::RolledBack,
-      (int)clusterRolloutCheckWait(st, true, String("0000000"), LEADER_REV,
+      (int)clusterRolloutCheckWait(st, true, String("0000000"), false, LEADER_REV,
                                    20000));
   TEST_ASSERT_EQUAL(ClusterRolloutPhase::Idle, st.phase);
   TEST_ASSERT_EQUAL_UINT8(1, st.attempts[1]);
@@ -245,7 +245,7 @@ static void test_wait_timeout_burns_attempt() {
   clusterRolloutUploadDone(st, 10000);
   uint32_t after = 10000 + CLUSTER_ROLLOUT_REJOIN_TIMEOUT_MS;
   TEST_ASSERT_EQUAL((int)ClusterRolloutWait::TimedOut,
-                    (int)clusterRolloutCheckWait(st, false, String(""),
+                    (int)clusterRolloutCheckWait(st, false, String(""), false,
                                                  LEADER_REV, after));
   TEST_ASSERT_EQUAL(ClusterRolloutPhase::Idle, st.phase);
   TEST_ASSERT_EQUAL_UINT8(1, st.attempts[1]);
@@ -415,6 +415,51 @@ static void test_follower_image_candidate_respects_shared_gates() {
                                                           "esp01", st, 1000));
 }
 
+// --- #343 rescue-beacon convergence ----------------------------------------------
+
+static void test_rescue_member_is_candidate_despite_matching_rev() {
+  // A boot-looping esp01 comes up as a rescue beacon and advertises
+  // rescue:1 — its flash needs the stored image again EVEN at the same rev.
+  ClusterMemberTable t = makeTable();
+  ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
+  primeJoined(r, LEADER_REV, "1111111");
+  r[2].plat = "esp01";
+  r[2].rescue = true;
+  ClusterRolloutState st;
+  TEST_ASSERT_EQUAL(2, clusterFollowerImageNextCandidate(t, r, "1111111",
+                                                         "esp01", st, 1000));
+  // The flash-loop cap still rules: a blocked member stays blocked even
+  // while beaconing (the stored image itself may be the crasher).
+  st.blocked[2] = true;
+  TEST_ASSERT_EQUAL(-1, clusterFollowerImageNextCandidate(t, r, "1111111",
+                                                          "esp01", st, 1000));
+}
+
+static void test_rescue_never_unlocks_the_s3_rollout() {
+  // rescue is an esp01-image fact — the S3 scan must not adopt it.
+  ClusterMemberTable t = makeTable();
+  ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
+  primeJoined(r, LEADER_REV, LEADER_REV);
+  r[2].rescue = true;
+  ClusterRolloutState st;
+  TEST_ASSERT_EQUAL(-1, clusterRolloutNextCandidate(t, r, LEADER_REV,
+                                                    LEADER_PLAT, st, 1000));
+}
+
+static void test_rescue_rejoin_burns_attempt() {
+  // The pushed image booted... straight back into the beacon: the member
+  // is still crash-looping, so the attempt burns (cap → blocked protects
+  // against an endlessly re-pushed poisoned store image).
+  ClusterRolloutState st;
+  clusterRolloutStart(st, 1, 1000);
+  clusterRolloutUploadDone(st, 10000);
+  TEST_ASSERT_EQUAL((int)ClusterRolloutWait::RescueLooping,
+                    (int)clusterRolloutCheckWait(st, true, String("1111111"),
+                                                 true, "1111111", 20000));
+  TEST_ASSERT_EQUAL(ClusterRolloutPhase::Idle, st.phase);
+  TEST_ASSERT_EQUAL_UINT8(1, st.attempts[1]);
+}
+
 static void test_phase_names() {
   TEST_ASSERT_EQUAL_STRING("idle",
                            clusterRolloutPhaseName(ClusterRolloutPhase::Idle));
@@ -456,6 +501,9 @@ int main(int, char**) {
   RUN_TEST(test_follower_image_candidate_never_picks_non_esp01);
   RUN_TEST(test_follower_image_candidate_needs_stored_rev);
   RUN_TEST(test_follower_image_candidate_respects_shared_gates);
+  RUN_TEST(test_rescue_member_is_candidate_despite_matching_rev);
+  RUN_TEST(test_rescue_never_unlocks_the_s3_rollout);
+  RUN_TEST(test_rescue_rejoin_burns_attempt);
   RUN_TEST(test_phase_names);
   return UNITY_END();
 }

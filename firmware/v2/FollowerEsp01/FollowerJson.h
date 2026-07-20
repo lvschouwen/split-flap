@@ -101,10 +101,17 @@ inline void followerAppendHealthKeys(String& out,
   out += h.wear ? "true" : "false";
 }
 
+// #343 additive: only a rescue-beacon boot emits the marker (`"rescue":1`
+// — an int so the leader's existing bare-number extractor reads it);
+// absent = healthy, so pre-#343 leaders see an unchanged reply.
+inline void followerAppendRescue(String& out, bool rescue) {
+  if (rescue) out += ",\"rescue\":1";
+}
+
 // POST /cluster/join reply — the v2 handshake shape plus plat/vitals.
 inline String followerJoinReplyJson(const String& name, const char* rev,
                                     const FollowerHealthFacts& h,
-                                    const FollowerVitals& v) {
+                                    const FollowerVitals& v, bool rescue) {
   String out;
   out.reserve(224);
   out += "{\"name\":";
@@ -114,6 +121,7 @@ inline String followerJoinReplyJson(const String& name, const char* rev,
   out += '"';
   followerAppendHealthKeys(out, h);
   followerAppendPlatVitals(out, v);
+  followerAppendRescue(out, rescue);
   out += ",\"protocol\":1}";
   return out;
 }
@@ -123,7 +131,8 @@ inline String followerJoinReplyJson(const String& name, const char* rev,
 inline String followerPingReplyJson(const char* phaseName, uint32_t epoch,
                                     uint32_t seq,
                                     const FollowerHealthFacts& h,
-                                    const FollowerVitals& v, const char* rev) {
+                                    const FollowerVitals& v, const char* rev,
+                                    bool rescue) {
   String out;
   out.reserve(224);
   out += "{\"state\":\"";
@@ -137,6 +146,7 @@ inline String followerPingReplyJson(const char* phaseName, uint32_t epoch,
   out += rev;
   out += '"';
   followerAppendPlatVitals(out, v);
+  followerAppendRescue(out, rescue);
   out += '}';
   return out;
 }

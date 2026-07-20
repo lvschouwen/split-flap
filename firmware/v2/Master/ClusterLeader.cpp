@@ -654,6 +654,9 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
         // "" keeps the old width-0-preferred slot (tier 0), "display" at
         // width 0 ranks with spare — so a mixed-rev cluster is unchanged.
         m.role = clusterExtractJsonString(body, "role");
+        // #343 additive: rescue:1 = the member boots as a rescue beacon and
+        // wants the stored follower image re-pushed. Absent = healthy.
+        m.rescue = clusterExtractJsonInt(body, "rescue", 0) != 0;
         m.reportedWidth = clusterExtractJsonInt(body, "width", 0);
         // The handshake ends with a re-send of the current segment.
         m.renderDirty = segments[item.index].length() > 0;
@@ -687,6 +690,8 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
       // member) flowing into the succession tiers without a re-join.
       String role = clusterExtractJsonString(body, "role");
       if (role.length() > 0) m.role = role;
+      // #343: absolute on every reply — a healed boot stops beaconing.
+      m.rescue = clusterExtractJsonInt(body, "rescue", 0) != 0;
       m.reportedWidth = clusterExtractJsonInt(body, "width", m.reportedWidth);
     }
     if (wasDegraded) {
@@ -1007,12 +1012,17 @@ static void rolloutServiceTick() {
       rolloutFollowerSource ? rolloutFollowerTargetRev.c_str() : GIT_REV;
   ClusterRolloutWait wait =
       clusterRolloutCheckWait(rollout, runtimes[target].joined,
-                              runtimes[target].rev, wantRev, millis());
+                              runtimes[target].rev, runtimes[target].rescue,
+                              wantRev, millis());
   if (wait != ClusterRolloutWait::Waiting) rolloutFollowerSource = false;
   switch (wait) {
     case ClusterRolloutWait::Converged:
       SerialPrintln("cluster: " + String(table.members[target].host) +
                     " converged on " + String(wantRev) + " — rollout advances");
+      break;
+    case ClusterRolloutWait::RescueLooping:
+      SerialPrintln("cluster: " + String(table.members[target].host) +
+                    " rejoined still in rescue — attempt burned");
       break;
     case ClusterRolloutWait::RolledBack:
       SerialPrintln("cluster: " + String(table.members[target].host) +
@@ -1623,6 +1633,7 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
     out.updating = rollout.phase != ClusterRolloutPhase::Idle &&
                    rollout.memberIndex == i;
     out.updateBlocked = rollout.blocked[i];
+    out.rescue = runtimes[i].rescue;  // #343
     out.hmac = runtimes[i].hmacKeyValid;  // signing to this member (#313)
     if (clusterMemberIsSelf(table.members[i])) {
       out.rev = GIT_REV;

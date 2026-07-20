@@ -8,6 +8,7 @@
 #include "ClusterHmac.h"  // cluster-wire auth: key storage + verify (#313 follow-on)
 #include "FollowerBus.h"
 #include "FollowerConfig.h"
+#include "FollowerRescue.h"  // #343: rescue beacon never touches the bus
 #include "FollowerSettings.h"
 
 static FollowerClusterState policyState;
@@ -107,6 +108,14 @@ void clusterLoopTick() {
       SerialPrint(F("cluster: phase -> "));
       SerialPrintln(followerPhaseName(policyState.phase));
     }
+  }
+
+  // Rescue beacon (#343): membership/phase bookkeeping above stays live so
+  // the leader sees us and the marker, but the bus is untouchable — drop
+  // any accepted render unshown (the leader's re-push is the point).
+  if (rescueActive()) {
+    renderPending = false;
+    return;
   }
 
   // Blank rule: Standalone and Blank show nothing; Grace holds. One blank
