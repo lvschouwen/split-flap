@@ -658,6 +658,9 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
     switch (item.action) {
       case ClusterLeaderAction::Join: {
         m.joined = true;
+        // #343: a fresh join means the member was just down or reclaimed —
+        // the continuous-healthy window restarts here.
+        m.healthySinceMs = nowMs;
         String joinRev = clusterExtractJsonString(body, "rev");
         // #340: a rev change (manual OTA, bench flash) forgives a rollout
         // give-up — the blocked latch was pinned to a build that's gone.
@@ -708,6 +711,7 @@ static void applyMemberResult(const MemberWorkItem& item, int status,
       if (role.length() > 0) m.role = role;
       // #343: absolute on every reply — a healed boot stops beaconing.
       m.rescue = clusterExtractJsonInt(body, "rescue", 0) != 0;
+      if (m.rescue) m.healthySinceMs = nowMs;  // beaconing ≠ healthy
       m.reportedWidth = clusterExtractJsonInt(body, "width", m.reportedWidth);
     }
     if (wasDegraded) {
@@ -985,6 +989,22 @@ static void rolloutServiceTick() {
       LeaderLock lock;
       rolloutFollowerSource = false;  // self-heal: Idle never streams (#344)
       rolloutRescueTriggered = false;
+      // #343: sustained health forgives esp01 give-ups — a healed row's
+      // future beacons must be served again (S3 semantics untouched).
+      uint32_t sweepNow = millis();
+      for (int i = 0; i < table.count; i++) {
+        if (rollout.attempts[i] == 0 && !rollout.blocked[i]) continue;
+        if (runtimes[i].plat != FOLLOWER_IMAGE_PLAT) continue;
+        if (!runtimes[i].joined || runtimes[i].rescue) continue;
+        if (!clusterRolloutHealthyForgiveDue(runtimes[i].healthySinceMs,
+                                             sweepNow)) {
+          continue;
+        }
+        rollout.attempts[i] = 0;
+        rollout.blocked[i] = false;
+        SerialPrintln("cluster: " + String(table.members[i].host) +
+                      " healthy long enough — rescue give-ups forgiven");
+      }
       // Stand down while an on-demand follower push owns the flash (#304).
       if (followerPush.phase != FollowerPushPhase::Idle) return;
       candidate = clusterRolloutNextCandidate(table, runtimes, GIT_REV,

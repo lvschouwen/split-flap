@@ -502,6 +502,17 @@ static void test_non_rescue_convergence_still_clears_attempts() {
   TEST_ASSERT_EQUAL_UINT8(0, st.attempts[1]);
 }
 
+static void test_sustained_health_forgives_after_window() {
+  // Bench-proven gap: a heal that lands on the last allowed attempt leaves
+  // blocked latched on a healthy member, refusing its NEXT legit rescue.
+  // 10 min of continuous joined+non-rescue forgives; a crash-looping
+  // member resets the window at every re-join and never accumulates it.
+  TEST_ASSERT_FALSE(clusterRolloutHealthyForgiveDue(
+      1000, 1000 + CLUSTER_ROLLOUT_HEALTHY_FORGIVE_MS - 1));
+  TEST_ASSERT_TRUE(clusterRolloutHealthyForgiveDue(
+      1000, 1000 + CLUSTER_ROLLOUT_HEALTHY_FORGIVE_MS));
+}
+
 static void test_new_stored_image_forgives_esp01_giveups() {
   // A NEW stored image voids the poisoned-image evidence: esp01 members
   // get fresh attempts; S3 members' state is untouched.
@@ -565,6 +576,7 @@ int main(int, char**) {
   RUN_TEST(test_rescue_rejoin_burns_attempt);
   RUN_TEST(test_rescue_cycle_accumulates_attempts_across_convergences);
   RUN_TEST(test_non_rescue_convergence_still_clears_attempts);
+  RUN_TEST(test_sustained_health_forgives_after_window);
   RUN_TEST(test_new_stored_image_forgives_esp01_giveups);
   RUN_TEST(test_phase_names);
   return UNITY_END();

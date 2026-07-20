@@ -159,6 +159,21 @@ inline void clusterRolloutStartRescue(ClusterRolloutState& st, int memberIndex,
   }
 }
 
+// #343 (bench-proven follow-up): sustained health forgives give-ups — a
+// heal that lands on the last allowed attempt would otherwise leave
+// blocked latched on a healthy member and refuse its NEXT legit rescue.
+// 10 min of CONTINUOUS joined+non-rescue proves the current image holds
+// (the glue resets the window at every re-join and on every rescue-marked
+// reply, so a crash-looping member never accumulates it — the
+// poisoned-image cap keeps holding).
+static const uint32_t CLUSTER_ROLLOUT_HEALTHY_FORGIVE_MS = 600000UL;
+
+inline bool clusterRolloutHealthyForgiveDue(uint32_t healthySinceMs,
+                                            uint32_t nowMs) {
+  return (uint32_t)(nowMs - healthySinceMs) >=
+         CLUSTER_ROLLOUT_HEALTHY_FORGIVE_MS;
+}
+
 // #343: a NEW stored follower image voids the poisoned-image evidence the
 // rescue give-ups were built on — esp01 members get fresh attempts; S3
 // members (converging from the leader's own slot) are untouched.
