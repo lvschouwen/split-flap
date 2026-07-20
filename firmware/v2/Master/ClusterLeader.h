@@ -66,6 +66,9 @@ struct ClusterLeaderStatus {
   // The running image failed its verify/read pass — convergence is off
   // until reboot ("idle" alone would read as "nothing to do").
   bool rolloutImageFailed = false;
+  // #344: the active rollout streams the STORED follower image at an esp01
+  // row (additive "src":"esp01" on the wire; absent = the S3 slot).
+  bool rolloutFollowerImage = false;
   // On-demand ESP-01 firmware relay (#304 Part B): the stored follower image
   // + the live on-demand push. followerImage* drive the Cluster card's upload
   // control; followerPush* mirror the rollout fields for the member panel's

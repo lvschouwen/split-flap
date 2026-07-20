@@ -104,6 +104,32 @@ inline int clusterRolloutNextCandidate(const ClusterMemberTable& table,
   return -1;
 }
 
+// #344: esp01 auto-convergence — the SAME sequencing machine (shared state,
+// so the fleet still converges strictly one member at a time and attempts/
+// blocked behave identically), fed by the STORED follower image (#304)
+// instead of the leader's running slot. Scanned only when the S3 scan found
+// nothing. A candidate must report exactly the follower platform (inverse
+// of the #297 guard — never hand the esp01 image to an S3) and a rev that
+// differs from the stored image's rev, both directions like #276.
+inline int clusterFollowerImageNextCandidate(
+    const ClusterMemberTable& table, const ClusterMemberRuntime* runtimes,
+    const char* storedRev, const char* followerPlat,
+    const ClusterRolloutState& st, uint32_t nowMs) {
+  if (st.phase != ClusterRolloutPhase::Idle) return -1;
+  if ((int32_t)(nowMs - st.holdoffUntilMs) < 0) return -1;
+  if (storedRev == nullptr || storedRev[0] == '\0') return -1;
+  for (int i = 0; i < table.count; i++) {
+    if (clusterMemberIsSelf(table.members[i])) continue;
+    if (!runtimes[i].joined) continue;
+    if (runtimes[i].rev.length() == 0) continue;
+    if (runtimes[i].plat != followerPlat) continue;
+    if (runtimes[i].rev == storedRev) continue;
+    if (st.blocked[i]) continue;
+    return i;
+  }
+  return -1;
+}
+
 inline void clusterRolloutStart(ClusterRolloutState& st, int memberIndex,
                                 uint32_t totalBytes) {
   st.phase = ClusterRolloutPhase::Uploading;

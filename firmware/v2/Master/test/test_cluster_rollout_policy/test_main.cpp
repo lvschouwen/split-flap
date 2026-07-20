@@ -352,6 +352,69 @@ static void test_stream_timeout_sits_between_lan_and_finalize() {
                             CLUSTER_ROLLOUT_STREAM_TIMEOUT_MS);
 }
 
+// --- #344 esp01 auto-convergence candidate ---------------------------------------
+
+static void test_follower_image_candidate_selects_mismatched_esp01() {
+  ClusterMemberTable t = makeTable();
+  ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
+  primeJoined(r, LEADER_REV, "0000000");
+  r[2].plat = "esp01";
+  ClusterRolloutState st;
+  TEST_ASSERT_EQUAL(2, clusterFollowerImageNextCandidate(t, r, "1111111",
+                                                         "esp01", st, 1000));
+  // Both directions, mirroring #276: stored == reported → nothing to do.
+  TEST_ASSERT_EQUAL(-1, clusterFollowerImageNextCandidate(t, r, "0000000",
+                                                          "esp01", st, 1000));
+}
+
+static void test_follower_image_candidate_never_picks_non_esp01() {
+  // A mismatched S3 member belongs to the #276 rollout — the stored esp01
+  // image must never be aimed at it (inverse of the #297 guard).
+  ClusterMemberTable t = makeTable();
+  ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
+  primeJoined(r, "0000000", "0000000");  // no plat = same as leader (S3)
+  ClusterRolloutState st;
+  TEST_ASSERT_EQUAL(-1, clusterFollowerImageNextCandidate(t, r, "1111111",
+                                                          "esp01", st, 1000));
+}
+
+static void test_follower_image_candidate_needs_stored_rev() {
+  ClusterMemberTable t = makeTable();
+  ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
+  primeJoined(r, LEADER_REV, "0000000");
+  r[2].plat = "esp01";
+  ClusterRolloutState st;
+  TEST_ASSERT_EQUAL(-1, clusterFollowerImageNextCandidate(t, r, "", "esp01",
+                                                          st, 1000));
+  TEST_ASSERT_EQUAL(-1, clusterFollowerImageNextCandidate(t, r, nullptr,
+                                                          "esp01", st, 1000));
+}
+
+static void test_follower_image_candidate_respects_shared_gates() {
+  ClusterMemberTable t = makeTable();
+  ClusterMemberRuntime r[CLUSTER_MAX_MEMBERS];
+  primeJoined(r, LEADER_REV, "0000000");
+  r[2].plat = "esp01";
+  ClusterRolloutState st;
+  // Shared machine: busy phase, holdoff, blocked and unjoined all gate the
+  // esp01 scan exactly like the S3 one.
+  st.phase = ClusterRolloutPhase::Uploading;
+  TEST_ASSERT_EQUAL(-1, clusterFollowerImageNextCandidate(t, r, "1111111",
+                                                          "esp01", st, 1000));
+  st.phase = ClusterRolloutPhase::Idle;
+  st.holdoffUntilMs = 5000;
+  TEST_ASSERT_EQUAL(-1, clusterFollowerImageNextCandidate(t, r, "1111111",
+                                                          "esp01", st, 1000));
+  st.holdoffUntilMs = 0;
+  st.blocked[2] = true;
+  TEST_ASSERT_EQUAL(-1, clusterFollowerImageNextCandidate(t, r, "1111111",
+                                                          "esp01", st, 1000));
+  st.blocked[2] = false;
+  r[2].joined = false;
+  TEST_ASSERT_EQUAL(-1, clusterFollowerImageNextCandidate(t, r, "1111111",
+                                                          "esp01", st, 1000));
+}
+
 static void test_phase_names() {
   TEST_ASSERT_EQUAL_STRING("idle",
                            clusterRolloutPhaseName(ClusterRolloutPhase::Idle));
@@ -389,6 +452,10 @@ int main(int, char**) {
   RUN_TEST(test_same_rev_refresh_changes_nothing);
   RUN_TEST(test_note_rev_ignores_out_of_range_index);
   RUN_TEST(test_stream_timeout_sits_between_lan_and_finalize);
+  RUN_TEST(test_follower_image_candidate_selects_mismatched_esp01);
+  RUN_TEST(test_follower_image_candidate_never_picks_non_esp01);
+  RUN_TEST(test_follower_image_candidate_needs_stored_rev);
+  RUN_TEST(test_follower_image_candidate_respects_shared_gates);
   RUN_TEST(test_phase_names);
   return UNITY_END();
 }
