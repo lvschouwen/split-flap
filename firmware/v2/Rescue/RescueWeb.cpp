@@ -11,6 +11,7 @@
 #include "RescueOta.h"
 #include "RescueSlotRecord.h"
 #include "RescueSlots.h"
+#include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
 
 static String deviceName;
 static bool serverStarted = false;
@@ -175,6 +176,10 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
   deviceName = effectiveDeviceName;
   pinSlotRecord(0, probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_0), slotRec0);
   pinSlotRecord(1, probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_1), slotRec1);
+
+  // Pre-auth body-size guard (#347) — before any route so it wins the
+  // first-match-wins scan for an oversized body.
+  attachBodyLimitGuard(server);
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
     serveGzipAsset(request, "text/html", RESCUE_HTML_GZ, RESCUE_HTML_GZ_LEN);

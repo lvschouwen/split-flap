@@ -32,6 +32,7 @@
 #include "SettingsJson.h"
 #include "SplitFlapProtocol.h"
 #include "Tasks.h"
+#include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
 
 // Staged mutations, owned here; drained by webEndpointsLoop(). External
 // linkage across the Web*.cpp family (WebEndpointsInternal.h).
@@ -164,6 +165,9 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                       SettingsStore& store,
                       const String& effectiveDeviceName) {
   server.addMiddleware(&webClusterCorsMiddleware());
+  // Pre-auth body-size guard (#347) — before any route so it wins the
+  // first-match-wins scan for an oversized body.
+  attachBodyLimitGuard(server);
   // #332: seed the leader's self-row role (clusterLeaderInit ran earlier in
   // setup(), so LeaderLock is safe); the settings drain pushes changes.
   clusterLeaderSetSelfRole(settings.deviceRole);

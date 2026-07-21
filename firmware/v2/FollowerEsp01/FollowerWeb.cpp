@@ -21,6 +21,7 @@
 #include "FollowerSettings.h"
 #include "FollowerWifi.h"
 #include "WearPolicy.h"
+#include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
 
 volatile bool isPendingReboot = false;
 static volatile bool masterOtaUploadActive = false;
@@ -377,6 +378,9 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
 // --- endpoint registration ------------------------------------------------------------
 
 void webEndpointsInit(AsyncWebServer& server) {
+  // Pre-auth body-size guard (#347) — before any route so it wins the
+  // first-match-wins scan for an oversized body.
+  attachBodyLimitGuard(server);
   registerMasterFirmwareEndpoint(server);
 
   // Self-documenting route + terse-key legend index for the headless
