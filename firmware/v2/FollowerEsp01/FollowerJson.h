@@ -9,6 +9,7 @@
 
 #include <Arduino.h>
 
+#include "ClusterForeign.h"
 #include "UnitHealth.h"
 
 #define FOLLOWER_PLAT "esp01"
@@ -160,6 +161,8 @@ struct FollowerClusterDiag {
   uint32_t minHeap = 0;
   bool sntpSynced = false;
   bool hmac = false;  // #313 follow-on: enforcing signed leader-wire requests
+  ForeignContactStats foreign;  // #358: refused foreign-leader contacts
+  uint32_t nowMs = 0;           // for the foreign block's msSince
 };
 
 inline String followerClusterHealthJson(
@@ -206,6 +209,7 @@ inline String followerClusterHealthJson(
   out += d.sntpSynced ? "true" : "false";
   out += ",\"hmac\":";
   out += d.hmac ? "true" : "false";
+  foreignContactAppendJson(out, d.foreign, d.nowMs);  // #358
   out += '}';
   return out;
 }

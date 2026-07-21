@@ -156,7 +156,7 @@ static void test_health_json_heartbeat_freshness() {
 }
 
 static void test_freshness_survives_a_real_miss_streak() {
-  // #310 regression guard (cpp-review CRITICAL 2): a lost unit's current read
+  // #310 regression guard: a lost unit's current read
   // FAILS (statusValid=false), which is exactly when misses/stale must show.
   // The freshness keys therefore gate on state==1, NOT statusValid — otherwise
   // heartbeatApply can never coexist with statusValid=true and the keys are

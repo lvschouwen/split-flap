@@ -318,7 +318,7 @@ void webMaintenanceRegister(AsyncWebServer& server) {
                               content.alignment, content.flapSpeed));
   });
 
-  // Kill switch (v1 #35). Order is load-bearing (review 2026-07-11): the
+  // Kill switch (v1 #35). Order is load-bearing: the
   // abort flag is set BEFORE the enqueue so the queue's happens-before
   // guarantees displayTask's Stop always finds it set — set-after-enqueue
   // races an idle displayTask clearing it first, stranding the flag ON for

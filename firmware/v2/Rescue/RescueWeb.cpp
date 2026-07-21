@@ -8,6 +8,7 @@
 
 #include "BuildVersion.h"
 #include "RescueAssets.h"
+#include "RescueCors.h"  // CSRF origin gate on mutating POSTs (#349)
 #include "RescueOta.h"
 #include "RescueSlotRecord.h"
 #include "RescueSlots.h"
@@ -30,7 +31,20 @@ static int otaRejectionStatus = 0;
 static String otaRejectionReason;
 // #347: which request actually began an Update, so onRequest never reports a
 // flash (and reboots) for a POST that carried no multipart file part.
+// #349/#359: doubles as the single-owner session lock — a second concurrent
+// upload is 409'd instead of stealing/aborting a live recovery flash, and
+// every chunk is gated on ownership so an orphaned request can't interleave
+// bytes into the live Update session.
 static AsyncWebServerRequest* masterOtaOwnerRequest = nullptr;
+
+// CSRF gate (#349), copy of Master's webUploadCsrfRejected shape: multipart
+// POSTs are CORS-safelisted, so without this a visited web page could
+// blind-flash firmware or force a reboot while rescue is STA-joined.
+static bool rescueUploadCsrfRejected(AsyncWebServerRequest* request) {
+  bool hasOrigin = request->hasHeader("Origin");
+  return rescueCsrfRejectPost(true, hasOrigin,
+                              hasOrigin ? request->header("Origin") : String());
+}
 
 static void stageReboot() {
   rebootRequestedAtMs.store(millis());
@@ -205,13 +219,31 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
   server.on(
       "/firmware/master", HTTP_POST,
       [](AsyncWebServerRequest* request) {
+        // Overlap-rejected upload (#349/#359), or a bodyless POST racing a
+        // live session: answer 409 without touching the owner's shared state
+        // or Update session.
+        if (request->_tempObject != nullptr ||
+            (masterOtaOwnerRequest != nullptr &&
+             masterOtaOwnerRequest != request)) {
+          request->send(409, "text/plain",
+                        F("Another rescue flash is already in progress — "
+                          "retry when it finishes"));
+          return;
+        }
         // #347: did onUpload begin an Update for THIS request? A POST with no
         // multipart file part never enters onUpload, so Update.isFinished()
         // would report success on a never-begun Update and reboot the device.
         bool uploadRan = (masterOtaOwnerRequest == request);
         if (uploadRan) masterOtaOwnerRequest = nullptr;
-        if (otaRejectionStatus != 0) {
-          request->send(otaRejectionStatus, "text/plain", otaRejectionReason);
+        // Consume the rejection verdict: left set, a later POST whose
+        // upload callback never runs would echo this stale status instead
+        // of its own "no firmware in request" 400.
+        int rejStatus = otaRejectionStatus;
+        String rejReason = otaRejectionReason;
+        otaRejectionStatus = 0;
+        otaRejectionReason = "";
+        if (rejStatus != 0) {
+          request->send(rejStatus, "text/plain", rejReason);
           return;
         }
         if (Update.hasError()) {
@@ -238,8 +270,29 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
       [](AsyncWebServerRequest* request, String filename, size_t index,
          uint8_t* data, size_t len, bool final) {
         if (index == 0) {
+          // Concurrent-upload guard (#349/#359): a live session owns the
+          // Update singleton and the shared rejection state — mark this
+          // request rejected (per-request _tempObject; malloc pairs with the
+          // free in the request destructor) and leave both alone. Stealing
+          // the session here (the old abort+begin) DoS'd a legitimate
+          // recovery flash and interleaved the two requests' chunks.
+          if (masterOtaOwnerRequest != nullptr &&
+              masterOtaOwnerRequest != request) {
+            request->_tempObject = malloc(1);
+            return;
+          }
           otaRejectionStatus = 0;
           otaRejectionReason = "";
+
+          // CSRF gate (#349), INLINE before Update.begin: the body-parsing
+          // upload callback is the first code to run for this route, so a
+          // forged cross-site POST would otherwise flash + arm its image
+          // before any post-body check.
+          if (rescueUploadCsrfRejected(request)) {
+            otaRejectionStatus = 403;
+            otaRejectionReason = "Cross-origin flash refused (CSRF guard)";
+            return;
+          }
 
           String md5 = request->hasParam("md5")
                            ? request->getParam("md5")->value()
@@ -268,9 +321,20 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
             return;
           }
           Update.setMD5(md5.c_str());
-          masterOtaOwnerRequest = request;  // #347: a real flash began here
+          // #347: a real flash began here; #349: session is live from here.
+          // onDisconnect is the backstop for a client that dies mid-upload:
+          // free the slot; the stale Update session is aborted by the next
+          // upload's begin path above.
+          masterOtaOwnerRequest = request;
+          request->onDisconnect([request]() {
+            if (masterOtaOwnerRequest == request) masterOtaOwnerRequest = nullptr;
+          });
         }
 
+        // Not (or no longer) the live owner (#359): covers overlap-rejected
+        // requests whose client keeps streaming — without this gate their
+        // leftover chunks would interleave into the live owner's session.
+        if (masterOtaOwnerRequest != request) return;
         if (otaRejectionStatus != 0) return;
 
         if (len > 0 && Update.write(data, len) != len) {
@@ -293,6 +357,13 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
   // exited-to image re-proves itself against the health gate; it was
   // booting fine before, so that's a free self-test.
   server.on("/rescue/exit", HTTP_POST, [](AsyncWebServerRequest* request) {
+    // CSRF gate (#349): a forged cross-site POST must not reboot the device
+    // out of a recovery session.
+    if (rescueUploadCsrfRejected(request)) {
+      request->send(403, "text/plain",
+                    F("Cross-origin request refused (CSRF guard)"));
+      return;
+    }
     SlotProbe app0 = probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_0);
     SlotProbe app1 = probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_1);
     int slot = pickExitSlot(exitCandidate(app0, 0), exitCandidate(app1, 1));

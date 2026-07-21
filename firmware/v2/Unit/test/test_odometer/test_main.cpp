@@ -87,6 +87,53 @@ static void test_boot_value_all_erased_reads_zero() {
   TEST_ASSERT_EQUAL_UINT32(0, odometerBootValue(slots));
 }
 
+// --- odometerSlotChecksum / odometerBootValueChecked (#354) -----------------
+// A power-loss-torn slot write used to yield a large garbage value the boot
+// ring-max silently adopted; each slot now carries a masked XOR checksum
+// byte and only checksum-valid slots count.
+
+static void test_slot_checksum_masked_xor() {
+  TEST_ASSERT_EQUAL_UINT8((0x01 ^ 0x02 ^ 0x03 ^ 0x04) ^ ODO_SLOT_CHECKSUM_MASK,
+                          odometerSlotChecksum(0x04030201UL));
+  // Zero count: checksum is the bare mask — never 0x00 or 0xFF.
+  TEST_ASSERT_EQUAL_UINT8(ODO_SLOT_CHECKSUM_MASK, odometerSlotChecksum(0));
+}
+
+static void test_boot_value_checked_takes_max_of_valid_slots() {
+  uint32_t slots[ODO_RING_SLOTS] = {0};
+  uint8_t sums[ODO_RING_SLOTS];
+  slots[3] = 512;
+  slots[4] = 640;
+  for (int i = 0; i < ODO_RING_SLOTS; i++) sums[i] = odometerSlotChecksum(slots[i]);
+  TEST_ASSERT_EQUAL_UINT32(640, odometerBootValueChecked(slots, sums));
+}
+
+static void test_boot_value_checked_ignores_torn_garbage() {
+  // The #354 failure: power loss mid-write leaves a huge garbage value whose
+  // checksum byte no longer matches — it must not become the wear count.
+  uint32_t slots[ODO_RING_SLOTS] = {0};
+  uint8_t sums[ODO_RING_SLOTS];
+  for (int i = 0; i < ODO_RING_SLOTS; i++) sums[i] = odometerSlotChecksum(slots[i]);
+  slots[7] = 900;
+  sums[7] = odometerSlotChecksum(900);
+  slots[8] = 0x7F00FFFFUL;                  // torn write...
+  sums[8] = odometerSlotChecksum(1024);     // ...checksum from the old value
+  TEST_ASSERT_EQUAL_UINT32(900, odometerBootValueChecked(slots, sums));
+}
+
+static void test_boot_value_checked_still_rejects_erased_ff() {
+  uint32_t slots[ODO_RING_SLOTS];
+  uint8_t sums[ODO_RING_SLOTS];
+  for (int i = 0; i < ODO_RING_SLOTS; i++) {
+    slots[i] = 0xFFFFFFFFUL;
+    sums[i] = 0xFF;  // erased EEPROM reads 0xFF everywhere
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, odometerBootValueChecked(slots, sums));
+  // Even a checksum that happens to match must not validate 0xFFFFFFFF.
+  sums[2] = odometerSlotChecksum(0xFFFFFFFFUL);
+  TEST_ASSERT_EQUAL_UINT32(0, odometerBootValueChecked(slots, sums));
+}
+
 // --- odometerEncodeReply: I2C wire format ----------------------------------
 // 5 bytes: uint32 LE + XOR-of-payload ^ 0xA5. The masked checksum rejects
 // what an old unit (unknown opcode -> 1-byte status reply padded by the bus)
@@ -132,6 +179,10 @@ int main(int, char**) {
   RUN_TEST(test_boot_value_is_max_of_ring);
   RUN_TEST(test_boot_value_ignores_erased_ff_slots);
   RUN_TEST(test_boot_value_all_erased_reads_zero);
+  RUN_TEST(test_slot_checksum_masked_xor);
+  RUN_TEST(test_boot_value_checked_takes_max_of_valid_slots);
+  RUN_TEST(test_boot_value_checked_ignores_torn_garbage);
+  RUN_TEST(test_boot_value_checked_still_rejects_erased_ff);
   RUN_TEST(test_encode_reply_little_endian_with_checksum);
   RUN_TEST(test_encode_reply_zero_count_checksum_is_mask);
   RUN_TEST(test_should_persist_only_after_interval);

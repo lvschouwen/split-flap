@@ -142,7 +142,7 @@ inline void clusterRolloutStart(ClusterRolloutState& st, int memberIndex,
   st.bytesTotal = totalBytes;
 }
 
-// #343 (review HIGH): a RESCUE-triggered push burns its attempt AT START.
+// #343: a RESCUE-triggered push burns its attempt AT START.
 // The rejoin verdict can't be trusted to count it — a poisoned image often
 // joins looking healthy (rescue:0, matching rev) and only crashes after
 // the handshake, which would read as Converged and reset the counter every
@@ -232,7 +232,7 @@ inline void clusterRolloutUploadDone(ClusterRolloutState& st, uint32_t nowMs) {
 
 // The health gate: fed the target member's live supervision facts each
 // tick while WaitingRejoin. Success clears the member's attempts — EXCEPT
-// after a rescue-triggered push (#343 review HIGH): its "healthy" rejoin
+// after a rescue-triggered push (#343): its "healthy" rejoin
 // proves only that the handshake ran, not that the crash is gone, so the
 // start-burned attempt stands until a genuine rev change or a new stored
 // image forgives it. A rejoin still carrying the rescue marker means the

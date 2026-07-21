@@ -157,7 +157,7 @@ inline void displayApplyUnitFacts(DisplaySnapshot& snap,
     // phys and lastFrameLetters describe the same instant (frames and polls
     // are serialized). A render-time comparison would race newer frames
     // against stale phys and flag phantom mismatches. No verdict against a
-    // rotating drum (self-resolving by definition, cpp-review MEDIUM) or
+    // rotating drum (self-resolving by definition) or
     // before any frame exists.
     UnitFacts& u = snap.units[i];
     bool physKnown = u.diagValid &&

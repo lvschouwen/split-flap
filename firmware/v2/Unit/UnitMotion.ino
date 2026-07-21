@@ -100,10 +100,13 @@ void rotateToLetter(int toLetter) {
         millis() - lastUnhomedCalibrateMs < UNHOMED_CALIBRATE_COOLDOWN_MS) {
       return;  // still cooling down after a failed home — leave the drum idle
     }
+    // 0 is the "never attempted" sentinel — bump like identifyStartMs (#354).
     lastUnhomedCalibrateMs = millis();
+    if (lastUnhomedCalibrateMs == 0) lastUnhomedCalibrateMs = 1;
   }
 
   lastRotation = millis();
+  if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
   int posCurrentLetter = displayedLetter;
 #ifdef SERIAL_ENABLE
   Serial.print("go to letter: ");
@@ -459,7 +462,7 @@ void runSelfTest() {
     selfTest.revTimeMs = 0;
     //The hall edge was never found: the drum's position is unknowable, so
     //park instead of letting the letter-diff check "restore" the commanded
-    //letter from a fake blank origin (codex review). The master's next
+    //letter from a fake blank origin. The master's next
     //frame re-sends content deliberately; until then the unit stays put.
     displayedLetter = 0;
     receivedNumber = 0;
@@ -467,6 +470,7 @@ void runSelfTest() {
     drift.driftPending = false;
   }
   lastRotation = millis();  //overheat gate before the restore move
+  if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
   delay(100);
   stopMotor();
   driftRefreshReplyBuffers();  //publish the result before loop() resumes

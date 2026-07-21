@@ -16,6 +16,7 @@
 #include "FollowerCluster.h"
 #include "FollowerConfig.h"
 #include "FollowerCors.h"
+#include "ClusterForeign.h"
 #include "FollowerJson.h"
 #include "FollowerRescue.h"  // #343: beacon marker + op lockout
 #include "FollowerSettings.h"
@@ -55,6 +56,11 @@ static uint32_t selfTestPollLastMs = 0;
 // --- OTA session state (v1 #191 conventions) ----------------------------------------
 
 static AsyncWebServerRequest* volatile masterOtaOwnerRequest = nullptr;
+
+// #358: refused foreign-leader contacts, surfaced in /cluster/health.
+// Handler-context only (the ESP-01's async handlers and loop() cooperate on
+// one core), RAM-only, resets on reboot.
+static ForeignContactStats foreignContacts;
 static bool otaRejected = false;
 static int otaRejectionStatus = 0;
 static String otaRejectionReason;
@@ -311,6 +317,14 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         otaTxPowerReduced = true;
 
         uint32_t freeSpace = ESP.getFreeSketchSpace();
+        if (freeSpace < 0x1000) {
+          // #354: (freeSpace - 0x1000) below would underflow to a huge
+          // maxSketchSpace and defeat the contentLen pre-check.
+          otaRejected = true;
+          otaRejectionStatus = 507;
+          otaRejectionReason = String("No sketch space free: ") + freeSpace;
+          return;
+        }
         uint32_t maxSketchSpace = (freeSpace - 0x1000) & 0xFFFFF000;
         size_t contentLen = request->contentLength();
         if (contentLen > 0 && contentLen > maxSketchSpace) {
@@ -328,6 +342,24 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
               "Flash config mismatch — reflash once over USB";
           return;
         }
+        // MD5 is MANDATORY (v1 #144): eboot's checksum does not catch a
+        // truncated upload. Validated BEFORE Update.begin (#354): begin
+        // erases the flash region, so a malformed no-md5 POST used to cost
+        // a full erase cycle (display frozen, flash wear) per request.
+        if (!request->hasParam("md5")) {
+          otaRejected = true;
+          otaRejectionStatus = 400;
+          otaRejectionReason = "md5 query param is required";
+          return;
+        }
+        String md5 = request->getParam("md5")->value();
+        md5.toLowerCase();
+        if (md5.length() != 32) {
+          otaRejected = true;
+          otaRejectionStatus = 400;
+          otaRejectionReason = "md5 query param must be a 32-char hex digest";
+          return;
+        }
         Update.runAsync(true);
         if (!Update.begin(maxSketchSpace, U_FLASH)) {
           // Stale updater state from an aborted upload (v1 #162).
@@ -340,24 +372,6 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
                 String("Update.begin failed: ") + Update.getErrorString();
             return;
           }
-        }
-        // MD5 is MANDATORY (v1 #144): eboot's checksum does not catch a
-        // truncated upload.
-        if (!request->hasParam("md5")) {
-          otaRejected = true;
-          otaRejectionStatus = 400;
-          otaRejectionReason = "md5 query param is required";
-          Update.end(false);
-          return;
-        }
-        String md5 = request->getParam("md5")->value();
-        md5.toLowerCase();
-        if (md5.length() != 32) {
-          otaRejected = true;
-          otaRejectionStatus = 400;
-          otaRejectionReason = "md5 query param must be a 32-char hex digest";
-          Update.end(false);
-          return;
         }
         if (!Update.setMD5(md5.c_str())) {
           otaRejected = true;
@@ -491,6 +505,11 @@ void webEndpointsInit(AsyncWebServer& server) {
     // alive, a DIFFERENT leader's join is refused with its identity.
     String curName, curHost;
     if (clusterJoinWouldConflict(leaderHost, curName, curHost)) {
+      foreignContactRecord(foreignContacts, ForeignContactKind::Join,
+                           request->client()->remoteIP().toString(), millis());
+      SerialPrintln(String(F("Foreign join refused from ")) +
+                    request->client()->remoteIP().toString() +
+                    F(" — leader is ") + curHost);
       String out = "{\"error\":\"other-leader\",\"leaderHost\":";
       followerAppendJsonString(out, curHost);
       out += ",\"leaderName\":";
@@ -525,6 +544,11 @@ void webEndpointsInit(AsyncWebServer& server) {
     FollowerClusterView rcv = clusterViewGet();
     if (rcv.leaderHost.length() > 0 &&
         rcv.leaderHost != request->client()->remoteIP().toString()) {
+      foreignContactRecord(foreignContacts, ForeignContactKind::Render,
+                           request->client()->remoteIP().toString(), millis());
+      SerialPrintln(String(F("Foreign render refused from ")) +
+                    request->client()->remoteIP().toString() +
+                    F(" — leader is ") + rcv.leaderHost);
       request->send(403, "text/plain", F("render must come from the leader"));
       return;
     }
@@ -593,6 +617,11 @@ void webEndpointsInit(AsyncWebServer& server) {
     FollowerClusterView pcv = clusterViewGet();
     if (pcv.leaderHost.length() > 0 &&
         pcv.leaderHost != request->client()->remoteIP().toString()) {
+      foreignContactRecord(foreignContacts, ForeignContactKind::Ping,
+                           request->client()->remoteIP().toString(), millis());
+      SerialPrintln(String(F("Foreign ping refused from ")) +
+                    request->client()->remoteIP().toString() +
+                    F(" — leader is ") + pcv.leaderHost);
       request->send(403, "text/plain", F("ping must come from the leader"));
       return;
     }
@@ -685,6 +714,8 @@ void webEndpointsInit(AsyncWebServer& server) {
     diag.minHeap = followerMinHeap();
     diag.sntpSynced = cv.sntpSynced;
     diag.hmac = clusterHmacEnforced();
+    diag.foreign = foreignContacts;  // #358
+    diag.nowMs = millis();
     request->send(200, "application/json",
                   followerClusterHealthJson(
                       followerPhaseName(cv.phase), cv.leaderName,

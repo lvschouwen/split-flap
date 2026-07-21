@@ -500,7 +500,7 @@ static void test_successor_tier_table_width_beats_role() {
   // The admin-configured table width dominates: a width>0 member is a
   // rendering row (tier 1) REGARDLESS of its self-reported role — nothing
   // cross-validates the member table against the peer's own deviceRole,
-  // so this intentional precedence must not regress (review MED pin).
+  // so this intentional precedence must not regress.
   TEST_ASSERT_EQUAL(1, clusterSuccessorTier("headless-monitor", 8));
   TEST_ASSERT_EQUAL(1, clusterSuccessorTier("headless-backup", 8));
   TEST_ASSERT_EQUAL(1, clusterSuccessorTier("headless-spare", 8));

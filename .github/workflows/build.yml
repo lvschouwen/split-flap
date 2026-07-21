@@ -34,11 +34,13 @@ jobs:
         with:
           path: |
             ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
             ~/.cache/pip
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       - name: Build
         working-directory: firmware/${{ matrix.project }}
@@ -62,11 +64,13 @@ jobs:
         with:
           path: |
             ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
             ~/.cache/pip
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       - name: Run Unit native tests
         working-directory: firmware/v2/Unit
@@ -86,6 +90,11 @@ jobs:
 
       - name: Install pytest
         run: pip install pytest
+
+      # #350 copied-header drift gate: the v2 copy policy prices in silent
+      # divergence — this pins every declared copy pair.
+      - name: Copied-header drift gate
+        run: python -m pytest tests/ -v
 
       - name: Run v2 Master Python tests
         working-directory: firmware/v2/Master

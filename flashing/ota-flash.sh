@@ -306,10 +306,19 @@ flash_master() {
   while (( $(date +%s) < deadline )); do
     sleep 3
     post_version="$(fetch_setting version)"
-    if [[ "$post_version" != "?" ]]; then
-      reverted="$(fetch_setting otaReverted)"
-      break
+    if [[ "$post_version" == "?" ]]; then
+      continue
     fi
+    # #351 poll race: a 200 answered BEFORE the reboot actually happened
+    # reports the old version — keep polling while the version still reads
+    # pre_version (unless this genuinely is a same-rev reflash, where the
+    # version never changes and the deadline would be a guaranteed miss).
+    if [[ -n "$rev" && "$rev" != "$pre_version" &&
+          "$post_version" == "$pre_version" ]]; then
+      continue
+    fi
+    reverted="$(fetch_setting otaReverted)"
+    break
   done
 
   echo "  version     : $pre_version -> $post_version"
@@ -324,7 +333,15 @@ flash_master() {
     return 3
   fi
   if [[ -z "$rev" ]]; then
-    echo "[ok] device is back up (no rev to verify against)"
+    # #351: with no rev to compare, otaReverted is the ONLY verdict signal —
+    # "?" (fetch failed; also legitimately absent on esp01/v1 targets) must
+    # read as unverified, never as a silent pass.
+    if [[ "$reverted" == "?" ]]; then
+      echo "[fail] device is back up but the revert state could not be read" >&2
+      echo "       and no rev is available to verify against — UNVERIFIED" >&2
+      return 3
+    fi
+    echo "[ok] device is back up (no rev to verify against; otaReverted=$reverted)"
     return 0
   fi
   if [[ "$post_version" == "$rev" ]]; then
