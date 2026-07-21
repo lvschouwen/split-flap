@@ -238,4 +238,3 @@ String buildFreshDigestLocked(const String& leaderMode) {
   return "{\"gen\":" + String((unsigned long)digestGen) +
          body.substring(strlen("{\"gen\":0"));
 }
-

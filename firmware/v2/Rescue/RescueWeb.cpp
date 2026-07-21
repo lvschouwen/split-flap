@@ -235,8 +235,15 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
         // would report success on a never-begun Update and reboot the device.
         bool uploadRan = (masterOtaOwnerRequest == request);
         if (uploadRan) masterOtaOwnerRequest = nullptr;
-        if (otaRejectionStatus != 0) {
-          request->send(otaRejectionStatus, "text/plain", otaRejectionReason);
+        // Consume the rejection verdict: left set, a later POST whose
+        // upload callback never runs would echo this stale status instead
+        // of its own "no firmware in request" 400.
+        int rejStatus = otaRejectionStatus;
+        String rejReason = otaRejectionReason;
+        otaRejectionStatus = 0;
+        otaRejectionReason = "";
+        if (rejStatus != 0) {
+          request->send(rejStatus, "text/plain", rejReason);
           return;
         }
         if (Update.hasError()) {
