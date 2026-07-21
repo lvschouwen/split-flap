@@ -320,7 +320,10 @@ def render_dashboard(leader):
 
 
 def cmd_status(args):
-    print(render_dashboard(args.leader))
+    out = render_dashboard(args.leader)
+    print(out)
+    if "UNREACHABLE" in out:
+        sys.exit(1)  # #351
 
 
 def cmd_watch(args):
@@ -340,7 +343,7 @@ def cmd_units(args):
     d = jget(host, "/units/health")
     if not d:
         print(red(f"no unit health from {host}"))
-        return
+        sys.exit(1)  # #351
     units = d.get("units", [])
     print(bold(f"{host}  width={d.get('width')}  faulty={d.get('faulty')}  "
                f"vccMin={d.get('vccMin')}mV"))
@@ -401,7 +404,7 @@ def cmd_cluster(args):
     d = jget(args.leader, "/cluster/status")
     if not d:
         print(red("no /cluster/status"))
-        return
+        sys.exit(1)  # #351
     print(json.dumps(d, indent=2))
 
 
@@ -412,7 +415,7 @@ def cmd_authcheck(args):
     st, body = http(args.leader, "GET", "/log/flash", timeout=8.0)
     if st != 200:
         print(red(f"no /log/flash ({st})"))
-        return
+        sys.exit(1)  # #351
     hits = [ln for ln in body.splitlines() if "authenticated" in ln.lower()
             or "joined by" in ln.lower()]
     if not hits:
@@ -430,10 +433,10 @@ def cmd_log(args):
     path = "/log/flash" if args.flash else "/log"
     st, body = http(host, "GET", path, timeout=8.0)
     if st != 200:
-        hint = ("  (the ESP-01 has no /log endpoint yet — see issue #316; "
-                "the S3 serves /log and /log/flash)" if st in (404, 500) else "")
+        hint = ("  (the ESP-01 serves /log only — /log/flash is S3-only)"
+                if st in (404, 500) else "")
         print(yellow(f"no log from {host}{path} (HTTP {st}){hint}"))
-        return
+        sys.exit(1)  # #351
     # /log may be plain text or a JSON wrapper — handle both.
     lines = body.splitlines()
     try:
@@ -470,6 +473,10 @@ def cmd_raw(args):
     host = resolve_target(args)
     data = None
     if args.data:
+        bad = [kv for kv in args.data if "=" not in kv]
+        if bad:
+            print(red(f"--data fields need key=value form: {bad}"))
+            sys.exit(2)
         data = dict(kv.split("=", 1) for kv in args.data)
     st, body = http(host, args.method.upper(), args.path, data)
     print(f"{st}")
@@ -477,15 +484,19 @@ def cmd_raw(args):
 
 
 def _report_post(host, what, st, body):
+    # #351: anything but a 200 exits 1 — the colors are for humans, the exit
+    # code is for scripts/cron, and both must tell the same story.
     if st == 200:
         print(green(f"✓ {what} → {host}  ({body.strip() or 'ok'})"))
-    elif st == 409:
+        return
+    if st == 409:
         print(yellow(f"⚠ {what} → {host}: 409 {body.strip()} "
                      "(clustered follower? set text on the leader instead)"))
     elif st == 0:
         print(red(f"✗ {what} → {host}: unreachable ({body})"))
     else:
         print(red(f"✗ {what} → {host}: {st} {body.strip()}"))
+    sys.exit(1)
 
 
 # ---- argparse ---------------------------------------------------------------
