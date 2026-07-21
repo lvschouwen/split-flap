@@ -387,6 +387,255 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
   }
 }
 
+// --- mqttServiceTick stages (#353): one static helper per mechanism the
+// tick interleaves — OTA freeze, event-driven state, cluster surfacing,
+// periodic telemetry. All file-scope state; mqttTask-only execution.
+
+// OTA freeze/resume (#116 semantics). Returns true while frozen — the
+// caller skips the rest of the tick.
+static bool mqttHandleOtaFreeze() {
+  if (stopForOtaRequested.exchange(false) && !mqttStoppedForOta) {
+    mqttStoppedForOta = true;
+    mqttFrozenAtMs = millis();
+    // Abrupt on purpose: no DISCONNECT packet → the broker fires the
+    // retained "offline" LWT, so HA availability stays correct without a
+    // publish that would only go out if the broker ACKed mid-upload.
+    mqttClient.disconnect(true);
+    connectedAtomic.store(false);
+    SerialPrintln(F("MQTT: force-closed for master OTA upload"));
+}
+if (mqttStoppedForOta) {
+  bool resume = resumeAfterOtaRequested.exchange(false);
+  if (!resume &&
+      (int32_t)(millis() - mqttFrozenAtMs) >
+          (int32_t)MQTT_OTA_FREEZE_FAILSAFE_MS) {
+    SerialPrintln(F("MQTT: OTA freeze failsafe — resuming"));
+    resume = true;
+  }
+  if (!resume) {
+    mqttClient.loop();  // lets the disconnect complete; no reconnects
+    return true;
+  }
+  mqttStoppedForOta = false;
+  // The freeze's own force-close fired a disconnect event that was never
+  // consumed while frozen — drain it (and a racing connect flag) so it
+  // can't clobber the fresh immediate-attempt schedule.
+  mqttDisconnectedEvent = false;
+  mqttJustConnected = false;
+  connectedAtomic.store(false);
+  mqttBackoffInit(mqttBackoff, millis());
+  SerialPrintln(F("MQTT: resuming after OTA upload ended without reboot"));
+}
+resumeAfterOtaRequested.store(false);
+  return false;
+}
+
+// Event-driven retained state (v1 #130/#132): publish only on change so HA
+// updates instantly. Cheap compares every pass. MUST run before the rename
+// clear — the connect block resets the trackers, and running after the
+// clear would repopulate the just-blanked old-id topics.
+static void mqttPublishEventDrivenState(const DisplaySnapshot& snap,
+                                        const WebContentSnapshot& content,
+                                        bool leading) {
+if (content.deviceMode != mqttLastPublishedMode &&
+    (content.deviceMode == "text" || content.deviceMode == "clock")) {
+  mqttClient.publish(mqttTopicModeState.c_str(), 0, true,
+                     content.deviceMode.c_str());
+  mqttLastPublishedMode = content.deviceMode;
+}
+// While leading (#277), text/state carries the whole wall (published in
+// the cluster block below) — the own-row slice alone would be a lie.
+// Shared-tracker contract: mqttLastPublishedText/Width track the TOPIC's
+// last retained value, not a mode — this own-facts path and the wall
+// path below share them ON PURPOSE (one topic, one dedup), and the
+// transition branch resets both when ownership flips.
+if (!leading) {
+  String writtenText(snap.currentText);
+  if (writtenText != mqttLastPublishedText) {
+    mqttLastPublishedText = writtenText;
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "text/state").c_str(),
+                       0, true, writtenText.c_str());
+  }
+}
+int notif = mqttNotification.active ? 1 : 0;
+if (notif != mqttLastPublishedNotif) {
+  mqttLastPublishedNotif = notif;
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "notification").c_str(),
+                     0, true, notif ? "ON" : "OFF");
+}
+// Text capacity = grid size (#277): a leading master's display width IS
+// the wall. Capacity is the 5 s cluster pass's cached fact, so the first
+// publish after enabling may briefly show the own width — retained,
+// self-corrects next pass.
+int widthValue = (leading && mqttClusterCapacity > 0) ? mqttClusterCapacity
+                                                      : snap.displayWidth;
+if (widthValue != mqttLastPublishedWidth) {
+  mqttLastPublishedWidth = widthValue;
+  char n[12];
+  snprintf(n, sizeof(n), "%d", widthValue);
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "width").c_str(), 0,
+                     true, n);
+}
+if (snap.detectedUnitCount != mqttLastPublishedUnits) {
+  mqttLastPublishedUnits = snap.detectedUnitCount;
+  char n[12];
+  snprintf(n, sizeof(n), "%d", (int)snap.detectedUnitCount);
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units").c_str(), 0,
+                     true, n);
+}
+if (content.flapSpeed != mqttLastPublishedSpeed) {
+  mqttLastPublishedSpeed = content.flapSpeed;
+  char n[12];
+  snprintf(n, sizeof(n), "%d", content.flapSpeed);
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "speed").c_str(), 0,
+                     true, n);
+}
+if (content.alignment != mqttLastPublishedAlignment) {
+  mqttLastPublishedAlignment = content.alignment;
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "alignment").c_str(), 0,
+                     true, content.alignment.c_str());
+}
+}
+
+// Cluster surfacing (#277): degraded sensor + member/rollout attrs + the
+// wall text/state, 5 s cadence (MQTT_CLUSTER_INTERVAL_MS; cadence check
+// lives inside).
+static void mqttPublishClusterSurfacing(const DisplaySnapshot& snap,
+                                        const WebContentSnapshot& content,
+                                        bool leading) {
+// Cluster surfacing (#277): degraded sensor + member/rollout attrs +
+// the wall text/state, 5 s cadence (see MQTT_CLUSTER_INTERVAL_MS).
+if ((int32_t)(millis() - mqttNextClusterMs) >= 0) {
+  mqttNextClusterMs = millis() + MQTT_CLUSTER_INTERVAL_MS;
+  int leadingNow = leading ? 1 : 0;
+  if (leadingNow != mqttLastClusterConfigured) {
+    char topicBuf[96];
+    size_t tLen = buildClusterDegradedDiscoveryTopic(
+        topicBuf, sizeof(topicBuf), mqttResolvedDeviceId.c_str());
+    if (tLen > 0 && tLen < sizeof(topicBuf)) {
+      if (leadingNow) {
+        char payloadBuf[512];
+        size_t pLen = buildClusterDegradedDiscovery(
+            payloadBuf, sizeof(payloadBuf), mqttResolvedDeviceId.c_str(),
+            mqttFwVersion.c_str());
+        if (pLen > 0 && pLen < sizeof(payloadBuf)) {
+          mqttClient.publish(topicBuf, 0, true, payloadBuf);
+        } else {
+          SerialPrintln(
+              F("MQTT: cluster discovery skipped — would truncate"));
+        }
+      } else {
+        // Not leading (runtime disable OR the reconcile sweep of a fresh
+        // session): blank the retained config + topics so HA drops the
+        // entity instead of showing it stale, and force the width/text
+        // publishes back onto this board's own facts.
+        mqttClient.publish(topicBuf, 0, true, "");
+        mqttClient.publish(
+            mqttTopic(mqttResolvedDeviceId, "cluster_degraded").c_str(), 0,
+            true, "");
+        mqttClient.publish(
+            mqttTopic(mqttResolvedDeviceId, "cluster/attrs").c_str(), 0,
+            true, "");
+        mqttClusterCapacity = 0;
+        mqttLastPublishedWidth = -1;
+        mqttLastPublishedText = "\x01";
+      }
+    }
+    mqttLastClusterState = -1;
+    mqttLastClusterAttrs = "\x01";
+    mqttLastClusterConfigured = leadingNow;
+  }
+  if (leading) {
+    ClusterLeaderStatus cst = clusterLeaderStatusGet();
+    mqttClusterCapacity = cst.gridCapacity;
+    int degraded = clusterDegraded(cst) ? 1 : 0;
+    if (degraded != mqttLastClusterState) {
+      mqttLastClusterState = degraded;
+      mqttClient.publish(
+          mqttTopic(mqttResolvedDeviceId, "cluster_degraded").c_str(), 0,
+          true, degraded ? "ON" : "OFF");
+    }
+    String attrs = buildClusterAttrsJson(cst);
+    if (attrs != mqttLastClusterAttrs) {
+      mqttLastClusterAttrs = attrs;
+      mqttClient.publish(
+          mqttTopic(mqttResolvedDeviceId, "cluster/attrs").c_str(), 0, true,
+          attrs.c_str());
+    }
+    // Wall text/state — shares mqttLastPublishedText with the own-facts
+    // path (same topic; see the contract note above the leading gate).
+    String rows[CLUSTER_MAX_MEMBERS];
+    int selfRow = 0;
+    int rowCount = clusterLeaderMirrorRows(
+        rows, selfRow, String(snap.currentText), content.alignment);
+    String wall = clusterWallStateText(rows, rowCount);
+    if (rowCount > 0 && wall != mqttLastPublishedText) {
+      mqttLastPublishedText = wall;
+      mqttClient.publish(
+          mqttTopic(mqttResolvedDeviceId, "text/state").c_str(), 0, true,
+          wall.c_str());
+    }
+  }
+}
+}
+
+// Periodic telemetry + per-unit health, 60 s (wraparound-safe; cadence
+// check lives inside). Deviation from v1 (spec): no blocking bus poll from
+// here — displayTask owns the bus; faulty counts/attrs are probe-time
+// facts from the snapshot.
+static void mqttPublishTelemetry(const DisplaySnapshot& snap) {
+  // Periodic telemetry + per-unit health, 60 s (wraparound-safe). Deviation
+  // from v1 (spec): no blocking bus poll from here — displayTask owns the
+  // bus; faulty counts/attrs are probe-time facts from the snapshot.
+  if ((int32_t)(millis() - mqttNextTelemetryMs) >= 0) {
+    mqttNextTelemetryMs = millis() + MQTT_TELEMETRY_INTERVAL_S * 1000UL;
+    uint32_t freeHeap = ESP.getFreeHeap();
+    uint32_t maxBlock = ESP.getMaxAllocHeap();
+    int heapFragPct = (freeHeap > 0 && maxBlock <= freeHeap)
+                          ? (int)(100 - (maxBlock * 100ULL) / freeHeap)
+                          : 0;
+    char buf[128];
+    size_t tn = buildTelemetryPayload(
+        buf, sizeof(buf), freeHeap, heapFragPct, WiFi.RSSI(),
+        snap.lastShowWriteErrors, millis() / 1000UL,
+        clockIsTimeSynced(time(nullptr)));
+    if (tn > 0 && tn < sizeof(buf)) {
+      mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
+    }
+
+    char fc[12];
+    snprintf(fc, sizeof(fc), "%d", (int)snap.faultyUnitCount);
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units_faulty").c_str(),
+                       0, true, fc);
+    // Wear warning (#231): binary problem state + median/flagged attrs, both
+    // computed from the same snapshot the health payload uses.
+    WearAssessment wear;
+    assessWear(snap.units, snap.displayWidth, wear);
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units_wear").c_str(),
+                       0, true, wear.flaggedCount > 0 ? "ON" : "OFF");
+    char wearAttrs[100];
+    wearAttrs[0] = '{';
+    size_t wn = buildWearJson(wear, wearAttrs + 1, sizeof(wearAttrs) - 2);
+    if (wn > 0 && wn < sizeof(wearAttrs) - 2) {
+      wearAttrs[wn + 1] = '}';
+      wearAttrs[wn + 2] = '\0';
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units/wear").c_str(),
+                         0, true, wearAttrs);
+    }
+    // Static, not stack (~2 KB doesn't belong on mqttTask's stack) and not
+    // heap (a forever-periodic alloc/free is churn the memory policy
+    // forbids). mqttTask-only access, so no guard needed.
+    static char health[UNIT_HEALTH_JSON_CAP];
+    size_t hn = buildUnitHealthJson(health, UNIT_HEALTH_JSON_CAP, snap.units,
+                                    snap.displayWidth, snap.faultyUnitCount,
+                                    SFP_I2C_ADDRESS_BASE, millis());
+    if (hn > 0 && hn < UNIT_HEALTH_JSON_CAP) {
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units/attrs").c_str(),
+                         0, true, health);
+    }
+}
+}
+
 void mqttServiceTick() {
   // Overlay lifecycle runs BEFORE the initialised gate: web transients ride
   // this overlay on broker-less devices too (#219, v1 rule — calibration
@@ -410,39 +659,7 @@ void mqttServiceTick() {
   }
 
   if (!mqttInitialised) return;
-  if (stopForOtaRequested.exchange(false) && !mqttStoppedForOta) {
-    mqttStoppedForOta = true;
-    mqttFrozenAtMs = millis();
-    // Abrupt on purpose: no DISCONNECT packet → the broker fires the
-    // retained "offline" LWT, so HA availability stays correct without a
-    // publish that would only go out if the broker ACKed mid-upload.
-    mqttClient.disconnect(true);
-    connectedAtomic.store(false);
-    SerialPrintln(F("MQTT: force-closed for master OTA upload"));
-  }
-  if (mqttStoppedForOta) {
-    bool resume = resumeAfterOtaRequested.exchange(false);
-    if (!resume &&
-        (int32_t)(millis() - mqttFrozenAtMs) >
-            (int32_t)MQTT_OTA_FREEZE_FAILSAFE_MS) {
-      SerialPrintln(F("MQTT: OTA freeze failsafe — resuming"));
-      resume = true;
-    }
-    if (!resume) {
-      mqttClient.loop();  // lets the disconnect complete; no reconnects
-      return;
-    }
-    mqttStoppedForOta = false;
-    // The freeze's own force-close fired a disconnect event that was never
-    // consumed while frozen — drain it (and a racing connect flag) so it
-    // can't clobber the fresh immediate-attempt schedule.
-    mqttDisconnectedEvent = false;
-    mqttJustConnected = false;
-    connectedAtomic.store(false);
-    mqttBackoffInit(mqttBackoff, millis());
-    SerialPrintln(F("MQTT: resuming after OTA upload ended without reboot"));
-  }
-  resumeAfterOtaRequested.store(false);
+  if (mqttHandleOtaFreeze()) return;
 
   // Pump the client: socket reads/writes + all callbacks fire in here.
   mqttClient.loop();
@@ -516,200 +733,16 @@ void mqttServiceTick() {
     return;
   }
 
-  // Event-driven retained state (v1 #130/#132): publish only on change so
-  // HA updates instantly. Cheap compares every pass. MUST run before the
-  // rename clear below — the connect block resets the trackers, and running
-  // after the clear would repopulate the just-blanked old-id topics.
   DisplaySnapshot snap = displaySnapshotGet();
   WebContentSnapshot content = webDisplayContentSnapshot();
-
-  if (content.deviceMode != mqttLastPublishedMode &&
-      (content.deviceMode == "text" || content.deviceMode == "clock")) {
-    mqttClient.publish(mqttTopicModeState.c_str(), 0, true,
-                       content.deviceMode.c_str());
-    mqttLastPublishedMode = content.deviceMode;
-  }
-  // While leading (#277), text/state carries the whole wall (published in
-  // the cluster block below) — the own-row slice alone would be a lie.
-  // Shared-tracker contract: mqttLastPublishedText/Width track the TOPIC's
-  // last retained value, not a mode — this own-facts path and the wall
-  // path below share them ON PURPOSE (one topic, one dedup), and the
-  // transition branch resets both when ownership flips.
   bool leading = clusterLeaderEnabled();
-  if (!leading) {
-    String writtenText(snap.currentText);
-    if (writtenText != mqttLastPublishedText) {
-      mqttLastPublishedText = writtenText;
-      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "text/state").c_str(),
-                         0, true, writtenText.c_str());
-    }
-  }
-  int notif = mqttNotification.active ? 1 : 0;
-  if (notif != mqttLastPublishedNotif) {
-    mqttLastPublishedNotif = notif;
-    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "notification").c_str(),
-                       0, true, notif ? "ON" : "OFF");
-  }
-  // Text capacity = grid size (#277): a leading master's display width IS
-  // the wall. Capacity is the 5 s cluster pass's cached fact, so the first
-  // publish after enabling may briefly show the own width — retained,
-  // self-corrects next pass.
-  int widthValue = (leading && mqttClusterCapacity > 0) ? mqttClusterCapacity
-                                                        : snap.displayWidth;
-  if (widthValue != mqttLastPublishedWidth) {
-    mqttLastPublishedWidth = widthValue;
-    char n[12];
-    snprintf(n, sizeof(n), "%d", widthValue);
-    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "width").c_str(), 0,
-                       true, n);
-  }
-  if (snap.detectedUnitCount != mqttLastPublishedUnits) {
-    mqttLastPublishedUnits = snap.detectedUnitCount;
-    char n[12];
-    snprintf(n, sizeof(n), "%d", (int)snap.detectedUnitCount);
-    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units").c_str(), 0,
-                       true, n);
-  }
-  if (content.flapSpeed != mqttLastPublishedSpeed) {
-    mqttLastPublishedSpeed = content.flapSpeed;
-    char n[12];
-    snprintf(n, sizeof(n), "%d", content.flapSpeed);
-    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "speed").c_str(), 0,
-                       true, n);
-  }
-  if (content.alignment != mqttLastPublishedAlignment) {
-    mqttLastPublishedAlignment = content.alignment;
-    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "alignment").c_str(), 0,
-                       true, content.alignment.c_str());
-  }
 
-  // Cluster surfacing (#277): degraded sensor + member/rollout attrs +
-  // the wall text/state, 5 s cadence (see MQTT_CLUSTER_INTERVAL_MS).
-  if ((int32_t)(millis() - mqttNextClusterMs) >= 0) {
-    mqttNextClusterMs = millis() + MQTT_CLUSTER_INTERVAL_MS;
-    int leadingNow = leading ? 1 : 0;
-    if (leadingNow != mqttLastClusterConfigured) {
-      char topicBuf[96];
-      size_t tLen = buildClusterDegradedDiscoveryTopic(
-          topicBuf, sizeof(topicBuf), mqttResolvedDeviceId.c_str());
-      if (tLen > 0 && tLen < sizeof(topicBuf)) {
-        if (leadingNow) {
-          char payloadBuf[512];
-          size_t pLen = buildClusterDegradedDiscovery(
-              payloadBuf, sizeof(payloadBuf), mqttResolvedDeviceId.c_str(),
-              mqttFwVersion.c_str());
-          if (pLen > 0 && pLen < sizeof(payloadBuf)) {
-            mqttClient.publish(topicBuf, 0, true, payloadBuf);
-          } else {
-            SerialPrintln(
-                F("MQTT: cluster discovery skipped — would truncate"));
-          }
-        } else {
-          // Not leading (runtime disable OR the reconcile sweep of a fresh
-          // session): blank the retained config + topics so HA drops the
-          // entity instead of showing it stale, and force the width/text
-          // publishes back onto this board's own facts.
-          mqttClient.publish(topicBuf, 0, true, "");
-          mqttClient.publish(
-              mqttTopic(mqttResolvedDeviceId, "cluster_degraded").c_str(), 0,
-              true, "");
-          mqttClient.publish(
-              mqttTopic(mqttResolvedDeviceId, "cluster/attrs").c_str(), 0,
-              true, "");
-          mqttClusterCapacity = 0;
-          mqttLastPublishedWidth = -1;
-          mqttLastPublishedText = "\x01";
-        }
-      }
-      mqttLastClusterState = -1;
-      mqttLastClusterAttrs = "\x01";
-      mqttLastClusterConfigured = leadingNow;
-    }
-    if (leading) {
-      ClusterLeaderStatus cst = clusterLeaderStatusGet();
-      mqttClusterCapacity = cst.gridCapacity;
-      int degraded = clusterDegraded(cst) ? 1 : 0;
-      if (degraded != mqttLastClusterState) {
-        mqttLastClusterState = degraded;
-        mqttClient.publish(
-            mqttTopic(mqttResolvedDeviceId, "cluster_degraded").c_str(), 0,
-            true, degraded ? "ON" : "OFF");
-      }
-      String attrs = buildClusterAttrsJson(cst);
-      if (attrs != mqttLastClusterAttrs) {
-        mqttLastClusterAttrs = attrs;
-        mqttClient.publish(
-            mqttTopic(mqttResolvedDeviceId, "cluster/attrs").c_str(), 0, true,
-            attrs.c_str());
-      }
-      // Wall text/state — shares mqttLastPublishedText with the own-facts
-      // path (same topic; see the contract note above the leading gate).
-      String rows[CLUSTER_MAX_MEMBERS];
-      int selfRow = 0;
-      int rowCount = clusterLeaderMirrorRows(
-          rows, selfRow, String(snap.currentText), content.alignment);
-      String wall = clusterWallStateText(rows, rowCount);
-      if (rowCount > 0 && wall != mqttLastPublishedText) {
-        mqttLastPublishedText = wall;
-        mqttClient.publish(
-            mqttTopic(mqttResolvedDeviceId, "text/state").c_str(), 0, true,
-            wall.c_str());
-      }
-    }
-  }
+  mqttPublishEventDrivenState(snap, content, leading);
+  mqttPublishClusterSurfacing(snap, content, leading);
 
   if (discoveryClearRequested.exchange(false)) publishDiscoveryClear();
 
-  // Periodic telemetry + per-unit health, 60 s (wraparound-safe). Deviation
-  // from v1 (spec): no blocking bus poll from here — displayTask owns the
-  // bus; faulty counts/attrs are probe-time facts from the snapshot.
-  if ((int32_t)(millis() - mqttNextTelemetryMs) >= 0) {
-    mqttNextTelemetryMs = millis() + MQTT_TELEMETRY_INTERVAL_S * 1000UL;
-    uint32_t freeHeap = ESP.getFreeHeap();
-    uint32_t maxBlock = ESP.getMaxAllocHeap();
-    int heapFragPct = (freeHeap > 0 && maxBlock <= freeHeap)
-                          ? (int)(100 - (maxBlock * 100ULL) / freeHeap)
-                          : 0;
-    char buf[128];
-    size_t tn = buildTelemetryPayload(
-        buf, sizeof(buf), freeHeap, heapFragPct, WiFi.RSSI(),
-        snap.lastShowWriteErrors, millis() / 1000UL,
-        clockIsTimeSynced(time(nullptr)));
-    if (tn > 0 && tn < sizeof(buf)) {
-      mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
-    }
-
-    char fc[12];
-    snprintf(fc, sizeof(fc), "%d", (int)snap.faultyUnitCount);
-    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units_faulty").c_str(),
-                       0, true, fc);
-    // Wear warning (#231): binary problem state + median/flagged attrs, both
-    // computed from the same snapshot the health payload uses.
-    WearAssessment wear;
-    assessWear(snap.units, snap.displayWidth, wear);
-    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units_wear").c_str(),
-                       0, true, wear.flaggedCount > 0 ? "ON" : "OFF");
-    char wearAttrs[100];
-    wearAttrs[0] = '{';
-    size_t wn = buildWearJson(wear, wearAttrs + 1, sizeof(wearAttrs) - 2);
-    if (wn > 0 && wn < sizeof(wearAttrs) - 2) {
-      wearAttrs[wn + 1] = '}';
-      wearAttrs[wn + 2] = '\0';
-      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units/wear").c_str(),
-                         0, true, wearAttrs);
-    }
-    // Static, not stack (~2 KB doesn't belong on mqttTask's stack) and not
-    // heap (a forever-periodic alloc/free is churn the memory policy
-    // forbids). mqttTask-only access, so no guard needed.
-    static char health[UNIT_HEALTH_JSON_CAP];
-    size_t hn = buildUnitHealthJson(health, UNIT_HEALTH_JSON_CAP, snap.units,
-                                    snap.displayWidth, snap.faultyUnitCount,
-                                    SFP_I2C_ADDRESS_BASE, millis());
-    if (hn > 0 && hn < UNIT_HEALTH_JSON_CAP) {
-      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units/attrs").c_str(),
-                         0, true, health);
-    }
-  }
+  mqttPublishTelemetry(snap);
 }
 
 bool mqttIsConnected() { return mqttInitialised && connectedAtomic.load(); }
