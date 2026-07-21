@@ -64,13 +64,18 @@ static uint64_t nowEpochMs(bool& synced) {
   return (uint64_t)t * 1000ULL + (millis() % 1000);
 }
 
-// #342: publish the leader's zone to libc so localtime() speaks it. Safe
-// pre-WiFi (it's just the TZ env var); SNTP keeps feeding raw epoch.
-static void applyLeaderTz() {
-  if (leaderTz.length() == 0) return;
-  setenv("TZ", leaderTz.c_str(), 1);
-  tzset();
-}
+// #342/#362: the leader's zone is installed via the ESP8266 core's
+// configTime(tz) (which drives newlib's __gettzinfo) from LOOP context —
+// bench-proven that a bare setenv+tzset is INERT for localtime_r here, and
+// that configTime re-inits SNTP so it must never run from an async handler.
+// It also must run AFTER wifiServicesInit's configTime(0,0) (which resets the
+// zone to UTC) — the loop is, clusterInit isn't. This just marks a (re)install
+// as needed; clusterLoopTick does it lazily once SNTP is synced.
+// volatile: cleared from the async-handler context (clusterHandleJoin ->
+// applyLeaderTz), read+set from loop context — same cross-context idiom as
+// membershipDirty/renderPending above.
+static volatile bool tzInstalled = false;
+static void applyLeaderTz() { tzInstalled = false; }
 
 void clusterInit() {
   EEPROM.begin(FOLLOWER_MEMBERSHIP_BLOB_LEN);
@@ -150,20 +155,30 @@ void clusterLoopTick() {
     (void)nowEpochMs(synced);
     if (followerClockEligible(policyState.phase, leaderHost.length() > 0,
                               leaderTz.length() > 0, synced)) {
-      time_t t = time(nullptr);
+      // #362: install the leader's zone lazily, here in loop context, the
+      // first time a fallback actually needs it (and after any zone change).
+      // configTime installs it synchronously via setTZ before returning, so
+      // the localtime_r below is already correct this same tick. Latched, so
+      // the SNTP re-init cost is paid once per fallback episode, not per tick.
+      if (!tzInstalled) {
+        configTime(leaderTz.c_str(), "pool.ntp.org");
+        tzInstalled = true;
+      }
+      time_t nowT = time(nullptr);
       struct tm lt;
-      localtime_r(&t, &lt);
-      if ((!clockShowing || lt.tm_min != shownClockMinute) &&
+      localtime_r(&nowT, &lt);
+      int hour = lt.tm_hour, minute = lt.tm_min;
+      if ((!clockShowing || minute != shownClockMinute) &&
           !renderPending && !reflashInProgress(reflashProgress)) {
         if (!clockShowing) {
           SerialPrintln(F("cluster: leader lost — local clock fallback"));
         }
         int width = displayWidth > 0 ? displayWidth : UNITS_AMOUNT;
         char text[UNITS_AMOUNT + 1];
-        followerClockText(lt.tm_hour, lt.tm_min, width, text);
+        followerClockText(hour, minute, width, text);
         busShowSegment(String(text), heldSpeed > 0 ? heldSpeed : 80);
         clockShowing = true;
-        shownClockMinute = lt.tm_min;
+        shownClockMinute = minute;
         rowIsBlank = false;
       }
       return;
@@ -302,6 +317,8 @@ void clusterHandleLeave() {
   leaderName = "";
   leaderHost = "";
   leaderTz = "";  // #342: the zone leaves with the leader that owned it
+  applyLeaderTz();  // #362: re-arm the tz latch (defensive — eligibility also
+                    // gates on leaderTz, but this survives a future refactor)
   memberRow = 0;
   heldSegment = "";
   renderPending = false;

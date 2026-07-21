@@ -33,6 +33,15 @@ inline void followerClockText(int hour, int minute, int width, char* out) {
   for (int i = 0; i < 5 && left + i < width; i++) out[left + i] = hhmm[i];
 }
 
+// #362: the epoch→local-HH:MM conversion is NOT here — it is target libc
+// glue (bench tier). On the ESP8266, setenv("TZ")+tzset() is INERT for
+// localtime_r; the zone must be installed via the core's configTime(tz)
+// (which drives newlib's __gettzinfo), done from loop context in
+// FollowerCluster.cpp. A host-side test would use glibc's fully-working
+// tzset and pass while the target renders UTC — actively misleading — so the
+// tz application is proven on the bench, not natively. `followerClockText`
+// (pure formatting) stays natively tested.
+
 // The fallback runs ONLY in Blank with a held membership (the tz belongs
 // to a leader we still expect back), a known zone, and synced time.
 // Standalone (never joined / left) stays dark — no membership, no zone.
