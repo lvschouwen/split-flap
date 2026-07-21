@@ -22,6 +22,7 @@ Arduino-based split-flap display: a master MCU drives per-flap units over I2C. F
 - `flashing/` — `ota-flash.sh` (scp-fetch staged bin + OTA + `/settings` verdict; platform autodetect via the `plat` settings key, `-p esp01|esp32` to assert it; multi-device fan-out) and `flasher/make_manifest.py` (`stage` writes the unit bundle into `firmware/v2/Master/data` AND `firmware/v2/FollowerEsp01/data` — MUST run between the Unit build and those builds; `gate` = the CI anti-drift check). New-board provisioning: esptool merged-factory-bin recipe in `flashing/README.md`.
 - `PCB/v2/` — design docs (unit board is the only planned custom PCB; GPIO 4 = future reset button)
 - `docs/superpowers/specs/` — design docs per feature
+- `docs/CODING_STANDARDS.md` — how code must be written (architecture, C++ style, concurrency, security, testing, tooling gates); CLAUDE.md Hard rules win on conflict
 
 ## Build / flash / test
 
