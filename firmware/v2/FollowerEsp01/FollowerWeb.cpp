@@ -16,6 +16,7 @@
 #include "FollowerCluster.h"
 #include "FollowerConfig.h"
 #include "FollowerCors.h"
+#include "ClusterForeign.h"
 #include "FollowerJson.h"
 #include "FollowerRescue.h"  // #343: beacon marker + op lockout
 #include "FollowerSettings.h"
@@ -55,6 +56,11 @@ static uint32_t selfTestPollLastMs = 0;
 // --- OTA session state (v1 #191 conventions) ----------------------------------------
 
 static AsyncWebServerRequest* volatile masterOtaOwnerRequest = nullptr;
+
+// #358: refused foreign-leader contacts, surfaced in /cluster/health.
+// Handler-context only (the ESP-01's async handlers and loop() cooperate on
+// one core), RAM-only, resets on reboot.
+static ForeignContactStats foreignContacts;
 static bool otaRejected = false;
 static int otaRejectionStatus = 0;
 static String otaRejectionReason;
@@ -499,6 +505,11 @@ void webEndpointsInit(AsyncWebServer& server) {
     // alive, a DIFFERENT leader's join is refused with its identity.
     String curName, curHost;
     if (clusterJoinWouldConflict(leaderHost, curName, curHost)) {
+      foreignContactRecord(foreignContacts, ForeignContactKind::Join,
+                           request->client()->remoteIP().toString(), millis());
+      SerialPrintln(String(F("Foreign join refused from ")) +
+                    request->client()->remoteIP().toString() +
+                    F(" — leader is ") + curHost);
       String out = "{\"error\":\"other-leader\",\"leaderHost\":";
       followerAppendJsonString(out, curHost);
       out += ",\"leaderName\":";
@@ -533,6 +544,11 @@ void webEndpointsInit(AsyncWebServer& server) {
     FollowerClusterView rcv = clusterViewGet();
     if (rcv.leaderHost.length() > 0 &&
         rcv.leaderHost != request->client()->remoteIP().toString()) {
+      foreignContactRecord(foreignContacts, ForeignContactKind::Render,
+                           request->client()->remoteIP().toString(), millis());
+      SerialPrintln(String(F("Foreign render refused from ")) +
+                    request->client()->remoteIP().toString() +
+                    F(" — leader is ") + rcv.leaderHost);
       request->send(403, "text/plain", F("render must come from the leader"));
       return;
     }
@@ -601,6 +617,11 @@ void webEndpointsInit(AsyncWebServer& server) {
     FollowerClusterView pcv = clusterViewGet();
     if (pcv.leaderHost.length() > 0 &&
         pcv.leaderHost != request->client()->remoteIP().toString()) {
+      foreignContactRecord(foreignContacts, ForeignContactKind::Ping,
+                           request->client()->remoteIP().toString(), millis());
+      SerialPrintln(String(F("Foreign ping refused from ")) +
+                    request->client()->remoteIP().toString() +
+                    F(" — leader is ") + pcv.leaderHost);
       request->send(403, "text/plain", F("ping must come from the leader"));
       return;
     }
@@ -693,6 +714,8 @@ void webEndpointsInit(AsyncWebServer& server) {
     diag.minHeap = followerMinHeap();
     diag.sntpSynced = cv.sntpSynced;
     diag.hmac = clusterHmacEnforced();
+    diag.foreign = foreignContacts;  // #358
+    diag.nowMs = millis();
     request->send(200, "application/json",
                   followerClusterHealthJson(
                       followerPhaseName(cv.phase), cv.leaderName,

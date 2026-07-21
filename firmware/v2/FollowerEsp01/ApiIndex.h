@@ -20,6 +20,7 @@ struct ApiLegendEntry { const char* key; const char* meaning; };
 static const ApiRoute API_ROUTES[] = {
   {"GET",  "/api",                   "this self-documenting index"},
   {"GET",  "/settings",              "tiny identity/rev/plat/width/phase/vitals"},
+  {"GET",  "/log",                   "in-RAM log ring (?after=<cursor> for the leader pull)"},
   {"GET",  "/units/health",          "per-unit health/diagnostics table"},
   {"POST", "/units/health/refresh",  "re-poll unit health"},
   {"GET",  "/cluster/health",        "follower phase + diagnostics + unit health"},
@@ -42,6 +43,20 @@ static const ApiRoute API_ROUTES[] = {
   {"GET",  "/unit/op-result",        "result of the last {seq} maintenance op"},
 };
 static const int API_ROUTES_COUNT = (int)(sizeof(API_ROUTES) / sizeof(API_ROUTES[0]));
+
+// #358: routes the wider v2 surface serves but this platform deliberately
+// does NOT (spec 2026-07-14-v2-esp01-follower-design.md "Not served, by
+// design") — surfaced so tooling can distinguish "this platform doesn't do
+// that" from "no such route" (both answer 404 on the wire). The
+// tests/test_api_index.py drift gate asserts none of these is registered.
+static const char* API_NOT_SERVED[] = {
+  "/cluster/digest",
+  "/cluster/promote",
+  "/cluster/config",
+  "/cluster/discover",
+};
+static const int API_NOT_SERVED_COUNT =
+    (int)(sizeof(API_NOT_SERVED) / sizeof(API_NOT_SERVED[0]));
 
 static const ApiLegendEntry API_LEGEND[] = {
   // --- /units/health headline + per-unit (must match the master's meanings) --
@@ -93,6 +108,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"minHeap",      "since-boot minimum free heap (bytes)"},
   {"sntpSynced",   "1 = SNTP epoch synced (commitAt flips honored)"},
   {"hmac",         "1 = enforcing signed (HMAC) leader-wire requests (#313)"},
+  {"foreign",      "refused foreign-leader contacts: joins/pings/renders counters + lastHost + msSince (-1 = never)"},
 };
 static const int API_LEGEND_COUNT = (int)(sizeof(API_LEGEND) / sizeof(API_LEGEND[0]));
 
@@ -116,6 +132,10 @@ inline size_t buildApiJson(char* buf, size_t cap) {
   for (int i = 0; i < API_ROUTES_COUNT; i++) {
     API_APPEND("%s{\"m\":\"%s\",\"p\":\"%s\",\"d\":\"%s\"}", i == 0 ? "" : ",",
                API_ROUTES[i].m, API_ROUTES[i].p, API_ROUTES[i].d);
+  }
+  API_APPEND("],\"notServed\":[");
+  for (int i = 0; i < API_NOT_SERVED_COUNT; i++) {
+    API_APPEND("%s\"%s\"", i == 0 ? "" : ",", API_NOT_SERVED[i]);
   }
   API_APPEND("],\"legend\":{");
   for (int i = 0; i < API_LEGEND_COUNT; i++) {

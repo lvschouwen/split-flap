@@ -37,6 +37,7 @@ IDENTICAL_PAIRS = [
         "WearPolicy.h",
         "DisplayWidth.h",
         "ClusterHmac.h",
+        "ClusterForeign.h",
         "UnitVitals.h",
         "HeartbeatPolicy.h",
         "BootHomePlan.h",

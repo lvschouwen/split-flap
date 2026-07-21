@@ -115,6 +115,29 @@ static void test_settings_json_shape() {
   TEST_ASSERT_TRUE(out.indexOf("\"up\":1200") >= 0);
 }
 
+// --- foreign-contact block (#358) ---------------------------------------------------
+
+static void test_foreign_contact_record_and_json() {
+  ForeignContactStats f;
+  String out;
+  // Never contacted: zero counters, msSince -1.
+  foreignContactAppendJson(out, f, 5000);
+  TEST_ASSERT_TRUE(out.indexOf("\"foreign\":{\"joins\":0") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"msSince\":-1") >= 0);
+  // Record one of each kind; lastHost/lastMs track the newest refusal.
+  foreignContactRecord(f, ForeignContactKind::Join, "192.168.15.77", 1000);
+  foreignContactRecord(f, ForeignContactKind::Ping, "192.168.15.77", 2000);
+  foreignContactRecord(f, ForeignContactKind::Render, "192.168.15.78", 3000);
+  foreignContactRecord(f, ForeignContactKind::Join, "192.168.15.77", 4000);
+  out = "";
+  foreignContactAppendJson(out, f, 5000);
+  TEST_ASSERT_TRUE(out.indexOf("\"joins\":2") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"pings\":1") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"renders\":1") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"lastHost\":\"192.168.15.77\"") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"msSince\":1000") >= 0);
+}
+
 // --- /cluster/health ----------------------------------------------------------------
 
 static void test_cluster_health_json_shape() {
@@ -139,6 +162,8 @@ static void test_cluster_health_json_shape() {
   TEST_ASSERT_TRUE(out.indexOf("\"segment\":\"ROW THREE       \"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"rev\":\"abc1234\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"width\":8") >= 0);
+  // #358: the foreign block always rides along (zeroed here).
+  TEST_ASSERT_TRUE(out.indexOf("\"foreign\":{\"joins\":0") >= 0);
   // Diagnostics (#306).
   TEST_ASSERT_TRUE(out.indexOf("\"msSinceRender\":4200") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"secsUntilBlank\":95") >= 0);
@@ -212,6 +237,7 @@ int main(int, char**) {
   RUN_TEST(test_join_and_ping_replies_carry_rescue_marker);
   RUN_TEST(test_ping_reply_carries_state_and_health_and_plat);
   RUN_TEST(test_settings_json_shape);
+  RUN_TEST(test_foreign_contact_record_and_json);
   RUN_TEST(test_cluster_health_json_shape);
   RUN_TEST(test_wire_strings_are_escaped);
   return UNITY_END();

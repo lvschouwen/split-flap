@@ -16,12 +16,17 @@
 #include "ClusterDigest.h"
 #include "ClusterDiscovery.h"
 #include "ClusterFollower.h"
+#include "ClusterForeign.h"  // #358: refused foreign-contact counters
 #include "ClusterHmac.h"  // #313 follow-on: rebuild canonical msgs for verify
 #include "ClusterLayout.h"  // CLUSTER_MAX_MEMBERS / CLUSTER_HOST_MAX_LEN
 #include "ClusterLeader.h"
 #include "FollowerImagePolicy.h"  // #304 follower-image upload guard
 #include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
+
+// #358: refused foreign-leader contacts, surfaced in /cluster/health.
+// async_tcp handler context is the sole writer and reader; RAM-only.
+static ForeignContactStats foreignContacts;
 #include "MdnsDiscovery.h"  // normalizeMdnsHostname
 #include "OtaService.h"  // normalizeOtaMd5
 #include "SettingsJson.h"  // appendJsonString, settingsIsPrintableAscii
@@ -131,6 +136,11 @@ void webClusterRegister(AsyncWebServer& server) {
     // joins collect this marker (from us and from every claimed member)
     // and it demotes instead of building a second cluster.
     if (clusterLeaderEnabled()) {
+      foreignContactRecord(foreignContacts, ForeignContactKind::Join,
+                           request->client()->remoteIP().toString(), millis());
+      SerialPrintln(String(F("Foreign join refused from ")) +
+                    request->client()->remoteIP().toString() +
+                    F(" — this board leads its own wall"));
       String out = "{\"error\":\"other-leader\",\"leaderHost\":";
       appendJsonString(out, WiFi.localIP().toString());
       out += ",\"leaderName\":";
@@ -144,6 +154,11 @@ void webClusterRegister(AsyncWebServer& server) {
     // demotes itself on this marker.
     if (clusterFollowerJoinWouldConflict(req.leaderHost)) {
       ClusterFollowerView cv = clusterFollowerViewGet();
+      foreignContactRecord(foreignContacts, ForeignContactKind::Join,
+                           request->client()->remoteIP().toString(), millis());
+      SerialPrintln(String(F("Foreign join refused from ")) +
+                    request->client()->remoteIP().toString() +
+                    F(" — leader is ") + cv.leaderHost);
       String out = "{\"error\":\"other-leader\",\"leaderHost\":";
       appendJsonString(out, cv.leaderHost);
       out += ",\"leaderName\":";
@@ -195,6 +210,11 @@ void webClusterRegister(AsyncWebServer& server) {
     ClusterFollowerView cv = clusterFollowerViewGet();
     if (cv.leaderHost.length() > 0 &&
         cv.leaderHost != request->client()->remoteIP().toString()) {
+      foreignContactRecord(foreignContacts, ForeignContactKind::Render,
+                           request->client()->remoteIP().toString(), millis());
+      SerialPrintln(String(F("Foreign render refused from ")) +
+                    request->client()->remoteIP().toString() +
+                    F(" — leader is ") + cv.leaderHost);
       request->send(403, "text/plain", F("render must come from the leader"));
       return;
     }
@@ -258,6 +278,19 @@ void webClusterRegister(AsyncWebServer& server) {
   });
 
   server.on("/cluster/ping", HTTP_POST, [](AsyncWebServerRequest* request) {
+    // #358 counting only — clusterFollowerHandlePing() keeps enforcing the
+    // foreign-ping refusal (source-IP bind lives there); this pre-check just
+    // makes the refusal observable.
+    {
+      ClusterFollowerView fcv = clusterFollowerViewGet();
+      String fromIp = request->client()->remoteIP().toString();
+      if (fcv.leaderHost.length() > 0 && fcv.leaderHost != fromIp) {
+        foreignContactRecord(foreignContacts, ForeignContactKind::Ping, fromIp,
+                             millis());
+        SerialPrintln(String(F("Foreign ping refused from ")) + fromIp +
+                      F(" — leader is ") + fcv.leaderHost);
+      }
+    }
     // #294: the leader piggybacks the cluster digest (+ this member's
     // table index) on the ping body, and the reply carries this row's
     // unit health — both additive; either side may predate the other.
@@ -416,6 +449,7 @@ void webClusterRegister(AsyncWebServer& server) {
     out += (int)snap.faultyUnitCount;
     out += ",\"hmac\":";  // #313 follow-on: enforcing signed leader-wire requests
     out += clusterFollowerHmacEnforced() ? "true" : "false";
+    foreignContactAppendJson(out, foreignContacts, millis());  // #358
     out += '}';
     request->send(200, "application/json", out);
   });
