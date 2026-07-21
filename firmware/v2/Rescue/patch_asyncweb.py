@@ -86,6 +86,16 @@ PATCHES = [
         "        if (_params.size() < SF347_MULTIPART_MAX_PARAMS)  // #347\n"
         "        _params.emplace_back(_itemName, _itemValue, true);",
     ),
+    # 6) Same cap on the file-part completion emplace (symmetry — an
+    # explicit bound instead of relying on the header budget indirectly).
+    (
+        _REQ,
+        "        _itemBufferIndex = 0;\n"
+        "        _params.emplace_back(_itemName, _itemFilename, true, true, _itemSize);",
+        "        _itemBufferIndex = 0;\n"
+        "        if (_params.size() < SF347_MULTIPART_MAX_PARAMS)  // #347\n"
+        "        _params.emplace_back(_itemName, _itemFilename, true, true, _itemSize);",
+    ),
 ]
 
 
