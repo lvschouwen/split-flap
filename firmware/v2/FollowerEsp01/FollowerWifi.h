@@ -6,7 +6,7 @@
 // Static IPs unsupported (DHCP reservation, v1 rule).
 
 #include <Arduino.h>
-#include <ESPAsyncWebSrv.h>
+#include <ESPAsyncWebServer.h>
 
 // "split-flap-<hex chip id>" — no rename on this firmware.
 extern String effectiveDeviceName;
