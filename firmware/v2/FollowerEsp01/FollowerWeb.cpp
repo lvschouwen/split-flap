@@ -311,6 +311,14 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         otaTxPowerReduced = true;
 
         uint32_t freeSpace = ESP.getFreeSketchSpace();
+        if (freeSpace < 0x1000) {
+          // #354: (freeSpace - 0x1000) below would underflow to a huge
+          // maxSketchSpace and defeat the contentLen pre-check.
+          otaRejected = true;
+          otaRejectionStatus = 507;
+          otaRejectionReason = String("No sketch space free: ") + freeSpace;
+          return;
+        }
         uint32_t maxSketchSpace = (freeSpace - 0x1000) & 0xFFFFF000;
         size_t contentLen = request->contentLength();
         if (contentLen > 0 && contentLen > maxSketchSpace) {
@@ -328,6 +336,24 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
               "Flash config mismatch — reflash once over USB";
           return;
         }
+        // MD5 is MANDATORY (v1 #144): eboot's checksum does not catch a
+        // truncated upload. Validated BEFORE Update.begin (#354): begin
+        // erases the flash region, so a malformed no-md5 POST used to cost
+        // a full erase cycle (display frozen, flash wear) per request.
+        if (!request->hasParam("md5")) {
+          otaRejected = true;
+          otaRejectionStatus = 400;
+          otaRejectionReason = "md5 query param is required";
+          return;
+        }
+        String md5 = request->getParam("md5")->value();
+        md5.toLowerCase();
+        if (md5.length() != 32) {
+          otaRejected = true;
+          otaRejectionStatus = 400;
+          otaRejectionReason = "md5 query param must be a 32-char hex digest";
+          return;
+        }
         Update.runAsync(true);
         if (!Update.begin(maxSketchSpace, U_FLASH)) {
           // Stale updater state from an aborted upload (v1 #162).
@@ -340,24 +366,6 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
                 String("Update.begin failed: ") + Update.getErrorString();
             return;
           }
-        }
-        // MD5 is MANDATORY (v1 #144): eboot's checksum does not catch a
-        // truncated upload.
-        if (!request->hasParam("md5")) {
-          otaRejected = true;
-          otaRejectionStatus = 400;
-          otaRejectionReason = "md5 query param is required";
-          Update.end(false);
-          return;
-        }
-        String md5 = request->getParam("md5")->value();
-        md5.toLowerCase();
-        if (md5.length() != 32) {
-          otaRejected = true;
-          otaRejectionStatus = 400;
-          otaRejectionReason = "md5 query param must be a 32-char hex digest";
-          Update.end(false);
-          return;
         }
         if (!Update.setMD5(md5.c_str())) {
           otaRejected = true;

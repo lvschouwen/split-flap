@@ -100,10 +100,13 @@ void rotateToLetter(int toLetter) {
         millis() - lastUnhomedCalibrateMs < UNHOMED_CALIBRATE_COOLDOWN_MS) {
       return;  // still cooling down after a failed home — leave the drum idle
     }
+    // 0 is the "never attempted" sentinel — bump like identifyStartMs (#354).
     lastUnhomedCalibrateMs = millis();
+    if (lastUnhomedCalibrateMs == 0) lastUnhomedCalibrateMs = 1;
   }
 
   lastRotation = millis();
+  if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
   int posCurrentLetter = displayedLetter;
 #ifdef SERIAL_ENABLE
   Serial.print("go to letter: ");
@@ -467,6 +470,7 @@ void runSelfTest() {
     drift.driftPending = false;
   }
   lastRotation = millis();  //overheat gate before the restore move
+  if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
   delay(100);
   stopMotor();
   driftRefreshReplyBuffers();  //publish the result before loop() resumes

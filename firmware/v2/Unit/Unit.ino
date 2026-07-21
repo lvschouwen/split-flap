@@ -37,11 +37,16 @@
 //   5     byte  lifetime watchdog-reset count (saturating)  (issue #47)
 //   6     byte  health-counter init magic — if == EEPROM_HEALTH_MAGIC_VALUE,
 //               slots 4/5 are initialised; else they're fresh 0xFF (#139)
-//   7     byte  odometer ring init magic — if == EEPROM_ODO_MAGIC_VALUE,
-//               the ring below is initialised; else fresh 0xFF (#231)
+//   7     byte  odometer ring init magic — EEPROM_ODO_MAGIC_VALUE means ring
+//               + checksum ring initialised; EEPROM_ODO_MAGIC_LEGACY (#231
+//               pre-#354) means ring only, migrated in place at boot; else
+//               fresh 0xFF
 //   8..71 16 x uint32 LE  revolution-odometer wear-leveled ring (#231);
 //               ring policy + boot recovery in UnitOdometer.h
-// Slots 72+ reserved.
+//   72..87 16 x byte  per-slot masked XOR checksum (#354) — slot s's byte
+//               lives at 72+s; a torn slot write fails its checksum and is
+//               skipped by boot recovery instead of adopted as the count
+// Slots 88+ reserved.
 #define EEPROM_ADDR_ID_MAGIC      2
 #define EEPROM_ADDR_I2C_ADDR      3
 #define EEPROM_ADDR_BROWNOUT_CNT  4
@@ -49,9 +54,11 @@
 #define EEPROM_ADDR_HEALTH_MAGIC  6
 #define EEPROM_ADDR_ODO_MAGIC     7
 #define EEPROM_ADDR_ODO_RING      8
+#define EEPROM_ADDR_ODO_SUMS      72
 #define EEPROM_ID_MAGIC_VALUE     0xA5
 #define EEPROM_HEALTH_MAGIC_VALUE 0x5A
-#define EEPROM_ODO_MAGIC_VALUE    0xC3
+#define EEPROM_ODO_MAGIC_LEGACY   0xC3  // #231 ring without checksums
+#define EEPROM_ODO_MAGIC_VALUE    0xC4  // ring + #354 checksum ring
 
 // I2C "receive" namespace: the first byte is a letter index (0..AMOUNTFLAPS-1)
 // for normal display commands, or a command opcode (>= AMOUNTFLAPS) for
@@ -308,16 +315,33 @@ void setup() {
   // health counters above, #139). Runs before the Wire handlers register —
   // the ISR mirror below must be coherent before a master can query it
   // (same ordering rule as getOffset(), #173).
-  if (EEPROM.read(EEPROM_ADDR_ODO_MAGIC) == EEPROM_ODO_MAGIC_VALUE) {
+  uint8_t odoMagic = EEPROM.read(EEPROM_ADDR_ODO_MAGIC);
+  if (odoMagic == EEPROM_ODO_MAGIC_VALUE || odoMagic == EEPROM_ODO_MAGIC_LEGACY) {
     uint32_t ringSlots[ODO_RING_SLOTS];
     for (uint8_t s = 0; s < ODO_RING_SLOTS; s++) {
       EEPROM.get(EEPROM_ADDR_ODO_RING + s * (int)sizeof(uint32_t), ringSlots[s]);
     }
-    odometer.revolutions = odometerBootValue(ringSlots);
+    if (odoMagic == EEPROM_ODO_MAGIC_LEGACY) {
+      // One-time #354 migration: adopt the count under the legacy validity
+      // rule, stamp checksums over the existing slots, upgrade the magic.
+      // Magic last — a power loss mid-migration re-runs it, never orphans.
+      odometer.revolutions = odometerBootValue(ringSlots);
+      for (uint8_t s = 0; s < ODO_RING_SLOTS; s++) {
+        EEPROM.update(EEPROM_ADDR_ODO_SUMS + s, odometerSlotChecksum(ringSlots[s]));
+      }
+      EEPROM.update(EEPROM_ADDR_ODO_MAGIC, EEPROM_ODO_MAGIC_VALUE);
+    } else {
+      uint8_t ringSums[ODO_RING_SLOTS];
+      for (uint8_t s = 0; s < ODO_RING_SLOTS; s++) {
+        ringSums[s] = EEPROM.read(EEPROM_ADDR_ODO_SUMS + s);
+      }
+      odometer.revolutions = odometerBootValueChecked(ringSlots, ringSums);
+    }
   } else {
     const uint32_t zero = 0;
     for (uint8_t s = 0; s < ODO_RING_SLOTS; s++) {
       EEPROM.put(EEPROM_ADDR_ODO_RING + s * (int)sizeof(uint32_t), zero);
+      EEPROM.update(EEPROM_ADDR_ODO_SUMS + s, odometerSlotChecksum(zero));
     }
     EEPROM.update(EEPROM_ADDR_ODO_MAGIC, EEPROM_ODO_MAGIC_VALUE);
     odometer.revolutions = 0;
@@ -480,6 +504,7 @@ void loop() {
     // themselves stay ungated: <=127 steps, human-paced from the
     // calibration UI — a 2 s inter-jog cooldown would wreck that UX.
     lastRotation = millis();
+    if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
     previousMillis = millis();
   }
 
@@ -539,6 +564,7 @@ void loop() {
     const uint32_t zero = 0;
     for (uint8_t s = 0; s < ODO_RING_SLOTS; s++) {
       EEPROM.put(EEPROM_ADDR_ODO_RING + s * (int)sizeof(uint32_t), zero);
+      EEPROM.update(EEPROM_ADDR_ODO_SUMS + s, odometerSlotChecksum(zero));
     }
 #ifdef SERIAL_ENABLE
     Serial.println("Odometer reset");
@@ -547,9 +573,12 @@ void loop() {
   }
   if (odometerShouldPersist(odometer.revolutions, lastPersistedRevs)) {
     uint32_t revs = odometer.revolutions;  // shadow for EEPROM.put
-    EEPROM.put(EEPROM_ADDR_ODO_RING +
-                   odometerSlotIndex(revs) * (int)sizeof(uint32_t),
-               revs);
+    uint8_t slot = odometerSlotIndex(revs);
+    // Value then checksum (#354): a power loss between the two leaves a
+    // mismatched slot that boot recovery skips — the previous slot's count
+    // is adopted instead of torn garbage.
+    EEPROM.put(EEPROM_ADDR_ODO_RING + slot * (int)sizeof(uint32_t), revs);
+    EEPROM.update(EEPROM_ADDR_ODO_SUMS + slot, odometerSlotChecksum(revs));
     lastPersistedRevs = revs;
   }
 

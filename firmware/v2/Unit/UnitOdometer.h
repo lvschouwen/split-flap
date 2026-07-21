@@ -53,6 +53,34 @@ inline bool odometerShouldPersist(uint32_t revolutions,
   return revolutions - lastPersisted >= ODO_PERSIST_INTERVAL_REVS;
 }
 
+// Per-slot EEPROM integrity (#354): each ring slot carries a masked XOR
+// checksum byte (own EEPROM ring, layout in Unit.ino). A power-loss-torn
+// 4-byte slot write yields a value whose checksum no longer matches — the
+// slot is skipped instead of a large garbage count being adopted at boot.
+// Mask keeps the zero count's byte away from 0x00/0xFF (erased EEPROM).
+#define ODO_SLOT_CHECKSUM_MASK 0x3C
+
+inline uint8_t odometerSlotChecksum(uint32_t value) {
+  uint8_t x = (uint8_t)(value & 0xFF) ^ (uint8_t)((value >> 8) & 0xFF) ^
+              (uint8_t)((value >> 16) & 0xFF) ^ (uint8_t)((value >> 24) & 0xFF);
+  return (uint8_t)(x ^ ODO_SLOT_CHECKSUM_MASK);
+}
+
+// Boot recovery over the checksummed ring: max of the slots whose checksum
+// matches. 0xFFFFFFFF stays excluded unconditionally (the #139 lesson) —
+// a coincidentally-matching checksum must not resurrect erased EEPROM.
+inline uint32_t odometerBootValueChecked(const uint32_t slots[ODO_RING_SLOTS],
+                                         const uint8_t sums[ODO_RING_SLOTS]) {
+  uint32_t best = 0;
+  for (uint8_t i = 0; i < ODO_RING_SLOTS; i++) {
+    if (slots[i] != 0xFFFFFFFFUL && sums[i] == odometerSlotChecksum(slots[i]) &&
+        slots[i] > best) {
+      best = slots[i];
+    }
+  }
+  return best;
+}
+
 // SFP_CMD_GET_ODOMETER wire reply: uint32 LE + XOR-of-payload ^ 0xA5.
 // A unit running pre-odometer firmware answers the unknown opcode with its
 // 1-byte status reply and bus padding — the masked checksum rejects all-0xFF,
