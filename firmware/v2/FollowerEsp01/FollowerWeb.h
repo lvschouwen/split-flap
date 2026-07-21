@@ -8,7 +8,7 @@
 // ops / reflash / health refreshes from loop() — the only I2C context.
 
 #include <Arduino.h>
-#include <ESPAsyncWebSrv.h>
+#include <ESPAsyncWebServer.h>
 
 // Cross-context flags (v1 conventions).
 extern volatile bool isPendingReboot;

@@ -21,6 +21,7 @@
 #include "FollowerSettings.h"
 #include "FollowerWifi.h"
 #include "WearPolicy.h"
+#include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
 
 volatile bool isPendingReboot = false;
 static volatile bool masterOtaUploadActive = false;
@@ -228,6 +229,12 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
                       "retry when it finishes");
         return;
       }
+      // #347: did onUpload establish a session for THIS request? A POST with
+      // no multipart file part never enters onUpload, so Update.begin() and
+      // the in-onUpload CSRF gate never run — Update.isFinished() would then
+      // report success on a never-begun Update and trigger a spurious,
+      // unauthenticated reboot.
+      bool uploadRan = (masterOtaOwnerRequest == request);
       masterOtaOwnerRequest = nullptr;
       if (otaTxPowerReduced) {
         WiFi.setOutputPower(DEFAULT_TX_POWER_DBM);
@@ -247,6 +254,13 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         String msg = String("Master OTA failed: ") + Update.getErrorString();
         masterOtaUploadActive = false;
         request->send(500, "text/plain", msg);
+      } else if (!uploadRan) {
+        // #347: no file part streamed — nothing was flashed; never report
+        // success (which reboots).
+        masterOtaUploadActive = false;
+        request->send(400, "text/plain",
+                      "No firmware in request (a multipart file part is "
+                      "required)");
       } else if (!Update.isFinished()) {
         masterOtaUploadActive = false;
         request->send(500, "text/plain",
@@ -377,6 +391,9 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
 // --- endpoint registration ------------------------------------------------------------
 
 void webEndpointsInit(AsyncWebServer& server) {
+  // Pre-auth body-size guard (#347) — before any route so it wins the
+  // first-match-wins scan for an oversized body.
+  attachBodyLimitGuard(server);
   registerMasterFirmwareEndpoint(server);
 
   // Self-documenting route + terse-key legend index for the headless

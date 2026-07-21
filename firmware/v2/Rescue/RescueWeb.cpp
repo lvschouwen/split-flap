@@ -11,6 +11,7 @@
 #include "RescueOta.h"
 #include "RescueSlotRecord.h"
 #include "RescueSlots.h"
+#include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
 
 static String deviceName;
 static bool serverStarted = false;
@@ -27,6 +28,9 @@ static const uint32_t REBOOT_GRACE_MS = 750;
 // Upload gating state, same shape as Master's /firmware/master handler.
 static int otaRejectionStatus = 0;
 static String otaRejectionReason;
+// #347: which request actually began an Update, so onRequest never reports a
+// flash (and reboots) for a POST that carried no multipart file part.
+static AsyncWebServerRequest* masterOtaOwnerRequest = nullptr;
 
 static void stageReboot() {
   rebootRequestedAtMs.store(millis());
@@ -176,6 +180,10 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
   pinSlotRecord(0, probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_0), slotRec0);
   pinSlotRecord(1, probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_1), slotRec1);
 
+  // Pre-auth body-size guard (#347) — before any route so it wins the
+  // first-match-wins scan for an oversized body.
+  attachBodyLimitGuard(server);
+
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
     serveGzipAsset(request, "text/html", RESCUE_HTML_GZ, RESCUE_HTML_GZ_LEN);
   });
@@ -197,6 +205,11 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
   server.on(
       "/firmware/master", HTTP_POST,
       [](AsyncWebServerRequest* request) {
+        // #347: did onUpload begin an Update for THIS request? A POST with no
+        // multipart file part never enters onUpload, so Update.isFinished()
+        // would report success on a never-begun Update and reboot the device.
+        bool uploadRan = (masterOtaOwnerRequest == request);
+        if (uploadRan) masterOtaOwnerRequest = nullptr;
         if (otaRejectionStatus != 0) {
           request->send(otaRejectionStatus, "text/plain", otaRejectionReason);
           return;
@@ -204,6 +217,12 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
         if (Update.hasError()) {
           request->send(500, "text/plain", String("Rescue flash failed: ") +
                                                Update.errorString());
+          return;
+        }
+        if (!uploadRan) {
+          request->send(400, "text/plain",
+                        F("No firmware in request (a multipart file part is "
+                          "required)"));
           return;
         }
         if (!Update.isFinished()) {
@@ -249,6 +268,7 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
             return;
           }
           Update.setMD5(md5.c_str());
+          masterOtaOwnerRequest = request;  // #347: a real flash began here
         }
 
         if (otaRejectionStatus != 0) return;

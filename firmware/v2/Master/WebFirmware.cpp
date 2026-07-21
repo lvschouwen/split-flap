@@ -52,6 +52,9 @@ static const uint32_t OTA_STALL_TIMEOUT_MS = 30000UL;
 // each other's leftovers. (Concurrent uploads remain #191 territory.)
 static int rescueRejectionStatus = 0;
 static String rescueRejectionReason;
+// #347: which request actually began a factory-slot install, so onRequest
+// never reports "installed" for a POST that carried no file part.
+static AsyncWebServerRequest* rescueOwnerRequest = nullptr;
 
 void webFirmwareRegister(AsyncWebServer& server) {
   // --- master OTA (#190) -----------------------------------------------------
@@ -73,6 +76,13 @@ void webFirmwareRegister(AsyncWebServer& server) {
                           "— retry when it finishes"));
           return;
         }
+        // #347: did onUpload actually establish a session for THIS request?
+        // A POST with no multipart file part never enters onUpload, so
+        // Update.begin() and the in-onUpload CSRF/md5 gates never run — and
+        // Update.isFinished() then reports success on a never-begun Update,
+        // triggering a spurious, unauthenticated reboot. Capture before the
+        // clear below.
+        bool uploadRan = (otaOwnerRequest == request);
         otaOwnerRequest = nullptr;  // session concluded, whatever the verdict
         if (otaRejectionStatus != 0) {
           request->send(otaRejectionStatus, "text/plain", otaRejectionReason);
@@ -82,6 +92,15 @@ void webFirmwareRegister(AsyncWebServer& server) {
           mqttResumeAfterOta();  // no reboot coming — thaw the session (#116)
           request->send(500, "text/plain", String("Master OTA failed: ") +
                                                Update.errorString());
+          return;
+        }
+        if (!uploadRan) {
+          // #347: no file part streamed — nothing was flashed; never report
+          // success (which would reboot). MQTT was never frozen (that happens
+          // in onUpload), so no thaw needed.
+          request->send(400, "text/plain",
+                        F("No firmware in request (a multipart file part is "
+                          "required)"));
           return;
         }
         if (!Update.isFinished()) {
@@ -236,9 +255,20 @@ void webFirmwareRegister(AsyncWebServer& server) {
                         rescueRejectionReason);
           return;
         }
+        // #347: capture/clear the per-request install marker (see master OTA).
+        bool installRan = (rescueOwnerRequest == request);
+        if (installRan) rescueOwnerRequest = nullptr;
         String err = factoryWriteError();
         if (err.length() > 0) {
           request->send(500, "text/plain", "Rescue install failed: " + err);
+          return;
+        }
+        if (!installRan) {
+          // No file part streamed — factoryWriteBegin never ran, the factory
+          // slot is untouched; never report a false "installed".
+          request->send(400, "text/plain",
+                        F("No rescue image in request (a multipart file part "
+                          "is required)"));
           return;
         }
         request->send(200, "text/plain",
@@ -292,6 +322,7 @@ void webFirmwareRegister(AsyncWebServer& server) {
                 "Rescue install could not start: " + factoryWriteError();
             return;
           }
+          rescueOwnerRequest = request;  // #347: a real install began here
         }
 
         if (rescueRejectionStatus != 0) return;
