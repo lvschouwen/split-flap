@@ -396,7 +396,7 @@ void mqttServiceTick() {
   // (this staged web path and the inbox's direct MQTT-text arm): within a
   // ~10 ms tick window the later writer silently replaces the earlier
   // dwell/text — v1's single-notification-slot last-write-wins, with the
-  // tick boundary deciding "later" (cpp-review MED, accepted).
+  // tick boundary deciding "later" — an accepted race.
   if (cancelNotificationRequested.exchange(false)) cancelNotificationLocal();
   long transientDwell = transientDwellRequested.exchange(0);
   if (transientDwell > 0) {
@@ -435,7 +435,7 @@ void mqttServiceTick() {
     mqttStoppedForOta = false;
     // The freeze's own force-close fired a disconnect event that was never
     // consumed while frozen — drain it (and a racing connect flag) so it
-    // can't clobber the fresh immediate-attempt schedule (cpp-review MED).
+    // can't clobber the fresh immediate-attempt schedule.
     mqttDisconnectedEvent = false;
     mqttJustConnected = false;
     connectedAtomic.store(false);
@@ -461,8 +461,7 @@ void mqttServiceTick() {
     if (!mqttClient.connect()) {
       // connect() failing here (CONNECT packet allocation) never reaches
       // the TCP layer, so no disconnect event will ever re-arm the
-      // schedule — re-arm it ourselves or reconnects stop forever
-      // (cpp-review HIGH).
+      // schedule — re-arm it ourselves or reconnects stop forever.
       SerialPrintln(F("MQTT: connect attempt failed to start — rescheduled"));
       mqttBackoffOnDisconnect(mqttBackoff, millis());
     }

@@ -2,10 +2,11 @@
 
 #include <stdint.h>
 
-// Twiboot I2C protocol constants (#155), shared by the unit-flash client
-// (ServiceFirmwareFunctions.ino) and the bootloader-mode probe in
-// ServiceFlapFunctions.ino. Protocol reference: the command dispatch in
-// UnitBootloader/main.c.
+// Twiboot I2C protocol constants — copied: byte-identical constants from
+// firmware/v2/Master/TwibootProtocol.h (copy policy: fix bugs in both
+// trees). Used by the follower's unit-reflash client and bootloader-mode
+// probe (FollowerBus.cpp). Protocol reference: the command dispatch in
+// firmware/v2/UnitBootloader/main.c.
 
 #define TWIBOOT_CMD_WAIT               0x00  // no-op; resets twiboot's boot-window countdown
 #define TWIBOOT_CMD_SWITCH_APPLICATION 0x01  // followed by a boottype byte

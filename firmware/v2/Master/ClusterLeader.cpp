@@ -969,7 +969,7 @@ static bool rolloutFollowerSource = false;
 static String rolloutFollowerTargetRev;
 // #343: the active follower push was triggered by the rescue marker (not a
 // rev mismatch) — its attempt was burned at start and a Converged rejoin
-// must not forgive it (review HIGH). Lifecycle mirrors rolloutFollowerSource.
+// must not forgive it. Lifecycle mirrors rolloutFollowerSource.
 static bool rolloutRescueTriggered = false;
 static void rolloutTryFollowerImageStart();
 static void followerPushPump();
@@ -1705,7 +1705,7 @@ static void statusFillLocked(ClusterLeaderStatus& st) {
     if (clusterMemberIsSelf(table.members[i])) {
       out.rev = GIT_REV;
       // #332: the self row is never joined/pinged, so its runtime role stays
-      // empty — inject our live deviceRole like GIT_REV above (review MED).
+      // empty — inject our live deviceRole like GIT_REV above.
       out.role = leaderSelfRole;
       out.healthValid = true;
       out.faulty = snap.faultyUnitCount;
@@ -1815,7 +1815,7 @@ ClusterConfigVerdict clusterLeaderStageConfig(const String& membersSpec) {
     // The single staged slot is last-writer-wins ON PURPOSE (a demote
     // racing a user edit: whichever intent lands second is the one that
     // holds) — but a user-originated stage must never inherit a pending
-    // demote's suppress-leave flag (review HIGH), so it resets here.
+    // demote's suppress-leave flag, so it resets here.
     configSpec = membersSpec;
     configPending = true;
     configSuppressLeave = false;

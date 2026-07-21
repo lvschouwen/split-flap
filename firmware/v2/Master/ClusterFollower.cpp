@@ -516,7 +516,7 @@ static ClusterPromoteVerdict clusterFollowerPromoteImpl(bool autoPath) {
   ClusterConfigVerdict v = clusterLeaderValidateSpec(newSpec);
   if (v.httpStatus != 200) return {v.httpStatus, v.message};
 
-  // Commit point (review HIGH — promote/reclaim TOCTOU): re-check the
+  // Commit point (promote/reclaim TOCTOU): re-check the
   // gate and leave in ONE critical section. A leader ping landing after
   // this wins nothing: the board is Standalone (ping 409s) and about to
   // lead; the returning old leader demotes on the sticky-leadership 409s.

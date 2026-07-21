@@ -314,7 +314,7 @@ inline bool clusterCorsPrivateIpv4(const String& host) {
   return false;
 }
 
-// Digest acceptance gate (review hardening): the follower re-serves the
+// Digest acceptance gate: the follower re-serves the
 // stored digest RAW inside its /cluster/digest wrapper, so the string must
 // be exactly ONE balanced JSON object — trailing top-level data would
 // inject fields into the wrapper. String-aware brace scan, no parser; the
@@ -360,10 +360,11 @@ inline bool clusterCorsPathAllowed(const String& path) {
       path == "/units/health/refresh" || path == "/system/stats" ||
       path == "/log" || path == "/log/flash" || path == "/reboot" ||
       path == "/reflash-units") {
-    // #304: board-level unit reflash from the wall panel. Note the ESP-01
-    // follower's FollowerCors.h copy additionally opens /firmware/master —
-    // a deliberate divergence: S3 members update via #276 fleet convergence,
-    // so /firmware/* stays closed HERE.
+    // #304: board-level unit reflash from the wall panel. /firmware/* stays
+    // closed in BOTH copies of this gate: S3 members update via #276 fleet
+    // convergence, and the ESP-01's firmware is pushed by the S3 relay
+    // (server-to-server, no Origin) — the FollowerCors.h copy differs only
+    // in the routes the ESP-01 doesn't serve ("/", log/stat reads).
     return true;
   }
   return path.startsWith("/unit/");

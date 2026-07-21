@@ -34,11 +34,13 @@ jobs:
         with:
           path: |
             ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
             ~/.cache/pip
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       - name: Build
         working-directory: firmware/${{ matrix.project }}
@@ -62,11 +64,13 @@ jobs:
         with:
           path: |
             ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
             ~/.cache/pip
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       - name: Run Unit native tests
         working-directory: firmware/v2/Unit

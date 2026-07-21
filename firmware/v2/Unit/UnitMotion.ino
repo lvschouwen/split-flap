@@ -462,7 +462,7 @@ void runSelfTest() {
     selfTest.revTimeMs = 0;
     //The hall edge was never found: the drum's position is unknowable, so
     //park instead of letting the letter-diff check "restore" the commanded
-    //letter from a fake blank origin (codex review). The master's next
+    //letter from a fake blank origin. The master's next
     //frame re-sends content deliberately; until then the unit stays put.
     displayedLetter = 0;
     receivedNumber = 0;

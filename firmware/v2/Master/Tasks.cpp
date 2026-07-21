@@ -418,7 +418,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
     }
   }
   // Trailing partial batch — reached on plan exhaustion AND on both abort
-  // exits (cpp-review HIGH): the settle is brownout pacing and is never
+  // exits: the settle is brownout pacing and is never
   // abort-shortened, so even a cancelled job waits out the homing of the
   // units it already flashed before the queued Stop broadcast-homes.
   if (inBatch > 0) {
@@ -543,7 +543,7 @@ static void displayTaskMain(void*) {
           // Re-scan + health refresh: an address change moves a unit to a
           // slot only a probe can see (v1 #56 semantics). A refresh queued
           // right behind a /unit/reboot must not scan into the twiboot
-          // window (review 2026-07-11) — wait the risk deadline out first.
+          // window — wait the risk deadline out first.
           settleBeforeProbe();
           unitBusProbe(busFacts, UNITS_AMOUNT);
           pollHealthWithFreshness(busFacts);
@@ -636,8 +636,7 @@ static void displayTaskMain(void*) {
               if (!haveBaseline) {
                 // First valid reading = the pre-test buffer content. A later
                 // terminal that DIFFERS from it is provably fresh even when
-                // every poll of the RUNNING window was lost to bus glitches
-                // (codex review).
+                // every poll of the RUNNING window was lost to bus glitches.
                 haveBaseline = true;
                 baseline = r;
               }
@@ -645,7 +644,7 @@ static void displayTaskMain(void*) {
                 if (!sawRunning) {
                   // The test provably started — re-arm the window so time the
                   // unit spent finishing a prior move doesn't eat the test's
-                  // own budget (codex review).
+                  // own budget.
                   sawRunning = true;
                   start = millis();
                 }
@@ -868,7 +867,7 @@ static void clockTaskMain(void*) {
     // gated loop()'s mode block via mqttNotificationTick()). On the
     // falling edge, drop the dedup marker: it was frozen at the pre-
     // notification text, which is exactly the revert target — a stale
-    // match would block the revert forever (cpp-review HIGH).
+    // match would block the revert forever.
     static bool notifWasActive = false;
     if (mqttNotificationActive()) {
       notifWasActive = true;

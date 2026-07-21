@@ -269,7 +269,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // mode switches). Skipped when a transient rides the same POST: its
       // overlay arm below supersedes the old one anyway, and a staged
       // cancel draining one tick earlier than the arm would drop the
-      // clockTask gate for a one-frame stray re-show (cpp-review MED).
+      // clockTask gate for a one-frame stray re-show.
       if ((modeProvided || messageProvided) && !transientProvided) {
         mqttCancelNotification();
       }
