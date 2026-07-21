@@ -91,6 +91,11 @@ jobs:
       - name: Install pytest
         run: pip install pytest
 
+      # #350 copied-header drift gate: the v2 copy policy prices in silent
+      # divergence — this pins every declared copy pair.
+      - name: Copied-header drift gate
+        run: python -m pytest tests/ -v
+
       - name: Run v2 Master Python tests
         working-directory: firmware/v2/Master
         run: python -m pytest tests/

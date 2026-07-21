@@ -4,7 +4,7 @@ Guidance for Claude Code in this repository. Current state only — history live
 
 ## Project
 
-Arduino-based split-flap display: a master MCU drives per-flap units over I2C. Firmware builds with **PlatformIO** — every project directory has its own `platformio.ini`; run commands from that directory. CI (`.github/workflows/build.yml`) builds every active firmware project (frozen v1/ESPMaster excluded) and runs every native/pytest suite plus the unit-bundle drift gate.
+Arduino-based split-flap display: a master MCU drives per-flap units over I2C. Firmware builds with **PlatformIO** — every project directory has its own `platformio.ini`; run commands from that directory. CI (`.github/workflows/build.yml`) builds every active firmware project (frozen v1/ESPMaster excluded) and runs every native/pytest suite plus the unit-bundle and copied-header drift gates (`tests/test_copied_headers.py` — its manifest and the copied-header lists here must stay in sync).
 
 - **v1 is frozen** — only `firmware/v1/ESPMaster` remains, as reference. **Never edit anything under `firmware/v1`.**
 - **v2 is the live stack:** `Master` (ESP32-S3 N16R8 devkit), `Unit` (Arduino Nano per flap), `FollowerEsp01` (ESP-01 "dumb row" under an S3 leader). Pure-logic headers are **copies** across the v2 projects, not shared includes — fix a copied-header bug in every tree that carries it.
