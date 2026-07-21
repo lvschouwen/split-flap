@@ -745,6 +745,9 @@ UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
 
   size_t pageCount = len / TWIBOOT_PAGE_SIZE;
   for (size_t pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+    // #348: ~87 pages × up to ~300 ms each on a degraded bus approaches the
+    // 30 s TWDT with no feed — feed per page, not per unit.
+    wdtFeed();
     if (abortRequested.load()) {
       SerialPrintln(F("Unit flash aborted by /stop — unit left in twiboot"));
       return UnitFlashResult::Aborted;
