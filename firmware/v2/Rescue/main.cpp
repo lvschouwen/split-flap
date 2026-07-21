@@ -123,10 +123,20 @@ static void startOnline() {
 void loop() {
   if (apUp) dnsServer.processNextRequest();
 
-  RescueAction action = rescuePolicyStep(
-      policy, millis(), WiFi.status() == WL_CONNECTED, wifiSsid.length() > 0);
+  // #349: associated stations hold an idle AP open past its STA-retry
+  // window — a recovery in progress must never lose its network.
+  int apStations = apUp ? WiFi.softAPgetStationNum() : 0;
+  RescueAction action =
+      rescuePolicyStep(policy, millis(), WiFi.status() == WL_CONNECTED,
+                       wifiSsid.length() > 0, apStations);
   switch (action) {
     case RescueAction::StartJoin:
+      if (apUp) {
+        // Idle-AP retry (#349): drop the captive DNS before WIFI_STA tears
+        // the softAP down; a failed retry re-runs startAp from scratch.
+        dnsServer.stop();
+        apUp = false;
+      }
       startJoin();
       break;
     case RescueAction::StartAp:
