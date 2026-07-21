@@ -27,6 +27,13 @@ class WebBodyLimitGuard : public AsyncWebHandler {
   }
   bool isRequestHandlerTrivial() const override { return true; }
   void handleRequest(AsyncWebServerRequest* request) override {
+    // Raw 413 with no per-platform CORS headers. On Master the server CORS
+    // middleware still decorates it; on FollowerEsp01/Rescue (no middleware)
+    // it is bare — acceptable because the guard only trips on >2 KB bodies,
+    // and in this system those reach a follower/rescue only server-to-server
+    // (leader wire, no Origin), never from a browser (member fan-out is GET /
+    // small POSTs). A cross-origin oversized POST to a follower is not a real
+    // flow here, so a CORS-less 413 has no victim.
     request->send(413);
   }
 };

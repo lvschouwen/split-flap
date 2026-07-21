@@ -9,6 +9,13 @@
 // with 413 — before a byte is buffered. The thin glue that owns the
 // AsyncWebHandler subclass lives in each project's web-init TU.
 //
+// Scope: this guard covers bodies with a declared Content-Length. It does
+// NOT cover chunked Transfer-Encoding (contentLength() == 0) — that path is
+// harmless today because no route implements onBody/handleBody, so chunked
+// bytes are discarded by the default no-op. The multipart NON-file field and
+// header-line buffering the guard's upload exemption cannot see is bounded
+// separately, inside the parser, by patch_asyncweb.py (#347).
+//
 // COPIED HEADER — byte-identical across Master / Rescue / FollowerEsp01 (the
 // whole fleet now shares esp32async/ESPAsyncWebServer, #356). Fix bugs in
 // every tree; the union upload allowlist below intentionally names routes
