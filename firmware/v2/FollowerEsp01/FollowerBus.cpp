@@ -12,6 +12,7 @@
 #include "DisplayWidth.h"
 #include "FollowerConfig.h"
 #include "HeartbeatPolicy.h"  // pure heartbeat miss/schedule logic (#310)
+#include "RenderStagger.h"  // sub-frame inrush stagger (#324)
 #include "SplitFlapProtocol.h"
 #include "TwibootProtocol.h"
 #include "UnitAssets.h"  // UNIT_FIRMWARE_BIN (build_assets.py)
@@ -364,12 +365,19 @@ void busShowSegment(const String& segment, int webSpeed) {
   int commanded[UNITS_AMOUNT];
   for (int i = 0; i < UNITS_AMOUNT; i++) commanded[i] = -1;
 
+  int commandedCount = 0;
   for (int i = 0; i < width; i++) {
     if (unitFacts[i].state != 1) continue;
     int letter = translateLetterToInt(frame[i]);
     if (letter < 0) continue;  // char not on the drum: leave the unit be
+    // #324: spread the flap inrush — pause before opening each new group so a
+    // full row's steppers don't spin up at once and brown out the rail.
+    if (renderStaggerShouldSettle(commandedCount, RENDER_STAGGER_BATCH)) {
+      delay(RENDER_STAGGER_SETTLE_MS);
+    }
     writeToUnit(i, letter, speed);
     commanded[i] = letter;
+    commandedCount++;
   }
 
   waitForRowToStop();
