@@ -50,7 +50,16 @@ The firmware runs on bench hardware reached by OTA over the user's VPN; there is
 6. **Commit + close issue** — conventional message referencing it; push; confirm the GitHub auto-close fired (it has silently failed — close manually if not).
 7. **Update memory.**
 
-Releases are batched (≤1/day, after the day's commits land) — never version-bump inside a feature/fix commit.
+## Release policy (semver, event-triggered)
+
+The fleet converges on the git **REV** (`git describe`/short SHA baked into the binary), never on the tag — so a `vX.Y.Z` tag has no operational role; it is a human changelog + rollback anchor only. There is **no version file**: a "release" = a git tag + a GitHub release with notes.
+
+- **Tag on a milestone, not on a clock.** No daily-cadence rule. Days of pure fixes accumulate untagged on `master` (the fleet still runs specific REVs); cut a tag only when the diff since the last tag is worth announcing or anchoring. Never version-bump inside a feature/fix commit.
+- **Litmus for the bump, applied to the aggregate diff since the last tag:**
+  - **MAJOR** — a backward-incompatible change to the I2C/cluster wire protocol, NVS/EEPROM layout, partition table, OTA contract, or config semantics (deployed units / HA automations could break or need migration).
+  - **MINOR** — a backward-compatible *operator-visible* capability: a new mode, endpoint/API surface, HA/MQTT entity, topology, provisioning/control workflow, or an additive wire field that *enables* new behavior.
+  - **PATCH** — fixes, reliability, security hardening, perf, refactors, diagnostics/logging, docs, tooling, and purely-internal additive protocol/storage robustness.
+- Don't retag or rewrite a shipped release. A run of fix-only work stays on the same MINOR: `vX.Y.Z` → `vX.Y.(Z+1)`. Bump MINOR only when a genuine new capability lands.
 
 ## Hard rules
 
