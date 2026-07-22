@@ -29,7 +29,7 @@ A mechanical split-flap display driven by an **ESP32-S3 master** that talks over
 
 Multiple masters can be joined into a **multi-display cluster** — a wall of N rows driven as one logical display over your LAN, with automatic leader/follower coordination and firmware convergence across the fleet.
 
-> **Release:** the current stack is **v2** (`v2.0.0`, the full port of the original ESP8266 firmware onto the ESP32-S3 plus the cluster feature). See the [releases page](https://github.com/lvschouwen/split-flap/releases) for notes and firmware binaries.
+> **Release:** the current stack is **v2** — the full port of the original ESP8266 firmware onto the ESP32-S3 plus the multi-display cluster. Releases are date-versioned (`vYYYY.MM.DD`); see the [releases page](https://github.com/lvschouwen/split-flap/releases) for notes and firmware binaries.
 
 ## Firmware layout
 
