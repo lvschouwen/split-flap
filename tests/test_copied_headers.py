@@ -41,6 +41,7 @@ IDENTICAL_PAIRS = [
         "UnitVitals.h",
         "HeartbeatPolicy.h",
         "BootHomePlan.h",
+        "RenderStagger.h",
     ]
 ]
 

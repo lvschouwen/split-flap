@@ -50,7 +50,14 @@ The firmware runs on bench hardware reached by OTA over the user's VPN; there is
 6. **Commit + close issue** — conventional message referencing it; push; confirm the GitHub auto-close fired (it has silently failed — close manually if not).
 7. **Update memory.**
 
-Releases are batched (≤1/day, after the day's commits land) — never version-bump inside a feature/fix commit.
+## Release policy (CalVer `vYYYY.MM.DD`, ≤1/day)
+
+The fleet converges on the git **REV** (`git describe`/short SHA baked into the binary), never on the tag — so a tag has no operational role; it is a human changelog + rollback anchor only. There is **no version file**: a "release" = an annotated git tag + a GitHub release with notes.
+
+- **Versioning is CalVer `vYYYY.MM.DD`** (`v`-prefixed for continuity with the old `v2.3.0` tags), **at most one release per day** — the date IS the version, so no within-day counter. Fix-only days accumulate untagged on `master` (the fleet still runs specific REVs); cut a dated release only when the day's diff is worth announcing or anchoring. Never tag inside a feature/fix commit.
+- **Breaking changes aren't in the version string** (CalVer has no MAJOR signal) — flag them in the release: title `vYYYY.MM.DD — BREAKING`, plus a `## Breaking / Operator action required` notes section, for any change to the I2C/cluster wire, NVS/EEPROM layout, partition table, OTA contract, config semantics, or minimum bootloader.
+- **Same-day critical fix** (a release already shipped today): OTA-deploy the fixed REV now (the fleet needs no tag) and cut the dated release the next day. `vYYYY.MM.DD-hotfix.N` is break-glass only, when a same-day rollback anchor is genuinely needed.
+- The v2 release line was retro-converted to CalVer on 2026-07-22 (v2.0.0→`v2026.07.18`, v2.1.0→`v2026.07.20`, v2.2.0→`v2026.07.20-hotfix.1`, v2.3.0→`v2026.07.22`, commits unchanged); the frozen v1 tags (`v1.x`) stay semver. Mixed CalVer/semver tags don't version-sort, so always set the GitHub release latest explicitly (`gh release create --latest`). Firmware identity stays the baked REV — never parse meaning from the tag. Going forward, don't retag/rewrite a shipped release — that migration was a deliberate one-time exception.
 
 ## Hard rules
 
@@ -82,7 +89,7 @@ One line per mechanism: what it is + issue # + the file(s) whose headers carry t
 - **Status LED (#199):** WS2812 on GPIO 48, pure `StatusLedPolicy.h`, ticked from netTask. Boot banner with partition diagnostics owned by `main.cpp`.
 - **Flash log (#206):** LittleFS tee of the serial/web-log stream on the `storage` partition, served at `GET /log/flash` — `FlashLog.h` + `FlashLogPolicy.h`; writer discipline in Hard rules.
 - **Slot confirm records (#200):** per-slot NVS record stamped on first netif-up so Rescue can rank images (the app-descriptor stamp freezes at framework-assembly time under pioarduino). `SlotRecord.h` ↔ parse-only copy `RescueSlotRecord.h`.
-- **I2C unit bus (#203):** `UnitBus.cpp`/`.h` (sole Wire toucher — Hard rules), blocking transactions; pure seams `FlapFrame.h`, `UnitHealth.h`, `UnitProtocolHelpers.h`, `TwibootProtocol.h`.
+- **I2C unit bus (#203):** `UnitBus.cpp`/`.h` (sole Wire toucher — Hard rules), blocking transactions; pure seams `FlapFrame.h`, `UnitHealth.h`, `UnitProtocolHelpers.h`, `TwibootProtocol.h`, `RenderStagger.h` (#324: bulk render pauses between unit groups so a full row's flap inrush doesn't brown out the rail — the runtime twin of the #309 boot-home stagger; copied to FollowerEsp01).
 - **Calibration + provisioning (#204):** every op is a DisplayCommand (`{"seq":N}` → `GET /unit/op-result`); validation pure in `MaintenancePolicy.h`, re-run by displayTask pre-burn; op/abort contracts in `UnitBus.h`; probe-inhibit in `DisplayTask.cpp`.
 - **Unit reflash over twiboot (#205):** bundled unit hex (`data/unit-firmware.hex` + `.rev`; staged by `make_manifest.py`, CI drift-gated) flashed by `runReflashJob` in `DisplayTask.cpp`; plan + progress pure in `ReflashPlan.h`; producer gate in Hard rules.
 - **MQTT + Home Assistant (#224):** 23 discovery entities, LWT, five command topics on espMqttClient, owned by mqttTask — `MqttService.h`/`.cpp`, pure logic in `MqttHelpers.h` + `MqttLifecyclePolicy.h`; spec `2026-07-12-v2-mqtt-ha-slice.md`.
@@ -122,7 +129,7 @@ Minimal ESP8266 firmware (spec `2026-07-14-v2-esp01-follower-design.md`) turning
 - Phases (pure `FollowerPolicy.h`, trimmed ClusterFollowerPolicy copy): Standalone → Clustered → Grace (holds last text) → **Blank** (~2 min silence); membership persists in EEPROM (`FollowerSettings.h`, magic `4FFS`) so a reboot lands in Grace. SNTP epoch-only for commitAt flips; unsynced = render immediately.
 - **Clock fallback (#342):** the leader's POSIX tz rides the join (`tz=` additive) and persists with the membership; a Blank row with a held membership + synced time renders centered HH:MM (pure `FollowerClock.h`) instead of going dark. Leader content replaces it; leave drops the zone; no tz or no sync = blank as before.
 - **Boot-rescue beacon (#343):** RTC-memory bad-boot counter (pure `FollowerRescue.h`, word offset 32; zeroed by 60 s uptime or the deliberate-reboot path — which OTA completion takes; a power cycle wipes it). 3 consecutive early deaths boot a minimal beacon: WiFi + cluster wire + OTA only, no I2C/probe/boot-home/render, unit ops 409, `rescue:1` in join/ping replies → the leader re-pushes the stored image.
-- Copied pure headers (fix bugs in both trees): `UnitHealth.h`, `UnitProtocolHelpers.h`, `WearPolicy.h`, `TwibootProtocol.h`, `DisplayWidth.h`, `FollowerCors.h`, `ClusterHmac.h`, `ClusterForeign.h`, `UnitVitals.h`, `HeartbeatPolicy.h`, `BootHomePlan.h`, plus `FollowerOps.h` (reflash batch size 2 — bench-tuned, NOT the S3's 4).
+- Copied pure headers (fix bugs in both trees): `UnitHealth.h`, `UnitProtocolHelpers.h`, `WearPolicy.h`, `TwibootProtocol.h`, `DisplayWidth.h`, `FollowerCors.h`, `ClusterHmac.h`, `ClusterForeign.h`, `UnitVitals.h`, `HeartbeatPolicy.h`, `BootHomePlan.h`, `RenderStagger.h`, plus `FollowerOps.h` (reflash batch size 2 — bench-tuned, NOT the S3's 4).
 - `build_assets.py` bakes `data/unit-firmware.hex` (staged by `make_manifest.py stage`, CI-gated) into `UnitAssets.h` and stamps `follower-<rev>.bin` — the prefix ota-flash.sh keys the platform on.
 - Tests: `pio test -e native` (policy/settings/json/ops/clock/rescue) + the fake_leader/fake_follower twin pytest (see Cluster bullet).
 

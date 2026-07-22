@@ -14,6 +14,7 @@
 #include "BuildVersion.h"  // BUNDLED_UNIT_REV (#205)
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
+#include "RenderStagger.h"  // sub-frame inrush stagger (#324)
 #include "SplitFlapProtocol.h"
 #include "TaskWatchdog.h"  // wdtFeed() (#314)
 #include "TwibootProtocol.h"
@@ -471,14 +472,21 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
   waitForDisplayToStop(facts, width);
 
   int writeErrors = 0;
+  int commanded = 0;
   for (int unitIndex = 0; unitIndex < width; unitIndex++) {
     // Skip slots the probe did not find a sketch-running unit on: writing
     // to absent addresses stalls isDisplayMoving() and a dead unit
     // mid-display must not wedge the whole frame (v1 behavior).
     if (facts[unitIndex].state != 1) continue;
+    // #324: spread the flap inrush — pause before opening each new group so a
+    // full row's steppers don't spin up at once and brown out the rail.
+    if (renderStaggerShouldSettle(commanded, RENDER_STAGGER_BATCH)) {
+      delay(RENDER_STAGGER_SETTLE_MS);
+    }
     if (writeToUnit(unitIndex, letters[unitIndex], (uint8_t)unitSpeed) != 0) {
       writeErrors++;
     }
+    commanded++;
   }
 
   waitForDisplayToStop(facts, width);
