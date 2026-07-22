@@ -33,6 +33,14 @@ static const uint32_t CLUSTER_RETRY_BASE_MS = 1000UL;
 static const uint32_t CLUSTER_RETRY_MAX_MS = 8000UL;
 static const uint8_t CLUSTER_DEGRADED_AFTER_FAILURES = 3;
 
+// Render-busy grace (#326): a contact timeout in the window after a follower
+// ACKed a render is almost always the single-core follower heads-down applying
+// it — its blocking I2C flap starves the async contact path. Such a timeout
+// backs off and retries but does NOT count toward degrade. Sized to cover a
+// worst-case normal full-row flap + readback; a genuinely stuck unit (bounded
+// by the follower's 30 s show-timeout) outlasts it and degrades honestly.
+static const uint32_t CLUSTER_RENDER_GRACE_MS = 6000UL;
+
 // This master's own platform tag (#297). Members report theirs via the
 // additive `plat` join/ping-reply key; ABSENT means same-platform (the
 // pre-#297 S3 fleet), so only a foreign non-empty plat changes behavior —
@@ -57,6 +65,7 @@ struct ClusterMemberRuntime {
   uint8_t failures = 0;
   uint32_t nextAttemptMs = 0;  // backoff gate for the next HTTP attempt
   uint32_t lastContactMs = 0;  // last successful round-trip
+  uint32_t lastRenderMs = 0;   // last ACKed render (#326 busy-grace; 0 = never)
   bool renderDirty = false;    // segment changed since the last acked render
   String rev;                  // follower firmware rev (join + ping replies, #276)
   String plat;                 // reported platform, "" = same as leader (#297)
@@ -131,7 +140,23 @@ inline void clusterMemberOnSuccess(ClusterMemberRuntime& m, uint32_t nowMs) {
   m.nextAttemptMs = nowMs;
 }
 
+// #326: stamp the moment a render was ACKed — the follower is about to go
+// heads-down flapping it. Refreshed ONLY on a successful render (never on a
+// failed one), so a dead follower's stamp goes stale and the grace below
+// cannot mask a real outage.
+inline void clusterMemberNoteRender(ClusterMemberRuntime& m, uint32_t nowMs) {
+  m.lastRenderMs = nowMs;
+}
+
 inline void clusterMemberOnFailure(ClusterMemberRuntime& m, uint32_t nowMs) {
+  // #326 render-busy grace: a timeout shortly after an ACKed render is the
+  // follower applying it, not a dead link — retry soon, but don't degrade.
+  // Gated on lastRenderMs != 0 so a never-rendered member counts normally.
+  if (m.lastRenderMs != 0 &&
+      (uint32_t)(nowMs - m.lastRenderMs) < CLUSTER_RENDER_GRACE_MS) {
+    m.nextAttemptMs = nowMs + CLUSTER_RETRY_BASE_MS;
+    return;
+  }
   if (m.failures < 255) m.failures++;
   if (m.failures >= CLUSTER_DEGRADED_AFTER_FAILURES) {
     m.degraded = true;

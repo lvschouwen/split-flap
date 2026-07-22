@@ -312,6 +312,10 @@ void applyMemberResult(const MemberWorkItem& item, int status,
       }
       case ClusterLeaderAction::Render:
         m.renderDirty = false;
+        // #326: the follower just ACKed this render and is about to go
+        // heads-down flapping it — arm the busy-grace so the next contact
+        // timeout during that flap isn't counted toward degrade.
+        clusterMemberNoteRender(m, nowMs);
         break;
       default:
         break;

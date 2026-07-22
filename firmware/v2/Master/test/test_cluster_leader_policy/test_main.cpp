@@ -113,6 +113,46 @@ static void test_success_clears_failures_and_degraded() {
   TEST_ASSERT_EQUAL_UINT32(20000, m.lastContactMs);
 }
 
+// #326: a timeout in the window after a follower ACKed a render is the
+// single-core follower heads-down flapping that render, not a dead link —
+// it must not count toward degrade.
+static void test_render_busy_grace_suppresses_degrade() {
+  ClusterMemberRuntime m = makeJoined(1000);
+  clusterMemberNoteRender(m, 2000);  // follower just ACKed a render
+  // Three timeouts inside the grace window: backoff applies, but no count.
+  clusterMemberOnFailure(m, 2100);
+  clusterMemberOnFailure(m, 2600);
+  clusterMemberOnFailure(m, 3100);
+  TEST_ASSERT_EQUAL(0, m.failures);
+  TEST_ASSERT_FALSE(m.degraded);
+  TEST_ASSERT_TRUE(m.joined);
+  // Still rescheduled (a short retry, not a hammer).
+  TEST_ASSERT_TRUE((int32_t)(m.nextAttemptMs - 3100) > 0);
+}
+
+// A genuinely dead follower never ACKs a render, so lastRenderMs goes stale
+// and normal failure counting resumes — grace can't mask a real outage.
+static void test_render_busy_grace_expires_then_degrades() {
+  ClusterMemberRuntime m = makeJoined(1000);
+  clusterMemberNoteRender(m, 2000);
+  uint32_t past = 2000 + CLUSTER_RENDER_GRACE_MS + 1;  // grace expired
+  clusterMemberOnFailure(m, past);
+  clusterMemberOnFailure(m, past + 5000);
+  TEST_ASSERT_FALSE(m.degraded);
+  clusterMemberOnFailure(m, past + 20000);
+  TEST_ASSERT_TRUE(m.degraded);
+}
+
+// A member that never rendered (lastRenderMs == 0) degrades as before — the
+// grace sentinel must not fire on a fresh member.
+static void test_no_render_means_no_grace() {
+  ClusterMemberRuntime m = makeJoined(1000);
+  clusterMemberOnFailure(m, 2000);
+  clusterMemberOnFailure(m, 4000);
+  clusterMemberOnFailure(m, 8000);
+  TEST_ASSERT_TRUE(m.degraded);
+}
+
 static void test_not_clustered_reply_forces_rejoin_without_backoff() {
   ClusterMemberRuntime m = makeJoined(1000);
   clusterMemberOnNotClustered(m);
@@ -308,6 +348,9 @@ int main(int, char**) {
   RUN_TEST(test_backoff_doubles_and_caps);
   RUN_TEST(test_third_failure_degrades_and_forces_rejoin);
   RUN_TEST(test_success_clears_failures_and_degraded);
+  RUN_TEST(test_render_busy_grace_suppresses_degrade);
+  RUN_TEST(test_render_busy_grace_expires_then_degrades);
+  RUN_TEST(test_no_render_means_no_grace);
   RUN_TEST(test_not_clustered_reply_forces_rejoin_without_backoff);
   RUN_TEST(test_table_round_trips_through_string);
   RUN_TEST(test_empty_string_parses_to_disabled_table);
