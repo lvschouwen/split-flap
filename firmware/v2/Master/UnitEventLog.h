@@ -21,12 +21,33 @@
 #define UNIT_EVT_HALL_NEVER  (1 << 1)  // UNIT_FLAG_HALL_NEVER (status)
 #define UNIT_EVT_STALE       (1 << 2)  // heartbeat lost — unit off the bus (#310)
 #define UNIT_EVT_MISMATCH    (1 << 3)  // displayed letter != intended (#264 mm)
+#define UNIT_EVT_LOW_VCC     (1 << 4)  // since-boot vccMin below the floor (#366)
 
 // Conditions whose RECOVERY (true->false) is also worth a log line. Onset is
 // always logged; recovery only here — a unit rejoining the bus or homing OK
-// again is real good-news, whereas hall-never is effectively permanent and a
-// mismatch clearing is usually just the next frame catching up (noise).
+// again is real good-news, whereas hall-never is effectively permanent, a
+// mismatch clearing is usually just the next frame catching up (noise), and
+// low-Vcc rides a since-boot MINIMUM that only ever falls (it can't "recover"
+// without a unit reboot, which re-baselines the whole mask at the next probe).
 #define UNIT_EVT_RECOVERABLE (UNIT_EVT_HOME_FAILED | UNIT_EVT_STALE)
+
+// Fixed low-supply floor (#366): a unit whose since-boot vccMin (mid-move
+// sampled, #306) has dipped below this is logged once as a brownout precursor
+// where an operator actually looks — the vccMin JSON is otherwise a passive
+// number. AVR units run 5V nominal with BOD typically ~2.7V, so 4000 mV is a
+// clear ~1V sag warning: well above a hard reset yet below normal mid-move
+// droop, so it flags real trouble without flooding on healthy rails.
+// TODO(#366): make NVS-configurable per-device (fixed compile-time for now).
+#define UNIT_VCC_MIN_FLOOR_MV 4000
+
+// True when a unit's supply diagnostics are valid AND its since-boot minimum
+// Vcc has dipped below the floor. vccMin==0 is the "no reading" sentinel (a
+// pre-vitals unit or a glitched ADC), never a low-Vcc alert. Pure so the
+// threshold decision is natively tested; the SerialPrintf glue is bench tier.
+inline bool unitVccIsLow(bool vitalsValid, uint16_t vccMin_mV,
+                         uint16_t floor_mV) {
+  return vitalsValid && vccMin_mV != 0 && vccMin_mV < floor_mV;
+}
 
 struct UnitEventTransitions {
   uint8_t onset;     // conditions that became true since the baseline

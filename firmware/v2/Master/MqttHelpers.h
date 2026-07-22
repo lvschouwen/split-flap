@@ -194,10 +194,17 @@ inline String mqttTopic(const String& deviceId, const char* suffix) {
 // retained topics, published on-change / on-connect (ServiceMqttFunctions.ino)
 // so HA sees them instantly instead of on this periodic tick (#132).
 inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap, int heapFragPct,
-                                    long rssi, int unitErrors, unsigned long uptimeSec, bool ntpSynced) {
-  return (size_t)mqttSnprintf(buf, bufLen,
-      MQTT_FMT("{\"heap\":%lu,\"heapFrag\":%d,\"rssi\":%ld,\"unitErrors\":%d,\"uptime\":%lu,\"ntp\":%d}"),
+                                    long rssi, int unitErrors, unsigned long uptimeSec,
+                                    bool ntpSynced, uint16_t vccMin_mV) {
+  size_t o = (size_t)mqttSnprintf(buf, bufLen,
+      MQTT_FMT("{\"heap\":%lu,\"heapFrag\":%d,\"rssi\":%ld,\"unitErrors\":%d,\"uptime\":%lu,\"ntp\":%d"),
       (unsigned long)freeHeap, heapFragPct, rssi, unitErrors, uptimeSec, ntpSynced ? 1 : 0);
+  // Fleet-min supply Vcc (#366): omitted when no unit reports vitals (value 0)
+  // so the HA sensor reads unavailable instead of a phantom 0 mV.
+  if (vccMin_mV > 0 && o < bufLen)
+    o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"vccMin\":%u"), (unsigned)vccMin_mV);
+  if (o < bufLen) o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT("}"));
+  return o;
 }
 
 // ---- HA MQTT Discovery ----
@@ -241,6 +248,10 @@ enum MqttDiscoveryEntity {
   // the relative threshold (WearPolicy.h); median + flagged list ride the
   // units/wear attrs topic.
   DISCOVERY_UNIT_WEAR,
+  // Fleet-min supply Vcc (#366) — diagnostic voltage sensor, the lowest
+  // since-boot vccMin any unit reports (the brownout smoking gun). Rides the
+  // periodic telemetry packet; the per-unit vmin lives in units/attrs.
+  DISCOVERY_VCC_MIN,
   DISCOVERY_ENTITY_COUNT
 };
 
@@ -272,6 +283,7 @@ inline MqttDiscMeta mqttDiscMeta(int entity) {
     case DISCOVERY_RESTART:      return { "button",        "_restart" };
     case DISCOVERY_UNITS_FAULTY: return { "sensor",        "_units_faulty" };
     case DISCOVERY_UNIT_WEAR:    return { "binary_sensor", "_unit_wear" };
+    case DISCOVERY_VCC_MIN:      return { "sensor",        "_vcc_min" };
   }
   return { nullptr, nullptr };
 }
@@ -374,6 +386,8 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Unit wear warning\",\"stat_t\":\"splitflap/%s/units_wear\",\"json_attr_t\":\"splitflap/%s/units/wear\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_unit_wear\",\"dev_cla\":\"problem\",\"ent_cat\":\"diagnostic\",\"pl_on\":\"ON\",\"pl_off\":\"OFF\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+    //                        obj             name                 stat_t          val_tpl                       dev_cla    unit    ent_cat        pOn    pOff
+    case DISCOVERY_VCC_MIN:      return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_vcc_min",      "Unit supply Vcc (min)", "telemetry", "{{ value_json.vccMin }}",  "voltage", "mV",  "diagnostic", nullptr, nullptr);
   }
   if (bufLen > 0) buf[0] = '\0';
   return 0;

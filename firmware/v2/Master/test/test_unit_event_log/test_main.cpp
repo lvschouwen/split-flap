@@ -94,12 +94,52 @@ static void test_mismatch_diag_gap_carries_not_reonsets() {
 }
 
 static void test_recoverable_mask_membership() {
-  // Guard the policy: exactly home-failed + stale recover; hall-never + mismatch
-  // do not.
+  // Guard the policy: exactly home-failed + stale recover; hall-never, mismatch
+  // and low-Vcc do not.
   TEST_ASSERT_TRUE(UNIT_EVT_RECOVERABLE & UNIT_EVT_HOME_FAILED);
   TEST_ASSERT_TRUE(UNIT_EVT_RECOVERABLE & UNIT_EVT_STALE);
   TEST_ASSERT_FALSE(UNIT_EVT_RECOVERABLE & UNIT_EVT_HALL_NEVER);
   TEST_ASSERT_FALSE(UNIT_EVT_RECOVERABLE & UNIT_EVT_MISMATCH);
+  TEST_ASSERT_FALSE(UNIT_EVT_RECOVERABLE & UNIT_EVT_LOW_VCC);
+}
+
+// --- low-Vcc alert (#366) ---------------------------------------------------
+
+static void test_low_vcc_onsets_once_and_stays_latched() {
+  // A unit whose vccMin crossed the floor onsets LOW_VCC once (with all
+  // conditions observable), then stays silent — vccMin only ever falls further.
+  uint8_t all = ALL | UNIT_EVT_LOW_VCC;
+  UnitEventTransitions t = unitEventEvaluate(0, UNIT_EVT_LOW_VCC, all);
+  TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_LOW_VCC, t.onset);
+  TEST_ASSERT_EQUAL_UINT8(0, t.recovery);
+  // Next tick, still low: no repeat line.
+  t = unitEventEvaluate(UNIT_EVT_LOW_VCC, UNIT_EVT_LOW_VCC, all);
+  TEST_ASSERT_EQUAL_UINT8(0, t.onset);
+  TEST_ASSERT_EQUAL_UINT8(0, t.recovery);
+}
+
+static void test_low_vcc_vitals_gap_carries_no_recovery() {
+  // vccMin rides the vitals read; a missed vitals poll (LOW_VCC not observable)
+  // must CARRY a prior low-Vcc, never emit a phantom recovery (it's non-
+  // recoverable) or re-onset when the next good read arrives.
+  uint8_t validNoVitals = ALL;  // LOW_VCC bit absent
+  UnitEventTransitions t = unitEventEvaluate(UNIT_EVT_LOW_VCC, 0, validNoVitals);
+  TEST_ASSERT_EQUAL_UINT8(0, t.onset);
+  TEST_ASSERT_EQUAL_UINT8(0, t.recovery);
+  TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_LOW_VCC, t.newState);
+}
+
+static void test_unit_vcc_is_low_threshold() {
+  // Below the floor with valid vitals -> low.
+  TEST_ASSERT_TRUE(unitVccIsLow(true, 3999, UNIT_VCC_MIN_FLOOR_MV));
+  TEST_ASSERT_TRUE(unitVccIsLow(true, 3000, 4000));
+  // At or above the floor -> not low.
+  TEST_ASSERT_FALSE(unitVccIsLow(true, 4000, 4000));
+  TEST_ASSERT_FALSE(unitVccIsLow(true, 4800, UNIT_VCC_MIN_FLOOR_MV));
+  // vccMin==0 is the "no reading" sentinel, never an alert even if < floor.
+  TEST_ASSERT_FALSE(unitVccIsLow(true, 0, UNIT_VCC_MIN_FLOOR_MV));
+  // Invalid vitals never alert regardless of the value.
+  TEST_ASSERT_FALSE(unitVccIsLow(false, 3000, UNIT_VCC_MIN_FLOOR_MV));
 }
 
 int main(int, char**) {
@@ -113,5 +153,8 @@ int main(int, char**) {
   RUN_TEST(test_going_stale_while_home_failed_logs_only_stale);
   RUN_TEST(test_mismatch_diag_gap_carries_not_reonsets);
   RUN_TEST(test_recoverable_mask_membership);
+  RUN_TEST(test_low_vcc_onsets_once_and_stays_latched);
+  RUN_TEST(test_low_vcc_vitals_gap_carries_no_recovery);
+  RUN_TEST(test_unit_vcc_is_low_threshold);
   return UNITY_END();
 }

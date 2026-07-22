@@ -151,6 +151,15 @@ static void logUnitHealthTransition(const DisplaySnapshot& local,
     if (u.status.flags & UNIT_FLAG_LAST_HOME_FAILED) cur |= UNIT_EVT_HOME_FAILED;
     if (u.status.flags & UNIT_FLAG_HALL_NEVER)       cur |= UNIT_EVT_HALL_NEVER;
   }
+  // #366: low-Vcc rides the vitals read (its own transaction, can miss
+  // independently). Onset-only (non-recoverable) — vccMin is a since-boot
+  // minimum that only ever falls, so it "clears" solely on a unit reboot, which
+  // re-baselines the whole mask at the next probe rescan.
+  if (u.vitalsValid) {
+    valid |= UNIT_EVT_LOW_VCC;
+    if (unitVccIsLow(u.vitalsValid, u.vitals.vccMin_mV, UNIT_VCC_MIN_FLOOR_MV))
+      cur |= UNIT_EVT_LOW_VCC;
+  }
   if (u.stale)    cur |= UNIT_EVT_STALE;
   if (u.mismatch) cur |= UNIT_EVT_MISMATCH;
 
@@ -169,6 +178,11 @@ static void logUnitHealthTransition(const DisplaySnapshot& local,
   if (t.onset & UNIT_EVT_MISMATCH)
     SerialPrintf("Unit 0x%02x: displayed letter disagrees with intended (#264)\n",
                  addr);
+  if (t.onset & UNIT_EVT_LOW_VCC)
+    SerialPrintf("Unit 0x%02x: supply Vcc dipped to %u mV (below %u mV floor) — "
+                 "brownout precursor\n",
+                 addr, (unsigned)u.vitals.vccMin_mV,
+                 (unsigned)UNIT_VCC_MIN_FLOOR_MV);
   if (t.recovery & UNIT_EVT_STALE)
     SerialPrintf("Unit 0x%02x recovered — back on the bus\n", addr);
   if (t.recovery & UNIT_EVT_HOME_FAILED)

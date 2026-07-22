@@ -731,13 +731,20 @@ void webEndpointsInit(AsyncWebServer& server) {
     // heap-allocates, but ~3.5 KB of new/delete churn per poll fragments
     // this board's ~40 KB heap). Safe unlocked: handlers run one at a time
     // in the single LWIP context.
-    static char buf[UNIT_HEALTH_JSON_CAP];
+    // Sized off a follower-LOCAL cap, deliberately NOT the shared
+    // UNIT_HEALTH_JSON_CAP: the master raised that to 6144 for the #367
+    // err/errAge keys, which are inert here (per-unit I2C attribution is
+    // master-only — i2cErrors stays 0), so a follower payload never exceeds
+    // its pre-#367 worst case (~4681 B with the wear + reflash splices). Keeping
+    // 5120 spares this RAM-tightest board ~1 KB of dead BSS.
+    static constexpr size_t FOLLOWER_HEALTH_BUF = 5120;
+    static char buf[FOLLOWER_HEALTH_BUF];
     int faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
-    size_t n = buildUnitHealthJson(buf, UNIT_HEALTH_JSON_CAP, unitFacts,
+    size_t n = buildUnitHealthJson(buf, FOLLOWER_HEALTH_BUF, unitFacts,
                                    displayWidth, faulty,
                                    SFP_I2C_ADDRESS_BASE, millis());
-    if (n == 0 || n >= UNIT_HEALTH_JSON_CAP) {
-      n = (size_t)snprintf(buf, UNIT_HEALTH_JSON_CAP,
+    if (n == 0 || n >= FOLLOWER_HEALTH_BUF) {
+      n = (size_t)snprintf(buf, FOLLOWER_HEALTH_BUF,
                            "{\"width\":%d,\"faulty\":%d,\"units\":[]}",
                            displayWidth, faulty);
     }
@@ -748,14 +755,14 @@ void webEndpointsInit(AsyncWebServer& server) {
     char wearJson[96];
     size_t wearLen = buildWearJson(wear, wearJson, sizeof(wearJson));
     if (n > 0 && wearLen < sizeof(wearJson) &&
-        n + wearLen + 2 < UNIT_HEALTH_JSON_CAP) {
-      n += (size_t)snprintf(buf + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
+        n + wearLen + 2 < FOLLOWER_HEALTH_BUF) {
+      n += (size_t)snprintf(buf + n - 1, FOLLOWER_HEALTH_BUF - n + 1,
                             ",%s}", wearJson) - 1;
     }
     char reflashJson[80];
     buildReflashJson(reflashJson, sizeof(reflashJson), reflashProgress);
-    if (n > 0 && n + strlen(reflashJson) + 13 < UNIT_HEALTH_JSON_CAP) {
-      snprintf(buf + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
+    if (n > 0 && n + strlen(reflashJson) + 13 < FOLLOWER_HEALTH_BUF) {
+      snprintf(buf + n - 1, FOLLOWER_HEALTH_BUF - n + 1,
                ",\"reflash\":%s}", reflashJson);
     }
     sendWithCors(request, 200, "application/json", buf);

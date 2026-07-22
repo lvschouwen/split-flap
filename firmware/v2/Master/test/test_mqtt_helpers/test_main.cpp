@@ -168,15 +168,24 @@ static void test_mqttTopic_builds_expected_paths() {
 }
 static void test_telemetry_payload_exact_shape() {
   char buf[128];
-  //                            heap    frag  rssi  errs uptime  ntp
-  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true);
+  //                            heap    frag  rssi  errs uptime  ntp   vccMin
+  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 4210);
   TEST_ASSERT_EQUAL_STRING(
-    "{\"heap\":25048,\"heapFrag\":12,\"rssi\":-61,\"unitErrors\":2,\"uptime\":3600,\"ntp\":1}", buf);
+    "{\"heap\":25048,\"heapFrag\":12,\"rssi\":-61,\"unitErrors\":2,\"uptime\":3600,\"ntp\":1,\"vccMin\":4210}", buf);
+  TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
+}
+static void test_telemetry_vccmin_omitted_when_zero() {
+  // #366: no unit reports vitals -> vccMin 0 -> the key is dropped so the HA
+  // sensor reads unavailable instead of a phantom 0 mV. Object still closes.
+  char buf[128];
+  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0);
+  TEST_ASSERT_NULL(strstr(buf, "vccMin"));
+  TEST_ASSERT_EQUAL_CHAR('}', buf[strlen(buf) - 1]);
   TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
 }
 static void test_telemetry_ntp_false_renders_zero() {
   char buf[128];
-  buildTelemetryPayload(buf, sizeof(buf), 1UL, 0, 0L, 0, 0UL, false);
+  buildTelemetryPayload(buf, sizeof(buf), 1UL, 0, 0L, 0, 0UL, false, 4700);
   assert_contains(buf, "\"ntp\":0");
 }
 // ---- parseModeCommand (#130) ----
@@ -355,6 +364,22 @@ static void test_discovery_unit_wear_topic_and_payload() {
   assert_contains(buf, "\"pl_on\":\"ON\"");
 }
 
+static void test_discovery_vcc_min_topic_and_payload() {
+  // #366: fleet-min supply Vcc diagnostic voltage sensor, telemetry-backed.
+  char buf[512];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_VCC_MIN, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_vcc_min/config", buf);
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_VCC_MIN, "flappy", "abc1234");
+  assert_contains(buf, "\"name\":\"Unit supply Vcc (min)\"");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/telemetry\"");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.vccMin }}\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_vcc_min\"");
+  assert_contains(buf, "\"dev_cla\":\"voltage\"");
+  assert_contains(buf, "\"unit_of_meas\":\"mV\"");
+  assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
+}
+
 static void test_all_discovery_entities_wellformed() {
   char pbuf[512];
   char tbuf[96];
@@ -475,6 +500,7 @@ int main(int, char**) {
   RUN_TEST(test_notification_survives_millis_wraparound);
   RUN_TEST(test_mqttTopic_builds_expected_paths);
   RUN_TEST(test_telemetry_payload_exact_shape);
+  RUN_TEST(test_telemetry_vccmin_omitted_when_zero);
   RUN_TEST(test_telemetry_ntp_false_renders_zero);
   RUN_TEST(test_mode_command_accepts_exact_options);
   RUN_TEST(test_mode_command_trims_whitespace);
@@ -496,5 +522,6 @@ int main(int, char**) {
   RUN_TEST(test_discovery_control_topics_and_payloads);
   RUN_TEST(test_discovery_units_faulty_topic_and_payload);
   RUN_TEST(test_discovery_unit_wear_topic_and_payload);
+  RUN_TEST(test_discovery_vcc_min_topic_and_payload);
   return UNITY_END();
 }
