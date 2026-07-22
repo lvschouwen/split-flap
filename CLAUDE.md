@@ -50,16 +50,14 @@ The firmware runs on bench hardware reached by OTA over the user's VPN; there is
 6. **Commit + close issue** — conventional message referencing it; push; confirm the GitHub auto-close fired (it has silently failed — close manually if not).
 7. **Update memory.**
 
-## Release policy (semver, event-triggered)
+## Release policy (CalVer `vYYYY.MM.DD`, ≤1/day)
 
-The fleet converges on the git **REV** (`git describe`/short SHA baked into the binary), never on the tag — so a `vX.Y.Z` tag has no operational role; it is a human changelog + rollback anchor only. There is **no version file**: a "release" = a git tag + a GitHub release with notes.
+The fleet converges on the git **REV** (`git describe`/short SHA baked into the binary), never on the tag — so a tag has no operational role; it is a human changelog + rollback anchor only. There is **no version file**: a "release" = an annotated git tag + a GitHub release with notes.
 
-- **Tag on a milestone, not on a clock.** No daily-cadence rule. Days of pure fixes accumulate untagged on `master` (the fleet still runs specific REVs); cut a tag only when the diff since the last tag is worth announcing or anchoring. Never version-bump inside a feature/fix commit.
-- **Litmus for the bump, applied to the aggregate diff since the last tag:**
-  - **MAJOR** — a backward-incompatible change to the I2C/cluster wire protocol, NVS/EEPROM layout, partition table, OTA contract, or config semantics (deployed units / HA automations could break or need migration).
-  - **MINOR** — a backward-compatible *operator-visible* capability: a new mode, endpoint/API surface, HA/MQTT entity, topology, provisioning/control workflow, or an additive wire field that *enables* new behavior.
-  - **PATCH** — fixes, reliability, security hardening, perf, refactors, diagnostics/logging, docs, tooling, and purely-internal additive protocol/storage robustness.
-- Don't retag or rewrite a shipped release. A run of fix-only work stays on the same MINOR: `vX.Y.Z` → `vX.Y.(Z+1)`. Bump MINOR only when a genuine new capability lands.
+- **Versioning is CalVer `vYYYY.MM.DD`** (`v`-prefixed for continuity with the old `v2.3.0` tags), **at most one release per day** — the date IS the version, so no within-day counter. Fix-only days accumulate untagged on `master` (the fleet still runs specific REVs); cut a dated release only when the day's diff is worth announcing or anchoring. Never tag inside a feature/fix commit.
+- **Breaking changes aren't in the version string** (CalVer has no MAJOR signal) — flag them in the release: title `vYYYY.MM.DD — BREAKING`, plus a `## Breaking / Operator action required` notes section, for any change to the I2C/cluster wire, NVS/EEPROM layout, partition table, OTA contract, config semantics, or minimum bootloader.
+- **Same-day critical fix** (a release already shipped today): OTA-deploy the fixed REV now (the fleet needs no tag) and cut the dated release the next day. `vYYYY.MM.DD-hotfix.N` is break-glass only, when a same-day rollback anchor is genuinely needed.
+- Mixed `v2.3.0`/`vYYYY.MM.DD` tags don't version-sort, so set the GitHub release as latest explicitly (`gh release create --latest`). Firmware identity stays the baked REV — never parse meaning from the tag. Don't retag/rewrite a shipped release.
 
 ## Hard rules
 
