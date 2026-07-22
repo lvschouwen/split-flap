@@ -84,6 +84,13 @@ struct UnitFacts {
   uint8_t driftEvents = 0;
   int8_t lastDriftSteps = 0;
   bool diagValid = false;
+  // Master-side only (#322): baseline of driftEvents already reflected on the
+  // operator log, so a NEW drift/self-correction (#263, otherwise silent) can
+  // be logged once. -1 until the first valid diag read this probe epoch; a
+  // probe rescan re-zeroes the whole struct (re-baseline), but a transient
+  // diag-read failure early-returns without touching it, so a poll gap can't
+  // drop a drift log. Inert in the FollowerEsp01 copy. Policy in DriftLogPolicy.h.
+  int16_t driftEventsBaseline = -1;
   // Supply-Vcc / free-RAM / commanded-position diagnostics (#306):
   // probe/health-poll CMD_GET_VITALS truth, same lifecycle as the odometer
   // (checksum-rejected replies from pre-vitals firmware leave vitalsValid
@@ -104,6 +111,12 @@ struct UnitFacts {
   // coherent at that instant (#267: render-time comparison produced phantom
   // mismatches from stale phys vs newer frames).
   bool mismatch = false;
+  // Master-side only (#322): last-logged unit-health condition mask
+  // (UNIT_EVT_* in UnitEventLog.h) so an onset/recovery of home-failed /
+  // hall-never / stale / mismatch is logged once, not folded silently into
+  // /units/health JSON. Same probe-epoch lifecycle as driftEventsBaseline;
+  // inert in the FollowerEsp01 copy.
+  uint8_t healthEventState = 0;
 };
 
 // driftFlags bit positions (must match the unit's UnitDrift.h encode).

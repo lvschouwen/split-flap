@@ -12,6 +12,7 @@
 #include <atomic>
 
 #include "BuildVersion.h"  // BUNDLED_UNIT_REV (#205)
+#include "DriftLogPolicy.h"  // drift-event operator-log decision (#322)
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
 #include "RenderStagger.h"  // sub-frame inrush stagger (#324)
@@ -153,6 +154,19 @@ static void refreshUnitDiag(UnitFacts& fact, int i2cAddress) {
   fact.diagValid = false;
   UnitDiagReading d;
   if (!readUnitDiag(i2cAddress, d)) return;
+  // #322: the unit's drift auto re-home (#263) is otherwise silent on the
+  // operator log — it only prints to the Nano's own (unmonitored) serial, and
+  // de/ds/dp reach the operator solely as passive /units/health JSON. Emit one
+  // flash/web-log line per newly-observed drift event so a self-correction (and
+  // a mechanically failing unit) is visible where an operator actually looks.
+  DriftLogDecision drift = driftLogEvaluate(fact.driftEventsBaseline, d.driftEvents);
+  if (drift.shouldLog) {
+    SerialPrintf("Unit 0x%02x drifted: %u new event(s), last %d steps "
+                 "(de=%u) — unit auto re-homing\n",
+                 i2cAddress, (unsigned)drift.newEvents, (int)d.lastDriftSteps,
+                 (unsigned)d.driftEvents);
+  }
+  fact.driftEventsBaseline = drift.newBaseline;
   fact.physLetter = d.physicalLetter;
   fact.driftFlags = d.flags;
   fact.driftEvents = d.driftEvents;

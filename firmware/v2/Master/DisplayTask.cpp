@@ -17,6 +17,7 @@
 #include "TaskWatchdog.h"
 #include "TasksInternal.h"
 #include "UnitBus.h"
+#include "UnitEventLog.h"  // per-unit health transition log decision (#322)
 #include "WebEndpoints.h"
 
 // Settle after an address-mutating burn before the follow-up probe (#204):
@@ -120,6 +121,60 @@ static void runBootHomeSequence(DisplaySnapshot& local, UnitFacts* busFacts) {
   snapshotPublish(local);
 }
 
+// #322: surface a unit's health TRANSITIONS on the operator log. The master
+// otherwise folds home-failed / hall-never / stale / mismatch into passive
+// /units/health JSON, so a unit going bad (or recovering) never reaches the
+// flash/web log an operator watches — the same silent gap as the drift auto
+// re-home (logged in refreshUnitDiag). Evaluated per unit right after ITS own
+// heartbeat poll, so every signal (incl. the #264 mismatch verdict, coherent
+// only at diag-poll time per #267) describes this unit at this instant. The
+// last-logged mask lives in busFacts (durable across polls; a probe rescan
+// re-zeroes it) — pure edge logic in UnitEventLog.h. Unlike DriftLogPolicy's
+// silent-first-read (drift is a count of PAST events, re-announcing history is
+// noise), a health CONDITION is live state: logging it the first time it's seen
+// — at boot, or re-asserted after a maintenance rescan — is the point (an
+// operator wants "unit 3 is faulty" surfaced), so prior=0 onsets deliberately.
+static void logUnitHealthTransition(const DisplaySnapshot& local,
+                                    UnitFacts* busFacts, int i) {
+  const UnitFacts& u = local.units[i];
+  uint8_t cur = 0;
+  // A condition is only OBSERVABLE this tick when its backing I2C read
+  // succeeded — otherwise validMask carries the prior state instead of faking a
+  // recovery + duplicate re-onset. mismatch rides the DIAG read (physKnown
+  // needs diagValid, DisplayIpc.h), home/hall ride the STATUS read; the two are
+  // separate transactions and can miss independently. STALE is the master's own
+  // heartbeat verdict — always meaningful (it's SET when reads fail).
+  uint8_t valid = UNIT_EVT_STALE;
+  if (u.diagValid) valid |= UNIT_EVT_MISMATCH;
+  if (u.statusValid) {
+    valid |= UNIT_EVT_HOME_FAILED | UNIT_EVT_HALL_NEVER;
+    if (u.status.flags & UNIT_FLAG_LAST_HOME_FAILED) cur |= UNIT_EVT_HOME_FAILED;
+    if (u.status.flags & UNIT_FLAG_HALL_NEVER)       cur |= UNIT_EVT_HALL_NEVER;
+  }
+  if (u.stale)    cur |= UNIT_EVT_STALE;
+  if (u.mismatch) cur |= UNIT_EVT_MISMATCH;
+
+  UnitEventTransitions t =
+      unitEventEvaluate(busFacts[i].healthEventState, cur, valid);
+  busFacts[i].healthEventState = t.newState;
+  if (!t.onset && !t.recovery) return;
+
+  int addr = SFP_I2C_ADDRESS_BASE + i;
+  if (t.onset & UNIT_EVT_STALE)
+    SerialPrintf("Unit 0x%02x LOST — no heartbeat, off the bus\n", addr);
+  if (t.onset & UNIT_EVT_HOME_FAILED)
+    SerialPrintf("Unit 0x%02x: last home FAILED (faulty)\n", addr);
+  if (t.onset & UNIT_EVT_HALL_NEVER)
+    SerialPrintf("Unit 0x%02x: hall sensor never fired (faulty)\n", addr);
+  if (t.onset & UNIT_EVT_MISMATCH)
+    SerialPrintf("Unit 0x%02x: displayed letter disagrees with intended (#264)\n",
+                 addr);
+  if (t.recovery & UNIT_EVT_STALE)
+    SerialPrintf("Unit 0x%02x recovered — back on the bus\n", addr);
+  if (t.recovery & UNIT_EVT_HOME_FAILED)
+    SerialPrintf("Unit 0x%02x recovered — homed OK\n", addr);
+}
+
 // One opportunistic heartbeat read (#310), synthesized by displayTask only on
 // an idle tick — display writes / reflash / an explicit Probe always preempt
 // (they arrive as commands). Round-robins one unit per tick; skipped entirely
@@ -136,6 +191,7 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
   heartbeatApply(busFacts[i], ok, millis(), HEARTBEAT_MISS_THRESHOLD);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         effectiveWidthOverride());
+  logUnitHealthTransition(local, busFacts, i);  // #322
   headlessTrack(local);  // #329: idle-tick observation feeds the debounce
   snapshotPublish(local);
 }
