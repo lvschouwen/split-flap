@@ -598,7 +598,8 @@ static void mqttPublishTelemetry(const DisplaySnapshot& snap) {
     size_t tn = buildTelemetryPayload(
         buf, sizeof(buf), freeHeap, heapFragPct, WiFi.RSSI(),
         snap.lastShowWriteErrors, millis() / 1000UL,
-        clockIsTimeSynced(time(nullptr)));
+        clockIsTimeSynced(time(nullptr)),
+        unitFleetVccMin(snap.units, snap.displayWidth));  // #366 HA vccMin sensor
     if (tn > 0 && tn < sizeof(buf)) {
       mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
     }

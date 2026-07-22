@@ -84,6 +84,13 @@ struct UnitFacts {
   uint8_t driftEvents = 0;
   int8_t lastDriftSteps = 0;
   bool diagValid = false;
+  // Master-side only (#322): baseline of driftEvents already reflected on the
+  // operator log, so a NEW drift/self-correction (#263, otherwise silent) can
+  // be logged once. -1 until the first valid diag read this probe epoch; a
+  // probe rescan re-zeroes the whole struct (re-baseline), but a transient
+  // diag-read failure early-returns without touching it, so a poll gap can't
+  // drop a drift log. Inert in the FollowerEsp01 copy. Policy in DriftLogPolicy.h.
+  int16_t driftEventsBaseline = -1;
   // Supply-Vcc / free-RAM / commanded-position diagnostics (#306):
   // probe/health-poll CMD_GET_VITALS truth, same lifecycle as the odometer
   // (checksum-rejected replies from pre-vitals firmware leave vitalsValid
@@ -104,7 +111,29 @@ struct UnitFacts {
   // coherent at that instant (#267: render-time comparison produced phantom
   // mismatches from stale phys vs newer frames).
   bool mismatch = false;
+  // Master-side only (#322): last-logged unit-health condition mask
+  // (UNIT_EVT_* in UnitEventLog.h) so an onset/recovery of home-failed /
+  // hall-never / stale / mismatch / low-Vcc (#366) is logged once, not folded
+  // silently into /units/health JSON. Same probe-epoch lifecycle as
+  // driftEventsBaseline; inert in the FollowerEsp01 copy.
+  uint8_t healthEventState = 0;
+  // Per-unit I2C reliability attribution (#367): cumulative count of failed
+  // transactions charged to THIS unit's address (saturating), and millis() of
+  // the most recent one (0 = none since boot). The global busErrCount (#245)
+  // can't tell WHICH unit degraded — this can, which is the instrument the
+  // 400 kHz bus bump (#375) is validated against. Master-side mirror of the
+  // UnitBus.cpp static counters, refreshed on each health poll; lifetime (never
+  // reset by a probe rescan — a reliability signal, unlike the re-baselined
+  // masks above). Inert in the FollowerEsp01 copy.
+  uint16_t i2cErrors = 0;
+  uint32_t lastErrorMs = 0;
 };
+
+// Saturating increment for the per-unit I2C error counter (#367). Pins at
+// 0xFFFF instead of wrapping to 0 — a wrapped counter would read as "healthy".
+inline uint16_t unitErrBump(uint16_t prev) {
+  return prev >= 0xFFFF ? 0xFFFF : (uint16_t)(prev + 1);
+}
 
 // driftFlags bit positions (must match the unit's UnitDrift.h encode).
 #define UNIT_DRIFT_FLAG_PENDING        (1 << 0)
@@ -123,6 +152,21 @@ inline uint8_t unitFwStatusFromRev(const char* version,
     if (version[i] == '\0') break;  // both ended together — match
   }
   return 0;
+}
+
+// Fleet-wide supply floor (#306/#366): the lowest since-boot vccMin any valid
+// unit reports, or 0 when none report vitals (all pre-vitals firmware). The
+// brownout smoking gun, surfaced as the /units/health headline "vccMin" and the
+// HA vccMin sensor. vccMin==0 is the per-unit "no reading" sentinel and never
+// participates. Pure so both surfaces share one definition (natively tested).
+inline uint16_t unitFleetVccMin(const UnitFacts* units, int width) {
+  uint16_t lo = 0xFFFF;
+  for (int i = 0; i < width; i++) {
+    const UnitVitals& vt = units[i].vitals;
+    if (units[i].vitalsValid && vt.vccMin_mV != 0 && vt.vccMin_mV < lo)
+      lo = vt.vccMin_mV;
+  }
+  return lo == 0xFFFF ? 0 : lo;
 }
 
 // A unit is "faulty" when its last home failed, its hall sensor never fired
@@ -156,11 +200,12 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 // spliced wear object (#231, ~45 B), the per-unit drift fields
 // phys/de/dp/ds/mm (#263/#264, ~43 B/unit), the per-unit vitals block
 // vcc/vmin/cp/ram (#306, ~44 B/unit + the headline "vccMin") and the per-unit
-// heartbeat-freshness keys age/hs2/misses/stale (#310, ~44 B/unit) so a full
-// display can't push the payload into the headline-only fallback.
-// test_unit_health pins the worst case + headroom (measured ~4495 B for a
-// full 16-unit payload; ~4681 B with the wear + reflash splices).
-#define UNIT_HEALTH_JSON_CAP 5120
+// heartbeat-freshness keys age/hs2/misses/stale (#310, ~44 B/unit) and the
+// per-unit I2C-reliability keys err/errAge (#367, ~32 B/unit) so a full
+// display can't push the payload into the headline-only fallback. The #367
+// keys raised the ceiling over the prior 5120. test_unit_health pins the
+// worst case + headroom (a full 16-unit payload with the wear + reflash splices).
+#define UNIT_HEALTH_JSON_CAP 6144
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
@@ -188,15 +233,9 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
   // Headline supply-Vcc floor (#306): the lowest since-boot vccMin any valid
   // unit has reported — the brownout smoking gun. Omitted when no unit reports
   // vitals (all pre-vitals firmware) so it never appears as a phantom 0.
-  uint16_t vccMinAll = 0xFFFF;
-  for (int i = 0; i < width; i++) {
-    const UnitVitals& vt = units[i].vitals;
-    if (units[i].vitalsValid && vt.vccMin_mV != 0 && vt.vccMin_mV < vccMinAll) {
-      vccMinAll = vt.vccMin_mV;
-    }
-  }
+  uint16_t vccMinAll = unitFleetVccMin(units, width);
   UNIT_HEALTH_APPEND("{\"width\":%d,\"faulty\":%d", width, faulty);
-  if (vccMinAll != 0xFFFF) {
+  if (vccMinAll != 0) {
     UNIT_HEALTH_APPEND(",\"vccMin\":%u", (unsigned)vccMinAll);
   }
   UNIT_HEALTH_APPEND(",\"units\":[");
@@ -264,6 +303,13 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                          (unsigned)unitBootHomeState(u.status.flags));
       if (u.misses > 0) UNIT_HEALTH_APPEND(",\"misses\":%u", (unsigned)u.misses);
       if (u.stale)      UNIT_HEALTH_APPEND(",\"stale\":1");
+      // Per-unit I2C reliability (#367): cumulative error count for this
+      // address + ms since its last error, emit-when-nonzero so a clean unit
+      // stays lean. errAge is only meaningful once an error has been charged.
+      if (u.i2cErrors > 0) {
+        UNIT_HEALTH_APPEND(",\"err\":%u,\"errAge\":%lu", (unsigned)u.i2cErrors,
+                           (unsigned long)(nowMs - u.lastErrorMs));
+      }
     }
     UNIT_HEALTH_APPEND("}");
   }

@@ -429,6 +429,8 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].misses = 255;     // widest heartbeat block (#310)
     units[i].stale = true;
     units[i].lastSeenMs = 0;   // with the wide nowMs below -> 10-digit "age"
+    units[i].i2cErrors = 0xFFFF;  // widest err/errAge block (#367)
+    units[i].lastErrorMs = 0;     // 10-digit errAge against the wide nowMs
   }
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
@@ -472,6 +474,8 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].misses = 255;     // widest heartbeat block (#310)
     units[i].stale = true;
     units[i].lastSeenMs = 0;
+    units[i].i2cErrors = 0xFFFF;  // widest err/errAge block (#367)
+    units[i].lastErrorMs = 0;
   }
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
@@ -559,6 +563,55 @@ static void test_health_json_no_vccmin_without_any_vitals() {
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_NULL(strstr(buf, "\"vccMin\""));
   TEST_ASSERT_NULL(strstr(buf, "\"vcc\""));
+}
+
+// --- per-unit I2C error attribution (#367) ----------------------------------
+
+static void test_unit_err_bump_saturates() {
+  TEST_ASSERT_EQUAL_UINT16(1, unitErrBump(0));
+  TEST_ASSERT_EQUAL_UINT16(100, unitErrBump(99));
+  // Pins at 0xFFFF instead of wrapping to 0 (a wrap would read as healthy).
+  TEST_ASSERT_EQUAL_UINT16(0xFFFF, unitErrBump(0xFFFE));
+  TEST_ASSERT_EQUAL_UINT16(0xFFFF, unitErrBump(0xFFFF));
+}
+
+static void test_health_json_err_emitted_when_nonzero() {
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  strcpy(units[0].version, "abc12345");
+  units[0].i2cErrors = 7;
+  units[0].lastErrorMs = 1000;
+  char buf[512];
+  // nowMs = 4500 -> errAge = 3500.
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 4500);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"err\":7"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"errAge\":3500"));
+}
+
+static void test_health_json_err_omitted_when_clean() {
+  // A unit that has never errored stays lean — no err/errAge keys.
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  strcpy(units[0].version, "abc12345");
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 5000);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NULL(strstr(buf, "\"err\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"errAge\""));
+}
+
+static void test_fleet_vcc_min_helper() {
+  UnitFacts units[3];
+  for (int i = 0; i < 3; i++) { units[i].state = 1; units[i].statusValid = true; }
+  // No vitals anywhere -> 0 (sentinel).
+  TEST_ASSERT_EQUAL_UINT16(0, unitFleetVccMin(units, 3));
+  units[0].vitalsValid = true; units[0].vitals.vccMin_mV = 4600;
+  units[1].vitalsValid = true; units[1].vitals.vccMin_mV = 4100;
+  units[2].vitalsValid = true; units[2].vitals.vccMin_mV = 0;  // sentinel skipped
+  TEST_ASSERT_EQUAL_UINT16(4100, unitFleetVccMin(units, 3));
 }
 
 static void test_health_json_silent_gap_slot() {
@@ -659,6 +712,10 @@ int main(int, char**) {
   RUN_TEST(test_health_json_vitals_emitted_when_valid);
   RUN_TEST(test_health_json_headline_vccmin_is_min_across_units);
   RUN_TEST(test_health_json_no_vccmin_without_any_vitals);
+  RUN_TEST(test_unit_err_bump_saturates);
+  RUN_TEST(test_health_json_err_emitted_when_nonzero);
+  RUN_TEST(test_health_json_err_omitted_when_clean);
+  RUN_TEST(test_fleet_vcc_min_helper);
   RUN_TEST(test_health_json_silent_gap_slot);
   RUN_TEST(test_health_json_overflow_reports_full);
   RUN_TEST(test_letter_readback_valid_pair);

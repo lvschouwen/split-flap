@@ -12,6 +12,7 @@
 #include <atomic>
 
 #include "BuildVersion.h"  // BUNDLED_UNIT_REV (#205)
+#include "DriftLogPolicy.h"  // drift-event operator-log decision (#322)
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
 #include "RenderStagger.h"  // sub-frame inrush stagger (#324)
@@ -31,7 +32,14 @@ bool unitBusAbortRequested() { return abortRequested.load(); }
 // platformio.ini).
 static constexpr int UNIT_BUS_SDA_PIN = 8;
 static constexpr int UNIT_BUS_SCL_PIN = 9;
-static constexpr uint32_t UNIT_BUS_FREQ_HZ = 100000;
+// 400 kHz (#375): the PCB v2 unit board is designed for Fast-mode I2C, and the
+// Nano TWI slaves are clocked by the master — they follow the higher rate (and
+// clock-stretch if an ISR lags) with no unit reflash. 4x faster shrinks the
+// per-frame render burst and the health-poll cadence on the bus; it does NOT
+// change the #326 clock-stretch stall (that's slave-ISR bound, speed-agnostic).
+// Attributed per-unit error rate (#367) is the bench guard — revert to 100000
+// if signal integrity degrades on a given wall.
+static constexpr uint32_t UNIT_BUS_FREQ_HZ = 400000;
 
 // Delay between an opcode write and the read-back clocking, so the slave's
 // receiveEvent ISR has time to flip its pending*Response flag.
@@ -79,6 +87,37 @@ static std::atomic<uint32_t> busErrCount{0};
 
 uint32_t unitBusTxCount() { return busTxCount.load(); }
 uint32_t unitBusErrCount() { return busErrCount.load(); }
+
+// Per-unit I2C error attribution (#367). busErrCount above is fleet-global — it
+// can't say WHICH unit's transactions fail, the exact signal the 400 kHz bump
+// (#375) has to be validated against. These parallel per-address counters
+// charge a failed render write or health-poll read to its column; displayTask
+// folds them into the snapshot's UnitFacts (foldUnitErrors) so /units/health
+// attributes err/errAge per unit. Lifetime since boot — deliberately NOT reset
+// by a probe rescan (a reliability trend, unlike the re-baselined health masks).
+// displayTask is the sole writer (sole Wire toucher, Hard rules), so plain
+// arrays need no atomics — the netTask reader only ever sees the folded snapshot.
+static uint16_t unitErrCount[UNITS_AMOUNT] = {0};
+static uint32_t unitLastErrMs[UNITS_AMOUNT] = {0};
+
+// Charge one failed transaction to a unit index (bounds-guarded, saturating).
+static void noteUnitError(int index) {
+  if (index < 0 || index >= UNITS_AMOUNT) return;
+  unitErrCount[index] = unitErrBump(unitErrCount[index]);
+  unitLastErrMs[index] = millis();
+}
+
+// Copies the per-unit error counters into the caller's facts so they ride the
+// next published snapshot. Runs on every health poll (below): cheap, and keeps
+// a render-time error visible within one heartbeat tick regardless of which
+// unit the round-robin polled.
+static void foldUnitErrors(UnitFacts* facts, int n) {
+  if (n > UNITS_AMOUNT) n = UNITS_AMOUNT;
+  for (int i = 0; i < n; i++) {
+    facts[i].i2cErrors = unitErrCount[i];
+    facts[i].lastErrorMs = unitLastErrMs[i];
+  }
+}
 
 static int countedTransmission() {
   int status = Wire.endTransmission();
@@ -153,6 +192,19 @@ static void refreshUnitDiag(UnitFacts& fact, int i2cAddress) {
   fact.diagValid = false;
   UnitDiagReading d;
   if (!readUnitDiag(i2cAddress, d)) return;
+  // #322: the unit's drift auto re-home (#263) is otherwise silent on the
+  // operator log — it only prints to the Nano's own (unmonitored) serial, and
+  // de/ds/dp reach the operator solely as passive /units/health JSON. Emit one
+  // flash/web-log line per newly-observed drift event so a self-correction (and
+  // a mechanically failing unit) is visible where an operator actually looks.
+  DriftLogDecision drift = driftLogEvaluate(fact.driftEventsBaseline, d.driftEvents);
+  if (drift.shouldLog) {
+    SerialPrintf("Unit 0x%02x drifted: %u new event(s), last %d steps "
+                 "(de=%u) — unit auto re-homing\n",
+                 i2cAddress, (unsigned)drift.newEvents, (int)d.lastDriftSteps,
+                 (unsigned)d.driftEvents);
+  }
+  fact.driftEventsBaseline = drift.newBaseline;
   fact.physLetter = d.physicalLetter;
   fact.driftFlags = d.flags;
   fact.driftEvents = d.driftEvents;
@@ -427,12 +479,22 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
     // fails the checksum and stays vitalsValid=false.
     refreshUnitVitals(facts[unitIndex], i2cAddress);
   }
+  // #367: the per-unit reset above zeroed the facts' error fields, but the
+  // attributed counters are lifetime — restore them so a probe rescan doesn't
+  // drop the reliability trend (only a reboot clears them).
+  foldUnitErrors(facts, maxUnits);
   SerialPrintf("I2C scan complete. Detected %d", detected);
   SerialPrintf("/%d possible units.\n", maxUnits);
 }
 
 bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   facts[i].statusValid = false;
+  // #367: refresh every column's attributed error counters into the facts BEFORE
+  // the state gate below, so a render-time write failure (charged in
+  // unitBusShowFrame) surfaces in the next published /units/health within one
+  // heartbeat tick — even on a tick whose round-robin slot lands on a silent /
+  // bootloader unit that returns early.
+  foldUnitErrors(facts, UNITS_AMOUNT);
   // Only sketch-running units (state 1) answer CMD_GET_STATUS; a unit in
   // bootloader (2) or silent (0) is left invalid so it renders as a gap
   // in the table and never counts toward the faulty total.
@@ -442,6 +504,12 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   if (ok) {
     facts[i].status = s;
     facts[i].statusValid = true;
+  } else {
+    // #367: the heartbeat status read is the clean per-unit liveness probe —
+    // charge its failure to this column. Odometer/diag/vitals sub-reads below
+    // are NOT charged: they fail routinely on pre-opcode firmware and would
+    // misattribute a healthy unit as flaky.
+    noteUnitError(i);
   }
   // Refresh the odometer with the same validity semantics as the status:
   // reset, then re-read, so a unit that stops answering (or was reflashed
@@ -485,6 +553,7 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
     }
     if (writeToUnit(unitIndex, letters[unitIndex], (uint8_t)unitSpeed) != 0) {
       writeErrors++;
+      noteUnitError(unitIndex);  // #367: attribute the render write to its unit
     }
     commanded++;
   }
