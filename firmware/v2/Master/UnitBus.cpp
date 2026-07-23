@@ -32,14 +32,14 @@ bool unitBusAbortRequested() { return abortRequested.load(); }
 // platformio.ini).
 static constexpr int UNIT_BUS_SDA_PIN = 8;
 static constexpr int UNIT_BUS_SCL_PIN = 9;
-// 400 kHz (#375): the PCB v2 unit board is designed for Fast-mode I2C, and the
-// Nano TWI slaves are clocked by the master — they follow the higher rate (and
-// clock-stretch if an ISR lags) with no unit reflash. 4x faster shrinks the
-// per-frame render burst and the health-poll cadence on the bus; it does NOT
-// change the #326 clock-stretch stall (that's slave-ISR bound, speed-agnostic).
-// Attributed per-unit error rate (#367) is the bench guard — revert to 100000
-// if signal integrity degrades on a given wall.
-static constexpr uint32_t UNIT_BUS_FREQ_HZ = 400000;
+// 100 kHz standard-mode (#383 reverted #375's 400 kHz): the reflash path shares
+// this single clock and twiboot is only proven at standard mode, so driving the
+// bootloader at 400 kHz makes flash writes unreliable; 400 kHz signal integrity
+// on the full 16-unit wall also proved marginal (units dropped, bus locked on a
+// master reboot). The Nano TWI sketch slaves follow whatever the master clocks.
+// Re-raising requires dropping to 100 kHz for the twiboot phase (or a validated
+// Fast-mode reflash) — see #383; #367 per-unit error telemetry stays the guard.
+static constexpr uint32_t UNIT_BUS_FREQ_HZ = 100000;
 
 // Delay between an opcode write and the read-back clocking, so the slave's
 // receiveEvent ISR has time to flip its pending*Response flag.
