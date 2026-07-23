@@ -16,7 +16,6 @@
   #include <Arduino.h>
 #endif
 #include "UnitVitals.h"  // shared supply-Vcc/ram/cmd-pos diag packet (#306)
-#include "UnitEventLog.h"  // UnitRebootWatch reboot edge-detect state (#368)
 
 // Health / diagnostics snapshot returned by a sketch-running unit's
 // CMD_GET_STATUS reply. Populated by UnitBus.cpp; mirrors the 8-byte layout
@@ -53,6 +52,18 @@ inline uint8_t unitBootHomeState(uint8_t flags) {
   if (flags & UNIT_FLAG_HOMED) return 2;
   return (flags & UNIT_FLAG_MOVING) ? 1 : 0;
 }
+
+// Reboot edge-detect state (#368): last-seen uptime/brownout/watchdog triple
+// so heartbeatTick can log a unit reboot once, the same place #322 logs
+// health transitions. Detection logic (unitRebootDetect) lives in
+// UnitEventLog.h; the POD lives here so the copied FollowerEsp01 tree needs
+// no master-only header. Inert in the FollowerEsp01 copy.
+struct UnitRebootWatch {
+  uint16_t lastUptime = 0;
+  uint8_t  lastBrownout = 0;
+  uint8_t  lastWatchdog = 0;
+  bool     primed = false;
+};
 
 // Everything the master knows about one unit slot — the per-unit facts the
 // DisplaySnapshot carries (POD, ~24 B/slot). fwStatus keeps v1's /settings

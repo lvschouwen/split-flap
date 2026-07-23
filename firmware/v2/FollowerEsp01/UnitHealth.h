@@ -53,6 +53,18 @@ inline uint8_t unitBootHomeState(uint8_t flags) {
   return (flags & UNIT_FLAG_MOVING) ? 1 : 0;
 }
 
+// Reboot edge-detect state (#368): last-seen uptime/brownout/watchdog triple
+// so heartbeatTick can log a unit reboot once, the same place #322 logs
+// health transitions. Detection logic (unitRebootDetect) lives in
+// UnitEventLog.h; the POD lives here so the copied FollowerEsp01 tree needs
+// no master-only header. Inert in the FollowerEsp01 copy.
+struct UnitRebootWatch {
+  uint16_t lastUptime = 0;
+  uint8_t  lastBrownout = 0;
+  uint8_t  lastWatchdog = 0;
+  bool     primed = false;
+};
+
 // Everything the master knows about one unit slot — the per-unit facts the
 // DisplaySnapshot carries (POD, ~24 B/slot). fwStatus keeps v1's /settings
 // vocabulary (0 ok / 1 outdated / 2 unknown); slice A has no bundled unit
@@ -127,6 +139,10 @@ struct UnitFacts {
   // masks above). Inert in the FollowerEsp01 copy.
   uint16_t i2cErrors = 0;
   uint32_t lastErrorMs = 0;
+  // Reboot edge-detect state (#368): last-seen uptime/brownout/watchdog
+  // triple so heartbeatTick can log a unit reboot once, the same place #322
+  // logs health transitions. Policy in UnitEventLog.h.
+  UnitRebootWatch rebootWatch{};
 };
 
 // Saturating increment for the per-unit I2C error counter (#367). Pins at

@@ -15,6 +15,7 @@
 // SerialPrintf glue + label strings stay in DisplayTask.cpp.
 
 #include <stdint.h>
+#include "UnitHealth.h"  // UnitRebootWatch reboot edge-detect state (#368)
 
 // Loggable per-unit conditions, one bit each (master-side derived).
 #define UNIT_EVT_HOME_FAILED (1 << 0)  // UNIT_FLAG_LAST_HOME_FAILED (status)
@@ -98,14 +99,7 @@ inline const char* unitResetCauseName(UnitResetCause c) {
 // Reboot edge (#368): a unit that browns out / watchdog-resets just re-homes
 // and looks healthy. GET_STATUS carries uptime + lifetime brownout/watchdog
 // counts; a reboot shows as uptime falling OR either count climbing. State
-// lives per-unit in UnitFacts. First observation only primes (no phantom).
-struct UnitRebootWatch {
-  uint16_t lastUptime = 0;
-  uint8_t  lastBrownout = 0;
-  uint8_t  lastWatchdog = 0;
-  bool     primed = false;
-};
-
+// (UnitRebootWatch) lives per-unit in UnitFacts, defined in UnitHealth.h.
 inline bool unitRebootDetect(UnitRebootWatch& w, uint16_t uptime,
                              uint8_t brownout, uint8_t watchdog) {
   if (!w.primed) {
