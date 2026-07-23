@@ -8,7 +8,9 @@
 #include <cstring>
 
 #include "../../ApiIndex.h"
+#include "../../FollowerOps.h"  // ReflashProgress/buildReflashJson (#365 capacity check)
 #include "../../UnitHealth.h"
+#include "../../WearPolicy.h"   // WearAssessment/buildWearJson (#365 capacity check)
 #include "SplitFlapProtocol.h"
 
 void setUp() {}
@@ -89,9 +91,98 @@ static void test_legend_covers_all_health_keys() {
   assertEveryKeyDocumented(buf);
 }
 
+// #365: the follower reads GET_EXT_DIAG on its own bus now (FollowerBus.cpp),
+// so extDiagValid can be true here too — unlike err/errAge (#367), which stay
+// inert (per-unit I2C attribution is master-only). Mirrors the master's
+// combined-splice worst case (test_unit_health.cpp
+// test_health_json_combined_splices_fit_cap) against THIS board's local
+// /units/health buffer (FollowerWeb.cpp's FOLLOWER_HEALTH_BUF), which is
+// deliberately smaller than the master's shared UNIT_HEALTH_JSON_CAP.
+static void test_health_json_follower_worst_case_fits_local_buf() {
+  constexpr size_t FOLLOWER_HEALTH_BUF = 6144;  // keep in sync w/ FollowerWeb.cpp
+  UnitFacts units[16];
+  for (int i = 0; i < 16; i++) {
+    units[i].state = 1;
+    units[i].statusValid = true;
+    units[i].fwStatus = 2;
+    strcpy(units[i].version, "abc12345");
+    units[i].status.flags = 0xFF;
+    units[i].status.mcusrAtBoot = 255;
+    units[i].status.lifetimeBrownoutCount = 255;
+    units[i].status.lifetimeWatchdogCount = 255;
+    units[i].status.uptimeSeconds = 65535;
+    units[i].status.badCommandCount = 255;
+    units[i].status.lastHomingStepCount = 65520;
+    units[i].odometer = 0xFFFFFFFEUL;
+    units[i].odometerValid = true;
+    units[i].diagValid = true;
+    units[i].physLetter = 44;
+    units[i].driftFlags = 0x03;
+    units[i].driftEvents = 255;
+    units[i].lastDriftSteps = -127;
+    units[i].mismatch = true;
+    units[i].vitals.vccNow_mV = 65535;
+    units[i].vitals.vccMin_mV = 65535;
+    units[i].vitals.cmdPos = 44;
+    units[i].vitals.freeRamMin = 65535;
+    units[i].vitalsValid = true;
+    units[i].misses = 255;
+    units[i].stale = true;
+    units[i].lastSeenMs = 0;
+    // i2cErrors/lastErrorMs stay 0 — FollowerBus.cpp never populates them.
+    units[i].extDiagValid = true;
+    units[i].extDiag.stepExcessLast = 0xFFFF;
+    units[i].extDiag.stepExcessMax = 0xFFFF;
+    units[i].extDiag.vccSagLastMove = 0xFFFF;
+    units[i].extDiag.hallEdgesLastRev = 0xFF;
+    units[i].extDiag.dutyWindow = 0xFFFF;
+    units[i].extDiag.statusBits = 0xFF;
+  }
+  char buf[FOLLOWER_HEALTH_BUF];
+  size_t n = buildUnitHealthJson(buf, FOLLOWER_HEALTH_BUF, units, 16, 16,
+                                 SFP_I2C_ADDRESS_BASE, 0xFFFFFFFFUL);
+  TEST_ASSERT_TRUE(n > 0 && n < FOLLOWER_HEALTH_BUF);
+  // The ext-diag block must actually be present at this saturation, or the
+  // headroom assertions below are vacuous.
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"se\":65535"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sb\":255"));
+
+  // Worst wear fragment (hand-filled — assessWear can't actually flag all 16,
+  // but the buffer must survive it), same splice arithmetic as FollowerWeb.cpp.
+  WearAssessment w;
+  w.median = 0xFFFFFFFFUL;
+  for (int i = 0; i < 16; i++) w.flagged[i] = true;
+  w.flaggedCount = 16;
+  char wearJson[96];
+  size_t wearLen = buildWearJson(w, wearJson, sizeof(wearJson));
+  TEST_ASSERT_TRUE(wearLen > 0 && wearLen < sizeof(wearJson));
+  TEST_ASSERT_TRUE(n + wearLen + 2 < FOLLOWER_HEALTH_BUF);
+  n += (size_t)snprintf(buf + n - 1, FOLLOWER_HEALTH_BUF - n + 1, ",%s}",
+                        wearJson) - 1;
+
+  // Worst reflash fragment: saturated counts + the longest state name.
+  ReflashProgress rp;
+  rp.state = ReflashState::Cancelled;
+  rp.total = 255;
+  rp.done = 255;
+  rp.failed = 255;
+  rp.currentAddr = 255;
+  char reflashJson[80];
+  buildReflashJson(reflashJson, sizeof(reflashJson), rp);
+  TEST_ASSERT_TRUE(n + strlen(reflashJson) + 13 < FOLLOWER_HEALTH_BUF);
+  snprintf(buf + n - 1, FOLLOWER_HEALTH_BUF - n + 1, ",\"reflash\":%s}",
+           reflashJson);
+
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"wear\":{"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"reflash\":{"));
+  TEST_ASSERT_EQUAL_CHAR('}', buf[strlen(buf) - 1]);
+  TEST_ASSERT_TRUE(strlen(buf) < FOLLOWER_HEALTH_BUF);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_api_json_wellformed);
   RUN_TEST(test_legend_covers_all_health_keys);
+  RUN_TEST(test_health_json_follower_worst_case_fits_local_buf);
   return UNITY_END();
 }
