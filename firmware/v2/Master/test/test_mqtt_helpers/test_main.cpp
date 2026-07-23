@@ -167,25 +167,32 @@ static void test_mqttTopic_builds_expected_paths() {
   TEST_ASSERT_EQUAL_STRING("splitflap/flappy/telemetry", mqttTopic(String("flappy"), "telemetry").c_str());
 }
 static void test_telemetry_payload_exact_shape() {
-  char buf[128];
-  //                            heap    frag  rssi  errs uptime  ntp   vccMin
-  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 4210);
+  char buf[160];
+  //                            heap    frag  rssi  errs uptime  ntp   vccMin reboots jam   stepsExcess
+  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 4210, 6UL, true, 340);
   TEST_ASSERT_EQUAL_STRING(
-    "{\"heap\":25048,\"heapFrag\":12,\"rssi\":-61,\"unitErrors\":2,\"uptime\":3600,\"ntp\":1,\"vccMin\":4210}", buf);
+    "{\"heap\":25048,\"heapFrag\":12,\"rssi\":-61,\"unitErrors\":2,\"uptime\":3600,\"ntp\":1,\"vccMin\":4210,\"reboots\":6,\"jam\":\"ON\",\"stepsExcess\":340}", buf);
   TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
 }
 static void test_telemetry_vccmin_omitted_when_zero() {
   // #366: no unit reports vitals -> vccMin 0 -> the key is dropped so the HA
   // sensor reads unavailable instead of a phantom 0 mV. Object still closes.
-  char buf[128];
-  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0);
+  char buf[160];
+  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0, 0UL, false, 0);
   TEST_ASSERT_NULL(strstr(buf, "vccMin"));
+  // #368: unlike vccMin, 0 reboots is a real reading, not a sentinel — the
+  // key is always present.
+  assert_contains(buf, "\"reboots\":0");
+  // #365: jam/stepsExcess are always emitted too — OFF/0 is a real
+  // healthy reading, not a sentinel.
+  assert_contains(buf, "\"jam\":\"OFF\"");
+  assert_contains(buf, "\"stepsExcess\":0");
   TEST_ASSERT_EQUAL_CHAR('}', buf[strlen(buf) - 1]);
   TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
 }
 static void test_telemetry_ntp_false_renders_zero() {
-  char buf[128];
-  buildTelemetryPayload(buf, sizeof(buf), 1UL, 0, 0L, 0, 0UL, false, 4700);
+  char buf[160];
+  buildTelemetryPayload(buf, sizeof(buf), 1UL, 0, 0L, 0, 0UL, false, 4700, 0UL, false, 0);
   assert_contains(buf, "\"ntp\":0");
 }
 // ---- parseModeCommand (#130) ----
@@ -380,6 +387,96 @@ static void test_discovery_vcc_min_topic_and_payload() {
   assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
 }
 
+// ---- Stage A4 fleet reboot-total (#368) ----
+static void test_fleet_reboot_total_sums_valid_units() {
+  // Sum of lifetime brownout+watchdog resets across every unit we hold a
+  // valid CMD_GET_STATUS read for — mirrors unitFleetVccMin's statusValid
+  // gate (UnitHealth.h). A unit we never read can't contribute.
+  UnitFacts u[3];
+  u[0].statusValid = true; u[0].status.lifetimeBrownoutCount = 3; u[0].status.lifetimeWatchdogCount = 1;
+  u[1].statusValid = true; u[1].status.lifetimeBrownoutCount = 2; u[1].status.lifetimeWatchdogCount = 0;
+  u[2].statusValid = false; u[2].status.lifetimeBrownoutCount = 9; u[2].status.lifetimeWatchdogCount = 9;
+  TEST_ASSERT_EQUAL_UINT32(6, unitFleetRebootTotal(u, 3));
+}
+
+static void test_discovery_reboot_total_topic_and_payload() {
+  // #368: fleet reboot odometer diagnostic sensor, telemetry-backed.
+  char buf[512];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_REBOOT_TOTAL, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_reboot_total/config", buf);
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_REBOOT_TOTAL, "flappy", "abc1234");
+  assert_contains(buf, "\"name\":\"Unit reboots (fleet)\"");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/telemetry\"");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.reboots }}\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_reboot_total\"");
+  assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
+}
+
+// ---- Fleet jam/steps-excess (#365) ----
+static void test_fleet_any_jam_true_when_valid_unit_stalled() {
+  UnitFacts u[3];
+  u[0].extDiagValid = true;  u[0].extDiag.statusBits = 0;
+  u[1].extDiagValid = true;  u[1].extDiag.statusBits = EXT_DIAG_STATUS_STALL;
+  u[2].extDiagValid = false;
+  TEST_ASSERT_TRUE(unitFleetAnyJam(u, 3));
+}
+static void test_fleet_any_jam_false_when_only_invalid_unit_stalled() {
+  // A stall bit on a unit whose ext-diag read failed this epoch must not
+  // count — extDiagValid gates every fleet ext-diag consumer.
+  UnitFacts u[2];
+  u[0].extDiagValid = false; u[0].extDiag.statusBits = EXT_DIAG_STATUS_STALL;
+  u[1].extDiagValid = true;  u[1].extDiag.statusBits = 0;
+  TEST_ASSERT_FALSE(unitFleetAnyJam(u, 2));
+}
+static void test_fleet_max_excess_returns_max_over_valid_units() {
+  UnitFacts u[3];
+  u[0].extDiagValid = true;  u[0].extDiag.stepExcessMax = 12;
+  u[1].extDiagValid = true;  u[1].extDiag.stepExcessMax = 340;
+  u[2].extDiagValid = false; u[2].extDiag.stepExcessMax = 9000;  // must not win
+  TEST_ASSERT_EQUAL_UINT16(340, unitFleetMaxExcess(u, 3));
+}
+static void test_fleet_max_excess_zero_when_none_valid() {
+  UnitFacts u[2];
+  u[0].extDiagValid = false; u[0].extDiag.stepExcessMax = 50;
+  u[1].extDiagValid = false; u[1].extDiag.stepExcessMax = 99;
+  TEST_ASSERT_EQUAL_UINT16(0, unitFleetMaxExcess(u, 2));
+}
+
+static void test_discovery_unit_jam_topic_and_payload() {
+  // #365: fleet jam/stall problem sensor, telemetry-backed like
+  // vccMin/reboots. Binary_sensor with the same pl_on/pl_off "ON"/"OFF"
+  // convention as the existing DISCOVERY_UNIT_WEAR problem sensor.
+  char buf[512];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_UNIT_JAM, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/binary_sensor/flappy_unit_jam/config", buf);
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_UNIT_JAM, "flappy", "abc1234");
+  assert_contains(buf, "\"name\":\"Unit jam\"");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/telemetry\"");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.jam }}\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_unit_jam\"");
+  assert_contains(buf, "\"dev_cla\":\"problem\"");
+  assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
+  assert_contains(buf, "\"pl_on\":\"ON\",\"pl_off\":\"OFF\"");
+}
+
+static void test_discovery_steps_excess_topic_and_payload() {
+  // #365: fleet worst-seen home-step excess, telemetry-backed
+  // diagnostic sensor (unitFleetMaxExcess).
+  char buf[512];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_STEPS_EXCESS, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_steps_excess/config", buf);
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_STEPS_EXCESS, "flappy", "abc1234");
+  assert_contains(buf, "\"name\":\"Unit steps excess (max)\"");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/telemetry\"");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.stepsExcess }}\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_steps_excess\"");
+  assert_contains(buf, "\"unit_of_meas\":\"steps\"");
+  assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
+}
+
 static void test_all_discovery_entities_wellformed() {
   char pbuf[512];
   char tbuf[96];
@@ -523,5 +620,13 @@ int main(int, char**) {
   RUN_TEST(test_discovery_units_faulty_topic_and_payload);
   RUN_TEST(test_discovery_unit_wear_topic_and_payload);
   RUN_TEST(test_discovery_vcc_min_topic_and_payload);
+  RUN_TEST(test_fleet_reboot_total_sums_valid_units);
+  RUN_TEST(test_discovery_reboot_total_topic_and_payload);
+  RUN_TEST(test_fleet_any_jam_true_when_valid_unit_stalled);
+  RUN_TEST(test_fleet_any_jam_false_when_only_invalid_unit_stalled);
+  RUN_TEST(test_fleet_max_excess_returns_max_over_valid_units);
+  RUN_TEST(test_fleet_max_excess_zero_when_none_valid);
+  RUN_TEST(test_discovery_unit_jam_topic_and_payload);
+  RUN_TEST(test_discovery_steps_excess_topic_and_payload);
   return UNITY_END();
 }

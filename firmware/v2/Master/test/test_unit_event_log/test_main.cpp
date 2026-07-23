@@ -142,6 +142,144 @@ static void test_unit_vcc_is_low_threshold() {
   TEST_ASSERT_FALSE(unitVccIsLow(false, 3000, UNIT_VCC_MIN_FLOOR_MV));
 }
 
+// --- reset-cause decode (#368) -----------------------------------------------
+
+static void test_reset_cause_priority_brownout_over_watchdog() {
+  // BORF (bit2) + WDRF (bit3) both set -> brownout wins (most actionable).
+  TEST_ASSERT_EQUAL(RESET_BROWNOUT, unitResetCauseDecode((1<<2) | (1<<3)));
+}
+
+static void test_reset_cause_each_flag() {
+  TEST_ASSERT_EQUAL(RESET_WATCHDOG, unitResetCauseDecode(1<<3));
+  TEST_ASSERT_EQUAL(RESET_EXTERNAL, unitResetCauseDecode(1<<1));
+  TEST_ASSERT_EQUAL(RESET_POWER_ON, unitResetCauseDecode(1<<0));
+  TEST_ASSERT_EQUAL(RESET_UNKNOWN,  unitResetCauseDecode(0));
+}
+
+static void test_reset_cause_name_nonnull() {
+  TEST_ASSERT_EQUAL_STRING("brownout", unitResetCauseName(RESET_BROWNOUT));
+  TEST_ASSERT_EQUAL_STRING("power-on", unitResetCauseName(RESET_POWER_ON));
+}
+
+// --- reboot-detect edge helper (#368) ----------------------------------------
+
+static void test_reboot_detect_primes_silent() {
+  UnitRebootWatch w{};
+  // First observation only primes — never logs a phantom reboot.
+  TEST_ASSERT_FALSE(unitRebootDetect(w, 100, 0, 0));
+}
+
+static void test_reboot_detect_uptime_drop() {
+  UnitRebootWatch w{};
+  unitRebootDetect(w, 500, 0, 0);           // prime
+  TEST_ASSERT_TRUE(unitRebootDetect(w, 12, 0, 0));   // uptime fell -> reboot
+  TEST_ASSERT_FALSE(unitRebootDetect(w, 30, 0, 0));  // climbing -> no event
+}
+
+static void test_reboot_detect_counter_climb() {
+  UnitRebootWatch w{};
+  unitRebootDetect(w, 500, 1, 0);           // prime
+  // Fast reboot: uptime may not have visibly dropped but brownout count rose.
+  TEST_ASSERT_TRUE(unitRebootDetect(w, 505, 2, 0));
+}
+
+// --- ext-diag derived: jam / drag / hall-anomaly (#365 GET_EXT_DIAG) --------
+
+static void test_jam_onsets_on_stall_status_bit() {
+  UnitExtDiag d;
+  d.hallEdgesLastRev = 1;  // healthy baseline — isolate the JAM bit only
+  d.statusBits = EXT_DIAG_STATUS_STALL;
+  UnitEventTransitions t = unitEventEvaluate(0, 0, 0, true, d);
+  TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_JAM, t.onset);
+  TEST_ASSERT_EQUAL_UINT8(0, t.recovery);
+  TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_JAM, t.newState);
+}
+
+static void test_drag_onsets_over_threshold() {
+  UnitExtDiag d;
+  d.hallEdgesLastRev = 1;  // healthy baseline — isolate the DRAG bit only
+  d.stepExcessMax = EXT_DIAG_DRAG_EXCESS_STEPS + 1;
+  UnitEventTransitions t = unitEventEvaluate(0, 0, 0, true, d);
+  TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_DRAG, t.onset);
+  TEST_ASSERT_EQUAL_UINT8(0, t.recovery);
+}
+
+static void test_drag_does_not_onset_at_or_below_threshold() {
+  UnitExtDiag d;
+  d.hallEdgesLastRev = 1;  // healthy baseline — isolate the DRAG bit only
+  d.stepExcessMax = EXT_DIAG_DRAG_EXCESS_STEPS;  // at threshold, not over
+  UnitEventTransitions t = unitEventEvaluate(0, 0, 0, true, d);
+  TEST_ASSERT_EQUAL_UINT8(0, t.onset);
+}
+
+static void test_hall_anomaly_onsets_when_not_exactly_one() {
+  UnitExtDiag d;
+  d.hallEdgesLastRev = 0;
+  UnitEventTransitions t = unitEventEvaluate(0, 0, 0, true, d);
+  TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_HALL_ANOMALY, t.onset);
+
+  UnitExtDiag d2;
+  d2.hallEdgesLastRev = 2;
+  t = unitEventEvaluate(0, 0, 0, true, d2);
+  TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_HALL_ANOMALY, t.onset);
+}
+
+static void test_hall_anomaly_silent_at_exactly_one() {
+  UnitExtDiag d;
+  d.hallEdgesLastRev = 1;
+  UnitEventTransitions t = unitEventEvaluate(0, 0, 0, true, d);
+  TEST_ASSERT_EQUAL_UINT8(0, t.onset);
+}
+
+static void test_ext_diag_bits_are_onset_only_not_recoverable() {
+  TEST_ASSERT_FALSE(UNIT_EVT_RECOVERABLE & UNIT_EVT_JAM);
+  TEST_ASSERT_FALSE(UNIT_EVT_RECOVERABLE & UNIT_EVT_DRAG);
+  TEST_ASSERT_FALSE(UNIT_EVT_RECOVERABLE & UNIT_EVT_HALL_ANOMALY);
+}
+
+static void test_ext_diag_conditions_clear_silently_not_as_recovery() {
+  // A jammed unit whose next move succeeds re-baselines without a recovery
+  // line (onset-only, like mismatch/hall-never — see UNIT_EVT_RECOVERABLE).
+  UnitExtDiag clear;
+  clear.hallEdgesLastRev = 1;  // healthy baseline — isolate the JAM clear
+  UnitEventTransitions t = unitEventEvaluate(UNIT_EVT_JAM, 0, 0, true, clear);
+  TEST_ASSERT_EQUAL_UINT8(0, t.onset);
+  TEST_ASSERT_EQUAL_UINT8(0, t.recovery);
+  TEST_ASSERT_EQUAL_UINT8(0, t.newState);
+}
+
+static void test_ext_diag_invalid_contributes_no_bits() {
+  // !extDiagValid (a silent / pre-ext-diag unit) must never fabricate a
+  // jam/drag/hall-anomaly, even if the (stale/garbage) struct fields would
+  // otherwise trip every threshold.
+  UnitExtDiag garbage;
+  garbage.statusBits = EXT_DIAG_STATUS_STALL;
+  garbage.stepExcessMax = 0xFFFF;
+  garbage.hallEdgesLastRev = 0;
+  UnitEventTransitions t = unitEventEvaluate(0, 0, 0, false, garbage);
+  TEST_ASSERT_EQUAL_UINT8(0, t.onset);
+  TEST_ASSERT_EQUAL_UINT8(0, t.recovery);
+  TEST_ASSERT_EQUAL_UINT8(0, t.newState);
+}
+
+static void test_ext_diag_invalid_carries_prior_state() {
+  // A previously-onset jam whose ext-diag read then fails this tick must be
+  // carried (not silently cleared) — same "unreadable never fakes recovery"
+  // rule as the status-derived conditions.
+  UnitExtDiag d;
+  UnitEventTransitions t = unitEventEvaluate(UNIT_EVT_JAM, 0, 0, false, d);
+  TEST_ASSERT_EQUAL_UINT8(0, t.onset);
+  TEST_ASSERT_EQUAL_UINT8(0, t.recovery);
+  TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_JAM, t.newState);
+}
+
+static void test_ext_diag_default_args_preserve_legacy_three_arg_calls() {
+  // Existing 3-arg call sites (no ext-diag args) must keep compiling and
+  // behaving exactly as before the #365 signature extension.
+  UnitEventTransitions t = unitEventEvaluate(0, UNIT_EVT_HOME_FAILED, ALL);
+  TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_HOME_FAILED, t.onset);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_first_seen_fault_is_an_onset);
@@ -156,5 +294,21 @@ int main(int, char**) {
   RUN_TEST(test_low_vcc_onsets_once_and_stays_latched);
   RUN_TEST(test_low_vcc_vitals_gap_carries_no_recovery);
   RUN_TEST(test_unit_vcc_is_low_threshold);
+  RUN_TEST(test_reset_cause_priority_brownout_over_watchdog);
+  RUN_TEST(test_reset_cause_each_flag);
+  RUN_TEST(test_reset_cause_name_nonnull);
+  RUN_TEST(test_reboot_detect_primes_silent);
+  RUN_TEST(test_reboot_detect_uptime_drop);
+  RUN_TEST(test_reboot_detect_counter_climb);
+  RUN_TEST(test_jam_onsets_on_stall_status_bit);
+  RUN_TEST(test_drag_onsets_over_threshold);
+  RUN_TEST(test_drag_does_not_onset_at_or_below_threshold);
+  RUN_TEST(test_hall_anomaly_onsets_when_not_exactly_one);
+  RUN_TEST(test_hall_anomaly_silent_at_exactly_one);
+  RUN_TEST(test_ext_diag_bits_are_onset_only_not_recoverable);
+  RUN_TEST(test_ext_diag_conditions_clear_silently_not_as_recovery);
+  RUN_TEST(test_ext_diag_invalid_contributes_no_bits);
+  RUN_TEST(test_ext_diag_invalid_carries_prior_state);
+  RUN_TEST(test_ext_diag_default_args_preserve_legacy_three_arg_calls);
   return UNITY_END();
 }

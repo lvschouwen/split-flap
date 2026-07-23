@@ -16,6 +16,7 @@
   #include <Arduino.h>
 #endif
 #include "UnitVitals.h"  // shared supply-Vcc/ram/cmd-pos diag packet (#306)
+#include "UnitExtDiag.h"  // shared new-measurement diag packet (#365)
 
 // Health / diagnostics snapshot returned by a sketch-running unit's
 // CMD_GET_STATUS reply. Populated by UnitBus.cpp; mirrors the 8-byte layout
@@ -52,6 +53,18 @@ inline uint8_t unitBootHomeState(uint8_t flags) {
   if (flags & UNIT_FLAG_HOMED) return 2;
   return (flags & UNIT_FLAG_MOVING) ? 1 : 0;
 }
+
+// Reboot edge-detect state (#368): last-seen uptime/brownout/watchdog triple
+// so heartbeatTick can log a unit reboot once, the same place #322 logs
+// health transitions. Detection logic (unitRebootDetect) lives in
+// UnitEventLog.h; the POD lives here so the copied FollowerEsp01 tree needs
+// no master-only header. Inert in the FollowerEsp01 copy.
+struct UnitRebootWatch {
+  uint16_t lastUptime = 0;
+  uint8_t  lastBrownout = 0;
+  uint8_t  lastWatchdog = 0;
+  bool     primed = false;
+};
 
 // Everything the master knows about one unit slot — the per-unit facts the
 // DisplaySnapshot carries (POD, ~24 B/slot). fwStatus keeps v1's /settings
@@ -97,6 +110,10 @@ struct UnitFacts {
   // false — the "diagV2" gate in the spec).
   UnitVitals vitals{};
   bool vitalsValid = false;
+  // New-measurement diagnostics (#365): probe/health-poll CMD_GET_EXT_DIAG
+  // truth, same checksum-rejected-on-old-firmware lifecycle as vitals/odometer.
+  UnitExtDiag extDiag{};
+  bool extDiagValid = false;
   // Heartbeat freshness (#310), maintained by displayTask's scheduled poll.
   // lastSeenMs is millis() at the last good CMD_GET_STATUS read; misses is the
   // consecutive-miss counter (NACK/checksum/timeout increments, a good read
@@ -127,6 +144,10 @@ struct UnitFacts {
   // masks above). Inert in the FollowerEsp01 copy.
   uint16_t i2cErrors = 0;
   uint32_t lastErrorMs = 0;
+  // Reboot edge-detect state (#368): last-seen uptime/brownout/watchdog
+  // triple so heartbeatTick can log a unit reboot once, the same place #322
+  // logs health transitions. Policy in UnitEventLog.h.
+  UnitRebootWatch rebootWatch{};
 };
 
 // Saturating increment for the per-unit I2C error counter (#367). Pins at
@@ -199,13 +220,15 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 // ~70 B), the per-unit "ae" field (#215), the per-unit "odo" field and the
 // spliced wear object (#231, ~45 B), the per-unit drift fields
 // phys/de/dp/ds/mm (#263/#264, ~43 B/unit), the per-unit vitals block
-// vcc/vmin/cp/ram (#306, ~44 B/unit + the headline "vccMin") and the per-unit
-// heartbeat-freshness keys age/hs2/misses/stale (#310, ~44 B/unit) and the
-// per-unit I2C-reliability keys err/errAge (#367, ~32 B/unit) so a full
-// display can't push the payload into the headline-only fallback. The #367
-// keys raised the ceiling over the prior 5120. test_unit_health pins the
-// worst case + headroom (a full 16-unit payload with the wear + reflash splices).
-#define UNIT_HEALTH_JSON_CAP 6144
+// vcc/vmin/cp/ram (#306, ~44 B/unit + the headline "vccMin"), the per-unit
+// heartbeat-freshness keys age/hs2/misses/stale (#310, ~44 B/unit), the
+// per-unit I2C-reliability keys err/errAge (#367, ~32 B/unit) and the
+// per-unit ext-diag keys se/sx/sag/he/dw/sb (#365, ~63 B/unit) so a full
+// display can't push the payload into the headline-only fallback. The #365
+// keys raised the ceiling over the prior 6144 (#367). test_unit_health pins
+// the worst case + headroom (a full 16-unit payload with the wear + reflash
+// splices).
+#define UNIT_HEALTH_JSON_CAP 7168
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
@@ -289,6 +312,18 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
       UNIT_HEALTH_APPEND(",\"vcc\":%u,\"vmin\":%u,\"cp\":%u,\"ram\":%u",
                          (unsigned)vt.vccNow_mV, (unsigned)vt.vccMin_mV,
                          (unsigned)vt.cmdPos, (unsigned)vt.freeRamMin);
+    }
+    if (u.extDiagValid) {
+      // New-measurement diagnostics (#365), own valid flag like "odo"/"vcc" —
+      // a unit can report status but run pre-ext-diag firmware. se/sx = last
+      // and worst-seen home step excess, sag = min Vcc during last move, he =
+      // hall edges seen in the last completed rev, dw = moves in the rolling
+      // duty window, sb = status bits (bit0 stall/jam).
+      const UnitExtDiag& e = u.extDiag;
+      UNIT_HEALTH_APPEND(",\"se\":%u,\"sx\":%u,\"sag\":%u,\"he\":%u,\"dw\":%u,\"sb\":%u",
+                         (unsigned)e.stepExcessLast, (unsigned)e.stepExcessMax,
+                         (unsigned)e.vccSagLastMove, (unsigned)e.hallEdgesLastRev,
+                         (unsigned)e.dutyWindow, (unsigned)e.statusBits);
     }
     if (u.state == 1) {
       // Heartbeat freshness (#310): age = ms since the last good scheduled

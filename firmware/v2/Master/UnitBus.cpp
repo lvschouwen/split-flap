@@ -32,14 +32,14 @@ bool unitBusAbortRequested() { return abortRequested.load(); }
 // platformio.ini).
 static constexpr int UNIT_BUS_SDA_PIN = 8;
 static constexpr int UNIT_BUS_SCL_PIN = 9;
-// 400 kHz (#375): the PCB v2 unit board is designed for Fast-mode I2C, and the
-// Nano TWI slaves are clocked by the master — they follow the higher rate (and
-// clock-stretch if an ISR lags) with no unit reflash. 4x faster shrinks the
-// per-frame render burst and the health-poll cadence on the bus; it does NOT
-// change the #326 clock-stretch stall (that's slave-ISR bound, speed-agnostic).
-// Attributed per-unit error rate (#367) is the bench guard — revert to 100000
-// if signal integrity degrades on a given wall.
-static constexpr uint32_t UNIT_BUS_FREQ_HZ = 400000;
+// 100 kHz standard-mode (#383 reverted #375's 400 kHz): the reflash path shares
+// this single clock and twiboot is only proven at standard mode, so driving the
+// bootloader at 400 kHz makes flash writes unreliable; 400 kHz signal integrity
+// on the full 16-unit wall also proved marginal (units dropped, bus locked on a
+// master reboot). The Nano TWI sketch slaves follow whatever the master clocks.
+// Re-raising requires dropping to 100 kHz for the twiboot phase (or a validated
+// Fast-mode reflash) — see #383; #367 per-unit error telemetry stays the guard.
+static constexpr uint32_t UNIT_BUS_FREQ_HZ = 100000;
 
 // Delay between an opcode write and the read-back clocking, so the slave's
 // receiveEvent ISR has time to flip its pending*Response flag.
@@ -231,6 +231,27 @@ static void refreshUnitVitals(UnitFacts& fact, int i2cAddress) {
   if (!readUnitVitals(i2cAddress, v)) return;
   fact.vitals = v;
   fact.vitalsValid = true;
+}
+
+// Reads the unit's new-measurement diagnostics via CMD_GET_EXT_DIAG (#365):
+// 11 bytes, masked XOR checksum. Pre-ext-diag firmware answers the unknown
+// opcode with its 1-byte status fallback + bus padding — extDiagReadbackValid
+// rejects that instead of "verifying" garbage (same discipline as vitals).
+static bool readUnitExtDiag(int i2cAddress, UnitExtDiag& out) {
+  uint8_t buf[EXT_DIAG_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_EXT_DIAG, buf, EXT_DIAG_REPLY_LEN)) return false;
+  return extDiagReadbackValid(buf, out);
+}
+
+// Folds an ext-diag read into the slot; clears extDiagValid first so a unit
+// that stops answering (or was reflashed to pre-ext-diag firmware) never
+// keeps serving a stale reading (same discipline as refreshUnitVitals).
+static void refreshUnitExtDiag(UnitFacts& fact, int i2cAddress) {
+  fact.extDiagValid = false;
+  UnitExtDiag d;
+  if (!readUnitExtDiag(i2cAddress, d)) return;
+  fact.extDiag = d;
+  fact.extDiagValid = true;
 }
 
 // Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
@@ -478,6 +499,9 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
     // Supply-Vcc diagnostics ride the probe too (#306); pre-vitals firmware
     // fails the checksum and stays vitalsValid=false.
     refreshUnitVitals(facts[unitIndex], i2cAddress);
+    // New-measurement diagnostics ride the probe too (#365); pre-ext-diag
+    // firmware fails the checksum and stays extDiagValid=false.
+    refreshUnitExtDiag(facts[unitIndex], i2cAddress);
   }
   // #367: the per-unit reset above zeroed the facts' error fields, but the
   // attributed counters are lifetime — restore them so a probe rescan doesn't
@@ -523,6 +547,9 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   refreshUnitDiag(facts[i], toI2cAddress(i));
   // Supply-Vcc diagnostics refresh on the same cadence (#306).
   refreshUnitVitals(facts[i], toI2cAddress(i));
+  // New-measurement diagnostics refresh on the same cadence (#365); not
+  // charged to #367 error attribution — see readUnitStatus above.
+  refreshUnitExtDiag(facts[i], toI2cAddress(i));
   // ok == the CMD_GET_STATUS read succeeded — the heartbeat liveness signal
   // (#310); the caller folds it into the miss counter.
   return ok;

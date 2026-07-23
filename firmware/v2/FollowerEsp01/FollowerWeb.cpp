@@ -733,11 +733,14 @@ void webEndpointsInit(AsyncWebServer& server) {
     // in the single LWIP context.
     // Sized off a follower-LOCAL cap, deliberately NOT the shared
     // UNIT_HEALTH_JSON_CAP: the master raised that to 6144 for the #367
-    // err/errAge keys, which are inert here (per-unit I2C attribution is
-    // master-only — i2cErrors stays 0), so a follower payload never exceeds
-    // its pre-#367 worst case (~4681 B with the wear + reflash splices). Keeping
-    // 5120 spares this RAM-tightest board ~1 KB of dead BSS.
-    static constexpr size_t FOLLOWER_HEALTH_BUF = 5120;
+    // err/errAge keys, which stay inert here (per-unit I2C attribution is
+    // master-only — i2cErrors/lastErrorMs are never set by FollowerBus.cpp),
+    // so those keys never widen a follower payload. #365 ext-diag is the
+    // opposite case: FollowerBus.cpp DOES populate extDiagValid on this bus,
+    // so the se/sx/sag/he/dw/sb keys are live here too — raised from 5120 to
+    // 6144 (measured worst case incl. the wear + reflash splices: ~5662 B;
+    // see test_health_json_follower_worst_case_fits_local_buf).
+    static constexpr size_t FOLLOWER_HEALTH_BUF = 6144;
     static char buf[FOLLOWER_HEALTH_BUF];
     int faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
     size_t n = buildUnitHealthJson(buf, FOLLOWER_HEALTH_BUF, unitFacts,

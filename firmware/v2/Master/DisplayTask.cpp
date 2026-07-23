@@ -163,8 +163,11 @@ static void logUnitHealthTransition(const DisplaySnapshot& local,
   if (u.stale)    cur |= UNIT_EVT_STALE;
   if (u.mismatch) cur |= UNIT_EVT_MISMATCH;
 
-  UnitEventTransitions t =
-      unitEventEvaluate(busFacts[i].healthEventState, cur, valid);
+  // #365: jam/drag/hall-anomaly ride the GET_EXT_DIAG read (its own
+  // transaction, can miss independently) — the builder folds all three
+  // gated on extDiagValid, so a silent/pre-ext-diag unit contributes none.
+  UnitEventTransitions t = unitEventEvaluate(busFacts[i].healthEventState, cur,
+                                             valid, u.extDiagValid, u.extDiag);
   busFacts[i].healthEventState = t.newState;
   if (!t.onset && !t.recovery) return;
 
@@ -183,10 +186,40 @@ static void logUnitHealthTransition(const DisplaySnapshot& local,
                  "brownout precursor\n",
                  addr, (unsigned)u.vitals.vccMin_mV,
                  (unsigned)UNIT_VCC_MIN_FLOOR_MV);
+  if (t.onset & UNIT_EVT_JAM)
+    SerialPrintf("Unit 0x%02x: jam (stalled move)\n", addr);
+  if (t.onset & UNIT_EVT_DRAG)
+    SerialPrintf("Unit 0x%02x: steps-to-home drag (excess %u > %u steps)\n",
+                 addr, (unsigned)u.extDiag.stepExcessMax,
+                 (unsigned)EXT_DIAG_DRAG_EXCESS_STEPS);
+  if (t.onset & UNIT_EVT_HALL_ANOMALY)
+    SerialPrintf("Unit 0x%02x: hall edges/rev anomaly (%u, expected 1)\n",
+                 addr, (unsigned)u.extDiag.hallEdgesLastRev);
   if (t.recovery & UNIT_EVT_STALE)
     SerialPrintf("Unit 0x%02x recovered — back on the bus\n", addr);
   if (t.recovery & UNIT_EVT_HOME_FAILED)
     SerialPrintf("Unit 0x%02x recovered — homed OK\n", addr);
+}
+
+// Logs a unit reboot (reset cause + lifetime brownout/watchdog counts) the
+// same place #322 logs health transitions (#368). Gated on statusValid so a
+// unit whose read failed this tick never fabricates a reboot from stale
+// rebootWatch state; the durable edge state lives in busFacts (survives
+// across ticks, like healthEventState above).
+static void logUnitReboot(const DisplaySnapshot& local, UnitFacts* busFacts,
+                          int i) {
+  const UnitFacts& u = local.units[i];
+  if (!u.statusValid) return;
+  const UnitStatus& s = u.status;
+  if (!unitRebootDetect(busFacts[i].rebootWatch, s.uptimeSeconds,
+                        s.lifetimeBrownoutCount, s.lifetimeWatchdogCount)) {
+    return;
+  }
+  int addr = SFP_I2C_ADDRESS_BASE + i;
+  SerialPrintf("Unit 0x%02x rebooted (%s) — brownouts=%u watchdogs=%u\n", addr,
+               unitResetCauseName(unitResetCauseDecode(s.mcusrAtBoot)),
+               (unsigned)s.lifetimeBrownoutCount,
+               (unsigned)s.lifetimeWatchdogCount);
 }
 
 // One opportunistic heartbeat read (#310), synthesized by displayTask only on
@@ -206,6 +239,7 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         effectiveWidthOverride());
   logUnitHealthTransition(local, busFacts, i);  // #322
+  logUnitReboot(local, busFacts, i);  // #368
   headlessTrack(local);  // #329: idle-tick observation feeds the debounce
   snapshotPublish(local);
 }
