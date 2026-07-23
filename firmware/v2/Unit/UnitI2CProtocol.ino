@@ -56,6 +56,9 @@ void receiveLetter(int numBytes) {
       case SFP_CMD_GET_VITALS:
         pendingVitalsResponse = true;
         break;
+      case SFP_CMD_GET_EXT_DIAG:
+        pendingExtDiagResponse = true;
+        break;
       case SFP_CMD_START_SELF_TEST:
         pendingSelfTest = true;
         break;
@@ -189,6 +192,14 @@ void requestEvent() {
     // (#306) — stream verbatim. Un-reflashed masters never send GET_VITALS.
     Wire.write((const uint8_t*)vitalsReplyBuf, VITALS_REPLY_LEN);
     pendingVitalsResponse = false;
+    return;
+  }
+  if (pendingExtDiagResponse) {
+    // 11 bytes, pre-encoded by refreshExtDiagReply() under noInterrupts()
+    // (#365) — stream verbatim. Un-reflashed masters never send GET_EXT_DIAG;
+    // the masked checksum handles a stray probe hitting the unknown opcode.
+    Wire.write((const uint8_t*)extDiagReplyBuf, EXT_DIAG_REPLY_LEN);
+    pendingExtDiagResponse = false;
     return;
   }
   if (pendingStatusResponse) {

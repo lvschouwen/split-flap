@@ -16,6 +16,7 @@
 #include "UnitDrift.h"     // pure drift-detection logic (#263/#264)
 #include "UnitSelfTest.h"  // pure self-test result + wire encode (#265)
 #include "UnitVitals.h"    // pure supply-Vcc/ram/cmd-pos diag packet (#306)
+#include "UnitExtDiag.h"   // pure ext-diag reply encode (#365; AVR glue below)
 #include "BootHomePolicy.h"  // pure staggered boot-home decision (#309)
 // Single source of truth for the master<->unit I2C contract (opcodes, address
 // base, alphabet, flap count), shared with firmware/v1/ESPMaster (#149).
@@ -210,6 +211,22 @@ unsigned long     vitalsLastSampleMs        = 0;       // idle-sample throttle
 volatile uint8_t  vitalsReplyBuf[VITALS_REPLY_LEN] = {0};
 volatile bool     pendingVitalsResponse     = false;  // consumed by requestEvent
 
+// Extended per-move diagnostics (#365). Measured in loop context (UnitMotion.ino
+// hooks: step-excess in calibrate() #370, per-move Vcc sag #371, hall-edges-per-
+// rev #372, duty window #373, stall #374). refreshExtDiagReply() re-encodes the
+// ISR-visible mirror each loop pass under noInterrupts() — same #96-class torn-
+// read discipline as the vitals/diag buffers above. Only extDiagReplyBuf and
+// pendingExtDiagResponse cross into the TWI ISR; the raw counters are loop-only.
+volatile bool     pendingExtDiagResponse    = false;  // consumed by requestEvent
+volatile uint8_t  extDiagReplyBuf[EXT_DIAG_REPLY_LEN] = {0};
+uint16_t          extStepExcessLast         = 0;      // #370 last home: actual-expected steps
+uint16_t          extStepExcessMax          = 0;      // #370 worst-seen since boot
+uint16_t          extVccSagLastMove         = 0xFFFF; // #371 min loaded Vcc this move (sentinel high)
+uint8_t           extHallEdgesLastRev       = 0;      // #372 entering edges in last completed rev
+uint16_t          extHallEdgesThisRev       = 0;      // #372 running count within the current rev
+uint16_t          extDutyWindow             = 0;      // #373 decaying rolling ~60 s move count
+uint8_t           extStatusBits             = 0;      // #374 bit0 = last-move stall
+
 // Revolution odometer (#231). `odometer` is loop-context only (every step
 // happens in loop; stepCounted() folds them in). The ISR-visible mirror is
 // what SFP_CMD_GET_ODOMETER replies from — 4 bytes, so loop-side updates
@@ -390,6 +407,9 @@ void setup() {
   // it so a GET_VITALS right after boot streams a real rail, not zeroes.
   vitalsSample(false);
   vitalsRefreshReplyBuffer();
+  // Ext-diag reply (#365): publish a coherent all-zero/sentinel packet before
+  // the Wire handlers register, same #173 ordering rule as the buffers above.
+  refreshExtDiagReply();
 
   //I2C function assignment
   Wire.begin(i2cAddress); //i2c address of this unit
@@ -439,6 +459,7 @@ void loop() {
   // every drift/state change from the previous pass is published.
   driftRefreshReplyBuffers();
   vitalsRefreshReplyBuffer();  // publish latest Vcc/RAM/cmdPos (#306)
+  refreshExtDiagReply();       // publish latest ext-diag measurements (#365)
 
   //If an enter-bootloader command arrived, give Wire a beat to finish any
   //in-flight transaction, then let the watchdog reset us. Twiboot takes over
@@ -667,6 +688,15 @@ void loop() {
   if (currentMillis - vitalsLastSampleMs >= 1000UL) {
     vitalsLastSampleMs = currentMillis;
     vitalsSample(false);
+  }
+
+  // Duty-window decay (#373): halve the rolling move counter on a coarse ~60 s
+  // timer so it tracks recent activity, not lifetime moves. Exponential decay
+  // is a cheap rolling window — no per-move timestamp history to store.
+  static unsigned long extDutyDecayMs = 0;
+  if (currentMillis - extDutyDecayMs >= 60000UL) {
+    extDutyDecayMs = currentMillis;
+    extDutyWindow -= (extDutyWindow >> 1);  // -> ceil(n/2); decays toward 0
   }
 
   // Silent drift correction (#263): a mid-move hall observation measured

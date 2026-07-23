@@ -21,6 +21,13 @@ void stepCounted(int steps) {
     noInterrupts();
     odometerRevolutions = odometer.revolutions;
     interrupts();
+    // Hall-edges-per-rev (#372): a healthy drum sweeps the fixed hall marker
+    // exactly once per full revolution. Latch the running count at the
+    // odometer's revolution boundary (the marker need not align with it — any
+    // 2038-step window passes the marker once) and start the next window.
+    extHallEdgesLastRev =
+        (extHallEdgesThisRev > 0xFF) ? 0xFF : (uint8_t)extHallEdgesThisRev;
+    extHallEdgesThisRev = 0;
   }
 }
 
@@ -56,6 +63,7 @@ void stepFlaps(int flaps) {
         if (lowStreak < 2) lowStreak++;
         if (lowStreak == 2 && !inWindow) {
           inWindow = true;
+          if (extHallEdgesThisRev < 0xFFFF) extHallEdgesThisRev++;  // #372
           if (driftObserveEdge(drift, STEPS, DRIFT_THRESHOLD_STEPS)) {
             drift.driftPending = true;
           }
@@ -66,6 +74,16 @@ void stepFlaps(int flaps) {
       }
     }
   }
+}
+
+// Wall-time a healthy move of `steps` commanded steps should take at `speedRpm`
+// (#374). Arduino Stepper blocks step_delay = 60e6 / (STEPS * RPM) us per step;
+// the per-step digitalRead/wdt overhead is ~us against a >=2 ms step, so the
+// prediction is tight. Products stay < ~78M — uint32 is enough, no AVR int64.
+uint32_t extExpectedMoveMs(uint32_t steps, int speedRpm) {
+  if (speedRpm < 1) speedRpm = 1;
+  uint32_t stepUs = 60000000UL / ((uint32_t)STEPS * (uint32_t)speedRpm);
+  return steps * stepUs / 1000UL;
 }
 
 //rotate to letter
@@ -107,6 +125,13 @@ void rotateToLetter(int toLetter) {
 
   lastRotation = millis();
   if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
+  // Committed to a move now (past the overheat/unhomed gates): arm the per-move
+  // Vcc sag (#371) and count the move into the rolling duty window (#373).
+  extVccSagLastMove = 0xFFFF;
+  if (extDutyWindow < 0xFFFF) extDutyWindow++;
+  unsigned long extMoveStartMs = millis();  // #374 stall timing
+  uint32_t extExpectedMs = 0;
+  bool extStallEvaluable = true;
   int posCurrentLetter = displayedLetter;
 #ifdef SERIAL_ENABLE
   Serial.print("go to letter: ");
@@ -122,19 +147,45 @@ void rotateToLetter(int toLetter) {
 #endif
     startMotor();
     stepper.setSpeed(stepperSpeed);
-    stepFlaps(toLetter - posCurrentLetter);
+    int flaps = toLetter - posCurrentLetter;
+    extExpectedMs = extExpectedMoveMs((uint32_t)flaps * STEPS / AMOUNTFLAPS,
+                                      stepperSpeed);  // #374
+    stepFlaps(flaps);
   }
   else {
     //full rotation is needed, good time for a calibration
 #ifdef SERIAL_ENABLE
     Serial.println("full rotation incl. calibration");
 #endif
-    calibrate(false); //calibrate revolver and do not stop motor
+    int homingSteps = calibrate(false); //calibrate revolver and do not stop motor
     stepper.setSpeed(stepperSpeed);
+    // #374: the commanded steps here are the homing seek (at HOMING_RPM) plus
+    // the flap move (at the commanded speed). A failed home (-1) makes the
+    // duration meaningless — skip the stall verdict, statusLastHomeFailed owns
+    // that fault.
+    if (homingSteps < 0) {
+      extStallEvaluable = false;
+    } else {
+      extExpectedMs =
+          extExpectedMoveMs((uint32_t)homingSteps, HOMING_RPM) +
+          extExpectedMoveMs((uint32_t)toLetter * STEPS / AMOUNTFLAPS, stepperSpeed);
+    }
     stepFlaps(toLetter);
   }
   //store new position
   displayedLetter = toLetter;
+  // Stall detection (#374): the move's wall time exceeded the commanded-steps
+  // prediction by more than 25%. Note the stepper blocks a fixed period per
+  // step regardless of mechanical load, so this catches abnormal wall-time
+  // stretch, not a silently-slipping drum — bench-tier heuristic.
+  if (extStallEvaluable) {
+    unsigned long extActualMs = millis() - extMoveStartMs;
+    if (extActualMs > extExpectedMs + (extExpectedMs >> 2)) {
+      extStatusBits |= EXT_DIAG_STATUS_STALL;
+    } else {
+      extStatusBits &= ~EXT_DIAG_STATUS_STALL;
+    }
+  }
   //Loaded Vcc sample (#306): the coils are still energised here, so the rail
   //is at its steady loaded level — the sag the #305 brownout saga chased.
   //Taken once per move, before the motor de-energises below.
@@ -168,6 +219,12 @@ int calibrate(bool initialCalibration) {
   Serial.println("calibrate revolver");
 #endif
   currentlyrotating = 1; //set active state to active
+  // Step-excess (#370): snapshot the believed drum position BEFORE any search
+  // stepping mutates it. Meaningful only with a prior belief — a homed unit
+  // whose position is known. The initial boot-home has neither, so skip it
+  // there and never pollute the worst-seen max with a fabricated first value.
+  bool extExcessValid = homed && drift.positionKnown;
+  uint16_t extStartPos = drift.drumPosition;
   bool reachedMarker = false;
   // Track whether the hall sensor ever read 0 (magnet detected) during this
   // homing attempt. Stays true only if hall was 0 from step 0 OR we stepped
@@ -218,6 +275,17 @@ int calibrate(bool initialCalibration) {
       //homing itself IS the correction, so only count; pending clears.
       driftObserveEdge(drift, STEPS, DRIFT_THRESHOLD_STEPS);
       drift.driftPending = false;
+      if (extHallEdgesThisRev < 0xFFFF) extHallEdgesThisRev++;  // #372
+      // #370: actual homing steps (i) vs geometry-expected (belief -> edge =
+      // one rev minus the believed distance already past the last edge). Excess
+      // = extra commanded steps to physically reach the marker = drag/slip.
+      if (extExcessValid) {
+        uint16_t expected = (uint16_t)(STEPS - extStartPos);
+        uint16_t excess = ((uint16_t)i >= expected)
+                              ? (uint16_t)((uint16_t)i - expected) : 0;
+        extStepExcessLast = excess;
+        if (excess > extStepExcessMax) extStepExcessMax = excess;
+      }
       stepCounted(ROTATIONDIRECTION * calOffset);
       displayedLetter = 0;
       missedSteps = 0;
@@ -342,9 +410,15 @@ uint16_t freeRamBytes() {
 //mid-move sample (coils energised, the sag we care about) from an idle rail
 //check; both feed the since-boot minimum, so the loaded samples drive vccMin
 //down toward the brownout floor while idle samples keep vccNow fresh.
-void vitalsSample(bool /*loaded*/) {
+void vitalsSample(bool loaded) {
   vitalsVccNow = readVccMv();
   if (vitalsVccNow != 0 && vitalsVccNow < vitalsVccMin) vitalsVccMin = vitalsVccNow;
+  // Per-move Vcc sag (#371): only loaded samples (coils energised, taken from
+  // rotateToLetter) feed it — idle samples refresh vccNow but say nothing about
+  // the move's rail droop. rotateToLetter re-arms the 0xFFFF sentinel per move.
+  if (loaded && vitalsVccNow != 0 && vitalsVccNow < extVccSagLastMove) {
+    extVccSagLastMove = vitalsVccNow;
+  }
   uint16_t fr = freeRamBytes();
   if (fr < vitalsFreeRamMin) vitalsFreeRamMin = fr;
 }
@@ -363,6 +437,26 @@ void vitalsRefreshReplyBuffer() {
   vitalsEncodeReply(v, buf);
   noInterrupts();
   for (uint8_t i = 0; i < VITALS_REPLY_LEN; i++) vitalsReplyBuf[i] = buf[i];
+  interrupts();
+}
+
+//Re-encodes the ISR-visible GET_EXT_DIAG reply from loop-context measurement
+//state (#365), same interrupt-guarded handshake as the buffers above. The raw
+//counters are folded by the UnitMotion.ino hooks; here we only snapshot them
+//into the wire struct. The Vcc-sag sentinel falls back to vccNow exactly like
+//vitalsRefreshReplyBuffer() handles its min sentinel.
+void refreshExtDiagReply() {
+  UnitExtDiag d;
+  d.stepExcessLast   = extStepExcessLast;
+  d.stepExcessMax    = extStepExcessMax;
+  d.vccSagLastMove   = (extVccSagLastMove == 0xFFFF) ? vitalsVccNow : extVccSagLastMove;
+  d.hallEdgesLastRev = extHallEdgesLastRev;
+  d.dutyWindow       = extDutyWindow;
+  d.statusBits       = extStatusBits;
+  uint8_t buf[EXT_DIAG_REPLY_LEN];
+  extDiagEncodeReply(d, buf);
+  noInterrupts();
+  for (uint8_t i = 0; i < EXT_DIAG_REPLY_LEN; i++) extDiagReplyBuf[i] = buf[i];
   interrupts();
 }
 
