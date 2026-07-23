@@ -94,3 +94,27 @@ inline const char* unitResetCauseName(UnitResetCause c) {
     default:             return "unknown";
   }
 }
+
+// Reboot edge (#368): a unit that browns out / watchdog-resets just re-homes
+// and looks healthy. GET_STATUS carries uptime + lifetime brownout/watchdog
+// counts; a reboot shows as uptime falling OR either count climbing. State
+// lives per-unit in UnitFacts. First observation only primes (no phantom).
+struct UnitRebootWatch {
+  uint16_t lastUptime = 0;
+  uint8_t  lastBrownout = 0;
+  uint8_t  lastWatchdog = 0;
+  bool     primed = false;
+};
+
+inline bool unitRebootDetect(UnitRebootWatch& w, uint16_t uptime,
+                             uint8_t brownout, uint8_t watchdog) {
+  if (!w.primed) {
+    w.lastUptime = uptime; w.lastBrownout = brownout;
+    w.lastWatchdog = watchdog; w.primed = true;
+    return false;
+  }
+  bool rebooted = uptime < w.lastUptime ||
+                  brownout != w.lastBrownout || watchdog != w.lastWatchdog;
+  w.lastUptime = uptime; w.lastBrownout = brownout; w.lastWatchdog = watchdog;
+  return rebooted;
+}

@@ -161,6 +161,28 @@ static void test_reset_cause_name_nonnull() {
   TEST_ASSERT_EQUAL_STRING("power-on", unitResetCauseName(RESET_POWER_ON));
 }
 
+// --- reboot-detect edge helper (#368) ----------------------------------------
+
+static void test_reboot_detect_primes_silent() {
+  UnitRebootWatch w{};
+  // First observation only primes — never logs a phantom reboot.
+  TEST_ASSERT_FALSE(unitRebootDetect(w, 100, 0, 0));
+}
+
+static void test_reboot_detect_uptime_drop() {
+  UnitRebootWatch w{};
+  unitRebootDetect(w, 500, 0, 0);           // prime
+  TEST_ASSERT_TRUE(unitRebootDetect(w, 12, 0, 0));   // uptime fell -> reboot
+  TEST_ASSERT_FALSE(unitRebootDetect(w, 30, 0, 0));  // climbing -> no event
+}
+
+static void test_reboot_detect_counter_climb() {
+  UnitRebootWatch w{};
+  unitRebootDetect(w, 500, 1, 0);           // prime
+  // Fast reboot: uptime may not have visibly dropped but brownout count rose.
+  TEST_ASSERT_TRUE(unitRebootDetect(w, 505, 2, 0));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_first_seen_fault_is_an_onset);
@@ -178,5 +200,8 @@ int main(int, char**) {
   RUN_TEST(test_reset_cause_priority_brownout_over_watchdog);
   RUN_TEST(test_reset_cause_each_flag);
   RUN_TEST(test_reset_cause_name_nonnull);
+  RUN_TEST(test_reboot_detect_primes_silent);
+  RUN_TEST(test_reboot_detect_uptime_drop);
+  RUN_TEST(test_reboot_detect_counter_climb);
   return UNITY_END();
 }
