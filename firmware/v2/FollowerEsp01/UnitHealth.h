@@ -220,13 +220,15 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 // ~70 B), the per-unit "ae" field (#215), the per-unit "odo" field and the
 // spliced wear object (#231, ~45 B), the per-unit drift fields
 // phys/de/dp/ds/mm (#263/#264, ~43 B/unit), the per-unit vitals block
-// vcc/vmin/cp/ram (#306, ~44 B/unit + the headline "vccMin") and the per-unit
-// heartbeat-freshness keys age/hs2/misses/stale (#310, ~44 B/unit) and the
-// per-unit I2C-reliability keys err/errAge (#367, ~32 B/unit) so a full
-// display can't push the payload into the headline-only fallback. The #367
-// keys raised the ceiling over the prior 5120. test_unit_health pins the
-// worst case + headroom (a full 16-unit payload with the wear + reflash splices).
-#define UNIT_HEALTH_JSON_CAP 6144
+// vcc/vmin/cp/ram (#306, ~44 B/unit + the headline "vccMin"), the per-unit
+// heartbeat-freshness keys age/hs2/misses/stale (#310, ~44 B/unit), the
+// per-unit I2C-reliability keys err/errAge (#367, ~32 B/unit) and the
+// per-unit ext-diag keys se/sx/sag/he/dw/sb (#365, ~63 B/unit) so a full
+// display can't push the payload into the headline-only fallback. The #365
+// keys raised the ceiling over the prior 6144 (#367). test_unit_health pins
+// the worst case + headroom (a full 16-unit payload with the wear + reflash
+// splices).
+#define UNIT_HEALTH_JSON_CAP 7168
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
@@ -310,6 +312,18 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
       UNIT_HEALTH_APPEND(",\"vcc\":%u,\"vmin\":%u,\"cp\":%u,\"ram\":%u",
                          (unsigned)vt.vccNow_mV, (unsigned)vt.vccMin_mV,
                          (unsigned)vt.cmdPos, (unsigned)vt.freeRamMin);
+    }
+    if (u.extDiagValid) {
+      // New-measurement diagnostics (#365), own valid flag like "odo"/"vcc" —
+      // a unit can report status but run pre-ext-diag firmware. se/sx = last
+      // and worst-seen home step excess, sag = min Vcc during last move, he =
+      // hall edges seen in the last completed rev, dw = moves in the rolling
+      // duty window, sb = status bits (bit0 stall/jam).
+      const UnitExtDiag& e = u.extDiag;
+      UNIT_HEALTH_APPEND(",\"se\":%u,\"sx\":%u,\"sag\":%u,\"he\":%u,\"dw\":%u,\"sb\":%u",
+                         (unsigned)e.stepExcessLast, (unsigned)e.stepExcessMax,
+                         (unsigned)e.vccSagLastMove, (unsigned)e.hallEdgesLastRev,
+                         (unsigned)e.dutyWindow, (unsigned)e.statusBits);
     }
     if (u.state == 1) {
       // Heartbeat freshness (#310): age = ms since the last good scheduled

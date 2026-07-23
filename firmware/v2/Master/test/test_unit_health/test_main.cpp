@@ -431,12 +431,52 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].lastSeenMs = 0;   // with the wide nowMs below -> 10-digit "age"
     units[i].i2cErrors = 0xFFFF;  // widest err/errAge block (#367)
     units[i].lastErrorMs = 0;     // 10-digit errAge against the wide nowMs
+    // Widest ext-diag block (#365): all fields saturated.
+    units[i].extDiagValid = true;
+    units[i].extDiag.stepExcessLast = 0xFFFF;
+    units[i].extDiag.stepExcessMax = 0xFFFF;
+    units[i].extDiag.vccSagLastMove = 0xFFFF;
+    units[i].extDiag.hallEdgesLastRev = 0xFF;
+    units[i].extDiag.dutyWindow = 0xFFFF;
+    units[i].extDiag.statusBits = 0xFF;
   }
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
                                  0xFFFFFFFFUL);
   TEST_ASSERT_TRUE(n < sizeof(buf));
   TEST_ASSERT_TRUE(n + 96 <= UNIT_HEALTH_JSON_CAP);
+  // The ext-diag block (#365) must actually be present at this saturation —
+  // otherwise the headroom assertion above is vacuous.
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"se\":65535"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sx\":65535"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sag\":65535"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"he\":255"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"dw\":65535"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sb\":255"));
+}
+
+// --- ext-diag block (#365) ---------------------------------------------------
+
+static void test_health_json_ext_diag_emitted_when_valid() {
+  UnitFacts units[2];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].extDiagValid = true;
+  units[0].extDiag.stepExcessLast = 12;
+  units[0].extDiag.stepExcessMax = 34;
+  units[0].extDiag.vccSagLastMove = 4650;
+  units[0].extDiag.hallEdgesLastRev = 1;
+  units[0].extDiag.dutyWindow = 8;
+  units[0].extDiag.statusBits = 0;
+  units[1].state = 1;
+  units[1].statusValid = true;  // old firmware: no ext-diag read at all
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 0);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"se\":12,\"sx\":34,\"sag\":4650,\"he\":1,\"dw\":8,\"sb\":0"));
+  char* second = strstr(buf, "\"i\":1");
+  TEST_ASSERT_NOT_NULL(second);
+  TEST_ASSERT_NULL(strstr(second, "\"se\""));
 }
 
 static void test_health_json_combined_splices_fit_cap() {
@@ -476,6 +516,14 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].lastSeenMs = 0;
     units[i].i2cErrors = 0xFFFF;  // widest err/errAge block (#367)
     units[i].lastErrorMs = 0;
+    // Widest ext-diag block (#365): all fields saturated.
+    units[i].extDiagValid = true;
+    units[i].extDiag.stepExcessLast = 0xFFFF;
+    units[i].extDiag.stepExcessMax = 0xFFFF;
+    units[i].extDiag.vccSagLastMove = 0xFFFF;
+    units[i].extDiag.hallEdgesLastRev = 0xFF;
+    units[i].extDiag.dutyWindow = 0xFFFF;
+    units[i].extDiag.statusBits = 0xFF;
   }
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
@@ -708,6 +756,7 @@ int main(int, char**) {
   RUN_TEST(test_health_json_emits_stamped_mismatch_only);
   RUN_TEST(test_health_json_no_mismatch_without_position);
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
+  RUN_TEST(test_health_json_ext_diag_emitted_when_valid);
   RUN_TEST(test_health_json_combined_splices_fit_cap);
   RUN_TEST(test_health_json_vitals_emitted_when_valid);
   RUN_TEST(test_health_json_headline_vccmin_is_min_across_units);
