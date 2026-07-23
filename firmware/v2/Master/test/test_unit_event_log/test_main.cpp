@@ -142,6 +142,25 @@ static void test_unit_vcc_is_low_threshold() {
   TEST_ASSERT_FALSE(unitVccIsLow(false, 3000, UNIT_VCC_MIN_FLOOR_MV));
 }
 
+// --- reset-cause decode (#368) -----------------------------------------------
+
+static void test_reset_cause_priority_brownout_over_watchdog() {
+  // BORF (bit2) + WDRF (bit3) both set -> brownout wins (most actionable).
+  TEST_ASSERT_EQUAL(RESET_BROWNOUT, unitResetCauseDecode((1<<2) | (1<<3)));
+}
+
+static void test_reset_cause_each_flag() {
+  TEST_ASSERT_EQUAL(RESET_WATCHDOG, unitResetCauseDecode(1<<3));
+  TEST_ASSERT_EQUAL(RESET_EXTERNAL, unitResetCauseDecode(1<<1));
+  TEST_ASSERT_EQUAL(RESET_POWER_ON, unitResetCauseDecode(1<<0));
+  TEST_ASSERT_EQUAL(RESET_UNKNOWN,  unitResetCauseDecode(0));
+}
+
+static void test_reset_cause_name_nonnull() {
+  TEST_ASSERT_EQUAL_STRING("brownout", unitResetCauseName(RESET_BROWNOUT));
+  TEST_ASSERT_EQUAL_STRING("power-on", unitResetCauseName(RESET_POWER_ON));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_first_seen_fault_is_an_onset);
@@ -156,5 +175,8 @@ int main(int, char**) {
   RUN_TEST(test_low_vcc_onsets_once_and_stays_latched);
   RUN_TEST(test_low_vcc_vitals_gap_carries_no_recovery);
   RUN_TEST(test_unit_vcc_is_low_threshold);
+  RUN_TEST(test_reset_cause_priority_brownout_over_watchdog);
+  RUN_TEST(test_reset_cause_each_flag);
+  RUN_TEST(test_reset_cause_name_nonnull);
   return UNITY_END();
 }

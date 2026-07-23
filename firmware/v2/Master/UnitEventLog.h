@@ -69,3 +69,28 @@ inline UnitEventTransitions unitEventEvaluate(uint8_t prior, uint8_t cur,
   t.newState = effective;
   return t;
 }
+
+// Unit reset-cause decoded from the MCUSR snapshot GET_STATUS byte 1 carries
+// (#368). Priority is most-actionable-first: a brownout (BORF) is the operator
+// signal that matters, so it wins over a co-set watchdog/power-on flag.
+enum UnitResetCause {
+  RESET_UNKNOWN = 0, RESET_POWER_ON, RESET_EXTERNAL, RESET_BROWNOUT, RESET_WATCHDOG
+};
+
+inline UnitResetCause unitResetCauseDecode(uint8_t mcusr) {
+  if (mcusr & (1 << 2)) return RESET_BROWNOUT;  // BORF
+  if (mcusr & (1 << 3)) return RESET_WATCHDOG;  // WDRF
+  if (mcusr & (1 << 1)) return RESET_EXTERNAL;  // EXTRF
+  if (mcusr & (1 << 0)) return RESET_POWER_ON;  // PORF
+  return RESET_UNKNOWN;
+}
+
+inline const char* unitResetCauseName(UnitResetCause c) {
+  switch (c) {
+    case RESET_BROWNOUT: return "brownout";
+    case RESET_WATCHDOG: return "watchdog";
+    case RESET_EXTERNAL: return "external";
+    case RESET_POWER_ON: return "power-on";
+    default:             return "unknown";
+  }
+}
