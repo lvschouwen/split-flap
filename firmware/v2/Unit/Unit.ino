@@ -222,7 +222,11 @@ volatile uint8_t  extDiagReplyBuf[EXT_DIAG_REPLY_LEN] = {0};
 uint16_t          extStepExcessLast         = 0;      // #370 last home: actual-expected steps
 uint16_t          extStepExcessMax          = 0;      // #370 worst-seen since boot
 uint16_t          extVccSagLastMove         = 0xFFFF; // #371 min loaded Vcc this move (sentinel high)
-uint8_t           extHallEdgesLastRev       = 0;      // #372 entering edges in last completed rev
+// Pre-first-revolution there is no real sample yet; report 1 (the benign/
+// healthy sentinel, not 0) so the master's hallEdgesLastRev!=1 anomaly check
+// doesn't false-fire before the first rev latches a true count. A genuinely
+// dead hall still latches 0 on the first completed rev and surfaces then.
+uint8_t           extHallEdgesLastRev       = 1;      // #372 entering edges in last completed rev
 uint16_t          extHallEdgesThisRev       = 0;      // #372 running count within the current rev
 uint16_t          extDutyWindow             = 0;      // #373 decaying rolling ~60 s move count
 uint8_t           extStatusBits             = 0;      // #374 bit0 = last-move stall
@@ -696,7 +700,9 @@ void loop() {
   static unsigned long extDutyDecayMs = 0;
   if (currentMillis - extDutyDecayMs >= 60000UL) {
     extDutyDecayMs = currentMillis;
-    extDutyWindow -= (extDutyWindow >> 1);  // -> ceil(n/2); decays toward 0
+    // (extDutyWindow >> 1) subtracted from itself sticks at 1 forever (1-0=1);
+    // floor to 0 below that so an idle unit's window actually reaches 0.
+    extDutyWindow = (extDutyWindow > 1) ? (uint16_t)(extDutyWindow - (extDutyWindow >> 1)) : 0;
   }
 
   // Silent drift correction (#263): a mid-move hall observation measured

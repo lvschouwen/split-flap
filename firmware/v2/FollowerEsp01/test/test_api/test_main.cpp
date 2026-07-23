@@ -58,6 +58,16 @@ static void fullyPopulated(UnitFacts& u) {
   u.lastSeenMs = 1000;
   u.misses = 4;
   u.stale = true;
+  // Ext-diag (#365) populated so se/sx/sag/he/dw/sb all emit — without this
+  // the legend-completeness guard below never sees these keys and can't
+  // catch them going undocumented.
+  u.extDiag.stepExcessLast = 3;
+  u.extDiag.stepExcessMax = 9;
+  u.extDiag.vccSagLastMove = 4600;
+  u.extDiag.hallEdgesLastRev = 1;
+  u.extDiag.dutyWindow = 12;
+  u.extDiag.statusBits = 1;
+  u.extDiagValid = true;
 }
 
 static void assertEveryKeyDocumented(const char* json) {

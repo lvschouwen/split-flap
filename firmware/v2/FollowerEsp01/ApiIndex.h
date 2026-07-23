@@ -92,6 +92,12 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"hs2",    "boot-home state: 0 unhomed, 1 homing, 2 homed"},
   {"misses", "consecutive missed heartbeat reads"},
   {"stale",  "1 = unit missed >= the threshold of consecutive heartbeats (lost)"},
+  {"se",     "step-excess on the last home (actual minus expected steps)"},
+  {"sx",     "worst-seen step-excess since boot"},
+  {"sag",    "minimum loaded supply Vcc (mV) during the last move"},
+  {"he",     "hall edges seen in the last completed revolution"},
+  {"dw",     "rolling ~60 s duty window (recent move count)"},
+  {"sb",     "ext-diag status bitfield (bit0 last-move stall)"},
   // --- /cluster/health ---
   {"state",        "follower phase: standalone/clustered/grace/blank"},
   {"leaderName",   "name of the leader feeding this row"},
@@ -119,7 +125,9 @@ inline bool legendHasKey(const char* key) {
   return false;
 }
 
-#define API_JSON_CAP 4096
+// #365 legend growth (se/sx/sag/he/dw/sb) pushed the full /api payload past
+// the prior 4096 — bumped with headroom, same as the master's cap.
+#define API_JSON_CAP 5120
 
 #define API_APPEND(...) do { \
     if (o >= cap) return o; \
