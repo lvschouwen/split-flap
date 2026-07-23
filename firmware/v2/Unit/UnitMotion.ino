@@ -3,6 +3,14 @@
 // globals/#defines are visible here (main sketch concatenates first).
 // The blocking step loops here kick the 8 s watchdog per iteration.
 
+// Hall-edge latch inhibit (#372): runSelfTest() drives ~2 full revolutions
+// through raw stepCounted() calls that never feed driftObserveEdge(), so the
+// odometer boundary latch in stepCounted() would otherwise snapshot a phantom
+// near-zero hall-edge count and make a healthy unit report a false
+// "edges/rev != 1" degraded-sensor fault. Set for the duration of a self-test;
+// the odometer's own revolution counting is unaffected (wear still accrues).
+static bool extHallLatchInhibit = false;
+
 //Single funnel for every drum move (#231): steps the motor and folds the
 //magnitude into the revolution odometer. All motion runs in loop context,
 //so the plain-state update is safe; the ISR-visible mirror write must be
@@ -25,9 +33,14 @@ void stepCounted(int steps) {
     // exactly once per full revolution. Latch the running count at the
     // odometer's revolution boundary (the marker need not align with it — any
     // 2038-step window passes the marker once) and start the next window.
-    extHallEdgesLastRev =
-        (extHallEdgesThisRev > 0xFF) ? 0xFF : (uint8_t)extHallEdgesThisRev;
-    extHallEdgesThisRev = 0;
+    // Skip while self-test stepping owns the drum (extHallLatchInhibit): that
+    // motion never feeds the edge counter, so latching it would report a
+    // phantom fault. The odometerRevolutions mirror above still advances.
+    if (!extHallLatchInhibit) {
+      extHallEdgesLastRev =
+          (extHallEdgesThisRev > 0xFF) ? 0xFF : (uint8_t)extHallEdgesThisRev;
+      extHallEdgesThisRev = 0;
+    }
   }
 }
 
@@ -470,6 +483,7 @@ void refreshExtDiagReply() {
 //position estimate (same reasoning as calibrate's failure path).
 void runSelfTest() {
   selfTest.state = SELFTEST_STATE_RUNNING;
+  extHallLatchInhibit = true;  //#372: don't latch the phantom edge count below
   driftRefreshReplyBuffers();  //publish RUNNING before the ~12 s of motion
   startMotor();
   stepper.setSpeed(HOMING_RPM);
@@ -567,5 +581,10 @@ void runSelfTest() {
   if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
   delay(100);
   stopMotor();
+  // #372: drop the partial window the self-test stepping spanned (it crossed
+  // one or two odometer boundaries with the latch inhibited) so the first
+  // post-self-test normal revolution latches a clean count, then re-enable.
+  extHallEdgesThisRev = 0;
+  extHallLatchInhibit = false;
   driftRefreshReplyBuffers();  //publish the result before loop() resumes
 }
