@@ -599,7 +599,8 @@ static void mqttPublishTelemetry(const DisplaySnapshot& snap) {
         buf, sizeof(buf), freeHeap, heapFragPct, WiFi.RSSI(),
         snap.lastShowWriteErrors, millis() / 1000UL,
         clockIsTimeSynced(time(nullptr)),
-        unitFleetVccMin(snap.units, snap.displayWidth));  // #366 HA vccMin sensor
+        unitFleetVccMin(snap.units, snap.displayWidth),      // #366 HA vccMin sensor
+        unitFleetRebootTotal(snap.units, snap.displayWidth));  // #368 HA reboot-total sensor
     if (tn > 0 && tn < sizeof(buf)) {
       mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
     }

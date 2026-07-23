@@ -168,24 +168,27 @@ static void test_mqttTopic_builds_expected_paths() {
 }
 static void test_telemetry_payload_exact_shape() {
   char buf[128];
-  //                            heap    frag  rssi  errs uptime  ntp   vccMin
-  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 4210);
+  //                            heap    frag  rssi  errs uptime  ntp   vccMin reboots
+  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 4210, 6UL);
   TEST_ASSERT_EQUAL_STRING(
-    "{\"heap\":25048,\"heapFrag\":12,\"rssi\":-61,\"unitErrors\":2,\"uptime\":3600,\"ntp\":1,\"vccMin\":4210}", buf);
+    "{\"heap\":25048,\"heapFrag\":12,\"rssi\":-61,\"unitErrors\":2,\"uptime\":3600,\"ntp\":1,\"vccMin\":4210,\"reboots\":6}", buf);
   TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
 }
 static void test_telemetry_vccmin_omitted_when_zero() {
   // #366: no unit reports vitals -> vccMin 0 -> the key is dropped so the HA
   // sensor reads unavailable instead of a phantom 0 mV. Object still closes.
   char buf[128];
-  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0);
+  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0, 0UL);
   TEST_ASSERT_NULL(strstr(buf, "vccMin"));
+  // #368: unlike vccMin, 0 reboots is a real reading, not a sentinel — the
+  // key is always present.
+  assert_contains(buf, "\"reboots\":0");
   TEST_ASSERT_EQUAL_CHAR('}', buf[strlen(buf) - 1]);
   TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
 }
 static void test_telemetry_ntp_false_renders_zero() {
   char buf[128];
-  buildTelemetryPayload(buf, sizeof(buf), 1UL, 0, 0L, 0, 0UL, false, 4700);
+  buildTelemetryPayload(buf, sizeof(buf), 1UL, 0, 0L, 0, 0UL, false, 4700, 0UL);
   assert_contains(buf, "\"ntp\":0");
 }
 // ---- parseModeCommand (#130) ----
@@ -380,6 +383,32 @@ static void test_discovery_vcc_min_topic_and_payload() {
   assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
 }
 
+// ---- Stage A4 fleet reboot-total (#368) ----
+static void test_fleet_reboot_total_sums_valid_units() {
+  // Sum of lifetime brownout+watchdog resets across every unit we hold a
+  // valid CMD_GET_STATUS read for — mirrors unitFleetVccMin's statusValid
+  // gate (UnitHealth.h). A unit we never read can't contribute.
+  UnitFacts u[3];
+  u[0].statusValid = true; u[0].status.lifetimeBrownoutCount = 3; u[0].status.lifetimeWatchdogCount = 1;
+  u[1].statusValid = true; u[1].status.lifetimeBrownoutCount = 2; u[1].status.lifetimeWatchdogCount = 0;
+  u[2].statusValid = false; u[2].status.lifetimeBrownoutCount = 9; u[2].status.lifetimeWatchdogCount = 9;
+  TEST_ASSERT_EQUAL_UINT32(6, unitFleetRebootTotal(u, 3));
+}
+
+static void test_discovery_reboot_total_topic_and_payload() {
+  // #368: fleet reboot odometer diagnostic sensor, telemetry-backed.
+  char buf[512];
+  buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_REBOOT_TOTAL, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_reboot_total/config", buf);
+
+  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_REBOOT_TOTAL, "flappy", "abc1234");
+  assert_contains(buf, "\"name\":\"Unit reboots (fleet)\"");
+  assert_contains(buf, "\"stat_t\":\"splitflap/flappy/telemetry\"");
+  assert_contains(buf, "\"val_tpl\":\"{{ value_json.reboots }}\"");
+  assert_contains(buf, "\"uniq_id\":\"flappy_reboot_total\"");
+  assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
+}
+
 static void test_all_discovery_entities_wellformed() {
   char pbuf[512];
   char tbuf[96];
@@ -523,5 +552,7 @@ int main(int, char**) {
   RUN_TEST(test_discovery_units_faulty_topic_and_payload);
   RUN_TEST(test_discovery_unit_wear_topic_and_payload);
   RUN_TEST(test_discovery_vcc_min_topic_and_payload);
+  RUN_TEST(test_fleet_reboot_total_sums_valid_units);
+  RUN_TEST(test_discovery_reboot_total_topic_and_payload);
   return UNITY_END();
 }

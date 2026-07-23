@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "UnitHealth.h"  // UnitFacts/UnitStatus for unitFleetRebootTotal (#368)
+
 // Pure MQTT logic for the Home Assistant integration (issue #121): payload
 // parsing, show-then-revert notification state, and topic/discovery/telemetry
 // JSON assembly. No networking and no AsyncMqttClient types — everything in
@@ -193,9 +195,26 @@ inline String mqttTopic(const String& deviceId, const char* suffix) {
 // static diagnostics (ip/ssid/reset/boots/tz/otaReverted) ride their own
 // retained topics, published on-change / on-connect (ServiceMqttFunctions.ino)
 // so HA sees them instantly instead of on this periodic tick (#132).
+// Fleet-wide reboot odometer (#368): sum of lifetime brownout + watchdog
+// reset counts across every unit we hold a valid CMD_GET_STATUS read for —
+// mirrors unitFleetVccMin's statusValid gate (UnitHealth.h). Unlike vccMin,
+// 0 is a real "no reboots since boot" reading, not a sentinel — the caller
+// always emits it. MQTT-only derived stat (no /units/health consumer), so it
+// lives here rather than in the copied UnitHealth.h.
+inline uint32_t unitFleetRebootTotal(const UnitFacts* units, int width) {
+  uint32_t total = 0;
+  for (int i = 0; i < width; i++) {
+    if (units[i].statusValid) {
+      total += (uint32_t)units[i].status.lifetimeBrownoutCount +
+               (uint32_t)units[i].status.lifetimeWatchdogCount;
+    }
+  }
+  return total;
+}
+
 inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap, int heapFragPct,
                                     long rssi, int unitErrors, unsigned long uptimeSec,
-                                    bool ntpSynced, uint16_t vccMin_mV) {
+                                    bool ntpSynced, uint16_t vccMin_mV, uint32_t rebootTotal) {
   size_t o = (size_t)mqttSnprintf(buf, bufLen,
       MQTT_FMT("{\"heap\":%lu,\"heapFrag\":%d,\"rssi\":%ld,\"unitErrors\":%d,\"uptime\":%lu,\"ntp\":%d"),
       (unsigned long)freeHeap, heapFragPct, rssi, unitErrors, uptimeSec, ntpSynced ? 1 : 0);
@@ -203,6 +222,9 @@ inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap,
   // so the HA sensor reads unavailable instead of a phantom 0 mV.
   if (vccMin_mV > 0 && o < bufLen)
     o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"vccMin\":%u"), (unsigned)vccMin_mV);
+  // Fleet reboot odometer (#368): always emitted, see unitFleetRebootTotal.
+  if (o < bufLen)
+    o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"reboots\":%u"), (unsigned)rebootTotal);
   if (o < bufLen) o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT("}"));
   return o;
 }
@@ -252,6 +274,12 @@ enum MqttDiscoveryEntity {
   // since-boot vccMin any unit reports (the brownout smoking gun). Rides the
   // periodic telemetry packet; the per-unit vmin lives in units/attrs.
   DISCOVERY_VCC_MIN,
+  // Fleet reboot odometer (#368) — diagnostic sensor, sum of lifetime
+  // brownout+watchdog resets across every unit we hold a valid status read
+  // for (unitFleetRebootTotal). A rising counter — HA's total_increasing
+  // state_class would be the right fit, but buildEntityDiscovery has no
+  // state_class slot, so it's omitted here.
+  DISCOVERY_REBOOT_TOTAL,
   DISCOVERY_ENTITY_COUNT
 };
 
@@ -284,6 +312,7 @@ inline MqttDiscMeta mqttDiscMeta(int entity) {
     case DISCOVERY_UNITS_FAULTY: return { "sensor",        "_units_faulty" };
     case DISCOVERY_UNIT_WEAR:    return { "binary_sensor", "_unit_wear" };
     case DISCOVERY_VCC_MIN:      return { "sensor",        "_vcc_min" };
+    case DISCOVERY_REBOOT_TOTAL: return { "sensor",        "_reboot_total" };
   }
   return { nullptr, nullptr };
 }
@@ -388,6 +417,7 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
         deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
     //                        obj             name                 stat_t          val_tpl                       dev_cla    unit    ent_cat        pOn    pOff
     case DISCOVERY_VCC_MIN:      return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_vcc_min",      "Unit supply Vcc (min)", "telemetry", "{{ value_json.vccMin }}",  "voltage", "mV",  "diagnostic", nullptr, nullptr);
+    case DISCOVERY_REBOOT_TOTAL: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_reboot_total", "Unit reboots (fleet)",  "telemetry", "{{ value_json.reboots }}", nullptr,   nullptr, "diagnostic", nullptr, nullptr);
   }
   if (bufLen > 0) buf[0] = '\0';
   return 0;
