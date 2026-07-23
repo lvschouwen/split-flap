@@ -90,6 +90,12 @@
                                          //     XOR checksum ^ 0x3C (wire format
                                          //     in UnitVitals.h, #306). Frozen v1
                                          //     ESPMaster never sends it.
+#define SFP_CMD_GET_EXT_DIAG       0x89  // reply: 11 bytes — step-excess last/max,
+                                         //     per-move Vcc sag, hall edges/rev,
+                                         //     duty window, status bits + XOR
+                                         //     checksum ^ 0x93 (wire format in
+                                         //     UnitExtDiag.h, #365). Unversioned;
+                                         //     a format change takes a new opcode.
 
 // --- 0x9X mutations ---
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT reset)

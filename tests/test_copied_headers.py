@@ -39,6 +39,7 @@ IDENTICAL_PAIRS = [
         "ClusterHmac.h",
         "ClusterForeign.h",
         "UnitVitals.h",
+        "UnitExtDiag.h",
         "HeartbeatPolicy.h",
         "BootHomePlan.h",
         "RenderStagger.h",
