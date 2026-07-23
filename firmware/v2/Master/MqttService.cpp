@@ -594,13 +594,15 @@ static void mqttPublishTelemetry(const DisplaySnapshot& snap) {
     int heapFragPct = (freeHeap > 0 && maxBlock <= freeHeap)
                           ? (int)(100 - (maxBlock * 100ULL) / freeHeap)
                           : 0;
-    char buf[128];
+    char buf[160];
     size_t tn = buildTelemetryPayload(
         buf, sizeof(buf), freeHeap, heapFragPct, WiFi.RSSI(),
         snap.lastShowWriteErrors, millis() / 1000UL,
         clockIsTimeSynced(time(nullptr)),
         unitFleetVccMin(snap.units, snap.displayWidth),      // #366 HA vccMin sensor
-        unitFleetRebootTotal(snap.units, snap.displayWidth));  // #368 HA reboot-total sensor
+        unitFleetRebootTotal(snap.units, snap.displayWidth),  // #368 HA reboot-total sensor
+        unitFleetAnyJam(snap.units, snap.displayWidth),      // #365 HA jam binary_sensor
+        unitFleetMaxExcess(snap.units, snap.displayWidth));  // #365 HA steps-excess sensor
     if (tn > 0 && tn < sizeof(buf)) {
       mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
     }
