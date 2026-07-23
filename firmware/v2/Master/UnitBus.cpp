@@ -233,6 +233,27 @@ static void refreshUnitVitals(UnitFacts& fact, int i2cAddress) {
   fact.vitalsValid = true;
 }
 
+// Reads the unit's new-measurement diagnostics via CMD_GET_EXT_DIAG (#365):
+// 11 bytes, masked XOR checksum. Pre-ext-diag firmware answers the unknown
+// opcode with its 1-byte status fallback + bus padding — extDiagReadbackValid
+// rejects that instead of "verifying" garbage (same discipline as vitals).
+static bool readUnitExtDiag(int i2cAddress, UnitExtDiag& out) {
+  uint8_t buf[EXT_DIAG_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_EXT_DIAG, buf, EXT_DIAG_REPLY_LEN)) return false;
+  return extDiagReadbackValid(buf, out);
+}
+
+// Folds an ext-diag read into the slot; clears extDiagValid first so a unit
+// that stops answering (or was reflashed to pre-ext-diag firmware) never
+// keeps serving a stale reading (same discipline as refreshUnitVitals).
+static void refreshUnitExtDiag(UnitFacts& fact, int i2cAddress) {
+  fact.extDiagValid = false;
+  UnitExtDiag d;
+  if (!readUnitExtDiag(i2cAddress, d)) return;
+  fact.extDiag = d;
+  fact.extDiagValid = true;
+}
+
 // Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
 // true on success; `out` is untouched on failure (old firmware predating
 // v1 #32 answers short — the drain-and-fail path).
@@ -478,6 +499,9 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
     // Supply-Vcc diagnostics ride the probe too (#306); pre-vitals firmware
     // fails the checksum and stays vitalsValid=false.
     refreshUnitVitals(facts[unitIndex], i2cAddress);
+    // New-measurement diagnostics ride the probe too (#365); pre-ext-diag
+    // firmware fails the checksum and stays extDiagValid=false.
+    refreshUnitExtDiag(facts[unitIndex], i2cAddress);
   }
   // #367: the per-unit reset above zeroed the facts' error fields, but the
   // attributed counters are lifetime — restore them so a probe rescan doesn't
@@ -523,6 +547,9 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   refreshUnitDiag(facts[i], toI2cAddress(i));
   // Supply-Vcc diagnostics refresh on the same cadence (#306).
   refreshUnitVitals(facts[i], toI2cAddress(i));
+  // New-measurement diagnostics refresh on the same cadence (#365); not
+  // charged to #367 error attribution — see readUnitStatus above.
+  refreshUnitExtDiag(facts[i], toI2cAddress(i));
   // ok == the CMD_GET_STATUS read succeeded — the heartbeat liveness signal
   // (#310); the caller folds it into the miss counter.
   return ok;

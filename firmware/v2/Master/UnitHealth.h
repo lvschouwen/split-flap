@@ -16,6 +16,7 @@
   #include <Arduino.h>
 #endif
 #include "UnitVitals.h"  // shared supply-Vcc/ram/cmd-pos diag packet (#306)
+#include "UnitExtDiag.h"  // shared new-measurement diag packet (#365)
 
 // Health / diagnostics snapshot returned by a sketch-running unit's
 // CMD_GET_STATUS reply. Populated by UnitBus.cpp; mirrors the 8-byte layout
@@ -109,6 +110,10 @@ struct UnitFacts {
   // false — the "diagV2" gate in the spec).
   UnitVitals vitals{};
   bool vitalsValid = false;
+  // New-measurement diagnostics (#365): probe/health-poll CMD_GET_EXT_DIAG
+  // truth, same checksum-rejected-on-old-firmware lifecycle as vitals/odometer.
+  UnitExtDiag extDiag{};
+  bool extDiagValid = false;
   // Heartbeat freshness (#310), maintained by displayTask's scheduled poll.
   // lastSeenMs is millis() at the last good CMD_GET_STATUS read; misses is the
   // consecutive-miss counter (NACK/checksum/timeout increments, a good read
