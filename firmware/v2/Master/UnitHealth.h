@@ -16,6 +16,7 @@
   #include <Arduino.h>
 #endif
 #include "UnitVitals.h"  // shared supply-Vcc/ram/cmd-pos diag packet (#306)
+#include "UnitEventLog.h"  // UnitRebootWatch reboot edge-detect state (#368)
 
 // Health / diagnostics snapshot returned by a sketch-running unit's
 // CMD_GET_STATUS reply. Populated by UnitBus.cpp; mirrors the 8-byte layout
@@ -127,6 +128,10 @@ struct UnitFacts {
   // masks above). Inert in the FollowerEsp01 copy.
   uint16_t i2cErrors = 0;
   uint32_t lastErrorMs = 0;
+  // Reboot edge-detect state (#368): last-seen uptime/brownout/watchdog
+  // triple so heartbeatTick can log a unit reboot once, the same place #322
+  // logs health transitions. Policy in UnitEventLog.h.
+  UnitRebootWatch rebootWatch{};
 };
 
 // Saturating increment for the per-unit I2C error counter (#367). Pins at

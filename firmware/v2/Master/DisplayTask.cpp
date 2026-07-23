@@ -189,6 +189,27 @@ static void logUnitHealthTransition(const DisplaySnapshot& local,
     SerialPrintf("Unit 0x%02x recovered — homed OK\n", addr);
 }
 
+// Logs a unit reboot (reset cause + lifetime brownout/watchdog counts) the
+// same place #322 logs health transitions (#368). Gated on statusValid so a
+// unit whose read failed this tick never fabricates a reboot from stale
+// rebootWatch state; the durable edge state lives in busFacts (survives
+// across ticks, like healthEventState above).
+static void logUnitReboot(const DisplaySnapshot& local, UnitFacts* busFacts,
+                          int i) {
+  const UnitFacts& u = local.units[i];
+  if (!u.statusValid) return;
+  const UnitStatus& s = u.status;
+  if (!unitRebootDetect(busFacts[i].rebootWatch, s.uptimeSeconds,
+                        s.lifetimeBrownoutCount, s.lifetimeWatchdogCount)) {
+    return;
+  }
+  int addr = SFP_I2C_ADDRESS_BASE + i;
+  SerialPrintf("Unit 0x%02x rebooted (%s) — brownouts=%u watchdogs=%u\n", addr,
+               unitResetCauseName(unitResetCauseDecode(s.mcusrAtBoot)),
+               (unsigned)s.lifetimeBrownoutCount,
+               (unsigned)s.lifetimeWatchdogCount);
+}
+
 // One opportunistic heartbeat read (#310), synthesized by displayTask only on
 // an idle tick — display writes / reflash / an explicit Probe always preempt
 // (they arrive as commands). Round-robins one unit per tick; skipped entirely
@@ -206,6 +227,7 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         effectiveWidthOverride());
   logUnitHealthTransition(local, busFacts, i);  // #322
+  logUnitReboot(local, busFacts, i);  // #368
   headlessTrack(local);  // #329: idle-tick observation feeds the debounce
   snapshotPublish(local);
 }
