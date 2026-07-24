@@ -27,24 +27,34 @@ REPO = Path(__file__).resolve().parent.parent
 MASTER = REPO / "firmware/v2/Master"
 FOLLOWER = REPO / "firmware/v2/FollowerEsp01"
 RESCUE = REPO / "firmware/v2/Rescue"
+UNIT = REPO / "firmware/v2/Unit"
 
-# Master <-> FollowerEsp01 pairs that are byte-identical by policy.
+# Byte-identical copy groups: header name -> every tree that carries a copy.
+# Each listed tree is compared against the first (identity is transitive).
+IDENTICAL_GROUPS = {
+    "UnitHealth.h": [MASTER, FOLLOWER],
+    "UnitProtocolHelpers.h": [MASTER, FOLLOWER],
+    "WearPolicy.h": [MASTER, FOLLOWER],
+    "DisplayWidth.h": [MASTER, FOLLOWER],
+    "ClusterHmac.h": [MASTER, FOLLOWER],
+    "ClusterForeign.h": [MASTER, FOLLOWER],
+    "UnitVitals.h": [MASTER, FOLLOWER, UNIT],
+    "UnitExtDiag.h": [MASTER, FOLLOWER, UNIT],
+    "HeartbeatPolicy.h": [MASTER, FOLLOWER],
+    "BootHomePlan.h": [MASTER, FOLLOWER],
+    "RenderStagger.h": [MASTER, FOLLOWER],
+}
+
 IDENTICAL_PAIRS = [
-    (MASTER / name, FOLLOWER / name)
-    for name in [
-        "UnitHealth.h",
-        "UnitProtocolHelpers.h",
-        "WearPolicy.h",
-        "DisplayWidth.h",
-        "ClusterHmac.h",
-        "ClusterForeign.h",
-        "UnitVitals.h",
-        "UnitExtDiag.h",
-        "HeartbeatPolicy.h",
-        "BootHomePlan.h",
-        "RenderStagger.h",
-    ]
+    (trees[0] / name, tree / name)
+    for name, trees in IDENTICAL_GROUPS.items()
+    for tree in trees[1:]
 ]
+
+# Headers that legitimately exist in multiple trees WITHOUT being copies.
+TREE_LOCAL_HEADERS = {
+    "BuildVersion.h",  # generated per-tree rev stamp (gitignored)
+}
 
 # Pairs where the protocol constants are the contract; header comments are
 # tree-specific by design.
@@ -95,6 +105,25 @@ def test_define_lines_match(source, copy):
     assert defines(source) == defines(copy), (
         f"#define drift between {_rel(source)} and {_rel(copy)}"
     )
+
+
+def test_unit_tree_copies_are_manifested():
+    """#379: any Unit-tree header that shares a name with a Master/Follower
+    header must be in IDENTICAL_GROUPS with the Unit tree listed — otherwise
+    a hand-edit to the Unit copy alone passes CI while drifting."""
+    for header in sorted(UNIT.glob("*.h")):
+        name = header.name
+        if name in TREE_LOCAL_HEADERS:
+            continue
+        for tree in (MASTER, FOLLOWER):
+            if not (tree / name).is_file():
+                continue
+            trees = IDENTICAL_GROUPS.get(name, [])
+            assert UNIT in trees and tree in trees, (
+                f"{_rel(header)} also exists in {_rel(tree)} but the Unit copy "
+                f"is not gated — add it to IDENTICAL_GROUPS (or "
+                f"TREE_LOCAL_HEADERS if it is not a copy)"
+            )
 
 
 @pytest.mark.parametrize(
