@@ -375,8 +375,21 @@ void applyMemberResult(const MemberWorkItem& item, int status,
     // lost its membership — fresh join next round, no backoff (the link
     // is fine).
     if (item.action != ClusterLeaderAction::Join) {
+      bool wasDegraded = m.degraded;
+      bool wasSuspect = clusterMemberSuspect(m);
       clusterMemberOnSuccess(m, nowMs);
       clusterMemberOnNotClustered(m);
+      // #385: same transition-only logging as the 200 path — the member
+      // answered, so a suspect/degraded episode ends here.
+      if (wasDegraded) {
+        SerialPrintln("cluster: member " +
+                      String(table.members[item.index].host) +
+                      " recovered (answering, re-joining)");
+      } else if (wasSuspect) {
+        SerialPrintln("cluster: member " +
+                      String(table.members[item.index].host) +
+                      " suspect cleared (answering, re-joining)");
+      }
       return;
     }
     // A join 409 with the other-leader marker (#295 sticky leadership):

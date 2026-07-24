@@ -40,11 +40,47 @@ static void test_idle_member_pings_at_cadence() {
                     clusterMemberNextAction(m, 1000 + CLUSTER_LEADER_PING_MS));
 }
 
-static void test_render_outranks_ping() {
+static void test_render_outranks_ping_while_contact_fresh() {
   ClusterMemberRuntime m = makeJoined(1000);
   m.renderDirty = true;
-  TEST_ASSERT_EQUAL(ClusterLeaderAction::Render,
+  TEST_ASSERT_EQUAL(
+      ClusterLeaderAction::Render,
+      clusterMemberNextAction(m, 1000 + CLUSTER_LEADER_PING_MS - 1));
+}
+
+// #385: once contact is stale, a liveness ping outranks content — without
+// this a member whose renders keep failing never gets pinged, its
+// lastContactMs ages to the degrade bar, and an alive member degrades.
+static void test_stale_contact_ping_outranks_render() {
+  ClusterMemberRuntime m = makeJoined(1000);
+  m.renderDirty = true;
+  TEST_ASSERT_EQUAL(ClusterLeaderAction::Ping,
                     clusterMemberNextAction(m, 1000 + CLUSTER_LEADER_PING_MS));
+}
+
+// The §4 guarantee end-to-end: renders failing, pings succeeding — the
+// member must flag renderStuck but NEVER degrade (it is alive).
+static void test_render_only_failures_never_degrade_while_pings_succeed() {
+  ClusterMemberRuntime m = makeJoined(1000);
+  clusterMemberMarkRenderDirty(m, 1000);
+  uint32_t nowMs = 1000;
+  for (int round = 0; round < 8; round++) {  // ~80 s of simulated wall time
+    // Renders fail while contact is fresh...
+    while ((uint32_t)(nowMs - m.lastContactMs) < CLUSTER_LEADER_PING_MS) {
+      TEST_ASSERT_EQUAL(ClusterLeaderAction::Render,
+                        clusterMemberNextAction(m, nowMs));
+      clusterMemberOnFailure(m, nowMs, true);
+      nowMs = m.nextAttemptMs;
+    }
+    // ...then the stale-contact liveness ping gets through and succeeds.
+    TEST_ASSERT_EQUAL(ClusterLeaderAction::Ping,
+                      clusterMemberNextAction(m, nowMs));
+    clusterMemberOnSuccess(m, nowMs);
+    TEST_ASSERT_FALSE(m.degraded);
+    TEST_ASSERT_TRUE(m.joined);
+  }
+  TEST_ASSERT_TRUE(m.renderDirty);
+  TEST_ASSERT_TRUE(clusterMemberRenderStuck(m, nowMs));  // surfaced, not degraded
 }
 
 static void test_backoff_gate_outranks_everything() {
@@ -367,7 +403,9 @@ int main(int, char**) {
   RUN_TEST(test_fresh_member_needs_join);
   RUN_TEST(test_joined_member_with_dirty_segment_renders);
   RUN_TEST(test_idle_member_pings_at_cadence);
-  RUN_TEST(test_render_outranks_ping);
+  RUN_TEST(test_render_outranks_ping_while_contact_fresh);
+  RUN_TEST(test_stale_contact_ping_outranks_render);
+  RUN_TEST(test_render_only_failures_never_degrade_while_pings_succeed);
   RUN_TEST(test_backoff_gate_outranks_everything);
   RUN_TEST(test_backoff_doubles_and_caps);
   RUN_TEST(test_stall_failures_stay_suspect_never_degrade);

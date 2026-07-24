@@ -97,16 +97,20 @@ inline bool clusterMemberIsSelf(const ClusterMemberDef& def) {
   return def.host[0] == '\0';
 }
 
-// One member's next outbound op. Priority: membership before content
-// before keep-alive; the backoff gate outranks everything.
+// One member's next outbound op. Priority: membership first, then content —
+// but content outranks keep-alive only while contact is FRESH (#385): once
+// the ping cadence elapses without a successful round-trip, a liveness ping
+// outranks the render. Without that inversion a member whose renders keep
+// failing is never pinged, so lastContactMs ages to the degrade bar and an
+// ALIVE member degrades — render-only faults must stay joined and surface as
+// renderStuck instead. The backoff gate outranks everything.
 inline ClusterLeaderAction clusterMemberNextAction(
     const ClusterMemberRuntime& m, uint32_t nowMs) {
   if ((int32_t)(nowMs - m.nextAttemptMs) < 0) return ClusterLeaderAction::None;
   if (!m.joined) return ClusterLeaderAction::Join;
-  if (m.renderDirty) return ClusterLeaderAction::Render;
-  if (nowMs - m.lastContactMs >= CLUSTER_LEADER_PING_MS) {
-    return ClusterLeaderAction::Ping;
-  }
+  bool pingDue = nowMs - m.lastContactMs >= CLUSTER_LEADER_PING_MS;
+  if (m.renderDirty && !pingDue) return ClusterLeaderAction::Render;
+  if (pingDue) return ClusterLeaderAction::Ping;
   return ClusterLeaderAction::None;
 }
 

@@ -45,9 +45,14 @@ Degrade stops being a failure-*count* decision and becomes a wall-clock one:
   by construction. `CLUSTER_DEGRADED_AFTER_FAILURES` and
   `CLUSTER_RENDER_GRACE_MS` (+ its `lastRenderMs` grace branch) are removed.
 - **Never-contacted members:** `lastContactMs` starts at the runtime epoch —
-  every member-table apply (config swap, promote, leader boot) stamps
+  every member-table apply (config swap, promote) stamps
   `lastContactMs = nowMs` on all members, so a dead host degrades ~30 s after
-  the table goes live instead of never or instantly.
+  the table goes live instead of never or instantly. A table restored from
+  NVS at boot is stamped twice (belt and braces, Codex + cpp-review
+  findings): once in `clusterLeaderInit` and again at the first
+  netif-connected tick (the edge detector starts false), so the window
+  anchors at WiFi-up — the earliest a contact could even be attempted —
+  regardless of task/WiFi startup ordering.
 - Wraparound-safe via the existing `uint32_t` subtraction idiom.
 
 ### 2. Suspect tier (quiet intermediate state)
@@ -76,9 +81,19 @@ Degrade stops being a failure-*count* decision and becomes a wall-clock one:
 
 ### 4. Render-stuck flag
 
-Under the age criterion, a member whose pings succeed but whose renders keep
-failing never degrades — correct (it is alive) but its row shows stale
-content. Surface it instead of degrading:
+A member whose pings succeed but whose renders keep failing must never
+degrade — it is alive; its row just shows stale content. Two pieces make
+that guarantee real:
+
+- **Stale-contact ping priority** (review finding, cpp-reviewer HIGH):
+  `renderDirty` outranks the keep-alive ping only while contact is fresh.
+  Once `now - lastContactMs >= CLUSTER_LEADER_PING_MS`, a liveness ping
+  outranks the render — otherwise a member with a broken render path is
+  never pinged at all, `lastContactMs` ages to the degrade bar, and an
+  alive member degrades. With the inversion, successful pings keep contact
+  age ≤ ~13 s forever; a genuinely dead member fails the pings too and
+  degrades honestly.
+- **The renderStuck flag** surfaces the stale row:
 
 - Stamp `renderDirtySinceMs` when `renderDirty` first sets (0 when clear).
 - `renderStuck` = `renderDirty && nowMs - renderDirtySinceMs >= 30 s`

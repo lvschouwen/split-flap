@@ -225,6 +225,12 @@ void clusterLeaderInit(SettingsStore& store, const String& deviceName) {
   if (clusterTableFromString(stored, parsed) && parsed.count > 0 &&
       validateMemberTable(parsed, grid).ok) {
     table = parsed;
+    // #385 benefit-of-the-doubt epoch for the boot-restored table, mirroring
+    // applyStagedConfig — the netif up-edge in clusterLeaderTick re-stamps at
+    // WiFi-up, but the invariant must not depend on task/WiFi ordering.
+    for (int i = 0; i < CLUSTER_MAX_MEMBERS; i++) {
+      clusterMemberStampContactEpoch(runtimes[i], millis());
+    }
     enabledAtomic.store(true);
     SerialPrintf("cluster: leading %d member(s), epoch %08x\n",
                  (int)table.count, (unsigned)epoch);
