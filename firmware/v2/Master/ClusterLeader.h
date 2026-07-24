@@ -33,6 +33,9 @@ struct ClusterLeaderMemberStatus {
   int width = 0;
   bool joined = false;
   bool degraded = false;
+  bool suspect = false;      // #385: failing contacts, not yet 30 s silent —
+                             // quiet tier (no re-join, no HA alarm)
+  bool renderStuck = false;  // #385: alive but segment undeliverable >= 30 s
   int failures = 0;
   String rev;            // follower firmware rev from the join reply
   String plat;           // reported platform, "" = same as leader (#297)

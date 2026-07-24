@@ -62,6 +62,8 @@ void statusFillLocked(ClusterLeaderStatus& st) {
     out.width = table.members[i].width;
     out.joined = runtimes[i].joined || clusterMemberIsSelf(table.members[i]);
     out.degraded = runtimes[i].degraded;
+    out.suspect = clusterMemberSuspect(runtimes[i]);
+    out.renderStuck = clusterMemberRenderStuck(runtimes[i], millis());
     out.failures = runtimes[i].failures;
     out.rev = runtimes[i].rev;
     out.plat = runtimes[i].plat;

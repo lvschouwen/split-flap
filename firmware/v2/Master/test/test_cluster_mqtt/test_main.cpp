@@ -87,10 +87,10 @@ static void test_attrs_json_shape() {
   TEST_ASSERT_EQUAL_STRING(
       "{\"rows\":2,\"capacity\":32,\"members\":["
       "{\"host\":\"\",\"self\":true,\"row\":0,\"col\":0,\"width\":16,"
-      "\"joined\":true,\"degraded\":false,\"updating\":false,"
+      "\"joined\":true,\"degraded\":false,\"suspect\":false,\"updating\":false,"
       "\"updateBlocked\":false,\"rev\":\"\"},"
       "{\"host\":\"follower.local\",\"self\":false,\"row\":1,\"col\":0,"
-      "\"width\":16,\"joined\":true,\"degraded\":false,\"updating\":false,"
+      "\"width\":16,\"joined\":true,\"degraded\":false,\"suspect\":false,\"updating\":false,"
       "\"updateBlocked\":false,\"rev\":\"abc1234\"}],"
       "\"rollout\":{\"phase\":\"idle\",\"host\":\"follower.local\","
       "\"sent\":10,\"total\":100},\"imageVerifyFailed\":false}",

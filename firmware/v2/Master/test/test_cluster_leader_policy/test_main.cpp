@@ -49,7 +49,7 @@ static void test_render_outranks_ping() {
 
 static void test_backoff_gate_outranks_everything() {
   ClusterMemberRuntime m;
-  clusterMemberOnFailure(m, 1000);  // nextAttempt pushed out
+  clusterMemberOnFailure(m, 1000, true);  // nextAttempt pushed out
   TEST_ASSERT_EQUAL(ClusterLeaderAction::None,
                     clusterMemberNextAction(m, 1500));
   TEST_ASSERT_EQUAL(ClusterLeaderAction::Join,
@@ -71,86 +71,110 @@ static void test_join_reply_plat_parses_and_defaults_empty() {
   TEST_ASSERT_EQUAL_STRING("", clusterExtractJsonString(s3, "plat").c_str());
 }
 
-// --- failure / recovery ---------------------------------------------------------
+// --- failure / recovery (#385 contact-age degrade) --------------------------------
 
 static void test_backoff_doubles_and_caps() {
   ClusterMemberRuntime m;
-  clusterMemberOnFailure(m, 1000);
+  clusterMemberOnFailure(m, 1000, true);
   TEST_ASSERT_EQUAL_UINT32(1000 + 1000, m.nextAttemptMs);
-  clusterMemberOnFailure(m, 3000);
+  clusterMemberOnFailure(m, 3000, true);
   TEST_ASSERT_EQUAL_UINT32(3000 + 2000, m.nextAttemptMs);
-  clusterMemberOnFailure(m, 6000);
+  clusterMemberOnFailure(m, 6000, true);
   TEST_ASSERT_EQUAL_UINT32(6000 + 4000, m.nextAttemptMs);
-  clusterMemberOnFailure(m, 11000);
+  clusterMemberOnFailure(m, 11000, true);
   TEST_ASSERT_EQUAL_UINT32(11000 + 8000, m.nextAttemptMs);
-  clusterMemberOnFailure(m, 20000);  // capped
+  clusterMemberOnFailure(m, 20000, true);  // capped
   TEST_ASSERT_EQUAL_UINT32(20000 + CLUSTER_RETRY_MAX_MS, m.nextAttemptMs);
 }
 
-static void test_third_failure_degrades_and_forces_rejoin() {
+// #385: transient follower stalls (render apply, heartbeat collision, drift
+// re-home — any class) produce scattered timeouts but never 30 s of silence.
+// The member goes suspect (quiet: membership kept, retries continue) and must
+// NOT degrade, no matter how many failures accumulate inside the window.
+static void test_stall_failures_stay_suspect_never_degrade() {
   ClusterMemberRuntime m = makeJoined(1000);
-  clusterMemberOnFailure(m, 2000);
-  clusterMemberOnFailure(m, 4000);
+  clusterMemberOnFailure(m, 2000, true);
+  clusterMemberOnFailure(m, 2600, true);
+  clusterMemberOnFailure(m, 3400, true);
+  clusterMemberOnFailure(m, 15000, true);
+  TEST_ASSERT_TRUE(m.failures > 0);
+  TEST_ASSERT_TRUE(clusterMemberSuspect(m));
   TEST_ASSERT_FALSE(m.degraded);
-  TEST_ASSERT_TRUE(m.joined);
-  clusterMemberOnFailure(m, 8000);
+  TEST_ASSERT_TRUE(m.joined);  // membership + HMAC key survive suspect
+  clusterMemberOnSuccess(m, 16000);
+  TEST_ASSERT_FALSE(clusterMemberSuspect(m));
+  TEST_ASSERT_EQUAL(0, m.failures);
+}
+
+// Degrade is wall-clock truth: a counted failure landing >= 30 s after the
+// last successful round-trip (of ANY kind) degrades and forces the re-join.
+static void test_thirty_seconds_of_silence_degrades() {
+  ClusterMemberRuntime m = makeJoined(1000);
+  clusterMemberOnFailure(m, 12000, true);
+  clusterMemberOnFailure(m, 22000, true);
+  clusterMemberOnFailure(m, 30999, true);  // age 29 999 ms — one short
+  TEST_ASSERT_FALSE(m.degraded);
+  clusterMemberOnFailure(m, 31000, true);  // age 30 000 ms
   TEST_ASSERT_TRUE(m.degraded);
-  // Recovery is a fresh join (idempotent — it re-sends the segment).
-  TEST_ASSERT_FALSE(m.joined);
+  TEST_ASSERT_FALSE(m.joined);  // recovery is a fresh join
+  TEST_ASSERT_FALSE(clusterMemberSuspect(m));  // degraded outranks suspect
   TEST_ASSERT_EQUAL(ClusterLeaderAction::Join,
-                    clusterMemberNextAction(m, 8000 + CLUSTER_RETRY_MAX_MS));
+                    clusterMemberNextAction(m, 31000 + CLUSTER_RETRY_MAX_MS));
 }
 
 static void test_success_clears_failures_and_degraded() {
   ClusterMemberRuntime m = makeJoined(1000);
-  clusterMemberOnFailure(m, 2000);
-  clusterMemberOnFailure(m, 3000);
-  clusterMemberOnFailure(m, 4000);
+  clusterMemberOnFailure(m, 32000, true);  // 31 s of silence: one strike is enough
   TEST_ASSERT_TRUE(m.degraded);
-  clusterMemberOnSuccess(m, 20000);
+  clusterMemberOnSuccess(m, 40000);  // the fresh join's round-trip
   TEST_ASSERT_FALSE(m.degraded);
   TEST_ASSERT_EQUAL(0, m.failures);
-  TEST_ASSERT_EQUAL_UINT32(20000, m.lastContactMs);
+  TEST_ASSERT_EQUAL_UINT32(40000, m.lastContactMs);
 }
 
-// #326: a timeout in the window after a follower ACKed a render is the
-// single-core follower heads-down flapping that render, not a dead link —
-// it must not count toward degrade.
-static void test_render_busy_grace_suppresses_degrade() {
+// #385 leader-offline gate: failures while the leader's own netif is down are
+// the leader's problem, not member evidence — reschedule only, count nothing.
+static void test_offline_failures_do_not_count() {
   ClusterMemberRuntime m = makeJoined(1000);
-  clusterMemberNoteRender(m, 2000);  // follower just ACKed a render
-  // Three timeouts inside the grace window: backoff applies, but no count.
-  clusterMemberOnFailure(m, 2100);
-  clusterMemberOnFailure(m, 2600);
-  clusterMemberOnFailure(m, 3100);
+  clusterMemberOnFailure(m, 40000, false);
+  clusterMemberOnFailure(m, 50000, false);
   TEST_ASSERT_EQUAL(0, m.failures);
   TEST_ASSERT_FALSE(m.degraded);
-  TEST_ASSERT_TRUE(m.joined);
-  // Still rescheduled (a short retry, not a hammer).
-  TEST_ASSERT_TRUE((int32_t)(m.nextAttemptMs - 3100) > 0);
+  TEST_ASSERT_FALSE(clusterMemberSuspect(m));
+  TEST_ASSERT_EQUAL_UINT32(50000 + CLUSTER_RETRY_BASE_MS, m.nextAttemptMs);
 }
 
-// A genuinely dead follower never ACKs a render, so lastRenderMs goes stale
-// and normal failure counting resumes — grace can't mask a real outage.
-static void test_render_busy_grace_expires_then_degrades() {
-  ClusterMemberRuntime m = makeJoined(1000);
-  clusterMemberNoteRender(m, 2000);
-  uint32_t past = 2000 + CLUSTER_RENDER_GRACE_MS + 1;  // grace expired
-  clusterMemberOnFailure(m, past);
-  clusterMemberOnFailure(m, past + 5000);
-  TEST_ASSERT_FALSE(m.degraded);
-  clusterMemberOnFailure(m, past + 20000);
-  TEST_ASSERT_TRUE(m.degraded);
+// Epoch stamp = benefit of the doubt: member-table apply and netif recovery
+// stamp lastContactMs so a never-contacted member (or the whole wall after a
+// leader outage) gets the full 30 s window instead of degrading on its first
+// post-epoch failure.
+static void test_contact_epoch_stamp_resets_silence_window() {
+  ClusterMemberRuntime m;  // fresh: lastContactMs == 0
+  clusterMemberStampContactEpoch(m, 100000);
+  clusterMemberOnFailure(m, 101000, true);
+  TEST_ASSERT_FALSE(m.degraded);  // without the stamp the age would be ~100 s
+  clusterMemberOnFailure(m, 100000 + CLUSTER_DEGRADED_SILENCE_MS, true);
+  TEST_ASSERT_TRUE(m.degraded);  // a genuinely dead host degrades ~30 s after epoch
 }
 
-// A member that never rendered (lastRenderMs == 0) degrades as before — the
-// grace sentinel must not fire on a fresh member.
-static void test_no_render_means_no_grace() {
+// #385 render-stuck: pings fine but renders failing never degrades under the
+// age criterion (the member IS alive) — it surfaces as a distinct flag.
+static void test_render_stuck_flags_persistent_dirty() {
   ClusterMemberRuntime m = makeJoined(1000);
-  clusterMemberOnFailure(m, 2000);
-  clusterMemberOnFailure(m, 4000);
-  clusterMemberOnFailure(m, 8000);
-  TEST_ASSERT_TRUE(m.degraded);
+  clusterMemberMarkRenderDirty(m, 5000);
+  TEST_ASSERT_TRUE(m.renderDirty);
+  TEST_ASSERT_FALSE(
+      clusterMemberRenderStuck(m, 5000 + CLUSTER_DEGRADED_SILENCE_MS - 1));
+  TEST_ASSERT_TRUE(
+      clusterMemberRenderStuck(m, 5000 + CLUSTER_DEGRADED_SILENCE_MS));
+  // Re-marking while already dirty keeps the ORIGINAL stamp — stuck is
+  // measured from the first unmet want, not the latest content change.
+  clusterMemberMarkRenderDirty(m, 20000);
+  TEST_ASSERT_TRUE(
+      clusterMemberRenderStuck(m, 5000 + CLUSTER_DEGRADED_SILENCE_MS));
+  clusterMemberRenderAcked(m);  // ACK clears dirty + stamp
+  TEST_ASSERT_FALSE(m.renderDirty);
+  TEST_ASSERT_FALSE(clusterMemberRenderStuck(m, 60000));
 }
 
 static void test_not_clustered_reply_forces_rejoin_without_backoff() {
@@ -346,11 +370,12 @@ int main(int, char**) {
   RUN_TEST(test_render_outranks_ping);
   RUN_TEST(test_backoff_gate_outranks_everything);
   RUN_TEST(test_backoff_doubles_and_caps);
-  RUN_TEST(test_third_failure_degrades_and_forces_rejoin);
+  RUN_TEST(test_stall_failures_stay_suspect_never_degrade);
+  RUN_TEST(test_thirty_seconds_of_silence_degrades);
   RUN_TEST(test_success_clears_failures_and_degraded);
-  RUN_TEST(test_render_busy_grace_suppresses_degrade);
-  RUN_TEST(test_render_busy_grace_expires_then_degrades);
-  RUN_TEST(test_no_render_means_no_grace);
+  RUN_TEST(test_offline_failures_do_not_count);
+  RUN_TEST(test_contact_epoch_stamp_resets_silence_window);
+  RUN_TEST(test_render_stuck_flags_persistent_dirty);
   RUN_TEST(test_not_clustered_reply_forces_rejoin_without_backoff);
   RUN_TEST(test_table_round_trips_through_string);
   RUN_TEST(test_empty_string_parses_to_disabled_table);

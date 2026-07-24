@@ -261,6 +261,21 @@ void clusterLeaderTick() {
   applyStagedConfig();
   if (!clusterLeaderEnabled()) return;
 
+  // #385 netif-recovery epoch: failures while our own STA was down never
+  // counted (leader-offline gate in applyMemberResult) — on the up-edge every
+  // member gets a fresh benefit-of-the-doubt window so a >30 s leader outage
+  // can't degrade the whole wall on its first post-reconnect timeout.
+  static bool lastNetifUp = true;
+  bool netifUp = WiFi.status() == WL_CONNECTED;
+  if (netifUp && !lastNetifUp) {
+    LeaderLock lock;
+    uint32_t nowMs = millis();
+    for (int i = 0; i < table.count; i++) {
+      clusterMemberStampContactEpoch(runtimes[i], nowMs);
+    }
+  }
+  lastNetifUp = netifUp;
+
   // #321: deliver a pending reboot-hold ONE member per tick — watchdog-safe,
   // same cadence as the normal fan-out (the 100 ms inter-tick vTaskDelay feeds
   // core-0 idle between every blocking send). While it drains, this tick does

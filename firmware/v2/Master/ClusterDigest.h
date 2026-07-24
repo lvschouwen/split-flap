@@ -139,6 +139,16 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
       // #343 additive: only a beaconing member carries the key.
       out += ",\"rescue\":true";
     }
+    if (m.suspect) {
+      // #385 additive: failing contacts but not yet 30 s silent — the quiet
+      // tier (membership kept, no HA alarm; amber pill in the UI).
+      out += ",\"suspect\":true";
+    }
+    if (m.renderStuck) {
+      // #385 additive: alive (contacts succeed) but its segment has been
+      // undeliverable for a full silence window — stale content on the wall.
+      out += ",\"renderStuck\":true";
+    }
     out += ",\"hmac\":";  // #313 follow-on: leader is signing to this member
     out += m.hmac ? "true" : "false";
     out += '}';
