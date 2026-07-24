@@ -25,21 +25,22 @@ static const uint32_t CLUSTER_COMMIT_LEAD_MS = 400UL;
 // with ~2.5 pings of margin.
 static const uint32_t CLUSTER_LEADER_PING_MS = 10000UL;
 
-// Failure handling: exponential backoff 1-2-4-8 s (capped), degraded after
-// 3 straight failures. A degraded member keeps being retried at the capped
-// cadence; recovery goes through a fresh join (idempotent — the handshake
-// ends with a re-send of the current segment).
+// Failure handling (#385): exponential backoff 1-2-4-8 s (capped) on every
+// failure, but degrade is decided by CONTACT AGE, not a failure count — a
+// member is degraded only when a counted failure lands >= 30 s after its last
+// successful round-trip of any kind. Transient single-core follower I2C
+// stalls (~1.1 s per busy-slave transaction — render apply, heartbeat
+// collision, autonomous drift re-home) scatter timeouts but can never produce
+// 30 s of silence, so they are forgiven by construction; no per-cause grace.
+// failures > 0 short of that = SUSPECT: quiet (membership + HMAC key kept, no
+// re-join, no HA alarm), surfaced in status only. 30 s aligns with the
+// follower's own 25 s contact-fresh window — by the time the leader degrades
+// a board, the board has already fallen back to Grace on its own. Recovery
+// from degraded goes through a fresh join (idempotent — the handshake ends
+// with a re-send of the current segment).
 static const uint32_t CLUSTER_RETRY_BASE_MS = 1000UL;
 static const uint32_t CLUSTER_RETRY_MAX_MS = 8000UL;
-static const uint8_t CLUSTER_DEGRADED_AFTER_FAILURES = 3;
-
-// Render-busy grace (#326): a contact timeout in the window after a follower
-// ACKed a render is almost always the single-core follower heads-down applying
-// it — its blocking I2C flap starves the async contact path. Such a timeout
-// backs off and retries but does NOT count toward degrade. Sized to cover a
-// worst-case normal full-row flap + readback; a genuinely stuck unit (bounded
-// by the follower's 30 s show-timeout) outlasts it and degrades honestly.
-static const uint32_t CLUSTER_RENDER_GRACE_MS = 6000UL;
+static const uint32_t CLUSTER_DEGRADED_SILENCE_MS = 30000UL;
 
 // This master's own platform tag (#297). Members report theirs via the
 // additive `plat` join/ping-reply key; ABSENT means same-platform (the
@@ -64,9 +65,12 @@ struct ClusterMemberRuntime {
   bool degraded = false;
   uint8_t failures = 0;
   uint32_t nextAttemptMs = 0;  // backoff gate for the next HTTP attempt
-  uint32_t lastContactMs = 0;  // last successful round-trip
-  uint32_t lastRenderMs = 0;   // last ACKed render (#326 busy-grace; 0 = never)
+  uint32_t lastContactMs = 0;  // last successful round-trip; also stamped as a
+                               // benefit-of-the-doubt epoch at table apply and
+                               // netif recovery (clusterMemberStampContactEpoch)
   bool renderDirty = false;    // segment changed since the last acked render
+  uint32_t renderDirtySinceMs = 0;  // when renderDirty first set (0 = clear) —
+                                    // feeds the #385 renderStuck flag
   String rev;                  // follower firmware rev (join + ping replies, #276)
   String plat;                 // reported platform, "" = same as leader (#297)
   bool rescue = false;         // rescue-beacon marker (#343) — the member is
@@ -93,16 +97,20 @@ inline bool clusterMemberIsSelf(const ClusterMemberDef& def) {
   return def.host[0] == '\0';
 }
 
-// One member's next outbound op. Priority: membership before content
-// before keep-alive; the backoff gate outranks everything.
+// One member's next outbound op. Priority: membership first, then content —
+// but content outranks keep-alive only while contact is FRESH (#385): once
+// the ping cadence elapses without a successful round-trip, a liveness ping
+// outranks the render. Without that inversion a member whose renders keep
+// failing is never pinged, so lastContactMs ages to the degrade bar and an
+// ALIVE member degrades — render-only faults must stay joined and surface as
+// renderStuck instead. The backoff gate outranks everything.
 inline ClusterLeaderAction clusterMemberNextAction(
     const ClusterMemberRuntime& m, uint32_t nowMs) {
   if ((int32_t)(nowMs - m.nextAttemptMs) < 0) return ClusterLeaderAction::None;
   if (!m.joined) return ClusterLeaderAction::Join;
-  if (m.renderDirty) return ClusterLeaderAction::Render;
-  if (nowMs - m.lastContactMs >= CLUSTER_LEADER_PING_MS) {
-    return ClusterLeaderAction::Ping;
-  }
+  bool pingDue = nowMs - m.lastContactMs >= CLUSTER_LEADER_PING_MS;
+  if (m.renderDirty && !pingDue) return ClusterLeaderAction::Render;
+  if (pingDue) return ClusterLeaderAction::Ping;
   return ClusterLeaderAction::None;
 }
 
@@ -140,25 +148,55 @@ inline void clusterMemberOnSuccess(ClusterMemberRuntime& m, uint32_t nowMs) {
   m.nextAttemptMs = nowMs;
 }
 
-// #326: stamp the moment a render was ACKed — the follower is about to go
-// heads-down flapping it. Refreshed ONLY on a successful render (never on a
-// failed one), so a dead follower's stamp goes stale and the grace below
-// cannot mask a real outage.
-inline void clusterMemberNoteRender(ClusterMemberRuntime& m, uint32_t nowMs) {
-  m.lastRenderMs = nowMs;
+// #385 suspect tier: failing but not yet 30 s silent. Derived, never stored —
+// quiet by design (no re-join, no HA alarm; status/UI surfacing only).
+inline bool clusterMemberSuspect(const ClusterMemberRuntime& m) {
+  return m.failures > 0 && !m.degraded;
 }
 
-inline void clusterMemberOnFailure(ClusterMemberRuntime& m, uint32_t nowMs) {
-  // #326 render-busy grace: a timeout shortly after an ACKed render is the
-  // follower applying it, not a dead link — retry soon, but don't degrade.
-  // Gated on lastRenderMs != 0 so a never-rendered member counts normally.
-  if (m.lastRenderMs != 0 &&
-      (uint32_t)(nowMs - m.lastRenderMs) < CLUSTER_RENDER_GRACE_MS) {
+// Benefit-of-the-doubt epoch: called on every member-table apply and on
+// leader netif recovery, so a never-contacted member (or the whole wall after
+// a leader-side outage) gets the full silence window instead of degrading on
+// its first post-epoch failure.
+inline void clusterMemberStampContactEpoch(ClusterMemberRuntime& m,
+                                           uint32_t nowMs) {
+  m.lastContactMs = nowMs;
+}
+
+// Sets renderDirty and stamps when the want FIRST became unmet; a re-mark
+// while already dirty keeps the original stamp (renderStuck measures from the
+// first unmet want, not the latest content change).
+inline void clusterMemberMarkRenderDirty(ClusterMemberRuntime& m,
+                                         uint32_t nowMs) {
+  m.renderDirty = true;
+  if (m.renderDirtySinceMs == 0) m.renderDirtySinceMs = nowMs;
+}
+
+inline void clusterMemberRenderAcked(ClusterMemberRuntime& m) {
+  m.renderDirty = false;
+  m.renderDirtySinceMs = 0;
+}
+
+// #385 render-stuck: alive (contacts succeed, so the age criterion never
+// degrades) but the segment has been undeliverable for a full silence window
+// — stale content on the wall, surfaced as a flag instead of a degrade.
+inline bool clusterMemberRenderStuck(const ClusterMemberRuntime& m,
+                                     uint32_t nowMs) {
+  return m.renderDirty && m.renderDirtySinceMs != 0 &&
+         (uint32_t)(nowMs - m.renderDirtySinceMs) >= CLUSTER_DEGRADED_SILENCE_MS;
+}
+
+// leaderOnline = this master's own netif state: failures while WE are offline
+// are the leader's problem, not member evidence — reschedule only. The glue
+// re-stamps every member's contact epoch when the netif comes back.
+inline void clusterMemberOnFailure(ClusterMemberRuntime& m, uint32_t nowMs,
+                                   bool leaderOnline) {
+  if (!leaderOnline) {
     m.nextAttemptMs = nowMs + CLUSTER_RETRY_BASE_MS;
     return;
   }
   if (m.failures < 255) m.failures++;
-  if (m.failures >= CLUSTER_DEGRADED_AFTER_FAILURES) {
+  if ((uint32_t)(nowMs - m.lastContactMs) >= CLUSTER_DEGRADED_SILENCE_MS) {
     m.degraded = true;
     // Recovery is a fresh join: idempotent, and the handshake ends with a
     // re-send of the current segment.

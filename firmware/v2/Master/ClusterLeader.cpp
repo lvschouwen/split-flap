@@ -225,6 +225,12 @@ void clusterLeaderInit(SettingsStore& store, const String& deviceName) {
   if (clusterTableFromString(stored, parsed) && parsed.count > 0 &&
       validateMemberTable(parsed, grid).ok) {
     table = parsed;
+    // #385 benefit-of-the-doubt epoch for the boot-restored table, mirroring
+    // applyStagedConfig — the netif up-edge in clusterLeaderTick re-stamps at
+    // WiFi-up, but the invariant must not depend on task/WiFi ordering.
+    for (int i = 0; i < CLUSTER_MAX_MEMBERS; i++) {
+      clusterMemberStampContactEpoch(runtimes[i], millis());
+    }
     enabledAtomic.store(true);
     SerialPrintf("cluster: leading %d member(s), epoch %08x\n",
                  (int)table.count, (unsigned)epoch);
@@ -260,6 +266,25 @@ void clusterLeaderTick() {
   if (leaderMutex == nullptr) return;
   applyStagedConfig();
   if (!clusterLeaderEnabled()) return;
+
+  // #385 netif-recovery epoch: failures while our own STA was down never
+  // counted (leader-offline gate in applyMemberResult) — on the up-edge every
+  // member gets a fresh benefit-of-the-doubt window so a >30 s leader outage
+  // can't degrade the whole wall on its first post-reconnect timeout.
+  // Starts false so the FIRST connected tick stamps too: a member table
+  // restored from NVS boots with lastContactMs == 0, and only this edge
+  // anchors its 30 s window at WiFi-up instead of boot (a join that can't be
+  // attempted until the STA is up must not inherit the connect delay).
+  static bool lastNetifUp = false;
+  bool netifUp = WiFi.status() == WL_CONNECTED;
+  if (netifUp && !lastNetifUp) {
+    LeaderLock lock;
+    uint32_t nowMs = millis();
+    for (int i = 0; i < table.count; i++) {
+      clusterMemberStampContactEpoch(runtimes[i], nowMs);
+    }
+  }
+  lastNetifUp = netifUp;
 
   // #321: deliver a pending reboot-hold ONE member per tick — watchdog-safe,
   // same cadence as the normal fan-out (the 100 ms inter-tick vTaskDelay feeds

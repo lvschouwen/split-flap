@@ -61,6 +61,9 @@ inline String buildClusterAttrsJson(const ClusterLeaderStatus& st) {
     out += m.joined ? "true" : "false";
     out += ",\"degraded\":";
     out += m.degraded ? "true" : "false";
+    // #385: attributes-only — suspect never trips the sensor's ON condition.
+    out += ",\"suspect\":";
+    out += m.suspect ? "true" : "false";
     out += ",\"updating\":";
     out += m.updating ? "true" : "false";
     out += ",\"updateBlocked\":";

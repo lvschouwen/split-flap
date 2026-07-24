@@ -2564,6 +2564,10 @@ function clusterStateLabel(m) {
 	if (m.updateBlocked) return { text: "update blocked", kind: "bad" };
 	if (m.self) return { text: "ok", kind: "ok" };
 	if (m.degraded) return { text: "degraded", kind: "bad" };
+	//#385: quiet tier — failing contacts but not yet 30 s silent; and the
+	//alive-but-undeliverable-segment flag. Amber, never red.
+	if (m.suspect) return { text: "suspect", kind: "warn" };
+	if (m.renderStuck) return { text: "render stuck", kind: "warn" };
 	if (m.joined) return { text: "ok", kind: "ok" };
 	return { text: "joining", kind: "off" };
 }

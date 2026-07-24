@@ -41,6 +41,10 @@
 
 // Applies a staged member-table swap: leave fan-out to dropped remote
 // hosts (single best-effort attempt), runtime/segment reset, NVS persist.
+// #385 render-stuck log latch: one onset + one clear line per episode
+// (transition-only logging); reset with the runtimes on every config apply.
+static bool renderStuckLogged[CLUSTER_MAX_MEMBERS] = {false};
+
 void applyStagedConfig() {
   String spec;
   bool suppressLeave;
@@ -99,7 +103,11 @@ void applyStagedConfig() {
     table = next;
     for (int i = 0; i < CLUSTER_MAX_MEMBERS; i++) {
       runtimes[i] = ClusterMemberRuntime{};
+      // #385 benefit-of-the-doubt epoch: a fresh table entry gets the full
+      // 30 s silence window before a failure can degrade it.
+      clusterMemberStampContactEpoch(runtimes[i], millis());
       segments[i] = "";
+      renderStuckLogged[i] = false;
     }
     clusterRolloutReset(rollout);
     followerPush = FollowerPushState{};
@@ -166,15 +174,22 @@ int collectMemberWork(MemberWorkItem* items) {
     if (clusterMemberIsSelf(table.members[i])) continue;
     // While a rollout upload streams to a member, its flash writes hog the
     // follower's async_tcp task — regular contact would time out and read
-    // as failures. Skip it; the upload round-trip IS the contact (#276).
+    // as failures. Skip it; the upload round-trip IS the contact (#276), so
+    // it must also COUNT as contact (#385): hold the epoch fresh while we
+    // deliberately aren't probing, or a >30 s upload leaves a stale contact
+    // age that degrades the member on its first post-upload timeout —
+    // whichever way the upload window ends, supervision restarts with the
+    // full silence window.
     if (rollout.phase == ClusterRolloutPhase::Uploading &&
         rollout.memberIndex == i) {
+      clusterMemberStampContactEpoch(runtimes[i], nowMs);
       continue;
     }
     // Same hazard for the on-demand follower-image push (#304): don't ping a
     // row whose async_tcp task is busy taking our /firmware/master stream.
     if (followerPush.phase == FollowerPushPhase::Uploading &&
         followerPush.memberIndex == i) {
+      clusterMemberStampContactEpoch(runtimes[i], nowMs);
       continue;
     }
     needsAction[i] =
@@ -280,6 +295,7 @@ void applyMemberResult(const MemberWorkItem& item, int status,
 
   if (status == 200) {
     bool wasDegraded = m.degraded;
+    bool wasSuspect = clusterMemberSuspect(m);
     clusterMemberOnSuccess(m, nowMs);
     switch (item.action) {
       case ClusterLeaderAction::Join: {
@@ -304,18 +320,24 @@ void applyMemberResult(const MemberWorkItem& item, int status,
         m.rescue = clusterExtractJsonInt(body, "rescue", 0) != 0;
         m.reportedWidth = clusterExtractJsonInt(body, "width", 0);
         // The handshake ends with a re-send of the current segment.
-        m.renderDirty = segments[item.index].length() > 0;
+        if (segments[item.index].length() > 0) {
+          clusterMemberMarkRenderDirty(m, nowMs);
+        } else {
+          clusterMemberRenderAcked(m);
+        }
         SerialPrintln("cluster: member " +
                       String(table.members[item.index].host) + " joined (rev " +
                       m.rev + (m.hmacKeyValid ? ", authenticated)" : ")"));
         break;
       }
       case ClusterLeaderAction::Render:
-        m.renderDirty = false;
-        // #326: the follower just ACKed this render and is about to go
-        // heads-down flapping it — arm the busy-grace so the next contact
-        // timeout during that flap isn't counted toward degrade.
-        clusterMemberNoteRender(m, nowMs);
+        clusterMemberRenderAcked(m);
+        if (renderStuckLogged[item.index]) {
+          renderStuckLogged[item.index] = false;
+          SerialPrintln("cluster: member " +
+                        String(table.members[item.index].host) +
+                        " render unstuck (segment delivered)");
+        }
         break;
       default:
         break;
@@ -347,6 +369,10 @@ void applyMemberResult(const MemberWorkItem& item, int status,
     if (wasDegraded) {
       SerialPrintln("cluster: member " +
                     String(table.members[item.index].host) + " recovered");
+    } else if (wasSuspect) {
+      SerialPrintln("cluster: member " +
+                    String(table.members[item.index].host) +
+                    " suspect cleared");
     }
     return;
   }
@@ -356,8 +382,21 @@ void applyMemberResult(const MemberWorkItem& item, int status,
     // lost its membership — fresh join next round, no backoff (the link
     // is fine).
     if (item.action != ClusterLeaderAction::Join) {
+      bool wasDegraded = m.degraded;
+      bool wasSuspect = clusterMemberSuspect(m);
       clusterMemberOnSuccess(m, nowMs);
       clusterMemberOnNotClustered(m);
+      // #385: same transition-only logging as the 200 path — the member
+      // answered, so a suspect/degraded episode ends here.
+      if (wasDegraded) {
+        SerialPrintln("cluster: member " +
+                      String(table.members[item.index].host) +
+                      " recovered (answering, re-joining)");
+      } else if (wasSuspect) {
+        SerialPrintln("cluster: member " +
+                      String(table.members[item.index].host) +
+                      " suspect cleared (answering, re-joining)");
+      }
       return;
     }
     // A join 409 with the other-leader marker (#295 sticky leadership):
@@ -378,9 +417,21 @@ void applyMemberResult(const MemberWorkItem& item, int status,
   }
 
   bool wasDegraded = m.degraded;
-  clusterMemberOnFailure(m, nowMs);
+  bool wasSuspect = clusterMemberSuspect(m);
+  // #385 leader-offline gate: while our own STA is down, failures are the
+  // leader's problem, not member evidence (clusterLeaderTick re-stamps every
+  // member's contact epoch on the up-edge).
+  clusterMemberOnFailure(m, nowMs, WiFi.status() == WL_CONNECTED);
   if (m.degraded && !wasDegraded) {
     SerialPrintln("cluster: member " + String(table.members[item.index].host) +
                   " DEGRADED (no re-layout; its board falls back alone)");
+  } else if (clusterMemberSuspect(m) && !wasSuspect) {
+    SerialPrintln("cluster: member " + String(table.members[item.index].host) +
+                  " suspect (contact failed — retrying, membership kept)");
+  }
+  if (clusterMemberRenderStuck(m, nowMs) && !renderStuckLogged[item.index]) {
+    renderStuckLogged[item.index] = true;
+    SerialPrintln("cluster: member " + String(table.members[item.index].host) +
+                  " render STUCK (alive, but segment undelivered for 30 s)");
   }
 }

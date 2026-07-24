@@ -81,7 +81,7 @@ static void submitGrid(const String& contentKey, bool isClock,
       selfDueMs =
           millis() + clusterRenderDelayMs(gridCommitAtMs, nowE, synced);
     } else {
-      runtimes[i].renderDirty = true;
+      clusterMemberMarkRenderDirty(runtimes[i], millis());
     }
   }
   if (anyChanged) {
@@ -133,7 +133,7 @@ void clusterLeaderBlankWall() {
     if (clusterMemberIsSelf(table.members[i])) continue;
     if (segments[i].length() == 0) continue;  // already blank
     segments[i] = "";
-    runtimes[i].renderDirty = true;
+    clusterMemberMarkRenderDirty(runtimes[i], millis());
     anyChanged = true;
   }
   if (anyChanged) {
