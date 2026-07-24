@@ -174,15 +174,22 @@ int collectMemberWork(MemberWorkItem* items) {
     if (clusterMemberIsSelf(table.members[i])) continue;
     // While a rollout upload streams to a member, its flash writes hog the
     // follower's async_tcp task — regular contact would time out and read
-    // as failures. Skip it; the upload round-trip IS the contact (#276).
+    // as failures. Skip it; the upload round-trip IS the contact (#276), so
+    // it must also COUNT as contact (#385): hold the epoch fresh while we
+    // deliberately aren't probing, or a >30 s upload leaves a stale contact
+    // age that degrades the member on its first post-upload timeout —
+    // whichever way the upload window ends, supervision restarts with the
+    // full silence window.
     if (rollout.phase == ClusterRolloutPhase::Uploading &&
         rollout.memberIndex == i) {
+      clusterMemberStampContactEpoch(runtimes[i], nowMs);
       continue;
     }
     // Same hazard for the on-demand follower-image push (#304): don't ping a
     // row whose async_tcp task is busy taking our /firmware/master stream.
     if (followerPush.phase == FollowerPushPhase::Uploading &&
         followerPush.memberIndex == i) {
+      clusterMemberStampContactEpoch(runtimes[i], nowMs);
       continue;
     }
     needsAction[i] =

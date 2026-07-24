@@ -53,6 +53,11 @@ Degrade stops being a failure-*count* decision and becomes a wall-clock one:
   netif-connected tick (the edge detector starts false), so the window
   anchors at WiFi-up — the earliest a contact could even be attempted —
   regardless of task/WiFi startup ordering.
+- **Deliberate no-contact windows** (Codex finding): while a #276 rollout or
+  #304 follower-push upload streams to a member, the fan-out skips it by
+  design — the skip branch keeps re-stamping its contact epoch, so however
+  the upload window ends (converged, stream abort, 409 holdoff), supervision
+  resumes with the full 30 s window instead of a pre-upload contact age.
 - Wraparound-safe via the existing `uint32_t` subtraction idiom.
 
 ### 2. Suspect tier (quiet intermediate state)
