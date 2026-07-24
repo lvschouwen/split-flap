@@ -265,7 +265,11 @@ void clusterLeaderTick() {
   // counted (leader-offline gate in applyMemberResult) — on the up-edge every
   // member gets a fresh benefit-of-the-doubt window so a >30 s leader outage
   // can't degrade the whole wall on its first post-reconnect timeout.
-  static bool lastNetifUp = true;
+  // Starts false so the FIRST connected tick stamps too: a member table
+  // restored from NVS boots with lastContactMs == 0, and only this edge
+  // anchors its 30 s window at WiFi-up instead of boot (a join that can't be
+  // attempted until the STA is up must not inherit the connect delay).
+  static bool lastNetifUp = false;
   bool netifUp = WiFi.status() == WL_CONNECTED;
   if (netifUp && !lastNetifUp) {
     LeaderLock lock;
