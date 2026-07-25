@@ -279,15 +279,22 @@ int collectMemberWork(MemberWorkItem* items) {
     const size_t kPingOverheadBytes = 128;
     const bool sendDigest =
         pingBodyDigestFits(encoded.length(), kPingOverheadBytes);
+    // Transition-only, BOTH edges (#322 philosophy): a wall that grows past
+    // the budget and one that shrinks back under it. clusterTask is the sole
+    // caller (ClusterLeader.cpp), so the function-local static is safe.
+    static bool digestOmitted = false;
+    if (!sendDigest && !digestOmitted) {
+      digestOmitted = true;
+      SerialPrintln("cluster: ping digest too large (" +
+                    String(encoded.length()) + "B encoded + overhead > " +
+                    String((unsigned long)kMaxPingBodyBytes) +
+                    "B budget) — pinging without it; wall mirror will lag");
+    } else if (sendDigest && digestOmitted) {
+      digestOmitted = false;
+      SerialPrintln("cluster: ping digest fits again (" +
+                    String(encoded.length()) + "B encoded) — wall mirror live");
+    }
     if (!sendDigest) {
-      static bool digestDroppedLogged = false;
-      if (!digestDroppedLogged) {
-        digestDroppedLogged = true;
-        SerialPrintln("cluster: ping digest too large (" +
-                      String(encoded.length()) + "B encoded > " +
-                      String((unsigned long)kMaxPingBodyBytes) +
-                      "B budget) — pinging without it; wall mirror will lag");
-      }
       digest = "";
       encoded = "";
     }

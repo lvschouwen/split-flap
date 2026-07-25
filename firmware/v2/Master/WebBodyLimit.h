@@ -37,8 +37,22 @@ static const size_t kMaxNonUploadBodyBytes = 2048;
 // 1236 B raw -> 2038 B encoded -> 2137 B with you/ts/mac, so the flat 2 KB
 // ceiling 413'd EVERY ping before the handler ran: contact aged to the degrade
 // bar and the whole cluster cycled joined -> DEGRADED -> re-join every ~46 s.
-// The ping therefore gets its own, still-bounded ceiling. Keep it small enough
-// that the ESP-01 follower (~18 KB free heap) can buffer one pre-auth.
+// The ping therefore gets its own, still-bounded ceiling.
+//
+// 4096 is a deliberate compromise, NOT headroom for a full wall. The guard
+// buffers this body pre-auth — before the ping handler's source-IP/leader
+// binding runs — so ANY LAN host can trigger the allocation, and the weakest
+// board must survive it. Bench-measured on the ESP-01 (.121): 18680 B free at
+// rest; 50 consecutive 3913 B POSTs to /cluster/ping dipped it to 17576 B and
+// it settled back to 18600 B, still clustered and rendering — no fragmentation
+// creep. 8192 would be ~43% of that free heap, so it is NOT taken.
+//
+// Consequence, stated plainly: the digest scales at roughly 200 B/member
+// (ClusterDigest.h reserve()), so a full CLUSTER_MAX_MEMBERS=8 wall lands
+// around 4.6-5.4 KB encoded and its digest will be dropped on EVERY round, not
+// occasionally — steady state for a big wall, not an edge case. Liveness is
+// unaffected (that is the point of the budget); only the single-pane wall
+// mirror goes stale. Raising this ceiling is an ESP-01 heap decision.
 static const size_t kMaxPingBodyBytes = 4096;
 
 // The ceiling that applies to `url`. Route-aware so relaxing the ping does not
