@@ -43,6 +43,12 @@ IDENTICAL_GROUPS = {
     "HeartbeatPolicy.h": [MASTER, FOLLOWER],
     "BootHomePlan.h": [MASTER, FOLLOWER],
     "RenderStagger.h": [MASTER, FOLLOWER],
+    # #386: both declare themselves byte-identical across all three web trees
+    # but were never gated. WebBodyLimit.h now carries the per-route ceiling
+    # AND the leader's ping-digest budget — a drift between the guard's ceiling
+    # and the leader's budget silently returns the #386 413 loop.
+    "WebBodyLimit.h": [MASTER, FOLLOWER, RESCUE],
+    "WebBodyLimitGuard.h": [MASTER, FOLLOWER, RESCUE],
 }
 
 IDENTICAL_PAIRS = [

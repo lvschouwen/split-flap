@@ -33,6 +33,7 @@
 #include "ReflashPlan.h"
 #include "Tasks.h"
 #include "TaskWatchdog.h"
+#include "WebBodyLimit.h"  // #386: ping digest budget — same ceiling the guard enforces
 #include "WebEndpoints.h"  // #337: webDisplayContentSnapshot() — leader's mode
 
 #include "ClusterLeaderInternal.h"
@@ -267,10 +268,35 @@ int collectMemberWork(MemberWorkItem* items) {
   if (anyPing) {
     String digest = buildFreshDigestLocked(leaderMode);
     String encoded = urlEncode(digest);
+    // #386: the digest is an OPTIONAL piggyback (#294 — absent ⇒ ""), the
+    // liveness ping is NOT. URL-encoding inflates a JSON digest ~65%, so a
+    // wall that grows past the ceiling used to 413 every ping and degrade the
+    // whole cluster. Drop the digest instead: the wall mirror goes stale, the
+    // cluster stays alive. Clearing `digest` too keeps the signed canonical
+    // equal to what is actually sent (both follower copies reconstruct "" from
+    // an absent param).
+    // Overhead = "you=" + index + "&ts=" + 13 + "&mac=" + 64 + separators.
+    const size_t kPingOverheadBytes = 128;
+    const bool sendDigest =
+        pingBodyDigestFits(encoded.length(), kPingOverheadBytes);
+    if (!sendDigest) {
+      static bool digestDroppedLogged = false;
+      if (!digestDroppedLogged) {
+        digestDroppedLogged = true;
+        SerialPrintln("cluster: ping digest too large (" +
+                      String(encoded.length()) + "B encoded > " +
+                      String((unsigned long)kMaxPingBodyBytes) +
+                      "B budget) — pinging without it; wall mirror will lag");
+      }
+      digest = "";
+      encoded = "";
+    }
     for (int i = 0; i < count; i++) {
       if (items[i].action != ClusterLeaderAction::Ping) continue;
-      items[i].body =
-          "digest=" + encoded + "&you=" + String(items[i].index);
+      items[i].body = sendDigest
+                          ? ("digest=" + encoded + "&you=" +
+                             String(items[i].index))
+                          : ("you=" + String(items[i].index));
       // Sign the ping per member (#313 follow-on): its own key, so the
       // digest/you piggyback rides an authenticated request.
       int mi = items[i].index;

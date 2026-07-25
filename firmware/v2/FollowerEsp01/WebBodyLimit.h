@@ -25,11 +25,39 @@
 #include <stddef.h>
 #include <string.h>
 
-// Ceiling for any body that is NOT a firmware/image upload. The settings form
-// and every cluster-wire body are well under 1 KB (the largest, an 8-member
-// /cluster/config table, is ~400 B); 2 KB is generous headroom that still
-// bounds a single request to a trivially safe allocation.
+// Ceiling for any body that is NOT a firmware/image upload and not the ping.
+// The settings form and every other cluster-wire body are well under 1 KB (the
+// largest, an 8-member /cluster/config table, is ~400 B); 2 KB is generous
+// headroom that still bounds a single request to a trivially safe allocation.
 static const size_t kMaxNonUploadBodyBytes = 2048;
+
+// #386: /cluster/ping is the ONE cluster-wire body whose size scales with the
+// wall — it carries the #294 digest piggyback, and URL-encoding a JSON digest
+// inflates it ~65% ({, ", :, , all become %XX). A 3-member wall measured
+// 1236 B raw -> 2038 B encoded -> 2137 B with you/ts/mac, so the flat 2 KB
+// ceiling 413'd EVERY ping before the handler ran: contact aged to the degrade
+// bar and the whole cluster cycled joined -> DEGRADED -> re-join every ~46 s.
+// The ping therefore gets its own, still-bounded ceiling. Keep it small enough
+// that the ESP-01 follower (~18 KB free heap) can buffer one pre-auth.
+static const size_t kMaxPingBodyBytes = 4096;
+
+// The ceiling that applies to `url`. Route-aware so relaxing the ping does not
+// relax anything else.
+inline size_t bodyLimitCeilingFor(const char* url) {
+  if (url != nullptr && strcmp(url, "/cluster/ping") == 0) {
+    return kMaxPingBodyBytes;
+  }
+  return kMaxNonUploadBodyBytes;
+}
+
+// Leader-side budget for the ping's OPTIONAL digest piggyback (#294: absent
+// ⇒ ""). Liveness must never depend on an optional extra, so the leader asks
+// this BEFORE attaching the digest and simply omits it when it would not fit —
+// a degraded wall mirror instead of a dead cluster. `overheadLen` is the rest
+// of the body (digest=, you=, ts=, mac= and separators).
+inline bool pingBodyDigestFits(size_t encodedDigestLen, size_t overheadLen) {
+  return encodedDigestLen + overheadLen <= kMaxPingBodyBytes;
+}
 
 // The only routes whose declared Content-Length legitimately exceeds the
 // ceiling: multipart firmware/image uploads. Their bytes stream through a
@@ -50,6 +78,6 @@ inline bool bodyLimitUrlIsUpload(const char* url) {
 // /firmware/master" bypass.
 inline bool bodyLimitExceeded(const char* url, bool isMultipart,
                               size_t contentLength) {
-  if (contentLength <= kMaxNonUploadBodyBytes) return false;
+  if (contentLength <= bodyLimitCeilingFor(url)) return false;
   return !(isMultipart && bodyLimitUrlIsUpload(url));
 }

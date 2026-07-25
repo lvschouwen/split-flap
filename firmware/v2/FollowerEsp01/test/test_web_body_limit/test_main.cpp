@@ -56,6 +56,46 @@ static void test_non_multipart_body_to_upload_route_is_capped() {
   TEST_ASSERT_FALSE(bodyLimitExceeded("/firmware/master", false, 0));
 }
 
+// --- #386: /cluster/ping carries the digest piggyback and needs headroom -----
+
+static void test_ping_route_has_its_own_higher_ceiling() {
+  // The #294 digest piggyback pushed a 3-member ping body to ~2137 B, which
+  // the flat 2048 B ceiling 413'd before the handler ran — every ping failed,
+  // so contact aged to the degrade bar and the whole wall cycled
+  // joined -> DEGRADED -> re-join every ~46 s.
+  TEST_ASSERT_FALSE(bodyLimitExceeded("/cluster/ping", false, 2137));
+  TEST_ASSERT_FALSE(
+      bodyLimitExceeded("/cluster/ping", false, kMaxPingBodyBytes));
+  // ...but the ping stays bounded — this is still a pre-auth DoS guard.
+  TEST_ASSERT_TRUE(
+      bodyLimitExceeded("/cluster/ping", false, kMaxPingBodyBytes + 1));
+  // Every other cluster route keeps the tight ceiling.
+  TEST_ASSERT_TRUE(bodyLimitExceeded("/cluster/render", false, 2137));
+  TEST_ASSERT_TRUE(bodyLimitExceeded("/cluster/join", false, 2137));
+  TEST_ASSERT_TRUE(bodyLimitExceeded("/cluster/config", false, 2137));
+  // The relaxation is real but modest: the ESP-01 follower must still be able
+  // to buffer it (~18 KB free heap in practice).
+  TEST_ASSERT_TRUE(kMaxPingBodyBytes > kMaxNonUploadBodyBytes);
+  TEST_ASSERT_TRUE(kMaxPingBodyBytes <= 8192);
+}
+
+// --- #386: leader-side digest budget ----------------------------------------
+
+static void test_digest_budget_drops_oversized_digest() {
+  // The digest is an OPTIONAL piggyback (#294 — absent ⇒ ""); the liveness
+  // ping is not. A digest that would not fit is dropped, never allowed to
+  // 413 the ping that carries it.
+  TEST_ASSERT_TRUE(pingBodyDigestFits(1200, 128));
+  TEST_ASSERT_TRUE(pingBodyDigestFits(kMaxPingBodyBytes - 128, 128));
+  TEST_ASSERT_FALSE(pingBodyDigestFits(kMaxPingBodyBytes - 128 + 1, 128));
+  // An 8-member wall's encoded digest degrades gracefully instead of wedging
+  // liveness for the entire cluster.
+  TEST_ASSERT_FALSE(pingBodyDigestFits(7000, 128));
+  // Overhead is counted, not ignored: a digest that only fits when the
+  // signature is forgotten must NOT be considered fitting.
+  TEST_ASSERT_FALSE(pingBodyDigestFits(kMaxPingBodyBytes, 1));
+}
+
 // --- allowlist membership ---------------------------------------------------
 
 static void test_upload_allowlist_membership() {
@@ -74,6 +114,8 @@ int main(int, char**) {
   RUN_TEST(test_oversized_body_rejected_on_normal_routes);
   RUN_TEST(test_large_multipart_upload_passes_on_upload_routes);
   RUN_TEST(test_non_multipart_body_to_upload_route_is_capped);
+  RUN_TEST(test_ping_route_has_its_own_higher_ceiling);
+  RUN_TEST(test_digest_budget_drops_oversized_digest);
   RUN_TEST(test_upload_allowlist_membership);
   return UNITY_END();
 }
