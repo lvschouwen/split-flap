@@ -291,6 +291,15 @@ void webClusterRegister(AsyncWebServer& server) {
                       F(" — leader is ") + fcv.leaderHost);
       }
     }
+#if CLUSTER_WIRE_DEBUG
+    // #386 bench trace: proves the ping REACHED the handler at all. If the
+    // leader logs a failure and no ENTER line appears here, the request died
+    // earlier (body guard 413, or it never arrived).
+    SerialPrintln("dbg/wire: /cluster/ping ENTER from " +
+                  request->client()->remoteIP().toString() + " len=" +
+                  String((unsigned long)request->contentLength()) + " params=" +
+                  String(request->params()));
+#endif
     // #294: the leader piggybacks the cluster digest (+ this member's
     // table index) on the ping body, and the reply carries this row's
     // unit health — both additive; either side may predate the other.
@@ -312,12 +321,24 @@ void webClusterRegister(AsyncWebServer& server) {
       String mac = request->getParam("mac", true)->value();
       if (!clusterFollowerVerifySigned(clusterHmacPingMsg(ts, digest, youIndex),
                                        ts, mac)) {
+#if CLUSTER_WIRE_DEBUG
+        // #386: distinguishes a key mismatch from a replay-window/mark reject
+        // — both return the same 403 to the leader.
+        SerialPrintln("dbg/wire: ping REJECT 403 — bad signature (ts=" +
+                      String((unsigned long)(ts / 1000ULL)) + "s digestLen=" +
+                      String(digest.length()) + " you=" + String(youIndex) +
+                      ")");
+#endif
         request->send(403, "text/plain", F("bad cluster signature"));
         return;
       }
     }
     if (!clusterFollowerHandlePing(digest, youIndex,
                                    request->client()->remoteIP().toString())) {
+#if CLUSTER_WIRE_DEBUG
+      SerialPrintln("dbg/wire: ping REJECT 409 — handlePing declined (from " +
+                    request->client()->remoteIP().toString() + ")");
+#endif
       request->send(409, "application/json",
                     F("{\"error\":\"not clustered\"}"));
       return;

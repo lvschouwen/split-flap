@@ -282,6 +282,16 @@ int collectMemberWork(MemberWorkItem* items) {
         items[i].body += "&ts=" + clusterU64ToStr(signTs) + "&mac=" +
                          clusterHmacSign(runtimes[mi].hmacKey, msg);
       }
+#if CLUSTER_WIRE_DEBUG
+      // #386: the ping body is the one request whose size scales with member
+      // count (it carries the whole cluster digest). kMaxNonUploadBodyBytes is
+      // 2048 — measure, do not assume.
+      SerialPrintln("dbg/wire: ping body idx=" + String(mi) + " digestRaw=" +
+                    String(digest.length()) + "B encoded=" +
+                    String(encoded.length()) + "B total=" +
+                    String(items[i].body.length()) + "B keyed=" +
+                    String(runtimes[mi].hmacKeyValid ? 1 : 0));
+#endif
     }
   }
   return count;
@@ -292,6 +302,26 @@ void applyMemberResult(const MemberWorkItem& item, int status,
   LeaderLock lock;
   ClusterMemberRuntime& m = runtimes[item.index];
   uint32_t nowMs = millis();
+
+#if CLUSTER_WIRE_DEBUG
+  // #386 bench trace: every contact result, including the ones the normal
+  // path swallows. status -1 = transport failure (connect/write/timeout);
+  // 403 = member rejected the signature; 413 = body guard tripped before the
+  // handler ran. Without this the leader records only "contact failed".
+  {
+    const char* actionName =
+        item.action == ClusterLeaderAction::Join     ? "JOIN"
+        : item.action == ClusterLeaderAction::Render ? "RENDER"
+        : item.action == ClusterLeaderAction::Ping   ? "PING"
+                                                     : "NONE";
+    String replyHead = body.substring(0, body.length() > 96 ? 96 : body.length());
+    replyHead.replace('\n', ' ');
+    SerialPrintln("dbg/wire: " + String(table.members[item.index].host) + " " +
+                  actionName + " status=" + String(status) + " req=" +
+                  String(item.body.length()) + "B reply=" +
+                  String(body.length()) + "B \"" + replyHead + "\"");
+  }
+#endif
 
   if (status == 200) {
     bool wasDegraded = m.degraded;
