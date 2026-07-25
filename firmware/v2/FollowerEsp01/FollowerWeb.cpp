@@ -611,6 +611,14 @@ void webEndpointsInit(AsyncWebServer& server) {
   });
 
   server.on("/cluster/ping", HTTP_POST, [](AsyncWebServerRequest* request) {
+#if CLUSTER_WIRE_DEBUG
+    // #386 bench trace: proves the ping REACHED the handler. If the leader
+    // logs a failure and no ENTER line appears in GET /log, the request died
+    // earlier (body guard 413, CSRF, or it never arrived).
+    SerialPrintln("dbg/wire: ping ENTER from " +
+                  request->client()->remoteIP().toString() + " len=" +
+                  String((unsigned long)request->contentLength()));
+#endif
     if (followerRejectCsrf(request)) return;
     // Source-IP binding (#313): only the joined leader's ping keeps this row
     // alive — a foreign ping must not refresh the contact-fresh window.
@@ -639,17 +647,30 @@ void webEndpointsInit(AsyncWebServer& server) {
       String tsStr, mac;
       if (!paramString(request, "ts", tsStr) ||
           !paramString(request, "mac", mac)) {
+#if CLUSTER_WIRE_DEBUG
+        SerialPrintln(F("dbg/wire: ping REJECT 403 — ts/mac absent"));
+#endif
         request->send(403, "text/plain", F("cluster signature required"));
         return;
       }
       uint64_t ts = strtoull(tsStr.c_str(), nullptr, 10);
       if (!clusterVerifySigned(clusterHmacPingMsg(ts, digest, youIndex), ts,
                                mac)) {
+#if CLUSTER_WIRE_DEBUG
+        // #386: separates a key mismatch from a replay-window/mark reject —
+        // both return the same 403 to the leader.
+        SerialPrintln("dbg/wire: ping REJECT 403 — bad sig (digestLen=" +
+                      String(digest.length()) + " you=" + String(youIndex) +
+                      ")");
+#endif
         request->send(403, "text/plain", F("bad cluster signature"));
         return;
       }
     }
     if (!clusterHandlePing()) {
+#if CLUSTER_WIRE_DEBUG
+      SerialPrintln(F("dbg/wire: ping REJECT 409 — handlePing declined"));
+#endif
       request->send(409, "application/json",
                     F("{\"error\":\"not clustered\"}"));
       return;

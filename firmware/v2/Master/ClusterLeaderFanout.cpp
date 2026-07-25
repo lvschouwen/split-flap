@@ -33,6 +33,7 @@
 #include "ReflashPlan.h"
 #include "Tasks.h"
 #include "TaskWatchdog.h"
+#include "WebBodyLimit.h"  // #386: ping digest budget — same ceiling the guard enforces
 #include "WebEndpoints.h"  // #337: webDisplayContentSnapshot() — leader's mode
 
 #include "ClusterLeaderInternal.h"
@@ -267,10 +268,42 @@ int collectMemberWork(MemberWorkItem* items) {
   if (anyPing) {
     String digest = buildFreshDigestLocked(leaderMode);
     String encoded = urlEncode(digest);
+    // #386: the digest is an OPTIONAL piggyback (#294 — absent ⇒ ""), the
+    // liveness ping is NOT. URL-encoding inflates a JSON digest ~65%, so a
+    // wall that grows past the ceiling used to 413 every ping and degrade the
+    // whole cluster. Drop the digest instead: the wall mirror goes stale, the
+    // cluster stays alive. Clearing `digest` too keeps the signed canonical
+    // equal to what is actually sent (both follower copies reconstruct "" from
+    // an absent param).
+    // Overhead = "you=" + index + "&ts=" + 13 + "&mac=" + 64 + separators.
+    const size_t kPingOverheadBytes = 128;
+    const bool sendDigest =
+        pingBodyDigestFits(encoded.length(), kPingOverheadBytes);
+    // Transition-only, BOTH edges (#322 philosophy): a wall that grows past
+    // the budget and one that shrinks back under it. clusterTask is the sole
+    // caller (ClusterLeader.cpp), so the function-local static is safe.
+    static bool digestOmitted = false;
+    if (!sendDigest && !digestOmitted) {
+      digestOmitted = true;
+      SerialPrintln("cluster: ping digest too large (" +
+                    String(encoded.length()) + "B encoded + overhead > " +
+                    String((unsigned long)kMaxPingBodyBytes) +
+                    "B budget) — pinging without it; wall mirror will lag");
+    } else if (sendDigest && digestOmitted) {
+      digestOmitted = false;
+      SerialPrintln("cluster: ping digest fits again (" +
+                    String(encoded.length()) + "B encoded) — wall mirror live");
+    }
+    if (!sendDigest) {
+      digest = "";
+      encoded = "";
+    }
     for (int i = 0; i < count; i++) {
       if (items[i].action != ClusterLeaderAction::Ping) continue;
-      items[i].body =
-          "digest=" + encoded + "&you=" + String(items[i].index);
+      items[i].body = sendDigest
+                          ? ("digest=" + encoded + "&you=" +
+                             String(items[i].index))
+                          : ("you=" + String(items[i].index));
       // Sign the ping per member (#313 follow-on): its own key, so the
       // digest/you piggyback rides an authenticated request.
       int mi = items[i].index;
@@ -282,6 +315,16 @@ int collectMemberWork(MemberWorkItem* items) {
         items[i].body += "&ts=" + clusterU64ToStr(signTs) + "&mac=" +
                          clusterHmacSign(runtimes[mi].hmacKey, msg);
       }
+#if CLUSTER_WIRE_DEBUG
+      // #386: the ping body is the one request whose size scales with member
+      // count (it carries the whole cluster digest). kMaxNonUploadBodyBytes is
+      // 2048 — measure, do not assume.
+      SerialPrintln("dbg/wire: ping body idx=" + String(mi) + " digestRaw=" +
+                    String(digest.length()) + "B encoded=" +
+                    String(encoded.length()) + "B total=" +
+                    String(items[i].body.length()) + "B keyed=" +
+                    String(runtimes[mi].hmacKeyValid ? 1 : 0));
+#endif
     }
   }
   return count;
@@ -292,6 +335,26 @@ void applyMemberResult(const MemberWorkItem& item, int status,
   LeaderLock lock;
   ClusterMemberRuntime& m = runtimes[item.index];
   uint32_t nowMs = millis();
+
+#if CLUSTER_WIRE_DEBUG
+  // #386 bench trace: every contact result, including the ones the normal
+  // path swallows. status -1 = transport failure (connect/write/timeout);
+  // 403 = member rejected the signature; 413 = body guard tripped before the
+  // handler ran. Without this the leader records only "contact failed".
+  {
+    const char* actionName =
+        item.action == ClusterLeaderAction::Join     ? "JOIN"
+        : item.action == ClusterLeaderAction::Render ? "RENDER"
+        : item.action == ClusterLeaderAction::Ping   ? "PING"
+                                                     : "NONE";
+    String replyHead = body.substring(0, body.length() > 96 ? 96 : body.length());
+    replyHead.replace('\n', ' ');
+    SerialPrintln("dbg/wire: " + String(table.members[item.index].host) + " " +
+                  actionName + " status=" + String(status) + " req=" +
+                  String(item.body.length()) + "B reply=" +
+                  String(body.length()) + "B \"" + replyHead + "\"");
+  }
+#endif
 
   if (status == 200) {
     bool wasDegraded = m.degraded;
