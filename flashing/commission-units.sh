@@ -176,7 +176,8 @@ fi
 BRAKE="$(api GET "/settings" | jqf "d['reflashOnBoot']")"
 if [[ "$BRAKE" != "False" && "$BRAKE" != "false" ]]; then
   echo "REFUSING: reflashOnBoot is '${BRAKE:-unreadable}', expected false." >&2
-  echo "  curl -X POST 'http://$HOST/settings?reflashOnBoot=false'" >&2
+  # /settings is GET-only; the settings POST is the form route at /.
+  echo "  curl -X POST -d reflashOnBoot=false 'http://$HOST/'" >&2
   exit 1
 fi
 
@@ -250,6 +251,28 @@ PY
   back="$(api GET "/unit/offset?address=$a" | jqf "d['offset']")"
   [[ "$back" == "$want_off" ]] || { fail "offset read back '$back', wanted '$want_off'"; return 1; }
   printf '  offset      %s restored\n' "$want_off"
+
+  # 3b. odometer — the day-0 init deliberately leaves the ring unwritten on the
+  # theory that erased slots read 0xFFFFFFFF and recover as 0. That is true of a
+  # factory-fresh Nano and false of every unit on this wall: the erase rewrites
+  # only bytes 0..22, and the ring grew 16 -> 128 slots, so the new scan reads
+  # stale bytes the old ring never wrote. a1 booted claiming 0x3C3C3C3C
+  # revolutions (#417). Zero it BEFORE the exercise so the odo readings below
+  # measure something.
+  seq="$(post_seq "/unit/reset-odometer?address=$a")"
+  [[ -n "$seq" ]] || { fail "odometer reset POST gave no seq"; return 1; }
+  why="$(await_op "$seq" 30)" || { fail "odometer reset did not confirm: $why"; return 1; }
+  # 128 slots is ~2 s of EEPROM writes and the op ACKs before they land. Reading
+  # back immediately returns the PRE-reset value and looks like a failed reset.
+  sleep 5
+  api GET "/units/health?refresh=1" >/dev/null || true
+  local odo_zeroed
+  odo_zeroed="$(unit_field "$a" odo)"
+  [[ "$odo_zeroed" == "0" ]] || {
+    fail "odometer reads '${odo_zeroed:-<unreadable>}' after reset, wanted 0"
+    return 1
+  }
+  printf '  odometer    zeroed\n'
 
   # 4. home
   seq="$(post_seq "/unit/home?address=$a")"
