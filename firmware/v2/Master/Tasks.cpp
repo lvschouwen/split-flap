@@ -69,7 +69,14 @@ bool tasksUnitCountOverridePinned() {
 // Sizes are the spec's table; the heartbeat prints each task's high-water
 // mark so the numbers get validated (and trimmed) on real hardware.
 
-static constexpr uint32_t DISPLAY_TASK_STACK = 4096;
+// 4096 crashed displayTask on real hardware (split-flap-c8a746) inside the
+// boot probe: unitBusProbe's per-unit SerialPrintf -> Print::printf ->
+// newlib vsnprintf, faulting in the context-switch path (an interrupt frame
+// pushed onto an exhausted stack), coredump backtrace uncorrupted. vsnprintf
+// is the deepest chain displayTask runs per unit, and runReflashJob rides the
+// same task, so the #205 fleet reflash pays that peak too. The heartbeat HWM
+// column stays the trim-down evidence.
+static constexpr uint32_t DISPLAY_TASK_STACK = 16384;
 // 2048 leaves only ~124 B HWM on real hardware — newlib's first
 // tzset/localtime parse of the POSIX TZ string runs deep in the ticker.
 static constexpr uint32_t CLOCK_TASK_STACK = 4096;
