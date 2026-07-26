@@ -13,7 +13,7 @@
     "  curl -s 'http://<host>/units/health?refresh=1' >/dev/null",
     "  curl -s 'http://<host>/unit/offset?address=<N>'"
   ],
-  "capturedUtc": "2026-07-26T15:21:18Z",
+  "capturedUtc": "2026-07-26T15:23:05Z",
   "rows": [
     {
       "host": "192.168.15.91",
