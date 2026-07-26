@@ -257,15 +257,19 @@ void requestEvent() {
 //to be unique after first setup; empty/invalid EEPROM falls back to
 //SFP_I2C_ADDRESS_BASE + DIP.
 int getaddress() {
-  uint8_t magic = EEPROM.read(EEPROM_ADDR_ID_MAGIC);
-  if (magic == EEPROM_ID_MAGIC_VALUE) {
-    uint8_t stored = EEPROM.read(EEPROM_ADDR_I2C_ADDR);
-    //Reject obviously bad values. Address 0 is reserved general-call, 127 is
-    //reserved too; anything else in 1..126 is plausible.
-    if (stored >= 1 && stored <= 126) {
-      addressFromEeprom = true;  //GET_STATUS flags bit 4 (#215)
-      return stored;
-    }
+  //Blank, unprovisioned, checksum-failed and out-of-range identity blocks all
+  //resolve to 0 = fall back to DIP (#406). That direction is the safe one:
+  //twiboot listens on the DIP-derived address regardless, so an address we
+  //refuse to adopt is always recoverable, while an address we wrongly adopt
+  //strands the unit somewhere nobody is looking and takes a physical trip.
+  uint8_t block[EE_ID_BLOCK_LEN];
+  for (uint8_t i = 0; i < EE_ID_BLOCK_LEN; i++) {
+    block[i] = EEPROM.read(EE_LAYOUT_VERSION + i);
+  }
+  uint8_t stored = unitEeIdentityAddress(block);
+  if (stored != 0) {
+    addressFromEeprom = true;  //GET_STATUS flags bit 4 (#215)
+    return stored;
   }
   int dipValue = !digitalRead(ADRESSSW4) + (!digitalRead(ADRESSSW3) * 2) + (!digitalRead(ADRESSSW2) * 4) + (!digitalRead(ADRESSSW1) * 8);
   return SFP_I2C_ADDRESS_BASE + dipValue;

@@ -210,11 +210,16 @@ void rotateToLetter(int toLetter) {
 
 //gets magnet sensor offset from EEPROM in steps
 void getOffset() {
-  int stored;  //shadow: EEPROM.get can't take the volatile directly
-  EEPROM.get(eeAddress, stored);
-  // Fresh EEPROM reads 0xFFFF (-1, harmless); corruption can read anything.
-  // An offset beyond one full revolution is never a legitimate calibration
-  // and would make every homing overshoot by whole turns — treat as unset.
+  uint8_t block[EE_CAL_BLOCK_LEN];
+  for (uint8_t i = 0; i < EE_CAL_BLOCK_LEN; i++) {
+    block[i] = EEPROM.read(EE_CAL_OFFSET + i);
+  }
+  // A blank or torn block decodes to 0 (uncalibrated), never to whatever the
+  // bytes happened to say. The range clamp stays as the second guard: an
+  // offset beyond one full revolution is never a legitimate calibration and
+  // would make every homing overshoot by whole turns.
+  int16_t stored = 0;
+  unitEeCalDecode(block, stored);
   if (stored < -STEPS || stored > STEPS) {
     stored = 0;
   }
@@ -298,6 +303,11 @@ int calibrate(bool initialCalibration) {
                               ? (uint16_t)((uint16_t)i - expected) : 0;
         extStepExcessLast = excess;
         if (excess > extStepExcessMax) extStepExcessMax = excess;
+        // #406: extStepExcessMax is the SINCE-BOOT worst, so every reboot
+        // forgets the drag record. Keep a lifetime high-water mark too — it
+        // is what turns a one-off reading into evidence of slow mechanical
+        // decline. Only a new record writes EEPROM.
+        if (unitEeRecordStepExcess(lifetime, excess)) persistLifetimeHealth();
       }
       stepCounted(ROTATIONDIRECTION * calOffset);
       displayedLetter = 0;
@@ -334,6 +344,12 @@ int calibrate(bool initialCalibration) {
       statusHallNeverTriggered = !hallSawMagnet;
       lastHomingStepCount = (uint16_t)i;
       interrupts();
+      // #406: statusLastHomeFailed is a single current-state bit, so a unit
+      // that fails intermittently looks healthy between attempts. The
+      // lifetime count would have been climbing on a15 for hours before
+      // anything else showed it.
+      unitEeBumpSaturating(lifetime.homeFailedCount);
+      persistLifetimeHealth();
       stopMotor();
       return -1;
     }
@@ -577,6 +593,16 @@ void runSelfTest() {
     drift.positionKnown = false;
     drift.driftPending = false;
   }
+  // #406: carry the measurements into lifetime storage. The FIRST valid
+  // reading becomes the baseline this unit is compared against forever;
+  // later ones move `last`. a15's healthy hallWindow of 46 survived only in
+  // a session note, so "46 when new, failing now" was a thing a human had to
+  // remember — now the unit carries it. A failed test measured nothing and
+  // records nothing, so a zero can neither become the baseline nor erase a
+  // real last reading.
+  unitEeRecordSelfTest(lifetime, selfTest.hallWindowSteps, selfTest.stepsPerRev);
+  persistLifetimeHealth();
+
   lastRotation = millis();  //overheat gate before the restore move
   if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
   delay(100);
