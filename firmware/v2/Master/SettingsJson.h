@@ -61,6 +61,11 @@ struct SettingsJsonFields {
 
   String lastTimeReceivedMessageDateTime;
   String lastWrittenText;
+  // Who last drove the wall, and how long ago (#403). The age is seconds
+  // since the text changed — a duration, not a clock time, so it stays
+  // meaningful on a board that has never synced NTP.
+  String displaySource = "none";
+  uint32_t displaySourceAgeSeconds = 0;
   bool isInOtaMode = false;
   bool wifiSettingsResettable = false;
 
@@ -177,6 +182,8 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"lastTimeReceivedMessageDateTime\":";
   appendJsonString(out, f.lastTimeReceivedMessageDateTime);
   out += ",\"lastWrittenText\":";     appendJsonString(out, f.lastWrittenText);
+  out += ",\"displaySource\":";       appendJsonString(out, f.displaySource);
+  out += ",\"displaySourceAge\":";    out += f.displaySourceAgeSeconds;
   out += ",\"isInOtaMode\":";         appendJsonBool(out, f.isInOtaMode);
   out += ",\"wifiSettingsResettable\":";
   appendJsonBool(out, f.wifiSettingsResettable);

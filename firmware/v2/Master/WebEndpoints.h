@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 
+#include "DisplayCommand.h"  // DisplaySource on the content snapshot (#403)
 #include "Settings.h"
 #include "SettingsStore.h"
 
@@ -35,6 +36,10 @@ void webDisplayEventsTick();
 struct WebContentSnapshot {
   String deviceMode;
   String inputText;
+  // Who owns the retained message (#403). The 1 Hz mode ticker re-shows
+  // inputText in text mode — after an overlay reverts, for instance — and
+  // must re-state the ORIGINAL producer rather than claim the clock wrote it.
+  DisplaySource inputTextSource = DisplaySource::Unknown;
   String alignment;
   int flapSpeed = 1;
 };

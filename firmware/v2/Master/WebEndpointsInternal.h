@@ -15,6 +15,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "DisplayCommand.h"  // DisplaySource on currentInputSource (#403)
 #include "PendingSettingsPost.h"
 #include "Settings.h"
 #include "SettingsStore.h"
@@ -50,6 +51,7 @@ extern bool pendingRescueRecord;
 
 // Runtime-only message state (#192, never persisted) — under WebStateLock.
 extern String currentInputText;
+extern DisplaySource currentInputSource;
 extern String lastMessageStamp;
 
 // Full /settings JSON gather — GET /settings and the /status aggregate (#307)

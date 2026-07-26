@@ -54,7 +54,10 @@ static String sseDisplayPayload(const DisplaySnapshot& snap,
                                        content.alignment);
   }
   if (rowsKeyOut != nullptr) *rowsKeyOut = displayEventRowsKey(rows, rowCount);
-  return buildDisplayEventJson(snap.currentText, rows, rowCount, selfRow);
+  uint32_t ageSeconds =
+      snap.sourceAtMs == 0 ? 0 : (millis() - snap.sourceAtMs) / 1000;
+  return buildDisplayEventJson(snap.currentText, snap.source, ageSeconds, rows,
+                               rowCount, selfRow);
 }
 
 void webContentRegister(AsyncWebServer& server) {

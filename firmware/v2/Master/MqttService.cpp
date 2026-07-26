@@ -366,8 +366,8 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
       // clusterTask's self-row re-show restores the segment after the
       // dwell.
       WebContentSnapshot content = webDisplayContentSnapshot();
-      DisplayCommand cmd =
-          makeShowTextCommand(text, content.alignment, content.flapSpeed);
+      DisplayCommand cmd = makeShowTextCommand(
+          text, content.alignment, content.flapSpeed, DisplaySource::Mqtt);
       if (!displayEnqueue(cmd)) {
         SerialPrintln("MQTT: notification dropped (display queue full): " +
                       text);

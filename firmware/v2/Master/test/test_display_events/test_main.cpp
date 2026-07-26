@@ -43,28 +43,41 @@ static void test_overlong_text_is_truncated_not_overflowed() {
 }
 
 static void test_payload_shape_and_escaping() {
-  String json = buildDisplayEventJson("A\"B\\C");
-  TEST_ASSERT_EQUAL_STRING("{\"text\":\"A\\\"B\\\\C\"}", json.c_str());
+  String json = buildDisplayEventJson("A\"B\\C", DisplaySource::Web, 0);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"text\":\"A\\\"B\\\\C\",\"source\":\"web\",\"sourceAge\":0}",
+      json.c_str());
 }
 
 static void test_payload_empty_text() {
-  String json = buildDisplayEventJson("");
-  TEST_ASSERT_EQUAL_STRING("{\"text\":\"\"}", json.c_str());
+  String json = buildDisplayEventJson("", DisplaySource::Unknown, 0);
+  TEST_ASSERT_EQUAL_STRING("{\"text\":\"\",\"source\":\"none\",\"sourceAge\":0}",
+                           json.c_str());
+}
+
+// #403: the push carries the producer so the console can name it the moment
+// the flaps turn, without chasing a /settings read behind every event.
+static void test_payload_names_the_producer_and_its_age() {
+  String json = buildDisplayEventJson("X", DisplaySource::Leader, 47);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"text\":\"X\",\"source\":\"leader\",\"sourceAge\":47}", json.c_str());
 }
 
 // --- wall mirror rows (#277) — leader-only payload extension ---------------------
 
 static void test_rows_payload_shape() {
   String rows[2] = {String("AB"), String("C\"D")};
-  String json = buildDisplayEventJson("X", rows, 2, 1);
+  String json = buildDisplayEventJson("X", DisplaySource::Clock, 3, rows, 2, 1);
   TEST_ASSERT_EQUAL_STRING(
-      "{\"text\":\"X\",\"selfRow\":1,\"rows\":[\"AB\",\"C\\\"D\"]}",
+      "{\"text\":\"X\",\"source\":\"clock\",\"sourceAge\":3,\"selfRow\":1,"
+      "\"rows\":[\"AB\",\"C\\\"D\"]}",
       json.c_str());
 }
 
 static void test_zero_rows_keeps_plain_payload() {
-  String json = buildDisplayEventJson("X", nullptr, 0, 0);
-  TEST_ASSERT_EQUAL_STRING("{\"text\":\"X\"}", json.c_str());
+  String json = buildDisplayEventJson("X", DisplaySource::Clock, 3, nullptr, 0, 0);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"text\":\"X\",\"source\":\"clock\",\"sourceAge\":3}", json.c_str());
 }
 
 static void test_row_change_alone_is_due() {
@@ -100,6 +113,7 @@ int main(int, char**) {
   RUN_TEST(test_overlong_text_is_truncated_not_overflowed);
   RUN_TEST(test_payload_shape_and_escaping);
   RUN_TEST(test_payload_empty_text);
+  RUN_TEST(test_payload_names_the_producer_and_its_age);
   RUN_TEST(test_rows_payload_shape);
   RUN_TEST(test_zero_rows_keeps_plain_payload);
   RUN_TEST(test_row_change_alone_is_due);

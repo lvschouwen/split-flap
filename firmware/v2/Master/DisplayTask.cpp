@@ -900,7 +900,7 @@ void displayTaskMain(void*) {
     }
     local.busy = true;
     snapshotPublish(local);
-    if (displayApplyCommand(local, cmd)) {
+    if (displayApplyCommand(local, cmd, millis())) {
       SerialPrintln("display: " + describeDisplayCommand(cmd));
       switch (cmd.opcode) {
         case DisplayOpcode::ShowText:

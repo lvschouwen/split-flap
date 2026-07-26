@@ -125,6 +125,25 @@ static void test_control_characters_use_unicode_escapes() {
   TEST_ASSERT_TRUE(contains(json, "\"lastWrittenText\":\"\\u0001\""));
 }
 
+// #403: the console names who last drove the wall without a second request.
+// "none" and age 0 are the honest defaults for a board that has shown
+// nothing since boot.
+static void test_display_source_defaults_to_nobody() {
+  SettingsJsonFields f;
+  String json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"displaySource\":\"none\""));
+  TEST_ASSERT_TRUE(contains(json, "\"displaySourceAge\":0"));
+}
+
+static void test_display_source_serializes_producer_and_age() {
+  SettingsJsonFields f;
+  f.displaySource = "leader";
+  f.displaySourceAgeSeconds = 47;
+  String json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"displaySource\":\"leader\""));
+  TEST_ASSERT_TRUE(contains(json, "\"displaySourceAge\":47"));
+}
+
 static void test_unit_arrays_carry_supplied_data() {
   const int addresses[] = {1, 2, 4};
   const int status[] = {1, 1, 0, 2};
@@ -235,5 +254,7 @@ int main(int, char**) {
   RUN_TEST(test_vitals_serialize_values);
   RUN_TEST(test_rescue_slot_defaults_to_empty_rev);
   RUN_TEST(test_rescue_slot_fields_serialize);
+  RUN_TEST(test_display_source_defaults_to_nobody);
+  RUN_TEST(test_display_source_serializes_producer_and_age);
   return UNITY_END();
 }

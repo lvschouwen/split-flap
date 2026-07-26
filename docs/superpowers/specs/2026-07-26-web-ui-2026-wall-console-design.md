@@ -191,13 +191,21 @@ slice.
    the third hit is a comment, not a call.)*
 
    Plus **two re-projection sites inside `DisplayCommand.h` itself** —
-   `makeResetUnitsCommand` (`:203`) and `makeReflashUnitsCommand` (`:223`) build
-   a ShowText and re-stamp the opcode, so the display returns to what was on it
-   before the operation. These must carry the **restored** text's source
-   forward, not mint a new one; a reflash that ends by re-showing the leader's
-   text must still say the leader put it there. The same rule covers the #219
-   transient overlay: it reports as the overlay while it is up, and restores the
-   underlying source when it reverts.
+   `makeResetUnitsCommand` and `makeReflashUnitsCommand` build a ShowText and
+   re-stamp the opcode, so the display returns to what was on it before the
+   operation. **A re-show restores attribution, it does not author it:** a
+   reflash that ends by re-showing the leader's text must still say the leader
+   put it there. The same rule covers the #219 transient overlay — it reports
+   itself while it is up, and the underlying source returns when it reverts,
+   because the revert is a different producer re-showing.
+
+   Two producers turn out to be lying about themselves and need threading, not
+   just a field: the 1 Hz ticker in `ClockTask.cpp` also performs the
+   **text-mode re-show** of the retained message, so it is only "the clock"
+   when it is actually rendering a clock; and `serviceSelfRow()` in
+   `ClusterLeaderGrid.cpp` renders the leader's OWN row after the producer's
+   identity was already dropped at `clusterLeaderSubmit*()`, which would make
+   every leader report `leader` for its own web and MQTT traffic.
 
    The distinction that matters most to an owner is
    `ClusterLeaderGrid.cpp` versus `ClusterFollower.cpp`: *I put this here*

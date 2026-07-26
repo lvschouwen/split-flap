@@ -112,8 +112,12 @@ bool clusterLeaderRebootHoldSent();
 // Producers hand LOGICAL grid content here when enabled. Identical
 // content dedups internally; changed content re-slices, stamps a shared
 // commitAt (~400 ms out) and marks the affected members dirty.
+// `source` (#403) rides through to the leader's OWN row: the grid is where a
+// producer's identity would otherwise be lost, since every row downstream of
+// here looks like it came from the leader. The clock submit needs no
+// parameter — it is the clock by construction.
 void clusterLeaderSubmitText(const String& text, const String& alignment,
-                             int speed);
+                             int speed, DisplaySource source);
 void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
                               const String& alignment, int speed);
 // #317: blank the follower rows (leader's own row = the local Stop). Leaves

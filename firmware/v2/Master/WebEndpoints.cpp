@@ -57,6 +57,7 @@ String effectiveName;
 // boot). Written by the drain, read by GET /settings and the clock ticker's
 // webDisplayContentSnapshot() — all under webStateMutex.
 String currentInputText;
+DisplaySource currentInputSource = DisplaySource::Unknown;
 String lastMessageStamp;
 
 // Cross-task guard. Unlike v1's single-core cooperative ESP8266, the
@@ -149,6 +150,10 @@ String buildCurrentSettingsJson() {
     f.lastTimeReceivedMessageDateTime = lastMessageStamp;
   }
   f.lastWrittenText = String(snap.currentText);
+  // #403: same snapshot copy as the text, so the pair can never disagree.
+  f.displaySource = displaySourceName(snap.source);
+  f.displaySourceAgeSeconds =
+      snap.sourceAtMs == 0 ? 0 : (millis() - snap.sourceAtMs) / 1000;
   f.mqttConnected = mqttIsConnected();
   f.version = GIT_REV;
   f.sketchMd5 = ESP.getSketchMD5();
@@ -303,6 +308,11 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
         currentInputText = clusterLeaderEnabled()
                                ? messageText
                                : truncateForDisplay(messageText);
+        // The retained message keeps its author (#403): this drain is the
+        // ONLY writer of currentInputText, and everything reaching it came
+        // from an HTTP client. Stored rather than assumed so the mode
+        // ticker's re-show reads attribution instead of inferring it.
+        currentInputSource = DisplaySource::Web;
         // Reflash gate re-check at drain time (#205, Codex review): the
         // handler's 409 ran when the POST arrived; a job that started in
         // between must not get a ShowText queued behind it. Dropping is
@@ -320,11 +330,11 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
           // layer — it slices the grid, stages our own row, and fans the
           // rest out from clusterTask.
           clusterLeaderSubmitText(messageText, settings.alignment,
-                                  settings.flapSpeed);
+                                  settings.flapSpeed, DisplaySource::Web);
           SerialPrintln("Message routed to the cluster grid: " + messageText);
         } else if (displayEnqueue(makeShowTextCommand(
-                       messageText, settings.alignment,
-                       settings.flapSpeed))) {
+                       messageText, settings.alignment, settings.flapSpeed,
+                       DisplaySource::Web))) {
           SerialPrintln("Message queued for display: " + messageText);
         } else {
           // The handler's 503 pre-check makes this a wedged-queue signal,
@@ -352,8 +362,8 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
           SerialPrintln("Transient text dropped (reflash running): " +
                         transientText);
         } else if (displayEnqueue(makeShowTextCommand(
-                       transientText, settings.alignment,
-                       settings.flapSpeed))) {
+                       transientText, settings.alignment, settings.flapSpeed,
+                       DisplaySource::Web))) {
           mqttStartNotificationDwell(transientDwell);
           SerialPrintln(
               "Transient text (dwell " +
@@ -445,6 +455,7 @@ WebContentSnapshot webDisplayContentSnapshot() {
   WebStateLock lock;
   c.deviceMode = liveSettings->deviceMode;
   c.inputText = currentInputText;
+  c.inputTextSource = currentInputSource;
   c.alignment = liveSettings->alignment;
   c.flapSpeed = liveSettings->flapSpeed;
   return c;

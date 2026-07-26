@@ -58,11 +58,20 @@ inline bool displayEventDue(DisplayEventTracker& t, const char* text) {
 // ,"selfRow":N,"rows":["...", ...] — the browser renders those verbatim
 // (they arrive pre-positioned) and keys the health strip to selfRow
 // (-1 = the leader owns no row; the strip stays below the wall).
-inline String buildDisplayEventJson(const char* text,
+// `source`/`sourceAgeSeconds` (#403) ride every push: the console names the
+// producer at the instant the flaps turn instead of chasing a /settings read
+// behind each event. Both are required — an unattributed push would put the
+// console back to guessing.
+inline String buildDisplayEventJson(const char* text, DisplaySource source,
+                                    uint32_t sourceAgeSeconds,
                                     const String* rows = nullptr,
                                     int rowCount = 0, int selfRow = 0) {
   String out = "{\"text\":";
   appendJsonString(out, String(text));
+  out += ",\"source\":";
+  appendJsonString(out, String(displaySourceName(source)));
+  out += ",\"sourceAge\":";
+  out += sourceAgeSeconds;
   if (rows != nullptr && rowCount > 0) {
     out += ",\"selfRow\":";
     out += selfRow;

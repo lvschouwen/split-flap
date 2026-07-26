@@ -75,7 +75,8 @@ void clockTaskMain(void*) {
                  leaderContent.inputText.length() > 0) {
         clusterLeaderSubmitText(leaderContent.inputText,
                                 leaderContent.alignment,
-                                leaderContent.flapSpeed);
+                                leaderContent.flapSpeed,
+                                leaderContent.inputTextSource);
       }
       lastQueued = "";  // the ticker owns nothing while leading
       continue;
@@ -116,11 +117,19 @@ void clockTaskMain(void*) {
       // Segment re-shows are pre-positioned by the leader: rendered Left at
       // the speed the render arrived with, like the original enqueue.
       bool segmentReshow = cluster.gated && !cluster.forcesLocalClock;
+      // This ticker is not always "the clock" (#403): in text mode it
+      // re-shows the retained message — after an overlay reverts, say — and
+      // must credit whoever wrote it. Only an actual clock render is Clock;
+      // a held segment belongs to the leader.
+      DisplaySource source = segmentReshow      ? DisplaySource::Leader
+                             : in.deviceMode == "clock"
+                                 ? DisplaySource::Clock
+                                 : content.inputTextSource;
       DisplayCommand cmd =
           segmentReshow
-              ? makeShowTextCommand(d.text, "left", cluster.heldSpeed)
+              ? makeShowTextCommand(d.text, "left", cluster.heldSpeed, source)
               : makeShowTextCommand(d.text, content.alignment,
-                                    content.flapSpeed);
+                                    content.flapSpeed, source);
       if (displayEnqueue(cmd)) {
         lastQueued = d.text;
       }

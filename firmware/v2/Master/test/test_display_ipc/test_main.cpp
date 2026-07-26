@@ -24,15 +24,18 @@ static void test_fresh_snapshot_defaults() {
 
 static void test_show_text_updates_current_text_and_counter() {
   DisplaySnapshot snap;
-  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeShowTextCommand("HELLO", "left", 50)));
+  TEST_ASSERT_TRUE(displayApplyCommand(
+      snap, makeShowTextCommand("HELLO", "left", 50, DisplaySource::Web)));
   TEST_ASSERT_EQUAL_STRING("HELLO", snap.currentText);
   TEST_ASSERT_EQUAL(1, snap.commandsProcessed);
 }
 
 static void test_second_show_text_replaces_text() {
   DisplaySnapshot snap;
-  displayApplyCommand(snap, makeShowTextCommand("FIRST", "left", 50));
-  displayApplyCommand(snap, makeShowTextCommand("SECOND", "left", 50));
+  displayApplyCommand(snap,
+                      makeShowTextCommand("FIRST", "left", 50, DisplaySource::Web));
+  displayApplyCommand(snap,
+                      makeShowTextCommand("SECOND", "left", 50, DisplaySource::Web));
   TEST_ASSERT_EQUAL_STRING("SECOND", snap.currentText);
   TEST_ASSERT_EQUAL(2, snap.commandsProcessed);
 }
@@ -87,7 +90,8 @@ static void test_unit_facts_recompute_faulty_count() {
 
 static void test_none_opcode_is_rejected_without_mutation() {
   DisplaySnapshot snap;
-  displayApplyCommand(snap, makeShowTextCommand("KEEP", "left", 50));
+  displayApplyCommand(snap,
+                      makeShowTextCommand("KEEP", "left", 50, DisplaySource::Web));
   DisplayCommand none;  // default-constructed: opcode None
   TEST_ASSERT_FALSE(displayApplyCommand(snap, none));
   TEST_ASSERT_EQUAL_STRING("KEEP", snap.currentText);
@@ -117,7 +121,8 @@ static void test_maintenance_opcodes_count_and_apply() {
 
 static void test_stop_clears_current_text() {
   DisplaySnapshot snap;
-  displayApplyCommand(snap, makeShowTextCommand("HELLO", "left", 50));
+  displayApplyCommand(snap,
+                      makeShowTextCommand("HELLO", "left", 50, DisplaySource::Web));
   TEST_ASSERT_TRUE(displayApplyCommand(snap, makeStopCommand(8)));
   // v1 parity: the retained text clears so the clock/event loop re-sends
   // fresh content instead of dedup-suppressing forever.
@@ -126,7 +131,8 @@ static void test_stop_clears_current_text() {
 
 static void test_reset_units_leaves_current_text_untouched() {
   DisplaySnapshot snap;
-  displayApplyCommand(snap, makeShowTextCommand("HELLO", "left", 50));
+  displayApplyCommand(snap,
+                      makeShowTextCommand("HELLO", "left", 50, DisplaySource::Web));
   TEST_ASSERT_TRUE(
       displayApplyCommand(snap, makeResetUnitsCommand(9, "HELLO", "left", 50)));
   // The blank-out frames are execution detail; the re-shown text equals the
@@ -259,11 +265,87 @@ static void test_gate_reopens_after_job_finishes() {
 
 static void test_reflash_units_command_counts_without_touching_text() {
   DisplaySnapshot snap;
-  displayApplyCommand(snap, makeShowTextCommand("14:44", "center", 80));
+  displayApplyCommand(snap,
+                      makeShowTextCommand("14:44", "center", 80, DisplaySource::Web));
   DisplayCommand cmd = makeReflashUnitsCommand(7, "14:44", "center", 80, 0);
   TEST_ASSERT_TRUE(displayApplyCommand(snap, cmd));
   TEST_ASSERT_EQUAL_STRING("14:44", snap.currentText);
   TEST_ASSERT_EQUAL(2, snap.commandsProcessed);
+}
+
+// --- display source projection (#403) ---------------------------------------
+// "Who last drove the wall" is the one fact the console cannot fake. The
+// snapshot carries the producer of the CURRENT text plus the millis() it
+// landed — no history, no audit log.
+
+static void test_show_text_stamps_its_source_and_time() {
+  DisplaySnapshot snap;
+  TEST_ASSERT_EQUAL(DisplaySource::Unknown, snap.source);
+  TEST_ASSERT_EQUAL_UINT32(0, snap.sourceAtMs);
+
+  displayApplyCommand(snap, makeShowTextCommand("HI", "left", 50,
+                                                DisplaySource::Mqtt),
+                      1234);
+  TEST_ASSERT_EQUAL(DisplaySource::Mqtt, snap.source);
+  TEST_ASSERT_EQUAL_UINT32(1234, snap.sourceAtMs);
+}
+
+static void test_each_producer_round_trips_its_own_source() {
+  DisplaySnapshot snap;
+  const DisplaySource producers[] = {DisplaySource::Web, DisplaySource::Mqtt,
+                                     DisplaySource::Clock,
+                                     DisplaySource::Leader};
+  for (unsigned i = 0; i < sizeof(producers) / sizeof(producers[0]); i++) {
+    displayApplyCommand(snap, makeShowTextCommand("X", "left", 50,
+                                                  producers[i]),
+                        (uint32_t)(100 + i));
+    TEST_ASSERT_EQUAL(producers[i], snap.source);
+    TEST_ASSERT_EQUAL_UINT32(100 + i, snap.sourceAtMs);
+  }
+}
+
+// A follower rendering the leader's text must say LEADER, not web — that
+// distinction is the whole reason the field exists.
+static void test_a_leader_render_outranks_the_previous_local_source() {
+  DisplaySnapshot snap;
+  displayApplyCommand(
+      snap, makeShowTextCommand("MINE", "left", 50, DisplaySource::Web), 10);
+  displayApplyCommand(
+      snap, makeShowTextCommand("THEIRS", "left", 50, DisplaySource::Leader),
+      20);
+  TEST_ASSERT_EQUAL_STRING("THEIRS", snap.currentText);
+  TEST_ASSERT_EQUAL(DisplaySource::Leader, snap.source);
+}
+
+// Blank wall, nobody driving: the console says "Nothing" rather than naming
+// whoever pressed stop. The field answers "what put this text here".
+static void test_stop_clears_the_source_with_the_text() {
+  DisplaySnapshot snap;
+  displayApplyCommand(
+      snap, makeShowTextCommand("HI", "left", 50, DisplaySource::Web), 10);
+  displayApplyCommand(snap, makeStopCommand(1), 99);
+  TEST_ASSERT_EQUAL_STRING("", snap.currentText);
+  TEST_ASSERT_EQUAL(DisplaySource::Unknown, snap.source);
+  TEST_ASSERT_EQUAL_UINT32(99, snap.sourceAtMs);
+}
+
+// The re-show opcodes restore text the snapshot already attributes. They must
+// leave the attribution standing: a reflash that ends by re-showing the
+// leader's text has not become the author of it.
+static void test_reset_and_reflash_reshows_do_not_reassign_authorship() {
+  DisplaySnapshot snap;
+  displayApplyCommand(
+      snap, makeShowTextCommand("HELD", "left", 50, DisplaySource::Leader), 10);
+
+  displayApplyCommand(snap, makeResetUnitsCommand(1, "HELD", "left", 50), 20);
+  TEST_ASSERT_EQUAL(DisplaySource::Leader, snap.source);
+  TEST_ASSERT_EQUAL_UINT32(10, snap.sourceAtMs);
+
+  displayApplyCommand(snap, makeReflashUnitsCommand(2, "HELD", "left", 50, 0),
+                      30);
+  TEST_ASSERT_EQUAL(DisplaySource::Leader, snap.source);
+  TEST_ASSERT_EQUAL_UINT32(10, snap.sourceAtMs);
+  TEST_ASSERT_EQUAL_STRING("HELD", snap.currentText);
 }
 
 static void test_reflash_json_shapes() {
@@ -526,6 +608,11 @@ int main(int, char**) {
   RUN_TEST(test_gate_blocks_everything_but_stop_while_reflashing);
   RUN_TEST(test_gate_reopens_after_job_finishes);
   RUN_TEST(test_reflash_units_command_counts_without_touching_text);
+  RUN_TEST(test_show_text_stamps_its_source_and_time);
+  RUN_TEST(test_each_producer_round_trips_its_own_source);
+  RUN_TEST(test_a_leader_render_outranks_the_previous_local_source);
+  RUN_TEST(test_stop_clears_the_source_with_the_text);
+  RUN_TEST(test_reset_and_reflash_reshows_do_not_reassign_authorship);
   RUN_TEST(test_reflash_json_shapes);
   RUN_TEST(test_reflash_json_carries_the_halt);
   RUN_TEST(test_fresh_snapshot_selftest_slot_is_pending);

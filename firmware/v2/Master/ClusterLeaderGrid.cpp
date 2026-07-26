@@ -44,7 +44,8 @@
 // alignment, speed) so identical ticks dedup to nothing.
 static void submitGrid(const String& contentKey, bool isClock,
                        const String& textOrTime, const String& date,
-                       const String& alignment, int speed) {
+                       const String& alignment, int speed,
+                       DisplaySource source) {
   if (!clusterLeaderEnabled()) return;
 
   bool synced = false;
@@ -78,6 +79,11 @@ static void submitGrid(const String& contentKey, bool isClock,
       selfPending = true;
       selfText = segs[i];
       selfSpeed = speed;
+      // Carry the producer across the grid boundary (#403). Without this the
+      // leader's own row would report Leader — "I put this here because I put
+      // it here" — and the browser/MQTT/clock origin would be lost at exactly
+      // the box where it is still knowable.
+      selfSource = source;
       selfDueMs =
           millis() + clusterRenderDelayMs(gridCommitAtMs, nowE, synced);
     } else {
@@ -90,9 +96,9 @@ static void submitGrid(const String& contentKey, bool isClock,
 }
 
 void clusterLeaderSubmitText(const String& text, const String& alignment,
-                             int speed) {
+                             int speed, DisplaySource source) {
   submitGrid("t:" + alignment + ":" + String(speed) + ":" + text, false, text,
-             "", alignment, speed);
+             "", alignment, speed, source);
 }
 
 void clusterLeaderSetSelfRole(const String& role) {
@@ -113,7 +119,7 @@ void clusterLeaderSubmitClock(const String& timeText, const String& dateText,
                               const String& alignment, int speed) {
   submitGrid("c:" + alignment + ":" + String(speed) + ":" + timeText + "|" +
                  dateText,
-             true, timeText, dateText, alignment, speed);
+             true, timeText, dateText, alignment, speed, DisplaySource::Clock);
 }
 
 // /stop propagation (#317): blank every FOLLOWER row in sync (the leader's own
@@ -149,7 +155,7 @@ void serviceSelfRow() {
   if (selfPending) {
     if ((int32_t)(millis() - selfDueMs) < 0) return;
     if (reflashInProgress(displaySnapshotGet().reflash)) return;  // retry
-    if (displayEnqueue(makeShowTextCommand(selfText, "left", selfSpeed))) {
+    if (displayEnqueue(makeShowTextCommand(selfText, "left", selfSpeed, selfSource))) {
       selfPending = false;
     }
     return;
@@ -159,7 +165,7 @@ void serviceSelfRow() {
   DisplaySnapshot snap = displaySnapshotGet();
   if (snap.busy || reflashInProgress(snap.reflash)) return;
   if (selfText == String(snap.currentText)) return;
-  displayEnqueue(makeShowTextCommand(selfText, "left", selfSpeed));
+  displayEnqueue(makeShowTextCommand(selfText, "left", selfSpeed, selfSource));
 }
 
 uint32_t clusterLeaderGridGeneration() {

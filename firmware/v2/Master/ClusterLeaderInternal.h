@@ -49,6 +49,9 @@ extern String lastContentKey;
 extern bool selfPending;
 extern String selfText;
 extern int selfSpeed;
+// The producer behind selfText (#403), carried across the grid boundary so
+// the leader's own row credits the browser/MQTT/clock rather than itself.
+extern DisplaySource selfSource;
 extern uint32_t selfDueMs;
 extern bool configPending;
 extern String configSpec;
