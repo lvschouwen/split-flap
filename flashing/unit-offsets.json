@@ -13,17 +13,29 @@
     "  curl -s 'http://<host>/units/health?refresh=1' >/dev/null",
     "  curl -s 'http://<host>/unit/offset?address=<N>'"
   ],
-  "capturedUtc": "2026-07-26T11:12:00Z",
+  "capturedUtc": "2026-07-26T15:21:18Z",
   "rows": [
     {
       "host": "192.168.15.91",
       "row": 1,
       "note": "S3 leader, 16 units. Unit at address 15 was hall-dead at capture time; its offset is still the calibrated value and stays worth restoring after the sensor is repaired.",
       "offsets": {
-        "1": 69, "2": 79, "3": 70, "4": 52,
-        "5": 52, "6": 74, "7": 89, "8": 63,
-        "9": 87, "10": 69, "11": 69, "12": 44,
-        "13": 80, "14": 69, "15": 69, "16": 79
+        "1": 69,
+        "2": 79,
+        "3": 70,
+        "4": 52,
+        "5": 52,
+        "6": 74,
+        "7": 89,
+        "8": 63,
+        "9": 87,
+        "10": 69,
+        "11": 69,
+        "12": 44,
+        "13": 80,
+        "14": 69,
+        "15": 69,
+        "16": 79
       }
     },
     {
@@ -31,7 +43,11 @@
       "row": 0,
       "note": "ESP-01 follower, 5 units.",
       "offsets": {
-        "1": 63, "2": 54, "3": 54, "4": 61, "5": 64
+        "1": 63,
+        "2": 54,
+        "3": 54,
+        "4": 61,
+        "5": 64
       }
     }
   ]
