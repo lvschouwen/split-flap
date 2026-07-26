@@ -98,6 +98,13 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"he",     "hall edges seen in the last completed revolution"},
   {"dw",     "rolling ~60 s duty window (recent move count)"},
   {"sb",     "ext-diag status bitfield (bit0 last-move stall)"},
+  {"hf",     "lifetime failed-homing count (survives power cycles)"},
+  {"gates",  "active unit feature-gate bits (bit0 idle hall check, bit1 scheduled re-home)"},
+  {"sxl",    "worst-seen step-excess over the unit's lifetime (sx forgets at reboot)"},
+  {"stw0",   "hall window measured by the unit's FIRST self-test (baseline)"},
+  {"stw1",   "hall window measured by its most recent self-test"},
+  {"str0",   "steps/rev measured by the unit's FIRST self-test (baseline)"},
+  {"str1",   "steps/rev measured by its most recent self-test"},
   // --- /cluster/health ---
   {"state",        "follower phase: standalone/clustered/grace/blank"},
   {"leaderName",   "name of the leader feeding this row"},

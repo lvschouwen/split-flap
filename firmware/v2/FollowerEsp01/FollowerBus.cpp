@@ -169,6 +169,28 @@ static void refreshUnitExtDiag(UnitFacts& fact, int i2cAddress) {
   fact.extDiagValid = true;
 }
 
+// Across-power-cycle health (#406): same shared UnitLifetime.h packet and
+// guard the master reads, so both rows report identically. Pre-lifetime
+// firmware answers short and fails the length check.
+static bool readUnitLifetime(int i2cAddress, UnitLifetimeFacts& out) {
+  uint8_t buf[LIFETIME_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_LIFETIME, buf, LIFETIME_REPLY_LEN)) {
+    return false;
+  }
+  return lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out);
+}
+
+// Folds a lifetime read into the slot; clears lifetimeValid first so a unit
+// that stops answering (or was reflashed to pre-lifetime firmware) never
+// keeps serving a stale record (same discipline as refreshUnitExtDiag).
+static void refreshUnitLifetime(UnitFacts& fact, int i2cAddress) {
+  fact.lifetimeValid = false;
+  UnitLifetimeFacts lt;
+  if (!readUnitLifetime(i2cAddress, lt)) return;
+  fact.lifetime = lt;
+  fact.lifetimeValid = true;
+}
+
 // v1 #140 rule: reject non-printables and the two JSON-structural chars at
 // the I2C boundary — the version string is emitted raw into JSON.
 static bool readUnitVersion(int i2cAddress, char* out) {
@@ -258,6 +280,9 @@ void busProbe() {
     // New-measurement diagnostics ride the probe too (#365); pre-ext-diag
     // firmware fails the checksum and stays extDiagValid=false.
     refreshUnitExtDiag(unitFacts[i], i2cAddress);
+    // Lifetime health rides the probe too (#406); pre-lifetime firmware
+    // fails the length check and stays lifetimeValid=false.
+    refreshUnitLifetime(unitFacts[i], i2cAddress);
   }
   displayWidth = computeDisplayWidth(states, UNITS_AMOUNT);
   SerialPrint(F("I2C scan complete. Detected "));
@@ -291,6 +316,9 @@ bool busPollHealthOne(int i) {
   // charged to bus error attribution — same as odometer/vitals above, only
   // the CMD_GET_STATUS read above is the liveness signal.
   refreshUnitExtDiag(unitFacts[i], toI2cAddress(i));
+  // Lifetime health refreshes on the same cadence (#406) — a failed homing
+  // must not wait for the next probe to surface.
+  refreshUnitLifetime(unitFacts[i], toI2cAddress(i));
   return ok;  // CMD_GET_STATUS liveness signal for the heartbeat (#310)
 #else
   (void)i;

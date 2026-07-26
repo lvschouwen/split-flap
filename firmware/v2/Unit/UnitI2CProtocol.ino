@@ -59,6 +59,9 @@ void receiveLetter(int numBytes) {
       case SFP_CMD_GET_EXT_DIAG:
         pendingExtDiagResponse = true;
         break;
+      case SFP_CMD_GET_LIFETIME:
+        pendingLifetimeResponse = true;
+        break;
       case SFP_CMD_START_SELF_TEST:
         pendingSelfTest = true;
         break;
@@ -200,6 +203,15 @@ void requestEvent() {
     // the masked checksum handles a stray probe hitting the unknown opcode.
     Wire.write((const uint8_t*)extDiagReplyBuf, EXT_DIAG_REPLY_LEN);
     pendingExtDiagResponse = false;
+    return;
+  }
+  if (pendingLifetimeResponse) {
+    // 15 bytes, pre-encoded by refreshLifetimeReply() under noInterrupts()
+    // (#406) — stream verbatim. A master predating the opcode never sends it;
+    // the masked checksum plus the reply-length check on the master side
+    // handle a stray probe hitting the unknown opcode.
+    Wire.write((const uint8_t*)lifetimeReplyBuf, LIFETIME_REPLY_LEN);
+    pendingLifetimeResponse = false;
     return;
   }
   if (pendingStatusResponse) {

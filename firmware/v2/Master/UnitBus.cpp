@@ -254,6 +254,31 @@ static void refreshUnitExtDiag(UnitFacts& fact, int i2cAddress) {
   fact.extDiagValid = true;
 }
 
+// Reads what the unit's EEPROM remembers across power cycles via
+// CMD_GET_LIFETIME (#406): 15 bytes, masked XOR checksum. Pre-lifetime
+// firmware answers the unknown opcode with its 1-byte status fallback + bus
+// padding, and lifetimeReadbackValid rejects it on LENGTH before the checksum
+// even matters — during a fleet reflash the wall runs both firmwares, so this
+// path is exercised for real, not theoretically.
+static bool readUnitLifetime(int i2cAddress, UnitLifetimeFacts& out) {
+  uint8_t buf[LIFETIME_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_LIFETIME, buf, LIFETIME_REPLY_LEN)) {
+    return false;
+  }
+  return lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out);
+}
+
+// Folds a lifetime read into the slot; clears lifetimeValid first so a unit
+// that stops answering (or was reflashed to pre-lifetime firmware) never
+// keeps serving a stale record (same discipline as refreshUnitExtDiag).
+static void refreshUnitLifetime(UnitFacts& fact, int i2cAddress) {
+  fact.lifetimeValid = false;
+  UnitLifetimeFacts lt;
+  if (!readUnitLifetime(i2cAddress, lt)) return;
+  fact.lifetime = lt;
+  fact.lifetimeValid = true;
+}
+
 // Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
 // true on success; `out` is untouched on failure (old firmware predating
 // v1 #32 answers short — the drain-and-fail path).
@@ -502,6 +527,9 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
     // New-measurement diagnostics ride the probe too (#365); pre-ext-diag
     // firmware fails the checksum and stays extDiagValid=false.
     refreshUnitExtDiag(facts[unitIndex], i2cAddress);
+    // Lifetime health rides the probe too (#406); pre-lifetime firmware
+    // fails the length check and stays lifetimeValid=false.
+    refreshUnitLifetime(facts[unitIndex], i2cAddress);
   }
   // #367: the per-unit reset above zeroed the facts' error fields, but the
   // attributed counters are lifetime — restore them so a probe rescan doesn't
@@ -550,6 +578,11 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   // New-measurement diagnostics refresh on the same cadence (#365); not
   // charged to #367 error attribution — see readUnitStatus above.
   refreshUnitExtDiag(facts[i], toI2cAddress(i));
+  // Lifetime health refreshes on the same cadence (#406). It changes rarely —
+  // only a failed homing, a new drag record or a self-test moves it — but a
+  // failed homing is exactly the signal that must not wait for the next probe
+  // to surface. Not charged to #367 error attribution, like ext-diag above.
+  refreshUnitLifetime(facts[i], toI2cAddress(i));
   // ok == the CMD_GET_STATUS read succeeded — the heartbeat liveness signal
   // (#310); the caller folds it into the miss counter.
   return ok;

@@ -96,6 +96,15 @@
                                          //     checksum ^ 0x93 (wire format in
                                          //     UnitExtDiag.h, #365). Unversioned;
                                          //     a format change takes a new opcode.
+#define SFP_CMD_GET_LIFETIME       0x8A  // reply: 15 bytes — EEPROM layout
+                                         //     version, lifetime home-failure
+                                         //     count, active feature gates,
+                                         //     lifetime step-excess max, first/
+                                         //     last self-test measurements +
+                                         //     XOR checksum ^ 0x6E (wire format
+                                         //     in UnitLifetime.h, #406/#407).
+                                         //     GET_EXT_DIAG's since-boot twin:
+                                         //     this is what survives a reboot.
 
 // --- 0x9X mutations ---
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT reset)
