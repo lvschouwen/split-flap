@@ -141,6 +141,13 @@ struct ReflashProgress {
   uint8_t done = 0;         // flashed + verified
   uint8_t failed = 0;       // left in twiboot for the next attempt
   uint8_t currentAddr = 0;  // unit being flashed (0 outside Flashing)
+  // #412: the run stopped itself on consecutive failures rather than reaching
+  // the end of its plan. Distinct from `failed > 0`, which a completed run also
+  // shows — an operator reading /units/health cannot otherwise tell "the image
+  // is suspect and the remaining units were never touched" from "this job
+  // finished and these are the real failures", and giving a human that signal
+  // is the entire point of the halt.
+  bool halted = false;
 };
 
 // The producer gate (#205 design rule) keys off this: while true, only Stop
@@ -157,6 +164,7 @@ inline void reflashProgressBegin(ReflashProgress& p, int total) {
   p.done = 0;
   p.failed = 0;
   p.currentAddr = 0;
+  p.halted = false;
 }
 
 inline void reflashProgressUnitStart(ReflashProgress& p, uint8_t addr) {
@@ -175,8 +183,13 @@ inline void reflashProgressSettling(ReflashProgress& p) {
 
 // Cancel wins over per-unit failures: the operator pulled the plug, so the
 // counters describe an interrupted job, not a graded one.
-inline void reflashProgressFinish(ReflashProgress& p, bool cancelled) {
+inline void reflashProgressFinish(ReflashProgress& p, bool cancelled,
+                                  bool halted) {
   p.currentAddr = 0;
+  // A halt always implies failures (it takes REFLASH_MAX_CONSECUTIVE_FAILURES
+  // to trigger), so the state below is already Failed — this flag adds the WHY,
+  // not the severity. A cancel outranks it: the operator pulled the plug.
+  p.halted = halted && !cancelled;
   if (cancelled) {
     p.state = ReflashState::Cancelled;
   } else if (p.failed > 0) {

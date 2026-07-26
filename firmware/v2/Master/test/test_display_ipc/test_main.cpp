@@ -253,7 +253,7 @@ static void test_gate_blocks_everything_but_stop_while_reflashing() {
 static void test_gate_reopens_after_job_finishes() {
   DisplaySnapshot snap;
   reflashProgressBegin(snap.reflash, 4);
-  reflashProgressFinish(snap.reflash, false);
+  reflashProgressFinish(snap.reflash, false, false);
   TEST_ASSERT_TRUE(displayAcceptsCommand(snap, DisplayOpcode::ShowText));
 }
 
@@ -267,11 +267,12 @@ static void test_reflash_units_command_counts_without_touching_text() {
 }
 
 static void test_reflash_json_shapes() {
-  char buf[96];
+  char buf[112];
   ReflashProgress p;
   buildReflashJson(buf, sizeof(buf), p);
   TEST_ASSERT_EQUAL_STRING(
-      "{\"state\":\"idle\",\"total\":0,\"done\":0,\"failed\":0,\"cur\":0}",
+      "{\"state\":\"idle\",\"total\":0,\"done\":0,\"failed\":0,\"cur\":0,"
+      "\"halted\":false}",
       buf);
   reflashProgressBegin(p, 12);
   reflashProgressUnitStart(p, 5);
@@ -279,7 +280,25 @@ static void test_reflash_json_shapes() {
   reflashProgressUnitStart(p, 6);
   buildReflashJson(buf, sizeof(buf), p);
   TEST_ASSERT_EQUAL_STRING(
-      "{\"state\":\"flashing\",\"total\":12,\"done\":1,\"failed\":0,\"cur\":6}",
+      "{\"state\":\"flashing\",\"total\":12,\"done\":1,\"failed\":0,"
+      "\"cur\":6,\"halted\":false}",
+      buf);
+}
+
+// #412: the halt must reach the API surface, not just the serial log — an
+// operator watching /units/health otherwise cannot tell a run that stopped
+// itself from one that finished with the same failure count.
+static void test_reflash_json_carries_the_halt() {
+  char buf[112];
+  ReflashProgress p;
+  reflashProgressBegin(p, 21);
+  reflashProgressUnitResult(p, false);
+  reflashProgressUnitResult(p, false);
+  reflashProgressFinish(p, false, true);
+  buildReflashJson(buf, sizeof(buf), p);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"total\":21,\"done\":0,\"failed\":2,"
+      "\"cur\":0,\"halted\":true}",
       buf);
 }
 
@@ -508,6 +527,7 @@ int main(int, char**) {
   RUN_TEST(test_gate_reopens_after_job_finishes);
   RUN_TEST(test_reflash_units_command_counts_without_touching_text);
   RUN_TEST(test_reflash_json_shapes);
+  RUN_TEST(test_reflash_json_carries_the_halt);
   RUN_TEST(test_fresh_snapshot_selftest_slot_is_pending);
   RUN_TEST(test_selftest_command_counts_without_mutation);
   RUN_TEST(test_apply_selftest_result_fills_the_slot);

@@ -199,6 +199,50 @@ static void test_filtering_the_flash_phase_leaves_a_stranded_unit_alone() {
 
 // --- consecutive-failure halt (#412) ----------------------------------------
 
+// The halt has to be legible over the API, not just on the serial log: a run
+// that stopped early and a run that finished with the same failure count are
+// otherwise the same JSON, and telling those apart is the whole point.
+static void test_halted_is_distinct_from_a_completed_run_with_failures() {
+  ReflashProgress halted;
+  reflashProgressBegin(halted, 4);
+  reflashProgressUnitResult(halted, false);
+  reflashProgressUnitResult(halted, false);
+  reflashProgressFinish(halted, false, true);
+
+  ReflashProgress ranOut;
+  reflashProgressBegin(ranOut, 4);
+  reflashProgressUnitResult(ranOut, false);
+  reflashProgressUnitResult(ranOut, false);
+  reflashProgressFinish(ranOut, false, false);
+
+  // Same counters, same state — only `halted` separates them.
+  TEST_ASSERT_EQUAL(halted.failed, ranOut.failed);
+  TEST_ASSERT_TRUE(halted.state == ranOut.state);
+  TEST_ASSERT_TRUE(halted.halted);
+  TEST_ASSERT_FALSE(ranOut.halted);
+}
+
+// The operator pulled the plug — that is the reason, not a suspect image.
+static void test_cancel_outranks_halted() {
+  ReflashProgress p;
+  reflashProgressBegin(p, 4);
+  reflashProgressUnitResult(p, false);
+  reflashProgressFinish(p, true, true);
+  TEST_ASSERT_TRUE(p.state == ReflashState::Cancelled);
+  TEST_ASSERT_FALSE(p.halted);
+}
+
+static void test_begin_clears_a_previous_halt() {
+  ReflashProgress p;
+  reflashProgressBegin(p, 2);
+  reflashProgressUnitResult(p, false);
+  reflashProgressFinish(p, false, true);
+  TEST_ASSERT_TRUE(p.halted);
+  reflashProgressBegin(p, 2);  // next job must not inherit it
+  TEST_ASSERT_FALSE(p.halted);
+}
+
+
 static void test_a_lone_failure_does_not_halt_the_run() {
   // a15 is hall-dead. It must not wedge every future fleet converge.
   TEST_ASSERT_FALSE(reflashShouldHalt(0));
@@ -261,21 +305,21 @@ static void test_finish_grades_done_cancelled_failed() {
   reflashProgressBegin(p, 2);
   reflashProgressUnitStart(p, 1);
   reflashProgressUnitResult(p, true);
-  reflashProgressFinish(p, false);
+  reflashProgressFinish(p, false, false);
   TEST_ASSERT_EQUAL(ReflashState::Done, p.state);
   TEST_ASSERT_EQUAL_UINT8(0, p.currentAddr);
   TEST_ASSERT_FALSE(reflashInProgress(p));
 
   ReflashProgress c;
   reflashProgressBegin(c, 2);
-  reflashProgressFinish(c, true);
+  reflashProgressFinish(c, true, false);
   TEST_ASSERT_EQUAL(ReflashState::Cancelled, c.state);
 
   ReflashProgress f;
   reflashProgressBegin(f, 2);
   reflashProgressUnitStart(f, 1);
   reflashProgressUnitResult(f, false);
-  reflashProgressFinish(f, false);
+  reflashProgressFinish(f, false, false);
   TEST_ASSERT_EQUAL(ReflashState::Failed, f.state);
 }
 
@@ -284,7 +328,7 @@ static void test_cancel_wins_over_failures_in_grading() {
   reflashProgressBegin(p, 3);
   reflashProgressUnitStart(p, 1);
   reflashProgressUnitResult(p, false);
-  reflashProgressFinish(p, true);
+  reflashProgressFinish(p, true, false);
   TEST_ASSERT_EQUAL(ReflashState::Cancelled, p.state);
 }
 
@@ -307,7 +351,7 @@ static void test_classify_done_job_is_ok() {
   reflashProgressUnitResult(p, true);
   reflashProgressUnitStart(p, 2);
   reflashProgressUnitResult(p, true);
-  reflashProgressFinish(p, false);
+  reflashProgressFinish(p, false, false);
   MaintReason reason;
   TEST_ASSERT_EQUAL(MaintOutcome::Ok, classifyReflashOutcome(p, reason));
   TEST_ASSERT_EQUAL(MaintReason::None, reason);
@@ -318,14 +362,14 @@ static void test_classify_failed_and_cancelled_jobs() {
   reflashProgressBegin(f, 1);
   reflashProgressUnitStart(f, 1);
   reflashProgressUnitResult(f, false);
-  reflashProgressFinish(f, false);
+  reflashProgressFinish(f, false, false);
   MaintReason reason;
   TEST_ASSERT_EQUAL(MaintOutcome::PostconditionFail,
                     classifyReflashOutcome(f, reason));
 
   ReflashProgress c;
   reflashProgressBegin(c, 1);
-  reflashProgressFinish(c, true);
+  reflashProgressFinish(c, true, false);
   TEST_ASSERT_EQUAL(MaintOutcome::PostconditionFail,
                     classifyReflashOutcome(c, reason));
 }
@@ -335,7 +379,7 @@ static void test_empty_plan_finishes_done_and_ok() {
   // that must still grade ok — the v1 semantics for "nothing to do".
   ReflashProgress p;
   reflashProgressBegin(p, 0);
-  reflashProgressFinish(p, false);
+  reflashProgressFinish(p, false, false);
   TEST_ASSERT_EQUAL(ReflashState::Done, p.state);
   MaintReason reason;
   TEST_ASSERT_EQUAL(MaintOutcome::Ok, classifyReflashOutcome(p, reason));
@@ -360,6 +404,9 @@ int main(int, char**) {
   RUN_TEST(test_a_lone_failure_does_not_halt_the_run);
   RUN_TEST(test_two_in_a_row_halts);
   RUN_TEST(test_the_halt_threshold_bounds_the_damage);
+  RUN_TEST(test_halted_is_distinct_from_a_completed_run_with_failures);
+  RUN_TEST(test_cancel_outranks_halted);
+  RUN_TEST(test_begin_clears_a_previous_halt);
   RUN_TEST(test_fresh_progress_is_idle_and_not_in_progress);
   RUN_TEST(test_begin_enters_and_counts);
   RUN_TEST(test_unit_start_and_results_accumulate);

@@ -294,9 +294,10 @@ inline void buildReflashJson(char* buf, size_t cap,
                              const ReflashProgress& p) {
   snprintf(buf, cap,
            "{\"state\":\"%s\",\"total\":%u,\"done\":%u,\"failed\":%u,"
-           "\"cur\":%u}",
+           "\"cur\":%u,\"halted\":%s}",
            reflashStateName(p.state), (unsigned)p.total, (unsigned)p.done,
-           (unsigned)p.failed, (unsigned)p.currentAddr);
+           (unsigned)p.failed, (unsigned)p.currentAddr,
+           p.halted ? "true" : "false");
 }
 
 inline const char* selfTestOutcomeName(SelfTestOutcome o) {

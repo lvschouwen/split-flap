@@ -25,6 +25,14 @@
 // MaintenancePolicy.h, this only translates request → verdict → response.
 // Validates against the caller's snapshot COPY — a fast, possibly stale
 // view; displayTask re-runs whatever check the queue delay can invalidate.
+// /reflash-units?address= bounds the target as 1..UNITS_AMOUNT, which is the
+// unit array's valid range only while the address base is 1. MaintenancePolicy.h
+// carries the same assumption behind its own static_assert; this endpoint does
+// not go through those validators (a protocol-mismatched unit must stay
+// reflashable), so it needs its own or the bound goes stale silently.
+static_assert(SFP_I2C_ADDRESS_BASE == 1,
+              "/reflash-units address bound assumes address base 1");
+
 static bool maintCheckAddress(AsyncWebServerRequest* request,
                               const DisplaySnapshot& snap, int& outAddr) {
   String raw;

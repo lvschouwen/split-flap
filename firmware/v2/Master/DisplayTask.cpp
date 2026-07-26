@@ -435,7 +435,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // the abort flag set so this bails and the queued Stop broadcast-homes.
   wdtFeed();  // #314: boot-home of just-flashed units
   runBootHomeSequence(local, busFacts);
-  reflashProgressFinish(local.reflash, cancelled);
+  reflashProgressFinish(local.reflash, cancelled, halted);
   snapshotPublish(local);  // gate reopens here
   SerialPrintf("reflash: %s — %u ok, %u failed of %u%s\n",
                reflashStateName(local.reflash.state),

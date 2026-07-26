@@ -183,7 +183,7 @@ fi
 # --- per unit ----------------------------------------------------------------
 
 commission() {  # addr -> 0 pass, 1 fail
-  local a="$1" seq before_rev before_hf want_off
+  local a="$1" seq why before_rev before_hf want_off
   printf '=== a%s ===\n' "$a"
 
   before_rev="$(unit_field "$a" rev)"
@@ -199,16 +199,29 @@ commission() {  # addr -> 0 pass, 1 fail
     [[ -n "$seq" ]] || { fail "reflash POST gave no seq"; return 1; }
     printf '  flash       seq=%s ' "$seq"
     await_op "$seq" 180 || { fail "reflash did not complete"; return 1; }
-    local planned flashed
-    planned="$(api GET "/units/health" | jqf "d['reflash']['total']")"
-    flashed="$(api GET "/units/health" | jqf "d['reflash']['done']")"
-    if [[ "$planned" == "0" ]]; then
+    # One read, both fields: two GETs could straddle a state change, and an
+    # absent reflash object must be indistinguishable from neither.
+    local health planned flashed
+    health="$(api GET "/units/health" || true)"
+    planned="$(printf '%s' "$health" | jqf "d['reflash']['total']")"
+    flashed="$(printf '%s' "$health" | jqf "d['reflash']['done']")"
+    # Demand a POSITIVE INTEGER. Comparing against the literal "0" alone let an
+    # empty value through — and empty is exactly what an unreadable health
+    # response or an omitted reflash object produces (WebMaintenance splices
+    # that object only when it fits the JSON cap). That would silently skip the
+    # one check this step exists for.
+    if ! [[ "$planned" =~ ^[0-9]+$ ]]; then
+      fail "could not read reflash.total from /units/health (got '${planned}')
+        — refusing to assume the flash planned anything."
+      return 1
+    fi
+    if [[ "$planned" -eq 0 ]]; then
       fail "nothing was planned for a$a — its twiboot did not answer at this
         address, which means the DIP switches disagree with the burned
         address. STOP: do not erase anything else until that is resolved."
       return 1
     fi
-    printf '  flashed     %s/%s\n' "${flashed:-?}" "${planned:-?}"
+    printf '  flashed     %s/%s\n' "${flashed:-?}" "${planned}"
   fi
 
   # 2. identity
@@ -232,7 +245,7 @@ PY
   [[ -n "$want_off" ]] || { fail "no captured offset for a$a"; return 1; }
   seq="$(post_seq "/unit/offset?address=$a&value=$want_off")"
   [[ -n "$seq" ]] || { fail "offset POST gave no seq"; return 1; }
-  await_op "$seq" 30 >/dev/null || { fail "offset write did not confirm"; return 1; }
+  why="$(await_op "$seq" 30)" || { fail "offset write did not confirm: $why"; return 1; }
   local back
   back="$(api GET "/unit/offset?address=$a" | jqf "d['offset']")"
   [[ "$back" == "$want_off" ]] || { fail "offset read back '$back', wanted '$want_off'"; return 1; }
@@ -240,7 +253,8 @@ PY
 
   # 4. home
   seq="$(post_seq "/unit/home?address=$a")"
-  await_op "$seq" 60 >/dev/null || { fail "home did not complete"; return 1; }
+  [[ -n "$seq" ]] || { fail "home POST gave no seq"; return 1; }
+  why="$(await_op "$seq" 60)" || { fail "home did not complete: $why"; return 1; }
   local hs2 hf
   hs2="$(unit_field "$a" hs2)"; hf="$(unit_field "$a" hf)"
   [[ "$hs2" == "2" ]] || { fail "not homed after home (hs2=$hs2)"; return 1; }
@@ -283,14 +297,14 @@ PY
 }
 
 exercise() {  # addr -> spins the drum ROUNDS revolutions via jog
-  local a="$1" n=$(( ROUNDS * JOGS_PER_ROUND )) i seq
+  local a="$1" n=$(( ROUNDS * JOGS_PER_ROUND )) i seq why
   local odo_before odo_after
   odo_before="$(unit_field "$a" odo)"
   printf '  exercise    %s jogs' "$n"
   for (( i = 0; i < n; i++ )); do
     seq="$(post_seq "/unit/jog?address=$a&steps=$JOG_STEPS")"
     [[ -n "$seq" ]] || { echo; fail "jog $i POST gave no seq"; return 1; }
-    await_op "$seq" 20 >/dev/null || { echo; fail "jog $i did not complete"; return 1; }
+    why="$(await_op "$seq" 20)" || { echo; fail "jog $i did not complete: $why"; return 1; }
     printf '.'
   done
   odo_after="$(unit_field "$a" odo)"
