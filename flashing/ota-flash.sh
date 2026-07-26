@@ -361,7 +361,7 @@ flash_master() {
 
 install_rescue() {
   local fw="$1"
-  local size md5 rev
+  local size md5 rev url
   size=$(stat -c%s "$fw")
   md5=$(md5sum "$fw" | awk '{print $1}')
   rev=$(rev_from_name "$fw")
@@ -369,9 +369,18 @@ install_rescue() {
   echo "Rescue install: $fw"
   echo "Size / MD5    : $size bytes / $md5"
   echo "Rev           : ${rev:-<unknown>}"
+  if [[ -z "$rev" ]]; then
+    echo "WARNING: cannot derive git rev from '$(basename "$fw")' — the slot" >&2
+    echo "         will report 'unidentified' until reinstalled (#391)." >&2
+  fi
   confirm
 
-  upload_with_retry "$fw" "$TARGET/firmware/rescue?md5=$md5"
+  # #391: stamp the slot with the rev it actually holds, same as the master
+  # path. Without it the install is anonymous and /settings warns forever.
+  url="$TARGET/firmware/rescue?md5=$md5"
+  [[ -n "$rev" ]] && url="$url&v=$rev"
+
+  upload_with_retry "$fw" "$url"
   if (( CURL_RC != 0 )); then
     echo "[fail] upload failed at the network level (curl exit $CURL_RC —" >&2
     echo "       see curl's message above); the factory slot is untouched" >&2
