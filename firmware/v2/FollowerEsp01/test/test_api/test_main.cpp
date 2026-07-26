@@ -9,8 +9,8 @@
 
 #include "../../ApiIndex.h"
 #include "../../FollowerOps.h"  // ReflashProgress/buildReflashJson (#365 capacity check)
-#include "../../UnitHealth.h"
-#include "../../WearPolicy.h"   // WearAssessment/buildWearJson (#365 capacity check)
+#include "UnitHealth.h"
+#include "WearPolicy.h"   // WearAssessment/buildWearJson (#365 capacity check)
 #include "SplitFlapProtocol.h"
 
 void setUp() {}

@@ -8,7 +8,7 @@
 #include <cstring>
 
 #include "../../ApiIndex.h"
-#include "../../UnitHealth.h"
+#include "UnitHealth.h"
 #include "SplitFlapProtocol.h"
 
 void setUp() {}

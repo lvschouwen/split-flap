@@ -8,7 +8,7 @@
 
 #include <cstring>
 
-#include "../../WearPolicy.h"
+#include "WearPolicy.h"
 
 void setUp() {}
 void tearDown() {}

@@ -9,11 +9,11 @@
 
 #include <cstring>
 
-#include "../../HeartbeatPolicy.h"
-#include "../../TwibootProtocol.h"
-#include "../../UnitHealth.h"
-#include "../../UnitProtocolHelpers.h"
-#include "../../WearPolicy.h"
+#include "HeartbeatPolicy.h"
+#include "TwibootProtocol.h"
+#include "UnitHealth.h"
+#include "UnitProtocolHelpers.h"
+#include "WearPolicy.h"
 #include "SplitFlapProtocol.h"
 
 void setUp() {}

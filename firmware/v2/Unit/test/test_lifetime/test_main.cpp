@@ -7,7 +7,7 @@
 #include <unity.h>
 #include <stdint.h>
 #include <string.h>
-#include "../../UnitLifetime.h"
+#include "UnitLifetime.h"
 
 void setUp() {}
 void tearDown() {}

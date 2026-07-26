@@ -5,7 +5,7 @@
 #include <ArduinoFake.h>
 #include <unity.h>
 
-#include "../../WebBodyLimit.h"
+#include "WebBodyLimit.h"
 
 void setUp() {}
 void tearDown() {}

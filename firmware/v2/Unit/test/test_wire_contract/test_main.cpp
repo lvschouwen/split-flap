@@ -10,7 +10,7 @@
 #include <unity.h>
 #include <stdint.h>
 #include <string.h>
-#include "../../UnitWireContract.h"
+#include "UnitWireContract.h"
 
 void setUp() {}
 void tearDown() {}

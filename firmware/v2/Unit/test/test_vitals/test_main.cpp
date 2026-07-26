@@ -5,7 +5,7 @@
 #include <unity.h>
 #include <stdint.h>
 #include <string.h>
-#include "../../UnitVitals.h"
+#include "UnitVitals.h"
 
 void setUp() {}
 void tearDown() {}

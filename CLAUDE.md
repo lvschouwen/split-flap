@@ -4,16 +4,16 @@ Guidance for Claude Code in this repository. Current state only — history live
 
 ## Project
 
-Arduino-based split-flap display: a master MCU drives per-flap units over I2C. Firmware builds with **PlatformIO** — every project directory has its own `platformio.ini`; run commands from that directory. CI (`.github/workflows/build.yml`) builds every active firmware project (frozen v1/ESPMaster excluded) and runs every native/pytest suite plus the unit-bundle and copied-header drift gates (`tests/test_copied_headers.py` — its manifest and the copied-header lists here must stay in sync).
+Arduino-based split-flap display: a master MCU drives per-flap units over I2C. Firmware builds with **PlatformIO** — every project directory has its own `platformio.ini`; run commands from that directory. CI (`.github/workflows/build.yml`) builds every active firmware project (frozen v1/ESPMaster excluded) and runs every native/pytest suite plus the unit-bundle and header-sharing gates (`tests/test_copied_headers.py` — no tree may shadow a `shared/` header, and the deliberate trims must keep their copy notes).
 
 - **v1 is frozen** — only `firmware/v1/ESPMaster` remains, as reference. **Never edit anything under `firmware/v1`.**
-- **v2 is the live stack:** `Master` (ESP32-S3 N16R8 devkit), `Unit` (Arduino Nano per flap), `FollowerEsp01` (ESP-01 "dumb row" under an S3 leader). Pure-logic headers are **copies** across the v2 projects, not shared includes — fix a copied-header bug in every tree that carries it.
+- **v2 is the live stack:** `Master` (ESP32-S3 N16R8 devkit), `Unit` (Arduino Nano per flap), `FollowerEsp01` (ESP-01 "dumb row" under an S3 leader). Pure-logic headers live ONCE in `firmware/v2/shared/` and are included by every project (#408) — fix a bug there and all four trees get it. Only deliberate TRIMS (a reduced derivative, not a copy) stay per-tree, and each carries a note pointing at its source.
 
 ## Repository map
 
 - `firmware/v2/Master/` — S3 master (plain `.cpp`, console on native USB-CDC)
 - `firmware/v2/Unit/` — Nano unit: stepper + hall homing, I2C slave, EEPROM offset/address
-- `firmware/v2/shared/` — `SplitFlapProtocol.h`, the master↔unit I2C contract (`-I ../shared` from `firmware/v2/Unit`)
+- `firmware/v2/shared/` — every pure-logic header shared across the v2 trees (#408): `SplitFlapProtocol.h` (the master↔unit I2C contract + `SFP_PROTOCOL_VERSION`), the unit wire packets (`UnitWireContract.h`, `UnitVitals.h`, `UnitExtDiag.h`, `UnitLifetime.h`, `UnitProtocolHelpers.h`, `TwibootProtocol.h`), health/policy (`UnitHealth.h`, `WearPolicy.h`, `HeartbeatPolicy.h`, `BootHomePlan.h`, `RenderStagger.h`, `DisplayWidth.h`), cluster (`ClusterHmac.h`, `ClusterForeign.h`) and web (`WebBodyLimit.h`, `WebBodyLimitGuard.h`). On every project's `-I ../shared`, target AND native envs.
 - `firmware/v2/UnitBootloader/` — vendored+patched twiboot (I2C reflash of units; see its README)
 - `firmware/v2/FollowerEsp01/` — ESP-01 cluster follower "dumb row" (#298; own section below)
 - `firmware/v2/Rescue/` — break-glass image for the factory slot (#195)
@@ -130,7 +130,7 @@ Minimal ESP8266 firmware (spec `2026-07-14-v2-esp01-follower-design.md`) turning
 - Phases (pure `FollowerPolicy.h`, trimmed ClusterFollowerPolicy copy): Standalone → Clustered → Grace (holds last text) → **Blank** (~2 min silence); membership persists in EEPROM (`FollowerSettings.h`, magic `4FFS`) so a reboot lands in Grace. SNTP epoch-only for commitAt flips; unsynced = render immediately.
 - **Clock fallback (#342):** the leader's POSIX tz rides the join (`tz=` additive) and persists with the membership; a Blank row with a held membership + synced time renders centered HH:MM (pure `FollowerClock.h`) instead of going dark. Leader content replaces it; leave drops the zone; no tz or no sync = blank as before.
 - **Boot-rescue beacon (#343):** RTC-memory bad-boot counter (pure `FollowerRescue.h`, word offset 32; zeroed by 60 s uptime or the deliberate-reboot path — which OTA completion takes; a power cycle wipes it). 3 consecutive early deaths boot a minimal beacon: WiFi + cluster wire + OTA only, no I2C/probe/boot-home/render, unit ops 409, `rescue:1` in join/ping replies → the leader re-pushes the stored image.
-- Copied pure headers (fix bugs in every tree that carries the copy): `UnitHealth.h`, `UnitProtocolHelpers.h`, `WearPolicy.h`, `TwibootProtocol.h`, `DisplayWidth.h`, `FollowerCors.h`, `ClusterHmac.h`, `ClusterForeign.h`, `UnitVitals.h` (3-way: Unit tree too), `UnitExtDiag.h` (3-way: Unit tree too), `UnitLifetime.h` (3-way: Unit tree too), `UnitWireContract.h` (3-way: Unit tree too), `HeartbeatPolicy.h`, `BootHomePlan.h`, `RenderStagger.h`, `WebBodyLimit.h` (3-way: Rescue too — per-route body ceiling AND the leader's ping-digest budget; the two must not drift), `WebBodyLimitGuard.h` (3-way: Rescue too), plus `FollowerOps.h` (reflash batch size 2 — bench-tuned, NOT the S3's 4).
+- Pure logic comes from `firmware/v2/shared/` (#408) — nothing to keep in sync. Tree-LOCAL trims that are deliberately NOT the shared version: `FollowerOps.h` (reflash batch size 2 — bench-tuned, NOT the S3's 4), `FollowerCors.h`, and this tree's reduced `ApiIndex.h`.
 - `build_assets.py` bakes `data/unit-firmware.hex` (staged by `make_manifest.py stage`, CI-gated) into `UnitAssets.h` and stamps `follower-<rev>.bin` — the prefix ota-flash.sh keys the platform on.
 - Tests: `pio test -e native` (policy/settings/json/ops/clock/rescue) + the fake_leader/fake_follower twin pytest (see Cluster bullet).
 

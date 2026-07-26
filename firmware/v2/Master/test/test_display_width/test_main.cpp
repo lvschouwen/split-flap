@@ -3,7 +3,7 @@
 // effective character width every text-layout helper targets.
 
 #include <unity.h>
-#include "../../DisplayWidth.h"
+#include "DisplayWidth.h"
 
 void setUp() {}
 void tearDown() {}
