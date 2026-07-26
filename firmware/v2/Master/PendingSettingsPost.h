@@ -40,6 +40,7 @@
 #define PARAM_MQTT_USER       "mqttUser"
 #define PARAM_MQTT_PASSWORD   "mqttPassword"
 #define PARAM_UNIT_COUNT      "unitCount"
+#define PARAM_REFLASH_ON_BOOT "reflashOnBoot"
 
 struct PendingSettingsPost {
   bool pending = false;
@@ -59,6 +60,7 @@ struct PendingSettingsPost {
   String mqttUser;      bool mqttUserProvided = false;
   String mqttPassword;  bool mqttPasswordProvided = false;
   String unitCount;     bool unitCountProvided = false;
+  String reflashOnBoot; bool reflashOnBootProvided = false;  // #412
 };
 
 enum class SettingsParamResult {
@@ -166,6 +168,21 @@ inline SettingsParamResult stageSettingsParam(PendingSettingsPost& post,
     return SettingsParamResult::Accepted;
   }
 
+  // #412 boot auto-install brake. Strictly "true"/"false" — a bare presence
+  // check or a truthy-string rule would make a typo silently disarm the
+  // unattended recovery path, which is the failure this setting exists to
+  // make deliberate.
+  if (name == PARAM_REFLASH_ON_BOOT) {
+    String trimmed = rawValue;
+    trimmed.trim();
+    if (trimmed != "true" && trimmed != "false") {
+      return SettingsParamResult::Invalid;
+    }
+    post.reflashOnBoot = trimmed;
+    post.reflashOnBootProvided = true;
+    return SettingsParamResult::Accepted;
+  }
+
   if (name == PARAM_UNIT_COUNT) {
     String trimmed = rawValue;
     trimmed.trim();
@@ -233,6 +250,7 @@ inline void mergeSettingsPost(PendingSettingsPost& shared,
   if (accepted.mqttUserProvided)   { shared.mqttUser   = accepted.mqttUser;   shared.mqttUserProvided   = true; }
   if (accepted.mqttPasswordProvided) { shared.mqttPassword = accepted.mqttPassword; shared.mqttPasswordProvided = true; }
   if (accepted.unitCountProvided)  { shared.unitCount  = accepted.unitCount;  shared.unitCountProvided  = true; }
+  if (accepted.reflashOnBootProvided) { shared.reflashOnBoot = accepted.reflashOnBoot; shared.reflashOnBootProvided = true; }
   shared.pending = true;
 }
 
@@ -284,6 +302,14 @@ inline void applySettingsPost(PendingSettingsPost& post,
       settings.unitCountOverride != post.unitCount.toInt()) {
     settings.unitCountOverride = post.unitCount.toInt();
     saveUnitCountOverride(store, settings.unitCountOverride);
+  }
+
+  if (post.reflashOnBootProvided) {
+    bool want = (post.reflashOnBoot == "true");
+    if (settings.reflashOnBoot != want) {
+      settings.reflashOnBoot = want;
+      saveReflashOnBoot(store, settings.reflashOnBoot);
+    }
   }
 
   bool mqttChanged = false;

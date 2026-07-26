@@ -1,21 +1,36 @@
 #pragma once
 // Pure odometer logic for the unit's revolution counter (#231) — step
 // accumulation, EEPROM ring rotation and boot recovery, natively tested by
-// test_odometer. The EEPROM/I2C glue lives in the .ino files.
+// test_odometer. The EEPROM/I2C glue lives in the .ino files; the ring's
+// base address and the rest of the EEPROM map live in UnitEeprom.h.
 //
 // Wear model: one revolution = one full drum rotation (STEPS stepper steps,
 // passed in by the caller so this header stays free of sketch globals).
+//
 // The count is persisted every ODO_PERSIST_INTERVAL_REVS revolutions into a
-// ring of ODO_RING_SLOTS uint32 EEPROM slots — rotating the write across
-// slots multiplies EEPROM endurance by the slot count (16 slots x 100k
-// writes x 128 revs ~= 200M revolutions). Boot takes the ring maximum:
-// counts are monotonic, so the largest valid slot is always the newest.
+// ring of ODO_RING_SLOTS slots — rotating the write across slots multiplies
+// EEPROM endurance by the slot count. Boot takes the ring maximum: counts
+// are monotonic, so the largest valid slot is always the newest.
+//
+// Interval 1 means the boundary is unreachable: below it a count did not
+// merely undercount, it reset to 0 at every power loss, and a slot rotation
+// only happened after 128 revolutions no unit on the wall had ever reached.
+// 128 slots x 100k writes x 1 rev = 12.8 M revolutions of endurance, three
+// orders of magnitude past WearPolicy.h's 10,000-revolution flag threshold.
+// 128 is the largest power of two that fits the reserved region, so the slot
+// index stays a mask rather than a division on an 8-bit MCU.
 
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ODO_RING_SLOTS            16
-#define ODO_PERSIST_INTERVAL_REVS 128
+#define ODO_RING_SLOTS            128
+#define ODO_PERSIST_INTERVAL_REVS 1
+
+// Slots are INTERLEAVED: count and checksum adjacent, so a persist is one
+// contiguous 5-byte write and the slot address is a single base-plus-stride
+// rather than two writes at distant addresses.
+#define ODO_SLOT_STRIDE           5
+#define ODO_RING_BYTES            (ODO_RING_SLOTS * ODO_SLOT_STRIDE)
 
 struct OdometerState {
   uint32_t revolutions;
@@ -37,15 +52,9 @@ inline uint8_t odometerSlotIndex(uint32_t revolutions) {
   return (uint8_t)((revolutions / ODO_PERSIST_INTERVAL_REVS) % ODO_RING_SLOTS);
 }
 
-// Boot recovery: the ring maximum. 0xFFFFFFFF is erased/corrupt EEPROM, not
-// a count — trusting it would pin the odometer at 4 billion and trip the
-// wear alert forever (the #139 fresh-EEPROM lesson).
-inline uint32_t odometerBootValue(const uint32_t slots[ODO_RING_SLOTS]) {
-  uint32_t best = 0;
-  for (uint8_t i = 0; i < ODO_RING_SLOTS; i++) {
-    if (slots[i] != 0xFFFFFFFFUL && slots[i] > best) best = slots[i];
-  }
-  return best;
+// Byte offset of a slot within the ring (add the ring base to address EEPROM).
+inline uint16_t odometerSlotOffset(uint8_t slot) {
+  return (uint16_t)slot * ODO_SLOT_STRIDE;
 }
 
 inline bool odometerShouldPersist(uint32_t revolutions,
@@ -54,10 +63,10 @@ inline bool odometerShouldPersist(uint32_t revolutions,
 }
 
 // Per-slot EEPROM integrity (#354): each ring slot carries a masked XOR
-// checksum byte (own EEPROM ring, layout in Unit.ino). A power-loss-torn
-// 4-byte slot write yields a value whose checksum no longer matches — the
-// slot is skipped instead of a large garbage count being adopted at boot.
-// Mask keeps the zero count's byte away from 0x00/0xFF (erased EEPROM).
+// checksum byte. A power-loss-torn slot write yields a value whose checksum
+// no longer matches — the slot is skipped instead of a large garbage count
+// being adopted at boot. Mask keeps the zero count's byte away from
+// 0x00/0xFF (erased EEPROM).
 #define ODO_SLOT_CHECKSUM_MASK 0x3C
 
 inline uint8_t odometerSlotChecksum(uint32_t value) {
@@ -66,19 +75,29 @@ inline uint8_t odometerSlotChecksum(uint32_t value) {
   return (uint8_t)(x ^ ODO_SLOT_CHECKSUM_MASK);
 }
 
-// Boot recovery over the checksummed ring: max of the slots whose checksum
-// matches. 0xFFFFFFFF stays excluded unconditionally (the #139 lesson) —
-// a coincidentally-matching checksum must not resurrect erased EEPROM.
-inline uint32_t odometerBootValueChecked(const uint32_t slots[ODO_RING_SLOTS],
-                                         const uint8_t sums[ODO_RING_SLOTS]) {
-  uint32_t best = 0;
-  for (uint8_t i = 0; i < ODO_RING_SLOTS; i++) {
-    if (slots[i] != 0xFFFFFFFFUL && sums[i] == odometerSlotChecksum(slots[i]) &&
-        slots[i] > best) {
-      best = slots[i];
-    }
+// Boot recovery, folded one slot at a time as the sketch reads them. A
+// 128-slot ring read at once would need a 512-byte stack buffer on a 2 KB
+// Nano; this keeps recovery at O(1) RAM for any ring size.
+//
+// 0xFFFFFFFF stays excluded UNCONDITIONALLY (the #139 lesson) — erased
+// EEPROM whose checksum byte happens to match must not resurrect as a
+// 4-billion count that trips the wear alert forever.
+struct OdometerBootScan {
+  uint32_t best;
+};
+
+inline void odometerBootScanInit(OdometerBootScan& s) { s.best = 0; }
+
+inline void odometerBootScanSlot(OdometerBootScan& s, uint32_t value,
+                                 uint8_t checksum) {
+  if (value != 0xFFFFFFFFUL && checksum == odometerSlotChecksum(value) &&
+      value > s.best) {
+    s.best = value;
   }
-  return best;
+}
+
+inline uint32_t odometerBootScanResult(const OdometerBootScan& s) {
+  return s.best;
 }
 
 // SFP_CMD_GET_ODOMETER wire reply: uint32 LE + XOR-of-payload ^ 0xA5.

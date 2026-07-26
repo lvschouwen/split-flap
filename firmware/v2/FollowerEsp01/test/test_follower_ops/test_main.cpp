@@ -25,11 +25,38 @@ static void test_address_validation() {
   TEST_ASSERT_EQUAL(2, addr);
 }
 
+static void test_protocol_mismatch_unit_is_409_not_drivable() {
+  // #405 gap found in review: this gate checked only state==1, so a unit
+  // speaking a contract we have no code for would still receive every
+  // single-unit op — including the unverifiable SET_I2C_ADDRESS burn. Both
+  // rows must refuse identically.
+  UnitFacts units[16];
+  units[1].state = 1;
+  units[1].protocolKnown = true;
+  units[1].protocolVersion = SFP_PROTOCOL_VERSION;
+  int addr = 0;
+  TEST_ASSERT_EQUAL(200, maintValidateAddress("2", units, 16, addr).httpStatus);
+  units[1].protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  TEST_ASSERT_EQUAL(409, maintValidateAddress("2", units, 16, addr).httpStatus);
+  // Unreadable is absence of evidence, not evidence of difference.
+  units[1].protocolKnown = false;
+  TEST_ASSERT_EQUAL(200, maintValidateAddress("2", units, 16, addr).httpStatus);
+}
+
 static void test_offset_and_jog_ranges() {
   TEST_ASSERT_EQUAL(200, maintValidateOffset(SFP_OFFSET_LIMIT_STEPS).httpStatus);
   TEST_ASSERT_EQUAL(400, maintValidateOffset(SFP_OFFSET_LIMIT_STEPS + 1).httpStatus);
   TEST_ASSERT_EQUAL(200, maintValidateJog(-127).httpStatus);
   TEST_ASSERT_EQUAL(400, maintValidateJog(128).httpStatus);
+}
+
+// Feature gates ride the wire as one byte (#409); the vocabulary check is the
+// unit's, not this row's.
+static void test_gates_range_is_one_byte() {
+  TEST_ASSERT_EQUAL(200, maintValidateGates(0).httpStatus);
+  TEST_ASSERT_EQUAL(200, maintValidateGates(255).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(256).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(-1).httpStatus);
 }
 
 // --- op-result slot ----------------------------------------------------------------
@@ -82,10 +109,20 @@ static void test_self_test_result_json() {
       "\"rev_time_ms\":4100}",
       buf);
 
+  // #404: a failure carries the unit's own failure mode plus whatever it
+  // measured before giving up — byte-for-byte the master's shape, so both
+  // rows report identically.
   slot.outcome = SelfTestOutcome::Timeout;
   buildSelfTestJson(buf, sizeof(buf), slot, 1);
-  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"timeout\"}",
-                           buf);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"reason\":\"timeout\",\"unit_reason\":\"none\","
+      "\"steps_per_rev\":2050,\"hall_window\":59,\"rev_time_ms\":4100}",
+      buf);
+
+  slot.outcome = SelfTestOutcome::UnitFailed;
+  slot.unitReason = SELFTEST_REASON_HALL_NEVER;
+  buildSelfTestJson(buf, sizeof(buf), slot, 1);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"unit_reason\":\"hall-never\""));
 }
 
 // --- reflash progress ---------------------------------------------------------------
@@ -109,7 +146,9 @@ static void test_reflash_json_and_gate() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_address_validation);
+  RUN_TEST(test_protocol_mismatch_unit_is_409_not_drivable);
   RUN_TEST(test_offset_and_jog_ranges);
+  RUN_TEST(test_gates_range_is_one_byte);
   RUN_TEST(test_op_result_pending_found_expired);
   RUN_TEST(test_op_result_failure_carries_reason);
   RUN_TEST(test_self_test_result_json);

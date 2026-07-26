@@ -408,6 +408,52 @@ static void test_apply_persists_unit_count_override() {
   TEST_ASSERT_EQUAL_INT(0, settings.unitCountOverride);
 }
 
+// --- boot auto-install brake (#412) -----------------------------------------
+
+static void test_reflash_on_boot_defaults_true() {
+  FakeSettingsStore store;
+  // The auto-install is the unattended recovery path for a unit that came
+  // back from a failed flash. Defaulting the brake ON would strand those.
+  TEST_ASSERT_TRUE(loadSettings(store).reflashOnBoot);
+}
+
+static void test_stage_reflash_on_boot_takes_only_true_or_false() {
+  PendingSettingsPost post;
+  TEST_ASSERT_EQUAL((int)SettingsParamResult::Accepted,
+                    (int)stageSettingsParam(post, PARAM_REFLASH_ON_BOOT, " false "));
+  TEST_ASSERT_TRUE(post.reflashOnBootProvided);
+  TEST_ASSERT_EQUAL_STRING("false", post.reflashOnBoot.c_str());
+}
+
+// A truthy-string or presence rule would let a typo silently disarm the
+// unattended recovery path — the exact failure this setting exists to make
+// deliberate. "0", "no" and "" are all rejected rather than read as false.
+static void test_stage_reflash_on_boot_rejects_near_misses() {
+  PendingSettingsPost post;
+  const char* rejected[] = {"0", "1", "no", "yes", "False", "", "off"};
+  for (unsigned i = 0; i < sizeof(rejected) / sizeof(rejected[0]); i++) {
+    TEST_ASSERT_EQUAL((int)SettingsParamResult::Invalid,
+                      (int)stageSettingsParam(post, PARAM_REFLASH_ON_BOOT,
+                                              rejected[i]));
+  }
+  TEST_ASSERT_FALSE(post.reflashOnBootProvided);
+}
+
+static void test_apply_persists_reflash_on_boot_both_ways() {
+  FakeSettingsStore store;
+  MasterSettings settings = loadSettings(store);
+  PendingSettingsPost post;
+  stageSettingsParam(post, PARAM_REFLASH_ON_BOOT, "false");
+  applySettingsPost(post, settings, store);
+  TEST_ASSERT_FALSE(settings.reflashOnBoot);
+  // Survives a reload — the campaign spans reboots, so this must be durable.
+  TEST_ASSERT_FALSE(loadSettings(store).reflashOnBoot);
+  stageSettingsParam(post, PARAM_REFLASH_ON_BOOT, "true");
+  applySettingsPost(post, settings, store);
+  TEST_ASSERT_TRUE(settings.reflashOnBoot);
+  TEST_ASSERT_TRUE(loadSettings(store).reflashOnBoot);
+}
+
 // --- device role (#329 headless mode) --------------------------------------
 
 static void test_device_role_defaults_to_display() {
@@ -480,6 +526,10 @@ int main(int, char**) {
   RUN_TEST(test_stage_unit_count_accepts_and_trims);
   RUN_TEST(test_stage_unit_count_rejects_out_of_range);
   RUN_TEST(test_apply_persists_unit_count_override);
+  RUN_TEST(test_reflash_on_boot_defaults_true);
+  RUN_TEST(test_stage_reflash_on_boot_takes_only_true_or_false);
+  RUN_TEST(test_stage_reflash_on_boot_rejects_near_misses);
+  RUN_TEST(test_apply_persists_reflash_on_boot_both_ways);
   RUN_TEST(test_device_role_defaults_to_display);
   RUN_TEST(test_stage_device_role_accepts_the_headless_roles);
   RUN_TEST(test_stage_device_role_rejects_unknown);

@@ -18,6 +18,7 @@
 
 #include "SplitFlapProtocol.h"
 #include "UnitHealth.h"
+#include "UnitSelfTest.h"  // SELFTEST_REASON_* + selfTestReasonName (#404)
 
 static_assert(SFP_I2C_ADDRESS_BASE == 1,
               "maintenance validators assume address base 1");
@@ -47,6 +48,18 @@ inline MaintVerdict maintValidateAddress(const char* raw,
   if (unitIndex < 0 || unitIndex >= maxUnits || units[unitIndex].state != 1) {
     return {404, "No sketch-running unit at that address"};
   }
+  // #405: a unit reporting a wire contract we do not speak is present but not
+  // drivable, so every single-unit op behind this gate is refused. Without it
+  // an operator could still fire the most consequential one of all —
+  // SET_I2C_ADDRESS, an unverifiable address burn whose recovery is a physical
+  // trip — at a unit whose reply layout we cannot even parse.
+  //
+  // POST /unit/reboot deliberately does NOT come through here (it range-checks
+  // itself), which is what keeps ENTER_BOOTLOADER reachable and a mismatched
+  // unit always recoverable by reflash.
+  if (!unitDrivable(units[unitIndex])) {
+    return {409, "Unit reports an unrecognised protocol version — reflash it"};
+  }
   outAddr = (int)parsed;
   return {};
 }
@@ -70,6 +83,17 @@ inline void maintEncodeOffsetLE(int16_t value, uint8_t out[2]) {
   out[1] = (uint8_t)(((uint16_t)value >> 8) & 0xFF);
 }
 
+// Feature gates are one wire byte (#409). WHICH bits are legal belongs to the
+// unit's firmware, which refuses any it has no code for — this row's five
+// units are gated the same way row 1's sixteen are, or they would need a
+// reflash to enable what the S3 rows enable with a curl.
+inline MaintVerdict maintValidateGates(long gates) {
+  if (gates < 0 || gates > 255) {
+    return {400, "Gates must be a 0..255 bit mask"};
+  }
+  return {};
+}
+
 inline uint8_t maintEncodeJogByte(int steps) {
   if (steps > 127) steps = 127;
   if (steps < -127) steps = -127;
@@ -87,6 +111,7 @@ enum class FollowerOpKind : uint8_t {
   ResetOdometer,
   SelfTest,
   RebootToBootloader,
+  SetGates,
 };
 
 // --- execution outcomes (the /unit/op-result vocabulary, v2 copies) ----------------
@@ -185,6 +210,10 @@ struct SelfTestSlot {
   uint16_t stepsPerRev = 0;
   uint16_t hallWindowSteps = 0;
   uint16_t revTimeMs = 0;
+  // Which of the unit's three failure modes fired (#404), SELFTEST_REASON_*.
+  // `outcome` is this row master's view; this is the unit's own account of
+  // why. Both rows must report identically.
+  uint8_t unitReason = SELFTEST_REASON_NONE;
 };
 
 inline const char* selfTestOutcomeName(SelfTestOutcome o) {
@@ -218,8 +247,15 @@ inline void buildSelfTestJson(char* buf, size_t cap, const SelfTestSlot& slot,
              (unsigned)slot.revTimeMs);
     return;
   }
-  snprintf(buf, cap, "{\"state\":\"failed\",\"reason\":\"%s\"}",
-           selfTestOutcomeName(slot.outcome));
+  // #404: carry the unit's own failure mode and whatever it measured before
+  // giving up, exactly as the master's buildSelfTestJson does.
+  snprintf(buf, cap,
+           "{\"state\":\"failed\",\"reason\":\"%s\",\"unit_reason\":\"%s\","
+           "\"steps_per_rev\":%u,\"hall_window\":%u,\"rev_time_ms\":%u}",
+           selfTestOutcomeName(slot.outcome),
+           selfTestReasonName(slot.unitReason),
+           (unsigned)slot.stepsPerRev, (unsigned)slot.hallWindowSteps,
+           (unsigned)slot.revTimeMs);
 }
 
 // --- reflash progress (#205 shape, v2 ReflashPlan.h copies) -------------------------

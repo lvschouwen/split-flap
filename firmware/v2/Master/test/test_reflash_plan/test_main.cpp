@@ -27,6 +27,85 @@ static void test_needs_reboot_only_for_sketch_units_off_the_bundle() {
   TEST_ASSERT_FALSE(reflashUnitNeedsReboot(u));
 }
 
+// --- protocol-version mismatch (#405) ----------------------------------------
+// A unit reporting a wire contract we do not speak cannot be driven at all, so
+// converging it is the only way it becomes useful again. Equality-based: the
+// master cannot speak a contract it has no code for, so a HIGHER version is
+// exactly as un-drivable as a lower one.
+
+static void test_protocol_mismatch_needs_a_successful_read() {
+  UnitFacts u;
+  u.state = 1;
+  u.fwStatus = 0;  // rev is current — only the protocol is wrong
+  // Never read: absence of information, not proof of difference.
+  u.protocolKnown = false;
+  u.protocolVersion = 0;
+  TEST_ASSERT_FALSE(reflashUnitProtocolMismatch(u));
+  // Read, and it is ours.
+  u.protocolKnown = true;
+  u.protocolVersion = SFP_PROTOCOL_VERSION;
+  TEST_ASSERT_FALSE(reflashUnitProtocolMismatch(u));
+  // Read, and it is not ours.
+  u.protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  TEST_ASSERT_TRUE(reflashUnitProtocolMismatch(u));
+}
+
+static void test_protocol_mismatch_forces_reboot_even_on_the_bundled_rev() {
+  // The rev can match while the contract does not — a unit flashed from a
+  // different build line, say. The mismatch alone must make it a target.
+  UnitFacts u;
+  u.state = 1;
+  u.fwStatus = 0;
+  u.protocolKnown = true;
+  u.protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  TEST_ASSERT_TRUE(reflashUnitNeedsReboot(u));
+}
+
+static void test_protocol_mismatch_is_flashed_regardless_of_direction() {
+  // "Newer" is not a thing we can act on, and the rev is a hash so it is not
+  // orderable at all. Both directions converge on the master's bundle.
+  UnitFacts lower;
+  lower.state = 1; lower.fwStatus = 0;
+  lower.protocolKnown = true; lower.protocolVersion = 0;
+  TEST_ASSERT_TRUE(reflashUnitNeedsReboot(lower));
+
+  UnitFacts higher;
+  higher.state = 1; higher.fwStatus = 0;
+  higher.protocolKnown = true; higher.protocolVersion = 0xFF;
+  TEST_ASSERT_TRUE(reflashUnitNeedsReboot(higher));
+}
+
+static void test_protocol_mismatch_is_boot_auto_update_eligible() {
+  // Unlike an unreadable rev, a mismatch is PROOF — the read succeeded and
+  // reported a contract that is not ours. So it qualifies for the narrow boot
+  // auto-update path, while fwStatus==2 (unreadable) still does not.
+  UnitFacts facts[UNITS_AMOUNT];
+  facts[0].state = 1; facts[0].fwStatus = 2;  // unreadable — still excluded
+  facts[1].state = 1; facts[1].fwStatus = 0;
+  facts[1].protocolKnown = true;
+  facts[1].protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  uint8_t addrs[UNITS_AMOUNT];
+  int n = reflashCollectOutdatedTargets(facts, UNITS_AMOUNT, 1, addrs);
+  TEST_ASSERT_EQUAL(1, n);
+  TEST_ASSERT_EQUAL_UINT8(2, addrs[0]);  // base 1 + index 1
+}
+
+static void test_protocol_mismatch_makes_a_unit_undrivable() {
+  // The producer gate: no renders, no polls, no calibration. It stays state==1
+  // so the reflash path can still reach it.
+  UnitFacts u;
+  u.state = 1;
+  u.protocolKnown = true;
+  u.protocolVersion = SFP_PROTOCOL_VERSION;
+  TEST_ASSERT_TRUE(unitDrivable(u));
+  u.protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  TEST_ASSERT_FALSE(unitDrivable(u));
+  // Never read: we have no evidence against it, so it stays drivable rather
+  // than the whole wall going dark on a transient read failure.
+  u.protocolKnown = false;
+  TEST_ASSERT_TRUE(unitDrivable(u));
+}
+
 static void test_collect_reboot_targets_fills_addresses() {
   UnitFacts facts[UNITS_AMOUNT];
   facts[0].state = 1; facts[0].fwStatus = 0;  // on bundle — skipped
@@ -75,6 +154,112 @@ static void test_batch_constants() {
   TEST_ASSERT_EQUAL(500, TWIBOOT_STARTUP_MS);
 }
 
+// --- single-unit targeting (#412) --------------------------------------------
+// The #407 image is a day-0 EEPROM erase on a contract that has never run on
+// hardware, so the campaign flashes one unit, inspects it, and only then moves
+// on. The filter composes with all three collectors rather than being threaded
+// through each of them.
+
+static void test_zero_address_means_the_whole_fleet() {
+  uint8_t addrs[4] = {1, 2, 3, 4};
+  TEST_ASSERT_EQUAL(4, reflashFilterToAddress(addrs, 4, 0));
+  TEST_ASSERT_EQUAL_UINT8(1, addrs[0]);
+  TEST_ASSERT_EQUAL_UINT8(4, addrs[3]);
+}
+
+static void test_a_targeted_address_narrows_to_exactly_that_unit() {
+  uint8_t addrs[4] = {1, 2, 3, 4};
+  TEST_ASSERT_EQUAL(1, reflashFilterToAddress(addrs, 4, 3));
+  TEST_ASSERT_EQUAL_UINT8(3, addrs[0]);
+}
+
+// The targeted unit is not in the plan — it is already on the bundle, silent,
+// or (for the flash phase) never made it into twiboot. An empty plan finishes
+// Done/Ok, which is the honest answer: nothing to do at that address.
+static void test_a_targeted_address_absent_from_the_plan_yields_nothing() {
+  uint8_t addrs[3] = {1, 2, 4};
+  TEST_ASSERT_EQUAL(0, reflashFilterToAddress(addrs, 3, 3));
+  TEST_ASSERT_EQUAL(0, reflashFilterToAddress(addrs, 0, 1));
+}
+
+// The point of filtering BOTH phases: a unit stranded in twiboot by an earlier
+// attempt must not be swept up by a run targeting a different address.
+static void test_filtering_the_flash_phase_leaves_a_stranded_unit_alone() {
+  UnitFacts facts[4];
+  for (int i = 0; i < 4; i++) facts[i] = UnitFacts{};
+  facts[1].state = 2;  // addr 2 stranded in twiboot from a previous attempt
+  facts[2].state = 2;  // addr 3 is the one we are targeting now
+  uint8_t addrs[4];
+  int n = reflashCollectFlashTargets(facts, 4, 1, addrs);
+  TEST_ASSERT_EQUAL(2, n);
+  n = reflashFilterToAddress(addrs, n, 3);
+  TEST_ASSERT_EQUAL(1, n);
+  TEST_ASSERT_EQUAL_UINT8(3, addrs[0]);
+}
+
+// --- consecutive-failure halt (#412) ----------------------------------------
+
+// The halt has to be legible over the API, not just on the serial log: a run
+// that stopped early and a run that finished with the same failure count are
+// otherwise the same JSON, and telling those apart is the whole point.
+static void test_halted_is_distinct_from_a_completed_run_with_failures() {
+  ReflashProgress halted;
+  reflashProgressBegin(halted, 4);
+  reflashProgressUnitResult(halted, false);
+  reflashProgressUnitResult(halted, false);
+  reflashProgressFinish(halted, false, true);
+
+  ReflashProgress ranOut;
+  reflashProgressBegin(ranOut, 4);
+  reflashProgressUnitResult(ranOut, false);
+  reflashProgressUnitResult(ranOut, false);
+  reflashProgressFinish(ranOut, false, false);
+
+  // Same counters, same state — only `halted` separates them.
+  TEST_ASSERT_EQUAL(halted.failed, ranOut.failed);
+  TEST_ASSERT_TRUE(halted.state == ranOut.state);
+  TEST_ASSERT_TRUE(halted.halted);
+  TEST_ASSERT_FALSE(ranOut.halted);
+}
+
+// The operator pulled the plug — that is the reason, not a suspect image.
+static void test_cancel_outranks_halted() {
+  ReflashProgress p;
+  reflashProgressBegin(p, 4);
+  reflashProgressUnitResult(p, false);
+  reflashProgressFinish(p, true, true);
+  TEST_ASSERT_TRUE(p.state == ReflashState::Cancelled);
+  TEST_ASSERT_FALSE(p.halted);
+}
+
+static void test_begin_clears_a_previous_halt() {
+  ReflashProgress p;
+  reflashProgressBegin(p, 2);
+  reflashProgressUnitResult(p, false);
+  reflashProgressFinish(p, false, true);
+  TEST_ASSERT_TRUE(p.halted);
+  reflashProgressBegin(p, 2);  // next job must not inherit it
+  TEST_ASSERT_FALSE(p.halted);
+}
+
+
+static void test_a_lone_failure_does_not_halt_the_run() {
+  // a15 is hall-dead. It must not wedge every future fleet converge.
+  TEST_ASSERT_FALSE(reflashShouldHalt(0));
+  TEST_ASSERT_FALSE(reflashShouldHalt(1));
+}
+
+static void test_two_in_a_row_halts() {
+  TEST_ASSERT_TRUE(reflashShouldHalt(REFLASH_MAX_CONSECUTIVE_FAILURES));
+  TEST_ASSERT_TRUE(reflashShouldHalt(REFLASH_MAX_CONSECUTIVE_FAILURES + 1));
+}
+
+// The threshold has to be low enough that a bad image cannot take the row.
+static void test_the_halt_threshold_bounds_the_damage() {
+  TEST_ASSERT_LESS_THAN_UINT8(REFLASH_BATCH_SIZE,
+                              REFLASH_MAX_CONSECUTIVE_FAILURES);
+}
+
 // --- progress state machine ----------------------------------------------------
 
 static void test_fresh_progress_is_idle_and_not_in_progress() {
@@ -120,21 +305,21 @@ static void test_finish_grades_done_cancelled_failed() {
   reflashProgressBegin(p, 2);
   reflashProgressUnitStart(p, 1);
   reflashProgressUnitResult(p, true);
-  reflashProgressFinish(p, false);
+  reflashProgressFinish(p, false, false);
   TEST_ASSERT_EQUAL(ReflashState::Done, p.state);
   TEST_ASSERT_EQUAL_UINT8(0, p.currentAddr);
   TEST_ASSERT_FALSE(reflashInProgress(p));
 
   ReflashProgress c;
   reflashProgressBegin(c, 2);
-  reflashProgressFinish(c, true);
+  reflashProgressFinish(c, true, false);
   TEST_ASSERT_EQUAL(ReflashState::Cancelled, c.state);
 
   ReflashProgress f;
   reflashProgressBegin(f, 2);
   reflashProgressUnitStart(f, 1);
   reflashProgressUnitResult(f, false);
-  reflashProgressFinish(f, false);
+  reflashProgressFinish(f, false, false);
   TEST_ASSERT_EQUAL(ReflashState::Failed, f.state);
 }
 
@@ -143,7 +328,7 @@ static void test_cancel_wins_over_failures_in_grading() {
   reflashProgressBegin(p, 3);
   reflashProgressUnitStart(p, 1);
   reflashProgressUnitResult(p, false);
-  reflashProgressFinish(p, true);
+  reflashProgressFinish(p, true, false);
   TEST_ASSERT_EQUAL(ReflashState::Cancelled, p.state);
 }
 
@@ -166,7 +351,7 @@ static void test_classify_done_job_is_ok() {
   reflashProgressUnitResult(p, true);
   reflashProgressUnitStart(p, 2);
   reflashProgressUnitResult(p, true);
-  reflashProgressFinish(p, false);
+  reflashProgressFinish(p, false, false);
   MaintReason reason;
   TEST_ASSERT_EQUAL(MaintOutcome::Ok, classifyReflashOutcome(p, reason));
   TEST_ASSERT_EQUAL(MaintReason::None, reason);
@@ -177,14 +362,14 @@ static void test_classify_failed_and_cancelled_jobs() {
   reflashProgressBegin(f, 1);
   reflashProgressUnitStart(f, 1);
   reflashProgressUnitResult(f, false);
-  reflashProgressFinish(f, false);
+  reflashProgressFinish(f, false, false);
   MaintReason reason;
   TEST_ASSERT_EQUAL(MaintOutcome::PostconditionFail,
                     classifyReflashOutcome(f, reason));
 
   ReflashProgress c;
   reflashProgressBegin(c, 1);
-  reflashProgressFinish(c, true);
+  reflashProgressFinish(c, true, false);
   TEST_ASSERT_EQUAL(MaintOutcome::PostconditionFail,
                     classifyReflashOutcome(c, reason));
 }
@@ -194,7 +379,7 @@ static void test_empty_plan_finishes_done_and_ok() {
   // that must still grade ok — the v1 semantics for "nothing to do".
   ReflashProgress p;
   reflashProgressBegin(p, 0);
-  reflashProgressFinish(p, false);
+  reflashProgressFinish(p, false, false);
   TEST_ASSERT_EQUAL(ReflashState::Done, p.state);
   MaintReason reason;
   TEST_ASSERT_EQUAL(MaintOutcome::Ok, classifyReflashOutcome(p, reason));
@@ -203,10 +388,25 @@ static void test_empty_plan_finishes_done_and_ok() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_needs_reboot_only_for_sketch_units_off_the_bundle);
+  RUN_TEST(test_protocol_mismatch_needs_a_successful_read);
+  RUN_TEST(test_protocol_mismatch_forces_reboot_even_on_the_bundled_rev);
+  RUN_TEST(test_protocol_mismatch_is_flashed_regardless_of_direction);
+  RUN_TEST(test_protocol_mismatch_is_boot_auto_update_eligible);
+  RUN_TEST(test_protocol_mismatch_makes_a_unit_undrivable);
   RUN_TEST(test_collect_reboot_targets_fills_addresses);
   RUN_TEST(test_collect_flash_targets_takes_bootloader_units_only);
   RUN_TEST(test_collect_outdated_targets_skips_unknown_revs);
   RUN_TEST(test_batch_constants);
+  RUN_TEST(test_zero_address_means_the_whole_fleet);
+  RUN_TEST(test_a_targeted_address_narrows_to_exactly_that_unit);
+  RUN_TEST(test_a_targeted_address_absent_from_the_plan_yields_nothing);
+  RUN_TEST(test_filtering_the_flash_phase_leaves_a_stranded_unit_alone);
+  RUN_TEST(test_a_lone_failure_does_not_halt_the_run);
+  RUN_TEST(test_two_in_a_row_halts);
+  RUN_TEST(test_the_halt_threshold_bounds_the_damage);
+  RUN_TEST(test_halted_is_distinct_from_a_completed_run_with_failures);
+  RUN_TEST(test_cancel_outranks_halted);
+  RUN_TEST(test_begin_clears_a_previous_halt);
   RUN_TEST(test_fresh_progress_is_idle_and_not_in_progress);
   RUN_TEST(test_begin_enters_and_counts);
   RUN_TEST(test_unit_start_and_results_accumulate);

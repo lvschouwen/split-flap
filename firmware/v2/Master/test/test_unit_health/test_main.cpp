@@ -9,11 +9,11 @@
 
 #include <cstring>
 
-#include "../../HeartbeatPolicy.h"
-#include "../../TwibootProtocol.h"
-#include "../../UnitHealth.h"
-#include "../../UnitProtocolHelpers.h"
-#include "../../WearPolicy.h"
+#include "HeartbeatPolicy.h"
+#include "TwibootProtocol.h"
+#include "UnitHealth.h"
+#include "UnitProtocolHelpers.h"
+#include "WearPolicy.h"
 #include "SplitFlapProtocol.h"
 
 void setUp() {}
@@ -439,6 +439,15 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].extDiag.hallEdgesLastRev = 0xFF;
     units[i].extDiag.dutyWindow = 0xFFFF;
     units[i].extDiag.statusBits = 0xFF;
+    // Widest lifetime block (#406): all fields saturated.
+    units[i].lifetimeValid = true;
+    units[i].lifetime.homeFailedCount = 0xFF;
+    units[i].lifetime.featureGates = 0xFF;
+    units[i].lifetime.stepExcessLifetimeMax = 0xFFFF;
+    units[i].lifetime.selfTestFirstHallWindow = 0xFFFF;
+    units[i].lifetime.selfTestFirstStepsPerRev = 0xFFFF;
+    units[i].lifetime.selfTestLastHallWindow = 0xFFFF;
+    units[i].lifetime.selfTestLastStepsPerRev = 0xFFFF;
   }
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
@@ -453,6 +462,75 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"he\":255"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"dw\":65535"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"sb\":255"));
+  // Same for the lifetime block (#406).
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"hf\":255"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"gates\":255"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sxl\":65535"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"stw0\":65535,\"stw1\":65535"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"str0\":65535,\"str1\":65535"));
+}
+
+// --- lifetime block (#406) ---------------------------------------------------
+
+static void test_health_json_lifetime_emitted_when_valid() {
+  UnitFacts units[2];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].lifetimeValid = true;
+  units[0].lifetime.homeFailedCount = 4;
+  units[0].lifetime.featureGates = 1;
+  units[0].lifetime.stepExcessLifetimeMax = 61;
+  units[0].lifetime.selfTestFirstHallWindow = 46;
+  units[0].lifetime.selfTestLastHallWindow = 12;
+  units[0].lifetime.selfTestFirstStepsPerRev = 2038;
+  units[0].lifetime.selfTestLastStepsPerRev = 2044;
+  units[1].state = 1;
+  units[1].statusValid = true;  // old firmware: no lifetime read at all
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 0);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"hf\":4"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"gates\":1"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sxl\":61"));
+  // The first/last pairs are the diagnosis — 46 when new, 12 now.
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"stw0\":46,\"stw1\":12"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"str0\":2038,\"str1\":2044"));
+  char* second = strstr(buf, "\"i\":1");
+  TEST_ASSERT_NOT_NULL(second);
+  TEST_ASSERT_NULL(strstr(second, "\"hf\""));
+}
+
+static void test_health_json_fresh_unit_emits_no_lifetime_keys() {
+  // A unit that has never failed a homing and never run a self-test reports a
+  // valid all-zero record. Emitting seven zero keys for every healthy unit on
+  // the wall is pure payload — the emit-when-nonzero guard keeps it lean.
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].lifetimeValid = true;  // valid, but nothing has happened yet
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NULL(strstr(buf, "\"hf\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"gates\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"sxl\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"stw0\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"str0\""));
+}
+
+static void test_health_json_self_test_pair_emits_when_only_one_is_set() {
+  // A unit whose only self-test failed to measure steps/rev still has a hall
+  // window worth reporting; the pair must not vanish because its twin is 0.
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].lifetimeValid = true;
+  units[0].lifetime.selfTestFirstHallWindow = 46;
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"stw0\":46,\"stw1\":0"));
+  TEST_ASSERT_NULL(strstr(buf, "\"str0\""));
 }
 
 // --- ext-diag block (#365) ---------------------------------------------------
@@ -524,6 +602,15 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].extDiag.hallEdgesLastRev = 0xFF;
     units[i].extDiag.dutyWindow = 0xFFFF;
     units[i].extDiag.statusBits = 0xFF;
+    // Widest lifetime block (#406): all fields saturated.
+    units[i].lifetimeValid = true;
+    units[i].lifetime.homeFailedCount = 0xFF;
+    units[i].lifetime.featureGates = 0xFF;
+    units[i].lifetime.stepExcessLifetimeMax = 0xFFFF;
+    units[i].lifetime.selfTestFirstHallWindow = 0xFFFF;
+    units[i].lifetime.selfTestFirstStepsPerRev = 0xFFFF;
+    units[i].lifetime.selfTestLastHallWindow = 0xFFFF;
+    units[i].lifetime.selfTestLastStepsPerRev = 0xFFFF;
   }
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
@@ -757,6 +844,9 @@ int main(int, char**) {
   RUN_TEST(test_health_json_no_mismatch_without_position);
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
   RUN_TEST(test_health_json_ext_diag_emitted_when_valid);
+  RUN_TEST(test_health_json_lifetime_emitted_when_valid);
+  RUN_TEST(test_health_json_fresh_unit_emits_no_lifetime_keys);
+  RUN_TEST(test_health_json_self_test_pair_emits_when_only_one_is_set);
   RUN_TEST(test_health_json_combined_splices_fit_cap);
   RUN_TEST(test_health_json_vitals_emitted_when_valid);
   RUN_TEST(test_health_json_headline_vccmin_is_min_across_units);

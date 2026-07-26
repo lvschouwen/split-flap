@@ -44,6 +44,7 @@ static constexpr uint32_t UNIT_BUS_FREQ_HZ = 100000;
 // Delay between an opcode write and the read-back clocking, so the slave's
 // receiveEvent ISR has time to flip its pending*Response flag.
 static constexpr uint32_t UNIT_RESPONSE_SETTLE_MS = 2;
+
 // How long waitForDisplayToStop() keeps polling before assuming a unit is
 // physically stuck (status byte pegged at 1) and moving on. This and any
 // other display stuck-timeout must stay <= the TWDT timeout, OR the poll
@@ -148,20 +149,27 @@ static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf, uint8_t n) {
   return true;
 }
 
-// Reads the 8-byte health/status payload via CMD_GET_STATUS (v1 #47).
-// Returns true on success. Short replies (old firmware predating this
-// opcode) or Wire failures return false without touching `out`.
+// Reads the 8-byte health/status payload + its #405 checksum via
+// CMD_GET_STATUS (v1 #47). Returns true on success; `out` is untouched on
+// failure. This is the highest-frequency read on the bus and feeds fault
+// flags, reset counts, uptime, stale detection, the event log and the HA
+// sensors — a corrupted byte used to be able to invent a fault or mask a real
+// one with nothing to catch it.
 static bool readUnitStatus(int i2cAddress, UnitStatus& out) {
-  uint8_t buf[8];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_STATUS, buf, 8)) return false;
-  out.flags                 = buf[0];
-  out.mcusrAtBoot           = buf[1];
-  out.lifetimeBrownoutCount = buf[2];
-  out.lifetimeWatchdogCount = buf[3];
-  out.uptimeSeconds         = ((uint16_t)buf[4] << 8) | (uint16_t)buf[5];
-  out.badCommandCount       = buf[6];
+  uint8_t buf[STATUS_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_STATUS, buf, STATUS_REPLY_LEN)) {
+    return false;
+  }
+  uint8_t p[STATUS_PAYLOAD_LEN];
+  if (!statusReadbackValid(buf, STATUS_REPLY_LEN, p)) return false;
+  out.flags                 = p[0];
+  out.mcusrAtBoot           = p[1];
+  out.lifetimeBrownoutCount = p[2];
+  out.lifetimeWatchdogCount = p[3];
+  out.uptimeSeconds         = ((uint16_t)p[4] << 8) | (uint16_t)p[5];
+  out.badCommandCount       = p[6];
   // Byte 7 is last-homing-step / 16 (saturating); decode by reversing.
-  out.lastHomingStepCount   = (uint16_t)buf[7] << 4;
+  out.lastHomingStepCount   = (uint16_t)p[7] << 4;
   return true;
 }
 
@@ -254,14 +262,40 @@ static void refreshUnitExtDiag(UnitFacts& fact, int i2cAddress) {
   fact.extDiagValid = true;
 }
 
+// Reads what the unit's EEPROM remembers across power cycles via
+// CMD_GET_LIFETIME (#406): 15 bytes, masked XOR checksum. Pre-lifetime
+// firmware answers the unknown opcode with its 1-byte status fallback + bus
+// padding, and lifetimeReadbackValid rejects it on LENGTH before the checksum
+// even matters — during a fleet reflash the wall runs both firmwares, so this
+// path is exercised for real, not theoretically.
+static bool readUnitLifetime(int i2cAddress, UnitLifetimeFacts& out) {
+  uint8_t buf[LIFETIME_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_LIFETIME, buf, LIFETIME_REPLY_LEN)) {
+    return false;
+  }
+  return lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out);
+}
+
+// Folds a lifetime read into the slot; clears lifetimeValid first so a unit
+// that stops answering (or was reflashed to pre-lifetime firmware) never
+// keeps serving a stale record (same discipline as refreshUnitExtDiag).
+static void refreshUnitLifetime(UnitFacts& fact, int i2cAddress) {
+  fact.lifetimeValid = false;
+  UnitLifetimeFacts lt;
+  if (!readUnitLifetime(i2cAddress, lt)) return;
+  fact.lifetime = lt;
+  fact.lifetimeValid = true;
+}
+
 // Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
 // true on success; `out` is untouched on failure (old firmware predating
 // v1 #32 answers short — the drain-and-fail path).
 static bool readUnitOffset(int i2cAddress, int16_t& out) {
-  uint8_t buf[2];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_OFFSET, buf, 2)) return false;
-  out = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
-  return true;
+  uint8_t buf[OFFSET_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_OFFSET, buf, OFFSET_REPLY_LEN)) {
+    return false;
+  }
+  return offsetReadbackValid(buf, OFFSET_REPLY_LEN, out);
 }
 
 // Asks a sketch-mode unit for its firmware GIT_REV via CMD_GET_VERSION.
@@ -269,19 +303,29 @@ static bool readUnitOffset(int i2cAddress, int16_t& out) {
 // Rejects `"` and `\` at the I2C boundary (v1 #140): the string is emitted
 // raw into the health JSON, and a glitched read carrying either would break
 // JSON.parse — a real git short-rev never contains them.
-static bool readUnitVersion(int i2cAddress, char* out) {
+// Also yields the unit's SFP_PROTOCOL_VERSION (#405) — the one number that
+// says which wire contract this unit speaks. That is why this reply's shape is
+// frozen forever: you cannot ask the question through an opcode whose format
+// depends on the answer.
+static bool readUnitVersion(int i2cAddress, char* out, uint8_t& protocolOut) {
   out[0] = '\0';
-  uint8_t buf[8];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VERSION, buf, 8)) return false;
+  protocolOut = 0;
+  uint8_t buf[VERSION_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VERSION, buf, VERSION_REPLY_LEN)) {
+    return false;
+  }
+  UnitVersionPacket pkt;
+  if (!versionReadbackValid(buf, VERSION_REPLY_LEN, pkt)) return false;
   uint8_t len = 0;
-  for (; len < 8; len++) {
-    if (buf[len] == 0) break;
-    if (buf[len] < 32 || buf[len] > 126) return false;
-    if (buf[len] == '"' || buf[len] == '\\') return false;
+  for (; len < VERSION_REV_LEN; len++) {
+    if (pkt.rev[len] == 0) break;
+    if (pkt.rev[len] < 32 || pkt.rev[len] > 126) return false;
+    if (pkt.rev[len] == '"' || pkt.rev[len] == '\\') return false;
   }
   if (len == 0) return false;
-  for (uint8_t i = 0; i < len; i++) out[i] = (char)buf[i];
+  for (uint8_t i = 0; i < len; i++) out[i] = pkt.rev[i];
   out[len] = '\0';
+  protocolOut = pkt.protocolVersion;
   return true;
 }
 
@@ -354,7 +398,7 @@ static int checkIfMoving(int unitIndex) {
 // never deadlocks on a transiently unresponsive (or physically absent) unit.
 static bool isDisplayMoving(const UnitFacts* facts, int width) {
   for (int unitIndex = 0; unitIndex < width; unitIndex++) {
-    if (facts[unitIndex].state != 1) continue;
+    if (!unitDrivable(facts[unitIndex])) continue;  // #405
     if (checkIfMoving(unitIndex) == 1) return true;
   }
   return false;
@@ -393,7 +437,7 @@ static void verifyAndResendLetters(const UnitFacts* facts, int width,
                                    const uint8_t* letters, uint8_t unitSpeed) {
   int resent = 0;
   for (int unitIndex = 0; unitIndex < width; unitIndex++) {
-    if (facts[unitIndex].state != 1) continue;
+    if (!unitDrivable(facts[unitIndex])) continue;  // #405
     int shown;
     if (!readUnitDisplayedLetter(toI2cAddress(unitIndex), shown)) continue;
     if (shown == letters[unitIndex]) continue;
@@ -467,16 +511,29 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
       SerialPrintln(F(" is in BOOTLOADER mode"));
       continue;
     }
-    if (readUnitVersion(i2cAddress, facts[unitIndex].version)) {
+    uint8_t protocolVersion = 0;
+    if (readUnitVersion(i2cAddress, facts[unitIndex].version, protocolVersion)) {
       // The build bundles a unit hex (#205), so a readable rev grades for
-      // real against BUNDLED_UNIT_REV — 0 ok / 1 outdated.
+      // real against BUNDLED_UNIT_REV — 0 ok / 1 differs. Both the rev (a
+      // hash) and the protocol version are compared for EQUALITY only: neither
+      // tells us "older", just "not ours", and not-ours always means reflash.
       facts[unitIndex].fwStatus =
           unitFwStatusFromRev(facts[unitIndex].version, BUNDLED_UNIT_REV);
-      SerialPrintf(" is running sketch (fw %s%s)\n",
-                   facts[unitIndex].version,
-                   facts[unitIndex].fwStatus == 0 ? "" : " — OUTDATED");
+      facts[unitIndex].protocolVersion = protocolVersion;
+      facts[unitIndex].protocolKnown = true;
+      if (!unitProtocolSupported(protocolVersion)) {
+        SerialPrintf(" speaks protocol v%u, we speak v%u — NOT DRIVABLE, reflash target\n",
+                     (unsigned)protocolVersion, (unsigned)SFP_PROTOCOL_VERSION);
+      } else {
+        SerialPrintf(" is running sketch (fw %s%s)\n",
+                     facts[unitIndex].version,
+                     facts[unitIndex].fwStatus == 0 ? "" : " — OUTDATED");
+      }
     } else {
-      SerialPrintln(F(" is running sketch (fw UNKNOWN — likely predates version opcode)"));
+      // Unreadable, NOT known-different: stays "unknown" and keeps the
+      // conservative v1 #114 treatment, so a unit we simply cannot read does
+      // not trigger a reflash cycle at every power-up.
+      SerialPrintln(F(" is running sketch (fw UNKNOWN — unreadable version reply)"));
     }
     // Offset is a probe-time fact (#204): GET /unit/offset serves from the
     // snapshot, so every sketch unit's stored offset is read here. Old
@@ -502,6 +559,9 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
     // New-measurement diagnostics ride the probe too (#365); pre-ext-diag
     // firmware fails the checksum and stays extDiagValid=false.
     refreshUnitExtDiag(facts[unitIndex], i2cAddress);
+    // Lifetime health rides the probe too (#406); pre-lifetime firmware
+    // fails the length check and stays lifetimeValid=false.
+    refreshUnitLifetime(facts[unitIndex], i2cAddress);
   }
   // #367: the per-unit reset above zeroed the facts' error fields, but the
   // attributed counters are lifetime — restore them so a probe rescan doesn't
@@ -522,7 +582,9 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   // Only sketch-running units (state 1) answer CMD_GET_STATUS; a unit in
   // bootloader (2) or silent (0) is left invalid so it renders as a gap
   // in the table and never counts toward the faulty total.
-  if (facts[i].state != 1) return false;
+  // #405: a unit speaking an unrecognised contract is not polled either — its
+  // reply layout is by definition unknown, so reading it would be guessing.
+  if (!unitDrivable(facts[i])) return false;
   UnitStatus s;
   bool ok = readUnitStatus(toI2cAddress(i), s);
   if (ok) {
@@ -550,6 +612,11 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   // New-measurement diagnostics refresh on the same cadence (#365); not
   // charged to #367 error attribution — see readUnitStatus above.
   refreshUnitExtDiag(facts[i], toI2cAddress(i));
+  // Lifetime health refreshes on the same cadence (#406). It changes rarely —
+  // only a failed homing, a new drag record or a self-test moves it — but a
+  // failed homing is exactly the signal that must not wait for the next probe
+  // to surface. Not charged to #367 error attribution, like ext-diag above.
+  refreshUnitLifetime(facts[i], toI2cAddress(i));
   // ok == the CMD_GET_STATUS read succeeded — the heartbeat liveness signal
   // (#310); the caller folds it into the miss counter.
   return ok;
@@ -571,8 +638,10 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
   for (int unitIndex = 0; unitIndex < width; unitIndex++) {
     // Skip slots the probe did not find a sketch-running unit on: writing
     // to absent addresses stalls isDisplayMoving() and a dead unit
-    // mid-display must not wedge the whole frame (v1 behavior).
-    if (facts[unitIndex].state != 1) continue;
+    // mid-display must not wedge the whole frame (v1 behavior). #405 also
+    // skips a unit whose protocol version we do not speak — a render is the
+    // loudest thing we could get wrong against an unknown contract.
+    if (!unitDrivable(facts[unitIndex])) continue;
     // #324: spread the flap inrush — pause before opening each new group so a
     // full row's steppers don't spin up at once and brown out the rail.
     if (renderStaggerShouldSettle(commanded, RENDER_STAGGER_BATCH)) {
@@ -594,14 +663,28 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
 // Payload encodings live in MaintenancePolicy.h so the negative int16/int8
 // wire bytes are asserted natively.
 
+// Value + bitwise complement (#405), then READ IT BACK. This was
+// fire-and-forget: the master wrote and returned the transmission status, with
+// no verification even though GET_OFFSET exists. Range-clamping on both sides
+// bounded the damage but detected nothing.
+//
+// Returns 0 only when the unit's own GET_OFFSET confirms the value landed.
+// The complement stops the unit persisting a corrupted write; the read-back
+// stops the master reporting success for a write that never took.
 int unitBusWriteOffset(int i2cAddress, int16_t value) {
-  uint8_t payload[2];
-  maintEncodeOffsetLE(value, payload);
+  uint8_t payload[SET_OFFSET_PAYLOAD_LEN];
+  setOffsetEncode(value, payload);
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_SET_OFFSET);
-  Wire.write(payload[0]);
-  Wire.write(payload[1]);
-  return countedTransmission();
+  Wire.write(payload, SET_OFFSET_PAYLOAD_LEN);
+  int txStatus = countedTransmission();
+  if (txStatus != 0) return txStatus;
+  // The unit persists in loop context, not the TWI ISR — let the write drain.
+  delay(UNIT_OFFSET_WRITE_SETTLE_MS);
+  int16_t readBack = 0;
+  if (!readUnitOffset(i2cAddress, readBack)) return UNIT_BUS_OFFSET_UNVERIFIED;
+  if (readBack != value) return UNIT_BUS_OFFSET_MISMATCH;
+  return 0;
 }
 
 int unitBusJog(int i2cAddress, int steps) {
@@ -629,6 +712,26 @@ int unitBusResetOdometer(int i2cAddress) {
   return countedTransmission();
 }
 
+// Feature gates (#409). The write half of the byte GET_LIFETIME reports, and
+// the only one of the three complement-protected writes that can be confirmed
+// afterwards — so it is, unlike SET_I2C_ADDRESS. The unit refuses gate bits it
+// has no code for, which lands here as a MISMATCH rather than a silent 0.
+int unitBusSetGates(int i2cAddress, uint8_t gates) {
+  uint8_t payload[SET_GATES_PAYLOAD_LEN];
+  setGatesEncode(gates, payload);
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_SET_GATES);
+  Wire.write(payload, SET_GATES_PAYLOAD_LEN);
+  int txStatus = countedTransmission();
+  if (txStatus != 0) return txStatus;
+  // The unit persists in loop context, not the TWI ISR — let the write drain.
+  delay(UNIT_GATES_WRITE_SETTLE_MS);
+  UnitLifetimeFacts lt;
+  if (!readUnitLifetime(i2cAddress, lt)) return UNIT_BUS_GATES_UNVERIFIED;
+  if (lt.featureGates != gates) return UNIT_BUS_GATES_MISMATCH;
+  return 0;
+}
+
 int unitBusStartSelfTest(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_START_SELF_TEST);
@@ -636,8 +739,9 @@ int unitBusStartSelfTest(int i2cAddress) {
 }
 
 bool unitBusReadSelfTest(int i2cAddress, UnitSelfTestReading& out) {
-  uint8_t buf[9];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_SELF_TEST, buf, 9)) {
+  uint8_t buf[SELFTEST_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_SELF_TEST, buf,
+                 SELFTEST_REPLY_LEN)) {
     return false;
   }
   return selfTestReadbackValid(buf, out);
@@ -652,10 +756,18 @@ int unitBusRebootToBootloader(int i2cAddress) {
   return countedTransmission();
 }
 
+// Value + bitwise complement (#405). Cannot be verified afterwards by
+// construction — the unit persists the address and reboots, so it is gone from
+// the address we were talking to. That is exactly why the complement matters
+// here more than anywhere else: a single-bit corruption landing inside 1..126
+// used to relocate a unit to an address nobody was looking at, recoverable
+// only by a physical trip to re-DIP (twiboot listens on the DIP address).
 int unitBusSetAddress(int i2cAddress, uint8_t newAddress) {
+  uint8_t payload[SET_ADDRESS_PAYLOAD_LEN];
+  setAddressEncode(newAddress, payload);
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_SET_I2C_ADDRESS);
-  Wire.write(newAddress);
+  Wire.write(payload, SET_ADDRESS_PAYLOAD_LEN);
   return countedTransmission();
 }
 

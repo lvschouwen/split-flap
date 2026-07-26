@@ -4,7 +4,7 @@
 
 #include <unity.h>
 #include <stdint.h>
-#include "../../BootHomePlan.h"
+#include "BootHomePlan.h"
 
 void setUp() {}
 void tearDown() {}

@@ -56,6 +56,12 @@ void tasksSetUnitCountOverride(int count);
 // settings drain queues a Probe right after calling this.
 void tasksSetDeviceRole(const String& role);
 
+// #412 boot auto-install brake, pushed by the settings drain on netTask. True
+// (the default) keeps the historical behaviour: a master booting with
+// off-bundle units converges them unattended. False skips it so an operator
+// can drive the campaign one unit at a time and inspect each result.
+void tasksSetReflashOnBoot(bool enabled);
+
 // Non-blocking enqueue into the display task; false = queue full (callers
 // report, never wait — network context must not block on the display).
 bool displayEnqueue(const DisplayCommand& cmd);

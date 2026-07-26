@@ -20,6 +20,7 @@
 #include "MaintenancePolicy.h"
 #include "ReflashPlan.h"
 #include "UnitHealth.h"
+#include "UnitSelfTest.h"  // SELFTEST_REASON_* + selfTestReasonName (#404)
 
 // Execution result of the LAST maintenance op (#204) — the /unit/op-result
 // contract. A single slot, not a log: it is a best-effort acknowledgement
@@ -55,6 +56,11 @@ struct SelfTestSlot {
   uint16_t stepsPerRev = 0;
   uint16_t hallWindowSteps = 0;
   uint16_t revTimeMs = 0;
+  // Which of the unit's three failure modes fired (#404), SELFTEST_REASON_*.
+  // `outcome` above is the MASTER's view (wire-fail, timeout, unit-failed);
+  // this is the unit's own account of why, which is what tells a person
+  // whether to reseat a magnet, replace a sensor, or free a binding drum.
+  uint8_t unitReason = SELFTEST_REASON_NONE;
 };
 
 struct DisplaySnapshot {
@@ -128,6 +134,7 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
     case DisplayOpcode::ClearAddress:
     case DisplayOpcode::ResetOdometer:
     case DisplayOpcode::SelfTest:
+    case DisplayOpcode::SetGates:
     case DisplayOpcode::ResetUnits:
     case DisplayOpcode::ReflashUnits:
       snap.commandsProcessed++;
@@ -223,6 +230,17 @@ inline void displayApplyOdometerReset(DisplaySnapshot& snap, int i2cAddress) {
   snap.units[idx].odometerValid = true;
 }
 
+// A verified SET_GATES landed (#409) — patch the fact so /units/health shows
+// the new gates immediately instead of the pre-write value until the next
+// lifetime poll. Only ever called after the read-back confirmed it, so this
+// cannot invent a gate the unit did not accept.
+inline void displayApplyGatesWrite(DisplaySnapshot& snap, int i2cAddress,
+                                   uint8_t gates) {
+  int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
+  if (idx < 0 || idx >= UNITS_AMOUNT) return;
+  snap.units[idx].lifetime.featureGates = gates;
+}
+
 // A unit sent into twiboot forgets nothing, but the master must stop
 // serving reads for it until the next probe confirms it is back in sketch.
 inline void displayInvalidateUnitReads(DisplaySnapshot& snap, int i2cAddress) {
@@ -276,9 +294,10 @@ inline void buildReflashJson(char* buf, size_t cap,
                              const ReflashProgress& p) {
   snprintf(buf, cap,
            "{\"state\":\"%s\",\"total\":%u,\"done\":%u,\"failed\":%u,"
-           "\"cur\":%u}",
+           "\"cur\":%u,\"halted\":%s}",
            reflashStateName(p.state), (unsigned)p.total, (unsigned)p.done,
-           (unsigned)p.failed, (unsigned)p.currentAddr);
+           (unsigned)p.failed, (unsigned)p.currentAddr,
+           p.halted ? "true" : "false");
 }
 
 inline const char* selfTestOutcomeName(SelfTestOutcome o) {
@@ -315,8 +334,17 @@ inline void buildSelfTestJson(char* buf, size_t cap, const SelfTestSlot& slot,
              (unsigned)slot.revTimeMs);
     return;
   }
-  snprintf(buf, cap, "{\"state\":\"failed\",\"reason\":\"%s\"}",
-           selfTestOutcomeName(slot.outcome));
+  // #404: the failure branch used to be a bare state+reason with every
+  // measurement zeroed, so /unit/self-test-result said exactly why the MASTER
+  // gave up and nothing about what the unit found. Now it carries the unit's
+  // own failure mode and whatever it managed to measure first.
+  snprintf(buf, cap,
+           "{\"state\":\"failed\",\"reason\":\"%s\",\"unit_reason\":\"%s\","
+           "\"steps_per_rev\":%u,\"hall_window\":%u,\"rev_time_ms\":%u}",
+           selfTestOutcomeName(slot.outcome),
+           selfTestReasonName(slot.unitReason),
+           (unsigned)slot.stepsPerRev, (unsigned)slot.hallWindowSteps,
+           (unsigned)slot.revTimeMs);
 }
 
 // Renders the op-result JSON for a queried seq from the (mutex-copied)

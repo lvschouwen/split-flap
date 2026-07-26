@@ -5,7 +5,7 @@
 
 #include <unity.h>
 #include <stdint.h>
-#include "../../UnitExtDiag.h"
+#include "UnitExtDiag.h"
 
 void setUp() {}
 void tearDown() {}

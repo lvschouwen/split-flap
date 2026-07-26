@@ -25,6 +25,14 @@
 // MaintenancePolicy.h, this only translates request → verdict → response.
 // Validates against the caller's snapshot COPY — a fast, possibly stale
 // view; displayTask re-runs whatever check the queue delay can invalidate.
+// /reflash-units?address= bounds the target as 1..UNITS_AMOUNT, which is the
+// unit array's valid range only while the address base is 1. MaintenancePolicy.h
+// carries the same assumption behind its own static_assert; this endpoint does
+// not go through those validators (a protocol-mismatched unit must stay
+// reflashable), so it needs its own or the bound goes stale silently.
+static_assert(SFP_I2C_ADDRESS_BASE == 1,
+              "/reflash-units address bound assumes address base 1");
+
 static bool maintCheckAddress(AsyncWebServerRequest* request,
                               const DisplaySnapshot& snap, int& outAddr) {
   String raw;
@@ -228,6 +236,26 @@ void webMaintenanceRegister(AsyncWebServer& server) {
                                                    (uint8_t)addr));
   });
 
+  // Feature gates (#409): flip a unit's UNIT_GATE_* byte over the wire. This
+  // is what lets #407's motion changes ship dormant — enabling one is a curl
+  // per unit instead of a second fleet reflash. Same op contract as the rest;
+  // the unit's read-back decides whether it landed, so a refused bit comes
+  // back as a postcondition failure rather than a phantom success.
+  server.on("/unit/gates", HTTP_POST, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    long gates = 0;
+    if (!maintRequireLongParam(request, "gates", gates)) return;
+    MaintVerdict verdict = maintValidateGates(gates);
+    if (verdict.httpStatus != 200) {
+      request->send(verdict.httpStatus, "text/plain", verdict.message);
+      return;
+    }
+    maintEnqueue(request, makeSetGatesCommand(displayNextMaintSeq(),
+                                              (uint8_t)addr, (uint8_t)gates));
+  });
+
   // On-demand unit self-test (#265): the unit measures its own mechanics
   // (steps/rev, hall window, rev time) over ~2 revolutions. Same op
   // contract as identify/home; the measurements come back via
@@ -363,11 +391,31 @@ void webMaintenanceRegister(AsyncWebServer& server) {
   // progress in /units/health's reflash object. Text/alignment/speed baked
   // at enqueue (the job re-shows them; reflashed units homed to blank).
   server.on("/reflash-units", HTTP_POST, [](AsyncWebServerRequest* request) {
-    SerialPrintln(F("Unit reflash requested from web UI"));
     DisplaySnapshot snap = displaySnapshotGet();
+    // Optional ?address=N narrows the job to one unit (#412). Absent = the
+    // whole fleet, unchanged. Validated through maintValidateAddress so a
+    // targeted reflash gets the same range and protocol-mismatch treatment as
+    // every other single-unit op — except that a protocol MISMATCH must still
+    // be reflashable, since converging it is the only way it becomes useful
+    // again (#405). So range-check only, like /unit/reboot.
+    int addr = 0;
+    if (request->hasParam("address")) {
+      long parsed = 0;
+      if (!maintRequireLongParam(request, "address", parsed)) return;
+      if (parsed < 1 || parsed > UNITS_AMOUNT) {
+        request->send(400, "text/plain",
+                      F("Address must be within the managed unit range"));
+        return;
+      }
+      addr = (int)parsed;
+      SerialPrintf("Unit reflash requested for unit 0x%02x\n", addr);
+    } else {
+      SerialPrintln(F("Unit reflash requested from web UI"));
+    }
     WebContentSnapshot content = webDisplayContentSnapshot();
     maintEnqueue(request, makeReflashUnitsCommand(
                               displayNextMaintSeq(), String(snap.currentText),
-                              content.alignment, content.flapSpeed));
+                              content.alignment, content.flapSpeed,
+                              (uint8_t)addr));
   });
 }

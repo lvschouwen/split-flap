@@ -137,6 +137,7 @@ String buildCurrentSettingsJson() {
         headlessShouldSuggest(snap.headlessUnitless, liveSettings->deviceRole);
     f.timezonePosix = liveSettings->timezonePosix;
     f.unitCountOverride = liveSettings->unitCountOverride;
+    f.reflashOnBoot = liveSettings->reflashOnBoot;
     f.deviceName = liveSettings->deviceName;
     f.effectiveDeviceName = effectiveName;
     f.mqttHost = liveSettings->mqttHost;
@@ -254,6 +255,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // same POST as a message must apply to that message (v1 ordering).
       String timezoneBefore = settings.timezonePosix;
       int unitCountBefore = settings.unitCountOverride;
+      bool reflashOnBootBefore = settings.reflashOnBoot;
       String deviceRoleBefore = settings.deviceRole;
       applySettingsPost(pendingPost, settings, store);
       timezoneChanged = settings.timezonePosix != timezoneBefore;
@@ -264,6 +266,12 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       if (settings.unitCountOverride != unitCountBefore) {
         tasksSetUnitCountOverride(settings.unitCountOverride);
         displayEnqueue(makeProbeCommand());
+      }
+      // #412: push the brake to displayTask so a mid-session change lands
+      // without a reboot — the gate is only read at boot, but the operator
+      // sets this BEFORE rebooting into the campaign.
+      if (settings.reflashOnBoot != reflashOnBootBefore) {
+        tasksSetReflashOnBoot(settings.reflashOnBoot);
       }
       if (settings.deviceRole != deviceRoleBefore) {
         tasksSetDeviceRole(settings.deviceRole);

@@ -1,6 +1,7 @@
 // Host-side unit tests for the pure odometer logic in UnitOdometer.h
-// (#231): step->revolution accumulation, EEPROM ring slot rotation, and
-// boot-time recovery. The EEPROM/I2C glue in the .ino files is bench tier.
+// (#231, re-geometried by #406): step->revolution accumulation, EEPROM ring
+// slot rotation, and boot-time recovery. The EEPROM/I2C glue in the .ino
+// files is bench tier.
 
 #include <unity.h>
 #include <stdint.h>
@@ -45,11 +46,37 @@ static void test_add_steps_large_move_spans_multiple_revs() {
   TEST_ASSERT_EQUAL_UINT16(150, s.stepAccumulator);
 }
 
-// --- odometerSlotIndex: ring rotation ------------------------------------
+// --- #406 geometry --------------------------------------------------------
+// The measured failure this re-geometry fixes: 19 of 21 units had never
+// crossed the old 128-revolution persist boundary in their lives, so their
+// count was not merely undercounted but total — reset to 0 by every power
+// loss. Persisting every revolution makes the boundary unreachable.
+
+static void test_persists_every_revolution() {
+  TEST_ASSERT_EQUAL_UINT32(1, ODO_PERSIST_INTERVAL_REVS);
+  TEST_ASSERT_TRUE(odometerShouldPersist(1, 0));
+  TEST_ASSERT_FALSE(odometerShouldPersist(1, 1));
+  TEST_ASSERT_TRUE(odometerShouldPersist(2, 1));
+}
+
+static void test_ring_endurance_exceeds_the_wear_threshold() {
+  // WearPolicy.h flags a unit at 10,000 revolutions. Endurance is
+  // slots x 100k writes x interval; the ring must outlive the flag by a
+  // wide margin or persist-every-revolution would trade one bug for another.
+  const uint32_t kWearFlagThreshold = 10000UL;
+  uint32_t endurance = (uint32_t)ODO_RING_SLOTS * 100000UL * ODO_PERSIST_INTERVAL_REVS;
+  TEST_ASSERT_TRUE(endurance / kWearFlagThreshold >= 1000UL);
+}
+
+static void test_ring_slot_count_is_a_power_of_two() {
+  // Keeps the slot index a mask rather than a division on an 8-bit MCU.
+  TEST_ASSERT_EQUAL_UINT32(0, (uint32_t)ODO_RING_SLOTS & (ODO_RING_SLOTS - 1));
+}
+
+// --- odometerSlotIndex / odometerSlotOffset: ring rotation ----------------
 
 static void test_slot_index_rotates_every_persist_interval() {
   TEST_ASSERT_EQUAL_UINT8(0, odometerSlotIndex(0));
-  TEST_ASSERT_EQUAL_UINT8(0, odometerSlotIndex(ODO_PERSIST_INTERVAL_REVS - 1));
   TEST_ASSERT_EQUAL_UINT8(1, odometerSlotIndex(ODO_PERSIST_INTERVAL_REVS));
   TEST_ASSERT_EQUAL_UINT8(15, odometerSlotIndex(15UL * ODO_PERSIST_INTERVAL_REVS));
 }
@@ -61,36 +88,18 @@ static void test_slot_index_wraps_after_full_ring() {
       1, odometerSlotIndex((uint32_t)(ODO_RING_SLOTS + 1) * ODO_PERSIST_INTERVAL_REVS));
 }
 
-// --- odometerBootValue: boot-time recovery --------------------------------
-
-static void test_boot_value_is_max_of_ring() {
-  uint32_t slots[ODO_RING_SLOTS] = {0};
-  slots[3] = 512;
-  slots[4] = 640;   // most recent write
-  slots[5] = 128;   // older lap of the ring
-  TEST_ASSERT_EQUAL_UINT32(640, odometerBootValue(slots));
+static void test_slot_offset_is_interleaved_base_plus_stride() {
+  // Count and checksum adjacent: one contiguous 5-byte write per persist
+  // instead of two writes at distant addresses.
+  TEST_ASSERT_EQUAL_UINT16(0, odometerSlotOffset(0));
+  TEST_ASSERT_EQUAL_UINT16(ODO_SLOT_STRIDE, odometerSlotOffset(1));
+  TEST_ASSERT_EQUAL_UINT16(ODO_SLOT_STRIDE * 5, odometerSlotOffset(5));
+  // The last slot's checksum byte must be the ring's last byte.
+  TEST_ASSERT_EQUAL_UINT16(ODO_RING_BYTES,
+                           odometerSlotOffset(ODO_RING_SLOTS - 1) + ODO_SLOT_STRIDE);
 }
 
-static void test_boot_value_ignores_erased_ff_slots() {
-  // A slot that reads 0xFFFFFFFF is erased/corrupt EEPROM, not a count —
-  // trusting it would pin the odometer at 4 billion and trip the wear
-  // alert forever (the #139 fresh-EEPROM lesson).
-  uint32_t slots[ODO_RING_SLOTS] = {0};
-  slots[0] = 0xFFFFFFFF;
-  slots[1] = 700;
-  TEST_ASSERT_EQUAL_UINT32(700, odometerBootValue(slots));
-}
-
-static void test_boot_value_all_erased_reads_zero() {
-  uint32_t slots[ODO_RING_SLOTS];
-  for (int i = 0; i < ODO_RING_SLOTS; i++) slots[i] = 0xFFFFFFFF;
-  TEST_ASSERT_EQUAL_UINT32(0, odometerBootValue(slots));
-}
-
-// --- odometerSlotChecksum / odometerBootValueChecked (#354) -----------------
-// A power-loss-torn slot write used to yield a large garbage value the boot
-// ring-max silently adopted; each slot now carries a masked XOR checksum
-// byte and only checksum-valid slots count.
+// --- slot checksum --------------------------------------------------------
 
 static void test_slot_checksum_masked_xor() {
   TEST_ASSERT_EQUAL_UINT8((0x01 ^ 0x02 ^ 0x03 ^ 0x04) ^ ODO_SLOT_CHECKSUM_MASK,
@@ -99,39 +108,69 @@ static void test_slot_checksum_masked_xor() {
   TEST_ASSERT_EQUAL_UINT8(ODO_SLOT_CHECKSUM_MASK, odometerSlotChecksum(0));
 }
 
-static void test_boot_value_checked_takes_max_of_valid_slots() {
-  uint32_t slots[ODO_RING_SLOTS] = {0};
-  uint8_t sums[ODO_RING_SLOTS];
-  slots[3] = 512;
-  slots[4] = 640;
-  for (int i = 0; i < ODO_RING_SLOTS; i++) sums[i] = odometerSlotChecksum(slots[i]);
-  TEST_ASSERT_EQUAL_UINT32(640, odometerBootValueChecked(slots, sums));
+// --- odometerBootScan: streaming boot recovery -----------------------------
+// #406 grew the ring to 128 slots. The old array-at-once API would have
+// needed a 512-byte stack buffer on a 2 KB Nano, so recovery folds slot by
+// slot as the .ino reads them: O(1) RAM, same max-of-valid-slots rule.
+
+static void test_boot_scan_is_max_of_valid_slots() {
+  OdometerBootScan s;
+  odometerBootScanInit(s);
+  odometerBootScanSlot(s, 512, odometerSlotChecksum(512));
+  odometerBootScanSlot(s, 640, odometerSlotChecksum(640));  // most recent
+  odometerBootScanSlot(s, 128, odometerSlotChecksum(128));  // older lap
+  TEST_ASSERT_EQUAL_UINT32(640, odometerBootScanResult(s));
 }
 
-static void test_boot_value_checked_ignores_torn_garbage() {
-  // The #354 failure: power loss mid-write leaves a huge garbage value whose
-  // checksum byte no longer matches — it must not become the wear count.
-  uint32_t slots[ODO_RING_SLOTS] = {0};
-  uint8_t sums[ODO_RING_SLOTS];
-  for (int i = 0; i < ODO_RING_SLOTS; i++) sums[i] = odometerSlotChecksum(slots[i]);
-  slots[7] = 900;
-  sums[7] = odometerSlotChecksum(900);
-  slots[8] = 0x7F00FFFFUL;                  // torn write...
-  sums[8] = odometerSlotChecksum(1024);     // ...checksum from the old value
-  TEST_ASSERT_EQUAL_UINT32(900, odometerBootValueChecked(slots, sums));
+static void test_boot_scan_empty_ring_reads_zero() {
+  OdometerBootScan s;
+  odometerBootScanInit(s);
+  TEST_ASSERT_EQUAL_UINT32(0, odometerBootScanResult(s));
 }
 
-static void test_boot_value_checked_still_rejects_erased_ff() {
-  uint32_t slots[ODO_RING_SLOTS];
-  uint8_t sums[ODO_RING_SLOTS];
-  for (int i = 0; i < ODO_RING_SLOTS; i++) {
-    slots[i] = 0xFFFFFFFFUL;
-    sums[i] = 0xFF;  // erased EEPROM reads 0xFF everywhere
+static void test_boot_scan_ignores_torn_garbage() {
+  // #354: power loss mid-write leaves a huge garbage value whose checksum
+  // byte no longer matches — it must not become the wear count.
+  OdometerBootScan s;
+  odometerBootScanInit(s);
+  odometerBootScanSlot(s, 900, odometerSlotChecksum(900));
+  odometerBootScanSlot(s, 0x7F00FFFFUL, odometerSlotChecksum(1024));  // torn
+  TEST_ASSERT_EQUAL_UINT32(900, odometerBootScanResult(s));
+}
+
+static void test_boot_scan_rejects_erased_ff_even_if_checksum_matches() {
+  // A slot reading 0xFFFFFFFF is erased EEPROM, not a count — adopting it
+  // would pin the odometer at 4 billion and trip the wear alert forever
+  // (the #139 fresh-EEPROM lesson). Unconditional, checksum notwithstanding.
+  OdometerBootScan s;
+  odometerBootScanInit(s);
+  odometerBootScanSlot(s, 0xFFFFFFFFUL, 0xFF);
+  TEST_ASSERT_EQUAL_UINT32(0, odometerBootScanResult(s));
+  odometerBootScanSlot(s, 0xFFFFFFFFUL, odometerSlotChecksum(0xFFFFFFFFUL));
+  TEST_ASSERT_EQUAL_UINT32(0, odometerBootScanResult(s));
+}
+
+static void test_boot_scan_over_a_blank_day_zero_ring() {
+  // Day 0: the whole ring is erased 0xFF. Recovery must read 0, and the
+  // first persist then writes slot 0.
+  OdometerBootScan s;
+  odometerBootScanInit(s);
+  for (uint16_t i = 0; i < ODO_RING_SLOTS; i++) {
+    odometerBootScanSlot(s, 0xFFFFFFFFUL, 0xFF);
   }
-  TEST_ASSERT_EQUAL_UINT32(0, odometerBootValueChecked(slots, sums));
-  // Even a checksum that happens to match must not validate 0xFFFFFFFF.
-  sums[2] = odometerSlotChecksum(0xFFFFFFFFUL);
-  TEST_ASSERT_EQUAL_UINT32(0, odometerBootValueChecked(slots, sums));
+  TEST_ASSERT_EQUAL_UINT32(0, odometerBootScanResult(s));
+}
+
+static void test_boot_scan_full_ring_wrap_takes_the_high_lap() {
+  // A wrapped ring holds one lap of old counts and one of new; max wins
+  // because counts are monotonic.
+  OdometerBootScan s;
+  odometerBootScanInit(s);
+  for (uint16_t i = 0; i < ODO_RING_SLOTS; i++) {
+    uint32_t v = (i < 40) ? (uint32_t)(1000 + i) : (uint32_t)(872 + i);
+    odometerBootScanSlot(s, v, odometerSlotChecksum(v));
+  }
+  TEST_ASSERT_EQUAL_UINT32(1039, odometerBootScanResult(s));
 }
 
 // --- odometerEncodeReply: I2C wire format ----------------------------------
@@ -155,38 +194,27 @@ static void test_encode_reply_zero_count_checksum_is_mask() {
   TEST_ASSERT_EQUAL_UINT8(0xA5, buf[4]);  // never matches a 0x00-padded reply
 }
 
-// --- odometerShouldPersist: EEPROM write cadence ---------------------------
-
-static void test_should_persist_only_after_interval() {
-  TEST_ASSERT_FALSE(odometerShouldPersist(127, 0));
-  TEST_ASSERT_TRUE(odometerShouldPersist(128, 0));
-  TEST_ASSERT_FALSE(odometerShouldPersist(255, 128));
-  TEST_ASSERT_TRUE(odometerShouldPersist(256, 128));
-}
-
-static void test_should_persist_false_when_nothing_new() {
-  TEST_ASSERT_FALSE(odometerShouldPersist(128, 128));
-}
-
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_add_steps_below_one_rev_accumulates_only);
   RUN_TEST(test_add_steps_rolls_over_at_steps_per_rev);
   RUN_TEST(test_add_steps_negative_counts_magnitude);
   RUN_TEST(test_add_steps_large_move_spans_multiple_revs);
+  RUN_TEST(test_persists_every_revolution);
+  RUN_TEST(test_ring_endurance_exceeds_the_wear_threshold);
+  RUN_TEST(test_ring_slot_count_is_a_power_of_two);
   RUN_TEST(test_slot_index_rotates_every_persist_interval);
   RUN_TEST(test_slot_index_wraps_after_full_ring);
-  RUN_TEST(test_boot_value_is_max_of_ring);
-  RUN_TEST(test_boot_value_ignores_erased_ff_slots);
-  RUN_TEST(test_boot_value_all_erased_reads_zero);
+  RUN_TEST(test_slot_offset_is_interleaved_base_plus_stride);
   RUN_TEST(test_slot_checksum_masked_xor);
-  RUN_TEST(test_boot_value_checked_takes_max_of_valid_slots);
-  RUN_TEST(test_boot_value_checked_ignores_torn_garbage);
-  RUN_TEST(test_boot_value_checked_still_rejects_erased_ff);
+  RUN_TEST(test_boot_scan_is_max_of_valid_slots);
+  RUN_TEST(test_boot_scan_empty_ring_reads_zero);
+  RUN_TEST(test_boot_scan_ignores_torn_garbage);
+  RUN_TEST(test_boot_scan_rejects_erased_ff_even_if_checksum_matches);
+  RUN_TEST(test_boot_scan_over_a_blank_day_zero_ring);
+  RUN_TEST(test_boot_scan_full_ring_wrap_takes_the_high_lap);
   RUN_TEST(test_encode_reply_little_endian_with_checksum);
   RUN_TEST(test_encode_reply_zero_count_checksum_is_mask);
-  RUN_TEST(test_should_persist_only_after_interval);
-  RUN_TEST(test_should_persist_false_when_nothing_new);
   UNITY_END();
   return 0;
 }

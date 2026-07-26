@@ -280,8 +280,12 @@ static bool reflashHasWork(const DisplaySnapshot& snap, ReflashSweep sweep) {
   return n > 0;
 }
 
+// `onlyAddr` narrows the whole job to one unit (0 = the whole fleet, today's
+// behaviour). The #407 campaign flashes a day-0 image that has never run on
+// hardware, so the operator wants to convince themselves on unit 1 before
+// unit 2 exists (#412).
 static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
-                          ReflashSweep sweep) {
+                          ReflashSweep sweep, uint8_t onlyAddr) {
   reflashProgressBegin(local.reflash, 0);  // total known after the rescan
   snapshotPublish(local);                  // gate closes here
 
@@ -317,6 +321,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
                                         SFP_I2C_ADDRESS_BASE, addrs)
           : reflashCollectOutdatedTargets(local.units, UNITS_AMOUNT,
                                           SFP_I2C_ADDRESS_BASE, addrs);
+  sweepCount = reflashFilterToAddress(addrs, sweepCount, onlyAddr);
   for (int i = 0; i < sweepCount; i++) {
     if (unitBusRebootToBootloader(addrs[i]) == 0) {
       displayInvalidateUnitReads(local, addrs[i]);
@@ -336,6 +341,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   uint8_t targets[UNITS_AMOUNT];
   int total = reflashCollectFlashTargets(local.units, UNITS_AMOUNT,
                                          SFP_I2C_ADDRESS_BASE, targets);
+  total = reflashFilterToAddress(targets, total, onlyAddr);
   local.reflash.total = (uint8_t)total;
   snapshotPublish(local);
   SerialPrintf("reflash: %d unit(s) to flash\n", total);
@@ -343,6 +349,8 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   const uint8_t* image = webUnitFirmwareBin();
   size_t imageLen = webUnitFirmwareBinLen();
   bool cancelled = false;
+  bool halted = false;
+  uint8_t consecutiveFailures = 0;
   uint8_t batch[REFLASH_BATCH_SIZE];
   int inBatch = 0;
   for (int k = 0; k < total; k++) {
@@ -366,6 +374,9 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
     if (!ok) {
       SerialPrintf("reflash: unit 0x%02x failed (%s)\n", addr,
                    unitFlashResultName(r));
+      if (consecutiveFailures < 0xFF) consecutiveFailures++;
+    } else {
+      consecutiveFailures = 0;  // an isolated dead unit must not wedge a sweep
     }
     reflashProgressUnitResult(local.reflash, ok);
     if (ok) {
@@ -384,6 +395,19 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
       snapshotPublish(local);
       unitBusWaitBatchIdle(batch, inBatch, REFLASH_BATCH_SETTLE_MS);
       inBatch = 0;
+    }
+
+    // Stop walking the row (#412). Two failures back to back is the signature
+    // of an image that cannot land, not of one dead unit — and the old code
+    // would have kept going and broken every remaining unit the same way. The
+    // trailing settle below still runs, so units already flashed finish homing
+    // before we hand the display back.
+    if (reflashShouldHalt(consecutiveFailures)) {
+      SerialPrintf("reflash: HALTED after %u consecutive failures — "
+                   "%d unit(s) left untouched\n",
+                   (unsigned)consecutiveFailures, total - (k + 1));
+      halted = true;
+      break;
     }
   }
   // Trailing partial batch — reached on plan exhaustion AND on both abort
@@ -411,12 +435,14 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // the abort flag set so this bails and the queued Stop broadcast-homes.
   wdtFeed();  // #314: boot-home of just-flashed units
   runBootHomeSequence(local, busFacts);
-  reflashProgressFinish(local.reflash, cancelled);
+  reflashProgressFinish(local.reflash, cancelled, halted);
   snapshotPublish(local);  // gate reopens here
-  SerialPrintf("reflash: %s — %u ok, %u failed of %u\n",
+  SerialPrintf("reflash: %s — %u ok, %u failed of %u%s\n",
                reflashStateName(local.reflash.state),
                (unsigned)local.reflash.done, (unsigned)local.reflash.failed,
-               (unsigned)local.reflash.total);
+               (unsigned)local.reflash.total,
+               halted ? " (HALTED — image suspect, remaining units untouched)"
+                      : "");
 }
 
 // --- opcode executors (#353): one static helper per DisplayCommand opcode —
@@ -573,21 +599,26 @@ static void execSelfTest(DisplaySnapshot& local, UnitFacts* busFacts,
            (r.state != baseline.state ||
             r.stepsPerRev != baseline.stepsPerRev ||
             r.hallWindowSteps != baseline.hallWindowSteps ||
-            r.revTimeMs != baseline.revTimeMs));
+            r.revTimeMs != baseline.revTimeMs ||
+            r.reason != baseline.reason));
       if (r.state == 0 || !freshTerminal) continue;  // not started / stale
-      if (r.state == 2) {
-        slot.outcome = SelfTestOutcome::Ok;
-        slot.stepsPerRev = r.stepsPerRev;
-        slot.hallWindowSteps = r.hallWindowSteps;
-        slot.revTimeMs = r.revTimeMs;
-      } else {
-        slot.outcome = SelfTestOutcome::UnitFailed;
-      }
+      // #404: carry the measurements on BOTH paths. A failure preserves
+      // whatever it got to measure — a phase-2 failure knows its hall window,
+      // and that is the most diagnostic number the unit has.
+      slot.stepsPerRev = r.stepsPerRev;
+      slot.hallWindowSteps = r.hallWindowSteps;
+      slot.revTimeMs = r.revTimeMs;
+      slot.unitReason = r.reason;
+      slot.outcome = (r.state == 2) ? SelfTestOutcome::Ok
+                                    : SelfTestOutcome::UnitFailed;
       break;
     }
   }
-  SerialPrintf("display: self-test unit 0x%02x → %s\n",
-               cmd.unitAddress, selfTestOutcomeName(slot.outcome));
+  SerialPrintf("display: self-test unit 0x%02x → %s%s%s\n",
+               cmd.unitAddress, selfTestOutcomeName(slot.outcome),
+               slot.unitReason != SELFTEST_REASON_NONE ? " / " : "",
+               slot.unitReason != SELFTEST_REASON_NONE
+                   ? selfTestReasonName(slot.unitReason) : "");
   displayApplySelfTestResult(local, slot);
   displayApplyMaintResult(local, cmd,
                           slot.outcome == SelfTestOutcome::Ok
@@ -610,6 +641,28 @@ static void execResetOdometer(DisplaySnapshot& local, UnitFacts* busFacts,
   displayApplyMaintResult(
       local, cmd,
       status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
+      MaintReason::None);
+}
+
+static void execSetGates(DisplaySnapshot& local, UnitFacts* busFacts,
+                        const DisplayCommand& cmd) {
+  (void)busFacts;
+  int status = unitBusSetGates(cmd.unitAddress, (uint8_t)cmd.value);
+  if (status == 0) {
+    // Verified by the read-back inside unitBusSetGates — patch the fact so
+    // /units/health stops reporting the pre-write gates (#409).
+    displayApplyGatesWrite(local, cmd.unitAddress, (uint8_t)cmd.value);
+  }
+  // A unit that refused the bits answers with its old gates, which the
+  // read-back grades as a mismatch — the operator sees the refusal instead
+  // of an op that claims to have landed.
+  displayApplyMaintResult(
+      local, cmd,
+      status == 0 ? MaintOutcome::Ok
+                  : (status == UNIT_BUS_GATES_MISMATCH ||
+                     status == UNIT_BUS_GATES_UNVERIFIED)
+                        ? MaintOutcome::PostconditionFail
+                        : MaintOutcome::WireFail,
       MaintReason::None);
 }
 
@@ -749,7 +802,7 @@ static void execReflashUnits(DisplaySnapshot& local, UnitFacts* busFacts,
   (void)cmd;
   // The job closes the gate, drains queue stragglers (Stop
   // survives), flashes in batches, and reprobes — see runReflashJob.
-  runReflashJob(local, busFacts, ReflashSweep::OffBundle);
+  runReflashJob(local, busFacts, ReflashSweep::OffBundle, cmd.unitAddress);
 
   // Baked re-show: reflashed units homed to blank — put the
   // enqueue-time content back. Skipped on cancel: the queued Stop
@@ -816,9 +869,15 @@ void displayTaskMain(void*) {
   // whole row's steppers spike the shared rail at once (the #305 verify-boot
   // brownout). runReflashJob ends with its own boot-home of the units it
   // flashed, so only home here when no boot reflash ran.
-  if (reflashHasWork(local, ReflashSweep::OutdatedOnly)) {
+  if (!tasksReflashOnBoot()) {
+    // #412: deliberately suppressed for a gated campaign. Say so loudly — a
+    // silently-skipped auto-install looks exactly like a healthy display, and
+    // this setting persists across reboots.
+    SerialPrintln(F("reflash: boot auto-install SUPPRESSED (reflashOnBoot=false)"));
+    runBootHomeSequence(local, busFacts);
+  } else if (reflashHasWork(local, ReflashSweep::OutdatedOnly)) {
     SerialPrintln(F("reflash: boot auto-install/auto-update starting"));
-    runReflashJob(local, busFacts, ReflashSweep::OutdatedOnly);
+    runReflashJob(local, busFacts, ReflashSweep::OutdatedOnly, 0);
   } else {
     runBootHomeSequence(local, busFacts);
   }
@@ -866,6 +925,9 @@ void displayTaskMain(void*) {
           break;
         case DisplayOpcode::SelfTest:
           execSelfTest(local, busFacts, cmd);
+          break;
+        case DisplayOpcode::SetGates:
+          execSetGates(local, busFacts, cmd);
           break;
         case DisplayOpcode::ResetOdometer:
           execResetOdometer(local, busFacts, cmd);

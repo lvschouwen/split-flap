@@ -54,6 +54,30 @@
 #define SFP_I2C_GENERAL_CALL_ADDRESS  0x00
 
 // ---------------------------------------------------------------------------
+// Wire contract version (#405). ONE number describes what a unit speaks — no
+// per-command version byte. The master reads it from the GET_VERSION reply,
+// which is why that opcode's format is frozen forever: you cannot ask "which
+// contract do you speak" through an opcode whose shape depends on the answer.
+//
+// A unit reporting anything else is NOT ignored — that would take a wall of
+// newer units under an older master dark with no way back, since the master
+// is what drives the reflash. It is reachable through GET_VERSION and
+// ENTER_BOOTLOADER only, surfaced as a fault, and always a reflash target.
+// Gate helpers live in UnitWireContract.h.
+//
+// Bump this whenever any reply length, payload layout or checksum mask below
+// changes. It does NOT track the EEPROM layout — that is the unit's own
+// UNIT_EE_LAYOUT_VERSION, describing stored bytes rather than the wire.
+//
+//   1  The #407 day-0 contract, all of it landing in one fleet reflash:
+//        #405 checksums on GET_STATUS/GET_VERSION/GET_OFFSET, complement-
+//             protected SET_OFFSET/SET_I2C_ADDRESS
+//        #406 GET_LIFETIME added
+//        #404 GET_SELF_TEST byte 7 (was reserved) carries the failure reason
+//        #409 SET_GATES added — the write half of #406's feature-gate byte
+#define SFP_PROTOCOL_VERSION       1
+
+// ---------------------------------------------------------------------------
 // Command opcodes understood by the unit's receiveLetter(). The unit's first
 // received byte is a letter index (0..SFP_FLAP_AMOUNT-1) for a normal display
 // command, or one of these opcodes (all >= SFP_FLAP_AMOUNT, i.e. >= 45) for a
@@ -96,6 +120,15 @@
                                          //     checksum ^ 0x93 (wire format in
                                          //     UnitExtDiag.h, #365). Unversioned;
                                          //     a format change takes a new opcode.
+#define SFP_CMD_GET_LIFETIME       0x8A  // reply: 15 bytes — EEPROM layout
+                                         //     version, lifetime home-failure
+                                         //     count, active feature gates,
+                                         //     lifetime step-excess max, first/
+                                         //     last self-test measurements +
+                                         //     XOR checksum ^ 0x6E (wire format
+                                         //     in UnitLifetime.h, #406/#407).
+                                         //     GET_EXT_DIAG's since-boot twin:
+                                         //     this is what survives a reboot.
 
 // --- 0x9X mutations ---
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT reset)
@@ -117,6 +150,13 @@
 #define SFP_CMD_START_SELF_TEST    0x98  // no args; unit runs the ~2-revolution
                                          //     diagnostic (#265), reports busy while
                                          //     running; result via GET_SELF_TEST
+#define SFP_CMD_SET_GATES          0x99  // +2 bytes gates + ~gates; persist the
+                                         //     UNIT_GATE_* byte to EEPROM (#409).
+                                         //     The write half of #406's feature-gate
+                                         //     byte: motion changes ship OFF and are
+                                         //     switched on over the wire, so enabling
+                                         //     one costs no second reflash. Verify by
+                                         //     reading GET_LIFETIME back.
 
 // SET_OFFSET's accepted range (#171). The bound is one full revolution of the
 // unit's 28BYJ-48 drum (its STEPS constant — a static_assert there pins the

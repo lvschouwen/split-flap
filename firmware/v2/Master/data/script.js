@@ -1678,6 +1678,14 @@ function reflashProgressLabel(rf) {
 	if (rf.state === "entering") return "entering bootloaders…";
 	if (rf.state === "flashing") return "flashing 0x" + rf.cur.toString(16) + " — " + counters;
 	if (rf.state === "settling") return "units homing — " + counters;
+	// #412: a halted run stopped itself because the image looked suspect. Say
+	// which units were never attempted — the counters alone read like a job
+	// that finished, and that is the confusion the halt exists to prevent.
+	if (rf.halted) {
+		var untouched = rf.total - rf.done - rf.failed;
+		return "HALTED after repeated failures — " + counters +
+			(untouched > 0 ? ", " + untouched + " unit(s) not attempted" : "");
+	}
 	return rf.state + " — " + counters;
 }
 

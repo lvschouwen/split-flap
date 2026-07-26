@@ -4,7 +4,7 @@
 
 #include <unity.h>
 #include <stdint.h>
-#include "../../HeartbeatPolicy.h"
+#include "HeartbeatPolicy.h"
 
 void setUp() {}
 void tearDown() {}

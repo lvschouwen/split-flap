@@ -4,7 +4,7 @@
 
 #include <unity.h>
 #include <stdint.h>
-#include "../../RenderStagger.h"
+#include "RenderStagger.h"
 
 void setUp() {}
 void tearDown() {}

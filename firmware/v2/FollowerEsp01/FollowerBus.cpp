@@ -96,28 +96,30 @@ static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf,
   return true;
 }
 
+// 8-byte payload + its #405 checksum, same shared guard the master uses.
 static bool readUnitStatus(int i2cAddress, UnitStatus& out) {
-  uint8_t buf[8];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_STATUS, buf, 8)) {
+  uint8_t buf[STATUS_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_STATUS, buf, STATUS_REPLY_LEN)) {
     return false;
   }
-  out.flags = buf[0];
-  out.mcusrAtBoot = buf[1];
-  out.lifetimeBrownoutCount = buf[2];
-  out.lifetimeWatchdogCount = buf[3];
-  out.uptimeSeconds = ((uint16_t)buf[4] << 8) | (uint16_t)buf[5];
-  out.badCommandCount = buf[6];
-  out.lastHomingStepCount = (uint16_t)buf[7] << 4;
+  uint8_t p[STATUS_PAYLOAD_LEN];
+  if (!statusReadbackValid(buf, STATUS_REPLY_LEN, p)) return false;
+  out.flags = p[0];
+  out.mcusrAtBoot = p[1];
+  out.lifetimeBrownoutCount = p[2];
+  out.lifetimeWatchdogCount = p[3];
+  out.uptimeSeconds = ((uint16_t)p[4] << 8) | (uint16_t)p[5];
+  out.badCommandCount = p[6];
+  out.lastHomingStepCount = (uint16_t)p[7] << 4;
   return true;
 }
 
 static bool readUnitOffset(int i2cAddress, int16_t& out) {
-  uint8_t buf[2];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_OFFSET, buf, 2)) {
+  uint8_t buf[OFFSET_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_OFFSET, buf, OFFSET_REPLY_LEN)) {
     return false;
   }
-  out = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
-  return true;
+  return offsetReadbackValid(buf, OFFSET_REPLY_LEN, out);
 }
 
 static bool readUnitOdometer(int i2cAddress, uint32_t& out) {
@@ -169,23 +171,51 @@ static void refreshUnitExtDiag(UnitFacts& fact, int i2cAddress) {
   fact.extDiagValid = true;
 }
 
-// v1 #140 rule: reject non-printables and the two JSON-structural chars at
-// the I2C boundary — the version string is emitted raw into JSON.
-static bool readUnitVersion(int i2cAddress, char* out) {
-  out[0] = '\0';
-  uint8_t buf[8];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VERSION, buf, 8)) {
+// Across-power-cycle health (#406): same shared UnitLifetime.h packet and
+// guard the master reads, so both rows report identically. Pre-lifetime
+// firmware answers short and fails the length check.
+static bool readUnitLifetime(int i2cAddress, UnitLifetimeFacts& out) {
+  uint8_t buf[LIFETIME_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_LIFETIME, buf, LIFETIME_REPLY_LEN)) {
     return false;
   }
+  return lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out);
+}
+
+// Folds a lifetime read into the slot; clears lifetimeValid first so a unit
+// that stops answering (or was reflashed to pre-lifetime firmware) never
+// keeps serving a stale record (same discipline as refreshUnitExtDiag).
+static void refreshUnitLifetime(UnitFacts& fact, int i2cAddress) {
+  fact.lifetimeValid = false;
+  UnitLifetimeFacts lt;
+  if (!readUnitLifetime(i2cAddress, lt)) return;
+  fact.lifetime = lt;
+  fact.lifetimeValid = true;
+}
+
+// v1 #140 rule: reject non-printables and the two JSON-structural chars at
+// the I2C boundary — the version string is emitted raw into JSON.
+// Also yields the unit's SFP_PROTOCOL_VERSION (#405) — the one number saying
+// which wire contract it speaks. This reply's shape is frozen forever.
+static bool readUnitVersion(int i2cAddress, char* out, uint8_t& protocolOut) {
+  out[0] = '\0';
+  protocolOut = 0;
+  uint8_t buf[VERSION_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VERSION, buf, VERSION_REPLY_LEN)) {
+    return false;
+  }
+  UnitVersionPacket pkt;
+  if (!versionReadbackValid(buf, VERSION_REPLY_LEN, pkt)) return false;
   uint8_t len = 0;
-  for (; len < 8; len++) {
-    if (buf[len] == 0) break;
-    if (buf[len] < 32 || buf[len] > 126) return false;
-    if (buf[len] == '"' || buf[len] == '\\') return false;
+  for (; len < VERSION_REV_LEN; len++) {
+    if (pkt.rev[len] == 0) break;
+    if (pkt.rev[len] < 32 || pkt.rev[len] > 126) return false;
+    if (pkt.rev[len] == '"' || pkt.rev[len] == '\\') return false;
   }
   if (len == 0) return false;
-  for (uint8_t i = 0; i < len; i++) out[i] = (char)buf[i];
+  for (uint8_t i = 0; i < len; i++) out[i] = pkt.rev[i];
   out[len] = '\0';
+  protocolOut = pkt.protocolVersion;
   return true;
 }
 
@@ -240,9 +270,14 @@ void busProbe() {
     detectedUnitCount++;
     if (inBootloader) continue;
 
-    if (readUnitVersion(i2cAddress, unitFacts[i].version)) {
+    uint8_t protocolVersion = 0;
+    if (readUnitVersion(i2cAddress, unitFacts[i].version, protocolVersion)) {
+      // Rev (a hash) and protocol version are both compared for EQUALITY
+      // only — neither says "older", and different always means reflash.
       unitFacts[i].fwStatus =
           unitFwStatusFromRev(unitFacts[i].version, BUNDLED_UNIT_REV);
+      unitFacts[i].protocolVersion = protocolVersion;
+      unitFacts[i].protocolKnown = true;
     }
     int16_t offset;
     if (readUnitOffset(i2cAddress, offset)) {
@@ -258,6 +293,9 @@ void busProbe() {
     // New-measurement diagnostics ride the probe too (#365); pre-ext-diag
     // firmware fails the checksum and stays extDiagValid=false.
     refreshUnitExtDiag(unitFacts[i], i2cAddress);
+    // Lifetime health rides the probe too (#406); pre-lifetime firmware
+    // fails the length check and stays lifetimeValid=false.
+    refreshUnitLifetime(unitFacts[i], i2cAddress);
   }
   displayWidth = computeDisplayWidth(states, UNITS_AMOUNT);
   SerialPrint(F("I2C scan complete. Detected "));
@@ -269,7 +307,7 @@ void busProbe() {
 
 bool busPollHealthOne(int i) {
 #if SERIAL_ENABLE == false
-  if (unitFacts[i].state != 1) {
+  if (!unitDrivable(unitFacts[i])) {  // #405
     unitFacts[i].statusValid = false;
     return false;
   }
@@ -291,6 +329,9 @@ bool busPollHealthOne(int i) {
   // charged to bus error attribution — same as odometer/vitals above, only
   // the CMD_GET_STATUS read above is the liveness signal.
   refreshUnitExtDiag(unitFacts[i], toI2cAddress(i));
+  // Lifetime health refreshes on the same cadence (#406) — a failed homing
+  // must not wait for the next probe to surface.
+  refreshUnitLifetime(unitFacts[i], toI2cAddress(i));
   return ok;  // CMD_GET_STATUS liveness signal for the heartbeat (#310)
 #else
   (void)i;
@@ -356,7 +397,7 @@ static int checkIfMoving(int unitIndex) {
 
 static bool isRowMoving() {
   for (int i = 0; i < UNITS_AMOUNT; i++) {
-    if (unitFacts[i].state != 1) continue;
+    if (!unitDrivable(unitFacts[i])) continue;  // #405
     if (checkIfMoving(i) == 1) return true;
   }
   return false;
@@ -396,7 +437,7 @@ void busShowSegment(const String& segment, int webSpeed) {
 
   int commandedCount = 0;
   for (int i = 0; i < width; i++) {
-    if (unitFacts[i].state != 1) continue;
+    if (!unitDrivable(unitFacts[i])) continue;  // #405
     int letter = translateLetterToInt(frame[i]);
     if (letter < 0) continue;  // char not on the drum: leave the unit be
     // #324: spread the flap inrush — pause before opening each new group so a
@@ -414,7 +455,7 @@ void busShowSegment(const String& segment, int webSpeed) {
   // Closed-loop verification (v1 #106): read back, re-send once on mismatch.
   int resent = 0;
   for (int i = 0; i < UNITS_AMOUNT; i++) {
-    if (commanded[i] < 0 || unitFacts[i].state != 1) continue;
+    if (commanded[i] < 0 || !unitDrivable(unitFacts[i])) continue;  // #405
     int shown;
     if (!readUnitDisplayedLetter(toI2cAddress(i), shown)) continue;
     if (shown == commanded[i]) continue;
@@ -432,14 +473,21 @@ void busShowSegment(const String& segment, int webSpeed) {
 
 // --- single-unit ops ---------------------------------------------------------------
 
+// Value + bitwise complement, then read it back (#405) — was fire-and-forget.
 int busWriteOffset(uint8_t i2cAddress, int16_t value) {
-  uint8_t enc[2];
-  maintEncodeOffsetLE(value, enc);
+  uint8_t enc[SET_OFFSET_PAYLOAD_LEN];
+  setOffsetEncode(value, enc);
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_SET_OFFSET);
-  Wire.write(enc[0]);
-  Wire.write(enc[1]);
-  return Wire.endTransmission();
+  Wire.write(enc, SET_OFFSET_PAYLOAD_LEN);
+  int txStatus = Wire.endTransmission();
+  if (txStatus != 0) return txStatus;
+  // The unit persists in loop context, not its TWI ISR — let the write drain.
+  delay(UNIT_OFFSET_WRITE_SETTLE_MS);
+  int16_t readBack = 0;
+  if (!readUnitOffset(i2cAddress, readBack)) return UNIT_BUS_OFFSET_UNVERIFIED;
+  if (readBack != value) return UNIT_BUS_OFFSET_MISMATCH;
+  return 0;
 }
 
 int busJog(uint8_t i2cAddress, int steps) {
@@ -467,6 +515,26 @@ int busResetOdometer(uint8_t i2cAddress) {
   return Wire.endTransmission();
 }
 
+// Feature gates (#409): complement-protected write, then a GET_LIFETIME
+// read-back — the same verified shape as busWriteOffset above, and the
+// mechanism that lets this row's units have a motion gate flipped without
+// pulling five Nanos for a reflash.
+int busSetGates(uint8_t i2cAddress, uint8_t gates) {
+  uint8_t enc[SET_GATES_PAYLOAD_LEN];
+  setGatesEncode(gates, enc);
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_SET_GATES);
+  Wire.write(enc, SET_GATES_PAYLOAD_LEN);
+  int txStatus = Wire.endTransmission();
+  if (txStatus != 0) return txStatus;
+  // The unit persists in loop context, not its TWI ISR — let the write drain.
+  delay(UNIT_GATES_WRITE_SETTLE_MS);
+  UnitLifetimeFacts lt;
+  if (!readUnitLifetime(i2cAddress, lt)) return UNIT_BUS_GATES_UNVERIFIED;
+  if (lt.featureGates != gates) return UNIT_BUS_GATES_MISMATCH;
+  return 0;
+}
+
 int busRebootToBootloader(uint8_t i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_ENTER_BOOTLOADER);
@@ -487,8 +555,9 @@ int busStartSelfTest(uint8_t i2cAddress) {
 }
 
 bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out) {
-  uint8_t buf[9];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_SELF_TEST, buf, 9)) {
+  uint8_t buf[SELFTEST_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_SELF_TEST, buf,
+                 SELFTEST_REPLY_LEN)) {
     return false;
   }
   return selfTestReadbackValid(buf, out);

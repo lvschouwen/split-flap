@@ -178,12 +178,29 @@ static void test_reset_units_bakes_enqueue_time_text_and_show_params() {
 static void test_reflash_units_bakes_enqueue_time_show_params() {
   // Same bake-at-enqueue rule as ResetUnits (#205): the job's end-of-run
   // re-show uses the content of the moment the operator clicked.
-  DisplayCommand cmd = makeReflashUnitsCommand(21, "14:44", "center", 80);
+  DisplayCommand cmd = makeReflashUnitsCommand(21, "14:44", "center", 80, 0);
   TEST_ASSERT_EQUAL(DisplayOpcode::ReflashUnits, cmd.opcode);
   TEST_ASSERT_EQUAL_UINT32(21, cmd.seq);
   TEST_ASSERT_EQUAL_STRING("14:44", cmd.text);
   TEST_ASSERT_EQUAL(DisplayAlignment::Center, cmd.alignment);
   TEST_ASSERT_EQUAL_UINT8(80, cmd.speed);
+}
+
+// 0 = whole fleet, N = that unit only (#412). unitAddress is unused on this
+// opcode otherwise, and 0 is the general-call address, so it is a free
+// sentinel rather than a new queue field.
+static void test_reflash_units_defaults_to_the_whole_fleet() {
+  DisplayCommand cmd = makeReflashUnitsCommand(22, "HI", "left", 50, 0);
+  TEST_ASSERT_EQUAL_UINT8(0, cmd.unitAddress);
+}
+
+static void test_reflash_units_carries_a_single_target() {
+  DisplayCommand cmd = makeReflashUnitsCommand(23, "HI", "left", 50, 9);
+  TEST_ASSERT_TRUE(cmd.opcode == DisplayOpcode::ReflashUnits);
+  TEST_ASSERT_EQUAL_UINT8(9, cmd.unitAddress);
+  // The baked re-show params survive the extra argument.
+  TEST_ASSERT_EQUAL_STRING("HI", cmd.text);
+  TEST_ASSERT_EQUAL_UINT8(50, cmd.speed);
 }
 
 static void test_reflash_units_opcode_name() {
@@ -223,6 +240,31 @@ static void test_selftest_command_carries_seq_and_address() {
   TEST_ASSERT_EQUAL_INT16(0, cmd.value);
 }
 
+static void test_set_gates_command_carries_the_gate_byte_in_value() {
+  DisplayCommand cmd = makeSetGatesCommand(12, 5, 0x01);
+  TEST_ASSERT_TRUE(cmd.opcode == DisplayOpcode::SetGates);
+  TEST_ASSERT_EQUAL_UINT32(12, cmd.seq);
+  TEST_ASSERT_EQUAL_UINT8(5, cmd.unitAddress);
+  TEST_ASSERT_EQUAL_INT16(0x01, cmd.value);
+}
+
+// Clearing every gate is the safety action — it must survive the trip
+// through the signed value field as 0, not as a dropped command.
+static void test_set_gates_command_carries_an_all_clear() {
+  DisplayCommand cmd = makeSetGatesCommand(13, 6, 0x00);
+  TEST_ASSERT_TRUE(cmd.opcode == DisplayOpcode::SetGates);
+  TEST_ASSERT_EQUAL_INT16(0, cmd.value);
+}
+
+static void test_set_gates_high_bit_survives_the_signed_value_field() {
+  DisplayCommand cmd = makeSetGatesCommand(14, 7, 0xFF);
+  TEST_ASSERT_EQUAL_UINT8(0xFF, (uint8_t)cmd.value);
+}
+
+static void test_set_gates_opcode_name() {
+  TEST_ASSERT_EQUAL_STRING("SetGates", displayOpcodeName(DisplayOpcode::SetGates));
+}
+
 static void test_selftest_opcode_name() {
   TEST_ASSERT_EQUAL_STRING("SelfTest", displayOpcodeName(DisplayOpcode::SelfTest));
 }
@@ -254,8 +296,14 @@ int main(int, char**) {
   RUN_TEST(test_stop_command_carries_seq_only);
   RUN_TEST(test_describe_names_maintenance_opcodes);
   RUN_TEST(test_reflash_units_bakes_enqueue_time_show_params);
+  RUN_TEST(test_reflash_units_defaults_to_the_whole_fleet);
+  RUN_TEST(test_reflash_units_carries_a_single_target);
   RUN_TEST(test_reflash_units_opcode_name);
   RUN_TEST(test_selftest_command_carries_seq_and_address);
   RUN_TEST(test_selftest_opcode_name);
+  RUN_TEST(test_set_gates_command_carries_the_gate_byte_in_value);
+  RUN_TEST(test_set_gates_command_carries_an_all_clear);
+  RUN_TEST(test_set_gates_high_bit_survives_the_signed_value_field);
+  RUN_TEST(test_set_gates_opcode_name);
   return UNITY_END();
 }

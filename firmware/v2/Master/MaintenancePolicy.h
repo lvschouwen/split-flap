@@ -55,6 +55,18 @@ inline MaintVerdict maintValidateAddress(const char* raw,
   if (unitIndex < 0 || unitIndex >= maxUnits || units[unitIndex].state != 1) {
     return {404, "No sketch-running unit at that address"};
   }
+  // #405: a unit reporting a wire contract we do not speak is present but not
+  // drivable, so every single-unit op behind this gate is refused. Without it
+  // an operator could still fire the most consequential one of all —
+  // SET_I2C_ADDRESS, an unverifiable address burn whose recovery is a physical
+  // trip — at a unit whose reply layout we cannot even parse.
+  //
+  // POST /unit/reboot deliberately does NOT come through here (it range-checks
+  // itself), which is what keeps ENTER_BOOTLOADER reachable and a mismatched
+  // unit always recoverable by reflash.
+  if (!unitDrivable(units[unitIndex])) {
+    return {409, "Unit reports an unrecognised protocol version — reflash it"};
+  }
   outAddr = (int)parsed;
   return {};
 }
@@ -74,6 +86,19 @@ inline MaintVerdict maintValidateOffset(long value) {
 inline MaintVerdict maintValidateJog(long steps) {
   if (steps < -127 || steps > 127) {
     return {400, "Steps must be -127..127"};
+  }
+  return {};
+}
+
+// Feature gates ride the wire as one byte (#409). WHICH bits are legal is
+// deliberately not checked here: the vocabulary belongs to the unit's
+// firmware, which refuses any bit it has no code for, and the write's
+// read-back grades that refusal as a postcondition failure. A master that
+// second-guessed the vocabulary would start rejecting gates that a newer unit
+// firmware understands perfectly well.
+inline MaintVerdict maintValidateGates(long gates) {
+  if (gates < 0 || gates > 255) {
+    return {400, "Gates must be a 0..255 bit mask"};
   }
   return {};
 }

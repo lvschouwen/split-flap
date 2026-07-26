@@ -20,12 +20,44 @@
 // (~15 ms) + twiboot init. 500 ms is generous (v1 value).
 #define TWIBOOT_STARTUP_MS 500
 
+// Halt a run after this many CONSECUTIVE unit failures (#412). The job used to
+// log a failed unit and walk straight on to the next one, so an image that
+// cannot flash — or flashes and does not boot — took the whole row down one
+// unit at a time with nobody stopping it.
+//
+// Consecutive rather than total, because the two failure shapes need opposite
+// answers and their signatures differ:
+//   A BAD IMAGE fails on every unit it touches. Two in a row is already
+//       conclusive, and the run stops having burned two rather than 21.
+//   A DEAD UNIT fails alone. a15 is hall-dead today; a first-failure halt would
+//       let it wedge every fleet converge from now on, including the unattended
+//       boot auto-install. One success resets the count and the sweep continues.
+// Applies to both sweeps. The boot path is where nobody is watching, which is
+// where an unbounded failure walk is worst.
+#define REFLASH_MAX_CONSECUTIVE_FAILURES 2
+
+inline bool reflashShouldHalt(uint8_t consecutiveFailures) {
+  return consecutiveFailures >= REFLASH_MAX_CONSECUTIVE_FAILURES;
+}
+
+// A unit that reports a protocol version we do not speak (#405). KNOWN
+// different, not merely unreadable — the version read succeeded and carried a
+// number that is not ours. We cannot drive such a unit at all (see
+// unitOpcodeAllowedWhenUnsupported: GET_VERSION and ENTER_BOOTLOADER only), so
+// converging it is the only way it becomes useful again.
+//
+// Deliberately EQUALITY-based: a higher version is exactly as un-drivable as a
+// lower one, because the master cannot speak a contract it has no code for.
+inline bool reflashUnitProtocolMismatch(const UnitFacts& u) {
+  return u.protocolKnown && !unitProtocolSupported(u.protocolVersion);
+}
+
 // A sketch-mode unit whose rev is not the bundled one gets pushed into
 // twiboot. UNKNOWN qualifies alongside OUTDATED (v1 #114: only units
 // provably on the bundled rev are skipped). Bootloader units need no
 // reboot — they are flash targets already.
 inline bool reflashUnitNeedsReboot(const UnitFacts& u) {
-  return u.state == 1 && u.fwStatus != 0;
+  return u.state == 1 && (u.fwStatus != 0 || reflashUnitProtocolMismatch(u));
 }
 
 inline int reflashCollectRebootTargets(const UnitFacts* facts, int maxUnits,
@@ -38,14 +70,19 @@ inline int reflashCollectRebootTargets(const UnitFacts* facts, int maxUnits,
 }
 
 // Boot auto-update predicate (v1 semantics, deliberately narrower than
-// reflashUnitNeedsReboot): only units PROVABLY outdated are force-rebooted
-// at boot — an unreadable rev must not trigger a reflash cycle every
-// power-up. The operator's web job sweeps unknowns too (v1 #114).
+// reflashUnitNeedsReboot): only units PROVABLY not on our build are
+// force-rebooted at boot — an unreadable rev must not trigger a reflash cycle
+// every power-up. The operator's web job sweeps unknowns too (v1 #114).
+//
+// A protocol mismatch qualifies as proof: the read SUCCEEDED and reported a
+// contract that is not ours, which is a definite fact about the unit rather
+// than an absence of information. An unreadable version stays excluded.
 inline int reflashCollectOutdatedTargets(const UnitFacts* facts, int maxUnits,
                                          int base, uint8_t* outAddrs) {
   int n = 0;
   for (int i = 0; i < maxUnits; i++) {
-    if (facts[i].state == 1 && facts[i].fwStatus == 1) {
+    if (facts[i].state == 1 &&
+        (facts[i].fwStatus == 1 || reflashUnitProtocolMismatch(facts[i]))) {
       outAddrs[n++] = (uint8_t)(base + i);
     }
   }
@@ -59,6 +96,31 @@ inline int reflashCollectFlashTargets(const UnitFacts* facts, int maxUnits,
     if (facts[i].state == 2) outAddrs[n++] = (uint8_t)(base + i);
   }
   return n;
+}
+
+// Narrow any collected target list to a single address; 0 means "no filter"
+// and returns the list untouched (0 is the general-call address, never a
+// unit's, so it is free to use as the sentinel).
+//
+// A filter rather than three extra parameters: all three collectors above
+// answer "who matches this predicate", and "…and is this one unit" is a
+// separate question that composes with each of them identically. It is
+// applied to BOTH the reboot sweep and the post-rescan flash list, so a unit
+// stranded in twiboot by an earlier attempt is not swept up by a run aimed at
+// a different address.
+//
+// Exists for the #407 campaign (#412): a day-0 EEPROM erase on a wire contract
+// that has never run on hardware is not something to hand a 21-unit sweep. The
+// operator flashes one, inspects it, and decides.
+inline int reflashFilterToAddress(uint8_t* addrs, int n, uint8_t onlyAddr) {
+  if (onlyAddr == 0) return n;
+  for (int i = 0; i < n; i++) {
+    if (addrs[i] == onlyAddr) {
+      addrs[0] = onlyAddr;
+      return 1;
+    }
+  }
+  return 0;
 }
 
 // --- progress (published in the DisplaySnapshot, rendered on the web) ---------
@@ -79,6 +141,13 @@ struct ReflashProgress {
   uint8_t done = 0;         // flashed + verified
   uint8_t failed = 0;       // left in twiboot for the next attempt
   uint8_t currentAddr = 0;  // unit being flashed (0 outside Flashing)
+  // #412: the run stopped itself on consecutive failures rather than reaching
+  // the end of its plan. Distinct from `failed > 0`, which a completed run also
+  // shows — an operator reading /units/health cannot otherwise tell "the image
+  // is suspect and the remaining units were never touched" from "this job
+  // finished and these are the real failures", and giving a human that signal
+  // is the entire point of the halt.
+  bool halted = false;
 };
 
 // The producer gate (#205 design rule) keys off this: while true, only Stop
@@ -95,6 +164,7 @@ inline void reflashProgressBegin(ReflashProgress& p, int total) {
   p.done = 0;
   p.failed = 0;
   p.currentAddr = 0;
+  p.halted = false;
 }
 
 inline void reflashProgressUnitStart(ReflashProgress& p, uint8_t addr) {
@@ -113,8 +183,13 @@ inline void reflashProgressSettling(ReflashProgress& p) {
 
 // Cancel wins over per-unit failures: the operator pulled the plug, so the
 // counters describe an interrupted job, not a graded one.
-inline void reflashProgressFinish(ReflashProgress& p, bool cancelled) {
+inline void reflashProgressFinish(ReflashProgress& p, bool cancelled,
+                                  bool halted) {
   p.currentAddr = 0;
+  // A halt always implies failures (it takes REFLASH_MAX_CONSECUTIVE_FAILURES
+  // to trigger), so the state below is already Failed — this flag adds the WHY,
+  // not the severity. A cancel outranks it: the operator pulled the plug.
+  p.halted = halted && !cancelled;
   if (cancelled) {
     p.state = ReflashState::Cancelled;
   } else if (p.failed > 0) {

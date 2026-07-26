@@ -210,11 +210,16 @@ void rotateToLetter(int toLetter) {
 
 //gets magnet sensor offset from EEPROM in steps
 void getOffset() {
-  int stored;  //shadow: EEPROM.get can't take the volatile directly
-  EEPROM.get(eeAddress, stored);
-  // Fresh EEPROM reads 0xFFFF (-1, harmless); corruption can read anything.
-  // An offset beyond one full revolution is never a legitimate calibration
-  // and would make every homing overshoot by whole turns — treat as unset.
+  uint8_t block[EE_CAL_BLOCK_LEN];
+  for (uint8_t i = 0; i < EE_CAL_BLOCK_LEN; i++) {
+    block[i] = EEPROM.read(EE_CAL_OFFSET + i);
+  }
+  // A blank or torn block decodes to 0 (uncalibrated), never to whatever the
+  // bytes happened to say. The range clamp stays as the second guard: an
+  // offset beyond one full revolution is never a legitimate calibration and
+  // would make every homing overshoot by whole turns.
+  int16_t stored = 0;
+  unitEeCalDecode(block, stored);
   if (stored < -STEPS || stored > STEPS) {
     stored = 0;
   }
@@ -298,6 +303,11 @@ int calibrate(bool initialCalibration) {
                               ? (uint16_t)((uint16_t)i - expected) : 0;
         extStepExcessLast = excess;
         if (excess > extStepExcessMax) extStepExcessMax = excess;
+        // #406: extStepExcessMax is the SINCE-BOOT worst, so every reboot
+        // forgets the drag record. Keep a lifetime high-water mark too — it
+        // is what turns a one-off reading into evidence of slow mechanical
+        // decline. Only a new record writes EEPROM.
+        if (unitEeRecordStepExcess(lifetime, excess)) persistLifetimeHealth();
       }
       stepCounted(ROTATIONDIRECTION * calOffset);
       displayedLetter = 0;
@@ -334,6 +344,12 @@ int calibrate(bool initialCalibration) {
       statusHallNeverTriggered = !hallSawMagnet;
       lastHomingStepCount = (uint16_t)i;
       interrupts();
+      // #406: statusLastHomeFailed is a single current-state bit, so a unit
+      // that fails intermittently looks healthy between attempts. The
+      // lifetime count would have been climbing on a15 for hours before
+      // anything else showed it.
+      unitEeBumpSaturating(lifetime.homeFailedCount);
+      persistLifetimeHealth();
       stopMotor();
       return -1;
     }
@@ -483,6 +499,10 @@ void refreshExtDiagReply() {
 //position estimate (same reasoning as calibrate's failure path).
 void runSelfTest() {
   selfTest.state = SELFTEST_STATE_RUNNING;
+  selfTest.reason = SELFTEST_REASON_NONE;  //#404: never report a stale reason
+  selfTest.stepsPerRev = 0;
+  selfTest.hallWindowSteps = 0;
+  selfTest.revTimeMs = 0;
   extHallLatchInhibit = true;  //#372: don't latch the phantom edge count below
   driftRefreshReplyBuffers();  //publish RUNNING before the ~12 s of motion
   startMotor();
@@ -495,7 +515,13 @@ void runSelfTest() {
     while (digitalRead(HALLPIN) == 0) {
       wdt_reset();
       stepCounted(ROTATIONDIRECTION * 1);
-      if (++guard > 3L * STEPS) { failed = true; break; }
+      if (++guard > 3L * STEPS) {
+        //Could not step OUT of the window: magnet against the sensor, or a
+        //sensor stuck low (#404).
+        failed = true;
+        selfTest.reason = SELFTEST_REASON_HALL_STUCK;
+        break;
+      }
     }
     if (!failed) {
       stepCounted(ROTATIONDIRECTION * 50);  //clear the release edge
@@ -505,7 +531,12 @@ void runSelfTest() {
   while (!failed && digitalRead(HALLPIN) != 0) {
     wdt_reset();
     stepCounted(ROTATIONDIRECTION * 1);
-    if (++guard > 3L * STEPS) failed = true;
+    if (++guard > 3L * STEPS) {
+      //Never saw the hall go low: magnet fallen off, dead KY-003, or broken
+      //wiring (#404).
+      failed = true;
+      selfTest.reason = SELFTEST_REASON_HALL_NEVER;
+    }
   }
 
   //Phase 2: one measured revolution from the edge. The window width is the
@@ -525,7 +556,12 @@ void runSelfTest() {
       stepCounted(ROTATIONDIRECTION * 1);
       measuredSteps++;
       if (measuredSteps > (uint16_t)(2 * STEPS)) {  //edge never came back
+        //A drum that slips or binds part-way round (#404). windowSteps was
+        //already measured this pass — preserved below, it is the most
+        //diagnostic number available for this failure.
         failed = true;
+        selfTest.reason = SELFTEST_REASON_REV_INCOMPLETE;
+        selfTest.hallWindowSteps = windowSteps;
         break;
       }
       int hall = digitalRead(HALLPIN);
@@ -564,10 +600,11 @@ void runSelfTest() {
     }
   }
   if (failed) {
+    //#404: keep whatever WAS measured instead of zeroing it. A phase-2
+    //failure already knows its hall window, and that number is exactly what
+    //diagnoses the unit; throwing it away is what made address 15 take four
+    //runs and a healthy control to explain.
     selfTest.state = SELFTEST_STATE_FAILED;
-    selfTest.stepsPerRev = 0;
-    selfTest.hallWindowSteps = 0;
-    selfTest.revTimeMs = 0;
     //The hall edge was never found: the drum's position is unknowable, so
     //park instead of letting the letter-diff check "restore" the commanded
     //letter from a fake blank origin. The master's next
@@ -577,6 +614,25 @@ void runSelfTest() {
     drift.positionKnown = false;
     drift.driftPending = false;
   }
+  // #406: carry the measurements into lifetime storage. The FIRST valid
+  // reading becomes the baseline this unit is compared against forever;
+  // later ones move `last`. a15's healthy hallWindow of 46 survived only in
+  // a session note, so "46 when new, failing now" was a thing a human had to
+  // remember — now the unit carries it.
+  //
+  // ONLY a passing run records. #404 deliberately preserves whatever a failed
+  // run measured — but that is for the GET_SELF_TEST reply a human reads, not
+  // for the lifetime record. A REV_INCOMPLETE failure carries a windowSteps
+  // measured against a drum that then stopped cooperating, and #268 now
+  // consumes this field as a CONTROL input, so persisting it would let one bad
+  // run drive the idle check's model until someone re-runs the test. The
+  // reply keeps the number; the record does not.
+  if (selfTest.state == SELFTEST_STATE_OK) {
+    unitEeRecordSelfTest(lifetime, selfTest.hallWindowSteps,
+                         selfTest.stepsPerRev);
+    persistLifetimeHealth();
+  }
+
   lastRotation = millis();  //overheat gate before the restore move
   if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
   delay(100);

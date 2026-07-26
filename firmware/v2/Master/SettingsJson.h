@@ -67,6 +67,7 @@ struct SettingsJsonFields {
   // #289 dummy mode: the stored override (0 = auto), distinct from the
   // effective width already carried by unitCount.
   int unitCountOverride = 0;
+  bool reflashOnBoot = true;  // #412 boot auto-install brake
 
   // Per-board vitals (#335) so cluster members surface heap/rssi/uptime in
   // the System-tab panel — same keys/units as the ESP-01 follower's #297
@@ -180,6 +181,7 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"wifiSettingsResettable\":";
   appendJsonBool(out, f.wifiSettingsResettable);
   out += ",\"unitCountOverride\":"; out += f.unitCountOverride;
+  out += ",\"reflashOnBoot\":";     out += f.reflashOnBoot ? "true" : "false";
   out += ",\"clusterState\":";      appendJsonString(out, f.clusterState);
   out += ",\"clusterLeaderName\":"; appendJsonString(out, f.clusterLeaderName);
   out += ",\"clusterLeaderHost\":"; appendJsonString(out, f.clusterLeaderHost);

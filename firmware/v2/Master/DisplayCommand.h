@@ -24,6 +24,9 @@ enum class DisplayOpcode : uint8_t {
   SetAddress,
   ClearAddress,
   ResetOdometer,
+  // Feature gates (#409): persist the unit's UNIT_GATE_* byte. `value`
+  // carries the new byte; the exec verifies it by reading GET_LIFETIME back.
+  SetGates,
   // On-demand unit self-test (#265): displayTask starts the unit's
   // diagnostic revolution and polls the result; measurements publish into
   // the snapshot's SelfTestSlot.
@@ -94,6 +97,7 @@ inline const char* displayOpcodeName(DisplayOpcode op) {
     case DisplayOpcode::SetAddress:         return "SetAddress";
     case DisplayOpcode::ClearAddress:       return "ClearAddress";
     case DisplayOpcode::ResetOdometer:      return "ResetOdometer";
+    case DisplayOpcode::SetGates:           return "SetGates";
     case DisplayOpcode::SelfTest:           return "SelfTest";
     case DisplayOpcode::ResetUnits:         return "ResetUnits";
     case DisplayOpcode::Stop:               return "Stop";
@@ -174,6 +178,14 @@ inline DisplayCommand makeResetOdometerCommand(uint32_t seq, uint8_t addr) {
   return makeMaintCommand(DisplayOpcode::ResetOdometer, seq, addr, 0);
 }
 
+// Feature gates (#409): the write half of #406's gate byte, which is what
+// lets #407's motion changes ship dormant and be switched on over the wire
+// instead of costing a second fleet reflash.
+inline DisplayCommand makeSetGatesCommand(uint32_t seq, uint8_t addr,
+                                          uint8_t gates) {
+  return makeMaintCommand(DisplayOpcode::SetGates, seq, addr, (int16_t)gates);
+}
+
 // On-demand diagnostic revolution (#265): ~15 s of unit motion displayTask
 // waits out inline (commands queue behind it, like every long op).
 inline DisplayCommand makeSelfTestCommand(uint32_t seq, uint8_t addr) {
@@ -201,13 +213,17 @@ inline DisplayCommand makeStopCommand(uint32_t seq) {
 // Same bake-at-enqueue rule as ResetUnits (#205): the reflash job's
 // end-of-run re-show uses the content of the moment the operator clicked —
 // reflashed units home to blank, so the job puts the display back itself.
+// `addr` 0 = the whole fleet (the historical behaviour); 1..126 targets one
+// unit (#412). 0 is the general-call address and never a unit's, so it is a
+// free sentinel — no extra field needed on the queue-copied POD.
 inline DisplayCommand makeReflashUnitsCommand(uint32_t seq,
                                               const String& currentText,
                                               const String& alignment,
-                                              int speed) {
+                                              int speed, uint8_t addr) {
   DisplayCommand cmd = makeShowTextCommand(currentText, alignment, speed);
   cmd.opcode = DisplayOpcode::ReflashUnits;
   cmd.seq = seq;
+  cmd.unitAddress = addr;
   return cmd;
 }
 

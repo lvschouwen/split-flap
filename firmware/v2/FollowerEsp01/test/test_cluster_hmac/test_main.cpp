@@ -5,7 +5,7 @@
 
 #include <unity.h>
 
-#include "../../ClusterHmac.h"
+#include "ClusterHmac.h"
 
 static String sha256Hex(const String& s) {
   uint8_t out[32];

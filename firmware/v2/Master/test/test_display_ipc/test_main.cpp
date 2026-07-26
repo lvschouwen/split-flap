@@ -108,7 +108,11 @@ static void test_maintenance_opcodes_count_and_apply() {
   // #231 review CRITICAL: displayApplyCommand gates the whole dispatch in
   // Tasks.cpp — an opcode missing here silently never executes on the bus.
   TEST_ASSERT_TRUE(displayApplyCommand(snap, makeResetOdometerCommand(8, 3)));
-  TEST_ASSERT_EQUAL(8, snap.commandsProcessed);
+  // #409 shipped SetGates without this line and the whole POST /unit/gates
+  // path was dead on the S3 — enqueued, 200 OK, silently dropped, op-result
+  // stuck on "pending" forever. Exactly the failure the note above predicts.
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeSetGatesCommand(9, 3, 0x01)));
+  TEST_ASSERT_EQUAL(9, snap.commandsProcessed);
 }
 
 static void test_stop_clears_current_text() {
@@ -249,25 +253,26 @@ static void test_gate_blocks_everything_but_stop_while_reflashing() {
 static void test_gate_reopens_after_job_finishes() {
   DisplaySnapshot snap;
   reflashProgressBegin(snap.reflash, 4);
-  reflashProgressFinish(snap.reflash, false);
+  reflashProgressFinish(snap.reflash, false, false);
   TEST_ASSERT_TRUE(displayAcceptsCommand(snap, DisplayOpcode::ShowText));
 }
 
 static void test_reflash_units_command_counts_without_touching_text() {
   DisplaySnapshot snap;
   displayApplyCommand(snap, makeShowTextCommand("14:44", "center", 80));
-  DisplayCommand cmd = makeReflashUnitsCommand(7, "14:44", "center", 80);
+  DisplayCommand cmd = makeReflashUnitsCommand(7, "14:44", "center", 80, 0);
   TEST_ASSERT_TRUE(displayApplyCommand(snap, cmd));
   TEST_ASSERT_EQUAL_STRING("14:44", snap.currentText);
   TEST_ASSERT_EQUAL(2, snap.commandsProcessed);
 }
 
 static void test_reflash_json_shapes() {
-  char buf[96];
+  char buf[112];
   ReflashProgress p;
   buildReflashJson(buf, sizeof(buf), p);
   TEST_ASSERT_EQUAL_STRING(
-      "{\"state\":\"idle\",\"total\":0,\"done\":0,\"failed\":0,\"cur\":0}",
+      "{\"state\":\"idle\",\"total\":0,\"done\":0,\"failed\":0,\"cur\":0,"
+      "\"halted\":false}",
       buf);
   reflashProgressBegin(p, 12);
   reflashProgressUnitStart(p, 5);
@@ -275,7 +280,25 @@ static void test_reflash_json_shapes() {
   reflashProgressUnitStart(p, 6);
   buildReflashJson(buf, sizeof(buf), p);
   TEST_ASSERT_EQUAL_STRING(
-      "{\"state\":\"flashing\",\"total\":12,\"done\":1,\"failed\":0,\"cur\":6}",
+      "{\"state\":\"flashing\",\"total\":12,\"done\":1,\"failed\":0,"
+      "\"cur\":6,\"halted\":false}",
+      buf);
+}
+
+// #412: the halt must reach the API surface, not just the serial log — an
+// operator watching /units/health otherwise cannot tell a run that stopped
+// itself from one that finished with the same failure count.
+static void test_reflash_json_carries_the_halt() {
+  char buf[112];
+  ReflashProgress p;
+  reflashProgressBegin(p, 21);
+  reflashProgressUnitResult(p, false);
+  reflashProgressUnitResult(p, false);
+  reflashProgressFinish(p, false, true);
+  buildReflashJson(buf, sizeof(buf), p);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"total\":21,\"done\":0,\"failed\":2,"
+      "\"cur\":0,\"halted\":true}",
       buf);
 }
 
@@ -375,18 +398,45 @@ static void test_selftest_json_shapes() {
       "\"rev_time_ms\":6120}",
       buf);
 
-  // Failure vocabulary.
+  // Failure vocabulary. #404: a failure now also carries the unit's own
+  // failure mode and whatever it measured before giving up — it used to be
+  // state + master-side reason and nothing else.
   slot.outcome = SelfTestOutcome::Timeout;
   buildSelfTestJson(buf, sizeof(buf), slot, 4);
-  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"timeout\"}", buf);
-  slot.outcome = SelfTestOutcome::UnitFailed;
-  buildSelfTestJson(buf, sizeof(buf), slot, 4);
-  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"unit-failed\"}",
-                           buf);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"reason\":\"timeout\",\"unit_reason\":\"none\","
+      "\"steps_per_rev\":2041,\"hall_window\":90,\"rev_time_ms\":6120}",
+      buf);
   slot.outcome = SelfTestOutcome::Unsupported;
   buildSelfTestJson(buf, sizeof(buf), slot, 4);
-  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"unsupported\"}",
-                           buf);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"reason\":\"unsupported\""));
+
+  // The three unit-side failure modes each name themselves. On a physical
+  // wall they mean completely different repairs: a magnet against the sensor,
+  // a magnet that fell off or a dead sensor, and a drum that slips or binds.
+  slot.outcome = SelfTestOutcome::UnitFailed;
+  slot.unitReason = SELFTEST_REASON_HALL_STUCK;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"unit_reason\":\"hall-stuck\""));
+  slot.unitReason = SELFTEST_REASON_HALL_NEVER;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"unit_reason\":\"hall-never\""));
+  slot.unitReason = SELFTEST_REASON_REV_INCOMPLETE;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"unit_reason\":\"rev-incomplete\""));
+
+  // The a15 case: a phase-2 failure knows its hall window, and that number is
+  // what diagnoses the unit. Zeroing it is what made address 15 take four runs
+  // and a healthy control to explain.
+  slot.stepsPerRev = 0;      // never completed a revolution
+  slot.hallWindowSteps = 46; // ...but it DID measure the window
+  slot.revTimeMs = 0;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"hall_window\":46"));
+  slot.stepsPerRev = 2041;
+  slot.hallWindowSteps = 90;
+  slot.revTimeMs = 6120;
+  slot.unitReason = SELFTEST_REASON_NONE;
 
   // An older seq answering for a newer query -> pending; newer slot -> expired.
   buildSelfTestJson(buf, sizeof(buf), slot, 9);
@@ -477,6 +527,7 @@ int main(int, char**) {
   RUN_TEST(test_gate_reopens_after_job_finishes);
   RUN_TEST(test_reflash_units_command_counts_without_touching_text);
   RUN_TEST(test_reflash_json_shapes);
+  RUN_TEST(test_reflash_json_carries_the_halt);
   RUN_TEST(test_fresh_snapshot_selftest_slot_is_pending);
   RUN_TEST(test_selftest_command_counts_without_mutation);
   RUN_TEST(test_apply_selftest_result_fills_the_slot);

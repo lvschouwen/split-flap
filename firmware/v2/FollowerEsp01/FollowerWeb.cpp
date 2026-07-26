@@ -893,6 +893,23 @@ void webEndpointsInit(AsyncWebServer& server) {
                       0);
             });
 
+  // Feature gates (#409): the same flip the S3 rows get, so this row's units
+  // are not the ones that need a reflash to enable a motion change.
+  server.on("/unit/gates", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
+    int addr = 0;
+    if (!checkAddressParam(request, addr)) return;
+    long gates = 0;
+    if (!queryRequireLong(request, "gates", gates)) return;
+    MaintVerdict verdict = maintValidateGates(gates);
+    if (verdict.httpStatus != 200) {
+      sendWithCors(request, verdict.httpStatus, "text/plain",
+                   verdict.message);
+      return;
+    }
+    stageOp(request, FollowerOpKind::SetGates, (uint8_t)addr, gates);
+  });
+
   server.on("/unit/self-test", HTTP_POST, [](AsyncWebServerRequest* request) {
     if (followerRejectCsrf(request)) return;
     int addr = 0;
@@ -1018,6 +1035,16 @@ static void executeStagedOp() {
         u.odometer = 0;
       }
       break;
+    case FollowerOpKind::SetGates:
+      // busSetGates verifies with a read-back, so a unit that refused the
+      // bits grades as a failure here rather than a phantom success — same
+      // collapsing of verify failures into the wire status as WriteOffset.
+      wireStatus = busSetGates(op.addr, (uint8_t)op.arg);
+      if (wireStatus == 0) {
+        UnitFacts& u = unitFacts[op.addr - SFP_I2C_ADDRESS_BASE];
+        u.lifetime.featureGates = (uint8_t)op.arg;
+      }
+      break;
     case FollowerOpKind::RebootToBootloader:
       wireStatus = busRebootToBootloader(op.addr);
       // The unit sits in twiboot for ~1 s — keep every runtime probe out
@@ -1055,16 +1082,15 @@ static void pollSelfTest() {
   selfTestPollLastMs = millis();
   UnitSelfTestReading reading;
   if (busReadSelfTest(selfTestAddr, reading)) {
-    if (reading.state == 2 /* ok */) {
-      selfTestSlot.outcome = SelfTestOutcome::Ok;
+    if (reading.state == 2 /* ok */ || reading.state == 3 /* failed */) {
+      // #404: the measurements ride BOTH paths now — a failed test preserves
+      // whatever it got to measure, which is the diagnostic part.
       selfTestSlot.stepsPerRev = reading.stepsPerRev;
       selfTestSlot.hallWindowSteps = reading.hallWindowSteps;
       selfTestSlot.revTimeMs = reading.revTimeMs;
-      selfTestPolling = false;
-      return;
-    }
-    if (reading.state == 3 /* failed */) {
-      selfTestSlot.outcome = SelfTestOutcome::UnitFailed;
+      selfTestSlot.unitReason = reading.reason;
+      selfTestSlot.outcome = (reading.state == 2) ? SelfTestOutcome::Ok
+                                                  : SelfTestOutcome::UnitFailed;
       selfTestPolling = false;
       return;
     }

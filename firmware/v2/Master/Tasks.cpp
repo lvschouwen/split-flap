@@ -19,6 +19,10 @@ static std::atomic<int> unitWidthOverride{0};
 // the -1 sentinel via effectiveWidthOverride(). Seeded by tasksInit(),
 // pushed live by the settings drain (netTask).
 static std::atomic<bool> deviceRoleHeadless{false};
+// #412: false suppresses the boot auto-install so the fleet can be converged
+// unit by unit. Read once by displayTask at boot; pushed live by the settings
+// drain so a mid-session change lands without a reboot.
+static std::atomic<bool> reflashOnBootEnabled{true};
 
 void tasksSetUnitCountOverride(int count) {
   unitWidthOverride.store(count, std::memory_order_relaxed);
@@ -26,6 +30,14 @@ void tasksSetUnitCountOverride(int count) {
 
 void tasksSetDeviceRole(const String& role) {
   deviceRoleHeadless.store(isHeadlessRole(role), std::memory_order_relaxed);
+}
+
+void tasksSetReflashOnBoot(bool enabled) {
+  reflashOnBootEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+bool tasksReflashOnBoot() {
+  return reflashOnBootEnabled.load(std::memory_order_relaxed);
 }
 
 // The width-override value handed to displayApplyUnitFacts: -1 (force width 0)
@@ -57,7 +69,14 @@ bool tasksUnitCountOverridePinned() {
 // Sizes are the spec's table; the heartbeat prints each task's high-water
 // mark so the numbers get validated (and trimmed) on real hardware.
 
-static constexpr uint32_t DISPLAY_TASK_STACK = 4096;
+// 4096 crashed displayTask on real hardware (split-flap-c8a746) inside the
+// boot probe: unitBusProbe's per-unit SerialPrintf -> Print::printf ->
+// newlib vsnprintf, faulting in the context-switch path (an interrupt frame
+// pushed onto an exhausted stack), coredump backtrace uncorrupted. vsnprintf
+// is the deepest chain displayTask runs per unit, and runReflashJob rides the
+// same task, so the #205 fleet reflash pays that peak too. The heartbeat HWM
+// column stays the trim-down evidence.
+static constexpr uint32_t DISPLAY_TASK_STACK = 16384;
 // 2048 leaves only ~124 B HWM on real hardware — newlib's first
 // tzset/localtime parse of the POSIX TZ string runs deep in the ticker.
 static constexpr uint32_t CLOCK_TASK_STACK = 4096;
@@ -219,6 +238,11 @@ static void clusterTaskMain(void*) {
 void tasksInit(MasterSettings& settings, SettingsStore& store) {
   unitWidthOverride.store(settings.unitCountOverride,
                           std::memory_order_relaxed);
+  // #412: seed the boot auto-install brake BEFORE displayTask starts — the
+  // gate is read once during its boot sequence, so a stored false that is not
+  // seeded here would let the fleet converge on exactly the reboot the
+  // operator set it to prevent.
+  reflashOnBootEnabled.store(settings.reflashOnBoot, std::memory_order_relaxed);
   deviceRoleHeadless.store(isHeadlessRole(settings.deviceRole),
                            std::memory_order_relaxed);  // #331
   snapshotMutex = xSemaphoreCreateMutex();

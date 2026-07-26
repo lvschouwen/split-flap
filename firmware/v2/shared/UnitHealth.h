@@ -17,6 +17,8 @@
 #endif
 #include "UnitVitals.h"  // shared supply-Vcc/ram/cmd-pos diag packet (#306)
 #include "UnitExtDiag.h"  // shared new-measurement diag packet (#365)
+#include "UnitLifetime.h"  // shared across-power-cycle health packet (#406)
+#include "UnitWireContract.h"  // shared core read/write wire formats (#405)
 
 // Health / diagnostics snapshot returned by a sketch-running unit's
 // CMD_GET_STATUS reply. Populated by UnitBus.cpp; mirrors the 8-byte layout
@@ -77,6 +79,14 @@ struct UnitFacts {
   char version[9] = {0};     // git short-rev; "" when the read failed
   bool statusValid = false;  // status below holds a real CMD_GET_STATUS read
   UnitStatus status{};
+  // Wire contract the unit reports (#405), read from GET_VERSION alongside
+  // the rev. protocolKnown separates "definitively a different contract" from
+  // "could not read it at all" — only the first justifies force-flashing, or
+  // a unit we merely cannot read would reflash itself at every power-up
+  // (the v1 #114 guard). Compared for EQUALITY only: neither this nor the rev
+  // (a hash) can tell newer from older, and different always means reflash.
+  uint8_t protocolVersion = 0;
+  bool protocolKnown = false;
   // Calibration offset (#204): probe-time CMD_GET_OFFSET truth, patched in
   // place by displayTask after a successful SET_OFFSET. offsetValid stays
   // false for silent/bootloader units and firmware predating the opcode
@@ -114,6 +124,12 @@ struct UnitFacts {
   // truth, same checksum-rejected-on-old-firmware lifecycle as vitals/odometer.
   UnitExtDiag extDiag{};
   bool extDiagValid = false;
+  // Across-power-cycle health (#406): probe/health-poll CMD_GET_LIFETIME
+  // truth, same checksum-rejected-on-old-firmware lifecycle as ext-diag. The
+  // distinction from extDiag is the point — that one is since-boot and every
+  // reboot forgets it, this one is what the unit's EEPROM remembers.
+  UnitLifetimeFacts lifetime{};
+  bool lifetimeValid = false;
   // Heartbeat freshness (#310), maintained by displayTask's scheduled poll.
   // lastSeenMs is millis() at the last good CMD_GET_STATUS read; misses is the
   // consecutive-miss counter (NACK/checksum/timeout increments, a good read
@@ -149,6 +165,16 @@ struct UnitFacts {
   // logs health transitions. Policy in UnitEventLog.h.
   UnitRebootWatch rebootWatch{};
 };
+
+// May we drive this unit at all (#405)? A sketch-running unit that reports a
+// contract we do not speak is left strictly alone: no renders, no status
+// polls, no calibration. It stays visible in /units/health as a fault and
+// stays a reflash target, so the operator can always converge it — but we
+// never guess at a protocol we have no code for.
+inline bool unitDrivable(const UnitFacts& u) {
+  return u.state == 1 &&
+         !(u.protocolKnown && !unitProtocolSupported(u.protocolVersion));
+}
 
 // Saturating increment for the per-unit I2C error counter (#367). Pins at
 // 0xFFFF instead of wrapping to 0 — a wrapped counter would read as "healthy".
@@ -223,12 +249,14 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 // vcc/vmin/cp/ram (#306, ~44 B/unit + the headline "vccMin"), the per-unit
 // heartbeat-freshness keys age/hs2/misses/stale (#310, ~44 B/unit), the
 // per-unit I2C-reliability keys err/errAge (#367, ~32 B/unit) and the
-// per-unit ext-diag keys se/sx/sag/he/dw/sb (#365, ~63 B/unit) so a full
-// display can't push the payload into the headline-only fallback. The #365
-// keys raised the ceiling over the prior 6144 (#367). test_unit_health pins
-// the worst case + headroom (a full 16-unit payload with the wear + reflash
-// splices).
-#define UNIT_HEALTH_JSON_CAP 7168
+// per-unit ext-diag keys se/sx/sag/he/dw/sb (#365, ~63 B/unit) and the
+// per-unit lifetime keys hf/gates/sxl/stw0/str0/stw1/str1 (#406, ~60 B/unit
+// worst case — each rides an emit-when-nonzero guard, so a fresh unit adds
+// nothing) so a full display can't push the payload into the headline-only
+// fallback. The #406 keys raised the ceiling over the prior 7168 (#365).
+// test_unit_health pins the worst case + headroom (a full 16-unit payload
+// with the wear + reflash splices).
+#define UNIT_HEALTH_JSON_CAP 8192
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
@@ -324,6 +352,45 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                          (unsigned)e.stepExcessLast, (unsigned)e.stepExcessMax,
                          (unsigned)e.vccSagLastMove, (unsigned)e.hallEdgesLastRev,
                          (unsigned)e.dutyWindow, (unsigned)e.statusBits);
+    }
+    if (u.protocolKnown) {
+      // Wire contract the unit reports (#405). pmm marks one we do not speak:
+      // that unit is deliberately not rendered to or polled, so without this
+      // key it would look merely silent rather than deliberately untouched.
+      UNIT_HEALTH_APPEND(",\"pv\":%u", (unsigned)u.protocolVersion);
+      if (!unitProtocolSupported(u.protocolVersion)) {
+        UNIT_HEALTH_APPEND(",\"pmm\":1");
+      }
+    }
+    if (u.lifetimeValid) {
+      // Across-power-cycle health (#406), own valid flag like "odo"/"vcc" —
+      // a unit can report status but run pre-lifetime firmware. hf = lifetime
+      // failed-homing count, gates = active UNIT_GATE_* bits, sxl = worst home
+      // step excess ever seen (the "sx" above forgets at every reboot),
+      // stw0/str0 = the unit's FIRST self-test hall window and steps/rev,
+      // stw1/str1 = its most recent. The first/last pairs are the diagnosis:
+      // "hall window 46 when new, 12 now" is the trajectory that unit 0x0f's
+      // two-hour decline had nowhere to live.
+      //
+      // Each key is emitted only when non-zero, so a healthy unit that has
+      // never failed a homing and never run a self-test stays lean — the
+      // same discipline as misses/stale below.
+      const UnitLifetimeFacts& lt = u.lifetime;
+      if (lt.homeFailedCount) UNIT_HEALTH_APPEND(",\"hf\":%u", (unsigned)lt.homeFailedCount);
+      if (lt.featureGates)    UNIT_HEALTH_APPEND(",\"gates\":%u", (unsigned)lt.featureGates);
+      if (lt.stepExcessLifetimeMax) {
+        UNIT_HEALTH_APPEND(",\"sxl\":%u", (unsigned)lt.stepExcessLifetimeMax);
+      }
+      if (lt.selfTestFirstHallWindow || lt.selfTestLastHallWindow) {
+        UNIT_HEALTH_APPEND(",\"stw0\":%u,\"stw1\":%u",
+                           (unsigned)lt.selfTestFirstHallWindow,
+                           (unsigned)lt.selfTestLastHallWindow);
+      }
+      if (lt.selfTestFirstStepsPerRev || lt.selfTestLastStepsPerRev) {
+        UNIT_HEALTH_APPEND(",\"str0\":%u,\"str1\":%u",
+                           (unsigned)lt.selfTestFirstStepsPerRev,
+                           (unsigned)lt.selfTestLastStepsPerRev);
+      }
     }
     if (u.state == 1) {
       // Heartbeat freshness (#310): age = ms since the last good scheduled
