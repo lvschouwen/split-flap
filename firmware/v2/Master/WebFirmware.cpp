@@ -273,12 +273,19 @@ void webFirmwareRegister(AsyncWebServer& server) {
         }
         // #391: record what was just installed so the slot's identity is
         // readable without booting into it. Optional ?v= mirrors
-        // /firmware/master's; absent, the slot honestly reads unidentified.
-        String rescueRev;
-        if (request->hasParam("v")) {
-          rescueRev = request->getParam("v")->value();
+        // /firmware/master's — same sanitizer, and STAGED for the drain
+        // rather than written here: the record is an NVS commit, which the
+        // async-context rule keeps off this task (the streaming exception
+        // above covers the image bytes, not a keyed settings write).
+        // Absent/empty ?v= is staged too, so the drain clears any record
+        // left by the image this one just replaced.
+        {
+          WebStateLock lock;
+          pendingRescueRev = sanitizeIntendedVersion(
+              request->hasParam("v") ? request->getParam("v")->value()
+                                     : String());
+          pendingRescueRecord = true;
         }
-        rescueSlotRecordInstall(rescueRev);
         request->send(200, "text/plain",
                       F("Rescue image installed into the factory slot. No "
                         "reboot — POST /firmware/rescue-boot to test it."));

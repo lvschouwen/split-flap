@@ -69,9 +69,13 @@ inline RescueSlotFacts rescueSlotFacts(bool present, bool valid,
     return f;
   }
 
-  // A parsed record with an empty rev carries no identity — that is
-  // unidentified, not a rev of "".
-  if (!rec.ok || !shaMatches || rec.rev[0] == '\0') {
+  // A record carrying no identity is unidentified, not a rev. Two shapes
+  // mean that: an empty rev, and the literal "?" that formatSlotRecord
+  // substitutes when a rev filters down to nothing (SlotRecord.h) — a
+  // placeholder that must never be compared against the running rev, or a
+  // slot of unknown vintage reports as STALE and cries wolf.
+  if (!rec.ok || !shaMatches || rec.rev[0] == '\0' ||
+      (rec.rev[0] == '?' && rec.rev[1] == '\0')) {
     f.state = RESCUE_SLOT_UNIDENTIFIED;
     return f;
   }

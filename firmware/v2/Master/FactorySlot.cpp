@@ -195,9 +195,19 @@ String factoryWriteError() { return lastError; }
 // --- rescue-slot identity (#391) ---------------------------------------------
 // sha256 over the image costs ~60 ms, so the verdict is computed once and
 // cached: /settings is polled every 5 s from the async task and must never
-// pay for it. The cache is refreshed in place right after an install (the
-// one event that can change the answer), so no request ever triggers the
-// expensive path.
+// pay for it.
+//
+// Task affinity is the whole safety argument here, so state it: the cache is
+// WRITTEN only by rescueSlotRefresh() on loopTask (setup(), and the
+// webEndpointsLoop drain after an install) and READ by rescueSlotCurrent()
+// from the async_tcp task (GET /settings, GET /status). That is a genuine
+// cross-task hand-off of a multi-field struct, so it is not assumed atomic —
+// a spinlock guards the copy at both ends. The expensive computation
+// deliberately happens OUTSIDE the lock, and rescueSlotCurrent() never
+// computes: a reader that arrives before the first refresh gets the
+// conservative default (absent + warn), never a stale all-clear and never a
+// 60 ms stall on the task serving the cluster wire.
+static portMUX_TYPE rescueFactsMux = portMUX_INITIALIZER_UNLOCKED;
 static bool rescueFactsValid = false;
 static RescueSlotFacts rescueFacts;
 
@@ -228,12 +238,20 @@ static RescueSlotFacts computeRescueSlotFacts() {
   return rescueSlotFacts(true, valid, rec, shaMatches, GIT_REV);
 }
 
+void rescueSlotRefresh() {
+  RescueSlotFacts fresh = computeRescueSlotFacts();  // flash + NVS, unlocked
+  portENTER_CRITICAL(&rescueFactsMux);
+  rescueFacts = fresh;
+  rescueFactsValid = true;
+  portEXIT_CRITICAL(&rescueFactsMux);
+}
+
 RescueSlotFacts rescueSlotCurrent() {
-  if (!rescueFactsValid) {
-    rescueFacts = computeRescueSlotFacts();
-    rescueFactsValid = true;
-  }
-  return rescueFacts;
+  RescueSlotFacts copy;
+  portENTER_CRITICAL(&rescueFactsMux);
+  if (rescueFactsValid) copy = rescueFacts;
+  portEXIT_CRITICAL(&rescueFactsMux);
+  return copy;
 }
 
 void rescueSlotRecordInstall(const String& rev) {
@@ -242,24 +260,42 @@ void rescueSlotRecordInstall(const String& rev) {
   if (!factoryImageSha(part, sha)) {
     SerialPrintln(F("rescue slot: sha256 of installed image failed — rev not "
                     "recorded"));
+    rescueSlotRefresh();
+    return;
+  }
+
+  Preferences prefs;
+  if (!prefs.begin("splitflap", false)) {
+    SerialPrintln(F("rescue slot: NVS open failed — rev not recorded"));
+    rescueSlotRefresh();
+    return;
+  }
+
+  if (rev.length() == 0) {
+    // No identity to record. Drop any previous record instead of writing
+    // one: formatSlotRecord substitutes a literal "?" for an empty rev
+    // (parse requires a non-empty field), and a "?" record would read as a
+    // rev that differs from the running one — i.e. a false STALE warning
+    // about the image we simply cannot name. Removing it reads UNIDENTIFIED,
+    // which is the truth. It also stops a previous image's record from
+    // outliving the image it described.
+    prefs.remove("slotRecF");
   } else {
-    Preferences prefs;
-    if (!prefs.begin("splitflap", false)) {
-      SerialPrintln(F("rescue slot: NVS open failed — rev not recorded"));
-    } else {
+    // Skip a redundant write when this exact image already holds the
+    // record — same NVS-wear guard as ensureSlotRecord() (#200).
+    SlotRecord existing =
+        parseSlotRecord(prefs.getString("slotRecF", "").c_str());
+    bool unchanged = slotRecordShaMatches(existing, sha) &&
+                     strcmp(existing.rev, rev.c_str()) == 0;
+    if (!unchanged) {
       char buf[SLOT_RECORD_BUF_LEN];
-      // An install with no ?v= records the sha but no identity: the slot
-      // then reads UNIDENTIFIED, which is honest — never guess a rev.
       if (formatSlotRecord(buf, sizeof(buf), 0, sha, rev.c_str())) {
         prefs.putString("slotRecF", buf);
       }
-      prefs.end();
     }
   }
-  // Recompute here (not lazily): the install already runs in the async task
-  // where the cost is budgeted, so /settings stays O(1).
-  rescueFactsValid = false;
-  rescueSlotCurrent();
+  prefs.end();
+  rescueSlotRefresh();
 }
 
 bool rescueBootArm() {

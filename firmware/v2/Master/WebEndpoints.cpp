@@ -42,6 +42,8 @@ bool pendingReboot = false;
 uint32_t rebootRequestedAtMs = 0;
 String pendingIntendedVersion;  // ?v= from /firmware/master (#190)
 bool pendingIntendedVersionProvided = false;
+String pendingRescueRev;  // ?v= from /firmware/rescue (#391)
+bool pendingRescueRecord = false;
 
 // Live state the read handlers render. Set once in webEndpointsInit();
 // handlers only ever read (async-context rule). Held as module globals
@@ -229,6 +231,8 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   // section). Worst case a handler blocks a few ms behind a flash commit.
   bool rebootDue = false;
   bool timezoneChanged = false;
+  bool rescueRecordDue = false;
+  String rescueRevToRecord;
   {
     WebStateLock lock;
     if (pendingPost.pending) {
@@ -361,8 +365,25 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
         saveIntendedVersion(store, pendingIntendedVersion);
       }
     }
+    // #391: only CAPTURE here. The record costs an NVS write plus a ~60 ms
+    // sha256 over the rescue image — far longer than the "few ms behind a
+    // flash commit" this lock budgets for, and it would stall every async
+    // handler including the cluster wire's 1.5 s endpoints. Runs below,
+    // outside the lock, like rebootDue.
+    if (pendingRescueRecord) {
+      pendingRescueRecord = false;
+      rescueRecordDue = true;
+      rescueRevToRecord = pendingRescueRev;
+    }
     // Small grace period so the HTTP response flushes before the restart.
     rebootDue = pendingReboot && millis() - rebootRequestedAtMs > 750;
+  }
+
+  // #391: rescue-slot record — NVS write + sha256, on loopTask and outside
+  // the WebState lock. An empty rev clears the record rather than storing a
+  // placeholder that would read as a false STALE.
+  if (rescueRecordDue) {
+    rescueSlotRecordInstall(rescueRevToRecord);
   }
 
   // #321: before an intentional reboot, announce a graceful hold to followers

@@ -133,6 +133,50 @@ static void test_record_with_empty_rev_is_unidentified() {
   TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, f.state);
 }
 
+// Round-trip through the REAL formatter, not a hand-built record. The
+// hand-built variants above cannot reach this: formatSlotRecord guarantees
+// a non-empty rev by substituting "?" for one that filters to nothing, so
+// an identity-less record actually arrives here as rev "?" — which must
+// read UNIDENTIFIED, never STALE against the running rev.
+static void test_formatter_placeholder_rev_round_trips_as_unidentified() {
+  static const uint8_t sha[32] = {0};
+  char buf[SLOT_RECORD_BUF_LEN];
+  TEST_ASSERT_TRUE(formatSlotRecord(buf, sizeof(buf), 0, sha, ""));
+  SlotRecord parsed = parseSlotRecord(buf);
+  TEST_ASSERT_TRUE(parsed.ok);
+  TEST_ASSERT_EQUAL_STRING("?", parsed.rev);  // pins the formatter's behaviour
+
+  RescueSlotFacts f = rescueSlotFacts(true, true, parsed, true, "f14a7b6");
+  TEST_ASSERT_FALSE(f.identified);
+  TEST_ASSERT_FALSE(f.stale);
+  TEST_ASSERT_EQUAL_STRING("", f.rev);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, f.state);
+}
+
+// A rev made entirely of characters the formatter drops collapses to the
+// same placeholder — same verdict, via a different route.
+static void test_formatter_all_filtered_rev_is_unidentified() {
+  static const uint8_t sha[32] = {0};
+  char buf[SLOT_RECORD_BUF_LEN];
+  TEST_ASSERT_TRUE(formatSlotRecord(buf, sizeof(buf), 0, sha, "|||\\\"|||"));
+  RescueSlotFacts f =
+      rescueSlotFacts(true, true, parseSlotRecord(buf), true, "f14a7b6");
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, f.state);
+}
+
+// A real rev must still survive the same round trip — the guard above must
+// not swallow legitimate identities.
+static void test_formatter_real_rev_round_trips_as_identified() {
+  static const uint8_t sha[32] = {0};
+  char buf[SLOT_RECORD_BUF_LEN];
+  TEST_ASSERT_TRUE(formatSlotRecord(buf, sizeof(buf), 0, sha, "b0e3fe6"));
+  RescueSlotFacts f =
+      rescueSlotFacts(true, true, parseSlotRecord(buf), true, "f14a7b6");
+  TEST_ASSERT_TRUE(f.identified);
+  TEST_ASSERT_TRUE(f.stale);
+  TEST_ASSERT_EQUAL_STRING("b0e3fe6", f.rev);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_absent_partition_reports_absent);
@@ -145,5 +189,8 @@ int main(int, char**) {
   RUN_TEST(test_missing_running_rev_reports_rev_without_staleness);
   RUN_TEST(test_null_running_rev_is_safe);
   RUN_TEST(test_record_with_empty_rev_is_unidentified);
+  RUN_TEST(test_formatter_placeholder_rev_round_trips_as_unidentified);
+  RUN_TEST(test_formatter_all_filtered_rev_is_unidentified);
+  RUN_TEST(test_formatter_real_rev_round_trips_as_identified);
   return UNITY_END();
 }

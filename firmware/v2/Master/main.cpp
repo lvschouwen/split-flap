@@ -69,6 +69,13 @@ static void printBootDiagnostics() {
                running ? (unsigned)running->address : 0, otaStateName(state),
                boot ? boot->label : "?");
 
+  // #391: warm the rescue-slot cache before anything can read it. Runs on
+  // loopTask in setup(), strictly before the web server and the other tasks
+  // exist, so the async readers below can never race the first computation
+  // or pay its ~60 ms. Unconditional: with no factory partition it caches
+  // the honest "absent" verdict.
+  rescueSlotRefresh();
+
   const esp_partition_t* factory = esp_partition_find_first(
       ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
   if (factory) {
@@ -78,8 +85,8 @@ static void printBootDiagnostics() {
     SerialPrintf("rescue: %s @ 0x%06x (%u KB) — %s\n", factory->label,
                  (unsigned)factory->address, factory->size / 1024,
                  magic == 0xE9 ? "image present" : "empty");
-    // #391: "image present" alone hid a months-old rescue build. Warm the
-    // cache here (once per boot, off the async path) and say what it is.
+    // #391: "image present" alone hid a months-old rescue build. Say what it
+    // is. The cache is warmed just below, unconditionally.
     RescueSlotFacts rescue = rescueSlotCurrent();
     if (rescue.identified) {
       SerialPrintf("rescue: image rev %s%s\n", rescue.rev,

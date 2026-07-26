@@ -40,6 +40,28 @@ static void test_defaults_produce_v1_shaped_empty_document() {
   TEST_ASSERT_TRUE(contains(json, "\"wifiSettingsResettable\":false"));
 }
 
+// #391 rescue slot: the wire contract this issue exists to expose. An
+// unidentified slot must serialize an EMPTY rev — never a placeholder that
+// a client could mistake for a real one.
+static void test_rescue_slot_defaults_to_empty_rev() {
+  SettingsJsonFields f;
+  String json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"rescueRev\":\"\""));
+  TEST_ASSERT_TRUE(contains(json, "\"rescueSlot\":\"\""));
+  TEST_ASSERT_TRUE(contains(json, "\"rescueSlotWarn\":false"));
+}
+
+static void test_rescue_slot_fields_serialize() {
+  SettingsJsonFields f;
+  f.rescueRev = "b0e3fe6";
+  f.rescueSlot = "stale";
+  f.rescueSlotWarn = true;
+  String json = buildSettingsJson(f);
+  TEST_ASSERT_TRUE(contains(json, "\"rescueRev\":\"b0e3fe6\""));
+  TEST_ASSERT_TRUE(contains(json, "\"rescueSlot\":\"stale\""));
+  TEST_ASSERT_TRUE(contains(json, "\"rescueSlotWarn\":true"));
+}
+
 static void test_flap_speed_is_string_typed_like_v1() {
   SettingsJsonFields f;
   f.flapSpeed = "80";
@@ -211,5 +233,7 @@ int main(int, char**) {
   RUN_TEST(test_device_role_and_suggestion_serialize);
   RUN_TEST(test_vitals_default_to_esp32s3_plat);
   RUN_TEST(test_vitals_serialize_values);
+  RUN_TEST(test_rescue_slot_defaults_to_empty_rev);
+  RUN_TEST(test_rescue_slot_fields_serialize);
   return UNITY_END();
 }
