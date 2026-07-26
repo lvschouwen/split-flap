@@ -16,6 +16,7 @@
 #include "ClusterFollower.h"
 #include "ClusterLeader.h"
 #include "DeviceIdentity.h"
+#include "FactorySlot.h"
 #include "FlashLog.h"
 #include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
@@ -77,6 +78,18 @@ static void printBootDiagnostics() {
     SerialPrintf("rescue: %s @ 0x%06x (%u KB) — %s\n", factory->label,
                  (unsigned)factory->address, factory->size / 1024,
                  magic == 0xE9 ? "image present" : "empty");
+    // #391: "image present" alone hid a months-old rescue build. Warm the
+    // cache here (once per boot, off the async path) and say what it is.
+    RescueSlotFacts rescue = rescueSlotCurrent();
+    if (rescue.identified) {
+      SerialPrintf("rescue: image rev %s%s\n", rescue.rev,
+                   rescue.stale ? " — OLDER than the running app, reinstall "
+                                  "via POST /firmware/rescue"
+                                : "");
+    } else if (rescue.valid) {
+      SerialPrintln(F("rescue: image rev unknown (installed out of band) — "
+                      "reinstall via POST /firmware/rescue to record it"));
+    }
   } else {
     SerialPrintln(F("rescue: no factory partition (!)"));
   }

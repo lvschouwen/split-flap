@@ -49,6 +49,11 @@ struct SettingsJsonFields {
   String lastFlashResult;
   String intendedVersion;
   bool otaReverted = false;
+  // #391 rescue slot: what the factory partition actually holds. rescueRev
+  // is "" whenever the image cannot be identified — never a guess.
+  String rescueRev;
+  String rescueSlot;  // ok | absent | empty | unidentified | stale
+  bool rescueSlotWarn = false;
   String lastResetReason;
   uint32_t bootCounter = 0;
   bool recoveryMode = false;
@@ -161,6 +166,9 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"lastFlashResult\":";     appendJsonString(out, f.lastFlashResult);
   out += ",\"intendedVersion\":";     appendJsonString(out, f.intendedVersion);
   out += ",\"otaReverted\":";         appendJsonBool(out, f.otaReverted);
+  out += ",\"rescueRev\":";           appendJsonString(out, f.rescueRev);
+  out += ",\"rescueSlot\":";          appendJsonString(out, f.rescueSlot);
+  out += ",\"rescueSlotWarn\":";      appendJsonBool(out, f.rescueSlotWarn);
   out += ",\"lastResetReason\":";     appendJsonString(out, f.lastResetReason);
   out += ",\"bootCounter\":";         out += String(f.bootCounter);
   out += ",\"recoveryMode\":";        appendJsonBool(out, f.recoveryMode);

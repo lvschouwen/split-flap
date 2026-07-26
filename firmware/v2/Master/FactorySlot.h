@@ -9,9 +9,24 @@
 
 #include <Arduino.h>
 
+#include "RescueSlotStatus.h"
+
 // The partition exists in the table (always true on the #193 layout; guards
 // a mismatched table loudly instead of writing into nothing).
 bool factorySlotPresent();
+
+// What the rescue slot actually holds (#391) — partition truth, not a
+// record of what someone meant to upload. Cached: the first call pays a
+// ~60 ms sha256, every later one is free. Call once at boot (the banner
+// does) so no web request ever triggers the computation.
+RescueSlotFacts rescueSlotCurrent();
+
+// Stamp the installed image's identity after a successful /firmware/rescue
+// (NVS key slotRecF, SlotRecord.h format: sha256 binds the record to the
+// image, so a slot rewritten out of band demotes itself to UNIDENTIFIED).
+// An empty rev records the sha only — the slot then reads UNIDENTIFIED,
+// which is honest. Refreshes the cache in place.
+void rescueSlotRecordInstall(const String& rev);
 
 // The slot holds a bootable-looking app image (validated app descriptor).
 // Gate for /firmware/rescue-boot's 409: never strand a wall-mounted device

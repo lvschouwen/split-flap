@@ -271,6 +271,14 @@ void webFirmwareRegister(AsyncWebServer& server) {
                           "is required)"));
           return;
         }
+        // #391: record what was just installed so the slot's identity is
+        // readable without booting into it. Optional ?v= mirrors
+        // /firmware/master's; absent, the slot honestly reads unidentified.
+        String rescueRev;
+        if (request->hasParam("v")) {
+          rescueRev = request->getParam("v")->value();
+        }
+        rescueSlotRecordInstall(rescueRev);
         request->send(200, "text/plain",
                       F("Rescue image installed into the factory slot. No "
                         "reboot — POST /firmware/rescue-boot to test it."));

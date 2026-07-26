@@ -1,11 +1,13 @@
 #include "FactorySlot.h"
 
 #include <MD5Builder.h>
+#include <Preferences.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 
 #include <cstring>
 
+#include "BuildVersion.h"
 #include "FactoryChunkPlan.h"
 #include "HelpersSerialHandling.h"
 
@@ -189,6 +191,76 @@ bool factoryWriteEnd() {
 }
 
 String factoryWriteError() { return lastError; }
+
+// --- rescue-slot identity (#391) ---------------------------------------------
+// sha256 over the image costs ~60 ms, so the verdict is computed once and
+// cached: /settings is polled every 5 s from the async task and must never
+// pay for it. The cache is refreshed in place right after an install (the
+// one event that can change the answer), so no request ever triggers the
+// expensive path.
+static bool rescueFactsValid = false;
+static RescueSlotFacts rescueFacts;
+
+static bool factoryImageSha(const esp_partition_t* part, uint8_t sha[32]) {
+  return part != nullptr && esp_partition_get_sha256(part, sha) == ESP_OK;
+}
+
+static RescueSlotFacts computeRescueSlotFacts() {
+  const esp_partition_t* part = findFactory();
+  if (part == nullptr) {
+    return rescueSlotFacts(false, false, SlotRecord(), false, GIT_REV);
+  }
+
+  bool valid = factorySlotImageValid();
+  SlotRecord rec;
+  bool shaMatches = false;
+  if (valid) {
+    Preferences prefs;
+    if (prefs.begin("splitflap", true)) {
+      rec = parseSlotRecord(prefs.getString("slotRecF", "").c_str());
+      prefs.end();
+    }
+    uint8_t sha[32];
+    if (rec.ok && factoryImageSha(part, sha)) {
+      shaMatches = slotRecordShaMatches(rec, sha);
+    }
+  }
+  return rescueSlotFacts(true, valid, rec, shaMatches, GIT_REV);
+}
+
+RescueSlotFacts rescueSlotCurrent() {
+  if (!rescueFactsValid) {
+    rescueFacts = computeRescueSlotFacts();
+    rescueFactsValid = true;
+  }
+  return rescueFacts;
+}
+
+void rescueSlotRecordInstall(const String& rev) {
+  const esp_partition_t* part = findFactory();
+  uint8_t sha[32];
+  if (!factoryImageSha(part, sha)) {
+    SerialPrintln(F("rescue slot: sha256 of installed image failed — rev not "
+                    "recorded"));
+  } else {
+    Preferences prefs;
+    if (!prefs.begin("splitflap", false)) {
+      SerialPrintln(F("rescue slot: NVS open failed — rev not recorded"));
+    } else {
+      char buf[SLOT_RECORD_BUF_LEN];
+      // An install with no ?v= records the sha but no identity: the slot
+      // then reads UNIDENTIFIED, which is honest — never guess a rev.
+      if (formatSlotRecord(buf, sizeof(buf), 0, sha, rev.c_str())) {
+        prefs.putString("slotRecF", buf);
+      }
+      prefs.end();
+    }
+  }
+  // Recompute here (not lazily): the install already runs in the async task
+  // where the cost is budgeted, so /settings stays O(1).
+  rescueFactsValid = false;
+  rescueSlotCurrent();
+}
 
 bool rescueBootArm() {
   const esp_partition_t* otadata = esp_partition_find_first(

@@ -24,6 +24,7 @@
 #include "ClusterDigest.h"  // clusterCsrfRejectPost (inline upload gate)
 #include "ClusterFollower.h"
 #include "ClusterLeader.h"
+#include "FactorySlot.h"
 #include "FlashLog.h"
 #include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
@@ -151,6 +152,11 @@ String buildCurrentSettingsJson() {
   OtaVerdict verdict = otaVerdictSnapshot();
   f.lastFlashResult = verdict.lastFlashResult;
   f.otaReverted = verdict.otaReverted;
+  // Cached since boot (#391) — no sha256 on the async path.
+  RescueSlotFacts rescue = rescueSlotCurrent();
+  f.rescueRev = rescue.rev;
+  f.rescueSlot = rescueSlotStateLabel(rescue.state);
+  f.rescueSlotWarn = rescue.warn;
   f.lastResetReason = webResetReasonString();
   ClusterFollowerView cluster = clusterFollowerViewGet();
   f.clusterState = clusterFollowerPhaseName(cluster.phase);
