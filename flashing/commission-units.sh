@@ -262,12 +262,17 @@ PY
   seq="$(post_seq "/unit/reset-odometer?address=$a")"
   [[ -n "$seq" ]] || { fail "odometer reset POST gave no seq"; return 1; }
   why="$(await_op "$seq" 30)" || { fail "odometer reset did not confirm: $why"; return 1; }
-  # 128 slots is ~2 s of EEPROM writes and the op ACKs before they land. Reading
-  # back immediately returns the PRE-reset value and looks like a failed reset.
-  sleep 5
-  api GET "/units/health?refresh=1" >/dev/null || true
-  local odo_zeroed
-  odo_zeroed="$(unit_field "$a" odo)"
+  # Two lags stack here, so POLL instead of sleeping a guessed constant: 128
+  # slots is ~2 s of EEPROM writes and the op ACKs before they land, and
+  # /units/health serves the master's CACHED facts — a read issued straight
+  # after ?refresh=1 outruns the re-poll and returns the pre-reset value.
+  local odo_zeroed="" odo_deadline=$(( SECONDS + 40 ))
+  while (( SECONDS < odo_deadline )); do
+    api GET "/units/health?refresh=1" >/dev/null || true
+    sleep 3
+    odo_zeroed="$(unit_field "$a" odo)"
+    [[ "$odo_zeroed" == "0" ]] && break
+  done
   [[ "$odo_zeroed" == "0" ]] || {
     fail "odometer reads '${odo_zeroed:-<unreadable>}' after reset, wanted 0"
     return 1
