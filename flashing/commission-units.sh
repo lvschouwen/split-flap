@@ -266,7 +266,12 @@ PY
   # slots is ~2 s of EEPROM writes and the op ACKs before they land, and
   # /units/health serves the master's CACHED facts — a read issued straight
   # after ?refresh=1 outruns the re-poll and returns the pre-reset value.
-  local odo_zeroed="" odo_deadline=$(( SECONDS + 40 ))
+  # 150 s is deliberate: the master heartbeats one unit about every 3 s, so a
+  # full 16-unit cycle is ~48 s and ?refresh=1 does not jump the queue. A
+  # deadline inside one cycle makes this check a coin flip — a4 failed at 40 s
+  # and read 0 shortly after. Breaks early on success, so the common cost is
+  # one cycle, not the deadline.
+  local odo_zeroed="" odo_deadline=$(( SECONDS + 150 ))
   while (( SECONDS < odo_deadline )); do
     api GET "/units/health?refresh=1" >/dev/null || true
     sleep 3
