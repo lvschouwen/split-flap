@@ -66,11 +66,19 @@ void receiveLetter(int numBytes) {
         pendingSelfTest = true;
         break;
       case SFP_CMD_SET_OFFSET:
-        if (remaining >= 2) {
-          uint8_t lo = (uint8_t)Wire.read();
-          uint8_t hi = (uint8_t)Wire.read();
-          remaining -= 2;
-          int16_t requestedOffset = (int16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+        if (remaining >= SET_OFFSET_PAYLOAD_LEN) {
+          uint8_t pay[SET_OFFSET_PAYLOAD_LEN];
+          for (uint8_t k = 0; k < SET_OFFSET_PAYLOAD_LEN; k++) {
+            pay[k] = (uint8_t)Wire.read();
+          }
+          remaining -= SET_OFFSET_PAYLOAD_LEN;
+          // Value + bitwise complement (#405): a pair that disagrees is a
+          // corrupted write, not a calibration. Previously fire-and-forget.
+          int16_t requestedOffset = 0;
+          if (!setOffsetDecode(pay, SET_OFFSET_PAYLOAD_LEN, requestedOffset)) {
+            if (badCommandCount < 0xFF) badCommandCount++;
+            break;
+          }
           // Drop out-of-range offsets instead of persisting them (#171):
           // past ±STEPS the post-homing stepper.step(calOffset) — one
           // blocking library call — outruns the 8 s watchdog window and
@@ -97,10 +105,25 @@ void receiveLetter(int numBytes) {
         pendingHome = true;
         break;
       case SFP_CMD_SET_I2C_ADDRESS:
-        if (remaining >= 1) {
-          pendingAddressValue = (uint8_t)Wire.read();
-          remaining--;
-          pendingSetAddress = true;
+        if (remaining >= SET_ADDRESS_PAYLOAD_LEN) {
+          uint8_t pay[SET_ADDRESS_PAYLOAD_LEN];
+          for (uint8_t k = 0; k < SET_ADDRESS_PAYLOAD_LEN; k++) {
+            pay[k] = (uint8_t)Wire.read();
+          }
+          remaining -= SET_ADDRESS_PAYLOAD_LEN;
+          // Value + bitwise complement (#405). This was the worst hole in the
+          // contract: one unprotected byte, after which the unit persists it
+          // and reboots. A corruption landing inside 1..126 relocated the unit
+          // to an address nobody was looking at, unverifiable after the fact
+          // because the unit was gone from the address you were talking to —
+          // recovery was a physical trip to re-DIP.
+          uint8_t requestedAddress = 0;
+          if (setAddressDecode(pay, SET_ADDRESS_PAYLOAD_LEN, requestedAddress)) {
+            pendingAddressValue = requestedAddress;
+            pendingSetAddress = true;
+          } else if (badCommandCount < 0xFF) {
+            badCommandCount++;
+          }
         } else if (badCommandCount < 0xFF) {
           badCommandCount++;
         }
@@ -142,18 +165,21 @@ void receiveLetter(int numBytes) {
 
 void requestEvent() {
   if (pendingVersionResponse) {
-    // Send exactly 8 bytes: GIT_REV, null-padded. Master reads 8 and compares.
-    uint8_t buf[8] = {0};
-    for (uint8_t i = 0; i < 8 && GIT_REV[i] != '\0'; i++) buf[i] = GIT_REV[i];
-    Wire.write(buf, 8);
+    // 10 bytes: GIT_REV null-padded, SFP_PROTOCOL_VERSION, checksum (#405).
+    // This reply's shape is FIXED FOREVER — it carries the version that gates
+    // every other opcode, so a master must be able to parse it without
+    // already knowing which contract this unit speaks.
+    uint8_t buf[VERSION_REPLY_LEN];
+    versionEncodeReply(GIT_REV, SFP_PROTOCOL_VERSION, buf);
+    Wire.write(buf, VERSION_REPLY_LEN);
     pendingVersionResponse = false;
     return;
   }
   if (pendingOffsetResponse) {
-    // Send exactly 2 bytes: int16 calOffset, little-endian.
-    uint16_t raw = (uint16_t)calOffset;
-    uint8_t buf[2] = { (uint8_t)(raw & 0xFF), (uint8_t)((raw >> 8) & 0xFF) };
-    Wire.write(buf, 2);
+    // 3 bytes: int16 calOffset LE + checksum (#405).
+    uint8_t buf[OFFSET_REPLY_LEN];
+    offsetEncodeReply((int16_t)calOffset, buf);
+    Wire.write(buf, OFFSET_REPLY_LEN);
     pendingOffsetResponse = false;
     return;
   }
@@ -215,9 +241,8 @@ void requestEvent() {
     return;
   }
   if (pendingStatusResponse) {
-    // Issue #47. 8-byte health/diag payload. Master parses into UnitStatus;
-    // old masters that don't know SFP_CMD_GET_STATUS never send it, so this
-    // branch won't fire for them.
+    // Issue #47. 8-byte health/diag payload + a #405 checksum byte. Master
+    // parses it into UnitStatus.
     //
     //   byte 0   status flag bitfield
     //             bit 0  currentlyrotating
@@ -247,7 +272,7 @@ void requestEvent() {
     if (homed)                      flags |= UNIT_STATUS_FLAG_HOMED;
     uint16_t lastHomeScaled16 = (lastHomingStepCount >> 4);
     uint8_t lastHomeScaled = (lastHomeScaled16 > 0xFF) ? 0xFF : (uint8_t)lastHomeScaled16;
-    uint8_t buf[8] = {
+    uint8_t payload[STATUS_PAYLOAD_LEN] = {
       flags,
       savedMcusr,
       lifetimeBrownoutCount,
@@ -257,7 +282,12 @@ void requestEvent() {
       badCommandCount,
       lastHomeScaled,
     };
-    Wire.write(buf, 8);
+    // 9th byte is the #405 checksum. This is the highest-frequency read on the
+    // bus and the one with the widest blast radius — a corrupted flags byte
+    // used to be able to invent a fault or mask a real one silently.
+    uint8_t buf[STATUS_REPLY_LEN];
+    statusEncodeReply(payload, buf);
+    Wire.write(buf, STATUS_REPLY_LEN);
     pendingStatusResponse = false;
     return;
   }

@@ -51,7 +51,10 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
 // All return Wire.endTransmission() status (0 = success) so displayTask can
 // grade the op's MaintResult.
 
-int unitBusWriteOffset(int i2cAddress, int16_t value);  // persists, no re-home
+// unitBusWriteOffset additionally reads the offset back (#405) and returns
+// UNIT_BUS_OFFSET_UNVERIFIED / _MISMATCH (UnitWireContract.h) instead of 0
+// when the write did not demonstrably land.
+int unitBusWriteOffset(int i2cAddress, int16_t value);  // persists, verifies
 int unitBusJog(int i2cAddress, int steps);              // ±127, not persisted
 int unitBusHome(int i2cAddress);                        // full calibrate(true)
 int unitBusIdentify(int i2cAddress);                    // ~3 s LED blink

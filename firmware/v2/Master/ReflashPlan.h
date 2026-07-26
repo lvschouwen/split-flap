@@ -20,12 +20,24 @@
 // (~15 ms) + twiboot init. 500 ms is generous (v1 value).
 #define TWIBOOT_STARTUP_MS 500
 
+// A unit that reports a protocol version we do not speak (#405). KNOWN
+// different, not merely unreadable — the version read succeeded and carried a
+// number that is not ours. We cannot drive such a unit at all (see
+// unitOpcodeAllowedWhenUnsupported: GET_VERSION and ENTER_BOOTLOADER only), so
+// converging it is the only way it becomes useful again.
+//
+// Deliberately EQUALITY-based: a higher version is exactly as un-drivable as a
+// lower one, because the master cannot speak a contract it has no code for.
+inline bool reflashUnitProtocolMismatch(const UnitFacts& u) {
+  return u.protocolKnown && !unitProtocolSupported(u.protocolVersion);
+}
+
 // A sketch-mode unit whose rev is not the bundled one gets pushed into
 // twiboot. UNKNOWN qualifies alongside OUTDATED (v1 #114: only units
 // provably on the bundled rev are skipped). Bootloader units need no
 // reboot — they are flash targets already.
 inline bool reflashUnitNeedsReboot(const UnitFacts& u) {
-  return u.state == 1 && u.fwStatus != 0;
+  return u.state == 1 && (u.fwStatus != 0 || reflashUnitProtocolMismatch(u));
 }
 
 inline int reflashCollectRebootTargets(const UnitFacts* facts, int maxUnits,
@@ -38,14 +50,19 @@ inline int reflashCollectRebootTargets(const UnitFacts* facts, int maxUnits,
 }
 
 // Boot auto-update predicate (v1 semantics, deliberately narrower than
-// reflashUnitNeedsReboot): only units PROVABLY outdated are force-rebooted
-// at boot — an unreadable rev must not trigger a reflash cycle every
-// power-up. The operator's web job sweeps unknowns too (v1 #114).
+// reflashUnitNeedsReboot): only units PROVABLY not on our build are
+// force-rebooted at boot — an unreadable rev must not trigger a reflash cycle
+// every power-up. The operator's web job sweeps unknowns too (v1 #114).
+//
+// A protocol mismatch qualifies as proof: the read SUCCEEDED and reported a
+// contract that is not ours, which is a definite fact about the unit rather
+// than an absence of information. An unreadable version stays excluded.
 inline int reflashCollectOutdatedTargets(const UnitFacts* facts, int maxUnits,
                                          int base, uint8_t* outAddrs) {
   int n = 0;
   for (int i = 0; i < maxUnits; i++) {
-    if (facts[i].state == 1 && facts[i].fwStatus == 1) {
+    if (facts[i].state == 1 &&
+        (facts[i].fwStatus == 1 || reflashUnitProtocolMismatch(facts[i]))) {
       outAddrs[n++] = (uint8_t)(base + i);
     }
   }

@@ -98,6 +98,8 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"he",     "hall edges seen in the last completed revolution"},
   {"dw",     "rolling ~60 s duty window (recent move count)"},
   {"sb",     "ext-diag status bitfield (bit0 last-move stall)"},
+  {"pv",     "wire protocol version the unit reports"},
+  {"pmm",    "1 = protocol version we do not speak; unit is untouched and is a reflash target"},
   {"hf",     "lifetime failed-homing count (survives power cycles)"},
   {"gates",  "active unit feature-gate bits (bit0 idle hall check, bit1 scheduled re-home)"},
   {"sxl",    "worst-seen step-excess over the unit's lifetime (sx forgets at reboot)"},

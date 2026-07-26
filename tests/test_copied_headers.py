@@ -41,6 +41,7 @@ IDENTICAL_GROUPS = {
     "UnitVitals.h": [MASTER, FOLLOWER, UNIT],
     "UnitExtDiag.h": [MASTER, FOLLOWER, UNIT],
     "UnitLifetime.h": [MASTER, FOLLOWER, UNIT],
+    "UnitWireContract.h": [MASTER, FOLLOWER, UNIT],
     "HeartbeatPolicy.h": [MASTER, FOLLOWER],
     "BootHomePlan.h": [MASTER, FOLLOWER],
     "RenderStagger.h": [MASTER, FOLLOWER],

@@ -54,6 +54,26 @@
 #define SFP_I2C_GENERAL_CALL_ADDRESS  0x00
 
 // ---------------------------------------------------------------------------
+// Wire contract version (#405). ONE number describes what a unit speaks — no
+// per-command version byte. The master reads it from the GET_VERSION reply,
+// which is why that opcode's format is frozen forever: you cannot ask "which
+// contract do you speak" through an opcode whose shape depends on the answer.
+//
+// A unit reporting anything else is NOT ignored — that would take a wall of
+// newer units under an older master dark with no way back, since the master
+// is what drives the reflash. It is reachable through GET_VERSION and
+// ENTER_BOOTLOADER only, surfaced as a fault, and always a reflash target.
+// Gate helpers live in UnitWireContract.h.
+//
+// Bump this whenever any reply length, payload layout or checksum mask below
+// changes. It does NOT track the EEPROM layout — that is the unit's own
+// UNIT_EE_LAYOUT_VERSION, describing stored bytes rather than the wire.
+//
+//   1  #405: checksums on GET_STATUS/GET_VERSION/GET_OFFSET, complement-
+//            protected SET_OFFSET/SET_I2C_ADDRESS, GET_LIFETIME added.
+#define SFP_PROTOCOL_VERSION       1
+
+// ---------------------------------------------------------------------------
 // Command opcodes understood by the unit's receiveLetter(). The unit's first
 // received byte is a letter index (0..SFP_FLAP_AMOUNT-1) for a normal display
 // command, or one of these opcodes (all >= SFP_FLAP_AMOUNT, i.e. >= 45) for a

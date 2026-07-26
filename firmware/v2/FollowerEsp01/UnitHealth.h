@@ -18,6 +18,7 @@
 #include "UnitVitals.h"  // shared supply-Vcc/ram/cmd-pos diag packet (#306)
 #include "UnitExtDiag.h"  // shared new-measurement diag packet (#365)
 #include "UnitLifetime.h"  // shared across-power-cycle health packet (#406)
+#include "UnitWireContract.h"  // shared core read/write wire formats (#405)
 
 // Health / diagnostics snapshot returned by a sketch-running unit's
 // CMD_GET_STATUS reply. Populated by UnitBus.cpp; mirrors the 8-byte layout
@@ -78,6 +79,14 @@ struct UnitFacts {
   char version[9] = {0};     // git short-rev; "" when the read failed
   bool statusValid = false;  // status below holds a real CMD_GET_STATUS read
   UnitStatus status{};
+  // Wire contract the unit reports (#405), read from GET_VERSION alongside
+  // the rev. protocolKnown separates "definitively a different contract" from
+  // "could not read it at all" — only the first justifies force-flashing, or
+  // a unit we merely cannot read would reflash itself at every power-up
+  // (the v1 #114 guard). Compared for EQUALITY only: neither this nor the rev
+  // (a hash) can tell newer from older, and different always means reflash.
+  uint8_t protocolVersion = 0;
+  bool protocolKnown = false;
   // Calibration offset (#204): probe-time CMD_GET_OFFSET truth, patched in
   // place by displayTask after a successful SET_OFFSET. offsetValid stays
   // false for silent/bootloader units and firmware predating the opcode
@@ -156,6 +165,16 @@ struct UnitFacts {
   // logs health transitions. Policy in UnitEventLog.h.
   UnitRebootWatch rebootWatch{};
 };
+
+// May we drive this unit at all (#405)? A sketch-running unit that reports a
+// contract we do not speak is left strictly alone: no renders, no status
+// polls, no calibration. It stays visible in /units/health as a fault and
+// stays a reflash target, so the operator can always converge it — but we
+// never guess at a protocol we have no code for.
+inline bool unitDrivable(const UnitFacts& u) {
+  return u.state == 1 &&
+         !(u.protocolKnown && !unitProtocolSupported(u.protocolVersion));
+}
 
 // Saturating increment for the per-unit I2C error counter (#367). Pins at
 // 0xFFFF instead of wrapping to 0 — a wrapped counter would read as "healthy".
@@ -333,6 +352,15 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                          (unsigned)e.stepExcessLast, (unsigned)e.stepExcessMax,
                          (unsigned)e.vccSagLastMove, (unsigned)e.hallEdgesLastRev,
                          (unsigned)e.dutyWindow, (unsigned)e.statusBits);
+    }
+    if (u.protocolKnown) {
+      // Wire contract the unit reports (#405). pmm marks one we do not speak:
+      // that unit is deliberately not rendered to or polled, so without this
+      // key it would look merely silent rather than deliberately untouched.
+      UNIT_HEALTH_APPEND(",\"pv\":%u", (unsigned)u.protocolVersion);
+      if (!unitProtocolSupported(u.protocolVersion)) {
+        UNIT_HEALTH_APPEND(",\"pmm\":1");
+      }
     }
     if (u.lifetimeValid) {
       // Across-power-cycle health (#406), own valid flag like "odo"/"vcc" —

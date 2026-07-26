@@ -27,6 +27,85 @@ static void test_needs_reboot_only_for_sketch_units_off_the_bundle() {
   TEST_ASSERT_FALSE(reflashUnitNeedsReboot(u));
 }
 
+// --- protocol-version mismatch (#405) ----------------------------------------
+// A unit reporting a wire contract we do not speak cannot be driven at all, so
+// converging it is the only way it becomes useful again. Equality-based: the
+// master cannot speak a contract it has no code for, so a HIGHER version is
+// exactly as un-drivable as a lower one.
+
+static void test_protocol_mismatch_needs_a_successful_read() {
+  UnitFacts u;
+  u.state = 1;
+  u.fwStatus = 0;  // rev is current — only the protocol is wrong
+  // Never read: absence of information, not proof of difference.
+  u.protocolKnown = false;
+  u.protocolVersion = 0;
+  TEST_ASSERT_FALSE(reflashUnitProtocolMismatch(u));
+  // Read, and it is ours.
+  u.protocolKnown = true;
+  u.protocolVersion = SFP_PROTOCOL_VERSION;
+  TEST_ASSERT_FALSE(reflashUnitProtocolMismatch(u));
+  // Read, and it is not ours.
+  u.protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  TEST_ASSERT_TRUE(reflashUnitProtocolMismatch(u));
+}
+
+static void test_protocol_mismatch_forces_reboot_even_on_the_bundled_rev() {
+  // The rev can match while the contract does not — a unit flashed from a
+  // different build line, say. The mismatch alone must make it a target.
+  UnitFacts u;
+  u.state = 1;
+  u.fwStatus = 0;
+  u.protocolKnown = true;
+  u.protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  TEST_ASSERT_TRUE(reflashUnitNeedsReboot(u));
+}
+
+static void test_protocol_mismatch_is_flashed_regardless_of_direction() {
+  // "Newer" is not a thing we can act on, and the rev is a hash so it is not
+  // orderable at all. Both directions converge on the master's bundle.
+  UnitFacts lower;
+  lower.state = 1; lower.fwStatus = 0;
+  lower.protocolKnown = true; lower.protocolVersion = 0;
+  TEST_ASSERT_TRUE(reflashUnitNeedsReboot(lower));
+
+  UnitFacts higher;
+  higher.state = 1; higher.fwStatus = 0;
+  higher.protocolKnown = true; higher.protocolVersion = 0xFF;
+  TEST_ASSERT_TRUE(reflashUnitNeedsReboot(higher));
+}
+
+static void test_protocol_mismatch_is_boot_auto_update_eligible() {
+  // Unlike an unreadable rev, a mismatch is PROOF — the read succeeded and
+  // reported a contract that is not ours. So it qualifies for the narrow boot
+  // auto-update path, while fwStatus==2 (unreadable) still does not.
+  UnitFacts facts[UNITS_AMOUNT];
+  facts[0].state = 1; facts[0].fwStatus = 2;  // unreadable — still excluded
+  facts[1].state = 1; facts[1].fwStatus = 0;
+  facts[1].protocolKnown = true;
+  facts[1].protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  uint8_t addrs[UNITS_AMOUNT];
+  int n = reflashCollectOutdatedTargets(facts, UNITS_AMOUNT, 1, addrs);
+  TEST_ASSERT_EQUAL(1, n);
+  TEST_ASSERT_EQUAL_UINT8(2, addrs[0]);  // base 1 + index 1
+}
+
+static void test_protocol_mismatch_makes_a_unit_undrivable() {
+  // The producer gate: no renders, no polls, no calibration. It stays state==1
+  // so the reflash path can still reach it.
+  UnitFacts u;
+  u.state = 1;
+  u.protocolKnown = true;
+  u.protocolVersion = SFP_PROTOCOL_VERSION;
+  TEST_ASSERT_TRUE(unitDrivable(u));
+  u.protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  TEST_ASSERT_FALSE(unitDrivable(u));
+  // Never read: we have no evidence against it, so it stays drivable rather
+  // than the whole wall going dark on a transient read failure.
+  u.protocolKnown = false;
+  TEST_ASSERT_TRUE(unitDrivable(u));
+}
+
 static void test_collect_reboot_targets_fills_addresses() {
   UnitFacts facts[UNITS_AMOUNT];
   facts[0].state = 1; facts[0].fwStatus = 0;  // on bundle — skipped
@@ -203,6 +282,11 @@ static void test_empty_plan_finishes_done_and_ok() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_needs_reboot_only_for_sketch_units_off_the_bundle);
+  RUN_TEST(test_protocol_mismatch_needs_a_successful_read);
+  RUN_TEST(test_protocol_mismatch_forces_reboot_even_on_the_bundled_rev);
+  RUN_TEST(test_protocol_mismatch_is_flashed_regardless_of_direction);
+  RUN_TEST(test_protocol_mismatch_is_boot_auto_update_eligible);
+  RUN_TEST(test_protocol_mismatch_makes_a_unit_undrivable);
   RUN_TEST(test_collect_reboot_targets_fills_addresses);
   RUN_TEST(test_collect_flash_targets_takes_bootloader_units_only);
   RUN_TEST(test_collect_outdated_targets_skips_unknown_revs);
