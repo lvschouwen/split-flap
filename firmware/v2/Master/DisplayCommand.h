@@ -40,6 +40,37 @@ enum class DisplayOpcode : uint8_t {
 
 enum class DisplayAlignment : uint8_t { Left = 0, Center, Right };
 
+// What put the current text on the wall (#403). The wall has five producers
+// and no record of which one drove it: ask the display what it shows and it
+// answers with the text, ask why and nothing in the system knows.
+//
+// This names the ACTOR, not the mechanism — a #219 show-then-revert transient
+// from a browser is Web, an MQTT notification is Mqtt. The distinction that
+// matters most to an owner is Leader vs the rest: on a follower, "I put this
+// here" and "the leader put this here" are otherwise indistinguishable.
+//
+// uint8_t keeps the queue slot a fixed-size POD. No history, no audit log:
+// one field for the CURRENT text, plus the millis() it landed.
+enum class DisplaySource : uint8_t {
+  Unknown = 0,  // nothing has driven the display since boot, or it is blank
+  Web,          // a browser talking to this box
+  Mqtt,         // MQTT / Home Assistant
+  Clock,        // this box's own clock ticker
+  Leader,       // the cluster leader handed this row its content
+};
+
+// Wire vocabulary for /settings and /events. The console names the producer
+// from these strings — renaming one is a breaking UI change.
+inline const char* displaySourceName(DisplaySource s) {
+  switch (s) {
+    case DisplaySource::Web:    return "web";
+    case DisplaySource::Mqtt:   return "mqtt";
+    case DisplaySource::Clock:  return "clock";
+    case DisplaySource::Leader: return "leader";
+    default:                    return "none";
+  }
+}
+
 // The display can never show more than the hardware ceiling; longer text is
 // truncated at build time so the queue slot stays fixed-size.
 #define DISPLAY_CMD_TEXT_LEN UNITS_AMOUNT
@@ -65,6 +96,10 @@ struct DisplayCommand {
   uint32_t seq = 0;
   uint8_t unitAddress = 0;
   int16_t value = 0;
+  // Who is driving (#403). Meaningful on ShowText; the re-show opcodes below
+  // deliberately leave it Unknown because they restore text the snapshot
+  // already attributes — see makeResetUnitsCommand.
+  DisplaySource source = DisplaySource::Unknown;
   char text[DISPLAY_CMD_TEXT_LEN + 1] = {0};
 };
 
@@ -106,10 +141,15 @@ inline const char* displayOpcodeName(DisplayOpcode op) {
   }
 }
 
+// `source` has no default on purpose (#403): a new producer must state who it
+// is rather than inherit an anonymous one. An unattributed wall is the bug
+// this field exists to kill.
 inline DisplayCommand makeShowTextCommand(const String& text,
-                                          const String& alignment, int speed) {
+                                          const String& alignment, int speed,
+                                          DisplaySource source) {
   DisplayCommand cmd;
   cmd.opcode = DisplayOpcode::ShowText;
+  cmd.source = source;
   cmd.alignment = displayAlignmentFromString(alignment);
   cmd.speed = (uint8_t)(speed < 1 ? 1 : (speed > 100 ? 100 : speed));
 
@@ -200,7 +240,12 @@ inline DisplayCommand makeResetUnitsCommand(uint32_t seq,
                                             const String& currentText,
                                             const String& alignment,
                                             int speed) {
-  DisplayCommand cmd = makeShowTextCommand(currentText, alignment, speed);
+  // Unknown source is deliberate (#403): this re-shows text the snapshot
+  // already attributes, so displayApplyCommand leaves both the text and the
+  // source alone. Minting a source here would let a maintenance op claim
+  // authorship of a message the leader or a browser put on the wall.
+  DisplayCommand cmd =
+      makeShowTextCommand(currentText, alignment, speed, DisplaySource::Unknown);
   cmd.opcode = DisplayOpcode::ResetUnits;
   cmd.seq = seq;
   return cmd;
@@ -220,7 +265,10 @@ inline DisplayCommand makeReflashUnitsCommand(uint32_t seq,
                                               const String& currentText,
                                               const String& alignment,
                                               int speed, uint8_t addr) {
-  DisplayCommand cmd = makeShowTextCommand(currentText, alignment, speed);
+  // Same Unknown-source rule as ResetUnits (#403): the end-of-run re-show
+  // restores attributed text, it does not author it.
+  DisplayCommand cmd =
+      makeShowTextCommand(currentText, alignment, speed, DisplaySource::Unknown);
   cmd.opcode = DisplayOpcode::ReflashUnits;
   cmd.seq = seq;
   cmd.unitAddress = addr;

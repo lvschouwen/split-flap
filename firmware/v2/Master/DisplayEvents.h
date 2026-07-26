@@ -17,6 +17,9 @@
 struct DisplayEventTracker {
   char lastText[DISPLAY_CMD_TEXT_LEN + 1] = {0};
   String lastRowsKey;  // "" whenever this master isn't leading a cluster
+  // #403: re-attribution of the SAME text is a change too. Without this a
+  // console keeps naming the previous producer until the 5 s poll catches up.
+  DisplaySource lastSource = DisplaySource::Unknown;
 };
 
 // Injective join of the wall rows (#277): length-prefixed so row contents
@@ -31,26 +34,29 @@ inline String displayEventRowsKey(const String* rows, int rowCount) {
   return key;
 }
 
-// True when `text` OR the wall rows differ from the last observation
-// (which they then become). The tracker starts at ""/"" — a boot-time text
-// is a change, and pushing it to zero connected clients is harmless. A
-// cluster-leader row changing while this master's own row didn't is a
-// change too, as is leaving cluster mode (the browser must collapse its
-// wall back to the single-row mirror).
+// True when `text`, its producer, OR the wall rows differ from the last
+// observation (which they then become). The tracker starts at ""/none/"" — a
+// boot-time text is a change, and pushing it to zero connected clients is
+// harmless. A cluster-leader row changing while this master's own row didn't
+// is a change too, as is leaving cluster mode (the browser must collapse its
+// wall back to the single-row mirror), as is the same string arriving from a
+// different producer (#403).
 inline bool displayEventDue(DisplayEventTracker& t, const char* text,
-                            const String& rowsKey) {
+                            DisplaySource source, const String& rowsKey) {
   if (strncmp(t.lastText, text, DISPLAY_CMD_TEXT_LEN) == 0 &&
-      t.lastRowsKey == rowsKey) {
+      t.lastSource == source && t.lastRowsKey == rowsKey) {
     return false;
   }
   strncpy(t.lastText, text, DISPLAY_CMD_TEXT_LEN);
   t.lastText[DISPLAY_CMD_TEXT_LEN] = '\0';
+  t.lastSource = source;
   t.lastRowsKey = rowsKey;
   return true;
 }
 
-inline bool displayEventDue(DisplayEventTracker& t, const char* text) {
-  return displayEventDue(t, text, String());
+inline bool displayEventDue(DisplayEventTracker& t, const char* text,
+                            DisplaySource source) {
+  return displayEventDue(t, text, source, String());
 }
 
 // {"text":"..."} with full JSON escaping — display text is user input.
@@ -58,11 +64,20 @@ inline bool displayEventDue(DisplayEventTracker& t, const char* text) {
 // ,"selfRow":N,"rows":["...", ...] — the browser renders those verbatim
 // (they arrive pre-positioned) and keys the health strip to selfRow
 // (-1 = the leader owns no row; the strip stays below the wall).
-inline String buildDisplayEventJson(const char* text,
+// `source`/`sourceAgeSeconds` (#403) ride every push: the console names the
+// producer at the instant the flaps turn instead of chasing a /settings read
+// behind each event. Both are required — an unattributed push would put the
+// console back to guessing.
+inline String buildDisplayEventJson(const char* text, DisplaySource source,
+                                    uint32_t sourceAgeSeconds,
                                     const String* rows = nullptr,
                                     int rowCount = 0, int selfRow = 0) {
   String out = "{\"text\":";
   appendJsonString(out, String(text));
+  out += ",\"source\":";
+  appendJsonString(out, String(displaySourceName(source)));
+  out += ",\"sourceAge\":";
+  out += sourceAgeSeconds;
   if (rows != nullptr && rowCount > 0) {
     out += ",\"selfRow\":";
     out += selfRow;

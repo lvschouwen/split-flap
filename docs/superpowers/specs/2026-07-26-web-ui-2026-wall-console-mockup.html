@@ -1,0 +1,576 @@
+<title>Wall Console — #396 phone mockup</title>
+
+<style>
+  /* Single dark theme (#396 R3). No prefers-color-scheme branch, no toggle. */
+  :root {
+    color-scheme: dark;
+
+    --ground:   #14120F;
+    --surface:  #1D1A16;
+    --sunk:     #100E0C;
+    --hair:     #2E2A24;
+    --ink:      #EDE7DC;
+    --ink-dim:  #A69D8F;
+    --ink-faint:#6E6659;
+    --accent:   #D9A03F;
+    --accent-on:#17130B;
+    --fault:    #D2604A;
+    --busy:     #7FA3C4;
+
+    /* The board is darker than the page it sits on: an object on a surface,
+       not the surface itself. It never takes a chrome colour. */
+    --board:     #0B0A09;
+    --flap-top:  #201D19;
+    --flap-btm:  #17140F;
+    --flap-ink:  #EFE3CE;
+    --seam:      #080706;
+    --board-dim: #7A7166;
+    --board-lbl: #A79C8C;
+
+    --r: 3px;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font: 400 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+    padding: 0 0 60px;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 0 14px; }
+  .mono { font-family: ui-monospace, "SF Mono", "DejaVu Sans Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+  /* ---------- mockup-only chrome ---------- */
+  .chrome { border-bottom: 1px solid var(--hair); background: var(--sunk); padding: 10px 0 11px; margin-bottom: 20px; }
+  .chrome-in { max-width: 560px; margin: 0 auto; padding: 0 14px; }
+  .chrome p { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 8px; }
+  .states { display: flex; gap: 6px; flex-wrap: wrap; }
+  .states button { font: 500 13px/1 system-ui, sans-serif; padding: 8px 11px; border: 1px solid var(--hair); border-radius: var(--r); background: var(--surface); color: var(--ink-dim); cursor: pointer; }
+  .states button[aria-pressed="true"] { border-color: var(--ink-dim); color: var(--ink); background: var(--ground); }
+
+  section { margin-bottom: 26px; }
+  h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 10px; }
+
+  /* ---------- the wall ---------- */
+  .board { --gap: 2px; background: var(--board); border-radius: var(--r); padding: 10px; display: flex; flex-direction: column; gap: 4px; overflow-x: auto; }
+  .brow { display: block; width: 100%; background: none; border: 0; padding: 5px 0; cursor: pointer; text-align: left; font: inherit; color: inherit; border-radius: 2px; }
+  .brow:hover .rowbar b, .brow:focus-visible .rowbar b { color: var(--flap-ink); }
+  .flaps { display: flex; gap: var(--gap); }
+  .flap {
+    width: calc((100% - 15 * var(--gap)) / 16);   /* one physical flap size for every row */
+    flex: 0 0 auto; aspect-ratio: 5 / 7;
+    container-type: inline-size; position: relative; border-radius: 1.5px;
+    background: linear-gradient(to bottom, var(--flap-top) 0 50%, var(--flap-btm) 50% 100%);
+    display: grid; place-items: center; overflow: hidden;
+  }
+  .flap::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--seam); }
+  .flap span { font: 500 64cqw/1 ui-monospace, "SF Mono", "DejaVu Sans Mono", Menlo, monospace; color: var(--flap-ink); }
+  .brow[data-silent="true"] .flap span { color: #6E6559; }
+  .rowbar { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--board-dim); }
+  .rowbar b { font-weight: 600; color: var(--board-lbl); }
+  .rowbar .flag { color: var(--fault); font-weight: 600; letter-spacing: 0.04em; }
+  .rowbar .flag.busy { color: var(--busy); }
+  .rowbar .go { margin-left: auto; color: var(--board-dim); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .flap.turn span { animation: turn 200ms ease-out; }
+    @keyframes turn { 0% { transform: scaleY(0.15); opacity: .4; } 100% { transform: scaleY(1); opacity: 1; } }
+  }
+
+  .source { margin-top: 11px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13.5px; color: var(--ink-dim); }
+  .source strong { color: var(--ink); font-weight: 600; }
+  .source .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); align-self: center; flex: 0 0 auto; }
+  .source .when { color: var(--ink-faint); font-size: 12.5px; }
+
+  /* ---------- compose ---------- */
+  .compose { display: flex; flex-direction: column; gap: 9px; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  input[type="text"] {
+    width: 100%; font: 500 16px/1.2 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .04em;
+    padding: 13px 12px; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--hair); border-radius: var(--r);
+  }
+  input[type="text"]::placeholder { color: var(--ink-faint); letter-spacing: .02em; }
+  .acts { display: flex; gap: 8px; }
+  .btn { font: 600 15px/1 system-ui, sans-serif; padding: 13px 16px; border-radius: var(--r); border: 1px solid transparent; cursor: pointer; }
+  .btn.primary { background: var(--accent); color: var(--accent-on); flex: 1; }
+  .btn.quiet { background: transparent; color: var(--ink-dim); border-color: var(--hair); }
+  .btn.small { font-size: 13.5px; padding: 10px 12px; }
+  .btn[disabled] { opacity: .42; cursor: not-allowed; }
+  .blocked { font-size: 13px; color: var(--ink-dim); border-left: 2px solid var(--busy); padding-left: 10px; }
+  .capacity { font-size: 12.5px; color: var(--ink-faint); }
+
+  :where(button, input, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1:focus { outline: none; }
+
+  /* ---------- the one line home keeps for hardware ---------- */
+  .hw {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 13px 12px; background: var(--surface); border: 1px solid var(--hair);
+    border-radius: var(--r); font: inherit; color: inherit; cursor: pointer; text-align: left;
+  }
+  .hw:hover { background: var(--sunk); }
+  .hw .lbl { font-weight: 600; font-size: 14.5px; }
+  .hw .say { color: var(--ink-dim); font-size: 13.5px; }
+  .hw .say.bad { color: var(--fault); font-weight: 600; }
+  .hw .say.busy { color: var(--busy); font-weight: 600; }
+  .hw .chev { margin-left: auto; color: var(--ink-faint); }
+
+  /* ---------- lists of objects ---------- */
+  .kit { display: flex; flex-direction: column; gap: 1px; background: var(--hair); border: 1px solid var(--hair); border-radius: var(--r); overflow: hidden; }
+  .box { background: var(--surface); display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; padding: 13px 12px; text-align: left; width: 100%; border: 0; cursor: pointer; font: inherit; color: inherit; }
+  .box:hover { background: var(--sunk); }
+  .box .name { font-weight: 600; font-size: 15px; }
+  .box .drives { grid-column: 1; font-size: 13px; color: var(--ink-dim); }
+  .box .meta { grid-column: 1 / -1; font-size: 12px; line-height: 1.45; color: var(--ink-faint); }
+  .box .state { grid-row: 1 / 3; grid-column: 2; align-self: center; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-faint); text-align: right; }
+  .box .state.bad { color: var(--fault); font-weight: 600; }
+  .box .state.busy { color: var(--busy); font-weight: 600; }
+
+  /* ---------- detail screen ---------- */
+  .back { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; padding: 4px 0; margin-bottom: 12px; font: 500 14px system-ui, sans-serif; color: var(--ink-dim); cursor: pointer; }
+  .back:hover { color: var(--ink); }
+  h1 { font-size: 21px; font-weight: 600; letter-spacing: -0.015em; margin-bottom: 3px; }
+  .sub { font-size: 12.5px; color: var(--ink-faint); margin-bottom: 22px; }
+
+  .panel { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); padding: 13px 12px; }
+  .facts { display: flex; flex-direction: column; gap: 0; }
+  .fact { display: flex; align-items: baseline; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--hair); font-size: 14px; }
+  .fact:last-child { border-bottom: 0; padding-bottom: 0; }
+  .fact:first-child { padding-top: 0; }
+  .fact .k { color: var(--ink-dim); flex: 0 0 auto; min-width: 108px; font-size: 13.5px; }
+  .fact .v { color: var(--ink); text-align: right; margin-left: auto; }
+  .fact .v.bad { color: var(--fault); font-weight: 600; }
+  .fact .v.busy { color: var(--busy); font-weight: 600; }
+  .fact .v small { display: block; color: var(--ink-faint); font-size: 12px; font-weight: 400; }
+  .rowacts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .lede { font-size: 13.5px; color: var(--ink-dim); margin-bottom: 10px; }
+  .none { font-size: 14px; color: var(--ink-dim); }
+
+  /* units strip */
+  .units { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+  .unit { aspect-ratio: 1; border: 1px solid var(--hair); border-radius: 2px; background: var(--surface); color: var(--ink-dim); font: 500 12px/1 ui-monospace, Menlo, monospace; display: grid; place-items: center; cursor: pointer; }
+  .unit:hover { border-color: var(--ink-dim); color: var(--ink); }
+  .unit.bad { border-color: var(--fault); color: var(--fault); font-weight: 700; }
+  .unit.busy { border-color: var(--busy); color: var(--busy); font-weight: 700; }
+  .unit.wear { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .legend { margin-top: 9px; font-size: 12.5px; color: var(--ink-dim); }
+  .legend .bad { color: var(--fault); font-weight: 600; }
+  .legend .wear { color: var(--accent); font-weight: 600; }
+
+  .rare { border-top: 1px solid var(--hair); padding-top: 16px; }
+  .rare .lede { max-width: 60ch; }
+  .rare .rowacts { margin-top: 0; }
+
+  /* ---------- notes ---------- */
+  .notes { border-top: 1px solid var(--hair); padding-top: 18px; }
+  .notes dl { display: flex; flex-direction: column; gap: 13px; }
+  .notes dt { font-weight: 600; font-size: 13.5px; margin-bottom: 2px; }
+  .notes dd { font-size: 13.5px; color: var(--ink-dim); max-width: 62ch; }
+  .notes code { font: 400 12.5px ui-monospace, Menlo, monospace; background: var(--sunk); padding: 1px 4px; border-radius: 2px; color: var(--ink); }
+</style>
+
+<div class="chrome">
+  <div class="chrome-in">
+    <p>Mockup control — not part of the product</p>
+    <div class="states" role="group" aria-label="Preview a wall state">
+      <button type="button" data-state="steady" aria-pressed="true">Steady</button>
+      <button type="button" data-state="clock" aria-pressed="false">Clock</button>
+      <button type="button" data-state="silent" aria-pressed="false">Row 0 silent</button>
+      <button type="button" data-state="reflash" aria-pressed="false">Reflashing row 1</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <main>
+    <!-- ============ HOME ============ -->
+    <div id="s-home">
+      <h1 class="sr" tabindex="-1">The wall</h1>
+      <section aria-label="The wall">
+        <div class="board" id="board"></div>
+        <p class="source" id="source" aria-live="polite"></p>
+      </section>
+
+      <section aria-labelledby="send-h">
+        <h2 id="send-h">Put something on it</h2>
+        <div class="compose">
+          <label class="sr" for="msg">Message for the wall</label>
+          <input type="text" id="msg" value="TODAY 26 JUL 2026" placeholder="Type a message" autocomplete="off">
+          <div class="acts">
+            <button type="button" class="btn primary" id="send">Send to wall</button>
+            <button type="button" class="btn quiet" id="stop">Blank it</button>
+          </div>
+          <p class="capacity" id="capacity"></p>
+          <p class="blocked" id="blocked" hidden></p>
+        </div>
+      </section>
+
+      <section aria-label="Hardware">
+        <button type="button" class="hw" id="hw">
+          <span class="lbl">Controllers</span>
+          <span class="say" id="hw-say"></span>
+          <span class="chev" aria-hidden="true">›</span>
+        </button>
+      </section>
+    </div>
+
+    <!-- ============ CONTROLLER LIST ============ -->
+    <div id="s-list" hidden>
+      <button type="button" class="back" data-go="home"><span aria-hidden="true">‹</span> The wall</button>
+      <h1 tabindex="-1">Controllers</h1>
+      <p class="sub">Three boxes on this wall. Two drive a row; one does not.</p>
+      <div class="kit" id="kit"></div>
+    </div>
+
+    <!-- ============ CONTROLLER DETAIL ============ -->
+    <div id="s-ctrl" hidden>
+      <button type="button" class="back" id="ctrl-back"><span aria-hidden="true">‹</span> <span id="ctrl-back-lbl">The wall</span></button>
+      <h1 id="ctrl-name" tabindex="-1"></h1>
+      <p class="sub" id="ctrl-sub"></p>
+      <div id="ctrl-body"></div>
+    </div>
+
+    <!-- ============ notes ============ -->
+    <section class="notes" aria-labelledby="notes-h">
+      <h2 id="notes-h">What this mockup is testing</h2>
+      <dl>
+        <dt>Home is the wall, and the wall is the navigation</dt>
+        <dd>Tap a row on the board to reach the controller that drives it. The physical object is the menu — there is no settings tab to find your way back out of.</dd>
+
+        <dt>Settings live next to the thing they affect</dt>
+        <dd>Flap speed and line-up belong to <em>the row</em>, so that is where they sit. Name, time zone and role belong to <em>the box</em>. Reflashing belongs to <em>the units</em>. That is the part that makes this a different stance rather than a different set of doors — a settings section would have collected all of them in one place, away from what they change.</dd>
+
+        <dt>One flap size for the whole wall</dt>
+        <dd>Every row is drawn at the widest row's flap size, so five units next to sixteen look like five units next to sixteen. Nothing stretches to fill.</dd>
+
+        <dt>Two object types, kept apart</dt>
+        <dd><code>.20</code> drives no row, so it has nothing on the board. It says so in its own words on its page rather than appearing as an empty row.</dd>
+
+        <dt>State changes attention, never what exists</dt>
+        <dd>Flip the four states: the same wall, the same three controllers, every time. A silent row still shows the text it is holding. The Controllers line is always there — it just stops being quiet when something needs you.</dd>
+
+        <dt>A number shown without crying wolf</dt>
+        <dd>Row 0's unit 5 has turned 1257 times against 13 for its neighbours. <code>WearPolicy.h</code> correctly does not flag it — flagging starts at <code>max(2 × median, median + 10000)</code>, so 10,013 here. The console shows the number and says plainly that it is not a fault, instead of either hiding it or dressing it as an alarm.</dd>
+
+        <dt>Who last drove the wall</dt>
+        <dd>The line under the board names the source. Firmware has no such field yet — <code>DisplayCommand</code> carries no origin across its eight enqueue sites. This is the argument for adding one.</dd>
+      </dl>
+    </section>
+  </main>
+</div>
+
+<script>
+  /* ---------- data: real values read off .91 / .20 / .121 ---------- */
+
+  var WALL = {
+    steady: {
+      rows: [{ text: "TODAY", cols: 5 }, { text: "  26 JUL 2026   ", cols: 16 }],
+      source: { who: "Your message", how: "sent from this phone", when: "2 min ago" }
+    },
+    clock: {
+      rows: [{ text: "     ", cols: 5 }, { text: "   26 Jul 26    ", cols: 16 }],
+      source: { who: "Clock", how: "kept by this controller", when: "updates each minute" }
+    },
+    silent: {
+      rows: [{ text: "TODAY", cols: 5, silent: true, flag: "not answering · 47s" }, { text: "  26 JUL 2026   ", cols: 16 }],
+      source: { who: "Your message", how: "sent from this phone", when: "9 min ago" }
+    },
+    reflash: {
+      rows: [{ text: "TODAY", cols: 5 }, { text: "                ", cols: 16, flagBusy: "reflashing · 7 of 16" }],
+      source: { who: "Nothing", how: "row 1 is off the bus while its units take new firmware", when: "" },
+      blocked: "Sending is held until row 1 finishes its firmware update. Blanking still works."
+    }
+  };
+
+  var ORDER = ["c8a746", "261bb6", "a47dee"];
+
+  var CTRL = {
+    c8a746: {
+      name: "split-flap-c8a746", ip: "192.168.15.91", plat: "ESP32-S3", rev: "1e70cda",
+      rowIndex: 1, cols: 16, leader: true,
+      sub: "192.168.15.91 · ESP32-S3 · leads the wall",
+      box: [
+        ["Firmware", "1e70cda", "current across both S3s"],
+        ["Running for", "1h 43m", "last restart: the power dipped"],
+        ["Radio", "−55 dBm", "strong"],
+        ["Free memory", "133 KB", "plus 8 MB PSRAM"],
+        ["Rescue image", "1e70cda", "matches what is running"]
+      ],
+      boxCfg: [["Name", "split-flap-c8a746"], ["Time zone", "Central European", "CET / CEST, follows daylight saving"], ["This box", "Drives a row"]],
+      row: {
+        title: "Row 1 — the 16 units it drives",
+        health: [["Answering", "16 of 16"], ["Faults", "none"], ["Supply floor", "4.87 V", "lowest any unit has seen since boot"], ["Unit firmware", "bf64943", "same on all 16"]],
+        cfg: [["Flap speed", "80"], ["Line up", "Centred"]],
+        wear: -1
+      },
+      wall: [["Position", "Row 1 of 3"], ["Wall role", "Leads", "hands out the text and keeps the clock"], ["Other rows", "Row 0 · .121   ·   Row 2 · none"]]
+    },
+    "261bb6": {
+      name: "split-flap-261bb6", ip: "192.168.15.121", plat: "ESP-01", rev: "f14a7b6",
+      rowIndex: 0, cols: 5, leader: false,
+      sub: "192.168.15.121 · ESP-01 · follows split-flap-c8a746",
+      box: [
+        ["Firmware", "f14a7b6", "matches the row image this wall stores — not out of date"],
+        ["Running for", "12h 46m", "no restarts"],
+        ["Radio", "−55 dBm", "strong"],
+        ["Free memory", "18 KB", "small board, this is normal"]
+      ],
+      boxCfg: [["Name", "split-flap-261bb6"], ["This box", "Drives a row"]],
+      row: {
+        title: "Row 0 — the 5 units it drives",
+        health: [["Answering", "5 of 5"], ["Faults", "none"], ["Supply floor", "4.89 V"], ["Unit firmware", "bf64943", "same on all 5"]],
+        cfg: [["Flap speed", "80"], ["Line up", "Centred"]],
+        wear: 5
+      },
+      wall: [["Position", "Row 0 of 3"], ["Wall role", "Follows", "renders what the leader hands it"], ["Leader", "split-flap-c8a746"]]
+    },
+    a47dee: {
+      name: "split-flap-a47dee", ip: "192.168.15.20", plat: "ESP32-S3", rev: "1e70cda",
+      rowIndex: null, cols: 0, leader: false,
+      sub: "192.168.15.20 · ESP32-S3 · spare",
+      box: [
+        ["Firmware", "1e70cda", "current across both S3s"],
+        ["Running for", "1h 40m", "last restart: took an update"],
+        ["Radio", "−61 dBm", "fine"],
+        ["Free memory", "140 KB", "plus 8 MB PSRAM"],
+        ["Rescue image", "1e70cda", "matches what is running"]
+      ],
+      boxCfg: [["Name", "split-flap-a47dee"], ["Time zone", "Central European", "CET / CEST, follows daylight saving"], ["This box", "Spare — drives nothing"]],
+      row: null,
+      wall: [["Position", "Row 2 of 3", "reserved, no flaps mounted"], ["Wall role", "Standing by", "takes over the wall if the leader goes quiet"], ["Leader", "split-flap-c8a746"]]
+    }
+  };
+
+  var LIST = {
+    steady: { c8a746: {}, "261bb6": {}, a47dee: { state: "spare" } },
+    silent: { c8a746: {}, "261bb6": { state: "silent", bad: true, over: "last answered 47s ago" }, a47dee: { state: "spare" } },
+    reflash: { c8a746: { state: "working", busy: true, over: "flashing unit 7 of 16" }, "261bb6": {}, a47dee: { state: "spare" } }
+  };
+  LIST.clock = LIST.steady;
+
+  var HW = {
+    steady:  { say: "3 · all well", cls: "" },
+    clock:   { say: "3 · all well", cls: "" },
+    silent:  { say: "row 0 is not answering", cls: "bad" },
+    reflash: { say: "row 1 is taking firmware", cls: "busy" }
+  };
+
+  /* ---------- helpers ---------- */
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  function factList(rows) {
+    var wrap = el("div", "facts");
+    rows.forEach(function (r) {
+      var f = el("div", "fact");
+      f.appendChild(el("span", "k", r[0]));
+      var v = el("span", "v" + (r[3] ? " " + r[3] : ""));
+      v.appendChild(document.createTextNode(r[1]));
+      if (r[2]) v.appendChild(el("small", null, r[2]));
+      f.appendChild(v);
+      wrap.appendChild(f);
+    });
+    return wrap;
+  }
+  function section(title, node, lede) {
+    var s = el("section");
+    s.appendChild(el("h2", null, title));
+    if (lede) s.appendChild(el("p", "lede", lede));
+    s.appendChild(node);
+    return s;
+  }
+  function acts(labels) {
+    var d = el("div", "rowacts");
+    labels.forEach(function (l) { d.appendChild(el("button", "btn quiet small", l)).type = "button"; });
+    return d;
+  }
+
+  /* ---------- screens ---------- */
+  var state = "steady", screen = "home", cameFrom = "home";
+  var board = document.getElementById("board");
+  var source = document.getElementById("source");
+  var blocked = document.getElementById("blocked");
+  var sendBtn = document.getElementById("send");
+  var capacity = document.getElementById("capacity");
+  var prev = {};
+
+  function drawBoard() {
+    var w = WALL[state];
+    board.innerHTML = "";
+    w.rows.forEach(function (row, i) {
+      var b = el("button", "brow");
+      b.type = "button";
+      if (row.silent) b.setAttribute("data-silent", "true");
+      var who = CTRL[ORDER.filter(function (k) { return CTRL[k].rowIndex === i; })[0]];
+      b.setAttribute("aria-label", "Row " + i + ", " + row.cols + " units, driven by " + who.name);
+
+      var flaps = el("div", "flaps");
+      for (var c = 0; c < row.cols; c++) {
+        var ch = row.text[c] === undefined ? " " : row.text[c];
+        var f = el("div", "flap");
+        f.appendChild(el("span", null, ch));
+        if (prev[i + ":" + c] !== ch) f.classList.add("turn");
+        prev[i + ":" + c] = ch;
+        flaps.appendChild(f);
+      }
+      var bar = el("div", "rowbar");
+      bar.appendChild(el("b", null, "Row " + i));
+      bar.appendChild(el("span", null, row.cols + " units"));
+      if (row.flag) bar.appendChild(el("span", "flag", row.flag));
+      if (row.flagBusy) bar.appendChild(el("span", "flag busy", row.flagBusy));
+      bar.appendChild(el("span", "go", "›"));
+
+      b.appendChild(flaps);
+      b.appendChild(bar);
+      b.addEventListener("click", function () { openCtrl(who === CTRL.c8a746 ? "c8a746" : "261bb6", "home"); });
+      board.appendChild(b);
+    });
+
+    source.innerHTML = "";
+    source.appendChild(el("span", "dot"));
+    source.appendChild(el("strong", null, w.source.who));
+    source.appendChild(el("span", null, w.source.how));
+    if (w.source.when) source.appendChild(el("span", "when", w.source.when));
+
+    if (w.blocked) { blocked.textContent = w.blocked; blocked.hidden = false; sendBtn.disabled = true; }
+    else { blocked.hidden = true; sendBtn.disabled = false; }
+    capacity.textContent = "21 characters fit on this wall — 5 on row 0, 16 on row 1.";
+
+    var hw = HW[state];
+    var say = document.getElementById("hw-say");
+    say.textContent = hw.say;
+    say.className = "say " + hw.cls;
+  }
+
+  function drawList() {
+    var kit = document.getElementById("kit");
+    kit.innerHTML = "";
+    ORDER.forEach(function (key) {
+      var c = CTRL[key], o = LIST[state][key] || {};
+      var b = el("button", "box");
+      b.type = "button";
+      b.appendChild(el("span", "name", c.name));
+      var st = el("span", "state" + (o.bad ? " bad" : "") + (o.busy ? " busy" : ""), o.state || "ok");
+      b.appendChild(st);
+      b.appendChild(el("span", "drives", c.rowIndex === null ? "Drives no row" : "Row " + c.rowIndex + " — " + c.cols + " units"));
+      b.appendChild(el("span", "meta", o.over ? c.ip + " · " + c.plat + " · " + o.over : c.ip + " · " + c.plat + " · " + c.rev));
+      b.addEventListener("click", function () { openCtrl(key, "list"); });
+      kit.appendChild(b);
+    });
+  }
+
+  function drawCtrl(key) {
+    var c = CTRL[key];
+    document.getElementById("ctrl-name").textContent = c.name;
+    document.getElementById("ctrl-sub").textContent = c.sub;
+    var body = document.getElementById("ctrl-body");
+    body.innerHTML = "";
+
+    /* the box itself */
+    var boxPanel = el("div", "panel");
+    boxPanel.appendChild(factList(c.box));
+    var bs = section("The box", boxPanel);
+    bs.querySelector(".panel").appendChild(acts(["Update firmware", "Restart"]));
+    body.appendChild(bs);
+
+    /* how it is set up — attached to the box, because that is what it changes */
+    var cfgPanel = el("div", "panel");
+    cfgPanel.appendChild(factList(c.boxCfg));
+    body.appendChild(section("How this box is set up", cfgPanel));
+
+    /* the row it drives */
+    if (c.row) {
+      var rowPanel = el("div", "panel");
+      rowPanel.appendChild(factList(c.row.health));
+      body.appendChild(section(c.row.title, rowPanel));
+
+      var howPanel = el("div", "panel");
+      howPanel.appendChild(factList(c.row.cfg));
+      body.appendChild(section("How this row behaves", howPanel,
+        "Speed and line-up belong to the row, not to a settings page."));
+
+      /* the units */
+      var u = el("div", "units");
+      for (var i = 1; i <= c.cols; i++) {
+        var cell = el("button", "unit", String(i));
+        cell.type = "button";
+        cell.setAttribute("aria-label", "Unit " + i);
+        if (state === "reflash" && key === "c8a746") { if (i <= 7) cell.classList.add("busy"); }
+        if (state === "silent" && key === "261bb6") cell.classList.add("bad");
+        if (i === c.row.wear) cell.classList.add("wear");
+        u.appendChild(cell);
+      }
+      var uWrap = el("div");
+      uWrap.appendChild(u);
+      var legend = el("p", "legend");
+      if (state === "silent" && key === "261bb6") legend.innerHTML = '<span class="bad">Nothing is answering on this row.</span> The units are probably fine — the box above them is not talking.';
+      else if (state === "reflash" && key === "c8a746") legend.innerHTML = '<span class="busy">Units 1–7 have taken the new firmware.</span> Unit 8 is next.';
+      else if (c.row.wear > 0) legend.innerHTML = '<span class="wear">Unit ' + c.row.wear + ' has turned more than the rest</span> — 1257 times against 13 for its neighbours. Not a fault: flagging starts at 10,013 turns on this row.';
+      else legend.textContent = "All answering, none flagged. Tap a unit for its offset, odometer and self-test.";
+      uWrap.appendChild(legend);
+      var us = section("The units", uWrap, "Tap one to calibrate it or read its diagnostics.");
+      uWrap.appendChild(acts(["Re-home the row", "Update unit firmware"]));
+      body.appendChild(us);
+    } else {
+      var noRow = el("div", "panel");
+      noRow.appendChild(el("p", "none", "This box drives no flaps. It sits on the wall ready to take over if the leader goes quiet — there is nothing here to calibrate."));
+      body.appendChild(section("The row it drives", noRow));
+    }
+
+    /* place in the wall */
+    var wallPanel = el("div", "panel");
+    wallPanel.appendChild(factList(c.wall));
+    body.appendChild(section("Its place in the wall", wallPanel));
+
+    /* rare + consequential, last, plainly labelled */
+    var rare = el("section", "rare");
+    rare.appendChild(el("h2", null, "When something has gone wrong"));
+    rare.appendChild(el("p", "lede", "Rarely needed, and each one interrupts the wall. Nothing here happens without asking you first."));
+    rare.appendChild(acts(["Read the log", "Rescue image", "Forget Wi-Fi", "Take out of the wall"]));
+    body.appendChild(rare);
+  }
+
+  /* ---------- navigation ---------- */
+  function go(next) {
+    screen = next;
+    ["home", "list", "ctrl"].forEach(function (s) {
+      document.getElementById("s-" + s).hidden = (s !== next);
+    });
+    var h = document.querySelector("#s-" + next + " h1");
+    if (h) h.focus();
+    window.scrollTo(0, 0);
+  }
+  function openCtrl(key, from) {
+    cameFrom = from;
+    document.getElementById("ctrl-back-lbl").textContent = from === "list" ? "Controllers" : "The wall";
+    drawCtrl(key);
+    document.getElementById("s-ctrl").dataset.key = key;
+    go("ctrl");
+  }
+
+  document.getElementById("hw").addEventListener("click", function () { drawList(); go("list"); });
+  document.getElementById("ctrl-back").addEventListener("click", function () {
+    if (cameFrom === "list") { drawList(); go("list"); } else go("home");
+  });
+  document.querySelectorAll("[data-go='home']").forEach(function (b) {
+    b.addEventListener("click", function () { go("home"); });
+  });
+
+  document.querySelectorAll(".states button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state = b.dataset.state;
+      document.querySelectorAll(".states button").forEach(function (x) {
+        x.setAttribute("aria-pressed", String(x.dataset.state === state));
+      });
+      drawBoard();
+      if (screen === "list") drawList();
+      if (screen === "ctrl") drawCtrl(document.getElementById("s-ctrl").dataset.key);
+    });
+  });
+
+  drawBoard();
+</script>

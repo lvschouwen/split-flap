@@ -69,6 +69,12 @@ struct DisplaySnapshot {
   bool busy = false;
   uint32_t commandsProcessed = 0;
   char currentText[DISPLAY_CMD_TEXT_LEN + 1] = {0};
+  // Who put currentText there and when (#403). Only ShowText and Stop move
+  // these: the re-show opcodes restore text this snapshot already attributes,
+  // so they must leave the attribution standing. sourceAtMs is a millis()
+  // stamp — the console renders it as an age, never as a wall-clock time.
+  DisplaySource source = DisplaySource::Unknown;
+  uint32_t sourceAtMs = 0;
   // Failed unit writes on the most recent frame show (v1's
   // lastShowUnitWriteErrors) — an MQTT telemetry input (#224).
   uint8_t lastShowWriteErrors = 0;
@@ -104,20 +110,39 @@ inline bool displayAcceptsCommand(const DisplaySnapshot& snap,
   return op == DisplayOpcode::Stop;
 }
 
+// Seconds since the current text landed (#403) — a duration, so it stays
+// meaningful on a board that has never synced NTP. Unsigned subtraction makes
+// the 49.7-day millis() rollover a non-event. sourceAtMs 0 means nothing has
+// driven the display: by the time the first command applies, displayTask has
+// already spent its 1500 ms pre-probe delay, so millis() is never really 0 and
+// the value is free to use as a sentinel.
+inline uint32_t displaySourceAgeSeconds(uint32_t nowMs, uint32_t sourceAtMs) {
+  if (sourceAtMs == 0) return 0;
+  return (uint32_t)(nowMs - sourceAtMs) / 1000;
+}
+
 // Applies one command's state effects to the snapshot. Returns false (no
 // mutation) for commands the worker can't execute. Probe only counts here —
 // its facts arrive through displayApplyUnitFacts() after the bus scan.
 inline bool displayApplyCommand(DisplaySnapshot& snap,
-                                const DisplayCommand& cmd) {
+                                const DisplayCommand& cmd,
+                                uint32_t nowMs = 0) {
   switch (cmd.opcode) {
     case DisplayOpcode::ShowText:
       memcpy(snap.currentText, cmd.text, sizeof(snap.currentText));
+      snap.source = cmd.source;
+      snap.sourceAtMs = nowMs;
       snap.commandsProcessed++;
       return true;
     case DisplayOpcode::Stop:
       // v1 parity: clearing the retained text makes the clock/event loop
       // re-send fresh content instead of dedup-suppressing forever.
       snap.currentText[0] = '\0';
+      // Nothing is on the wall, so nothing drove it (#403). The console says
+      // "Nothing" rather than naming whoever blanked it — the field answers
+      // "what put this text here", and there is no text.
+      snap.source = DisplaySource::Unknown;
+      snap.sourceAtMs = nowMs;
       snap.commandsProcessed++;
       return true;
     case DisplayOpcode::Probe:

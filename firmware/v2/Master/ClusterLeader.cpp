@@ -72,6 +72,7 @@ String lastContentKey;        // submit dedup
 bool selfPending = false;
 String selfText;
 int selfSpeed = 0;
+DisplaySource selfSource = DisplaySource::Unknown;
 uint32_t selfDueMs = 0;
 // Config swap staging (validated at the web boundary, applied here).
 bool configPending = false;

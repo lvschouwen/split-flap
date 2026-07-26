@@ -192,8 +192,8 @@ void clusterFollowerServiceTick(SettingsStore& store) {
       // The reflash producer gate outranks renders too — the job owns the
       // display; the slot retries until it ends (idempotent, latest wins).
       if (!reflashInProgress(displaySnapshotGet().reflash)) {
-        if (displayEnqueue(
-                makeShowTextCommand(renderText, "left", renderSpeed))) {
+        if (displayEnqueue(makeShowTextCommand(renderText, "left", renderSpeed,
+                                              DisplaySource::Leader))) {
           renderPending = false;
         }
         // Queue full: keep the slot, next tick retries.

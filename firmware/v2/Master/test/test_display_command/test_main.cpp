@@ -15,7 +15,8 @@ void tearDown() {}
 // --- ShowText builder -------------------------------------------------------
 
 static void test_show_text_sets_opcode_and_copies_text() {
-  DisplayCommand cmd = makeShowTextCommand("HELLO", "left", 50);
+  DisplayCommand cmd =
+      makeShowTextCommand("HELLO", "left", 50, DisplaySource::Web);
   TEST_ASSERT_EQUAL(DisplayOpcode::ShowText, cmd.opcode);
   TEST_ASSERT_EQUAL_STRING("HELLO", cmd.text);
 }
@@ -24,19 +25,22 @@ static void test_show_text_is_nul_terminated_at_full_width() {
   // Exactly UNITS_AMOUNT characters must survive intact.
   String full;
   for (int i = 0; i < UNITS_AMOUNT; i++) full += 'A';
-  DisplayCommand cmd = makeShowTextCommand(full, "left", 50);
+  DisplayCommand cmd =
+      makeShowTextCommand(full, "left", 50, DisplaySource::Web);
   TEST_ASSERT_EQUAL(UNITS_AMOUNT, (int)strlen(cmd.text));
 }
 
 static void test_show_text_truncates_beyond_units_amount() {
   String over;
   for (int i = 0; i < UNITS_AMOUNT + 5; i++) over += 'B';
-  DisplayCommand cmd = makeShowTextCommand(over, "left", 50);
+  DisplayCommand cmd =
+      makeShowTextCommand(over, "left", 50, DisplaySource::Web);
   TEST_ASSERT_EQUAL(UNITS_AMOUNT, (int)strlen(cmd.text));
 }
 
 static void test_show_text_empty_text_is_valid() {
-  DisplayCommand cmd = makeShowTextCommand("", "left", 50);
+  DisplayCommand cmd =
+      makeShowTextCommand("", "left", 50, DisplaySource::Web);
   TEST_ASSERT_EQUAL(DisplayOpcode::ShowText, cmd.opcode);
   TEST_ASSERT_EQUAL_STRING("", cmd.text);
 }
@@ -59,42 +63,52 @@ static void test_truncate_matches_command_builder_domain() {
   // what makeShowTextCommand writes into the queue slot.
   String over;
   for (int i = 0; i < UNITS_AMOUNT + 5; i++) over += (char)('A' + (i % 26));
-  DisplayCommand cmd = makeShowTextCommand(over, "left", 50);
+  DisplayCommand cmd =
+      makeShowTextCommand(over, "left", 50, DisplaySource::Web);
   TEST_ASSERT_EQUAL_STRING(cmd.text, truncateForDisplay(over).c_str());
 }
 
 // --- speed clamping (web-side 1..100 scale, v1 slider contract) --------------
 
 static void test_speed_in_range_is_preserved() {
-  TEST_ASSERT_EQUAL(80, makeShowTextCommand("X", "left", 80).speed);
+  TEST_ASSERT_EQUAL(
+      80, makeShowTextCommand("X", "left", 80, DisplaySource::Web).speed);
 }
 
 static void test_speed_clamped_low() {
-  TEST_ASSERT_EQUAL(1, makeShowTextCommand("X", "left", 0).speed);
-  TEST_ASSERT_EQUAL(1, makeShowTextCommand("X", "left", -7).speed);
+  TEST_ASSERT_EQUAL(
+      1, makeShowTextCommand("X", "left", 0, DisplaySource::Web).speed);
+  TEST_ASSERT_EQUAL(
+      1, makeShowTextCommand("X", "left", -7, DisplaySource::Web).speed);
 }
 
 static void test_speed_clamped_high() {
-  TEST_ASSERT_EQUAL(100, makeShowTextCommand("X", "left", 101).speed);
-  TEST_ASSERT_EQUAL(100, makeShowTextCommand("X", "left", 100000).speed);
+  TEST_ASSERT_EQUAL(
+      100, makeShowTextCommand("X", "left", 101, DisplaySource::Web).speed);
+  TEST_ASSERT_EQUAL(
+      100, makeShowTextCommand("X", "left", 100000, DisplaySource::Web).speed);
 }
 
 // --- alignment mapping -------------------------------------------------------
 
 static void test_alignment_strings_map_to_enum() {
   TEST_ASSERT_EQUAL(DisplayAlignment::Left,
-                    makeShowTextCommand("X", "left", 50).alignment);
+                    makeShowTextCommand("X", "left", 50,
+                                        DisplaySource::Web).alignment);
   TEST_ASSERT_EQUAL(DisplayAlignment::Center,
-                    makeShowTextCommand("X", "center", 50).alignment);
+                    makeShowTextCommand("X", "center", 50,
+                                        DisplaySource::Web).alignment);
   TEST_ASSERT_EQUAL(DisplayAlignment::Right,
-                    makeShowTextCommand("X", "right", 50).alignment);
+                    makeShowTextCommand("X", "right", 50,
+                                        DisplaySource::Web).alignment);
 }
 
 static void test_unknown_alignment_falls_back_to_left() {
   TEST_ASSERT_EQUAL(DisplayAlignment::Left,
-                    makeShowTextCommand("X", "diagonal", 50).alignment);
+                    makeShowTextCommand("X", "diagonal", 50,
+                                        DisplaySource::Web).alignment);
   TEST_ASSERT_EQUAL(DisplayAlignment::Left,
-                    makeShowTextCommand("X", "", 50).alignment);
+                    makeShowTextCommand("X", "", 50, DisplaySource::Web).alignment);
 }
 
 // --- Probe builder ------------------------------------------------------------
@@ -105,10 +119,48 @@ static void test_probe_command_carries_no_text() {
   TEST_ASSERT_EQUAL_STRING("", cmd.text);
 }
 
+// --- source (#403) ------------------------------------------------------------
+// The wall can be driven by five producers and the firmware kept no record of
+// which one did it. The source names the ACTOR, not the mechanism: a web
+// transient and a retained web message are both Web; an MQTT notification is
+// Mqtt. Fixed-size, so the queue slot stays POD-copyable.
+
+static void test_show_text_carries_the_source_it_was_built_with() {
+  TEST_ASSERT_EQUAL(DisplaySource::Web,
+                    makeShowTextCommand("X", "left", 50, DisplaySource::Web)
+                        .source);
+  TEST_ASSERT_EQUAL(DisplaySource::Mqtt,
+                    makeShowTextCommand("X", "left", 50, DisplaySource::Mqtt)
+                        .source);
+  TEST_ASSERT_EQUAL(DisplaySource::Clock,
+                    makeShowTextCommand("X", "left", 50, DisplaySource::Clock)
+                        .source);
+  TEST_ASSERT_EQUAL(DisplaySource::Leader,
+                    makeShowTextCommand("X", "left", 50, DisplaySource::Leader)
+                        .source);
+}
+
+static void test_fresh_command_has_no_source() {
+  DisplayCommand cmd;
+  TEST_ASSERT_EQUAL(DisplaySource::Unknown, cmd.source);
+  TEST_ASSERT_EQUAL(DisplaySource::Unknown, makeProbeCommand().source);
+}
+
+// The wire vocabulary the console reads. Stable strings: the UI names the
+// producer from these, so renaming one is a breaking UI change.
+static void test_source_names_are_the_wire_vocabulary() {
+  TEST_ASSERT_EQUAL_STRING("none", displaySourceName(DisplaySource::Unknown));
+  TEST_ASSERT_EQUAL_STRING("web", displaySourceName(DisplaySource::Web));
+  TEST_ASSERT_EQUAL_STRING("mqtt", displaySourceName(DisplaySource::Mqtt));
+  TEST_ASSERT_EQUAL_STRING("clock", displaySourceName(DisplaySource::Clock));
+  TEST_ASSERT_EQUAL_STRING("leader", displaySourceName(DisplaySource::Leader));
+}
+
 // --- describe (the stub worker's USB-CDC log line) ----------------------------
 
 static void test_describe_show_text_names_opcode_and_text() {
-  DisplayCommand cmd = makeShowTextCommand("HI", "center", 42);
+  DisplayCommand cmd =
+      makeShowTextCommand("HI", "center", 42, DisplaySource::Web);
   String line = describeDisplayCommand(cmd);
   TEST_ASSERT_TRUE(line.indexOf("ShowText") >= 0);
   TEST_ASSERT_TRUE(line.indexOf("HI") >= 0);
@@ -284,6 +336,9 @@ int main(int, char**) {
   RUN_TEST(test_alignment_strings_map_to_enum);
   RUN_TEST(test_unknown_alignment_falls_back_to_left);
   RUN_TEST(test_probe_command_carries_no_text);
+  RUN_TEST(test_show_text_carries_the_source_it_was_built_with);
+  RUN_TEST(test_fresh_command_has_no_source);
+  RUN_TEST(test_source_names_are_the_wire_vocabulary);
   RUN_TEST(test_describe_show_text_names_opcode_and_text);
   RUN_TEST(test_describe_probe_names_opcode);
   RUN_TEST(test_write_offset_command_bakes_seq_addr_and_negative_value);
