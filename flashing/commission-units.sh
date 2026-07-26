@@ -171,14 +171,29 @@ if (( DRY )); then
   exit 0
 fi
 
+# An esp01 follower is a different machine: no #412 boot auto-install to brake
+# (so no reflashOnBoot key at all), and no ?address= targeting. Detect it from
+# the plat key rather than inferring it from the missing brake — "absent" and
+# "unreadable host" must not look the same.
+PLAT="$(api GET "/settings" | jqf "d.get('plat','')")"
+ESP01=0
+[[ "$PLAT" == "esp01" ]] && ESP01=1
+
 # The brake must be on, or the master will converge the fleet behind our back
 # on its next boot and this script's whole premise is gone.
-BRAKE="$(api GET "/settings" | jqf "d['reflashOnBoot']")"
-if [[ "$BRAKE" != "False" && "$BRAKE" != "false" ]]; then
-  echo "REFUSING: reflashOnBoot is '${BRAKE:-unreadable}', expected false." >&2
-  # /settings is GET-only; the settings POST is the form route at /.
-  echo "  curl -X POST -d reflashOnBoot=false 'http://$HOST/'" >&2
-  exit 1
+if (( ESP01 )); then
+  echo "host is an esp01 follower (plat=$PLAT) — no boot auto-install to brake."
+  echo "Per-unit flashing is NOT available on this host; units must already be"
+  echo "on $WANT_REV (see the flash step)."
+  echo
+else
+  BRAKE="$(api GET "/settings" | jqf "d['reflashOnBoot']")"
+  if [[ "$BRAKE" != "False" && "$BRAKE" != "false" ]]; then
+    echo "REFUSING: reflashOnBoot is '${BRAKE:-unreadable}', expected false." >&2
+    # /settings is GET-only; the settings POST is the form route at /.
+    echo "  curl -X POST -d reflashOnBoot=false 'http://$HOST/'" >&2
+    exit 1
+  fi
 fi
 
 # --- per unit ----------------------------------------------------------------
@@ -195,6 +210,17 @@ commission() {  # addr -> 0 pass, 1 fail
   # 1. flash — also the DIP/EEPROM address proof (see the header)
   if [[ "$before_rev" == "$WANT_REV" ]]; then
     printf '  flash       already on %s, skipping\n' "$WANT_REV"
+  elif (( ESP01 )); then
+    # #412's ?address= is Master-only. FollowerEsp01's /reflash-units ignores
+    # every query param and reflashes THE WHOLE ROW, 2 at a time — so taking
+    # the targeted path here would silently do the one thing this script exists
+    # to prevent. Refuse, and make the operator run the bulk reflash knowingly.
+    fail "a$a is on '${before_rev:-<unreadable>}', not $WANT_REV, and this host
+        is an esp01 follower whose /reflash-units IGNORES ?address= and would
+        reflash the entire row. Flash the row deliberately first:
+          curl -X POST 'http://$HOST/reflash-units'
+        then re-run this script to validate each unit."
+    return 1
   else
     seq="$(post_seq "/reflash-units?address=$a")"
     [[ -n "$seq" ]] || { fail "reflash POST gave no seq"; return 1; }
