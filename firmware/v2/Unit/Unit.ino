@@ -171,7 +171,10 @@ unsigned long     lastAutoRehomeMs          = 0;      // 0 = never auto re-homed
 
 // On-demand self-test (#265). Result lives in loop context; the encoded
 // mirror rides selfTestReplyBuf like the diag reply above.
-SelfTestResult    selfTest                  = {SELFTEST_STATE_NEVER, 0, 0, 0};
+// Field defaults live in the struct (#404) — brace-init here would break on
+// AVR's C++11, where a default member initialiser makes the class a
+// non-aggregate, and would silently omit any field added later.
+SelfTestResult    selfTest;
 volatile uint8_t  selfTestReplyBuf[SELFTEST_REPLY_LEN] = {0};
 volatile bool     pendingSelfTest           = false;  // loop() runs the test
 volatile bool     pendingSelfTestResponse   = false;  // consumed by requestEvent

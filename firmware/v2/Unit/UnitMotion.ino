@@ -499,6 +499,10 @@ void refreshExtDiagReply() {
 //position estimate (same reasoning as calibrate's failure path).
 void runSelfTest() {
   selfTest.state = SELFTEST_STATE_RUNNING;
+  selfTest.reason = SELFTEST_REASON_NONE;  //#404: never report a stale reason
+  selfTest.stepsPerRev = 0;
+  selfTest.hallWindowSteps = 0;
+  selfTest.revTimeMs = 0;
   extHallLatchInhibit = true;  //#372: don't latch the phantom edge count below
   driftRefreshReplyBuffers();  //publish RUNNING before the ~12 s of motion
   startMotor();
@@ -511,7 +515,13 @@ void runSelfTest() {
     while (digitalRead(HALLPIN) == 0) {
       wdt_reset();
       stepCounted(ROTATIONDIRECTION * 1);
-      if (++guard > 3L * STEPS) { failed = true; break; }
+      if (++guard > 3L * STEPS) {
+        //Could not step OUT of the window: magnet against the sensor, or a
+        //sensor stuck low (#404).
+        failed = true;
+        selfTest.reason = SELFTEST_REASON_HALL_STUCK;
+        break;
+      }
     }
     if (!failed) {
       stepCounted(ROTATIONDIRECTION * 50);  //clear the release edge
@@ -521,7 +531,12 @@ void runSelfTest() {
   while (!failed && digitalRead(HALLPIN) != 0) {
     wdt_reset();
     stepCounted(ROTATIONDIRECTION * 1);
-    if (++guard > 3L * STEPS) failed = true;
+    if (++guard > 3L * STEPS) {
+      //Never saw the hall go low: magnet fallen off, dead KY-003, or broken
+      //wiring (#404).
+      failed = true;
+      selfTest.reason = SELFTEST_REASON_HALL_NEVER;
+    }
   }
 
   //Phase 2: one measured revolution from the edge. The window width is the
@@ -541,7 +556,12 @@ void runSelfTest() {
       stepCounted(ROTATIONDIRECTION * 1);
       measuredSteps++;
       if (measuredSteps > (uint16_t)(2 * STEPS)) {  //edge never came back
+        //A drum that slips or binds part-way round (#404). windowSteps was
+        //already measured this pass — preserved below, it is the most
+        //diagnostic number available for this failure.
         failed = true;
+        selfTest.reason = SELFTEST_REASON_REV_INCOMPLETE;
+        selfTest.hallWindowSteps = windowSteps;
         break;
       }
       int hall = digitalRead(HALLPIN);
@@ -580,10 +600,11 @@ void runSelfTest() {
     }
   }
   if (failed) {
+    //#404: keep whatever WAS measured instead of zeroing it. A phase-2
+    //failure already knows its hall window, and that number is exactly what
+    //diagnoses the unit; throwing it away is what made address 15 take four
+    //runs and a healthy control to explain.
     selfTest.state = SELFTEST_STATE_FAILED;
-    selfTest.stepsPerRev = 0;
-    selfTest.hallWindowSteps = 0;
-    selfTest.revTimeMs = 0;
     //The hall edge was never found: the drum's position is unknowable, so
     //park instead of letting the letter-diff check "restore" the commanded
     //letter from a fake blank origin. The master's next

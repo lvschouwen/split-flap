@@ -573,21 +573,26 @@ static void execSelfTest(DisplaySnapshot& local, UnitFacts* busFacts,
            (r.state != baseline.state ||
             r.stepsPerRev != baseline.stepsPerRev ||
             r.hallWindowSteps != baseline.hallWindowSteps ||
-            r.revTimeMs != baseline.revTimeMs));
+            r.revTimeMs != baseline.revTimeMs ||
+            r.reason != baseline.reason));
       if (r.state == 0 || !freshTerminal) continue;  // not started / stale
-      if (r.state == 2) {
-        slot.outcome = SelfTestOutcome::Ok;
-        slot.stepsPerRev = r.stepsPerRev;
-        slot.hallWindowSteps = r.hallWindowSteps;
-        slot.revTimeMs = r.revTimeMs;
-      } else {
-        slot.outcome = SelfTestOutcome::UnitFailed;
-      }
+      // #404: carry the measurements on BOTH paths. A failure preserves
+      // whatever it got to measure — a phase-2 failure knows its hall window,
+      // and that is the most diagnostic number the unit has.
+      slot.stepsPerRev = r.stepsPerRev;
+      slot.hallWindowSteps = r.hallWindowSteps;
+      slot.revTimeMs = r.revTimeMs;
+      slot.unitReason = r.reason;
+      slot.outcome = (r.state == 2) ? SelfTestOutcome::Ok
+                                    : SelfTestOutcome::UnitFailed;
       break;
     }
   }
-  SerialPrintf("display: self-test unit 0x%02x → %s\n",
-               cmd.unitAddress, selfTestOutcomeName(slot.outcome));
+  SerialPrintf("display: self-test unit 0x%02x → %s%s%s\n",
+               cmd.unitAddress, selfTestOutcomeName(slot.outcome),
+               slot.unitReason != SELFTEST_REASON_NONE ? " / " : "",
+               slot.unitReason != SELFTEST_REASON_NONE
+                   ? selfTestReasonName(slot.unitReason) : "");
   displayApplySelfTestResult(local, slot);
   displayApplyMaintResult(local, cmd,
                           slot.outcome == SelfTestOutcome::Ok

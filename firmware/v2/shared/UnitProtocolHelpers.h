@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "UnitSelfTest.h"  // reply length/mask/vocabulary, defined once (#404)
+
 // Pure logic for the master<->unit I2C wire protocol — v2 copy of v1's
 // UnitProtocolHelpers.h (copy policy: fix bugs in both trees). Header-only
 // so the native test env (test_unit_health) exercises it without Arduino
@@ -65,17 +67,25 @@ struct UnitSelfTestReading {
   uint16_t stepsPerRev = 0;
   uint16_t hallWindowSteps = 0;
   uint16_t revTimeMs = 0;
+  uint8_t reason = 0;  // SELFTEST_REASON_* (#404)
 };
 
-inline bool selfTestReadbackValid(const uint8_t buf[9],
+// Lengths, mask and vocabulary all come from UnitSelfTest.h now — this
+// decoder used to restate them as magic numbers, which is a format defined
+// twice and free to drift.
+inline bool selfTestReadbackValid(const uint8_t buf[SELFTEST_REPLY_LEN],
                                   UnitSelfTestReading& out) {
   uint8_t x = 0;
-  for (uint8_t i = 0; i < 8; i++) x ^= buf[i];
-  if (buf[8] != (uint8_t)(x ^ 0x5C)) return false;
-  if (buf[0] > 3) return false;  // outside the state vocabulary
+  for (uint8_t i = 0; i < SELFTEST_REPLY_LEN - 1; i++) x ^= buf[i];
+  if (buf[SELFTEST_REPLY_LEN - 1] != (uint8_t)(x ^ SELFTEST_REPLY_CHECKSUM_MASK)) {
+    return false;
+  }
+  if (buf[0] > SELFTEST_STATE_FAILED) return false;  // outside the vocabulary
+  if (buf[7] > SELFTEST_REASON_REV_INCOMPLETE) return false;
   out.state = buf[0];
   out.stepsPerRev = (uint16_t)buf[1] | ((uint16_t)buf[2] << 8);
   out.hallWindowSteps = (uint16_t)buf[3] | ((uint16_t)buf[4] << 8);
   out.revTimeMs = (uint16_t)buf[5] | ((uint16_t)buf[6] << 8);
+  out.reason = buf[7];
   return true;
 }

@@ -7,7 +7,7 @@
 #include <unity.h>
 #include <stdint.h>
 #include "../../UnitDrift.h"
-#include "../../UnitSelfTest.h"
+#include "UnitSelfTest.h"
 
 // The unit's real constants (Unit.ino STEPS / AMOUNTFLAPS). Tests pass them
 // explicitly — the headers stay pure and never include sketch globals.
@@ -250,6 +250,58 @@ static void test_encode_selftest_layout_and_checksum() {
   TEST_ASSERT_EQUAL_UINT8((uint8_t)(x ^ SELFTEST_REPLY_CHECKSUM_MASK), buf[8]);
 }
 
+// --- self-test failure reason (#404) -----------------------------------------
+// The three modes used to collapse into a bare "failed" with every
+// measurement zeroed, so the network could not tell a magnet against the
+// sensor from a magnet that fell off from a drum that binds.
+
+static void test_encode_selftest_reason_rides_the_reserved_byte() {
+  // Byte 7 was reserved, so carrying the reason costs no reply length.
+  SelfTestResult r;
+  r.state = SELFTEST_STATE_FAILED;
+  r.stepsPerRev = 0;
+  r.hallWindowSteps = 46;  // phase 2 knew this before it gave up
+  r.revTimeMs = 0;
+  r.reason = SELFTEST_REASON_REV_INCOMPLETE;
+  uint8_t buf[SELFTEST_REPLY_LEN];
+  selfTestEncodeReply(r, buf);
+  TEST_ASSERT_EQUAL_UINT8(SELFTEST_STATE_FAILED, buf[0]);
+  TEST_ASSERT_EQUAL_UINT8(46, buf[3]);
+  TEST_ASSERT_EQUAL_UINT8(SELFTEST_REASON_REV_INCOMPLETE, buf[7]);
+  uint8_t x = 0;
+  for (int i = 0; i < SELFTEST_REPLY_LEN - 1; i++) x ^= buf[i];
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)(x ^ SELFTEST_REPLY_CHECKSUM_MASK), buf[8]);
+}
+
+static void test_selftest_reason_is_inside_the_checksum() {
+  // A corrupted reason must be REJECTED, not acted on — it is a repair
+  // instruction for a person standing at the wall.
+  SelfTestResult r;
+  r.state = SELFTEST_STATE_FAILED;
+  r.stepsPerRev = 0;
+  r.hallWindowSteps = 0;
+  r.revTimeMs = 0;
+  r.reason = SELFTEST_REASON_HALL_STUCK;
+  uint8_t a[SELFTEST_REPLY_LEN];
+  selfTestEncodeReply(r, a);
+  r.reason = SELFTEST_REASON_HALL_NEVER;
+  uint8_t b[SELFTEST_REPLY_LEN];
+  selfTestEncodeReply(r, b);
+  TEST_ASSERT_NOT_EQUAL(a[SELFTEST_REPLY_LEN - 1], b[SELFTEST_REPLY_LEN - 1]);
+}
+
+static void test_selftest_reason_names_are_distinct_and_actionable() {
+  TEST_ASSERT_EQUAL_STRING("none", selfTestReasonName(SELFTEST_REASON_NONE));
+  TEST_ASSERT_EQUAL_STRING("hall-stuck",
+                           selfTestReasonName(SELFTEST_REASON_HALL_STUCK));
+  TEST_ASSERT_EQUAL_STRING("hall-never",
+                           selfTestReasonName(SELFTEST_REASON_HALL_NEVER));
+  TEST_ASSERT_EQUAL_STRING("rev-incomplete",
+                           selfTestReasonName(SELFTEST_REASON_REV_INCOMPLETE));
+  // An out-of-vocabulary code must not print as a real diagnosis.
+  TEST_ASSERT_EQUAL_STRING("none", selfTestReasonName(99));
+}
+
 static void test_encode_selftest_never_run_checksum_is_mask() {
   SelfTestResult r;  // zero-initialised: never run
   r.state = SELFTEST_STATE_NEVER;
@@ -286,6 +338,9 @@ int main(int, char**) {
   RUN_TEST(test_encode_diag_clamps_large_drift_magnitude);
   RUN_TEST(test_encode_diag_all_zero_checksum_is_mask);
   RUN_TEST(test_encode_selftest_layout_and_checksum);
+  RUN_TEST(test_encode_selftest_reason_rides_the_reserved_byte);
+  RUN_TEST(test_selftest_reason_is_inside_the_checksum);
+  RUN_TEST(test_selftest_reason_names_are_distinct_and_actionable);
   RUN_TEST(test_encode_selftest_never_run_checksum_is_mask);
   UNITY_END();
   return 0;

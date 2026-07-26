@@ -69,8 +69,11 @@
 // changes. It does NOT track the EEPROM layout — that is the unit's own
 // UNIT_EE_LAYOUT_VERSION, describing stored bytes rather than the wire.
 //
-//   1  #405: checksums on GET_STATUS/GET_VERSION/GET_OFFSET, complement-
-//            protected SET_OFFSET/SET_I2C_ADDRESS, GET_LIFETIME added.
+//   1  The #407 day-0 contract, all of it landing in one fleet reflash:
+//        #405 checksums on GET_STATUS/GET_VERSION/GET_OFFSET, complement-
+//             protected SET_OFFSET/SET_I2C_ADDRESS
+//        #406 GET_LIFETIME added
+//        #404 GET_SELF_TEST byte 7 (was reserved) carries the failure reason
 #define SFP_PROTOCOL_VERSION       1
 
 // ---------------------------------------------------------------------------

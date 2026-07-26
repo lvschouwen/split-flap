@@ -82,10 +82,20 @@ static void test_self_test_result_json() {
       "\"rev_time_ms\":4100}",
       buf);
 
+  // #404: a failure carries the unit's own failure mode plus whatever it
+  // measured before giving up — byte-for-byte the master's shape, so both
+  // rows report identically.
   slot.outcome = SelfTestOutcome::Timeout;
   buildSelfTestJson(buf, sizeof(buf), slot, 1);
-  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"timeout\"}",
-                           buf);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"reason\":\"timeout\",\"unit_reason\":\"none\","
+      "\"steps_per_rev\":2050,\"hall_window\":59,\"rev_time_ms\":4100}",
+      buf);
+
+  slot.outcome = SelfTestOutcome::UnitFailed;
+  slot.unitReason = SELFTEST_REASON_HALL_NEVER;
+  buildSelfTestJson(buf, sizeof(buf), slot, 1);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"unit_reason\":\"hall-never\""));
 }
 
 // --- reflash progress ---------------------------------------------------------------

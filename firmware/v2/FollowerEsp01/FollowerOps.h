@@ -18,6 +18,7 @@
 
 #include "SplitFlapProtocol.h"
 #include "UnitHealth.h"
+#include "UnitSelfTest.h"  // SELFTEST_REASON_* + selfTestReasonName (#404)
 
 static_assert(SFP_I2C_ADDRESS_BASE == 1,
               "maintenance validators assume address base 1");
@@ -185,6 +186,10 @@ struct SelfTestSlot {
   uint16_t stepsPerRev = 0;
   uint16_t hallWindowSteps = 0;
   uint16_t revTimeMs = 0;
+  // Which of the unit's three failure modes fired (#404), SELFTEST_REASON_*.
+  // `outcome` is this row master's view; this is the unit's own account of
+  // why. Both rows must report identically.
+  uint8_t unitReason = SELFTEST_REASON_NONE;
 };
 
 inline const char* selfTestOutcomeName(SelfTestOutcome o) {
@@ -218,8 +223,15 @@ inline void buildSelfTestJson(char* buf, size_t cap, const SelfTestSlot& slot,
              (unsigned)slot.revTimeMs);
     return;
   }
-  snprintf(buf, cap, "{\"state\":\"failed\",\"reason\":\"%s\"}",
-           selfTestOutcomeName(slot.outcome));
+  // #404: carry the unit's own failure mode and whatever it measured before
+  // giving up, exactly as the master's buildSelfTestJson does.
+  snprintf(buf, cap,
+           "{\"state\":\"failed\",\"reason\":\"%s\",\"unit_reason\":\"%s\","
+           "\"steps_per_rev\":%u,\"hall_window\":%u,\"rev_time_ms\":%u}",
+           selfTestOutcomeName(slot.outcome),
+           selfTestReasonName(slot.unitReason),
+           (unsigned)slot.stepsPerRev, (unsigned)slot.hallWindowSteps,
+           (unsigned)slot.revTimeMs);
 }
 
 // --- reflash progress (#205 shape, v2 ReflashPlan.h copies) -------------------------

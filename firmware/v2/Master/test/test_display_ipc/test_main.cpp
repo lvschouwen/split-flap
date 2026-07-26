@@ -375,18 +375,45 @@ static void test_selftest_json_shapes() {
       "\"rev_time_ms\":6120}",
       buf);
 
-  // Failure vocabulary.
+  // Failure vocabulary. #404: a failure now also carries the unit's own
+  // failure mode and whatever it measured before giving up — it used to be
+  // state + master-side reason and nothing else.
   slot.outcome = SelfTestOutcome::Timeout;
   buildSelfTestJson(buf, sizeof(buf), slot, 4);
-  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"timeout\"}", buf);
-  slot.outcome = SelfTestOutcome::UnitFailed;
-  buildSelfTestJson(buf, sizeof(buf), slot, 4);
-  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"unit-failed\"}",
-                           buf);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"reason\":\"timeout\",\"unit_reason\":\"none\","
+      "\"steps_per_rev\":2041,\"hall_window\":90,\"rev_time_ms\":6120}",
+      buf);
   slot.outcome = SelfTestOutcome::Unsupported;
   buildSelfTestJson(buf, sizeof(buf), slot, 4);
-  TEST_ASSERT_EQUAL_STRING("{\"state\":\"failed\",\"reason\":\"unsupported\"}",
-                           buf);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"reason\":\"unsupported\""));
+
+  // The three unit-side failure modes each name themselves. On a physical
+  // wall they mean completely different repairs: a magnet against the sensor,
+  // a magnet that fell off or a dead sensor, and a drum that slips or binds.
+  slot.outcome = SelfTestOutcome::UnitFailed;
+  slot.unitReason = SELFTEST_REASON_HALL_STUCK;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"unit_reason\":\"hall-stuck\""));
+  slot.unitReason = SELFTEST_REASON_HALL_NEVER;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"unit_reason\":\"hall-never\""));
+  slot.unitReason = SELFTEST_REASON_REV_INCOMPLETE;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"unit_reason\":\"rev-incomplete\""));
+
+  // The a15 case: a phase-2 failure knows its hall window, and that number is
+  // what diagnoses the unit. Zeroing it is what made address 15 take four runs
+  // and a healthy control to explain.
+  slot.stepsPerRev = 0;      // never completed a revolution
+  slot.hallWindowSteps = 46; // ...but it DID measure the window
+  slot.revTimeMs = 0;
+  buildSelfTestJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"hall_window\":46"));
+  slot.stepsPerRev = 2041;
+  slot.hallWindowSteps = 90;
+  slot.revTimeMs = 6120;
+  slot.unitReason = SELFTEST_REASON_NONE;
 
   // An older seq answering for a newer query -> pending; newer slot -> expired.
   buildSelfTestJson(buf, sizeof(buf), slot, 9);

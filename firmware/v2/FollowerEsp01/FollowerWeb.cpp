@@ -1055,16 +1055,15 @@ static void pollSelfTest() {
   selfTestPollLastMs = millis();
   UnitSelfTestReading reading;
   if (busReadSelfTest(selfTestAddr, reading)) {
-    if (reading.state == 2 /* ok */) {
-      selfTestSlot.outcome = SelfTestOutcome::Ok;
+    if (reading.state == 2 /* ok */ || reading.state == 3 /* failed */) {
+      // #404: the measurements ride BOTH paths now — a failed test preserves
+      // whatever it got to measure, which is the diagnostic part.
       selfTestSlot.stepsPerRev = reading.stepsPerRev;
       selfTestSlot.hallWindowSteps = reading.hallWindowSteps;
       selfTestSlot.revTimeMs = reading.revTimeMs;
-      selfTestPolling = false;
-      return;
-    }
-    if (reading.state == 3 /* failed */) {
-      selfTestSlot.outcome = SelfTestOutcome::UnitFailed;
+      selfTestSlot.unitReason = reading.reason;
+      selfTestSlot.outcome = (reading.state == 2) ? SelfTestOutcome::Ok
+                                                  : SelfTestOutcome::UnitFailed;
       selfTestPolling = false;
       return;
     }
