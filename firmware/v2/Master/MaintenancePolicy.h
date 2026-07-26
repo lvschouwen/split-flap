@@ -90,6 +90,19 @@ inline MaintVerdict maintValidateJog(long steps) {
   return {};
 }
 
+// Feature gates ride the wire as one byte (#409). WHICH bits are legal is
+// deliberately not checked here: the vocabulary belongs to the unit's
+// firmware, which refuses any bit it has no code for, and the write's
+// read-back grades that refusal as a postcondition failure. A master that
+// second-guessed the vocabulary would start rejecting gates that a newer unit
+// firmware understands perfectly well.
+inline MaintVerdict maintValidateGates(long gates) {
+  if (gates < 0 || gates > 255) {
+    return {400, "Gates must be a 0..255 bit mask"};
+  }
+  return {};
+}
+
 // Set-address target: bounded to the managed window (an address above it
 // would strand the unit beyond all over-I2C management — v1 rule), and the
 // target must not answer on the bus unless it IS the unit's current address

@@ -515,6 +515,26 @@ int busResetOdometer(uint8_t i2cAddress) {
   return Wire.endTransmission();
 }
 
+// Feature gates (#409): complement-protected write, then a GET_LIFETIME
+// read-back — the same verified shape as busWriteOffset above, and the
+// mechanism that lets this row's units have a motion gate flipped without
+// pulling five Nanos for a reflash.
+int busSetGates(uint8_t i2cAddress, uint8_t gates) {
+  uint8_t enc[SET_GATES_PAYLOAD_LEN];
+  setGatesEncode(gates, enc);
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_SET_GATES);
+  Wire.write(enc, SET_GATES_PAYLOAD_LEN);
+  int txStatus = Wire.endTransmission();
+  if (txStatus != 0) return txStatus;
+  // The unit persists in loop context, not its TWI ISR — let the write drain.
+  delay(UNIT_GATES_WRITE_SETTLE_MS);
+  UnitLifetimeFacts lt;
+  if (!readUnitLifetime(i2cAddress, lt)) return UNIT_BUS_GATES_UNVERIFIED;
+  if (lt.featureGates != gates) return UNIT_BUS_GATES_MISMATCH;
+  return 0;
+}
+
 int busRebootToBootloader(uint8_t i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_ENTER_BOOTLOADER);

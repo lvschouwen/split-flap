@@ -893,6 +893,23 @@ void webEndpointsInit(AsyncWebServer& server) {
                       0);
             });
 
+  // Feature gates (#409): the same flip the S3 rows get, so this row's units
+  // are not the ones that need a reflash to enable a motion change.
+  server.on("/unit/gates", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
+    int addr = 0;
+    if (!checkAddressParam(request, addr)) return;
+    long gates = 0;
+    if (!queryRequireLong(request, "gates", gates)) return;
+    MaintVerdict verdict = maintValidateGates(gates);
+    if (verdict.httpStatus != 200) {
+      sendWithCors(request, verdict.httpStatus, "text/plain",
+                   verdict.message);
+      return;
+    }
+    stageOp(request, FollowerOpKind::SetGates, (uint8_t)addr, gates);
+  });
+
   server.on("/unit/self-test", HTTP_POST, [](AsyncWebServerRequest* request) {
     if (followerRejectCsrf(request)) return;
     int addr = 0;
@@ -1016,6 +1033,16 @@ static void executeStagedOp() {
       if (wireStatus == 0) {
         UnitFacts& u = unitFacts[op.addr - SFP_I2C_ADDRESS_BASE];
         u.odometer = 0;
+      }
+      break;
+    case FollowerOpKind::SetGates:
+      // busSetGates verifies with a read-back, so a unit that refused the
+      // bits grades as a failure here rather than a phantom success — same
+      // collapsing of verify failures into the wire status as WriteOffset.
+      wireStatus = busSetGates(op.addr, (uint8_t)op.arg);
+      if (wireStatus == 0) {
+        UnitFacts& u = unitFacts[op.addr - SFP_I2C_ADDRESS_BASE];
+        u.lifetime.featureGates = (uint8_t)op.arg;
       }
       break;
     case FollowerOpKind::RebootToBootloader:

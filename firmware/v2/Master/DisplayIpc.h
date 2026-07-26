@@ -229,6 +229,17 @@ inline void displayApplyOdometerReset(DisplaySnapshot& snap, int i2cAddress) {
   snap.units[idx].odometerValid = true;
 }
 
+// A verified SET_GATES landed (#409) — patch the fact so /units/health shows
+// the new gates immediately instead of the pre-write value until the next
+// lifetime poll. Only ever called after the read-back confirmed it, so this
+// cannot invent a gate the unit did not accept.
+inline void displayApplyGatesWrite(DisplaySnapshot& snap, int i2cAddress,
+                                   uint8_t gates) {
+  int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
+  if (idx < 0 || idx >= UNITS_AMOUNT) return;
+  snap.units[idx].lifetime.featureGates = gates;
+}
+
 // A unit sent into twiboot forgets nothing, but the master must stop
 // serving reads for it until the next probe confirms it is back in sketch.
 inline void displayInvalidateUnitReads(DisplaySnapshot& snap, int i2cAddress) {

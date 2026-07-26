@@ -126,6 +126,19 @@ static void test_jog_limit_is_int8_range() {
   TEST_ASSERT_EQUAL(400, maintValidateJog(-128).httpStatus);
 }
 
+// Feature gates are one wire byte (#409). The web boundary bounds the byte
+// and nothing else: WHICH bits are legal belongs to the unit's firmware,
+// which refuses the ones it has no code for, and the write's read-back grades
+// that refusal. A master enforcing a vocabulary here would reject gates a
+// newer unit firmware understands.
+static void test_gates_accept_any_byte_and_reject_beyond_it() {
+  TEST_ASSERT_EQUAL(200, maintValidateGates(0).httpStatus);
+  TEST_ASSERT_EQUAL(200, maintValidateGates(1).httpStatus);
+  TEST_ASSERT_EQUAL(200, maintValidateGates(255).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(256).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(-1).httpStatus);
+}
+
 // --- set-address target (web boundary AND displayTask recheck) -----------------
 
 static void test_set_address_target_out_of_managed_range_is_400() {
@@ -221,6 +234,7 @@ int main(int, char**) {
   RUN_TEST(test_hex_address_parses_v1_strtol_base0);
   RUN_TEST(test_offset_limit_is_one_revolution_both_signs);
   RUN_TEST(test_jog_limit_is_int8_range);
+  RUN_TEST(test_gates_accept_any_byte_and_reject_beyond_it);
   RUN_TEST(test_set_address_target_out_of_managed_range_is_400);
   RUN_TEST(test_set_address_occupied_target_is_409);
   RUN_TEST(test_set_address_burning_current_address_is_allowed);

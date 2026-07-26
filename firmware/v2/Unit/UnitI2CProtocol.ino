@@ -137,6 +137,28 @@ void receiveLetter(int numBytes) {
       case SFP_CMD_RESET_ODOMETER:
         pendingOdometerReset = true;
         break;
+      case SFP_CMD_SET_GATES:
+        if (remaining >= SET_GATES_PAYLOAD_LEN) {
+          uint8_t pay[SET_GATES_PAYLOAD_LEN];
+          for (uint8_t k = 0; k < SET_GATES_PAYLOAD_LEN; k++) {
+            pay[k] = (uint8_t)Wire.read();
+          }
+          remaining -= SET_GATES_PAYLOAD_LEN;
+          // Value + bitwise complement (#405 discipline), then a bits check:
+          // this unit persists only gates it has code for, so a newer master
+          // cannot talk it into reporting a feature it will never run (#409).
+          uint8_t requestedGates = 0;
+          if (setGatesDecode(pay, SET_GATES_PAYLOAD_LEN, requestedGates) &&
+              unitGateBitsKnown(requestedGates)) {
+            pendingGatesValue = requestedGates;
+            pendingGatesWrite = true;
+          } else if (badCommandCount < 0xFF) {
+            badCommandCount++;
+          }
+        } else if (badCommandCount < 0xFF) {
+          badCommandCount++;
+        }
+        break;
       default:
         if (badCommandCount < 0xFF) badCommandCount++;
         break;  // unknown opcode -> ignore

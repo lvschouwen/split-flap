@@ -232,6 +232,18 @@ static void test_gate_bits_are_independent() {
   TEST_ASSERT_TRUE(unitGateEnabled(gates, UNIT_GATE_SCHEDULED_REHOME));
 }
 
+// A unit must never persist a bit its own firmware has no code for (#409):
+// /units/health would then report a feature as enabled that does not exist
+// here, and a SET_GATES from a newer master would look like it landed.
+static void test_only_gates_this_firmware_implements_are_accepted() {
+  TEST_ASSERT_TRUE(unitGateBitsKnown(0));
+  TEST_ASSERT_TRUE(unitGateBitsKnown(UNIT_GATE_IDLE_HALL_CHECK));
+  TEST_ASSERT_TRUE(unitGateBitsKnown(UNIT_GATE_ALL));
+  TEST_ASSERT_FALSE(unitGateBitsKnown(0x04));
+  TEST_ASSERT_FALSE(unitGateBitsKnown(0xFF));
+  TEST_ASSERT_FALSE(unitGateBitsKnown(UNIT_GATE_IDLE_HALL_CHECK | 0x80));
+}
+
 // --- saturating counters --------------------------------------------------
 
 static void test_counters_saturate_rather_than_wrap() {
@@ -309,6 +321,7 @@ int main(int, char**) {
   RUN_TEST(test_health_bad_checksum_decodes_to_zeros);
   RUN_TEST(test_health_ships_with_both_motion_gates_off);
   RUN_TEST(test_gate_bits_are_independent);
+  RUN_TEST(test_only_gates_this_firmware_implements_are_accepted);
   RUN_TEST(test_counters_saturate_rather_than_wrap);
   RUN_TEST(test_self_test_first_reading_becomes_the_baseline);
   RUN_TEST(test_self_test_later_readings_only_move_last);

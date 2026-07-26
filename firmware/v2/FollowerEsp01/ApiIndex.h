@@ -37,6 +37,7 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/unit/home",             "home a unit"},
   {"POST", "/unit/identify",         "blink a unit's LED"},
   {"POST", "/unit/reset-odometer",   "zero a unit's revolution odometer"},
+  {"POST", "/unit/gates",            "set a unit's feature-gate bits"},
   {"POST", "/unit/self-test",        "run a unit's self-test"},
   {"GET",  "/unit/self-test-result", "read a unit's self-test result"},
   {"POST", "/unit/reboot",           "reboot a unit"},

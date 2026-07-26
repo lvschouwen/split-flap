@@ -72,6 +72,9 @@ int busJog(uint8_t i2cAddress, int steps);
 int busHome(uint8_t i2cAddress);
 int busIdentify(uint8_t i2cAddress);
 int busResetOdometer(uint8_t i2cAddress);
+// Persists the unit's UNIT_GATE_* byte and verifies it via GET_LIFETIME
+// (#409) — UNIT_BUS_GATES_UNVERIFIED / _MISMATCH when it did not land.
+int busSetGates(uint8_t i2cAddress, uint8_t gates);
 int busRebootToBootloader(uint8_t i2cAddress);
 int busStartSelfTest(uint8_t i2cAddress);
 bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out);

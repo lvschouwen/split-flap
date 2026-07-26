@@ -294,6 +294,58 @@ static void test_set_address_rejects_short_payload() {
   TEST_ASSERT_FALSE(setAddressDecode(buf, SET_ADDRESS_PAYLOAD_LEN - 1, out));
 }
 
+// --- SET_GATES (0x99) -----------------------------------------------------
+// The write half of #406's feature-gate byte (#409). Same complement pair as
+// the two writes above, and the only one of the three that can be verified
+// afterwards — GET_LIFETIME reports the byte back under a checksum.
+
+static void test_set_gates_roundtrip() {
+  uint8_t buf[SET_GATES_PAYLOAD_LEN];
+  setGatesEncode(0x01, buf);
+  uint8_t out = 0xFF;
+  TEST_ASSERT_TRUE(setGatesDecode(buf, SET_GATES_PAYLOAD_LEN, out));
+  TEST_ASSERT_EQUAL_UINT8(0x01, out);
+}
+
+// Turning every gate back OFF is the safety action — 0x00 followed by 0xFF,
+// which an idle or stuck bus cannot spell either way round.
+static void test_set_gates_can_clear_every_gate() {
+  uint8_t buf[SET_GATES_PAYLOAD_LEN];
+  setGatesEncode(0x00, buf);
+  TEST_ASSERT_EQUAL_UINT8(0x00, buf[0]);
+  TEST_ASSERT_EQUAL_UINT8(0xFF, buf[1]);
+  uint8_t out = 0xAA;
+  TEST_ASSERT_TRUE(setGatesDecode(buf, SET_GATES_PAYLOAD_LEN, out));
+  TEST_ASSERT_EQUAL_UINT8(0x00, out);
+}
+
+static void test_set_gates_rejects_a_disagreeing_pair() {
+  for (uint8_t i = 0; i < SET_GATES_PAYLOAD_LEN; i++) {
+    uint8_t buf[SET_GATES_PAYLOAD_LEN];
+    setGatesEncode(0x03, buf);
+    buf[i] ^= 0x01;
+    uint8_t out = 0;
+    TEST_ASSERT_FALSE(setGatesDecode(buf, SET_GATES_PAYLOAD_LEN, out));
+  }
+}
+
+// An all-zero and an all-0xFF bus both decode to nothing: 0x00/0x00 and
+// 0xFF/0xFF are each a disagreeing pair.
+static void test_set_gates_rejects_a_flatlined_bus() {
+  uint8_t out = 0;
+  const uint8_t zeros[SET_GATES_PAYLOAD_LEN] = {0x00, 0x00};
+  TEST_ASSERT_FALSE(setGatesDecode(zeros, SET_GATES_PAYLOAD_LEN, out));
+  const uint8_t ones[SET_GATES_PAYLOAD_LEN] = {0xFF, 0xFF};
+  TEST_ASSERT_FALSE(setGatesDecode(ones, SET_GATES_PAYLOAD_LEN, out));
+}
+
+static void test_set_gates_rejects_short_payload() {
+  uint8_t buf[SET_GATES_PAYLOAD_LEN];
+  setGatesEncode(0x02, buf);
+  uint8_t out = 0;
+  TEST_ASSERT_FALSE(setGatesDecode(buf, SET_GATES_PAYLOAD_LEN - 1, out));
+}
+
 // --- masks ----------------------------------------------------------------
 
 static void test_checksum_masks_are_all_distinct() {
@@ -344,6 +396,11 @@ int main(int, char**) {
   RUN_TEST(test_set_address_rejects_a_disagreeing_pair);
   RUN_TEST(test_set_address_single_bit_corruption_within_range_is_caught);
   RUN_TEST(test_set_address_rejects_short_payload);
+  RUN_TEST(test_set_gates_roundtrip);
+  RUN_TEST(test_set_gates_can_clear_every_gate);
+  RUN_TEST(test_set_gates_rejects_a_disagreeing_pair);
+  RUN_TEST(test_set_gates_rejects_a_flatlined_bus);
+  RUN_TEST(test_set_gates_rejects_short_payload);
   RUN_TEST(test_checksum_masks_are_all_distinct);
   UNITY_END();
   return 0;

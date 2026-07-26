@@ -59,6 +59,13 @@ int unitBusJog(int i2cAddress, int steps);              // ±127, not persisted
 int unitBusHome(int i2cAddress);                        // full calibrate(true)
 int unitBusIdentify(int i2cAddress);                    // ~3 s LED blink
 int unitBusResetOdometer(int i2cAddress);               // zero wear odometer (#231)
+
+// Persists the unit's UNIT_GATE_* byte (#409) and VERIFIES it by reading
+// GET_LIFETIME back — returns UNIT_BUS_GATES_UNVERIFIED / _MISMATCH
+// (UnitWireContract.h) instead of 0 when the write did not demonstrably land.
+// The unit rejects gate bits it has no code for, so a refused write surfaces
+// as _MISMATCH rather than as a silent success.
+int unitBusSetGates(int i2cAddress, uint8_t gates);
 int unitBusStartSelfTest(int i2cAddress);               // ~15 s diagnostic rev (#265)
 
 // Reads the unit's self-test state/result via CMD_GET_SELF_TEST (#265).

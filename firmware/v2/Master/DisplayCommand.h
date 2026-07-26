@@ -24,6 +24,9 @@ enum class DisplayOpcode : uint8_t {
   SetAddress,
   ClearAddress,
   ResetOdometer,
+  // Feature gates (#409): persist the unit's UNIT_GATE_* byte. `value`
+  // carries the new byte; the exec verifies it by reading GET_LIFETIME back.
+  SetGates,
   // On-demand unit self-test (#265): displayTask starts the unit's
   // diagnostic revolution and polls the result; measurements publish into
   // the snapshot's SelfTestSlot.
@@ -94,6 +97,7 @@ inline const char* displayOpcodeName(DisplayOpcode op) {
     case DisplayOpcode::SetAddress:         return "SetAddress";
     case DisplayOpcode::ClearAddress:       return "ClearAddress";
     case DisplayOpcode::ResetOdometer:      return "ResetOdometer";
+    case DisplayOpcode::SetGates:           return "SetGates";
     case DisplayOpcode::SelfTest:           return "SelfTest";
     case DisplayOpcode::ResetUnits:         return "ResetUnits";
     case DisplayOpcode::Stop:               return "Stop";
@@ -172,6 +176,14 @@ inline DisplayCommand makeClearAddressCommand(uint32_t seq, uint8_t addr) {
 // odometer + its EEPROM ring after a flap swap or motor replacement.
 inline DisplayCommand makeResetOdometerCommand(uint32_t seq, uint8_t addr) {
   return makeMaintCommand(DisplayOpcode::ResetOdometer, seq, addr, 0);
+}
+
+// Feature gates (#409): the write half of #406's gate byte, which is what
+// lets #407's motion changes ship dormant and be switched on over the wire
+// instead of costing a second fleet reflash.
+inline DisplayCommand makeSetGatesCommand(uint32_t seq, uint8_t addr,
+                                          uint8_t gates) {
+  return makeMaintCommand(DisplayOpcode::SetGates, seq, addr, (int16_t)gates);
 }
 
 // On-demand diagnostic revolution (#265): ~15 s of unit motion displayTask

@@ -149,6 +149,13 @@ volatile bool    pendingClearAddress    = false;
 volatile bool    pendingIdentify        = false;
 unsigned long    identifyStartMs        = 0;
 
+// Feature-gate write (#409), the same ISR-sets/loop-drains shape as every
+// other EEPROM mutation. The gate byte decides whether the motion changes
+// #407 shipped dormant actually run, so turning one on costs a wire write
+// instead of a second fleet reflash.
+volatile bool    pendingGatesWrite      = false;
+volatile uint8_t pendingGatesValue      = 0;
+
 // Health / diagnostics state returned by SFP_CMD_GET_STATUS (issue #47).
 volatile bool     pendingStatusResponse     = false;  // consumed by requestEvent
 volatile bool     pendingLetterResponse     = false;  // consumed by requestEvent (#106)
@@ -623,6 +630,26 @@ void loop() {
       if (badCommandCount < 0xFF) badCommandCount++;
       interrupts();
     }
+  }
+  // Feature-gate write (#409). Persisting the byte is the whole op — the gate
+  // is read live wherever it is consulted, so nothing has to be restarted for
+  // it to take effect, and persistLifetimeHealth() republishes the
+  // GET_LIFETIME reply the master verifies the write against.
+  if (pendingGatesWrite) {
+    noInterrupts();
+    uint8_t v = pendingGatesValue;
+    pendingGatesWrite = false;
+    interrupts();
+    lifetime.featureGates = v;
+    persistLifetimeHealth();
+    // A gate change invalidates whatever the idle check had accumulated: the
+    // streak was built under the old rules.
+    idleHallReset(idleHall);
+#ifdef SERIAL_ENABLE
+    Serial.print("Feature gates set to 0x");
+    Serial.println(v, HEX);
+#endif
+    previousMillis = millis();  // keep awake briefly for follow-up commands
   }
   if (pendingClearAddress) {
     noInterrupts();

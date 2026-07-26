@@ -712,6 +712,26 @@ int unitBusResetOdometer(int i2cAddress) {
   return countedTransmission();
 }
 
+// Feature gates (#409). The write half of the byte GET_LIFETIME reports, and
+// the only one of the three complement-protected writes that can be confirmed
+// afterwards — so it is, unlike SET_I2C_ADDRESS. The unit refuses gate bits it
+// has no code for, which lands here as a MISMATCH rather than a silent 0.
+int unitBusSetGates(int i2cAddress, uint8_t gates) {
+  uint8_t payload[SET_GATES_PAYLOAD_LEN];
+  setGatesEncode(gates, payload);
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_SET_GATES);
+  Wire.write(payload, SET_GATES_PAYLOAD_LEN);
+  int txStatus = countedTransmission();
+  if (txStatus != 0) return txStatus;
+  // The unit persists in loop context, not the TWI ISR — let the write drain.
+  delay(UNIT_GATES_WRITE_SETTLE_MS);
+  UnitLifetimeFacts lt;
+  if (!readUnitLifetime(i2cAddress, lt)) return UNIT_BUS_GATES_UNVERIFIED;
+  if (lt.featureGates != gates) return UNIT_BUS_GATES_MISMATCH;
+  return 0;
+}
+
 int unitBusStartSelfTest(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_START_SELF_TEST);

@@ -50,6 +50,15 @@ static void test_offset_and_jog_ranges() {
   TEST_ASSERT_EQUAL(400, maintValidateJog(128).httpStatus);
 }
 
+// Feature gates ride the wire as one byte (#409); the vocabulary check is the
+// unit's, not this row's.
+static void test_gates_range_is_one_byte() {
+  TEST_ASSERT_EQUAL(200, maintValidateGates(0).httpStatus);
+  TEST_ASSERT_EQUAL(200, maintValidateGates(255).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(256).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(-1).httpStatus);
+}
+
 // --- op-result slot ----------------------------------------------------------------
 
 static void test_op_result_pending_found_expired() {
@@ -139,6 +148,7 @@ int main(int, char**) {
   RUN_TEST(test_address_validation);
   RUN_TEST(test_protocol_mismatch_unit_is_409_not_drivable);
   RUN_TEST(test_offset_and_jog_ranges);
+  RUN_TEST(test_gates_range_is_one_byte);
   RUN_TEST(test_op_result_pending_found_expired);
   RUN_TEST(test_op_result_failure_carries_reason);
   RUN_TEST(test_self_test_result_json);

@@ -618,6 +618,28 @@ static void execResetOdometer(DisplaySnapshot& local, UnitFacts* busFacts,
       MaintReason::None);
 }
 
+static void execSetGates(DisplaySnapshot& local, UnitFacts* busFacts,
+                        const DisplayCommand& cmd) {
+  (void)busFacts;
+  int status = unitBusSetGates(cmd.unitAddress, (uint8_t)cmd.value);
+  if (status == 0) {
+    // Verified by the read-back inside unitBusSetGates — patch the fact so
+    // /units/health stops reporting the pre-write gates (#409).
+    displayApplyGatesWrite(local, cmd.unitAddress, (uint8_t)cmd.value);
+  }
+  // A unit that refused the bits answers with its old gates, which the
+  // read-back grades as a mismatch — the operator sees the refusal instead
+  // of an op that claims to have landed.
+  displayApplyMaintResult(
+      local, cmd,
+      status == 0 ? MaintOutcome::Ok
+                  : (status == UNIT_BUS_GATES_MISMATCH ||
+                     status == UNIT_BUS_GATES_UNVERIFIED)
+                        ? MaintOutcome::PostconditionFail
+                        : MaintOutcome::WireFail,
+      MaintReason::None);
+}
+
 static void execRebootToBootloader(DisplaySnapshot& local, UnitFacts* busFacts,
                                   const DisplayCommand& cmd) {
   (void)busFacts;
@@ -871,6 +893,9 @@ void displayTaskMain(void*) {
           break;
         case DisplayOpcode::SelfTest:
           execSelfTest(local, busFacts, cmd);
+          break;
+        case DisplayOpcode::SetGates:
+          execSetGates(local, busFacts, cmd);
           break;
         case DisplayOpcode::ResetOdometer:
           execResetOdometer(local, busFacts, cmd);

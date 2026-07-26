@@ -74,6 +74,7 @@
 //             protected SET_OFFSET/SET_I2C_ADDRESS
 //        #406 GET_LIFETIME added
 //        #404 GET_SELF_TEST byte 7 (was reserved) carries the failure reason
+//        #409 SET_GATES added — the write half of #406's feature-gate byte
 #define SFP_PROTOCOL_VERSION       1
 
 // ---------------------------------------------------------------------------
@@ -149,6 +150,13 @@
 #define SFP_CMD_START_SELF_TEST    0x98  // no args; unit runs the ~2-revolution
                                          //     diagnostic (#265), reports busy while
                                          //     running; result via GET_SELF_TEST
+#define SFP_CMD_SET_GATES          0x99  // +2 bytes gates + ~gates; persist the
+                                         //     UNIT_GATE_* byte to EEPROM (#409).
+                                         //     The write half of #406's feature-gate
+                                         //     byte: motion changes ship OFF and are
+                                         //     switched on over the wire, so enabling
+                                         //     one costs no second reflash. Verify by
+                                         //     reading GET_LIFETIME back.
 
 // SET_OFFSET's accepted range (#171). The bound is one full revolution of the
 // unit's 28BYJ-48 drum (its STEPS constant — a static_assert there pins the

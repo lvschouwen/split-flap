@@ -213,3 +213,41 @@ inline bool setAddressDecode(const uint8_t* buf, uint8_t len, uint8_t& out) {
   out = buf[0];
   return true;
 }
+
+// --- SET_GATES (0x99) -------------------------------------------------------
+// 2 bytes: the UNIT_GATE_* byte + its bitwise complement (#409).
+//
+// The write half of #406's feature-gate byte, and the reason #407 can ship its
+// two motion changes switched off: without it, enabling one would take a
+// second fleet reflash — the exact cost the epic exists to avoid paying twice.
+//
+// Unlike SET_I2C_ADDRESS this one is fully verifiable: GET_LIFETIME already
+// reports the byte under a checksum, so the master writes, waits out the
+// unit's loop-context EEPROM drain, reads back and grades the op. Same shape
+// as SET_OFFSET's read-back.
+//
+// Which bits are legal is the UNIT's call, not the master's — the unit
+// rejects any bit its own firmware has no code for (UnitEeprom.h), so a
+// newer master cannot talk an older unit into persisting a gate it will
+// never act on.
+#define SET_GATES_PAYLOAD_LEN         2
+
+inline void setGatesEncode(uint8_t gates, uint8_t buf[SET_GATES_PAYLOAD_LEN]) {
+  buf[0] = gates;
+  buf[1] = (uint8_t)~gates;
+}
+
+inline bool setGatesDecode(const uint8_t* buf, uint8_t len, uint8_t& out) {
+  if (len < SET_GATES_PAYLOAD_LEN) return false;
+  if (buf[1] != (uint8_t)~buf[0]) return false;
+  out = buf[0];
+  return true;
+}
+
+// The unit persists in loop(), not the TWI ISR — an immediate read-back would
+// race the EEPROM write. Same reasoning and the same order of magnitude as
+// UNIT_OFFSET_WRITE_SETTLE_MS; the health block is one byte wider.
+#define UNIT_GATES_WRITE_SETTLE_MS    30
+
+#define UNIT_BUS_GATES_UNVERIFIED     22  // wrote OK, read-back unreadable
+#define UNIT_BUS_GATES_MISMATCH       23  // wrote OK, unit reports other bits

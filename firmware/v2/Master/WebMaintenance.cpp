@@ -228,6 +228,26 @@ void webMaintenanceRegister(AsyncWebServer& server) {
                                                    (uint8_t)addr));
   });
 
+  // Feature gates (#409): flip a unit's UNIT_GATE_* byte over the wire. This
+  // is what lets #407's motion changes ship dormant — enabling one is a curl
+  // per unit instead of a second fleet reflash. Same op contract as the rest;
+  // the unit's read-back decides whether it landed, so a refused bit comes
+  // back as a postcondition failure rather than a phantom success.
+  server.on("/unit/gates", HTTP_POST, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    long gates = 0;
+    if (!maintRequireLongParam(request, "gates", gates)) return;
+    MaintVerdict verdict = maintValidateGates(gates);
+    if (verdict.httpStatus != 200) {
+      request->send(verdict.httpStatus, "text/plain", verdict.message);
+      return;
+    }
+    maintEnqueue(request, makeSetGatesCommand(displayNextMaintSeq(),
+                                              (uint8_t)addr, (uint8_t)gates));
+  });
+
   // On-demand unit self-test (#265): the unit measures its own mechanics
   // (steps/rev, hall window, rev time) over ~2 revolutions. Same op
   // contract as identify/home; the measurements come back via

@@ -109,8 +109,18 @@ static_assert(EE_RESERVED_BASE <= EE_ODO_RING_BASE,
 #define UNIT_GATE_IDLE_HALL_CHECK   0x01  // #268 idle hall consistency check
 #define UNIT_GATE_SCHEDULED_REHOME  0x02  // #269 scheduled verification re-home
 
+// Every bit this firmware has code for. SET_GATES (#409) refuses anything
+// outside it: a unit must never persist a gate it will not act on, or
+// /units/health reports a feature as enabled that does not exist here.
+#define UNIT_GATE_ALL \
+  (UNIT_GATE_IDLE_HALL_CHECK | UNIT_GATE_SCHEDULED_REHOME)
+
 inline bool unitGateEnabled(uint8_t gates, uint8_t gate) {
   return (gates & gate) != 0;
+}
+
+inline bool unitGateBitsKnown(uint8_t gates) {
+  return (gates & (uint8_t)~UNIT_GATE_ALL) == 0;
 }
 
 // Masked XOR over a block's payload. The mask keeps an all-zero block's
