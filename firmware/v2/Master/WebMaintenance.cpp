@@ -383,11 +383,31 @@ void webMaintenanceRegister(AsyncWebServer& server) {
   // progress in /units/health's reflash object. Text/alignment/speed baked
   // at enqueue (the job re-shows them; reflashed units homed to blank).
   server.on("/reflash-units", HTTP_POST, [](AsyncWebServerRequest* request) {
-    SerialPrintln(F("Unit reflash requested from web UI"));
     DisplaySnapshot snap = displaySnapshotGet();
+    // Optional ?address=N narrows the job to one unit (#412). Absent = the
+    // whole fleet, unchanged. Validated through maintValidateAddress so a
+    // targeted reflash gets the same range and protocol-mismatch treatment as
+    // every other single-unit op — except that a protocol MISMATCH must still
+    // be reflashable, since converging it is the only way it becomes useful
+    // again (#405). So range-check only, like /unit/reboot.
+    int addr = 0;
+    if (request->hasParam("address")) {
+      long parsed = 0;
+      if (!maintRequireLongParam(request, "address", parsed)) return;
+      if (parsed < 1 || parsed > UNITS_AMOUNT) {
+        request->send(400, "text/plain",
+                      F("Address must be within the managed unit range"));
+        return;
+      }
+      addr = (int)parsed;
+      SerialPrintf("Unit reflash requested for unit 0x%02x\n", addr);
+    } else {
+      SerialPrintln(F("Unit reflash requested from web UI"));
+    }
     WebContentSnapshot content = webDisplayContentSnapshot();
     maintEnqueue(request, makeReflashUnitsCommand(
                               displayNextMaintSeq(), String(snap.currentText),
-                              content.alignment, content.flapSpeed));
+                              content.alignment, content.flapSpeed,
+                              (uint8_t)addr));
   });
 }

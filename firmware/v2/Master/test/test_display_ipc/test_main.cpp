@@ -260,7 +260,7 @@ static void test_gate_reopens_after_job_finishes() {
 static void test_reflash_units_command_counts_without_touching_text() {
   DisplaySnapshot snap;
   displayApplyCommand(snap, makeShowTextCommand("14:44", "center", 80));
-  DisplayCommand cmd = makeReflashUnitsCommand(7, "14:44", "center", 80);
+  DisplayCommand cmd = makeReflashUnitsCommand(7, "14:44", "center", 80, 0);
   TEST_ASSERT_TRUE(displayApplyCommand(snap, cmd));
   TEST_ASSERT_EQUAL_STRING("14:44", snap.currentText);
   TEST_ASSERT_EQUAL(2, snap.commandsProcessed);

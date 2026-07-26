@@ -59,7 +59,7 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/unit/clear-address",     "clear a unit's EEPROM I2C address"},
   {"GET",  "/unit/op-result",         "result of the last {seq} maintenance op"},
   {"POST", "/reset-units",            "home every unit"},
-  {"POST", "/reflash-units",          "reflash every unit over twiboot"},
+  {"POST", "/reflash-units",          "reflash units over twiboot (?address=N for one)"},
   {"POST", "/mqtt/discover",          "start an mDNS MQTT broker scan"},
   {"GET",  "/mqtt/discover",          "mDNS MQTT broker scan result"},
   {"POST", "/cluster/config",         "set cluster leader member table"},

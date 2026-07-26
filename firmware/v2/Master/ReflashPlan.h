@@ -20,6 +20,26 @@
 // (~15 ms) + twiboot init. 500 ms is generous (v1 value).
 #define TWIBOOT_STARTUP_MS 500
 
+// Halt a run after this many CONSECUTIVE unit failures (#412). The job used to
+// log a failed unit and walk straight on to the next one, so an image that
+// cannot flash — or flashes and does not boot — took the whole row down one
+// unit at a time with nobody stopping it.
+//
+// Consecutive rather than total, because the two failure shapes need opposite
+// answers and their signatures differ:
+//   A BAD IMAGE fails on every unit it touches. Two in a row is already
+//       conclusive, and the run stops having burned two rather than 21.
+//   A DEAD UNIT fails alone. a15 is hall-dead today; a first-failure halt would
+//       let it wedge every fleet converge from now on, including the unattended
+//       boot auto-install. One success resets the count and the sweep continues.
+// Applies to both sweeps. The boot path is where nobody is watching, which is
+// where an unbounded failure walk is worst.
+#define REFLASH_MAX_CONSECUTIVE_FAILURES 2
+
+inline bool reflashShouldHalt(uint8_t consecutiveFailures) {
+  return consecutiveFailures >= REFLASH_MAX_CONSECUTIVE_FAILURES;
+}
+
 // A unit that reports a protocol version we do not speak (#405). KNOWN
 // different, not merely unreadable — the version read succeeded and carried a
 // number that is not ours. We cannot drive such a unit at all (see
@@ -76,6 +96,31 @@ inline int reflashCollectFlashTargets(const UnitFacts* facts, int maxUnits,
     if (facts[i].state == 2) outAddrs[n++] = (uint8_t)(base + i);
   }
   return n;
+}
+
+// Narrow any collected target list to a single address; 0 means "no filter"
+// and returns the list untouched (0 is the general-call address, never a
+// unit's, so it is free to use as the sentinel).
+//
+// A filter rather than three extra parameters: all three collectors above
+// answer "who matches this predicate", and "…and is this one unit" is a
+// separate question that composes with each of them identically. It is
+// applied to BOTH the reboot sweep and the post-rescan flash list, so a unit
+// stranded in twiboot by an earlier attempt is not swept up by a run aimed at
+// a different address.
+//
+// Exists for the #407 campaign (#412): a day-0 EEPROM erase on a wire contract
+// that has never run on hardware is not something to hand a 21-unit sweep. The
+// operator flashes one, inspects it, and decides.
+inline int reflashFilterToAddress(uint8_t* addrs, int n, uint8_t onlyAddr) {
+  if (onlyAddr == 0) return n;
+  for (int i = 0; i < n; i++) {
+    if (addrs[i] == onlyAddr) {
+      addrs[0] = onlyAddr;
+      return 1;
+    }
+  }
+  return 0;
 }
 
 // --- progress (published in the DisplaySnapshot, rendered on the web) ---------

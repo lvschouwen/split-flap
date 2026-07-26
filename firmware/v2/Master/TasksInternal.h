@@ -24,6 +24,8 @@ int effectiveWidthOverride();
 
 // True while the #289 unit-count override pins the width (boot log line).
 bool tasksUnitCountOverridePinned();
+// #412: read by displayTask at the boot auto-install gate.
+bool tasksReflashOnBoot();
 
 // Task entry points started by tasksInit().
 void displayTaskMain(void*);

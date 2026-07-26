@@ -213,13 +213,17 @@ inline DisplayCommand makeStopCommand(uint32_t seq) {
 // Same bake-at-enqueue rule as ResetUnits (#205): the reflash job's
 // end-of-run re-show uses the content of the moment the operator clicked —
 // reflashed units home to blank, so the job puts the display back itself.
+// `addr` 0 = the whole fleet (the historical behaviour); 1..126 targets one
+// unit (#412). 0 is the general-call address and never a unit's, so it is a
+// free sentinel — no extra field needed on the queue-copied POD.
 inline DisplayCommand makeReflashUnitsCommand(uint32_t seq,
                                               const String& currentText,
                                               const String& alignment,
-                                              int speed) {
+                                              int speed, uint8_t addr) {
   DisplayCommand cmd = makeShowTextCommand(currentText, alignment, speed);
   cmd.opcode = DisplayOpcode::ReflashUnits;
   cmd.seq = seq;
+  cmd.unitAddress = addr;
   return cmd;
 }
 

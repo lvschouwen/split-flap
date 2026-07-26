@@ -49,6 +49,12 @@ struct MasterSettings {
                            // state (OtaService), never persisted here
   int unitCountOverride;   // #289 dummy mode: 0 = auto (probe-derived
                            // width), 1..UNITS_AMOUNT pins the width
+  bool reflashOnBoot;      // #412: false suppresses the boot auto-install so
+                           // an operator can converge the fleet unit by unit.
+                           // Defaults TRUE — the auto-install is the
+                           // unattended recovery path for a unit that came
+                           // back from a failed flash, and defaulting it off
+                           // would silently strand those.
 };
 
 // NVS keys (hard 15-char limit).
@@ -66,6 +72,7 @@ struct MasterSettings {
 #define SETTINGS_KEY_MQTT_PASS    "mqttPass"
 #define SETTINGS_KEY_INTENDED_VER "intendedVer"
 #define SETTINGS_KEY_UNIT_COUNT   "unitCount"
+#define SETTINGS_KEY_REFLASH_BOOT "reflashOnBoot"
 
 // Bounded free-text sanitation: printable ASCII and shorter than the
 // limit, else default.
@@ -139,6 +146,7 @@ inline MasterSettings loadSettings(SettingsStore& store) {
   s.intendedVersion =
       sanitizeIntendedVersion(store.getString(SETTINGS_KEY_INTENDED_VER, ""));
 
+  s.reflashOnBoot = store.getInt(SETTINGS_KEY_REFLASH_BOOT, 1) != 0;
   s.unitCountOverride = store.getInt(SETTINGS_KEY_UNIT_COUNT, 0);
   if (s.unitCountOverride < 0 || s.unitCountOverride > UNITS_AMOUNT) {
     s.unitCountOverride = 0;  // auto
@@ -177,6 +185,10 @@ inline void saveIntendedVersion(SettingsStore& store, const String& v) {
 
 inline void saveUnitCountOverride(SettingsStore& store, int v) {
   store.putInt(SETTINGS_KEY_UNIT_COUNT, v);
+}
+
+inline void saveReflashOnBoot(SettingsStore& store, bool v) {
+  store.putInt(SETTINGS_KEY_REFLASH_BOOT, v ? 1 : 0);
 }
 
 // WiFi credentials (#188): always written as a pair — the portal submits

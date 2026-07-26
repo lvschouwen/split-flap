@@ -154,6 +154,68 @@ static void test_batch_constants() {
   TEST_ASSERT_EQUAL(500, TWIBOOT_STARTUP_MS);
 }
 
+// --- single-unit targeting (#412) --------------------------------------------
+// The #407 image is a day-0 EEPROM erase on a contract that has never run on
+// hardware, so the campaign flashes one unit, inspects it, and only then moves
+// on. The filter composes with all three collectors rather than being threaded
+// through each of them.
+
+static void test_zero_address_means_the_whole_fleet() {
+  uint8_t addrs[4] = {1, 2, 3, 4};
+  TEST_ASSERT_EQUAL(4, reflashFilterToAddress(addrs, 4, 0));
+  TEST_ASSERT_EQUAL_UINT8(1, addrs[0]);
+  TEST_ASSERT_EQUAL_UINT8(4, addrs[3]);
+}
+
+static void test_a_targeted_address_narrows_to_exactly_that_unit() {
+  uint8_t addrs[4] = {1, 2, 3, 4};
+  TEST_ASSERT_EQUAL(1, reflashFilterToAddress(addrs, 4, 3));
+  TEST_ASSERT_EQUAL_UINT8(3, addrs[0]);
+}
+
+// The targeted unit is not in the plan — it is already on the bundle, silent,
+// or (for the flash phase) never made it into twiboot. An empty plan finishes
+// Done/Ok, which is the honest answer: nothing to do at that address.
+static void test_a_targeted_address_absent_from_the_plan_yields_nothing() {
+  uint8_t addrs[3] = {1, 2, 4};
+  TEST_ASSERT_EQUAL(0, reflashFilterToAddress(addrs, 3, 3));
+  TEST_ASSERT_EQUAL(0, reflashFilterToAddress(addrs, 0, 1));
+}
+
+// The point of filtering BOTH phases: a unit stranded in twiboot by an earlier
+// attempt must not be swept up by a run targeting a different address.
+static void test_filtering_the_flash_phase_leaves_a_stranded_unit_alone() {
+  UnitFacts facts[4];
+  for (int i = 0; i < 4; i++) facts[i] = UnitFacts{};
+  facts[1].state = 2;  // addr 2 stranded in twiboot from a previous attempt
+  facts[2].state = 2;  // addr 3 is the one we are targeting now
+  uint8_t addrs[4];
+  int n = reflashCollectFlashTargets(facts, 4, 1, addrs);
+  TEST_ASSERT_EQUAL(2, n);
+  n = reflashFilterToAddress(addrs, n, 3);
+  TEST_ASSERT_EQUAL(1, n);
+  TEST_ASSERT_EQUAL_UINT8(3, addrs[0]);
+}
+
+// --- consecutive-failure halt (#412) ----------------------------------------
+
+static void test_a_lone_failure_does_not_halt_the_run() {
+  // a15 is hall-dead. It must not wedge every future fleet converge.
+  TEST_ASSERT_FALSE(reflashShouldHalt(0));
+  TEST_ASSERT_FALSE(reflashShouldHalt(1));
+}
+
+static void test_two_in_a_row_halts() {
+  TEST_ASSERT_TRUE(reflashShouldHalt(REFLASH_MAX_CONSECUTIVE_FAILURES));
+  TEST_ASSERT_TRUE(reflashShouldHalt(REFLASH_MAX_CONSECUTIVE_FAILURES + 1));
+}
+
+// The threshold has to be low enough that a bad image cannot take the row.
+static void test_the_halt_threshold_bounds_the_damage() {
+  TEST_ASSERT_LESS_THAN_UINT8(REFLASH_BATCH_SIZE,
+                              REFLASH_MAX_CONSECUTIVE_FAILURES);
+}
+
 // --- progress state machine ----------------------------------------------------
 
 static void test_fresh_progress_is_idle_and_not_in_progress() {
@@ -291,6 +353,13 @@ int main(int, char**) {
   RUN_TEST(test_collect_flash_targets_takes_bootloader_units_only);
   RUN_TEST(test_collect_outdated_targets_skips_unknown_revs);
   RUN_TEST(test_batch_constants);
+  RUN_TEST(test_zero_address_means_the_whole_fleet);
+  RUN_TEST(test_a_targeted_address_narrows_to_exactly_that_unit);
+  RUN_TEST(test_a_targeted_address_absent_from_the_plan_yields_nothing);
+  RUN_TEST(test_filtering_the_flash_phase_leaves_a_stranded_unit_alone);
+  RUN_TEST(test_a_lone_failure_does_not_halt_the_run);
+  RUN_TEST(test_two_in_a_row_halts);
+  RUN_TEST(test_the_halt_threshold_bounds_the_damage);
   RUN_TEST(test_fresh_progress_is_idle_and_not_in_progress);
   RUN_TEST(test_begin_enters_and_counts);
   RUN_TEST(test_unit_start_and_results_accumulate);

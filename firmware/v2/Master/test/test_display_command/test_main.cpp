@@ -178,12 +178,29 @@ static void test_reset_units_bakes_enqueue_time_text_and_show_params() {
 static void test_reflash_units_bakes_enqueue_time_show_params() {
   // Same bake-at-enqueue rule as ResetUnits (#205): the job's end-of-run
   // re-show uses the content of the moment the operator clicked.
-  DisplayCommand cmd = makeReflashUnitsCommand(21, "14:44", "center", 80);
+  DisplayCommand cmd = makeReflashUnitsCommand(21, "14:44", "center", 80, 0);
   TEST_ASSERT_EQUAL(DisplayOpcode::ReflashUnits, cmd.opcode);
   TEST_ASSERT_EQUAL_UINT32(21, cmd.seq);
   TEST_ASSERT_EQUAL_STRING("14:44", cmd.text);
   TEST_ASSERT_EQUAL(DisplayAlignment::Center, cmd.alignment);
   TEST_ASSERT_EQUAL_UINT8(80, cmd.speed);
+}
+
+// 0 = whole fleet, N = that unit only (#412). unitAddress is unused on this
+// opcode otherwise, and 0 is the general-call address, so it is a free
+// sentinel rather than a new queue field.
+static void test_reflash_units_defaults_to_the_whole_fleet() {
+  DisplayCommand cmd = makeReflashUnitsCommand(22, "HI", "left", 50, 0);
+  TEST_ASSERT_EQUAL_UINT8(0, cmd.unitAddress);
+}
+
+static void test_reflash_units_carries_a_single_target() {
+  DisplayCommand cmd = makeReflashUnitsCommand(23, "HI", "left", 50, 9);
+  TEST_ASSERT_TRUE(cmd.opcode == DisplayOpcode::ReflashUnits);
+  TEST_ASSERT_EQUAL_UINT8(9, cmd.unitAddress);
+  // The baked re-show params survive the extra argument.
+  TEST_ASSERT_EQUAL_STRING("HI", cmd.text);
+  TEST_ASSERT_EQUAL_UINT8(50, cmd.speed);
 }
 
 static void test_reflash_units_opcode_name() {
@@ -279,6 +296,8 @@ int main(int, char**) {
   RUN_TEST(test_stop_command_carries_seq_only);
   RUN_TEST(test_describe_names_maintenance_opcodes);
   RUN_TEST(test_reflash_units_bakes_enqueue_time_show_params);
+  RUN_TEST(test_reflash_units_defaults_to_the_whole_fleet);
+  RUN_TEST(test_reflash_units_carries_a_single_target);
   RUN_TEST(test_reflash_units_opcode_name);
   RUN_TEST(test_selftest_command_carries_seq_and_address);
   RUN_TEST(test_selftest_opcode_name);
