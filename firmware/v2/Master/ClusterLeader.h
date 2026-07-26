@@ -24,6 +24,7 @@
 
 #include "ClusterLayout.h"
 #include "ClusterLeaderPolicy.h"
+#include "DisplayCommand.h"  // DisplaySource on the submit surface (#403)
 #include "SettingsStore.h"
 
 struct ClusterLeaderMemberStatus {

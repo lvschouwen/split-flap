@@ -54,10 +54,10 @@ static String sseDisplayPayload(const DisplaySnapshot& snap,
                                        content.alignment);
   }
   if (rowsKeyOut != nullptr) *rowsKeyOut = displayEventRowsKey(rows, rowCount);
-  uint32_t ageSeconds =
-      snap.sourceAtMs == 0 ? 0 : (millis() - snap.sourceAtMs) / 1000;
-  return buildDisplayEventJson(snap.currentText, snap.source, ageSeconds, rows,
-                               rowCount, selfRow);
+  return buildDisplayEventJson(snap.currentText, snap.source,
+                               displaySourceAgeSeconds(millis(),
+                                                       snap.sourceAtMs),
+                               rows, rowCount, selfRow);
 }
 
 void webContentRegister(AsyncWebServer& server) {
@@ -125,14 +125,17 @@ void webDisplayEventsTick() {
 
   // Cheap pre-check before paying for the wall reconstruction (mutex +
   // String churn, every 100 ms otherwise): only rebuild when the own text
-  // changed, the grid generation moved, or leading flipped. The rows-key
-  // due-check below stays authoritative for what actually gets pushed.
+  // changed, its producer changed (#403 — the same string from a different
+  // source is a real re-attribution), the grid generation moved, or leading
+  // flipped. The rows-key due-check below stays authoritative for what
+  // actually gets pushed.
   static uint32_t lastGridGen = 0;
   static bool lastLeading = false;
   bool leading = clusterLeaderEnabled();
   uint32_t gridGen = leading ? clusterLeaderGridGeneration() : 0;
   if (strncmp(tracker.lastText, snap.currentText, DISPLAY_CMD_TEXT_LEN) == 0 &&
-      leading == lastLeading && gridGen == lastGridGen) {
+      tracker.lastSource == snap.source && leading == lastLeading &&
+      gridGen == lastGridGen) {
     return;
   }
   lastLeading = leading;
@@ -140,7 +143,7 @@ void webDisplayEventsTick() {
 
   String rowsKey;
   String payload = sseDisplayPayload(snap, &rowsKey);
-  if (!displayEventDue(tracker, snap.currentText, rowsKey)) return;
+  if (!displayEventDue(tracker, snap.currentText, snap.source, rowsKey)) return;
   sseEvents.send(payload.c_str(), "display", millis());
 }
 

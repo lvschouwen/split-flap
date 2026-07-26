@@ -152,8 +152,7 @@ String buildCurrentSettingsJson() {
   f.lastWrittenText = String(snap.currentText);
   // #403: same snapshot copy as the text, so the pair can never disagree.
   f.displaySource = displaySourceName(snap.source);
-  f.displaySourceAgeSeconds =
-      snap.sourceAtMs == 0 ? 0 : (millis() - snap.sourceAtMs) / 1000;
+  f.displaySourceAgeSeconds = displaySourceAgeSeconds(millis(), snap.sourceAtMs);
   f.mqttConnected = mqttIsConnected();
   f.version = GIT_REV;
   f.sketchMd5 = ESP.getSketchMD5();

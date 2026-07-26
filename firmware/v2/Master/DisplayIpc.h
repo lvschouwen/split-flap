@@ -110,6 +110,17 @@ inline bool displayAcceptsCommand(const DisplaySnapshot& snap,
   return op == DisplayOpcode::Stop;
 }
 
+// Seconds since the current text landed (#403) — a duration, so it stays
+// meaningful on a board that has never synced NTP. Unsigned subtraction makes
+// the 49.7-day millis() rollover a non-event. sourceAtMs 0 means nothing has
+// driven the display: by the time the first command applies, displayTask has
+// already spent its 1500 ms pre-probe delay, so millis() is never really 0 and
+// the value is free to use as a sentinel.
+inline uint32_t displaySourceAgeSeconds(uint32_t nowMs, uint32_t sourceAtMs) {
+  if (sourceAtMs == 0) return 0;
+  return (uint32_t)(nowMs - sourceAtMs) / 1000;
+}
+
 // Applies one command's state effects to the snapshot. Returns false (no
 // mutation) for commands the worker can't execute. Probe only counts here —
 // its facts arrive through displayApplyUnitFacts() after the bus scan.

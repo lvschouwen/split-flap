@@ -348,6 +348,29 @@ static void test_reset_and_reflash_reshows_do_not_reassign_authorship() {
   TEST_ASSERT_EQUAL_STRING("HELD", snap.currentText);
 }
 
+// The age the console renders. Unsigned subtraction, so the 49.7-day millis()
+// rollover is a non-event; sourceAtMs 0 means nothing has driven the display.
+static void test_source_age_counts_seconds_since_the_text_landed() {
+  TEST_ASSERT_EQUAL_UINT32(0, displaySourceAgeSeconds(5000, 5000));
+  TEST_ASSERT_EQUAL_UINT32(1, displaySourceAgeSeconds(6200, 5000));
+  TEST_ASSERT_EQUAL_UINT32(47, displaySourceAgeSeconds(52000, 5000));
+}
+
+static void test_source_age_is_zero_when_nothing_has_driven_the_display() {
+  TEST_ASSERT_EQUAL_UINT32(0, displaySourceAgeSeconds(999999, 0));
+}
+
+static void test_source_age_survives_the_millis_rollover() {
+  // Stamped 16 ms before the wrap, read 100 ms after it: 116 ms, not 49 days.
+  TEST_ASSERT_EQUAL_UINT32(0, displaySourceAgeSeconds(100, 0xFFFFFFF0));
+  // A full minute across the same boundary: 0xFFFFFF00 + 60000 wraps to 59744.
+  TEST_ASSERT_EQUAL_UINT32(60, displaySourceAgeSeconds(59744, 0xFFFFFF00));
+  // The one blind spot, stated rather than hidden: a stamp landing on exactly
+  // millis() == 0 is indistinguishable from "never driven". displayTask's
+  // 1500 ms pre-probe delay means the first command can't apply that early.
+  TEST_ASSERT_EQUAL_UINT32(0, displaySourceAgeSeconds(5000, 0));
+}
+
 static void test_reflash_json_shapes() {
   char buf[112];
   ReflashProgress p;
@@ -613,6 +636,9 @@ int main(int, char**) {
   RUN_TEST(test_a_leader_render_outranks_the_previous_local_source);
   RUN_TEST(test_stop_clears_the_source_with_the_text);
   RUN_TEST(test_reset_and_reflash_reshows_do_not_reassign_authorship);
+  RUN_TEST(test_source_age_counts_seconds_since_the_text_landed);
+  RUN_TEST(test_source_age_is_zero_when_nothing_has_driven_the_display);
+  RUN_TEST(test_source_age_survives_the_millis_rollover);
   RUN_TEST(test_reflash_json_shapes);
   RUN_TEST(test_reflash_json_carries_the_halt);
   RUN_TEST(test_fresh_snapshot_selftest_slot_is_pending);

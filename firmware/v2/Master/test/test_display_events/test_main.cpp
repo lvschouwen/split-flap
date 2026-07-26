@@ -14,21 +14,24 @@ void tearDown() {}
 
 static void test_first_nonempty_text_is_due_once() {
   DisplayEventTracker t;
-  TEST_ASSERT_TRUE(displayEventDue(t, "18:56"));
-  TEST_ASSERT_FALSE(displayEventDue(t, "18:56"));  // unchanged — no push
+  TEST_ASSERT_TRUE(displayEventDue(t, "18:56", DisplaySource::Web));
+  // Unchanged text from the same producer — no push.
+  TEST_ASSERT_FALSE(displayEventDue(t, "18:56", DisplaySource::Web));
 }
 
 static void test_empty_initial_text_is_not_due() {
   DisplayEventTracker t;
-  TEST_ASSERT_FALSE(displayEventDue(t, ""));  // tracker starts at ""
+  // Tracker starts at ""/none — a blank display nobody has driven is exactly
+  // the state it already believes it is in.
+  TEST_ASSERT_FALSE(displayEventDue(t, "", DisplaySource::Unknown));
 }
 
 static void test_change_and_stop_clear_are_due() {
   DisplayEventTracker t;
-  TEST_ASSERT_TRUE(displayEventDue(t, "18:56"));
-  TEST_ASSERT_TRUE(displayEventDue(t, "18:57"));
-  TEST_ASSERT_TRUE(displayEventDue(t, ""));  // Stop clears the text
-  TEST_ASSERT_FALSE(displayEventDue(t, ""));
+  TEST_ASSERT_TRUE(displayEventDue(t, "18:56", DisplaySource::Web));
+  TEST_ASSERT_TRUE(displayEventDue(t, "18:57", DisplaySource::Web));
+  TEST_ASSERT_TRUE(displayEventDue(t, "", DisplaySource::Web));  // Stop clears
+  TEST_ASSERT_FALSE(displayEventDue(t, "", DisplaySource::Web));
 }
 
 static void test_overlong_text_is_truncated_not_overflowed() {
@@ -36,10 +39,10 @@ static void test_overlong_text_is_truncated_not_overflowed() {
   char big[DISPLAY_CMD_TEXT_LEN * 2];
   memset(big, 'A', sizeof(big) - 1);
   big[sizeof(big) - 1] = '\0';
-  TEST_ASSERT_TRUE(displayEventDue(t, big));
+  TEST_ASSERT_TRUE(displayEventDue(t, big, DisplaySource::Web));
   TEST_ASSERT_EQUAL(DISPLAY_CMD_TEXT_LEN, (int)strlen(t.lastText));
   // Same overlong text again: identical within the tracked window.
-  TEST_ASSERT_FALSE(displayEventDue(t, big));
+  TEST_ASSERT_FALSE(displayEventDue(t, big, DisplaySource::Web));
 }
 
 static void test_payload_shape_and_escaping() {
@@ -63,6 +66,18 @@ static void test_payload_names_the_producer_and_its_age() {
       "{\"text\":\"X\",\"source\":\"leader\",\"sourceAge\":47}", json.c_str());
 }
 
+// A producer change with byte-identical text is still a change (#403): the
+// wall showing "STATUS OK" from MQTT and then the same string from a browser
+// is a real, user-visible re-attribution. Keying the push on text alone left
+// a connected console naming the wrong producer until the 5 s poll caught up.
+static void test_source_change_alone_is_due() {
+  DisplayEventTracker t;
+  TEST_ASSERT_TRUE(displayEventDue(t, "STATUS OK", DisplaySource::Mqtt));
+  TEST_ASSERT_FALSE(displayEventDue(t, "STATUS OK", DisplaySource::Mqtt));
+  TEST_ASSERT_TRUE(displayEventDue(t, "STATUS OK", DisplaySource::Web));
+  TEST_ASSERT_FALSE(displayEventDue(t, "STATUS OK", DisplaySource::Web));
+}
+
 // --- wall mirror rows (#277) — leader-only payload extension ---------------------
 
 static void test_rows_payload_shape() {
@@ -75,7 +90,8 @@ static void test_rows_payload_shape() {
 }
 
 static void test_zero_rows_keeps_plain_payload() {
-  String json = buildDisplayEventJson("X", DisplaySource::Clock, 3, nullptr, 0, 0);
+  String json =
+      buildDisplayEventJson("X", DisplaySource::Clock, 3, nullptr, 0, 0);
   TEST_ASSERT_EQUAL_STRING(
       "{\"text\":\"X\",\"source\":\"clock\",\"sourceAge\":3}", json.c_str());
 }
@@ -83,20 +99,25 @@ static void test_zero_rows_keeps_plain_payload() {
 static void test_row_change_alone_is_due() {
   DisplayEventTracker t;
   String rows[2] = {String("A"), String("B")};
-  TEST_ASSERT_TRUE(displayEventDue(t, "X", displayEventRowsKey(rows, 2)));
-  TEST_ASSERT_FALSE(displayEventDue(t, "X", displayEventRowsKey(rows, 2)));
+  TEST_ASSERT_TRUE(displayEventDue(t, "X", DisplaySource::Web,
+                                   displayEventRowsKey(rows, 2)));
+  TEST_ASSERT_FALSE(displayEventDue(t, "X", DisplaySource::Web,
+                                   displayEventRowsKey(rows, 2)));
   rows[1] = "CHANGED";  // a follower-only row changed; own text did not
-  TEST_ASSERT_TRUE(displayEventDue(t, "X", displayEventRowsKey(rows, 2)));
+  TEST_ASSERT_TRUE(displayEventDue(t, "X", DisplaySource::Web,
+                                   displayEventRowsKey(rows, 2)));
 }
 
 static void test_leaving_cluster_mode_is_due() {
   DisplayEventTracker t;
   String rows[1] = {String("A")};
-  TEST_ASSERT_TRUE(displayEventDue(t, "X", displayEventRowsKey(rows, 1)));
+  TEST_ASSERT_TRUE(displayEventDue(t, "X", DisplaySource::Web,
+                                   displayEventRowsKey(rows, 1)));
   // Cluster disabled: same text, empty rows key — still a push (the
   // browser must collapse back to the single-row mirror).
-  TEST_ASSERT_TRUE(displayEventDue(t, "X", String()));
-  TEST_ASSERT_FALSE(displayEventDue(t, "X"));  // plain API sees it settled
+  TEST_ASSERT_TRUE(displayEventDue(t, "X", DisplaySource::Web, String()));
+  // The plain API sees it settled.
+  TEST_ASSERT_FALSE(displayEventDue(t, "X", DisplaySource::Web));
 }
 
 static void test_rows_key_separates_row_boundaries() {
@@ -114,6 +135,7 @@ int main(int, char**) {
   RUN_TEST(test_payload_shape_and_escaping);
   RUN_TEST(test_payload_empty_text);
   RUN_TEST(test_payload_names_the_producer_and_its_age);
+  RUN_TEST(test_source_change_alone_is_due);
   RUN_TEST(test_rows_payload_shape);
   RUN_TEST(test_zero_rows_keeps_plain_payload);
   RUN_TEST(test_row_change_alone_is_due);
