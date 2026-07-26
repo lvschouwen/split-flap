@@ -27,11 +27,21 @@
 // #269's scheduled verification re-home is what covers the rest; this is the
 // free half that costs one digitalRead every 250 ms.
 //
-// WHY A FALSE POSITIVE IS SELF-LIMITING. The re-home it triggers resyncs the
-// position belief to the physical edge, so an alarm caused by stale belief
-// error cannot repeat — the corrected belief then agrees with the sensor. The
-// only way to flap the detector forever is a systematically wrong WINDOW, and
-// that is what the two-tier margin below guards.
+// TWO CLASSES OF FALSE POSITIVE, AND WHY ONLY ONE IS SELF-LIMITING.
+//   STALE BELIEF — the re-home resyncs the position to the physical edge, so
+//       the corrected belief agrees with the sensor and the alarm cannot
+//       repeat. This one really is self-limiting.
+//   WRONG WINDOW — the re-home cannot touch it. calibrate() re-parks the drum
+//       at the same physical spot and the model still disagrees, so the check
+//       re-arms every cooldown for the life of the unit.
+// An earlier version of this header claimed the two-tier margin guarded the
+// second case. It does not, and cannot: the margin bounds how far a reading
+// may be off, while the dangerous input is a reading that is simply no longer
+// true. `selfTestLastHallWindow` is a HISTORICAL record that only moves when
+// someone re-runs the self-test, so a unit whose magnet weakened still reports
+// the width it had when healthy — which is exactly the decline #406 exists to
+// record. Hence two guards below that do not depend on the margin at all: a
+// plausibility band on the input, and idleHallStandDown() on the outcome.
 
 #include <stdint.h>
 
@@ -43,6 +53,24 @@
 // a15's healthy measurement; every other unit's is unknown until it measures
 // its own.
 #define IDLE_HALL_WINDOW_ASSUMED_STEPS   46
+
+// A measured window is only trusted inside this band; outside it the assumed
+// pair is used instead. Both ends are load-bearing, and neither is arbitrary:
+//
+//   TOO WIDE asserts a magnet where there is none. A drum that binds inside
+//   the window during the self-test keeps counting hall-low samples, so a
+//   several-hundred-step "window" is recordable. At margin 12 that claims LOW
+//   across most of the revolution, and every park outside the real ~46 steps
+//   contradicts forever.
+//   TOO NARROW asserts the opposite. The self-test's phase-1 approach exits on
+//   a single un-debounced low sample, so one glitch seeds a 1-step window —
+//   which claims HIGH from position 13 up, while a drum parked inside the real
+//   magnet reads LOW.
+//
+// A hall window is one magnet passing one sensor: a couple of flaps wide at
+// most. Anything outside that is a broken measurement, not a narrow drum.
+#define IDLE_HALL_WINDOW_TRUST_MIN_STEPS 23
+#define IDLE_HALL_WINDOW_TRUST_MAX_STEPS 127
 
 // Steps either side of a window edge where no verdict is issued. Two tiers,
 // because the two window sources carry different uncertainty:
@@ -70,15 +98,25 @@ struct IdleHallWindow {
   uint16_t margin;  // unjudgeable band either side of each edge
 };
 
-// Which window model to police against. A MEASURED reading is trusted all the
-// way down: a degrading sensor genuinely measures a smaller window, and
-// falling back to the constant there would assert a magnet where the unit has
-// already proven there is none. Only 0 (never measured) and a physically
-// impossible width fall back.
+// Which window model to police against. A measurement is trusted only inside
+// the plausibility band above; 0 (never measured) and anything outside it fall
+// back to the assumed pair, whose wide margin asserts nothing it cannot back.
+//
+// The earlier version trusted any width from 1 to a quarter-revolution on the
+// reasoning that a degrading sensor genuinely measures a smaller window. That
+// reasoning was right about the physics and wrong about the input: the stored
+// value is a HISTORICAL record (#406) that only changes when someone re-runs
+// the self-test, so it is stale by construction — the unit whose window shrank
+// still reports the width it had when healthy. Trusting a stale reading with
+// the tight margin is what turns this check into a re-home loop, which is why
+// the caller also disarms on futile re-homes: the band narrows the input, the
+// disarm bounds every cause the band cannot see.
 inline IdleHallWindow idleHallResolveWindow(uint16_t measuredSteps,
                                             uint16_t stepsPerRev) {
   IdleHallWindow w;
-  if (measuredSteps == 0 || measuredSteps > stepsPerRev / 4) {
+  (void)stepsPerRev;
+  if (measuredSteps < IDLE_HALL_WINDOW_TRUST_MIN_STEPS ||
+      measuredSteps > IDLE_HALL_WINDOW_TRUST_MAX_STEPS) {
     w.steps = IDLE_HALL_WINDOW_ASSUMED_STEPS;
     w.margin = IDLE_HALL_MARGIN_ASSUMED_STEPS;
     return w;
@@ -86,6 +124,23 @@ inline IdleHallWindow idleHallResolveWindow(uint16_t measuredSteps,
   w.steps = measuredSteps;
   w.margin = IDLE_HALL_MARGIN_MEASURED_STEPS;
   return w;
+}
+
+// A re-home this check armed either measured a real drift deviation or it did
+// not. One that did not is proof the WINDOW model was wrong, not the belief —
+// calibrate() resyncs to the physical edge and re-parks at the same place, so
+// the same contradiction returns and the detector re-arms every cooldown for
+// the life of the unit. Count those and stand down.
+//
+// This is the backstop the module's original "a false positive is
+// self-limiting" claim was missing: that holds for stale-belief alarms, which
+// the re-home genuinely corrects, and not for a wrong window, which it cannot
+// touch. Deliberately a since-boot RAM counter — a power cycle is a free
+// retry, and a re-run self-test that fixes the window comes with one.
+#define IDLE_HALL_FUTILE_REHOME_LIMIT 3
+
+inline bool idleHallStandDown(uint8_t futileRehomes) {
+  return futileRehomes >= IDLE_HALL_FUTILE_REHOME_LIMIT;
 }
 
 // What the sensor should read with the drum parked `position` steps past the

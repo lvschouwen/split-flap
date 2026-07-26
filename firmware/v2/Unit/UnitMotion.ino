@@ -618,11 +618,20 @@ void runSelfTest() {
   // reading becomes the baseline this unit is compared against forever;
   // later ones move `last`. a15's healthy hallWindow of 46 survived only in
   // a session note, so "46 when new, failing now" was a thing a human had to
-  // remember — now the unit carries it. A failed test measured nothing and
-  // records nothing, so a zero can neither become the baseline nor erase a
-  // real last reading.
-  unitEeRecordSelfTest(lifetime, selfTest.hallWindowSteps, selfTest.stepsPerRev);
-  persistLifetimeHealth();
+  // remember — now the unit carries it.
+  //
+  // ONLY a passing run records. #404 deliberately preserves whatever a failed
+  // run measured — but that is for the GET_SELF_TEST reply a human reads, not
+  // for the lifetime record. A REV_INCOMPLETE failure carries a windowSteps
+  // measured against a drum that then stopped cooperating, and #268 now
+  // consumes this field as a CONTROL input, so persisting it would let one bad
+  // run drive the idle check's model until someone re-runs the test. The
+  // reply keeps the number; the record does not.
+  if (selfTest.state == SELFTEST_STATE_OK) {
+    unitEeRecordSelfTest(lifetime, selfTest.hallWindowSteps,
+                         selfTest.stepsPerRev);
+    persistLifetimeHealth();
+  }
 
   lastRotation = millis();  //overheat gate before the restore move
   if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel

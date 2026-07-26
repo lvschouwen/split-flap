@@ -177,6 +177,11 @@ unsigned long     lastAutoRehomeMs          = 0;      // 0 = never auto re-homed
 // Runs only with UNIT_GATE_IDLE_HALL_CHECK set; ships dormant (#407).
 IdleHallCheck     idleHall                  = {0, IDLE_HALL_EXPECT_UNKNOWN};
 unsigned long     idleHallLastSampleMs      = 0;
+// Consecutive re-homes this check armed that measured no drift deviation —
+// proof the window model is wrong rather than the belief (UnitIdleHall.h).
+// Since-boot only; a power cycle is a free retry.
+uint8_t           idleHallFutileRehomes     = 0;
+bool              idleHallArmedRehome       = false;
 // At most one drift-triggered re-home per minute: a mechanically failing
 // unit (loose magnet, slipping drum) must not spend its life homing —
 // driftEvents keeps counting so the master still sees it.
@@ -565,6 +570,33 @@ void loop() {
 #endif
     previousMillis = millis();  // keep awake briefly for follow-up commands
   }
+  // Feature-gate write (#409). Persisting the byte is the whole op — the gate
+  // is read live wherever it is consulted, so nothing has to be restarted for
+  // it to take effect, and persistLifetimeHealth() republishes the
+  // GET_LIFETIME reply the master verifies the write against.
+  //
+  // Drained HERE, ahead of the home/jog drains, for the same reason SET_OFFSET
+  // is: the master waits a fixed UNIT_GATES_WRITE_SETTLE_MS and then reads
+  // GET_LIFETIME back to grade the write. Behind pendingHome that read-back
+  // would land mid-calibrate() — seconds — and report a landed write as a
+  // refusal. (A re-home we started ourselves can still delay it; the master's
+  // settle window is the remaining half of that story.)
+  if (pendingGatesWrite) {
+    noInterrupts();
+    uint8_t v = pendingGatesValue;
+    pendingGatesWrite = false;
+    interrupts();
+    lifetime.featureGates = v;
+    persistLifetimeHealth();
+    // A gate change invalidates whatever the idle check had accumulated: the
+    // streak was built under the old rules.
+    idleHallReset(idleHall);
+#ifdef SERIAL_ENABLE
+    Serial.print("Feature gates set to 0x");
+    Serial.println(v, HEX);
+#endif
+    previousMillis = millis();  // keep awake briefly for follow-up commands
+  }
   if (pendingHome) {
     noInterrupts();
     pendingHome = false;
@@ -630,26 +662,6 @@ void loop() {
       if (badCommandCount < 0xFF) badCommandCount++;
       interrupts();
     }
-  }
-  // Feature-gate write (#409). Persisting the byte is the whole op — the gate
-  // is read live wherever it is consulted, so nothing has to be restarted for
-  // it to take effect, and persistLifetimeHealth() republishes the
-  // GET_LIFETIME reply the master verifies the write against.
-  if (pendingGatesWrite) {
-    noInterrupts();
-    uint8_t v = pendingGatesValue;
-    pendingGatesWrite = false;
-    interrupts();
-    lifetime.featureGates = v;
-    persistLifetimeHealth();
-    // A gate change invalidates whatever the idle check had accumulated: the
-    // streak was built under the old rules.
-    idleHallReset(idleHall);
-#ifdef SERIAL_ENABLE
-    Serial.print("Feature gates set to 0x");
-    Serial.println(v, HEX);
-#endif
-    previousMillis = millis();  // keep awake briefly for follow-up commands
   }
   if (pendingClearAddress) {
     noInterrupts();
@@ -827,6 +839,7 @@ void loop() {
   // the streak — a streak that survived a move would be judging the old park.
   bool idleHallEligible =
       unitGateEnabled(lifetime.featureGates, UNIT_GATE_IDLE_HALL_CHECK) &&
+      !idleHallStandDown(idleHallFutileRehomes) &&
       homed && drift.positionKnown && !drift.driftPending &&
       currentlyrotating == 0 && displayedLetter == receivedNumber &&
       identifyStartMs == 0 && !pendingSelfTest && !pendingHome &&
@@ -844,6 +857,7 @@ void loop() {
         idleHallExpectation(drift.drumPosition, window, STEPS);
     if (idleHallObserve(idleHall, expectation, digitalRead(HALLPIN) == 0)) {
       drift.driftPending = true;
+      idleHallArmedRehome = true;
 #ifdef SERIAL_ENABLE
       Serial.print("Idle hall mismatch at position ");
       Serial.println(drift.drumPosition);
@@ -867,7 +881,25 @@ void loop() {
     Serial.println(drift.lastDriftSteps);
 #endif
     lastAutoRehomeMs = currentMillis == 0 ? 1 : currentMillis;
+    uint8_t eventsBefore = drift.driftEvents;
+    bool wasArmedByIdleCheck = idleHallArmedRehome;
+    idleHallArmedRehome = false;
     calibrate(true);  // clears drift.driftPending, parks belief at blank
+    // calibrate's edge observation bumps driftEvents only when the belief was
+    // measurably wrong. If we armed this re-home and it found nothing, the
+    // drum was where we thought — the window model contradicted a correct
+    // belief, and re-homing again will change nothing.
+    if (wasArmedByIdleCheck) {
+      if (drift.driftEvents == eventsBefore) {
+        if (idleHallFutileRehomes < 0xFF) idleHallFutileRehomes++;
+#ifdef SERIAL_ENABLE
+        Serial.print("Idle hall re-home found no drift; futile count ");
+        Serial.println(idleHallFutileRehomes);
+#endif
+      } else {
+        idleHallFutileRehomes = 0;  // a real catch re-earns the credit
+      }
+    }
     previousMillis = millis();
   }
 

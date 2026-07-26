@@ -30,13 +30,21 @@ static void test_measured_window_is_trusted_with_the_tighter_margin() {
   TEST_ASSERT_EQUAL_UINT16(IDLE_HALL_MARGIN_MEASURED_STEPS, w.margin);
 }
 
-// A degrading sensor measures a SMALLER window, and that is exactly the
-// reading we want to adopt — the fallback would then assert a magnet where
-// there is none. It must be trusted all the way down.
-static void test_a_shrunken_measured_window_is_still_trusted() {
+// This assertion used to be the reverse: a shrunken reading was trusted all
+// the way down, on the reasoning that a degrading sensor really does measure a
+// smaller window. The physics was right and the inference was wrong — a
+// 12-step record is indistinguishable from a glitch-seeded one, and either way
+// it is a HISTORICAL value that only moves when someone re-runs the self-test.
+// Trusting it asserts HIGH from position 24 up, so a unit whose magnet is
+// still healthy reads LOW inside its real 46-step window and contradicts on a
+// correct belief. Below the floor we fall back and assert less.
+static void test_a_shrunken_measured_window_falls_back_rather_than_asserting() {
   IdleHallWindow w = idleHallResolveWindow(12, kStepsPerRev);
-  TEST_ASSERT_EQUAL_UINT16(12, w.steps);
-  TEST_ASSERT_EQUAL_UINT16(IDLE_HALL_MARGIN_MEASURED_STEPS, w.margin);
+  TEST_ASSERT_EQUAL_UINT16(IDLE_HALL_WINDOW_ASSUMED_STEPS, w.steps);
+  TEST_ASSERT_EQUAL_UINT16(IDLE_HALL_MARGIN_ASSUMED_STEPS, w.margin);
+  // The position the tight-margin model would have called HIGH is now unjudged.
+  TEST_ASSERT_EQUAL_UINT8(IDLE_HALL_EXPECT_UNKNOWN,
+                          idleHallExpectation(30, w, kStepsPerRev));
 }
 
 // A window spanning a quarter of the drum is not a hall window, it is a
@@ -45,6 +53,62 @@ static void test_implausibly_wide_measurement_is_rejected() {
   IdleHallWindow w = idleHallResolveWindow(600, kStepsPerRev);
   TEST_ASSERT_EQUAL_UINT16(IDLE_HALL_WINDOW_ASSUMED_STEPS, w.steps);
   TEST_ASSERT_EQUAL_UINT16(IDLE_HALL_MARGIN_ASSUMED_STEPS, w.margin);
+}
+
+// A drum that binds inside the magnet during the self-test keeps counting
+// hall-low samples. 446 is under the old quarter-revolution ceiling, so it was
+// adopted with the tight margin and claimed LOW across [12,433] — every real
+// park then contradicts forever.
+static void test_a_bound_drums_inflated_window_is_rejected() {
+  IdleHallWindow w = idleHallResolveWindow(446, kStepsPerRev);
+  TEST_ASSERT_EQUAL_UINT16(IDLE_HALL_WINDOW_ASSUMED_STEPS, w.steps);
+  // A blank park at calOffset 80 sits outside the real ~46-step magnet, so
+  // HIGH is the truthful expectation. The rejected 446-step model claimed LOW
+  // there and contradicted every sample forever.
+  TEST_ASSERT_EQUAL_UINT8(IDLE_HALL_EXPECT_HIGH,
+                          idleHallExpectation(80, w, kStepsPerRev));
+  IdleHallWindow bogus = {446, IDLE_HALL_MARGIN_MEASURED_STEPS};
+  TEST_ASSERT_EQUAL_UINT8(IDLE_HALL_EXPECT_LOW,
+                          idleHallExpectation(80, bogus, kStepsPerRev));
+}
+
+// The mirror image: the self-test's phase-1 approach exits on ONE un-debounced
+// low sample, so a glitch seeds a 1-step window. That has no LOW band, but it
+// claims HIGH from position 13 — and a drum parked inside the real 46-step
+// magnet reads LOW there.
+static void test_a_glitch_seeded_one_step_window_is_rejected() {
+  IdleHallWindow w = idleHallResolveWindow(1, kStepsPerRev);
+  TEST_ASSERT_EQUAL_UINT16(IDLE_HALL_WINDOW_ASSUMED_STEPS, w.steps);
+  TEST_ASSERT_EQUAL_UINT8(IDLE_HALL_EXPECT_UNKNOWN,
+                          idleHallExpectation(44, w, kStepsPerRev));
+}
+
+static void test_the_trust_band_edges_are_inclusive() {
+  TEST_ASSERT_EQUAL_UINT16(
+      IDLE_HALL_WINDOW_TRUST_MIN_STEPS,
+      idleHallResolveWindow(IDLE_HALL_WINDOW_TRUST_MIN_STEPS, kStepsPerRev).steps);
+  TEST_ASSERT_EQUAL_UINT16(
+      IDLE_HALL_WINDOW_TRUST_MAX_STEPS,
+      idleHallResolveWindow(IDLE_HALL_WINDOW_TRUST_MAX_STEPS, kStepsPerRev).steps);
+  TEST_ASSERT_EQUAL_UINT16(
+      IDLE_HALL_WINDOW_ASSUMED_STEPS,
+      idleHallResolveWindow(IDLE_HALL_WINDOW_TRUST_MIN_STEPS - 1, kStepsPerRev).steps);
+  TEST_ASSERT_EQUAL_UINT16(
+      IDLE_HALL_WINDOW_ASSUMED_STEPS,
+      idleHallResolveWindow(IDLE_HALL_WINDOW_TRUST_MAX_STEPS + 1, kStepsPerRev).steps);
+}
+
+// --- futile-re-home disarm --------------------------------------------------
+// The backstop for every wrong-window cause the trust band can't see — above
+// all a STALE measurement, which is what a healthy-then-degrading unit always
+// has, since the record only moves when someone re-runs the self-test.
+
+static void test_the_check_stays_armed_until_the_limit() {
+  for (uint8_t n = 0; n < IDLE_HALL_FUTILE_REHOME_LIMIT; n++) {
+    TEST_ASSERT_FALSE(idleHallStandDown(n));
+  }
+  TEST_ASSERT_TRUE(idleHallStandDown(IDLE_HALL_FUTILE_REHOME_LIMIT));
+  TEST_ASSERT_TRUE(idleHallStandDown(IDLE_HALL_FUTILE_REHOME_LIMIT + 1));
 }
 
 // --- expectation from a parked position -------------------------------------
@@ -209,8 +273,12 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_unmeasured_window_falls_back_to_the_assumed_constant);
   RUN_TEST(test_measured_window_is_trusted_with_the_tighter_margin);
-  RUN_TEST(test_a_shrunken_measured_window_is_still_trusted);
+  RUN_TEST(test_a_shrunken_measured_window_falls_back_rather_than_asserting);
   RUN_TEST(test_implausibly_wide_measurement_is_rejected);
+  RUN_TEST(test_a_bound_drums_inflated_window_is_rejected);
+  RUN_TEST(test_a_glitch_seeded_one_step_window_is_rejected);
+  RUN_TEST(test_the_trust_band_edges_are_inclusive);
+  RUN_TEST(test_the_check_stays_armed_until_the_limit);
   RUN_TEST(test_parked_well_inside_the_window_expects_a_low_reading);
   RUN_TEST(test_parked_well_outside_the_window_expects_a_high_reading);
   RUN_TEST(test_the_entering_edge_itself_is_unjudgeable);

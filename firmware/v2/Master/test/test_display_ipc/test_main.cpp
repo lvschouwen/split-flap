@@ -108,7 +108,11 @@ static void test_maintenance_opcodes_count_and_apply() {
   // #231 review CRITICAL: displayApplyCommand gates the whole dispatch in
   // Tasks.cpp — an opcode missing here silently never executes on the bus.
   TEST_ASSERT_TRUE(displayApplyCommand(snap, makeResetOdometerCommand(8, 3)));
-  TEST_ASSERT_EQUAL(8, snap.commandsProcessed);
+  // #409 shipped SetGates without this line and the whole POST /unit/gates
+  // path was dead on the S3 — enqueued, 200 OK, silently dropped, op-result
+  // stuck on "pending" forever. Exactly the failure the note above predicts.
+  TEST_ASSERT_TRUE(displayApplyCommand(snap, makeSetGatesCommand(9, 3, 0x01)));
+  TEST_ASSERT_EQUAL(9, snap.commandsProcessed);
 }
 
 static void test_stop_clears_current_text() {

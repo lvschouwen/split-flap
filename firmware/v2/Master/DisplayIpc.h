@@ -134,6 +134,7 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
     case DisplayOpcode::ClearAddress:
     case DisplayOpcode::ResetOdometer:
     case DisplayOpcode::SelfTest:
+    case DisplayOpcode::SetGates:
     case DisplayOpcode::ResetUnits:
     case DisplayOpcode::ReflashUnits:
       snap.commandsProcessed++;
