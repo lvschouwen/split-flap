@@ -47,7 +47,7 @@ The firmware runs on bench hardware reached by OTA over the user's VPN; there is
 3. **Build + native tests green** before commit: `pio run` in each touched project dir, `pio test -e native`, `python -m pytest tests/`. Editing v2 firmware source auto-triggers that project's native suite via the local PostToolUse hook (`.claude/hooks/firmware-native-test.sh`). If Unit fw changed: rebuild Unit clean → `make_manifest.py stage` → rebuild Master + FollowerEsp01 (drift gate) → **separate** artifact commit (never amend the bundle in).
 4. **Risk-tiered review** — cpp-reviewer over the combined branch diff; ALWAYS for OTA / boot / flash / concurrency / credentials / cluster-wire, batched otherwise.
 5. **Bench-verify = the E2E tier** — stage the bin to `~/bench-bins/`, `ota-flash.sh` to the board, confirm on hardware. Host tests cover pure logic only; hardware glue is proven on the bench. OTA the LEADER first (an older-build leader downgrades followers via the rollout).
-6. **Commit + close issue** — conventional message referencing it; push; confirm the GitHub auto-close fired (it has silently failed — close manually if not).
+6. **Commit + close issue** — conventional message; the closing keyword `Closes #N` goes in the PR body, or the commit body when going direct to master. A `fix(#N):` scope closes nothing. Push.
 7. **Update memory.**
 
 ## Release policy (CalVer `vYYYY.MM.DD`, ≤1/day)
