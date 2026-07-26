@@ -338,6 +338,10 @@
 					<h2>Firmware</h2>
 					<div class="kv-rows">
 						<div class="kv"><span>Version</span><span id="statVersion">—</span></div>
+						<!-- #391: the factory rescue image is the last line of defence and
+						     was invisible until you booted into it. Pill appears only when
+						     it needs attention (stale / unidentified / missing). -->
+						<div class="kv"><span>Rescue image</span><span><span id="statRescueRev">—</span> <span class="pill hidden" id="statRescuePill"></span></span></div>
 						<div class="kv"><span>Uptime</span><span id="statUptime">—</span></div>
 						<div class="kv"><span>Last reset</span><span id="statReset">—</span></div>
 						<div class="kv"><span>Heap low-water</span><span id="statMinHeap">—</span></div>

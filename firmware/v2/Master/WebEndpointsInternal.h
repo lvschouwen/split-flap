@@ -43,6 +43,10 @@ extern bool pendingReboot;
 extern uint32_t rebootRequestedAtMs;
 extern String pendingIntendedVersion;  // ?v= from /firmware/master (#190)
 extern bool pendingIntendedVersionProvided;
+// ?v= from /firmware/rescue (#391) — staged like the above because writing
+// the rescue-slot record is an NVS commit, not part of the image stream.
+extern String pendingRescueRev;
+extern bool pendingRescueRecord;
 
 // Runtime-only message state (#192, never persisted) — under WebStateLock.
 extern String currentInputText;

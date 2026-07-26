@@ -9,9 +9,31 @@
 
 #include <Arduino.h>
 
+#include "RescueSlotStatus.h"
+
 // The partition exists in the table (always true on the #193 layout; guards
 // a mismatched table loudly instead of writing into nothing).
 bool factorySlotPresent();
+
+// Recompute the cached rescue-slot verdict (~60 ms of sha256 over the
+// image, plus an NVS read). loopTask ONLY — call at boot and after an
+// install; never from an async handler.
+void rescueSlotRefresh();
+
+// What the rescue slot actually holds (#391) — partition truth, not a
+// record of what someone meant to upload. Free, lock-guarded read of the
+// cache; never computes. Safe from any task. Before the first
+// rescueSlotRefresh() it reports the conservative default (absent + warn).
+RescueSlotFacts rescueSlotCurrent();
+
+// Stamp the installed image's identity after a successful /firmware/rescue
+// (NVS key slotRecF, SlotRecord.h format: sha256 binds the record to the
+// image, so a slot rewritten out of band demotes itself to UNIDENTIFIED).
+// An empty rev REMOVES the record — the formatter would otherwise store a
+// "?" placeholder that reads as a false STALE. Writes NVS, so loopTask
+// only: the /firmware/rescue handler stages it for the webEndpointsLoop
+// drain, mirroring /firmware/master's ?v=. Refreshes the cache.
+void rescueSlotRecordInstall(const String& rev);
 
 // The slot holds a bootable-looking app image (validated app descriptor).
 // Gate for /firmware/rescue-boot's 409: never strand a wall-mounted device

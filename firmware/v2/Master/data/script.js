@@ -466,7 +466,37 @@ function applySettings(s) {
 	setMqttPill(s.mqttHost || "", s.mqttConnected === true);
 	updateClusterBanner(s);
 	updateClusterFollowerCard(s);
+	updateRescueSlot(s);
 	window.lastSettings = s;  // System tab reuses version etc. (#245)
+}
+
+//Rescue slot (#391): identity of the factory rescue image, straight off
+///settings so it poll-refreshes like everything else. The rev is always
+//shown - that is the whole point, it used to be invisible - but the pill
+//only appears when the slot needs attention, so a healthy board stays
+//quiet. Wire strings are text nodes ONLY.
+function updateRescueSlot(s) {
+	var revEl = document.getElementById("statRescueRev");
+	var pill = document.getElementById("statRescuePill");
+	if (!revEl || !pill) return;
+	var state = s.rescueSlot || "";
+	var PILL = {
+		stale: "stale",
+		unidentified: "unidentified",
+		empty: "no image",
+		absent: "no factory partition"
+	};
+	//No rev to show: say what is there instead of a bare dash.
+	var FALLBACK = { empty: "none", absent: "\u2014", unidentified: "unknown" };
+	revEl.textContent = s.rescueRev || FALLBACK[state] || "\u2014";
+	var label = PILL[state];
+	if (!s.rescueSlotWarn || !label) {
+		pill.classList.add("hidden");
+		return;
+	}
+	//Missing image is worse than an out-of-date one: red vs amber.
+	pill.className = "pill " + (state === "empty" || state === "absent" ? "bad" : "warn");
+	pill.textContent = label;
 }
 
 //Cluster membership (#272): while this board renders a row of a cluster
