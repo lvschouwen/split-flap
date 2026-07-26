@@ -53,6 +53,37 @@ static void test_address_beyond_managed_units_is_404() {
   TEST_ASSERT_EQUAL(404, maintValidateAddress("17", facts, UNITS_AMOUNT, addr).httpStatus);
 }
 
+static void test_protocol_mismatch_unit_is_409_not_drivable() {
+  // #405 gap found in review: this gate only checked state==1, so every
+  // single-unit op — including SET_I2C_ADDRESS, an unverifiable address burn
+  // whose recovery is a physical trip — would have been sent to a unit whose
+  // reply layout we cannot parse.
+  UnitFacts facts[UNITS_AMOUNT];
+  fillFacts(facts);
+  int addr = 0;
+  facts[1].state = 1;  // present and sketch-running...
+  facts[1].protocolKnown = true;
+  facts[1].protocolVersion = SFP_PROTOCOL_VERSION;
+  TEST_ASSERT_EQUAL(200, maintValidateAddress("2", facts, UNITS_AMOUNT, addr).httpStatus);
+  TEST_ASSERT_EQUAL(2, addr);
+  // ...but speaking a contract we do not have code for.
+  facts[1].protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  MaintVerdict v = maintValidateAddress("2", facts, UNITS_AMOUNT, addr);
+  TEST_ASSERT_EQUAL(409, v.httpStatus);  // present, but refused — not a 404
+}
+
+static void test_unread_protocol_stays_drivable() {
+  // An UNREADABLE version is absence of evidence, not evidence of difference.
+  // Refusing those would strand every unit whose version read simply failed.
+  UnitFacts facts[UNITS_AMOUNT];
+  fillFacts(facts);
+  int addr = 0;
+  facts[1].state = 1;
+  facts[1].protocolKnown = false;
+  facts[1].protocolVersion = 0;
+  TEST_ASSERT_EQUAL(200, maintValidateAddress("2", facts, UNITS_AMOUNT, addr).httpStatus);
+}
+
 static void test_silent_and_bootloader_units_are_404() {
   UnitFacts facts[UNITS_AMOUNT];
   fillFacts(facts);
@@ -183,6 +214,8 @@ int main(int, char**) {
   RUN_TEST(test_unparsable_address_is_400);
   RUN_TEST(test_address_out_of_i2c_range_is_400);
   RUN_TEST(test_address_beyond_managed_units_is_404);
+  RUN_TEST(test_protocol_mismatch_unit_is_409_not_drivable);
+  RUN_TEST(test_unread_protocol_stays_drivable);
   RUN_TEST(test_silent_and_bootloader_units_are_404);
   RUN_TEST(test_sketch_unit_passes_and_yields_address);
   RUN_TEST(test_hex_address_parses_v1_strtol_base0);

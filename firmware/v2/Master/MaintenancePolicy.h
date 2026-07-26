@@ -55,6 +55,18 @@ inline MaintVerdict maintValidateAddress(const char* raw,
   if (unitIndex < 0 || unitIndex >= maxUnits || units[unitIndex].state != 1) {
     return {404, "No sketch-running unit at that address"};
   }
+  // #405: a unit reporting a wire contract we do not speak is present but not
+  // drivable, so every single-unit op behind this gate is refused. Without it
+  // an operator could still fire the most consequential one of all —
+  // SET_I2C_ADDRESS, an unverifiable address burn whose recovery is a physical
+  // trip — at a unit whose reply layout we cannot even parse.
+  //
+  // POST /unit/reboot deliberately does NOT come through here (it range-checks
+  // itself), which is what keeps ENTER_BOOTLOADER reachable and a mismatched
+  // unit always recoverable by reflash.
+  if (!unitDrivable(units[unitIndex])) {
+    return {409, "Unit reports an unrecognised protocol version — reflash it"};
+  }
   outAddr = (int)parsed;
   return {};
 }

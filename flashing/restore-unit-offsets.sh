@@ -97,9 +97,24 @@ PY
   exit 0
 fi
 
+# Materialise the row list BEFORE the loop. Feeding it in as `done < <(rows)`
+# put rows() inside a process substitution, where a failure — malformed JSON, a
+# schema change, no python3 — never trips errexit: the loop just ran zero times,
+# `fail` stayed 0, and the script exited 0 having printed nothing. A typo'd
+# --host did exactly the same. Both are indistinguishable from "all units
+# verified", which is the worst possible lie from the one script that restores
+# calibration after a destructive erase.
+ROWS="$(rows)"
+if [[ -z "$ROWS" ]]; then
+  echo "no units matched${ONLY_HOST:+ --host $ONLY_HOST} in $JSON" >&2
+  exit 1
+fi
+
 fail=0
 changed=0
+matched=0
 while IFS=$'\t' read -r host row addr want; do
+  matched=$((matched + 1))
   have="$(get_offset "$host" "$addr")"
 
   if [[ "$MODE" == verify ]]; then
@@ -112,6 +127,7 @@ while IFS=$'\t' read -r host row addr want; do
       printf 'row %s  a%-3s  captured %4s  live %4s  DIFFERS\n' \
         "$row" "$addr" "$want" "$have"
       changed=1
+      fail=1  # not verified IS a failure — see the exit contract in the header
     fi
     continue
   fi
@@ -138,7 +154,13 @@ while IFS=$'\t' read -r host row addr want; do
       "$row" "$addr" "$want" "${back:-<unreadable>}"
     fail=1
   fi
-done < <(rows)
+done <<< "$ROWS"
+
+# Belt and braces: the non-empty guard above should make this unreachable.
+if [[ "$matched" == 0 ]]; then
+  echo "read zero rows — refusing to report success" >&2
+  exit 1
+fi
 
 if [[ "$MODE" == verify && "$changed" == 1 ]]; then
   echo

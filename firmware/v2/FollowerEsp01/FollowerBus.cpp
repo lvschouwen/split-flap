@@ -535,8 +535,9 @@ int busStartSelfTest(uint8_t i2cAddress) {
 }
 
 bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out) {
-  uint8_t buf[9];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_SELF_TEST, buf, 9)) {
+  uint8_t buf[SELFTEST_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_SELF_TEST, buf,
+                 SELFTEST_REPLY_LEN)) {
     return false;
   }
   return selfTestReadbackValid(buf, out);
