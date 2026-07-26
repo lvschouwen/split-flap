@@ -17,6 +17,7 @@
 #include "UnitWireContract.h"  // pure core read/write wire formats (#405)
 #include "UnitOdometer.h"  // pure revolution-odometer logic (#231)
 #include "UnitDrift.h"     // pure drift-detection logic (#263/#264)
+#include "UnitIdleHall.h"  // pure idle hall-consistency logic (#268)
 #include "UnitSelfTest.h"  // pure self-test result + wire encode (#265)
 #include "UnitVitals.h"    // pure supply-Vcc/ram/cmd-pos diag packet (#306)
 #include "UnitExtDiag.h"   // pure ext-diag reply encode (#365; AVR glue below)
@@ -164,6 +165,11 @@ DriftState        drift                     = {0, false, 0, 0, false};
 volatile uint8_t  diagReplyBuf[DRIFT_REPLY_LEN]        = {0};
 volatile bool     pendingDiagResponse       = false;  // consumed by requestEvent
 unsigned long     lastAutoRehomeMs          = 0;      // 0 = never auto re-homed
+// Idle hall consistency check (#268), loop-context only — it samples a pin
+// and arms the drift re-home above, so nothing here crosses into the ISR.
+// Runs only with UNIT_GATE_IDLE_HALL_CHECK set; ships dormant (#407).
+IdleHallCheck     idleHall                  = {0, IDLE_HALL_EXPECT_UNKNOWN};
+unsigned long     idleHallLastSampleMs      = 0;
 // At most one drift-triggered re-home per minute: a mechanically failing
 // unit (loose magnet, slipping drum) must not spend its life homing —
 // driftEvents keeps counting so the master still sees it.
@@ -774,6 +780,48 @@ void loop() {
     // (extDutyWindow >> 1) subtracted from itself sticks at 1 forever (1-0=1);
     // floor to 0 below that so an idle unit's window actually reaches 0.
     extDutyWindow = (extDutyWindow > 1) ? (uint16_t)(extDutyWindow - (extDutyWindow >> 1)) : 0;
+  }
+
+  // Idle hall consistency check (#268), dormant unless UNIT_GATE_IDLE_HALL_CHECK
+  // is set (#407 ships both motion gates off; #409's SET_GATES turns them on).
+  // Hand-rotating a parked drum is invisible today — the hall is sampled only
+  // while stepping, so the unit keeps believing its last commanded letter until
+  // some later move happens to sweep the magnet. At rest the same one bit still
+  // polices the belief: the tracked position predicts whether the sensor should
+  // see the magnet, and a contradiction that survives the debounce means the
+  // drum moved without us. It arms the SAME driftPending a mid-move observation
+  // does, so the re-home below is the entire correction path — this adds a
+  // digitalRead every 250 ms and no new motion of its own.
+  //
+  // Suppressed unless the drum is genuinely parked and nothing is about to
+  // touch it: an unhomed or never-synced position has no expectation to
+  // contradict, and a pending op, an identify blink or an in-flight letter all
+  // mean the prediction is about to be stale. Every one of those also RESETS
+  // the streak — a streak that survived a move would be judging the old park.
+  bool idleHallEligible =
+      unitGateEnabled(lifetime.featureGates, UNIT_GATE_IDLE_HALL_CHECK) &&
+      homed && drift.positionKnown && !drift.driftPending &&
+      currentlyrotating == 0 && displayedLetter == receivedNumber &&
+      identifyStartMs == 0 && !pendingSelfTest && !pendingHome &&
+      !pendingBootloader && pendingJogSteps == 0;
+  if (!idleHallEligible) {
+    idleHallReset(idleHall);
+  } else if (currentMillis - idleHallLastSampleMs >=
+             IDLE_HALL_SAMPLE_INTERVAL_MS) {
+    idleHallLastSampleMs = currentMillis;
+    // The unit's own measured hall window when it has one (#406 persists it
+    // across reboots), the conservative constant otherwise.
+    IdleHallWindow window =
+        idleHallResolveWindow(lifetime.selfTestLastHallWindow, STEPS);
+    uint8_t expectation =
+        idleHallExpectation(drift.drumPosition, window, STEPS);
+    if (idleHallObserve(idleHall, expectation, digitalRead(HALLPIN) == 0)) {
+      drift.driftPending = true;
+#ifdef SERIAL_ENABLE
+      Serial.print("Idle hall mismatch at position ");
+      Serial.println(drift.drumPosition);
+#endif
+    }
   }
 
   // Silent drift correction (#263): a mid-move hall observation measured
