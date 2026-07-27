@@ -59,6 +59,11 @@
 	--mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 	--sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 	--r: 3px;
+
+	/* This console is worked on a phone, one-handed, standing in front of the
+	   wall. Every control clears this on its smallest tappable dimension;
+	   visual weight is carried by type size and width, never by height. */
+	--tap: 44px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -151,6 +156,9 @@ h1:focus { outline: none; }
 
 .seg {
 	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	min-height: var(--tap);
 	background: none;
 	border: 0;
 	padding: var(--sp-xs) 0;
@@ -257,6 +265,7 @@ h1:focus { outline: none; }
 
 input[type="text"], input[type="number"], input[type="password"], select {
 	width: 100%;
+	min-height: var(--tap);
 	padding: var(--sp-lg);
 	color: var(--ink);
 	background: var(--surface);
@@ -265,6 +274,8 @@ input[type="text"], input[type="number"], input[type="password"], select {
 	font: 500 1rem / var(--lh-tight) var(--mono);
 	letter-spacing: 0.04em;
 }
+
+select { cursor: pointer; }
 
 select, input[type="number"], input[type="password"] { font-family: var(--sans); letter-spacing: normal; }
 input[type="number"] { max-width: 8rem; }
@@ -280,7 +291,10 @@ input[type="text"]::placeholder { color: var(--ink-faint); letter-spacing: 0.02e
 	border: 1px solid transparent;
 	cursor: pointer;
 	text-decoration: none;
-	display: inline-block;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: var(--tap);
 }
 
 .btn.primary { background: var(--amber); color: var(--on-amber); }
@@ -383,14 +397,19 @@ input[type="text"]::placeholder { color: var(--ink-faint); letter-spacing: 0.02e
 
 /* ---------- one controller ---------- */
 
+/* Back is the most-used control on every detail screen and was the smallest
+   thing on it. The tap area grows sideways past the text so a thumb reaching
+   the edge of the screen still lands on it; the negative margin keeps the
+   glyph optically flush with the column. */
 .back {
 	display: inline-flex;
 	align-items: center;
 	gap: var(--sp-sm);
+	min-height: var(--tap);
 	background: none;
 	border: 0;
-	padding: var(--sp-xs) 0;
-	margin-bottom: var(--sp-lg);
+	padding: 0 var(--sp-lg);
+	margin: 0 0 var(--sp-xs) calc(-1 * var(--sp-lg));
 	font: 500 var(--fs-lg) var(--sans);
 	color: var(--ink-dim);
 	cursor: pointer;
@@ -429,12 +448,19 @@ input[type="text"]::placeholder { color: var(--ink-faint); letter-spacing: 0.02e
 .field { display: flex; flex-direction: column; gap: var(--sp-sm); margin-bottom: var(--sp-lg); }
 .field label, .fieldlabel { font-size: var(--fs-md); color: var(--ink-dim); }
 .field .fieldval { color: var(--ink); margin-left: var(--sp-sm); font-variant-numeric: tabular-nums; }
-.field input[type="range"] { width: 100%; accent-color: var(--amber); }
+/* The track draws thin; the grab area is the full tap height around it. */
+.field input[type="range"] {
+	width: 100%;
+	height: var(--tap);
+	accent-color: var(--amber);
+	cursor: pointer;
+}
 
 .choice { display: flex; gap: var(--sp-2xs); }
 
 .choicebtn {
 	flex: 1;
+	min-height: var(--tap);
 	padding: var(--sp-md);
 	font: 500 var(--fs-md) var(--sans);
 	color: var(--ink-dim);
@@ -456,10 +482,21 @@ input[type="text"]::placeholder { color: var(--ink-faint); letter-spacing: 0.02e
 .lede { font-size: var(--fs-lg); color: var(--ink-dim); margin-bottom: var(--sp-md); max-width: 60ch; }
 .none { font-size: var(--fs-lg); color: var(--ink-dim); }
 
-.units { display: grid; grid-template-columns: repeat(8, 1fr); gap: var(--sp-xs); }
+/* minmax(0, 1fr), not 1fr: a plain 1fr track floors at the item's min-content
+   width, and the tap floor below makes that 44px — which would widen all
+   eight tracks and push the grid off the side of the screen. */
+.units { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: var(--sp-xs); }
 
+/* Every tile is a button into that unit's screen. It has to say so on sight:
+   the border already carries fault/busy/wear, so the hover moves the surface
+   instead, the way .box and .hw do. */
+/* width first, then the ratio: eight tiles have to fit the column exactly, so
+   the tap floor is allowed to make a narrow tile taller than it is wide, but
+   never wider than its share of the grid. */
 .unit {
+	width: 100%;
 	aspect-ratio: 1;
+	min-height: var(--tap);
 	border: 1px solid var(--hair);
 	border-radius: var(--sp-2xs);
 	background: var(--surface);
@@ -467,11 +504,17 @@ input[type="text"]::placeholder { color: var(--ink-faint); letter-spacing: 0.02e
 	font: 500 var(--fs-sm) / 1 var(--mono);
 	display: grid;
 	place-items: center;
+	padding: 0;
+	cursor: pointer;
 }
 
+.unit:hover { background: var(--sunk); color: var(--ink); }
 .unit.bad { border-color: var(--warn); color: var(--warn); font-weight: 700; }
 .unit.busy { border-color: var(--busy); color: var(--busy); font-weight: 700; }
 .unit.wear { border-color: var(--amber); color: var(--amber); font-weight: 700; }
+.unit.bad:hover { color: var(--warn); }
+.unit.busy:hover { color: var(--busy); }
+.unit.wear:hover { color: var(--amber); }
 
 .legend { margin-top: var(--sp-md); font-size: var(--fs-md); color: var(--ink-dim); }
 
@@ -517,6 +560,8 @@ input[type="file"] {
 	border-radius: var(--r);
 	padding: var(--sp-md);
 	width: 100%;
+	min-height: var(--tap);
+	cursor: pointer;
 }
 
 input[type="number"], input[type="password"] { font-family: var(--sans); letter-spacing: normal; }
@@ -545,6 +590,7 @@ input[type="number"], input[type="password"] { font-family: var(--sans); letter-
 
 .chip {
 	font: 500 var(--fs-md) var(--sans);
+	min-height: var(--tap);
 	padding: var(--sp-sm) var(--sp-lg);
 	color: var(--ink);
 	background: var(--sunk);
@@ -567,7 +613,7 @@ input[type="number"], input[type="password"] { font-family: var(--sans); letter-
 	align-items: center;
 }
 
-.member input { padding: var(--sp-md); font-size: var(--fs-md); }
+.member input { padding: var(--sp-md); font-size: var(--fs-md); min-height: var(--tap); }
 
 .sub-panel { margin-top: var(--sp-xl); border-top: 1px solid var(--hair); padding-top: var(--sp-lg); }
 h3 { font-size: var(--fs-lg); font-weight: 600; margin: 0 0 var(--sp-sm); }
@@ -580,7 +626,8 @@ summary {
 	cursor: pointer;
 	font: 600 var(--fs-lg) var(--sans);
 	color: var(--ink-dim);
-	padding: var(--sp-md) 0;
+	min-height: var(--tap);
+	padding: var(--sp-lg) 0;
 	list-style-position: inside;
 }
 

@@ -281,6 +281,19 @@ function wallModel(input) {
 		controllers[0].faulty = Number(input.selfFaulty) || 0;
 	}
 
+	/* The list of boxes reads down the wall, in row order — not self-first.
+	   The wall draws row 0 at the top, so a list one tap away that opened with
+	   row 1 described the same two objects in the opposite order. A box that
+	   drives no row has no place on the wall, so it sits after the ones that
+	   do; "this box" is already called out in each box's meta line. */
+	controllers = controllers.slice().sort(function (a, b) {
+		var aOnWall = a.width > 0, bOnWall = b.width > 0;
+		if (aOnWall !== bOnWall) return aOnWall ? -1 : 1;
+		if (!aOnWall) return 0;
+		if (a.row !== b.row) return a.row - b.row;
+		return a.col - b.col;
+	});
+
 	var byRow = {};
 	controllers.forEach(function (c) {
 		/* A controller with no row renders nothing on the board. */

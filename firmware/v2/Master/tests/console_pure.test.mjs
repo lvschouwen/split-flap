@@ -333,6 +333,50 @@ test("wallModel keeps a width-0 member off the board but on the controller list"
   assert.deepEqual(w.rows.map((r) => r.index), [0, 1]);
 });
 
+test("wallModel lists controllers down the wall, not self first", () => {
+  // #428: the leader holds row 1 and the wire lists it first, but the board
+  // draws row 0 on top. The list is one tap from the board and has to agree
+  // with it.
+  const w = C.wallModel({
+    settings: settings({ clusterLeading: true }), status: leaderStatus,
+    rows: ["TODAY", "  26 JUL 2026   "], text: "",
+  });
+  assert.deepEqual(w.controllers.map((c) => c.row), [0, 1]);
+  assert.deepEqual(w.rows.map((r) => r.index), [0, 1]);
+});
+
+test("wallModel puts a controller that drives no row after the ones that do", () => {
+  const status = {
+    enabled: true,
+    members: [
+      { host: "192.168.15.20", self: false, row: 2, col: 0, width: 0,
+        joined: true, role: "headless-spare", rev: "aad1d68" },
+    ].concat(leaderStatus.members),
+  };
+  const w = C.wallModel({
+    settings: settings({ clusterLeading: true }), status,
+    rows: ["TODAY", "  26 JUL 2026   "], text: "",
+  });
+  assert.deepEqual(w.controllers.map((c) => c.width), [5, 16, 0]);
+});
+
+test("wallModel orders two controllers sharing one row by column", () => {
+  const status = {
+    enabled: true,
+    members: [
+      { host: "192.168.15.30", self: false, row: 0, col: 8, width: 8,
+        joined: true, rev: "aad1d68", faulty: 0, detected: 8 },
+      { host: "", self: true, row: 0, col: 0, width: 8, joined: true,
+        degraded: false, rev: "aad1d68", faulty: 0, detected: 8 },
+    ],
+  };
+  const w = C.wallModel({
+    settings: settings({ clusterLeading: true }), status,
+    rows: ["                "], text: "",
+  });
+  assert.deepEqual(w.controllers.map((c) => c.col), [0, 8]);
+});
+
 test("wallModel keeps a degraded row on the board, still holding its text", () => {
   // The boundary rule: state may change how loud a row is, never whether it
   // is there.

@@ -27,10 +27,6 @@
 					<div class="compose">
 						<label class="sr" for="msg">Message for the wall</label>
 						<input type="text" id="msg" maxlength="75" autocomplete="off" placeholder="Type a message" />
-						<div class="acts">
-							<button type="button" class="btn primary" id="send">Send to wall</button>
-							<button type="button" class="btn quiet" id="stop">Blank it</button>
-						</div>
 						<label class="sr" for="dwell">How long to show it</label>
 						<select id="dwell">
 							<option value="">leave it up until something replaces it</option>
@@ -38,6 +34,10 @@
 							<option value="900">show it for 15 minutes, then go back</option>
 							<option value="3600">show it for an hour, then go back</option>
 						</select>
+						<div class="acts">
+							<button type="button" class="btn primary" id="send">Send to wall</button>
+							<button type="button" class="btn quiet" id="stop">Blank it</button>
+						</div>
 						<p class="capacity" id="capacity"></p>
 						<p class="blocked" id="blocked" hidden></p>
 						<p class="note" id="home-status" role="status" hidden></p>
