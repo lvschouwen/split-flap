@@ -9,11 +9,14 @@
 class AsyncWebServer;
 
 // Web endpoint layer for the v2 master (#186) — the v1 endpoint surface on
-// the ESP32Async server stack, plus the WiFi portal/credential routes
-// (#188). Registers the PROGMEM-served UI, the settings read/write pair,
-// health/log/reboot, /wifi-setup + /wifi/scan + /wifi/config + /reset-wifi,
-// and explicit 501 stubs for every endpoint whose backing service hasn't
-// been ported yet (units/I2C, firmware/OTA, MQTT discovery).
+// the ESP32Async server stack, plus the WiFi credential routes (#188):
+// the settings read/write pair, health/log/reboot, /wifi/scan +
+// /wifi/config + /reset-wifi.
+//
+// This layer serves an API and no pages. The browser UI, the captive-portal
+// page, the SSE stream and the timezone table were all removed together —
+// the AP and its DNS catch-all still come up for provisioning, but the
+// credentials go in over /wifi/config rather than through a form.
 //
 // Lifecycle: webEndpointsInit() registers routes only. webEndpointsStart()
 // calls server.begin() — WifiService invokes it (idempotently) once a netif
@@ -24,10 +27,6 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
                       SettingsStore& store, const String& effectiveDeviceName);
 void webEndpointsStart(AsyncWebServer& server);
 void webEndpointsLoop(MasterSettings& settings, SettingsStore& store);
-
-// SSE display push (#251), netTask only: sends a "display" event when the
-// snapshot's text changes. Change detection pure in DisplayEvents.h.
-void webDisplayEventsTick();
 
 // What the 1 Hz mode ticker needs from the web domain (#192): the active
 // mode plus the parameters it bakes into DisplayCommands. inputText is the
@@ -64,8 +63,8 @@ String webTimezoneSnapshot();
 const char* webResetReasonString();
 
 // Bundled unit firmware (#205): the generated WebAssets.h arrays have
-// internal linkage, so only WebContent.cpp includes that header (#338) — a
-// second include would duplicate every PROGMEM blob into another TU.
+// internal linkage, so only UnitFirmwareAsset.cpp includes that header — a
+// second include would duplicate the whole image into another TU.
 // displayTask reaches the image through these accessors instead.
 const uint8_t* webUnitFirmwareBin();
 size_t webUnitFirmwareBinLen();

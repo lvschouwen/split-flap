@@ -150,17 +150,14 @@ static void startPortal() {
   WiFi.mode(WIFI_AP_STA);
   String apName = deviceName + AP_SUFFIX_SETUP;
   WiFi.softAP(apName.c_str());  // open AP, v1 portal parity
-  // Catch-all DNS: every hostname resolves to us; onNotFound() then
-  // redirects to /wifi-setup, which is what pops the OS captive sheet.
+  // Catch-all DNS so the AP is reachable by any hostname. There is no
+  // captive redirect any more: the page it pointed at went with the web UI,
+  // and redirecting the OS sign-in sheet at a 404 is worse than not popping
+  // it. Credentials go in over POST /wifi/config; portalRedirectUrl stays
+  // empty, which keeps onNotFound on its plain-404 branch.
   dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
   dnsServer.start(53, "*", WiFi.softAPIP());
   portalUp = true;
-  {
-    // Stage the captive-redirect target here so onNotFound never has to
-    // touch the WiFi class from the async_tcp task (async-context rule).
-    StageLock lock;
-    portalRedirectUrl = "http://" + WiFi.softAPIP().toString() + "/wifi-setup";
-  }
   webEndpointsStart(*webServer);  // LWIP is up on the AP netif
   // Fallback confirm (#305 moved the primary to setup() pre-inrush): no-op if
   // already confirmed, but retries should the pre-inrush otadata write have

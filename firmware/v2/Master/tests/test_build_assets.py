@@ -26,26 +26,6 @@ import build_assets  # noqa: E402
 EXPECTED_ALPHABET = " ABCDEFGHIJKLMNOPQRSTUVWXYZ$&#0123456789:.-?!"
 
 
-def test_parse_header_alphabet_extracts_literal():
-    header = f'#define SFP_ALPHABET "{EXPECTED_ALPHABET}"\n'
-    assert build_assets.parse_header_alphabet(header) == EXPECTED_ALPHABET
-
-
-def test_parse_header_alphabet_raises_when_missing():
-    with pytest.raises(ValueError):
-        build_assets.parse_header_alphabet("#define SOMETHING_ELSE 1\n")
-
-
-def test_parse_js_calibration_letters_joins_chars():
-    js = "const CALIBRATION_LETTERS = [' ','A','B','$','&','#','?','!'];"
-    assert build_assets.parse_js_calibration_letters(js) == " AB$&#?!"
-
-
-def test_parse_js_calibration_letters_raises_when_missing():
-    with pytest.raises(ValueError):
-        build_assets.parse_js_calibration_letters("const OTHER = [1,2,3];")
-
-
 def _make_tree(tmp_path, alphabet_header: str, alphabet_js: str) -> pathlib.Path:
     """Recreate the firmware/v2/shared + firmware/v2/Master layout the
     verify step resolves against (shared_protocol_header)."""
@@ -61,35 +41,6 @@ def _make_tree(tmp_path, alphabet_header: str, alphabet_js: str) -> pathlib.Path
         f"const CALIBRATION_LETTERS = [{js_array}];\n", encoding="utf-8"
     )
     return project
-
-
-def test_shared_protocol_header_points_into_v2_shared(tmp_path):
-    project = tmp_path / "v2" / "Master"
-    header = build_assets.shared_protocol_header(project)
-    assert header == tmp_path / "v2" / "shared" / "SplitFlapProtocol.h"
-
-
-def test_verify_js_alphabet_passes_on_match(tmp_path):
-    project = _make_tree(tmp_path, EXPECTED_ALPHABET, EXPECTED_ALPHABET)
-    build_assets.verify_js_alphabet(project)  # must not raise
-
-
-def test_verify_js_alphabet_fails_on_drift(tmp_path):
-    # Drop the trailing '!' so the JS drifts from the header.
-    project = _make_tree(tmp_path, EXPECTED_ALPHABET, EXPECTED_ALPHABET[:-1])
-    with pytest.raises(ValueError, match="drift"):
-        build_assets.verify_js_alphabet(project)
-
-
-def test_real_tree_alphabet_is_in_sync():
-    # The v2 data/ is a copy of v1's UI and both masters speak the same
-    # protocol header — run the actual gate against the working tree so a
-    # drifted copy fails in pytest before it fails the firmware build.
-    project = pathlib.Path(build_assets.__file__).resolve().parent
-    build_assets.verify_js_alphabet(project)
-
-
-# --- unit-firmware bundling (#205) -----------------------------------------
 
 
 def _hex_line(addr: int, data: bytes) -> str:
@@ -167,61 +118,6 @@ def test_real_tree_has_committed_unit_bundle():
 
 
 # --- timezone table (#252) ---------------------------------------------------
-
-
-def test_build_tz_json_maps_iana_to_posix(tmp_path):
-    import json
-
-    csv_file = tmp_path / "zones.csv"
-    csv_file.write_text(
-        '"Europe/Amsterdam","CET-1CEST,M3.5.0,M10.5.0/3"\n"Asia/Tokyo","JST-9"\n',
-        encoding="utf-8",
-    )
-    table = json.loads(build_assets.build_tz_json(csv_file))
-    assert table["Europe/Amsterdam"] == "CET-1CEST,M3.5.0,M10.5.0/3"
-    assert table["Asia/Tokyo"] == "JST-9"
-
-
-def test_build_tz_json_utc_head_entry_is_empty_default(tmp_path):
-    # "" is the firmware's stored UTC default — the table's UTC entry must
-    # round-trip to it, not to a POSIX "UTC0".
-    import json
-
-    csv_file = tmp_path / "zones.csv"
-    csv_file.write_text('"Etc/UTC","UTC0"\n', encoding="utf-8")
-    table = json.loads(build_assets.build_tz_json(csv_file))
-    assert table["UTC"] == ""
-
-
-def test_real_tree_has_vendored_zones_csv():
-    import json
-
-    data = pathlib.Path(build_assets.__file__).resolve().parent / "data"
-    table = json.loads(build_assets.build_tz_json(data / "zones.csv"))
-    assert len(table) > 400
-    assert table["Europe/Amsterdam"] == "CET-1CEST,M3.5.0,M10.5.0/3"
-
-
-# --- deterministic gzip (#168) ---------------------------------------------
-
-
-def test_compress_asset_zero_mtime_and_deterministic():
-    # The gzip MTIME header field (bytes 4..8, little-endian) must be zero so
-    # two bakes of the same source are byte-identical — otherwise WebAssets.h,
-    # the firmware bin and sketchMd5 differ on every rebuild.
-    out = build_assets.compress_asset(b"hello split-flap")
-    assert out[4:8] == b"\x00\x00\x00\x00"
-    assert out == build_assets.compress_asset(b"hello split-flap")
-
-
-def test_compress_asset_roundtrips():
-    import gzip
-
-    payload = b"<html>calibration</html>" * 50
-    assert gzip.decompress(build_assets.compress_asset(payload)) == payload
-
-
-# --- text IO encoding pinning ----------------------------------------------
 
 
 def test_all_text_io_in_build_assets_pins_utf8():

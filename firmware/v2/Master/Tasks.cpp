@@ -192,7 +192,6 @@ static void netTaskMain(void* arg) {
     wifiServiceTick();
     webEndpointsLoop(*ctx->settings, *ctx->store);
     clusterFollowerServiceTick(*ctx->store);  // #272: decay + NVS + renders
-    webDisplayEventsTick();  // #251: SSE push on display text change
     statusLedTick();
     systemStatsTick();  // #245/#251: self-throttled, 1 s fast + 5 s ring
     vTaskDelay(pdMS_TO_TICKS(10));

@@ -201,7 +201,6 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // Per-module route registration (#338). Cross-module order is not
   // semantic — the server matches per path+method, same-path method pairs
   // stay within one module, and onNotFound/middleware are setters.
-  webContentRegister(server);
   webSettingsRegister(server);
   webSystemRegister(server);
   webFirmwareRegister(server);

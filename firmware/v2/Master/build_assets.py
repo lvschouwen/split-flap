@@ -1,36 +1,24 @@
 """PlatformIO pre-build script for the v2 master (#186).
 
 Generates:
-  - WebAssets.h: PROGMEM arrays for the web UI assets.
+  - WebAssets.h: the bundled unit firmware image, as a PROGMEM array.
   - BuildVersion.h: #define for the current git commit (short hash +
     dirty flag), so the master firmware can report the version that
     was actually built into it.
 
-v2 copy of firmware/v1/ESPMaster/build_assets.py. Since the reflash slice
-(#205) it also bundles the unit firmware exactly like v1: data/
-unit-firmware.hex (+ .rev sidecar, both committed — staged by
-flashing/flasher/make_manifest.py) becomes UNIT_FIRMWARE_BIN in WebAssets.h
-and BUNDLED_UNIT_REV in BuildVersion.h. The UI is served straight from
-PROGMEM — no filesystem image, no uploadfs step.
+The browser UI this script used to bake is gone — the device serves an HTTP
+API and no pages, so the HTML/CSS/JS/favicon/portal blobs and the IANA
+timezone table went with it. What remains is the one asset the firmware
+itself needs: data/unit-firmware.hex (+ .rev sidecar, both committed —
+staged by flashing/flasher/make_manifest.py) becomes UNIT_FIRMWARE_BIN in
+WebAssets.h and BUNDLED_UNIT_REV in BuildVersion.h, for the over-I2C unit
+reflash (#205). No filesystem image, no uploadfs step.
 
 Invoked by PlatformIO via `extra_scripts = pre:build_assets.py`.
 """
 
-import csv
-import gzip
-import json
 import pathlib
-import re
 import subprocess
-
-ASSETS = [
-    ("index.html", "INDEX_HTML", True),
-    ("portal.html","PORTAL_HTML",True),
-    ("script.js",  "SCRIPT_JS",  True),
-    ("md5.js",     "MD5_JS",     True),
-    ("style.css",  "STYLE_CSS",  True),
-    ("favicon.png","FAVICON_PNG",False),
-]
 
 
 def parse_intel_hex(path: pathlib.Path) -> bytes:
@@ -72,28 +60,6 @@ def bundled_unit_rev(project_dir: pathlib.Path, fallback: str) -> str:
     if sidecar.exists():
         return sidecar.read_text(encoding="utf-8").strip() or fallback
     return fallback
-
-
-def build_tz_json(csv_path: pathlib.Path) -> bytes:
-    """data/zones.csv (vendored posix_tz_db) -> compact JSON object
-    {"IANA name": "POSIX string", ...}, served gzipped at /tz.json (#252).
-
-    The head "UTC" entry maps to "" — the firmware's stored default — so
-    the UI's reverse lookup round-trips a fresh device to "UTC" instead of
-    some Etc/ alias."""
-    table = {"UTC": ""}
-    with csv_path.open(encoding="utf-8", newline="") as fh:
-        for row in csv.reader(fh):
-            if len(row) == 2 and row[0]:
-                table[row[0]] = row[1]
-    return json.dumps(table, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-
-
-def compress_asset(data: bytes) -> bytes:
-    # mtime=0 keeps the gzip MTIME header field constant so two bakes of the
-    # same source are byte-identical — WebAssets.h, the firmware bin and its
-    # sketchMd5 must be reproducible per commit (#168).
-    return gzip.compress(data, 9, mtime=0)
 
 
 def emit_array(fh, name: str, data: bytes) -> None:
@@ -143,93 +109,19 @@ def build_version_header(project_dir: pathlib.Path) -> None:
     print(f"[build_assets] wrote {output.name}  GIT_REV={tag}  BUNDLED_UNIT_REV={unit_rev}")
 
 
-def parse_header_alphabet(header_text: str) -> str:
-    """Extract the SFP_ALPHABET string literal from SplitFlapProtocol.h.
-
-    Raises ValueError if the #define is missing so a botched header edit
-    fails the build loudly instead of silently skipping the drift check.
-    See issue #149.
-    """
-    m = re.search(r'#define\s+SFP_ALPHABET\s+"((?:[^"\\]|\\.)*)"', header_text)
-    if not m:
-        raise ValueError("SFP_ALPHABET #define not found in SplitFlapProtocol.h")
-    return m.group(1)
-
-
-def parse_js_calibration_letters(script_js_text: str) -> str:
-    """Extract data/script.js's CALIBRATION_LETTERS array as a plain string.
-
-    The array is `['<char>', '<char>', ...]`; each element is one character.
-    Returns the concatenation so it can be compared to the header alphabet
-    byte-for-byte. Raises ValueError if the array can't be located.
-    """
-    m = re.search(r"CALIBRATION_LETTERS\s*=\s*\[(.*?)\]", script_js_text, re.DOTALL)
-    if not m:
-        raise ValueError("CALIBRATION_LETTERS array not found in script.js")
-    return "".join(re.findall(r"'([^']*)'", m.group(1)))
-
-
-def shared_protocol_header(project_dir: pathlib.Path) -> pathlib.Path:
-    """The master<->unit protocol contract, shared with the Nano unit
-    firmware. Lives in firmware/v2/shared (migrated from v1 at #311) —
-    matching the -I ../shared include path in platformio.ini."""
-    return project_dir.parent / "shared" / "SplitFlapProtocol.h"
-
-
-def verify_js_alphabet(project_dir: pathlib.Path) -> None:
-    """Fail the build if data/script.js's alphabet has drifted from the
-    shared SplitFlapProtocol.h (single source of truth, #149). The C side
-    can't drift because both firmwares #include the header; the JS side has
-    no compiler to enforce it, so this is where CI catches it."""
-    header = shared_protocol_header(project_dir)
-    script_js = project_dir / "data" / "script.js"
-    header_alphabet = parse_header_alphabet(header.read_text(encoding="utf-8"))
-    js_alphabet = parse_js_calibration_letters(script_js.read_text(encoding="utf-8"))
-    if header_alphabet != js_alphabet:
-        raise ValueError(
-            "Alphabet drift: script.js CALIBRATION_LETTERS does not match "
-            "SplitFlapProtocol.h SFP_ALPHABET (#149).\n"
-            f"  header: {header_alphabet!r}\n"
-            f"  script: {js_alphabet!r}"
-        )
-    print(f"[build_assets] alphabet OK — script.js matches SFP_ALPHABET ({len(header_alphabet)} chars)")
-
-
 def build_header(project_dir: pathlib.Path) -> None:
-    verify_js_alphabet(project_dir)
-
     data_dir = project_dir / "data"
     output_header = project_dir / "WebAssets.h"
 
-    lines_in = {}
-    for filename, _, _ in ASSETS:
-        lines_in[filename] = (data_dir / filename).read_bytes()
-
     unit_hex = data_dir / "unit-firmware.hex"
     unit_bin = pad_to_page(parse_intel_hex(unit_hex))
-    tz_json = build_tz_json(data_dir / "zones.csv")
 
     with output_header.open("w", encoding="utf-8") as fh:
         fh.write("// Auto-generated by build_assets.py — do not edit.\n")
         fh.write("#pragma once\n\n#include <Arduino.h>\n\n")
-        for filename, varname, gz in ASSETS:
-            data = lines_in[filename]
-            if gz:
-                data = compress_asset(data)
-                varname = varname + "_GZ"
-            emit_array(fh, varname, data)
-        emit_array(fh, "TZ_JSON_GZ", compress_asset(tz_json))
         emit_array(fh, "UNIT_FIRMWARE_BIN", unit_bin)
 
     print(f"[build_assets] wrote {output_header.name}")
-    for filename, _, gz in ASSETS:
-        data = lines_in[filename]
-        if gz:
-            print(f"  {filename:<16} gz {len(data):>5} -> {len(compress_asset(data)):>5}")
-        else:
-            print(f"  {filename:<16} raw {len(data):>5}")
-    print(f"  tz.json          gz {len(tz_json):>5} -> {len(compress_asset(tz_json)):>5}")
-    print(f"  unit-firmware    hex {unit_hex.stat().st_size:>5} -> bin {len(unit_bin):>5}")
 
 
 # PlatformIO invokes this file as a pre-build script, setting up a SCons
