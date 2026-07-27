@@ -13,12 +13,10 @@
 #include "HelpersSerialHandling.h"
 #include "OtaService.h"
 #include "Tasks.h"
-#include "WebEndpoints.h"
 #include "WifiPolicy.h"
 #include "WifiScanJson.h"
 
 // Wiring from setup(); only netTask touches the radio afterwards.
-static AsyncWebServer* webServer = nullptr;
 static MasterSettings* liveSettings = nullptr;
 static SettingsStore* settingsStore = nullptr;
 static String deviceName;
@@ -28,7 +26,7 @@ static DNSServer dnsServer;
 static bool portalUp = false;  // netTask-private: gates the DNS pump only
 
 // Grace-delayed restart so the HTTP response that triggered it flushes
-// (same 750 ms rule as WebEndpoints' pendingReboot).
+// (same 750 ms rule as ContentState's staged reboot).
 static bool restartPending = false;
 static uint32_t restartRequestedAtMs = 0;
 static const uint32_t RESTART_GRACE_MS = 750;
@@ -77,14 +75,13 @@ static void onWifiStaEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   WiFi.reconnect();
 }
 
-void wifiServiceInit(AsyncWebServer& server, MasterSettings& settings,
+void wifiServiceInit(MasterSettings& settings,
                      SettingsStore& store, const String& effectiveDeviceName) {
   stageMutex = xSemaphoreCreateMutex();
   if (stageMutex == nullptr) {
     Serial.println(F("FATAL: wifi stageMutex allocation failed"));
     abort();
   }
-  webServer = &server;
   liveSettings = &settings;
   settingsStore = &store;
   deviceName = effectiveDeviceName;
@@ -158,7 +155,6 @@ static void startPortal() {
   dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
   dnsServer.start(53, "*", WiFi.softAPIP());
   portalUp = true;
-  webEndpointsStart(*webServer);  // LWIP is up on the AP netif
   // Fallback confirm (#305 moved the primary to setup() pre-inrush): no-op if
   // already confirmed, but retries should the pre-inrush otadata write have
   // failed. A portal boot is a healthy boot (#190).
@@ -169,20 +165,12 @@ static void startPortal() {
 
 static void startOnline() {
   SerialPrintln("WiFi connected. IP: " + WiFi.localIP().toString());
-  webEndpointsStart(*webServer);
   otaHealthConfirm();  // #305 fallback: primary confirm is setup() pre-inrush
   clockServiceApplyTz(*liveSettings);  // v1 parity: NTP kicked after join
+  // Nothing is served on port 80 right now, so nothing advertises an HTTP
+  // service; mDNS stays up purely so the board is reachable by name. The
+  // _splitflap._tcp advert went with the cluster discovery it existed for.
   if (MDNS.begin(deviceName.c_str())) {
-    MDNS.addService("http", "tcp", 80);
-    // Cluster discovery (#274): every v2 master advertises itself so a
-    // leader's Cluster card can browse for candidates. TXT width is the
-    // at-advertise-time hint only (0 if the boot probe hasn't finished);
-    // the join handshake stays the authoritative width fact.
-    MDNS.addService("splitflap", "tcp", 80);
-    MDNS.addServiceTxt("splitflap", "tcp", "name", deviceName.c_str());
-    MDNS.addServiceTxt("splitflap", "tcp", "rev", GIT_REV);
-    MDNS.addServiceTxt("splitflap", "tcp", "width",
-                       String((int)displaySnapshotGet().displayWidth).c_str());
     SerialPrintln("mDNS up: " + deviceName + ".local");
   } else {
     SerialPrintln(F("mDNS start failed"));

@@ -9,7 +9,7 @@
 #include "MqttService.h"
 #include "SystemStatsPolicy.h"
 #include "UnitBus.h"
-#include "WebEndpoints.h"  // webResetReasonString()
+#include "ContentState.h"  // contentResetReasonString()
 
 // CPU load per core from FreeRTOS run-time stats (sdkconfig has
 // CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y with the esp_timer clock):
@@ -71,7 +71,7 @@ size_t systemStatsJson(char* buf, size_t cap) {
   now.mqttDrops = mqttDropCount();
   now.ntpAgeS = clockNtpAgeS();
   snprintf(now.resetReason, sizeof(now.resetReason), "%s",
-           webResetReasonString());
+           contentResetReasonString());
 
   xSemaphoreTake(ringMutex, portMAX_DELAY);
   size_t n = buildSystemStatsJson(buf, cap, sampler, now);
@@ -88,7 +88,7 @@ size_t systemStatsNowJson(char* buf, size_t cap) {
   now.mqttDrops = mqttDropCount();
   now.ntpAgeS = clockNtpAgeS();
   snprintf(now.resetReason, sizeof(now.resetReason), "%s",
-           webResetReasonString());
+           contentResetReasonString());
 
   xSemaphoreTake(ringMutex, portMAX_DELAY);
   size_t n = buildSystemNowJson(buf, cap, sampler.latest, now);

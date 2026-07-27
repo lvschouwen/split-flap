@@ -165,3 +165,18 @@ void flashLogTick(bool force) {
     LittleFS.rename(LOG_PATH, LOG_PREV_PATH);
   }
 }
+
+
+// --- Print sink (adopted from the removed web log) --------------------------
+FlashLogPrinter flashLogPrinter;
+
+size_t FlashLogPrinter::write(uint8_t b) {
+  char c = (char)b;
+  flashLogStage(&c, 1);
+  return 1;
+}
+
+size_t FlashLogPrinter::write(const uint8_t* buffer, size_t size) {
+  flashLogStage((const char*)buffer, size);
+  return size;
+}

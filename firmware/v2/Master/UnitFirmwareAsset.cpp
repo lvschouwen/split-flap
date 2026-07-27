@@ -8,11 +8,11 @@
 // left underneath was this: displayTask reaching the bundled unit firmware
 // (#205) through two accessors, so the file is now named for that job.
 
-#include "WebEndpoints.h"
+#include "ContentState.h"
 
 #include "WebAssets.h"
 
 // On the S3, PROGMEM is flash-mapped and directly readable, so the pointer
 // works as a plain byte buffer.
-const uint8_t* webUnitFirmwareBin() { return UNIT_FIRMWARE_BIN; }
-size_t webUnitFirmwareBinLen() { return UNIT_FIRMWARE_BIN_LEN; }
+const uint8_t* unitFirmwareBin() { return UNIT_FIRMWARE_BIN; }
+size_t unitFirmwareBinLen() { return UNIT_FIRMWARE_BIN_LEN; }

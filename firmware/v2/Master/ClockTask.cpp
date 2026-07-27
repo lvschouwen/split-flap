@@ -1,8 +1,8 @@
 // ClockTask.cpp — the 1 Hz mode ticker (#192), split out of Tasks.cpp
 // (#352). Re-shows the active mode's content — clock time or the retained
 // message — via the pure decideClockTick(); reroutes LOGICAL grid content to
-// the cluster leader while leading (#273) and re-shows the held segment
-// while clustered (#272).
+// the display's own content — the cluster reroute and the follower gate
+// went with the cluster wire.
 
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -11,13 +11,11 @@
 #include <ctime>
 
 #include "ClockPolicy.h"
-#include "ClusterFollower.h"
-#include "ClusterLeader.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "TaskWatchdog.h"
 #include "TasksInternal.h"
-#include "WebEndpoints.h"
+#include "ContentState.h"
 
 // 1 Hz mode ticker (#192): re-shows the active mode's content — clock time
 // or the retained message — whenever the display drifts away from it (mode
@@ -54,58 +52,14 @@ void clockTaskMain(void*) {
       notifWasActive = false;
       lastQueued = "";
     }
-    // Leader reroute (#273): with the cluster enabled the ticker's product
-    // becomes LOGICAL grid content handed to the cluster layer — which
-    // dedups, slices, and stages this master's own row on the shared
-    // commitAt clock — so nothing enqueues from here. Overlays still win:
-    // the gates above run first, and the self-row re-show after an overlay
-    // belongs to clusterTask.
-    if (clusterLeaderEnabled()) {
-      WebContentSnapshot leaderContent = webDisplayContentSnapshot();
-      time_t leaderNow = time(nullptr);
-      if (leaderContent.deviceMode == "clock") {
-        // Un-synced clock holds (v1 deviation, same as decideClockTick).
-        if (clockIsTimeSynced(leaderNow)) {
-          clusterLeaderSubmitClock(
-              formatDateTime(leaderNow, CLOCK_FORMAT),
-              formatDateTime(leaderNow, CLUSTER_DATE_FORMAT),
-              leaderContent.alignment, leaderContent.flapSpeed);
-        }
-      } else if (leaderContent.deviceMode == "text" &&
-                 leaderContent.inputText.length() > 0) {
-        clusterLeaderSubmitText(leaderContent.inputText,
-                                leaderContent.alignment,
-                                leaderContent.flapSpeed,
-                                leaderContent.inputTextSource);
-      }
-      lastQueued = "";  // the ticker owns nothing while leading
-      continue;
-    }
-
     clockTickObserve(lastQueued, String(snap.currentText));
 
-    WebContentSnapshot content = webDisplayContentSnapshot();
+    DisplayContent content = contentSnapshot();
     time_t now = time(nullptr);
 
-    // Cluster gate (#272): while this board is a cluster member the leader
-    // owns the content — the ticker's job becomes re-showing the held
-    // segment (restores the wall after transients and reset-units). While a
-    // commitAt render is in flight it stands down entirely so a re-show
-    // can't preempt the synchronized flip. LocalFallback (leader silent ~2
-    // min) shows the follower's OWN clock through the normal clock path.
-    ClusterFollowerView cluster = clusterFollowerViewGet();
-    if (cluster.gated && cluster.renderPending) continue;
-
     ClockTickInput in;
-    if (cluster.gated && !cluster.forcesLocalClock) {
-      in.deviceMode = "text";
-      in.inputText = cluster.heldSegment;  // "" until a render arrives → no-op
-    } else if (cluster.gated) {
-      in.deviceMode = "clock";
-    } else {
-      in.deviceMode = content.deviceMode;
-      in.inputText = content.inputText;
-    }
+    in.deviceMode = content.deviceMode;
+    in.inputText = content.inputText;
     in.timeSynced = clockIsTimeSynced(now);
     in.formattedTime = in.timeSynced ? formatDateTime(now, CLOCK_FORMAT) : "";
     in.displayBusy = snap.busy;
@@ -114,22 +68,14 @@ void clockTaskMain(void*) {
 
     ClockTickDecision d = decideClockTick(in);
     if (d.enqueue) {
-      // Segment re-shows are pre-positioned by the leader: rendered Left at
-      // the speed the render arrived with, like the original enqueue.
-      bool segmentReshow = cluster.gated && !cluster.forcesLocalClock;
       // This ticker is not always "the clock" (#403): in text mode it
       // re-shows the retained message — after an overlay reverts, say — and
-      // must credit whoever wrote it. Only an actual clock render is Clock;
-      // a held segment belongs to the leader.
-      DisplaySource source = segmentReshow      ? DisplaySource::Leader
-                             : in.deviceMode == "clock"
+      // must credit whoever wrote it, not claim the clock authored it.
+      DisplaySource source = in.deviceMode == "clock"
                                  ? DisplaySource::Clock
                                  : content.inputTextSource;
-      DisplayCommand cmd =
-          segmentReshow
-              ? makeShowTextCommand(d.text, "left", cluster.heldSpeed, source)
-              : makeShowTextCommand(d.text, content.alignment,
-                                    content.flapSpeed, source);
+      DisplayCommand cmd = makeShowTextCommand(
+          d.text, content.alignment, content.flapSpeed, source);
       if (displayEnqueue(cmd)) {
         lastQueued = d.text;
       }

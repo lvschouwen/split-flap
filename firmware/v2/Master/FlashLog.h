@@ -1,24 +1,41 @@
 #pragma once
 // FlashLog — persistent boot/debug log on the `storage` partition (#206).
-// Serial-less debugging: everything the SerialPrint helpers emit (already
-// mirrored into the WebLog RAM ring) is also staged here and flushed to a
-// LittleFS file by netTask, so a boot's log survives reboot and USB-unplug.
+// Serial-less debugging: everything the SerialPrint helpers emit is staged
+// here and flushed to a LittleFS file by netTask, so a boot's log survives
+// reboot and USB-unplug. This is now the ONLY log tee — the in-RAM ring
+// that used to sit in front of it existed to answer GET /log and went with
+// the HTTP layer.
 //
 // Ownership: producers (any task) only touch the mutex-guarded staging
 // buffer via flashLogStage(); ALL filesystem work happens in
-// flashLogTick(), called from netTask (webEndpointsLoop) — one flash
-// writer, open→append→close per flush so read handlers never share a write
-// handle. Policy (capacities, cadence, rotation) is pure FlashLogPolicy.h.
+// flashLogTick(), called from netTask — one flash writer, open→append→close
+// per flush. Policy (capacities, cadence, rotation) is pure
+// FlashLogPolicy.h.
 //
 // Files: /log.txt (current) → renamed to /log.prev.txt at the size cap.
-// Web: GET /log/flash [?prev=1], POST /log/flash/clear (staged, drained by
-// the tick — handlers never write flash).
+// Nothing reads them back on-device today; whatever API comes next should
+// expose them, because a previous boot's log is how a crash gets diagnosed.
+
+#include <Arduino.h>
 
 #include <stddef.h>
 
 // Mounts LittleFS on the `storage` partition (formats on first use) and
 // writes the boot marker (reset reason + build rev). Call once from
-// setup(), after webLogInit(), before tasksInit().
+// setup(), before the first SerialPrint* and before tasksInit().
+// A Print-derived sink so every type Serial can format (int, float, String,
+// IPAddress, Printable, ...) tees to flash without a pile of template
+// overloads in the SerialPrint helpers. Inherited from the in-RAM web log
+// that used to sit in front of this tee; that ring existed only to answer
+// GET /log and went with the HTTP layer.
+class FlashLogPrinter : public Print {
+ public:
+  size_t write(uint8_t b) override;
+  size_t write(const uint8_t* buffer, size_t size) override;
+};
+
+extern FlashLogPrinter flashLogPrinter;
+
 void flashLogInit();
 
 // Stages bytes for the next flush. Safe from any task; drops (and counts)

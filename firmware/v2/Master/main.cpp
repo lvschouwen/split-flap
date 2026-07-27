@@ -7,18 +7,15 @@
 // composition root; loop() survives only as the observability heartbeat.
 
 #include <Arduino.h>
-#include <ESPAsyncWebServer.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 
 #include "BuildVersion.h"  // GIT_REV — boot banner
 #include "ClockService.h"
-#include "ClusterFollower.h"
-#include "ClusterLeader.h"
+#include "ContentState.h"
 #include "DeviceIdentity.h"
 #include "FactorySlot.h"
 #include "FlashLog.h"
-#include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "NvsSettingsStore.h"
@@ -27,8 +24,6 @@
 #include "StatusLed.h"
 #include "SystemStats.h"
 #include "Tasks.h"
-#include "WebEndpoints.h"
-#include "WebLog.h"
 #include "WifiService.h"
 
 // v1 derives its chip id from ESP.getChipId() = last 3 octets of the MAC.
@@ -116,16 +111,13 @@ static void printBootDiagnostics() {
 static NvsSettingsStore settingsStore;
 static MasterSettings settings;
 static String deviceName;
-static AsyncWebServer webServer(80);
 
 void setup() {
   Serial.begin(115200);
   delay(2000);  // native USB-CDC needs a moment before the first prints land
-  webLogInit();  // before the first SerialPrint*, or those lines never
-                 // reach GET /log
-  flashLogInit();  // #206: mounts `storage`, writes the boot marker; from
-                   // here every SerialPrint* also lands in /log.txt
-  followerImageStoreInit();  // #304: read the stored ESP-01 image rev/presence
+  // #206: mounts `storage`, writes the boot marker (reset reason + rev).
+  // Must precede the first SerialPrint* or those lines never reach the tee.
+  flashLogInit();
 
   settingsStore.begin();
   settings = loadSettings(settingsStore);
@@ -137,13 +129,6 @@ void setup() {
                                  chipIdFromEfuseMac());
   statusLedInit(settings);  // boot white from here on (#199)
   systemStatsInit();        // #245: before tasksInit() starts netTask
-  // #272: loads the persisted cluster membership — a clustered follower
-  // boots gated in Grace. Before tasksInit(): netTask ticks the service
-  // and clockTask reads its view.
-  clusterFollowerInit(settingsStore);
-  // #273: loads the member table if this master leads a cluster wall, and
-  // mints the boot epoch. Before tasksInit() — clusterTask ticks it.
-  clusterLeaderInit(settingsStore, deviceName);
 
   SerialPrintln(F(""));
   SerialPrintln(F("split-flap v2 master — " GIT_REV));
@@ -177,17 +162,17 @@ void setup() {
 
   // Routes registered now; server.begin() happens from WifiService once a
   // netif exists (STA join or portal AP) — LWIP isn't up before that.
-  webEndpointsInit(webServer, settings, settingsStore, deviceName);
+  contentStateInit(settings, settingsStore);
   SerialPrintln(F("web endpoints registered (server starts with the netif)"));
 
   // Stable broker-identity copies + client config (#224); the connection
   // itself is mqttTask's business once tasksInit() starts it. Must run
-  // after webEndpointsInit (the service reads web-domain snapshots).
+  // after contentStateInit (the service reads content snapshots).
   mqttServiceInit(settings, settingsStore, deviceName, bootCount);
 
   // Wiring only — the radio comes up on netTask's first wifiServiceTick(),
   // keeping every WiFi call on core 0 (#188).
-  wifiServiceInit(webServer, settings, settingsStore, deviceName);
+  wifiServiceInit(settings, settingsStore, deviceName);
   SerialPrintf("wifi: %s\n", settings.wifiSsid.length()
                                  ? ("join \"" + settings.wifiSsid + "\"").c_str()
                                  : "unprovisioned -> setup portal");
@@ -203,7 +188,7 @@ void setup() {
   // call is now a no-op fallback.
   otaHealthConfirm();
 
-  // After webEndpointsInit/wifiServiceInit: netTask ticks both and needs
+  // After contentStateInit/wifiServiceInit: netTask ticks both and needs
   // their mutexes to exist before its first pass.
   tasksInit(settings, settingsStore);
   SerialPrintln(F("task skeleton up: display+clock on core 1, net+mqtt on core 0"));

@@ -52,15 +52,14 @@ bool tasksUnitCountOverridePinned() {
   return unitWidthOverride.load(std::memory_order_relaxed) > 0;
 }
 
-#include "ClusterFollower.h"
-#include "ClusterLeader.h"
 #include "HeadlessPolicy.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "StatusLed.h"
 #include "SystemStats.h"
 #include "TaskWatchdog.h"
-#include "WebEndpoints.h"
+#include "ContentState.h"
+#include "FlashLog.h"
 #include "WifiService.h"
 
 // --- static RTOS allocation (memory policy rule 1) ---------------------------
@@ -80,23 +79,17 @@ static constexpr uint32_t DISPLAY_TASK_STACK = 16384;
 // 2048 leaves only ~124 B HWM on real hardware — newlib's first
 // tzset/localtime parse of the POSIX TZ string runs deep in the ticker.
 static constexpr uint32_t CLOCK_TASK_STACK = 4096;
-// netTask is the heaviest domain task: wifi + web + flashLog + cluster
+// netTask is the heaviest domain task: wifi + flashLog + stats
 // follower + SSE + system-stats all share one loop. 4096 overflowed the
 // canary on real hardware (split-flap-c8a746) inside flashLogTick's
 // LittleFS.open → fopen → esp_flash_read, whose cross-core cache-disable
-// IPC is the deepest chain netTask ever runs; the #294-era SSE/stats work
-// raised the per-iteration floor until the fopen spike no longer fit. The
-// heartbeat HWM column stays the trim-down evidence.
+// IPC is the deepest chain netTask ever runs. The figure was set when the
+// SSE and cluster work sat on this task too; both are gone, so it is now
+// generous — the heartbeat HWM column is the evidence for trimming it.
 static constexpr uint32_t NET_TASK_STACK = 8192;
 // espMqttClient internals + the 512 B discovery build buffers (#224); the
 // heartbeat's HWM column is the trim-down evidence.
 static constexpr uint32_t MQTT_TASK_STACK = 6144;
-// esp_http_client + String assembly for the cluster fan-out (#273). The digest
-// build puts a full ClusterLeaderStatus (8 members x 4 Strings) + String
-// mirror[8] on the stack; at the config-apply/leading peak 6144 left only ~620 B
-// HWM (bench, #321) — bumped to 8192 for margin (also covers the reboot-hold
-// fan-out, which builds the same objects). RAM is plentiful (150 KB+ free heap).
-static constexpr uint32_t CLUSTER_TASK_STACK = 8192;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
 static constexpr UBaseType_t DOMAIN_TASK_PRIORITY = 1;   // everything else
@@ -107,13 +100,11 @@ static constexpr BaseType_t NETWORK_CORE = 0;  // with WiFi/LWIP/AsyncTCP
 static constexpr UBaseType_t DISPLAY_QUEUE_DEPTH = 16;
 static constexpr UBaseType_t MQTT_INBOX_DEPTH = 8;
 
-static StaticTask_t displayTaskBuf, clockTaskBuf, netTaskBuf, mqttTaskBuf,
-    clusterTaskBuf;
+static StaticTask_t displayTaskBuf, clockTaskBuf, netTaskBuf, mqttTaskBuf;
 static StackType_t displayTaskStack[DISPLAY_TASK_STACK];
 static StackType_t clockTaskStack[CLOCK_TASK_STACK];
 static StackType_t netTaskStack[NET_TASK_STACK];
 static StackType_t mqttTaskStack[MQTT_TASK_STACK];
-static StackType_t clusterTaskStack[CLUSTER_TASK_STACK];
 
 static StaticQueue_t displayQueueBuf;
 static uint8_t displayQueueStorage[DISPLAY_QUEUE_DEPTH * sizeof(DisplayCommand)];
@@ -124,7 +115,7 @@ static uint8_t mqttInboxStorage[MQTT_INBOX_DEPTH * sizeof(MqttInboxMessage)];
 static QueueHandle_t mqttInbox = nullptr;
 
 static TaskHandle_t displayTaskHandle, clockTaskHandle, netTaskHandle,
-    mqttTaskHandle, clusterTaskHandle;
+    mqttTaskHandle;
 
 // --- display snapshot (single writer: displayTask) ---------------------------
 
@@ -190,8 +181,8 @@ static void netTaskMain(void* arg) {
   for (;;) {
     wdtFeed();
     wifiServiceTick();
-    webEndpointsLoop(*ctx->settings, *ctx->store);
-    clusterFollowerServiceTick(*ctx->store);  // #272: decay + NVS + renders
+    contentStateTick();  // staged reboot, performed once the log is flushed
+    flashLogTick();      // netTask is the sole flash writer
     statusLedTick();
     systemStatsTick();  // #245/#251: self-throttled, 1 s fast + 5 s ring
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -214,21 +205,6 @@ static void mqttTaskMain(void*) {
     }
     mqttServiceTick();
     vTaskDelay(pdMS_TO_TICKS(10));
-  }
-}
-
-// Leader-side cluster fan-out (#273): ALL outbound cluster HTTP lives in
-// this task (esp_http_client, 1.5 s timeouts) — a dead follower stalls
-// only the fan-out, never netTask. The body is clusterLeaderTick()
-// (ClusterLeader.cpp); disabled clusters make it a no-op read.
-static void clusterTaskMain(void*) {
-  SerialPrintf("clusterTask up on core %d\n", xPortGetCoreID());
-  if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
-    SerialPrintf("wdt: cluster subscribe -> %s\n", esp_err_to_name(e));
-  for (;;) {
-    wdtFeed();
-    clusterLeaderTick();
-    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
@@ -272,21 +248,17 @@ void tasksInit(MasterSettings& settings, SettingsStore& store) {
   mqttTaskHandle = xTaskCreateStaticPinnedToCore(
       mqttTaskMain, "mqtt", MQTT_TASK_STACK, nullptr, DOMAIN_TASK_PRIORITY,
       mqttTaskStack, &mqttTaskBuf, NETWORK_CORE);
-  clusterTaskHandle = xTaskCreateStaticPinnedToCore(
-      clusterTaskMain, "cluster", CLUSTER_TASK_STACK, nullptr,
-      DOMAIN_TASK_PRIORITY, clusterTaskStack, &clusterTaskBuf, NETWORK_CORE);
 }
 
 void tasksHeartbeatReport() {
   Serial.printf(
       "[%8lu ms] heap %u KB free (min %u KB), psram %u KB free | stack HWM: "
-      "display %u, clock %u, net %u, mqtt %u, cluster %u, loop %u\n",
+      "display %u, clock %u, net %u, mqtt %u, loop %u\n",
       (unsigned long)millis(), ESP.getFreeHeap() / 1024,
       ESP.getMinFreeHeap() / 1024, ESP.getFreePsram() / 1024,
       (unsigned)uxTaskGetStackHighWaterMark(displayTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(clockTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(netTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(mqttTaskHandle),
-      (unsigned)uxTaskGetStackHighWaterMark(clusterTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 }

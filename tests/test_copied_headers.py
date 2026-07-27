@@ -43,8 +43,12 @@ NOTED_COPIES = [
     (MASTER / "DeviceIdentity.h", RESCUE / "RescueIdentity.h"),
     (FOLLOWER / "FollowerCors.h", RESCUE / "RescueCors.h"),
     (MASTER / "MaintenancePolicy.h", FOLLOWER / "FollowerOps.h"),
-    (MASTER / "ApiIndex.h", FOLLOWER / "ApiIndex.h"),
-    (MASTER / "ClusterDigest.h", FOLLOWER / "FollowerCors.h"),
+    # The Master originals of the last two pairs went with its HTTP layer:
+    # ApiIndex.h was Master's own route legend, and the ClusterDigest.h ->
+    # FollowerCors.h pair was a mispairing to begin with (the two headers are
+    # unrelated; FollowerCors.h's real relative is Rescue's RescueCors.h,
+    # declared above). The follower's ApiIndex.h is now an original, not a
+    # trim, so neither pair has a source to check.
 ]
 
 COPY_NOTE_RE = re.compile(r"\b(copy|copied|copies)\b", re.IGNORECASE)

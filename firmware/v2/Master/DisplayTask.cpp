@@ -18,7 +18,7 @@
 #include "TasksInternal.h"
 #include "UnitBus.h"
 #include "UnitEventLog.h"  // per-unit health transition log decision (#322)
-#include "WebEndpoints.h"
+#include "ContentState.h"
 
 // Settle after an address-mutating burn before the follow-up probe (#204):
 // the unit watchdog-resets THROUGH its twiboot window (~1 s) and probing
@@ -346,8 +346,8 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   snapshotPublish(local);
   SerialPrintf("reflash: %d unit(s) to flash\n", total);
 
-  const uint8_t* image = webUnitFirmwareBin();
-  size_t imageLen = webUnitFirmwareBinLen();
+  const uint8_t* image = unitFirmwareBin();
+  size_t imageLen = unitFirmwareBinLen();
   bool cancelled = false;
   bool halted = false;
   uint8_t consecutiveFailures = 0;

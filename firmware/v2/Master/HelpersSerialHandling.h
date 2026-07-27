@@ -4,24 +4,24 @@
 
 #include <cstdarg>
 #ifndef UNIT_TEST
-#include "WebLog.h"
+#include "FlashLog.h"
 #endif
 
 // Centralised log output, v2 copy of the v1 helper. On the S3 the USB-CDC
 // console coexists with I2C (no SERIAL_ENABLE tradeoff — v1's reason for
 // gating Serial is gone), so everything goes to Serial unconditionally and
-// is mirrored into the in-RAM web log ring (exposed at GET /log). The
-// web-log tap is skipped in the native test environment so included sketch
-// logic stays linkable there.
+// is teed to the flash log on the storage partition. The in-RAM ring that
+// used to sit in front of that tee went with the HTTP layer — it existed
+// only to answer GET /log, whereas the flash tee survives a reboot and is
+// how a crash gets read afterwards. The tap is skipped in the native test
+// environment so included sketch logic stays linkable there.
 //
 // Since the task skeleton (#187) these helpers have genuinely concurrent
 // callers on both cores, and one logical line is several writes (Serial
 // body, Serial CRLF, web-log mirror). A helper-scope mutex keeps lines
 // whole. Lock-order rule: this lock is taken around leaf operations only —
-// nothing inside it may take webStateMutex/snapshotMutex. Two leaf mutexes
-// nest inside it by design, one direction only and never held together:
-// webLogMutex and FlashLog's stageMutex (both reached via webLogAppend,
-// which takes them sequentially — see WebLog.cpp / FlashLog.cpp).
+// nothing inside it may take ContentState's mutex or snapshotMutex.
+// FlashLog's stageMutex nests inside it by design, one direction only.
 
 #if defined(ARDUINO_ARCH_ESP32) && !defined(UNIT_TEST)
 #include <freertos/FreeRTOS.h>
@@ -52,7 +52,7 @@ void SerialPrint(T value) {
   SerialPrintLock lock;
   Serial.print(value);
 #ifndef UNIT_TEST
-  webLogPrinter.print(value);
+  flashLogPrinter.print(value);
 #endif
 }
 
@@ -64,7 +64,7 @@ void SerialPrintf(const char* message, T value) {
   char buf[96];
   int n = snprintf(buf, sizeof(buf), message, value);
   if (n > 0) {
-    webLogAppend(buf, n > (int)sizeof(buf) - 1 ? (int)sizeof(buf) - 1 : n);
+    flashLogStage(buf, n > (int)sizeof(buf) - 1 ? (int)sizeof(buf) - 1 : n);
   }
 #endif
 }
@@ -85,7 +85,7 @@ inline void SerialPrintf(const char* message, ...) {
   SerialPrintLock lock;
   Serial.write(reinterpret_cast<const uint8_t*>(buf), (size_t)n);
 #ifndef UNIT_TEST
-  webLogAppend(buf, n);
+  flashLogStage(buf, n);
 #endif
 }
 
@@ -94,6 +94,6 @@ void SerialPrintln(T value) {
   SerialPrintLock lock;
   Serial.println(value);
 #ifndef UNIT_TEST
-  webLogPrinter.println(value);
+  flashLogPrinter.println(value);
 #endif
 }

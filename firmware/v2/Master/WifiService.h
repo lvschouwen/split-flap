@@ -14,11 +14,10 @@
 #include "SettingsStore.h"
 #include "WifiPolicy.h"
 
-class AsyncWebServer;
 
 // Stores the wiring; the radio comes up on netTask's first tick. Call from
 // setup() before tasksInit() so no tick runs uninitialized.
-void wifiServiceInit(AsyncWebServer& server, MasterSettings& settings,
+void wifiServiceInit(MasterSettings& settings,
                      SettingsStore& store, const String& effectiveDeviceName);
 
 // netTask context only: runs the join/portal policy, executes its actions,
