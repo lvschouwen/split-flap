@@ -23,13 +23,18 @@ import pathlib
 import re
 import subprocess
 
+# The Wall Console (#399) is the whole UI. The pre-#396 five-tab panel
+# (index.html / script.js / style.css) was deleted with it, not kept beside
+# it: two front doors would have been the hybrid the redesign set out to end.
 ASSETS = [
-    ("index.html", "INDEX_HTML", True),
-    ("portal.html","PORTAL_HTML",True),
-    ("script.js",  "SCRIPT_JS",  True),
-    ("md5.js",     "MD5_JS",     True),
-    ("style.css",  "STYLE_CSS",  True),
-    ("favicon.png","FAVICON_PNG",False),
+    ("console.html",     "CONSOLE_HTML",   True),
+    ("constants.js",     "CONSTANTS_JS",   True),
+    ("console.css",      "CONSOLE_CSS",    True),
+    ("console.js",       "CONSOLE_JS",     True),
+    ("console-detail.js","CONSOLE_DETAIL_JS", True),
+    ("portal.html",      "PORTAL_HTML",    True),
+    ("md5.js",           "MD5_JS",         True),
+    ("favicon.png",      "FAVICON_PNG",    False),
 ]
 
 
@@ -156,17 +161,24 @@ def parse_header_alphabet(header_text: str) -> str:
     return m.group(1)
 
 
-def parse_js_calibration_letters(script_js_text: str) -> str:
-    """Extract data/script.js's CALIBRATION_LETTERS array as a plain string.
-
-    The array is `['<char>', '<char>', ...]`; each element is one character.
-    Returns the concatenation so it can be compared to the header alphabet
-    byte-for-byte. Raises ValueError if the array can't be located.
-    """
-    m = re.search(r"CALIBRATION_LETTERS\s*=\s*\[(.*?)\]", script_js_text, re.DOTALL)
+def parse_define(text: str, name: str) -> str:
+    """Return the literal body of `#define <name> <value>`, minus any trailing
+    comment. Raises ValueError when the define is missing, so a header rename
+    fails the build loudly instead of silently baking a stale constant."""
+    m = re.search(rf"^#define\s+{re.escape(name)}\s+(.+?)\s*(?://.*)?$",
+                  text, flags=re.MULTILINE)
     if not m:
-        raise ValueError("CALIBRATION_LETTERS array not found in script.js")
-    return "".join(re.findall(r"'([^']*)'", m.group(1)))
+        raise ValueError(f"{name} #define not found")
+    return m.group(1).strip()
+
+
+def parse_int_define(text: str, name: str) -> int:
+    """Same, for integer constants — including the `(1 << 4)` bit-flag form."""
+    raw = parse_define(text, name)
+    m = re.fullmatch(r"\(?\s*1\s*<<\s*(\d+)\s*\)?", raw)
+    if m:
+        return 1 << int(m.group(1))
+    return int(raw, 0)
 
 
 def shared_protocol_header(project_dir: pathlib.Path) -> pathlib.Path:
@@ -176,27 +188,67 @@ def shared_protocol_header(project_dir: pathlib.Path) -> pathlib.Path:
     return project_dir.parent / "shared" / "SplitFlapProtocol.h"
 
 
-def verify_js_alphabet(project_dir: pathlib.Path) -> None:
-    """Fail the build if data/script.js's alphabet has drifted from the
-    shared SplitFlapProtocol.h (single source of truth, #149). The C side
-    can't drift because both firmwares #include the header; the JS side has
-    no compiler to enforce it, so this is where CI catches it."""
-    header = shared_protocol_header(project_dir)
-    script_js = project_dir / "data" / "script.js"
-    header_alphabet = parse_header_alphabet(header.read_text(encoding="utf-8"))
-    js_alphabet = parse_js_calibration_letters(script_js.read_text(encoding="utf-8"))
-    if header_alphabet != js_alphabet:
-        raise ValueError(
-            "Alphabet drift: script.js CALIBRATION_LETTERS does not match "
-            "SplitFlapProtocol.h SFP_ALPHABET (#149).\n"
-            f"  header: {header_alphabet!r}\n"
-            f"  script: {js_alphabet!r}"
-        )
-    print(f"[build_assets] alphabet OK — script.js matches SFP_ALPHABET ({len(header_alphabet)} chars)")
+def console_constants(project_dir: pathlib.Path) -> dict:
+    """Every firmware constant the web console needs, read from the headers
+    that own them.
+
+    The console used to hand-copy these — the alphabet most visibly — with a
+    build-time gate comparing the copy to the header (#149). A gate catches
+    drift; generating removes the second copy, so there is nothing to drift.
+    That is the same rule #408 applied to the C headers, extended to the one
+    consumer that cannot #include them.
+    """
+    shared = project_dir.parent / "shared"
+    protocol = shared / "SplitFlapProtocol.h"
+    health = (shared / "UnitHealth.h").read_text(encoding="utf-8")
+    protocol_text = protocol.read_text(encoding="utf-8")
+    events = (project_dir / "UnitEventLog.h").read_text(encoding="utf-8")
+    ini = (project_dir / "platformio.ini").read_text(encoding="utf-8")
+
+    alphabet = parse_header_alphabet(protocol_text)
+    steps_per_revolution = parse_int_define(protocol_text, "SFP_OFFSET_LIMIT_STEPS")
+    max_units = re.search(r"-D\s+UNITS_AMOUNT=(\d+)", ini)
+    if not max_units:
+        raise ValueError("UNITS_AMOUNT not found in platformio.ini")
+
+    return {
+        "alphabet": alphabet,
+        "flapAmount": len(alphabet),
+        "stepsPerRevolution": steps_per_revolution,
+        "stepsPerFlap": steps_per_revolution / len(alphabet),
+        "addressBase": parse_int_define(protocol_text, "SFP_I2C_ADDRESS_BASE"),
+        "maxUnits": int(max_units.group(1)),
+        "vccFloorMv": parse_int_define(events, "UNIT_VCC_MIN_FLOOR_MV"),
+        "flag": {
+            "moving": parse_int_define(health, "UNIT_FLAG_MOVING"),
+            "homeFailed": parse_int_define(health, "UNIT_FLAG_LAST_HOME_FAILED"),
+            "hallNever": parse_int_define(health, "UNIT_FLAG_HALL_NEVER"),
+            "addrEeprom": parse_int_define(health, "UNIT_FLAG_ADDR_EEPROM"),
+            "homed": parse_int_define(health, "UNIT_FLAG_HOMED"),
+        },
+    }
+
+
+def build_constants(project_dir: pathlib.Path) -> pathlib.Path:
+    """Write data/constants.js from the firmware headers. Generated, and
+    gitignored like WebAssets.h and BuildVersion.h — never hand-edited."""
+    out = project_dir / "data" / "constants.js"
+    body = json.dumps(console_constants(project_dir), separators=(",", ":"),
+                      ensure_ascii=False)
+    out.write_text(
+        "/* Auto-generated by build_assets.py — do not edit.\n"
+        " * Every value here is read from the firmware header that owns it,\n"
+        " * so the console cannot drift from the hardware it is describing. */\n"
+        f"var SFP = {body};\n"
+        "if (typeof module === \"object\" && module.exports) module.exports = SFP;\n",
+        encoding="utf-8",
+    )
+    print(f"[build_assets] wrote data/{out.name} from the firmware headers")
+    return out
 
 
 def build_header(project_dir: pathlib.Path) -> None:
-    verify_js_alphabet(project_dir)
+    build_constants(project_dir)
 
     data_dir = project_dir / "data"
     output_header = project_dir / "WebAssets.h"

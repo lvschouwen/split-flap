@@ -1,0 +1,629 @@
+/* Wall Console (#399). Single dark theme by product decision (#396 R3):
+   the device is a wall display and its console is looked at in the same room
+   as the wall. No prefers-color-scheme branch, no toggle, no second palette.
+
+   Palette rules the design fixes:
+   - The board is DARKER than the page it sits on. It is an object on a
+     surface, not the surface itself, and it never takes a chrome colour.
+   - Healthy carries no colour at all. Only faults, busy states and the single
+     accent get ink; a wall where everything is fine reads typographically.
+   - One accent (--amber), one fault colour (--warn), one busy colour.
+
+   --amber and --warn are the #397 token law, carried over byte-for-byte from
+   the stylesheet this one replaced. Every text colour here clears WCAG AA
+   against the surface it is used on; the dimmed board inks were lightened
+   from the mockup's values to do so. */
+:root {
+	color-scheme: dark;
+
+	--ground: #14120F;
+	--surface: #1D1A16;
+	--sunk: #100E0C;
+	--hair: #2E2A24;
+	--ink: #EDE7DC;
+	--ink-dim: #A69D8F;
+	--ink-faint: #8A8171;
+	--amber: #D9A03F;
+	--on-amber: #17130B;
+	--warn: #EA6E5C;
+	--busy: #7FA3C4;
+
+	/* Flap material: the physical shading ramp of one leaf, not chrome. */
+	--board: #0B0A09;
+	--flap-hi: #201D19;
+	--flap-lo: #17140F;
+	--flap-ink: #EFE3CE;
+	--flap-ink-dim: #857C6E;
+	--seam: #080706;
+	--board-dim: #8F857A;
+	--board-lbl: #A79C8C;
+
+	--sp-2xs: 2px;
+	--sp-xs: 4px;
+	--sp-sm: 6px;
+	--sp-md: 8px;
+	--sp-lg: 12px;
+	--sp-xl: 16px;
+	--sp-2xl: 24px;
+	--sp-3xl: 32px;
+
+	--fs-xs: 0.6875rem;
+	--fs-sm: 0.75rem;
+	--fs-md: 0.8125rem;
+	--fs-lg: 0.875rem;
+	--fs-xl: 0.9375rem;
+	--fs-2xl: 1.3125rem;
+	--lh-tight: 1.2;
+	--lh-body: 1.5;
+
+	--mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	--sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+	--r: 3px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+	margin: 0;
+	padding: var(--sp-2xl) 0 var(--sp-3xl);
+	background: var(--ground);
+	color: var(--ink);
+	font: 400 var(--fs-xl) / var(--lh-body) var(--sans);
+	-webkit-text-size-adjust: 100%;
+}
+
+/* Phone-first, and it stays a narrow column on a desktop: this is a console
+   for one wall, not a dashboard that spreads. */
+.wrap { max-width: 560px; margin: 0 auto; padding: 0 var(--sp-lg); }
+
+section { margin-bottom: var(--sp-2xl); }
+
+h1 {
+	font-size: var(--fs-2xl);
+	font-weight: 600;
+	letter-spacing: -0.015em;
+	margin: 0 0 var(--sp-2xs);
+}
+
+h2 {
+	font-size: var(--fs-xs);
+	font-weight: 600;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: var(--ink-faint);
+	margin: 0 0 var(--sp-md);
+}
+
+p { margin: 0; }
+
+.sr {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+}
+
+.sub {
+	font-size: var(--fs-sm);
+	color: var(--ink-faint);
+	margin-bottom: var(--sp-2xl);
+}
+
+.offline {
+	margin-bottom: var(--sp-lg);
+	padding: var(--sp-md) var(--sp-lg);
+	border-left: var(--sp-2xs) solid var(--warn);
+	background: var(--surface);
+	font-size: var(--fs-lg);
+	color: var(--ink);
+}
+
+:where(button, input, select, a):focus-visible {
+	outline: var(--sp-2xs) solid var(--amber);
+	outline-offset: var(--sp-2xs);
+}
+
+h1:focus { outline: none; }
+
+/* ---------- the board ---------- */
+
+.board {
+	--gap: 2px;
+	container-type: inline-size;
+	background: var(--board);
+	border-radius: var(--r);
+	padding: var(--sp-md);
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-xs);
+	overflow-x: auto;
+}
+
+.board-empty {
+	font-size: var(--fs-lg);
+	color: var(--board-dim);
+	padding: var(--sp-md) var(--sp-xs);
+}
+
+.brow { display: flex; flex-direction: column; }
+.strip { display: flex; flex-wrap: nowrap; gap: var(--gap); }
+
+.seg {
+	flex: 0 0 auto;
+	background: none;
+	border: 0;
+	padding: var(--sp-xs) 0;
+	margin: 0;
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+	border-radius: var(--sp-2xs);
+}
+
+.flaps { display: flex; gap: var(--gap); }
+
+/* One flap size for the whole wall: every row draws at the widest row's cell
+   size (--cols, set by the console from the wall model), on a flex row that
+   does not stretch. Five units next to sixteen therefore READ as five units
+   next to sixteen — nothing grows to fill its line. */
+.flap {
+	width: calc((100cqw - (var(--cols) - 1) * var(--gap)) / var(--cols));
+	min-width: 9px;
+	flex: 0 0 auto;
+	aspect-ratio: 5 / 7;
+	container-type: inline-size;
+	position: relative;
+	border-radius: 1.5px;
+	background: linear-gradient(to bottom, var(--flap-hi) 0 50%, var(--flap-lo) 50% 100%);
+	display: grid;
+	place-items: center;
+	overflow: hidden;
+}
+
+/* The split is drawn, not animated. */
+.flap::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 50%;
+	height: 1px;
+	background: var(--seam);
+}
+
+.flap span {
+	font: 500 64cqw / 1 var(--mono);
+	color: var(--flap-ink);
+}
+
+.seg[data-silent="true"] .flap span { color: var(--flap-ink-dim); }
+
+.rowbar {
+	display: flex;
+	align-items: baseline;
+	gap: var(--sp-md);
+	margin-top: var(--sp-xs);
+	font-size: var(--fs-xs);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--board-dim);
+}
+
+.rowbar b { font-weight: 600; color: var(--board-lbl); }
+.rowbar .flag { color: var(--warn); font-weight: 600; letter-spacing: 0.04em; }
+.rowbar .flag.busy { color: var(--busy); }
+.rowbar .go { margin-left: auto; }
+
+.brow:hover .rowbar b, .brow:focus-within .rowbar b { color: var(--flap-ink); }
+
+/* The only motion on the page, and only on a flap whose character actually
+   changed. Nothing runs while the wall is idle. */
+@media (prefers-reduced-motion: no-preference) {
+	.flap.turn span { animation: turn 200ms ease-out; }
+	@keyframes turn {
+		0% { transform: scaleY(0.15); opacity: 0.4; }
+		100% { transform: scaleY(1); opacity: 1; }
+	}
+}
+
+/* ---------- who put it there ---------- */
+
+.source {
+	margin-top: var(--sp-lg);
+	display: flex;
+	align-items: baseline;
+	gap: var(--sp-md);
+	flex-wrap: wrap;
+	font-size: var(--fs-lg);
+	color: var(--ink-dim);
+}
+
+.source strong { color: var(--ink); font-weight: 600; }
+.source .when { color: var(--ink-faint); font-size: var(--fs-md); }
+
+.source .dot {
+	width: var(--sp-sm);
+	height: var(--sp-sm);
+	border-radius: 50%;
+	background: var(--amber);
+	align-self: center;
+	flex: 0 0 auto;
+}
+
+/* ---------- the composer ---------- */
+
+.compose { display: flex; flex-direction: column; gap: var(--sp-md); }
+
+input[type="text"], input[type="number"], input[type="password"], select {
+	width: 100%;
+	padding: var(--sp-lg);
+	color: var(--ink);
+	background: var(--surface);
+	border: 1px solid var(--hair);
+	border-radius: var(--r);
+	font: 500 1rem / var(--lh-tight) var(--mono);
+	letter-spacing: 0.04em;
+}
+
+select, input[type="number"], input[type="password"] { font-family: var(--sans); letter-spacing: normal; }
+input[type="number"] { max-width: 8rem; }
+
+input[type="text"]::placeholder { color: var(--ink-faint); letter-spacing: 0.02em; }
+
+.acts { display: flex; gap: var(--sp-md); }
+
+.btn {
+	font: 600 var(--fs-xl) / 1 var(--sans);
+	padding: var(--sp-lg) var(--sp-xl);
+	border-radius: var(--r);
+	border: 1px solid transparent;
+	cursor: pointer;
+	text-decoration: none;
+	display: inline-block;
+}
+
+.btn.primary { background: var(--amber); color: var(--on-amber); }
+.acts .btn.primary { flex: 1; }
+/* A save, and even a firmware upload, is not the reason a page exists — it
+   gets the accent as an outline, not as a fill. Exactly one filled accent
+   exists in the whole console: "Send to wall". */
+.rowacts .btn.primary, .upload .btn.primary {
+	background: transparent;
+	color: var(--amber);
+	border-color: var(--amber);
+}
+.btn.quiet { background: transparent; color: var(--ink-dim); border-color: var(--hair); }
+.btn.small { font-size: var(--fs-md); padding: var(--sp-md) var(--sp-lg); }
+.btn[disabled] { opacity: 0.42; cursor: not-allowed; }
+
+.capacity { font-size: var(--fs-md); color: var(--ink-faint); }
+
+.blocked {
+	font-size: var(--fs-lg);
+	color: var(--ink-dim);
+	border-left: var(--sp-2xs) solid var(--busy);
+	padding-left: var(--sp-md);
+}
+
+.note { font-size: var(--fs-lg); color: var(--ink-dim); }
+.note.ok { color: var(--ink); }
+.note.bad { color: var(--warn); }
+.note.pending { color: var(--ink-faint); }
+.hint { font-size: var(--fs-md); color: var(--ink-faint); margin-top: var(--sp-xs); }
+
+/* ---------- the one line home keeps for hardware ---------- */
+
+.hw {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-md);
+	width: 100%;
+	padding: var(--sp-lg);
+	background: var(--surface);
+	border: 1px solid var(--hair);
+	border-radius: var(--r);
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+	text-align: left;
+}
+
+.hw:hover { background: var(--sunk); }
+.hw .lbl { font-weight: 600; font-size: var(--fs-lg); }
+.hw .say { color: var(--ink-dim); font-size: var(--fs-lg); }
+.hw .say.bad { color: var(--warn); font-weight: 600; }
+.hw .say.busy { color: var(--busy); font-weight: 600; }
+.hw .chev { margin-left: auto; color: var(--ink-faint); }
+
+/* ---------- lists of objects ---------- */
+
+.kit {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	background: var(--hair);
+	border: 1px solid var(--hair);
+	border-radius: var(--r);
+	overflow: hidden;
+}
+
+.box {
+	background: var(--surface);
+	display: grid;
+	grid-template-columns: 1fr auto;
+	gap: var(--sp-2xs) var(--sp-lg);
+	padding: var(--sp-lg);
+	text-align: left;
+	width: 100%;
+	border: 0;
+	cursor: pointer;
+	font: inherit;
+	color: inherit;
+}
+
+.box:hover { background: var(--sunk); }
+.box .name { font-weight: 600; font-size: var(--fs-xl); }
+.box .drives { grid-column: 1; font-size: var(--fs-lg); color: var(--ink-dim); }
+.box .meta { grid-column: 1 / -1; font-size: var(--fs-sm); color: var(--ink-faint); }
+
+.box .state {
+	grid-row: 1 / 3;
+	grid-column: 2;
+	align-self: center;
+	font-size: var(--fs-sm);
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	color: var(--ink-faint);
+	text-align: right;
+}
+
+.box .state.bad { color: var(--warn); font-weight: 600; }
+.box .state.busy { color: var(--busy); font-weight: 600; }
+
+/* ---------- one controller ---------- */
+
+.back {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--sp-sm);
+	background: none;
+	border: 0;
+	padding: var(--sp-xs) 0;
+	margin-bottom: var(--sp-lg);
+	font: 500 var(--fs-lg) var(--sans);
+	color: var(--ink-dim);
+	cursor: pointer;
+}
+
+.back:hover { color: var(--ink); }
+
+.panel {
+	background: var(--surface);
+	border: 1px solid var(--hair);
+	border-radius: var(--r);
+	padding: var(--sp-lg);
+}
+
+.facts { display: flex; flex-direction: column; }
+
+.fact {
+	display: flex;
+	align-items: baseline;
+	gap: var(--sp-lg);
+	padding: var(--sp-md) 0;
+	border-bottom: 1px solid var(--hair);
+	font-size: var(--fs-lg);
+}
+
+.fact:first-child { padding-top: 0; }
+.fact:last-child { border-bottom: 0; padding-bottom: 0; }
+.fact .k { color: var(--ink-dim); flex: 0 0 auto; min-width: 108px; font-size: var(--fs-md); }
+.fact .v { color: var(--ink); text-align: right; margin-left: auto; }
+.fact .v.bad { color: var(--warn); font-weight: 600; }
+.fact .v.busy { color: var(--busy); font-weight: 600; }
+.fact .v small { display: block; color: var(--ink-faint); font-size: var(--fs-sm); font-weight: 400; }
+
+.facts + .field, .facts + .vitals { margin-top: var(--sp-lg); }
+
+.field { display: flex; flex-direction: column; gap: var(--sp-sm); margin-bottom: var(--sp-lg); }
+.field label, .fieldlabel { font-size: var(--fs-md); color: var(--ink-dim); }
+.field .fieldval { color: var(--ink); margin-left: var(--sp-sm); font-variant-numeric: tabular-nums; }
+.field input[type="range"] { width: 100%; accent-color: var(--amber); }
+
+.choice { display: flex; gap: var(--sp-2xs); }
+
+.choicebtn {
+	flex: 1;
+	padding: var(--sp-md);
+	font: 500 var(--fs-md) var(--sans);
+	color: var(--ink-dim);
+	background: var(--sunk);
+	border: 1px solid var(--hair);
+	border-radius: var(--r);
+	cursor: pointer;
+}
+
+.choicebtn[aria-pressed="true"] {
+	color: var(--amber);
+	background: var(--ground);
+	border-color: var(--amber);
+}
+
+.choicebtn[aria-pressed="true"] small { color: var(--ink-dim); }
+
+.rowacts { display: flex; gap: var(--sp-md); flex-wrap: wrap; margin-top: var(--sp-lg); }
+.lede { font-size: var(--fs-lg); color: var(--ink-dim); margin-bottom: var(--sp-md); max-width: 60ch; }
+.none { font-size: var(--fs-lg); color: var(--ink-dim); }
+
+.units { display: grid; grid-template-columns: repeat(8, 1fr); gap: var(--sp-xs); }
+
+.unit {
+	aspect-ratio: 1;
+	border: 1px solid var(--hair);
+	border-radius: var(--sp-2xs);
+	background: var(--surface);
+	color: var(--ink-dim);
+	font: 500 var(--fs-sm) / 1 var(--mono);
+	display: grid;
+	place-items: center;
+}
+
+.unit.bad { border-color: var(--warn); color: var(--warn); font-weight: 700; }
+.unit.busy { border-color: var(--busy); color: var(--busy); font-weight: 700; }
+.unit.wear { border-color: var(--amber); color: var(--amber); font-weight: 700; }
+
+.legend { margin-top: var(--sp-md); font-size: var(--fs-md); color: var(--ink-dim); }
+
+.rare { border-top: 1px solid var(--hair); padding-top: var(--sp-xl); }
+.rare .rowacts { margin-top: 0; }
+
+/* ---------- vitals ---------- */
+
+.vitals {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: var(--sp-md);
+	margin: var(--sp-lg) 0;
+}
+
+.tile {
+	background: var(--sunk);
+	border: 1px solid var(--hair);
+	border-radius: var(--r);
+	padding: var(--sp-md) var(--sp-lg);
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-2xs);
+	min-width: 0;
+}
+
+.tile-k { font-size: var(--fs-sm); color: var(--ink-dim); }
+.tile-v { font-size: var(--fs-xl); font-variant-numeric: tabular-nums; }
+
+.spark { width: 100%; height: 26px; margin-top: var(--sp-2xs); }
+.spark path { fill: none; stroke: var(--ink-faint); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+
+/* ---------- upload + progress ---------- */
+
+.upload { display: flex; flex-direction: column; gap: var(--sp-md); align-items: flex-start; }
+.upload input[type="file"], .upload .bar, .upload .note { align-self: stretch; }
+
+input[type="file"] {
+	font: 400 var(--fs-md) var(--sans);
+	color: var(--ink-dim);
+	background: var(--sunk);
+	border: 1px solid var(--hair);
+	border-radius: var(--r);
+	padding: var(--sp-md);
+	width: 100%;
+}
+
+input[type="number"], input[type="password"] { font-family: var(--sans); letter-spacing: normal; }
+
+.bar {
+	height: var(--sp-sm);
+	background: var(--sunk);
+	border-radius: var(--r);
+	overflow: hidden;
+}
+
+.bar .fill { height: 100%; width: 0; background: var(--amber); transition: width 120ms linear; }
+
+.progress {
+	margin-top: var(--sp-lg);
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-sm);
+	font-size: var(--fs-md);
+	color: var(--busy);
+}
+
+/* ---------- suggestion chips ---------- */
+
+.suggestions { display: flex; flex-wrap: wrap; gap: var(--sp-sm); margin: var(--sp-md) 0; }
+
+.chip {
+	font: 500 var(--fs-md) var(--sans);
+	padding: var(--sp-sm) var(--sp-lg);
+	color: var(--ink);
+	background: var(--sunk);
+	border: 1px solid var(--hair);
+	border-radius: var(--r);
+	cursor: pointer;
+}
+
+.chip:hover { border-color: var(--ink-dim); }
+
+/* ---------- the member editor ---------- */
+
+.editor { margin-top: var(--sp-xl); border-top: 1px solid var(--hair); padding-top: var(--sp-lg); }
+.members { display: flex; flex-direction: column; gap: var(--sp-md); margin: var(--sp-md) 0; }
+
+.member {
+	display: grid;
+	grid-template-columns: 1fr 4.5rem 4.5rem auto;
+	gap: var(--sp-sm);
+	align-items: center;
+}
+
+.member input { padding: var(--sp-md); font-size: var(--fs-md); }
+
+.sub-panel { margin-top: var(--sp-xl); border-top: 1px solid var(--hair); padding-top: var(--sp-lg); }
+h3 { font-size: var(--fs-lg); font-weight: 600; margin: 0 0 var(--sp-sm); }
+
+/* ---------- lining the drums up ---------- */
+
+details { margin-top: var(--sp-lg); }
+
+summary {
+	cursor: pointer;
+	font: 600 var(--fs-lg) var(--sans);
+	color: var(--ink-dim);
+	padding: var(--sp-md) 0;
+	list-style-position: inside;
+}
+
+summary:hover { color: var(--ink); }
+
+.lineup-rows {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(4.5rem, 1fr));
+	gap: var(--sp-md);
+	margin: var(--sp-md) 0;
+}
+
+.lineup-row { display: flex; align-items: center; gap: var(--sp-sm); }
+.lineup-n { font: 500 var(--fs-sm) var(--mono); color: var(--ink-faint); min-width: 1.5rem; }
+
+.lineup-real {
+	width: 100%;
+	min-width: 0;
+	text-align: center;
+	padding: var(--sp-md) var(--sp-2xs);
+	text-transform: uppercase;
+}
+
+/* ---------- the log ---------- */
+
+.log {
+	margin-top: var(--sp-md);
+	max-height: 24rem;
+	overflow: auto;
+	background: var(--sunk);
+	border: 1px solid var(--hair);
+	border-radius: var(--r);
+	padding: var(--sp-lg);
+	font: 400 var(--fs-sm) / 1.7 var(--mono);
+	color: var(--ink-dim);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* ---------- odds ---------- */
+
+.choice-col { flex-direction: column; }
+.choice-col .choicebtn { text-align: left; }
+.choicebtn small { display: block; font-weight: 400; font-size: var(--fs-sm); opacity: 0.8; }
+.choice-k { font-weight: 600; }
+

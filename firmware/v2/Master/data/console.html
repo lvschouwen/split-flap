@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<title>The wall</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1" charset="utf-8" />
+	<link rel="icon" type="image/png" href="favicon.png" />
+	<link rel="stylesheet" type="text/css" href="console.css" />
+</head>
+
+<body>
+	<div class="wrap">
+		<p id="offline" class="offline" role="status" hidden>Cannot reach this box right now.</p>
+
+		<main>
+			<!-- ============ HOME — the wall ============ -->
+			<div id="s-home">
+				<h1 class="sr" tabindex="-1">The wall</h1>
+
+				<section aria-label="The wall">
+					<div class="board" id="board" aria-live="polite"></div>
+					<p class="source" id="source"></p>
+				</section>
+
+				<section aria-labelledby="send-h">
+					<h2 id="send-h">Put something on it</h2>
+					<div class="compose">
+						<label class="sr" for="msg">Message for the wall</label>
+						<input type="text" id="msg" maxlength="75" autocomplete="off" placeholder="Type a message" />
+						<div class="acts">
+							<button type="button" class="btn primary" id="send">Send to wall</button>
+							<button type="button" class="btn quiet" id="stop">Blank it</button>
+						</div>
+						<label class="sr" for="dwell">How long to show it</label>
+						<select id="dwell">
+							<option value="">leave it up until something replaces it</option>
+							<option value="300">show it for 5 minutes, then go back</option>
+							<option value="900">show it for 15 minutes, then go back</option>
+							<option value="3600">show it for an hour, then go back</option>
+						</select>
+						<p class="capacity" id="capacity"></p>
+						<p class="blocked" id="blocked" hidden></p>
+						<p class="note" id="home-status" role="status" hidden></p>
+					</div>
+				</section>
+
+				<section aria-label="Hardware">
+					<button type="button" class="hw" id="hw">
+						<span class="lbl">Controllers</span>
+						<span class="say" id="hw-say"></span>
+						<span class="chev" aria-hidden="true">›</span>
+					</button>
+				</section>
+			</div>
+
+			<!-- ============ THE CONTROLLERS ============ -->
+			<div id="s-list" hidden>
+				<button type="button" class="back" id="list-back"><span aria-hidden="true">‹</span> The wall</button>
+				<h1 tabindex="-1">Controllers</h1>
+				<p class="sub" id="list-sub"></p>
+				<div class="kit" id="kit"></div>
+			</div>
+
+			<!-- ============ ONE CONTROLLER ============ -->
+			<div id="s-ctrl" hidden>
+				<button type="button" class="back" id="ctrl-back"><span aria-hidden="true">‹</span> <span
+						id="ctrl-back-lbl">The wall</span></button>
+				<h1 id="ctrl-name" tabindex="-1"></h1>
+				<p class="sub" id="ctrl-sub"></p>
+				<div id="ctrl-body"></div>
+			</div>
+
+			<!-- ============ ONE UNIT ============ -->
+			<div id="s-unit" hidden>
+				<button type="button" class="back" id="unit-back"><span aria-hidden="true">‹</span> <span
+						id="unit-back-lbl"></span></button>
+				<h1 id="unit-name" tabindex="-1"></h1>
+				<p class="sub" id="unit-sub"></p>
+				<div id="unit-body"></div>
+			</div>
+		</main>
+	</div>
+	<script src="constants.js"></script>
+	<script src="md5.js"></script>
+	<script src="console.js"></script>
+	<script src="console-detail.js"></script>
+</body>
+
+</html>

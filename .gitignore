@@ -57,3 +57,5 @@ firmware/v2/*/.cache/
 
 # clangd index cache (per-machine, generated)
 firmware/v2/*/.cache/
+# Web console constants, generated from the firmware headers (#399)
+firmware/**/data/constants.js

@@ -1,9 +1,10 @@
-"""Host-side tests for v2 Master/build_assets.py (#186, #205).
+"""Host-side tests for v2 Master/build_assets.py (#186, #205, #399).
 
-Covered here: the alphabet drift gate (#149) against the v1 shared protocol
-header the v2 master speaks, deterministic gzip (#168), the UTF-8 pinning
-guard, and — since the reflash slice (#205) — the unit-firmware bundling
-(Intel-HEX parse, page pad, rev sidecar) the v2 script re-grew from v1.
+Covered here: the console constants generated from the firmware headers
+(#399 — the alphabet among them, which the UI used to hand-copy behind a
+#149 drift gate), deterministic gzip (#168), the UTF-8 pinning guard, and —
+since the reflash slice (#205) — the unit-firmware bundling (Intel-HEX parse,
+page pad, rev sidecar) the v2 script re-grew from v1.
 
 Run with:
     pytest tests/
@@ -21,9 +22,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import build_assets  # noqa: E402
 
 
-# --- alphabet drift check (#149) ------------------------------------------
+# --- reading constants out of the headers ---------------------------------
 
-EXPECTED_ALPHABET = " ABCDEFGHIJKLMNOPQRSTUVWXYZ$&#0123456789:.-?!"
+# Deliberately NOT the real alphabet: these tests prove the parser, and a
+# copy of the real value here would be the very duplication #399 removed.
+EXPECTED_ALPHABET = " ABC$&#0123:.!?-"
 
 
 def test_parse_header_alphabet_extracts_literal():
@@ -36,57 +39,87 @@ def test_parse_header_alphabet_raises_when_missing():
         build_assets.parse_header_alphabet("#define SOMETHING_ELSE 1\n")
 
 
-def test_parse_js_calibration_letters_joins_chars():
-    js = "const CALIBRATION_LETTERS = [' ','A','B','$','&','#','?','!'];"
-    assert build_assets.parse_js_calibration_letters(js) == " AB$&#?!"
+def test_real_tree_no_longer_ships_the_old_panel():
+    # #399: the five-tab panel was deleted, not parked on a second route.
+    data = pathlib.Path(build_assets.__file__).resolve().parent / "data"
+    for gone in ("index.html", "script.js", "style.css"):
+        assert not (data / gone).exists(), f"{gone} came back"
+    names = {name for name, _, _ in build_assets.ASSETS}
+    assert names == {"console.html", "constants.js", "console.css", "console.js",
+                     "console-detail.js", "portal.html", "md5.js", "favicon.png"}
 
 
-def test_parse_js_calibration_letters_raises_when_missing():
-    with pytest.raises(ValueError):
-        build_assets.parse_js_calibration_letters("const OTHER = [1,2,3];")
+def test_parse_int_define_reads_a_plain_number():
+    assert build_assets.parse_int_define("#define SFP_I2C_ADDRESS_BASE 1\n",
+                                         "SFP_I2C_ADDRESS_BASE") == 1
 
 
-def _make_tree(tmp_path, alphabet_header: str, alphabet_js: str) -> pathlib.Path:
-    """Recreate the firmware/v2/shared + firmware/v2/Master layout the
-    verify step resolves against (shared_protocol_header)."""
-    shared = tmp_path / "v2" / "shared"
-    shared.mkdir(parents=True)
-    (shared / "SplitFlapProtocol.h").write_text(
-        f'#define SFP_ALPHABET "{alphabet_header}"\n', encoding="utf-8"
-    )
-    project = tmp_path / "v2" / "Master"
-    (project / "data").mkdir(parents=True)
-    js_array = ",".join(f"'{c}'" for c in alphabet_js)
-    (project / "data" / "script.js").write_text(
-        f"const CALIBRATION_LETTERS = [{js_array}];\n", encoding="utf-8"
-    )
-    return project
+def test_parse_int_define_reads_a_bit_flag():
+    assert build_assets.parse_int_define("#define UNIT_FLAG_HOMED (1 << 5)\n",
+                                         "UNIT_FLAG_HOMED") == 32
+
+
+def test_parse_int_define_ignores_a_trailing_comment():
+    assert build_assets.parse_int_define(
+        "#define SFP_OFFSET_LIMIT_STEPS     2038  // one full revolution\n",
+        "SFP_OFFSET_LIMIT_STEPS") == 2038
+
+
+def test_parse_int_define_raises_when_the_header_renamed_it():
+    with pytest.raises(ValueError, match="GONE"):
+        build_assets.parse_int_define("#define STILL_HERE 1\n", "GONE")
 
 
 def test_shared_protocol_header_points_into_v2_shared(tmp_path):
     project = tmp_path / "v2" / "Master"
-    header = build_assets.shared_protocol_header(project)
-    assert header == tmp_path / "v2" / "shared" / "SplitFlapProtocol.h"
+    assert build_assets.shared_protocol_header(project) == (
+        tmp_path / "v2" / "shared" / "SplitFlapProtocol.h")
 
 
-def test_verify_js_alphabet_passes_on_match(tmp_path):
-    project = _make_tree(tmp_path, EXPECTED_ALPHABET, EXPECTED_ALPHABET)
-    build_assets.verify_js_alphabet(project)  # must not raise
+# --- generated console constants (#399) ------------------------------------
+#
+# The console cannot #include a C header, so every firmware constant it needs
+# is GENERATED from the header that owns it. There is no second copy to drift,
+# which is why the old hand-copied alphabet + drift gate are both gone.
 
 
-def test_verify_js_alphabet_fails_on_drift(tmp_path):
-    # Drop the trailing '!' so the JS drifts from the header.
-    project = _make_tree(tmp_path, EXPECTED_ALPHABET, EXPECTED_ALPHABET[:-1])
-    with pytest.raises(ValueError, match="drift"):
-        build_assets.verify_js_alphabet(project)
-
-
-def test_real_tree_alphabet_is_in_sync():
-    # The v2 data/ is a copy of v1's UI and both masters speak the same
-    # protocol header — run the actual gate against the working tree so a
-    # drifted copy fails in pytest before it fails the firmware build.
+def test_console_constants_come_from_the_real_headers():
     project = pathlib.Path(build_assets.__file__).resolve().parent
-    build_assets.verify_js_alphabet(project)
+    c = build_assets.console_constants(project)
+    header = build_assets.shared_protocol_header(project).read_text(encoding="utf-8")
+    assert c["alphabet"] == build_assets.parse_header_alphabet(header)
+    assert c["flapAmount"] == len(c["alphabet"])
+    assert c["stepsPerFlap"] == c["stepsPerRevolution"] / c["flapAmount"]
+    assert c["maxUnits"] > 0
+    assert c["vccFloorMv"] > 0
+
+
+def test_console_constants_carry_every_unit_flag_the_console_reads():
+    project = pathlib.Path(build_assets.__file__).resolve().parent
+    flags = build_assets.console_constants(project)["flag"]
+    assert set(flags) == {"moving", "homeFailed", "hallNever", "addrEeprom", "homed"}
+    # Distinct single bits — a duplicated mask would silently mis-colour units.
+    assert sorted(flags.values()) == sorted(set(flags.values()))
+    for v in flags.values():
+        assert v and (v & (v - 1)) == 0
+
+
+def test_build_constants_writes_a_loadable_module():
+    project = pathlib.Path(build_assets.__file__).resolve().parent
+    out = build_assets.build_constants(project)
+    text = out.read_text(encoding="utf-8")
+    assert text.startswith("/* Auto-generated")
+    assert "var SFP = {" in text
+    assert "module.exports = SFP" in text
+
+
+def test_the_console_holds_no_copy_of_the_alphabet():
+    # The whole point of generating: grep for the literal and find nothing.
+    data = pathlib.Path(build_assets.__file__).resolve().parent / "data"
+    project = data.parent
+    alphabet = build_assets.console_constants(project)["alphabet"]
+    for name in ("console.js", "console-detail.js", "console.html"):
+        assert alphabet not in (data / name).read_text(encoding="utf-8"), name
 
 
 # --- unit-firmware bundling (#205) -----------------------------------------
