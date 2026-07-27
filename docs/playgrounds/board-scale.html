@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Board scale explorer — split-flap #423</title>
+<style>
+/* Tokens lifted byte-for-byte from firmware/v2/Master/data/console.css so what
+   you see here is what the firmware will draw. Do not "improve" them. */
+:root {
+  --ground:#14120F; --surface:#1D1A16; --sunk:#100E0C; --hair:#2E2A24;
+  --ink:#EDE7DC; --ink-dim:#A69D8F; --ink-faint:#8A8171;
+  --amber:#D9A03F; --on-amber:#17130B; --warn:#EA6E5C; --busy:#7FA3C4;
+  --board:#0B0A09; --flap-hi:#201D19; --flap-lo:#17140F;
+  --flap-ink:#EFE3CE; --seam:#080706; --board-dim:#8F857A; --board-lbl:#A79C8C;
+  --mono: ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  --sans: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --ok:#8FBF7F;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:#0A0908; color:var(--ink);
+  font:400 14px/1.5 var(--sans); -webkit-text-size-adjust:100%;
+}
+.app { display:grid; grid-template-columns:340px 1fr; min-height:100vh; }
+@media (max-width:900px){ .app{ grid-template-columns:1fr; } }
+
+/* ---------- controls ---------- */
+.controls { background:var(--surface); border-right:1px solid var(--hair); padding:18px; overflow-y:auto; max-height:100vh; }
+.controls h1 { font-size:16px; margin:0 0 2px; letter-spacing:-.01em; }
+.controls .lede { font-size:12px; color:var(--ink-faint); margin:0 0 18px; line-height:1.45; }
+fieldset { border:0; border-top:1px solid var(--hair); margin:0 0 16px; padding:14px 0 0; }
+legend { font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--ink-faint); font-weight:600; padding:0; }
+label.row { display:flex; justify-content:space-between; align-items:baseline; font-size:12px; color:var(--ink-dim); margin:12px 0 4px; gap:8px; }
+label.row b { color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; font-family:var(--mono); font-size:12px; }
+input[type=range]{ width:100%; height:28px; accent-color:var(--amber); cursor:pointer; margin:0; }
+input[type=text]{ width:100%; padding:8px; background:var(--sunk); border:1px solid var(--hair); border-radius:3px; color:var(--ink); font:500 13px var(--mono); letter-spacing:.04em; }
+.cards { display:flex; flex-direction:column; gap:6px; margin-top:10px; }
+.card { text-align:left; padding:9px 11px; background:var(--sunk); border:1px solid var(--hair); border-radius:3px; color:var(--ink-dim); cursor:pointer; font:inherit; font-size:12px; }
+.card b { display:block; color:var(--ink); font-size:13px; margin-bottom:2px; }
+.card[aria-pressed=true]{ border-color:var(--amber); color:var(--ink-dim); background:var(--ground); }
+.card[aria-pressed=true] b { color:var(--amber); }
+.chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+.chip { font:500 12px var(--sans); padding:7px 11px; background:var(--sunk); border:1px solid var(--hair); border-radius:3px; color:var(--ink); cursor:pointer; }
+.chip:hover { border-color:var(--ink-dim); }
+.tog { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-dim); margin:10px 0 0; cursor:pointer; }
+.tog input { accent-color:var(--amber); width:16px; height:16px; cursor:pointer; }
+.hint { font-size:11px; color:var(--ink-faint); margin:6px 0 0; line-height:1.45; }
+
+/* ---------- stage ---------- */
+.stage { padding:18px 18px 0; overflow:auto; display:flex; flex-direction:column; gap:14px; }
+.readout { display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:8px; }
+.tile { background:var(--surface); border:1px solid var(--hair); border-radius:3px; padding:8px 11px; }
+.tile-k { font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-faint); }
+.tile-v { font:600 16px var(--mono); font-variant-numeric:tabular-nums; margin-top:2px; }
+.tile-v small { display:block; font:400 11px var(--sans); color:var(--ink-faint); letter-spacing:0; }
+.tile.good .tile-v { color:var(--ok); } .tile.bad .tile-v { color:var(--warn); } .tile.warn .tile-v { color:var(--amber); }
+
+.viewport-wrap { background:#000; border:1px solid var(--hair); border-radius:4px; padding:14px; overflow:hidden; }
+.scalenote { font-size:11px; color:var(--ink-faint); margin:0 0 8px; font-family:var(--mono); }
+.screen { background:var(--ground); overflow:hidden; transform-origin:top left; }
+.wrap { margin:0 auto; padding:0 12px; }
+
+/* the board — same rules as console.css */
+.board { background:var(--board); border-radius:3px; padding:8px; display:flex; flex-direction:column; gap:4px; overflow-x:auto; }
+.brow { display:flex; flex-direction:column; }
+.strip { display:flex; flex-wrap:nowrap; }
+.flaps { display:flex; }
+.flap { flex:0 0 auto; position:relative; border-radius:1.5px; background:linear-gradient(to bottom,var(--flap-hi) 0 50%,var(--flap-lo) 50% 100%); display:grid; place-items:center; overflow:hidden; }
+.flap::after { content:""; position:absolute; left:0; right:0; top:50%; height:1px; background:var(--seam); }
+.flap span { font-family:var(--mono); font-weight:500; line-height:1; color:var(--flap-ink); }
+.rowbar { display:flex; align-items:baseline; gap:8px; margin-top:4px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--board-dim); }
+.rowbar b { font-weight:600; color:var(--board-lbl); }
+.rowbar .go { margin-left:auto; }
+
+/* the rest of home, so "is the board dominant?" is answerable */
+.rest { padding-top:20px; }
+.source { display:flex; align-items:baseline; gap:8px; font-size:14px; color:var(--ink-dim); }
+.source .dot { width:6px; height:6px; border-radius:50%; background:var(--amber); align-self:center; }
+.source strong { color:var(--ink); }
+.h2 { font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-faint); margin:24px 0 8px; }
+.fakeinput { padding:12px; background:var(--surface); border:1px solid var(--hair); border-radius:3px; color:var(--ink-faint); font:500 16px var(--mono); min-height:44px; }
+.fakesel { margin-top:8px; padding:12px; background:var(--surface); border:1px solid var(--hair); border-radius:3px; color:var(--ink); font-size:15px; min-height:44px; }
+.fakeacts { display:flex; gap:8px; margin-top:8px; }
+.fakebtn { flex:1; min-height:44px; display:flex; align-items:center; justify-content:center; background:var(--amber); color:var(--on-amber); border-radius:3px; font-weight:600; font-size:15px; }
+.fakebtn.q { flex:0 0 auto; padding:0 16px; background:transparent; color:var(--ink-dim); border:1px solid var(--hair); }
+.fakehw { margin-top:24px; padding:12px; background:var(--surface); border:1px solid var(--hair); border-radius:3px; display:flex; gap:8px; align-items:center; font-size:14px; min-height:44px; }
+.fakehw b { font-weight:600; } .fakehw span { color:var(--ink-dim); } .fakehw i { margin-left:auto; color:var(--ink-faint); font-style:normal; }
+.foldline { border-top:1px dashed #4a4136; position:relative; margin-top:0; }
+.foldline::after { content:"fold"; position:absolute; right:4px; top:-14px; font:400 10px var(--sans); color:#6b6153; letter-spacing:.08em; text-transform:uppercase; }
+
+/* ---------- prompt ---------- */
+.prompt { position:sticky; bottom:0; background:var(--surface); border-top:1px solid var(--hair); padding:12px 18px; margin:0 -18px; }
+.prompt-head { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.prompt-head h2 { font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--ink-faint); margin:0; font-weight:600; }
+.copy { margin-left:auto; background:transparent; color:var(--amber); border:1px solid var(--amber); border-radius:3px; padding:7px 14px; font:600 12px var(--sans); cursor:pointer; min-height:32px; }
+.copy.done { color:var(--ok); border-color:var(--ok); }
+pre.out { margin:0; padding:11px; background:var(--sunk); border:1px solid var(--hair); border-radius:3px; font:400 12px/1.6 var(--mono); color:var(--ink-dim); white-space:pre-wrap; max-height:150px; overflow:auto; }
+</style>
+</head>
+<body>
+<div class="app">
+
+<div class="controls">
+  <h1>Board scale explorer</h1>
+  <p class="lede">Issue #423 — the wall is drawn smaller than any other object in its own console. Pick a sizing rule and see it on the real 5&nbsp;+&nbsp;16 wall before touching firmware.</p>
+
+  <fieldset>
+    <legend>Presets</legend>
+    <div class="chips" id="presets"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Sizing rule</legend>
+    <div class="cards" id="strategies"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Viewport</legend>
+    <label class="row"><span>Width</span><b id="v-viewport"></b></label>
+    <input type="range" id="viewport" min="320" max="1440" step="1" />
+    <div class="chips">
+      <button class="chip" data-vw="390">390 phone</button>
+      <button class="chip" data-vw="412">412 phone</button>
+      <button class="chip" data-vw="768">768 tablet</button>
+      <button class="chip" data-vw="1440">1440 desktop</button>
+    </div>
+    <label class="row"><span>Height (for the fold line)</span><b id="v-vh"></b></label>
+    <input type="range" id="vh" min="600" max="1100" step="1" />
+  </fieldset>
+
+  <fieldset>
+    <legend>Board</legend>
+    <label class="row"><span>Minimum flap width</span><b id="v-minflap"></b></label>
+    <input type="range" id="minflap" min="9" max="48" step="1" />
+    <p class="hint" id="hint-minflap"></p>
+
+    <label class="row"><span>Gap between flaps</span><b id="v-gap"></b></label>
+    <input type="range" id="gap" min="0" max="8" step="1" />
+
+    <label class="row"><span>Height budget</span><b id="v-budget"></b></label>
+    <input type="range" id="budget" min="15" max="80" step="1" />
+    <p class="hint">Share of the screen the board may take. Only used by the “fill the space” rule.</p>
+
+    <label class="tog"><input type="checkbox" id="breakout" /> Let the board escape the reading column</label>
+    <label class="row"><span>…up to</span><b id="v-maxw"></b></label>
+    <input type="range" id="maxw" min="560" max="1400" step="10" />
+    <p class="hint">The 560px column exists for text. The board is an object, not a paragraph.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>The wall</legend>
+    <p class="hint" style="margin:8px 0 0">A row's width is its unit count, not its text — the flaps are there whether
+      or not anything is showing on them. Set units to 0 to remove a row.</p>
+
+    <label class="row"><span>Row 0 units</span><b id="v-u0"></b></label>
+    <input type="range" id="u0" min="0" max="32" step="1" />
+    <input type="text" id="t0" maxlength="32" placeholder="showing nothing" />
+
+    <label class="row"><span>Row 1 units</span><b id="v-u1"></b></label>
+    <input type="range" id="u1" min="0" max="32" step="1" />
+    <input type="text" id="t1" maxlength="32" placeholder="showing nothing" />
+
+    <label class="row"><span>Row 2 units</span><b id="v-u2"></b></label>
+    <input type="range" id="u2" min="0" max="32" step="1" />
+    <input type="text" id="t2" maxlength="32" placeholder="showing nothing" />
+
+    <label class="tog"><input type="checkbox" id="rest" checked /> Show the rest of the home screen</label>
+    <label class="tog"><input type="checkbox" id="fold" checked /> Show the fold</label>
+  </fieldset>
+</div>
+
+<div class="stage">
+  <div class="readout" id="readout"></div>
+
+  <div class="viewport-wrap">
+    <p class="scalenote" id="scalenote"></p>
+    <div id="screenhost"><div class="screen" id="screen"></div></div>
+  </div>
+
+  <div class="prompt">
+    <div class="prompt-head">
+      <h2>Direction for the firmware</h2>
+      <button class="copy" id="copy">Copy</button>
+    </div>
+    <pre class="out" id="out"></pre>
+  </div>
+</div>
+</div>
+
+<script>
+/* The firmware's own numbers. console.css: .board padding 8, row gap 4,
+   .flap aspect-ratio 5/7, glyph 64cqw, .wrap max-width 560 padding 0 12. */
+var PAD = 8, ROWGAP = 4, ASPECT = 7 / 5, GLYPH = 0.64, COL = 560, WRAPPAD = 12;
+var ROWBAR = 20;           /* .rowbar line box + its 4px margin-top */
+var LEGIBLE = 11;          /* glyph px below which a flap stops being readable */
+
+var STRATEGIES = [
+  { id: 'fit',   name: 'Fit the width (ships today)',
+    why: 'Every flap is the container divided by the widest row. Nothing overflows — and nothing is legible on a phone.' },
+  { id: 'min',   name: 'Minimum size, then scroll',
+    why: 'Flaps never go below the floor. A row too wide for the screen scrolls sideways instead of shrinking the whole wall.' },
+  { id: 'fill',  name: 'Fill the space it has',
+    why: 'Size flaps so the board uses its height budget. Spends the dead space below the fold rather than leaving it black.' }
+];
+
+var PRESETS = {
+  'As shipped':       { strategy:'fit',  minflap:9,  gap:2, budget:30, breakout:false, maxw:560,  viewport:390  },
+  'Floor + scroll':   { strategy:'min',  minflap:26, gap:2, budget:30, breakout:false, maxw:560,  viewport:390  },
+  'Fill the space':   { strategy:'fill', minflap:14, gap:2, budget:45, breakout:false, maxw:560,  viewport:390  },
+  'Desktop breakout': { strategy:'min',  minflap:20, gap:3, budget:45, breakout:true,  maxw:900,  viewport:1440 }
+};
+
+/* The bench wall as it stands: row 0 is the 5-unit ESP-01 row, row 1 the
+   leader's 16. Text is padded into those units, exactly as padRow() does. */
+var state = {
+  strategy:'fit', viewport:390, vh:844, minflap:9, gap:2, budget:30,
+  breakout:false, maxw:560, rest:true, fold:true,
+  u0:5,  t0:'10:24',
+  u1:16, t1:'27 JUL 26',
+  u2:0,  t2:''
+};
+
+function $(id){ return document.getElementById(id); }
+
+/* padRow(): centre the text in the row's units, blanks either side. */
+function padRow(text, units) {
+  var t = String(text || '').toUpperCase().slice(0, units);
+  var left = Math.floor((units - t.length) / 2);
+  var cells = [];
+  for (var i = 0; i < units; i++) {
+    cells.push(i >= left && i < left + t.length ? t[i - left] : ' ');
+  }
+  return cells;
+}
+
+function rows() {
+  return [0, 1, 2].map(function (i) {
+    return { i:i, units:state['u' + i], cells:padRow(state['t' + i], state['u' + i]) };
+  }).filter(function (r) { return r.units > 0; });
+}
+
+/* --- the model: one flap size for the whole wall, every strategy --------- */
+function model() {
+  var rs = rows();
+  var cols = rs.reduce(function (n, r) { return Math.max(n, r.units); }, 1);
+  var n = Math.max(1, rs.length);
+  var containerW = Math.min(state.viewport - WRAPPAD * 2, state.breakout ? state.maxw : COL);
+  var inner = containerW - PAD * 2;
+  var gap = state.gap;
+
+  var fit = (inner - (cols - 1) * gap) / cols;
+  var flap;
+
+  if (state.strategy === 'fit') {
+    flap = fit;
+  } else if (state.strategy === 'min') {
+    flap = Math.max(state.minflap, fit);
+  } else {
+    /* solve flap width from the height budget */
+    var budgetPx = state.vh * (state.budget / 100);
+    var chrome = PAD * 2 + (n - 1) * ROWGAP + n * ROWBAR;
+    var perRowH = (budgetPx - chrome) / n;
+    flap = Math.max(state.minflap, perRowH / ASPECT);
+  }
+  flap = Math.max(4, flap);
+
+  var boardW = cols * flap + (cols - 1) * gap + PAD * 2;
+  var overflow = Math.max(0, boardW - containerW);
+  var flapH = flap * ASPECT;
+  var boardH = PAD * 2 + n * flapH + (n - 1) * ROWGAP + n * ROWBAR;
+
+  return {
+    rows:rs, cols:cols, n:n, containerW:containerW, flap:flap, flapH:flapH, gap:gap,
+    glyph:flap * GLYPH, boardW:boardW, boardH:boardH, overflow:overflow,
+    widest:cols * flap + (cols - 1) * gap,
+    narrowUnits:rs.reduce(function (m, r) { return Math.min(m, r.units); }, cols),
+    narrowest:rs.reduce(function (m, r) {
+      return Math.min(m, r.units * flap + (r.units - 1) * gap);
+    }, Infinity)
+  };
+}
+
+/* --- render ------------------------------------------------------------- */
+function renderScreen(m) {
+  var scr = $('screen');
+  scr.style.width = state.viewport + 'px';
+  scr.style.minHeight = state.vh + 'px';
+
+  var html = '<div class="wrap" style="max-width:' + (state.breakout ? state.maxw : COL) + 'px">';
+  html += '<div class="board" style="gap:' + ROWGAP + 'px">';
+  m.rows.forEach(function (r) {
+    html += '<div class="brow"><div class="strip"><div class="flaps" style="gap:' + m.gap + 'px">';
+    r.cells.forEach(function (c) {
+      var ch = c === ' ' ? '' : c;
+      html += '<div class="flap" style="width:' + m.flap.toFixed(2) + 'px;height:' + m.flapH.toFixed(2) + 'px">'
+            + '<span style="font-size:' + m.glyph.toFixed(2) + 'px">' + ch + '</span></div>';
+    });
+    html += '</div></div><div class="rowbar"><b>Row ' + r.i + '</b> '
+          + r.units + ' units<span class="go">&rsaquo;</span></div></div>';
+  });
+  html += '</div>';
+
+  if (state.rest) {
+    html += '<div class="rest">'
+      + '<div class="source"><span class="dot"></span><strong>Clock</strong> kept by this controller</div>'
+      + '<div class="h2">Put something on it</div>'
+      + '<div class="fakeinput">Type a message</div>'
+      + '<div class="fakesel">leave it up until something replaces it</div>'
+      + '<div class="fakeacts"><div class="fakebtn">Send to wall</div><div class="fakebtn q">Blank it</div></div>'
+      + '<div class="fakehw"><b>Controllers</b><span>2 · all well</span><i>&rsaquo;</i></div>'
+      + '</div>';
+  }
+  html += '</div>';
+  scr.innerHTML = html;
+
+  if (state.fold) {
+    var f = document.createElement('div');
+    f.className = 'foldline';
+    f.style.position = 'absolute';
+    f.style.left = '0'; f.style.right = '0';
+    f.style.top = state.vh + 'px';
+    scr.style.position = 'relative';
+    scr.appendChild(f);
+  }
+
+  /* scale the simulated screen into whatever room the pane has */
+  var host = $('screenhost');
+  var avail = host.clientWidth || 600;
+  var scale = Math.min(1, avail / state.viewport);
+  scr.style.transform = 'scale(' + scale + ')';
+  host.style.height = (scr.offsetHeight * scale) + 'px';
+  $('scalenote').textContent = state.viewport + ' x ' + state.vh
+    + '  ·  shown at ' + Math.round(scale * 100) + '%';
+}
+
+function tile(k, v, sub, cls) {
+  return '<div class="tile ' + (cls || '') + '"><div class="tile-k">' + k + '</div>'
+       + '<div class="tile-v">' + v + (sub ? '<small>' + sub + '</small>' : '') + '</div></div>';
+}
+
+function renderReadout(m) {
+  var legible = m.glyph >= LEGIBLE;
+  var boardShare = Math.round((m.boardH / state.vh) * 100);
+  /* The invariant: rows are in proportion to their unit counts, always —
+     because every flap on the wall is one size. */
+  var want = m.narrowUnits / m.cols;
+  var got = m.narrowest / m.widest;
+  var ratioHeld = Math.abs(got - want) < 0.02;
+
+  $('readout').innerHTML =
+      tile('Flap', m.flap.toFixed(1) + ' &times; ' + m.flapH.toFixed(1), 'px')
+    + tile('Glyph', m.glyph.toFixed(1) + ' px', legible ? 'readable' : 'too small to read',
+           legible ? 'good' : 'bad')
+    + tile('Board height', Math.round(m.boardH) + ' px', boardShare + '% of the screen',
+           boardShare >= 25 ? 'good' : 'warn')
+    + tile('Sideways', m.overflow > 0.5 ? 'scrolls' : 'fits',
+           m.overflow > 0.5 ? Math.round(m.overflow) + ' px over' : 'whole wall visible',
+           m.overflow > 0.5 ? 'warn' : 'good')
+    + tile(m.narrowUnits + ' vs ' + m.cols + ' reads true', ratioHeld ? 'held' : 'BROKEN',
+           Math.round(m.narrowest) + ' px vs ' + Math.round(m.widest) + ' px',
+           ratioHeld ? 'good' : 'bad');
+
+  $('hint-minflap').textContent = state.strategy === 'fit'
+    ? 'Ignored by the “fit the width” rule — that is the whole problem with it.'
+    : 'Below about ' + LEGIBLE + 'px of glyph the flap stops being readable; that is ~'
+      + Math.ceil(LEGIBLE / GLYPH) + 'px of flap.';
+}
+
+function renderPrompt(m) {
+  var s = STRATEGIES.filter(function (x) { return x.id === state.strategy; })[0];
+  var lines = [];
+  lines.push('Change how the Wall Console sizes the board (#423). Rule: ' + s.name.toLowerCase() + '.');
+  lines.push('');
+  lines.push(s.why);
+  lines.push('');
+
+  if (state.strategy === 'min') {
+    lines.push('Give .flap a real min-width of ' + state.minflap + 'px (it is 9px today) and keep '
+      + '.board { overflow-x: auto } so a row wider than the screen scrolls instead of shrinking the wall.');
+  } else if (state.strategy === 'fill') {
+    lines.push('Size the flap from a height budget of ' + state.budget + '% of the viewport rather than '
+      + 'from the container width, with a ' + state.minflap + 'px floor. The board should spend the '
+      + 'vertical space that currently sits empty below the fold.');
+  } else {
+    lines.push('Keep the current width-division rule.');
+  }
+
+  lines.push('Flap gap ' + state.gap + 'px.');
+  if (state.breakout) {
+    lines.push('On wide screens let the board escape the 560px reading column, up to ' + state.maxw
+      + 'px. The column is sized for text; the board is an object, not a paragraph.');
+  } else {
+    lines.push('The board stays inside the 560px reading column.');
+  }
+
+  lines.push('');
+  lines.push('The invariant that must survive: every flap on the wall is one size, so a '
+    + m.narrowUnits + '-unit row still reads as narrower than a ' + m.cols
+    + '-unit row. Nothing stretches to fill its line.');
+  lines.push('');
+  lines.push('At ' + state.viewport + 'x' + state.vh + ' this gives a '
+    + m.flap.toFixed(1) + 'px flap, a ' + m.glyph.toFixed(1) + 'px glyph and a '
+    + Math.round(m.boardH) + 'px board (' + Math.round((m.boardH / state.vh) * 100)
+    + '% of the screen)'
+    + (m.overflow > 0.5 ? ', with the widest row scrolling ' + Math.round(m.overflow) + 'px sideways.' : '.'));
+
+  $('out').textContent = lines.join('\n');
+}
+
+function updateAll() {
+  var m = model();
+  ['viewport','vh','minflap','gap','budget','maxw'].forEach(function (k) {
+    var el = $(k); if (el) el.value = state[k];
+  });
+  $('v-viewport').textContent = state.viewport + 'px';
+  $('v-vh').textContent = state.vh + 'px';
+  $('v-minflap').textContent = state.minflap + 'px';
+  $('v-gap').textContent = state.gap + 'px';
+  $('v-budget').textContent = state.budget + '%';
+  $('v-maxw').textContent = state.maxw + 'px';
+  [0, 1, 2].forEach(function (i) {
+    $('u' + i).value = state['u' + i];
+    $('v-u' + i).textContent = state['u' + i] ? state['u' + i] : 'no row';
+  });
+  $('breakout').checked = state.breakout;
+
+  Array.prototype.forEach.call(document.querySelectorAll('#strategies .card'), function (b) {
+    b.setAttribute('aria-pressed', b.dataset.id === state.strategy);
+  });
+
+  renderScreen(m);
+  renderReadout(m);
+  renderPrompt(m);
+}
+
+/* --- wiring ------------------------------------------------------------- */
+$('strategies').innerHTML = STRATEGIES.map(function (s) {
+  return '<button class="card" data-id="' + s.id + '"><b>' + s.name + '</b>' + s.why + '</button>';
+}).join('');
+$('strategies').addEventListener('click', function (e) {
+  var b = e.target.closest('.card'); if (!b) return;
+  state.strategy = b.dataset.id; updateAll();
+});
+
+$('presets').innerHTML = Object.keys(PRESETS).map(function (n) {
+  return '<button class="chip" data-preset="' + n + '">' + n + '</button>';
+}).join('');
+$('presets').addEventListener('click', function (e) {
+  var b = e.target.closest('[data-preset]'); if (!b) return;
+  Object.assign(state, PRESETS[b.dataset.preset]); updateAll();
+});
+
+['viewport','vh','minflap','gap','budget','maxw'].forEach(function (k) {
+  $(k).addEventListener('input', function () { state[k] = Number(this.value); updateAll(); });
+});
+[0, 1, 2].forEach(function (i) {
+  $('u' + i).addEventListener('input', function () { state['u' + i] = Number(this.value); updateAll(); });
+  $('t' + i).value = state['t' + i];
+  $('t' + i).addEventListener('input', function () { state['t' + i] = this.value; updateAll(); });
+});
+['breakout','rest','fold'].forEach(function (k) {
+  $(k).addEventListener('change', function () { state[k] = this.checked; updateAll(); });
+});
+document.querySelectorAll('[data-vw]').forEach(function (b) {
+  b.addEventListener('click', function () { state.viewport = Number(b.dataset.vw); updateAll(); });
+});
+
+$('copy').addEventListener('click', function () {
+  var btn = this;
+  navigator.clipboard.writeText($('out').textContent).then(function () {
+    btn.textContent = 'Copied'; btn.classList.add('done');
+    setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1400);
+  });
+});
+
+window.addEventListener('resize', updateAll);
+updateAll();
+</script>
+</body>
+</html>
