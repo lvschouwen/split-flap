@@ -103,6 +103,9 @@ static void test_json_now_and_history_shape() {
   now.i2cTx = 12345; now.i2cErr = 2; now.mqttDrops = 1;
   now.ntpAgeS = 42;
   strcpy(now.resetReason, "POWERON");
+  // #415: stack low-water marks (bytes still free at the worst point).
+  now.hwmDisplay = 9000; now.hwmClock = 1200; now.hwmNet = 2100;
+  now.hwmMqtt = 1800; now.hwmCluster = 3300;
 
   char buf[2048];
   size_t n = buildSystemStatsJson(buf, sizeof(buf), smp, now);
@@ -119,6 +122,9 @@ static void test_json_now_and_history_shape() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"mqttDrops\":1"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"ntpAge\":42"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"reset\":\"POWERON\""));
+  TEST_ASSERT_NOT_NULL(strstr(
+      buf, "\"hwm\":{\"display\":9000,\"clock\":1200,\"net\":2100,"
+           "\"mqtt\":1800,\"cluster\":3300}"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"rssi\":[-55,-60]"));   // hist oldest-first
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"cpu0\":[12,15]"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"cpu1\":[99,99]"));
@@ -167,6 +173,9 @@ static void test_json_full_ring_fits_cap() {
   now.uptimeS = 4294967295UL; now.minFreeHeap = 4294967295UL;
   now.i2cTx = 4294967295UL; now.i2cErr = 4294967295UL;
   now.mqttDrops = 4294967295UL; now.ntpAgeS = -1;
+  now.hwmDisplay = 4294967295UL; now.hwmClock = 4294967295UL;  // #415 fields
+  now.hwmNet = 4294967295UL; now.hwmMqtt = 4294967295UL;       // join the
+  now.hwmCluster = 4294967295UL;                               // worst case
   strcpy(now.resetReason, "Interrupt watchdog");
   char buf[SYSTEM_STATS_JSON_CAP];
   size_t n = buildSystemStatsJson(buf, sizeof(buf), smp, now);

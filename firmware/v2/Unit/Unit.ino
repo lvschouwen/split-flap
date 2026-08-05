@@ -222,9 +222,9 @@ uint16_t          extStepExcessLast         = 0;      // #370 last home: actual-
 uint16_t          extStepExcessMax          = 0;      // #370 worst-seen since boot
 uint16_t          extVccSagLastMove         = 0xFFFF; // #371 min loaded Vcc this move (sentinel high)
 // Pre-first-revolution there is no real sample yet; report 1 (the benign/
-// healthy sentinel, not 0) so the master's hallEdgesLastRev!=1 anomaly check
-// doesn't false-fire before the first rev latches a true count. A genuinely
-// dead hall still latches 0 on the first completed rev and surfaces then.
+// healthy sentinel). The master treats 0 as "no completed rev measured" and
+// only flags >1 (#418) — this default keeps a fresh boot unambiguous either
+// way, and a completed rev always overwrites it with the true count.
 uint8_t           extHallEdgesLastRev       = 1;      // #372 entering edges in last completed rev
 uint16_t          extHallEdgesThisRev       = 0;      // #372 running count within the current rev
 uint16_t          extDutyWindow             = 0;      // #373 decaying rolling ~60 s move count

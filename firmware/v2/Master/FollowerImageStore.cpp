@@ -28,6 +28,13 @@ static bool accumulating = false;
 static uint8_t* accBuf = nullptr;
 static size_t accLen = 0;
 static String accMd5;   // expected, lower-hex 32
+// #419: last begin/chunk progress. An upload whose client dies mid-body
+// never reaches writeEnd, which used to leave `accumulating` (and the PSRAM
+// buffer) wedged until reboot — and the store is the ONLY supported esp01
+// update path. The flush tick reclaims after this stall window; 30 s
+// mirrors #313's OTA_STALL_TIMEOUT_MS on /firmware/master.
+static const uint32_t FOLLOWER_IMAGE_STALL_TIMEOUT_MS = 30000UL;
+static uint32_t accLastProgressMs = 0;
 static String accRev;
 static String lastError;
 
@@ -135,6 +142,7 @@ bool followerImageWriteBegin(const String& expectedMd5, const String& rev) {
     accMd5.toLowerCase();
     accRev = rev;
     accLen = 0;
+    accLastProgressMs = millis();  // #419: arms the stall reclaim
   }
   // Allocate outside the lock (largeAlloc may be slow); PSRAM-preferred.
   uint8_t* buf = (uint8_t*)largeAlloc(FOLLOWER_IMAGE_MAX_BYTES);
@@ -142,6 +150,14 @@ bool followerImageWriteBegin(const String& expectedMd5, const String& rev) {
   if (buf == nullptr) {
     lastError = "out of memory for the follower image buffer";
     accumulating = false;
+    return false;
+  }
+  if (!accumulating) {
+    // #419: the stall reclaim fired during the unlocked alloc window (only
+    // reachable if the allocator itself stalled >30 s) — committing accBuf
+    // here would resurrect a dead session and leak this buffer forever.
+    free(buf);
+    lastError = "upload reclaimed during buffer allocation";
     return false;
   }
   accBuf = buf;
@@ -159,6 +175,7 @@ bool followerImageWriteChunk(const uint8_t* data, size_t len, size_t streamOffse
   }
   memcpy(accBuf + accLen, data, len);
   accLen += len;
+  accLastProgressMs = millis();  // #419: progress resets the stall deadline
   return true;
 }
 
@@ -201,6 +218,20 @@ bool followerImageWriteEnd() {
 
 void followerImageFlushTick() {
   if (imgMutex == nullptr) return;
+  {
+    // #419: reclaim a stalled upload — no chunk for the stall window means
+    // the client is gone and writeEnd will never run. Freeing here (netTask)
+    // is safe: the async handler only touches accBuf between begin and end,
+    // and a late straggler chunk fails the `accumulating` check in
+    // followerImageWriteChunk instead of writing through a dangling pointer.
+    ImgLock lock;
+    if (accumulating &&
+        millis() - accLastProgressMs > FOLLOWER_IMAGE_STALL_TIMEOUT_MS) {
+      accFree();
+      lastError = "upload stalled — store reclaimed";
+      SerialPrintln(F("FollowerImageStore: stalled upload reclaimed (#419)"));
+    }
+  }
   uint8_t* buf = nullptr;
   size_t len = 0;
   String rev;

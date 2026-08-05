@@ -41,6 +41,7 @@ extern String effectiveName;
 extern PendingSettingsPost pendingPost;
 extern bool pendingReboot;
 extern uint32_t rebootRequestedAtMs;
+extern String pendingRebootCause;  // #432: stamped to NVS at the drain
 extern String pendingIntendedVersion;  // ?v= from /firmware/master (#190)
 extern bool pendingIntendedVersionProvided;
 // ?v= from /firmware/rescue (#391) — staged like the above because writing
@@ -70,6 +71,12 @@ AsyncMiddlewareFunction& webClusterCorsMiddleware();
 void webContentRegister(AsyncWebServer& server);
 void webSettingsRegister(AsyncWebServer& server);
 void webSystemRegister(AsyncWebServer& server);
+// #431: staged /coredump/erase drain (owned by WebSystem.cpp, called from
+// webEndpointsLoop — netTask is the sole flash writer).
+void webSystemCoredumpEraseTick();
+// #395: live master-OTA upload session (owned by WebFirmware.cpp) — the
+// /reboot gate consults it so a restart can't tear a mid-flight flash write.
+bool webFirmwareOtaUploadActive();
 void webFirmwareRegister(AsyncWebServer& server);
 void webMaintenanceRegister(AsyncWebServer& server);
 void webClusterRegister(AsyncWebServer& server);

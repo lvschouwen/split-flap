@@ -83,3 +83,11 @@ bool mqttInboxPost(const MqttInboxMessage& msg);
 // One heartbeat line: free heap + per-task stack high-water marks —
 // empirical validation of the stack sizing table on real hardware.
 void tasksHeartbeatReport();
+
+// #415: the same five HWMs (bytes still free at the stack's worst point) as
+// data, for /system/stats — the heartbeat line above only reaches USB-CDC.
+// Safe from any task; a not-yet-started task reads 0.
+struct TasksStackHwm {
+  uint32_t display = 0, clock = 0, net = 0, mqtt = 0, cluster = 0;
+};
+TasksStackHwm tasksStackHwm();

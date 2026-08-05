@@ -339,7 +339,7 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
       if (parseRestartCommand(payload)) {
         SerialPrintln(
             F("MQTT: restart requested via HA button — reboot pending"));
-        webRequestReboot();
+        webRequestReboot("restart command via MQTT/HA");
       }
       break;
     case MqttCommand::Text: {

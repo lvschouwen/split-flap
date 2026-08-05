@@ -212,15 +212,22 @@ static void test_drag_does_not_onset_at_or_below_threshold() {
   TEST_ASSERT_EQUAL_UINT8(0, t.onset);
 }
 
-static void test_hall_anomaly_onsets_when_not_exactly_one() {
+static void test_hall_anomaly_zero_is_unmeasured_not_anomalous() {
+  // #418: 0 = "no completed revolution measured" — a freshly flashed/rebooted
+  // unit in clock mode may not complete a rev for days, and the phase
+  // coincidence in the bench caveat also reads 0 on a healthy unit. A dead
+  // hall still surfaces through HOME_FAILED / HALL_NEVER.
   UnitExtDiag d;
   d.hallEdgesLastRev = 0;
   UnitEventTransitions t = unitEventEvaluate(0, 0, 0, true, d);
-  TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_HALL_ANOMALY, t.onset);
+  TEST_ASSERT_EQUAL_UINT8(0, t.onset);
+  TEST_ASSERT_EQUAL_UINT8(0, t.newState);
+}
 
+static void test_hall_anomaly_onsets_above_one() {
   UnitExtDiag d2;
   d2.hallEdgesLastRev = 2;
-  t = unitEventEvaluate(0, 0, 0, true, d2);
+  UnitEventTransitions t = unitEventEvaluate(0, 0, 0, true, d2);
   TEST_ASSERT_EQUAL_UINT8(UNIT_EVT_HALL_ANOMALY, t.onset);
 }
 
@@ -255,7 +262,7 @@ static void test_ext_diag_invalid_contributes_no_bits() {
   UnitExtDiag garbage;
   garbage.statusBits = EXT_DIAG_STATUS_STALL;
   garbage.stepExcessMax = 0xFFFF;
-  garbage.hallEdgesLastRev = 0;
+  garbage.hallEdgesLastRev = 7;  // >1 so the hall threshold would trip too
   UnitEventTransitions t = unitEventEvaluate(0, 0, 0, false, garbage);
   TEST_ASSERT_EQUAL_UINT8(0, t.onset);
   TEST_ASSERT_EQUAL_UINT8(0, t.recovery);
@@ -303,7 +310,8 @@ int main(int, char**) {
   RUN_TEST(test_jam_onsets_on_stall_status_bit);
   RUN_TEST(test_drag_onsets_over_threshold);
   RUN_TEST(test_drag_does_not_onset_at_or_below_threshold);
-  RUN_TEST(test_hall_anomaly_onsets_when_not_exactly_one);
+  RUN_TEST(test_hall_anomaly_zero_is_unmeasured_not_anomalous);
+  RUN_TEST(test_hall_anomaly_onsets_above_one);
   RUN_TEST(test_hall_anomaly_silent_at_exactly_one);
   RUN_TEST(test_ext_diag_bits_are_onset_only_not_recoverable);
   RUN_TEST(test_ext_diag_conditions_clear_silently_not_as_recovery);

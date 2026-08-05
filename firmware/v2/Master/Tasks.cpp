@@ -278,6 +278,21 @@ void tasksInit(MasterSettings& settings, SettingsStore& store) {
       DOMAIN_TASK_PRIORITY, clusterTaskStack, &clusterTaskBuf, NETWORK_CORE);
 }
 
+TasksStackHwm tasksStackHwm() {
+  TasksStackHwm h;
+  if (displayTaskHandle)
+    h.display = (uint32_t)uxTaskGetStackHighWaterMark(displayTaskHandle);
+  if (clockTaskHandle)
+    h.clock = (uint32_t)uxTaskGetStackHighWaterMark(clockTaskHandle);
+  if (netTaskHandle)
+    h.net = (uint32_t)uxTaskGetStackHighWaterMark(netTaskHandle);
+  if (mqttTaskHandle)
+    h.mqtt = (uint32_t)uxTaskGetStackHighWaterMark(mqttTaskHandle);
+  if (clusterTaskHandle)
+    h.cluster = (uint32_t)uxTaskGetStackHighWaterMark(clusterTaskHandle);
+  return h;
+}
+
 void tasksHeartbeatReport() {
   Serial.printf(
       "[%8lu ms] heap %u KB free (min %u KB), psram %u KB free | stack HWM: "

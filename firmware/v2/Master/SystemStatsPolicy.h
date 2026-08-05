@@ -82,6 +82,14 @@ struct SystemNow {
   uint32_t mqttDrops = 0;    // broker disconnects since boot
   int32_t  ntpAgeS = -1;     // seconds since last SNTP sync; -1 = never
   char resetReason[24] = {0};  // webResetReasonString()'s longest + NUL
+  // #415: per-task stack low-water marks, BYTES still free at the worst
+  // point since boot (portSTACK_TYPE is uint8_t on Xtensa) — the trim-down
+  // evidence for the *_TASK_STACK sizes, previously trapped on USB-CDC.
+  uint32_t hwmDisplay = 0;
+  uint32_t hwmClock = 0;
+  uint32_t hwmNet = 0;
+  uint32_t hwmMqtt = 0;
+  uint32_t hwmCluster = 0;
 };
 
 // Worst case measured by test_system_stats' saturated-ring test; headroom
@@ -105,13 +113,17 @@ inline size_t buildSystemNowJson(char* buf, size_t cap,
       "{\"rssi\":%d,\"heap\":%lu,\"maxAlloc\":%lu,\"psram\":%lu,"
       "\"cpu0\":%u,\"cpu1\":%u,\"temp\":%d,\"uptime\":%lu,\"minHeap\":%lu,"
       "\"i2cTx\":%lu,\"i2cErr\":%lu,\"mqttDrops\":%lu,\"ntpAge\":%ld,"
-      "\"reset\":\"%s\"}",
+      "\"reset\":\"%s\",\"hwm\":{\"display\":%lu,\"clock\":%lu,\"net\":%lu,"
+      "\"mqtt\":%lu,\"cluster\":%lu}}",
       (int)newest.rssi, (unsigned long)newest.freeHeap,
       (unsigned long)newest.maxAlloc, (unsigned long)newest.psramFree,
       (unsigned)newest.cpu0, (unsigned)newest.cpu1, (int)newest.tempC10,
       (unsigned long)now.uptimeS, (unsigned long)now.minFreeHeap,
       (unsigned long)now.i2cTx, (unsigned long)now.i2cErr,
-      (unsigned long)now.mqttDrops, (long)now.ntpAgeS, now.resetReason);
+      (unsigned long)now.mqttDrops, (long)now.ntpAgeS, now.resetReason,
+      (unsigned long)now.hwmDisplay, (unsigned long)now.hwmClock,
+      (unsigned long)now.hwmNet, (unsigned long)now.hwmMqtt,
+      (unsigned long)now.hwmCluster);
   return o;
 }
 

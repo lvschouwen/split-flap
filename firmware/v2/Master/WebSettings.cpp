@@ -127,12 +127,27 @@ void webSettingsRegister(AsyncWebServer& server) {
   // POST, not GET (v1 #145): state-changing actions must not be triggerable
   // by a drive-by <img src> on the LAN.
   server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
+    // #395: a reboot mid-unit-reflash leaves the Nano row parked in twiboot;
+    // mid-master-OTA it tears the upload session. 409 like every producer
+    // gate — /stop remains the only cancel path.
+    if (reflashInProgress(displaySnapshotGet().reflash)) {
+      request->send(409, "text/plain",
+                    F("Unit reflash in progress — retry when it finishes"));
+      return;
+    }
+    if (webFirmwareOtaUploadActive()) {
+      request->send(409, "text/plain",
+                    F("Master OTA upload in progress — retry when it "
+                      "finishes (stalled sessions clear in 30 s)"));
+      return;
+    }
     SerialPrintln(F("Reboot requested from web UI"));
     request->send(200, "text/plain",
                   "Reboot pending — this takes a few seconds. Reload the home "
                   "page afterwards.");
     WebStateLock lock;
     pendingReboot = true;
+    pendingRebootCause = F("reboot requested from the web UI");  // #432
     rebootRequestedAtMs = millis();
   });
 

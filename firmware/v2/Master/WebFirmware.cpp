@@ -10,6 +10,8 @@
 #include <ESPAsyncWebServer.h>
 #include <Update.h>
 
+#include <atomic>
+
 #include "FactorySlot.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
@@ -28,9 +30,12 @@ static String otaRejectionReason;
 // session. A second overlapping POST must not abort/hijack it — the
 // overlapping request is marked rejected via its _tempObject (freed by the
 // request destructor) and answered 409, and it never touches the shared
-// rejection state above, which belongs to the owner. Same async_tcp task
-// for all callbacks — no lock needed. Compared only, never dereferenced.
-static AsyncWebServerRequest* otaOwnerRequest = nullptr;
+// rejection state above, which belongs to the owner. Compared only, never
+// dereferenced. Atomic (#395): the async_tcp callbacks AND netTask touch it
+// (webFirmwareLoop's stall watchdog clears it; webFirmwareOtaUploadActive
+// reads it from the /reboot handler) — a stale read costs one spurious 409,
+// but the pointer itself must never tear.
+static std::atomic<AsyncWebServerRequest*> otaOwnerRequest{nullptr};
 
 // Upload throughput measurement (#248): decides whether flash erase or the
 // network dominates OTA wall time before any speed work is designed. Owned
@@ -393,6 +398,11 @@ void webFirmwareRegister(AsyncWebServer& server) {
 // abandoned session (v1 #191). Mirror of the ESP-01 follower's
 // webOtaUploadFrozen(); the stalled peer is parked in socket-read, not
 // writing flash, so there is no concurrent Update use.
+// #395: is a master-OTA upload session live right now? Keyed on the same
+// owner marker the #313 stall watchdog clears, so a dead client stops
+// blocking after at most OTA_STALL_TIMEOUT_MS.
+bool webFirmwareOtaUploadActive() { return otaOwnerRequest != nullptr; }
+
 void webFirmwareLoop() {
   if (otaOwnerRequest != nullptr &&
       millis() - otaLastChunkMs > OTA_STALL_TIMEOUT_MS) {

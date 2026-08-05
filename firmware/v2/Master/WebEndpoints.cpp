@@ -30,6 +30,7 @@
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "OtaService.h"
+#include "RebootCause.h"  // #432
 #include "SettingsJson.h"
 #include "SplitFlapProtocol.h"
 #include "Tasks.h"
@@ -40,6 +41,10 @@
 PendingSettingsPost pendingPost;
 bool pendingReboot = false;
 uint32_t rebootRequestedAtMs = 0;
+String pendingRebootCause;  // #432: stamped to NVS at the drain
+// #432: consumed once in webEndpointsInit (single-threaded boot), read-only
+// afterwards — "" when this boot did not follow a stamped deliberate reboot.
+static String bootRebootCause;
 String pendingIntendedVersion;  // ?v= from /firmware/master (#190)
 bool pendingIntendedVersionProvided = false;
 String pendingRescueRev;  // ?v= from /firmware/rescue (#391)
@@ -161,6 +166,7 @@ String buildCurrentSettingsJson() {
   f.rescueSlot = rescueSlotStateLabel(rescue.state);
   f.rescueSlotWarn = rescue.warn;
   f.lastResetReason = webResetReasonString();
+  f.lastRebootCause = bootRebootCause;  // #432
   ClusterFollowerView cluster = clusterFollowerViewGet();
   f.clusterState = clusterFollowerPhaseName(cluster.phase);
   f.clusterLeaderName = cluster.leaderName;
@@ -193,6 +199,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   liveSettings = &settings;
   liveStore = &store;
   effectiveName = effectiveDeviceName;
+  bootRebootCause = rebootCauseConsume();  // #432
 
   // Per-module route registration (#338). Cross-module order is not
   // semantic — the server matches per path+method, same-path method pairs
@@ -234,6 +241,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   bool timezoneChanged = false;
   bool rescueRecordDue = false;
   String rescueRevToRecord;
+  String rebootCauseToStamp;  // #432: copied out under the lock
   {
     WebStateLock lock;
     if (pendingPost.pending) {
@@ -385,6 +393,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
     }
     // Small grace period so the HTTP response flushes before the restart.
     rebootDue = pendingReboot && millis() - rebootRequestedAtMs > 750;
+    if (rebootDue) rebootCauseToStamp = pendingRebootCause;
   }
 
   // #391: rescue-slot record — NVS write + sha256, on loopTask and outside
@@ -428,8 +437,14 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   // Staged follower-image write (#304): same single-writer discipline — the
   // async upload handler accumulates in PSRAM, netTask commits it to flash.
   followerImageFlushTick();
+  // Staged coredump-partition purge (#431), same discipline.
+  webSystemCoredumpEraseTick();
 
   if (rebootDue) {
+    // #432: durable cause — the flash-log ring above only holds hours.
+    rebootCauseStamp(rebootCauseToStamp.length()
+                         ? rebootCauseToStamp
+                         : String(F("reboot requested (unattributed)")));
     SerialPrintln(F("Rebooting..."));
     Serial.flush();
     flashLogTick(true);  // catch the reboot line itself
@@ -489,10 +504,11 @@ bool webMqttApplyAlignment(const String& alignment) {
   return true;
 }
 
-void webRequestReboot() {
+void webRequestReboot(const char* cause) {
   if (webStateMutex == nullptr) return;
   WebStateLock lock;
   pendingReboot = true;
+  pendingRebootCause = cause;
   rebootRequestedAtMs = millis();
 }
 

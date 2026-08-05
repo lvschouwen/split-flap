@@ -12,6 +12,7 @@
 #include "DeviceIdentity.h"
 #include "HelpersSerialHandling.h"
 #include "OtaService.h"
+#include "RebootCause.h"  // #432
 #include "Tasks.h"
 #include "WebEndpoints.h"
 #include "WifiPolicy.h"
@@ -124,6 +125,10 @@ String wifiPortalRedirectUrl() {
 
 static void scheduleRestart(const __FlashStringHelper* why) {
   SerialPrintln(String(F("Rebooting: ")) + String(why));
+  // #432: the log line above outlives the flash-log ring only as this NVS
+  // breadcrumb (served as lastRebootCause next boot). Tick context = netTask,
+  // so the write is legal here.
+  rebootCauseStamp(String(why));
   restartPending = true;
   restartRequestedAtMs = millis();
 }

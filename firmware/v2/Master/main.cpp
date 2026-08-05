@@ -23,6 +23,7 @@
 #include "MqttService.h"
 #include "NvsSettingsStore.h"
 #include "OtaService.h"
+#include "RebootCause.h"  // #432
 #include "Settings.h"
 #include "StatusLed.h"
 #include "SystemStats.h"
@@ -121,6 +122,10 @@ static AsyncWebServer webServer(80);
 void setup() {
   Serial.begin(115200);
   delay(2000);  // native USB-CDC needs a moment before the first prints land
+  // #432: consume the deliberate-reboot breadcrumb before ANYTHING that can
+  // panic — a stamp surviving a crashed init would be blamed on the wrong
+  // boot. Caches; webEndpointsInit reads the cached copy.
+  rebootCauseConsume();
   webLogInit();  // before the first SerialPrint*, or those lines never
                  // reach GET /log
   flashLogInit();  // #206: mounts `storage`, writes the boot marker; from

@@ -9,8 +9,10 @@
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 
+#include <atomic>
 #include <memory>
 
+#include <esp_app_desc.h>   // #416: running-image ELF sha for dump dating
 #include <esp_core_dump.h>  // #319: /coredump crash diagnostics
 #include <esp_partition.h>
 
@@ -29,6 +31,16 @@
 #include "UnitBus.h"
 #include "WearPolicy.h"
 #include "WebLog.h"
+
+#include "HelpersSerialHandling.h"
+
+// #431: /coredump/erase handler stages here; webSystemCoredumpEraseTick()
+// (netTask, via webEndpointsLoop) performs the actual flash erase.
+static std::atomic<bool> coredumpErasePending{false};
+// Open /coredump/raw chunked streams (async task; decremented onDisconnect).
+// The erase tick defers while one is open, or a slow download would get a
+// silent 0xFF tail read from under the ~1 s 64 KB erase.
+static std::atomic<int> coredumpRawStreamsActive{0};
 
 void webSystemRegister(AsyncWebServer& server) {
   server.on("/health", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -76,16 +88,16 @@ void webSystemRegister(AsyncWebServer& server) {
     request->send(202, "text/plain", F("Flash log clear queued"));
   });
 
-  // --- coredump (#319) — remote crash diagnostics --------------------------
+  // --- coredump (#319/#431) — remote crash diagnostics ---------------------
   // The SUMMARY (task name + code addresses + backtrace PCs) carries NO
   // secrets, so an unauthenticated GET is fine — same posture as /settings,
-  // /log/flash. It is always registered. The RAW image, in contrast, is a
-  // task-stack dump that CAN transiently hold HMAC key material / WiFi-cred
-  // fragments (a key mid-sign on clusterTask's stack); this device has no
-  // auth and CORS-closing does not stop a plain HTTP client, so raw is
-  // compiled out of shipped images and only appears in a build that opts in
-  // with -DCOREDUMP_RAW_ENABLE (deliberately OTA'd to a crashing board).
-  // Read-only; the coredump partition is written solely by the panic handler.
+  // /log/flash. The RAW image is a task-stack dump that CAN transiently hold
+  // HMAC key material / WiFi-cred fragments (a key mid-sign on clusterTask's
+  // stack); #431 ships it anyway — accepted risk for this internal LAN-only
+  // deployment, where a dump that cannot be pulled costs more than the
+  // exposure (the surface stays CSRF/CORS-closed like every other route).
+  // The partition is written by the panic handler and erased only via the
+  // staged /coredump/erase drain below (netTask, like every flash write).
   server.on("/coredump/summary", HTTP_GET, [](AsyncWebServerRequest* request) {
     if (esp_core_dump_image_check() != ESP_OK) {
       request->send(404, "application/json", F("{\"present\":false}"));
@@ -108,10 +120,27 @@ void webSystemRegister(AsyncWebServer& server) {
     char task[17];
     memcpy(task, summary->exc_task, 16);
     task[16] = '\0';
+    // #416: `rev` is the RUNNING image's compile-time GIT_REV — it says
+    // nothing about which build crashed (a fossil dump survives every OTA).
+    // The truncated ELF SHA pair is what actually dates a dump: `stale`
+    // is only claimed when the dump carries a sha and it differs.
+    char dumpSha[APP_ELF_SHA256_SZ];
+    memcpy(dumpSha, summary->app_elf_sha256, sizeof(dumpSha));
+    dumpSha[sizeof(dumpSha) - 1] = '\0';
+    char runSha[APP_ELF_SHA256_SZ];
+    esp_app_get_elf_sha256(runSha, sizeof(runSha));
+    bool stale =
+        dumpSha[0] != '\0' && strncmp(dumpSha, runSha, strlen(dumpSha)) != 0;
     char hex[11];
     String out;
-    out.reserve(640);
-    out += F("{\"present\":true,\"rev\":\"" GIT_REV "\",\"task\":");
+    out.reserve(768);
+    out += F("{\"present\":true,\"rev\":\"" GIT_REV "\",\"elfSha256\":");
+    appendJsonString(out, String(dumpSha));
+    out += F(",\"runningElfSha256\":");
+    appendJsonString(out, String(runSha));
+    out += F(",\"stale\":");
+    out += stale ? F("true") : F("false");
+    out += F(",\"task\":");
     appendJsonString(out, String(task));
     snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->exc_pc);
     out += F(",\"pc\":\"");
@@ -140,12 +169,10 @@ void webSystemRegister(AsyncWebServer& server) {
     request->send(200, "application/json", out);
   });
 
-#ifdef COREDUMP_RAW_ENABLE
   // Raw ELF coredump for offline `esp-coredump info_corefile` — the fallback
   // when a summary backtrace reads corrupted. Streamed straight off the
-  // coredump partition (flash READ only, async-safe). Opt-in only (see the
-  // summary comment above): task stacks can leak transient secrets, so this
-  // never ships in a release image.
+  // coredump partition (flash READ only, async-safe). Always registered
+  // since #431 (see the posture note above).
   server.on("/coredump/raw", HTTP_GET, [](AsyncWebServerRequest* request) {
     if (esp_core_dump_image_check() != ESP_OK) {
       request->send(404, "text/plain", F("no coredump"));
@@ -180,9 +207,28 @@ void webSystemRegister(AsyncWebServer& server) {
         });
     response->addHeader("Content-Disposition",
                         "attachment; filename=\"coredump-" GIT_REV ".elf\"");
+    coredumpRawStreamsActive.fetch_add(1, std::memory_order_relaxed);
+    request->onDisconnect([]() {
+      coredumpRawStreamsActive.fetch_sub(1, std::memory_order_relaxed);
+    });
     request->send(response);
   });
-#endif  // COREDUMP_RAW_ENABLE
+
+  // #431: purge the partition so the NEXT dump is unambiguous. Before this
+  // route a dump could only ever be replaced by the next panic, and the
+  // fossils muddied every later forensics pass (both wall masters carried
+  // one on 2026-08-05). Handlers never write flash: stage the request and
+  // let netTask's drain run the erase — same pattern as /log/flash/clear.
+  server.on("/coredump/erase", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (esp_core_dump_image_check() != ESP_OK) {
+      request->send(404, "text/plain", F("no coredump"));
+      return;
+    }
+    coredumpErasePending.store(true, std::memory_order_relaxed);
+    request->send(202, "text/plain",
+                  F("Coredump erase queued — /coredump/summary reports "
+                    "present:false once it lands"));
+  });
 
   // System tab (#245): current vitals + ~10 min sparkline history in one
   // JSON. History is server-side (netTask's sample ring) so a freshly
@@ -301,4 +347,19 @@ void webSystemRegister(AsyncWebServer& server) {
     out += "}";
     request->send(200, "application/json", out);
   });
+}
+
+// #431: drained from webEndpointsLoop — netTask is the sole flash writer,
+// so the erase (a few sector erases on the 64 KB coredump partition) never
+// runs in async-handler context.
+void webSystemCoredumpEraseTick() {
+  if (!coredumpErasePending.load(std::memory_order_relaxed)) return;
+  // A raw stream opened after this check (or a summary read mid-handler)
+  // can still overlap the erase by a hair — each partition op is
+  // driver-locked, so the worst case is one corrupt/`0xFF`-tailed response,
+  // accepted for a two-humans-in-one-second window.
+  if (coredumpRawStreamsActive.load(std::memory_order_relaxed) > 0) return;
+  coredumpErasePending.store(false, std::memory_order_relaxed);
+  esp_err_t err = esp_core_dump_image_erase();
+  SerialPrintf("coredump: erase -> %s\n", esp_err_to_name(err));
 }
