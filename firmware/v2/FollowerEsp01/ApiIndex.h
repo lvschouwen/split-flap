@@ -122,6 +122,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"i2cTx",        "unit-bus read transactions since boot"},
   {"i2cErr",       "failed unit-bus reads since boot"},
   {"minHeap",      "since-boot minimum free heap (bytes)"},
+  {"stackFree",    "since-boot low-water of the 4 KB cont stack (bytes, #435)"},
   {"sntpSynced",   "1 = SNTP epoch synced (commitAt flips honored)"},
   {"hmac",         "1 = enforcing signed (HMAC) leader-wire requests (#313)"},
   {"foreign",      "refused foreign-leader contacts: joins/pings/renders counters + lastHost + msSince (-1 = never)"},
@@ -137,7 +138,7 @@ inline bool legendHasKey(const char* key) {
 
 // #365 legend growth (se/sx/sag/he/dw/sb) pushed the full /api payload past
 // the prior 4096 — bumped with headroom, same as the master's cap.
-#define API_JSON_CAP 5120
+#define API_JSON_CAP 6144  // #435's legend row overflowed 5120; static BSS
 
 #define API_APPEND(...) do { \
     if (o >= cap) return o; \

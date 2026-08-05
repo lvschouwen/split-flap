@@ -159,6 +159,10 @@ struct FollowerClusterDiag {
   uint32_t i2cTx = 0;
   uint32_t i2cErr = 0;
   uint32_t minHeap = 0;
+  // #435: since-boot low-water of the ONE painted 4 KB cont stack the whole
+  // superloop runs on — ESP.getFreeContStack() is already the minimum (paint
+  // check), no sampling needed. The 8266's answer to the S3's #415 hwm.
+  uint32_t stackFree = 0;
   bool sntpSynced = false;
   bool hmac = false;  // #313 follow-on: enforcing signed leader-wire requests
   ForeignContactStats foreign;  // #358: refused foreign-leader contacts
@@ -205,6 +209,8 @@ inline String followerClusterHealthJson(
   out += String((unsigned long)d.i2cErr);
   out += ",\"minHeap\":";
   out += String((unsigned long)d.minHeap);
+  out += ",\"stackFree\":";
+  out += String((unsigned long)d.stackFree);
   out += ",\"sntpSynced\":";
   out += d.sntpSynced ? "true" : "false";
   out += ",\"hmac\":";

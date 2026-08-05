@@ -733,6 +733,7 @@ void webEndpointsInit(AsyncWebServer& server) {
     diag.i2cTx = followerBusTxCount();
     diag.i2cErr = followerBusErrCount();
     diag.minHeap = followerMinHeap();
+    diag.stackFree = ESP.getFreeContStack();  // #435: painted low-water
     diag.sntpSynced = cv.sntpSynced;
     diag.hmac = clusterHmacEnforced();
     diag.foreign = foreignContacts;  // #358

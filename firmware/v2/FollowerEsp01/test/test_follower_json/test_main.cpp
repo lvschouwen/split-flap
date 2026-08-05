@@ -147,6 +147,7 @@ static void test_cluster_health_json_shape() {
   d.i2cTx = 1000;
   d.i2cErr = 2;
   d.minHeap = 21000;
+  d.stackFree = 1184;  // #435
   d.sntpSynced = true;
   d.hmac = true;
   String out = followerClusterHealthJson("grace", "wall-leader",
@@ -170,6 +171,7 @@ static void test_cluster_health_json_shape() {
   TEST_ASSERT_TRUE(out.indexOf("\"i2cTx\":1000") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"i2cErr\":2") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"minHeap\":21000") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"stackFree\":1184") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"sntpSynced\":true") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"hmac\":true") >= 0);
 }
