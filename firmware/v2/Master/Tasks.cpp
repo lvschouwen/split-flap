@@ -79,7 +79,11 @@ bool tasksUnitCountOverridePinned() {
 static constexpr uint32_t DISPLAY_TASK_STACK = 16384;
 // 2048 leaves only ~124 B HWM on real hardware — newlib's first
 // tzset/localtime parse of the POSIX TZ string runs deep in the ticker.
-static constexpr uint32_t CLOCK_TASK_STACK = 4096;
+// 4096 fared little better: 364 B HWM on BOTH wall masters (#434, first
+// /system/stats hwm readout — deterministic, not noise), one deeper library
+// path away from the #414 canary-panic class. 8192 matches net/cluster;
+// static BSS, RAM is plentiful.
+static constexpr uint32_t CLOCK_TASK_STACK = 8192;
 // netTask is the heaviest domain task: wifi + web + flashLog + cluster
 // follower + SSE + system-stats all share one loop. 4096 overflowed the
 // canary on real hardware (split-flap-c8a746) inside flashLogTick's
