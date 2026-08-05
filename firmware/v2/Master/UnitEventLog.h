@@ -86,12 +86,17 @@ struct UnitEventTransitions {
 // call site (this header's other tests, and any future non-ext-diag caller)
 // keeps compiling and behaving identically.
 //
-// BENCH CAVEAT (not yet mitigated here): extDiag.hallEdgesLastRev can read 0
-// or 2 on a perfectly healthy unit at odometer-vs-marker phase coincidence
-// (it averages 1 across many revs) — a bench run may show onset noise on
-// otherwise-fine units. A consecutive-count debounce is the follow-up if that
-// noise shows up; it needs new persisted UnitFacts state (a copied-header
-// change) so it is deliberately NOT done in this slice.
+// hallEdgesLastRev semantics (#418): 0 is the "no completed revolution
+// measured" sentinel, NOT an anomaly — a freshly flashed/rebooted unit in
+// clock mode may not complete a rev for days (the wall logged four false
+// anomalies minutes after the #407 campaign), and the odometer-vs-marker
+// phase coincidence reads 0 on a healthy unit too. Only >1 flags. A hall
+// that truly misses edges surfaces through HOME_FAILED / HALL_NEVER, which
+// homing depends on. BENCH CAVEAT (still open for the >1 side): phase
+// coincidence can also read 2 on a healthy unit; a consecutive-count
+// debounce is the follow-up if that noise shows up — it needs new persisted
+// UnitFacts state (a shared-header change) so it is deliberately NOT done
+// in this slice.
 inline UnitEventTransitions unitEventEvaluate(
     uint8_t prior, uint8_t cur, uint8_t validMask, bool extDiagValid = false,
     const UnitExtDiag& extDiag = UnitExtDiag()) {
@@ -101,7 +106,7 @@ inline UnitEventTransitions unitEventEvaluate(
     if (extDiag.statusBits & EXT_DIAG_STATUS_STALL) cur = (uint8_t)(cur | UNIT_EVT_JAM);
     if (extDiag.stepExcessMax > EXT_DIAG_DRAG_EXCESS_STEPS)
       cur = (uint8_t)(cur | UNIT_EVT_DRAG);
-    if (extDiag.hallEdgesLastRev != 1) cur = (uint8_t)(cur | UNIT_EVT_HALL_ANOMALY);
+    if (extDiag.hallEdgesLastRev > 1) cur = (uint8_t)(cur | UNIT_EVT_HALL_ANOMALY);
   }
   uint8_t effective = (uint8_t)((cur & validMask) | (prior & ~validMask));
   UnitEventTransitions t;

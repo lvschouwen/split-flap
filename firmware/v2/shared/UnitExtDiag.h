@@ -12,7 +12,9 @@
 //   0..1 stepExcessLast   u16 LE  last home: actual - geometry-expected steps
 //   2..3 stepExcessMax    u16 LE  worst-seen excess since boot (drag alarm)
 //   4..5 vccSagLastMove   u16 LE  min Vcc during last move (mV)
-//   6    hallEdgesLastRev u8      entering-edges in last completed rev (1=OK)
+//   6    hallEdgesLastRev u8      entering-edges in last completed rev (1=OK;
+//                                 0 = no completed rev measured yet — a
+//                                 sentinel, not an anomaly, #418)
 //   7..8 dutyWindow       u16 LE  moves in a rolling ~60s window
 //   9    statusBits       u8      bit0 last-move stall/jam; bits1-7 reserved
 //   10   checksum         u8      XOR of 0..9 ^ EXT_DIAG_REPLY_CHECKSUM_MASK

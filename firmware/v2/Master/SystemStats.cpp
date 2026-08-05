@@ -8,6 +8,7 @@
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "SystemStatsPolicy.h"
+#include "Tasks.h"  // tasksStackHwm (#415)
 #include "UnitBus.h"
 #include "WebEndpoints.h"  // webResetReasonString()
 
@@ -72,6 +73,9 @@ size_t systemStatsJson(char* buf, size_t cap) {
   now.ntpAgeS = clockNtpAgeS();
   snprintf(now.resetReason, sizeof(now.resetReason), "%s",
            webResetReasonString());
+  TasksStackHwm hwm = tasksStackHwm();  // #415
+  now.hwmDisplay = hwm.display; now.hwmClock = hwm.clock;
+  now.hwmNet = hwm.net; now.hwmMqtt = hwm.mqtt; now.hwmCluster = hwm.cluster;
 
   xSemaphoreTake(ringMutex, portMAX_DELAY);
   size_t n = buildSystemStatsJson(buf, cap, sampler, now);
@@ -89,6 +93,9 @@ size_t systemStatsNowJson(char* buf, size_t cap) {
   now.ntpAgeS = clockNtpAgeS();
   snprintf(now.resetReason, sizeof(now.resetReason), "%s",
            webResetReasonString());
+  TasksStackHwm hwm = tasksStackHwm();  // #415
+  now.hwmDisplay = hwm.display; now.hwmClock = hwm.clock;
+  now.hwmNet = hwm.net; now.hwmMqtt = hwm.mqtt; now.hwmCluster = hwm.cluster;
 
   xSemaphoreTake(ringMutex, portMAX_DELAY);
   size_t n = buildSystemNowJson(buf, cap, sampler.latest, now);
