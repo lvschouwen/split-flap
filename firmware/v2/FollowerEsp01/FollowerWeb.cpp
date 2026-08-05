@@ -758,10 +758,13 @@ void webEndpointsInit(AsyncWebServer& server) {
     // master-only — i2cErrors/lastErrorMs are never set by FollowerBus.cpp),
     // so those keys never widen a follower payload. #365 ext-diag is the
     // opposite case: FollowerBus.cpp DOES populate extDiagValid on this bus,
-    // so the se/sx/sag/he/dw/sb keys are live here too — raised from 5120 to
-    // 6144 (measured worst case incl. the wear + reflash splices: ~5662 B;
-    // see test_health_json_follower_worst_case_fits_local_buf).
-    static constexpr size_t FOLLOWER_HEALTH_BUF = 6144;
+    // so the se/sx/sag/he/dw/sb keys are live here too. 8192 matches the
+    // master's UNIT_HEALTH_JSON_CAP after the #405 protocol + #406 lifetime
+    // keys grew the shared builder past the old 6144 (#411 — a saturated
+    // 16-unit row overflowed and the handler dropped ALL per-unit health);
+    // test_health_json_follower_worst_case_fits_local_buf now saturates
+    // every key family and is the lockstep guard.
+    static constexpr size_t FOLLOWER_HEALTH_BUF = 8192;
     static char buf[FOLLOWER_HEALTH_BUF];
     int faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
     size_t n = buildUnitHealthJson(buf, FOLLOWER_HEALTH_BUF, unitFacts,

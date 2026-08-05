@@ -67,6 +67,18 @@ static void fullyPopulated(UnitFacts& u) {
   u.extDiag.hallEdgesLastRev = 1;
   u.extDiag.dutyWindow = 12;
   u.extDiag.statusBits = 1;
+  // #411: the #405 protocol and #406 lifetime keys must be exercised or the
+  // legend guard is blind to them (how the follower buffer went stale).
+  u.protocolKnown = true;
+  u.protocolVersion = 255;  // unsupported -> emits pv AND pmm
+  u.lifetimeValid = true;
+  u.lifetime.homeFailedCount = 2;
+  u.lifetime.featureGates = 3;
+  u.lifetime.stepExcessLifetimeMax = 1465;
+  u.lifetime.selfTestFirstHallWindow = 46;
+  u.lifetime.selfTestFirstStepsPerRev = 2050;
+  u.lifetime.selfTestLastHallWindow = 12;
+  u.lifetime.selfTestLastStepsPerRev = 2048;
   u.extDiagValid = true;
 }
 
@@ -109,7 +121,7 @@ static void test_legend_covers_all_health_keys() {
 // /units/health buffer (FollowerWeb.cpp's FOLLOWER_HEALTH_BUF), which is
 // deliberately smaller than the master's shared UNIT_HEALTH_JSON_CAP.
 static void test_health_json_follower_worst_case_fits_local_buf() {
-  constexpr size_t FOLLOWER_HEALTH_BUF = 6144;  // keep in sync w/ FollowerWeb.cpp
+  constexpr size_t FOLLOWER_HEALTH_BUF = 8192;  // keep in sync w/ FollowerWeb.cpp
   UnitFacts units[16];
   for (int i = 0; i < 16; i++) {
     units[i].state = 1;
@@ -147,6 +159,18 @@ static void test_health_json_follower_worst_case_fits_local_buf() {
     units[i].extDiag.hallEdgesLastRev = 0xFF;
     units[i].extDiag.dutyWindow = 0xFFFF;
     units[i].extDiag.statusBits = 0xFF;
+    // #411: the #405 protocol keys and #406 lifetime keys — this fixture
+    // omitting them is exactly how the 6144 buffer went stale unnoticed.
+    units[i].protocolKnown = true;
+    units[i].protocolVersion = 255;  // unsupported → emits pv AND pmm
+    units[i].lifetimeValid = true;
+    units[i].lifetime.homeFailedCount = 255;
+    units[i].lifetime.featureGates = 255;
+    units[i].lifetime.stepExcessLifetimeMax = 0xFFFF;
+    units[i].lifetime.selfTestFirstHallWindow = 0xFFFF;
+    units[i].lifetime.selfTestFirstStepsPerRev = 0xFFFF;
+    units[i].lifetime.selfTestLastHallWindow = 0xFFFF;
+    units[i].lifetime.selfTestLastStepsPerRev = 0xFFFF;
   }
   char buf[FOLLOWER_HEALTH_BUF];
   size_t n = buildUnitHealthJson(buf, FOLLOWER_HEALTH_BUF, units, 16, 16,

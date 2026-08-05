@@ -74,6 +74,18 @@ static void fullyPopulated(UnitFacts& u) {
   u.extDiag.hallEdgesLastRev = 1;
   u.extDiag.dutyWindow = 12;
   u.extDiag.statusBits = 1;
+  // #411: the #405 protocol and #406 lifetime keys must be exercised or the
+  // legend guard is blind to them (how the follower buffer went stale).
+  u.protocolKnown = true;
+  u.protocolVersion = 255;  // unsupported -> emits pv AND pmm
+  u.lifetimeValid = true;
+  u.lifetime.homeFailedCount = 2;
+  u.lifetime.featureGates = 3;
+  u.lifetime.stepExcessLifetimeMax = 1465;
+  u.lifetime.selfTestFirstHallWindow = 46;
+  u.lifetime.selfTestFirstStepsPerRev = 2050;
+  u.lifetime.selfTestLastHallWindow = 12;
+  u.lifetime.selfTestLastStepsPerRev = 2048;
   u.extDiagValid = true;
 }
 
