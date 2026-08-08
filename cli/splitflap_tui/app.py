@@ -163,6 +163,7 @@ class SplitflapApp(App):
         self.wall_stale = True
         self.poller: Poller | None = None
         self.plat = PLAT_S3          # default before the first /status poll
+        self.device_mode = ""        # "" until the first successful poll
         self._board_cycle_index = 0
 
     def compose(self) -> ComposeResult:
@@ -196,6 +197,7 @@ class SplitflapApp(App):
     def apply_status(self, agg: StatusAggregate, cluster: ClusterStatus) -> None:
         self.connected = True
         self.plat = agg.settings.plat
+        self.device_mode = agg.settings.device_mode
         s = agg.settings
         role = "leading" if s.cluster_leading else (s.cluster_state or "standalone")
         self.sub_title = (f"{s.effective_device_name or 'wall'} · "
@@ -320,11 +322,18 @@ class SplitflapApp(App):
     def dispatch_command(self, parsed: ParsedCommand) -> None:
         if not self._capability_gate(parsed):
             return
-        if parsed.tier in (TIER_KILL, TIER_ROUTINE):
+        clock_guard = parsed.name == "text" and self.device_mode == "clock"
+        if parsed.tier in (TIER_KILL, TIER_ROUTINE) and not clock_guard:
             self.run_command(parsed)
             return
         typed = parsed.tier == TIER_TYPED
         token = self._typed_confirm_token(parsed) if typed else ""
+        summary = parsed.summary
+        if clock_guard:
+            summary = (f"{parsed.summary}\n"
+                       "wall is in clock mode — the clock reclaims the "
+                       "display at the next minute tick.\n"
+                       "Send anyway? (tip: `:mode text` first)")
 
         def on_result(confirmed: bool) -> None:
             if confirmed:
@@ -332,7 +341,7 @@ class SplitflapApp(App):
             else:
                 self.apply_cmd_result("cancelled")
 
-        self.push_screen(ConfirmModal(parsed.summary, typed=typed, token=token),
+        self.push_screen(ConfirmModal(summary, typed=typed, token=token),
                          on_result)
 
     def run_command(self, parsed: ParsedCommand) -> None:

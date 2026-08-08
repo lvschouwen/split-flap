@@ -6,6 +6,8 @@ from splitflap_client.events import DisplayEvent
 from splitflap_client.models import ClusterStatus, StatusAggregate
 from splitflap_client.transport import BoardClient
 from splitflap_tui.app import SplitflapApp
+from splitflap_tui.commands import parse
+from splitflap_tui.confirm import ConfirmModal
 from splitflap_tui.config import Board, Config
 from splitflap_tui.widgets import ClusterStrip, LogTail, UnitsTable, WallPanel
 
@@ -197,3 +199,29 @@ async def test_wall_renders_flap_cells():
         await pilot.pause(0.05)
         assert wall.wall_text() == "HI"
         assert "▐H▌ ▐I▌" in wall.content        # cells, not a plain string
+
+
+@pytest.mark.asyncio
+async def test_text_in_clock_mode_asks_before_sending():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)                 # STATUS fixture: deviceMode=clock
+        assert app.device_mode == "clock"
+        app.dispatch_command(parse("text HI"))
+        await pilot.pause(0.05)
+        assert isinstance(app.screen, ConfirmModal)
+        assert "clock" in app.screen.summary
+        app.screen.action_no()                 # cancel; nothing sent
+        await pilot.pause(0.05)
+
+
+@pytest.mark.asyncio
+async def test_text_outside_clock_mode_sends_directly():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        for mode in ("text", ""):              # explicit text mode + unknown
+            app.device_mode = mode
+            app.dispatch_command(parse("text HI"))
+            await pilot.pause(0.1)
+            assert not isinstance(app.screen, ConfirmModal)
