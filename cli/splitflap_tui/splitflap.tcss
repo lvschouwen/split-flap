@@ -42,3 +42,10 @@ Header {
 .stale {
     opacity: 45%;
 }
+HelpScreen {
+    align: center middle;
+}
+HelpScreen DataTable {
+    max-height: 80%;
+    border: round #FFB000 50%;
+}

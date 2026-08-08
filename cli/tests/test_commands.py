@@ -1,6 +1,7 @@
 import pytest
-from splitflap_tui.commands import (CommandError, TIER_CONFIRM, TIER_KILL,
-                                    TIER_ROUTINE, TIER_TYPED, parse)
+from splitflap_tui.commands import (CANONICAL_NAMES, CommandError, HELP,
+                                    TIER_CONFIRM, TIER_KILL, TIER_ROUTINE,
+                                    TIER_TYPED, parse)
 
 
 def test_stop_is_kill_tier():
@@ -409,3 +410,13 @@ async def test_reboot_without_board_arg_still_targets_default():
         await pilot.press("enter")            # to the command name
         await pilot.pause(0.3)
     assert "/reboot" in posts
+
+
+def test_help_examples_cover_every_command_exactly():
+    names = {parse(e.example).name for e in HELP}
+    assert names == set(CANONICAL_NAMES)
+
+
+def test_help_entries_are_complete():
+    for e in HELP:
+        assert e.usage and e.tier and e.blurb and e.example

@@ -8,8 +8,11 @@ from splitflap_tui.app import SplitflapApp
 from splitflap_tui.config import Board, Config
 from splitflap_tui.screens import board_detail
 from splitflap_tui.screens.board_detail import BoardDetailScreen
+from splitflap_tui.screens.help_screen import HelpScreen
 from splitflap_tui.screens.log_screen import LogScreen
 from textual.widgets import RichLog
+
+from tests.test_app import CFG, fake_factory
 
 ESP01_SETTINGS = {"plat": "esp01", "width": 5, "version": "9f694dd",
                   "clusterState": "clustered", "effectiveDeviceName": "row0"}
@@ -188,3 +191,15 @@ async def test_log_screen_shows_error_on_unreachable():
         log = app.screen.query_one("#flash-log", RichLog)
         rendered = "\n".join(strip.text for strip in log.lines)
         assert "UNREACHABLE" in rendered
+
+
+@pytest.mark.asyncio
+async def test_question_mark_opens_help_and_escape_closes():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("question_mark")
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("escape")
+        await pilot.pause(0.05)
+        assert not isinstance(app.screen, HelpScreen)

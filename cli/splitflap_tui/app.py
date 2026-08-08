@@ -24,6 +24,7 @@ from .config import Config
 from .confirm import ConfirmModal
 from .poller import Poller
 from .screens.board_detail import BoardDetailScreen
+from .screens.help_screen import HelpScreen
 from .screens.log_screen import LogScreen
 from .widgets import (ClusterStrip, CommandInput, LogTail, StatsBar,
                       UnitsTable, WallPanel, border_text, format_cmd_status)
@@ -152,7 +153,8 @@ class SplitflapApp(App):
     CSS_PATH = "splitflap.tcss"
     BINDINGS = [("q", "quit", "Quit"), (":", "open_command", "Command"),
                 Binding("ctrl+s", "stop_wall", "STOP", priority=True),
-                ("b", "board_detail", "Board"), ("l", "log_screen", "Log")]
+                ("b", "board_detail", "Board"), ("l", "log_screen", "Log"),
+                ("question_mark", "help", "Help")]
 
     def __init__(self, config: Config,
                  client_factory: Callable[[str], BoardClient] = BoardClient):
@@ -281,6 +283,9 @@ class SplitflapApp(App):
             return
         self.push_screen(LogScreen(url, self.client_factory))
 
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command":
             return
@@ -289,6 +294,9 @@ class SplitflapApp(App):
         event.input.value = ""
         event.input.display = False
         self.set_focus(None)
+        if line.strip() in ("help", "?"):
+            self.push_screen(HelpScreen())
+            return
         try:
             parsed = parse(line)
         except CommandError as exc:
