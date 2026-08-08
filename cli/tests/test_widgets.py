@@ -1,4 +1,4 @@
-from splitflap_client.models import ClusterMember, ClusterStatus
+from splitflap_client.models import ClusterMember
 from splitflap_tui.widgets import DOT_BAD, DOT_OK, DOT_WARN, member_dot_style
 
 

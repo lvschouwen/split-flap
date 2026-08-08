@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from splitflap_client.control import (notify, post_form, reboot, set_mode,
+from splitflap_client.control import (notify, reboot, set_mode,
                                       set_setting, set_text, stop)
 from splitflap_client.transport import BoardClient, HttpError
 

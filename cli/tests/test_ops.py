@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from splitflap_client.ops import (OpResult, SelfTestResult, parse_op_result,
+from splitflap_client.ops import (OpResult, parse_op_result,
                                   parse_self_test_result, run_op, submit_op,
                                   wait_op)
 from splitflap_client.transport import BoardClient, HttpError

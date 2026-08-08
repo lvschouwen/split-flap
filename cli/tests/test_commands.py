@@ -1,6 +1,6 @@
 import pytest
 from splitflap_tui.commands import (CANONICAL_NAMES, CommandError, HELP,
-                                    TIER_CONFIRM, TIER_KILL, TIER_ROUTINE,
+                                    TIER_KILL, TIER_ROUTINE,
                                     TIER_TYPED, parse)
 
 

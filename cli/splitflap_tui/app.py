@@ -37,6 +37,9 @@ def _route_known_anywhere(route: tuple[str, str]) -> bool:
     return any((method, path) in routes for routes in CLIENT_ROUTES.values())
 
 
+DISPLAY_NAMES = {"config": "cluster config", "cluster-leave": "cluster leave"}
+
+
 def _format_op_result(r: OpResult) -> str:
     parts = [r.state]
     if r.reason:
@@ -171,6 +174,7 @@ class SplitflapApp(App):
         self.plat = PLAT_S3          # default before the first /status poll
         self.device_mode = ""        # "" until the first successful poll
         self._board_cycle_index = 0
+        self._last_cmd_result = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -322,7 +326,8 @@ class SplitflapApp(App):
         call, so they pass through to the wire untouched."""
         method, path = parsed.route
         if _route_known_anywhere(parsed.route) and not serves(self.plat, method, path):
-            self.apply_cmd_result(f"⛔ {parsed.name}: not served on {self.plat}")
+            name = DISPLAY_NAMES.get(parsed.name, parsed.name)
+            self.apply_cmd_result(f"⛔ {name}: not served on {self.plat}")
             return False
         return True
 
@@ -373,6 +378,7 @@ class SplitflapApp(App):
         self.run_worker(work, thread=True)
 
     def apply_cmd_result(self, text: str, duration_s: float | None = None) -> None:
+        self._last_cmd_result = text
         self.query_one("#cmd-status", Static).update(
             format_cmd_status(text, duration_s, datetime.now().strftime("%H:%M:%S")))
 

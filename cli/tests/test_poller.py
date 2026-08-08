@@ -141,3 +141,74 @@ def test_sse_loop_skips_apply_wall_stale_after_stop_triggered_disconnect(monkeyp
     assert not t.is_alive(), "SSE thread still blocked after stop()"
     assert app.calls == [], "call_from_thread was scheduled after stop()"
 
+
+# ---- #452: client-handoff lock + status-loop client reuse
+
+class _CloseTrackingClient:
+    def __init__(self):
+        self.closed = threading.Event()
+
+    def close(self):
+        self.closed.set()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+class _NullApp:
+    def call_from_thread(self, fn, *a):
+        fn(*a)
+
+
+def test_sse_client_created_after_stop_is_closed_immediately():
+    """#452: the stop()-vs-reconnect TOCTOU — stop() fired while a fresh
+    cycle was between factory() and the _sse_client assignment used to leak
+    a client blocked in a long read past unmount."""
+    client = _CloseTrackingClient()
+    p = Poller(_NullApp(), lambda url: client, "http://x", 1.0, 1.0)
+    p.stop()                     # stop FIRST
+    p._sse_cycle()               # cycle races in afterwards
+    assert client.closed.is_set()
+    assert p._sse_client is None
+
+
+def test_status_loop_reuses_one_client_and_retries_once(monkeypatch):
+    made = []
+
+    class _JsonClient(_CloseTrackingClient):
+        def __init__(self, fail_first: bool):
+            super().__init__()
+            self.fail_first = fail_first
+
+        def get_json(self, path):
+            if self.fail_first:
+                self.fail_first = False
+                raise Unreachable("http://x" + path, OSError("keepalive"))
+            if path == "/status":
+                return {"settings": {"plat": "esp32s3"}}
+            return {"enabled": False}
+
+    def factory(url):
+        c = _JsonClient(fail_first=(len(made) == 0))
+        made.append(c)
+        return c
+
+    applied = []
+
+    class _App:
+        def call_from_thread(self, fn, *a):
+            applied.append(fn.__name__)
+
+        def apply_status(self, agg, cluster): ...
+        def apply_disconnect(self, msg): ...
+
+    app = _App()
+    p = Poller(app, factory, "http://x", 1.0, 1.0)
+    p._status_cycle()            # first client dies mid-flight -> retried fresh
+    p._status_cycle()            # second cycle reuses the fresh client
+    assert len(made) == 2        # NOT 3: retry made one, cycle 2 made none
+    assert applied == ["apply_status", "apply_status"]   # no disconnect flash
+

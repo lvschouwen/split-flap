@@ -242,3 +242,15 @@ async def test_history_persists_across_sessions(tmp_path):
         await pilot.press("enter")
         await pilot.pause(0.1)
     assert "mode text" in hist.read_text().splitlines()
+
+
+@pytest.mark.asyncio
+async def test_gate_message_uses_spoken_command_name():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        app.plat = "esp01"       # /cluster/config is S3-only
+        app.dispatch_command(parse("cluster config a|1|0|5;"))
+        await pilot.pause(0.05)
+        # gate wording (#452): "cluster config", not the internal "config"
+        assert app._last_cmd_result.startswith("⛔ cluster config:")

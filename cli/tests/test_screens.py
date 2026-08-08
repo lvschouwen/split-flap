@@ -193,6 +193,15 @@ async def test_log_screen_shows_error_on_unreachable():
         assert "UNREACHABLE" in rendered
 
 
+def test_board_detail_log_buffer_is_capped():
+    from splitflap_tui.screens.board_detail import LOG_CAP_LINES, cap_log
+    text = "\n".join(f"line {i}" for i in range(500))
+    capped = cap_log(text)
+    lines = capped.splitlines()
+    assert len(lines) == LOG_CAP_LINES
+    assert lines[-1] == "line 499"
+
+
 @pytest.mark.asyncio
 async def test_question_mark_opens_help_and_escape_closes():
     app = SplitflapApp(CFG, client_factory=fake_factory)
