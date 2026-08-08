@@ -1,7 +1,7 @@
 import httpx
 import pytest
 from splitflap_client.control import (notify, post_form, reboot, set_mode,
-                                      set_text, stop)
+                                      set_setting, set_text, stop)
 from splitflap_client.transport import BoardClient, HttpError
 
 
@@ -55,3 +55,10 @@ def test_reboot_posts():
         return httpx.Response(200, text="rebooting")
     reboot(BoardClient("http://b", transport=httpx.MockTransport(handler)))
     assert seen["path"] == "/reboot"
+
+
+def test_set_setting_passes_field_through_with_ajax():
+    seen, c = capture()
+    set_setting(c, "flapSpeed", 42)
+    assert seen["form"]["flapSpeed"] == "42"
+    assert seen["form"]["ajax"] == "1"
