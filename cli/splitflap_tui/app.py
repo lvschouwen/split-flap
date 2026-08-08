@@ -19,6 +19,8 @@ from .commands import (CommandError, ParsedCommand, TIER_KILL, TIER_ROUTINE,
 from .config import Config
 from .confirm import ConfirmModal
 from .poller import Poller
+from .screens.board_detail import BoardDetailScreen
+from .screens.log_screen import LogScreen
 from .widgets import (ClusterStrip, CommandInput, LogTail, StatsBar,
                       UnitsTable, WallPanel)
 
@@ -112,7 +114,8 @@ def execute(parsed: ParsedCommand, client: BoardClient) -> str:
 class SplitflapApp(App):
     TITLE = "splitflap"
     BINDINGS = [("q", "quit", "Quit"), (":", "open_command", "Command"),
-                Binding("ctrl+s", "stop_wall", "STOP", priority=True)]
+                Binding("ctrl+s", "stop_wall", "STOP", priority=True),
+                ("b", "board_detail", "Board"), ("l", "log_screen", "Log")]
 
     def __init__(self, config: Config,
                  client_factory: Callable[[str], BoardClient] = BoardClient):
@@ -123,6 +126,7 @@ class SplitflapApp(App):
         self.wall_stale = True
         self.poller: Poller | None = None
         self.plat = PLAT_S3          # default before the first /status poll
+        self._board_cycle_index = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -192,6 +196,27 @@ class SplitflapApp(App):
         capability check. Priority=True means this fires even while the
         command Input or a confirm modal has focus."""
         self.dispatch_command(parse("stop"))
+
+    def action_board_detail(self) -> None:
+        """`b` pushes BoardDetailScreen for the next board in config.boards,
+        cycling on repeat press (one board per config.boards entry, wrapping
+        around) — the follower is polled only while that screen is open."""
+        boards = self.config.boards
+        if not boards:
+            self.apply_cmd_result("no boards configured")
+            return
+        board = boards[self._board_cycle_index % len(boards)]
+        self._board_cycle_index += 1
+        self.apply_cmd_result(f"board detail: {board.name}")
+        self.push_screen(BoardDetailScreen(board, self.client_factory))
+
+    def action_log_screen(self) -> None:
+        """`l` pushes the leader's flash-log screen (S3-only route)."""
+        url = self.config.board_url()
+        if not url:
+            self.apply_cmd_result("no config — no leader url")
+            return
+        self.push_screen(LogScreen(url, self.client_factory))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command":
