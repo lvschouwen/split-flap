@@ -95,7 +95,7 @@ class UnitsHealth:
             vcc_min=_opt(d, "vccMin"),
             units=[UnitEntry.from_json(u) for u in units_raw
                    if isinstance(u, dict)] if isinstance(units_raw, list) else [],
-            wear_flagged=[int(x) for x in flagged] if isinstance(flagged, list) else [],
+            wear_flagged=[int(x) for x in flagged if isinstance(x, (int, float)) and not isinstance(x, bool)] if isinstance(flagged, list) else [],
             reflash_state=_str(reflash, "state"),
             reflash_halted=_bool(reflash, "halted"),
         )

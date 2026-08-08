@@ -34,3 +34,11 @@ def test_status_aggregate_variant_without_wear_reflash():
 def test_overflow_fallback_shape():
     h = UnitsHealth.from_json({"width": 16, "faulty": 2, "units": []})
     assert h.width == 16 and h.units == []
+
+
+def test_wear_flagged_tolerant_coercion():
+    # from_json must never raise on mistyped keys — coerce tolerantly
+    d = {"width": 1, "faulty": 0, "units": [],
+         "wear": {"median": 1, "flagged": [3, "oops", None, True, 7]}}
+    h = UnitsHealth.from_json(d)
+    assert h.wear_flagged == [3, 7]  # only numeric non-bool elements
