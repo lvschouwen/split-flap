@@ -9,7 +9,8 @@ from splitflap_tui.app import SplitflapApp
 from splitflap_tui.commands import parse
 from splitflap_tui.confirm import ConfirmModal
 from splitflap_tui.config import Board, Config
-from splitflap_tui.widgets import ClusterStrip, LogTail, UnitsTable, WallPanel
+from splitflap_tui.widgets import (ClusterStrip, CommandInput, LogTail,
+                                   UnitsTable, WallPanel)
 
 STATUS = {"settings": {"plat": "esp32s3", "unitCount": 16, "version": "817e3a9",
                        "clusterLeading": True, "deviceMode": "clock"},
@@ -225,3 +226,19 @@ async def test_text_outside_clock_mode_sends_directly():
             app.dispatch_command(parse("text HI"))
             await pilot.pause(0.1)
             assert not isinstance(app.screen, ConfirmModal)
+
+
+@pytest.mark.asyncio
+async def test_history_persists_across_sessions(tmp_path):
+    hist = tmp_path / "history"
+    hist.write_text("mode clock\n")
+    app = SplitflapApp(CFG, client_factory=fake_factory, history_path=hist)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        cmd = app.query_one("#command", CommandInput)
+        assert cmd.history == ["mode clock"]
+        app.action_open_command()
+        cmd.value = "mode text"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+    assert "mode text" in hist.read_text().splitlines()

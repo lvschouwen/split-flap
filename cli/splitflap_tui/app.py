@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
 from textual.app import App, ComposeResult
@@ -22,6 +23,7 @@ from .commands import (CommandError, ParsedCommand, TIER_KILL, TIER_ROUTINE,
                        TIER_TYPED, parse)
 from .config import Config
 from .confirm import ConfirmModal
+from .history import load_history, save_history
 from .poller import Poller
 from .screens.board_detail import BoardDetailScreen
 from .screens.help_screen import HelpScreen
@@ -157,10 +159,12 @@ class SplitflapApp(App):
                 ("question_mark", "help", "Help")]
 
     def __init__(self, config: Config,
-                 client_factory: Callable[[str], BoardClient] = BoardClient):
+                 client_factory: Callable[[str], BoardClient] = BoardClient,
+                 history_path: Path | None = None):
         super().__init__()
         self.config = config
         self.client_factory = client_factory
+        self.history_path = history_path
         self.connected = False
         self.wall_stale = True
         self.poller: Poller | None = None
@@ -186,6 +190,9 @@ class SplitflapApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        cmd = self.query_one("#command", CommandInput)
+        cmd.history = load_history(self.history_path)
+        cmd.reset_history_cursor()
         url = self.config.board_url()
         if not url:
             self.query_one("#stats", StatsBar).update(
@@ -291,6 +298,7 @@ class SplitflapApp(App):
             return
         line = event.value
         event.input.remember(line)
+        save_history(event.input.history, self.history_path)
         event.input.value = ""
         event.input.display = False
         self.set_focus(None)
