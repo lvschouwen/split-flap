@@ -11,7 +11,9 @@ from splitflap_client import control
 from splitflap_client.capability import CLIENT_ROUTES, PLAT_S3, serves
 from splitflap_client.events import DisplayEvent
 from splitflap_client.models import ClusterStatus, StatusAggregate
-from splitflap_client.ops import OpResult, run_op
+from splitflap_client.ops import (OpResult, SelfTestResult,
+                                  parse_self_test_result, run_op, submit_op,
+                                  wait_op)
 from splitflap_client.transport import BoardClient, HttpError, SplitflapError
 
 from .commands import (CommandError, ParsedCommand, TIER_KILL, TIER_ROUTINE,
@@ -39,6 +41,17 @@ def _format_op_result(r: OpResult) -> str:
     return ", ".join(parts)
 
 
+def _format_self_test_result(r: SelfTestResult) -> str:
+    parts = [r.state, f"steps_per_rev={r.steps_per_rev}",
+             f"hall_window={r.hall_window}", f"rev_time_ms={r.rev_time_ms}"]
+    if r.state != "ok":
+        if r.reason:
+            parts.append(f"reason={r.reason}")
+        if r.unit_reason:
+            parts.append(f"unit_reason={r.unit_reason}")
+    return ", ".join(parts)
+
+
 def _execute_op(client: BoardClient, parsed: ParsedCommand) -> str:
     path = parsed.route[1]
     params: dict = {"address": parsed.args["unit"]}
@@ -46,6 +59,15 @@ def _execute_op(client: BoardClient, parsed: ParsedCommand) -> str:
         params["value"] = parsed.args["value"]
     elif path == "/unit/jog":
         params["steps"] = parsed.args["value"]
+    if path == "/unit/self-test":
+        # #441 finding 3: /unit/op-result's "ok" doesn't carry the
+        # measurements, and on the follower means only "started" — false
+        # success is possible there. Self-test has its own result contract:
+        # poll /unit/self-test-result and parse it with SelfTestResult.
+        seq = submit_op(client, path, params)
+        result = wait_op(client, seq, result_path="/unit/self-test-result",
+                         parse=parse_self_test_result)
+        return _format_self_test_result(result)
     return _format_op_result(run_op(client, path, params))
 
 
@@ -63,10 +85,17 @@ def _execute_addr(client: BoardClient, parsed: ParsedCommand) -> str:
     return f"ok — address {unit} cleared"
 
 
-def execute(parsed: ParsedCommand, client: BoardClient) -> str:
+def execute(parsed: ParsedCommand, client: BoardClient, config: Config,
+           client_factory: Callable[[str], BoardClient]) -> str:
     """Runs one parsed command against client; returns the status-line text.
     Every HttpError renders verbatim (⛔ status: body); OpResult renders
-    as "state[, reason[, detail]]"."""
+    as "state[, reason[, detail]]".
+
+    client is already opened against config.board_url() (the default
+    board) — every command uses it EXCEPT reboot, whose spec-mandated
+    dangerous-tier form is `reboot [board]` (#441 finding 4): it resolves
+    its own target via config/client_factory and ignores the passed-in
+    client entirely when a board name is given."""
     try:
         if parsed.name == "stop":
             control.stop(client)
@@ -90,8 +119,13 @@ def execute(parsed: ParsedCommand, client: BoardClient) -> str:
                 "address": parsed.args["unit"], "gates": parsed.args["mask"]})
             return _format_op_result(result)
         if parsed.name == "reboot":
-            control.reboot(client)
-            return "rebooting"
+            board = parsed.args.get("board", "")
+            url = config.board_url(board)
+            if not url:
+                return f"⛔ unknown board: {board}"
+            with client_factory(url) as reboot_client:
+                control.reboot(reboot_client)
+            return f"rebooting {board}" if board else "rebooting"
         if parsed.name == "addr":
             return _execute_addr(client, parsed)
         if parsed.name == "config":
@@ -137,7 +171,9 @@ class SplitflapApp(App):
                 yield UnitsTable(id="units")
                 yield LogTail(id="log")
             yield StatsBar(id="stats")
-            yield Static("press ':' for commands", id="cmd-status")
+            # markup=False (#441 finding 1a): op/HttpError results folded in
+            # here can carry a board-supplied error body verbatim.
+            yield Static("press ':' for commands", id="cmd-status", markup=False)
             command_input = CommandInput(id="command")
             command_input.display = False
             yield command_input
@@ -157,14 +193,25 @@ class SplitflapApp(App):
     def apply_status(self, agg: StatusAggregate, cluster: ClusterStatus) -> None:
         self.connected = True
         self.plat = agg.settings.plat
-        self.query_one("#cluster-strip", ClusterStrip).update_cluster(cluster)
-        self.query_one("#units", UnitsTable).update_units(agg.units)
+        cluster_strip = self.query_one("#cluster-strip", ClusterStrip)
+        cluster_strip.update_cluster(cluster)
+        cluster_strip.clear_stale()
+        units = self.query_one("#units", UnitsTable)
+        units.update_units(agg.units)
+        units.clear_stale()
+        self.query_one("#log", LogTail).clear_stale()
         self.query_one("#stats", StatsBar).update_stats(agg.stats_now, True)
 
     def apply_disconnect(self, message: str) -> None:
+        # #441 finding 5: the stats bar isn't the only stale panel while
+        # the leader is unreachable — the cluster strip, units table and
+        # log tail last showed data from before the disconnect too.
         self.connected = False
         stats = self.query_one("#stats", StatsBar)
         stats.update(f"DISCONNECTED — {message} (retrying)")
+        self.query_one("#cluster-strip", ClusterStrip).mark_stale()
+        self.query_one("#units", UnitsTable).mark_stale()
+        self.query_one("#log", LogTail).mark_stale()
 
     def apply_log(self, lines: list[str]) -> None:
         log = self.query_one("#log", LogTail)
@@ -247,6 +294,15 @@ class SplitflapApp(App):
             return False
         return True
 
+    @staticmethod
+    def _typed_confirm_token(parsed: ParsedCommand) -> str:
+        """#441 finding 4: reboot's token is the board name when one was
+        given (`reboot row0` -> "row0"), else the command name ("reboot"),
+        matching every other typed-confirm command's fallback."""
+        if "board" in parsed.args:
+            return parsed.args["board"] or parsed.name
+        return str(parsed.args.get("unit", parsed.name))
+
     def dispatch_command(self, parsed: ParsedCommand) -> None:
         if not self._capability_gate(parsed):
             return
@@ -254,7 +310,7 @@ class SplitflapApp(App):
             self.run_command(parsed)
             return
         typed = parsed.tier == TIER_TYPED
-        token = str(parsed.args.get("unit", parsed.name)) if typed else ""
+        token = self._typed_confirm_token(parsed) if typed else ""
 
         def on_result(confirmed: bool) -> None:
             if confirmed:
@@ -269,7 +325,7 @@ class SplitflapApp(App):
         def work() -> None:
             try:
                 with self.client_factory(self.config.board_url()) as client:
-                    result = execute(parsed, client)
+                    result = execute(parsed, client, self.config, self.client_factory)
             except SplitflapError as exc:
                 result = f"⛔ {exc}"
             self.call_from_thread(self.apply_cmd_result, result)

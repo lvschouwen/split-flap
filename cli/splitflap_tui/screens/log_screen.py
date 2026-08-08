@@ -24,6 +24,13 @@ class LogScreen(Screen):
         self.url = url
         self.factory = client_factory
         self.prev = False
+        # #441 finding 6: consecutive `p` toggles spawn overlapping fetch
+        # workers with no ordering guarantee — a slow first fetch resolving
+        # AFTER a fast second one would overwrite the correct boot's log
+        # with the stale one ("last-write-wins" picking the wrong writer).
+        # Each _refresh() call claims the next generation; _apply/_apply_
+        # error drop any result whose generation isn't the current one.
+        self._gen = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -38,25 +45,31 @@ class LogScreen(Screen):
         self._refresh()
 
     def _refresh(self) -> None:
+        self._gen += 1
+        gen = self._gen
         prev = self.prev
 
         def work() -> None:
             try:
                 with self.factory(self.url) as c:
                     text = fetch_flash_log(c, prev=prev)
-                self.app.call_from_thread(self._apply, text, prev)
+                self.app.call_from_thread(self._apply, text, prev, gen)
             except SplitflapError as exc:
-                self.app.call_from_thread(self._apply_error, str(exc))
+                self.app.call_from_thread(self._apply_error, str(exc), gen)
         self.run_worker(work, thread=True)
 
-    def _apply(self, text: str, prev: bool) -> None:
+    def _apply(self, text: str, prev: bool, gen: int) -> None:
+        if gen != self._gen:
+            return                       # superseded by a later toggle
         log = self.query_one("#flash-log", RichLog)
         log.clear()
         log.write(f"-- {'previous' if prev else 'current'} boot --")
         for line in text.splitlines():
             log.write(line)
 
-    def _apply_error(self, message: str) -> None:
+    def _apply_error(self, message: str, gen: int) -> None:
+        if gen != self._gen:
+            return                       # superseded by a later toggle
         log = self.query_one("#flash-log", RichLog)
         log.clear()
         log.write(f"UNREACHABLE — {message}")

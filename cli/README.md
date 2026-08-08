@@ -80,7 +80,7 @@ tiered by risk:
 | `set <field> <value>` | confirm | raw settings-form write |
 | `op home\|jog\|identify\|self-test\|reset-odometer\|offset <unit> [value]` | confirm | `jog`/`offset` require the value arg |
 | `gates <unit> <mask>` | confirm | `SET_GATES` mask, hex or decimal (`0x02` or `2`) |
-| `reboot` | typed | token = `reboot` |
+| `reboot [board]` | typed | targets `board` (config name) or the default board when omitted; token = the board name when given, else `reboot` |
 | `reset-units` | typed | token = `reset-units` |
 | `addr burn <unit> <target>` | typed | token = the unit address |
 | `addr clear <unit>` | typed | token = the unit address |

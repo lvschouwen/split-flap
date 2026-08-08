@@ -95,8 +95,14 @@ def parse(line: str) -> ParsedCommand:
                              TIER_CONFIRM, ("POST", "/unit/gates"),
                              f"gates unit {unit} mask 0x{mask:02x}")
     if head == "reboot":
-        return ParsedCommand("reboot", {}, TIER_TYPED, ("POST", "/reboot"),
-                             "REBOOT the board")
+        # #441 finding 4: spec's dangerous tier is `reboot [board]` — an
+        # optional board name, defaulting to the configured default board
+        # when omitted (see app.py's execute(), which resolves this via
+        # Config.board_url(board)).
+        board = rest[0] if rest else ""
+        summary = f"REBOOT {board}" if board else "REBOOT the board"
+        return ParsedCommand("reboot", {"board": board}, TIER_TYPED,
+                             ("POST", "/reboot"), summary)
     if head == "reset-units":
         return ParsedCommand("reset-units", {}, TIER_TYPED,
                              ("POST", "/reset-units"), "RESET every unit")

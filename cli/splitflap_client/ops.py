@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, TypeVar
 
 from .transport import BoardClient, ParseError
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -57,13 +59,20 @@ def submit_op(client: BoardClient, path: str, params: dict) -> int:
 
 def wait_op(client: BoardClient, seq: int, *,
             result_path: str = "/unit/op-result",
+            parse: Callable[[dict], T] = parse_op_result,
             timeout_s: float = 30.0, poll_s: float = 0.5,
             sleep: Callable[[float], None] = time.sleep,
-            clock: Callable[[], float] = time.monotonic) -> OpResult:
+            clock: Callable[[], float] = time.monotonic) -> T:
+    """Poll result_path until its "state" leaves "pending" or timeout_s
+    elapses. parse defaults to the {"seq":N} op contract's OpResult shape;
+    self-test's own result contract (measurements, not just state/reason)
+    passes parse_self_test_result and result_path="/unit/self-test-result"
+    instead (#441 finding 3) — both shapes carry a "state" field, which is
+    all this loop inspects."""
     deadline = clock() + timeout_s
     while True:
         raw = client.get_json(result_path, params={"seq": str(seq)})
-        result = parse_op_result(raw if isinstance(raw, dict) else {})
+        result = parse(raw if isinstance(raw, dict) else {})
         if result.state != "pending" or clock() >= deadline:
             return result
         sleep(poll_s)

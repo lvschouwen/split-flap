@@ -1,3 +1,6 @@
+import asyncio
+import threading
+
 import httpx
 import pytest
 from splitflap_client.transport import BoardClient
@@ -124,6 +127,51 @@ async def test_log_screen_renders_and_prev_toggle_refetches():
         await pilot.press("escape")
         await pilot.pause(0.1)
         assert not isinstance(app.screen, LogScreen)
+
+
+@pytest.mark.asyncio
+async def test_log_screen_toggle_race_last_toggle_wins():
+    """#441 finding 6: consecutive `p` toggles spawn overlapping fetch
+    workers — a slow FIRST fetch resolving AFTER a fast SECOND one must not
+    overwrite the screen with the stale result. Here the initial (on_mount)
+    fetch is held open until after the `p` toggle's fetch has already
+    completed and rendered, then released — its result must be dropped."""
+    initial_entered = threading.Event()
+    release_initial = threading.Event()
+
+    def handler(req):
+        prev = req.url.params.get("prev")
+        if prev is None:
+            initial_entered.set()
+            assert release_initial.wait(5.0), "test never released the initial fetch"
+            return httpx.Response(200, text="INITIAL\n")
+        return httpx.Response(200, text="PREV\n")
+
+    factory = lambda url: BoardClient(url, transport=httpx.MockTransport(handler))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        app.push_screen(LogScreen("http://leader", factory))
+        # a blocking .wait() here would stall the app's own event-loop
+        # thread (the same thread this coroutine runs on) — hop to a
+        # worker thread for the wait instead.
+        entered = await asyncio.to_thread(initial_entered.wait, 2.0)
+        assert entered, "initial fetch never started"
+
+        await pilot.press("p")          # second, faster fetch — gen 2
+        await pilot.pause(0.3)
+        log = app.screen.query_one("#flash-log", RichLog)
+        rendered = "\n".join(strip.text for strip in log.lines)
+        assert "PREV" in rendered
+
+        release_initial.set()           # let the stale gen-1 fetch resolve
+        await pilot.pause(0.3)
+        rendered = "\n".join(strip.text for strip in log.lines)
+        assert "INITIAL" not in rendered, "stale fetch overwrote the newer toggle"
+        assert "PREV" in rendered
+
+        await pilot.press("escape")
+        await pilot.pause(0.1)
 
 
 @pytest.mark.asyncio

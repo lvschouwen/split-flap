@@ -38,6 +38,18 @@ def test_dangerous_tiers():
     assert parse("cluster leave").tier == TIER_TYPED
 
 
+def test_reboot_accepts_optional_board_arg():
+    """#441 finding 4: the spec's dangerous tier is `reboot [board]`, not a
+    fixed target — the board name (or its absence) rides in args."""
+    no_board = parse("reboot")
+    assert no_board.tier == TIER_TYPED and no_board.args == {"board": ""}
+
+    with_board = parse("reboot row0")
+    assert with_board.tier == TIER_TYPED
+    assert with_board.args == {"board": "row0"}
+    assert with_board.route == ("POST", "/reboot")
+
+
 def test_unknown_command_raises_usage():
     with pytest.raises(CommandError):
         parse("frobnicate")
@@ -259,3 +271,141 @@ async def test_cluster_config_sends_members_form_param():
               and "host1" in body for path, body in posts)
     # query string must NOT carry it — that would be the wrong transport
     assert not any("?members=" in path for path, _ in posts)
+
+
+# ---- #441 finding 3: self-test's own result contract, not /unit/op-result
+
+@pytest.mark.asyncio
+async def test_self_test_polls_its_own_result_endpoint_and_renders_measurements():
+    """/unit/op-result's "ok" doesn't carry measurements, and on the
+    follower means only "started" — false success is possible there. This
+    pins the fix: submit to /unit/self-test, then poll
+    /unit/self-test-result (never /unit/op-result), and render the
+    measurements in the status line."""
+    calls = []
+    def handler(req):
+        calls.append(req.url.path)
+        if req.url.path == "/unit/self-test" and req.method == "POST":
+            return httpx.Response(200, json={"seq": 9})
+        if req.url.path == "/unit/self-test-result":
+            return httpx.Response(200, json={"state": "ok", "steps_per_rev": 2038,
+                                             "hall_window": 46, "rev_time_ms": 1200})
+        return httpx.Response(200, json={})
+    cfg = Config(boards=[Board("leader", "http://x")], default="leader")
+    app = SplitflapApp(cfg, client_factory=lambda url: BoardClient(
+        url, transport=httpx.MockTransport(handler)))
+    async with app.run_test() as pilot:
+        await pilot.press(":")
+        await pilot.press(*"op self-test 3")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        await pilot.press("y")              # plain confirm tier (TIER_CONFIRM)
+        await pilot.pause(0.3)
+        status = app.query_one("#cmd-status", Static)
+    assert "/unit/self-test-result" in calls
+    assert "/unit/op-result" not in calls
+    assert "steps_per_rev=2038" in status.content
+    assert "hall_window=46" in status.content
+    assert "rev_time_ms=1200" in status.content
+
+
+@pytest.mark.asyncio
+async def test_self_test_failure_renders_reason_and_unit_reason():
+    def handler(req):
+        if req.url.path == "/unit/self-test" and req.method == "POST":
+            return httpx.Response(200, json={"seq": 3})
+        if req.url.path == "/unit/self-test-result":
+            return httpx.Response(200, json={"state": "failed",
+                                             "reason": "unit-failed",
+                                             "unit_reason": "hall-stuck",
+                                             "steps_per_rev": 0, "hall_window": 0,
+                                             "rev_time_ms": 0})
+        return httpx.Response(200, json={})
+    cfg = Config(boards=[Board("leader", "http://x")], default="leader")
+    app = SplitflapApp(cfg, client_factory=lambda url: BoardClient(
+        url, transport=httpx.MockTransport(handler)))
+    async with app.run_test() as pilot:
+        await pilot.press(":")
+        await pilot.press(*"op self-test 6")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        await pilot.press("y")
+        await pilot.pause(0.3)
+        status = app.query_one("#cmd-status", Static)
+    assert "hall-stuck" in status.content
+    assert "unit-failed" in status.content
+
+
+# ---- #441 finding 4: `reboot [board]` targets a named board, not always
+# the default one.
+
+@pytest.mark.asyncio
+async def test_reboot_with_board_arg_targets_that_boards_url():
+    posts: list[tuple[str, str]] = []
+    def factory(url: str) -> BoardClient:
+        name = "leader" if url == "http://leader" else "row0"
+        def handler(req):
+            if req.method == "POST":
+                posts.append((name, req.url.path))
+                return httpx.Response(200, text="rebooting")
+            return httpx.Response(200, json={})
+        return BoardClient(url, transport=httpx.MockTransport(handler))
+    cfg = Config(boards=[Board("leader", "http://leader"),
+                         Board("row0", "http://row0")], default="leader")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        await pilot.press(":")
+        await pilot.press(*"reboot row0")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        await pilot.press(*"row0")            # typed-confirm token = board name
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+    assert ("row0", "/reboot") in posts
+    assert ("leader", "/reboot") not in posts
+
+
+@pytest.mark.asyncio
+async def test_reboot_unknown_board_shows_error_and_sends_no_request():
+    posts = []
+    def handler(req):
+        if req.method == "POST":
+            posts.append(req.url.path)
+        return httpx.Response(200, json={})
+    cfg = Config(boards=[Board("leader", "http://leader")], default="leader")
+    app = SplitflapApp(cfg, client_factory=lambda url: BoardClient(
+        url, transport=httpx.MockTransport(handler)))
+    async with app.run_test() as pilot:
+        await pilot.press(":")
+        await pilot.press(*"reboot bogus")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        await pilot.press(*"bogus")           # typed-confirm token = board name
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        status = app.query_one("#cmd-status", Static)
+    assert "/reboot" not in posts
+    assert "unknown board" in status.content
+    assert "bogus" in status.content
+
+
+@pytest.mark.asyncio
+async def test_reboot_without_board_arg_still_targets_default():
+    posts = []
+    def handler(req):
+        if req.method == "POST":
+            posts.append(req.url.path)
+            return httpx.Response(200, text="rebooting")
+        return httpx.Response(200, json={})
+    cfg = Config(boards=[Board("leader", "http://leader")], default="leader")
+    app = SplitflapApp(cfg, client_factory=lambda url: BoardClient(
+        url, transport=httpx.MockTransport(handler)))
+    async with app.run_test() as pilot:
+        await pilot.press(":")
+        await pilot.press(*"reboot")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        await pilot.press(*"reboot")          # typed-confirm token falls back
+        await pilot.press("enter")            # to the command name
+        await pilot.pause(0.3)
+    assert "/reboot" in posts
