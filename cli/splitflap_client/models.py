@@ -142,3 +142,166 @@ class Settings:
             last_reset_reason=_str(d, "lastResetReason"),
             reflash_on_boot=_bool(d, "reflashOnBoot"),
         )
+
+
+@dataclass(frozen=True)
+class ClusterMember:
+    raw: dict
+    host: str
+    self_row: bool
+    row: int
+    col: int
+    width: int
+    joined: bool
+    degraded: bool
+    failures: int
+    rev: str
+    plat: str
+    role: str
+    suspect: bool
+    rescue: bool
+    render_stuck: bool
+    updating: bool
+    update_blocked: bool
+    hmac: bool
+    faulty: int | None      # None = healthValid block absent
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ClusterMember":
+        return cls(raw=d, host=_str(d, "host"), self_row=_bool(d, "self"),
+                   row=_int(d, "row"), col=_int(d, "col"), width=_int(d, "width"),
+                   joined=_bool(d, "joined"), degraded=_bool(d, "degraded"),
+                   failures=_int(d, "failures"), rev=_str(d, "rev"),
+                   plat=_str(d, "plat", "esp32s3") or "esp32s3",
+                   role=_str(d, "role"), suspect=_bool(d, "suspect"),
+                   rescue=_bool(d, "rescue"),
+                   render_stuck=_bool(d, "renderStuck"),
+                   updating=_bool(d, "updating"),
+                   update_blocked=_bool(d, "updateBlocked"),
+                   hmac=_bool(d, "hmac"), faulty=_opt(d, "faulty"))
+
+
+@dataclass(frozen=True)
+class ClusterStatus:
+    raw: dict
+    enabled: bool
+    epoch: int
+    seq: int
+    members: list[ClusterMember]
+    rollout_phase: str
+    rollout_src: str
+    follower_image_present: bool
+    follower_image_rev: str
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ClusterStatus":
+        rollout = d.get("rollout") if isinstance(d.get("rollout"), dict) else {}
+        fimg = d.get("followerImage") if isinstance(d.get("followerImage"), dict) else {}
+        members = d.get("members")
+        return cls(raw=d, enabled=_bool(d, "enabled"), epoch=_int(d, "epoch"),
+                   seq=_int(d, "seq"),
+                   members=[ClusterMember.from_json(m) for m in members
+                            if isinstance(m, dict)] if isinstance(members, list) else [],
+                   rollout_phase=_str(rollout, "phase"),
+                   rollout_src=_str(rollout, "src"),
+                   follower_image_present=_bool(fimg, "present"),
+                   follower_image_rev=_str(fimg, "rev"))
+
+
+@dataclass(frozen=True)
+class ClusterHealth:
+    raw: dict
+    state: str
+    leader_name: str
+    leader_host: str
+    row: int
+    rev: str
+    hmac: bool
+    foreign_joins: int
+    foreign_pings: int
+    foreign_renders: int
+    foreign_last_host: str
+    stack_free: int | None       # esp01 #435 cont-stack low-water; None on S3
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ClusterHealth":
+        f = d.get("foreign") if isinstance(d.get("foreign"), dict) else {}
+        return cls(raw=d, state=_str(d, "state"),
+                   leader_name=_str(d, "leaderName"),
+                   leader_host=_str(d, "leaderHost"), row=_int(d, "row"),
+                   rev=_str(d, "rev"), hmac=_bool(d, "hmac"),
+                   foreign_joins=_int(f, "joins"), foreign_pings=_int(f, "pings"),
+                   foreign_renders=_int(f, "renders"),
+                   foreign_last_host=_str(f, "lastHost"),
+                   stack_free=_opt(d, "stackFree"))
+
+
+@dataclass(frozen=True)
+class SystemStatsNow:
+    raw: dict
+    rssi: int
+    heap: int
+    min_heap: int
+    cpu0: int
+    cpu1: int
+    temp_dc: int
+    uptime: int
+    i2c_tx: int
+    i2c_err: int
+    ntp_age: int
+    reset: str
+    hwm: dict[str, int]
+
+    @classmethod
+    def from_json(cls, d: dict) -> "SystemStatsNow":
+        hwm = d.get("hwm") if isinstance(d.get("hwm"), dict) else {}
+        return cls(raw=d, rssi=_int(d, "rssi"), heap=_int(d, "heap"),
+                   min_heap=_int(d, "minHeap"), cpu0=_int(d, "cpu0"),
+                   cpu1=_int(d, "cpu1"), temp_dc=_int(d, "temp"),
+                   uptime=_int(d, "uptime"), i2c_tx=_int(d, "i2cTx"),
+                   i2c_err=_int(d, "i2cErr"), ntp_age=_int(d, "ntpAge", -1),
+                   reset=_str(d, "reset"),
+                   hwm={k: int(v) for k, v in hwm.items()
+                        if isinstance(v, (int, float)) and not isinstance(v, bool)})
+
+
+@dataclass(frozen=True)
+class OtaDebug:
+    raw: dict
+    running: str
+    next: str
+    last_invalid: str | None
+    last_flash_result: str
+    ota_reverted: bool
+    factory_valid: bool
+
+    @classmethod
+    def from_json(cls, d: dict) -> "OtaDebug":
+        li = d.get("lastInvalid")
+        return cls(raw=d, running=_str(d, "running"), next=_str(d, "next"),
+                   last_invalid=li if isinstance(li, str) else None,
+                   last_flash_result=_str(d, "lastFlashResult"),
+                   ota_reverted=_bool(d, "otaReverted"),
+                   factory_valid=_bool(d, "factoryValid"))
+
+
+@dataclass(frozen=True)
+class StatusAggregate:
+    raw: dict
+    settings: Settings
+    stats_now: SystemStatsNow
+    units: UnitsHealth
+    cluster: ClusterStatus
+    ota: OtaDebug
+
+    @classmethod
+    def from_json(cls, d: dict) -> "StatusAggregate":
+        stats = d.get("stats") if isinstance(d.get("stats"), dict) else {}
+        return cls(
+            raw=d,
+            settings=Settings.from_json(d.get("settings") or {}),
+            stats_now=SystemStatsNow.from_json(stats.get("now") or {}),
+            units=UnitsHealth.from_json(d.get("units") or {}),
+            cluster=ClusterStatus.from_json(d.get("cluster") or {}),
+            ota=OtaDebug.from_json(d.get("ota") or {}),
+        )
