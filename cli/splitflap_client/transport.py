@@ -73,6 +73,11 @@ class BoardClient:
         return self._request("POST", path, params=params, data=data)
 
     def stream(self, path: str):
-        """Context manager for a long-lived GET (SSE): read timeout disabled."""
+        """Context manager for a long-lived GET (SSE): read timeout disabled.
+        Accept header is load-bearing: the vendored ESPAsyncWebServer only
+        routes /events to the SSE handler when the request declares
+        text/event-stream (AsyncEventSource canHandle -> isSSE()); without it
+        the request 404s and the body must not be parsed as an empty stream."""
         timeout = httpx.Timeout(connect=2.0, read=None, write=5.0, pool=2.0)
-        return self._http.stream("GET", path, timeout=timeout)
+        return self._http.stream("GET", path, timeout=timeout,
+                                 headers={"Accept": "text/event-stream"})

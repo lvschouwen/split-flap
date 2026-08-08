@@ -43,3 +43,15 @@ def test_post_sends_form_data():
     client = make_client(handler)
     client.post("/", data={"inputText": "HELLO", "ajax": "1"})
     assert "inputText=HELLO" in seen["content"] and "ajax=1" in seen["content"]
+
+
+def test_stream_sends_sse_accept_header():
+    seen = {}
+    def handler(req):
+        seen["accept"] = req.headers.get("accept")
+        return httpx.Response(200, content=b"",
+                              headers={"content-type": "text/event-stream"})
+    client = make_client(handler)
+    with client.stream("/events") as resp:
+        resp.read()
+    assert seen["accept"] == "text/event-stream"

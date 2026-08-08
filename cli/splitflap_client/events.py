@@ -8,7 +8,7 @@ from typing import Iterator
 
 import httpx
 
-from .transport import BoardClient, Unreachable
+from .transport import BoardClient, HttpError, Unreachable
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,10 @@ def _parse(data: str) -> DisplayEvent | None:
 def display_events(client: BoardClient) -> Iterator[DisplayEvent]:
     try:
         with client.stream("/events") as resp:
+            if resp.status_code >= 400:
+                raise HttpError(resp.status_code,
+                                resp.read().decode(errors="replace"),
+                                f"{client.base_url}/events")
             event_name, data_lines = "", []
             for line in resp.iter_lines():
                 if line == "":

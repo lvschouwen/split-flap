@@ -1,7 +1,7 @@
 import httpx
 import pytest
 from splitflap_client.events import DisplayEvent, display_events
-from splitflap_client.transport import BoardClient, Unreachable
+from splitflap_client.transport import BoardClient, HttpError, Unreachable
 
 STREAM = (b"event: display\n"
           b'data: {"text":"HELLO"}\n'
@@ -45,3 +45,12 @@ def test_partial_event_at_eof_is_not_emitted():
                b'event: display\ndata: {"text":"PARTIAL"}\n')   # no blank line
     events = list(display_events(make_client(content)))
     assert events == [DisplayEvent(text="FIRST", self_row=None, rows=None)]
+
+
+def test_status_error_raises_http_error_not_parsed_as_empty_stream():
+    def handler(req):
+        return httpx.Response(404, text="Not found")
+    c = BoardClient("http://b", transport=httpx.MockTransport(handler))
+    with pytest.raises(HttpError) as exc:
+        list(display_events(c))
+    assert exc.value.status == 404
