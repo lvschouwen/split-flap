@@ -1,8 +1,50 @@
 from __future__ import annotations
 
-from textual.widgets import DataTable, RichLog, Static
+from textual import events
+from textual.widgets import DataTable, Input, RichLog, Static
 
 from splitflap_client.models import ClusterStatus, SystemStatsNow, UnitsHealth
+
+
+class CommandInput(Input):
+    """Command-bar Input with k9s-style in-memory history recall (#446 fix
+    round 1, item 3): up/down cycle previously submitted lines while this
+    widget is focused. Implemented via on_key (not BINDINGS) deliberately —
+    Input inherits ScrollableContainer's "up"/"down" -> scroll_up/scroll_down
+    bindings, and those are only resolved once the raw Key message bubbles
+    all the way up to the App; stopping the message here, before it bubbles,
+    reliably suppresses them without fighting Textual's binding-merge order."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.history: list[str] = []
+        self._history_index = 0
+
+    def remember(self, line: str) -> None:
+        line = line.strip()
+        if line and (not self.history or self.history[-1] != line):
+            self.history.append(line)
+        self._history_index = len(self.history)
+
+    def reset_history_cursor(self) -> None:
+        self._history_index = len(self.history)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "up":
+            event.stop()
+            event.prevent_default()
+            if self.history:
+                self._history_index = max(0, self._history_index - 1)
+                self.value = self.history[self._history_index]
+                self.cursor_position = len(self.value)
+        elif event.key == "down":
+            event.stop()
+            event.prevent_default()
+            if self._history_index < len(self.history):
+                self._history_index += 1
+            self.value = (self.history[self._history_index]
+                         if self._history_index < len(self.history) else "")
+            self.cursor_position = len(self.value)
 
 
 class WallPanel(Static):

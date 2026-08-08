@@ -18,7 +18,8 @@ class CommandError(Exception):
 @dataclass(frozen=True)
 class ParsedCommand:
     name: str                 # canonical: stop|text|mode|notify|set|op|gates|
-                               # reboot|promote|reset-units|addr|cluster-leave
+                               # reboot|promote|reset-units|addr|cluster-leave|
+                               # config (== "cluster config <table>")
     args: dict
     tier: str
     route: tuple[str, str]    # (method, path) for capability gating
@@ -117,7 +118,22 @@ def parse(line: str) -> ParsedCommand:
         return ParsedCommand("promote", {}, TIER_TYPED,
                              ("POST", "/cluster/promote"),
                              "PROMOTE this board to leader")
-    if head == "cluster" and rest[:1] == ["leave"]:
-        return ParsedCommand("cluster-leave", {}, TIER_TYPED,
-                             ("POST", "/cluster/leave"), "LEAVE the cluster")
+    if head == "cluster":
+        if rest[:1] == ["leave"]:
+            return ParsedCommand("cluster-leave", {}, TIER_TYPED,
+                                 ("POST", "/cluster/leave"), "LEAVE the cluster")
+        if rest[:1] == ["config"]:
+            # VERIFIED (WebCluster.cpp:483-491): POST /cluster/config takes
+            # a "members" FORM param (hasParam(..., true) = POST body, not
+            # query) — the `host|row|col|width;…` table string, verbatim.
+            # Named "config" (not "cluster-config") so the existing
+            # args.get("unit", parsed.name) typed-confirm-token fallback
+            # yields the spec-mandated token "config" without a special case.
+            table = line.strip()[len("cluster config "):] if len(rest) > 1 else ""
+            if not table:
+                raise CommandError("usage: cluster config <host|row|col|width;...>")
+            return ParsedCommand("config", {"members": table}, TIER_TYPED,
+                                 ("POST", "/cluster/config"),
+                                 f"CLUSTER CONFIG: {table}")
+        raise CommandError("usage: cluster leave | cluster config <table>")
     raise CommandError(f"unknown command: {head}")
