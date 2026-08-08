@@ -7,13 +7,20 @@ from textual.widgets import DataTable, Input, RichLog, Static
 from splitflap_client.models import ClusterStatus, SystemStatsNow, UnitsHealth
 
 
-def _border_text(s: str) -> Text:
+def border_text(s: str) -> Text:
     """Textual's border_title setter unconditionally parses a plain str as
     Rich console markup (Widget.render_str -> Content.from_markup),
     regardless of a widget's own markup=False — a bracketed literal like
     "cluster [STALE]" silently loses everything from "[STALE]" onward (the
     unclosed tag swallows the rest). Wrapping in rich.text.Text takes the
-    special-cased from_rich_text path instead and renders literally."""
+    special-cased from_rich_text path instead and renders literally.
+
+    Public (no leading underscore): every border_title assignment in this
+    module goes through it, AND app.py's apply_wall_stale() — the one
+    border_title assignment outside this module — must too (#441 follow-up:
+    it was still a raw f-string, so WallPanel's "STALE" suffix was silently
+    swallowed the same way "cluster [STALE]" was before this helper
+    existed)."""
     return Text(s)
 
 
@@ -69,7 +76,7 @@ class WallPanel(Static):
 
     def update_wall(self, rows: list[str] | None, text: str, stale: bool) -> None:
         body = "\n".join(rows) if rows else text
-        self.border_title = _border_text("wall [STALE]" if stale else "wall")
+        self.border_title = border_text("wall [STALE]" if stale else "wall")
         self.update(body or "(no display data)")
 
 
@@ -86,7 +93,7 @@ class ClusterStrip(Static):
         super().__init__(**kw)
 
     def on_mount(self) -> None:
-        self.border_title = _border_text(self.BASE_TITLE)
+        self.border_title = border_text(self.BASE_TITLE)
 
     def cluster_text(self) -> str:
         # NOT named render_str: that name collides with Widget.render_str
@@ -113,10 +120,10 @@ class ClusterStrip(Static):
         self.update(self._text)
 
     def mark_stale(self) -> None:
-        self.border_title = _border_text(f"{self.BASE_TITLE} [STALE]")
+        self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
 
     def clear_stale(self) -> None:
-        self.border_title = _border_text(self.BASE_TITLE)
+        self.border_title = border_text(self.BASE_TITLE)
 
 
 class UnitsTable(DataTable):
@@ -127,7 +134,7 @@ class UnitsTable(DataTable):
 
     def on_mount(self) -> None:
         self.add_columns(*self.COLUMNS)
-        self.border_title = _border_text(self.BASE_TITLE)
+        self.border_title = border_text(self.BASE_TITLE)
 
     def update_units(self, h: UnitsHealth) -> None:
         def cell(v):
@@ -139,10 +146,10 @@ class UnitsTable(DataTable):
                          cell(u.odo), cell(u.vcc_min), cell(u.gates), flags)
 
     def mark_stale(self) -> None:
-        self.border_title = _border_text(f"{self.BASE_TITLE} [STALE]")
+        self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
 
     def clear_stale(self) -> None:
-        self.border_title = _border_text(self.BASE_TITLE)
+        self.border_title = border_text(self.BASE_TITLE)
 
 
 class LogTail(RichLog):
@@ -158,13 +165,13 @@ class LogTail(RichLog):
         super().__init__(**kw)
 
     def on_mount(self) -> None:
-        self.border_title = _border_text(self.BASE_TITLE)
+        self.border_title = border_text(self.BASE_TITLE)
 
     def mark_stale(self) -> None:
-        self.border_title = _border_text(f"{self.BASE_TITLE} [STALE]")
+        self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
 
     def clear_stale(self) -> None:
-        self.border_title = _border_text(self.BASE_TITLE)
+        self.border_title = border_text(self.BASE_TITLE)
 
 
 class StatsBar(Static):

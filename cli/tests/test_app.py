@@ -60,6 +60,12 @@ async def test_wall_marks_stale_when_sse_down():
     async with app.run_test() as pilot:
         await pilot.pause(0.5)
         assert app.wall_stale is True     # empty SSE stream ended -> stale
+        # #441 follow-up: apply_wall_stale's border_title assignment must
+        # survive Textual's markup parsing — a raw "wall [STALE]" string
+        # gets its unclosed "[STALE]" tag silently swallowed, same bug the
+        # panel-staleness widgets were fixed for (finding 5).
+        wall = app.query_one("#wall", WallPanel)
+        assert "STALE" in wall.border_title
 
 
 # ---- #441 finding 1: board-supplied display text must render literally,

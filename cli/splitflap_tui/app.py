@@ -24,7 +24,7 @@ from .poller import Poller
 from .screens.board_detail import BoardDetailScreen
 from .screens.log_screen import LogScreen
 from .widgets import (ClusterStrip, CommandInput, LogTail, StatsBar,
-                      UnitsTable, WallPanel)
+                      UnitsTable, WallPanel, border_text)
 
 
 def _route_known_anywhere(route: tuple[str, str]) -> bool:
@@ -225,9 +225,14 @@ class SplitflapApp(App):
             event.rows, event.text, stale=False)
 
     def apply_wall_stale(self) -> None:
+        # border_text (#441 follow-up): a raw "wall [STALE]" string here
+        # gets markup-parsed by Textual's border_title setter regardless of
+        # WallPanel's own markup=False — the unclosed "[STALE]" tag
+        # silently swallows itself, same bug widgets.py's border_title
+        # assignments were fixed for.
         self.wall_stale = True
         wall = self.query_one("#wall", WallPanel)
-        wall.border_title = "wall [STALE]"
+        wall.border_title = border_text("wall [STALE]")
 
     # ---- command bar ----
     def action_open_command(self) -> None:
