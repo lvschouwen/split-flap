@@ -38,3 +38,10 @@ def test_connect_failure_raises_unreachable():
     c = BoardClient("http://b", transport=httpx.MockTransport(handler))
     with pytest.raises(Unreachable):
         list(display_events(c))
+
+
+def test_partial_event_at_eof_is_not_emitted():
+    content = (b'event: display\ndata: {"text":"FIRST"}\n\n'
+               b'event: display\ndata: {"text":"PARTIAL"}\n')   # no blank line
+    events = list(display_events(make_client(content)))
+    assert events == [DisplayEvent(text="FIRST", self_row=None, rows=None)]
