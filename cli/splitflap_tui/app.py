@@ -213,6 +213,10 @@ class SplitflapApp(App):
         self.device_mode = agg.settings.device_mode
         s = agg.settings
         role = "leading" if s.cluster_leading else (s.cluster_state or "standalone")
+        # sub_title carries board-supplied strings; safe because
+        # App.format_title builds Content(title) literally (verified Textual
+        # 8.2.8) — if a Textual upgrade ever markup-parses titles, wrap
+        # these values.
         self.sub_title = (f"{s.effective_device_name or 'wall'} · "
                           f"{s.device_mode or '-'} · {role} · rev {s.version}")
         cluster_strip = self.query_one("#cluster-strip", ClusterStrip)

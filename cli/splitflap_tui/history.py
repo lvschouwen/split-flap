@@ -12,7 +12,7 @@ def load_history(path: Path | None = None) -> list[str]:
     p = path or DEFAULT_HISTORY_PATH
     try:
         return [l for l in p.read_text().splitlines() if l.strip()][-LIMIT:]
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return []
 
 

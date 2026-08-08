@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Label
@@ -21,7 +22,10 @@ class HelpScreen(ModalScreen[None]):
         table = self.query_one("#help-table", DataTable)
         table.add_columns("command", "tier", "what")
         for e in HELP:
-            table.add_row(e.usage, e.tier, e.blurb)
+            # DataTable's default cell formatter runs plain str cells through
+            # Text.from_markup — "reboot [board]" would render as "reboot "
+            # (the unclosed tag swallows the rest). Text renders literally.
+            table.add_row(Text(e.usage), Text(e.tier), Text(e.blurb))
 
     def action_close(self) -> None:
         self.dismiss(None)

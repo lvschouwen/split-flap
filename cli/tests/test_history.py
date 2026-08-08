@@ -18,3 +18,9 @@ def test_save_into_unwritable_parent_is_silent(tmp_path):
     blocker.write_text("x")                    # a FILE where a dir is needed
     save_history(["a"], blocker / "history")    # must not raise
     assert load_history(blocker / "history") == []
+
+
+def test_load_corrupt_file_returns_empty(tmp_path):
+    p = tmp_path / "history"
+    p.write_bytes(b"\xff\xfe garbage \xff")
+    assert load_history(p) == []

@@ -245,6 +245,18 @@ async def test_history_persists_across_sessions(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_sub_title_keeps_board_brackets_literal():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        raw = {**STATUS, "settings": {**STATUS["settings"],
+                                      "effectiveDeviceName": "[red]wall[/red]"}}
+        app.apply_status(StatusAggregate.from_json(raw),
+                         ClusterStatus.from_json(STATUS["cluster"]))
+        assert "[red]wall[/red]" in app.sub_title
+
+
+@pytest.mark.asyncio
 async def test_gate_message_uses_spoken_command_name():
     app = SplitflapApp(CFG, client_factory=fake_factory)
     async with app.run_test() as pilot:

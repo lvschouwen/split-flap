@@ -93,6 +93,8 @@ class BoardDetailScreen(Screen):
             settings, units, health, log_text = self._fetch()
         except SplitflapError:
             self._drop_client()
+            if self.stop_event.is_set():      # bail before opening a fresh
+                return                        # client post-stop (finding 7)
             settings, units, health, log_text = self._fetch()
         if self.stop_event.is_set():          # finding 2
             return

@@ -64,6 +64,13 @@ class Poller:
                 c.close()
             except Exception:
                 pass
+        # Same reasoning applies to the status/log clients: dropping them
+        # here makes the using thread's in-flight blocking request raise
+        # immediately instead of running out its timeout — run_poll_loop's
+        # on_error handles the raise, and the loop then exits on the
+        # stop_event check instead of sitting on a client already torn down.
+        self._drop_status_client()
+        self._drop_log_client()
 
     # ---- /status + /cluster/status ----
     def _fetch_status(self):
@@ -87,6 +94,10 @@ class Poller:
         except SplitflapError:
             # a board-closed keep-alive is not an outage: retry once fresh
             self._drop_status_client()
+            # stop() may have just dropped/closed this client out from under
+            # us (finding 6) -> don't open a fresh one post-stop
+            if self.stop_event.is_set():
+                return
             agg, cluster = self._fetch_status()
         if self.stop_event.is_set():
             return
@@ -127,6 +138,10 @@ class Poller:
         except SplitflapError:
             # a board-closed keep-alive is not an outage: retry once fresh
             self._drop_log_client()
+            # stop() may have just dropped/closed this client out from under
+            # us (finding 6) -> don't open a fresh one post-stop
+            if self.stop_event.is_set():
+                return
             text = self._fetch_log()
         tail = text.splitlines()[-200:]
         if self.stop_event.is_set():

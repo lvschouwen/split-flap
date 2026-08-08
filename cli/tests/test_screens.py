@@ -10,7 +10,8 @@ from splitflap_tui.screens import board_detail
 from splitflap_tui.screens.board_detail import BoardDetailScreen
 from splitflap_tui.screens.help_screen import HelpScreen
 from splitflap_tui.screens.log_screen import LogScreen
-from textual.widgets import RichLog
+from textual.coordinate import Coordinate
+from textual.widgets import DataTable, RichLog
 
 from tests.test_app import CFG, fake_factory
 
@@ -212,3 +213,21 @@ async def test_question_mark_opens_help_and_escape_closes():
         await pilot.press("escape")
         await pilot.pause(0.05)
         assert not isinstance(app.screen, HelpScreen)
+
+
+@pytest.mark.asyncio
+async def test_help_table_cells_render_brackets_literally():
+    # DataTable's default cell formatter markup-parses plain str cells —
+    # "reboot [board]" would lose everything from "[board]" onward. The
+    # help screen wraps every cell in rich.text.Text so it renders literally.
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("question_mark")
+        assert isinstance(app.screen, HelpScreen)
+        table = app.screen.query_one("#help-table", DataTable)
+        cells = [table.get_cell_at(Coordinate(row, 0)) for row in range(table.row_count)]
+        assert any("[board]" in c.plain for c in cells)
+        assert any("[value]" in c.plain for c in cells)
+        await pilot.press("escape")
+        await pilot.pause(0.05)

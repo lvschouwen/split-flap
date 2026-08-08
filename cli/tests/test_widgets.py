@@ -65,3 +65,10 @@ async def test_command_input_suggests_command_names():
     assert await inp.suggester.get_suggestion("clu") == "cluster leave"
     assert await inp.suggester.get_suggestion("st") == "stop"
     assert "help" in SUGGEST_WORDS
+
+
+def test_suggest_words_cover_every_command():
+    from splitflap_tui.app import DISPLAY_NAMES
+    from splitflap_tui.commands import CANONICAL_NAMES
+    expected = {DISPLAY_NAMES.get(n, n) for n in CANONICAL_NAMES} | {"help"}
+    assert set(SUGGEST_WORDS) == expected
