@@ -2,7 +2,7 @@ import httpx
 import pytest
 from splitflap_client.logs import (FollowerLogDelta, fetch_flash_log,
                                    fetch_follower_log)
-from splitflap_client.transport import BoardClient, HttpError
+from splitflap_client.transport import BoardClient, HttpError, ParseError
 
 
 def make_client(handler):
@@ -43,3 +43,9 @@ def test_follower_log_cursor_parse():
 def test_follower_log_empty_delta():
     d = fetch_follower_log(make_client(lambda r: httpx.Response(200, text="164\n")))
     assert d.cursor == 164 and d.text == ""
+
+
+def test_follower_log_bad_cursor_raises_parse_error():
+    c = make_client(lambda r: httpx.Response(200, text="not-a-number\nrest\n"))
+    with pytest.raises(ParseError):
+        fetch_follower_log(c)
