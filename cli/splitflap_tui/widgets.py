@@ -8,6 +8,7 @@ from splitflap_client.models import (ClusterMember, ClusterStatus,
                                       SystemStatsNow, UnitsHealth)
 
 from .flapwall import wall_cells
+from .format import human_duration, human_size
 
 
 def border_text(s: str) -> Text:
@@ -25,6 +26,21 @@ def border_text(s: str) -> Text:
     swallowed the same way "cluster [STALE]" was before this helper
     existed)."""
     return Text(s)
+
+
+def format_cmd_status(text: str, duration_s: float | None, clock: str) -> Text:
+    """Status-line Text (#451): glyph + timestamp + literal result body.
+    The ⛔-prefix convention (execute() puts it on every error) drives the
+    glyph and is stripped from the body so it doesn't render twice."""
+    ok = not text.startswith("⛔")
+    body = text[2:] if text.startswith("⛔ ") else text
+    out = Text()
+    out.append("✓" if ok else "⛔", style="#FFB000" if ok else "#E05B4B")
+    out.append(f" {clock}  ", style="dim")
+    out.append(body)                                  # literal, never markup
+    if duration_s is not None:
+        out.append(f" ({duration_s:.1f} s)", style="dim")
+    return out
 
 
 DOT_OK = "#FFB000"
@@ -237,6 +253,7 @@ class StatsBar(Static):
 
     def update_stats(self, s: SystemStatsNow, connected: bool) -> None:
         link = "connected" if connected else "DISCONNECTED — retrying"
-        self.update(f"{link} | heap {s.heap} (min {s.min_heap}) | "
-                    f"rssi {s.rssi} | up {s.uptime}s | "
+        self.update(f"{link} · heap {human_size(s.heap)} "
+                    f"(min {human_size(s.min_heap)}) · rssi {s.rssi} · "
+                    f"up {human_duration(s.uptime)} · "
                     f"i2c {s.i2c_tx}/{s.i2c_err} err")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from datetime import datetime
 from typing import Callable
 
 from textual.app import App, ComposeResult
@@ -24,7 +26,7 @@ from .poller import Poller
 from .screens.board_detail import BoardDetailScreen
 from .screens.log_screen import LogScreen
 from .widgets import (ClusterStrip, CommandInput, LogTail, StatsBar,
-                      UnitsTable, WallPanel, border_text)
+                      UnitsTable, WallPanel, border_text, format_cmd_status)
 
 
 def _route_known_anywhere(route: tuple[str, str]) -> bool:
@@ -194,6 +196,10 @@ class SplitflapApp(App):
     def apply_status(self, agg: StatusAggregate, cluster: ClusterStatus) -> None:
         self.connected = True
         self.plat = agg.settings.plat
+        s = agg.settings
+        role = "leading" if s.cluster_leading else (s.cluster_state or "standalone")
+        self.sub_title = (f"{s.effective_device_name or 'wall'} · "
+                          f"{s.device_mode or '-'} · {role} · rev {s.version}")
         cluster_strip = self.query_one("#cluster-strip", ClusterStrip)
         cluster_strip.update_cluster(cluster)
         cluster_strip.clear_stale()
@@ -331,16 +337,19 @@ class SplitflapApp(App):
 
     def run_command(self, parsed: ParsedCommand) -> None:
         def work() -> None:
+            t0 = time.monotonic()
             try:
                 with self.client_factory(self.config.board_url()) as client:
                     result = execute(parsed, client, self.config, self.client_factory)
             except SplitflapError as exc:
                 result = f"⛔ {exc}"
-            self.call_from_thread(self.apply_cmd_result, result)
+            self.call_from_thread(self.apply_cmd_result, result,
+                                  time.monotonic() - t0)
         self.run_worker(work, thread=True)
 
-    def apply_cmd_result(self, text: str) -> None:
-        self.query_one("#cmd-status", Static).update(text)
+    def apply_cmd_result(self, text: str, duration_s: float | None = None) -> None:
+        self.query_one("#cmd-status", Static).update(
+            format_cmd_status(text, duration_s, datetime.now().strftime("%H:%M:%S")))
 
     def on_unmount(self) -> None:
         if self.poller:
