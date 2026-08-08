@@ -71,3 +71,8 @@ class BoardClient:
     def post(self, path: str, *, params: dict | None = None,
              data: dict | None = None) -> httpx.Response:
         return self._request("POST", path, params=params, data=data)
+
+    def stream(self, path: str):
+        """Context manager for a long-lived GET (SSE): read timeout disabled."""
+        timeout = httpx.Timeout(connect=2.0, read=None, write=5.0, pool=2.0)
+        return self._http.stream("GET", path, timeout=timeout)
