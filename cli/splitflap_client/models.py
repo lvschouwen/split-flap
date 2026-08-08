@@ -22,6 +22,85 @@ def _bool(d: dict, key: str, default: bool = False) -> bool:
     return v if isinstance(v, bool) else default
 
 
+def _opt(d: dict, key: str) -> int | None:
+    v = d.get(key)
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+@dataclass(frozen=True)
+class UnitEntry:
+    raw: dict
+    index: int
+    address: int
+    state: int          # 0 silent / 1 sketch / 2 bootloader
+    valid: bool
+    rev: str
+
+    @classmethod
+    def from_json(cls, d: dict) -> "UnitEntry":
+        return cls(raw=d, index=_int(d, "i"), address=_int(d, "a"),
+                   state=_int(d, "st"), valid=_int(d, "v") == 1,
+                   rev=_str(d, "rev"))
+
+    @property
+    def stale(self) -> bool:
+        return d.get("stale") == 1 if (d := self.raw) else False
+
+    @property
+    def fault(self) -> bool:
+        return self.state != 1 or self.stale
+
+    # Absent = None (key emission is validity-gated, UnitHealth.h:295-412).
+    @property
+    def sx(self): return _opt(self.raw, "sx")
+    @property
+    def sxl(self): return _opt(self.raw, "sxl")
+    @property
+    def odo(self): return _opt(self.raw, "odo")
+    @property
+    def vcc_min(self): return _opt(self.raw, "vmin")
+    @property
+    def gates(self): return _opt(self.raw, "gates")
+    @property
+    def hall_fails(self): return _opt(self.raw, "hf")
+    @property
+    def err(self): return _opt(self.raw, "err")
+    @property
+    def err_age(self): return _opt(self.raw, "errAge")
+    @property
+    def age(self): return _opt(self.raw, "age")
+    @property
+    def misses(self): return _opt(self.raw, "misses")
+
+
+@dataclass(frozen=True)
+class UnitsHealth:
+    raw: dict
+    width: int
+    faulty: int
+    vcc_min: int | None
+    units: list[UnitEntry]
+    wear_flagged: list[int]
+    reflash_state: str
+    reflash_halted: bool
+
+    @classmethod
+    def from_json(cls, d: dict) -> "UnitsHealth":
+        wear = d.get("wear") if isinstance(d.get("wear"), dict) else {}
+        reflash = d.get("reflash") if isinstance(d.get("reflash"), dict) else {}
+        flagged = wear.get("flagged")
+        units_raw = d.get("units")
+        return cls(
+            raw=d, width=_int(d, "width"), faulty=_int(d, "faulty"),
+            vcc_min=_opt(d, "vccMin"),
+            units=[UnitEntry.from_json(u) for u in units_raw
+                   if isinstance(u, dict)] if isinstance(units_raw, list) else [],
+            wear_flagged=[int(x) for x in flagged] if isinstance(flagged, list) else [],
+            reflash_state=_str(reflash, "state"),
+            reflash_halted=_bool(reflash, "halted"),
+        )
+
+
 @dataclass(frozen=True)
 class Settings:
     raw: dict
