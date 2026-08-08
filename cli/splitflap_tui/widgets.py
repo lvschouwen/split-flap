@@ -143,9 +143,11 @@ class ClusterStrip(Static):
 
     def mark_stale(self) -> None:
         self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
+        self.add_class("stale")
 
     def clear_stale(self) -> None:
         self.border_title = border_text(self.BASE_TITLE)
+        self.remove_class("stale")
 
 
 class UnitsTable(DataTable):
@@ -169,9 +171,11 @@ class UnitsTable(DataTable):
 
     def mark_stale(self) -> None:
         self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
+        self.add_class("stale")
 
     def clear_stale(self) -> None:
         self.border_title = border_text(self.BASE_TITLE)
+        self.remove_class("stale")
 
 
 class LogTail(RichLog):
@@ -191,9 +195,11 @@ class LogTail(RichLog):
 
     def mark_stale(self) -> None:
         self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
+        self.add_class("stale")
 
     def clear_stale(self) -> None:
         self.border_title = border_text(self.BASE_TITLE)
+        self.remove_class("stale")
 
 
 class StatsBar(Static):

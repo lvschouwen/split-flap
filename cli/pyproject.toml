@@ -18,5 +18,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = ["splitflap_client", "splitflap_tui", "splitflap_tui.screens"]
 
+[tool.setuptools.package-data]
+splitflap_tui = ["*.tcss"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

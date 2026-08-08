@@ -1,0 +1,44 @@
+/* splitflap.tcss — the amber board-strip identity (#450). One file, no
+   inline styles elsewhere; board-text literalness is a Python concern
+   (markup=False), never a CSS one. */
+Screen {
+    background: #111008;
+}
+Header {
+    background: #1c1708;
+    color: #FFB000;
+}
+#wall, #cluster-strip, #units, #log {
+    border: round #FFB000 50%;
+    border-title-color: #FFB000;
+}
+#wall {
+    height: auto;
+    padding: 0 1;
+}
+#cluster-strip {
+    height: auto;
+    max-height: 6;
+    padding: 0 1;
+}
+#main-split {
+    height: 1fr;
+}
+#units {
+    width: 46;
+}
+#log {
+    width: 1fr;
+}
+#stats {
+    height: 1;
+    padding: 0 1;
+    color: #b8a060;
+}
+#cmd-status {
+    height: 1;
+    padding: 0 1;
+}
+.stale {
+    opacity: 45%;
+}

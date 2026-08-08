@@ -137,6 +137,30 @@ async def test_sse_malformed_and_bracketed_text_render_literally_not_stale():
 
 
 @pytest.mark.asyncio
+async def test_stale_panels_get_css_class_and_recover():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        strip = app.query_one("#cluster-strip", ClusterStrip)
+        units = app.query_one("#units", UnitsTable)
+        log = app.query_one("#log", LogTail)
+        wall = app.query_one("#wall", WallPanel)
+
+        app.apply_disconnect("boom")
+        app.apply_wall_stale()
+        await pilot.pause(0.05)
+        assert strip.has_class("stale") and units.has_class("stale")
+        assert log.has_class("stale") and wall.has_class("stale")
+
+        agg = StatusAggregate.from_json(STATUS)
+        app.apply_status(agg, ClusterStatus.from_json(STATUS["cluster"]))
+        app.apply_display(DisplayEvent(text="OK", self_row=None, rows=None))
+        await pilot.pause(0.05)
+        assert not strip.has_class("stale") and not units.has_class("stale")
+        assert not log.has_class("stale") and not wall.has_class("stale")
+
+
+@pytest.mark.asyncio
 async def test_disconnect_marks_panels_stale_and_reconnect_clears():
     """#441 finding 5: apply_disconnect must mark ClusterStrip, UnitsTable
     and LogTail stale (not just the stats bar), and apply_status must clear

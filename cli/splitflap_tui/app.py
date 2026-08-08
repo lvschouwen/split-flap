@@ -147,6 +147,7 @@ def execute(parsed: ParsedCommand, client: BoardClient, config: Config,
 
 class SplitflapApp(App):
     TITLE = "splitflap"
+    CSS_PATH = "splitflap.tcss"
     BINDINGS = [("q", "quit", "Quit"), (":", "open_command", "Command"),
                 Binding("ctrl+s", "stop_wall", "STOP", priority=True),
                 ("b", "board_detail", "Board"), ("l", "log_screen", "Log")]
@@ -167,7 +168,7 @@ class SplitflapApp(App):
         with Vertical():
             yield WallPanel(id="wall")
             yield ClusterStrip(id="cluster-strip")
-            with Horizontal():
+            with Horizontal(id="main-split"):
                 yield UnitsTable(id="units")
                 yield LogTail(id="log")
             yield StatsBar(id="stats")
@@ -221,8 +222,9 @@ class SplitflapApp(App):
 
     def apply_display(self, event: DisplayEvent) -> None:
         self.wall_stale = False
-        self.query_one("#wall", WallPanel).update_wall(
-            event.rows, event.text, stale=False)
+        wall = self.query_one("#wall", WallPanel)
+        wall.update_wall(event.rows, event.text, stale=False)
+        wall.remove_class("stale")
 
     def apply_wall_stale(self) -> None:
         # border_text (#441 follow-up): a raw "wall [STALE]" string here
@@ -233,6 +235,7 @@ class SplitflapApp(App):
         self.wall_stale = True
         wall = self.query_one("#wall", WallPanel)
         wall.border_title = border_text("wall [STALE]")
+        wall.add_class("stale")
 
     # ---- command bar ----
     def action_open_command(self) -> None:
