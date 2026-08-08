@@ -2,6 +2,7 @@ import threading
 
 import httpx
 import pytest
+from splitflap_client.events import DisplayEvent
 from splitflap_client.models import ClusterStatus, StatusAggregate
 from splitflap_client.transport import BoardClient
 from splitflap_tui.app import SplitflapApp
@@ -119,13 +120,16 @@ async def test_sse_malformed_and_bracketed_text_render_literally_not_stale():
     async with app.run_test() as pilot:
         await pilot.pause(0.3)      # sse_loop connects and gets chunk 1
         wall = app.query_one("#wall", WallPanel)
-        assert "[/][/] MALFORMED" in wall.content     # literal, not parsed
+        # Task 3 (#450): cells interleave ▐▌ glyphs into rendered content, so
+        # the literal-rendering invariant is now pinned on the logical text
+        # accessor instead of the visual content.
+        assert "[/][/] MALFORMED" in wall.wall_text()  # literal, not parsed
         assert app.wall_stale is False
         assert app.is_running                          # thread didn't die
 
         malformed_gate.set()        # release chunk 2
         await pilot.pause(0.3)
-        assert "[ICE 704]" in wall.content
+        assert "[ICE 704]" in wall.wall_text()
         assert app.wall_stale is False
 
         done_gate.set()              # let the stream end so teardown is clean
@@ -157,3 +161,15 @@ async def test_disconnect_marks_panels_stale_and_reconnect_clears():
         assert "STALE" not in strip.border_title
         assert "STALE" not in units.border_title
         assert "STALE" not in log.border_title
+
+
+@pytest.mark.asyncio
+async def test_wall_renders_flap_cells():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        wall = app.query_one("#wall", WallPanel)
+        app.apply_display(DisplayEvent(text="HI", self_row=None, rows=None))
+        await pilot.pause(0.05)
+        assert wall.wall_text() == "HI"
+        assert "▐H▌ ▐I▌" in wall.content        # cells, not a plain string

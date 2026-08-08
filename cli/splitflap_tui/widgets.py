@@ -6,6 +6,8 @@ from textual.widgets import DataTable, Input, RichLog, Static
 
 from splitflap_client.models import ClusterStatus, SystemStatsNow, UnitsHealth
 
+from .flapwall import wall_cells
+
 
 def border_text(s: str) -> Text:
     """Textual's border_title setter unconditionally parses a plain str as
@@ -68,16 +70,36 @@ class CommandInput(Input):
 class WallPanel(Static):
     """markup=False (#441 finding 1a): the wall renders board/firmware
     -supplied display text verbatim — a payload like "[/]" is valid content,
-    not Rich console markup, and must never be parsed as such."""
+    not Rich console markup, and must never be parsed as such. #450: body is
+    flap cells (flapwall.wall_cells) when the panel is wide enough, plain
+    text otherwise; on_resize re-decides."""
 
     def __init__(self, **kw):
         kw.setdefault("markup", False)
         super().__init__(**kw)
+        self._rows: list[str] | None = None
+        self._text = ""
+
+    def wall_text(self) -> str:
+        return "\n".join(self._rows) if self._rows else self._text
 
     def update_wall(self, rows: list[str] | None, text: str, stale: bool) -> None:
-        body = "\n".join(rows) if rows else text
+        self._rows, self._text = rows, text
         self.border_title = border_text("wall [STALE]" if stale else "wall")
-        self.update(body or "(no display data)")
+        self._refresh_body()
+
+    def _refresh_body(self) -> None:
+        body = self.wall_text()
+        if not body:
+            self.update("(no display data)")
+            return
+        # Pre-layout content_size is 0x0 — assume wide, on_resize corrects.
+        width = self.content_size.width or 200
+        cells = wall_cells(self._rows, self._text, width)
+        self.update(cells if cells is not None else body)
+
+    def on_resize(self, event) -> None:
+        self._refresh_body()
 
 
 class ClusterStrip(Static):
