@@ -1,0 +1,28 @@
+{
+ "state": "clustered",
+ "leaderName": "split-flap-c8a746",
+ "leaderHost": "192.168.15.88",
+ "row": 0,
+ "epoch": 1351137917,
+ "seq": 1771,
+ "segment": "18:29",
+ "rev": "9f694dd",
+ "width": 5,
+ "detected": 5,
+ "faulty": 0,
+ "msSinceRender": 37823,
+ "secsUntilBlank": 112,
+ "i2cTx": 429350,
+ "i2cErr": 0,
+ "minHeap": 4672,
+ "stackFree": 2688,
+ "sntpSynced": true,
+ "hmac": true,
+ "foreign": {
+  "joins": 0,
+  "pings": 0,
+  "renders": 0,
+  "lastHost": "",
+  "msSince": -1
+ }
+}

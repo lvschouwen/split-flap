@@ -1,0 +1,65 @@
+{
+ "enabled": true,
+ "epoch": 1351137917,
+ "seq": 1771,
+ "members": [
+  {
+   "host": "",
+   "self": true,
+   "row": 1,
+   "col": 0,
+   "width": 16,
+   "joined": true,
+   "degraded": false,
+   "failures": 0,
+   "rev": "817e3a9",
+   "role": "display",
+   "reportedWidth": 0,
+   "faulty": 0,
+   "detected": 16,
+   "faultMask": "0000",
+   "wear": false,
+   "updating": false,
+   "updateBlocked": false,
+   "hmac": false
+  },
+  {
+   "host": "192.168.15.121",
+   "self": false,
+   "row": 0,
+   "col": 0,
+   "width": 5,
+   "joined": true,
+   "degraded": false,
+   "failures": 0,
+   "rev": "9f694dd",
+   "plat": "esp01",
+   "reportedWidth": 5,
+   "faulty": 0,
+   "detected": 5,
+   "faultMask": "00",
+   "wear": false,
+   "updating": false,
+   "updateBlocked": false,
+   "hmac": true
+  }
+ ],
+ "rollout": {
+  "phase": "idle",
+  "host": "",
+  "sent": 0,
+  "total": 0,
+  "imageVerifyFailed": false
+ },
+ "followerImage": {
+  "present": true,
+  "rev": "9f694dd"
+ },
+ "followerPush": {
+  "phase": "idle",
+  "host": "",
+  "sent": 0,
+  "total": 0,
+  "result": "none"
+ }
+}

@@ -1,0 +1,14 @@
+{
+ "deviceName": "",
+ "effectiveDeviceName": "",
+ "version": "9f694dd",
+ "width": 5,
+ "clusterState": "clustered",
+ "clusterLeaderName": "split-flap-c8a746",
+ "clusterLeaderHost": "192.168.15.88",
+ "clusterRow": 0,
+ "plat": "esp01",
+ "heap": 13712,
+ "rssi": -59,
+ "up": 246528
+}

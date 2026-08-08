@@ -1,0 +1,357 @@
+{
+ "routes": [
+  {
+   "m": "GET",
+   "p": "/api",
+   "d": "this self-documenting index"
+  },
+  {
+   "m": "GET",
+   "p": "/settings",
+   "d": "full device + cluster settings snapshot"
+  },
+  {
+   "m": "GET",
+   "p": "/system/info",
+   "d": "static hardware/partition inventory"
+  },
+  {
+   "m": "GET",
+   "p": "/system/stats",
+   "d": "live vitals + ~10 min history ring"
+  },
+  {
+   "m": "GET",
+   "p": "/status",
+   "d": "one-shot aggregate: settings+stats.now+units+cluster+ota"
+  },
+  {
+   "m": "GET",
+   "p": "/units/health",
+   "d": "per-unit health/diagnostics table"
+  },
+  {
+   "m": "POST",
+   "p": "/units/health/refresh",
+   "d": "re-probe the bus + re-poll health"
+  },
+  {
+   "m": "GET",
+   "p": "/health",
+   "d": "liveness text"
+  },
+  {
+   "m": "GET",
+   "p": "/log",
+   "d": "in-RAM log tail"
+  },
+  {
+   "m": "GET",
+   "p": "/log/flash",
+   "d": "persistent flash log"
+  },
+  {
+   "m": "POST",
+   "p": "/log/flash/clear",
+   "d": "truncate the flash log"
+  },
+  {
+   "m": "GET",
+   "p": "/tz.json",
+   "d": "IANA timezone table"
+  },
+  {
+   "m": "GET",
+   "p": "/events",
+   "d": "SSE display + cluster-wall stream"
+  },
+  {
+   "m": "POST",
+   "p": "/",
+   "d": "set display text / mode (per-card fields)"
+  },
+  {
+   "m": "POST",
+   "p": "/reboot",
+   "d": "soft reboot the master"
+  },
+  {
+   "m": "POST",
+   "p": "/stop",
+   "d": "blank + halt the display"
+  },
+  {
+   "m": "GET",
+   "p": "/wifi-setup",
+   "d": "WiFi portal page"
+  },
+  {
+   "m": "GET",
+   "p": "/wifi/scan",
+   "d": "last WiFi scan result"
+  },
+  {
+   "m": "POST",
+   "p": "/wifi/scan",
+   "d": "start a WiFi scan"
+  },
+  {
+   "m": "POST",
+   "p": "/wifi/config",
+   "d": "set WiFi credentials"
+  },
+  {
+   "m": "POST",
+   "p": "/reset-wifi",
+   "d": "erase WiFi credentials"
+  },
+  {
+   "m": "POST",
+   "p": "/firmware/master",
+   "d": "OTA the master (?md5= required)"
+  },
+  {
+   "m": "GET",
+   "p": "/debug/ota",
+   "d": "OTA/partition state"
+  },
+  {
+   "m": "POST",
+   "p": "/firmware/rescue",
+   "d": "install the rescue image"
+  },
+  {
+   "m": "POST",
+   "p": "/firmware/rescue-boot",
+   "d": "boot into the rescue slot"
+  },
+  {
+   "m": "GET",
+   "p": "/unit/offset",
+   "d": "read a unit's calibration offset"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/offset",
+   "d": "set a unit's calibration offset"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/jog",
+   "d": "jog a unit N steps"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/home",
+   "d": "home a unit"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/identify",
+   "d": "blink a unit's LED"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/reset-odometer",
+   "d": "zero a unit's revolution odometer"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/gates",
+   "d": "set a unit's feature-gate bits"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/self-test",
+   "d": "run a unit's self-test"
+  },
+  {
+   "m": "GET",
+   "p": "/unit/self-test-result",
+   "d": "read a unit's self-test result"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/reboot",
+   "d": "reboot a unit"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/set-address",
+   "d": "burn a unit's EEPROM I2C address"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/clear-address",
+   "d": "clear a unit's EEPROM I2C address"
+  },
+  {
+   "m": "GET",
+   "p": "/unit/op-result",
+   "d": "result of the last {seq} maintenance op"
+  },
+  {
+   "m": "POST",
+   "p": "/reset-units",
+   "d": "home every unit"
+  },
+  {
+   "m": "POST",
+   "p": "/reflash-units",
+   "d": "reflash units over twiboot (?address=N for one)"
+  },
+  {
+   "m": "POST",
+   "p": "/mqtt/discover",
+   "d": "start an mDNS MQTT broker scan"
+  },
+  {
+   "m": "GET",
+   "p": "/mqtt/discover",
+   "d": "mDNS MQTT broker scan result"
+  },
+  {
+   "m": "POST",
+   "p": "/cluster/config",
+   "d": "set cluster leader member table"
+  },
+  {
+   "m": "GET",
+   "p": "/cluster/status",
+   "d": "cluster leader supervision status"
+  },
+  {
+   "m": "GET",
+   "p": "/cluster/health",
+   "d": "this board's follower/unit health"
+  },
+  {
+   "m": "GET",
+   "p": "/cluster/digest",
+   "d": "cluster-wide digest (follower copy)"
+  },
+  {
+   "m": "POST",
+   "p": "/cluster/promote",
+   "d": "promote this follower to leader"
+  },
+  {
+   "m": "POST",
+   "p": "/cluster/discover",
+   "d": "start a cluster mDNS scan"
+  },
+  {
+   "m": "GET",
+   "p": "/cluster/discover",
+   "d": "cluster mDNS scan result"
+  },
+  {
+   "m": "POST",
+   "p": "/cluster/follower-firmware",
+   "d": "store an ESP-01 follower image for relay"
+  },
+  {
+   "m": "GET",
+   "p": "/coredump/summary",
+   "d": "last-crash task + backtrace + dump ELF sha"
+  },
+  {
+   "m": "GET",
+   "p": "/coredump/raw",
+   "d": "raw ELF coredump for esp-coredump (#431)"
+  },
+  {
+   "m": "POST",
+   "p": "/coredump/erase",
+   "d": "queue a coredump partition purge"
+  }
+ ],
+ "legend": {
+  "width": "display width in units",
+  "faulty": "count of units flagged faulty",
+  "vccMin": "lowest since-boot unit supply Vcc (mV) across the display — the brownout floor",
+  "units": "per-unit array, one entry per display column",
+  "i": "unit index (0-based column)",
+  "a": "I2C address",
+  "st": "unit state: 0 silent / 1 sketch / 2 bootloader",
+  "v": "1 = a CMD_GET_STATUS read succeeded",
+  "fw": "firmware vs bundle: 0 ok / 1 outdated / 2 unknown",
+  "rev": "firmware git short-rev",
+  "up": "uptime seconds (saturating)",
+  "br": "lifetime brownout reset count",
+  "wd": "lifetime watchdog reset count",
+  "bc": "bad-I2C-command count since boot",
+  "mc": "MCUSR reset-cause snapshot at boot",
+  "fl": "status flag bitfield (bit0 moving, bit1 home-failed, bit2 hall-never, bit4 addr-eeprom, bit5 homed)",
+  "hs": "last homing step count",
+  "ae": "1 = I2C address came from EEPROM, not DIP",
+  "odo": "drum revolution odometer",
+  "de": "drift events since boot",
+  "ds": "last drift magnitude in steps",
+  "dp": "1 = a drift re-home is pending",
+  "phys": "hall-corrected physical letter index",
+  "mm": "1 = physical letter disagrees with intended",
+  "vcc": "supply Vcc now (mV)",
+  "vmin": "since-boot minimum supply Vcc (mV), sampled mid-move",
+  "cp": "last commanded flap index",
+  "ram": "since-boot minimum free SRAM (bytes)",
+  "age": "ms since the last good scheduled health read (heartbeat freshness)",
+  "hs2": "boot-home state: 0 unhomed, 1 homing, 2 homed",
+  "misses": "consecutive missed heartbeat reads",
+  "stale": "1 = unit missed >= the threshold of consecutive heartbeats (lost)",
+  "se": "step-excess on the last home (actual minus expected steps)",
+  "sx": "worst-seen step-excess since boot",
+  "sag": "minimum loaded supply Vcc (mV) during the last move",
+  "he": "hall edges seen in the last completed revolution",
+  "dw": "rolling ~60 s duty window (recent move count)",
+  "sb": "ext-diag status bitfield (bit0 last-move stall)",
+  "pv": "wire protocol version the unit reports",
+  "pmm": "1 = protocol version we do not speak; unit is untouched and is a reflash target",
+  "hf": "lifetime failed-homing count (survives power cycles)",
+  "gates": "active unit feature-gate bits (bit0 idle hall check, bit1 scheduled re-home)",
+  "sxl": "worst-seen step-excess over the unit's lifetime (sx forgets at reboot)",
+  "stw0": "hall window measured by the unit's FIRST self-test (baseline)",
+  "stw1": "hall window measured by its most recent self-test",
+  "str0": "steps/rev measured by the unit's FIRST self-test (baseline)",
+  "str1": "steps/rev measured by its most recent self-test",
+  "rssi": "WiFi RSSI (dBm)",
+  "heap": "free heap (bytes)",
+  "maxAlloc": "largest allocatable heap block (bytes)",
+  "psram": "free PSRAM (bytes)",
+  "cpu0": "core 0 load percent",
+  "cpu1": "core 1 load percent",
+  "temp": "die temperature x10 (°C)",
+  "uptime": "uptime seconds",
+  "minHeap": "lifetime minimum free heap (bytes)",
+  "i2cTx": "unit-bus transactions since boot",
+  "i2cErr": "failed unit-bus transactions since boot",
+  "mqttDrops": "MQTT broker disconnects since boot",
+  "ntpAge": "seconds since last SNTP sync (-1 = never)",
+  "reset": "last reset reason",
+  "hist": "history ring of the spark series",
+  "interval": "history sample interval (s)",
+  "enabled": "cluster leader mode on",
+  "epoch": "leader epoch",
+  "seq": "render sequence number",
+  "members": "leader member table",
+  "host": "member host (empty = own row)",
+  "self": "1 = this board's own row",
+  "row": "grid row",
+  "col": "grid column offset",
+  "joined": "member has joined",
+  "degraded": "member marked degraded (30 s without a successful contact, #385)",
+  "suspect": "member failing contacts but not yet degraded (#385 quiet tier)",
+  "renderStuck": "member alive but its segment undeliverable for 30 s (#385)",
+  "failures": "contact failures since the last success",
+  "plat": "member platform (esp01/esp32; absent = leader's)",
+  "role": "member deviceRole (#332 tiers; absent = pre-#332 peer, keeps the old width-0-preferred slot)",
+  "rollout": "fleet firmware rollout state",
+  "updating": "a member firmware push is in flight",
+  "updateBlocked": "rollout gave up after the attempt cap",
+  "hmac": "leader is signing wire-auth (HMAC) to this member (#313)",
+  "imageVerifyFailed": "the running image failed self-verify for streaming",
+  "followerImage": "a stored ESP-01 follower image is present",
+  "followerPush": "an ESP-01 follower image push is in flight",
+  "gen": "grid generation counter"
+ }
+}

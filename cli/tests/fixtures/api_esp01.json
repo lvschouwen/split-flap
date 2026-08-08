@@ -1,0 +1,196 @@
+{
+ "routes": [
+  {
+   "m": "GET",
+   "p": "/api",
+   "d": "this self-documenting index"
+  },
+  {
+   "m": "GET",
+   "p": "/settings",
+   "d": "tiny identity/rev/plat/width/phase/vitals"
+  },
+  {
+   "m": "GET",
+   "p": "/log",
+   "d": "in-RAM log ring (?after=<cursor> for the leader pull)"
+  },
+  {
+   "m": "GET",
+   "p": "/units/health",
+   "d": "per-unit health/diagnostics table"
+  },
+  {
+   "m": "POST",
+   "p": "/units/health/refresh",
+   "d": "re-poll unit health"
+  },
+  {
+   "m": "GET",
+   "p": "/cluster/health",
+   "d": "follower phase + diagnostics + unit health"
+  },
+  {
+   "m": "POST",
+   "p": "/cluster/join",
+   "d": "leader assigns this row (leaderHost/row/epoch)"
+  },
+  {
+   "m": "POST",
+   "p": "/cluster/render",
+   "d": "leader pushes a segment (epoch/seq/text)"
+  },
+  {
+   "m": "POST",
+   "p": "/cluster/ping",
+   "d": "leader liveness ping"
+  },
+  {
+   "m": "POST",
+   "p": "/cluster/leave",
+   "d": "leave the cluster (blank)"
+  },
+  {
+   "m": "POST",
+   "p": "/firmware/master",
+   "d": "OTA this follower (?md5= required)"
+  },
+  {
+   "m": "POST",
+   "p": "/reflash-units",
+   "d": "reflash every unit over twiboot"
+  },
+  {
+   "m": "POST",
+   "p": "/reboot",
+   "d": "soft reboot the follower"
+  },
+  {
+   "m": "GET",
+   "p": "/unit/offset",
+   "d": "read a unit's calibration offset"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/offset",
+   "d": "set a unit's calibration offset"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/jog",
+   "d": "jog a unit N steps"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/home",
+   "d": "home a unit"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/identify",
+   "d": "blink a unit's LED"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/reset-odometer",
+   "d": "zero a unit's revolution odometer"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/gates",
+   "d": "set a unit's feature-gate bits"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/self-test",
+   "d": "run a unit's self-test"
+  },
+  {
+   "m": "GET",
+   "p": "/unit/self-test-result",
+   "d": "read a unit's self-test result"
+  },
+  {
+   "m": "POST",
+   "p": "/unit/reboot",
+   "d": "reboot a unit"
+  },
+  {
+   "m": "GET",
+   "p": "/unit/op-result",
+   "d": "result of the last {seq} maintenance op"
+  }
+ ],
+ "notServed": [
+  "/cluster/digest",
+  "/cluster/promote",
+  "/cluster/config",
+  "/cluster/discover"
+ ],
+ "legend": {
+  "width": "display width in units",
+  "faulty": "count of units flagged faulty",
+  "vccMin": "lowest since-boot unit supply Vcc (mV) across the display — the brownout floor",
+  "units": "per-unit array, one entry per display column",
+  "i": "unit index (0-based column)",
+  "a": "I2C address",
+  "st": "unit state: 0 silent / 1 sketch / 2 bootloader",
+  "v": "1 = a CMD_GET_STATUS read succeeded",
+  "fw": "firmware vs bundle: 0 ok / 1 outdated / 2 unknown",
+  "rev": "firmware git short-rev",
+  "up": "uptime seconds (saturating)",
+  "br": "lifetime brownout reset count",
+  "wd": "lifetime watchdog reset count",
+  "bc": "bad-I2C-command count since boot",
+  "mc": "MCUSR reset-cause snapshot at boot",
+  "fl": "status flag bitfield (bit0 moving, bit1 home-failed, bit2 hall-never, bit4 addr-eeprom, bit5 homed)",
+  "hs": "last homing step count",
+  "ae": "1 = I2C address came from EEPROM, not DIP",
+  "odo": "drum revolution odometer",
+  "de": "drift events since boot",
+  "ds": "last drift magnitude in steps",
+  "dp": "1 = a drift re-home is pending",
+  "phys": "hall-corrected physical letter index",
+  "mm": "1 = physical letter disagrees with intended",
+  "vcc": "supply Vcc now (mV)",
+  "vmin": "since-boot minimum supply Vcc (mV), sampled mid-move",
+  "cp": "last commanded flap index",
+  "ram": "since-boot minimum free SRAM (bytes)",
+  "age": "ms since the last good scheduled health read (heartbeat freshness)",
+  "hs2": "boot-home state: 0 unhomed, 1 homing, 2 homed",
+  "misses": "consecutive missed heartbeat reads",
+  "stale": "1 = unit missed >= the threshold of consecutive heartbeats (lost)",
+  "se": "step-excess on the last home (actual minus expected steps)",
+  "sx": "worst-seen step-excess since boot",
+  "sag": "minimum loaded supply Vcc (mV) during the last move",
+  "he": "hall edges seen in the last completed revolution",
+  "dw": "rolling ~60 s duty window (recent move count)",
+  "sb": "ext-diag status bitfield (bit0 last-move stall)",
+  "pv": "wire protocol version the unit reports",
+  "pmm": "1 = protocol version we do not speak; unit is untouched and is a reflash target",
+  "hf": "lifetime failed-homing count (survives power cycles)",
+  "gates": "active unit feature-gate bits (bit0 idle hall check, bit1 scheduled re-home)",
+  "sxl": "worst-seen step-excess over the unit's lifetime (sx forgets at reboot)",
+  "stw0": "hall window measured by the unit's FIRST self-test (baseline)",
+  "stw1": "hall window measured by its most recent self-test",
+  "str0": "steps/rev measured by the unit's FIRST self-test (baseline)",
+  "str1": "steps/rev measured by its most recent self-test",
+  "state": "follower phase: standalone/clustered/grace/blank",
+  "leaderName": "name of the leader feeding this row",
+  "leaderHost": "host of the leader",
+  "row": "this follower's grid row",
+  "epoch": "leader epoch",
+  "seq": "last accepted render sequence number",
+  "segment": "the text currently held for this row",
+  "detected": "units responding on the bus",
+  "msSinceRender": "ms since the last leader render applied (-1 = none yet)",
+  "secsUntilBlank": "seconds until total-silence blanks the row (-1 = already blank)",
+  "i2cTx": "unit-bus read transactions since boot",
+  "i2cErr": "failed unit-bus reads since boot",
+  "minHeap": "since-boot minimum free heap (bytes)",
+  "stackFree": "since-boot low-water of the 4 KB cont stack (bytes, #435)",
+  "sntpSynced": "1 = SNTP epoch synced (commitAt flips honored)",
+  "hmac": "1 = enforcing signed (HMAC) leader-wire requests (#313)",
+  "foreign": "refused foreign-leader contacts: joins/pings/renders counters + lastHost + msSince (-1 = never)"
+ }
+}

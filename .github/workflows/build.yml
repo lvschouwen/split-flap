@@ -121,3 +121,19 @@ jobs:
       - name: Unit bundle drift gate
         working-directory: flashing
         run: python flasher/make_manifest.py gate
+
+  cli-tests:
+    name: CLI tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install cli
+        run: pip install -e "./cli[dev]"
+
+      - name: Run cli tests
+        run: python -m pytest cli/tests/ -v

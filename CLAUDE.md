@@ -20,6 +20,7 @@ Arduino-based split-flap display: a master MCU drives per-flap units over I2C. F
 - `firmware/v2/Bootloader/` — builds the S3 second-stage bootloader (#201; see its platformio.ini)
 - `firmware/v1/ESPMaster/` — FROZEN ESP8266 master reference
 - `flashing/` — `ota-flash.sh` (scp-fetch staged bin + OTA + `/settings` verdict; platform autodetect via the `plat` settings key, `-p esp01|esp32` to assert it; multi-device fan-out) and `flasher/make_manifest.py` (`stage` writes the unit bundle into `firmware/v2/Master/data` AND `firmware/v2/FollowerEsp01/data` — MUST run between the Unit build and those builds; `gate` = the CI anti-drift check). Unit campaigns: `restore-unit-offsets.sh` (capture/replay the per-unit calibration offsets the #406 day-0 erase destroys) and `commission-units.sh` (gated per-unit reflash + acceptance run — needs `reflashOnBoot=false` and `/reflash-units?address=N`; stops at the first failure). New-board provisioning: esptool merged-factory-bin recipe in `flashing/README.md`.
+- `cli/` — operator TUI (`splitflap`, #441): Textual dashboard + command bar over the HTTP surface; `splitflap_client` is the typed client library (capability table drift-gated against /api fixtures). Tests: `cd cli && python -m pytest tests/`.
 - `PCB/v2/` — design docs (unit board is the only planned custom PCB; GPIO 4 = future reset button)
 - `docs/superpowers/specs/` — design docs per feature
 - `docs/CODING_STANDARDS.md` — how code must be written (architecture, C++ style, concurrency, security, testing, tooling gates); CLAUDE.md Hard rules win on conflict
