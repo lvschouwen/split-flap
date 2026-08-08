@@ -17,10 +17,14 @@ class ConfirmModal(ModalScreen[bool]):
         self.token = token
 
     def compose(self) -> ComposeResult:
+        # markup=False (#441 finding 1a): summary/token can carry
+        # board-supplied or user-typed text (e.g. "text [ICE 704]") that
+        # must render literally, never be parsed as Rich console markup.
         with Vertical(id="confirm-box"):
-            yield Label(self.summary)
+            yield Label(self.summary, markup=False)
             if self.typed:
-                yield Label(f"type '{self.token}' to confirm, Esc to cancel")
+                yield Label(f"type '{self.token}' to confirm, Esc to cancel",
+                           markup=False)
                 yield Input(id="confirm-input")
             else:
                 yield Label("y to confirm, n/Esc to cancel")

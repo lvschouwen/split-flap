@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+from rich.text import Text
 from textual import events
 from textual.widgets import DataTable, Input, RichLog, Static
 
 from splitflap_client.models import ClusterStatus, SystemStatsNow, UnitsHealth
+
+
+def _border_text(s: str) -> Text:
+    """Textual's border_title setter unconditionally parses a plain str as
+    Rich console markup (Widget.render_str -> Content.from_markup),
+    regardless of a widget's own markup=False — a bracketed literal like
+    "cluster [STALE]" silently loses everything from "[STALE]" onward (the
+    unclosed tag swallows the rest). Wrapping in rich.text.Text takes the
+    special-cased from_rich_text path instead and renders literally."""
+    return Text(s)
 
 
 class CommandInput(Input):
@@ -48,16 +59,40 @@ class CommandInput(Input):
 
 
 class WallPanel(Static):
+    """markup=False (#441 finding 1a): the wall renders board/firmware
+    -supplied display text verbatim — a payload like "[/]" is valid content,
+    not Rich console markup, and must never be parsed as such."""
+
+    def __init__(self, **kw):
+        kw.setdefault("markup", False)
+        super().__init__(**kw)
+
     def update_wall(self, rows: list[str] | None, text: str, stale: bool) -> None:
         body = "\n".join(rows) if rows else text
-        self.border_title = "wall [STALE]" if stale else "wall"
+        self.border_title = _border_text("wall [STALE]" if stale else "wall")
         self.update(body or "(no display data)")
 
 
 class ClusterStrip(Static):
+    """markup=False (#441 finding 1a): member host/rev strings are
+    board-supplied. Finding 5: border_title carries a " [STALE]" suffix
+    while the leader is unreachable, cleared on the next successful poll."""
+
+    BASE_TITLE = "cluster"
     _text: str = ""
 
-    def render_str(self) -> str:
+    def __init__(self, **kw):
+        kw.setdefault("markup", False)
+        super().__init__(**kw)
+
+    def on_mount(self) -> None:
+        self.border_title = _border_text(self.BASE_TITLE)
+
+    def cluster_text(self) -> str:
+        # NOT named render_str: that name collides with Widget.render_str
+        # (str | Content -> Content, used internally by the border_title
+        # setter) — the collision was latent until border_title was ever
+        # assigned on this widget (finding 5's staleness marker).
         return self._text
 
     def update_cluster(self, c: ClusterStatus) -> None:
@@ -77,12 +112,22 @@ class ClusterStrip(Static):
         self._text = "\n".join(lines) or "(cluster disabled)"
         self.update(self._text)
 
+    def mark_stale(self) -> None:
+        self.border_title = _border_text(f"{self.BASE_TITLE} [STALE]")
+
+    def clear_stale(self) -> None:
+        self.border_title = _border_text(self.BASE_TITLE)
+
 
 class UnitsTable(DataTable):
+    """Finding 5: same border-staleness pattern as ClusterStrip/LogTail."""
+
+    BASE_TITLE = "units"
     COLUMNS = ("addr", "st", "sx", "odo", "vmin", "gates", "flags")
 
     def on_mount(self) -> None:
         self.add_columns(*self.COLUMNS)
+        self.border_title = _border_text(self.BASE_TITLE)
 
     def update_units(self, h: UnitsHealth) -> None:
         def cell(v):
@@ -93,12 +138,44 @@ class UnitsTable(DataTable):
             self.add_row(f"0x{u.address:02x}", str(u.state), cell(u.sx),
                          cell(u.odo), cell(u.vcc_min), cell(u.gates), flags)
 
+    def mark_stale(self) -> None:
+        self.border_title = _border_text(f"{self.BASE_TITLE} [STALE]")
+
+    def clear_stale(self) -> None:
+        self.border_title = _border_text(self.BASE_TITLE)
+
 
 class LogTail(RichLog):
-    pass
+    """markup=False (#441 finding 1a — RichLog already defaults to False,
+    made explicit here so it can never silently flip): the dashboard log
+    tail writes board flash-log lines verbatim. Finding 5: same
+    border-staleness pattern as ClusterStrip/UnitsTable."""
+
+    BASE_TITLE = "log"
+
+    def __init__(self, **kw):
+        kw.setdefault("markup", False)
+        super().__init__(**kw)
+
+    def on_mount(self) -> None:
+        self.border_title = _border_text(self.BASE_TITLE)
+
+    def mark_stale(self) -> None:
+        self.border_title = _border_text(f"{self.BASE_TITLE} [STALE]")
+
+    def clear_stale(self) -> None:
+        self.border_title = _border_text(self.BASE_TITLE)
 
 
 class StatsBar(Static):
+    """markup=False (#441 finding 1a): stats text is board/firmware-numeric
+    but the DISCONNECTED path folds in the raw SplitflapError message,
+    which can itself carry a board-supplied HTTP error body."""
+
+    def __init__(self, **kw):
+        kw.setdefault("markup", False)
+        super().__init__(**kw)
+
     def update_stats(self, s: SystemStatsNow, connected: bool) -> None:
         link = "connected" if connected else "DISCONNECTED — retrying"
         self.update(f"{link} | heap {s.heap} (min {s.min_heap}) | "
