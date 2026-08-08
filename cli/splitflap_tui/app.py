@@ -4,20 +4,97 @@ from typing import Callable
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header
+from textual.widgets import Footer, Header, Input, Static
 
+from splitflap_client import control
 from splitflap_client.events import DisplayEvent
 from splitflap_client.models import ClusterStatus, StatusAggregate
-from splitflap_client.transport import BoardClient
+from splitflap_client.ops import OpResult, run_op
+from splitflap_client.transport import BoardClient, HttpError, SplitflapError
 
+from .commands import (CommandError, ParsedCommand, TIER_KILL, TIER_ROUTINE,
+                       TIER_TYPED, parse)
 from .config import Config
+from .confirm import ConfirmModal
 from .poller import Poller
 from .widgets import ClusterStrip, LogTail, StatsBar, UnitsTable, WallPanel
 
 
+def _format_op_result(r: OpResult) -> str:
+    parts = [r.state]
+    if r.reason:
+        parts.append(r.reason)
+    if r.detail:
+        parts.append(r.detail)
+    return ", ".join(parts)
+
+
+def _execute_op(client: BoardClient, parsed: ParsedCommand) -> str:
+    path = parsed.route[1]
+    params: dict = {"address": parsed.args["unit"]}
+    if path == "/unit/offset":
+        params["value"] = parsed.args["value"]
+    elif path == "/unit/jog":
+        params["steps"] = parsed.args["value"]
+    return _format_op_result(run_op(client, path, params))
+
+
+def _execute_addr(client: BoardClient, parsed: ParsedCommand) -> str:
+    unit = parsed.args["unit"]
+    if parsed.args["mode"] == "burn":
+        # VERIFIED (Task 7, WebMaintenance.cpp:305-334): /unit/set-address
+        # takes query params "address" (source) + "value" (target) — NOT
+        # "target". ParsedCommand.args keeps the readable key "target"; this
+        # is the one place that maps it onto the wire's "value" param.
+        client.post("/unit/set-address",
+                    params={"address": unit, "value": parsed.args["target"]})
+        return f"ok — address {unit} -> {parsed.args['target']}"
+    client.post("/unit/clear-address", params={"address": unit})
+    return f"ok — address {unit} cleared"
+
+
+def execute(parsed: ParsedCommand, client: BoardClient) -> str:
+    """Runs one parsed command against client; returns the status-line text.
+    Every HttpError renders verbatim (⛔ status: body); OpResult renders
+    as "state[, reason[, detail]]"."""
+    try:
+        if parsed.name == "stop":
+            control.stop(client)
+            return "stopped"
+        if parsed.name == "text":
+            control.set_text(client, parsed.args["text"])
+            return f"ok — {parsed.summary}"
+        if parsed.name == "mode":
+            control.set_mode(client, parsed.args["mode"])
+            return f"ok — {parsed.summary}"
+        if parsed.name == "notify":
+            control.notify(client, parsed.args["text"], parsed.args["dwell"])
+            return f"ok — {parsed.summary}"
+        if parsed.name == "set":
+            control.set_setting(client, parsed.args["field"], parsed.args["value"])
+            return f"ok — {parsed.summary}"
+        if parsed.name == "op":
+            return _execute_op(client, parsed)
+        if parsed.name == "gates":
+            result = run_op(client, "/unit/gates", {
+                "address": parsed.args["unit"], "gates": parsed.args["mask"]})
+            return _format_op_result(result)
+        if parsed.name == "reboot":
+            control.reboot(client)
+            return "rebooting"
+        if parsed.name == "addr":
+            return _execute_addr(client, parsed)
+        client.post(parsed.route[1])          # reset-units, promote, cluster-leave
+        return f"ok — {parsed.summary}"
+    except HttpError as exc:
+        return f"⛔ {exc.status}: {exc.body}"
+    except SplitflapError as exc:
+        return f"⛔ {exc}"
+
+
 class SplitflapApp(App):
     TITLE = "splitflap"
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [("q", "quit", "Quit"), (":", "open_command", "Command")]
 
     def __init__(self, config: Config,
                  client_factory: Callable[[str], BoardClient] = BoardClient):
@@ -37,6 +114,10 @@ class SplitflapApp(App):
                 yield UnitsTable(id="units")
                 yield LogTail(id="log")
             yield StatsBar(id="stats")
+            yield Static("press ':' for commands", id="cmd-status")
+            command_input = Input(id="command")
+            command_input.display = False
+            yield command_input
         yield Footer()
 
     def on_mount(self) -> None:
@@ -76,6 +157,54 @@ class SplitflapApp(App):
         self.wall_stale = True
         wall = self.query_one("#wall", WallPanel)
         wall.border_title = "wall [STALE]"
+
+    # ---- command bar ----
+    def action_open_command(self) -> None:
+        cmd = self.query_one("#command", Input)
+        cmd.display = True
+        cmd.focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "command":
+            return
+        event.input.value = ""
+        event.input.display = False
+        self.set_focus(None)
+        try:
+            parsed = parse(event.value)
+        except CommandError as exc:
+            self.apply_cmd_result(f"⛔ {exc}")
+            return
+        self.dispatch_command(parsed)
+
+    def dispatch_command(self, parsed: ParsedCommand) -> None:
+        if parsed.tier in (TIER_KILL, TIER_ROUTINE):
+            self.run_command(parsed)
+            return
+        typed = parsed.tier == TIER_TYPED
+        token = str(parsed.args.get("unit", parsed.name)) if typed else ""
+
+        def on_result(confirmed: bool) -> None:
+            if confirmed:
+                self.run_command(parsed)
+            else:
+                self.apply_cmd_result("cancelled")
+
+        self.push_screen(ConfirmModal(parsed.summary, typed=typed, token=token),
+                         on_result)
+
+    def run_command(self, parsed: ParsedCommand) -> None:
+        def work() -> None:
+            try:
+                with self.client_factory(self.config.board_url()) as client:
+                    result = execute(parsed, client)
+            except SplitflapError as exc:
+                result = f"⛔ {exc}"
+            self.call_from_thread(self.apply_cmd_result, result)
+        self.run_worker(work, thread=True)
+
+    def apply_cmd_result(self, text: str) -> None:
+        self.query_one("#cmd-status", Static).update(text)
 
     def on_unmount(self) -> None:
         if self.poller:
