@@ -54,3 +54,14 @@ def test_stats_bar_humanizes():
     bar.update_stats(s, True)
     assert lines[-1] == ("connected · heap 182k (min 141k) · rssi -54 · "
                          "up 3d 3h · i2c 12043/0 err")
+
+
+from splitflap_tui.widgets import SUGGEST_WORDS, CommandInput
+
+
+async def test_command_input_suggests_command_names():
+    inp = CommandInput()
+    assert inp.suggester is not None
+    assert await inp.suggester.get_suggestion("clu") == "cluster leave"
+    assert await inp.suggester.get_suggestion("st") == "stop"
+    assert "help" in SUGGEST_WORDS

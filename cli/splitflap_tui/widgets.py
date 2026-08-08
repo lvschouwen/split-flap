@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rich.text import Text
 from textual import events
+from textual.suggester import SuggestFromList
 from textual.widgets import DataTable, Input, RichLog, Static
 
 from splitflap_client.models import (ClusterMember, ClusterStatus,
@@ -9,6 +10,11 @@ from splitflap_client.models import (ClusterMember, ClusterStatus,
 
 from .flapwall import wall_cells
 from .format import human_duration, human_size
+
+
+SUGGEST_WORDS = ["stop", "text", "mode", "notify", "set", "op", "gates",
+                 "reboot", "reset-units", "addr", "promote",
+                 "cluster leave", "cluster config", "help"]
 
 
 def border_text(s: str) -> Text:
@@ -66,6 +72,8 @@ class CommandInput(Input):
     reliably suppresses them without fighting Textual's binding-merge order."""
 
     def __init__(self, **kw):
+        kw.setdefault("suggester",
+                      SuggestFromList(SUGGEST_WORDS, case_sensitive=True))
         super().__init__(**kw)
         self.history: list[str] = []
         self._history_index = 0
