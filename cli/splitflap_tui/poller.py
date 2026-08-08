@@ -22,6 +22,7 @@ class Poller:
         self.poll_s = poll_s
         self.log_poll_s = log_poll_s
         self.stop_event = threading.Event()
+        self._sse_client: BoardClient | None = None
 
     def start(self) -> None:
         for fn in (self.poll_status, self.poll_log, self.sse_loop):
@@ -29,6 +30,17 @@ class Poller:
 
     def stop(self) -> None:
         self.stop_event.set()
+        # sse_loop's read has no timeout (SSE is long-lived by design) and
+        # won't notice stop_event until it returns on its own -> close the
+        # in-flight client to abort the blocked read now, not whenever the
+        # board next talks. A thread left running past unmount would call
+        # app.call_from_thread on a torn-down app.
+        c = self._sse_client
+        if c:
+            try:
+                c.close()
+            except Exception:
+                pass
 
     def poll_status(self) -> None:
         while not self.stop_event.is_set():
@@ -57,9 +69,13 @@ class Poller:
         while not self.stop_event.is_set():
             try:
                 with self.factory(self.url) as c:
-                    for event in display_events(c):
-                        backoff = 1.0
-                        self.app.call_from_thread(self.app.apply_display, event)
+                    self._sse_client = c
+                    try:
+                        for event in display_events(c):
+                            backoff = 1.0
+                            self.app.call_from_thread(self.app.apply_display, event)
+                    finally:
+                        self._sse_client = None
             except SplitflapError:
                 pass
             self.app.call_from_thread(self.app.apply_wall_stale)
