@@ -4,7 +4,8 @@ from rich.text import Text
 from textual import events
 from textual.widgets import DataTable, Input, RichLog, Static
 
-from splitflap_client.models import ClusterStatus, SystemStatsNow, UnitsHealth
+from splitflap_client.models import (ClusterMember, ClusterStatus,
+                                      SystemStatsNow, UnitsHealth)
 
 from .flapwall import wall_cells
 
@@ -24,6 +25,19 @@ def border_text(s: str) -> Text:
     swallowed the same way "cluster [STALE]" was before this helper
     existed)."""
     return Text(s)
+
+
+DOT_OK = "#FFB000"
+DOT_WARN = "#D9A03F"
+DOT_BAD = "#E05B4B"
+
+
+def member_dot_style(m: ClusterMember) -> str:
+    if not m.joined or m.degraded or m.rescue or m.render_stuck:
+        return DOT_BAD
+    if m.suspect or m.update_blocked:
+        return DOT_WARN
+    return DOT_OK
 
 
 class CommandInput(Input):
@@ -125,7 +139,8 @@ class ClusterStrip(Static):
         return self._text
 
     def update_cluster(self, c: ClusterStatus) -> None:
-        lines = []
+        out = Text()
+        plain_lines = []
         for m in c.members:
             flags = [f for f, on in (("SUSPECT", m.suspect),
                                      ("DEGRADED", m.degraded),
@@ -134,12 +149,21 @@ class ClusterStrip(Static):
                                      ("STUCK", m.render_stuck)) if on]
             who = "self" if m.self_row else m.host
             state = "joined" if m.joined else f"lost({m.failures})"
-            lines.append(f"row{m.row} {who} [{m.plat}] {m.rev} {state} "
-                         + (" ".join(flags) if flags else "ok"))
+            line = (f"row{m.row}  {who:<16.16} {m.plat:<8} {m.rev:<10.10} "
+                    f"{state}" + (" " + " ".join(flags) if flags else ""))
+            if plain_lines:
+                out.append("\n")
+            out.append("● ", style=member_dot_style(m))
+            out.append(line)                       # literal, never markup
+            plain_lines.append("● " + line)
         if c.rollout_phase and c.rollout_phase != "idle":
-            lines.append(f"rollout: {c.rollout_phase} src={c.rollout_src or 's3'}")
-        self._text = "\n".join(lines) or "(cluster disabled)"
-        self.update(self._text)
+            line = f"rollout: {c.rollout_phase} src={c.rollout_src or 's3'}"
+            if plain_lines:
+                out.append("\n")
+            out.append(line)
+            plain_lines.append(line)
+        self._text = "\n".join(plain_lines) or "(cluster disabled)"
+        self.update(out if plain_lines else "(cluster disabled)")
 
     def mark_stale(self) -> None:
         self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
