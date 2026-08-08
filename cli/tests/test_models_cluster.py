@@ -72,6 +72,13 @@ def test_status_aggregate_splices():
     assert s.ota.running == "app0" and s.cluster.epoch == 7
 
 
+def test_status_aggregate_tolerates_mistyped_blocks():
+    s = StatusAggregate.from_json({"settings": "not-a-dict", "stats": 7,
+                                   "units": 42, "cluster": [1, 2, 3],
+                                   "ota": True})
+    assert s.settings.unit_count == 0 and s.cluster.members == []
+
+
 import json
 import pathlib
 

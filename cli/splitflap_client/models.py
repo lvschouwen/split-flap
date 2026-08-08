@@ -27,6 +27,10 @@ def _opt(d: dict, key: str) -> int | None:
     return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
+def _dict(v) -> dict:
+    return v if isinstance(v, dict) else {}
+
+
 @dataclass(frozen=True)
 class UnitEntry:
     raw: dict
@@ -296,12 +300,12 @@ class StatusAggregate:
 
     @classmethod
     def from_json(cls, d: dict) -> "StatusAggregate":
-        stats = d.get("stats") if isinstance(d.get("stats"), dict) else {}
+        stats = _dict(d.get("stats"))
         return cls(
             raw=d,
-            settings=Settings.from_json(d.get("settings") or {}),
-            stats_now=SystemStatsNow.from_json(stats.get("now") or {}),
-            units=UnitsHealth.from_json(d.get("units") or {}),
-            cluster=ClusterStatus.from_json(d.get("cluster") or {}),
-            ota=OtaDebug.from_json(d.get("ota") or {}),
+            settings=Settings.from_json(_dict(d.get("settings"))),
+            stats_now=SystemStatsNow.from_json(_dict(stats.get("now"))),
+            units=UnitsHealth.from_json(_dict(d.get("units"))),
+            cluster=ClusterStatus.from_json(_dict(d.get("cluster"))),
+            ota=OtaDebug.from_json(_dict(d.get("ota"))),
         )
