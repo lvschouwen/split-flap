@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
 from textual.app import App, ComposeResult
@@ -20,16 +23,21 @@ from .commands import (CommandError, ParsedCommand, TIER_KILL, TIER_ROUTINE,
                        TIER_TYPED, parse)
 from .config import Config
 from .confirm import ConfirmModal
+from .history import load_history, save_history
 from .poller import Poller
 from .screens.board_detail import BoardDetailScreen
+from .screens.help_screen import HelpScreen
 from .screens.log_screen import LogScreen
 from .widgets import (ClusterStrip, CommandInput, LogTail, StatsBar,
-                      UnitsTable, WallPanel, border_text)
+                      UnitsTable, WallPanel, border_text, format_cmd_status)
 
 
 def _route_known_anywhere(route: tuple[str, str]) -> bool:
     method, path = route
     return any((method, path) in routes for routes in CLIENT_ROUTES.values())
+
+
+DISPLAY_NAMES = {"config": "cluster config", "cluster-leave": "cluster leave"}
 
 
 def _format_op_result(r: OpResult) -> str:
@@ -147,27 +155,33 @@ def execute(parsed: ParsedCommand, client: BoardClient, config: Config,
 
 class SplitflapApp(App):
     TITLE = "splitflap"
+    CSS_PATH = "splitflap.tcss"
     BINDINGS = [("q", "quit", "Quit"), (":", "open_command", "Command"),
                 Binding("ctrl+s", "stop_wall", "STOP", priority=True),
-                ("b", "board_detail", "Board"), ("l", "log_screen", "Log")]
+                ("b", "board_detail", "Board"), ("l", "log_screen", "Log"),
+                ("question_mark", "help", "Help")]
 
     def __init__(self, config: Config,
-                 client_factory: Callable[[str], BoardClient] = BoardClient):
+                 client_factory: Callable[[str], BoardClient] = BoardClient,
+                 history_path: Path | None = None):
         super().__init__()
         self.config = config
         self.client_factory = client_factory
+        self.history_path = history_path
         self.connected = False
         self.wall_stale = True
         self.poller: Poller | None = None
         self.plat = PLAT_S3          # default before the first /status poll
+        self.device_mode = ""        # "" until the first successful poll
         self._board_cycle_index = 0
+        self._last_cmd_result = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
             yield WallPanel(id="wall")
             yield ClusterStrip(id="cluster-strip")
-            with Horizontal():
+            with Horizontal(id="main-split"):
                 yield UnitsTable(id="units")
                 yield LogTail(id="log")
             yield StatsBar(id="stats")
@@ -180,6 +194,9 @@ class SplitflapApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        cmd = self.query_one("#command", CommandInput)
+        cmd.history = load_history(self.history_path)
+        cmd.reset_history_cursor()
         url = self.config.board_url()
         if not url:
             self.query_one("#stats", StatsBar).update(
@@ -193,6 +210,15 @@ class SplitflapApp(App):
     def apply_status(self, agg: StatusAggregate, cluster: ClusterStatus) -> None:
         self.connected = True
         self.plat = agg.settings.plat
+        self.device_mode = agg.settings.device_mode
+        s = agg.settings
+        role = "leading" if s.cluster_leading else (s.cluster_state or "standalone")
+        # sub_title carries board-supplied strings; safe because
+        # App.format_title builds Content(title) literally (verified Textual
+        # 8.2.8) — if a Textual upgrade ever markup-parses titles, wrap
+        # these values.
+        self.sub_title = (f"{s.effective_device_name or 'wall'} · "
+                          f"{s.device_mode or '-'} · {role} · rev {s.version}")
         cluster_strip = self.query_one("#cluster-strip", ClusterStrip)
         cluster_strip.update_cluster(cluster)
         cluster_strip.clear_stale()
@@ -221,8 +247,9 @@ class SplitflapApp(App):
 
     def apply_display(self, event: DisplayEvent) -> None:
         self.wall_stale = False
-        self.query_one("#wall", WallPanel).update_wall(
-            event.rows, event.text, stale=False)
+        wall = self.query_one("#wall", WallPanel)
+        wall.update_wall(event.rows, event.text, stale=False)
+        wall.remove_class("stale")
 
     def apply_wall_stale(self) -> None:
         # border_text (#441 follow-up): a raw "wall [STALE]" string here
@@ -233,6 +260,7 @@ class SplitflapApp(App):
         self.wall_stale = True
         wall = self.query_one("#wall", WallPanel)
         wall.border_title = border_text("wall [STALE]")
+        wall.add_class("stale")
 
     # ---- command bar ----
     def action_open_command(self) -> None:
@@ -270,14 +298,21 @@ class SplitflapApp(App):
             return
         self.push_screen(LogScreen(url, self.client_factory))
 
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command":
             return
         line = event.value
         event.input.remember(line)
+        save_history(event.input.history, self.history_path)
         event.input.value = ""
         event.input.display = False
         self.set_focus(None)
+        if line.strip() in ("help", "?"):
+            self.push_screen(HelpScreen())
+            return
         try:
             parsed = parse(line)
         except CommandError as exc:
@@ -295,7 +330,8 @@ class SplitflapApp(App):
         call, so they pass through to the wire untouched."""
         method, path = parsed.route
         if _route_known_anywhere(parsed.route) and not serves(self.plat, method, path):
-            self.apply_cmd_result(f"⛔ {parsed.name}: not served on {self.plat}")
+            name = DISPLAY_NAMES.get(parsed.name, parsed.name)
+            self.apply_cmd_result(f"⛔ {name}: not served on {self.plat}")
             return False
         return True
 
@@ -311,11 +347,18 @@ class SplitflapApp(App):
     def dispatch_command(self, parsed: ParsedCommand) -> None:
         if not self._capability_gate(parsed):
             return
-        if parsed.tier in (TIER_KILL, TIER_ROUTINE):
+        clock_guard = parsed.name == "text" and self.device_mode == "clock"
+        if parsed.tier in (TIER_KILL, TIER_ROUTINE) and not clock_guard:
             self.run_command(parsed)
             return
         typed = parsed.tier == TIER_TYPED
         token = self._typed_confirm_token(parsed) if typed else ""
+        summary = parsed.summary
+        if clock_guard:
+            summary = (f"{parsed.summary}\n"
+                       "wall is in clock mode — the clock reclaims the "
+                       "display at the next minute tick.\n"
+                       "Send anyway? (tip: `:mode text` first)")
 
         def on_result(confirmed: bool) -> None:
             if confirmed:
@@ -323,21 +366,25 @@ class SplitflapApp(App):
             else:
                 self.apply_cmd_result("cancelled")
 
-        self.push_screen(ConfirmModal(parsed.summary, typed=typed, token=token),
+        self.push_screen(ConfirmModal(summary, typed=typed, token=token),
                          on_result)
 
     def run_command(self, parsed: ParsedCommand) -> None:
         def work() -> None:
+            t0 = time.monotonic()
             try:
                 with self.client_factory(self.config.board_url()) as client:
                     result = execute(parsed, client, self.config, self.client_factory)
             except SplitflapError as exc:
                 result = f"⛔ {exc}"
-            self.call_from_thread(self.apply_cmd_result, result)
+            self.call_from_thread(self.apply_cmd_result, result,
+                                  time.monotonic() - t0)
         self.run_worker(work, thread=True)
 
-    def apply_cmd_result(self, text: str) -> None:
-        self.query_one("#cmd-status", Static).update(text)
+    def apply_cmd_result(self, text: str, duration_s: float | None = None) -> None:
+        self._last_cmd_result = text
+        self.query_one("#cmd-status", Static).update(
+            format_cmd_status(text, duration_s, datetime.now().strftime("%H:%M:%S")))
 
     def on_unmount(self) -> None:
         if self.poller:

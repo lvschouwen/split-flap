@@ -10,6 +10,38 @@ TIER_ROUTINE = "routine"
 TIER_CONFIRM = "confirm"
 TIER_TYPED = "typed"
 
+CANONICAL_NAMES = ("stop", "text", "mode", "notify", "set", "op", "gates",
+                   "reboot", "reset-units", "addr", "promote",
+                   "cluster-leave", "config")
+
+
+@dataclass(frozen=True)
+class HelpEntry:
+    usage: str
+    tier: str
+    blurb: str
+    example: str      # must parse; the drift test derives coverage from it
+
+
+HELP: list[HelpEntry] = [
+    HelpEntry("stop", TIER_KILL, "blank and halt the wall NOW (also ctrl+s)", "stop"),
+    HelpEntry("text <display text>", TIER_ROUTINE, "render text on the wall", "text HELLO"),
+    HelpEntry("mode text|clock", TIER_ROUTINE, "switch device mode", "mode clock"),
+    HelpEntry("notify <dwell-s> <text>", TIER_ROUTINE, "show text, then revert", "notify 10 DOOR"),
+    HelpEntry("set <field> <value>", TIER_CONFIRM, "write one settings field", "set deviceMode clock"),
+    HelpEntry("op home|jog|identify|self-test|reset-odometer|offset <unit> [value]",
+              TIER_CONFIRM, "run a unit maintenance op", "op home 1"),
+    HelpEntry("gates <unit> <mask>", TIER_CONFIRM, "set unit feature-gate byte", "gates 1 0x03"),
+    HelpEntry("reboot [board]", TIER_TYPED, "reboot the default or named board", "reboot"),
+    HelpEntry("reset-units", TIER_TYPED, "power-cycle every unit", "reset-units"),
+    HelpEntry("addr burn <unit> <target> | addr clear <unit>", TIER_TYPED,
+              "provision/clear a unit I2C address", "addr clear 1"),
+    HelpEntry("promote", TIER_TYPED, "promote this board to cluster leader", "promote"),
+    HelpEntry("cluster leave", TIER_TYPED, "leave the cluster", "cluster leave"),
+    HelpEntry("cluster config <host|row|col|width;...>", TIER_TYPED,
+              "replace the cluster member table", "cluster config |1|0|16;"),
+]
+
 
 class CommandError(Exception):
     pass

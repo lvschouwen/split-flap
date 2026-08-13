@@ -37,8 +37,11 @@ class Poller:
         self.poll_s = poll_s
         self.log_poll_s = log_poll_s
         self.stop_event = threading.Event()
+        self._client_lock = threading.Lock()
         self._sse_client: BoardClient | None = None
         self._sse_backoff = 1.0
+        self._status_client: BoardClient | None = None
+        self._log_client: BoardClient | None = None
 
     def start(self) -> None:
         for fn in (self.poll_status, self.poll_log, self.sse_loop):
@@ -50,43 +53,104 @@ class Poller:
         # won't notice stop_event until it returns on its own -> close the
         # in-flight client to abort the blocked read now, not whenever the
         # board next talks. A thread left running past unmount would call
-        # app.call_from_thread on a torn-down app.
-        c = self._sse_client
+        # app.call_from_thread on a torn-down app. The handoff is guarded by
+        # _client_lock (#452): without it, a cycle between factory() and the
+        # _sse_client assignment could race stop()'s read-then-close and
+        # leak a client blocked in a long read past unmount.
+        with self._client_lock:
+            c, self._sse_client = self._sse_client, None
+        if c:
+            try:
+                c.close()
+            except Exception:
+                pass
+        # Same reasoning applies to the status/log clients: dropping them
+        # here makes the using thread's in-flight blocking request raise
+        # immediately instead of running out its timeout — run_poll_loop's
+        # on_error handles the raise, and the loop then exits on the
+        # stop_event check instead of sitting on a client already torn down.
+        self._drop_status_client()
+        self._drop_log_client()
+
+    # ---- /status + /cluster/status ----
+    def _fetch_status(self):
+        if self._status_client is None:
+            self._status_client = self.factory(self.url)
+        c = self._status_client
+        return (StatusAggregate.from_json(c.get_json("/status")),
+                ClusterStatus.from_json(c.get_json("/cluster/status")))
+
+    def _drop_status_client(self) -> None:
+        c, self._status_client = self._status_client, None
         if c:
             try:
                 c.close()
             except Exception:
                 pass
 
-    # ---- /status + /cluster/status ----
     def _status_cycle(self) -> None:
-        with self.factory(self.url) as c:
-            agg = StatusAggregate.from_json(c.get_json("/status"))
-            cluster = ClusterStatus.from_json(c.get_json("/cluster/status"))
+        try:
+            agg, cluster = self._fetch_status()
+        except SplitflapError:
+            # a board-closed keep-alive is not an outage: retry once fresh
+            self._drop_status_client()
+            # stop() may have just dropped/closed this client out from under
+            # us (finding 6) -> don't open a fresh one post-stop
+            if self.stop_event.is_set():
+                return
+            agg, cluster = self._fetch_status()
         if self.stop_event.is_set():
             return
         self.app.call_from_thread(self.app.apply_status, agg, cluster)
 
     def _status_error(self, exc: BaseException) -> None:
+        self._drop_status_client()   # a broken client must never survive into
+                                      # the next cycle
         if self.stop_event.is_set():
             return
         message = str(exc) if isinstance(exc, SplitflapError) else _internal_error(exc)
         self.app.call_from_thread(self.app.apply_disconnect, message)
 
     def poll_status(self) -> None:
-        run_poll_loop(self.stop_event, self.poll_s,
-                      self._status_cycle, self._status_error)
+        try:
+            run_poll_loop(self.stop_event, self.poll_s,
+                          self._status_cycle, self._status_error)
+        finally:
+            self._drop_status_client()
 
     # ---- flash log tail ----
+    def _fetch_log(self) -> str:
+        if self._log_client is None:
+            self._log_client = self.factory(self.url)
+        return fetch_flash_log(self._log_client)
+
+    def _drop_log_client(self) -> None:
+        c, self._log_client = self._log_client, None
+        if c:
+            try:
+                c.close()
+            except Exception:
+                pass
+
     def _log_cycle(self) -> None:
-        with self.factory(self.url) as c:
-            text = fetch_flash_log(c)
+        try:
+            text = self._fetch_log()
+        except SplitflapError:
+            # a board-closed keep-alive is not an outage: retry once fresh
+            self._drop_log_client()
+            # stop() may have just dropped/closed this client out from under
+            # us (finding 6) -> don't open a fresh one post-stop
+            if self.stop_event.is_set():
+                return
+            text = self._fetch_log()
         tail = text.splitlines()[-200:]
         if self.stop_event.is_set():
             return
         self.app.call_from_thread(self.app.apply_log, tail)
 
     def _log_error(self, exc: BaseException) -> None:
+        self._drop_log_client()      # a broken client must never survive into
+                                      # the next cycle
         if isinstance(exc, SplitflapError):
             return                   # status poller owns the banner
         if self.stop_event.is_set():
@@ -94,23 +158,34 @@ class Poller:
         self.app.call_from_thread(self.app.apply_disconnect, _internal_error(exc))
 
     def poll_log(self) -> None:
-        run_poll_loop(self.stop_event, self.log_poll_s,
-                      self._log_cycle, self._log_error)
+        try:
+            run_poll_loop(self.stop_event, self.log_poll_s,
+                          self._log_cycle, self._log_error)
+        finally:
+            self._drop_log_client()
 
     # ---- /events SSE ----
     def _sse_cycle(self) -> None:
-        try:
-            with self.factory(self.url) as c:
-                self._sse_client = c
+        c = self.factory(self.url)
+        with self._client_lock:
+            if self.stop_event.is_set():
+                # stop() already ran and can't see this client — our job.
                 try:
-                    for event in display_events(c):
-                        self._sse_backoff = 1.0
-                        if self.stop_event.is_set():
-                            return
-                        self.app.call_from_thread(self.app.apply_display, event)
-                finally:
-                    self._sse_client = None
+                    c.close()
+                except Exception:
+                    pass
+                return
+            self._sse_client = c
+        try:
+            with c:
+                for event in display_events(c):
+                    self._sse_backoff = 1.0
+                    if self.stop_event.is_set():
+                        return
+                    self.app.call_from_thread(self.app.apply_display, event)
         finally:
+            with self._client_lock:
+                self._sse_client = None
             if not self.stop_event.is_set():
                 self.app.call_from_thread(self.app.apply_wall_stale)
 

@@ -2,9 +2,19 @@ from __future__ import annotations
 
 from rich.text import Text
 from textual import events
+from textual.suggester import SuggestFromList
 from textual.widgets import DataTable, Input, RichLog, Static
 
-from splitflap_client.models import ClusterStatus, SystemStatsNow, UnitsHealth
+from splitflap_client.models import (ClusterMember, ClusterStatus,
+                                      SystemStatsNow, UnitsHealth)
+
+from .flapwall import wall_cells
+from .format import human_duration, human_size
+
+
+SUGGEST_WORDS = ["stop", "text", "mode", "notify", "set", "op", "gates",
+                 "reboot", "reset-units", "addr", "promote",
+                 "cluster leave", "cluster config", "help"]
 
 
 def border_text(s: str) -> Text:
@@ -24,6 +34,34 @@ def border_text(s: str) -> Text:
     return Text(s)
 
 
+def format_cmd_status(text: str, duration_s: float | None, clock: str) -> Text:
+    """Status-line Text (#451): glyph + timestamp + literal result body.
+    The ⛔-prefix convention (execute() puts it on every error) drives the
+    glyph and is stripped from the body so it doesn't render twice."""
+    ok = not text.startswith("⛔")
+    body = text[2:] if text.startswith("⛔ ") else text
+    out = Text()
+    out.append("✓" if ok else "⛔", style="#FFB000" if ok else "#E05B4B")
+    out.append(f" {clock}  ", style="dim")
+    out.append(body)                                  # literal, never markup
+    if duration_s is not None:
+        out.append(f" ({duration_s:.1f} s)", style="dim")
+    return out
+
+
+DOT_OK = "#FFB000"
+DOT_WARN = "#D9A03F"
+DOT_BAD = "#E05B4B"
+
+
+def member_dot_style(m: ClusterMember) -> str:
+    if not m.joined or m.degraded or m.rescue or m.render_stuck:
+        return DOT_BAD
+    if m.suspect or m.update_blocked:
+        return DOT_WARN
+    return DOT_OK
+
+
 class CommandInput(Input):
     """Command-bar Input with k9s-style in-memory history recall (#446 fix
     round 1, item 3): up/down cycle previously submitted lines while this
@@ -34,6 +72,8 @@ class CommandInput(Input):
     reliably suppresses them without fighting Textual's binding-merge order."""
 
     def __init__(self, **kw):
+        kw.setdefault("suggester",
+                      SuggestFromList(SUGGEST_WORDS, case_sensitive=True))
         super().__init__(**kw)
         self.history: list[str] = []
         self._history_index = 0
@@ -68,16 +108,36 @@ class CommandInput(Input):
 class WallPanel(Static):
     """markup=False (#441 finding 1a): the wall renders board/firmware
     -supplied display text verbatim — a payload like "[/]" is valid content,
-    not Rich console markup, and must never be parsed as such."""
+    not Rich console markup, and must never be parsed as such. #450: body is
+    flap cells (flapwall.wall_cells) when the panel is wide enough, plain
+    text otherwise; on_resize re-decides."""
 
     def __init__(self, **kw):
         kw.setdefault("markup", False)
         super().__init__(**kw)
+        self._rows: list[str] | None = None
+        self._text = ""
+
+    def wall_text(self) -> str:
+        return "\n".join(self._rows) if self._rows else self._text
 
     def update_wall(self, rows: list[str] | None, text: str, stale: bool) -> None:
-        body = "\n".join(rows) if rows else text
+        self._rows, self._text = rows, text
         self.border_title = border_text("wall [STALE]" if stale else "wall")
-        self.update(body or "(no display data)")
+        self._refresh_body()
+
+    def _refresh_body(self) -> None:
+        body = self.wall_text()
+        if not body:
+            self.update("(no display data)")
+            return
+        # Pre-layout content_size is 0x0 — assume wide, on_resize corrects.
+        width = self.content_size.width or 200
+        cells = wall_cells(self._rows, self._text, width)
+        self.update(cells if cells is not None else body)
+
+    def on_resize(self, event) -> None:
+        self._refresh_body()
 
 
 class ClusterStrip(Static):
@@ -103,7 +163,8 @@ class ClusterStrip(Static):
         return self._text
 
     def update_cluster(self, c: ClusterStatus) -> None:
-        lines = []
+        out = Text()
+        plain_lines = []
         for m in c.members:
             flags = [f for f, on in (("SUSPECT", m.suspect),
                                      ("DEGRADED", m.degraded),
@@ -112,18 +173,29 @@ class ClusterStrip(Static):
                                      ("STUCK", m.render_stuck)) if on]
             who = "self" if m.self_row else m.host
             state = "joined" if m.joined else f"lost({m.failures})"
-            lines.append(f"row{m.row} {who} [{m.plat}] {m.rev} {state} "
-                         + (" ".join(flags) if flags else "ok"))
+            line = (f"row{m.row}  {who:<16.16} {m.plat:<8} {m.rev:<10.10} "
+                    f"{state}" + (" " + " ".join(flags) if flags else ""))
+            if plain_lines:
+                out.append("\n")
+            out.append("● ", style=member_dot_style(m))
+            out.append(line)                       # literal, never markup
+            plain_lines.append("● " + line)
         if c.rollout_phase and c.rollout_phase != "idle":
-            lines.append(f"rollout: {c.rollout_phase} src={c.rollout_src or 's3'}")
-        self._text = "\n".join(lines) or "(cluster disabled)"
-        self.update(self._text)
+            line = f"rollout: {c.rollout_phase} src={c.rollout_src or 's3'}"
+            if plain_lines:
+                out.append("\n")
+            out.append(line)
+            plain_lines.append(line)
+        self._text = "\n".join(plain_lines) or "(cluster disabled)"
+        self.update(out if plain_lines else "(cluster disabled)")
 
     def mark_stale(self) -> None:
         self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
+        self.add_class("stale")
 
     def clear_stale(self) -> None:
         self.border_title = border_text(self.BASE_TITLE)
+        self.remove_class("stale")
 
 
 class UnitsTable(DataTable):
@@ -147,9 +219,11 @@ class UnitsTable(DataTable):
 
     def mark_stale(self) -> None:
         self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
+        self.add_class("stale")
 
     def clear_stale(self) -> None:
         self.border_title = border_text(self.BASE_TITLE)
+        self.remove_class("stale")
 
 
 class LogTail(RichLog):
@@ -169,9 +243,11 @@ class LogTail(RichLog):
 
     def mark_stale(self) -> None:
         self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
+        self.add_class("stale")
 
     def clear_stale(self) -> None:
         self.border_title = border_text(self.BASE_TITLE)
+        self.remove_class("stale")
 
 
 class StatsBar(Static):
@@ -185,6 +261,7 @@ class StatsBar(Static):
 
     def update_stats(self, s: SystemStatsNow, connected: bool) -> None:
         link = "connected" if connected else "DISCONNECTED — retrying"
-        self.update(f"{link} | heap {s.heap} (min {s.min_heap}) | "
-                    f"rssi {s.rssi} | up {s.uptime}s | "
+        self.update(f"{link} · heap {human_size(s.heap)} "
+                    f"(min {human_size(s.min_heap)}) · rssi {s.rssi} · "
+                    f"up {human_duration(s.uptime)} · "
                     f"i2c {s.i2c_tx}/{s.i2c_err} err")

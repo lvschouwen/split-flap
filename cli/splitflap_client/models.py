@@ -1,8 +1,7 @@
 """Typed views over firmware JSON. Tolerant: absent/mistyped keys -> defaults."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from .capability import plat_from_settings
 

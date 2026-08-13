@@ -2,11 +2,15 @@ import threading
 
 import httpx
 import pytest
+from splitflap_client.events import DisplayEvent
 from splitflap_client.models import ClusterStatus, StatusAggregate
 from splitflap_client.transport import BoardClient
 from splitflap_tui.app import SplitflapApp
+from splitflap_tui.commands import parse
+from splitflap_tui.confirm import ConfirmModal
 from splitflap_tui.config import Board, Config
-from splitflap_tui.widgets import ClusterStrip, LogTail, UnitsTable, WallPanel
+from splitflap_tui.widgets import (ClusterStrip, CommandInput, LogTail,
+                                   UnitsTable, WallPanel)
 
 STATUS = {"settings": {"plat": "esp32s3", "unitCount": 16, "version": "817e3a9",
                        "clusterLeading": True, "deviceMode": "clock"},
@@ -119,17 +123,44 @@ async def test_sse_malformed_and_bracketed_text_render_literally_not_stale():
     async with app.run_test() as pilot:
         await pilot.pause(0.3)      # sse_loop connects and gets chunk 1
         wall = app.query_one("#wall", WallPanel)
-        assert "[/][/] MALFORMED" in wall.content     # literal, not parsed
+        # Task 3 (#450): cells interleave ▐▌ glyphs into rendered content, so
+        # the literal-rendering invariant is now pinned on the logical text
+        # accessor instead of the visual content.
+        assert "[/][/] MALFORMED" in wall.wall_text()  # literal, not parsed
         assert app.wall_stale is False
         assert app.is_running                          # thread didn't die
 
         malformed_gate.set()        # release chunk 2
         await pilot.pause(0.3)
-        assert "[ICE 704]" in wall.content
+        assert "[ICE 704]" in wall.wall_text()
         assert app.wall_stale is False
 
         done_gate.set()              # let the stream end so teardown is clean
         await pilot.pause(0.1)
+
+
+@pytest.mark.asyncio
+async def test_stale_panels_get_css_class_and_recover():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        strip = app.query_one("#cluster-strip", ClusterStrip)
+        units = app.query_one("#units", UnitsTable)
+        log = app.query_one("#log", LogTail)
+        wall = app.query_one("#wall", WallPanel)
+
+        app.apply_disconnect("boom")
+        app.apply_wall_stale()
+        await pilot.pause(0.05)
+        assert strip.has_class("stale") and units.has_class("stale")
+        assert log.has_class("stale") and wall.has_class("stale")
+
+        agg = StatusAggregate.from_json(STATUS)
+        app.apply_status(agg, ClusterStatus.from_json(STATUS["cluster"]))
+        app.apply_display(DisplayEvent(text="OK", self_row=None, rows=None))
+        await pilot.pause(0.05)
+        assert not strip.has_class("stale") and not units.has_class("stale")
+        assert not log.has_class("stale") and not wall.has_class("stale")
 
 
 @pytest.mark.asyncio
@@ -157,3 +188,81 @@ async def test_disconnect_marks_panels_stale_and_reconnect_clears():
         assert "STALE" not in strip.border_title
         assert "STALE" not in units.border_title
         assert "STALE" not in log.border_title
+
+
+@pytest.mark.asyncio
+async def test_wall_renders_flap_cells():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        wall = app.query_one("#wall", WallPanel)
+        app.apply_display(DisplayEvent(text="HI", self_row=None, rows=None))
+        await pilot.pause(0.05)
+        assert wall.wall_text() == "HI"
+        assert "▐H▌ ▐I▌" in wall.content        # cells, not a plain string
+
+
+@pytest.mark.asyncio
+async def test_text_in_clock_mode_asks_before_sending():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)                 # STATUS fixture: deviceMode=clock
+        assert app.device_mode == "clock"
+        app.dispatch_command(parse("text HI"))
+        await pilot.pause(0.05)
+        assert isinstance(app.screen, ConfirmModal)
+        assert "clock" in app.screen.summary
+        app.screen.action_no()                 # cancel; nothing sent
+        await pilot.pause(0.05)
+
+
+@pytest.mark.asyncio
+async def test_text_outside_clock_mode_sends_directly():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        for mode in ("text", ""):              # explicit text mode + unknown
+            app.device_mode = mode
+            app.dispatch_command(parse("text HI"))
+            await pilot.pause(0.1)
+            assert not isinstance(app.screen, ConfirmModal)
+
+
+@pytest.mark.asyncio
+async def test_history_persists_across_sessions(tmp_path):
+    hist = tmp_path / "history"
+    hist.write_text("mode clock\n")
+    app = SplitflapApp(CFG, client_factory=fake_factory, history_path=hist)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        cmd = app.query_one("#command", CommandInput)
+        assert cmd.history == ["mode clock"]
+        app.action_open_command()
+        cmd.value = "mode text"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+    assert "mode text" in hist.read_text().splitlines()
+
+
+@pytest.mark.asyncio
+async def test_sub_title_keeps_board_brackets_literal():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        raw = {**STATUS, "settings": {**STATUS["settings"],
+                                      "effectiveDeviceName": "[red]wall[/red]"}}
+        app.apply_status(StatusAggregate.from_json(raw),
+                         ClusterStatus.from_json(STATUS["cluster"]))
+        assert "[red]wall[/red]" in app.sub_title
+
+
+@pytest.mark.asyncio
+async def test_gate_message_uses_spoken_command_name():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        app.plat = "esp01"       # /cluster/config is S3-only
+        app.dispatch_command(parse("cluster config a|1|0|5;"))
+        await pilot.pause(0.05)
+        # gate wording (#452): "cluster config", not the internal "config"
+        assert app._last_cmd_result.startswith("⛔ cluster config:")

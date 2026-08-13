@@ -45,11 +45,18 @@ superloop.
 splitflap
 ```
 
+The dashboard wears an amber board-strip identity (`splitflap_tui/splitflap.tcss`,
+#450) and mirrors the wall itself: the `wall` panel renders each display
+character as a discrete flap cell (amber-on-dark, one cell per unit) when
+there's room, degrading to plain text on a narrow terminal rather than
+wrapping cells.
+
 ## Keybindings
 
 | Key | Action |
 |---|---|
 | `:` | open the command bar |
+| `?` | open the command reference/help overlay |
 | `b` | push the board-detail screen for the next board in `config.boards` (repeat to cycle) |
 | `l` | push the leader's flash-log screen |
 | `ctrl+s` | STOP — blank + halt the wall immediately, no confirm (always active, even mid-command-entry) |
@@ -62,8 +69,16 @@ boot's flash log (`?prev=1`); `escape` pops back.
 
 ## Command bar
 
-Press `:` to open it, type a command, Enter to submit. Commands are
-tiered by risk:
+Press `:` to open it, type a command, Enter to submit. The command name
+autocompletes inline as you type, suggesting from the same vocabulary as
+the table below. Type `help` (or `:help`, or press `?` — see Keybindings)
+to open a command reference overlay generated straight from the command
+table, so it can't drift out of sync. Submitted lines persist across runs:
+the last 100 are saved to `~/.config/splitflap/history` and reloaded at
+startup (best-effort — an unwritable config dir never blocks the app);
+recall them with up/down while the bar is focused.
+
+Commands are tiered by risk:
 
 - **kill** — runs immediately, no confirm.
 - **routine** — runs immediately, no confirm.
@@ -87,6 +102,11 @@ tiered by risk:
 | `promote` | typed | token = `promote` |
 | `cluster leave` | typed | token = `cluster-leave` |
 | `cluster config <host\|row\|col\|width;…>` | typed | token = `config` |
+
+`text` is normally routine (no confirm), but while the wall's last known
+mode is `clock` it routes through the confirm modal instead — a warning,
+not a block, since the clock reclaims the display at the next minute tick
+anyway (`:mode text` first avoids the fight).
 
 Every route is gated client-side against the connected board's platform
 capability table (`splitflap_client.capability`) before it's even offered a
