@@ -358,7 +358,6 @@ void applyMemberResult(const MemberWorkItem& item, int status,
 
   if (status == 200) {
     bool wasDegraded = m.degraded;
-    bool wasSuspect = clusterMemberSuspect(m);
     clusterMemberOnSuccess(m, nowMs);
     switch (item.action) {
       case ClusterLeaderAction::Join: {
@@ -432,10 +431,6 @@ void applyMemberResult(const MemberWorkItem& item, int status,
     if (wasDegraded) {
       SerialPrintln("cluster: member " +
                     String(table.members[item.index].host) + " recovered");
-    } else if (wasSuspect) {
-      SerialPrintln("cluster: member " +
-                    String(table.members[item.index].host) +
-                    " suspect cleared");
     }
     return;
   }
@@ -446,19 +441,14 @@ void applyMemberResult(const MemberWorkItem& item, int status,
     // is fine).
     if (item.action != ClusterLeaderAction::Join) {
       bool wasDegraded = m.degraded;
-      bool wasSuspect = clusterMemberSuspect(m);
       clusterMemberOnSuccess(m, nowMs);
       clusterMemberOnNotClustered(m);
       // #385: same transition-only logging as the 200 path — the member
-      // answered, so a suspect/degraded episode ends here.
+      // answered, so a degraded episode ends here.
       if (wasDegraded) {
         SerialPrintln("cluster: member " +
                       String(table.members[item.index].host) +
                       " recovered (answering, re-joining)");
-      } else if (wasSuspect) {
-        SerialPrintln("cluster: member " +
-                      String(table.members[item.index].host) +
-                      " suspect cleared (answering, re-joining)");
       }
       return;
     }
@@ -480,17 +470,19 @@ void applyMemberResult(const MemberWorkItem& item, int status,
   }
 
   bool wasDegraded = m.degraded;
-  bool wasSuspect = clusterMemberSuspect(m);
   // #385 leader-offline gate: while our own STA is down, failures are the
   // leader's problem, not member evidence (clusterLeaderTick re-stamps every
   // member's contact epoch on the up-edge).
   clusterMemberOnFailure(m, nowMs, WiFi.status() == WL_CONNECTED);
+  // The suspect tier is a single failed contact (ClusterLeaderPolicy.h) and a
+  // clock-mode follower trips it every few minutes when a ping lands while it
+  // is clock-stretched mid-flap (#326 physics). Logging that edge buries every
+  // real event in the flash ring, so suspect stays status/UI-only as its tier
+  // was specified — NEVER log it here. DEGRADED is the signal worth a line;
+  // per-contact detail belongs to CLUSTER_WIRE_DEBUG above.
   if (m.degraded && !wasDegraded) {
     SerialPrintln("cluster: member " + String(table.members[item.index].host) +
                   " DEGRADED (no re-layout; its board falls back alone)");
-  } else if (clusterMemberSuspect(m) && !wasSuspect) {
-    SerialPrintln("cluster: member " + String(table.members[item.index].host) +
-                  " suspect (contact failed — retrying, membership kept)");
   }
   if (clusterMemberRenderStuck(m, nowMs) && !renderStuckLogged[item.index]) {
     renderStuckLogged[item.index] = true;

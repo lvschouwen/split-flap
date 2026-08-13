@@ -97,10 +97,13 @@ static constexpr uint32_t NET_TASK_STACK = 8192;
 static constexpr uint32_t MQTT_TASK_STACK = 6144;
 // esp_http_client + String assembly for the cluster fan-out (#273). The digest
 // build puts a full ClusterLeaderStatus (8 members x 4 Strings) + String
-// mirror[8] on the stack; at the config-apply/leading peak 6144 left only ~620 B
-// HWM (bench, #321) — bumped to 8192 for margin (also covers the reboot-hold
-// fan-out, which builds the same objects). RAM is plentiful (150 KB+ free heap).
-static constexpr uint32_t CLUSTER_TASK_STACK = 8192;
+// mirror[8] on the stack; the same objects are rebuilt by the reboot-hold
+// fan-out. This is the DEEPEST call stack on the board — HTTP client, SHA-256
+// HMAC signing on every leader-wire request, and the rollout chunk pump all
+// nest under it — and the field HWM confirms it: 8192 left only 1016 B free on
+// a leader whose boot included a follower rollout (#437). RAM is plentiful
+// (110 KB+ free heap), so buy the margin rather than run this one close.
+static constexpr uint32_t CLUSTER_TASK_STACK = 12288;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
 static constexpr UBaseType_t DOMAIN_TASK_PRIORITY = 1;   // everything else
