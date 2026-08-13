@@ -307,9 +307,7 @@ class SplitflapApp(App):
         line = event.value
         event.input.remember(line)
         save_history(event.input.history, self.history_path)
-        event.input.value = ""
-        event.input.display = False
-        self.set_focus(None)
+        event.input.dismiss_bar()
         if line.strip() in ("help", "?"):
             self.push_screen(HelpScreen())
             return

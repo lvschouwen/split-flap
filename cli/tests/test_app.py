@@ -266,3 +266,99 @@ async def test_gate_message_uses_spoken_command_name():
         await pilot.pause(0.05)
         # gate wording (#452): "cluster config", not the internal "config"
         assert app._last_cmd_result.startswith("⛔ cluster config:")
+
+
+@pytest.mark.asyncio
+async def test_escape_dismisses_command_bar(tmp_path):
+    """#454: Escape must abandon a half-typed command — clear it, hide the
+    bar and drop focus. Before the fix Escape was a no-op, so the bar stayed
+    focused and swallowed every dashboard hotkey as text."""
+    app = SplitflapApp(CFG, client_factory=fake_factory,
+                       history_path=tmp_path / "history")
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        cmd = app.query_one("#command", CommandInput)
+
+        await pilot.press(":")
+        for ch in "reboot":
+            await pilot.press(ch)
+        await pilot.pause(0.1)
+        assert cmd.value == "reboot"
+
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert cmd.value == ""
+        assert not cmd.display
+        assert not cmd.has_focus
+
+
+@pytest.mark.asyncio
+async def test_hotkeys_survive_an_escaped_command_bar(tmp_path):
+    """#454: the operator-facing half — after Escape the dashboard keys must
+    work again instead of accumulating into the input ('rebootbl?q')."""
+    app = SplitflapApp(CFG, client_factory=fake_factory,
+                       history_path=tmp_path / "history")
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        cmd = app.query_one("#command", CommandInput)
+
+        await pilot.press(":")
+        for ch in "reboot":
+            await pilot.press(ch)
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+
+        depth = len(app.screen_stack)
+        await pilot.press("b")
+        await pilot.pause(0.3)
+        assert len(app.screen_stack) > depth, "'b' must open board detail"
+        assert cmd.value == "", "'b' must not be swallowed as input text"
+
+
+@pytest.mark.asyncio
+async def test_escaped_command_does_not_prefix_the_next_one(tmp_path):
+    """#454: a fragment abandoned with Escape must not survive into the next
+    command — ':' + 'text HI' used to submit as 'clu:text HI'."""
+    app = SplitflapApp(CFG, client_factory=fake_factory,
+                       history_path=tmp_path / "history")
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        cmd = app.query_one("#command", CommandInput)
+
+        await pilot.press(":")
+        for ch in "clu":
+            await pilot.press(ch)
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+
+        await pilot.press(":")
+        for ch in "mode":
+            await pilot.press(ch)
+        await pilot.pause(0.1)
+        assert cmd.value == "mode"
+
+
+@pytest.mark.asyncio
+async def test_escape_leaves_history_recall_usable(tmp_path):
+    """#454: dismissing with Escape must reset the recall cursor, so the next
+    up-arrow returns the newest entry rather than resuming mid-history."""
+    hist = tmp_path / "history"
+    hist.write_text("mode clock\nmode text\n")
+    app = SplitflapApp(CFG, client_factory=fake_factory, history_path=hist)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        cmd = app.query_one("#command", CommandInput)
+
+        await pilot.press(":")
+        await pilot.press("up")
+        await pilot.press("up")
+        await pilot.pause(0.1)
+        assert cmd.value == "mode clock"
+
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+
+        await pilot.press(":")
+        await pilot.press("up")
+        await pilot.pause(0.1)
+        assert cmd.value == "mode text"
