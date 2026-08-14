@@ -60,6 +60,7 @@ wrapping cells.
 | `b` | push the board-detail screen for the next board in `config.boards` (repeat to cycle) |
 | `l` | push the leader's flash-log screen |
 | `ctrl+s` | STOP — blank + halt the wall immediately, no confirm (always active, even mid-command-entry) |
+| `escape` | abandon a half-typed command and close the command bar |
 | `q` | quit |
 
 Inside the board-detail screen: `escape` pops back to the dashboard and stops
@@ -69,7 +70,9 @@ boot's flash log (`?prev=1`); `escape` pops back.
 
 ## Command bar
 
-Press `:` to open it, type a command, Enter to submit. The command name
+Press `:` to open it, type a command, Enter to submit, `escape` to abandon
+it — escape clears the bar and hands focus back, so the dashboard hotkeys
+keep working. The command name
 autocompletes inline as you type, suggesting from the same vocabulary as
 the table below. Type `help` (or `:help`, or press `?` — see Keybindings)
 to open a command reference overlay generated straight from the command

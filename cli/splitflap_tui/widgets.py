@@ -87,8 +87,22 @@ class CommandInput(Input):
     def reset_history_cursor(self) -> None:
         self._history_index = len(self.history)
 
+    def dismiss_bar(self) -> None:
+        """Abandon whatever is typed and put the bar away (#454). Submit and
+        escape MUST leave identical state; the two paths having separate
+        implementations is what left escape a no-op, and a bar that stays
+        focused swallows every dashboard hotkey — including quit — as text."""
+        self.value = ""
+        self.display = False
+        self.reset_history_cursor()
+        self.app.set_focus(None)
+
     def on_key(self, event: events.Key) -> None:
-        if event.key == "up":
+        if event.key == "escape":
+            event.stop()
+            event.prevent_default()
+            self.dismiss_bar()
+        elif event.key == "up":
             event.stop()
             event.prevent_default()
             if self.history:
