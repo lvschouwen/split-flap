@@ -59,13 +59,34 @@ static void test_persists_every_revolution() {
   TEST_ASSERT_TRUE(odometerShouldPersist(2, 1));
 }
 
-static void test_ring_endurance_exceeds_the_wear_threshold() {
-  // WearPolicy.h flags a unit at 10,000 revolutions. Endurance is
-  // slots x 100k writes x interval; the ring must outlive the flag by a
-  // wide margin or persist-every-revolution would trade one bug for another.
-  const uint32_t kWearFlagThreshold = 10000UL;
+static void test_ring_endurance_outlives_the_drum_it_measures() {
+  // The bar here used to be "1000x the 10,000-revolution wear flag", and that
+  // is what sized the ring at 62.5% of the EEPROM (#463). The flag is not a
+  // life expectancy: WearPolicy.h says plainly that nobody has real 28BYJ-48
+  // flap-drum life data and that 10,000 is a floor to keep young displays
+  // quiet. A margin multiplied against an invented number cannot be wrong,
+  // which is exactly why it kept growing.
+  //
+  // The honest anchor is the drum. One revolution is ~3.4 s of motion; a
+  // generous thousand-hour gearbox is on the order of 1e6 revolutions and the
+  // flap tabs give out before the gears do. The ring must outlive that with
+  // margin, and no more — this bound is a CEILING on ambition as much as a
+  // floor on safety, and it is what pins ODO_RING_SLOTS at 16 rather than 8.
+  const uint32_t kPlausibleDrumLifeRevs = 1000000UL;
   uint32_t endurance = (uint32_t)ODO_RING_SLOTS * 100000UL * ODO_PERSIST_INTERVAL_REVS;
-  TEST_ASSERT_TRUE(endurance / kWearFlagThreshold >= 1000UL);
+  TEST_ASSERT_TRUE(endurance >= kPlausibleDrumLifeRevs);
+  // And still far clear of the wear flag, so the odometer stays readable
+  // across the whole range anyone would act on.
+  TEST_ASSERT_TRUE(endurance / 10000UL >= 100UL);
+}
+
+static void test_sweep_extent_covers_every_geometry_ever_shipped() {
+  // Shrinking the ring strands old slots beyond the live geometry. They still
+  // satisfy their own checksums, so a future GROW would read them back into
+  // range — #417 re-armed by construction. The one-shot self-heal sweep
+  // therefore clears the HIGH-WATER extent, not the live ring.
+  TEST_ASSERT_TRUE(ODO_RING_SWEEP_BYTES >= ODO_RING_BYTES);
+  TEST_ASSERT_EQUAL_UINT16(640, ODO_RING_SWEEP_BYTES);  // 128 x 5, the widest shipped
 }
 
 static void test_ring_slot_count_is_a_power_of_two() {
@@ -163,14 +184,19 @@ static void test_boot_scan_over_a_blank_day_zero_ring() {
 
 static void test_boot_scan_full_ring_wrap_takes_the_high_lap() {
   // A wrapped ring holds one lap of old counts and one of new; max wins
-  // because counts are monotonic.
+  // because counts are monotonic. The lap boundary is expressed against the
+  // ring size: it used to be a hard-coded 40, which stopped covering the wrap
+  // at all the moment the ring was right-sized below that (#463) — the loop
+  // simply never reached the old-lap branch.
+  const uint16_t newLap = ODO_RING_SLOTS / 2;
   OdometerBootScan s;
   odometerBootScanInit(s);
   for (uint16_t i = 0; i < ODO_RING_SLOTS; i++) {
-    uint32_t v = (i < 40) ? (uint32_t)(1000 + i) : (uint32_t)(872 + i);
+    uint32_t v = (i < newLap) ? (uint32_t)(1000 + i)
+                              : (uint32_t)(1000 - ODO_RING_SLOTS + i);
     odometerBootScanSlot(s, v, odometerSlotChecksum(v));
   }
-  TEST_ASSERT_EQUAL_UINT32(1039, odometerBootScanResult(s));
+  TEST_ASSERT_EQUAL_UINT32(1000 + newLap - 1, odometerBootScanResult(s));
 }
 
 // --- odometerEncodeReply: I2C wire format ----------------------------------
@@ -201,7 +227,8 @@ int main(int, char**) {
   RUN_TEST(test_add_steps_negative_counts_magnitude);
   RUN_TEST(test_add_steps_large_move_spans_multiple_revs);
   RUN_TEST(test_persists_every_revolution);
-  RUN_TEST(test_ring_endurance_exceeds_the_wear_threshold);
+  RUN_TEST(test_ring_endurance_outlives_the_drum_it_measures);
+  RUN_TEST(test_sweep_extent_covers_every_geometry_ever_shipped);
   RUN_TEST(test_ring_slot_count_is_a_power_of_two);
   RUN_TEST(test_slot_index_rotates_every_persist_interval);
   RUN_TEST(test_slot_index_wraps_after_full_ring);

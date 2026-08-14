@@ -39,6 +39,20 @@ static void test_ring_fits_the_device() {
   TEST_ASSERT_TRUE(EE_ODO_RING_BASE + ODO_RING_BYTES <= EE_SIZE);
 }
 
+static void test_the_ring_does_not_dominate_the_device() {
+  // #463: the ring once took 640 of 1024 bytes because it was sized to the
+  // space that happened to be free rather than to a requirement. A counter is
+  // not entitled to most of the device — if this ever trips again, the
+  // question to ask is what the endurance is being measured against.
+  TEST_ASSERT_TRUE(ODO_RING_BYTES * 4 <= EE_SIZE);
+}
+
+// The one-shot sweep must clear every geometry this firmware has ever
+// shipped, and that extent still has to fit the part.
+static void test_sweep_extent_fits_the_device() {
+  TEST_ASSERT_TRUE(EE_ODO_RING_BASE + ODO_RING_SWEEP_BYTES <= EE_SIZE);
+}
+
 // --- block checksum ------------------------------------------------------
 
 static void test_block_checksum_is_masked_xor() {
@@ -304,6 +318,18 @@ static void test_a_foreign_marker_version_asks_for_the_sweep() {
   TEST_ASSERT_FALSE(unitEeRingInitDone(block));
 }
 
+// The wall is on marker version 1 (#417). #463 shrinks the ring, so every
+// unit must sweep exactly once more — which is the whole point of versioning
+// the marker rather than flagging it: a geometry change costs one boot, not a
+// UNIT_EE_LAYOUT_VERSION bump and 21 destroyed calibration offsets.
+static void test_the_previous_marker_version_asks_for_the_sweep() {
+  uint8_t block[EE_RING_INIT_BLOCK_LEN];
+  block[0] = 1;
+  block[1] = unitEeBlockChecksum(block, EE_RING_INIT_BLOCK_LEN - 1,
+                                 EE_RING_INIT_CHECKSUM_MASK);
+  TEST_ASSERT_FALSE(unitEeRingInitDone(block));
+}
+
 static void test_marker_mask_is_distinct_from_every_other_block() {
   // A block read at the wrong offset must not validate — the property the
   // whole layout is built on. Byte 24 sits where the OLD 16-slot ring used
@@ -378,6 +404,9 @@ int main(int, char**) {
   RUN_TEST(test_layout_blocks_do_not_overlap);
   RUN_TEST(test_reserved_scalar_headroom_is_real);
   RUN_TEST(test_ring_fits_the_device);
+  RUN_TEST(test_the_ring_does_not_dominate_the_device);
+  RUN_TEST(test_sweep_extent_fits_the_device);
+  RUN_TEST(test_the_previous_marker_version_asks_for_the_sweep);
   RUN_TEST(test_block_checksum_is_masked_xor);
   RUN_TEST(test_block_checksum_of_zeros_is_the_bare_mask);
   RUN_TEST(test_block_masks_are_distinct);

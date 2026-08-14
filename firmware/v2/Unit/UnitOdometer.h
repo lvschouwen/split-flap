@@ -12,18 +12,34 @@
 // EEPROM endurance by the slot count. Boot takes the ring maximum: counts
 // are monotonic, so the largest valid slot is always the newest.
 //
-// Interval 1 means the boundary is unreachable: below it a count did not
-// merely undercount, it reset to 0 at every power loss, and a slot rotation
+// Interval 1 means the persist boundary is unreachable: below it a count did
+// not merely undercount, it reset to 0 at every power loss, and a rotation
 // only happened after 128 revolutions no unit on the wall had ever reached.
-// 128 slots x 100k writes x 1 rev = 12.8 M revolutions of endurance, three
-// orders of magnitude past WearPolicy.h's 10,000-revolution flag threshold.
-// 128 is the largest power of two that fits the reserved region, so the slot
-// index stays a mask rather than a division on an 8-bit MCU.
+// That half of #406 was right and is not up for revisiting.
+//
+// SIZING (#463). The ring was 128 slots — 640 of the part's 1024 bytes, 62.5%
+// of the device — justified as "1,280x WearPolicy.h's 10,000-revolution flag
+// threshold". That flag is not a life expectancy: WearPolicy.h states plainly
+// that nobody has real 28BYJ-48 flap-drum life data and that 10,000 is a
+// floor to keep young displays quiet. A margin taken against an invented
+// number cannot be falsified, which is how a counter came to own most of the
+// EEPROM — it was sized to the space that happened to be free.
+//
+// The anchor is the drum, not a calendar. One revolution is ~3.4 s of motion,
+// so a generous thousand-hour gearbox is on the order of 1e6 revolutions and
+// the flap tabs give out before the gears do. 16 slots x 100k writes x 1 rev
+// = 1.6 M revolutions: one to two drum lifetimes, and still a power of two so
+// the slot index stays a mask rather than a division on an 8-bit MCU.
+//
+// Not 8 (800 k). The case that burns writes fastest is a mechanically failing
+// drum drifting and re-homing constantly — GENUINE drift, so #268's
+// futile-rehome standdown never fires — and that is precisely the unit whose
+// history is worth keeping.
 
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ODO_RING_SLOTS            128
+#define ODO_RING_SLOTS            16
 #define ODO_PERSIST_INTERVAL_REVS 1
 
 // Slots are INTERLEAVED: count and checksum adjacent, so a persist is one
@@ -31,6 +47,17 @@
 // rather than two writes at distant addresses.
 #define ODO_SLOT_STRIDE           5
 #define ODO_RING_BYTES            (ODO_RING_SLOTS * ODO_SLOT_STRIDE)
+
+// Every byte the ring has ever occupied, across every geometry this firmware
+// has shipped — #406's 128-slot ring is the widest so far. The one-shot
+// self-heal sweep (#417) clears THIS extent, never the live ring: shrinking
+// strands old slots past the new end, they still satisfy their own checksums,
+// and a later GROW would read them straight back into range. That is #417's
+// own bug re-armed by construction, so the extent only ever grows.
+#define ODO_RING_SWEEP_BYTES      640
+
+static_assert(ODO_RING_SWEEP_BYTES >= ODO_RING_BYTES,
+              "the sweep must cover at least the live ring");
 
 struct OdometerState {
   uint32_t revolutions;

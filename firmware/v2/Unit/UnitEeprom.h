@@ -36,11 +36,13 @@
 //   26..63         38 B — future fields land here, the ring never moves again
 //
 //  -- odometer ring ---------------------------------------------------------
-//   64..703        ODO_RING_SLOTS x ODO_SLOT_STRIDE, interleaved
+//   64..143        ODO_RING_SLOTS x ODO_SLOT_STRIDE, interleaved
 //                  (geometry + policy in UnitOdometer.h)
 //
 //  -- free ------------------------------------------------------------------
-//  704..1023       320 B
+//  144..1023       880 B — 144..703 returned by the #463 right-sizing; the
+//                  self-heal sweep clears that whole span once so no slot of
+//                  the old 128-slot geometry survives to be read back
 // ---------------------------------------------------------------------------
 //
 // Three properties this layout is built for:
@@ -121,7 +123,13 @@
 #define EE_RING_INIT_CHECKSUM       25
 #define EE_RING_INIT_BLOCK_LEN      2
 #define EE_RING_INIT_CHECKSUM_MASK  0x4B
-#define UNIT_EE_RING_INIT_VERSION   1
+// 1 = #417's first sweep. 2 = #463 right-sized the ring 128 -> 16 slots, so
+// every unit re-sweeps once: the counts are discarded deliberately (a
+// prototype wall, and the units ran for months with no odometer at all) and
+// the geometry change costs one boot instead of a UNIT_EE_LAYOUT_VERSION bump
+// and 21 destroyed calibration offsets. This is the self-heal the marker was
+// versioned for.
+#define UNIT_EE_RING_INIT_VERSION   2
 
 static_assert(EE_RING_INIT_VERSION >= EE_RESERVED_BASE,
               "the ring marker is a reserved scalar");
@@ -130,6 +138,8 @@ static_assert(EE_RING_INIT_VERSION + EE_RING_INIT_BLOCK_LEN <= EE_ODO_RING_BASE,
 
 static_assert(EE_ODO_RING_BASE + ODO_RING_BYTES <= EE_SIZE,
               "odometer ring must fit the ATmega328P EEPROM");
+static_assert(EE_ODO_RING_BASE + ODO_RING_SWEEP_BYTES <= EE_SIZE,
+              "the sweep's historical extent must fit the ATmega328P EEPROM");
 static_assert(EE_RESERVED_BASE <= EE_ODO_RING_BASE,
               "reserved scalars must sit ahead of the ring");
 
