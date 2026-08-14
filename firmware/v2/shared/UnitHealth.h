@@ -284,7 +284,8 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
 // per-unit ext-diag keys se/sx/sag/he/dw/sb (#365, ~63 B/unit) and the
 // per-unit lifetime keys hf/gates/sxl/stw0/str0/stw1/str1 (#406, ~60 B/unit
 // worst case — each rides an emit-when-nonzero guard, so a fresh unit adds
-// nothing) so a full display can't push the payload into the headline-only
+// nothing) and the per-unit idle-hall keys fr/frd (#460, ~18 B/unit, same
+// guard) so a full display can't push the payload into the headline-only
 // fallback. The #406 keys raised the ceiling over the prior 7168 (#365).
 // test_unit_health pins the worst case + headroom (a full 16-unit payload
 // with the wear + reflash splices).
@@ -423,6 +424,18 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                            (unsigned)lt.selfTestFirstStepsPerRev,
                            (unsigned)lt.selfTestLastStepsPerRev);
       }
+      // Idle hall check reporting on itself (#460). fr = futile re-homes this
+      // boot (ones that measured no drift, so they proved the WINDOW model
+      // wrong — the one false-positive class a re-home cannot fix); frd = the
+      // check has disarmed itself here and is no longer protecting this unit.
+      // frd is the unit's own verdict, not this side re-deriving it from fr
+      // against a copy of the unit's limit — that duplication is what #458
+      // was. Both ride the emit-when-nonzero guard, so an armed unit that has
+      // never argued with its model stays silent.
+      if (lt.idleHallFutileRehomes) {
+        UNIT_HEALTH_APPEND(",\"fr\":%u", (unsigned)lt.idleHallFutileRehomes);
+      }
+      if (lt.idleHallStoodDown) UNIT_HEALTH_APPEND(",\"frd\":1");
     }
     if (u.state == 1) {
       // Heartbeat freshness (#310): age = ms since the last good scheduled

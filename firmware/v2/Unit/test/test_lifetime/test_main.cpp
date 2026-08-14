@@ -16,7 +16,8 @@ static UnitLifetimeFacts sample() {
   UnitLifetimeFacts f;
   f.layoutVersion = 1;
   f.homeFailedCount = 11;
-  f.featureGates = 0x02;
+  f.featureGates = 0x01;
+  f.idleHallFutileRehomes = 2;
   f.stepExcessLifetimeMax = 4001;
   f.selfTestFirstHallWindow = 46;
   f.selfTestFirstStepsPerRev = 2038;
@@ -35,7 +36,9 @@ static void test_roundtrip_all_fields() {
   TEST_ASSERT_TRUE(lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out));
   TEST_ASSERT_EQUAL_UINT8(1, out.layoutVersion);
   TEST_ASSERT_EQUAL_UINT8(11, out.homeFailedCount);
-  TEST_ASSERT_EQUAL_UINT8(0x02, out.featureGates);
+  TEST_ASSERT_EQUAL_UINT8(0x01, out.featureGates);
+  TEST_ASSERT_EQUAL_UINT8(2, out.idleHallFutileRehomes);
+  TEST_ASSERT_FALSE(out.idleHallStoodDown);
   TEST_ASSERT_EQUAL_UINT16(4001, out.stepExcessLifetimeMax);
   TEST_ASSERT_EQUAL_UINT16(46, out.selfTestFirstHallWindow);
   TEST_ASSERT_EQUAL_UINT16(2038, out.selfTestFirstStepsPerRev);
@@ -50,6 +53,70 @@ static void test_multibyte_fields_are_little_endian() {
   lifetimeEncodeReply(f, buf);
   TEST_ASSERT_EQUAL_UINT8(0x01, buf[4]);
   TEST_ASSERT_EQUAL_UINT8(0x02, buf[5]);
+}
+
+// --- idle hall standdown (#460) -------------------------------------------
+// The check disarms itself after IDLE_HALL_FUTILE_REHOME_LIMIT futile
+// re-homes, and until now both the counter and the disarmed state were
+// unobservable: a since-boot RAM counter whose only egress was a Serial.print
+// on a Nano nobody monitors — and on row 0 those pins ARE the I2C bus. A
+// futile re-home finds no drift, so it does not move "de" either. A unit that
+// had permanently disarmed the feature looked identical to one running it.
+
+static void test_futile_rehome_count_rides_the_reserved_byte() {
+  UnitLifetimeFacts f;
+  f.idleHallFutileRehomes = 3;
+  uint8_t buf[LIFETIME_REPLY_LEN];
+  lifetimeEncodeReply(f, buf);
+
+  UnitLifetimeFacts out;
+  TEST_ASSERT_TRUE(lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out));
+  TEST_ASSERT_EQUAL_UINT8(3, out.idleHallFutileRehomes);
+}
+
+static void test_stand_down_is_carried_beside_the_count() {
+  // Reported as its own bit rather than left for the master to re-derive from
+  // the count: the limit is the UNIT's rule, and a master comparing against
+  // its own copy of it is the drift that #458 was.
+  UnitLifetimeFacts f;
+  f.idleHallFutileRehomes = 3;
+  f.idleHallStoodDown = true;
+  uint8_t buf[LIFETIME_REPLY_LEN];
+  lifetimeEncodeReply(f, buf);
+
+  UnitLifetimeFacts out;
+  TEST_ASSERT_TRUE(lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out));
+  TEST_ASSERT_EQUAL_UINT8(3, out.idleHallFutileRehomes);
+  TEST_ASSERT_TRUE(out.idleHallStoodDown);
+}
+
+static void test_a_saturated_count_does_not_bleed_into_the_flag() {
+  UnitLifetimeFacts f;
+  f.idleHallFutileRehomes = 0xFF;
+  uint8_t buf[LIFETIME_REPLY_LEN];
+  lifetimeEncodeReply(f, buf);
+
+  UnitLifetimeFacts out;
+  TEST_ASSERT_TRUE(lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out));
+  TEST_ASSERT_EQUAL_UINT8(LIFETIME_FUTILE_REHOME_MAX, out.idleHallFutileRehomes);
+  TEST_ASSERT_FALSE(out.idleHallStoodDown);
+}
+
+static void test_pre_460_firmware_decodes_as_armed_and_never_futile() {
+  // Byte 3 was a hard-coded reserved zero. During the campaign the wall runs
+  // both firmwares, so an old unit must degrade to the honest "nothing to
+  // report" rather than to a phantom standdown.
+  UnitLifetimeFacts old;
+  uint8_t buf[LIFETIME_REPLY_LEN];
+  lifetimeEncodeReply(old, buf);
+  TEST_ASSERT_EQUAL_UINT8(0, buf[3]);
+
+  UnitLifetimeFacts out;
+  out.idleHallFutileRehomes = 9;
+  out.idleHallStoodDown = true;
+  TEST_ASSERT_TRUE(lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out));
+  TEST_ASSERT_EQUAL_UINT8(0, out.idleHallFutileRehomes);
+  TEST_ASSERT_FALSE(out.idleHallStoodDown);
 }
 
 // --- mixed-firmware safety ------------------------------------------------
@@ -144,6 +211,10 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_roundtrip_all_fields);
   RUN_TEST(test_multibyte_fields_are_little_endian);
+  RUN_TEST(test_futile_rehome_count_rides_the_reserved_byte);
+  RUN_TEST(test_stand_down_is_carried_beside_the_count);
+  RUN_TEST(test_a_saturated_count_does_not_bleed_into_the_flag);
+  RUN_TEST(test_pre_460_firmware_decodes_as_armed_and_never_futile);
   RUN_TEST(test_short_reply_from_an_old_unit_is_rejected);
   RUN_TEST(test_all_ff_padding_is_rejected);
   RUN_TEST(test_all_zero_padding_is_rejected);

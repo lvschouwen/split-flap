@@ -328,6 +328,11 @@ void refreshLifetimeReply() {
   f.layoutVersion            = UNIT_EE_LAYOUT_VERSION;
   f.homeFailedCount          = lifetime.homeFailedCount;
   f.featureGates             = lifetime.featureGates;
+  // #460: the only two fields here that are RAM, not EEPROM. Since-boot is
+  // the right scope — a power cycle is a free retry for the window model, and
+  // a re-run self-test that fixes it comes with one.
+  f.idleHallFutileRehomes    = idleHallFutileRehomes;
+  f.idleHallStoodDown        = idleHallStandDown(idleHallFutileRehomes);
   f.stepExcessLifetimeMax    = lifetime.stepExcessLifetimeMax;
   f.selfTestFirstHallWindow  = lifetime.selfTestFirstHallWindow;
   f.selfTestFirstStepsPerRev = lifetime.selfTestFirstStepsPerRev;
@@ -366,10 +371,9 @@ void setup() {
   // simply re-runs it on the next boot rather than leaving a half-written
   // layout marked valid.
   //
-  // The odometer ring is deliberately NOT written here. Erased slots read
-  // 0xFFFFFFFF and every one of them is rejected unconditionally by the
-  // checksummed boot scan, so a blank ring already recovers as 0 — zeroing
-  // 640 bytes at first boot would spend endurance to reach the same answer.
+  // The odometer ring is not written here — it has its own marker and its own
+  // sweep further down (#417), so that healing it never costs the erase this
+  // block performs.
   if (unitEeIsBlank(EEPROM.read(EE_LAYOUT_VERSION))) {
     uint8_t block[EE_HEALTH_BLOCK_LEN];
     unitEeCalEncode(0, block);
@@ -414,6 +418,50 @@ void setup() {
     if (bumped || !healthValid) persistLifetimeHealth();
     lifetimeBrownoutCount = lifetime.brownoutCount;
     lifetimeWatchdogCount = lifetime.watchdogCount;
+  }
+
+  // Odometer ring self-heal (#417), keyed on its own marker in the reserved
+  // scalars — NOT on UNIT_EE_LAYOUT_VERSION, because bumping that re-runs the
+  // erase above and destroys every per-unit calibration offset (#407's
+  // restore list): a re-campaign to correct a lifetime counter.
+  //
+  // The day-0 init leaves the ring unwritten on the reasoning that erased
+  // slots read 0xFFFFFFFF and are rejected unconditionally. That is true of a
+  // factory-fresh Nano and of nothing on this wall: #406 rewrites bytes 0..22
+  // only, while the ring moved from 16 slots at byte 8 to 128 at byte 64 — so
+  // the scan below reads bytes the OLD ring wrote and the init never cleared.
+  // One stale slot satisfied its own checksum and a1 booted claiming
+  // 1010580540 revolutions, then counted up from there.
+  //
+  // This RESETS the count on every unit it heals, which is the correction:
+  // a poisoned baseline makes the cross-unit wear comparison in WearPolicy
+  // meaningless, and the count is unrecoverable rather than merely wrong.
+  // Already-erased slots are skipped — the scan rejects them anyway, so
+  // writing zeros over them would spend endurance to reach the same answer,
+  // and a factory-fresh unit still pays nothing.
+  {
+    uint8_t marker[EE_RING_INIT_BLOCK_LEN];
+    for (uint8_t i = 0; i < EE_RING_INIT_BLOCK_LEN; i++) {
+      marker[i] = EEPROM.read(EE_RING_INIT_VERSION + i);
+    }
+    if (!unitEeRingInitDone(marker)) {
+      for (uint8_t s = 0; s < ODO_RING_SLOTS; s++) {
+        int at = EE_ODO_RING_BASE + (int)odometerSlotOffset(s);
+        uint32_t value;
+        EEPROM.get(at, value);
+        if (value == 0xFFFFFFFFUL) continue;
+        uint32_t zero = 0;
+        EEPROM.put(at, zero);
+        EEPROM.update(at + 4, odometerSlotChecksum(0));
+      }
+      // Marker LAST, same rule as the layout version byte: a power loss
+      // mid-sweep simply re-runs it on the next boot.
+      unitEeRingInitEncode(marker);
+      for (uint8_t i = EE_RING_INIT_BLOCK_LEN; i > 1; i--) {
+        EEPROM.update(EE_RING_INIT_VERSION + (i - 1), marker[i - 1]);
+      }
+      EEPROM.update(EE_RING_INIT_VERSION, marker[0]);
+    }
   }
 
   // Revolution odometer (#231): recover the count from the EEPROM ring.
@@ -899,6 +947,12 @@ void loop() {
       } else {
         idleHallFutileRehomes = 0;  // a real catch re-earns the credit
       }
+      // GET_LIFETIME carries the count and the standdown (#460), and this is
+      // the only thing that moves either. Nothing persists here, so the reply
+      // has to be re-encoded explicitly — refreshLifetimeReply() otherwise
+      // rides the EEPROM persist path, and the wire would keep reporting the
+      // stale figure until some unrelated write happened to refresh it.
+      refreshLifetimeReply();
     }
     previousMillis = millis();
   }
