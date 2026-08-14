@@ -10,6 +10,7 @@ from splitflap_client.models import (ClusterMember, ClusterStatus,
 
 from .flapwall import wall_cells
 from .format import human_duration, human_size
+from .wear import row_sxl_median, unit_markers
 
 
 SUGGEST_WORDS = ["stop", "text", "mode", "notify", "set", "op", "gates",
@@ -212,24 +213,38 @@ class ClusterStrip(Static):
         self.remove_class("stale")
 
 
+def units_rows(h: UnitsHealth) -> list[tuple[str, ...]]:
+    """Pure row builder for UnitsTable (#455) — one tuple per unit, in
+    COLUMNS order. Kept out of the widget so the wear markers can be tested
+    against real board payloads without standing up an app."""
+    def cell(v):
+        return "—" if v is None else str(v)
+    median = row_sxl_median(h.units)
+    return [(f"0x{u.address:02x}", str(u.state), cell(u.sxl),
+             cell(u.hall_fails), cell(u.odo), cell(u.vcc_min), cell(u.gates),
+             " ".join(unit_markers(u, median)))
+            for u in h.units]
+
+
 class UnitsTable(DataTable):
-    """Finding 5: same border-staleness pattern as ClusterStrip/LogTail."""
+    """Finding 5: same border-staleness pattern as ClusterStrip/LogTail.
+
+    #455: the wear columns are LIFETIME (`sxl`, `hf`), not since-boot — `sx`
+    read 0 on every unit of a 24 h-old wall that had two units needing
+    physical attention, so it was costing a column and showing nothing."""
 
     BASE_TITLE = "units"
-    COLUMNS = ("addr", "st", "sx", "odo", "vmin", "gates", "flags")
+    COLUMNS = ("addr", "st", "sxl", "hf", "odo", "vmin", "gates", "flags")
 
     def on_mount(self) -> None:
         self.add_columns(*self.COLUMNS)
         self.border_title = border_text(self.BASE_TITLE)
 
     def update_units(self, h: UnitsHealth) -> None:
-        def cell(v):
-            return "—" if v is None else str(v)
         self.clear()
-        for u in h.units:
-            flags = "STALE" if u.stale else ("FAULT" if u.fault else "")
-            self.add_row(f"0x{u.address:02x}", str(u.state), cell(u.sx),
-                         cell(u.odo), cell(u.vcc_min), cell(u.gates), flags)
+        for row in units_rows(h):
+            # Text() per #450: DataTable markup-parses plain-str cells.
+            self.add_row(*(Text(c) for c in row))
 
     def mark_stale(self) -> None:
         self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")
