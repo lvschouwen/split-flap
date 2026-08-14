@@ -19,20 +19,62 @@ void tearDown() {}
 // never move it again. Pin the boundaries so a careless edit fails here
 // rather than by silently overlapping two blocks on a real unit.
 
+// Every byte this layout has claimed, in address order. A new field means a
+// new row HERE — that is the single action that lets the guards below see it,
+// and it is the same action EE_RESERVED_NEXT_FREE demands of the header, so
+// the two cross-check each other. The gaps (bytes 7 and 23) are deliberate
+// padding and are claimed by nobody.
+struct EeBlock {
+  int base;
+  int len;
+  const char* name;
+};
+
+static const EeBlock kClaimedBlocks[] = {
+    {EE_LAYOUT_VERSION,    EE_ID_BLOCK_LEN,        "identity"},
+    {EE_CAL_OFFSET,        EE_CAL_BLOCK_LEN,       "calibration"},
+    {EE_HEALTH_BASE,       EE_HEALTH_BLOCK_LEN,    "lifetime health"},
+    {EE_RING_INIT_VERSION, EE_RING_INIT_BLOCK_LEN, "odometer ring marker"},
+    {EE_ODO_RING_BASE,     ODO_RING_BYTES,         "odometer ring"},
+};
+static const int kClaimedBlockCount =
+    (int)(sizeof(kClaimedBlocks) / sizeof(kClaimedBlocks[0]));
+
+// Walk the table rather than ordering a handful of named constants: ordering
+// four boundaries treats the whole reserved region as one undivided span, so
+// a field claiming a byte another block already holds satisfies every
+// assertion and collides only on the wall.
 static void test_layout_blocks_do_not_overlap() {
-  TEST_ASSERT_EQUAL_INT(3, EE_ID_CHECKSUM);
-  TEST_ASSERT_TRUE(EE_CAL_OFFSET > EE_ID_CHECKSUM);
-  TEST_ASSERT_TRUE(EE_HEALTH_BASE > EE_CAL_CHECKSUM);
-  TEST_ASSERT_TRUE(EE_RESERVED_BASE > EE_HEALTH_CHECKSUM);
-  TEST_ASSERT_TRUE(EE_ODO_RING_BASE >= EE_RESERVED_BASE);
+  for (int i = 0; i < kClaimedBlockCount; i++) {
+    const EeBlock& a = kClaimedBlocks[i];
+    TEST_ASSERT_TRUE_MESSAGE(a.len > 0, a.name);
+    TEST_ASSERT_TRUE_MESSAGE(a.base + a.len <= EE_SIZE, a.name);
+    for (int j = i + 1; j < kClaimedBlockCount; j++) {
+      const EeBlock& b = kClaimedBlocks[j];
+      bool disjoint = (a.base + a.len <= b.base) || (b.base + b.len <= a.base);
+      TEST_ASSERT_TRUE_MESSAGE(disjoint, a.name);
+    }
+  }
   // The health checksum must cover exactly bytes EE_HEALTH_BASE..CHECKSUM-1.
   TEST_ASSERT_EQUAL_INT(EE_HEALTH_CHECKSUM, EE_HEALTH_BASE + EE_HEALTH_LEN);
 }
 
-static void test_reserved_scalar_headroom_is_real() {
-  // 40 bytes of headroom ahead of the ring is what makes byte 11's
-  // featureGates affordable and stops the next field forcing a re-layout.
-  TEST_ASSERT_EQUAL_INT(40, EE_ODO_RING_BASE - EE_RESERVED_BASE);
+// Headroom is what is LEFT, not the distance between two #defines a new field
+// does not move: measure from the highest byte actually claimed ahead of the
+// ring, so the number counts down as fields land and the test named for the
+// invariant is the one that watches it being consumed.
+static void test_reserved_scalar_headroom_counts_down_as_fields_land() {
+  int highestClaimedEnd = EE_RESERVED_BASE;
+  for (int i = 0; i < kClaimedBlockCount; i++) {
+    const EeBlock& b = kClaimedBlocks[i];
+    if (b.base >= EE_ODO_RING_BASE) continue;  // the ring itself
+    if (b.base < EE_RESERVED_BASE) continue;   // blocks ahead of the region
+    if (b.base + b.len > highestClaimedEnd) highestClaimedEnd = b.base + b.len;
+  }
+  // The header states where the next field lands; the table states what is
+  // already taken. Either one going stale on its own fails here.
+  TEST_ASSERT_EQUAL_INT(EE_RESERVED_NEXT_FREE, highestClaimedEnd);
+  TEST_ASSERT_EQUAL_INT(38, EE_ODO_RING_BASE - highestClaimedEnd);
 }
 
 static void test_ring_fits_the_device() {
@@ -69,11 +111,23 @@ static void test_block_checksum_of_zeros_is_the_bare_mask() {
   TEST_ASSERT_EQUAL_UINT8(0x5A, unitEeBlockChecksum(zeros, 4, 0x5A));
 }
 
+// EVERY mask, in one test. Distinct per block is what stops a block read at
+// the wrong offset from validating — the property the whole layout rests on —
+// so a mask that only some other test knows about is a hole in it. The ring
+// marker's byte 24 is the live case: it sits where the old 16-slot ring used
+// to live, so a stale slot's bytes are exactly what its mask must reject.
 static void test_block_masks_are_distinct() {
-  // Distinct per block, so a block read at the wrong offset cannot validate.
-  TEST_ASSERT_TRUE(EE_ID_CHECKSUM_MASK != EE_CAL_CHECKSUM_MASK);
-  TEST_ASSERT_TRUE(EE_ID_CHECKSUM_MASK != EE_HEALTH_CHECKSUM_MASK);
-  TEST_ASSERT_TRUE(EE_CAL_CHECKSUM_MASK != EE_HEALTH_CHECKSUM_MASK);
+  const uint8_t masks[] = {
+      EE_ID_CHECKSUM_MASK,        EE_CAL_CHECKSUM_MASK,
+      EE_HEALTH_CHECKSUM_MASK,    EE_RING_INIT_CHECKSUM_MASK,
+      ODO_SLOT_CHECKSUM_MASK,
+  };
+  const int n = (int)(sizeof(masks) / sizeof(masks[0]));
+  for (int i = 0; i < n; i++) {
+    for (int j = i + 1; j < n; j++) {
+      TEST_ASSERT_TRUE(masks[i] != masks[j]);
+    }
+  }
 }
 
 // --- identity: address resolution + DIP fallback --------------------------
@@ -330,16 +384,6 @@ static void test_the_previous_marker_version_asks_for_the_sweep() {
   TEST_ASSERT_FALSE(unitEeRingInitDone(block));
 }
 
-static void test_marker_mask_is_distinct_from_every_other_block() {
-  // A block read at the wrong offset must not validate — the property the
-  // whole layout is built on. Byte 24 sits where the OLD 16-slot ring used
-  // to live, so a stale slot's bytes are exactly what this must reject.
-  TEST_ASSERT_TRUE(EE_RING_INIT_CHECKSUM_MASK != EE_ID_CHECKSUM_MASK);
-  TEST_ASSERT_TRUE(EE_RING_INIT_CHECKSUM_MASK != EE_CAL_CHECKSUM_MASK);
-  TEST_ASSERT_TRUE(EE_RING_INIT_CHECKSUM_MASK != EE_HEALTH_CHECKSUM_MASK);
-  TEST_ASSERT_TRUE(EE_RING_INIT_CHECKSUM_MASK != ODO_SLOT_CHECKSUM_MASK);
-}
-
 static void test_marker_sits_in_the_reserved_region_ahead_of_the_ring() {
   TEST_ASSERT_TRUE(EE_RING_INIT_VERSION >= EE_RESERVED_BASE);
   TEST_ASSERT_TRUE(EE_RING_INIT_VERSION + EE_RING_INIT_BLOCK_LEN <=
@@ -402,7 +446,7 @@ static void test_step_excess_max_is_lifetime_high_water() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_layout_blocks_do_not_overlap);
-  RUN_TEST(test_reserved_scalar_headroom_is_real);
+  RUN_TEST(test_reserved_scalar_headroom_counts_down_as_fields_land);
   RUN_TEST(test_ring_fits_the_device);
   RUN_TEST(test_the_ring_does_not_dominate_the_device);
   RUN_TEST(test_sweep_extent_fits_the_device);
@@ -433,7 +477,6 @@ int main(int, char**) {
   RUN_TEST(test_zeroed_eeprom_asks_for_the_sweep);
   RUN_TEST(test_torn_marker_asks_for_the_sweep);
   RUN_TEST(test_a_foreign_marker_version_asks_for_the_sweep);
-  RUN_TEST(test_marker_mask_is_distinct_from_every_other_block);
   RUN_TEST(test_marker_sits_in_the_reserved_region_ahead_of_the_ring);
   RUN_TEST(test_counters_saturate_rather_than_wrap);
   RUN_TEST(test_self_test_first_reading_becomes_the_baseline);

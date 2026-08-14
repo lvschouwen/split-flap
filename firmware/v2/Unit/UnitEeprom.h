@@ -15,7 +15,7 @@
 //  -- calibration -----------------------------------------------------------
 //    4..5    i16   calibrationOffset  clamped +/-SFP_OFFSET_LIMIT_STEPS
 //    6       u8    checksum over 4..5
-//    7       -     reserved
+//    7       -     padding, deliberately stranded (see below)
 //
 //  -- lifetime health -------------------------------------------------------
 //    8       u8    brownoutCount             saturating
@@ -28,12 +28,12 @@
 //   18..19   u16   selfTestLastHallWindow
 //   20..21   u16   selfTestLastStepsPerRev
 //   22       u8    checksum over 8..21
-//   23       -     reserved
+//   23       -     padding, deliberately stranded (see below)
 //
 //  -- reserved scalars ------------------------------------------------------
 //   24       u8    ringInitVersion           UNIT_EE_RING_INIT_VERSION (#417)
 //   25       u8    checksum over 24
-//   26..63         38 B — future fields land here, the ring never moves again
+//   26..63         38 B — EE_RESERVED_NEXT_FREE, the ring never moves again
 //
 //  -- odometer ring ---------------------------------------------------------
 //   64..143        ODO_RING_SLOTS x ODO_SLOT_STRIDE, interleaved
@@ -45,15 +45,33 @@
 //                  the old 128-slot geometry survives to be read back
 // ---------------------------------------------------------------------------
 //
-// Three properties this layout is built for:
+// The properties this layout is built for:
 //
-//   ONE VERSION BYTE, NOT THREE MAGICS. Erased EEPROM reads 0xFF on every
-//   byte, so blank detection needs no magic constant at all — anything that
-//   is not the current version is blank and gets initialised.
+//   NO MAGIC CHAIN. Erased EEPROM reads 0xFF on every byte, so blank
+//   detection needs no magic constant at all — anything that is not the
+//   current version is blank and gets initialised.
+//
+//   BLOCK-ADDRESSED, NOT VERSION-ADDRESSED. Every block proves itself by
+//   checksum, so UNIT_EE_LAYOUT_VERSION separates only "initialised by a
+//   firmware whose map we know" from "blank or foreign". It is not an index
+//   of which fields exist, and adding a field does not bump it: an
+//   un-migrated unit reads the new block as garbage and heals it. Bumping it
+//   means ERASE EVERYTHING, which costs 21 hand-measured calibration offsets.
+//
+//   A REGION EARNS ITS OWN VERSION BYTE only when its repair action is
+//   strictly cheaper than that full erase, and only as a self-validating
+//   checksummed block. EE_RING_INIT_VERSION is the one that qualifies:
+//   re-zeroing the ring costs a revolution count, so coupling it to byte 0
+//   would force the expensive repair for the cheap problem. Anything that
+//   cannot clear that bar is a field, not a version — otherwise the magic
+//   chain comes back one byte at a time.
 //
 //   THE RING GOES LAST. It used to start at byte 8, so any new scalar shoved
-//   it and forced another re-layout. With 40 bytes of headroom ahead of it,
-//   that never happens again.
+//   it and forced another re-layout. With the reserved scalars ahead of it,
+//   that never happens again. A new field lands at EE_RESERVED_NEXT_FREE and
+//   moves it; bytes 7 and 23 are NOT free space but padding stranded between
+//   blocks, left alone because reclaiming them would move a block for two
+//   bytes.
 //
 //   EVERY BLOCK CHECKSUMMED, AND FAILURE IS SAFE BY CONSTRUCTION. The I2C
 //   address used to be guarded only by a magic byte, so a corrupted address
@@ -130,6 +148,16 @@
 // and 21 destroyed calibration offsets. This is the self-heal the marker was
 // versioned for.
 #define UNIT_EE_RING_INIT_VERSION   2
+
+// Where the NEXT reserved scalar lands, and therefore what is left ahead of
+// the ring. Claiming bytes means re-pointing this at the end of the new block
+// — the same edit the test's claimed-block table demands, so a field that
+// updates only one of the two fails test_eeprom_layout rather than colliding
+// on a unit.
+#define EE_RESERVED_NEXT_FREE  (EE_RING_INIT_VERSION + EE_RING_INIT_BLOCK_LEN)
+
+static_assert(EE_RESERVED_NEXT_FREE <= EE_ODO_RING_BASE,
+              "the reserved scalars have run into the ring");
 
 static_assert(EE_RING_INIT_VERSION >= EE_RESERVED_BASE,
               "the ring marker is a reserved scalar");
