@@ -1,14 +1,17 @@
 import asyncio
+import json
 import threading
 
 import httpx
 import pytest
+from splitflap_client.models import ClusterStatus, StatusAggregate
 from splitflap_client.transport import BoardClient
 from splitflap_tui.app import SplitflapApp
 from splitflap_tui.config import Board, Config
 from splitflap_tui.screens import board_detail
 from splitflap_tui.screens.board_detail import BoardDetailScreen
 from splitflap_tui.screens.discover_screen import DiscoverScreen
+from splitflap_tui.screens.health_screen import HealthScreen
 from splitflap_tui.screens.help_screen import HelpScreen
 from splitflap_tui.screens.log_screen import LogScreen
 from textual.coordinate import Coordinate
@@ -382,3 +385,62 @@ async def test_help_table_cells_render_brackets_literally():
         assert any("[value]" in c.plain for c in cells)
         await pilot.press("escape")
         await pilot.pause(0.05)
+
+
+# ---- #472: board-health screen ---------------------------------------
+
+@pytest.mark.asyncio
+async def test_s_opens_health_screen_with_polled_values():
+    from tests.test_app import STATUS
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("s")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, HealthScreen)
+        rendered = app.screen.query_one("#health-body", Static).content
+        assert STATUS["ota"]["running"] in rendered      # app0
+        assert "cluster" in rendered                     # the hwm task row
+        assert "2600 B free" in rendered
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, HealthScreen)
+
+
+@pytest.mark.asyncio
+async def test_health_screen_before_any_poll_says_so():
+    """No successful /status yet (unreachable board) — the screen must say
+    it has nothing rather than render a page of dashes as if they were
+    readings, or crash on a None aggregate."""
+    def dead(url):
+        return BoardClient(url, transport=httpx.MockTransport(
+            lambda r: httpx.Response(503, text="down")))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="leader")
+    app = SplitflapApp(cfg, client_factory=dead)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("s")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, HealthScreen)
+        assert "no status yet" in app.screen.query_one("#health-body", Static).content
+
+
+@pytest.mark.asyncio
+async def test_health_screen_follows_later_polls():
+    """The dashboard poller keeps running while a screen is pushed, so an
+    open health screen must show the newest reading, not the one it was
+    opened with."""
+    from tests.test_app import STATUS
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("s")
+        await pilot.pause(0.2)
+        body = app.screen.query_one("#health-body", Static)
+        assert "app0" in body.content
+        moved = json.loads(json.dumps(STATUS))
+        moved["ota"]["running"] = "app1"
+        app.apply_status(StatusAggregate.from_json(moved),
+                         ClusterStatus.from_json(moved["cluster"]))
+        await pilot.pause(0.1)
+        assert "app1" in body.content

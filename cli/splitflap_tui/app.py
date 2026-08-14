@@ -27,6 +27,7 @@ from .history import load_history, save_history
 from .poller import Poller
 from .screens.board_detail import BoardDetailScreen
 from .screens.discover_screen import DiscoverScreen
+from .screens.health_screen import HealthScreen
 from .screens.help_screen import HelpScreen
 from .screens.log_screen import LogScreen
 from .widgets import (ClusterStrip, CommandInput, LogTail, StatsBar,
@@ -160,6 +161,7 @@ class SplitflapApp(App):
     BINDINGS = [("q", "quit", "Quit"), (":", "open_command", "Command"),
                 Binding("ctrl+s", "stop_wall", "STOP", priority=True),
                 ("b", "board_detail", "Board"), ("l", "log_screen", "Log"),
+                ("s", "health_screen", "Health"),
                 ("question_mark", "help", "Help")]
 
     def __init__(self, config: Config,
@@ -175,6 +177,10 @@ class SplitflapApp(App):
         self.plat = PLAT_S3          # default before the first /status poll
         self.device_mode = ""        # "" until the first successful poll
         self._board_cycle_index = 0
+        # Newest /status aggregate, kept so HealthScreen (#472) can render
+        # without issuing a request of its own. None until the first
+        # successful poll — that is NOT the same as all-values-absent.
+        self.last_status: StatusAggregate | None = None
         self._last_cmd_result = ""
 
     def compose(self) -> ComposeResult:
@@ -210,6 +216,9 @@ class SplitflapApp(App):
     # ---- called from poller threads via call_from_thread ----
     def apply_status(self, agg: StatusAggregate, cluster: ClusterStatus) -> None:
         self.connected = True
+        self.last_status = agg
+        if isinstance(self.screen, HealthScreen):
+            self.screen.render_status(agg)   # keep an open screen live
         self.plat = agg.settings.plat
         self.device_mode = agg.settings.device_mode
         s = agg.settings
@@ -298,6 +307,11 @@ class SplitflapApp(App):
             self.apply_cmd_result("no config — no leader url")
             return
         self.push_screen(LogScreen(url, self.client_factory))
+
+    def action_health_screen(self) -> None:
+        """`s` pushes the board-health screen (#472) — renders the last
+        polled /status, so it costs no extra request."""
+        self.push_screen(HealthScreen())
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())

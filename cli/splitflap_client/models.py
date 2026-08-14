@@ -245,6 +245,9 @@ class SystemStatsNow:
     rssi: int
     heap: int
     min_heap: int
+    max_alloc: int      # largest allocatable block — heap fragmentation
+    psram: int
+    mqtt_drops: int
     cpu0: int
     cpu1: int
     temp_dc: int
@@ -259,7 +262,9 @@ class SystemStatsNow:
     def from_json(cls, d: dict) -> "SystemStatsNow":
         hwm = d.get("hwm") if isinstance(d.get("hwm"), dict) else {}
         return cls(raw=d, rssi=_int(d, "rssi"), heap=_int(d, "heap"),
-                   min_heap=_int(d, "minHeap"), cpu0=_int(d, "cpu0"),
+                   min_heap=_int(d, "minHeap"), max_alloc=_int(d, "maxAlloc"),
+                   psram=_int(d, "psram"), mqtt_drops=_int(d, "mqttDrops"),
+                   cpu0=_int(d, "cpu0"),
                    cpu1=_int(d, "cpu1"), temp_dc=_int(d, "temp"),
                    uptime=_int(d, "uptime"), i2c_tx=_int(d, "i2cTx"),
                    i2c_err=_int(d, "i2cErr"), ntp_age=_int(d, "ntpAge", -1),
