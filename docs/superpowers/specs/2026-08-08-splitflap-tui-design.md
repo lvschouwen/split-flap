@@ -1,6 +1,6 @@
 # `splitflap` — interactive operator TUI (design)
 
-**Status:** APPROVED design, not yet implemented.
+**Status:** IMPLEMENTED — the v1 cut line below is what `cli/` ships.
 **Date:** 2026-08-08
 **Scope:** one host-side Python program. No firmware changes.
 

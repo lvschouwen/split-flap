@@ -8,10 +8,11 @@ from splitflap_tui.app import SplitflapApp
 from splitflap_tui.config import Board, Config
 from splitflap_tui.screens import board_detail
 from splitflap_tui.screens.board_detail import BoardDetailScreen
+from splitflap_tui.screens.discover_screen import DiscoverScreen
 from splitflap_tui.screens.help_screen import HelpScreen
 from splitflap_tui.screens.log_screen import LogScreen
 from textual.coordinate import Coordinate
-from textual.widgets import DataTable, RichLog
+from textual.widgets import DataTable, RichLog, Static
 
 from tests.test_app import CFG, fake_factory
 
@@ -192,6 +193,156 @@ async def test_log_screen_shows_error_on_unreachable():
         log = app.screen.query_one("#flash-log", RichLog)
         rendered = "\n".join(strip.text for strip in log.lines)
         assert "UNREACHABLE" in rendered
+
+
+DISCOVER_DONE = {"status": "done", "boards": [
+    {"name": "wall-row0", "host": "192.168.15.121", "rev": "bb958fb",
+     "width": 5, "plat": "esp01"},
+    {"name": "spare", "host": "spare.local", "rev": "941d8a9", "width": 16},
+]}
+
+
+def discover_handler(done=DISCOVER_DONE):
+    def handler(req):
+        if req.url.path == "/cluster/discover":
+            if req.method == "POST":
+                return httpx.Response(200, text="Board discovery started")
+            return httpx.Response(200, json=done)
+        return httpx.Response(404, text="nope")
+    return handler
+
+
+async def _run_discover_command(pilot, app):
+    await pilot.press(":")
+    await pilot.press(*"discover")
+    await pilot.press("enter")
+    await pilot.pause(0.4)
+
+
+@pytest.mark.asyncio
+async def test_discover_command_pushes_screen_and_renders_boards():
+    """#469: `:discover` is routine tier — no confirm — and its result is a
+    table, not a status line, so it opens its own screen."""
+    factory = lambda url: BoardClient(
+        url, transport=httpx.MockTransport(discover_handler()))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="leader")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        await _run_discover_command(pilot, app)
+        assert isinstance(app.screen, DiscoverScreen)
+        table = app.screen.query_one("#discover-table", DataTable)
+        assert table.row_count == 2
+        names = [table.get_cell_at(Coordinate(r, 0)).plain
+                 for r in range(table.row_count)]
+        hosts = [table.get_cell_at(Coordinate(r, 1)).plain
+                 for r in range(table.row_count)]
+        plats = [table.get_cell_at(Coordinate(r, 4)).plain
+                 for r in range(table.row_count)]
+        assert names == ["wall-row0", "spare"]
+        assert hosts == ["192.168.15.121", "spare.local"]
+        # absent plat on the wire means an S3 (#297) — never a blank cell
+        assert plats == ["esp01", "esp32s3"]
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, DiscoverScreen)
+
+
+@pytest.mark.asyncio
+async def test_discover_rejected_on_esp01_before_any_request():
+    """Both /cluster/discover routes are in ESP01_NOT_SERVED — the gate must
+    stop it client-side, naming the platform, with nothing on the wire."""
+    calls = []
+
+    def handler(req):
+        calls.append(req.url.path)
+        return httpx.Response(200, json={})
+
+    factory = lambda url: BoardClient(url, transport=httpx.MockTransport(handler))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="leader")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        app.plat = "esp01"
+        await _run_discover_command(pilot, app)
+        assert not isinstance(app.screen, DiscoverScreen)
+        status = app.query_one("#cmd-status", Static)
+        assert "not served on esp01" in status.content
+    assert "/cluster/discover" not in calls
+
+
+@pytest.mark.asyncio
+async def test_discover_screen_empty_result_is_not_an_error():
+    """A scan that finds nothing is the normal answer across the VPN."""
+    done = {"status": "done", "boards": []}
+    factory = lambda url: BoardClient(
+        url, transport=httpx.MockTransport(discover_handler(done)))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        app.push_screen(DiscoverScreen("http://leader", factory))
+        await pilot.pause(0.4)
+        status = app.screen.query_one("#discover-status", Static)
+        assert "no boards found" in status.content
+        assert "⛔" not in status.content
+
+
+@pytest.mark.asyncio
+async def test_discover_screen_surfaces_board_error_verbatim():
+    def handler(req):
+        return httpx.Response(503, text="board busy")
+
+    factory = lambda url: BoardClient(url, transport=httpx.MockTransport(handler))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        app.push_screen(DiscoverScreen("http://leader", factory))
+        await pilot.pause(0.4)
+        status = app.screen.query_one("#discover-status", Static)
+        assert "board busy" in status.content
+
+
+@pytest.mark.asyncio
+async def test_discover_screen_rescan_race_last_scan_wins():
+    """Same hazard LogScreen's generation guard exists for (#441 finding 6):
+    a slow FIRST scan resolving AFTER a fast rescan must not overwrite the
+    newer result. The initial on_mount scan is held open until the `r`
+    rescan has already rendered, then released."""
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    gets = []
+    lock = threading.Lock()
+
+    def handler(req):
+        if req.method == "POST":
+            return httpx.Response(200, text="Board discovery started")
+        with lock:
+            gets.append(1)
+            ordinal = len(gets)
+        if ordinal == 1:
+            first_entered.set()
+            assert release_first.wait(5.0), "test never released the first scan"
+            return httpx.Response(200, json={"status": "done", "boards": [
+                {"name": "STALE", "host": "1.1.1.1", "rev": "", "width": 0}]})
+        return httpx.Response(200, json={"status": "done", "boards": [
+            {"name": "FRESH", "host": "2.2.2.2", "rev": "", "width": 0}]})
+
+    factory = lambda url: BoardClient(url, transport=httpx.MockTransport(handler))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        app.push_screen(DiscoverScreen("http://leader", factory))
+        entered = await asyncio.to_thread(first_entered.wait, 2.0)
+        assert entered, "first scan never started"
+
+        await pilot.press("r")              # second, faster scan — gen 2
+        await pilot.pause(0.4)
+        table = app.screen.query_one("#discover-table", DataTable)
+        assert table.get_cell_at(Coordinate(0, 0)).plain == "FRESH"
+
+        release_first.set()                 # let the stale gen-1 scan resolve
+        await pilot.pause(0.4)
+        assert table.row_count == 1
+        assert table.get_cell_at(Coordinate(0, 0)).plain == "FRESH", \
+            "stale scan overwrote the newer rescan"
 
 
 def test_board_detail_log_buffer_is_capped():

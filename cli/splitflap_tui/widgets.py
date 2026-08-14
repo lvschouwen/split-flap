@@ -15,7 +15,7 @@ from .wear import row_sxl_median, unit_markers
 
 SUGGEST_WORDS = ["stop", "text", "mode", "notify", "set", "op", "gates",
                  "reboot", "reset-units", "addr", "promote",
-                 "cluster leave", "cluster config", "help"]
+                 "cluster leave", "cluster config", "discover", "help"]
 
 
 def border_text(s: str) -> Text:

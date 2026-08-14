@@ -68,6 +68,12 @@ class BoardClient:
     def get_text(self, path: str, params: dict | None = None) -> str:
         return self._request("GET", path, params=params).text
 
+    def get(self, path: str, params: dict | None = None) -> httpx.Response:
+        """Raw GET (mirrors post()) for routes whose 2xx status is itself the
+        answer: GET /cluster/discover returns a text/plain 202 while the scan
+        runs and JSON only on 200, so get_json would ParseError on the 202."""
+        return self._request("GET", path, params=params)
+
     def post(self, path: str, *, params: dict | None = None,
              data: dict | None = None) -> httpx.Response:
         return self._request("POST", path, params=params, data=data)

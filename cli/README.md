@@ -78,6 +78,7 @@ that need physical attention, which is exactly what these markers surface.
 | `?` | open the command reference/help overlay |
 | `b` | push the board-detail screen for the next board in `config.boards` (repeat to cycle) |
 | `l` | push the leader's flash-log screen |
+| `r` | *(discover screen only)* re-run the scan |
 | `ctrl+s` | STOP — blank + halt the wall immediately, no confirm (always active, even mid-command-entry) |
 | `escape` | abandon a half-typed command and close the command bar |
 | `q` | quit |
@@ -124,11 +125,34 @@ Commands are tiered by risk:
 | `promote` | typed | token = `promote` |
 | `cluster leave` | typed | token = `cluster-leave` |
 | `cluster config <host\|row\|col\|width;…>` | typed | token = `config` |
+| `discover` | routine | scan the LAN for boards — opens its own result screen |
 
 `text` is normally routine (no confirm), but while the wall's last known
 mode is `clock` it routes through the confirm modal instead — a warning,
 not a block, since the clock reclaims the display at the next minute tick
 anyway (`:mode text` first avoids the fight).
+
+### `discover`
+
+`discover` is the one command whose answer is a table rather than a status
+line, so it opens its own screen: `scanning…`, then one row per board found
+(name / host / rev / width / plat), `r` to rescan, `escape` to go back. The
+`host` column is exactly what a `cluster config` member table wants — a
+dotted quad, or `<name>.local` when the mDNS answer carried no address.
+
+There is **no client-side mDNS** — multicast doesn't cross the operator VPN.
+The scan runs on the *leader*: `POST /cluster/discover` arms a browse that
+runs in its netTask, and the GET is polled until it reports done (10 s
+deadline, 500 ms cadence — the same bound the Web UI's Cluster card uses).
+Because mDNS is link-local, an empty result is the normal answer for
+anything not on the leader's own subnet, so the screen says "no boards
+found" rather than reporting a failure. The leader filters its own
+advertisement out and returns at most 8 boards. A board that advertises no
+`plat` is an S3 (only foreign platforms tag themselves), so that column
+never renders blank.
+
+`discover` is not served on an ESP-01 at all — asking a follower to scan is
+rejected client-side by the capability table.
 
 Every route is gated client-side against the connected board's platform
 capability table (`splitflap_client.capability`) before it's even offered a

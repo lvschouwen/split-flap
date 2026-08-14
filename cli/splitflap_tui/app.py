@@ -26,6 +26,7 @@ from .confirm import ConfirmModal
 from .history import load_history, save_history
 from .poller import Poller
 from .screens.board_detail import BoardDetailScreen
+from .screens.discover_screen import DiscoverScreen
 from .screens.help_screen import HelpScreen
 from .screens.log_screen import LogScreen
 from .widgets import (ClusterStrip, CommandInput, LogTail, StatsBar,
@@ -344,6 +345,18 @@ class SplitflapApp(App):
 
     def dispatch_command(self, parsed: ParsedCommand) -> None:
         if not self._capability_gate(parsed):
+            return
+        if parsed.name == "discover":
+            # #469: the only command whose result is a table rather than a
+            # status line, and the only one that takes seconds to answer —
+            # its screen owns the staged POST/GET scan (and the rescan key)
+            # instead of execute() returning a string. Deliberately AFTER
+            # the capability gate, so an esp01 still rejects it client-side.
+            url = self.config.board_url()
+            if not url:
+                self.apply_cmd_result("no config — no leader url")
+                return
+            self.push_screen(DiscoverScreen(url, self.client_factory))
             return
         clock_guard = parsed.name == "text" and self.device_mode == "clock"
         if parsed.tier in (TIER_KILL, TIER_ROUTINE) and not clock_guard:

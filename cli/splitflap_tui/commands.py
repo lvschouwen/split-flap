@@ -12,7 +12,7 @@ TIER_TYPED = "typed"
 
 CANONICAL_NAMES = ("stop", "text", "mode", "notify", "set", "op", "gates",
                    "reboot", "reset-units", "addr", "promote",
-                   "cluster-leave", "config")
+                   "cluster-leave", "config", "discover")
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,8 @@ HELP: list[HelpEntry] = [
     HelpEntry("cluster leave", TIER_TYPED, "leave the cluster", "cluster leave"),
     HelpEntry("cluster config <host|row|col|width;...>", TIER_TYPED,
               "replace the cluster member table", "cluster config |1|0|16;"),
+    HelpEntry("discover", TIER_ROUTINE, "scan the LAN for boards (leader-side mDNS)",
+              "discover"),
 ]
 
 
@@ -156,6 +158,17 @@ def parse(line: str) -> ParsedCommand:
         return ParsedCommand("promote", {}, TIER_TYPED,
                              ("POST", "/cluster/promote"),
                              "PROMOTE this board to leader")
+    if head == "discover":
+        # Read-only: it arms the LEADER's mDNS browse and reads the result
+        # back, mutating nothing — routine tier, no confirm. The route is the
+        # POST one so the capability gate rejects it on an esp01 (both
+        # /cluster/discover routes are in ESP01_NOT_SERVED). app.py's
+        # dispatch_command opens DiscoverScreen for it instead of calling
+        # execute(): a scan takes seconds and returns a table, which the
+        # one-line command-status bar can't hold.
+        return ParsedCommand("discover", {}, TIER_ROUTINE,
+                             ("POST", "/cluster/discover"),
+                             "scan the LAN for boards")
     if head == "cluster":
         if rest[:1] == ["leave"]:
             return ParsedCommand("cluster-leave", {}, TIER_TYPED,
