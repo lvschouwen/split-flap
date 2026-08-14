@@ -1,0 +1,40 @@
+# Unit revs proven to run byte-identical machine code to a given image (#440).
+#
+#   <legacy-rev> <sha256 of that image with the embedded rev string masked>
+#
+# WHY THIS EXISTS. A unit reports the COMMIT it was built at, not the CODE it
+# is running. Units flashed before the identity scheme changed to the Unit
+# source head still report a repo-HEAD rev, so they would read OUTDATED
+# forever against a bundle they are byte-identical to — and via ReflashPlan,
+# an OUTDATED unit is an auto-reflash target. Each line here says "a unit
+# reporting THIS rev is running THAT image", measured, not assumed.
+#
+# WHY IT CANNOT ROT. make_manifest.py stage hashes the image it is staging the
+# same way and keeps only the lines that still match. The anchor is the
+# artifact, not a commit: an entry survives every change that cannot alter the
+# Nano binary (a shared header the unit never compiles, a docs edit, a
+# restage) and evaporates the instant one that can does. Nobody has to
+# remember to prune this file, and a stale entry cannot outlive its proof.
+#
+# HOW TO RE-PROVE (or prove a new one), from the repo root:
+#
+#   git worktree add --detach /tmp/wt <legacy-rev>
+#   (cd /tmp/wt/firmware/v2/Unit && pio run -e unit)
+#   (cd firmware/v2/Unit && pio run -e unit)
+#   cd flashing && python3 -c "
+#   from flasher.make_manifest import image_content_hash as h
+#   print(h('/tmp/wt/firmware/v2/Unit/.pio/build/unit/firmware.hex', '<legacy-rev>'))"
+#   git worktree remove --force /tmp/wt
+#
+# Both builds must be from a CLEAN tree: a dirty build appends '*' to the tag,
+# which changes its length and shifts the image.
+#
+# DELETE a line once no unit on the wall reports that rev — after the next
+# fleet reflash, this file should be empty again.
+
+# Measured 2026-08-14. The wall was commissioned on d6e8a8a; the only Unit-
+# source commits since were comment-only (f01d855 reworded a block above a
+# byte-identical declaration in Unit.ino, and one in shared/UnitExtDiag.h).
+# Builds at d6e8a8a and at the then-current head: 13848 bytes, differing in
+# exactly the 7 bytes of the rev string at 0x360F..0x3615.
+d6e8a8a fa6ae49ea8203af814407867bf2d0211480effe2acf60994b7263e3e92e273c8
