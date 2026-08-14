@@ -824,13 +824,23 @@ static void flashBootloaderUnits() {
   // probe sends isUnitInBootloader()'s CMD_ACCESS_MEMORY, which zeroes
   // twiboot's boot_timeout and pins it alive on a unit still inside its
   // post-reset window (v1 #88 — the quirk main.cpp's 1500 ms pre-probe delay
-  // exists for). What makes the placement safe is not the elapsed delay but
-  // what waitForBatchIdle can see: a unit still in twiboot answers a bare
-  // 1-byte read from its default branch with 0xFF (UnitBootloader/main.c
-  // TWI_data_read, cmd == CMD_WAIT), and a unit that does not answer at all
-  // reads -1. checkIfMoving returns both verbatim and the settle treats
-  // anything != 0 as not-idle, so the wait CANNOT return while a batch member
-  // is in the bootloader. Only a unit running its sketch reports 0.
+  // exists for). The settle closes that window by construction, not by an
+  // assumed margin:
+  //
+  //   - only a WRITE of CMD_WAIT/CMD_ACCESS_MEMORY/CMD_SWITCH_APPLICATION
+  //     pins twiboot (UnitBootloader/main.c TWI_data_write). A bare read
+  //     cannot, and while cmd == CMD_WAIT a read returns 0xFF from
+  //     TWI_data_read's default branch — never 0x00.
+  //   - checkIfMoving returns that 0xFF verbatim (and -1 for no answer), and
+  //     waitForBatchIdle treats anything != 0 as not-idle. So the settle
+  //     CANNOT return while a batch member is in the bootloader; only a unit
+  //     running its sketch reports 0.
+  //   - twiboot's TIMEOUT_MS is 1000 and the Nano's SFP_CMD_REBOOT path adds
+  //     delay(10) + WDTO_15MS, so a unit jumps to its app at about T+1025 ms.
+  //     The settle's delay(1000) puts the first poll at T+1000 — still inside
+  //     the window, so it reads non-zero and the 100 ms loop cannot exit
+  //     before T+1100, after the unit has already left. Independent of
+  //     REFLASH_BATCH_SIZE.
   //
   // Units OUTSIDE the batch — the ones that failed to flash — are still in
   // twiboot and this probe does pin them there. That is the intended end
