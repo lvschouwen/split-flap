@@ -186,19 +186,51 @@ inline uint16_t unitErrBump(uint16_t prev) {
 #define UNIT_DRIFT_FLAG_PENDING        (1 << 0)
 #define UNIT_DRIFT_FLAG_POSITION_KNOWN (1 << 1)
 
-// fwStatus from a unit's reported rev vs the build's bundled unit rev
-// (#205; v1 compared with strncmp(..., 8) against an 8-char + NUL cache —
-// same semantics here so a "-dirty" sidecar still matches its prefix).
-// Unreadable version or no bundle → 2 (unknown), never a false OUTDATED.
-inline uint8_t unitFwStatusFromRev(const char* version,
-                                   const char* bundledRev) {
-  if (version == nullptr || version[0] == '\0') return 2;
-  if (bundledRev == nullptr || bundledRev[0] == '\0') return 2;
+// One rev comparator, shared by the bundle rev and every equivalence entry so
+// the two can never be graded by different rules. v1 semantics: compare the
+// first 8 chars, so a "-dirty" sidecar still matches its prefix. A ',' or ' '
+// in the candidate reads as end-of-string — a rev contains neither, and that
+// is what lets the same function walk a comma-separated (and possibly
+// human-padded) list without copying entries out of it.
+inline bool unitRevMatches(const char* version, const char* rev) {
   for (int i = 0; i < 8; i++) {
-    if (version[i] != bundledRev[i]) return 1;
+    char r = (rev[i] == ',' || rev[i] == ' ') ? '\0' : rev[i];
+    if (version[i] != r) return false;
     if (version[i] == '\0') break;  // both ended together — match
   }
-  return 0;
+  return true;
+}
+
+// fwStatus from a unit's reported rev vs the build's bundled unit rev
+// (#205). Unreadable version or no bundle → 2 (unknown), never a false
+// OUTDATED.
+//
+// equivalentRevs (#440) is an optional comma-separated list of revs PROVEN to
+// build byte-identical machine code to the bundle — a unit reporting one of
+// them is running our code and is current. It exists because the reported rev
+// identifies the COMMIT a unit was built at, not the CODE it is running: a
+// comment-only edit moves the rev and nothing else, and the resulting
+// permanent OUTDATED both cries wolf and (via ReflashPlan) makes every unit a
+// reflash target. The list widens what counts as current and nothing more —
+// an unproven rev still reads OUTDATED, and an unreadable one still reads
+// UNKNOWN. The proof and the list's self-invalidation live in
+// flashing/flasher/make_manifest.py.
+inline uint8_t unitFwStatusFromRev(const char* version,
+                                   const char* bundledRev,
+                                   const char* equivalentRevs = nullptr) {
+  if (version == nullptr || version[0] == '\0') return 2;
+  if (bundledRev == nullptr || bundledRev[0] == '\0') return 2;
+  if (unitRevMatches(version, bundledRev)) return 0;
+  if (equivalentRevs != nullptr) {
+    const char* p = equivalentRevs;
+    while (*p != '\0') {
+      while (*p == ',' || *p == ' ') p++;   // skip separators and padding
+      if (*p == '\0') break;
+      if (unitRevMatches(version, p)) return 0;
+      while (*p != '\0' && *p != ',') p++;  // advance to the next entry
+    }
+  }
+  return 1;
 }
 
 // Fleet-wide supply floor (#306/#366): the lowest since-boot vccMin any valid

@@ -41,8 +41,10 @@ struct RescueSlotFacts {
   bool valid = false;
   bool identified = false;
   bool stale = false;
-  // Anything an operator should act on. Only OK clears it — an
-  // unidentifiable rescue image is a finding, not a neutral state.
+  // Whether this board can still be recovered by its break-glass image —
+  // the only question the flag answers, and the only one an operator can
+  // act on. ABSENT, EMPTY and UNIDENTIFIED say no. STALE does not: it
+  // reports vintage, not capability (#438).
   bool warn = true;
   RescueSlotState state = RESCUE_SLOT_ABSENT;
   char rev[SLOT_RECORD_REV_MAX_LEN + 1] = {0};
@@ -83,6 +85,18 @@ inline RescueSlotFacts rescueSlotFacts(bool present, bool valid,
   f.identified = true;
   snprintf(f.rev, sizeof(f.rev), "%s", rec.rev);
 
+  // Identified means recoverable, so the warn is already answered: clear it
+  // before grading vintage. Staleness here is measured against the RUNNING
+  // APP's rev, and those two diverge by construction — Rescue is installed
+  // rarely (break-glass, POST /firmware/rescue) while Master is OTA'd often,
+  // so they part company on the very next unrelated OTA and never
+  // re-converge. Letting that raise a warning made rescueSlotWarn
+  // permanently true outside the brief window after a paired install, which
+  // is a warning nobody reads (#438). The STATE is still worth reporting —
+  // it tells an operator their break-glass image predates the running app —
+  // it just is not a finding.
+  f.warn = false;
+
   if (runningRev != nullptr && runningRev[0] != '\0' &&
       strcmp(f.rev, runningRev) != 0) {
     f.stale = true;
@@ -91,7 +105,6 @@ inline RescueSlotFacts rescueSlotFacts(bool present, bool valid,
   }
 
   f.state = RESCUE_SLOT_OK;
-  f.warn = false;
   return f;
 }
 

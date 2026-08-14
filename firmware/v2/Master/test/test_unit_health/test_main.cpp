@@ -814,6 +814,56 @@ static void test_fw_status_compares_first_eight_chars_like_v1() {
   TEST_ASSERT_EQUAL_UINT8(1, unitFwStatusFromRev("26518a1e", "26518a1f-dirty"));
 }
 
+// --- proven content-equivalent legacy revs (#440) ------------------------------
+
+// A unit built before the identity scheme changed reports an older rev while
+// running byte-identical machine code. Those revs are proven equivalent at
+// stage time and carried in the bundle, so they must grade as current.
+static void test_fw_status_accepts_a_proven_equivalent_rev() {
+  TEST_ASSERT_EQUAL_UINT8(0, unitFwStatusFromRev("d6e8a8a", "f01d855",
+                                                 "d6e8a8a"));
+}
+
+static void test_fw_status_accepts_any_of_several_equivalents() {
+  const char* equiv = "aaaaaaa,d6e8a8a,bbbbbbb";
+  TEST_ASSERT_EQUAL_UINT8(0, unitFwStatusFromRev("aaaaaaa", "f01d855", equiv));
+  TEST_ASSERT_EQUAL_UINT8(0, unitFwStatusFromRev("d6e8a8a", "f01d855", equiv));
+  TEST_ASSERT_EQUAL_UINT8(0, unitFwStatusFromRev("bbbbbbb", "f01d855", equiv));
+}
+
+// The whole point: a rev NOT proven equivalent still reads OUTDATED. The list
+// must widen what counts as current, never blanket-suppress the flag.
+static void test_fw_status_still_outdated_when_not_in_the_equivalent_list() {
+  TEST_ASSERT_EQUAL_UINT8(1, unitFwStatusFromRev("0fd341f", "f01d855",
+                                                 "d6e8a8a,aaaaaaa"));
+}
+
+// A CSV entry must terminate at the comma — otherwise "d6e8a8a" would be
+// compared against "d6e8a8a,aaaaaaa" and fail on the separator.
+static void test_fw_status_equivalent_entry_terminates_at_the_comma() {
+  TEST_ASSERT_EQUAL_UINT8(0, unitFwStatusFromRev("d6e8a8a", "f01d855",
+                                                 "d6e8a8a,aaaaaaa"));
+  // ...and a longer version must not match a shorter entry by prefix.
+  TEST_ASSERT_EQUAL_UINT8(1, unitFwStatusFromRev("d6e8a8ab", "f01d855",
+                                                 "d6e8a8a,aaaaaaa"));
+}
+
+static void test_fw_status_tolerates_empty_null_and_padded_equivalents() {
+  TEST_ASSERT_EQUAL_UINT8(1, unitFwStatusFromRev("d6e8a8a", "f01d855", nullptr));
+  TEST_ASSERT_EQUAL_UINT8(1, unitFwStatusFromRev("d6e8a8a", "f01d855", ""));
+  TEST_ASSERT_EQUAL_UINT8(1, unitFwStatusFromRev("d6e8a8a", "f01d855", ",,,"));
+  TEST_ASSERT_EQUAL_UINT8(0, unitFwStatusFromRev("d6e8a8a", "f01d855",
+                                                 " d6e8a8a , aaaaaaa "));
+}
+
+// An unreadable version stays UNKNOWN — the equivalence list must never
+// promote "we could not ask" into "current".
+static void test_fw_status_equivalents_never_rescue_an_unknown_version() {
+  TEST_ASSERT_EQUAL_UINT8(2, unitFwStatusFromRev("", "f01d855", "d6e8a8a"));
+  TEST_ASSERT_EQUAL_UINT8(2, unitFwStatusFromRev(nullptr, "f01d855", "d6e8a8a"));
+  TEST_ASSERT_EQUAL_UINT8(2, unitFwStatusFromRev("d6e8a8a", "", "d6e8a8a"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_clean_status_is_not_faulty);
@@ -865,5 +915,11 @@ int main(int, char**) {
   RUN_TEST(test_fw_status_outdated_on_mismatch);
   RUN_TEST(test_fw_status_unknown_on_empty_version_or_bundle);
   RUN_TEST(test_fw_status_compares_first_eight_chars_like_v1);
+  RUN_TEST(test_fw_status_accepts_a_proven_equivalent_rev);
+  RUN_TEST(test_fw_status_accepts_any_of_several_equivalents);
+  RUN_TEST(test_fw_status_still_outdated_when_not_in_the_equivalent_list);
+  RUN_TEST(test_fw_status_equivalent_entry_terminates_at_the_comma);
+  RUN_TEST(test_fw_status_tolerates_empty_null_and_padded_equivalents);
+  RUN_TEST(test_fw_status_equivalents_never_rescue_an_unknown_version);
   return UNITY_END();
 }

@@ -1,36 +1,67 @@
 """PlatformIO pre-build script for the Unit sketch.
 
-Generates Unit/BuildVersion.h with the current git short rev so the unit
-firmware can report its build over I2C via CMD_GET_VERSION (see Unit.ino).
+Generates Unit/BuildVersion.h with the unit firmware's identity so it can
+report its build over I2C via CMD_GET_VERSION (see Unit.ino), and drops the
+same string in a .rev sidecar for make_manifest.py to stage alongside the hex.
 
-The master compares this against its own GIT_REV to flag units running
-outdated firmware. See issue #28.
+That identity is the UNIT SOURCE HEAD — the last commit touching the files
+that actually compile into this binary — not the repo HEAD at build time
+(#440). The master grades a unit by comparing its reported rev against the
+bundled one, so stamping HEAD meant any commit anywhere (a docs edit, a
+master-only fix, a bundle restage) re-labelled every unit on the wall
+OUTDATED. Measured on 2026-08-14: 58 commits had landed since the last Unit
+source change, and a build at the deployed rev vs. one at HEAD differed in
+exactly the 7 bytes of this string out of 13848 — the flag was pure noise,
+and via ReflashPlan it made every unit a reflash target.
+
+Both sides of the comparison are stamped here, from one computation, so they
+cannot drift. UNIT_SRC_PATHSPECS is duplicated in make_manifest.py (which
+cannot be imported from a PlatformIO build) and pinned equal by
+flasher/tests/test_make_manifest.py.
 """
 
 import pathlib
 import subprocess
 
+# Everything that compiles into the Unit binary; host-side tests don't.
+# MUST stay identical to make_manifest.py's copy — see module docstring.
+UNIT_SRC_PATHSPECS = [
+    "firmware/v2/Unit",
+    ":(exclude)firmware/v2/Unit/test",
+    # Metadata ABOUT the artifact, not an input to it — recording a proof
+    # must not move the identity the proof is about.
+    ":(exclude)firmware/v2/Unit/equivalent-revs.txt",
+    "firmware/v2/shared",
+]
 
-def git_short_rev(project_dir: pathlib.Path) -> tuple[str, bool]:
+
+def _git(project_dir: pathlib.Path, *args: str) -> str:
+    return subprocess.check_output(
+        ["git", *args], cwd=project_dir, stderr=subprocess.DEVNULL,
+    ).decode().strip()
+
+
+def unit_source_rev(project_dir: pathlib.Path) -> tuple[str, bool]:
+    """(short rev of the last commit touching the Unit sources, dirty).
+
+    Pathspecs resolve against the repo root, so git runs from there rather
+    than the project dir. Dirty is scoped the same way: uncommitted work
+    elsewhere in the tree cannot change this binary and must not mark it.
+    """
     try:
-        rev = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=project_dir, stderr=subprocess.DEVNULL,
-        ).decode().strip()
+        root = pathlib.Path(_git(project_dir, "rev-parse", "--show-toplevel"))
+        rev = _git(root, "log", "-1", "--format=%h", "--", *UNIT_SRC_PATHSPECS)
+        if not rev:
+            return ("unknown", False)
+        dirty = bool(_git(root, "status", "--porcelain", "--",
+                          *UNIT_SRC_PATHSPECS))
+        return (rev, dirty)
     except (FileNotFoundError, subprocess.CalledProcessError):
         return ("unknown", False)
-    try:
-        dirty = bool(subprocess.check_output(
-            ["git", "status", "--porcelain"],
-            cwd=project_dir, stderr=subprocess.DEVNULL,
-        ).decode().strip())
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        dirty = False
-    return (rev, dirty)
 
 
 def build_version_header(project_dir: pathlib.Path) -> None:
-    rev, dirty = git_short_rev(project_dir)
+    rev, dirty = unit_source_rev(project_dir)
     # Unit I2C response is a fixed 8 bytes. Keep the tag <= 8 chars so it
     # transmits verbatim; master truncates its own rev the same way on compare.
     tag = rev[:7]
@@ -44,9 +75,9 @@ def build_version_header(project_dir: pathlib.Path) -> None:
     )
     print(f"[build_version] wrote {output.name}  GIT_REV={tag}")
 
-    # Sidecar: the master's build_assets.py reads this to know which rev the
-    # bundled unit-firmware.hex was built at (see issue #31). Whoever copies
-    # firmware.hex -> ESPMaster/data/unit-firmware.hex should copy this too.
+    # Sidecar: make_manifest.py stages this next to the hex so the master's
+    # build_assets.py knows which rev the bundled unit-firmware.hex was built
+    # at (see issue #31). Same string as the binary carries, by construction.
     rev_out = project_dir / ".pio" / "build" / "unit" / "firmware.rev"
     rev_out.parent.mkdir(parents=True, exist_ok=True)
     rev_out.write_text(tag + "\n")

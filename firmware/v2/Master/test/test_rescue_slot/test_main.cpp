@@ -71,14 +71,41 @@ static void test_matching_record_at_running_rev_is_ok() {
 }
 
 // The #391 case observed on .20: a Jul-13 rescue image under a Jul-25 app.
-static void test_matching_record_behind_running_rev_is_stale() {
+// STALE is reported, but it does NOT warn (#438). The rescue image is
+// compared against the RUNNING APP's rev, and the two diverge by
+// construction: Rescue is installed rarely (break-glass, POST
+// /firmware/rescue) while Master is OTA'd often, so the revs part company on
+// the very next unrelated OTA and never re-converge on their own. Warning on
+// that made rescueSlotWarn permanently true in normal operation — and a
+// warning that is always on is one nobody reads.
+static void test_matching_record_behind_running_rev_is_stale_but_not_a_warning() {
   RescueSlotFacts f =
       rescueSlotFacts(true, true, recordFor("b0e3fe6"), true, "f14a7b6");
   TEST_ASSERT_TRUE(f.identified);
   TEST_ASSERT_TRUE(f.stale);
-  TEST_ASSERT_TRUE(f.warn);
+  TEST_ASSERT_FALSE(f.warn);
   TEST_ASSERT_EQUAL_STRING("b0e3fe6", f.rev);
   TEST_ASSERT_EQUAL(RESCUE_SLOT_STALE, f.state);
+}
+
+// The other half of #438: demoting the staleness warn must not disarm the
+// states that genuinely mean "this board cannot be recovered". Those are the
+// only things rescueSlotWarn now claims.
+static void test_only_recovery_blocking_states_warn() {
+  // Bootable and identified — recoverable, whatever its vintage.
+  TEST_ASSERT_FALSE(
+      rescueSlotFacts(true, true, recordFor("f14a7b6"), true, "f14a7b6").warn);
+  TEST_ASSERT_FALSE(
+      rescueSlotFacts(true, true, recordFor("b0e3fe6"), true, "f14a7b6").warn);
+  // No factory partition at all.
+  TEST_ASSERT_TRUE(
+      rescueSlotFacts(false, false, noRecord(), false, "f14a7b6").warn);
+  // Partition present, nothing bootable in it.
+  TEST_ASSERT_TRUE(
+      rescueSlotFacts(true, false, noRecord(), false, "f14a7b6").warn);
+  // Bootable but unnameable — a finding, not a neutral state.
+  TEST_ASSERT_TRUE(
+      rescueSlotFacts(true, true, noRecord(), false, "f14a7b6").warn);
 }
 
 // --- unidentified slot --------------------------------------------------------
@@ -183,7 +210,8 @@ int main(int, char**) {
   RUN_TEST(test_present_but_no_valid_image_reports_empty);
   RUN_TEST(test_invalid_image_never_inherits_a_matching_record);
   RUN_TEST(test_matching_record_at_running_rev_is_ok);
-  RUN_TEST(test_matching_record_behind_running_rev_is_stale);
+  RUN_TEST(test_matching_record_behind_running_rev_is_stale_but_not_a_warning);
+  RUN_TEST(test_only_recovery_blocking_states_warn);
   RUN_TEST(test_no_record_is_unidentified_not_stale);
   RUN_TEST(test_sha_mismatch_demotes_to_unidentified);
   RUN_TEST(test_missing_running_rev_reports_rev_without_staleness);
