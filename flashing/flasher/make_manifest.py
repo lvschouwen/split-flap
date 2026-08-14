@@ -236,7 +236,7 @@ def cmd_gate() -> None:
         staged_rev = sidecar.read_text().strip()
         staged_rev_gate(staged_rev, repo=REPO)
         print(f"gate passed: {data_dir / 'unit-firmware.rev'} rev "
-              f"{staged_rev} contains the latest Unit source change")
+              f"{staged_rev} IS the Unit source head")
 
 
 if __name__ == "__main__":
