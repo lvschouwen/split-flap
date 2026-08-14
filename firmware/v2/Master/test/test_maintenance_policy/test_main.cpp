@@ -126,15 +126,32 @@ static void test_jog_limit_is_int8_range() {
   TEST_ASSERT_EQUAL(400, maintValidateJog(-128).httpStatus);
 }
 
-// Feature gates are one wire byte (#409). The web boundary bounds the byte
-// and nothing else: WHICH bits are legal belongs to the unit's firmware,
-// which refuses the ones it has no code for, and the write's read-back grades
-// that refusal. A master enforcing a vocabulary here would reject gates a
-// newer unit firmware understands.
-static void test_gates_accept_any_byte_and_reject_beyond_it() {
+// Feature gates are one wire byte (#409). This boundary used to bound the byte
+// and nothing else, reasoning that WHICH bits are legal belongs to the unit,
+// "which refuses the ones it has no code for", with the write's read-back
+// grading that refusal.
+//
+// The reasoning was sound; the premise was false (#458). The unit's
+// UNIT_GATE_ALL admits 0x02, a bit declared but implemented nowhere, so the
+// unit accepts it, persists it, and reports it as ACTIVE via GET_LIFETIME —
+// and the read-back therefore CONFIRMS a feature that does not exist. The
+// read-back is truthful about storage and silent about behaviour, so it
+// cannot be the thing that grades a vocabulary.
+//
+// Narrowing UNIT_GATE_ALL needs a fleet reflash, so until then the masters
+// refuse to send a bit nothing honours. The old comment's counter-argument —
+// that a master vocabulary could reject gates a newer unit understands —
+// still holds, which is why the mask lives in the shared wire contract and
+// is widened together with the code that honours the bit.
+static void test_gates_reject_bits_no_firmware_implements() {
   TEST_ASSERT_EQUAL(200, maintValidateGates(0).httpStatus);
-  TEST_ASSERT_EQUAL(200, maintValidateGates(1).httpStatus);
-  TEST_ASSERT_EQUAL(200, maintValidateGates(255).httpStatus);
+  TEST_ASSERT_EQUAL(200, maintValidateGates(SFP_UNIT_GATE_IDLE_HALL_CHECK).httpStatus);
+  // 0x02 is declared in UnitEeprom.h and implemented nowhere — the #458 case.
+  TEST_ASSERT_EQUAL(400, maintValidateGates(0x02).httpStatus);
+  // Mixed with a legal bit it must still fail: a partially-honoured write
+  // would report gates the operator never asked for.
+  TEST_ASSERT_EQUAL(400, maintValidateGates(0x03).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(255).httpStatus);
   TEST_ASSERT_EQUAL(400, maintValidateGates(256).httpStatus);
   TEST_ASSERT_EQUAL(400, maintValidateGates(-1).httpStatus);
 }
@@ -234,7 +251,7 @@ int main(int, char**) {
   RUN_TEST(test_hex_address_parses_v1_strtol_base0);
   RUN_TEST(test_offset_limit_is_one_revolution_both_signs);
   RUN_TEST(test_jog_limit_is_int8_range);
-  RUN_TEST(test_gates_accept_any_byte_and_reject_beyond_it);
+  RUN_TEST(test_gates_reject_bits_no_firmware_implements);
   RUN_TEST(test_set_address_target_out_of_managed_range_is_400);
   RUN_TEST(test_set_address_occupied_target_is_409);
   RUN_TEST(test_set_address_burning_current_address_is_allowed);

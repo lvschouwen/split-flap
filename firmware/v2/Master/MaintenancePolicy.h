@@ -90,15 +90,30 @@ inline MaintVerdict maintValidateJog(long steps) {
   return {};
 }
 
-// Feature gates ride the wire as one byte (#409). WHICH bits are legal is
-// deliberately not checked here: the vocabulary belongs to the unit's
-// firmware, which refuses any bit it has no code for, and the write's
-// read-back grades that refusal as a postcondition failure. A master that
-// second-guessed the vocabulary would start rejecting gates that a newer unit
-// firmware understands perfectly well.
+// Feature gates ride the wire as one byte (#409). This used to check the byte
+// range only, on the reasoning that the vocabulary belongs to the unit's
+// firmware, "which refuses any bit it has no code for", with the write's
+// read-back grading that refusal as a postcondition failure.
+//
+// The reasoning was sound; the premise was false (#458). UNIT_GATE_ALL admits
+// 0x02 — declared in UnitEeprom.h, implemented nowhere — so the unit accepts
+// it, persists it to EEPROM, and reports it as ACTIVE in GET_LIFETIME. The
+// read-back then CONFIRMS a feature that does not exist, because it is
+// truthful about storage and silent about behaviour. It cannot grade a
+// vocabulary it never observes.
+//
+// Narrowing UNIT_GATE_ALL needs a fleet reflash, so until one happens the
+// master refuses to send a bit nothing honours. The old comment's
+// counter-argument still stands — a master second-guessing the vocabulary
+// could reject gates a newer unit understands — which is why the mask lives
+// in the shared wire contract next to the opcode, to be widened in the same
+// change that adds the code honouring the bit.
 inline MaintVerdict maintValidateGates(long gates) {
   if (gates < 0 || gates > 255) {
     return {400, "Gates must be a 0..255 bit mask"};
+  }
+  if ((gates & ~(long)SFP_UNIT_GATE_IMPLEMENTED) != 0) {
+    return {400, "Gates contain bits no unit firmware implements"};
   }
   return {};
 }

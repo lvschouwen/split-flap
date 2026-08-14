@@ -83,13 +83,17 @@ inline void maintEncodeOffsetLE(int16_t value, uint8_t out[2]) {
   out[1] = (uint8_t)(((uint16_t)value >> 8) & 0xFF);
 }
 
-// Feature gates are one wire byte (#409). WHICH bits are legal belongs to the
-// unit's firmware, which refuses any it has no code for — this row's five
-// units are gated the same way row 1's sixteen are, or they would need a
-// reflash to enable what the S3 rows enable with a curl.
+// Feature gates are one wire byte (#409). This row's five units are gated the
+// same way row 1's sixteen are, or they would need a reflash to enable what
+// the S3 rows enable with a curl — so this must reject exactly what the S3's
+// maintValidateGates rejects, including the #458 unimplemented-bit check. A
+// permissive follower would be the hole the S3 just closed.
 inline MaintVerdict maintValidateGates(long gates) {
   if (gates < 0 || gates > 255) {
     return {400, "Gates must be a 0..255 bit mask"};
+  }
+  if ((gates & ~(long)SFP_UNIT_GATE_IMPLEMENTED) != 0) {
+    return {400, "Gates contain bits no unit firmware implements"};
   }
   return {};
 }
