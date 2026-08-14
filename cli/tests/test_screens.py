@@ -559,3 +559,109 @@ async def test_value_op_key_prefills_the_command_bar_instead_of_running():
         assert cmd.value == "op offset 1 "
         assert app.focused is cmd
     assert not any(p.startswith("/unit/offset") for p in posts)
+
+
+# ---- #474: wear baselines --------------------------------------------
+
+def _units_payload(sxl_by_addr):
+    return {"width": len(sxl_by_addr), "faulty": 0,
+            "units": [{"i": i, "a": a, "st": 1, "v": 1, "sxl": v}
+                      for i, (a, v) in enumerate(sorted(sxl_by_addr.items()))]}
+
+
+def _status_with(sxl_by_addr):
+    from tests.test_app import STATUS
+    payload = json.loads(json.dumps(STATUS))
+    payload["units"] = _units_payload(sxl_by_addr)
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_baseline_adds_a_delta_column_that_tracks_growth():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        units = app.query_one("#units", UnitsTable)
+        assert "Δsxl" not in [c.label.plain for c in units.columns.values()]
+
+        app.apply_status(StatusAggregate.from_json(_status_with({1: 17, 15: 1465})),
+                         ClusterStatus.from_json({}))
+        await pilot.press(":")
+        await pilot.press(*"baseline")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        labels = [c.label.plain for c in units.columns.values()]
+        assert "Δsxl" in labels
+        deltas = [units.get_cell_at(Coordinate(r, 3)).plain
+                  for r in range(units.row_count)]
+        assert deltas == ["0", "0"]          # captured just now
+
+        # a15 accumulates 12 more steps-to-home; a1 stays put
+        app.apply_status(StatusAggregate.from_json(_status_with({1: 17, 15: 1477})),
+                         ClusterStatus.from_json({}))
+        await pilot.pause(0.1)
+        deltas = [units.get_cell_at(Coordinate(r, 3)).plain
+                  for r in range(units.row_count)]
+        assert deltas == ["0", "12"]
+
+
+@pytest.mark.asyncio
+async def test_baseline_clear_removes_the_column():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        units = app.query_one("#units", UnitsTable)
+        await pilot.press(":")
+        await pilot.press(*"baseline")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert "Δsxl" in [c.label.plain for c in units.columns.values()]
+        await pilot.press(":")
+        await pilot.press(*"baseline clear")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert "Δsxl" not in [c.label.plain for c in units.columns.values()]
+
+
+@pytest.mark.asyncio
+async def test_baseline_before_any_poll_says_so_and_writes_nothing():
+    def dead(url):
+        return BoardClient(url, transport=httpx.MockTransport(
+            lambda r: httpx.Response(503, text="down")))
+    app = SplitflapApp(CFG, client_factory=dead)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        await pilot.press(":")
+        await pilot.press(*"baseline")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        status = app.query_one("#cmd-status", Static).content
+        assert "no unit health polled yet" in status
+        units = app.query_one("#units", UnitsTable)
+        assert "Δsxl" not in [c.label.plain for c in units.columns.values()]
+
+
+@pytest.mark.asyncio
+async def test_captured_baseline_survives_a_restart(tmp_path):
+    path = tmp_path / "wear-baseline.json"
+    app = SplitflapApp(CFG, client_factory=fake_factory, baseline_path=path)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        app.apply_status(StatusAggregate.from_json(_status_with({1: 17})),
+                         ClusterStatus.from_json({}))
+        await pilot.press(":")
+        await pilot.press(*"baseline")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+    assert path.exists()
+
+    restarted = SplitflapApp(CFG, client_factory=fake_factory, baseline_path=path)
+    async with restarted.run_test() as pilot:
+        await pilot.pause(0.5)
+        restarted.apply_status(
+            StatusAggregate.from_json(_status_with({1: 20})),
+            ClusterStatus.from_json({}))
+        await pilot.pause(0.1)
+        units = restarted.query_one("#units", UnitsTable)
+        assert "Δsxl" in [c.label.plain for c in units.columns.values()]
+        assert units.get_cell_at(Coordinate(0, 3)).plain == "3"

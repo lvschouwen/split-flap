@@ -21,6 +21,8 @@ from splitflap_client.transport import BoardClient, HttpError, SplitflapError
 
 from .commands import (CommandError, ParsedCommand, TIER_KILL, TIER_ROUTINE,
                        TIER_TYPED, parse)
+from .baseline import (clear_baseline, delta_sxl, load_baseline,
+                       save_baseline, snapshot)
 from .config import Config
 from .confirm import ConfirmModal
 from .history import load_history, save_history
@@ -168,11 +170,13 @@ class SplitflapApp(App):
 
     def __init__(self, config: Config,
                  client_factory: Callable[[str], BoardClient] = BoardClient,
-                 history_path: Path | None = None):
+                 history_path: Path | None = None,
+                 baseline_path: Path | None = None):
         super().__init__()
         self.config = config
         self.client_factory = client_factory
         self.history_path = history_path
+        self.baseline_path = baseline_path
         self.connected = False
         self.wall_stale = True
         self.poller: Poller | None = None
@@ -206,6 +210,8 @@ class SplitflapApp(App):
         cmd = self.query_one("#command", CommandInput)
         cmd.history = load_history(self.history_path)
         cmd.reset_history_cursor()
+        # #474: a captured baseline persists across runs, like history.
+        self.query_one("#units", UnitsTable).baseline = self._load_baseline()
         url = self.config.board_url()
         if not url:
             self.query_one("#stats", StatsBar).update(
@@ -388,6 +394,9 @@ class SplitflapApp(App):
     def dispatch_command(self, parsed: ParsedCommand) -> None:
         if not self._capability_gate(parsed):
             return
+        if parsed.name == "baseline":
+            self._run_baseline(parsed.args.get("mode", "save"))
+            return
         if parsed.name == "discover":
             # #469: the only command whose result is a table rather than a
             # status line, and the only one that takes seconds to answer —
@@ -421,6 +430,31 @@ class SplitflapApp(App):
 
         self.push_screen(ConfirmModal(summary, typed=typed, token=token),
                          on_result)
+
+    # ---- wear baseline (#474): local file, never touches the wall ----
+    def _baseline_kwargs(self) -> dict:
+        return {} if self.baseline_path is None else {"path": self.baseline_path}
+
+    def _load_baseline(self):
+        return load_baseline(**self._baseline_kwargs())
+
+    def _run_baseline(self, mode: str) -> None:
+        units = self.query_one("#units", UnitsTable)
+        if mode == "clear":
+            clear_baseline(**self._baseline_kwargs())
+            units.set_baseline(None)
+            self.apply_cmd_result("wear baseline cleared")
+            return
+        if self.last_status is None:
+            self.apply_cmd_result("⛔ baseline: no unit health polled yet")
+            return
+        snap = snapshot(self.last_status.units, self.last_status.settings.version)
+        ok = save_baseline(snap, **self._baseline_kwargs())
+        units.set_baseline(snap)
+        self.apply_cmd_result(
+            f"baseline captured — {len(snap.sxl)} unit(s)" if ok else
+            f"baseline captured for this session only — {len(snap.sxl)} "
+            "unit(s), could not write the file")
 
     def run_command(self, parsed: ParsedCommand) -> None:
         def work() -> None:

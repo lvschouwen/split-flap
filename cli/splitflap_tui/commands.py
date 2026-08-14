@@ -12,7 +12,7 @@ TIER_TYPED = "typed"
 
 CANONICAL_NAMES = ("stop", "text", "mode", "notify", "set", "op", "gates",
                    "reboot", "reset-units", "addr", "promote",
-                   "cluster-leave", "config", "discover")
+                   "cluster-leave", "config", "discover", "baseline")
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,8 @@ HELP: list[HelpEntry] = [
               "replace the cluster member table", "cluster config |1|0|16;"),
     HelpEntry("discover", TIER_ROUTINE, "scan the LAN for boards (leader-side mDNS)",
               "discover"),
+    HelpEntry("baseline [clear]", TIER_ROUTINE,
+              "snapshot unit wear so servicing is measurable", "baseline"),
 ]
 
 
@@ -169,6 +171,19 @@ def parse(line: str) -> ParsedCommand:
         return ParsedCommand("discover", {}, TIER_ROUTINE,
                              ("POST", "/cluster/discover"),
                              "scan the LAN for boards")
+    if head == "baseline":
+        # Local-only (#474): writes/clears a file on THIS host and never
+        # touches the wall. The route is /units/health because that is the
+        # data it snapshots, and it is served on both platforms so the
+        # capability gate passes; app.py's dispatch_command handles the
+        # command before execute() would send anything.
+        mode = rest[0] if rest else "save"
+        if mode not in ("save", "clear"):
+            raise CommandError("usage: baseline [clear]")
+        summary = ("clear the wear baseline" if mode == "clear"
+                   else "snapshot unit wear as the new baseline")
+        return ParsedCommand("baseline", {"mode": mode}, TIER_ROUTINE,
+                             ("GET", "/units/health"), summary)
     if head == "cluster":
         if rest[:1] == ["leave"]:
             return ParsedCommand("cluster-leave", {}, TIER_TYPED,

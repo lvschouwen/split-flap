@@ -78,6 +78,8 @@ that need physical attention, which is exactly what these markers surface.
 | `?` | open the command reference/help overlay |
 | `b` | push the board-detail screen for the next board in `config.boards` (repeat to cycle) |
 | `l` | push the leader's flash-log screen |
+| `s` | push the board-health screen (OTA, rescue slot, boot cause, task stacks, vitals) |
+| `u` | focus the units table — ↑/↓ pick a unit, `enter` opens its detail screen, `escape` releases focus |
 | `r` | *(discover screen only)* re-run the scan |
 | `ctrl+s` | STOP — blank + halt the wall immediately, no confirm (always active, even mid-command-entry) |
 | `escape` | abandon a half-typed command and close the command bar |
@@ -94,7 +96,10 @@ Press `:` to open it, type a command, Enter to submit, `escape` to abandon
 it — escape clears the bar and hands focus back, so the dashboard hotkeys
 keep working. The command name
 autocompletes inline as you type, suggesting from the same vocabulary as
-the table below. Type `help` (or `:help`, or press `?` — see Keybindings)
+the table below; **Tab accepts the suggestion** (so does `→`). Enter always
+submits exactly what is typed — a unique prefix is never auto-expanded,
+because `stop` is a no-confirm kill command and `st` + Enter must not be
+able to blank the wall. Type `help` (or `:help`, or press `?` — see Keybindings)
 to open a command reference overlay generated straight from the command
 table, so it can't drift out of sync. Submitted lines persist across runs:
 the last 100 are saved to `~/.config/splitflap/history` and reloaded at
@@ -126,6 +131,7 @@ Commands are tiered by risk:
 | `cluster leave` | typed | token = `cluster-leave` |
 | `cluster config <host\|row\|col\|width;…>` | typed | token = `config` |
 | `discover` | routine | scan the LAN for boards — opens its own result screen |
+| `baseline [clear]` | routine | snapshot unit wear locally; adds the `Δsxl` column |
 
 `text` is normally routine (no confirm), but while the wall's last known
 mode is `clock` it routes through the confirm modal instead — a warning,
@@ -153,6 +159,71 @@ never renders blank.
 
 `discover` is not served on an ESP-01 at all — asking a follower to scan is
 rejected client-side by the capability table.
+
+### Board health (`s`)
+
+Everything the leader reports about its own condition, on one screen and
+costing no extra request — it renders the same `/status` the dashboard is
+already polling, and keeps re-rendering while open:
+
+- **image** — running/next OTA slot, last flash result, last invalid image,
+  whether the last OTA reverted, factory-slot validity;
+- **rescue** — rescue-slot state and its warning flag;
+- **boot** — last reset cause and uptime;
+- **tasks** — per-task stack low-water marks, **smallest flagged**. These are
+  *bytes still free at the worst point since boot*, so the smallest is the
+  closest to overflow — the failure mode that took out clusterTask (#437);
+- **system** — heap, min heap, largest allocatable block (fragmentation),
+  PSRAM, per-core load, die temperature, RSSI, NTP age, I2C counters;
+- **config** — role, mode, reflash-on-boot, cluster leader.
+
+Anything the board didn't report reads `-`, never `0`: these keys are
+validity-gated firmware-side, so absent genuinely means "no reading". Before
+the first successful poll the screen says so outright rather than showing a
+page of dashes that would look like data.
+
+### Unit detail (`u`, then `enter`)
+
+The dashboard table has room for eight columns; a unit answers about
+thirty-seven. The detail screen shows all of them grouped (identity, wear,
+self-test, homing, power, bus) plus the per-unit I2C error attribution
+(`err`/`errAge`) that the wall only emits once an error has been charged.
+
+Two rows are composed because the numbers only mean something in pairs:
+
+| Row | Reads like | Why |
+|---|---|---|
+| `worst step-excess` | `1465 lifetime · 0 since boot` | `sxl` never forgets; `sx` resets at reboot. A bad lifetime figure with a clean since-boot figure means the unit misbehaved **historically** and has been fine this boot |
+| `hall window` / `steps/rev` | `48 → 47`, `2050 → 2051` | the unit keeps its own FIRST self-test measurements alongside its latest, so the pair is a drift check with no host-side bookkeeping |
+
+Actions run against the selected unit: `h` home, `i` identify, `t`
+self-test, `z` reset-odometer go straight through the normal confirm tiers.
+`o` offset, `j` jog and `g` gates need a value, so they pre-fill the command
+bar with the address already typed instead of firing on one keystroke.
+`identify` is usually the one you want first — it's how you find a unit on a
+physical wall.
+
+The labels are our wording for the firmware's keys, and a test gates them
+against the board's own `/api` legend, so a firmware rename fails the suite
+instead of leaving a column quietly showing `-` forever.
+
+### Wear baselines (`:baseline`)
+
+`sxl` is a lifetime high-water mark in the unit's own EEPROM. That makes it
+trustworthy across reboots and useless as a before/after: after servicing a
+unit, its lifetime figure still reads whatever its worst day was. `:baseline`
+snapshots the current wear to `~/.config/splitflap/wear-baseline.json`, and
+the units table grows a **`Δsxl`** column — a serviced unit's delta goes
+flat, a failing one's keeps climbing. `:baseline clear` drops it.
+
+A unit the baseline never saw (added or re-addressed since) reads `—`, not a
+delta of 0. So does a unit whose lifetime counter went *backwards*, which
+would mean the address now points at different hardware or an erased EEPROM
+— never a negative number that would look like an improvement.
+
+This is not a replacement for a master-side history (#465): it only records
+while the TUI is running, whereas the master runs around the clock. It is
+cheaper — no flash, no firmware change — and blinder.
 
 Every route is gated client-side against the connected board's platform
 capability table (`splitflap_client.capability`) before it's even offered a

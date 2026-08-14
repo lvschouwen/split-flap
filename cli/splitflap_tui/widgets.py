@@ -10,12 +10,14 @@ from splitflap_client.models import (ClusterMember, ClusterStatus,
 
 from .flapwall import wall_cells
 from .format import human_duration, human_size
+from .baseline import delta_sxl
 from .wear import row_sxl_median, unit_markers
 
 
 SUGGEST_WORDS = ["stop", "text", "mode", "notify", "set", "op", "gates",
                  "reboot", "reset-units", "addr", "promote",
-                 "cluster leave", "cluster config", "discover", "help"]
+                 "cluster leave", "cluster config", "discover", "baseline",
+                 "help"]
 
 
 def border_text(s: str) -> Text:
@@ -229,17 +231,24 @@ class ClusterStrip(Static):
         self.remove_class("stale")
 
 
-def units_rows(h: UnitsHealth) -> list[tuple[str, ...]]:
+def units_rows(h: UnitsHealth, baseline=None) -> list[tuple[str, ...]]:
     """Pure row builder for UnitsTable (#455) — one tuple per unit, in
     COLUMNS order. Kept out of the widget so the wear markers can be tested
     against real board payloads without standing up an app."""
     def cell(v):
         return "—" if v is None else str(v)
     median = row_sxl_median(h.units)
-    return [(f"0x{u.address:02x}", str(u.state), cell(u.sxl),
-             cell(u.hall_fails), cell(u.odo), cell(u.vcc_min), cell(u.gates),
-             " ".join(unit_markers(u, median)))
-            for u in h.units]
+    rows = []
+    for u in h.units:
+        row = (f"0x{u.address:02x}", str(u.state), cell(u.sxl),
+               cell(u.hall_fails), cell(u.odo), cell(u.vcc_min), cell(u.gates),
+               " ".join(unit_markers(u, median)))
+        if baseline is not None:
+            # #474: inserted right after sxl, where it is read against it.
+            delta = delta_sxl(u, baseline)
+            row = row[:3] + (cell(delta),) + row[3:]
+        rows.append(row)
+    return rows
 
 
 class UnitsTable(DataTable):
@@ -251,6 +260,11 @@ class UnitsTable(DataTable):
 
     BASE_TITLE = "units"
     COLUMNS = ("addr", "st", "sxl", "hf", "odo", "vmin", "gates", "flags")
+    # #474: Δsxl sits directly after sxl, where it is read against it.
+    BASELINE_COLUMNS = COLUMNS[:3] + ("Δsxl",) + COLUMNS[3:]
+
+    def columns_for(self, has_baseline: bool) -> tuple[str, ...]:
+        return self.BASELINE_COLUMNS if has_baseline else self.COLUMNS
 
     def on_mount(self) -> None:
         self.add_columns(*self.COLUMNS)
@@ -261,12 +275,29 @@ class UnitsTable(DataTable):
         # in step with the table by update_units and nothing else.
         self.entries: list = []
         self.row_median = 0
+        self.baseline = None
+        self._has_baseline_columns = False
+        self._last_health: UnitsHealth | None = None
+
+    def set_baseline(self, baseline) -> None:
+        """Attach/detach the wear baseline (#474) and re-render. The column
+        set changes with it, so the table is rebuilt only when its presence
+        actually flips — not on every poll."""
+        self.baseline = baseline
+        if self._last_health is not None:
+            self.update_units(self._last_health)
 
     def update_units(self, h: UnitsHealth) -> None:
+        self._last_health = h
+        want_baseline_columns = self.baseline is not None
+        if want_baseline_columns != self._has_baseline_columns:
+            self.clear(columns=True)
+            self.add_columns(*self.columns_for(want_baseline_columns))
+            self._has_baseline_columns = want_baseline_columns
         self.clear()
         self.entries = list(h.units)
         self.row_median = row_sxl_median(h.units)
-        for row in units_rows(h):
+        for row in units_rows(h, self.baseline):
             # Text() per #450: DataTable markup-parses plain-str cells.
             self.add_row(*(Text(c) for c in row))
 
