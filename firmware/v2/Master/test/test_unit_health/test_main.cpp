@@ -448,6 +448,8 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].lifetime.selfTestFirstStepsPerRev = 0xFFFF;
     units[i].lifetime.selfTestLastHallWindow = 0xFFFF;
     units[i].lifetime.selfTestLastStepsPerRev = 0xFFFF;
+    units[i].lifetime.idleHallFutileRehomes = LIFETIME_FUTILE_REHOME_MAX;
+    units[i].lifetime.idleHallStoodDown = true;
   }
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
@@ -468,6 +470,8 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"sxl\":65535"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"stw0\":65535,\"stw1\":65535"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"str0\":65535,\"str1\":65535"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"fr\":127"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"frd\":1"));
 }
 
 // --- lifetime block (#406) ---------------------------------------------------
@@ -516,6 +520,43 @@ static void test_health_json_fresh_unit_emits_no_lifetime_keys() {
   TEST_ASSERT_NULL(strstr(buf, "\"sxl\""));
   TEST_ASSERT_NULL(strstr(buf, "\"stw0\""));
   TEST_ASSERT_NULL(strstr(buf, "\"str0\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"fr\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"frd\""));
+}
+
+// --- idle hall standdown (#460) ----------------------------------------------
+
+static void test_health_json_futile_rehomes_emitted_when_nonzero() {
+  // Non-zero means this unit is arguing with its own window model — a real
+  // diagnostic about the magnet and the self-test data behind it.
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].lifetimeValid = true;
+  units[0].lifetime.idleHallFutileRehomes = 2;
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"fr\":2"));
+  // Still armed — the disarmed flag must not appear merely because it tried.
+  TEST_ASSERT_NULL(strstr(buf, "\"frd\""));
+}
+
+static void test_health_json_says_plainly_when_the_check_is_disarmed() {
+  // The question this exists to answer: "is the idle hall check actually
+  // protecting this wall?" A stood-down unit must say so, not merely carry a
+  // count the reader has to compare against a limit they do not have.
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].lifetimeValid = true;
+  units[0].lifetime.idleHallFutileRehomes = 3;
+  units[0].lifetime.idleHallStoodDown = true;
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"fr\":3"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"frd\":1"));
 }
 
 static void test_health_json_self_test_pair_emits_when_only_one_is_set() {
@@ -611,6 +652,8 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].lifetime.selfTestFirstStepsPerRev = 0xFFFF;
     units[i].lifetime.selfTestLastHallWindow = 0xFFFF;
     units[i].lifetime.selfTestLastStepsPerRev = 0xFFFF;
+    units[i].lifetime.idleHallFutileRehomes = LIFETIME_FUTILE_REHOME_MAX;
+    units[i].lifetime.idleHallStoodDown = true;
   }
   char buf[UNIT_HEALTH_JSON_CAP];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
@@ -895,6 +938,8 @@ int main(int, char**) {
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
   RUN_TEST(test_health_json_ext_diag_emitted_when_valid);
   RUN_TEST(test_health_json_lifetime_emitted_when_valid);
+  RUN_TEST(test_health_json_futile_rehomes_emitted_when_nonzero);
+  RUN_TEST(test_health_json_says_plainly_when_the_check_is_disarmed);
   RUN_TEST(test_health_json_fresh_unit_emits_no_lifetime_keys);
   RUN_TEST(test_health_json_self_test_pair_emits_when_only_one_is_set);
   RUN_TEST(test_health_json_combined_splices_fit_cap);

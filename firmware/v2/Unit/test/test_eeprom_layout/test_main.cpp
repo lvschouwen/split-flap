@@ -215,21 +215,31 @@ static void test_health_bad_checksum_decodes_to_zeros() {
   TEST_ASSERT_EQUAL_UINT16(0, out.stepExcessLifetimeMax);
 }
 
-static void test_health_ships_with_both_motion_gates_off() {
-  // Epic #407's risk defusal: one reflash, motion behaviour OFF, enabled
-  // one at a time on the bench.
+static void test_health_ships_with_the_motion_gate_off() {
+  // Epic #407's risk defusal: one reflash, motion behaviour OFF, switched on
+  // over the wire once the wall is proven.
   UnitLifetimeHealth fresh = {};
   TEST_ASSERT_FALSE(unitGateEnabled(fresh.featureGates, UNIT_GATE_IDLE_HALL_CHECK));
-  TEST_ASSERT_FALSE(unitGateEnabled(fresh.featureGates, UNIT_GATE_SCHEDULED_REHOME));
 }
 
-static void test_gate_bits_are_independent() {
-  uint8_t gates = UNIT_GATE_SCHEDULED_REHOME;
+static void test_gate_lookup_isolates_the_bit_it_is_asked_about() {
+  uint8_t gates = 0;
   TEST_ASSERT_FALSE(unitGateEnabled(gates, UNIT_GATE_IDLE_HALL_CHECK));
-  TEST_ASSERT_TRUE(unitGateEnabled(gates, UNIT_GATE_SCHEDULED_REHOME));
   gates |= UNIT_GATE_IDLE_HALL_CHECK;
   TEST_ASSERT_TRUE(unitGateEnabled(gates, UNIT_GATE_IDLE_HALL_CHECK));
-  TEST_ASSERT_TRUE(unitGateEnabled(gates, UNIT_GATE_SCHEDULED_REHOME));
+  // A neighbouring bit must never read through as this one.
+  TEST_ASSERT_FALSE(unitGateEnabled(0xFE, UNIT_GATE_IDLE_HALL_CHECK));
+}
+
+// #269's scheduled verification re-home turned out to be a MASTER-side
+// feature — the master broadcasts CMD_HOME — so 0x02 never needed unit
+// behaviour and is RETIRED rather than reserved (#458). The masters already
+// refuse to send it; this is the unit's own half of that refusal, so a unit
+// cannot persist and then report through GET_LIFETIME a feature that exists
+// nowhere in this firmware.
+static void test_the_retired_scheduled_rehome_bit_is_refused() {
+  TEST_ASSERT_FALSE(unitGateBitsKnown(0x02));
+  TEST_ASSERT_FALSE(unitGateBitsKnown(UNIT_GATE_IDLE_HALL_CHECK | 0x02));
 }
 
 // A unit must never persist a bit its own firmware has no code for (#409):
@@ -242,6 +252,72 @@ static void test_only_gates_this_firmware_implements_are_accepted() {
   TEST_ASSERT_FALSE(unitGateBitsKnown(0x04));
   TEST_ASSERT_FALSE(unitGateBitsKnown(0xFF));
   TEST_ASSERT_FALSE(unitGateBitsKnown(UNIT_GATE_IDLE_HALL_CHECK | 0x80));
+}
+
+// --- odometer ring init marker (#417) --------------------------------------
+// The day-0 init (#406) deliberately left the ring unwritten, reasoning that
+// erased slots read 0xFFFFFFFF and are rejected anyway. True of a factory-
+// fresh Nano, false of every unit on this wall: #406 rewrites bytes 0..22
+// only, and the ring moved from 16 slots at byte 8 to 128 slots at byte 64 —
+// so the new scan reads EEPROM the old ring wrote and the init never cleared.
+// One stale slot satisfied its checksum and a1 booted claiming 1010580540
+// revolutions.
+//
+// The sweep that fixes it cannot hang off UNIT_EE_LAYOUT_VERSION: bumping
+// that re-runs the erase, which destroys every calibration offset again
+// (#407's restore list). So the ring carries its OWN marker, in the reserved
+// scalars that #406 never touched.
+
+static void test_ring_init_marker_roundtrip() {
+  uint8_t block[EE_RING_INIT_BLOCK_LEN];
+  unitEeRingInitEncode(block);
+  TEST_ASSERT_TRUE(unitEeRingInitDone(block));
+}
+
+static void test_erased_eeprom_asks_for_the_sweep() {
+  // The wall's units: reserved bytes never written, so 0xFF or old ring data.
+  uint8_t block[EE_RING_INIT_BLOCK_LEN];
+  memset(block, 0xFF, sizeof(block));
+  TEST_ASSERT_FALSE(unitEeRingInitDone(block));
+}
+
+static void test_zeroed_eeprom_asks_for_the_sweep() {
+  uint8_t block[EE_RING_INIT_BLOCK_LEN] = {0};
+  TEST_ASSERT_FALSE(unitEeRingInitDone(block));
+}
+
+static void test_torn_marker_asks_for_the_sweep() {
+  uint8_t block[EE_RING_INIT_BLOCK_LEN];
+  unitEeRingInitEncode(block);
+  block[EE_RING_INIT_BLOCK_LEN - 1] ^= 0x08;
+  TEST_ASSERT_FALSE(unitEeRingInitDone(block));
+}
+
+static void test_a_foreign_marker_version_asks_for_the_sweep() {
+  // Why a VERSION and not a flag: if the ring geometry ever moves again, this
+  // bumps and every unit self-heals once more — without touching
+  // UNIT_EE_LAYOUT_VERSION and therefore without erasing calibration.
+  uint8_t block[EE_RING_INIT_BLOCK_LEN];
+  block[0] = (uint8_t)(UNIT_EE_RING_INIT_VERSION + 1);
+  block[1] = unitEeBlockChecksum(block, EE_RING_INIT_BLOCK_LEN - 1,
+                                 EE_RING_INIT_CHECKSUM_MASK);
+  TEST_ASSERT_FALSE(unitEeRingInitDone(block));
+}
+
+static void test_marker_mask_is_distinct_from_every_other_block() {
+  // A block read at the wrong offset must not validate — the property the
+  // whole layout is built on. Byte 24 sits where the OLD 16-slot ring used
+  // to live, so a stale slot's bytes are exactly what this must reject.
+  TEST_ASSERT_TRUE(EE_RING_INIT_CHECKSUM_MASK != EE_ID_CHECKSUM_MASK);
+  TEST_ASSERT_TRUE(EE_RING_INIT_CHECKSUM_MASK != EE_CAL_CHECKSUM_MASK);
+  TEST_ASSERT_TRUE(EE_RING_INIT_CHECKSUM_MASK != EE_HEALTH_CHECKSUM_MASK);
+  TEST_ASSERT_TRUE(EE_RING_INIT_CHECKSUM_MASK != ODO_SLOT_CHECKSUM_MASK);
+}
+
+static void test_marker_sits_in_the_reserved_region_ahead_of_the_ring() {
+  TEST_ASSERT_TRUE(EE_RING_INIT_VERSION >= EE_RESERVED_BASE);
+  TEST_ASSERT_TRUE(EE_RING_INIT_VERSION + EE_RING_INIT_BLOCK_LEN <=
+                   EE_ODO_RING_BASE);
 }
 
 // --- saturating counters --------------------------------------------------
@@ -319,9 +395,17 @@ int main(int, char**) {
   RUN_TEST(test_health_roundtrip_all_fields);
   RUN_TEST(test_health_erased_block_decodes_to_zeros_not_255);
   RUN_TEST(test_health_bad_checksum_decodes_to_zeros);
-  RUN_TEST(test_health_ships_with_both_motion_gates_off);
-  RUN_TEST(test_gate_bits_are_independent);
+  RUN_TEST(test_health_ships_with_the_motion_gate_off);
+  RUN_TEST(test_gate_lookup_isolates_the_bit_it_is_asked_about);
   RUN_TEST(test_only_gates_this_firmware_implements_are_accepted);
+  RUN_TEST(test_the_retired_scheduled_rehome_bit_is_refused);
+  RUN_TEST(test_ring_init_marker_roundtrip);
+  RUN_TEST(test_erased_eeprom_asks_for_the_sweep);
+  RUN_TEST(test_zeroed_eeprom_asks_for_the_sweep);
+  RUN_TEST(test_torn_marker_asks_for_the_sweep);
+  RUN_TEST(test_a_foreign_marker_version_asks_for_the_sweep);
+  RUN_TEST(test_marker_mask_is_distinct_from_every_other_block);
+  RUN_TEST(test_marker_sits_in_the_reserved_region_ahead_of_the_ring);
   RUN_TEST(test_counters_saturate_rather_than_wrap);
   RUN_TEST(test_self_test_first_reading_becomes_the_baseline);
   RUN_TEST(test_self_test_later_readings_only_move_last);

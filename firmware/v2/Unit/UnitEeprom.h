@@ -31,7 +31,9 @@
 //   23       -     reserved
 //
 //  -- reserved scalars ------------------------------------------------------
-//   24..63         40 B — future fields land here, the ring never moves again
+//   24       u8    ringInitVersion           UNIT_EE_RING_INIT_VERSION (#417)
+//   25       u8    checksum over 24
+//   26..63         38 B — future fields land here, the ring never moves again
 //
 //  -- odometer ring ---------------------------------------------------------
 //   64..703        ODO_RING_SLOTS x ODO_SLOT_STRIDE, interleaved
@@ -97,23 +99,61 @@
 #define EE_RESERVED_BASE        24
 #define EE_ODO_RING_BASE        64
 
+// Odometer ring init marker (#417), the first of the reserved scalars.
+//
+// The ring is the one region the day-0 init never wrote: erased slots read
+// 0xFFFFFFFF and the checksummed boot scan rejects them unconditionally, so a
+// blank ring already recovers as 0 and zeroing 640 bytes would spend
+// endurance to reach the same answer. That holds for a factory-fresh Nano and
+// for nothing on this wall — #406 rewrites bytes 0..22 only, while the ring
+// moved from 16 slots at byte 8 to 128 at byte 64. The new scan therefore
+// reads bytes the OLD ring wrote and the init never cleared; one of those
+// stale slots satisfied its own checksum and a1 booted claiming 1010580540
+// revolutions, then counted up from there.
+//
+// A one-shot sweep fixes it, but it cannot hang off UNIT_EE_LAYOUT_VERSION:
+// bumping that re-runs the erase, and the one thing an erase does not survive
+// is the per-unit calibration offset (#407's restore list) — a re-campaign to
+// fix a lifetime counter. So the ring carries its own version marker, here in
+// the reserved scalars the erase never touches. A VERSION rather than a flag
+// because the next geometry change gets the same free self-heal.
+#define EE_RING_INIT_VERSION        24
+#define EE_RING_INIT_CHECKSUM       25
+#define EE_RING_INIT_BLOCK_LEN      2
+#define EE_RING_INIT_CHECKSUM_MASK  0x4B
+#define UNIT_EE_RING_INIT_VERSION   1
+
+static_assert(EE_RING_INIT_VERSION >= EE_RESERVED_BASE,
+              "the ring marker is a reserved scalar");
+static_assert(EE_RING_INIT_VERSION + EE_RING_INIT_BLOCK_LEN <= EE_ODO_RING_BASE,
+              "the ring marker must not overlap the ring it guards");
+
 static_assert(EE_ODO_RING_BASE + ODO_RING_BYTES <= EE_SIZE,
               "odometer ring must fit the ATmega328P EEPROM");
 static_assert(EE_RESERVED_BASE <= EE_ODO_RING_BASE,
               "reserved scalars must sit ahead of the ring");
 
-// Runtime feature gates (#407), byte 11. The epic lands five changes in one
-// physical reflash; the two that alter MOTION behaviour ship OFF so the wall
-// can be proven on the low-risk three first, then have each motion change
-// switched on over I2C without another reflash.
+// Runtime feature gates (#407), byte 11. The epic lands its changes in one
+// physical reflash; the one that alters MOTION behaviour ships OFF so the
+// wall can be proven on the low-risk changes first, then have the motion
+// change switched on over I2C without another reflash.
+//
+// 0x02 was allocated to #269's scheduled verification re-home and is RETIRED,
+// not reserved (#458): #269 turned out to be entirely master-side — the
+// master broadcasts CMD_HOME on its own schedule — so no unit firmware ever
+// implemented it, yet UNIT_GATE_ALL admitted the bit. A unit accepted it,
+// persisted it, and reported it back through GET_LIFETIME, so the op's
+// read-back verification confirmed a feature that did not exist: truthful
+// about STORAGE, silent about BEHAVIOUR. The number stays burned here rather
+// than in a dead #define, because a constant nothing reads is exactly what
+// made that possible. Mirrored by SFP_UNIT_GATE_IMPLEMENTED on the master
+// side; widen the two together with the code that honours the bit.
 #define UNIT_GATE_IDLE_HALL_CHECK   0x01  // #268 idle hall consistency check
-#define UNIT_GATE_SCHEDULED_REHOME  0x02  // #269 scheduled verification re-home
 
 // Every bit this firmware has code for. SET_GATES (#409) refuses anything
 // outside it: a unit must never persist a gate it will not act on, or
 // /units/health reports a feature as enabled that does not exist here.
-#define UNIT_GATE_ALL \
-  (UNIT_GATE_IDLE_HALL_CHECK | UNIT_GATE_SCHEDULED_REHOME)
+#define UNIT_GATE_ALL  (UNIT_GATE_IDLE_HALL_CHECK)
 
 inline bool unitGateEnabled(uint8_t gates, uint8_t gate) {
   return (gates & gate) != 0;
@@ -173,6 +213,25 @@ inline uint8_t unitEeIdentityAddress(const uint8_t block[EE_ID_BLOCK_LEN]) {
   // 0 is general call, 127 is reserved; anything else in 1..126 is plausible.
   if (block[1] < 1 || block[1] > 126) return 0;
   return block[1];
+}
+
+inline void unitEeRingInitEncode(uint8_t block[EE_RING_INIT_BLOCK_LEN]) {
+  block[0] = UNIT_EE_RING_INIT_VERSION;
+  block[1] = unitEeBlockChecksum(block, EE_RING_INIT_BLOCK_LEN - 1,
+                                 EE_RING_INIT_CHECKSUM_MASK);
+}
+
+// False means "sweep the ring, then stamp this". Everything that is not this
+// exact version under a valid checksum asks for the sweep — erased bytes, a
+// stale slot from the old ring geometry that happens to sit here, a torn
+// write, or a marker from an older geometry.
+inline bool unitEeRingInitDone(const uint8_t block[EE_RING_INIT_BLOCK_LEN]) {
+  if (block[EE_RING_INIT_BLOCK_LEN - 1] !=
+      unitEeBlockChecksum(block, EE_RING_INIT_BLOCK_LEN - 1,
+                          EE_RING_INIT_CHECKSUM_MASK)) {
+    return false;
+  }
+  return block[0] == UNIT_EE_RING_INIT_VERSION;
 }
 
 inline void unitEeCalEncode(int16_t offset, uint8_t block[EE_CAL_BLOCK_LEN]) {

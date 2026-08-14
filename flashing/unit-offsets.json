@@ -16,7 +16,7 @@
   "capturedUtc": "2026-07-26T15:23:05Z",
   "rows": [
     {
-      "host": "192.168.15.91",
+      "host": "192.168.15.88",
       "row": 1,
       "note": "S3 leader, 16 units. Unit at address 15 was hall-dead at capture time; its offset is still the calibrated value and stays worth restoring after the sensor is repaired.",
       "offsets": {
