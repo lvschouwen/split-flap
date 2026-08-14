@@ -445,14 +445,15 @@ void setup() {
       marker[i] = EEPROM.read(EE_RING_INIT_VERSION + i);
     }
     if (!unitEeRingInitDone(marker)) {
-      for (uint8_t s = 0; s < ODO_RING_SLOTS; s++) {
-        int at = EE_ODO_RING_BASE + (int)odometerSlotOffset(s);
-        uint32_t value;
-        EEPROM.get(at, value);
-        if (value == 0xFFFFFFFFUL) continue;
-        uint32_t zero = 0;
-        EEPROM.put(at, zero);
-        EEPROM.update(at + 4, odometerSlotChecksum(0));
+      // Clear the HISTORICAL extent, not the live ring (#463). A shrink
+      // strands old slots past the new end; they still satisfy their own
+      // checksums, so a later grow would read them back into range — which is
+      // #417's own bug, re-armed by construction. Raw zeros rather than valid
+      // zero-slots: a zeroed slot's checksum byte no longer matches, so every
+      // stale slot is REJECTED by the boot scan rather than merely losing the
+      // max, which is the stronger property for bytes outside the live ring.
+      for (uint16_t i = 0; i < ODO_RING_SWEEP_BYTES; i++) {
+        EEPROM.update(EE_ODO_RING_BASE + (int)i, 0x00);
       }
       // Marker LAST, same rule as the layout version byte: a power loss
       // mid-sweep simply re-runs it on the next boot.
