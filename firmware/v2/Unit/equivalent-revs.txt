@@ -32,9 +32,6 @@
 # DELETE a line once no unit on the wall reports that rev — after the next
 # fleet reflash, this file should be empty again.
 
-# Measured 2026-08-14. The wall was commissioned on d6e8a8a; the only Unit-
-# source commits since were comment-only (f01d855 reworded a block above a
-# byte-identical declaration in Unit.ino, and one in shared/UnitExtDiag.h).
-# Builds at d6e8a8a and at the then-current head: 13848 bytes, differing in
-# exactly the 7 bytes of the rev string at 0x360F..0x3615.
-d6e8a8a fa6ae49ea8203af814407867bf2d0211480effe2acf60994b7263e3e92e273c8
+# Empty, as intended. The d6e8a8a entry retired on 2026-08-14 when the
+# #458/#417/#460 campaign put all 21 units on the current rev — no unit on
+# the wall reports a legacy rev, so nothing needs an equivalence claim.
