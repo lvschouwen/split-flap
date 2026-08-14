@@ -1,5 +1,6 @@
-from splitflap_client.models import ClusterMember
-from splitflap_tui.widgets import DOT_BAD, DOT_OK, DOT_WARN, member_dot_style
+from splitflap_client.models import ClusterMember, UnitsHealth
+from splitflap_tui.widgets import (DOT_BAD, DOT_OK, DOT_WARN, UnitsTable,
+                                   member_dot_style, units_rows)
 
 
 def member(**over):
@@ -72,3 +73,40 @@ def test_suggest_words_cover_every_command():
     from splitflap_tui.commands import CANONICAL_NAMES
     expected = {DISPLAY_NAMES.get(n, n) for n in CANONICAL_NAMES} | {"help"}
     assert set(SUGGEST_WORDS) == expected
+
+
+# ---- #455: lifetime wear in the units table ---------------------------
+def _wall_row():
+    """The REAL row 1 as read off the live leader on 2026-08-13: sixteen
+    units, of which a6 carries hf=3 with sxl 972 and a15 sits at sxl 1465
+    against a median of 18."""
+    sxl = [17, 18, 37, 18, 17, 972, 17, 18, 18, 18, 17, 17, 17, 18, 1465, 17]
+    units = []
+    for i, v in enumerate(sxl):
+        u = {"i": i, "a": i + 1, "st": 1, "v": 1, "sx": 0, "odo": 20,
+             "vmin": 5000, "sxl": v}
+        if i + 1 == 6:
+            u["hf"] = 3
+        units.append(u)
+    return UnitsHealth.from_json({"width": 16, "faulty": 0, "units": units})
+
+
+def test_units_table_shows_lifetime_not_since_boot():
+    table = UnitsTable()
+    assert "sxl" in table.COLUMNS and "hf" in table.COLUMNS
+    assert "sx" not in table.COLUMNS, "sx read 0 on every live unit"
+
+
+def test_units_table_flags_the_two_degrading_units():
+    rows = units_rows(_wall_row())
+    flags = {r[0]: r[-1] for r in rows}
+    assert flags["0x01"] == "" and flags["0x05"] == ""
+    assert "HALL" in flags["0x06"] and "DRAG" in flags["0x06"]
+    assert flags["0x0f"] == "DRAG"
+
+
+def test_units_table_renders_lifetime_values():
+    rows = {r[0]: r for r in units_rows(_wall_row())}
+    assert rows["0x0f"][2] == "1465"      # sxl column
+    assert rows["0x06"][3] == "3"         # hf column
+    assert rows["0x01"][3] == "—"         # absent hf stays an em dash

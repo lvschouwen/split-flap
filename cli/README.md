@@ -51,6 +51,25 @@ character as a discrete flap cell (amber-on-dark, one cell per unit) when
 there's room, degrading to plain text on a narrow terminal rather than
 wrapping cells.
 
+The `units` panel reports **lifetime** wear (#455): `sxl` is cumulative
+steps-to-home and `hf` the hall-failure count, both read straight from the
+unit's own EEPROM. The `flags` column adds two derived markers on top of
+`STALE`/`FAULT`:
+
+| Marker | Meaning |
+|---|---|
+| `HALL` | the unit has recorded at least one hall failure (`hf`) — the firmware's own escalation bar is 3 |
+| `DRAG` | `sxl` is at least 8× its row's median and at least 100 — friction or a slipping coupling, not a sensor |
+
+`DRAG` is relative to the row median rather than an absolute number, so a
+wall that ages evenly does not light up end to end, and a re-calibrated row
+re-baselines itself. The flip side is that it needs a majority-healthy row
+to have something to be an outlier from. A unit can carry both markers.
+
+Note that a board's own `faulty` count answers "is this unit responding?",
+not "is it wearing out" — a wall can report `faulty: 0` while carrying units
+that need physical attention, which is exactly what these markers surface.
+
 ## Keybindings
 
 | Key | Action |
