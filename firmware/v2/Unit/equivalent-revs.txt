@@ -32,6 +32,7 @@
 # DELETE a line once no unit on the wall reports that rev — after the next
 # fleet reflash, this file should be empty again.
 
-# Empty, as intended. The d6e8a8a entry retired on 2026-08-14 when the
-# #458/#417/#460 campaign put all 21 units on the current rev — no unit on
-# the wall reports a legacy rev, so nothing needs an equivalence claim.
+# #466 moved the Unit source head with a comments-and-static_asserts edit to
+# UnitEeprom.h (the header is an input to the binary; the tests beside it are
+# not). Measured, both clean builds: identical.
+3186546 9b042ebeb17f9b28950191c6e479ed960a100b274980432c6f58d030e96151ed
