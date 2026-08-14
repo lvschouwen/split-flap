@@ -818,12 +818,24 @@ static void flashBootloaderUnits() {
     waitForBatchIdle(batch, batchCount, REFLASH_BATCH_SETTLE_MS);
   }
   // Runs only when something was actually flashed — a no-op sweep leaves the
-  // facts it was handed alone. Placed AFTER the trailing batch settle, which
-  // is what keeps the probe clear of twiboot's post-reset window: this probe
-  // sends isUnitInBootloader()'s CMD_ACCESS_MEMORY, and that pins twiboot
-  // alive on a unit still inside it (v1 #88 — the same quirk main.cpp's
-  // 1500 ms pre-probe delay exists for). A unit that failed to come back stays
-  // pinned in twiboot either way, which is the truth the operator needs.
+  // facts it was handed alone.
+  //
+  // Position is load-bearing: it must follow the trailing batch settle. This
+  // probe sends isUnitInBootloader()'s CMD_ACCESS_MEMORY, which zeroes
+  // twiboot's boot_timeout and pins it alive on a unit still inside its
+  // post-reset window (v1 #88 — the quirk main.cpp's 1500 ms pre-probe delay
+  // exists for). What makes the placement safe is not the elapsed delay but
+  // what waitForBatchIdle can see: a unit still in twiboot answers a bare
+  // 1-byte read from its default branch with 0xFF (UnitBootloader/main.c
+  // TWI_data_read, cmd == CMD_WAIT), and a unit that does not answer at all
+  // reads -1. checkIfMoving returns both verbatim and the settle treats
+  // anything != 0 as not-idle, so the wait CANNOT return while a batch member
+  // is in the bootloader. Only a unit running its sketch reports 0.
+  //
+  // Units OUTSIDE the batch — the ones that failed to flash — are still in
+  // twiboot and this probe does pin them there. That is the intended end
+  // state: they show as bootloader and the next sweep flashes them.
+  //
   // Same position and same preceding settle as the S3's runReflashJob; keep
   // the two flows in step rather than tuning one of them alone.
   if (flashed > 0) busProbe();
