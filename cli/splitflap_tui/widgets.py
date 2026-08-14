@@ -255,12 +255,29 @@ class UnitsTable(DataTable):
     def on_mount(self) -> None:
         self.add_columns(*self.COLUMNS)
         self.border_title = border_text(self.BASE_TITLE)
+        # #473: row cursor so `enter` selects a whole unit, not one cell.
+        self.cursor_type = "row"
+        # Row index -> the unit that built it, for the detail screen. Kept
+        # in step with the table by update_units and nothing else.
+        self.entries: list = []
+        self.row_median = 0
 
     def update_units(self, h: UnitsHealth) -> None:
         self.clear()
+        self.entries = list(h.units)
+        self.row_median = row_sxl_median(h.units)
         for row in units_rows(h):
             # Text() per #450: DataTable markup-parses plain-str cells.
             self.add_row(*(Text(c) for c in row))
+
+    def on_key(self, event) -> None:
+        # Escape gives focus back to the dashboard. Every other key is left
+        # to bubble: the app's bindings (including the ctrl+s STOP priority
+        # binding) must keep working while this table is focused.
+        if event.key == "escape":
+            event.stop()
+            event.prevent_default()
+            self.app.set_focus(None)
 
     def mark_stale(self) -> None:
         self.border_title = border_text(f"{self.BASE_TITLE} [STALE]")

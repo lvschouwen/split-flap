@@ -30,6 +30,7 @@ from .screens.discover_screen import DiscoverScreen
 from .screens.health_screen import HealthScreen
 from .screens.help_screen import HelpScreen
 from .screens.log_screen import LogScreen
+from .screens.unit_detail import UnitDetailScreen
 from .widgets import (ClusterStrip, CommandInput, LogTail, StatsBar,
                       UnitsTable, WallPanel, border_text, format_cmd_status)
 
@@ -162,6 +163,7 @@ class SplitflapApp(App):
                 Binding("ctrl+s", "stop_wall", "STOP", priority=True),
                 ("b", "board_detail", "Board"), ("l", "log_screen", "Log"),
                 ("s", "health_screen", "Health"),
+                ("u", "focus_units", "Units"),
                 ("question_mark", "help", "Help")]
 
     def __init__(self, config: Config,
@@ -312,6 +314,32 @@ class SplitflapApp(App):
         """`s` pushes the board-health screen (#472) — renders the last
         polled /status, so it costs no extra request."""
         self.push_screen(HealthScreen())
+
+    def action_focus_units(self) -> None:
+        """`u` hands focus to the units table (#473): arrows move the row
+        cursor, enter opens that unit's detail screen, escape gives focus
+        back. Letter keys keep bubbling to the app bindings meanwhile."""
+        self.query_one("#units", UnitsTable).focus()
+
+    def on_data_table_row_selected(self, event) -> None:
+        table = event.data_table
+        if table.id != "units":
+            return
+        entries = getattr(table, "entries", [])
+        if event.cursor_row < len(entries):
+            self.push_screen(UnitDetailScreen(entries[event.cursor_row],
+                                              table.row_median))
+
+    def open_command_with(self, text: str) -> None:
+        """Open the command bar pre-filled (#473): the value-taking ops
+        (offset/jog/gates) can't be a single keystroke, so the unit detail
+        screen drops the operator here with the address already typed."""
+        cmd = self.query_one("#command", CommandInput)
+        cmd.reset_history_cursor()
+        cmd.display = True
+        cmd.value = text
+        cmd.cursor_position = len(text)
+        cmd.focus()
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())

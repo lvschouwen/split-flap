@@ -17,7 +17,7 @@ Two rules the firmware forces on us:
 """
 from __future__ import annotations
 
-from splitflap_client.models import StatusAggregate
+from splitflap_client.models import StatusAggregate, UnitEntry
 
 from .format import human_duration, human_size
 
@@ -97,4 +97,77 @@ def health_sections(agg: StatusAggregate) -> list[Section]:
             ("reflash on boot", _yes_no(s.reflash_on_boot)),
             ("cluster leader", _dash(s.cluster_leader_name)),
         ]),
+    ]
+
+
+# --- per-unit detail (#473) -------------------------------------------
+#
+# One unit answers ~37 keys (the #365 ext-diag surface). The labels below
+# are OUR wording for the firmware's keys; test_health's drift gate asserts
+# every key here still exists in the board's own /api legend, so a rename
+# firmware-side fails a test instead of quietly showing a dash forever.
+#
+# Rows are (key, label). Composed rows — the ones that only mean something
+# as a pair — are built by hand below and carry no single key.
+
+_IDENTITY = [("a", "address"), ("i", "column"), ("rev", "firmware rev"),
+             ("fw", "vs bundle"), ("pv", "protocol"), ("st", "state"),
+             ("up", "unit uptime")]
+_WEAR = [("odo", "odometer"), ("hf", "failed homings"), ("dw", "duty window")]
+_HOMING = [("hs", "last homing steps"), ("he", "hall edges/rev"),
+           ("hs2", "boot-home state"), ("fl", "status flags"),
+           ("de", "drift events"), ("ds", "last drift steps"),
+           ("phys", "physical letter"), ("cp", "commanded flap")]
+_POWER = [("vcc", "supply now"), ("vmin", "min since boot"),
+          ("sag", "min under load"), ("br", "brownout resets"),
+          ("wd", "watchdog resets"), ("ram", "min free SRAM")]
+_BUS = [("age", "last good read"), ("bc", "bad commands"),
+        ("mc", "MCUSR at boot"), ("ae", "address source"),
+        ("gates", "feature gates"), ("sb", "ext-diag bits")]
+
+# Every key the detail view renders, including the composed rows'.
+UNIT_DETAIL_KEYS = tuple(
+    k for k, _ in _IDENTITY + _WEAR + _HOMING + _POWER + _BUS
+) + ("sxl", "sx", "se", "stw0", "stw1", "str0", "str1", "err", "errAge",
+     "misses")
+
+
+def _rows(entry: UnitEntry, spec: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    return [(label, _dash(entry.raw.get(key))) for key, label in spec]
+
+
+def _pair(entry: UnitEntry, first: str, latest: str) -> str:
+    a, b = entry.raw.get(first), entry.raw.get(latest)
+    return "-" if a is None and b is None else f"{_dash(a)} → {_dash(b)}"
+
+
+def unit_detail_sections(entry: UnitEntry, row_median: int) -> list[Section]:
+    """Everything one unit reports, grouped. `row_median` is its row's median
+    sxl, carried in so a number can be read against its neighbours."""
+    raw = entry.raw
+    wear: list[tuple[str, str]] = [
+        # THE row that decides whether a unit needs hands. sxl is the
+        # LIFETIME worst step-excess and sx forgets at reboot, so
+        # "1465 lifetime · 0 since boot" says misbehaved-historically,
+        # currently-clean — which lifetime alone cannot express, and which
+        # is exactly how a permanently-on warning gets ignored.
+        ("worst step-excess",
+         f"{_dash(raw.get('sxl'))} lifetime · {_dash(raw.get('sx'))} since boot"),
+        ("last home excess", _dash(raw.get("se"))),
+        ("row median", f"median {row_median}"),
+    ] + _rows(entry, _WEAR)
+    bus: list[tuple[str, str]] = _rows(entry, _BUS) + [
+        ("i2c errors",
+         "-" if raw.get("err") is None
+         else f"{raw['err']} (last {_dash(raw.get('errAge'))} ms ago)"),
+        ("missed heartbeats", _dash(raw.get("misses"))),
+    ]
+    return [
+        ("identity", _rows(entry, _IDENTITY)),
+        ("wear", wear),
+        ("self-test", [("hall window", _pair(entry, "stw0", "stw1")),
+                       ("steps/rev", _pair(entry, "str0", "str1"))]),
+        ("homing", _rows(entry, _HOMING)),
+        ("power", _rows(entry, _POWER)),
+        ("bus", bus),
     ]

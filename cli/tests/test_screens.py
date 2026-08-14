@@ -8,12 +8,14 @@ from splitflap_client.models import ClusterStatus, StatusAggregate
 from splitflap_client.transport import BoardClient
 from splitflap_tui.app import SplitflapApp
 from splitflap_tui.config import Board, Config
+from splitflap_tui.widgets import CommandInput, UnitsTable
 from splitflap_tui.screens import board_detail
 from splitflap_tui.screens.board_detail import BoardDetailScreen
 from splitflap_tui.screens.discover_screen import DiscoverScreen
 from splitflap_tui.screens.health_screen import HealthScreen
 from splitflap_tui.screens.help_screen import HelpScreen
 from splitflap_tui.screens.log_screen import LogScreen
+from splitflap_tui.screens.unit_detail import UnitDetailScreen
 from textual.coordinate import Coordinate
 from textual.widgets import DataTable, RichLog, Static
 
@@ -444,3 +446,116 @@ async def test_health_screen_follows_later_polls():
                          ClusterStatus.from_json(moved["cluster"]))
         await pilot.pause(0.1)
         assert "app1" in body.content
+
+
+# ---- #473: selectable units table + unit detail -----------------------
+
+@pytest.mark.asyncio
+async def test_u_focuses_units_and_enter_opens_that_units_detail():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("u")
+        await pilot.pause(0.1)
+        units = app.query_one("#units", UnitsTable)
+        assert app.focused is units
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, UnitDetailScreen)
+        assert app.screen.entry.address == 1          # the fixture's only unit
+        body = app.screen.query_one("#unit-body", Static).content
+        assert "worst step-excess" in body
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, UnitDetailScreen)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_s_still_stops_while_the_units_table_is_focused():
+    """Focusing a widget must not swallow the always-active kill switch."""
+    posts = []
+
+    def factory(url):
+        def h(req):
+            if req.method == "POST":
+                posts.append(req.url.path)
+                return httpx.Response(200, json={"seq": 1})
+            if req.url.path == "/status":
+                from tests.test_app import STATUS
+                return httpx.Response(200, json=STATUS)
+            return httpx.Response(200, json={})
+        return BoardClient(url, transport=httpx.MockTransport(h))
+
+    app = SplitflapApp(CFG, client_factory=factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("u")
+        await pilot.pause(0.1)
+        assert app.focused is app.query_one("#units", UnitsTable)
+        await pilot.press("ctrl+s")
+        await pilot.pause(0.4)
+    assert "/stop" in posts
+
+
+@pytest.mark.asyncio
+async def test_direct_op_key_dispatches_for_the_selected_unit():
+    """`i` on the detail screen runs identify for THAT unit, through the
+    normal confirm tier — not a second op path."""
+    posts = []
+    def factory(url):
+        def h(req):
+            if req.method == "POST":
+                posts.append((req.url.path, dict(req.url.params)))
+                return httpx.Response(200, json={"seq": 1})
+            if req.url.path == "/unit/op-result":
+                return httpx.Response(200, json={"state": "ok"})
+            if req.url.path == "/status":
+                from tests.test_app import STATUS
+                return httpx.Response(200, json=STATUS)
+            if req.url.path == "/cluster/status":
+                from tests.test_app import STATUS
+                return httpx.Response(200, json=STATUS["cluster"])
+            return httpx.Response(200, json={})
+        return BoardClient(url, transport=httpx.MockTransport(h))
+    app = SplitflapApp(CFG, client_factory=factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("u")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        await pilot.press("i")                 # identify
+        await pilot.pause(0.2)
+        await pilot.press("y")                 # TIER_CONFIRM
+        await pilot.pause(0.4)
+    assert any(path == "/unit/identify" and params.get("address") == "1"
+               for path, params in posts)
+
+
+@pytest.mark.asyncio
+async def test_value_op_key_prefills_the_command_bar_instead_of_running():
+    posts = []
+    def factory(url):
+        def h(req):
+            if req.method == "POST":
+                posts.append(req.url.path)
+                return httpx.Response(200, json={"seq": 1})
+            if req.url.path == "/status":
+                from tests.test_app import STATUS
+                return httpx.Response(200, json=STATUS)
+            if req.url.path == "/cluster/status":
+                from tests.test_app import STATUS
+                return httpx.Response(200, json=STATUS["cluster"])
+            return httpx.Response(200, json={})
+        return BoardClient(url, transport=httpx.MockTransport(h))
+    app = SplitflapApp(CFG, client_factory=factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("u")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        await pilot.press("o")                 # offset — needs a value
+        await pilot.pause(0.2)
+        cmd = app.query_one("#command", CommandInput)
+        assert cmd.value == "op offset 1 "
+        assert app.focused is cmd
+    assert not any(p.startswith("/unit/offset") for p in posts)
