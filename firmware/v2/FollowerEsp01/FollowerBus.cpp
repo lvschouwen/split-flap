@@ -775,10 +775,24 @@ void followerBootHome() {
 
 // Flash every bootloader-mode unit in the CURRENT facts, batched. Updates
 // facts in place for successes (v1 #120 rule: the streamed image IS the
-// bundle, page-verified — don't re-read over I2C and risk pinning twiboot).
+// bundle, page-verified — don't re-read over I2C and risk pinning twiboot),
+// then re-probes the row if anything was flashed.
+//
+// The re-probe is not optional bookkeeping (#462). Every caller reaches here
+// through a probe taken with the targets sitting in twiboot, where the offset
+// / odometer / lifetime reads cannot succeed — so those facts come back
+// INVALID and nothing else repopulates them: busPollHealth is a health poll,
+// not a probe, and it never reads the offset. GET /unit/offset then served
+// "no valid offset" for a whole freshly-flashed row whose calibration was
+// perfectly intact, at the exact moment an operator checks it, and
+// restore-unit-offsets.sh read the same cache and called the row UNREADABLE.
+// The invalidation is right (UnitHealth.h's documented lifecycle: reads drop
+// when a bootloader reboot invalidates them) — the repopulation was missing.
+// This is what the S3 already does at the end of runReflashJob.
 static void flashBootloaderUnits() {
   uint8_t batch[REFLASH_BATCH_SIZE];
   int batchCount = 0;
+  int flashed = 0;
   for (int i = 0; i < UNITS_AMOUNT; i++) {
     if (unitFacts[i].state != 2) continue;
     uint8_t addr = (uint8_t)toI2cAddress(i);
@@ -791,6 +805,7 @@ static void flashBootloaderUnits() {
       unitFacts[i].version[8] = '\0';
       unitFacts[i].fwStatus = 0;
       batch[batchCount++] = addr;
+      flashed++;
     }
     if (batchCount >= REFLASH_BATCH_SIZE) {
       reflashProgressSettling(reflashProgress);
@@ -802,6 +817,16 @@ static void flashBootloaderUnits() {
     reflashProgressSettling(reflashProgress);
     waitForBatchIdle(batch, batchCount, REFLASH_BATCH_SETTLE_MS);
   }
+  // Runs only when something was actually flashed — a no-op sweep leaves the
+  // facts it was handed alone. Placed AFTER the trailing batch settle, which
+  // is what keeps the probe clear of twiboot's post-reset window: this probe
+  // sends isUnitInBootloader()'s CMD_ACCESS_MEMORY, and that pins twiboot
+  // alive on a unit still inside it (v1 #88 — the same quirk main.cpp's
+  // 1500 ms pre-probe delay exists for). A unit that failed to come back stays
+  // pinned in twiboot either way, which is the truth the operator needs.
+  // Same position and same preceding settle as the S3's runReflashJob; keep
+  // the two flows in step rather than tuning one of them alone.
+  if (flashed > 0) busProbe();
 }
 
 void busAutoInstallBootloaderUnits() {
