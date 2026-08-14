@@ -517,8 +517,11 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
       // real against BUNDLED_UNIT_REV — 0 ok / 1 differs. Both the rev (a
       // hash) and the protocol version are compared for EQUALITY only: neither
       // tells us "older", just "not ours", and not-ours always means reflash.
-      facts[unitIndex].fwStatus =
-          unitFwStatusFromRev(facts[unitIndex].version, BUNDLED_UNIT_REV);
+      // BUNDLED_UNIT_REV_EQUIV widens "ours" to revs measured to build the
+      // same machine code (#440), so a unit flashed before the identity
+      // scheme changed is not mislabelled — and not auto-reflashed for it.
+      facts[unitIndex].fwStatus = unitFwStatusFromRev(
+          facts[unitIndex].version, BUNDLED_UNIT_REV, BUNDLED_UNIT_REV_EQUIV);
       facts[unitIndex].protocolVersion = protocolVersion;
       facts[unitIndex].protocolKnown = true;
       if (!unitProtocolSupported(protocolVersion)) {

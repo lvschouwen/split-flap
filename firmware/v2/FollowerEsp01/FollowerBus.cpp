@@ -274,8 +274,10 @@ void busProbe() {
     if (readUnitVersion(i2cAddress, unitFacts[i].version, protocolVersion)) {
       // Rev (a hash) and protocol version are both compared for EQUALITY
       // only — neither says "older", and different always means reflash.
-      unitFacts[i].fwStatus =
-          unitFwStatusFromRev(unitFacts[i].version, BUNDLED_UNIT_REV);
+      // BUNDLED_UNIT_REV_EQUIV widens "ours" to revs measured to build the
+      // same machine code (#440).
+      unitFacts[i].fwStatus = unitFwStatusFromRev(
+          unitFacts[i].version, BUNDLED_UNIT_REV, BUNDLED_UNIT_REV_EQUIV);
       unitFacts[i].protocolVersion = protocolVersion;
       unitFacts[i].protocolKnown = true;
     }

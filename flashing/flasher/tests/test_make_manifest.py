@@ -60,11 +60,16 @@ def test_rev_gate_passes_when_staged_at_unit_head(repo):
     staged_rev_gate(staged, repo=repo)  # no raise
 
 
-def test_rev_gate_passes_when_staged_after_unit_head(repo):
-    # Bundle staged from a later tree that already contains the Unit change.
+def test_rev_gate_requires_the_exact_unit_source_head(repo):
+    # #440 tightened this from "contains the Unit change" to "IS the Unit
+    # source head". The sidecar and the rev baked into the unit binary are
+    # both stamped by build_version.py from unit_source_head(), so anything
+    # else means the two sides disagree — and every unit would then read
+    # OUTDATED against its own bundle.
     staged = _commit(repo, "firmware/v2/Master/data/unit-firmware.rev",
                      "x", "artifact commit")
-    staged_rev_gate(staged, repo=repo)  # no raise
+    with pytest.raises(GateError, match="source head"):
+        staged_rev_gate(staged, repo=repo)
 
 
 def test_rev_gate_rejects_unit_change_after_staging(repo):
@@ -112,6 +117,122 @@ def test_unit_source_head_tracks_unit_and_shared(repo):
     assert unit_source_head(repo) == first
     _commit(repo, "firmware/v2/shared/SplitFlapProtocol.h", "p", "protocol")
     assert unit_source_head(repo) == _git(repo, "rev-parse", "HEAD")
+
+
+# --- proven content-equivalent revs (#440) -----------------------------------
+# A unit reports the COMMIT it was built at, not the CODE it runs, so a
+# comment-only edit re-labels every unit OUTDATED. equivalent-revs.txt records
+# revs measured to run byte-identical machine code, paired with the CONTENT
+# HASH of that image. Anchoring on the artifact (not a commit) is what lets an
+# entry survive commits that cannot touch the Nano binary while evaporating
+# the instant one that can does.
+
+HASH_A = "a" * 64
+HASH_B = "b" * 64
+
+
+def _equiv_file(repo, text: str):
+    p = repo / "firmware/v2/Unit/equivalent-revs.txt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def test_equivalents_survive_for_the_image_they_were_proven_against(repo):
+    _equiv_file(repo, f"# comment\n\nd6e8a8a {HASH_A}\n")
+    assert mm.load_equivalent_revs(HASH_A, repo=repo) == ["d6e8a8a"]
+
+
+def test_equivalents_are_dropped_once_the_image_changes(repo):
+    _equiv_file(repo, f"d6e8a8a {HASH_A}\n")
+    # A REAL Unit change lands: the built image hashes differently, so the
+    # proof no longer applies and the entry evaporates with no one editing it.
+    assert mm.load_equivalent_revs(HASH_B, repo=repo) == []
+
+
+def test_equivalents_ignore_comments_blanks_and_malformed_lines(repo):
+    _equiv_file(repo, f"""
+        # a comment
+        d6e8a8a {HASH_A}
+        onlyonefield
+        aaaaaaa {HASH_A} trailing junk
+        bbbbbbb {HASH_B}
+        ccccccc deadbee
+    """.replace("        ", ""))
+    # Only the well-formed line proven against THIS image survives: the
+    # 3-field line is malformed, HASH_B is a different image, and "deadbee"
+    # is too short to be a content hash.
+    assert mm.load_equivalent_revs(HASH_A, repo=repo) == ["d6e8a8a"]
+
+
+def test_equivalents_absent_file_is_not_an_error(repo):
+    assert mm.load_equivalent_revs(HASH_A, repo=repo) == []
+
+
+def test_empty_content_hash_never_matches(repo):
+    """A hash we failed to compute must not silently match a blank field."""
+    _equiv_file(repo, "d6e8a8a \n")
+    assert mm.load_equivalent_revs("", repo=repo) == []
+
+
+# --- image content hashing ---------------------------------------------------
+
+def _write_hex(path, payload: bytes):
+    """Minimal Intel HEX: one data record at 0x0000 plus EOF."""
+    body = bytes([len(payload), 0x00, 0x00, 0x00]) + payload
+    checksum = (-sum(body)) & 0xFF
+    path.write_text(":" + (body + bytes([checksum])).hex().upper() +
+                    "\n:00000001FF\n")
+
+
+def test_content_hash_ignores_the_embedded_rev(tmp_path):
+    """The whole premise: two images differing only in the baked rev string
+    are the same code and must hash identically."""
+    a = tmp_path / "a.hex"; _write_hex(a, b"\x01\x02d6e8a8a\x03")
+    b = tmp_path / "b.hex"; _write_hex(b, b"\x01\x02c0729fe\x03")
+    assert mm.image_content_hash(a, "d6e8a8a") == \
+           mm.image_content_hash(b, "c0729fe")
+
+
+def test_content_hash_still_sees_a_real_code_change(tmp_path):
+    a = tmp_path / "a.hex"; _write_hex(a, b"\x01\x02d6e8a8a\x03")
+    b = tmp_path / "b.hex"; _write_hex(b, b"\x01\x99c0729fe\x03")
+    assert mm.image_content_hash(a, "d6e8a8a") != \
+           mm.image_content_hash(b, "c0729fe")
+
+
+def test_stage_writes_the_equiv_sidecar(tmp_path):
+    built_hex = tmp_path / "firmware.hex"; built_hex.write_bytes(b"HEX")
+    built_rev = tmp_path / "firmware.rev"; built_rev.write_text("abc1234\n")
+    tree = tmp_path / "a"; tree.mkdir()
+    stage_bundle(built_hex, built_rev, [tree], equivalents=["d6e8a8a", "eee"])
+    assert (tree / "unit-firmware.equiv").read_text() == "d6e8a8a\neee\n"
+
+
+def test_stage_overwrites_a_stale_equiv_sidecar(tmp_path):
+    """The sidecar must always describe THIS stage — a leftover from a
+    previous one would silently keep suppressing a real OUTDATED."""
+    built_hex = tmp_path / "firmware.hex"; built_hex.write_bytes(b"HEX")
+    built_rev = tmp_path / "firmware.rev"; built_rev.write_text("abc1234\n")
+    tree = tmp_path / "a"; tree.mkdir()
+    (tree / "unit-firmware.equiv").write_text("stale000\n")
+    stage_bundle(built_hex, built_rev, [tree], equivalents=[])
+    assert (tree / "unit-firmware.equiv").read_text() == ""
+
+
+def test_unit_src_pathspecs_match_the_build_stamp():
+    """build_version.py stamps the binary and make_manifest.py gates the
+    sidecar; both decide what "the Unit sources" are. If the two lists
+    diverge, the baked rev and the staged rev disagree and EVERY unit reads
+    OUTDATED against its own bundle. build_version.py cannot import from here
+    (it runs inside a PlatformIO build), so pin them instead."""
+    import importlib.util
+
+    path = mm.REPO / "firmware/v2/Unit/build_version.py"
+    spec = importlib.util.spec_from_file_location("unit_build_version", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.UNIT_SRC_PATHSPECS == mm.UNIT_SRC_PATHSPECS
 
 
 def test_cmd_gate_rejects_missing_rev_sidecar(repo, monkeypatch):

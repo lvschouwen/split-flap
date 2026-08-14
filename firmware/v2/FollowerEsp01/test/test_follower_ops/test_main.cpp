@@ -50,11 +50,18 @@ static void test_offset_and_jog_ranges() {
   TEST_ASSERT_EQUAL(400, maintValidateJog(128).httpStatus);
 }
 
-// Feature gates ride the wire as one byte (#409); the vocabulary check is the
-// unit's, not this row's.
-static void test_gates_range_is_one_byte() {
+// Feature gates ride the wire as one byte (#409). The vocabulary check is NOT
+// the unit's after all (#458): UNIT_GATE_ALL admits 0x02, which nothing
+// implements, and the GET_LIFETIME read-back confirms it as active because it
+// sees storage rather than behaviour. This row must reject exactly what the
+// S3 rejects — a permissive follower would just be the same hole, one row
+// over.
+static void test_gates_reject_bits_no_firmware_implements() {
   TEST_ASSERT_EQUAL(200, maintValidateGates(0).httpStatus);
-  TEST_ASSERT_EQUAL(200, maintValidateGates(255).httpStatus);
+  TEST_ASSERT_EQUAL(200, maintValidateGates(SFP_UNIT_GATE_IDLE_HALL_CHECK).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(0x02).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(0x03).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(255).httpStatus);
   TEST_ASSERT_EQUAL(400, maintValidateGates(256).httpStatus);
   TEST_ASSERT_EQUAL(400, maintValidateGates(-1).httpStatus);
 }
@@ -148,7 +155,7 @@ int main(int, char**) {
   RUN_TEST(test_address_validation);
   RUN_TEST(test_protocol_mismatch_unit_is_409_not_drivable);
   RUN_TEST(test_offset_and_jog_ranges);
-  RUN_TEST(test_gates_range_is_one_byte);
+  RUN_TEST(test_gates_reject_bits_no_firmware_implements);
   RUN_TEST(test_op_result_pending_found_expired);
   RUN_TEST(test_op_result_failure_carries_reason);
   RUN_TEST(test_self_test_result_json);

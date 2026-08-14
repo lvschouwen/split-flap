@@ -157,6 +157,37 @@ def test_bundled_unit_rev_falls_back_on_empty_sidecar(tmp_path):
     assert build_assets.bundled_unit_rev(tmp_path, fallback="deadbee") == "deadbee"
 
 
+# --- proven content-equivalent revs (#440) -----------------------------------
+
+def test_bundled_unit_equivalent_revs_joins_the_sidecar(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "unit-firmware.equiv").write_text(
+        "d6e8a8a\naaaaaaa\n", encoding="utf-8")
+    assert build_assets.bundled_unit_equivalent_revs(tmp_path) == \
+        "d6e8a8a,aaaaaaa"
+
+
+def test_bundled_unit_equivalent_revs_empty_without_sidecar(tmp_path):
+    """No sidecar → bundle-rev equality only, the pre-#440 behaviour."""
+    (tmp_path / "data").mkdir()
+    assert build_assets.bundled_unit_equivalent_revs(tmp_path) == ""
+
+
+def test_bundled_unit_equivalent_revs_empty_sidecar_yields_nothing(tmp_path):
+    """stage writes the sidecar even when nothing survives — an empty file
+    must bake an empty define, never a stray comma."""
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "unit-firmware.equiv").write_text("", encoding="utf-8")
+    assert build_assets.bundled_unit_equivalent_revs(tmp_path) == ""
+
+
+def test_bundled_unit_equivalent_revs_skips_blanks_and_comments(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "unit-firmware.equiv").write_text(
+        "# note\n\n  d6e8a8a  \n\n", encoding="utf-8")
+    assert build_assets.bundled_unit_equivalent_revs(tmp_path) == "d6e8a8a"
+
+
 def test_real_tree_has_committed_unit_bundle():
     # #205: the hex + rev sidecar are committed (v1 pattern) — the build
     # must never depend on a stage step having run.

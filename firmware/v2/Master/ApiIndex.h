@@ -18,7 +18,12 @@
 struct ApiRoute { const char* m; const char* p; const char* d; };
 struct ApiLegendEntry { const char* key; const char* meaning; };
 
-// Every registered endpoint, method + path + one-line description.
+// Every operator-facing endpoint, method + path + one-line description.
+// tests/test_api_index.py diffs this against the routes actually registered
+// across the Web*.cpp family in BOTH directions (#448), so a served route is
+// either listed here or named in that gate's deliberate-exclusion set — the
+// browser-UI assets and the server-to-server cluster wire. Neither an
+// undeclared endpoint nor a phantom one can survive CI.
 static const ApiRoute API_ROUTES[] = {
   {"GET",  "/api",                    "this self-documenting index"},
   {"GET",  "/settings",               "full device + cluster settings snapshot"},
@@ -67,6 +72,7 @@ static const ApiRoute API_ROUTES[] = {
   {"GET",  "/cluster/health",         "this board's follower/unit health"},
   {"GET",  "/cluster/digest",         "cluster-wide digest (follower copy)"},
   {"POST", "/cluster/promote",        "promote this follower to leader"},
+  {"POST", "/cluster/leave",          "drop this board's cluster membership"},
   {"POST", "/cluster/discover",       "start a cluster mDNS scan"},
   {"GET",  "/cluster/discover",       "cluster mDNS scan result"},
   {"POST", "/cluster/follower-firmware", "store an ESP-01 follower image for relay"},

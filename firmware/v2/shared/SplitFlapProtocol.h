@@ -158,6 +158,21 @@
                                          //     one costs no second reflash. Verify by
                                          //     reading GET_LIFETIME back.
 
+// Feature-gate bits a master may SET_GATES, i.e. the ones some unit firmware
+// actually implements. Mirrors the unit's UNIT_GATE_* (Unit/UnitEeprom.h),
+// which is unit-local because it also names the EEPROM byte.
+//
+// WHY A SEPARATE MASK (#458): the unit's UNIT_GATE_ALL is knowingly WIDER
+// than this — it still admits 0x02 (#269 scheduled re-home), a bit declared
+// but implemented nowhere. A unit accepts it, persists it, and reports it as
+// active through GET_LIFETIME, so the op's read-back verification confirms a
+// feature that does not exist: the read-back is truthful about STORAGE and
+// silent about BEHAVIOUR. Narrowing UNIT_GATE_ALL needs a reflash, so the
+// masters refuse to send an unimplemented bit in the meantime. Widen this
+// only together with the code that honours the bit.
+#define SFP_UNIT_GATE_IDLE_HALL_CHECK  0x01  // #268 idle hall consistency check
+#define SFP_UNIT_GATE_IMPLEMENTED      SFP_UNIT_GATE_IDLE_HALL_CHECK
+
 // SET_OFFSET's accepted range (#171). The bound is one full revolution of the
 // unit's 28BYJ-48 drum (its STEPS constant — a static_assert there pins the
 // two together): a larger offset is never a legitimate calibration, and past
