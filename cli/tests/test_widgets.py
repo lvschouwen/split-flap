@@ -110,3 +110,86 @@ def test_units_table_renders_lifetime_values():
     assert rows["0x0f"][2] == "1465"      # sxl column
     assert rows["0x06"][3] == "3"         # hf column
     assert rows["0x01"][3] == "—"         # absent hf stays an em dash
+
+
+# ---- #471: Tab accepts the ghost completion --------------------------
+import httpx
+from textual.widgets import Static
+import pytest
+from splitflap_client.transport import BoardClient
+from splitflap_tui.app import SplitflapApp
+from splitflap_tui.config import Board, Config
+from splitflap_tui.screens.discover_screen import DiscoverScreen
+
+
+def _app(posts=None):
+    def handler(req):
+        if req.method == "POST":
+            if posts is not None:
+                posts.append(req.url.path)
+            if req.url.path == "/cluster/discover":
+                return httpx.Response(200, text="Board discovery started")
+            return httpx.Response(200, text="ok")
+        if req.url.path == "/cluster/discover":
+            return httpx.Response(200, json={"status": "done", "boards": []})
+        return httpx.Response(200, json={})
+    cfg = Config(boards=[Board("leader", "http://x")], default="leader")
+    return SplitflapApp(cfg, client_factory=lambda url: BoardClient(
+        url, transport=httpx.MockTransport(handler)))
+
+
+async def test_tab_accepts_the_ghost_completion():
+    app = _app()
+    async with app.run_test() as pilot:
+        await pilot.press(":")
+        await pilot.press(*"disc")
+        await pilot.pause(0.1)
+        cmd = app.query_one("#command", CommandInput)
+        assert cmd._suggestion == "discover"    # ghost is showing
+        assert cmd.value == "disc"              # but not yet accepted
+        await pilot.press("tab")
+        await pilot.pause(0.1)
+        assert cmd.value == "discover"
+        assert cmd.cursor_position == len("discover")
+
+
+async def test_tab_keeps_focus_on_the_bar_when_there_is_no_suggestion():
+    """Tab must never fall through to focus-next: a bar that loses focus
+    mid-typing is the #454 failure class."""
+    app = _app()
+    async with app.run_test() as pilot:
+        await pilot.press(":")
+        await pilot.press(*"zzz")
+        await pilot.pause(0.1)
+        cmd = app.query_one("#command", CommandInput)
+        await pilot.press("tab")
+        await pilot.pause(0.1)
+        assert cmd.value == "zzz"
+        assert app.focused is cmd
+
+
+async def test_unique_prefix_plus_enter_never_expands_to_a_kill_command():
+    """The deliberate non-feature (#471): `stop` is TIER_KILL and runs with
+    NO confirm, so auto-accepting a unique prefix on Enter would let `st` +
+    Enter blank the wall from a typo. Enter stays literal."""
+    posts = []
+    app = _app(posts)
+    async with app.run_test() as pilot:
+        await pilot.press(":")
+        await pilot.press(*"st")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        status = app.query_one("#cmd-status", Static)
+        assert "unknown command: st" in status.content
+    assert "/stop" not in posts
+
+
+async def test_tab_then_enter_runs_the_completed_command():
+    app = _app()
+    async with app.run_test() as pilot:
+        await pilot.press(":")
+        await pilot.press(*"disc")
+        await pilot.press("tab")
+        await pilot.press("enter")
+        await pilot.pause(0.4)
+        assert isinstance(app.screen, DiscoverScreen)

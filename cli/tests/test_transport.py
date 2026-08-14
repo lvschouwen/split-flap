@@ -55,3 +55,19 @@ def test_stream_sends_sse_accept_header():
     with client.stream("/events") as resp:
         resp.read()
     assert seen["accept"] == "text/event-stream"
+
+
+def test_get_returns_the_response_so_a_202_survives():
+    """get_json can't read GET /cluster/discover: while the leader's mDNS
+    browse runs it answers 202 with a text/plain body, and only 200 carries
+    JSON. get() hands the caller the status to branch on."""
+    client = make_client(lambda r: httpx.Response(202, text="Discovery running"))
+    resp = client.get("/cluster/discover")
+    assert resp.status_code == 202 and resp.text == "Discovery running"
+
+
+def test_get_still_raises_on_error_status():
+    client = make_client(lambda r: httpx.Response(404, text="No discovery has run yet"))
+    with pytest.raises(HttpError) as exc:
+        client.get("/cluster/discover")
+    assert exc.value.body == "No discovery has run yet"

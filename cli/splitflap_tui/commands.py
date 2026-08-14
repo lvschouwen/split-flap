@@ -12,7 +12,7 @@ TIER_TYPED = "typed"
 
 CANONICAL_NAMES = ("stop", "text", "mode", "notify", "set", "op", "gates",
                    "reboot", "reset-units", "addr", "promote",
-                   "cluster-leave", "config")
+                   "cluster-leave", "config", "discover", "baseline")
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,10 @@ HELP: list[HelpEntry] = [
     HelpEntry("cluster leave", TIER_TYPED, "leave the cluster", "cluster leave"),
     HelpEntry("cluster config <host|row|col|width;...>", TIER_TYPED,
               "replace the cluster member table", "cluster config |1|0|16;"),
+    HelpEntry("discover", TIER_ROUTINE, "scan the LAN for boards (leader-side mDNS)",
+              "discover"),
+    HelpEntry("baseline [clear]", TIER_ROUTINE,
+              "snapshot unit wear so servicing is measurable", "baseline"),
 ]
 
 
@@ -156,6 +160,30 @@ def parse(line: str) -> ParsedCommand:
         return ParsedCommand("promote", {}, TIER_TYPED,
                              ("POST", "/cluster/promote"),
                              "PROMOTE this board to leader")
+    if head == "discover":
+        # Read-only: it arms the LEADER's mDNS browse and reads the result
+        # back, mutating nothing — routine tier, no confirm. The route is the
+        # POST one so the capability gate rejects it on an esp01 (both
+        # /cluster/discover routes are in ESP01_NOT_SERVED). app.py's
+        # dispatch_command opens DiscoverScreen for it instead of calling
+        # execute(): a scan takes seconds and returns a table, which the
+        # one-line command-status bar can't hold.
+        return ParsedCommand("discover", {}, TIER_ROUTINE,
+                             ("POST", "/cluster/discover"),
+                             "scan the LAN for boards")
+    if head == "baseline":
+        # Local-only (#474): writes/clears a file on THIS host and never
+        # touches the wall. The route is /units/health because that is the
+        # data it snapshots, and it is served on both platforms so the
+        # capability gate passes; app.py's dispatch_command handles the
+        # command before execute() would send anything.
+        mode = rest[0] if rest else "save"
+        if mode not in ("save", "clear"):
+            raise CommandError("usage: baseline [clear]")
+        summary = ("clear the wear baseline" if mode == "clear"
+                   else "snapshot unit wear as the new baseline")
+        return ParsedCommand("baseline", {"mode": mode}, TIER_ROUTINE,
+                             ("GET", "/units/health"), summary)
     if head == "cluster":
         if rest[:1] == ["leave"]:
             return ParsedCommand("cluster-leave", {}, TIER_TYPED,

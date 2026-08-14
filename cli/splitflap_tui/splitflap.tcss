@@ -42,6 +42,16 @@ Header {
 .stale {
     opacity: 45%;
 }
+#discover-status {
+    height: 1;
+    padding: 0 1;
+    color: #b8a060;
+}
+#discover-table {
+    height: 1fr;
+    border: round #FFB000 50%;
+    border-title-color: #FFB000;
+}
 HelpScreen {
     align: center middle;
 }

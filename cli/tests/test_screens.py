@@ -1,17 +1,23 @@
 import asyncio
+import json
 import threading
 
 import httpx
 import pytest
+from splitflap_client.models import ClusterStatus, StatusAggregate
 from splitflap_client.transport import BoardClient
 from splitflap_tui.app import SplitflapApp
 from splitflap_tui.config import Board, Config
+from splitflap_tui.widgets import CommandInput, UnitsTable
 from splitflap_tui.screens import board_detail
 from splitflap_tui.screens.board_detail import BoardDetailScreen
+from splitflap_tui.screens.discover_screen import DiscoverScreen
+from splitflap_tui.screens.health_screen import HealthScreen
 from splitflap_tui.screens.help_screen import HelpScreen
 from splitflap_tui.screens.log_screen import LogScreen
+from splitflap_tui.screens.unit_detail import UnitDetailScreen
 from textual.coordinate import Coordinate
-from textual.widgets import DataTable, RichLog
+from textual.widgets import DataTable, RichLog, Static
 
 from tests.test_app import CFG, fake_factory
 
@@ -194,6 +200,156 @@ async def test_log_screen_shows_error_on_unreachable():
         assert "UNREACHABLE" in rendered
 
 
+DISCOVER_DONE = {"status": "done", "boards": [
+    {"name": "wall-row0", "host": "192.168.15.121", "rev": "bb958fb",
+     "width": 5, "plat": "esp01"},
+    {"name": "spare", "host": "spare.local", "rev": "941d8a9", "width": 16},
+]}
+
+
+def discover_handler(done=DISCOVER_DONE):
+    def handler(req):
+        if req.url.path == "/cluster/discover":
+            if req.method == "POST":
+                return httpx.Response(200, text="Board discovery started")
+            return httpx.Response(200, json=done)
+        return httpx.Response(404, text="nope")
+    return handler
+
+
+async def _run_discover_command(pilot, app):
+    await pilot.press(":")
+    await pilot.press(*"discover")
+    await pilot.press("enter")
+    await pilot.pause(0.4)
+
+
+@pytest.mark.asyncio
+async def test_discover_command_pushes_screen_and_renders_boards():
+    """#469: `:discover` is routine tier — no confirm — and its result is a
+    table, not a status line, so it opens its own screen."""
+    factory = lambda url: BoardClient(
+        url, transport=httpx.MockTransport(discover_handler()))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="leader")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        await _run_discover_command(pilot, app)
+        assert isinstance(app.screen, DiscoverScreen)
+        table = app.screen.query_one("#discover-table", DataTable)
+        assert table.row_count == 2
+        names = [table.get_cell_at(Coordinate(r, 0)).plain
+                 for r in range(table.row_count)]
+        hosts = [table.get_cell_at(Coordinate(r, 1)).plain
+                 for r in range(table.row_count)]
+        plats = [table.get_cell_at(Coordinate(r, 4)).plain
+                 for r in range(table.row_count)]
+        assert names == ["wall-row0", "spare"]
+        assert hosts == ["192.168.15.121", "spare.local"]
+        # absent plat on the wire means an S3 (#297) — never a blank cell
+        assert plats == ["esp01", "esp32s3"]
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, DiscoverScreen)
+
+
+@pytest.mark.asyncio
+async def test_discover_rejected_on_esp01_before_any_request():
+    """Both /cluster/discover routes are in ESP01_NOT_SERVED — the gate must
+    stop it client-side, naming the platform, with nothing on the wire."""
+    calls = []
+
+    def handler(req):
+        calls.append(req.url.path)
+        return httpx.Response(200, json={})
+
+    factory = lambda url: BoardClient(url, transport=httpx.MockTransport(handler))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="leader")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        app.plat = "esp01"
+        await _run_discover_command(pilot, app)
+        assert not isinstance(app.screen, DiscoverScreen)
+        status = app.query_one("#cmd-status", Static)
+        assert "not served on esp01" in status.content
+    assert "/cluster/discover" not in calls
+
+
+@pytest.mark.asyncio
+async def test_discover_screen_empty_result_is_not_an_error():
+    """A scan that finds nothing is the normal answer across the VPN."""
+    done = {"status": "done", "boards": []}
+    factory = lambda url: BoardClient(
+        url, transport=httpx.MockTransport(discover_handler(done)))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        app.push_screen(DiscoverScreen("http://leader", factory))
+        await pilot.pause(0.4)
+        status = app.screen.query_one("#discover-status", Static)
+        assert "no boards found" in status.content
+        assert "⛔" not in status.content
+
+
+@pytest.mark.asyncio
+async def test_discover_screen_surfaces_board_error_verbatim():
+    def handler(req):
+        return httpx.Response(503, text="board busy")
+
+    factory = lambda url: BoardClient(url, transport=httpx.MockTransport(handler))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        app.push_screen(DiscoverScreen("http://leader", factory))
+        await pilot.pause(0.4)
+        status = app.screen.query_one("#discover-status", Static)
+        assert "board busy" in status.content
+
+
+@pytest.mark.asyncio
+async def test_discover_screen_rescan_race_last_scan_wins():
+    """Same hazard LogScreen's generation guard exists for (#441 finding 6):
+    a slow FIRST scan resolving AFTER a fast rescan must not overwrite the
+    newer result. The initial on_mount scan is held open until the `r`
+    rescan has already rendered, then released."""
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    gets = []
+    lock = threading.Lock()
+
+    def handler(req):
+        if req.method == "POST":
+            return httpx.Response(200, text="Board discovery started")
+        with lock:
+            gets.append(1)
+            ordinal = len(gets)
+        if ordinal == 1:
+            first_entered.set()
+            assert release_first.wait(5.0), "test never released the first scan"
+            return httpx.Response(200, json={"status": "done", "boards": [
+                {"name": "STALE", "host": "1.1.1.1", "rev": "", "width": 0}]})
+        return httpx.Response(200, json={"status": "done", "boards": [
+            {"name": "FRESH", "host": "2.2.2.2", "rev": "", "width": 0}]})
+
+    factory = lambda url: BoardClient(url, transport=httpx.MockTransport(handler))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="")
+    app = SplitflapApp(cfg, client_factory=factory)
+    async with app.run_test() as pilot:
+        app.push_screen(DiscoverScreen("http://leader", factory))
+        entered = await asyncio.to_thread(first_entered.wait, 2.0)
+        assert entered, "first scan never started"
+
+        await pilot.press("r")              # second, faster scan — gen 2
+        await pilot.pause(0.4)
+        table = app.screen.query_one("#discover-table", DataTable)
+        assert table.get_cell_at(Coordinate(0, 0)).plain == "FRESH"
+
+        release_first.set()                 # let the stale gen-1 scan resolve
+        await pilot.pause(0.4)
+        assert table.row_count == 1
+        assert table.get_cell_at(Coordinate(0, 0)).plain == "FRESH", \
+            "stale scan overwrote the newer rescan"
+
+
 def test_board_detail_log_buffer_is_capped():
     from splitflap_tui.screens.board_detail import LOG_CAP_LINES, cap_log
     text = "\n".join(f"line {i}" for i in range(500))
@@ -231,3 +387,281 @@ async def test_help_table_cells_render_brackets_literally():
         assert any("[value]" in c.plain for c in cells)
         await pilot.press("escape")
         await pilot.pause(0.05)
+
+
+# ---- #472: board-health screen ---------------------------------------
+
+@pytest.mark.asyncio
+async def test_s_opens_health_screen_with_polled_values():
+    from tests.test_app import STATUS
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("s")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, HealthScreen)
+        rendered = app.screen.query_one("#health-body", Static).content
+        assert STATUS["ota"]["running"] in rendered      # app0
+        assert "cluster" in rendered                     # the hwm task row
+        assert "2600 B free" in rendered
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, HealthScreen)
+
+
+@pytest.mark.asyncio
+async def test_health_screen_before_any_poll_says_so():
+    """No successful /status yet (unreachable board) — the screen must say
+    it has nothing rather than render a page of dashes as if they were
+    readings, or crash on a None aggregate."""
+    def dead(url):
+        return BoardClient(url, transport=httpx.MockTransport(
+            lambda r: httpx.Response(503, text="down")))
+    cfg = Config(boards=[Board("leader", "http://leader")], default="leader")
+    app = SplitflapApp(cfg, client_factory=dead)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("s")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, HealthScreen)
+        assert "no status yet" in app.screen.query_one("#health-body", Static).content
+
+
+@pytest.mark.asyncio
+async def test_health_screen_follows_later_polls():
+    """The dashboard poller keeps running while a screen is pushed, so an
+    open health screen must show the newest reading, not the one it was
+    opened with."""
+    from tests.test_app import STATUS
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("s")
+        await pilot.pause(0.2)
+        body = app.screen.query_one("#health-body", Static)
+        assert "app0" in body.content
+        moved = json.loads(json.dumps(STATUS))
+        moved["ota"]["running"] = "app1"
+        app.apply_status(StatusAggregate.from_json(moved),
+                         ClusterStatus.from_json(moved["cluster"]))
+        await pilot.pause(0.1)
+        assert "app1" in body.content
+
+
+# ---- #473: selectable units table + unit detail -----------------------
+
+@pytest.mark.asyncio
+async def test_u_focuses_units_and_enter_opens_that_units_detail():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("u")
+        await pilot.pause(0.1)
+        units = app.query_one("#units", UnitsTable)
+        assert app.focused is units
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, UnitDetailScreen)
+        assert app.screen.entry.address == 1          # the fixture's only unit
+        body = app.screen.query_one("#unit-body", Static).content
+        assert "worst step-excess" in body
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, UnitDetailScreen)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_s_still_stops_while_the_units_table_is_focused():
+    """Focusing a widget must not swallow the always-active kill switch."""
+    posts = []
+
+    def factory(url):
+        def h(req):
+            if req.method == "POST":
+                posts.append(req.url.path)
+                return httpx.Response(200, json={"seq": 1})
+            if req.url.path == "/status":
+                from tests.test_app import STATUS
+                return httpx.Response(200, json=STATUS)
+            return httpx.Response(200, json={})
+        return BoardClient(url, transport=httpx.MockTransport(h))
+
+    app = SplitflapApp(CFG, client_factory=factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("u")
+        await pilot.pause(0.1)
+        assert app.focused is app.query_one("#units", UnitsTable)
+        await pilot.press("ctrl+s")
+        await pilot.pause(0.4)
+    assert "/stop" in posts
+
+
+@pytest.mark.asyncio
+async def test_direct_op_key_dispatches_for_the_selected_unit():
+    """`i` on the detail screen runs identify for THAT unit, through the
+    normal confirm tier — not a second op path."""
+    posts = []
+    def factory(url):
+        def h(req):
+            if req.method == "POST":
+                posts.append((req.url.path, dict(req.url.params)))
+                return httpx.Response(200, json={"seq": 1})
+            if req.url.path == "/unit/op-result":
+                return httpx.Response(200, json={"state": "ok"})
+            if req.url.path == "/status":
+                from tests.test_app import STATUS
+                return httpx.Response(200, json=STATUS)
+            if req.url.path == "/cluster/status":
+                from tests.test_app import STATUS
+                return httpx.Response(200, json=STATUS["cluster"])
+            return httpx.Response(200, json={})
+        return BoardClient(url, transport=httpx.MockTransport(h))
+    app = SplitflapApp(CFG, client_factory=factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("u")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        await pilot.press("i")                 # identify
+        await pilot.pause(0.2)
+        await pilot.press("y")                 # TIER_CONFIRM
+        await pilot.pause(0.4)
+    assert any(path == "/unit/identify" and params.get("address") == "1"
+               for path, params in posts)
+
+
+@pytest.mark.asyncio
+async def test_value_op_key_prefills_the_command_bar_instead_of_running():
+    posts = []
+    def factory(url):
+        def h(req):
+            if req.method == "POST":
+                posts.append(req.url.path)
+                return httpx.Response(200, json={"seq": 1})
+            if req.url.path == "/status":
+                from tests.test_app import STATUS
+                return httpx.Response(200, json=STATUS)
+            if req.url.path == "/cluster/status":
+                from tests.test_app import STATUS
+                return httpx.Response(200, json=STATUS["cluster"])
+            return httpx.Response(200, json={})
+        return BoardClient(url, transport=httpx.MockTransport(h))
+    app = SplitflapApp(CFG, client_factory=factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        await pilot.press("u")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        await pilot.press("o")                 # offset — needs a value
+        await pilot.pause(0.2)
+        cmd = app.query_one("#command", CommandInput)
+        assert cmd.value == "op offset 1 "
+        assert app.focused is cmd
+    assert not any(p.startswith("/unit/offset") for p in posts)
+
+
+# ---- #474: wear baselines --------------------------------------------
+
+def _units_payload(sxl_by_addr):
+    return {"width": len(sxl_by_addr), "faulty": 0,
+            "units": [{"i": i, "a": a, "st": 1, "v": 1, "sxl": v}
+                      for i, (a, v) in enumerate(sorted(sxl_by_addr.items()))]}
+
+
+def _status_with(sxl_by_addr):
+    from tests.test_app import STATUS
+    payload = json.loads(json.dumps(STATUS))
+    payload["units"] = _units_payload(sxl_by_addr)
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_baseline_adds_a_delta_column_that_tracks_growth():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        units = app.query_one("#units", UnitsTable)
+        assert "Δsxl" not in [c.label.plain for c in units.columns.values()]
+
+        app.apply_status(StatusAggregate.from_json(_status_with({1: 17, 15: 1465})),
+                         ClusterStatus.from_json({}))
+        await pilot.press(":")
+        await pilot.press(*"baseline")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        labels = [c.label.plain for c in units.columns.values()]
+        assert "Δsxl" in labels
+        deltas = [units.get_cell_at(Coordinate(r, 3)).plain
+                  for r in range(units.row_count)]
+        assert deltas == ["0", "0"]          # captured just now
+
+        # a15 accumulates 12 more steps-to-home; a1 stays put
+        app.apply_status(StatusAggregate.from_json(_status_with({1: 17, 15: 1477})),
+                         ClusterStatus.from_json({}))
+        await pilot.pause(0.1)
+        deltas = [units.get_cell_at(Coordinate(r, 3)).plain
+                  for r in range(units.row_count)]
+        assert deltas == ["0", "12"]
+
+
+@pytest.mark.asyncio
+async def test_baseline_clear_removes_the_column():
+    app = SplitflapApp(CFG, client_factory=fake_factory)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        units = app.query_one("#units", UnitsTable)
+        await pilot.press(":")
+        await pilot.press(*"baseline")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert "Δsxl" in [c.label.plain for c in units.columns.values()]
+        await pilot.press(":")
+        await pilot.press(*"baseline clear")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert "Δsxl" not in [c.label.plain for c in units.columns.values()]
+
+
+@pytest.mark.asyncio
+async def test_baseline_before_any_poll_says_so_and_writes_nothing():
+    def dead(url):
+        return BoardClient(url, transport=httpx.MockTransport(
+            lambda r: httpx.Response(503, text="down")))
+    app = SplitflapApp(CFG, client_factory=dead)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        await pilot.press(":")
+        await pilot.press(*"baseline")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        status = app.query_one("#cmd-status", Static).content
+        assert "no unit health polled yet" in status
+        units = app.query_one("#units", UnitsTable)
+        assert "Δsxl" not in [c.label.plain for c in units.columns.values()]
+
+
+@pytest.mark.asyncio
+async def test_captured_baseline_survives_a_restart(tmp_path):
+    path = tmp_path / "wear-baseline.json"
+    app = SplitflapApp(CFG, client_factory=fake_factory, baseline_path=path)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.5)
+        app.apply_status(StatusAggregate.from_json(_status_with({1: 17})),
+                         ClusterStatus.from_json({}))
+        await pilot.press(":")
+        await pilot.press(*"baseline")
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+    assert path.exists()
+
+    restarted = SplitflapApp(CFG, client_factory=fake_factory, baseline_path=path)
+    async with restarted.run_test() as pilot:
+        await pilot.pause(0.5)
+        restarted.apply_status(
+            StatusAggregate.from_json(_status_with({1: 20})),
+            ClusterStatus.from_json({}))
+        await pilot.pause(0.1)
+        units = restarted.query_one("#units", UnitsTable)
+        assert "Δsxl" in [c.label.plain for c in units.columns.values()]
+        assert units.get_cell_at(Coordinate(0, 3)).plain == "3"

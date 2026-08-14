@@ -21,13 +21,18 @@ from splitflap_client.transport import BoardClient, HttpError, SplitflapError
 
 from .commands import (CommandError, ParsedCommand, TIER_KILL, TIER_ROUTINE,
                        TIER_TYPED, parse)
+from .baseline import (clear_baseline, delta_sxl, load_baseline,
+                       save_baseline, snapshot)
 from .config import Config
 from .confirm import ConfirmModal
 from .history import load_history, save_history
 from .poller import Poller
 from .screens.board_detail import BoardDetailScreen
+from .screens.discover_screen import DiscoverScreen
+from .screens.health_screen import HealthScreen
 from .screens.help_screen import HelpScreen
 from .screens.log_screen import LogScreen
+from .screens.unit_detail import UnitDetailScreen
 from .widgets import (ClusterStrip, CommandInput, LogTail, StatsBar,
                       UnitsTable, WallPanel, border_text, format_cmd_status)
 
@@ -159,21 +164,29 @@ class SplitflapApp(App):
     BINDINGS = [("q", "quit", "Quit"), (":", "open_command", "Command"),
                 Binding("ctrl+s", "stop_wall", "STOP", priority=True),
                 ("b", "board_detail", "Board"), ("l", "log_screen", "Log"),
+                ("s", "health_screen", "Health"),
+                ("u", "focus_units", "Units"),
                 ("question_mark", "help", "Help")]
 
     def __init__(self, config: Config,
                  client_factory: Callable[[str], BoardClient] = BoardClient,
-                 history_path: Path | None = None):
+                 history_path: Path | None = None,
+                 baseline_path: Path | None = None):
         super().__init__()
         self.config = config
         self.client_factory = client_factory
         self.history_path = history_path
+        self.baseline_path = baseline_path
         self.connected = False
         self.wall_stale = True
         self.poller: Poller | None = None
         self.plat = PLAT_S3          # default before the first /status poll
         self.device_mode = ""        # "" until the first successful poll
         self._board_cycle_index = 0
+        # Newest /status aggregate, kept so HealthScreen (#472) can render
+        # without issuing a request of its own. None until the first
+        # successful poll — that is NOT the same as all-values-absent.
+        self.last_status: StatusAggregate | None = None
         self._last_cmd_result = ""
 
     def compose(self) -> ComposeResult:
@@ -197,6 +210,8 @@ class SplitflapApp(App):
         cmd = self.query_one("#command", CommandInput)
         cmd.history = load_history(self.history_path)
         cmd.reset_history_cursor()
+        # #474: a captured baseline persists across runs, like history.
+        self.query_one("#units", UnitsTable).baseline = self._load_baseline()
         url = self.config.board_url()
         if not url:
             self.query_one("#stats", StatsBar).update(
@@ -209,6 +224,9 @@ class SplitflapApp(App):
     # ---- called from poller threads via call_from_thread ----
     def apply_status(self, agg: StatusAggregate, cluster: ClusterStatus) -> None:
         self.connected = True
+        self.last_status = agg
+        if isinstance(self.screen, HealthScreen):
+            self.screen.render_status(agg)   # keep an open screen live
         self.plat = agg.settings.plat
         self.device_mode = agg.settings.device_mode
         s = agg.settings
@@ -298,6 +316,37 @@ class SplitflapApp(App):
             return
         self.push_screen(LogScreen(url, self.client_factory))
 
+    def action_health_screen(self) -> None:
+        """`s` pushes the board-health screen (#472) — renders the last
+        polled /status, so it costs no extra request."""
+        self.push_screen(HealthScreen())
+
+    def action_focus_units(self) -> None:
+        """`u` hands focus to the units table (#473): arrows move the row
+        cursor, enter opens that unit's detail screen, escape gives focus
+        back. Letter keys keep bubbling to the app bindings meanwhile."""
+        self.query_one("#units", UnitsTable).focus()
+
+    def on_data_table_row_selected(self, event) -> None:
+        table = event.data_table
+        if table.id != "units":
+            return
+        entries = getattr(table, "entries", [])
+        if event.cursor_row < len(entries):
+            self.push_screen(UnitDetailScreen(entries[event.cursor_row],
+                                              table.row_median))
+
+    def open_command_with(self, text: str) -> None:
+        """Open the command bar pre-filled (#473): the value-taking ops
+        (offset/jog/gates) can't be a single keystroke, so the unit detail
+        screen drops the operator here with the address already typed."""
+        cmd = self.query_one("#command", CommandInput)
+        cmd.reset_history_cursor()
+        cmd.display = True
+        cmd.value = text
+        cmd.cursor_position = len(text)
+        cmd.focus()
+
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
 
@@ -345,6 +394,21 @@ class SplitflapApp(App):
     def dispatch_command(self, parsed: ParsedCommand) -> None:
         if not self._capability_gate(parsed):
             return
+        if parsed.name == "baseline":
+            self._run_baseline(parsed.args.get("mode", "save"))
+            return
+        if parsed.name == "discover":
+            # #469: the only command whose result is a table rather than a
+            # status line, and the only one that takes seconds to answer —
+            # its screen owns the staged POST/GET scan (and the rescan key)
+            # instead of execute() returning a string. Deliberately AFTER
+            # the capability gate, so an esp01 still rejects it client-side.
+            url = self.config.board_url()
+            if not url:
+                self.apply_cmd_result("no config — no leader url")
+                return
+            self.push_screen(DiscoverScreen(url, self.client_factory))
+            return
         clock_guard = parsed.name == "text" and self.device_mode == "clock"
         if parsed.tier in (TIER_KILL, TIER_ROUTINE) and not clock_guard:
             self.run_command(parsed)
@@ -366,6 +430,31 @@ class SplitflapApp(App):
 
         self.push_screen(ConfirmModal(summary, typed=typed, token=token),
                          on_result)
+
+    # ---- wear baseline (#474): local file, never touches the wall ----
+    def _baseline_kwargs(self) -> dict:
+        return {} if self.baseline_path is None else {"path": self.baseline_path}
+
+    def _load_baseline(self):
+        return load_baseline(**self._baseline_kwargs())
+
+    def _run_baseline(self, mode: str) -> None:
+        units = self.query_one("#units", UnitsTable)
+        if mode == "clear":
+            clear_baseline(**self._baseline_kwargs())
+            units.set_baseline(None)
+            self.apply_cmd_result("wear baseline cleared")
+            return
+        if self.last_status is None:
+            self.apply_cmd_result("⛔ baseline: no unit health polled yet")
+            return
+        snap = snapshot(self.last_status.units, self.last_status.settings.version)
+        ok = save_baseline(snap, **self._baseline_kwargs())
+        units.set_baseline(snap)
+        self.apply_cmd_result(
+            f"baseline captured — {len(snap.sxl)} unit(s)" if ok else
+            f"baseline captured for this session only — {len(snap.sxl)} "
+            "unit(s), could not write the file")
 
     def run_command(self, parsed: ParsedCommand) -> None:
         def work() -> None:

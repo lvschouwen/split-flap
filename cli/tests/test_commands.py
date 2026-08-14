@@ -51,6 +51,17 @@ def test_reboot_accepts_optional_board_arg():
     assert with_board.route == ("POST", "/reboot")
 
 
+def test_discover_is_a_routine_read_only_scan():
+    """#469: `discover` arms the LEADER's mDNS browse (POST /cluster/discover)
+    and reads the result back — it mutates nothing, so it takes no confirm.
+    The route is the POST one so the capability gate rejects it on an esp01,
+    whose own /api index lists /cluster/discover as notServed."""
+    c = parse("discover")
+    assert c.name == "discover" and c.tier == TIER_ROUTINE
+    assert c.route == ("POST", "/cluster/discover")
+    assert c.args == {}
+
+
 def test_unknown_command_raises_usage():
     with pytest.raises(CommandError):
         parse("frobnicate")
