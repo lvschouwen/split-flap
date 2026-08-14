@@ -103,6 +103,22 @@ class CommandInput(Input):
             event.stop()
             event.prevent_default()
             self.dismiss_bar()
+        elif event.key == "tab":
+            # #471: accept the ghost completion. Textual's SuggestFromList
+            # only offers right-arrow/End, so Enter would otherwise throw a
+            # visible suggestion away ("disc" -> unknown command: disc).
+            # Swallowed even with nothing to accept: Tab's default is
+            # focus-next, and a command bar that loses focus mid-typing is
+            # the #454 failure class.
+            #
+            # Enter deliberately stays LITERAL — no auto-accepting a unique
+            # prefix. `stop` is TIER_KILL and runs with no confirm, so `st`
+            # + Enter expanding would blank the wall from a two-key typo.
+            event.stop()
+            event.prevent_default()
+            if self._suggestion and self._suggestion != self.value:
+                self.value = self._suggestion
+                self.cursor_position = len(self.value)
         elif event.key == "up":
             event.stop()
             event.prevent_default()
