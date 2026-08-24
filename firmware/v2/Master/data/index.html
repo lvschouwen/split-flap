@@ -92,7 +92,7 @@
 						</div>
 					</div>
 					<div class="row" style="margin-top:12px">
-						<button type="button" class="btn danger" id="buttonStop" onclick="stopDisplay()">Stop &amp; blank display</button>
+						<button type="button" class="btn danger" id="buttonStop" onclick="stopDisplay()">Stop & blank display</button>
 					</div>
 					<p id="displayStatus" class="status hidden"></p>
 				</div>
@@ -200,7 +200,7 @@
 					<h2>WiFi</h2>
 					<p class="note">Erases the stored WiFi credentials. The display reboots into its setup portal so you can connect it to another network.</p>
 					<div class="row">
-						<button type="button" class="btn danger" onclick="postAction('/reset-wifi', 'Are you sure you want to reset the WiFi settings?')">Forget WiFi &amp; open setup portal…</button>
+						<button type="button" class="btn danger" onclick="postAction('/reset-wifi', 'Are you sure you want to reset the WiFi settings?')">Forget WiFi & open setup portal…</button>
 					</div>
 				</div>
 			</section>
@@ -227,7 +227,7 @@
 					<datalist id="calibrationLetters"></datalist>
 					<div id="containerCalibrationUnits"></div>
 					<details id="calibrationAdvanced">
-						<summary>Advanced: raw jog &amp; offset</summary>
+						<summary>Advanced: raw jog & offset</summary>
 						<p class="note">Nudge a single unit a few steps at a time, or set its offset directly. Jog does not persist; Save writes to EEPROM.</p>
 						<div id="containerCalibrationAdvanced"></div>
 					</details>
@@ -423,7 +423,7 @@
 						<div class="row">
 							<button type="button" class="btn ghost" onclick="wizardFinish(false)">Skip — take me to the display</button>
 							<span class="grow"></span>
-							<button type="button" class="btn primary" onclick="wizardSaveMqtt()">Save &amp; finish</button>
+							<button type="button" class="btn primary" onclick="wizardSaveMqtt()">Save & finish</button>
 						</div>
 						<p id="wizardMqttStatus" class="status hidden"></p>
 					</div>
@@ -433,6 +433,34 @@
 	</div>
 	<script src="md5.js"></script>
 	<script src="script.js"></script>
+	<script>
+	/* Wall tab bridge (ui/modern-hybrid) — fold into script.js when modularized. */
+	(function () {
+		TAB_NAMES = ["home", "wall", "settings", "maintenance", "system", "logs"];
+		showView = function (name) {
+			["home", "wall", "settings", "maintenance", "system", "logs", "setup"].forEach(function (view) {
+				var section = document.getElementById("section-" + view);
+				if (section) section.classList.toggle("on", view === name);
+			});
+			document.querySelectorAll(".tab-btn").forEach(function (button) {
+				var on = button.dataset.tab === name;
+				button.classList.toggle("on", on);
+				button.setAttribute("aria-selected", on ? "true" : "false");
+			});
+			document.dispatchEvent(new CustomEvent("sf-tabchange", { detail: name }));
+		};
+		/* Cluster card moved off Settings — keep /cluster/status live on Wall. */
+		setInterval(function () {
+			if (document.hidden) return;
+			if (location.hash.replace("#", "") === "wall" && typeof loadClusterStatus === "function") {
+				loadClusterStatus();
+			}
+		}, 5000);
+		document.addEventListener("sf-tabchange", function (event) {
+			if (event.detail === "wall" && typeof loadClusterStatus === "function") loadClusterStatus();
+		});
+	})();
+	</script>
 </body>
 
 </html>
