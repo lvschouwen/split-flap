@@ -94,7 +94,9 @@ static constexpr uint32_t CLOCK_TASK_STACK = 8192;
 static constexpr uint32_t NET_TASK_STACK = 8192;
 // espMqttClient internals + the 512 B discovery build buffers (#224); the
 // heartbeat's HWM column is the trim-down evidence.
-static constexpr uint32_t MQTT_TASK_STACK = 6144;
+// 6144 overflowed on the first-ever broker connect + discovery burst (#479:
+// coredump task=mqtt, excVaddr a5a5..; idle hwm was already down to 1768).
+static constexpr uint32_t MQTT_TASK_STACK = 12288;
 // esp_http_client + String assembly for the cluster fan-out (#273). The digest
 // build puts a full ClusterLeaderStatus (8 members x 4 Strings) + String
 // mirror[8] on the stack; the same objects are rebuilt by the reboot-hold
