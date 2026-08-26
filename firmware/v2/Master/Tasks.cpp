@@ -91,12 +91,14 @@ static constexpr uint32_t CLOCK_TASK_STACK = 8192;
 // IPC is the deepest chain netTask ever runs; the #294-era SSE/stats work
 // raised the per-iteration floor until the fopen spike no longer fit. The
 // heartbeat HWM column stays the trim-down evidence.
-static constexpr uint32_t NET_TASK_STACK = 8192;
+static constexpr uint32_t NET_TASK_STACK = 12288;
 // espMqttClient internals + the 512 B discovery build buffers (#224); the
 // heartbeat's HWM column is the trim-down evidence.
 // 6144 overflowed on the first-ever broker connect + discovery burst (#479:
 // coredump task=mqtt, excVaddr a5a5..; idle hwm was already down to 1768).
-static constexpr uint32_t MQTT_TASK_STACK = 12288;
+// Sizing policy since then (#480): >=50% margin at the measured peak — a
+// never-exercised path can need far more than the busiest observed one.
+static constexpr uint32_t MQTT_TASK_STACK = 16384;
 // esp_http_client + String assembly for the cluster fan-out (#273). The digest
 // build puts a full ClusterLeaderStatus (8 members x 4 Strings) + String
 // mirror[8] on the stack; the same objects are rebuilt by the reboot-hold
@@ -105,7 +107,7 @@ static constexpr uint32_t MQTT_TASK_STACK = 12288;
 // nest under it — and the field HWM confirms it: 8192 left only 1016 B free on
 // a leader whose boot included a follower rollout (#437). RAM is plentiful
 // (110 KB+ free heap), so buy the margin rather than run this one close.
-static constexpr uint32_t CLUSTER_TASK_STACK = 12288;
+static constexpr uint32_t CLUSTER_TASK_STACK = 16384;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
 static constexpr UBaseType_t DOMAIN_TASK_PRIORITY = 1;   // everything else
