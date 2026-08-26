@@ -382,14 +382,26 @@ function setBoardStatus(text, offline) {
 	el.style.color = offline ? "var(--warn)" : "";
 }
 
+//#478: the leading state rides the sticky chrome instead of a banner —
+//row count from the cached /cluster/status (absent until its first poll).
 function refreshLiveStatus() {
-	setBoardStatus("● LIVE · " + (wallWidths ? "CLUSTER · " : "") +
-		(currentMode === "clock" ? "CLOCK" : "TEXT"), false);
+	var s = window.lastSettings || {};
+	var extra = "";
+	if (s.clusterLeading) {
+		var rows = 0;
+		var members = (window.lastClusterStatus || {}).members || [];
+		members.forEach(function(m) { rows = Math.max(rows, m.row + 1); });
+		extra = rows ? "LEADING " + rows + " ROW" + (rows === 1 ? "" : "S") + " · " : "LEADING · ";
+	} else if (wallWidths) {
+		extra = "CLUSTER · ";
+	}
+	setBoardStatus("● LIVE · " + extra + (currentMode === "clock" ? "CLOCK" : "TEXT"), false);
 }
 
 // ===================== settings poll =====================
 
 function applySettings(s) {
+	window.lastSettings = s;  //cached first — refreshLiveStatus and the System tab (#245) read it
 	unitCount = s.unitCount || 0;
 	currentAlignment = s.alignment || "left";
 	currentMode = s.deviceMode || "text";
@@ -467,7 +479,6 @@ function applySettings(s) {
 	updateClusterBanner(s);
 	updateClusterFollowerCard(s);
 	updateRescueSlot(s);
-	window.lastSettings = s;  // System tab reuses version etc. (#245)
 }
 
 //Rescue slot (#391): identity of the factory rescue image, straight off
@@ -508,11 +519,14 @@ function updateClusterBanner(s) {
 	var el = document.getElementById("clusterBanner");
 	if (!el) return;
 	var clustered = !!s.clusterState && s.clusterState !== "standalone";
-	//#317: this board is the LEADER (not itself a follower row) — show a
-	//distinct "leading a wall" banner and relabel the command controls.
 	var leading = !clustered && !!s.clusterLeading;
-	el.classList.toggle("hidden", !clustered && !leading);
-	if (clustered) {
+	//#478: the banner is an ALERT surface — the leading state lives in the
+	//sticky chrome (refreshLiveStatus), healthy membership in the composer
+	//note; only a follower whose wall is dark or at risk banners here.
+	var alerting = clustered &&
+		(s.clusterState === "grace" || s.clusterState === "local-fallback");
+	el.classList.toggle("hidden", !alerting);
+	if (alerting) {
 		//leaderName/leaderHost come off an unauthenticated LAN POST — build
 		//the banner with DOM nodes, never markup strings.
 		var leader = s.clusterLeaderName || s.clusterLeaderHost || "leader";
@@ -542,7 +556,7 @@ function updateClusterBanner(s) {
 			el.appendChild(promote);
 		}
 	}
-	if (leading) buildLeadingBanner(el);
+	updateComposerFollowerNote(s, clustered);
 	["inputText", "buttonSend", "selectDuration"].forEach(function(id) {
 		var control = document.getElementById(id);
 		if (control) control.disabled = clustered;
@@ -554,29 +568,34 @@ function updateClusterBanner(s) {
 	updateMessageInputs(leading);
 }
 
-//#317: the leader banner — driven off the /settings poll for clusterLeading,
-//with member count + per-member auth taken from the cached /cluster/status.
-//Built with DOM nodes (member hosts/names come off unauthenticated LAN wire).
-function buildLeadingBanner(el) {
-	var st = window.lastClusterStatus || {};
-	var members = st.members || [];
-	var rows = 0;
-	members.forEach(function(m) { rows = Math.max(rows, m.row + 1); });
-	el.textContent = "⚑ Leading — driving a " + rows + "-row wall · " +
-		members.length + " member" + (members.length === 1 ? "" : "s");
-	//Auth summary over the FOLLOWER links only (the leader's own row is not a
-	//wire link). "all" = leader signs to every follower.
-	var followers = members.filter(function(m) { return !m.self; });
-	if (followers.length) {
-		var authed = followers.filter(function(m) { return m.hmac; }).length;
-		el.appendChild(document.createTextNode(" · "));
-		var chip = document.createElement("span");
-		if (authed === followers.length) { chip.className = "pill ok"; chip.textContent = "Auth · all links"; }
-		else if (authed > 0) { chip.className = "pill bad"; chip.textContent = "Auth · " + authed + "/" + followers.length; }
-		else { chip.className = "pill off"; chip.textContent = "Unauthenticated"; }
-		el.appendChild(chip);
+//#478: while clustered the composer card explains its own disabled state —
+//row, leader, link — instead of a page-wide banner. Hidden during grace/
+//local-fallback: the alert banner owns those states (the display is NOT
+//showing leader content then, so this wording would contradict it). DOM
+//nodes only (leaderName/leaderHost come off an unauthenticated LAN POST).
+function updateComposerFollowerNote(s, clustered) {
+	var note = document.getElementById("composerFollowerNote");
+	if (!note) return;
+	var show = clustered &&
+		s.clusterState !== "grace" && s.clusterState !== "local-fallback";
+	note.classList.toggle("hidden", !show);
+	if (!show) return;
+	var leader = s.clusterLeaderName || s.clusterLeaderHost || "the leader";
+	//#332: a monitor renders nothing — its mirror IS the product, so the
+	//row wording would be wrong for it.
+	note.textContent = s.deviceRole === "headless-monitor"
+		? "This board monitors " + leader + "'s wall — the mirror above is the live dashboard."
+		: "This board renders row " + (Number(s.clusterRow) + 1) + " of " + leader +
+		  " — text, mode and clock come from the leader.";
+	//Strict hostname[:port] allowlist — anything else gets no link at all.
+	var host = String(s.clusterLeaderHost || "");
+	if (/^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {
+		note.appendChild(document.createTextNode(" "));
+		var link = document.createElement("a");
+		link.href = "http://" + host + "/";
+		link.textContent = "Open the leader";
+		note.appendChild(link);
 	}
-	el.appendChild(document.createTextNode(" · text, mode and stop apply to the whole wall."));
 }
 
 //#317: relabel the command buttons to signal wall-wide reach while leading.
@@ -629,13 +648,21 @@ function updateMessageInputs(leading) {
 		cell.className = "grow";
 		var lbl = document.createElement("label");
 		lbl.className = "small";
-		lbl.textContent = "Row " + r + " · " + w + " wide";
+		lbl.textContent = "Row " + (r + 1) + " — " + w + " units";
+		//#478: live per-row count, same duty as the single box's char counter.
+		var count = document.createElement("span");
+		count.className = "meta perrow-count";
+		count.textContent = "0 / " + w;
+		lbl.appendChild(count);
 		var input = document.createElement("input");
 		input.type = "text";
 		input.className = "perrow-input";
 		input.maxLength = w;
 		input.autocomplete = "off";
 		input.placeholder = "up to " + w + " characters";
+		input.addEventListener("input", function() {
+			count.textContent = input.value.length + " / " + w;
+		});
 		cell.appendChild(lbl);
 		cell.appendChild(input);
 		row.appendChild(cell);
@@ -764,7 +791,7 @@ window.addEventListener("load", loadPage);
 
 // ===================== views / tabs =====================
 
-var TAB_NAMES = ["home", "settings", "maintenance", "system", "logs"];
+var TAB_NAMES = ["home", "wall", "settings", "maintenance", "system", "logs"];
 
 function currentTabFromHash() {
 	var name = location.hash.replace("#", "");
@@ -773,7 +800,7 @@ function currentTabFromHash() {
 
 //"setup" is a view but not a tab: the tabbar stays hidden while it's up.
 function showView(name) {
-	["home", "settings", "maintenance", "system", "logs", "setup"].forEach(function(view) {
+	["home", "wall", "settings", "maintenance", "system", "logs", "setup"].forEach(function(view) {
 		var section = document.getElementById("section-" + view);
 		if (section) section.classList.toggle("on", view === name);
 	});
@@ -2487,14 +2514,14 @@ var clusterRolloutSeen = false;
 function initClusterCard() {
 	var tabActive = false;
 	document.addEventListener("sf-tabchange", function(event) {
-		//Settings needs the editor pills/rollout; Maintenance (#318 C) and
+		//Wall hosts the member editor + rollout; Maintenance (#318 C) and
 		//System (#318 D) need the live member list to render their cards.
-		tabActive = event.detail === "settings" || event.detail === "maintenance" ||
+		tabActive = event.detail === "wall" || event.detail === "maintenance" ||
 			event.detail === "system";
 		if (tabActive) loadClusterStatus();
 	});
-	//One steady 5 s timer: the settings tab needs pills/rollout, and the
-	//home tab's wall needs per-row health (#294) while this board leads.
+	//One steady 5 s timer: the wall tab needs pills/rollout, and the
+	//home tab's mirror needs per-row health (#294) while this board leads.
 	clusterStatusTimer = setInterval(function() {
 		if (document.hidden) return;
 		if (tabActive || (wallWidths && wallSource === "sse")) loadClusterStatus();
@@ -2610,13 +2637,79 @@ function clusterStateLabel(m) {
 	return { text: "joining", kind: "off" };
 }
 
+//#478: Wall-at-a-glance — totals + one pill per member above the editor,
+//off the same /cluster/status poll as the table. Leader-side only (a
+//follower's Wall tab shows the follower view). Member hosts come off the
+//LAN wire — text nodes only.
+function renderWallGlance(st) {
+	var el = document.getElementById("wallGlance");
+	if (!el) return;
+	var followerVisible = !document.getElementById("clusterFollowerView").classList.contains("hidden");
+	var members = (st && st.members) || [];
+	var show = !!(st && st.enabled) && !followerVisible && members.length > 0;
+	el.classList.toggle("hidden", !show);
+	removeAllChildren(el);
+	if (!show) return;
+	var rows = 0, units = 0, faulty = 0, joined = 0;
+	members.forEach(function(m) {
+		rows = Math.max(rows, m.row + 1);
+		units += m.detected || 0;
+		faulty += m.faulty || 0;
+		if (m.joined) joined++;
+	});
+	var line = document.createElement("span");
+	line.className = "glance-line";
+	line.textContent = "Leading " + rows + " row" + (rows === 1 ? "" : "s") +
+		" · " + units + " units · " +
+		(faulty ? faulty + " faulty" : "no faults") + " · " +
+		(joined === members.length ? "all joined" : joined + "/" + members.length + " joined");
+	el.appendChild(line);
+	members.slice().sort(function(a, b) { return a.row - b.row; }).forEach(function(m) {
+		var label = clusterStateLabel(m);
+		var pill = document.createElement("span");
+		pill.className = "pill " + label.kind;
+		pill.textContent = "R" + (m.row + 1) + " · " +
+			(m.self ? "this board" : m.host) + " · " + label.text;
+		el.appendChild(pill);
+	});
+	//Wire-auth summary over the FOLLOWER links only (the leader's own row is
+	//not a wire link); none authed = legacy auto-negotiate, off not red.
+	var followers = members.filter(function(m) { return !m.self; });
+	if (followers.length) {
+		var authed = followers.filter(function(m) { return m.hmac; }).length;
+		var chip = document.createElement("span");
+		if (authed === followers.length) { chip.className = "pill ok"; chip.textContent = "auth · all links"; }
+		else if (authed > 0) { chip.className = "pill bad"; chip.textContent = "auth · " + authed + "/" + followers.length; }
+		else { chip.className = "pill off"; chip.textContent = "unauthenticated"; }
+		el.appendChild(chip);
+	}
+	//Convergence activity — a short line only while something moves; the
+	//card status below keeps the detailed progress text.
+	var rollout = st.rollout || {}, push = st.followerPush || {};
+	var act = "";
+	if (rollout.phase === "uploading" && rollout.total > 0) {
+		act = "updating " + rollout.host + " — " + Math.floor(rollout.sent * 100 / rollout.total) + "%";
+	} else if (rollout.phase === "waiting") {
+		act = "flashed " + rollout.host + " — waiting for rejoin";
+	} else if (push.phase === "uploading" && push.total > 0) {
+		act = "pushing follower firmware to " + push.host + " — " + Math.floor(push.sent * 100 / push.total) + "%";
+	}
+	if (act) {
+		var actEl = document.createElement("span");
+		actEl.className = "glance-act";
+		actEl.textContent = act;
+		el.appendChild(actEl);
+	}
+}
+
 function updateClusterFromStatus(st) {
-	//Cache for the leading banner (#317): it runs off the /settings poll but
-	//needs member count + per-member auth from here.
+	//Cache for the chrome status line + glance strip: they run off the
+	///settings poll but need member data from here.
 	window.lastClusterStatus = st;
 	updateClusterBanner(window.lastSettings || {});
 	//Maintenance-tab member list (#318 C): shown only while leading.
 	renderMaintClusterMembers(st);
+	renderWallGlance(st);
 	//Wall row strips (#294) — the leader's own SSE wall colors its remote
 	//rows from the same member health the pills use.
 	if (wallSource === "sse") updateWallHealth(st.members || []);
