@@ -44,6 +44,10 @@
 			<section id="section-home" class="panel" role="tabpanel">
 				<div class="card card-primary">
 					<h2>Send a message</h2>
+					<!-- #478: while this board is a follower row the leader owns the
+					     content — this note explains the disabled controls in place
+					     (the banner is reserved for grace/fallback alerts). -->
+					<p class="note hidden" id="composerFollowerNote"></p>
 					<!-- #318: per-row inputs (one per wall row) while leading; the
 					     single box + newline marker below is the standalone path. -->
 					<div id="perRowInputs" class="hidden"></div>
@@ -102,6 +106,9 @@
 
 			<!-- ============ WALL (cluster) ============ -->
 			<section id="section-wall" class="panel" role="tabpanel">
+				<!-- #478: at-a-glance strip — totals + a pill per member off the
+				     same /cluster/status poll as the table below. -->
+				<div id="wallGlance" class="glance hidden"></div>
 				<div class="card" id="cardCluster">
 					<h2>Cluster <span class="pill off" id="labelClusterStatus">off</span></h2>
 					<div id="clusterFollowerView" class="hidden">

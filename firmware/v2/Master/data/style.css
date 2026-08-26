@@ -201,6 +201,16 @@ input[type=range] { width: 100%; accent-color: var(--amber); margin: 12px 0 4px;
 .pill.bad { color: var(--warn); } .pill.bad::before { background: var(--warn); }
 .pill.warn { color: var(--amber); } .pill.warn::before { background: var(--amber); }
 
+/* #478: Wall-at-a-glance strip (totals + member pills, Wall tab) */
+.glance {
+	display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+	background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+	padding: 10px 14px; margin-top: 14px; font-size: 13px;
+}
+.glance-line { color: var(--ink); }
+.glance-act { color: var(--muted); font-style: italic; }
+.perrow-count { margin-left: 10px; }
+
 .status { font-size: 14px; margin: 12px 0 0; }
 .status.pending { color: var(--muted); }
 .status.success { color: var(--ok); }
