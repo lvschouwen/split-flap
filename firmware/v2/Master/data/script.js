@@ -764,7 +764,7 @@ window.addEventListener("load", loadPage);
 
 // ===================== views / tabs =====================
 
-var TAB_NAMES = ["home", "settings", "maintenance", "system", "logs"];
+var TAB_NAMES = ["home", "wall", "settings", "maintenance", "system", "logs"];
 
 function currentTabFromHash() {
 	var name = location.hash.replace("#", "");
@@ -773,7 +773,7 @@ function currentTabFromHash() {
 
 //"setup" is a view but not a tab: the tabbar stays hidden while it's up.
 function showView(name) {
-	["home", "settings", "maintenance", "system", "logs", "setup"].forEach(function(view) {
+	["home", "wall", "settings", "maintenance", "system", "logs", "setup"].forEach(function(view) {
 		var section = document.getElementById("section-" + view);
 		if (section) section.classList.toggle("on", view === name);
 	});
@@ -2487,14 +2487,14 @@ var clusterRolloutSeen = false;
 function initClusterCard() {
 	var tabActive = false;
 	document.addEventListener("sf-tabchange", function(event) {
-		//Settings needs the editor pills/rollout; Maintenance (#318 C) and
+		//Wall hosts the member editor + rollout; Maintenance (#318 C) and
 		//System (#318 D) need the live member list to render their cards.
-		tabActive = event.detail === "settings" || event.detail === "maintenance" ||
+		tabActive = event.detail === "wall" || event.detail === "maintenance" ||
 			event.detail === "system";
 		if (tabActive) loadClusterStatus();
 	});
-	//One steady 5 s timer: the settings tab needs pills/rollout, and the
-	//home tab's wall needs per-row health (#294) while this board leads.
+	//One steady 5 s timer: the wall tab needs pills/rollout, and the
+	//home tab's mirror needs per-row health (#294) while this board leads.
 	clusterStatusTimer = setInterval(function() {
 		if (document.hidden) return;
 		if (tabActive || (wallWidths && wallSource === "sse")) loadClusterStatus();

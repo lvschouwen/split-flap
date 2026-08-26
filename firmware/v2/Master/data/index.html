@@ -44,6 +44,8 @@
 			<section id="section-home" class="panel" role="tabpanel">
 				<div class="card card-primary">
 					<h2>Send a message</h2>
+					<!-- #318: per-row inputs (one per wall row) while leading; the
+					     single box + newline marker below is the standalone path. -->
 					<div id="perRowInputs" class="hidden"></div>
 					<div class="row">
 						<div class="grow" id="singleInputWrap">
@@ -92,7 +94,7 @@
 						</div>
 					</div>
 					<div class="row" style="margin-top:12px">
-						<button type="button" class="btn danger" id="buttonStop" onclick="stopDisplay()">Stop & blank display</button>
+						<button type="button" class="btn danger" id="buttonStop" onclick="stopDisplay()">Stop &amp; blank display</button>
 					</div>
 					<p id="displayStatus" class="status hidden"></p>
 				</div>
@@ -200,13 +202,16 @@
 					<h2>WiFi</h2>
 					<p class="note">Erases the stored WiFi credentials. The display reboots into its setup portal so you can connect it to another network.</p>
 					<div class="row">
-						<button type="button" class="btn danger" onclick="postAction('/reset-wifi', 'Are you sure you want to reset the WiFi settings?')">Forget WiFi & open setup portal…</button>
+						<button type="button" class="btn danger" onclick="postAction('/reset-wifi', 'Are you sure you want to reset the WiFi settings?')">Forget WiFi &amp; open setup portal…</button>
 					</div>
 				</div>
 			</section>
 
 			<!-- ============ MAINTENANCE ============ -->
 			<section id="section-maintenance" class="panel" role="tabpanel">
+				<!-- Cluster members (#318 C): only while this board leads a wall —
+				     manage every row's units/firmware from here, same ⚙ panel as
+				     the Wall tab's cluster card. -->
 				<div class="card hidden" id="maintClusterCard">
 					<h2>Cluster members</h2>
 					<p class="note">This board is driving a wall. Open a row’s ⚙ panel to calibrate, reflash or reboot without leaving this page.</p>
@@ -227,7 +232,7 @@
 					<datalist id="calibrationLetters"></datalist>
 					<div id="containerCalibrationUnits"></div>
 					<details id="calibrationAdvanced">
-						<summary>Advanced: raw jog & offset</summary>
+						<summary>Advanced: raw jog &amp; offset</summary>
 						<p class="note">Nudge a single unit a few steps at a time, or set its offset directly. Jog does not persist; Save writes to EEPROM.</p>
 						<div id="containerCalibrationAdvanced"></div>
 					</details>
@@ -236,7 +241,7 @@
 
 				<div class="card">
 					<h2>Unit health <span id="unitHealthSummary" class="pill off">—</span></h2>
-					<p class="note">Per-unit diagnostics over I2C: firmware, uptime, lifetime brownout/watchdog resets, last-home result, reset cause and drum drift.</p>
+					<p class="note">Per-unit diagnostics over I2C: firmware, uptime, lifetime brownout/watchdog resets, last-home result, reset cause and drum drift (measured hall-vs-belief deviations; drifted units silently re-home at idle).</p>
 					<div class="row">
 						<button type="button" class="btn" onclick="refreshUnitHealth()">Refresh (re-polls every unit)</button>
 						<button type="button" class="btn" onclick="resetUnits()">Reset unit calibration</button>
@@ -258,7 +263,7 @@
 
 				<div class="card" id="provisioningCard">
 					<h2>Provisioning</h2>
-					<p class="note">Each unit can store its I2C address in EEPROM; the DIP switches become a fallback. <b>Burn all</b> locks in the current addresses (do this before DIP switches are ever removed).</p>
+					<p class="note">Each unit can store its I2C address in EEPROM; the DIP switches become a fallback. <b>Burn all</b> locks in the current addresses (do this before DIP switches are ever removed). Changing an address <em>away</em> from its DIP setting breaks that unit's over-I2C reflash until the address is cleared again.</p>
 					<div class="row">
 						<button type="button" class="btn" onclick="burnAllAddresses()">Burn current addresses to EEPROM (all units)</button>
 					</div>
@@ -268,7 +273,7 @@
 
 				<div class="card">
 					<h2>Display width <span id="labelWidthOverride" class="pill off">auto</span></h2>
-					<p class="note">Dummy mode for benches without (all of) the units: pin the display width instead of deriving it from the I2C probe. <b>0 = auto</b>.</p>
+					<p class="note">Dummy mode for benches without (all of) the units: pin the display width instead of deriving it from the I2C probe. <b>0 = auto</b> (probe-derived). Real units keep working; missing ones simply show as unreachable.</p>
 					<div class="row">
 						<label class="small inline" for="inputUnitCountOverride">Unit count</label>
 						<input type="number" id="inputUnitCountOverride" min="0" max="16" step="1" value="0">
@@ -279,7 +284,7 @@
 
 				<div class="card">
 					<h2>Device role <span id="labelDeviceRole" class="pill off">display</span></h2>
-					<p class="note">What this board is for. A master with no flap units can take a non-display role instead of showing a blank wall row.</p>
+					<p class="note">What this board is for. A master with no flap units on its I2C bus can take a non-display role instead of showing a blank wall row. Detection only <em>suggests</em> — you confirm the role here; it never switches on its own.</p>
 					<div id="deviceRoleSuggestion" class="banner hidden">This master detects no units — it looks unit-less. Pick a headless role below, or leave it as <b>Display</b>.</div>
 					<div class="row" style="margin-top:12px">
 						<div class="seg" id="segDeviceRole">
@@ -306,7 +311,7 @@
 				</div>
 			</section>
 
-			<!-- ============ SYSTEM ============ -->
+			<!-- ============ SYSTEM (#245) ============ -->
 			<section id="section-system" class="panel" role="tabpanel">
 				<div class="card">
 					<h2>Vitals <span class="pill off" id="systemStatsStatus">loading</span></h2>
@@ -335,6 +340,9 @@
 					<h2>Firmware</h2>
 					<div class="kv-rows">
 						<div class="kv"><span>Version</span><span id="statVersion">—</span></div>
+						<!-- #391: the factory rescue image is the last line of defence and
+						     was invisible until you booted into it. Pill appears only when
+						     it needs attention (stale / unidentified / missing). -->
 						<div class="kv"><span>Rescue image</span><span><span id="statRescueRev">—</span> <span class="pill hidden" id="statRescuePill"></span></span></div>
 						<div class="kv"><span>Uptime</span><span id="statUptime">—</span></div>
 						<div class="kv"><span>Last reset</span><span id="statReset">—</span></div>
@@ -342,9 +350,12 @@
 					</div>
 				</div>
 
+				<!-- Cluster members (#318 D): per-row vitals fanned out from each
+				     member's /settings. ESP-01 rows carry heap/rssi/up; an S3 row's
+				     /settings has none, so it shows its rev and a dash. -->
 				<div class="card hidden" id="sysClusterCard">
 					<h2>Cluster members</h2>
-					<p class="note">Live vitals of every row this board drives.</p>
+					<p class="note">Live vitals of every row this board drives, read straight from each board.</p>
 					<div class="scroll-x">
 						<table id="sysClusterTable" class="uh-table">
 							<thead>
@@ -367,7 +378,7 @@
 
 				<div class="card">
 					<h2>Flash log</h2>
-					<p class="note">Persistent copy on the storage partition — survives reboots. Flushed every ~5 s; rotates at 1&nbsp;MB.</p>
+					<p class="note">Persistent copy of the same output on the storage partition — survives reboots and works with USB unplugged. Flushed every ~5 s; rotates at 1&nbsp;MB (current + previous ≈ several weeks of history).</p>
 					<div class="row">
 						<button type="button" class="btn" onclick="loadFlashLog(false)">Load current</button>
 						<button type="button" class="btn" onclick="loadFlashLog(true)">Load previous</button>
@@ -423,7 +434,7 @@
 						<div class="row">
 							<button type="button" class="btn ghost" onclick="wizardFinish(false)">Skip — take me to the display</button>
 							<span class="grow"></span>
-							<button type="button" class="btn primary" onclick="wizardSaveMqtt()">Save & finish</button>
+							<button type="button" class="btn primary" onclick="wizardSaveMqtt()">Save &amp; finish</button>
 						</div>
 						<p id="wizardMqttStatus" class="status hidden"></p>
 					</div>
@@ -433,34 +444,6 @@
 	</div>
 	<script src="md5.js"></script>
 	<script src="script.js"></script>
-	<script>
-	/* Wall tab bridge (ui/modern-hybrid) — fold into script.js when modularized. */
-	(function () {
-		TAB_NAMES = ["home", "wall", "settings", "maintenance", "system", "logs"];
-		showView = function (name) {
-			["home", "wall", "settings", "maintenance", "system", "logs", "setup"].forEach(function (view) {
-				var section = document.getElementById("section-" + view);
-				if (section) section.classList.toggle("on", view === name);
-			});
-			document.querySelectorAll(".tab-btn").forEach(function (button) {
-				var on = button.dataset.tab === name;
-				button.classList.toggle("on", on);
-				button.setAttribute("aria-selected", on ? "true" : "false");
-			});
-			document.dispatchEvent(new CustomEvent("sf-tabchange", { detail: name }));
-		};
-		/* Cluster card moved off Settings — keep /cluster/status live on Wall. */
-		setInterval(function () {
-			if (document.hidden) return;
-			if (location.hash.replace("#", "") === "wall" && typeof loadClusterStatus === "function") {
-				loadClusterStatus();
-			}
-		}, 5000);
-		document.addEventListener("sf-tabchange", function (event) {
-			if (event.detail === "wall" && typeof loadClusterStatus === "function") loadClusterStatus();
-		});
-	})();
-	</script>
 </body>
 
 </html>
