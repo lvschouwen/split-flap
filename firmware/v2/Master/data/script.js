@@ -569,16 +569,24 @@ function updateClusterBanner(s) {
 }
 
 //#478: while clustered the composer card explains its own disabled state —
-//row, leader, link — instead of a page-wide banner. DOM nodes only
-//(leaderName/leaderHost come off an unauthenticated LAN POST).
+//row, leader, link — instead of a page-wide banner. Hidden during grace/
+//local-fallback: the alert banner owns those states (the display is NOT
+//showing leader content then, so this wording would contradict it). DOM
+//nodes only (leaderName/leaderHost come off an unauthenticated LAN POST).
 function updateComposerFollowerNote(s, clustered) {
 	var note = document.getElementById("composerFollowerNote");
 	if (!note) return;
-	note.classList.toggle("hidden", !clustered);
-	if (!clustered) return;
+	var show = clustered &&
+		s.clusterState !== "grace" && s.clusterState !== "local-fallback";
+	note.classList.toggle("hidden", !show);
+	if (!show) return;
 	var leader = s.clusterLeaderName || s.clusterLeaderHost || "the leader";
-	note.textContent = "This board renders row " + (Number(s.clusterRow) + 1) +
-		" of " + leader + " — text, mode and clock come from the leader.";
+	//#332: a monitor renders nothing — its mirror IS the product, so the
+	//row wording would be wrong for it.
+	note.textContent = s.deviceRole === "headless-monitor"
+		? "This board monitors " + leader + "'s wall — the mirror above is the live dashboard."
+		: "This board renders row " + (Number(s.clusterRow) + 1) + " of " + leader +
+		  " — text, mode and clock come from the leader.";
 	//Strict hostname[:port] allowlist — anything else gets no link at all.
 	var host = String(s.clusterLeaderHost || "");
 	if (/^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {

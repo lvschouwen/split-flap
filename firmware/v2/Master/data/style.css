@@ -106,7 +106,6 @@ body {
 	display: flex; gap: 0; margin: 16px 0 0;
 	border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
 	background: var(--cell);
-	position: sticky; top: auto; z-index: 30;
 }
 .tab-btn {
 	appearance: none; cursor: pointer; flex: 1 1 0;
