@@ -140,11 +140,7 @@ def test_every_displayed_unit_key_is_documented_by_the_firmware():
     """Drift gate: the labels here are OUR words for the firmware's keys, so
     every key displayed must still exist in the board's own /api legend. If
     firmware renames or drops one, this fails instead of the screen quietly
-    showing a dash forever.
-
-    err/errAge are the documented exception — the firmware emits them
-    (UnitHealth.h:457) but ApiIndex.h's legend omits them."""
+    showing a dash forever."""
     legend = json.loads((FIXDIR / "api_esp32s3.json").read_text())["legend"]
-    undocumented = {"err", "errAge"}
-    missing = [k for k in UNIT_DETAIL_KEYS if k not in legend and k not in undocumented]
+    missing = [k for k in UNIT_DETAIL_KEYS if k not in legend]
     assert missing == [], f"keys not in the firmware's /api legend: {missing}"
