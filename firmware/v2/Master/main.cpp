@@ -176,6 +176,18 @@ void setup() {
   // netif-up call in WifiService as a fallback.
   otaServiceInit();
 
+  // #390: after an out-of-band recovery the stored ?v= diagnostic names an
+  // image this boot is not running — blank it (one NVS write, only on the
+  // boot after such a recovery). A genuine revert keeps the mismatch.
+  if (otaShouldBlankIntendedVersion(settings.intendedVersion, GIT_REV,
+                                    otaVerdictSnapshot())) {
+    SerialPrintln("intendedVersion \"" + settings.intendedVersion +
+                  "\" != running " GIT_REV " without a revert — blanking "
+                  "(out-of-band recovery, #390)");
+    settings.intendedVersion = "";
+    saveIntendedVersion(settingsStore, "");
+  }
+
   // TZ correct from the first log line; SNTP starts now and syncs once a
   // netif exists (startOnline re-applies for the immediate kick, #192).
   clockServiceApplyTz(settings);

@@ -43,3 +43,19 @@ inline OtaVerdict synthesizeOtaVerdict(bool rolledBack, bool pendingVerify,
   }
   return v;
 }
+
+// #390: an out-of-band recovery (rescue upload to app0, USB flash) leaves
+// the last normal OTA's ?v= diagnostic pointing at an image this boot is
+// not running — misleading to anyone reading intendedVersion as "what
+// should be running". Blank it on boot when it mismatches the running rev,
+// UNLESS the verdict is a genuine revert: there version != intendedVersion
+// is exactly the signal the field exists to produce, and erasing it would
+// destroy the revert diagnosis. Gates on the synthesized verdict, not the
+// raw rolledBack flag — that one can be a previous attempt's corpse (see
+// synthesizeOtaVerdict above).
+inline bool otaShouldBlankIntendedVersion(const String& intendedVersion,
+                                          const char* runningRev,
+                                          const OtaVerdict& verdict) {
+  return intendedVersion.length() > 0 && intendedVersion != runningRev &&
+         !verdict.otaReverted;
+}
