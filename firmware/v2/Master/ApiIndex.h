@@ -35,6 +35,7 @@ static const ApiRoute API_ROUTES[] = {
   {"GET",  "/health",                 "liveness text"},
   {"GET",  "/log",                    "in-RAM log tail"},
   {"GET",  "/log/flash",              "persistent flash log"},
+  {"GET",  "/units/odometer-log",     "append-only odometer history CSV: epoch,addr,revs[,R=reset] (?prev=1 = rotated file)"},
   {"POST", "/log/flash/clear",        "truncate the flash log"},
   {"GET",  "/tz.json",                "IANA timezone table"},
   {"GET",  "/events",                 "SSE display + cluster-wall stream"},
@@ -119,6 +120,8 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"hs2",    "boot-home state: 0 unhomed, 1 homing, 2 homed"},
   {"misses", "consecutive missed heartbeat reads"},
   {"stale",  "1 = unit missed >= the threshold of consecutive heartbeats (lost)"},
+  {"err",    "cumulative failed unit-bus transactions charged to this address"},
+  {"errAge", "ms since this unit's last charged bus error"},
   {"se",     "step-excess on the last home (actual minus expected steps)"},
   {"sx",     "worst-seen step-excess since boot"},
   {"sag",    "minimum loaded supply Vcc (mV) during the last move"},
@@ -189,7 +192,9 @@ inline bool legendHasKey(const char* key) {
   return false;
 }
 
-#define API_JSON_CAP 8192
+// #475's err/errAge legend rows + #465's route overflowed 8192; heap-built
+// by the handler, so the cost is transient, not BSS.
+#define API_JSON_CAP 9216
 
 #define API_APPEND(...) do { \
     if (o >= cap) return o; \

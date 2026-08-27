@@ -57,6 +57,7 @@ bool tasksUnitCountOverridePinned() {
 #include "HeadlessPolicy.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
+#include "OdometerLog.h"
 #include "StatusLed.h"
 #include "SystemStats.h"
 #include "TaskWatchdog.h"
@@ -206,6 +207,7 @@ static void netTaskMain(void* arg) {
     webDisplayEventsTick();  // #251: SSE push on display text change
     statusLedTick();
     systemStatsTick();  // #245/#251: self-throttled, 1 s fast + 5 s ring
+    odometerLogTick();  // #465: self-throttled odometer historian append
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }

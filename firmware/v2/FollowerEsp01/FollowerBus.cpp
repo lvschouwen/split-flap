@@ -255,50 +255,65 @@ static bool isUnitInBootloader(int i2cAddress) {
 void busProbe() {
 #if SERIAL_ENABLE == false
   SerialPrintln(F("Scanning I2C bus for units..."));
-  detectedUnitCount = 0;
+  // #468: async handlers (/units/health, /unit/offset, /settings) read
+  // unitFacts / detectedUnitCount live, and the I2C reads below yield —
+  // zeroing a slot up front and refilling it field by field would let a GET
+  // landing mid-probe see the unit as absent/unversioned. Each slot is
+  // therefore probed into a scratch struct and published with one
+  // assignment (no yield inside a struct copy on this single-core part),
+  // and the count is published once at the end.
+  int detected = 0;
   int states[UNITS_AMOUNT];
   for (int i = 0; i < UNITS_AMOUNT; i++) {
-    unitFacts[i] = UnitFacts{};
+    UnitFacts f{};
     states[i] = 0;
     int i2cAddress = toI2cAddress(i);
     Wire.beginTransmission(i2cAddress);
-    if (Wire.endTransmission() != 0) continue;
+    if (Wire.endTransmission() != 0) {
+      unitFacts[i] = f;
+      continue;
+    }
 
     bool inBootloader = isUnitInBootloader(i2cAddress);
-    unitFacts[i].state = inBootloader ? 2 : 1;
-    states[i] = unitFacts[i].state;
-    detectedUnitCount++;
-    if (inBootloader) continue;
+    f.state = inBootloader ? 2 : 1;
+    states[i] = f.state;
+    detected++;
+    if (inBootloader) {
+      unitFacts[i] = f;
+      continue;
+    }
 
     uint8_t protocolVersion = 0;
-    if (readUnitVersion(i2cAddress, unitFacts[i].version, protocolVersion)) {
+    if (readUnitVersion(i2cAddress, f.version, protocolVersion)) {
       // Rev (a hash) and protocol version are both compared for EQUALITY
       // only — neither says "older", and different always means reflash.
       // BUNDLED_UNIT_REV_EQUIV widens "ours" to revs measured to build the
       // same machine code (#440).
-      unitFacts[i].fwStatus = unitFwStatusFromRev(
-          unitFacts[i].version, BUNDLED_UNIT_REV, BUNDLED_UNIT_REV_EQUIV);
-      unitFacts[i].protocolVersion = protocolVersion;
-      unitFacts[i].protocolKnown = true;
+      f.fwStatus = unitFwStatusFromRev(f.version, BUNDLED_UNIT_REV,
+                                       BUNDLED_UNIT_REV_EQUIV);
+      f.protocolVersion = protocolVersion;
+      f.protocolKnown = true;
     }
     int16_t offset;
     if (readUnitOffset(i2cAddress, offset)) {
-      unitFacts[i].offset = offset;
-      unitFacts[i].offsetValid = true;
+      f.offset = offset;
+      f.offsetValid = true;
     }
     uint32_t odometer;
     if (readUnitOdometer(i2cAddress, odometer)) {
-      unitFacts[i].odometer = odometer;
-      unitFacts[i].odometerValid = true;
+      f.odometer = odometer;
+      f.odometerValid = true;
     }
-    refreshUnitVitals(unitFacts[i], i2cAddress);
+    refreshUnitVitals(f, i2cAddress);
     // New-measurement diagnostics ride the probe too (#365); pre-ext-diag
     // firmware fails the checksum and stays extDiagValid=false.
-    refreshUnitExtDiag(unitFacts[i], i2cAddress);
+    refreshUnitExtDiag(f, i2cAddress);
     // Lifetime health rides the probe too (#406); pre-lifetime firmware
     // fails the length check and stays lifetimeValid=false.
-    refreshUnitLifetime(unitFacts[i], i2cAddress);
+    refreshUnitLifetime(f, i2cAddress);
+    unitFacts[i] = f;
   }
+  detectedUnitCount = detected;
   displayWidth = computeDisplayWidth(states, UNITS_AMOUNT);
   SerialPrint(F("I2C scan complete. Detected "));
   SerialPrint(detectedUnitCount);
@@ -313,27 +328,32 @@ bool busPollHealthOne(int i) {
     unitFacts[i].statusValid = false;
     return false;
   }
+  // #468: same publish-on-complete rule as busProbe() above — the reads
+  // below yield, so mutate a scratch copy (seeded from the published slot:
+  // a poll updates, it never resets) and publish with one assignment.
+  UnitFacts f = unitFacts[i];
   UnitStatus s;
   bool ok = readUnitStatus(toI2cAddress(i), s);
   if (ok) {
-    unitFacts[i].status = s;
-    unitFacts[i].statusValid = true;
+    f.status = s;
+    f.statusValid = true;
   } else {
-    unitFacts[i].statusValid = false;
+    f.statusValid = false;
   }
   uint32_t odometer;
   if (readUnitOdometer(toI2cAddress(i), odometer)) {
-    unitFacts[i].odometer = odometer;
-    unitFacts[i].odometerValid = true;
+    f.odometer = odometer;
+    f.odometerValid = true;
   }
-  refreshUnitVitals(unitFacts[i], toI2cAddress(i));
+  refreshUnitVitals(f, toI2cAddress(i));
   // New-measurement diagnostics refresh on the same cadence (#365); not
   // charged to bus error attribution — same as odometer/vitals above, only
   // the CMD_GET_STATUS read above is the liveness signal.
-  refreshUnitExtDiag(unitFacts[i], toI2cAddress(i));
+  refreshUnitExtDiag(f, toI2cAddress(i));
   // Lifetime health refreshes on the same cadence (#406) — a failed homing
   // must not wait for the next probe to surface.
-  refreshUnitLifetime(unitFacts[i], toI2cAddress(i));
+  refreshUnitLifetime(f, toI2cAddress(i));
+  unitFacts[i] = f;
   return ok;  // CMD_GET_STATUS liveness signal for the heartbeat (#310)
 #else
   (void)i;

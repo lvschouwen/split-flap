@@ -85,6 +85,39 @@ static void test_fresh_flash_outranks_stale_rollback_history() {
   TEST_ASSERT_FALSE(ok.otaReverted);
 }
 
+// --- otaShouldBlankIntendedVersion (#390) ----------------------------------
+
+static void test_intended_matching_running_rev_is_kept() {
+  // The normal case after every successful OTA: ?v= names the image that
+  // is now running. Nothing to blank — and no NVS write every boot.
+  OtaVerdict clean = synthesizeOtaVerdict(false, false, false);
+  TEST_ASSERT_FALSE(otaShouldBlankIntendedVersion("fa7067a", "fa7067a", clean));
+  TEST_ASSERT_FALSE(otaShouldBlankIntendedVersion("", "fa7067a", clean));
+}
+
+static void test_mismatch_on_clean_boot_blanks() {
+  // The #389 bench observation: rescue recovery put fa7067a on app0 while
+  // intendedVersion still said f14a7b6 from the last normal OTA. Clean
+  // verdict + mismatch = out-of-band recovery — blank the stale intent.
+  OtaVerdict clean = synthesizeOtaVerdict(false, false, false);
+  TEST_ASSERT_TRUE(otaShouldBlankIntendedVersion("f14a7b6", "fa7067a", clean));
+  OtaVerdict confirmed = synthesizeOtaVerdict(false, true, true);
+  TEST_ASSERT_TRUE(
+      otaShouldBlankIntendedVersion("f14a7b6", "fa7067a", confirmed));
+}
+
+static void test_mismatch_on_reverted_boot_is_kept() {
+  // A silent revert is EXACTLY version != intendedVersion on an
+  // otaReverted verdict — that mismatch is the field's whole purpose and
+  // must survive. Gate on the synthesized verdict, not the raw rolledBack
+  // flag: a corpse-mark boot (rolledBack but pending/confirmed) is not a
+  // revert and does blank (covered above via synthesizeOtaVerdict).
+  OtaVerdict reverted = synthesizeOtaVerdict(true, false, false);
+  TEST_ASSERT_TRUE(reverted.otaReverted);
+  TEST_ASSERT_FALSE(
+      otaShouldBlankIntendedVersion("f14a7b6", "fa7067a", reverted));
+}
+
 // ---------------------------------------------------------------------------
 
 int main(int, char**) {
@@ -98,5 +131,8 @@ int main(int, char**) {
   RUN_TEST(test_pending_verify_yields_pending);
   RUN_TEST(test_confirmed_this_boot_yields_ok);
   RUN_TEST(test_fresh_flash_outranks_stale_rollback_history);
+  RUN_TEST(test_intended_matching_running_rev_is_kept);
+  RUN_TEST(test_mismatch_on_clean_boot_blanks);
+  RUN_TEST(test_mismatch_on_reverted_boot_is_kept);
   return UNITY_END();
 }

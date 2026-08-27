@@ -22,6 +22,7 @@
 #include "ClusterLeader.h"
 #include "FactorySlot.h"
 #include "FlashLog.h"
+#include "OdometerLog.h"
 #include "OtaService.h"
 #include "SettingsJson.h"  // appendJsonString
 #include "SplitFlapProtocol.h"
@@ -86,6 +87,24 @@ void webSystemRegister(AsyncWebServer& server) {
     }
     flashLogRequestClear();
     request->send(202, "text/plain", F("Flash log clear queued"));
+  });
+
+  // --- odometer historian (#465) --------------------------------------------
+  // Same serving pattern (and known-benign exists/open race) as /log/flash
+  // above; the file is appended by netTask's odometerLogTick.
+  server.on("/units/odometer-log", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (!odometerLogAvailable()) {
+      request->send(503, "text/plain",
+                    F("Odometer history unavailable (storage mount failed)"));
+      return;
+    }
+    const char* path = request->hasParam("prev") ? odometerLogPreviousPath()
+                                                 : odometerLogCurrentPath();
+    if (!LittleFS.exists(path)) {
+      request->send(404, "text/plain", F("No odometer history yet"));
+      return;
+    }
+    request->send(LittleFS, path, "text/csv");
   });
 
   // --- coredump (#319/#431) — remote crash diagnostics ---------------------
