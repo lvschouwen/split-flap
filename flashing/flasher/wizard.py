@@ -232,7 +232,7 @@ def run_master_ota(manifest) -> None:
         ui.ok("SUCCESS — new firmware is running")
     elif verdict == ota.REVERTED:
         ui.fail("EBOOT SILENT REVERT after all retries — power-supply margin problem; "
-                "add caps / beefier 3.3V (see CLAUDE.md OTA section)")
+                "add caps / beefier 3.3V (see firmware/v2/Master/CLAUDE.md OTA section)")
     else:
         ui.fail(f"verdict: {verdict} — not retryable (config/network problem, retrying can't fix it)")
 
