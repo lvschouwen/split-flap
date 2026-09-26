@@ -29,6 +29,9 @@ void busInit();
 // Full bus scan: state, version (vs the bundled rev), offset, odometer per
 // slot; recomputes displayWidth. Blocking (~2 ms/unit) — loop() only.
 void busProbe();
+// Same probe without the scan log lines — the #488 empty-row recovery
+// re-probes every backoff step and must not flood the 2 KB ring.
+void busProbeQuiet(bool quiet);
 
 // CMD_GET_STATUS + odometer refresh for every sketch-mode unit, plus a
 // heartbeat-freshness stamp per slot (#310). loop() only.

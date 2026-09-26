@@ -91,6 +91,18 @@ inline BusRecoveryEvent busRecoveryObserve(BusRecoveryState& s, int unitIndex,
   return BusRecoveryEvent::WentDead;
 }
 
+// A row whose probe found no unit at all is a dead bus too: a follower row is
+// never legitimately empty, and a slave-held SDA NACKs every probe address, so
+// the liveness path above has nothing to poll. Opens an episode (idempotent);
+// a re-probe that finds units closes it through busRecoveryObserve(ok=true).
+inline void busRecoveryNoteEmptyRow(BusRecoveryState& s, uint32_t nowMs) {
+  if (s.dead) return;
+  s.dead = true;
+  s.deadSinceMs = nowMs;
+  s.nextAttemptMs = nowMs;
+  s.episodes++;
+}
+
 inline bool busRecoveryDue(const BusRecoveryState& s, uint32_t nowMs) {
   return s.dead && (int32_t)(nowMs - s.nextAttemptMs) >= 0;
 }

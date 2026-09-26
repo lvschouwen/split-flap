@@ -91,6 +91,23 @@ static void test_wide_row_with_one_polled_unit_never_trips() {
   TEST_ASSERT_FALSE(s.dead);
 }
 
+static void test_empty_row_opens_one_episode_due_now() {
+  BusRecoveryState s;
+  busRecoveryNoteEmptyRow(s, 500);
+  busRecoveryNoteEmptyRow(s, 900);
+  TEST_ASSERT_TRUE(s.dead);
+  TEST_ASSERT_EQUAL_UINT32(1, s.episodes);
+  TEST_ASSERT_EQUAL_UINT32(500, s.deadSinceMs);
+  TEST_ASSERT_TRUE(busRecoveryDue(s, 500));
+  busRecoveryNoteAttempt(s, 500, 3);
+  busRecoveryNoteEmptyRow(s, 600);  // still empty: must not reset the backoff
+  TEST_ASSERT_FALSE(busRecoveryDue(s, 600));
+  // A re-probe that finds units closes it.
+  TEST_ASSERT_TRUE(busRecoveryObserve(s, 0, true, 2500, 5) ==
+                   BusRecoveryEvent::Recovered);
+  TEST_ASSERT_EQUAL_UINT32(2000, s.lastDeadMs);
+}
+
 static void test_success_resets_the_run() {
   BusRecoveryState s;
   for (int n = 0; n < BUS_DEAD_MIN_FAILS - 1; n++) {
@@ -182,6 +199,7 @@ int main(int, char**) {
   RUN_TEST(test_trips_after_threshold_not_before);
   RUN_TEST(test_one_unit_row_trips_on_its_own_failures);
   RUN_TEST(test_wide_row_with_one_polled_unit_never_trips);
+  RUN_TEST(test_empty_row_opens_one_episode_due_now);
   RUN_TEST(test_success_resets_the_run);
   RUN_TEST(test_due_immediately_then_backs_off);
   RUN_TEST(test_backoff_is_capped);

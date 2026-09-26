@@ -51,6 +51,14 @@ void busInit() {
   // buffer is bumped to 256 via -DI2C_BUFFER_LENGTH for twiboot's
   // 132-byte page writes.
   Wire.begin(1, 3);
+  // #488: a warm reboot (OTA, /reboot) leaves the Nanos powered, so one held
+  // SDA mid-byte survives it and the boot probe finds nothing. Clock it free
+  // before anything scans.
+  uint8_t status = Wire.status();
+  if (status != 0) {
+    SerialPrint(F("bus: line held at boot, state "));
+    SerialPrintln(status);
+  }
 #endif
 }
 
@@ -115,6 +123,17 @@ static void followerBusRecoveryTick() {
     SerialPrint(busRecovery.attemptsThisEpisode);
     SerialPrint(F(", line state "));
     SerialPrintln(status);
+  }
+  // An empty row has no liveness reads to close the episode: re-probe
+  // (quietly — this repeats every backoff step) and close it here.
+  if (detectedUnitCount == 0) {
+    busProbeQuiet(true);
+    if (detectedUnitCount > 0) {
+      SerialPrint(F("bus: re-probe found "));
+      SerialPrint(detectedUnitCount);
+      SerialPrintln(F(" unit(s)"));
+      observeLiveness(0, true);
+    }
   }
 }
 #endif
@@ -309,9 +328,11 @@ static bool isUnitInBootloader(int i2cAddress) {
   return isAtmega328pSignature(sig0, sig1, sig2);
 }
 
-void busProbe() {
+void busProbe() { busProbeQuiet(false); }
+
+void busProbeQuiet(bool quiet) {
 #if SERIAL_ENABLE == false
-  SerialPrintln(F("Scanning I2C bus for units..."));
+  if (!quiet) SerialPrintln(F("Scanning I2C bus for units..."));
   // #468: async handlers (/units/health, /unit/offset, /settings) read
   // unitFacts / detectedUnitCount live, and the I2C reads below yield —
   // zeroing a slot up front and refilling it field by field would let a GET
@@ -372,6 +393,7 @@ void busProbe() {
   }
   detectedUnitCount = detected;
   displayWidth = computeDisplayWidth(states, UNITS_AMOUNT);
+  if (quiet) return;
   SerialPrint(F("I2C scan complete. Detected "));
   SerialPrint(detectedUnitCount);
   SerialPrint(F(" unit(s). Row width: "));
@@ -440,8 +462,9 @@ void followerHeartbeatTick() {
   // be in its twiboot window (v1 #88) or a reflash is streaming.
   if ((int32_t)(now - busProbeInhibitedUntilMs()) < 0) return;
   if (reflashInProgress(reflashProgress)) return;
-  if (displayWidth <= 0) return;
+  if (detectedUnitCount == 0) busRecoveryNoteEmptyRow(busRecovery, now);
   followerBusRecoveryTick();
+  if (displayWidth <= 0 || detectedUnitCount == 0) return;
   int i = slot;
   slot = heartbeatNextSlot(slot, displayWidth);
   bool drivable = unitDrivable(unitFacts[i]);
