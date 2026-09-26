@@ -98,7 +98,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"sag",    "minimum loaded supply Vcc (mV) during the last move"},
   {"he",     "hall edges seen in the last completed revolution"},
   {"dw",     "rolling ~60 s duty window (recent move count)"},
-  {"sb",     "ext-diag status bitfield (bit0 last-move stall)"},
+  {"sb",     "ext-diag status bitfield (bit0 last-move stall, bits1-3 TWI self-heals that freed the bus #489)"},
   {"pv",     "wire protocol version the unit reports"},
   {"pmm",    "1 = protocol version we do not speak; unit is untouched and is a reflash target"},
   {"hf",     "lifetime failed-homing count (survives power cycles)"},

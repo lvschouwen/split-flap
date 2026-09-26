@@ -481,7 +481,7 @@ void refreshExtDiagReply() {
   d.vccSagLastMove   = (extVccSagLastMove == 0xFFFF) ? vitalsVccNow : extVccSagLastMove;
   d.hallEdgesLastRev = extHallEdgesLastRev;
   d.dutyWindow       = extDutyWindow;
-  d.statusBits       = extStatusBits;
+  d.statusBits       = extDiagWithTwiHeal(extStatusBits, twiHeal.selfResets);
   uint8_t buf[EXT_DIAG_REPLY_LEN];
   extDiagEncodeReply(d, buf);
   noInterrupts();

@@ -21,6 +21,7 @@
 #include "UnitSelfTest.h"  // pure self-test result + wire encode (#265)
 #include "UnitVitals.h"    // pure supply-Vcc/ram/cmd-pos diag packet (#306)
 #include "UnitExtDiag.h"   // pure ext-diag reply encode (#365; AVR glue below)
+#include "UnitTwiHeal.h"   // pure TWI self-heal policy (#489; glue in UnitI2CProtocol.ino)
 #include "BootHomePolicy.h"  // pure staggered boot-home decision (#309)
 // Single source of truth for the master<->unit I2C contract (opcodes, address
 // base, alphabet, flap count), shared with firmware/v1/ESPMaster (#149).
@@ -110,6 +111,8 @@ volatile int stepperSpeed = 10; //current speed of stepper, from the last letter
 volatile int calOffset; //Offset for calibration in steps, stored in EEPROM, gets read in setup
 volatile int receivedNumber = 0;
 int i2cAddress;
+// TWI self-heal (#489): loop-only; the reset count rides ext-diag statusBits.
+TwiHealState twiHeal;
 // True when getaddress() returned the EEPROM-provisioned address instead of
 // the DIP-derived one. Surfaced as GET_STATUS flags bit 4 (#215): twiboot only
 // listens on the DIP-derived address, so the master needs to know a unit may
@@ -577,6 +580,7 @@ void setup() {
 
 void loop() {
   wdt_reset(); //see wdt_enable(WDTO_8S) in setup() (issue #107)
+  twiHealTick(); //release a wedged TWI holding SDA before anything else (#489)
 
   // Keep the ISR-visible diag/self-test replies current (#263/#265). Cheap
   // (two small encodes + an interrupt-guarded copy) and unconditional, so

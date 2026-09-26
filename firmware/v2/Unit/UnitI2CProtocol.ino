@@ -316,6 +316,29 @@ void requestEvent() {
   Wire.write(currentlyrotating); //send unit status to master
 }
 
+//TWI self-heal (#489, policy in UnitTwiHeal.h). Samples SDA (PC4) and SCL
+//(PC5) straight from PINC — valid while the TWI owns the pins. Either held low
+//kills the bus (SDA: no START; SCL: an endless stretch). Dropping TWEN hands
+//the pins back to the port: inputs with the pull-ups twi_init() left set, so
+//lines that read high a moment later were ours. Wire.begin() re-runs twi_init (twi_state back
+//to READY) and keeps the onReceive/onRequest hooks; TWGCE must be re-armed
+//after it, same as setup(). Runs from loop() only — a wedge during a blocking
+//move clears when the move returns to loop().
+void twiHealTick() {
+  uint32_t now = millis();
+  const uint8_t lines = _BV(PC4) | _BV(PC5);
+  bool held = (PINC & lines) != lines;
+  if (!twiHealShouldReset(twiHeal, held, now)) return;
+  // TWEN off; writing TWINT=1 also clears a stale flag that would otherwise
+  // vector a bogus ISR the moment Wire.begin() re-enables TWIE.
+  TWCR = _BV(TWINT);
+  delayMicroseconds(20);
+  bool releasedByUs = (PINC & lines) == lines;
+  Wire.begin(i2cAddress);
+  TWAR |= (1 << TWGCE);
+  twiHealNoteReset(twiHeal, now, releasedByUs);
+}
+
 //Returns the I2C address of the unit. EEPROM takes precedence (set by the
 //position wizard, once implemented) so the physical DIP switches don't need
 //to be unique after first setup; empty/invalid EEPROM falls back to

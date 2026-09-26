@@ -16,7 +16,9 @@
 //                                 0 = no completed rev measured yet — a
 //                                 sentinel, not an anomaly, #418)
 //   7..8 dutyWindow       u16 LE  moves in a rolling ~60s window
-//   9    statusBits       u8      bit0 last-move stall/jam; bits1-7 reserved
+//   9    statusBits       u8      bit0 last-move stall/jam; bits1-3 TWI
+//                                 self-heals since boot that freed the bus (#489,
+//                                 saturating at 7); bits4-7 reserved
 //   10   checksum         u8      XOR of 0..9 ^ EXT_DIAG_REPLY_CHECKSUM_MASK
 //
 // Backward compat (#231/#106 pattern): a pre-ext-diag unit answers the unknown
@@ -29,6 +31,20 @@
 #define EXT_DIAG_REPLY_LEN            11
 #define EXT_DIAG_REPLY_CHECKSUM_MASK  0x93
 #define EXT_DIAG_STATUS_STALL         (1 << 0)
+#define EXT_DIAG_STATUS_TWI_HEAL_SHIFT 1
+#define EXT_DIAG_STATUS_TWI_HEAL_MASK  (0x07 << EXT_DIAG_STATUS_TWI_HEAL_SHIFT)
+
+// #489: replaces bits1-3 of statusBits with the (saturated) self-heal count.
+inline uint8_t extDiagWithTwiHeal(uint8_t statusBits, uint8_t count) {
+  uint8_t c = count > 7 ? 7 : count;
+  return (uint8_t)((statusBits & ~EXT_DIAG_STATUS_TWI_HEAL_MASK) |
+                   (c << EXT_DIAG_STATUS_TWI_HEAL_SHIFT));
+}
+
+inline uint8_t extDiagTwiHealCount(uint8_t statusBits) {
+  return (uint8_t)((statusBits & EXT_DIAG_STATUS_TWI_HEAL_MASK) >>
+                   EXT_DIAG_STATUS_TWI_HEAL_SHIFT);
+}
 
 struct UnitExtDiag {
   uint16_t stepExcessLast = 0;
