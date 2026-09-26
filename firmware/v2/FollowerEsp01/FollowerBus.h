@@ -64,6 +64,10 @@ void busArmProbeInhibit(uint32_t untilMs);
 uint32_t followerBusTxCount();
 uint32_t followerBusErrCount();
 uint32_t followerMinHeap();
+// Row-wide I2C bus-death detector + recovery counters (#488), fed by the
+// heartbeat and acted on from followerHeartbeatTick(). Read-only view.
+struct BusRecoveryState;
+const BusRecoveryState& followerBusRecovery();
 void followerDiagTick();
 
 // Short single-unit ops (loop() executes the staged {"seq":N} op).

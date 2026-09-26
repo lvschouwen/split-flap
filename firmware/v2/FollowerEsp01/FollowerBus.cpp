@@ -9,6 +9,7 @@
 
 #include "BootHomePlan.h"   // pure batched boot-home target selection (#309)
 #include "BuildVersion.h"  // GIT_REV + BUNDLED_UNIT_REV (build_assets.py)
+#include "FollowerBusRecovery.h"  // pure row-wide bus-death policy (#488)
 #include "DisplayWidth.h"
 #include "FollowerConfig.h"
 #include "HeartbeatPolicy.h"  // pure heartbeat miss/schedule logic (#310)
@@ -61,6 +62,62 @@ static uint32_t busTxCount = 0;
 static uint32_t busErrCount = 0;
 uint32_t followerBusTxCount() { return busTxCount; }
 uint32_t followerBusErrCount() { return busErrCount; }
+
+// Row-wide bus-death recovery (#488): policy in FollowerBusRecovery.h. The
+// last frame written is kept so a recovered bus re-shows it — without that a
+// text-mode row stays frozen on whatever the dead bus half-rendered until the
+// leader happens to send new content.
+static_assert(UNITS_AMOUNT <= 32, "BusRecoveryState.failMask is 32 bits");
+static BusRecoveryState busRecovery;
+static bool reshowPending = false;
+static String lastFrame;
+static int lastFrameSpeed = 0;
+static bool lastFrameValid = false;
+// Attempt lines logged per episode; a bus held for good then goes quiet
+// instead of evicting the 2 KB ring (the #436 flood lesson).
+#define BUS_RECOVERY_LOGGED_ATTEMPTS 3
+
+const BusRecoveryState& followerBusRecovery() { return busRecovery; }
+
+#if SERIAL_ENABLE == false
+// Only drivable units feed the detector: busPollHealthOne() returns false for
+// the rest without touching the bus, which is no evidence either way. The
+// reshow is staged, not run here: a render blocks up to SHOW_STUCK_TIMEOUT_MS.
+static void observeLiveness(int i, bool ok) {
+  BusRecoveryEvent e =
+      busRecoveryObserve(busRecovery, i, ok, millis(), displayWidth);
+  if (e == BusRecoveryEvent::WentDead) {
+    SerialPrintln(F("bus: every unit stopped answering — recovering the I2C bus"));
+  } else if (e == BusRecoveryEvent::Recovered) {
+    SerialPrint(F("bus: recovered after "));
+    SerialPrint(busRecovery.lastDeadMs / 1000UL);
+    SerialPrintln(F(" s — re-showing the last frame"));
+    reshowPending = lastFrameValid;
+  }
+}
+
+// Clocks a slave-held SDA free: Wire.status() reads up to 20 bits, releasing
+// a Nano stuck mid-byte, and leaves both lines released so the next START
+// resets every slave's TWI state machine. No Wire.begin() re-init — Twi::init
+// re-registers core timers/tasks, and the pins never change mode. SCL held low
+// is reported but cannot be fixed from this side: the Nano needs a power cycle.
+static void followerBusRecoveryTick() {
+  uint32_t now = millis();
+  if (reshowPending) {
+    reshowPending = false;
+    busShowSegment(String(lastFrame), lastFrameSpeed);
+  }
+  if (!busRecoveryDue(busRecovery, now)) return;
+  uint8_t status = Wire.status();
+  busRecoveryNoteAttempt(busRecovery, now, status);
+  if (busRecovery.attemptsThisEpisode <= BUS_RECOVERY_LOGGED_ATTEMPTS) {
+    SerialPrint(F("bus: recovery attempt "));
+    SerialPrint(busRecovery.attemptsThisEpisode);
+    SerialPrint(F(", line state "));
+    SerialPrintln(status);
+  }
+}
+#endif
 
 // Since-boot minimum free heap (#306). ESP8266 has no built-in min-heap
 // accessor, so track it: followerDiagTick() folds the current heap each loop
@@ -384,10 +441,13 @@ void followerHeartbeatTick() {
   if ((int32_t)(now - busProbeInhibitedUntilMs()) < 0) return;
   if (reflashInProgress(reflashProgress)) return;
   if (displayWidth <= 0) return;
+  followerBusRecoveryTick();
   int i = slot;
   slot = heartbeatNextSlot(slot, displayWidth);
+  bool drivable = unitDrivable(unitFacts[i]);
   bool ok = busPollHealthOne(i);
   heartbeatApply(unitFacts[i], ok, millis(), HEARTBEAT_MISS_THRESHOLD);
+  if (drivable) observeLiveness(i, ok);
 #endif
 }
 
@@ -451,6 +511,9 @@ void busShowSegment(const String& segment, int webSpeed) {
   // probed width, no alignment pass.
   String frame = segment;
   while ((int)frame.length() < width) frame += ' ';
+  lastFrame = segment;
+  lastFrameSpeed = webSpeed;
+  lastFrameValid = true;
 
   waitForRowToStop();
 

@@ -738,6 +738,7 @@ void webEndpointsInit(AsyncWebServer& server) {
     diag.hmac = clusterHmacEnforced();
     diag.foreign = foreignContacts;  // #358
     diag.nowMs = millis();
+    diag.bus = followerBusRecovery();  // #488
     request->send(200, "application/json",
                   followerClusterHealthJson(
                       followerPhaseName(cv.phase), cv.leaderName,

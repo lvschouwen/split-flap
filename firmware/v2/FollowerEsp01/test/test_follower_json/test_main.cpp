@@ -174,6 +174,29 @@ static void test_cluster_health_json_shape() {
   TEST_ASSERT_TRUE(out.indexOf("\"stackFree\":1184") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"sntpSynced\":true") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"hmac\":true") >= 0);
+  // #488: a never-dead bus reports a quiet block.
+  TEST_ASSERT_TRUE(out.indexOf("\"bus\":{\"dead\":false,\"deadMs\":0,"
+                               "\"episodes\":0,\"recovered\":0,"
+                               "\"attempts\":0,\"lastStatus\":-1,"
+                               "\"lastDeadMs\":0}") >= 0);
+}
+
+static void test_cluster_health_bus_block_while_dead() {
+  FollowerClusterDiag d;
+  d.nowMs = 50000;
+  d.bus.dead = true;
+  d.bus.deadSinceMs = 20000;
+  d.bus.episodes = 2;
+  d.bus.recovered = 1;
+  d.bus.attempts = 4;
+  d.bus.lastStatus = 3;  // I2C_SDA_HELD_LOW
+  d.bus.lastDeadMs = 7000;
+  String out = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
+                                         "abc1234", 5, 5, 0, d);
+  TEST_ASSERT_TRUE(out.indexOf("\"bus\":{\"dead\":true,\"deadMs\":30000,"
+                               "\"episodes\":2,\"recovered\":1,"
+                               "\"attempts\":4,\"lastStatus\":3,"
+                               "\"lastDeadMs\":7000}") >= 0);
 }
 
 // --- string escaping ----------------------------------------------------------------
@@ -241,6 +264,7 @@ int main(int, char**) {
   RUN_TEST(test_settings_json_shape);
   RUN_TEST(test_foreign_contact_record_and_json);
   RUN_TEST(test_cluster_health_json_shape);
+  RUN_TEST(test_cluster_health_bus_block_while_dead);
   RUN_TEST(test_wire_strings_are_escaped);
   return UNITY_END();
 }

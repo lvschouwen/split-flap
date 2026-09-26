@@ -10,6 +10,7 @@
 #include <Arduino.h>
 
 #include "ClusterForeign.h"
+#include "FollowerBusRecovery.h"
 #include "UnitHealth.h"
 
 #define FOLLOWER_PLAT "esp01"
@@ -166,7 +167,8 @@ struct FollowerClusterDiag {
   bool sntpSynced = false;
   bool hmac = false;  // #313 follow-on: enforcing signed leader-wire requests
   ForeignContactStats foreign;  // #358: refused foreign-leader contacts
-  uint32_t nowMs = 0;           // for the foreign block's msSince
+  uint32_t nowMs = 0;           // for the foreign block's msSince + bus deadMs
+  BusRecoveryState bus;         // #488: row-wide bus-death recovery
 };
 
 inline String followerClusterHealthJson(
@@ -175,7 +177,7 @@ inline String followerClusterHealthJson(
     const char* rev, int width, int detected, int faulty,
     const FollowerClusterDiag& d) {
   String out;
-  out.reserve(320);
+  out.reserve(480);
   out += "{\"state\":\"";
   out += phaseName;
   out += "\",\"leaderName\":";
@@ -216,7 +218,21 @@ inline String followerClusterHealthJson(
   out += ",\"hmac\":";
   out += d.hmac ? "true" : "false";
   foreignContactAppendJson(out, d.foreign, d.nowMs);  // #358
-  out += '}';
+  out += ",\"bus\":{\"dead\":";  // #488
+  out += d.bus.dead ? "true" : "false";
+  out += ",\"deadMs\":";
+  out += String((unsigned long)(d.bus.dead ? d.nowMs - d.bus.deadSinceMs : 0));
+  out += ",\"episodes\":";
+  out += String((unsigned long)d.bus.episodes);
+  out += ",\"recovered\":";
+  out += String((unsigned long)d.bus.recovered);
+  out += ",\"attempts\":";
+  out += String((unsigned long)d.bus.attempts);
+  out += ",\"lastStatus\":";
+  out += String((int)d.bus.lastStatus);
+  out += ",\"lastDeadMs\":";
+  out += String((unsigned long)d.bus.lastDeadMs);
+  out += "}}";
   return out;
 }
 
