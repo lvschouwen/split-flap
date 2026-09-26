@@ -14,8 +14,12 @@
 // #306 vmin telemetry — grow the batch once the rail proves it holds a larger
 // simultaneous inrush.
 
-// Units commanded per group before a rail-settle pause.
+// Units commanded per group before a rail-settle pause. Overridable per build:
+// the ESP-01 row runs 1 (#490 — its bus deaths coincided with 3-4 unit hour
+// rollovers).
+#ifndef RENDER_STAGGER_BATCH
 #define RENDER_STAGGER_BATCH     4
+#endif
 // Rail-settle delay inserted between groups (ms).
 #define RENDER_STAGGER_SETTLE_MS 100UL
 
