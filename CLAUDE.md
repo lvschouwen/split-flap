@@ -37,7 +37,7 @@ python -m pytest tests/      # python-side tests (v2 Master, Rescue, FollowerEsp
 
 - Unit envs (`firmware/v2/Unit`): `unit` (new Nano bootloader) / `unit_old_bootloader` (fallback).
 - Native env uses ArduinoFake: `map()` is a fakeit mock — wire the real formula in each test's `setUp()` or calls abort; `EEPROM` etc. re-wire via `ArduinoFake(EEPROM)`.
-- v2 first build on a clean machine is slow (pioarduino hybrid compile downloads IDF). A fresh `~/.platformio/penv` must hold `pioarduino==6.1.19` (pre-seed it the way `.github/workflows/build.yml` does): the platform's `>=6.1.19` otherwise resolves 6.2.0, and its SCons 4.11 breaks the Master/Rescue link (#491). `managed_components/`, `sdkconfig.*`, `.dummy/` in v2 project dirs are generated artifacts (gitignored; exception: `Bootloader/sdkconfig.defaults` is a source file kept by a negation).
+- v2 first build on a clean machine is slow (pioarduino hybrid compile downloads IDF). The pioarduino platform needs PlatformIO Core ≥ 6.2.0 on the host (CI pins it in `.github/workflows/build.yml`). `managed_components/`, `sdkconfig.*`, `.dummy/` in v2 project dirs are generated artifacts (gitignored; exception: `Bootloader/sdkconfig.defaults` is a source file kept by a negation).
 
 ## Per-change workflow (overrides the global "stop the app" flow — there is no local app)
 

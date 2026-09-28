@@ -40,17 +40,7 @@ jobs:
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install platformio==6.1.19
-
-      # pioarduino's penv_setup.py installs `pioarduino>=6.1.19` into a fresh
-      # penv; 6.2.0 brings SCons 4.11.1 and breaks the hybrid-compile link
-      # (`No module named 'SCons.Tool.FortranCommon'`, #491). A pre-seeded
-      # penv satisfies the `>=` and is left alone. Keep in step with the pin
-      # above.
-      - name: Pin pioarduino core in penv
-        run: |
-          python -m venv ~/.platformio/penv
-          ~/.platformio/penv/bin/pip install --quiet pioarduino==6.1.19
+        run: pip install platformio==6.2.0
 
       - name: Build
         working-directory: firmware/${{ matrix.project }}
@@ -80,7 +70,7 @@ jobs:
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install platformio==6.1.19
+        run: pip install platformio==6.2.0
 
       - name: Run Unit native tests
         working-directory: firmware/v2/Unit
