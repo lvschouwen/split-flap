@@ -27,7 +27,7 @@ import pathlib
 import sys
 
 # (relative path under the library src dir, anchor, replacement). Each anchor
-# is an exact substring of the pinned 3.11.2 source; the replacement contains
+# is an exact substring of the pinned 3.12.1 source; the replacement contains
 # the SENTINEL so a second run is a no-op.
 SENTINEL = "_sf347FieldBudget"
 
