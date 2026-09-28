@@ -45,8 +45,8 @@ def flash_master(port: str, bin_path: str) -> list[str]:
     warnings = validate_image_header(data[:4])
     args = [
         "--chip", "esp8266", "--port", port, "--baud", "115200",
-        "--before", "no_reset", "--after", "no_reset",
-        "write_flash", "0x0", bin_path,
+        "--before", "no-reset", "--after", "no-reset",
+        "write-flash", "0x0", bin_path,
     ]
     if getattr(sys, "frozen", False):
         import esptool

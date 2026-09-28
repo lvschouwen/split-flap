@@ -63,7 +63,7 @@ The fleet converges on the git REV (`git describe`/short SHA baked into the bina
 ## Hard rules
 
 - **GPIO 35/36/37 are used by octal PSRAM on the S3 — never assign them.** GPIO 4 is reserved (factory-reset button), 19/20 are native USB, 48 is the devkit WS2812.
-- **Never `pio run -t upload` the Rescue project.** Install it via Master's `POST /firmware/rescue` or `esptool write_flash 0x830000`.
+- **Never `pio run -t upload` the Rescue project.** Install it via Master's `POST /firmware/rescue` or `esptool write-flash 0x830000`.
 - **Don't port v1's OTA verdict machinery to v2** (RTC cookie / sketchMd5 compare) — the S3's A/B boot makes it obsolete; use `esp_ota_*` state APIs and the core's weak `verifyRollbackLater()`/`verifyOta()` hooks.
 - **v2 web/MQTT code never touches display state directly** — enqueue a `DisplayCommand` (params baked in by the sender), read back mutex-copied `DisplaySnapshot`s.
 - **The partition table (S3) and EEPROM layout (Nano unit) are per-device truth** — change them only via their documented migration/invariant rules (Master and Unit CLAUDE.md).

@@ -23,14 +23,14 @@ jobs:
       matrix:
         project: [v2/Unit, v2/Master, v2/Rescue, v2/FollowerEsp01]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
       - name: Cache PlatformIO
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.platformio/.cache
@@ -61,16 +61,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Full history: the unit-bundle drift gate walks commit ancestry.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
       - name: Cache PlatformIO
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.platformio/.cache
@@ -119,7 +119,7 @@ jobs:
         run: python -m pytest tests/
 
       - name: Install flasher deps
-        run: pip install pyserial==3.5 esptool==4.8.1
+        run: pip install pyserial==3.5 esptool==5.4.0
 
       - name: Run flasher tests
         working-directory: flashing
@@ -136,9 +136,9 @@ jobs:
     name: CLI tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 

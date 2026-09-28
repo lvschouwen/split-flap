@@ -83,8 +83,8 @@ def test_flash_master_dev_path_invokes_esptool_with_exact_args(tmp_path, monkeyp
         [
             sys.executable, "-m", "esptool",
             "--chip", "esp8266", "--port", port, "--baud", "115200",
-            "--before", "no_reset", "--after", "no_reset",
-            "write_flash", "0x0", str(bin_path),
+            "--before", "no-reset", "--after", "no-reset",
+            "write-flash", "0x0", str(bin_path),
         ],
         check=True,
     )
