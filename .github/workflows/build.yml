@@ -23,14 +23,14 @@ jobs:
       matrix:
         project: [v2/Unit, v2/Master, v2/Rescue, v2/FollowerEsp01]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
       - name: Cache PlatformIO
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.platformio/.cache
@@ -40,17 +40,7 @@ jobs:
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install platformio==6.1.19
-
-      # pioarduino's penv_setup.py installs `pioarduino>=6.1.19` into a fresh
-      # penv; 6.2.0 brings SCons 4.11.1 and breaks the hybrid-compile link
-      # (`No module named 'SCons.Tool.FortranCommon'`, #491). A pre-seeded
-      # penv satisfies the `>=` and is left alone. Keep in step with the pin
-      # above.
-      - name: Pin pioarduino core in penv
-        run: |
-          python -m venv ~/.platformio/penv
-          ~/.platformio/penv/bin/pip install --quiet pioarduino==6.1.19
+        run: pip install platformio==6.2.0
 
       - name: Build
         working-directory: firmware/${{ matrix.project }}
@@ -61,16 +51,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Full history: the unit-bundle drift gate walks commit ancestry.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
       - name: Cache PlatformIO
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.platformio/.cache
@@ -80,7 +70,7 @@ jobs:
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install platformio==6.1.19
+        run: pip install platformio==6.2.0
 
       - name: Run Unit native tests
         working-directory: firmware/v2/Unit
@@ -119,7 +109,7 @@ jobs:
         run: python -m pytest tests/
 
       - name: Install flasher deps
-        run: pip install pyserial==3.5 esptool==4.8.1
+        run: pip install pyserial==3.5 esptool==5.4.0
 
       - name: Run flasher tests
         working-directory: flashing
@@ -136,9 +126,9 @@ jobs:
     name: CLI tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 

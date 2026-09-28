@@ -10,7 +10,7 @@
 # would resurrect exactly the silent no-op this fixes.
 #
 # OTA'd boards are NOT covered (the bootloader is immutable over OTA):
-# one-time `esptool --chip esp32s3 write_flash 0x0 <bin>` per board.
+# one-time `esptool --chip esp32s3 write-flash 0x0 <bin>` per board.
 
 Import("env")
 

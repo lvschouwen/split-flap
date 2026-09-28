@@ -16,14 +16,14 @@ app0, and the Rescue image in the factory-adjacent `rescue` slot @ 0x830000
     (cd firmware/v2/Rescue && pio run -e rescue)
 
     # 2. merge (pio's firmware.factory.bin lacks the rescue slot)
-    python3 -m esptool --chip esp32s3 merge_bin -o splitflap-v2.factory.bin \
-        --flash_size 16MB \
+    python3 -m esptool --chip esp32s3 merge-bin -o splitflap-v2.factory.bin \
+        --flash-size 16MB \
         0x0 firmware/v2/Master/.pio/build/master/firmware.factory.bin \
         0x830000 firmware/v2/Rescue/.pio/build/rescue/firmware.bin
 
     # 3. flash (any OS with esptool; use the board's native USB port)
-    python3 -m esptool --chip esp32s3 --port <PORT> erase_flash
-    python3 -m esptool --chip esp32s3 --port <PORT> write_flash 0x0 splitflap-v2.factory.bin
+    python3 -m esptool --chip esp32s3 --port <PORT> erase-flash
+    python3 -m esptool --chip esp32s3 --port <PORT> write-flash 0x0 splitflap-v2.factory.bin
 
 First boot on blank NVS logs one expected `slotRec1 NOT_FOUND` error (#200
 record not stamped yet). Join WiFi via the `<name>-setup` portal, then all

@@ -37,7 +37,7 @@ python -m pytest tests/      # python-side tests (v2 Master, Rescue, FollowerEsp
 
 - Unit envs (`firmware/v2/Unit`): `unit` (new Nano bootloader) / `unit_old_bootloader` (fallback).
 - Native env uses ArduinoFake: `map()` is a fakeit mock — wire the real formula in each test's `setUp()` or calls abort; `EEPROM` etc. re-wire via `ArduinoFake(EEPROM)`.
-- v2 first build on a clean machine is slow (pioarduino hybrid compile downloads IDF). A fresh `~/.platformio/penv` must hold `pioarduino==6.1.19` (pre-seed it the way `.github/workflows/build.yml` does): the platform's `>=6.1.19` otherwise resolves 6.2.0, and its SCons 4.11 breaks the Master/Rescue link (#491). `managed_components/`, `sdkconfig.*`, `.dummy/` in v2 project dirs are generated artifacts (gitignored; exception: `Bootloader/sdkconfig.defaults` is a source file kept by a negation).
+- v2 first build on a clean machine is slow (pioarduino hybrid compile downloads IDF). The pioarduino platform needs PlatformIO Core ≥ 6.2.0 on the host (CI pins it in `.github/workflows/build.yml`). `managed_components/`, `sdkconfig.*`, `.dummy/` in v2 project dirs are generated artifacts (gitignored; exception: `Bootloader/sdkconfig.defaults` is a source file kept by a negation).
 
 ## Per-change workflow (overrides the global "stop the app" flow — there is no local app)
 
@@ -63,7 +63,7 @@ The fleet converges on the git REV (`git describe`/short SHA baked into the bina
 ## Hard rules
 
 - **GPIO 35/36/37 are used by octal PSRAM on the S3 — never assign them.** GPIO 4 is reserved (factory-reset button), 19/20 are native USB, 48 is the devkit WS2812.
-- **Never `pio run -t upload` the Rescue project.** Install it via Master's `POST /firmware/rescue` or `esptool write_flash 0x830000`.
+- **Never `pio run -t upload` the Rescue project.** Install it via Master's `POST /firmware/rescue` or `esptool write-flash 0x830000`.
 - **Don't port v1's OTA verdict machinery to v2** (RTC cookie / sketchMd5 compare) — the S3's A/B boot makes it obsolete; use `esp_ota_*` state APIs and the core's weak `verifyRollbackLater()`/`verifyOta()` hooks.
 - **v2 web/MQTT code never touches display state directly** — enqueue a `DisplayCommand` (params baked in by the sender), read back mutex-copied `DisplaySnapshot`s.
 - **The partition table (S3) and EEPROM layout (Nano unit) are per-device truth** — change them only via their documented migration/invariant rules (Master and Unit CLAUDE.md).
