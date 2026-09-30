@@ -55,6 +55,14 @@ static void test_age_uses_last_tick() {
   TEST_ASSERT_EQUAL_UINT32(3500, crashCtxAgeMs(c, CRASH_SLOT_DISPLAY));
 }
 
+static void test_slot_fields_are_whole_words() {
+  // RTC memory is only reliable for 32-bit stores; byte-wide fields read
+  // back as their armed value across a reset (bench 2026-10-01).
+  TEST_ASSERT_EQUAL(4, (int)sizeof(CrashSlotState{}.act));
+  TEST_ASSERT_EQUAL(4, (int)sizeof(CrashSlotState{}.arg));
+  TEST_ASSERT_EQUAL(0, (int)(sizeof(CrashContext) % 4));
+}
+
 static void test_names() {
   TEST_ASSERT_EQUAL_STRING("display", crashSlotName(CRASH_SLOT_DISPLAY));
   TEST_ASSERT_EQUAL_STRING("i2c-read", crashActName(CRASH_ACT_I2C_READ));
@@ -78,6 +86,7 @@ int main() {
   RUN_TEST(test_repeating_the_same_activity_keeps_its_start_time);
   RUN_TEST(test_out_of_range_slot_is_ignored);
   RUN_TEST(test_age_uses_last_tick);
+  RUN_TEST(test_slot_fields_are_whole_words);
   RUN_TEST(test_names);
   RUN_TEST(test_crash_reset_classification);
   return UNITY_END();

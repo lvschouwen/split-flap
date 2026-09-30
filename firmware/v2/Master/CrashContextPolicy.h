@@ -45,9 +45,12 @@ enum CrashReset : int {
   CRASH_RESET_BROWNOUT = 9,
 };
 
+// Every field is a full 32-bit word: RTC memory is only reliable for word
+// stores (bench 2026-10-01: byte-wide act/arg read back as their armed zeros
+// across a reset while the uint32 tick next to them survived).
 struct CrashSlotState {
-  uint8_t act = CRASH_ACT_NONE;
-  uint8_t arg = 0;
+  uint32_t act = CRASH_ACT_NONE;
+  uint32_t arg = 0;
   uint32_t sinceMs = 0;
 };
 
@@ -58,7 +61,13 @@ struct CrashContext {
 };
 
 inline void crashCtxArm(CrashContext& c) {
-  memset(&c, 0, sizeof(c));
+  // Word stores only (memset may use byte stores at the tail).
+  c.lastTickMs = 0;
+  for (int i = 0; i < CRASH_CTX_SLOTS; i++) {
+    c.slot[i].act = CRASH_ACT_NONE;
+    c.slot[i].arg = 0;
+    c.slot[i].sinceMs = 0;
+  }
   c.magic = CRASH_CTX_MAGIC;
 }
 
@@ -77,6 +86,7 @@ inline void crashCtxSet(CrashContext& c, int slot, uint8_t act, uint8_t arg,
   if (slot < 0 || slot >= CRASH_CTX_SLOTS) return;
   CrashSlotState& s = c.slot[slot];
   if (s.act == act && s.arg == arg) return;
+  // Assigned as words (see CrashSlotState).
   s.act = act;
   s.arg = arg;
   s.sinceMs = nowMs;
@@ -112,7 +122,7 @@ inline const char* crashSlotName(int slot) {
   }
 }
 
-inline const char* crashActName(uint8_t act) {
+inline const char* crashActName(uint32_t act) {
   switch (act) {
     case CRASH_ACT_NONE: return "none";
     case CRASH_ACT_IDLE: return "idle";
