@@ -10,6 +10,7 @@
 #include <freertos/task.h>
 
 #include "BootHomePlan.h"
+#include "BootTrace.h"  // #504
 #include "FlapFrame.h"
 #include "HeadlessPolicy.h"
 #include "HeartbeatPolicy.h"
@@ -949,6 +950,7 @@ void displayTaskMain(void*) {
                         effectiveWidthOverride());
   headlessTrack(local);  // #329: first (boot) observation
   snapshotPublish(local);
+  bootTraceMarkStage(BOOT_STAGE_UNITS);  // #504
   if (local.detectedUnitCount == 0) {
     if (local.displayWidth == 0) {
       SerialPrintln("display: no units — headless role, display disabled");  // #331

@@ -59,6 +59,8 @@ void webRequestReboot(const char* cause);
 // Mutex-guarded reads for MQTT's retained diagnostics.
 String webTimezoneSnapshot();
 const char* webResetReasonString();
+// Same names for a stored esp_reset_reason_t (boot trace, #504).
+const char* webResetReasonName(int reason);
 
 // Bundled unit firmware (#205): the generated WebAssets.h arrays have
 // internal linkage, so only WebContent.cpp includes that header (#338) — a

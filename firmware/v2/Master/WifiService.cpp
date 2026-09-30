@@ -8,6 +8,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "BootTrace.h"  // #504
 #include "BuildVersion.h"
 #include "ClockService.h"
 #include "DeviceIdentity.h"
@@ -152,6 +153,7 @@ static void startJoin() {
   // esp_wifi keeps its credential copy in RAM only — our NVS namespace is
   // the single store, so the v1 persistent()/disconnect() foot-gun class
   // cannot exist here.
+  bootTraceMarkStage(BOOT_STAGE_JOIN);  // #504
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   if (!joinTxPowerReduced) {
@@ -196,6 +198,7 @@ static void startPortal() {
 
 static void startOnline() {
   SerialPrintln("WiFi connected. IP: " + WiFi.localIP().toString());
+  bootTraceMarkStage(BOOT_STAGE_ONLINE);  // #504
   if (joinTxPowerReduced && WiFi.setTxPower(onlineTxPower)) {
     joinTxPowerReduced = false;
   }

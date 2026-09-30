@@ -56,6 +56,7 @@ struct SettingsJsonFields {
   bool rescueSlotWarn = false;
   String lastResetReason;
   String lastRebootCause;  // #432: "" unless the last reset was a stamped deliberate reboot
+  String bootTrace = "[]";  // #504: raw JSON array, oldest boot first
   uint32_t bootCounter = 0;
   bool recoveryMode = false;
   bool flashConfigMismatch = false;
@@ -173,6 +174,7 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"rescueSlotWarn\":";      appendJsonBool(out, f.rescueSlotWarn);
   out += ",\"lastResetReason\":";     appendJsonString(out, f.lastResetReason);
   out += ",\"lastRebootCause\":";     appendJsonString(out, f.lastRebootCause);
+  out += ",\"bootTrace\":";           out += f.bootTrace;
   out += ",\"bootCounter\":";         out += String(f.bootCounter);
   out += ",\"recoveryMode\":";        appendJsonBool(out, f.recoveryMode);
   out += ",\"flashConfigMismatch\":"; appendJsonBool(out, f.flashConfigMismatch);

@@ -23,6 +23,7 @@
 #include "MqttService.h"
 #include "NvsSettingsStore.h"
 #include "OtaService.h"
+#include "BootTrace.h"  // #504
 #include "RebootCause.h"  // #432
 #include "Settings.h"
 #include "StatusLed.h"
@@ -126,6 +127,7 @@ void setup() {
   // panic — a stamp surviving a crashed init would be blamed on the wrong
   // boot. Caches; webEndpointsInit reads the cached copy.
   rebootCauseConsume();
+  bootTraceInit();  // #504: after the consume, before anything that can die
   webLogInit();  // before the first SerialPrint*, or those lines never
                  // reach GET /log
   flashLogInit();  // #206: mounts `storage`, writes the boot marker; from
@@ -219,6 +221,7 @@ void setup() {
   // above still leaves the image unconfirmed and rolls back; the netif-up
   // call is now a no-op fallback.
   otaHealthConfirm();
+  bootTraceMarkStage(BOOT_STAGE_INIT_DONE);  // #504
 
   // After webEndpointsInit/wifiServiceInit: netTask ticks both and needs
   // their mutexes to exist before its first pass.
