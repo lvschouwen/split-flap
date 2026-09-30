@@ -93,6 +93,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"hs2",    "boot-home state: 0 unhomed, 1 homing, 2 homed"},
   {"misses", "consecutive missed heartbeat reads"},
   {"stale",  "1 = unit missed >= the threshold of consecutive heartbeats (lost)"},
+  {"rsx",    "twiboot exits by the runtime lost-unit rescue since boot (#498)"},
   {"se",     "step-excess on the last home (actual minus expected steps)"},
   {"sx",     "worst-seen step-excess since boot"},
   {"sag",    "minimum loaded supply Vcc (mV) during the last move"},

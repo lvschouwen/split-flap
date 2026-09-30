@@ -18,6 +18,7 @@
 #include "TwibootProtocol.h"
 #include "UnitAssets.h"  // UNIT_FIRMWARE_BIN (build_assets.py)
 #include "UnitProtocolHelpers.h"
+#include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
 
 UnitFacts unitFacts[UNITS_AMOUNT];
 int displayWidth = UNITS_AMOUNT;
@@ -451,6 +452,10 @@ void busPollHealth() {
 #endif
 }
 
+#if SERIAL_ENABLE == false
+static void rescueTick(int i);  // #498, defined after the twiboot helpers
+#endif
+
 void followerHeartbeatTick() {
 #if SERIAL_ENABLE == false
   static uint32_t lastMs = 0;
@@ -471,6 +476,7 @@ void followerHeartbeatTick() {
   bool ok = busPollHealthOne(i);
   heartbeatApply(unitFacts[i], ok, millis(), HEARTBEAT_MISS_THRESHOLD);
   if (drivable) observeLiveness(i, ok);
+  rescueTick(i);
 #endif
 }
 
@@ -688,6 +694,54 @@ static int twibootExit() {
   Wire.write((uint8_t)TWIBOOT_BOOTTYPE_APPLICATION);
   return Wire.endTransmission();
 }
+
+#if SERIAL_ENABLE == false
+// Runtime rescue of lost units (#498, UnitRescuePolicy.h). Reached only from
+// the heartbeat tick: never inside the probe-inhibit window, never during a
+// reflash. A dead bus is the row-wide recovery's job, not a per-unit probe's.
+static UnitRescueState rescueStates[UNITS_AMOUNT];
+
+static void rescueTick(int i) {
+  UnitRescueState& rs = rescueStates[i];
+  unitFacts[i].rescueExits = rs.exits;  // a probe rebuilds unitFacts
+  if (unitRescueObserve(rs, unitFacts[i])) {
+    SerialPrint(F("unit "));
+    SerialPrint(toI2cAddress(i));
+    SerialPrintln(F(": answering again — re-showing the last frame"));
+    reshowPending = lastFrameValid;  // run by the next recovery tick
+    return;
+  }
+  if (busRecovery.dead) return;
+  if (!unitRescueDue(unitFacts[i], rs, millis())) return;
+  uint8_t addr = (uint8_t)toI2cAddress(i);
+  UnitRescueProbe probe = UnitRescueProbe::NoAck;
+  Wire.beginTransmission(addr);
+  if (Wire.endTransmission() == 0) {
+    probe = UnitRescueProbe::SketchSilent;
+    if (isUnitInBootloader(addr)) {
+      twibootAddr = addr;
+      twibootExit();
+      probe = UnitRescueProbe::Bootloader;
+    }
+  }
+  unitRescueNoteAttempt(rs, millis(), probe);
+  unitFacts[i].rescueExits = rs.exits;
+  SerialPrint(F("unit "));
+  SerialPrint(addr);
+  if (probe == UnitRescueProbe::Bootloader) {
+    SerialPrint(F(": lost — found in twiboot, started its app (rescue #"));
+    SerialPrint(rs.exits);
+    busArmProbeInhibit(millis() + 3000);  // let the sketch boot
+  } else if (probe == UnitRescueProbe::NoAck) {
+    SerialPrint(F(": lost — no ACK (attempt "));
+    SerialPrint(rs.attempts);
+  } else {
+    SerialPrint(F(": lost — ACKs but status reads fail (attempt "));
+    SerialPrint(rs.attempts);
+  }
+  SerialPrintln(F(")"));
+}
+#endif
 
 static bool twibootVerifyChip() {
   Wire.beginTransmission(twibootAddr);

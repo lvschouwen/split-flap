@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "UnitHealth.h"
+#include "UnitRescuePolicy.h"  // UnitRescueProbe (#498)
 #include "UnitProtocolHelpers.h"
 
 // Wire init on the unit bus pins. SDA=8 / SCL=9 (Arduino-ESP32 S3 defaults),
@@ -76,6 +77,11 @@ bool unitBusReadSelfTest(int i2cAddress, UnitSelfTestReading& out);
 // read cross-task (aligned 32-bit). Idle rotation polls are not counted.
 uint32_t unitBusTxCount();
 uint32_t unitBusErrCount();
+// Runtime rescue probe for a lost unit (#498): ACK check, then twiboot
+// chipinfo; a unit found in twiboot is told to start its application.
+// Only call outside the twiboot risk window (the chipinfo write pins twiboot).
+UnitRescueProbe unitBusRescueProbe(int i2cAddress);
+
 int unitBusRebootToBootloader(int i2cAddress);          // twiboot @DIP, ~1 s
 int unitBusSetAddress(int i2cAddress, uint8_t newAddress);  // burn + reboot
 int unitBusClearAddress(int i2cAddress);                    // EEPROM → DIP

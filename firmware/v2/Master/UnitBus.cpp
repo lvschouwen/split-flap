@@ -806,6 +806,14 @@ static int twibootExit(int addr) {
   return Wire.endTransmission();
 }
 
+UnitRescueProbe unitBusRescueProbe(int i2cAddress) {
+  Wire.beginTransmission((uint8_t)i2cAddress);
+  if (Wire.endTransmission() != 0) return UnitRescueProbe::NoAck;
+  if (!isUnitInBootloader(i2cAddress)) return UnitRescueProbe::SketchSilent;
+  twibootExit(i2cAddress);
+  return UnitRescueProbe::Bootloader;
+}
+
 // Spin-poll twiboot with CMD_WAIT until it ACKs again (its async flash
 // write finished) or the timeout elapses.
 static bool twibootWaitReady(int addr, uint16_t timeoutMs) {

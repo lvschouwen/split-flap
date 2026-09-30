@@ -14,10 +14,12 @@
 #include "HeadlessPolicy.h"
 #include "HeartbeatPolicy.h"
 #include "HelpersSerialHandling.h"
+#include "Settings.h"  // SETTINGS_DEFAULT_FLAP_SPEED (rescue re-show seed)
 #include "TaskWatchdog.h"
 #include "TasksInternal.h"
 #include "UnitBus.h"
 #include "UnitEventLog.h"  // per-unit health transition log decision (#322)
+#include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
 #include "WebEndpoints.h"
 
 // Settle after an address-mutating burn before the follow-up probe (#204):
@@ -52,6 +54,10 @@ static uint32_t twibootRiskUntilMs = 0;
 static void armTwibootRiskWindow() {
   twibootRiskUntilMs = millis() + ADDRESS_OP_SETTLE_MS;
 }
+
+// Wire speed of the last text frame, so a rescued unit (#498) gets its
+// letter back at the speed the wall was last driven at.
+static int lastFrameUnitSpeed = convertSpeedToUnit(SETTINGS_DEFAULT_FLAP_SPEED);
 
 static void settleBeforeProbe() {
   int32_t remaining = (int32_t)(twibootRiskUntilMs - millis());
@@ -222,6 +228,52 @@ static void logUnitReboot(const DisplaySnapshot& local, UnitFacts* busFacts,
                (unsigned)s.lifetimeWatchdogCount);
 }
 
+// Runtime rescue of lost units (#498, UnitRescuePolicy.h). Runs from the
+// heartbeat tick, so never inside the twiboot risk window (heartbeatTick
+// returns before reaching here) and never during a reflash (inline job).
+static UnitRescueState rescueStates[UNITS_AMOUNT];
+
+static void rescueTick(DisplaySnapshot& local, UnitFacts* busFacts, int i) {
+  UnitRescueState& rs = rescueStates[i];
+  int addr = SFP_I2C_ADDRESS_BASE + i;
+  // Mirrored every tick: a reprobe rebuilds busFacts, the count lives here.
+  busFacts[i].rescueExits = rs.exits;
+  local.units[i].rescueExits = rs.exits;
+  if (unitRescueObserve(rs, busFacts[i])) {
+    SerialPrintf("Unit 0x%02x answering again — re-showing the frame\n", addr);
+    if (local.lastFrameValid) {
+      // A letter command homes an unhomed unit first; units already on
+      // their letter don't move.
+      local.busy = true;
+      snapshotPublish(local);
+      unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
+                       lastFrameUnitSpeed);
+      local.busy = false;
+    }
+    return;
+  }
+  if (!unitRescueDue(busFacts[i], rs, millis())) return;
+  UnitRescueProbe probe = unitBusRescueProbe(addr);
+  unitRescueNoteAttempt(rs, millis(), probe);
+  busFacts[i].rescueExits = rs.exits;
+  local.units[i].rescueExits = rs.exits;
+  switch (probe) {
+    case UnitRescueProbe::Bootloader:
+      SerialPrintf("Unit 0x%02x lost — found in twiboot, started its app "
+                   "(rescue #%u)\n", addr, (unsigned)rs.exits);
+      armTwibootRiskWindow();  // let the sketch boot before the next read
+      break;
+    case UnitRescueProbe::NoAck:
+      SerialPrintf("Unit 0x%02x lost — no ACK (attempt %u)\n", addr,
+                   (unsigned)rs.attempts);
+      break;
+    case UnitRescueProbe::SketchSilent:
+      SerialPrintf("Unit 0x%02x lost — ACKs but status reads fail "
+                   "(attempt %u)\n", addr, (unsigned)rs.attempts);
+      break;
+  }
+}
+
 // One opportunistic heartbeat read (#310), synthesized by displayTask only on
 // an idle tick — display writes / reflash / an explicit Probe always preempt
 // (they arrive as commands). Round-robins one unit per tick; skipped entirely
@@ -240,6 +292,7 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
                         effectiveWidthOverride());
   logUnitHealthTransition(local, busFacts, i);  // #322
   logUnitReboot(local, busFacts, i);  // #368
+  rescueTick(local, busFacts, i);  // #498
   headlessTrack(local);  // #329: idle-tick observation feeds the debounce
   snapshotPublish(local);
 }
@@ -456,8 +509,9 @@ static void execShowText(DisplaySnapshot& local, UnitFacts* busFacts,
   uint8_t letters[UNITS_AMOUNT];
   flapFrameBuild(cmd.text, local.displayWidth, cmd.alignment,
                  letters);
+  lastFrameUnitSpeed = convertSpeedToUnit(cmd.speed);
   int errs = unitBusShowFrame(local.units, local.displayWidth,
-                              letters, convertSpeedToUnit(cmd.speed));
+                              letters, lastFrameUnitSpeed);
   // v1's lastShowUnitWriteErrors — the MQTT unitErrors telemetry
   // input (#224).
   local.lastShowWriteErrors = errs > 0 ? (uint8_t)errs : 0;

@@ -160,6 +160,10 @@ struct UnitFacts {
   // masks above). Inert in the FollowerEsp01 copy.
   uint16_t i2cErrors = 0;
   uint32_t lastErrorMs = 0;
+  // Runtime-rescue twiboot exits since boot (#498, UnitRescuePolicy.h),
+  // mirrored from the row master's rescue state. The only trace a
+  // spontaneous unit reset leaves: twiboot clears MCUSR before the sketch.
+  uint16_t rescueExits = 0;
   // Reboot edge-detect state (#368): last-seen uptime/brownout/watchdog
   // triple so heartbeatTick can log a unit reboot once, the same place #322
   // logs health transitions. Policy in UnitEventLog.h.
@@ -480,6 +484,9 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
       if (u.i2cErrors > 0) {
         UNIT_HEALTH_APPEND(",\"err\":%u,\"errAge\":%lu", (unsigned)u.i2cErrors,
                            (unsigned long)(nowMs - u.lastErrorMs));
+      }
+      if (u.rescueExits > 0) {
+        UNIT_HEALTH_APPEND(",\"rsx\":%u", (unsigned)u.rescueExits);
       }
     }
     UNIT_HEALTH_APPEND("}");
