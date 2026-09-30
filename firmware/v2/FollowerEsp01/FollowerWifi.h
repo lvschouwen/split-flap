@@ -20,3 +20,8 @@ void wifiInit(AsyncWebServer& server);
 // _splitflap._tcp advertisement (TXT name/rev/width/plat=esp01, #297) so
 // the leader's Cluster-card scan finds this row.
 void wifiServicesInit(int rowWidth);
+
+// #505: radio in a high-draw phase — an OTA writing, or the first minute of
+// a reconnect. Unit motion holds until it settles (MotionBudget.h). A link
+// down for longer is not "busy": the row must still show its clock fallback.
+bool followerRadioBusy();

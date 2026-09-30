@@ -7,6 +7,7 @@
 
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
+#include <Updater.h>
 #include <time.h>
 
 #include "BuildVersion.h"
@@ -100,4 +101,22 @@ void wifiServicesInit(int rowWidth) {
   } else {
     SerialPrintln(F("Error setting up mDNS responder"));
   }
+}
+
+#define FOLLOWER_RADIO_RECONNECT_HOLD_MS 60000UL
+
+bool followerRadioBusy() {
+  static uint32_t downSinceMs = 0;
+  static bool down = false;
+  if (Update.isRunning()) return true;
+  if (WiFi.status() == WL_CONNECTED) {
+    down = false;
+    return false;
+  }
+  uint32_t now = millis();
+  if (!down) {
+    down = true;
+    downSinceMs = now;
+  }
+  return now - downSinceMs < FOLLOWER_RADIO_RECONNECT_HOLD_MS;
 }

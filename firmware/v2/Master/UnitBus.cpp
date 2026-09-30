@@ -15,6 +15,7 @@
 #include "DriftLogPolicy.h"  // drift-event operator-log decision (#322)
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
+#include "MotionBudget.h"  // motion admission (#505)
 #include "RenderStagger.h"  // sub-frame inrush stagger (#324)
 #include "SplitFlapProtocol.h"
 #include "TaskWatchdog.h"  // wdtFeed() (#314)
@@ -404,6 +405,33 @@ static bool isDisplayMoving(const UnitFacts* facts, int width) {
   return false;
 }
 
+// --- motion admission (#505, MotionBudget.h) ---------------------------------
+// The cap is owned by displayTask (sag-adaptive) and pushed in; the gate is
+// displayTask's radio-quiet wait, called before any op that starts motion.
+static int motionCap = MOTION_BUDGET_MAX;
+static void (*motionGate)() = nullptr;
+
+void unitBusSetMotionCap(int cap) { motionCap = cap; }
+void unitBusSetMotionGate(void (*gate)()) { motionGate = gate; }
+
+static void admitMotion() {
+  if (motionGate) motionGate();
+}
+
+// Blocks until fewer than motionCap tracked units are still moving. Returns
+// false when /stop aborted the wait.
+static bool waitForMotionSlot(MotionTracker& movers) {
+  while (motionTrackerFull(movers, motionCap)) {
+    wdtFeed();
+    if (abortRequested.load()) return false;
+    for (int k = movers.count - 1; k >= 0; k--) {
+      motionTrackerObserve(movers, k, checkIfMoving(movers.unit[k]), millis());
+    }
+    if (motionTrackerFull(movers, motionCap)) delay(50);
+  }
+  return true;
+}
+
 // Waits until no unit reports rotation, with the SHOW_STUCK_TIMEOUT_MS
 // stuck-unit cap. The delay(100) yields displayTask's core between polls.
 // The abort signal (#204) short-circuits the wait so a queued Stop takes
@@ -436,6 +464,7 @@ static void waitForDisplayToStop(const UnitFacts* facts, int width) {
 static void verifyAndResendLetters(const UnitFacts* facts, int width,
                                    const uint8_t* letters, uint8_t unitSpeed) {
   int resent = 0;
+  MotionTracker movers;  // resends are moves too (#505)
   for (int unitIndex = 0; unitIndex < width; unitIndex++) {
     if (!unitDrivable(facts[unitIndex])) continue;  // #405
     int shown;
@@ -443,7 +472,9 @@ static void verifyAndResendLetters(const UnitFacts* facts, int width,
     if (shown == letters[unitIndex]) continue;
     SerialPrintf("Unit %d shows the wrong letter index — re-sending\n",
                  unitIndex);
+    if (!waitForMotionSlot(movers)) break;
     writeToUnit(unitIndex, letters[unitIndex], unitSpeed);
+    motionTrackerAdd(movers, unitIndex, millis());
     resent++;
   }
   if (resent > 0) {
@@ -635,9 +666,12 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
                      const uint8_t* letters, int unitSpeed) {
   // Entry wait: never interleave a new frame into a still-rotating display.
   waitForDisplayToStop(facts, width);
+  admitMotion();
 
   int writeErrors = 0;
   int commanded = 0;
+  bool aborted = false;
+  MotionTracker movers;
   for (int unitIndex = 0; unitIndex < width; unitIndex++) {
     // Skip slots the probe did not find a sketch-running unit on: writing
     // to absent addresses stalls isDisplayMoving() and a dead unit
@@ -645,6 +679,12 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
     // skips a unit whose protocol version we do not speak — a render is the
     // loudest thing we could get wrong against an unknown contract.
     if (!unitDrivable(facts[unitIndex])) continue;
+    // #505: at most motionCap units moving at once — the steady draw of every
+    // energised stepper, not just the start spike, is what sags the rail.
+    if (!waitForMotionSlot(movers)) {
+      aborted = true;
+      break;
+    }
     // #324: spread the flap inrush — pause before opening each new group so a
     // full row's steppers don't spin up at once and brown out the rail.
     if (renderStaggerShouldSettle(commanded, RENDER_STAGGER_BATCH)) {
@@ -654,11 +694,13 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
       writeErrors++;
       noteUnitError(unitIndex);  // #367: attribute the render write to its unit
     }
+    motionTrackerAdd(movers, unitIndex, millis());
     commanded++;
   }
 
   waitForDisplayToStop(facts, width);
-  verifyAndResendLetters(facts, width, letters, (uint8_t)unitSpeed);
+  // An aborted frame is abandoned, not repaired: the queued Stop parks it.
+  if (!aborted) verifyAndResendLetters(facts, width, letters, (uint8_t)unitSpeed);
   return writeErrors;
 }
 
@@ -691,6 +733,7 @@ int unitBusWriteOffset(int i2cAddress, int16_t value) {
 }
 
 int unitBusJog(int i2cAddress, int steps) {
+  admitMotion();
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_JOG);
   Wire.write(maintEncodeJogByte(steps));
@@ -698,6 +741,7 @@ int unitBusJog(int i2cAddress, int steps) {
 }
 
 int unitBusHome(int i2cAddress) {
+  admitMotion();
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_HOME);
   return countedTransmission();
@@ -736,6 +780,7 @@ int unitBusSetGates(int i2cAddress, uint8_t gates) {
 }
 
 int unitBusStartSelfTest(int i2cAddress) {
+  admitMotion();
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_START_SELF_TEST);
   return countedTransmission();
@@ -777,12 +822,6 @@ int unitBusSetAddress(int i2cAddress, uint8_t newAddress) {
 int unitBusClearAddress(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_CLEAR_I2C_ADDRESS);
-  return countedTransmission();
-}
-
-int unitBusBroadcastHome() {
-  Wire.beginTransmission((uint8_t)SFP_I2C_GENERAL_CALL_ADDRESS);
-  Wire.write((uint8_t)SFP_CMD_HOME);
   return countedTransmission();
 }
 

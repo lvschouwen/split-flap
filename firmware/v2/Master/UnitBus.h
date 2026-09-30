@@ -40,6 +40,12 @@ void unitBusPollHealth(UnitFacts* facts, int maxUnits);
 // (#310). A bootloader/silent slot returns false without bus traffic.
 bool unitBusPollHealthOne(UnitFacts* facts, int i);
 
+// Motion admission (#505, MotionBudget.h). displayTask pushes the
+// sag-adaptive cap and registers its radio-quiet wait; frames, homes and jogs
+// then never exceed the cap and never start while the radio is busy.
+void unitBusSetMotionCap(int cap);
+void unitBusSetMotionGate(void (*gate)());
+
 // Drives one frame onto the flaps: waits for the display to stop, sends
 // letters[0..width-1] to every sketch-mode unit, waits again, then verifies
 // each unit via CMD_GET_LETTER with one resend round (v1 #106 closed loop).
@@ -85,7 +91,6 @@ UnitRescueProbe unitBusRescueProbe(int i2cAddress);
 int unitBusRebootToBootloader(int i2cAddress);          // twiboot @DIP, ~1 s
 int unitBusSetAddress(int i2cAddress, uint8_t newAddress);  // burn + reboot
 int unitBusClearAddress(int i2cAddress);                    // EEPROM → DIP
-int unitBusBroadcastHome();  // general-call CMD_HOME, one transaction (v1 #47)
 
 // --- unit reflash over twiboot (#205) — straight v1 ports ---------------------
 

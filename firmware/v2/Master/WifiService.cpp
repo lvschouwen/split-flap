@@ -2,6 +2,7 @@
 
 #include <DNSServer.h>
 #include <ESPmDNS.h>
+#include <Update.h>
 #include <WiFi.h>
 #include <atomic>
 #include <freertos/FreeRTOS.h>
@@ -64,6 +65,11 @@ struct StageLock {
 static const uint32_t WIFI_RECONNECT_KICK_MS = 5000;
 static uint32_t lastReconnectKickMs = 0;                 // event-task-private
 static std::atomic<bool> staReconnectWanted{false};      // netTask -> event task
+// #505: radio in a high-draw phase (join, reconnect, OTA write) — netTask ->
+// displayTask's motion gate. Starts busy: boot is a join until proven otherwise.
+static std::atomic<bool> radioBusyFlag{true};
+
+bool wifiRadioBusy() { return radioBusyFlag.load(std::memory_order_relaxed); }
 
 static void onWifiStaEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   if (event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED) return;
@@ -317,4 +323,10 @@ void wifiServiceTick() {
   staReconnectWanted.store(
       policy.phase == WifiPhase::Connected && !restartPending,
       std::memory_order_relaxed);
+  bool linkUp = WiFi.status() == WL_CONNECTED;
+  radioBusyFlag.store(policy.phase == WifiPhase::Boot ||
+                          policy.phase == WifiPhase::Joining ||
+                          (policy.phase == WifiPhase::Connected && !linkUp) ||
+                          Update.isRunning(),
+                      std::memory_order_relaxed);
 }

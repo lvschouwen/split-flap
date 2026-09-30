@@ -14,6 +14,7 @@
 #include "HeadlessPolicy.h"
 #include "HeartbeatPolicy.h"
 #include "HelpersSerialHandling.h"
+#include "MotionBudget.h"  // motion admission (#505)
 #include "Settings.h"  // SETTINGS_DEFAULT_FLAP_SPEED (rescue re-show seed)
 #include "TaskWatchdog.h"
 #include "TasksInternal.h"
@@ -21,6 +22,7 @@
 #include "UnitEventLog.h"  // per-unit health transition log decision (#322)
 #include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
 #include "WebEndpoints.h"
+#include "WifiService.h"  // wifiRadioBusy (#505)
 
 // Settle after an address-mutating burn before the follow-up probe (#204):
 // the unit watchdog-resets THROUGH its twiboot window (~1 s) and probing
@@ -58,6 +60,51 @@ static void armTwibootRiskWindow() {
 // Wire speed of the last text frame, so a rescued unit (#498) gets its
 // letter back at the speed the wall was last driven at.
 static int lastFrameUnitSpeed = convertSpeedToUnit(SETTINGS_DEFAULT_FLAP_SPEED);
+
+// Motion admission (#505). displayTask owns both: the radio-quiet gate that
+// UnitBus calls before starting motion, and the sag-adaptive cap it pushes
+// into UnitBus after each heartbeat.
+static MotionRadioGate radioGate;
+static MotionBudgetState motionBudget;
+
+static void waitRadioQuiet() {
+  uint32_t holdStart = millis();
+  bool logged = false;
+  for (;;) {
+    motionRadioObserve(radioGate, wifiRadioBusy(), millis());
+    if (motionRadioQuiet(radioGate, millis())) return;
+    if (unitBusAbortRequested()) return;
+    if (motionRadioHoldExpired(holdStart, millis())) {
+      SerialPrintln(F("motion: radio still busy after the hold cap — moving anyway"));
+      return;
+    }
+    if (!logged) {
+      SerialPrintln(F("motion: holding unit moves while the radio is busy"));
+      logged = true;
+    }
+    wdtFeed();
+    delay(100);
+  }
+}
+
+// Folds unit i's since-boot supply minimum into the budget and restores it
+// over quiet time; pushes any change into UnitBus.
+static void motionBudgetFold(const UnitFacts& u, int i) {
+  uint32_t now = millis();
+  motionRadioObserve(radioGate, wifiRadioBusy(), now);
+  if (u.vitalsValid &&
+      motionBudgetObserveVmin(motionBudget, i, u.vitals.vccMin_mV, now)) {
+    SerialPrintf("motion: rail sag %u mV at unit 0x%02x — at most %u unit(s) "
+                 "move at once\n",
+                 (unsigned)u.vitals.vccMin_mV, SFP_I2C_ADDRESS_BASE + i,
+                 (unsigned)motionBudget.cap);
+    unitBusSetMotionCap(motionBudget.cap);
+  } else if (motionBudgetTick(motionBudget, now)) {
+    SerialPrintf("motion: rail quiet — at most %u unit(s) move at once\n",
+                 (unsigned)motionBudget.cap);
+    unitBusSetMotionCap(motionBudget.cap);
+  }
+}
 
 static void settleBeforeProbe() {
   int32_t remaining = (int32_t)(twibootRiskUntilMs - millis());
@@ -292,6 +339,7 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
                         effectiveWidthOverride());
   logUnitHealthTransition(local, busFacts, i);  // #322
   logUnitReboot(local, busFacts, i);  // #368
+  motionBudgetFold(busFacts[i], i);  // #505
   rescueTick(local, busFacts, i);  // #498
   headlessTrack(local);  // #329: idle-tick observation feeds the debounce
   snapshotPublish(local);
@@ -836,17 +884,19 @@ static void execStop(DisplaySnapshot& local, UnitFacts* busFacts,
   (void)busFacts;
   (void)cmd;
   // The abort flag (set by the /stop handler at enqueue) already
-  // short-circuited every wait ahead of us; now park the display.
-  int status = unitBusBroadcastHome();
-  if (status == 0) {
-    // Every unit parks at blank — the intended frame follows (#264).
-    memset(local.lastFrameLetters, 0, sizeof(local.lastFrameLetters));
-    local.lastFrameValid = true;
-  }
+  // short-circuited every wait ahead of us. Clear it BEFORE parking: the
+  // park is a budgeted blank frame (#505) whose admission waits must run —
+  // a broadcast HOME started every stepper at once.
   unitBusClearAbort();
+  uint8_t blanks[UNITS_AMOUNT] = {0};
+  int errs = unitBusShowFrame(local.units, local.displayWidth, blanks,
+                              lastFrameUnitSpeed);
+  // Every unit parks at blank — the intended frame follows (#264).
+  memset(local.lastFrameLetters, 0, sizeof(local.lastFrameLetters));
+  local.lastFrameValid = true;
   displayApplyMaintResult(
       local, cmd,
-      status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
+      errs == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
       MaintReason::None);
 }
 
@@ -883,6 +933,8 @@ void displayTaskMain(void*) {
   static UnitFacts busFacts[UNITS_AMOUNT];
 
   unitBusInit();
+  unitBusSetMotionGate(waitRadioQuiet);  // #505: before boot-home can move
+  unitBusSetMotionCap(motionBudget.cap);
   // Subscribe BEFORE the boot probe/reflash/boot-home block: those ops carry
   // wdtFeed() calls that are silent no-ops for an unsubscribed task, and a
   // wedged I2C transaction on the cold first scan must still trip the dog.
