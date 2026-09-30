@@ -2,6 +2,8 @@
 // that survives a watchdog/panic reset in RTC memory.
 #include <unity.h>
 
+#include <new>
+
 #include "CrashContextPolicy.h"
 
 void setUp() {}
@@ -55,18 +57,27 @@ static void test_age_uses_last_tick() {
   TEST_ASSERT_EQUAL_UINT32(3500, crashCtxAgeMs(c, CRASH_SLOT_DISPLAY));
 }
 
-static void test_slot_fields_are_whole_words() {
-  // RTC memory is only reliable for 32-bit stores; byte-wide fields read
-  // back as their armed value across a reset (bench 2026-10-01).
-  TEST_ASSERT_EQUAL(4, (int)sizeof(CrashSlotState{}.act));
-  TEST_ASSERT_EQUAL(4, (int)sizeof(CrashSlotState{}.arg));
-  TEST_ASSERT_EQUAL(0, (int)(sizeof(CrashContext) % 4));
+static void test_static_init_leaves_the_record_intact() {
+  // The RTC_NOINIT instance is a global: any constructor (default member
+  // initializers included) runs at every boot, before setup(), and wipes
+  // the record the boot after a crash is about to read.
+  alignas(CrashContext) unsigned char raw[sizeof(CrashContext)];
+  CrashContext* c = reinterpret_cast<CrashContext*>(raw);
+  crashCtxArm(*c);
+  crashCtxSet(*c, CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_READ, 0x07, 1234);
+  crashCtxTick(*c, 5000);
+  new (raw) CrashContext;  // what C++ static init does to the global
+  TEST_ASSERT_TRUE(crashCtxValid(*c));
+  TEST_ASSERT_EQUAL(CRASH_ACT_I2C_READ, c->slot[CRASH_SLOT_DISPLAY].act);
+  TEST_ASSERT_EQUAL(0x07, c->slot[CRASH_SLOT_DISPLAY].arg);
+  TEST_ASSERT_EQUAL_UINT32(3766, crashCtxAgeMs(*c, CRASH_SLOT_DISPLAY));
 }
 
 static void test_names() {
   TEST_ASSERT_EQUAL_STRING("display", crashSlotName(CRASH_SLOT_DISPLAY));
   TEST_ASSERT_EQUAL_STRING("i2c-read", crashActName(CRASH_ACT_I2C_READ));
-  TEST_ASSERT_EQUAL_STRING("?", crashActName(200));
+  TEST_ASSERT_EQUAL_STRING("flash-write", crashActName(CRASH_ACT_FLASH_WRITE));
+  TEST_ASSERT_EQUAL_STRING("?", crashActName(CRASH_ACT_LAST + 1));
 }
 
 static void test_crash_reset_classification() {
@@ -86,7 +97,7 @@ int main() {
   RUN_TEST(test_repeating_the_same_activity_keeps_its_start_time);
   RUN_TEST(test_out_of_range_slot_is_ignored);
   RUN_TEST(test_age_uses_last_tick);
-  RUN_TEST(test_slot_fields_are_whole_words);
+  RUN_TEST(test_static_init_leaves_the_record_intact);
   RUN_TEST(test_names);
   RUN_TEST(test_crash_reset_classification);
   return UNITY_END();
