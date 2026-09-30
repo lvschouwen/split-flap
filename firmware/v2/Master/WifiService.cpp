@@ -139,12 +139,25 @@ static void scheduleRestart(const __FlashStringHelper* why) {
   restartRequestedAtMs = millis();
 }
 
+// #505: the join's TX bursts (scan, auth, DHCP) are the S3's own start-up
+// current peak on the shared 5 V rail — a plain software restart came back as
+// a brownout with every stepper idle. Join at reduced TX power, restore the
+// SDK default once online. Can only apply after STA start, so the RF
+// calibration inside WiFi.mode() still runs at full power.
+static const wifi_power_t JOIN_TX_POWER = WIFI_POWER_8_5dBm;
+static wifi_power_t onlineTxPower = WIFI_POWER_19_5dBm;
+static bool joinTxPowerReduced = false;
+
 static void startJoin() {
   // esp_wifi keeps its credential copy in RAM only — our NVS namespace is
   // the single store, so the v1 persistent()/disconnect() foot-gun class
   // cannot exist here.
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  if (!joinTxPowerReduced) {
+    onlineTxPower = WiFi.getTxPower();
+    joinTxPowerReduced = WiFi.setTxPower(JOIN_TX_POWER);
+  }
   WiFi.setHostname(deviceName.c_str());
   WiFi.setAutoReconnect(true);
   SerialPrintln("Joining WiFi \"" + liveSettings->wifiSsid + "\" ...");
@@ -183,6 +196,9 @@ static void startPortal() {
 
 static void startOnline() {
   SerialPrintln("WiFi connected. IP: " + WiFi.localIP().toString());
+  if (joinTxPowerReduced && WiFi.setTxPower(onlineTxPower)) {
+    joinTxPowerReduced = false;
+  }
   webEndpointsStart(*webServer);
   otaHealthConfirm();  // #305 fallback: primary confirm is setup() pre-inrush
   clockServiceApplyTz(*liveSettings);  // v1 parity: NTP kicked after join
