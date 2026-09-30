@@ -20,9 +20,8 @@
 #include "SettingsJson.h"  // appendJsonString
 #include "UnitHealth.h"    // UnitFacts + the faulty predicate
 
-// Hex fault bitmap for one row: bit i = unit at position i is faulty
-// (same statusValid gate as computeFaultyUnitCount — unread units are
-// unknown, not faulty). Fixed width ceil(width/4) nibbles so the string
+// Hex fault bitmap for one row: bit i = unit at position i is faulty or lost
+// (same predicate as computeFaultyUnitCount). Fixed width ceil(width/4) nibbles so the string
 // length itself carries the row width; enough for a strip — per-unit
 // DETAIL is rung 3's browser fan-out to the member's own /units/health.
 inline size_t clusterFaultMaskHex(const UnitFacts* units, int width,
@@ -34,9 +33,7 @@ inline size_t clusterFaultMaskHex(const UnitFacts* units, int width,
   }
   uint32_t mask = 0;
   for (int i = 0; i < width; i++) {
-    if (units[i].statusValid && unitStatusIsFaulty(units[i].status)) {
-      mask |= (1UL << i);
-    }
+    if (unitIsFaultyOrLost(units[i])) mask |= (1UL << i);
   }
   int nibbles = (width + 3) / 4;
   if (cap == 0) return 0;
@@ -66,7 +63,9 @@ inline String clusterPingHealthJson(const UnitFacts* units, int width,
   out += faulty;
   out += ",\"faultMask\":\"";
   out += mask;
-  out += "\",\"wear\":";
+  out += "\",\"lost\":";
+  out += computeLostUnitCount(units, width);
+  out += ",\"wear\":";
   out += wear ? "true" : "false";
   out += ",\"rev\":";
   appendJsonString(out, String(rev));

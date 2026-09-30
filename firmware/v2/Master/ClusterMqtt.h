@@ -25,10 +25,11 @@ inline bool clusterDegraded(const ClusterLeaderStatus& st) {
   if (!st.enabled) return false;
   if (st.rolloutImageFailed) return true;
   for (int i = 0; i < st.memberCount; i++) {
-    if (!st.members[i].joined || st.members[i].degraded ||
-        st.members[i].updateBlocked) {
-      return true;
-    }
+    const ClusterLeaderMemberStatus& m = st.members[i];
+    if (!m.joined || m.degraded || m.updateBlocked) return true;
+    // #497: a row that pings fine but whose units went silent is dark.
+    // Not faulty — that folds sticky lifetime counters and would latch.
+    if (m.healthValid && (m.lost > 0 || m.busDead)) return true;
   }
   return false;
 }
@@ -76,6 +77,10 @@ inline String buildClusterAttrsJson(const ClusterLeaderStatus& st) {
       out += m.faulty;
       out += ",\"detected\":";
       out += m.detected;
+      out += ",\"lost\":";
+      out += m.lost;
+      out += ",\"busDead\":";
+      out += m.busDead ? "true" : "false";
       out += ",\"wear\":";
       out += m.wear ? "true" : "false";
     }

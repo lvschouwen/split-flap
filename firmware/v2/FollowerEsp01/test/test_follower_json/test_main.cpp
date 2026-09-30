@@ -51,6 +51,30 @@ static void test_fault_mask_zero_width_is_empty() {
   TEST_ASSERT_EQUAL_STRING("", buf);
 }
 
+static void test_fault_mask_flags_lost_unit() {
+  // #497: a stale sketch unit sets its bit although its status is unreadable.
+  UnitFacts units[8];
+  units[1].state = 1;
+  units[1].stale = true;
+  char buf[16];
+  followerFaultMaskHex(units, 8, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("02", buf);
+}
+
+static void test_health_keys_carry_lost_and_bus_dead() {
+  FollowerHealthFacts h = makeHealth();
+  h.lost = 1;
+  h.busDead = true;
+  String out;
+  followerAppendHealthKeys(out, h);
+  TEST_ASSERT_TRUE(out.indexOf("\"lost\":1") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"busDead\":1") >= 0);
+  h.busDead = false;
+  out = "";
+  followerAppendHealthKeys(out, h);
+  TEST_ASSERT_TRUE(out.indexOf("busDead") < 0);  // additive: absent = alive
+}
+
 // --- join reply -------------------------------------------------------------------
 
 static void test_join_reply_carries_identity_health_plat_vitals() {
@@ -258,6 +282,8 @@ int main(int, char**) {
   RUN_TEST(test_csrf_gate_matches_master);
   RUN_TEST(test_fault_mask_width_sets_nibble_count);
   RUN_TEST(test_fault_mask_zero_width_is_empty);
+  RUN_TEST(test_fault_mask_flags_lost_unit);
+  RUN_TEST(test_health_keys_carry_lost_and_bus_dead);
   RUN_TEST(test_join_reply_carries_identity_health_plat_vitals);
   RUN_TEST(test_join_and_ping_replies_carry_rescue_marker);
   RUN_TEST(test_ping_reply_carries_state_and_health_and_plat);

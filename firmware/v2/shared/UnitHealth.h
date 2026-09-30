@@ -260,14 +260,38 @@ inline bool unitStatusIsFaulty(const UnitStatus& s) {
   return false;
 }
 
-// Number of units we hold a valid status for AND that are faulty. Units we
-// never read (statusValid false: silent, in bootloader, or old firmware
-// without CMD_GET_STATUS) can't be assessed and are not counted — the count is
-// the HA alerting signal, so it must not fire on units we simply can't see.
+// A sketch unit that answered once and has since missed the heartbeat
+// threshold (#310) — silent on the bus, wedged, or reset into twiboot. Only
+// state 1 counts: heartbeatApply never tracks other slots.
+inline bool unitIsLost(const UnitFacts& u) {
+  return u.state == 1 && u.stale;
+}
+
+// The per-unit alerting predicate: lost, or a valid status that reports a
+// fault. Units never read (statusValid false and not stale: empty, in
+// bootloader, old firmware without CMD_GET_STATUS) can't be assessed and
+// don't count. A lost unit's status is unreadable by definition, so it can't
+// be gated on statusValid (#497: a unit dead for 12 h reported faulty 0).
+inline bool unitIsFaultyOrLost(const UnitFacts& u) {
+  if (unitIsLost(u)) return true;
+  return u.statusValid && unitStatusIsFaulty(u.status);
+}
+
+// The HA units_faulty signal and the cluster ping's faulty key.
 inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
   int count = 0;
   for (int i = 0; i < n; i++) {
-    if (units[i].statusValid && unitStatusIsFaulty(units[i].status)) count++;
+    if (unitIsFaultyOrLost(units[i])) count++;
+  }
+  return count;
+}
+
+// Lost units only. Unlike faulty (which folds sticky lifetime counters), this
+// clears as soon as the unit answers again, so it can drive cluster degrade.
+inline int computeLostUnitCount(const UnitFacts* units, int n) {
+  int count = 0;
+  for (int i = 0; i < n; i++) {
+    if (unitIsLost(units[i])) count++;
   }
   return count;
 }

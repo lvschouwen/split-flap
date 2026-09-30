@@ -75,6 +75,30 @@ static void test_faulty_count_only_counts_valid_slots() {
   TEST_ASSERT_EQUAL(1, computeFaultyUnitCount(units, 3));
 }
 
+static void test_faulty_count_includes_lost_sketch_units() {
+  // #497: a sketch unit that stopped answering (heartbeat stale) is the worst
+  // fault there is — it must count even though its status read is invalid.
+  UnitFacts units[4];
+  units[0].state = 1;            // lost: stale, status unreadable -> counts
+  units[0].stale = true;
+  units[1].state = 2;            // bootloader slot: stale is meaningless
+  units[1].stale = true;
+  units[2].state = 0;            // empty column
+  units[3].state = 1;            // healthy sketch unit
+  units[3].statusValid = true;
+  TEST_ASSERT_EQUAL(1, computeFaultyUnitCount(units, 4));
+  TEST_ASSERT_EQUAL(1, computeLostUnitCount(units, 4));
+}
+
+static void test_lost_and_faulty_unit_counts_once() {
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].stale = true;
+  units[0].statusValid = true;   // last read before it went quiet was faulty
+  units[0].status.flags = UNIT_FLAG_HALL_NEVER;
+  TEST_ASSERT_EQUAL(1, computeFaultyUnitCount(units, 1));
+}
+
 // --- buildUnitHealthJson -----------------------------------------------------
 
 static void test_health_json_valid_and_bootloader_slots() {
@@ -916,6 +940,8 @@ int main(int, char**) {
   RUN_TEST(test_bad_commands_alone_are_not_faulty);
   RUN_TEST(test_addr_eeprom_flag_alone_is_not_faulty);
   RUN_TEST(test_faulty_count_only_counts_valid_slots);
+  RUN_TEST(test_faulty_count_includes_lost_sketch_units);
+  RUN_TEST(test_lost_and_faulty_unit_counts_once);
   RUN_TEST(test_health_json_valid_and_bootloader_slots);
   RUN_TEST(test_health_json_addr_eeprom_bit_surfaces_as_ae);
   RUN_TEST(test_boot_home_state_decode);

@@ -83,12 +83,15 @@ void statusFillLocked(ClusterLeaderStatus& st) {
       out.faulty = snap.faultyUnitCount;
       out.detected = snap.detectedUnitCount;
       out.faultMask = selfMask;
+      out.lost = computeLostUnitCount(snap.units, snap.displayWidth);
       out.wear = selfWear.flaggedCount > 0;
     } else if (runtimes[i].health.valid) {
       out.healthValid = true;
       out.faulty = runtimes[i].health.faulty;
       out.detected = runtimes[i].health.detected;
       out.faultMask = runtimes[i].health.faultMask;
+      out.lost = runtimes[i].health.lost;
+      out.busDead = runtimes[i].health.busDead;
       out.wear = runtimes[i].health.wear;
     }
   }

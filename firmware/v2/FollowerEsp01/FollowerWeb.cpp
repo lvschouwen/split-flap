@@ -124,6 +124,8 @@ static FollowerHealthFacts healthNow(char* maskBuf, size_t maskCap) {
   h.faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
   followerFaultMaskHex(unitFacts, displayWidth, maskBuf, maskCap);
   h.faultMask = maskBuf;
+  h.lost = computeLostUnitCount(unitFacts, UNITS_AMOUNT);
+  h.busDead = followerBusRecovery().dead;
   WearAssessment wear;
   assessWear(unitFacts, UNITS_AMOUNT, wear);
   h.wear = wear.flaggedCount > 0;
