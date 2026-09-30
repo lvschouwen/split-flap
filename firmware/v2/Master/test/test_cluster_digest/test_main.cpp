@@ -214,6 +214,8 @@ static void test_status_json_carries_member_health() {
   TEST_ASSERT_TRUE(out.indexOf("\"enabled\":true") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"faultMask\":\"0000\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"faulty\":0") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"lost\":0") >= 0);          // #497
+  TEST_ASSERT_TRUE(out.indexOf("\"busDead\":false") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"detected\":16") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"wear\":false") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"rollout\":{\"phase\":\"idle\"") >= 0);

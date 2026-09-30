@@ -127,6 +127,10 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
       out += m.detected;
       out += ",\"faultMask\":";
       appendJsonString(out, m.faultMask);
+      out += ",\"lost\":";
+      out += m.lost;
+      out += ",\"busDead\":";
+      out += m.busDead ? "true" : "false";
       out += ",\"wear\":";
       out += m.wear ? "true" : "false";
     }
