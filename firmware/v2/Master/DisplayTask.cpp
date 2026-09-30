@@ -11,6 +11,7 @@
 
 #include "BootHomePlan.h"
 #include "BootTrace.h"  // #504
+#include "CrashContext.h"  // #504
 #include "FlapFrame.h"
 #include "HeadlessPolicy.h"
 #include "HeartbeatPolicy.h"
@@ -999,6 +1000,7 @@ void displayTaskMain(void*) {
     // the TWDT must reboot within ~30 s. NEVER defined in a shipping build.
     if (millis() > 20000) { for (;;) { /* no wdtFeed() → dog fires */ } }
 #endif
+    crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_IDLE);  // #504
     // Timed wait: a real command preempts (display writes / reflash / Probe);
     // an idle timeout synthesizes one opportunistic heartbeat read.
     if (xQueueReceive(displayQueue, &cmd,

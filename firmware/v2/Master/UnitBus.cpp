@@ -12,6 +12,7 @@
 #include <atomic>
 
 #include "BuildVersion.h"  // BUNDLED_UNIT_REV (#205)
+#include "CrashContext.h"  // per-transaction crash breadcrumb (#504)
 #include "DriftLogPolicy.h"  // drift-event operator-log decision (#322)
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
@@ -72,6 +73,7 @@ void unitBusInit() {
 // the bus down and rebuilding it destroys the stale driver state, so every
 // failed read must pass through here before the next probe touches the bus.
 static void recoverBusAfterFailedRead() {
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_RECOVER);
   Wire.end();
   unitBusInit();
 }
@@ -135,10 +137,12 @@ static int countedTransmission() {
 // so a short reply means "unsupported" — drain the RX buffer and fail.
 // `buf` holds all `n` bytes only on success.
 static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf, uint8_t n) {
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_WRITE, (uint8_t)i2cAddress);
   Wire.beginTransmission(i2cAddress);
   Wire.write(opcode);
   if (countedTransmission() != 0) return false;
   delay(UNIT_RESPONSE_SETTLE_MS);
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_READ, (uint8_t)i2cAddress);
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
   if (got != n) {
     while (Wire.available()) Wire.read();
@@ -347,6 +351,7 @@ static bool readUnitDisplayedLetter(int i2cAddress, int& out) {
 // Safe to call against a sketch-running unit: the patched Unit.ino ignores
 // writes of length != 2, so probing doesn't rotate the drum as a side effect.
 static bool isUnitInBootloader(int i2cAddress) {
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_PROBE, (uint8_t)i2cAddress);
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
   Wire.write((uint8_t)TWIBOOT_MEMTYPE_CHIPINFO);
@@ -370,6 +375,8 @@ static bool isUnitInBootloader(int i2cAddress) {
 // Wire.endTransmission() status (0 = success) so callers can tally
 // bus-level failures (v1 #121).
 static int writeToUnit(int unitIndex, uint8_t letter, uint8_t unitSpeed) {
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_WRITE,
+               (uint8_t)toI2cAddress(unitIndex));
   Wire.beginTransmission(toI2cAddress(unitIndex));
   Wire.write(letter);
   Wire.write(unitSpeed);
@@ -380,6 +387,7 @@ static int writeToUnit(int unitIndex, uint8_t letter, uint8_t unitSpeed) {
 // from isDisplayMoving() — must be quiet on /log when nothing is wrong.
 static int checkIfMoving(int unitIndex) {
   int i2cAddress = toI2cAddress(unitIndex);
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_READ, (uint8_t)i2cAddress);
   Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)1);
   int active = Wire.available() ? Wire.read() : -1;
   if (active == -1) {
@@ -520,6 +528,7 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
   for (int unitIndex = 0; unitIndex < maxUnits; unitIndex++) {
     facts[unitIndex] = UnitFacts{};  // silent, fw unknown, status invalid
     int i2cAddress = toI2cAddress(unitIndex);
+    crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_PROBE, (uint8_t)i2cAddress);
     Wire.beginTransmission(i2cAddress);
     if (Wire.endTransmission() != 0) continue;
 

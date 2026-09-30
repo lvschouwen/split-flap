@@ -24,6 +24,7 @@
 #include "NvsSettingsStore.h"
 #include "OtaService.h"
 #include "BootTrace.h"  // #504
+#include "CrashContext.h"  // #504
 #include "RebootCause.h"  // #432
 #include "Settings.h"
 #include "StatusLed.h"
@@ -128,6 +129,7 @@ void setup() {
   // boot. Caches; webEndpointsInit reads the cached copy.
   rebootCauseConsume();
   bootTraceInit();  // #504: after the consume, before anything that can die
+  crashCtxBoot();   // #504: report + re-arm the RTC task breadcrumb
   webLogInit();  // before the first SerialPrint*, or those lines never
                  // reach GET /log
   flashLogInit();  // #206: mounts `storage`, writes the boot marker; from

@@ -16,6 +16,7 @@
 #include "WebEndpointsInternal.h"
 
 #include "BootTrace.h"  // bootTraceJson (#504)
+#include "CrashContext.h"  // crashCtxReportJson (#504)
 
 #include <ESPAsyncWebServer.h>
 #include <WiFi.h>
@@ -174,6 +175,7 @@ String buildCurrentSettingsJson() {
   f.lastResetReason = webResetReasonString();
   f.lastRebootCause = bootRebootCause;  // #432
   f.bootTrace = bootTraceJson();         // #504
+  f.crashContext = crashCtxReportJson(); // #504
   ClusterFollowerView cluster = clusterFollowerViewGet();
   f.clusterState = clusterFollowerPhaseName(cluster.phase);
   f.clusterLeaderName = cluster.leaderName;

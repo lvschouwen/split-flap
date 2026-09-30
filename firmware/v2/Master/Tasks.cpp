@@ -8,6 +8,8 @@
 
 #include <atomic>
 
+#include "CrashContext.h"  // task activity breadcrumb (#504)
+
 // #289 dummy mode: the settings-stored unit-count override, seeded by
 // tasksInit() and updated live by the settings drain (netTask). displayTask
 // reads it at every fold; 0 = auto (probe-derived width).
@@ -201,13 +203,17 @@ static void netTaskMain(void* arg) {
     SerialPrintf("wdt: net subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
     wdtFeed();
+    crashCtxHeartbeat();  // #504: the clock crash "ages" are measured against
+    crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_WIFI);
     wifiServiceTick();
+    crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_WEB_LOOP);
     webEndpointsLoop(*ctx->settings, *ctx->store);
     clusterFollowerServiceTick(*ctx->store);  // #272: decay + NVS + renders
     webDisplayEventsTick();  // #251: SSE push on display text change
     statusLedTick();
     systemStatsTick();  // #245/#251: self-throttled, 1 s fast + 5 s ring
     odometerLogTick();  // #465: self-throttled odometer historian append
+    crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_IDLE);
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
@@ -223,10 +229,12 @@ static void mqttTaskMain(void*) {
     SerialPrintf("wdt: mqtt subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
     wdtFeed();
+    crashCtxMark(CRASH_SLOT_MQTT, CRASH_ACT_MQTT);
     while (xQueueReceive(mqttInbox, &msg, 0) == pdTRUE) {
       mqttServiceHandleInbox(msg);
     }
     mqttServiceTick();
+    crashCtxMark(CRASH_SLOT_MQTT, CRASH_ACT_IDLE);
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
@@ -241,7 +249,9 @@ static void clusterTaskMain(void*) {
     SerialPrintf("wdt: cluster subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
     wdtFeed();
+    crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_CLUSTER);
     clusterLeaderTick();
+    crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_IDLE);
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
