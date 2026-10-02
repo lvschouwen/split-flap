@@ -774,6 +774,8 @@ static void execSetGates(DisplaySnapshot& local, UnitFacts* busFacts,
 // The dumped bytes stay out of the snapshot (1 KB copied on every read). The
 // store is written by displayTask and copied out by the web handler under a
 // spinlock; the seq ties a copy to the result slot it belongs to.
+// How long a dumped unit gets to restart into its sketch before the re-show.
+static const uint32_t BOOT_DUMP_RETURN_TIMEOUT_MS = 10000;
 static uint8_t bootDumpBytes[BOOT_SECTION_LEN];
 static uint32_t bootDumpBytesSeq = 0;
 static portMUX_TYPE bootDumpMux = portMUX_INITIALIZER_UNLOCKED;
@@ -815,7 +817,16 @@ static void execBootDump(DisplaySnapshot& local, UnitFacts* busFacts,
         slot.outcome = BootDumpOutcome::ReadFail;
         break;
     }
-    // The unit restarts through its twiboot window once more (v1 #88).
+    // The unit comes back unhomed and blank. Wait for its sketch, then
+    // re-show the frame: the letter command homes it first, and units already
+    // on their letter do not move.
+    uint8_t addr = cmd.unitAddress;
+    unitBusWaitBatchIdle(&addr, 1, BOOT_DUMP_RETURN_TIMEOUT_MS);
+    if (local.lastFrameValid) {
+      unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
+                       lastFrameUnitSpeed);
+    }
+    // Its reads were invalidated above; keep probes off until it has settled.
     armTwibootRiskWindow();
   }
   if (slot.outcome == BootDumpOutcome::Ok) {

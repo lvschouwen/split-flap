@@ -60,7 +60,7 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/unit/gates",             "set a unit's feature-gate bits"},
   {"POST", "/unit/self-test",         "run a unit's self-test"},
   {"GET",  "/unit/self-test-result",  "read a unit's self-test result"},
-  {"POST", "/unit/boot-dump",         "read a unit's bootloader section over I2C (unit restarts)"},
+  {"POST", "/unit/boot-dump",         "read a unit's bootloader section over I2C (unit restarts and re-homes)"},
   {"GET",  "/unit/boot-dump-result",  "boot-section dump result: crc32 + bytes as hex"},
   {"POST", "/unit/reboot",            "reboot a unit"},
   {"POST", "/unit/set-address",       "burn a unit's EEPROM I2C address"},
