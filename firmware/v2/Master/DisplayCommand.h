@@ -31,6 +31,10 @@ enum class DisplayOpcode : uint8_t {
   // diagnostic revolution and polls the result; measurements publish into
   // the snapshot's SelfTestSlot.
   SelfTest,
+  // Read the unit's twiboot boot section over I2C (#511): the unit passes
+  // through its bootloader and restarts; result in the snapshot's
+  // BootDumpSlot, bytes in the dump store.
+  BootDump,
   ResetUnits,
   Stop,
   // Bulk unit reflash over twiboot (#205, slice C) — a long-running job
@@ -99,6 +103,7 @@ inline const char* displayOpcodeName(DisplayOpcode op) {
     case DisplayOpcode::ResetOdometer:      return "ResetOdometer";
     case DisplayOpcode::SetGates:           return "SetGates";
     case DisplayOpcode::SelfTest:           return "SelfTest";
+    case DisplayOpcode::BootDump:           return "BootDump";
     case DisplayOpcode::ResetUnits:         return "ResetUnits";
     case DisplayOpcode::Stop:               return "Stop";
     case DisplayOpcode::ReflashUnits:       return "ReflashUnits";
@@ -190,6 +195,11 @@ inline DisplayCommand makeSetGatesCommand(uint32_t seq, uint8_t addr,
 // waits out inline (commands queue behind it, like every long op).
 inline DisplayCommand makeSelfTestCommand(uint32_t seq, uint8_t addr) {
   return makeMaintCommand(DisplayOpcode::SelfTest, seq, addr, 0);
+}
+
+// Boot-section dump (#511): a few seconds through twiboot and back.
+inline DisplayCommand makeBootDumpCommand(uint32_t seq, uint8_t addr) {
+  return makeMaintCommand(DisplayOpcode::BootDump, seq, addr, 0);
 }
 
 // The re-show text/alignment/speed are baked at enqueue time (senders bake

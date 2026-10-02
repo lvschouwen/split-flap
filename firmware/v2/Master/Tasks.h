@@ -76,6 +76,11 @@ uint32_t displayNextMaintSeq();
 // task; consumers render from the copy, never from live state.
 DisplaySnapshot displaySnapshotGet();
 
+// Boot-section dump bytes (#511) for the result slot with this seq: copies
+// BOOT_SECTION_LEN bytes into `out`, or returns false when the store holds a
+// different dump. Any task.
+bool displayBootDumpCopy(uint32_t seq, uint8_t* out);
+
 // Posts one inbound MQTT message; false = inbox full. Safe from LWIP
 // callbacks (non-blocking).
 bool mqttInboxPost(const MqttInboxMessage& msg);

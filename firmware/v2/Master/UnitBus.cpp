@@ -6,6 +6,8 @@
 
 #include "UnitBus.h"
 
+#include "BootDump.h"  // BOOT_SECTION_START / _LEN (#511)
+
 #include <Arduino.h>
 #include <Wire.h>
 
@@ -1003,6 +1005,60 @@ void unitBusWaitBatchIdle(const uint8_t* addrs, int count,
     delay(100);
   }
   SerialPrintln(F("  batch settle timed out — continuing anyway"));
+}
+
+UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out) {
+  bool bootloaderLive = false;
+  for (int attempt = 0; attempt < 5; attempt++) {
+    if (twibootPing(i2cAddress) == 0) { bootloaderLive = true; break; }
+    delay(100);
+  }
+  if (!bootloaderLive) return UnitBootReadResult::BootloaderSilent;
+
+  UnitBootReadResult result = UnitBootReadResult::Ok;
+  if (!twibootVerifyChip(i2cAddress)) {
+    result = UnitBootReadResult::ChipMismatch;
+  } else {
+    for (int page = 0; page < BOOT_SECTION_LEN / TWIBOOT_PAGE_SIZE; page++) {
+      wdtFeed();
+      uint16_t flashAddr =
+          (uint16_t)(BOOT_SECTION_START + page * TWIBOOT_PAGE_SIZE);
+      uint8_t* dst = out + page * TWIBOOT_PAGE_SIZE;
+      if (!twibootReadFlashPage(i2cAddress, flashAddr, dst) &&
+          !twibootReadFlashPage(i2cAddress, flashAddr, dst)) {
+        result = UnitBootReadResult::ReadFailed;
+        break;
+      }
+    }
+  }
+
+  // Whatever the read did, the unit must not stay parked in twiboot: start
+  // the sketch, then the clean watchdog restart a flash ends with (v1 #113).
+  bool exited = false;
+  for (int attempt = 0; attempt < 3 && !exited; attempt++) {
+    exited = twibootExit(i2cAddress) == 0;
+    if (!exited) delay(20);
+  }
+  if (!exited) {
+    // Still in twiboot: it falls back to the sketch once nothing talks to it,
+    // and the lost-unit rescue (#498) sends the exit again. A reboot command
+    // here would only be another byte keeping the boot window open.
+    SerialPrintf("Unit 0x%02x did not ACK the twiboot exit after the "
+                 "boot-section read\n", i2cAddress);
+    return result;
+  }
+  wdtFeed();
+  delay(2000);
+  Wire.beginTransmission((uint8_t)i2cAddress);
+  if (Wire.endTransmission() == 0) {
+    Wire.beginTransmission((uint8_t)i2cAddress);
+    Wire.write((uint8_t)SFP_CMD_REBOOT);
+    Wire.endTransmission();
+  } else {
+    SerialPrintf("Unit 0x%02x not responding after the boot-section read\n",
+                 i2cAddress);
+  }
+  return result;
 }
 
 UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,

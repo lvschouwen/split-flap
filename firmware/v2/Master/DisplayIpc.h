@@ -20,6 +20,7 @@
 #include "MaintenancePolicy.h"
 #include "ReflashPlan.h"
 #include "UnitHealth.h"
+#include "BootDump.h"      // BootDumpSlot (#511)
 #include "UnitSelfTest.h"  // SELFTEST_REASON_* + selfTestReasonName (#404)
 
 // Execution result of the LAST maintenance op (#204) — the /unit/op-result
@@ -87,6 +88,7 @@ struct DisplaySnapshot {
   // transitions while the job runs; the producer gate keys off it.
   ReflashProgress reflash;
   SelfTestSlot lastSelfTest;  // single-slot self-test result (#265)
+  BootDumpSlot lastBootDump;  // single-slot boot-section dump result (#511)
   // The letter indices of the last frame the master actually put on the
   // bus (#264) — the "intended" side of the displayed==intended check.
   // Valid after the first ShowText/Stop/ResetUnits; maintained by
@@ -134,6 +136,7 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
     case DisplayOpcode::ClearAddress:
     case DisplayOpcode::ResetOdometer:
     case DisplayOpcode::SelfTest:
+    case DisplayOpcode::BootDump:
     case DisplayOpcode::SetGates:
     case DisplayOpcode::ResetUnits:
     case DisplayOpcode::ReflashUnits:
@@ -208,6 +211,12 @@ inline void displayApplyMaintResult(DisplaySnapshot& snap,
 inline void displayApplySelfTestResult(DisplaySnapshot& snap,
                                        const SelfTestSlot& slot) {
   snap.lastSelfTest = slot;
+}
+
+// Same overwrite contract for the boot-section dump (#511).
+inline void displayApplyBootDumpResult(DisplaySnapshot& snap,
+                                       const BootDumpSlot& slot) {
+  snap.lastBootDump = slot;
 }
 
 // A successful SET_OFFSET is the only in-place offset mutation; everything

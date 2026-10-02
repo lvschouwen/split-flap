@@ -770,6 +770,72 @@ static void execSetGates(DisplaySnapshot& local, UnitFacts* busFacts,
       MaintReason::None);
 }
 
+// --- boot-section dump (#511) --------------------------------------------------
+// The dumped bytes stay out of the snapshot (1 KB copied on every read). The
+// store is written by displayTask and copied out by the web handler under a
+// spinlock; the seq ties a copy to the result slot it belongs to.
+static uint8_t bootDumpBytes[BOOT_SECTION_LEN];
+static uint32_t bootDumpBytesSeq = 0;
+static portMUX_TYPE bootDumpMux = portMUX_INITIALIZER_UNLOCKED;
+
+bool displayBootDumpCopy(uint32_t seq, uint8_t* out) {
+  taskENTER_CRITICAL(&bootDumpMux);
+  bool held = seq != 0 && seq == bootDumpBytesSeq;
+  if (held) memcpy(out, bootDumpBytes, BOOT_SECTION_LEN);
+  taskEXIT_CRITICAL(&bootDumpMux);
+  return held;
+}
+
+static void execBootDump(DisplaySnapshot& local, UnitFacts* busFacts,
+                         const DisplayCommand& cmd) {
+  (void)busFacts;
+  static uint8_t scratch[BOOT_SECTION_LEN];  // displayTask-only
+  BootDumpSlot slot;
+  slot.seq = cmd.seq;
+  slot.addr = cmd.unitAddress;
+  if (unitBusRebootToBootloader(cmd.unitAddress) != 0) {
+    slot.outcome = BootDumpOutcome::EnterFail;
+    // A NACK does not prove the unit stayed in its sketch.
+    armTwibootRiskWindow();
+  } else {
+    displayInvalidateUnitReads(local, cmd.unitAddress);
+    wdtFeed();
+    delay(TWIBOOT_STARTUP_MS);
+    switch (unitBusReadBootSection(cmd.unitAddress, scratch)) {
+      case UnitBootReadResult::Ok:
+        slot.outcome = BootDumpOutcome::Ok;
+        break;
+      case UnitBootReadResult::BootloaderSilent:
+        slot.outcome = BootDumpOutcome::BootloaderSilent;
+        break;
+      case UnitBootReadResult::ChipMismatch:
+        slot.outcome = BootDumpOutcome::ChipMismatch;
+        break;
+      case UnitBootReadResult::ReadFailed:
+        slot.outcome = BootDumpOutcome::ReadFail;
+        break;
+    }
+    // The unit restarts through its twiboot window once more (v1 #88).
+    armTwibootRiskWindow();
+  }
+  if (slot.outcome == BootDumpOutcome::Ok) {
+    slot.crc32 = bootDumpCrc32(scratch, BOOT_SECTION_LEN);
+    taskENTER_CRITICAL(&bootDumpMux);
+    memcpy(bootDumpBytes, scratch, BOOT_SECTION_LEN);
+    bootDumpBytesSeq = cmd.seq;
+    taskEXIT_CRITICAL(&bootDumpMux);
+  }
+  SerialPrintf("display: boot-section dump unit 0x%02x → %s (crc32 %08lx)\n",
+               cmd.unitAddress, bootDumpOutcomeName(slot.outcome),
+               (unsigned long)slot.crc32);
+  displayApplyBootDumpResult(local, slot);
+  displayApplyMaintResult(local, cmd,
+                          slot.outcome == BootDumpOutcome::Ok
+                              ? MaintOutcome::Ok
+                              : MaintOutcome::PostconditionFail,
+                          MaintReason::None);
+}
+
 static void execRebootToBootloader(DisplaySnapshot& local, UnitFacts* busFacts,
                                   const DisplayCommand& cmd) {
   (void)busFacts;
@@ -1035,6 +1101,9 @@ void displayTaskMain(void*) {
           break;
         case DisplayOpcode::SelfTest:
           execSelfTest(local, busFacts, cmd);
+          break;
+        case DisplayOpcode::BootDump:
+          execBootDump(local, busFacts, cmd);
           break;
         case DisplayOpcode::SetGates:
           execSetGates(local, busFacts, cmd);

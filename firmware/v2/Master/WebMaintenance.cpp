@@ -285,6 +285,42 @@ void webMaintenanceRegister(AsyncWebServer& server) {
     request->send(200, "application/json", buf);
   });
 
+  // Boot-section dump (#511): reads the unit's twiboot image over I2C. The
+  // unit passes through its bootloader and restarts; nothing is written.
+  server.on("/unit/boot-dump", HTTP_POST, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    maintEnqueue(request,
+                 makeBootDumpCommand(displayNextMaintSeq(), (uint8_t)addr));
+  });
+
+  // pending / ok (+crc32 and the bytes as hex) / failed (+reason) / expired.
+  server.on("/unit/boot-dump-result", HTTP_GET,
+            [](AsyncWebServerRequest* request) {
+    long seq = 0;
+    if (!maintRequireLongParam(request, "seq", seq)) return;
+    if (seq < 1) {
+      request->send(400, "text/plain", F("seq must be >= 1"));
+      return;
+    }
+    DisplaySnapshot snap = displaySnapshotGet();
+    const BootDumpSlot& slot = snap.lastBootDump;
+    if (slot.seq != (uint32_t)seq || slot.outcome != BootDumpOutcome::Ok) {
+      char small[96];  // every non-ok answer is one short line
+      buildBootDumpJson(small, sizeof(small), slot, (uint32_t)seq, nullptr);
+      request->send(200, "application/json", small);
+      return;
+    }
+    // Heap, not stack: ~3 KB doesn't belong on the async_tcp task stack.
+    std::unique_ptr<uint8_t[]> bytes(new uint8_t[BOOT_SECTION_LEN]);
+    std::unique_ptr<char[]> buf(new char[BOOT_DUMP_JSON_CAP]);
+    bool held = displayBootDumpCopy((uint32_t)seq, bytes.get());
+    buildBootDumpJson(buf.get(), BOOT_DUMP_JSON_CAP, slot, (uint32_t)seq,
+                      held ? bytes.get() : nullptr);
+    request->send(200, "application/json", buf.get());
+  });
+
   // Debug endpoint, v1 semantics preserved: pushes the unit into twiboot
   // (~1 s on its DIP-derived address, then back to the sketch). v1 parity:
   // range check only, no sketch-state gate — it exists precisely for poking

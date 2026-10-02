@@ -108,6 +108,18 @@ enum class UnitFlashResult : uint8_t {
 };
 const char* unitFlashResultName(UnitFlashResult r);
 
+// Reads the BOOT_SECTION_LEN bytes of the boot section (BootDump.h) from a
+// unit that is already in twiboot, then starts its application and gives it
+// the same clean restart a flash ends with. No flash write. `out` holds the
+// bytes only on Ok.
+enum class UnitBootReadResult : uint8_t {
+  Ok = 0,
+  BootloaderSilent,  // twiboot never ACKed a ping at this address
+  ChipMismatch,      // chipinfo signature / page size not an ATmega328P
+  ReadFailed,        // a page read came back short twice
+};
+UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out);
+
 // Streams `image` (page-padded, TWIBOOT_PAGE_SIZE multiple) to the unit at
 // `i2cAddress`, which must already be in twiboot (the orchestration's
 // enter-bootloader sweep + rescan guarantees it): ping retry → chipinfo

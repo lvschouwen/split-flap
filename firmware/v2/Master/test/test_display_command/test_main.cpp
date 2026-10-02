@@ -265,6 +265,14 @@ static void test_set_gates_opcode_name() {
   TEST_ASSERT_EQUAL_STRING("SetGates", displayOpcodeName(DisplayOpcode::SetGates));
 }
 
+static void test_boot_dump_command_carries_seq_and_address() {
+  DisplayCommand cmd = makeBootDumpCommand(21, 7);
+  TEST_ASSERT_TRUE(cmd.opcode == DisplayOpcode::BootDump);
+  TEST_ASSERT_EQUAL_UINT32(21, cmd.seq);
+  TEST_ASSERT_EQUAL_UINT8(7, cmd.unitAddress);
+  TEST_ASSERT_EQUAL_STRING("BootDump", displayOpcodeName(DisplayOpcode::BootDump));
+}
+
 static void test_selftest_opcode_name() {
   TEST_ASSERT_EQUAL_STRING("SelfTest", displayOpcodeName(DisplayOpcode::SelfTest));
 }
@@ -301,6 +309,7 @@ int main(int, char**) {
   RUN_TEST(test_reflash_units_opcode_name);
   RUN_TEST(test_selftest_command_carries_seq_and_address);
   RUN_TEST(test_selftest_opcode_name);
+  RUN_TEST(test_boot_dump_command_carries_seq_and_address);
   RUN_TEST(test_set_gates_command_carries_the_gate_byte_in_value);
   RUN_TEST(test_set_gates_command_carries_an_all_clear);
   RUN_TEST(test_set_gates_high_bit_survives_the_signed_value_field);
