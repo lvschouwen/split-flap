@@ -25,6 +25,14 @@ void wifiServiceInit(AsyncWebServer& server, MasterSettings& settings,
 // pumps the portal DNS catch-all and any in-flight scan.
 void wifiServiceTick();
 
+// #505: true while the radio is joining, reconnecting or an OTA is writing —
+// displayTask holds unit motion until it settles (MotionBudget.h).
+bool wifiRadioBusy();
+
+// #507: the TX power cap the radio currently runs at, tenths of a dBm
+// (WifiTxPolicy.h ladder). Any task.
+int wifiTxPowerDbm10();
+
 // netTask context only (same task as the tick that mutates it): the
 // policy's current phase, for the status LED (#199).
 WifiPhase wifiServicePhase();

@@ -2,11 +2,13 @@
 
 #include <DNSServer.h>
 #include <ESPmDNS.h>
+#include <Update.h>
 #include <WiFi.h>
 #include <atomic>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "BootTrace.h"  // #504
 #include "BuildVersion.h"
 #include "ClockService.h"
 #include "DeviceIdentity.h"
@@ -17,6 +19,7 @@
 #include "WebEndpoints.h"
 #include "WifiPolicy.h"
 #include "WifiScanJson.h"
+#include "WifiTxPolicy.h"
 
 // Wiring from setup(); only netTask touches the radio afterwards.
 static AsyncWebServer* webServer = nullptr;
@@ -64,6 +67,11 @@ struct StageLock {
 static const uint32_t WIFI_RECONNECT_KICK_MS = 5000;
 static uint32_t lastReconnectKickMs = 0;                 // event-task-private
 static std::atomic<bool> staReconnectWanted{false};      // netTask -> event task
+// #505: radio in a high-draw phase (join, reconnect, OTA write) — netTask ->
+// displayTask's motion gate. Starts busy: boot is a join until proven otherwise.
+static std::atomic<bool> radioBusyFlag{true};
+
+bool wifiRadioBusy() { return radioBusyFlag.load(std::memory_order_relaxed); }
 
 static void onWifiStaEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   if (event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED) return;
@@ -133,12 +141,98 @@ static void scheduleRestart(const __FlashStringHelper* why) {
   restartRequestedAtMs = millis();
 }
 
+// #505/#506: TX bursts are the S3's own current peak on the shared 5 V rail —
+// a plain software restart came back as a brownout with every stepper idle,
+// and a boot that restored full power once online died on a corrupted
+// instruction fetch right after. The radio therefore starts every boot at
+// the lowest level and only ever moves one level at a time (WifiTxPolicy.h,
+// #507). Can only apply after the interface starts, so the RF calibration
+// inside WiFi.mode() still runs at full power.
+static WifiTxState txState;
+static int8_t txAppliedIndex = -1;  // -1 = nothing applied yet
+static bool txReassertLogged = false;
+static bool txRefusedLogged = false;  // one line per refusal streak
+static uint32_t txNextStepMs = 0;
+static const uint8_t TX_INDEX_UNKNOWN = 0xFF;
+static std::atomic<uint8_t> txPublishedIndex{TX_INDEX_UNKNOWN};
+
+int wifiTxPowerDbm10() {
+  uint8_t index = txPublishedIndex.load(std::memory_order_relaxed);
+  return index == TX_INDEX_UNKNOWN ? 0 : wifiTxLevelDbm10(index);
+}
+
+static bool txPowerApply(uint8_t index) {
+  if (!WiFi.setTxPower((wifi_power_t)wifiTxLevelRaw(index))) return false;
+  txAppliedIndex = (int8_t)index;
+  txPublishedIndex.store(index, std::memory_order_relaxed);
+  return true;
+}
+
+// Runs the ladder for the given phase and pushes a changed level to the
+// radio. Returns false when the radio refused the level: the ladder is then
+// held at the level the radio really has, so a later success is still a
+// single step.
+static bool txPowerStep(WifiTxPhase phase) {
+  WifiTxInput in;
+  in.phase = phase;
+  in.linkUp = WiFi.status() == WL_CONNECTED;
+  in.rssiDbm = in.linkUp ? WiFi.RSSI() : 0;
+  // RSSI() reads 0 when the link fell between the two calls; fed to the
+  // ladder it would count as a perfect signal.
+  if (in.linkUp && in.rssiDbm >= 0) return true;
+  in.unitsIdle = !displaySnapshotGet().busy;
+  uint8_t index = wifiTxPolicyStep(txState, in, millis());
+
+  if ((int8_t)index == txAppliedIndex) {
+    // The driver owns the value; a silent reset there would put the radio
+    // back at the SDK default with nothing here noticing.
+    if ((int8_t)WiFi.getTxPower() != wifiTxLevelRaw(index)) {
+      if (!txReassertLogged) {
+        SerialPrintln("wifi: TX power drifted from the ladder — re-asserting");
+        txReassertLogged = true;
+      }
+      return txPowerApply(index);
+    }
+    return true;
+  }
+
+  int8_t was = txAppliedIndex;
+  if (!txPowerApply(index)) {
+    if (!txRefusedLogged) {
+      SerialPrintln("wifi: TX power level refused by the radio");
+      txRefusedLogged = true;
+    }
+    if (was >= 0) txState.index = (uint8_t)was;
+    return false;
+  }
+  txRefusedLogged = false;
+  char line[64];
+  int dbm10 = wifiTxLevelDbm10(index);
+  if (was < 0) {
+    snprintf(line, sizeof(line), "wifi: TX power %d.%d dBm", dbm10 / 10,
+             dbm10 % 10);
+  } else {
+    int was10 = wifiTxLevelDbm10((uint8_t)was);
+    snprintf(line, sizeof(line), "wifi: TX power %d.%d -> %d.%d dBm",
+             was10 / 10, was10 % 10, dbm10 / 10, dbm10 % 10);
+  }
+  SerialPrintln(line);
+  return true;
+}
+
 static void startJoin() {
   // esp_wifi keeps its credential copy in RAM only — our NVS namespace is
   // the single store, so the v1 persistent()/disconnect() foot-gun class
   // cannot exist here.
+  bootTraceMarkStage(BOOT_STAGE_JOIN);  // #504
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  // Before begin(): no join burst above the ladder. A refusal is retried
+  // briefly; joining at the SDK default beats a board with no network.
+  for (int attempt = 0; attempt < 3 && !txPowerStep(WifiTxPhase::Joining);
+       attempt++) {
+    delay(20);
+  }
   WiFi.setHostname(deviceName.c_str());
   WiFi.setAutoReconnect(true);
   SerialPrintln("Joining WiFi \"" + liveSettings->wifiSsid + "\" ...");
@@ -153,6 +247,7 @@ static void startPortal() {
   // AP_STA, not AP: the portal page's scan needs the STA half alive.
   WiFi.persistent(false);
   WiFi.mode(WIFI_AP_STA);
+  txPowerStep(WifiTxPhase::Portal);  // before the AP starts beaconing
   String apName = deviceName + AP_SUFFIX_SETUP;
   WiFi.softAP(apName.c_str());  // open AP, v1 portal parity
   // Catch-all DNS: every hostname resolves to us; onNotFound() then
@@ -177,6 +272,7 @@ static void startPortal() {
 
 static void startOnline() {
   SerialPrintln("WiFi connected. IP: " + WiFi.localIP().toString());
+  bootTraceMarkStage(BOOT_STAGE_ONLINE);  // #504
   webEndpointsStart(*webServer);
   otaHealthConfirm();  // #305 fallback: primary confirm is setup() pre-inrush
   clockServiceApplyTz(*liveSettings);  // v1 parity: NTP kicked after join
@@ -307,6 +403,16 @@ void wifiServiceTick() {
     }
   }
 
+  // #507: the TX ladder, once a second. Boot has no radio to set yet.
+  if (policy.phase != WifiPhase::Boot &&
+      (int32_t)(millis() - txNextStepMs) >= 0) {
+    txNextStepMs = millis() + 1000;
+    txPowerStep(policy.phase == WifiPhase::Connected
+                    ? WifiTxPhase::Online
+                    : policy.phase == WifiPhase::Portal ? WifiTxPhase::Portal
+                                                        : WifiTxPhase::Joining);
+  }
+
   if (restartPending && millis() - restartRequestedAtMs > RESTART_GRACE_MS) {
     Serial.flush();
     ESP.restart();
@@ -317,4 +423,10 @@ void wifiServiceTick() {
   staReconnectWanted.store(
       policy.phase == WifiPhase::Connected && !restartPending,
       std::memory_order_relaxed);
+  bool linkUp = WiFi.status() == WL_CONNECTED;
+  radioBusyFlag.store(policy.phase == WifiPhase::Boot ||
+                          policy.phase == WifiPhase::Joining ||
+                          (policy.phase == WifiPhase::Connected && !linkUp) ||
+                          Update.isRunning(),
+                      std::memory_order_relaxed);
 }

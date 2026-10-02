@@ -12,6 +12,7 @@
 
 #include "BuildVersion.h"
 #include "ClockPolicy.h"
+#include "CrashContext.h"  // #504 flash-write mark
 #include "FlashLogPolicy.h"
 #include "HelpersSerialHandling.h"
 #include "LargeAlloc.h"
@@ -134,6 +135,8 @@ void flashLogTick(bool force) {
   }
   if (len == 0 && droppedNow == 0) return;
 
+  // #504: netTask is the only caller; its loop re-marks on the next pass.
+  crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_FLASH_WRITE);
   File f = LittleFS.open(LOG_PATH, FILE_APPEND, true);
   if (!f) return;  // staged data already consumed; next lines still flow
   // Day boundary marker (netTask-private state, no lock needed). Local

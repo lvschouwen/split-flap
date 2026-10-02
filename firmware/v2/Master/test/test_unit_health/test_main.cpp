@@ -75,7 +75,45 @@ static void test_faulty_count_only_counts_valid_slots() {
   TEST_ASSERT_EQUAL(1, computeFaultyUnitCount(units, 3));
 }
 
+static void test_faulty_count_includes_lost_sketch_units() {
+  // #497: a sketch unit that stopped answering (heartbeat stale) is the worst
+  // fault there is — it must count even though its status read is invalid.
+  UnitFacts units[4];
+  units[0].state = 1;            // lost: stale, status unreadable -> counts
+  units[0].stale = true;
+  units[1].state = 2;            // bootloader slot: stale is meaningless
+  units[1].stale = true;
+  units[2].state = 0;            // empty column
+  units[3].state = 1;            // healthy sketch unit
+  units[3].statusValid = true;
+  TEST_ASSERT_EQUAL(1, computeFaultyUnitCount(units, 4));
+  TEST_ASSERT_EQUAL(1, computeLostUnitCount(units, 4));
+}
+
+static void test_lost_and_faulty_unit_counts_once() {
+  UnitFacts units[1];
+  units[0].state = 1;
+  units[0].stale = true;
+  units[0].statusValid = true;   // last read before it went quiet was faulty
+  units[0].status.flags = UNIT_FLAG_HALL_NEVER;
+  TEST_ASSERT_EQUAL(1, computeFaultyUnitCount(units, 1));
+}
+
 // --- buildUnitHealthJson -----------------------------------------------------
+
+static void test_health_json_reports_rescue_exits_when_nonzero() {
+  UnitFacts units[2];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].rescueExits = 3;  // #498: twiboot exits by the runtime rescue
+  units[1].state = 1;
+  units[1].statusValid = true;
+  char buf[2048];
+  buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 1000);
+  String out(buf);
+  TEST_ASSERT_TRUE(out.indexOf("\"rsx\":3") >= 0);
+  TEST_ASSERT_EQUAL(out.indexOf("\"rsx\""), out.lastIndexOf("\"rsx\""));
+}
 
 static void test_health_json_valid_and_bootloader_slots() {
   UnitFacts units[2];
@@ -430,6 +468,7 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].stale = true;
     units[i].lastSeenMs = 0;   // with the wide nowMs below -> 10-digit "age"
     units[i].i2cErrors = 0xFFFF;  // widest err/errAge block (#367)
+    units[i].rescueExits = 0xFFFF;  // widest rsx key (#498)
     units[i].lastErrorMs = 0;     // 10-digit errAge against the wide nowMs
     // Widest ext-diag block (#365): all fields saturated.
     units[i].extDiagValid = true;
@@ -634,6 +673,7 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].stale = true;
     units[i].lastSeenMs = 0;
     units[i].i2cErrors = 0xFFFF;  // widest err/errAge block (#367)
+    units[i].rescueExits = 0xFFFF;  // widest rsx key (#498)
     units[i].lastErrorMs = 0;
     // Widest ext-diag block (#365): all fields saturated.
     units[i].extDiagValid = true;
@@ -916,7 +956,10 @@ int main(int, char**) {
   RUN_TEST(test_bad_commands_alone_are_not_faulty);
   RUN_TEST(test_addr_eeprom_flag_alone_is_not_faulty);
   RUN_TEST(test_faulty_count_only_counts_valid_slots);
+  RUN_TEST(test_faulty_count_includes_lost_sketch_units);
+  RUN_TEST(test_lost_and_faulty_unit_counts_once);
   RUN_TEST(test_health_json_valid_and_bootloader_slots);
+  RUN_TEST(test_health_json_reports_rescue_exits_when_nonzero);
   RUN_TEST(test_health_json_addr_eeprom_bit_surfaces_as_ae);
   RUN_TEST(test_boot_home_state_decode);
   RUN_TEST(test_health_json_heartbeat_freshness);

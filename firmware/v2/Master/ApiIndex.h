@@ -120,6 +120,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"hs2",    "boot-home state: 0 unhomed, 1 homing, 2 homed"},
   {"misses", "consecutive missed heartbeat reads"},
   {"stale",  "1 = unit missed >= the threshold of consecutive heartbeats (lost)"},
+  {"rsx",    "twiboot exits by the runtime lost-unit rescue since boot (#498)"},
   {"err",    "cumulative failed unit-bus transactions charged to this address"},
   {"errAge", "ms since this unit's last charged bus error"},
   {"se",     "step-excess on the last home (actual minus expected steps)"},
@@ -141,6 +142,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"frd",    "1 = the unit disarmed its own idle hall check; it is not protecting this unit"},
   // --- /system/stats (now object) ---
   {"rssi",     "WiFi RSSI (dBm)"},
+  {"txPower",  "WiFi TX power cap x10 (dBm) — starts lowest, ramps one level at a time"},
   {"heap",     "free heap (bytes)"},
   {"maxAlloc", "largest allocatable heap block (bytes)"},
   {"psram",    "free PSRAM (bytes)"},

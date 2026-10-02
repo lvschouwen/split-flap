@@ -98,7 +98,7 @@ static void test_ping_health_fragment_shape() {
   String frag = clusterPingHealthJson(units, 16, 16, 1, false, "abc1234");
   TEST_ASSERT_EQUAL_STRING(
       ",\"width\":16,\"detected\":16,\"faulty\":1,\"faultMask\":\"0001\","
-      "\"wear\":false,\"rev\":\"abc1234\"",
+      "\"lost\":0,\"wear\":false,\"rev\":\"abc1234\"",
       frag.c_str());
 }
 
@@ -107,6 +107,21 @@ static void test_ping_health_fragment_wear_true() {
   makeUnits(units, 1);
   String frag = clusterPingHealthJson(units, 1, 1, 0, true, "abc1234");
   TEST_ASSERT_TRUE(frag.indexOf("\"wear\":true") >= 0);
+}
+
+static void test_fault_mask_and_ping_flag_lost_unit() {
+  // #497: a stale sketch unit sets its mask bit and the lost count.
+  UnitFacts units[4];
+  makeUnits(units, 4);
+  for (int i = 0; i < 4; i++) setHealthy(units[i]);
+  units[2].state = 1;
+  units[2].statusValid = false;
+  units[2].stale = true;
+  char buf[8];
+  clusterFaultMaskHex(units, 4, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("4", buf);
+  String frag = clusterPingHealthJson(units, 4, 4, 1, false, "abc1234");
+  TEST_ASSERT_TRUE(frag.indexOf("\"lost\":1") >= 0);
 }
 
 // --- ping-reply health parse (leader side) --------------------------------------
@@ -124,6 +139,26 @@ static void test_parse_ping_health_full_body() {
   TEST_ASSERT_EQUAL(15, h.detected);
   TEST_ASSERT_EQUAL_STRING("0104", h.faultMask.c_str());
   TEST_ASSERT_TRUE(h.wear);
+}
+
+static void test_parse_ping_health_lost_and_bus_dead() {
+  ClusterMemberHealth h;
+  TEST_ASSERT_TRUE(clusterParsePingHealth(
+      "{\"width\":5,\"detected\":5,\"faulty\":1,\"faultMask\":\"02\","
+      "\"lost\":1,\"busDead\":1,\"wear\":false}",
+      h));
+  TEST_ASSERT_EQUAL(1, h.lost);
+  TEST_ASSERT_TRUE(h.busDead);
+}
+
+static void test_parse_ping_health_pre_497_reply_reads_no_loss() {
+  ClusterMemberHealth h;
+  TEST_ASSERT_TRUE(clusterParsePingHealth(
+      "{\"width\":5,\"detected\":5,\"faulty\":0,\"faultMask\":\"00\","
+      "\"wear\":false}",
+      h));
+  TEST_ASSERT_EQUAL(0, h.lost);
+  TEST_ASSERT_FALSE(h.busDead);
 }
 
 static void test_parse_ping_health_old_firmware_reply_is_invalid() {
@@ -179,6 +214,8 @@ static void test_status_json_carries_member_health() {
   TEST_ASSERT_TRUE(out.indexOf("\"enabled\":true") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"faultMask\":\"0000\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"faulty\":0") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"lost\":0") >= 0);          // #497
+  TEST_ASSERT_TRUE(out.indexOf("\"busDead\":false") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"detected\":16") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"wear\":false") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"rollout\":{\"phase\":\"idle\"") >= 0);
@@ -587,6 +624,9 @@ int main(int, char**) {
   RUN_TEST(test_ping_health_fragment_shape);
   RUN_TEST(test_ping_health_fragment_wear_true);
   RUN_TEST(test_parse_ping_health_full_body);
+  RUN_TEST(test_parse_ping_health_lost_and_bus_dead);
+  RUN_TEST(test_parse_ping_health_pre_497_reply_reads_no_loss);
+  RUN_TEST(test_fault_mask_and_ping_flag_lost_unit);
   RUN_TEST(test_parse_ping_health_old_firmware_reply_is_invalid);
   RUN_TEST(test_extract_json_bool);
   RUN_TEST(test_status_json_carries_member_health);

@@ -15,6 +15,9 @@
 #include "WebEndpoints.h"
 #include "WebEndpointsInternal.h"
 
+#include "BootTrace.h"  // bootTraceJson (#504)
+#include "CrashContext.h"  // crashCtxReportJson (#504)
+
 #include <ESPAsyncWebServer.h>
 #include <WiFi.h>
 
@@ -74,7 +77,11 @@ String lastMessageStamp;
 SemaphoreHandle_t webStateMutex = nullptr;
 
 const char* webResetReasonString() {
-  switch (esp_reset_reason()) {
+  return webResetReasonName((int)esp_reset_reason());
+}
+
+const char* webResetReasonName(int reason) {
+  switch ((esp_reset_reason_t)reason) {
     case ESP_RST_POWERON:   return "Power on";
     case ESP_RST_EXT:       return "External reset";
     case ESP_RST_SW:        return "Software reset";
@@ -167,6 +174,8 @@ String buildCurrentSettingsJson() {
   f.rescueSlotWarn = rescue.warn;
   f.lastResetReason = webResetReasonString();
   f.lastRebootCause = bootRebootCause;  // #432
+  f.bootTrace = bootTraceJson();         // #504
+  f.crashContext = crashCtxReportJson(); // #504
   ClusterFollowerView cluster = clusterFollowerViewGet();
   f.clusterState = clusterFollowerPhaseName(cluster.phase);
   f.clusterLeaderName = cluster.leaderName;

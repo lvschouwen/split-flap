@@ -62,6 +62,29 @@ static void test_update_blocked_member_is_degraded() {
   TEST_ASSERT_TRUE(clusterDegraded(st));
 }
 
+static void test_member_with_lost_units_is_degraded() {
+  // #497: a joined, pinging row whose units went silent is not healthy.
+  ClusterLeaderStatus st = makeHealthy();
+  st.members[1].healthValid = true;
+  st.members[1].lost = 1;
+  TEST_ASSERT_TRUE(clusterDegraded(st));
+}
+
+static void test_member_with_dead_bus_is_degraded() {
+  ClusterLeaderStatus st = makeHealthy();
+  st.members[1].healthValid = true;
+  st.members[1].busDead = true;
+  TEST_ASSERT_TRUE(clusterDegraded(st));
+}
+
+static void test_sticky_faulty_alone_is_not_degraded() {
+  // faulty folds sticky lifetime counters; only loss/bus death degrade.
+  ClusterLeaderStatus st = makeHealthy();
+  st.members[1].healthValid = true;
+  st.members[1].faulty = 3;
+  TEST_ASSERT_FALSE(clusterDegraded(st));
+}
+
 static void test_image_verify_failure_is_degraded() {
   ClusterLeaderStatus st = makeHealthy();
   st.rolloutImageFailed = true;
@@ -161,7 +184,8 @@ static void test_attrs_json_carries_member_health_when_valid() {
   st.members[1].wear = true;
   String json = buildClusterAttrsJson(st);
   TEST_ASSERT_NOT_NULL(strstr(json.c_str(),
-                              "\"faulty\":2,\"detected\":15,\"wear\":true"));
+                              "\"faulty\":2,\"detected\":15,\"lost\":0,"
+                              "\"busDead\":false,\"wear\":true"));
   // Member 0 never reported — no health keys inside its object.
   const char* m0 = strstr(json.c_str(), "\"host\":\"\"");
   TEST_ASSERT_NOT_NULL(m0);
@@ -179,6 +203,9 @@ int main(int, char**) {
   RUN_TEST(test_unjoined_member_is_degraded);
   RUN_TEST(test_degraded_member_is_degraded);
   RUN_TEST(test_update_blocked_member_is_degraded);
+  RUN_TEST(test_member_with_lost_units_is_degraded);
+  RUN_TEST(test_member_with_dead_bus_is_degraded);
+  RUN_TEST(test_sticky_faulty_alone_is_not_degraded);
   RUN_TEST(test_image_verify_failure_is_degraded);
   RUN_TEST(test_updating_alone_is_not_degraded);
   RUN_TEST(test_attrs_json_shape);

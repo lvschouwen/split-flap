@@ -53,6 +53,8 @@ struct ClusterLeaderMemberStatus {
   int faulty = 0;
   int detected = 0;
   String faultMask;  // hex bitmap, bit i = unit at position i faulty
+  int lost = 0;          // #497: units that stopped answering
+  bool busDead = false;  // #497: row I2C bus dead
   bool wear = false;
 };
 

@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "UnitHealth.h"
+#include "UnitRescuePolicy.h"  // UnitRescueProbe (#498)
 #include "UnitProtocolHelpers.h"
 
 // Wire init on the unit bus pins. SDA=8 / SCL=9 (Arduino-ESP32 S3 defaults),
@@ -38,6 +39,12 @@ void unitBusPollHealth(UnitFacts* facts, int maxUnits);
 // CMD_GET_STATUS read succeeded — the scheduled-heartbeat liveness signal
 // (#310). A bootloader/silent slot returns false without bus traffic.
 bool unitBusPollHealthOne(UnitFacts* facts, int i);
+
+// Motion admission (#505, MotionBudget.h). displayTask pushes the
+// sag-adaptive cap and registers its radio-quiet wait; frames, homes and jogs
+// then never exceed the cap and never start while the radio is busy.
+void unitBusSetMotionCap(int cap);
+void unitBusSetMotionGate(void (*gate)());
 
 // Drives one frame onto the flaps: waits for the display to stop, sends
 // letters[0..width-1] to every sketch-mode unit, waits again, then verifies
@@ -76,10 +83,14 @@ bool unitBusReadSelfTest(int i2cAddress, UnitSelfTestReading& out);
 // read cross-task (aligned 32-bit). Idle rotation polls are not counted.
 uint32_t unitBusTxCount();
 uint32_t unitBusErrCount();
+// Runtime rescue probe for a lost unit (#498): ACK check, then twiboot
+// chipinfo; a unit found in twiboot is told to start its application.
+// Only call outside the twiboot risk window (the chipinfo write pins twiboot).
+UnitRescueProbe unitBusRescueProbe(int i2cAddress);
+
 int unitBusRebootToBootloader(int i2cAddress);          // twiboot @DIP, ~1 s
 int unitBusSetAddress(int i2cAddress, uint8_t newAddress);  // burn + reboot
 int unitBusClearAddress(int i2cAddress);                    // EEPROM → DIP
-int unitBusBroadcastHome();  // general-call CMD_HOME, one transaction (v1 #47)
 
 // --- unit reflash over twiboot (#205) — straight v1 ports ---------------------
 
@@ -116,7 +127,10 @@ void unitBusWaitBatchIdle(const uint8_t* addrs, int count,
 // atomic flag, not bus state. The /stop handler sets it BEFORE enqueuing the
 // Stop command and rolls it back if the enqueue 503s (set-after-enqueue races
 // an idle displayTask clearing it first, stranding the flag ON); every wait
-// loop polls it and returns early; displayTask clears it when Stop executes.
+// loop polls it and returns early, which cuts the command AHEAD of Stop
+// short; displayTask clears it when Stop executes. Stop's own park is a
+// budgeted blank frame (#505) and is deliberately not exempt: it waits for
+// in-flight rotation to end (stuck-unit cap) and for the radio-quiet gate.
 // The bus itself stays displayTask-exclusive. The reflash orchestration polls
 // it between units and batches via unitBusAbortRequested() (#205).
 void unitBusRequestAbort();

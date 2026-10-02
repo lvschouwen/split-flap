@@ -35,9 +35,8 @@ inline void followerAppendJsonString(String& out, const String& value) {
   out += '"';
 }
 
-// Hex fault bitmap for this row: bit i = unit at position i is faulty (same
-// statusValid gate as computeFaultyUnitCount — unread units are unknown,
-// not faulty). Fixed width ceil(width/4) nibbles so the string length
+// Hex fault bitmap for this row: bit i = unit at position i is faulty or
+// lost (same predicate as computeFaultyUnitCount). Fixed width ceil(width/4) nibbles so the string length
 // itself carries the row width.
 inline size_t followerFaultMaskHex(const UnitFacts* units, int width,
                                    char* buf, size_t cap) {
@@ -48,9 +47,7 @@ inline size_t followerFaultMaskHex(const UnitFacts* units, int width,
   }
   uint32_t mask = 0;
   for (int i = 0; i < width; i++) {
-    if (units[i].statusValid && unitStatusIsFaulty(units[i].status)) {
-      mask |= (1UL << i);
-    }
+    if (unitIsFaultyOrLost(units[i])) mask |= (1UL << i);
   }
   int nibbles = (width + 3) / 4;
   if (cap == 0) return 0;
@@ -68,6 +65,8 @@ struct FollowerHealthFacts {
   int detected = 0;
   int faulty = 0;
   const char* faultMask = "";
+  int lost = 0;          // #497: stale sketch units
+  bool busDead = false;  // #497: row-wide I2C bus death (#488)
   bool wear = false;
 };
 
@@ -99,7 +98,12 @@ inline void followerAppendHealthKeys(String& out,
   out += h.faulty;
   out += ",\"faultMask\":\"";
   out += h.faultMask;
-  out += "\",\"wear\":";
+  out += "\",\"lost\":";
+  out += h.lost;
+  // Additive, int so the leader's bare-number extractor reads it; absent =
+  // bus alive, so older leaders see an unchanged reply.
+  if (h.busDead) out += ",\"busDead\":1";
+  out += ",\"wear\":";
   out += h.wear ? "true" : "false";
 }
 
@@ -244,9 +248,10 @@ inline String followerSettingsJson(const String& name, const char* rev,
                                    int width, const char* phaseName,
                                    const String& leaderName,
                                    const String& leaderHost, int row,
-                                   const FollowerVitals& v) {
+                                   const FollowerVitals& v,
+                                   int txPowerDbm10) {
   String out;
-  out.reserve(288);
+  out.reserve(304);
   out += "{\"deviceName\":";
   followerAppendJsonString(out, name);
   out += ",\"effectiveDeviceName\":";
@@ -264,6 +269,8 @@ inline String followerSettingsJson(const String& name, const char* rev,
   out += ",\"clusterRow\":";
   out += row;
   followerAppendPlatVitals(out, v);
+  out += ",\"txPower\":";  // #508: WiFi TX power cap x10 (dBm)
+  out += txPowerDbm10;
   out += '}';
   return out;
 }

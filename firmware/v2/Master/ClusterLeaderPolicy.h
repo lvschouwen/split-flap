@@ -57,6 +57,8 @@ struct ClusterMemberHealth {
   int faulty = 0;
   int detected = 0;
   String faultMask;  // hex bitmap, bit i = unit at position i faulty
+  int lost = 0;          // #497: units that stopped answering (0 = pre-#497)
+  bool busDead = false;  // #497: member's I2C bus is dead (ESP-01 rows)
   bool wear = false;
 };
 
@@ -265,6 +267,8 @@ inline bool clusterParsePingHealth(const String& body,
   out.faulty = clusterExtractJsonInt(body, "faulty", 0);
   out.detected = clusterExtractJsonInt(body, "detected", 0);
   out.faultMask = mask;
+  out.lost = clusterExtractJsonInt(body, "lost", 0);
+  out.busDead = clusterExtractJsonInt(body, "busDead", 0) != 0;
   out.wear = clusterExtractJsonBool(body, "wear", false);
   return true;
 }

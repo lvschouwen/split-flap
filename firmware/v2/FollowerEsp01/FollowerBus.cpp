@@ -12,12 +12,15 @@
 #include "FollowerBusRecovery.h"  // pure row-wide bus-death policy (#488)
 #include "DisplayWidth.h"
 #include "FollowerConfig.h"
+#include "FollowerWifi.h"  // followerRadioBusy (#505)
 #include "HeartbeatPolicy.h"  // pure heartbeat miss/schedule logic (#310)
+#include "MotionBudget.h"  // motion admission (#505)
 #include "RenderStagger.h"  // sub-frame inrush stagger (#324)
 #include "SplitFlapProtocol.h"
 #include "TwibootProtocol.h"
 #include "UnitAssets.h"  // UNIT_FIRMWARE_BIN (build_assets.py)
 #include "UnitProtocolHelpers.h"
+#include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
 
 UnitFacts unitFacts[UNITS_AMOUNT];
 int displayWidth = UNITS_AMOUNT;
@@ -451,6 +454,11 @@ void busPollHealth() {
 #endif
 }
 
+#if SERIAL_ENABLE == false
+static void rescueTick(int i);  // #498, defined after the twiboot helpers
+static void motionBudgetFold(int i);  // #505, defined with the render path
+#endif
+
 void followerHeartbeatTick() {
 #if SERIAL_ENABLE == false
   static uint32_t lastMs = 0;
@@ -471,6 +479,8 @@ void followerHeartbeatTick() {
   bool ok = busPollHealthOne(i);
   heartbeatApply(unitFacts[i], ok, millis(), HEARTBEAT_MISS_THRESHOLD);
   if (drivable) observeLiveness(i, ok);
+  motionBudgetFold(i);  // #505
+  rescueTick(i);
 #endif
 }
 
@@ -508,6 +518,72 @@ static bool isRowMoving() {
   return false;
 }
 
+bool busRowMoving() {
+#if SERIAL_ENABLE == false
+  // A unit in its twiboot window (v1 #88) or a streaming reflash must not be
+  // read: report "moving" so the caller waits instead.
+  if ((int32_t)(millis() - busProbeInhibitedUntilMs()) < 0) return true;
+  if (reflashInProgress(reflashProgress)) return true;
+  return isRowMoving();
+#else
+  return false;
+#endif
+}
+
+// --- motion admission (#505, MotionBudget.h) ---------------------------------
+static MotionRadioGate radioGate;
+static MotionBudgetState motionBudget;
+
+// No motion while the radio is in a high-draw phase, bounded.
+static void admitMotion() {
+  uint32_t holdStart = millis();
+  bool logged = false;
+  for (;;) {
+    motionRadioObserve(radioGate, followerRadioBusy(), millis());
+    if (motionRadioQuiet(radioGate, millis())) return;
+    if (motionRadioHoldExpired(holdStart, millis())) {
+      SerialPrintln(F("motion: radio still busy after the hold cap — moving anyway"));
+      return;
+    }
+    if (!logged) {
+      SerialPrintln(F("motion: holding unit moves while the radio is busy"));
+      logged = true;
+    }
+    delay(100);
+  }
+}
+
+// Blocks until fewer than the budget's cap of tracked units still move.
+static void waitForMotionSlot(MotionTracker& movers) {
+  while (motionTrackerFull(movers, motionBudget.cap)) {
+    for (int k = movers.count - 1; k >= 0; k--) {
+      motionTrackerObserve(movers, k, checkIfMoving(movers.unit[k]), millis());
+    }
+    if (motionTrackerFull(movers, motionBudget.cap)) delay(50);
+  }
+}
+
+// Folds unit i's since-boot supply minimum into the cap (heartbeat cadence).
+static void motionBudgetFold(int i) {
+  uint32_t now = millis();
+  motionRadioObserve(radioGate, followerRadioBusy(), now);
+  const UnitFacts& u = unitFacts[i];
+  if (u.vitalsValid &&
+      motionBudgetObserveVmin(motionBudget, i, u.vitals.vccMin_mV, now)) {
+    SerialPrint(F("motion: rail sag "));
+    SerialPrint(u.vitals.vccMin_mV);
+    SerialPrint(F(" mV at unit "));
+    SerialPrint(toI2cAddress(i));
+    SerialPrint(F(" — at most "));
+    SerialPrint(motionBudget.cap);
+    SerialPrintln(F(" unit(s) move at once"));
+  } else if (motionBudgetTick(motionBudget, now)) {
+    SerialPrint(F("motion: rail quiet — at most "));
+    SerialPrint(motionBudget.cap);
+    SerialPrintln(F(" unit(s) move at once"));
+  }
+}
+
 // v1 waitForDisplayToStop, minus the /stop abort (this firmware has no
 // local producers and serves no /stop — the stuck timeout is the bound).
 static void waitForRowToStop() {
@@ -539,7 +615,9 @@ void busShowSegment(const String& segment, int webSpeed) {
   lastFrameValid = true;
 
   waitForRowToStop();
+  admitMotion();
 
+  MotionTracker movers;
   int commanded[UNITS_AMOUNT];
   for (int i = 0; i < UNITS_AMOUNT; i++) commanded[i] = -1;
 
@@ -548,12 +626,16 @@ void busShowSegment(const String& segment, int webSpeed) {
     if (!unitDrivable(unitFacts[i])) continue;  // #405
     int letter = translateLetterToInt(frame[i]);
     if (letter < 0) continue;  // char not on the drum: leave the unit be
+    // #505: at most the budget's cap moving at once — the steady draw of
+    // every energised stepper, not just the start spike, sags the rail.
+    waitForMotionSlot(movers);
     // #324: spread the flap inrush — pause before opening each new group so a
     // full row's steppers don't spin up at once and brown out the rail.
     if (renderStaggerShouldSettle(commandedCount, RENDER_STAGGER_BATCH)) {
       delay(RENDER_STAGGER_SETTLE_MS);
     }
     writeToUnit(i, letter, speed);
+    motionTrackerAdd(movers, i, millis());
     commanded[i] = letter;
     commandedCount++;
   }
@@ -562,12 +644,15 @@ void busShowSegment(const String& segment, int webSpeed) {
 
   // Closed-loop verification (v1 #106): read back, re-send once on mismatch.
   int resent = 0;
+  MotionTracker resendMovers;
   for (int i = 0; i < UNITS_AMOUNT; i++) {
     if (commanded[i] < 0 || !unitDrivable(unitFacts[i])) continue;  // #405
     int shown;
     if (!readUnitDisplayedLetter(toI2cAddress(i), shown)) continue;
     if (shown == commanded[i]) continue;
+    waitForMotionSlot(resendMovers);  // resends are moves too (#505)
     writeToUnit(i, commanded[i], speed);
+    motionTrackerAdd(resendMovers, i, millis());
     resent++;
   }
   if (resent > 0) waitForRowToStop();
@@ -599,6 +684,7 @@ int busWriteOffset(uint8_t i2cAddress, int16_t value) {
 }
 
 int busJog(uint8_t i2cAddress, int steps) {
+  admitMotion();
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_JOG);
   Wire.write(maintEncodeJogByte(steps));
@@ -606,6 +692,7 @@ int busJog(uint8_t i2cAddress, int steps) {
 }
 
 int busHome(uint8_t i2cAddress) {
+  admitMotion();
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_HOME);
   return Wire.endTransmission();
@@ -657,6 +744,7 @@ static int rebootUnit(uint8_t i2cAddress) {
 }
 
 int busStartSelfTest(uint8_t i2cAddress) {
+  admitMotion();
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_START_SELF_TEST);
   return Wire.endTransmission();
@@ -688,6 +776,54 @@ static int twibootExit() {
   Wire.write((uint8_t)TWIBOOT_BOOTTYPE_APPLICATION);
   return Wire.endTransmission();
 }
+
+#if SERIAL_ENABLE == false
+// Runtime rescue of lost units (#498, UnitRescuePolicy.h). Reached only from
+// the heartbeat tick: never inside the probe-inhibit window, never during a
+// reflash. A dead bus is the row-wide recovery's job, not a per-unit probe's.
+static UnitRescueState rescueStates[UNITS_AMOUNT];
+
+static void rescueTick(int i) {
+  UnitRescueState& rs = rescueStates[i];
+  unitFacts[i].rescueExits = rs.exits;  // a probe rebuilds unitFacts
+  if (unitRescueObserve(rs, unitFacts[i])) {
+    SerialPrint(F("unit "));
+    SerialPrint(toI2cAddress(i));
+    SerialPrintln(F(": answering again — re-showing the last frame"));
+    reshowPending = lastFrameValid;  // run by the next recovery tick
+    return;
+  }
+  if (busRecovery.dead) return;
+  if (!unitRescueDue(unitFacts[i], rs, millis())) return;
+  uint8_t addr = (uint8_t)toI2cAddress(i);
+  UnitRescueProbe probe = UnitRescueProbe::NoAck;
+  Wire.beginTransmission(addr);
+  if (Wire.endTransmission() == 0) {
+    probe = UnitRescueProbe::SketchSilent;
+    if (isUnitInBootloader(addr)) {
+      twibootAddr = addr;
+      twibootExit();
+      probe = UnitRescueProbe::Bootloader;
+    }
+  }
+  unitRescueNoteAttempt(rs, millis(), probe);
+  unitFacts[i].rescueExits = rs.exits;
+  SerialPrint(F("unit "));
+  SerialPrint(addr);
+  if (probe == UnitRescueProbe::Bootloader) {
+    SerialPrint(F(": lost — found in twiboot, started its app (rescue #"));
+    SerialPrint(rs.exits);
+    busArmProbeInhibit(millis() + 3000);  // let the sketch boot
+  } else if (probe == UnitRescueProbe::NoAck) {
+    SerialPrint(F(": lost — no ACK (attempt "));
+    SerialPrint(rs.attempts);
+  } else {
+    SerialPrint(F(": lost — ACKs but status reads fail (attempt "));
+    SerialPrint(rs.attempts);
+  }
+  SerialPrintln(F(")"));
+}
+#endif
 
 static bool twibootVerifyChip() {
   Wire.beginTransmission(twibootAddr);

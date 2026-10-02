@@ -12,9 +12,11 @@
 #include <atomic>
 
 #include "BuildVersion.h"  // BUNDLED_UNIT_REV (#205)
+#include "CrashContext.h"  // per-transaction crash breadcrumb (#504)
 #include "DriftLogPolicy.h"  // drift-event operator-log decision (#322)
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
+#include "MotionBudget.h"  // motion admission (#505)
 #include "RenderStagger.h"  // sub-frame inrush stagger (#324)
 #include "SplitFlapProtocol.h"
 #include "TaskWatchdog.h"  // wdtFeed() (#314)
@@ -71,6 +73,7 @@ void unitBusInit() {
 // the bus down and rebuilding it destroys the stale driver state, so every
 // failed read must pass through here before the next probe touches the bus.
 static void recoverBusAfterFailedRead() {
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_RECOVER);
   Wire.end();
   unitBusInit();
 }
@@ -134,10 +137,12 @@ static int countedTransmission() {
 // so a short reply means "unsupported" — drain the RX buffer and fail.
 // `buf` holds all `n` bytes only on success.
 static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf, uint8_t n) {
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_WRITE, (uint8_t)i2cAddress);
   Wire.beginTransmission(i2cAddress);
   Wire.write(opcode);
   if (countedTransmission() != 0) return false;
   delay(UNIT_RESPONSE_SETTLE_MS);
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_READ, (uint8_t)i2cAddress);
   uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
   if (got != n) {
     while (Wire.available()) Wire.read();
@@ -346,6 +351,7 @@ static bool readUnitDisplayedLetter(int i2cAddress, int& out) {
 // Safe to call against a sketch-running unit: the patched Unit.ino ignores
 // writes of length != 2, so probing doesn't rotate the drum as a side effect.
 static bool isUnitInBootloader(int i2cAddress) {
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_PROBE, (uint8_t)i2cAddress);
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
   Wire.write((uint8_t)TWIBOOT_MEMTYPE_CHIPINFO);
@@ -369,6 +375,8 @@ static bool isUnitInBootloader(int i2cAddress) {
 // Wire.endTransmission() status (0 = success) so callers can tally
 // bus-level failures (v1 #121).
 static int writeToUnit(int unitIndex, uint8_t letter, uint8_t unitSpeed) {
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_WRITE,
+               (uint8_t)toI2cAddress(unitIndex));
   Wire.beginTransmission(toI2cAddress(unitIndex));
   Wire.write(letter);
   Wire.write(unitSpeed);
@@ -379,6 +387,7 @@ static int writeToUnit(int unitIndex, uint8_t letter, uint8_t unitSpeed) {
 // from isDisplayMoving() — must be quiet on /log when nothing is wrong.
 static int checkIfMoving(int unitIndex) {
   int i2cAddress = toI2cAddress(unitIndex);
+  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_READ, (uint8_t)i2cAddress);
   Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)1);
   int active = Wire.available() ? Wire.read() : -1;
   if (active == -1) {
@@ -402,6 +411,33 @@ static bool isDisplayMoving(const UnitFacts* facts, int width) {
     if (checkIfMoving(unitIndex) == 1) return true;
   }
   return false;
+}
+
+// --- motion admission (#505, MotionBudget.h) ---------------------------------
+// The cap is owned by displayTask (sag-adaptive) and pushed in; the gate is
+// displayTask's radio-quiet wait, called before any op that starts motion.
+static int motionCap = MOTION_BUDGET_MAX;
+static void (*motionGate)() = nullptr;
+
+void unitBusSetMotionCap(int cap) { motionCap = cap; }
+void unitBusSetMotionGate(void (*gate)()) { motionGate = gate; }
+
+static void admitMotion() {
+  if (motionGate) motionGate();
+}
+
+// Blocks until fewer than motionCap tracked units are still moving. Returns
+// false when /stop aborted the wait.
+static bool waitForMotionSlot(MotionTracker& movers) {
+  while (motionTrackerFull(movers, motionCap)) {
+    wdtFeed();
+    if (abortRequested.load()) return false;
+    for (int k = movers.count - 1; k >= 0; k--) {
+      motionTrackerObserve(movers, k, checkIfMoving(movers.unit[k]), millis());
+    }
+    if (motionTrackerFull(movers, motionCap)) delay(50);
+  }
+  return true;
 }
 
 // Waits until no unit reports rotation, with the SHOW_STUCK_TIMEOUT_MS
@@ -436,6 +472,7 @@ static void waitForDisplayToStop(const UnitFacts* facts, int width) {
 static void verifyAndResendLetters(const UnitFacts* facts, int width,
                                    const uint8_t* letters, uint8_t unitSpeed) {
   int resent = 0;
+  MotionTracker movers;  // resends are moves too (#505)
   for (int unitIndex = 0; unitIndex < width; unitIndex++) {
     if (!unitDrivable(facts[unitIndex])) continue;  // #405
     int shown;
@@ -443,7 +480,9 @@ static void verifyAndResendLetters(const UnitFacts* facts, int width,
     if (shown == letters[unitIndex]) continue;
     SerialPrintf("Unit %d shows the wrong letter index — re-sending\n",
                  unitIndex);
+    if (!waitForMotionSlot(movers)) break;
     writeToUnit(unitIndex, letters[unitIndex], unitSpeed);
+    motionTrackerAdd(movers, unitIndex, millis());
     resent++;
   }
   if (resent > 0) {
@@ -489,6 +528,7 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
   for (int unitIndex = 0; unitIndex < maxUnits; unitIndex++) {
     facts[unitIndex] = UnitFacts{};  // silent, fw unknown, status invalid
     int i2cAddress = toI2cAddress(unitIndex);
+    crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_PROBE, (uint8_t)i2cAddress);
     Wire.beginTransmission(i2cAddress);
     if (Wire.endTransmission() != 0) continue;
 
@@ -635,9 +675,12 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
                      const uint8_t* letters, int unitSpeed) {
   // Entry wait: never interleave a new frame into a still-rotating display.
   waitForDisplayToStop(facts, width);
+  admitMotion();
 
   int writeErrors = 0;
   int commanded = 0;
+  bool aborted = false;
+  MotionTracker movers;
   for (int unitIndex = 0; unitIndex < width; unitIndex++) {
     // Skip slots the probe did not find a sketch-running unit on: writing
     // to absent addresses stalls isDisplayMoving() and a dead unit
@@ -645,6 +688,12 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
     // skips a unit whose protocol version we do not speak — a render is the
     // loudest thing we could get wrong against an unknown contract.
     if (!unitDrivable(facts[unitIndex])) continue;
+    // #505: at most motionCap units moving at once — the steady draw of every
+    // energised stepper, not just the start spike, is what sags the rail.
+    if (!waitForMotionSlot(movers)) {
+      aborted = true;
+      break;
+    }
     // #324: spread the flap inrush — pause before opening each new group so a
     // full row's steppers don't spin up at once and brown out the rail.
     if (renderStaggerShouldSettle(commanded, RENDER_STAGGER_BATCH)) {
@@ -654,11 +703,13 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
       writeErrors++;
       noteUnitError(unitIndex);  // #367: attribute the render write to its unit
     }
+    motionTrackerAdd(movers, unitIndex, millis());
     commanded++;
   }
 
   waitForDisplayToStop(facts, width);
-  verifyAndResendLetters(facts, width, letters, (uint8_t)unitSpeed);
+  // An aborted frame is abandoned, not repaired: the queued Stop parks it.
+  if (!aborted) verifyAndResendLetters(facts, width, letters, (uint8_t)unitSpeed);
   return writeErrors;
 }
 
@@ -691,6 +742,7 @@ int unitBusWriteOffset(int i2cAddress, int16_t value) {
 }
 
 int unitBusJog(int i2cAddress, int steps) {
+  admitMotion();
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_JOG);
   Wire.write(maintEncodeJogByte(steps));
@@ -698,6 +750,7 @@ int unitBusJog(int i2cAddress, int steps) {
 }
 
 int unitBusHome(int i2cAddress) {
+  admitMotion();
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_HOME);
   return countedTransmission();
@@ -736,6 +789,7 @@ int unitBusSetGates(int i2cAddress, uint8_t gates) {
 }
 
 int unitBusStartSelfTest(int i2cAddress) {
+  admitMotion();
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_START_SELF_TEST);
   return countedTransmission();
@@ -780,12 +834,6 @@ int unitBusClearAddress(int i2cAddress) {
   return countedTransmission();
 }
 
-int unitBusBroadcastHome() {
-  Wire.beginTransmission((uint8_t)SFP_I2C_GENERAL_CALL_ADDRESS);
-  Wire.write((uint8_t)SFP_CMD_HOME);
-  return countedTransmission();
-}
-
 // --- unit reflash over twiboot (#205) — v1 ServiceFirmwareFunctions.ino port --
 // Our DIP-patched twiboot listens on the unit's own address (not stock 0x29),
 // so every twiboot command targets the unit's address directly. Write NACKs
@@ -804,6 +852,14 @@ static int twibootExit(int addr) {
   Wire.write((uint8_t)TWIBOOT_CMD_SWITCH_APPLICATION);
   Wire.write((uint8_t)TWIBOOT_BOOTTYPE_APPLICATION);
   return Wire.endTransmission();
+}
+
+UnitRescueProbe unitBusRescueProbe(int i2cAddress) {
+  Wire.beginTransmission((uint8_t)i2cAddress);
+  if (Wire.endTransmission() != 0) return UnitRescueProbe::NoAck;
+  if (!isUnitInBootloader(i2cAddress)) return UnitRescueProbe::SketchSilent;
+  twibootExit(i2cAddress);
+  return UnitRescueProbe::Bootloader;
 }
 
 // Spin-poll twiboot with CMD_WAIT until it ACKs again (its async flash
