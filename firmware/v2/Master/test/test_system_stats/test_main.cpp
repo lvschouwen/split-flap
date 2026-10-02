@@ -102,6 +102,7 @@ static void test_json_now_and_history_shape() {
   now.uptimeS = 3600; now.minFreeHeap = 150000;
   now.i2cTx = 12345; now.i2cErr = 2; now.mqttDrops = 1;
   now.ntpAgeS = 42;
+  now.txPowerDbm10 = 85;  // #507
   strcpy(now.resetReason, "POWERON");
   // #415: stack low-water marks (bytes still free at the worst point).
   now.hwmDisplay = 9000; now.hwmClock = 1200; now.hwmNet = 2100;
@@ -121,6 +122,7 @@ static void test_json_now_and_history_shape() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"i2cErr\":2"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"mqttDrops\":1"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"ntpAge\":42"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"txPower\":85"));       // x10
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"reset\":\"POWERON\""));
   TEST_ASSERT_NOT_NULL(strstr(
       buf, "\"hwm\":{\"display\":9000,\"clock\":1200,\"net\":2100,"

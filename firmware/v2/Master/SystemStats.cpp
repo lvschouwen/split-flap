@@ -11,6 +11,7 @@
 #include "Tasks.h"  // tasksStackHwm (#415)
 #include "UnitBus.h"
 #include "WebEndpoints.h"  // webResetReasonString()
+#include "WifiService.h"   // wifiTxPowerDbm10 (#507)
 
 // CPU load per core from FreeRTOS run-time stats (sdkconfig has
 // CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y with the esp_timer clock):
@@ -71,6 +72,7 @@ size_t systemStatsJson(char* buf, size_t cap) {
   now.i2cErr = unitBusErrCount();
   now.mqttDrops = mqttDropCount();
   now.ntpAgeS = clockNtpAgeS();
+  now.txPowerDbm10 = (int16_t)wifiTxPowerDbm10();
   snprintf(now.resetReason, sizeof(now.resetReason), "%s",
            webResetReasonString());
   TasksStackHwm hwm = tasksStackHwm();  // #415
@@ -91,6 +93,7 @@ size_t systemStatsNowJson(char* buf, size_t cap) {
   now.i2cErr = unitBusErrCount();
   now.mqttDrops = mqttDropCount();
   now.ntpAgeS = clockNtpAgeS();
+  now.txPowerDbm10 = (int16_t)wifiTxPowerDbm10();
   snprintf(now.resetReason, sizeof(now.resetReason), "%s",
            webResetReasonString());
   TasksStackHwm hwm = tasksStackHwm();  // #415

@@ -81,6 +81,7 @@ struct SystemNow {
   uint32_t i2cErr = 0;       // failed transactions since boot
   uint32_t mqttDrops = 0;    // broker disconnects since boot
   int32_t  ntpAgeS = -1;     // seconds since last SNTP sync; -1 = never
+  int16_t  txPowerDbm10 = 0; // #507: WiFi TX power cap x10 (dBm)
   char resetReason[24] = {0};  // webResetReasonString()'s longest + NUL
   // #415: per-task stack low-water marks, BYTES still free at the worst
   // point since boot (portSTACK_TYPE is uint8_t on Xtensa) — the trim-down
@@ -110,12 +111,13 @@ inline size_t buildSystemNowJson(char* buf, size_t cap,
                                  const SystemNow& now) {
   size_t o = 0;
   SYSTEM_STATS_APPEND(
-      "{\"rssi\":%d,\"heap\":%lu,\"maxAlloc\":%lu,\"psram\":%lu,"
+      "{\"rssi\":%d,\"txPower\":%d,\"heap\":%lu,\"maxAlloc\":%lu,\"psram\":%lu,"
       "\"cpu0\":%u,\"cpu1\":%u,\"temp\":%d,\"uptime\":%lu,\"minHeap\":%lu,"
       "\"i2cTx\":%lu,\"i2cErr\":%lu,\"mqttDrops\":%lu,\"ntpAge\":%ld,"
       "\"reset\":\"%s\",\"hwm\":{\"display\":%lu,\"clock\":%lu,\"net\":%lu,"
       "\"mqtt\":%lu,\"cluster\":%lu}}",
-      (int)newest.rssi, (unsigned long)newest.freeHeap,
+      (int)newest.rssi, (int)now.txPowerDbm10,
+      (unsigned long)newest.freeHeap,
       (unsigned long)newest.maxAlloc, (unsigned long)newest.psramFree,
       (unsigned)newest.cpu0, (unsigned)newest.cpu1, (int)newest.tempC10,
       (unsigned long)now.uptimeS, (unsigned long)now.minFreeHeap,
