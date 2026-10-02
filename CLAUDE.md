@@ -43,13 +43,14 @@ python -m pytest tests/      # python-side tests (v2 Master, Rescue, FollowerEsp
 
 The firmware runs on bench hardware reached by OTA over the user's VPN; there is nothing to stop before editing. Per change:
 
-1. **Issue first** with `effort:`/`gain:` labels; no private data (public repo). Interactive sessions may commit direct to `master`.
-2. **One branch + PR per session arc**, not per issue — batch related issues onto it. A stage-commit PR is never squash-merged (bundle drift is history).
-3. **Build + native tests green** before commit: `pio run` in each touched project dir, `pio test -e native`, `python -m pytest tests/`. If Unit fw changed: rebuild Unit clean → `make_manifest.py stage` → rebuild Master + FollowerEsp01 (drift gate) → separate artifact commit (never amend the bundle in).
-4. **Risk-tiered review** — cpp-reviewer over the combined branch diff; always for OTA / boot / flash / concurrency / credentials / cluster-wire, batched otherwise.
-5. **Bench-verify = the E2E tier** — stage the bin to `~/bench-bins/`, `ota-flash.sh` to the board, confirm on hardware. Host tests cover pure logic only. OTA the leader first (an older-build leader downgrades followers via the rollout).
-6. **Commit + close issue** — conventional message; the closing keyword `Closes #N` goes in the PR body, or the commit body when going direct to master. A `fix(#N):` scope closes nothing. Push.
-7. **Update memory.**
+1. **Issue first** with `effort:`/`gain:` labels; no private data (public repo).
+2. **Commit direct to `master`.** No branch, no PR, no waiting on CI: CI runs on the push as a safety net, and a red run is fixed forward. A branch + PR is the exception — work that must not land yet (unfinished across sessions, not bench-proven), or a background session that cannot push `master`. A PR carrying a stage commit is never squash-merged (bundle drift is history).
+3. **Build + tests for the trees you touched** before commit: `pio run`, `pio test -e native`, `python -m pytest tests/` in each touched project dir. An edit under `firmware/v2/shared` counts as touching Master, FollowerEsp01 and Unit.
+4. **Unit bundle:** any commit touching `firmware/v2/Unit` or `firmware/v2/shared` moves the unit source head, and the drift gate then fails until the bundle is restaged — even when the Nano binary is unchanged. Rebuild Unit clean → `make_manifest.py stage` → rebuild Master + FollowerEsp01 → separate artifact commit (never amend the bundle in). If the image content hash is unchanged, record the deployed rev in `firmware/v2/Unit/equivalent-revs.txt` first, so fielded units do not read OUTDATED.
+5. **Review only where it pays** — cpp-reviewer for OTA / boot / flash / concurrency / credentials / cluster-wire / I2C bus-and-probe changes. Nothing else needs a reviewer, and there is no end-of-arc combined gate or cross-model review unless asked for.
+6. **Bench-verify = the E2E tier** — stage the bin to `~/bench-bins/`, `ota-flash.sh` to the board, confirm on hardware. Host tests cover pure logic only. OTA the leader first (an older-build leader downgrades followers via the rollout).
+7. **Commit + close issue** — conventional message with `Closes #N` in the commit body (a `fix(#N):` scope closes nothing). Push.
+8. **Update memory.**
 
 ## Release policy (CalVer `vYYYY.MM.DD`, ≤1/day)
 

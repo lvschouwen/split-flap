@@ -36,3 +36,8 @@
 # UnitEeprom.h (the header is an input to the binary; the tests beside it are
 # not). Measured, both clean builds: identical.
 3186546 9b042ebeb17f9b28950191c6e479ed960a100b274980432c6f58d030e96151ed
+
+# #508 moved the Unit source head by adding WifiTxPolicy.h to shared/ — a
+# header the Nano never compiles. Measured against the staged 8cf4e79 image,
+# clean build: identical.
+8cf4e79 57ee23ccdc6ff02785d5196174c02ef468f616d72632a835f29eea0dcc968a1d

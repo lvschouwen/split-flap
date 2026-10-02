@@ -127,7 +127,10 @@ void unitBusWaitBatchIdle(const uint8_t* addrs, int count,
 // atomic flag, not bus state. The /stop handler sets it BEFORE enqueuing the
 // Stop command and rolls it back if the enqueue 503s (set-after-enqueue races
 // an idle displayTask clearing it first, stranding the flag ON); every wait
-// loop polls it and returns early; displayTask clears it when Stop executes.
+// loop polls it and returns early, which cuts the command AHEAD of Stop
+// short; displayTask clears it when Stop executes. Stop's own park is a
+// budgeted blank frame (#505) and is deliberately not exempt: it waits for
+// in-flight rotation to end (stuck-unit cap) and for the radio-quiet gate.
 // The bus itself stays displayTask-exclusive. The reflash orchestration polls
 // it between units and batches via unitBusAbortRequested() (#205).
 void unitBusRequestAbort();
