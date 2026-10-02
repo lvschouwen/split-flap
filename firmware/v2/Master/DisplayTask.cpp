@@ -776,6 +776,7 @@ static void execSetGates(DisplaySnapshot& local, UnitFacts* busFacts,
 // spinlock; the seq ties a copy to the result slot it belongs to.
 // How long a dumped unit gets to restart into its sketch before the re-show.
 static const uint32_t BOOT_DUMP_RETURN_TIMEOUT_MS = 10000;
+static const uint32_t BOOT_DUMP_HOME_TIMEOUT_MS = 20000;  // one full revolution
 static uint8_t bootDumpBytes[BOOT_SECTION_LEN];
 static uint32_t bootDumpBytesSeq = 0;
 static portMUX_TYPE bootDumpMux = portMUX_INITIALIZER_UNLOCKED;
@@ -817,11 +818,14 @@ static void execBootDump(DisplaySnapshot& local, UnitFacts* busFacts,
         slot.outcome = BootDumpOutcome::ReadFail;
         break;
     }
-    // The unit comes back unhomed and blank. Wait for its sketch, then
-    // re-show the frame: the letter command homes it first, and units already
-    // on their letter do not move.
+    // The unit comes back unhomed. Wait for its sketch and home it — a blank
+    // target would not, the frame write skips a unit already reporting its
+    // letter — then re-show the frame for the units that carry one.
     uint8_t addr = cmd.unitAddress;
     unitBusWaitBatchIdle(&addr, 1, BOOT_DUMP_RETURN_TIMEOUT_MS);
+    if (unitBusHome(cmd.unitAddress) == 0) {
+      unitBusWaitBatchIdle(&addr, 1, BOOT_DUMP_HOME_TIMEOUT_MS);
+    }
     if (local.lastFrameValid) {
       unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
                        lastFrameUnitSpeed);
