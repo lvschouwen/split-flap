@@ -51,6 +51,11 @@ void followerHeartbeatTick();
 // bounded batches with a rail-settle between them. setup() only (blocking).
 void followerBootHome();
 
+// True while any drivable unit of the row reports moving — and, without
+// touching the bus, while the probe-inhibit is armed or a reflash streams.
+// One I2C read per unit — loop() only, and not in rescue mode (no bus there).
+bool busRowMoving();
+
 // Renders one pre-positioned segment verbatim: pad/truncate to the probed
 // width, write per-unit letter indexes, wait, verify + resend (v1 #106).
 // Blocking for the whole flap time — loop() only.

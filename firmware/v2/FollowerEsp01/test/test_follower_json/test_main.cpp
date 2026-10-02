@@ -124,7 +124,8 @@ static void test_ping_reply_carries_state_and_health_and_plat() {
 static void test_settings_json_shape() {
   String out = followerSettingsJson("split-flap-c8a746", "abc1234", 8,
                                     "clustered", "wall-leader",
-                                    "192.168.15.22", 2, makeVitals());
+                                    "192.168.15.22", 2, makeVitals(), 85);
+  TEST_ASSERT_TRUE(out.indexOf("\"txPower\":85") >= 0);  // #508, dBm x10
   TEST_ASSERT_TRUE(out.indexOf("\"deviceName\":\"split-flap-c8a746\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"effectiveDeviceName\":\"split-flap-c8a746\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"version\":\"abc1234\"") >= 0);

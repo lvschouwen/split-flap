@@ -1,11 +1,11 @@
-// Host-side unit tests for WifiTxPolicy.h (#507) — the pure TX-power ladder:
+// Host-side unit tests for shared/WifiTxPolicy.h (#507) — the pure TX-power ladder:
 // every boot starts at the lowest real level and moves one level at a time,
 // up only when the link needs it, never past the phase's ceiling.
 
 #include <ArduinoFake.h>
 #include <unity.h>
 
-#include "../../WifiTxPolicy.h"
+#include "WifiTxPolicy.h"
 
 void setUp() {}
 void tearDown() {}

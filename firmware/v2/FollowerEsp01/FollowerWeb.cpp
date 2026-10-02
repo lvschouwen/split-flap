@@ -65,8 +65,6 @@ static bool otaRejected = false;
 static int otaRejectionStatus = 0;
 static String otaRejectionReason;
 static bool otaTxPowerReduced = false;
-static constexpr float OTA_TX_POWER_DBM = 10.0f;
-static constexpr float DEFAULT_TX_POWER_DBM = 20.5f;
 
 // --- helpers ------------------------------------------------------------------------
 
@@ -245,7 +243,7 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
       bool uploadRan = (masterOtaOwnerRequest == request);
       masterOtaOwnerRequest = nullptr;
       if (otaTxPowerReduced) {
-        WiFi.setOutputPower(DEFAULT_TX_POWER_DBM);
+        followerTxOtaCap(false);
         otaTxPowerReduced = false;
       }
       if (otaRejected) {
@@ -315,7 +313,7 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         otaRejectionStatus = 0;
         otaRejectionReason = String();
 
-        WiFi.setOutputPower(OTA_TX_POWER_DBM);  // v1 #60 sag guard
+        followerTxOtaCap(true);  // v1 #60 sag guard
         otaTxPowerReduced = true;
 
         uint32_t freeSpace = ESP.getFreeSketchSpace();
@@ -432,7 +430,7 @@ void webEndpointsInit(AsyncWebServer& server) {
                                       displayWidth,
                                       followerPhaseName(cv.phase),
                                       cv.leaderName, cv.leaderHost, cv.row,
-                                      vitalsNow()));
+                                      vitalsNow(), followerTxPowerDbm10()));
   });
 
   // #318 E: the row's in-RAM log, cursor-paged so the leader pulls only new
@@ -1004,6 +1002,10 @@ bool webOtaUploadFrozen() {
   if (millis() - masterOtaLastChunkMs > 30000UL) {
     SerialPrintln(F("OTA upload stalled >30 s — resuming normal operation"));
     masterOtaUploadActive = false;
+    if (otaTxPowerReduced) {  // an abandoned upload must not freeze the ladder
+      followerTxOtaCap(false);
+      otaTxPowerReduced = false;
+    }
     // Free the session slot too (v1 #191) — the next upload's begin()
     // retry recovers the abandoned Update session instead of a 409 wedge.
     masterOtaOwnerRequest = nullptr;

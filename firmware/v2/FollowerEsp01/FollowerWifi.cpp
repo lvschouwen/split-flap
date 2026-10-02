@@ -11,18 +11,110 @@
 #include <time.h>
 
 #include "BuildVersion.h"
+#include "FollowerBus.h"     // busRowMoving
 #include "FollowerConfig.h"
 #include "FollowerJson.h"  // FOLLOWER_PLAT
 #include "FollowerWeb.h"   // isPendingReboot
+#include "FollowerRescue.h"  // rescueActive
 #include "FollowerWifi.h"
+#include "WifiTxPolicy.h"
 
 String effectiveDeviceName;
 bool isWifiConfigured = false;
 
 static DNSServer dnsServer;
 
+// --- TX power ladder (#508) -----------------------------------------------------
+static WifiTxState txState;
+static int8_t txAppliedIndex = -1;  // -1 = nothing applied yet
+static bool txOtaCapped = false;
+
+// `force` re-sends an unchanged level: the ESP8266 cannot read the level
+// back, so it is re-asserted wherever the radio may have been re-initialised.
+static void txApply(uint8_t index, bool log, bool force = false) {
+  if ((int8_t)index == txAppliedIndex && !force) return;
+  WiFi.setOutputPower(wifiTxLevelRaw(index) / 4.0f);
+  if (log && (int8_t)index != txAppliedIndex) {
+    int dbm10 = wifiTxLevelDbm10(index);
+    SerialPrint(F("wifi: TX power "));
+    if (txAppliedIndex >= 0) {
+      int was10 = wifiTxLevelDbm10((uint8_t)txAppliedIndex);
+      SerialPrint(was10 / 10);
+      SerialPrint('.');
+      SerialPrint(was10 % 10);
+      SerialPrint(F(" -> "));
+    }
+    SerialPrint(dbm10 / 10);
+    SerialPrint('.');
+    SerialPrint(dbm10 % 10);
+    SerialPrintln(F(" dBm"));
+  }
+  txAppliedIndex = (int8_t)index;
+}
+
+int followerTxPowerDbm10() {
+  return txAppliedIndex < 0 ? 0 : wifiTxLevelDbm10((uint8_t)txAppliedIndex);
+}
+
+// Join and portal: no link, no units moving yet.
+static void txBringUpStep(WifiTxPhase phase, bool force = false) {
+  WifiTxInput in;
+  in.phase = phase;
+  txApply(wifiTxPolicyStep(txState, in, millis()), true, force);
+}
+
+void followerTxOtaCap(bool on) {
+  txOtaCapped = on;
+  // Capped at the join ceiling, below the 10 dBm this guard used before the
+  // ladder: a row that climbed past it for a weak link may stall the upload,
+  // which the 30 s thaw and the leader's retry recover; a sagging rail during
+  // flash writes is the worse failure.
+  uint8_t index = txState.index;
+  if (on && index > WIFI_TX_JOIN_CEILING_INDEX) {
+    index = WIFI_TX_JOIN_CEILING_INDEX;
+  }
+  txApply(index, false);
+}
+
+void followerTxTick() {
+  static uint32_t nextMs = 0;
+  static bool reasserted = false;
+  uint32_t now = millis();
+  if ((int32_t)(now - nextMs) < 0) return;
+  nextMs = now + 1000;
+  if (txOtaCapped) return;
+  if (!reasserted) {  // the join or the portal may have re-initialised the PHY
+    reasserted = true;
+    txApply(txState.index, false, true);
+  }
+
+  WifiTxInput in;
+  in.phase = WifiTxPhase::Online;
+  in.linkUp = WiFi.status() == WL_CONNECTED;
+  in.rssiDbm = in.linkUp ? WiFi.RSSI() : 0;
+  // RSSI() reads a non-negative sentinel when the link fell between the two
+  // calls; fed to the ladder it would count as a perfect signal.
+  if (in.linkUp && in.rssiDbm >= 0) return;
+
+  // An up-step needs an idle row, and asking the row costs one I2C read per
+  // unit — so ask only when a step is actually due.
+  WifiTxState trial = txState;
+  in.unitsIdle = true;
+  uint8_t index = wifiTxPolicyStep(trial, in, now);
+  if (index > txState.index && !rescueActive() && busRowMoving()) {
+    in.unitsIdle = false;
+    index = wifiTxPolicyStep(txState, in, now);
+  } else {
+    txState = trial;
+  }
+  // The row poll can yield to the upload handler, which then owns the level.
+  if (txOtaCapped) return;
+  txApply(index, true);
+}
+
 static bool waitForWifiConnected(int timeoutSeconds) {
   for (int elapsed = 0; elapsed < timeoutSeconds; elapsed++) {
+    txBringUpStep(WifiTxPhase::Joining);
     if (WiFi.status() == WL_CONNECTED) {
       SerialPrint(F("connected. IP Address: "));
       SerialPrintln(WiFi.localIP());
@@ -36,7 +128,8 @@ static bool waitForWifiConnected(int timeoutSeconds) {
 }
 
 static bool tryJoinKnownWifi(int timeoutSeconds) {
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_STA);  // the radio is off until here (core 3.x boot default)
+  txBringUpStep(WifiTxPhase::Joining);  // before any join burst
   WiFi.hostname(effectiveDeviceName.c_str());
   WiFi.setAutoReconnect(true);
   if (WiFi.SSID().length() == 0) {
@@ -59,6 +152,7 @@ void wifiInit(AsyncWebServer& server) {
   }
 
   SerialPrintln(F("Starting WiFi setup portal..."));
+  txBringUpStep(WifiTxPhase::Portal);
   // Function-local static: the manager registers handlers on the shared
   // server, so it must outlive this call (v1 keeps its instance global).
   static AsyncWiFiManager wifiManager(&server, &dnsServer);

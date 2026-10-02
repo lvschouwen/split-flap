@@ -248,9 +248,10 @@ inline String followerSettingsJson(const String& name, const char* rev,
                                    int width, const char* phaseName,
                                    const String& leaderName,
                                    const String& leaderHost, int row,
-                                   const FollowerVitals& v) {
+                                   const FollowerVitals& v,
+                                   int txPowerDbm10) {
   String out;
-  out.reserve(288);
+  out.reserve(304);
   out += "{\"deviceName\":";
   followerAppendJsonString(out, name);
   out += ",\"effectiveDeviceName\":";
@@ -268,6 +269,8 @@ inline String followerSettingsJson(const String& name, const char* rev,
   out += ",\"clusterRow\":";
   out += row;
   followerAppendPlatVitals(out, v);
+  out += ",\"txPower\":";  // #508: WiFi TX power cap x10 (dBm)
+  out += txPowerDbm10;
   out += '}';
   return out;
 }

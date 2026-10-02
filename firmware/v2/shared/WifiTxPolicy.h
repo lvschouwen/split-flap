@@ -1,15 +1,17 @@
 #pragma once
-// WifiTxPolicy.h — pure WiFi TX-power ladder (#507).
+// WifiTxPolicy.h — pure WiFi TX-power ladder (#507), shared by the S3 master
+// and the ESP-01 follower (#508).
 //
-// TX bursts are the S3's own current peak on the 5 V rail it shares with the
-// units; a boot that went straight to the SDK default died on a corrupted
-// instruction fetch (#506). So every boot starts at the lowest real level and
-// moves ONE level at a time: up only when the link needs it, down again after
-// a long healthy period. Nothing is remembered across reboots — a step-up
-// that browns the board out cannot become a boot loop.
+// TX bursts are the board's own current peak on the 5 V rail it shares with
+// the units; an S3 boot that went straight to the SDK default died on a
+// corrupted instruction fetch (#506). So every boot starts at the lowest real
+// level and moves ONE level at a time: up only when the link needs it, down
+// again after a long healthy period. Nothing is remembered across reboots — a
+// step-up that browns the board out cannot become a boot loop.
 //
-// No radio types in here: WifiService.cpp feeds this from netTask and applies
-// the index it returns. Natively tested (test/test_wifi_tx_policy).
+// No radio types in here: each tree's WiFi glue (Master WifiService.cpp,
+// FollowerEsp01 FollowerWifi.cpp) feeds this and applies the index it
+// returns. Natively tested (Master test/test_wifi_tx_policy).
 //
 // The board cannot measure how well the access point hears it. The received
 // signal strength is the proxy (path loss is symmetric); link drops are the
@@ -17,9 +19,10 @@
 
 #include <stdint.h>
 
-// The real levels of esp_wifi_set_max_tx_power(), in its 0.25 dBm unit. The
-// IDF rounds any other request DOWN onto one of these, so only this table
-// makes "one step" mean one real level.
+// The real levels of the S3's esp_wifi_set_max_tx_power(), in its 0.25 dBm
+// unit. The IDF rounds any other request DOWN onto one of these, so only this
+// table makes "one step" mean one real level. The ESP8266 takes any 0.25 dB
+// value; it uses the same table so both platforms behave alike.
 static const int8_t WIFI_TX_LEVELS_RAW[] = {8,  20, 28, 34, 44, 52,
                                             56, 60, 66, 72, 80};
 static const uint8_t WIFI_TX_LEVEL_COUNT =

@@ -123,6 +123,7 @@ void loop() {
     return;
   }
 
+  followerTxTick();     // #508: WiFi TX power ladder, 1 Hz
   rescueHealthyTick();  // #343: a stable minute proves this boot good
   if (!rescueActive()) {
     webLoopTick();            // staged ops / reflash / health refresh

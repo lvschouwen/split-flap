@@ -518,6 +518,18 @@ static bool isRowMoving() {
   return false;
 }
 
+bool busRowMoving() {
+#if SERIAL_ENABLE == false
+  // A unit in its twiboot window (v1 #88) or a streaming reflash must not be
+  // read: report "moving" so the caller waits instead.
+  if ((int32_t)(millis() - busProbeInhibitedUntilMs()) < 0) return true;
+  if (reflashInProgress(reflashProgress)) return true;
+  return isRowMoving();
+#else
+  return false;
+#endif
+}
+
 // --- motion admission (#505, MotionBudget.h) ---------------------------------
 static MotionRadioGate radioGate;
 static MotionBudgetState motionBudget;
