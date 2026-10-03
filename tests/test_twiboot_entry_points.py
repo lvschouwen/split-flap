@@ -107,6 +107,17 @@ def test_image_size_unchanged(boot_image: bytes) -> None:
     assert len(boot_image.rstrip(b"\xff")) == FIELDED_USED_BYTES
 
 
+def test_fielded_pages_0_6_crc32(boot_image: bytes) -> None:
+    # BootSectionClassify.h hardcodes this so a half-done stage 1 (fielded core,
+    # dirty page 7) still classifies Old and is retriable rather than a brick.
+    # Pin it against the fielded image the same way as the full CRC.
+    pages_0_6_crc = zlib.crc32(boot_image[: 7 * PAGE_SIZE])
+    assert pages_0_6_crc == 0x2524E944, (
+        "fielded pages-0-6 CRC32 changed — update BOOT_FIELDED_PAGES_0_6_CRC32 "
+        "in firmware/v2/shared/BootSectionClassify.h to match"
+    )
+
+
 def test_spm_opcode_at_every_borrow_site(boot_image: bytes) -> None:
     for site in SPM_SITES:
         off = site - BOOT_SECTION_START

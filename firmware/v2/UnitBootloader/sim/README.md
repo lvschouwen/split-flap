@@ -1,73 +1,68 @@
-# In-system twiboot update — simavr feasibility harness (#499)
+# In-system twiboot update — simavr proof (#499)
 
-Proof-of-concept harness that validated the #499 mechanism (replace twiboot on a
-fielded unit over I2C, no ICSP) against the **real committed image**
-(`../prebuilt/twiboot-atmega328p-16mhz.hex`, CRC `18173add`) before any unit
-firmware was written. This is scaffolding, not shipped firmware or a CI test —
-it documents and reproduces the proof.
+Proves the in-system twiboot update against the **real committed images**
+(fielded `../prebuilt/twiboot-atmega328p-16mhz.hex`, CRC `18173add`, and the
+new image built by `../make_new_twiboot.py`) by running the unit firmware's own
+self-program core, `firmware/v2/Unit/BootUpdateAvr.h`, compiled unchanged into
+`updater_app.cpp`. Scaffolding, not a CI test (CI has no simavr); the static
+facts it relies on are CI-gated by `tests/test_twiboot_entry_points.py` and
+`tests/test_new_twiboot_image.py`.
 
-## Why it exists
-
-A unit can only run `spm` (flash self-program) from its boot section, and the
-only code there is twiboot — which refuses to write its own boot section. The
-question was whether the running sketch can nonetheless rewrite twiboot. It can,
-in two stages, both proven here in simavr:
-
-- **Stage 1** — get a small callable `do_spm` into twiboot's one empty page
-  (page 7, `0x7F80`). The sketch seeds twiboot's own page buffer and loop state
-  in SRAM and jumps into twiboot's write handler *just past* its boot-section
-  guard (`0x7e5a`), so twiboot erases+fills+writes page 7 itself, then drops
-  into its idle loop; a relaxed timer IRQ returns control. `drivefill.c`.
-- **Stage 2** — the sketch simply `call`s `do_spm` in page 7 to rewrite
-  twiboot's pages 0–6. Clean `ret`-based flow, no tricks. `do_spm.S` + `stage2.c`.
-
-`keystone.c` is the earlier minimal proof that a borrowed `spm` returns control
-at all. The static assumptions (CRC, `spm` sites, empty page 7) are gated by
-`tests/test_twiboot_entry_points.py` in CI.
-
-## Prerequisites
+## Run
 
 ```bash
 sudo apt install -y libsimavr-dev        # C API (the gdb stub is unusable here)
-export PATH=$HOME/.platformio/packages/toolchain-atmelavr/bin:$PATH   # avr-gcc
+./prove.sh                               # avr-gcc from ~/.platformio is put on PATH
 ```
 
-## Run the proofs
+Prints `ALL PROOFS PASSED`, or `PROOF FAILED: ...` and exits non-zero. ~40 s.
 
-```bash
-./prove.sh
-```
+## What it proves
 
-`prove.sh` builds the real second-generation image (`../make_new_twiboot.py`,
-which also emits `new_image.h` here), then runs **both stages against the real
-bytes** — not test patterns — and checks the whole boot section (0x7C00-0x7FFF)
-byte for byte:
+`updater_app.cpp` does what the sketch does at boot (`bootAutoResume()`), then
+stands in for the master: state Old → stage 1, Page7Installed → stage 2.
+`runtest.c` models BOOTRST (every reset enters 0x7C00), counts every executed
+`spm` (twiboot's in stage 1, `do_spm`'s in stage 2), and can power-cycle or
+corrupt flash at any SPM index. Stage 1 = 67 flash operations, stage 2 = 8 page
+writes × 67 = 536.
 
-- **Stage 1** (`drivefill.c`): overlay = the fielded twiboot; the app seeds
-  twiboot's `buf[]` with the real page-7 blob (`do_spm` + pad + ABI marker) and
-  drives twiboot's write handler. Expected = fielded pages 0-6 + new page 7.
-- **Stage 2** (`stage2.c` + `do_spm.S`): overlay = the post-stage-1 state; the
-  app `call`s `do_spm@0x7F80` to rewrite pages 0-6 with the new image. Expected =
-  the full new image.
+| Step | Scenario | Must hold |
+|---|---|---|
+| A1–A3 | whole update from power-on | ends byte-identical to the new image; stage 1 regains control by twiboot's own jump-to-app (cmd byte 0x21 in overlaid RAM) or by the watchdog reset; an armed twiboot countdown cannot exit (stage 1 zeroes `r10`, the command its expiry stores) |
+| B | power loss before each of the 603 flash operations + reset | every point recovers to the new image by itself, except exactly 130 points where page 0 is erased and not yet rewritten — the trampoline write and the final page-0 write, 65 each |
+| C | a page-3 write that does not verify | stage 2 stops with the trampoline in page 0; the next boot resumes to New |
+| D | a final page-0 write that does not verify | the trampoline is written back; the next boot resumes to New |
+| H | a trampoline write that does not verify | retried in the same run, ends New |
+| E | trampoline but no `do_spm` in page 7 | refused with zero SPMs |
+| F | resume with trampoline + pages 1–6 already done | writes only page 0 (67 SPMs) |
+| G | unit already on the new image | untouched |
 
-Both report `BOOT SECTION: 1024/1024 match` and the script prints
-`ALL STAGES PASSED`. The source bytes live in PROGMEM in the test apps (as they
-will in the unit firmware), so they do not collide with twiboot's SRAM `buf[]`.
+Each guard was proven by breaking it in a scratch copy of the header: dropping
+the page-7 check fails E, always rewriting the trampoline fails F, dropping
+per-page verify fails C, dropping the trampoline restore fails D, dropping the page-0 retry fails H, and writing
+the real page 0 first (no trampoline) makes every B kill point inside pages 1–6
+fail.
 
-`runtest.c` takes `<app.elf> <overlay.bin|none> <main_byte> <cycles> <done_sram>
-<expected_boot.bin>` and diffs the result against the expected image.
+## Not modelled
 
-## Key facts the harness nailed down
+- SPM duration: simavr executes an erase/write atomically. A real power loss
+  during an erase or write leaves that one page undefined — for pages 1–7 the
+  same recovery as the neighbouring kill points applies; for page 0 it is inside
+  the windows above.
+- Lock bits (the app passes an unlocked byte), brown-out, and other ISRs
+  (Timer0 runs, as under Arduino's `init()`, but no ISR is attached).
+
+## Harness facts
 
 - simavr's **gdb stub is unusable** here (ignores hardware breakpoints and
   watchpoints, single-steps 32-bit instructions one word at a time). Use the C
   API and read `avr->flash[]` / `avr->data[]` directly.
 - simavr's ELF loader **ignores a high `--section-start`** and loads `.text` at
-  `0`; `runtest` overlays the boot-section binary at `0x7C00` manually.
-- simavr does **not** model the multi-ms NRWW erase/write halt, so the exact
-  stage-1 return-timer value cannot be sim-validated — on real silicon use a
-  generous margin (~50 ms, past the ~8 ms of erase+write) while twiboot idles.
-  The control *flow* is what the sim proves.
+  `0`; `runtest` places the boot-section binary at `0x7C00` itself.
 - twiboot write-handler entry past the boot-section guard: `0x7e5a`. Loop state:
   `buf` at SRAM `0x011D`, fill-loop end pointer `r14:r15 = 0x019D`, SPMCSR
   constants `r9=0x03`/`r16=0x01`/`r13=0x05`/`r12=0x11`, pagestart in `r24:r25`.
+  Its idle loop reads its command byte at `0x019D` and timeout state at
+  `0x0100`/`0x0101` — application RAM while stage 1 runs.
+- `keystone.c` is the earlier minimal proof that a borrowed `spm` returns
+  control at all; it is not part of `prove.sh`.

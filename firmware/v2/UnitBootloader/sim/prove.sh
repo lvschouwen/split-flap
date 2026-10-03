@@ -1,50 +1,126 @@
 #!/usr/bin/env bash
-# #499 in-system twiboot update — simavr proof against the REAL new twiboot image.
+# #499 in-system twiboot update — simavr proof, single entry point.
 #
-# Stage 1: drive the fielded twiboot's write handler to install the real do_spm
-#          (+ ABI marker) into its empty page 7.
-# Stage 2: call that do_spm to rewrite pages 0-6 with the real new twiboot.
-#
-# Both stages are checked byte-for-byte against the expected boot section.
+# Runs the unit firmware's own self-program core (firmware/v2/Unit/
+# BootUpdateAvr.h, compiled unchanged into updater_app.cpp) against the REAL
+# fielded twiboot and the REAL new image, in the order the sketch uses it, and
+# checks the whole boot section byte for byte. Any failed check exits non-zero
+# with "PROOF FAILED".
 set -euo pipefail
 cd "$(dirname "$0")"
 export PATH=$HOME/.platformio/packages/toolchain-atmelavr/bin:$PATH
 
-# 1. Build the new image + generated header (writes sim/new_image.h).
+fail() { echo "PROOF FAILED: $*" >&2; exit 1; }
+trap 'fail "command failed at line $LINENO"' ERR
+
+# BootUpdateResult / BootSectionState values (shared/BootUpdateReport.h,
+# shared/BootSectionClassify.h).
+R_NONE=0 R_S2_OK=2 R_REFUSED_STATE=3 R_VERIFY_FAILED=6
+S_TRAMPOLINE=3 S_NEW=4
+
+# 1. New image + canonical generated header (../prebuilt/twiboot-new-progmem.h).
 (cd .. && python3 make_new_twiboot.py)
 
-# 2. Extract the fielded twiboot and the new image as raw boot-section binaries.
-avr-objcopy -I ihex -O binary ../prebuilt/twiboot-atmega328p-16mhz.hex fielded.bin
+# 2. Boot-section images.
+avr-objcopy -I ihex -O binary ../prebuilt/twiboot-atmega328p-16mhz.hex fielded.raw
 avr-objcopy -I ihex -O binary ../twiboot-new-atmega328p-16mhz.hex newimage.bin
-
 python3 - <<'PY'
-# Pad fielded to 1024 (its page 7 is blank/absent in the hex).
-fielded = bytearray(open('fielded.bin', 'rb').read().ljust(1024, b'\xff'))
+fielded = bytearray(open('fielded.raw', 'rb').read().ljust(1024, b'\xff'))
 new = open('newimage.bin', 'rb').read()
 assert len(new) == 1024
-# Stage-1 expected: fielded pages 0-6 unchanged, page 7 replaced by new page 7.
-s1 = bytearray(fielded)
-s1[0x380:0x400] = new[0x380:0x400]
-open('expect_stage1.bin', 'wb').write(s1)
-# Stage-2 overlay (post-stage-1 state): same as stage-1 expected.
-open('overlay_stage2.bin', 'wb').write(s1)
-# Stage-2 expected: the full new image.
-open('expect_stage2.bin', 'wb').write(new)
-print('built expected/overlay bins')
+tramp = bytes([0x0C, 0x94, 0x00, 0x00]) + b'\xff' * 124   # jmp 0x0000 + pad
+def w(name, b): open(name, 'wb').write(bytes(b))
+w('fielded.bin', fielded)
+# Post-stage-1: fielded pages 0-6 + new page 7 (do_spm).
+w('page7_installed.bin', fielded[:0x380] + new[0x380:])
+# Trampoline in page 0 but page 7 still blank: must never call into page 7.
+w('tramp_no_dospm.bin', tramp + fielded[0x80:])
+# Killed just before the final page-0 write: only page 0 still to do.
+w('tramp_rest_new.bin', tramp + new[0x80:])
+print('built boot-section images')
 PY
 
-# 3. Compile the harness and the two updater test apps.
-gcc runtest.c -o runtest -lsimavr
-avr-gcc -Os -mmcu=atmega328p -I. -o drivefill.elf drivefill.c
-avr-gcc -Os -mmcu=atmega328p -I. -o stage2.elf stage2.c
+# 3. Harness + the updater app (same header the sketch compiles).
+gcc -O2 -Wall -Werror runtest.c -o runtest -lsimavr
+avr-g++ -Os -mmcu=atmega328p -Wall -Werror -I../../Unit -I../../shared \
+  -I../prebuilt -o updater_app.elf updater_app.cpp
+REPORT=0x$(avr-nm updater_app.elf | awk '/ sim_report$/{print substr($1,5)}')
+[ "$REPORT" != "0x" ] || fail "sim_report symbol not found"
 
-sym() { avr-nm "$1" | awk "/ $2\$/{print \"0x\"\$1}"; }
-dsym() { avr-nm "$1" | awk "/ $2\$/{print \"0x\"substr(\$1,5)}"; }
+APP=updater_app.elf
+step() { echo; echo "=== $1"; shift; ./runtest "$APP" "$@" || fail "$*"; }
 
-echo "=== STAGE 1: install real do_spm into page 7 (expect full match) ==="
-./runtest drivefill.elf fielded.bin "$(sym drivefill.elf main)" 2000000 \
-  "$(dsym drivefill.elf done)" expect_stage1.bin
-echo "=== STAGE 2: rewrite pages 0-6 with real new twiboot (expect full match) ==="
-./runtest stage2.elf overlay_stage2.bin "$(sym stage2.elf main)" 2000000 \
-  "$(dsym stage2.elf done)" expect_stage2.bin
-echo "ALL STAGES PASSED"
+# SPM numbering: stage 1 = 67 operations inside twiboot (erase, 64 fills,
+# write, rww); stage 2 = 8 page writes x 67 via do_spm (trampoline, pages 1-6,
+# final page 0). Full run = 67 + 536 = 603.
+
+# A. Whole update from power-on through the fielded twiboot. Stage 1 leaves
+#    twiboot idling; it exits either by its own "jump to app" command byte (the
+#    overlaid application RAM at 0x019D happens to read 0x21) or by the
+#    watchdog reset. Its timeout countdown cannot exit (stage 1 zeroes r10, the
+#    command its expiry stores) — the armed-countdown case proves that.
+step "A1 full update, twiboot exits to app (cmd byte 0x21)" \
+  fielded.bin newimage.bin "$REPORT" --start reset --twiboot-ram 0x21:0:0 \
+  --expect 0:$R_S2_OK:$S_NEW --expect-spm 603 --expect-resets 1
+step "A2 full update, watchdog reset regains control" \
+  fielded.bin newimage.bin "$REPORT" --start reset --twiboot-ram 0x00:0:0 \
+  --expect 0:$R_S2_OK:$S_NEW --expect-spm 603 --expect-resets 2
+step "A3 full update, twiboot timeout armed: still the watchdog" \
+  fielded.bin newimage.bin "$REPORT" --start reset --twiboot-ram 0x00:1:5 \
+  --expect 0:$R_S2_OK:$S_NEW --expect-spm 603 --expect-resets 2
+
+# B. Power loss before every one of the 603 flash operations (and once after
+#    the last), each followed by a reset and the unit's own recovery: a retried
+#    stage 1, or the trampoline booting the app which auto-resumes stage 2.
+#    Every point must end byte-identical to the new image, except the points
+#    where page 0 is erased and not yet rewritten — exactly the two page-0
+#    windows (trampoline write, final write), 65 points each. Stage 1 exits
+#    twiboot via its command byte here (A2/A3 pin the watchdog exit): it keeps
+#    the sweep fast and the flash states visited are the same.
+step "B  kill sweep over the whole update" \
+  fielded.bin newimage.bin "$REPORT" --start app --twiboot-ram 0x21:0:0 \
+  --sweep-kill 0 603 --expect-windows 130
+
+# C. A page that does not verify stops stage 2 with the trampoline still in
+#    page 0 (the unit keeps booting its app); the next boot auto-resumes.
+#    Page 3's write is SPM #67*3+65; corrupt it just before its rww (#267).
+step "C  page-3 verify failure -> stop resumable, resume on next boot" \
+  page7_installed.bin newimage.bin "$REPORT" --start app --boots 2 \
+  --corrupt-at-spm 267 0x7d85 \
+  --expect 0:$R_VERIFY_FAILED:$S_TRAMPOLINE --expect 1:$R_S2_OK:$S_NEW
+
+# D. A final page-0 write that does not verify puts the trampoline back (the
+#    only page 0 a reset can boot) and the next boot resumes. Final page 0 is
+#    written at SPM #534; corrupt before its rww (#535).
+step "D  final page-0 verify failure -> trampoline restored, resume" \
+  page7_installed.bin newimage.bin "$REPORT" --start app --boots 2 \
+  --corrupt-at-spm 535 0x7c10 \
+  --expect 0:$R_VERIFY_FAILED:$S_TRAMPOLINE --expect 1:$R_S2_OK:$S_NEW
+
+# H. A trampoline write that does not verify is retried while the app is still
+#    alive (a corrupt page 0 is the next reset's brick). Trampoline write is
+#    SPM #65; corrupt before its rww (#66). One extra page write: 536 + 67.
+step "H  trampoline verify failure -> retried in the same run" \
+  page7_installed.bin newimage.bin "$REPORT" --start app \
+  --corrupt-at-spm 66 0x7c00 --expect 0:$R_S2_OK:$S_NEW --expect-spm 603
+
+# E. Trampoline with no do_spm in page 7: auto-resume must refuse without a
+#    single SPM (calling into a blank page 7 would execute erased flash).
+step "E  no do_spm in page 7 -> refuse, zero SPMs" \
+  tramp_no_dospm.bin tramp_no_dospm.bin "$REPORT" --start reset \
+  --expect 0:$R_REFUSED_STATE:$S_TRAMPOLINE --expect-spm 0
+
+# F. Resume is idempotent: trampoline already in place and pages 1-6 already
+#    new -> only the final page 0 is written (67 SPMs, no second trampoline).
+step "F  resume skips the trampoline and matching pages" \
+  tramp_rest_new.bin newimage.bin "$REPORT" --start reset \
+  --expect 0:$R_S2_OK:$S_NEW --expect-spm 67
+
+# G. A unit already on the new image does nothing.
+step "G  new image is left alone" \
+  newimage.bin newimage.bin "$REPORT" --start app \
+  --expect 0:$R_NONE:$S_NEW --expect-spm 0
+
+trap - ERR
+echo
+echo "ALL PROOFS PASSED"
