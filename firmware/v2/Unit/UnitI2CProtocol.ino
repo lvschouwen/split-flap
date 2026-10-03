@@ -9,6 +9,9 @@
 // pending* flags declared in Unit.ino.
 
 void receiveLetter(int numBytes) {
+  // Every master write — a bare bus-scan probe included — supersedes whatever
+  // reply the previous write asked for (#502).
+  pendingReply = REPLY_NONE;
   if (numBytes <= 0) return;
 
   // Any I2C receive — even a bus-scan probe — proves a master is present, so
@@ -33,37 +36,37 @@ void receiveLetter(int numBytes) {
         pendingBootloader = true;
         break;
       case SFP_CMD_GET_VERSION:
-        pendingVersionResponse = true;
+        pendingReply = REPLY_VERSION;
         break;
       case SFP_CMD_GET_OFFSET:
-        pendingOffsetResponse = true;
+        pendingReply = REPLY_OFFSET;
         break;
       case SFP_CMD_GET_STATUS:
-        pendingStatusResponse = true;
+        pendingReply = REPLY_STATUS;
         break;
       case SFP_CMD_GET_LETTER:
-        pendingLetterResponse = true;
+        pendingReply = REPLY_LETTER;
         break;
       case SFP_CMD_GET_ODOMETER:
-        pendingOdometerResponse = true;
+        pendingReply = REPLY_ODOMETER;
         break;
       case SFP_CMD_GET_DIAG:
-        pendingDiagResponse = true;
+        pendingReply = REPLY_DIAG;
         break;
       case SFP_CMD_GET_SELF_TEST:
-        pendingSelfTestResponse = true;
+        pendingReply = REPLY_SELF_TEST;
         break;
       case SFP_CMD_GET_VITALS:
-        pendingVitalsResponse = true;
+        pendingReply = REPLY_VITALS;
         break;
       case SFP_CMD_GET_EXT_DIAG:
-        pendingExtDiagResponse = true;
+        pendingReply = REPLY_EXT_DIAG;
         break;
       case SFP_CMD_GET_LIFETIME:
-        pendingLifetimeResponse = true;
+        pendingReply = REPLY_LIFETIME;
         break;
       case SFP_CMD_GET_BOOT_INFO:
-        pendingBootInfoResponse = true;  // #499; cached reply streamed by requestEvent
+        pendingReply = REPLY_BOOT_INFO;  // #499; cached reply streamed by requestEvent
         break;
       case SFP_CMD_START_SELF_TEST:
         pendingSelfTest = true;
@@ -207,7 +210,9 @@ void receiveLetter(int numBytes) {
 }
 
 void requestEvent() {
-  if (pendingVersionResponse) {
+  uint8_t reply = pendingReply;
+  pendingReply = REPLY_NONE;
+  if (reply == REPLY_VERSION) {
     // 10 bytes: GIT_REV null-padded, SFP_PROTOCOL_VERSION, checksum (#405).
     // This reply's shape is FIXED FOREVER — it carries the version that gates
     // every other opcode, so a master must be able to parse it without
@@ -215,84 +220,74 @@ void requestEvent() {
     uint8_t buf[VERSION_REPLY_LEN];
     versionEncodeReply(GIT_REV, SFP_PROTOCOL_VERSION, buf);
     Wire.write(buf, VERSION_REPLY_LEN);
-    pendingVersionResponse = false;
     return;
   }
-  if (pendingOffsetResponse) {
+  if (reply == REPLY_OFFSET) {
     // 3 bytes: int16 calOffset LE + checksum (#405).
     uint8_t buf[OFFSET_REPLY_LEN];
     offsetEncodeReply((int16_t)calOffset, buf);
     Wire.write(buf, OFFSET_REPLY_LEN);
-    pendingOffsetResponse = false;
     return;
   }
-  if (pendingLetterResponse) {
+  if (reply == REPLY_LETTER) {
     // Issue #106. 2 bytes: displayed letter index + bitwise complement so
     // the master can reject a corrupted read instead of "verifying" noise.
     uint8_t letter = (uint8_t)displayedLetter;
     uint8_t buf[2] = { letter, (uint8_t)~letter };
     Wire.write(buf, 2);
-    pendingLetterResponse = false;
     return;
   }
-  if (pendingOdometerResponse) {
+  if (reply == REPLY_ODOMETER) {
     // 5 bytes: uint32 LE revolutions + XOR checksum ^ 0xA5 (#231). Reading
     // the 4-byte mirror is safe here: this IS the TWI ISR, and loop-side
     // writers hold interrupts off (UnitMotion.ino stepCounted()).
     uint8_t buf[ODO_REPLY_LEN];
     odometerEncodeReply(odometerRevolutions, buf);
     Wire.write(buf, ODO_REPLY_LEN);
-    pendingOdometerResponse = false;
     return;
   }
-  if (pendingDiagResponse) {
+  if (reply == REPLY_DIAG) {
     // 6 bytes, pre-encoded by driftRefreshReplyBuffers() under
     // noInterrupts() (#263/#264) — stream verbatim, nothing to compute in
     // ISR context. The volatile cast is safe: writers hold interrupts off.
     Wire.write((const uint8_t*)diagReplyBuf, DRIFT_REPLY_LEN);
-    pendingDiagResponse = false;
     return;
   }
-  if (pendingSelfTestResponse) {
+  if (reply == REPLY_SELF_TEST) {
     // 9 bytes, same pre-encoded-buffer contract as the diag reply (#265).
     Wire.write((const uint8_t*)selfTestReplyBuf, SELFTEST_REPLY_LEN);
-    pendingSelfTestResponse = false;
     return;
   }
-  if (pendingVitalsResponse) {
+  if (reply == REPLY_VITALS) {
     // 8 bytes, pre-encoded by vitalsRefreshReplyBuffer() under noInterrupts()
     // (#306) — stream verbatim. Un-reflashed masters never send GET_VITALS.
     Wire.write((const uint8_t*)vitalsReplyBuf, VITALS_REPLY_LEN);
-    pendingVitalsResponse = false;
     return;
   }
-  if (pendingExtDiagResponse) {
+  if (reply == REPLY_EXT_DIAG) {
     // 11 bytes, pre-encoded by refreshExtDiagReply() under noInterrupts()
     // (#365) — stream verbatim. Un-reflashed masters never send GET_EXT_DIAG;
     // the masked checksum handles a stray probe hitting the unknown opcode.
     Wire.write((const uint8_t*)extDiagReplyBuf, EXT_DIAG_REPLY_LEN);
-    pendingExtDiagResponse = false;
     return;
   }
-  if (pendingLifetimeResponse) {
+  if (reply == REPLY_LIFETIME) {
     // 15 bytes, pre-encoded by refreshLifetimeReply() under noInterrupts()
     // (#406) — stream verbatim. A master predating the opcode never sends it;
     // the masked checksum plus the reply-length check on the master side
     // handle a stray probe hitting the unknown opcode.
     Wire.write((const uint8_t*)lifetimeReplyBuf, LIFETIME_REPLY_LEN);
-    pendingLifetimeResponse = false;
     return;
   }
-  if (pendingBootInfoResponse) {
+  if (reply == REPLY_BOOT_INFO) {
     // 11 bytes (#499), cached by refreshBootInfoReply() at boot + after each
     // update — streamed verbatim. A master predating the opcode never sends it;
     // the masked checksum + range checks on the master side reject a stray probe
     // hitting the unknown opcode.
     Wire.write((const uint8_t*)bootInfoReplyBuf, BOOT_INFO_REPLY_LEN);
-    pendingBootInfoResponse = false;
     return;
   }
-  if (pendingStatusResponse) {
+  if (reply == REPLY_STATUS) {
     // Issue #47. 8-byte health/diag payload + a #405 checksum byte. Master
     // parses it into UnitStatus.
     //
@@ -340,7 +335,6 @@ void requestEvent() {
     uint8_t buf[STATUS_REPLY_LEN];
     statusEncodeReply(payload, buf);
     Wire.write(buf, STATUS_REPLY_LEN);
-    pendingStatusResponse = false;
     return;
   }
   Wire.write(currentlyrotating); //send unit status to master

@@ -131,17 +131,32 @@ bool addressFromEeprom = false;
 // the Wire ISR is risky — we want the I2C transaction to finish cleanly).
 volatile bool pendingBootloader = false;
 
-// When true, the next requestEvent() returns the 8-byte GIT_REV instead of
-// the rotation-status byte. Flag set by receiveLetter() on SFP_CMD_GET_VERSION,
-// cleared after the response is sent so subsequent reads fall back to status.
-volatile bool pendingVersionResponse = false;
+// The reply the next requestEvent() streams, set by receiveLetter() on a GET_*
+// opcode. One slot rather than a flag per reply: a master write always
+// supersedes the request before it, so receiveLetter() clears the slot on every
+// frame and a read the master never came back for cannot answer a later,
+// different request (#502). REPLY_NONE streams the rotation-status byte.
+// Single byte, touched only inside the TWI ISR.
+enum UnitReply : uint8_t {
+  REPLY_NONE = 0,
+  REPLY_VERSION,
+  REPLY_OFFSET,
+  REPLY_STATUS,
+  REPLY_LETTER,
+  REPLY_ODOMETER,
+  REPLY_DIAG,
+  REPLY_SELF_TEST,
+  REPLY_VITALS,
+  REPLY_EXT_DIAG,
+  REPLY_LIFETIME,
+  REPLY_BOOT_INFO,
+};
+volatile uint8_t pendingReply = REPLY_NONE;
 
 // Interactive calibration flags (issue #32). Each is set from inside the
-// Wire ISR by receiveLetter(); loop() drains the non-response ones and
-// requestEvent() drains pendingOffsetResponse. The motor/EEPROM work
+// Wire ISR by receiveLetter() and drained by loop(). The motor/EEPROM work
 // cannot run inside the ISR — EEPROM writes take ~7 ms per 2 bytes and
 // stepping blocks for tens of ms per step.
-volatile bool    pendingOffsetResponse = false;   // consumed by requestEvent
 volatile bool    pendingOffsetWrite    = false;   // loop() persists + updates
 volatile int16_t pendingOffsetValue    = 0;
 volatile bool    pendingHome           = false;   // loop() re-homes
@@ -165,8 +180,6 @@ volatile bool    pendingGatesWrite      = false;
 volatile uint8_t pendingGatesValue      = 0;
 
 // Health / diagnostics state returned by SFP_CMD_GET_STATUS (issue #47).
-volatile bool     pendingStatusResponse     = false;  // consumed by requestEvent
-volatile bool     pendingLetterResponse     = false;  // consumed by requestEvent (#106)
 
 // Drum drift tracking (#263/#264). `drift` is loop-context only — every
 // step happens in loop and UnitMotion.ino's stepCounted()/hall watch fold
@@ -178,7 +191,6 @@ volatile bool     pendingLetterResponse     = false;  // consumed by requestEven
 // handlers register — same ordering rule as getOffset() (#173).
 DriftState        drift                     = {0, false, 0, 0, false};
 volatile uint8_t  diagReplyBuf[DRIFT_REPLY_LEN]        = {0};
-volatile bool     pendingDiagResponse       = false;  // consumed by requestEvent
 unsigned long     lastAutoRehomeMs          = 0;      // 0 = never auto re-homed
 // Idle hall consistency check (#268), loop-context only — it samples a pin
 // and arms the drift re-home above, so nothing here crosses into the ISR.
@@ -203,7 +215,6 @@ bool              idleHallArmedRehome       = false;
 SelfTestResult    selfTest;
 volatile uint8_t  selfTestReplyBuf[SELFTEST_REPLY_LEN] = {0};
 volatile bool     pendingSelfTest           = false;  // loop() runs the test
-volatile bool     pendingSelfTestResponse   = false;  // consumed by requestEvent
 
 // In-system twiboot update (#499). GET_BOOT_INFO streams a cached 11-byte reply
 // (refreshed at boot and after each update — the boot section only changes then,
@@ -212,7 +223,6 @@ volatile bool     pendingSelfTestResponse   = false;  // consumed by requestEven
 // Self-program core in BootUpdateAvr.h (shared with the simavr proof); sketch
 // glue (reply refresh, drum-idle gate, TWI re-init) in UnitBootUpdate.ino.
 volatile uint8_t  bootInfoReplyBuf[BOOT_INFO_REPLY_LEN] = {0};
-volatile bool     pendingBootInfoResponse   = false;  // consumed by requestEvent
 volatile bool     pendingBootUpdate         = false;  // loop() runs the stage
 volatile uint8_t  pendingBootUpdateStage    = 0;      // 1 or 2
 uint8_t           lastBootUpdateResult      = BOOT_RESULT_NONE;  // loop-context
@@ -228,15 +238,13 @@ uint16_t          vitalsVccMin              = 0xFFFF;  // since-boot min (sentin
 uint16_t          vitalsFreeRamMin          = 0xFFFF;  // since-boot min free SRAM
 unsigned long     vitalsLastSampleMs        = 0;       // idle-sample throttle
 volatile uint8_t  vitalsReplyBuf[VITALS_REPLY_LEN] = {0};
-volatile bool     pendingVitalsResponse     = false;  // consumed by requestEvent
 
 // Extended per-move diagnostics (#365). Measured in loop context (UnitMotion.ino
 // hooks: step-excess in calibrate() #370, per-move Vcc sag #371, hall-edges-per-
 // rev #372, duty window #373, stall #374). refreshExtDiagReply() re-encodes the
 // ISR-visible mirror each loop pass under noInterrupts() — same #96-class torn-
-// read discipline as the vitals/diag buffers above. Only extDiagReplyBuf and
-// pendingExtDiagResponse cross into the TWI ISR; the raw counters are loop-only.
-volatile bool     pendingExtDiagResponse    = false;  // consumed by requestEvent
+// read discipline as the vitals/diag buffers above. Only extDiagReplyBuf crosses
+// into the TWI ISR; the raw counters are loop-only.
 volatile uint8_t  extDiagReplyBuf[EXT_DIAG_REPLY_LEN] = {0};
 uint16_t          extStepExcessLast         = 0;      // #370 last home: actual-expected steps
 uint16_t          extStepExcessMax          = 0;      // #370 worst-seen since boot
@@ -259,7 +267,6 @@ uint8_t           extStatusBits             = 0;      // #374 bit0 = last-move s
 OdometerState     odometer                  = {0, 0};
 volatile uint32_t odometerRevolutions       = 0;      // ISR-read mirror of odometer.revolutions
 uint32_t          lastPersistedRevs         = 0;
-volatile bool     pendingOdometerResponse   = false;  // consumed by requestEvent
 volatile bool     pendingOdometerReset      = false;  // loop() zeroes counter + ring
 uint8_t           savedMcusr                = 0;      // snapshot of MCUSR at boot
 // ISR-facing mirrors of the two counters GET_STATUS reports. Set once in
@@ -278,7 +285,6 @@ UnitLifetimeHealth lifetime;
 // ISR-visible mirror of the GET_LIFETIME reply, re-encoded by
 // refreshLifetimeReply() whenever the record is persisted — same #96-class
 // torn-read discipline as the diag/vitals/ext-diag buffers.
-volatile bool     pendingLifetimeResponse   = false;  // consumed by requestEvent
 volatile uint8_t  lifetimeReplyBuf[LIFETIME_REPLY_LEN] = {0};
 // Incremented from BOTH the TWI ISR (receiveLetter) and loop() (the invalid-
 // address branch of the pendingSetAddress drain) and read back in the ISR's
