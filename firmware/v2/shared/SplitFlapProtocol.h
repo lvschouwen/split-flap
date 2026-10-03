@@ -91,6 +91,17 @@
 // protocol bumps — they are the cross-generation recovery path (how a new
 // master updates / detects an old unit). Do not renumber them.
 
+// Highest stepper speed (RPM) a unit runs a letter move at. The speed byte of
+// a letter write is clamped to it on the unit, so a corrupted byte cannot ask a
+// 28BYJ-48 for a rate at which it only buzzes and loses its position. It is
+// the top of the range both row masters send (their MAX_SPEED).
+#define SFP_UNIT_SPEED_MAX         12
+
+// SFP_CMD_GET_LETTER index of a unit that does not know where its drum is
+// (not homed, or its last home failed). Outside every flap index, so a master
+// treats the reply as unreadable instead of verifying against a guess.
+#define SFP_LETTER_UNKNOWN         0xFF
+
 // --- 0x8X queries ---
 #define SFP_CMD_ENTER_BOOTLOADER   0x80  // trigger watchdog reset into twiboot
 #define SFP_CMD_GET_VERSION        0x81  // reply: 8 bytes GIT_REV (null-padded)

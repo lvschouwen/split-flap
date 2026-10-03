@@ -337,3 +337,20 @@ inline bool jogDecode(const uint8_t* payload, uint8_t extraLen, bool strict,
   out = (int8_t)payload[0];
   return true;
 }
+
+// --- letter write: speed byte (#502) -----------------------------------------
+// The second byte of a letter write is the move speed in RPM. Zero would make
+// the stepper library divide by it; anything above SFP_UNIT_SPEED_MAX is not a
+// speed a master sends.
+inline int unitClampSpeed(int requested) {
+  if (requested < 1) return 1;
+  if (requested > SFP_UNIT_SPEED_MAX) return SFP_UNIT_SPEED_MAX;
+  return requested;
+}
+
+// --- GET_LETTER (0x84): what the unit reports (#502) -------------------------
+// A unit that is not homed has no letter: whatever index it holds is where it
+// would be had the home worked.
+inline uint8_t letterReplyIndex(uint8_t displayedLetter, bool homed) {
+  return homed ? displayedLetter : (uint8_t)SFP_LETTER_UNKNOWN;
+}

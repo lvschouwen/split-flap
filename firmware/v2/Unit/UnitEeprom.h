@@ -33,7 +33,11 @@
 //  -- reserved scalars ------------------------------------------------------
 //   24       u8    ringInitVersion           UNIT_EE_RING_INIT_VERSION (#417)
 //   25       u8    checksum over 24
-//   26..63         38 B — EE_RESERVED_NEXT_FREE, the ring never moves again
+//   26       u8    resetMark                 UNIT_EE_RESET_MARK_REQUESTED while
+//                                            a reset the sketch asked for is
+//                                            pending (#502)
+//   27       u8    checksum over 26
+//   28..63         36 B — EE_RESERVED_NEXT_FREE, the ring never moves again
 //
 //  -- odometer ring ---------------------------------------------------------
 //   64..143        ODO_RING_SLOTS x ODO_SLOT_STRIDE, interleaved
@@ -149,12 +153,28 @@
 // versioned for.
 #define UNIT_EE_RING_INIT_VERSION   2
 
+// Requested-reset marker (#502). The sketch resets itself through the watchdog
+// (reboot, bootloader entry, address burn, boot-update stage 1), which the
+// chip reports exactly like a hang. The sketch stamps this byte first and the
+// next boot consumes it, so only an unexplained watchdog reset moves the
+// lifetime counter (rules in shared/UnitResetCause.h).
+//
+// Everything but a checksum-valid "requested" reads as not requested — erased
+// EEPROM, the cleared block, a torn write — so a damaged marker can only
+// over-report a hang, never hide one. It lives in EEPROM, not RAM, because the
+// bootloader and a reflashed sketch both run in between.
+#define EE_RESET_MARK               (EE_RING_INIT_VERSION + EE_RING_INIT_BLOCK_LEN)
+#define EE_RESET_MARK_CHECKSUM      (EE_RESET_MARK + 1)
+#define EE_RESET_MARK_BLOCK_LEN     2
+#define EE_RESET_MARK_CHECKSUM_MASK 0x96
+#define UNIT_EE_RESET_MARK_REQUESTED 0xA5
+
 // Where the NEXT reserved scalar lands, and therefore what is left ahead of
 // the ring. Claiming bytes means re-pointing this at the end of the new block
 // — the same edit the test's claimed-block table demands, so a field that
 // updates only one of the two fails test_eeprom_layout rather than colliding
 // on a unit.
-#define EE_RESERVED_NEXT_FREE  (EE_RING_INIT_VERSION + EE_RING_INIT_BLOCK_LEN)
+#define EE_RESERVED_NEXT_FREE  (EE_RESET_MARK + EE_RESET_MARK_BLOCK_LEN)
 
 static_assert(EE_RESERVED_NEXT_FREE <= EE_ODO_RING_BASE,
               "the reserved scalars have run into the ring");
@@ -256,6 +276,23 @@ inline uint8_t unitEeIdentityAddress(const uint8_t block[EE_ID_BLOCK_LEN]) {
   // 0 is general call, 127 is reserved; anything else in 1..126 is plausible.
   if (block[1] < 1 || block[1] > 126) return 0;
   return block[1];
+}
+
+inline void unitEeResetMarkEncode(bool requested,
+                                  uint8_t block[EE_RESET_MARK_BLOCK_LEN]) {
+  block[0] = requested ? UNIT_EE_RESET_MARK_REQUESTED : 0;
+  block[1] = unitEeBlockChecksum(block, EE_RESET_MARK_BLOCK_LEN - 1,
+                                 EE_RESET_MARK_CHECKSUM_MASK);
+}
+
+inline bool unitEeResetMarkRequested(
+    const uint8_t block[EE_RESET_MARK_BLOCK_LEN]) {
+  if (block[EE_RESET_MARK_BLOCK_LEN - 1] !=
+      unitEeBlockChecksum(block, EE_RESET_MARK_BLOCK_LEN - 1,
+                          EE_RESET_MARK_CHECKSUM_MASK)) {
+    return false;
+  }
+  return block[0] == UNIT_EE_RESET_MARK_REQUESTED;
 }
 
 inline void unitEeRingInitEncode(uint8_t block[EE_RING_INIT_BLOCK_LEN]) {

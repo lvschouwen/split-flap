@@ -82,7 +82,11 @@ void runBootUpdate(uint8_t stage) {
   // master reads the outcome as state Page7Installed after the reboot.
   BootUpdateReport lockFuses;
   readLockAndFuses(lockFuses);
+  // Stage 1 ends in a watchdog reset when its gates pass; if it returns, no
+  // reset happened and the marker must not explain a later one.
+  if (stage == 1) markResetRequested();
   BootUpdateResult r = bootRunStage(stage, bootEffectiveLockByte(lockFuses));
+  if (stage == 1) clearResetRequested();
   // A master that resends stage 2 after timing out in the NACK window gets
   // REFUSED_STATE (state is already New); keep the STAGE2_OK it missed. Masters
   // key on the state, the result only explains it.

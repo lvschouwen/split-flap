@@ -512,6 +512,41 @@ static void test_jog_rejects_a_disagreeing_pair_and_odd_lengths() {
   TEST_ASSERT_EQUAL_INT8(99, out);
 }
 
+// --- letter write speed + GET_LETTER reply (#502) ---------------------------
+
+static void test_speed_is_clamped_into_the_range_masters_send() {
+  TEST_ASSERT_EQUAL_INT(1, unitClampSpeed(0));
+  TEST_ASSERT_EQUAL_INT(1, unitClampSpeed(-5));
+  TEST_ASSERT_EQUAL_INT(1, unitClampSpeed(1));
+  TEST_ASSERT_EQUAL_INT(7, unitClampSpeed(7));
+  TEST_ASSERT_EQUAL_INT(SFP_UNIT_SPEED_MAX, unitClampSpeed(SFP_UNIT_SPEED_MAX));
+  TEST_ASSERT_EQUAL_INT(SFP_UNIT_SPEED_MAX, unitClampSpeed(SFP_UNIT_SPEED_MAX + 1));
+  TEST_ASSERT_EQUAL_INT(SFP_UNIT_SPEED_MAX, unitClampSpeed(255));
+}
+
+// The ceiling is the top of the masters' range; a higher one would let a
+// flipped bit through, a lower one would slow the wall down.
+static void test_speed_ceiling_is_twelve_rpm() {
+  TEST_ASSERT_EQUAL_INT(12, SFP_UNIT_SPEED_MAX);
+}
+
+static void test_a_homed_unit_reports_its_letter() {
+  TEST_ASSERT_EQUAL_UINT8(0, letterReplyIndex(0, true));
+  TEST_ASSERT_EQUAL_UINT8(44, letterReplyIndex(44, true));
+}
+
+static void test_an_unhomed_unit_reports_no_letter() {
+  TEST_ASSERT_EQUAL_UINT8(SFP_LETTER_UNKNOWN, letterReplyIndex(0, false));
+  TEST_ASSERT_EQUAL_UINT8(SFP_LETTER_UNKNOWN, letterReplyIndex(17, false));
+}
+
+// The marker has to fail the master's readback check even with a correct
+// complement, or a master would verify a frame against it.
+static void test_the_unknown_marker_is_outside_every_flap_index() {
+  TEST_ASSERT_TRUE(SFP_LETTER_UNKNOWN >= SFP_FLAP_AMOUNT);
+  TEST_ASSERT_TRUE(SFP_LETTER_UNKNOWN > 0x2C);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_version_roundtrip);
@@ -556,6 +591,11 @@ int main(int, char**) {
   RUN_TEST(test_jog_roundtrip_with_complement);
   RUN_TEST(test_jog_single_byte_form_only_without_strict);
   RUN_TEST(test_jog_rejects_a_disagreeing_pair_and_odd_lengths);
+  RUN_TEST(test_speed_is_clamped_into_the_range_masters_send);
+  RUN_TEST(test_speed_ceiling_is_twelve_rpm);
+  RUN_TEST(test_a_homed_unit_reports_its_letter);
+  RUN_TEST(test_an_unhomed_unit_reports_no_letter);
+  RUN_TEST(test_the_unknown_marker_is_outside_every_flap_index);
   UNITY_END();
   return 0;
 }

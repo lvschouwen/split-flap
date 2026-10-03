@@ -230,10 +230,10 @@ void receiveLetter(int numBytes) {
   }
 
   receivedNumber = firstByte;
-  // Stepper::setSpeed() divides by the speed — a zero byte (bus noise or a
-  // buggy master) would produce a garbage step delay. Clamp to >= 1.
-  int requestedSpeed = Wire.read();
-  stepperSpeed = (requestedSpeed < 1) ? 1 : requestedSpeed;
+  // Clamped into the range a master sends (unitClampSpeed): zero would make
+  // Stepper::setSpeed() divide by it, and a corrupted high byte would ask the
+  // motor for a rate it only loses steps at.
+  stepperSpeed = unitClampSpeed(Wire.read());
 }
 
 void requestEvent() {
@@ -260,7 +260,8 @@ void requestEvent() {
   if (reply == REPLY_LETTER) {
     // Issue #106. 2 bytes: displayed letter index + bitwise complement so
     // the master can reject a corrupted read instead of "verifying" noise.
-    uint8_t letter = (uint8_t)displayedLetter;
+    // A unit that is not homed reports SFP_LETTER_UNKNOWN (letterReplyIndex).
+    uint8_t letter = letterReplyIndex((uint8_t)displayedLetter, homed);
     uint8_t buf[2] = { letter, (uint8_t)~letter };
     Wire.write(buf, 2);
     return;
@@ -340,7 +341,8 @@ void requestEvent() {
     //             bit 5  homed since boot (#309) — with bit 0 gives the
     //                    master unhomed/homing/homed (hs2)
     //             bits 6-7 reserved
-    //   byte 1   savedMcusr — current-boot reset-cause snapshot
+    //   byte 1   reset cause of this boot: MCUSR bits 0-3, bit 7 = the
+    //            sketch asked for it (UnitResetCause.h)
     //   byte 2   lifetime brownout reset count (EEPROM, saturating)
     //   byte 3   lifetime watchdog reset count (EEPROM, saturating)
     //   byte 4-5 uptime in seconds (uint16 big-endian, saturating)
@@ -359,7 +361,7 @@ void requestEvent() {
     uint8_t lastHomeScaled = (lastHomeScaled16 > 0xFF) ? 0xFF : (uint8_t)lastHomeScaled16;
     uint8_t payload[STATUS_PAYLOAD_LEN] = {
       flags,
-      savedMcusr,
+      resetStatusByte,
       lifetimeBrownoutCount,
       lifetimeWatchdogCount,
       (uint8_t)((uptimeSeconds >> 8) & 0xFF),

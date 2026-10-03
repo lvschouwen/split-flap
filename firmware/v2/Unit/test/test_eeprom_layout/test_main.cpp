@@ -35,6 +35,7 @@ static const EeBlock kClaimedBlocks[] = {
     {EE_CAL_OFFSET,        EE_CAL_BLOCK_LEN,       "calibration"},
     {EE_HEALTH_BASE,       EE_HEALTH_BLOCK_LEN,    "lifetime health"},
     {EE_RING_INIT_VERSION, EE_RING_INIT_BLOCK_LEN, "odometer ring marker"},
+    {EE_RESET_MARK,        EE_RESET_MARK_BLOCK_LEN, "requested-reset marker"},
     {EE_ODO_RING_BASE,     ODO_RING_BYTES,         "odometer ring"},
 };
 static const int kClaimedBlockCount =
@@ -74,7 +75,7 @@ static void test_reserved_scalar_headroom_counts_down_as_fields_land() {
   // The header states where the next field lands; the table states what is
   // already taken. Either one going stale on its own fails here.
   TEST_ASSERT_EQUAL_INT(EE_RESERVED_NEXT_FREE, highestClaimedEnd);
-  TEST_ASSERT_EQUAL_INT(38, EE_ODO_RING_BASE - highestClaimedEnd);
+  TEST_ASSERT_EQUAL_INT(36, EE_ODO_RING_BASE - highestClaimedEnd);
 }
 
 static void test_ring_fits_the_device() {
@@ -120,7 +121,7 @@ static void test_block_masks_are_distinct() {
   const uint8_t masks[] = {
       EE_ID_CHECKSUM_MASK,        EE_CAL_CHECKSUM_MASK,
       EE_HEALTH_CHECKSUM_MASK,    EE_RING_INIT_CHECKSUM_MASK,
-      ODO_SLOT_CHECKSUM_MASK,
+      EE_RESET_MARK_CHECKSUM_MASK, ODO_SLOT_CHECKSUM_MASK,
   };
   const int n = (int)(sizeof(masks) / sizeof(masks[0]));
   for (int i = 0; i < n; i++) {
@@ -444,6 +445,49 @@ static void test_step_excess_max_is_lifetime_high_water() {
   TEST_ASSERT_EQUAL_UINT16(41, h.stepExcessLifetimeMax);
 }
 
+// --- requested-reset marker (#502) ----------------------------------------
+// The marker may only ever err towards "not requested": a watchdog reset it
+// wrongly explains away is a hang nobody hears about.
+
+static void test_reset_mark_roundtrip() {
+  uint8_t block[EE_RESET_MARK_BLOCK_LEN];
+  unitEeResetMarkEncode(true, block);
+  TEST_ASSERT_TRUE(unitEeResetMarkRequested(block));
+  unitEeResetMarkEncode(false, block);
+  TEST_ASSERT_FALSE(unitEeResetMarkRequested(block));
+}
+
+static void test_reset_mark_erased_and_zeroed_eeprom_read_not_requested() {
+  const uint8_t erased[EE_RESET_MARK_BLOCK_LEN] = {0xFF, 0xFF};
+  const uint8_t zeroed[EE_RESET_MARK_BLOCK_LEN] = {0x00, 0x00};
+  TEST_ASSERT_FALSE(unitEeResetMarkRequested(erased));
+  TEST_ASSERT_FALSE(unitEeResetMarkRequested(zeroed));
+}
+
+static void test_reset_mark_any_single_bit_flip_reads_not_requested() {
+  for (int byte = 0; byte < EE_RESET_MARK_BLOCK_LEN; byte++) {
+    for (int bit = 0; bit < 8; bit++) {
+      uint8_t block[EE_RESET_MARK_BLOCK_LEN];
+      unitEeResetMarkEncode(true, block);
+      block[byte] ^= (uint8_t)(1 << bit);
+      TEST_ASSERT_FALSE(unitEeResetMarkRequested(block));
+    }
+  }
+}
+
+// A write torn between the two bytes leaves one new and one old byte.
+static void test_reset_mark_a_torn_write_reads_not_requested() {
+  uint8_t set[EE_RESET_MARK_BLOCK_LEN], clear[EE_RESET_MARK_BLOCK_LEN];
+  unitEeResetMarkEncode(true, set);
+  unitEeResetMarkEncode(false, clear);
+  const uint8_t tornSetting[EE_RESET_MARK_BLOCK_LEN] = {set[0], clear[1]};
+  const uint8_t tornClearing[EE_RESET_MARK_BLOCK_LEN] = {clear[0], set[1]};
+  const uint8_t fromErased[EE_RESET_MARK_BLOCK_LEN] = {set[0], 0xFF};
+  TEST_ASSERT_FALSE(unitEeResetMarkRequested(tornSetting));
+  TEST_ASSERT_FALSE(unitEeResetMarkRequested(tornClearing));
+  TEST_ASSERT_FALSE(unitEeResetMarkRequested(fromErased));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_layout_blocks_do_not_overlap);
@@ -484,6 +528,10 @@ int main(int, char**) {
   RUN_TEST(test_self_test_later_readings_only_move_last);
   RUN_TEST(test_self_test_zero_hall_window_is_not_a_baseline);
   RUN_TEST(test_step_excess_max_is_lifetime_high_water);
+  RUN_TEST(test_reset_mark_roundtrip);
+  RUN_TEST(test_reset_mark_erased_and_zeroed_eeprom_read_not_requested);
+  RUN_TEST(test_reset_mark_any_single_bit_flip_reads_not_requested);
+  RUN_TEST(test_reset_mark_a_torn_write_reads_not_requested);
   UNITY_END();
   return 0;
 }

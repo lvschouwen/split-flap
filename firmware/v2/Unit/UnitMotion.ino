@@ -110,6 +110,15 @@ void rotateToLetter(int toLetter) {
     return;
   }
 
+  // A unit whose home failed has no position to move from, and seeking again
+  // before the retry gap is over would only repeat the failure
+  // (UnitHomePolicy.h). The letter stays commanded: loop() calls back every
+  // pass and the seek runs when the gap ends. Ahead of the overheat gate,
+  // which would report the unit busy for the whole wait.
+  if (!homed && !homeAttemptAllowed(homeBackoff, millis())) {
+    return;
+  }
+
   // Anti-overheat gate: after a rotation starts, the stepper won't move again
   // until OVERHEATINGTIMEOUT has passed. While a target is pending but the gate
   // hasn't cleared, report "busy" so the master's waitForDisplayToStop() waits
@@ -121,21 +130,6 @@ void rotateToLetter(int toLetter) {
     return;
   }
 
-  // Trigger 2 (#309): while UNHOMED, this call will force a full calibrate below
-  // (the drum position is unknown). If homing keeps FAILING (dead hall), that
-  // full seek would otherwise re-run on every letter and cook the motor —
-  // calibrate() has no overheat gate. Rate-limit the retries after the first
-  // attempt; a success sets `homed` and skips this path entirely next time.
-  if (!homed) {
-    if (lastUnhomedCalibrateMs != 0 &&
-        millis() - lastUnhomedCalibrateMs < UNHOMED_CALIBRATE_COOLDOWN_MS) {
-      return;  // still cooling down after a failed home — leave the drum idle
-    }
-    // 0 is the "never attempted" sentinel — bump like identifyStartMs (#354).
-    lastUnhomedCalibrateMs = millis();
-    if (lastUnhomedCalibrateMs == 0) lastUnhomedCalibrateMs = 1;
-  }
-
   lastRotation = millis();
   if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
   // Committed to a move now (past the overheat/unhomed gates): arm the per-move
@@ -144,7 +138,6 @@ void rotateToLetter(int toLetter) {
   if (extDutyWindow < 0xFFFF) extDutyWindow++;
   unsigned long extMoveStartMs = millis();  // #374 stall timing
   uint32_t extExpectedMs = 0;
-  bool extStallEvaluable = true;
   int posCurrentLetter = displayedLetter;
 #ifdef SERIAL_ENABLE
   Serial.print("go to letter: ");
@@ -171,18 +164,19 @@ void rotateToLetter(int toLetter) {
     Serial.println("full rotation incl. calibration");
 #endif
     int homingSteps = calibrate(false); //calibrate revolver and do not stop motor
+    if (homingSteps < 0) {
+      // No marker, so no position to count flaps from: stepping on would park
+      // the drum on an arbitrary flap and report it as the letter. calibrate()
+      // already stopped the motor, dropped `homed` and started the retry gap;
+      // the letter stays commanded for that retry.
+      return;
+    }
     stepper.setSpeed(stepperSpeed);
     // #374: the commanded steps here are the homing seek (at HOMING_RPM) plus
-    // the flap move (at the commanded speed). A failed home (-1) makes the
-    // duration meaningless — skip the stall verdict, statusLastHomeFailed owns
-    // that fault.
-    if (homingSteps < 0) {
-      extStallEvaluable = false;
-    } else {
-      extExpectedMs =
-          extExpectedMoveMs((uint32_t)homingSteps, HOMING_RPM) +
-          extExpectedMoveMs((uint32_t)toLetter * STEPS / AMOUNTFLAPS, stepperSpeed);
-    }
+    // the flap move (at the commanded speed).
+    extExpectedMs =
+        extExpectedMoveMs((uint32_t)homingSteps, HOMING_RPM) +
+        extExpectedMoveMs((uint32_t)toLetter * STEPS / AMOUNTFLAPS, stepperSpeed);
     stepFlaps(toLetter);
   }
   //store new position
@@ -191,13 +185,11 @@ void rotateToLetter(int toLetter) {
   // prediction by more than 25%. Note the stepper blocks a fixed period per
   // step regardless of mechanical load, so this catches abnormal wall-time
   // stretch, not a silently-slipping drum — bench-tier heuristic.
-  if (extStallEvaluable) {
-    unsigned long extActualMs = millis() - extMoveStartMs;
-    if (extActualMs > extExpectedMs + (extExpectedMs >> 2)) {
-      extStatusBits |= EXT_DIAG_STATUS_STALL;
-    } else {
-      extStatusBits &= ~EXT_DIAG_STATUS_STALL;
-    }
+  unsigned long extActualMs = millis() - extMoveStartMs;
+  if (extActualMs > extExpectedMs + (extExpectedMs >> 2)) {
+    extStatusBits |= EXT_DIAG_STATUS_STALL;
+  } else {
+    extStatusBits &= ~EXT_DIAG_STATUS_STALL;
   }
   //Loaded Vcc sample (#306): the coils are still energised here, so the rail
   //is at its steady loaded level — the sag the #305 brownout saga chased.
@@ -237,6 +229,9 @@ int calibrate(bool initialCalibration) {
   Serial.println("calibrate revolver");
 #endif
   currentlyrotating = 1; //set active state to active
+  // Any seek stands in for the boot self-home (#309): once this one fails and
+  // drops `homed`, that fallback must not fire a second seek on the next pass.
+  bootHomeAttempted = true;
   // Step-excess (#370): snapshot the believed drum position BEFORE any search
   // stepping mutates it. Meaningful only with a prior belief — a homed unit
   // whose position is known. The initial boot-home has neither, so skip it
@@ -321,6 +316,7 @@ int calibrate(bool initialCalibration) {
       lastHomingStepCount = (uint16_t)i;
       homed = true;  // boot-home satisfied (#309); disables the self-home drain
       interrupts();
+      homeNoteResult(homeBackoff, true, millis());
       //Only stop motor for initial calibration
       if (initialCalibration) {
         stopMotor();
@@ -343,6 +339,7 @@ int calibrate(bool initialCalibration) {
       statusLastHomeFailed = true;
       statusHallNeverTriggered = !hallSawMagnet;
       lastHomingStepCount = (uint16_t)i;
+      homed = false;  // position unknown: no direct moves, no letter to report
       interrupts();
       // #406: statusLastHomeFailed is a single current-state bit, so a unit
       // that fails intermittently looks healthy between attempts. The
@@ -351,6 +348,7 @@ int calibrate(bool initialCalibration) {
       unitEeBumpSaturating(lifetime.homeFailedCount);
       persistLifetimeHealth();
       stopMotor();
+      homeNoteResult(homeBackoff, false, millis());  // the retry gap starts here
       return -1;
     }
     i++;
@@ -499,6 +497,7 @@ void refreshExtDiagReply() {
 //position estimate (same reasoning as calibrate's failure path).
 void runSelfTest() {
   selfTest.state = SELFTEST_STATE_RUNNING;
+  bootHomeAttempted = true;  // a seek, like calibrate(): no boot self-home after it
   selfTest.reason = SELFTEST_REASON_NONE;  //#404: never report a stale reason
   selfTest.stepsPerRev = 0;
   selfTest.hallWindowSteps = 0;
@@ -597,6 +596,14 @@ void runSelfTest() {
       displayedLetter = 0;
       missedSteps = 0;
       drift.driftPending = false;
+      // Parked at the calibrated zero from a freshly found edge — the state a
+      // successful home leaves, so it counts as one.
+      noInterrupts();
+      statusLastHomeFailed = false;
+      statusHallNeverTriggered = false;
+      homed = true;
+      interrupts();
+      homeNoteResult(homeBackoff, true, millis());
     }
   }
   if (failed) {
@@ -613,6 +620,12 @@ void runSelfTest() {
     receivedNumber = 0;
     drift.positionKnown = false;
     drift.driftPending = false;
+    // Same consequence as a failed home: the next letter must seek the marker
+    // rather than step from here, and that seek waits out the retry gap.
+    noInterrupts();
+    homed = false;
+    interrupts();
+    homeNoteResult(homeBackoff, false, millis());
   }
   // #406: carry the measurements into lifetime storage. The FIRST valid
   // reading becomes the baseline this unit is compared against forever;

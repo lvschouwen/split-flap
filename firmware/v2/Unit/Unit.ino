@@ -24,6 +24,8 @@
 #include "UnitExtDiag.h"   // pure ext-diag reply encode (#365; AVR glue below)
 #include "UnitTwiHeal.h"   // pure TWI self-heal policy (#489; glue in UnitI2CProtocol.ino)
 #include "BootHomePolicy.h"  // pure staggered boot-home decision (#309)
+#include "UnitHomePolicy.h"  // pure failed-home retry policy (#502)
+#include "UnitResetCause.h"  // pure reset-cause rules, shared with the masters (#502)
 #include "BootSectionClassify.h"  // pure boot-section state classifier (#499)
 #include "BootUpdateReport.h"     // pure GET_BOOT_INFO reply codec (#499)
 #include "twiboot-new-progmem.h"  // generated new-twiboot image + CRCs (#499)
@@ -126,7 +128,7 @@ TwiDeafState twiDeaf;
 // listens on the DIP-derived address, so the master needs to know a unit may
 // be unreachable for over-I2C reflash. Written once in setup() before the
 // Wire handlers register, then only read by the ISR — non-volatile is fine
-// for the same reason as savedMcusr.
+// for the same reason as resetStatusByte.
 bool addressFromEeprom = false;
 
 // Set by the I2C receive handler when an enter-bootloader command arrives;
@@ -279,10 +281,10 @@ OdometerState     odometer                  = {0, 0};
 volatile uint32_t odometerRevolutions       = 0;      // ISR-read mirror of odometer.revolutions
 uint32_t          lastPersistedRevs         = 0;
 volatile bool     pendingOdometerReset      = false;  // loop() zeroes counter + ring
-uint8_t           savedMcusr                = 0;      // snapshot of MCUSR at boot
+uint8_t           resetStatusByte           = 0;      // GET_STATUS byte 1: reset cause at boot (UnitResetCause.h)
 // ISR-facing mirrors of the two counters GET_STATUS reports. Set once in
 // setup() before the Wire handlers register and never written again, which
-// is why they need no volatile (same rationale as savedMcusr).
+// is why they need no volatile (same rationale as resetStatusByte).
 uint8_t           lifetimeBrownoutCount     = 0;
 uint8_t           lifetimeWatchdogCount     = 0;
 
@@ -325,13 +327,14 @@ volatile bool     homed                     = false;  // homed at least once sin
 volatile bool     masterEverContacted       = false;  // any I2C receive since boot
 bool              bootHomeAttempted         = false;  // self-home tried (loop ctx)
 uint16_t          bootHomeJitterMs          = 0;      // 0..BOOT_HOME_JITTER_MAX_MS
-// Rate-limit the trigger-2 home (a letter command while UNHOMED, #309): a unit
-// whose hall never fires would otherwise re-seek a full revolution on EVERY
-// letter (calibrate() has no overheat gate — it would cook the motor). After a
-// homing attempt while unhomed, hold off this long before the next one; a
-// successful home sets `homed` and disables the path entirely. Loop-context.
-unsigned long     lastUnhomedCalibrateMs    = 0;      // 0 = never attempted
-#define UNHOMED_CALIBRATE_COOLDOWN_MS 30000UL
+// Retry policy after a failed home (UnitHomePolicy.h): calibrate() has no
+// overheat gate, so a unit whose hall never fires would otherwise seek three
+// revolutions on every HOME and every letter. calibrate() and runSelfTest()
+// record each outcome; the HOME drain and rotateToLetter() ask before seeking,
+// and loop() keeps calling rotateToLetter() while a retry is owed. A failed
+// seek also drops `homed`, so the drum is never stepped from a position nobody
+// knows. Loop-context.
+HomeBackoff       homeBackoff               = {0, 0};
 // Status flag bit surfaced to the master (mirrors UnitHealth.h UNIT_FLAG_HOMED).
 #define UNIT_STATUS_FLAG_HOMED (1 << 5)
 
@@ -382,14 +385,40 @@ void refreshLifetimeReply() {
   interrupts();
 }
 
+// A reset the sketch asks for is a watchdog reset on the chip. The marker
+// tells the next boot it was not a hang (UnitEeprom.h). The write is settled
+// before the caller arms the watchdog.
+static void writeResetMark(bool requested) {
+  uint8_t block[EE_RESET_MARK_BLOCK_LEN];
+  unitEeResetMarkEncode(requested, block);
+  for (uint8_t i = 0; i < EE_RESET_MARK_BLOCK_LEN; i++) {
+    EEPROM.update(EE_RESET_MARK + i, block[i]);
+  }
+  eeprom_busy_wait();
+}
+
+void markResetRequested() { writeResetMark(true); }
+
+// The requested reset did not happen after all, or its boot has consumed it.
+void clearResetRequested() { writeResetMark(false); }
+
+static_assert((1 << PORF) == UNIT_MCUSR_PORF && (1 << EXTRF) == UNIT_MCUSR_EXTRF &&
+              (1 << BORF) == UNIT_MCUSR_BORF && (1 << WDRF) == UNIT_MCUSR_WDRF,
+              "UnitResetCause.h restates this chip's MCUSR bits");
+
 //setup
 void setup() {
-  // Capture MCUSR *before* clearing — it tells us why we last reset
-  // (brownout / watchdog / external / power-on / jtag). Kept around for
-  // SFP_CMD_GET_STATUS byte 1, and used right now to bump the lifetime
-  // reset counters in EEPROM. See issue #47.
-  savedMcusr = MCUSR;
+  // Why we last reset (brownout / watchdog / external / power-on). The
+  // bootloader clears MCUSR and leaves the cause in GPIOR0; a unit whose
+  // bootloader does not, still has it in MCUSR — one of the two is always
+  // zero. Reported in SFP_CMD_GET_STATUS byte 1 and used below to move the
+  // lifetime reset counters. See issue #47.
+  uint8_t resetFlags = MCUSR | GPIOR0;
   MCUSR = 0;
+  // Only a real reset refills GPIOR0. A restart that is not one (the
+  // bootloader jumping back to the sketch) must not read this boot's cause
+  // again.
+  GPIOR0 = 0;
   wdt_disable();
 
   // In-system twiboot update auto-resume (#499). A unit whose boot section is a
@@ -448,12 +477,22 @@ void setup() {
       block[i] = EEPROM.read(EE_HEALTH_BASE + i);
     }
     bool healthValid = unitEeHealthDecode(block, lifetime);
+    // A reset the sketch asked for left its marker; consume it so it explains
+    // exactly one reset.
+    uint8_t mark[EE_RESET_MARK_BLOCK_LEN];
+    for (uint8_t i = 0; i < EE_RESET_MARK_BLOCK_LEN; i++) {
+      mark[i] = EEPROM.read(EE_RESET_MARK + i);
+    }
+    bool resetRequested = unitEeResetMarkRequested(mark);
+    if (resetRequested) clearResetRequested();
+    UnitResetKind resetKind = unitResetClassify(resetFlags, resetRequested);
+    resetStatusByte = unitResetStatusByte(resetFlags, resetKind);
     bool bumped = false;
-    if (savedMcusr & (1 << BORF)) {
+    if (resetKind == UNIT_RESET_BROWNOUT) {
       unitEeBumpSaturating(lifetime.brownoutCount);
       bumped = true;
     }
-    if (savedMcusr & (1 << WDRF)) {
+    if (resetKind == UNIT_RESET_WATCHDOG) {
       unitEeBumpSaturating(lifetime.watchdogCount);
       bumped = true;
     }
@@ -645,6 +684,7 @@ void loop() {
     Serial.flush();
 #endif
     delay(10);
+    markResetRequested();
     wdt_enable(WDTO_15MS);
     while (true) {}
   }
@@ -716,11 +756,15 @@ void loop() {
 #ifdef SERIAL_ENABLE
     Serial.println("Home requested");
 #endif
-    calibrate(true);
-    // Park at blank — don't immediately rotate back to the last displayed
-    // letter when the main letter-diff check runs below.
-    receivedNumber = 0;
-    displayedLetter = 0;
+    // Refused for the base gap after a failed home (UnitHomePolicy.h): the
+    // status flags keep reporting that failure.
+    if (homeCommandAllowed(homeBackoff, millis())) {
+      calibrate(true);
+      // Park at blank — don't immediately rotate back to the last displayed
+      // letter when the main letter-diff check runs below.
+      receivedNumber = 0;
+      displayedLetter = 0;
+    }
     previousMillis = millis();
   }
   if (pendingJogSteps != 0) {
@@ -1041,8 +1085,10 @@ void loop() {
     previousMillis = currentMillis; //reset sleep counter
   }  // end of time to sleep
 
-  //check if new letter was received through i2c
-  if (displayedLetter != receivedNumber)
+  //check if new letter was received through i2c, or a failed home still owes
+  //its retry (rotateToLetter() waits out the gap, seeks, then shows the letter
+  //— blank included, which the letter comparison alone would never retry)
+  if (displayedLetter != receivedNumber || homeRetryOwed(homeBackoff))
   {
     /*
       #ifdef SERIAL_ENABLE
@@ -1055,5 +1101,11 @@ void loop() {
     */
     //rotate to new letter
     rotateToLetter(receivedNumber);
+  }
+  else if (currentlyrotating) {
+    // Nothing is moving here — every move blocks and ends in stopMotor(). The
+    // flag can only still be set by the overheat gate holding a letter the
+    // master has since withdrawn; left alone it reports the unit busy forever.
+    currentlyrotating = 0;
   }
 }
