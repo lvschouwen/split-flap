@@ -332,6 +332,32 @@ void webMaintenanceRegister(AsyncWebServer& server) {
                  makeBootUpdateCommand(displayNextMaintSeq(), (uint8_t)addr));
   });
 
+  // Read-only boot report (#499): what the unit says about its own boot
+  // section. No restart, nothing written — safe to ask at any time.
+  server.on("/unit/boot-info", HTTP_POST, [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    maintEnqueue(request,
+                 makeBootInfoCommand(displayNextMaintSeq(), (uint8_t)addr));
+  });
+
+  // pending / ok (+state, crc32, lock and fuse bytes, last result) / failed /
+  // expired.
+  server.on("/unit/boot-info-result", HTTP_GET,
+            [](AsyncWebServerRequest* request) {
+    long seq = 0;
+    if (!maintRequireLongParam(request, "seq", seq)) return;
+    if (seq < 1) {
+      request->send(400, "text/plain", F("seq must be >= 1"));
+      return;
+    }
+    DisplaySnapshot snap = displaySnapshotGet();
+    char buf[BOOT_INFO_JSON_CAP];
+    buildBootInfoJson(buf, sizeof(buf), snap.lastBootInfo, (uint32_t)seq);
+    request->send(200, "application/json", buf);
+  });
+
   // Debug endpoint, v1 semantics preserved: pushes the unit into twiboot
   // (~1 s on its DIP-derived address, then back to the sketch). v1 parity:
   // range check only, no sketch-state gate — it exists precisely for poking

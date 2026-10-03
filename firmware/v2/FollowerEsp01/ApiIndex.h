@@ -42,6 +42,8 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/unit/self-test",        "run a unit's self-test"},
   {"GET",  "/unit/self-test-result", "read a unit's self-test result"},
   {"POST", "/unit/boot-update",      "in-system twiboot update: reads boot info, runs needed stages, verifies"},
+  {"POST", "/unit/boot-info",        "read a unit's own boot-section report (no restart, nothing written)"},
+  {"GET",  "/unit/boot-info-result", "boot report: state, crc32, lock + fuse bytes, last update result"},
   {"POST", "/unit/reboot",           "reboot a unit"},
   {"GET",  "/unit/op-result",        "result of the last {seq} maintenance op"},
 };

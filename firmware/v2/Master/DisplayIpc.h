@@ -21,6 +21,7 @@
 #include "ReflashPlan.h"
 #include "UnitHealth.h"
 #include "BootDump.h"      // BootDumpSlot (#511)
+#include "BootInfo.h"      // BootInfoSlot (#499)
 #include "UnitSelfTest.h"  // SELFTEST_REASON_* + selfTestReasonName (#404)
 
 // Execution result of the LAST maintenance op (#204) — the /unit/op-result
@@ -89,6 +90,7 @@ struct DisplaySnapshot {
   ReflashProgress reflash;
   SelfTestSlot lastSelfTest;  // single-slot self-test result (#265)
   BootDumpSlot lastBootDump;  // single-slot boot-section dump result (#511)
+  BootInfoSlot lastBootInfo;  // single-slot read-only boot report (#499)
   // The letter indices of the last frame the master actually put on the
   // bus (#264) — the "intended" side of the displayed==intended check.
   // Valid after the first ShowText/Stop/ResetUnits; maintained by
@@ -138,6 +140,7 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
     case DisplayOpcode::SelfTest:
     case DisplayOpcode::BootDump:
     case DisplayOpcode::BootUpdate:
+    case DisplayOpcode::BootInfo:
     case DisplayOpcode::SetGates:
     case DisplayOpcode::ResetUnits:
     case DisplayOpcode::ReflashUnits:
@@ -218,6 +221,12 @@ inline void displayApplySelfTestResult(DisplaySnapshot& snap,
 inline void displayApplyBootDumpResult(DisplaySnapshot& snap,
                                        const BootDumpSlot& slot) {
   snap.lastBootDump = slot;
+}
+
+// Same overwrite contract for the read-only boot report (#499).
+inline void displayApplyBootInfoResult(DisplaySnapshot& snap,
+                                       const BootInfoSlot& slot) {
+  snap.lastBootInfo = slot;
 }
 
 // A successful SET_OFFSET is the only in-place offset mutation; everything

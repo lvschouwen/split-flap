@@ -852,6 +852,33 @@ static void execBootDump(DisplaySnapshot& local, UnitFacts* busFacts,
                           MaintReason::None);
 }
 
+// Read-only boot report (#499): one GET_BOOT_INFO exchange, no restart, no
+// write. A unit on firmware predating the opcode answers its one-byte status
+// fallback, which the report's checksum and range checks reject — that reads
+// as a failed read here, not as a report.
+static void execBootInfo(DisplaySnapshot& local, const DisplayCommand& cmd) {
+  BootInfoSlot slot;
+  slot.seq = cmd.seq;
+  slot.addr = cmd.unitAddress;
+  slot.ok = unitBusReadBootInfo(cmd.unitAddress, slot.report);
+  slot.done = true;
+  if (slot.ok) {
+    SerialPrintf("display: boot-info unit 0x%02x → %s crc32 %08lx lock %02x\n",
+                 cmd.unitAddress, bootInfoStateName(slot.report.state),
+                 (unsigned long)slot.report.bootCrc32,
+                 (unsigned)slot.report.lockByte);
+  } else {
+    SerialPrintf("display: boot-info unit 0x%02x → read fail\n",
+                 cmd.unitAddress);
+  }
+  displayApplyBootInfoResult(local, slot);
+  displayApplyMaintResult(local, cmd,
+                          slot.ok ? MaintOutcome::Ok
+                                  : MaintOutcome::PostconditionFail,
+                          slot.ok ? MaintReason::None
+                                  : MaintReason::BootInfoReadFail);
+}
+
 // In-system twiboot update (#499). Reads boot info, decides which stages
 // (if any) the unit needs, drives them, and verifies. Stage 1 causes a WDT
 // reset (~250 ms) that passes through twiboot; stage 2 disables TWI for
@@ -1264,6 +1291,9 @@ void displayTaskMain(void*) {
           break;
         case DisplayOpcode::BootUpdate:
           execBootUpdate(local, busFacts, cmd);
+          break;
+        case DisplayOpcode::BootInfo:
+          execBootInfo(local, cmd);
           break;
         case DisplayOpcode::SetGates:
           execSetGates(local, busFacts, cmd);

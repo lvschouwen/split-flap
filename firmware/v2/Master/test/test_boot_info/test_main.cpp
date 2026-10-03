@@ -1,0 +1,127 @@
+// Host-side tests for the read-only unit boot report (BootInfo.h, #499): the
+// JSON an operator reads back after a bootloader update, and the seq ordering
+// it shares with the other single-slot op results.
+
+#include <cstring>
+
+#include <unity.h>
+
+#include "BootInfo.h"
+
+void setUp() {}
+void tearDown() {}
+
+static BootInfoSlot okSlot(uint32_t seq) {
+  BootInfoSlot s;
+  s.seq = seq;
+  s.addr = 3;
+  s.done = true;
+  s.ok = true;
+  s.report.lockByte = 0xFF;
+  s.report.fuseLow = 0xFF;
+  s.report.fuseHigh = 0xDC;
+  s.report.fuseExt = 0xFD;
+  s.report.bootCrc32 = 0xE422A668UL;
+  s.report.state = BOOT_STATE_NEW;
+  s.report.lastResult = BOOT_RESULT_STAGE2_OK;
+  return s;
+}
+
+static void test_ok_report_carries_every_field() {
+  char buf[BOOT_INFO_JSON_CAP];
+  size_t n = buildBootInfoJson(buf, sizeof(buf), okSlot(7), 7);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"ok\",\"addr\":3,\"boot\":\"new\",\"crc32\":\"e422a668\","
+      "\"lock\":\"ff\",\"lfuse\":\"ff\",\"hfuse\":\"dc\",\"efuse\":\"fd\","
+      "\"last\":\"stage2-ok\"}",
+      buf);
+  TEST_ASSERT_EQUAL_size_t(strlen(buf), n);
+}
+
+static void test_crc_is_zero_padded_hex() {
+  BootInfoSlot s = okSlot(1);
+  s.report.bootCrc32 = 0x0000ABCDUL;
+  s.report.state = BOOT_STATE_OLD;
+  s.report.lastResult = BOOT_RESULT_NONE;
+  char buf[BOOT_INFO_JSON_CAP];
+  buildBootInfoJson(buf, sizeof(buf), s, 1);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"crc32\":\"0000abcd\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"boot\":\"old\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"last\":\"none\""));
+}
+
+static void test_seq_ordering() {
+  char buf[BOOT_INFO_JSON_CAP];
+  BootInfoSlot fresh;  // nothing ever read
+  buildBootInfoJson(buf, sizeof(buf), fresh, 1);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"pending\"}", buf);
+  // An older result is still in the slot while seq 9 is queued.
+  buildBootInfoJson(buf, sizeof(buf), okSlot(8), 9);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"pending\"}", buf);
+  // A newer result replaced the one asked for.
+  buildBootInfoJson(buf, sizeof(buf), okSlot(8), 7);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"expired\"}", buf);
+}
+
+static void test_failed_read_never_shows_a_report() {
+  // A unit on firmware without the opcode: the read is rejected, and the
+  // default-constructed report (state unknown, all-0xFF bytes) must not be
+  // served as if the unit had said it.
+  BootInfoSlot s;
+  s.seq = 4;
+  s.addr = 9;
+  s.done = true;
+  s.ok = false;
+  char buf[BOOT_INFO_JSON_CAP];
+  buildBootInfoJson(buf, sizeof(buf), s, 4);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"addr\":9,\"reason\":\"read-fail\"}", buf);
+  TEST_ASSERT_NULL(strstr(buf, "crc32"));
+}
+
+static void test_every_state_and_result_has_a_distinct_name() {
+  const char* states[] = {
+      bootInfoStateName(BOOT_STATE_UNKNOWN), bootInfoStateName(BOOT_STATE_OLD),
+      bootInfoStateName(BOOT_STATE_PAGE7_INSTALLED),
+      bootInfoStateName(BOOT_STATE_TRAMPOLINE), bootInfoStateName(BOOT_STATE_NEW)};
+  for (int i = 0; i < 5; i++) {
+    for (int j = i + 1; j < 5; j++) {
+      TEST_ASSERT_TRUE(strcmp(states[i], states[j]) != 0);
+    }
+  }
+  for (int r = 0; r < BOOT_RESULT_COUNT; r++) {
+    for (int q = r + 1; q < BOOT_RESULT_COUNT; q++) {
+      TEST_ASSERT_TRUE(strcmp(bootInfoResultName((uint8_t)r),
+                              bootInfoResultName((uint8_t)q)) != 0);
+    }
+    TEST_ASSERT_TRUE(strcmp(bootInfoResultName((uint8_t)r), "unknown") != 0);
+  }
+  TEST_ASSERT_EQUAL_STRING("unknown", bootInfoStateName(200));
+  TEST_ASSERT_EQUAL_STRING("unknown", bootInfoResultName(200));
+}
+
+static void test_longest_reply_fits_the_declared_cap_and_a_small_one_truncates() {
+  BootInfoSlot s = okSlot(1);
+  s.addr = 126;
+  s.report.state = BOOT_STATE_TRAMPOLINE;
+  s.report.lastResult = BOOT_RESULT_REFUSED_STATE;
+  char buf[BOOT_INFO_JSON_CAP];
+  size_t n = buildBootInfoJson(buf, sizeof(buf), s, 1);
+  TEST_ASSERT_TRUE(n < BOOT_INFO_JSON_CAP - 1);
+  TEST_ASSERT_EQUAL_CHAR('}', buf[n - 1]);
+  char tiny[16];
+  size_t m = buildBootInfoJson(tiny, sizeof(tiny), s, 1);
+  TEST_ASSERT_EQUAL_size_t(sizeof(tiny) - 1, m);
+  TEST_ASSERT_EQUAL_size_t(sizeof(tiny) - 1, strlen(tiny));
+}
+
+int main(int, char**) {
+  UNITY_BEGIN();
+  RUN_TEST(test_ok_report_carries_every_field);
+  RUN_TEST(test_crc_is_zero_padded_hex);
+  RUN_TEST(test_seq_ordering);
+  RUN_TEST(test_failed_read_never_shows_a_report);
+  RUN_TEST(test_every_state_and_result_has_a_distinct_name);
+  RUN_TEST(test_longest_reply_fits_the_declared_cap_and_a_small_one_truncates);
+  return UNITY_END();
+}

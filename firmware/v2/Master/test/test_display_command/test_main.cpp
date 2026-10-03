@@ -286,6 +286,15 @@ static void test_boot_update_command_carries_seq_and_address() {
                            displayOpcodeName(DisplayOpcode::BootUpdate));
 }
 
+static void test_boot_info_command_carries_seq_and_address() {
+  DisplayCommand cmd = makeBootInfoCommand(43, 5);
+  TEST_ASSERT_TRUE(cmd.opcode == DisplayOpcode::BootInfo);
+  TEST_ASSERT_EQUAL_UINT32(43, cmd.seq);
+  TEST_ASSERT_EQUAL_UINT8(5, cmd.unitAddress);
+  TEST_ASSERT_EQUAL_STRING("BootInfo",
+                           displayOpcodeName(DisplayOpcode::BootInfo));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_show_text_sets_opcode_and_copies_text);
@@ -320,6 +329,7 @@ int main(int, char**) {
   RUN_TEST(test_selftest_opcode_name);
   RUN_TEST(test_boot_dump_command_carries_seq_and_address);
   RUN_TEST(test_boot_update_command_carries_seq_and_address);
+  RUN_TEST(test_boot_info_command_carries_seq_and_address);
   RUN_TEST(test_set_gates_command_carries_the_gate_byte_in_value);
   RUN_TEST(test_set_gates_command_carries_an_all_clear);
   RUN_TEST(test_set_gates_high_bit_survives_the_signed_value_field);

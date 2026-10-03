@@ -11,6 +11,7 @@
 
 #include "BuildVersion.h"
 #include "ApiIndex.h"
+#include "BootInfo.h"  // #499: read-only boot report slot + JSON
 #include "FollowerBus.h"
 #include "ClusterHmac.h"  // #313 follow-on: rebuild canonical msgs for verify
 #include "FollowerCluster.h"
@@ -45,6 +46,7 @@ struct StagedOp {
 static StagedOp stagedOp;
 static MaintResult opResult;
 static SelfTestSlot selfTestSlot;
+static BootInfoSlot bootInfoSlot;  // #499: last read-only boot report
 static uint32_t maintSeqCounter = 0;
 
 // Self-test poll state (the unit measures ~2 revolutions; we poll its
@@ -980,6 +982,32 @@ void webEndpointsInit(AsyncWebServer& server) {
     stageOp(request, FollowerOpKind::BootUpdate, (uint8_t)addr, 0);
   });
 
+  // Read-only boot report (#499): what the unit says about its own boot
+  // section. No restart, nothing written. This row has no boot-section dump,
+  // so this is its read-back after an update.
+  server.on("/unit/boot-info", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
+    int addr = 0;
+    if (!checkAddressParam(request, addr)) return;
+    stageOp(request, FollowerOpKind::BootInfo, (uint8_t)addr, 0);
+  });
+
+  server.on("/unit/boot-info-result", HTTP_GET,
+            [](AsyncWebServerRequest* request) {
+    if (!request->hasParam("seq")) {
+      sendWithCors(request, 400, "text/plain", F("Missing 'seq' query param"));
+      return;
+    }
+    long seq = request->getParam("seq")->value().toInt();
+    if (seq < 1) {
+      sendWithCors(request, 400, "text/plain", F("seq must be >= 1"));
+      return;
+    }
+    char buf[BOOT_INFO_JSON_CAP];
+    buildBootInfoJson(buf, sizeof(buf), bootInfoSlot, (uint32_t)seq);
+    sendWithCors(request, 200, "application/json", buf);
+  });
+
   server.on("/unit/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
     if (followerRejectCsrf(request)) return;
     long addr = 0;
@@ -1142,6 +1170,16 @@ static void executeStagedOp() {
       busRunBootUpdate(op.seq, op.addr, opResult);
       stagedOp.pending = false;
       return;
+    case FollowerOpKind::BootInfo: {
+      BootInfoSlot slot;
+      slot.seq = op.seq;
+      slot.addr = op.addr;
+      slot.ok = busReadBootInfo(op.addr, slot.report);
+      slot.done = true;
+      bootInfoSlot = slot;
+      wireStatus = slot.ok ? 0 : 4;
+      break;
+    }
     default:
       break;
   }

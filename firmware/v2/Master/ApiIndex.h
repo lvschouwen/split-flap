@@ -63,6 +63,8 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/unit/boot-dump",         "read a unit's bootloader section over I2C (unit restarts and re-homes)"},
   {"GET",  "/unit/boot-dump-result",  "boot-section dump result: crc32 + bytes as hex"},
   {"POST", "/unit/boot-update",       "in-system twiboot update: reads boot info, runs needed stages, verifies"},
+  {"POST", "/unit/boot-info",         "read a unit's own boot-section report (no restart, nothing written)"},
+  {"GET",  "/unit/boot-info-result",  "boot report: state, crc32, lock + fuse bytes, last update result"},
   {"POST", "/unit/reboot",            "reboot a unit"},
   {"POST", "/unit/set-address",       "burn a unit's EEPROM I2C address"},
   {"POST", "/unit/clear-address",     "clear a unit's EEPROM I2C address"},
