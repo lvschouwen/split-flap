@@ -61,6 +61,17 @@ inline uint8_t unitBootHomeState(uint8_t flags) {
 // health transitions. Detection logic (unitRebootDetect) lives in
 // UnitEventLog.h; the POD lives here so the copied FollowerEsp01 tree needs
 // no master-only header. Inert in the FollowerEsp01 copy.
+// A unit's lifetime reset counters as this master first read them (#502). The
+// counters are history kept in the unit's EEPROM: a brownout months ago, or
+// the one reset a firmware campaign leaves behind, is not a fault today. What
+// is one is a counter that climbs while this master is watching. Held by the
+// bus layer outside UnitFacts, because a probe rescan rebuilds the facts.
+struct UnitResetBaseline {
+  bool    valid = false;
+  uint8_t brownout = 0;
+  uint8_t watchdog = 0;
+};
+
 struct UnitRebootWatch {
   uint16_t lastUptime = 0;
   uint8_t  lastBrownout = 0;
@@ -173,7 +184,27 @@ struct UnitFacts {
   // triple so heartbeatTick can log a unit reboot once, the same place #322
   // logs health transitions. Policy in UnitEventLog.h.
   UnitRebootWatch rebootWatch{};
+  // A lifetime brownout/watchdog counter has climbed since this master first
+  // read the unit (unitResetBaselineFold). Refreshed with every status read.
+  bool resetSeen = false;
 };
+
+// Folds one status read into the unit's baseline; true when the unit has reset
+// unexpectedly since the baseline was taken. A counter that reads lower than
+// its baseline was cleared on the unit (EEPROM re-init), so the baseline
+// follows it down.
+inline bool unitResetBaselineFold(UnitResetBaseline& b, uint8_t brownout,
+                                  uint8_t watchdog) {
+  if (!b.valid) {
+    b.valid = true;
+    b.brownout = brownout;
+    b.watchdog = watchdog;
+    return false;
+  }
+  if (brownout < b.brownout) b.brownout = brownout;
+  if (watchdog < b.watchdog) b.watchdog = watchdog;
+  return brownout > b.brownout || watchdog > b.watchdog;
+}
 
 // Folds one EXT_DIAG_LINK_REPLY_LEN read into the slot (#502). The base packet
 // and the link extension are validated independently: a unit without the
@@ -278,15 +309,15 @@ inline uint16_t unitFleetVccMin(const UnitFacts* units, int width) {
   return lo == 0xFFFF ? 0 : lo;
 }
 
-// A unit is "faulty" when its last home failed, its hall sensor never fired
-// during that home, or it has accrued any lifetime brownout/watchdog reset.
-// badCommandCount is surfaced in the UI/attrs but deliberately NOT counted as
-// a fault — a stray malformed I2C receive is not a hardware problem (#45/#137).
+// What a status read alone says is wrong: the last home failed, or the hall
+// sensor never fired during it. The lifetime brownout/watchdog counters are
+// NOT judged here — their absolute value is history; UnitFacts::resetSeen
+// carries "it reset while we were watching". badCommandCount is surfaced in
+// the UI/attrs but deliberately NOT counted as a fault — a stray malformed I2C
+// receive is not a hardware problem (#45/#137).
 inline bool unitStatusIsFaulty(const UnitStatus& s) {
   if (s.flags & UNIT_FLAG_LAST_HOME_FAILED) return true;
   if (s.flags & UNIT_FLAG_HALL_NEVER)       return true;
-  if (s.lifetimeBrownoutCount > 0)          return true;
-  if (s.lifetimeWatchdogCount > 0)          return true;
   return false;
 }
 
@@ -304,7 +335,7 @@ inline bool unitIsLost(const UnitFacts& u) {
 // be gated on statusValid (#497: a unit dead for 12 h reported faulty 0).
 inline bool unitIsFaultyOrLost(const UnitFacts& u) {
   if (unitIsLost(u)) return true;
-  return u.statusValid && unitStatusIsFaulty(u.status);
+  return u.statusValid && (unitStatusIsFaulty(u.status) || u.resetSeen);
 }
 
 // The HA units_faulty signal and the cluster ping's faulty key.
@@ -316,7 +347,8 @@ inline int computeFaultyUnitCount(const UnitFacts* units, int n) {
   return count;
 }
 
-// Lost units only. Unlike faulty (which folds sticky lifetime counters), this
+// Lost units only. Unlike faulty (where a reset seen stays until this master
+// reboots), this
 // clears as soon as the unit answers again, so it can drive cluster degrade.
 inline int computeLostUnitCount(const UnitFacts* units, int n) {
   int count = 0;
@@ -392,6 +424,9 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                          (unsigned)s.badCommandCount, (unsigned)s.mcusrAtBoot,
                          (unsigned)s.flags, (unsigned)s.lastHomingStepCount,
                          (s.flags & UNIT_FLAG_ADDR_EEPROM) ? 1u : 0u);
+      // rs: a lifetime reset counter climbed while this master was watching —
+      // the part of br/wd that counts as a fault. Emitted only when set.
+      if (u.resetSeen) UNIT_HEALTH_APPEND(",\"rs\":1");
     }
     if (u.odometerValid) {
       // Rides its own valid flag, independent of statusValid — a unit can

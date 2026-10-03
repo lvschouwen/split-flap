@@ -626,6 +626,11 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
   SerialPrintf("/%d possible units.\n", maxUnits);
 }
 
+// Per-unit reset-counter baselines (UnitHealth.h). Outside the facts so a
+// probe rescan, which rebuilds every slot, does not re-baseline a unit that
+// reset; only a master reboot does.
+static UnitResetBaseline resetBaselines[UNITS_AMOUNT];
+
 bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   facts[i].statusValid = false;
   // #367: refresh every column's attributed error counters into the facts BEFORE
@@ -645,6 +650,8 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   if (ok) {
     facts[i].status = s;
     facts[i].statusValid = true;
+    facts[i].resetSeen = unitResetBaselineFold(
+        resetBaselines[i], s.lifetimeBrownoutCount, s.lifetimeWatchdogCount);
   } else {
     // #367: the heartbeat status read is the clean per-unit liveness probe —
     // charge its failure to this column. Odometer/diag/vitals sub-reads below

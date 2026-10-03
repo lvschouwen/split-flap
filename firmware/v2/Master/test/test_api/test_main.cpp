@@ -45,6 +45,7 @@ static void fullyPopulated(UnitFacts& u) {
   u.status.mcusrAtBoot = 0x54;
   u.status.lifetimeBrownoutCount = 2;
   u.status.lifetimeWatchdogCount = 1;
+  u.resetSeen = true;  // #502: the rs key must reach the legend guard
   u.status.uptimeSeconds = 1200;
   u.status.badCommandCount = 3;
   u.status.lastHomingStepCount = 720;

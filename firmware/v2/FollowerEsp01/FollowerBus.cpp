@@ -412,6 +412,11 @@ void busProbeQuiet(bool quiet) {
 #endif
 }
 
+// Per-unit reset-counter baselines (UnitHealth.h). Outside the facts so a
+// probe rescan, which rebuilds every slot, does not re-baseline a unit that
+// reset; only a follower reboot does.
+static UnitResetBaseline resetBaselines[UNITS_AMOUNT];
+
 bool busPollHealthOne(int i) {
 #if SERIAL_ENABLE == false
   if (!unitDrivable(unitFacts[i])) {  // #405
@@ -427,6 +432,8 @@ bool busPollHealthOne(int i) {
   if (ok) {
     f.status = s;
     f.statusValid = true;
+    f.resetSeen = unitResetBaselineFold(
+        resetBaselines[i], s.lifetimeBrownoutCount, s.lifetimeWatchdogCount);
   } else {
     f.statusValid = false;
   }

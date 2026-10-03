@@ -81,6 +81,7 @@ static void fullyPopulated(UnitFacts& u) {
   u.lifetime.selfTestLastStepsPerRev = 2048;
   u.extDiagValid = true;
   u.linkValid = true;  // #502: ut/rx/tx/dh must reach the legend guard
+  u.resetSeen = true;  // #502: the rs key
   u.link.uptimeSeconds = 70000;
   u.link.rxFrames = 500;
   u.link.txReplies = 499;
@@ -169,6 +170,7 @@ static size_t worstCaseFitsFor(int width) {
     units[i].extDiag.statusBits = 0xFF;
     // #502 link-health keys at their widest (10-digit uptime).
     units[i].linkValid = true;
+    units[i].resetSeen = true;  // #502: the rs key
     units[i].link.uptimeSeconds = 0xFFFFFFFFUL;
     units[i].link.rxFrames = 0xFFFF;
     units[i].link.txReplies = 0xFFFF;

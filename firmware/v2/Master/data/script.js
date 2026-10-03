@@ -1340,14 +1340,14 @@ function appendDriftCell(row, u) {
 var UNIT_STATE_LABELS = { 0: "silent", 1: "sketch", 2: "bootloader" };
 var UNIT_FW_LABELS = { 0: "ok", 1: "OUTDATED", 2: "unknown" };
 
-//Mirror UnitHealth.h's unitStatusIsFaulty(): home-failed / hall-never /
-//any lifetime brownout or watchdog. Only meaningful for a read unit.
+//Mirror UnitHealth.h's unitIsFaultyOrLost() for a read unit: home-failed /
+//hall-never / a reset counter that climbed while the master was watching
+//(rs). The br/wd totals are history and not a fault by themselves.
 function unitRowIsFaulty(u) {
 	if (!u.v) return false;
 	if (u.fl & 0x02) return true;   // last home failed
 	if (u.fl & 0x04) return true;   // hall never triggered
-	if (u.br > 0) return true;
-	if (u.wd > 0) return true;
+	if (u.rs) return true;
 	return false;
 }
 
@@ -1438,8 +1438,8 @@ function renderUnitHealth(data) {
 		if (unit.v) {
 			appendCell(row, UNIT_FW_LABELS[unit.fw] || unit.fw, unit.fw === 0 ? "" : "uh-warn");
 			appendCell(row, formatUptime(unit.up));
-			appendCell(row, unit.br, unit.br > 0 ? "uh-bad" : "");
-			appendCell(row, unit.wd, unit.wd > 0 ? "uh-bad" : "");
+			appendCell(row, unit.br, unit.rs ? "uh-bad" : "");
+			appendCell(row, unit.wd, unit.rs ? "uh-bad" : "");
 			appendCell(row, unit.bc, unit.bc > 0 ? "uh-warn" : "");
 			appendCell(row, homeCellText(unit), (unit.fl & 0x06) ? "uh-bad" : "");
 			appendCell(row, decodeMcusr(unit.mc));

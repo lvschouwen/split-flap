@@ -38,13 +38,72 @@ static void test_hall_never_flag_is_faulty() {
   TEST_ASSERT_TRUE(unitStatusIsFaulty(s));
 }
 
-static void test_brownout_or_watchdog_is_faulty() {
+// The lifetime counters are history: every unit carries the one reset a
+// firmware campaign leaves behind, and that must not read as 21 faults.
+static void test_lifetime_reset_counters_alone_are_not_faulty() {
   UnitStatus s{};
   s.lifetimeBrownoutCount = 1;
-  TEST_ASSERT_TRUE(unitStatusIsFaulty(s));
+  TEST_ASSERT_FALSE(unitStatusIsFaulty(s));
   UnitStatus w{};
   w.lifetimeWatchdogCount = 3;
-  TEST_ASSERT_TRUE(unitStatusIsFaulty(w));
+  TEST_ASSERT_FALSE(unitStatusIsFaulty(w));
+  UnitFacts u;
+  u.state = 1;
+  u.statusValid = true;
+  u.status.lifetimeBrownoutCount = 255;
+  u.status.lifetimeWatchdogCount = 255;
+  TEST_ASSERT_FALSE(unitIsFaultyOrLost(u));
+}
+
+// --- unitResetBaselineFold ---------------------------------------------------
+
+static void test_first_read_sets_the_baseline_and_is_not_a_reset() {
+  UnitResetBaseline b;
+  TEST_ASSERT_FALSE(unitResetBaselineFold(b, 4, 7));
+  TEST_ASSERT_TRUE(b.valid);
+  TEST_ASSERT_FALSE(unitResetBaselineFold(b, 4, 7));
+}
+
+static void test_a_counter_that_climbs_is_a_reset_seen() {
+  UnitResetBaseline b;
+  unitResetBaselineFold(b, 0, 1);
+  TEST_ASSERT_TRUE(unitResetBaselineFold(b, 0, 2));   // watchdog
+  UnitResetBaseline c;
+  unitResetBaselineFold(c, 3, 1);
+  TEST_ASSERT_TRUE(unitResetBaselineFold(c, 4, 1));   // brownout
+}
+
+// The verdict stays for as long as the baseline does: a probe rescan between
+// two polls must not make the reset disappear.
+static void test_a_reset_seen_stays_seen_on_later_reads() {
+  UnitResetBaseline b;
+  unitResetBaselineFold(b, 0, 0);
+  TEST_ASSERT_TRUE(unitResetBaselineFold(b, 1, 0));
+  TEST_ASSERT_TRUE(unitResetBaselineFold(b, 1, 0));
+  TEST_ASSERT_TRUE(unitResetBaselineFold(b, 1, 0));
+}
+
+static void test_a_cleared_counter_pulls_the_baseline_down() {
+  UnitResetBaseline b;
+  unitResetBaselineFold(b, 5, 5);
+  TEST_ASSERT_FALSE(unitResetBaselineFold(b, 0, 0));  // unit EEPROM re-initialised
+  TEST_ASSERT_TRUE(unitResetBaselineFold(b, 0, 1));   // and the next reset counts
+}
+
+static void test_a_saturated_counter_cannot_report_a_reset() {
+  UnitResetBaseline b;
+  unitResetBaselineFold(b, 255, 255);
+  TEST_ASSERT_FALSE(unitResetBaselineFold(b, 255, 255));
+}
+
+static void test_reset_seen_makes_a_valid_unit_faulty() {
+  UnitFacts u;
+  u.state = 1;
+  u.statusValid = true;
+  u.resetSeen = true;
+  TEST_ASSERT_TRUE(unitIsFaultyOrLost(u));
+  u.statusValid = false;  // never read: cannot be assessed
+  TEST_ASSERT_FALSE(unitIsFaultyOrLost(u));
 }
 
 static void test_bad_commands_alone_are_not_faulty() {
@@ -68,9 +127,9 @@ static void test_addr_eeprom_flag_alone_is_not_faulty() {
 static void test_faulty_count_only_counts_valid_slots() {
   UnitFacts units[3];
   units[0].statusValid = true;   // valid + faulty -> counts
-  units[0].status.lifetimeWatchdogCount = 1;
+  units[0].status.flags = UNIT_FLAG_LAST_HOME_FAILED;
   units[1].statusValid = false;  // faulty-looking but never read -> ignored
-  units[1].status.lifetimeWatchdogCount = 1;
+  units[1].status.flags = UNIT_FLAG_LAST_HOME_FAILED;
   units[2].statusValid = true;   // valid + clean -> not counted
   TEST_ASSERT_EQUAL(1, computeFaultyUnitCount(units, 3));
 }
@@ -480,6 +539,7 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].extDiag.statusBits = 0xFF;
     // Widest link-health block (#502).
     units[i].linkValid = true;
+    units[i].resetSeen = true;  // #502: the rs key
     units[i].link.uptimeSeconds = 0xFFFFFFFFUL;
     units[i].link.rxFrames = 0xFFFF;
     units[i].link.txReplies = 0xFFFF;
@@ -1037,7 +1097,13 @@ int main(int, char**) {
   RUN_TEST(test_clean_status_is_not_faulty);
   RUN_TEST(test_home_failed_flag_is_faulty);
   RUN_TEST(test_hall_never_flag_is_faulty);
-  RUN_TEST(test_brownout_or_watchdog_is_faulty);
+  RUN_TEST(test_lifetime_reset_counters_alone_are_not_faulty);
+  RUN_TEST(test_first_read_sets_the_baseline_and_is_not_a_reset);
+  RUN_TEST(test_a_counter_that_climbs_is_a_reset_seen);
+  RUN_TEST(test_a_reset_seen_stays_seen_on_later_reads);
+  RUN_TEST(test_a_cleared_counter_pulls_the_baseline_down);
+  RUN_TEST(test_a_saturated_counter_cannot_report_a_reset);
+  RUN_TEST(test_reset_seen_makes_a_valid_unit_faulty);
   RUN_TEST(test_bad_commands_alone_are_not_faulty);
   RUN_TEST(test_addr_eeprom_flag_alone_is_not_faulty);
   RUN_TEST(test_faulty_count_only_counts_valid_slots);

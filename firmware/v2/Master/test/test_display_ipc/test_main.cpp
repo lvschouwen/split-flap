@@ -74,13 +74,13 @@ static void test_unit_facts_recompute_faulty_count() {
   UnitFacts facts[UNITS_AMOUNT];
   facts[0].state = 1;
   facts[0].statusValid = true;
-  facts[0].status.lifetimeBrownoutCount = 1;  // faulty
+  facts[0].status.flags = UNIT_FLAG_LAST_HOME_FAILED;  // faulty
   facts[1].state = 1;
   facts[1].statusValid = true;                // clean
   displayApplyUnitFacts(snap, facts, UNITS_AMOUNT);
   TEST_ASSERT_EQUAL(1, snap.faultyUnitCount);
   // A later all-clean pass must clear the count, not latch it.
-  facts[0].status.lifetimeBrownoutCount = 0;
+  facts[0].status.flags = 0;
   displayApplyUnitFacts(snap, facts, UNITS_AMOUNT);
   TEST_ASSERT_EQUAL(0, snap.faultyUnitCount);
 }
