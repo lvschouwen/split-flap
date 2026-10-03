@@ -456,3 +456,20 @@ inline int reflashCollectFlashTargets(const UnitFacts* facts, int maxUnits,
   }
   return n;
 }
+
+// --- /units/health reply buffer (#519) -----------------------------------------
+// Sized for the row this board drives, not for a 16-unit worst case held in
+// RAM forever: 8 KB static on an 82 KB chip for a reply that is 1.6 KB on a
+// 5-unit row. The per-unit figure is the saturated worst case of
+// buildUnitHealthJson (every key family present, every value at its widest);
+// test_health_json_follower_worst_case_fits_local_buf holds it to that for
+// every width.
+#define FOLLOWER_HEALTH_BASE_BYTES     448  // headline + wear + reflash splices
+#define FOLLOWER_HEALTH_PER_UNIT_BYTES 496
+
+inline size_t followerHealthBufCap(int width, int maxUnits) {
+  if (width < 0) width = 0;
+  if (width > maxUnits) width = maxUnits;
+  return (size_t)FOLLOWER_HEALTH_BASE_BYTES +
+         (size_t)width * FOLLOWER_HEALTH_PER_UNIT_BYTES;
+}

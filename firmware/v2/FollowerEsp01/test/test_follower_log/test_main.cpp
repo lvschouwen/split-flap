@@ -97,6 +97,57 @@ static void test_stamp_survives_the_largest_uptime() {
   TEST_ASSERT_EQUAL_STRING("[4294967295] z\n", out.c_str());
 }
 
+// --- zero-copy reader (#503/#519) ---
+
+static String viaSink(const FollowerLogRing& r, uint32_t after, uint32_t* next,
+                      int* spans) {
+  String out;
+  int n = 0;
+  uint32_t nx = r.readSinceInto(after, [&](const char* p, size_t len) {
+    n++;
+    for (size_t i = 0; i < len; i++) out += p[i];
+  });
+  if (next) *next = nx;
+  if (spans) *spans = n;
+  return out;
+}
+
+static void test_sink_reader_matches_the_copying_reader_everywhere() {
+  // Fill past a wrap in small steps and compare both readers from every
+  // cursor a leader could hold, including stale and future ones.
+  FollowerLogRing r;
+  const char* chunk = "abcdefg";
+  for (int step = 0; step < 9; step++) {
+    r.append(chunk, 7);
+    for (uint32_t after = 0; after <= r.written + 3; after++) {
+      String viaCopy;
+      uint32_t nextCopy = r.readSince(after, viaCopy);
+      uint32_t nextSink = 0;
+      String got = viaSink(r, after, &nextSink, nullptr);
+      TEST_ASSERT_EQUAL_STRING(viaCopy.c_str(), got.c_str());
+      TEST_ASSERT_EQUAL_UINT32(nextCopy, nextSink);
+      TEST_ASSERT_EQUAL_size_t(viaCopy.length(), r.countSince(after));
+    }
+  }
+}
+
+static void test_sink_reader_hands_out_at_most_two_spans_and_none_when_empty() {
+  FollowerLogRing r;
+  int spans = -1;
+  viaSink(r, 0, nullptr, &spans);
+  TEST_ASSERT_EQUAL_INT(0, spans);
+  r.append("0123456789", 10);  // not wrapped: one span
+  viaSink(r, 0, nullptr, &spans);
+  TEST_ASSERT_EQUAL_INT(1, spans);
+  r.append("abcdefghij", 10);  // 20 bytes into a 16-byte ring: wrapped
+  String got = viaSink(r, 0, nullptr, &spans);
+  TEST_ASSERT_EQUAL_INT(2, spans);
+  TEST_ASSERT_EQUAL_STRING("456789abcdefghij", got.c_str());
+  // Caught up: nothing to hand out.
+  viaSink(r, r.written, nullptr, &spans);
+  TEST_ASSERT_EQUAL_INT(0, spans);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_ring_reads_empty_cursor_zero);
@@ -108,5 +159,7 @@ int main(int, char**) {
   RUN_TEST(test_cursor_past_written_rewinds_and_emits_nothing);
   RUN_TEST(test_every_line_opens_with_its_uptime_stamp);
   RUN_TEST(test_stamp_survives_the_largest_uptime);
+  RUN_TEST(test_sink_reader_matches_the_copying_reader_everywhere);
+  RUN_TEST(test_sink_reader_hands_out_at_most_two_spans_and_none_when_empty);
   return UNITY_END();
 }

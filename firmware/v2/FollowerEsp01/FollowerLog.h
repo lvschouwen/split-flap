@@ -65,6 +65,31 @@ struct FollowerLogRing {
   // Oldest cursor value still recoverable from the ring.
   uint32_t oldestCursor() const { return written - (uint32_t)fill(); }
 
+  // The same bytes readSince() appends, handed to `sink(data, len)` as at most
+  // two contiguous spans straight out of the ring — no copy (#503/#519).
+  // Returns the next cursor.
+  template <typename Sink>
+  uint32_t readSinceInto(uint32_t after, Sink&& sink) const {
+    uint32_t start = after;
+    if (start < oldestCursor()) start = oldestCursor();
+    if (start > written) start = written;
+    size_t count = (size_t)(written - start);
+    size_t idx = (head + (size_t)FOLLOWER_LOG_SIZE - count) % FOLLOWER_LOG_SIZE;
+    size_t first = count;
+    if (idx + first > (size_t)FOLLOWER_LOG_SIZE) first = (size_t)FOLLOWER_LOG_SIZE - idx;
+    if (first > 0) sink(buf + idx, first);
+    if (count > first) sink(buf, count - first);
+    return written;
+  }
+
+  // Bytes readSinceInto() would hand out for `after`.
+  size_t countSince(uint32_t after) const {
+    uint32_t start = after;
+    if (start < oldestCursor()) start = oldestCursor();
+    if (start > written) start = written;
+    return (size_t)(written - start);
+  }
+
   // Append the retained bytes with cursor >= `after` (clamped to what the ring
   // still holds), oldest first, to `out`; return the next cursor (== written).
   // A stale `after` past `written` — the leader outlived a follower reboot —
@@ -94,5 +119,6 @@ class FollowerLogPrinter : public Print {
 
 extern FollowerLogPrinter followerLogPrinter;
 
-// Read the delta since `after` into `out`; returns the next cursor.
-uint32_t followerLogReadSince(uint32_t after, String& out);
+// The ring itself, for a reader that streams it (GET /log). Single-core
+// superloop: a handler runs to completion between writers.
+const FollowerLogRing& followerLogRing();

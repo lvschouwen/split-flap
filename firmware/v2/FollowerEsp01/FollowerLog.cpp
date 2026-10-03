@@ -20,6 +20,5 @@ size_t FollowerLogPrinter::write(const uint8_t* buffer, size_t size) {
   return size;
 }
 
-uint32_t followerLogReadSince(uint32_t after, String& out) {
-  return g_ring.readSince(after, out);
-}
+const FollowerLogRing& followerLogRing() { return g_ring; }
+

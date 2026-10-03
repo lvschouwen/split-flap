@@ -144,9 +144,12 @@ inline bool legendHasKey(const char* key) {
   return false;
 }
 
-// #365 legend growth (se/sx/sag/he/dw/sb) pushed the full /api payload past
-// the prior 4096 — bumped with headroom, same as the master's cap.
-#define API_JSON_CAP 6144  // #435's legend row overflowed 5120; static BSS
+// The target never runs buildApiJson(): build_assets.py renders the same text
+// from these tables into ApiIndexAsset.h (PROGMEM) and GET /api serves that,
+// so neither the tables' strings nor a reply buffer live in RAM (#519). The
+// builder stays as the reference the host tests and the asset gate compare
+// against; the cap is host-side only.
+#define API_JSON_CAP 8192
 
 #define API_APPEND(...) do { \
     if (o >= cap) return o; \

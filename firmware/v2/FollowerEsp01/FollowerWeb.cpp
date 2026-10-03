@@ -7,10 +7,13 @@
 #include "FollowerWeb.h"
 
 #include <ESP8266WiFi.h>
+#include <memory>
+#include <new>
 #include <Updater.h>
 
 #include "BuildVersion.h"
 #include "ApiIndex.h"
+#include "ApiIndexAsset.h"  // #519: the GET /api reply, in flash
 #include "BootInfo.h"  // #499: read-only boot report slot + JSON
 #include "FollowerBus.h"
 #include "ClusterHmac.h"  // #313 follow-on: rebuild canonical msgs for verify
@@ -74,10 +77,10 @@ static bool otaTxPowerReduced = false;
 
 // #294 rung 3 CORS: per-response reflection (the ESP8266 async fork has no
 // middleware). Simple requests only — no preflight handler needed.
-static void sendWithCors(AsyncWebServerRequest* request, int status,
-                         const String& contentType, const String& body) {
-  AsyncWebServerResponse* response =
-      request->beginResponse(status, contentType, body);
+// For replies that are not built from a String (flash content, streamed or
+// callback-filled bodies): the same CORS decision, then send.
+static void sendResponseWithCors(AsyncWebServerRequest* request,
+                                 AsyncWebServerResponse* response) {
   if (request->hasHeader("Origin") &&
       followerCorsPathAllowed(request->url())) {
     const String origin = request->header("Origin");
@@ -87,6 +90,12 @@ static void sendWithCors(AsyncWebServerRequest* request, int status,
     }
   }
   request->send(response);
+}
+
+static void sendWithCors(AsyncWebServerRequest* request, int status,
+                         const String& contentType, const String& body) {
+  sendResponseWithCors(request,
+                       request->beginResponse(status, contentType, body));
 }
 
 // #313 CSRF gate for the middleware-less ESP8266 fork: call at the top of
@@ -415,16 +424,12 @@ void webEndpointsInit(AsyncWebServer& server) {
   registerMasterFirmwareEndpoint(server);
 
   // Self-documenting route + terse-key legend index for the headless
-  // operator (#308). Static buffer (BSS) — no per-request heap churn on the
-  // ESP-01, like /units/health.
+  // operator (#308). The reply is fixed text, rendered at build time into
+  // flash (ApiIndexAsset.h) and sent from there: no buffer, no copy (#519).
   server.on("/api", HTTP_GET, [](AsyncWebServerRequest* request) {
-    static char buf[API_JSON_CAP];
-    size_t n = buildApiJson(buf, API_JSON_CAP);
-    if (n == 0 || n >= API_JSON_CAP) {
-      sendWithCors(request, 500, "text/plain", F("api index unavailable"));
-      return;
-    }
-    sendWithCors(request, 200, "application/json", buf);
+    sendResponseWithCors(
+        request, request->beginResponse(200, "application/json",
+                                        API_INDEX_JSON, API_INDEX_JSON_LEN));
   });
 
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -473,15 +478,17 @@ void webEndpointsInit(AsyncWebServer& server) {
       after = (uint32_t)strtoul(request->getParam("after")->value().c_str(),
                                 nullptr, 10);
     }
-    String body;
-    body.reserve(FOLLOWER_LOG_SIZE + 16);
-    uint32_t next = followerLogReadSince(after, body);
-    String out;
-    out.reserve(body.length() + 12);
-    out += next;
-    out += '\n';
-    out += body;
-    sendWithCors(request, 200, "text/plain", out);
+    // One copy, ring -> response buffer (#519). The cursor line comes first;
+    // the next cursor is the ring's write cursor, known before reading.
+    const FollowerLogRing& ring = followerLogRing();
+    AsyncResponseStream* response =
+        request->beginResponseStream("text/plain", ring.countSince(after) + 16);
+    response->print(ring.written);
+    response->print('\n');
+    ring.readSinceInto(after, [response](const char* data, size_t len) {
+      response->write((const uint8_t*)data, len);
+    });
+    sendResponseWithCors(request, response);
   });
 
   server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
@@ -779,31 +786,23 @@ void webEndpointsInit(AsyncWebServer& server) {
   // --- unit health (v1/v2 shared wire shape) --------------------------------
 
   server.on("/units/health", HTTP_GET, [](AsyncWebServerRequest* request) {
-    // Static, not per-request heap (v1's ESP-01 RAM tactic — the S3 version
-    // heap-allocates, but ~3.5 KB of new/delete churn per poll fragments
-    // this board's ~40 KB heap). Safe unlocked: handlers run one at a time
-    // in the single LWIP context.
-    // Sized off a follower-LOCAL cap, deliberately NOT the shared
-    // UNIT_HEALTH_JSON_CAP: the master raised that to 6144 for the #367
-    // err/errAge keys, which stay inert here (per-unit I2C attribution is
-    // master-only — i2cErrors/lastErrorMs are never set by FollowerBus.cpp),
-    // so those keys never widen a follower payload. #365 ext-diag is the
-    // opposite case: FollowerBus.cpp DOES populate extDiagValid on this bus,
-    // so the se/sx/sag/he/dw/sb keys are live here too. 8192 matches the
-    // master's UNIT_HEALTH_JSON_CAP after the #405 protocol + #406 lifetime
-    // keys grew the shared builder past the old 6144 (#411 — a saturated
-    // 16-unit row overflowed and the handler dropped ALL per-unit health);
-    // test_health_json_follower_worst_case_fits_local_buf now saturates
-    // every key family and is the lockstep guard.
-    static constexpr size_t FOLLOWER_HEALTH_BUF = 8192;
-    static char buf[FOLLOWER_HEALTH_BUF];
+    // Built in a buffer sized for THIS row and freed with the response (#519):
+    // the 16-unit worst case used to sit in RAM permanently, 8 KB for a reply
+    // that is 1.6 KB on a 5-unit row. The callback response reads straight
+    // from the buffer, so there is no second copy.
+    const size_t cap = followerHealthBufCap(displayWidth, UNITS_AMOUNT);
+    std::shared_ptr<char> held(new (std::nothrow) char[cap],
+                               std::default_delete<char[]>());
+    char* buf = held.get();
+    if (buf == nullptr) {
+      sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
+      return;
+    }
     int faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
-    size_t n = buildUnitHealthJson(buf, FOLLOWER_HEALTH_BUF, unitFacts,
-                                   displayWidth, faulty,
+    size_t n = buildUnitHealthJson(buf, cap, unitFacts, displayWidth, faulty,
                                    SFP_I2C_ADDRESS_BASE, millis());
-    if (n == 0 || n >= FOLLOWER_HEALTH_BUF) {
-      n = (size_t)snprintf(buf, FOLLOWER_HEALTH_BUF,
-                           "{\"width\":%d,\"faulty\":%d,\"units\":[]}",
+    if (n == 0 || n >= cap) {
+      n = (size_t)snprintf(buf, cap, "{\"width\":%d,\"faulty\":%d,\"units\":[]}",
                            displayWidth, faulty);
     }
     // Wear + reflash progress splices (v2 additive keys — same payload the
@@ -812,18 +811,26 @@ void webEndpointsInit(AsyncWebServer& server) {
     assessWear(unitFacts, UNITS_AMOUNT, wear);
     char wearJson[96];
     size_t wearLen = buildWearJson(wear, wearJson, sizeof(wearJson));
-    if (n > 0 && wearLen < sizeof(wearJson) &&
-        n + wearLen + 2 < FOLLOWER_HEALTH_BUF) {
-      n += (size_t)snprintf(buf + n - 1, FOLLOWER_HEALTH_BUF - n + 1,
-                            ",%s}", wearJson) - 1;
+    if (n > 0 && wearLen < sizeof(wearJson) && n + wearLen + 2 < cap) {
+      n += (size_t)snprintf(buf + n - 1, cap - n + 1, ",%s}", wearJson) - 1;
     }
     char reflashJson[80];
     buildReflashJson(reflashJson, sizeof(reflashJson), reflashProgress);
-    if (n > 0 && n + strlen(reflashJson) + 13 < FOLLOWER_HEALTH_BUF) {
-      snprintf(buf + n - 1, FOLLOWER_HEALTH_BUF - n + 1,
-               ",\"reflash\":%s}", reflashJson);
+    if (n > 0 && n + strlen(reflashJson) + 13 < cap) {
+      n += (size_t)snprintf(buf + n - 1, cap - n + 1, ",\"reflash\":%s}",
+                            reflashJson) - 1;
     }
-    sendWithCors(request, 200, "application/json", buf);
+    sendResponseWithCors(
+        request,
+        request->beginResponse(
+            "application/json", n,
+            [held, n](uint8_t* out, size_t maxLen, size_t index) -> size_t {
+              if (index >= n) return 0;
+              size_t take = n - index;
+              if (take > maxLen) take = maxLen;
+              memcpy(out, held.get() + index, take);
+              return take;
+            }));
   });
 
   server.on("/units/health/refresh", HTTP_POST,

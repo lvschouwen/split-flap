@@ -120,10 +120,12 @@ static void test_legend_covers_all_health_keys() {
 // test_health_json_combined_splices_fit_cap) against THIS board's local
 // /units/health buffer (FollowerWeb.cpp's FOLLOWER_HEALTH_BUF), which is
 // deliberately smaller than the master's shared UNIT_HEALTH_JSON_CAP.
-static void test_health_json_follower_worst_case_fits_local_buf() {
-  constexpr size_t FOLLOWER_HEALTH_BUF = 8192;  // keep in sync w/ FollowerWeb.cpp
+// One saturated row of `width` units against the buffer FollowerWeb.cpp
+// allocates for that width (#519). Returns the reply length.
+static size_t worstCaseFitsFor(int width) {
+  const size_t FOLLOWER_HEALTH_BUF = followerHealthBufCap(width, 16);
   UnitFacts units[16];
-  for (int i = 0; i < 16; i++) {
+  for (int i = 0; i < width; i++) {
     units[i].state = 1;
     units[i].statusValid = true;
     units[i].fwStatus = 2;
@@ -172,8 +174,9 @@ static void test_health_json_follower_worst_case_fits_local_buf() {
     units[i].lifetime.selfTestLastHallWindow = 0xFFFF;
     units[i].lifetime.selfTestLastStepsPerRev = 0xFFFF;
   }
-  char buf[FOLLOWER_HEALTH_BUF];
-  size_t n = buildUnitHealthJson(buf, FOLLOWER_HEALTH_BUF, units, 16, 16,
+  static char buf[16384];
+  TEST_ASSERT_TRUE(FOLLOWER_HEALTH_BUF <= sizeof(buf));
+  size_t n = buildUnitHealthJson(buf, FOLLOWER_HEALTH_BUF, units, width, width,
                                  SFP_I2C_ADDRESS_BASE, 0xFFFFFFFFUL);
   TEST_ASSERT_TRUE(n > 0 && n < FOLLOWER_HEALTH_BUF);
   // The ext-diag block must actually be present at this saturation, or the
@@ -185,8 +188,8 @@ static void test_health_json_follower_worst_case_fits_local_buf() {
   // but the buffer must survive it), same splice arithmetic as FollowerWeb.cpp.
   WearAssessment w;
   w.median = 0xFFFFFFFFUL;
-  for (int i = 0; i < 16; i++) w.flagged[i] = true;
-  w.flaggedCount = 16;
+  for (int i = 0; i < width; i++) w.flagged[i] = true;
+  w.flaggedCount = width;
   char wearJson[96];
   size_t wearLen = buildWearJson(w, wearJson, sizeof(wearJson));
   TEST_ASSERT_TRUE(wearLen > 0 && wearLen < sizeof(wearJson));
@@ -211,6 +214,20 @@ static void test_health_json_follower_worst_case_fits_local_buf() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"reflash\":{"));
   TEST_ASSERT_EQUAL_CHAR('}', buf[strlen(buf) - 1]);
   TEST_ASSERT_TRUE(strlen(buf) < FOLLOWER_HEALTH_BUF);
+  return strlen(buf);
+}
+
+static void test_health_json_follower_worst_case_fits_local_buf() {
+  size_t widest = 0;
+  for (int width = 1; width <= 16; width++) widest = worstCaseFitsFor(width);
+  // The sizing must be tight enough to be worth having: a saturated 16-unit
+  // row uses most of its buffer, and a 5-unit row gets well under half of the
+  // 8 KB the handler used to hold statically.
+  TEST_ASSERT_TRUE(widest * 10 > followerHealthBufCap(16, 16) * 8);
+  TEST_ASSERT_TRUE(followerHealthBufCap(5, 16) < 3072);
+  // Out-of-range widths clamp instead of under- or over-allocating.
+  TEST_ASSERT_EQUAL_size_t(followerHealthBufCap(0, 16), followerHealthBufCap(-3, 16));
+  TEST_ASSERT_EQUAL_size_t(followerHealthBufCap(16, 16), followerHealthBufCap(99, 16));
 }
 
 int main(int, char**) {

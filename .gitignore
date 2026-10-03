@@ -17,6 +17,7 @@
 firmware/**/BuildVersion.h
 firmware/**/WebAssets.h
 firmware/**/UnitAssets.h
+firmware/**/ApiIndexAsset.h
 firmware/**/RescueAssets.h
 firmware/**/WifiCredentials.h
 firmware/**/MqttCredentials.h
