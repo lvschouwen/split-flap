@@ -15,6 +15,12 @@
 #define UNITS_AMOUNT 16
 #endif
 
+// WiFi join windows on stored credentials before the setup portal opens
+// (#524). Three 30 s windows reach the portal in a minute and a half when the
+// network is really gone.
+#define FOLLOWER_JOIN_ATTEMPTS 3
+#define FOLLOWER_JOIN_WINDOW_S 30
+
 // Unit speed byte range (v1 values; the wire contract's rpm scale).
 #define MIN_SPEED 1
 #define MAX_SPEED 12

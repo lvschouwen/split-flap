@@ -54,12 +54,118 @@ static void test_join_window_still_open_just_before_timeout() {
   TEST_ASSERT_EQUAL(WifiPhase::Joining, st.phase);
 }
 
-static void test_join_timeout_opens_portal() {
+// One failed association must not park the board in the portal for five
+// minutes (#524): the first windows that close ask for a restart instead.
+static void test_first_join_timeout_asks_for_a_retry_not_the_portal() {
   WifiPolicyState st;
   quietStep(st, 1000, true);
+  TEST_ASSERT_EQUAL(WifiAction::RetryJoin,
+                    quietStep(st, 1000 + WIFI_JOIN_TIMEOUT_MS, true));
+  TEST_ASSERT_EQUAL(WifiPhase::Joining, st.phase);
+  // Still the answer on a later step: the caller restarts, the policy does
+  // not fall through to the portal on its own.
+  TEST_ASSERT_EQUAL(WifiAction::RetryJoin,
+                    quietStep(st, 2000 + WIFI_JOIN_TIMEOUT_MS, true));
+}
+
+static void test_every_attempt_before_the_last_retries() {
+  for (uint8_t failed = 0; failed + 1 < WIFI_JOIN_ATTEMPTS; failed++) {
+    WifiPolicyState st;
+    st.failedJoinBoots = failed;
+    quietStep(st, 1000, true);
+    TEST_ASSERT_EQUAL(WifiAction::RetryJoin,
+                      quietStep(st, 1000 + WIFI_JOIN_TIMEOUT_MS, true));
+  }
+}
+
+static void test_last_attempt_timeout_opens_portal() {
+  WifiPolicyState st;
+  st.failedJoinBoots = WIFI_JOIN_ATTEMPTS - 1;
+  quietStep(st, 1000, true);
+  TEST_ASSERT_EQUAL(WifiAction::None,
+                    quietStep(st, 1000 + WIFI_JOIN_TIMEOUT_MS - 1, true));
   TEST_ASSERT_EQUAL(WifiAction::StartPortal,
                     quietStep(st, 1000 + WIFI_JOIN_TIMEOUT_MS, true));
   TEST_ASSERT_EQUAL(WifiPhase::Portal, st.phase);
+}
+
+// Three windows is the promise; a different number changes how long a board
+// with a dead network stays away from its portal.
+static void test_three_join_attempts_before_the_portal() {
+  TEST_ASSERT_EQUAL_UINT8(3, WIFI_JOIN_ATTEMPTS);
+}
+
+static void test_a_retry_boot_that_joins_goes_online() {
+  WifiPolicyState st;
+  st.failedJoinBoots = 1;
+  quietStep(st, 1000, true);
+  TEST_ASSERT_EQUAL(WifiAction::StartOnline,
+                    wifiPolicyStep(st, 4000, true, true, false));
+}
+
+static void test_no_credentials_never_retry() {
+  WifiPolicyState st;
+  st.failedJoinBoots = 1;  // stale tally: credentials were erased since
+  TEST_ASSERT_EQUAL(WifiAction::StartPortal, quietStep(st, 1000, false));
+}
+
+// --- restarts wait for a unit reflash -----------------------------------------
+
+static void test_a_join_retry_waits_for_a_unit_reflash() {
+  TEST_ASSERT_FALSE(wifiRestartMayProceed(WifiAction::RetryJoin,
+                                          WifiPhase::Joining, true));
+  TEST_ASSERT_TRUE(wifiRestartMayProceed(WifiAction::RetryJoin,
+                                         WifiPhase::Joining, false));
+}
+
+static void test_the_portal_timeout_restart_waits_for_a_unit_reflash() {
+  TEST_ASSERT_FALSE(wifiRestartMayProceed(WifiAction::Reboot,
+                                          WifiPhase::Portal, true));
+  TEST_ASSERT_TRUE(wifiRestartMayProceed(WifiAction::Reboot,
+                                         WifiPhase::Portal, false));
+}
+
+// The link-loss watchdog is the only way back onto the network; a reflash
+// must not be able to hold it off.
+static void test_the_link_loss_restart_never_waits() {
+  TEST_ASSERT_TRUE(wifiRestartMayProceed(WifiAction::Reboot,
+                                         WifiPhase::Connected, true));
+}
+
+static void test_a_saved_configuration_restart_never_waits() {
+  TEST_ASSERT_TRUE(wifiRestartMayProceed(WifiAction::SaveAndReboot,
+                                         WifiPhase::Portal, true));
+}
+
+// --- the tally between boots -------------------------------------------------
+
+static void test_retry_record_roundtrip() {
+  WifiJoinRetryRecord r;
+  for (uint8_t n = 0; n < WIFI_JOIN_ATTEMPTS; n++) {
+    wifiJoinRetryEncode(r, n);
+    TEST_ASSERT_EQUAL_UINT8(n, wifiJoinRetryDecode(r));
+  }
+}
+
+// After power-on the record is whatever the RAM held.
+static void test_retry_record_garbage_reads_as_no_failures() {
+  WifiJoinRetryRecord zeros = {0, 0, 0};
+  WifiJoinRetryRecord ones = {0xFFFFFFFFUL, 0xFF, 0xFF};
+  WifiJoinRetryRecord magicOnly = {WIFI_JOIN_RETRY_MAGIC, 2, 2};
+  TEST_ASSERT_EQUAL_UINT8(0, wifiJoinRetryDecode(zeros));
+  TEST_ASSERT_EQUAL_UINT8(0, wifiJoinRetryDecode(ones));
+  TEST_ASSERT_EQUAL_UINT8(0, wifiJoinRetryDecode(magicOnly));
+}
+
+static void test_retry_record_never_leaves_a_boot_without_an_attempt() {
+  WifiJoinRetryRecord r;
+  wifiJoinRetryEncode(r, 200);
+  uint8_t failed = wifiJoinRetryDecode(r);
+  TEST_ASSERT_TRUE(failed < WIFI_JOIN_ATTEMPTS);
+  // That boot still spends its window before the portal.
+  WifiPolicyState st;
+  st.failedJoinBoots = failed;
+  TEST_ASSERT_EQUAL(WifiAction::StartJoin, quietStep(st, 1000, true));
 }
 
 static void test_link_up_wins_over_simultaneous_timeout() {
@@ -206,7 +312,7 @@ static void test_join_timeout_survives_millis_rollover() {
   const uint32_t afterWrap = nearWrap + WIFI_JOIN_TIMEOUT_MS;  // wrapped
   TEST_ASSERT_TRUE(afterWrap < nearWrap);                      // sanity
   TEST_ASSERT_EQUAL(WifiAction::None, quietStep(st, afterWrap - 1, true));
-  TEST_ASSERT_EQUAL(WifiAction::StartPortal, quietStep(st, afterWrap, true));
+  TEST_ASSERT_EQUAL(WifiAction::RetryJoin, quietStep(st, afterWrap, true));
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +323,19 @@ int main(int, char**) {
   RUN_TEST(test_boot_without_creds_goes_straight_to_portal);
   RUN_TEST(test_join_success_goes_online);
   RUN_TEST(test_join_window_still_open_just_before_timeout);
-  RUN_TEST(test_join_timeout_opens_portal);
+  RUN_TEST(test_first_join_timeout_asks_for_a_retry_not_the_portal);
+  RUN_TEST(test_every_attempt_before_the_last_retries);
+  RUN_TEST(test_last_attempt_timeout_opens_portal);
+  RUN_TEST(test_three_join_attempts_before_the_portal);
+  RUN_TEST(test_a_retry_boot_that_joins_goes_online);
+  RUN_TEST(test_no_credentials_never_retry);
+  RUN_TEST(test_a_join_retry_waits_for_a_unit_reflash);
+  RUN_TEST(test_the_portal_timeout_restart_waits_for_a_unit_reflash);
+  RUN_TEST(test_the_link_loss_restart_never_waits);
+  RUN_TEST(test_a_saved_configuration_restart_never_waits);
+  RUN_TEST(test_retry_record_roundtrip);
+  RUN_TEST(test_retry_record_garbage_reads_as_no_failures);
+  RUN_TEST(test_retry_record_never_leaves_a_boot_without_an_attempt);
   RUN_TEST(test_link_up_wins_over_simultaneous_timeout);
   RUN_TEST(test_portal_submission_saves_and_reboots);
   RUN_TEST(test_portal_window_still_open_just_before_timeout);

@@ -1,12 +1,18 @@
 #pragma once
 // WifiPolicy.h — pure join/portal supervision state machine (#188).
 //
-// The v2 master's WiFi bring-up policy, v1-parity by construction
-// (ServiceWifiFunctions.ino initWiFi()): a bounded join attempt on stored
+// The v2 master's WiFi bring-up policy: bounded join attempts on stored
 // credentials, then the "<deviceName>-setup" portal, then a reboot-retry
 // cycle. No radio types in here — WifiService.cpp owns the esp_wifi calls
 // and feeds this step function from netTask; everything decision-shaped is
 // natively tested (test/test_wifi_policy).
+//
+// A join window that closes without a link is retried by REBOOTING, up to
+// WIFI_JOIN_ATTEMPTS boots in a row, before the portal opens (#524). The
+// portal parks the board off the network for its whole window, which is the
+// right answer to wrong credentials and the wrong first answer to one failed
+// association on a wall nobody is standing at. A reboot rather than a second
+// begin(): a fresh boot is what has been seen to un-stick this radio (#328).
 //
 // Once Connected, brief link drops belong to the SDK's auto-reconnect
 // (WiFi.setAutoReconnect(true)) and never re-open the portal. But that path
@@ -19,9 +25,12 @@
 
 #include <stdint.h>
 
-// v1 timings verbatim (user decision 2026-07-09 on #58).
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000UL;
 static const uint32_t WIFI_PORTAL_TIMEOUT_MS = 300000UL;
+// Boots in a row that may spend a join window before the portal opens. Three
+// windows plus two reboots reach the portal in about two minutes when the
+// network is really gone.
+static const uint8_t WIFI_JOIN_ATTEMPTS = 3;
 // #328: continuous Connected-phase link loss tolerated before a recovery
 // reboot. Long enough that the SDK auto-reconnect owns transient blips; short
 // enough that an AP-reboot wedge self-heals in ~1.5 min instead of never.
@@ -34,6 +43,7 @@ enum class WifiAction : uint8_t {
   StartJoin,       // begin STA join with the stored credentials
   StartPortal,     // bring up SoftAP + DNS catch-all + web server
   StartOnline,     // join succeeded: web server + mDNS
+  RetryJoin,       // join window closed with attempts left: restart, try again
   SaveAndReboot,   // persist the portal-submitted credentials, then restart
   Reboot,          // portal expired unconfigured: restart to retry the join
 };
@@ -41,16 +51,62 @@ enum class WifiAction : uint8_t {
 struct WifiPolicyState {
   WifiPhase phase = WifiPhase::Boot;
   uint32_t deadlineMs = 0;  // end of the current join/portal window
+  // Boots right before this one whose join window closed without a link
+  // (wifiJoinRetryDecode). Seeded once by the caller before the first step.
+  uint8_t failedJoinBoots = 0;
   // #328: millis() at which a Connected-phase link loss began; 0 = link up
   // (or not yet tracking). The reconnect watchdog fires on continuous
   // downtime, so any link-up tick clears it.
   uint32_t linkDownSinceMs = 0;
 };
 
+// The failed-join tally between boots. It lives in RAM that a software reset
+// keeps and a power cycle does not, so pulling the plug always starts over
+// with a full set of attempts — and that RAM holds garbage after power-on,
+// which is why the count travels with a magic and its own complement.
+#define WIFI_JOIN_RETRY_MAGIC 0x524A4657UL  // "WFJR" LE
+
+struct WifiJoinRetryRecord {
+  uint32_t magic;
+  uint8_t failed;
+  uint8_t check;  // ~failed
+};
+
+inline void wifiJoinRetryEncode(WifiJoinRetryRecord& r, uint8_t failed) {
+  r.magic = WIFI_JOIN_RETRY_MAGIC;
+  r.failed = failed;
+  r.check = (uint8_t)~failed;
+}
+
+// Anything that is not a record this code wrote decodes as 0 failed boots.
+// Capped below the attempt count: a tally that says "no attempts left" before
+// this boot has tried would send a board straight to the portal.
+inline uint8_t wifiJoinRetryDecode(const WifiJoinRetryRecord& r) {
+  if (r.magic != WIFI_JOIN_RETRY_MAGIC) return 0;
+  if (r.check != (uint8_t)~r.failed) return 0;
+  if (r.failed >= WIFI_JOIN_ATTEMPTS) return (uint8_t)(WIFI_JOIN_ATTEMPTS - 1);
+  return r.failed;
+}
+
 // Rollover-safe "now reached deadline": valid while the window length stays
 // far under 2^31 ms (ours are 30 s / 300 s).
 static inline bool wifiDeadlineReached(uint32_t nowMs, uint32_t deadlineMs) {
   return (int32_t)(nowMs - deadlineMs) >= 0;
+}
+
+// May the caller restart the board for this action right now? The two
+// restarts that only exist to try the join again wait for a unit reflash to
+// finish: cutting one leaves that unit in its bootloader with half an image,
+// and the next boot's job would be cut the same way. Both actions are returned
+// on every step past their deadline, so waiting needs no state. Every other
+// restart goes ahead — the link-loss watchdog's included, which is the only
+// way back onto the network.
+inline bool wifiRestartMayProceed(WifiAction action, WifiPhase phase,
+                                  bool unitReflashRunning) {
+  if (!unitReflashRunning) return true;
+  if (action == WifiAction::RetryJoin) return false;
+  if (action == WifiAction::Reboot && phase == WifiPhase::Portal) return false;
+  return true;
 }
 
 // One supervision step. `linkUp` = WL_CONNECTED, `credsStored` = a usable
@@ -80,6 +136,11 @@ static inline WifiAction wifiPolicyStep(WifiPolicyState& st, uint32_t nowMs,
         return WifiAction::StartOnline;
       }
       if (wifiDeadlineReached(nowMs, st.deadlineMs)) {
+        // Returned on every step past the deadline, like the portal's Reboot:
+        // the caller restarts and stops stepping.
+        if ((uint8_t)(st.failedJoinBoots + 1) < WIFI_JOIN_ATTEMPTS) {
+          return WifiAction::RetryJoin;
+        }
         st.phase = WifiPhase::Portal;
         st.deadlineMs = nowMs + WIFI_PORTAL_TIMEOUT_MS;
         return WifiAction::StartPortal;

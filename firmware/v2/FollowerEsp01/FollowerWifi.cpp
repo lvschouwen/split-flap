@@ -174,9 +174,21 @@ void wifiInit(AsyncWebServer& server) {
   SerialPrint(F("Device identity: "));
   SerialPrintln(effectiveDeviceName);
 
-  if (tryJoinKnownWifi(30)) {
-    isWifiConfigured = true;
-    return;
+  // One failed association must not park the row in the portal for five
+  // minutes (#524): the join gets FOLLOWER_JOIN_ATTEMPTS windows first. Each
+  // is a fresh begin() on the stored credentials — never a disconnect(), which
+  // on this SDK can erase them.
+  for (int attempt = 1; attempt <= FOLLOWER_JOIN_ATTEMPTS; attempt++) {
+    if (tryJoinKnownWifi(FOLLOWER_JOIN_WINDOW_S)) {
+      isWifiConfigured = true;
+      return;
+    }
+    if (WiFi.SSID().length() == 0) break;  // nothing stored: only the portal helps
+    SerialPrint(F("WiFi join attempt "));
+    SerialPrint(attempt);
+    SerialPrint(F(" of "));
+    SerialPrint(FOLLOWER_JOIN_ATTEMPTS);
+    SerialPrintln(F(" failed"));
   }
 
   SerialPrintln(F("Starting WiFi setup portal..."));

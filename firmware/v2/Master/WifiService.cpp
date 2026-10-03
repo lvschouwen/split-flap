@@ -15,6 +15,7 @@
 #include "HelpersSerialHandling.h"
 #include "OtaService.h"
 #include "RebootCause.h"  // #432
+#include "ReflashPlan.h"  // reflashInProgress: no retry restart mid-reflash
 #include "Tasks.h"
 #include "WebEndpoints.h"
 #include "WifiPolicy.h"
@@ -28,6 +29,11 @@ static SettingsStore* settingsStore = nullptr;
 static String deviceName;
 
 static WifiPolicyState policy;
+// Failed-join tally across software resets (WifiPolicy.h). netTask only.
+RTC_NOINIT_ATTR static WifiJoinRetryRecord joinRetry;
+// Reason code of the last STA disconnect while joining: the one clue a failed
+// join leaves, carried into the reboot cause. Event task -> netTask.
+static std::atomic<uint8_t> lastJoinDisconnectReason{0};
 static DNSServer dnsServer;
 static bool portalUp = false;  // netTask-private: gates the DNS pump only
 
@@ -75,6 +81,8 @@ bool wifiRadioBusy() { return radioBusyFlag.load(std::memory_order_relaxed); }
 
 static void onWifiStaEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   if (event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED) return;
+  lastJoinDisconnectReason.store((uint8_t)info.wifi_sta_disconnected.reason,
+                                 std::memory_order_relaxed);
   // Only re-kick when a live association is what we want (Connected, no reboot
   // pending). Portal/Boot/Joining leave STA retries to WifiPolicy.
   if (!staReconnectWanted.load(std::memory_order_relaxed)) return;
@@ -97,6 +105,13 @@ void wifiServiceInit(AsyncWebServer& server, MasterSettings& settings,
   liveSettings = &settings;
   settingsStore = &store;
   deviceName = effectiveDeviceName;
+  policy.failedJoinBoots = wifiJoinRetryDecode(joinRetry);
+  if (policy.failedJoinBoots > 0) {
+    SerialPrintf("wifi: join attempt %u of %u (the boot(s) before this one "
+                 "did not join)\n",
+                 (unsigned)policy.failedJoinBoots + 1,
+                 (unsigned)WIFI_JOIN_ATTEMPTS);
+  }
   // #328: supplement setAutoReconnect with the event-driven re-kick above.
   WiFi.onEvent(onWifiStaEvent, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 }
@@ -131,14 +146,18 @@ String wifiPortalRedirectUrl() {
 
 // --- tick helpers (netTask context) ------------------------------------------
 
-static void scheduleRestart(const __FlashStringHelper* why) {
-  SerialPrintln(String(F("Rebooting: ")) + String(why));
+static void scheduleRestart(const String& why) {
+  SerialPrintln(String(F("Rebooting: ")) + why);
   // #432: the log line above outlives the flash-log ring only as this NVS
   // breadcrumb (served as lastRebootCause next boot). Tick context = netTask,
   // so the write is legal here.
-  rebootCauseStamp(String(why));
+  rebootCauseStamp(why);
   restartPending = true;
   restartRequestedAtMs = millis();
+}
+
+static void scheduleRestart(const __FlashStringHelper* why) {
+  scheduleRestart(String(why));
 }
 
 // #505/#506: TX bursts are the S3's own current peak on the shared 5 V rail —
@@ -242,6 +261,7 @@ static void startJoin() {
   // the single store, so the v1 persistent()/disconnect() foot-gun class
   // cannot exist here.
   bootTraceMarkStage(BOOT_STAGE_JOIN);  // #504
+  lastJoinDisconnectReason.store(0, std::memory_order_relaxed);  // 0 = none seen
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   // Before begin(): no join burst above the ladder. A refusal is retried
@@ -261,6 +281,8 @@ static void startJoin() {
 }
 
 static void startPortal() {
+  // The boot after the portal starts over with a full set of join attempts.
+  wifiJoinRetryEncode(joinRetry, 0);
   // AP_STA, not AP: the portal page's scan needs the STA half alive.
   WiFi.persistent(false);
   WiFi.mode(WIFI_AP_STA);
@@ -294,6 +316,7 @@ static void startOnline() {
                 WiFi.BSSIDstr() + " ch " + String(WiFi.channel()) + ", rssi " +
                 String(WiFi.RSSI()));
   bootTraceMarkStage(BOOT_STAGE_ONLINE);  // #504
+  wifiJoinRetryEncode(joinRetry, 0);
   webEndpointsStart(*webServer);
   otaHealthConfirm();  // #305 fallback: primary confirm is setup() pre-inrush
   clockServiceApplyTz(*liveSettings);  // v1 parity: NTP kicked after join
@@ -394,6 +417,12 @@ void wifiServiceTick() {
     WifiAction action =
         wifiPolicyStep(policy, millis(), WiFi.status() == WL_CONNECTED,
                        liveSettings->wifiSsid.length() > 0, submitted);
+    if ((action == WifiAction::RetryJoin || action == WifiAction::Reboot) &&
+        !wifiRestartMayProceed(
+            action, policy.phase,
+            reflashInProgress(displaySnapshotGet().reflash))) {
+      action = WifiAction::None;  // asked again next tick, once the job is done
+    }
     switch (action) {
       case WifiAction::StartJoin:
         startJoin();
@@ -404,6 +433,19 @@ void wifiServiceTick() {
       case WifiAction::StartOnline:
         startOnline();
         break;
+      case WifiAction::RetryJoin: {
+        uint8_t attempt = (uint8_t)(policy.failedJoinBoots + 1);
+        wifiJoinRetryEncode(joinRetry, attempt);
+        uint8_t reason =
+            lastJoinDisconnectReason.load(std::memory_order_relaxed);
+        scheduleRestart(
+            String(F("WiFi join failed (attempt ")) + String(attempt) +
+            F(" of ") + String(WIFI_JOIN_ATTEMPTS) +
+            F(", last disconnect reason ") +
+            (reason == 0 ? String(F("none")) : String(reason)) +
+            F(") — rebooting to retry"));
+        break;
+      }
       case WifiAction::SaveAndReboot: {
         saveWifiCredentials(*settingsStore, ssid, pass);
         scheduleRestart(F("new WiFi configuration saved"));
