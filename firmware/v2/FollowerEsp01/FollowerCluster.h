@@ -31,6 +31,9 @@ struct FollowerClusterView {
 // when a membership is stored).
 void clusterInit();
 
+// The leader's requests are arriving and being answered right now (#515).
+bool clusterLeaderContactFresh();
+
 // loop(): ~1 Hz phase decay (blank on Blank/Standalone transitions), due
 // render drain, staged EEPROM persist. Blocking I2C happens in here only.
 void clusterLoopTick();

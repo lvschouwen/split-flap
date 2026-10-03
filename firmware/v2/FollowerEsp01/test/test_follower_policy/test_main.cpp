@@ -161,6 +161,23 @@ static void test_render_delay_math() {
                             true));
 }
 
+// #515: the TX ladder's "traffic confirmed" — a real leader contact, recent.
+static void test_leader_contact_fresh_needs_a_real_recent_contact() {
+  FollowerClusterState st;
+  followerClusterBoot(st, 1000, true);  // stored membership -> Grace
+  // Boot stamps lastContactMs for the grace window; that is not a contact.
+  TEST_ASSERT_FALSE(followerLeaderContactFresh(st, 1500));
+  followerClusterJoin(st, 5000, 7);
+  TEST_ASSERT_TRUE(followerLeaderContactFresh(st, 5001));
+  TEST_ASSERT_TRUE(
+      followerLeaderContactFresh(st, 5000 + FOLLOWER_CONTACT_FRESH_MS - 1));
+  TEST_ASSERT_FALSE(
+      followerLeaderContactFresh(st, 5000 + FOLLOWER_CONTACT_FRESH_MS));
+  FollowerClusterState standalone;
+  followerClusterBoot(standalone, 1000, false);
+  TEST_ASSERT_FALSE(followerLeaderContactFresh(standalone, 1001));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_boot_without_membership_is_standalone);
@@ -177,5 +194,6 @@ int main(int, char**) {
   RUN_TEST(test_phase_names);
   RUN_TEST(test_blank_and_standalone_phases_blank_the_row);
   RUN_TEST(test_render_delay_math);
+  RUN_TEST(test_leader_contact_fresh_needs_a_real_recent_contact);
   return UNITY_END();
 }

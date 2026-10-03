@@ -16,6 +16,7 @@
 #include "HelpersSerialHandling.h"
 #include "ReflashPlan.h"
 #include "Tasks.h"
+#include "WifiService.h"  // #515: wifiNoteConfirmedTraffic
 
 // NVS membership record (15-char key limit). leaderHost doubles as the
 // stored/not-stored sentinel — a membership without a reachable leader
@@ -284,6 +285,7 @@ ClusterFollowerView clusterFollowerViewGet() {
 void clusterFollowerHandleJoin(const ClusterJoinRequest& req) {
   ClusterLock lock;
   clusterFollowerJoin(policyState, millis(), req.epoch);
+  wifiNoteConfirmedTraffic();  // #515: the leader's request reached us
   // Adopt the negotiated wire-auth key (#313 follow-on). A join with a valid
   // key turns enforcement ON; a pre-HMAC leader sends none, so we stay on the
   // #313 source-IP binding. (The key rides the same NVS record — a change
@@ -362,6 +364,7 @@ bool clusterFollowerHandlePing(const String& digest, int youIndex,
   // leaderHost is "", so contact below still 409s the ping.)
   if (leaderHost.length() > 0 && remoteIp != leaderHost) return false;
   if (!clusterFollowerContact(policyState, millis())) return false;
+  wifiNoteConfirmedTraffic();  // #515: a leader ping served
   // The digest becomes served-back state and the #295 promote input — the
   // IP is already bound to the leader above, so accept it only as one
   // balanced JSON object and persist the table only when it parses as a

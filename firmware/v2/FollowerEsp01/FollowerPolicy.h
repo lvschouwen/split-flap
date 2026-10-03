@@ -106,6 +106,15 @@ inline void followerClusterLeave(FollowerClusterState& st) {
   st = FollowerClusterState{};
 }
 
+// The leader is demonstrably reaching us and getting answers (#515: the TX
+// ladder's "traffic confirmed"). Boot stamps lastContactMs for the grace
+// window, so the phase matters: Grace is a stored membership, not a contact.
+inline bool followerLeaderContactFresh(const FollowerClusterState& st,
+                                       uint32_t nowMs) {
+  return st.phase == FollowerPhase::Clustered &&
+         nowMs - st.lastContactMs < FOLLOWER_CONTACT_FRESH_MS;
+}
+
 // ~1 Hz supervision: Clustered decays to Grace, Grace to Blank. Returns
 // true when the phase changed (glue logs it and blanks on Blank). Cascades
 // on total silence, not tick cadence — a starved tick can't stretch grace.

@@ -125,6 +125,10 @@ static void persistMembership() {
   EEPROM.commit();
 }
 
+bool clusterLeaderContactFresh() {
+  return followerLeaderContactFresh(policyState, millis());
+}
+
 void clusterLoopTick() {
   if (membershipDirty) {
     membershipDirty = false;

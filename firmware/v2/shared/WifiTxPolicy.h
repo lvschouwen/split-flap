@@ -9,6 +9,12 @@
 // again after a long healthy period. Nothing is remembered across reboots — a
 // step-up that browns the board out cannot become a boot loop.
 //
+// "Needs it" is judged on evidence (#515). A dropped link is evidence and
+// earns a level up to the online ceiling. A weak signal estimate is only a
+// proxy: it counts while nothing better is known, never past the join ceiling,
+// and not at all while the board's traffic is being answered — a board that
+// is heard well enough to complete exchanges has no reason to transmit louder.
+//
 // No radio types in here: each tree's WiFi glue (Master WifiService.cpp,
 // FollowerEsp01 FollowerWifi.cpp) feeds this and applies the index it
 // returns. Natively tested (Master test/test_wifi_tx_policy).
@@ -57,11 +63,27 @@ static const int16_t WIFI_TX_DOWN_MARGIN_RAW = 6 * 4;
 
 enum class WifiTxPhase : uint8_t { Joining, Online, Portal };
 
+// How long one completed exchange keeps the traffic "confirmed".
+static const uint32_t WIFI_TX_CONFIRM_FRESH_MS = 30000UL;
+
 struct WifiTxInput {
   WifiTxPhase phase = WifiTxPhase::Joining;
   bool linkUp = false;    // Online only: WL_CONNECTED
   int rssiDbm = 0;        // Online + linkUp only
   bool unitsIdle = true;  // no unit is moving — up-steps wait for this
+  // Online only: a two-way exchange with a peer completed within
+  // WIFI_TX_CONFIRM_FRESH_MS (a leader-wire request served, a member contact
+  // answered). False when the board has nobody to confirm against.
+  bool trafficConfirmed = false;
+};
+
+// Why the level last changed — for the log line, so a step explains itself.
+enum class WifiTxStepReason : uint8_t {
+  None = 0,
+  JoinTimeout,  // the join did not complete at the level below
+  WeakSignal,   // uplink estimate under the floor, traffic unconfirmed
+  LinkDrop,     // the link dropped at the level below
+  Spare,        // stepped down after a long healthy period
 };
 
 struct WifiTxState {
@@ -78,7 +100,13 @@ struct WifiTxState {
   uint32_t spareSinceMs = 0;
   uint16_t stepsUp = 0;
   uint16_t stepsDown = 0;
+  WifiTxStepReason lastReason = WifiTxStepReason::None;
 };
+
+// lastMs 0 = never. Rollover-safe.
+static inline bool wifiTxTrafficFresh(uint32_t lastMs, uint32_t nowMs) {
+  return lastMs != 0 && (uint32_t)(nowMs - lastMs) < WIFI_TX_CONFIRM_FRESH_MS;
+}
 
 static inline int8_t wifiTxLevelRaw(uint8_t index) {
   if (index >= WIFI_TX_LEVEL_COUNT) index = WIFI_TX_LEVEL_COUNT - 1;
@@ -100,9 +128,11 @@ static inline int16_t wifiTxUplinkRaw(int rssiDbm, uint8_t index) {
                    WIFI_TX_AP_ASSUMED_RAW);
 }
 
-static inline void wifiTxStepUp(WifiTxState& st, uint32_t nowMs) {
+static inline void wifiTxStepUp(WifiTxState& st, uint32_t nowMs,
+                                WifiTxStepReason reason) {
   st.index++;
   st.stepsUp++;
+  st.lastReason = reason;
   st.upAllowedAtMs = nowMs + WIFI_TX_UP_DWELL_MS;
   st.weakArmed = false;
   st.spareArmed = false;
@@ -129,6 +159,7 @@ static inline uint8_t wifiTxPolicyStep(WifiTxState& st, const WifiTxInput& in,
                                st.joinLevelSinceMs + WIFI_TX_JOIN_STEP_MS)) {
         st.index++;
         st.stepsUp++;
+        st.lastReason = WifiTxStepReason::JoinTimeout;
         st.joinLevelSinceMs = nowMs;
       }
       return st.index;
@@ -158,7 +189,7 @@ static inline uint8_t wifiTxPolicyStep(WifiTxState& st, const WifiTxInput& in,
     st.spareArmed = false;
     if (st.dropPending && canStepUp) {
       st.dropPending = false;
-      wifiTxStepUp(st, nowMs);
+      wifiTxStepUp(st, nowMs, WifiTxStepReason::LinkDrop);
     }
     return st.index;
   }
@@ -166,11 +197,14 @@ static inline uint8_t wifiTxPolicyStep(WifiTxState& st, const WifiTxInput& in,
 
   if (st.dropPending && canStepUp) {
     st.dropPending = false;
-    wifiTxStepUp(st, nowMs);
+    wifiTxStepUp(st, nowMs, WifiTxStepReason::LinkDrop);
     return st.index;
   }
 
-  bool weak = wifiTxUplinkRaw(in.rssiDbm, st.index) < WIFI_TX_WEAK_UPLINK_RAW;
+  // The estimate is a proxy for need (see the header): ignored while traffic
+  // is confirmed, and never the reason to pass the join ceiling.
+  bool weak = !in.trafficConfirmed && st.index < WIFI_TX_JOIN_CEILING_INDEX &&
+              wifiTxUplinkRaw(in.rssiDbm, st.index) < WIFI_TX_WEAK_UPLINK_RAW;
   if (!weak) {
     st.weakArmed = false;
   } else if (!st.weakArmed) {
@@ -178,7 +212,7 @@ static inline uint8_t wifiTxPolicyStep(WifiTxState& st, const WifiTxInput& in,
     st.weakSinceMs = nowMs;
   } else if (canStepUp &&
              wifiTxReached(nowMs, st.weakSinceMs + WIFI_TX_WEAK_MS)) {
-    wifiTxStepUp(st, nowMs);
+    wifiTxStepUp(st, nowMs, WifiTxStepReason::WeakSignal);
     return st.index;
   }
 
@@ -193,7 +227,19 @@ static inline uint8_t wifiTxPolicyStep(WifiTxState& st, const WifiTxInput& in,
   } else if (wifiTxReached(nowMs, st.spareSinceMs + WIFI_TX_HEALTHY_MS)) {
     st.index--;
     st.stepsDown++;
+    st.lastReason = WifiTxStepReason::Spare;
     st.spareArmed = false;
   }
   return st.index;
+}
+
+static inline const char* wifiTxStepReasonName(WifiTxStepReason r) {
+  switch (r) {
+    case WifiTxStepReason::JoinTimeout: return "join timeout";
+    case WifiTxStepReason::WeakSignal:  return "weak signal";
+    case WifiTxStepReason::LinkDrop:    return "link drop";
+    case WifiTxStepReason::Spare:       return "spare margin";
+    case WifiTxStepReason::None:        break;
+  }
+  return "";
 }

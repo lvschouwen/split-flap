@@ -155,6 +155,12 @@ static bool txRefusedLogged = false;  // one line per refusal streak
 static uint32_t txNextStepMs = 0;
 static const uint8_t TX_INDEX_UNKNOWN = 0xFF;
 static std::atomic<uint8_t> txPublishedIndex{TX_INDEX_UNKNOWN};
+static std::atomic<uint32_t> txConfirmedAtMs{0};  // 0 = never (#515)
+
+void wifiNoteConfirmedTraffic() {
+  uint32_t now = millis();
+  txConfirmedAtMs.store(now != 0 ? now : 1, std::memory_order_relaxed);
+}
 
 int wifiTxPowerDbm10() {
   uint8_t index = txPublishedIndex.load(std::memory_order_relaxed);
@@ -181,7 +187,10 @@ static bool txPowerStep(WifiTxPhase phase) {
   // ladder it would count as a perfect signal.
   if (in.linkUp && in.rssiDbm >= 0) return true;
   in.unitsIdle = !displaySnapshotGet().busy;
-  uint8_t index = wifiTxPolicyStep(txState, in, millis());
+  uint32_t nowMs = millis();
+  in.trafficConfirmed = wifiTxTrafficFresh(
+      txConfirmedAtMs.load(std::memory_order_relaxed), nowMs);
+  uint8_t index = wifiTxPolicyStep(txState, in, nowMs);
 
   if ((int8_t)index == txAppliedIndex) {
     // The driver owns the value; a silent reset there would put the radio
@@ -206,15 +215,23 @@ static bool txPowerStep(WifiTxPhase phase) {
     return false;
   }
   txRefusedLogged = false;
-  char line[64];
+  char line[112];
   int dbm10 = wifiTxLevelDbm10(index);
   if (was < 0) {
     snprintf(line, sizeof(line), "wifi: TX power %d.%d dBm", dbm10 / 10,
              dbm10 % 10);
   } else {
+    // #515: a step says why it happened. The estimate is the one the policy
+    // judged, i.e. at the level it stepped FROM.
     int was10 = wifiTxLevelDbm10((uint8_t)was);
-    snprintf(line, sizeof(line), "wifi: TX power %d.%d -> %d.%d dBm",
-             was10 / 10, was10 % 10, dbm10 / 10, dbm10 % 10);
+    int n = snprintf(line, sizeof(line), "wifi: TX power %d.%d -> %d.%d dBm (%s",
+                     was10 / 10, was10 % 10, dbm10 / 10, dbm10 % 10,
+                     wifiTxStepReasonName(txState.lastReason));
+    if (in.linkUp && n > 0 && n < (int)sizeof(line)) {
+      n += snprintf(line + n, sizeof(line) - n, ", rssi %d, uplink est %d dBm",
+                    in.rssiDbm, wifiTxUplinkRaw(in.rssiDbm, (uint8_t)was) / 4);
+    }
+    if (n > 0 && n < (int)sizeof(line)) snprintf(line + n, sizeof(line) - n, ")");
   }
   SerialPrintln(line);
   return true;
@@ -271,7 +288,11 @@ static void startPortal() {
 }
 
 static void startOnline() {
-  SerialPrintln("WiFi connected. IP: " + WiFi.localIP().toString());
+  // #515: which access point and how well we hear it — a mesh hands a board
+  // to a different node across reconnects, and the TX ladder follows that.
+  SerialPrintln("WiFi connected. IP: " + WiFi.localIP().toString() + ", AP " +
+                WiFi.BSSIDstr() + " ch " + String(WiFi.channel()) + ", rssi " +
+                String(WiFi.RSSI()));
   bootTraceMarkStage(BOOT_STAGE_ONLINE);  // #504
   webEndpointsStart(*webServer);
   otaHealthConfirm();  // #305 fallback: primary confirm is setup() pre-inrush

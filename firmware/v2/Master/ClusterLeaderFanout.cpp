@@ -34,7 +34,8 @@
 #include "Tasks.h"
 #include "TaskWatchdog.h"
 #include "WebBodyLimit.h"  // #386: ping digest budget — same ceiling the guard enforces
-#include "WebEndpoints.h"  // #337: webDisplayContentSnapshot() — leader's mode
+#include "WebEndpoints.h"  // #337: webDisplayContentSnapshot()
+#include "WifiService.h"  // #515: wifiNoteConfirmedTraffic — leader's mode
 
 #include "ClusterLeaderInternal.h"
 
@@ -359,6 +360,7 @@ void applyMemberResult(const MemberWorkItem& item, int status,
   if (status == 200) {
     bool wasDegraded = m.degraded;
     clusterMemberOnSuccess(m, nowMs);
+    wifiNoteConfirmedTraffic();  // #515: a member answered us
     switch (item.action) {
       case ClusterLeaderAction::Join: {
         m.joined = true;
@@ -442,6 +444,7 @@ void applyMemberResult(const MemberWorkItem& item, int status,
     if (item.action != ClusterLeaderAction::Join) {
       bool wasDegraded = m.degraded;
       clusterMemberOnSuccess(m, nowMs);
+      wifiNoteConfirmedTraffic();  // #515: answered, even if with a 409
       clusterMemberOnNotClustered(m);
       // #385: same transition-only logging as the 200 path — the member
       // answered, so a degraded episode ends here.

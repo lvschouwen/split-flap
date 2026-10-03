@@ -12,6 +12,7 @@
 
 #include "BuildVersion.h"
 #include "FollowerBus.h"     // busRowMoving
+#include "FollowerCluster.h"  // clusterLeaderContactFresh (#515)
 #include "FollowerConfig.h"
 #include "FollowerJson.h"  // FOLLOWER_PLAT
 #include "FollowerWeb.h"   // isPendingReboot
@@ -28,6 +29,7 @@ static DNSServer dnsServer;
 static WifiTxState txState;
 static int8_t txAppliedIndex = -1;  // -1 = nothing applied yet
 static bool txOtaCapped = false;
+static int txLastRssiDbm = 0;  // what the last online tick fed the ladder; 0 = none
 
 // `force` re-sends an unchanged level: the ESP8266 cannot read the level
 // back, so it is re-asserted wherever the radio may have been re-initialised.
@@ -47,7 +49,22 @@ static void txApply(uint8_t index, bool log, bool force = false) {
     SerialPrint(dbm10 / 10);
     SerialPrint('.');
     SerialPrint(dbm10 % 10);
-    SerialPrintln(F(" dBm"));
+    SerialPrint(F(" dBm"));
+    if (txAppliedIndex >= 0) {
+      // #515: a step says why it happened. The estimate is the one the policy
+      // judged, i.e. at the level it stepped FROM.
+      SerialPrint(F(" ("));
+      SerialPrint(wifiTxStepReasonName(txState.lastReason));
+      if (txLastRssiDbm < 0) {
+        SerialPrint(F(", rssi "));
+        SerialPrint(txLastRssiDbm);
+        SerialPrint(F(", uplink est "));
+        SerialPrint(wifiTxUplinkRaw(txLastRssiDbm, (uint8_t)txAppliedIndex) / 4);
+        SerialPrint(F(" dBm"));
+      }
+      SerialPrint(')');
+    }
+    SerialPrintln(F(""));
   }
   txAppliedIndex = (int8_t)index;
 }
@@ -95,6 +112,8 @@ void followerTxTick() {
   // RSSI() reads a non-negative sentinel when the link fell between the two
   // calls; fed to the ladder it would count as a perfect signal.
   if (in.linkUp && in.rssiDbm >= 0) return;
+  txLastRssiDbm = in.rssiDbm;
+  in.trafficConfirmed = clusterLeaderContactFresh();
 
   // An up-step needs an idle row, and asking the row costs one I2C read per
   // unit — so ask only when a step is actually due.
@@ -117,7 +136,16 @@ static bool waitForWifiConnected(int timeoutSeconds) {
     txBringUpStep(WifiTxPhase::Joining);
     if (WiFi.status() == WL_CONNECTED) {
       SerialPrint(F("connected. IP Address: "));
-      SerialPrintln(WiFi.localIP());
+      SerialPrint(WiFi.localIP());
+      // #515: which access point and how well we hear it — a mesh hands the
+      // board to a different node across reconnects, and the TX ladder
+      // follows that.
+      SerialPrint(F(", AP "));
+      SerialPrint(WiFi.BSSIDstr());
+      SerialPrint(F(" ch "));
+      SerialPrint(WiFi.channel());
+      SerialPrint(F(", rssi "));
+      SerialPrintln(WiFi.RSSI());
       return true;
     }
     SerialPrint('.');

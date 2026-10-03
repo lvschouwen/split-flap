@@ -12,6 +12,7 @@ void tearDown() {}
 
 static const int STRONG_RSSI = -50;  // spare at every level
 static const int WEAK_RSSI = -85;    // weak at every level up to the ceiling
+static const int TODAY_RSSI = -73;   // the 2026-10-03 ESP-01 boot (#515)
 
 static WifiTxInput joining() {
   WifiTxInput in;
@@ -25,6 +26,12 @@ static WifiTxInput online(int rssiDbm, bool unitsIdle = true) {
   in.linkUp = true;
   in.rssiDbm = rssiDbm;
   in.unitsIdle = unitsIdle;
+  return in;
+}
+
+static WifiTxInput confirmed(int rssiDbm) {
+  WifiTxInput in = online(rssiDbm);
+  in.trafficConfirmed = true;
   return in;
 }
 
@@ -155,10 +162,84 @@ static void test_weak_threshold_follows_the_level() {
   TEST_ASSERT_EQUAL(1, st.index);
 }
 
-static void test_online_never_passes_the_online_ceiling() {
+// --- online: need is judged on evidence (#515) ---------------------------------
+
+static void test_weak_signal_alone_stops_at_the_join_ceiling() {
+  // The estimate is a proxy; it never takes the board past the bench-proven
+  // level, however long it stays weak.
   WifiTxState st;
   runSeconds(st, online(WEAK_RSSI), 0, 3600000);
+  TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX, st.index);
+  TEST_ASSERT_EQUAL((int)WifiTxStepReason::WeakSignal, (int)st.lastReason);
+}
+
+static void test_confirmed_traffic_never_steps_up_on_a_weak_signal() {
+  // What the ESP-01 row did: -73 dBm heard, leader pings answered all along.
+  // It climbed to 13 dBm; a board that is being answered stays where it is.
+  WifiTxState st;
+  wifiTxPolicyStep(st, joining(), 0);
+  runSeconds(st, confirmed(TODAY_RSSI), 1000, 3600000);
+  TEST_ASSERT_EQUAL(0, st.index);
+  TEST_ASSERT_EQUAL(0, st.stepsUp);
+  WifiTxState worst;
+  runSeconds(worst, confirmed(WEAK_RSSI), 0, 3600000);
+  TEST_ASSERT_EQUAL(0, worst.index);
+}
+
+static void test_the_same_signal_unconfirmed_climbs_only_to_the_join_ceiling() {
+  WifiTxState st;
+  runSeconds(st, online(TODAY_RSSI), 0, 3600000);
+  TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX, st.index);
+}
+
+static void test_weak_window_starts_when_confirmation_is_lost() {
+  // Confirmed for ten minutes, then the peer goes quiet: the weak window is
+  // measured from that moment, not from the first weak sample.
+  WifiTxState st;
+  runSeconds(st, confirmed(WEAK_RSSI), 0, 600000);
+  TEST_ASSERT_EQUAL(0, st.index);
+  uint32_t lost = 601000;
+  wifiTxPolicyStep(st, online(WEAK_RSSI), lost);
+  TEST_ASSERT_EQUAL(
+      0, wifiTxPolicyStep(st, online(WEAK_RSSI), lost + WIFI_TX_WEAK_MS - 1));
+  TEST_ASSERT_EQUAL(
+      1, wifiTxPolicyStep(st, online(WEAK_RSSI), lost + WIFI_TX_WEAK_MS));
+}
+
+static void test_a_link_drop_still_earns_a_step_with_confirmed_traffic() {
+  // Hard evidence outranks the proxy either way.
+  WifiTxState st;
+  wifiTxPolicyStep(st, confirmed(STRONG_RSSI), 1000);
+  uint32_t t = 1000 + WIFI_TX_SETTLE_MS;
+  TEST_ASSERT_EQUAL(1, wifiTxPolicyStep(st, linkDown(), t));
+  TEST_ASSERT_EQUAL((int)WifiTxStepReason::LinkDrop, (int)st.lastReason);
+}
+
+static void test_only_link_drops_reach_the_online_ceiling() {
+  WifiTxState st;
+  wifiTxPolicyStep(st, online(STRONG_RSSI), 1000);
+  uint32_t t = 1000 + WIFI_TX_SETTLE_MS;
+  for (int i = 0; i < 20; i++) {
+    wifiTxPolicyStep(st, linkDown(), t);
+    wifiTxPolicyStep(st, online(STRONG_RSSI), t + 1000);
+    t += WIFI_TX_UP_DWELL_MS;
+  }
   TEST_ASSERT_EQUAL(WIFI_TX_ONLINE_CEILING_INDEX, st.index);
+}
+
+static void test_traffic_freshness_window() {
+  TEST_ASSERT_FALSE(wifiTxTrafficFresh(0, 5000));  // never confirmed
+  TEST_ASSERT_TRUE(wifiTxTrafficFresh(1000, 1000 + WIFI_TX_CONFIRM_FRESH_MS - 1));
+  TEST_ASSERT_FALSE(wifiTxTrafficFresh(1000, 1000 + WIFI_TX_CONFIRM_FRESH_MS));
+  TEST_ASSERT_TRUE(wifiTxTrafficFresh(0xFFFFFF00UL, 0x00000100UL));  // rollover
+}
+
+static void test_step_reason_names() {
+  TEST_ASSERT_EQUAL_STRING("weak signal",
+                           wifiTxStepReasonName(WifiTxStepReason::WeakSignal));
+  TEST_ASSERT_EQUAL_STRING("link drop",
+                           wifiTxStepReasonName(WifiTxStepReason::LinkDrop));
+  TEST_ASSERT_EQUAL_STRING("", wifiTxStepReasonName(WifiTxStepReason::None));
 }
 
 static void test_online_never_jumps() {
@@ -300,9 +381,10 @@ static void test_portal_runs_at_the_fixed_portal_level() {
 static void test_steps_are_counted() {
   WifiTxState st;
   runSeconds(st, online(WEAK_RSSI), 0, 3600000);
-  TEST_ASSERT_EQUAL(WIFI_TX_ONLINE_CEILING_INDEX, st.stepsUp);
+  TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX, st.stepsUp);
   runSeconds(st, online(STRONG_RSSI), 3601000, 3601000 + 10 * WIFI_TX_HEALTHY_MS);
-  TEST_ASSERT_EQUAL(WIFI_TX_ONLINE_CEILING_INDEX, st.stepsDown);
+  TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX, st.stepsDown);
+  TEST_ASSERT_EQUAL((int)WifiTxStepReason::Spare, (int)st.lastReason);
 }
 
 static void test_survives_millis_rollover() {
@@ -331,7 +413,14 @@ int main(int, char**) {
   RUN_TEST(test_weak_signal_steps_up_only_after_the_weak_window);
   RUN_TEST(test_a_good_sample_restarts_the_weak_window);
   RUN_TEST(test_weak_threshold_follows_the_level);
-  RUN_TEST(test_online_never_passes_the_online_ceiling);
+  RUN_TEST(test_weak_signal_alone_stops_at_the_join_ceiling);
+  RUN_TEST(test_confirmed_traffic_never_steps_up_on_a_weak_signal);
+  RUN_TEST(test_the_same_signal_unconfirmed_climbs_only_to_the_join_ceiling);
+  RUN_TEST(test_weak_window_starts_when_confirmation_is_lost);
+  RUN_TEST(test_a_link_drop_still_earns_a_step_with_confirmed_traffic);
+  RUN_TEST(test_only_link_drops_reach_the_online_ceiling);
+  RUN_TEST(test_traffic_freshness_window);
+  RUN_TEST(test_step_reason_names);
   RUN_TEST(test_online_never_jumps);
   RUN_TEST(test_step_up_waits_for_idle_units);
   RUN_TEST(test_no_step_up_while_the_boot_settles);
