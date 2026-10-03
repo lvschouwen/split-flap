@@ -154,6 +154,14 @@ uint32_t followerMinHeap() {
   return minHeapBytes;
 }
 
+// No-argument mutations go out as opcode + ~opcode (#512, UnitWireContract.h):
+// alone on the wire, the opcode byte is a complete command one bit flip away
+// from a letter write or a poll. Units predating the guard drain the extra byte.
+static void writeGuardedOpcode(uint8_t opcode) {
+  Wire.write(opcode);
+  Wire.write(noArgGuardByte(opcode));
+}
+
 // Shared opcode-write-then-read-back transaction (v1 #154 helper).
 static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf,
                       uint8_t n) {
@@ -694,19 +702,19 @@ int busJog(uint8_t i2cAddress, int steps) {
 int busHome(uint8_t i2cAddress) {
   admitMotion();
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_HOME);
+  writeGuardedOpcode(SFP_CMD_HOME);
   return Wire.endTransmission();
 }
 
 int busIdentify(uint8_t i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_IDENTIFY);
+  writeGuardedOpcode(SFP_CMD_IDENTIFY);
   return Wire.endTransmission();
 }
 
 int busResetOdometer(uint8_t i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_RESET_ODOMETER);
+  writeGuardedOpcode(SFP_CMD_RESET_ODOMETER);
   return Wire.endTransmission();
 }
 
@@ -732,21 +740,21 @@ int busSetGates(uint8_t i2cAddress, uint8_t gates) {
 
 int busRebootToBootloader(uint8_t i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_ENTER_BOOTLOADER);
+  writeGuardedOpcode(SFP_CMD_ENTER_BOOTLOADER);
   return Wire.endTransmission();
 }
 
 // Soft watchdog reset — stays in sketch mode (v1 #47/#113).
 static int rebootUnit(uint8_t i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_REBOOT);
+  writeGuardedOpcode(SFP_CMD_REBOOT);
   return Wire.endTransmission();
 }
 
 int busStartSelfTest(uint8_t i2cAddress) {
   admitMotion();
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_START_SELF_TEST);
+  writeGuardedOpcode(SFP_CMD_START_SELF_TEST);
   return Wire.endTransmission();
 }
 

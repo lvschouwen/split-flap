@@ -25,7 +25,25 @@ void receiveLetter(int numBytes) {
 
   // First byte >= AMOUNTFLAPS is a command opcode, not a letter index.
   if (firstByte >= AMOUNTFLAPS) {
-    switch ((uint8_t)firstByte) {
+    uint8_t opcode = (uint8_t)firstByte;
+    if (sfpIsNoArgMutation(opcode)) {
+      // #512: these carry no payload, so the guard byte is the only thing that
+      // tells a real command from a corrupted letter or poll. The gate byte is
+      // written by loop() in a single store — safe to read here.
+      uint8_t extraLen = (remaining > 0xFF) ? 0xFF : (uint8_t)remaining;
+      uint8_t guard = 0;
+      if (remaining > 0) {
+        guard = (uint8_t)Wire.read();
+        remaining--;
+      }
+      bool strict = unitGateEnabled(lifetime.featureGates, UNIT_GATE_STRICT_OPCODES);
+      if (!noArgMutationAccepted(opcode, extraLen, guard, strict)) {
+        if (badCommandCount < 0xFF) badCommandCount++;
+        while (remaining-- > 0) Wire.read();
+        return;
+      }
+    }
+    switch (opcode) {
       case SFP_CMD_ENTER_BOOTLOADER:
       case SFP_CMD_REBOOT:
         // Both trigger a watchdog reset. SFP_CMD_ENTER_BOOTLOADER is the

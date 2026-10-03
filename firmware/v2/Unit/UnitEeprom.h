@@ -187,11 +187,16 @@ static_assert(EE_RESERVED_BASE <= EE_ODO_RING_BASE,
 // made that possible. Mirrored by SFP_UNIT_GATE_IMPLEMENTED on the master
 // side; widen the two together with the code that honours the bit.
 #define UNIT_GATE_IDLE_HALL_CHECK   0x01  // #268 idle hall consistency check
+// Refuse a no-argument mutation that arrives without its ~opcode guard byte
+// (#512, UnitWireContract.h). Off, a bare opcode from a master predating the
+// guard still runs; a WRONG guard byte is refused either way. A bare
+// ENTER_BOOTLOADER is never refused.
+#define UNIT_GATE_STRICT_OPCODES    0x04
 
 // Every bit this firmware has code for. SET_GATES (#409) refuses anything
 // outside it: a unit must never persist a gate it will not act on, or
 // /units/health reports a feature as enabled that does not exist here.
-#define UNIT_GATE_ALL  (UNIT_GATE_IDLE_HALL_CHECK)
+#define UNIT_GATE_ALL  (UNIT_GATE_IDLE_HALL_CHECK | UNIT_GATE_STRICT_OPCODES)
 
 inline bool unitGateEnabled(uint8_t gates, uint8_t gate) {
   return (gates & gate) != 0;

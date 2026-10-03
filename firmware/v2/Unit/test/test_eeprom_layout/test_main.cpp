@@ -316,8 +316,9 @@ static void test_the_retired_scheduled_rehome_bit_is_refused() {
 static void test_only_gates_this_firmware_implements_are_accepted() {
   TEST_ASSERT_TRUE(unitGateBitsKnown(0));
   TEST_ASSERT_TRUE(unitGateBitsKnown(UNIT_GATE_IDLE_HALL_CHECK));
+  TEST_ASSERT_TRUE(unitGateBitsKnown(UNIT_GATE_STRICT_OPCODES));
   TEST_ASSERT_TRUE(unitGateBitsKnown(UNIT_GATE_ALL));
-  TEST_ASSERT_FALSE(unitGateBitsKnown(0x04));
+  TEST_ASSERT_FALSE(unitGateBitsKnown(0x08));
   TEST_ASSERT_FALSE(unitGateBitsKnown(0xFF));
   TEST_ASSERT_FALSE(unitGateBitsKnown(UNIT_GATE_IDLE_HALL_CHECK | 0x80));
 }

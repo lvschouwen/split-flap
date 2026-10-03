@@ -140,6 +140,8 @@
                                          //     update is safe. Closes #502 item 8.
 
 // --- 0x9X mutations ---
+// The no-argument ones (and ENTER_BOOTLOADER above) travel as opcode + ~opcode
+// (#512); the acceptance rules are in UnitWireContract.h.
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT reset)
 // to the unit's loop() via pending* flags — doing it in the Wire ISR stalls
 // the bus and can drop follow-up transactions.
@@ -191,7 +193,13 @@
 // masters refuse to send an unimplemented bit in the meantime. Widen this
 // only together with the code that honours the bit.
 #define SFP_UNIT_GATE_IDLE_HALL_CHECK  0x01  // #268 idle hall consistency check
-#define SFP_UNIT_GATE_IMPLEMENTED      SFP_UNIT_GATE_IDLE_HALL_CHECK
+#define SFP_UNIT_GATE_STRICT_OPCODES   0x04  // #512 no-argument mutations must
+                                             //     carry their ~opcode guard
+                                             //     byte (UnitWireContract.h).
+                                             //     Turn on only once every
+                                             //     master on that row sends it.
+#define SFP_UNIT_GATE_IMPLEMENTED \
+  (SFP_UNIT_GATE_IDLE_HALL_CHECK | SFP_UNIT_GATE_STRICT_OPCODES)
 
 // SET_OFFSET's accepted range (#171). The bound is one full revolution of the
 // unit's 28BYJ-48 drum (its STEPS constant — a static_assert there pins the

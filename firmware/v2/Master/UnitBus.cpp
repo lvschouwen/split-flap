@@ -132,6 +132,14 @@ static int countedTransmission() {
   return status;
 }
 
+// No-argument mutations go out as opcode + ~opcode (#512, UnitWireContract.h):
+// alone on the wire, the opcode byte is a complete command one bit flip away
+// from a letter write or a poll. Units predating the guard drain the extra byte.
+static void writeGuardedOpcode(uint8_t opcode) {
+  Wire.write(opcode);
+  Wire.write(noArgGuardByte(opcode));
+}
+
 // Shared opcode-write-then-read-back transaction behind every readUnit*
 // helper (v1 #154): write the opcode, settle, clock `n` bytes into `buf`.
 // Old firmware that predates an opcode silently drops the write (the opcode
@@ -754,19 +762,19 @@ int unitBusJog(int i2cAddress, int steps) {
 int unitBusHome(int i2cAddress) {
   admitMotion();
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_HOME);
+  writeGuardedOpcode(SFP_CMD_HOME);
   return countedTransmission();
 }
 
 int unitBusIdentify(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_IDENTIFY);
+  writeGuardedOpcode(SFP_CMD_IDENTIFY);
   return countedTransmission();
 }
 
 int unitBusResetOdometer(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_RESET_ODOMETER);
+  writeGuardedOpcode(SFP_CMD_RESET_ODOMETER);
   return countedTransmission();
 }
 
@@ -793,7 +801,7 @@ int unitBusSetGates(int i2cAddress, uint8_t gates) {
 int unitBusStartSelfTest(int i2cAddress) {
   admitMotion();
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_START_SELF_TEST);
+  writeGuardedOpcode(SFP_CMD_START_SELF_TEST);
   return countedTransmission();
 }
 
@@ -811,7 +819,7 @@ bool unitBusReadSelfTest(int i2cAddress, UnitSelfTestReading& out) {
 // in its twiboot window — the CHIPINFO query pins the bootloader alive.
 int unitBusRebootToBootloader(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_ENTER_BOOTLOADER);
+  writeGuardedOpcode(SFP_CMD_ENTER_BOOTLOADER);
   return countedTransmission();
 }
 
@@ -832,7 +840,7 @@ int unitBusSetAddress(int i2cAddress, uint8_t newAddress) {
 
 int unitBusClearAddress(int i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_CLEAR_I2C_ADDRESS);
+  writeGuardedOpcode(SFP_CMD_CLEAR_I2C_ADDRESS);
   return countedTransmission();
 }
 
@@ -1052,7 +1060,7 @@ UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out) {
   Wire.beginTransmission((uint8_t)i2cAddress);
   if (Wire.endTransmission() == 0) {
     Wire.beginTransmission((uint8_t)i2cAddress);
-    Wire.write((uint8_t)SFP_CMD_REBOOT);
+    writeGuardedOpcode(SFP_CMD_REBOOT);
     Wire.endTransmission();
   } else {
     SerialPrintf("Unit 0x%02x not responding after the boot-section read\n",
@@ -1105,7 +1113,7 @@ UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
     return UnitFlashResult::PostBootSilent;
   }
   Wire.beginTransmission((uint8_t)i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_REBOOT);
+  writeGuardedOpcode(SFP_CMD_REBOOT);
   Wire.endTransmission();
   SerialPrintf("Unit 0x%02x flashed (%u bytes) — sent CMD_REBOOT\n",
                i2cAddress, (unsigned)len);
