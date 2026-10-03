@@ -15,7 +15,9 @@
 #include "FollowerBus.h"
 #include "FollowerCluster.h"
 #include "FollowerConfig.h"
+#include "FollowerPrefs.h"
 #include "FollowerRescue.h"
+#include "FollowerResetLog.h"
 #include "FollowerWeb.h"
 #include "FollowerWifi.h"
 
@@ -33,9 +35,17 @@ void setup() {
   // Boot-rescue tally (#343) FIRST — everything after this line is what a
   // crash-looping image never reaches.
   rescueBootInit();
+  resetLogBootInit();  // #503: why we restarted, kept across soft resets
 
   busInit();
   clusterInit();  // EEPROM membership → Grace/Standalone
+  prefsInit();    // #513: needs clusterInit()'s EEPROM.begin
+  if (!prefsReflashOnBoot()) {
+    // Deliberately suppressed for a gated campaign. Say so loudly — a skipped
+    // auto-install looks exactly like a healthy row, and this setting
+    // persists across reboots.
+    SerialPrintln(F("reflash: boot auto-install SUPPRESSED (reflashOnBoot=false)"));
+  }
 
   if (!rescueActive()) {
 #ifdef RESCUE_CRASH_TEST
@@ -53,7 +63,7 @@ void setup() {
     SerialPrintln(F("Early I2C scan (post-twiboot window)..."));
     delay(1500);
     busProbe();
-    busAutoInstallBootloaderUnits();
+    if (prefsReflashOnBoot()) busAutoInstallBootloaderUnits();
   }
 
   wifiInit(webServer);
@@ -68,8 +78,10 @@ void setup() {
     // Settled pass (v1 flow): re-probe, catch stragglers, self-heal any unit
     // not on the bundled rev, then warm the health facts.
     busProbe();
-    busAutoInstallBootloaderUnits();
-    busAutoUpdateOutdatedUnits();
+    if (prefsReflashOnBoot()) {
+      busAutoInstallBootloaderUnits();
+      busAutoUpdateOutdatedUnits();
+    }
     busPollHealth();
   }
 
@@ -101,6 +113,8 @@ void loop() {
     // zero the bad-boot tally so the next image gets fresh chances — this is
     // also the rescue beacon's one exit (#343).
     rescueMarkHealthy();
+    // A setting accepted moments ago must not die with this restart (#513).
+    prefsLoopTick(true);
     // Let AsyncWebServer flush the response before the restart yanks the
     // socket (v1 #37 value).
     delay(500);
@@ -124,6 +138,7 @@ void loop() {
   }
 
   followerTxTick();     // #508: WiFi TX power ladder, 1 Hz
+  prefsLoopTick();      // #513: persist a staged settings change
   rescueHealthyTick();  // #343: a stable minute proves this boot good
   if (!rescueActive()) {
     webLoopTick();            // staged ops / reflash / health refresh

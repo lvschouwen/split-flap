@@ -94,7 +94,10 @@ bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out);
 // The full bundled-hex reflash job (v1 #138 flow: enter-bootloader sweep,
 // throttled PROGMEM flash, batch settle). Blocking for many seconds —
 // loop() only; progress lands in reflashProgress.
-void busRunReflashJob();
+// onlyAddr 0 = every unit that needs it; otherwise exactly that unit (#513).
+void busRunReflashJob(uint8_t onlyAddr = 0);
+// Units the last reflash job failed to flash (0 after a clean run).
+uint8_t busLastReflashFailed();
 
 // Boot-time provisioning/auto-update (v1 semantics): flash every unit the
 // probe found sitting in twiboot; push provably-outdated sketch units

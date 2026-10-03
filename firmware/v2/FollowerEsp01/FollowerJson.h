@@ -9,6 +9,7 @@
 
 #include <Arduino.h>
 
+#include "FollowerResetLog.h"
 #include "ClusterForeign.h"
 #include "FollowerBusRecovery.h"
 #include "UnitHealth.h"
@@ -173,6 +174,8 @@ struct FollowerClusterDiag {
   ForeignContactStats foreign;  // #358: refused foreign-leader contacts
   uint32_t nowMs = 0;           // for the foreign block's msSince + bus deadMs
   BusRecoveryState bus;         // #488: row-wide bus-death recovery
+  // #503: reset history, newest first (this boot leads). Null = omit the key.
+  const FollowerResetLogBlob* resets = nullptr;
 };
 
 inline String followerClusterHealthJson(
@@ -181,7 +184,7 @@ inline String followerClusterHealthJson(
     const char* rev, int width, int detected, int faulty,
     const FollowerClusterDiag& d) {
   String out;
-  out.reserve(480);
+  out.reserve(608);  // ~480 before the #503 resets array
   out += "{\"state\":\"";
   out += phaseName;
   out += "\",\"leaderName\":";
@@ -236,7 +239,23 @@ inline String followerClusterHealthJson(
   out += String((int)d.bus.lastStatus);
   out += ",\"lastDeadMs\":";
   out += String((unsigned long)d.bus.lastDeadMs);
-  out += "}}";
+  out += '}';
+  if (d.resets != nullptr) {
+    // "<reason>:<exccause>:<epc1>:<excvaddr>" per boot since the last power
+    // cycle (FollowerResetLog.h).
+    out += ",\"resets\":[";
+    int n = followerResetLogCount(*d.resets);
+    for (int i = 0; i < n; i++) {
+      char entry[32];
+      followerResetEntryFormat(d.resets->e[i], entry, sizeof(entry));
+      if (i > 0) out += ',';
+      out += '"';
+      out += entry;
+      out += '"';
+    }
+    out += ']';
+  }
+  out += '}';
   return out;
 }
 
@@ -249,9 +268,9 @@ inline String followerSettingsJson(const String& name, const char* rev,
                                    const String& leaderName,
                                    const String& leaderHost, int row,
                                    const FollowerVitals& v,
-                                   int txPowerDbm10) {
+                                   int txPowerDbm10, bool reflashOnBoot) {
   String out;
-  out.reserve(304);
+  out.reserve(328);
   out += "{\"deviceName\":";
   followerAppendJsonString(out, name);
   out += ",\"effectiveDeviceName\":";
@@ -271,6 +290,9 @@ inline String followerSettingsJson(const String& name, const char* rev,
   followerAppendPlatVitals(out, v);
   out += ",\"txPower\":";  // #508: WiFi TX power cap x10 (dBm)
   out += txPowerDbm10;
+  // #513: same key and type as the S3's, so one campaign script reads both.
+  out += ",\"reflashOnBoot\":";
+  out += reflashOnBoot ? "true" : "false";
   out += '}';
   return out;
 }

@@ -18,6 +18,8 @@
 #include "FollowerCors.h"
 #include "ClusterForeign.h"
 #include "FollowerJson.h"
+#include "FollowerPrefs.h"     // #513: reflashOnBoot
+#include "FollowerResetLog.h"  // #503: reset history in /cluster/health
 #include "FollowerRescue.h"  // #343: beacon marker + op lockout
 #include "FollowerSettings.h"
 #include "FollowerWifi.h"
@@ -430,7 +432,31 @@ void webEndpointsInit(AsyncWebServer& server) {
                                       displayWidth,
                                       followerPhaseName(cv.phase),
                                       cv.leaderName, cv.leaderHost, cv.row,
-                                      vitalsNow(), followerTxPowerDbm10()));
+                                      vitalsNow(), followerTxPowerDbm10(),
+                                      prefsReflashOnBoot()));
+  });
+
+  // #513: the one operator setting. `reflashOnBoot=true|false` as a query or
+  // form parameter (the S3 takes the same form field on POST /). Staged here,
+  // persisted by loop(); GET /settings reports the persisted value.
+  server.on("/settings", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
+    const AsyncWebParameter* p = request->getParam("reflashOnBoot");
+    if (p == nullptr) p = request->getParam("reflashOnBoot", true);
+    if (p == nullptr) {
+      sendWithCors(request, 400, "text/plain",
+                   F("Missing 'reflashOnBoot' param"));
+      return;
+    }
+    bool want = true;
+    if (!followerParseBool(p->value().c_str(), want)) {
+      sendWithCors(request, 400, "text/plain",
+                   F("reflashOnBoot must be true or false"));
+      return;
+    }
+    prefsStageReflashOnBoot(want);
+    sendWithCors(request, 200, "text/plain",
+                 want ? F("reflashOnBoot=true") : F("reflashOnBoot=false"));
   });
 
   // #318 E: the row's in-RAM log, cursor-paged so the leader pulls only new
@@ -739,6 +765,7 @@ void webEndpointsInit(AsyncWebServer& server) {
     diag.foreign = foreignContacts;  // #358
     diag.nowMs = millis();
     diag.bus = followerBusRecovery();  // #488
+    diag.resets = &resetLogGet();      // #503
     request->send(200, "application/json",
                   followerClusterHealthJson(
                       followerPhaseName(cv.phase), cv.leaderName,
@@ -976,6 +1003,30 @@ void webEndpointsInit(AsyncWebServer& server) {
 
   server.on("/reflash-units", HTTP_POST, [](AsyncWebServerRequest* request) {
     if (followerRejectCsrf(request)) return;
+    // Optional ?address=N narrows the job to one unit (#513, the S3's #412
+    // contract): a {"seq":N} op whose outcome lands in /unit/op-result, with
+    // the same progress object in /units/health. Absent = the whole row.
+    // An address that does not parse, or that arrives in the form body, is
+    // refused rather than ignored: falling through would turn a one-unit
+    // request into a whole-row reflash.
+    if (request->hasParam("address", true)) {
+      sendWithCors(request, 400, "text/plain",
+                   F("'address' must be a query parameter"));
+      return;
+    }
+    if (request->hasParam("address")) {
+      long addr = 0;
+      if (!reflashParseAddress(request->getParam("address")->value().c_str(),
+                               addr) ||
+          !reflashAddressInRange(addr, SFP_I2C_ADDRESS_BASE, UNITS_AMOUNT)) {
+        sendWithCors(request, 400, "text/plain",
+                     F("Address must be a decimal unit address within the "
+                       "managed range"));
+        return;
+      }
+      stageOp(request, FollowerOpKind::ReflashUnit, (uint8_t)addr, 0);
+      return;
+    }
     if (rescueActive()) {
       sendWithCors(request, 409, "text/plain",
                    F("Rescue beacon active — reflash disabled until a "
@@ -1053,6 +1104,12 @@ static void executeStagedOp() {
         UnitFacts& u = unitFacts[op.addr - SFP_I2C_ADDRESS_BASE];
         u.lifetime.featureGates = (uint8_t)op.arg;
       }
+      break;
+    case FollowerOpKind::ReflashUnit:
+      // Blocks loop() for the length of one unit's flash, like the bulk job;
+      // the op slot stays claimed, so every other unit op answers 503.
+      busRunReflashJob(op.addr);
+      wireStatus = busLastReflashFailed() == 0 ? 0 : 4;
       break;
     case FollowerOpKind::RebootToBootloader:
       wireStatus = busRebootToBootloader(op.addr);

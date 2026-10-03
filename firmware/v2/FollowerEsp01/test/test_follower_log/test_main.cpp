@@ -77,6 +77,26 @@ static void test_cursor_past_written_rewinds_and_emits_nothing() {
   TEST_ASSERT_EQUAL_STRING("", out.c_str());
 }
 
+// --- uptime stamps (#503) ---
+
+static void test_every_line_opens_with_its_uptime_stamp() {
+  FollowerLogRing r;
+  r.appendStamped("a\n", 2, 0);
+  r.appendStamped("b", 1, 7);
+  r.appendStamped("c\n", 2, 8);  // same line, written in two calls
+  String out;
+  r.readSince(0, out);
+  TEST_ASSERT_EQUAL_STRING("[0] a\n[7] bc\n", out.c_str());
+}
+
+static void test_stamp_survives_the_largest_uptime() {
+  FollowerLogRing r;
+  r.appendStamped("z\n", 2, 0xFFFFFFFFUL);
+  String out;
+  r.readSince(0, out);
+  TEST_ASSERT_EQUAL_STRING("[4294967295] z\n", out.c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_ring_reads_empty_cursor_zero);
@@ -86,5 +106,7 @@ int main(int, char**) {
   RUN_TEST(test_wrap_evicts_oldest_but_cursor_stays_monotonic);
   RUN_TEST(test_stale_evicted_cursor_clamps_to_oldest_retained);
   RUN_TEST(test_cursor_past_written_rewinds_and_emits_nothing);
+  RUN_TEST(test_every_line_opens_with_its_uptime_stamp);
+  RUN_TEST(test_stamp_survives_the_largest_uptime);
   return UNITY_END();
 }

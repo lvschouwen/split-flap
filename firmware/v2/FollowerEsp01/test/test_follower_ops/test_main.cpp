@@ -150,6 +150,72 @@ static void test_reflash_json_and_gate() {
   TEST_ASSERT_FALSE(reflashInProgress(p));
 }
 
+// --- single-unit reflash (#513) ---
+
+static void test_filter_zero_means_no_filter() {
+  uint8_t addrs[4] = {1, 2, 3, 4};
+  TEST_ASSERT_EQUAL_INT(4, reflashFilterToAddress(addrs, 4, 0));
+  TEST_ASSERT_EQUAL_UINT8(1, addrs[0]);
+  TEST_ASSERT_EQUAL_UINT8(4, addrs[3]);
+}
+
+static void test_filter_keeps_only_the_target() {
+  uint8_t addrs[4] = {1, 2, 3, 4};
+  TEST_ASSERT_EQUAL_INT(1, reflashFilterToAddress(addrs, 4, 3));
+  TEST_ASSERT_EQUAL_UINT8(3, addrs[0]);
+}
+
+static void test_filter_target_not_collected_plans_nothing() {
+  // The unit is current, silent, or stranded at another address: a run aimed
+  // at it must not fall back to flashing its neighbours.
+  uint8_t addrs[3] = {1, 2, 4};
+  TEST_ASSERT_EQUAL_INT(0, reflashFilterToAddress(addrs, 3, 3));
+  TEST_ASSERT_EQUAL_INT(0, reflashFilterToAddress(addrs, 0, 3));
+}
+
+static void test_reflash_address_range() {
+  TEST_ASSERT_FALSE(reflashAddressInRange(0, 1, 16));  // general call
+  TEST_ASSERT_TRUE(reflashAddressInRange(1, 1, 16));
+  TEST_ASSERT_TRUE(reflashAddressInRange(16, 1, 16));
+  TEST_ASSERT_FALSE(reflashAddressInRange(17, 1, 16));
+  TEST_ASSERT_FALSE(reflashAddressInRange(-1, 1, 16));
+  TEST_ASSERT_FALSE(reflashAddressInRange(300, 1, 16));
+}
+
+static void test_targeted_run_flashes_only_its_unit() {
+  UnitFacts inBootloader;
+  inBootloader.state = 2;
+  UnitFacts running;
+  running.state = 1;
+  UnitFacts silent;
+  silent.state = 0;
+  // Bulk: every bootloader-mode unit, nothing else.
+  TEST_ASSERT_TRUE(reflashShouldFlashUnit(inBootloader, 7, 0));
+  TEST_ASSERT_FALSE(reflashShouldFlashUnit(running, 7, 0));
+  TEST_ASSERT_FALSE(reflashShouldFlashUnit(silent, 7, 0));
+  // Targeted at 3: unit 7 sitting in twiboot from an earlier attempt is NOT
+  // flashed, unit 3 is — and only if it actually reached the bootloader.
+  TEST_ASSERT_FALSE(reflashShouldFlashUnit(inBootloader, 7, 3));
+  TEST_ASSERT_TRUE(reflashShouldFlashUnit(inBootloader, 3, 3));
+  TEST_ASSERT_FALSE(reflashShouldFlashUnit(running, 3, 3));
+}
+
+static void test_reflash_address_parses_decimal_only() {
+  long v = -1;
+  TEST_ASSERT_TRUE(reflashParseAddress("3", v));
+  TEST_ASSERT_EQUAL_INT(3, (int)v);
+  TEST_ASSERT_TRUE(reflashParseAddress("16", v));
+  TEST_ASSERT_EQUAL_INT(16, (int)v);
+  TEST_ASSERT_TRUE(reflashParseAddress("0", v));
+  TEST_ASSERT_EQUAL_INT(0, (int)v);  // parses; the range check refuses it
+  v = 99;
+  const char* bad[] = {"",    "010", "0x3", "3abc", " 3",  "3 ",
+                       "-3",  "+3",  "3.0", "1234", "abc", "03"};
+  for (const char* b : bad) TEST_ASSERT_FALSE(reflashParseAddress(b, v));
+  TEST_ASSERT_FALSE(reflashParseAddress(nullptr, v));
+  TEST_ASSERT_EQUAL_INT(99, (int)v);  // untouched on rejection
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_address_validation);
@@ -160,5 +226,11 @@ int main(int, char**) {
   RUN_TEST(test_op_result_failure_carries_reason);
   RUN_TEST(test_self_test_result_json);
   RUN_TEST(test_reflash_json_and_gate);
+  RUN_TEST(test_filter_zero_means_no_filter);
+  RUN_TEST(test_filter_keeps_only_the_target);
+  RUN_TEST(test_filter_target_not_collected_plans_nothing);
+  RUN_TEST(test_reflash_address_range);
+  RUN_TEST(test_targeted_run_flashes_only_its_unit);
+  RUN_TEST(test_reflash_address_parses_decimal_only);
   return UNITY_END();
 }

@@ -1031,13 +1031,14 @@ void followerBootHome() {
 // The invalidation is right (UnitHealth.h's documented lifecycle: reads drop
 // when a bootloader reboot invalidates them) — the repopulation was missing.
 // This is what the S3 already does at the end of runReflashJob.
-static void flashBootloaderUnits() {
+static void flashBootloaderUnits(uint8_t onlyAddr = 0) {
   uint8_t batch[REFLASH_BATCH_SIZE];
   int batchCount = 0;
   int flashed = 0;
   for (int i = 0; i < UNITS_AMOUNT; i++) {
-    if (unitFacts[i].state != 2) continue;
     uint8_t addr = (uint8_t)toI2cAddress(i);
+    // A targeted run leaves every other bootloader-mode unit alone (#513).
+    if (!reflashShouldFlashUnit(unitFacts[i], addr, onlyAddr)) continue;
     reflashProgressUnitStart(reflashProgress, addr);
     bool ok = flashUnitFromProgmem(addr);
     reflashProgressUnitResult(reflashProgress, ok);
@@ -1118,20 +1119,24 @@ void busAutoUpdateOutdatedUnits() {
 #endif
 }
 
-void busRunReflashJob() {
+uint8_t busLastReflashFailed() { return reflashProgress.failed; }
+
+void busRunReflashJob(uint8_t onlyAddr) {
 #if SERIAL_ENABLE == false
   SerialPrintln(F("Unit reflash starting (throttled)..."));
   uint8_t targets[UNITS_AMOUNT];
   int rebooted = reflashCollectRebootTargets(unitFacts, UNITS_AMOUNT,
                                              SFP_I2C_ADDRESS_BASE, targets);
+  rebooted = reflashFilterToAddress(targets, rebooted, onlyAddr);
   for (int k = 0; k < rebooted; k++) busRebootToBootloader(targets[k]);
   if (rebooted > 0) delay(TWIBOOT_STARTUP_MS);
   busProbe();  // reflash-internal probe (#205 exception to the inhibit)
   uint8_t flashTargets[UNITS_AMOUNT];
   int n = reflashCollectFlashTargets(unitFacts, UNITS_AMOUNT,
                                      SFP_I2C_ADDRESS_BASE, flashTargets);
+  n = reflashFilterToAddress(flashTargets, n, onlyAddr);
   reflashProgressBegin(reflashProgress, n);
-  flashBootloaderUnits();
+  flashBootloaderUnits(onlyAddr);
   reflashProgressFinish(reflashProgress, false);
   busPollHealth();
   // Staggered boot-home of the just-flashed units (#309): a reflashed unit
@@ -1139,5 +1144,7 @@ void busRunReflashJob() {
   // whole row at once — the #305 inrush class. Targets only unhomed units.
   followerBootHome();
   SerialPrintln(F("Unit reflash complete."));
+#else
+  (void)onlyAddr;
 #endif
 }

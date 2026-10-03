@@ -180,6 +180,60 @@ static void test_clear_makes_blob_undecodable() {
       followerMembershipDecode(blob, name, host, tzBuf, row, keyValid, key, ts));
 }
 
+// --- operator preferences (#513) ---
+
+static void test_prefs_roundtrip_both_values() {
+  for (int on = 0; on <= 1; on++) {
+    FollowerPrefs in;
+    in.reflashOnBoot = on != 0;
+    uint8_t rec[FOLLOWER_PREFS_LEN];
+    followerPrefsEncode(in, rec);
+    TEST_ASSERT_EQUAL(in.reflashOnBoot, followerPrefsDecode(rec).reflashOnBoot);
+  }
+}
+
+static void test_prefs_unwritten_eeprom_means_defaults() {
+  // What a firmware predating the record leaves behind the membership blob.
+  uint8_t erased[FOLLOWER_PREFS_LEN] = {0xFF, 0xFF, 0xFF};
+  TEST_ASSERT_TRUE(followerPrefsDecode(erased).reflashOnBoot);
+  uint8_t zeroed[FOLLOWER_PREFS_LEN] = {0, 0, 0};
+  TEST_ASSERT_TRUE(followerPrefsDecode(zeroed).reflashOnBoot);
+}
+
+static void test_prefs_corruption_never_decodes_to_off() {
+  FollowerPrefs off;
+  off.reflashOnBoot = false;
+  uint8_t rec[FOLLOWER_PREFS_LEN];
+  followerPrefsEncode(off, rec);
+  TEST_ASSERT_FALSE(followerPrefsDecode(rec).reflashOnBoot);
+  for (int i = 0; i < FOLLOWER_PREFS_LEN; i++) {
+    for (int bit = 0; bit < 8; bit++) {
+      rec[i] ^= (uint8_t)(1 << bit);
+      TEST_ASSERT_TRUE(followerPrefsDecode(rec).reflashOnBoot);
+      rec[i] ^= (uint8_t)(1 << bit);
+    }
+  }
+}
+
+static void test_prefs_sit_behind_the_membership_blob() {
+  TEST_ASSERT_EQUAL_INT(FOLLOWER_MEMBERSHIP_BLOB_LEN, FOLLOWER_PREFS_OFF);
+  TEST_ASSERT_EQUAL_INT(FOLLOWER_MEMBERSHIP_BLOB_LEN + FOLLOWER_PREFS_LEN,
+                        FOLLOWER_EEPROM_LEN);
+}
+
+static void test_parse_bool_is_strict() {
+  bool v = false;
+  TEST_ASSERT_TRUE(followerParseBool("true", v));
+  TEST_ASSERT_TRUE(v);
+  TEST_ASSERT_TRUE(followerParseBool("false", v));
+  TEST_ASSERT_FALSE(v);
+  v = true;
+  const char* bad[] = {"", "0", "1", "True", "FALSE", "false ", "no", "off"};
+  for (const char* b : bad) TEST_ASSERT_FALSE(followerParseBool(b, v));
+  TEST_ASSERT_FALSE(followerParseBool(nullptr, v));
+  TEST_ASSERT_TRUE(v);  // untouched on rejection
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_v4_magic_pins_the_tz_format_bump);
@@ -193,5 +247,10 @@ int main(int, char**) {
   RUN_TEST(test_oversized_fields_reject_at_encode);
   RUN_TEST(test_empty_host_rejects_at_encode);
   RUN_TEST(test_clear_makes_blob_undecodable);
+  RUN_TEST(test_prefs_roundtrip_both_values);
+  RUN_TEST(test_prefs_unwritten_eeprom_means_defaults);
+  RUN_TEST(test_prefs_corruption_never_decodes_to_off);
+  RUN_TEST(test_prefs_sit_behind_the_membership_blob);
+  RUN_TEST(test_parse_bool_is_strict);
   return UNITY_END();
 }

@@ -116,6 +116,7 @@ enum class FollowerOpKind : uint8_t {
   SelfTest,
   RebootToBootloader,
   SetGates,
+  ReflashUnit,  // #513: reflash exactly one unit; addr = the target
 };
 
 // --- execution outcomes (the /unit/op-result vocabulary, v2 copies) ----------------
@@ -362,6 +363,56 @@ inline int reflashCollectRebootTargets(const UnitFacts* facts, int maxUnits,
     if (reflashUnitNeedsReboot(facts[i])) outAddrs[n++] = (uint8_t)(base + i);
   }
   return n;
+}
+
+// Narrow a collected target list to one address; 0 = no filter (0 is the
+// general-call address, never a unit's). Applied to BOTH the reboot sweep and
+// the post-rescan flash list, so a unit stranded in twiboot by an earlier
+// attempt is not swept up by a run aimed at a different address (#513; the
+// S3's ReflashPlan.h carries the same helper for #412).
+inline int reflashFilterToAddress(uint8_t* addrs, int n, uint8_t onlyAddr) {
+  if (onlyAddr == 0) return n;
+  for (int i = 0; i < n; i++) {
+    if (addrs[i] == onlyAddr) {
+      addrs[0] = onlyAddr;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+// The one decision that keeps a targeted run off its neighbours: the flash
+// loop walks the facts, not the filtered list, so a unit already sitting in
+// twiboot at another address is skipped HERE or not at all.
+inline bool reflashShouldFlashUnit(const UnitFacts& u, uint8_t addr,
+                                   uint8_t onlyAddr) {
+  if (u.state != 2) return false;
+  return onlyAddr == 0 || addr == onlyAddr;
+}
+
+// /reflash-units?address=N bound: the managed range only. Deliberately not
+// maintValidateAddress — a unit in twiboot or on a protocol we do not speak
+// must still be reflashable; converging it is the point. A target that is
+// current, silent or absent plans nothing: the op still reports ok and the
+// progress object's total is 0, which is what a caller must check (the S3's
+// contract, and what commission-units.sh reads).
+inline bool reflashAddressInRange(long addr, int base, int maxUnits) {
+  return addr >= base && addr < (long)base + maxUnits;
+}
+
+// Decimal digits only, 1..3 of them. This picks which unit gets erased, so no
+// base guessing ("010" is not 8) and no trailing garbage ("3abc" is not 3).
+inline bool reflashParseAddress(const char* raw, long& out) {
+  if (raw == nullptr || raw[0] == '\0') return false;
+  long v = 0;
+  int n = 0;
+  for (; raw[n] != '\0'; n++) {
+    if (raw[n] < '0' || raw[n] > '9' || n >= 3) return false;
+    v = v * 10 + (raw[n] - '0');
+  }
+  if (n > 1 && raw[0] == '0') return false;
+  out = v;
+  return true;
 }
 
 // Boot auto-update predicate: only units PROVABLY outdated are

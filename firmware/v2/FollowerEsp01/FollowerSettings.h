@@ -1,10 +1,11 @@
 #pragma once
-// FollowerSettings.h — the follower's EEPROM membership record (#298),
-// natively tested by test_follower_settings. The ONLY on-ESP persisted
-// setting besides the SDK's WiFi credentials: the `clusteredBy` marker
-// (leader name/host + row) so a reboot boots into Grace instead of
-// flashing stale standalone content. Pure encode/decode over a fixed blob;
-// the EEPROM.begin/commit glue lives in main.cpp.
+// FollowerSettings.h — the follower's EEPROM records, natively tested by
+// test_follower_settings. Besides the SDK's WiFi credentials the board
+// persists two things: the `clusteredBy` membership marker (#298: leader
+// name/host + row, so a reboot boots into Grace instead of flashing stale
+// standalone content) and, behind it, the operator preferences (#513). Pure
+// encode/decode over fixed blobs; the EEPROM glue lives in FollowerCluster.cpp
+// and FollowerPrefs.cpp.
 
 #include <stdint.h>
 #include <string.h>
@@ -109,4 +110,60 @@ inline bool followerMembershipDecode(const uint8_t* blob, char* leaderName,
 
 inline void followerMembershipClear(uint8_t* blob) {
   memset(blob, 0, FOLLOWER_MEMBERSHIP_BLOB_LEN);
+}
+
+// --- operator preferences (#513) ----------------------------------------------
+// A second, independent record directly behind the membership blob, so adding
+// it leaves that blob's layout and magic alone — a change there drops the
+// follower out of its cluster. magic | flags | check. Bytes a firmware
+// predating the record never wrote read back erased (0xFF) and fail the check,
+// which yields the defaults.
+#define FOLLOWER_PREFS_OFF FOLLOWER_MEMBERSHIP_BLOB_LEN
+#define FOLLOWER_PREFS_LEN 3
+#define FOLLOWER_EEPROM_LEN (FOLLOWER_PREFS_OFF + FOLLOWER_PREFS_LEN)
+#define FOLLOWER_PREFS_MAGIC 0xB7
+#define FOLLOWER_PREFS_CHECK_MASK 0x5C
+#define FOLLOWER_PREF_REFLASH_ON_BOOT 0x01
+
+struct FollowerPrefs {
+  // Boot auto-install of bootloader-mode units and auto-update of outdated
+  // ones. Off = a gated campaign: nothing is flashed until an operator asks,
+  // one unit at a time (the S3's #412 setting, same name on the wire).
+  bool reflashOnBoot = true;
+};
+
+inline uint8_t followerPrefsCheck(const uint8_t* rec) {
+  return (uint8_t)(rec[0] ^ rec[1] ^ FOLLOWER_PREFS_CHECK_MASK);
+}
+
+inline void followerPrefsEncode(const FollowerPrefs& p,
+                                uint8_t rec[FOLLOWER_PREFS_LEN]) {
+  rec[0] = FOLLOWER_PREFS_MAGIC;
+  rec[1] = p.reflashOnBoot ? FOLLOWER_PREF_REFLASH_ON_BOOT : 0;
+  rec[2] = followerPrefsCheck(rec);
+}
+
+// An unreadable record decodes to the defaults, never to "off": a corrupted
+// byte must not silently stop a row from repairing its units.
+inline FollowerPrefs followerPrefsDecode(const uint8_t rec[FOLLOWER_PREFS_LEN]) {
+  FollowerPrefs p;
+  if (rec[0] != FOLLOWER_PREFS_MAGIC || rec[2] != followerPrefsCheck(rec)) {
+    return p;
+  }
+  p.reflashOnBoot = (rec[1] & FOLLOWER_PREF_REFLASH_ON_BOOT) != 0;
+  return p;
+}
+
+// Strict: a setting that gates unit flashing takes exactly "true" or "false".
+inline bool followerParseBool(const char* s, bool& out) {
+  if (s == nullptr) return false;
+  if (strcmp(s, "true") == 0) {
+    out = true;
+    return true;
+  }
+  if (strcmp(s, "false") == 0) {
+    out = false;
+    return true;
+  }
+  return false;
 }

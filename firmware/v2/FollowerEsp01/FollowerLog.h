@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdio.h>
 #include <Arduino.h>
 #include <Print.h>
 
@@ -9,10 +10,11 @@
 // more usefully, pulled by the S3 leader into the fleet-wide log so the whole
 // wall's activity lands in one place (/log/flash on the master).
 //
-// v1's ESP-01 web log was 2 KB (#133); we keep that budget. Unlike the
-// master's ring the bytes are NOT timestamped here — the leader stamps each
-// line on ingest, giving the fleet log one coherent clock (the ESP-01's own
-// clock is SNTP-epoch-only and often unset).
+// v1's ESP-01 web log was 2 KB (#133); we keep that budget. Lines carry the
+// board's own uptime in seconds (#503), not a wall clock — the leader stamps
+// each line on ingest, giving the fleet log one coherent clock (the ESP-01's
+// own clock is SNTP-epoch-only and often unset). The stamp costs up to 13
+// bytes a line out of that budget.
 
 #ifndef FOLLOWER_LOG_SIZE
 #define FOLLOWER_LOG_SIZE 2048
@@ -36,6 +38,24 @@ struct FollowerLogRing {
         wrapped = true;
       }
       written++;
+    }
+  }
+
+  // Append with an "[<uptime seconds>] " stamp opening every line (#503): the
+  // ring is pulled into the fleet log long after the fact, and without it a
+  // line cannot be placed against a reset or a bus-death episode.
+  bool atLineStart = true;
+  void appendStamped(const char* data, size_t len, uint32_t seconds) {
+    if (data == nullptr) return;
+    for (size_t i = 0; i < len; i++) {
+      if (atLineStart) {
+        char stamp[14];
+        int n = snprintf(stamp, sizeof(stamp), "[%lu] ", (unsigned long)seconds);
+        append(stamp, (size_t)n);
+        atLineStart = false;
+      }
+      append(&data[i], 1);
+      if (data[i] == '\n') atLineStart = true;
     }
   }
 

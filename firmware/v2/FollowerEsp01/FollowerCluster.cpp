@@ -78,7 +78,9 @@ static volatile bool tzInstalled = false;
 static void applyLeaderTz() { tzInstalled = false; }
 
 void clusterInit() {
-  EEPROM.begin(FOLLOWER_MEMBERSHIP_BLOB_LEN);
+  // One mirror for both records: the membership blob and, behind it, the
+  // operator preferences (#513, read by prefsInit()).
+  EEPROM.begin(FOLLOWER_EEPROM_LEN);
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
   for (int i = 0; i < FOLLOWER_MEMBERSHIP_BLOB_LEN; i++) {
     blob[i] = EEPROM.read(i);

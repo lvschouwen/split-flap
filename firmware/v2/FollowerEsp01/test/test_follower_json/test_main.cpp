@@ -124,8 +124,15 @@ static void test_ping_reply_carries_state_and_health_and_plat() {
 static void test_settings_json_shape() {
   String out = followerSettingsJson("split-flap-c8a746", "abc1234", 8,
                                     "clustered", "wall-leader",
-                                    "192.168.15.22", 2, makeVitals(), 85);
+                                    "192.168.15.22", 2, makeVitals(), 85,
+                                    true);
   TEST_ASSERT_TRUE(out.indexOf("\"txPower\":85") >= 0);  // #508, dBm x10
+  // #513: a JSON boolean under the S3's key name, so commission-units.sh
+  // reads both platforms with one expression.
+  TEST_ASSERT_TRUE(out.indexOf("\"reflashOnBoot\":true}") >= 0);
+  String braked = followerSettingsJson("n", "abc1234", 5, "clustered", "l",
+                                       "h", 0, makeVitals(), 85, false);
+  TEST_ASSERT_TRUE(braked.indexOf("\"reflashOnBoot\":false}") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"deviceName\":\"split-flap-c8a746\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"effectiveDeviceName\":\"split-flap-c8a746\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"version\":\"abc1234\"") >= 0);
@@ -276,6 +283,25 @@ static void test_csrf_gate_matches_master() {
   TEST_ASSERT_FALSE(followerCsrfRejectPost(false, true, "http://evil.example.com"));
 }
 
+// #503: the reset history rides /cluster/health, newest boot first, and the
+// key is absent (not empty) when the caller has none to offer.
+static void test_cluster_health_carries_reset_history() {
+  FollowerClusterDiag d;
+  String without = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
+                                             "abc1234", 5, 5, 0, d);
+  TEST_ASSERT_TRUE(without.indexOf("\"resets\"") < 0);
+  TEST_ASSERT_TRUE(without.endsWith("}}"));
+
+  FollowerResetLogBlob log;
+  followerResetLogPush(log, 2, 28, 0x40201234UL, 4);  // the crash
+  followerResetLogPush(log, 4, 0, 0, 0);              // then a clean reboot
+  d.resets = &log;
+  String with = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
+                                          "abc1234", 5, 5, 0, d);
+  TEST_ASSERT_TRUE(with.indexOf(
+      "},\"resets\":[\"4:0:00000000:00000000\",\"2:28:40201234:00000004\"]}") >= 0);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_cors_origin_gate_lan_only);
@@ -293,5 +319,6 @@ int main(int, char**) {
   RUN_TEST(test_cluster_health_json_shape);
   RUN_TEST(test_cluster_health_bus_block_while_dead);
   RUN_TEST(test_wire_strings_are_escaped);
+  RUN_TEST(test_cluster_health_carries_reset_history);
   return UNITY_END();
 }

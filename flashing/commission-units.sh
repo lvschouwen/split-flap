@@ -171,29 +171,34 @@ if (( DRY )); then
   exit 0
 fi
 
-# An esp01 follower is a different machine: no #412 boot auto-install to brake
-# (so no reflashOnBoot key at all), and no ?address= targeting. Detect it from
-# the plat key rather than inferring it from the missing brake — "absent" and
-# "unreadable host" must not look the same.
 PLAT="$(api GET "/settings" | jqf "d.get('plat','')")"
 ESP01=0
 [[ "$PLAT" == "esp01" ]] && ESP01=1
 
-# The brake must be on, or the master will converge the fleet behind our back
-# on its next boot and this script's whole premise is gone.
-if (( ESP01 )); then
-  echo "host is an esp01 follower (plat=$PLAT) — no boot auto-install to brake."
+# The brake must be on, or the host will converge its units behind our back on
+# its next boot and this script's whole premise is gone. An esp01 follower has
+# the brake and ?address= targeting since #513; one that predates it reports no
+# reflashOnBoot key at all, reflashes its whole row at every boot and ignores
+# ?address=. Tell the two apart by the key, never by guessing from the platform
+# — "absent" and "unreadable host" must not look the same either, hence the
+# explicit default.
+BRAKE="$(api GET "/settings" | jqf "d.get('reflashOnBoot','absent')")"
+PER_UNIT=1
+if (( ESP01 )) && [[ "$BRAKE" == "absent" ]]; then
+  PER_UNIT=0
+  echo "host is an esp01 follower (plat=$PLAT) on firmware without the #513 brake."
   echo "Per-unit flashing is NOT available on this host; units must already be"
   echo "on $WANT_REV (see the flash step)."
   echo
-else
-  BRAKE="$(api GET "/settings" | jqf "d['reflashOnBoot']")"
-  if [[ "$BRAKE" != "False" && "$BRAKE" != "false" ]]; then
-    echo "REFUSING: reflashOnBoot is '${BRAKE:-unreadable}', expected false." >&2
-    # /settings is GET-only; the settings POST is the form route at /.
+elif [[ "$BRAKE" != "False" && "$BRAKE" != "false" ]]; then
+  echo "REFUSING: reflashOnBoot is '${BRAKE:-unreadable}', expected false." >&2
+  if (( ESP01 )); then
+    echo "  curl -X POST 'http://$HOST/settings?reflashOnBoot=false'" >&2
+  else
+    # /settings is GET-only on the S3; the settings POST is the form route at /.
     echo "  curl -X POST -d reflashOnBoot=false 'http://$HOST/'" >&2
-    exit 1
   fi
+  exit 1
 fi
 
 # --- per unit ----------------------------------------------------------------
@@ -210,14 +215,15 @@ commission() {  # addr -> 0 pass, 1 fail
   # 1. flash — also the DIP/EEPROM address proof (see the header)
   if [[ "$before_rev" == "$WANT_REV" ]]; then
     printf '  flash       already on %s, skipping\n' "$WANT_REV"
-  elif (( ESP01 )); then
-    # #412's ?address= is Master-only. FollowerEsp01's /reflash-units ignores
-    # every query param and reflashes THE WHOLE ROW, 2 at a time — so taking
-    # the targeted path here would silently do the one thing this script exists
-    # to prevent. Refuse, and make the operator run the bulk reflash knowingly.
+  elif (( ! PER_UNIT )); then
+    # A follower predating #513 ignores every query param on /reflash-units and
+    # reflashes THE WHOLE ROW, 2 at a time — so taking the targeted path here
+    # would silently do the one thing this script exists to prevent. Refuse,
+    # and make the operator run the bulk reflash knowingly.
     fail "a$a is on '${before_rev:-<unreadable>}', not $WANT_REV, and this host
         is an esp01 follower whose /reflash-units IGNORES ?address= and would
-        reflash the entire row. Flash the row deliberately first:
+        reflash the entire row. Update the follower firmware (#513), or flash
+        the row deliberately first:
           curl -X POST 'http://$HOST/reflash-units'
         then re-run this script to validate each unit."
     return 1
