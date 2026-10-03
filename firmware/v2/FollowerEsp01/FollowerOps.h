@@ -120,6 +120,7 @@ enum class FollowerOpKind : uint8_t {
   ReflashUnit,  // #513: reflash exactly one unit; addr = the target
   BootUpdate,   // #499: in-system twiboot update (reads info, drives stages)
   BootInfo,     // #499: read-only boot report; result in the BootInfoSlot
+  BootDump,     // #522: read the unit's twiboot image over I2C
 };
 
 // --- execution outcomes (the /unit/op-result vocabulary, v2 copies) ----------------

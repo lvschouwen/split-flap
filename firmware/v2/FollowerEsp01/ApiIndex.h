@@ -41,6 +41,8 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/unit/gates",            "set a unit's feature-gate bits"},
   {"POST", "/unit/self-test",        "run a unit's self-test"},
   {"GET",  "/unit/self-test-result", "read a unit's self-test result"},
+  {"POST", "/unit/boot-dump",         "read a unit's twiboot image over I2C (unit restarts, nothing written)"},
+  {"GET",  "/unit/boot-dump-result", "boot-section dump: 1 KB hex + crc32, or failure reason"},
   {"POST", "/unit/boot-update",      "in-system twiboot update: reads boot info, runs needed stages, verifies"},
   {"POST", "/unit/boot-info",        "read a unit's own boot-section report (no restart, nothing written)"},
   {"GET",  "/unit/boot-info-result", "boot report: state, crc32, lock + fuse bytes, last update result"},

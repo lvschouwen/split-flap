@@ -1,9 +1,8 @@
 #pragma once
 // BootDump.h — pure half of the unit boot-section dump (#511, stage 1 of the
 // in-system twiboot update #499): the result slot, the CRC and the
-// /unit/boot-dump-result JSON. The bus work is unitBusReadBootSection()
-// (UnitBus.cpp), run by displayTask; the dumped bytes live in a store of
-// their own (Tasks.h), not in the mutex-copied snapshot.
+// /unit/boot-dump-result JSON. Shared by both row masters (S3 and ESP-01);
+// the Nano never compiles it.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -15,6 +14,17 @@
 
 // Worst case: the fixed keys plus two hex characters per byte.
 #define BOOT_DUMP_JSON_CAP (2 * BOOT_SECTION_LEN + 128)
+
+// The ESP-01 keeps string literals in RAM, and that board runs with a few KB
+// of free heap: its format strings go to flash instead.
+#if defined(ESP8266)
+#include <pgmspace.h>
+#define BOOT_DUMP_SNPRINTF(buf, cap, fmt, ...) \
+  snprintf_P(buf, cap, PSTR(fmt), ##__VA_ARGS__)
+#else
+#define BOOT_DUMP_SNPRINTF(buf, cap, fmt, ...) \
+  snprintf(buf, cap, fmt, ##__VA_ARGS__)
+#endif
 
 enum class BootDumpOutcome : uint8_t {
   Pending = 0,       // slot default; a real result always overwrites it
@@ -66,15 +76,16 @@ inline size_t buildBootDumpJson(char* buf, size_t cap, const BootDumpSlot& slot,
   int n;
   if (slot.seq < seq ||
       (slot.seq == seq && slot.outcome == BootDumpOutcome::Pending)) {
-    n = snprintf(buf, cap, "{\"state\":\"pending\"}");
+    n = BOOT_DUMP_SNPRINTF(buf, cap, "{\"state\":\"pending\"}");
   } else if (slot.seq > seq ||
              (slot.outcome == BootDumpOutcome::Ok && bytes == nullptr)) {
-    n = snprintf(buf, cap, "{\"state\":\"expired\"}");
+    n = BOOT_DUMP_SNPRINTF(buf, cap, "{\"state\":\"expired\"}");
   } else if (slot.outcome != BootDumpOutcome::Ok) {
-    n = snprintf(buf, cap, "{\"state\":\"failed\",\"addr\":%u,\"reason\":\"%s\"}",
+    n = BOOT_DUMP_SNPRINTF(buf, cap,
+                 "{\"state\":\"failed\",\"addr\":%u,\"reason\":\"%s\"}",
                  (unsigned)slot.addr, bootDumpOutcomeName(slot.outcome));
   } else {
-    n = snprintf(buf, cap,
+    n = BOOT_DUMP_SNPRINTF(buf, cap,
                  "{\"state\":\"ok\",\"addr\":%u,\"start\":%u,\"len\":%u,"
                  "\"crc32\":\"%08lx\",\"hex\":\"",
                  (unsigned)slot.addr, (unsigned)BOOT_SECTION_START,
@@ -91,7 +102,7 @@ inline size_t buildBootDumpJson(char* buf, size_t cap, const BootDumpSlot& slot,
       *p = '\0';
       return (size_t)(p - buf);
     }
-    n = snprintf(buf, cap, "{}");  // caller's buffer cannot hold the dump
+    n = BOOT_DUMP_SNPRINTF(buf, cap, "{}");
   }
   if (n < 0) { buf[0] = '\0'; return 0; }
   if ((size_t)n >= cap) n = (int)cap - 1;  // snprintf truncated

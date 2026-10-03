@@ -17,6 +17,7 @@
 #include "FollowerOps.h"
 #include "UnitHealth.h"
 #include "UnitProtocolHelpers.h"  // UnitSelfTestReading
+#include "BootDump.h"            // #522 boot-section dump slot + CRC + JSON
 #include "BootUpdatePlan.h"      // #499 decision logic (includes BootUpdateReport)
 
 // Per-slot facts (probe + health poll truth) and the derived row width.
@@ -96,6 +97,13 @@ bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out);
 bool busReadBootInfo(uint8_t i2cAddress, BootUpdateReport& out);
 int busBootUpdate(uint8_t i2cAddress, uint8_t stage);
 void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result);
+
+// Boot-section dump (#522): reads the unit's twiboot image over I2C.
+// The unit passes through its bootloader and restarts; nothing is written.
+// Fills `slot` with the outcome and `outBytes` with the raw 1 KB section
+// when the read succeeds.
+void busRunBootDump(uint32_t seq, uint8_t addr,
+                    BootDumpSlot& slot, uint8_t* outBytes);
 
 // The full bundled-hex reflash job (v1 #138 flow: enter-bootloader sweep,
 // throttled PROGMEM flash, batch settle). Blocking for many seconds —

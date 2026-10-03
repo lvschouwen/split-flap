@@ -5,7 +5,7 @@
 #include <string.h>
 #include <unity.h>
 
-#include "../../BootDump.h"
+#include "BootDump.h"
 
 void setUp() {}
 void tearDown() {}

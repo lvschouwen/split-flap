@@ -4,10 +4,11 @@
 // state, a CRC32 over the section computed by the unit's sketch, the lock and
 // fuse bytes, and the result of its last update attempt. Nothing is written
 // and the unit does not restart, so it can be asked at any time, on either
-// row; the ESP-01 row has no boot-section dump, which makes this its only
-// read-back.
+// row; both row masters now also have BootDump.h (#522) for the full
+// boot-section dump.
 //
-// Shared by both row masters; the Nano never compiles it.
+// Shared by both row masters (both have the dump too, #522); the Nano never
+// compiles it.
 
 #include <stddef.h>
 #include <stdint.h>

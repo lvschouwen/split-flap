@@ -1313,3 +1313,76 @@ void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result) {
   (void)seq; (void)addr; (void)result;
 #endif
 }
+
+void busRunBootDump(uint32_t seq, uint8_t addr,
+                    BootDumpSlot& slot, uint8_t* outBytes) {
+#if SERIAL_ENABLE == false
+  slot.seq = seq;
+  slot.addr = addr;
+  if (busRebootToBootloader(addr) != 0) {
+    slot.outcome = BootDumpOutcome::EnterFail;
+    busArmProbeInhibit(millis() + 3000);
+    return;
+  }
+  delay(TWIBOOT_STARTUP_MS);
+
+  twibootAddr = addr;
+  bool bootloaderLive = false;
+  for (int attempt = 0; attempt < 5; attempt++) {
+    if (twibootPing() == 0) { bootloaderLive = true; break; }
+    delay(100);
+  }
+  if (!bootloaderLive) {
+    slot.outcome = BootDumpOutcome::BootloaderSilent;
+  } else if (!twibootVerifyChip()) {
+    slot.outcome = BootDumpOutcome::ChipMismatch;
+  } else {
+    slot.outcome = BootDumpOutcome::Ok;
+    for (int page = 0; page < BOOT_SECTION_LEN / TWIBOOT_PAGE_SIZE; page++) {
+      uint16_t flashAddr =
+          (uint16_t)(BOOT_SECTION_START + page * TWIBOOT_PAGE_SIZE);
+      uint8_t* dst = outBytes + page * TWIBOOT_PAGE_SIZE;
+      if (!twibootReadFlashPage(flashAddr, dst) &&
+          !twibootReadFlashPage(flashAddr, dst)) {
+        slot.outcome = BootDumpOutcome::ReadFail;
+        break;
+      }
+    }
+  }
+
+  bool exited = false;
+  for (int attempt = 0; attempt < 3 && !exited; attempt++) {
+    exited = twibootExit() == 0;
+    if (!exited) delay(20);
+  }
+  if (!exited) {
+    char addrHex[8];
+    snprintf(addrHex, sizeof(addrHex), "0x%02x", addr);
+    SerialPrint(F("Unit "));
+    SerialPrint(addrHex);
+    SerialPrintln(F(": twiboot exit failed after boot-section read"));
+  } else {
+    delay(2000);
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) rebootUnit(addr);
+  }
+
+  waitForBatchIdle(&addr, 1, 10000);
+  if (busHome(addr) == 0) waitForBatchIdle(&addr, 1, 20000);
+  reshowPending = lastFrameValid;
+  busArmProbeInhibit(millis() + 3000);
+
+  if (slot.outcome == BootDumpOutcome::Ok) {
+    slot.crc32 = bootDumpCrc32(outBytes, BOOT_SECTION_LEN);
+  }
+  {
+    char logBuf[72];
+    snprintf(logBuf, sizeof(logBuf), "boot-dump unit 0x%02x -> %s (crc32 %08lx)",
+             addr, bootDumpOutcomeName(slot.outcome),
+             (unsigned long)slot.crc32);
+    SerialPrintln(logBuf);
+  }
+#else
+  (void)seq; (void)addr; (void)slot; (void)outBytes;
+#endif
+}

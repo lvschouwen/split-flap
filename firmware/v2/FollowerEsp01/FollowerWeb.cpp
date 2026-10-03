@@ -14,6 +14,7 @@
 #include "BuildVersion.h"
 #include "ApiIndex.h"
 #include "ApiIndexAsset.h"  // #519: the GET /api reply, in flash
+#include "BootDump.h"  // #522: boot-section dump slot + CRC + JSON
 #include "BootInfo.h"  // #499: read-only boot report slot + JSON
 #include "FollowerBus.h"
 #include "ClusterHmac.h"  // #313 follow-on: rebuild canonical msgs for verify
@@ -50,6 +51,9 @@ static StagedOp stagedOp;
 static MaintResult opResult;
 static SelfTestSlot selfTestSlot;
 static BootInfoSlot bootInfoSlot;  // #499: last read-only boot report
+static BootDumpSlot bootDumpSlot;  // #522: last boot-section dump result
+static uint8_t bootDumpBytes[BOOT_SECTION_LEN];  // raw 1 KB section
+static uint32_t bootDumpBytesSeq = 0;  // seq that wrote bootDumpBytes
 static uint32_t maintSeqCounter = 0;
 
 // Self-test poll state (the unit measures ~2 revolutions; we poll its
@@ -1006,9 +1010,64 @@ void webEndpointsInit(AsyncWebServer& server) {
     stageOp(request, FollowerOpKind::BootUpdate, (uint8_t)addr, 0);
   });
 
+  // Boot-section dump (#522): reads the unit's twiboot image over I2C. The
+  // unit passes through its bootloader and restarts; nothing is written.
+  server.on("/unit/boot-dump", HTTP_POST, [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
+    int addr = 0;
+    if (!checkAddressParam(request, addr)) return;
+    stageOp(request, FollowerOpKind::BootDump, (uint8_t)addr, 0);
+  });
+
+  server.on("/unit/boot-dump-result", HTTP_GET,
+            [](AsyncWebServerRequest* request) {
+    if (!request->hasParam("seq")) {
+      sendWithCors(request, 400, "text/plain", F("Missing 'seq' query param"));
+      return;
+    }
+    long seq = request->getParam("seq")->value().toInt();
+    if (seq < 1) {
+      sendWithCors(request, 400, "text/plain", F("seq must be >= 1"));
+      return;
+    }
+    const BootDumpSlot& slot = bootDumpSlot;
+    if (slot.seq != (uint32_t)seq || slot.outcome != BootDumpOutcome::Ok) {
+      char small[96];
+      buildBootDumpJson(small, sizeof(small), slot, (uint32_t)seq, nullptr);
+      sendWithCors(request, 200, "application/json", small);
+      return;
+    }
+    // ~2.2 KB JSON with the hex dump — heap, not stack. The callback
+    // response pattern (same as /units/health) avoids a second copy.
+    size_t cap = BOOT_DUMP_JSON_CAP;
+    if (!heapCanHold(cap + BOOT_SECTION_LEN)) {
+      sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
+      return;
+    }
+    std::shared_ptr<char> held(new (std::nothrow) char[cap],
+                               std::default_delete<char[]>());
+    if (held.get() == nullptr) {
+      sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
+      return;
+    }
+    const uint8_t* bytes = nullptr;
+    if (bootDumpBytesSeq == (uint32_t)seq) bytes = bootDumpBytes;
+    size_t n = buildBootDumpJson(held.get(), cap, slot, (uint32_t)seq, bytes);
+    sendResponseWithCors(
+        request,
+        request->beginResponse(
+            "application/json", n,
+            [held, n](uint8_t* out, size_t maxLen, size_t index) -> size_t {
+              if (index >= n) return 0;
+              size_t take = n - index;
+              if (take > maxLen) take = maxLen;
+              memcpy(out, held.get() + index, take);
+              return take;
+            }));
+  });
+
   // Read-only boot report (#499): what the unit says about its own boot
-  // section. No restart, nothing written. This row has no boot-section dump,
-  // so this is its read-back after an update.
+  // section. No restart, nothing written.
   server.on("/unit/boot-info", HTTP_POST, [](AsyncWebServerRequest* request) {
     if (followerRejectCsrf(request)) return;
     int addr = 0;
@@ -1194,6 +1253,12 @@ static void executeStagedOp() {
       busRunBootUpdate(op.seq, op.addr, opResult);
       stagedOp.pending = false;
       return;
+    case FollowerOpKind::BootDump:
+      busRunBootDump(op.seq, op.addr, bootDumpSlot, bootDumpBytes);
+      bootDumpBytesSeq = (bootDumpSlot.outcome == BootDumpOutcome::Ok)
+                             ? op.seq : 0;
+      wireStatus = (bootDumpSlot.outcome == BootDumpOutcome::Ok) ? 0 : 4;
+      break;
     case FollowerOpKind::BootInfo: {
       BootInfoSlot slot;
       slot.seq = op.seq;
