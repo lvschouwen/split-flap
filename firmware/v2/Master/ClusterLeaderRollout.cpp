@@ -222,13 +222,9 @@ static void rolloutPumpUpload() {
     SerialPrintln("cluster: " + host +
                   " flashed — rebooting, waiting for it to rejoin on " GIT_REV);
     clusterRolloutUploadDone(rollout, nowMs);
-    // The follower reboots in ~750 ms: mark it un-joined now (rev unknown
-    // until the rejoin handshake) and skip the doomed contact attempts so
-    // the reboot window doesn't read as failures → degraded noise.
-    runtimes[target].joined = false;
-    runtimes[target].rev = "";
-    runtimes[target].failures = 0;
-    runtimes[target].nextAttemptMs = nowMs + 5000;
+    // The follower reboots in ~750 ms; its silence until the rejoin is ours
+    // to expect, not supervision evidence (#514).
+    clusterMemberExpectRestart(runtimes[target], nowMs);
   } else if (status == 409) {
     // Its own reflash/OTA owns the flash right now — transient by contract.
     SerialPrintln("cluster: " + host + " busy (409) — rollout retries later");

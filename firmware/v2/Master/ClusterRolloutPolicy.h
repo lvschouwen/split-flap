@@ -29,6 +29,10 @@ static const uint8_t CLUSTER_ROLLOUT_ATTEMPT_CAP = 3;
 // confirm (pre-inrush in setup(), #305) + the leader's join backoff ladder
 // fit well inside.
 static const uint32_t CLUSTER_ROLLOUT_REJOIN_TIMEOUT_MS = 120000UL;
+// The supervision grace for a member the leader restarted must not outlast
+// this budget, or a rollout that timed out would still be hiding the member.
+static_assert(CLUSTER_RESTART_GRACE_MS <= CLUSTER_ROLLOUT_REJOIN_TIMEOUT_MS,
+              "restart grace must end with the rollout's rejoin budget");
 
 // Global pause after a failed/rejected upload before the next candidate is
 // considered — a busy follower (409: its own reflash/OTA in flight) or a

@@ -273,10 +273,7 @@ void followerPushPump() {
       // rolloutFollowerSource stays set: the wait gate compares the rejoin
       // rev against the stored image's rev.
       if (t >= 0 && t < table.count) {
-        runtimes[t].joined = false;
-        runtimes[t].rev = "";
-        runtimes[t].failures = 0;
-        runtimes[t].nextAttemptMs = nowMs + 5000;
+        clusterMemberExpectRestart(runtimes[t], nowMs);  // #514
       }
     } else if (status == 409) {
       SerialPrintln("cluster: esp01 " + h +
@@ -299,13 +296,10 @@ void followerPushPump() {
   if (status == 200) {
     followerPushFinishLocked(FollowerPushResult::Done, host,
                              "flashed — rebooting, will rejoin");
-    // Reboot window (~750 ms): mark un-joined so the doomed contacts don't
-    // read as failures → degraded noise (mirrors the rollout).
+    // The row reboots now; its silence until the rejoin is ours to expect
+    // (#514, mirrors the rollout).
     if (target >= 0 && target < table.count) {
-      runtimes[target].joined = false;
-      runtimes[target].rev = "";
-      runtimes[target].failures = 0;
-      runtimes[target].nextAttemptMs = millis() + 5000;
+      clusterMemberExpectRestart(runtimes[target], millis());
     }
   } else if (status == 409) {
     followerPushFinishLocked(FollowerPushResult::Rejected, host,

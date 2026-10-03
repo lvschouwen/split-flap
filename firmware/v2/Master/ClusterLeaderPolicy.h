@@ -70,6 +70,9 @@ struct ClusterMemberRuntime {
   uint32_t lastContactMs = 0;  // last successful round-trip; also stamped as a
                                // benefit-of-the-doubt epoch at table apply and
                                // netif recovery (clusterMemberStampContactEpoch)
+  uint32_t restartExpectedUntilMs = 0;  // #514: 0 = none; the leader just
+                               // restarted this member (image push accepted)
+                               // and its silence until then is not evidence
   bool renderDirty = false;    // segment changed since the last acked render
   uint32_t renderDirtySinceMs = 0;  // when renderDirty first set (0 = clear) —
                                     // feeds the #385 renderStuck flag
@@ -148,6 +151,37 @@ inline void clusterMemberOnSuccess(ClusterMemberRuntime& m, uint32_t nowMs) {
   m.degraded = false;
   m.lastContactMs = nowMs;
   m.nextAttemptMs = nowMs;
+  m.restartExpectedUntilMs = 0;  // it is back; ordinary supervision from here
+}
+
+// --- leader-initiated restart (#514) ---------------------------------------------
+// The leader pushed an image, the member answered 200 and is now rebooting.
+// Nobody needs to be told the row is away: the leader caused it. An ESP-01
+// takes ~36 s to come back, longer than the degrade window, so without this
+// every rollout logged STUCK + DEGRADED and raised the HA problem sensor.
+//
+// The grace equals the rollout's rejoin budget, so the rollout's own timeout
+// is the alarm for this window; once it passes, a member that is still silent
+// degrades by the ordinary rule a full silence window later.
+static const uint32_t CLUSTER_RESTART_GRACE_MS = 120000UL;
+// The member needs a moment to actually go down; contacts before that would
+// reach the old image.
+static const uint32_t CLUSTER_RESTART_FIRST_RETRY_MS = 5000UL;
+
+inline void clusterMemberExpectRestart(ClusterMemberRuntime& m, uint32_t nowMs) {
+  m.joined = false;
+  m.rev = "";  // unknown until the rejoin handshake reports it
+  m.failures = 0;
+  m.lastContactMs = nowMs;
+  m.nextAttemptMs = nowMs + CLUSTER_RESTART_FIRST_RETRY_MS;
+  uint32_t until = nowMs + CLUSTER_RESTART_GRACE_MS;
+  m.restartExpectedUntilMs = until != 0 ? until : 1;  // 0 means "none"
+}
+
+inline bool clusterMemberRestartExpected(const ClusterMemberRuntime& m,
+                                         uint32_t nowMs) {
+  return m.restartExpectedUntilMs != 0 &&
+         (int32_t)(nowMs - m.restartExpectedUntilMs) < 0;
 }
 
 // #385 suspect tier: failing but not yet 30 s silent. Derived, never stored —
@@ -184,6 +218,8 @@ inline void clusterMemberRenderAcked(ClusterMemberRuntime& m) {
 // — stale content on the wall, surfaced as a flag instead of a degrade.
 inline bool clusterMemberRenderStuck(const ClusterMemberRuntime& m,
                                      uint32_t nowMs) {
+  // A member the leader is restarting is not "alive but undeliverable" (#514).
+  if (clusterMemberRestartExpected(m, nowMs)) return false;
   return m.renderDirty && m.renderDirtySinceMs != 0 &&
          (uint32_t)(nowMs - m.renderDirtySinceMs) >= CLUSTER_DEGRADED_SILENCE_MS;
 }
@@ -194,6 +230,14 @@ inline bool clusterMemberRenderStuck(const ClusterMemberRuntime& m,
 inline void clusterMemberOnFailure(ClusterMemberRuntime& m, uint32_t nowMs,
                                    bool leaderOnline) {
   if (!leaderOnline) {
+    m.nextAttemptMs = nowMs + CLUSTER_RETRY_BASE_MS;
+    return;
+  }
+  if (clusterMemberRestartExpected(m, nowMs)) {
+    // Expected silence (#514): keep knocking at the base cadence — the rejoin
+    // is what ends the wait — and hold the contact epoch fresh, so supervision
+    // resumes with the full silence window if the grace runs out.
+    m.lastContactMs = nowMs;
     m.nextAttemptMs = nowMs + CLUSTER_RETRY_BASE_MS;
     return;
   }

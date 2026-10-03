@@ -398,6 +398,95 @@ static void test_fanout_normalizes_stale_cursor() {
   TEST_ASSERT_EQUAL(1, clusterFanoutNext(cursor, some, 3));
 }
 
+// --- leader-initiated restart (#514) ---
+
+// The real timeline of an ESP-01 rollout: upload accepted, ~36 s of failed
+// contacts while the row reboots, then the rejoin. None of it is evidence.
+static void test_expected_restart_is_not_degraded_or_stuck() {
+  ClusterMemberRuntime m;
+  clusterMemberOnSuccess(m, 1000);
+  m.joined = true;
+  m.rev = "old";
+  clusterMemberMarkRenderDirty(m, 2000);  // a minute tick during the upload
+  uint32_t t0 = 40000;
+  clusterMemberExpectRestart(m, t0);
+  TEST_ASSERT_FALSE(m.joined);
+  TEST_ASSERT_EQUAL_STRING("", m.rev.c_str());
+  TEST_ASSERT_EQUAL_UINT32(t0 + CLUSTER_RESTART_FIRST_RETRY_MS, m.nextAttemptMs);
+  for (uint32_t t = t0 + 5000; t < t0 + 36000; t += 1000) {
+    clusterMemberOnFailure(m, t, true);
+    TEST_ASSERT_FALSE(m.degraded);
+    TEST_ASSERT_FALSE(clusterMemberSuspect(m));
+    TEST_ASSERT_FALSE(clusterMemberRenderStuck(m, t));
+    // Still knocking at the base cadence: the rejoin is what ends the wait.
+    TEST_ASSERT_EQUAL_UINT32(t + CLUSTER_RETRY_BASE_MS, m.nextAttemptMs);
+  }
+  clusterMemberOnSuccess(m, t0 + 36000);
+  TEST_ASSERT_FALSE(clusterMemberRestartExpected(m, t0 + 36001));
+}
+
+// Without the expectation the same timeline is exactly what #514 reported.
+static void test_same_silence_without_the_expectation_degrades_and_sticks() {
+  ClusterMemberRuntime m;
+  clusterMemberOnSuccess(m, 1000);
+  clusterMemberMarkRenderDirty(m, 2000);
+  uint32_t t0 = 40000;
+  clusterMemberStampContactEpoch(m, t0);
+  bool degraded = false;
+  for (uint32_t t = t0 + 5000; t < t0 + 36000; t += 1000) {
+    clusterMemberOnFailure(m, t, true);
+    degraded |= m.degraded;
+  }
+  TEST_ASSERT_TRUE(degraded);
+  TEST_ASSERT_TRUE(clusterMemberRenderStuck(m, t0 + 36000));
+}
+
+// A member that never comes back must still be reported: the grace ends with
+// the rollout's budget and ordinary supervision takes over, a full silence
+// window later rather than instantly.
+static void test_expected_restart_that_never_returns_degrades_after_the_grace() {
+  ClusterMemberRuntime m;
+  clusterMemberOnSuccess(m, 1000);
+  clusterMemberMarkRenderDirty(m, 2000);
+  uint32_t t0 = 40000;
+  clusterMemberExpectRestart(m, t0);
+  uint32_t graceEnd = t0 + CLUSTER_RESTART_GRACE_MS;
+  uint32_t degradedAt = 0;
+  for (uint32_t t = t0 + 5000; t < graceEnd + 60000; t += 1000) {
+    clusterMemberOnFailure(m, t, true);
+    if (m.degraded && degradedAt == 0) degradedAt = t;
+    if (t < graceEnd) TEST_ASSERT_FALSE(m.degraded);
+  }
+  TEST_ASSERT_TRUE(degradedAt >= graceEnd);
+  TEST_ASSERT_TRUE(degradedAt <= graceEnd + CLUSTER_DEGRADED_SILENCE_MS);
+  TEST_ASSERT_TRUE(clusterMemberRenderStuck(m, graceEnd + 1));
+}
+
+// A success during the grace ends it: a member that rejoined and then really
+// goes silent gets no extra cover.
+static void test_rejoin_ends_the_grace() {
+  ClusterMemberRuntime m;
+  clusterMemberExpectRestart(m, 1000);
+  clusterMemberOnSuccess(m, 20000);
+  for (uint32_t t = 21000; t <= 20000 + CLUSTER_DEGRADED_SILENCE_MS; t += 1000) {
+    clusterMemberOnFailure(m, t, true);
+  }
+  TEST_ASSERT_TRUE(m.degraded);
+}
+
+static void test_restart_grace_survives_the_millis_rollover() {
+  ClusterMemberRuntime m;
+  uint32_t t0 = 0xFFFFFFFFUL - 5000;  // grace end wraps past zero
+  clusterMemberExpectRestart(m, t0);
+  TEST_ASSERT_TRUE(clusterMemberRestartExpected(m, t0 + 1));
+  TEST_ASSERT_TRUE(clusterMemberRestartExpected(m, t0 + 10000));  // after wrap
+  TEST_ASSERT_FALSE(clusterMemberRestartExpected(m, t0 + CLUSTER_RESTART_GRACE_MS));
+  // A grace that would end exactly on 0 must not read as "none".
+  ClusterMemberRuntime z;
+  clusterMemberExpectRestart(z, (uint32_t)(0 - CLUSTER_RESTART_GRACE_MS));
+  TEST_ASSERT_TRUE(clusterMemberRestartExpected(z, (uint32_t)(0 - CLUSTER_RESTART_GRACE_MS) + 10));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_member_needs_join);
@@ -430,5 +519,10 @@ int main(int, char**) {
   RUN_TEST(test_fanout_skips_members_with_no_due_op);
   RUN_TEST(test_fanout_stuck_member_does_not_starve_others);
   RUN_TEST(test_fanout_normalizes_stale_cursor);
+  RUN_TEST(test_expected_restart_is_not_degraded_or_stuck);
+  RUN_TEST(test_same_silence_without_the_expectation_degrades_and_sticks);
+  RUN_TEST(test_expected_restart_that_never_returns_degrades_after_the_grace);
+  RUN_TEST(test_rejoin_ends_the_grace);
+  RUN_TEST(test_restart_grace_survives_the_millis_rollover);
   return UNITY_END();
 }
