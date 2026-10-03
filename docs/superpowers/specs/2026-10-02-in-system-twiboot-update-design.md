@@ -38,9 +38,9 @@ two ~9 ms page-0 writes per unit and makes everything else resumable:
 
 1. SPM executes only from the boot section. The application cannot write flash
    directly; it must transfer control to code in the boot section.
-2. **Stage 1** gets a proper `do_spm` into the *empty* page 7 using the
-   interrupt-return trick (below). Page 7 is not on any execution path, so a
-   failure here cannot brick a unit — it is the proof of the technique, on the
+2. **Stage 1** gets a proper `do_spm` into the *empty* page 7 by driving
+   twiboot's own write handler (below). Page 7 is not on any execution path, so
+   a failure here cannot brick a unit — it is the proof of the technique, on the
    wall, at zero risk.
 3. **Stage 2** uses that `do_spm` (now a normal callable routine) to rewrite
    pages 0–6. It writes a one-instruction trampoline into page 0 first, then
@@ -48,28 +48,48 @@ two ~9 ms page-0 writes per unit and makes everything else resumable:
    loss between the trampoline and the final page-0 write boots the (still
    intact) application, which detects the half-done state and resumes.
 
-## The interrupt-return trick (stage 1 only)
+## Stage 1 mechanism — drive twiboot's own write handler (proven)
 
-Writing page 7 needs an SPM, and no callable `do_spm` exists yet, so the app
-borrows a boot-section SPM instruction and gets control back via an interrupt:
+Writing page 7 needs an SPM, and no callable `do_spm` exists yet. An earlier
+plan borrowed a bare boot-section `spm` per fill and returned via a timer IRQ;
+simavr **disproved** it — after a non-halting fill `spm`, twiboot's *own* fill
+loop (`0x7e86`, ~19 instructions later) starts running during the ~5-cycle
+interrupt latency and walks a pointer out of bounds before the ISR can preempt
+(crash at `0x7e7e`). Per-word borrow is not viable.
 
-1. App sets `SPMCSR` for the operation (erase `0x03`, fill `0x01`, write
-   `0x05`, rww-enable `0x11`), loads `Z` (and `r0:r1` for fill), and arms a
-   timer compare interrupt to fire within a few cycles.
-2. App jumps to a boot-section `spm` instruction.
-3. The SPM halts the CPU for the NRWW page write/erase. When it completes the
-   CPU resumes at the next (twiboot) instruction; the already-pending timer IRQ
-   immediately vectors into the **application's** ISR (vectors are in app
-   space), returning control to the app.
+The method that works, and is proven in simavr against the fielded image
+(`firmware/v2/UnitBootloader/sim/`), drives twiboot's *entire* write handler
+once instead of fighting it:
 
-This works **only** for boot-section (NRWW) pages, where the CPU halts for the
-write. For application-section (RWW) pages the CPU keeps running during the
-write and would execute code it must not; that is why stage 2 does not use this
-trick and instead calls the real `do_spm`.
+1. Seed twiboot's page buffer in SRAM (`buf` at `0x011D`..`0x019C`) with the 128
+   bytes destined for page 7 (the `do_spm` routine + `0xFF` padding) — plain
+   `st`, twiboot is not running.
+2. Set the handler's register inputs: `r24:r25 = 0x7F80` (pagestart), the SPMCSR
+   constants `r9=0x03`/`r16=0x01`/`r13=0x05`/`r12=0x11`, the fill-loop end
+   pointer `r14:r15 = 0x019D` (buf+128), and `r1 = 0`.
+3. `jmp 0x7e5a` — into twiboot's handler *just past* its boot-section guard
+   (`0x7e52`, `brcc` away if pagestart ≥ `0x7C00`). twiboot then erases page 7,
+   fills it from `buf[]`, writes it, re-enables RWW, and `rjmp`s to its **idle
+   main loop** (`0x7e12`→`0x7d02`) — no crash.
+4. A **relaxed** Timer1 compare IRQ (armed before the jump, set to fire well
+   after the ~8 ms of erase+write while twiboot idles) vectors into the
+   application's naked ISR, which pops twiboot's return address off the stack
+   and resumes the updater. No tight timing: control returns from a benign idle
+   loop, not from a race against twiboot's active code.
 
-The exact borrow site, `SPMCSR` values, timer setup and the entry/return
-addresses are **locked by a test over the fielded hex** (see Verification) and
-validated end-to-end in simavr before any unit is touched.
+Because the whole page-7 write rides twiboot's halting NRWW erase+write, the
+return timing has a wide margin. simavr does not model the NRWW halt duration,
+so the exact timer value is a computed margin (datasheet erase+write ≈ 8 ms →
+fire at ~50 ms), not a sim-validated constant; the control *flow* is what the
+sim proves (`PAGE7 128/128`).
+
+Stage 2 does **not** use any of this: `do_spm` in page 7 is a normal callable
+boot-section routine ending in `ret`, so the sketch rewrites pages 0–6 with
+plain `call`s (proven, `PAGE6 128/128`).
+
+The borrow/entry addresses, SPMCSR values and buffer layout are **locked by a
+test over the fielded hex** (`tests/test_twiboot_entry_points.py`) and the
+mechanism is reproduced by the simavr harness before any unit is touched.
 
 ## New twiboot image (lean set)
 
@@ -118,7 +138,7 @@ Deferred to `loop()` via a `pending*` flag like every other mutation; refused
 while the drum is moving or not homed.
 
 - **Stage 1** allowed only from `Old` with lock bits permitting boot writes.
-  Writes `do_spm` into page 7 via the interrupt-return trick, re-verifies page
+  Writes `do_spm` into page 7 by driving twiboot's write handler, re-verifies page
   7 by read-back, records the result, and continues running. Brick-free.
 - **Stage 2** allowed only from `Page7Installed` or `Trampoline`. Writes the
   page-0 trampoline (`jmp 0` to the application), then pages 1–6 with per-page

@@ -45,10 +45,19 @@ FIELDED_USED_BYTES = 890
 # `spm` is opcode 0x9508; AVR flash is little-endian, so it reads `e8 95`.
 SPM_OPCODE_LE = bytes((0xE8, 0x95))
 
-# Borrow sites, as absolute flash addresses. Each is an `spm` immediately
-# preceded by twiboot's own SPMCSR load, so a jump landing *on* the spm (not on
-# the load) runs it with the SPMCSR value the unit firmware set itself.
+# twiboot's page-write handler contains one `spm` per operation (erase/fill/
+# write/rww). The proven stage-1 method (sim/README.md) drives the whole handler
+# rather than borrowing a bare spm, but these sites are still the SPM backbone
+# of that handler, so pinning them guards the image the method was proven on.
 SPM_SITES = (0x7E60, 0x7E86, 0x7EA6, 0x7EB2)
+
+# Stage-1 jumps into the write handler at HANDLER_ENTRY — one instruction past
+# twiboot's boot-section guard (the `cpc r25,r30` / `brcc` that would otherwise
+# skip any write at or above BOOTLOADER_START). Entry is `movw r30, r24` (opcode
+# 0x01FC, little-endian `fc 01`): Z <- pagestart. If this instruction moves, the
+# seeded register state no longer matches the code and the method is invalid.
+HANDLER_ENTRY = 0x7E5A
+HANDLER_ENTRY_OPCODE_LE = bytes((0xFC, 0x01))  # movw r30, r24
 
 # Page 7 — the empty page stage 1 writes do_spm into.
 PAGE7_START = 0x7F80
@@ -104,6 +113,14 @@ def test_spm_opcode_at_every_borrow_site(boot_image: bytes) -> None:
         assert boot_image[off : off + 2] == SPM_OPCODE_LE, (
             f"no spm opcode at {site:#06x} — the stage-1 borrow jumps here"
         )
+
+
+def test_write_handler_entry(boot_image: bytes) -> None:
+    off = HANDLER_ENTRY - BOOT_SECTION_START
+    assert boot_image[off : off + 2] == HANDLER_ENTRY_OPCODE_LE, (
+        f"twiboot write-handler entry at {HANDLER_ENTRY:#06x} is not "
+        "`movw r30,r24` — stage 1 jumps here past the boot-section guard"
+    )
 
 
 def test_page7_is_empty(boot_image: bytes) -> None:
