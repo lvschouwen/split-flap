@@ -51,3 +51,8 @@ f6dec3d 6ff48604c1897dca41d05c5b4d2f1ab4978df55a63c7f09e999b144f821d2004
 # Nano never compiles. Measured against the staged b00c4d1 image (all 21 units
 # on the wall run it), clean build: identical.
 b00c4d1 fe3066aba53bab79a912281d33481f30e7fb47baedba1f31533b9b88facce3bf
+
+# The masters' fault rule changed in shared/UnitHealth.h, which the Nano never
+# compiles. Measured against the staged d1d7dfb image (all 21 units on the wall
+# run it), clean build: identical.
+d1d7dfb f93f649147bf129e9ad21bd29013865abdbfe07bc34ead3a4eae8ef1a1bffa17
