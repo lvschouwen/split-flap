@@ -46,3 +46,8 @@
 # masters compile. Measured against the staged f6dec3d image (two units on the
 # wall run it), clean build: identical.
 f6dec3d 6ff48604c1897dca41d05c5b4d2f1ab4978df55a63c7f09e999b144f821d2004
+
+# #516 added master-side decision helpers to shared/BootUpdatePlan.h, which the
+# Nano never compiles. Measured against the staged b00c4d1 image (all 21 units
+# on the wall run it), clean build: identical.
+b00c4d1 fe3066aba53bab79a912281d33481f30e7fb47baedba1f31533b9b88facce3bf

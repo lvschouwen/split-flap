@@ -502,6 +502,42 @@ static void test_width_override_headless_zero_when_unitless() {
   TEST_ASSERT_EQUAL(0, snap.detectedUnitCount);
 }
 
+// #516: an ok can carry a reason — "already new" must not read as "updated" —
+// and every boot-update reason has a name of its own.
+static void test_op_result_ok_carries_its_reason() {
+  DisplaySnapshot snap;
+  char buf[96];
+  displayApplyMaintResult(snap, makeBootUpdateCommand(9, 3), MaintOutcome::Ok,
+                          MaintReason::BootAlreadyNew);
+  buildOpResultJson(buf, sizeof(buf), snap.lastMaint, 9);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"ok\",\"detail\":\"boot-already-new\"}",
+                           buf);
+  displayApplyMaintResult(snap, makeBootUpdateCommand(10, 3),
+                          MaintOutcome::PostconditionFail,
+                          MaintReason::BootUnitBusy);
+  buildOpResultJson(buf, sizeof(buf), snap.lastMaint, 10);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"reason\":\"postcondition-fail\","
+      "\"detail\":\"boot-unit-busy\"}",
+      buf);
+}
+
+static void test_boot_reasons_have_distinct_names() {
+  const MaintReason reasons[] = {
+      MaintReason::BootInfoReadFail, MaintReason::BootStateUnknown,
+      MaintReason::BootLockRefused,  MaintReason::BootUnitLost,
+      MaintReason::BootVerifyFailed, MaintReason::BootAlreadyNew,
+      MaintReason::BootUnitBusy};
+  const int n = (int)(sizeof(reasons) / sizeof(reasons[0]));
+  for (int i = 0; i < n; i++) {
+    TEST_ASSERT_TRUE(strlen(maintReasonName(reasons[i])) > 5);
+    for (int j = i + 1; j < n; j++) {
+      TEST_ASSERT_TRUE(strcmp(maintReasonName(reasons[i]),
+                              maintReasonName(reasons[j])) != 0);
+    }
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_snapshot_defaults);
@@ -541,5 +577,7 @@ int main(int, char**) {
   RUN_TEST(test_width_override_out_of_range_is_ignored);
   RUN_TEST(test_width_override_headless_forces_zero_with_units);
   RUN_TEST(test_width_override_headless_zero_when_unitless);
+  RUN_TEST(test_op_result_ok_carries_its_reason);
+  RUN_TEST(test_boot_reasons_have_distinct_names);
   return UNITY_END();
 }

@@ -170,6 +170,7 @@ enum class MaintReason : uint8_t {
   BootUnitLost,             // unit did not come back after stage 1 WDT reset
   BootVerifyFailed,         // boot state after update is not the expected one
   BootAlreadyNew,           // already on the new twiboot — nothing to do (Ok)
+  BootUnitBusy,             // unit refused: drum moving or not homed
 };
 
 // After SetAddress burn + settle + reprobe: the unit must answer in sketch

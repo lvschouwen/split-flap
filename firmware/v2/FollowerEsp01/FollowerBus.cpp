@@ -1181,6 +1181,15 @@ void busRunReflashJob(uint8_t onlyAddr) {
 #endif
 }
 
+static MaintReason bootFailureReason(BootUpdateFailure f) {
+  switch (f) {
+    case BOOT_FAIL_BUSY:  return MaintReason::BootUnitBusy;
+    case BOOT_FAIL_LOCK:  return MaintReason::BootLockRefused;
+    case BOOT_FAIL_STATE: return MaintReason::BootStateUnknown;
+    default:              return MaintReason::BootVerifyFailed;
+  }
+}
+
 void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result) {
 #if SERIAL_ENABLE == false
   BootUpdateReport info;
@@ -1205,12 +1214,34 @@ void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result) {
     result = {seq, o, r};
     return;
   }
+  // A request sent mid-move is held by the unit until the move ends and would
+  // then run behind this op's back, so the drum settles first (#516).
+  waitForBatchIdle(&addr, 1, 8000);
   if (plan.needStage1) {
     if (busBootUpdate(addr, 1) != 0) {
       result = {seq, MaintOutcome::WireFail, MaintReason::None};
       return;
     }
     busArmProbeInhibit(millis() + 3000);
+    // An accepted stage 1 takes the unit off the bus within milliseconds and
+    // keeps it off for over a second. A unit that still answers at +200 and
+    // +500 ms never started: report what it said.
+    bool started = false;
+    const uint16_t probes[2] = {200, 300};
+    for (uint16_t gap : probes) {
+      delay(gap);
+      BootUpdateReport still;
+      if (!busReadBootInfo(addr, still)) {
+        started = true;
+        break;
+      }
+      info = still;
+    }
+    if (!started) {
+      result = {seq, MaintOutcome::PostconditionFail,
+                bootFailureReason(bootResultFailure(info.lastResult))};
+      return;
+    }
     waitForBatchIdle(&addr, 1, 10000);
     busHome(addr);
     waitForBatchIdle(&addr, 1, 20000);
@@ -1226,28 +1257,40 @@ void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result) {
     }
   }
   if (plan.needStage2) {
+    if (!plan.needStage1) {
+      // Resuming a unit that already carries page 7: nothing above homed it,
+      // and an unhomed unit refuses the stage.
+      busHome(addr);
+      waitForBatchIdle(&addr, 1, 20000);
+      if (!busReadBootInfo(addr, info)) {
+        result = {seq, MaintOutcome::PostconditionFail,
+                  MaintReason::BootUnitLost};
+        return;
+      }
+    }
+    const uint8_t resultBeforeSend = info.lastResult;
     if (busBootUpdate(addr, 2) != 0) {
       result = {seq, MaintOutcome::WireFail, MaintReason::None};
       return;
     }
     delay(300);
-    bool verified = false;
+    BootPollVerdict verdict = BOOT_POLL_WAIT;
+    bool anyRead = false;
     uint32_t start = millis();
     while (millis() - start < 5000) {
       if (busReadBootInfo(addr, info)) {
-        if (info.state == BOOT_STATE_NEW) { verified = true; break; }
-        if (info.lastResult == BOOT_RESULT_VERIFY_FAILED ||
-            info.lastResult == BOOT_RESULT_REFUSED_STATE ||
-            info.lastResult == BOOT_RESULT_REFUSED_LOCK ||
-            info.lastResult == BOOT_RESULT_REFUSED_BUSY) {
-          break;
-        }
+        anyRead = true;
+        verdict = bootStage2Poll(info, resultBeforeSend);
+        if (verdict != BOOT_POLL_WAIT) break;
       }
       delay(100);
     }
-    if (!verified) {
+    if (verdict != BOOT_POLL_DONE) {
+      // No report at all is a lost unit, not a failed verify; otherwise the
+      // unit's own result names the cause.
       result = {seq, MaintOutcome::PostconditionFail,
-                MaintReason::BootVerifyFailed};
+                anyRead ? bootFailureReason(bootResultFailure(info.lastResult))
+                        : MaintReason::BootUnitLost};
       return;
     }
   }

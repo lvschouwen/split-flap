@@ -216,6 +216,45 @@ static void test_reflash_address_parses_decimal_only() {
   TEST_ASSERT_EQUAL_INT(99, (int)v);  // untouched on rejection
 }
 
+// #516: same contract as the S3 — an ok can carry a reason, and a refusal by
+// the unit has its own name.
+static void test_op_result_ok_carries_its_reason() {
+  MaintResult slot;
+  slot.seq = 4;
+  slot.outcome = MaintOutcome::Ok;
+  slot.reason = MaintReason::BootAlreadyNew;
+  char buf[96];
+  buildOpResultJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"ok\",\"detail\":\"boot-already-new\"}",
+                           buf);
+  slot.reason = MaintReason::None;
+  buildOpResultJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_EQUAL_STRING("{\"state\":\"ok\"}", buf);
+  slot.outcome = MaintOutcome::PostconditionFail;
+  slot.reason = MaintReason::BootUnitBusy;
+  buildOpResultJson(buf, sizeof(buf), slot, 4);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"failed\",\"reason\":\"postcondition-fail\","
+      "\"detail\":\"boot-unit-busy\"}",
+      buf);
+}
+
+static void test_boot_reasons_have_distinct_names() {
+  const MaintReason reasons[] = {
+      MaintReason::BootInfoReadFail, MaintReason::BootStateUnknown,
+      MaintReason::BootLockRefused,  MaintReason::BootUnitLost,
+      MaintReason::BootVerifyFailed, MaintReason::BootAlreadyNew,
+      MaintReason::BootUnitBusy};
+  const int n = (int)(sizeof(reasons) / sizeof(reasons[0]));
+  for (int i = 0; i < n; i++) {
+    TEST_ASSERT_TRUE(strlen(maintReasonName(reasons[i])) > 5);
+    for (int j = i + 1; j < n; j++) {
+      TEST_ASSERT_TRUE(strcmp(maintReasonName(reasons[i]),
+                              maintReasonName(reasons[j])) != 0);
+    }
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_address_validation);
@@ -232,5 +271,7 @@ int main(int, char**) {
   RUN_TEST(test_reflash_address_range);
   RUN_TEST(test_targeted_run_flashes_only_its_unit);
   RUN_TEST(test_reflash_address_parses_decimal_only);
+  RUN_TEST(test_op_result_ok_carries_its_reason);
+  RUN_TEST(test_boot_reasons_have_distinct_names);
   return UNITY_END();
 }

@@ -313,6 +313,8 @@ inline const char* maintReasonName(MaintReason r) {
       return "boot-verify-failed";
     case MaintReason::BootAlreadyNew:
       return "boot-already-new";
+    case MaintReason::BootUnitBusy:
+      return "boot-unit-busy";
     default:
       return "";
   }
@@ -393,7 +395,13 @@ inline void buildOpResultJson(char* buf, size_t cap, const MaintResult& slot,
       break;
   }
   if (slot.outcome == MaintOutcome::Ok) {
-    snprintf(buf, cap, "{\"state\":\"ok\"}");
+    // An ok can carry a reason too — "already new" is not "updated" (#516).
+    if (slot.reason == MaintReason::None) {
+      snprintf(buf, cap, "{\"state\":\"ok\"}");
+    } else {
+      snprintf(buf, cap, "{\"state\":\"ok\",\"detail\":\"%s\"}",
+               maintReasonName(slot.reason));
+    }
   } else if (slot.reason == MaintReason::None) {
     snprintf(buf, cap, "{\"state\":\"failed\",\"reason\":\"%s\"}",
              maintOutcomeName(slot.outcome));
