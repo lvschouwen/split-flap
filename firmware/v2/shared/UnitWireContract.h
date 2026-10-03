@@ -256,7 +256,9 @@ inline bool setGatesDecode(const uint8_t* buf, uint8_t len, uint8_t& out) {
 // ENTER_BOOTLOADER, HOME, REBOOT, CLEAR_I2C_ADDRESS, IDENTIFY, RESET_ODOMETER
 // and START_SELF_TEST carry no payload, so one corrupted byte is a complete
 // command: a letter index with bit 7 flipped, or a GET_* poll with bit 4
-// flipped, lands on one of them. Masters send them as opcode + ~opcode.
+// flipped, lands on one of them. Masters send them as opcode + ~opcode —
+// all but ENTER_BOOTLOADER, which they keep sending bare (see below; a unit
+// still refuses it when a trailing byte is present and wrong).
 //
 // Unit-side acceptance, by what followed the opcode in the frame:
 //   nothing          accepted unless the unit's strict gate is on
@@ -270,12 +272,14 @@ inline bool setGatesDecode(const uint8_t* buf, uint8_t len, uint8_t& out) {
 //                    off too: a letter write is always two bytes, so this alone
 //                    stops a bit-flipped letter from running a mutation
 //   anything longer  rejected
-// The guard bytes are 0x67..0x7F; read as a letter write's speed byte that is
-// 103..127 RPM, far past what a 28BYJ-48 runs, so a real letter frame never
-// carries one by accident.
+// What remains: a letter write whose index flips onto one of these AND whose
+// speed byte happens to equal that opcode's guard (0x67..0x7F, a speed of
+// 103..127).
 //
 // A unit predating the guard runs the opcode and drains the extra byte, so a
-// master sends the guarded form to every unit unconditionally.
+// master sends the guarded form to every unit unconditionally. A unit sitting
+// in twiboot ACKs one byte and NACKs the guard, so there the write reports a
+// data NACK where the bare form reported success.
 #define NOARG_GUARD_LEN               1
 
 inline bool sfpIsNoArgMutation(uint8_t opcode) {
@@ -302,4 +306,34 @@ inline bool noArgMutationAccepted(uint8_t opcode, uint8_t extraLen,
   if (extraLen == 0) return !strict || opcode == SFP_CMD_ENTER_BOOTLOADER;
   if (extraLen != NOARG_GUARD_LEN) return false;
   return guard == noArgGuardByte(opcode);
+}
+
+// --- JOG (0x91) (#512) -------------------------------------------------------
+// One signed step count, sent with its complement. A letter write whose index
+// flips onto 0x91 is otherwise a valid one-byte jog by its speed byte, so:
+//   steps            accepted unless the strict gate is on — the form a master
+//                    predating the complement sends, and the shape of that
+//                    corrupted letter write
+//   steps, ~steps    accepted
+//   anything else    rejected
+// A unit predating the complement reads the first byte and drains the second.
+#define JOG_PAYLOAD_LEN               2
+
+inline void jogEncode(uint8_t stepsByte, uint8_t buf[JOG_PAYLOAD_LEN]) {
+  buf[0] = stepsByte;
+  buf[1] = (uint8_t)~stepsByte;
+}
+
+// extraLen: bytes that followed the opcode; payload: the first
+// min(extraLen, JOG_PAYLOAD_LEN) of them. `out` is untouched on rejection.
+inline bool jogDecode(const uint8_t* payload, uint8_t extraLen, bool strict,
+                      int8_t& out) {
+  if (extraLen == 1) {
+    if (strict) return false;
+  } else if (extraLen != JOG_PAYLOAD_LEN ||
+             payload[1] != (uint8_t)~payload[0]) {
+    return false;
+  }
+  out = (int8_t)payload[0];
+  return true;
 }

@@ -140,13 +140,15 @@
                                          //     update is safe. Closes #502 item 8.
 
 // --- 0x9X mutations ---
-// The no-argument ones (and ENTER_BOOTLOADER above) travel as opcode + ~opcode
-// (#512); the acceptance rules are in UnitWireContract.h.
+// The no-argument ones travel as opcode + ~opcode (#512); the acceptance
+// rules, and why ENTER_BOOTLOADER above is the exception, are in
+// UnitWireContract.h.
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT reset)
 // to the unit's loop() via pending* flags — doing it in the Wire ISR stalls
 // the bus and can drop follow-up transactions.
 #define SFP_CMD_HOME               0x90  // no args; unit runs full calibrate(true)
-#define SFP_CMD_JOG                0x91  // +1 signed byte (-127..+127)
+#define SFP_CMD_JOG                0x91  // +1 signed byte (-127..+127) + its
+                                         //     complement (#512)
 #define SFP_CMD_REBOOT             0x92  // no args; soft watchdog reset (stays in sketch)
 #define SFP_CMD_SET_OFFSET         0x93  // +2 bytes int16 LE; persist to EEPROM
                                          //     accepted range: ±SFP_OFFSET_LIMIT_STEPS
@@ -195,7 +197,8 @@
 #define SFP_UNIT_GATE_IDLE_HALL_CHECK  0x01  // #268 idle hall consistency check
 #define SFP_UNIT_GATE_STRICT_OPCODES   0x04  // #512 no-argument mutations must
                                              //     carry their ~opcode guard
-                                             //     byte (UnitWireContract.h).
+                                             //     byte and JOG its complement
+                                             //     (UnitWireContract.h).
                                              //     Turn on only once every
                                              //     master on that row sends it.
 #define SFP_UNIT_GATE_IMPLEMENTED \

@@ -315,7 +315,7 @@ A transaction is one of two shapes:
 | 0x89 | GET_EXT_DIAG | 11 B: step excess, per-move Vcc sag, hall edges/rev, duty, status bits + checksum; then a 10 B link extension with its own checksum: uint32 uptime, frames received, replies sent, deaf-TWI re-inits |
 | 0x8A | GET_LIFETIME | 15 B: EEPROM layout version, lifetime home failures, feature gates, lifetime step-excess max, first/last self-test measurements + checksum |
 | 0x90 | HOME | — |
-| 0x91 | JOG | +1 signed byte |
+| 0x91 | JOG | +1 signed byte + its complement |
 | 0x92 | REBOOT | — |
 | 0x93 | SET_OFFSET | +2 B int16 LE, complement-protected |
 | 0x94 | SET_I2C_ADDRESS | +1 B, complement-protected |
@@ -325,11 +325,12 @@ A transaction is one of two shapes:
 | 0x98 | START_SELF_TEST | — |
 | 0x99 | SET_GATES | +2 B gates + ~gates |
 
-The payload-less mutations (0x80, 0x90, 0x92, 0x95, 0x96, 0x97, 0x98) are sent
-as `opcode, ~opcode`. A unit refuses one whose trailing byte is not the
-complement, so a letter write with a flipped index bit cannot run them; with
-the `0x04` feature gate on it also refuses the bare one-byte form, except
-ENTER_BOOTLOADER, whose bare form stays valid for every master generation.
+The payload-less mutations (0x90, 0x92, 0x95, 0x96, 0x97, 0x98) are sent as
+`opcode, ~opcode`. A unit refuses one whose trailing byte is not the
+complement, so a letter write with a flipped index bit cannot run them. With
+the `0x04` feature gate on it also refuses the bare one-byte form and a JOG
+without its complement. ENTER_BOOTLOADER is the exception: masters send it
+bare and its bare form stays valid for every master generation.
 
 Three properties worth carrying forward regardless of what a rewrite does: ✅
 
