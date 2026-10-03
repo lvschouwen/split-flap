@@ -251,3 +251,55 @@ inline bool setGatesDecode(const uint8_t* buf, uint8_t len, uint8_t& out) {
 
 #define UNIT_BUS_GATES_UNVERIFIED     22  // wrote OK, read-back unreadable
 #define UNIT_BUS_GATES_MISMATCH       23  // wrote OK, unit reports other bits
+
+// --- No-argument mutations (#512) -------------------------------------------
+// ENTER_BOOTLOADER, HOME, REBOOT, CLEAR_I2C_ADDRESS, IDENTIFY, RESET_ODOMETER
+// and START_SELF_TEST carry no payload, so one corrupted byte is a complete
+// command: a letter index with bit 7 flipped, or a GET_* poll with bit 4
+// flipped, lands on one of them. Masters send them as opcode + ~opcode.
+//
+// Unit-side acceptance, by what followed the opcode in the frame:
+//   nothing          accepted unless the unit's strict gate is on
+//                    (UNIT_GATE_STRICT_OPCODES) — the form a master predating
+//                    the guard sends. ENTER_BOOTLOADER is accepted bare even
+//                    then: its one-byte form is FIXED FOREVER, so any master
+//                    generation can still push any unit into the bootloader.
+//                    The cost is that a GET_VERSION poll with bit 0 flipped
+//                    still reboots a strict unit through twiboot
+//   one byte         accepted only when it is ~opcode. Enforced with the gate
+//                    off too: a letter write is always two bytes, so this alone
+//                    stops a bit-flipped letter from running a mutation
+//   anything longer  rejected
+// The guard bytes are 0x67..0x7F; read as a letter write's speed byte that is
+// 103..127 RPM, far past what a 28BYJ-48 runs, so a real letter frame never
+// carries one by accident.
+//
+// A unit predating the guard runs the opcode and drains the extra byte, so a
+// master sends the guarded form to every unit unconditionally.
+#define NOARG_GUARD_LEN               1
+
+inline bool sfpIsNoArgMutation(uint8_t opcode) {
+  switch (opcode) {
+    case SFP_CMD_ENTER_BOOTLOADER:
+    case SFP_CMD_HOME:
+    case SFP_CMD_REBOOT:
+    case SFP_CMD_CLEAR_I2C_ADDRESS:
+    case SFP_CMD_IDENTIFY:
+    case SFP_CMD_RESET_ODOMETER:
+    case SFP_CMD_START_SELF_TEST:
+      return true;
+    default:
+      return false;
+  }
+}
+
+inline uint8_t noArgGuardByte(uint8_t opcode) { return (uint8_t)~opcode; }
+
+// extraLen: bytes that followed the opcode in the frame; guard: the first of
+// them (ignored when extraLen is 0).
+inline bool noArgMutationAccepted(uint8_t opcode, uint8_t extraLen,
+                                  uint8_t guard, bool strict) {
+  if (extraLen == 0) return !strict || opcode == SFP_CMD_ENTER_BOOTLOADER;
+  if (extraLen != NOARG_GUARD_LEN) return false;
+  return guard == noArgGuardByte(opcode);
+}

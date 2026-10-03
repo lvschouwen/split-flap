@@ -368,6 +368,108 @@ static void test_checksum_masks_are_all_distinct() {
   }
 }
 
+// --- no-argument mutations (#512) ---
+
+static const uint8_t kNoArgMutations[] = {
+    SFP_CMD_ENTER_BOOTLOADER,  SFP_CMD_HOME,     SFP_CMD_REBOOT,
+    SFP_CMD_CLEAR_I2C_ADDRESS, SFP_CMD_IDENTIFY, SFP_CMD_RESET_ODOMETER,
+    SFP_CMD_START_SELF_TEST,
+};
+
+static void test_noarg_guarded_form_is_accepted_in_both_modes() {
+  for (uint8_t op : kNoArgMutations) {
+    TEST_ASSERT_TRUE(sfpIsNoArgMutation(op));
+    TEST_ASSERT_TRUE(noArgMutationAccepted(op, 1, noArgGuardByte(op), false));
+    TEST_ASSERT_TRUE(noArgMutationAccepted(op, 1, noArgGuardByte(op), true));
+  }
+}
+
+static void test_noarg_bare_form_is_accepted_only_when_not_strict() {
+  for (uint8_t op : kNoArgMutations) {
+    TEST_ASSERT_TRUE(noArgMutationAccepted(op, 0, 0, false));
+    if (op == SFP_CMD_ENTER_BOOTLOADER) continue;
+    TEST_ASSERT_FALSE(noArgMutationAccepted(op, 0, 0, true));
+    // The ignored guard argument must not rescue a bare frame.
+    TEST_ASSERT_FALSE(noArgMutationAccepted(op, 0, noArgGuardByte(op), true));
+  }
+}
+
+// ENTER_BOOTLOADER's one-byte form is FIXED FOREVER (SplitFlapProtocol.h): a
+// master of any generation must be able to push a strict unit into twiboot.
+static void test_noarg_bare_enter_bootloader_survives_strict() {
+  TEST_ASSERT_TRUE(unitOpcodeAllowedWhenUnsupported(SFP_CMD_ENTER_BOOTLOADER));
+  TEST_ASSERT_TRUE(noArgMutationAccepted(SFP_CMD_ENTER_BOOTLOADER, 0, 0, true));
+  // A trailing byte still has to be the guard: blank (0x00) with bit 7 flipped
+  // is this opcode followed by a speed byte.
+  TEST_ASSERT_FALSE(noArgMutationAccepted(SFP_CMD_ENTER_BOOTLOADER, 1, 12, true));
+  TEST_ASSERT_FALSE(noArgMutationAccepted(SFP_CMD_ENTER_BOOTLOADER, 1, 12, false));
+}
+
+static void test_noarg_wrong_guard_or_long_frame_is_always_rejected() {
+  for (uint8_t op : kNoArgMutations) {
+    for (int strict = 0; strict <= 1; strict++) {
+      for (int g = 0; g < 256; g++) {
+        if ((uint8_t)g == noArgGuardByte(op)) continue;
+        TEST_ASSERT_FALSE(noArgMutationAccepted(op, 1, (uint8_t)g, strict != 0));
+      }
+      TEST_ASSERT_FALSE(
+          noArgMutationAccepted(op, 2, noArgGuardByte(op), strict != 0));
+      TEST_ASSERT_FALSE(
+          noArgMutationAccepted(op, 0xFF, noArgGuardByte(op), strict != 0));
+    }
+  }
+}
+
+// The failure this exists for: a two-byte letter write [index, speed] whose
+// index takes one bit flip and becomes a mutation opcode. With the gate OFF it
+// must already be refused at every speed a drum can run.
+static void test_noarg_no_bit_flipped_letter_write_runs_a_mutation() {
+  int exposed = 0;
+  for (int letter = 0; letter < SFP_FLAP_AMOUNT; letter++) {
+    for (int bit = 0; bit < 8; bit++) {
+      uint8_t flipped = (uint8_t)(letter ^ (1 << bit));
+      if (!sfpIsNoArgMutation(flipped)) continue;
+      exposed++;
+      for (int speed = 0; speed <= 100; speed++) {
+        TEST_ASSERT_FALSE(
+            noArgMutationAccepted(flipped, 1, (uint8_t)speed, false));
+      }
+    }
+  }
+  TEST_ASSERT_TRUE(exposed > 0);  // the hole is real: some letters land there
+}
+
+// Strict mode closes the other path: a bare GET_* poll one bit flip away from
+// a bare mutation.
+static void test_noarg_strict_refuses_a_bit_flipped_bare_poll() {
+  int exposed = 0;
+  for (int op = 0x80; op <= 0x8F; op++) {
+    if (sfpIsNoArgMutation((uint8_t)op)) continue;  // ENTER_BOOTLOADER itself
+    for (int bit = 0; bit < 8; bit++) {
+      uint8_t flipped = (uint8_t)(op ^ (1 << bit));
+      if (!sfpIsNoArgMutation(flipped)) continue;
+      if (flipped == SFP_CMD_ENTER_BOOTLOADER) continue;  // the fixed-forever form
+      exposed++;
+      TEST_ASSERT_FALSE(noArgMutationAccepted(flipped, 0, 0, true));
+    }
+  }
+  TEST_ASSERT_TRUE(exposed > 0);
+}
+
+static void test_noarg_set_is_exactly_the_payloadless_mutations() {
+  // Reads and payload-carrying mutations have their own protection.
+  for (int op = SFP_CMD_GET_VERSION; op <= 0x8F; op++) {
+    TEST_ASSERT_FALSE(sfpIsNoArgMutation((uint8_t)op));
+  }
+  TEST_ASSERT_FALSE(sfpIsNoArgMutation(SFP_CMD_JOG));
+  TEST_ASSERT_FALSE(sfpIsNoArgMutation(SFP_CMD_SET_OFFSET));
+  TEST_ASSERT_FALSE(sfpIsNoArgMutation(SFP_CMD_SET_I2C_ADDRESS));
+  TEST_ASSERT_FALSE(sfpIsNoArgMutation(SFP_CMD_SET_GATES));
+  for (int letter = 0; letter < SFP_FLAP_AMOUNT; letter++) {
+    TEST_ASSERT_FALSE(sfpIsNoArgMutation((uint8_t)letter));
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_version_roundtrip);
@@ -402,6 +504,13 @@ int main(int, char**) {
   RUN_TEST(test_set_gates_rejects_a_flatlined_bus);
   RUN_TEST(test_set_gates_rejects_short_payload);
   RUN_TEST(test_checksum_masks_are_all_distinct);
+  RUN_TEST(test_noarg_guarded_form_is_accepted_in_both_modes);
+  RUN_TEST(test_noarg_bare_form_is_accepted_only_when_not_strict);
+  RUN_TEST(test_noarg_bare_enter_bootloader_survives_strict);
+  RUN_TEST(test_noarg_wrong_guard_or_long_frame_is_always_rejected);
+  RUN_TEST(test_noarg_no_bit_flipped_letter_write_runs_a_mutation);
+  RUN_TEST(test_noarg_strict_refuses_a_bit_flipped_bare_poll);
+  RUN_TEST(test_noarg_set_is_exactly_the_payloadless_mutations);
   UNITY_END();
   return 0;
 }
