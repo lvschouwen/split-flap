@@ -117,6 +117,7 @@ enum class FollowerOpKind : uint8_t {
   RebootToBootloader,
   SetGates,
   ReflashUnit,  // #513: reflash exactly one unit; addr = the target
+  BootUpdate,   // #499: in-system twiboot update (reads info, drives stages)
 };
 
 // --- execution outcomes (the /unit/op-result vocabulary, v2 copies) ----------------
@@ -133,6 +134,12 @@ enum class MaintReason : uint8_t {
   None = 0,
   UnitMissingAfterReprobe,
   TargetAddressOccupied,
+  BootInfoReadFail,
+  BootStateUnknown,
+  BootLockRefused,
+  BootUnitLost,
+  BootVerifyFailed,
+  BootAlreadyNew,
 };
 
 struct MaintResult {
@@ -157,6 +164,18 @@ inline const char* maintReasonName(MaintReason r) {
       return "unit-missing-after-reprobe";
     case MaintReason::TargetAddressOccupied:
       return "target-address-occupied";
+    case MaintReason::BootInfoReadFail:
+      return "boot-info-read-fail";
+    case MaintReason::BootStateUnknown:
+      return "boot-state-unknown";
+    case MaintReason::BootLockRefused:
+      return "boot-lock-refused";
+    case MaintReason::BootUnitLost:
+      return "boot-unit-lost";
+    case MaintReason::BootVerifyFailed:
+      return "boot-verify-failed";
+    case MaintReason::BootAlreadyNew:
+      return "boot-already-new";
     default:
       return "";
   }

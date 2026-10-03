@@ -164,6 +164,12 @@ enum class MaintReason : uint8_t {
   None = 0,
   UnitMissingAfterReprobe,  // expected responder absent from the rescan
   TargetAddressOccupied,    // pre-burn exec recheck found the target taken
+  BootInfoReadFail,         // GET_BOOT_INFO wire fail or checksum rejected
+  BootStateUnknown,         // boot section is in an unrecognized state
+  BootLockRefused,          // lock bits prohibit boot-section self-program
+  BootUnitLost,             // unit did not come back after stage 1 WDT reset
+  BootVerifyFailed,         // boot state after update is not the expected one
+  BootAlreadyNew,           // already on the new twiboot — nothing to do (Ok)
 };
 
 // After SetAddress burn + settle + reprobe: the unit must answer in sketch

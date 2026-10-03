@@ -972,6 +972,14 @@ void webEndpointsInit(AsyncWebServer& server) {
   // equivalent rule: never reprobe right after — the loop's probe-inhibit
   // deadline (armed at execution) keeps runtime probes out of the twiboot
   // window (v1 #88).
+  server.on("/unit/boot-update", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+    if (followerRejectCsrf(request)) return;
+    int addr = 0;
+    if (!checkAddressParam(request, addr)) return;
+    stageOp(request, FollowerOpKind::BootUpdate, (uint8_t)addr, 0);
+  });
+
   server.on("/unit/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
     if (followerRejectCsrf(request)) return;
     long addr = 0;
@@ -1130,6 +1138,10 @@ static void executeStagedOp() {
         selfTestSlot.outcome = SelfTestOutcome::WireFail;
       }
       break;
+    case FollowerOpKind::BootUpdate:
+      busRunBootUpdate(op.seq, op.addr, opResult);
+      stagedOp.pending = false;
+      return;
     default:
       break;
   }

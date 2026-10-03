@@ -137,6 +137,7 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
     case DisplayOpcode::ResetOdometer:
     case DisplayOpcode::SelfTest:
     case DisplayOpcode::BootDump:
+    case DisplayOpcode::BootUpdate:
     case DisplayOpcode::SetGates:
     case DisplayOpcode::ResetUnits:
     case DisplayOpcode::ReflashUnits:
@@ -291,6 +292,18 @@ inline const char* maintReasonName(MaintReason r) {
       return "unit-missing-after-reprobe";
     case MaintReason::TargetAddressOccupied:
       return "target-address-occupied";
+    case MaintReason::BootInfoReadFail:
+      return "boot-info-read-fail";
+    case MaintReason::BootStateUnknown:
+      return "boot-state-unknown";
+    case MaintReason::BootLockRefused:
+      return "boot-lock-refused";
+    case MaintReason::BootUnitLost:
+      return "boot-unit-lost";
+    case MaintReason::BootVerifyFailed:
+      return "boot-verify-failed";
+    case MaintReason::BootAlreadyNew:
+      return "boot-already-new";
     default:
       return "";
   }

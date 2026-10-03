@@ -817,6 +817,23 @@ bool unitBusReadSelfTest(int i2cAddress, UnitSelfTestReading& out) {
   return selfTestReadbackValid(buf, out);
 }
 
+bool unitBusReadBootInfo(int i2cAddress, BootUpdateReport& out) {
+  uint8_t buf[BOOT_INFO_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_BOOT_INFO, buf,
+                 BOOT_INFO_REPLY_LEN)) {
+    return false;
+  }
+  return bootInfoDecode(buf, out);
+}
+
+int unitBusBootUpdate(int i2cAddress, uint8_t stage) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_BOOT_UPDATE);
+  Wire.write(stage);
+  Wire.write((uint8_t)~stage);
+  return countedTransmission();
+}
+
 // The unit watchdog-resets into twiboot, which listens ~1 s on the
 // DIP-derived address. HARD RULE (v1 #88): never probe while a unit can be
 // in its twiboot window — the CHIPINFO query pins the bootloader alive.

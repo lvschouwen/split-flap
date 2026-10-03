@@ -17,6 +17,7 @@
 #include "FollowerOps.h"
 #include "UnitHealth.h"
 #include "UnitProtocolHelpers.h"  // UnitSelfTestReading
+#include "BootUpdatePlan.h"      // #499 decision logic (includes BootUpdateReport)
 
 // Per-slot facts (probe + health poll truth) and the derived row width.
 extern UnitFacts unitFacts[UNITS_AMOUNT];
@@ -90,6 +91,11 @@ int busSetGates(uint8_t i2cAddress, uint8_t gates);
 int busRebootToBootloader(uint8_t i2cAddress);
 int busStartSelfTest(uint8_t i2cAddress);
 bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out);
+
+// In-system twiboot update primitives (#499).
+bool busReadBootInfo(uint8_t i2cAddress, BootUpdateReport& out);
+int busBootUpdate(uint8_t i2cAddress, uint8_t stage);
+void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result);
 
 // The full bundled-hex reflash job (v1 #138 flow: enter-bootloader sweep,
 // throttled PROGMEM flash, batch settle). Blocking for many seconds —

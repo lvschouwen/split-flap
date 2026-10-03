@@ -35,6 +35,9 @@ enum class DisplayOpcode : uint8_t {
   // through its bootloader and restarts; result in the snapshot's
   // BootDumpSlot, bytes in the dump store.
   BootDump,
+  // In-system twiboot update (#499): reads boot info, runs stage 1 and/or
+  // stage 2 as needed, verifies. A multi-step op that can take ~20 s.
+  BootUpdate,
   ResetUnits,
   Stop,
   // Bulk unit reflash over twiboot (#205, slice C) — a long-running job
@@ -104,6 +107,7 @@ inline const char* displayOpcodeName(DisplayOpcode op) {
     case DisplayOpcode::SetGates:           return "SetGates";
     case DisplayOpcode::SelfTest:           return "SelfTest";
     case DisplayOpcode::BootDump:           return "BootDump";
+    case DisplayOpcode::BootUpdate:         return "BootUpdate";
     case DisplayOpcode::ResetUnits:         return "ResetUnits";
     case DisplayOpcode::Stop:               return "Stop";
     case DisplayOpcode::ReflashUnits:       return "ReflashUnits";
@@ -200,6 +204,12 @@ inline DisplayCommand makeSelfTestCommand(uint32_t seq, uint8_t addr) {
 // Boot-section dump (#511): a few seconds through twiboot and back.
 inline DisplayCommand makeBootDumpCommand(uint32_t seq, uint8_t addr) {
   return makeMaintCommand(DisplayOpcode::BootDump, seq, addr, 0);
+}
+
+// In-system twiboot update (#499): reads boot info, runs the needed stages,
+// verifies. The execution logic determines the stage from the unit's state.
+inline DisplayCommand makeBootUpdateCommand(uint32_t seq, uint8_t addr) {
+  return makeMaintCommand(DisplayOpcode::BootUpdate, seq, addr, 0);
 }
 
 // The re-show text/alignment/speed are baked at enqueue time (senders bake

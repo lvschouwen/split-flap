@@ -11,6 +11,7 @@
 
 #include "BootHomePlan.h"
 #include "BootTrace.h"  // #504
+#include "BootUpdatePlan.h"  // #499 decision logic
 #include "CrashContext.h"  // #504
 #include "FlapFrame.h"
 #include "HeadlessPolicy.h"
@@ -851,6 +852,147 @@ static void execBootDump(DisplaySnapshot& local, UnitFacts* busFacts,
                           MaintReason::None);
 }
 
+// In-system twiboot update (#499). Reads boot info, decides which stages
+// (if any) the unit needs, drives them, and verifies. Stage 1 causes a WDT
+// reset (~250 ms) that passes through twiboot; stage 2 disables TWI for
+// ~100 ms while rewriting pages. Total wall time ≤ 25 s.
+static const uint32_t BOOT_UPDATE_RETURN_MS = 10000;
+static const uint32_t BOOT_UPDATE_HOME_MS = 20000;
+static const uint32_t BOOT_UPDATE_STAGE2_SETTLE_MS = 300;
+static const uint32_t BOOT_UPDATE_STAGE2_POLL_MS = 5000;
+
+static void execBootUpdate(DisplaySnapshot& local, UnitFacts* busFacts,
+                           const DisplayCommand& cmd) {
+  (void)busFacts;
+  uint8_t addr = cmd.unitAddress;
+
+  BootUpdateReport info;
+  if (!unitBusReadBootInfo(addr, info)) {
+    SerialPrintf("display: boot-update unit 0x%02x → boot info read fail\n",
+                 addr);
+    displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
+                            MaintReason::BootInfoReadFail);
+    return;
+  }
+
+  BootUpdatePlan plan = bootUpdateDecide(info);
+  if (plan.terminal != BOOT_PLAN_PROCEED) {
+    MaintOutcome o = MaintOutcome::PostconditionFail;
+    MaintReason r = MaintReason::BootStateUnknown;
+    switch (plan.terminal) {
+      case BOOT_PLAN_ALREADY_NEW:
+        o = MaintOutcome::Ok; r = MaintReason::BootAlreadyNew; break;
+      case BOOT_PLAN_LOCK_REFUSED:
+        r = MaintReason::BootLockRefused; break;
+      case BOOT_PLAN_UNKNOWN_STATE:
+        r = MaintReason::BootStateUnknown; break;
+      default: break;
+    }
+    SerialPrintf("display: boot-update unit 0x%02x → %s\n",
+                 addr, maintReasonName(r));
+    displayApplyMaintResult(local, cmd, o, r);
+    return;
+  }
+
+  // Stage 1: install do_spm into the empty page 7. The unit WDT-resets,
+  // passes through twiboot (BOOTRST), and boots the app with page 7 written.
+  if (plan.needStage1) {
+    SerialPrintf("display: boot-update unit 0x%02x stage 1\n", addr);
+    if (unitBusBootUpdate(addr, 1) != 0) {
+      displayApplyMaintResult(local, cmd, MaintOutcome::WireFail,
+                              MaintReason::None);
+      return;
+    }
+    displayInvalidateUnitReads(local, addr);
+    armTwibootRiskWindow();
+    wdtFeed();
+    unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_RETURN_MS);
+    wdtFeed();
+    if (unitBusHome(addr) == 0) {
+      unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_HOME_MS);
+    }
+    wdtFeed();
+    if (!unitBusReadBootInfo(addr, info)) {
+      SerialPrintf(
+          "display: boot-update unit 0x%02x stage 1 → unit lost\n", addr);
+      if (local.lastFrameValid) {
+        unitBusShowFrame(local.units, local.displayWidth,
+                         local.lastFrameLetters, lastFrameUnitSpeed);
+      }
+      displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
+                              MaintReason::BootUnitLost);
+      return;
+    }
+    if (info.state != BOOT_STATE_PAGE7_INSTALLED) {
+      SerialPrintf(
+          "display: boot-update unit 0x%02x stage 1 verify fail (state %u)\n",
+          addr, info.state);
+      if (local.lastFrameValid) {
+        unitBusShowFrame(local.units, local.displayWidth,
+                         local.lastFrameLetters, lastFrameUnitSpeed);
+      }
+      displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
+                              MaintReason::BootVerifyFailed);
+      return;
+    }
+    SerialPrintf("display: boot-update unit 0x%02x stage 1 ok\n", addr);
+  }
+
+  // Stage 2: rewrite pages 0-6 using the do_spm now in page 7. TWI goes
+  // dark for ~100 ms while the unit writes; poll until we see state New.
+  if (plan.needStage2) {
+    SerialPrintf("display: boot-update unit 0x%02x stage 2\n", addr);
+    if (unitBusBootUpdate(addr, 2) != 0) {
+      displayApplyMaintResult(local, cmd, MaintOutcome::WireFail,
+                              MaintReason::None);
+      if (plan.needStage1 && local.lastFrameValid) {
+        unitBusShowFrame(local.units, local.displayWidth,
+                         local.lastFrameLetters, lastFrameUnitSpeed);
+      }
+      return;
+    }
+    wdtFeed();
+    delay(BOOT_UPDATE_STAGE2_SETTLE_MS);
+    bool verified = false;
+    uint32_t pollStart = millis();
+    while (millis() - pollStart < BOOT_UPDATE_STAGE2_POLL_MS) {
+      wdtFeed();
+      if (unitBusReadBootInfo(addr, info)) {
+        if (info.state == BOOT_STATE_NEW) { verified = true; break; }
+        if (info.lastResult == BOOT_RESULT_VERIFY_FAILED ||
+            info.lastResult == BOOT_RESULT_REFUSED_STATE ||
+            info.lastResult == BOOT_RESULT_REFUSED_LOCK ||
+            info.lastResult == BOOT_RESULT_REFUSED_BUSY) {
+          break;
+        }
+      }
+      delay(100);
+    }
+    if (!verified) {
+      SerialPrintf(
+          "display: boot-update unit 0x%02x stage 2 verify fail "
+          "(state %u result %u)\n",
+          addr, info.state, info.lastResult);
+      if (local.lastFrameValid) {
+        unitBusShowFrame(local.units, local.displayWidth,
+                         local.lastFrameLetters, lastFrameUnitSpeed);
+      }
+      displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
+                              MaintReason::BootVerifyFailed);
+      return;
+    }
+    SerialPrintf("display: boot-update unit 0x%02x stage 2 ok\n", addr);
+  }
+
+  if (local.lastFrameValid) {
+    unitBusShowFrame(local.units, local.displayWidth,
+                     local.lastFrameLetters, lastFrameUnitSpeed);
+  }
+  armTwibootRiskWindow();
+  SerialPrintf("display: boot-update unit 0x%02x → ok\n", addr);
+  displayApplyMaintResult(local, cmd, MaintOutcome::Ok, MaintReason::None);
+}
+
 static void execRebootToBootloader(DisplaySnapshot& local, UnitFacts* busFacts,
                                   const DisplayCommand& cmd) {
   (void)busFacts;
@@ -1119,6 +1261,9 @@ void displayTaskMain(void*) {
           break;
         case DisplayOpcode::BootDump:
           execBootDump(local, busFacts, cmd);
+          break;
+        case DisplayOpcode::BootUpdate:
+          execBootUpdate(local, busFacts, cmd);
           break;
         case DisplayOpcode::SetGates:
           execSetGates(local, busFacts, cmd);

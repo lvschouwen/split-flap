@@ -21,6 +21,7 @@
 #include "UnitAssets.h"  // UNIT_FIRMWARE_BIN (build_assets.py)
 #include "UnitProtocolHelpers.h"
 #include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
+#include "BootUpdatePlan.h"   // #499 decision logic (includes BootUpdateReport)
 
 UnitFacts unitFacts[UNITS_AMOUNT];
 int displayWidth = UNITS_AMOUNT;
@@ -773,6 +774,23 @@ bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out) {
   return selfTestReadbackValid(buf, out);
 }
 
+bool busReadBootInfo(uint8_t i2cAddress, BootUpdateReport& out) {
+  uint8_t buf[BOOT_INFO_REPLY_LEN];
+  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_BOOT_INFO, buf,
+                 BOOT_INFO_REPLY_LEN)) {
+    return false;
+  }
+  return bootInfoDecode(buf, out);
+}
+
+int busBootUpdate(uint8_t i2cAddress, uint8_t stage) {
+  Wire.beginTransmission(i2cAddress);
+  Wire.write((uint8_t)SFP_CMD_BOOT_UPDATE);
+  Wire.write(stage);
+  Wire.write((uint8_t)~stage);
+  return Wire.endTransmission();
+}
+
 // --- twiboot flash (v1 ServiceFirmwareFunctions port) --------------------------------
 
 static uint8_t twibootAddr = 0;
@@ -1160,5 +1178,82 @@ void busRunReflashJob(uint8_t onlyAddr) {
   SerialPrintln(F("Unit reflash complete."));
 #else
   (void)onlyAddr;
+#endif
+}
+
+void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result) {
+#if SERIAL_ENABLE == false
+  BootUpdateReport info;
+  if (!busReadBootInfo(addr, info)) {
+    result = {seq, MaintOutcome::PostconditionFail,
+              MaintReason::BootInfoReadFail};
+    return;
+  }
+  BootUpdatePlan plan = bootUpdateDecide(info);
+  if (plan.terminal != BOOT_PLAN_PROCEED) {
+    MaintOutcome o = MaintOutcome::PostconditionFail;
+    MaintReason r = MaintReason::BootStateUnknown;
+    switch (plan.terminal) {
+      case BOOT_PLAN_ALREADY_NEW:
+        o = MaintOutcome::Ok; r = MaintReason::BootAlreadyNew; break;
+      case BOOT_PLAN_LOCK_REFUSED:
+        r = MaintReason::BootLockRefused; break;
+      case BOOT_PLAN_UNKNOWN_STATE:
+        r = MaintReason::BootStateUnknown; break;
+      default: break;
+    }
+    result = {seq, o, r};
+    return;
+  }
+  if (plan.needStage1) {
+    if (busBootUpdate(addr, 1) != 0) {
+      result = {seq, MaintOutcome::WireFail, MaintReason::None};
+      return;
+    }
+    busArmProbeInhibit(millis() + 3000);
+    waitForBatchIdle(&addr, 1, 10000);
+    busHome(addr);
+    waitForBatchIdle(&addr, 1, 20000);
+    if (!busReadBootInfo(addr, info)) {
+      result = {seq, MaintOutcome::PostconditionFail,
+                MaintReason::BootUnitLost};
+      return;
+    }
+    if (info.state != BOOT_STATE_PAGE7_INSTALLED) {
+      result = {seq, MaintOutcome::PostconditionFail,
+                MaintReason::BootVerifyFailed};
+      return;
+    }
+  }
+  if (plan.needStage2) {
+    if (busBootUpdate(addr, 2) != 0) {
+      result = {seq, MaintOutcome::WireFail, MaintReason::None};
+      return;
+    }
+    delay(300);
+    bool verified = false;
+    uint32_t start = millis();
+    while (millis() - start < 5000) {
+      if (busReadBootInfo(addr, info)) {
+        if (info.state == BOOT_STATE_NEW) { verified = true; break; }
+        if (info.lastResult == BOOT_RESULT_VERIFY_FAILED ||
+            info.lastResult == BOOT_RESULT_REFUSED_STATE ||
+            info.lastResult == BOOT_RESULT_REFUSED_LOCK ||
+            info.lastResult == BOOT_RESULT_REFUSED_BUSY) {
+          break;
+        }
+      }
+      delay(100);
+    }
+    if (!verified) {
+      result = {seq, MaintOutcome::PostconditionFail,
+                MaintReason::BootVerifyFailed};
+      return;
+    }
+  }
+  busArmProbeInhibit(millis() + 3000);
+  result = {seq, MaintOutcome::Ok, MaintReason::None};
+#else
+  (void)seq; (void)addr; (void)result;
 #endif
 }

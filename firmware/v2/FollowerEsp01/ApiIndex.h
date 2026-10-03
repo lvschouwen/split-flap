@@ -41,6 +41,7 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/unit/gates",            "set a unit's feature-gate bits"},
   {"POST", "/unit/self-test",        "run a unit's self-test"},
   {"GET",  "/unit/self-test-result", "read a unit's self-test result"},
+  {"POST", "/unit/boot-update",      "in-system twiboot update: reads boot info, runs needed stages, verifies"},
   {"POST", "/unit/reboot",           "reboot a unit"},
   {"GET",  "/unit/op-result",        "result of the last {seq} maintenance op"},
 };

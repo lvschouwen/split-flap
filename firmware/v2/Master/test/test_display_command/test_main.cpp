@@ -277,6 +277,15 @@ static void test_selftest_opcode_name() {
   TEST_ASSERT_EQUAL_STRING("SelfTest", displayOpcodeName(DisplayOpcode::SelfTest));
 }
 
+static void test_boot_update_command_carries_seq_and_address() {
+  DisplayCommand cmd = makeBootUpdateCommand(42, 9);
+  TEST_ASSERT_TRUE(cmd.opcode == DisplayOpcode::BootUpdate);
+  TEST_ASSERT_EQUAL_UINT32(42, cmd.seq);
+  TEST_ASSERT_EQUAL_UINT8(9, cmd.unitAddress);
+  TEST_ASSERT_EQUAL_STRING("BootUpdate",
+                           displayOpcodeName(DisplayOpcode::BootUpdate));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_show_text_sets_opcode_and_copies_text);
@@ -310,6 +319,7 @@ int main(int, char**) {
   RUN_TEST(test_selftest_command_carries_seq_and_address);
   RUN_TEST(test_selftest_opcode_name);
   RUN_TEST(test_boot_dump_command_carries_seq_and_address);
+  RUN_TEST(test_boot_update_command_carries_seq_and_address);
   RUN_TEST(test_set_gates_command_carries_the_gate_byte_in_value);
   RUN_TEST(test_set_gates_command_carries_an_all_clear);
   RUN_TEST(test_set_gates_high_bit_survives_the_signed_value_field);

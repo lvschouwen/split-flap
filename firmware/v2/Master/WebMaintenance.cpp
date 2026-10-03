@@ -321,6 +321,17 @@ void webMaintenanceRegister(AsyncWebServer& server) {
     request->send(200, "application/json", buf.get());
   });
 
+  // In-system twiboot update (#499): reads boot info, decides stages, drives
+  // them, verifies. Result via /unit/op-result?seq=N.
+  server.on("/unit/boot-update", HTTP_POST,
+            [](AsyncWebServerRequest* request) {
+    DisplaySnapshot snap = displaySnapshotGet();
+    int addr = 0;
+    if (!maintCheckAddress(request, snap, addr)) return;
+    maintEnqueue(request,
+                 makeBootUpdateCommand(displayNextMaintSeq(), (uint8_t)addr));
+  });
+
   // Debug endpoint, v1 semantics preserved: pushes the unit into twiboot
   // (~1 s on its DIP-derived address, then back to the sketch). v1 parity:
   // range check only, no sketch-state gate — it exists precisely for poking

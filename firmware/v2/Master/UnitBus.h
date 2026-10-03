@@ -17,6 +17,7 @@
 #include "UnitHealth.h"
 #include "UnitRescuePolicy.h"  // UnitRescueProbe (#498)
 #include "UnitProtocolHelpers.h"
+#include "BootUpdateReport.h"  // BootUpdateReport (#499)
 
 // Wire init on the unit bus pins. SDA=8 / SCL=9 (Arduino-ESP32 S3 defaults),
 // 100 kHz, 3.3 V — electrically a drop-in for the ESP-01. Clear of the
@@ -78,6 +79,16 @@ int unitBusStartSelfTest(int i2cAddress);               // ~15 s diagnostic rev 
 // Reads the unit's self-test state/result via CMD_GET_SELF_TEST (#265).
 // False on wire failure or a checksum-rejected reply (old firmware).
 bool unitBusReadSelfTest(int i2cAddress, UnitSelfTestReading& out);
+
+// Reads the unit's boot-section info via CMD_GET_BOOT_INFO (#499): lock/fuse
+// bytes, boot-section CRC32, classified state, last update result. False on
+// wire failure or a checksum-rejected reply (old firmware or unit in twiboot).
+bool unitBusReadBootInfo(int i2cAddress, BootUpdateReport& out);
+
+// Sends CMD_BOOT_UPDATE with stage (1 or 2) + ~stage (#499). Stage 1 causes a
+// WDT reset (~250 ms later); stage 2 disables TWI for ~100 ms while rewriting
+// pages. Returns Wire.endTransmission() status.
+int unitBusBootUpdate(int i2cAddress, uint8_t stage);
 
 // Bus transaction counters (#245): written only by displayTask, safe to
 // read cross-task (aligned 32-bit). Idle rotation polls are not counted.
