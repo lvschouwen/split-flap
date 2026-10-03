@@ -6,7 +6,9 @@
  * well after the write, while twiboot idles) returns control to us. */
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <avr/pgmspace.h>
 #include <stdint.h>
+#include "new_image.h"   /* new_twiboot_page7[128] — the real page-7 bytes */
 
 #define ENTRY 0x7e5a
 #define BUF   0x011D      /* twiboot's buf[] base in SRAM */
@@ -24,9 +26,10 @@ static void recovery(void) { done = 0xFF; for (;;) {} }
 
 int main(void) {
   cli();
-  /* Seed buf[] with a recognizable pattern: byte i = i. */
+  /* Seed buf[] with the REAL page-7 content of the new twiboot image (do_spm +
+   * 0xFF pad + ABI marker), not a test pattern. */
   volatile uint8_t* buf = (volatile uint8_t*)BUF;
-  for (uint8_t i = 0; i < 128; i++) buf[i] = i;
+  for (uint8_t i = 0; i < 128; i++) buf[i] = pgm_read_byte(&new_twiboot_page7[i]);
 
   /* Relaxed timer: fire after the whole erase+fill+write finishes. In sim the
    * sequence is a few hundred cycles; OCR well past that lands us in twiboot's

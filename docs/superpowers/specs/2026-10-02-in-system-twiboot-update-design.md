@@ -8,8 +8,12 @@ Stage 1 (boot-section dump, #511) already shipped.
 Replace the bootloader (twiboot) on fielded split-flap units over I2C, with no
 ICSP, and leave behind a bootloader that can be updated routinely afterwards.
 The update runs from the unit's own application firmware, driven one unit at a
-time by the S3 master. The S3 row (16 units) goes first; the ESP-01 row (5
-units) is a follow-up issue once the mechanism is proven on the wall.
+time by whichever master owns the row. **Both masters must be able to drive it:**
+the S3 master (16-unit row) and the ESP-01 follower (5-unit row). The unit-side
+report + updater is master-agnostic by construction (it answers I2C ops), so the
+only per-master work is the driving code; the S3 and ESP-01 drivers ship
+together, not as a deferred follow-up. Rollout order on the wall is still S3 row
+first, then the ESP-01 row, once the mechanism is proven.
 
 ## What is already known (stage 1, #511)
 
@@ -152,7 +156,12 @@ The updater and the embedded target image stay in the unit firmware afterwards
 (~1.6 KB; unit firmware uses 14.2 KB of 30.7 KB today) as the routine path for
 future bootloader updates.
 
-## Master (S3)
+## Masters (S3 **and** ESP-01 follower)
+
+Both masters must be able to drive the report + update, so the master-side work
+ships for both trees in this arc.
+
+### S3 master
 
 Mirrors the stage-1 (#511) op structure: a `DisplayOpcode`, a
 `makeBootUpdateCommand`, an `exec*` in `DisplayTask.cpp`, a `UnitBus` entry, and
@@ -171,7 +180,15 @@ two web routes.
 - **`flashing/update-unit-bootloaders.sh`:** gated, per-unit, stops at the
   first failure — the twiboot-generation twin of `commission-units.sh`.
 
-## Fielding sequence
+### ESP-01 follower
+
+The follower drives its own 5-unit row's update over the same I2C ops. It has no
+web UI of its own, so the leader exposes the trigger (the follower already
+proxies unit ops in the cluster). Constraints carried from the follower's known
+limits: the ping/op digest body ceiling (#386) — the boot-info reply must fit —
+and the follower's narrower flash/RAM budget for the embedded target image. The
+boot-section CRC guard still protects the 5 ESP-01-row units even though they
+were never dumped (#511).
 
 1. OTA the master, then an ordinary unit reflash campaign carrying the report +
    updater (no EEPROM-layout bump, so it is a cheap reflash).
@@ -209,9 +226,9 @@ two web routes.
   resumable.
 - Lock bits are unknown until the new unit firmware reports them. A locked unit
   is refused and stays on the old twiboot.
-- The ESP-01 row is out of scope for this arc (follow-up issue). Its units are
-  still guarded by the boot-section CRC check even though they were never
-  dumped.
+- The ESP-01 row is in scope for this arc (both masters must drive the update).
+  Its 5 units are still guarded by the boot-section CRC check even though they
+  were never dumped. Only the on-the-wall rollout is sequenced S3-first.
 - Not doing the "full #499 list": an in-twiboot application CRC check is
   deferred — it needs a length+CRC trailer and a wire change and does not fit
   the lean budget. The bounded pin + application-written page-0-last gives the

@@ -22,7 +22,24 @@
 #include <avr/pgmspace.h>
 
 #define VERSION_STRING          "TWIBOOT v3.2"
+
+/* Split-flap patch: SF_NEW_TWIBOOT selects the lean second-generation image
+ * that in-system bootloader update (#499) installs over I2C. Relative to the
+ * fielded image it drops EEPROM access (no master uses twiboot's EEPROM path),
+ * stashes MCUSR into GPIOR0 so the sketch can read the reset cause, and bounds
+ * the pinned state so a unit the master pins and then loses contact with
+ * recovers on its own. The fixed-address do_spm in page 7 and the ABI marker at
+ * 0x7FFE are added by the image builder (make_new_twiboot.py), not this
+ * translation unit, which only ever occupies pages 0-6. */
+#ifndef SF_NEW_TWIBOOT
+#define SF_NEW_TWIBOOT          0
+#endif
+
+#if (SF_NEW_TWIBOOT)
+#define EEPROM_SUPPORT          0
+#else
 #define EEPROM_SUPPORT          1
+#endif
 #define LED_SUPPORT             1
 
 #ifndef USE_CLOCKSTRETCH
@@ -197,7 +214,21 @@ const static uint8_t chipinfo[8] = {
 #endif
 };
 
+#if (SF_NEW_TWIBOOT)
+/* Split-flap patch (#499): bounded pin. The fielded twiboot pins forever once
+ * the master sends any command (boot_timeout = 0, never counts down), so a unit
+ * the master pins and then loses contact with sits dark until a power cycle.
+ * Here a command instead re-arms a long-but-finite quiet timer, so the unit
+ * falls back to the application after SF_PIN_TIMEOUT_MS of silence. The
+ * blank-flash guard (app_installed) still overrides this and waits forever.
+ * TODO(#499): SF_PIN_TIMEOUT_MS is provisional — anchor it to the measured
+ * worst-case gap between reflash steps before fielding; see the issue. The
+ * counter is 16-bit here because the pin window exceeds the 8-bit range. */
+#define SF_PIN_TIMEOUT_MS       30000UL
+static uint16_t boot_timeout = TIMER_MSEC2IRQCNT(TIMEOUT_MS);
+#else
 static uint8_t boot_timeout = TIMER_MSEC2IRQCNT(TIMEOUT_MS);
+#endif
 static uint8_t cmd = CMD_WAIT;
 
 /* Split-flap patch: stay-alive-on-empty-flash.
@@ -347,8 +378,14 @@ static uint8_t TWI_data_write(uint8_t bcnt, uint8_t data)
                     /* no break */
 
                 case CMD_WAIT:
+#if (SF_NEW_TWIBOOT)
+                    /* bounded pin: re-arm the quiet timer on every command
+                     * instead of pinning forever (see boot_timeout above) */
+                    boot_timeout = TIMER_MSEC2IRQCNT(SF_PIN_TIMEOUT_MS);
+#else
                     /* abort countdown */
                     boot_timeout = 0;
+#endif
                     cmd = data;
                     break;
 
@@ -824,6 +861,13 @@ void init1(void)
 void disable_wdt_timer(void) __attribute__((naked, section(".init3")));
 void disable_wdt_timer(void)
 {
+#if (SF_NEW_TWIBOOT)
+    /* Split-flap patch (#499): stash the reset cause before clearing MCUSR, so
+     * the application can read it (GPIOR0 survives into the sketch). The fielded
+     * twiboot clears MCUSR unconditionally, hiding the reset cause from the
+     * sketch — see #502 item 6. */
+    GPIOR0 = MCUSR;
+#endif
     MCUSR = 0;
     WDTCSR = (1<<WDCE) | (1<<WDE);
     WDTCSR = (0<<WDE);

@@ -1,19 +1,22 @@
-/* simavr C-API harness for the #499 stage-1 keystone.
+/* simavr C-API harness for the #499 in-system twiboot update proof.
  *
- * Loads the keystone ELF (which also pulls in the fielded twiboot via the
- * merged image we build separately), forces PC straight to `main` (the real
- * sketch calls the updater while already running, so we don't exercise
- * twiboot's boot flow), runs a bounded number of cycles, then reads flash and
- * SRAM directly — no gdb stub, no breakpoints.
+ * Loads an updater test ELF (the "app", linked at 0x0000), optionally overlays a
+ * boot-section binary at 0x7C00 (the real fielded twiboot, since the ELF only
+ * carries the app), forces PC straight to the updater entry (the real sketch
+ * calls the updater while already running, so we don't exercise twiboot's own
+ * boot flow), runs a bounded number of cycles, then compares the resulting boot
+ * section against an expected image byte for byte.
  *
- * Usage: runtest <firmware.elf> <main_byte_addr_hex> <run_cycles>
- * Reports: whether `done`/`isr_hit` got set, and the first bytes of page 7.
+ * Usage:
+ *   runtest <app.elf> <overlay.bin|none> <main_byte_hex> <cycles> \
+ *           <done_sram_hex> <expected_boot.bin>
  *
- * Addresses of done/isr_hit/page7_sample are read from the ELF symbol table by
- * the caller and passed via a tiny sidecar? No — simpler: we hardcode nothing;
- * we scan the loaded firmware's symbols via libsimavr's elf loader if exposed,
- * else the caller passes the SRAM addresses. We take them as argv to stay
- * decoupled from the build. */
+ * <done_sram_hex> is the raw data-space offset of a volatile byte the app sets
+ * to 0xFF when it has finished (NOT the 0x800000 gdb alias). <expected_boot.bin>
+ * is the full 1024-byte boot section (0x7C00-0x7FFF) expected after the run.
+ *
+ * Exit 0 iff the app signalled done AND the whole boot section matches.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,25 +25,25 @@
 
 #include <simavr/sim_avr.h>
 #include <simavr/sim_elf.h>
-#include <simavr/avr_ioport.h>
+
+#define BOOT_START 0x7c00
+#define BOOT_LEN   1024
+#define PAGE_SIZE  128
 
 int main(int argc, char** argv) {
-  if (argc < 8) {
+  if (argc < 7) {
     fprintf(stderr,
-            "usage: %s <elf> <twiboot.bin> <main_byte_hex> <cycles> "
-            "<done_sram_hex> <isr_hit_sram_hex> <page7_sram_hex>\n",
+            "usage: %s <app.elf> <overlay.bin|none> <main_byte_hex> <cycles> "
+            "<done_sram_hex> <expected_boot.bin>\n",
             argv[0]);
     return 2;
   }
   const char* elf_path = argv[1];
-  const char* twiboot_path = argv[2];
+  const char* overlay_path = argv[2];
   uint32_t main_byte = (uint32_t)strtoul(argv[3], NULL, 0);
   uint64_t cycles = strtoull(argv[4], NULL, 0);
-  /* SRAM data addresses are given as the raw data-space offset (e.g. 0x100),
-   * NOT the 0x800000 gdb alias — avr->data[] is indexed directly. */
   uint32_t done_a = (uint32_t)strtoul(argv[5], NULL, 0);
-  uint32_t isr_a = (uint32_t)strtoul(argv[6], NULL, 0);
-  uint32_t p7_a = (uint32_t)strtoul(argv[7], NULL, 0);
+  const char* expected_path = argv[6];
 
   elf_firmware_t fw;
   memset(&fw, 0, sizeof(fw));
@@ -58,26 +61,39 @@ int main(int argc, char** argv) {
   avr->frequency = 16000000;
   avr_load_firmware(avr, &fw);
 
-  /* Overlay the real fielded twiboot into the boot section (0x7C00), so the
-   * borrowed spm sites exist in flash. The ELF only carries the app. */
-  {
-    if (strcmp(twiboot_path,"none")==0) goto skip_overlay; FILE* f = fopen(twiboot_path, "rb");
+  /* Overlay the starting boot section at 0x7C00. simavr's ELF loader ignores a
+   * high --section-start and loads .text at 0, so the app's ELF never touches
+   * the boot section; we place it here manually. */
+  if (strcmp(overlay_path, "none") != 0) {
+    FILE* f = fopen(overlay_path, "rb");
     if (!f) {
-      fprintf(stderr, "cannot open twiboot bin %s\n", twiboot_path);
+      fprintf(stderr, "cannot open overlay %s\n", overlay_path);
       return 1;
     }
-    uint8_t buf[1024];
+    uint8_t buf[BOOT_LEN];
     size_t n = fread(buf, 1, sizeof(buf), f);
     fclose(f);
-    for (size_t i = 0; i < n && (0x7c00 + i) < avr->flashend + 1u; i++) {
-      avr->flash[0x7c00 + i] = buf[i];
+    for (size_t i = 0; i < n && (BOOT_START + i) < avr->flashend + 1u; i++) {
+      avr->flash[BOOT_START + i] = buf[i];
     }
-    skip_overlay:; fprintf(stderr, "overlaid %zu twiboot bytes at 0x7c00; spm@0x7e60=%02x %02x\n",
-            n, avr->flash[0x7e60], avr->flash[0x7e61]);
+    fprintf(stderr, "overlaid %zu bytes at 0x%04x; spm@0x7e60=%02x %02x\n", n,
+            BOOT_START, avr->flash[0x7e60], avr->flash[0x7e61]);
   }
 
-  /* Jump straight into the application. PC in avr_t is a BYTE address. */
-  avr->pc = main_byte;
+  /* Load the expected post-run boot section. */
+  uint8_t expected[BOOT_LEN];
+  memset(expected, 0xFF, sizeof(expected));
+  {
+    FILE* f = fopen(expected_path, "rb");
+    if (!f) {
+      fprintf(stderr, "cannot open expected %s\n", expected_path);
+      return 1;
+    }
+    fread(expected, 1, sizeof(expected), f);
+    fclose(f);
+  }
+
+  avr->pc = main_byte; /* PC in avr_t is a BYTE address. */
 
   uint64_t ran = 0;
   int state = cpu_Running;
@@ -85,32 +101,29 @@ int main(int argc, char** argv) {
     state = avr_run(avr);
     ran++;
     if (state == cpu_Done || state == cpu_Crashed) break;
-    /* stop early once recovery has signalled completion */
     if (avr->data[done_a] == 0xFF) break;
   }
 
   uint8_t done = avr->data[done_a];
-  uint8_t isr_hit = avr->data[isr_a];
-  printf("ran=%llu state=%d pc=0x%04x done=0x%02x isr_hit=0x%02x\n",
-         (unsigned long long)ran, state, avr->pc, done, isr_hit);
-  printf("page7_sample=%02x %02x %02x %02x\n", avr->data[p7_a],
-         avr->data[p7_a + 1], avr->data[p7_a + 2], avr->data[p7_a + 3]);
-  /* Also read the live flash at page 7 directly from the sim. */
-  printf("flash[0x7f80..]=%02x %02x %02x %02x\n", avr->flash[0x7f80],
-         avr->flash[0x7f81], avr->flash[0x7f82], avr->flash[0x7f83]);
+  printf("ran=%llu state=%d pc=0x%04x done=0x%02x\n",
+         (unsigned long long)ran, state, avr->pc, done);
 
-  {
-    int bad = 0, first_bad = -1;
-    for (int i = 0; i < 128; i++) {
-      if (avr->flash[0x7f80 + i] != (uint8_t)i) { bad++; if (first_bad<0) first_bad=i; }
+  int total_bad = 0, first_bad = -1;
+  for (int p = 0; p < BOOT_LEN / PAGE_SIZE; p++) {
+    int bad = 0;
+    for (int i = 0; i < PAGE_SIZE; i++) {
+      int off = p * PAGE_SIZE + i;
+      if (avr->flash[BOOT_START + off] != expected[off]) {
+        bad++;
+        if (first_bad < 0) first_bad = off;
+      }
     }
-    printf("PAGE7 FULL: %d/128 match, mismatches=%d first_bad=%d\n", 128-bad, bad, first_bad);
+    total_bad += bad;
+    printf("  page %d (0x%04x): %d/%d match%s\n", p, BOOT_START + p * PAGE_SIZE,
+           PAGE_SIZE - bad, PAGE_SIZE, bad ? "  <-- MISMATCH" : "");
   }
-  {
-    int bad=0, fb=-1;
-    for (int i=0;i<128;i++){ if (avr->flash[0x7f00+i]!=(uint8_t)(0xC0+i)){bad++; if(fb<0)fb=i;} }
-    printf("PAGE6: %d/128 match, mismatches=%d first_bad=%d (b0=%02x b1=%02x b127=%02x)\n",
-           128-bad,bad,fb, avr->flash[0x7f00], avr->flash[0x7f01], avr->flash[0x7f7f]);
-  }
-  return (done == 0xFF) ? 0 : 3;
+  printf("BOOT SECTION: %d/%d match, mismatches=%d first_bad_off=%d\n",
+         BOOT_LEN - total_bad, BOOT_LEN, total_bad, first_bad);
+
+  return (done == 0xFF && total_bad == 0) ? 0 : 3;
 }

@@ -35,25 +35,27 @@ export PATH=$HOME/.platformio/packages/toolchain-atmelavr/bin:$PATH   # avr-gcc
 ## Run the proofs
 
 ```bash
-gcc runtest.c -o runtest -lsimavr
-
-# Extract the fielded twiboot as a raw boot-section binary (1 KB at 0x7C00):
-avr-objcopy -I ihex -O binary ../prebuilt/twiboot-atmega328p-16mhz.hex tw.bin
-
-# Stage 1: drive twiboot's loop to write page 7 (expect PAGE7 128/128):
-avr-gcc -Os -mmcu=atmega328p -o drivefill.elf drivefill.c
-MAIN=$(avr-nm drivefill.elf | awk '/ main$/{print "0x"$1}')
-DONE=$(avr-nm drivefill.elf | awk '/ done$/{print "0x"substr($1,5)}')
-./runtest drivefill.elf tw.bin $MAIN 2000000 $DONE $DONE $DONE
-
-# Stage 2: call do_spm@0x7F80 to rewrite page 6 (expect PAGE6 128/128):
-avr-gcc -mmcu=atmega328p -nostartfiles -Wl,--section-start=.text=0x7f80 -o do_spm.elf do_spm.S
-avr-objcopy -O binary -j .text do_spm.elf do_spm.bin
-python3 -c "img=bytearray(b'\xff'*1024); d=open('do_spm.bin','rb').read(); img[0x380:0x380+len(d)]=d; open('boot_do_spm.bin','wb').write(img)"
-avr-gcc -Os -mmcu=atmega328p -o stage2.elf stage2.c
-MAIN=$(avr-nm stage2.elf | awk '/ main$/{print "0x"$1}'); DONE=$(avr-nm stage2.elf | awk '/ done$/{print "0x"substr($1,5)}')
-./runtest stage2.elf boot_do_spm.bin $MAIN 2000000 $DONE $DONE $DONE
+./prove.sh
 ```
+
+`prove.sh` builds the real second-generation image (`../make_new_twiboot.py`,
+which also emits `new_image.h` here), then runs **both stages against the real
+bytes** — not test patterns — and checks the whole boot section (0x7C00-0x7FFF)
+byte for byte:
+
+- **Stage 1** (`drivefill.c`): overlay = the fielded twiboot; the app seeds
+  twiboot's `buf[]` with the real page-7 blob (`do_spm` + pad + ABI marker) and
+  drives twiboot's write handler. Expected = fielded pages 0-6 + new page 7.
+- **Stage 2** (`stage2.c` + `do_spm.S`): overlay = the post-stage-1 state; the
+  app `call`s `do_spm@0x7F80` to rewrite pages 0-6 with the new image. Expected =
+  the full new image.
+
+Both report `BOOT SECTION: 1024/1024 match` and the script prints
+`ALL STAGES PASSED`. The source bytes live in PROGMEM in the test apps (as they
+will in the unit firmware), so they do not collide with twiboot's SRAM `buf[]`.
+
+`runtest.c` takes `<app.elf> <overlay.bin|none> <main_byte> <cycles> <done_sram>
+<expected_boot.bin>` and diffs the result against the expected image.
 
 ## Key facts the harness nailed down
 
