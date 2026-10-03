@@ -15,8 +15,28 @@ MASTER_BUSES = [V2 / "Master" / "UnitBus.cpp", V2 / "FollowerEsp01" / "FollowerB
 
 
 def _strip_comments(text):
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    return re.sub(r"//[^\n]*", "", text)
+    """Drop // and /* */ comments, honouring string and char literals — a
+    naive regex treats the "/*" in a "// .../cluster/* ..." comment as a block
+    opener and swallows the code after it."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in "\"'":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def _function_body(text, signature):
