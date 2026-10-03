@@ -142,6 +142,12 @@ section, a classified boot-section state, and the last update result. Reading
 lock/fuses is done by **application** code (twiboot cannot report them). This
 closes **#502 item 8**.
 
+Part of the fleet cannot read them: on 11 of 21 units the read returns the
+sketch's own first four flash bytes (#518). The unit recognises that, sets the
+unreadable flag (bit 7 of the result byte) and sends placeholder bytes; masters
+report `lockfuse: unreadable`. For the update guard an unreadable lock counts as
+open — the read-back verification is what catches a write that did not land.
+
 Boot-section state is derived from flash, never stored — a pure,
 natively-tested classifier in a new `shared/` header maps the section to:
 `Old` (CRC == `18173add`), `Page7Installed`, `Trampoline`, `New`, or `Unknown`.
@@ -263,8 +269,8 @@ were never dumped (#511).
   leaving an unverified page 0 for the next reset. Everything else is
   resumable. No brown-out handling is added: a slow supply collapse during a
   window is the same loss.
-- Lock bits are unknown until the new unit firmware reports them. A locked unit
-  is refused and stays on the old twiboot.
+- A unit whose lock byte reads closed is refused and stays on the old twiboot.
+  A unit whose lock byte cannot be read at all proceeds (#518).
 - The ESP-01 row is in scope for this arc (both masters must drive the update).
   Its 5 units are still guarded by the boot-section CRC check even though they
   were never dumped. Only the on-the-wall rollout is sequenced S3-first.

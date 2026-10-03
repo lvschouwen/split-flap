@@ -8,15 +8,36 @@
 //
 // Concatenated after Unit.ino, so its globals/includes are visible here.
 
-static uint8_t readLockByte() {
-  // boot_lock_fuse_bits_get is `sts SPMCSR,..; lpm` and needs the lpm within 3
-  // cycles; an ISR in between returns a program byte instead. An EEPROM write
-  // in progress blocks lock/fuse reads too.
+// The Z addresses bootLockFuseReadFellThrough() assumes (BootUpdateReport.h).
+static_assert(GET_LOW_FUSE_BITS == 0 && GET_LOCK_BITS == 1 &&
+                  GET_EXTENDED_FUSE_BITS == 2 && GET_HIGH_FUSE_BITS == 3,
+              "avr/boot.h lock/fuse Z addresses moved");
+
+// Lock + fuse bytes into `r`, with lockFuseReadable cleared when this chip
+// answered with its own flash bytes instead (#518).
+//
+// boot_lock_fuse_bits_get is `sts SPMCSR,..; lpm` and needs the lpm within 3
+// cycles; an ISR in between returns a program byte instead. An EEPROM write in
+// progress blocks lock/fuse reads too.
+static void readLockAndFuses(BootUpdateReport& r) {
   noInterrupts();
   eeprom_busy_wait();
   uint8_t lock = boot_lock_fuse_bits_get(GET_LOCK_BITS);
+  uint8_t low = boot_lock_fuse_bits_get(GET_LOW_FUSE_BITS);
+  uint8_t high = boot_lock_fuse_bits_get(GET_HIGH_FUSE_BITS);
+  uint8_t ext = boot_lock_fuse_bits_get(GET_EXTENDED_FUSE_BITS);
   interrupts();
-  return lock;
+  uint8_t flash0to3[4];
+  for (uint8_t i = 0; i < 4; i++) flash0to3[i] = pgm_read_byte(i);
+  if (bootLockFuseReadFellThrough(lock, low, high, ext, flash0to3)) {
+    r.lockFuseReadable = false;  // the bytes keep their 0xFF placeholders
+    return;
+  }
+  r.lockFuseReadable = true;
+  r.lockByte = lock;
+  r.fuseLow = low;
+  r.fuseHigh = high;
+  r.fuseExt = ext;
 }
 
 // Rebuild the cached GET_BOOT_INFO reply. Called at boot and after each update
@@ -25,13 +46,7 @@ static uint8_t readLockByte() {
 void refreshBootInfoReply() {
   BootSectionFacts f = bootReadFacts();
   BootUpdateReport r;
-  noInterrupts();  // same lpm timing + EEPROM constraints as readLockByte()
-  eeprom_busy_wait();
-  r.lockByte = boot_lock_fuse_bits_get(GET_LOCK_BITS);
-  r.fuseLow = boot_lock_fuse_bits_get(GET_LOW_FUSE_BITS);
-  r.fuseHigh = boot_lock_fuse_bits_get(GET_HIGH_FUSE_BITS);
-  r.fuseExt = boot_lock_fuse_bits_get(GET_EXTENDED_FUSE_BITS);
-  interrupts();
+  readLockAndFuses(r);
   r.bootCrc32 = f.fullCrc32;
   r.state = bootClassify(f);
   r.lastResult = lastBootUpdateResult;
@@ -65,7 +80,9 @@ void runBootUpdate(uint8_t stage) {
   wdt_reset();
   // Stage 1, when its gates pass, does not return: the chip resets and the
   // master reads the outcome as state Page7Installed after the reboot.
-  BootUpdateResult r = bootRunStage(stage, readLockByte());
+  BootUpdateReport lockFuses;
+  readLockAndFuses(lockFuses);
+  BootUpdateResult r = bootRunStage(stage, bootEffectiveLockByte(lockFuses));
   // A master that resends stage 2 after timing out in the NACK window gets
   // REFUSED_STATE (state is already New); keep the STAGE2_OK it missed. Masters
   // key on the state, the result only explains it.

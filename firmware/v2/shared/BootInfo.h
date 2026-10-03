@@ -74,6 +74,15 @@ inline size_t buildBootInfoJson(char* buf, size_t cap, const BootInfoSlot& slot,
     n = BOOT_INFO_SNPRINTF(buf, cap,
                  "{\"state\":\"failed\",\"addr\":%u,\"reason\":\"read-fail\"}",
                  (unsigned)slot.addr);
+  } else if (!slot.report.lockFuseReadable) {
+    // #518: say so instead of printing placeholder bytes as lock and fuses.
+    const BootUpdateReport& r = slot.report;
+    n = BOOT_INFO_SNPRINTF(buf, cap,
+                 "{\"state\":\"ok\",\"addr\":%u,\"boot\":\"%s\","
+                 "\"crc32\":\"%08lx\",\"lockfuse\":\"unreadable\","
+                 "\"last\":\"%s\"}",
+                 (unsigned)slot.addr, bootInfoStateName(r.state),
+                 (unsigned long)r.bootCrc32, bootInfoResultName(r.lastResult));
   } else {
     const BootUpdateReport& r = slot.report;
     n = BOOT_INFO_SNPRINTF(buf, cap,

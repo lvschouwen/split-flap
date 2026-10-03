@@ -84,6 +84,80 @@ static void test_out_of_range_result_rejected() {
   TEST_ASSERT_FALSE(bootInfoDecode(buf, out));
 }
 
+// --- lock/fuse readability (#518) ---
+
+static void test_unreadable_flag_roundtrips_without_disturbing_the_result() {
+  for (int result = 0; result < BOOT_RESULT_COUNT; result++) {
+    BootUpdateReport in = sample();
+    in.lastResult = (uint8_t)result;
+    in.lockFuseReadable = false;
+    uint8_t buf[BOOT_INFO_REPLY_LEN];
+    bootInfoEncode(in, buf);
+    TEST_ASSERT_EQUAL_HEX8(result | BOOT_INFO_FLAG_LOCKFUSE_UNREADABLE, buf[9]);
+    BootUpdateReport out;
+    TEST_ASSERT_TRUE(bootInfoDecode(buf, out));
+    TEST_ASSERT_FALSE(out.lockFuseReadable);
+    TEST_ASSERT_EQUAL(result, out.lastResult);
+    TEST_ASSERT_EQUAL(in.state, out.state);
+    TEST_ASSERT_EQUAL_HEX32(in.bootCrc32, out.bootCrc32);
+  }
+}
+
+static void test_readable_report_is_byte_identical_to_the_flagless_format() {
+  // A unit that reads its fuses sends exactly what it sent before the flag
+  // existed, so a master predating it still decodes that unit.
+  BootUpdateReport in = sample();
+  in.lastResult = BOOT_RESULT_STAGE2_OK;
+  uint8_t buf[BOOT_INFO_REPLY_LEN];
+  bootInfoEncode(in, buf);
+  TEST_ASSERT_EQUAL_HEX8(BOOT_RESULT_STAGE2_OK, buf[9]);
+  BootUpdateReport out;
+  TEST_ASSERT_TRUE(bootInfoDecode(buf, out));
+  TEST_ASSERT_TRUE(out.lockFuseReadable);
+}
+
+static void test_flag_does_not_admit_an_out_of_range_result() {
+  uint8_t buf[BOOT_INFO_REPLY_LEN];
+  bootInfoEncode(sample(), buf);
+  buf[9] = (uint8_t)(BOOT_RESULT_COUNT | BOOT_INFO_FLAG_LOCKFUSE_UNREADABLE);
+  uint8_t x = 0;
+  for (uint8_t i = 0; i < BOOT_INFO_REPLY_LEN - 1; i++) x ^= buf[i];
+  buf[BOOT_INFO_REPLY_LEN - 1] = (uint8_t)(x ^ BOOT_INFO_CHECKSUM_MASK);
+  BootUpdateReport out;
+  TEST_ASSERT_FALSE(bootInfoDecode(buf, out));
+}
+
+// What 11 of the 21 fielded units returned: the reset vector, read back as
+// lock 94, lfuse 0c, hfuse 02, efuse a2.
+static void test_fall_through_is_recognised_from_the_wall_values() {
+  const uint8_t flash0to3[4] = {0x0C, 0x94, 0xA2, 0x02};  // jmp 0x02A2
+  TEST_ASSERT_TRUE(bootLockFuseReadFellThrough(0x94, 0x0C, 0x02, 0xA2, flash0to3));
+  // The other 10 units: real values, with the same sketch in flash.
+  TEST_ASSERT_FALSE(bootLockFuseReadFellThrough(0xFF, 0xFF, 0xDC, 0xFD, flash0to3));
+}
+
+static void test_fall_through_needs_all_four_bytes_to_match() {
+  const uint8_t flash0to3[4] = {0x0C, 0x94, 0xA2, 0x02};
+  // One coincidence is not a fall-through — e.g. a real lock byte that happens
+  // to equal flash byte 1 while the fuses are real.
+  TEST_ASSERT_FALSE(bootLockFuseReadFellThrough(0x94, 0xFF, 0xDC, 0xFD, flash0to3));
+  TEST_ASSERT_FALSE(bootLockFuseReadFellThrough(0xFF, 0x0C, 0x02, 0xA2, flash0to3));
+  TEST_ASSERT_FALSE(bootLockFuseReadFellThrough(0x94, 0x0C, 0x02, 0xFD, flash0to3));
+  TEST_ASSERT_FALSE(bootLockFuseReadFellThrough(0x94, 0x0C, 0xDC, 0xA2, flash0to3));
+  // Each byte is compared against ITS Z address, not just any of the four.
+  TEST_ASSERT_FALSE(bootLockFuseReadFellThrough(0x0C, 0x94, 0xA2, 0x02, flash0to3));
+}
+
+static void test_effective_lock_byte() {
+  BootUpdateReport r = sample();
+  r.lockByte = 0x00;  // readable and closed
+  TEST_ASSERT_EQUAL_HEX8(0x00, bootEffectiveLockByte(r));
+  TEST_ASSERT_FALSE(bootLockPermitsBootWrite(bootEffectiveLockByte(r)));
+  r.lockFuseReadable = false;  // unknown: proceed, verification is the gate
+  TEST_ASSERT_EQUAL_HEX8(0xFF, bootEffectiveLockByte(r));
+  TEST_ASSERT_TRUE(bootLockPermitsBootWrite(bootEffectiveLockByte(r)));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_roundtrip);
@@ -92,5 +166,11 @@ int main(int, char**) {
   RUN_TEST(test_all_ff_rejected);
   RUN_TEST(test_out_of_range_state_rejected);
   RUN_TEST(test_out_of_range_result_rejected);
+  RUN_TEST(test_unreadable_flag_roundtrips_without_disturbing_the_result);
+  RUN_TEST(test_readable_report_is_byte_identical_to_the_flagless_format);
+  RUN_TEST(test_flag_does_not_admit_an_out_of_range_result);
+  RUN_TEST(test_fall_through_is_recognised_from_the_wall_values);
+  RUN_TEST(test_fall_through_needs_all_four_bytes_to_match);
+  RUN_TEST(test_effective_lock_byte);
   return UNITY_END();
 }

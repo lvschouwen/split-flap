@@ -40,9 +40,10 @@ inline BootUpdatePlan bootUpdateDecide(const BootUpdateReport& info) {
     default:
       return {false, false, BOOT_PLAN_UNKNOWN_STATE};
   }
-  // Both stages need SPM writes to boot-section pages, so the lock must
-  // permit it for any update path.
-  if (!bootLockPermitsBootWrite(info.lockByte)) {
+  // Both stages need SPM writes to boot-section pages, so a lock that is
+  // readable and closed refuses any update path. An unreadable lock proceeds
+  // (bootEffectiveLockByte, #518).
+  if (!bootLockPermitsBootWrite(bootEffectiveLockByte(info))) {
     return {false, false, BOOT_PLAN_LOCK_REFUSED};
   }
   return {needStage1, needStage2, BOOT_PLAN_PROCEED};

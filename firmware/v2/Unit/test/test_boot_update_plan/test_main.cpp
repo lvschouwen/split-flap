@@ -72,6 +72,27 @@ static void test_page7_installed_with_locked_boot_refuses() {
   TEST_ASSERT_EQUAL(BOOT_PLAN_LOCK_REFUSED, p.terminal);
 }
 
+// #518: a lock nobody can read does not block the update; a lock that reads
+// closed still does.
+static void test_unreadable_lock_proceeds_in_every_updatable_state() {
+  const uint8_t states[] = {BOOT_STATE_OLD, BOOT_STATE_PAGE7_INSTALLED,
+                            BOOT_STATE_TRAMPOLINE};
+  for (uint8_t st : states) {
+    BootUpdateReport r = makeReport(st, 0x00);  // placeholder that READS closed
+    r.lockFuseReadable = false;
+    BootUpdatePlan p = bootUpdateDecide(r);
+    TEST_ASSERT_EQUAL(BOOT_PLAN_PROCEED, p.terminal);
+    TEST_ASSERT_TRUE(p.needStage2);
+    TEST_ASSERT_EQUAL(st == BOOT_STATE_OLD, p.needStage1);
+  }
+}
+
+static void test_unreadable_lock_does_not_rescue_an_unknown_state() {
+  BootUpdateReport r = makeReport(BOOT_STATE_UNKNOWN, 0xFF);
+  r.lockFuseReadable = false;
+  TEST_ASSERT_EQUAL(BOOT_PLAN_UNKNOWN_STATE, bootUpdateDecide(r).terminal);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_new_exits_immediately);
@@ -82,5 +103,7 @@ int main(int, char**) {
   RUN_TEST(test_trampoline_needs_stage2_only);
   RUN_TEST(test_unknown_state_refuses);
   RUN_TEST(test_page7_installed_with_locked_boot_refuses);
+  RUN_TEST(test_unreadable_lock_proceeds_in_every_updatable_state);
+  RUN_TEST(test_unreadable_lock_does_not_rescue_an_unknown_state);
   return UNITY_END();
 }

@@ -29,3 +29,22 @@ def test_esp01_reads_the_report_and_serves_the_slot():
                       "busRunBootUpdate"):
         assert forbidden not in case, f"the info op must not call {forbidden}"
     assert "buildBootInfoJson(buf, sizeof(buf), bootInfoSlot, (uint32_t)seq);" in web
+
+
+def test_unit_detects_an_unreadable_lock_and_gates_on_the_effective_byte():
+    # #518. The detection and the "unknown lock proceeds" rule are pure and
+    # unit-tested; this pins the sketch glue that applies them.
+    ino = (V2 / "Unit" / "UnitBootUpdate.ino").read_text()
+    read = ino[ino.index("static void readLockAndFuses(BootUpdateReport& r) {"):]
+    read = read[:read.index("\n}\n")]
+    assert "bootLockFuseReadFellThrough(lock, low, high, ext, flash0to3)" in read
+    assert "pgm_read_byte(i)" in read
+    assert "r.lockFuseReadable = false;" in read
+    refresh = ino[ino.index("void refreshBootInfoReply() {"):]
+    refresh = refresh[:refresh.index("\n}\n")]
+    assert "readLockAndFuses(r);" in refresh
+    assert "boot_lock_fuse_bits_get" not in refresh, "one reader, so one detection"
+    run = ino[ino.index("void runBootUpdate(uint8_t stage) {"):]
+    run = run[:run.index("\n}\n")]
+    assert "bootRunStage(stage, bootEffectiveLockByte(lockFuses));" in run
+    assert ino.count("boot_lock_fuse_bits_get(") == 4, "all reads live in readLockAndFuses"

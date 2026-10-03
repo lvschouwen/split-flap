@@ -115,6 +115,24 @@ static void test_longest_reply_fits_the_declared_cap_and_a_small_one_truncates()
   TEST_ASSERT_EQUAL_size_t(sizeof(tiny) - 1, strlen(tiny));
 }
 
+// #518: a unit that cannot read its lock and fuses says so; no bytes are
+// printed that a reader could take for values.
+static void test_unreadable_lock_and_fuses_are_named_not_printed() {
+  BootInfoSlot s = okSlot(2);
+  s.report.lockFuseReadable = false;
+  s.report.state = BOOT_STATE_OLD;
+  s.report.bootCrc32 = 0x18173ADDUL;
+  s.report.lastResult = BOOT_RESULT_NONE;
+  char buf[BOOT_INFO_JSON_CAP];
+  buildBootInfoJson(buf, sizeof(buf), s, 2);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"state\":\"ok\",\"addr\":3,\"boot\":\"old\",\"crc32\":\"18173add\","
+      "\"lockfuse\":\"unreadable\",\"last\":\"none\"}",
+      buf);
+  TEST_ASSERT_NULL(strstr(buf, "\"lock\":"));
+  TEST_ASSERT_NULL(strstr(buf, "fuse\":\"f"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_ok_report_carries_every_field);
@@ -123,5 +141,6 @@ int main(int, char**) {
   RUN_TEST(test_failed_read_never_shows_a_report);
   RUN_TEST(test_every_state_and_result_has_a_distinct_name);
   RUN_TEST(test_longest_reply_fits_the_declared_cap_and_a_small_one_truncates);
+  RUN_TEST(test_unreadable_lock_and_fuses_are_named_not_printed);
   return UNITY_END();
 }
