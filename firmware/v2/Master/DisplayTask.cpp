@@ -273,7 +273,7 @@ static void logUnitReboot(const DisplaySnapshot& local, UnitFacts* busFacts,
   }
   int addr = SFP_I2C_ADDRESS_BASE + i;
   SerialPrintf("Unit 0x%02x rebooted (%s) — brownouts=%u watchdogs=%u\n", addr,
-               unitResetCauseName(unitResetCauseDecode(s.mcusrAtBoot)),
+               unitResetKindName(unitResetFromStatusByte(s.mcusrAtBoot)),
                (unsigned)s.lifetimeBrownoutCount,
                (unsigned)s.lifetimeWatchdogCount);
 }

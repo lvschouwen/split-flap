@@ -24,6 +24,11 @@ inline int flapLetterIndex(char c) {
   return -1;
 }
 
+// A unit clamps the speed byte to SFP_UNIT_SPEED_MAX, so a wider range here
+// would silently flatten its top end.
+static_assert(MIN_SPEED >= 1 && MAX_SPEED <= SFP_UNIT_SPEED_MAX,
+              "the wire speed range must stay inside what a unit accepts");
+
 // Web slider speed (1..100) → unit wire speed (MIN_SPEED..MAX_SPEED). Exact
 // v1 convertSpeed() math: clamp first (Arduino map() extrapolates outside
 // its input range), then the integer map with truncation toward zero.

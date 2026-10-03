@@ -491,7 +491,7 @@ inline int reflashCollectFlashTargets(const UnitFacts* facts, int maxUnits,
 // test_health_json_follower_worst_case_fits_local_buf holds it to that for
 // every width.
 #define FOLLOWER_HEALTH_BASE_BYTES     448  // headline + wear + reflash splices
-#define FOLLOWER_HEALTH_PER_UNIT_BYTES 496
+#define FOLLOWER_HEALTH_PER_UNIT_BYTES 544
 
 inline size_t followerHealthBufCap(int width, int maxUnits) {
   if (width < 0) width = 0;

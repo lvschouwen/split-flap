@@ -107,7 +107,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"br",     "lifetime brownout reset count"},
   {"wd",     "lifetime watchdog reset count"},
   {"bc",     "bad-I2C-command count since boot"},
-  {"mc",     "MCUSR reset-cause snapshot at boot"},
+  {"mc",     "reset cause of the unit's last boot: MCUSR bits, +128 = the unit asked for it"},
   {"fl",     "status flag bitfield (bit0 moving, bit1 home-failed, bit2 hall-never, bit4 addr-eeprom, bit5 homed)"},
   {"hs",     "last homing step count"},
   {"ae",     "1 = I2C address came from EEPROM, not DIP"},
@@ -134,6 +134,10 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"he",     "hall edges seen in the last completed revolution"},
   {"dw",     "rolling ~60 s duty window (recent move count)"},
   {"sb",     "ext-diag status bitfield (bit0 last-move stall, bits1-3 TWI self-heals that freed the bus #489)"},
+  {"ut",     "unit uptime in seconds since boot, full width (up saturates at 65535)"},
+  {"rx",     "master writes this unit received since boot (u16, wraps; compare deltas)"},
+  {"tx",     "master reads this unit answered since boot (u16, wraps; compare deltas)"},
+  {"dh",     "TWI register self-check re-inits since boot (unit deafness self-heals)"},
   {"pv",     "wire protocol version the unit reports"},
   {"pmm",    "1 = protocol version we do not speak; unit is untouched and is a reflash target"},
   {"hf",     "lifetime failed-homing count (survives power cycles)"},
@@ -199,9 +203,10 @@ inline bool legendHasKey(const char* key) {
   return false;
 }
 
-// #475's err/errAge legend rows + #465's route overflowed 8192; heap-built
-// by the handler, so the cost is transient, not BSS.
-#define API_JSON_CAP 9216
+// #475's err/errAge legend rows + #465's route overflowed 8192, and the #502
+// link-health rows 9216; heap-built by the handler, so the cost is transient,
+// not BSS.
+#define API_JSON_CAP 9728
 
 #define API_APPEND(...) do { \
     if (o >= cap) return o; \

@@ -478,6 +478,12 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].extDiag.hallEdgesLastRev = 0xFF;
     units[i].extDiag.dutyWindow = 0xFFFF;
     units[i].extDiag.statusBits = 0xFF;
+    // Widest link-health block (#502).
+    units[i].linkValid = true;
+    units[i].link.uptimeSeconds = 0xFFFFFFFFUL;
+    units[i].link.rxFrames = 0xFFFF;
+    units[i].link.txReplies = 0xFFFF;
+    units[i].link.deafHeals = 0xFF;
     // Widest lifetime block (#406): all fields saturated.
     units[i].lifetimeValid = true;
     units[i].lifetime.homeFailedCount = 0xFF;
@@ -503,6 +509,7 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"he\":255"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"dw\":65535"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"sb\":255"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"ut\":4294967295,\"rx\":65535,\"tx\":65535,\"dh\":255"));
   // Same for the lifetime block (#406).
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"hf\":255"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"gates\":255"));
@@ -635,6 +642,84 @@ static void test_health_json_ext_diag_emitted_when_valid() {
   char* second = strstr(buf, "\"i\":1");
   TEST_ASSERT_NOT_NULL(second);
   TEST_ASSERT_NULL(strstr(second, "\"se\""));
+}
+
+// --- link-health extension (#502) ---------------------------------------------
+
+static void fillExtReply(uint8_t* buf, bool baseOk, bool linkOk) {
+  UnitExtDiag d;
+  d.stepExcessLast = 12;
+  d.dutyWindow = 8;
+  UnitLinkStats l;
+  l.uptimeSeconds = 70000;  // past the u16 saturation of status "up"
+  l.rxFrames = 500;
+  l.txReplies = 499;
+  l.deafHeals = 2;
+  extDiagEncodeReply(d, buf);
+  extDiagLinkEncode(l, buf + EXT_DIAG_REPLY_LEN);
+  if (!baseOk) buf[EXT_DIAG_REPLY_LEN - 1] ^= 0x55;
+  if (!linkOk) buf[EXT_DIAG_LINK_REPLY_LEN - 1] ^= 0x55;
+}
+
+static void test_fold_ext_diag_both_valid() {
+  uint8_t buf[EXT_DIAG_LINK_REPLY_LEN];
+  fillExtReply(buf, true, true);
+  UnitFacts u;
+  unitFactsFoldExtDiag(u, buf);
+  TEST_ASSERT_TRUE(u.extDiagValid);
+  TEST_ASSERT_TRUE(u.linkValid);
+  TEST_ASSERT_EQUAL_UINT16(12, u.extDiag.stepExcessLast);
+  TEST_ASSERT_EQUAL_UINT32(70000UL, u.link.uptimeSeconds);
+  TEST_ASSERT_EQUAL_UINT16(500, u.link.rxFrames);
+  TEST_ASSERT_EQUAL_UINT16(499, u.link.txReplies);
+  TEST_ASSERT_EQUAL_UINT8(2, u.link.deafHeals);
+}
+
+static void test_fold_ext_diag_base_only_when_extension_absent() {
+  // A unit without the extension: padding behind the base packet.
+  uint8_t buf[EXT_DIAG_LINK_REPLY_LEN];
+  fillExtReply(buf, true, true);
+  memset(buf + EXT_DIAG_REPLY_LEN, 0xFF, EXT_DIAG_LINK_EXT_LEN);
+  UnitFacts u;
+  u.link.rxFrames = 77;  // stale value must not survive as "valid"
+  u.linkValid = true;
+  unitFactsFoldExtDiag(u, buf);
+  TEST_ASSERT_TRUE(u.extDiagValid);
+  TEST_ASSERT_FALSE(u.linkValid);
+  TEST_ASSERT_EQUAL_UINT16(12, u.extDiag.stepExcessLast);
+  TEST_ASSERT_EQUAL_UINT16(8, u.extDiag.dutyWindow);
+}
+
+static void test_fold_ext_diag_bad_base_good_extension_independent() {
+  uint8_t buf[EXT_DIAG_LINK_REPLY_LEN];
+  fillExtReply(buf, false, true);
+  UnitFacts u;
+  u.extDiagValid = true;
+  unitFactsFoldExtDiag(u, buf);
+  TEST_ASSERT_FALSE(u.extDiagValid);
+  TEST_ASSERT_TRUE(u.linkValid);
+}
+
+static void test_health_json_link_keys_only_when_valid() {
+  UnitFacts units[2];
+  for (int i = 0; i < 2; i++) {
+    units[i].state = 1;
+    units[i].statusValid = true;
+    units[i].extDiagValid = true;
+  }
+  units[0].linkValid = true;
+  units[0].link.uptimeSeconds = 70000;
+  units[0].link.rxFrames = 500;
+  units[0].link.txReplies = 499;
+  units[0].link.deafHeals = 2;
+  char buf[768];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 0);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"ut\":70000,\"rx\":500,\"tx\":499,\"dh\":2"));
+  char* second = strstr(buf, "\"i\":1");
+  TEST_ASSERT_NOT_NULL(second);
+  TEST_ASSERT_NULL(strstr(second, "\"ut\""));
+  TEST_ASSERT_NOT_NULL(strstr(second, "\"se\""));
 }
 
 static void test_health_json_combined_splices_fit_cap() {
@@ -980,6 +1065,10 @@ int main(int, char**) {
   RUN_TEST(test_health_json_no_mismatch_without_position);
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
   RUN_TEST(test_health_json_ext_diag_emitted_when_valid);
+  RUN_TEST(test_fold_ext_diag_both_valid);
+  RUN_TEST(test_fold_ext_diag_base_only_when_extension_absent);
+  RUN_TEST(test_fold_ext_diag_bad_base_good_extension_independent);
+  RUN_TEST(test_health_json_link_keys_only_when_valid);
   RUN_TEST(test_health_json_lifetime_emitted_when_valid);
   RUN_TEST(test_health_json_futile_rehomes_emitted_when_nonzero);
   RUN_TEST(test_health_json_says_plainly_when_the_check_is_disarmed);

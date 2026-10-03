@@ -124,6 +124,11 @@ struct UnitFacts {
   // truth, same checksum-rejected-on-old-firmware lifecycle as vitals/odometer.
   UnitExtDiag extDiag{};
   bool extDiagValid = false;
+  // Link-health extension behind the ext-diag packet (#502): its own checksum,
+  // so linkValid can be false while extDiagValid is true (a unit without the
+  // extension). Same stale-clearing lifecycle as extDiag.
+  UnitLinkStats link{};
+  bool linkValid = false;
   // Across-power-cycle health (#406): probe/health-poll CMD_GET_LIFETIME
   // truth, same checksum-rejected-on-old-firmware lifecycle as ext-diag. The
   // distinction from extDiag is the point — that one is since-boot and every
@@ -161,14 +166,35 @@ struct UnitFacts {
   uint16_t i2cErrors = 0;
   uint32_t lastErrorMs = 0;
   // Runtime-rescue twiboot exits since boot (#498, UnitRescuePolicy.h),
-  // mirrored from the row master's rescue state. The only trace a
-  // spontaneous unit reset leaves: twiboot clears MCUSR before the sketch.
+  // mirrored from the row master's rescue state: a unit found sitting in
+  // twiboot was reset and never got as far as counting it.
   uint16_t rescueExits = 0;
   // Reboot edge-detect state (#368): last-seen uptime/brownout/watchdog
   // triple so heartbeatTick can log a unit reboot once, the same place #322
   // logs health transitions. Policy in UnitEventLog.h.
   UnitRebootWatch rebootWatch{};
 };
+
+// Folds one EXT_DIAG_LINK_REPLY_LEN read into the slot (#502). The base packet
+// and the link extension are validated independently: a unit without the
+// extension (bus padding behind byte 10) keeps its base data and reports the
+// link fields absent. Both flags are cleared first so a reply that stops
+// validating never leaves a stale reading.
+inline void unitFactsFoldExtDiag(UnitFacts& fact,
+                                 const uint8_t buf[EXT_DIAG_LINK_REPLY_LEN]) {
+  fact.extDiagValid = false;
+  fact.linkValid = false;
+  UnitExtDiag d;
+  if (extDiagReadbackValid(buf, d)) {
+    fact.extDiag = d;
+    fact.extDiagValid = true;
+  }
+  UnitLinkStats l;
+  if (extDiagLinkReadbackValid(buf + EXT_DIAG_REPLY_LEN, l)) {
+    fact.link = l;
+    fact.linkValid = true;
+  }
+}
 
 // May we drive this unit at all (#405)? A sketch-running unit that reports a
 // contract we do not speak is left strictly alone: no renders, no status
@@ -313,7 +339,8 @@ inline int computeLostUnitCount(const UnitFacts* units, int n) {
 // per-unit lifetime keys hf/gates/sxl/stw0/str0/stw1/str1 (#406, ~60 B/unit
 // worst case — each rides an emit-when-nonzero guard, so a fresh unit adds
 // nothing) and the per-unit idle-hall keys fr/frd (#460, ~18 B/unit, same
-// guard) so a full display can't push the payload into the headline-only
+// guard) and the per-unit link-health keys ut/rx/tx/dh (#502, ~45 B/unit)
+// so a full display can't push the payload into the headline-only
 // fallback. The #406 keys raised the ceiling over the prior 7168 (#365).
 // test_unit_health pins the worst case + headroom (a full 16-unit payload
 // with the wear + reflash splices).
@@ -413,6 +440,17 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                          (unsigned)e.stepExcessLast, (unsigned)e.stepExcessMax,
                          (unsigned)e.vccSagLastMove, (unsigned)e.hallEdgesLastRev,
                          (unsigned)e.dutyWindow, (unsigned)e.statusBits);
+    }
+    if (u.linkValid) {
+      // Link health (#502), own valid flag: the extension has its own checksum.
+      // ut = full since-boot uptime in seconds (the status "up" saturates at
+      // 65535), rx/tx = master writes received / reads answered by the unit
+      // (wrapping u16 — compare deltas), dh = TWI register self-check re-inits
+      // since boot.
+      const UnitLinkStats& l = u.link;
+      UNIT_HEALTH_APPEND(",\"ut\":%lu,\"rx\":%u,\"tx\":%u,\"dh\":%u",
+                         (unsigned long)l.uptimeSeconds, (unsigned)l.rxFrames,
+                         (unsigned)l.txReplies, (unsigned)l.deafHeals);
     }
     if (u.protocolKnown) {
       // Wire contract the unit reports (#405). pmm marks one we do not speak:

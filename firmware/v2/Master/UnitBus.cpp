@@ -258,24 +258,25 @@ static void refreshUnitVitals(UnitFacts& fact, int i2cAddress) {
 }
 
 // Reads the unit's new-measurement diagnostics via CMD_GET_EXT_DIAG (#365):
-// 11 bytes, masked XOR checksum. Pre-ext-diag firmware answers the unknown
-// opcode with its 1-byte status fallback + bus padding — extDiagReadbackValid
-// rejects that instead of "verifying" garbage (same discipline as vitals).
-static bool readUnitExtDiag(int i2cAddress, UnitExtDiag& out) {
-  uint8_t buf[EXT_DIAG_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_EXT_DIAG, buf, EXT_DIAG_REPLY_LEN)) return false;
-  return extDiagReadbackValid(buf, out);
+// 11-byte base + 10-byte link extension (#502), each with its own masked XOR
+// checksum. Pre-ext-diag firmware answers the unknown opcode with its 1-byte
+// status fallback + bus padding — the checksums reject that instead of
+// "verifying" garbage (same discipline as vitals).
+static bool readUnitExtDiag(int i2cAddress, uint8_t* buf) {
+  return queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_EXT_DIAG, buf,
+                   EXT_DIAG_LINK_REPLY_LEN);
 }
 
-// Folds an ext-diag read into the slot; clears extDiagValid first so a unit
-// that stops answering (or was reflashed to pre-ext-diag firmware) never
-// keeps serving a stale reading (same discipline as refreshUnitVitals).
+// Folds an ext-diag read into the slot (#502 link extension included); both
+// valid flags clear first so a unit that stops answering (or was reflashed to
+// pre-ext-diag firmware) never keeps serving a stale reading (same discipline
+// as refreshUnitVitals).
 static void refreshUnitExtDiag(UnitFacts& fact, int i2cAddress) {
   fact.extDiagValid = false;
-  UnitExtDiag d;
-  if (!readUnitExtDiag(i2cAddress, d)) return;
-  fact.extDiag = d;
-  fact.extDiagValid = true;
+  fact.linkValid = false;
+  uint8_t buf[EXT_DIAG_LINK_REPLY_LEN];
+  if (!readUnitExtDiag(i2cAddress, buf)) return;
+  unitFactsFoldExtDiag(fact, buf);
 }
 
 // Reads what the unit's EEPROM remembers across power cycles via

@@ -80,6 +80,11 @@ static void fullyPopulated(UnitFacts& u) {
   u.lifetime.selfTestLastHallWindow = 12;
   u.lifetime.selfTestLastStepsPerRev = 2048;
   u.extDiagValid = true;
+  u.linkValid = true;  // #502: ut/rx/tx/dh must reach the legend guard
+  u.link.uptimeSeconds = 70000;
+  u.link.rxFrames = 500;
+  u.link.txReplies = 499;
+  u.link.deafHeals = 2;
 }
 
 static void assertEveryKeyDocumented(const char* json) {
@@ -162,6 +167,12 @@ static size_t worstCaseFitsFor(int width) {
     units[i].extDiag.hallEdgesLastRev = 0xFF;
     units[i].extDiag.dutyWindow = 0xFFFF;
     units[i].extDiag.statusBits = 0xFF;
+    // #502 link-health keys at their widest (10-digit uptime).
+    units[i].linkValid = true;
+    units[i].link.uptimeSeconds = 0xFFFFFFFFUL;
+    units[i].link.rxFrames = 0xFFFF;
+    units[i].link.txReplies = 0xFFFF;
+    units[i].link.deafHeals = 0xFF;
     // #411: the #405 protocol keys and #406 lifetime keys — this fixture
     // omitting them is exactly how the 6144 buffer went stale unnoticed.
     units[i].protocolKnown = true;
@@ -184,6 +195,7 @@ static size_t worstCaseFitsFor(int width) {
   // headroom assertions below are vacuous.
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"se\":65535"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"sb\":255"));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"ut\":4294967295,\"rx\":65535,\"tx\":65535,\"dh\":255"));
 
   // Worst wear fragment (hand-filled — assessWear can't actually flag all 16,
   // but the buffer must survive it), same splice arithmetic as FollowerWeb.cpp.
@@ -225,7 +237,7 @@ static void test_health_json_follower_worst_case_fits_local_buf() {
   // row uses most of its buffer, and a 5-unit row gets well under half of the
   // 8 KB the handler used to hold statically.
   TEST_ASSERT_TRUE(widest * 10 > followerHealthBufCap(16, 16) * 8);
-  TEST_ASSERT_TRUE(followerHealthBufCap(5, 16) < 3072);
+  TEST_ASSERT_TRUE(followerHealthBufCap(5, 16) < 4096);
   // Out-of-range widths clamp instead of under- or over-allocating.
   TEST_ASSERT_EQUAL_size_t(followerHealthBufCap(0, 16), followerHealthBufCap(-3, 16));
   TEST_ASSERT_EQUAL_size_t(followerHealthBufCap(16, 16), followerHealthBufCap(99, 16));

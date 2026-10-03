@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include "UnitHealth.h"  // UnitRebootWatch reboot edge-detect state (#368)
+#include "UnitResetCause.h"  // GET_STATUS byte 1 decode, the unit's own rules
 #include "UnitExtDiag.h"  // UnitExtDiag + EXT_DIAG_STATUS_STALL (#365, also
                           // reached transitively via UnitHealth.h; included
                           // directly since this header now names both)
@@ -116,30 +117,8 @@ inline UnitEventTransitions unitEventEvaluate(
   return t;
 }
 
-// Unit reset-cause decoded from the MCUSR snapshot GET_STATUS byte 1 carries
-// (#368). Priority is most-actionable-first: a brownout (BORF) is the operator
-// signal that matters, so it wins over a co-set watchdog/power-on flag.
-enum UnitResetCause {
-  RESET_UNKNOWN = 0, RESET_POWER_ON, RESET_EXTERNAL, RESET_BROWNOUT, RESET_WATCHDOG
-};
-
-inline UnitResetCause unitResetCauseDecode(uint8_t mcusr) {
-  if (mcusr & (1 << 2)) return RESET_BROWNOUT;  // BORF
-  if (mcusr & (1 << 3)) return RESET_WATCHDOG;  // WDRF
-  if (mcusr & (1 << 1)) return RESET_EXTERNAL;  // EXTRF
-  if (mcusr & (1 << 0)) return RESET_POWER_ON;  // PORF
-  return RESET_UNKNOWN;
-}
-
-inline const char* unitResetCauseName(UnitResetCause c) {
-  switch (c) {
-    case RESET_BROWNOUT: return "brownout";
-    case RESET_WATCHDOG: return "watchdog";
-    case RESET_EXTERNAL: return "external";
-    case RESET_POWER_ON: return "power-on";
-    default:             return "unknown";
-  }
-}
+// The reset cause a reboot is logged with (#368) is decoded from GET_STATUS
+// byte 1 by shared/UnitResetCause.h — the rules the unit itself counts by.
 
 // Reboot edge (#368): a unit that browns out / watchdog-resets just re-homes
 // and looks healthy. GET_STATUS carries uptime + lifetime brownout/watchdog

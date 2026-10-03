@@ -15,9 +15,9 @@
 // blank, so its first good read re-shows the last frame (a letter command
 // homes it first; units already on their letter don't move).
 //
-// Each twiboot exit is the only evidence of a spontaneous unit reset we have:
-// twiboot clears MCUSR before the sketch runs, so the unit's own lifetime
-// brownout/watchdog counters never move.
+// A twiboot exit is evidence of a spontaneous unit reset the unit may not be
+// able to report itself: a unit left sitting in twiboot never ran the sketch
+// that counts its brownout/watchdog resets (shared/UnitResetCause.h).
 
 #include <stdint.h>
 

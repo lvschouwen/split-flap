@@ -241,23 +241,21 @@ static void refreshUnitVitals(UnitFacts& fact, int i2cAddress) {
 // New-measurement diagnostics (#365): same shared UnitExtDiag.h packet and
 // checksum guard the master reads; pre-ext-diag firmware fails the checksum
 // and stays extDiagValid=false.
-static bool readUnitExtDiag(int i2cAddress, UnitExtDiag& out) {
-  uint8_t buf[EXT_DIAG_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_EXT_DIAG, buf, EXT_DIAG_REPLY_LEN)) {
-    return false;
-  }
-  return extDiagReadbackValid(buf, out);
+static bool readUnitExtDiag(int i2cAddress, uint8_t* buf) {
+  return queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_EXT_DIAG, buf,
+                   EXT_DIAG_LINK_REPLY_LEN);
 }
 
-// Folds an ext-diag read into the slot; clears extDiagValid first so a unit
-// that stops answering (or was reflashed to pre-ext-diag firmware) never
-// keeps serving a stale reading (same discipline as refreshUnitVitals).
+// Folds an ext-diag read into the slot (#502 link extension included); both
+// valid flags clear first so a unit that stops answering (or was reflashed to
+// pre-ext-diag firmware) never keeps serving a stale reading (same discipline
+// as refreshUnitVitals).
 static void refreshUnitExtDiag(UnitFacts& fact, int i2cAddress) {
   fact.extDiagValid = false;
-  UnitExtDiag d;
-  if (!readUnitExtDiag(i2cAddress, d)) return;
-  fact.extDiag = d;
-  fact.extDiagValid = true;
+  fact.linkValid = false;
+  uint8_t buf[EXT_DIAG_LINK_REPLY_LEN];
+  if (!readUnitExtDiag(i2cAddress, buf)) return;
+  unitFactsFoldExtDiag(fact, buf);
 }
 
 // Across-power-cycle health (#406): same shared UnitLifetime.h packet and
@@ -606,6 +604,11 @@ static void waitForRowToStop() {
     delay(100);
   }
 }
+
+// A unit clamps the speed byte to SFP_UNIT_SPEED_MAX, so a wider range here
+// would silently flatten its top end.
+static_assert(MIN_SPEED >= 1 && MAX_SPEED <= SFP_UNIT_SPEED_MAX,
+              "the wire speed range must stay inside what a unit accepts");
 
 static int convertWebSpeed(int webSpeed) {
   webSpeed = constrain(webSpeed, 1, 100);

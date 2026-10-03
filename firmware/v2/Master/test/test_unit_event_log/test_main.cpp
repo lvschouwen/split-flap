@@ -144,21 +144,32 @@ static void test_unit_vcc_is_low_threshold() {
 
 // --- reset-cause decode (#368) -----------------------------------------------
 
+// The rules live in shared/UnitResetCause.h and are tested exhaustively in the
+// Unit tree; these pin what the master's reboot log line says for the status
+// bytes a unit actually sends.
+
 static void test_reset_cause_priority_brownout_over_watchdog() {
   // BORF (bit2) + WDRF (bit3) both set -> brownout wins (most actionable).
-  TEST_ASSERT_EQUAL(RESET_BROWNOUT, unitResetCauseDecode((1<<2) | (1<<3)));
+  TEST_ASSERT_EQUAL_STRING("brownout",
+      unitResetKindName(unitResetFromStatusByte((1<<2) | (1<<3))));
 }
 
 static void test_reset_cause_each_flag() {
-  TEST_ASSERT_EQUAL(RESET_WATCHDOG, unitResetCauseDecode(1<<3));
-  TEST_ASSERT_EQUAL(RESET_EXTERNAL, unitResetCauseDecode(1<<1));
-  TEST_ASSERT_EQUAL(RESET_POWER_ON, unitResetCauseDecode(1<<0));
-  TEST_ASSERT_EQUAL(RESET_UNKNOWN,  unitResetCauseDecode(0));
+  TEST_ASSERT_EQUAL_STRING("watchdog", unitResetKindName(unitResetFromStatusByte(1<<3)));
+  TEST_ASSERT_EQUAL_STRING("external", unitResetKindName(unitResetFromStatusByte(1<<1)));
+  TEST_ASSERT_EQUAL_STRING("power-on", unitResetKindName(unitResetFromStatusByte(1<<0)));
+  TEST_ASSERT_EQUAL_STRING("unknown",  unitResetKindName(unitResetFromStatusByte(0)));
 }
 
-static void test_reset_cause_name_nonnull() {
-  TEST_ASSERT_EQUAL_STRING("brownout", unitResetCauseName(RESET_BROWNOUT));
-  TEST_ASSERT_EQUAL_STRING("power-on", unitResetCauseName(RESET_POWER_ON));
+static void test_reset_cause_power_on_is_not_logged_as_a_brownout() {
+  // A slow rail sets BORF with PORF on an ordinary power-up.
+  TEST_ASSERT_EQUAL_STRING("power-on",
+      unitResetKindName(unitResetFromStatusByte((1<<0) | (1<<2))));
+}
+
+static void test_reset_cause_a_requested_reboot_is_not_logged_as_a_hang() {
+  TEST_ASSERT_EQUAL_STRING("requested",
+      unitResetKindName(unitResetFromStatusByte((1<<3) | UNIT_RESET_REQUESTED_FLAG)));
 }
 
 // --- reboot-detect edge helper (#368) ----------------------------------------
@@ -303,7 +314,8 @@ int main(int, char**) {
   RUN_TEST(test_unit_vcc_is_low_threshold);
   RUN_TEST(test_reset_cause_priority_brownout_over_watchdog);
   RUN_TEST(test_reset_cause_each_flag);
-  RUN_TEST(test_reset_cause_name_nonnull);
+  RUN_TEST(test_reset_cause_power_on_is_not_logged_as_a_brownout);
+  RUN_TEST(test_reset_cause_a_requested_reboot_is_not_logged_as_a_hang);
   RUN_TEST(test_reboot_detect_primes_silent);
   RUN_TEST(test_reboot_detect_uptime_drop);
   RUN_TEST(test_reboot_detect_counter_climb);
