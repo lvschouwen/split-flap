@@ -470,6 +470,48 @@ static void test_noarg_set_is_exactly_the_payloadless_mutations() {
   }
 }
 
+// --- JOG (#512) ---
+
+static void test_jog_roundtrip_with_complement() {
+  for (int v = -127; v <= 127; v++) {
+    uint8_t buf[JOG_PAYLOAD_LEN];
+    jogEncode((uint8_t)(int8_t)v, buf);
+    for (int strict = 0; strict <= 1; strict++) {
+      int8_t out = 99;
+      TEST_ASSERT_TRUE(jogDecode(buf, JOG_PAYLOAD_LEN, strict != 0, out));
+      TEST_ASSERT_EQUAL_INT8(v, out);
+    }
+  }
+}
+
+static void test_jog_single_byte_form_only_without_strict() {
+  const uint8_t pay[JOG_PAYLOAD_LEN] = {(uint8_t)(int8_t)-5, 0};
+  int8_t out = 99;
+  TEST_ASSERT_TRUE(jogDecode(pay, 1, false, out));
+  TEST_ASSERT_EQUAL_INT8(-5, out);
+  // Strict: this is also the shape of a letter write whose index flipped onto
+  // 0x91, the byte being its speed.
+  out = 99;
+  TEST_ASSERT_FALSE(jogDecode(pay, 1, true, out));
+  TEST_ASSERT_EQUAL_INT8(99, out);  // untouched on rejection
+}
+
+static void test_jog_rejects_a_disagreeing_pair_and_odd_lengths() {
+  uint8_t buf[JOG_PAYLOAD_LEN];
+  jogEncode(12, buf);
+  int8_t out = 99;
+  for (int strict = 0; strict <= 1; strict++) {
+    for (int bit = 0; bit < 8; bit++) {
+      buf[1] ^= (uint8_t)(1 << bit);
+      TEST_ASSERT_FALSE(jogDecode(buf, JOG_PAYLOAD_LEN, strict != 0, out));
+      buf[1] ^= (uint8_t)(1 << bit);
+    }
+    TEST_ASSERT_FALSE(jogDecode(buf, 0, strict != 0, out));
+    TEST_ASSERT_FALSE(jogDecode(buf, 3, strict != 0, out));
+  }
+  TEST_ASSERT_EQUAL_INT8(99, out);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_version_roundtrip);
@@ -511,6 +553,9 @@ int main(int, char**) {
   RUN_TEST(test_noarg_no_bit_flipped_letter_write_runs_a_mutation);
   RUN_TEST(test_noarg_strict_refuses_a_bit_flipped_bare_poll);
   RUN_TEST(test_noarg_set_is_exactly_the_payloadless_mutations);
+  RUN_TEST(test_jog_roundtrip_with_complement);
+  RUN_TEST(test_jog_single_byte_form_only_without_strict);
+  RUN_TEST(test_jog_rejects_a_disagreeing_pair_and_odd_lengths);
   UNITY_END();
   return 0;
 }

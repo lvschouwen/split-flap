@@ -248,13 +248,14 @@ volatile uint8_t  vitalsReplyBuf[VITALS_REPLY_LEN] = {0};
 // ISR-visible mirror each loop pass under noInterrupts() — same #96-class torn-
 // read discipline as the vitals/diag buffers above. Only extDiagReplyBuf crosses
 // into the TWI ISR; the raw counters are loop-only.
-volatile uint8_t  extDiagReplyBuf[EXT_DIAG_LINK_REPLY_LEN] = {0};
-// Link health (#502), streamed as the extension behind the ext-diag packet.
-// The two frame counters are incremented in the TWI ISR and wrap; loop() reads
-// them under noInterrupts(). uptimeSecondsFull is loop-only.
+volatile uint8_t  extDiagReplyBuf[EXT_DIAG_REPLY_LEN] = {0};
+// Link health (#502), streamed as the extension behind the ext-diag packet and
+// encoded by requestEvent() itself. The two frame counters live entirely in the
+// TWI ISR and wrap. uptimeSecondsFull is written by loop() under
+// noInterrupts() and lags by the length of a blocking move.
 volatile uint16_t linkRxFrames              = 0;      // master writes received
 volatile uint16_t linkTxReplies             = 0;      // master reads answered
-uint32_t          uptimeSecondsFull         = 0;      // no saturation, no millis() wrap
+volatile uint32_t uptimeSecondsFull         = 0;      // no saturation, no millis() wrap
 unsigned long     uptimeLastTickMs          = 0;
 uint16_t          extStepExcessLast         = 0;      // #370 last home: actual-expected steps
 uint16_t          extStepExcessMax          = 0;      // #370 worst-seen since boot
@@ -882,12 +883,14 @@ void loop() {
   // 49.7-day millis() wrap; a pass that blocked on a move catches up here.
   // GET_STATUS carries the u16 view, saturating at 18 h 12 min (issue #47); the
   // ext-diag link extension carries the full count (#502).
+  uint32_t uptimeFull = uptimeSecondsFull;  // loop() is the only writer
   while (currentMillis - uptimeLastTickMs >= 1000UL) {
     uptimeLastTickMs += 1000UL;
-    uptimeSecondsFull++;
+    uptimeFull++;
   }
-  uint16_t newUptime = (uptimeSecondsFull > 0xFFFFUL) ? 0xFFFF : (uint16_t)uptimeSecondsFull;
+  uint16_t newUptime = (uptimeFull > 0xFFFFUL) ? 0xFFFF : (uint16_t)uptimeFull;
   noInterrupts();
+  uptimeSecondsFull = uptimeFull;
   uptimeSeconds = newUptime;
   interrupts();
 

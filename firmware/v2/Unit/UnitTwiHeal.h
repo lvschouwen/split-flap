@@ -52,9 +52,11 @@ inline void twiHealNoteReset(TwiHealState& s, uint32_t nowMs,
 // no longer holding this unit's address plus the general-call enable. Such a
 // unit NACKs its own address indefinitely while loop() keeps the watchdog fed.
 // loop() samples both registers; a config that stays wrong for TWI_HEAL_HOLD_MS
-// arms the same peripheral re-init, fired at an instant when both lines are
-// free. TWEA drops legitimately for about a byte time at the end of a slave
-// transmit — far inside the hold window. A held line is the other heal's job.
+// arms the same peripheral re-init, deferred while a line reads low (a held
+// line is the other heal's job; both high does not prove the bus idle). TWEA
+// drops legitimately for about a byte time at the end of a slave transmit, so
+// bad samples only add up while loop() samples densely: two of them either
+// side of a blocking move say nothing about the seconds in between.
 
 // TWCR bits a listening slave needs: TWEA (bit 6) | TWEN (bit 2) | TWIE
 // (bit 0). A literal so this header stays host-buildable; the AVR glue
@@ -68,9 +70,15 @@ inline bool twiListenConfigIntact(uint8_t twcr, uint8_t twar, uint8_t address) {
          twar == (uint8_t)((uint8_t)(address << 1) | TWI_LISTEN_TWAR_GCE);
 }
 
+// A larger gap between two samples restarts the hold window. An idle loop()
+// pass is well under a millisecond; a deaf unit receives no commands, so it
+// has no moves to block on.
+#define TWI_DEAF_MAX_SAMPLE_GAP_MS 10UL
+
 struct TwiDeafState {
   bool     badSeen = false;
   uint32_t badSinceMs = 0;
+  uint32_t lastSampleMs = 0;
   bool     everReset = false;
   uint32_t lastResetMs = 0;
   uint8_t  resets = 0;  // since boot, saturating
@@ -82,10 +90,11 @@ inline bool twiDeafShouldReset(TwiDeafState& s, bool configIntact,
     s.badSeen = false;
     return false;
   }
-  if (!s.badSeen) {
+  if (!s.badSeen || nowMs - s.lastSampleMs > TWI_DEAF_MAX_SAMPLE_GAP_MS) {
     s.badSeen = true;
     s.badSinceMs = nowMs;
   }
+  s.lastSampleMs = nowMs;
   if (nowMs - s.badSinceMs < TWI_HEAL_HOLD_MS) return false;
   if (!linesFree) return false;
   return !s.everReset || nowMs - s.lastResetMs >= TWI_HEAL_COOLDOWN_MS;

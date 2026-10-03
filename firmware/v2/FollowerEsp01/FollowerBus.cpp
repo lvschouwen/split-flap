@@ -157,6 +157,7 @@ uint32_t followerMinHeap() {
 // No-argument mutations go out as opcode + ~opcode (#512, UnitWireContract.h):
 // alone on the wire, the opcode byte is a complete command one bit flip away
 // from a letter write or a poll. Units predating the guard drain the extra byte.
+// Not for ENTER_BOOTLOADER — see its sender.
 static void writeGuardedOpcode(uint8_t opcode) {
   Wire.write(opcode);
   Wire.write(noArgGuardByte(opcode));
@@ -695,7 +696,9 @@ int busJog(uint8_t i2cAddress, int steps) {
   admitMotion();
   Wire.beginTransmission(i2cAddress);
   Wire.write((uint8_t)SFP_CMD_JOG);
-  Wire.write(maintEncodeJogByte(steps));
+  uint8_t jog[JOG_PAYLOAD_LEN];
+  jogEncode(maintEncodeJogByte(steps), jog);
+  Wire.write(jog, JOG_PAYLOAD_LEN);
   return Wire.endTransmission();
 }
 
@@ -740,7 +743,10 @@ int busSetGates(uint8_t i2cAddress, uint8_t gates) {
 
 int busRebootToBootloader(uint8_t i2cAddress) {
   Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_ENTER_BOOTLOADER);
+  // Bare on purpose: the one-byte form is the fixed-forever one every unit
+  // accepts (#512), and a unit already sitting in twiboot ACKs exactly one
+  // byte — a guard byte would turn that status into a NACK.
+  Wire.write((uint8_t)SFP_CMD_ENTER_BOOTLOADER);
   return Wire.endTransmission();
 }
 

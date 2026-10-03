@@ -107,9 +107,19 @@ static void test_listen_config_intact_checks_address_and_general_call() {
 
 static void test_intact_config_never_resets() {
   TwiDeafState s;
-  for (uint32_t t = 0; t < 10000; t += 7) {
+  for (uint32_t t = 0; t < 10000; t += 1) {
     TEST_ASSERT_FALSE(twiDeafShouldReset(s, true, true, t));
   }
+}
+
+// Feeds one sample per millisecond, as an idle loop() does, and returns the
+// first time the policy fires (or 0xFFFFFFFF).
+static uint32_t firstFire(TwiDeafState& s, uint32_t from, uint32_t until,
+                          bool linesFree) {
+  for (uint32_t t = from; t <= until; t++) {
+    if (twiDeafShouldReset(s, false, linesFree, t)) return t;
+  }
+  return 0xFFFFFFFFUL;
 }
 
 static void test_transient_bad_config_never_resets() {
@@ -123,36 +133,37 @@ static void test_transient_bad_config_never_resets() {
 
 static void test_bad_config_resets_after_hold_window() {
   TwiDeafState s;
+  TEST_ASSERT_EQUAL_UINT32(1000 + TWI_HEAL_HOLD_MS, firstFire(s, 1000, 5000, true));
+}
+
+static void test_bad_samples_either_side_of_a_blocking_move_do_not_add_up() {
+  // A transient caught just before a multi-second move and again just after
+  // it: nothing was sampled in between, so the window restarts.
+  TwiDeafState s;
   TEST_ASSERT_FALSE(twiDeafShouldReset(s, false, true, 1000));
-  TEST_ASSERT_FALSE(
-      twiDeafShouldReset(s, false, true, 1000 + TWI_HEAL_HOLD_MS - 1));
-  TEST_ASSERT_TRUE(twiDeafShouldReset(s, false, true, 1000 + TWI_HEAL_HOLD_MS));
+  TEST_ASSERT_FALSE(twiDeafShouldReset(s, false, true, 4000));
+  TEST_ASSERT_FALSE(twiDeafShouldReset(s, false, true, 4001));
+  // Still bad and now sampled densely: fires one hold window after the gap.
+  TEST_ASSERT_EQUAL_UINT32(4000 + TWI_HEAL_HOLD_MS, firstFire(s, 4002, 9000, true));
 }
 
 static void test_deaf_reset_waits_for_free_lines() {
-  // Bus traffic to other units must not restart the window, only defer the
-  // reset to an instant with both lines high.
+  // A low line must not restart the window, only defer the reset.
   TwiDeafState s;
-  TEST_ASSERT_FALSE(twiDeafShouldReset(s, false, false, 0));
-  TEST_ASSERT_FALSE(twiDeafShouldReset(s, false, false, TWI_HEAL_HOLD_MS));
-  TEST_ASSERT_FALSE(twiDeafShouldReset(s, false, false, TWI_HEAL_HOLD_MS + 5));
+  TEST_ASSERT_EQUAL_UINT32(0xFFFFFFFFUL,
+                           firstFire(s, 0, TWI_HEAL_HOLD_MS + 5, false));
   TEST_ASSERT_TRUE(twiDeafShouldReset(s, false, true, TWI_HEAL_HOLD_MS + 6));
 }
 
 static void test_deaf_cooldown_and_count() {
   TwiDeafState s;
-  twiDeafShouldReset(s, false, true, 0);
-  TEST_ASSERT_TRUE(twiDeafShouldReset(s, false, true, TWI_HEAL_HOLD_MS));
-  twiDeafNoteReset(s, TWI_HEAL_HOLD_MS);
+  uint32_t t0 = firstFire(s, 0, 1000, true);
+  TEST_ASSERT_EQUAL_UINT32(TWI_HEAL_HOLD_MS, t0);
+  twiDeafNoteReset(s, t0);
   TEST_ASSERT_EQUAL_UINT8(1, s.resets);
   // A re-init that did not stick: the cooldown bounds the retry rate.
-  uint32_t t0 = TWI_HEAL_HOLD_MS;
-  bool fired = false;
-  for (uint32_t k = 1; k < TWI_HEAL_COOLDOWN_MS; k++) {
-    fired |= twiDeafShouldReset(s, false, true, t0 + k);
-  }
-  TEST_ASSERT_FALSE(fired);
-  TEST_ASSERT_TRUE(twiDeafShouldReset(s, false, true, t0 + TWI_HEAL_COOLDOWN_MS));
+  TEST_ASSERT_EQUAL_UINT32(t0 + TWI_HEAL_COOLDOWN_MS,
+                           firstFire(s, t0 + 1, t0 + 5000, true));
 }
 
 static void test_deaf_count_saturates() {
@@ -176,6 +187,7 @@ int main(int, char**) {
   RUN_TEST(test_intact_config_never_resets);
   RUN_TEST(test_transient_bad_config_never_resets);
   RUN_TEST(test_bad_config_resets_after_hold_window);
+  RUN_TEST(test_bad_samples_either_side_of_a_blocking_move_do_not_add_up);
   RUN_TEST(test_deaf_reset_waits_for_free_lines);
   RUN_TEST(test_deaf_cooldown_and_count);
   RUN_TEST(test_deaf_count_saturates);

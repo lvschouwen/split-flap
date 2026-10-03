@@ -26,11 +26,14 @@
 // and one that reads EXT_DIAG_LINK_REPLY_LEN gets both, each with its own
 // checksum.
 //   11..14 uptimeSeconds  u32 LE  seconds since boot (GET_STATUS's u16
-//                                 saturates at 18 h 12 min)
+//                                 saturates at 18 h 12 min); lags by the
+//                                 length of a blocking move
 //   15..16 rxFrames       u16 LE  master writes this unit received since boot,
 //                                 wrapping — a delta of 0 across a window in
 //                                 which the master wrote means the unit was deaf
-//   17..18 txReplies      u16 LE  master reads this unit answered, wrapping
+//   17..18 txReplies      u16 LE  master reads this unit answered, wrapping;
+//                                 counts the read carrying this packet. Both
+//                                 counters are sampled as the reply is sent
 //   19     deafHeals      u8      TWI register self-check re-inits since boot
 //                                 (UnitTwiHeal.h), saturating
 //   20     checksum       u8      XOR of 11..19 ^ EXT_DIAG_LINK_CHECKSUM_MASK

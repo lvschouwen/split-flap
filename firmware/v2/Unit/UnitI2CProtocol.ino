@@ -26,17 +26,18 @@ void receiveLetter(int numBytes) {
   // First byte >= AMOUNTFLAPS is a command opcode, not a letter index.
   if (firstByte >= AMOUNTFLAPS) {
     uint8_t opcode = (uint8_t)firstByte;
+    // #512. The gate byte is written by loop() in a single store — safe to
+    // read here.
+    bool strict = unitGateEnabled(lifetime.featureGates, UNIT_GATE_STRICT_OPCODES);
     if (sfpIsNoArgMutation(opcode)) {
-      // #512: these carry no payload, so the guard byte is the only thing that
-      // tells a real command from a corrupted letter or poll. The gate byte is
-      // written by loop() in a single store — safe to read here.
+      // These carry no payload, so the guard byte is the only thing that tells
+      // a real command from a corrupted letter or poll.
       uint8_t extraLen = (remaining > 0xFF) ? 0xFF : (uint8_t)remaining;
       uint8_t guard = 0;
       if (remaining > 0) {
         guard = (uint8_t)Wire.read();
         remaining--;
       }
-      bool strict = unitGateEnabled(lifetime.featureGates, UNIT_GATE_STRICT_OPCODES);
       if (!noArgMutationAccepted(opcode, extraLen, guard, strict)) {
         if (badCommandCount < 0xFF) badCommandCount++;
         while (remaining-- > 0) Wire.read();
@@ -118,14 +119,21 @@ void receiveLetter(int numBytes) {
           badCommandCount++;
         }
         break;
-      case SFP_CMD_JOG:
-        if (remaining >= 1) {
-          pendingJogSteps = (int8_t)Wire.read();
+      case SFP_CMD_JOG: {
+        uint8_t extraLen = (remaining > 0xFF) ? 0xFF : (uint8_t)remaining;
+        uint8_t pay[JOG_PAYLOAD_LEN] = {0, 0};
+        for (uint8_t k = 0; k < JOG_PAYLOAD_LEN && remaining > 0; k++) {
+          pay[k] = (uint8_t)Wire.read();
           remaining--;
+        }
+        int8_t steps = 0;
+        if (jogDecode(pay, extraLen, strict, steps)) {
+          pendingJogSteps = steps;
         } else if (badCommandCount < 0xFF) {
           badCommandCount++;
         }
         break;
+      }
       case SFP_CMD_HOME:
         pendingHome = true;
         break;
@@ -285,11 +293,20 @@ void requestEvent() {
     return;
   }
   if (reply == REPLY_EXT_DIAG) {
-    // 11-byte base packet (#365) + 10-byte link extension (#502), pre-encoded
-    // by refreshExtDiagReply() under noInterrupts() — stream verbatim. A master
-    // that reads only the base length NACKs after byte 10 and never sees the
-    // extension.
-    Wire.write((const uint8_t*)extDiagReplyBuf, EXT_DIAG_LINK_REPLY_LEN);
+    // 11-byte base packet (#365), pre-encoded by refreshExtDiagReply() under
+    // noInterrupts(), followed by the 10-byte link extension (#502). The
+    // extension is encoded here, not in loop(): its frame counters must keep
+    // moving while a blocking move holds loop(), or a busy unit reads as a deaf
+    // one. A master that reads only the base length NACKs after byte 10.
+    uint8_t buf[EXT_DIAG_LINK_REPLY_LEN];
+    for (uint8_t i = 0; i < EXT_DIAG_REPLY_LEN; i++) buf[i] = extDiagReplyBuf[i];
+    UnitLinkStats link;
+    link.uptimeSeconds = uptimeSecondsFull;
+    link.rxFrames      = linkRxFrames;
+    link.txReplies     = linkTxReplies;
+    link.deafHeals     = twiDeaf.resets;
+    extDiagLinkEncode(link, buf + EXT_DIAG_REPLY_LEN);
+    Wire.write(buf, EXT_DIAG_LINK_REPLY_LEN);
     return;
   }
   if (reply == REPLY_LIFETIME) {
@@ -377,6 +394,7 @@ void twiHealTick() {
   // TWEN off; writing TWINT=1 also clears a stale flag that would otherwise
   // vector a bogus ISR the moment Wire.begin() re-enables TWIE.
   TWCR = _BV(TWINT);
+  pendingReply = REPLY_NONE;  // whatever was asked for died with the transfer
   delayMicroseconds(20);
   bool releasedByUs = (PINC & lines) == lines;
   Wire.begin(i2cAddress);
@@ -386,9 +404,9 @@ void twiHealTick() {
 
 //Deaf-slave check (#502, policy in UnitTwiHeal.h). Compares TWCR/TWAR against
 //what a listening slave needs; a config that stays wrong past the hold window
-//gets the same TWEN-off -> Wire.begin() re-init as the heal above, at an
-//instant when both lines are free. PINC still reads the line levels if TWEN
-//was lost: the pins fall back to inputs with twi_init()'s pull-ups.
+//gets the same TWEN-off -> Wire.begin() re-init as the heal above, deferred
+//while a line reads low. PINC still reads the line levels if TWEN was lost:
+//the pins fall back to inputs with twi_init()'s pull-ups.
 static_assert(TWI_LISTEN_TWCR_MASK == (_BV(TWEA) | _BV(TWEN) | _BV(TWIE)),
               "UnitTwiHeal.h TWCR mask does not match the AVR bit positions");
 static_assert(TWI_LISTEN_TWAR_GCE == _BV(TWGCE),
@@ -400,6 +418,7 @@ void twiDeafTick() {
   bool intact = twiListenConfigIntact(TWCR, TWAR, (uint8_t)i2cAddress);
   if (!twiDeafShouldReset(twiDeaf, intact, linesFree, now)) return;
   TWCR = _BV(TWINT);  // TWEN off, stale flag cleared — see twiHealTick()
+  pendingReply = REPLY_NONE;
   Wire.begin(i2cAddress);
   TWAR |= (1 << TWGCE);
   twiDeafNoteReset(twiDeaf, now);
