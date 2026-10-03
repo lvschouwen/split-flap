@@ -1,7 +1,8 @@
 # In-system twiboot update over I2C (#499)
 
-Status: design approved in chat 2026-10-02; implementation pending.
-Stage 1 (boot-section dump, #511) already shipped.
+Status: design approved in chat 2026-10-02. Unit side implemented and
+simavr-proven (`firmware/v2/Unit/BootUpdateAvr.h`, `UnitBootloader/sim/`);
+master drivers pending. Stage 1 (boot-section dump, #511) already shipped.
 
 ## Goal
 
@@ -37,8 +38,12 @@ first, then the ESP-01 row, once the mechanism is proven.
 ## Why it is safe to attempt
 
 The only moment a unit can be bricked is while a page that is on the reset /
-execution path is mid-write and power is lost. The design shrinks that window to
-two ~9 ms page-0 writes per unit and makes everything else resumable:
+execution path is mid-write and power is lost. Reset always enters 0x7C00
+(BOOTRST), so that page is boot page 0: from the start of its erase until its
+write completes it is blank, and a reset then executes erased flash. Stage 2
+rewrites page 0 twice (trampoline, then the real page), so there are exactly
+two such windows per update, each one erase+write (~9 ms). Everything else is
+resumable:
 
 1. SPM executes only from the boot section. The application cannot write flash
    directly; it must transfer control to code in the boot section.
@@ -48,9 +53,11 @@ two ~9 ms page-0 writes per unit and makes everything else resumable:
    wall, at zero risk.
 3. **Stage 2** uses that `do_spm` (now a normal callable routine) to rewrite
    pages 0–6. It writes a one-instruction trampoline into page 0 first, then
-   pages 1–6 with read-back verify, then the real page 0 last. A reset or power
-   loss between the trampoline and the final page-0 write boots the (still
-   intact) application, which detects the half-done state and resumes.
+   pages 1–6, verifying each by read-back, and writes the real page 0 only
+   once pages 1–7 all match the target. A reset or power loss after the
+   trampoline write completes and before the final page-0 erase starts boots
+   the (still intact) application, which detects the half-done state and
+   resumes. The simavr kill sweep confirms the windows are exactly these two.
 
 ## Stage 1 mechanism — drive twiboot's own write handler (proven)
 
@@ -75,17 +82,18 @@ once instead of fighting it:
    (`0x7e52`, `brcc` away if pagestart ≥ `0x7C00`). twiboot then erases page 7,
    fills it from `buf[]`, writes it, re-enables RWW, and `rjmp`s to its **idle
    main loop** (`0x7e12`→`0x7d02`) — no crash.
-4. A **relaxed** Timer1 compare IRQ (armed before the jump, set to fire well
-   after the ~8 ms of erase+write while twiboot idles) vectors into the
-   application's naked ISR, which pops twiboot's return address off the stack
-   and resumes the updater. No tight timing: control returns from a benign idle
-   loop, not from a race against twiboot's active code.
-
-Because the whole page-7 write rides twiboot's halting NRWW erase+write, the
-return timing has a wide margin. simavr does not model the NRWW halt duration,
-so the exact timer value is a computed margin (datasheet erase+write ≈ 8 ms →
-fire at ~50 ms), not a sim-validated constant; the control *flow* is what the
-sim proves (`PAGE7 128/128`).
+4. Control does **not** return to the running sketch: twiboot's `buf[]` and
+   globals overlay the application's `.data`/`.bss`, so its RAM is gone. The
+   updater disables interrupts and TWI *before* seeding (an ISR would run on, or
+   write into, the seeded bytes; an ISR between twiboot's `sts SPMCSR` and
+   `spm` voids the SPM), arms the watchdog at 250 ms, and jumps. twiboot then
+   leaves its idle loop one of two ways: the watchdog reset, or — if the
+   overlaid application byte at its command address `0x019D` happens to read
+   `0x21` — an immediate jump to the application. Its timeout countdown cannot
+   exit, because expiry stores `r10` as the command and the updater zeroes
+   `r10`. Either way the application starts from its reset vector, and the
+   outcome is read as boot-section state `Page7Installed`, not as a RAM result
+   code. All three cases are exercised in simavr.
 
 Stage 2 does **not** use any of this: `do_spm` in page 7 is a normal callable
 boot-section routine ending in `ret`, so the sketch rewrites pages 0–6 with
@@ -101,9 +109,11 @@ Built from the vendored `main.c` + a small patch; delivered as a second
 prebuilt hex plus a generated PROGMEM header for the unit firmware.
 
 - **`do_spm` in page 7** at a fixed address, optiboot-style calling convention
-  (`r24:r25` = address, `SPMCSR` action in a register, `r0:r1` = data word for
-  fill), plus a 2-byte ABI/generation marker at `0x7FFE` so future firmware can
-  identify the bootloader generation it runs under.
+  (`r24:r25` = address, `r22` = `SPMCSR` action, `r20:r21` = data word for
+  fill; caller holds interrupts off; `UnitBootloader/do_spm.S`), plus a 2-byte
+  ABI/generation marker at `0x7FFE` (version byte `0x01`, then its complement:
+  `01 fe`) so future firmware can identify the bootloader generation it runs
+  under.
 - **MCUSR stash:** `.init3` copies `MCUSR` into `GPIOR0` before clearing it, so
   the sketch can finally read the reset cause (today twiboot clears it — see
   #502 item 6, which this partly addresses).
@@ -113,7 +123,7 @@ prebuilt hex plus a generated PROGMEM header for the unit firmware.
   reflash batch gap, not an invented number.
 - **EEPROM access removed** (the master never uses twiboot's EEPROM path) to
   buy space. Measured budget with avr-gcc 7.3.0: EEPROM off = 728 B text,
-  EEPROM+LED off = 694 B. Target image ≈ 790 B in pages 0–6 (896 B available),
+  EEPROM+LED off = 694 B. Built image: 778 B in pages 0–6 (896 B available),
   leaving headroom; `do_spm` lives in page 7.
 - **Unchanged:** flash *write* stays bounded to the application section; flash
   *read* stays unbounded so `boot-dump` keeps working.
@@ -142,19 +152,38 @@ Deferred to `loop()` via a `pending*` flag like every other mutation; refused
 while the drum is moving or not homed.
 
 - **Stage 1** allowed only from `Old` with lock bits permitting boot writes.
-  Writes `do_spm` into page 7 by driving twiboot's write handler, re-verifies page
-  7 by read-back, records the result, and continues running. Brick-free.
-- **Stage 2** allowed only from `Page7Installed` or `Trampoline`. Writes the
-  page-0 trampoline (`jmp 0` to the application), then pages 1–6 with per-page
-  read-back verify, then the real page 0, then verifies the whole-section CRC
-  against the target and resets into the new bootloader.
+  Writes `do_spm` into page 7 by driving twiboot's write handler, then the unit
+  restarts (above). Success = state `Page7Installed` on the next
+  `GET_BOOT_INFO`. The unit comes back unhomed (staggered boot-home, #309) and
+  stage 2 is refused `REFUSED_BUSY` until the master homes it. Brick-free: a half-done stage 1 keeps the fielded pages 0–6
+  and classifies `Old`, so it is simply retried.
+- **Stage 2** allowed only from `Page7Installed` or `Trampoline`, and only when
+  page 7 is byte-identical to the target `do_spm` page (`Trampoline` is keyed on
+  page 0 alone, so it does not imply this). Interrupts off and TWI disabled
+  (bus NACKs) for the ~80 ms; TWI is re-initialised afterwards. Any EEPROM
+  write still in progress is drained first (both stages, and before lock/fuse
+  reads): it silently blocks SPM, and one ending between a page-0 erase and
+  its write would program an unerased page 0. Order:
+  1. page 0 → trampoline (`jmp 0` to the application), skipped when it already
+     is one, then read back; a page-0 write that does not verify is retried
+     (3 attempts) while the application is still alive to repair it;
+  2. pages 1–6 → target, skipping pages that already match, each read back;
+     the first mismatch stops with the trampoline in place (resumable);
+  3. only when pages 1–7 all match: page 0 → target, read back. If it does not
+     match, the trampoline is written back — the only page 0 a reset can boot;
+  4. whole-section CRC must classify `New` → `STAGE2_OK`, else `VERIFY_FAILED`.
+  No reset afterwards: the sketch at 0x0000 is untouched, so the master reads
+  the result via `GET_BOOT_INFO` and then issues `REBOOT`. Masters key on the
+  **state**; the result byte only explains it (a resent stage 2 on a unit
+  already New is refused but does not overwrite `STAGE2_OK`).
 - **Auto-resume:** a unit that boots and classifies as `Trampoline` runs stage
-  2 once unprompted — it has no working bootloader until stage 2 finishes, so
-  it must not wait for a command.
+  2 once unprompted, from `setup()` before `Wire.begin()` — it has no working
+  bootloader until stage 2 finishes, so it must not wait for a command. A
+  resume adds no page-0 window (the trampoline is already there).
 
 The updater and the embedded target image stay in the unit firmware afterwards
-(~1.6 KB; unit firmware uses 14.2 KB of 30.7 KB today) as the routine path for
-future bootloader updates.
+(unit firmware is 16.9 KB of 30.7 KB with them) as the routine path for future
+bootloader updates.
 
 ## Masters (S3 **and** ESP-01 follower)
 
@@ -170,8 +199,10 @@ two web routes.
 - **`POST /unit/boot-update?address=N&stage=1|2`** and **`POST
   /unit/boot-info?address=N`** / result reads, on the existing `{"seq":N}`
   op-result contract.
-- Arms the probe-inhibit deadline after stage 2 (as `/unit/reboot` and the
-  address burns do).
+- Arms the probe-inhibit deadline after **both** stages (as `/unit/reboot` and
+  the address burns do): stage 1 restarts the unit, and stage 2 is followed by
+  a `REBOOT`. After stage 1 the result is the re-polled `GET_BOOT_INFO` state,
+  not the result byte (it does not survive the restart).
 - **Reflash-order change (load-bearing):** the normal unit reflash job writes
   application page 0 **last** (blank it first). An interrupted reflash then
   leaves word 0 blank, so both the old and the new twiboot stay in the
@@ -193,7 +224,8 @@ were never dumped (#511).
 1. OTA the master, then an ordinary unit reflash campaign carrying the report +
    updater (no EEPROM-layout bump, so it is a cheap reflash).
 2. `GET_BOOT_INFO` on all 16 units; confirm `Old` and lock bits open.
-3. Stage 1 on all 16; confirm `Page7Installed` by read-back.
+3. Stage 1 on all 16; confirm `Page7Installed` by read-back, then home each
+   unit (it restarts unhomed and stage 2 is refused until it is homed).
 4. Stage 2 on **one** unit, then accept it three ways: `boot-dump` CRC through
    the new twiboot, a full application reflash through it, and the unit homing
    afterwards.
@@ -211,19 +243,26 @@ were never dumped (#511).
 - **Generated-header gate** (pytest): the PROGMEM target image header matches
   the prebuilt hex.
 - **simavr** (installed on the build host), standing in for the declined
-  spare-Nano bench stage: run the real updater against the real fielded image,
-  including a kill mid-stage-2 and a resume, and diff the resulting boot section
-  against the target. It does not model SPM timing or lock bits, but it
-  exercises the register setup, addresses and page ordering — where a defect
-  would actually live.
+  spare-Nano bench stage: `UnitBootloader/sim/prove.sh` compiles the unit's own
+  `BootUpdateAvr.h` into a test app and runs the whole update from the real
+  fielded image, a power-loss + reset before every one of its 603 flash
+  operations (each must recover by itself to the byte-exact target, except the
+  130 points inside the two page-0 windows), verify failures on a middle page
+  and on the final page 0, a missing `do_spm`, and an idempotent resume. Every
+  guard is proven by breaking it. It does not model SPM duration, lock bits or
+  other ISRs, but it exercises the register setup, addresses and page ordering
+  — where a defect would actually live.
 - **Review:** `cpp-reviewer` on the unit updater and the master reflash-order
   change (OTA/flash/concurrency surface).
 
 ## Risks and non-goals
 
-- A power loss during either page-0 write (~9 ms each, twice per unit) bricks
-  that unit until ICSP. This is the irreducible window; everything else is
-  resumable.
+- A power loss during either page-0 write (erase start to write end, ~9 ms
+  each, twice per update) bricks that unit until ICSP. A failed final page-0
+  read-back adds a third (the trampoline restore), which is still better than
+  leaving an unverified page 0 for the next reset. Everything else is
+  resumable. No brown-out handling is added: a slow supply collapse during a
+  window is the same loss.
 - Lock bits are unknown until the new unit firmware reports them. A locked unit
   is refused and stays on the old twiboot.
 - The ESP-01 row is in scope for this arc (both masters must drive the update).

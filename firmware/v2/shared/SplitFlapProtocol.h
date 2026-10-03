@@ -129,6 +129,15 @@
                                          //     in UnitLifetime.h, #406/#407).
                                          //     GET_EXT_DIAG's since-boot twin:
                                          //     this is what survives a reboot.
+#define SFP_CMD_GET_BOOT_INFO      0x8B  // reply: 11 bytes — lock byte, 3 fuse
+                                         //     bytes, boot-section CRC32 LE,
+                                         //     classified boot-section state,
+                                         //     last update result + XOR checksum
+                                         //     ^ 0x5A (wire format in
+                                         //     BootUpdateReport.h, #499). Lets a
+                                         //     master see each unit's bootloader
+                                         //     generation + whether a twiboot
+                                         //     update is safe. Closes #502 item 8.
 
 // --- 0x9X mutations ---
 // All mutation opcodes defer heavy work (EEPROM write, motor moves, WDT reset)
@@ -157,6 +166,17 @@
                                          //     switched on over the wire, so enabling
                                          //     one costs no second reflash. Verify by
                                          //     reading GET_LIFETIME back.
+#define SFP_CMD_BOOT_UPDATE        0x9A  // +2 bytes: stage (1 or 2) + ~stage.
+                                         //     In-system twiboot update (#499),
+                                         //     deferred to loop() like every
+                                         //     mutation and refused unless the
+                                         //     drum is homed and idle. Stage 1
+                                         //     installs do_spm into twiboot's
+                                         //     empty page 7 (brick-free); stage 2
+                                         //     rewrites pages 0-6 with the new
+                                         //     bootloader (page 0 last). Result
+                                         //     and state read back via
+                                         //     GET_BOOT_INFO.
 
 // Feature-gate bits a master may SET_GATES, i.e. the ones some unit firmware
 // actually implements. Mirrors the unit's UNIT_GATE_* (Unit/UnitEeprom.h),

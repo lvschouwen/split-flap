@@ -62,6 +62,9 @@ void receiveLetter(int numBytes) {
       case SFP_CMD_GET_LIFETIME:
         pendingLifetimeResponse = true;
         break;
+      case SFP_CMD_GET_BOOT_INFO:
+        pendingBootInfoResponse = true;  // #499; cached reply streamed by requestEvent
+        break;
       case SFP_CMD_START_SELF_TEST:
         pendingSelfTest = true;
         break;
@@ -152,6 +155,24 @@ void receiveLetter(int numBytes) {
               unitGateBitsKnown(requestedGates)) {
             pendingGatesValue = requestedGates;
             pendingGatesWrite = true;
+          } else if (badCommandCount < 0xFF) {
+            badCommandCount++;
+          }
+        } else if (badCommandCount < 0xFF) {
+          badCommandCount++;
+        }
+        break;
+      case SFP_CMD_BOOT_UPDATE:
+        // In-system twiboot update (#499). 2-byte payload: stage + ~stage
+        // (#405 complement discipline — this mutation rewrites the bootloader,
+        // so a corrupted stage byte must never be acted on). loop() runs it.
+        if (remaining >= 2) {
+          uint8_t stage = (uint8_t)Wire.read();
+          uint8_t comp = (uint8_t)Wire.read();
+          remaining -= 2;
+          if ((uint8_t)(stage ^ comp) == 0xFF && (stage == 1 || stage == 2)) {
+            pendingBootUpdateStage = stage;
+            pendingBootUpdate = true;
           } else if (badCommandCount < 0xFF) {
             badCommandCount++;
           }
@@ -260,6 +281,15 @@ void requestEvent() {
     // handle a stray probe hitting the unknown opcode.
     Wire.write((const uint8_t*)lifetimeReplyBuf, LIFETIME_REPLY_LEN);
     pendingLifetimeResponse = false;
+    return;
+  }
+  if (pendingBootInfoResponse) {
+    // 11 bytes (#499), cached by refreshBootInfoReply() at boot + after each
+    // update — streamed verbatim. A master predating the opcode never sends it;
+    // the masked checksum + range checks on the master side reject a stray probe
+    // hitting the unknown opcode.
+    Wire.write((const uint8_t*)bootInfoReplyBuf, BOOT_INFO_REPLY_LEN);
+    pendingBootInfoResponse = false;
     return;
   }
   if (pendingStatusResponse) {
