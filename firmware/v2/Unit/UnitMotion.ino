@@ -482,10 +482,18 @@ void refreshExtDiagReply() {
   d.hallEdgesLastRev = extHallEdgesLastRev;
   d.dutyWindow       = extDutyWindow;
   d.statusBits       = extDiagWithTwiHeal(extStatusBits, twiHeal.selfResets);
-  uint8_t buf[EXT_DIAG_REPLY_LEN];
-  extDiagEncodeReply(d, buf);
+  UnitLinkStats link;
   noInterrupts();
-  for (uint8_t i = 0; i < EXT_DIAG_REPLY_LEN; i++) extDiagReplyBuf[i] = buf[i];
+  link.rxFrames  = linkRxFrames;
+  link.txReplies = linkTxReplies;
+  interrupts();
+  link.uptimeSeconds = uptimeSecondsFull;
+  link.deafHeals     = twiDeaf.resets;
+  uint8_t buf[EXT_DIAG_LINK_REPLY_LEN];
+  extDiagEncodeReply(d, buf);
+  extDiagLinkEncode(link, buf + EXT_DIAG_REPLY_LEN);
+  noInterrupts();
+  for (uint8_t i = 0; i < EXT_DIAG_LINK_REPLY_LEN; i++) extDiagReplyBuf[i] = buf[i];
   interrupts();
 }
 
