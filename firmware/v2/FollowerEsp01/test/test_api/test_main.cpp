@@ -155,6 +155,7 @@ static size_t worstCaseFitsFor(int width) {
     units[i].lastSeenMs = 0;
     // i2cErrors/lastErrorMs stay 0 — FollowerBus.cpp never populates them.
     units[i].extDiagValid = true;
+    units[i].rescueExits = 65535;  // #498: set by the follower's lost-unit rescue
     units[i].extDiag.stepExcessLast = 0xFFFF;
     units[i].extDiag.stepExcessMax = 0xFFFF;
     units[i].extDiag.vccSagLastMove = 0xFFFF;

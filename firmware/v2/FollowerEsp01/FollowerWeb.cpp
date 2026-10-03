@@ -77,6 +77,14 @@ static bool otaTxPowerReduced = false;
 
 // #294 rung 3 CORS: per-response reflection (the ESP8266 async fork has no
 // middleware). Simple requests only — no preflight handler needed.
+// operator new aborts on this core when the heap cannot serve it — the board
+// resets instead of answering. A handler about to make a large allocation asks
+// first and answers 503; the margin covers the web library's send buffer and
+// response objects on top of the block itself.
+static bool heapCanHold(size_t bytes) {
+  return ESP.getMaxFreeBlockSize() >= bytes + 1536;
+}
+
 // For replies that are not built from a String (flash content, streamed or
 // callback-filled bodies): the same CORS decision, then send.
 static void sendResponseWithCors(AsyncWebServerRequest* request,
@@ -481,8 +489,13 @@ void webEndpointsInit(AsyncWebServer& server) {
     // One copy, ring -> response buffer (#519). The cursor line comes first;
     // the next cursor is the ring's write cursor, known before reading.
     const FollowerLogRing& ring = followerLogRing();
+    const size_t streamBytes = ring.countSince(after) + 16;
+    if (!heapCanHold(streamBytes)) {
+      sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
+      return;
+    }
     AsyncResponseStream* response =
-        request->beginResponseStream("text/plain", ring.countSince(after) + 16);
+        request->beginResponseStream("text/plain", streamBytes);
     response->print(ring.written);
     response->print('\n');
     ring.readSinceInto(after, [response](const char* data, size_t len) {
@@ -791,6 +804,10 @@ void webEndpointsInit(AsyncWebServer& server) {
     // that is 1.6 KB on a 5-unit row. The callback response reads straight
     // from the buffer, so there is no second copy.
     const size_t cap = followerHealthBufCap(displayWidth, UNITS_AMOUNT);
+    if (!heapCanHold(cap)) {
+      sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
+      return;
+    }
     std::shared_ptr<char> held(new (std::nothrow) char[cap],
                                std::default_delete<char[]>());
     char* buf = held.get();

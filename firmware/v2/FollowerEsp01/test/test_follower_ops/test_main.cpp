@@ -244,7 +244,7 @@ static void test_boot_reasons_have_distinct_names() {
       MaintReason::BootInfoReadFail, MaintReason::BootStateUnknown,
       MaintReason::BootLockRefused,  MaintReason::BootUnitLost,
       MaintReason::BootVerifyFailed, MaintReason::BootAlreadyNew,
-      MaintReason::BootUnitBusy};
+      MaintReason::BootUnitBusy,     MaintReason::BootNotStarted};
   const int n = (int)(sizeof(reasons) / sizeof(reasons[0]));
   for (int i = 0; i < n; i++) {
     TEST_ASSERT_TRUE(strlen(maintReasonName(reasons[i])) > 5);
@@ -253,6 +253,21 @@ static void test_boot_reasons_have_distinct_names() {
                               maintReasonName(reasons[j])) != 0);
     }
   }
+}
+
+// #516: the unit's own failure names the reason; when it reported none, the
+// caller's fallback is used — never a guess.
+static void test_boot_failure_maps_to_its_own_reason() {
+  const MaintReason fb = MaintReason::BootNotStarted;
+  TEST_ASSERT_TRUE(maintReasonForBootFailure(BOOT_FAIL_BUSY, fb) == MaintReason::BootUnitBusy);
+  TEST_ASSERT_TRUE(maintReasonForBootFailure(BOOT_FAIL_LOCK, fb) == MaintReason::BootLockRefused);
+  TEST_ASSERT_TRUE(maintReasonForBootFailure(BOOT_FAIL_STATE, fb) == MaintReason::BootStateUnknown);
+  TEST_ASSERT_TRUE(maintReasonForBootFailure(BOOT_FAIL_VERIFY, fb) == MaintReason::BootVerifyFailed);
+  TEST_ASSERT_TRUE(maintReasonForBootFailure(BOOT_FAIL_NONE, fb) == MaintReason::BootNotStarted);
+  TEST_ASSERT_TRUE(maintReasonForBootFailure(BOOT_FAIL_NONE, MaintReason::BootVerifyFailed) ==
+                   MaintReason::BootVerifyFailed);
+  TEST_ASSERT_EQUAL_STRING("boot-not-started",
+                           maintReasonName(MaintReason::BootNotStarted));
 }
 
 int main(int, char**) {
@@ -273,5 +288,6 @@ int main(int, char**) {
   RUN_TEST(test_reflash_address_parses_decimal_only);
   RUN_TEST(test_op_result_ok_carries_its_reason);
   RUN_TEST(test_boot_reasons_have_distinct_names);
+  RUN_TEST(test_boot_failure_maps_to_its_own_reason);
   return UNITY_END();
 }

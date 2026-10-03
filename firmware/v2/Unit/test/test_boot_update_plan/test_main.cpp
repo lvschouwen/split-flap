@@ -159,6 +159,61 @@ static void test_stage2_poll_waits_while_nothing_is_conclusive() {
                                    BOOT_RESULT_NONE));
 }
 
+// --- did stage 1 start? (#516) ---
+
+// Runs the helper against a scripted series of report reads (true = a valid
+// report came back) and records the pauses it asked for.
+struct StartScript {
+  const bool* reads;
+  int count;
+  int used = 0;
+  int pauses[8];
+  int pauseCount = 0;
+};
+
+static bool runStart(StartScript& s) {
+  return bootStage1WentOffBus(
+      [&]() {
+        TEST_ASSERT_TRUE_MESSAGE(s.used < s.count, "more reads than scripted");
+        return s.reads[s.used++];
+      },
+      [&](uint16_t ms) { s.pauses[s.pauseCount++] = ms; });
+}
+
+static void test_a_unit_that_keeps_answering_never_started() {
+  const bool reads[] = {true, true};
+  StartScript s{reads, 2};
+  TEST_ASSERT_FALSE(runStart(s));
+  TEST_ASSERT_EQUAL_INT(2, s.used);
+  TEST_ASSERT_EQUAL_INT(200, s.pauses[0]);
+  TEST_ASSERT_EQUAL_INT(300, s.pauses[1]);
+}
+
+static void test_a_unit_off_the_bus_started() {
+  const bool reads[] = {false, false};  // probe, then its confirmation
+  StartScript s{reads, 2};
+  TEST_ASSERT_TRUE(runStart(s));
+  TEST_ASSERT_EQUAL_INT(2, s.used);
+  TEST_ASSERT_EQUAL_INT(200, s.pauses[0]);
+  TEST_ASSERT_EQUAL_INT(50, s.pauses[1]);
+}
+
+static void test_one_corrupted_reply_is_not_an_absence() {
+  // A refusing unit whose first reply is garbled: the confirmation read gets
+  // through, and so does the second probe.
+  const bool reads[] = {false, true, true};
+  StartScript s{reads, 3};
+  TEST_ASSERT_FALSE(runStart(s));
+  TEST_ASSERT_EQUAL_INT(3, s.used);
+}
+
+static void test_going_off_the_bus_at_the_second_probe_still_counts() {
+  const bool reads[] = {true, false, false};
+  StartScript s{reads, 3};
+  TEST_ASSERT_TRUE(runStart(s));
+  TEST_ASSERT_EQUAL_INT(3, s.used);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_new_exits_immediately);
@@ -176,5 +231,9 @@ int main(int, char**) {
   RUN_TEST(test_stage2_poll_fresh_failure_ends_the_poll);
   RUN_TEST(test_stage2_poll_ignores_a_result_that_was_there_before_the_send);
   RUN_TEST(test_stage2_poll_waits_while_nothing_is_conclusive);
+  RUN_TEST(test_a_unit_that_keeps_answering_never_started);
+  RUN_TEST(test_a_unit_off_the_bus_started);
+  RUN_TEST(test_one_corrupted_reply_is_not_an_absence);
+  RUN_TEST(test_going_off_the_bus_at_the_second_probe_still_counts);
   return UNITY_END();
 }

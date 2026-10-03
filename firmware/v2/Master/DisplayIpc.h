@@ -315,6 +315,8 @@ inline const char* maintReasonName(MaintReason r) {
       return "boot-already-new";
     case MaintReason::BootUnitBusy:
       return "boot-unit-busy";
+    case MaintReason::BootNotStarted:
+      return "boot-not-started";
     default:
       return "";
   }

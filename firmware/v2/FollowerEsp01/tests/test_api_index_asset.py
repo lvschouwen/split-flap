@@ -87,7 +87,8 @@ def test_no_handler_keeps_a_large_static_buffer():
 def test_health_reply_buffer_is_sized_for_the_row():
     health = _handler(_code("FollowerWeb.cpp"), "/units/health")
     assert "followerHealthBufCap(displayWidth, UNITS_AMOUNT)" in health
-    assert "std::nothrow" in health, "an allocation failure must answer, not crash"
+    # operator new aborts on this core, so the handler asks the heap first.
+    assert health.index("if (!heapCanHold(cap)) {") < health.index("new (std::nothrow) char[cap]")
     assert "503" in health
 
 
@@ -95,3 +96,5 @@ def test_log_is_streamed_from_the_ring():
     log = _handler(_code("FollowerWeb.cpp"), "/log")
     assert "readSinceInto(" in log and "beginResponseStream(" in log
     assert "String body" not in log and "String out" not in log
+    # The stream's buffer is a throwing allocation: ask first, answer 503.
+    assert log.index("if (!heapCanHold(streamBytes)) {") < log.index("beginResponseStream(")

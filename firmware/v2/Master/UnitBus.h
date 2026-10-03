@@ -143,7 +143,8 @@ UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
 // not-rotating (post-flash homing finished), or the timeout elapses —
 // bounds how many units draw homing current at once (v1 #138). Bus-safety
 // pacing: deliberately NOT abort-shortened.
-void unitBusWaitBatchIdle(const uint8_t* addrs, int count,
+// True when every unit reported idle inside the timeout; false on a timeout.
+bool unitBusWaitBatchIdle(const uint8_t* addrs, int count,
                           uint32_t timeoutMs);
 
 // Stop-abort signal (#204): the ONE cross-task entry into this module — an

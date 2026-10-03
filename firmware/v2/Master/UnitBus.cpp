@@ -1012,9 +1012,9 @@ const char* unitFlashResultName(UnitFlashResult r) {
   }
 }
 
-void unitBusWaitBatchIdle(const uint8_t* addrs, int count,
+bool unitBusWaitBatchIdle(const uint8_t* addrs, int count,
                           uint32_t timeoutMs) {
-  if (count <= 0) return;
+  if (count <= 0) return true;
   SerialPrintf("  waiting for %d unit(s) to come online + finish homing...\n",
                count);
   delay(1000);  // let CMD_REBOOT take effect before polling
@@ -1031,11 +1031,12 @@ void unitBusWaitBatchIdle(const uint8_t* addrs, int count,
     }
     if (allIdle) {
       SerialPrintln(F("  batch online + idle"));
-      return;
+      return true;
     }
     delay(100);
   }
   SerialPrintln(F("  batch settle timed out — continuing anyway"));
+  return false;
 }
 
 UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out) {

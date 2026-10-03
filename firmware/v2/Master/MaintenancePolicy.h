@@ -13,12 +13,13 @@
 // that the EEPROM write ACKed.
 
 #ifdef UNIT_TEST
-  #include <cstdint>
+#include <cstdint>
   #include <cstdlib>
 #else
   #include <Arduino.h>
 #endif
 
+#include "BootUpdatePlan.h"  // BootUpdateFailure (#516)
 #include "SplitFlapProtocol.h"
 #include "UnitHealth.h"
 
@@ -171,7 +172,22 @@ enum class MaintReason : uint8_t {
   BootVerifyFailed,         // boot state after update is not the expected one
   BootAlreadyNew,           // already on the new twiboot — nothing to do (Ok)
   BootUnitBusy,             // unit refused: drum moving or not homed
+  BootNotStarted,           // stage 1 was requested and the unit never left the
+                            // bus, without recording a refusal
 };
+
+// The reason for a failure the unit itself reported. BOOT_FAIL_NONE means it
+// reported none; the caller says what that amounts to at its point in the op.
+inline MaintReason maintReasonForBootFailure(BootUpdateFailure f,
+                                             MaintReason whenNone) {
+  switch (f) {
+    case BOOT_FAIL_BUSY:   return MaintReason::BootUnitBusy;
+    case BOOT_FAIL_LOCK:   return MaintReason::BootLockRefused;
+    case BOOT_FAIL_STATE:  return MaintReason::BootStateUnknown;
+    case BOOT_FAIL_VERIFY: return MaintReason::BootVerifyFailed;
+    default:               return whenNone;
+  }
+}
 
 // After SetAddress burn + settle + reprobe: the unit must answer in sketch
 // mode at its new address.

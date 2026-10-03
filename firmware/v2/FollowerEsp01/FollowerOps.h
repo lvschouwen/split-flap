@@ -16,6 +16,7 @@
   #include <Arduino.h>
 #endif
 
+#include "BootUpdatePlan.h"  // BootUpdateFailure (#516)
 #include "SplitFlapProtocol.h"
 #include "UnitHealth.h"
 #include "UnitSelfTest.h"  // SELFTEST_REASON_* + selfTestReasonName (#404)
@@ -142,7 +143,21 @@ enum class MaintReason : uint8_t {
   BootVerifyFailed,
   BootAlreadyNew,
   BootUnitBusy,  // unit refused: drum moving or not homed
+  BootNotStarted,  // stage 1 requested, unit never left the bus, no refusal
 };
+
+// The reason for a failure the unit itself reported. BOOT_FAIL_NONE means it
+// reported none; the caller says what that amounts to at its point in the op.
+inline MaintReason maintReasonForBootFailure(BootUpdateFailure f,
+                                             MaintReason whenNone) {
+  switch (f) {
+    case BOOT_FAIL_BUSY:   return MaintReason::BootUnitBusy;
+    case BOOT_FAIL_LOCK:   return MaintReason::BootLockRefused;
+    case BOOT_FAIL_STATE:  return MaintReason::BootStateUnknown;
+    case BOOT_FAIL_VERIFY: return MaintReason::BootVerifyFailed;
+    default:               return whenNone;
+  }
+}
 
 struct MaintResult {
   uint32_t seq = 0;
@@ -180,6 +195,8 @@ inline const char* maintReasonName(MaintReason r) {
       return "boot-already-new";
     case MaintReason::BootUnitBusy:
       return "boot-unit-busy";
+    case MaintReason::BootNotStarted:
+      return "boot-not-started";
     default:
       return "";
   }

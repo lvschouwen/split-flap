@@ -882,7 +882,8 @@ static void execBootInfo(DisplaySnapshot& local, const DisplayCommand& cmd) {
 // In-system twiboot update (#499). Reads boot info, decides which stages
 // (if any) the unit needs, drives them, and verifies. Stage 1 causes a WDT
 // reset (~250 ms) that passes through twiboot; stage 2 disables TWI for
-// ~100 ms while rewriting pages. Total wall time ≤ 25 s.
+// ~100 ms while rewriting pages. Typical wall time ~10 s; worst case with
+// every wait running to its timeout is about 47 s.
 static const uint32_t BOOT_UPDATE_RETURN_MS = 10000;
 static const uint32_t BOOT_UPDATE_HOME_MS = 20000;
 static const uint32_t BOOT_UPDATE_STAGE2_SETTLE_MS = 300;
@@ -890,20 +891,13 @@ static const uint32_t BOOT_UPDATE_STAGE2_POLL_MS = 5000;
 // A request sent mid-move is held by the unit until the move ends and would
 // then run behind this op's back, so the drum settles first.
 static const uint32_t BOOT_UPDATE_IDLE_MS = 8000;
-// An accepted stage 1 takes the unit off the bus within milliseconds and keeps
-// it off for over a second (page write, watchdog reset, bootloader window). A
-// unit that still answers at both of these points never started (#516).
-static const uint32_t BOOT_UPDATE_START_PROBE1_MS = 200;
-static const uint32_t BOOT_UPDATE_START_PROBE2_MS = 300;
-
-static MaintReason bootFailureReason(BootUpdateFailure f) {
-  switch (f) {
-    case BOOT_FAIL_BUSY:  return MaintReason::BootUnitBusy;
-    case BOOT_FAIL_LOCK:  return MaintReason::BootLockRefused;
-    case BOOT_FAIL_STATE: return MaintReason::BootStateUnknown;
-    default:              return MaintReason::BootVerifyFailed;
-  }
-}
+// The start probes below run inside the twiboot risk window this op arms. That
+// is safe only because a report request is not one of the first bytes the
+// bootloader pins itself on (0x00..0x02): it answers it by leaving for the
+// sketch.
+static_assert(SFP_CMD_GET_BOOT_INFO > 0x02,
+              "GET_BOOT_INFO would pin twiboot — the stage 1 start probes "
+              "would then hold a unit in its bootloader");
 
 static void execBootUpdate(DisplaySnapshot& local, UnitFacts* busFacts,
                            const DisplayCommand& cmd) {
@@ -939,7 +933,15 @@ static void execBootUpdate(DisplaySnapshot& local, UnitFacts* busFacts,
   }
 
   wdtFeed();
-  unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_IDLE_MS);
+  if (!unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_IDLE_MS)) {
+    // Still moving. The unit would hold a request sent now and run it after
+    // this op has reported, with nobody keeping the bus quiet around it.
+    SerialPrintf("display: boot-update unit 0x%02x still moving → %s\n", addr,
+                 maintReasonName(MaintReason::BootUnitBusy));
+    displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
+                            MaintReason::BootUnitBusy);
+    return;
+  }
   wdtFeed();
 
   // Stage 1: install do_spm into the empty page 7. The unit WDT-resets,
@@ -953,22 +955,21 @@ static void execBootUpdate(DisplaySnapshot& local, UnitFacts* busFacts,
     }
     displayInvalidateUnitReads(local, addr);
     armTwibootRiskWindow();
-    bool started = false;
-    const uint32_t probes[2] = {BOOT_UPDATE_START_PROBE1_MS,
-                                BOOT_UPDATE_START_PROBE2_MS};
-    for (uint32_t gap : probes) {
-      wdtFeed();
-      delay(gap);
-      BootUpdateReport still;
-      if (!unitBusReadBootInfo(addr, still)) {
-        started = true;
-        break;
-      }
-      info = still;
-    }
+    bool started = bootStage1WentOffBus(
+        [&]() {
+          BootUpdateReport still;
+          if (!unitBusReadBootInfo(addr, still)) return false;
+          info = still;
+          return true;
+        },
+        [](uint16_t ms) {
+          wdtFeed();
+          delay(ms);
+        });
     if (!started) {
       // Nothing moved and nothing was written: report what the unit said.
-      MaintReason why = bootFailureReason(bootResultFailure(info.lastResult));
+      MaintReason why = maintReasonForBootFailure(
+          bootResultFailure(info.lastResult), MaintReason::BootNotStarted);
       SerialPrintf("display: boot-update unit 0x%02x stage 1 not started → %s\n",
                    addr, maintReasonName(why));
       displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail, why);
@@ -1020,6 +1021,10 @@ static void execBootUpdate(DisplaySnapshot& local, UnitFacts* busFacts,
       if (!unitBusReadBootInfo(addr, info)) {
         SerialPrintf("display: boot-update unit 0x%02x lost before stage 2\n",
                      addr);
+        if (local.lastFrameValid) {
+          unitBusShowFrame(local.units, local.displayWidth,
+                           local.lastFrameLetters, lastFrameUnitSpeed);
+        }
         displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
                                 MaintReason::BootUnitLost);
         return;
@@ -1030,7 +1035,7 @@ static void execBootUpdate(DisplaySnapshot& local, UnitFacts* busFacts,
     if (unitBusBootUpdate(addr, 2) != 0) {
       displayApplyMaintResult(local, cmd, MaintOutcome::WireFail,
                               MaintReason::None);
-      if (plan.needStage1 && local.lastFrameValid) {
+      if (local.lastFrameValid) {  // both paths homed the unit by now
         unitBusShowFrame(local.units, local.displayWidth,
                          local.lastFrameLetters, lastFrameUnitSpeed);
       }
@@ -1054,7 +1059,8 @@ static void execBootUpdate(DisplaySnapshot& local, UnitFacts* busFacts,
       // No report at all is a lost unit, not a failed verify; otherwise the
       // unit's own result names the cause.
       MaintReason why =
-          anyRead ? bootFailureReason(bootResultFailure(info.lastResult))
+          anyRead ? maintReasonForBootFailure(bootResultFailure(info.lastResult),
+                                              MaintReason::BootVerifyFailed)
                   : MaintReason::BootUnitLost;
       if (anyRead) {
         SerialPrintf("display: boot-update unit 0x%02x stage 2 → %s "

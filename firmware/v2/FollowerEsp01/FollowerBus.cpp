@@ -1002,7 +1002,8 @@ static bool flashUnitFromProgmem(uint8_t i2cAddress) {
 }
 
 // Polls a just-flashed batch until online + homed (v1 #138 throttle).
-static void waitForBatchIdle(const uint8_t* addrs, int count,
+// True when every unit reported idle inside the timeout.
+static bool waitForBatchIdle(const uint8_t* addrs, int count,
                              uint32_t timeoutMs) {
   delay(1000);
   uint32_t start = millis();
@@ -1014,9 +1015,10 @@ static void waitForBatchIdle(const uint8_t* addrs, int count,
         break;
       }
     }
-    if (allIdle) return;
+    if (allIdle) return true;
     delay(100);
   }
+  return false;
 }
 
 // Staggered boot-home (#309): the units boot UNHOMED, so the follower homes
@@ -1181,14 +1183,13 @@ void busRunReflashJob(uint8_t onlyAddr) {
 #endif
 }
 
-static MaintReason bootFailureReason(BootUpdateFailure f) {
-  switch (f) {
-    case BOOT_FAIL_BUSY:  return MaintReason::BootUnitBusy;
-    case BOOT_FAIL_LOCK:  return MaintReason::BootLockRefused;
-    case BOOT_FAIL_STATE: return MaintReason::BootStateUnknown;
-    default:              return MaintReason::BootVerifyFailed;
-  }
-}
+// The start probes below run inside the probe-inhibit window this op arms.
+// That is safe only because a report request is not one of the first bytes the
+// bootloader pins itself on (0x00..0x02): it answers it by leaving for the
+// sketch.
+static_assert(SFP_CMD_GET_BOOT_INFO > 0x02,
+              "GET_BOOT_INFO would pin twiboot — the stage 1 start probes "
+              "would then hold a unit in its bootloader");
 
 void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result) {
 #if SERIAL_ENABLE == false
@@ -1215,31 +1216,31 @@ void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result) {
     return;
   }
   // A request sent mid-move is held by the unit until the move ends and would
-  // then run behind this op's back, so the drum settles first (#516).
-  waitForBatchIdle(&addr, 1, 8000);
+  // then run behind this op's back, so the drum settles first — and a drum
+  // that does not settle ends the op here (#516).
+  if (!waitForBatchIdle(&addr, 1, 8000)) {
+    result = {seq, MaintOutcome::PostconditionFail, MaintReason::BootUnitBusy};
+    return;
+  }
   if (plan.needStage1) {
     if (busBootUpdate(addr, 1) != 0) {
       result = {seq, MaintOutcome::WireFail, MaintReason::None};
       return;
     }
     busArmProbeInhibit(millis() + 3000);
-    // An accepted stage 1 takes the unit off the bus within milliseconds and
-    // keeps it off for over a second. A unit that still answers at +200 and
-    // +500 ms never started: report what it said.
-    bool started = false;
-    const uint16_t probes[2] = {200, 300};
-    for (uint16_t gap : probes) {
-      delay(gap);
-      BootUpdateReport still;
-      if (!busReadBootInfo(addr, still)) {
-        started = true;
-        break;
-      }
-      info = still;
-    }
+    // A unit that never left the bus did not start: report what it said.
+    bool started = bootStage1WentOffBus(
+        [&]() {
+          BootUpdateReport still;
+          if (!busReadBootInfo(addr, still)) return false;
+          info = still;
+          return true;
+        },
+        [](uint16_t ms) { delay(ms); });
     if (!started) {
       result = {seq, MaintOutcome::PostconditionFail,
-                bootFailureReason(bootResultFailure(info.lastResult))};
+                maintReasonForBootFailure(bootResultFailure(info.lastResult),
+                                          MaintReason::BootNotStarted)};
       return;
     }
     waitForBatchIdle(&addr, 1, 10000);
@@ -1289,7 +1290,9 @@ void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result) {
       // No report at all is a lost unit, not a failed verify; otherwise the
       // unit's own result names the cause.
       result = {seq, MaintOutcome::PostconditionFail,
-                anyRead ? bootFailureReason(bootResultFailure(info.lastResult))
+                anyRead ? maintReasonForBootFailure(
+                              bootResultFailure(info.lastResult),
+                              MaintReason::BootVerifyFailed)
                         : MaintReason::BootUnitLost};
       return;
     }

@@ -91,3 +91,25 @@ inline BootPollVerdict bootStage2Poll(const BootUpdateReport& now,
   }
   return BOOT_POLL_WAIT;
 }
+
+// Did the unit start stage 1? An accepted request takes it off the bus within
+// milliseconds and keeps it off for over a second (page write, watchdog reset,
+// bootloader window); a refusing unit keeps answering. `answers()` performs one
+// report read and returns whether a valid report came back; `pause(ms)` waits.
+// A single failed read is confirmed 50 ms later before it counts — one
+// corrupted reply from a unit that refused must not send the driver down the
+// "it is rebooting" path.
+//
+// Only valid when the unit was idle when the request was sent: a unit busy in
+// a move holds the request and keeps answering until the move ends.
+template <typename Answers, typename Pause>
+inline bool bootStage1WentOffBus(Answers&& answers, Pause&& pause) {
+  static const uint16_t gaps[2] = {200, 300};
+  for (uint16_t gap : gaps) {
+    pause(gap);
+    if (answers()) continue;
+    pause(50);
+    if (!answers()) return true;
+  }
+  return false;
+}

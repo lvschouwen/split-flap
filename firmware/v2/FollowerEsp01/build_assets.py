@@ -174,6 +174,11 @@ def build_api_index_asset(project_dir: pathlib.Path) -> None:
 
 try:
     Import("env")  # noqa: F821  (provided by PlatformIO SCons env)
+    _under_scons = True
+except NameError:  # imported by a test, not run by the build
+    _under_scons = False
+
+if _under_scons:
     _project_dir = pathlib.Path(env["PROJECT_DIR"])  # noqa: F821
     build_version_header(_project_dir)
     build_unit_assets(_project_dir)
@@ -192,5 +197,3 @@ try:
     env.AddPostAction(  # noqa: F821
         "$BUILD_DIR/${PROGNAME}.bin", _stamp_firmware_filename
     )
-except NameError:
-    pass

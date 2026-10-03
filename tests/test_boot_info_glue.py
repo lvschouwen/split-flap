@@ -62,21 +62,26 @@ def test_update_drivers_use_the_shared_decisions():
     # which order.
     drivers = {
         "S3": (_driver("Master/DisplayTask.cpp", "static void execBootUpdate("),
-               "unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_IDLE_MS);",
+               "if (!unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_IDLE_MS)) {",
                "unitBusBootUpdate(addr, 1)", "unitBusBootUpdate(addr, 2)",
                "unitBusHome(addr)"),
         "ESP-01": (_driver("FollowerEsp01/FollowerBus.cpp", "void busRunBootUpdate("),
-                   "waitForBatchIdle(&addr, 1, 8000);",
+                   "if (!waitForBatchIdle(&addr, 1, 8000)) {",
                    "busBootUpdate(addr, 1)", "busBootUpdate(addr, 2)",
                    "busHome(addr)"),
     }
     for name, (body, idle, stage1, stage2, home) in drivers.items():
-        # The drum settles before stage 1 is requested.
-        assert body.index(idle) < body.index(stage1), name
-        # A unit that never left the bus is reported by what it said.
+        # A drum that does not settle ends the op BEFORE stage 1 is requested.
+        settle = body[body.index(idle):body.index(stage1)]
+        assert "MaintReason::BootUnitBusy" in settle and "return;" in settle, name
+        # Whether stage 1 started is decided by the tested helper, and a unit
+        # that never left the bus is reported by what it said.
         after1 = body[body.index(stage1):body.index(stage2)]
-        assert "if (!started) {" in after1, name
-        assert "bootFailureReason(bootResultFailure(info.lastResult))" in after1, name
+        assert "bool started = bootStage1WentOffBus(" in after1, name
+        not_started = after1[after1.index("if (!started) {"):]
+        assert "maintReasonForBootFailure(" in not_started, name
+        assert "MaintReason::BootNotStarted" in not_started, name
+        assert "return;" in not_started[:not_started.index("waitForBatchIdle" if name == "ESP-01" else "unitBusWaitBatchIdle")], name
         # The stage-2-only path homes first; the poll judges through the helper
         # with the result read before the send.
         before2 = body[body.index("if (plan.needStage2) {"):body.index(stage2)]
@@ -86,3 +91,10 @@ def test_update_drivers_use_the_shared_decisions():
         assert "bootStage2Poll(info, resultBeforeSend)" in after2, name
         assert "MaintReason::BootUnitLost" in after2, name
         assert "BOOT_RESULT_REFUSED" not in body, f"{name}: judge through the helpers"
+
+
+def test_start_probes_cannot_pin_the_bootloader():
+    # The probes run inside the inhibit window; that is only safe while the
+    # report opcode is not one of twiboot's pinning first bytes.
+    for path in ("Master/DisplayTask.cpp", "FollowerEsp01/FollowerBus.cpp"):
+        assert "static_assert(SFP_CMD_GET_BOOT_INFO > 0x02," in (V2 / path).read_text(), path
