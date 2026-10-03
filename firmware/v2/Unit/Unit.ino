@@ -118,6 +118,9 @@ volatile int receivedNumber = 0;
 int i2cAddress;
 // TWI self-heal (#489): loop-only; the reset count rides ext-diag statusBits.
 TwiHealState twiHeal;
+// Deaf-slave check (#502): loop-only; the re-init count rides the ext-diag
+// link extension.
+TwiDeafState twiDeaf;
 // True when getaddress() returned the EEPROM-provisioned address instead of
 // the DIP-derived one. Surfaced as GET_STATUS flags bit 4 (#215): twiboot only
 // listens on the DIP-derived address, so the master needs to know a unit may
@@ -245,7 +248,14 @@ volatile uint8_t  vitalsReplyBuf[VITALS_REPLY_LEN] = {0};
 // ISR-visible mirror each loop pass under noInterrupts() — same #96-class torn-
 // read discipline as the vitals/diag buffers above. Only extDiagReplyBuf crosses
 // into the TWI ISR; the raw counters are loop-only.
-volatile uint8_t  extDiagReplyBuf[EXT_DIAG_REPLY_LEN] = {0};
+volatile uint8_t  extDiagReplyBuf[EXT_DIAG_LINK_REPLY_LEN] = {0};
+// Link health (#502), streamed as the extension behind the ext-diag packet.
+// The two frame counters are incremented in the TWI ISR and wrap; loop() reads
+// them under noInterrupts(). uptimeSecondsFull is loop-only.
+volatile uint16_t linkRxFrames              = 0;      // master writes received
+volatile uint16_t linkTxReplies             = 0;      // master reads answered
+uint32_t          uptimeSecondsFull         = 0;      // no saturation, no millis() wrap
+unsigned long     uptimeLastTickMs          = 0;
 uint16_t          extStepExcessLast         = 0;      // #370 last home: actual-expected steps
 uint16_t          extStepExcessMax          = 0;      // #370 worst-seen since boot
 uint16_t          extVccSagLastMove         = 0xFFFF; // #371 min loaded Vcc this move (sentinel high)
@@ -616,6 +626,7 @@ void setup() {
 void loop() {
   wdt_reset(); //see wdt_enable(WDTO_8S) in setup() (issue #107)
   twiHealTick(); //release a wedged TWI holding SDA before anything else (#489)
+  twiDeafTick(); //re-arm a TWI whose registers stopped listening (#502)
 
   // Keep the ISR-visible diag/self-test replies current (#263/#265). Cheap
   // (two small encodes + an interrupt-guarded copy) and unconditional, so
@@ -867,11 +878,15 @@ void loop() {
     }
   }
 
-  // Uptime counter for SFP_CMD_GET_STATUS (issue #47). Saturating at 18 h 12 min;
-  // the master is expected to poll more often than that. Cheap arithmetic,
-  // fine to recompute every loop iteration.
-  uint32_t secondsSinceBoot = currentMillis / 1000UL;
-  uint16_t newUptime = (secondsSinceBoot > 0xFFFFUL) ? 0xFFFF : (uint16_t)secondsSinceBoot;
+  // Uptime, counted in whole seconds from millis() deltas so it outlives the
+  // 49.7-day millis() wrap; a pass that blocked on a move catches up here.
+  // GET_STATUS carries the u16 view, saturating at 18 h 12 min (issue #47); the
+  // ext-diag link extension carries the full count (#502).
+  while (currentMillis - uptimeLastTickMs >= 1000UL) {
+    uptimeLastTickMs += 1000UL;
+    uptimeSecondsFull++;
+  }
+  uint16_t newUptime = (uptimeSecondsFull > 0xFFFFUL) ? 0xFFFF : (uint16_t)uptimeSecondsFull;
   noInterrupts();
   uptimeSeconds = newUptime;
   interrupts();

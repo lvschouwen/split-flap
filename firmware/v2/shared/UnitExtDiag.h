@@ -21,6 +21,22 @@
 //                                 saturating at 7); bits4-7 reserved
 //   10   checksum         u8      XOR of 0..9 ^ EXT_DIAG_REPLY_CHECKSUM_MASK
 //
+// Link-health extension (#502): 10 more bytes AFTER the checksum above, so a
+// master that reads EXT_DIAG_REPLY_LEN bytes sees the unchanged base packet
+// and one that reads EXT_DIAG_LINK_REPLY_LEN gets both, each with its own
+// checksum.
+//   11..14 uptimeSeconds  u32 LE  seconds since boot (GET_STATUS's u16
+//                                 saturates at 18 h 12 min)
+//   15..16 rxFrames       u16 LE  master writes this unit received since boot,
+//                                 wrapping — a delta of 0 across a window in
+//                                 which the master wrote means the unit was deaf
+//   17..18 txReplies      u16 LE  master reads this unit answered, wrapping
+//   19     deafHeals      u8      TWI register self-check re-inits since boot
+//                                 (UnitTwiHeal.h), saturating
+//   20     checksum       u8      XOR of 11..19 ^ EXT_DIAG_LINK_CHECKSUM_MASK
+// A unit without the extension stops driving after byte 10, so the master
+// clocks in bus padding (0xFF) and the masked checksum rejects it.
+//
 // Backward compat (#231/#106 pattern): a pre-ext-diag unit answers the unknown
 // opcode with its 1-byte status reply + bus padding; the masked checksum
 // rejects all-0xFF, all-0x00 and repeated-status garbage, so the master
@@ -83,5 +99,50 @@ inline bool extDiagReadbackValid(const uint8_t buf[EXT_DIAG_REPLY_LEN], UnitExtD
   out.hallEdgesLastRev = buf[6];
   out.dutyWindow = (uint16_t)buf[7] | ((uint16_t)buf[8] << 8);
   out.statusBits = buf[9];
+  return true;
+}
+
+#define EXT_DIAG_LINK_EXT_LEN         10
+#define EXT_DIAG_LINK_REPLY_LEN       (EXT_DIAG_REPLY_LEN + EXT_DIAG_LINK_EXT_LEN)
+#define EXT_DIAG_LINK_CHECKSUM_MASK   0xC6
+
+struct UnitLinkStats {
+  uint32_t uptimeSeconds = 0;
+  uint16_t rxFrames = 0;
+  uint16_t txReplies = 0;
+  uint8_t  deafHeals = 0;
+};
+
+// `ext` points at the extension's first byte (offset EXT_DIAG_REPLY_LEN of the
+// full reply).
+inline uint8_t extDiagLinkChecksum(const uint8_t ext[EXT_DIAG_LINK_EXT_LEN]) {
+  uint8_t x = 0;
+  for (uint8_t i = 0; i < EXT_DIAG_LINK_EXT_LEN - 1; i++) x ^= ext[i];
+  return (uint8_t)(x ^ EXT_DIAG_LINK_CHECKSUM_MASK);
+}
+
+inline void extDiagLinkEncode(const UnitLinkStats& l,
+                              uint8_t ext[EXT_DIAG_LINK_EXT_LEN]) {
+  ext[0] = (uint8_t)(l.uptimeSeconds & 0xFF);
+  ext[1] = (uint8_t)((l.uptimeSeconds >> 8) & 0xFF);
+  ext[2] = (uint8_t)((l.uptimeSeconds >> 16) & 0xFF);
+  ext[3] = (uint8_t)((l.uptimeSeconds >> 24) & 0xFF);
+  ext[4] = (uint8_t)(l.rxFrames & 0xFF);
+  ext[5] = (uint8_t)((l.rxFrames >> 8) & 0xFF);
+  ext[6] = (uint8_t)(l.txReplies & 0xFF);
+  ext[7] = (uint8_t)((l.txReplies >> 8) & 0xFF);
+  ext[8] = l.deafHeals;
+  ext[9] = extDiagLinkChecksum(ext);
+}
+
+// `out` is left untouched on rejection.
+inline bool extDiagLinkReadbackValid(const uint8_t ext[EXT_DIAG_LINK_EXT_LEN],
+                                     UnitLinkStats& out) {
+  if (ext[EXT_DIAG_LINK_EXT_LEN - 1] != extDiagLinkChecksum(ext)) return false;
+  out.uptimeSeconds = (uint32_t)ext[0] | ((uint32_t)ext[1] << 8) |
+                      ((uint32_t)ext[2] << 16) | ((uint32_t)ext[3] << 24);
+  out.rxFrames = (uint16_t)ext[4] | ((uint16_t)ext[5] << 8);
+  out.txReplies = (uint16_t)ext[6] | ((uint16_t)ext[7] << 8);
+  out.deafHeals = ext[8];
   return true;
 }

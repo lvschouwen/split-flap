@@ -12,6 +12,7 @@ void receiveLetter(int numBytes) {
   // Every master write — a bare bus-scan probe included — supersedes whatever
   // reply the previous write asked for (#502).
   pendingReply = REPLY_NONE;
+  linkRxFrames++;  // probes count too: any addressed write proves we heard it
   if (numBytes <= 0) return;
 
   // Any I2C receive — even a bus-scan probe — proves a master is present, so
@@ -212,6 +213,7 @@ void receiveLetter(int numBytes) {
 void requestEvent() {
   uint8_t reply = pendingReply;
   pendingReply = REPLY_NONE;
+  linkTxReplies++;
   if (reply == REPLY_VERSION) {
     // 10 bytes: GIT_REV null-padded, SFP_PROTOCOL_VERSION, checksum (#405).
     // This reply's shape is FIXED FOREVER — it carries the version that gates
@@ -265,10 +267,11 @@ void requestEvent() {
     return;
   }
   if (reply == REPLY_EXT_DIAG) {
-    // 11 bytes, pre-encoded by refreshExtDiagReply() under noInterrupts()
-    // (#365) — stream verbatim. Un-reflashed masters never send GET_EXT_DIAG;
-    // the masked checksum handles a stray probe hitting the unknown opcode.
-    Wire.write((const uint8_t*)extDiagReplyBuf, EXT_DIAG_REPLY_LEN);
+    // 11-byte base packet (#365) + 10-byte link extension (#502), pre-encoded
+    // by refreshExtDiagReply() under noInterrupts() — stream verbatim. A master
+    // that reads only the base length NACKs after byte 10 and never sees the
+    // extension.
+    Wire.write((const uint8_t*)extDiagReplyBuf, EXT_DIAG_LINK_REPLY_LEN);
     return;
   }
   if (reply == REPLY_LIFETIME) {
@@ -361,6 +364,27 @@ void twiHealTick() {
   Wire.begin(i2cAddress);
   TWAR |= (1 << TWGCE);
   twiHealNoteReset(twiHeal, now, releasedByUs);
+}
+
+//Deaf-slave check (#502, policy in UnitTwiHeal.h). Compares TWCR/TWAR against
+//what a listening slave needs; a config that stays wrong past the hold window
+//gets the same TWEN-off -> Wire.begin() re-init as the heal above, at an
+//instant when both lines are free. PINC still reads the line levels if TWEN
+//was lost: the pins fall back to inputs with twi_init()'s pull-ups.
+static_assert(TWI_LISTEN_TWCR_MASK == (_BV(TWEA) | _BV(TWEN) | _BV(TWIE)),
+              "UnitTwiHeal.h TWCR mask does not match the AVR bit positions");
+static_assert(TWI_LISTEN_TWAR_GCE == _BV(TWGCE),
+              "UnitTwiHeal.h TWAR general-call bit does not match the AVR bit");
+void twiDeafTick() {
+  uint32_t now = millis();
+  const uint8_t lines = _BV(PC4) | _BV(PC5);
+  bool linesFree = (PINC & lines) == lines;
+  bool intact = twiListenConfigIntact(TWCR, TWAR, (uint8_t)i2cAddress);
+  if (!twiDeafShouldReset(twiDeaf, intact, linesFree, now)) return;
+  TWCR = _BV(TWINT);  // TWEN off, stale flag cleared — see twiHealTick()
+  Wire.begin(i2cAddress);
+  TWAR |= (1 << TWGCE);
+  twiDeafNoteReset(twiDeaf, now);
 }
 
 //Returns the I2C address of the unit. EEPROM takes precedence (set by the
