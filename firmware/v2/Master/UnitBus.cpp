@@ -983,7 +983,7 @@ static int twibootWriteFlashPage(int addr, uint16_t flashAddr,
                  (unsigned)queued, (unsigned)(TWIBOOT_PAGE_SIZE + 4));
     return -1;
   }
-  return countedTransmission();
+  return Wire.endTransmission();
 }
 
 // Writes one page and reads it back to verify, with one rewrite attempt on
@@ -1002,7 +1002,7 @@ static bool flashAndVerifyPage(int addr, uint16_t flashAddr,
     uint8_t readBuf[TWIBOOT_PAGE_SIZE];
     if (!twibootReadFlashPage(addr, flashAddr, readBuf)) return false;
     if (memcmp(readBuf, page, TWIBOOT_PAGE_SIZE) == 0) return true;
-    SerialPrintf("Verify mismatch at page 0x%04x%s\n", flashAddr,
+    SerialPrintf("Verify mismatch at 0x%02x page 0x%04x%s\n", addr, flashAddr,
                  attempt == 0 ? " — rewriting once" : " — giving up");
   }
   return false;
@@ -1103,6 +1103,12 @@ UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out) {
 
 UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
                                  size_t len) {
+  if (len > BOOT_SECTION_START) {
+    SerialPrintf("Unit image too large (%u > %u) — would overwrite twiboot\n",
+                 (unsigned)len, (unsigned)BOOT_SECTION_START);
+    return UnitFlashResult::Aborted;
+  }
+
   SerialPrintf("Flashing unit at 0x%02x (%u bytes)\n", i2cAddress,
                (unsigned)len);
 
@@ -1134,19 +1140,27 @@ UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
 
   if (twibootExit(i2cAddress) != 0) return UnitFlashResult::ExitFailed;
 
-  // Give the fresh sketch a couple of seconds to boot, then verify it
-  // answers. twiboot's exit is a direct jump_to_app(), not a reset —
-  // CMD_REBOOT gives the new sketch a clean watchdog restart (fresh
-  // peripherals/MCUSR, DIP + EEPROM address re-read; v1 #113).
-  delay(2000);
-  Wire.beginTransmission((uint8_t)i2cAddress);
-  if (Wire.endTransmission() != 0) {
+  // Poll until the fresh sketch answers — a slow-booting unit (marginal
+  // supply, cold start) may need more than 2 s after twiboot's
+  // jump_to_app(). CMD_REBOOT then gives it a clean watchdog restart
+  // (fresh peripherals/MCUSR, DIP + EEPROM address re-read; v1 #113).
+  bool postBootAlive = false;
+  for (int attempt = 0; attempt < 5; attempt++) {
+    delay(500);
+    Wire.beginTransmission((uint8_t)i2cAddress);
+    if (Wire.endTransmission() == 0) { postBootAlive = true; break; }
+  }
+  if (!postBootAlive) {
     SerialPrintf("Unit 0x%02x not responding post-flash\n", i2cAddress);
     return UnitFlashResult::PostBootSilent;
   }
   Wire.beginTransmission((uint8_t)i2cAddress);
   writeGuardedOpcode(SFP_CMD_REBOOT);
-  Wire.endTransmission();
+  int rebootStatus = countedTransmission();
+  if (rebootStatus != 0) {
+    SerialPrintf("Unit 0x%02x CMD_REBOOT failed (status %d)\n",
+                 i2cAddress, rebootStatus);
+  }
   SerialPrintf("Unit 0x%02x flashed (%u bytes) — sent CMD_REBOOT\n",
                i2cAddress, (unsigned)len);
   return UnitFlashResult::Ok;
