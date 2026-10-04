@@ -28,6 +28,7 @@
 #include "FollowerRescue.h"  // #343: beacon marker + op lockout
 #include "FollowerSettings.h"
 #include "FollowerWifi.h"
+#include "OtaUploadGate.h"  // shared gate / completion / stall rules
 #include "UnitTimings.h"
 #include "SelfTestPoll.h"  // the shared self-test wait (#529)
 #include "WearPolicy.h"
@@ -72,9 +73,7 @@ static AsyncWebServerRequest* volatile masterOtaOwnerRequest = nullptr;
 // Handler-context only (the ESP-01's async handlers and loop() cooperate on
 // one core), RAM-only, resets on reboot.
 static ForeignContactStats foreignContacts;
-static bool otaRejected = false;
-static int otaRejectionStatus = 0;
-static String otaRejectionReason;
+static OtaRejection otaRejection;
 static bool otaTxPowerReduced = false;
 
 // --- helpers ------------------------------------------------------------------------
@@ -271,35 +270,36 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         followerTxOtaCap(false);
         otaTxPowerReduced = false;
       }
-      if (otaRejected) {
-        int status = otaRejectionStatus;
-        String reason = otaRejectionReason;
-        otaRejected = false;
-        otaRejectionStatus = 0;
-        otaRejectionReason = String();
-        masterOtaUploadActive = false;
-        request->send(status, "text/plain", reason);
-        return;
-      }
-      if (Update.hasError()) {
-        String msg = String("Master OTA failed: ") + Update.getErrorString();
-        masterOtaUploadActive = false;
-        request->send(500, "text/plain", msg);
-      } else if (!uploadRan) {
-        // #347: no file part streamed — nothing was flashed; never report
-        // success (which reboots).
-        masterOtaUploadActive = false;
-        request->send(400, "text/plain",
-                      "No firmware in request (a multipart file part is "
-                      "required)");
-      } else if (!Update.isFinished()) {
-        masterOtaUploadActive = false;
-        request->send(500, "text/plain",
-                      "Master OTA incomplete: final chunk missing");
-      } else {
-        request->send(200, "text/plain",
-                      "Master firmware flashed; rebooting…");
-        isPendingReboot = true;
+      int rejStatus = 0;
+      String rejReason;
+      bool rejected = otaRejection.take(rejStatus, rejReason);
+      OtaCompletion verdict = otaUploadCompletion(
+          rejected, Update.hasError(), uploadRan, Update.isFinished());
+      // Anything but a flashed image means no reboot follows: thaw the row.
+      if (verdict != OtaCompletion::Flashed) masterOtaUploadActive = false;
+      switch (verdict) {
+        case OtaCompletion::Rejected:
+          request->send(rejStatus, "text/plain", rejReason);
+          break;
+        case OtaCompletion::FlashError:
+          request->send(500, "text/plain",
+                        String(F("Master OTA failed: ")) +
+                            Update.getErrorString());
+          break;
+        case OtaCompletion::NoFile:
+          request->send(400, "text/plain",
+                        F("No firmware in request (a multipart file part is "
+                          "required)"));
+          break;
+        case OtaCompletion::Incomplete:
+          request->send(500, "text/plain",
+                        F("Master OTA incomplete: final chunk missing"));
+          break;
+        case OtaCompletion::Flashed:
+          request->send(200, "text/plain",
+                        F("Master firmware flashed; rebooting…"));
+          isPendingReboot = true;
+          break;
       }
     },
     [](AsyncWebServerRequest* request, String filename, size_t index,
@@ -316,27 +316,30 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         masterOtaLastChunkMs = millis();
       }
       if (index == 0) {
-        // CSRF gate (#313): reject a forged cross-site upload BEFORE any
-        // flash write or freeze — an attacker can match ?md5= to their own
-        // bytes (MD5 is integrity, not authenticity), so a browser CSRF could
-        // flash hostile firmware. Marked like every other reject so the
-        // completion handler answers 403; no owner/freeze is taken.
-        if (lanCsrfRejectPost(true, request->hasHeader("Origin"),
-                                   request->hasHeader("Origin")
-                                       ? request->header("Origin")
-                                       : String())) {
-          otaRejected = true;
-          otaRejectionStatus = 403;
-          otaRejectionReason = F("Cross-origin OTA refused (CSRF guard)");
+        // Before any flash write or freeze: no owner is taken on a refusal.
+        // The unit-reflash gate: this upload ends in a reboot, which would
+        // strand the unit being flashed in twiboot (the leader's rollout
+        // reads the 409 as "busy, retry").
+        // MD5 is MANDATORY (v1 #144: eboot's checksum does not catch a
+        // truncated upload) and validated before Update.begin (#354), which
+        // erases the flash region.
+        bool hasOrigin = request->hasHeader("Origin");
+        String md5 = request->hasParam("md5")
+                         ? request->getParam("md5")->value()
+                         : String();
+        OtaGate gate = otaUploadGate(
+            lanCsrfRejectPost(true, hasOrigin,
+                              hasOrigin ? request->header("Origin") : String()),
+            reflashPending || reflashInProgress(reflashProgress), md5);
+        otaRejection.clear();
+        if (gate != OtaGate::Pass) {
+          otaRejection.set(gate);
           return;
         }
         // Freeze all display/unit work for the upload (v1 #116): WiFi RX +
         // flash writes + stepper current on one small supply is the storm
         // that endangers a flash.
         masterOtaUploadActive = true;
-        otaRejected = false;
-        otaRejectionStatus = 0;
-        otaRejectionReason = String();
 
         followerTxOtaCap(true);  // v1 #60 sag guard
         otaTxPowerReduced = true;
@@ -345,44 +348,21 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         if (freeSpace < 0x1000) {
           // #354: (freeSpace - 0x1000) below would underflow to a huge
           // maxSketchSpace and defeat the contentLen pre-check.
-          otaRejected = true;
-          otaRejectionStatus = 507;
-          otaRejectionReason = String("No sketch space free: ") + freeSpace;
+          otaRejection.set(507, String(F("No sketch space free: ")) + freeSpace);
           return;
         }
         uint32_t maxSketchSpace = (freeSpace - 0x1000) & 0xFFFFF000;
         size_t contentLen = request->contentLength();
         if (contentLen > 0 && contentLen > maxSketchSpace) {
-          otaRejected = true;
-          otaRejectionStatus = 413;
-          otaRejectionReason = String("Firmware too large: ") + contentLen +
-                               " bytes > maxSketchSpace " + maxSketchSpace;
+          otaRejection.set(413, String(F("Firmware too large: ")) + contentLen +
+                                    F(" bytes > maxSketchSpace ") +
+                                    maxSketchSpace);
           return;
         }
         if (ESP.getFlashChipRealSize() < ESP.getFlashChipSize()) {
           // v1 #92/#94: Update.begin() would refuse everything.
-          otaRejected = true;
-          otaRejectionStatus = 412;
-          otaRejectionReason =
-              "Flash config mismatch — reflash once over USB";
-          return;
-        }
-        // MD5 is MANDATORY (v1 #144): eboot's checksum does not catch a
-        // truncated upload. Validated BEFORE Update.begin (#354): begin
-        // erases the flash region, so a malformed no-md5 POST used to cost
-        // a full erase cycle (display frozen, flash wear) per request.
-        if (!request->hasParam("md5")) {
-          otaRejected = true;
-          otaRejectionStatus = 400;
-          otaRejectionReason = "md5 query param is required";
-          return;
-        }
-        String md5 = request->getParam("md5")->value();
-        md5.toLowerCase();
-        if (md5.length() != 32) {
-          otaRejected = true;
-          otaRejectionStatus = 400;
-          otaRejectionReason = "md5 query param must be a 32-char hex digest";
+          otaRejection.set(
+              412, F("Flash config mismatch — reflash once over USB"));
           return;
         }
         Update.runAsync(true);
@@ -391,17 +371,13 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
           Update.end(false);
           Update.clearError();
           if (!Update.begin(maxSketchSpace, U_FLASH)) {
-            otaRejected = true;
-            otaRejectionStatus = 500;
-            otaRejectionReason =
-                String("Update.begin failed: ") + Update.getErrorString();
+            otaRejection.set(500, String(F("Update.begin failed: ")) +
+                                      Update.getErrorString());
             return;
           }
         }
         if (!Update.setMD5(md5.c_str())) {
-          otaRejected = true;
-          otaRejectionStatus = 400;
-          otaRejectionReason = "Update.setMD5 rejected '" + md5 + "'";
+          otaRejection.set(400, String(F("Update.setMD5 rejected '")) + md5 + "'");
           Update.end(false);
           return;
         }
@@ -413,7 +389,7 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         });
       }
       if (masterOtaOwnerRequest != request) return;
-      if (otaRejected) return;
+      if (otaRejection.rejected()) return;
       if (!Update.hasError() && len > 0) {
         Update.write(data, len);
       }
@@ -1169,7 +1145,7 @@ void webEndpointsInit(AsyncWebServer& server) {
 
 bool webOtaUploadFrozen() {
   if (!masterOtaUploadActive) return false;
-  if (millis() - masterOtaLastChunkMs > 30000UL) {
+  if (otaUploadStalled(masterOtaLastChunkMs, millis())) {
     SerialPrintln(F("OTA upload stalled >30 s — resuming normal operation"));
     masterOtaUploadActive = false;
     if (otaTxPowerReduced) {  // an abandoned upload must not freeze the ladder

@@ -183,3 +183,38 @@ def test_unit_timings_are_named_once():
                       r"constexpr\s+uint32_t\s+(?:ADDRESS_OP_SETTLE_MS|"
                       r"SHOW_STUCK_TIMEOUT_MS)", ROW_MASTERS)
     assert not hits, f"use shared/UnitTimings.h: {hits}"
+
+
+# --- #532: OTA upload gate ----------------------------------------------------
+
+UPLOAD_PATHS = ["Master/WebFirmware.cpp", "Rescue/RescueWeb.cpp",
+                "FollowerEsp01/FollowerWeb.cpp"]
+
+
+def test_upload_paths_decide_through_the_shared_gate():
+    """Four hand-written upload sessions had drifted: the follower started a
+    flash erase on a non-hex md5, the Master echoed a stale rejection, Rescue
+    had no stall watchdog."""
+    assert not _offenders(r"inline bool normalizeOtaMd5|"
+                          r"\b\w*[Rr]ejectionStatus\b|"
+                          r"OTA_STALL_TIMEOUT_MS\s*=|>\s*30000UL")
+    for path in UPLOAD_PATHS:
+        body = _strip_comments((V2 / path).read_text())
+        for call in ("otaUploadGate(", "otaUploadCompletion(", ".take(",
+                     "otaUploadStalled("):
+            assert call in body, f"{path}: {call}"
+        # Nothing may touch the flash before the gate has passed.
+        upload = body[body.index("otaUploadGate("):]
+        assert "Update.begin(" in upload or "factoryWriteBegin(" in upload, path
+    master = _strip_comments((V2 / "Master/WebFirmware.cpp").read_text())
+    assert master.count("otaUploadGate(") == 2, "app slot and factory slot"
+    for begin in ("Update.begin(", "factoryWriteBegin("):
+        assert master.index(begin) > master.index("otaUploadGate("), begin
+
+
+def test_every_row_master_refuses_an_upload_during_a_unit_reflash():
+    for path in ("Master/WebFirmware.cpp", "FollowerEsp01/FollowerWeb.cpp"):
+        body = _strip_comments((V2 / path).read_text())
+        gate = body[body.index("otaUploadGate("):]
+        gate = gate[:gate.index(";")]
+        assert "reflashInProgress(" in gate, path

@@ -9,7 +9,7 @@
 #include "BuildVersion.h"
 #include "RescueAssets.h"
 #include "LanOrigin.h"  // CSRF origin gate on mutating POSTs (#349)
-#include "RescueOta.h"
+#include "OtaUploadGate.h"  // shared gate / completion / stall rules
 #include "RescueSlotRecord.h"
 #include "RescueSlots.h"
 #include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
@@ -26,16 +26,20 @@ static std::atomic<bool> rebootPending{false};
 static std::atomic<uint32_t> rebootRequestedAtMs{0};
 static const uint32_t REBOOT_GRACE_MS = 750;
 
-// Upload gating state, same shape as Master's /firmware/master handler.
-static int otaRejectionStatus = 0;
-static String otaRejectionReason;
+// Upload gating state; the rules are the shared OtaUploadGate.h.
+static OtaRejection otaRejection;
 // #347: which request actually began an Update, so onRequest never reports a
 // flash (and reboots) for a POST that carried no multipart file part.
 // #349/#359: doubles as the single-owner session lock — a second concurrent
 // upload is 409'd instead of stealing/aborting a live recovery flash, and
 // every chunk is gated on ownership so an orphaned request can't interleave
 // bytes into the live Update session.
-static AsyncWebServerRequest* masterOtaOwnerRequest = nullptr;
+// Atomic: the async_tcp callbacks and loop()'s stall watchdog both touch it.
+// Compared only, never dereferenced.
+static std::atomic<AsyncWebServerRequest*> masterOtaOwnerRequest{nullptr};
+// Last time a chunk of the live upload arrived. Written by the async_tcp
+// task, read by loop(); a stalled session has no concurrent writer.
+static uint32_t otaLastChunkMs = 0;
 
 // CSRF gate (#349), copy of Master's webUploadCsrfRejected shape: multipart
 // POSTs are CORS-safelisted, so without this a visited web page could
@@ -235,33 +239,30 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
         // would report success on a never-begun Update and reboot the device.
         bool uploadRan = (masterOtaOwnerRequest == request);
         if (uploadRan) masterOtaOwnerRequest = nullptr;
-        // Consume the rejection verdict: left set, a later POST whose
-        // upload callback never runs would echo this stale status instead
-        // of its own "no firmware in request" 400.
-        int rejStatus = otaRejectionStatus;
-        String rejReason = otaRejectionReason;
-        otaRejectionStatus = 0;
-        otaRejectionReason = "";
-        if (rejStatus != 0) {
-          request->send(rejStatus, "text/plain", rejReason);
-          return;
-        }
-        if (Update.hasError()) {
-          request->send(500, "text/plain", String("Rescue flash failed: ") +
-                                               Update.errorString());
-          return;
-        }
-        if (!uploadRan) {
-          request->send(400, "text/plain",
-                        F("No firmware in request (a multipart file part is "
-                          "required)"));
-          return;
-        }
-        if (!Update.isFinished()) {
-          request->send(500, "text/plain",
-                        F("Rescue flash incomplete: upload ended before the "
-                          "image was complete."));
-          return;
+        int rejStatus = 0;
+        String rejReason;
+        bool rejected = otaRejection.take(rejStatus, rejReason);
+        switch (otaUploadCompletion(rejected, Update.hasError(), uploadRan,
+                                    Update.isFinished())) {
+          case OtaCompletion::Rejected:
+            request->send(rejStatus, "text/plain", rejReason);
+            return;
+          case OtaCompletion::FlashError:
+            request->send(500, "text/plain", String("Rescue flash failed: ") +
+                                                 Update.errorString());
+            return;
+          case OtaCompletion::NoFile:
+            request->send(400, "text/plain",
+                          F("No firmware in request (a multipart file part is "
+                            "required)"));
+            return;
+          case OtaCompletion::Incomplete:
+            request->send(500, "text/plain",
+                          F("Rescue flash incomplete: upload ended before the "
+                            "image was complete."));
+            return;
+          case OtaCompletion::Flashed:
+            break;
         }
         request->send(200, "text/plain",
                       F("Master firmware flashed; rebooting into it…"));
@@ -281,32 +282,19 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
             request->_tempObject = malloc(1);
             return;
           }
-          otaRejectionStatus = 0;
-          otaRejectionReason = "";
+          otaRejection.clear();
 
-          // CSRF gate (#349), INLINE before Update.begin: the body-parsing
-          // upload callback is the first code to run for this route, so a
-          // forged cross-site POST would otherwise flash + arm its image
-          // before any post-body check.
-          if (rescueUploadCsrfRejected(request)) {
-            otaRejectionStatus = 403;
-            otaRejectionReason = "Cross-origin flash refused (CSRF guard)";
-            return;
-          }
-
+          // INLINE before Update.begin (#349): the body-parsing upload
+          // callback is the first code to run for this route, so a forged
+          // cross-site POST would otherwise flash + arm its image before any
+          // post-body check. No reflash gate: rescue drives no units.
           String md5 = request->hasParam("md5")
                            ? request->getParam("md5")->value()
                            : String();
-          if (md5.length() == 0) {
-            otaRejectionStatus = 400;
-            otaRejectionReason =
-                "md5 query parameter is required (compute it over the .bin "
-                "and pass ?md5=...)";
-            return;
-          }
-          if (!normalizeOtaMd5(md5)) {
-            otaRejectionStatus = 400;
-            otaRejectionReason = "md5 must be exactly 32 hex characters";
+          OtaGate gate =
+              otaUploadGate(rescueUploadCsrfRejected(request), false, md5);
+          if (gate != OtaGate::Pass) {
+            otaRejection.set(gate);
             return;
           }
 
@@ -315,9 +303,8 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
             Update.abort();  // stale aborted upload must not wedge this one
           }
           if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
-            otaRejectionStatus = 500;
-            otaRejectionReason =
-                String("Rescue flash could not start: ") + Update.errorString();
+            otaRejection.set(500, String("Rescue flash could not start: ") +
+                                      Update.errorString());
             return;
           }
           Update.setMD5(md5.c_str());
@@ -326,6 +313,7 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
           // free the slot; the stale Update session is aborted by the next
           // upload's begin path above.
           masterOtaOwnerRequest = request;
+          otaLastChunkMs = millis();
           request->onDisconnect([request]() {
             if (masterOtaOwnerRequest == request) masterOtaOwnerRequest = nullptr;
           });
@@ -335,7 +323,8 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
         // requests whose client keeps streaming — without this gate their
         // leftover chunks would interleave into the live owner's session.
         if (masterOtaOwnerRequest != request) return;
-        if (otaRejectionStatus != 0) return;
+        if (otaRejection.rejected()) return;
+        otaLastChunkMs = millis();  // progress resets the stall deadline
 
         if (len > 0 && Update.write(data, len) != len) {
           return;  // error latched inside Update; completion callback reports
@@ -408,6 +397,16 @@ void rescueWebSetCaptiveRedirect(const String& url) {
 }
 
 void rescueWebTick() {
+  // Stall watchdog: a client that opened an upload and went silent holds the
+  // single flash session, and every other recovery attempt gets a 409 until
+  // its socket dies. The stalled peer is parked in socket-read, not writing
+  // flash, so there is no concurrent Update use.
+  if (masterOtaOwnerRequest != nullptr &&
+      otaUploadStalled(otaLastChunkMs, millis())) {
+    Serial.println(F("Rescue flash stalled >30 s — session released"));
+    if (Update.isRunning()) Update.abort();
+    masterOtaOwnerRequest = nullptr;
+  }
   if (rebootPending.load() &&
       millis() - rebootRequestedAtMs.load() > REBOOT_GRACE_MS) {
     Serial.flush();

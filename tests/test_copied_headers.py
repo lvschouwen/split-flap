@@ -42,7 +42,6 @@ TREE_LOCAL_HEADERS = {
 # source existence is asserted so a rename can't silently orphan the note.
 NOTED_COPIES = [
     (MASTER / "SlotRecord.h", RESCUE / "RescueSlotRecord.h"),
-    (MASTER / "OtaService.h", RESCUE / "RescueOta.h"),
     (MASTER / "DeviceIdentity.h", RESCUE / "RescueIdentity.h"),
     (MASTER / "WifiPolicy.h", RESCUE / "RescueWifiPolicy.h"),
     (MASTER / "ApiIndex.h", FOLLOWER / "ApiIndex.h"),

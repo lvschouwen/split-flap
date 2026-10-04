@@ -4,7 +4,7 @@
 // wire contract as normal firmware: multipart + mandatory ?md5=, target
 // app0), and POST /rescue/exit (boot the most recently confirmed valid OTA
 // slot per Master's #200 NVS records, no flash write beyond otadata).
-// Decision logic lives in the natively-tested RescueOta.h / RescueSlots.h /
+// Decision logic lives in the natively-tested shared OtaUploadGate.h, RescueSlots.h /
 // RescueSlotRecord.h; this TU is target glue.
 
 #include <Arduino.h>

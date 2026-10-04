@@ -1,25 +1,13 @@
 #pragma once
-// OtaStatus.h — pure decision logic for the OTA slice (#190): md5 query-param
-// validation for POST /firmware/master and the /settings verdict fields
-// synthesized from esp_ota partition state. No esp_ota types in here —
+// OtaStatus.h — pure decision logic for the OTA slice (#190): the /settings
+// verdict fields synthesized from esp_ota partition state. (Upload gating is
+// the shared OtaUploadGate.h.) No esp_ota types in here —
 // OtaService.cpp reads the hardware state and feeds these; everything
 // decision-shaped is natively tested (test/test_ota_status).
 
 #include <Arduino.h>
 
-// Lowercases the digest in place, then demands exactly 32 hex chars — a
-// digest that can't be a digest is a client bug, rejected with 400 before
-// any flash work starts (v1 #144, tightened: v1 let Update discover
-// non-hex at end()).
-inline bool normalizeOtaMd5(String& md5) {
-  md5.toLowerCase();
-  if (md5.length() != 32) return false;
-  for (size_t i = 0; i < 32; i++) {
-    char c = md5[i];
-    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
-  }
-  return true;
-}
+#include "OtaUploadGate.h"
 
 struct OtaVerdict {
   String lastFlashResult;  // "", "pending", "ok", "reverted"
