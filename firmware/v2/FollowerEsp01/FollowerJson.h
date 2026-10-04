@@ -10,6 +10,7 @@
 
 #include "FollowerResetLog.h"
 #include "ClusterForeign.h"
+#include "ClusterWireGuards.h"  // ClusterRowHealth + the health-key block
 #include "FollowerBusRecovery.h"
 #include "UnitHealth.h"
 
@@ -35,17 +36,6 @@ inline void followerAppendJsonString(String& out, const String& value) {
   out += '"';
 }
 
-// One row's health facts, snapshotted by the caller.
-struct FollowerHealthFacts {
-  int width = 0;
-  int detected = 0;
-  int faulty = 0;
-  const char* faultMask = "";
-  int lost = 0;          // #497: stale sketch units
-  bool busDead = false;  // #497: row-wide I2C bus death (#488)
-  bool wear = false;
-};
-
 // The #297 vitals the ESP-01 reports on every join/ping reply and /settings.
 struct FollowerVitals {
   uint32_t heapBytes = 0;
@@ -63,26 +53,6 @@ inline void followerAppendPlatVitals(String& out, const FollowerVitals& v) {
   out += String((unsigned long)v.upSeconds);
 }
 
-// The #294 health keys both the join and ping replies carry.
-inline void followerAppendHealthKeys(String& out,
-                                     const FollowerHealthFacts& h) {
-  out += ",\"width\":";
-  out += h.width;
-  out += ",\"detected\":";
-  out += h.detected;
-  out += ",\"faulty\":";
-  out += h.faulty;
-  out += ",\"faultMask\":\"";
-  out += h.faultMask;
-  out += "\",\"lost\":";
-  out += h.lost;
-  // Additive, int so the leader's bare-number extractor reads it; absent =
-  // bus alive, so older leaders see an unchanged reply.
-  if (h.busDead) out += ",\"busDead\":1";
-  out += ",\"wear\":";
-  out += h.wear ? "true" : "false";
-}
-
 // #343 additive: only a rescue-beacon boot emits the marker (`"rescue":1`
 // — an int so the leader's existing bare-number extractor reads it);
 // absent = healthy, so pre-#343 leaders see an unchanged reply.
@@ -92,7 +62,7 @@ inline void followerAppendRescue(String& out, bool rescue) {
 
 // POST /cluster/join reply — the v2 handshake shape plus plat/vitals.
 inline String followerJoinReplyJson(const String& name, const char* rev,
-                                    const FollowerHealthFacts& h,
+                                    const ClusterRowHealth& h,
                                     const FollowerVitals& v, bool rescue) {
   String out;
   out.reserve(224);
@@ -101,7 +71,7 @@ inline String followerJoinReplyJson(const String& name, const char* rev,
   out += ",\"rev\":\"";
   out += rev;
   out += '"';
-  followerAppendHealthKeys(out, h);
+  clusterAppendHealthKeys(out, h);
   followerAppendPlatVitals(out, v);
   followerAppendRescue(out, rescue);
   out += ",\"protocol\":1}";
@@ -112,7 +82,7 @@ inline String followerJoinReplyJson(const String& name, const char* rev,
 // rev (the leader's rev-refresh fact), then plat/vitals.
 inline String followerPingReplyJson(const char* phaseName, uint32_t epoch,
                                     uint32_t seq,
-                                    const FollowerHealthFacts& h,
+                                    const ClusterRowHealth& h,
                                     const FollowerVitals& v, const char* rev,
                                     bool rescue) {
   String out;
@@ -123,7 +93,7 @@ inline String followerPingReplyJson(const char* phaseName, uint32_t epoch,
   out += String((unsigned long)epoch);
   out += ",\"seq\":";
   out += String((unsigned long)seq);
-  followerAppendHealthKeys(out, h);
+  clusterAppendHealthKeys(out, h);
   out += ",\"rev\":\"";
   out += rev;
   out += '"';

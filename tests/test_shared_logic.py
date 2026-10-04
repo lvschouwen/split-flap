@@ -218,3 +218,36 @@ def test_every_row_master_refuses_an_upload_during_a_unit_reflash():
         gate = body[body.index("otaUploadGate("):]
         gate = gate[:gate.index(";")]
         assert "reflashInProgress(" in gate, path
+
+
+# --- #533: cluster-wire member guards -----------------------------------------
+
+MEMBER_HANDLERS = ["Master/WebCluster.cpp", "FollowerEsp01/FollowerWeb.cpp"]
+
+
+def test_member_handlers_decide_through_the_shared_guards():
+    """The two member implementations bounded the row differently and built
+    different join replies."""
+    for path in MEMBER_HANDLERS:
+        body = _strip_comments((V2 / path).read_text())
+        for call in ("clusterJoinValidate(", "clusterCallerIsForeign(",
+                     "clusterLeaveAllowed("):
+            assert call in body, f"{path}: {call}"
+        # The guards' own comparisons must not be restated beside them.
+        for own in ("leaderHost != request->client()", "Row out of range",
+                    "leaderHost.length() > 0 &&"):
+            assert own not in body, f"{path}: {own!r} belongs to the shared guard"
+    for path in ("Master/WebCluster.cpp", "FollowerEsp01/FollowerJson.h"):
+        assert "clusterAppendHealthKeys(" in (V2 / path).read_text(), path
+    assert not _offenders(r"#define\s+CLUSTER_MAX_MEMBERS\b|"
+                          r"clusterHmacAccept\(|"
+                          r"clusterHmacMarkNeedsPersist\(")
+
+
+def test_both_members_keep_their_wire_auth_in_the_shared_struct():
+    for path in ("Master/ClusterFollower.cpp",
+                 "FollowerEsp01/FollowerCluster.cpp"):
+        body = _strip_comments((V2 / path).read_text())
+        for call in ("ClusterMemberAuth auth;", "auth.adoptKey(",
+                     "auth.accept(", "auth.drop()", "auth.restored("):
+            assert call in body, f"{path}: {call}"

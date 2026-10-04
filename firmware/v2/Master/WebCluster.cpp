@@ -80,6 +80,24 @@ AsyncMiddlewareFunction& webClusterCorsMiddleware() {
   return clusterCorsMiddleware;
 }
 
+// This row's health facts for a join / ping reply. `maskBuf` backs the
+// returned faultMask pointer and must outlive the struct.
+static ClusterRowHealth clusterMemberHealthNow(const DisplaySnapshot& snap,
+                                                  char* maskBuf,
+                                                  size_t maskCap) {
+  ClusterRowHealth h;
+  h.width = snap.displayWidth;
+  h.detected = snap.detectedUnitCount;
+  h.faulty = snap.faultyUnitCount;
+  unitFaultMaskHex(snap.units, snap.displayWidth, maskBuf, maskCap);
+  h.faultMask = maskBuf;
+  h.lost = computeLostUnitCount(snap.units, snap.displayWidth);
+  WearAssessment wear;
+  assessWear(snap.units, snap.displayWidth, wear);
+  h.wear = wear.flaggedCount > 0;
+  return h;
+}
+
 void webClusterRegister(AsyncWebServer& server) {
   // --- Cluster follower endpoints (#272, epic #270) --------------------------
   // The LAN wire protocol the leader drives (form-encoded requests, JSON
@@ -105,32 +123,15 @@ void webClusterRegister(AsyncWebServer& server) {
     long row = request->getParam("row", true)->value().toInt();
     req.epoch = (uint32_t)strtoul(
         request->getParam("epoch", true)->value().c_str(), nullptr, 10);
-    if (row < 0 || row >= CLUSTER_MAX_MEMBERS) {
-      request->send(400, "text/plain", F("Row out of range"));
+    ClusterJoinCheck check = clusterJoinValidate(
+        row, req.leaderHost, req.leaderName, CLUSTER_HOST_MAX_LEN,
+        request->client()->remoteIP().toString());
+    if (check != ClusterJoinCheck::Ok) {
+      request->send(clusterJoinCheckStatus(check), "text/plain",
+                    clusterJoinCheckMessage(check));
       return;
     }
     req.row = (int)row;
-    if (req.leaderHost.length() == 0 ||
-        req.leaderHost.length() > CLUSTER_HOST_MAX_LEN ||
-        !settingsIsPrintableAscii(req.leaderHost, 0x21)) {
-      request->send(400, "text/plain", F("Invalid leaderHost"));
-      return;
-    }
-    if (req.leaderName.length() > CLUSTER_HOST_MAX_LEN ||
-        !settingsIsPrintableAscii(req.leaderName, 0x20)) {
-      request->send(400, "text/plain", F("Invalid leaderName"));
-      return;
-    }
-    // Source-IP binding (#313): a join mints a membership pointing display
-    // and firmware traffic at leaderHost, so the caller must actually BE
-    // leaderHost — the real leader dials from WiFi.localIP(), which is the
-    // exact value it puts in this field. A CSRF'd browser or any other LAN
-    // host cannot satisfy this, so it cannot hijack the row/membership.
-    if (req.leaderHost != request->client()->remoteIP().toString()) {
-      request->send(403, "text/plain",
-                    F("leaderHost must match the caller's address"));
-      return;
-    }
     // #295 sticky leadership: a board that LEADS a wall never becomes a
     // row of someone else's — after a promote, the returning old leader's
     // joins collect this marker (from us and from every claimed member)
@@ -168,15 +169,12 @@ void webClusterRegister(AsyncWebServer& server) {
       return;
     }
     clusterFollowerHandleJoin(req);
-    // Handshake reply: identity, firmware rev, width. Width is the boot
-    // probe's result today; #234 refines it — no protocol change. The
-    // #294 health keys ride along (minus width/rev, already present) so
+    // Handshake reply: identity, firmware rev and the #294 health keys, so
     // the leader's strip is live from the handshake, not the first ping.
     DisplaySnapshot snap = displaySnapshotGet();
     char mask[16];
-    unitFaultMaskHex(snap.units, snap.displayWidth, mask, sizeof(mask));
-    WearAssessment wear;
-    assessWear(snap.units, snap.displayWidth, wear);
+    ClusterRowHealth health =
+        clusterMemberHealthNow(snap, mask, sizeof(mask));
     // #332 additive: our deviceRole feeds the leader's succession tiers
     // (backup > rendering > spare > monitor). Absent = pre-#332 peer.
     String selfRole;
@@ -188,16 +186,8 @@ void webClusterRegister(AsyncWebServer& server) {
     appendJsonString(out, effectiveName);
     out += ",\"role\":";
     appendJsonString(out, selfRole);
-    out += ",\"rev\":\"" GIT_REV "\",\"width\":";
-    out += (int)snap.displayWidth;
-    out += ",\"detected\":";
-    out += (int)snap.detectedUnitCount;
-    out += ",\"faulty\":";
-    out += (int)snap.faultyUnitCount;
-    out += ",\"faultMask\":\"";
-    out += mask;
-    out += "\",\"wear\":";
-    out += wear.flaggedCount > 0 ? "true" : "false";
+    out += ",\"rev\":\"" GIT_REV "\"";
+    clusterAppendHealthKeys(out, health);
     out += ",\"protocol\":1}";
     request->send(200, "application/json", out);
   });
@@ -208,8 +198,8 @@ void webClusterRegister(AsyncWebServer& server) {
     // only), so a strict bind is safe. Standalone (leaderHost "") falls
     // through to the handler's NotClustered 409.
     ClusterFollowerView cv = clusterFollowerViewGet();
-    if (cv.leaderHost.length() > 0 &&
-        cv.leaderHost != request->client()->remoteIP().toString()) {
+    if (clusterCallerIsForeign(cv.leaderHost,
+                               request->client()->remoteIP().toString())) {
       foreignContactRecord(foreignContacts, ForeignContactKind::Render,
                            request->client()->remoteIP().toString(), millis());
       SerialPrintln(String(F("Foreign render refused from ")) +
@@ -284,7 +274,7 @@ void webClusterRegister(AsyncWebServer& server) {
     {
       ClusterFollowerView fcv = clusterFollowerViewGet();
       String fromIp = request->client()->remoteIP().toString();
-      if (fcv.leaderHost.length() > 0 && fcv.leaderHost != fromIp) {
+      if (clusterCallerIsForeign(fcv.leaderHost, fromIp)) {
         foreignContactRecord(foreignContacts, ForeignContactKind::Ping, fromIp,
                              millis());
         SerialPrintln(String(F("Foreign ping refused from ")) + fromIp +
@@ -345,17 +335,19 @@ void webClusterRegister(AsyncWebServer& server) {
     }
     ClusterFollowerView cv = clusterFollowerViewGet();
     DisplaySnapshot snap = displaySnapshotGet();
-    WearAssessment wear;
-    assessWear(snap.units, snap.displayWidth, wear);
+    char mask[16];
+    ClusterRowHealth health =
+        clusterMemberHealthNow(snap, mask, sizeof(mask));
     String out = "{\"state\":";
     appendJsonString(out, clusterFollowerPhaseName(cv.phase));
     out += ",\"epoch\":";
     out += String((unsigned long)cv.epoch);
     out += ",\"seq\":";
     out += String((unsigned long)cv.lastSeq);
-    out += clusterPingHealthJson(snap.units, snap.displayWidth,
-                                 snap.detectedUnitCount, snap.faultyUnitCount,
-                                 wear.flaggedCount > 0, GIT_REV);
+    clusterAppendHealthKeys(out, health);
+    // rev refreshes on every ping so the leader's rev fact survives its own
+    // reboot without a re-join.
+    out += ",\"rev\":\"" GIT_REV "\"";
     // #332 additive: refresh our role every ping so a live role change
     // reorders the leader's succession tiers without a re-join.
     String selfRole;
@@ -410,36 +402,24 @@ void webClusterRegister(AsyncWebServer& server) {
     ClusterFollowerView cv = clusterFollowerViewGet();
     bool fromLanBrowser = request->hasHeader("Origin") &&
                           lanOriginAllowed(request->header("Origin"));
-    if (clusterFollowerHmacEnforced()) {
-      // Keyed (#313 follow-on): the leader arm becomes a valid SIGNATURE
-      // (beats a spoofed IP); the local Leave button rides the LAN-browser
-      // arm. A bare unsigned non-browser leave is refused.
-      bool signedOk = false;
-      if (request->hasParam("ts", true) && request->hasParam("mac", true)) {
-        uint64_t ts = strtoull(request->getParam("ts", true)->value().c_str(),
-                               nullptr, 10);
-        signedOk = clusterFollowerVerifySigned(
-            clusterHmacLeaveMsg(ts), ts,
-            request->getParam("mac", true)->value());
-      }
-      if (!signedOk && !fromLanBrowser) {
-        request->send(403, "text/plain",
-                      F("leave requires a valid signature or this display's "
-                        "own web UI"));
-        return;
-      }
-    } else {
-      // Pre-HMAC combined guard (#313): the leader's reconfigure fan-out
-      // (no Origin, dials from leaderHost) OR the local browser; a bare
-      // non-leader LAN host is refused (closes the any-host force-leave DoS).
-      bool fromLeader =
-          cv.leaderHost.length() > 0 &&
-          cv.leaderHost == request->client()->remoteIP().toString();
-      if (cv.leaderHost.length() > 0 && !fromLeader && !fromLanBrowser) {
-        request->send(403, "text/plain", F("leave must come from the leader "
-                                           "or this display's own web UI"));
-        return;
-      }
+    bool keyed = clusterFollowerHmacEnforced();
+    bool signedOk = false;
+    if (keyed && request->hasParam("ts", true) &&
+        request->hasParam("mac", true)) {
+      uint64_t ts = strtoull(request->getParam("ts", true)->value().c_str(),
+                             nullptr, 10);
+      signedOk = clusterFollowerVerifySigned(
+          clusterHmacLeaveMsg(ts), ts, request->getParam("mac", true)->value());
+    }
+    if (!clusterLeaveAllowed(keyed, signedOk, cv.leaderHost,
+                             request->client()->remoteIP().toString(),
+                             fromLanBrowser)) {
+      request->send(403, "text/plain",
+                    keyed ? F("leave requires a valid signature or this "
+                              "display's own web UI")
+                          : F("leave must come from the leader or this "
+                              "display's own web UI"));
+      return;
     }
     clusterFollowerHandleLeave();  // idempotent
     request->send(200, "text/plain", F("ok"));

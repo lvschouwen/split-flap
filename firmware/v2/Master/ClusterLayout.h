@@ -26,10 +26,8 @@
 
 #include <Arduino.h>
 
-#include "DisplayCommand.h"  // DisplayAlignment
-
-#define CLUSTER_MAX_MEMBERS 8
-#define CLUSTER_HOST_MAX_LEN 40
+#include "ClusterWireGuards.h"  // CLUSTER_MAX_MEMBERS, CLUSTER_HOST_MAX_LEN
+#include "DisplayCommand.h"     // DisplayAlignment
 
 // Cluster clock date row: v1's message-stamp date shape (%d %b %y).
 // flapFrameBuild uppercases at render time, so "13 Jul 26" flips as

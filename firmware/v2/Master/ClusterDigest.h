@@ -21,33 +21,6 @@
 #include "SettingsJson.h"  // appendJsonString
 #include "UnitHealth.h"    // UnitFacts + the faulty predicate
 
-// The additive #294 keys of the follower's ping reply, spliced after the
-// #272 state/epoch/seq trio (leading comma). rev refreshes on every ping
-// so the leader's rev fact survives its own reboot without a re-join.
-inline String clusterPingHealthJson(const UnitFacts* units, int width,
-                                    int detected, int faulty, bool wear,
-                                    const char* rev) {
-  char mask[16];
-  unitFaultMaskHex(units, width, mask, sizeof(mask));
-  String out;
-  out.reserve(96);
-  out += ",\"width\":";
-  out += width;
-  out += ",\"detected\":";
-  out += detected;
-  out += ",\"faulty\":";
-  out += faulty;
-  out += ",\"faultMask\":\"";
-  out += mask;
-  out += "\",\"lost\":";
-  out += computeLostUnitCount(units, width);
-  out += ",\"wear\":";
-  out += wear ? "true" : "false";
-  out += ",\"rev\":";
-  appendJsonString(out, String(rev));
-  return out;
-}
-
 // The one /cluster/status wire shape (#273 keys + #294 health), shared by
 // the GET endpoint and the digest below so follower panes can feed the
 // same browser renderer the leader uses.

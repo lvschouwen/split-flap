@@ -25,15 +25,12 @@ static volatile bool membershipDirty = false;
 // Cluster-wire auth (#313 follow-on): the leader's negotiated key. Present ⇒
 // every leader-wire request must carry a valid ts+mac; absent (pre-HMAC
 // leader) ⇒ fall back to #313 source-IP binding.
-static uint8_t hmacKey[FOLLOWER_HMAC_KEY_LEN] = {0};
-static bool hmacKeyValid = false;
+static ClusterMemberAuth auth;  // key + replay mark (ClusterWireGuards.h)
 // Monotonic replay high-water mark (#313 follow-on HIGH#1): every accepted
 // signed request must carry a strictly newer ts. Persisted coarsely in the
 // EEPROM membership blob (hmacLastPersistedTs = last written value) so a
 // reboot reloads it; reset durably on (re)key at join and on leave so a
 // rebooted leader's fresh signing epoch is re-accepted.
-static uint64_t hmacLastAcceptedTs = 0;
-static uint64_t hmacLastPersistedTs = 0;
 
 // Single staged render slot — a newer accepted render replaces an
 // undelivered older one (seq acceptance upstream keeps ordering honest).
@@ -89,14 +86,11 @@ void clusterInit() {
   char host[FOLLOWER_HOST_MAX + 1];
   char tz[FOLLOWER_TZ_MAX + 1];
   uint8_t row = 0;
-  bool stored = followerMembershipDecode(blob, name, host, tz, row,
-                                         hmacKeyValid, hmacKey,
-                                         hmacLastAcceptedTs);
-  if (!stored) {
-    hmacKeyValid = false;
-    hmacLastAcceptedTs = 0;
-  }
-  hmacLastPersistedTs = hmacLastAcceptedTs;
+  bool keyValid = false;
+  uint64_t mark = 0;
+  bool stored = followerMembershipDecode(blob, name, host, tz, row, keyValid,
+                                         auth.key, mark);
+  auth.restored(stored && keyValid, mark);
   if (stored) {
     leaderName = name;
     leaderHost = host;
@@ -115,7 +109,7 @@ static void persistMembership() {
   if (leaderHost.length() == 0 ||
       !followerMembershipEncode(leaderName.c_str(), leaderHost.c_str(),
                                 leaderTz.c_str(), (uint8_t)memberRow,
-                                hmacKeyValid, hmacKey, hmacLastAcceptedTs,
+                                auth.keyed, auth.key, auth.lastAcceptedTs,
                                 blob)) {
     followerMembershipClear(blob);
   }
@@ -236,24 +230,10 @@ void clusterHandleJoin(const String& name, const String& host, int row,
   clusterFollowerJoin(policyState, millis(), epoch);
   // Adopt the negotiated wire-auth key (#313 follow-on): a valid key turns
   // enforcement ON; a pre-HMAC leader sends none.
-  uint8_t newKey[FOLLOWER_HMAC_KEY_LEN];
-  bool newKeyValid = key.length() > 0 && clusterKeyFromHex(key, newKey);
-  bool keyChanged = newKeyValid != hmacKeyValid ||
-                    (newKeyValid && memcmp(newKey, hmacKey, 32) != 0);
-  if (newKeyValid) {
-    memcpy(hmacKey, newKey, 32);
-    hmacKeyValid = true;
-  } else {
-    hmacKeyValid = false;
-  }
-  // Fresh key material ⇒ a fresh signing epoch (a leader reboot re-mints):
-  // reset the monotonic mark so post-reboot lower ts values are re-accepted.
-  // The `changed` persist below rewrites the blob with this reset mark, so a
+  // Fresh key material resets the replay mark (ClusterMemberAuth::adoptKey);
+  // the `changed` persist below rewrites the blob with that reset mark, so a
   // follower reboot after the rekey won't reload a stale-high mark.
-  if (keyChanged) {
-    hmacLastAcceptedTs = 0;
-    hmacLastPersistedTs = 0;
-  }
+  bool keyChanged = auth.adoptKey(key);
   // NVS/EEPROM-flood guard (#313, parity with the S3 follower): persist the
   // membership blob only when a field actually moved — a leader re-joining
   // on its cadence must not burn EEPROM on every accepted join.
@@ -273,21 +253,20 @@ void clusterHandleJoin(const String& name, const String& host, int row,
     membershipDirty = true;
     SerialPrint(F("cluster: joined by "));
     SerialPrint(name);
-    SerialPrintln(hmacKeyValid ? F(" [authenticated]") : F(""));
+    SerialPrintln(auth.keyed ? F(" [authenticated]") : F(""));
   }
 }
 
-bool clusterHmacEnforced() { return hmacKeyValid; }
+bool clusterHmacEnforced() { return auth.keyed; }
 
 bool clusterVerifySigned(const String& canonicalMsg, uint64_t ts,
                          const String& macHex) {
-  if (!hmacKeyValid) return false;
   bool synced = false;
   uint64_t nowMs = nowEpochMs(synced);
-  bool ok = clusterHmacAccept(hmacKey, canonicalMsg, ts, macHex, nowMs, synced,
-                              hmacLastAcceptedTs);
-  if (ok && clusterHmacMarkNeedsPersist(hmacLastAcceptedTs, hmacLastPersistedTs)) {
-    hmacLastPersistedTs = hmacLastAcceptedTs;
+  bool markDue = false;
+  bool ok = auth.accept(canonicalMsg, ts, macHex, nowMs, synced, markDue);
+  if (markDue) {
+    auth.markPersisted();
     membershipDirty = true;  // loop() rewrites the blob (mark included)
   }
   return ok;
@@ -328,9 +307,7 @@ void clusterHandleLeave() {
   memberRow = 0;
   heldSegment = "";
   renderPending = false;
-  hmacKeyValid = false;  // #313 follow-on: drop the wire-auth key on leave
-  hmacLastAcceptedTs = 0;  // and reset the replay mark alongside the key
-  hmacLastPersistedTs = 0;
+  auth.drop();  // #313 follow-on: the wire-auth key and its replay mark
   membershipDirty = true;  // persistMembership clears the blob (mark included)
   SerialPrintln(F("cluster: left — standalone (blank)"));
 }

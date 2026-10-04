@@ -12,8 +12,8 @@
 void setUp() {}
 void tearDown() {}
 
-static FollowerHealthFacts makeHealth() {
-  FollowerHealthFacts h;
+static ClusterRowHealth makeHealth() {
+  ClusterRowHealth h;
   h.width = 8;
   h.detected = 8;
   h.faulty = 2;
@@ -62,16 +62,16 @@ static void test_fault_mask_flags_lost_unit() {
 }
 
 static void test_health_keys_carry_lost_and_bus_dead() {
-  FollowerHealthFacts h = makeHealth();
+  ClusterRowHealth h = makeHealth();
   h.lost = 1;
   h.busDead = true;
   String out;
-  followerAppendHealthKeys(out, h);
+  clusterAppendHealthKeys(out, h);
   TEST_ASSERT_TRUE(out.indexOf("\"lost\":1") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"busDead\":1") >= 0);
   h.busDead = false;
   out = "";
-  followerAppendHealthKeys(out, h);
+  clusterAppendHealthKeys(out, h);
   TEST_ASSERT_TRUE(out.indexOf("busDead") < 0);  // additive: absent = alive
 }
 

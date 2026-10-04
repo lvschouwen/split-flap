@@ -88,29 +88,10 @@ static void test_fault_mask_tiny_buffer_truncates_safely() {
   TEST_ASSERT_EQUAL('\0', buf[n]);
 }
 
-// --- ping-reply health fragment ------------------------------------------------
+// --- fault mask -------------------------------------------------------------------
 
-static void test_ping_health_fragment_shape() {
-  UnitFacts units[16];
-  makeUnits(units, 16);
-  for (int i = 0; i < 16; i++) setHealthy(units[i]);
-  setFaulty(units[0]);
-  String frag = clusterPingHealthJson(units, 16, 16, 1, false, "abc1234");
-  TEST_ASSERT_EQUAL_STRING(
-      ",\"width\":16,\"detected\":16,\"faulty\":1,\"faultMask\":\"0001\","
-      "\"lost\":0,\"wear\":false,\"rev\":\"abc1234\"",
-      frag.c_str());
-}
-
-static void test_ping_health_fragment_wear_true() {
-  UnitFacts units[1];
-  makeUnits(units, 1);
-  String frag = clusterPingHealthJson(units, 1, 1, 0, true, "abc1234");
-  TEST_ASSERT_TRUE(frag.indexOf("\"wear\":true") >= 0);
-}
-
-static void test_fault_mask_and_ping_flag_lost_unit() {
-  // #497: a stale sketch unit sets its mask bit and the lost count.
+static void test_fault_mask_flags_lost_unit() {
+  // #497: a stale sketch unit sets its mask bit.
   UnitFacts units[4];
   makeUnits(units, 4);
   for (int i = 0; i < 4; i++) setHealthy(units[i]);
@@ -120,8 +101,7 @@ static void test_fault_mask_and_ping_flag_lost_unit() {
   char buf[8];
   unitFaultMaskHex(units, 4, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("4", buf);
-  String frag = clusterPingHealthJson(units, 4, 4, 1, false, "abc1234");
-  TEST_ASSERT_TRUE(frag.indexOf("\"lost\":1") >= 0);
+  TEST_ASSERT_EQUAL(1, computeLostUnitCount(units, 4));
 }
 
 // --- ping-reply health parse (leader side) --------------------------------------
@@ -621,12 +601,10 @@ int main(int, char**) {
   RUN_TEST(test_fault_mask_unread_unit_is_not_faulty);
   RUN_TEST(test_fault_mask_zero_width_is_empty);
   RUN_TEST(test_fault_mask_tiny_buffer_truncates_safely);
-  RUN_TEST(test_ping_health_fragment_shape);
-  RUN_TEST(test_ping_health_fragment_wear_true);
   RUN_TEST(test_parse_ping_health_full_body);
   RUN_TEST(test_parse_ping_health_lost_and_bus_dead);
   RUN_TEST(test_parse_ping_health_pre_497_reply_reads_no_loss);
-  RUN_TEST(test_fault_mask_and_ping_flag_lost_unit);
+  RUN_TEST(test_fault_mask_flags_lost_unit);
   RUN_TEST(test_parse_ping_health_old_firmware_reply_is_invalid);
   RUN_TEST(test_extract_json_bool);
   RUN_TEST(test_status_json_carries_member_health);

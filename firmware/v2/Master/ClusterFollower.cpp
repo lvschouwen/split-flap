@@ -9,7 +9,8 @@
 
 #include "ClockPolicy.h"  // clockIsTimeSynced
 #include "ClusterDigest.h"  // promote transform + digest field extraction
-#include "ClusterHmac.h"  // cluster-wire auth: key storage + verify (#313 follow-on)
+#include "ClusterHmac.h"
+#include "ClusterWireGuards.h"  // cluster-wire auth: key storage + verify (#313 follow-on)
 #include "ClusterLeader.h"  // clusterLeaderStageConfig — the promote handoff
 #include "WebEndpoints.h"   // #337: webMqttApplyMode — adopt cluster mode on promote
 #include "DisplayCommand.h"
@@ -55,19 +56,16 @@ static String heldSegment;
 static int heldSpeed = 0;
 static bool membershipDirty = false;  // staged NVS persist/clear
 // Cluster-wire auth (#313 follow-on): the negotiated key, held with the
-// membership. hmacKeyValid gates ENFORCEMENT — present ⇒ every leader-wire
+// membership. auth.keyed gates ENFORCEMENT — present ⇒ every leader-wire
 // request must carry a valid ts+mac; absent (pre-HMAC leader) ⇒ fall back to
 // #313 source-IP binding.
-static uint8_t hmacKey[32] = {0};
-static bool hmacKeyValid = false;
+static ClusterMemberAuth auth;  // key + replay mark (ClusterWireGuards.h)
 static String hmacKeyHex;  // staged for the NVS persist
 // Monotonic replay high-water mark (#313 follow-on HIGH#1): every accepted
 // signed request must carry a strictly newer ts. Persisted coarsely to NVS
-// (hmacLastPersistedTs tracks the last written value; hmacTsDirty stages the
+// (auth.lastPersistedTs tracks the last written value; hmacTsDirty stages the
 // next write) so a reboot reloads it; reset durably on (re)key at join and on
 // leave so a rebooted leader's fresh signing epoch is re-accepted.
-static uint64_t hmacLastAcceptedTs = 0;
-static uint64_t hmacLastPersistedTs = 0;
 static bool hmacTsDirty = false;
 // #294 ping-piggybacked digest: raw JSON held for GET /cluster/digest
 // (RAM-only); the promote-critical table + self index persist via
@@ -116,10 +114,9 @@ void clusterFollowerInit(SettingsStore& store) {
   digestSelfIndex = store.getInt(CLUSTER_KEY_SELF_INDEX, -1);
   digestMode = store.getString(CLUSTER_KEY_MODE, "");  // #337
   hmacKeyHex = store.getString(CLUSTER_KEY_HMAC, "");
-  hmacKeyValid = clusterKeyFromHex(hmacKeyHex, hmacKey);
-  if (!hmacKeyValid) hmacKeyHex = "";
-  hmacLastAcceptedTs = clusterU64FromStr(store.getString(CLUSTER_KEY_LASTTS, "0"));
-  hmacLastPersistedTs = hmacLastAcceptedTs;
+  auth.restored(clusterKeyFromHex(hmacKeyHex, auth.key),
+                clusterU64FromStr(store.getString(CLUSTER_KEY_LASTTS, "0")));
+  if (!auth.keyed) hmacKeyHex = "";
   clusterFollowerBoot(policyState, millis(), leaderHost.length() > 0);
   if (policyState.phase == ClusterFollowerPhase::Grace) {
     SerialPrintln("cluster: booted clustered by " + leaderName +
@@ -168,7 +165,7 @@ void clusterFollowerServiceTick(SettingsStore& store) {
         persistName = leaderName;
         persistHost = leaderHost;
         persistRow = memberRow;
-        persistKeyHex = hmacKeyValid ? hmacKeyHex : String();
+        persistKeyHex = auth.keyed ? hmacKeyHex : String();
       } else {
         clearMembership = true;
       }
@@ -186,8 +183,8 @@ void clusterFollowerServiceTick(SettingsStore& store) {
     if (hmacTsDirty && !clearMembership) {
       hmacTsDirty = false;
       persistTs = true;
-      persistTsVal = hmacLastAcceptedTs;
-      hmacLastPersistedTs = hmacLastAcceptedTs;  // optimistic; drives next gate
+      persistTsVal = auth.lastAcceptedTs;
+      auth.markPersisted();  // optimistic; drives next gate
     }
     if (renderPending && (int32_t)(millis() - renderDueMs) >= 0) {
       // The reflash producer gate outranks renders too — the job owns the
@@ -290,25 +287,13 @@ void clusterFollowerHandleJoin(const ClusterJoinRequest& req) {
   // key turns enforcement ON; a pre-HMAC leader sends none, so we stay on the
   // #313 source-IP binding. (The key rides the same NVS record — a change
   // marks the membership dirty below.)
-  uint8_t newKey[32];
-  bool newKeyValid = req.key.length() > 0 && clusterKeyFromHex(req.key, newKey);
-  bool keyChanged = newKeyValid != hmacKeyValid ||
-                    (newKeyValid && memcmp(newKey, hmacKey, 32) != 0);
-  if (newKeyValid) {
-    memcpy(hmacKey, newKey, 32);
-    hmacKeyValid = true;
-    hmacKeyHex = req.key;
-  } else {
-    hmacKeyValid = false;
-    hmacKeyHex = "";
-  }
-  // Fresh key material ⇒ a fresh signing epoch (a leader reboot re-mints):
-  // reset the monotonic mark so post-reboot lower ts values are re-accepted,
-  // and stage a durable reset of the persisted mark so a follower reboot right
-  // after the rekey doesn't reload a stale-high mark and reject the new leader.
+  bool keyChanged = auth.adoptKey(req.key);
+  hmacKeyHex = auth.keyed ? req.key : String();
+  // Fresh key material reset the replay mark (ClusterMemberAuth::adoptKey):
+  // stage a durable reset of the persisted mark too, so a follower reboot
+  // right after the rekey doesn't reload a stale-high mark and reject the new
+  // leader.
   if (keyChanged) {
-    hmacLastAcceptedTs = 0;
-    hmacLastPersistedTs = 0;
     hmacTsDirty = true;
     // #321: a new key means a new leader relationship — drop any successor rank
     // / hold carried over from the previous leader (the new leader's first ping
@@ -328,7 +313,7 @@ void clusterFollowerHandleJoin(const ClusterJoinRequest& req) {
     membershipDirty = true;
     SerialPrintln("cluster: joined by " + req.leaderName + " (" +
                   req.leaderHost + ") as row " + String(req.row) +
-                  (hmacKeyValid ? " [authenticated]" : ""));
+                  (auth.keyed ? " [authenticated]" : ""));
   }
 }
 
@@ -413,7 +398,7 @@ bool clusterFollowerHandlePing(const String& digest, int youIndex,
 bool clusterFollowerHmacEnforced() {
   if (clusterMutex == nullptr) return false;
   ClusterLock lock;
-  return hmacKeyValid;
+  return auth.keyed;
 }
 
 bool clusterFollowerVerifySigned(const String& canonicalMsg, uint64_t ts,
@@ -422,12 +407,9 @@ bool clusterFollowerVerifySigned(const String& canonicalMsg, uint64_t ts,
   bool synced = false;
   uint64_t nowMs = nowEpochMs(synced);  // no lock needed (gettimeofday only)
   ClusterLock lock;
-  if (!hmacKeyValid) return false;
-  bool ok = clusterHmacAccept(hmacKey, canonicalMsg, ts, macHex, nowMs, synced,
-                              hmacLastAcceptedTs);
-  if (ok && clusterHmacMarkNeedsPersist(hmacLastAcceptedTs, hmacLastPersistedTs)) {
-    hmacTsDirty = true;  // drained in clusterFollowerServiceTick (outside lock)
-  }
+  bool markDue = false;
+  bool ok = auth.accept(canonicalMsg, ts, macHex, nowMs, synced, markDue);
+  if (markDue) hmacTsDirty = true;  // drained in the service tick, outside lock
   return ok;
 }
 
@@ -441,10 +423,8 @@ static void followerLeaveLocked() {
   heldSpeed = 0;
   renderPending = false;
   membershipDirty = true;
-  hmacKeyValid = false;  // #313 follow-on: drop the wire-auth key on leave
+  auth.drop();  // #313 follow-on: the wire-auth key and its replay mark
   hmacKeyHex = "";
-  hmacLastAcceptedTs = 0;  // and reset the replay mark alongside the key
-  hmacLastPersistedTs = 0;
   hmacTsDirty = false;  // clearMembership removes CLUSTER_KEY_LASTTS from NVS
   digestRaw = "";
   digestTable = "";

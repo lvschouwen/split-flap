@@ -10,10 +10,12 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "ClusterWireGuards.h"  // CLUSTER_HOST_MAX_LEN, CLUSTER_HMAC_KEY_LEN
+
 #define FOLLOWER_NAME_MAX 32
-#define FOLLOWER_HOST_MAX 40
+#define FOLLOWER_HOST_MAX CLUSTER_HOST_MAX_LEN
 #define FOLLOWER_TZ_MAX 64
-#define FOLLOWER_HMAC_KEY_LEN 32
+#define FOLLOWER_HMAC_KEY_LEN CLUSTER_HMAC_KEY_LEN
 
 // magic u32 LE | row u8 | keyPresent u8 | key[32] | lastTs u64 LE |
 // name[NAME_MAX+1] | host[HOST_MAX+1] | tz[TZ_MAX+1] | xor checksum. The
