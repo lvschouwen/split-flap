@@ -32,7 +32,7 @@ enum BootSectionState {
 // expects every unit to carry (BootIntegrity.h). The generated image header's
 // NEW_TWIBOOT_CRC32 is the source; the unit build asserts the two equal and
 // tests/test_new_twiboot_image pins it for the trees that never see that header.
-#define BOOT_CURRENT_CRC32 0x333aaf99UL
+#define BOOT_CURRENT_CRC32 0xc65e3dbfUL
 // crc32 of each previous new image still deployed on units. Their page 7
 // (do_spm) is byte-identical to the current image's, so stage 2 alone takes a
 // unit from any of them to the current image; bootPage7HoldsDoSpm() in

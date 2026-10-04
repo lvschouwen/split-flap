@@ -425,11 +425,6 @@ void setup() {
   GPIOR0 = 0;
   wdt_disable();
 
-  // Crash recovery sentinel (#542): tell the new twiboot that the application
-  // booted successfully. Written before any risky code so that only a crash
-  // this early — before the CPU even gets here — triggers the crash counter.
-  GPIOR1 = 0xAA;
-
   // In-system twiboot update auto-resume (#499). A unit whose boot section is a
   // half-done stage 2 (page 0 is a jmp-0 trampoline) has no working bootloader
   // and must finish the rewrite before anything else — it cannot wait for a

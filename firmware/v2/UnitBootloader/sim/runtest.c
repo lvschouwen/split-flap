@@ -55,7 +55,6 @@
 #define PAGE_SIZE  128
 #define SIM_DONE   0xD0
 #define MAX_EXPECT 8
-#define MAX_INIT   16
 
 static elf_firmware_t fw;
 static uint8_t start_boot[BOOT_LEN];
@@ -72,9 +71,6 @@ static int n_expects = 0;
 static int tw_ram_set = 0, tw_cmd, tw_flag, tw_count;
 static long expect_resets = -1;
 static long expect_spm = -1;
-static int expect_hold = 0;
-static struct { uint32_t addr; uint8_t val; } init_data[MAX_INIT];
-static int n_init = 0;
 
 #define TWIBOOT_HANDLER_ENTRY 0x7e5a
 
@@ -99,7 +95,6 @@ static avr_t* fresh_avr(void) {
   memcpy(&avr->flash[BOOT_START], start_boot, BOOT_LEN);
   avr->reset_pc = BOOT_START;  /* BOOTRST: every reset enters the boot section */
   avr->pc = start_at_reset ? BOOT_START : 0;
-  for (int i = 0; i < n_init; i++) avr->data[init_data[i].addr] = init_data[i].val;
   return avr;
 }
 
@@ -210,15 +205,6 @@ static enum outcome run_once(long kill_n, int verbose, long* spm_total) {
     printf("ran=%llu dones=%d spm=%ld BOOT SECTION: %d/%d match\n",
            (unsigned long long)ran, dones, spm, BOOT_LEN - bad, BOOT_LEN);
   avr_terminate(avr);
-  if (expect_hold) {
-    if (dones == 0) {
-      if (verbose) printf("HOLD confirmed: app never reached in %llu cycles\n",
-                          (unsigned long long)ran);
-      return OUT_OK;
-    }
-    if (verbose) printf("FAIL: expected hold but app ran (%d dones)\n", dones);
-    return OUT_FAIL;
-  }
   if (dones < boots) {
     if (verbose) printf("FAIL: only %d of %d boots finished\n", dones, boots);
     return OUT_FAIL;
@@ -283,17 +269,6 @@ int main(int argc, char** argv) {
       expect_resets = strtol(argv[++i], NULL, 0);
     } else if (!strcmp(a, "--max-cycles") && i + 1 < argc) {
       max_cycles = strtoull(argv[++i], NULL, 0);
-    } else if (!strcmp(a, "--expect-hold")) {
-      expect_hold = 1;
-    } else if (!strcmp(a, "--init-data") && i + 1 < argc) {
-      if (n_init >= MAX_INIT) { fprintf(stderr, "too many --init-data\n"); return 2; }
-      unsigned int a_val, d_val;
-      if (sscanf(argv[++i], "%x:%x", &a_val, &d_val) != 2 || d_val > 0xFF) {
-        fprintf(stderr, "bad --init-data (want ADDR:VAL in hex)\n"); return 2;
-      }
-      init_data[n_init].addr = a_val;
-      init_data[n_init].val = (uint8_t)d_val;
-      n_init++;
     } else {
       fprintf(stderr, "unknown/incomplete option %s\n", a);
       return 2;

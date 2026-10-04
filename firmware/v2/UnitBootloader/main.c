@@ -24,20 +24,13 @@
 #define VERSION_STRING          "TWIBOOT v3.2"
 
 #if (SF_NEW_TWIBOOT)
-/* Crash recovery (#542): GPIOR1 is the "booted OK" sentinel the application
- * writes in setup(), GPIOR2 is the crash counter. Both survive soft resets
- * (WDT, external) and are cleared to 0x00 on power-on. */
-#define SF_CRASH_SENTINEL       0xAA
-#define SF_CRASH_THRESHOLD      3
 /* Identity bytes (#541): compact identifier in the CMD_READ_VERSION response. */
 #define SF_INFO_VERSION         0x02
 #define SF_INFO_CAP_DO_SPM      0x01
 #define SF_INFO_CAP_BOUNDED_PIN 0x02
-#define SF_INFO_CAP_CRASH_REC   0x04
 #define SF_INFO_CAP_FUSE_CHIP   0x08
 #define SF_INFO_CAPS            (SF_INFO_CAP_DO_SPM | SF_INFO_CAP_BOUNDED_PIN | \
-                                 SF_INFO_CAP_CRASH_REC | SF_INFO_CAP_FUSE_CHIP)
-#define SF_CRASH_MAGIC_VAL      0x5F
+                                 SF_INFO_CAP_FUSE_CHIP)
 #endif
 
 /* Split-flap patch: SF_NEW_TWIBOOT selects the lean second-generation image
@@ -268,16 +261,6 @@ static uint8_t app_installed = 1;
 /* flash buffer */
 static uint8_t buf[SPM_PAGESIZE];
 static uint16_t addr;
-
-#if (SF_NEW_TWIBOOT)
-/* Crash recovery (#542): counter lives in .noinit SRAM so it survives
- * WDT/EXT/BOD resets (AVR preserves SRAM on soft resets). A magic byte
- * guards against uninitialised SRAM on first power-on (SRAM is undefined
- * after POR). GPIORs are I/O registers zeroed by hardware on any reset,
- * so they cannot hold a count across boots — that was the original bug. */
-static uint8_t sf_crash_magic __attribute__((section(".noinit")));
-static uint8_t sf_crash_count __attribute__((section(".noinit")));
-#endif
 
 #if (VIRTUAL_BOOT_SECTION)
 /* reset/application vectors received from host, needed for verify read */
@@ -921,23 +904,6 @@ void disable_wdt_timer(void)
      * twiboot clears MCUSR unconditionally, hiding the reset cause from the
      * sketch — see #502 item 6. */
     GPIOR0 = MCUSR;
-    /* Crash recovery (#542): count consecutive WDT resets where the app never
-     * wrote the sentinel (GPIOR1 = 0xAA). The counter lives in .noinit SRAM
-     * (survives WDT/EXT/BOD resets). A magic byte detects uninitialised SRAM
-     * (first boot after flashing, or power-on where SRAM content is undefined).
-     * PORF also clears: a power cycle is never a crash loop. */
-    if ((MCUSR & (1 << PORF)) || sf_crash_magic != SF_CRASH_MAGIC_VAL) {
-        sf_crash_magic = SF_CRASH_MAGIC_VAL;
-        sf_crash_count = 0;
-    }
-    if (MCUSR & (1 << WDRF)) {
-        if (GPIOR1 == SF_CRASH_SENTINEL) {
-            sf_crash_count = 0;
-        } else {
-            if (sf_crash_count < 0xFF) sf_crash_count++;
-        }
-    }
-    GPIOR1 = 0;
 #endif
     MCUSR = 0;
     WDTCSR = (1<<WDCE) | (1<<WDE);
@@ -973,11 +939,6 @@ int main(void)
     }
 
 #if (SF_NEW_TWIBOOT)
-    /* Crash recovery (#542): stay in bootloader when the crash counter
-     * (.noinit SRAM, set in .init3) reaches the threshold. */
-    if (app_installed && (GPIOR0 & (1 << WDRF)) && sf_crash_count >= SF_CRASH_THRESHOLD) {
-        app_installed = 0;
-    }
     boot_timeout = BOOT_TICKS(TIMEOUT_MS) + 1;
 #endif
 
@@ -1076,13 +1037,6 @@ int main(void)
     do {
         __asm volatile ("nop");
     } while (--wait);
-#endif
-
-#if (SF_NEW_TWIBOOT)
-    /* Clear the sentinel so the app starts a fresh crash-detection cycle.
-     * The crash counter in .noinit SRAM is NOT cleared here — it persists
-     * across twiboot runs and is reset only by the sentinel write or POR. */
-    GPIOR1 = 0;
 #endif
 
     jump_to_app();

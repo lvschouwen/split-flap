@@ -13,7 +13,7 @@ void tearDown() {}
 // Stand-in constants from the generated new-image header. The classifier takes
 // them as parameters so it never embeds build-specific values; the real caller
 // passes NEW_TWIBOOT_CRC32 / NEW_TWIBOOT_PAGE7_INSTALLED_CRC32.
-static const uint32_t NEW_CRC = 0x333aaf99UL;
+static const uint32_t NEW_CRC = 0xc65e3dbfUL;
 static const uint32_t P7_CRC = 0x12345678UL;  // fielded 0-6 + new page 7
 // A pages-0-6 CRC that is NOT the fielded core, so the retriable fallback does
 // not fire unless a test opts in with BOOT_FIELDED_PAGES_0_6_CRC32.
