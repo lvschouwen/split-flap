@@ -22,7 +22,7 @@
 #include "UnitAssets.h"  // UNIT_FIRMWARE_BIN (build_assets.py)
 #include "UnitProtocolHelpers.h"
 #include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
-#include "BootUpdatePlan.h"   // #499 decision logic (includes BootUpdateReport)
+#include "BootUpdateOp.h"     // the shared in-system twiboot update (#499)
 
 UnitFacts unitFacts[UNITS_AMOUNT];
 int displayWidth = UNITS_AMOUNT;
@@ -1121,7 +1121,11 @@ void busAutoUpdateOutdatedUnits() {
 #endif
 }
 
-uint8_t busLastReflashFailed() { return reflashProgress.failed; }
+MaintGrade busLastReflashGrade() {
+  MaintGrade grade{MaintOutcome::Ok, MaintReason::None};
+  grade.outcome = classifyReflashOutcome(reflashProgress, grade.reason);
+  return grade;
+}
 
 void busRunReflashJob(uint8_t onlyAddr) {
 #if SERIAL_ENABLE == false
@@ -1151,125 +1155,52 @@ void busRunReflashJob(uint8_t onlyAddr) {
 #endif
 }
 
-// The start probes below run inside the probe-inhibit window this op arms.
-// That is safe only because a report request is not one of the first bytes the
-// bootloader pins itself on (0x00..0x02): it answers it by leaving for the
-// sketch.
-static_assert(SFP_CMD_GET_BOOT_INFO > 0x02,
-              "GET_BOOT_INFO would pin twiboot — the stage 1 start probes "
-              "would then hold a unit in its bootloader");
+// In-system twiboot update (#499): the sequence, its timeouts and its grading
+// are shared/BootUpdateOp.h; these are the superloop's hooks into it.
+#if SERIAL_ENABLE == false
+struct BootUpdateHooks {
+  bool readBootInfo(uint8_t addr, BootUpdateReport& out) {
+    return busReadBootInfo(addr, out);
+  }
+  bool waitIdle(uint8_t addr, uint32_t timeoutMs) {
+    return waitForBatchIdle(&addr, 1, timeoutMs);
+  }
+  int sendStage(uint8_t addr, uint8_t stage) {
+    return busBootUpdate(addr, stage);
+  }
+  int home(uint8_t addr) { return busHome(addr); }
+  void unitLeftSketch(uint8_t addr) {
+    busInvalidateUnitReads(addr);
+    busArmProbeInhibit(millis() + 3000);
+  }
+  void holdProbes() { busArmProbeInhibit(millis() + 3000); }
+  void pause(uint32_t ms) { delay(ms); }
+  uint32_t nowMs() { return millis(); }
+  void reshow() { reshowPending = lastFrameValid; }
+  void note(BootUpdateStep step, MaintReason why, const BootUpdateReport&) {
+    if (why == MaintReason::None) return;
+    SerialPrint(F("boot-update step "));
+    SerialPrint((int)step);
+    SerialPrint(F(" -> "));
+    SerialPrintln(maintReasonName(why));
+  }
+};
+#endif
 
 void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result) {
 #if SERIAL_ENABLE == false
-  BootUpdateReport info;
-  if (!busReadBootInfo(addr, info)) {
-    result = {seq, MaintOutcome::PostconditionFail,
-              MaintReason::BootInfoReadFail};
-    return;
-  }
-  BootUpdatePlan plan = bootUpdateDecide(info);
-  if (plan.terminal != BOOT_PLAN_PROCEED) {
-    MaintOutcome o = MaintOutcome::PostconditionFail;
-    MaintReason r = MaintReason::BootStateUnknown;
-    switch (plan.terminal) {
-      case BOOT_PLAN_ALREADY_NEW:
-        o = MaintOutcome::Ok; r = MaintReason::BootAlreadyNew; break;
-      case BOOT_PLAN_LOCK_REFUSED:
-        r = MaintReason::BootLockRefused; break;
-      case BOOT_PLAN_UNKNOWN_STATE:
-        r = MaintReason::BootStateUnknown; break;
-      default: break;
-    }
-    result = {seq, o, r};
-    return;
-  }
-  // A request sent mid-move is held by the unit until the move ends and would
-  // then run behind this op's back, so the drum settles first — and a drum
-  // that does not settle ends the op here (#516).
-  if (!waitForBatchIdle(&addr, 1, 8000)) {
-    result = {seq, MaintOutcome::PostconditionFail, MaintReason::BootUnitBusy};
-    return;
-  }
-  if (plan.needStage1) {
-    if (busBootUpdate(addr, 1) != 0) {
-      result = {seq, MaintOutcome::WireFail, MaintReason::None};
-      return;
-    }
-    busArmProbeInhibit(millis() + 3000);
-    // A unit that never left the bus did not start: report what it said.
-    bool started = bootStage1WentOffBus(
-        [&]() {
-          BootUpdateReport still;
-          if (!busReadBootInfo(addr, still)) return false;
-          info = still;
-          return true;
-        },
-        [](uint16_t ms) { delay(ms); });
-    if (!started) {
-      result = {seq, MaintOutcome::PostconditionFail,
-                maintReasonForBootFailure(bootResultFailure(info.lastResult),
-                                          MaintReason::BootNotStarted)};
-      return;
-    }
-    waitForBatchIdle(&addr, 1, 10000);
-    busHome(addr);
-    waitForBatchIdle(&addr, 1, 20000);
-    if (!busReadBootInfo(addr, info)) {
-      result = {seq, MaintOutcome::PostconditionFail,
-                MaintReason::BootUnitLost};
-      return;
-    }
-    if (info.state != BOOT_STATE_PAGE7_INSTALLED) {
-      result = {seq, MaintOutcome::PostconditionFail,
-                MaintReason::BootVerifyFailed};
-      return;
-    }
-  }
-  if (plan.needStage2) {
-    if (!plan.needStage1) {
-      // Resuming a unit that already carries page 7: nothing above homed it,
-      // and an unhomed unit refuses the stage.
-      busHome(addr);
-      waitForBatchIdle(&addr, 1, 20000);
-      if (!busReadBootInfo(addr, info)) {
-        result = {seq, MaintOutcome::PostconditionFail,
-                  MaintReason::BootUnitLost};
-        return;
-      }
-    }
-    const uint8_t resultBeforeSend = info.lastResult;
-    if (busBootUpdate(addr, 2) != 0) {
-      result = {seq, MaintOutcome::WireFail, MaintReason::None};
-      return;
-    }
-    delay(300);
-    BootPollVerdict verdict = BOOT_POLL_WAIT;
-    bool anyRead = false;
-    uint32_t start = millis();
-    while (millis() - start < 5000) {
-      if (busReadBootInfo(addr, info)) {
-        anyRead = true;
-        verdict = bootStage2Poll(info, resultBeforeSend);
-        if (verdict != BOOT_POLL_WAIT) break;
-      }
-      delay(100);
-    }
-    if (verdict != BOOT_POLL_DONE) {
-      // No report at all is a lost unit, not a failed verify; otherwise the
-      // unit's own result names the cause.
-      result = {seq, MaintOutcome::PostconditionFail,
-                anyRead ? maintReasonForBootFailure(
-                              bootResultFailure(info.lastResult),
-                              MaintReason::BootVerifyFailed)
-                        : MaintReason::BootUnitLost};
-      return;
-    }
-  }
-  busArmProbeInhibit(millis() + 3000);
-  result = {seq, MaintOutcome::Ok, MaintReason::None};
+  BootUpdateHooks hooks;
+  MaintGrade grade = bootUpdateRun(hooks, addr);
+  result = {seq, grade.outcome, grade.reason};
 #else
   (void)seq; (void)addr; (void)result;
 #endif
+}
+
+void busInvalidateUnitReads(uint8_t i2cAddress) {
+  int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
+  if (idx < 0 || idx >= UNITS_AMOUNT) return;
+  unitFactsInvalidateReads(unitFacts[idx]);
 }
 
 void busRunBootDump(uint32_t seq, uint8_t addr,
@@ -1282,6 +1213,7 @@ void busRunBootDump(uint32_t seq, uint8_t addr,
     busArmProbeInhibit(millis() + 3000);
     return;
   }
+  busInvalidateUnitReads(addr);
   delay(TWIBOOT_STARTUP_MS);
 
   if (!twibootAwaitBootloader(twibootBus, addr)) {

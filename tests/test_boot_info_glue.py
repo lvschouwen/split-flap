@@ -56,45 +56,30 @@ def _driver(path, signature):
     return body[:body.index("\n}\n")]
 
 
-def test_update_drivers_use_the_shared_decisions():
-    # #516. The decisions are pure and unit-tested in BootUpdatePlan.h; the two
-    # drivers are bus glue no native test reaches, so pin what they call and in
-    # which order.
+def test_update_drivers_run_the_shared_op():
+    # #516/#530. The sequence, its timeouts and its grading are
+    # shared/BootUpdateOp.h, natively tested against a scripted unit; each row
+    # master supplies hooks only.
     drivers = {
-        "S3": (_driver("Master/DisplayTask.cpp", "static void execBootUpdate("),
-               "if (!unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_IDLE_MS)) {",
-               "unitBusBootUpdate(addr, 1)", "unitBusBootUpdate(addr, 2)",
-               "unitBusHome(addr)"),
-        "ESP-01": (_driver("FollowerEsp01/FollowerBus.cpp", "void busRunBootUpdate("),
-                   "if (!waitForBatchIdle(&addr, 1, 8000)) {",
-                   "busBootUpdate(addr, 1)", "busBootUpdate(addr, 2)",
-                   "busHome(addr)"),
+        "S3": _driver("Master/DisplayTask.cpp", "static void execBootUpdate("),
+        "ESP-01": _driver("FollowerEsp01/FollowerBus.cpp",
+                          "void busRunBootUpdate("),
     }
-    for name, (body, idle, stage1, stage2, home) in drivers.items():
-        # A drum that does not settle ends the op BEFORE stage 1 is requested.
-        settle = body[body.index(idle):body.index(stage1)]
-        assert "MaintReason::BootUnitBusy" in settle and "return;" in settle, name
-        # Whether stage 1 started is decided by the tested helper, and a unit
-        # that never left the bus is reported by what it said.
-        after1 = body[body.index(stage1):body.index(stage2)]
-        assert "bool started = bootStage1WentOffBus(" in after1, name
-        not_started = after1[after1.index("if (!started) {"):]
-        assert "maintReasonForBootFailure(" in not_started, name
-        assert "MaintReason::BootNotStarted" in not_started, name
-        assert "return;" in not_started[:not_started.index("waitForBatchIdle" if name == "ESP-01" else "unitBusWaitBatchIdle")], name
-        # The stage-2-only path homes first; the poll judges through the helper
-        # with the result read before the send.
-        before2 = body[body.index("if (plan.needStage2) {"):body.index(stage2)]
-        assert "if (!plan.needStage1) {" in before2 and home in before2, name
-        assert "const uint8_t resultBeforeSend = info.lastResult;" in before2, name
-        after2 = body[body.index(stage2):]
-        assert "bootStage2Poll(info, resultBeforeSend)" in after2, name
-        assert "MaintReason::BootUnitLost" in after2, name
-        assert "BOOT_RESULT_REFUSED" not in body, f"{name}: judge through the helpers"
+    for name, body in drivers.items():
+        assert "bootUpdateRun(hooks, " in body, name
+        for own in ("bootUpdateDecide(", "bootStage1WentOffBus(",
+                    "bootStage2Poll(", "BootUpdate(addr, "):
+            assert own not in body, f"{name}: {own} belongs to the shared op"
+    op = (V2 / "shared" / "BootUpdateOp.h").read_text()
+    for call in ("bootUpdateDecide(", "bootStage1WentOffBus(",
+                 "bootStage2Poll(info, resultBeforeSend)",
+                 "maintReasonForBootFailure("):
+        assert call in op, call
+    assert "BOOT_RESULT_REFUSED" not in op, "judge through the helpers"
 
 
 def test_start_probes_cannot_pin_the_bootloader():
     # The probes run inside the inhibit window; that is only safe while the
     # report opcode is not one of twiboot's pinning first bytes.
-    for path in ("Master/DisplayTask.cpp", "FollowerEsp01/FollowerBus.cpp"):
-        assert "static_assert(SFP_CMD_GET_BOOT_INFO > 0x02," in (V2 / path).read_text(), path
+    op = (V2 / "shared" / "BootUpdateOp.h").read_text()
+    assert "static_assert(SFP_CMD_GET_BOOT_INFO > 0x02," in op

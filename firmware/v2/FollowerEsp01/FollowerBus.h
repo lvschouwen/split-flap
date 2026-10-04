@@ -97,6 +97,11 @@ bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out);
 bool busReadBootInfo(uint8_t i2cAddress, BootUpdateReport& out);
 int busBootUpdate(uint8_t i2cAddress, uint8_t stage);
 void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result);
+// A unit sent into twiboot: stop serving its offset/status/odometer until the
+// next probe finds it back in its sketch.
+void busInvalidateUnitReads(uint8_t i2cAddress);
+// The reflash progress of the last job, graded for the op-result contract.
+MaintGrade busLastReflashGrade();
 
 // Boot-section dump (#522): reads the unit's twiboot image over I2C.
 // The unit passes through its bootloader and restarts; nothing is written.
@@ -110,8 +115,6 @@ void busRunBootDump(uint32_t seq, uint8_t addr,
 // loop() only; progress lands in reflashProgress.
 // onlyAddr 0 = every unit that needs it; otherwise exactly that unit (#513).
 void busRunReflashJob(uint8_t onlyAddr = 0);
-// Units the last reflash job failed to flash (0 after a clean run).
-uint8_t busLastReflashFailed();
 
 // Boot-time provisioning/auto-update (v1 semantics): flash every unit the
 // probe found sitting in twiboot; push provably-outdated sketch units

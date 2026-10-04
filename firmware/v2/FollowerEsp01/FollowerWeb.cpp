@@ -28,6 +28,7 @@
 #include "FollowerRescue.h"  // #343: beacon marker + op lockout
 #include "FollowerSettings.h"
 #include "FollowerWifi.h"
+#include "SelfTestPoll.h"  // the shared self-test wait (#529)
 #include "WearPolicy.h"
 #include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
 
@@ -59,10 +60,8 @@ static uint32_t maintSeqCounter = 0;
 // Self-test poll state (the unit measures ~2 revolutions; we poll its
 // GET_SELF_TEST until it stops reporting "running").
 static bool selfTestPolling = false;
-static uint8_t selfTestAddr = 0;
-static uint32_t selfTestPollDeadlineMs = 0;
+static SelfTestPoll selfTestPoll;
 static uint32_t selfTestPollLastMs = 0;
-#define SELF_TEST_TIMEOUT_MS 20000UL
 
 // --- OTA session state (v1 #191 conventions) ----------------------------------------
 
@@ -1184,71 +1183,80 @@ bool webOtaUploadFrozen() {
   return true;
 }
 
+// Stamps the single result slot the {"seq":N} → GET /unit/op-result contract
+// reads, graded by the shared MaintenancePolicy.h rules.
+static void stampOpResult(uint32_t seq, MaintGrade grade) {
+  opResult.seq = seq;
+  opResult.outcome = grade.outcome;
+  opResult.reason = grade.reason;
+}
+
 static void executeStagedOp() {
   StagedOp op = stagedOp;  // copy, then release the slot at the end
-  int wireStatus = -1;
+  MaintGrade grade = maintGradeWire(-1);
   switch (op.kind) {
     case FollowerOpKind::WriteOffset:
-      wireStatus = busWriteOffset(op.addr, (int16_t)op.arg);
-      if (wireStatus == 0) {
-        // Patch the probe-time fact in place (v2 rule) so GET /unit/offset
-        // reflects the write without a reprobe.
-        UnitFacts& u = unitFacts[op.addr - SFP_I2C_ADDRESS_BASE];
-        u.offset = (int16_t)op.arg;
-        u.offsetValid = true;
+      grade = maintGradeWire(busWriteOffset(op.addr, (int16_t)op.arg));
+      // Patch the probe-time fact in place so GET /unit/offset reflects the
+      // write without a reprobe.
+      if (grade.outcome == MaintOutcome::Ok) {
+        unitFactsApplyOffsetWrite(unitFacts[op.addr - SFP_I2C_ADDRESS_BASE],
+                                  (int16_t)op.arg);
       }
       break;
     case FollowerOpKind::Jog:
-      wireStatus = busJog(op.addr, (int)op.arg);
+      grade = maintGradeWire(busJog(op.addr, (int)op.arg));
       break;
     case FollowerOpKind::Home:
-      wireStatus = busHome(op.addr);
+      grade = maintGradeWire(busHome(op.addr));
       break;
     case FollowerOpKind::Identify:
-      wireStatus = busIdentify(op.addr);
+      grade = maintGradeWire(busIdentify(op.addr));
       break;
     case FollowerOpKind::ResetOdometer:
-      wireStatus = busResetOdometer(op.addr);
-      if (wireStatus == 0) {
-        UnitFacts& u = unitFacts[op.addr - SFP_I2C_ADDRESS_BASE];
-        u.odometer = 0;
+      grade = maintGradeWire(busResetOdometer(op.addr));
+      if (grade.outcome == MaintOutcome::Ok) {
+        unitFactsApplyOdometerReset(unitFacts[op.addr - SFP_I2C_ADDRESS_BASE]);
       }
       break;
     case FollowerOpKind::SetGates:
       // busSetGates verifies with a read-back, so a unit that refused the
-      // bits grades as a failure here rather than a phantom success — same
-      // collapsing of verify failures into the wire status as WriteOffset.
-      wireStatus = busSetGates(op.addr, (uint8_t)op.arg);
-      if (wireStatus == 0) {
-        UnitFacts& u = unitFacts[op.addr - SFP_I2C_ADDRESS_BASE];
-        u.lifetime.featureGates = (uint8_t)op.arg;
+      // bits grades as a failure here rather than a phantom success.
+      grade = maintGradeGates(busSetGates(op.addr, (uint8_t)op.arg));
+      if (grade.outcome == MaintOutcome::Ok) {
+        unitFactsApplyGatesWrite(unitFacts[op.addr - SFP_I2C_ADDRESS_BASE],
+                                 (uint8_t)op.arg);
       }
       break;
     case FollowerOpKind::ReflashUnit:
       // Blocks loop() for the length of one unit's flash, like the bulk job;
       // the op slot stays claimed, so every other unit op answers 503.
       busRunReflashJob(op.addr);
-      wireStatus = busLastReflashFailed() == 0 ? 0 : 4;
+      grade = busLastReflashGrade();
       break;
     case FollowerOpKind::RebootToBootloader:
-      wireStatus = busRebootToBootloader(op.addr);
+      grade = maintGradeWire(busRebootToBootloader(op.addr));
+      if (grade.outcome == MaintOutcome::Ok) busInvalidateUnitReads(op.addr);
       // The unit sits in twiboot for ~1 s — keep every runtime probe out
-      // of that window (v1 #88).
+      // of that window (v1 #88). Armed on a NACK too: it does not prove the
+      // unit stayed in its sketch.
       busArmProbeInhibit(millis() + 3000);
       break;
     case FollowerOpKind::SelfTest:
-      wireStatus = busStartSelfTest(op.addr);
       selfTestSlot = SelfTestSlot{};
       selfTestSlot.seq = op.seq;
       selfTestSlot.addr = op.addr;
-      if (wireStatus == 0) {
+      if (busStartSelfTest(op.addr) == 0) {
+        // The op result follows the test: it is stamped by pollSelfTest once
+        // the unit reports, and reads pending until then.
         selfTestPolling = true;
-        selfTestAddr = op.addr;
-        selfTestPollDeadlineMs = millis() + SELF_TEST_TIMEOUT_MS;
         selfTestPollLastMs = millis();
-      } else {
-        selfTestSlot.outcome = SelfTestOutcome::WireFail;
+        selfTestPollBegin(selfTestPoll, selfTestPollLastMs);
+        stagedOp.pending = false;
+        return;
       }
+      selfTestSlot.outcome = SelfTestOutcome::WireFail;
+      grade = maintGradeObserved(false);
       break;
     case FollowerOpKind::BootUpdate:
       busRunBootUpdate(op.seq, op.addr, opResult);
@@ -1258,7 +1266,7 @@ static void executeStagedOp() {
       busRunBootDump(op.seq, op.addr, bootDumpSlot, bootDumpBytes);
       bootDumpBytesSeq = (bootDumpSlot.outcome == BootDumpOutcome::Ok)
                              ? op.seq : 0;
-      wireStatus = (bootDumpSlot.outcome == BootDumpOutcome::Ok) ? 0 : 4;
+      grade = maintGradeObserved(bootDumpSlot.outcome == BootDumpOutcome::Ok);
       break;
     case FollowerOpKind::BootInfo: {
       BootInfoSlot slot;
@@ -1267,46 +1275,31 @@ static void executeStagedOp() {
       slot.ok = busReadBootInfo(op.addr, slot.report);
       slot.done = true;
       bootInfoSlot = slot;
-      wireStatus = slot.ok ? 0 : 4;
+      grade = maintGradeObserved(slot.ok, MaintReason::BootInfoReadFail);
       break;
     }
     default:
       break;
   }
-  // The op-result contract answers for every kind; for a self-test, "ok"
-  // means "started" — the measurements land in /unit/self-test-result.
-  opResult.seq = op.seq;
-  opResult.outcome =
-      wireStatus == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail;
-  opResult.reason = MaintReason::None;
+  stampOpResult(op.seq, grade);
   stagedOp.pending = false;
 }
 
+// One poll per SELF_TEST_POLL_MS; SelfTestPoll.h decides what the replies
+// mean (stale terminal, unsupported firmware, timeout).
 static void pollSelfTest() {
   if (!selfTestPolling) return;
-  if (millis() - selfTestPollLastMs < 500) return;
+  if (millis() - selfTestPollLastMs < SELF_TEST_POLL_MS) return;
   selfTestPollLastMs = millis();
   UnitSelfTestReading reading;
-  if (busReadSelfTest(selfTestAddr, reading)) {
-    if (reading.state == 2 /* ok */ || reading.state == 3 /* failed */) {
-      // #404: the measurements ride BOTH paths now — a failed test preserves
-      // whatever it got to measure, which is the diagnostic part.
-      selfTestSlot.stepsPerRev = reading.stepsPerRev;
-      selfTestSlot.hallWindowSteps = reading.hallWindowSteps;
-      selfTestSlot.revTimeMs = reading.revTimeMs;
-      selfTestSlot.unitReason = reading.reason;
-      selfTestSlot.outcome = (reading.state == 2) ? SelfTestOutcome::Ok
-                                                  : SelfTestOutcome::UnitFailed;
-      selfTestPolling = false;
-      return;
-    }
-    // state 0 (never) right after a start means the unit dropped the
-    // command — old firmware; keep polling until the deadline settles it.
-  }
-  if ((int32_t)(millis() - selfTestPollDeadlineMs) >= 0) {
-    selfTestSlot.outcome = SelfTestOutcome::Timeout;
-    selfTestPolling = false;
-  }
+  bool readOk = busReadSelfTest(selfTestSlot.addr, reading);
+  SelfTestOutcome outcome = selfTestPollObserve(
+      selfTestPoll, readOk, reading, selfTestPollLastMs, selfTestSlot);
+  if (outcome == SelfTestOutcome::Pending) return;
+  selfTestSlot.outcome = outcome;
+  selfTestPolling = false;
+  stampOpResult(selfTestSlot.seq,
+                maintGradeObserved(outcome == SelfTestOutcome::Ok));
 }
 
 void webLoopTick() {

@@ -103,3 +103,32 @@ def test_both_reflash_jobs_halt_on_consecutive_failures():
                  V2 / "FollowerEsp01/FollowerBus.cpp"):
         body = _strip_comments(path.read_text())
         assert "reflashShouldHalt(" in body, path.name
+
+
+# --- #529/#530: self-test wait, op grading, fact patches ---------------------
+
+def test_no_tree_grades_an_op_outcome_by_hand():
+    """The same op used to report wire-fail on one platform and
+    postcondition-fail on the other."""
+    hits = _offenders(r"\?\s*MaintOutcome::Ok\s*:\s*MaintOutcome::\w+",
+                      ROW_MASTERS)
+    assert not hits, f"grade through maintGrade*(): {hits}"
+
+
+def test_no_tree_judges_self_test_replies_itself():
+    assert not _offenders(r"\bSELFTEST_STATE_\w+|\bsawRunning\b|"
+                          r"#define\s+SELF_TEST_\w+|"
+                          r"\bconstexpr\s+\w+\s+SELF_TEST_\w+", ROW_MASTERS), (
+        "the self-test wait is shared/SelfTestPoll.h")
+    for path in ("Master/DisplayTask.cpp", "FollowerEsp01/FollowerWeb.cpp"):
+        assert "selfTestPollObserve(" in (V2 / path).read_text(), path
+
+
+def test_unit_read_validity_is_patched_through_the_shared_helpers():
+    hits = _offenders(r"\b(?:offsetValid|odometerValid)\s*=(?!=)", ROW_MASTERS)
+    # The bus files set them where they READ the value; nothing else may.
+    readers = {"firmware/v2/Master/UnitBus.cpp",
+               "firmware/v2/FollowerEsp01/FollowerBus.cpp"}
+    assert set(hits) <= readers, hits
+    for path in ("Master/DisplayIpc.h", "FollowerEsp01/FollowerBus.cpp"):
+        assert "unitFactsInvalidateReads(" in (V2 / path).read_text(), path

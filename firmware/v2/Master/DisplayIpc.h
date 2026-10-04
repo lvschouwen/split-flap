@@ -181,6 +181,12 @@ inline void displayApplyMaintResult(DisplaySnapshot& snap,
   snap.lastMaint.reason = reason;
 }
 
+inline void displayApplyMaintResult(DisplaySnapshot& snap,
+                                    const DisplayCommand& cmd,
+                                    MaintGrade grade) {
+  displayApplyMaintResult(snap, cmd, grade.outcome, grade.reason);
+}
+
 // Publishes a self-test op's outcome + measurements into its single result
 // slot (#265) — same overwrite contract as displayApplyMaintResult.
 inline void displayApplySelfTestResult(DisplaySnapshot& snap,
@@ -206,8 +212,7 @@ inline void displayApplyOffsetWrite(DisplaySnapshot& snap, int i2cAddress,
                                     int16_t value) {
   int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
   if (idx < 0 || idx >= UNITS_AMOUNT) return;
-  snap.units[idx].offset = value;
-  snap.units[idx].offsetValid = true;
+  unitFactsApplyOffsetWrite(snap.units[idx], value);
 }
 
 // A successful RESET_ODOMETER zeroes the unit's count; patch the fact in
@@ -216,8 +221,7 @@ inline void displayApplyOffsetWrite(DisplaySnapshot& snap, int i2cAddress,
 inline void displayApplyOdometerReset(DisplaySnapshot& snap, int i2cAddress) {
   int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
   if (idx < 0 || idx >= UNITS_AMOUNT) return;
-  snap.units[idx].odometer = 0;
-  snap.units[idx].odometerValid = true;
+  unitFactsApplyOdometerReset(snap.units[idx]);
 }
 
 // A verified SET_GATES landed (#409) — patch the fact so /units/health shows
@@ -228,7 +232,7 @@ inline void displayApplyGatesWrite(DisplaySnapshot& snap, int i2cAddress,
                                    uint8_t gates) {
   int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
   if (idx < 0 || idx >= UNITS_AMOUNT) return;
-  snap.units[idx].lifetime.featureGates = gates;
+  unitFactsApplyGatesWrite(snap.units[idx], gates);
 }
 
 // A unit sent into twiboot forgets nothing, but the master must stop
@@ -236,7 +240,5 @@ inline void displayApplyGatesWrite(DisplaySnapshot& snap, int i2cAddress,
 inline void displayInvalidateUnitReads(DisplaySnapshot& snap, int i2cAddress) {
   int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
   if (idx < 0 || idx >= UNITS_AMOUNT) return;
-  snap.units[idx].offsetValid = false;
-  snap.units[idx].statusValid = false;
-  snap.units[idx].odometerValid = false;
+  unitFactsInvalidateReads(snap.units[idx]);
 }

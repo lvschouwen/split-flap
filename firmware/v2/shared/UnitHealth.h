@@ -243,6 +243,36 @@ inline bool unitDrivable(const UnitFacts& u) {
          !(u.protocolKnown && !unitProtocolSupported(u.protocolVersion));
 }
 
+// --- in-place fact patches -------------------------------------------------------
+// A probe rewrites a unit's facts wholesale; these are the only mutations in
+// between, each applied after the op that justifies it was verified.
+
+inline void unitFactsApplyOffsetWrite(UnitFacts& u, int16_t value) {
+  u.offset = value;
+  u.offsetValid = true;
+}
+
+// A successful RESET_ODOMETER: the wear view must not show the old count
+// until the next probe (#231).
+inline void unitFactsApplyOdometerReset(UnitFacts& u) {
+  u.odometer = 0;
+  u.odometerValid = true;
+}
+
+// A verified SET_GATES (#409) — only after the read-back confirmed it, so
+// this cannot invent a gate the unit did not accept.
+inline void unitFactsApplyGatesWrite(UnitFacts& u, uint8_t gates) {
+  u.lifetime.featureGates = gates;
+}
+
+// A unit sent into twiboot forgets nothing, but its row master must stop
+// serving reads for it until the next probe confirms it is back in sketch.
+inline void unitFactsInvalidateReads(UnitFacts& u) {
+  u.offsetValid = false;
+  u.statusValid = false;
+  u.odometerValid = false;
+}
+
 // Saturating increment for the per-unit I2C error counter (#367). Pins at
 // 0xFFFF instead of wrapping to 0 — a wrapped counter would read as "healthy".
 inline uint16_t unitErrBump(uint16_t prev) {

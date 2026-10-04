@@ -10,6 +10,8 @@
 #include <freertos/task.h>
 
 #include "BootHomePlan.h"
+#include "BootUpdateOp.h"   // the shared in-system twiboot update
+#include "SelfTestPoll.h"   // the shared self-test wait
 #include "BootTrace.h"  // #504
 #include "BootUpdatePlan.h"  // #499 decision logic
 #include "CrashContext.h"  // #504
@@ -32,16 +34,6 @@
 // inside it pins the bootloader (v1 #88) — 3 s clears the window plus the
 // homing start, same margin class as the 1500 ms boot delay.
 static constexpr uint32_t ADDRESS_OP_SETTLE_MS = 3000;
-
-// Self-test wait (#265): the unit's diagnostic is ~2 revolutions at homing
-// speed (~12-15 s) but can queue behind a slow in-flight move unit-side, so
-// the window is generous — and it re-arms once RUNNING is first observed,
-// so the true worst-case displayTask block is ~2x this constant. Polled at
-// 500 ms; three consecutive invalid replies with none ever valid =
-// firmware predating the opcode.
-static constexpr uint32_t SELF_TEST_TIMEOUT_MS = 45000;
-static constexpr uint32_t SELF_TEST_POLL_MS = 500;
-static constexpr int SELF_TEST_UNSUPPORTED_POLLS = 3;
 
 // --- core 1: display domain ---------------------------------------------------
 
@@ -595,10 +587,7 @@ static void execWriteOffset(DisplaySnapshot& local, UnitFacts* busFacts,
     // The only in-place offset mutation — probes own everything else.
     displayApplyOffsetWrite(local, cmd.unitAddress, cmd.value);
   }
-  displayApplyMaintResult(
-      local, cmd,
-      status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
-      MaintReason::None);
+  displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
 
 static void execJog(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -606,10 +595,7 @@ static void execJog(DisplaySnapshot& local, UnitFacts* busFacts,
   (void)busFacts;
   (void)cmd;
   int status = unitBusJog(cmd.unitAddress, cmd.value);
-  displayApplyMaintResult(
-      local, cmd,
-      status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
-      MaintReason::None);
+  displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
 
 static void execHome(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -625,10 +611,7 @@ static void execHome(DisplaySnapshot& local, UnitFacts* busFacts,
       local.lastFrameLetters[idx] = 0;
     }
   }
-  displayApplyMaintResult(
-      local, cmd,
-      status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
-      MaintReason::None);
+  displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
 
 static void execIdentify(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -636,36 +619,24 @@ static void execIdentify(DisplaySnapshot& local, UnitFacts* busFacts,
   (void)busFacts;
   (void)cmd;
   int status = unitBusIdentify(cmd.unitAddress);
-  displayApplyMaintResult(
-      local, cmd,
-      status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
-      MaintReason::None);
+  displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
 
 static void execSelfTest(DisplaySnapshot& local, UnitFacts* busFacts,
                         const DisplayCommand& cmd) {
   (void)busFacts;
-  (void)cmd;
-  // On-demand diagnostic revolution (#265): start, then poll the
-  // unit's result until a terminal state. A stale terminal from a
-  // PREVIOUS test can still sit in the unit's reply buffer while
-  // this one queues behind an in-flight move — only accept a
-  // terminal state after RUNNING has been observed.
+  // On-demand diagnostic revolution (#265): start, then poll the unit until
+  // SelfTestPoll.h calls the result — the worst-case displayTask block is
+  // ~2x SELF_TEST_TIMEOUT_MS.
   SelfTestSlot slot;
   slot.seq = cmd.seq;
   slot.addr = cmd.unitAddress;
-  int status = unitBusStartSelfTest(cmd.unitAddress);
-  if (status != 0) {
+  if (unitBusStartSelfTest(cmd.unitAddress) != 0) {
     slot.outcome = SelfTestOutcome::WireFail;
   } else {
-    slot.outcome = SelfTestOutcome::Timeout;
-    bool sawRunning = false;
-    bool everValid = false;
-    bool haveBaseline = false;
-    UnitSelfTestReading baseline{};
-    int badPolls = 0;
-    uint32_t start = millis();
-    while (millis() - start < SELF_TEST_TIMEOUT_MS) {
+    SelfTestPoll poll;
+    selfTestPollBegin(poll, millis());
+    while (slot.outcome == SelfTestOutcome::Pending) {
       wdtFeed();  // #314: self-test polls the unit until it reports an outcome
       if (unitBusAbortRequested()) {
         slot.outcome = SelfTestOutcome::Aborted;
@@ -673,50 +644,8 @@ static void execSelfTest(DisplaySnapshot& local, UnitFacts* busFacts,
       }
       delay(SELF_TEST_POLL_MS);
       UnitSelfTestReading r;
-      if (!unitBusReadSelfTest(cmd.unitAddress, r)) {
-        if (!everValid && ++badPolls >= SELF_TEST_UNSUPPORTED_POLLS) {
-          slot.outcome = SelfTestOutcome::Unsupported;
-          break;
-        }
-        continue;
-      }
-      everValid = true;
-      if (!haveBaseline) {
-        // First valid reading = the pre-test buffer content. A later
-        // terminal that DIFFERS from it is provably fresh even when
-        // every poll of the RUNNING window was lost to bus glitches.
-        haveBaseline = true;
-        baseline = r;
-      }
-      if (r.state == 1) {  // running
-        if (!sawRunning) {
-          // The test provably started — re-arm the window so time the
-          // unit spent finishing a prior move doesn't eat the test's
-          // own budget.
-          sawRunning = true;
-          start = millis();
-        }
-        continue;
-      }
-      bool freshTerminal =
-          sawRunning ||
-          (haveBaseline &&
-           (r.state != baseline.state ||
-            r.stepsPerRev != baseline.stepsPerRev ||
-            r.hallWindowSteps != baseline.hallWindowSteps ||
-            r.revTimeMs != baseline.revTimeMs ||
-            r.reason != baseline.reason));
-      if (r.state == 0 || !freshTerminal) continue;  // not started / stale
-      // #404: carry the measurements on BOTH paths. A failure preserves
-      // whatever it got to measure — a phase-2 failure knows its hall window,
-      // and that is the most diagnostic number the unit has.
-      slot.stepsPerRev = r.stepsPerRev;
-      slot.hallWindowSteps = r.hallWindowSteps;
-      slot.revTimeMs = r.revTimeMs;
-      slot.unitReason = r.reason;
-      slot.outcome = (r.state == 2) ? SelfTestOutcome::Ok
-                                    : SelfTestOutcome::UnitFailed;
-      break;
+      bool readOk = unitBusReadSelfTest(cmd.unitAddress, r);
+      slot.outcome = selfTestPollObserve(poll, readOk, r, millis(), slot);
     }
   }
   SerialPrintf("display: self-test unit 0x%02x → %s%s%s\n",
@@ -725,11 +654,8 @@ static void execSelfTest(DisplaySnapshot& local, UnitFacts* busFacts,
                slot.unitReason != SELFTEST_REASON_NONE
                    ? selfTestReasonName(slot.unitReason) : "");
   displayApplySelfTestResult(local, slot);
-  displayApplyMaintResult(local, cmd,
-                          slot.outcome == SelfTestOutcome::Ok
-                              ? MaintOutcome::Ok
-                              : MaintOutcome::PostconditionFail,
-                          MaintReason::None);
+  displayApplyMaintResult(
+      local, cmd, maintGradeObserved(slot.outcome == SelfTestOutcome::Ok));
 }
 
 static void execResetOdometer(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -743,10 +669,7 @@ static void execResetOdometer(DisplaySnapshot& local, UnitFacts* busFacts,
     // probe (#231).
     displayApplyOdometerReset(local, cmd.unitAddress);
   }
-  displayApplyMaintResult(
-      local, cmd,
-      status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
-      MaintReason::None);
+  displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
 
 static void execSetGates(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -761,14 +684,7 @@ static void execSetGates(DisplaySnapshot& local, UnitFacts* busFacts,
   // A unit that refused the bits answers with its old gates, which the
   // read-back grades as a mismatch — the operator sees the refusal instead
   // of an op that claims to have landed.
-  displayApplyMaintResult(
-      local, cmd,
-      status == 0 ? MaintOutcome::Ok
-                  : (status == UNIT_BUS_GATES_MISMATCH ||
-                     status == UNIT_BUS_GATES_UNVERIFIED)
-                        ? MaintOutcome::PostconditionFail
-                        : MaintOutcome::WireFail,
-      MaintReason::None);
+  displayApplyMaintResult(local, cmd, maintGradeGates(status));
 }
 
 // --- boot-section dump (#511) --------------------------------------------------
@@ -845,11 +761,8 @@ static void execBootDump(DisplaySnapshot& local, UnitFacts* busFacts,
                cmd.unitAddress, bootDumpOutcomeName(slot.outcome),
                (unsigned long)slot.crc32);
   displayApplyBootDumpResult(local, slot);
-  displayApplyMaintResult(local, cmd,
-                          slot.outcome == BootDumpOutcome::Ok
-                              ? MaintOutcome::Ok
-                              : MaintOutcome::PostconditionFail,
-                          MaintReason::None);
+  displayApplyMaintResult(
+      local, cmd, maintGradeObserved(slot.outcome == BootDumpOutcome::Ok));
 }
 
 // Read-only boot report (#499): one GET_BOOT_INFO exchange, no restart, no
@@ -872,221 +785,66 @@ static void execBootInfo(DisplaySnapshot& local, const DisplayCommand& cmd) {
                  cmd.unitAddress);
   }
   displayApplyBootInfoResult(local, slot);
-  displayApplyMaintResult(local, cmd,
-                          slot.ok ? MaintOutcome::Ok
-                                  : MaintOutcome::PostconditionFail,
-                          slot.ok ? MaintReason::None
-                                  : MaintReason::BootInfoReadFail);
+  displayApplyMaintResult(
+      local, cmd, maintGradeObserved(slot.ok, MaintReason::BootInfoReadFail));
 }
 
-// In-system twiboot update (#499). Reads boot info, decides which stages
-// (if any) the unit needs, drives them, and verifies. Stage 1 causes a WDT
-// reset (~250 ms) that passes through twiboot; stage 2 disables TWI for
-// ~100 ms while rewriting pages. Typical wall time ~10 s; worst case with
-// every wait running to its timeout is about 47 s.
-static const uint32_t BOOT_UPDATE_RETURN_MS = 10000;
-static const uint32_t BOOT_UPDATE_HOME_MS = 20000;
-static const uint32_t BOOT_UPDATE_STAGE2_SETTLE_MS = 300;
-static const uint32_t BOOT_UPDATE_STAGE2_POLL_MS = 5000;
-// A request sent mid-move is held by the unit until the move ends and would
-// then run behind this op's back, so the drum settles first.
-static const uint32_t BOOT_UPDATE_IDLE_MS = 8000;
-// The start probes below run inside the twiboot risk window this op arms. That
-// is safe only because a report request is not one of the first bytes the
-// bootloader pins itself on (0x00..0x02): it answers it by leaving for the
-// sketch.
-static_assert(SFP_CMD_GET_BOOT_INFO > 0x02,
-              "GET_BOOT_INFO would pin twiboot — the stage 1 start probes "
-              "would then hold a unit in its bootloader");
+// In-system twiboot update (#499): the sequence, its timeouts and its grading
+// are shared/BootUpdateOp.h; this is displayTask's side of it.
+struct BootUpdateHooks {
+  DisplaySnapshot& local;
+
+  bool readBootInfo(uint8_t addr, BootUpdateReport& out) {
+    wdtFeed();
+    return unitBusReadBootInfo(addr, out);
+  }
+  bool waitIdle(uint8_t addr, uint32_t timeoutMs) {
+    wdtFeed();
+    bool idle = unitBusWaitBatchIdle(&addr, 1, timeoutMs);
+    wdtFeed();
+    return idle;
+  }
+  int sendStage(uint8_t addr, uint8_t stage) {
+    SerialPrintf("display: boot-update unit 0x%02x stage %u\n", addr, stage);
+    return unitBusBootUpdate(addr, stage);
+  }
+  int home(uint8_t addr) { return unitBusHome(addr); }
+  void unitLeftSketch(uint8_t addr) {
+    displayInvalidateUnitReads(local, addr);
+    armTwibootRiskWindow();
+  }
+  void holdProbes() { armTwibootRiskWindow(); }
+  void pause(uint32_t ms) {
+    wdtFeed();
+    delay(ms);
+  }
+  uint32_t nowMs() { return millis(); }
+  void reshow() {
+    if (!local.lastFrameValid) return;
+    unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
+                     lastFrameUnitSpeed);
+  }
+  void note(BootUpdateStep step, MaintReason why,
+            const BootUpdateReport& info) {
+    static const char* const kStep[] = {"read info", "plan",    "settle",
+                                        "stage 1",   "stage 2", "done"};
+    SerialPrintf("display: boot-update %s → %s (state %u result %u)\n",
+                 kStep[(uint8_t)step],
+                 why == MaintReason::None ? "ok" : maintReasonName(why),
+                 info.state, info.lastResult);
+  }
+};
 
 static void execBootUpdate(DisplaySnapshot& local, UnitFacts* busFacts,
                            const DisplayCommand& cmd) {
   (void)busFacts;
-  uint8_t addr = cmd.unitAddress;
-
-  BootUpdateReport info;
-  if (!unitBusReadBootInfo(addr, info)) {
-    SerialPrintf("display: boot-update unit 0x%02x → boot info read fail\n",
-                 addr);
-    displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
-                            MaintReason::BootInfoReadFail);
-    return;
-  }
-
-  BootUpdatePlan plan = bootUpdateDecide(info);
-  if (plan.terminal != BOOT_PLAN_PROCEED) {
-    MaintOutcome o = MaintOutcome::PostconditionFail;
-    MaintReason r = MaintReason::BootStateUnknown;
-    switch (plan.terminal) {
-      case BOOT_PLAN_ALREADY_NEW:
-        o = MaintOutcome::Ok; r = MaintReason::BootAlreadyNew; break;
-      case BOOT_PLAN_LOCK_REFUSED:
-        r = MaintReason::BootLockRefused; break;
-      case BOOT_PLAN_UNKNOWN_STATE:
-        r = MaintReason::BootStateUnknown; break;
-      default: break;
-    }
-    SerialPrintf("display: boot-update unit 0x%02x → %s\n",
-                 addr, maintReasonName(r));
-    displayApplyMaintResult(local, cmd, o, r);
-    return;
-  }
-
-  wdtFeed();
-  if (!unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_IDLE_MS)) {
-    // Still moving. The unit would hold a request sent now and run it after
-    // this op has reported, with nobody keeping the bus quiet around it.
-    SerialPrintf("display: boot-update unit 0x%02x still moving → %s\n", addr,
-                 maintReasonName(MaintReason::BootUnitBusy));
-    displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
-                            MaintReason::BootUnitBusy);
-    return;
-  }
-  wdtFeed();
-
-  // Stage 1: install do_spm into the empty page 7. The unit WDT-resets,
-  // passes through twiboot (BOOTRST), and boots the app with page 7 written.
-  if (plan.needStage1) {
-    SerialPrintf("display: boot-update unit 0x%02x stage 1\n", addr);
-    if (unitBusBootUpdate(addr, 1) != 0) {
-      displayApplyMaintResult(local, cmd, MaintOutcome::WireFail,
-                              MaintReason::None);
-      return;
-    }
-    displayInvalidateUnitReads(local, addr);
-    armTwibootRiskWindow();
-    bool started = bootStage1WentOffBus(
-        [&]() {
-          BootUpdateReport still;
-          if (!unitBusReadBootInfo(addr, still)) return false;
-          info = still;
-          return true;
-        },
-        [](uint16_t ms) {
-          wdtFeed();
-          delay(ms);
-        });
-    if (!started) {
-      // Nothing moved and nothing was written: report what the unit said.
-      MaintReason why = maintReasonForBootFailure(
-          bootResultFailure(info.lastResult), MaintReason::BootNotStarted);
-      SerialPrintf("display: boot-update unit 0x%02x stage 1 not started → %s\n",
-                   addr, maintReasonName(why));
-      displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail, why);
-      return;
-    }
-    wdtFeed();
-    unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_RETURN_MS);
-    wdtFeed();
-    if (unitBusHome(addr) == 0) {
-      unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_HOME_MS);
-    }
-    wdtFeed();
-    if (!unitBusReadBootInfo(addr, info)) {
-      SerialPrintf(
-          "display: boot-update unit 0x%02x stage 1 → unit lost\n", addr);
-      if (local.lastFrameValid) {
-        unitBusShowFrame(local.units, local.displayWidth,
-                         local.lastFrameLetters, lastFrameUnitSpeed);
-      }
-      displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
-                              MaintReason::BootUnitLost);
-      return;
-    }
-    if (info.state != BOOT_STATE_PAGE7_INSTALLED) {
-      SerialPrintf(
-          "display: boot-update unit 0x%02x stage 1 verify fail (state %u)\n",
-          addr, info.state);
-      if (local.lastFrameValid) {
-        unitBusShowFrame(local.units, local.displayWidth,
-                         local.lastFrameLetters, lastFrameUnitSpeed);
-      }
-      displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
-                              MaintReason::BootVerifyFailed);
-      return;
-    }
-    SerialPrintf("display: boot-update unit 0x%02x stage 1 ok\n", addr);
-  }
-
-  // Stage 2: rewrite pages 0-6 using the do_spm now in page 7. TWI goes
-  // dark for ~100 ms while the unit writes; poll until we see state New.
-  if (plan.needStage2) {
-    if (!plan.needStage1) {
-      // Resuming a unit that already carries page 7: nothing above homed it,
-      // and an unhomed unit refuses the stage (#516).
-      if (unitBusHome(addr) == 0) {
-        unitBusWaitBatchIdle(&addr, 1, BOOT_UPDATE_HOME_MS);
-      }
-      wdtFeed();
-      if (!unitBusReadBootInfo(addr, info)) {
-        SerialPrintf("display: boot-update unit 0x%02x lost before stage 2\n",
-                     addr);
-        if (local.lastFrameValid) {
-          unitBusShowFrame(local.units, local.displayWidth,
-                           local.lastFrameLetters, lastFrameUnitSpeed);
-        }
-        displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail,
-                                MaintReason::BootUnitLost);
-        return;
-      }
-    }
-    const uint8_t resultBeforeSend = info.lastResult;
-    SerialPrintf("display: boot-update unit 0x%02x stage 2\n", addr);
-    if (unitBusBootUpdate(addr, 2) != 0) {
-      displayApplyMaintResult(local, cmd, MaintOutcome::WireFail,
-                              MaintReason::None);
-      if (local.lastFrameValid) {  // both paths homed the unit by now
-        unitBusShowFrame(local.units, local.displayWidth,
-                         local.lastFrameLetters, lastFrameUnitSpeed);
-      }
-      return;
-    }
-    wdtFeed();
-    delay(BOOT_UPDATE_STAGE2_SETTLE_MS);
-    BootPollVerdict verdict = BOOT_POLL_WAIT;
-    bool anyRead = false;
-    uint32_t pollStart = millis();
-    while (millis() - pollStart < BOOT_UPDATE_STAGE2_POLL_MS) {
-      wdtFeed();
-      if (unitBusReadBootInfo(addr, info)) {
-        anyRead = true;
-        verdict = bootStage2Poll(info, resultBeforeSend);
-        if (verdict != BOOT_POLL_WAIT) break;
-      }
-      delay(100);
-    }
-    if (verdict != BOOT_POLL_DONE) {
-      // No report at all is a lost unit, not a failed verify; otherwise the
-      // unit's own result names the cause.
-      MaintReason why =
-          anyRead ? maintReasonForBootFailure(bootResultFailure(info.lastResult),
-                                              MaintReason::BootVerifyFailed)
-                  : MaintReason::BootUnitLost;
-      if (anyRead) {
-        SerialPrintf("display: boot-update unit 0x%02x stage 2 → %s "
-                     "(state %u result %u)\n",
-                     addr, maintReasonName(why), info.state, info.lastResult);
-      } else {
-        SerialPrintf("display: boot-update unit 0x%02x stage 2 → %s\n", addr,
-                     maintReasonName(why));
-      }
-      if (local.lastFrameValid) {
-        unitBusShowFrame(local.units, local.displayWidth,
-                         local.lastFrameLetters, lastFrameUnitSpeed);
-      }
-      displayApplyMaintResult(local, cmd, MaintOutcome::PostconditionFail, why);
-      return;
-    }
-    SerialPrintf("display: boot-update unit 0x%02x stage 2 ok\n", addr);
-  }
-
-  if (local.lastFrameValid) {
-    unitBusShowFrame(local.units, local.displayWidth,
-                     local.lastFrameLetters, lastFrameUnitSpeed);
-  }
-  armTwibootRiskWindow();
-  SerialPrintf("display: boot-update unit 0x%02x → ok\n", addr);
-  displayApplyMaintResult(local, cmd, MaintOutcome::Ok, MaintReason::None);
+  BootUpdateHooks hooks{local};
+  MaintGrade grade = bootUpdateRun(hooks, cmd.unitAddress);
+  SerialPrintf("display: boot-update unit 0x%02x → %s%s%s\n", cmd.unitAddress,
+               maintOutcomeName(grade.outcome),
+               grade.reason != MaintReason::None ? " / " : "",
+               maintReasonName(grade.reason));
+  displayApplyMaintResult(local, cmd, grade);
 }
 
 static void execRebootToBootloader(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -1101,10 +859,7 @@ static void execRebootToBootloader(DisplaySnapshot& local, UnitFacts* busFacts,
     displayInvalidateUnitReads(local, cmd.unitAddress);
     armTwibootRiskWindow();
   }
-  displayApplyMaintResult(
-      local, cmd,
-      status == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
-      MaintReason::None);
+  displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
 
 static void execSetAddress(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -1215,10 +970,7 @@ static void execStop(DisplaySnapshot& local, UnitFacts* busFacts,
   // Every unit parks at blank — the intended frame follows (#264).
   memset(local.lastFrameLetters, 0, sizeof(local.lastFrameLetters));
   local.lastFrameValid = true;
-  displayApplyMaintResult(
-      local, cmd,
-      errs == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
-      MaintReason::None);
+  displayApplyMaintResult(local, cmd, maintGradeWire(errs));
 }
 
 static void execReflashUnits(DisplaySnapshot& local, UnitFacts* busFacts,

@@ -25,6 +25,7 @@
 #include "BootUpdatePlan.h"  // BootUpdateFailure (#516)
 #include "SplitFlapProtocol.h"
 #include "UnitHealth.h"
+#include "UnitWireContract.h"  // UNIT_BUS_GATES_*
 #include "UnitSelfTest.h"  // SELFTEST_REASON_* + selfTestReasonName (#404)
 
 // The validators below spell the lower I2C bound as literal 1; they only
@@ -191,6 +192,36 @@ inline MaintReason maintReasonForBootFailure(BootUpdateFailure f,
     case BOOT_FAIL_VERIFY: return MaintReason::BootVerifyFailed;
     default:               return whenNone;
   }
+}
+
+// What an op amounts to once it ran: the outcome and, where one applies, why.
+struct MaintGrade {
+  MaintOutcome outcome;
+  MaintReason reason;
+};
+
+// A plain single-write op: the unit ACKed it or it did not.
+inline MaintGrade maintGradeWire(int wireStatus) {
+  return {wireStatus == 0 ? MaintOutcome::Ok : MaintOutcome::WireFail,
+          MaintReason::None};
+}
+
+// SET_GATES is verified by a read-back (#409). A unit that refused the bits
+// answers with its old gates: the write landed on the wire and the intent did
+// not, which is a postcondition failure rather than a wire one.
+inline MaintGrade maintGradeGates(int status) {
+  if (status == UNIT_BUS_GATES_MISMATCH || status == UNIT_BUS_GATES_UNVERIFIED) {
+    return {MaintOutcome::PostconditionFail, MaintReason::None};
+  }
+  return maintGradeWire(status);
+}
+
+// An op whose wire traffic went through and whose result is a reading of the
+// unit: the boot report, the boot-section dump, a self-test.
+inline MaintGrade maintGradeObserved(bool ok,
+                                     MaintReason whyNot = MaintReason::None) {
+  if (ok) return {MaintOutcome::Ok, MaintReason::None};
+  return {MaintOutcome::PostconditionFail, whyNot};
 }
 
 // After SetAddress burn + settle + reprobe: the unit must answer in sketch
