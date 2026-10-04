@@ -606,17 +606,25 @@ function applyWallLabels(leading) {
 	if (stop) stop.textContent = leading ? "Stop & blank the wall" : "Stop & blank display";
 }
 
-//#318: per-row wall widths from the cached /cluster/status — a row's capacity
-//is the max of (col+width) over its members. Returns [w0,w1,…] or null.
+//#318: per-row text widths from the cached /cluster/status — a row holds as
+//many characters as it has flaps: the widths of its members, mirror twins
+//(same col) counted once. Columns no member owns are gaps in the wall, not
+//capacity (#303). Returns [w0,w1,…] or null.
 function clusterRowWidths() {
 	var st = window.lastClusterStatus;
 	if (!st || !st.members || !st.members.length) return null;
-	var widths = {};
+	var widths = {}, seen = {};
 	st.members.forEach(function(m) {
-		var w = (m.col || 0) + (m.width || 0);
-		if (!(m.row in widths) || w > widths[m.row]) widths[m.row] = w;
+		var w = m.width || 0;
+		if (!w) return;
+		var span = m.row + "|" + (m.col || 0);
+		if (seen[span]) return;
+		seen[span] = true;
+		widths[m.row] = (widths[m.row] || 0) + w;
 	});
-	var maxRow = Math.max.apply(null, Object.keys(widths).map(Number));
+	var rows = Object.keys(widths).map(Number);
+	if (!rows.length) return null;
+	var maxRow = Math.max.apply(null, rows);
 	var arr = [];
 	for (var r = 0; r <= maxRow; r++) arr.push(widths[r] || 0);
 	return arr;

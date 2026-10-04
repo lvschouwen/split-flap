@@ -6,15 +6,22 @@
 // leader runs before any fan-out.
 //
 // Member table semantics: each member owns the half-open unit span
-// [col, col+width) of its row. Rows must be contiguous from 0 and every
-// row must be tiled exactly — no gaps, no partial overlaps. Members with
-// IDENTICAL {row, col, width} are legal and receive identical segments
-// (a mirror is a table shape, not a mode). Row width is the tiled extent,
-// so coincident members never double-count.
+// [col, col+width) of its row. Row indices must be contiguous from 0 and
+// spans in a row must not partially overlap. Members with IDENTICAL
+// {row, col, width} are legal and receive identical segments (a mirror is
+// a table shape, not a mode). A row may have GAPS — columns no member
+// owns: `col` says where a display physically hangs (a narrow row centred
+// under a wider one), and there are no flaps in a gap.
+//
+// So text never lands in a gap: a row's width is the number of columns
+// that HAVE flaps (coincident members counted once), text is wrapped and
+// aligned to that, and its characters fill the owned columns left to
+// right, skipping gaps. Only the wall mirror is laid out in physical
+// columns, with gaps blank.
 //
 // Segment contract: segments are PRE-POSITIONED — the row text is padded
 // to the full row width with the alignment applied (v1 lead math, same as
-// flapFrameBuild) and then sliced by {col, width}. A follower renders its
+// flapFrameBuild) and then sliced per member. A follower renders its
 // segment verbatim (Left), never re-wraps. Charset passes through
 // untouched: case mapping and flap-index lookup happen in flapFrameBuild
 // on each master, and $ & # umlaut wire-encoding is upstream of here.
@@ -49,8 +56,33 @@ struct ClusterMemberTable {
 // Derived grid facts (valid only when the verdict passed).
 struct ClusterGrid {
   uint8_t rows = 0;
-  uint16_t rowWidth[CLUSTER_MAX_MEMBERS] = {0};
+  uint16_t rowWidth[CLUSTER_MAX_MEMBERS] = {0};   // columns with flaps
+  uint16_t rowExtent[CLUSTER_MAX_MEMBERS] = {0};  // physical: max col+width
 };
+
+// Is members[i] the first of its span? Coincident mirror twins share one
+// span, and only the first counts toward widths and offsets.
+inline bool clusterSpanIsFirst(const ClusterMemberTable& table, int i) {
+  const ClusterMemberDef& m = table.members[i];
+  for (int j = 0; j < i; j++) {
+    const ClusterMemberDef& o = table.members[j];
+    if (o.width != 0 && o.row == m.row && o.col == m.col) return false;
+  }
+  return true;
+}
+
+// How many columns with flaps lie left of `col` in `row` — where a member
+// starting at `col` begins in the row's text. Valid tables only.
+inline int clusterTextOffset(const ClusterMemberTable& table, uint8_t row,
+                             uint8_t col) {
+  int offset = 0;
+  for (int i = 0; i < table.count; i++) {
+    const ClusterMemberDef& m = table.members[i];
+    if (m.width == 0 || m.row != row || m.col >= col) continue;
+    if (clusterSpanIsFirst(table, i)) offset += m.width;
+  }
+  return offset;
+}
 
 // Config-time verdict: ok=false carries the 400 body for the web boundary.
 struct ClusterVerdict {
@@ -82,33 +114,33 @@ inline ClusterVerdict validateMemberTable(const ClusterMemberTable& table,
   // member width 0) would "enable" a cluster that shows nothing anywhere.
   if (maxRow == -1) return {false, "No rendering members (all off-grid)"};
 
-  // Tile each row left to right: every cursor position must be the start
-  // of exactly one member span (coincident mirror twins advance together,
-  // so the row width is the tiled extent, never a sum).
-  for (int r = 0; r <= maxRow; r++) {
-    int inRow = 0;
-    for (int i = 0; i < table.count; i++) {
-      if (table.members[i].row == r && table.members[i].width != 0) inRow++;
-    }
-    if (inRow == 0) return {false, "Rows must be contiguous from 0"};
-
-    int cursor = 0;
-    int placed = 0;
-    while (placed < inRow) {
-      int span = -1;
-      for (int i = 0; i < table.count; i++) {
-        const ClusterMemberDef& m = table.members[i];
-        if (m.row != r || m.col != cursor || m.width == 0) continue;
-        if (span != -1 && m.width != span) {
-          return {false, "Members overlap"};
-        }
-        span = m.width;
-        placed++;
+  // Two spans in a row are either the same span (mirror twins) or disjoint.
+  for (int i = 0; i < table.count; i++) {
+    const ClusterMemberDef& a = table.members[i];
+    if (a.width == 0) continue;
+    for (int j = i + 1; j < table.count; j++) {
+      const ClusterMemberDef& b = table.members[j];
+      if (b.width == 0 || b.row != a.row) continue;
+      if (a.col == b.col && a.width == b.width) continue;
+      if ((int)a.col < (int)b.col + b.width &&
+          (int)b.col < (int)a.col + a.width) {
+        return {false, "Members overlap"};
       }
-      if (span == -1) return {false, "Row has a gap or overlapping members"};
-      cursor += span;
     }
-    outGrid.rowWidth[r] = (uint16_t)cursor;
+  }
+
+  for (int i = 0; i < table.count; i++) {
+    const ClusterMemberDef& m = table.members[i];
+    if (m.width == 0) continue;
+    uint16_t extent = (uint16_t)(m.col + m.width);
+    if (extent > outGrid.rowExtent[m.row]) outGrid.rowExtent[m.row] = extent;
+    if (clusterSpanIsFirst(table, i)) outGrid.rowWidth[m.row] += m.width;
+  }
+  for (int r = 0; r <= maxRow; r++) {
+    if (outGrid.rowWidth[r] == 0) {
+      outGrid = ClusterGrid{};
+      return {false, "Rows must be contiguous from 0"};
+    }
   }
 
   outGrid.rows = (uint8_t)(maxRow + 1);
@@ -211,6 +243,15 @@ inline void clusterWrapRows(const String& text, const ClusterGrid& grid,
   }
 }
 
+// A member's share of its (padded) row text. Off-grid members get "".
+inline String clusterSliceSegment(const ClusterMemberTable& table,
+                                  const String* rows, int m) {
+  const ClusterMemberDef& def = table.members[m];
+  if (def.width == 0) return String();
+  int from = clusterTextOffset(table, def.row, def.col);
+  return rows[def.row].substring(from, from + def.width);
+}
+
 // Wraps `text` across the grid's rows, applies the alignment per row,
 // slices into segments[0..table.count-1] (parallel to table.members).
 // Overflowing text is truncated. Returns false on an invalid table.
@@ -225,8 +266,7 @@ inline bool layoutGridText(const String& text, DisplayAlignment align,
     rows[r] = clusterAlignRow(rows[r], grid.rowWidth[r], align);
   }
   for (int m = 0; m < table.count; m++) {
-    const ClusterMemberDef& def = table.members[m];
-    segments[m] = rows[def.row].substring(def.col, def.col + def.width);
+    segments[m] = clusterSliceSegment(table, rows, m);
   }
   return true;
 }
@@ -239,8 +279,10 @@ inline bool layoutGridText(const String& text, DisplayAlignment align,
 // transient/notification may own it, and the display re-applies the
 // alignment lead, so the same lead math runs here). Self slots overlay in
 // a second pass: on a coincident self+remote twin the live text must win
-// over the twin's stale segment. rows[] needs CLUSTER_MAX_MEMBERS
-// entries. Returns the grid's row count, 0 on an invalid table.
+// over the twin's stale segment. Rows come out in PHYSICAL columns (the
+// wall as it hangs): each as long as its rightmost member reaches, gaps
+// blank. rows[] needs CLUSTER_MAX_MEMBERS entries. Returns the grid's row
+// count, 0 on an invalid table.
 inline int clusterMirrorRows(const ClusterMemberTable& table,
                              const String* segments, const String& selfRowText,
                              DisplayAlignment selfAlign, String* rows) {
@@ -248,7 +290,7 @@ inline int clusterMirrorRows(const ClusterMemberTable& table,
   if (!validateMemberTable(table, grid).ok) return 0;
 
   for (int r = 0; r < grid.rows; r++) {
-    rows[r] = clusterAlignRow(String(), grid.rowWidth[r],
+    rows[r] = clusterAlignRow(String(), grid.rowExtent[r],
                               DisplayAlignment::Left);
   }
   for (int pass = 0; pass < 2; pass++) {
@@ -284,8 +326,7 @@ inline bool clusterClockSegments(const String& timeText, const String& dateText,
     rows[r] = clusterAlignRow(rows[r], grid.rowWidth[r], align);
   }
   for (int m = 0; m < table.count; m++) {
-    const ClusterMemberDef& def = table.members[m];
-    segments[m] = rows[def.row].substring(def.col, def.col + def.width);
+    segments[m] = clusterSliceSegment(table, rows, m);
   }
   return true;
 }

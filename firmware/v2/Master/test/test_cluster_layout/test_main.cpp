@@ -170,17 +170,157 @@ static void test_row_index_at_member_cap_rejected() {
   TEST_ASSERT_FALSE(validateMemberTable(t, grid).ok);
 }
 
-static void test_row_not_starting_at_col_zero_rejected() {
-  ClusterGrid grid;
-  ClusterMemberTable t = makeRows(1, 12);
-  t.members[0].col = 4;
-  TEST_ASSERT_FALSE(validateMemberTable(t, grid).ok);
+// --- gapped / offset rows (#303) -------------------------------------------------
+
+// A 16-wide row with a 5-wide row hanging centred under it (cols 6..10).
+static ClusterMemberTable makeCentredUnder16() {
+  ClusterMemberTable t = makeRows(2, 16);
+  t.members[1].col = 6;
+  t.members[1].width = 5;
+  return t;
 }
 
-static void test_gap_between_members_rejected() {
+static void test_offset_row_is_valid_and_counts_only_its_flaps() {
+  ClusterGrid grid;
+  TEST_ASSERT_TRUE(validateMemberTable(makeCentredUnder16(), grid).ok);
+  TEST_ASSERT_EQUAL_UINT8(2, grid.rows);
+  TEST_ASSERT_EQUAL_UINT16(16, grid.rowWidth[0]);
+  TEST_ASSERT_EQUAL_UINT16(5, grid.rowWidth[1]);    // text width: flaps only
+  TEST_ASSERT_EQUAL_UINT16(11, grid.rowExtent[1]);  // physical reach
+}
+
+static void test_gap_between_members_is_valid() {
   ClusterGrid grid;
   ClusterMemberTable t = makeWide2x32();
-  t.members[1].col = 20;  // row 0: [0,16) + [20,36) leaves a hole
+  t.members[1].col = 20;  // row 0: [0,16) + [20,36), four columns unowned
+  TEST_ASSERT_TRUE(validateMemberTable(t, grid).ok);
+  TEST_ASSERT_EQUAL_UINT16(32, grid.rowWidth[0]);
+  TEST_ASSERT_EQUAL_UINT16(36, grid.rowExtent[0]);
+  TEST_ASSERT_EQUAL_UINT16(32, grid.rowWidth[1]);
+  TEST_ASSERT_EQUAL_UINT16(32, grid.rowExtent[1]);
+}
+
+static void test_solid_rows_have_equal_width_and_extent() {
+  ClusterGrid grid;
+  TEST_ASSERT_TRUE(validateMemberTable(makeWide2x32(), grid).ok);
+  TEST_ASSERT_EQUAL_UINT16(grid.rowWidth[0], grid.rowExtent[0]);
+  ClusterGrid mirror;
+  TEST_ASSERT_TRUE(validateMemberTable(makeMirror(), mirror).ok);
+  TEST_ASSERT_EQUAL_UINT16(16, mirror.rowWidth[0]);  // twins count once
+  TEST_ASSERT_EQUAL_UINT16(16, mirror.rowExtent[0]);
+}
+
+static void test_offset_row_shows_its_text_not_a_slice_of_the_gap() {
+  // Left-aligned text must land ON the narrow row, not in the six columns
+  // to its left where nothing hangs.
+  String seg[2];
+  TEST_ASSERT_TRUE(layoutGridText("HELLO WORLD\\nABCDE", DisplayAlignment::Left,
+                                  makeCentredUnder16(), seg));
+  TEST_ASSERT_EQUAL_STRING("HELLO WORLD     ", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("ABCDE", seg[1].c_str());
+}
+
+static void test_offset_row_wraps_to_its_own_width() {
+  String seg[2];
+  TEST_ASSERT_TRUE(layoutGridText("0123456789ABCDEF TODAY", DisplayAlignment::Left,
+                                  makeCentredUnder16(), seg));
+  TEST_ASSERT_EQUAL_STRING("0123456789ABCDEF", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("TODAY", seg[1].c_str());
+}
+
+static void test_text_flows_across_a_gap_without_losing_characters() {
+  // Row 0 = [0,4) + [8,12): eight flaps, "ABCDEFGH" fills them in order.
+  ClusterMemberTable t = makeRows(1, 4);
+  t.count = 2;
+  snprintf(t.members[1].host, sizeof(t.members[1].host), "right.local");
+  t.members[1].row = 0;
+  t.members[1].col = 8;
+  t.members[1].width = 4;
+  String seg[2];
+  TEST_ASSERT_TRUE(layoutGridText("ABCDEFGH", DisplayAlignment::Left, t, seg));
+  TEST_ASSERT_EQUAL_STRING("ABCD", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("EFGH", seg[1].c_str());
+  // Table order must not matter.
+  ClusterMemberDef swap = t.members[0];
+  t.members[0] = t.members[1];
+  t.members[1] = swap;
+  TEST_ASSERT_TRUE(layoutGridText("ABCDEFGH", DisplayAlignment::Left, t, seg));
+  TEST_ASSERT_EQUAL_STRING("EFGH", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("ABCD", seg[1].c_str());
+}
+
+static void test_mirror_twins_after_a_gap_get_the_same_segment() {
+  // [0,4) then twins at [8,12): the twins count once toward the offset.
+  ClusterMemberTable t = makeRows(1, 4);
+  t.count = 4;
+  const uint8_t cols[4] = {0, 8, 8, 14};
+  for (int i = 1; i < 4; i++) {
+    snprintf(t.members[i].host, sizeof(t.members[i].host), "m%d.local", i);
+    t.members[i].row = 0;
+    t.members[i].col = cols[i];
+    t.members[i].width = 4;
+  }
+  ClusterGrid grid;
+  TEST_ASSERT_TRUE(validateMemberTable(t, grid).ok);
+  TEST_ASSERT_EQUAL_UINT16(12, grid.rowWidth[0]);
+  TEST_ASSERT_EQUAL_UINT16(18, grid.rowExtent[0]);
+  String seg[4];
+  TEST_ASSERT_TRUE(layoutGridText("ABCDEFGHIJKL", DisplayAlignment::Left, t, seg));
+  TEST_ASSERT_EQUAL_STRING("ABCD", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("EFGH", seg[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("EFGH", seg[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("IJKL", seg[3].c_str());
+}
+
+static void test_clock_on_an_offset_row_uses_its_flaps() {
+  String seg[2];
+  TEST_ASSERT_TRUE(clusterClockSegments("17:05", "04 Oct 26",
+                                        DisplayAlignment::Center,
+                                        makeCentredUnder16(), seg));
+  TEST_ASSERT_EQUAL_STRING("     17:05      ", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("04 Oc", seg[1].c_str());
+}
+
+static void test_mirror_draws_the_wall_as_it_hangs() {
+  ClusterMemberTable t = makeCentredUnder16();
+  t.members[0].host[0] = '\0';  // row 0 is this master
+  String seg[2] = {String(), String("17:05")};
+  String rows[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_EQUAL_INT(2, clusterMirrorRows(t, seg, "HELLO",
+                                             DisplayAlignment::Left, rows));
+  TEST_ASSERT_EQUAL_STRING("HELLO           ", rows[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("      17:05", rows[1].c_str());  // six blank columns
+}
+
+static void test_mirror_blanks_an_interior_gap() {
+  ClusterMemberTable t = makeRows(1, 4);
+  t.count = 2;
+  snprintf(t.members[1].host, sizeof(t.members[1].host), "right.local");
+  t.members[1].row = 0;
+  t.members[1].col = 8;
+  t.members[1].width = 4;
+  String seg[2] = {String("ABCD"), String("EFGH")};
+  String rows[CLUSTER_MAX_MEMBERS];
+  TEST_ASSERT_EQUAL_INT(1, clusterMirrorRows(t, seg, "", DisplayAlignment::Left,
+                                             rows));
+  TEST_ASSERT_EQUAL_STRING("ABCD    EFGH", rows[0].c_str());
+}
+
+static void test_row_with_no_rendering_member_still_rejected() {
+  // Row 1 holds only an off-grid member: rows 0 and 2 are not contiguous.
+  ClusterMemberTable t = makeRows(3, 16);
+  t.members[1].width = 0;
+  ClusterGrid grid;
+  ClusterVerdict v = validateMemberTable(t, grid);
+  TEST_ASSERT_FALSE(v.ok);
+  TEST_ASSERT_EQUAL_STRING("Rows must be contiguous from 0", v.message);
+}
+
+static void test_span_contained_in_another_rejected() {
+  ClusterGrid grid;
+  ClusterMemberTable t = makeMirror();
+  t.members[1].col = 4;
+  t.members[1].width = 4;  // [4,8) inside [0,16)
   TEST_ASSERT_FALSE(validateMemberTable(t, grid).ok);
 }
 
@@ -530,8 +670,18 @@ int main(int, char**) {
   RUN_TEST(test_missing_row_rejected);
   RUN_TEST(test_table_without_row_zero_rejected);
   RUN_TEST(test_row_index_at_member_cap_rejected);
-  RUN_TEST(test_row_not_starting_at_col_zero_rejected);
-  RUN_TEST(test_gap_between_members_rejected);
+  RUN_TEST(test_offset_row_is_valid_and_counts_only_its_flaps);
+  RUN_TEST(test_gap_between_members_is_valid);
+  RUN_TEST(test_solid_rows_have_equal_width_and_extent);
+  RUN_TEST(test_offset_row_shows_its_text_not_a_slice_of_the_gap);
+  RUN_TEST(test_offset_row_wraps_to_its_own_width);
+  RUN_TEST(test_text_flows_across_a_gap_without_losing_characters);
+  RUN_TEST(test_mirror_twins_after_a_gap_get_the_same_segment);
+  RUN_TEST(test_clock_on_an_offset_row_uses_its_flaps);
+  RUN_TEST(test_mirror_draws_the_wall_as_it_hangs);
+  RUN_TEST(test_mirror_blanks_an_interior_gap);
+  RUN_TEST(test_row_with_no_rendering_member_still_rejected);
+  RUN_TEST(test_span_contained_in_another_rejected);
   RUN_TEST(test_partial_overlap_rejected);
   RUN_TEST(test_same_col_different_width_rejected);
   RUN_TEST(test_mirror_coincident_members_accepted);
