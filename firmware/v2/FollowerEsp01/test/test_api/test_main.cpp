@@ -218,12 +218,14 @@ static size_t worstCaseFitsFor(int width) {
 
   // Worst reflash fragment: saturated counts + the longest state name.
   ReflashProgress rp;
-  rp.state = ReflashState::Cancelled;
+  rp.state = ReflashState::BootUpdate;
   rp.total = 255;
   rp.done = 255;
   rp.failed = 255;
   rp.currentAddr = 255;
-  char reflashJson[80];
+  rp.bootDone = 255;
+  rp.bootFailed = 255;
+  char reflashJson[REFLASH_JSON_CAP];
   buildReflashJson(reflashJson, sizeof(reflashJson), rp);
   TEST_ASSERT_TRUE(n + strlen(reflashJson) + 13 < FOLLOWER_HEALTH_BUF);
   snprintf(buf + n - 1, FOLLOWER_HEALTH_BUF - n + 1, ",\"reflash\":%s}",

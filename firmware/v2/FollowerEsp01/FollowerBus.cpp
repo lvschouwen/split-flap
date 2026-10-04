@@ -26,6 +26,8 @@
 #include "UnitTimings.h"
 #include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
 #include "BootUpdateOp.h"     // the shared in-system twiboot update (#499)
+#include "UnitUpdateJob.h"    // quiet wait + boot sweep around the flash loop
+#include "FollowerScanLog.h"  // which units a scan logs
 #include "BootDumpOp.h"       // the shared boot-section dump (#511)
 
 UnitFacts unitFacts[UNITS_AMOUNT];
@@ -142,7 +144,7 @@ static String lastFrame;
 static int lastFrameSpeed = 0;
 static bool lastFrameValid = false;
 // Attempt lines logged per episode; a bus held for good then goes quiet
-// instead of evicting the 2 KB ring (the #436 flood lesson).
+// instead of evicting the ring (the #436 flood lesson).
 #define BUS_RECOVERY_LOGGED_ATTEMPTS 3
 
 const BusRecoveryState& followerBusRecovery() { return busRecovery; }
@@ -233,9 +235,11 @@ void busProbeQuiet(bool quiet) {
   // and the count is published once at the end.
   int detected = 0;
   int states[UNITS_AMOUNT];
+  uint8_t statesBefore[UNITS_AMOUNT];
   for (int i = 0; i < UNITS_AMOUNT; i++) {
     UnitFacts f{};
     states[i] = 0;
+    statesBefore[i] = unitFacts[i].state;
     int i2cAddress = toI2cAddress(i);
     Wire.beginTransmission(i2cAddress);
     if (Wire.endTransmission() != 0) {
@@ -263,6 +267,19 @@ void busProbeQuiet(bool quiet) {
   detectedUnitCount = detected;
   displayWidth = computeDisplayWidth(states, UNITS_AMOUNT);
   if (quiet) return;
+  // One line per unit per change of finding: a row that stays outdated says
+  // so once, not on every rescan (the ring is small).
+  static uint8_t scanLogged[UNITS_AMOUNT];
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    char line[FOLLOWER_SCAN_LINE_CAP];
+    uint8_t finding = followerScanLine(line, sizeof(line),
+                                       (uint8_t)toI2cAddress(i), unitFacts[i],
+                                       statesBefore[i]);
+    if (finding != SCAN_FINDING_NONE && finding != scanLogged[i]) {
+      SerialPrintln(line);
+    }
+    scanLogged[i] = finding;
+  }
   SerialPrint(F("I2C scan complete. Detected "));
   SerialPrint(detectedUnitCount);
   SerialPrint(F(" unit(s). Row width: "));
@@ -303,14 +320,29 @@ bool busPollHealthOne(int i) {
 #endif
 }
 
-void busPollHealth() {
 #if SERIAL_ENABLE == false
-  if (reflashInProgress(reflashProgress)) return;
+static void pollHealthAll() {
   uint32_t now = millis();
   for (int i = 0; i < UNITS_AMOUNT; i++) {
     bool ok = busPollHealthOne(i);
     heartbeatApply(unitFacts[i], ok, now, HEARTBEAT_MISS_THRESHOLD);
   }
+}
+
+// The update job's own poll. The job holds the gate, so the public poll
+// stands down for it; this one waits out the twiboot window first — a status
+// read inside it can pin a unit in its bootloader.
+static void jobPollHealth() {
+  int32_t remaining = (int32_t)(busProbeInhibitedUntilMs() - millis());
+  if (remaining > 0) delay((uint32_t)remaining);
+  pollHealthAll();
+}
+#endif
+
+void busPollHealth() {
+#if SERIAL_ENABLE == false
+  if (reflashInProgress(reflashProgress)) return;
+  pollHealthAll();
 #endif
 }
 
@@ -848,12 +880,36 @@ MaintGrade busLastReflashGrade() {
   return grade;
 }
 
-void busRunReflashJob(uint8_t onlyAddr) {
+#if SERIAL_ENABLE == false
+static bool runBootSweep(uint8_t onlyAddr);
+#endif
+
+void busRunReflashJob(uint8_t onlyAddr, bool force) {
 #if SERIAL_ENABLE == false
   SerialPrintln(F("Unit reflash starting (throttled)..."));
+  // The gate closes here and reopens at the single Finish below: every wait
+  // in between yields to the web handlers, and a master OTA or a unit op let
+  // in halfway would reboot or drive a row that has units in twiboot.
+  reflashProgressBegin(reflashProgress, 0);  // total known after the rescan
+  // Let the row finish what it was doing before the first unit leaves for
+  // its bootloader. Idle, not homed — a home is a full turn per unit and
+  // nothing here needs one (UnitUpdateJob.h).
+  {
+    uint8_t rowUnits[UNITS_AMOUNT];
+    int rowCount = unitUpdateCollectSketchUnits(unitFacts, UNITS_AMOUNT,
+                                                SFP_I2C_ADDRESS_BASE, rowUnits);
+    if (rowCount > 0 &&
+        !waitForBatchIdle(rowUnits, rowCount, UNIT_UPDATE_QUIET_MS)) {
+      SerialPrintln(F("reflash: row still moving after the quiet wait"));
+    }
+  }
   uint8_t targets[UNITS_AMOUNT];
-  int rebooted = reflashCollectRebootTargets(unitFacts, UNITS_AMOUNT,
-                                             SFP_I2C_ADDRESS_BASE, targets);
+  int rebooted =
+      force ? reflashCollectForcedTarget(unitFacts, UNITS_AMOUNT,
+                                         SFP_I2C_ADDRESS_BASE, onlyAddr,
+                                         targets)
+            : reflashCollectRebootTargets(unitFacts, UNITS_AMOUNT,
+                                          SFP_I2C_ADDRESS_BASE, targets);
   rebooted = reflashFilterToAddress(targets, rebooted, onlyAddr);
   for (int k = 0; k < rebooted; k++) busRebootToBootloader(targets[k]);
   if (rebooted > 0) delay(TWIBOOT_STARTUP_MS);
@@ -862,17 +918,28 @@ void busRunReflashJob(uint8_t onlyAddr) {
   int n = reflashCollectFlashTargets(unitFacts, UNITS_AMOUNT,
                                      SFP_I2C_ADDRESS_BASE, flashTargets);
   n = reflashFilterToAddress(flashTargets, n, onlyAddr);
-  reflashProgressBegin(reflashProgress, n);
+  reflashProgress.total = (uint8_t)n;
   bool halted = flashBootloaderUnits(flashTargets, n);
-  reflashProgressFinish(reflashProgress, false, halted);
-  busPollHealth();
+  reflashProgressSettling(reflashProgress);
+  jobPollHealth();
   // Staggered boot-home of the just-flashed units (#309): a reflashed unit
   // reboots UNHOMED, so without this the next cluster render would home the
   // whole row at once — the #305 inrush class. Targets only unhomed units.
   followerBootHome();
+  // Boot sections last (UnitUpdateJob.h): the flashed units are back in
+  // their sketch and homed, the state stage 2 needs, so it costs no further
+  // turn of the drum. A halted flash run does not start a second kind of
+  // write.
+  bool bootHalted = !halted && runBootSweep(onlyAddr);
+  // The result goes out with the facts it is judged by: homed state from the
+  // boot-home above (whose own poll stands down while the gate is closed)
+  // and the new boot verdicts.
+  jobPollHealth();
+  reflashProgressFinish(reflashProgress, false, halted || bootHalted);
   SerialPrintln(F("Unit reflash complete."));
 #else
   (void)onlyAddr;
+  (void)force;
 #endif
 }
 
@@ -890,6 +957,10 @@ struct BootUpdateHooks {
     return busBootUpdate(addr, stage);
   }
   int home(uint8_t addr) { return busHome(addr); }
+  bool isHomed(uint8_t addr) {
+    UnitStatus s;
+    return unitReadStatus(unitBus, addr, s) && (s.flags & UNIT_FLAG_HOMED) != 0;
+  }
   void unitLeftSketch(uint8_t addr) {
     busInvalidateUnitReads(addr);
     busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
@@ -907,6 +978,61 @@ struct BootUpdateHooks {
   }
 };
 #endif
+
+#if SERIAL_ENABLE == false
+namespace {
+struct BootSweepHooks {
+  bool stopRequested() { return false; }
+  MaintGrade bootUpdate(uint8_t addr) {
+    BootUpdateHooks hooks;
+    MaintGrade grade = bootUpdateRun(hooks, addr);
+    SerialPrint(F("boot section of unit "));
+    SerialPrint((int)addr);
+    SerialPrint(F(" -> "));
+    SerialPrintln(maintOutcomeName(grade.outcome));
+    return grade;
+  }
+  void progressChanged() {}
+  void sweepHalted(uint8_t, int) {
+    SerialPrintln(F("Boot sweep HALTED: consecutive failures — remaining "
+                    "units left untouched"));
+  }
+};
+}  // namespace
+
+// Brings the boot section of every unit on the bundled firmware to the
+// current image (0 = the whole row); true when the sweep halted itself. It
+// adds to the progress object's counters and leaves the Finish to its caller,
+// so the gate does not reopen between the sweep and whatever follows it.
+static bool runBootSweep(uint8_t onlyAddr) {
+  uint8_t targets[UNITS_AMOUNT];
+  int n = unitUpdateCollectBootTargets(unitFacts, UNITS_AMOUNT,
+                                       SFP_I2C_ADDRESS_BASE, targets);
+  n = reflashFilterToAddress(targets, n, onlyAddr);
+  if (n == 0) return false;
+  SerialPrint(F("boot sections to update: "));
+  SerialPrintln(n);
+  BootSweepHooks hooks;
+  BootSweepEnd end = unitUpdateRunBootSweep(hooks, targets, n, reflashProgress);
+  return end.halted;
+}
+#endif
+
+void busAutoUpdateBootSections() {
+#if SERIAL_ENABLE == false
+  // On top of what the boot flash passes recorded: their counters stay, and
+  // a row with nothing to update leaves the progress object alone.
+  uint8_t targets[UNITS_AMOUNT];
+  if (unitUpdateCollectBootTargets(unitFacts, UNITS_AMOUNT,
+                                   SFP_I2C_ADDRESS_BASE, targets) == 0) {
+    return;
+  }
+  bool halted = runBootSweep(0);
+  jobPollHealth();  // publish the new boot verdicts with the result
+  reflashProgressFinish(reflashProgress, false,
+                        halted || reflashProgress.halted);
+#endif
+}
 
 void busRunBootUpdate(uint32_t seq, uint8_t addr, MaintResult& result) {
 #if SERIAL_ENABLE == false

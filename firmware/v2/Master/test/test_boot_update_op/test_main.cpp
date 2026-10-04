@@ -21,6 +21,7 @@ struct FakeUnit {
   uint8_t lastResult = BOOT_RESULT_NONE;
   bool infoReadable = true;
   bool idle = true;
+  bool homed = false;               // homed since its last boot
   int stage1Ack = 0;
   int stage2Ack = 0;
   bool stage1Refuses = false;       // keeps answering, records a refusal
@@ -86,9 +87,11 @@ struct FakeUnit {
   }
   int home(uint8_t) {
     homes++;
+    homed = true;
     calls.push_back("home");
     return 0;
   }
+  bool isHomed(uint8_t) { return homed; }
   void unitLeftSketch(uint8_t) { invalidated++; }
   void holdProbes() { holds++; }
   void pause(uint32_t ms) { now += ms; }
@@ -197,6 +200,27 @@ static void test_resume_at_stage2_homes_first() {
   std::vector<std::string> want = {"home", "stage2", "reshow"};
   TEST_ASSERT_TRUE(want == u.calls);
   TEST_ASSERT_EQUAL(0, u.invalidated);
+}
+
+static void test_homed_unit_is_not_homed_again_before_stage2() {
+  // The unit homed after its reflash: the update must not cost a second turn
+  // of the drum, and with nothing moved there is no frame to put back.
+  FakeUnit u;
+  u.state = BOOT_STATE_PREV_NEW;
+  u.homed = true;
+  assertGrade(MaintOutcome::Ok, MaintReason::None, bootUpdateRun(u, 5));
+  TEST_ASSERT_EQUAL(0, u.homes);
+  TEST_ASSERT_EQUAL(0, u.reshows);
+  TEST_ASSERT_TRUE(u.calls == std::vector<std::string>({"stage2"}));
+}
+
+static void test_previous_image_unhomed_homes_once_then_stage2() {
+  FakeUnit u;
+  u.state = BOOT_STATE_PREV_NEW;
+  assertGrade(MaintOutcome::Ok, MaintReason::None, bootUpdateRun(u, 5));
+  TEST_ASSERT_EQUAL(1, u.homes);
+  TEST_ASSERT_TRUE(u.calls ==
+                   std::vector<std::string>({"home", "stage2", "reshow"}));
 }
 
 static void test_stage2_nack_reshows_the_homed_row() {
@@ -317,6 +341,8 @@ int main(int, char**) {
   RUN_TEST(test_unit_lost_after_stage1_reshows_the_row);
   RUN_TEST(test_stage1_wrong_state_is_a_verify_failure);
   RUN_TEST(test_resume_at_stage2_homes_first);
+  RUN_TEST(test_homed_unit_is_not_homed_again_before_stage2);
+  RUN_TEST(test_previous_image_unhomed_homes_once_then_stage2);
   RUN_TEST(test_stage2_nack_reshows_the_homed_row);
   RUN_TEST(test_stage2_failure_names_the_units_own_result);
   RUN_TEST(test_stage2_silence_is_a_lost_unit_after_the_poll_window);

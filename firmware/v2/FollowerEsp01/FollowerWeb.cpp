@@ -57,8 +57,13 @@ static MaintResult opResult;
 static SelfTestSlot selfTestSlot;
 static BootInfoSlot bootInfoSlot;  // #499: last read-only boot report
 static BootDumpSlot bootDumpSlot;  // #522: last boot-section dump result
-static uint8_t bootDumpBytes[BOOT_SECTION_LEN];  // raw 1 KB section
+// The raw 1 KB section lives on the heap and only around a dump: claimed by
+// the request that stages one, given back by loop() once the result has had
+// time to be fetched or a reflash job needs the room.
+static uint8_t* bootDumpBytes = nullptr;
 static uint32_t bootDumpBytesSeq = 0;  // seq that wrote bootDumpBytes
+static uint32_t bootDumpBytesAtMs = 0;  // claimed or last written
+#define BOOT_DUMP_KEEP_MS (5UL * 60UL * 1000UL)
 static uint32_t maintSeqCounter = 0;
 
 // Self-test poll state (the unit measures ~2 revolutions; we poll its
@@ -96,6 +101,15 @@ static uint32_t appAreaBytes() { return FS_start - 0x40200000; }
 // response objects on top of the block itself.
 static bool heapCanHold(size_t bytes) {
   return ESP.getMaxFreeBlockSize() >= bytes + 1536;
+}
+
+// loop() only: the result handler copies out of the block without yielding,
+// so it can never see it go.
+static void releaseBootDumpBytes() {
+  if (bootDumpBytes == nullptr) return;
+  delete[] bootDumpBytes;
+  bootDumpBytes = nullptr;
+  bootDumpBytesSeq = 0;
 }
 
 // For replies that are not built from a String (flash content, streamed or
@@ -1013,6 +1027,20 @@ void webEndpointsInit(AsyncWebServer& server) {
     if (followerRejectCsrf(request)) return;
     int addr = 0;
     if (!checkAddressParam(request, addr)) return;
+    // Claimed only when the op will be staged: a refused request must not
+    // leave 1 KB held through the reflash that made the slot busy.
+    if (bootDumpBytes == nullptr && !rescueActive() && !opSlotBusy()) {
+      if (!heapCanHold(BOOT_SECTION_LEN)) {
+        sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
+        return;
+      }
+      bootDumpBytes = new (std::nothrow) uint8_t[BOOT_SECTION_LEN];
+      if (bootDumpBytes == nullptr) {
+        sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
+        return;
+      }
+    }
+    bootDumpBytesAtMs = millis();
     stageOp(request, FollowerOpKind::BootDump, (uint8_t)addr, 0);
   });
 
@@ -1140,7 +1168,22 @@ void webEndpointsInit(AsyncWebServer& server) {
                        "managed range"));
         return;
       }
-      stageOp(request, FollowerOpKind::ReflashUnit, (uint8_t)addr, 0);
+      // Optional &force=1: reflash the unit even on the bundled rev.
+      bool force = false;
+      if (request->hasParam("force") &&
+          !reflashParseForce(request->getParam("force")->value().c_str(),
+                             force)) {
+        sendWithCors(request, 400, "text/plain", F("'force' must be 1 or 0"));
+        return;
+      }
+      stageOp(request, FollowerOpKind::ReflashUnit, (uint8_t)addr,
+              force ? 1 : 0);
+      return;
+    }
+    if (request->hasParam("force")) {
+      // Never a whole-row erase of healthy units.
+      sendWithCors(request, 400, "text/plain",
+                   F("'force' needs 'address': one unit at a time"));
       return;
     }
     if (rescueActive()) {
@@ -1227,9 +1270,10 @@ static void executeStagedOp() {
       }
       break;
     case FollowerOpKind::ReflashUnit:
+      releaseBootDumpBytes();  // the flash is this board's heap low-water mark
       // Blocks loop() for the length of one unit's flash, like the bulk job;
       // the op slot stays claimed, so every other unit op answers 503.
-      busRunReflashJob(op.addr);
+      busRunReflashJob(op.addr, op.arg != 0);
       grade = busLastReflashGrade();
       break;
     case FollowerOpKind::RebootToBootloader:
@@ -1268,6 +1312,7 @@ static void executeStagedOp() {
       busRunBootDump(op.seq, op.addr, bootDumpSlot, bootDumpBytes);
       bootDumpBytesSeq = (bootDumpSlot.outcome == BootDumpOutcome::Ok)
                              ? op.seq : 0;
+      bootDumpBytesAtMs = millis();
       grade = maintGradeObserved(bootDumpSlot.outcome == BootDumpOutcome::Ok);
       unitHealthRefreshPending = true;  // its reads were invalidated
       break;
@@ -1308,9 +1353,14 @@ static void pollSelfTest() {
 void webLoopTick() {
   if (reflashPending) {
     reflashPending = false;
+    releaseBootDumpBytes();  // the flash is this board's heap low-water mark
     busRunReflashJob();
   }
   if (stagedOp.pending) executeStagedOp();
+  if (bootDumpBytes != nullptr && !stagedOp.pending &&
+      (uint32_t)(millis() - bootDumpBytesAtMs) >= BOOT_DUMP_KEEP_MS) {
+    releaseBootDumpBytes();
+  }
   pollSelfTest();
   if (unitHealthRefreshPending) {
     // Probe-inhibit (v1 #88): wait out any twiboot window before scanning.

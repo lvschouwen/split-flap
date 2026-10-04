@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "HeartbeatPolicy.h"
+#include "ReflashPlan.h"
 #include "TwibootProtocol.h"
 #include "UnitHealth.h"
 #include "UnitProtocolHelpers.h"
@@ -893,9 +894,16 @@ static void test_health_json_combined_splices_fit_cap() {
   n += (size_t)snprintf(buf + n - 1, UNIT_HEALTH_JSON_CAP - n + 1, ",%s}",
                         wearJson) - 1;
 
-  // Worst reflash fragment (buildReflashJson's format, saturated fields).
-  const char* reflashJson =
-      "{\"state\":\"flashing\",\"total\":16,\"done\":16,\"failed\":16,\"cur\":127}";
+  // Worst reflash fragment: the real builder, every field saturated and the
+  // longest state name.
+  ReflashProgress worst;
+  worst.state = ReflashState::BootUpdate;
+  worst.total = worst.done = worst.failed = 255;
+  worst.currentAddr = 127;
+  worst.bootDone = worst.bootFailed = 255;
+  char reflashJson[REFLASH_JSON_CAP];
+  buildReflashJson(reflashJson, sizeof(reflashJson), worst);
+  TEST_ASSERT_EQUAL_CHAR('}', reflashJson[strlen(reflashJson) - 1]);
   TEST_ASSERT_TRUE(n + strlen(reflashJson) + 13 < UNIT_HEALTH_JSON_CAP);
   snprintf(buf + n - 1, UNIT_HEALTH_JSON_CAP - n + 1, ",\"reflash\":%s}",
            reflashJson);

@@ -7,6 +7,8 @@
 // test_reflash_plan (Master) and test_follower_ops (FollowerEsp01). The
 // hardware execution lives in each row master's bus file.
 
+#include <string.h>
+
 #include "MaintenancePolicy.h"
 #include "UnitHealth.h"
 #include "UnitTimings.h"  // TWIBOOT_STARTUP_MS
@@ -122,6 +124,37 @@ inline int reflashFilterToAddress(uint8_t* addrs, int n, uint8_t onlyAddr) {
   return 0;
 }
 
+// /reflash-units?address=N&force=1: the named unit is sent into its bootloader
+// whatever revision it reports — an image can be damaged under a version
+// string that still matches. One unit by construction: without an address it
+// plans nothing, so a forced job can never turn into a whole-row reflash. A
+// unit already in twiboot is a flash target without this, and an absent one
+// stays absent.
+inline int reflashCollectForcedTarget(const UnitFacts* facts, int maxUnits,
+                                      int base, uint8_t onlyAddr,
+                                      uint8_t* outAddrs) {
+  if (onlyAddr < base || onlyAddr >= base + maxUnits) return 0;
+  if (facts[onlyAddr - base].state != 1) return 0;
+  outAddrs[0] = onlyAddr;
+  return 1;
+}
+
+// The `force` query value: 1/true or 0/false, nothing else. It decides
+// whether a healthy unit is erased, so a value that is not understood is
+// refused rather than read as either.
+inline bool reflashParseForce(const char* raw, bool& out) {
+  if (raw == nullptr) return false;
+  if (strcmp(raw, "1") == 0 || strcmp(raw, "true") == 0) {
+    out = true;
+    return true;
+  }
+  if (strcmp(raw, "0") == 0 || strcmp(raw, "false") == 0) {
+    out = false;
+    return true;
+  }
+  return false;
+}
+
 // /reflash-units?address=N bound: the managed range only. Deliberately not
 // maintValidateAddress — a unit in twiboot or on a protocol we do not speak
 // must still be reflashable; converging it is the point. A target that is
@@ -154,6 +187,7 @@ enum class ReflashState : uint8_t {
   Entering,   // enter-bootloader sweep + twiboot settle + rescan
   Flashing,   // streaming pages to currentAddr
   Settling,   // waiting for a flashed batch to come back online + home
+  BootUpdate, // bringing boot sections to the current image (UnitUpdateJob.h)
   Done,       // finished, every planned unit flashed
   Cancelled,  // aborted via /stop — in-flight unit left in twiboot
   Failed,     // finished with per-unit failures (failed > 0)
@@ -172,6 +206,11 @@ struct ReflashProgress {
   // finished and these are the real failures", and giving a human that signal
   // is the entire point of the halt.
   bool halted = false;
+  // Boot sections brought to the current image by this job, and the ones
+  // that refused or failed (UnitUpdateJob.h). Units already current count in
+  // neither.
+  uint8_t bootDone = 0;
+  uint8_t bootFailed = 0;
 };
 
 // The producer gate (#205 design rule) keys off this: while true, only Stop
@@ -179,7 +218,8 @@ struct ReflashProgress {
 inline bool reflashInProgress(const ReflashProgress& p) {
   return p.state == ReflashState::Entering ||
          p.state == ReflashState::Flashing ||
-         p.state == ReflashState::Settling;
+         p.state == ReflashState::Settling ||
+         p.state == ReflashState::BootUpdate;
 }
 
 inline void reflashProgressBegin(ReflashProgress& p, int total) {
@@ -189,6 +229,8 @@ inline void reflashProgressBegin(ReflashProgress& p, int total) {
   p.failed = 0;
   p.currentAddr = 0;
   p.halted = false;
+  p.bootDone = 0;
+  p.bootFailed = 0;
 }
 
 inline void reflashProgressUnitStart(ReflashProgress& p, uint8_t addr) {
@@ -216,7 +258,7 @@ inline void reflashProgressFinish(ReflashProgress& p, bool cancelled,
   p.halted = halted && !cancelled;
   if (cancelled) {
     p.state = ReflashState::Cancelled;
-  } else if (p.failed > 0) {
+  } else if (p.failed > 0 || p.bootFailed > 0) {
     p.state = ReflashState::Failed;
   } else {
     p.state = ReflashState::Done;
@@ -228,6 +270,7 @@ inline const char* reflashStateName(ReflashState s) {
     case ReflashState::Entering:  return "entering";
     case ReflashState::Flashing:  return "flashing";
     case ReflashState::Settling:  return "settling";
+    case ReflashState::BootUpdate: return "bootloader";
     case ReflashState::Done:      return "done";
     case ReflashState::Cancelled: return "cancelled";
     case ReflashState::Failed:    return "failed";
@@ -333,13 +376,14 @@ inline ReflashRunEnd reflashRunTargets(Hooks& h, const uint8_t* targets,
 // Renders the reflash progress JSON (#205) — spliced into the /units/health
 // payload by the web layer (additive key). REFLASH_JSON_CAP holds the widest
 // object the fields can produce.
-#define REFLASH_JSON_CAP 96
+#define REFLASH_JSON_CAP 128
 inline void buildReflashJson(char* buf, size_t cap,
                              const ReflashProgress& p) {
   snprintf(buf, cap,
            "{\"state\":\"%s\",\"total\":%u,\"done\":%u,\"failed\":%u,"
-           "\"cur\":%u,\"halted\":%s}",
+           "\"cur\":%u,\"halted\":%s,\"boot\":%u,\"bootFailed\":%u}",
            reflashStateName(p.state), (unsigned)p.total, (unsigned)p.done,
            (unsigned)p.failed, (unsigned)p.currentAddr,
-           p.halted ? "true" : "false");
+           p.halted ? "true" : "false", (unsigned)p.bootDone,
+           (unsigned)p.bootFailed);
 }

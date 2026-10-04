@@ -485,10 +485,26 @@ void webMaintenanceRegister(AsyncWebServer& server) {
     } else {
       SerialPrintln(F("Unit reflash requested from web UI"));
     }
+    // Optional &force=1: reflash the addressed unit even when it reports the
+    // bundled rev. Refused without an address — never a whole-row erase.
+    bool force = false;
+    if (request->hasParam("force")) {
+      if (!reflashParseForce(request->getParam("force")->value().c_str(),
+                             force)) {
+        request->send(400, "text/plain", F("'force' must be 1 or 0"));
+        return;
+      }
+      if (force && addr == 0) {
+        request->send(400, "text/plain",
+                      F("'force' needs 'address': one unit at a time"));
+        return;
+      }
+      if (force) SerialPrintf("Unit 0x%02x: reflash FORCED\n", addr);
+    }
     WebContentSnapshot content = webDisplayContentSnapshot();
     maintEnqueue(request, makeReflashUnitsCommand(
                               displayNextMaintSeq(), String(snap.currentText),
                               content.alignment, content.flapSpeed,
-                              (uint8_t)addr));
+                              (uint8_t)addr, force));
   });
 }

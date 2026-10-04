@@ -13,6 +13,7 @@
 //   bool     waitIdle(uint8_t addr, uint32_t timeoutMs)   false = still moving
 //   int      sendStage(uint8_t addr, uint8_t stage)       0 = ACKed
 //   int      home(uint8_t addr)                           0 = ACKed
+//   bool     isHomed(uint8_t addr)   a FRESH read: homed since its last boot
 //   void     unitLeftSketch(uint8_t addr)   reads are stale, hold the probes
 //   void     holdProbes()                   keep runtime probes off the unit
 //   void     pause(uint32_t ms)
@@ -118,9 +119,11 @@ inline MaintGrade bootUpdateRun(Hooks& h, uint8_t addr) {
   }
 
   if (plan.needStage2) {
-    if (!plan.needStage1) {
+    if (!plan.needStage1 && !h.isHomed(addr)) {
       // Resuming a unit that already carries page 7: nothing above homed it,
-      // and an unhomed unit refuses the stage (#516).
+      // and an unhomed unit refuses the stage (#516). One that is homed is
+      // left where it stands — a home is a full turn of the drum, and stage 2
+      // does not move it.
       moved = true;
       if (h.home(addr) == 0) h.waitIdle(addr, UNIT_HOME_TIMEOUT_MS);
       if (!h.readBootInfo(addr, info)) {

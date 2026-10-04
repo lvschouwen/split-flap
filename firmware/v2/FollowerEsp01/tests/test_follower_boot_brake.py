@@ -107,7 +107,7 @@ def test_targeted_run_flashes_only_the_planned_list():
     assert "reflashRunTargets(hooks, targets, count, reflashProgress)" in loop
     assert "unitFacts[" not in loop, "the loop must not re-derive targets from the facts"
     job = _function_body(_code(TREE / "FollowerBus.cpp"),
-                         "void busRunReflashJob(uint8_t onlyAddr)")
+                         "void busRunReflashJob(uint8_t onlyAddr, bool force)")
     assert job.count("reflashFilterToAddress(") == 2  # reboot sweep + planned total
     narrowed = job.index("n = reflashFilterToAddress(flashTargets, n, onlyAddr);")
     assert narrowed < job.index("flashBootloaderUnits(flashTargets, n);")
@@ -125,3 +125,7 @@ def test_reflash_route_never_falls_through_to_the_bulk_job_on_a_bad_address():
     # Both address branches end in a return before the bulk path.
     assert route[body_refusal:query].count("return;") == 1
     assert route[query:].count("return;") >= 2
+    # force without an address is refused before the bulk path: it must never
+    # turn into a whole-row reflash of healthy units.
+    assert "'force' needs 'address'" in route
+    assert "reflashParseForce(" in route

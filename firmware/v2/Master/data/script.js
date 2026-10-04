@@ -1705,7 +1705,8 @@ function setMaintenanceControlsDisabled(disabled) {
 }
 
 function reflashIsRunning(rf) {
-	return rf.state === "entering" || rf.state === "flashing" || rf.state === "settling";
+	return rf.state === "entering" || rf.state === "flashing" || rf.state === "settling" ||
+		rf.state === "bootloader";
 }
 
 function reflashProgressLabel(rf) {
@@ -1713,6 +1714,11 @@ function reflashProgressLabel(rf) {
 	if (rf.state === "entering") return "entering bootloaders…";
 	if (rf.state === "flashing") return "flashing 0x" + rf.cur.toString(16) + " — " + counters;
 	if (rf.state === "settling") return "units homing — " + counters;
+	//Boot sections follow the flash in the same job; `boot` counts the ones
+	//this job brought to the current image.
+	var boot = (rf.boot || 0) + (rf.bootFailed > 0 ? " (" + rf.bootFailed + " failed)" : "");
+	if (rf.state === "bootloader") return "updating bootloader of 0x" + rf.cur.toString(16) + " — " + boot + " done";
+	if (rf.boot > 0 || rf.bootFailed > 0) counters += ", bootloaders " + boot;
 	// #412: a halted run stopped itself because the image looked suspect. Say
 	// which units were never attempted — the counters alone read like a job
 	// that finished, and that is the confusion the halt exists to prevent.

@@ -30,7 +30,7 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/cluster/ping",          "leader liveness ping"},
   {"POST", "/cluster/leave",         "leave the cluster (blank)"},
   {"POST", "/firmware/master",       "OTA this follower (?md5= required)"},
-  {"POST", "/reflash-units",         "reflash units over twiboot (?address=N for one)"},
+  {"POST", "/reflash-units",         "update units: firmware, then bootloader (?address=N for one, &force=1 to reflash it regardless)"},
   {"POST", "/reboot",                "soft reboot the follower"},
   {"GET",  "/unit/offset",           "read a unit's calibration offset"},
   {"POST", "/unit/offset",           "set a unit's calibration offset"},

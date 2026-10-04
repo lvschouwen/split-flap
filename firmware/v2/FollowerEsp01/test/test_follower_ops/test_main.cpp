@@ -6,6 +6,8 @@
 #include <ArduinoFake.h>
 #include <unity.h>
 
+#include <string.h>
+#include "../../FollowerScanLog.h"
 #include "../../FollowerOps.h"
 
 void setUp() {}
@@ -141,11 +143,11 @@ static void test_reflash_json_and_gate() {
   TEST_ASSERT_TRUE(reflashInProgress(p));
   reflashProgressUnitStart(p, 2);
   reflashProgressUnitResult(p, true);
-  char buf[96];
+  char buf[REFLASH_JSON_CAP];
   buildReflashJson(buf, sizeof(buf), p);
   TEST_ASSERT_EQUAL_STRING(
       "{\"state\":\"flashing\",\"total\":3,\"done\":1,\"failed\":0,\"cur\":2,"
-      "\"halted\":false}",
+      "\"halted\":false,\"boot\":0,\"bootFailed\":0}",
       buf);
   reflashProgressFinish(p, false, false);
   TEST_ASSERT_FALSE(reflashInProgress(p));
@@ -303,6 +305,64 @@ static void test_boot_failure_maps_to_its_own_reason() {
                            maintReasonName(MaintReason::BootNotStarted));
 }
 
+// --- scan log: one line per unit that is not current (#549) -----------------
+
+static UnitFacts scanFact(uint8_t state, uint8_t fwStatus, const char* rev) {
+  UnitFacts f{};
+  f.state = state;
+  f.fwStatus = fwStatus;
+  strncpy(f.version, rev, sizeof(f.version) - 1);
+  return f;
+}
+
+static void test_scan_line_is_silent_for_a_current_unit_and_an_empty_slot() {
+  char buf[FOLLOWER_SCAN_LINE_CAP] = "untouched";
+  TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_NONE, followerScanLine(buf, sizeof(buf), 1,
+                                     scanFact(1, 0, "1089153"), 1));
+  TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_NONE, followerScanLine(buf, sizeof(buf), 1,
+                                     scanFact(1, 0, "1089153"), 0));
+  TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_NONE, followerScanLine(buf, sizeof(buf), 6,
+                                     scanFact(0, 2, ""), 0));
+  TEST_ASSERT_EQUAL_STRING("untouched", buf);
+}
+
+static void test_scan_line_names_each_state_that_needs_attention() {
+  char buf[FOLLOWER_SCAN_LINE_CAP];
+  TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_OUTDATED, followerScanLine(buf, sizeof(buf), 1,
+                                    scanFact(1, 1, "cfd9948"), 1));
+  TEST_ASSERT_EQUAL_STRING(
+      "- unit at 0x01 is running sketch (fw cfd9948 — OUTDATED)", buf);
+
+  TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_UNREADABLE, followerScanLine(buf, sizeof(buf), 2, scanFact(1, 2, ""), 1));
+  TEST_ASSERT_EQUAL_STRING(
+      "- unit at 0x02 is running sketch (fw UNKNOWN — unreadable version "
+      "reply)", buf);
+
+  TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_BOOTLOADER, followerScanLine(buf, sizeof(buf), 3, scanFact(2, 2, ""), 1));
+  TEST_ASSERT_EQUAL_STRING("- unit at 0x03 is in BOOTLOADER mode", buf);
+
+  TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_MISSING, followerScanLine(buf, sizeof(buf), 4, scanFact(0, 2, ""), 1));
+  TEST_ASSERT_EQUAL_STRING(
+      "- unit at 0x04 is MISSING (answered the previous scan)", buf);
+  TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_MISSING, followerScanLine(buf, sizeof(buf), 4, scanFact(0, 2, ""), 2));
+}
+
+static void test_scan_line_names_a_protocol_it_cannot_drive() {
+  UnitFacts f = scanFact(1, 0, "abcdef0");
+  f.protocolKnown = true;
+  f.protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  char buf[FOLLOWER_SCAN_LINE_CAP];
+  TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_PROTOCOL, followerScanLine(buf, sizeof(buf), 16, f, 1));
+  char want[FOLLOWER_SCAN_LINE_CAP];
+  snprintf(want, sizeof(want),
+           "- unit at 0x10 speaks protocol v%u, we speak v%u — NOT DRIVABLE, "
+           "reflash target",
+           (unsigned)(SFP_PROTOCOL_VERSION + 1), (unsigned)SFP_PROTOCOL_VERSION);
+  TEST_ASSERT_EQUAL_STRING(want, buf);
+  // The widest line fits the buffer with room to spare.
+  TEST_ASSERT_TRUE(strlen(buf) < FOLLOWER_SCAN_LINE_CAP - 1);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_address_validation);
@@ -324,5 +384,8 @@ int main(int, char**) {
   RUN_TEST(test_op_result_ok_carries_its_reason);
   RUN_TEST(test_boot_reasons_have_distinct_names);
   RUN_TEST(test_boot_failure_maps_to_its_own_reason);
+  RUN_TEST(test_scan_line_is_silent_for_a_current_unit_and_an_empty_slot);
+  RUN_TEST(test_scan_line_names_each_state_that_needs_attention);
+  RUN_TEST(test_scan_line_names_a_protocol_it_cannot_drive);
   return UNITY_END();
 }

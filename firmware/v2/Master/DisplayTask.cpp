@@ -12,6 +12,7 @@
 #include "BootHomePlan.h"
 #include "BootDumpOp.h"     // the shared boot-section dump
 #include "BootUpdateOp.h"   // the shared in-system twiboot update
+#include "UnitUpdateJob.h"  // quiet wait + boot sweep around the flash loop
 #include "SelfTestPoll.h"   // the shared self-test wait
 #include "BootTrace.h"  // #504
 #include "BootUpdatePlan.h"  // #499 decision logic
@@ -353,6 +354,7 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
 enum class ReflashSweep : uint8_t {
   OffBundle,     // web job: outdated + unknown revs (v1 #114 semantics)
   OutdatedOnly,  // boot auto-update: only provably stale revs
+  ForcedOne,     // operator override: the addressed unit, whatever its rev
 };
 
 // True when a job would have work: something sits in twiboot already, or
@@ -370,6 +372,72 @@ static bool reflashHasWork(const DisplaySnapshot& snap, ReflashSweep sweep) {
               : reflashCollectOutdatedTargets(snap.units, UNITS_AMOUNT,
                                               SFP_I2C_ADDRESS_BASE, addrs);
   return n > 0;
+}
+
+// In-system twiboot update (#499): the sequence, its timeouts and its grading
+// are shared/BootUpdateOp.h; this is displayTask's side of it.
+struct BootUpdateHooks {
+  DisplaySnapshot& local;
+  // The update job re-shows the row once at its end; replaying the frame
+  // after every unit would turn drums the job exists to leave alone, and
+  // would keep the next unit busy past its idle wait.
+  bool reshowAfter = true;
+
+  bool readBootInfo(uint8_t addr, BootUpdateReport& out) {
+    wdtFeed();
+    return unitBusReadBootInfo(addr, out);
+  }
+  bool waitIdle(uint8_t addr, uint32_t timeoutMs) {
+    wdtFeed();
+    bool idle = unitBusWaitBatchIdle(&addr, 1, timeoutMs);
+    wdtFeed();
+    return idle;
+  }
+  int sendStage(uint8_t addr, uint8_t stage) {
+    SerialPrintf("display: boot-update unit 0x%02x stage %u\n", addr, stage);
+    return unitBusBootUpdate(addr, stage);
+  }
+  int home(uint8_t addr) { return unitBusHome(addr); }
+  bool isHomed(uint8_t addr) { return unitBusIsHomed(addr); }
+  void unitLeftSketch(uint8_t addr) {
+    displayInvalidateUnitReads(local, addr);
+    armTwibootRiskWindow();
+  }
+  void holdProbes() { armTwibootRiskWindow(); }
+  void pause(uint32_t ms) {
+    wdtFeed();
+    delay(ms);
+  }
+  uint32_t nowMs() { return millis(); }
+  void reshow() {
+    if (!reshowAfter || !local.lastFrameValid) return;
+    unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
+                     lastFrameUnitSpeed);
+  }
+  void note(BootUpdateStep step, MaintReason why,
+            const BootUpdateReport& info) {
+    static const char* const kStep[] = {"read info", "plan",    "settle",
+                                        "stage 1",   "stage 2", "done"};
+    SerialPrintf("display: boot-update %s → %s (state %u result %u)\n",
+                 kStep[(uint8_t)step],
+                 why == MaintReason::None ? "ok" : maintReasonName(why),
+                 info.state, info.lastResult);
+  }
+};
+
+// Does a unit on the bundled firmware report a boot section that is known
+// and not the current one? Boot starts the job on that alone. Narrower than
+// the job's own sweep on purpose: an unread verdict must not send a healthy
+// display through the job on every boot.
+static bool bootSweepHasWork(const DisplaySnapshot& snap) {
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    const UnitFacts& u = snap.units[i];
+    if (u.state == 1 && u.fwStatus == 0 &&
+        u.bootVerdict == BOOT_INTEGRITY_OUTDATED) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // `onlyAddr` narrows the whole job to one unit (0 = the whole fleet, today's
@@ -402,17 +470,52 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   }
   if (sawStop) xQueueSend(displayQueue, &stopCmd, 0);
 
+  // Let the row finish what it was doing before the first unit leaves for
+  // its bootloader: no drum turning, no rail load, while pages are streamed.
+  // Idle, not homed — a home is a full turn per unit and nothing here needs
+  // one (UnitUpdateJob.h).
+  {
+    uint8_t rowUnits[UNITS_AMOUNT];
+    int rowCount = unitUpdateCollectSketchUnits(
+        local.units, UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE, rowUnits);
+    wdtFeed();
+    if (rowCount > 0 &&
+        !unitBusWaitBatchIdle(rowUnits, rowCount, UNIT_UPDATE_QUIET_MS)) {
+      SerialPrintln(F("reflash: row still moving after the quiet wait — "
+                      "going ahead"));
+    }
+    wdtFeed();
+  }
+  // A Stop during the wait ends the job here, before any unit is sent into
+  // its bootloader: past this point a cancel leaves them parked there.
+  if (unitBusAbortRequested()) {
+    reflashProgressFinish(local.reflash, true, false);
+    snapshotPublish(local);  // gate reopens here
+    SerialPrintln(F("reflash: cancelled before any unit was touched"));
+    return;
+  }
+
   // Push sweep-matching sketch units into twiboot (v1's
   // enterBootloaderAllDetected), then wait out the watchdog reset +
   // twiboot init before talking to anyone.
   uint8_t addrs[UNITS_AMOUNT];
   int rebooted = 0;
-  int sweepCount =
-      sweep == ReflashSweep::OffBundle
-          ? reflashCollectRebootTargets(local.units, UNITS_AMOUNT,
-                                        SFP_I2C_ADDRESS_BASE, addrs)
-          : reflashCollectOutdatedTargets(local.units, UNITS_AMOUNT,
-                                          SFP_I2C_ADDRESS_BASE, addrs);
+  int sweepCount = 0;
+  switch (sweep) {
+    case ReflashSweep::OffBundle:
+      sweepCount = reflashCollectRebootTargets(local.units, UNITS_AMOUNT,
+                                               SFP_I2C_ADDRESS_BASE, addrs);
+      break;
+    case ReflashSweep::OutdatedOnly:
+      sweepCount = reflashCollectOutdatedTargets(local.units, UNITS_AMOUNT,
+                                                 SFP_I2C_ADDRESS_BASE, addrs);
+      break;
+    case ReflashSweep::ForcedOne:
+      sweepCount = reflashCollectForcedTarget(local.units, UNITS_AMOUNT,
+                                              SFP_I2C_ADDRESS_BASE, onlyAddr,
+                                              addrs);
+      break;
+  }
   sweepCount = reflashFilterToAddress(addrs, sweepCount, onlyAddr);
   for (int i = 0; i < sweepCount; i++) {
     if (unitBusRebootToBootloader(addrs[i]) == 0) {
@@ -494,14 +597,71 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // the abort flag set so this bails and the queued Stop broadcast-homes.
   wdtFeed();  // #314: boot-home of just-flashed units
   runBootHomeSequence(local, busFacts);
-  reflashProgressFinish(local.reflash, cancelled, halted);
+
+  // Boot sections last (UnitUpdateJob.h): every unit that could be flashed is
+  // back in its sketch and homed, which is the state stage 2 needs — so the
+  // update costs no further turn of the drum. Skipped after a cancel or a
+  // halt: a job that stopped itself does not start a second kind of write.
+  bool bootHalted = false;
+  if (!cancelled && !halted) {
+    uint8_t bootTargets[UNITS_AMOUNT];
+    int bootTotal = unitUpdateCollectBootTargets(
+        local.units, UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE, bootTargets);
+    bootTotal = reflashFilterToAddress(bootTargets, bootTotal, onlyAddr);
+    if (bootTotal > 0) {
+      SerialPrintf("reflash: %d boot section(s) to update\n", bootTotal);
+      struct SweepHooks {
+        DisplaySnapshot& local;
+        bool stopRequested() {
+          wdtFeed();
+          return unitBusAbortRequested();
+        }
+        MaintGrade bootUpdate(uint8_t addr) {
+          BootUpdateHooks hooks{local, false};
+          MaintGrade grade = bootUpdateRun(hooks, addr);
+          SerialPrintf("reflash: boot section of unit 0x%02x → %s%s%s\n", addr,
+                       maintOutcomeName(grade.outcome),
+                       grade.reason != MaintReason::None ? " / " : "",
+                       maintReasonName(grade.reason));
+          return grade;
+        }
+        void progressChanged() { snapshotPublish(local); }
+        void sweepHalted(uint8_t consecutiveFailures, int untouched) {
+          SerialPrintf("reflash: boot sweep HALTED after %u consecutive "
+                       "failures — %d unit(s) left untouched\n",
+                       (unsigned)consecutiveFailures, untouched);
+        }
+      };
+      SweepHooks sweepHooks{local};
+      BootSweepEnd sweepEnd = unitUpdateRunBootSweep(
+          sweepHooks, bootTargets, bootTotal, local.reflash);
+      cancelled = sweepEnd.cancelled;
+      bootHalted = sweepEnd.halted;
+      // The masters judge a boot section on their health poll: publish the
+      // new verdicts with the result, not minutes later. After the twiboot
+      // window the last unit armed — a status read inside it can pin a unit
+      // in its bootloader.
+      wdtFeed();
+      settleBeforeProbe();
+      wdtFeed();
+      pollHealthWithFreshness(busFacts);
+      displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                            effectiveWidthOverride());
+    }
+  }
+
+  reflashProgressFinish(local.reflash, cancelled, halted || bootHalted);
   snapshotPublish(local);  // gate reopens here
-  SerialPrintf("reflash: %s — %u ok, %u failed of %u%s\n",
+  SerialPrintf("reflash: %s — %u ok, %u failed of %u; boot sections %u "
+               "updated, %u failed%s\n",
                reflashStateName(local.reflash.state),
                (unsigned)local.reflash.done, (unsigned)local.reflash.failed,
                (unsigned)local.reflash.total,
-               halted ? " (HALTED — image suspect, remaining units untouched)"
-                      : "");
+               (unsigned)local.reflash.bootDone,
+               (unsigned)local.reflash.bootFailed,
+               (halted || bootHalted)
+                   ? " (HALTED — image suspect, remaining units untouched)"
+                   : "");
 }
 
 // --- opcode executors (#353): one static helper per DisplayCommand opcode —
@@ -738,52 +898,6 @@ static void execBootInfo(DisplaySnapshot& local, const DisplayCommand& cmd) {
       local, cmd, maintGradeObserved(slot.ok, MaintReason::BootInfoReadFail));
 }
 
-// In-system twiboot update (#499): the sequence, its timeouts and its grading
-// are shared/BootUpdateOp.h; this is displayTask's side of it.
-struct BootUpdateHooks {
-  DisplaySnapshot& local;
-
-  bool readBootInfo(uint8_t addr, BootUpdateReport& out) {
-    wdtFeed();
-    return unitBusReadBootInfo(addr, out);
-  }
-  bool waitIdle(uint8_t addr, uint32_t timeoutMs) {
-    wdtFeed();
-    bool idle = unitBusWaitBatchIdle(&addr, 1, timeoutMs);
-    wdtFeed();
-    return idle;
-  }
-  int sendStage(uint8_t addr, uint8_t stage) {
-    SerialPrintf("display: boot-update unit 0x%02x stage %u\n", addr, stage);
-    return unitBusBootUpdate(addr, stage);
-  }
-  int home(uint8_t addr) { return unitBusHome(addr); }
-  void unitLeftSketch(uint8_t addr) {
-    displayInvalidateUnitReads(local, addr);
-    armTwibootRiskWindow();
-  }
-  void holdProbes() { armTwibootRiskWindow(); }
-  void pause(uint32_t ms) {
-    wdtFeed();
-    delay(ms);
-  }
-  uint32_t nowMs() { return millis(); }
-  void reshow() {
-    if (!local.lastFrameValid) return;
-    unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
-                     lastFrameUnitSpeed);
-  }
-  void note(BootUpdateStep step, MaintReason why,
-            const BootUpdateReport& info) {
-    static const char* const kStep[] = {"read info", "plan",    "settle",
-                                        "stage 1",   "stage 2", "done"};
-    SerialPrintf("display: boot-update %s → %s (state %u result %u)\n",
-                 kStep[(uint8_t)step],
-                 why == MaintReason::None ? "ok" : maintReasonName(why),
-                 info.state, info.lastResult);
-  }
-};
-
 static void execBootUpdate(DisplaySnapshot& local, UnitFacts* busFacts,
                            const DisplayCommand& cmd) {
   (void)busFacts;
@@ -928,7 +1042,10 @@ static void execReflashUnits(DisplaySnapshot& local, UnitFacts* busFacts,
   (void)cmd;
   // The job closes the gate, drains queue stragglers (Stop
   // survives), flashes in batches, and reprobes — see runReflashJob.
-  runReflashJob(local, busFacts, ReflashSweep::OffBundle, cmd.unitAddress);
+  runReflashJob(local, busFacts,
+                cmd.value != 0 ? ReflashSweep::ForcedOne
+                               : ReflashSweep::OffBundle,
+                cmd.unitAddress);
 
   // Baked re-show: reflashed units homed to blank — put the
   // enqueue-time content back. Skipped on cancel: the queued Stop
@@ -1002,7 +1119,8 @@ void displayTaskMain(void*) {
     // this setting persists across reboots.
     SerialPrintln(F("reflash: boot auto-install SUPPRESSED (reflashOnBoot=false)"));
     runBootHomeSequence(local, busFacts);
-  } else if (reflashHasWork(local, ReflashSweep::OutdatedOnly)) {
+  } else if (reflashHasWork(local, ReflashSweep::OutdatedOnly) ||
+             bootSweepHasWork(local)) {
     SerialPrintln(F("reflash: boot auto-install/auto-update starting"));
     runReflashJob(local, busFacts, ReflashSweep::OutdatedOnly, 0);
   } else {

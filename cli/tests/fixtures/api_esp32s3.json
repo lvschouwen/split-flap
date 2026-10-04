@@ -198,7 +198,7 @@
   {
    "m": "POST",
    "p": "/reflash-units",
-   "d": "reflash units over twiboot (?address=N for one)"
+   "d": "update units: firmware, then bootloader (?address=N for one, &force=1 to reflash it regardless)"
   },
   {
    "m": "POST",

@@ -99,6 +99,10 @@ void setup() {
     // single-core board, so a slow homing sweep (bad halls) would otherwise leave
     // it unreachable. Staged renders that arrive meanwhile wait for loop().
     followerBootHome();
+    // Boot sections after the boot-home: stage 2 needs a homed unit, and one
+    // homed here is not homed again for it (UnitUpdateJob.h). Same brake as
+    // the application auto-update.
+    if (prefsReflashOnBoot()) busAutoUpdateBootSections();
   }
 
   SerialPrintln(rescueActive()

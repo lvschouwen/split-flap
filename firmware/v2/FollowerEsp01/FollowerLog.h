@@ -10,14 +10,16 @@
 // more usefully, pulled by the S3 leader into the fleet-wide log so the whole
 // wall's activity lands in one place (/log/flash on the master).
 //
-// v1's ESP-01 web log was 2 KB (#133); we keep that budget. Lines carry the
+// 4 KB: the leader pulls the ring every LOG_PULL_INTERVAL_MS, so it has to
+// hold what a row writes between two pulls — and at boot, before any leader
+// is talking to it, the banner plus the scans of a full row. Lines carry the
 // board's own uptime in seconds (#503), not a wall clock — the leader stamps
 // each line on ingest, giving the fleet log one coherent clock (the ESP-01's
 // own clock is SNTP-epoch-only and often unset). The stamp costs up to 13
 // bytes a line out of that budget.
 
 #ifndef FOLLOWER_LOG_SIZE
-#define FOLLOWER_LOG_SIZE 2048
+#define FOLLOWER_LOG_SIZE 4096
 #endif
 
 // Byte ring with a monotonic write cursor so the leader can fetch only the

@@ -496,6 +496,12 @@ bool unitBusReadBootInfo(int i2cAddress, BootUpdateReport& out) {
   return unitReadBootInfo(unitBus, (uint8_t)i2cAddress, out);
 }
 
+bool unitBusIsHomed(int i2cAddress) {
+  UnitStatus s;
+  return unitReadStatus(unitBus, (uint8_t)i2cAddress, s) &&
+         (s.flags & UNIT_FLAG_HOMED) != 0;
+}
+
 int unitBusBootUpdate(int i2cAddress, uint8_t stage) {
   return unitSendBootUpdate(unitBus, (uint8_t)i2cAddress, stage);
 }

@@ -266,13 +266,21 @@ static void test_reflash_units_command_counts_without_touching_text() {
   TEST_ASSERT_EQUAL(2, snap.commandsProcessed);
 }
 
+static void test_reflash_force_needs_an_address() {
+  TEST_ASSERT_EQUAL(1, makeReflashUnitsCommand(7, "", "left", 80, 3, true).value);
+  TEST_ASSERT_EQUAL(0, makeReflashUnitsCommand(7, "", "left", 80, 3, false).value);
+  TEST_ASSERT_EQUAL(0, makeReflashUnitsCommand(7, "", "left", 80, 3).value);
+  // Forced without a unit would be a whole-row erase: the flag is dropped.
+  TEST_ASSERT_EQUAL(0, makeReflashUnitsCommand(7, "", "left", 80, 0, true).value);
+}
+
 static void test_reflash_json_shapes() {
-  char buf[112];
+  char buf[REFLASH_JSON_CAP];
   ReflashProgress p;
   buildReflashJson(buf, sizeof(buf), p);
   TEST_ASSERT_EQUAL_STRING(
       "{\"state\":\"idle\",\"total\":0,\"done\":0,\"failed\":0,\"cur\":0,"
-      "\"halted\":false}",
+      "\"halted\":false,\"boot\":0,\"bootFailed\":0}",
       buf);
   reflashProgressBegin(p, 12);
   reflashProgressUnitStart(p, 5);
@@ -281,7 +289,7 @@ static void test_reflash_json_shapes() {
   buildReflashJson(buf, sizeof(buf), p);
   TEST_ASSERT_EQUAL_STRING(
       "{\"state\":\"flashing\",\"total\":12,\"done\":1,\"failed\":0,"
-      "\"cur\":6,\"halted\":false}",
+      "\"cur\":6,\"halted\":false,\"boot\":0,\"bootFailed\":0}",
       buf);
 }
 
@@ -289,7 +297,7 @@ static void test_reflash_json_shapes() {
 // operator watching /units/health otherwise cannot tell a run that stopped
 // itself from one that finished with the same failure count.
 static void test_reflash_json_carries_the_halt() {
-  char buf[112];
+  char buf[REFLASH_JSON_CAP];
   ReflashProgress p;
   reflashProgressBegin(p, 21);
   reflashProgressUnitResult(p, false);
@@ -298,7 +306,7 @@ static void test_reflash_json_carries_the_halt() {
   buildReflashJson(buf, sizeof(buf), p);
   TEST_ASSERT_EQUAL_STRING(
       "{\"state\":\"failed\",\"total\":21,\"done\":0,\"failed\":2,"
-      "\"cur\":0,\"halted\":true}",
+      "\"cur\":0,\"halted\":true,\"boot\":0,\"bootFailed\":0}",
       buf);
 }
 
@@ -577,6 +585,7 @@ int main(int, char**) {
   RUN_TEST(test_gate_blocks_everything_but_stop_while_reflashing);
   RUN_TEST(test_gate_reopens_after_job_finishes);
   RUN_TEST(test_reflash_units_command_counts_without_touching_text);
+  RUN_TEST(test_reflash_force_needs_an_address);
   RUN_TEST(test_reflash_json_shapes);
   RUN_TEST(test_reflash_json_carries_the_halt);
   RUN_TEST(test_fresh_snapshot_selftest_slot_is_pending);

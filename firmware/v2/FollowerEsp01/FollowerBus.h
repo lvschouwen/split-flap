@@ -32,7 +32,7 @@ void busInit();
 // slot; recomputes displayWidth. Blocking (~2 ms/unit) — loop() only.
 void busProbe();
 // Same probe without the scan log lines — the #488 empty-row recovery
-// re-probes every backoff step and must not flood the 2 KB ring.
+// re-probes every backoff step and must not flood the ring.
 void busProbeQuiet(bool quiet);
 
 // CMD_GET_STATUS + odometer refresh for every sketch-mode unit, plus a
@@ -114,7 +114,12 @@ void busRunBootDump(uint32_t seq, uint8_t addr,
 // throttled PROGMEM flash, batch settle). Blocking for many seconds —
 // loop() only; progress lands in reflashProgress.
 // onlyAddr 0 = every unit that needs it; otherwise exactly that unit (#513).
-void busRunReflashJob(uint8_t onlyAddr = 0);
+// force: reflash `onlyAddr` even when it reports the bundled rev; ignored
+// without an address.
+void busRunReflashJob(uint8_t onlyAddr = 0, bool force = false);
+// Boot pass: update the boot section of every unit that is on the bundled
+// firmware and reports another image than the current one.
+void busAutoUpdateBootSections();
 
 // Boot-time provisioning/auto-update (v1 semantics): flash every unit the
 // probe found sitting in twiboot; push provably-outdated sketch units

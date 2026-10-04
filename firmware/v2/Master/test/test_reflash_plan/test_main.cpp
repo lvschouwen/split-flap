@@ -509,6 +509,45 @@ static void test_loop_with_no_targets_does_nothing() {
   TEST_ASSERT_EQUAL(0, h.settles);
 }
 
+// --- force (#545): one named unit, whatever revision it reports ------------
+
+static void test_force_targets_a_current_sketch_unit() {
+  UnitFacts facts[4] = {};
+  facts[1].state = 1;
+  facts[1].fwStatus = 0;  // on the bundled rev: no ordinary sweep takes it
+  uint8_t out[4];
+  TEST_ASSERT_EQUAL(0, reflashCollectRebootTargets(facts, 4, 1, out));
+  TEST_ASSERT_EQUAL(1, reflashCollectForcedTarget(facts, 4, 1, 2, out));
+  TEST_ASSERT_EQUAL_UINT8(2, out[0]);
+}
+
+static void test_force_plans_nothing_without_one_reachable_sketch_unit() {
+  UnitFacts facts[4] = {};
+  facts[0].state = 1;
+  facts[2].state = 2;  // already in twiboot: a flash target without a reboot
+  uint8_t out[4];
+  TEST_ASSERT_EQUAL(0, reflashCollectForcedTarget(facts, 4, 1, 0, out));  // no address = never the row
+  TEST_ASSERT_EQUAL(0, reflashCollectForcedTarget(facts, 4, 1, 2, out));  // absent
+  TEST_ASSERT_EQUAL(0, reflashCollectForcedTarget(facts, 4, 1, 3, out));  // in twiboot
+  TEST_ASSERT_EQUAL(0, reflashCollectForcedTarget(facts, 4, 1, 5, out));  // past the row
+}
+
+static void test_force_value_parses_strictly() {
+  bool force = false;
+  TEST_ASSERT_TRUE(reflashParseForce("1", force));
+  TEST_ASSERT_TRUE(force);
+  TEST_ASSERT_TRUE(reflashParseForce("true", force));
+  TEST_ASSERT_TRUE(force);
+  TEST_ASSERT_TRUE(reflashParseForce("0", force));
+  TEST_ASSERT_FALSE(force);
+  TEST_ASSERT_TRUE(reflashParseForce("false", force));
+  TEST_ASSERT_FALSE(force);
+  TEST_ASSERT_FALSE(reflashParseForce("", force));
+  TEST_ASSERT_FALSE(reflashParseForce("yes", force));
+  TEST_ASSERT_FALSE(reflashParseForce("11", force));
+  TEST_ASSERT_FALSE(reflashParseForce(nullptr, force));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_loop_flashes_every_target_in_batches);
@@ -547,5 +586,8 @@ int main(int, char**) {
   RUN_TEST(test_classify_done_job_is_ok);
   RUN_TEST(test_classify_failed_and_cancelled_jobs);
   RUN_TEST(test_empty_plan_finishes_done_and_ok);
+  RUN_TEST(test_force_targets_a_current_sketch_unit);
+  RUN_TEST(test_force_plans_nothing_without_one_reachable_sketch_unit);
+  RUN_TEST(test_force_value_parses_strictly);
   return UNITY_END();
 }

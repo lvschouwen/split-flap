@@ -244,14 +244,18 @@ inline DisplayCommand makeStopCommand(uint32_t seq) {
 // `addr` 0 = the whole fleet (the historical behaviour); 1..126 targets one
 // unit (#412). 0 is the general-call address and never a unit's, so it is a
 // free sentinel — no extra field needed on the queue-copied POD.
+// `force` (carried in `value`) reflashes the addressed unit even when it is
+// on the bundled rev; it means nothing without an address.
 inline DisplayCommand makeReflashUnitsCommand(uint32_t seq,
                                               const String& currentText,
                                               const String& alignment,
-                                              int speed, uint8_t addr) {
+                                              int speed, uint8_t addr,
+                                              bool force = false) {
   DisplayCommand cmd = makeShowTextCommand(currentText, alignment, speed);
   cmd.opcode = DisplayOpcode::ReflashUnits;
   cmd.seq = seq;
   cmd.unitAddress = addr;
+  cmd.value = (force && addr != 0) ? 1 : 0;
   return cmd;
 }
 

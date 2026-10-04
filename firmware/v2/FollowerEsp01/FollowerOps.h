@@ -22,7 +22,7 @@ enum class FollowerOpKind : uint8_t {
   SelfTest,
   RebootToBootloader,
   SetGates,
-  ReflashUnit,  // #513: reflash exactly one unit; addr = the target
+  ReflashUnit,  // #513: reflash exactly one unit; addr = the target, arg 1 = forced
   BootUpdate,   // #499: in-system twiboot update (reads info, drives stages)
   BootInfo,     // #499: read-only boot report; result in the BootInfoSlot
   BootDump,     // #522: read the unit's twiboot image over I2C
