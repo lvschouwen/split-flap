@@ -18,6 +18,7 @@
 #include "UnitRescuePolicy.h"  // UnitRescueProbe (#498)
 #include "UnitProtocolHelpers.h"
 #include "BootUpdateReport.h"  // BootUpdateReport (#499)
+#include "UnitBusTwiboot.h"    // UnitFlashResult, UnitBootReadResult
 
 // Wire init on the unit bus pins. SDA=8 / SCL=9 (Arduino-ESP32 S3 defaults),
 // 100 kHz, 3.3 V — electrically a drop-in for the ESP-01. Clear of the
@@ -105,30 +106,14 @@ int unitBusClearAddress(int i2cAddress);                    // EEPROM → DIP
 
 // --- unit reflash over twiboot (#205) — straight v1 ports ---------------------
 
-// Outcome of one unit's flash attempt. Any failure after Ok's page stream
-// began leaves the unit sitting in twiboot — boot auto-install or a retry
-// recovers it (v1 failure story); it is never exited onto a torn image.
-enum class UnitFlashResult : uint8_t {
-  Ok = 0,
-  BootloaderSilent,  // twiboot never ACKed a ping at this address
-  ChipMismatch,      // chipinfo signature / page size not an ATmega328P
-  PageFailed,        // write / readback-verify failed after one rewrite
-  ExitFailed,        // SWITCH_APPLICATION not ACKed
-  PostBootSilent,    // sketch did not answer after the exit
-  Aborted,           // /stop during the page stream — unit left in twiboot
-};
+// UnitFlashResult / UnitBootReadResult and the sequences behind the two
+// functions below are shared/UnitBusTwiboot.h.
 const char* unitFlashResultName(UnitFlashResult r);
 
 // Reads the BOOT_SECTION_LEN bytes of the boot section (BootDump.h) from a
 // unit that is already in twiboot, then starts its application and gives it
 // the same clean restart a flash ends with. No flash write. `out` holds the
 // bytes only on Ok.
-enum class UnitBootReadResult : uint8_t {
-  Ok = 0,
-  BootloaderSilent,  // twiboot never ACKed a ping at this address
-  ChipMismatch,      // chipinfo signature / page size not an ATmega328P
-  ReadFailed,        // a page read came back short twice
-};
 UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out);
 
 // Streams `image` (page-padded, TWIBOOT_PAGE_SIZE multiple) to the unit at

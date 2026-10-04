@@ -98,17 +98,19 @@ def test_a_staged_setting_is_persisted_before_a_restart():
     assert reboot.index("prefsLoopTick(true);") < reboot.index("ESP.restart();")
 
 
-def test_flash_loop_selects_units_through_the_tested_predicate():
-    # The loop walks unitFacts, not the filtered target list, so this call is
-    # the only thing keeping a ?address= run off the other bootloader-mode units.
-    body = _function_body(_code(TREE / "FollowerBus.cpp"),
-                          "static bool flashBootloaderUnits(uint8_t onlyAddr")
-    guard = body.index("if (!reflashShouldFlashUnit(unitFacts[i], addr, onlyAddr)) continue;")
-    assert guard < body.index("flashUnitFromProgmem(addr)")
+def test_targeted_run_flashes_only_the_planned_list():
+    # The flash loop (shared reflashRunTargets) walks the list it is handed,
+    # so narrowing that list is what keeps a ?address= run off the other
+    # bootloader-mode units.
+    loop = _function_body(_code(TREE / "FollowerBus.cpp"),
+                          "static bool flashBootloaderUnits(const uint8_t* targets")
+    assert "reflashRunTargets(hooks, targets, count, reflashProgress)" in loop
+    assert "unitFacts[" not in loop, "the loop must not re-derive targets from the facts"
     job = _function_body(_code(TREE / "FollowerBus.cpp"),
                          "void busRunReflashJob(uint8_t onlyAddr)")
-    assert "flashBootloaderUnits(onlyAddr);" in job
     assert job.count("reflashFilterToAddress(") == 2  # reboot sweep + planned total
+    narrowed = job.index("n = reflashFilterToAddress(flashTargets, n, onlyAddr);")
+    assert narrowed < job.index("flashBootloaderUnits(flashTargets, n);")
 
 
 def test_reflash_route_never_falls_through_to_the_bulk_job_on_a_bad_address():

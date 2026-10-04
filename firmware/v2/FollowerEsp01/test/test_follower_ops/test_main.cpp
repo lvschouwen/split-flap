@@ -233,24 +233,6 @@ static void test_reflash_address_range() {
   TEST_ASSERT_FALSE(reflashAddressInRange(300, 1, 16));
 }
 
-static void test_targeted_run_flashes_only_its_unit() {
-  UnitFacts inBootloader;
-  inBootloader.state = 2;
-  UnitFacts running;
-  running.state = 1;
-  UnitFacts silent;
-  silent.state = 0;
-  // Bulk: every bootloader-mode unit, nothing else.
-  TEST_ASSERT_TRUE(reflashShouldFlashUnit(inBootloader, 7, 0));
-  TEST_ASSERT_FALSE(reflashShouldFlashUnit(running, 7, 0));
-  TEST_ASSERT_FALSE(reflashShouldFlashUnit(silent, 7, 0));
-  // Targeted at 3: unit 7 sitting in twiboot from an earlier attempt is NOT
-  // flashed, unit 3 is — and only if it actually reached the bootloader.
-  TEST_ASSERT_FALSE(reflashShouldFlashUnit(inBootloader, 7, 3));
-  TEST_ASSERT_TRUE(reflashShouldFlashUnit(inBootloader, 3, 3));
-  TEST_ASSERT_FALSE(reflashShouldFlashUnit(running, 3, 3));
-}
-
 static void test_reflash_address_parses_decimal_only() {
   long v = -1;
   TEST_ASSERT_TRUE(reflashParseAddress("3", v));
@@ -338,7 +320,6 @@ int main(int, char**) {
   RUN_TEST(test_filter_keeps_only_the_target);
   RUN_TEST(test_filter_target_not_collected_plans_nothing);
   RUN_TEST(test_reflash_address_range);
-  RUN_TEST(test_targeted_run_flashes_only_its_unit);
   RUN_TEST(test_reflash_address_parses_decimal_only);
   RUN_TEST(test_op_result_ok_carries_its_reason);
   RUN_TEST(test_boot_reasons_have_distinct_names);

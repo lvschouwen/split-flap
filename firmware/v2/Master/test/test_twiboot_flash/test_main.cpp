@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "TwibootFlash.h"
+#include "UnitBusTwiboot.h"  // the sequences built on the client
 
 namespace {
 
@@ -38,6 +39,8 @@ struct FakeTwiboot {
   int readFailedCalls = 0;
   std::vector<uint32_t> probeTimes;
   int framingErrors = 0;        // wrong length or wrong stop/repeated-start
+  std::vector<uint8_t> sketchOps;  // guarded sketch opcodes seen (REBOOT…)
+  int counted = 0;
 
   // --- bus state ---
   uint32_t now = 0;
@@ -88,9 +91,21 @@ struct FakeTwiboot {
       }
       return 0;
     }
+    // A guarded no-argument sketch opcode (opcode + ~opcode), e.g. the
+    // REBOOT that closes a flash.
+    if (tx.size() == 2 && tx[1] == (uint8_t)~tx[0]) {
+      sketchOps.push_back(tx[0]);
+      return 0;
+    }
     framingErrors++;
     return NACK;
   }
+  int endCounted() {
+    counted++;
+    return endTransmission(true);
+  }
+  void noteReadError() {}
+  void mark(UnitBusAct, uint8_t) {}
   uint8_t requestFrom(uint8_t a, uint8_t qty) {
     rx.clear();
     rxPos = 0;
@@ -354,6 +369,181 @@ static void test_every_step_has_a_distinct_name() {
   }
 }
 
+// --- UnitBusTwiboot.h: the sequences both row masters run ---------------------
+
+namespace {
+
+struct Watch {
+  int pagesBeforeStop = -1;  // >= 0: keepGoing() turns false after that many
+  int asked = 0;
+  int rewrittenPages = 0;
+  bool keepGoing() { return pagesBeforeStop < 0 || asked++ < pagesBeforeStop; }
+  void pageRewritten(uint16_t, uint8_t) { rewrittenPages++; }
+};
+
+const size_t IMAGE_LEN = 3 * TWIBOOT_PAGE_SIZE;
+
+struct Image {
+  uint8_t bytes[IMAGE_LEN];
+  Image() {
+    for (size_t i = 0; i < IMAGE_LEN; i++) bytes[i] = (uint8_t)(i * 7 + 3);
+  }
+  void operator()(size_t pageIndex, uint8_t* buf) const {
+    memcpy(buf, bytes + pageIndex * TWIBOOT_PAGE_SIZE, TWIBOOT_PAGE_SIZE);
+  }
+};
+
+}  // namespace
+
+static void test_flash_image_writes_every_page_and_restarts_the_unit() {
+  FakeTwiboot bus;
+  Image image;
+  Watch watch;
+  UnitFlashReport r = unitFlashImage(bus, ADDR, IMAGE_LEN, image, watch);
+  TEST_ASSERT_TRUE(UnitFlashResult::Ok == r.result);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(image.bytes, bus.flash, IMAGE_LEN);
+  TEST_ASSERT_EQUAL(1, bus.exits);
+  // The closing clean restart is the guarded REBOOT, sent AFTER the exit.
+  TEST_ASSERT_EQUAL(1, (int)bus.sketchOps.size());
+  TEST_ASSERT_EQUAL_UINT8(SFP_CMD_REBOOT, bus.sketchOps[0]);
+  TEST_ASSERT_EQUAL(0, r.rebootStatus);
+  TEST_ASSERT_EQUAL(0, bus.framingErrors);
+}
+
+static void test_flash_image_too_large_sends_nothing() {
+  FakeTwiboot bus;
+  Image image;
+  Watch watch;
+  UnitFlashReport r =
+      unitFlashImage(bus, ADDR, BOOT_SECTION_START + TWIBOOT_PAGE_SIZE, image,
+                     watch);
+  TEST_ASSERT_TRUE(UnitFlashResult::ImageTooLarge == r.result);
+  TEST_ASSERT_EQUAL(0, bus.pings);
+  TEST_ASSERT_EQUAL(0, bus.pageWrites);
+}
+
+static void test_flash_image_silent_bootloader() {
+  FakeTwiboot bus;
+  bus.stuckBusy = true;  // never ACKs
+  Image image;
+  Watch watch;
+  TEST_ASSERT_TRUE(UnitFlashResult::BootloaderSilent ==
+                   unitFlashImage(bus, ADDR, IMAGE_LEN, image, watch).result);
+  TEST_ASSERT_EQUAL(0, bus.pageWrites);
+}
+
+static void test_flash_image_refuses_a_foreign_chip() {
+  FakeTwiboot bus;
+  bus.chipinfo[1] = 0x94;  // not a 328P
+  Image image;
+  Watch watch;
+  UnitFlashReport r = unitFlashImage(bus, ADDR, IMAGE_LEN, image, watch);
+  TEST_ASSERT_TRUE(UnitFlashResult::ChipMismatch == r.result);
+  TEST_ASSERT_TRUE(TwibootStep::ChipBadSignature == r.step);
+  TEST_ASSERT_EQUAL(0, bus.pageWrites);
+}
+
+// A page that never verifies leaves the unit in twiboot: no exit is sent.
+static void test_flash_image_failed_page_never_exits_onto_a_torn_image() {
+  FakeTwiboot bus;
+  bus.corruptWrites = 100;
+  Image image;
+  Watch watch;
+  UnitFlashReport r = unitFlashImage(bus, ADDR, IMAGE_LEN, image, watch);
+  TEST_ASSERT_TRUE(UnitFlashResult::PageFailed == r.result);
+  TEST_ASSERT_TRUE(TwibootStep::PageVerifyMismatch == r.step);
+  TEST_ASSERT_EQUAL_UINT16(0, r.pageAddr);
+  TEST_ASSERT_EQUAL(0, bus.exits);
+  TEST_ASSERT_TRUE(bus.sketchOps.empty());
+  TEST_ASSERT_EQUAL(1, watch.rewrittenPages);
+}
+
+static void test_flash_image_stop_request_leaves_the_unit_in_twiboot() {
+  FakeTwiboot bus;
+  Image image;
+  Watch watch;
+  watch.pagesBeforeStop = 1;
+  UnitFlashReport r = unitFlashImage(bus, ADDR, IMAGE_LEN, image, watch);
+  TEST_ASSERT_TRUE(UnitFlashResult::Aborted == r.result);
+  TEST_ASSERT_EQUAL(1, bus.pageWrites);
+  TEST_ASSERT_EQUAL(0, bus.exits);
+}
+
+static void test_boot_section_read_returns_the_bytes_and_restarts_the_unit() {
+  FakeTwiboot bus;
+  for (int i = 0; i < BOOT_SECTION_LEN; i++) {
+    bus.flash[BOOT_SECTION_START + i] = (uint8_t)(i ^ 0x5A);
+  }
+  uint8_t out[BOOT_SECTION_LEN];
+  bool exitAcked = false, answered = false;
+  int keepAlives = 0;
+  UnitBootReadResult r = unitReadBootSection(
+      bus, ADDR, out, [&]() { keepAlives++; }, exitAcked, answered);
+  TEST_ASSERT_TRUE(UnitBootReadResult::Ok == r);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(bus.flash + BOOT_SECTION_START, out,
+                                BOOT_SECTION_LEN);
+  TEST_ASSERT_TRUE(exitAcked);
+  TEST_ASSERT_TRUE(answered);
+  TEST_ASSERT_EQUAL(1, bus.exits);
+  TEST_ASSERT_EQUAL(0, bus.pageWrites);  // a read never writes flash
+  TEST_ASSERT_EQUAL_UINT8(SFP_CMD_REBOOT, bus.sketchOps.back());
+  TEST_ASSERT_TRUE(keepAlives >= BOOT_SECTION_LEN / TWIBOOT_PAGE_SIZE);
+}
+
+// A failed read still starts the application: the unit must not stay in its
+// bootloader because a diagnostic read went wrong.
+static void test_boot_section_read_failure_still_exits_the_bootloader() {
+  FakeTwiboot bus;
+  uint8_t out[BOOT_SECTION_LEN];
+  bool exitAcked = false, answered = false;
+  bool armed = false;
+  // Armed from the first keep-alive, i.e. after the chip check: one page read
+  // then fails twice.
+  UnitBootReadResult r = unitReadBootSection(
+      bus, ADDR, out,
+      [&]() {
+        if (!armed) bus.shortReads = 2;
+        armed = true;
+      },
+      exitAcked, answered);
+  TEST_ASSERT_TRUE(UnitBootReadResult::ReadFailed == r);
+  TEST_ASSERT_EQUAL(1, bus.exits);
+  TEST_ASSERT_TRUE(exitAcked);
+}
+
+static void test_boot_section_read_from_a_silent_unit_sends_no_exit() {
+  FakeTwiboot bus;
+  bus.stuckBusy = true;
+  uint8_t out[BOOT_SECTION_LEN];
+  bool exitAcked = true, answered = true;
+  UnitBootReadResult r =
+      unitReadBootSection(bus, ADDR, out, []() {}, exitAcked, answered);
+  TEST_ASSERT_TRUE(UnitBootReadResult::BootloaderSilent == r);
+  TEST_ASSERT_FALSE(exitAcked);
+  TEST_ASSERT_FALSE(answered);
+  TEST_ASSERT_EQUAL(0, bus.exits);
+}
+
+static void test_rescue_probe_starts_a_unit_parked_in_twiboot() {
+  FakeTwiboot bus;
+  TEST_ASSERT_TRUE(UnitRescueProbe::Bootloader == unitRescueProbe(bus, ADDR));
+  TEST_ASSERT_EQUAL(1, bus.exits);
+}
+
+static void test_rescue_probe_of_an_absent_unit_is_no_ack() {
+  FakeTwiboot bus;
+  TEST_ASSERT_TRUE(UnitRescueProbe::NoAck == unitRescueProbe(bus, ADDR + 1));
+  TEST_ASSERT_EQUAL(0, bus.exits);
+}
+
+// ACKs but is not twiboot: a sketch that cannot be read. Never sent an exit.
+static void test_rescue_probe_of_a_silent_sketch() {
+  FakeTwiboot bus;
+  bus.replyLen = 0;  // chipinfo read comes back empty
+  TEST_ASSERT_TRUE(UnitRescueProbe::SketchSilent == unitRescueProbe(bus, ADDR));
+  TEST_ASSERT_EQUAL(0, bus.exits);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_image_guard_stops_at_the_boot_section);
@@ -373,5 +563,17 @@ int main(int, char**) {
   RUN_TEST(test_sketch_wait_gives_the_sketch_time_before_the_first_probe);
   RUN_TEST(test_a_whole_flash_frames_every_transaction_correctly);
   RUN_TEST(test_every_step_has_a_distinct_name);
+  RUN_TEST(test_flash_image_writes_every_page_and_restarts_the_unit);
+  RUN_TEST(test_flash_image_too_large_sends_nothing);
+  RUN_TEST(test_flash_image_silent_bootloader);
+  RUN_TEST(test_flash_image_refuses_a_foreign_chip);
+  RUN_TEST(test_flash_image_failed_page_never_exits_onto_a_torn_image);
+  RUN_TEST(test_flash_image_stop_request_leaves_the_unit_in_twiboot);
+  RUN_TEST(test_boot_section_read_returns_the_bytes_and_restarts_the_unit);
+  RUN_TEST(test_boot_section_read_failure_still_exits_the_bootloader);
+  RUN_TEST(test_boot_section_read_from_a_silent_unit_sends_no_exit);
+  RUN_TEST(test_rescue_probe_starts_a_unit_parked_in_twiboot);
+  RUN_TEST(test_rescue_probe_of_an_absent_unit_is_no_ack);
+  RUN_TEST(test_rescue_probe_of_a_silent_sketch);
   return UNITY_END();
 }

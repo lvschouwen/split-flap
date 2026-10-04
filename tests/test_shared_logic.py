@@ -98,11 +98,15 @@ def test_the_reflash_batch_size_is_a_build_flag_per_row_master():
     assert not _offenders(r"#define\s+REFLASH_BATCH_SIZE\b")
 
 
-def test_both_reflash_jobs_halt_on_consecutive_failures():
+def test_both_reflash_jobs_run_the_shared_loop():
+    """The loop carries the batch throttle and the consecutive-failure halt."""
+    loop = _strip_comments((SHARED / "ReflashPlan.h").read_text())
+    assert "reflashShouldHalt(consecutiveFailures)" in loop
     for path in (V2 / "Master/DisplayTask.cpp",
                  V2 / "FollowerEsp01/FollowerBus.cpp"):
         body = _strip_comments(path.read_text())
-        assert "reflashShouldHalt(" in body, path.name
+        assert "reflashRunTargets(" in body, path.name
+        assert "reflashShouldHalt(" not in body, path.name
 
 
 # --- #529/#530: self-test wait, op grading, fact patches ---------------------
@@ -321,3 +325,46 @@ def test_tests_of_shared_headers_are_not_copied_per_tree():
                 str(test.relative_to(REPO)))
     copies = [paths for paths in seen.values() if len(paths) > 1]
     assert not copies, copies
+
+
+# --- #534: the unit-bus protocol layer -----------------------------------------
+
+BUS_FILES = [V2 / "Master/UnitBus.cpp", V2 / "FollowerEsp01/FollowerBus.cpp"]
+
+
+def test_no_tree_speaks_the_unit_protocol_by_hand():
+    """Everything above the bus adapter was written twice. A unit opcode, a
+    reply validator or a payload encoder in a tree means a second
+    implementation of shared/UnitBusCore.h."""
+    hits = _offenders(r"\bSFP_CMD_\w+|\b\w+ReadbackValid\(|"
+                      r"\b(?:setOffset|setGates|setAddress|jog)Encode\(|"
+                      r"\bnoArgGuardByte\(|\bbootInfoDecode\(", ROW_MASTERS)
+    assert not hits, hits
+
+
+def test_bus_files_touch_wire_only_in_the_adapter_and_the_probe():
+    """Outside the adapter struct, the only Wire calls left are bus setup and
+    the address-ACK check of a scan."""
+    allowed = re.compile(r"Wire\.(?:begin|end|status|beginTransmission|"
+                         r"endTransmission)\(")
+    for path in BUS_FILES:
+        src = _strip_comments(path.read_text())
+        a = src.index("struct WireTwibootBus {")
+        b = src.index("};", a)
+        outside = src[:a] + src[b:]
+        raw = [m for m in re.findall(r"Wire\.\w+\(", outside)
+               if not allowed.fullmatch(m)]
+        assert not raw, f"{path.name}: {sorted(set(raw))}"
+
+
+def test_both_row_masters_run_the_shared_bootloader_sequences():
+    for path in BUS_FILES:
+        src = _strip_comments(path.read_text())
+        for call in ("unitFlashImage(", "unitReadBootSection(",
+                     "unitRescueProbe(", "unitWaitBatchIdle("):
+            assert call in src, f"{path.name}: {call}"
+    for path in (V2 / "Master/DisplayTask.cpp",
+                 V2 / "FollowerEsp01/FollowerBus.cpp"):
+        src = _strip_comments(path.read_text())
+        for call in ("bootDumpRun(hooks, ", "bootUpdateRun(hooks, "):
+            assert call in src, f"{path.name}: {call}"

@@ -385,8 +385,138 @@ static void test_empty_plan_finishes_done_and_ok() {
   TEST_ASSERT_EQUAL(MaintOutcome::Ok, classifyReflashOutcome(p, reason));
 }
 
+// --- the flash loop (reflashRunTargets) -----------------------------------------
+
+namespace {
+
+struct LoopHooks {
+  // script
+  uint8_t failAddrs[8] = {0};
+  int failCount = 0;
+  uint8_t stopAtAddr = 0;      // flashUnit reports Stopped for this unit
+  int stopBeforeUnit = -1;     // stopRequested() turns true at this call
+  // observations
+  int asked = 0;
+  int flashCalls = 0;
+  int settles = 0;
+  int settledUnits = 0;
+  int publishes = 0;
+  int haltedLeft = -1;
+  uint8_t flashedAddrs[16] = {0};
+  int flashedCount = 0;
+
+  bool stopRequested() { return stopBeforeUnit >= 0 && asked++ >= stopBeforeUnit; }
+  ReflashUnitOutcome flashUnit(uint8_t addr) {
+    flashCalls++;
+    if (addr == stopAtAddr) return ReflashUnitOutcome::Stopped;
+    for (int i = 0; i < failCount; i++) {
+      if (failAddrs[i] == addr) return ReflashUnitOutcome::Failed;
+    }
+    return ReflashUnitOutcome::Flashed;
+  }
+  void unitFlashed(uint8_t addr) { flashedAddrs[flashedCount++] = addr; }
+  void progressChanged() { publishes++; }
+  void settleBatch(const uint8_t*, int n) {
+    settles++;
+    settledUnits += n;
+  }
+  void runHalted(uint8_t, int left) { haltedLeft = left; }
+};
+
+}  // namespace
+
+static void test_loop_flashes_every_target_in_batches() {
+  LoopHooks h;
+  ReflashProgress p;
+  uint8_t targets[5] = {1, 2, 3, 4, 5};
+  reflashProgressBegin(p, 5);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 5, p);
+  TEST_ASSERT_FALSE(end.cancelled);
+  TEST_ASSERT_FALSE(end.halted);
+  TEST_ASSERT_EQUAL_UINT8(5, end.flashed);
+  TEST_ASSERT_EQUAL_UINT8(5, p.done);
+  // Every flashed unit is waited for exactly once, full batches then the rest.
+  TEST_ASSERT_EQUAL(5, h.settledUnits);
+  TEST_ASSERT_EQUAL((5 + REFLASH_BATCH_SIZE - 1) / REFLASH_BATCH_SIZE, h.settles);
+  TEST_ASSERT_TRUE(h.publishes > 0);
+}
+
+static void test_loop_halts_on_two_failures_in_a_row_and_touches_no_more() {
+  LoopHooks h;
+  h.failAddrs[0] = 2;
+  h.failAddrs[1] = 3;
+  h.failCount = 2;
+  ReflashProgress p;
+  uint8_t targets[5] = {1, 2, 3, 4, 5};
+  reflashProgressBegin(p, 5);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 5, p);
+  TEST_ASSERT_TRUE(end.halted);
+  TEST_ASSERT_EQUAL(3, h.flashCalls);  // units 4 and 5 were never touched
+  TEST_ASSERT_EQUAL(2, h.haltedLeft);
+  TEST_ASSERT_EQUAL_UINT8(2, p.failed);
+  // The unit flashed before the halt still gets its settle.
+  TEST_ASSERT_EQUAL(1, h.settledUnits);
+}
+
+static void test_loop_isolated_failure_does_not_halt() {
+  LoopHooks h;
+  h.failAddrs[0] = 2;
+  h.failAddrs[1] = 4;
+  h.failCount = 2;
+  ReflashProgress p;
+  uint8_t targets[5] = {1, 2, 3, 4, 5};
+  reflashProgressBegin(p, 5);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 5, p);
+  TEST_ASSERT_FALSE(end.halted);
+  TEST_ASSERT_EQUAL(5, h.flashCalls);
+  TEST_ASSERT_EQUAL_UINT8(3, p.done);
+  TEST_ASSERT_EQUAL_UINT8(2, p.failed);
+}
+
+static void test_loop_stop_request_before_a_unit_cancels() {
+  LoopHooks h;
+  h.stopBeforeUnit = 2;
+  ReflashProgress p;
+  uint8_t targets[5] = {1, 2, 3, 4, 5};
+  reflashProgressBegin(p, 5);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 5, p);
+  TEST_ASSERT_TRUE(end.cancelled);
+  TEST_ASSERT_EQUAL(2, h.flashCalls);
+  // Brownout pacing is never shortened: the flashed units are settled.
+  TEST_ASSERT_EQUAL(2, h.settledUnits);
+}
+
+static void test_loop_unit_stopped_mid_flash_counts_as_failed_and_cancels() {
+  LoopHooks h;
+  h.stopAtAddr = 2;
+  ReflashProgress p;
+  uint8_t targets[3] = {1, 2, 3};
+  reflashProgressBegin(p, 3);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 3, p);
+  TEST_ASSERT_TRUE(end.cancelled);
+  TEST_ASSERT_FALSE(end.halted);
+  TEST_ASSERT_EQUAL_UINT8(1, p.done);
+  TEST_ASSERT_EQUAL_UINT8(1, p.failed);
+  TEST_ASSERT_EQUAL(2, h.flashCalls);
+}
+
+static void test_loop_with_no_targets_does_nothing() {
+  LoopHooks h;
+  ReflashProgress p;
+  reflashProgressBegin(p, 0);
+  ReflashRunEnd end = reflashRunTargets(h, nullptr, 0, p);
+  TEST_ASSERT_EQUAL_UINT8(0, end.flashed);
+  TEST_ASSERT_EQUAL(0, h.settles);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_loop_flashes_every_target_in_batches);
+  RUN_TEST(test_loop_halts_on_two_failures_in_a_row_and_touches_no_more);
+  RUN_TEST(test_loop_isolated_failure_does_not_halt);
+  RUN_TEST(test_loop_stop_request_before_a_unit_cancels);
+  RUN_TEST(test_loop_unit_stopped_mid_flash_counts_as_failed_and_cancels);
+  RUN_TEST(test_loop_with_no_targets_does_nothing);
   RUN_TEST(test_needs_reboot_only_for_sketch_units_off_the_bundle);
   RUN_TEST(test_protocol_mismatch_needs_a_successful_read);
   RUN_TEST(test_protocol_mismatch_forces_reboot_even_on_the_bundled_rev);

@@ -19,11 +19,14 @@
 #include "RenderStagger.h"  // sub-frame inrush stagger (#324)
 #include "SplitFlapProtocol.h"
 #include "TwibootFlash.h"  // the twiboot client; this file is its Wire adapter
+#include "UnitBusCore.h"   // the unit sketch protocol, on the same adapter
+#include "UnitBusTwiboot.h"  // rescue probe, boot-section read, unit flash
 #include "UnitAssets.h"  // UNIT_FIRMWARE_BIN (build_assets.py)
 #include "UnitProtocolHelpers.h"
 #include "UnitTimings.h"
 #include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
 #include "BootUpdateOp.h"     // the shared in-system twiboot update (#499)
+#include "BootDumpOp.h"       // the shared boot-section dump (#511)
 
 UnitFacts unitFacts[UNITS_AMOUNT];
 int displayWidth = UNITS_AMOUNT;
@@ -65,8 +68,22 @@ void busInit() {
 #endif
 }
 
-// The protocol itself is shared/TwibootFlash.h; this is the Wire adapter it
-// runs on.
+// Bus health counters (#306), surfaced in /cluster/health so a curl-only
+// operator can see a flaky row. Same scope as the S3's i2cTx/i2cErr: every
+// sketch-protocol write transaction (frames, queries, maintenance ops) counts
+// as tx; err counts failed writes AND failed read legs. Not counted: the
+// ~10 Hz rotation polls, the bus-scan probe and the twiboot page stream.
+static uint32_t busTxCount = 0;
+static uint32_t busErrCount = 0;
+uint32_t followerBusTxCount() { return busTxCount; }
+uint32_t followerBusErrCount() { return busErrCount; }
+
+// Per-unit error attribution (#367), as on the S3.
+static UnitErrorLedger<UNITS_AMOUNT> unitErrors;
+
+// The unit protocol is shared/UnitBusCore.h and the twiboot protocol
+// shared/TwibootFlash.h; this is the Wire adapter both run on. No bus rebuild
+// after a short read here: that is an ESP32 I2C driver quirk (#207).
 namespace {
 struct WireTwibootBus {
   void beginTransmission(uint8_t addr) { Wire.beginTransmission(addr); }
@@ -80,18 +97,40 @@ struct WireTwibootBus {
   uint32_t nowMs() { return millis(); }
   void sleepMs(uint32_t ms) { delay(ms); }
   void readFailed() {}
+  int endCounted() {
+    int status = Wire.endTransmission();
+    busTxCount++;
+    if (status != 0) busErrCount++;
+    return status;
+  }
+  void noteReadError() { busErrCount++; }
+  void mark(UnitBusAct, uint8_t) {}
 };
-WireTwibootBus twibootBus;
-}  // namespace
+WireTwibootBus unitBus;
 
-// Bus health counters (#306): sketch-protocol read transactions and their
-// failures since boot, surfaced in /cluster/health so a curl-only operator
-// can see a flaky row. Bumped only by queryUnit (twiboot page writes and the
-// bus-scan probe stay out, matching the master's i2cTx/i2cErr semantics).
-static uint32_t busTxCount = 0;
-static uint32_t busErrCount = 0;
-uint32_t followerBusTxCount() { return busTxCount; }
-uint32_t followerBusErrCount() { return busErrCount; }
+// What the shared probe/poll code found worth a log line; the text stays in
+// flash on this chip.
+struct UnitBusNotes {
+  void driftSeen(uint8_t i2cAddress, const DriftLogDecision& drift,
+                 const UnitDiagReading&) {
+    SerialPrint(F("Unit "));
+    SerialPrint(i2cAddress);
+    SerialPrint(F(" drifted: "));
+    SerialPrint(drift.newEvents);
+    SerialPrintln(F(" new event(s) — unit auto re-homing"));
+  }
+  void bootVerdictChanged(uint8_t i2cAddress, const UnitFacts& fact,
+                          const BootUpdateReport& r) {
+    char logBuf[88];
+    snprintf(logBuf, sizeof(logBuf),
+             "Unit 0x%02x bootloader %s - crc32 %08lx (expected %08lx)",
+             i2cAddress, bootIntegrityName(fact.bootVerdict),
+             (unsigned long)r.bootCrc32, (unsigned long)BOOT_CURRENT_CRC32);
+    SerialPrintln(logBuf);
+  }
+};
+UnitBusNotes unitBusNotes;
+}  // namespace
 
 // Row-wide bus-death recovery (#488): policy in FollowerBusRecovery.h. The
 // last frame written is kept so a recovered bus re-shows it — without that a
@@ -173,196 +212,12 @@ uint32_t followerMinHeap() {
   return minHeapBytes;
 }
 
-// No-argument mutations go out as opcode + ~opcode (#512, UnitWireContract.h):
-// alone on the wire, the opcode byte is a complete command one bit flip away
-// from a letter write or a poll. Units predating the guard drain the extra byte.
-// Not for ENTER_BOOTLOADER — see its sender.
-static void writeGuardedOpcode(uint8_t opcode) {
-  Wire.write(opcode);
-  Wire.write(noArgGuardByte(opcode));
-}
-
-// Shared opcode-write-then-read-back transaction (v1 #154 helper).
-static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf,
-                      uint8_t n) {
-  busTxCount++;
-  Wire.beginTransmission(i2cAddress);
-  Wire.write(opcode);
-  if (Wire.endTransmission() != 0) {
-    busErrCount++;
-    return false;
-  }
-  delay(UNIT_RESPONSE_SETTLE_MS);
-  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
-  if (got != n) {
-    while (Wire.available()) Wire.read();
-    busErrCount++;
-    return false;
-  }
-  for (uint8_t i = 0; i < n; i++) buf[i] = Wire.read();
-  return true;
-}
-
-// 8-byte payload + its #405 checksum, same shared guard the master uses.
-static bool readUnitStatus(int i2cAddress, UnitStatus& out) {
-  uint8_t buf[STATUS_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_STATUS, buf, STATUS_REPLY_LEN)) {
-    return false;
-  }
-  uint8_t p[STATUS_PAYLOAD_LEN];
-  if (!statusReadbackValid(buf, STATUS_REPLY_LEN, p)) return false;
-  out.flags = p[0];
-  out.mcusrAtBoot = p[1];
-  out.lifetimeBrownoutCount = p[2];
-  out.lifetimeWatchdogCount = p[3];
-  out.uptimeSeconds = ((uint16_t)p[4] << 8) | (uint16_t)p[5];
-  out.badCommandCount = p[6];
-  out.lastHomingStepCount = (uint16_t)p[7] << 4;
-  return true;
-}
-
-static bool readUnitOffset(int i2cAddress, int16_t& out) {
-  uint8_t buf[OFFSET_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_OFFSET, buf, OFFSET_REPLY_LEN)) {
-    return false;
-  }
-  return offsetReadbackValid(buf, OFFSET_REPLY_LEN, out);
-}
-
-static bool readUnitOdometer(int i2cAddress, uint32_t& out) {
-  uint8_t buf[5];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_ODOMETER, buf, 5)) {
-    return false;
-  }
-  return odometerReadbackValid(buf, out);
-}
-
-// Supply-Vcc / free-RAM / commanded-position diagnostics (#306) — same shared
-// UnitVitals.h packet and checksum guard the master reads; pre-vitals firmware
-// fails the checksum and stays vitalsValid=false.
-static bool readUnitVitals(int i2cAddress, UnitVitals& out) {
-  uint8_t buf[VITALS_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VITALS, buf, VITALS_REPLY_LEN)) {
-    return false;
-  }
-  return vitalsReadbackValid(buf, out);
-}
-
-static void refreshUnitVitals(UnitFacts& fact, int i2cAddress) {
-  fact.vitalsValid = false;
-  UnitVitals v;
-  if (!readUnitVitals(i2cAddress, v)) return;
-  fact.vitals = v;
-  fact.vitalsValid = true;
-}
-
-// New-measurement diagnostics (#365): same shared UnitExtDiag.h packet and
-// checksum guard the master reads; pre-ext-diag firmware fails the checksum
-// and stays extDiagValid=false.
-static bool readUnitExtDiag(int i2cAddress, uint8_t* buf) {
-  return queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_EXT_DIAG, buf,
-                   EXT_DIAG_LINK_REPLY_LEN);
-}
-
-// Folds an ext-diag read into the slot (#502 link extension included); both
-// valid flags clear first so a unit that stops answering (or was reflashed to
-// pre-ext-diag firmware) never keeps serving a stale reading (same discipline
-// as refreshUnitVitals).
-static void refreshUnitExtDiag(UnitFacts& fact, int i2cAddress) {
-  fact.extDiagValid = false;
-  fact.linkValid = false;
-  uint8_t buf[EXT_DIAG_LINK_REPLY_LEN];
-  if (!readUnitExtDiag(i2cAddress, buf)) return;
-  unitFactsFoldExtDiag(fact, buf);
-}
-
-// Across-power-cycle health (#406): same shared UnitLifetime.h packet and
-// guard the master reads, so both rows report identically. Pre-lifetime
-// firmware answers short and fails the length check.
-static bool readUnitLifetime(int i2cAddress, UnitLifetimeFacts& out) {
-  uint8_t buf[LIFETIME_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_LIFETIME, buf, LIFETIME_REPLY_LEN)) {
-    return false;
-  }
-  return lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out);
-}
-
-// Folds a lifetime read into the slot; clears lifetimeValid first so a unit
-// that stops answering (or was reflashed to pre-lifetime firmware) never
-// keeps serving a stale record (same discipline as refreshUnitExtDiag).
-static void refreshUnitLifetime(UnitFacts& fact, int i2cAddress) {
-  fact.lifetimeValid = false;
-  UnitLifetimeFacts lt;
-  if (!readUnitLifetime(i2cAddress, lt)) return;
-  fact.lifetime = lt;
-  fact.lifetimeValid = true;
-}
-
-// Boot-section integrity (BootIntegrity.h, #520): judges the unit's boot
-// report on every health poll, same rules as the S3 master. The verdict
-// clears first; the logged verdict lives outside the facts so a rescan does
-// not repeat a finding.
+// Per-unit memory of the last boot verdict logged (#520): outside the facts,
+// so a probe rescan (which rebuilds them) does not repeat a finding.
 static uint8_t bootVerdictLogged[UNITS_AMOUNT];
 
-static void refreshUnitBootVerdict(UnitFacts& fact, int unitIndex) {
-  fact.bootVerdict = BOOT_INTEGRITY_UNREAD;
-  uint8_t i2cAddress = (uint8_t)toI2cAddress(unitIndex);
-  BootUpdateReport r;
-  if (!busReadBootInfo(i2cAddress, r)) return;
-  fact.bootCrc32 = r.bootCrc32;
-  fact.bootVerdict = bootIntegrityJudge(r, BOOT_CURRENT_CRC32);
-  BootIntegrityEdge e =
-      bootIntegrityEdge(bootVerdictLogged[unitIndex], fact.bootVerdict);
-  bootVerdictLogged[unitIndex] = e.logged;
-  if (!e.log) return;
-  char logBuf[88];
-  snprintf(logBuf, sizeof(logBuf),
-           "Unit 0x%02x bootloader %s - crc32 %08lx (expected %08lx)",
-           i2cAddress, bootIntegrityName(fact.bootVerdict),
-           (unsigned long)r.bootCrc32, (unsigned long)BOOT_CURRENT_CRC32);
-  SerialPrintln(logBuf);
-}
-
-// v1 #140 rule: reject non-printables and the two JSON-structural chars at
-// the I2C boundary — the version string is emitted raw into JSON.
-// Also yields the unit's SFP_PROTOCOL_VERSION (#405) — the one number saying
-// which wire contract it speaks. This reply's shape is frozen forever.
-static bool readUnitVersion(int i2cAddress, char* out, uint8_t& protocolOut) {
-  out[0] = '\0';
-  protocolOut = 0;
-  uint8_t buf[VERSION_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VERSION, buf, VERSION_REPLY_LEN)) {
-    return false;
-  }
-  UnitVersionPacket pkt;
-  if (!versionReadbackValid(buf, VERSION_REPLY_LEN, pkt)) return false;
-  uint8_t len = 0;
-  for (; len < VERSION_REV_LEN; len++) {
-    if (pkt.rev[len] == 0) break;
-    if (pkt.rev[len] < 32 || pkt.rev[len] > 126) return false;
-    if (pkt.rev[len] == '"' || pkt.rev[len] == '\\') return false;
-  }
-  if (len == 0) return false;
-  for (uint8_t i = 0; i < len; i++) out[i] = pkt.rev[i];
-  out[len] = '\0';
-  protocolOut = pkt.protocolVersion;
-  return true;
-}
-
-static bool readUnitDisplayedLetter(int i2cAddress, int& out) {
-  uint8_t buf[2];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_LETTER, buf, 2)) {
-    return false;
-  }
-  if (!letterReadbackValid(buf[0], buf[1], (uint8_t)SFP_FLAP_AMOUNT)) {
-    return false;
-  }
-  out = buf[0];
-  return true;
-}
-
 static bool isUnitInBootloader(int i2cAddress) {
-  return twibootIsBootloader(twibootBus, (uint8_t)i2cAddress);
+  return twibootIsBootloader(unitBus, (uint8_t)i2cAddress);
 }
 
 void busProbe() { busProbeQuiet(false); }
@@ -398,35 +253,10 @@ void busProbeQuiet(bool quiet) {
       continue;
     }
 
-    uint8_t protocolVersion = 0;
-    if (readUnitVersion(i2cAddress, f.version, protocolVersion)) {
-      // Rev (a hash) and protocol version are both compared for EQUALITY
-      // only — neither says "older", and different always means reflash.
-      // BUNDLED_UNIT_REV_EQUIV widens "ours" to revs measured to build the
-      // same machine code (#440).
-      f.fwStatus = unitFwStatusFromRev(f.version, BUNDLED_UNIT_REV,
-                                       BUNDLED_UNIT_REV_EQUIV);
-      f.protocolVersion = protocolVersion;
-      f.protocolKnown = true;
-    }
-    int16_t offset;
-    if (readUnitOffset(i2cAddress, offset)) {
-      f.offset = offset;
-      f.offsetValid = true;
-    }
-    uint32_t odometer;
-    if (readUnitOdometer(i2cAddress, odometer)) {
-      f.odometer = odometer;
-      f.odometerValid = true;
-    }
-    refreshUnitVitals(f, i2cAddress);
-    // New-measurement diagnostics ride the probe too (#365); pre-ext-diag
-    // firmware fails the checksum and stays extDiagValid=false.
-    refreshUnitExtDiag(f, i2cAddress);
-    // Lifetime health rides the probe too (#406); pre-lifetime firmware
-    // fails the length check and stays lifetimeValid=false.
-    refreshUnitLifetime(f, i2cAddress);
-    refreshUnitBootVerdict(f, i);  // #520
+    unitProbeSketchUnit(unitBus, unitBusNotes, f, (uint8_t)i2cAddress,
+                        BUNDLED_UNIT_REV, BUNDLED_UNIT_REV_EQUIV,
+                        bootVerdictLogged[i]);
+    unitErrors.fold(f, i);
     unitFacts[i] = f;
   }
   detectedUnitCount = detected;
@@ -455,31 +285,12 @@ bool busPollHealthOne(int i) {
   // below yield, so mutate a scratch copy (seeded from the published slot:
   // a poll updates, it never resets) and publish with one assignment.
   UnitFacts f = unitFacts[i];
-  UnitStatus s;
-  bool ok = readUnitStatus(toI2cAddress(i), s);
-  if (ok) {
-    f.status = s;
-    f.statusValid = true;
-    f.resetSeen = unitResetBaselineFold(
-        resetBaselines[i], s.lifetimeBrownoutCount, s.lifetimeWatchdogCount);
-  } else {
-    f.statusValid = false;
-  }
-  uint32_t odometer;
-  if (readUnitOdometer(toI2cAddress(i), odometer)) {
-    f.odometer = odometer;
-    f.odometerValid = true;
-  }
-  refreshUnitVitals(f, toI2cAddress(i));
-  // New-measurement diagnostics refresh on the same cadence (#365); not
-  // charged to bus error attribution — same as odometer/vitals above, only
-  // the CMD_GET_STATUS read above is the liveness signal.
-  refreshUnitExtDiag(f, toI2cAddress(i));
-  // Lifetime health refreshes on the same cadence (#406) — a failed homing
-  // must not wait for the next probe to surface.
-  refreshUnitLifetime(f, toI2cAddress(i));
-  // Boot-section verdict on the same cadence (#520).
-  refreshUnitBootVerdict(f, i);
+  bool ok = unitPollHealth(unitBus, unitBusNotes, f, (uint8_t)toI2cAddress(i),
+                           resetBaselines[i], bootVerdictLogged[i]);
+  // Only the status read is the liveness signal, so only its failure is
+  // charged to the unit (#367).
+  if (!ok) unitErrors.note(i, millis());
+  unitErrors.fold(f, i);
   unitFacts[i] = f;
   return ok;  // CMD_GET_STATUS liveness signal for the heartbeat (#310)
 #else
@@ -529,23 +340,17 @@ void followerHeartbeatTick() {
 #endif
 }
 
+// A render's write; a failure is charged to its unit (#367).
 static int writeToUnit(int unitIndex, int letter, int speed) {
-  Wire.beginTransmission(toI2cAddress(unitIndex));
-  Wire.write(letter);
-  Wire.write(speed);
-  return Wire.endTransmission();
+  int status = unitWriteLetter(unitBus, (uint8_t)toI2cAddress(unitIndex),
+                               (uint8_t)letter, (uint8_t)speed);
+  if (status != 0) unitErrors.note(unitIndex, millis());
+  return status;
 }
 
-// 0 idle, 1 rotating, -1 offline (v1 checkIfMoving, incl. the wake-up ping).
+// 0 idle, 1 rotating, -1 offline.
 static int checkIfMoving(int unitIndex) {
-  int i2cAddress = toI2cAddress(unitIndex);
-  Wire.requestFrom(i2cAddress, 1, 1);
-  int active = Wire.read();
-  if (active == -1) {
-    Wire.beginTransmission(i2cAddress);
-    Wire.endTransmission();
-  }
-  return active;
+  return unitMovingStatus(unitBus, (uint8_t)toI2cAddress(unitIndex));
 }
 
 static bool isRowMoving() {
@@ -680,7 +485,9 @@ void busShowSegment(const String& segment, int webSpeed) {
   for (int i = 0; i < UNITS_AMOUNT; i++) {
     if (commanded[i] < 0 || !unitDrivable(unitFacts[i])) continue;  // #405
     int shown;
-    if (!readUnitDisplayedLetter(toI2cAddress(i), shown)) continue;
+    if (!unitReadDisplayedLetter(unitBus, (uint8_t)toI2cAddress(i), shown)) {
+      continue;
+    }
     if (shown == commanded[i]) continue;
     waitForMotionSlot(resendMovers);  // resends are moves too (#505)
     writeToUnit(i, commanded[i], speed);
@@ -698,119 +505,51 @@ void busShowSegment(const String& segment, int webSpeed) {
 
 // --- single-unit ops ---------------------------------------------------------------
 
-// Value + bitwise complement, then read it back (#405) — was fire-and-forget.
+// The frames, verifies and settle times are shared/UnitBusCore.h; an op that
+// starts motion first waits for a quiet radio (#505).
 int busWriteOffset(uint8_t i2cAddress, int16_t value) {
-  uint8_t enc[SET_OFFSET_PAYLOAD_LEN];
-  setOffsetEncode(value, enc);
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_SET_OFFSET);
-  Wire.write(enc, SET_OFFSET_PAYLOAD_LEN);
-  int txStatus = Wire.endTransmission();
-  if (txStatus != 0) return txStatus;
-  // The unit persists in loop context, not its TWI ISR — let the write drain.
-  delay(UNIT_OFFSET_WRITE_SETTLE_MS);
-  int16_t readBack = 0;
-  if (!readUnitOffset(i2cAddress, readBack)) return UNIT_BUS_OFFSET_UNVERIFIED;
-  if (readBack != value) return UNIT_BUS_OFFSET_MISMATCH;
-  return 0;
+  return unitWriteOffset(unitBus, i2cAddress, value);
 }
 
 int busJog(uint8_t i2cAddress, int steps) {
   admitMotion();
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_JOG);
-  uint8_t jog[JOG_PAYLOAD_LEN];
-  jogEncode(maintEncodeJogByte(steps), jog);
-  Wire.write(jog, JOG_PAYLOAD_LEN);
-  return Wire.endTransmission();
+  return unitJog(unitBus, i2cAddress, steps);
 }
 
 int busHome(uint8_t i2cAddress) {
   admitMotion();
-  Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_HOME);
-  return Wire.endTransmission();
+  return unitHome(unitBus, i2cAddress);
 }
 
-int busIdentify(uint8_t i2cAddress) {
-  Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_IDENTIFY);
-  return Wire.endTransmission();
-}
+int busIdentify(uint8_t i2cAddress) { return unitIdentify(unitBus, i2cAddress); }
 
 int busResetOdometer(uint8_t i2cAddress) {
-  Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_RESET_ODOMETER);
-  return Wire.endTransmission();
+  return unitResetOdometer(unitBus, i2cAddress);
 }
 
-// Feature gates (#409): complement-protected write, then a GET_LIFETIME
-// read-back — the same verified shape as busWriteOffset above, and the
-// mechanism that lets this row's units have a motion gate flipped without
-// pulling five Nanos for a reflash.
 int busSetGates(uint8_t i2cAddress, uint8_t gates) {
-  uint8_t enc[SET_GATES_PAYLOAD_LEN];
-  setGatesEncode(gates, enc);
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_SET_GATES);
-  Wire.write(enc, SET_GATES_PAYLOAD_LEN);
-  int txStatus = Wire.endTransmission();
-  if (txStatus != 0) return txStatus;
-  // The unit persists in loop context, not its TWI ISR — let the write drain.
-  delay(UNIT_GATES_WRITE_SETTLE_MS);
-  UnitLifetimeFacts lt;
-  if (!readUnitLifetime(i2cAddress, lt)) return UNIT_BUS_GATES_UNVERIFIED;
-  if (lt.featureGates != gates) return UNIT_BUS_GATES_MISMATCH;
-  return 0;
+  return unitSetGates(unitBus, i2cAddress, gates);
 }
 
 int busRebootToBootloader(uint8_t i2cAddress) {
-  Wire.beginTransmission(i2cAddress);
-  // Bare on purpose: the one-byte form is the fixed-forever one every unit
-  // accepts (#512), and a unit already sitting in twiboot ACKs exactly one
-  // byte — a guard byte would turn that status into a NACK.
-  Wire.write((uint8_t)SFP_CMD_ENTER_BOOTLOADER);
-  return Wire.endTransmission();
-}
-
-// Soft watchdog reset — stays in sketch mode (v1 #47/#113).
-static int rebootUnit(uint8_t i2cAddress) {
-  Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_REBOOT);
-  return Wire.endTransmission();
+  return unitEnterBootloader(unitBus, i2cAddress);
 }
 
 int busStartSelfTest(uint8_t i2cAddress) {
   admitMotion();
-  Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_START_SELF_TEST);
-  return Wire.endTransmission();
+  return unitStartSelfTest(unitBus, i2cAddress);
 }
 
 bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out) {
-  uint8_t buf[SELFTEST_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_SELF_TEST, buf,
-                 SELFTEST_REPLY_LEN)) {
-    return false;
-  }
-  return selfTestReadbackValid(buf, out);
+  return unitReadSelfTest(unitBus, i2cAddress, out);
 }
 
 bool busReadBootInfo(uint8_t i2cAddress, BootUpdateReport& out) {
-  uint8_t buf[BOOT_INFO_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_BOOT_INFO, buf,
-                 BOOT_INFO_REPLY_LEN)) {
-    return false;
-  }
-  return bootInfoDecode(buf, out);
+  return unitReadBootInfo(unitBus, i2cAddress, out);
 }
 
 int busBootUpdate(uint8_t i2cAddress, uint8_t stage) {
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_BOOT_UPDATE);
-  Wire.write(stage);
-  Wire.write((uint8_t)~stage);
-  return Wire.endTransmission();
+  return unitSendBootUpdate(unitBus, i2cAddress, stage);
 }
 
 // --- twiboot flash (v1 ServiceFirmwareFunctions port) --------------------------------
@@ -836,15 +575,7 @@ static void rescueTick(int i) {
   if (busRecovery.dead) return;
   if (!unitRescueDue(unitFacts[i], rs, millis())) return;
   uint8_t addr = (uint8_t)toI2cAddress(i);
-  UnitRescueProbe probe = UnitRescueProbe::NoAck;
-  Wire.beginTransmission(addr);
-  if (Wire.endTransmission() == 0) {
-    probe = UnitRescueProbe::SketchSilent;
-    if (isUnitInBootloader(addr)) {
-      twibootExit(twibootBus, addr);
-      probe = UnitRescueProbe::Bootloader;
-    }
-  }
+  UnitRescueProbe probe = unitRescueProbe(unitBus, addr);
   unitRescueNoteAttempt(rs, millis(), probe);
   unitFacts[i].rescueExits = rs.exits;
   SerialPrint(F("unit "));
@@ -883,12 +614,20 @@ static const __FlashStringHelper* flashStepText(TwibootStep step) {
 
 // Streams the PROGMEM-embedded unit firmware to one unit's twiboot. A false
 // return leaves the reason in flashError.
-static bool flashUnitSteps(uint8_t i2cAddress) {
-  if (!twibootImageFits(UNIT_FIRMWARE_BIN_LEN)) {
-    flashError = F("image too large — would overwrite twiboot");
-    return false;
-  }
+namespace {
+// loop()'s side of a unit flash: no abort path on this board, and a rewrite
+// is not worth a log line of its 4 KB ring.
+struct FlashWatch {
+  bool keepGoing() { return true; }
+  void pageRewritten(uint16_t, uint8_t) {}
+};
+}  // namespace
 
+// Flashes the bundled image to one unit (shared unitFlashImage: size guard →
+// liveness → chip check → pages → exit → sketch wait → restart). A target
+// still in its sketch is sent into twiboot first. On failure `flashError`
+// says why.
+static bool flashUnitSteps(uint8_t i2cAddress) {
   if (!isUnitInBootloader((int)i2cAddress)) {
     if (busRebootToBootloader(i2cAddress) != 0) {
       flashError = F("unit did not ack enter-bootloader");
@@ -896,47 +635,43 @@ static bool flashUnitSteps(uint8_t i2cAddress) {
     }
     delay(TWIBOOT_STARTUP_MS);
   }
-
-  if (!twibootAwaitBootloader(twibootBus, i2cAddress)) {
-    flashError = F("twiboot not responding");
-    return false;
+  FlashWatch watch;
+  UnitFlashReport report = unitFlashImage(
+      unitBus, i2cAddress, UNIT_FIRMWARE_BIN_LEN,
+      [](size_t pageIndex, uint8_t* buf) {
+        memcpy_P(buf, UNIT_FIRMWARE_BIN + pageIndex * TWIBOOT_PAGE_SIZE,
+                 TWIBOOT_PAGE_SIZE);
+      },
+      watch);
+  switch (report.result) {
+    case UnitFlashResult::Ok:
+      if (report.rebootStatus != 0) {
+        SerialPrint(F("Unit "));
+        SerialPrint(i2cAddress);
+        SerialPrintln(F(": reboot command after flash not acked"));
+      }
+      return true;
+    case UnitFlashResult::ImageTooLarge:
+      flashError = F("image too large — would overwrite twiboot");
+      break;
+    case UnitFlashResult::BootloaderSilent:
+      flashError = F("twiboot not responding");
+      break;
+    case UnitFlashResult::ChipMismatch:
+    case UnitFlashResult::PageFailed:
+      flashError = flashStepText(report.step);
+      break;
+    case UnitFlashResult::ExitFailed:
+      flashError = F("exit bootloader failed");
+      break;
+    case UnitFlashResult::PostBootSilent:
+      flashError = F("unit not responding post-flash");
+      break;
+    default:
+      flashError = F("aborted");
+      break;
   }
-  TwibootStep step = twibootVerifyChip(twibootBus, i2cAddress);
-  if (step != TwibootStep::Ok) {
-    flashError = flashStepText(step);
-    return false;
-  }
-
-  size_t pageCount = UNIT_FIRMWARE_BIN_LEN / TWIBOOT_PAGE_SIZE;
-  uint8_t pageBuf[TWIBOOT_PAGE_SIZE];
-  for (size_t pageIndex = 0; pageIndex < pageCount; pageIndex++) {
-    memcpy_P(pageBuf, UNIT_FIRMWARE_BIN + pageIndex * TWIBOOT_PAGE_SIZE,
-             TWIBOOT_PAGE_SIZE);
-    step = twibootFlashAndVerifyPage(
-        twibootBus, i2cAddress, (uint16_t)(pageIndex * TWIBOOT_PAGE_SIZE),
-        pageBuf);
-    if (step != TwibootStep::Ok) {
-      flashError = flashStepText(step);
-      return false;
-    }
-  }
-
-  if (twibootExit(twibootBus, i2cAddress) != 0) {
-    flashError = F("exit bootloader failed");
-    return false;
-  }
-  // Then a clean watchdog restart (v1 #113: twiboot's exit is a jump, not a
-  // reset).
-  if (!twibootAwaitSketch(twibootBus, i2cAddress)) {
-    flashError = F("unit not responding post-flash");
-    return false;
-  }
-  if (rebootUnit(i2cAddress) != 0) {
-    SerialPrint(F("Unit "));
-    SerialPrint(i2cAddress);
-    SerialPrintln(F(": reboot command after flash not acked"));
-  }
-  return true;
+  return false;
 }
 
 static bool flashUnitFromProgmem(uint8_t i2cAddress) {
@@ -951,24 +686,9 @@ static bool flashUnitFromProgmem(uint8_t i2cAddress) {
   return ok;
 }
 
-// Polls a just-flashed batch until online + homed (v1 #138 throttle).
-// True when every unit reported idle inside the timeout.
 static bool waitForBatchIdle(const uint8_t* addrs, int count,
                              uint32_t timeoutMs) {
-  delay(1000);
-  uint32_t start = millis();
-  while (millis() - start < timeoutMs) {
-    bool allIdle = true;
-    for (int k = 0; k < count; k++) {
-      if (checkIfMoving(addrs[k] - SFP_I2C_ADDRESS_BASE) != 0) {
-        allIdle = false;
-        break;
-      }
-    }
-    if (allIdle) return true;
-    delay(100);
-  }
-  return false;
+  return unitWaitBatchIdle(unitBus, addrs, count, timeoutMs, []() {});
 }
 
 // Staggered boot-home (#309): the units boot UNHOMED, so the follower homes
@@ -1016,51 +736,42 @@ void followerBootHome() {
 // when a bootloader reboot invalidates them) — the repopulation was missing.
 // This is what the S3 already does at the end of runReflashJob.
 //
-// Returns true when the sweep halted itself on consecutive failures (#412):
-// two in a row is an image that cannot land, not one dead unit, and walking
-// on would break every remaining unit the same way.
-static bool flashBootloaderUnits(uint8_t onlyAddr = 0) {
-  uint8_t batch[REFLASH_BATCH_SIZE];
-  int batchCount = 0;
-  int flashed = 0;
-  uint8_t consecutiveFailures = 0;
-  bool halted = false;
-  for (int i = 0; i < UNITS_AMOUNT; i++) {
-    uint8_t addr = (uint8_t)toI2cAddress(i);
-    // A targeted run leaves every other bootloader-mode unit alone (#513).
-    if (!reflashShouldFlashUnit(unitFacts[i], addr, onlyAddr)) continue;
-    reflashProgressUnitStart(reflashProgress, addr);
-    bool ok = flashUnitFromProgmem(addr);
-    reflashProgressUnitResult(reflashProgress, ok);
-    if (ok) {
-      unitFacts[i].state = 1;
-      strncpy(unitFacts[i].version, BUNDLED_UNIT_REV, 8);
-      unitFacts[i].version[8] = '\0';
-      unitFacts[i].fwStatus = 0;
-      batch[batchCount++] = addr;
-      flashed++;
-      consecutiveFailures = 0;  // an isolated dead unit must not wedge a sweep
-    } else if (consecutiveFailures < 0xFF) {
-      consecutiveFailures++;
-    }
-    if (batchCount >= REFLASH_BATCH_SIZE) {
-      reflashProgressSettling(reflashProgress);
-      waitForBatchIdle(batch, batchCount, REFLASH_BATCH_SETTLE_MS);
-      batchCount = 0;
-    }
-    // The trailing settle below still runs, so units already flashed finish
-    // homing before the row is handed back.
-    if (reflashShouldHalt(consecutiveFailures)) {
-      SerialPrintln(F("Unit reflash HALTED: consecutive failures — "
-                      "remaining units left untouched"));
-      halted = true;
-      break;
-    }
+// The loop, its batch throttle and the #412 halt are the shared
+// reflashRunTargets (ReflashPlan.h). `targets` is the planned list — already
+// narrowed to one address for a targeted run (#513), so a unit sitting in
+// twiboot at another address is not in it. Returns true when the sweep
+// halted itself on consecutive failures.
+namespace {
+struct ReflashLoopHooks {
+  bool stopRequested() { return false; }
+  ReflashUnitOutcome flashUnit(uint8_t addr) {
+    return flashUnitFromProgmem(addr) ? ReflashUnitOutcome::Flashed
+                                      : ReflashUnitOutcome::Failed;
   }
-  if (batchCount > 0) {
-    reflashProgressSettling(reflashProgress);
-    waitForBatchIdle(batch, batchCount, REFLASH_BATCH_SETTLE_MS);
+  void unitFlashed(uint8_t addr) {
+    UnitFacts& u = unitFacts[addr - SFP_I2C_ADDRESS_BASE];
+    u.state = 1;
+    strncpy(u.version, BUNDLED_UNIT_REV, 8);
+    u.version[8] = '\0';
+    u.fwStatus = 0;
   }
+  void progressChanged() {}
+  void settleBatch(const uint8_t* addrs, int n) {
+    waitForBatchIdle(addrs, n, REFLASH_BATCH_SETTLE_MS);
+  }
+  void runHalted(uint8_t, int) {
+    SerialPrintln(F("Unit reflash HALTED: consecutive failures — "
+                    "remaining units left untouched"));
+  }
+};
+}  // namespace
+
+static bool flashBootloaderUnits(const uint8_t* targets, int count) {
+  ReflashLoopHooks hooks;
+  ReflashRunEnd end =
+      reflashRunTargets(hooks, targets, count, reflashProgress);
+  bool halted = end.halted;
+  int flashed = end.flashed;
   // Runs only when something was actually flashed — a no-op sweep leaves the
   // facts it was handed alone.
   //
@@ -1103,7 +814,7 @@ void busAutoInstallBootloaderUnits() {
                                      SFP_I2C_ADDRESS_BASE, targets);
   if (n == 0) return;
   reflashProgressBegin(reflashProgress, n);
-  bool halted = flashBootloaderUnits();
+  bool halted = flashBootloaderUnits(targets, n);
   reflashProgressFinish(reflashProgress, false, halted);
 #endif
 }
@@ -1142,7 +853,7 @@ void busRunReflashJob(uint8_t onlyAddr) {
                                      SFP_I2C_ADDRESS_BASE, flashTargets);
   n = reflashFilterToAddress(flashTargets, n, onlyAddr);
   reflashProgressBegin(reflashProgress, n);
-  bool halted = flashBootloaderUnits(onlyAddr);
+  bool halted = flashBootloaderUnits(flashTargets, n);
   reflashProgressFinish(reflashProgress, false, halted);
   busPollHealth();
   // Staggered boot-home of the just-flashed units (#309): a reflashed unit
@@ -1203,69 +914,49 @@ void busInvalidateUnitReads(uint8_t i2cAddress) {
   unitFactsInvalidateReads(unitFacts[idx]);
 }
 
+#if SERIAL_ENABLE == false
+namespace {
+// The superloop's hooks into the shared boot-section dump (BootDumpOp.h).
+struct BootDumpHooks {
+  int enterBootloader(uint8_t addr) { return busRebootToBootloader(addr); }
+  void unitLeftSketch(uint8_t addr) { busInvalidateUnitReads(addr); }
+  void holdProbes() { busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS); }
+  void pause(uint32_t ms) { delay(ms); }
+  UnitBootReadResult readBootSection(uint8_t addr, uint8_t* out) {
+    bool exitAcked = false;
+    bool answeredAfter = false;
+    UnitBootReadResult r = unitReadBootSection(unitBus, addr, out, []() {},
+                                               exitAcked, answeredAfter);
+    if (r != UnitBootReadResult::BootloaderSilent && !exitAcked) {
+      SerialPrint(F("Unit "));
+      SerialPrint(addr);
+      SerialPrintln(F(": twiboot exit failed after boot-section read"));
+    }
+    return r;
+  }
+  bool waitIdle(uint8_t addr, uint32_t timeoutMs) {
+    return waitForBatchIdle(&addr, 1, timeoutMs);
+  }
+  int home(uint8_t addr) { return busHome(addr); }
+  void reshow() { reshowPending = lastFrameValid; }
+};
+}  // namespace
+#endif
+
 void busRunBootDump(uint32_t seq, uint8_t addr,
                     BootDumpSlot& slot, uint8_t* outBytes) {
 #if SERIAL_ENABLE == false
   slot.seq = seq;
   slot.addr = addr;
-  if (busRebootToBootloader(addr) != 0) {
-    slot.outcome = BootDumpOutcome::EnterFail;
-    busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
-    return;
-  }
-  busInvalidateUnitReads(addr);
-  delay(TWIBOOT_STARTUP_MS);
-
-  if (!twibootAwaitBootloader(twibootBus, addr)) {
-    slot.outcome = BootDumpOutcome::BootloaderSilent;
-  } else if (twibootVerifyChip(twibootBus, addr) != TwibootStep::Ok) {
-    slot.outcome = BootDumpOutcome::ChipMismatch;
-  } else {
-    slot.outcome = BootDumpOutcome::Ok;
-    for (int page = 0; page < BOOT_SECTION_LEN / TWIBOOT_PAGE_SIZE; page++) {
-      uint16_t flashAddr =
-          (uint16_t)(BOOT_SECTION_START + page * TWIBOOT_PAGE_SIZE);
-      uint8_t* dst = outBytes + page * TWIBOOT_PAGE_SIZE;
-      if (!twibootReadFlashPage(twibootBus, addr, flashAddr, dst) &&
-          !twibootReadFlashPage(twibootBus, addr, flashAddr, dst)) {
-        slot.outcome = BootDumpOutcome::ReadFail;
-        break;
-      }
-    }
-  }
-
-  bool exited = false;
-  for (int attempt = 0; attempt < 3 && !exited; attempt++) {
-    exited = twibootExit(twibootBus, addr) == 0;
-    if (!exited) delay(20);
-  }
-  if (!exited) {
-    char addrHex[8];
-    snprintf(addrHex, sizeof(addrHex), "0x%02x", addr);
-    SerialPrint(F("Unit "));
-    SerialPrint(addrHex);
-    SerialPrintln(F(": twiboot exit failed after boot-section read"));
-  } else {
-    delay(2000);
-    Wire.beginTransmission(addr);
-    if (Wire.endTransmission() == 0) rebootUnit(addr);
-  }
-
-  waitForBatchIdle(&addr, 1, UNIT_RETURN_TIMEOUT_MS);
-  if (busHome(addr) == 0) waitForBatchIdle(&addr, 1, UNIT_HOME_TIMEOUT_MS);
-  reshowPending = lastFrameValid;
-  busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
-
+  BootDumpHooks hooks;
+  slot.outcome = bootDumpRun(hooks, addr, outBytes);
   if (slot.outcome == BootDumpOutcome::Ok) {
     slot.crc32 = bootDumpCrc32(outBytes, BOOT_SECTION_LEN);
   }
-  {
-    char logBuf[72];
-    snprintf(logBuf, sizeof(logBuf), "boot-dump unit 0x%02x -> %s (crc32 %08lx)",
-             addr, bootDumpOutcomeName(slot.outcome),
-             (unsigned long)slot.crc32);
-    SerialPrintln(logBuf);
-  }
+  char logBuf[72];
+  snprintf(logBuf, sizeof(logBuf), "boot-dump unit 0x%02x -> %s (crc32 %08lx)",
+           addr, bootDumpOutcomeName(slot.outcome), (unsigned long)slot.crc32);
+  SerialPrintln(logBuf);
 #else
   (void)seq; (void)addr; (void)slot; (void)outBytes;
 #endif

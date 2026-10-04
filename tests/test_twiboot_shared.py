@@ -20,11 +20,15 @@ SKIP_DIRS = {".pio", "test", "tests", "managed_components", ".dummy"}
 # Raw protocol vocabulary: using any of it means framing a twiboot command.
 WIRE_TOKEN = re.compile(r"\bTWIBOOT_(?:CMD|MEMTYPE|BOOTTYPE)_\w+")
 
+# Each row master's flash path, and the call that hands it to the shared
+# sequence.
 FLASH_PATHS = {
     "Master": (V2 / "Master/UnitBus.cpp", "UnitFlashResult unitBusFlashUnit("),
     "ESP-01": (V2 / "FollowerEsp01/FollowerBus.cpp",
                "static bool flashUnitSteps("),
 }
+FLASH_SEQUENCE = (V2 / "shared/UnitBusTwiboot.h",
+                  "inline UnitFlashReport unitFlashImage(")
 
 
 def _strip_comments(src: str) -> str:
@@ -79,9 +83,8 @@ def test_no_tree_frames_a_twiboot_command_itself():
         f"{offenders}")
 
 
-@pytest.mark.parametrize("tree", sorted(FLASH_PATHS))
-def test_flash_path_keeps_the_shared_guards(tree):
-    path, signature = FLASH_PATHS[tree]
+def test_the_shared_flash_sequence_keeps_its_guard_order():
+    path, signature = FLASH_SEQUENCE
     body = _function_body(_strip_comments(path.read_text()), signature)
     guard = body.index("twibootImageFits(")
     live = body.index("twibootAwaitBootloader(")
@@ -89,8 +92,17 @@ def test_flash_path_keeps_the_shared_guards(tree):
     page = body.index("twibootFlashAndVerifyPage(")
     leave = body.index("twibootExit(")
     sketch = body.index("twibootAwaitSketch(")
-    reboot = body.index("SFP_CMD_REBOOT") if "SFP_CMD_REBOOT" in body \
-        else body.index("rebootUnit(")
+    reboot = body.index("unitRebootSketch(")
     assert guard < live < chip < page < leave < sketch < reboot, (
-        f"{tree}: size guard, liveness, chip check, pages, exit, sketch "
-        "wait, reboot — in that order")
+        "size guard, liveness, chip check, pages, exit, sketch wait, reboot "
+        "— in that order")
+
+
+@pytest.mark.parametrize("tree", sorted(FLASH_PATHS))
+def test_flash_path_runs_the_shared_sequence(tree):
+    path, signature = FLASH_PATHS[tree]
+    body = _function_body(_strip_comments(path.read_text()), signature)
+    assert "unitFlashImage(" in body, f"{tree}: flash through the shared sequence"
+    for own in ("twibootFlashAndVerifyPage(", "twibootExit(",
+                "twibootAwaitSketch(", "twibootVerifyChip("):
+        assert own not in body, f"{tree}: {own} belongs to the shared sequence"

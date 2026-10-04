@@ -10,6 +10,7 @@
 #include <freertos/task.h>
 
 #include "BootHomePlan.h"
+#include "BootDumpOp.h"     // the shared boot-section dump
 #include "BootUpdateOp.h"   // the shared in-system twiboot update
 #include "SelfTestPoll.h"   // the shared self-test wait
 #include "BootTrace.h"  // #504
@@ -439,77 +440,44 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
 
   const uint8_t* image = webUnitFirmwareBin();
   size_t imageLen = webUnitFirmwareBinLen();
-  bool cancelled = false;
-  bool halted = false;
-  uint8_t consecutiveFailures = 0;
-  uint8_t batch[REFLASH_BATCH_SIZE];
-  int inBatch = 0;
-  for (int k = 0; k < total; k++) {
-    wdtFeed();  // #314: I2C page-streaming is the longest displayTask op
-    if (unitBusAbortRequested()) {
-      cancelled = true;
-      break;
+  // The loop, its batch throttle and the #412 halt are the shared
+  // reflashRunTargets (ReflashPlan.h); these are displayTask's hooks.
+  struct JobHooks {
+    DisplaySnapshot& local;
+    const uint8_t* image;
+    size_t imageLen;
+    bool stopRequested() {
+      wdtFeed();  // #314: I2C page-streaming is the longest displayTask op
+      return unitBusAbortRequested();
     }
-    uint8_t addr = targets[k];
-    reflashProgressUnitStart(local.reflash, addr);
-    snapshotPublish(local);
-
-    UnitFlashResult r = unitBusFlashUnit(addr, image, imageLen);
-    if (r == UnitFlashResult::Aborted) {
-      reflashProgressUnitResult(local.reflash, false);
-      snapshotPublish(local);
-      cancelled = true;
-      break;
-    }
-    bool ok = (r == UnitFlashResult::Ok);
-    if (!ok) {
+    ReflashUnitOutcome flashUnit(uint8_t addr) {
+      UnitFlashResult r = unitBusFlashUnit(addr, image, imageLen);
+      if (r == UnitFlashResult::Aborted) return ReflashUnitOutcome::Stopped;
+      if (r == UnitFlashResult::Ok) return ReflashUnitOutcome::Flashed;
       SerialPrintf("reflash: unit 0x%02x failed (%s)\n", addr,
                    unitFlashResultName(r));
-      if (consecutiveFailures < 0xFF) consecutiveFailures++;
-    } else {
-      consecutiveFailures = 0;  // an isolated dead unit must not wedge a sweep
+      return ReflashUnitOutcome::Failed;
     }
-    reflashProgressUnitResult(local.reflash, ok);
-    if (ok) {
-      // Just-flashed unit runs the sketch again; bump the fact so the
-      // batch-idle wait below polls it (the final reprobe rewrites all
-      // facts wholesale anyway).
+    // Just-flashed unit runs the sketch again; bump the fact so the batch-idle
+    // wait polls it (the final reprobe rewrites all facts wholesale anyway).
+    void unitFlashed(uint8_t addr) {
       local.units[addr - SFP_I2C_ADDRESS_BASE].state = 1;
-      batch[inBatch++] = addr;
     }
-    snapshotPublish(local);
-
-    // v1 #138 brownout throttle: once a batch is full, wait for those
-    // units to come back online + finish homing before flashing more.
-    if (inBatch >= REFLASH_BATCH_SIZE) {
-      reflashProgressSettling(local.reflash);
-      snapshotPublish(local);
-      unitBusWaitBatchIdle(batch, inBatch, REFLASH_BATCH_SETTLE_MS);
-      inBatch = 0;
+    void progressChanged() { snapshotPublish(local); }
+    void settleBatch(const uint8_t* addrs, int n) {
+      unitBusWaitBatchIdle(addrs, n, REFLASH_BATCH_SETTLE_MS);
     }
-
-    // Stop walking the row (#412). Two failures back to back is the signature
-    // of an image that cannot land, not of one dead unit — and the old code
-    // would have kept going and broken every remaining unit the same way. The
-    // trailing settle below still runs, so units already flashed finish homing
-    // before we hand the display back.
-    if (reflashShouldHalt(consecutiveFailures)) {
+    void runHalted(uint8_t consecutiveFailures, int untouched) {
       SerialPrintf("reflash: HALTED after %u consecutive failures — "
                    "%d unit(s) left untouched\n",
-                   (unsigned)consecutiveFailures, total - (k + 1));
-      halted = true;
-      break;
+                   (unsigned)consecutiveFailures, untouched);
     }
-  }
-  // Trailing partial batch — reached on plan exhaustion AND on both abort
-  // exits: the settle is brownout pacing and is never
-  // abort-shortened, so even a cancelled job waits out the homing of the
-  // units it already flashed before the queued Stop broadcast-homes.
-  if (inBatch > 0) {
-    reflashProgressSettling(local.reflash);
-    snapshotPublish(local);
-    unitBusWaitBatchIdle(batch, inBatch, REFLASH_BATCH_SETTLE_MS);
-  }
+  };
+  JobHooks jobHooks{local, image, imageLen};
+  ReflashRunEnd runEnd =
+      reflashRunTargets(jobHooks, targets, total, local.reflash);
+  bool cancelled = runEnd.cancelled;
+  bool halted = runEnd.halted;
 
   // Final reprobe + health poll: published topology and fw grades are
   // execution-time truth (a failed/cancelled unit shows as bootloader and
@@ -698,6 +666,30 @@ bool displayBootDumpCopy(uint32_t seq, uint8_t* out) {
   return held;
 }
 
+// displayTask's hooks into the shared boot-section dump (BootDumpOp.h).
+struct BootDumpHooks {
+  DisplaySnapshot& local;
+  int enterBootloader(uint8_t addr) { return unitBusRebootToBootloader(addr); }
+  void unitLeftSketch(uint8_t addr) { displayInvalidateUnitReads(local, addr); }
+  void holdProbes() { armTwibootRiskWindow(); }
+  void pause(uint32_t ms) {
+    wdtFeed();
+    delay(ms);
+  }
+  UnitBootReadResult readBootSection(uint8_t addr, uint8_t* out) {
+    return unitBusReadBootSection(addr, out);
+  }
+  bool waitIdle(uint8_t addr, uint32_t timeoutMs) {
+    return unitBusWaitBatchIdle(&addr, 1, timeoutMs);
+  }
+  int home(uint8_t addr) { return unitBusHome(addr); }
+  void reshow() {
+    if (!local.lastFrameValid) return;
+    unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
+                     lastFrameUnitSpeed);
+  }
+};
+
 static void execBootDump(DisplaySnapshot& local, UnitFacts* busFacts,
                          const DisplayCommand& cmd) {
   (void)busFacts;
@@ -705,43 +697,8 @@ static void execBootDump(DisplaySnapshot& local, UnitFacts* busFacts,
   BootDumpSlot slot;
   slot.seq = cmd.seq;
   slot.addr = cmd.unitAddress;
-  if (unitBusRebootToBootloader(cmd.unitAddress) != 0) {
-    slot.outcome = BootDumpOutcome::EnterFail;
-    // A NACK does not prove the unit stayed in its sketch.
-    armTwibootRiskWindow();
-  } else {
-    displayInvalidateUnitReads(local, cmd.unitAddress);
-    wdtFeed();
-    delay(TWIBOOT_STARTUP_MS);
-    switch (unitBusReadBootSection(cmd.unitAddress, scratch)) {
-      case UnitBootReadResult::Ok:
-        slot.outcome = BootDumpOutcome::Ok;
-        break;
-      case UnitBootReadResult::BootloaderSilent:
-        slot.outcome = BootDumpOutcome::BootloaderSilent;
-        break;
-      case UnitBootReadResult::ChipMismatch:
-        slot.outcome = BootDumpOutcome::ChipMismatch;
-        break;
-      case UnitBootReadResult::ReadFailed:
-        slot.outcome = BootDumpOutcome::ReadFail;
-        break;
-    }
-    // The unit comes back unhomed. Wait for its sketch and home it — a blank
-    // target would not, the frame write skips a unit already reporting its
-    // letter — then re-show the frame for the units that carry one.
-    uint8_t addr = cmd.unitAddress;
-    unitBusWaitBatchIdle(&addr, 1, UNIT_RETURN_TIMEOUT_MS);
-    if (unitBusHome(cmd.unitAddress) == 0) {
-      unitBusWaitBatchIdle(&addr, 1, UNIT_HOME_TIMEOUT_MS);
-    }
-    if (local.lastFrameValid) {
-      unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
-                       lastFrameUnitSpeed);
-    }
-    // Its reads were invalidated above; keep probes off until it has settled.
-    armTwibootRiskWindow();
-  }
+  BootDumpHooks hooks{local};
+  slot.outcome = bootDumpRun(hooks, cmd.unitAddress, scratch);
   if (slot.outcome == BootDumpOutcome::Ok) {
     slot.crc32 = bootDumpCrc32(scratch, BOOT_SECTION_LEN);
     taskENTER_CRITICAL(&bootDumpMux);

@@ -39,28 +39,25 @@ def _poll_sites(path, call):
     return len(re.findall(re.escape(call), _code(path)))
 
 
-def test_s3_master_judges_the_report_on_probe_and_on_every_health_poll():
-    src = _code("Master/UnitBus.cpp")
-    fn = _function_body(src, "static void refreshUnitBootVerdict(")
-    assert "fact.bootVerdict = BOOT_INTEGRITY_UNREAD;" in fn
-    assert "unitBusReadBootInfo(i2cAddress, r)" in fn
-    assert "bootIntegrityJudge(r, BOOT_CURRENT_CRC32)" in fn
-    assert "bootIntegrityEdge(bootVerdictLogged[unitIndex], fact.bootVerdict)" in fn
-    poll = _function_body(src, "bool unitBusPollHealthOne(")
-    assert "refreshUnitBootVerdict(facts[i], i);" in poll
-    assert src.count("refreshUnitBootVerdict(") == 3  # definition, probe, poll
-
-
-def test_esp01_follower_judges_the_report_on_probe_and_on_every_health_poll():
-    src = _code("FollowerEsp01/FollowerBus.cpp")
-    fn = _function_body(src, "static void refreshUnitBootVerdict(")
-    assert "fact.bootVerdict = BOOT_INTEGRITY_UNREAD;" in fn
-    assert "busReadBootInfo(i2cAddress, r)" in fn
-    assert "bootIntegrityJudge(r, BOOT_CURRENT_CRC32)" in fn
-    assert "bootIntegrityEdge(bootVerdictLogged[unitIndex], fact.bootVerdict)" in fn
-    poll = _function_body(src, "bool busPollHealthOne(")
-    assert "refreshUnitBootVerdict(f, i);" in poll
-    assert src.count("refreshUnitBootVerdict(") == 3  # definition, probe, poll
+def test_both_row_masters_judge_the_report_on_probe_and_on_every_health_poll():
+    # The read, the verdict and the log edge are shared/UnitBusCore.h, natively
+    # tested; what is pinned here is that both the probe and the poll of each
+    # row master go through the composed reads that include it.
+    core = _code("shared/UnitBusCore.h")
+    verdict = _function_body(core, "inline bool unitRefreshBootVerdict(")
+    assert "fact.bootVerdict = BOOT_INTEGRITY_UNREAD;" in verdict
+    assert "bootIntegrityJudge(report, BOOT_CURRENT_CRC32)" in verdict
+    assert "bootIntegrityEdge(logged, fact.bootVerdict)" in verdict
+    diagnostics = _function_body(core, "inline void unitRefreshDiagnostics(")
+    assert "unitRefreshBootVerdict(bus, fact, i2cAddress, bootLogged, report)" in diagnostics
+    for composed in ("inline bool unitProbeSketchUnit(", "inline bool unitPollHealth("):
+        assert "unitRefreshDiagnostics(" in _function_body(core, composed), composed
+    for path, probe, poll in (
+            ("Master/UnitBus.cpp", "void unitBusProbe(", "bool unitBusPollHealthOne("),
+            ("FollowerEsp01/FollowerBus.cpp", "void busProbeQuiet(", "bool busPollHealthOne(")):
+        src = _code(path)
+        assert "unitProbeSketchUnit(unitBus, unitBusNotes" in _function_body(src, probe), path
+        assert "unitPollHealth(unitBus, unitBusNotes" in _function_body(src, poll), path
 
 
 def test_a_corrupt_bootloader_counts_as_faulty():

@@ -122,15 +122,6 @@ inline int reflashFilterToAddress(uint8_t* addrs, int n, uint8_t onlyAddr) {
   return 0;
 }
 
-// The one decision that keeps a targeted run off its neighbours: the flash
-// loop walks the facts, not the filtered list, so a unit already sitting in
-// twiboot at another address is skipped HERE or not at all.
-inline bool reflashShouldFlashUnit(const UnitFacts& u, uint8_t addr,
-                                   uint8_t onlyAddr) {
-  if (u.state != 2) return false;
-  return onlyAddr == 0 || addr == onlyAddr;
-}
-
 // /reflash-units?address=N bound: the managed range only. Deliberately not
 // maintValidateAddress — a unit in twiboot or on a protocol we do not speak
 // must still be reflashable; converging it is the point. A target that is
@@ -252,6 +243,91 @@ inline MaintOutcome classifyReflashOutcome(const ReflashProgress& p,
   reason = MaintReason::None;
   if (p.state == ReflashState::Done) return MaintOutcome::Ok;
   return MaintOutcome::PostconditionFail;
+}
+
+// --- the flash loop ---------------------------------------------------------------
+
+enum class ReflashUnitOutcome : uint8_t {
+  Flashed = 0,
+  Failed,   // this unit did not take the image; it stays in twiboot
+  Stopped,  // the flash was aborted mid-unit — the run ends here
+};
+
+struct ReflashRunEnd {
+  bool cancelled = false;  // the tree asked to stop
+  bool halted = false;     // consecutive failures stopped the run (#412)
+  uint8_t flashed = 0;
+};
+
+// Flashes the planned targets in batches and keeps the progress object
+// current. v1 #138 brownout throttle: once REFLASH_BATCH_SIZE units have been
+// flashed, wait for them to come back online and finish homing before
+// flashing more — post-flash homing current shares a supply with the
+// steppers. Two failures back to back end the run (#412); one success in
+// between resets the count.
+//
+// The trailing settle runs on EVERY exit: it is brownout pacing and is never
+// shortened, so even a cancelled or halted run waits out the homing of the
+// units it already flashed before the row is handed back.
+//
+//   bool stopRequested()                        checked before each unit
+//   ReflashUnitOutcome flashUnit(uint8_t addr)
+//   void unitFlashed(uint8_t addr)              the unit runs its sketch again
+//   void progressChanged()                      publish the progress object
+//   void settleBatch(const uint8_t* addrs, int n)
+//   void runHalted(uint8_t consecutiveFailures, int unitsLeftUntouched)
+template <typename Hooks>
+inline ReflashRunEnd reflashRunTargets(Hooks& h, const uint8_t* targets,
+                                       int total, ReflashProgress& progress) {
+  ReflashRunEnd end;
+  uint8_t consecutiveFailures = 0;
+  uint8_t batch[REFLASH_BATCH_SIZE];
+  int inBatch = 0;
+  for (int k = 0; k < total; k++) {
+    if (h.stopRequested()) {
+      end.cancelled = true;
+      break;
+    }
+    uint8_t addr = targets[k];
+    reflashProgressUnitStart(progress, addr);
+    h.progressChanged();
+
+    ReflashUnitOutcome outcome = h.flashUnit(addr);
+    bool ok = outcome == ReflashUnitOutcome::Flashed;
+    reflashProgressUnitResult(progress, ok);
+    if (outcome == ReflashUnitOutcome::Stopped) {
+      h.progressChanged();
+      end.cancelled = true;
+      break;
+    }
+    if (ok) {
+      consecutiveFailures = 0;  // an isolated dead unit must not wedge a sweep
+      h.unitFlashed(addr);
+      batch[inBatch++] = addr;
+      end.flashed++;
+    } else if (consecutiveFailures < 0xFF) {
+      consecutiveFailures++;
+    }
+    h.progressChanged();
+
+    if (inBatch >= REFLASH_BATCH_SIZE) {
+      reflashProgressSettling(progress);
+      h.progressChanged();
+      h.settleBatch(batch, inBatch);
+      inBatch = 0;
+    }
+    if (reflashShouldHalt(consecutiveFailures)) {
+      h.runHalted(consecutiveFailures, total - (k + 1));
+      end.halted = true;
+      break;
+    }
+  }
+  if (inBatch > 0) {
+    reflashProgressSettling(progress);
+    h.progressChanged();
+    h.settleBatch(batch, inBatch);
+  }
+  return end;
 }
 
 // Renders the reflash progress JSON (#205) — spliced into the /units/health

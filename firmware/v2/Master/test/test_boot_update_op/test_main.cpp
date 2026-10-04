@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "BootDumpOp.h"
 #include "BootUpdateOp.h"
 
 void setUp() {}
@@ -226,8 +227,86 @@ static void test_stage2_silence_is_a_lost_unit_after_the_poll_window() {
   TEST_ASSERT_TRUE(u.now - before >= BOOT_UPDATE_STAGE2_POLL_MS);
 }
 
+// --- BootDumpOp.h ---------------------------------------------------------------
+
+namespace {
+
+struct DumpUnit {
+  int enterAck = 0;
+  UnitBootReadResult read = UnitBootReadResult::Ok;
+  std::vector<std::string> calls;
+  int holds = 0;
+  int invalidated = 0;
+
+  int enterBootloader(uint8_t) {
+    calls.push_back("enter");
+    return enterAck;
+  }
+  void unitLeftSketch(uint8_t) { invalidated++; }
+  void holdProbes() { holds++; }
+  void pause(uint32_t) {}
+  UnitBootReadResult readBootSection(uint8_t, uint8_t* out) {
+    calls.push_back("read");
+    out[0] = 0xAB;
+    return read;
+  }
+  bool waitIdle(uint8_t, uint32_t) { return true; }
+  int home(uint8_t) {
+    calls.push_back("home");
+    return 0;
+  }
+  void reshow() { calls.push_back("reshow"); }
+};
+
+}  // namespace
+
+static void test_dump_reads_then_homes_and_reshows() {
+  DumpUnit u;
+  uint8_t out[4] = {0};
+  TEST_ASSERT_EQUAL((int)BootDumpOutcome::Ok, (int)bootDumpRun(u, 5, out));
+  std::vector<std::string> want = {"enter", "read", "home", "reshow"};
+  TEST_ASSERT_TRUE(want == u.calls);
+  TEST_ASSERT_EQUAL(1, u.invalidated);
+  TEST_ASSERT_EQUAL(1, u.holds);
+  TEST_ASSERT_EQUAL_HEX8(0xAB, out[0]);
+}
+
+// A NACK does not prove the unit stayed in its sketch: probes are held, and
+// nothing else is sent.
+static void test_dump_enter_nack_only_holds_the_probes() {
+  DumpUnit u;
+  u.enterAck = 2;
+  uint8_t out[4];
+  TEST_ASSERT_EQUAL((int)BootDumpOutcome::EnterFail, (int)bootDumpRun(u, 5, out));
+  TEST_ASSERT_EQUAL(1, (int)u.calls.size());
+  TEST_ASSERT_EQUAL(0, u.invalidated);
+  TEST_ASSERT_EQUAL(1, u.holds);
+}
+
+// Whatever the read came to, the unit was restarted: it is homed and the row
+// re-shown on every read outcome.
+static void test_dump_failed_read_still_homes_and_reshows() {
+  const UnitBootReadResult results[] = {UnitBootReadResult::BootloaderSilent,
+                                        UnitBootReadResult::ChipMismatch,
+                                        UnitBootReadResult::ReadFailed};
+  const BootDumpOutcome outcomes[] = {BootDumpOutcome::BootloaderSilent,
+                                      BootDumpOutcome::ChipMismatch,
+                                      BootDumpOutcome::ReadFail};
+  for (int i = 0; i < 3; i++) {
+    DumpUnit u;
+    u.read = results[i];
+    uint8_t out[4];
+    TEST_ASSERT_EQUAL((int)outcomes[i], (int)bootDumpRun(u, 5, out));
+    TEST_ASSERT_TRUE(u.calls.back() == "reshow");
+    TEST_ASSERT_EQUAL(1, u.holds);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_dump_reads_then_homes_and_reshows);
+  RUN_TEST(test_dump_enter_nack_only_holds_the_probes);
+  RUN_TEST(test_dump_failed_read_still_homes_and_reshows);
   RUN_TEST(test_old_unit_runs_both_stages_and_reshows_once);
   RUN_TEST(test_already_new_is_ok_with_a_reason_and_touches_nothing);
   RUN_TEST(test_unreadable_report_fails_before_anything_is_sent);

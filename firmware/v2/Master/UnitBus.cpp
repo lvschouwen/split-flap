@@ -16,7 +16,6 @@
 
 #include "BuildVersion.h"  // BUNDLED_UNIT_REV (#205)
 #include "CrashContext.h"  // per-transaction crash breadcrumb (#504)
-#include "DriftLogPolicy.h"  // drift-event operator-log decision (#322)
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
 #include "UnitTimings.h"
@@ -25,6 +24,7 @@
 #include "SplitFlapProtocol.h"
 #include "TaskWatchdog.h"  // wdtFeed() (#314)
 #include "TwibootFlash.h"  // the twiboot client; this file is its Wire adapter
+#include "UnitBusCore.h"   // the unit sketch protocol, on the same adapter
 #include "UnitProtocolHelpers.h"
 
 // Stop-abort signal (#204) — see UnitBus.h for the contract.
@@ -47,9 +47,6 @@ static constexpr int UNIT_BUS_SCL_PIN = 9;
 // Fast-mode reflash) — see #383; #367 per-unit error telemetry stays the guard.
 static constexpr uint32_t UNIT_BUS_FREQ_HZ = 100000;
 
-// Delay between an opcode write and the read-back clocking, so the slave's
-// receiveEvent ISR has time to flip its pending*Response flag.
-static constexpr uint32_t UNIT_RESPONSE_SETTLE_MS = 2;
 
 
 static int toI2cAddress(int unitIndex) {
@@ -76,27 +73,6 @@ static void recoverBusAfterFailedRead() {
   unitBusInit();
 }
 
-// The protocol itself is shared/TwibootFlash.h; this is the Wire adapter it
-// runs on. A short read must pass through recoverBusAfterFailedRead() before
-// the bus is touched again (#207); write NACKs during a page-program window
-// are expected and are not bus damage.
-namespace {
-struct WireTwibootBus {
-  void beginTransmission(uint8_t addr) { Wire.beginTransmission(addr); }
-  int endTransmission(bool stop) { return Wire.endTransmission(stop); }
-  size_t write(uint8_t b) { return Wire.write(b); }
-  uint8_t requestFrom(uint8_t addr, uint8_t qty) {
-    return Wire.requestFrom(addr, qty);
-  }
-  int read() { return Wire.read(); }
-  int available() { return Wire.available(); }
-  uint32_t nowMs() { return millis(); }
-  void sleepMs(uint32_t ms) { delay(ms); }
-  void readFailed() { recoverBusAfterFailedRead(); }
-};
-WireTwibootBus twibootBus;
-}  // namespace
-
 // Bus transaction counters for the System tab (#245). displayTask is the
 // only writer (sole Wire toucher); netTask's stats sampler reads them.
 // Scope: sketch-protocol traffic only — frames, queries and maintenance
@@ -120,320 +96,89 @@ uint32_t unitBusErrCount() { return busErrCount.load(); }
 // by a probe rescan (a reliability trend, unlike the re-baselined health masks).
 // displayTask is the sole writer (sole Wire toucher, Hard rules), so plain
 // arrays need no atomics — the netTask reader only ever sees the folded snapshot.
-static uint16_t unitErrCount[UNITS_AMOUNT] = {0};
-static uint32_t unitLastErrMs[UNITS_AMOUNT] = {0};
+static UnitErrorLedger<UNITS_AMOUNT> unitErrors;
 
-// Charge one failed transaction to a unit index (bounds-guarded, saturating).
-static void noteUnitError(int index) {
-  if (index < 0 || index >= UNITS_AMOUNT) return;
-  unitErrCount[index] = unitErrBump(unitErrCount[index]);
-  unitLastErrMs[index] = millis();
-}
+static void noteUnitError(int index) { unitErrors.note(index, millis()); }
 
 // Copies the per-unit error counters into the caller's facts so they ride the
-// next published snapshot. Runs on every health poll (below): cheap, and keeps
-// a render-time error visible within one heartbeat tick regardless of which
+// next published snapshot. Runs on every health poll: cheap, and keeps a
+// render-time error visible within one heartbeat tick regardless of which
 // unit the round-robin polled.
-static void foldUnitErrors(UnitFacts* facts, int n) {
-  if (n > UNITS_AMOUNT) n = UNITS_AMOUNT;
-  for (int i = 0; i < n; i++) {
-    facts[i].i2cErrors = unitErrCount[i];
-    facts[i].lastErrorMs = unitLastErrMs[i];
+static void foldUnitErrors(UnitFacts* facts, int n) { unitErrors.fold(facts, n); }
+
+// The unit protocol is shared/UnitBusCore.h and the twiboot protocol
+// shared/TwibootFlash.h; this is the Wire adapter both run on. A short read
+// must pass through recoverBusAfterFailedRead() before the bus is touched
+// again (#207); write NACKs during a page-program window are expected and are
+// not bus damage.
+namespace {
+struct WireTwibootBus {
+  void beginTransmission(uint8_t addr) { Wire.beginTransmission(addr); }
+  int endTransmission(bool stop) { return Wire.endTransmission(stop); }
+  size_t write(uint8_t b) { return Wire.write(b); }
+  uint8_t requestFrom(uint8_t addr, uint8_t qty) {
+    return Wire.requestFrom(addr, qty);
   }
-}
-
-static int countedTransmission() {
-  int status = Wire.endTransmission();
-  busTxCount.fetch_add(1);
-  if (status != 0) busErrCount.fetch_add(1);
-  return status;
-}
-
-// No-argument mutations go out as opcode + ~opcode (#512, UnitWireContract.h):
-// alone on the wire, the opcode byte is a complete command one bit flip away
-// from a letter write or a poll. Units predating the guard drain the extra byte.
-// Not for ENTER_BOOTLOADER — see its sender.
-static void writeGuardedOpcode(uint8_t opcode) {
-  Wire.write(opcode);
-  Wire.write(noArgGuardByte(opcode));
-}
-
-// Shared opcode-write-then-read-back transaction behind every readUnit*
-// helper (v1 #154): write the opcode, settle, clock `n` bytes into `buf`.
-// Old firmware that predates an opcode silently drops the write (the opcode
-// namespace is reserved) but answers reads with its 1-byte rotation status,
-// so a short reply means "unsupported" — drain the RX buffer and fail.
-// `buf` holds all `n` bytes only on success.
-static bool queryUnit(int i2cAddress, uint8_t opcode, uint8_t* buf, uint8_t n) {
-  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_WRITE, (uint8_t)i2cAddress);
-  Wire.beginTransmission(i2cAddress);
-  Wire.write(opcode);
-  if (countedTransmission() != 0) return false;
-  delay(UNIT_RESPONSE_SETTLE_MS);
-  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_READ, (uint8_t)i2cAddress);
-  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, n);
-  if (got != n) {
-    while (Wire.available()) Wire.read();
-    busErrCount.fetch_add(1);  // short/failed read leg (#245)
-    recoverBusAfterFailedRead();
-    return false;
+  int read() { return Wire.read(); }
+  int available() { return Wire.available(); }
+  uint32_t nowMs() { return millis(); }
+  void sleepMs(uint32_t ms) { delay(ms); }
+  void readFailed() { recoverBusAfterFailedRead(); }
+  int endCounted() {
+    int status = Wire.endTransmission();
+    busTxCount.fetch_add(1);
+    if (status != 0) busErrCount.fetch_add(1);
+    return status;
   }
-  for (uint8_t i = 0; i < n; i++) buf[i] = Wire.read();
-  return true;
-}
-
-// Reads the 8-byte health/status payload + its #405 checksum via
-// CMD_GET_STATUS (v1 #47). Returns true on success; `out` is untouched on
-// failure. This is the highest-frequency read on the bus and feeds fault
-// flags, reset counts, uptime, stale detection, the event log and the HA
-// sensors — a corrupted byte used to be able to invent a fault or mask a real
-// one with nothing to catch it.
-static bool readUnitStatus(int i2cAddress, UnitStatus& out) {
-  uint8_t buf[STATUS_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_STATUS, buf, STATUS_REPLY_LEN)) {
-    return false;
+  void noteReadError() { busErrCount.fetch_add(1); }  // short read leg (#245)
+  void mark(UnitBusAct act, uint8_t addr) {
+    crashCtxMark(CRASH_SLOT_DISPLAY,
+                 act == UnitBusAct::Write   ? CRASH_ACT_I2C_WRITE
+                 : act == UnitBusAct::Read ? CRASH_ACT_I2C_READ
+                                           : CRASH_ACT_I2C_PROBE,
+                 addr);
   }
-  uint8_t p[STATUS_PAYLOAD_LEN];
-  if (!statusReadbackValid(buf, STATUS_REPLY_LEN, p)) return false;
-  out.flags                 = p[0];
-  out.mcusrAtBoot           = p[1];
-  out.lifetimeBrownoutCount = p[2];
-  out.lifetimeWatchdogCount = p[3];
-  out.uptimeSeconds         = ((uint16_t)p[4] << 8) | (uint16_t)p[5];
-  out.badCommandCount       = p[6];
-  // Byte 7 is last-homing-step / 16 (saturating); decode by reversing.
-  out.lastHomingStepCount   = (uint16_t)p[7] << 4;
-  return true;
-}
+};
+WireTwibootBus unitBus;
+}  // namespace
 
-// Reads the unit's revolution odometer via CMD_GET_ODOMETER (#231): 5 bytes,
-// uint32 LE + masked XOR checksum. Old firmware answers the unknown opcode
-// with its 1-byte status fallback + bus padding — odometerReadbackValid
-// rejects that instead of "verifying" garbage as a count.
-static bool readUnitOdometer(int i2cAddress, uint32_t& out) {
-  uint8_t buf[5];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_ODOMETER, buf, 5)) return false;
-  return odometerReadbackValid(buf, out);
-}
-
-// Reads the unit's drift diagnostics via CMD_GET_DIAG (#263/#264): 6 bytes,
-// masked XOR checksum + letter range check. Old firmware answers the
-// unknown opcode with its 1-byte status fallback — diagReadbackValid
-// rejects that (#106 class).
-static bool readUnitDiag(int i2cAddress, UnitDiagReading& out) {
-  uint8_t buf[6];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_DIAG, buf, 6)) return false;
-  return diagReadbackValid(buf, (uint8_t)FLAP_AMOUNT, out);
-}
-
-// Folds a diag read into the slot's facts; clears diagValid first so a unit
-// that stops answering (or was reflashed to pre-diag firmware) never keeps
-// serving stale drift numbers.
-static void refreshUnitDiag(UnitFacts& fact, int i2cAddress) {
-  fact.diagValid = false;
-  UnitDiagReading d;
-  if (!readUnitDiag(i2cAddress, d)) return;
-  // #322: the unit's drift auto re-home (#263) is otherwise silent on the
-  // operator log — it only prints to the Nano's own (unmonitored) serial, and
-  // de/ds/dp reach the operator solely as passive /units/health JSON. Emit one
-  // flash/web-log line per newly-observed drift event so a self-correction (and
-  // a mechanically failing unit) is visible where an operator actually looks.
-  DriftLogDecision drift = driftLogEvaluate(fact.driftEventsBaseline, d.driftEvents);
-  if (drift.shouldLog) {
+// What the shared probe/poll code found worth a log line.
+namespace {
+struct UnitBusNotes {
+  // The unit's drift auto re-home (#263) is otherwise silent on the operator
+  // log — it only prints to the Nano's own (unmonitored) serial (#322).
+  void driftSeen(uint8_t i2cAddress, const DriftLogDecision& drift,
+                 const UnitDiagReading& d) {
     SerialPrintf("Unit 0x%02x drifted: %u new event(s), last %d steps "
                  "(de=%u) — unit auto re-homing\n",
                  i2cAddress, (unsigned)drift.newEvents, (int)d.lastDriftSteps,
                  (unsigned)d.driftEvents);
   }
-  fact.driftEventsBaseline = drift.newBaseline;
-  fact.physLetter = d.physicalLetter;
-  fact.driftFlags = d.flags;
-  fact.driftEvents = d.driftEvents;
-  fact.lastDriftSteps = d.lastDriftSteps;
-  fact.diagValid = true;
-}
-
-// Reads the unit's supply-Vcc / free-RAM / commanded-position diagnostics via
-// CMD_GET_VITALS (#306): 8 bytes, masked XOR checksum. Pre-vitals firmware
-// answers the unknown opcode with its 1-byte status fallback + bus padding —
-// vitalsReadbackValid rejects that instead of "verifying" garbage (#106 class).
-static bool readUnitVitals(int i2cAddress, UnitVitals& out) {
-  uint8_t buf[VITALS_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VITALS, buf, VITALS_REPLY_LEN)) return false;
-  return vitalsReadbackValid(buf, out);
-}
-
-// Folds a vitals read into the slot; clears vitalsValid first so a unit that
-// stops answering (or was reflashed to pre-vitals firmware) never keeps
-// serving a stale Vcc reading (same discipline as refreshUnitDiag).
-static void refreshUnitVitals(UnitFacts& fact, int i2cAddress) {
-  fact.vitalsValid = false;
-  UnitVitals v;
-  if (!readUnitVitals(i2cAddress, v)) return;
-  fact.vitals = v;
-  fact.vitalsValid = true;
-}
-
-// Reads the unit's new-measurement diagnostics via CMD_GET_EXT_DIAG (#365):
-// 11-byte base + 10-byte link extension (#502), each with its own masked XOR
-// checksum. Pre-ext-diag firmware answers the unknown opcode with its 1-byte
-// status fallback + bus padding — the checksums reject that instead of
-// "verifying" garbage (same discipline as vitals).
-static bool readUnitExtDiag(int i2cAddress, uint8_t* buf) {
-  return queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_EXT_DIAG, buf,
-                   EXT_DIAG_LINK_REPLY_LEN);
-}
-
-// Folds an ext-diag read into the slot (#502 link extension included); both
-// valid flags clear first so a unit that stops answering (or was reflashed to
-// pre-ext-diag firmware) never keeps serving a stale reading (same discipline
-// as refreshUnitVitals).
-static void refreshUnitExtDiag(UnitFacts& fact, int i2cAddress) {
-  fact.extDiagValid = false;
-  fact.linkValid = false;
-  uint8_t buf[EXT_DIAG_LINK_REPLY_LEN];
-  if (!readUnitExtDiag(i2cAddress, buf)) return;
-  unitFactsFoldExtDiag(fact, buf);
-}
-
-// Reads what the unit's EEPROM remembers across power cycles via
-// CMD_GET_LIFETIME (#406): 15 bytes, masked XOR checksum. Pre-lifetime
-// firmware answers the unknown opcode with its 1-byte status fallback + bus
-// padding, and lifetimeReadbackValid rejects it on LENGTH before the checksum
-// even matters — during a fleet reflash the wall runs both firmwares, so this
-// path is exercised for real, not theoretically.
-static bool readUnitLifetime(int i2cAddress, UnitLifetimeFacts& out) {
-  uint8_t buf[LIFETIME_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_LIFETIME, buf, LIFETIME_REPLY_LEN)) {
-    return false;
+  void bootVerdictChanged(uint8_t i2cAddress, const UnitFacts& fact,
+                          const BootUpdateReport& r) {
+    SerialPrintf("Unit 0x%02x bootloader %s — crc32 %08lx (expected %08lx), "
+                 "state %s\n",
+                 i2cAddress, bootIntegrityName(fact.bootVerdict),
+                 (unsigned long)r.bootCrc32, (unsigned long)BOOT_CURRENT_CRC32,
+                 bootInfoStateName(r.state));
   }
-  return lifetimeReadbackValid(buf, LIFETIME_REPLY_LEN, out);
-}
+};
+UnitBusNotes unitBusNotes;
+}  // namespace
 
-// Folds a lifetime read into the slot; clears lifetimeValid first so a unit
-// that stops answering (or was reflashed to pre-lifetime firmware) never
-// keeps serving a stale record (same discipline as refreshUnitExtDiag).
-static void refreshUnitLifetime(UnitFacts& fact, int i2cAddress) {
-  fact.lifetimeValid = false;
-  UnitLifetimeFacts lt;
-  if (!readUnitLifetime(i2cAddress, lt)) return;
-  fact.lifetime = lt;
-  fact.lifetimeValid = true;
-}
-
-// Boot-section integrity (BootIntegrity.h, #520): judges the unit's boot
-// report on every health poll. The verdict clears first, like every other
-// refresh here; the logged verdict lives outside the facts so a probe rescan
-// (which rebuilds them) does not repeat a finding. Not charged to #367 error
-// attribution — see readUnitStatus.
+// Per-unit memory of the last boot verdict logged (#520): outside the facts,
+// so a probe rescan (which rebuilds them) does not repeat a finding.
 static uint8_t bootVerdictLogged[UNITS_AMOUNT];
 
-static void refreshUnitBootVerdict(UnitFacts& fact, int unitIndex) {
-  fact.bootVerdict = BOOT_INTEGRITY_UNREAD;
-  int i2cAddress = toI2cAddress(unitIndex);
-  BootUpdateReport r;
-  if (!unitBusReadBootInfo(i2cAddress, r)) return;
-  fact.bootCrc32 = r.bootCrc32;
-  fact.bootVerdict = bootIntegrityJudge(r, BOOT_CURRENT_CRC32);
-  BootIntegrityEdge e =
-      bootIntegrityEdge(bootVerdictLogged[unitIndex], fact.bootVerdict);
-  bootVerdictLogged[unitIndex] = e.logged;
-  if (!e.log) return;
-  SerialPrintf("Unit 0x%02x bootloader %s — crc32 %08lx (expected %08lx), "
-               "state %s\n",
-               i2cAddress, bootIntegrityName(fact.bootVerdict),
-               (unsigned long)r.bootCrc32, (unsigned long)BOOT_CURRENT_CRC32,
-               bootInfoStateName(r.state));
-}
-
-// Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
-// true on success; `out` is untouched on failure (old firmware predating
-// v1 #32 answers short — the drain-and-fail path).
-static bool readUnitOffset(int i2cAddress, int16_t& out) {
-  uint8_t buf[OFFSET_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_OFFSET, buf, OFFSET_REPLY_LEN)) {
-    return false;
-  }
-  return offsetReadbackValid(buf, OFFSET_REPLY_LEN, out);
-}
-
-// Asks a sketch-mode unit for its firmware GIT_REV via CMD_GET_VERSION.
-// Writes up to 8 printable ASCII bytes into `out` (null-terminated).
-// Rejects `"` and `\` at the I2C boundary (v1 #140): the string is emitted
-// raw into the health JSON, and a glitched read carrying either would break
-// JSON.parse — a real git short-rev never contains them.
-// Also yields the unit's SFP_PROTOCOL_VERSION (#405) — the one number that
-// says which wire contract this unit speaks. That is why this reply's shape is
-// frozen forever: you cannot ask the question through an opcode whose format
-// depends on the answer.
-static bool readUnitVersion(int i2cAddress, char* out, uint8_t& protocolOut) {
-  out[0] = '\0';
-  protocolOut = 0;
-  uint8_t buf[VERSION_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_VERSION, buf, VERSION_REPLY_LEN)) {
-    return false;
-  }
-  UnitVersionPacket pkt;
-  if (!versionReadbackValid(buf, VERSION_REPLY_LEN, pkt)) return false;
-  uint8_t len = 0;
-  for (; len < VERSION_REV_LEN; len++) {
-    if (pkt.rev[len] == 0) break;
-    if (pkt.rev[len] < 32 || pkt.rev[len] > 126) return false;
-    if (pkt.rev[len] == '"' || pkt.rev[len] == '\\') return false;
-  }
-  if (len == 0) return false;
-  for (uint8_t i = 0; i < len; i++) out[i] = pkt.rev[i];
-  out[len] = '\0';
-  protocolOut = pkt.protocolVersion;
-  return true;
-}
-
-// Reads back the unit's currently displayed letter index via CMD_GET_LETTER
-// (v1 #106). New firmware replies 2 bytes: index + bitwise complement; old
-// firmware replies with the 1-byte status fallback, so a short read (or a
-// failed complement check) returns false and `out` is untouched.
-static bool readUnitDisplayedLetter(int i2cAddress, int& out) {
-  uint8_t buf[2];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_LETTER, buf, 2)) return false;
-  if (!letterReadbackValid(buf[0], buf[1], FLAP_AMOUNT)) return false;
-  out = buf[0];
-  return true;
-}
-
 static bool isUnitInBootloader(int i2cAddress) {
-  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_PROBE, (uint8_t)i2cAddress);
-  return twibootIsBootloader(twibootBus, (uint8_t)i2cAddress);
-}
-
-// Write letter index and wire speed to a single unit. Returns
-// Wire.endTransmission() status (0 = success) so callers can tally
-// bus-level failures (v1 #121).
-static int writeToUnit(int unitIndex, uint8_t letter, uint8_t unitSpeed) {
-  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_WRITE,
-               (uint8_t)toI2cAddress(unitIndex));
-  Wire.beginTransmission(toI2cAddress(unitIndex));
-  Wire.write(letter);
-  Wire.write(unitSpeed);
-  return countedTransmission();
+  unitBus.mark(UnitBusAct::Probe, (uint8_t)i2cAddress);
+  return twibootIsBootloader(unitBus, (uint8_t)i2cAddress);
 }
 
 // Checks if a single unit is moving (1-byte rotation status). Called ~10x/s
 // from isDisplayMoving() — must be quiet on /log when nothing is wrong.
 static int checkIfMoving(int unitIndex) {
-  int i2cAddress = toI2cAddress(unitIndex);
-  crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_READ, (uint8_t)i2cAddress);
-  Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)1);
-  int active = Wire.available() ? Wire.read() : -1;
-  if (active == -1) {
-    // The failed read must not leave stale driver state behind (#207): the
-    // wake-up ping below is exactly the probe-after-failed-read shape that
-    // panics the master. Recover first, then ping.
-    recoverBusAfterFailedRead();
-    // Wake-up ping: empty transmission pulses the TWI peripheral.
-    Wire.beginTransmission(i2cAddress);
-    Wire.endTransmission();
-  }
-  return active;
+  return unitMovingStatus(unitBus, (uint8_t)toI2cAddress(unitIndex));
 }
 
 // True while any sketch-mode unit reports rotation. A silent read (-1) from
@@ -510,12 +255,16 @@ static void verifyAndResendLetters(const UnitFacts* facts, int width,
   for (int unitIndex = 0; unitIndex < width; unitIndex++) {
     if (!unitDrivable(facts[unitIndex])) continue;  // #405
     int shown;
-    if (!readUnitDisplayedLetter(toI2cAddress(unitIndex), shown)) continue;
+    if (!unitReadDisplayedLetter(unitBus, (uint8_t)toI2cAddress(unitIndex),
+                                 shown)) {
+      continue;
+    }
     if (shown == letters[unitIndex]) continue;
     SerialPrintf("Unit %d shows the wrong letter index — re-sending\n",
                  unitIndex);
     if (!waitForMotionSlot(movers)) break;
-    writeToUnit(unitIndex, letters[unitIndex], unitSpeed);
+    unitWriteLetter(unitBus, (uint8_t)toI2cAddress(unitIndex),
+                    letters[unitIndex], unitSpeed);
     motionTrackerAdd(movers, unitIndex, millis());
     resent++;
   }
@@ -585,62 +334,21 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
       SerialPrintln(F(" is in BOOTLOADER mode"));
       continue;
     }
-    uint8_t protocolVersion = 0;
-    if (readUnitVersion(i2cAddress, facts[unitIndex].version, protocolVersion)) {
-      // The build bundles a unit hex (#205), so a readable rev grades for
-      // real against BUNDLED_UNIT_REV — 0 ok / 1 differs. Both the rev (a
-      // hash) and the protocol version are compared for EQUALITY only: neither
-      // tells us "older", just "not ours", and not-ours always means reflash.
-      // BUNDLED_UNIT_REV_EQUIV widens "ours" to revs measured to build the
-      // same machine code (#440), so a unit flashed before the identity
-      // scheme changed is not mislabelled — and not auto-reflashed for it.
-      facts[unitIndex].fwStatus = unitFwStatusFromRev(
-          facts[unitIndex].version, BUNDLED_UNIT_REV, BUNDLED_UNIT_REV_EQUIV);
-      facts[unitIndex].protocolVersion = protocolVersion;
-      facts[unitIndex].protocolKnown = true;
-      if (!unitProtocolSupported(protocolVersion)) {
+    UnitFacts& fact = facts[unitIndex];
+    if (unitProbeSketchUnit(unitBus, unitBusNotes, fact, (uint8_t)i2cAddress,
+                            BUNDLED_UNIT_REV, BUNDLED_UNIT_REV_EQUIV,
+                            bootVerdictLogged[unitIndex])) {
+      if (!unitProtocolSupported(fact.protocolVersion)) {
         SerialPrintf(" speaks protocol v%u, we speak v%u — NOT DRIVABLE, reflash target\n",
-                     (unsigned)protocolVersion, (unsigned)SFP_PROTOCOL_VERSION);
+                     (unsigned)fact.protocolVersion,
+                     (unsigned)SFP_PROTOCOL_VERSION);
       } else {
-        SerialPrintf(" is running sketch (fw %s%s)\n",
-                     facts[unitIndex].version,
-                     facts[unitIndex].fwStatus == 0 ? "" : " — OUTDATED");
+        SerialPrintf(" is running sketch (fw %s%s)\n", fact.version,
+                     fact.fwStatus == 0 ? "" : " — OUTDATED");
       }
     } else {
-      // Unreadable, NOT known-different: stays "unknown" and keeps the
-      // conservative v1 #114 treatment, so a unit we simply cannot read does
-      // not trigger a reflash cycle at every power-up.
       SerialPrintln(F(" is running sketch (fw UNKNOWN — unreadable version reply)"));
     }
-    // Offset is a probe-time fact (#204): GET /unit/offset serves from the
-    // snapshot, so every sketch unit's stored offset is read here. Old
-    // firmware (pre-#32) fails the read and stays offsetValid=false.
-    int16_t offset;
-    if (readUnitOffset(i2cAddress, offset)) {
-      facts[unitIndex].offset = offset;
-      facts[unitIndex].offsetValid = true;
-    }
-    // Odometer is a probe-time fact like the offset (#231); pre-odometer
-    // firmware fails the checksum and stays odometerValid=false.
-    uint32_t odometer;
-    if (readUnitOdometer(i2cAddress, odometer)) {
-      facts[unitIndex].odometer = odometer;
-      facts[unitIndex].odometerValid = true;
-    }
-    // Drift diagnostics ride the probe too (#263/#264); pre-diag firmware
-    // fails the checksum and stays diagValid=false.
-    refreshUnitDiag(facts[unitIndex], i2cAddress);
-    // Supply-Vcc diagnostics ride the probe too (#306); pre-vitals firmware
-    // fails the checksum and stays vitalsValid=false.
-    refreshUnitVitals(facts[unitIndex], i2cAddress);
-    // New-measurement diagnostics ride the probe too (#365); pre-ext-diag
-    // firmware fails the checksum and stays extDiagValid=false.
-    refreshUnitExtDiag(facts[unitIndex], i2cAddress);
-    // Lifetime health rides the probe too (#406); pre-lifetime firmware
-    // fails the length check and stays lifetimeValid=false.
-    refreshUnitLifetime(facts[unitIndex], i2cAddress);
-    // Boot-section verdict rides the probe too (#520).
-    refreshUnitBootVerdict(facts[unitIndex], unitIndex);
   }
   // #367: the per-unit reset above zeroed the facts' error fields, but the
   // attributed counters are lifetime — restore them so a probe rescan doesn't
@@ -670,43 +378,13 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   // #405: a unit speaking an unrecognised contract is not polled either — its
   // reply layout is by definition unknown, so reading it would be guessing.
   if (!unitDrivable(facts[i])) return false;
-  UnitStatus s;
-  bool ok = readUnitStatus(toI2cAddress(i), s);
-  if (ok) {
-    facts[i].status = s;
-    facts[i].statusValid = true;
-    facts[i].resetSeen = unitResetBaselineFold(
-        resetBaselines[i], s.lifetimeBrownoutCount, s.lifetimeWatchdogCount);
-  } else {
-    // #367: the heartbeat status read is the clean per-unit liveness probe —
-    // charge its failure to this column. Odometer/diag/vitals sub-reads below
-    // are NOT charged: they fail routinely on pre-opcode firmware and would
-    // misattribute a healthy unit as flaky.
-    noteUnitError(i);
-  }
-  // Refresh the odometer with the same validity semantics as the status:
-  // reset, then re-read, so a unit that stops answering (or was reflashed
-  // to pre-odometer firmware) doesn't keep serving a stale count (#231).
-  uint32_t odometer;
-  if (readUnitOdometer(toI2cAddress(i), odometer)) {
-    facts[i].odometer = odometer;
-    facts[i].odometerValid = true;
-  }
-  // Drift diagnostics refresh on the same cadence (#263/#264).
-  refreshUnitDiag(facts[i], toI2cAddress(i));
-  // Supply-Vcc diagnostics refresh on the same cadence (#306).
-  refreshUnitVitals(facts[i], toI2cAddress(i));
-  // New-measurement diagnostics refresh on the same cadence (#365); not
-  // charged to #367 error attribution — see readUnitStatus above.
-  refreshUnitExtDiag(facts[i], toI2cAddress(i));
-  // Lifetime health refreshes on the same cadence (#406). It changes rarely —
-  // only a failed homing, a new drag record or a self-test moves it — but a
-  // failed homing is exactly the signal that must not wait for the next probe
-  // to surface. Not charged to #367 error attribution, like ext-diag above.
-  refreshUnitLifetime(facts[i], toI2cAddress(i));
-  // Boot-section verdict on the same cadence (#520): the unit recomputes its
-  // report on a timer, so this is what turns that into a standing watch.
-  refreshUnitBootVerdict(facts[i], i);
+  bool ok = unitPollHealth(unitBus, unitBusNotes, facts[i],
+                           (uint8_t)toI2cAddress(i), resetBaselines[i],
+                           bootVerdictLogged[i]);
+  // #367: the heartbeat status read is the clean per-unit liveness probe —
+  // charge its failure to this column (the diagnostic sub-reads are not
+  // charged; they fail routinely on pre-opcode firmware).
+  if (!ok) noteUnitError(i);
   // ok == the CMD_GET_STATUS read succeeded — the heartbeat liveness signal
   // (#310); the caller folds it into the miss counter.
   return ok;
@@ -746,7 +424,8 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
     if (renderStaggerShouldSettle(commanded, RENDER_STAGGER_BATCH)) {
       delay(RENDER_STAGGER_SETTLE_MS);
     }
-    if (writeToUnit(unitIndex, letters[unitIndex], (uint8_t)unitSpeed) != 0) {
+    if (unitWriteLetter(unitBus, (uint8_t)toI2cAddress(unitIndex),
+                        letters[unitIndex], (uint8_t)unitSpeed) != 0) {
       writeErrors++;
       noteUnitError(unitIndex);  // #367: attribute the render write to its unit
     }
@@ -773,48 +452,25 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
 // The complement stops the unit persisting a corrupted write; the read-back
 // stops the master reporting success for a write that never took.
 int unitBusWriteOffset(int i2cAddress, int16_t value) {
-  uint8_t payload[SET_OFFSET_PAYLOAD_LEN];
-  setOffsetEncode(value, payload);
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_SET_OFFSET);
-  Wire.write(payload, SET_OFFSET_PAYLOAD_LEN);
-  int txStatus = countedTransmission();
-  if (txStatus != 0) return txStatus;
-  // The unit persists in loop context, not the TWI ISR — let the write drain.
-  delay(UNIT_OFFSET_WRITE_SETTLE_MS);
-  int16_t readBack = 0;
-  if (!readUnitOffset(i2cAddress, readBack)) return UNIT_BUS_OFFSET_UNVERIFIED;
-  if (readBack != value) return UNIT_BUS_OFFSET_MISMATCH;
-  return 0;
+  return unitWriteOffset(unitBus, (uint8_t)i2cAddress, value);
 }
 
 int unitBusJog(int i2cAddress, int steps) {
   admitMotion();
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_JOG);
-  uint8_t jog[JOG_PAYLOAD_LEN];
-  jogEncode(maintEncodeJogByte(steps), jog);
-  Wire.write(jog, JOG_PAYLOAD_LEN);
-  return countedTransmission();
+  return unitJog(unitBus, (uint8_t)i2cAddress, steps);
 }
 
 int unitBusHome(int i2cAddress) {
   admitMotion();
-  Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_HOME);
-  return countedTransmission();
+  return unitHome(unitBus, (uint8_t)i2cAddress);
 }
 
 int unitBusIdentify(int i2cAddress) {
-  Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_IDENTIFY);
-  return countedTransmission();
+  return unitIdentify(unitBus, (uint8_t)i2cAddress);
 }
 
 int unitBusResetOdometer(int i2cAddress) {
-  Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_RESET_ODOMETER);
-  return countedTransmission();
+  return unitResetOdometer(unitBus, (uint8_t)i2cAddress);
 }
 
 // Feature gates (#409). The write half of the byte GET_LIFETIME reports, and
@@ -822,64 +478,31 @@ int unitBusResetOdometer(int i2cAddress) {
 // afterwards — so it is, unlike SET_I2C_ADDRESS. The unit refuses gate bits it
 // has no code for, which lands here as a MISMATCH rather than a silent 0.
 int unitBusSetGates(int i2cAddress, uint8_t gates) {
-  uint8_t payload[SET_GATES_PAYLOAD_LEN];
-  setGatesEncode(gates, payload);
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_SET_GATES);
-  Wire.write(payload, SET_GATES_PAYLOAD_LEN);
-  int txStatus = countedTransmission();
-  if (txStatus != 0) return txStatus;
-  // The unit persists in loop context, not the TWI ISR — let the write drain.
-  delay(UNIT_GATES_WRITE_SETTLE_MS);
-  UnitLifetimeFacts lt;
-  if (!readUnitLifetime(i2cAddress, lt)) return UNIT_BUS_GATES_UNVERIFIED;
-  if (lt.featureGates != gates) return UNIT_BUS_GATES_MISMATCH;
-  return 0;
+  return unitSetGates(unitBus, (uint8_t)i2cAddress, gates);
 }
 
 int unitBusStartSelfTest(int i2cAddress) {
   admitMotion();
-  Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_START_SELF_TEST);
-  return countedTransmission();
+  return unitStartSelfTest(unitBus, (uint8_t)i2cAddress);
 }
 
 bool unitBusReadSelfTest(int i2cAddress, UnitSelfTestReading& out) {
-  uint8_t buf[SELFTEST_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_SELF_TEST, buf,
-                 SELFTEST_REPLY_LEN)) {
-    return false;
-  }
-  return selfTestReadbackValid(buf, out);
+  return unitReadSelfTest(unitBus, (uint8_t)i2cAddress, out);
 }
 
 bool unitBusReadBootInfo(int i2cAddress, BootUpdateReport& out) {
-  uint8_t buf[BOOT_INFO_REPLY_LEN];
-  if (!queryUnit(i2cAddress, (uint8_t)SFP_CMD_GET_BOOT_INFO, buf,
-                 BOOT_INFO_REPLY_LEN)) {
-    return false;
-  }
-  return bootInfoDecode(buf, out);
+  return unitReadBootInfo(unitBus, (uint8_t)i2cAddress, out);
 }
 
 int unitBusBootUpdate(int i2cAddress, uint8_t stage) {
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_BOOT_UPDATE);
-  Wire.write(stage);
-  Wire.write((uint8_t)~stage);
-  return countedTransmission();
+  return unitSendBootUpdate(unitBus, (uint8_t)i2cAddress, stage);
 }
 
 // The unit watchdog-resets into twiboot, which listens ~1 s on the
 // DIP-derived address. HARD RULE (v1 #88): never probe while a unit can be
 // in its twiboot window — the CHIPINFO query pins the bootloader alive.
 int unitBusRebootToBootloader(int i2cAddress) {
-  Wire.beginTransmission(i2cAddress);
-  // Bare on purpose: the one-byte form is the fixed-forever one every unit
-  // accepts (#512), and a unit already sitting in twiboot ACKs exactly one
-  // byte — a guard byte would turn that status into a NACK.
-  Wire.write((uint8_t)SFP_CMD_ENTER_BOOTLOADER);
-  return countedTransmission();
+  return unitEnterBootloader(unitBus, (uint8_t)i2cAddress);
 }
 
 // Value + bitwise complement (#405). Cannot be verified afterwards by
@@ -889,27 +512,16 @@ int unitBusRebootToBootloader(int i2cAddress) {
 // used to relocate a unit to an address nobody was looking at, recoverable
 // only by a physical trip to re-DIP (twiboot listens on the DIP address).
 int unitBusSetAddress(int i2cAddress, uint8_t newAddress) {
-  uint8_t payload[SET_ADDRESS_PAYLOAD_LEN];
-  setAddressEncode(newAddress, payload);
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)SFP_CMD_SET_I2C_ADDRESS);
-  Wire.write(payload, SET_ADDRESS_PAYLOAD_LEN);
-  return countedTransmission();
+  return unitSetAddress(unitBus, (uint8_t)i2cAddress, newAddress);
 }
 
 int unitBusClearAddress(int i2cAddress) {
-  Wire.beginTransmission(i2cAddress);
-  writeGuardedOpcode(SFP_CMD_CLEAR_I2C_ADDRESS);
-  return countedTransmission();
+  return unitClearAddress(unitBus, (uint8_t)i2cAddress);
 }
 
 // --- unit reflash over twiboot (#205) -----------------------------------------
 UnitRescueProbe unitBusRescueProbe(int i2cAddress) {
-  Wire.beginTransmission((uint8_t)i2cAddress);
-  if (Wire.endTransmission() != 0) return UnitRescueProbe::NoAck;
-  if (!isUnitInBootloader(i2cAddress)) return UnitRescueProbe::SketchSilent;
-  twibootExit(twibootBus, (uint8_t)i2cAddress);
-  return UnitRescueProbe::Bootloader;
+  return unitRescueProbe(unitBus, (uint8_t)i2cAddress);
 }
 
 // The 132-byte page burst must fit the Wire TX buffer in one transaction —
@@ -922,6 +534,7 @@ static_assert(I2C_BUFFER_LENGTH >= TWIBOOT_PAGE_SIZE + 4,
 const char* unitFlashResultName(UnitFlashResult r) {
   switch (r) {
     case UnitFlashResult::Ok:               return "ok";
+    case UnitFlashResult::ImageTooLarge:    return "image-too-large";
     case UnitFlashResult::BootloaderSilent: return "bootloader-silent";
     case UnitFlashResult::ChipMismatch:     return "chip-mismatch";
     case UnitFlashResult::PageFailed:       return "page-failed";
@@ -936,147 +549,90 @@ bool unitBusWaitBatchIdle(const uint8_t* addrs, int count,
   if (count <= 0) return true;
   SerialPrintf("  waiting for %d unit(s) to come online + finish homing...\n",
                count);
-  delay(1000);  // let CMD_REBOOT take effect before polling
-  uint32_t start = millis();
-  while (millis() - start < timeoutMs) {
-    wdtFeed();  // #314: feed the TWDT through the batch-settle poll
-    bool allIdle = true;
-    for (int k = 0; k < count; k++) {
-      // checkIfMoving takes a unit INDEX; addrs carry bus addresses.
-      if (checkIfMoving(addrs[k] - SFP_I2C_ADDRESS_BASE) != 0) {
-        allIdle = false;
-        break;
-      }
-    }
-    if (allIdle) {
-      SerialPrintln(F("  batch online + idle"));
-      return true;
-    }
-    delay(100);
-  }
-  SerialPrintln(F("  batch settle timed out — continuing anyway"));
-  return false;
+  // #314: feed the TWDT through the batch-settle poll.
+  bool idle = unitWaitBatchIdle(unitBus, addrs, count, timeoutMs,
+                                []() { wdtFeed(); });
+  SerialPrintln(idle ? F("  batch online + idle")
+                     : F("  batch settle timed out — continuing anyway"));
+  return idle;
 }
 
 UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out) {
-  const uint8_t addr = (uint8_t)i2cAddress;
-  if (!twibootAwaitBootloader(twibootBus, addr)) {
-    return UnitBootReadResult::BootloaderSilent;
-  }
-
-  UnitBootReadResult result = UnitBootReadResult::Ok;
-  if (twibootVerifyChip(twibootBus, addr) != TwibootStep::Ok) {
-    result = UnitBootReadResult::ChipMismatch;
-  } else {
-    for (int page = 0; page < BOOT_SECTION_LEN / TWIBOOT_PAGE_SIZE; page++) {
-      wdtFeed();
-      uint16_t flashAddr =
-          (uint16_t)(BOOT_SECTION_START + page * TWIBOOT_PAGE_SIZE);
-      uint8_t* dst = out + page * TWIBOOT_PAGE_SIZE;
-      if (!twibootReadFlashPage(twibootBus, addr, flashAddr, dst) &&
-          !twibootReadFlashPage(twibootBus, addr, flashAddr, dst)) {
-        result = UnitBootReadResult::ReadFailed;
-        break;
-      }
-    }
-  }
-
-  // Whatever the read did, the unit must not stay parked in twiboot: start
-  // the sketch, then the clean watchdog restart a flash ends with (v1 #113).
-  bool exited = false;
-  for (int attempt = 0; attempt < 3 && !exited; attempt++) {
-    exited = twibootExit(twibootBus, addr) == 0;
-    if (!exited) delay(20);
-  }
-  if (!exited) {
-    // Still in twiboot: it falls back to the sketch once nothing talks to it,
-    // and the lost-unit rescue (#498) sends the exit again. A reboot command
-    // here would only be another byte keeping the boot window open.
+  bool exitAcked = false;
+  bool answeredAfter = false;
+  UnitBootReadResult result = unitReadBootSection(
+      unitBus, (uint8_t)i2cAddress, out, []() { wdtFeed(); }, exitAcked,
+      answeredAfter);
+  if (result == UnitBootReadResult::BootloaderSilent) return result;
+  if (!exitAcked) {
     SerialPrintf("Unit 0x%02x did not ACK the twiboot exit after the "
                  "boot-section read\n", i2cAddress);
-    return result;
-  }
-  wdtFeed();
-  delay(2000);
-  Wire.beginTransmission((uint8_t)i2cAddress);
-  if (Wire.endTransmission() == 0) {
-    Wire.beginTransmission((uint8_t)i2cAddress);
-    writeGuardedOpcode(SFP_CMD_REBOOT);
-    Wire.endTransmission();
-  } else {
+  } else if (!answeredAfter) {
     SerialPrintf("Unit 0x%02x not responding after the boot-section read\n",
                  i2cAddress);
   }
   return result;
 }
 
+namespace {
+// displayTask's side of a unit flash: feed the task watchdog between pages
+// (#314) and stop when /stop asked for it.
+struct FlashWatch {
+  uint8_t addr;
+  bool keepGoing() {
+    wdtFeed();
+    return !abortRequested.load();
+  }
+  void pageRewritten(uint16_t flashAddr, uint8_t rewrites) {
+    SerialPrintf("Verify mismatch at 0x%02x page 0x%04x (%u write(s) read "
+                 "back wrong)\n",
+                 addr, flashAddr, (unsigned)rewrites);
+  }
+};
+}  // namespace
+
 UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
                                  size_t len) {
-  if (!twibootImageFits(len)) {
-    SerialPrintf("Unit image too large (%u > %u) — would overwrite twiboot\n",
-                 (unsigned)len, (unsigned)BOOT_SECTION_START);
-    return UnitFlashResult::Aborted;
-  }
-
   SerialPrintf("Flashing unit at 0x%02x (%u bytes)\n", i2cAddress,
                (unsigned)len);
-
   const uint8_t addr = (uint8_t)i2cAddress;
-  if (!twibootAwaitBootloader(twibootBus, addr)) {
-    return UnitFlashResult::BootloaderSilent;
-  }
-  TwibootStep chip = twibootVerifyChip(twibootBus, addr);
-  if (chip != TwibootStep::Ok) {
-    SerialPrintf("Unit 0x%02x chip check failed: %s\n", i2cAddress,
-                 twibootStepName(chip));
-    return UnitFlashResult::ChipMismatch;
-  }
-
-  size_t pageCount = len / TWIBOOT_PAGE_SIZE;
-  for (size_t pageIndex = 0; pageIndex < pageCount; pageIndex++) {
-    // #348: ~87 pages × up to ~300 ms each on a degraded bus approaches the
-    // 30 s TWDT with no feed — feed per page, not per unit.
-    wdtFeed();
-    if (abortRequested.load()) {
-      SerialPrintln(F("Unit flash aborted by /stop — unit left in twiboot"));
-      return UnitFlashResult::Aborted;
-    }
-    uint16_t flashAddr = (uint16_t)(pageIndex * TWIBOOT_PAGE_SIZE);
-    uint8_t rewrites = 0;
-    TwibootStep step = twibootFlashAndVerifyPage(
-        twibootBus, addr, flashAddr, image + pageIndex * TWIBOOT_PAGE_SIZE,
-        &rewrites);
-    if (rewrites > 0) {
-      SerialPrintf("Verify mismatch at 0x%02x page 0x%04x (%u write(s) "
-                   "read back wrong)\n",
-                   i2cAddress, flashAddr, (unsigned)rewrites);
-    }
-    if (step != TwibootStep::Ok) {
-      // Boot auto-install retries later; the unit never boots a half-written
-      // sketch.
+  FlashWatch watch{addr};
+  UnitFlashReport report = unitFlashImage(
+      unitBus, addr, len,
+      [image](size_t pageIndex, uint8_t* buf) {
+        memcpy(buf, image + pageIndex * TWIBOOT_PAGE_SIZE, TWIBOOT_PAGE_SIZE);
+      },
+      watch);
+  switch (report.result) {
+    case UnitFlashResult::Ok:
+      if (report.rebootStatus != 0) {
+        SerialPrintf("Unit 0x%02x CMD_REBOOT failed (status %d)\n", i2cAddress,
+                     report.rebootStatus);
+      }
+      SerialPrintf("Unit 0x%02x flashed (%u bytes) — sent CMD_REBOOT\n",
+                   i2cAddress, (unsigned)len);
+      break;
+    case UnitFlashResult::ImageTooLarge:
+      SerialPrintf("Unit image too large (%u > %u) — would overwrite twiboot\n",
+                   (unsigned)len, (unsigned)BOOT_SECTION_START);
+      break;
+    case UnitFlashResult::ChipMismatch:
+      SerialPrintf("Unit 0x%02x chip check failed: %s\n", i2cAddress,
+                   twibootStepName(report.step));
+      break;
+    case UnitFlashResult::PageFailed:
       SerialPrintf("Unit flash FAILED at page 0x%04x (%s) — unit left in "
                    "twiboot\n",
-                   flashAddr, twibootStepName(step));
-      return UnitFlashResult::PageFailed;
-    }
+                   report.pageAddr, twibootStepName(report.step));
+      break;
+    case UnitFlashResult::PostBootSilent:
+      SerialPrintf("Unit 0x%02x not responding post-flash\n", i2cAddress);
+      break;
+    case UnitFlashResult::Aborted:
+      SerialPrintln(F("Unit flash aborted by /stop — unit left in twiboot"));
+      break;
+    default:
+      break;
   }
-
-  if (twibootExit(twibootBus, addr) != 0) return UnitFlashResult::ExitFailed;
-
-  // CMD_REBOOT gives the fresh sketch a clean watchdog restart (fresh
-  // peripherals/MCUSR, DIP + EEPROM address re-read; v1 #113).
-  if (!twibootAwaitSketch(twibootBus, addr)) {
-    SerialPrintf("Unit 0x%02x not responding post-flash\n", i2cAddress);
-    return UnitFlashResult::PostBootSilent;
-  }
-  Wire.beginTransmission(addr);
-  writeGuardedOpcode(SFP_CMD_REBOOT);
-  int rebootStatus = countedTransmission();
-  if (rebootStatus != 0) {
-    SerialPrintf("Unit 0x%02x CMD_REBOOT failed (status %d)\n",
-                 i2cAddress, rebootStatus);
-  }
-  SerialPrintf("Unit 0x%02x flashed (%u bytes) — sent CMD_REBOOT\n",
-               i2cAddress, (unsigned)len);
-  return UnitFlashResult::Ok;
+  return report.result;
 }

@@ -90,23 +90,31 @@ def test_unit_checks_the_guard_before_dispatching_an_opcode():
     assert "UNIT_GATE_STRICT_OPCODES" in body
 
 
+CORE = V2 / "shared" / "UnitBusCore.h"
+
+
 def test_masters_never_send_a_guarded_opcode_bare():
+    """The frames are shared/UnitBusCore.h; no row master writes an opcode."""
+    core = _strip_comments(CORE.read_text())
+    guarded = _function_body(core, "inline int unitSendGuarded(")
+    assert "bus.write(opcode);" in guarded
+    assert "bus.write(noArgGuardByte(opcode));" in guarded
+    for op in _noarg_mutations():
+        sent_guarded = re.search(r"unitSendGuarded\(bus, i2cAddress, %s\)" % op, core)
+        if op == "SFP_CMD_ENTER_BOOTLOADER":
+            # Fixed-forever one-byte form; a unit in twiboot ACKs one byte.
+            enter = _function_body(core, "inline int unitEnterBootloader(")
+            assert "SFP_CMD_ENTER_BOOTLOADER" in enter and "nullptr, 0" in enter
+            assert not sent_guarded, f"{op} must stay bare"
+        else:
+            assert sent_guarded, f"{op} is not sent with its guard byte"
     for path in MASTER_BUSES:
         src = _strip_comments(path.read_text())
-        for op in _noarg_mutations():
-            bare = re.findall(r"Wire\.write\(\s*\(uint8_t\)\s*%s\s*\)" % op, src)
-            guarded = re.findall(r"writeGuardedOpcode\(\s*%s\s*\)" % op, src)
-            if op == "SFP_CMD_ENTER_BOOTLOADER":
-                # Fixed-forever one-byte form; a unit in twiboot ACKs one byte.
-                assert bare and not guarded, f"{path.name}: {op} must stay bare"
-            else:
-                assert not bare, f"{path.name}: {op} is sent without its guard byte"
-        body = _function_body(src, "static void writeGuardedOpcode(uint8_t opcode)")
-        assert "Wire.write(opcode);" in body and "Wire.write(noArgGuardByte(opcode));" in body
+        assert not re.findall(r"\bSFP_CMD_\w+", src), (
+            f"{path.name} frames a unit command itself")
 
 
 def test_masters_send_jog_with_its_complement():
-    for path in MASTER_BUSES:
-        src = _strip_comments(path.read_text())
-        after = src[src.index("SFP_CMD_JOG"):][:300]
-        assert "jogEncode(" in after and "Wire.write(jog, JOG_PAYLOAD_LEN);" in after, path.name
+    jog = _function_body(_strip_comments(CORE.read_text()), "inline int unitJog(")
+    assert "jogEncode(maintEncodeJogByte(steps), payload);" in jog
+    assert "JOG_PAYLOAD_LEN" in jog

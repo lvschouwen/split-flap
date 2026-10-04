@@ -6,7 +6,7 @@
 
 #include <unity.h>
 #include <stdint.h>
-#include "../../DriftLogPolicy.h"
+#include "DriftLogPolicy.h"
 
 void setUp() {}
 void tearDown() {}
