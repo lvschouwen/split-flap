@@ -15,7 +15,7 @@
  * across the two sketches AND data/script.js, kept in sync by comment only —
  * drift silently sent wrong characters or mis-decoded opcodes and nothing in
  * CI caught it. Everything on the wire now derives from the macros below:
- *   - master  : `letters[]`      = SFP_ALPHABET, FLAP_AMOUNT  = SFP_FLAP_AMOUNT
+ *   - master  : FlapLetters.h maps text through SFP_ALPHABET
  *   - unit    : `LETTER_CHARS[]` = SFP_ALPHABET, AMOUNTFLAPS  = SFP_FLAP_AMOUNT
  *   - web UI  : data/script.js CALIBRATION_LETTERS is verified byte-for-byte
  *               against SFP_ALPHABET at build time by build_assets.py.

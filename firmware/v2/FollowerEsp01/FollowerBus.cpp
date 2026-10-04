@@ -11,6 +11,7 @@
 #include "BuildVersion.h"  // GIT_REV + BUNDLED_UNIT_REV (build_assets.py)
 #include "FollowerBusRecovery.h"  // pure row-wide bus-death policy (#488)
 #include "DisplayWidth.h"
+#include "FlapLetters.h"  // shared character/speed mapping
 #include "FollowerConfig.h"
 #include "FollowerWifi.h"  // followerRadioBusy (#505)
 #include "HeartbeatPolicy.h"  // pure heartbeat miss/schedule logic (#310)
@@ -27,8 +28,6 @@ UnitFacts unitFacts[UNITS_AMOUNT];
 int displayWidth = UNITS_AMOUNT;
 int detectedUnitCount = 0;
 ReflashProgress reflashProgress;
-
-static const char letters[] = SFP_ALPHABET;
 
 // v1 #88: probes must never land inside a twiboot window.
 static uint32_t probeInhibitUntilMs = 0;
@@ -530,13 +529,6 @@ void followerHeartbeatTick() {
 #endif
 }
 
-static int translateLetterToInt(char letterChar) {
-  for (int i = 0; i < SFP_FLAP_AMOUNT; i++) {
-    if (letterChar == letters[i]) return i;
-  }
-  return -1;
-}
-
 static int writeToUnit(int unitIndex, int letter, int speed) {
   Wire.beginTransmission(toI2cAddress(unitIndex));
   Wire.write(letter);
@@ -643,20 +635,10 @@ static void waitForRowToStop() {
   }
 }
 
-// A unit clamps the speed byte to SFP_UNIT_SPEED_MAX, so a wider range here
-// would silently flatten its top end.
-static_assert(MIN_SPEED >= 1 && MAX_SPEED <= SFP_UNIT_SPEED_MAX,
-              "the wire speed range must stay inside what a unit accepts");
-
-static int convertWebSpeed(int webSpeed) {
-  webSpeed = constrain(webSpeed, 1, 100);
-  return map(webSpeed, 1, 100, MIN_SPEED, MAX_SPEED);
-}
-
 void busShowSegment(const String& segment, int webSpeed) {
 #if SERIAL_ENABLE == false
   const int width = displayWidth;
-  const int speed = convertWebSpeed(webSpeed);
+  const int speed = convertSpeedToUnit(webSpeed);
   // Segments arrive pre-positioned from the leader: pad/truncate to the
   // probed width, no alignment pass.
   String frame = segment;
@@ -675,8 +657,7 @@ void busShowSegment(const String& segment, int webSpeed) {
   int commandedCount = 0;
   for (int i = 0; i < width; i++) {
     if (!unitDrivable(unitFacts[i])) continue;  // #405
-    int letter = translateLetterToInt(frame[i]);
-    if (letter < 0) continue;  // char not on the drum: leave the unit be
+    int letter = flapLetterOrBlank(frame[i]);
     // #505: at most the budget's cap moving at once — the steady draw of
     // every energised stepper, not just the start spike, sags the rail.
     waitForMotionSlot(movers);

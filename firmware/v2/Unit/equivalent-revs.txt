@@ -61,3 +61,8 @@ d1d7dfb f93f649147bf129e9ad21bd29013865abdbfe07bc34ead3a4eae8ef1a1bffa17
 # Nano never compiles. Measured against the staged 34c72e0 image (all 21 units
 # on the wall run it), clean build: identical.
 34c72e0 79b8235899693bc5508825de93760629aab5580b74b5aaad8672be706b084a12
+
+# Epic #538 moves row-master logic into shared/ headers the Nano never
+# compiles. Unit 1 of each row runs the 795f0af image, which is the 34c72e0
+# image above (same content hash).
+795f0af 79b8235899693bc5508825de93760629aab5580b74b5aaad8672be706b084a12

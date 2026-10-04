@@ -21,10 +21,6 @@
 #define FOLLOWER_JOIN_ATTEMPTS 3
 #define FOLLOWER_JOIN_WINDOW_S 30
 
-// Unit speed byte range (v1 values; the wire contract's rpm scale).
-#define MIN_SPEED 1
-#define MAX_SPEED 12
-
 #include <Arduino.h>
 
 #ifndef UNIT_TEST
