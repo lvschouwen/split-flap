@@ -275,7 +275,8 @@ static inline BootUpdateResult bootRunStage(uint8_t stage, uint8_t lockByte) {
     bootStage1InstallDoSpm();
   }
   if (stage == 2) {
-    if (st != BOOT_STATE_PAGE7_INSTALLED && st != BOOT_STATE_TRAMPOLINE) {
+    if (st != BOOT_STATE_PAGE7_INSTALLED && st != BOOT_STATE_TRAMPOLINE &&
+        st != BOOT_STATE_PREV_NEW) {
       return BOOT_RESULT_REFUSED_STATE;
     }
     if (!bootLockPermitsBootWrite(lockByte)) return BOOT_RESULT_REFUSED_LOCK;

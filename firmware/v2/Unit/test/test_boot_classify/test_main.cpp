@@ -13,7 +13,7 @@ void tearDown() {}
 // Stand-in constants from the generated new-image header. The classifier takes
 // them as parameters so it never embeds build-specific values; the real caller
 // passes NEW_TWIBOOT_CRC32 / NEW_TWIBOOT_PAGE7_INSTALLED_CRC32.
-static const uint32_t NEW_CRC = 0xe422a668UL;
+static const uint32_t NEW_CRC = 0xf8cdd7a1UL;
 static const uint32_t P7_CRC = 0x12345678UL;  // fielded 0-6 + new page 7
 // A pages-0-6 CRC that is NOT the fielded core, so the retriable fallback does
 // not fire unless a test opts in with BOOT_FIELDED_PAGES_0_6_CRC32.
@@ -97,6 +97,22 @@ static void test_dirty_page7_without_fielded_core_is_unknown() {
   TEST_ASSERT_EQUAL(BOOT_STATE_UNKNOWN, classifyBootSection(f, NEW_CRC, P7_CRC));
 }
 
+// --- previous new: a known prior image, stage-2-only path -------------------
+
+static void test_prev_new_is_prev_new_crc() {
+  TEST_ASSERT_EQUAL(BOOT_STATE_PREV_NEW,
+                    classifyBootSection(facts(BOOT_PREV_NEW_CRC32, 0x24c0, 0),
+                                        NEW_CRC, P7_CRC));
+}
+
+static void test_prev_new_does_not_shadow_current_new() {
+  // If the current image CRC happens to equal BOOT_PREV_NEW_CRC32 (only when
+  // test stand-ins match), NEW wins because it is checked first.
+  TEST_ASSERT_EQUAL(BOOT_STATE_NEW,
+                    classifyBootSection(facts(BOOT_PREV_NEW_CRC32, 0x24c0, 0),
+                                        BOOT_PREV_NEW_CRC32, P7_CRC));
+}
+
 // --- anything else is Unknown and refuses every update ----------------------
 
 static void test_garbage_is_unknown() {
@@ -130,6 +146,8 @@ int main(int, char**) {
   RUN_TEST(test_trampoline_detected_by_page0_jmp);
   RUN_TEST(test_trampoline_needs_both_words);
   RUN_TEST(test_clean_crc_beats_trampoline_marker);
+  RUN_TEST(test_prev_new_is_prev_new_crc);
+  RUN_TEST(test_prev_new_does_not_shadow_current_new);
   RUN_TEST(test_dirty_page7_with_fielded_core_is_old);
   RUN_TEST(test_dirty_page7_without_fielded_core_is_unknown);
   RUN_TEST(test_garbage_is_unknown);

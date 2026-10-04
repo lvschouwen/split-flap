@@ -80,7 +80,7 @@ inline bool bootInfoDecode(const uint8_t buf[BOOT_INFO_REPLY_LEN],
   if (buf[BOOT_INFO_REPLY_LEN - 1] != (uint8_t)(x ^ BOOT_INFO_CHECKSUM_MASK)) {
     return false;
   }
-  if (buf[8] > BOOT_STATE_NEW) return false;           // BootSectionState range
+  if (buf[8] > BOOT_STATE_PREV_NEW) return false;       // BootSectionState range
   uint8_t result = (uint8_t)(buf[9] & ~BOOT_INFO_FLAG_LOCKFUSE_UNREADABLE);
   if (result >= BOOT_RESULT_COUNT) return false;       // BootUpdateResult range
   out.lockByte = buf[0];

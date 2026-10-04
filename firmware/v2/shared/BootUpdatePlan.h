@@ -35,6 +35,7 @@ inline BootUpdatePlan bootUpdateDecide(const BootUpdateReport& info) {
       break;
     case BOOT_STATE_PAGE7_INSTALLED:
     case BOOT_STATE_TRAMPOLINE:
+    case BOOT_STATE_PREV_NEW:
       needStage2 = true;
       break;
     default:

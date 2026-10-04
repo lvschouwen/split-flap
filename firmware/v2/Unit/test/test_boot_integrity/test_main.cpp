@@ -70,6 +70,11 @@ static void test_known_other_images_are_outdated_not_corrupt() {
   TEST_ASSERT_EQUAL(BOOT_INTEGRITY_OUTDATED,
                     bootIntegrityJudge(report(0x12345678UL, BOOT_STATE_NEW),
                                        BOOT_CURRENT_CRC32));
+  // A unit carrying the previous new-twiboot image.
+  TEST_ASSERT_EQUAL(
+      BOOT_INTEGRITY_OUTDATED,
+      bootIntegrityJudge(report(BOOT_PREV_NEW_CRC32, BOOT_STATE_PREV_NEW),
+                         BOOT_CURRENT_CRC32));
 }
 
 static void test_the_crc_outranks_the_units_own_label() {

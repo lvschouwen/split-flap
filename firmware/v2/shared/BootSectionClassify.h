@@ -19,6 +19,7 @@ enum BootSectionState {
   BOOT_STATE_PAGE7_INSTALLED,  // fielded pages 0-6 + do_spm in page 7 (post stage 1)
   BOOT_STATE_TRAMPOLINE,       // page 0 is a jmp-to-app trampoline (mid stage 2)
   BOOT_STATE_NEW,              // new twiboot fully installed
+  BOOT_STATE_PREV_NEW,         // a previous new image (do_spm in page 7, old pages 0-6)
 };
 
 // crc32 (zlib / reflected 0xEDB88320) of the fielded image over 0x7C00-0x7FFF.
@@ -29,6 +30,11 @@ enum BootSectionState {
 // NEW_TWIBOOT_CRC32 is the source; the unit build asserts the two equal and
 // tests/test_new_twiboot_image pins it for the trees that never see that header.
 #define BOOT_CURRENT_CRC32 0xf8cdd7a1UL
+// crc32 of the previous new-twiboot image (#499 original, before #546
+// optimised pages 0-6). All 21 fielded units carry this image; page 7 is
+// byte-identical to the current image (do_spm.S unchanged), so only stage 2
+// is needed. The runtime guard is bootPage7HoldsDoSpm() in BootUpdateAvr.h.
+#define BOOT_PREV_NEW_CRC32 0xe422a668UL
 // crc32 of just the fielded pages 0-6 (0x7C00-0x7F7F, the twiboot core, page 7
 // excluded). Stage 1 only writes page 7, so this is what survives a half-done or
 // retried stage 1 — see the retriable case in classifyBootSection. Also pinned
@@ -58,6 +64,7 @@ inline BootSectionState classifyBootSection(const BootSectionFacts& f,
                                             uint32_t newFullCrc32,
                                             uint32_t page7InstalledCrc32) {
   if (f.fullCrc32 == newFullCrc32) return BOOT_STATE_NEW;
+  if (f.fullCrc32 == BOOT_PREV_NEW_CRC32) return BOOT_STATE_PREV_NEW;
   if (f.fullCrc32 == BOOT_FIELDED_CRC32) return BOOT_STATE_OLD;
   if (f.fullCrc32 == page7InstalledCrc32) return BOOT_STATE_PAGE7_INSTALLED;
   if (f.page0Word0 == BOOT_TRAMPOLINE_WORD0 &&

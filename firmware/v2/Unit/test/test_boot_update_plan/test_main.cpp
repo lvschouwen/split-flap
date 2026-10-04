@@ -57,6 +57,14 @@ static void test_trampoline_needs_stage2_only() {
   TEST_ASSERT_EQUAL(BOOT_PLAN_PROCEED, p.terminal);
 }
 
+static void test_prev_new_needs_stage2_only() {
+  BootUpdatePlan p = bootUpdateDecide(
+      makeReport(BOOT_STATE_PREV_NEW, 0xFF));
+  TEST_ASSERT_FALSE(p.needStage1);
+  TEST_ASSERT_TRUE(p.needStage2);
+  TEST_ASSERT_EQUAL(BOOT_PLAN_PROCEED, p.terminal);
+}
+
 static void test_unknown_state_refuses() {
   BootUpdatePlan p = bootUpdateDecide(makeReport(BOOT_STATE_UNKNOWN, 0xFF));
   TEST_ASSERT_FALSE(p.needStage1);
@@ -76,7 +84,7 @@ static void test_page7_installed_with_locked_boot_refuses() {
 // closed still does.
 static void test_unreadable_lock_proceeds_in_every_updatable_state() {
   const uint8_t states[] = {BOOT_STATE_OLD, BOOT_STATE_PAGE7_INSTALLED,
-                            BOOT_STATE_TRAMPOLINE};
+                            BOOT_STATE_TRAMPOLINE, BOOT_STATE_PREV_NEW};
   for (uint8_t st : states) {
     BootUpdateReport r = makeReport(st, 0x00);  // placeholder that READS closed
     r.lockFuseReadable = false;
@@ -222,6 +230,7 @@ int main(int, char**) {
   RUN_TEST(test_old_with_locked_boot_section_refuses);
   RUN_TEST(test_page7_installed_needs_stage2_only);
   RUN_TEST(test_trampoline_needs_stage2_only);
+  RUN_TEST(test_prev_new_needs_stage2_only);
   RUN_TEST(test_unknown_state_refuses);
   RUN_TEST(test_page7_installed_with_locked_boot_refuses);
   RUN_TEST(test_unreadable_lock_proceeds_in_every_updatable_state);
