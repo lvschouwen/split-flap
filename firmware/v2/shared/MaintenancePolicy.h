@@ -1,7 +1,9 @@
 #pragma once
-// MaintenancePolicy.h — pure validation, wire encoding and postcondition
-// classification for the calibration/provisioning ops (#204), natively
-// tested by test_maintenance_policy.
+// MaintenancePolicy.h — pure validation, wire encoding, postcondition
+// classification and the result vocabulary ({"seq":N} → /unit/op-result,
+// /unit/self-test-result) of the calibration/provisioning ops (#204). Both
+// row masters answer through it, so an op means the same on every row.
+// Natively tested by test_maintenance_policy and test_follower_ops.
 //
 // The validators are v1's parseCalibrationAddress/endpoint checks as a
 // seam. The occupancy check deliberately runs TWICE per set-address: at the
@@ -13,7 +15,8 @@
 // that the EEPROM write ACKed.
 
 #ifdef UNIT_TEST
-#include <cstdint>
+  #include <cstdint>
+  #include <cstdio>
   #include <cstdlib>
 #else
   #include <Arduino.h>
@@ -22,6 +25,7 @@
 #include "BootUpdatePlan.h"  // BootUpdateFailure (#516)
 #include "SplitFlapProtocol.h"
 #include "UnitHealth.h"
+#include "UnitSelfTest.h"  // SELFTEST_REASON_* + selfTestReasonName (#404)
 
 // The validators below spell the lower I2C bound as literal 1; they only
 // stay correct while the wire contract's base agrees.
@@ -216,4 +220,170 @@ inline MaintOutcome classifyClearAddressOutcome(int countBefore,
   }
   reason = MaintReason::UnitMissingAfterReprobe;
   return MaintOutcome::PostconditionFail;
+}
+
+// --- /unit/op-result (#204) -------------------------------------------------------
+
+enum class OpResultState : uint8_t { Pending, Found, Expired };
+
+// The result slot of the LAST maintenance op is one per row master; each tree
+// declares its own (the S3 adds the opcode and address it ran). These read
+// only `seq`, `outcome` and `reason`.
+
+// The seq counter is monotonic, so ordering answers everything: the slot
+// hasn't reached the queried op (pending), holds it (found), or moved past
+// it (expired — the outcome is gone for good; UI treats it as unknown).
+template <typename Slot>
+inline OpResultState opResultQuery(const Slot& slot, uint32_t seq) {
+  if (slot.seq < seq) return OpResultState::Pending;
+  if (slot.seq == seq && slot.outcome != MaintOutcome::Pending)
+    return OpResultState::Found;
+  if (slot.seq == seq) return OpResultState::Pending;
+  return OpResultState::Expired;
+}
+
+inline const char* maintOutcomeName(MaintOutcome o) {
+  switch (o) {
+    case MaintOutcome::Ok:                 return "ok";
+    case MaintOutcome::WireFail:           return "wire-fail";
+    case MaintOutcome::ExecValidationFail: return "exec-validation-fail";
+    case MaintOutcome::PostconditionFail:  return "postcondition-fail";
+    default:                               return "pending";
+  }
+}
+
+inline const char* maintReasonName(MaintReason r) {
+  switch (r) {
+    case MaintReason::UnitMissingAfterReprobe:
+      return "unit-missing-after-reprobe";
+    case MaintReason::TargetAddressOccupied:
+      return "target-address-occupied";
+    case MaintReason::BootInfoReadFail:
+      return "boot-info-read-fail";
+    case MaintReason::BootStateUnknown:
+      return "boot-state-unknown";
+    case MaintReason::BootLockRefused:
+      return "boot-lock-refused";
+    case MaintReason::BootUnitLost:
+      return "boot-unit-lost";
+    case MaintReason::BootVerifyFailed:
+      return "boot-verify-failed";
+    case MaintReason::BootAlreadyNew:
+      return "boot-already-new";
+    case MaintReason::BootUnitBusy:
+      return "boot-unit-busy";
+    case MaintReason::BootNotStarted:
+      return "boot-not-started";
+    default:
+      return "";
+  }
+}
+
+// --- /unit/self-test-result (#265) -----------------------------------------------
+
+// Execution result of the LAST self-test op (#265) — same single-slot,
+// best-effort contract as MaintResult (the UI serializes self-tests and
+// polls /unit/self-test-result). Carries the unit's three measurements on
+// success.
+enum class SelfTestOutcome : uint8_t {
+  Pending = 0,  // slot default; a real result always overwrites it
+  Ok,
+  WireFail,     // the START write was not ACKed
+  Timeout,      // unit never reported done within the master's window
+  UnitFailed,   // unit reported FAILED (hall/marker problem mid-test)
+  Unsupported,  // every poll answered garbage — firmware predates #265
+  Aborted,      // /stop arrived while waiting
+};
+
+struct SelfTestSlot {
+  uint32_t seq = 0;
+  uint8_t addr = 0;
+  SelfTestOutcome outcome = SelfTestOutcome::Pending;
+  uint16_t stepsPerRev = 0;
+  uint16_t hallWindowSteps = 0;
+  uint16_t revTimeMs = 0;
+  // Which of the unit's three failure modes fired (#404), SELFTEST_REASON_*.
+  // `outcome` above is the MASTER's view (wire-fail, timeout, unit-failed);
+  // this is the unit's own account of why, which is what tells a person
+  // whether to reseat a magnet, replace a sensor, or free a binding drum.
+  uint8_t unitReason = SELFTEST_REASON_NONE;
+};
+
+inline const char* selfTestOutcomeName(SelfTestOutcome o) {
+  switch (o) {
+    case SelfTestOutcome::Ok:          return "ok";
+    case SelfTestOutcome::WireFail:    return "wire-fail";
+    case SelfTestOutcome::Timeout:     return "timeout";
+    case SelfTestOutcome::UnitFailed:  return "unit-failed";
+    case SelfTestOutcome::Unsupported: return "unsupported";
+    case SelfTestOutcome::Aborted:     return "aborted";
+    default:                           return "pending";
+  }
+}
+
+// Renders the self-test result JSON for a queried seq (#265) — the same
+// pending / found / expired ordering rules as opResultQuery, from the
+// self-test's own slot. Fits well inside 128 bytes.
+inline void buildSelfTestJson(char* buf, size_t cap, const SelfTestSlot& slot,
+                              uint32_t seq) {
+  if (slot.seq < seq ||
+      (slot.seq == seq && slot.outcome == SelfTestOutcome::Pending)) {
+    snprintf(buf, cap, "{\"state\":\"pending\"}");
+    return;
+  }
+  if (slot.seq > seq) {
+    snprintf(buf, cap, "{\"state\":\"expired\"}");
+    return;
+  }
+  if (slot.outcome == SelfTestOutcome::Ok) {
+    snprintf(buf, cap,
+             "{\"state\":\"ok\",\"steps_per_rev\":%u,\"hall_window\":%u,"
+             "\"rev_time_ms\":%u}",
+             (unsigned)slot.stepsPerRev, (unsigned)slot.hallWindowSteps,
+             (unsigned)slot.revTimeMs);
+    return;
+  }
+  // #404: the failure branch used to be a bare state+reason with every
+  // measurement zeroed, so /unit/self-test-result said exactly why the MASTER
+  // gave up and nothing about what the unit found. Now it carries the unit's
+  // own failure mode and whatever it managed to measure first.
+  snprintf(buf, cap,
+           "{\"state\":\"failed\",\"reason\":\"%s\",\"unit_reason\":\"%s\","
+           "\"steps_per_rev\":%u,\"hall_window\":%u,\"rev_time_ms\":%u}",
+           selfTestOutcomeName(slot.outcome),
+           selfTestReasonName(slot.unitReason),
+           (unsigned)slot.stepsPerRev, (unsigned)slot.hallWindowSteps,
+           (unsigned)slot.revTimeMs);
+}
+
+// Renders the op-result JSON for a queried seq from the result slot. Fits well inside 96 bytes.
+template <typename Slot>
+inline void buildOpResultJson(char* buf, size_t cap, const Slot& slot,
+                              uint32_t seq) {
+  switch (opResultQuery(slot, seq)) {
+    case OpResultState::Pending:
+      snprintf(buf, cap, "{\"state\":\"pending\"}");
+      return;
+    case OpResultState::Expired:
+      snprintf(buf, cap, "{\"state\":\"expired\"}");
+      return;
+    case OpResultState::Found:
+      break;
+  }
+  if (slot.outcome == MaintOutcome::Ok) {
+    // An ok can carry a reason too — "already new" is not "updated" (#516).
+    if (slot.reason == MaintReason::None) {
+      snprintf(buf, cap, "{\"state\":\"ok\"}");
+    } else {
+      snprintf(buf, cap, "{\"state\":\"ok\",\"detail\":\"%s\"}",
+               maintReasonName(slot.reason));
+    }
+  } else if (slot.reason == MaintReason::None) {
+    snprintf(buf, cap, "{\"state\":\"failed\",\"reason\":\"%s\"}",
+             maintOutcomeName(slot.outcome));
+  } else {
+    snprintf(buf, cap,
+             "{\"state\":\"failed\",\"reason\":\"%s\",\"detail\":\"%s\"}",
+             maintOutcomeName(slot.outcome), maintReasonName(slot.reason));
+  }
 }

@@ -102,7 +102,7 @@ def test_flash_loop_selects_units_through_the_tested_predicate():
     # The loop walks unitFacts, not the filtered target list, so this call is
     # the only thing keeping a ?address= run off the other bootloader-mode units.
     body = _function_body(_code(TREE / "FollowerBus.cpp"),
-                          "static void flashBootloaderUnits(uint8_t onlyAddr")
+                          "static bool flashBootloaderUnits(uint8_t onlyAddr")
     guard = body.index("if (!reflashShouldFlashUnit(unitFacts[i], addr, onlyAddr)) continue;")
     assert guard < body.index("flashUnitFromProgmem(addr)")
     job = _function_body(_code(TREE / "FollowerBus.cpp"),

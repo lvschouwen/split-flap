@@ -6,7 +6,7 @@
 #include <ArduinoFake.h>
 #include <unity.h>
 
-#include "../../ReflashPlan.h"
+#include "ReflashPlan.h"
 
 void setUp() {}
 void tearDown() {}

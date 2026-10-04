@@ -835,7 +835,7 @@ void webEndpointsInit(AsyncWebServer& server) {
     if (n > 0 && wearLen < sizeof(wearJson) && n + wearLen + 2 < cap) {
       n += (size_t)snprintf(buf + n - 1, cap - n + 1, ",%s}", wearJson) - 1;
     }
-    char reflashJson[80];
+    char reflashJson[REFLASH_JSON_CAP];
     buildReflashJson(reflashJson, sizeof(reflashJson), reflashProgress);
     if (n > 0 && n + strlen(reflashJson) + 13 < cap) {
       n += (size_t)snprintf(buf + n - 1, cap - n + 1, ",\"reflash\":%s}",
@@ -1240,6 +1240,7 @@ static void executeStagedOp() {
       wireStatus = busStartSelfTest(op.addr);
       selfTestSlot = SelfTestSlot{};
       selfTestSlot.seq = op.seq;
+      selfTestSlot.addr = op.addr;
       if (wireStatus == 0) {
         selfTestPolling = true;
         selfTestAddr = op.addr;

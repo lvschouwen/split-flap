@@ -42,7 +42,6 @@ NOTED_COPIES = [
     (MASTER / "OtaService.h", RESCUE / "RescueOta.h"),
     (MASTER / "DeviceIdentity.h", RESCUE / "RescueIdentity.h"),
     (FOLLOWER / "FollowerCors.h", RESCUE / "RescueCors.h"),
-    (MASTER / "MaintenancePolicy.h", FOLLOWER / "FollowerOps.h"),
     (MASTER / "ApiIndex.h", FOLLOWER / "ApiIndex.h"),
     (MASTER / "ClusterDigest.h", FOLLOWER / "FollowerCors.h"),
 ]

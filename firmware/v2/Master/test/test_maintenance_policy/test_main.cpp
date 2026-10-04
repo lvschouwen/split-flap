@@ -7,7 +7,7 @@
 
 #include <unity.h>
 
-#include "../../MaintenancePolicy.h"
+#include "MaintenancePolicy.h"
 
 void setUp() {}
 void tearDown() {}

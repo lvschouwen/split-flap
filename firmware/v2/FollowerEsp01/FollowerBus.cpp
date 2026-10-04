@@ -1015,10 +1015,16 @@ void followerBootHome() {
 // The invalidation is right (UnitHealth.h's documented lifecycle: reads drop
 // when a bootloader reboot invalidates them) — the repopulation was missing.
 // This is what the S3 already does at the end of runReflashJob.
-static void flashBootloaderUnits(uint8_t onlyAddr = 0) {
+//
+// Returns true when the sweep halted itself on consecutive failures (#412):
+// two in a row is an image that cannot land, not one dead unit, and walking
+// on would break every remaining unit the same way.
+static bool flashBootloaderUnits(uint8_t onlyAddr = 0) {
   uint8_t batch[REFLASH_BATCH_SIZE];
   int batchCount = 0;
   int flashed = 0;
+  uint8_t consecutiveFailures = 0;
+  bool halted = false;
   for (int i = 0; i < UNITS_AMOUNT; i++) {
     uint8_t addr = (uint8_t)toI2cAddress(i);
     // A targeted run leaves every other bootloader-mode unit alone (#513).
@@ -1033,11 +1039,22 @@ static void flashBootloaderUnits(uint8_t onlyAddr = 0) {
       unitFacts[i].fwStatus = 0;
       batch[batchCount++] = addr;
       flashed++;
+      consecutiveFailures = 0;  // an isolated dead unit must not wedge a sweep
+    } else if (consecutiveFailures < 0xFF) {
+      consecutiveFailures++;
     }
     if (batchCount >= REFLASH_BATCH_SIZE) {
       reflashProgressSettling(reflashProgress);
       waitForBatchIdle(batch, batchCount, REFLASH_BATCH_SETTLE_MS);
       batchCount = 0;
+    }
+    // The trailing settle below still runs, so units already flashed finish
+    // homing before the row is handed back.
+    if (reflashShouldHalt(consecutiveFailures)) {
+      SerialPrintln(F("Unit reflash HALTED: consecutive failures — "
+                      "remaining units left untouched"));
+      halted = true;
+      break;
     }
   }
   if (batchCount > 0) {
@@ -1076,6 +1093,7 @@ static void flashBootloaderUnits(uint8_t onlyAddr = 0) {
   // Same position and same preceding settle as the S3's runReflashJob; keep
   // the two flows in step rather than tuning one of them alone.
   if (flashed > 0) busProbe();
+  return halted;
 }
 
 void busAutoInstallBootloaderUnits() {
@@ -1085,8 +1103,8 @@ void busAutoInstallBootloaderUnits() {
                                      SFP_I2C_ADDRESS_BASE, targets);
   if (n == 0) return;
   reflashProgressBegin(reflashProgress, n);
-  flashBootloaderUnits();
-  reflashProgressFinish(reflashProgress, false);
+  bool halted = flashBootloaderUnits();
+  reflashProgressFinish(reflashProgress, false, halted);
 #endif
 }
 
@@ -1120,8 +1138,8 @@ void busRunReflashJob(uint8_t onlyAddr) {
                                      SFP_I2C_ADDRESS_BASE, flashTargets);
   n = reflashFilterToAddress(flashTargets, n, onlyAddr);
   reflashProgressBegin(reflashProgress, n);
-  flashBootloaderUnits(onlyAddr);
-  reflashProgressFinish(reflashProgress, false);
+  bool halted = flashBootloaderUnits(onlyAddr);
+  reflashProgressFinish(reflashProgress, false, halted);
   busPollHealth();
   // Staggered boot-home of the just-flashed units (#309): a reflashed unit
   // reboots UNHOMED, so without this the next cluster render would home the

@@ -144,10 +144,61 @@ static void test_reflash_json_and_gate() {
   char buf[96];
   buildReflashJson(buf, sizeof(buf), p);
   TEST_ASSERT_EQUAL_STRING(
-      "{\"state\":\"flashing\",\"total\":3,\"done\":1,\"failed\":0,\"cur\":2}",
+      "{\"state\":\"flashing\",\"total\":3,\"done\":1,\"failed\":0,\"cur\":2,"
+      "\"halted\":false}",
       buf);
-  reflashProgressFinish(p, false);
+  reflashProgressFinish(p, false, false);
   TEST_ASSERT_FALSE(reflashInProgress(p));
+}
+
+// The ESP-01 row runs the shared plan (#527): two failures back to back stop
+// the sweep and the progress object says so; one success in between does not.
+static void test_reflash_halts_on_consecutive_failures() {
+  TEST_ASSERT_FALSE(reflashShouldHalt(1));
+  TEST_ASSERT_TRUE(reflashShouldHalt(REFLASH_MAX_CONSECUTIVE_FAILURES));
+
+  ReflashProgress p;
+  reflashProgressBegin(p, 5);
+  reflashProgressUnitResult(p, false);
+  reflashProgressUnitResult(p, false);
+  reflashProgressFinish(p, false, true);
+  TEST_ASSERT_TRUE(p.halted);
+  char buf[96];
+  buildReflashJson(buf, sizeof(buf), p);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"state\":\"failed\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"halted\":true"));
+
+  reflashProgressBegin(p, 5);  // a new run clears the flag
+  TEST_ASSERT_FALSE(p.halted);
+}
+
+// #405 on this row too: a unit that answers with a protocol version we do not
+// speak is a reflash target even when its rev reads current.
+static void test_protocol_mismatch_unit_is_a_reflash_target() {
+  UnitFacts facts[2];
+  facts[0].state = 1;
+  facts[0].fwStatus = 0;
+  facts[0].protocolKnown = true;
+  facts[0].protocolVersion = (uint8_t)(SFP_PROTOCOL_VERSION + 1);
+  facts[1].state = 1;
+  facts[1].fwStatus = 0;
+  facts[1].protocolKnown = true;
+  facts[1].protocolVersion = SFP_PROTOCOL_VERSION;
+  uint8_t addrs[2];
+  TEST_ASSERT_EQUAL_INT(1, reflashCollectRebootTargets(facts, 2, 1, addrs));
+  TEST_ASSERT_EQUAL_UINT8(1, addrs[0]);
+  TEST_ASSERT_EQUAL_INT(1, reflashCollectOutdatedTargets(facts, 2, 1, addrs));
+  TEST_ASSERT_EQUAL_UINT8(1, addrs[0]);
+}
+
+// The worst-case progress object must fit the buffer both web layers hand it.
+static void test_reflash_json_worst_case_fits() {
+  ReflashProgress p;
+  p.state = ReflashState::Cancelled;
+  p.total = p.done = p.failed = p.currentAddr = 255;
+  char buf[REFLASH_JSON_CAP];
+  buildReflashJson(buf, sizeof(buf), p);
+  TEST_ASSERT_EQUAL_CHAR('}', buf[strlen(buf) - 1]);
 }
 
 // --- single-unit reflash (#513) ---
@@ -280,6 +331,9 @@ int main(int, char**) {
   RUN_TEST(test_op_result_failure_carries_reason);
   RUN_TEST(test_self_test_result_json);
   RUN_TEST(test_reflash_json_and_gate);
+  RUN_TEST(test_reflash_halts_on_consecutive_failures);
+  RUN_TEST(test_protocol_mismatch_unit_is_a_reflash_target);
+  RUN_TEST(test_reflash_json_worst_case_fits);
   RUN_TEST(test_filter_zero_means_no_filter);
   RUN_TEST(test_filter_keeps_only_the_target);
   RUN_TEST(test_filter_target_not_collected_plans_nothing);

@@ -2,19 +2,21 @@
 
 // ReflashPlan.h — pure planning + progress core of the unit reflash job
 // (#205, slice C of the I2C port). Who gets the enter-bootloader opcode,
-// who gets flashed, the per-unit progress the display task publishes, and
-// the job-level MaintResult grading. No Wire, no RTOS — natively tested by
-// test_reflash_plan. The hardware execution lives in UnitBus.cpp/Tasks.cpp.
+// who gets flashed, the per-unit progress a row master publishes, and the
+// job-level op grading. No Wire, no RTOS — natively tested by
+// test_reflash_plan (Master) and test_follower_ops (FollowerEsp01). The
+// hardware execution lives in each row master's bus file.
 
 #include "MaintenancePolicy.h"
 #include "UnitHealth.h"
 
 // v1 #138 brownout throttle: flash at most this many units per batch, then
 // wait for the batch to come back online + finish homing before the next —
-// post-flash homing current on a supply shared with the steppers. 4 (#250)
-// is bench-gated: a full-display reflash must leave every unit's lifetime
-// brownout counter (#139) flat, else revert to 2.
-#define REFLASH_BATCH_SIZE 4
+// post-flash homing current on a supply shared with the steppers. The size is
+// bench-tuned per supply, so each row master sets it in its platformio.ini.
+#ifndef REFLASH_BATCH_SIZE
+#error "REFLASH_BATCH_SIZE is per row master: set it in the tree's platformio.ini"
+#endif
 #define REFLASH_BATCH_SETTLE_MS 15000UL
 // Wait after CMD_ENTER_BOOTLOADER before talking to twiboot: watchdog reset
 // (~15 ms) + twiboot init. 500 ms is generous (v1 value).
@@ -123,7 +125,41 @@ inline int reflashFilterToAddress(uint8_t* addrs, int n, uint8_t onlyAddr) {
   return 0;
 }
 
-// --- progress (published in the DisplaySnapshot, rendered on the web) ---------
+// The one decision that keeps a targeted run off its neighbours: the flash
+// loop walks the facts, not the filtered list, so a unit already sitting in
+// twiboot at another address is skipped HERE or not at all.
+inline bool reflashShouldFlashUnit(const UnitFacts& u, uint8_t addr,
+                                   uint8_t onlyAddr) {
+  if (u.state != 2) return false;
+  return onlyAddr == 0 || addr == onlyAddr;
+}
+
+// /reflash-units?address=N bound: the managed range only. Deliberately not
+// maintValidateAddress — a unit in twiboot or on a protocol we do not speak
+// must still be reflashable; converging it is the point. A target that is
+// current, silent or absent plans nothing: the op still reports ok and the
+// progress object's total is 0, which is what a caller must check (what
+// commission-units.sh reads).
+inline bool reflashAddressInRange(long addr, int base, int maxUnits) {
+  return addr >= base && addr < (long)base + maxUnits;
+}
+
+// Decimal digits only, 1..3 of them. This picks which unit gets erased, so no
+// base guessing ("010" is not 8) and no trailing garbage ("3abc" is not 3).
+inline bool reflashParseAddress(const char* raw, long& out) {
+  if (raw == nullptr || raw[0] == '\0') return false;
+  long v = 0;
+  int n = 0;
+  for (; raw[n] != '\0'; n++) {
+    if (raw[n] < '0' || raw[n] > '9' || n >= 3) return false;
+    v = v * 10 + (raw[n] - '0');
+  }
+  if (n > 1 && raw[0] == '0') return false;
+  out = v;
+  return true;
+}
+
+// --- progress (published by the row master, rendered on the web) --------------
 
 enum class ReflashState : uint8_t {
   Idle = 0,   // no job since boot (snapshot default)
@@ -219,4 +255,18 @@ inline MaintOutcome classifyReflashOutcome(const ReflashProgress& p,
   reason = MaintReason::None;
   if (p.state == ReflashState::Done) return MaintOutcome::Ok;
   return MaintOutcome::PostconditionFail;
+}
+
+// Renders the reflash progress JSON (#205) — spliced into the /units/health
+// payload by the web layer (additive key). REFLASH_JSON_CAP holds the widest
+// object the fields can produce.
+#define REFLASH_JSON_CAP 96
+inline void buildReflashJson(char* buf, size_t cap,
+                             const ReflashProgress& p) {
+  snprintf(buf, cap,
+           "{\"state\":\"%s\",\"total\":%u,\"done\":%u,\"failed\":%u,"
+           "\"cur\":%u,\"halted\":%s}",
+           reflashStateName(p.state), (unsigned)p.total, (unsigned)p.done,
+           (unsigned)p.failed, (unsigned)p.currentAddr,
+           p.halted ? "true" : "false");
 }

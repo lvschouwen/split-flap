@@ -134,7 +134,7 @@ void webMaintenanceRegister(AsyncWebServer& server) {
     // Reflash progress rides the same payload (#205, additive key — the
     // Maintenance tab already polls this endpoint). Spliced before the
     // closing brace; the ~70 B worst case fits the cap's slack by design.
-    char reflashJson[80];
+    char reflashJson[REFLASH_JSON_CAP];
     buildReflashJson(reflashJson, sizeof(reflashJson), snap.reflash);
     if (n > 0 && n + strlen(reflashJson) + 13 < UNIT_HEALTH_JSON_CAP) {
       snprintf(buf.get() + n - 1, UNIT_HEALTH_JSON_CAP - n + 1,
