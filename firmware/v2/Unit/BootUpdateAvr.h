@@ -77,6 +77,9 @@ static inline BootSectionFacts bootReadFacts() {
   return f;
 }
 
+static_assert(BOOT_CURRENT_CRC32 == NEW_TWIBOOT_CRC32,
+              "the image the masters expect is not the image this unit installs");
+
 static inline BootSectionState bootClassify(const BootSectionFacts& f) {
   return classifyBootSection(f, NEW_TWIBOOT_CRC32,
                              NEW_TWIBOOT_PAGE7_INSTALLED_CRC32);

@@ -19,6 +19,7 @@
 #include "UnitExtDiag.h"  // shared new-measurement diag packet (#365)
 #include "UnitLifetime.h"  // shared across-power-cycle health packet (#406)
 #include "UnitWireContract.h"  // shared core read/write wire formats (#405)
+#include "BootIntegrity.h"  // boot-section verdict vocabulary (#520)
 
 // Health / diagnostics snapshot returned by a sketch-running unit's
 // CMD_GET_STATUS reply. Populated by UnitBus.cpp; mirrors the 8-byte layout
@@ -187,6 +188,11 @@ struct UnitFacts {
   // A lifetime brownout/watchdog counter has climbed since this master first
   // read the unit (unitResetBaselineFold). Refreshed with every status read.
   bool resetSeen = false;
+  // Boot-section integrity (#520): the verdict on this health poll's
+  // GET_BOOT_INFO read and the CRC it judged. UNREAD when the read failed, so
+  // a unit that stops answering never keeps an old verdict.
+  uint8_t bootVerdict = BOOT_INTEGRITY_UNREAD;
+  uint32_t bootCrc32 = 0;
 };
 
 // Folds one status read into the unit's baseline; true when the unit has reset
@@ -335,6 +341,9 @@ inline bool unitIsLost(const UnitFacts& u) {
 // be gated on statusValid (#497: a unit dead for 12 h reported faulty 0).
 inline bool unitIsFaultyOrLost(const UnitFacts& u) {
   if (unitIsLost(u)) return true;
+  // Its own read, so its own gate: a bootloader that matches no known image
+  // is the unit's last remote recovery path rotting (#520).
+  if (u.bootVerdict == BOOT_INTEGRITY_CORRUPT) return true;
   return u.statusValid && (unitStatusIsFaulty(u.status) || u.resetSeen);
 }
 
@@ -373,10 +382,12 @@ inline int computeLostUnitCount(const UnitFacts* units, int n) {
 // nothing) and the per-unit idle-hall keys fr/frd (#460, ~18 B/unit, same
 // guard) and the per-unit link-health keys ut/rx/tx/dh (#502, ~45 B/unit)
 // so a full display can't push the payload into the headline-only
-// fallback. The #406 keys raised the ceiling over the prior 7168 (#365).
+// fallback, and the per-unit boot-verdict keys bv/bcrc (#520, ~27 B/unit,
+// bcrc only off the expected image). The saturated 16-unit payload measures
+// 8383 B before the wear and reflash splices.
 // test_unit_health pins the worst case + headroom (a full 16-unit payload
 // with the wear + reflash splices).
-#define UNIT_HEALTH_JSON_CAP 8192
+#define UNIT_HEALTH_JSON_CAP 9216
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.
@@ -560,6 +571,16 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
       }
       if (u.rescueExits > 0) {
         UNIT_HEALTH_APPEND(",\"rsx\":%u", (unsigned)u.rescueExits);
+      }
+    }
+    if (u.bootVerdict != BOOT_INTEGRITY_UNREAD) {
+      // Boot-section integrity (#520): bv = 1 the expected bootloader image,
+      // 2 a known other image or update step, 3 matches nothing known (counts
+      // as faulty). bcrc = the CRC the unit reported, only when it is not the
+      // expected one.
+      UNIT_HEALTH_APPEND(",\"bv\":%u", (unsigned)u.bootVerdict);
+      if (u.bootVerdict != BOOT_INTEGRITY_OK) {
+        UNIT_HEALTH_APPEND(",\"bcrc\":\"%08lx\"", (unsigned long)u.bootCrc32);
       }
     }
     UNIT_HEALTH_APPEND("}");

@@ -28,6 +28,7 @@
 #include "UnitResetCause.h"  // pure reset-cause rules, shared with the masters (#502)
 #include "BootSectionClassify.h"  // pure boot-section state classifier (#499)
 #include "BootUpdateReport.h"     // pure GET_BOOT_INFO reply codec (#499)
+#include "BootIntegrity.h"        // boot-report refresh schedule (#520)
 #include "twiboot-new-progmem.h"  // generated new-twiboot image + CRCs (#499)
 #include "BootUpdateAvr.h"      // AVR self-program core (#499; glue in UnitBootUpdate.ino)
 // Single source of truth for the master<->unit I2C contract (opcodes, address
@@ -228,6 +229,9 @@ volatile bool     pendingSelfTest           = false;  // loop() runs the test
 // Self-program core in BootUpdateAvr.h (shared with the simavr proof); sketch
 // glue (reply refresh, drum-idle gate, TWI re-init) in UnitBootUpdate.ino.
 volatile uint8_t  bootInfoReplyBuf[BOOT_INFO_REPLY_LEN] = {0};
+// millis() of the last boot-report rebuild; loop() rebuilds it on a timer so a
+// boot section that rots after boot shows up in the reply (BootIntegrity.h).
+unsigned long bootInfoLastRefreshMs = 0;
 volatile bool     pendingBootUpdate         = false;  // loop() runs the stage
 volatile uint8_t  pendingBootUpdateStage    = 0;      // 1 or 2
 uint8_t           lastBootUpdateResult      = BOOT_RESULT_NONE;  // loop-context
@@ -1069,6 +1073,17 @@ void loop() {
       refreshLifetimeReply();
     }
     previousMillis = millis();
+  }
+
+  // Boot-section integrity (#520, BootIntegrity.h): re-read and re-classify
+  // the boot section on a timer, so the masters' GET_BOOT_INFO poll reports
+  // the bootloader as it is now. Parked drum only — the CRC pass holds loop()
+  // for tens of milliseconds, which must never land inside a move.
+  if (bootInfoRefreshDue(currentMillis, bootInfoLastRefreshMs,
+                         currentlyrotating == 0 &&
+                             displayedLetter == receivedNumber)) {
+    bootInfoLastRefreshMs = currentMillis;
+    refreshBootInfoReply();
   }
 
   if (currentMillis - previousMillis >= WAIT_TIME) {

@@ -83,6 +83,15 @@ def test_image_length_and_crc(header, image):
     assert (zlib.crc32(image) & 0xFFFFFFFF) == _read_define(header, "NEW_TWIBOOT_CRC32")
 
 
+def test_masters_expect_the_image_the_units_install(header):
+    # BOOT_CURRENT_CRC32 is what a row master judges a unit's bootloader
+    # against (#520). The unit build asserts it equals NEW_TWIBOOT_CRC32; the
+    # master trees never include the generated header, so it is pinned here.
+    classify = (REPO / "firmware/v2/shared/BootSectionClassify.h").read_text()
+    assert _read_define(classify, "BOOT_CURRENT_CRC32") == \
+        _read_define(header, "NEW_TWIBOOT_CRC32")
+
+
 def test_page7_matches_image_tail(header, image):
     page7 = _read_array(header, "new_twiboot_page7")
     assert len(page7) == PAGE_SIZE

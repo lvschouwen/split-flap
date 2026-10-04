@@ -18,8 +18,11 @@ static_assert(GET_LOW_FUSE_BITS == 0 && GET_LOCK_BITS == 1 &&
 //
 // boot_lock_fuse_bits_get is `sts SPMCSR,..; lpm` and needs the lpm within 3
 // cycles; an ISR in between returns a program byte instead. An EEPROM write in
-// progress blocks lock/fuse reads too.
+// progress blocks lock/fuse reads too. Every EEPROM write starts in loop()
+// context, so the first wait (interrupts on) is the one that can take
+// milliseconds: the periodic refresh must not hold the TWI ISR off that long.
 static void readLockAndFuses(BootUpdateReport& r) {
+  eeprom_busy_wait();
   noInterrupts();
   eeprom_busy_wait();
   uint8_t lock = boot_lock_fuse_bits_get(GET_LOCK_BITS);
@@ -40,9 +43,9 @@ static void readLockAndFuses(BootUpdateReport& r) {
   r.fuseExt = ext;
 }
 
-// Rebuild the cached GET_BOOT_INFO reply. Called at boot and after each update
-// attempt — not every loop: the CRC32 over 1 KB is ~8 k iterations and the boot
-// section only changes when this firmware changes it.
+// Rebuild the cached GET_BOOT_INFO reply. Called at boot, after each update
+// attempt, and on the BootIntegrity.h timer while the drum is parked — not
+// every loop: the CRC32 over 1 KB is ~8 k iterations.
 void refreshBootInfoReply() {
   BootSectionFacts f = bootReadFacts();
   BootUpdateReport r;

@@ -280,6 +280,31 @@ static void refreshUnitLifetime(UnitFacts& fact, int i2cAddress) {
   fact.lifetimeValid = true;
 }
 
+// Boot-section integrity (BootIntegrity.h, #520): judges the unit's boot
+// report on every health poll, same rules as the S3 master. The verdict
+// clears first; the logged verdict lives outside the facts so a rescan does
+// not repeat a finding.
+static uint8_t bootVerdictLogged[UNITS_AMOUNT];
+
+static void refreshUnitBootVerdict(UnitFacts& fact, int unitIndex) {
+  fact.bootVerdict = BOOT_INTEGRITY_UNREAD;
+  uint8_t i2cAddress = (uint8_t)toI2cAddress(unitIndex);
+  BootUpdateReport r;
+  if (!busReadBootInfo(i2cAddress, r)) return;
+  fact.bootCrc32 = r.bootCrc32;
+  fact.bootVerdict = bootIntegrityJudge(r, BOOT_CURRENT_CRC32);
+  BootIntegrityEdge e =
+      bootIntegrityEdge(bootVerdictLogged[unitIndex], fact.bootVerdict);
+  bootVerdictLogged[unitIndex] = e.logged;
+  if (!e.log) return;
+  char logBuf[88];
+  snprintf(logBuf, sizeof(logBuf),
+           "Unit 0x%02x bootloader %s - crc32 %08lx (expected %08lx)",
+           i2cAddress, bootIntegrityName(fact.bootVerdict),
+           (unsigned long)r.bootCrc32, (unsigned long)BOOT_CURRENT_CRC32);
+  SerialPrintln(logBuf);
+}
+
 // v1 #140 rule: reject non-printables and the two JSON-structural chars at
 // the I2C boundary — the version string is emitted raw into JSON.
 // Also yields the unit's SFP_PROTOCOL_VERSION (#405) — the one number saying
@@ -400,6 +425,7 @@ void busProbeQuiet(bool quiet) {
     // Lifetime health rides the probe too (#406); pre-lifetime firmware
     // fails the length check and stays lifetimeValid=false.
     refreshUnitLifetime(f, i2cAddress);
+    refreshUnitBootVerdict(f, i);  // #520
     unitFacts[i] = f;
   }
   detectedUnitCount = detected;
@@ -421,6 +447,7 @@ bool busPollHealthOne(int i) {
 #if SERIAL_ENABLE == false
   if (!unitDrivable(unitFacts[i])) {  // #405
     unitFacts[i].statusValid = false;
+    unitFacts[i].bootVerdict = BOOT_INTEGRITY_UNREAD;
     return false;
   }
   // #468: same publish-on-complete rule as busProbe() above — the reads
@@ -450,6 +477,8 @@ bool busPollHealthOne(int i) {
   // Lifetime health refreshes on the same cadence (#406) — a failed homing
   // must not wait for the next probe to surface.
   refreshUnitLifetime(f, toI2cAddress(i));
+  // Boot-section verdict on the same cadence (#520).
+  refreshUnitBootVerdict(f, i);
   unitFacts[i] = f;
   return ok;  // CMD_GET_STATUS liveness signal for the heartbeat (#310)
 #else

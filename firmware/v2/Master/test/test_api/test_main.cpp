@@ -88,6 +88,8 @@ static void fullyPopulated(UnitFacts& u) {
   u.lifetime.selfTestLastHallWindow = 12;
   u.lifetime.selfTestLastStepsPerRev = 2048;
   u.extDiagValid = true;
+  u.bootVerdict = BOOT_INTEGRITY_CORRUPT;  // #520: bv + bcrc reach the guard
+  u.bootCrc32 = 0x00c0ffeeUL;
 }
 
 // Extract each JSON object key (a quoted token immediately after '{' or ',')

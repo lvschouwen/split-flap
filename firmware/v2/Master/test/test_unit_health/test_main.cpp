@@ -106,6 +106,37 @@ static void test_reset_seen_makes_a_valid_unit_faulty() {
   TEST_ASSERT_FALSE(unitIsFaultyOrLost(u));
 }
 
+static void test_a_corrupt_bootloader_makes_a_unit_faulty() {
+  // #520: independent of the status read — the boot report is its own read.
+  UnitFacts u;
+  u.state = 1;
+  u.bootVerdict = BOOT_INTEGRITY_CORRUPT;
+  TEST_ASSERT_TRUE(unitIsFaultyOrLost(u));
+  u.bootVerdict = BOOT_INTEGRITY_OUTDATED;  // an update is owed, nothing rotted
+  TEST_ASSERT_FALSE(unitIsFaultyOrLost(u));
+  u.bootVerdict = BOOT_INTEGRITY_OK;
+  TEST_ASSERT_FALSE(unitIsFaultyOrLost(u));
+  u.bootVerdict = BOOT_INTEGRITY_UNREAD;
+  TEST_ASSERT_FALSE(unitIsFaultyOrLost(u));
+}
+
+static void test_health_json_boot_verdict_keys() {
+  UnitFacts units[1];
+  units[0].state = 1;
+  char buf[256];
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_NULL(strstr(buf, "\"bv\""));  // never read: no key at all
+  units[0].bootVerdict = BOOT_INTEGRITY_OK;
+  units[0].bootCrc32 = BOOT_CURRENT_CRC32;
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"bv\":1"));
+  TEST_ASSERT_NULL(strstr(buf, "\"bcrc\""));  // the expected image: no need
+  units[0].bootVerdict = BOOT_INTEGRITY_CORRUPT;
+  units[0].bootCrc32 = 0x00c0ffeeUL;
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 1, 1, 0);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"bv\":3,\"bcrc\":\"00c0ffee\""));
+}
+
 static void test_bad_commands_alone_are_not_faulty() {
   // Deliberate (#45/#137): a stray malformed I2C receive is not a hardware
   // problem; badCommandCount is surfaced but never counted.
@@ -544,6 +575,8 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].link.rxFrames = 0xFFFF;
     units[i].link.txReplies = 0xFFFF;
     units[i].link.deafHeals = 0xFF;
+    units[i].bootVerdict = BOOT_INTEGRITY_CORRUPT;  // #520: bv + bcrc
+    units[i].bootCrc32 = 0xFFFFFFFFUL;
     // Widest lifetime block (#406): all fields saturated.
     units[i].lifetimeValid = true;
     units[i].lifetime.homeFailedCount = 0xFF;
@@ -814,6 +847,8 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].vitals.cmdPos = 44;
     units[i].vitals.freeRamMin = 65535;
     units[i].vitalsValid = true;
+    units[i].bootVerdict = BOOT_INTEGRITY_CORRUPT;  // #520
+    units[i].bootCrc32 = 0xFFFFFFFFUL;
     units[i].misses = 255;     // widest heartbeat block (#310)
     units[i].stale = true;
     units[i].lastSeenMs = 0;
@@ -1130,6 +1165,8 @@ int main(int, char**) {
   RUN_TEST(test_health_json_emits_stamped_mismatch_only);
   RUN_TEST(test_health_json_no_mismatch_without_position);
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
+  RUN_TEST(test_a_corrupt_bootloader_makes_a_unit_faulty);
+  RUN_TEST(test_health_json_boot_verdict_keys);
   RUN_TEST(test_health_json_ext_diag_emitted_when_valid);
   RUN_TEST(test_fold_ext_diag_both_valid);
   RUN_TEST(test_fold_ext_diag_base_only_when_extension_absent);

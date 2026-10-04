@@ -7,6 +7,7 @@
 #include "UnitBus.h"
 
 #include "BootDump.h"  // BOOT_SECTION_START / _LEN (#511)
+#include "BootInfo.h"  // bootInfoStateName (#499)
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -302,6 +303,31 @@ static void refreshUnitLifetime(UnitFacts& fact, int i2cAddress) {
   if (!readUnitLifetime(i2cAddress, lt)) return;
   fact.lifetime = lt;
   fact.lifetimeValid = true;
+}
+
+// Boot-section integrity (BootIntegrity.h, #520): judges the unit's boot
+// report on every health poll. The verdict clears first, like every other
+// refresh here; the logged verdict lives outside the facts so a probe rescan
+// (which rebuilds them) does not repeat a finding. Not charged to #367 error
+// attribution — see readUnitStatus.
+static uint8_t bootVerdictLogged[UNITS_AMOUNT];
+
+static void refreshUnitBootVerdict(UnitFacts& fact, int unitIndex) {
+  fact.bootVerdict = BOOT_INTEGRITY_UNREAD;
+  int i2cAddress = toI2cAddress(unitIndex);
+  BootUpdateReport r;
+  if (!unitBusReadBootInfo(i2cAddress, r)) return;
+  fact.bootCrc32 = r.bootCrc32;
+  fact.bootVerdict = bootIntegrityJudge(r, BOOT_CURRENT_CRC32);
+  BootIntegrityEdge e =
+      bootIntegrityEdge(bootVerdictLogged[unitIndex], fact.bootVerdict);
+  bootVerdictLogged[unitIndex] = e.logged;
+  if (!e.log) return;
+  SerialPrintf("Unit 0x%02x bootloader %s — crc32 %08lx (expected %08lx), "
+               "state %s\n",
+               i2cAddress, bootIntegrityName(fact.bootVerdict),
+               (unsigned long)r.bootCrc32, (unsigned long)BOOT_CURRENT_CRC32,
+               bootInfoStateName(r.state));
 }
 
 // Reads the unit's current calOffset (int16 LE) via CMD_GET_OFFSET. Returns
@@ -617,6 +643,8 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
     // Lifetime health rides the probe too (#406); pre-lifetime firmware
     // fails the length check and stays lifetimeValid=false.
     refreshUnitLifetime(facts[unitIndex], i2cAddress);
+    // Boot-section verdict rides the probe too (#520).
+    refreshUnitBootVerdict(facts[unitIndex], unitIndex);
   }
   // #367: the per-unit reset above zeroed the facts' error fields, but the
   // attributed counters are lifetime — restore them so a probe rescan doesn't
@@ -633,6 +661,7 @@ static UnitResetBaseline resetBaselines[UNITS_AMOUNT];
 
 bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   facts[i].statusValid = false;
+  facts[i].bootVerdict = BOOT_INTEGRITY_UNREAD;
   // #367: refresh every column's attributed error counters into the facts BEFORE
   // the state gate below, so a render-time write failure (charged in
   // unitBusShowFrame) surfaces in the next published /units/health within one
@@ -679,6 +708,9 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   // failed homing is exactly the signal that must not wait for the next probe
   // to surface. Not charged to #367 error attribution, like ext-diag above.
   refreshUnitLifetime(facts[i], toI2cAddress(i));
+  // Boot-section verdict on the same cadence (#520): the unit recomputes its
+  // report on a timer, so this is what turns that into a standing watch.
+  refreshUnitBootVerdict(facts[i], i);
   // ok == the CMD_GET_STATUS read succeeded — the heartbeat liveness signal
   // (#310); the caller folds it into the miss counter.
   return ok;

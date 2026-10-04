@@ -24,6 +24,11 @@ enum BootSectionState {
 // crc32 (zlib / reflected 0xEDB88320) of the fielded image over 0x7C00-0x7FFF.
 // A fact of the deployed fleet (#511), pinned by tests/test_twiboot_entry_points.
 #define BOOT_FIELDED_CRC32 0x18173addUL
+// crc32 of the current twiboot image over the same range — what a row master
+// expects every unit to carry (BootIntegrity.h). The generated image header's
+// NEW_TWIBOOT_CRC32 is the source; the unit build asserts the two equal and
+// tests/test_new_twiboot_image pins it for the trees that never see that header.
+#define BOOT_CURRENT_CRC32 0xe422a668UL
 // crc32 of just the fielded pages 0-6 (0x7C00-0x7F7F, the twiboot core, page 7
 // excluded). Stage 1 only writes page 7, so this is what survives a half-done or
 // retried stage 1 — see the retriable case in classifyBootSection. Also pinned

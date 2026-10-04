@@ -111,6 +111,8 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"rx",     "master writes this unit received since boot (u16, wraps; compare deltas)"},
   {"tx",     "master reads this unit answered since boot (u16, wraps; compare deltas)"},
   {"dh",     "TWI register self-check re-inits since boot (unit deafness self-heals)"},
+  {"bv",     "bootloader verdict: 1 expected image, 2 known other image or update step, 3 corrupt (faulty)"},
+  {"bcrc",   "boot-section crc32 the unit reported, only when it is not the expected image"},
   {"pv",     "wire protocol version the unit reports"},
   {"pmm",    "1 = protocol version we do not speak; unit is untouched and is a reflash target"},
   {"hf",     "lifetime failed-homing count (survives power cycles)"},

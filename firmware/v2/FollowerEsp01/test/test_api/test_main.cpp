@@ -86,6 +86,8 @@ static void fullyPopulated(UnitFacts& u) {
   u.link.rxFrames = 500;
   u.link.txReplies = 499;
   u.link.deafHeals = 2;
+  u.bootVerdict = BOOT_INTEGRITY_CORRUPT;  // #520: bv + bcrc reach the guard
+  u.bootCrc32 = 0x00c0ffeeUL;
 }
 
 static void assertEveryKeyDocumented(const char* json) {
@@ -175,6 +177,8 @@ static size_t worstCaseFitsFor(int width) {
     units[i].link.rxFrames = 0xFFFF;
     units[i].link.txReplies = 0xFFFF;
     units[i].link.deafHeals = 0xFF;
+    units[i].bootVerdict = BOOT_INTEGRITY_CORRUPT;  // #520: bv + bcrc
+    units[i].bootCrc32 = 0xFFFFFFFFUL;
     // #411: the #405 protocol keys and #406 lifetime keys — this fixture
     // omitting them is exactly how the 6144 buffer went stale unnoticed.
     units[i].protocolKnown = true;
