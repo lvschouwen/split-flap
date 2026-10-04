@@ -24,6 +24,7 @@ S_TRAMPOLINE=3 S_NEW=4
 # 2. Boot-section images.
 avr-objcopy -I ihex -O binary ../prebuilt/twiboot-atmega328p-16mhz.hex fielded.raw
 avr-objcopy -I ihex -O binary ../twiboot-new-atmega328p-16mhz.hex newimage.bin
+avr-objcopy -I ihex -O binary ../prebuilt/twiboot-prev-e422a668.hex prevnew.bin
 python3 - <<'PY'
 fielded = bytearray(open('fielded.raw', 'rb').read().ljust(1024, b'\xff'))
 new = open('newimage.bin', 'rb').read()
@@ -115,6 +116,19 @@ step "E  no do_spm in page 7 -> refuse, zero SPMs" \
 step "F  resume skips the trampoline and matching pages" \
   tramp_rest_new.bin newimage.bin "$REPORT" --start reset \
   --expect 0:$R_S2_OK:$S_NEW --expect-spm 67
+
+# P. A unit on the PREVIOUS image (what the fleet carries): a complete,
+#    working bootloader whose page 7 already holds do_spm, so stage 2 alone
+#    replaces it — 8 page writes x 67 = 536, no stage 1, no reset.
+step "P1 previous image -> new image by stage 2 alone" \
+  prevnew.bin newimage.bin "$REPORT" --start app \
+  --expect 0:$R_S2_OK:$S_NEW --expect-spm 536 --expect-resets 0
+#    Power loss before every one of those 536 operations: all recover through
+#    the trampoline and the app's auto-resume, except the same two page-0
+#    windows as in B.
+step "P2 kill sweep from the previous image" \
+  prevnew.bin newimage.bin "$REPORT" --start app \
+  --sweep-kill 0 536 --expect-windows 130
 
 # G. A unit already on the new image does nothing.
 step "G  new image is left alone" \

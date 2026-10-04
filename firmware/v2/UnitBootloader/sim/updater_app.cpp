@@ -6,6 +6,7 @@
  *   boot -> bootAutoResume()            (setup(): finish a half-done stage 2)
  *        -> state Old            -> stage 1 (never returns; WDT reset)
  *        -> state Page7Installed -> stage 2
+ *        -> state PrevNew        -> stage 2 (a unit on the previous image)
  *        -> publish result + state in sim_report, spin.
  *
  * The harness (runtest.c) power-cycles the simulated chip around this to prove
@@ -41,7 +42,7 @@ int main(void) {
   BootSectionState st = bootCurrentState();
   if (st == BOOT_STATE_OLD) {
     r = bootRunStage(1, 0xFF);
-  } else if (st == BOOT_STATE_PAGE7_INSTALLED) {
+  } else if (st == BOOT_STATE_PAGE7_INSTALLED || st == BOOT_STATE_PREV_NEW) {
     r = bootRunStage(2, 0xFF);
   }
   sim_report.result = r;

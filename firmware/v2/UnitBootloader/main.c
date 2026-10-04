@@ -924,8 +924,12 @@ int main(void)
 #  if (I2C_ADDRESS_BASE > 0) && defined (__AVR_ATmega328P__)
     DDRD  &= (uint8_t)~((1<<3) | (1<<4) | (1<<5) | (1<<6));
     PORTD |= (uint8_t)((1<<3) | (1<<4) | (1<<5) | (1<<6));
-    /* small settle for the pullups to pull high */
-    for (uint8_t i = 50; i; --i) asm volatile ("nop");
+    /* Settle for the pullups to pull the address lines high before they
+     * are read: a line read early gives the wrong bus address, and a unit
+     * listening on the wrong address cannot be reflashed. 4 cycles per
+     * iteration -> 37.5 us at 16 MHz; the image fielded on every unit
+     * waits about 30 us, so do not go below that. */
+    for (uint8_t i = 150; i; --i) asm volatile ("nop");
     uint8_t dip = 0;
     if (!(PIND & (1<<3))) dip |= 1;
     if (!(PIND & (1<<4))) dip |= 2;

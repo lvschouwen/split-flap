@@ -122,3 +122,37 @@ def test_page7_installed_crc(header, image):
 def test_new_image_differs_from_fielded(image):
     fielded = _ihex_boot_section(FIELDED_HEX)
     assert image[:PAGES_0_6] != fielded[:PAGES_0_6], "new image equals fielded"
+
+
+# --- the image the current one replaces (#548) ----------------------------------
+
+PREV_HEX = BOOT / "prebuilt/twiboot-prev-e422a668.hex"
+CLASSIFY = REPO / "firmware/v2/shared/BootSectionClassify.h"
+
+
+def test_previous_image_is_the_one_the_classifier_names():
+    """Every unit carries this image until its boot section is updated. The
+    classifier must name exactly these bytes, or those units read Unknown —
+    corrupt on the masters, and refused by the updater."""
+    prev = _ihex_boot_section(PREV_HEX)
+    assert len(prev) == IMAGE_LEN
+    assert zlib.crc32(prev) == _read_define(CLASSIFY.read_text(),
+                                            "BOOT_PREV_NEW_CRC32")
+
+
+def test_previous_image_shares_page_7_with_the_current_one():
+    """Stage 2 rewrites pages 0-6 through do_spm in page 7 and never writes
+    page 7. Going from the previous image to the current one by stage 2 alone
+    is only correct while the two page 7s are the same bytes."""
+    prev = _ihex_boot_section(PREV_HEX)
+    image = _read_array(HEADER.read_text(), "new_twiboot_image")
+    assert prev[PAGES_0_6:] == image[PAGES_0_6:]
+    assert prev[:PAGES_0_6] != image[:PAGES_0_6]
+
+
+def test_classifier_expects_the_current_image():
+    text = CLASSIFY.read_text()
+    assert _read_define(text, "BOOT_CURRENT_CRC32") == _read_define(
+        HEADER.read_text(), "NEW_TWIBOOT_CRC32")
+    assert _read_define(text, "BOOT_CURRENT_CRC32") != _read_define(
+        text, "BOOT_PREV_NEW_CRC32")

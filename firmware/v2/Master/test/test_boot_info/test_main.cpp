@@ -80,15 +80,18 @@ static void test_failed_read_never_shows_a_report() {
 }
 
 static void test_every_state_and_result_has_a_distinct_name() {
-  const char* states[] = {
-      bootInfoStateName(BOOT_STATE_UNKNOWN), bootInfoStateName(BOOT_STATE_OLD),
-      bootInfoStateName(BOOT_STATE_PAGE7_INSTALLED),
-      bootInfoStateName(BOOT_STATE_TRAMPOLINE), bootInfoStateName(BOOT_STATE_NEW)};
-  for (int i = 0; i < 5; i++) {
-    for (int j = i + 1; j < 5; j++) {
-      TEST_ASSERT_TRUE(strcmp(states[i], states[j]) != 0);
+  // Every state a unit can report, so one added without a name reads
+  // "unknown" here instead of on the operator's screen.
+  for (int i = 0; i <= BOOT_STATE_LAST; i++) {
+    for (int j = i + 1; j <= BOOT_STATE_LAST; j++) {
+      TEST_ASSERT_TRUE(strcmp(bootInfoStateName((uint8_t)i),
+                              bootInfoStateName((uint8_t)j)) != 0);
+    }
+    if (i != BOOT_STATE_UNKNOWN) {
+      TEST_ASSERT_TRUE(strcmp(bootInfoStateName((uint8_t)i), "unknown") != 0);
     }
   }
+  TEST_ASSERT_EQUAL_STRING("prev-new", bootInfoStateName(BOOT_STATE_PREV_NEW));
   for (int r = 0; r < BOOT_RESULT_COUNT; r++) {
     for (int q = r + 1; q < BOOT_RESULT_COUNT; q++) {
       TEST_ASSERT_TRUE(strcmp(bootInfoResultName((uint8_t)r),

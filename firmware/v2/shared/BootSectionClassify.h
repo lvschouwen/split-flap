@@ -21,6 +21,9 @@ enum BootSectionState {
   BOOT_STATE_NEW,              // new twiboot fully installed
   BOOT_STATE_PREV_NEW,         // a previous new image (do_spm in page 7, old pages 0-6)
 };
+// The highest state a unit can report. A state added above must be added
+// here too: the report decoder's range check and the name-table test run to it.
+#define BOOT_STATE_LAST BOOT_STATE_PREV_NEW
 
 // crc32 (zlib / reflected 0xEDB88320) of the fielded image over 0x7C00-0x7FFF.
 // A fact of the deployed fleet (#511), pinned by tests/test_twiboot_entry_points.
@@ -29,11 +32,15 @@ enum BootSectionState {
 // expects every unit to carry (BootIntegrity.h). The generated image header's
 // NEW_TWIBOOT_CRC32 is the source; the unit build asserts the two equal and
 // tests/test_new_twiboot_image pins it for the trees that never see that header.
-#define BOOT_CURRENT_CRC32 0xf8cdd7a1UL
-// crc32 of the previous new-twiboot image (#499 original, before #546
-// optimised pages 0-6). All 21 fielded units carry this image; page 7 is
-// byte-identical to the current image (do_spm.S unchanged), so only stage 2
-// is needed. The runtime guard is bootPage7HoldsDoSpm() in BootUpdateAvr.h.
+#define BOOT_CURRENT_CRC32 0x081c2954UL
+// crc32 of the image the current one replaces — what the units carry until
+// their boot section is updated (UnitBootloader/prebuilt/
+// twiboot-prev-e422a668.hex, pinned by tests/test_new_twiboot_image). Its
+// page 7 (do_spm) is byte-identical to the current image's, so stage 2 alone
+// takes a unit from it to the current image; bootPage7HoldsDoSpm() in
+// BootUpdateAvr.h is the runtime guard. Replacing the current image again
+// means moving its CRC here and keeping its hex, or units carrying it
+// classify Unknown and can no longer be updated in-system.
 #define BOOT_PREV_NEW_CRC32 0xe422a668UL
 // crc32 of just the fielded pages 0-6 (0x7C00-0x7F7F, the twiboot core, page 7
 // excluded). Stage 1 only writes page 7, so this is what survives a half-done or

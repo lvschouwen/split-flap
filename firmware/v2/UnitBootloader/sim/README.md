@@ -20,7 +20,7 @@ Prints `ALL PROOFS PASSED`, or `PROOF FAILED: ...` and exits non-zero. ~40 s.
 ## What it proves
 
 `updater_app.cpp` does what the sketch does at boot (`bootAutoResume()`), then
-stands in for the master: state Old → stage 1, Page7Installed → stage 2.
+stands in for the master: state Old → stage 1, Page7Installed or PrevNew → stage 2.
 `runtest.c` models BOOTRST (every reset enters 0x7C00), counts every executed
 `spm` (twiboot's in stage 1, `do_spm`'s in stage 2), and can power-cycle or
 corrupt flash at any SPM index. Stage 1 = 67 flash operations, stage 2 = 8 page
@@ -36,6 +36,8 @@ writes × 67 = 536.
 | E | trampoline but no `do_spm` in page 7 | refused with zero SPMs |
 | F | resume with trampoline + pages 1–6 already done | writes only page 0 (67 SPMs) |
 | G | unit already on the new image | untouched |
+| P1 | a unit on the previous image (`prebuilt/twiboot-prev-e422a668.hex`, what the fleet carries) | stage 2 alone reaches New: 536 operations, no stage 1, no reset |
+| P2 | power loss before each of those 536 operations | all recover through the trampoline, except the same two page-0 windows |
 
 Each guard was proven by breaking it in a scratch copy of the header: dropping
 the page-7 check fails E, always rewriting the trampoline fails F, dropping
@@ -66,3 +68,11 @@ fail.
   `0x0100`/`0x0101` — application RAM while stage 1 runs.
 - `keystone.c` is the earlier minimal proof that a borrowed `spm` returns
   control at all; it is not part of `prove.sh`.
+
+## Replacing the image again
+
+A unit can only be updated from an image the classifier names. Before the
+current image is replaced, move its CRC to `BOOT_PREV_NEW_CRC32`
+(`shared/BootSectionClassify.h`), commit its bytes as a `prebuilt/` hex and
+point case P at it — and keep page 7 byte-identical, or stage 2 alone is no
+longer a valid path (`tests/test_new_twiboot_image.py` pins both).

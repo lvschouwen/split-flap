@@ -44,6 +44,7 @@ inline const char* bootInfoStateName(uint8_t state) {
     case BOOT_STATE_PAGE7_INSTALLED: return "page7";
     case BOOT_STATE_TRAMPOLINE:      return "trampoline";
     case BOOT_STATE_NEW:             return "new";
+    case BOOT_STATE_PREV_NEW:        return "prev-new";
     default:                         return "unknown";
   }
 }
