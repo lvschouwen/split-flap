@@ -42,8 +42,6 @@ void busArmProbeInhibit(uint32_t untilMs) { probeInhibitUntilMs = untilMs; }
 // Freshness bookkeeping (miss counter / stale latch / lastSeenMs) is the pure
 // heartbeatApply() in HeartbeatPolicy.h — same as the Master, copy policy.
 
-// Delay between an opcode write and the read-back clocking (v1 value).
-#define UNIT_RESPONSE_SETTLE_MS 2
 // How long a segment write waits for the row to stop before assuming a
 // unit is physically stuck (v1 value).
 
@@ -111,6 +109,7 @@ WireTwibootBus unitBus;
 // What the shared probe/poll code found worth a log line; the text stays in
 // flash on this chip.
 struct UnitBusNotes {
+  void identityRead(uint8_t, const UnitFacts&, bool) {}
   void driftSeen(uint8_t i2cAddress, const DriftLogDecision& drift,
                  const UnitDiagReading&) {
     SerialPrint(F("Unit "));
@@ -240,6 +239,7 @@ void busProbeQuiet(bool quiet) {
     int i2cAddress = toI2cAddress(i);
     Wire.beginTransmission(i2cAddress);
     if (Wire.endTransmission() != 0) {
+      unitErrors.fold(f, i);  // the tally outlives a rescan (#367)
       unitFacts[i] = f;
       continue;
     }
@@ -249,6 +249,7 @@ void busProbeQuiet(bool quiet) {
     states[i] = f.state;
     detected++;
     if (inBootloader) {
+      unitErrors.fold(f, i);  // the tally outlives a rescan (#367)
       unitFacts[i] = f;
       continue;
     }
@@ -276,6 +277,9 @@ static UnitResetBaseline resetBaselines[UNITS_AMOUNT];
 
 bool busPollHealthOne(int i) {
 #if SERIAL_ENABLE == false
+  // Every column's tally, before the state gate: a render-time write failure
+  // must show within one heartbeat tick, whichever slot this poll lands on.
+  unitErrors.fold(unitFacts, UNITS_AMOUNT);
   if (!unitDrivable(unitFacts[i])) {  // #405
     unitFacts[i].statusValid = false;
     unitFacts[i].bootVerdict = BOOT_INTEGRITY_UNREAD;
@@ -628,6 +632,12 @@ struct FlashWatch {
 // still in its sketch is sent into twiboot first. On failure `flashError`
 // says why.
 static bool flashUnitSteps(uint8_t i2cAddress) {
+  // Before the unit is sent anywhere: an image that cannot be flashed must
+  // not cost it a trip through its bootloader.
+  if (!twibootImageFits(UNIT_FIRMWARE_BIN_LEN)) {
+    flashError = F("image too large — would overwrite twiboot");
+    return false;
+  }
   if (!isUnitInBootloader((int)i2cAddress)) {
     if (busRebootToBootloader(i2cAddress) != 0) {
       flashError = F("unit did not ack enter-bootloader");

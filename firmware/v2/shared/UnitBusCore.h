@@ -428,6 +428,9 @@ inline void unitRefreshOdometer(Bus& bus, UnitFacts& fact, uint8_t i2cAddress) {
 // --- what a probe and a health poll read ------------------------------------------
 // `Notes` is the tree's log sink — the shared code decides WHAT is worth a
 // line, the tree words it (the ESP-01 keeps its text in flash):
+//   void identityRead(uint8_t addr, const UnitFacts&, bool versionReadable)
+//        (a probe only; called before the diagnostics so a scan-log entry is
+//        complete before any other line can follow it)
 //   void driftSeen(uint8_t addr, const DriftLogDecision&, const UnitDiagReading&)
 //   void bootVerdictChanged(uint8_t addr, const UnitFacts&, const BootUpdateReport&)
 // `bootLogged` is the tree's per-unit memory for unitRefreshBootVerdict.
@@ -466,6 +469,7 @@ inline bool unitProbeSketchUnit(Bus& bus, Notes& notes, UnitFacts& fact,
                                 uint8_t& bootLogged) {
   bool versionOk =
       unitReadIdentity(bus, fact, i2cAddress, bundledRev, bundledEquivRevs);
+  notes.identityRead(i2cAddress, fact, versionOk);
   unitRefreshDiagnostics(bus, notes, fact, i2cAddress, bootLogged);
   return versionOk;
 }

@@ -470,6 +470,62 @@ static void test_error_ledger_charges_a_unit_and_survives_a_rescan() {
   TEST_ASSERT_EQUAL_UINT16(2, facts[2].i2cErrors);
 }
 
+// --- the composed probe / poll reads -----------------------------------------
+
+namespace {
+struct NotesSpy {
+  std::vector<int> order;  // 1 identity, 2 drift, 3 boot verdict
+  bool versionReadable = false;
+  void identityRead(uint8_t, const UnitFacts&, bool readable) {
+    order.push_back(1);
+    versionReadable = readable;
+  }
+  void driftSeen(uint8_t, const DriftLogDecision&, const UnitDiagReading&) {
+    order.push_back(2);
+  }
+  void bootVerdictChanged(uint8_t, const UnitFacts&, const BootUpdateReport&) {
+    order.push_back(3);
+  }
+};
+}  // namespace
+
+// The identity note comes first, so a scan-log entry is complete before any
+// other line the diagnostics may produce.
+static void test_probe_reads_identity_then_diagnostics() {
+  FakeUnit u;
+  NotesSpy notes;
+  UnitFacts f;
+  uint8_t bootLogged = 0;
+  TEST_ASSERT_TRUE(
+      unitProbeSketchUnit(u, notes, f, ADDR, "34c72e0", "", bootLogged));
+  TEST_ASSERT_TRUE(notes.versionReadable);
+  TEST_ASSERT_FALSE(notes.order.empty());
+  TEST_ASSERT_EQUAL(1, notes.order.front());
+  TEST_ASSERT_EQUAL_UINT8(0, f.fwStatus);
+  TEST_ASSERT_TRUE(f.offsetValid);
+  TEST_ASSERT_TRUE(f.odometerValid);
+  TEST_ASSERT_TRUE(f.vitalsValid);
+  TEST_ASSERT_TRUE(f.lifetimeValid);
+  TEST_ASSERT_EQUAL_UINT8(BOOT_INTEGRITY_OK, f.bootVerdict);
+  TEST_ASSERT_FALSE(f.statusValid);  // the status is a poll's read, not a probe's
+}
+
+static void test_poll_returns_liveness_and_refreshes_the_diagnostics() {
+  FakeUnit u;
+  NotesSpy notes;
+  UnitFacts f;
+  UnitResetBaseline baseline;
+  uint8_t bootLogged = 0;
+  TEST_ASSERT_TRUE(unitPollHealth(u, notes, f, ADDR, baseline, bootLogged));
+  TEST_ASSERT_TRUE(f.statusValid);
+  TEST_ASSERT_TRUE(f.vitalsValid);
+  u.present = false;
+  TEST_ASSERT_FALSE(unitPollHealth(u, notes, f, ADDR, baseline, bootLogged));
+  TEST_ASSERT_FALSE(f.statusValid);
+  TEST_ASSERT_FALSE(f.vitalsValid);
+  TEST_ASSERT_EQUAL_UINT8(BOOT_INTEGRITY_UNREAD, f.bootVerdict);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_no_argument_mutations_carry_the_guard_byte);
@@ -493,6 +549,8 @@ int main(int, char**) {
   RUN_TEST(test_refresh_clears_validity_when_the_unit_stops_answering);
   RUN_TEST(test_poll_status_is_the_liveness_signal);
   RUN_TEST(test_boot_verdict_logs_once_per_change);
+  RUN_TEST(test_probe_reads_identity_then_diagnostics);
+  RUN_TEST(test_poll_returns_liveness_and_refreshes_the_diagnostics);
   RUN_TEST(test_batch_wait_returns_once_every_unit_is_idle);
   RUN_TEST(test_batch_wait_times_out_on_a_unit_that_never_comes_back);
   RUN_TEST(test_batch_wait_with_no_units_returns_at_once);

@@ -162,7 +162,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"cpu1",     "core 1 load percent"},
   {"temp",     "die temperature x10 (°C)"},
   {"uptime",   "uptime seconds"},
-  {"minHeap",  "lifetime minimum free heap (bytes)"},
+  {"minHeap",  "since-boot minimum free heap (bytes)"},
   {"i2cTx",    "unit-bus transactions since boot"},
   {"i2cErr",   "failed unit-bus transactions since boot"},
   {"mqttDrops","MQTT broker disconnects since boot"},

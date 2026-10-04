@@ -145,6 +145,19 @@ WireTwibootBus unitBus;
 // What the shared probe/poll code found worth a log line.
 namespace {
 struct UnitBusNotes {
+  // Completes the scan-log entry unitBusProbe opened with "- unit at 0x..".
+  void identityRead(uint8_t, const UnitFacts& fact, bool versionReadable) {
+    if (!versionReadable) {
+      SerialPrintln(F(" is running sketch (fw UNKNOWN — unreadable version reply)"));
+    } else if (!unitProtocolSupported(fact.protocolVersion)) {
+      SerialPrintf(" speaks protocol v%u, we speak v%u — NOT DRIVABLE, reflash target\n",
+                   (unsigned)fact.protocolVersion,
+                   (unsigned)SFP_PROTOCOL_VERSION);
+    } else {
+      SerialPrintf(" is running sketch (fw %s%s)\n", fact.version,
+                   fact.fwStatus == 0 ? "" : " — OUTDATED");
+    }
+  }
   // The unit's drift auto re-home (#263) is otherwise silent on the operator
   // log — it only prints to the Nano's own (unmonitored) serial (#322).
   void driftSeen(uint8_t i2cAddress, const DriftLogDecision& drift,
@@ -335,20 +348,9 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
       continue;
     }
     UnitFacts& fact = facts[unitIndex];
-    if (unitProbeSketchUnit(unitBus, unitBusNotes, fact, (uint8_t)i2cAddress,
-                            BUNDLED_UNIT_REV, BUNDLED_UNIT_REV_EQUIV,
-                            bootVerdictLogged[unitIndex])) {
-      if (!unitProtocolSupported(fact.protocolVersion)) {
-        SerialPrintf(" speaks protocol v%u, we speak v%u — NOT DRIVABLE, reflash target\n",
-                     (unsigned)fact.protocolVersion,
-                     (unsigned)SFP_PROTOCOL_VERSION);
-      } else {
-        SerialPrintf(" is running sketch (fw %s%s)\n", fact.version,
-                     fact.fwStatus == 0 ? "" : " — OUTDATED");
-      }
-    } else {
-      SerialPrintln(F(" is running sketch (fw UNKNOWN — unreadable version reply)"));
-    }
+    unitProbeSketchUnit(unitBus, unitBusNotes, fact, (uint8_t)i2cAddress,
+                        BUNDLED_UNIT_REV, BUNDLED_UNIT_REV_EQUIV,
+                        bootVerdictLogged[unitIndex]);
   }
   // #367: the per-unit reset above zeroed the facts' error fields, but the
   // attributed counters are lifetime — restore them so a probe rescan doesn't

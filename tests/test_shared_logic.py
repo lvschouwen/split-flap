@@ -368,3 +368,26 @@ def test_both_row_masters_run_the_shared_bootloader_sequences():
         src = _strip_comments(path.read_text())
         for call in ("bootDumpRun(hooks, ", "bootUpdateRun(hooks, "):
             assert call in src, f"{path.name}: {call}"
+
+
+# --- API legend: one meaning per key ---------------------------------------------
+
+def _api_legend(path):
+    src = path.read_text()
+    table = src[src.index("API_LEGEND"):]
+    return dict(re.findall(r'\{"([^"]+)",\s*"((?:[^"\\]|\\.)*)"\}', table))
+
+
+def test_a_legend_key_means_the_same_on_both_row_masters():
+    """The route gates never looked at the legend text, and i2cTx / i2cErr /
+    minHeap had drifted in meaning between the two GET /api replies."""
+    master = _api_legend(V2 / "Master/ApiIndex.h")
+    follower = _api_legend(V2 / "FollowerEsp01/ApiIndex.h")
+    # Same word, different object: the leader's view of a member vs the
+    # member's own state.
+    different_object = {"hmac", "row", "seq"}
+    common = (set(master) & set(follower)) - different_object
+    assert len(common) > 50
+    drift = {k: (master[k], follower[k]) for k in sorted(common)
+             if master[k] != follower[k]}
+    assert not drift, drift
