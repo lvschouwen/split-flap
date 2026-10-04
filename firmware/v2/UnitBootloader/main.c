@@ -215,17 +215,15 @@ const static uint8_t chipinfo[8] = {
 };
 
 #if (SF_NEW_TWIBOOT)
-/* Split-flap patch (#499): bounded pin. The fielded twiboot pins forever once
- * the master sends any command (boot_timeout = 0, never counts down), so a unit
- * the master pins and then loses contact with sits dark until a power cycle.
- * Here a command instead re-arms a long-but-finite quiet timer, so the unit
- * falls back to the application after SF_PIN_TIMEOUT_MS of silence. The
- * blank-flash guard (app_installed) still overrides this and waits forever.
- * TODO(#499): SF_PIN_TIMEOUT_MS is provisional — anchor it to the measured
- * worst-case gap between reflash steps before fielding; see the issue. The
- * counter is 16-bit here because the pin window exceeds the 8-bit range. */
+/* Split-flap patch (#499): bounded pin — see fielded-image comment for
+ * rationale. Prescaled (#546): decrement boot_timeout every BOOT_PRESCALE-th
+ * timer tick so the 30 s pin window fits uint8_t (1875/8 = 234 ≤ 255).
+ * Both counters live in GPIORs: IN/OUT (2 B) instead of LDS/STS (4 B). */
 #define SF_PIN_TIMEOUT_MS       30000UL
-static uint16_t boot_timeout = TIMER_MSEC2IRQCNT(TIMEOUT_MS);
+#define BOOT_PRESCALE           8
+#define BOOT_TICKS(ms)          (TIMER_MSEC2IRQCNT(ms) / BOOT_PRESCALE)
+#define boot_timeout            GPIOR2
+#define boot_prescale           GPIOR1
 #else
 static uint8_t boot_timeout = TIMER_MSEC2IRQCNT(TIMEOUT_MS);
 #endif
@@ -379,9 +377,7 @@ static uint8_t TWI_data_write(uint8_t bcnt, uint8_t data)
 
                 case CMD_WAIT:
 #if (SF_NEW_TWIBOOT)
-                    /* bounded pin: re-arm the quiet timer on every command
-                     * instead of pinning forever (see boot_timeout above) */
-                    boot_timeout = TIMER_MSEC2IRQCNT(SF_PIN_TIMEOUT_MS);
+                    boot_timeout = BOOT_TICKS(SF_PIN_TIMEOUT_MS);
 #else
                     /* abort countdown */
                     boot_timeout = 0;
@@ -807,15 +803,22 @@ static void TIMER0_OVF_vect(void)
     /* count down for app-boot — but only if an application is actually
      * installed. A blank flash stays in bootloader indefinitely so the
      * master can push firmware over I2C. */
-    if (app_installed)
+    if (app_installed
+#if (SF_NEW_TWIBOOT)
+        && ++boot_prescale >= BOOT_PRESCALE
+#endif
+       )
     {
-        if (boot_timeout > 1)
+#if (SF_NEW_TWIBOOT)
+        boot_prescale = 0;
+#endif
+        uint8_t t = boot_timeout;
+        if (t > 1)
         {
-            boot_timeout--;
+            boot_timeout = t - 1;
         }
-        else if (boot_timeout == 1)
+        else if (t == 1)
         {
-            /* trigger app-boot */
             cmd = CMD_BOOT_APPLICATION;
         }
     }
@@ -901,6 +904,10 @@ int main(void)
         app_installed = 0;
     }
 
+#if (SF_NEW_TWIBOOT)
+    boot_timeout = BOOT_TICKS(TIMEOUT_MS) + 1;
+#endif
+
     /* timer0: running with F_CPU/1024 */
 #if defined (TCCR0)
     TCCR0 = (1<<CS02) | (1<<CS00);
@@ -918,7 +925,7 @@ int main(void)
     DDRD  &= (uint8_t)~((1<<3) | (1<<4) | (1<<5) | (1<<6));
     PORTD |= (uint8_t)((1<<3) | (1<<4) | (1<<5) | (1<<6));
     /* small settle for the pullups to pull high */
-    for (volatile uint8_t i = 0; i < 50; i++) { asm volatile ("nop"); }
+    for (uint8_t i = 50; i; --i) asm volatile ("nop");
     uint8_t dip = 0;
     if (!(PIND & (1<<3))) dip |= 1;
     if (!(PIND & (1<<4))) dip |= 2;
@@ -987,12 +994,12 @@ int main(void)
 
     LED_OFF();
 
-#if (LED_SUPPORT)
+#if (LED_SUPPORT && !SF_NEW_TWIBOOT)
     uint16_t wait = 0x0000;
     do {
         __asm volatile ("nop");
     } while (--wait);
-#endif /* (LED_SUPPORT) */
+#endif
 
     jump_to_app();
 } /* main */

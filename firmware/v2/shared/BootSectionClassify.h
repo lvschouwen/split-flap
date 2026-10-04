@@ -28,7 +28,7 @@ enum BootSectionState {
 // expects every unit to carry (BootIntegrity.h). The generated image header's
 // NEW_TWIBOOT_CRC32 is the source; the unit build asserts the two equal and
 // tests/test_new_twiboot_image pins it for the trees that never see that header.
-#define BOOT_CURRENT_CRC32 0xe422a668UL
+#define BOOT_CURRENT_CRC32 0xf8cdd7a1UL
 // crc32 of just the fielded pages 0-6 (0x7C00-0x7F7F, the twiboot core, page 7
 // excluded). Stage 1 only writes page 7, so this is what survives a half-done or
 // retried stage 1 — see the retriable case in classifyBootSection. Also pinned
