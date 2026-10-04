@@ -181,9 +181,11 @@ void webFirmwareRegister(AsyncWebServer& server) {
           // Session is live from here (#191). onDisconnect is the backstop
           // for a client that dies mid-upload: free the slot; the stale
           // Update session is aborted by the next upload's begin path above.
-          otaOwnerRequest = request;
+          // Stamp BEFORE the owner is published: netTask's stall watchdog
+          // keys on the owner and must never pair it with an old stamp.
           otaUploadStartMs = millis();
           otaLastChunkMs = otaUploadStartMs;  // #313 stall watchdog baseline
+          otaOwnerRequest = request;
           request->onDisconnect([request]() {
             if (otaOwnerRequest == request) otaOwnerRequest = nullptr;
           });
@@ -236,14 +238,24 @@ void webFirmwareRegister(AsyncWebServer& server) {
   server.on(
       "/firmware/rescue", HTTP_POST,
       [](AsyncWebServerRequest* request) {
+        // Overlap-rejected upload: answer 409 without touching the live
+        // install's state (same per-request marker as the master OTA).
+        if (request->_tempObject != nullptr) {
+          request->send(409, "text/plain",
+                        F("another rescue install is in flight — let it "
+                          "finish (a dropped one expires after ~30 s) and "
+                          "retry"));
+          return;
+        }
+        // #347: capture/clear the per-request install marker (see master OTA).
+        // Cleared whenever it is ours, whatever the verdict: a marker left
+        // behind would match a later request allocated at the same address.
+        bool mine = (rescueOwnerRequest == request);
+        if (mine) rescueOwnerRequest = nullptr;
         int rejStatus = 0;
         String rejReason;
         bool rejected = rescueRejection.take(rejStatus, rejReason);
-        // #347: capture/clear the per-request install marker (see master OTA).
-        // Not on a rejection: a 409'd overlap must leave the live install's
-        // marker alone.
-        bool installRan = !rejected && (rescueOwnerRequest == request);
-        if (installRan) rescueOwnerRequest = nullptr;
+        bool installRan = mine && !rejected;
         String err = factoryWriteError();
         // The factory writer has no "finished" state of its own: an install
         // that ran and latched no error is complete.
@@ -287,14 +299,11 @@ void webFirmwareRegister(AsyncWebServer& server) {
       [](AsyncWebServerRequest* request, String filename, size_t index,
          uint8_t* data, size_t len, bool final) {
         if (index == 0) {
-          // An install is already streaming: 409 without touching its state.
-          // (The shared rejection flag stalls the in-flight upload too — the
-          // erased header keeps that safe; clean per-request verdicts are
-          // #191 territory.)
+          // An install is already streaming: mark THIS request rejected
+          // (malloc pairs with the free in the request destructor) and leave
+          // the live install's state alone.
           if (factoryInstallInProgress()) {
-            rescueRejection.set(
-                409, F("another rescue install is in flight — let it finish (a "
-                       "dropped one expires after ~30 s) and retry"));
+            request->_tempObject = malloc(1);
             return;
           }
           rescueRejection.clear();
@@ -317,8 +326,17 @@ void webFirmwareRegister(AsyncWebServer& server) {
             return;
           }
           rescueOwnerRequest = request;  // #347: a real install began here
+          // A client that dies mid-upload must not leave its marker behind;
+          // the install itself expires in FactorySlot.
+          request->onDisconnect([request]() {
+            if (rescueOwnerRequest == request) rescueOwnerRequest = nullptr;
+          });
         }
 
+        // Only the request that began the install writes into it: an
+        // overlap-rejected or gate-rejected request whose client keeps
+        // streaming must not splice its chunks into the live one.
+        if (rescueOwnerRequest != request) return;
         if (rescueRejection.rejected()) return;
 
         if (len > 0 && !factoryWriteChunk(data, len, index)) {
@@ -378,12 +396,13 @@ void webFirmwareRegister(AsyncWebServer& server) {
 bool webFirmwareOtaUploadActive() { return otaOwnerRequest != nullptr; }
 
 void webFirmwareLoop() {
-  if (otaOwnerRequest != nullptr &&
-      otaUploadStalled(otaLastChunkMs, millis())) {
+  AsyncWebServerRequest* stalled = otaOwnerRequest.load();
+  if (stalled != nullptr && otaUploadStalled(otaLastChunkMs, millis())) {
     SerialPrintln(F("Master OTA upload stalled >30 s — aborting and resuming "
                     "normal operation"));
     if (Update.isRunning()) Update.abort();
-    otaOwnerRequest = nullptr;
+    // Release only the session judged stalled, never one that began since.
+    otaOwnerRequest.compare_exchange_strong(stalled, nullptr);
     mqttResumeAfterOta();
   }
 }

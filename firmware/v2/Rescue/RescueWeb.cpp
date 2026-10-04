@@ -312,8 +312,10 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
           // onDisconnect is the backstop for a client that dies mid-upload:
           // free the slot; the stale Update session is aborted by the next
           // upload's begin path above.
-          masterOtaOwnerRequest = request;
+          // Stamp BEFORE the owner is published: loop()'s stall watchdog keys
+          // on the owner and must never pair it with an old stamp.
           otaLastChunkMs = millis();
+          masterOtaOwnerRequest = request;
           request->onDisconnect([request]() {
             if (masterOtaOwnerRequest == request) masterOtaOwnerRequest = nullptr;
           });
@@ -401,11 +403,12 @@ void rescueWebTick() {
   // single flash session, and every other recovery attempt gets a 409 until
   // its socket dies. The stalled peer is parked in socket-read, not writing
   // flash, so there is no concurrent Update use.
-  if (masterOtaOwnerRequest != nullptr &&
-      otaUploadStalled(otaLastChunkMs, millis())) {
+  AsyncWebServerRequest* stalled = masterOtaOwnerRequest.load();
+  if (stalled != nullptr && otaUploadStalled(otaLastChunkMs, millis())) {
     Serial.println(F("Rescue flash stalled >30 s — session released"));
     if (Update.isRunning()) Update.abort();
-    masterOtaOwnerRequest = nullptr;
+    // Release only the session judged stalled, never one that began since.
+    masterOtaOwnerRequest.compare_exchange_strong(stalled, nullptr);
   }
   if (rebootPending.load() &&
       millis() - rebootRequestedAtMs.load() > REBOOT_GRACE_MS) {

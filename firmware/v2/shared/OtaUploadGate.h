@@ -128,6 +128,9 @@ inline OtaCompletion otaUploadCompletion(bool rejected, bool flashError,
 // next upload's begin path recovers the stale session.
 #define OTA_STALL_TIMEOUT_MS 30000UL
 
+// Signed: the stamp is written by the upload task and read by another, so
+// it can be NEWER than the `nowMs` the caller sampled a moment earlier. An
+// unsigned difference would read that as ~49 days of silence.
 inline bool otaUploadStalled(uint32_t lastChunkMs, uint32_t nowMs) {
-  return (uint32_t)(nowMs - lastChunkMs) > OTA_STALL_TIMEOUT_MS;
+  return (int32_t)(nowMs - lastChunkMs) > (int32_t)OTA_STALL_TIMEOUT_MS;
 }

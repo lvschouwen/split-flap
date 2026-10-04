@@ -113,6 +113,8 @@ static void test_stall_after_the_timeout_and_across_millis_wrap() {
   TEST_ASSERT_FALSE(otaUploadStalled(1000, 1000 + OTA_STALL_TIMEOUT_MS));
   TEST_ASSERT_TRUE(otaUploadStalled(1000, 1001 + OTA_STALL_TIMEOUT_MS));
   TEST_ASSERT_FALSE(otaUploadStalled(0xFFFFFF00u, 0x00000100u));
+  // A chunk stamped just after `now` was sampled is not 49 days of silence.
+  TEST_ASSERT_FALSE(otaUploadStalled(5010, 5000));
 }
 
 int main(int, char**) {
