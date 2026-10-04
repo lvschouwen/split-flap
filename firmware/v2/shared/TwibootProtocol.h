@@ -2,10 +2,10 @@
 
 #include <stdint.h>
 
-// Twiboot I2C protocol constants, shared by every v2 tree that talks to the
-// unit bootloader: the Master's reflash client + bootloader-mode probe
-// (UnitBus.cpp) and the follower's (FollowerBus.cpp). Protocol reference: the
-// command dispatch in firmware/v2/UnitBootloader/main.c.
+// Twiboot I2C protocol constants. The client that frames them is
+// TwibootFlash.h — the only place a twiboot command is built
+// (tests/test_twiboot_shared.py). Protocol reference: the command dispatch in
+// firmware/v2/UnitBootloader/main.c.
 
 #define TWIBOOT_CMD_WAIT               0x00  // no-op; resets twiboot's boot-window countdown
 #define TWIBOOT_CMD_SWITCH_APPLICATION 0x01  // followed by a boottype byte

@@ -23,7 +23,7 @@
 #include "RenderStagger.h"  // sub-frame inrush stagger (#324)
 #include "SplitFlapProtocol.h"
 #include "TaskWatchdog.h"  // wdtFeed() (#314)
-#include "TwibootProtocol.h"
+#include "TwibootFlash.h"  // the twiboot client; this file is its Wire adapter
 #include "UnitProtocolHelpers.h"
 
 // Stop-abort signal (#204) — see UnitBus.h for the contract.
@@ -80,6 +80,27 @@ static void recoverBusAfterFailedRead() {
   Wire.end();
   unitBusInit();
 }
+
+// The protocol itself is shared/TwibootFlash.h; this is the Wire adapter it
+// runs on. A short read must pass through recoverBusAfterFailedRead() before
+// the bus is touched again (#207); write NACKs during a page-program window
+// are expected and are not bus damage.
+namespace {
+struct WireTwibootBus {
+  void beginTransmission(uint8_t addr) { Wire.beginTransmission(addr); }
+  int endTransmission(bool stop) { return Wire.endTransmission(stop); }
+  size_t write(uint8_t b) { return Wire.write(b); }
+  uint8_t requestFrom(uint8_t addr, uint8_t qty) {
+    return Wire.requestFrom(addr, qty);
+  }
+  int read() { return Wire.read(); }
+  int available() { return Wire.available(); }
+  uint32_t nowMs() { return millis(); }
+  void sleepMs(uint32_t ms) { delay(ms); }
+  void readFailed() { recoverBusAfterFailedRead(); }
+};
+WireTwibootBus twibootBus;
+}  // namespace
 
 // Bus transaction counters for the System tab (#245). displayTask is the
 // only writer (sole Wire toucher); netTask's stats sampler reads them.
@@ -384,29 +405,9 @@ static bool readUnitDisplayedLetter(int i2cAddress, int& out) {
   return true;
 }
 
-// Writes twiboot's CMD_ACCESS_MEMORY + CHIPINFO request, reads the 8-byte
-// chipinfo response and checks whether the signature matches the ATmega328P.
-// Safe to call against a sketch-running unit: the patched Unit.ino ignores
-// writes of length != 2, so probing doesn't rotate the drum as a side effect.
 static bool isUnitInBootloader(int i2cAddress) {
   crashCtxMark(CRASH_SLOT_DISPLAY, CRASH_ACT_I2C_PROBE, (uint8_t)i2cAddress);
-  Wire.beginTransmission(i2cAddress);
-  Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
-  Wire.write((uint8_t)TWIBOOT_MEMTYPE_CHIPINFO);
-  Wire.write((uint8_t)0x00);
-  Wire.write((uint8_t)0x00);
-  if (Wire.endTransmission(false) != 0) return false;
-  uint8_t got = Wire.requestFrom((uint8_t)i2cAddress, (uint8_t)8);
-  if (got < 3) {
-    while (Wire.available()) Wire.read();
-    recoverBusAfterFailedRead();
-    return false;
-  }
-  uint8_t sig0 = Wire.read();
-  uint8_t sig1 = Wire.read();
-  uint8_t sig2 = Wire.read();
-  while (Wire.available()) Wire.read();
-  return isAtmega328pSignature(sig0, sig1, sig2);
+  return twibootIsBootloader(twibootBus, (uint8_t)i2cAddress);
 }
 
 // Write letter index and wire speed to a single unit. Returns
@@ -907,85 +908,13 @@ int unitBusClearAddress(int i2cAddress) {
   return countedTransmission();
 }
 
-// --- unit reflash over twiboot (#205) — v1 ServiceFirmwareFunctions.ino port --
-// Our DIP-patched twiboot listens on the unit's own address (not stock 0x29),
-// so every twiboot command targets the unit's address directly. Write NACKs
-// during the ~4.5 ms page-program window are EXPECTED (clock stretching is
-// disabled in our twiboot build) and are not #207 bus damage — only failed
-// READS need recoverBusAfterFailedRead().
-
-static int twibootPing(int addr) {
-  Wire.beginTransmission((uint8_t)addr);
-  Wire.write((uint8_t)TWIBOOT_CMD_WAIT);
-  return Wire.endTransmission();
-}
-
-static int twibootExit(int addr) {
-  Wire.beginTransmission((uint8_t)addr);
-  Wire.write((uint8_t)TWIBOOT_CMD_SWITCH_APPLICATION);
-  Wire.write((uint8_t)TWIBOOT_BOOTTYPE_APPLICATION);
-  return Wire.endTransmission();
-}
-
+// --- unit reflash over twiboot (#205) -----------------------------------------
 UnitRescueProbe unitBusRescueProbe(int i2cAddress) {
   Wire.beginTransmission((uint8_t)i2cAddress);
   if (Wire.endTransmission() != 0) return UnitRescueProbe::NoAck;
   if (!isUnitInBootloader(i2cAddress)) return UnitRescueProbe::SketchSilent;
-  twibootExit(i2cAddress);
+  twibootExit(twibootBus, (uint8_t)i2cAddress);
   return UnitRescueProbe::Bootloader;
-}
-
-// Spin-poll twiboot with CMD_WAIT until it ACKs again (its async flash
-// write finished) or the timeout elapses.
-static bool twibootWaitReady(int addr, uint16_t timeoutMs) {
-  uint32_t deadline = millis() + timeoutMs;
-  while ((int32_t)(millis() - deadline) < 0) {
-    if (twibootPing(addr) == 0) return true;
-    delay(1);
-  }
-  return false;
-}
-
-// Queries twiboot chipinfo and checks it matches the ATmega328P with the
-// expected page size.
-static bool twibootVerifyChip(int addr) {
-  Wire.beginTransmission((uint8_t)addr);
-  Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
-  Wire.write((uint8_t)TWIBOOT_MEMTYPE_CHIPINFO);
-  Wire.write((uint8_t)0x00);
-  Wire.write((uint8_t)0x00);
-  if (Wire.endTransmission(false) != 0) return false;
-  uint8_t got = Wire.requestFrom((uint8_t)addr, (uint8_t)8);
-  if (got != 8) {
-    while (Wire.available()) Wire.read();
-    recoverBusAfterFailedRead();
-    return false;
-  }
-  uint8_t sig0 = Wire.read(), sig1 = Wire.read(), sig2 = Wire.read();
-  uint8_t pageSize = Wire.read();
-  while (Wire.available()) Wire.read();  // flash + eeprom sizes, unused
-  return isAtmega328pSignature(sig0, sig1, sig2) &&
-         pageSize == TWIBOOT_PAGE_SIZE;
-}
-
-// Reads one 128-byte page back for post-write verification (v1 #110): same
-// CMD_ACCESS_MEMORY framing as the write but with no payload, then a
-// repeated-start read — the exact flow twiboot's own host tool uses.
-static bool twibootReadFlashPage(int addr, uint16_t flashAddr, uint8_t* out) {
-  Wire.beginTransmission((uint8_t)addr);
-  Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
-  Wire.write((uint8_t)TWIBOOT_MEMTYPE_FLASH);
-  Wire.write((uint8_t)((flashAddr >> 8) & 0xFF));
-  Wire.write((uint8_t)(flashAddr & 0xFF));
-  if (Wire.endTransmission(false) != 0) return false;
-  uint8_t got = Wire.requestFrom((uint8_t)addr, (uint8_t)TWIBOOT_PAGE_SIZE);
-  if (got != TWIBOOT_PAGE_SIZE) {
-    while (Wire.available()) Wire.read();
-    recoverBusAfterFailedRead();
-    return false;
-  }
-  for (int i = 0; i < TWIBOOT_PAGE_SIZE; i++) out[i] = Wire.read();
-  return true;
 }
 
 // The 132-byte page burst must fit the Wire TX buffer in one transaction —
@@ -994,51 +923,6 @@ static bool twibootReadFlashPage(int addr, uint16_t flashAddr, uint8_t* out) {
 static_assert(I2C_BUFFER_LENGTH >= TWIBOOT_PAGE_SIZE + 4,
               "Wire buffer too small for a twiboot page write — "
               "build with -DI2C_BUFFER_LENGTH=256 (#243)");
-
-static int twibootWriteFlashPage(int addr, uint16_t flashAddr,
-                                 const uint8_t* page) {
-  Wire.beginTransmission((uint8_t)addr);
-  size_t queued = 0;
-  queued += Wire.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
-  queued += Wire.write((uint8_t)TWIBOOT_MEMTYPE_FLASH);
-  queued += Wire.write((uint8_t)((flashAddr >> 8) & 0xFF));
-  queued += Wire.write((uint8_t)(flashAddr & 0xFF));
-  for (int i = 0; i < TWIBOOT_PAGE_SIZE; i++) queued += Wire.write(page[i]);
-  if (queued != TWIBOOT_PAGE_SIZE + 4) {
-    // write() only queues into RAM, so bailing here keeps the truncated
-    // page off the bus. With the 256-byte buffer this can only trip when
-    // Wire's buffer alloc failed at begin() — a state the core's own
-    // endTransmission() early-returns on (mutex left held) too; failing
-    // the flash loudly is the least-bad option.
-    SerialPrintf("twiboot page burst truncated (%u/%u queued) — "
-                 "Wire buffer too small\n",
-                 (unsigned)queued, (unsigned)(TWIBOOT_PAGE_SIZE + 4));
-    return -1;
-  }
-  return Wire.endTransmission();
-}
-
-// Writes one page and reads it back to verify, with one rewrite attempt on
-// mismatch (v1 #110). On persistent failure the caller aborts while the
-// unit still sits in twiboot — boot auto-install retries later instead of
-// the unit booting a corrupted sketch.
-static bool flashAndVerifyPage(int addr, uint16_t flashAddr,
-                               const uint8_t* page) {
-  for (int attempt = 0; attempt < 2; attempt++) {
-    // Ready-wait before the 132-byte burst, then again for the ~4.5 ms SPM
-    // cycle. 100/50 ms are the generous v1 values.
-    if (!twibootWaitReady(addr, 100)) return false;
-    if (twibootWriteFlashPage(addr, flashAddr, page) != 0) return false;
-    if (!twibootWaitReady(addr, 50)) return false;
-
-    uint8_t readBuf[TWIBOOT_PAGE_SIZE];
-    if (!twibootReadFlashPage(addr, flashAddr, readBuf)) return false;
-    if (memcmp(readBuf, page, TWIBOOT_PAGE_SIZE) == 0) return true;
-    SerialPrintf("Verify mismatch at 0x%02x page 0x%04x%s\n", addr, flashAddr,
-                 attempt == 0 ? " — rewriting once" : " — giving up");
-  }
-  return false;
-}
 
 const char* unitFlashResultName(UnitFlashResult r) {
   switch (r) {
@@ -1080,15 +964,13 @@ bool unitBusWaitBatchIdle(const uint8_t* addrs, int count,
 }
 
 UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out) {
-  bool bootloaderLive = false;
-  for (int attempt = 0; attempt < 5; attempt++) {
-    if (twibootPing(i2cAddress) == 0) { bootloaderLive = true; break; }
-    delay(100);
+  const uint8_t addr = (uint8_t)i2cAddress;
+  if (!twibootAwaitBootloader(twibootBus, addr)) {
+    return UnitBootReadResult::BootloaderSilent;
   }
-  if (!bootloaderLive) return UnitBootReadResult::BootloaderSilent;
 
   UnitBootReadResult result = UnitBootReadResult::Ok;
-  if (!twibootVerifyChip(i2cAddress)) {
+  if (twibootVerifyChip(twibootBus, addr) != TwibootStep::Ok) {
     result = UnitBootReadResult::ChipMismatch;
   } else {
     for (int page = 0; page < BOOT_SECTION_LEN / TWIBOOT_PAGE_SIZE; page++) {
@@ -1096,8 +978,8 @@ UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out) {
       uint16_t flashAddr =
           (uint16_t)(BOOT_SECTION_START + page * TWIBOOT_PAGE_SIZE);
       uint8_t* dst = out + page * TWIBOOT_PAGE_SIZE;
-      if (!twibootReadFlashPage(i2cAddress, flashAddr, dst) &&
-          !twibootReadFlashPage(i2cAddress, flashAddr, dst)) {
+      if (!twibootReadFlashPage(twibootBus, addr, flashAddr, dst) &&
+          !twibootReadFlashPage(twibootBus, addr, flashAddr, dst)) {
         result = UnitBootReadResult::ReadFailed;
         break;
       }
@@ -1108,7 +990,7 @@ UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out) {
   // the sketch, then the clean watchdog restart a flash ends with (v1 #113).
   bool exited = false;
   for (int attempt = 0; attempt < 3 && !exited; attempt++) {
-    exited = twibootExit(i2cAddress) == 0;
+    exited = twibootExit(twibootBus, addr) == 0;
     if (!exited) delay(20);
   }
   if (!exited) {
@@ -1135,7 +1017,7 @@ UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out) {
 
 UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
                                  size_t len) {
-  if (len > BOOT_SECTION_START) {
+  if (!twibootImageFits(len)) {
     SerialPrintf("Unit image too large (%u > %u) — would overwrite twiboot\n",
                  (unsigned)len, (unsigned)BOOT_SECTION_START);
     return UnitFlashResult::Aborted;
@@ -1144,13 +1026,16 @@ UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
   SerialPrintf("Flashing unit at 0x%02x (%u bytes)\n", i2cAddress,
                (unsigned)len);
 
-  bool bootloaderLive = false;
-  for (int attempt = 0; attempt < 5; attempt++) {
-    if (twibootPing(i2cAddress) == 0) { bootloaderLive = true; break; }
-    delay(100);
+  const uint8_t addr = (uint8_t)i2cAddress;
+  if (!twibootAwaitBootloader(twibootBus, addr)) {
+    return UnitFlashResult::BootloaderSilent;
   }
-  if (!bootloaderLive) return UnitFlashResult::BootloaderSilent;
-  if (!twibootVerifyChip(i2cAddress)) return UnitFlashResult::ChipMismatch;
+  TwibootStep chip = twibootVerifyChip(twibootBus, addr);
+  if (chip != TwibootStep::Ok) {
+    SerialPrintf("Unit 0x%02x chip check failed: %s\n", i2cAddress,
+                 twibootStepName(chip));
+    return UnitFlashResult::ChipMismatch;
+  }
 
   size_t pageCount = len / TWIBOOT_PAGE_SIZE;
   for (size_t pageIndex = 0; pageIndex < pageCount; pageIndex++) {
@@ -1162,31 +1047,34 @@ UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
       return UnitFlashResult::Aborted;
     }
     uint16_t flashAddr = (uint16_t)(pageIndex * TWIBOOT_PAGE_SIZE);
-    if (!flashAndVerifyPage(i2cAddress, flashAddr,
-                            image + pageIndex * TWIBOOT_PAGE_SIZE)) {
-      SerialPrintf("Unit flash FAILED at page 0x%04x — unit left in twiboot\n",
-                   flashAddr);
+    uint8_t rewrites = 0;
+    TwibootStep step = twibootFlashAndVerifyPage(
+        twibootBus, addr, flashAddr, image + pageIndex * TWIBOOT_PAGE_SIZE,
+        &rewrites);
+    if (rewrites > 0) {
+      SerialPrintf("Verify mismatch at 0x%02x page 0x%04x (%u write(s) "
+                   "read back wrong)\n",
+                   i2cAddress, flashAddr, (unsigned)rewrites);
+    }
+    if (step != TwibootStep::Ok) {
+      // Boot auto-install retries later; the unit never boots a half-written
+      // sketch.
+      SerialPrintf("Unit flash FAILED at page 0x%04x (%s) — unit left in "
+                   "twiboot\n",
+                   flashAddr, twibootStepName(step));
       return UnitFlashResult::PageFailed;
     }
   }
 
-  if (twibootExit(i2cAddress) != 0) return UnitFlashResult::ExitFailed;
+  if (twibootExit(twibootBus, addr) != 0) return UnitFlashResult::ExitFailed;
 
-  // Poll until the fresh sketch answers — a slow-booting unit (marginal
-  // supply, cold start) may need more than 2 s after twiboot's
-  // jump_to_app(). CMD_REBOOT then gives it a clean watchdog restart
-  // (fresh peripherals/MCUSR, DIP + EEPROM address re-read; v1 #113).
-  bool postBootAlive = false;
-  for (int attempt = 0; attempt < 5; attempt++) {
-    delay(500);
-    Wire.beginTransmission((uint8_t)i2cAddress);
-    if (Wire.endTransmission() == 0) { postBootAlive = true; break; }
-  }
-  if (!postBootAlive) {
+  // CMD_REBOOT gives the fresh sketch a clean watchdog restart (fresh
+  // peripherals/MCUSR, DIP + EEPROM address re-read; v1 #113).
+  if (!twibootAwaitSketch(twibootBus, addr)) {
     SerialPrintf("Unit 0x%02x not responding post-flash\n", i2cAddress);
     return UnitFlashResult::PostBootSilent;
   }
-  Wire.beginTransmission((uint8_t)i2cAddress);
+  Wire.beginTransmission(addr);
   writeGuardedOpcode(SFP_CMD_REBOOT);
   int rebootStatus = countedTransmission();
   if (rebootStatus != 0) {

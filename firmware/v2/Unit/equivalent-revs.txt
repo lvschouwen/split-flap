@@ -56,3 +56,8 @@ b00c4d1 fe3066aba53bab79a912281d33481f30e7fb47baedba1f31533b9b88facce3bf
 # compiles. Measured against the staged d1d7dfb image (all 21 units on the wall
 # run it), clean build: identical.
 d1d7dfb f93f649147bf129e9ad21bd29013865abdbfe07bc34ead3a4eae8ef1a1bffa17
+
+# #526 added shared/TwibootFlash.h, the row masters' twiboot client, which the
+# Nano never compiles. Measured against the staged 34c72e0 image (all 21 units
+# on the wall run it), clean build: identical.
+34c72e0 79b8235899693bc5508825de93760629aab5580b74b5aaad8672be706b084a12
