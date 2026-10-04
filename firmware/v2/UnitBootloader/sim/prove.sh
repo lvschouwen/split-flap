@@ -25,6 +25,7 @@ S_TRAMPOLINE=3 S_NEW=4
 avr-objcopy -I ihex -O binary ../prebuilt/twiboot-atmega328p-16mhz.hex fielded.raw
 avr-objcopy -I ihex -O binary ../twiboot-new-atmega328p-16mhz.hex newimage.bin
 avr-objcopy -I ihex -O binary ../prebuilt/twiboot-prev-e422a668.hex prevnew.bin
+avr-objcopy -I ihex -O binary ../prebuilt/twiboot-prev-081c2954.hex prevnew2.bin
 python3 - <<'PY'
 fielded = bytearray(open('fielded.raw', 'rb').read().ljust(1024, b'\xff'))
 new = open('newimage.bin', 'rb').read()
@@ -128,6 +129,15 @@ step "P1 previous image -> new image by stage 2 alone" \
 #    windows as in B.
 step "P2 kill sweep from the previous image" \
   prevnew.bin newimage.bin "$REPORT" --start app \
+  --sweep-kill 0 536 --expect-windows 130
+
+# Q. A unit on the SECOND previous image (the one this build replaces): also a
+#    complete bootloader with do_spm in page 7, same stage-2-only path.
+step "Q1 second previous image -> new image by stage 2 alone" \
+  prevnew2.bin newimage.bin "$REPORT" --start app \
+  --expect 0:$R_S2_OK:$S_NEW --expect-spm 536 --expect-resets 0
+step "Q2 kill sweep from the second previous image" \
+  prevnew2.bin newimage.bin "$REPORT" --start app \
   --sweep-kill 0 536 --expect-windows 130
 
 # G. A unit already on the new image does nothing.

@@ -23,6 +23,22 @@
 
 #define VERSION_STRING          "TWIBOOT v3.2"
 
+#if (SF_NEW_TWIBOOT)
+/* Crash recovery (#542): GPIOR1 is the "booted OK" sentinel the application
+ * writes in setup(), GPIOR2 is the crash counter. Both survive soft resets
+ * (WDT, external) and are cleared to 0x00 on power-on. */
+#define SF_CRASH_SENTINEL       0xAA
+#define SF_CRASH_THRESHOLD      3
+/* Identity bytes (#541): compact identifier in the CMD_READ_VERSION response. */
+#define SF_INFO_VERSION         0x02
+#define SF_INFO_CAP_DO_SPM      0x01
+#define SF_INFO_CAP_BOUNDED_PIN 0x02
+#define SF_INFO_CAP_CRASH_REC   0x04
+#define SF_INFO_CAP_FUSE_CHIP   0x08
+#define SF_INFO_CAPS            (SF_INFO_CAP_DO_SPM | SF_INFO_CAP_BOUNDED_PIN | \
+                                 SF_INFO_CAP_CRASH_REC | SF_INFO_CAP_FUSE_CHIP)
+#endif
+
 /* Split-flap patch: SF_NEW_TWIBOOT selects the lean second-generation image
  * that in-system bootloader update (#499) installs over I2C. Relative to the
  * fielded image it drops EEPROM access (no master uses twiboot's EEPROM path),
@@ -198,7 +214,18 @@
  *   SLA+W, 0x02, 0x02, addrh, addrl, {* bytes}, STO
  */
 
+#if (SF_NEW_TWIBOOT)
+/* #541: compact identifier — "SF", version, capability bitfield, 0xFF pad.
+ * The master can classify the bootloader generation from bytes 0-3 without a
+ * full boot-section CRC. */
+const static uint8_t info[16] = {
+    'S', 'F', SF_INFO_VERSION, SF_INFO_CAPS,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF,
+};
+#else
 const static uint8_t info[16] = VERSION_STRING;
+#endif
 const static uint8_t chipinfo[8] = {
     SIGNATURE_0, SIGNATURE_1, SIGNATURE_2,
     SPM_PAGESIZE,
@@ -501,8 +528,21 @@ static uint8_t TWI_data_read(uint8_t bcnt)
             break;
 
         case CMD_ACCESS_CHIPINFO:
+#if (SF_NEW_TWIBOOT)
+            /* #543: extend chipinfo to 12 bytes — the standard 8 from the
+             * const array, then fuse/lock bytes read on the fly via SPM.
+             * Byte order matches the Z addresses: lfuse(0), lock(1),
+             * efuse(2), hfuse(3). Old masters read 8 and STOP; new masters
+             * read 12. */
+            bcnt %= 12;
+            if (bcnt < sizeof(chipinfo))
+                data = chipinfo[bcnt];
+            else
+                data = boot_lock_fuse_bits_get((uint16_t)(bcnt - sizeof(chipinfo)));
+#else
             bcnt %= sizeof(chipinfo);
             data = chipinfo[bcnt];
+#endif
             break;
 
         case CMD_ACCESS_FLASH:
@@ -870,6 +910,21 @@ void disable_wdt_timer(void)
      * twiboot clears MCUSR unconditionally, hiding the reset cause from the
      * sketch — see #502 item 6. */
     GPIOR0 = MCUSR;
+    /* Crash recovery (#542): if this is a WDT reset and the application never
+     * wrote the "booted OK" sentinel (GPIOR1 == 0xAA), the app crashed before
+     * setup() completed — increment the crash counter in GPIOR2. A power-on
+     * reset clears all GPIORs to 0x00, so the counter resets on its own.
+     * main() reads GPIOR2 and holds the bootloader when the threshold is hit.
+     * GPIOR1 is cleared here so boot_prescale (its runtime alias) starts at 0. */
+    if (MCUSR & (1 << WDRF)) {
+        if (GPIOR1 == SF_CRASH_SENTINEL) {
+            GPIOR2 = 0;
+        } else {
+            uint8_t c = GPIOR2;
+            if (c < 0xFF) GPIOR2 = c + 1;
+        }
+    }
+    GPIOR1 = 0;
 #endif
     MCUSR = 0;
     WDTCSR = (1<<WDCE) | (1<<WDE);
@@ -905,6 +960,12 @@ int main(void)
     }
 
 #if (SF_NEW_TWIBOOT)
+    /* Crash recovery (#542): stay in bootloader when the crash counter
+     * (GPIOR2, set in .init3) reaches the threshold. GPIOR0 holds the stashed
+     * MCUSR; read GPIOR2 before boot_timeout overwrites its register alias. */
+    if (app_installed && (GPIOR0 & (1 << WDRF)) && GPIOR2 >= SF_CRASH_THRESHOLD) {
+        app_installed = 0;
+    }
     boot_timeout = BOOT_TICKS(TIMEOUT_MS) + 1;
 #endif
 
@@ -1003,6 +1064,15 @@ int main(void)
     do {
         __asm volatile ("nop");
     } while (--wait);
+#endif
+
+#if (SF_NEW_TWIBOOT)
+    /* Crash recovery (#542): clear the counter and sentinel so the app starts
+     * a fresh crash-detection cycle. Without this, boot_timeout's value
+     * (which aliases GPIOR2) would be misread as a high crash count if the
+     * app crashes before writing the sentinel on the next boot. */
+    GPIOR1 = 0;
+    GPIOR2 = 0;
 #endif
 
     jump_to_app();
