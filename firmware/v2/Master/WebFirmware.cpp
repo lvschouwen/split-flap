@@ -101,8 +101,8 @@ void webFirmwareRegister(AsyncWebServer& server) {
                                                  Update.errorString());
             return;
           case OtaCompletion::NoFile:
-            // Nothing was flashed and MQTT was never frozen (that happens in
-            // onUpload), so no thaw needed.
+            // Nothing was flashed by this request, and it froze nothing
+            // (that happens in onUpload once a session begins).
             request->send(400, "text/plain",
                           F("No firmware in request (a multipart file part is "
                             "required)"));
@@ -187,7 +187,13 @@ void webFirmwareRegister(AsyncWebServer& server) {
           otaLastChunkMs = otaUploadStartMs;  // #313 stall watchdog baseline
           otaOwnerRequest = request;
           request->onDisconnect([request]() {
-            if (otaOwnerRequest == request) otaOwnerRequest = nullptr;
+            // Still the owner here = the client died mid-upload (a finished
+            // request was released by its completion handler). The stall
+            // watchdog keys on the owner, so nothing else would thaw MQTT.
+            AsyncWebServerRequest* mine = request;
+            if (otaOwnerRequest.compare_exchange_strong(mine, nullptr)) {
+              mqttResumeAfterOta();
+            }
           });
         }
 

@@ -109,14 +109,17 @@ enum class OtaCompletion : uint8_t {
 };
 
 // `uploadRan` = the upload callback established a session for THIS request.
-// It is checked before `finished`: a POST with no file part never begins an
-// Update, and a never-begun Update reports itself finished — answering 200
-// there was a spurious, unauthenticated reboot (#347).
+// It is checked before everything the flash layer says: that state is a
+// singleton which outlives requests. A POST with no file part never begins
+// an Update, and a never-begun Update reports itself finished — answering
+// 200 there was a spurious, unauthenticated reboot (#347) — and it still
+// carries the error of whatever upload failed last, which is not this
+// request's error either.
 inline OtaCompletion otaUploadCompletion(bool rejected, bool flashError,
                                          bool uploadRan, bool finished) {
   if (rejected) return OtaCompletion::Rejected;
-  if (flashError) return OtaCompletion::FlashError;
   if (!uploadRan) return OtaCompletion::NoFile;
+  if (flashError) return OtaCompletion::FlashError;
   if (!finished) return OtaCompletion::Incomplete;
   return OtaCompletion::Flashed;
 }

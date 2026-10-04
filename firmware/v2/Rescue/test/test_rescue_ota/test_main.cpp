@@ -105,6 +105,10 @@ static void test_completion_order() {
 static void test_completion_without_a_file_part_never_reports_flashed() {
   TEST_ASSERT_EQUAL((int)OtaCompletion::NoFile,
                     (int)otaUploadCompletion(false, false, false, true));
+  // The flash layer's error is a singleton left by an EARLIER upload: a
+  // request that streamed nothing must not answer with it.
+  TEST_ASSERT_EQUAL((int)OtaCompletion::NoFile,
+                    (int)otaUploadCompletion(false, true, false, true));
 }
 
 // --- stall rule -------------------------------------------------------------
