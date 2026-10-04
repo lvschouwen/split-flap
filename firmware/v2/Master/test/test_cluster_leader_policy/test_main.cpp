@@ -310,18 +310,18 @@ static void test_public_host_rejected_ssrf() {
 }
 
 static void test_lan_target_classifier() {
-  TEST_ASSERT_TRUE(clusterHostIsLanTarget("192.168.1.1"));
-  TEST_ASSERT_TRUE(clusterHostIsLanTarget("10.255.0.1"));
-  TEST_ASSERT_TRUE(clusterHostIsLanTarget("172.16.0.1"));
-  TEST_ASSERT_TRUE(clusterHostIsLanTarget("172.31.255.255"));
-  TEST_ASSERT_TRUE(clusterHostIsLanTarget("127.0.0.1"));
-  TEST_ASSERT_TRUE(clusterHostIsLanTarget("Wall-3.LOCAL"));  // case-insensitive
-  TEST_ASSERT_TRUE(clusterHostIsLanTarget("localhost"));
-  TEST_ASSERT_FALSE(clusterHostIsLanTarget("172.15.0.1"));
-  TEST_ASSERT_FALSE(clusterHostIsLanTarget("172.32.0.1"));
-  TEST_ASSERT_FALSE(clusterHostIsLanTarget("8.8.8.8"));
-  TEST_ASSERT_FALSE(clusterHostIsLanTarget(".local"));  // needs a label
-  TEST_ASSERT_FALSE(clusterHostIsLanTarget("attacker.com"));
+  TEST_ASSERT_TRUE(lanHostIsLocal("192.168.1.1"));
+  TEST_ASSERT_TRUE(lanHostIsLocal("10.255.0.1"));
+  TEST_ASSERT_TRUE(lanHostIsLocal("172.16.0.1"));
+  TEST_ASSERT_TRUE(lanHostIsLocal("172.31.255.255"));
+  TEST_ASSERT_TRUE(lanHostIsLocal("127.0.0.1"));
+  TEST_ASSERT_TRUE(lanHostIsLocal("Wall-3.LOCAL"));  // case-insensitive
+  TEST_ASSERT_TRUE(lanHostIsLocal("localhost"));
+  TEST_ASSERT_FALSE(lanHostIsLocal("172.15.0.1"));
+  TEST_ASSERT_FALSE(lanHostIsLocal("172.32.0.1"));
+  TEST_ASSERT_FALSE(lanHostIsLocal("8.8.8.8"));
+  TEST_ASSERT_FALSE(lanHostIsLocal(".local"));  // needs a label
+  TEST_ASSERT_FALSE(lanHostIsLocal("attacker.com"));
 }
 
 static void test_self_member_is_empty_host() {

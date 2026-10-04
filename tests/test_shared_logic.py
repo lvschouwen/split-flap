@@ -132,3 +132,31 @@ def test_unit_read_validity_is_patched_through_the_shared_helpers():
     assert set(hits) <= readers, hits
     for path in ("Master/DisplayIpc.h", "FollowerEsp01/FollowerBus.cpp"):
         assert "unitFactsInvalidateReads(" in (V2 / path).read_text(), path
+
+
+# --- #531: LAN origin + CSRF ---------------------------------------------------
+
+def test_the_lan_origin_rule_exists_once():
+    """A security boundary that was three byte-identical copies (plus a
+    fourth private-IPv4 parser for the SSRF guard)."""
+    assert not _offenders(r"\boctets\[|startsWith\(\"http://\"\)|"
+                          r"inline bool \w+(?:PrivateIpv4|OriginAllowed|"
+                          r"CsrfRejectPost|IsLanTarget)\b"), (
+        "LAN host/origin checks and the CSRF reject live in shared/LanOrigin.h")
+    users = {"Master/WebCluster.cpp", "Master/WebEndpoints.cpp",
+             "FollowerEsp01/FollowerWeb.cpp", "Rescue/RescueWeb.cpp"}
+    for path in users:
+        assert "lanCsrfRejectPost(" in (V2 / path).read_text(), path
+
+
+def test_the_follower_reprobes_a_unit_whose_reads_it_invalidated():
+    """Only a probe re-reads the offset on the ESP-01 row, and nothing probes
+    periodically there: an op that invalidates a unit's reads must queue one."""
+    web = _strip_comments((V2 / "FollowerEsp01/FollowerWeb.cpp").read_text())
+    body = web[web.index("static void executeStagedOp()"):
+               web.index("static void pollSelfTest()")]
+    for kind in ("RebootToBootloader", "BootUpdate", "BootDump"):
+        case = body[body.index(f"case FollowerOpKind::{kind}:"):]
+        case = case[:case.index("case FollowerOpKind::", 10)
+                    if "case FollowerOpKind::" in case[10:] else len(case)]
+        assert "unitHealthRefreshPending = true;" in case, kind

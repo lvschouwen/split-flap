@@ -1,68 +1,19 @@
 #pragma once
-// FollowerCors.h — the #294 rung-3 CORS gates, COPY of the v2 master's
-// ClusterDigest.h origin/path logic (copy policy: fix bugs in both trees),
-// natively tested by test_follower_json. Reflected back only for origins
-// that can only exist inside the LAN — private IPv4 literals, .local names
-// and localhost, all http-only. The path gate opens exactly the per-member
-// management surface the S3's wall panel fans out to; /firmware/* and
-// /cluster/* stay closed. The per-response glue lives in FollowerWeb.cpp
-// (the ESP8266 async fork has no server middleware).
+// FollowerCors.h — the #294 rung-3 CORS path allowlist of the ESP-01
+// follower, natively tested by test_follower_json. Which origins count as
+// LAN panes, and the CSRF rule, are the shared LanOrigin.h; this is only the
+// per-member management surface the S3's wall panel fans out to. The
+// per-response glue lives in FollowerWeb.cpp (the ESP8266 async fork has no
+// server middleware, so each mutating handler calls lanCsrfRejectPost).
 
 #include <Arduino.h>
 
-inline bool followerCorsPrivateIpv4(const String& host) {
-  int octets[4];
-  int value = 0, digits = 0, index = 0;
-  for (unsigned int i = 0; i <= host.length(); i++) {
-    char c = i < host.length() ? host[i] : '.';
-    if (c == '.') {
-      if (digits == 0 || digits > 3 || index >= 4) return false;
-      octets[index++] = value;
-      value = 0;
-      digits = 0;
-    } else if (c >= '0' && c <= '9') {
-      value = value * 10 + (c - '0');
-      if (value > 255) return false;
-      digits++;
-    } else {
-      return false;
-    }
-  }
-  if (index != 4) return false;
-  if (octets[0] == 10 || octets[0] == 127) return true;
-  if (octets[0] == 192 && octets[1] == 168) return true;
-  if (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) return true;
-  return false;
-}
+#include "LanOrigin.h"
 
-inline bool followerCorsOriginAllowed(const String& origin) {
-  if (!origin.startsWith("http://")) return false;
-  String host = origin.substring(7);
-  int cut = host.indexOf(':');
-  if (cut < 0) cut = host.indexOf('/');
-  if (cut >= 0) host = host.substring(0, cut);
-  if (host.length() == 0) return false;
-  if (host.equalsIgnoreCase("localhost")) return true;
-  String lower = host;
-  lower.toLowerCase();
-  if (lower.endsWith(".local") && host.length() > 6) return true;
-  return followerCorsPrivateIpv4(host);
-}
-
-// CSRF gate (#313), COPY of the master's clusterCsrfRejectPost. A mutating
-// POST carrying an Origin that is not a LAN pane is cross-site forgery —
-// refuse it (the ESP8266 fork has no middleware, so FollowerWeb.cpp calls
-// this at the top of each mutating handler). The leader's server-to-server
-// calls carry no Origin and pass; the board's own LAN UI passes.
-inline bool followerCsrfRejectPost(bool isPost, bool hasOrigin,
-                                   const String& origin) {
-  return isPost && hasOrigin && !followerCorsOriginAllowed(origin);
-}
-
-// This firmware's served slice of the v2 surface ("/" and the log/stat
-// reads don't exist here; /reboot does — the panel's reboot button).
-// #304 opens /reflash-units too (board-level unit reflash from the wall
-// panel). /firmware/* stays CLOSED, in lockstep with the S3's copy: the
+// The slice of this firmware's surface a wall pane on another board may call:
+// the settings/health reads, the unit ops, /reboot and (#304) /reflash-units.
+// /log is served but pulled by the leader server-to-server, so it is not
+// opened here. /firmware/* stays CLOSED, as on the S3: the
 // ESP-01's firmware is pushed by the S3 relay (stored image streamed
 // server-to-server via clusterTask, #304 2a), never a browser cross-origin
 // POST — so no CORS exception is needed here.

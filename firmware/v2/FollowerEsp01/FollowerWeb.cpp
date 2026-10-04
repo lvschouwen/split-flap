@@ -95,7 +95,7 @@ static void sendResponseWithCors(AsyncWebServerRequest* request,
   if (request->hasHeader("Origin") &&
       followerCorsPathAllowed(request->url())) {
     const String origin = request->header("Origin");
-    if (followerCorsOriginAllowed(origin)) {
+    if (lanOriginAllowed(origin)) {
       response->addHeader("Access-Control-Allow-Origin", origin);
       response->addHeader("Vary", "Origin");
     }
@@ -117,7 +117,7 @@ static void sendWithCors(AsyncWebServerRequest* request, int status,
 static bool followerRejectCsrf(AsyncWebServerRequest* request) {
   bool hasOrigin = request->hasHeader("Origin");
   String origin = hasOrigin ? request->header("Origin") : String();
-  if (followerCsrfRejectPost(request->method() == HTTP_POST, hasOrigin,
+  if (lanCsrfRejectPost(request->method() == HTTP_POST, hasOrigin,
                              origin)) {
     request->send(403, "text/plain",
                   F("Cross-origin POST refused (CSRF guard)"));
@@ -320,7 +320,7 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         // bytes (MD5 is integrity, not authenticity), so a browser CSRF could
         // flash hostile firmware. Marked like every other reject so the
         // completion handler answers 403; no owner/freeze is taken.
-        if (followerCsrfRejectPost(true, request->hasHeader("Origin"),
+        if (lanCsrfRejectPost(true, request->hasHeader("Origin"),
                                    request->hasHeader("Origin")
                                        ? request->header("Origin")
                                        : String())) {
@@ -741,7 +741,7 @@ void webEndpointsInit(AsyncWebServer& server) {
     // the wall's local "Leave" button (a LAN browser).
     FollowerClusterView lcv = clusterViewGet();
     bool fromLanBrowser = request->hasHeader("Origin") &&
-                          followerCorsOriginAllowed(request->header("Origin"));
+                          lanOriginAllowed(request->header("Origin"));
     if (clusterHmacEnforced()) {
       // Keyed (#313 follow-on): the leader arm becomes a valid SIGNATURE
       // (beats a spoofed IP); the local Leave button rides the browser arm.
@@ -1241,6 +1241,9 @@ static void executeStagedOp() {
       // of that window (v1 #88). Armed on a NACK too: it does not prove the
       // unit stayed in its sketch.
       busArmProbeInhibit(millis() + 3000);
+      // Only a probe re-reads the offset; queue one for once the inhibit
+      // has run out, or the unit's reads stay invalid until someone asks.
+      unitHealthRefreshPending = true;
       break;
     case FollowerOpKind::SelfTest:
       selfTestSlot = SelfTestSlot{};
@@ -1260,6 +1263,7 @@ static void executeStagedOp() {
       break;
     case FollowerOpKind::BootUpdate:
       busRunBootUpdate(op.seq, op.addr, opResult);
+      unitHealthRefreshPending = true;  // its reads were invalidated
       stagedOp.pending = false;
       return;
     case FollowerOpKind::BootDump:
@@ -1267,6 +1271,7 @@ static void executeStagedOp() {
       bootDumpBytesSeq = (bootDumpSlot.outcome == BootDumpOutcome::Ok)
                              ? op.seq : 0;
       grade = maintGradeObserved(bootDumpSlot.outcome == BootDumpOutcome::Ok);
+      unitHealthRefreshPending = true;  // its reads were invalidated
       break;
     case FollowerOpKind::BootInfo: {
       BootInfoSlot slot;

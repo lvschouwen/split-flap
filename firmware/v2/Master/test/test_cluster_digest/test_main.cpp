@@ -371,27 +371,27 @@ static void test_join_rejected_other_leader_marker() {
 // --- CORS origin validator (#294 rung 3) -------------------------------------------
 
 static void test_cors_allows_private_lan_origins() {
-  TEST_ASSERT_TRUE(clusterCorsOriginAllowed("http://192.168.15.90"));
-  TEST_ASSERT_TRUE(clusterCorsOriginAllowed("http://192.168.15.90:8080"));
-  TEST_ASSERT_TRUE(clusterCorsOriginAllowed("http://10.0.0.5"));
-  TEST_ASSERT_TRUE(clusterCorsOriginAllowed("http://172.16.0.1"));
-  TEST_ASSERT_TRUE(clusterCorsOriginAllowed("http://172.31.255.9"));
-  TEST_ASSERT_TRUE(clusterCorsOriginAllowed("http://127.0.0.1:5173"));
-  TEST_ASSERT_TRUE(clusterCorsOriginAllowed("http://localhost"));
-  TEST_ASSERT_TRUE(clusterCorsOriginAllowed("http://split-flap-a47dee.local"));
-  TEST_ASSERT_TRUE(clusterCorsOriginAllowed("http://Split-Flap.LOCAL"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://192.168.15.90"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://192.168.15.90:8080"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://10.0.0.5"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://172.16.0.1"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://172.31.255.9"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://127.0.0.1:5173"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://localhost"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://split-flap-a47dee.local"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://Split-Flap.LOCAL"));
 }
 
 static void test_cors_rejects_public_and_garbage_origins() {
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed(""));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("null"));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://evil.com"));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://8.8.8.8"));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://172.32.0.1"));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://192.168.1.evil.com"));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("https://192.168.15.90"));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://local"));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("ftp://192.168.15.90"));
+  TEST_ASSERT_FALSE(lanOriginAllowed(""));
+  TEST_ASSERT_FALSE(lanOriginAllowed("null"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://evil.com"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://8.8.8.8"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://172.32.0.1"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://192.168.1.evil.com"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("https://192.168.15.90"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://local"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("ftp://192.168.15.90"));
 }
 
 static void test_cors_path_surface_is_the_per_member_one() {
@@ -424,28 +424,28 @@ static void test_cors_path_surface_is_the_per_member_one() {
 }
 
 static void test_cors_rejects_lookalike_ipv4() {
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://192.168.1"));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://192.168.1.1.1"));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://192.168.01x.1"));
-  TEST_ASSERT_FALSE(clusterCorsOriginAllowed("http://1921.68.1.1"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://192.168.1"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://192.168.1.1.1"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://192.168.01x.1"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://1921.68.1.1"));
 }
 
 static void test_csrf_gate_blocks_cross_site_post() {
   // #313: a POST from a public/https page is forgery — refuse.
   TEST_ASSERT_TRUE(
-      clusterCsrfRejectPost(true, true, "https://192.168.1.5"));  // not http
-  TEST_ASSERT_TRUE(clusterCsrfRejectPost(true, true, "http://evil.example.com"));
-  TEST_ASSERT_TRUE(clusterCsrfRejectPost(true, true, "http://8.8.8.8"));
+      lanCsrfRejectPost(true, true, "https://192.168.1.5"));  // not http
+  TEST_ASSERT_TRUE(lanCsrfRejectPost(true, true, "http://evil.example.com"));
+  TEST_ASSERT_TRUE(lanCsrfRejectPost(true, true, "http://8.8.8.8"));
 }
 
 static void test_csrf_gate_allows_lan_ui_and_server_to_server() {
   // The board's own LAN web UI carries a LAN origin — allowed.
-  TEST_ASSERT_FALSE(clusterCsrfRejectPost(true, true, "http://192.168.1.5"));
-  TEST_ASSERT_FALSE(clusterCsrfRejectPost(true, true, "http://splitflap.local"));
+  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, true, "http://192.168.1.5"));
+  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, true, "http://splitflap.local"));
   // The leader's esp_http_client sends no Origin header — allowed.
-  TEST_ASSERT_FALSE(clusterCsrfRejectPost(true, false, ""));
+  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, false, ""));
   // Never blocks a GET (safe method), even with a hostile origin.
-  TEST_ASSERT_FALSE(clusterCsrfRejectPost(false, true, "http://evil.example.com"));
+  TEST_ASSERT_FALSE(lanCsrfRejectPost(false, true, "http://evil.example.com"));
 }
 
 // #321 eligible-successor list -------------------------------------------------

@@ -24,7 +24,7 @@
 #include "BuildVersion.h"
 #include "ClockPolicy.h"
 #include "ClockService.h"
-#include "ClusterDigest.h"  // clusterCsrfRejectPost (inline upload gate)
+#include "ClusterDigest.h"  // lanCsrfRejectPost (inline upload gate)
 #include "ClusterFollower.h"
 #include "ClusterLeader.h"
 #include "FactorySlot.h"
@@ -104,7 +104,7 @@ const char* webResetReasonName(int reason) {
 // cross-site POST; the caller marks its own per-request rejection state.
 bool webUploadCsrfRejected(AsyncWebServerRequest* request) {
   bool hasOrigin = request->hasHeader("Origin");
-  return clusterCsrfRejectPost(true, hasOrigin,
+  return lanCsrfRejectPost(true, hasOrigin,
                                hasOrigin ? request->header("Origin") : String());
 }
 

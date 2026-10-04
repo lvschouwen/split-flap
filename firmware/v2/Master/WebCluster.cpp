@@ -60,7 +60,7 @@ static AsyncMiddlewareFunction clusterCorsMiddleware(
     [](AsyncWebServerRequest* request, ArMiddlewareNext next) {
       bool hasOrigin = request->hasHeader("Origin");
       String origin = hasOrigin ? request->header("Origin") : String();
-      if (clusterCsrfRejectPost(request->method() == HTTP_POST, hasOrigin,
+      if (lanCsrfRejectPost(request->method() == HTTP_POST, hasOrigin,
                                 origin)) {
         request->send(403, "text/plain",
                       F("Cross-origin POST refused (CSRF guard)"));
@@ -69,7 +69,7 @@ static AsyncMiddlewareFunction clusterCorsMiddleware(
       next();
       if (!hasOrigin) return;
       if (!clusterCorsPathAllowed(request->url())) return;
-      if (!clusterCorsOriginAllowed(origin)) return;
+      if (!lanOriginAllowed(origin)) return;
       AsyncWebServerResponse* response = request->getResponse();
       if (response == nullptr) return;
       response->addHeader("Access-Control-Allow-Origin", origin);
@@ -409,7 +409,7 @@ void webClusterRegister(AsyncWebServer& server) {
     // (The CSRF middleware has already 403'd any non-LAN browser origin.)
     ClusterFollowerView cv = clusterFollowerViewGet();
     bool fromLanBrowser = request->hasHeader("Origin") &&
-                          clusterCorsOriginAllowed(request->header("Origin"));
+                          lanOriginAllowed(request->header("Origin"));
     if (clusterFollowerHmacEnforced()) {
       // Keyed (#313 follow-on): the leader arm becomes a valid SIGNATURE
       // (beats a spoofed IP); the local Leave button rides the LAN-browser

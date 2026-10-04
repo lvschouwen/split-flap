@@ -246,13 +246,13 @@ static void test_wire_strings_are_escaped() {
 // --- CORS gates (#294 copies) ---------------------------------------------------------
 
 static void test_cors_origin_gate_lan_only() {
-  TEST_ASSERT_TRUE(followerCorsOriginAllowed("http://192.168.15.90"));
-  TEST_ASSERT_TRUE(followerCorsOriginAllowed("http://10.1.2.3:8080"));
-  TEST_ASSERT_TRUE(followerCorsOriginAllowed("http://leader.local"));
-  TEST_ASSERT_TRUE(followerCorsOriginAllowed("http://localhost:8000"));
-  TEST_ASSERT_FALSE(followerCorsOriginAllowed("https://192.168.15.90"));
-  TEST_ASSERT_FALSE(followerCorsOriginAllowed("http://8.8.8.8"));
-  TEST_ASSERT_FALSE(followerCorsOriginAllowed("http://evil.example.com"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://192.168.15.90"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://10.1.2.3:8080"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://leader.local"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://localhost:8000"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("https://192.168.15.90"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://8.8.8.8"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://evil.example.com"));
 }
 
 static void test_cors_path_gate_matches_served_surface() {
@@ -274,13 +274,13 @@ static void test_cors_path_gate_matches_served_surface() {
 
 static void test_csrf_gate_matches_master() {
   // #313: a mutating POST with a public/https origin is cross-site forgery.
-  TEST_ASSERT_TRUE(followerCsrfRejectPost(true, true, "http://evil.example.com"));
-  TEST_ASSERT_TRUE(followerCsrfRejectPost(true, true, "https://192.168.15.90"));
+  TEST_ASSERT_TRUE(lanCsrfRejectPost(true, true, "http://evil.example.com"));
+  TEST_ASSERT_TRUE(lanCsrfRejectPost(true, true, "https://192.168.15.90"));
   // The board's own LAN UI and server-to-server (no Origin) both pass; GETs
   // are never blocked.
-  TEST_ASSERT_FALSE(followerCsrfRejectPost(true, true, "http://192.168.15.90"));
-  TEST_ASSERT_FALSE(followerCsrfRejectPost(true, false, ""));
-  TEST_ASSERT_FALSE(followerCsrfRejectPost(false, true, "http://evil.example.com"));
+  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, true, "http://192.168.15.90"));
+  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, false, ""));
+  TEST_ASSERT_FALSE(lanCsrfRejectPost(false, true, "http://evil.example.com"));
 }
 
 // #503: the reset history rides /cluster/health, newest boot first, and the

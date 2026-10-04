@@ -8,7 +8,7 @@
 
 #include "BuildVersion.h"
 #include "RescueAssets.h"
-#include "RescueCors.h"  // CSRF origin gate on mutating POSTs (#349)
+#include "LanOrigin.h"  // CSRF origin gate on mutating POSTs (#349)
 #include "RescueOta.h"
 #include "RescueSlotRecord.h"
 #include "RescueSlots.h"
@@ -42,7 +42,7 @@ static AsyncWebServerRequest* masterOtaOwnerRequest = nullptr;
 // blind-flash firmware or force a reboot while rescue is STA-joined.
 static bool rescueUploadCsrfRejected(AsyncWebServerRequest* request) {
   bool hasOrigin = request->hasHeader("Origin");
-  return rescueCsrfRejectPost(true, hasOrigin,
+  return lanCsrfRejectPost(true, hasOrigin,
                               hasOrigin ? request->header("Origin") : String());
 }
 

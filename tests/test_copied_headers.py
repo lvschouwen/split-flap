@@ -41,9 +41,7 @@ NOTED_COPIES = [
     (MASTER / "SlotRecord.h", RESCUE / "RescueSlotRecord.h"),
     (MASTER / "OtaService.h", RESCUE / "RescueOta.h"),
     (MASTER / "DeviceIdentity.h", RESCUE / "RescueIdentity.h"),
-    (FOLLOWER / "FollowerCors.h", RESCUE / "RescueCors.h"),
     (MASTER / "ApiIndex.h", FOLLOWER / "ApiIndex.h"),
-    (MASTER / "ClusterDigest.h", FOLLOWER / "FollowerCors.h"),
 ]
 
 COPY_NOTE_RE = re.compile(r"\b(copy|copied|copies)\b", re.IGNORECASE)

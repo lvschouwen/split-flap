@@ -16,6 +16,7 @@
 #include <Arduino.h>
 
 #include "ClusterLeader.h"
+#include "LanOrigin.h"  // LAN host / origin rules shared by every board
 #include "ClusterRolloutPolicy.h"  // clusterMemberPlatForeign (#321 successors)
 #include "SettingsJson.h"  // appendJsonString
 #include "UnitHealth.h"    // UnitFacts + the faulty predicate
@@ -297,36 +298,6 @@ inline bool clusterPromoteTransform(const String& tableSpec, int selfIndex,
   return true;
 }
 
-// CORS origin gate (#294 rung 3): reflected back only for origins that can
-// only exist inside the LAN — private IPv4 literals, .local names and
-// localhost, all http-only (the boards serve plain http; any https or
-// public origin is by definition not another pane of this wall). Applied
-// to the per-member maintenance surface only.
-inline bool clusterCorsPrivateIpv4(const String& host) {
-  int octets[4];
-  int value = 0, digits = 0, index = 0;
-  for (unsigned int i = 0; i <= host.length(); i++) {
-    char c = i < host.length() ? host[i] : '.';
-    if (c == '.') {
-      if (digits == 0 || digits > 3 || index >= 4) return false;
-      octets[index++] = value;
-      value = 0;
-      digits = 0;
-    } else if (c >= '0' && c <= '9') {
-      value = value * 10 + (c - '0');
-      if (value > 255) return false;
-      digits++;
-    } else {
-      return false;
-    }
-  }
-  if (index != 4) return false;
-  if (octets[0] == 10 || octets[0] == 127) return true;
-  if (octets[0] == 192 && octets[1] == 168) return true;
-  if (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) return true;
-  return false;
-}
-
 // Digest acceptance gate: the follower re-serves the
 // stored digest RAW inside its /cluster/digest wrapper, so the string must
 // be exactly ONE balanced JSON object — trailing top-level data would
@@ -361,7 +332,8 @@ inline bool clusterDigestShapeOk(const String& digest) {
   return depth == 0 && !inString;
 }
 
-// The per-member surface the CORS gate opens (#294 rung 3): reads +
+// The per-member surface the CORS gate opens (#294 rung 3) to origins that
+// pass lanOriginAllowed() (LanOrigin.h): reads +
 // maintenance a wall pane manages on another member's behalf. Deliberately
 // closed: /firmware/* (fleet convergence owns cross-board updates),
 // /cluster/* (leader-driven wire + local promote), WiFi (off-limits from
@@ -374,40 +346,10 @@ inline bool clusterCorsPathAllowed(const String& path) {
       path == "/log" || path == "/log/flash" || path == "/reboot" ||
       path == "/reflash-units") {
     // #304: board-level unit reflash from the wall panel. /firmware/* stays
-    // closed in BOTH copies of this gate: S3 members update via #276 fleet
-    // convergence, and the ESP-01's firmware is pushed by the S3 relay
-    // (server-to-server, no Origin) — the FollowerCors.h copy differs only
-    // in the routes the ESP-01 doesn't serve ("/", log/stat reads).
+    // closed on every board: S3 members update via #276 fleet convergence,
+    // and the ESP-01's firmware is pushed by the S3 relay (server-to-server,
+    // no Origin). FollowerCors.h is the ESP-01's own list.
     return true;
   }
   return path.startsWith("/unit/");
-}
-
-inline bool clusterCorsOriginAllowed(const String& origin) {
-  if (!origin.startsWith("http://")) return false;
-  String host = origin.substring(7);
-  int cut = host.indexOf(':');
-  if (cut < 0) cut = host.indexOf('/');
-  if (cut >= 0) host = host.substring(0, cut);
-  if (host.length() == 0) return false;
-  if (host.equalsIgnoreCase("localhost")) return true;
-  String lower = host;
-  lower.toLowerCase();
-  if (lower.endsWith(".local") && host.length() > 6) return true;
-  return clusterCorsPrivateIpv4(host);
-}
-
-// CSRF gate (#313): the pre-existing CORS logic above only ADDED a response
-// header — it never blocked the request, so any web page a LAN user opened
-// could drive a mutating form-POST (multipart triggers no preflight) at the
-// board. Browsers attach `Origin` to every POST, so the enforced rule is:
-// a state-changing request (POST) that carries an Origin which is NOT a LAN
-// pane is cross-site forgery and must be refused before the handler runs.
-// Server-to-server cluster traffic (the leader's esp_http_client) sends no
-// Origin and passes; the board's own LAN web UI sends a LAN origin and
-// passes; a public/https origin is refused. Method-based, so every mutating
-// POST — present and future — is covered without a path allowlist to drift.
-inline bool clusterCsrfRejectPost(bool isPost, bool hasOrigin,
-                                  const String& origin) {
-  return isPost && hasOrigin && !clusterCorsOriginAllowed(origin);
 }
