@@ -174,7 +174,7 @@ void webClusterRegister(AsyncWebServer& server) {
     // the leader's strip is live from the handshake, not the first ping.
     DisplaySnapshot snap = displaySnapshotGet();
     char mask[16];
-    clusterFaultMaskHex(snap.units, snap.displayWidth, mask, sizeof(mask));
+    unitFaultMaskHex(snap.units, snap.displayWidth, mask, sizeof(mask));
     WearAssessment wear;
     assessWear(snap.units, snap.displayWidth, wear);
     // #332 additive: our deviceRole feeds the leader's succession tiers

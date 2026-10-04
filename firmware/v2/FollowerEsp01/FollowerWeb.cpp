@@ -28,6 +28,7 @@
 #include "FollowerRescue.h"  // #343: beacon marker + op lockout
 #include "FollowerSettings.h"
 #include "FollowerWifi.h"
+#include "UnitTimings.h"
 #include "SelfTestPoll.h"  // the shared self-test wait (#529)
 #include "WearPolicy.h"
 #include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
@@ -144,7 +145,7 @@ static FollowerHealthFacts healthNow(char* maskBuf, size_t maskCap) {
   }
   h.detected = detected;
   h.faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
-  followerFaultMaskHex(unitFacts, displayWidth, maskBuf, maskCap);
+  unitFaultMaskHex(unitFacts, displayWidth, maskBuf, maskCap);
   h.faultMask = maskBuf;
   h.lost = computeLostUnitCount(unitFacts, UNITS_AMOUNT);
   h.busDead = followerBusRecovery().dead;
@@ -646,15 +647,15 @@ void webEndpointsInit(AsyncWebServer& server) {
     if ((int)text.length() > UNITS_AMOUNT) {
       text = text.substring(0, UNITS_AMOUNT);
     }
-    FollowerRenderVerdict v =
+    ClusterRenderVerdict v =
         clusterHandleRender(epoch, seq, text, speed, commitAtMs);
-    if (v == FollowerRenderVerdict::NotClustered) {
+    if (v == ClusterRenderVerdict::NotClustered) {
       request->send(409, "application/json",
                     F("{\"error\":\"not clustered\"}"));
       return;
     }
     String out = "{\"applied\":";
-    out += (v == FollowerRenderVerdict::Apply) ? "true" : "false";
+    out += (v == ClusterRenderVerdict::Apply) ? "true" : "false";
     out += ",\"seq\":";
     out += String((unsigned long)seq);
     out += '}';
@@ -1240,7 +1241,7 @@ static void executeStagedOp() {
       // The unit sits in twiboot for ~1 s — keep every runtime probe out
       // of that window (v1 #88). Armed on a NACK too: it does not prove the
       // unit stayed in its sketch.
-      busArmProbeInhibit(millis() + 3000);
+      busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
       // Only a probe re-reads the offset; queue one for once the inhibit
       // has run out, or the unit's reads stay invalid until someone asks.
       unitHealthRefreshPending = true;

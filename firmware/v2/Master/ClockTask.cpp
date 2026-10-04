@@ -90,7 +90,7 @@ void clockTaskMain(void*) {
     // owns the content — the ticker's job becomes re-showing the held
     // segment (restores the wall after transients and reset-units). While a
     // commitAt render is in flight it stands down entirely so a re-show
-    // can't preempt the synchronized flip. LocalFallback (leader silent ~2
+    // can't preempt the synchronized flip. LeaderLost (leader silent ~2
     // min) shows the follower's OWN clock through the normal clock path.
     ClusterFollowerView cluster = clusterFollowerViewGet();
     if (cluster.gated && cluster.renderPending) continue;

@@ -37,7 +37,7 @@ static void test_boot_grace_decays_to_local_fallback() {
   TEST_ASSERT_FALSE(clusterFollowerTick(st, 1000 + CLUSTER_GRACE_MS - 1));
   TEST_ASSERT_EQUAL(ClusterFollowerPhase::Grace, st.phase);
   TEST_ASSERT_TRUE(clusterFollowerTick(st, 1000 + CLUSTER_GRACE_MS));
-  TEST_ASSERT_EQUAL(ClusterFollowerPhase::LocalFallback, st.phase);
+  TEST_ASSERT_EQUAL(ClusterFollowerPhase::LeaderLost, st.phase);
 }
 
 // --- join / contact / decay -------------------------------------------------------
@@ -71,7 +71,7 @@ static void test_grace_decays_to_local_fallback_at_grace_deadline() {
   // The grace clock runs from the LAST CONTACT, not from entering Grace.
   TEST_ASSERT_FALSE(clusterFollowerTick(st, 1000 + CLUSTER_GRACE_MS - 1));
   TEST_ASSERT_TRUE(clusterFollowerTick(st, 1000 + CLUSTER_GRACE_MS));
-  TEST_ASSERT_EQUAL(ClusterFollowerPhase::LocalFallback, st.phase);
+  TEST_ASSERT_EQUAL(ClusterFollowerPhase::LeaderLost, st.phase);
 }
 
 static void test_contact_in_grace_reclaims_to_clustered() {
@@ -84,7 +84,7 @@ static void test_contact_in_grace_reclaims_to_clustered() {
 static void test_contact_in_local_fallback_reclaims_to_clustered() {
   ClusterFollowerState st = makeClustered(1000, 7);
   clusterFollowerTick(st, 1000 + CLUSTER_GRACE_MS);
-  TEST_ASSERT_EQUAL(ClusterFollowerPhase::LocalFallback, st.phase);
+  TEST_ASSERT_EQUAL(ClusterFollowerPhase::LeaderLost, st.phase);
   TEST_ASSERT_TRUE(clusterFollowerContact(st, 200000));
   TEST_ASSERT_EQUAL(ClusterFollowerPhase::Clustered, st.phase);
 }
@@ -254,7 +254,7 @@ static void test_phase_names_for_health_json() {
       "grace", clusterFollowerPhaseName(ClusterFollowerPhase::Grace));
   TEST_ASSERT_EQUAL_STRING(
       "local-fallback",
-      clusterFollowerPhaseName(ClusterFollowerPhase::LocalFallback));
+      clusterFollowerPhaseName(ClusterFollowerPhase::LeaderLost));
 }
 
 // --- join conflict (#295 sticky leadership) ---------------------------------------
@@ -292,7 +292,7 @@ static void test_promote_allowed_only_in_local_fallback() {
   TEST_ASSERT_FALSE(clusterFollowerCanPromote(st));
   clusterFollowerTick(st, 1000 + CLUSTER_CONTACT_FRESH_MS);  // Grace
   TEST_ASSERT_FALSE(clusterFollowerCanPromote(st));
-  clusterFollowerTick(st, 1000 + CLUSTER_GRACE_MS);  // LocalFallback
+  clusterFollowerTick(st, 1000 + CLUSTER_GRACE_MS);  // LeaderLost
   TEST_ASSERT_TRUE(clusterFollowerCanPromote(st));
   clusterFollowerLeave(st);
   TEST_ASSERT_FALSE(clusterFollowerCanPromote(st));

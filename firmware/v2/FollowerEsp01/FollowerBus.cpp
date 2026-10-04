@@ -21,6 +21,7 @@
 #include "TwibootFlash.h"  // the twiboot client; this file is its Wire adapter
 #include "UnitAssets.h"  // UNIT_FIRMWARE_BIN (build_assets.py)
 #include "UnitProtocolHelpers.h"
+#include "UnitTimings.h"
 #include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
 #include "BootUpdateOp.h"     // the shared in-system twiboot update (#499)
 
@@ -42,7 +43,6 @@ void busArmProbeInhibit(uint32_t untilMs) { probeInhibitUntilMs = untilMs; }
 #define UNIT_RESPONSE_SETTLE_MS 2
 // How long a segment write waits for the row to stop before assuming a
 // unit is physically stuck (v1 value).
-#define SHOW_STUCK_TIMEOUT_MS 30000UL
 
 static int toI2cAddress(int unitIndex) {
   return SFP_I2C_ADDRESS_BASE + unitIndex;
@@ -112,7 +112,7 @@ const BusRecoveryState& followerBusRecovery() { return busRecovery; }
 #if SERIAL_ENABLE == false
 // Only drivable units feed the detector: busPollHealthOne() returns false for
 // the rest without touching the bus, which is no evidence either way. The
-// reshow is staged, not run here: a render blocks up to SHOW_STUCK_TIMEOUT_MS.
+// reshow is staged, not run here: a render blocks up to UNIT_SHOW_STUCK_TIMEOUT_MS.
 static void observeLiveness(int i, bool ok) {
   BusRecoveryEvent e =
       busRecoveryObserve(busRecovery, i, ok, millis(), displayWidth);
@@ -627,7 +627,7 @@ static void motionBudgetFold(int i) {
 static void waitForRowToStop() {
   uint32_t waitStart = millis();
   while (isRowMoving()) {
-    if (millis() - waitStart > SHOW_STUCK_TIMEOUT_MS) {
+    if (millis() - waitStart > UNIT_SHOW_STUCK_TIMEOUT_MS) {
       SerialPrintln(F("Row-stop wait timed out — a unit may be stuck"));
       break;
     }
@@ -852,7 +852,7 @@ static void rescueTick(int i) {
   if (probe == UnitRescueProbe::Bootloader) {
     SerialPrint(F(": lost — found in twiboot, started its app (rescue #"));
     SerialPrint(rs.exits);
-    busArmProbeInhibit(millis() + 3000);  // let the sketch boot
+    busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);  // let the sketch boot
   } else if (probe == UnitRescueProbe::NoAck) {
     SerialPrint(F(": lost — no ACK (attempt "));
     SerialPrint(rs.attempts);
@@ -1171,9 +1171,9 @@ struct BootUpdateHooks {
   int home(uint8_t addr) { return busHome(addr); }
   void unitLeftSketch(uint8_t addr) {
     busInvalidateUnitReads(addr);
-    busArmProbeInhibit(millis() + 3000);
+    busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
   }
-  void holdProbes() { busArmProbeInhibit(millis() + 3000); }
+  void holdProbes() { busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS); }
   void pause(uint32_t ms) { delay(ms); }
   uint32_t nowMs() { return millis(); }
   void reshow() { reshowPending = lastFrameValid; }
@@ -1210,7 +1210,7 @@ void busRunBootDump(uint32_t seq, uint8_t addr,
   slot.addr = addr;
   if (busRebootToBootloader(addr) != 0) {
     slot.outcome = BootDumpOutcome::EnterFail;
-    busArmProbeInhibit(millis() + 3000);
+    busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
     return;
   }
   busInvalidateUnitReads(addr);
@@ -1251,10 +1251,10 @@ void busRunBootDump(uint32_t seq, uint8_t addr,
     if (Wire.endTransmission() == 0) rebootUnit(addr);
   }
 
-  waitForBatchIdle(&addr, 1, 10000);
-  if (busHome(addr) == 0) waitForBatchIdle(&addr, 1, 20000);
+  waitForBatchIdle(&addr, 1, UNIT_RETURN_TIMEOUT_MS);
+  if (busHome(addr) == 0) waitForBatchIdle(&addr, 1, UNIT_HOME_TIMEOUT_MS);
   reshowPending = lastFrameValid;
-  busArmProbeInhibit(millis() + 3000);
+  busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
 
   if (slot.outcome == BootDumpOutcome::Ok) {
     slot.crc32 = bootDumpCrc32(outBytes, BOOT_SECTION_LEN);

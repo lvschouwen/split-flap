@@ -21,31 +21,6 @@
 #include "SettingsJson.h"  // appendJsonString
 #include "UnitHealth.h"    // UnitFacts + the faulty predicate
 
-// Hex fault bitmap for one row: bit i = unit at position i is faulty or lost
-// (same predicate as computeFaultyUnitCount). Fixed width ceil(width/4) nibbles so the string
-// length itself carries the row width; enough for a strip — per-unit
-// DETAIL is rung 3's browser fan-out to the member's own /units/health.
-inline size_t clusterFaultMaskHex(const UnitFacts* units, int width,
-                                  char* buf, size_t cap) {
-  if (width > 32) width = 32;  // uint32 bitmap; real displays are ≤16
-  if (width <= 0) {            // no units, no mask (%0*X would still print "0")
-    if (cap > 0) buf[0] = '\0';
-    return 0;
-  }
-  uint32_t mask = 0;
-  for (int i = 0; i < width; i++) {
-    if (unitIsFaultyOrLost(units[i])) mask |= (1UL << i);
-  }
-  int nibbles = (width + 3) / 4;
-  if (cap == 0) return 0;
-  int n = snprintf(buf, cap, "%0*X", nibbles, (unsigned)mask);
-  if (n < 0) {
-    buf[0] = '\0';
-    return 0;
-  }
-  return (size_t)n < cap ? (size_t)n : cap - 1;
-}
-
 // The additive #294 keys of the follower's ping reply, spliced after the
 // #272 state/epoch/seq trio (leading comma). rev refreshes on every ping
 // so the leader's rev fact survives its own reboot without a re-join.
@@ -53,7 +28,7 @@ inline String clusterPingHealthJson(const UnitFacts* units, int width,
                                     int detected, int faulty, bool wear,
                                     const char* rev) {
   char mask[16];
-  clusterFaultMaskHex(units, width, mask, sizeof(mask));
+  unitFaultMaskHex(units, width, mask, sizeof(mask));
   String out;
   out.reserve(96);
   out += ",\"width\":";

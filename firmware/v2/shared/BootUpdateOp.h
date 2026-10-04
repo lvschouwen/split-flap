@@ -24,9 +24,8 @@
 
 #include "BootUpdatePlan.h"
 #include "MaintenancePolicy.h"
+#include "UnitTimings.h"
 
-#define BOOT_UPDATE_RETURN_MS 10000UL        // back in the sketch after a reset
-#define BOOT_UPDATE_HOME_MS 20000UL          // one full revolution
 #define BOOT_UPDATE_STAGE2_SETTLE_MS 300UL
 #define BOOT_UPDATE_STAGE2_POLL_MS 5000UL
 // A request sent mid-move is held by the unit until the move ends and would
@@ -107,8 +106,8 @@ inline MaintGrade bootUpdateRun(Hooks& h, uint8_t addr) {
                         MaintReason::BootNotStarted));
     }
     moved = true;
-    h.waitIdle(addr, BOOT_UPDATE_RETURN_MS);
-    if (h.home(addr) == 0) h.waitIdle(addr, BOOT_UPDATE_HOME_MS);
+    h.waitIdle(addr, UNIT_RETURN_TIMEOUT_MS);
+    if (h.home(addr) == 0) h.waitIdle(addr, UNIT_HOME_TIMEOUT_MS);
     if (!h.readBootInfo(addr, info)) {
       return failed(BootUpdateStep::Stage1, MaintReason::BootUnitLost);
     }
@@ -123,7 +122,7 @@ inline MaintGrade bootUpdateRun(Hooks& h, uint8_t addr) {
       // Resuming a unit that already carries page 7: nothing above homed it,
       // and an unhomed unit refuses the stage (#516).
       moved = true;
-      if (h.home(addr) == 0) h.waitIdle(addr, BOOT_UPDATE_HOME_MS);
+      if (h.home(addr) == 0) h.waitIdle(addr, UNIT_HOME_TIMEOUT_MS);
       if (!h.readBootInfo(addr, info)) {
         return failed(BootUpdateStep::Stage2, MaintReason::BootUnitLost);
       }

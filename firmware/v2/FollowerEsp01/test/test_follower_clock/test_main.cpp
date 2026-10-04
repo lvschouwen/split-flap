@@ -28,20 +28,20 @@ static void test_clock_truncates_on_tiny_width() {
 
 static void test_eligibility_needs_blank_membership_tz_and_sync() {
   TEST_ASSERT_TRUE(
-      followerClockEligible(FollowerPhase::Blank, true, true, true));
+      followerClockEligible(ClusterFollowerPhase::LeaderLost, true, true, true));
   // Grace still HOLDS the leader's last text — never overdraw it.
   TEST_ASSERT_FALSE(
-      followerClockEligible(FollowerPhase::Grace, true, true, true));
+      followerClockEligible(ClusterFollowerPhase::Grace, true, true, true));
   // Standalone has no membership and no zone to trust.
   TEST_ASSERT_FALSE(
-      followerClockEligible(FollowerPhase::Standalone, false, true, true));
+      followerClockEligible(ClusterFollowerPhase::Standalone, false, true, true));
   TEST_ASSERT_FALSE(
-      followerClockEligible(FollowerPhase::Blank, false, true, true));
+      followerClockEligible(ClusterFollowerPhase::LeaderLost, false, true, true));
   TEST_ASSERT_FALSE(
-      followerClockEligible(FollowerPhase::Blank, true, false, true));
+      followerClockEligible(ClusterFollowerPhase::LeaderLost, true, false, true));
   // Unsynced SNTP = today's blank behavior.
   TEST_ASSERT_FALSE(
-      followerClockEligible(FollowerPhase::Blank, true, true, false));
+      followerClockEligible(ClusterFollowerPhase::LeaderLost, true, true, false));
 }
 
 int main(int, char**) {

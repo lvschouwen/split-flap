@@ -9,6 +9,7 @@
 
 #include "MaintenancePolicy.h"
 #include "UnitHealth.h"
+#include "UnitTimings.h"  // TWIBOOT_STARTUP_MS
 
 // v1 #138 brownout throttle: flash at most this many units per batch, then
 // wait for the batch to come back online + finish homing before the next —
@@ -18,10 +19,6 @@
 #error "REFLASH_BATCH_SIZE is per row master: set it in the tree's platformio.ini"
 #endif
 #define REFLASH_BATCH_SETTLE_MS 15000UL
-// Wait after CMD_ENTER_BOOTLOADER before talking to twiboot: watchdog reset
-// (~15 ms) + twiboot init. 500 ms is generous (v1 value).
-#define TWIBOOT_STARTUP_MS 500
-
 // Halt a run after this many CONSECUTIVE unit failures (#412). The job used to
 // log a failed unit and walk straight on to the next one, so an image that
 // cannot flash — or flashes and does not boot — took the whole row down one

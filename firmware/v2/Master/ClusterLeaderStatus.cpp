@@ -49,7 +49,7 @@ void statusFillLocked(ClusterLeaderStatus& st) {
 
   DisplaySnapshot snap = displaySnapshotGet();
   char selfMask[16];
-  clusterFaultMaskHex(snap.units, snap.displayWidth, selfMask,
+  unitFaultMaskHex(snap.units, snap.displayWidth, selfMask,
                       sizeof(selfMask));
   WearAssessment selfWear;
   assessWear(snap.units, snap.displayWidth, selfWear);

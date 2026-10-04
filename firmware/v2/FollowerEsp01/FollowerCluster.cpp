@@ -12,7 +12,7 @@
 #include "FollowerRescue.h"  // #343: rescue beacon never touches the bus
 #include "FollowerSettings.h"
 
-static FollowerClusterState policyState;
+static ClusterFollowerState policyState;
 static String leaderName;
 static String leaderHost;
 // #342: the leader's POSIX zone (join body, persisted with the membership)
@@ -107,7 +107,7 @@ void clusterInit() {
     SerialPrint(leaderName);
     SerialPrintln(F(" — booting into grace, holding for the leader"));
   }
-  followerClusterBoot(policyState, millis(), stored);
+  clusterFollowerBoot(policyState, millis(), stored);
 }
 
 static void persistMembership() {
@@ -126,7 +126,7 @@ static void persistMembership() {
 }
 
 bool clusterLeaderContactFresh() {
-  return followerLeaderContactFresh(policyState, millis());
+  return clusterFollowerContactFresh(policyState, millis());
 }
 
 void clusterLoopTick() {
@@ -138,7 +138,7 @@ void clusterLoopTick() {
   static uint32_t lastPhaseTickMs = 0;
   if (millis() - lastPhaseTickMs >= 1000) {
     lastPhaseTickMs = millis();
-    if (followerClusterTick(policyState, millis())) {
+    if (clusterFollowerTick(policyState, millis())) {
       SerialPrint(F("cluster: phase -> "));
       SerialPrintln(followerPhaseName(policyState.phase));
     }
@@ -223,7 +223,7 @@ void clusterLoopTick() {
 bool clusterJoinWouldConflict(const String& joiningLeaderHost,
                               String& currentName, String& currentHost) {
   bool sameLeader = leaderHost == joiningLeaderHost;
-  if (!followerClusterJoinConflicts(policyState, millis(), sameLeader)) {
+  if (!clusterFollowerJoinConflicts(policyState, millis(), sameLeader)) {
     return false;
   }
   currentName = leaderName;
@@ -233,7 +233,7 @@ bool clusterJoinWouldConflict(const String& joiningLeaderHost,
 
 void clusterHandleJoin(const String& name, const String& host, int row,
                        uint32_t epoch, const String& key, const String& tz) {
-  followerClusterJoin(policyState, millis(), epoch);
+  clusterFollowerJoin(policyState, millis(), epoch);
   // Adopt the negotiated wire-auth key (#313 follow-on): a valid key turns
   // enforcement ON; a pre-HMAC leader sends none.
   uint8_t newKey[FOLLOWER_HMAC_KEY_LEN];
@@ -293,19 +293,19 @@ bool clusterVerifySigned(const String& canonicalMsg, uint64_t ts,
   return ok;
 }
 
-FollowerRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
+ClusterRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
                                           const String& text, int speed,
                                           uint64_t commitAtMs) {
-  FollowerRenderVerdict verdict =
-      followerClusterAcceptRender(policyState, millis(), epoch, seq);
-  if (verdict == FollowerRenderVerdict::Apply) {
+  ClusterRenderVerdict verdict =
+      clusterFollowerAcceptRender(policyState, millis(), epoch, seq);
+  if (verdict == ClusterRenderVerdict::Apply) {
     bool synced = false;
     uint64_t nowMs = nowEpochMs(synced);
     heldSegment = text;
     heldSpeed = speed;
     renderText = text;
     renderSpeed = speed;
-    renderDueMs = millis() + followerRenderDelayMs(commitAtMs, nowMs, synced);
+    renderDueMs = millis() + clusterRenderDelayMs(commitAtMs, nowMs, synced);
     renderPending = true;
     lastRenderMs = millis();
     haveRender = true;
@@ -314,12 +314,12 @@ FollowerRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
 }
 
 bool clusterHandlePing() {
-  return followerClusterContact(policyState, millis());
+  return clusterFollowerContact(policyState, millis());
 }
 
 void clusterHandleLeave() {
-  if (policyState.phase == FollowerPhase::Standalone) return;
-  followerClusterLeave(policyState);
+  if (policyState.phase == ClusterFollowerPhase::Standalone) return;
+  clusterFollowerLeave(policyState);
   leaderName = "";
   leaderHost = "";
   leaderTz = "";  // #342: the zone leaves with the leader that owned it
@@ -346,13 +346,13 @@ FollowerClusterView clusterViewGet() {
   v.heldSegment = heldSegment;
   // Diagnostics (#306).
   v.msSinceRender = haveRender ? (int32_t)(millis() - lastRenderMs) : -1;
-  // Total silence blanks the row at lastContactMs + FOLLOWER_GRACE_MS (the
+  // Total silence blanks the row at lastContactMs + CLUSTER_GRACE_MS (the
   // tick cascades Clustered->Grace->Blank on cumulative silence). Only
   // meaningful while still showing content.
-  if (policyState.phase == FollowerPhase::Clustered ||
-      policyState.phase == FollowerPhase::Grace) {
+  if (policyState.phase == ClusterFollowerPhase::Clustered ||
+      policyState.phase == ClusterFollowerPhase::Grace) {
     int32_t remainMs =
-        (int32_t)(policyState.lastContactMs + FOLLOWER_GRACE_MS - millis());
+        (int32_t)(policyState.lastContactMs + CLUSTER_GRACE_MS - millis());
     v.secsUntilBlank = remainMs > 0 ? remainMs / 1000 : 0;
   } else {
     v.secsUntilBlank = -1;  // already blank / standalone

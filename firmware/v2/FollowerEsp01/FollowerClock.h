@@ -10,7 +10,7 @@
 
 #include <string.h>
 
-#include "FollowerPolicy.h"  // FollowerPhase
+#include "FollowerPolicy.h"  // ClusterFollowerPhase
 
 // Centered zero-padded "HH:MM" in a width-char space-padded field; a width
 // under 5 keeps the leading characters (a tiny row shows what fits). out
@@ -45,8 +45,8 @@ inline void followerClockText(int hour, int minute, int width, char* out) {
 // The fallback runs ONLY in Blank with a held membership (the tz belongs
 // to a leader we still expect back), a known zone, and synced time.
 // Standalone (never joined / left) stays dark — no membership, no zone.
-inline bool followerClockEligible(FollowerPhase phase, bool membershipHeld,
+inline bool followerClockEligible(ClusterFollowerPhase phase, bool membershipHeld,
                                   bool tzKnown, bool timeSynced) {
-  return phase == FollowerPhase::Blank && membershipHeld && tzKnown &&
+  return phase == ClusterFollowerPhase::LeaderLost && membershipHeld && tzKnown &&
          timeSynced;
 }

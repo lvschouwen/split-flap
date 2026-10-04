@@ -12,7 +12,7 @@
 #include "FollowerPolicy.h"
 
 struct FollowerClusterView {
-  FollowerPhase phase = FollowerPhase::Standalone;
+  ClusterFollowerPhase phase = ClusterFollowerPhase::Standalone;
   String leaderName;
   String leaderHost;
   int row = 0;
@@ -44,7 +44,7 @@ bool clusterJoinWouldConflict(const String& joiningLeaderHost,
 void clusterHandleJoin(const String& leaderName, const String& leaderHost,
                        int row, uint32_t epoch, const String& key,
                        const String& tz);
-FollowerRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
+ClusterRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
                                           const String& text, int speed,
                                           uint64_t commitAtMs);
 bool clusterHandlePing();

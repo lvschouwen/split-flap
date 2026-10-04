@@ -33,7 +33,7 @@ static void test_fault_mask_all_healthy_is_zeroes() {
   makeUnits(units, 16);
   for (int i = 0; i < 16; i++) setHealthy(units[i]);
   char buf[16];
-  size_t n = clusterFaultMaskHex(units, 16, buf, sizeof(buf));
+  size_t n = unitFaultMaskHex(units, 16, buf, sizeof(buf));
   TEST_ASSERT_EQUAL(4, (int)n);
   TEST_ASSERT_EQUAL_STRING("0000", buf);
 }
@@ -44,7 +44,7 @@ static void test_fault_mask_bit_is_unit_index() {
   for (int i = 0; i < 16; i++) setHealthy(units[i]);
   setFaulty(units[2]);
   char buf[16];
-  clusterFaultMaskHex(units, 16, buf, sizeof(buf));
+  unitFaultMaskHex(units, 16, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("0004", buf);
 }
 
@@ -54,7 +54,7 @@ static void test_fault_mask_width_rounds_nibbles_up() {
   for (int i = 0; i < 5; i++) setHealthy(units[i]);
   setFaulty(units[4]);
   char buf[16];
-  size_t n = clusterFaultMaskHex(units, 5, buf, sizeof(buf));
+  size_t n = unitFaultMaskHex(units, 5, buf, sizeof(buf));
   TEST_ASSERT_EQUAL(2, (int)n);
   TEST_ASSERT_EQUAL_STRING("10", buf);
 }
@@ -66,7 +66,7 @@ static void test_fault_mask_unread_unit_is_not_faulty() {
   makeUnits(units, 4);
   units[1].status.flags = UNIT_FLAG_LAST_HOME_FAILED;  // but statusValid false
   char buf[16];
-  clusterFaultMaskHex(units, 4, buf, sizeof(buf));
+  unitFaultMaskHex(units, 4, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("0", buf);
 }
 
@@ -74,7 +74,7 @@ static void test_fault_mask_zero_width_is_empty() {
   UnitFacts units[1];
   makeUnits(units, 1);
   char buf[16];
-  size_t n = clusterFaultMaskHex(units, 0, buf, sizeof(buf));
+  size_t n = unitFaultMaskHex(units, 0, buf, sizeof(buf));
   TEST_ASSERT_EQUAL(0, (int)n);
   TEST_ASSERT_EQUAL_STRING("", buf);
 }
@@ -83,7 +83,7 @@ static void test_fault_mask_tiny_buffer_truncates_safely() {
   UnitFacts units[16];
   makeUnits(units, 16);
   char buf[3];  // needs 4 nibbles + NUL
-  size_t n = clusterFaultMaskHex(units, 16, buf, sizeof(buf));
+  size_t n = unitFaultMaskHex(units, 16, buf, sizeof(buf));
   TEST_ASSERT_TRUE(n < sizeof(buf));
   TEST_ASSERT_EQUAL('\0', buf[n]);
 }
@@ -118,7 +118,7 @@ static void test_fault_mask_and_ping_flag_lost_unit() {
   units[2].statusValid = false;
   units[2].stale = true;
   char buf[8];
-  clusterFaultMaskHex(units, 4, buf, sizeof(buf));
+  unitFaultMaskHex(units, 4, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("4", buf);
   String frag = clusterPingHealthJson(units, 4, 4, 1, false, "abc1234");
   TEST_ASSERT_TRUE(frag.indexOf("\"lost\":1") >= 0);

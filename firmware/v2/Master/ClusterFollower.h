@@ -20,7 +20,7 @@
 struct ClusterFollowerView {
   ClusterFollowerPhase phase = ClusterFollowerPhase::Standalone;
   bool gated = false;            // producer gate (any membership)
-  bool forcesLocalClock = false; // LocalFallback: show own clock
+  bool forcesLocalClock = false; // LeaderLost: show own clock
   bool renderPending = false;    // a commitAt render is staged, in flight
   String leaderName;
   String leaderHost;
@@ -89,7 +89,7 @@ String clusterFollowerDigestGet(uint32_t& ageMsOut);
 // DIFFERENT leader that is still demonstrably alive).
 bool clusterFollowerJoinWouldConflict(const String& leaderHost);
 
-// #295 promote: LocalFallback + a held digest-table → stage the
+// #295 promote: LeaderLost + a held digest-table → stage the
 // transformed member table as this board's own leader config and leave the
 // dead membership. The actual swap runs in clusterTask (staged config).
 struct ClusterPromoteVerdict {

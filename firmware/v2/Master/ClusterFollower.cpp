@@ -477,7 +477,7 @@ bool clusterFollowerJoinWouldConflict(const String& joiningLeaderHost) {
 }
 
 // Gate for a promote attempt — MUST be evaluated under the ClusterLock. Manual
-// (#295, web button) requires LocalFallback; auto (#321) requires the ranked
+// (#295, web button) requires LeaderLost; auto (#321) requires the ranked
 // takeover trigger (rank + staggered silence, no active hold). The commit-point
 // re-check uses this same gate so a leader returning mid-promote cancels it.
 static bool promoteGatePasses(bool autoPath) {

@@ -397,6 +397,31 @@ inline int computeLostUnitCount(const UnitFacts* units, int n) {
   return count;
 }
 
+// Hex fault bitmap for one row: bit i = unit at position i is faulty or lost
+// (same predicate as computeFaultyUnitCount). Fixed width ceil(width/4) nibbles
+// so the string length itself carries the row width; enough for a strip —
+// per-unit detail is the member's own /units/health.
+inline size_t unitFaultMaskHex(const UnitFacts* units, int width,
+                                  char* buf, size_t cap) {
+  if (width > 32) width = 32;  // uint32 bitmap; real displays are ≤16
+  if (width <= 0) {            // no units, no mask (%0*X would still print "0")
+    if (cap > 0) buf[0] = '\0';
+    return 0;
+  }
+  uint32_t mask = 0;
+  for (int i = 0; i < width; i++) {
+    if (unitIsFaultyOrLost(units[i])) mask |= (1UL << i);
+  }
+  int nibbles = (width + 3) / 4;
+  if (cap == 0) return 0;
+  int n = snprintf(buf, cap, "%0*X", nibbles, (unsigned)mask);
+  if (n < 0) {
+    buf[0] = '\0';
+    return 0;
+  }
+  return (size_t)n < cap ? (size_t)n : cap - 1;
+}
+
 // Worst case (16 valid units, all counters saturated, 10-digit odometers,
 // full drift blocks) measures ~3020 B — same truncation contract as v1, cap
 // raised over v1's 2048 for the spliced reflash progress object (#205,

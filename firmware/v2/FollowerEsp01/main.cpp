@@ -12,6 +12,7 @@
 #include <ESP8266mDNS.h>
 #include <ESPAsyncWebServer.h>
 
+#include "UnitTimings.h"
 #include "FollowerBus.h"
 #include "FollowerCluster.h"
 #include "FollowerConfig.h"
@@ -61,7 +62,7 @@ void setup() {
     // probing inside it pins the bootloader alive), then provision any
     // blank-app units from the PROGMEM bundle.
     SerialPrintln(F("Early I2C scan (post-twiboot window)..."));
-    delay(1500);
+    delay(UNIT_BOOT_PREPROBE_DELAY_MS);
     busProbe();
     if (prefsReflashOnBoot()) busAutoInstallBootloaderUnits();
   }

@@ -3,9 +3,8 @@
 // tested by test_follower_json. Pure String assembly: the join/ping replies
 // the S3 leader parses (#272 trio + #294 health keys + the #297 additive
 // plat/vitals block), the tiny /settings JSON the member ⚙ panel reads,
-// and /cluster/health. followerFaultMaskHex is a copy of the v2 master's
-// clusterFaultMaskHex (ClusterDigest.h — copy policy: fix bugs in both
-// trees); appendJsonString mirrors the fleet-wide escaping rule.
+// and /cluster/health. appendJsonString mirrors the fleet-wide escaping
+// rule.
 
 #include <Arduino.h>
 
@@ -34,30 +33,6 @@ inline void followerAppendJsonString(String& out, const String& value) {
     }
   }
   out += '"';
-}
-
-// Hex fault bitmap for this row: bit i = unit at position i is faulty or
-// lost (same predicate as computeFaultyUnitCount). Fixed width ceil(width/4) nibbles so the string length
-// itself carries the row width.
-inline size_t followerFaultMaskHex(const UnitFacts* units, int width,
-                                   char* buf, size_t cap) {
-  if (width > 32) width = 32;  // uint32 bitmap; real rows are ≤16
-  if (width <= 0) {            // no units, no mask
-    if (cap > 0) buf[0] = '\0';
-    return 0;
-  }
-  uint32_t mask = 0;
-  for (int i = 0; i < width; i++) {
-    if (unitIsFaultyOrLost(units[i])) mask |= (1UL << i);
-  }
-  int nibbles = (width + 3) / 4;
-  if (cap == 0) return 0;
-  int n = snprintf(buf, cap, "%0*X", nibbles, (unsigned)mask);
-  if (n < 0) {
-    buf[0] = '\0';
-    return 0;
-  }
-  return (size_t)n < cap ? (size_t)n : cap - 1;
 }
 
 // One row's health facts, snapshotted by the caller.

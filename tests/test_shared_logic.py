@@ -160,3 +160,26 @@ def test_the_follower_reprobes_a_unit_whose_reads_it_invalidated():
         case = case[:case.index("case FollowerOpKind::", 10)
                     if "case FollowerOpKind::" in case[10:] else len(case)]
         assert "unitHealthRefreshPending = true;" in case, kind
+
+
+# --- #536: member phase machine, fault mask, unit timings ---------------------
+
+def test_the_member_phase_machine_exists_once():
+    assert not _offenders(r"enum class (?:Cluster)?FollowerPhase\b|"
+                          r"struct (?:ClusterFollower|FollowerCluster)State\b|"
+                          r"inline \w[\w\s]* \w*[Ff]ollower\w*"
+                          r"(?:Tick|AcceptRender|JoinConflicts)\(|"
+                          r"\w+_CONTACT_FRESH_MS\s*=|\b(?:CLUSTER|FOLLOWER)_GRACE_MS\s*=|"
+                          r"inline size_t \w*FaultMaskHex\("), (
+        "the phase machine is shared/ClusterMemberPhase.h, the fault mask "
+        "shared/UnitHealth.h")
+
+
+def test_unit_timings_are_named_once():
+    """The probe inhibit was a named constant on the S3 and a bare 3000 at
+    seven sites on the ESP-01."""
+    hits = _offenders(r"ProbeInhibit\(millis\(\)\s*\+\s*\d+|\bdelay\(\s*1500\s*\)|"
+                      r"#define\s+(?:TWIBOOT_STARTUP_MS|SHOW_STUCK_TIMEOUT_MS)|"
+                      r"constexpr\s+uint32_t\s+(?:ADDRESS_OP_SETTLE_MS|"
+                      r"SHOW_STUCK_TIMEOUT_MS)", ROW_MASTERS)
+    assert not hits, f"use shared/UnitTimings.h: {hits}"

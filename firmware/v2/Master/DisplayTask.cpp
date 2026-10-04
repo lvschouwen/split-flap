@@ -25,15 +25,10 @@
 #include "TasksInternal.h"
 #include "UnitBus.h"
 #include "UnitEventLog.h"  // per-unit health transition log decision (#322)
+#include "UnitTimings.h"
 #include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
 #include "WebEndpoints.h"
 #include "WifiService.h"  // wifiRadioBusy (#505)
-
-// Settle after an address-mutating burn before the follow-up probe (#204):
-// the unit watchdog-resets THROUGH its twiboot window (~1 s) and probing
-// inside it pins the bootloader (v1 #88) — 3 s clears the window plus the
-// homing start, same margin class as the 1500 ms boot delay.
-static constexpr uint32_t ADDRESS_OP_SETTLE_MS = 3000;
 
 // --- core 1: display domain ---------------------------------------------------
 
@@ -49,7 +44,7 @@ static constexpr uint32_t ADDRESS_OP_SETTLE_MS = 3000;
 static uint32_t twibootRiskUntilMs = 0;
 
 static void armTwibootRiskWindow() {
-  twibootRiskUntilMs = millis() + ADDRESS_OP_SETTLE_MS;
+  twibootRiskUntilMs = millis() + UNIT_PROBE_INHIBIT_MS;
 }
 
 // Wire speed of the last text frame, so a rescued unit (#498) gets its
@@ -691,9 +686,6 @@ static void execSetGates(DisplaySnapshot& local, UnitFacts* busFacts,
 // The dumped bytes stay out of the snapshot (1 KB copied on every read). The
 // store is written by displayTask and copied out by the web handler under a
 // spinlock; the seq ties a copy to the result slot it belongs to.
-// How long a dumped unit gets to restart into its sketch before the re-show.
-static const uint32_t BOOT_DUMP_RETURN_TIMEOUT_MS = 10000;
-static const uint32_t BOOT_DUMP_HOME_TIMEOUT_MS = 20000;  // one full revolution
 static uint8_t bootDumpBytes[BOOT_SECTION_LEN];
 static uint32_t bootDumpBytesSeq = 0;
 static portMUX_TYPE bootDumpMux = portMUX_INITIALIZER_UNLOCKED;
@@ -739,9 +731,9 @@ static void execBootDump(DisplaySnapshot& local, UnitFacts* busFacts,
     // target would not, the frame write skips a unit already reporting its
     // letter — then re-show the frame for the units that carry one.
     uint8_t addr = cmd.unitAddress;
-    unitBusWaitBatchIdle(&addr, 1, BOOT_DUMP_RETURN_TIMEOUT_MS);
+    unitBusWaitBatchIdle(&addr, 1, UNIT_RETURN_TIMEOUT_MS);
     if (unitBusHome(cmd.unitAddress) == 0) {
-      unitBusWaitBatchIdle(&addr, 1, BOOT_DUMP_HOME_TIMEOUT_MS);
+      unitBusWaitBatchIdle(&addr, 1, UNIT_HOME_TIMEOUT_MS);
     }
     if (local.lastFrameValid) {
       unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
@@ -1013,9 +1005,7 @@ void displayTaskMain(void*) {
   // wedged I2C transaction on the cold first scan must still trip the dog.
   if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
     SerialPrintf("wdt: display subscribe -> %s\n", esp_err_to_name(e));
-  // Load-bearing pre-probe delay (v1 #88): probing earlier catches units
-  // still in twiboot's boot window and the CHIPINFO read pins them there.
-  delay(1500);
+  delay(UNIT_BOOT_PREPROBE_DELAY_MS);  // load-bearing, see UnitTimings.h
   unitBusProbe(busFacts, UNITS_AMOUNT);
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,

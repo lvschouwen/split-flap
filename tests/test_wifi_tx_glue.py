@@ -37,4 +37,4 @@ def test_esp01_ladder_is_fed_the_confirmation():
     assert tick.index("in.trafficConfirmed = clusterLeaderContactFresh();") < tick.index(
         "wifiTxPolicyStep(")
     cluster = _src("FollowerEsp01/FollowerCluster.cpp")
-    assert "return followerLeaderContactFresh(policyState, millis());" in cluster
+    assert "return clusterFollowerContactFresh(policyState, millis());" in cluster

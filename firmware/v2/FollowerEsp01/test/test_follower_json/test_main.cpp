@@ -39,15 +39,15 @@ static void test_fault_mask_width_sets_nibble_count() {
   units[2].statusValid = true;
   units[2].status.flags = UNIT_FLAG_HALL_NEVER;
   char buf[16];
-  TEST_ASSERT_EQUAL_UINT(2, followerFaultMaskHex(units, 8, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_UINT(2, unitFaultMaskHex(units, 8, buf, sizeof(buf)));
   TEST_ASSERT_EQUAL_STRING("05", buf);
-  TEST_ASSERT_EQUAL_UINT(4, followerFaultMaskHex(units, 16, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_UINT(4, unitFaultMaskHex(units, 16, buf, sizeof(buf)));
   TEST_ASSERT_EQUAL_STRING("0005", buf);
 }
 
 static void test_fault_mask_zero_width_is_empty() {
   char buf[16];
-  TEST_ASSERT_EQUAL_UINT(0, followerFaultMaskHex(nullptr, 0, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_UINT(0, unitFaultMaskHex(nullptr, 0, buf, sizeof(buf)));
   TEST_ASSERT_EQUAL_STRING("", buf);
 }
 
@@ -57,7 +57,7 @@ static void test_fault_mask_flags_lost_unit() {
   units[1].state = 1;
   units[1].stale = true;
   char buf[16];
-  followerFaultMaskHex(units, 8, buf, sizeof(buf));
+  unitFaultMaskHex(units, 8, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("02", buf);
 }
 

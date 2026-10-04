@@ -19,6 +19,7 @@
 #include "DriftLogPolicy.h"  // drift-event operator-log decision (#322)
 #include "HelpersSerialHandling.h"
 #include "MaintenancePolicy.h"
+#include "UnitTimings.h"
 #include "MotionBudget.h"  // motion admission (#505)
 #include "RenderStagger.h"  // sub-frame inrush stagger (#324)
 #include "SplitFlapProtocol.h"
@@ -50,12 +51,6 @@ static constexpr uint32_t UNIT_BUS_FREQ_HZ = 100000;
 // receiveEvent ISR has time to flip its pending*Response flag.
 static constexpr uint32_t UNIT_RESPONSE_SETTLE_MS = 2;
 
-// How long waitForDisplayToStop() keeps polling before assuming a unit is
-// physically stuck (status byte pegged at 1) and moving on. This and any
-// other display stuck-timeout must stay <= the TWDT timeout, OR the poll
-// loop must feed the watchdog itself (it does, #314) — a jammed flap is a
-// mechanical condition this code deliberately survives, not a reboot cause.
-static constexpr uint32_t SHOW_STUCK_TIMEOUT_MS = 30000;
 
 static int toI2cAddress(int unitIndex) {
   return SFP_I2C_ADDRESS_BASE + unitIndex;
@@ -479,7 +474,7 @@ static bool waitForMotionSlot(MotionTracker& movers) {
   return true;
 }
 
-// Waits until no unit reports rotation, with the SHOW_STUCK_TIMEOUT_MS
+// Waits until no unit reports rotation, with the UNIT_SHOW_STUCK_TIMEOUT_MS
 // stuck-unit cap. The delay(100) yields displayTask's core between polls.
 // The abort signal (#204) short-circuits the wait so a queued Stop takes
 // effect promptly instead of sitting out a stuck-unit timeout.
@@ -492,7 +487,7 @@ static void waitForDisplayToStop(const UnitFacts* facts, int width) {
       SerialPrintln(F("Display-stop wait aborted by /stop"));
       break;
     }
-    if (millis() - waitStart > SHOW_STUCK_TIMEOUT_MS) {
+    if (millis() - waitStart > UNIT_SHOW_STUCK_TIMEOUT_MS) {
       SerialPrintln(F("Display-stop wait timed out — assuming a unit is stuck, continuing anyway"));
       break;
     }
