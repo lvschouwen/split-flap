@@ -44,7 +44,8 @@
 #
 # Platform autodetect (#299): each device's GET /settings is read first —
 # `plat":"esp01"` (the #298 ESP-01 follower row) gets the latest
-# follower-<rev>.bin; anything else is an S3 master and gets
+# follower-<rev>-gz.bin (gzip-packed; the plain follower-<rev>.bin when no
+# packed one is staged); anything else is an S3 master and gets
 # firmware-<rev>.bin as before. -r/-a are refused for esp01 targets (no
 # factory slot there), and a local file whose prefix contradicts the
 # device's platform is refused — an S3 image POSTed at an ESP-01 (or vice
@@ -138,11 +139,21 @@ SSH_OPTS=(-o ConnectTimeout=10 -o BatchMode=yes)
 # is a merged USB-at-0x0 image, never a valid OTA payload — filter it out.
 # REMOTE_DIR/prefix travel as positional args to a fixed remote script, never
 # interpolated into the remote command line (shell-injection surface).
+#
+# The follower build stages two files per rev: the plain image and the
+# gzip-packed follower-<rev>-gz.bin, which the row's bootloader unpacks and
+# which still fits once the plain one no longer does. The packed file of the
+# newest build wins; the plain one is the fallback when only it is staged.
 find_latest() {
   local prefix="$1"
   ssh "${SSH_OPTS[@]}" -- "$SERVER" bash -s -- "$REMOTE_DIR" "$prefix" <<'REMOTE'
 dir="$1"; prefix="$2"
-ls -t -- "$dir/$prefix"-*.bin 2>/dev/null | grep -v '\.factory\.bin$' | head -1
+latest=$(ls -t -- "$dir/$prefix"-*.bin 2>/dev/null | grep -v '\.factory\.bin$' | head -1)
+if [ "$prefix" = follower ] && [ -n "$latest" ]; then
+  packed="${latest%.bin}"; packed="${packed%-gz}-gz.bin"
+  [ -f "$packed" ] && latest="$packed"
+fi
+[ -n "$latest" ] && echo "$latest"
 exit 0
 REMOTE
 }

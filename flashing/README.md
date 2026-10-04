@@ -103,9 +103,15 @@ and `follower-<rev>-gz.bin` (the same image, gzip-packed — the row's
 bootloader unpacks it). Either is a valid upload for the leader's
 `POST /cluster/follower-firmware` and for `ota-flash.sh -l`; the packed one
 is the only one that still fits once the image passes about 511 KB (the
-build log prints the margin). Stage ONE of them: `ota-flash.sh` picks the
-newest `follower-*.bin` by mtime and cannot tell the two apart. Only the
-build's `-gz` file is accepted — a plain `gzip` of the bin is refused.
+build log prints the margin). The packed image is the default: stage both
+and `ota-flash.sh` takes the packed file of the newest build, falling back
+to the plain one when only that is staged. Use the plain image for USB
+provisioning and for the first flash of a row still on v1 firmware (its
+bootloader may predate gzip support). Only the build's `-gz` file is
+accepted — a plain `gzip` of the bin is refused. Before the first packed
+flash of a new row, read `flashId` from its `/settings`: the ESP8266 core
+has open reports of OTA trouble on Puya and XMC flash chips, and only the
+chip of the existing row is proven.
 
 ## Legacy: the Windows flasher exe (retired)
 

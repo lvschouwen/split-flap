@@ -126,6 +126,7 @@ static FollowerFlashInfo makeFlash() {
   f.sketchBytes = 453776;
   f.sketchFreeBytes = 573440;
   f.flashMode = 3;
+  f.flashId = 0x1440E0;
   return f;
 }
 
@@ -138,6 +139,7 @@ static void test_settings_json_shape() {
   TEST_ASSERT_TRUE(out.indexOf("\"sketch\":453776") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"sketchFree\":573440") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"flashMode\":3") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"flashId\":\"1440e0\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"txPower\":85") >= 0);  // #508, dBm x10
   // #513: a JSON boolean under the S3's key name, so commission-units.sh
   // reads both platforms with one expression.

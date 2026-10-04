@@ -27,11 +27,14 @@ struct FollowerVitals {
 // #540: the running image against the app area. `sketchFree` is where an OTA
 // upload is stored (the handler takes one sector less); `flashMode` is the
 // image header's SPI mode (0 QIO, 1 QOUT, 2 DIO, 3 DOUT), which a gzip image
-// must match.
+// must match. `flashId` is the SPI flash chip's JEDEC id as hex (low byte =
+// vendor): the bootloader's copy has no per-vendor handling, so a row with
+// another chip than the proven one should be known before a packed flash.
 struct FollowerFlashInfo {
   uint32_t sketchBytes = 0;
   uint32_t sketchFreeBytes = 0;
   int flashMode = 0;
+  uint32_t flashId = 0;
 };
 
 // ,"plat":"esp01","heap":H,"rssi":R,"up":U — the #297 additive block.
@@ -207,7 +210,7 @@ inline String followerSettingsJson(const String& name, const char* rev,
                                    const FollowerFlashInfo& flash,
                                    int txPowerDbm10, bool reflashOnBoot) {
   String out;
-  out.reserve(392);
+  out.reserve(416);
   out += "{\"deviceName\":";
   appendJsonString(out, name);
   out += ",\"effectiveDeviceName\":";
@@ -231,6 +234,9 @@ inline String followerSettingsJson(const String& name, const char* rev,
   out += String((unsigned long)flash.sketchFreeBytes);
   out += ",\"flashMode\":";
   out += flash.flashMode;
+  out += ",\"flashId\":\"";
+  out += String((unsigned long)flash.flashId, HEX);
+  out += '"';
   out += ",\"txPower\":";  // #508: WiFi TX power cap x10 (dBm)
   out += txPowerDbm10;
   // #513: same key and type as the S3's, so one campaign script reads both.

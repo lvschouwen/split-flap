@@ -151,6 +151,7 @@ static FollowerFlashInfo flashInfoNow() {
   f.sketchBytes = ESP.getSketchSize();
   f.sketchFreeBytes = ESP.getFreeSketchSpace();
   f.flashMode = (int)ESP.getFlashChipMode();
+  f.flashId = ESP.getFlashChipId();
   return f;
 }
 
