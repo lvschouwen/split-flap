@@ -98,6 +98,15 @@ itself against `<staging-dir>/ota-flash.sh` and prints the update
 one-liner when the local copy is stale (#262, warn-only) — so keep the
 staged copy fresh alongside the bins.
 
+The ESP-01 follower build writes two images: `follower-<rev>.bin` (plain)
+and `follower-<rev>-gz.bin` (the same image, gzip-packed — the row's
+bootloader unpacks it). Either is a valid upload for the leader's
+`POST /cluster/follower-firmware` and for `ota-flash.sh -l`; the packed one
+is the only one that still fits once the image passes about 511 KB (the
+build log prints the margin). Stage ONE of them: `ota-flash.sh` picks the
+newest `follower-*.bin` by mtime and cannot tell the two apart. Only the
+build's `-gz` file is accepted — a plain `gzip` of the bin is refused.
+
 ## Legacy: the Windows flasher exe (retired)
 
 The guided provisioning exe (`split-flap-flasher.exe`) is retired (#284) —

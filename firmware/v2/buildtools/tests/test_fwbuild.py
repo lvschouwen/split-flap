@@ -131,3 +131,82 @@ def test_emit_array_shape():
     assert text.startswith("const uint8_t BLOB[] PROGMEM = {")
     assert "const size_t BLOB_LEN = 18;" in text
     assert "0x11," in text
+
+
+# --- ESP-01 OTA images (#540) ----------------------------------------------------
+
+def _image(n: int) -> bytes:
+    """An ESP8266-shaped image of `n` bytes that compresses like code does
+    (not at all like zeros, not at all like noise)."""
+    import random
+    rng = random.Random(540)
+    words = [bytes(rng.randrange(256) for _ in range(4)) for _ in range(900)]
+    body = b"".join(rng.choice(words) for _ in range(n // 4 + 1))
+    return (b"\xE9\x02\x00\x20" + body)[:n]
+
+
+def test_ota_gzip_is_a_gzip_file_of_the_image():
+    raw = _image(70000)
+    assert gzip.decompress(fwbuild.ota_gzip_image(raw)) == raw
+
+
+def test_ota_gzip_leaves_the_image_header_readable():
+    # The exact prefix FollowerOtaImage.h parses (and its native test builds
+    # by hand): gzip header without optional fields, one stored block.
+    raw = _image(70000)
+    packed = fwbuild.ota_gzip_image(raw)
+    assert packed[:15] == bytes.fromhex("1f8b0800" "00000000" "02ff"
+                                        "00" "1000" "efff")
+    off = fwbuild.OTA_GZIP_IMAGE_OFFSET
+    assert packed[off:off + fwbuild.OTA_GZIP_STORED_LEN] == raw[:16]
+
+
+def test_ota_gzip_is_reproducible():
+    raw = _image(70000)
+    assert fwbuild.ota_gzip_image(raw) == fwbuild.ota_gzip_image(raw)
+
+
+def test_ota_gzip_tail_is_the_unpacked_length():
+    raw = _image(70001)
+    assert int.from_bytes(fwbuild.ota_gzip_image(raw)[-4:], "little") == 70001
+
+
+def test_ota_max_upload_is_free_space_minus_a_sector():
+    # 453776 B running -> 111 sectors used, 140 free, the handler keeps one.
+    assert fwbuild.ota_max_upload(453776) == 139 * 4096
+    assert fwbuild.ota_max_upload(fwbuild.ESP01_SKETCH_AREA) == 0
+    assert fwbuild.ota_max_upload(fwbuild.ESP01_SKETCH_AREA - 1) == 0
+
+
+def test_plain_ceiling_is_half_the_area_less_the_spare_sector():
+    ceiling = fwbuild.ota_ceiling(1.0)
+    assert ceiling == 125 * 4096 - fwbuild.OTA_MULTIPART_ALLOWANCE
+    assert fwbuild.ota_upload_fits(ceiling, ceiling)
+    assert not fwbuild.ota_upload_fits(ceiling + 1, ceiling + 1)
+
+
+def test_gzip_ceiling_is_above_the_plain_one_and_exact():
+    ceiling = fwbuild.ota_ceiling(0.7)
+    assert ceiling > fwbuild.ota_ceiling(1.0) + 80000
+    assert fwbuild.ota_can_replace(ceiling, ceiling, round(ceiling * 0.7))
+    over = ceiling + 4096
+    assert not fwbuild.ota_can_replace(over, over, round(over * 0.7))
+
+
+def test_gzip_upload_is_stored_at_the_top_of_the_app_area():
+    # 317842 B + framing -> 78 sectors, ending where the app area ends.
+    assert fwbuild.ota_stage_addr(453776, 317842, True) == 0xFB000 - 78 * 4096
+    # A plain image takes the whole free space: one sector past the image.
+    assert fwbuild.ota_stage_addr(453776, 453776, False) == 112 * 4096
+
+
+def test_gzip_image_must_unpack_below_its_stored_copy():
+    assert fwbuild.ota_gzip_unpack_fits(453776, 453776, 317842)
+    assert fwbuild.ota_gzip_unpack_fits(453776, 708608, 317842)
+    assert not fwbuild.ota_gzip_unpack_fits(453776, 708609, 317842)
+
+
+def test_ota_report_names_both_margins():
+    line = fwbuild.ota_report(453776, 317842)
+    assert "plain-OTA ceiling 510976 B (+57200)" in line
+    assert "gzip-OTA ceiling" in line and "70.0%" in line

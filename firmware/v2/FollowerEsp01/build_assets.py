@@ -12,7 +12,9 @@ No web assets — this firmware serves no HTML. Generates:
 
 Post-build it stamps the artifact as follower-<rev>.bin — the prefix is
 what ota-flash.sh keys the ESP-01 platform on (never a valid payload for an
-S3 master's /firmware/master and vice versa).
+S3 master's /firmware/master and vice versa) — and as follower-<rev>-gz.bin,
+the same image gzip-packed for OTA (#540), and prints how far the image is
+from the size at which a row could no longer update itself.
 """
 
 import pathlib
@@ -35,7 +37,7 @@ sys.path.insert(0, str(_PROJECT_DIR.parent / "buildtools"))
 from fwbuild import (  # noqa: E402
     GENERATED_BANNER,
     emit_array,
-    stamp_firmware_bin,
+    stamp_follower_images,
     unit_firmware_image,
     write_version_header,
 )
@@ -105,4 +107,4 @@ if _UNDER_SCONS:
     _tag = write_version_header(_PROJECT_DIR, with_unit_bundle=True)
     build_unit_assets(_PROJECT_DIR)
     build_api_index_asset(_PROJECT_DIR)
-    stamp_firmware_bin(env, f"follower-{_tag}.bin")  # noqa: F821
+    stamp_follower_images(env, _tag)  # noqa: F821

@@ -121,17 +121,30 @@ static void test_ping_reply_carries_state_and_health_and_plat() {
 
 // --- /settings --------------------------------------------------------------------
 
+static FollowerFlashInfo makeFlash() {
+  FollowerFlashInfo f;
+  f.sketchBytes = 453776;
+  f.sketchFreeBytes = 573440;
+  f.flashMode = 3;
+  return f;
+}
+
 static void test_settings_json_shape() {
   String out = followerSettingsJson("split-flap-c8a746", "abc1234", 8,
                                     "clustered", "wall-leader",
-                                    "192.168.15.22", 2, makeVitals(), 85,
-                                    true);
+                                    "192.168.15.22", 2, makeVitals(),
+                                    makeFlash(), 85, true);
+  // #540: the running image against the app area.
+  TEST_ASSERT_TRUE(out.indexOf("\"sketch\":453776") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"sketchFree\":573440") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"flashMode\":3") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"txPower\":85") >= 0);  // #508, dBm x10
   // #513: a JSON boolean under the S3's key name, so commission-units.sh
   // reads both platforms with one expression.
   TEST_ASSERT_TRUE(out.indexOf("\"reflashOnBoot\":true}") >= 0);
   String braked = followerSettingsJson("n", "abc1234", 5, "clustered", "l",
-                                       "h", 0, makeVitals(), 85, false);
+                                       "h", 0, makeVitals(), makeFlash(), 85,
+                                       false);
   TEST_ASSERT_TRUE(braked.indexOf("\"reflashOnBoot\":false}") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"deviceName\":\"split-flap-c8a746\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"effectiveDeviceName\":\"split-flap-c8a746\"") >= 0);

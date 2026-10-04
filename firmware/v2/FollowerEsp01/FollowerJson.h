@@ -24,6 +24,16 @@ struct FollowerVitals {
   uint32_t upSeconds = 0;
 };
 
+// #540: the running image against the app area. `sketchFree` is where an OTA
+// upload is stored (the handler takes one sector less); `flashMode` is the
+// image header's SPI mode (0 QIO, 1 QOUT, 2 DIO, 3 DOUT), which a gzip image
+// must match.
+struct FollowerFlashInfo {
+  uint32_t sketchBytes = 0;
+  uint32_t sketchFreeBytes = 0;
+  int flashMode = 0;
+};
+
 // ,"plat":"esp01","heap":H,"rssi":R,"up":U — the #297 additive block.
 inline void followerAppendPlatVitals(String& out, const FollowerVitals& v) {
   out += ",\"plat\":\"" FOLLOWER_PLAT "\",\"heap\":";
@@ -194,9 +204,10 @@ inline String followerSettingsJson(const String& name, const char* rev,
                                    const String& leaderName,
                                    const String& leaderHost, int row,
                                    const FollowerVitals& v,
+                                   const FollowerFlashInfo& flash,
                                    int txPowerDbm10, bool reflashOnBoot) {
   String out;
-  out.reserve(328);
+  out.reserve(392);
   out += "{\"deviceName\":";
   appendJsonString(out, name);
   out += ",\"effectiveDeviceName\":";
@@ -214,6 +225,12 @@ inline String followerSettingsJson(const String& name, const char* rev,
   out += ",\"clusterRow\":";
   out += row;
   followerAppendPlatVitals(out, v);
+  out += ",\"sketch\":";
+  out += String((unsigned long)flash.sketchBytes);
+  out += ",\"sketchFree\":";
+  out += String((unsigned long)flash.sketchFreeBytes);
+  out += ",\"flashMode\":";
+  out += flash.flashMode;
   out += ",\"txPower\":";  // #508: WiFi TX power cap x10 (dBm)
   out += txPowerDbm10;
   // #513: same key and type as the S3's, so one campaign script reads both.

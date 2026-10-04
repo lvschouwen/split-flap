@@ -10,6 +10,7 @@
 #include <memory>
 #include <new>
 #include <Updater.h>
+#include <flash_hal.h>  // FS_start: the end of the app area
 
 #include "BuildVersion.h"
 #include "ApiIndex.h"
@@ -23,6 +24,7 @@
 #include "FollowerCors.h"
 #include "ClusterForeign.h"
 #include "FollowerJson.h"
+#include "FollowerOtaImage.h"  // #540: gzip upload checks
 #include "FollowerPrefs.h"     // #513: reflashOnBoot
 #include "FollowerResetLog.h"  // #503: reset history in /cluster/health
 #include "FollowerRescue.h"  // #343: beacon marker + op lockout
@@ -75,6 +77,14 @@ static AsyncWebServerRequest* volatile masterOtaOwnerRequest = nullptr;
 static ForeignContactStats foreignContacts;
 static OtaRejection otaRejection;
 static bool otaTxPowerReduced = false;
+// #540: the upload in progress is gzip-packed; its tail carries the length
+// eboot will unpack.
+static bool otaUploadIsGzip = false;
+static OtaGzipTail otaGzipTail;
+static uint32_t otaReservedBytes = 0;  // what Update.begin was given
+
+// Running image + stored upload share [0, this); the EEPROM sector follows.
+static uint32_t appAreaBytes() { return FS_start - 0x40200000; }
 
 // --- helpers ------------------------------------------------------------------------
 
@@ -132,6 +142,16 @@ static FollowerVitals vitalsNow() {
   v.rssiDbm = WiFi.RSSI();
   v.upSeconds = millis() / 1000;
   return v;
+}
+
+// #540: how much of the app area the running image takes — what is left is
+// where an OTA upload is stored.
+static FollowerFlashInfo flashInfoNow() {
+  FollowerFlashInfo f;
+  f.sketchBytes = ESP.getSketchSize();
+  f.sketchFreeBytes = ESP.getFreeSketchSpace();
+  f.flashMode = (int)ESP.getFlashChipMode();
+  return f;
 }
 
 // Health facts snapshot for the join/ping replies (#294 keys).
@@ -325,6 +345,22 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
           otaRejection.set(gate);
           return;
         }
+        // #540: a gzip image is refused here unless it shows the flash
+        // config this board runs (FollowerOtaImage.h) — before the freeze
+        // and before Update.begin, so a refusal costs nothing.
+        otaUploadIsGzip = otaIsGzip(data, len);
+        otaGzipTail = OtaGzipTail();
+        if (otaUploadIsGzip) {
+          uint32_t running = 0;
+          OtaImageCheck check =
+              ESP.flashRead(0, &running, sizeof(running))
+                  ? otaGzipCheck(data, len, (const uint8_t*)&running)
+                  : OtaImageCheck::FlashMode;
+          if (check != OtaImageCheck::Ok) {
+            otaRejection.set(400, String(otaImageCheckReason(check)));
+            return;
+          }
+        }
         // Freeze all display/unit work for the upload (v1 #116): WiFi RX +
         // flash writes + stepper current on one small supply is the storm
         // that endangers a flash.
@@ -354,12 +390,18 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
               412, F("Flash config mismatch — reflash once over USB"));
           return;
         }
+        // A plain image reserves the whole free space; a gzip one only
+        // what it needs, so it is stored clear of where it unpacks to
+        // (FollowerOtaImage.h).
+        otaReservedBytes = otaUploadIsGzip
+                               ? otaGzipReserve(contentLen, maxSketchSpace)
+                               : maxSketchSpace;
         Update.runAsync(true);
-        if (!Update.begin(maxSketchSpace, U_FLASH)) {
+        if (!Update.begin(otaReservedBytes, U_FLASH)) {
           // Stale updater state from an aborted upload (v1 #162).
           Update.end(false);
           Update.clearError();
-          if (!Update.begin(maxSketchSpace, U_FLASH)) {
+          if (!Update.begin(otaReservedBytes, U_FLASH)) {
             otaRejection.set(500, String(F("Update.begin failed: ")) +
                                       Update.getErrorString());
             return;
@@ -382,7 +424,17 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
       if (!Update.hasError() && len > 0) {
         Update.write(data, len);
       }
+      if (otaUploadIsGzip) otaGzipTail.feed(data, len);
       if (final) {
+        if (otaUploadIsGzip &&
+            !otaGzipUnpackFits(otaGzipTail, appAreaBytes(),
+                               otaReservedBytes)) {
+          // Nothing is staged for eboot: end(false) drops the session.
+          Update.end(false);
+          otaRejection.set(413, F("gzip image: unpacked it would not fit "
+                                  "below its stored copy"));
+          return;
+        }
         if (!Update.end(true)) {
           // md5-mismatch end() latches the error but skips _reset (v1
           // #162) — a second end(false) clears the size state.
@@ -416,7 +468,8 @@ void webEndpointsInit(AsyncWebServer& server) {
                                       displayWidth,
                                       followerPhaseName(cv.phase),
                                       cv.leaderName, cv.leaderHost, cv.row,
-                                      vitalsNow(), followerTxPowerDbm10(),
+                                      vitalsNow(), flashInfoNow(),
+                                      followerTxPowerDbm10(),
                                       prefsReflashOnBoot()));
   });
 
