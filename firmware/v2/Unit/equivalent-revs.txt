@@ -62,7 +62,9 @@ d1d7dfb f93f649147bf129e9ad21bd29013865abdbfe07bc34ead3a4eae8ef1a1bffa17
 # on the wall run it), clean build: identical.
 34c72e0 79b8235899693bc5508825de93760629aab5580b74b5aaad8672be706b084a12
 
-# Epic #538 moves row-master logic into shared/ headers the Nano never
-# compiles. Unit 1 of each row runs the 795f0af image, which is the 34c72e0
-# image above (same content hash).
-795f0af 79b8235899693bc5508825de93760629aab5580b74b5aaad8672be706b084a12
+# Epic #538 moved row-master logic into shared/ headers the Nano never
+# compiles. Unit 1 of each row was reflashed through the shared flash path
+# (#534 bench) and reports cfd9948, the bundle rev at that time; its image is
+# the 34c72e0 image above (same content hash, restaged unchanged throughout
+# the epic). The other 19 units still report 34c72e0.
+cfd9948 79b8235899693bc5508825de93760629aab5580b74b5aaad8672be706b084a12
