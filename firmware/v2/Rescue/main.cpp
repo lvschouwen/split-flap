@@ -17,6 +17,7 @@
 #include <WiFi.h>
 #include <esp_ota_ops.h>
 
+#include "NvsContract.h"  // namespace + keys shared with the other image
 #include "BuildVersion.h"
 #include "RescueIdentity.h"
 #include "RescueWeb.h"
@@ -45,16 +46,16 @@ void setup() {
   // created) — that's fine, empty credentials just mean straight to the AP.
   Preferences prefs;
   String storedName, slotRec0, slotRec1;
-  bool nvsOk = prefs.begin("splitflap", /*readOnly=*/true);
+  bool nvsOk = prefs.begin(SF_NVS_NAMESPACE, /*readOnly=*/true);
   if (nvsOk) {
-    storedName = prefs.getString("deviceName", "");
-    wifiSsid = prefs.getString("wifiSsid", "");
-    wifiPass = prefs.getString("wifiPass", "");
+    storedName = prefs.getString(SF_NVS_KEY_DEVICE_NAME, "");
+    wifiSsid = prefs.getString(SF_NVS_KEY_WIFI_SSID, "");
+    wifiPass = prefs.getString(SF_NVS_KEY_WIFI_PASS, "");
     // #200: Master's per-slot OTA confirm records — /rescue/exit ranks by
     // these (the app-descriptor build stamp is constant under pioarduino
     // hybrid builds and cannot order images).
-    slotRec0 = prefs.getString("slotRec0", "");
-    slotRec1 = prefs.getString("slotRec1", "");
+    slotRec0 = prefs.getString(SF_NVS_KEY_SLOT_REC_APP0, "");
+    slotRec1 = prefs.getString(SF_NVS_KEY_SLOT_REC_APP1, "");
     prefs.end();
   }
   deviceName =

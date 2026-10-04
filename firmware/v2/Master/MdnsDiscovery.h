@@ -1,5 +1,6 @@
 #pragma once
 
+#include "JsonEscape.h"  // appendJsonString: the answer comes off the wire
 #include <Arduino.h>
 
 // Pure logic for the MQTT broker auto-detect endpoint (#129): which host and
@@ -45,29 +46,6 @@ inline String preferredBrokerHost(const MdnsBrokerCandidate& candidate) {
   return candidate.name + ".local";
 }
 
-// JSON string literal (with quotes) appended to `out`. mDNS labels shouldn't
-// need escaping, but the answer comes off the wire — never trust it into a
-// JSON literal raw.
-inline void mdnsAppendJsonString(String& out, const String& value) {
-  out += '"';
-  for (unsigned int i = 0; i < value.length(); i++) {
-    char c = value[i];
-    switch (c) {
-      case '"':  out += "\\\""; break;
-      case '\\': out += "\\\\"; break;
-      default:
-        if ((unsigned char)c < 0x20) {
-          char buf[8];
-          snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
-          out += buf;
-        } else {
-          out += c;
-        }
-    }
-  }
-  out += '"';
-}
-
 // The GET /mqtt/discover "done" payload:
 // {"status":"done","candidates":[{"host":…,"name":…,"port":…,"source":…},…]}
 // "host"/"port" are the prefill suggestions; "name" is the display label.
@@ -78,9 +56,9 @@ inline String buildDiscoverJson(const MdnsBrokerCandidate* candidates, size_t co
   for (size_t i = 0; i < count; i++) {
     if (i > 0) out += ',';
     out += "{\"host\":";
-    mdnsAppendJsonString(out, preferredBrokerHost(candidates[i]));
+    appendJsonString(out, preferredBrokerHost(candidates[i]));
     out += ",\"name\":";
-    mdnsAppendJsonString(out, candidates[i].name);
+    appendJsonString(out, candidates[i].name);
     out += ",\"port\":";
     out += String(suggestedBrokerPort(candidates[i]));
     out += ",\"source\":\"";

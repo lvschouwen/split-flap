@@ -1,3 +1,4 @@
+#include "NvsContract.h"  // namespace + keys shared with the other image
 #include "FactorySlot.h"
 
 #include <MD5Builder.h>
@@ -226,8 +227,8 @@ static RescueSlotFacts computeRescueSlotFacts() {
   bool shaMatches = false;
   if (valid) {
     Preferences prefs;
-    if (prefs.begin("splitflap", true)) {
-      rec = parseSlotRecord(prefs.getString("slotRecF", "").c_str());
+    if (prefs.begin(SF_NVS_NAMESPACE, true)) {
+      rec = parseSlotRecord(prefs.getString(SF_NVS_KEY_SLOT_REC_FACTORY, "").c_str());
       prefs.end();
     }
     uint8_t sha[32];
@@ -265,7 +266,7 @@ void rescueSlotRecordInstall(const String& rev) {
   }
 
   Preferences prefs;
-  if (!prefs.begin("splitflap", false)) {
+  if (!prefs.begin(SF_NVS_NAMESPACE, false)) {
     SerialPrintln(F("rescue slot: NVS open failed — rev not recorded"));
     rescueSlotRefresh();
     return;
@@ -279,18 +280,18 @@ void rescueSlotRecordInstall(const String& rev) {
     // about the image we simply cannot name. Removing it reads UNIDENTIFIED,
     // which is the truth. It also stops a previous image's record from
     // outliving the image it described.
-    prefs.remove("slotRecF");
+    prefs.remove(SF_NVS_KEY_SLOT_REC_FACTORY);
   } else {
     // Skip a redundant write when this exact image already holds the
     // record — same NVS-wear guard as ensureSlotRecord() (#200).
     SlotRecord existing =
-        parseSlotRecord(prefs.getString("slotRecF", "").c_str());
+        parseSlotRecord(prefs.getString(SF_NVS_KEY_SLOT_REC_FACTORY, "").c_str());
     bool unchanged = slotRecordShaMatches(existing, sha) &&
                      strcmp(existing.rev, rev.c_str()) == 0;
     if (!unchanged) {
       char buf[SLOT_RECORD_BUF_LEN];
       if (formatSlotRecord(buf, sizeof(buf), 0, sha, rev.c_str())) {
-        prefs.putString("slotRecF", buf);
+        prefs.putString(SF_NVS_KEY_SLOT_REC_FACTORY, buf);
       }
     }
   }

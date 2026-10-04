@@ -8,6 +8,7 @@
 // layout-independent. Device-name validation is NOT here — it predates this
 // header and lives in DeviceIdentity.h (isValidDeviceName).
 
+#include "ClusterWireGuards.h"  // clusterWirePrintable
 #include <Arduino.h>
 #include <stdlib.h>
 
@@ -28,11 +29,7 @@ static inline bool settingsIsNumber(const String& str) {
 // 0x20 ("space allowed": timezone, password) or 0x21 ("no spaces": MQTT
 // host/user, which are also trimmed by the caller first).
 static inline bool settingsIsPrintableAscii(const String& v, char lowest) {
-  for (unsigned int i = 0; i < v.length(); i++) {
-    char c = v[i];
-    if (c < lowest || c > 0x7E) return false;
-  }
-  return true;
+  return clusterWirePrintable(v, lowest);  // one printable-ASCII rule
 }
 
 // "left" / "center" / "right" — must stay equal to the ALIGNMENT_MODE_*

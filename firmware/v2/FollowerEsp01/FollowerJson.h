@@ -10,31 +10,12 @@
 
 #include "FollowerResetLog.h"
 #include "ClusterForeign.h"
+#include "JsonEscape.h"  // appendJsonString
 #include "ClusterWireGuards.h"  // ClusterRowHealth + the health-key block
 #include "FollowerBusRecovery.h"
 #include "UnitHealth.h"
 
 #define FOLLOWER_PLAT "esp01"
-
-// Minimal JSON string escaping (quotes, backslash, control chars) — wire
-// strings like the leader name come off an unauthenticated LAN POST.
-inline void followerAppendJsonString(String& out, const String& value) {
-  out += '"';
-  for (unsigned int i = 0; i < value.length(); i++) {
-    char c = value[i];
-    if (c == '"' || c == '\\') {
-      out += '\\';
-      out += c;
-    } else if ((unsigned char)c < 0x20) {
-      char buf[8];
-      snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
-      out += buf;
-    } else {
-      out += c;
-    }
-  }
-  out += '"';
-}
 
 // The #297 vitals the ESP-01 reports on every join/ping reply and /settings.
 struct FollowerVitals {
@@ -67,7 +48,7 @@ inline String followerJoinReplyJson(const String& name, const char* rev,
   String out;
   out.reserve(224);
   out += "{\"name\":";
-  followerAppendJsonString(out, name);
+  appendJsonString(out, name);
   out += ",\"rev\":\"";
   out += rev;
   out += '"';
@@ -133,9 +114,9 @@ inline String followerClusterHealthJson(
   out += "{\"state\":\"";
   out += phaseName;
   out += "\",\"leaderName\":";
-  followerAppendJsonString(out, leaderName);
+  appendJsonString(out, leaderName);
   out += ",\"leaderHost\":";
-  followerAppendJsonString(out, leaderHost);
+  appendJsonString(out, leaderHost);
   out += ",\"row\":";
   out += row;
   out += ",\"epoch\":";
@@ -143,7 +124,7 @@ inline String followerClusterHealthJson(
   out += ",\"seq\":";
   out += String((unsigned long)seq);
   out += ",\"segment\":";
-  followerAppendJsonString(out, segment);
+  appendJsonString(out, segment);
   out += ",\"rev\":\"";
   out += rev;
   out += "\",\"width\":";
@@ -217,9 +198,9 @@ inline String followerSettingsJson(const String& name, const char* rev,
   String out;
   out.reserve(328);
   out += "{\"deviceName\":";
-  followerAppendJsonString(out, name);
+  appendJsonString(out, name);
   out += ",\"effectiveDeviceName\":";
-  followerAppendJsonString(out, name);
+  appendJsonString(out, name);
   out += ",\"version\":\"";
   out += rev;
   out += "\",\"width\":";
@@ -227,9 +208,9 @@ inline String followerSettingsJson(const String& name, const char* rev,
   out += ",\"clusterState\":\"";
   out += phaseName;
   out += "\",\"clusterLeaderName\":";
-  followerAppendJsonString(out, leaderName);
+  appendJsonString(out, leaderName);
   out += ",\"clusterLeaderHost\":";
-  followerAppendJsonString(out, leaderHost);
+  appendJsonString(out, leaderHost);
   out += ",\"clusterRow\":";
   out += row;
   followerAppendPlatVitals(out, v);

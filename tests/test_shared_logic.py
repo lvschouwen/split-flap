@@ -280,3 +280,44 @@ def test_the_asyncweb_patch_exists_once():
         assert not (V2 / tree / "patch_asyncweb.py").exists(), tree
         ini = (V2 / tree / "platformio.ini").read_text()
         assert "pre:../buildtools/patch_asyncweb.py" in ini, tree
+
+
+# --- #537: Rescue <-> Master NVS contract, small duplicates -------------------
+
+def test_nvs_keys_two_images_share_are_spelled_once():
+    """Rescue hard-coded the namespace and keys the Master defines; a rename
+    on one side would have left a rescue that cannot join WiFi."""
+    contract = (SHARED / "NvsContract.h").read_text()
+    literals = set(re.findall(r'#define\s+SF_NVS_\w+\s+"([^"]+)"', contract))
+    assert {"splitflap", "deviceName", "wifiSsid", "wifiPass", "slotRec0",
+            "slotRec1", "slotRecF"} <= literals
+    quoted = "|".join(sorted(re.escape(v) for v in literals))
+    hits = _offenders(r'"(?:%s)"' % quoted,
+                      [V2 / "Master", V2 / "Rescue"])
+    # JSON reply keys and form fields legitimately reuse some of the words.
+    nvs_users = {"firmware/v2/Rescue/main.cpp",
+                 "firmware/v2/Master/Settings.h",
+                 "firmware/v2/Master/NvsSettingsStore.h",
+                 "firmware/v2/Master/FactorySlot.cpp",
+                 "firmware/v2/Master/OtaService.cpp"}
+    assert not (set(hits) & nvs_users), {k: hits[k] for k in set(hits) & nvs_users}
+    for path in nvs_users:
+        assert "SF_NVS_" in (REPO / path).read_text(), path
+
+
+def test_json_strings_are_escaped_by_one_function():
+    assert not _offenders(r"inline void \w*[aA]ppendJsonString\(")
+    for path in ("Master/SettingsJson.h", "FollowerEsp01/FollowerJson.h"):
+        assert '#include "JsonEscape.h"' in (V2 / path).read_text(), path
+
+
+def test_tests_of_shared_headers_are_not_copied_per_tree():
+    """A test of a shared/ header belongs to one tree's suite; identical
+    copies elsewhere only drift."""
+    seen = {}
+    for tree in (V2 / "Master", V2 / "FollowerEsp01", V2 / "Rescue", V2 / "Unit"):
+        for test in sorted((tree / "test").glob("*/test_main.cpp")):
+            seen.setdefault(test.read_bytes(), []).append(
+                str(test.relative_to(REPO)))
+    copies = [paths for paths in seen.values() if len(paths) > 1]
+    assert not copies, copies

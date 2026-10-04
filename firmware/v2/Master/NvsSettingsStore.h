@@ -6,6 +6,7 @@
 // included from target code — ArduinoFake has no Preferences, so this file
 // must never be pulled into the native env.
 
+#include "NvsContract.h"
 #include <Preferences.h>
 
 #include "SettingsStore.h"
@@ -13,7 +14,7 @@
 class NvsSettingsStore : public SettingsStore {
  public:
   // read_only=false also creates the namespace on first boot.
-  void begin() { prefs_.begin("splitflap", false); }
+  void begin() { prefs_.begin(SF_NVS_NAMESPACE, false); }
 
   String getString(const char* key, const String& def) override {
     return prefs_.getString(key, def);

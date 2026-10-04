@@ -11,6 +11,7 @@
 // Hand-rolled to avoid an ArduinoJson dependency for a fixed-shape
 // serializer that never needs to parse (v1 issue #40).
 
+#include "JsonEscape.h"  // appendJsonString
 #include <Arduino.h>
 
 #include "HeadlessPolicy.h"
@@ -92,31 +93,6 @@ struct SettingsJsonFields {
   bool clusterLeading = false;
 };
 
-// JSON string escaper (v2 copy of v1's HelpersStringHandling.ino version).
-static inline void appendJsonString(String& out, const String& value) {
-  out += '"';
-  for (unsigned int i = 0; i < value.length(); i++) {
-    char c = value[i];
-    switch (c) {
-      case '"':  out += "\\\""; break;
-      case '\\': out += "\\\\"; break;
-      case '\b': out += "\\b";  break;
-      case '\f': out += "\\f";  break;
-      case '\n': out += "\\n";  break;
-      case '\r': out += "\\r";  break;
-      case '\t': out += "\\t";  break;
-      default:
-        if ((unsigned char)c < 0x20) {
-          char buf[8];
-          snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
-          out += buf;
-        } else {
-          out += c;
-        }
-    }
-  }
-  out += '"';
-}
 
 static inline void appendJsonBool(String& out, bool value) {
   out += value ? "true" : "false";

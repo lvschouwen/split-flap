@@ -10,7 +10,7 @@
 
 #include <Arduino.h>
 
-#include "MdnsDiscovery.h"  // normalizeMdnsHostname, mdnsAppendJsonString
+#include "MdnsDiscovery.h"  // normalizeMdnsHostname, appendJsonString
 
 #define CLUSTER_DISCOVER_MAX_BOARDS 8
 
@@ -59,17 +59,17 @@ inline String buildClusterDiscoverJson(const ClusterDiscoveredBoard* boards,
     if (!first) out += ',';
     first = false;
     out += "{\"name\":";
-    mdnsAppendJsonString(out, b.name);
+    appendJsonString(out, b.name);
     out += ",\"host\":";
-    mdnsAppendJsonString(out, clusterDiscoveredHost(b));
+    appendJsonString(out, clusterDiscoveredHost(b));
     out += ",\"rev\":";
-    mdnsAppendJsonString(out, b.rev);
+    appendJsonString(out, b.rev);
     out += ",\"width\":";
     out += String(b.width);
     if (b.plat.length() > 0) {
       // #297 additive: only foreign-platform boards advertise a plat tag.
       out += ",\"plat\":";
-      mdnsAppendJsonString(out, b.plat);
+      appendJsonString(out, b.plat);
     }
     out += '}';
   }

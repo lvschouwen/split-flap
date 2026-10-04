@@ -514,9 +514,9 @@ void webEndpointsInit(AsyncWebServer& server) {
                     request->client()->remoteIP().toString() +
                     F(" — leader is ") + curHost);
       String out = "{\"error\":\"other-leader\",\"leaderHost\":";
-      followerAppendJsonString(out, curHost);
+      appendJsonString(out, curHost);
       out += ",\"leaderName\":";
-      followerAppendJsonString(out, curName);
+      appendJsonString(out, curName);
       out += '}';
       request->send(409, "application/json", out);
       return;

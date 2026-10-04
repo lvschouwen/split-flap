@@ -58,14 +58,16 @@ struct MasterSettings {
 };
 
 // NVS keys (hard 15-char limit).
+#include "NvsContract.h"  // namespace + the keys the Rescue app reads
+
 #define SETTINGS_KEY_ALIGNMENT    "alignment"
 #define SETTINGS_KEY_FLAP_SPEED   "flapSpeed"
 #define SETTINGS_KEY_DEVICE_MODE  "deviceMode"
 #define SETTINGS_KEY_DEVICE_ROLE  "deviceRole"
 #define SETTINGS_KEY_TIMEZONE     "tzPosix"
-#define SETTINGS_KEY_DEVICE_NAME  "deviceName"
-#define SETTINGS_KEY_WIFI_SSID    "wifiSsid"
-#define SETTINGS_KEY_WIFI_PASS    "wifiPass"
+#define SETTINGS_KEY_DEVICE_NAME  SF_NVS_KEY_DEVICE_NAME  // read by Rescue
+#define SETTINGS_KEY_WIFI_SSID    SF_NVS_KEY_WIFI_SSID    // read by Rescue
+#define SETTINGS_KEY_WIFI_PASS    SF_NVS_KEY_WIFI_PASS    // read by Rescue
 #define SETTINGS_KEY_MQTT_HOST    "mqttHost"
 #define SETTINGS_KEY_MQTT_PORT    "mqttPort"
 #define SETTINGS_KEY_MQTT_USER    "mqttUser"
