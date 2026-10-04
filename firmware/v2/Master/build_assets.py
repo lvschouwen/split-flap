@@ -6,8 +6,7 @@ Generates:
     dirty flag), so the master firmware can report the version that
     was actually built into it.
 
-v2 copy of firmware/v1/ESPMaster/build_assets.py. Since the reflash slice
-(#205) it also bundles the unit firmware exactly like v1: data/
+Since the reflash slice (#205) it also bundles the unit firmware: data/
 unit-firmware.hex (+ .rev sidecar, both committed — staged by
 flashing/flasher/make_manifest.py) becomes UNIT_FIRMWARE_BIN in WebAssets.h
 and BUNDLED_UNIT_REV in BuildVersion.h. The UI is served straight from
@@ -17,11 +16,35 @@ Invoked by PlatformIO via `extra_scripts = pre:build_assets.py`.
 """
 
 import csv
-import gzip
 import json
 import pathlib
 import re
-import subprocess
+import sys
+
+# PlatformIO runs this file as a pre-build script: it sets up a SCons env and
+# provides Import() as a builtin. A plain `import build_assets` (pytest) has
+# neither, and then only defines the functions below.
+try:
+    Import("env")  # noqa: F821  (provided by PlatformIO SCons env)
+    _UNDER_SCONS = True
+    _PROJECT_DIR = pathlib.Path(env["PROJECT_DIR"])  # noqa: F821
+except NameError:
+    _UNDER_SCONS = False
+    _PROJECT_DIR = pathlib.Path(__file__).resolve().parent
+
+# The helpers every tree shares (hex parsing, rev stamping, PROGMEM arrays).
+sys.path.insert(0, str(_PROJECT_DIR.parent / "buildtools"))
+from fwbuild import (  # noqa: E402
+    GENERATED_BANNER,
+    bundled_unit_equivalent_revs,
+    bundled_unit_rev,
+    compress_asset,
+    emit_array,
+    pad_to_page,
+    stamp_firmware_bin,
+    unit_firmware_image,
+    write_version_header,
+)
 
 ASSETS = [
     ("index.html", "INDEX_HTML", True),
@@ -31,65 +54,6 @@ ASSETS = [
     ("style.css",  "STYLE_CSS",  True),
     ("favicon.png","FAVICON_PNG",False),
 ]
-
-
-def parse_intel_hex(path: pathlib.Path) -> bytes:
-    """Return the raw bytes produced by applying every data record of an
-    Intel-HEX file, filling gaps with 0xFF. Good enough for AVR sketches
-    that are contiguous from 0."""
-    out = bytearray()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.startswith(":"):
-            continue
-        byte_count = int(line[1:3], 16)
-        addr = int(line[3:7], 16)
-        rec_type = int(line[7:9], 16)
-        if rec_type == 0x00:
-            data = bytes.fromhex(line[9:9 + byte_count * 2])
-            while len(out) < addr + byte_count:
-                out.append(0xFF)
-            out[addr:addr + byte_count] = data
-        elif rec_type == 0x01:
-            break
-    return bytes(out)
-
-
-def pad_to_page(data: bytes, page: int = 128) -> bytes:
-    remainder = len(data) % page
-    if remainder == 0:
-        return data
-    return data + b"\xFF" * (page - remainder)
-
-
-def bundled_unit_rev(project_dir: pathlib.Path, fallback: str) -> str:
-    """Return the rev the bundled unit-firmware.hex was built at.
-
-    Read from data/unit-firmware.rev if present (written by the
-    make_manifest.py stage step). Falls back to the master's own rev so a
-    missing sidecar degrades instead of blowing up (v1 #31).
-    """
-    sidecar = project_dir / "data" / "unit-firmware.rev"
-    if sidecar.exists():
-        return sidecar.read_text(encoding="utf-8").strip() or fallback
-    return fallback
-
-
-def bundled_unit_equivalent_revs(project_dir: pathlib.Path) -> str:
-    """Comma-separated revs whose unit image is byte-identical to the bundled
-    one (#440), from data/unit-firmware.equiv (written by make_manifest.py
-    stage, which keeps only entries still proven against the staged image).
-
-    A unit reporting one of these was built before the identity scheme changed
-    but is running exactly our code, so it must not read OUTDATED — which,
-    via ReflashPlan, would make it a reflash target. Absent sidecar → empty,
-    i.e. bundle-rev equality only, the pre-#440 behaviour.
-    """
-    sidecar = project_dir / "data" / "unit-firmware.equiv"
-    if not sidecar.exists():
-        return ""
-    lines = sidecar.read_text(encoding="utf-8").splitlines()
-    return ",".join(s for s in (ln.strip() for ln in lines)
-                    if s and not s.startswith("#"))
 
 
 def build_tz_json(csv_path: pathlib.Path) -> bytes:
@@ -105,63 +69,6 @@ def build_tz_json(csv_path: pathlib.Path) -> bytes:
             if len(row) == 2 and row[0]:
                 table[row[0]] = row[1]
     return json.dumps(table, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-
-
-def compress_asset(data: bytes) -> bytes:
-    # mtime=0 keeps the gzip MTIME header field constant so two bakes of the
-    # same source are byte-identical — WebAssets.h, the firmware bin and its
-    # sketchMd5 must be reproducible per commit (#168).
-    return gzip.compress(data, 9, mtime=0)
-
-
-def emit_array(fh, name: str, data: bytes) -> None:
-    fh.write(f"const uint8_t {name}[] PROGMEM = {{\n  ")
-    for i, b in enumerate(data):
-        fh.write(f"0x{b:02X},")
-        if (i + 1) % 16 == 0:
-            fh.write("\n  ")
-        else:
-            fh.write(" ")
-    fh.write("\n};\n")
-    fh.write(f"const size_t {name}_LEN = {len(data)};\n\n")
-
-
-def git_short_rev(project_dir: pathlib.Path) -> tuple[str, bool]:
-    """Return (short commit hash, dirty?) for the repo that contains
-    project_dir. Falls back to ("unknown", False) if git isn't available."""
-    try:
-        rev = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=project_dir, stderr=subprocess.DEVNULL,
-        ).decode().strip()
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return ("unknown", False)
-    try:
-        dirty = bool(subprocess.check_output(
-            ["git", "status", "--porcelain"],
-            cwd=project_dir, stderr=subprocess.DEVNULL,
-        ).decode().strip())
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        dirty = False
-    return (rev, dirty)
-
-
-def build_version_header(project_dir: pathlib.Path) -> None:
-    rev, dirty = git_short_rev(project_dir)
-    tag = f"{rev}-dirty" if dirty else rev
-    unit_rev = bundled_unit_rev(project_dir, fallback=tag)
-    unit_equiv = bundled_unit_equivalent_revs(project_dir)
-    output = project_dir / "BuildVersion.h"
-    output.write_text(
-        "// Auto-generated by build_assets.py — do not edit.\n"
-        "#pragma once\n"
-        f'#define GIT_REV "{tag}"\n'
-        f'#define BUNDLED_UNIT_REV "{unit_rev}"\n'
-        f'#define BUNDLED_UNIT_REV_EQUIV "{unit_equiv}"\n',
-        encoding="utf-8",
-    )
-    print(f"[build_assets] wrote {output.name}  GIT_REV={tag}  "
-          f"BUNDLED_UNIT_REV={unit_rev}  EQUIV=[{unit_equiv}]")
 
 
 def parse_header_alphabet(header_text: str) -> str:
@@ -227,11 +134,11 @@ def build_header(project_dir: pathlib.Path) -> None:
         lines_in[filename] = (data_dir / filename).read_bytes()
 
     unit_hex = data_dir / "unit-firmware.hex"
-    unit_bin = pad_to_page(parse_intel_hex(unit_hex))
+    unit_bin = unit_firmware_image(project_dir)
     tz_json = build_tz_json(data_dir / "zones.csv")
 
     with output_header.open("w", encoding="utf-8") as fh:
-        fh.write("// Auto-generated by build_assets.py — do not edit.\n")
+        fh.write(GENERATED_BANNER)
         fh.write("#pragma once\n\n#include <Arduino.h>\n\n")
         for filename, varname, gz in ASSETS:
             data = lines_in[filename]
@@ -253,32 +160,10 @@ def build_header(project_dir: pathlib.Path) -> None:
     print(f"  unit-firmware    hex {unit_hex.stat().st_size:>5} -> bin {len(unit_bin):>5}")
 
 
-# PlatformIO invokes this file as a pre-build script, setting up a SCons
-# env and calling Import() as a builtin. Run the build only when invoked
-# that way — plain `import build_assets` (e.g. from pytest) is a no-op.
-try:
-    Import("env")  # noqa: F821  (provided by PlatformIO SCons env)
-    _project_dir = pathlib.Path(env["PROJECT_DIR"])  # noqa: F821
-    build_version_header(_project_dir)
-    build_header(_project_dir)
-
-    # Post-build: drop a copy of firmware.bin next to itself with the git
-    # rev AND env name in the filename so shipping / archiving is
-    # self-describing (v1 used the flash-size label; ESP32 boards have no
-    # eagle ldscript, so the env name carries the layout identity here).
-    _rev, _dirty = git_short_rev(_project_dir)
-    _tag = f"{_rev}-dirty" if _dirty else _rev
-    _env_name = env["PIOENV"]  # noqa: F821
-
-    def _stamp_firmware_filename(source, target, env):  # noqa: F821
-        import shutil
-        bin_path = pathlib.Path(str(target[0]))
-        stamped = bin_path.with_name(f"firmware-{_tag}-{_env_name}.bin")
-        shutil.copyfile(bin_path, stamped)
-        print(f"[build_assets] copied {bin_path.name} -> {stamped.name}")
-
-    env.AddPostAction(  # noqa: F821
-        "$BUILD_DIR/${PROGNAME}.bin", _stamp_firmware_filename
-    )
-except NameError:
-    pass
+if _UNDER_SCONS:
+    # The stamped copy carries the env name: ESP32 boards have no eagle
+    # ldscript, so the env identifies the layout.
+    _tag = write_version_header(_PROJECT_DIR, with_unit_bundle=True)
+    build_header(_PROJECT_DIR)
+    stamp_firmware_bin(  # noqa: F821
+        env, f"firmware-{_tag}-{env['PIOENV']}.bin")  # noqa: F821

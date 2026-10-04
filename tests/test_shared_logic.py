@@ -251,3 +251,32 @@ def test_both_members_keep_their_wire_auth_in_the_shared_struct():
         for call in ("ClusterMemberAuth auth;", "auth.adoptKey(",
                      "auth.accept(", "auth.drop()", "auth.restored("):
             assert call in body, f"{path}: {call}"
+
+
+# --- #535: python build helpers -----------------------------------------------
+
+BUILD_SCRIPTS = [V2 / t / "build_assets.py"
+                 for t in ("Master", "FollowerEsp01", "Rescue")]
+
+
+def test_build_scripts_share_one_helper_module():
+    """Three build_assets.py repeated the hex parser, the rev stamping and
+    the array emitter; the parser the bundle gate hashed with was a fourth."""
+    owned = re.compile(r"^def (parse_intel_hex|ihex_to_image|pad_to_page|"
+                       r"emit_array|compress_asset|git_short_rev|version_tag|"
+                       r"bundled_unit_\w+|build_version_header)\(", re.M)
+    for script in BUILD_SCRIPTS:
+        text = script.read_text()
+        assert "from fwbuild import" in text, script
+        assert not owned.findall(text), f"{script}: {owned.findall(text)}"
+    manifest = (REPO / "flashing/flasher/make_manifest.py").read_text()
+    assert "from fwbuild import ihex_to_image" in manifest
+    assert "def ihex_to_image" not in manifest
+
+
+def test_the_asyncweb_patch_exists_once():
+    assert (V2 / "buildtools/patch_asyncweb.py").is_file()
+    for tree in ("Master", "FollowerEsp01", "Rescue"):
+        assert not (V2 / tree / "patch_asyncweb.py").exists(), tree
+        ini = (V2 / tree / "platformio.ini").read_text()
+        assert "pre:../buildtools/patch_asyncweb.py" in ini, tree

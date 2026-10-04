@@ -26,6 +26,8 @@ import sys
 import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "buildtools"))
+from fwbuild import ihex_to_memory  # noqa: E402  (the one Intel HEX parser)
 FIELDED_HEX = os.path.join(HERE, "prebuilt", "twiboot-atmega328p-16mhz.hex")
 BOOT_START = 0x7C00
 PAGE_SIZE = 128
@@ -56,24 +58,8 @@ def run(cmd):
 def read_ihex_boot_section(path):
     """Return the boot section (0x7C00-0x7FFF) of an ihex as 1024 bytes, 0xFF
     where the hex has no data (e.g. the fielded image's blank page 7)."""
-    out = bytearray(b"\xff" * (8 * PAGE_SIZE))
-    base = 0
-    for line in open(path):
-        line = line.strip()
-        if not line.startswith(":"):
-            continue
-        b = bytes.fromhex(line[1:])
-        n, addr, typ = b[0], (b[1] << 8) | b[2], b[3]
-        if typ == 4:
-            base = ((b[4] << 8) | b[5]) << 16
-        elif typ == 2:
-            base = ((b[4] << 8) | b[5]) << 4
-        elif typ == 0:
-            for i in range(n):
-                a = base + addr + i
-                if BOOT_START <= a < BOOT_START + len(out):
-                    out[a - BOOT_START] = b[4 + i]
-    return bytes(out)
+    mem = ihex_to_memory(path)
+    return bytes(mem.get(BOOT_START + i, 0xFF) for i in range(8 * PAGE_SIZE))
 
 
 def build_pages_0_6():

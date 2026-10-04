@@ -96,6 +96,10 @@ jobs:
       - name: Copied-header drift gate
         run: python -m pytest tests/ -v
 
+      - name: Run shared build-tool tests
+        working-directory: firmware/v2/buildtools
+        run: python -m pytest tests/
+
       - name: Run v2 Master Python tests
         working-directory: firmware/v2/Master
         run: python -m pytest tests/

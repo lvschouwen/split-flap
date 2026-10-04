@@ -1,6 +1,6 @@
 """Tests for build_assets.py (#195) — the rescue project's pre-build bake:
 BuildVersion.h (git rev) + RescueAssets.h (gzipped PROGMEM page + md5.js).
-Trimmed COPY of Master's build_assets.py (no alphabet check, no favicon).
+The helpers come from the shared firmware/v2/buildtools/fwbuild.py.
 Run from firmware/v2/Rescue: python -m pytest tests/
 """
 
@@ -13,9 +13,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from build_assets import (
     ASSETS,
-    build_version_header,
     compress_asset,
     emit_array,
+    version_header_text as build_version_header,
     version_tag,
 )
 

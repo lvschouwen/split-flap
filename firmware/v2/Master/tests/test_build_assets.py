@@ -2,8 +2,9 @@
 
 Covered here: the alphabet drift gate (#149) against the v1 shared protocol
 header the v2 master speaks, deterministic gzip (#168), the UTF-8 pinning
-guard, and — since the reflash slice (#205) — the unit-firmware bundling
-(Intel-HEX parse, page pad, rev sidecar) the v2 script re-grew from v1.
+guard, and the unit-bundle sidecars as this tree's script sees them. The
+shared helpers (Intel-HEX parse, page pad, rev stamping) are tested in
+firmware/v2/buildtools/tests.
 
 Run with:
     pytest tests/
@@ -90,54 +91,6 @@ def test_real_tree_alphabet_is_in_sync():
 
 
 # --- unit-firmware bundling (#205) -----------------------------------------
-
-
-def _hex_line(addr: int, data: bytes) -> str:
-    body = bytes([len(data), (addr >> 8) & 0xFF, addr & 0xFF, 0x00]) + data
-    checksum = (-sum(body)) & 0xFF
-    return ":" + (body + bytes([checksum])).hex().upper()
-
-
-def test_parse_intel_hex_applies_data_records(tmp_path):
-    hex_file = tmp_path / "fw.hex"
-    hex_file.write_text(
-        _hex_line(0x0000, b"\x01\x02\x03\x04") + "\n"
-        + _hex_line(0x0004, b"\x05\x06") + "\n"
-        + ":00000001FF\n",
-        encoding="utf-8",
-    )
-    assert build_assets.parse_intel_hex(hex_file) == b"\x01\x02\x03\x04\x05\x06"
-
-
-def test_parse_intel_hex_fills_gaps_with_ff(tmp_path):
-    hex_file = tmp_path / "fw.hex"
-    hex_file.write_text(
-        _hex_line(0x0000, b"\xAA") + "\n"
-        + _hex_line(0x0003, b"\xBB") + "\n"
-        + ":00000001FF\n",
-        encoding="utf-8",
-    )
-    assert build_assets.parse_intel_hex(hex_file) == b"\xAA\xFF\xFF\xBB"
-
-
-def test_parse_intel_hex_stops_at_eof_record(tmp_path):
-    hex_file = tmp_path / "fw.hex"
-    hex_file.write_text(
-        _hex_line(0x0000, b"\x11") + "\n"
-        + ":00000001FF\n"
-        + _hex_line(0x0001, b"\x22") + "\n",
-        encoding="utf-8",
-    )
-    assert build_assets.parse_intel_hex(hex_file) == b"\x11"
-
-
-def test_pad_to_page_pads_partial_page_with_ff():
-    assert build_assets.pad_to_page(b"\x01\x02", page=4) == b"\x01\x02\xFF\xFF"
-
-
-def test_pad_to_page_keeps_exact_multiple():
-    data = b"\x01\x02\x03\x04"
-    assert build_assets.pad_to_page(data, page=4) == data
 
 
 def test_bundled_unit_rev_reads_sidecar(tmp_path):

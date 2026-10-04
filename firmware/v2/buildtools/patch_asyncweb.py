@@ -19,8 +19,8 @@ fixed chunk buffer, untouched here) and no large non-file fields, so they are
 unaffected. The exact-pinned version (#357) keeps the anchors stable; if an
 anchor ever moves the patch FAILS LOUD rather than silently no-op'ing.
 
-Copied byte-identical across Master / Rescue / FollowerEsp01 (unified stack,
-#356). Wired via `extra_scripts = pre:patch_asyncweb.py`.
+One script for Master / Rescue / FollowerEsp01 (unified stack, #356), wired
+in each platformio.ini via `extra_scripts = pre:../buildtools/patch_asyncweb.py`.
 """
 
 import pathlib

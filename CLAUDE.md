@@ -14,6 +14,7 @@ Arduino-based split-flap display: a master MCU drives per-flap units over I2C. F
 - `firmware/v2/Master/` — S3 master (plain `.cpp`, console on native USB-CDC)
 - `firmware/v2/Unit/` — Nano unit: stepper + hall homing, I2C slave, EEPROM offset/address
 - `firmware/v2/shared/` — pure-logic headers shared across v2 trees; `SplitFlapProtocol.h` is the master↔unit I2C contract + `SFP_PROTOCOL_VERSION`
+- `firmware/v2/buildtools/` — python shared by every tree's build: `fwbuild.py` (Intel-HEX → image, rev stamping, PROGMEM arrays; imported by each `build_assets.py`, `make_manifest.py` and the twiboot builder) and the one `patch_asyncweb.py`. Deliberately outside `shared/` (a build-script edit must not move the Unit source head). Tests: `cd firmware/v2/buildtools && python -m pytest tests/`
 - `firmware/v2/UnitBootloader/` — vendored+patched twiboot (I2C reflash of units; see its README)
 - `firmware/v2/FollowerEsp01/` — ESP-01 cluster follower "dumb row"
 - `firmware/v2/Rescue/` — break-glass image for the factory slot

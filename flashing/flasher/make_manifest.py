@@ -45,6 +45,10 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+# The Intel HEX parser every firmware build embeds the unit image with — the
+# content hash below must be taken over the same bytes.
+sys.path.insert(0, str(REPO / "firmware/v2/buildtools"))
+from fwbuild import ihex_to_image  # noqa: E402
 UNIT_BUILD = REPO / "firmware/v2/Unit/.pio/build/unit/firmware.hex"
 UNIT_REV_BUILT = REPO / "firmware/v2/Unit/.pio/build/unit/firmware.rev"
 V2_MASTER_DATA = REPO / "firmware/v2/Master/data"
@@ -85,28 +89,6 @@ def stage_bundle(unit_hex: Path, unit_rev: Path, data_dirs: list[Path],
         print(f"staged {unit_rev} -> {data_dir}/unit-firmware.rev")
         print(f"staged {len(equivalents or [])} equivalent rev(s) -> "
               f"{data_dir}/unit-firmware.equiv")
-
-
-def ihex_to_image(hex_path: Path) -> bytes:
-    """Flatten an Intel HEX file into its program image (0xFF for gaps)."""
-    mem: dict[int, int] = {}
-    base = 0
-    for line in hex_path.read_text().splitlines():
-        line = line.strip()
-        if not line.startswith(":"):
-            continue
-        raw = bytes.fromhex(line[1:])
-        count, addr, rtype, data = raw[0], (raw[1] << 8) | raw[2], raw[3], raw[4:4 + raw[0]]
-        if rtype == 0:
-            for i, b in enumerate(data):
-                mem[base + addr + i] = b
-        elif rtype == 2:
-            base = ((data[0] << 8) | data[1]) * 16
-        elif rtype == 4:
-            base = ((data[0] << 8) | data[1]) << 16
-    if not mem:
-        return b""
-    return bytes(mem.get(a, 0xFF) for a in range(max(mem) + 1))
 
 
 def image_content_hash(hex_path: Path, rev_tag: str) -> str:
