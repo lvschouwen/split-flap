@@ -52,7 +52,7 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 | | `Quiet` | on/off |
 | | `Config` | what to show when the master is lost (blank, time, date), update-units-at-start, tz rule |
 | | `Op` | op id, opcode, unit address, arguments |
-| | `Update` | rev, size, MD5, packed flag |
+| | `Update` | rev, size, MD5, packed flag, HTTP port |
 | | `LogCtl`, `Ping`, `Restart`, `Release` | |
 | row → master | `Hello` | row id, protocol, rev, boot id, rescue flag, width |
 | | `Status` | vitals: memory, signal, TX level, uptime, bus state, escalations, busy flag, image size, time synced. Every 10 s and on change |
@@ -68,7 +68,7 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 
 **Unit jobs.** The master names every job with its own op id; the row echoes it. A row that restarts sends a new boot id in `HELLO`, and the master fails every open job on that row as "row restarted". (Today the row numbers jobs itself and restarts at zero, so a forwarded job can be answered with another job's result.) Opcodes cover the full present set: home one / all, identify, jog, read and set offset, self-test, restart unit, set / clear address, burn all addresses, reset odometer, feature gates, boot info, boot dump, boot update, update one / all units (with force), re-probe, stop. Validation stays in `shared/MaintenancePolicy.h`; the unit bundle stays baked into the row image and the bundle drift gate is unchanged.
 
-**Row firmware.** The master stores one row image (as today) and sends `UPDATE` when a row's rev differs. The row board, if no unit update is running, downloads the image from the master over plain HTTP `GET`, checks it against the MD5 from the `UPDATE` frame, then installs. The attempt cap, rescue accounting and forgiveness rules of `ClusterRolloutPolicy.h` are kept.
+**Row firmware.** The master stores one row image (as today) and sends `UPDATE` when a row's rev differs. The row board, if no unit update is running, downloads the image from the master over plain HTTP `GET`, checks it against the MD5 from the `UPDATE` frame, then installs. The download is `GET /firmware/row` on the port the `UPDATE` frame names; the answer's length and the file's first bytes are checked before anything is erased. The row answers every `UPDATE` with `UpdateState` (downloading, installed, failed or refused, with a reason), and does not read the link while it downloads (about 25 s measured). A row in rescue mode takes the offered image even at the rev it runs. The attempt cap, rescue accounting and forgiveness rules of `ClusterRolloutPolicy.h` are kept.
 
 **Row board stack.** The row board keeps the web stack it has: the async server, the WiFi setup portal with its join-retry rules, and the present firmware upload route with its gates and packed-image checks. All three are proven on the wall, the upload route is the recovery path, and the space a lighter stack would free is not needed (section 9: about 435 KB after the rebuild against 511 KB plain and 602 KB packed). What goes is every other route. The link is a `WiFiClient` polled from `loop()`, as in the #560 trial, so link traffic touches state and the unit bus from `loop()` only; the existing rule that web handlers stage and `loop()` acts stays for the few routes left.
 

@@ -141,7 +141,8 @@ class Row:
             if not self.args.image:
                 raise ValueError("no --image to offer")
             bad = rest if word == "update-bad" else None
-            self.send(update=self.args.image.offer(rev=None if bad else rest or None, bad=bad))
+            # A bad offer carries a rev no row runs, or it is refused as current.
+            self.send(update=self.args.image.offer(rev="bad-offer" if bad else rest or None, bad=bad))
         elif word:
             log("bad-command", line=line)
             return
@@ -206,7 +207,12 @@ class Row:
             log("disconnected", peer=self.peer)
 
     async def housekeeping(self) -> None:
-        commands_at = 0
+        # Only commands written after this row connected: a row that restarts
+        # must not be given the whole file again.
+        try:
+            commands_at = Path(self.args.commands).stat().st_size if self.args.commands else 0
+        except FileNotFoundError:
+            commands_at = 0
         shown_minute = None
         while True:
             await asyncio.sleep(0.2)
