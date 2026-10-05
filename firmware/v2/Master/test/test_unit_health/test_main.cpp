@@ -138,6 +138,33 @@ static void test_health_json_boot_verdict_keys() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"bv\":3,\"bcrc\":\"00c0ffee\""));
 }
 
+static void test_health_json_bootloader_identity_keys() {
+  UnitFacts units[1];
+  units[0].state = 2;
+  char buf[256];
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_NULL(strstr(buf, "\"blv\""));  // never read: no key at all
+  units[0].bootloader.generation = TWIBOOT_GEN_NO_IDENTITY;
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"blv\":1,\"blc\":0}"));
+  units[0].bootloader.generation = 2;
+  units[0].bootloader.caps = 0x0B;
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"blv\":2,\"blc\":11}"));  // no fuses served
+  units[0].bootloader.fusesValid = true;
+  units[0].bootloader.lock = 0xCF;
+  units[0].bootloader.lfuse = 0xFF;
+  units[0].bootloader.hfuse = 0xDA;
+  units[0].bootloader.efuse = 0xFD;
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_NOT_NULL(
+      strstr(buf, "\"blv\":2,\"blc\":11,\"blk\":\"cf\",\"blf\":\"ffdafd\"}"));
+  // Back in its application the unit's own boot report is the source again.
+  units[0].state = 1;
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_NULL(strstr(buf, "\"blv\""));
+}
+
 static void test_bad_commands_alone_are_not_faulty() {
   // Deliberate (#45/#137): a stray malformed I2C receive is not a hardware
   // problem; badCommandCount is surfaced but never counted.
@@ -1175,6 +1202,7 @@ int main(int, char**) {
   RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
   RUN_TEST(test_a_corrupt_bootloader_makes_a_unit_faulty);
   RUN_TEST(test_health_json_boot_verdict_keys);
+  RUN_TEST(test_health_json_bootloader_identity_keys);
   RUN_TEST(test_health_json_ext_diag_emitted_when_valid);
   RUN_TEST(test_fold_ext_diag_both_valid);
   RUN_TEST(test_fold_ext_diag_base_only_when_extension_absent);

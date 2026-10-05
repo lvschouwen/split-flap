@@ -68,3 +68,8 @@ d1d7dfb f93f649147bf129e9ad21bd29013865abdbfe07bc34ead3a4eae8ef1a1bffa17
 # the 34c72e0 image above (same content hash, restaged unchanged throughout
 # the epic). The other 19 units still report 34c72e0.
 cfd9948 79b8235899693bc5508825de93760629aab5580b74b5aaad8672be706b084a12
+#
+# 661621f: the image on all 21 units since the 2026-10-04 campaign. Recorded
+# when the row masters learned to read the bootloader identity (#541/#543),
+# a shared-header change the unit does not compile.
+661621f cde7878f82f84969c885ffe21901892ff40e7f999abd89328ed823fba810066d

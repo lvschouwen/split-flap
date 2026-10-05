@@ -30,6 +30,19 @@ struct FakeTwiboot {
   int replyLen = -1;            // >= 0: every read returns this many bytes
   size_t txCap = 256;           // bus buffer size
   bool nackChipRequest = false;
+  // Identity (#541/#543). The original image answers the version read with
+  // its stock string and wraps chipinfo at 8 bytes.
+  uint8_t info[16] = {'T', 'W', 'I', 'B', 'O', 'O', 'T', ' ',
+                      'v', '3', '.', '2', 0, 0, 0, 0};
+  uint8_t fuses[4] = {0xFF, 0xCF, 0xFD, 0xDA};  // lfuse, lock, efuse, hfuse
+  int chipinfoLen = 8;          // 12 on an image that serves fuse bytes
+  int versionReads = 0;
+  int chipinfoReads = 0;
+  int longestChipinfoRead = 0;
+  bool versionArmed = false;
+  int cutChipinfoReads = 0;     // this many chipinfo reads come back one short
+  int cutFlashReads = 0;        // this many flash reads come back one short
+  bool nackFlashRequest = false;
 
   // --- observations ---
   int pageWrites = 0;
@@ -62,8 +75,11 @@ struct FakeTwiboot {
   // A read request (4 bytes) is followed by a repeated start; every other
   // frame ends with a stop, or the bus stays held.
   int endTransmission(bool stop) {
-    bool readRequest = tx.size() == 4 && tx[0] == TWIBOOT_CMD_ACCESS_MEMORY;
+    bool versionRequest = tx.size() == 1 && tx[0] == TWIBOOT_CMD_READ_VERSION;
+    bool readRequest = (tx.size() == 4 && tx[0] == TWIBOOT_CMD_ACCESS_MEMORY) ||
+                       versionRequest;
     if (stop == readRequest) framingErrors++;
+    versionArmed = false;
     if (tx.empty()) { probes++; probeTimes.push_back(now); }
     if (cur != ADDR || now < ackFromMs) return NACK;
     if (stuckBusy || now < busyUntilMs) return NACK;
@@ -71,6 +87,10 @@ struct FakeTwiboot {
     if (tx[0] == TWIBOOT_CMD_WAIT) {
       if (tx.size() != 1) framingErrors++;
       pings++;
+      return 0;
+    }
+    if (versionRequest) {
+      versionArmed = true;
       return 0;
     }
     if (tx[0] == TWIBOOT_CMD_SWITCH_APPLICATION) {
@@ -83,6 +103,9 @@ struct FakeTwiboot {
       memType = tx[1];
       memAddr = (uint16_t)((tx[2] << 8) | tx[3]);
       if (memType == TWIBOOT_MEMTYPE_CHIPINFO && nackChipRequest) return NACK;
+      if (memType == TWIBOOT_MEMTYPE_FLASH && tx.size() == 4 && nackFlashRequest) {
+        return NACK;
+      }
       if (tx.size() == 4 + TWIBOOT_PAGE_SIZE) {
         memcpy(flash + memAddr, tx.data() + 4, TWIBOOT_PAGE_SIZE);
         if (corruptWrites > 0) { corruptWrites--; flash[memAddr + 7] ^= 0x01; }
@@ -110,11 +133,26 @@ struct FakeTwiboot {
     rx.clear();
     rxPos = 0;
     if (a != ADDR) return 0;
-    const uint8_t* src = memType == TWIBOOT_MEMTYPE_CHIPINFO ? chipinfo
-                                                             : flash + memAddr;
     uint8_t n = qty;
     if (shortReads > 0) { shortReads--; n = (uint8_t)(qty - 1); }
     if (replyLen >= 0 && replyLen < n) n = (uint8_t)replyLen;
+    if (versionArmed) {
+      versionReads++;
+      for (uint8_t k = 0; k < n; k++) rx.push_back(info[k % 16]);
+      return n;
+    }
+    if (memType == TWIBOOT_MEMTYPE_CHIPINFO) {
+      chipinfoReads++;
+      if (qty > longestChipinfoRead) longestChipinfoRead = qty;
+      if (cutChipinfoReads > 0) { cutChipinfoReads--; n = (uint8_t)(n - 1); }
+      for (uint8_t k = 0; k < n; k++) {
+        int at = k % chipinfoLen;
+        rx.push_back(at < 8 ? chipinfo[at] : fuses[at - 8]);
+      }
+      return n;
+    }
+    if (cutFlashReads > 0) { cutFlashReads--; n = (uint8_t)(n - 1); }
+    const uint8_t* src = flash + memAddr;
     rx.assign(src, src + n);
     return n;
   }
@@ -544,6 +582,145 @@ static void test_rescue_probe_of_a_silent_sketch() {
   TEST_ASSERT_EQUAL(0, bus.exits);
 }
 
+// --- bootloader identity (#541) and fuse/lock bytes (#543) ------------------
+
+static void makeIdentityImage(FakeTwiboot& bus, uint8_t version, uint8_t caps) {
+  memset(bus.info, 0xFF, sizeof(bus.info));
+  bus.info[0] = 'S';
+  bus.info[1] = 'F';
+  bus.info[2] = version;
+  bus.info[3] = caps;
+  bus.chipinfoLen = 12;
+}
+
+static void test_identity_of_an_image_with_identity_and_fuse_bytes() {
+  FakeTwiboot bus;
+  makeIdentityImage(bus, 2, TWIBOOT_CAP_DO_SPM | TWIBOOT_CAP_BOUNDED_PIN |
+                               TWIBOOT_CAP_FUSE_CHIPINFO);
+  bus.flash[0] = 0x0C; bus.flash[1] = 0x94; bus.flash[2] = 0x5D; bus.flash[3] = 0x00;
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(twibootReadIdentity(bus, ADDR, id));
+  TEST_ASSERT_EQUAL_UINT8(2, id.generation);
+  TEST_ASSERT_EQUAL_HEX8(0x0B, id.caps);
+  TEST_ASSERT_TRUE(id.fusesValid);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, id.lfuse);
+  TEST_ASSERT_EQUAL_HEX8(0xCF, id.lock);
+  TEST_ASSERT_EQUAL_HEX8(0xFD, id.efuse);
+  TEST_ASSERT_EQUAL_HEX8(0xDA, id.hfuse);
+  TEST_ASSERT_EQUAL(0, bus.framingErrors);
+  TEST_ASSERT_EQUAL(0, bus.exits);
+  TEST_ASSERT_EQUAL(0, bus.pageWrites);
+  TEST_ASSERT_EQUAL(0, bus.readFailedCalls);
+  TEST_ASSERT_EQUAL(TWIBOOT_CHIPINFO_FUSES_LEN, bus.longestChipinfoRead);
+}
+
+// The image every unit carried before #541: no identity bytes, and chipinfo
+// wraps at 8 — so nothing past the version read is asked of it.
+static void test_identity_of_an_image_without_identity_bytes() {
+  FakeTwiboot bus;
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(twibootReadIdentity(bus, ADDR, id));
+  TEST_ASSERT_EQUAL_UINT8(TWIBOOT_GEN_NO_IDENTITY, id.generation);
+  TEST_ASSERT_EQUAL_HEX8(0, id.caps);
+  TEST_ASSERT_FALSE(id.fusesValid);
+  TEST_ASSERT_EQUAL(1, bus.versionReads);
+  TEST_ASSERT_EQUAL(0, bus.chipinfoReads);
+  TEST_ASSERT_EQUAL(0, bus.framingErrors);
+}
+
+static void test_identity_without_the_fuse_capability_reads_no_fuses() {
+  FakeTwiboot bus;
+  makeIdentityImage(bus, 2, TWIBOOT_CAP_DO_SPM);
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(twibootReadIdentity(bus, ADDR, id));
+  TEST_ASSERT_EQUAL_UINT8(2, id.generation);
+  TEST_ASSERT_FALSE(id.fusesValid);
+  TEST_ASSERT_EQUAL(0, bus.chipinfoReads);
+}
+
+// Some chips serve the application's first four flash bytes where the fuses
+// should be (#518). Bytes equal to those are not fuses.
+static void test_fuse_bytes_that_are_the_reset_vector_are_not_fuses() {
+  FakeTwiboot bus;
+  makeIdentityImage(bus, 2, TWIBOOT_CAP_FUSE_CHIPINFO);
+  // Z order on the wire: lfuse(0), lock(1), efuse(2), hfuse(3).
+  bus.flash[0] = bus.fuses[0];
+  bus.flash[1] = bus.fuses[1];
+  bus.flash[2] = bus.fuses[2];
+  bus.flash[3] = bus.fuses[3];
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(twibootReadIdentity(bus, ADDR, id));
+  TEST_ASSERT_EQUAL_UINT8(2, id.generation);
+  TEST_ASSERT_FALSE(id.fusesValid);
+}
+
+static void test_a_short_version_read_is_no_identity() {
+  FakeTwiboot bus;
+  makeIdentityImage(bus, 2, TWIBOOT_CAP_FUSE_CHIPINFO);
+  bus.shortReads = 1;
+  TwibootIdentity id;
+  TEST_ASSERT_FALSE(twibootReadIdentity(bus, ADDR, id));
+  TEST_ASSERT_EQUAL_UINT8(TWIBOOT_GEN_UNREAD, id.generation);
+  TEST_ASSERT_EQUAL(1, bus.readFailedCalls);
+  TEST_ASSERT_EQUAL(0, bus.chipinfoReads);
+}
+
+// The identity stands when only the fuse read fails, wherever it fails; a
+// short read is reported to the bus once, a NACKed request is not a read.
+static void test_a_failed_fuse_read_keeps_the_identity() {
+  struct Case { int cutChip; int cutFlash; bool nackChip; bool nackFlash; int readFailed; };
+  const Case cases[] = {
+      {1, 0, false, false, 1},  // chipinfo reply one byte short
+      {0, 1, false, false, 1},  // flash bytes 0..3 one byte short
+      {0, 0, true, false, 0},   // chipinfo request NACKed
+      {0, 0, false, true, 0},   // flash request NACKed
+  };
+  for (const Case& c : cases) {
+    FakeTwiboot bus;
+    makeIdentityImage(bus, 2, TWIBOOT_CAP_FUSE_CHIPINFO);
+    bus.cutChipinfoReads = c.cutChip;
+    bus.cutFlashReads = c.cutFlash;
+    bus.nackChipRequest = c.nackChip;
+    bus.nackFlashRequest = c.nackFlash;
+    TwibootIdentity id;
+    TEST_ASSERT_TRUE(twibootReadIdentity(bus, ADDR, id));
+    TEST_ASSERT_EQUAL_UINT8(2, id.generation);
+    TEST_ASSERT_FALSE(id.fusesValid);
+    TEST_ASSERT_EQUAL(c.readFailed, bus.readFailedCalls);
+    TEST_ASSERT_EQUAL(0, bus.available());  // nothing left for a later read
+  }
+}
+
+static void test_unrecognised_version_bytes_are_named_unknown() {
+  FakeTwiboot bus;
+  memset(bus.info, 0x00, sizeof(bus.info));
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(twibootReadIdentity(bus, ADDR, id));
+  TEST_ASSERT_EQUAL_UINT8(TWIBOOT_GEN_UNKNOWN, id.generation);
+  TEST_ASSERT_EQUAL(0, bus.chipinfoReads);
+}
+
+static void test_identity_text_for_the_scan_log() {
+  char buf[TWIBOOT_IDENTITY_TEXT_CAP];
+  TwibootIdentity id;
+  twibootIdentityText(buf, sizeof(buf), id);
+  TEST_ASSERT_EQUAL_STRING("", buf);
+  id.generation = TWIBOOT_GEN_NO_IDENTITY;
+  twibootIdentityText(buf, sizeof(buf), id);
+  TEST_ASSERT_EQUAL_STRING(" (bootloader without identity bytes)", buf);
+  id.generation = 2;
+  id.caps = 0x0B;
+  twibootIdentityText(buf, sizeof(buf), id);
+  TEST_ASSERT_EQUAL_STRING(" (bootloader v2, lock/fuses unreadable)", buf);
+  id.fusesValid = true;
+  id.lfuse = 0xFF; id.lock = 0xCF; id.efuse = 0xFD; id.hfuse = 0xDA;
+  twibootIdentityText(buf, sizeof(buf), id);
+  TEST_ASSERT_EQUAL_STRING(" (bootloader v2, lock cf, fuses l ff h da e fd)", buf);
+  id.generation = TWIBOOT_GEN_UNKNOWN;
+  twibootIdentityText(buf, sizeof(buf), id);
+  TEST_ASSERT_EQUAL_STRING(" (bootloader identity not recognised)", buf);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_image_guard_stops_at_the_boot_section);
@@ -575,5 +752,13 @@ int main(int, char**) {
   RUN_TEST(test_rescue_probe_starts_a_unit_parked_in_twiboot);
   RUN_TEST(test_rescue_probe_of_an_absent_unit_is_no_ack);
   RUN_TEST(test_rescue_probe_of_a_silent_sketch);
+  RUN_TEST(test_identity_of_an_image_with_identity_and_fuse_bytes);
+  RUN_TEST(test_identity_of_an_image_without_identity_bytes);
+  RUN_TEST(test_identity_without_the_fuse_capability_reads_no_fuses);
+  RUN_TEST(test_fuse_bytes_that_are_the_reset_vector_are_not_fuses);
+  RUN_TEST(test_a_short_version_read_is_no_identity);
+  RUN_TEST(test_a_failed_fuse_read_keeps_the_identity);
+  RUN_TEST(test_unrecognised_version_bytes_are_named_unknown);
+  RUN_TEST(test_identity_text_for_the_scan_log);
   return UNITY_END();
 }

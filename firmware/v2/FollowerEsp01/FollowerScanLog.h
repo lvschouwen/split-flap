@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "ReflashPlan.h"  // reflashUnitProtocolMismatch
+#include "TwibootFlash.h"  // twibootIdentityText
 #include "UnitHealth.h"
 
 // One log line per unit a bus scan found in a state that needs attention:
@@ -43,8 +44,10 @@ inline uint8_t followerScanLine(char* buf, size_t cap, uint8_t i2cAddress,
     return SCAN_FINDING_MISSING;
   }
   if (fact.state == 2) {
-    snprintf_P(buf, cap, PSTR("- unit at 0x%02x is in BOOTLOADER mode"),
-               i2cAddress);
+    char identity[TWIBOOT_IDENTITY_TEXT_CAP];
+    twibootIdentityText(identity, sizeof(identity), fact.bootloader);
+    snprintf_P(buf, cap, PSTR("- unit at 0x%02x is in BOOTLOADER mode%s"),
+               i2cAddress, identity);
     return SCAN_FINDING_BOOTLOADER;
   }
   if (reflashUnitProtocolMismatch(fact)) {

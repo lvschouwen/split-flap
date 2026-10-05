@@ -12,6 +12,21 @@
 #define TWIBOOT_CMD_ACCESS_MEMORY      0x02  // followed by memtype + 2 address bytes
 
 #define TWIBOOT_BOOTTYPE_APPLICATION   0x80  // SWITCH_APPLICATION arg: jump to the sketch
+// The same first byte with NO argument, followed by a read, returns the
+// 16-byte version reply. Like the other two it holds twiboot's countdown.
+#define TWIBOOT_CMD_READ_VERSION       TWIBOOT_CMD_SWITCH_APPLICATION
+#define TWIBOOT_VERSION_LEN            16
+// Version reply of an image with identity bytes (#541): 'S','F', a version
+// byte (2 and up), a capability bitfield, 0xFF padding. Images before that
+// answer with the stock "TWIBOOT v3.2" string.
+#define TWIBOOT_CAP_DO_SPM             0x01  // page 7 carries the do_spm stub
+#define TWIBOOT_CAP_BOUNDED_PIN        0x02  // a pinned bootloader times out
+#define TWIBOOT_CAP_FUSE_CHIPINFO      0x08  // chipinfo bytes 8..11, see below
+// Chipinfo is 8 bytes; an image with TWIBOOT_CAP_FUSE_CHIPINFO serves four
+// more (#543): low fuse, lock, extended fuse, high fuse. An image without it
+// wraps at 8, so the long read is only ever sent to one that advertises it.
+#define TWIBOOT_CHIPINFO_LEN           8
+#define TWIBOOT_CHIPINFO_FUSES_LEN     12
 
 #define TWIBOOT_MEMTYPE_CHIPINFO       0x00
 #define TWIBOOT_MEMTYPE_FLASH          0x01
@@ -24,3 +39,19 @@
 static inline bool isAtmega328pSignature(uint8_t sig0, uint8_t sig1, uint8_t sig2) {
   return sig0 == 0x1E && sig1 == 0x95 && sig2 == 0x0F;
 }
+
+// What a bootloader says about itself (TwibootFlash.h reads it; a row master
+// keeps it in the unit's facts while the unit sits in its bootloader).
+#define TWIBOOT_GEN_UNREAD      0     // not asked, or the read failed
+#define TWIBOOT_GEN_NO_IDENTITY 1     // an image from before the identity bytes
+#define TWIBOOT_GEN_UNKNOWN     0xFF  // answered with bytes this build cannot name
+
+struct TwibootIdentity {
+  uint8_t generation = TWIBOOT_GEN_UNREAD;  // else the image's version byte (2+)
+  uint8_t caps = 0;                         // TWIBOOT_CAP_*
+  bool fusesValid = false;                  // the four bytes below are fuses
+  uint8_t lfuse = 0;
+  uint8_t lock = 0;
+  uint8_t efuse = 0;
+  uint8_t hfuse = 0;
+};

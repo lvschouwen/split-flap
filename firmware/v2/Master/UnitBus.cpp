@@ -344,7 +344,14 @@ void unitBusProbe(UnitFacts* facts, int maxUnits) {
 
     SerialPrintf("- unit at 0x%02x", i2cAddress);
     if (inBootloader) {
-      SerialPrintln(F(" is in BOOTLOADER mode"));
+      // Which bootloader, and its lock and fuse bytes where it serves them
+      // (#541/#543). The chipinfo probe above already holds its countdown.
+      twibootReadIdentity(unitBus, (uint8_t)i2cAddress,
+                          facts[unitIndex].bootloader);
+      char identity[TWIBOOT_IDENTITY_TEXT_CAP];
+      twibootIdentityText(identity, sizeof(identity),
+                          facts[unitIndex].bootloader);
+      SerialPrintf(" is in BOOTLOADER mode%s\n", identity);
       continue;
     }
     UnitFacts& fact = facts[unitIndex];

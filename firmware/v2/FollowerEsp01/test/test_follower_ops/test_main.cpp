@@ -340,6 +340,19 @@ static void test_scan_line_names_each_state_that_needs_attention() {
 
   TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_BOOTLOADER, followerScanLine(buf, sizeof(buf), 3, scanFact(2, 2, ""), 1));
   TEST_ASSERT_EQUAL_STRING("- unit at 0x03 is in BOOTLOADER mode", buf);
+  UnitFacts named = scanFact(2, 2, "");
+  named.bootloader.generation = 2;
+  named.bootloader.fusesValid = true;
+  named.bootloader.lock = 0xCF;
+  named.bootloader.lfuse = 0xFF;
+  named.bootloader.hfuse = 0xDA;
+  named.bootloader.efuse = 0xFD;
+  TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_BOOTLOADER,
+                          followerScanLine(buf, sizeof(buf), 3, named, 1));
+  TEST_ASSERT_EQUAL_STRING(
+      "- unit at 0x03 is in BOOTLOADER mode (bootloader v2, lock cf, fuses l "
+      "ff h da e fd)", buf);
+  TEST_ASSERT_TRUE(strlen(buf) < FOLLOWER_SCAN_LINE_CAP - 1);
 
   TEST_ASSERT_EQUAL_UINT8(SCAN_FINDING_MISSING, followerScanLine(buf, sizeof(buf), 4, scanFact(0, 2, ""), 1));
   TEST_ASSERT_EQUAL_STRING(

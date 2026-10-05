@@ -20,6 +20,7 @@
 #include "UnitLifetime.h"  // shared across-power-cycle health packet (#406)
 #include "UnitWireContract.h"  // shared core read/write wire formats (#405)
 #include "BootIntegrity.h"  // boot-section verdict vocabulary (#520)
+#include "TwibootProtocol.h"  // TwibootIdentity (#541)
 
 // Health / diagnostics snapshot returned by a sketch-running unit's
 // CMD_GET_STATUS reply. Populated by UnitBus.cpp; mirrors the 8-byte layout
@@ -193,6 +194,10 @@ struct UnitFacts {
   // a unit that stops answering never keeps an old verdict.
   uint8_t bootVerdict = BOOT_INTEGRITY_UNREAD;
   uint32_t bootCrc32 = 0;
+  // What the bootloader said about itself (#541/#543), read by the bus scan
+  // from a unit found sitting in it. UNREAD for every unit running its
+  // application: there the unit's own boot report above is the source.
+  TwibootIdentity bootloader{};
 };
 
 // Folds one status read into the unit's baseline; true when the unit has reset
@@ -636,6 +641,20 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
       UNIT_HEALTH_APPEND(",\"bv\":%u", (unsigned)u.bootVerdict);
       if (u.bootVerdict != BOOT_INTEGRITY_OK) {
         UNIT_HEALTH_APPEND(",\"bcrc\":\"%08lx\"", (unsigned long)u.bootCrc32);
+      }
+    }
+    if (u.state == 2 && u.bootloader.generation != TWIBOOT_GEN_UNREAD) {
+      // A unit sitting in its bootloader (#541/#543): blv = 1 an image
+      // without identity bytes, 255 not recognised, else the image's version;
+      // blc = its capability bits; blk / blf = lock byte and low, high,
+      // extended fuse, only when the chip served real ones.
+      const TwibootIdentity& b = u.bootloader;
+      UNIT_HEALTH_APPEND(",\"blv\":%u,\"blc\":%u", (unsigned)b.generation,
+                         (unsigned)b.caps);
+      if (b.fusesValid) {
+        UNIT_HEALTH_APPEND(",\"blk\":\"%02x\",\"blf\":\"%02x%02x%02x\"",
+                           (unsigned)b.lock, (unsigned)b.lfuse,
+                           (unsigned)b.hfuse, (unsigned)b.efuse);
       }
     }
     UNIT_HEALTH_APPEND("}");

@@ -253,6 +253,9 @@ void busProbeQuiet(bool quiet) {
     states[i] = f.state;
     detected++;
     if (inBootloader) {
+      // Which bootloader, and its lock and fuse bytes where it serves them
+      // (#541/#543). The chipinfo probe above already holds its countdown.
+      twibootReadIdentity(unitBus, (uint8_t)i2cAddress, f.bootloader);
       unitErrors.fold(f, i);  // the tally outlives a rescan (#367)
       unitFacts[i] = f;
       continue;

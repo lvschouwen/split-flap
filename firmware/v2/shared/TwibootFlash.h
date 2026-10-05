@@ -4,7 +4,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <stdio.h>
+
 #include "BootDump.h"  // BOOT_SECTION_START
+#include "BootUpdateReport.h"  // bootLockFuseReadFellThrough
 #include "TwibootProtocol.h"
 
 // The twiboot I2C flash client, shared by every tree that reflashes units:
@@ -142,6 +145,116 @@ bool twibootIsBootloader(Bus& bus, uint8_t addr) {
   uint8_t sig2 = (uint8_t)bus.read();
   twibootDrain(bus);
   return isAtmega328pSignature(sig0, sig1, sig2);
+}
+
+// --- identity (#541) and fuse/lock bytes (#543) ----------------------------------
+// What a bootloader says about itself. Only ever asked of a unit that already
+// answered as a bootloader (twibootIsBootloader): a sketch would read the
+// version request as a letter.
+
+// `info` holds TWIBOOT_VERSION_LEN bytes.
+inline void twibootParseVersion(const uint8_t* info, TwibootIdentity& out) {
+  out = TwibootIdentity{};
+  if (info[0] == 'S' && info[1] == 'F' && info[2] >= 2 &&
+      info[2] != TWIBOOT_GEN_UNKNOWN) {
+    out.generation = info[2];
+    out.caps = info[3];
+  } else if (memcmp(info, "TWIBOOT", 7) == 0) {
+    out.generation = TWIBOOT_GEN_NO_IDENTITY;
+  } else {
+    out.generation = TWIBOOT_GEN_UNKNOWN;
+  }
+}
+
+// Reads the identity and, from an image that serves them, the fuse and lock
+// bytes. False when the version read failed (generation stays UNREAD). A
+// failed fuse read keeps the identity and leaves fusesValid false.
+//
+// Some of the fielded chips answer a fuse read with flash bytes 0..3 (#518);
+// the unit's application sees the same. Those four bytes are read back here
+// and a reply equal to them is not reported as fuses.
+template <typename Bus>
+bool twibootReadIdentity(Bus& bus, uint8_t addr, TwibootIdentity& out) {
+  out = TwibootIdentity{};
+  bus.beginTransmission(addr);
+  bus.write((uint8_t)TWIBOOT_CMD_READ_VERSION);
+  if (bus.endTransmission(false) != 0) return false;
+  uint8_t got = bus.requestFrom(addr, (uint8_t)TWIBOOT_VERSION_LEN);
+  if (got != TWIBOOT_VERSION_LEN) {
+    twibootDrain(bus);
+    bus.readFailed();
+    return false;
+  }
+  uint8_t info[TWIBOOT_VERSION_LEN];
+  for (int i = 0; i < TWIBOOT_VERSION_LEN; i++) info[i] = (uint8_t)bus.read();
+  twibootParseVersion(info, out);
+  if (out.generation < 2 || out.generation == TWIBOOT_GEN_UNKNOWN ||
+      (out.caps & TWIBOOT_CAP_FUSE_CHIPINFO) == 0) {
+    return true;
+  }
+
+  bus.beginTransmission(addr);
+  bus.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
+  bus.write((uint8_t)TWIBOOT_MEMTYPE_CHIPINFO);
+  bus.write((uint8_t)0x00);
+  bus.write((uint8_t)0x00);
+  if (bus.endTransmission(false) != 0) return true;
+  got = bus.requestFrom(addr, (uint8_t)TWIBOOT_CHIPINFO_FUSES_LEN);
+  if (got != TWIBOOT_CHIPINFO_FUSES_LEN) {
+    twibootDrain(bus);
+    bus.readFailed();
+    return true;
+  }
+  for (int i = 0; i < TWIBOOT_CHIPINFO_LEN; i++) bus.read();
+  uint8_t lfuse = (uint8_t)bus.read();
+  uint8_t lock = (uint8_t)bus.read();
+  uint8_t efuse = (uint8_t)bus.read();
+  uint8_t hfuse = (uint8_t)bus.read();
+
+  bus.beginTransmission(addr);
+  bus.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
+  bus.write((uint8_t)TWIBOOT_MEMTYPE_FLASH);
+  bus.write((uint8_t)0x00);
+  bus.write((uint8_t)0x00);
+  if (bus.endTransmission(false) != 0) return true;
+  got = bus.requestFrom(addr, (uint8_t)4);
+  if (got != 4) {
+    twibootDrain(bus);
+    bus.readFailed();
+    return true;
+  }
+  uint8_t flash0to3[4];
+  for (int i = 0; i < 4; i++) flash0to3[i] = (uint8_t)bus.read();
+  if (bootLockFuseReadFellThrough(lock, lfuse, hfuse, efuse, flash0to3)) {
+    return true;
+  }
+  out.fusesValid = true;
+  out.lfuse = lfuse;
+  out.lock = lock;
+  out.efuse = efuse;
+  out.hfuse = hfuse;
+  return true;
+}
+
+// The tail of a scan-log line for a unit found in its bootloader; "" when
+// nothing was read. The text stays in flash on the ESP-01 (BootDump.h).
+#define TWIBOOT_IDENTITY_TEXT_CAP 56
+inline void twibootIdentityText(char* buf, size_t cap,
+                                const TwibootIdentity& id) {
+  if (id.generation == TWIBOOT_GEN_UNREAD) {
+    if (cap > 0) buf[0] = '\0';
+  } else if (id.generation == TWIBOOT_GEN_NO_IDENTITY) {
+    BOOT_DUMP_SNPRINTF(buf, cap, " (bootloader without identity bytes)");
+  } else if (id.generation == TWIBOOT_GEN_UNKNOWN) {
+    BOOT_DUMP_SNPRINTF(buf, cap, " (bootloader identity not recognised)");
+  } else if (!id.fusesValid) {
+    BOOT_DUMP_SNPRINTF(buf, cap, " (bootloader v%u, lock/fuses unreadable)",
+             (unsigned)id.generation);
+  } else {
+    BOOT_DUMP_SNPRINTF(buf, cap, " (bootloader v%u, lock %02x, fuses l %02x h %02x e %02x)",
+             (unsigned)id.generation, (unsigned)id.lock, (unsigned)id.lfuse,
+             (unsigned)id.hfuse, (unsigned)id.efuse);
+  }
 }
 
 // Chipinfo must name the ATmega328P with the expected page size.
