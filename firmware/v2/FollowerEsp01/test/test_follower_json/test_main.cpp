@@ -317,6 +317,28 @@ static void test_cluster_health_carries_reset_history() {
       "},\"resets\":[\"4:0:00000000:00000000\",\"2:28:40201234:00000004\"]}") >= 0);
 }
 
+// #503: the self-restart record rides in /cluster/health, and the reply with
+// a full reset ring and this block still fits what the builder reserves.
+static void test_cluster_health_carries_the_escalation_record() {
+  FollowerClusterDiag d;
+  String without = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
+                                             "abc1234", 5, 5, 0, d);
+  TEST_ASSERT_NULL(strstr(without.c_str(), "\"esc\""));
+  EscalationRecord rec;
+  for (int m = 0; m < 42; m++) escalationRecordMinute(rec);
+  d.escalation = &rec;
+  String none = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
+                                          "abc1234", 5, 5, 0, d);
+  TEST_ASSERT_NOT_NULL(strstr(none.c_str(),
+                              "\"esc\":{\"n\":0,\"last\":\"none\",\"upMin\":42}}"));
+  escalationRecordTaken(rec, EscalationCause::BusDead);
+  escalationRecordMinute(rec);
+  String taken = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
+                                           "abc1234", 5, 5, 0, d);
+  TEST_ASSERT_NOT_NULL(strstr(
+      taken.c_str(), "\"esc\":{\"n\":1,\"last\":\"bus-dead\",\"upMin\":1}}"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_cors_origin_gate_lan_only);
@@ -335,5 +357,6 @@ int main(int, char**) {
   RUN_TEST(test_cluster_health_bus_block_while_dead);
   RUN_TEST(test_wire_strings_are_escaped);
   RUN_TEST(test_cluster_health_carries_reset_history);
+  RUN_TEST(test_cluster_health_carries_the_escalation_record);
   return UNITY_END();
 }

@@ -13,6 +13,7 @@
 #include <ESPAsyncWebServer.h>
 
 #include "UnitTimings.h"
+#include "FollowerEscalation.h"
 #include "FollowerBus.h"
 #include "FollowerCluster.h"
 #include "FollowerConfig.h"
@@ -37,6 +38,7 @@ void setup() {
   // crash-looping image never reaches.
   rescueBootInit();
   resetLogBootInit();  // #503: why we restarted, kept across soft resets
+  escalationBootInit();  // #503: self-restarts taken, for the rate limit
 
   busInit();
   clusterInit();  // EEPROM membership → Grace/Standalone
@@ -151,6 +153,7 @@ void loop() {
   }
   clusterLoopTick();  // phase decay, blanking, due renders (bus-gated in rescue)
   followerDiagTick(); // fold current heap into the since-boot min (#306)
+  escalationTick();   // #503: a fault that did not heal ends in a restart
 
   delay(2);
 }

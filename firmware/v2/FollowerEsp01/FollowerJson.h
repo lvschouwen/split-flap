@@ -8,6 +8,7 @@
 
 #include <Arduino.h>
 
+#include "FollowerEscalation.h"
 #include "FollowerResetLog.h"
 #include "ClusterForeign.h"
 #include "JsonEscape.h"  // appendJsonString
@@ -115,6 +116,8 @@ struct FollowerClusterDiag {
   BusRecoveryState bus;         // #488: row-wide bus-death recovery
   // #503: reset history, newest first (this boot leads). Null = omit the key.
   const FollowerResetLogBlob* resets = nullptr;
+  // #503: self-restarts taken for a fault that did not heal. Null = omit.
+  const EscalationRecord* escalation = nullptr;
 };
 
 inline String followerClusterHealthJson(
@@ -123,7 +126,7 @@ inline String followerClusterHealthJson(
     const char* rev, int width, int detected, int faulty,
     const FollowerClusterDiag& d) {
   String out;
-  out.reserve(608);  // ~480 before the #503 resets array
+  out.reserve(672);  // ~480 before the #503 resets array and esc block
   out += "{\"state\":\"";
   out += phaseName;
   out += "\",\"leaderName\":";
@@ -193,6 +196,19 @@ inline String followerClusterHealthJson(
       out += '"';
     }
     out += ']';
+  }
+  if (d.escalation != nullptr) {
+    // n = self-restarts since the last power cycle, last = cause of the most
+    // recent one, upMin = uptime since it (FollowerEscalation.h).
+    out += ",\"esc\":{\"n\":";
+    out += String((unsigned long)escalationCount(*d.escalation));
+    out += ",\"last\":\"";
+    out += escalationCauseName(escalationLastCause(*d.escalation));
+    out += "\",\"upMin\":";
+    out += String((unsigned long)(escalationRecordValid(*d.escalation)
+                                      ? d.escalation->minutesSince
+                                      : 0));
+    out += '}';
   }
   out += '}';
   return out;

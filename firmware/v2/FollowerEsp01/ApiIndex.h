@@ -150,6 +150,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"hmac",         "1 = enforcing signed (HMAC) leader-wire requests (#313)"},
   {"foreign",      "refused foreign-leader contacts: joins/pings/renders counters + lastHost + msSince (-1 = never)"},
   {"bus",          "I2C bus-death recovery (#488); lastStatus 1/2 = SCL held (power-cycle row), 3/4 = SDA held"},
+  {"esc",          "self-restarts for a fault that did not heal (#503): n since power-on, last cause, uptime minutes since"},
 };
 static const int API_LEGEND_COUNT = (int)(sizeof(API_LEGEND) / sizeof(API_LEGEND[0]));
 

@@ -4,6 +4,7 @@
 // v1's ESP8266 Update flow trimmed (no RTC verdict cookie — ota-flash.sh's
 // version comparison is the revert detector on this board).
 
+#include "FollowerEscalation.h"
 #include "FollowerWeb.h"
 
 #include <ESP8266WiFi.h>
@@ -803,6 +804,7 @@ void webEndpointsInit(AsyncWebServer& server) {
     diag.nowMs = millis();
     diag.bus = followerBusRecovery();  // #488
     diag.resets = &resetLogGet();      // #503
+    diag.escalation = &escalationRecordGet();
     request->send(200, "application/json",
                   followerClusterHealthJson(
                       followerPhaseName(cv.phase), cv.leaderName,
