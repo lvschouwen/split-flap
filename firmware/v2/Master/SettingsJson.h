@@ -58,6 +58,7 @@ struct SettingsJsonFields {
   String lastResetReason;
   String lastRebootCause;  // #432: "" unless the last reset was a stamped deliberate reboot
   String bootTrace = "[]";  // #504: raw JSON array, oldest boot first
+  String netLiveness = "{}";  // #501: raw JSON object, probe results + strikes
   String crashContext = "{}";  // #504: raw JSON, tasks at the last crash
   uint32_t bootCounter = 0;
   bool recoveryMode = false;
@@ -152,6 +153,7 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"lastResetReason\":";     appendJsonString(out, f.lastResetReason);
   out += ",\"lastRebootCause\":";     appendJsonString(out, f.lastRebootCause);
   out += ",\"bootTrace\":";           out += f.bootTrace;
+  out += ",\"netLiveness\":";         out += f.netLiveness;
   out += ",\"crashContext\":";        out += f.crashContext;
   out += ",\"bootCounter\":";         out += String(f.bootCounter);
   out += ",\"recoveryMode\":";        appendJsonBool(out, f.recoveryMode);

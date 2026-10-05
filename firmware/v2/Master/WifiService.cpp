@@ -1,3 +1,4 @@
+#include "NetLiveness.h"  // #501 end-to-end liveness
 #include "WifiService.h"
 
 #include <DNSServer.h>
@@ -463,6 +464,55 @@ void wifiServiceTick() {
         break;
       case WifiAction::None:
         break;
+    }
+  }
+
+  // #501: is traffic actually moving while the link says it is up? Once a
+  // second; the probes themselves run on clusterTask.
+  static uint32_t livenessNextMs = 0;
+  static NetLivenessState liveness;
+  if (!restartPending && (int32_t)(millis() - livenessNextMs) >= 0) {
+    uint32_t now = millis();
+    livenessNextMs = now + 1000;
+    bool linkUp = policy.phase == WifiPhase::Connected &&
+                  WiFi.status() == WL_CONNECTED;
+    bool wasBad = liveness.gateway.bad || liveness.self.bad;
+    NetLivenessVerdict v =
+        netLivenessStep(liveness, linkUp, netLivenessGateway(now),
+                        netLivenessSelf(now), now, netLivenessStrikes());
+    bool isBad = liveness.gateway.bad || liveness.self.bad;
+    if (isBad != wasBad) {
+      SerialPrintln(isBad ? String(F("net: liveness probe failing (")) +
+                                (liveness.gateway.bad ? F("gateway") : F("own server")) +
+                                F(") — restart after ") +
+                                String((unsigned long)(netLivenessThresholdMs(
+                                           netLivenessStrikes()) / 60000UL)) +
+                                F(" min of it")
+                          : String(F("net: liveness probes passing again")));
+    }
+    if (v.clearStrikes && netLivenessStrikes() > 0) netLivenessClearStrikes();
+    // A gateway that never answers on the probed port leaves that half of
+    // the check inert. Say so once, or nobody would know.
+    static bool gatewayInertLogged = false;
+    static uint32_t linkUpSinceMs = 0;
+    if (!linkUp) {
+      linkUpSinceMs = 0;
+    } else if (linkUpSinceMs == 0) {
+      linkUpSinceMs = now | 1;
+    } else if (!gatewayInertLogged && !liveness.gateway.seenOk &&
+               now - linkUpSinceMs >= 5UL * 60UL * 1000UL) {
+      gatewayInertLogged = true;
+      SerialPrintln(F("net: the gateway does not answer a TCP connect on port "
+                      "80 — the liveness watchdog cannot see a dead radio path"));
+    }
+    // Never under a job a restart would cut in half; the verdict stands and
+    // is acted on once the job is done.
+    bool restartWouldCutAJob =
+        Update.isRunning() || reflashInProgress(displaySnapshotGet().reflash);
+    if (v.reboot != NetLivenessCause::None && !restartWouldCutAJob) {
+      netLivenessAddStrike();
+      scheduleRestart(String(F("network liveness: ")) +
+                      netLivenessCauseText(v.reboot) + F(" (#501)"));
     }
   }
 

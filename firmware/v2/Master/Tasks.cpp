@@ -1,3 +1,4 @@
+#include "NetLiveness.h"  // #501 probes (clusterTask)
 #include "Tasks.h"
 
 #include <Arduino.h>
@@ -251,6 +252,7 @@ static void clusterTaskMain(void*) {
     wdtFeed();
     crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_CLUSTER);
     clusterLeaderTick();
+    netLivenessProbeTick();  // #501: the gateway and own-server probes
     crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_IDLE);
     vTaskDelay(pdMS_TO_TICKS(100));
   }
