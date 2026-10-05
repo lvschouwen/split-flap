@@ -287,6 +287,7 @@ int collectMemberWork(MemberWorkItem* items) {
     // the budget and one that shrinks back under it. clusterTask is the sole
     // caller (ClusterLeader.cpp), so the function-local static is safe.
     static bool digestOmitted = false;
+    pingDigestOmitted.store(!sendDigest, std::memory_order_relaxed);  // #387
     if (!sendDigest && !digestOmitted) {
       digestOmitted = true;
       SerialPrintln("cluster: ping digest too large (" +

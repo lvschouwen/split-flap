@@ -222,6 +222,11 @@ static void test_status_json_keeps_the_277_wire_keys() {
   TEST_ASSERT_TRUE(out.indexOf("\"updateBlocked\":false") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"hmac\":true") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"imageVerifyFailed\":false") >= 0);
+  // #387: additive, and the object still closes.
+  TEST_ASSERT_TRUE(out.endsWith(",\"digestOmitted\":false}"));
+  ClusterLeaderStatus omitted = makeStatus();
+  omitted.digestOmitted = true;
+  TEST_ASSERT_TRUE(clusterStatusJson(omitted).endsWith(",\"digestOmitted\":true}"));
 }
 
 static void test_status_json_carries_plat_only_when_reported() {

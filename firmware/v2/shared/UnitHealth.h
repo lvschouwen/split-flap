@@ -672,9 +672,10 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
                            (unsigned)b.lock, (unsigned)b.lfuse,
                            (unsigned)b.hfuse, (unsigned)b.efuse);
       }
-      // blx = crash resets in a row the bootloader counted (#542); at 3 it
-      // holds the unit, which counts as faulty.
-      if (b.crashValid && b.crashCount > 0) {
+      // blx = crash resets in a row the bootloader counted (#542), shown from
+      // 2 up (1 is the intentional reset of any reflash); at 3 it holds the
+      // unit, which counts as faulty.
+      if (b.crashValid && b.crashCount >= TWIBOOT_CRASH_REPORT_FROM) {
         UNIT_HEALTH_APPEND(",\"blx\":%u", (unsigned)b.crashCount);
       }
     }

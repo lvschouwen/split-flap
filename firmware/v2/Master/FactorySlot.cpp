@@ -183,9 +183,11 @@ bool factoryWriteEnd() {
   if (esp_ota_get_partition_description(target, &desc) != ESP_OK) {
     return fail("written image has no valid app descriptor");
   }
+  // Not desc.version: that stamp is frozen into the framework libraries when
+  // they are compiled and repeats on every image; the image's rev is logged
+  // with the slot record.
   SerialPrintln(String("Rescue image installed into the factory slot (") +
-                desc.version + ", " + String((unsigned)writeOffset) +
-                " bytes)");
+                String((unsigned)writeOffset) + " bytes)");
   target = nullptr;
   installInProgress = false;
   return true;

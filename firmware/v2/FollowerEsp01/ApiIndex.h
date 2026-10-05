@@ -119,7 +119,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"blc",    "bootloader capability bits: 1 do_spm, 2 bounded pin, 4 crash record, 8 fuse bytes"},
   {"blk",    "lock byte from the bootloader (hex), when the chip serves it"},
   {"blf",    "low, high, extended fuse from the bootloader (hex), when the chip serves them"},
-  {"blx",    "crash resets in a row per the bootloader; at 3 it holds the unit (faulty) until flashed"},
+  {"blx",    "crash resets in a row per the bootloader, from 2 up; at 3 it holds the unit (faulty) until flashed"},
   {"pv",     "wire protocol version the unit reports"},
   {"pmm",    "1 = protocol version we do not speak; unit is untouched and is a reflash target"},
   {"hf",     "lifetime failed-homing count (survives power cycles)"},

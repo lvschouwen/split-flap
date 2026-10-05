@@ -14,6 +14,12 @@
 //
 // A flag that is absent or not accepted changes nothing: the member keeps
 // what it last knew. Pure, shared by both member implementations.
+//
+// Accepted limit: absence is not signed. A host that can rewrite a ping in
+// flight can strip both params and so hold a member on its last known value
+// (it cannot set one). Closing that means putting the flag into the ping's
+// canonical message, which every member of a mixed-revision cluster would
+// have to agree on at once; the same host can already drop pings altogether.
 
 #include <Arduino.h>
 

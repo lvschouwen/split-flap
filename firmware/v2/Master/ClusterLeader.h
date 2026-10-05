@@ -72,6 +72,9 @@ struct ClusterLeaderStatus {
   // The running image failed its verify/read pass — convergence is off
   // until reboot ("idle" alone would read as "nothing to do").
   bool rolloutImageFailed = false;
+  // #387: the cluster digest did not fit the ping budget and is being left
+  // out — pings stay alive, the members' wall mirror goes stale.
+  bool digestOmitted = false;
   // #344: the active rollout streams the STORED follower image at an esp01
   // row (additive "src":"esp01" on the wire; absent = the S3 slot).
   bool rolloutFollowerImage = false;

@@ -145,7 +145,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"blc",    "bootloader capability bits: 1 do_spm, 2 bounded pin, 4 crash record, 8 fuse bytes"},
   {"blk",    "lock byte from the bootloader (hex), when the chip serves it"},
   {"blf",    "low, high, extended fuse from the bootloader (hex), when the chip serves them"},
-  {"blx",    "crash resets in a row per the bootloader; at 3 it holds the unit (faulty) until flashed"},
+  {"blx",    "crash resets in a row per the bootloader, from 2 up; at 3 it holds the unit (faulty) until flashed"},
   {"pv",     "wire protocol version the unit reports"},
   {"pmm",    "1 = protocol version we do not speak; unit is untouched and is a reflash target"},
   {"hf",     "lifetime failed-homing count (survives power cycles)"},
@@ -198,6 +198,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"imageVerifyFailed", "the running image failed self-verify for streaming"},
   {"followerImage", "a stored ESP-01 follower image is present"},
   {"followerPush",  "an ESP-01 follower image push is in flight"},
+  {"digestOmitted", "the cluster digest no longer fits the ping: the rows' own wall view is stale (#387)"},
   {"gen",       "grid generation counter"},
 };
 static const int API_LEGEND_COUNT = (int)(sizeof(API_LEGEND) / sizeof(API_LEGEND[0]));

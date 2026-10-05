@@ -263,7 +263,7 @@ inline void twibootIdentityText(char* buf, size_t cap,
     return;
   }
   char crash[36] = "";
-  if (id.crashValid && id.crashCount > 0) {
+  if (id.crashValid && id.crashCount >= TWIBOOT_CRASH_REPORT_FROM) {
     BOOT_DUMP_SNPRINTF(crash, sizeof(crash), ", %s%u crash reset(s)",
                        twibootHeldForCrashing(id) ? "HELD after " : "",
                        (unsigned)id.crashCount);

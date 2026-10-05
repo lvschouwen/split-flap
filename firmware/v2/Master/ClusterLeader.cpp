@@ -261,6 +261,7 @@ std::atomic<bool> rebootHoldSent{false};
 // the web task; the 4 KB buffer is shared because the #276 flash stream and
 // the #304 file stream are mutually exclusive by design.
 std::atomic<bool> rolloutFactsFailed{false};
+std::atomic<bool> pingDigestOmitted{false};
 uint8_t rolloutBuf[4096];
 bool rolloutFollowerSource = false;
 String rolloutFollowerTargetRev;

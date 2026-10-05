@@ -102,6 +102,7 @@ void statusFillLocked(ClusterLeaderStatus& st) {
   st.rolloutSent = rollout.bytesSent;
   st.rolloutTotal = rollout.bytesTotal;
   st.rolloutImageFailed = rolloutFactsFailed.load(std::memory_order_relaxed);
+  st.digestOmitted = pingDigestOmitted.load(std::memory_order_relaxed);
   st.rolloutFollowerImage = rolloutFollowerSource;  // #344
   // On-demand ESP-01 firmware relay (#304). followerImage* query the store's
   // own mutex — leaderMutex → imgMutex is a consistent leaf order.

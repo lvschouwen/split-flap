@@ -819,10 +819,14 @@ static void test_identity_text_for_the_scan_log() {
   id.crashCount = 0;
   twibootIdentityText(buf, sizeof(buf), id);
   TEST_ASSERT_EQUAL_STRING(" (bootloader v3, lock cf, fuses l ff h da e fd)", buf);
+  // 1 is what every intentional reset into the bootloader leaves: no news.
   id.crashCount = 1;
   twibootIdentityText(buf, sizeof(buf), id);
+  TEST_ASSERT_EQUAL_STRING(" (bootloader v3, lock cf, fuses l ff h da e fd)", buf);
+  id.crashCount = 2;
+  twibootIdentityText(buf, sizeof(buf), id);
   TEST_ASSERT_EQUAL_STRING(
-      " (bootloader v3, 1 crash reset(s), lock cf, fuses l ff h da e fd)", buf);
+      " (bootloader v3, 2 crash reset(s), lock cf, fuses l ff h da e fd)", buf);
   id.crashCount = 15;
   id.fusesValid = false;
   twibootIdentityText(buf, sizeof(buf), id);

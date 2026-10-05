@@ -2802,7 +2802,10 @@ function updateClusterFromStatus(st) {
 	//Fleet rollout (#276) surfacing: progress while it runs, one success
 	//line when it finishes, a persistent warning if convergence is dead.
 	var rollout = st.rollout || {};
-	if (rollout.imageVerifyFailed) {
+	if (st.digestOmitted) {
+		//#387: the pings stay alive without it; only the rows' own wall view lags.
+		showStatus("clusterCardStatus", "⚠ The wall is too large for the cluster ping: the rows’ own wall view is not being updated. Displays are unaffected.", "error");
+	} else if (rollout.imageVerifyFailed) {
 		showStatus("clusterCardStatus", "⚠ This board’s running image failed its verify pass — automatic follower updates are off until a reboot.", "error");
 	} else if (rollout.phase === "uploading" && rollout.total > 0) {
 		clusterRolloutSeen = true;

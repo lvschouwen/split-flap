@@ -34,6 +34,10 @@
 // and waits to be flashed. A master's explicit start command clears the count.
 #define TWIBOOT_CHIPINFO_CRASH_LEN     13
 #define TWIBOOT_CRASH_HOLD_COUNT       3
+// The count reads 1 after ANY reset that entered the bootloader, including
+// the intentional one a reflash starts with. Only from here up does it say
+// something worth showing.
+#define TWIBOOT_CRASH_REPORT_FROM      2
 
 #define TWIBOOT_MEMTYPE_CHIPINFO       0x00
 #define TWIBOOT_MEMTYPE_FLASH          0x01

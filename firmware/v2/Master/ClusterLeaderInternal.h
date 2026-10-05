@@ -76,6 +76,7 @@ extern std::atomic<bool> rebootHoldSent;
 // Rollout seams shared across Rollout/FollowerPush/Status (#276/#344/#304);
 // the flash/file session handles stay TU-private.
 extern std::atomic<bool> rolloutFactsFailed;
+extern std::atomic<bool> pingDigestOmitted;  // #387, set by the fan-out
 extern uint8_t rolloutBuf[4096];
 extern bool rolloutFollowerSource;
 extern String rolloutFollowerTargetRev;

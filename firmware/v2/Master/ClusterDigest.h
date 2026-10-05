@@ -137,7 +137,11 @@ inline String clusterStatusJson(const ClusterLeaderStatus& st) {
   out += String((unsigned long)st.followerPushTotal);
   out += ",\"result\":";
   appendJsonString(out, st.followerPushResult);
-  out += "}}";
+  // #387: the digest is being left off the pings (it did not fit the member
+  // body ceiling) — the members' wall mirror is stale until it fits again.
+  out += "},\"digestOmitted\":";
+  out += st.digestOmitted ? "true" : "false";
+  out += "}";
   return out;
 }
 

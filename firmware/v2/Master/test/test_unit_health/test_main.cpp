@@ -163,6 +163,11 @@ static void test_health_json_bootloader_identity_keys() {
   units[0].bootloader.crashCount = 3;
   buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"blf\":\"ffdafd\",\"blx\":3}"));
+  // 1 is the intentional reset of any reflash: not reported.
+  units[0].bootloader.crashCount = 1;
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_NULL(strstr(buf, "\"blx\""));
+  units[0].bootloader.crashCount = 3;
   // Held for crashing is a fault; merely sitting in the bootloader is not.
   TEST_ASSERT_TRUE(unitIsFaultyOrLost(units[0]));
   units[0].bootloader.crashCount = 2;
