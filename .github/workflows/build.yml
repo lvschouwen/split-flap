@@ -40,7 +40,7 @@ jobs:
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install platformio==6.2.0
+        run: pip install platformio==6.2.0 uv
 
       - name: Build
         working-directory: firmware/${{ matrix.project }}
@@ -70,7 +70,7 @@ jobs:
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install platformio==6.2.0
+        run: pip install platformio==6.2.0 uv
 
       - name: Run Unit native tests
         working-directory: firmware/v2/Unit
@@ -115,9 +115,12 @@ jobs:
       - name: Install flasher deps
         run: pip install pyserial==3.5 esptool==5.4.0
 
-      - name: Wall link codec twin (python)
+      # Stock protobuf must read the bytes the boards' nanopb code writes.
+      - name: Wall link schema (python)
         working-directory: firmware/v2/link
-        run: python -m pytest tests/
+        run: |
+          pip install grpcio-tools protobuf
+          python -m pytest tests/
 
       - name: Run flasher tests
         working-directory: flashing

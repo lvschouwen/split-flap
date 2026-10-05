@@ -1,0 +1,169 @@
+// The link between a Split-Flap's master (ESP32-S3) and its row boards
+// (ESP-01). One TCP connection per row board, opened by the row. Each message
+// on it is one ToRow or ToMaster, length-delimited (a varint length, then the
+// message). Generated for both boards with nanopb; field sizes are in
+// wall_link.options.
+// Spec: docs/superpowers/specs/2026-10-05-wall-link-and-console-design.md.
+//
+// Field numbers are the contract: never reuse or renumber one. Add fields and
+// oneof members at the end; a board that does not know them ignores them.
+syntax = "proto3";
+package wl;
+
+// ---- master -> row -------------------------------------------------------------
+
+message Welcome {
+  uint32 protocol = 1;
+  string master_id = 2;
+}
+
+// Show `text` on this row. commit_at_ms is the flip instant as Unix time in
+// milliseconds on the master's clock, which the row follows over NTP;
+// 0, or a row without synced time, flips on arrival.
+message Show {
+  uint32 render_id = 1;
+  uint64 commit_at_ms = 2;
+  uint32 speed = 3;
+  string text = 4;
+}
+
+message Quiet {
+  bool on = 1;
+}
+
+enum Fallback {
+  FALLBACK_BLANK = 0;
+  FALLBACK_TIME = 1;
+  FALLBACK_DATE = 2;
+}
+
+message Config {
+  Fallback fallback = 1;          // what to show when the master is lost
+  bool update_units_at_start = 2;
+  string tz = 3;                  // POSIX tz rule
+}
+
+// A unit job, named by the master. address 0 = the whole row.
+message Op {
+  uint32 op_id = 1;
+  uint32 opcode = 2;
+  uint32 address = 3;
+  bytes args = 4;
+}
+
+// "This is the image you should run": the row downloads it from the master
+// over HTTP and checks it against md5 before installing.
+message Update {
+  string rev = 1;
+  uint32 size = 2;
+  bytes md5 = 3;
+  bool packed = 4;                // gzip image for eboot
+}
+
+message LogCtl {
+  bool on = 1;
+}
+
+message Ping {}
+message Restart {}
+message Release {}
+
+message ToRow {
+  oneof body {
+    Welcome welcome = 1;
+    Show show = 2;
+    Quiet quiet = 3;
+    Config config = 4;
+    Op op = 5;
+    Update update = 6;
+    LogCtl log_ctl = 7;
+    Ping ping = 8;
+    Restart restart = 9;
+    Release release = 10;
+  }
+}
+
+// ---- row -> master -------------------------------------------------------------
+
+message Hello {
+  uint32 protocol = 1;
+  string id = 2;
+  string rev = 3;
+  uint32 boot_id = 4;             // changes at every start; open jobs die with the old one
+  bool rescue = 5;                // minimal boot after repeated early deaths
+  uint32 width = 6;               // units on this row
+}
+
+message Status {
+  uint32 up_s = 1;
+  uint32 heap = 2;
+  uint32 min_heap = 3;
+  uint32 max_block = 4;
+  sint32 rssi = 5;
+  uint32 tx_power = 6;            // quarter dBm
+  uint32 bus_tx = 7;
+  uint32 bus_err = 8;
+  bool bus_dead = 9;
+  uint32 bus_episodes = 10;
+  uint32 escalations = 11;
+  bool busy = 12;                 // a unit job holds the loop: expect silence
+  uint32 image_size = 13;
+  bool time_synced = 14;
+}
+
+message Shown {
+  uint32 render_id = 1;
+  uint32 late_ms = 2;             // how far past commit_at_ms it flipped; 0 = on time
+}
+
+enum OpPhase {
+  OP_RUNNING = 0;
+  OP_OK = 1;
+  OP_FAILED = 2;
+  OP_REFUSED = 3;
+}
+
+message OpState {
+  uint32 op_id = 1;
+  OpPhase phase = 2;
+  uint32 reason = 3;              // MaintReason vocabulary
+  uint32 data_offset = 4;         // for results sent in pieces (boot dump)
+  bytes data = 5;
+}
+
+message Event {
+  uint32 code = 1;
+  uint32 unit = 2;
+  uint32 a = 3;
+  uint32 b = 4;
+  uint32 up_s = 5;
+}
+
+message LogLine {
+  bytes text = 1;
+}
+
+// The row's unit facts: the /units/health JSON document exactly as
+// buildUnitHealthJson writes it, in pieces. doc_id ties the pieces of one
+// document together; the document is complete when offset + data reaches total.
+message UnitsJson {
+  uint32 doc_id = 1;
+  uint32 offset = 2;
+  uint32 total = 3;
+  bytes data = 4;
+}
+
+message Pong {}
+
+message ToMaster {
+  oneof body {
+    Hello hello = 1;
+    Status status = 2;
+    Shown shown = 3;
+    OpState op_state = 4;
+    Event event = 5;
+    LogLine log_line = 6;
+    UnitsJson units_json = 7;
+    Pong pong = 8;
+  }
+}

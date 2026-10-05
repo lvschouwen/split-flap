@@ -1,510 +1,399 @@
-// Native tests for link/WallLink.h: the frame format and every message, the
-// stream decoder, the link clock and the master's pacing rule.
+// Native tests for the wall link (link/wall_link.proto + WallLinkStream.h).
+// Encoding and decoding are nanopb's and are not re-tested here; these tests
+// pin what is ours: the schema's sizes and limits, the stream reader, and the
+// unit-facts document in pieces.
 //
-// The VEC lines are the byte contract with the Python twin: link/tests reads
-// them out of this file and requires link/wall_link.py to produce the same.
+// The VEC lines are bytes produced by this build's nanopb code. The Python
+// test in link/tests decodes them with the stock protobuf library, so the
+// schema is proven to mean the same on both sides.
 #include <unity.h>
 
 #include <stdio.h>
 
-#include "WallLink.h"
-#include "round_trips_560.h"
+#include "WallLinkStream.h"
 
 #define VEC(name, hex) hex
 
 void setUp() {}
 void tearDown() {}
 
-static uint8_t frame[WL_MAX_FRAME];
+static uint8_t wire[WL_PREFIX_MAX + wl_ToMaster_size + 8];
 
-static void assertFrame(size_t n, const char* hex) {
+static void assertWire(size_t n, const char* hex) {
   TEST_ASSERT_NOT_EQUAL(0, n);
-  char got[2 * WL_MAX_FRAME + 1];
-  for (size_t i = 0; i < n; i++) snprintf(got + 2 * i, 3, "%02x", frame[i]);
+  static char got[2 * sizeof(wire) + 1];
+  for (size_t i = 0; i < n; i++) snprintf(got + 2 * i, 3, "%02x", wire[i]);
   TEST_ASSERT_EQUAL_STRING(hex, got);
 }
-static const uint8_t* payload() { return frame + WL_HEADER_LEN; }
-static size_t payloadLen(size_t n) { return n - WL_HEADER_LEN; }
 
-// ---- messages: bytes, then a decode of those bytes ----------------------------
+// ---- the schema on the wire -------------------------------------------------------
 
-static void test_hello() {
-  WlHello m;
-  strcpy(m.id, "split-flap-261bb6");
-  strcpy(m.rev, "3f1a516");
-  m.bootId = 0xDEADBEEF;
-  m.flags = WL_HELLO_RESCUE;
-  m.width = 5;
-  size_t n = wlEncodeHello(frame, sizeof frame, m);
-  assertFrame(n, VEC("hello", "002120011173706c69742d666c61702d3236316262360733663161353136deadbeef0105"));
-  WlHello d;
-  TEST_ASSERT_TRUE(wlDecodeHello(payload(), payloadLen(n), d));
-  TEST_ASSERT_EQUAL(WALL_LINK_PROTOCOL, d.protocol);
-  TEST_ASSERT_EQUAL_STRING("split-flap-261bb6", d.id);
-  TEST_ASSERT_EQUAL_STRING("3f1a516", d.rev);
-  TEST_ASSERT_EQUAL_HEX32(0xDEADBEEF, d.bootId);
-  TEST_ASSERT_EQUAL(1, d.flags);
-  TEST_ASSERT_EQUAL(5, d.width);
+static void test_hello_round_trip_and_bytes() {
+  wl_ToMaster m = wl_ToMaster_init_zero;
+  m.which_body = wl_ToMaster_hello_tag;
+  m.body.hello.protocol = WALL_LINK_PROTOCOL;
+  strcpy(m.body.hello.id, "split-flap-261bb6");
+  strcpy(m.body.hello.rev, "3f1a516");
+  m.body.hello.boot_id = 0xDEADBEEF;
+  m.body.hello.rescue = true;
+  m.body.hello.width = 5;
+  size_t n = wlEncodeToMaster(wire, sizeof wire, m);
+  assertWire(n, VEC("hello", "2a0a280801121173706c69742d666c61702d3236316262361a073366316135313620effdb6f50d28013005"));
+
+  WlMasterReader r;
+  TEST_ASSERT_EQUAL(n, r.feed(wire, n));
+  TEST_ASSERT_EQUAL(WlFeed::Message, r.peek());
+  wl_ToMaster d = wl_ToMaster_init_zero;
+  TEST_ASSERT_TRUE(r.decode(wl_ToMaster_fields, &d));
+  TEST_ASSERT_EQUAL(wl_ToMaster_hello_tag, d.which_body);
+  TEST_ASSERT_EQUAL_STRING("split-flap-261bb6", d.body.hello.id);
+  TEST_ASSERT_EQUAL_STRING("3f1a516", d.body.hello.rev);
+  TEST_ASSERT_EQUAL_HEX32(0xDEADBEEF, d.body.hello.boot_id);
+  TEST_ASSERT_TRUE(d.body.hello.rescue);
+  TEST_ASSERT_EQUAL(5, d.body.hello.width);
 }
 
-static void test_welcome() {
-  WlWelcome m;
-  strcpy(m.masterId, "split-flap-c8a746");
-  size_t n = wlEncodeWelcome(frame, sizeof frame, m);
-  assertFrame(n, VEC("welcome", "001301011173706c69742d666c61702d633861373436"));
-  WlWelcome d;
-  TEST_ASSERT_TRUE(wlDecodeWelcome(payload(), payloadLen(n), d));
-  TEST_ASSERT_EQUAL_STRING("split-flap-c8a746", d.masterId);
+static void test_show_round_trip_and_bytes() {
+  wl_ToRow m = wl_ToRow_init_zero;
+  m.which_body = wl_ToRow_show_tag;
+  m.body.show.render_id = 94;
+  m.body.show.commit_at_ms = 1791223510400ULL;
+  m.body.show.speed = 80;
+  strcpy(m.body.show.text, "19:34");
+  size_t n = wlEncodeToRow(wire, sizeof wire, m);
+  assertWire(n, VEC("show", "141212085e1080ebf6e990341850220531393a3334"));
+
+  WlRowReader r;
+  r.feed(wire, n);
+  wl_ToRow d = wl_ToRow_init_zero;
+  TEST_ASSERT_TRUE(r.decode(wl_ToRow_fields, &d));
+  TEST_ASSERT_EQUAL(wl_ToRow_show_tag, d.which_body);
+  TEST_ASSERT_EQUAL_UINT32(94, d.body.show.render_id);
+  TEST_ASSERT_TRUE(d.body.show.commit_at_ms == 1791223510400ULL);
+  TEST_ASSERT_EQUAL_STRING("19:34", d.body.show.text);
 }
 
-static void test_time_request_and_reply() {
-  WlTimeReq q;
-  q.rowMs = 39153;
-  q.rxCount = 17;
-  size_t n = wlEncodeTimeReq(frame, sizeof frame, q);
-  assertFrame(n, VEC("timereq", "000621000098f10011"));
-  WlTimeReq dq;
-  TEST_ASSERT_TRUE(wlDecodeTimeReq(payload(), payloadLen(n), dq));
-  TEST_ASSERT_EQUAL_UINT32(39153, dq.rowMs);
-  TEST_ASSERT_EQUAL(17, dq.rxCount);
+static void test_update_and_op_round_trip_and_bytes() {
+  wl_ToRow m = wl_ToRow_init_zero;
+  m.which_body = wl_ToRow_update_tag;
+  strcpy(m.body.update.rev, "3f1a516");
+  m.body.update.size = 323047;
+  for (uint8_t i = 0; i < 16; i++) m.body.update.md5[i] = i;
+  m.body.update.packed = true;
+  size_t n = wlEncodeToRow(wire, sizeof wire, m);
+  assertWire(n, VEC("update", "2332210a073366316135313610e7db131a10000102030405060708090a0b0c0d0e0f2001"));
 
-  WlTime t;
-  t.echoRowMs = 39153;
-  t.masterMs = 7200123;
-  t.epochS = 1791223510;
-  n = wlEncodeTime(frame, sizeof frame, t);
-  assertFrame(n, VEC("time", "000c02000098f1006ddd7b6ac3e6d6"));
-  WlTime dt;
-  TEST_ASSERT_TRUE(wlDecodeTime(payload(), payloadLen(n), dt));
-  TEST_ASSERT_EQUAL_UINT32(7200123, dt.masterMs);
-  TEST_ASSERT_EQUAL_UINT32(1791223510, dt.epochS);
+  wl_ToRow op = wl_ToRow_init_zero;
+  op.which_body = wl_ToRow_op_tag;
+  op.body.op.op_id = 0xA1B20007;
+  op.body.op.opcode = 5;
+  op.body.op.address = 6;
+  op.body.op.args.size = 2;
+  op.body.op.args.bytes[0] = 0x01;
+  op.body.op.args.bytes[1] = 0xF4;
+  n = wlEncodeToRow(wire, sizeof wire, op);
+  assertWire(n, VEC("op", "102a0e088780c88d0a10051806220201f4"));
+  WlRowReader r;
+  r.feed(wire, n);
+  wl_ToRow d = wl_ToRow_init_zero;
+  TEST_ASSERT_TRUE(r.decode(wl_ToRow_fields, &d));
+  TEST_ASSERT_EQUAL_HEX32(0xA1B20007, d.body.op.op_id);
+  TEST_ASSERT_EQUAL(2, d.body.op.args.size);
+  TEST_ASSERT_EQUAL_HEX8(0xF4, d.body.op.args.bytes[1]);
 }
 
-static void test_show_and_shown() {
-  WlShow m;
-  m.renderId = 94;
-  m.atMs = 7202000;
-  m.speed = 80;
-  strcpy(m.text, "19:34");
-  size_t n = wlEncodeShow(frame, sizeof frame, m);
-  assertFrame(n, VEC("show", "000f030000005e006de4d0500531393a3334"));
-  WlShow d;
-  TEST_ASSERT_TRUE(wlDecodeShow(payload(), payloadLen(n), d));
-  TEST_ASSERT_EQUAL_UINT32(94, d.renderId);
-  TEST_ASSERT_EQUAL_UINT32(7202000, d.atMs);
-  TEST_ASSERT_EQUAL(80, d.speed);
-  TEST_ASSERT_EQUAL_STRING("19:34", d.text);
+static void test_status_with_a_negative_signal_and_empty_messages() {
+  wl_ToMaster m = wl_ToMaster_init_zero;
+  m.which_body = wl_ToMaster_status_tag;
+  m.body.status.up_s = 5429;
+  m.body.status.heap = 27312;
+  m.body.status.min_heap = 17464;
+  m.body.status.rssi = -58;
+  m.body.status.busy = true;
+  size_t n = wlEncodeToMaster(wire, sizeof wire, m);
+  assertWire(n, VEC("status", "11120f08b52a10b0d50118b8880128736001"));
+  WlMasterReader r;
+  r.feed(wire, n);
+  wl_ToMaster d = wl_ToMaster_init_zero;
+  TEST_ASSERT_TRUE(r.decode(wl_ToMaster_fields, &d));
+  TEST_ASSERT_EQUAL(-58, d.body.status.rssi);
+  TEST_ASSERT_TRUE(d.body.status.busy);
 
-  WlShow blank;
-  blank.renderId = 95;
-  blank.speed = 1;
-  n = wlEncodeShow(frame, sizeof frame, blank);
-  assertFrame(n, VEC("show_blank", "000a030000005f000000000100"));
-  TEST_ASSERT_TRUE(wlDecodeShow(payload(), payloadLen(n), d));
-  TEST_ASSERT_EQUAL_STRING("", d.text);
-
-  WlShown s;
-  s.renderId = 94;
-  s.rxCount = 18;
-  n = wlEncodeShown(frame, sizeof frame, s);
-  assertFrame(n, VEC("shown", "0008230000005e00000012"));
-  WlShown ds;
-  TEST_ASSERT_TRUE(wlDecodeShown(payload(), payloadLen(n), ds));
-  TEST_ASSERT_EQUAL(18, ds.rxCount);
+  wl_ToRow ping = wl_ToRow_init_zero;
+  ping.which_body = wl_ToRow_ping_tag;
+  assertWire(wlEncodeToRow(wire, sizeof wire, ping), VEC("ping", "024200"));
+  wl_ToMaster pong = wl_ToMaster_init_zero;
+  pong.which_body = wl_ToMaster_pong_tag;
+  assertWire(wlEncodeToMaster(wire, sizeof wire, pong), VEC("pong", "024200"));
 }
 
-static void test_quiet_config_logctl() {
-  WlQuiet q;
-  q.on = 1;
-  assertFrame(wlEncodeQuiet(frame, sizeof frame, q), VEC("quiet", "00010401"));
+// ---- sizes and limits ---------------------------------------------------------------
 
-  WlConfig c;
-  c.fallback = (uint8_t)WlFallback::Time;
-  c.updateUnitsAtStart = 0;
-  strcpy(c.tz, "CET-1CEST,M3.5.0,M10.5.0/3");
-  size_t n = wlEncodeConfig(frame, sizeof frame, c);
-  assertFrame(n, VEC("config", "001d0501001a4345542d31434553542c4d332e352e302c4d31302e352e302f33"));
-  WlConfig d;
-  TEST_ASSERT_TRUE(wlDecodeConfig(payload(), payloadLen(n), d));
-  TEST_ASSERT_EQUAL(1, d.fallback);
-  TEST_ASSERT_EQUAL(0, d.updateUnitsAtStart);
-  TEST_ASSERT_EQUAL_STRING("CET-1CEST,M3.5.0,M10.5.0/3", d.tz);
-
-  WlLogCtl l;
-  l.on = 1;
-  assertFrame(wlEncodeLogCtl(frame, sizeof frame, l), VEC("logctl", "00010801"));
+static void test_the_row_only_ever_buffers_a_small_message() {
+  // What the row board must hold for one incoming message. Text for a row,
+  // a tz rule, an update notice: nothing large travels master -> row.
+  TEST_ASSERT_TRUE(wl_ToRow_size <= 96);
+  TEST_ASSERT_TRUE(wl_ToMaster_size <= 512);
+  TEST_ASSERT_TRUE(sizeof(WlRowReader) <= 112);
 }
 
-static void test_op_and_its_state() {
-  WlOp m;
-  m.opId = 0xA1B20007;
-  m.opcode = 5;
-  m.address = 6;
-  m.argsLen = 2;
-  m.args[0] = 0x01;
-  m.args[1] = 0xF4;
-  size_t n = wlEncodeOp(frame, sizeof frame, m);
-  assertFrame(n, VEC("op", "000906a1b2000705060201f4"));
-  WlOp d;
-  TEST_ASSERT_TRUE(wlDecodeOp(payload(), payloadLen(n), d));
-  TEST_ASSERT_EQUAL_HEX32(0xA1B20007, d.opId);
-  TEST_ASSERT_EQUAL(6, d.address);
-  TEST_ASSERT_EQUAL(2, d.argsLen);
-  TEST_ASSERT_EQUAL_HEX8(0xF4, d.args[1]);
-
-  const uint8_t data[] = {0x0C, 0xA2, 0x0C};
-  WlOpState s;
-  s.opId = 0xA1B20007;
-  s.phase = (uint8_t)WlOpPhase::Ok;
-  s.rxCount = 19;
-  s.dataOffset = 128;
-  s.dataLen = sizeof data;
-  s.data = data;
-  n = wlEncodeOpState(frame, sizeof frame, s);
-  assertFrame(n, VEC("opstate", "000f24a1b2000701000013008000030ca20c"));
-  WlOpState ds;
-  TEST_ASSERT_TRUE(wlDecodeOpState(payload(), payloadLen(n), ds));
-  TEST_ASSERT_EQUAL(128, ds.dataOffset);
-  TEST_ASSERT_EQUAL(3, ds.dataLen);
-  TEST_ASSERT_EQUAL_HEX8_ARRAY(data, ds.data, 3);
+static void test_every_message_at_its_largest_fits_its_reader() {
+  wl_ToMaster m = wl_ToMaster_init_zero;
+  m.which_body = wl_ToMaster_op_state_tag;
+  m.body.op_state.op_id = 0xFFFFFFFF;
+  m.body.op_state.phase = wl_OpPhase_OP_REFUSED;
+  m.body.op_state.reason = 0xFFFFFFFF;
+  m.body.op_state.data_offset = 0xFFFFFFFF;
+  m.body.op_state.data.size = sizeof(m.body.op_state.data.bytes);
+  memset(m.body.op_state.data.bytes, 0xFF, sizeof(m.body.op_state.data.bytes));
+  size_t n = wlEncodeToMaster(wire, sizeof wire, m);
+  TEST_ASSERT_NOT_EQUAL(0, n);
+  WlMasterReader r;
+  TEST_ASSERT_EQUAL(n, r.feed(wire, n));
+  TEST_ASSERT_EQUAL(WlFeed::Message, r.peek());
+  static wl_ToMaster d;
+  TEST_ASSERT_TRUE(r.decode(wl_ToMaster_fields, &d));
+  TEST_ASSERT_EQUAL(480, d.body.op_state.data.size);
 }
 
-static void test_update() {
-  WlUpdate m;
-  strcpy(m.rev, "3f1a516");
-  m.size = 323047;
-  for (uint8_t i = 0; i < 16; i++) m.md5[i] = i;
-  m.packed = 1;
-  size_t n = wlEncodeUpdate(frame, sizeof frame, m);
-  assertFrame(n, VEC("update", "001d0707336631613531360004ede7000102030405060708090a0b0c0d0e0f01"));
-  WlUpdate d;
-  TEST_ASSERT_TRUE(wlDecodeUpdate(payload(), payloadLen(n), d));
-  TEST_ASSERT_EQUAL_STRING("3f1a516", d.rev);
-  TEST_ASSERT_EQUAL_UINT32(323047, d.size);
-  TEST_ASSERT_EQUAL_HEX8_ARRAY(m.md5, d.md5, 16);
-  TEST_ASSERT_EQUAL(1, d.packed);
+static void test_a_text_longer_than_a_row_is_refused_on_decode() {
+  // ToRow{show{text: 17 x 'A'}}, written by a peer that does not enforce the limit.
+  uint8_t over[32] = {0x15, 0x12, 0x13, 0x22, 0x11};
+  memset(over + 5, 'A', 17);
+  WlRowReader r;
+  r.feed(over, 5 + 17);
+  TEST_ASSERT_EQUAL(WlFeed::Message, r.peek());
+  wl_ToRow d = wl_ToRow_init_zero;
+  TEST_ASSERT_FALSE(r.decode(wl_ToRow_fields, &d));
 }
 
-static void test_status_event_logline_pong() {
-  WlStatus m;
-  m.rxCount = 17;
-  m.upS = 5429;
-  m.heap = 27312;
-  m.minHeap = 17464;
-  m.maxBlock = 26232;
-  m.rssi = -58;
-  m.txPower = 20;
-  m.busTx = 13502;
-  m.busEpisodes = 2;
-  m.jobRunning = 1;
-  m.imageSize = 461600;
-  size_t n = wlEncodeStatus(frame, sizeof frame, m);
-  assertFrame(n, VEC("status", "00252200110000153500006ab00000443800006678c614000034be00000000000002000100070b20"));
-  WlStatus d;
-  TEST_ASSERT_TRUE(wlDecodeStatus(payload(), payloadLen(n), d));
-  TEST_ASSERT_EQUAL(-58, d.rssi);
-  TEST_ASSERT_EQUAL_UINT32(17464, d.minHeap);
-  TEST_ASSERT_EQUAL(2, d.busEpisodes);
-  TEST_ASSERT_EQUAL(1, d.jobRunning);
-  TEST_ASSERT_EQUAL_UINT32(461600, d.imageSize);
-
-  WlEvent e;
-  e.code = 3;
-  e.unit = 6;
-  e.a = 10;
-  e.upS = 8343;
-  n = wlEncodeEvent(frame, sizeof frame, e);
-  assertFrame(n, VEC("event", "000f250003060000000a0000000000002097"));
-  WlEvent de;
-  TEST_ASSERT_TRUE(wlDecodeEvent(payload(), payloadLen(n), de));
-  TEST_ASSERT_EQUAL(6, de.unit);
-  TEST_ASSERT_EQUAL_UINT32(8343, de.upS);
-
-  const char* line = "[5429] bus recovered";
-  assertFrame(wlEncodeLogLine(frame, sizeof frame, line, strlen(line)),
-              VEC("logline", "0014265b353432395d20627573207265636f7665726564"));
-
-  WlPong p;
-  p.rxCount = 65535;
-  n = wlEncodePong(frame, sizeof frame, p);
-  assertFrame(n, VEC("pong", "000227ffff"));
-  WlPong dp;
-  TEST_ASSERT_TRUE(wlDecodePong(payload(), payloadLen(n), dp));
-  TEST_ASSERT_EQUAL(65535, dp.rxCount);
+static void test_a_message_that_does_not_fit_is_not_encoded() {
+  wl_ToMaster m = wl_ToMaster_init_zero;
+  m.which_body = wl_ToMaster_hello_tag;
+  strcpy(m.body.hello.id, "split-flap-261bb6");
+  uint8_t small[8];
+  TEST_ASSERT_EQUAL(0, wlEncodeToMaster(small, sizeof small, m));
 }
 
-static void test_empty_messages() {
-  assertFrame(wlEncodeEmpty(frame, sizeof frame, WlType::Ping), VEC("ping", "000009"));
-  assertFrame(wlEncodeEmpty(frame, sizeof frame, WlType::Restart), VEC("restart", "00000a"));
-  assertFrame(wlEncodeEmpty(frame, sizeof frame, WlType::Release), VEC("release", "00000b"));
+static void test_fields_and_messages_from_a_newer_build_are_ignored() {
+  // ToRow{quiet{on: true, <field 15>: 7}} — a field this build does not know.
+  const uint8_t newerField[] = {0x06, 0x1A, 0x04, 0x08, 0x01, 0x78, 0x07};
+  WlRowReader r;
+  r.feed(newerField, sizeof newerField);
+  wl_ToRow d = wl_ToRow_init_zero;
+  TEST_ASSERT_TRUE(r.decode(wl_ToRow_fields, &d));
+  TEST_ASSERT_EQUAL(wl_ToRow_quiet_tag, d.which_body);
+  TEST_ASSERT_TRUE(d.body.quiet.on);
+  r.pop();
+
+  // ToRow{<member 30>: {}} — a message this build does not know: nothing to act on.
+  const uint8_t newerMessage[] = {0x03, 0xF2, 0x01, 0x00};
+  r.feed(newerMessage, sizeof newerMessage);
+  d = wl_ToRow_init_zero;
+  TEST_ASSERT_TRUE(r.decode(wl_ToRow_fields, &d));
+  TEST_ASSERT_EQUAL(0, d.which_body);
 }
 
-// ---- rules of the format --------------------------------------------------------
+// ---- stream reader ---------------------------------------------------------------------
 
-static void test_a_field_over_its_limit_fails_the_frame() {
-  WlShow m;
-  memset(m.text, 'A', WL_TEXT_MAX);
-  m.text[WL_TEXT_MAX] = 0;
-  TEST_ASSERT_NOT_EQUAL(0, wlEncodeShow(frame, sizeof frame, m));
-
-  // One character over the row limit, sent by a peer that does not enforce it.
-  uint8_t over[32] = {0, 0, 0, 94, 0, 0, 0, 0, 80, (uint8_t)(WL_TEXT_MAX + 1)};
-  WlShow d;
-  TEST_ASSERT_FALSE(wlDecodeShow(over, 10 + WL_TEXT_MAX + 1, d));
-  TEST_ASSERT_EQUAL_STRING("", d.text);
-
-  WlOp op;
-  op.argsLen = WL_OP_ARGS_MAX + 1;
-  TEST_ASSERT_EQUAL(0, wlEncodeOp(frame, sizeof frame, op));
+static size_t twoMessages(uint8_t* out, size_t cap) {
+  wl_ToRow a = wl_ToRow_init_zero;
+  a.which_body = wl_ToRow_quiet_tag;
+  a.body.quiet.on = true;
+  size_t n = wlEncodeToRow(out, cap, a);
+  wl_ToRow b = wl_ToRow_init_zero;
+  b.which_body = wl_ToRow_show_tag;
+  b.body.show.render_id = 9;
+  strcpy(b.body.show.text, "HELLO");
+  return n + wlEncodeToRow(out + n, cap - n, b);
 }
 
-static void test_a_frame_that_does_not_fit_is_not_built() {
-  WlHello m;
-  strcpy(m.id, "split-flap-261bb6");
-  uint8_t small[16];
-  TEST_ASSERT_EQUAL(0, wlEncodeHello(small, sizeof small, m));
-  TEST_ASSERT_EQUAL(0, wlEncodeEmpty(small, 2, WlType::Ping));
-}
-
-static void test_a_cut_message_fails_to_decode() {
-  WlStatus m;
-  size_t n = wlEncodeStatus(frame, sizeof frame, m);
-  WlStatus d;
-  TEST_ASSERT_FALSE(wlDecodeStatus(payload(), payloadLen(n) - 1, d));
-  WlPong p;
-  TEST_ASSERT_FALSE(wlDecodePong(payload(), 1, p));
-}
-
-static void test_a_message_may_grow_at_its_end() {
-  WlPong m;
-  m.rxCount = 7;
-  size_t n = wlEncodePong(frame, sizeof frame, m);
-  frame[n] = 0xAB;      // a field a later build added
-  frame[n + 1] = 0xCD;
-  WlPong d;
-  TEST_ASSERT_TRUE(wlDecodePong(payload(), payloadLen(n) + 2, d));
-  TEST_ASSERT_EQUAL(7, d.rxCount);
-}
-
-static void test_op_state_data_cannot_reach_past_the_payload() {
-  // dataLen says 3, one byte follows.
-  const uint8_t p[] = {0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 3, 0xAA};
-  WlOpState d;
-  TEST_ASSERT_FALSE(wlDecodeOpState(p, sizeof p, d));
-}
-
-static void test_master_and_row_types_do_not_overlap() {
-  TEST_ASSERT_TRUE(wlTypeFromMaster((uint8_t)WlType::Show));
-  TEST_ASSERT_TRUE(wlTypeFromMaster((uint8_t)WlType::Release));
-  TEST_ASSERT_FALSE(wlTypeFromMaster((uint8_t)WlType::Hello));
-  TEST_ASSERT_FALSE(wlTypeFromMaster((uint8_t)WlType::Pong));
-}
-
-// ---- stream decoder ---------------------------------------------------------------
-
-static void test_decoder_reassembles_frames_fed_one_byte_at_a_time() {
+static void test_reader_reassembles_messages_fed_one_byte_at_a_time() {
   uint8_t stream[64];
-  WlPong p;
-  p.rxCount = 1;
-  size_t n = wlEncodePong(stream, sizeof stream, p);
-  WlQuiet q;
-  q.on = 1;
-  n += wlEncodeQuiet(stream + n, sizeof stream - n, q);
-
-  WlDecoder dec;
-  int frames = 0;
-  uint8_t types[2] = {0, 0};
+  const size_t n = twoMessages(stream, sizeof stream);
+  WlRowReader r;
+  int seen = 0;
+  pb_size_t which[2] = {0, 0};
   for (size_t i = 0; i < n; i++) {
-    TEST_ASSERT_EQUAL(1, dec.feed(stream + i, 1));
-    while (dec.peek() == WlFeed::Frame) {
-      types[frames++] = dec.type();
-      dec.pop();
+    TEST_ASSERT_EQUAL(1, r.feed(stream + i, 1));
+    while (r.peek() == WlFeed::Message) {
+      wl_ToRow d = wl_ToRow_init_zero;
+      TEST_ASSERT_TRUE(r.decode(wl_ToRow_fields, &d));
+      which[seen++] = d.which_body;
+      r.pop();
     }
   }
-  TEST_ASSERT_EQUAL(2, frames);
-  TEST_ASSERT_EQUAL((uint8_t)WlType::Pong, types[0]);
-  TEST_ASSERT_EQUAL((uint8_t)WlType::Quiet, types[1]);
-  TEST_ASSERT_EQUAL(0, dec.have);
+  TEST_ASSERT_EQUAL(2, seen);
+  TEST_ASSERT_EQUAL(wl_ToRow_quiet_tag, which[0]);
+  TEST_ASSERT_EQUAL(wl_ToRow_show_tag, which[1]);
+  TEST_ASSERT_EQUAL(0, r.have);
 }
 
-static void test_decoder_takes_two_frames_from_one_read() {
+static void test_reader_takes_two_messages_from_one_read() {
   uint8_t stream[64];
-  size_t n = wlEncodeEmpty(stream, sizeof stream, WlType::Ping);
-  WlShown s;
-  s.renderId = 9;
-  n += wlEncodeShown(stream + n, sizeof stream - n, s);
-  WlDecoder dec;
-  TEST_ASSERT_EQUAL(n, dec.feed(stream, n));
-  TEST_ASSERT_EQUAL(WlFeed::Frame, dec.peek());
-  TEST_ASSERT_EQUAL(0, dec.payloadLen());
-  dec.pop();
-  TEST_ASSERT_EQUAL(WlFeed::Frame, dec.peek());
-  WlShown d;
-  TEST_ASSERT_TRUE(wlDecodeShown(dec.payload(), dec.payloadLen(), d));
-  TEST_ASSERT_EQUAL_UINT32(9, d.renderId);
-  dec.pop();
-  TEST_ASSERT_EQUAL(WlFeed::NeedMore, dec.peek());
+  const size_t n = twoMessages(stream, sizeof stream);
+  WlRowReader r;
+  TEST_ASSERT_EQUAL(n, r.feed(stream, n));
+  TEST_ASSERT_EQUAL(WlFeed::Message, r.peek());
+  r.pop();
+  wl_ToRow d = wl_ToRow_init_zero;
+  TEST_ASSERT_TRUE(r.decode(wl_ToRow_fields, &d));
+  TEST_ASSERT_EQUAL_STRING("HELLO", d.body.show.text);
+  r.pop();
+  TEST_ASSERT_EQUAL(WlFeed::NeedMore, r.peek());
 }
 
-static void test_decoder_rejects_a_length_over_the_maximum() {
-  const uint8_t bad[] = {0x02, 0x01, (uint8_t)WlType::Show};  // 513
-  WlDecoder dec;
-  dec.feed(bad, sizeof bad);
-  TEST_ASSERT_EQUAL(WlFeed::Bad, dec.peek());
+static void test_reader_rejects_a_length_over_the_maximum() {
+  WlRowReader r;
+  const uint8_t tooLong[] = {(uint8_t)(wl_ToRow_size + 1)};
+  r.feed(tooLong, 1);
+  TEST_ASSERT_EQUAL(WlFeed::Bad, r.peek());
+
+  WlRowReader endless;
+  const uint8_t noEnd[] = {0x80, 0x80, 0x80};  // a length that never finishes
+  endless.feed(noEnd, sizeof noEnd);
+  TEST_ASSERT_EQUAL(WlFeed::Bad, endless.peek());
 }
 
-static void test_decoder_holds_a_frame_of_the_maximum_size() {
-  static uint8_t big[WL_MAX_FRAME + 8];
-  big[0] = (uint8_t)(WL_MAX_PAYLOAD >> 8);
-  big[1] = (uint8_t)WL_MAX_PAYLOAD;
-  big[2] = (uint8_t)WlType::LogLine;
-  WlDecoder dec;
-  // The buffer stops at one full frame; the rest waits for pop().
-  TEST_ASSERT_EQUAL(WL_MAX_FRAME, dec.feed(big, sizeof big));
-  TEST_ASSERT_EQUAL(WlFeed::Frame, dec.peek());
-  dec.pop();
-  TEST_ASSERT_EQUAL(0, dec.have);
-}
-
-static void test_decoder_passes_an_unknown_type_through() {
-  const uint8_t unknown[] = {0x00, 0x01, 200, 0x55};
-  WlDecoder dec;
-  dec.feed(unknown, sizeof unknown);
-  TEST_ASSERT_EQUAL(WlFeed::Frame, dec.peek());
-  TEST_ASSERT_EQUAL(200, dec.type());
-}
-
-// ---- link clock ---------------------------------------------------------------------
-
-static void test_clock_trusts_the_shortest_round_trip() {
-  WlClockSync c;
-  TEST_ASSERT_FALSE(c.valid());
-  c.add(1000, 1300, 51150);  // 300 ms round trip
-  c.add(2000, 2004, 52002);  // 4 ms: offset 50000
-  c.add(3000, 3700, 53100);  // 700 ms
-  TEST_ASSERT_TRUE(c.valid());
-  TEST_ASSERT_EQUAL_INT32(50000, c.offsetMs());
-  TEST_ASSERT_EQUAL_UINT32(10000, c.toRowMs(60000));
-  TEST_ASSERT_EQUAL_UINT32(60000, c.toMasterMs(10000));
-}
-
-static void test_clock_survives_the_millisecond_counter_wrapping() {
-  WlClockSync c;
-  // Row clock just before its wrap, master clock just after its own.
-  c.add(0xFFFFFFF0u, 0xFFFFFFF4u, 0x00000010u);
-  const uint32_t at = c.toRowMs(0x00000100u);
-  TEST_ASSERT_EQUAL_INT32(0xEE, wlMsUntil(at, 0xFFFFFFF4u));
-  TEST_ASSERT_TRUE(wlMsUntil(at, at + 5) < 0);  // already past: flip now
-}
-
-static void test_clock_forgets_samples_older_than_its_window() {
-  WlClockSync c;
-  c.add(0, 1, 1000);  // a perfect sample of an offset that then changes
-  for (uint32_t i = 1; i <= WL_CLOCK_SAMPLES; i++) c.add(i * 100, i * 100 + 10, i * 100 + 5 + 5000);
-  TEST_ASSERT_EQUAL_INT32(5000, c.offsetMs());
-}
-
-// The round trips recorded on the live row: single ones reach hundreds of ms,
-// the estimate holds to a few.
-static void test_clock_on_the_recorded_round_trips() {
-  const size_t n = sizeof(ROUND_TRIPS_560) / sizeof(ROUND_TRIPS_560[0]);
-  WlClockSync c;
-  int32_t lo = 0, hi = 0, rawLo = 0, rawHi = 0;
-  bool first = true;
-  for (size_t i = 0; i < n; i++) {
-    const RoundTrip& r = ROUND_TRIPS_560[i];
-    c.add(r.sentMs, r.sentMs + r.rttMs, r.peerMs);
-    const int32_t raw = (int32_t)(r.peerMs - (r.sentMs + r.rttMs / 2));
-    if (i == 0 || raw < rawLo) rawLo = raw;
-    if (i == 0 || raw > rawHi) rawHi = raw;
-    if (i + 1 < WL_CLOCK_SAMPLES) continue;
-    const int32_t est = c.offsetMs();
-    if (first || est < lo) lo = est;
-    if (first || est > hi) hi = est;
-    first = false;
+static void test_reader_stops_taking_bytes_when_full_and_resumes_after_pop() {
+  static uint8_t stream[2 * (WL_PREFIX_MAX + wl_ToMaster_size)];
+  wl_ToMaster m = wl_ToMaster_init_zero;
+  m.which_body = wl_ToMaster_log_line_tag;
+  m.body.log_line.text.size = sizeof(m.body.log_line.text.bytes);
+  memset(m.body.log_line.text.bytes, 'x', sizeof(m.body.log_line.text.bytes));
+  size_t one = wlEncodeToMaster(stream, sizeof stream, m);
+  size_t n = one + wlEncodeToMaster(stream + one, sizeof stream - one, m);
+  static WlMasterReader r;
+  r.reset();
+  size_t fed = 0;
+  int seen = 0;
+  for (int guard = 0; guard < 8 && fed < n; guard++) {
+    fed += r.feed(stream + fed, n - fed);
+    while (r.peek() == WlFeed::Message) {
+      seen++;
+      r.pop();
+    }
   }
-  TEST_ASSERT_TRUE(n >= 400);
-  TEST_ASSERT_TRUE(rawHi - rawLo > 100);
-  TEST_ASSERT_TRUE(hi - lo <= 4);
+  TEST_ASSERT_EQUAL(n, fed);
+  TEST_ASSERT_EQUAL(2, seen);
 }
 
-// ---- pacing ---------------------------------------------------------------------------
+static void test_a_message_that_does_not_parse_can_be_skipped() {
+  // Right length, body is not a valid message (a field cut short).
+  const uint8_t garbage[] = {0x02, 0x12, 0x7F};
+  uint8_t stream[32];
+  memcpy(stream, garbage, sizeof garbage);
+  wl_ToRow ok = wl_ToRow_init_zero;
+  ok.which_body = wl_ToRow_ping_tag;
+  size_t n = sizeof garbage + wlEncodeToRow(stream + sizeof garbage, sizeof stream - sizeof garbage, ok);
+  WlRowReader r;
+  r.feed(stream, n);
+  wl_ToRow d = wl_ToRow_init_zero;
+  TEST_ASSERT_EQUAL(WlFeed::Message, r.peek());
+  TEST_ASSERT_FALSE(r.decode(wl_ToRow_fields, &d));
+  r.pop();
+  TEST_ASSERT_TRUE(r.decode(wl_ToRow_fields, &d));
+  TEST_ASSERT_EQUAL(wl_ToRow_ping_tag, d.which_body);
+}
 
-static void test_pacer_stops_at_four_unanswered_frames() {
-  WlPacer p;
-  for (int i = 0; i < WL_MAX_UNANSWERED; i++) {
-    TEST_ASSERT_TRUE(p.canSend());
-    p.onSent();
+// ---- unit facts in pieces -----------------------------------------------------------------
+
+static char doc[1300];
+static char rebuilt[1400];
+
+static void makeDoc() {
+  for (size_t i = 0; i < sizeof doc; i++) doc[i] = (char)('a' + i % 26);
+}
+
+static void test_a_document_travels_in_pieces_and_comes_back_whole() {
+  makeDoc();
+  WlDocAssembler a(rebuilt, sizeof rebuilt);
+  static wl_ToMaster m;
+  static wl_ToMaster d;
+  uint32_t offset = 0;
+  int pieces = 0;
+  WlDocAssembler::Result res = WlDocAssembler::Result::Partial;
+  while (offset < sizeof doc) {
+    offset = wlUnitsPiece(m, 7, doc, sizeof doc, offset);
+    size_t n = wlEncodeToMaster(wire, sizeof wire, m);
+    TEST_ASSERT_NOT_EQUAL(0, n);
+    static WlMasterReader r;
+    r.reset();
+    r.feed(wire, n);
+    TEST_ASSERT_TRUE(r.decode(wl_ToMaster_fields, &d));
+    res = a.add(d.body.units_json);
+    pieces++;
+    TEST_ASSERT_TRUE(res != WlDocAssembler::Result::Rejected);
   }
-  TEST_ASSERT_FALSE(p.canSend());
-  p.onRxCount(1);
-  TEST_ASSERT_TRUE(p.canSend());
-  TEST_ASSERT_EQUAL(3, p.outstanding());
-  p.onRxCount(4);
-  TEST_ASSERT_EQUAL(0, p.outstanding());
+  TEST_ASSERT_EQUAL(3, pieces);  // 480 + 480 + 340
+  TEST_ASSERT_TRUE(res == WlDocAssembler::Result::Complete);
+  TEST_ASSERT_EQUAL(sizeof doc, strlen(rebuilt));
+  TEST_ASSERT_EQUAL_MEMORY(doc, rebuilt, sizeof doc);
 }
 
-static void test_pacer_ignores_a_count_that_goes_backwards_or_ahead() {
-  WlPacer p;
-  for (int i = 0; i < 3; i++) p.onSent();
-  p.onRxCount(2);
-  p.onRxCount(1);   // an older frame that crossed
-  TEST_ASSERT_EQUAL(1, p.outstanding());
-  p.onRxCount(9);   // more than was ever sent
-  TEST_ASSERT_EQUAL(1, p.outstanding());
+static void test_a_piece_out_of_order_or_from_another_document_drops_it() {
+  makeDoc();
+  static wl_ToMaster first, second, other;
+  wlUnitsPiece(first, 7, doc, sizeof doc, 0);
+  wlUnitsPiece(second, 7, doc, sizeof doc, 480);
+  wlUnitsPiece(other, 8, doc, sizeof doc, 480);
+
+  WlDocAssembler a(rebuilt, sizeof rebuilt);
+  TEST_ASSERT_TRUE(a.add(second.body.units_json) == WlDocAssembler::Result::Rejected);  // no start
+  TEST_ASSERT_TRUE(a.add(first.body.units_json) == WlDocAssembler::Result::Partial);
+  TEST_ASSERT_TRUE(a.add(other.body.units_json) == WlDocAssembler::Result::Rejected);   // other document
+  TEST_ASSERT_TRUE(a.add(second.body.units_json) == WlDocAssembler::Result::Rejected);  // dropped: needs a new start
+  TEST_ASSERT_TRUE(a.add(first.body.units_json) == WlDocAssembler::Result::Partial);
+  TEST_ASSERT_TRUE(a.add(first.body.units_json) == WlDocAssembler::Result::Partial);    // a restart is a new start
+  TEST_ASSERT_TRUE(a.add(second.body.units_json) == WlDocAssembler::Result::Partial);
 }
 
-static void test_pacer_counts_across_the_counter_wrap() {
-  WlPacer p;
-  p.sent = 65534;
-  p.handled = 65534;
-  p.onSent();
-  p.onSent();
-  p.onSent();  // sent == 1
-  TEST_ASSERT_EQUAL(3, p.outstanding());
-  p.onRxCount(0);
-  TEST_ASSERT_EQUAL(1, p.outstanding());
+static void test_a_document_larger_than_the_buffer_or_lying_about_its_size_is_refused() {
+  makeDoc();
+  static wl_ToMaster m;
+  wlUnitsPiece(m, 1, doc, sizeof doc, 0);
+  char tiny[64];
+  WlDocAssembler small(tiny, sizeof tiny);
+  TEST_ASSERT_TRUE(small.add(m.body.units_json) == WlDocAssembler::Result::Rejected);
+
+  WlDocAssembler exact(rebuilt, sizeof doc);  // no room for the terminator
+  TEST_ASSERT_TRUE(exact.add(m.body.units_json) == WlDocAssembler::Result::Rejected);
+
+  WlDocAssembler a(rebuilt, sizeof rebuilt);
+  m.body.units_json.total = 100;  // 480 bytes of data in a 100-byte document
+  TEST_ASSERT_TRUE(a.add(m.body.units_json) == WlDocAssembler::Result::Rejected);
+  m.body.units_json.total = 0;
+  TEST_ASSERT_TRUE(a.add(m.body.units_json) == WlDocAssembler::Result::Rejected);
 }
 
-static void test_pacer_holds_pings_while_a_job_runs_or_frames_are_out() {
-  WlPacer p;
-  TEST_ASSERT_TRUE(p.canPing(false));
-  TEST_ASSERT_FALSE(p.canPing(true));
-  p.onSent();
-  TEST_ASSERT_FALSE(p.canPing(false));
-  p.onConnect();
-  TEST_ASSERT_TRUE(p.canPing(false));
+static void test_a_short_document_is_complete_in_one_piece() {
+  const char* small = "{\"width\":0,\"faulty\":0,\"units\":[]}";
+  static wl_ToMaster m;
+  TEST_ASSERT_EQUAL(strlen(small), wlUnitsPiece(m, 3, small, strlen(small), 0));
+  WlDocAssembler a(rebuilt, sizeof rebuilt);
+  TEST_ASSERT_TRUE(a.add(m.body.units_json) == WlDocAssembler::Result::Complete);
+  TEST_ASSERT_EQUAL_STRING(small, rebuilt);
 }
 
 int main(int, char**) {
   UNITY_BEGIN();
-  RUN_TEST(test_hello);
-  RUN_TEST(test_welcome);
-  RUN_TEST(test_time_request_and_reply);
-  RUN_TEST(test_show_and_shown);
-  RUN_TEST(test_quiet_config_logctl);
-  RUN_TEST(test_op_and_its_state);
-  RUN_TEST(test_update);
-  RUN_TEST(test_status_event_logline_pong);
-  RUN_TEST(test_empty_messages);
-  RUN_TEST(test_a_field_over_its_limit_fails_the_frame);
-  RUN_TEST(test_a_frame_that_does_not_fit_is_not_built);
-  RUN_TEST(test_a_cut_message_fails_to_decode);
-  RUN_TEST(test_a_message_may_grow_at_its_end);
-  RUN_TEST(test_op_state_data_cannot_reach_past_the_payload);
-  RUN_TEST(test_master_and_row_types_do_not_overlap);
-  RUN_TEST(test_decoder_reassembles_frames_fed_one_byte_at_a_time);
-  RUN_TEST(test_decoder_takes_two_frames_from_one_read);
-  RUN_TEST(test_decoder_rejects_a_length_over_the_maximum);
-  RUN_TEST(test_decoder_holds_a_frame_of_the_maximum_size);
-  RUN_TEST(test_decoder_passes_an_unknown_type_through);
-  RUN_TEST(test_clock_trusts_the_shortest_round_trip);
-  RUN_TEST(test_clock_survives_the_millisecond_counter_wrapping);
-  RUN_TEST(test_clock_forgets_samples_older_than_its_window);
-  RUN_TEST(test_clock_on_the_recorded_round_trips);
-  RUN_TEST(test_pacer_stops_at_four_unanswered_frames);
-  RUN_TEST(test_pacer_ignores_a_count_that_goes_backwards_or_ahead);
-  RUN_TEST(test_pacer_counts_across_the_counter_wrap);
-  RUN_TEST(test_pacer_holds_pings_while_a_job_runs_or_frames_are_out);
+  RUN_TEST(test_hello_round_trip_and_bytes);
+  RUN_TEST(test_show_round_trip_and_bytes);
+  RUN_TEST(test_update_and_op_round_trip_and_bytes);
+  RUN_TEST(test_status_with_a_negative_signal_and_empty_messages);
+  RUN_TEST(test_the_row_only_ever_buffers_a_small_message);
+  RUN_TEST(test_every_message_at_its_largest_fits_its_reader);
+  RUN_TEST(test_a_text_longer_than_a_row_is_refused_on_decode);
+  RUN_TEST(test_a_message_that_does_not_fit_is_not_encoded);
+  RUN_TEST(test_fields_and_messages_from_a_newer_build_are_ignored);
+  RUN_TEST(test_reader_reassembles_messages_fed_one_byte_at_a_time);
+  RUN_TEST(test_reader_takes_two_messages_from_one_read);
+  RUN_TEST(test_reader_rejects_a_length_over_the_maximum);
+  RUN_TEST(test_reader_stops_taking_bytes_when_full_and_resumes_after_pop);
+  RUN_TEST(test_a_message_that_does_not_parse_can_be_skipped);
+  RUN_TEST(test_a_document_travels_in_pieces_and_comes_back_whole);
+  RUN_TEST(test_a_piece_out_of_order_or_from_another_document_drops_it);
+  RUN_TEST(test_a_document_larger_than_the_buffer_or_lying_about_its_size_is_refused);
+  RUN_TEST(test_a_short_document_is_complete_in_one_piece);
   return UNITY_END();
 }
