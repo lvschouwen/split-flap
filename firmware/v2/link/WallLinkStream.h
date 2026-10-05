@@ -36,6 +36,12 @@ inline size_t wlEncodeToMaster(uint8_t* out, size_t cap, const wl_ToMaster& m) {
   return wlEncode(out, cap, wl_ToMaster_fields, &m);
 }
 
+// An empty message to fill in. (Assigning the generated *_init_zero list to an
+// existing struct does not compile on the ESP8266 toolchain; every field of a
+// proto3 message starts at zero, so this is the same thing.)
+inline void wlClear(wl_ToRow& m) { memset(&m, 0, sizeof(m)); }
+inline void wlClear(wl_ToMaster& m) { memset(&m, 0, sizeof(m)); }
+
 enum class WlFeed : uint8_t { NeedMore, Message, Bad };
 
 // Collects one direction's messages. MaxBody is the generated maximum encoded
@@ -112,7 +118,7 @@ using WlMasterReader = WlReader<wl_ToMaster_size>;  // on the master
 // returns the offset of the next piece (== total when this was the last).
 inline uint32_t wlUnitsPiece(wl_ToMaster& m, uint32_t docId, const char* doc, uint32_t total,
                              uint32_t offset) {
-  m = wl_ToMaster_init_zero;
+  wlClear(m);
   m.which_body = wl_ToMaster_units_json_tag;
   wl_UnitsJson& u = m.body.units_json;
   u.doc_id = docId;

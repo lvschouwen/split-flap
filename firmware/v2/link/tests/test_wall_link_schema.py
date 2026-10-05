@@ -34,31 +34,31 @@ def pb(tmp_path_factory):
         sys.path.remove(str(out))
 
 
+sys.path.insert(0, str(LINK))
+import wall_link_io  # noqa: E402
+
+frame = wall_link_io.frame
+
+
 def delimited(data: bytes) -> bytes:
     """One length-delimited message: returns its body, requires nothing after it."""
-    length, shift, pos = 0, 0, 0
-    while True:
-        byte = data[pos]
-        length |= (byte & 0x7F) << shift
-        pos += 1
-        shift += 7
-        if not byte & 0x80:
-            break
-    assert pos + length == len(data)
-    return data[pos:]
+    (body,) = wall_link_io.Splitter().feed(data)
+    assert frame_len(body) == len(data)
+    return body
 
 
-def frame(message) -> bytes:
-    body = message.SerializeToString()
-    assert len(body) < 128 or len(body) < 16384
-    prefix = bytearray()
-    n = len(body)
-    while True:
-        prefix.append((n & 0x7F) | (0x80 if n > 0x7F else 0))
-        n >>= 7
-        if not n:
-            break
-    return bytes(prefix) + body
+def frame_len(body: bytes) -> int:
+    return len(body) + (1 if len(body) < 128 else 2)
+
+
+def test_splitter_reassembles_messages_fed_one_byte_at_a_time():
+    stream = VEC["hello"] + VEC["ping"] + VEC["status"]
+    splitter, bodies = wall_link_io.Splitter(), []
+    for i in range(len(stream)):
+        bodies += splitter.feed(stream[i:i + 1])
+    assert len(bodies) == 3 and splitter.buf == b""
+    with pytest.raises(ValueError):
+        wall_link_io.Splitter().feed(bytes([0xFF, 0x7F]))  # 16383 bytes
 
 
 def test_the_native_test_carries_the_vectors_this_file_checks():
