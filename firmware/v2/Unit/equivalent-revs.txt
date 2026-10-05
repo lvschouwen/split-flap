@@ -82,3 +82,8 @@ d360e2b da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
 # 10292ed: the bundle rev while the units still ran d360e2b's image (quiet
 # flag, crash-count wording: shared headers the unit does not compile).
 10292ed da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
+#
+# 8fe5d6a: the bundle rev since the crash-count wording change; unit 1 of the
+# ESP-01 row was reflashed from it and reports it. Recorded when the unit
+# facts gained the offset (#564), a shared header the unit does not compile.
+8fe5d6a da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810

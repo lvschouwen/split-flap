@@ -520,6 +520,11 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
       // report status but run pre-odometer firmware (#231).
       UNIT_HEALTH_APPEND(",\"odo\":%lu", (unsigned long)u.odometer);
     }
+    if (u.offsetValid) {
+      // Calibration offset in steps, own valid flag like "odo": the value the
+      // probe read, patched in place by a verified write.
+      UNIT_HEALTH_APPEND(",\"ofs\":%d", (int)u.offset);
+    }
     if (u.diagValid) {
       // Drift block (#263/#264), own valid flag like "odo": event count +
       // last magnitude always; "dp" only while a re-home is pending; "phys"

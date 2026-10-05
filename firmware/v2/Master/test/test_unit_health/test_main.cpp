@@ -396,6 +396,25 @@ static void test_health_json_odometer_emitted_when_valid() {
   TEST_ASSERT_NULL(strstr(second, "\"odo\""));
 }
 
+static void test_health_json_offset_emitted_when_valid() {
+  // The calibration offset rides its own valid flag, like "odo": a unit
+  // whose offset read failed has no "ofs" key rather than a phantom 0.
+  UnitFacts units[2];
+  units[0].state = 1;
+  units[0].statusValid = true;
+  units[0].offset = -12;
+  units[0].offsetValid = true;
+  units[1].state = 1;
+  units[1].statusValid = true;
+  char buf[512];
+  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 0);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"ofs\":-12"));
+  char* second = strstr(buf, "\"i\":1");
+  TEST_ASSERT_NOT_NULL(second);
+  TEST_ASSERT_NULL(strstr(second, "\"ofs\""));
+}
+
 // --- odometer readback (SFP_CMD_GET_ODOMETER, #231) --------------------------
 
 static void test_odometer_readback_valid_roundtrip() {
@@ -589,6 +608,8 @@ static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
     units[i].status.lastHomingStepCount = 65520;
     units[i].odometer = 0xFFFFFFFEUL;  // widest possible "odo" field (#231)
     units[i].odometerValid = true;
+    units[i].offset = -32768;  // widest "ofs" field
+    units[i].offsetValid = true;
     units[i].diagValid = true;         // widest drift block (#263/#264)
     units[i].physLetter = 44;
     units[i].driftFlags = 0x03;
@@ -877,6 +898,8 @@ static void test_health_json_combined_splices_fit_cap() {
     units[i].status.lastHomingStepCount = 65520;
     units[i].odometer = 0xFFFFFFFEUL;
     units[i].odometerValid = true;
+    units[i].offset = -32768;  // widest "ofs" field
+    units[i].offsetValid = true;
     units[i].diagValid = true;
     units[i].physLetter = 44;
     units[i].driftFlags = 0x03;
@@ -1200,6 +1223,7 @@ int main(int, char**) {
   RUN_TEST(test_freshness_survives_a_real_miss_streak);
   RUN_TEST(test_freshness_gap_slot_never_stale);
   RUN_TEST(test_health_json_odometer_emitted_when_valid);
+  RUN_TEST(test_health_json_offset_emitted_when_valid);
   RUN_TEST(test_odometer_readback_valid_roundtrip);
   RUN_TEST(test_odometer_readback_rejects_old_firmware_garbage);
   RUN_TEST(test_diag_readback_valid_roundtrip);

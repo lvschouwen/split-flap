@@ -113,6 +113,7 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"hs",     "last homing step count"},
   {"ae",     "1 = I2C address came from EEPROM, not DIP"},
   {"odo",    "drum revolution odometer"},
+  {"ofs",    "calibration offset in steps"},
   {"de",     "drift events since boot"},
   {"ds",     "last drift magnitude in steps"},
   {"dp",     "1 = a drift re-home is pending"},

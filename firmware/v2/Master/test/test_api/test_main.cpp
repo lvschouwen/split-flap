@@ -51,6 +51,8 @@ static void fullyPopulated(UnitFacts& u) {
   u.status.lastHomingStepCount = 720;
   u.odometer = 123456;
   u.odometerValid = true;
+  u.offset = -12;
+  u.offsetValid = true;
   u.physLetter = 12;
   u.driftFlags = UNIT_DRIFT_FLAG_PENDING | UNIT_DRIFT_FLAG_POSITION_KNOWN;
   u.driftEvents = 4;
