@@ -35,7 +35,8 @@ def test_own_server_probe_needs_an_answered_request():
     assert 'memcmp(head, "HTTP/", 5) == 0' in probe
     tick = code[code.index("void netLivenessProbeTick()"):]
     assert "tcpProbe(gateway, 80, nullptr, gwStep)" in tick
-    assert re.search(r'tcpProbe\(self, 80,\s*"GET ', tick)
+    assert "tcpProbe(self, 80, kRequest, ownStep)" in tick
+    assert re.search(r'kRequest\[\] =\s*"GET ', tick)
 
 
 def test_probes_run_on_the_cluster_task_only():

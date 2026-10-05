@@ -20,6 +20,7 @@ std::atomic<bool> everProbed{false};
 // alone does not say whether the connect, the send or the reply was missing.
 std::atomic<uint8_t> selfStep{0};
 std::atomic<int> selfErrno{0};
+std::atomic<bool> selfViaLoopback{false};
 
 enum ProbeStep : uint8_t {
   STEP_OK = 0,
@@ -140,10 +141,23 @@ void netLivenessProbeTick() {
   NetProbe gw = tcpProbe(gateway, 80, nullptr, gwStep);
   // A path nothing serves: the 404 comes from the web server's own task, so
   // it proves that task runs — at the cost of the smallest reply there is.
-  NetProbe own = tcpProbe(self, 80,
-                          "GET /net-liveness HTTP/1.0\r\n"
-                          "Connection: close\r\n\r\n",
-                          ownStep);
+  static const char kRequest[] =
+      "GET /net-liveness HTTP/1.0\r\nConnection: close\r\n\r\n";
+  // The server listens on every address. Its station address is the honest
+  // target; where the stack does not loop that back, the loopback interface
+  // reaches the same listener and the same task.
+  NetProbe own = tcpProbe(self, 80, kRequest, ownStep);
+  bool viaLoopback = false;
+  if (own == NetProbe::Fail && ownStep == STEP_CONNECT) {
+    uint8_t loStep = 0;
+    NetProbe lo = tcpProbe(IPAddress(127, 0, 0, 1), 80, kRequest, loStep);
+    if (lo == NetProbe::Ok || selfViaLoopback.load()) {
+      own = lo;
+      ownStep = loStep;
+      viaLoopback = true;
+    }
+  }
+  if (own == NetProbe::Ok) selfViaLoopback.store(viaLoopback);
   selfStep.store(ownStep);
   gatewayResult.store((uint8_t)gw);
   selfResult.store((uint8_t)own);
@@ -189,6 +203,8 @@ String netLivenessJson() {
   // an HTTP reply; selfErr = errno at that step.
   out += "\",\"selfStep\":";
   out += (unsigned)selfStep.load();
+  out += ",\"selfLo\":";
+  out += selfViaLoopback.load() ? "true" : "false";
   out += ",\"selfErr\":";
   out += selfErrno.load();
   out += ",\"strikes\":";
