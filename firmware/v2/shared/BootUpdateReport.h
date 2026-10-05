@@ -45,6 +45,9 @@ struct BootUpdateReport {
   uint8_t fuseHigh = 0xFF;
   uint8_t fuseExt = 0xFF;
   bool lockFuseReadable = true;  // false: the four bytes above mean nothing
+  // Only where lock and fuses are unreadable (#552): what the signature-row
+  // read returned for the three signature bytes. All 0xFF = not reported.
+  uint8_t sigRow[3] = {0xFF, 0xFF, 0xFF};
   uint32_t bootCrc32 = 0;
   uint8_t state = BOOT_STATE_UNKNOWN;   // BootSectionState
   uint8_t lastResult = BOOT_RESULT_NONE;  // BootUpdateResult
@@ -52,12 +55,22 @@ struct BootUpdateReport {
 
 // Byte layout: [0] lock, [1..3] fuse low/high/ext, [4..7] bootCrc32 LE,
 // [8] state, [9] lastResult, [10] XOR(buf[0..9]) ^ mask.
+//
+// With the unreadable flag set, [0] is 0xFF and [1..3] carry the signature-row
+// read instead (#552). A master predating that ignores all four, as it must.
 inline void bootInfoEncode(const BootUpdateReport& r,
                            uint8_t buf[BOOT_INFO_REPLY_LEN]) {
-  buf[0] = r.lockByte;
-  buf[1] = r.fuseLow;
-  buf[2] = r.fuseHigh;
-  buf[3] = r.fuseExt;
+  if (r.lockFuseReadable) {
+    buf[0] = r.lockByte;
+    buf[1] = r.fuseLow;
+    buf[2] = r.fuseHigh;
+    buf[3] = r.fuseExt;
+  } else {
+    buf[0] = 0xFF;
+    buf[1] = r.sigRow[0];
+    buf[2] = r.sigRow[1];
+    buf[3] = r.sigRow[2];
+  }
   buf[4] = (uint8_t)(r.bootCrc32 & 0xFF);
   buf[5] = (uint8_t)((r.bootCrc32 >> 8) & 0xFF);
   buf[6] = (uint8_t)((r.bootCrc32 >> 16) & 0xFF);
@@ -83,16 +96,35 @@ inline bool bootInfoDecode(const uint8_t buf[BOOT_INFO_REPLY_LEN],
   if (buf[8] > BOOT_STATE_LAST) return false;           // BootSectionState range
   uint8_t result = (uint8_t)(buf[9] & ~BOOT_INFO_FLAG_LOCKFUSE_UNREADABLE);
   if (result >= BOOT_RESULT_COUNT) return false;       // BootUpdateResult range
-  out.lockByte = buf[0];
-  out.fuseLow = buf[1];
-  out.fuseHigh = buf[2];
-  out.fuseExt = buf[3];
+  out.lockFuseReadable = (buf[9] & BOOT_INFO_FLAG_LOCKFUSE_UNREADABLE) == 0;
+  if (out.lockFuseReadable) {
+    out.lockByte = buf[0];
+    out.fuseLow = buf[1];
+    out.fuseHigh = buf[2];
+    out.fuseExt = buf[3];
+    out.sigRow[0] = out.sigRow[1] = out.sigRow[2] = 0xFF;
+  } else {
+    out.lockByte = out.fuseLow = out.fuseHigh = out.fuseExt = 0xFF;
+    out.sigRow[0] = buf[1];
+    out.sigRow[1] = buf[2];
+    out.sigRow[2] = buf[3];
+  }
   out.bootCrc32 = (uint32_t)buf[4] | ((uint32_t)buf[5] << 8) |
                   ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
   out.state = buf[8];
   out.lastResult = result;
-  out.lockFuseReadable = (buf[9] & BOOT_INFO_FLAG_LOCKFUSE_UNREADABLE) == 0;
   return true;
+}
+
+// Did the unit report a signature-row read at all, and is it the chip the
+// firmware is built for? A chip that ignores the read returns program bytes.
+inline bool bootSigRowReported(const BootUpdateReport& r) {
+  return !r.lockFuseReadable &&
+         !(r.sigRow[0] == 0xFF && r.sigRow[1] == 0xFF && r.sigRow[2] == 0xFF);
+}
+inline bool bootSigRowIsAtmega328p(const BootUpdateReport& r) {
+  return bootSigRowReported(r) && r.sigRow[0] == 0x1E && r.sigRow[1] == 0x95 &&
+         r.sigRow[2] == 0x0F;
 }
 
 // Some of the fielded Nanos do not serve lock and fuse bytes to application

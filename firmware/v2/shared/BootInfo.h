@@ -76,6 +76,19 @@ inline size_t buildBootInfoJson(char* buf, size_t cap, const BootInfoSlot& slot,
     n = BOOT_INFO_SNPRINTF(buf, cap,
                  "{\"state\":\"failed\",\"addr\":%u,\"reason\":\"read-fail\"}",
                  (unsigned)slot.addr);
+  } else if (bootSigRowReported(slot.report)) {
+    // #552: lock and fuses unreadable, with what the signature-row read gave.
+    const BootUpdateReport& r = slot.report;
+    n = BOOT_INFO_SNPRINTF(buf, cap,
+                 "{\"state\":\"ok\",\"addr\":%u,\"boot\":\"%s\","
+                 "\"crc32\":\"%08lx\",\"lockfuse\":\"unreadable\","
+                 "\"sigrow\":\"%02x%02x%02x\",\"sig\":\"%s\","
+                 "\"last\":\"%s\"}",
+                 (unsigned)slot.addr, bootInfoStateName(r.state),
+                 (unsigned long)r.bootCrc32, (unsigned)r.sigRow[0],
+                 (unsigned)r.sigRow[1], (unsigned)r.sigRow[2],
+                 bootSigRowIsAtmega328p(r) ? "ok" : "other",
+                 bootInfoResultName(r.lastResult));
   } else if (!slot.report.lockFuseReadable) {
     // #518: say so instead of printing placeholder bytes as lock and fuses.
     const BootUpdateReport& r = slot.report;

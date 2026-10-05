@@ -34,6 +34,16 @@ static void readLockAndFuses(BootUpdateReport& r) {
   for (uint8_t i = 0; i < 4; i++) flash0to3[i] = pgm_read_byte(i);
   if (bootLockFuseReadFellThrough(lock, low, high, ext, flash0to3)) {
     r.lockFuseReadable = false;  // the bytes keep their 0xFF placeholders
+    // Does this chip ignore every read through SPMCSR, or only that one? The
+    // signature row is read the same way under another flag (#552); the
+    // master names what comes back.
+    eeprom_busy_wait();
+    noInterrupts();
+    eeprom_busy_wait();
+    r.sigRow[0] = boot_signature_byte_get(0x0000);
+    r.sigRow[1] = boot_signature_byte_get(0x0002);
+    r.sigRow[2] = boot_signature_byte_get(0x0004);
+    interrupts();
     return;
   }
   r.lockFuseReadable = true;

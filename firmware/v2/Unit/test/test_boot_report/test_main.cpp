@@ -103,6 +103,70 @@ static void test_unreadable_flag_roundtrips_without_disturbing_the_result() {
   }
 }
 
+// #552: where lock and fuses are unreadable, three of their four bytes carry
+// what the signature-row read returned. The lock byte stays a placeholder.
+static void test_unreadable_report_carries_the_signature_row_read() {
+  BootUpdateReport in = sample();
+  in.lockFuseReadable = false;
+  in.sigRow[0] = 0x1E;
+  in.sigRow[1] = 0x95;
+  in.sigRow[2] = 0x0F;
+  uint8_t buf[BOOT_INFO_REPLY_LEN];
+  bootInfoEncode(in, buf);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, buf[0]);
+  TEST_ASSERT_EQUAL_HEX8(0x1E, buf[1]);
+  TEST_ASSERT_EQUAL_HEX8(0x95, buf[2]);
+  TEST_ASSERT_EQUAL_HEX8(0x0F, buf[3]);
+  BootUpdateReport out;
+  TEST_ASSERT_TRUE(bootInfoDecode(buf, out));
+  TEST_ASSERT_FALSE(out.lockFuseReadable);
+  TEST_ASSERT_TRUE(bootSigRowReported(out));
+  TEST_ASSERT_TRUE(bootSigRowIsAtmega328p(out));
+  // The signature bytes never read as lock or fuses.
+  TEST_ASSERT_EQUAL_HEX8(0xFF, out.lockByte);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, out.fuseLow);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, out.fuseHigh);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, out.fuseExt);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, bootEffectiveLockByte(out));
+}
+
+// A unit built before #552 sends 0xFF placeholders there: nothing reported.
+static void test_placeholders_are_not_a_signature_read() {
+  BootUpdateReport in = sample();
+  in.lockFuseReadable = false;
+  uint8_t buf[BOOT_INFO_REPLY_LEN];
+  bootInfoEncode(in, buf);
+  BootUpdateReport out;
+  TEST_ASSERT_TRUE(bootInfoDecode(buf, out));
+  TEST_ASSERT_FALSE(bootSigRowReported(out));
+  TEST_ASSERT_FALSE(bootSigRowIsAtmega328p(out));
+}
+
+// A unit that reads its fuses reports them, and no signature read.
+static void test_readable_report_carries_no_signature_row() {
+  BootUpdateReport in = sample();
+  in.sigRow[0] = 0x1E;  // set, but not what this report is for
+  uint8_t buf[BOOT_INFO_REPLY_LEN];
+  bootInfoEncode(in, buf);
+  TEST_ASSERT_EQUAL_HEX8(in.lockByte, buf[0]);
+  TEST_ASSERT_EQUAL_HEX8(in.fuseLow, buf[1]);
+  BootUpdateReport out;
+  TEST_ASSERT_TRUE(bootInfoDecode(buf, out));
+  TEST_ASSERT_TRUE(out.lockFuseReadable);
+  TEST_ASSERT_FALSE(bootSigRowReported(out));
+}
+
+// The chip answered the signature-row read with program bytes too.
+static void test_a_fallen_through_signature_read_is_not_the_signature() {
+  BootUpdateReport r = sample();
+  r.lockFuseReadable = false;
+  r.sigRow[0] = 0x0C;
+  r.sigRow[1] = 0xA2;
+  r.sigRow[2] = 0x0C;
+  TEST_ASSERT_TRUE(bootSigRowReported(r));
+  TEST_ASSERT_FALSE(bootSigRowIsAtmega328p(r));
+}
+
 static void test_readable_report_is_byte_identical_to_the_flagless_format() {
   // A unit that reads its fuses sends exactly what it sent before the flag
   // existed, so a master predating it still decodes that unit.
@@ -167,6 +231,10 @@ int main(int, char**) {
   RUN_TEST(test_out_of_range_state_rejected);
   RUN_TEST(test_out_of_range_result_rejected);
   RUN_TEST(test_unreadable_flag_roundtrips_without_disturbing_the_result);
+  RUN_TEST(test_unreadable_report_carries_the_signature_row_read);
+  RUN_TEST(test_placeholders_are_not_a_signature_read);
+  RUN_TEST(test_readable_report_carries_no_signature_row);
+  RUN_TEST(test_a_fallen_through_signature_read_is_not_the_signature);
   RUN_TEST(test_readable_report_is_byte_identical_to_the_flagless_format);
   RUN_TEST(test_flag_does_not_admit_an_out_of_range_result);
   RUN_TEST(test_fall_through_is_recognised_from_the_wall_values);
