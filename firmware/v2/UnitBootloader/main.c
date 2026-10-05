@@ -25,12 +25,24 @@
 
 #if (SF_NEW_TWIBOOT)
 /* Identity bytes (#541): compact identifier in the CMD_READ_VERSION response. */
-#define SF_INFO_VERSION         0x02
+#define SF_INFO_VERSION         0x03
 #define SF_INFO_CAP_DO_SPM      0x01
 #define SF_INFO_CAP_BOUNDED_PIN 0x02
+#define SF_INFO_CAP_CRASH_REC   0x04
 #define SF_INFO_CAP_FUSE_CHIP   0x08
 #define SF_INFO_CAPS            (SF_INFO_CAP_DO_SPM | SF_INFO_CAP_BOUNDED_PIN | \
-                                 SF_INFO_CAP_FUSE_CHIP)
+                                 SF_INFO_CAP_CRASH_REC | SF_INFO_CAP_FUSE_CHIP)
+
+/* Crash record (#542): two bytes at the top of RAM that both images leave
+ * alone by starting their stacks at CRASH_REC_STACK_TOP.  Every entry into
+ * twiboot is a hardware reset (WDT, external, power-on, brownout), which
+ * sets SP = RAMEND regardless of the application's SP — so init1 must write
+ * both SPH and SPL unconditionally. */
+#define CRASH_REC_A             (RAMEND - 1)   /* 0x08FE */
+#define CRASH_REC_B             RAMEND         /* 0x08FF */
+#define CRASH_REC_STACK_TOP     (RAMEND - 2)   /* 0x08FD */
+#define CRASH_REC_TAG           0xA0
+#define CRASH_REC_THRESHOLD     3
 #endif
 
 /* Split-flap patch: SF_NEW_TWIBOOT selects the lean second-generation image
@@ -250,6 +262,7 @@ static uint8_t boot_timeout = TIMER_MSEC2IRQCNT(TIMEOUT_MS);
 #endif
 static uint8_t cmd = CMD_WAIT;
 
+
 /* Split-flap patch: stay-alive-on-empty-flash.
  * If the application section is blank (first instruction word reads as
  * 0xFFFF, which is what an erased AVR flash byte pair looks like), we
@@ -421,6 +434,13 @@ static uint8_t TWI_data_write(uint8_t bcnt, uint8_t data)
                     if (data == BOOTTYPE_APPLICATION)
                     {
                         cmd = CMD_BOOT_APPLICATION;
+#if (SF_NEW_TWIBOOT)
+                        /* #542: invalidate the crash record so the app gets
+                         * fresh recovery attempts.  Writing 0 to CRASH_REC_A
+                         * suffices: tag check (0x00 & 0xF0 != 0xA0) fails,
+                         * and chipinfo byte 12 reads 0x00 & 0x0F = 0. */
+                        *(volatile uint8_t *)CRASH_REC_A = 0;
+#endif
                     }
 
                     ack = 0x00;
@@ -528,11 +548,13 @@ static uint8_t TWI_data_read(uint8_t bcnt)
              * Byte order matches the Z addresses: lfuse(0), lock(1),
              * efuse(2), hfuse(3). Old masters read 8 and STOP; new masters
              * read 12. */
-            bcnt %= 12;
+            bcnt %= 13;
             if (bcnt < sizeof(chipinfo))
                 data = chipinfo[bcnt];
-            else
+            else if (bcnt < 12)
                 data = boot_lock_fuse_bits_get((uint16_t)(bcnt - sizeof(chipinfo)));
+            else
+                data = *(volatile uint8_t *)CRASH_REC_A & 0x0F;
 #else
             bcnt %= sizeof(chipinfo);
             data = chipinfo[bcnt];
@@ -875,12 +897,23 @@ void init1(void)
   /* make sure r1 is 0x00 */
   asm volatile ("clr __zero_reg__");
 
+#if (SF_NEW_TWIBOOT)
+  /* #542: reserve 0x08FE/0x08FF for the crash record by starting the stack
+   * two bytes below RAMEND.  Every entry into twiboot is a hardware reset
+   * (the stage-1 update path ends with a WDT reset, and do_spm is a leaf
+   * that returns to the caller), so the hardware has already set
+   * SP = RAMEND.  We write both SPH and SPL unconditionally: the cost is
+   * 4 bytes over writing SPL alone, but it removes any dependency on the
+   * hardware reset value of SPH. */
+  SP = CRASH_REC_STACK_TOP;
+#else
   /* on some MCUs the stack pointer defaults NOT to RAMEND */
 #if defined(__AVR_ATmega8__) || defined(__AVR_ATmega8515__) || \
     defined(__AVR_ATmega8535__) || defined (__AVR_ATmega16__) || \
     defined (__AVR_ATmega32__) || defined (__AVR_ATmega64__)  || \
     defined (__AVR_ATmega128__) || defined (__AVR_ATmega162__)
   SP = RAMEND;
+#endif
 #endif
 } /* init1 */
 
@@ -939,6 +972,34 @@ int main(void)
     }
 
 #if (SF_NEW_TWIBOOT)
+    /* #542: crash record — two bytes at the top of SRAM that survive WDT
+     * resets because both images start their stacks at 0x08FD.  Only WDT
+     * resets carry history; every other reset source clears the count.
+     * Structured with forward gotos so all branches are short on AVR. */
+    {
+        uint8_t count = 0;
+        if (!(GPIOR0 & (1 << WDRF)))
+            goto crash_rec_write;
+        count = 1;
+        {
+            uint8_t a = *(volatile uint8_t *)CRASH_REC_A;
+            if ((uint8_t)(a ^ *(volatile uint8_t *)CRASH_REC_B) != 0xFF)
+                goto crash_rec_write;
+            if ((a & 0xF0) != CRASH_REC_TAG)
+                goto crash_rec_write;
+            count = a & 0x0F;
+            if (count < 15) count++;
+        }
+    crash_rec_write:
+        {
+            uint8_t rec = CRASH_REC_TAG | count;
+            *(volatile uint8_t *)CRASH_REC_A = rec;
+            *(volatile uint8_t *)CRASH_REC_B = (uint8_t)~rec;
+        }
+        if (count >= CRASH_REC_THRESHOLD)
+            app_installed = 0;
+    }
+
     boot_timeout = BOOT_TICKS(TIMEOUT_MS) + 1;
 #endif
 

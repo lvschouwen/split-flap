@@ -3,3 +3,4 @@
 *.raw
 *.o
 runtest
+crash_test

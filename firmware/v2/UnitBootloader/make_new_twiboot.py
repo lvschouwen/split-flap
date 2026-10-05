@@ -39,7 +39,8 @@ ABI_VERSION = 0x01                 # generation marker, at 0x7FFE..0x7FFF
 # Must match the Makefile's atmega328p CFLAGS_TARGET exactly so the lean build is
 # byte-reproducible the same way the fielded image is.
 CFLAGS = [
-    "-pipe", "-g", "-Os", "-mmcu=atmega328p", "-Wall",
+    "-pipe", "-g", "-Os", "-fno-reorder-blocks",
+    "-mmcu=atmega328p", "-Wall",
     "-fdata-sections", "-ffunction-sections",
     "-DBOOTLOADER_START=0x7C00",
     "-DF_CPU=16000000ULL", "-DTIMER_IRQFREQ_MS=16", "-DI2C_ADDRESS_BASE=1",
