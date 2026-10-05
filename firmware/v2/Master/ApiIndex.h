@@ -141,10 +141,11 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"dh",     "TWI register self-check re-inits since boot (unit deafness self-heals)"},
   {"bv",     "bootloader verdict: 1 expected image, 2 known other image or update step, 3 corrupt (faulty)"},
   {"bcrc",   "boot-section crc32 the unit reported, only when it is not the expected image"},
-  {"blv",    "unit sitting in its bootloader: 1 image without identity bytes, 255 not recognised, else the image version"},
-  {"blc",    "bootloader capability bits: 1 do_spm, 2 bounded pin, 8 fuse bytes in chipinfo"},
-  {"blk",    "lock byte read from the bootloader (hex), only when the chip serves it"},
-  {"blf",    "low, high, extended fuse read from the bootloader (hex), only when the chip serves them"},
+  {"blv",    "unit in its bootloader: image version (1 = none reported, 255 = not recognised)"},
+  {"blc",    "bootloader capability bits: 1 do_spm, 2 bounded pin, 4 crash record, 8 fuse bytes"},
+  {"blk",    "lock byte from the bootloader (hex), when the chip serves it"},
+  {"blf",    "low, high, extended fuse from the bootloader (hex), when the chip serves them"},
+  {"blx",    "crash resets in a row per the bootloader; at 3 it holds the unit (faulty) until flashed"},
   {"pv",     "wire protocol version the unit reports"},
   {"pmm",    "1 = protocol version we do not speak; unit is untouched and is a reflash target"},
   {"hf",     "lifetime failed-homing count (survives power cycles)"},
@@ -210,9 +211,10 @@ inline bool legendHasKey(const char* key) {
   return false;
 }
 
-// Sized to the reply (9739 B with the #520 legend rows) plus room for a few
-// more rows; heap-built by the handler, so the cost is transient, not BSS.
-#define API_JSON_CAP 10240
+// Sized to the reply (just over 10 KB with the bootloader legend rows) plus
+// room for a few more; heap-built by the handler, so the cost is transient,
+// not BSS.
+#define API_JSON_CAP 11264
 
 #define API_APPEND(...) do { \
     if (o >= cap) return o; \

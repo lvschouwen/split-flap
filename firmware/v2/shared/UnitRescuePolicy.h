@@ -7,6 +7,10 @@
 //
 //   no ACK            -> still lost; retry after UNIT_RESCUE_RETRY_MS
 //   ACK + twiboot     -> CMD_SWITCH_APPLICATION exits to the sketch
+//   ACK + twiboot holding after repeated crash resets (#542)
+//                     -> left there; the unit becomes a bootloader unit in
+//                        the facts, which ends the loss episode and makes it
+//                        a target of the update job
 //   ACK, sketch mute  -> still lost; retry (the unit hardening in #502 is what
 //                        heals a deaf TWI from the inside)
 //
@@ -31,6 +35,7 @@ enum class UnitRescueProbe : uint8_t {
   NoAck,         // address does not ACK
   Bootloader,    // twiboot answered and was told to start the application
   SketchSilent,  // address ACKs, not twiboot, but status reads still fail
+  CrashHeld,     // twiboot holds it after repeated crash resets; not started
 };
 
 struct UnitRescueState {
@@ -55,6 +60,16 @@ inline void unitRescueNoteAttempt(UnitRescueState& r, uint32_t nowMs,
   if (r.attempts < 0xFFFF) r.attempts++;
   if (probe == UnitRescueProbe::Bootloader && r.exits < 0xFFFF) r.exits++;
   r.restorePending = true;
+}
+
+// A unit held in its bootloader for crashing (#542) is no longer polled by
+// anyone: a bootloader unit has no heartbeat. A power cycle clears the hold,
+// so the row master looks again on the rescue cadence and rescans when the
+// unit has left its bootloader. `lastAttemptMs` is the shared clock.
+inline bool unitHeldRecheckDue(const UnitFacts& u, const UnitRescueState& r,
+                               uint32_t nowMs) {
+  return u.state == 2 && twibootHeldForCrashing(u.bootloader) &&
+         nowMs - r.lastAttemptMs >= UNIT_RESCUE_RETRY_MS;
 }
 
 // Folds the unit's latest heartbeat outcome. Returns true exactly once, on

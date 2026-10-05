@@ -362,6 +362,20 @@ inline bool unitStatusIsFaulty(const UnitStatus& s) {
   return false;
 }
 
+// A unit the rescue found held in its bootloader (#542): its application
+// reads are void, and it is a bootloader unit until a probe says otherwise.
+// The slot is rebuilt as a scan would leave it; only the bus-side history,
+// which is about the address and not the application, carries over.
+inline void unitFactsBecomeBootloader(UnitFacts& u, const TwibootIdentity& id) {
+  UnitFacts fresh{};
+  fresh.state = 2;
+  fresh.bootloader = id;
+  fresh.i2cErrors = u.i2cErrors;
+  fresh.lastErrorMs = u.lastErrorMs;
+  fresh.rescueExits = u.rescueExits;
+  u = fresh;
+}
+
 // A sketch unit that answered once and has since missed the heartbeat
 // threshold (#310) — silent on the bus, wedged, or reset into twiboot. Only
 // state 1 counts: heartbeatApply never tracks other slots.
@@ -379,6 +393,8 @@ inline bool unitIsFaultyOrLost(const UnitFacts& u) {
   // Its own read, so its own gate: a bootloader that matches no known image
   // is the unit's last remote recovery path rotting (#520).
   if (u.bootVerdict == BOOT_INTEGRITY_CORRUPT) return true;
+  // Held in its bootloader because the application keeps crashing (#542).
+  if (u.state == 2 && twibootHeldForCrashing(u.bootloader)) return true;
   return u.statusValid && (unitStatusIsFaulty(u.status) || u.resetSeen);
 }
 
@@ -655,6 +671,11 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
         UNIT_HEALTH_APPEND(",\"blk\":\"%02x\",\"blf\":\"%02x%02x%02x\"",
                            (unsigned)b.lock, (unsigned)b.lfuse,
                            (unsigned)b.hfuse, (unsigned)b.efuse);
+      }
+      // blx = crash resets in a row the bootloader counted (#542); at 3 it
+      // holds the unit, which counts as faulty.
+      if (b.crashValid && b.crashCount > 0) {
+        UNIT_HEALTH_APPEND(",\"blx\":%u", (unsigned)b.crashCount);
       }
     }
     UNIT_HEALTH_APPEND("}");

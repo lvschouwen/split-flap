@@ -20,7 +20,7 @@
 //
 // Pure logic, natively tested (test_follower_ops).
 
-#define FOLLOWER_SCAN_LINE_CAP 96
+#define FOLLOWER_SCAN_LINE_CAP 128
 
 // What the line says; the caller logs a unit again only when this changes.
 enum ScanFinding : uint8_t {

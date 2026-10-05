@@ -159,6 +159,14 @@ static void test_health_json_bootloader_identity_keys() {
   buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
   TEST_ASSERT_NOT_NULL(
       strstr(buf, "\"blv\":2,\"blc\":11,\"blk\":\"cf\",\"blf\":\"ffdafd\"}"));
+  units[0].bootloader.crashValid = true;
+  units[0].bootloader.crashCount = 3;
+  buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"blf\":\"ffdafd\",\"blx\":3}"));
+  // Held for crashing is a fault; merely sitting in the bootloader is not.
+  TEST_ASSERT_TRUE(unitIsFaultyOrLost(units[0]));
+  units[0].bootloader.crashCount = 2;
+  TEST_ASSERT_FALSE(unitIsFaultyOrLost(units[0]));
   // Back in its application the unit's own boot report is the source again.
   units[0].state = 1;
   buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 0);

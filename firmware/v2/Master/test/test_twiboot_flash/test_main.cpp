@@ -35,11 +35,13 @@ struct FakeTwiboot {
   uint8_t info[16] = {'T', 'W', 'I', 'B', 'O', 'O', 'T', ' ',
                       'v', '3', '.', '2', 0, 0, 0, 0};
   uint8_t fuses[4] = {0xFF, 0xCF, 0xFD, 0xDA};  // lfuse, lock, efuse, hfuse
-  int chipinfoLen = 8;          // 12 on an image that serves fuse bytes
+  int chipinfoLen = 8;          // 12 with fuse bytes, 13 with a crash count
+  uint8_t crashCount = 0;       // chipinfo byte 12
   int versionReads = 0;
   int chipinfoReads = 0;
   int longestChipinfoRead = 0;
   bool versionArmed = false;
+  int cutVersionReads = 0;      // this many version reads come back one short
   int cutChipinfoReads = 0;     // this many chipinfo reads come back one short
   int cutFlashReads = 0;        // this many flash reads come back one short
   bool nackFlashRequest = false;
@@ -138,6 +140,7 @@ struct FakeTwiboot {
     if (replyLen >= 0 && replyLen < n) n = (uint8_t)replyLen;
     if (versionArmed) {
       versionReads++;
+      if (cutVersionReads > 0) { cutVersionReads--; n = (uint8_t)(n - 1); }
       for (uint8_t k = 0; k < n; k++) rx.push_back(info[k % 16]);
       return n;
     }
@@ -147,7 +150,7 @@ struct FakeTwiboot {
       if (cutChipinfoReads > 0) { cutChipinfoReads--; n = (uint8_t)(n - 1); }
       for (uint8_t k = 0; k < n; k++) {
         int at = k % chipinfoLen;
-        rx.push_back(at < 8 ? chipinfo[at] : fuses[at - 8]);
+        rx.push_back(at < 8 ? chipinfo[at] : at < 12 ? fuses[at - 8] : crashCount);
       }
       return n;
     }
@@ -564,21 +567,24 @@ static void test_boot_section_read_from_a_silent_unit_sends_no_exit() {
 
 static void test_rescue_probe_starts_a_unit_parked_in_twiboot() {
   FakeTwiboot bus;
-  TEST_ASSERT_TRUE(UnitRescueProbe::Bootloader == unitRescueProbe(bus, ADDR));
+  TwibootIdentity rescueId;
+  TEST_ASSERT_TRUE(UnitRescueProbe::Bootloader == unitRescueProbe(bus, ADDR, rescueId));
   TEST_ASSERT_EQUAL(1, bus.exits);
 }
 
 static void test_rescue_probe_of_an_absent_unit_is_no_ack() {
   FakeTwiboot bus;
-  TEST_ASSERT_TRUE(UnitRescueProbe::NoAck == unitRescueProbe(bus, ADDR + 1));
+  TwibootIdentity rescueId;
+  TEST_ASSERT_TRUE(UnitRescueProbe::NoAck == unitRescueProbe(bus, ADDR + 1, rescueId));
   TEST_ASSERT_EQUAL(0, bus.exits);
 }
 
 // ACKs but is not twiboot: a sketch that cannot be read. Never sent an exit.
 static void test_rescue_probe_of_a_silent_sketch() {
   FakeTwiboot bus;
+  TwibootIdentity rescueId;
   bus.replyLen = 0;  // chipinfo read comes back empty
-  TEST_ASSERT_TRUE(UnitRescueProbe::SketchSilent == unitRescueProbe(bus, ADDR));
+  TEST_ASSERT_TRUE(UnitRescueProbe::SketchSilent == unitRescueProbe(bus, ADDR, rescueId));
   TEST_ASSERT_EQUAL(0, bus.exits);
 }
 
@@ -665,6 +671,98 @@ static void test_a_short_version_read_is_no_identity() {
   TEST_ASSERT_EQUAL(0, bus.chipinfoReads);
 }
 
+// --- crash record (#542) -----------------------------------------------------
+
+static void makeCrashImage(FakeTwiboot& bus, uint8_t count) {
+  makeIdentityImage(bus, 3, TWIBOOT_CAP_DO_SPM | TWIBOOT_CAP_BOUNDED_PIN |
+                               TWIBOOT_CAP_CRASH_RECORD |
+                               TWIBOOT_CAP_FUSE_CHIPINFO);
+  bus.chipinfoLen = 13;
+  bus.crashCount = count;
+}
+
+static void test_identity_carries_the_crash_count() {
+  FakeTwiboot bus;
+  makeCrashImage(bus, 2);
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(twibootReadIdentity(bus, ADDR, id));
+  TEST_ASSERT_EQUAL_UINT8(3, id.generation);
+  TEST_ASSERT_TRUE(id.crashValid);
+  TEST_ASSERT_EQUAL_UINT8(2, id.crashCount);
+  TEST_ASSERT_FALSE(twibootHeldForCrashing(id));
+  TEST_ASSERT_TRUE(id.fusesValid);  // the fuse bytes are still read
+  TEST_ASSERT_EQUAL(TWIBOOT_CHIPINFO_CRASH_LEN, bus.longestChipinfoRead);
+  bus.crashCount = TWIBOOT_CRASH_HOLD_COUNT;
+  TEST_ASSERT_TRUE(twibootReadIdentity(bus, ADDR, id));
+  TEST_ASSERT_TRUE(twibootHeldForCrashing(id));
+}
+
+// An image without the capability wraps before byte 12: never asked for it,
+// and whatever its chipinfo holds is never read as a crash count.
+static void test_no_crash_count_without_the_capability() {
+  FakeTwiboot bus;
+  makeIdentityImage(bus, 2, TWIBOOT_CAP_FUSE_CHIPINFO);
+  bus.crashCount = 9;
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(twibootReadIdentity(bus, ADDR, id));
+  TEST_ASSERT_FALSE(id.crashValid);
+  TEST_ASSERT_FALSE(twibootHeldForCrashing(id));
+  TEST_ASSERT_EQUAL(TWIBOOT_CHIPINFO_FUSES_LEN, bus.longestChipinfoRead);
+}
+
+// The rescue must not put a crash-looping unit back into its crash: it is
+// left in the bootloader, where the update job can flash it.
+static void test_rescue_probe_leaves_a_crash_held_unit_in_its_bootloader() {
+  FakeTwiboot bus;
+  makeCrashImage(bus, TWIBOOT_CRASH_HOLD_COUNT);
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(UnitRescueProbe::CrashHeld == unitRescueProbe(bus, ADDR, id));
+  TEST_ASSERT_EQUAL(0, bus.exits);
+  TEST_ASSERT_TRUE(twibootHeldForCrashing(id));
+}
+
+// Below the threshold the unit is in its bootloader for another reason (a
+// reset caught in the boot window): started as before.
+static void test_rescue_probe_starts_a_unit_below_the_crash_threshold() {
+  FakeTwiboot bus;
+  makeCrashImage(bus, TWIBOOT_CRASH_HOLD_COUNT - 1);
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(UnitRescueProbe::Bootloader == unitRescueProbe(bus, ADDR, id));
+  TEST_ASSERT_EQUAL(1, bus.exits);
+}
+
+// One lost read must not send a crash-looping unit back into its crash.
+static void test_rescue_probe_asks_twice_before_starting_the_application() {
+  FakeTwiboot bus;
+  makeCrashImage(bus, TWIBOOT_CRASH_HOLD_COUNT);
+  // The first read of the probe is the 8-byte chipinfo check; cut the
+  // version read that follows it.
+  bus.cutVersionReads = 1;
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(UnitRescueProbe::CrashHeld == unitRescueProbe(bus, ADDR, id));
+  TEST_ASSERT_EQUAL(0, bus.exits);
+  TEST_ASSERT_EQUAL(2, bus.versionReads);
+}
+
+// The crash count is read before the fuse check: a failed fuse read keeps it.
+static void test_the_crash_count_survives_a_failed_fuse_check() {
+  FakeTwiboot bus;
+  makeCrashImage(bus, TWIBOOT_CRASH_HOLD_COUNT);
+  bus.cutFlashReads = 1;
+  TwibootIdentity id;
+  TEST_ASSERT_TRUE(twibootReadIdentity(bus, ADDR, id));
+  TEST_ASSERT_TRUE(twibootHeldForCrashing(id));
+  TEST_ASSERT_FALSE(id.fusesValid);
+  TEST_ASSERT_EQUAL(1, bus.readFailedCalls);
+  // A short 13-byte reply is no crash count at all, reported once.
+  FakeTwiboot shortBus;
+  makeCrashImage(shortBus, TWIBOOT_CRASH_HOLD_COUNT);
+  shortBus.cutChipinfoReads = 1;
+  TEST_ASSERT_TRUE(twibootReadIdentity(shortBus, ADDR, id));
+  TEST_ASSERT_FALSE(id.crashValid);
+  TEST_ASSERT_EQUAL(1, shortBus.readFailedCalls);
+}
+
 // The identity stands when only the fuse read fails, wherever it fails; a
 // short read is reported to the bus once, a NACKed request is not a read.
 static void test_a_failed_fuse_read_keeps_the_identity() {
@@ -716,6 +814,22 @@ static void test_identity_text_for_the_scan_log() {
   id.lfuse = 0xFF; id.lock = 0xCF; id.efuse = 0xFD; id.hfuse = 0xDA;
   twibootIdentityText(buf, sizeof(buf), id);
   TEST_ASSERT_EQUAL_STRING(" (bootloader v2, lock cf, fuses l ff h da e fd)", buf);
+  id.generation = 3;
+  id.crashValid = true;
+  id.crashCount = 0;
+  twibootIdentityText(buf, sizeof(buf), id);
+  TEST_ASSERT_EQUAL_STRING(" (bootloader v3, lock cf, fuses l ff h da e fd)", buf);
+  id.crashCount = 1;
+  twibootIdentityText(buf, sizeof(buf), id);
+  TEST_ASSERT_EQUAL_STRING(
+      " (bootloader v3, 1 crash reset(s), lock cf, fuses l ff h da e fd)", buf);
+  id.crashCount = 15;
+  id.fusesValid = false;
+  twibootIdentityText(buf, sizeof(buf), id);
+  TEST_ASSERT_EQUAL_STRING(
+      " (bootloader v3, HELD after 15 crash reset(s), lock/fuses unreadable)",
+      buf);
+  TEST_ASSERT_TRUE(strlen(buf) < TWIBOOT_IDENTITY_TEXT_CAP - 1);
   id.generation = TWIBOOT_GEN_UNKNOWN;
   twibootIdentityText(buf, sizeof(buf), id);
   TEST_ASSERT_EQUAL_STRING(" (bootloader identity not recognised)", buf);
@@ -760,5 +874,11 @@ int main(int, char**) {
   RUN_TEST(test_a_failed_fuse_read_keeps_the_identity);
   RUN_TEST(test_unrecognised_version_bytes_are_named_unknown);
   RUN_TEST(test_identity_text_for_the_scan_log);
+  RUN_TEST(test_identity_carries_the_crash_count);
+  RUN_TEST(test_no_crash_count_without_the_capability);
+  RUN_TEST(test_rescue_probe_leaves_a_crash_held_unit_in_its_bootloader);
+  RUN_TEST(test_rescue_probe_starts_a_unit_below_the_crash_threshold);
+  RUN_TEST(test_rescue_probe_asks_twice_before_starting_the_application);
+  RUN_TEST(test_the_crash_count_survives_a_failed_fuse_check);
   return UNITY_END();
 }

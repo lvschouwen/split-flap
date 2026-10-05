@@ -17,15 +17,26 @@
 // --- rescue probe (#498) -----------------------------------------------------------
 
 // What is at the address of a unit that stopped answering: nothing, a unit
-// parked in twiboot (told to start its application), or a sketch that ACKs
-// but cannot be read. Only call outside the probe-inhibit window — the
-// chipinfo request pins twiboot.
+// parked in twiboot (told to start its application), a unit its bootloader is
+// holding because the application keeps crashing (#542 — left there: starting
+// it again would repeat the crash, and it is a flash target where it sits),
+// or a sketch that ACKs but cannot be read. `id` is what the bootloader said
+// about itself, UNREAD unless one answered. Only call outside the
+// probe-inhibit window — the chipinfo request pins twiboot.
 template <typename Bus>
-inline UnitRescueProbe unitRescueProbe(Bus& bus, uint8_t i2cAddress) {
+inline UnitRescueProbe unitRescueProbe(Bus& bus, uint8_t i2cAddress,
+                                       TwibootIdentity& id) {
+  id = TwibootIdentity{};
   bus.mark(UnitBusAct::Probe, i2cAddress);
   bus.beginTransmission(i2cAddress);
   if (bus.endTransmission(true) != 0) return UnitRescueProbe::NoAck;
   if (!twibootIsBootloader(bus, i2cAddress)) return UnitRescueProbe::SketchSilent;
+  // Asked twice before the unit is started: one lost read must not put a
+  // crash-looping unit back into its crash with a cleared count.
+  if (!twibootReadIdentity(bus, i2cAddress, id)) {
+    twibootReadIdentity(bus, i2cAddress, id);
+  }
+  if (twibootHeldForCrashing(id)) return UnitRescueProbe::CrashHeld;
   twibootExit(bus, i2cAddress);
   return UnitRescueProbe::Bootloader;
 }

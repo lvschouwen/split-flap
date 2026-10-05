@@ -535,8 +535,12 @@ int unitBusClearAddress(int i2cAddress) {
 }
 
 // --- unit reflash over twiboot (#205) -----------------------------------------
-UnitRescueProbe unitBusRescueProbe(int i2cAddress) {
-  return unitRescueProbe(unitBus, (uint8_t)i2cAddress);
+bool unitBusIsBootloader(int i2cAddress) {
+  return isUnitInBootloader(i2cAddress);
+}
+
+UnitRescueProbe unitBusRescueProbe(int i2cAddress, TwibootIdentity& id) {
+  return unitRescueProbe(unitBus, (uint8_t)i2cAddress, id);
 }
 
 // The 132-byte page burst must fit the Wire TX buffer in one transaction —

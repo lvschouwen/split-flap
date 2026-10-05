@@ -21,12 +21,19 @@
 // answer with the stock "TWIBOOT v3.2" string.
 #define TWIBOOT_CAP_DO_SPM             0x01  // page 7 carries the do_spm stub
 #define TWIBOOT_CAP_BOUNDED_PIN        0x02  // a pinned bootloader times out
+#define TWIBOOT_CAP_CRASH_RECORD       0x04  // chipinfo byte 12, see below
 #define TWIBOOT_CAP_FUSE_CHIPINFO      0x08  // chipinfo bytes 8..11, see below
 // Chipinfo is 8 bytes; an image with TWIBOOT_CAP_FUSE_CHIPINFO serves four
 // more (#543): low fuse, lock, extended fuse, high fuse. An image without it
 // wraps at 8, so the long read is only ever sent to one that advertises it.
 #define TWIBOOT_CHIPINFO_LEN           8
 #define TWIBOOT_CHIPINFO_FUSES_LEN     12
+// An image with TWIBOOT_CAP_CRASH_RECORD serves one byte more (#542): how many
+// watchdog resets in a row its application caused before it had run healthy.
+// At TWIBOOT_CRASH_HOLD_COUNT the bootloader stops starting the application
+// and waits to be flashed. A master's explicit start command clears the count.
+#define TWIBOOT_CHIPINFO_CRASH_LEN     13
+#define TWIBOOT_CRASH_HOLD_COUNT       3
 
 #define TWIBOOT_MEMTYPE_CHIPINFO       0x00
 #define TWIBOOT_MEMTYPE_FLASH          0x01
@@ -54,4 +61,12 @@ struct TwibootIdentity {
   uint8_t lock = 0;
   uint8_t efuse = 0;
   uint8_t hfuse = 0;
+  bool crashValid = false;                  // crashCount was read
+  uint8_t crashCount = 0;
 };
+
+// Is the bootloader holding the unit because its application keeps crashing?
+// Starting the application again would only repeat it.
+inline bool twibootHeldForCrashing(const TwibootIdentity& id) {
+  return id.crashValid && id.crashCount >= TWIBOOT_CRASH_HOLD_COUNT;
+}

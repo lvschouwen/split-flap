@@ -291,8 +291,23 @@ static void rescueTick(DisplaySnapshot& local, UnitFacts* busFacts, int i) {
     }
     return;
   }
+  if (unitHeldRecheckDue(busFacts[i], rs, millis())) {
+    rs.lastAttemptMs = millis();
+    if (!unitBusIsBootloader(addr)) {
+      // Power-cycled or replaced: a rescan finds out what is there now.
+      SerialPrintf("Unit 0x%02x no longer held in its bootloader — "
+                   "rescanning\n", addr);
+      unitBusProbe(busFacts, UNITS_AMOUNT);
+      pollHealthWithFreshness(busFacts);
+      displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                            effectiveWidthOverride());
+      snapshotPublish(local);
+    }
+    return;
+  }
   if (!unitRescueDue(busFacts[i], rs, millis())) return;
-  UnitRescueProbe probe = unitBusRescueProbe(addr);
+  TwibootIdentity bootloader;
+  UnitRescueProbe probe = unitBusRescueProbe(addr, bootloader);
   unitRescueNoteAttempt(rs, millis(), probe);
   busFacts[i].rescueExits = rs.exits;
   local.units[i].rescueExits = rs.exits;
@@ -309,6 +324,16 @@ static void rescueTick(DisplaySnapshot& local, UnitFacts* busFacts, int i) {
     case UnitRescueProbe::SketchSilent:
       SerialPrintf("Unit 0x%02x lost — ACKs but status reads fail "
                    "(attempt %u)\n", addr, (unsigned)rs.attempts);
+      break;
+    case UnitRescueProbe::CrashHeld:
+      // A bootloader unit from here on: no longer "lost", so no further
+      // rescue probes, and the update job flashes it where it sits.
+      SerialPrintf("Unit 0x%02x lost — held in its bootloader after %u crash "
+                   "resets; left there as a reflash target\n", addr,
+                   (unsigned)bootloader.crashCount);
+      unitFactsBecomeBootloader(busFacts[i], bootloader);
+      unitFactsBecomeBootloader(local.units[i], bootloader);
+      snapshotPublish(local);
       break;
   }
 }

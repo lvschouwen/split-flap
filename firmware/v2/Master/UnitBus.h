@@ -101,7 +101,11 @@ uint32_t unitBusErrCount();
 // Runtime rescue probe for a lost unit (#498): ACK check, then twiboot
 // chipinfo; a unit found in twiboot is told to start its application.
 // Only call outside the twiboot risk window (the chipinfo write pins twiboot).
-UnitRescueProbe unitBusRescueProbe(int i2cAddress);
+// Is a bootloader answering at that address right now? Pins it, like every
+// chipinfo request.
+bool unitBusIsBootloader(int i2cAddress);
+// `id`: what a bootloader at that address said about itself.
+UnitRescueProbe unitBusRescueProbe(int i2cAddress, TwibootIdentity& id);
 
 int unitBusRebootToBootloader(int i2cAddress);          // twiboot @DIP, ~1 s
 int unitBusSetAddress(int i2cAddress, uint8_t newAddress);  // burn + reboot

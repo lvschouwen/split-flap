@@ -188,10 +188,14 @@ bool twibootReadIdentity(Bus& bus, uint8_t addr, TwibootIdentity& out) {
   uint8_t info[TWIBOOT_VERSION_LEN];
   for (int i = 0; i < TWIBOOT_VERSION_LEN; i++) info[i] = (uint8_t)bus.read();
   twibootParseVersion(info, out);
-  if (out.generation < 2 || out.generation == TWIBOOT_GEN_UNKNOWN ||
-      (out.caps & TWIBOOT_CAP_FUSE_CHIPINFO) == 0) {
-    return true;
-  }
+  if (out.generation < 2 || out.generation == TWIBOOT_GEN_UNKNOWN) return true;
+  const bool wantFuses = (out.caps & TWIBOOT_CAP_FUSE_CHIPINFO) != 0;
+  const bool wantCrash = (out.caps & TWIBOOT_CAP_CRASH_RECORD) != 0;
+  if (!wantFuses && !wantCrash) return true;
+  // The crash count sits behind the fuse bytes; never ask an image for more
+  // bytes than it says it serves.
+  const uint8_t chipLen = wantCrash ? TWIBOOT_CHIPINFO_CRASH_LEN
+                                    : TWIBOOT_CHIPINFO_FUSES_LEN;
 
   bus.beginTransmission(addr);
   bus.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
@@ -199,8 +203,8 @@ bool twibootReadIdentity(Bus& bus, uint8_t addr, TwibootIdentity& out) {
   bus.write((uint8_t)0x00);
   bus.write((uint8_t)0x00);
   if (bus.endTransmission(false) != 0) return true;
-  got = bus.requestFrom(addr, (uint8_t)TWIBOOT_CHIPINFO_FUSES_LEN);
-  if (got != TWIBOOT_CHIPINFO_FUSES_LEN) {
+  got = bus.requestFrom(addr, chipLen);
+  if (got != chipLen) {
     twibootDrain(bus);
     bus.readFailed();
     return true;
@@ -210,6 +214,11 @@ bool twibootReadIdentity(Bus& bus, uint8_t addr, TwibootIdentity& out) {
   uint8_t lock = (uint8_t)bus.read();
   uint8_t efuse = (uint8_t)bus.read();
   uint8_t hfuse = (uint8_t)bus.read();
+  if (wantCrash) {
+    out.crashCount = (uint8_t)bus.read();
+    out.crashValid = true;
+  }
+  if (!wantFuses) return true;
 
   bus.beginTransmission(addr);
   bus.write((uint8_t)TWIBOOT_CMD_ACCESS_MEMORY);
@@ -238,22 +247,36 @@ bool twibootReadIdentity(Bus& bus, uint8_t addr, TwibootIdentity& out) {
 
 // The tail of a scan-log line for a unit found in its bootloader; "" when
 // nothing was read. The text stays in flash on the ESP-01 (BootDump.h).
-#define TWIBOOT_IDENTITY_TEXT_CAP 56
+#define TWIBOOT_IDENTITY_TEXT_CAP 80
 inline void twibootIdentityText(char* buf, size_t cap,
                                 const TwibootIdentity& id) {
   if (id.generation == TWIBOOT_GEN_UNREAD) {
     if (cap > 0) buf[0] = '\0';
-  } else if (id.generation == TWIBOOT_GEN_NO_IDENTITY) {
+    return;
+  }
+  if (id.generation == TWIBOOT_GEN_NO_IDENTITY) {
     BOOT_DUMP_SNPRINTF(buf, cap, " (bootloader without identity bytes)");
-  } else if (id.generation == TWIBOOT_GEN_UNKNOWN) {
+    return;
+  }
+  if (id.generation == TWIBOOT_GEN_UNKNOWN) {
     BOOT_DUMP_SNPRINTF(buf, cap, " (bootloader identity not recognised)");
-  } else if (!id.fusesValid) {
-    BOOT_DUMP_SNPRINTF(buf, cap, " (bootloader v%u, lock/fuses unreadable)",
-             (unsigned)id.generation);
+    return;
+  }
+  char crash[36] = "";
+  if (id.crashValid && id.crashCount > 0) {
+    BOOT_DUMP_SNPRINTF(crash, sizeof(crash), ", %s%u crash reset(s)",
+                       twibootHeldForCrashing(id) ? "HELD after " : "",
+                       (unsigned)id.crashCount);
+  }
+  if (!id.fusesValid) {
+    BOOT_DUMP_SNPRINTF(buf, cap, " (bootloader v%u%s, lock/fuses unreadable)",
+                       (unsigned)id.generation, crash);
   } else {
-    BOOT_DUMP_SNPRINTF(buf, cap, " (bootloader v%u, lock %02x, fuses l %02x h %02x e %02x)",
-             (unsigned)id.generation, (unsigned)id.lock, (unsigned)id.lfuse,
-             (unsigned)id.hfuse, (unsigned)id.efuse);
+    BOOT_DUMP_SNPRINTF(buf, cap,
+                       " (bootloader v%u%s, lock %02x, fuses l %02x h %02x e %02x)",
+                       (unsigned)id.generation, crash, (unsigned)id.lock,
+                       (unsigned)id.lfuse, (unsigned)id.hfuse,
+                       (unsigned)id.efuse);
   }
 }
 

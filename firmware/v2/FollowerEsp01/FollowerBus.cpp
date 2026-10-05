@@ -612,9 +612,22 @@ static void rescueTick(int i) {
     return;
   }
   if (busRecovery.dead) return;
+  if (unitHeldRecheckDue(unitFacts[i], rs, millis())) {
+    rs.lastAttemptMs = millis();
+    if (!isUnitInBootloader(toI2cAddress(i))) {
+      // Power-cycled or replaced: a rescan finds out what is there now.
+      SerialPrint(F("unit "));
+      SerialPrint(toI2cAddress(i));
+      SerialPrintln(F(": no longer held in its bootloader — rescanning"));
+      busProbe();
+      busPollHealth();
+    }
+    return;
+  }
   if (!unitRescueDue(unitFacts[i], rs, millis())) return;
   uint8_t addr = (uint8_t)toI2cAddress(i);
-  UnitRescueProbe probe = unitRescueProbe(unitBus, addr);
+  TwibootIdentity bootloader;
+  UnitRescueProbe probe = unitRescueProbe(unitBus, addr, bootloader);
   unitRescueNoteAttempt(rs, millis(), probe);
   unitFacts[i].rescueExits = rs.exits;
   SerialPrint(F("unit "));
@@ -626,6 +639,13 @@ static void rescueTick(int i) {
   } else if (probe == UnitRescueProbe::NoAck) {
     SerialPrint(F(": lost — no ACK (attempt "));
     SerialPrint(rs.attempts);
+  } else if (probe == UnitRescueProbe::CrashHeld) {
+    // A bootloader unit from here on: no longer "lost", so no further rescue
+    // probes, and the update job flashes it where it sits.
+    SerialPrint(F(": lost — held in its bootloader after crash resets; left "
+                  "there as a reflash target (count "));
+    SerialPrint(bootloader.crashCount);
+    unitFactsBecomeBootloader(unitFacts[i], bootloader);
   } else {
     SerialPrint(F(": lost — ACKs but status reads fail (attempt "));
     SerialPrint(rs.attempts);
