@@ -44,6 +44,11 @@
 // by displayTask exclusively; every runtime probe waits this deadline out —
 // including a Probe that was already queued behind a /unit/reboot.
 static uint32_t twibootRiskUntilMs = 0;
+// A unit was sent through its bootloader outside the reflash job, so its
+// probe-time reads (offset, odometer, version) are void. Only a probe reads
+// them again; the idle tick runs one once the risk window has passed, so the
+// unit is whole again without anyone asking.
+static bool probeOwedAfterRiskWindow = false;
 
 static void armTwibootRiskWindow() {
   twibootRiskUntilMs = millis() + UNIT_PROBE_INHIBIT_MS;
@@ -348,6 +353,15 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
   int width = local.displayWidth;
   if (width <= 0) return;
   if ((int32_t)(twibootRiskUntilMs - millis()) > 0) return;
+  if (probeOwedAfterRiskWindow) {
+    probeOwedAfterRiskWindow = false;
+    unitBusProbe(busFacts, UNITS_AMOUNT);
+    pollHealthWithFreshness(busFacts);
+    displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                          effectiveWidthOverride());
+    snapshotPublish(local);
+    return;
+  }
   int i = slot;
   slot = heartbeatNextSlot(slot, width);
   bool ok = unitBusPollHealthOne(busFacts, i);
@@ -719,6 +733,7 @@ static void execProbe(DisplaySnapshot& local, UnitFacts* busFacts,
   // right behind a /unit/reboot must not scan into the twiboot
   // window — wait the risk deadline out first.
   settleBeforeProbe();
+  probeOwedAfterRiskWindow = false;
   unitBusProbe(busFacts, UNITS_AMOUNT);
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
@@ -895,6 +910,7 @@ static void execBootDump(DisplaySnapshot& local, UnitFacts* busFacts,
                cmd.unitAddress, bootDumpOutcomeName(slot.outcome),
                (unsigned long)slot.crc32);
   displayApplyBootDumpResult(local, slot);
+  probeOwedAfterRiskWindow = true;  // the dump restarted the unit
   displayApplyMaintResult(
       local, cmd, maintGradeObserved(slot.outcome == BootDumpOutcome::Ok));
 }
@@ -946,6 +962,7 @@ static void execRebootToBootloader(DisplaySnapshot& local, UnitFacts* busFacts,
   if (status == 0) {
     displayInvalidateUnitReads(local, cmd.unitAddress);
     armTwibootRiskWindow();
+    probeOwedAfterRiskWindow = true;
   }
   displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
