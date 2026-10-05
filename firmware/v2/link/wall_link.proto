@@ -131,6 +131,7 @@ message Status {
   bool busy = 12;                 // a unit job holds the loop: expect silence
   uint32 image_size = 13;
   bool time_synced = 14;
+  uint32 heap2 = 15;              // free bytes in the second heap; 0 = the image has none
 }
 
 message Shown {

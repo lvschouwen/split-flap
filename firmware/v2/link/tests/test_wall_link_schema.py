@@ -101,7 +101,7 @@ def test_update_and_op(pb):
 def test_status_carries_a_negative_signal(pb):
     m = pb.ToMaster.FromString(delimited(VEC["status"]))
     assert (m.status.up_s, m.status.heap, m.status.min_heap) == (5429, 27312, 17464)
-    assert (m.status.rssi, m.status.busy) == (-58, True)
+    assert (m.status.rssi, m.status.busy, m.status.heap2) == (-58, True, 19824)
     assert frame(m) == VEC["status"]
 
 

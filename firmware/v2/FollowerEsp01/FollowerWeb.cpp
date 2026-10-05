@@ -26,6 +26,7 @@
 #include "FollowerCors.h"
 #include "ClusterForeign.h"
 #include "FollowerJson.h"
+#include "FollowerMem.h"
 #include "FollowerOtaImage.h"  // #540: gzip upload checks
 #include "FollowerPrefs.h"     // #513: reflashOnBoot
 #include "FollowerResetLog.h"  // #503: reset history in /cluster/health
@@ -60,7 +61,7 @@ static MaintResult opResult;
 static SelfTestSlot selfTestSlot;
 static BootInfoSlot bootInfoSlot;  // #499: last read-only boot report
 static BootDumpSlot bootDumpSlot;  // #522: last boot-section dump result
-// The raw 1 KB section lives on the heap and only around a dump: claimed by
+// The raw 1 KB section is a buffer of FollowerMem.h, held only around a dump: claimed by
 // the request that stages one, given back by loop() once the result has had
 // time to be fetched or a reflash job needs the room.
 static uint8_t* bootDumpBytes = nullptr;
@@ -105,14 +106,14 @@ uint32_t appAreaBytes() { return FS_start - 0x40200000; }
 // first and answers 503; the margin covers the web library's send buffer and
 // response objects on top of the block itself.
 static bool heapCanHold(size_t bytes) {
-  return ESP.getMaxFreeBlockSize() >= bytes + 1536;
+  return ESP.getMaxFreeBlockSize() >= bytes + FOLLOWER_BUF_HEAP_MARGIN;
 }
 
 // loop() only: the result handler copies out of the block without yielding,
 // so it can never see it go.
 static void releaseBootDumpBytes() {
   if (bootDumpBytes == nullptr) return;
-  delete[] bootDumpBytes;
+  followerBufFree(bootDumpBytes);
   bootDumpBytes = nullptr;
   bootDumpBytesSeq = 0;
 }
@@ -243,8 +244,7 @@ UnitOpStaged unitOpStage(FollowerOpKind kind, uint8_t addr, long arg,
     // Claimed only when the op will be staged: a refused request must not
     // leave 1 KB held through the reflash that made the slot busy.
     if (bootDumpBytes == nullptr) {
-      if (!heapCanHold(BOOT_SECTION_LEN)) return UnitOpStaged::NoMemory;
-      bootDumpBytes = new (std::nothrow) uint8_t[BOOT_SECTION_LEN];
+      bootDumpBytes = (uint8_t*)followerBufAlloc(BOOT_SECTION_LEN);
       if (bootDumpBytes == nullptr) return UnitOpStaged::NoMemory;
     }
     bootDumpBytesAtMs = millis();

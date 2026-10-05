@@ -118,14 +118,16 @@ static void test_status_with_a_negative_signal_and_empty_messages() {
   m.body.status.min_heap = 17464;
   m.body.status.rssi = -58;
   m.body.status.busy = true;
+  m.body.status.heap2 = 19824;
   size_t n = wlEncodeToMaster(wire, sizeof wire, m);
-  assertWire(n, VEC("status", "11120f08b52a10b0d50118b8880128736001"));
+  assertWire(n, VEC("status", "15121308b52a10b0d50118b8880128736001" "78f09a01"));
   WlMasterReader r;
   r.feed(wire, n);
   wl_ToMaster d = wl_ToMaster_init_zero;
   TEST_ASSERT_TRUE(r.decode(wl_ToMaster_fields, &d));
   TEST_ASSERT_EQUAL(-58, d.body.status.rssi);
   TEST_ASSERT_TRUE(d.body.status.busy);
+  TEST_ASSERT_EQUAL_UINT32(19824, d.body.status.heap2);
 
   wl_ToRow ping = wl_ToRow_init_zero;
   ping.which_body = wl_ToRow_ping_tag;

@@ -8,7 +8,6 @@
 
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
-#include <new>
 
 #include "BuildVersion.h"
 #include "FollowerBus.h"
@@ -17,6 +16,7 @@
 #include "FollowerEscalation.h"
 #include "FollowerLinkOps.h"
 #include "FollowerLinkPolicy.h"
+#include "FollowerMem.h"
 #include "FollowerPrefs.h"
 #include "FollowerRescue.h"
 #include "FollowerUpdate.h"
@@ -54,8 +54,8 @@ struct LinkOp {
 };
 LinkOp linkOp;
 
-// The unit facts document being sent, one piece per loop pass. Heap, held
-// only while it travels.
+// The unit facts document being sent, one piece per loop pass. A buffer of
+// FollowerMem.h, held only while it travels.
 char* unitsDoc = nullptr;
 uint32_t unitsTotal = 0;
 uint32_t unitsOffset = 0;
@@ -76,7 +76,7 @@ static_assert((int)FollowerFallback::Blank == wl_Fallback_FALLBACK_BLANK &&
               "FollowerFallback is stored with the numbers of wl.Fallback");
 
 void releaseUnitsDoc() {
-  delete[] unitsDoc;
+  followerBufFree(unitsDoc);
   unitsDoc = nullptr;
 }
 
@@ -126,6 +126,7 @@ void sendStatus(bool timeSynced) {
   s.heap = ESP.getFreeHeap();
   s.min_heap = followerMinHeap();
   s.max_block = ESP.getMaxFreeBlockSize();
+  s.heap2 = followerSecondHeapFree();
   s.rssi = WiFi.RSSI();
   s.tx_power = (uint32_t)(followerTxPowerDbm10() * 4 / 10);
   s.bus_tx = followerBusTxCount();
@@ -314,9 +315,7 @@ void unitsTick() {
     const size_t cap = followerHealthBufCap(displayWidth, UNITS_AMOUNT);
     lastUnitsMs = millis();
     unitsDue = false;
-    // operator new resets this board when it cannot serve; ask first.
-    if (ESP.getMaxFreeBlockSize() < cap + FOLLOWER_LINK_HEAP_MARGIN) return;
-    unitsDoc = new (std::nothrow) char[cap];
+    unitsDoc = (char*)followerBufAlloc(cap);
     if (unitsDoc == nullptr) return;
     unitsTotal = (uint32_t)unitsHealthJson(unitsDoc, cap);
     unitsOffset = 0;
