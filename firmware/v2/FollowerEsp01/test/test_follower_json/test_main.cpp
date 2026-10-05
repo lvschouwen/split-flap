@@ -1,362 +1,105 @@
-// Host-side tests for the follower's wire-reply builders (#298): the join /
-// ping reply JSON the S3 leader parses (#294 health keys + the #297
-// additive plat/vitals block), the tiny /settings JSON the member ⚙ panel
-// reads, /cluster/health, and the faultMask hex fragment.
+// Host-side tests for the one JSON document the row serves itself: its
+// identity (GET /settings, the answer to POST /pair).
 
 #include <ArduinoFake.h>
 #include <unity.h>
 
-#include "../../FollowerCors.h"
 #include "../../FollowerJson.h"
+#include "LanOrigin.h"
 
 void setUp() {}
 void tearDown() {}
 
-static ClusterRowHealth makeHealth() {
-  ClusterRowHealth h;
-  h.width = 8;
-  h.detected = 8;
-  h.faulty = 2;
-  h.faultMask = "05";
-  h.wear = false;
-  return h;
+static FollowerIdentity makeIdentity() {
+  FollowerIdentity id;
+  id.name = "split-flap-ab12cd";
+  id.rev = "abc1234";
+  id.width = 5;
+  id.masterId = "split-flap-master";
+  id.masterHost = "192.168.15.22";
+  id.linked = true;
+  id.upSeconds = 1200;
+  id.heapBytes = 28000;
+  id.sketchBytes = 458752;
+  id.sketchFreeBytes = 569344;
+  id.flashMode = 3;
+  id.flashId = 0x1440E0;
+  return id;
 }
 
-static FollowerVitals makeVitals() {
-  FollowerVitals v;
-  v.heapBytes = 28000;
-  v.rssiDbm = -61;
-  v.upSeconds = 1200;
-  return v;
+static void test_identity_json_shape() {
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"name\":\"split-flap-ab12cd\",\"version\":\"abc1234\",\"plat\":\"esp01\","
+      "\"width\":5,\"rescue\":false,\"master\":\"split-flap-master\","
+      "\"masterHost\":\"192.168.15.22\",\"linked\":true,\"up\":1200,"
+      "\"heap\":28000,\"sketch\":458752,\"sketchFree\":569344,\"flashMode\":3,"
+      "\"flashId\":\"1440e0\"}",
+      followerIdentityJson(makeIdentity()).c_str());
 }
 
-// --- fault mask -------------------------------------------------------------------
-
-static void test_fault_mask_width_sets_nibble_count() {
-  UnitFacts units[16];
-  units[0].statusValid = true;
-  units[0].status.flags = UNIT_FLAG_LAST_HOME_FAILED;
-  units[2].statusValid = true;
-  units[2].status.flags = UNIT_FLAG_HALL_NEVER;
-  char buf[16];
-  TEST_ASSERT_EQUAL_UINT(2, unitFaultMaskHex(units, 8, buf, sizeof(buf)));
-  TEST_ASSERT_EQUAL_STRING("05", buf);
-  TEST_ASSERT_EQUAL_UINT(4, unitFaultMaskHex(units, 16, buf, sizeof(buf)));
-  TEST_ASSERT_EQUAL_STRING("0005", buf);
-}
-
-static void test_fault_mask_zero_width_is_empty() {
-  char buf[16];
-  TEST_ASSERT_EQUAL_UINT(0, unitFaultMaskHex(nullptr, 0, buf, sizeof(buf)));
-  TEST_ASSERT_EQUAL_STRING("", buf);
-}
-
-static void test_fault_mask_flags_lost_unit() {
-  // #497: a stale sketch unit sets its bit although its status is unreadable.
-  UnitFacts units[8];
-  units[1].state = 1;
-  units[1].stale = true;
-  char buf[16];
-  unitFaultMaskHex(units, 8, buf, sizeof(buf));
-  TEST_ASSERT_EQUAL_STRING("02", buf);
-}
-
-static void test_health_keys_carry_lost_and_bus_dead() {
-  ClusterRowHealth h = makeHealth();
-  h.lost = 1;
-  h.busDead = true;
-  String out;
-  clusterAppendHealthKeys(out, h);
-  TEST_ASSERT_TRUE(out.indexOf("\"lost\":1") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"busDead\":1") >= 0);
-  h.busDead = false;
-  out = "";
-  clusterAppendHealthKeys(out, h);
-  TEST_ASSERT_TRUE(out.indexOf("busDead") < 0);  // additive: absent = alive
-}
-
-// --- join reply -------------------------------------------------------------------
-
-static void test_join_reply_carries_identity_health_plat_vitals() {
-  String out = followerJoinReplyJson("esp01-row", "abc1234", makeHealth(),
-                                     makeVitals(), false);
-  TEST_ASSERT_TRUE(out.indexOf("\"name\":\"esp01-row\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"rev\":\"abc1234\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"width\":8") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"detected\":8") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"faulty\":2") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"faultMask\":\"05\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"wear\":false") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"plat\":\"esp01\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"heap\":28000") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"rssi\":-61") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"up\":1200") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"protocol\":1") >= 0);
-  // #343: the rescue marker is strictly additive — absent while healthy.
-  TEST_ASSERT_TRUE(out.indexOf("rescue") < 0);
-}
-
-static void test_join_and_ping_replies_carry_rescue_marker() {
-  // #343: a beacon boot advertises rescue:1 so the leader re-pushes the
-  // stored follower image (same-rev included).
-  String join = followerJoinReplyJson("esp01-row", "abc1234", makeHealth(),
-                                      makeVitals(), true);
-  TEST_ASSERT_TRUE(join.indexOf("\"rescue\":1") >= 0);
-  String ping = followerPingReplyJson("grace", 7, 3, makeHealth(),
-                                      makeVitals(), "abc1234", true);
-  TEST_ASSERT_TRUE(ping.indexOf("\"rescue\":1") >= 0);
-}
-
-// --- ping reply -------------------------------------------------------------------
-
-static void test_ping_reply_carries_state_and_health_and_plat() {
-  String out = followerPingReplyJson("clustered", 7, 3, makeHealth(),
-                                     makeVitals(), "abc1234", false);
-  TEST_ASSERT_TRUE(out.startsWith("{\"state\":\"clustered\",\"epoch\":7,\"seq\":3"));
-  TEST_ASSERT_TRUE(out.indexOf("\"faultMask\":\"05\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"rev\":\"abc1234\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"plat\":\"esp01\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"heap\":28000") >= 0);
-}
-
-// --- /settings --------------------------------------------------------------------
-
-static FollowerFlashInfo makeFlash() {
-  FollowerFlashInfo f;
-  f.sketchBytes = 453776;
-  f.sketchFreeBytes = 573440;
-  f.flashMode = 3;
-  f.flashId = 0x1440E0;
-  return f;
-}
-
-static void test_settings_json_shape() {
-  String out = followerSettingsJson("split-flap-c8a746", "abc1234", 8,
-                                    "clustered", "wall-leader",
-                                    "192.168.15.22", 2, makeVitals(),
-                                    makeFlash(), 85, true);
-  // #540: the running image against the app area.
-  TEST_ASSERT_TRUE(out.indexOf("\"sketch\":453776") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"sketchFree\":573440") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"flashMode\":3") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"flashId\":\"1440e0\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"txPower\":85") >= 0);  // #508, dBm x10
-  // #513: a JSON boolean under the S3's key name, so commission-units.sh
-  // reads both platforms with one expression.
-  TEST_ASSERT_TRUE(out.indexOf("\"reflashOnBoot\":true}") >= 0);
-  String braked = followerSettingsJson("n", "abc1234", 5, "clustered", "l",
-                                       "h", 0, makeVitals(), makeFlash(), 85,
-                                       false);
-  TEST_ASSERT_TRUE(braked.indexOf("\"reflashOnBoot\":false}") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"deviceName\":\"split-flap-c8a746\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"effectiveDeviceName\":\"split-flap-c8a746\"") >= 0);
+static void test_identity_carries_what_ota_flash_reads() {
+  // ota-flash.sh keys the platform on `plat` and compares `version` before
+  // and after an upload.
+  const String out = followerIdentityJson(makeIdentity());
   TEST_ASSERT_TRUE(out.indexOf("\"version\":\"abc1234\"") >= 0);
   TEST_ASSERT_TRUE(out.indexOf("\"plat\":\"esp01\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"width\":8") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"clusterState\":\"clustered\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"clusterLeaderName\":\"wall-leader\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"clusterLeaderHost\":\"192.168.15.22\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"clusterRow\":2") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"heap\":28000") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"rssi\":-61") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"up\":1200") >= 0);
 }
 
-// --- foreign-contact block (#358) ---------------------------------------------------
-
-static void test_foreign_contact_record_and_json() {
-  ForeignContactStats f;
-  String out;
-  // Never contacted: zero counters, msSince -1.
-  foreignContactAppendJson(out, f, 5000);
-  TEST_ASSERT_TRUE(out.indexOf("\"foreign\":{\"joins\":0") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"msSince\":-1") >= 0);
-  // Record one of each kind; lastHost/lastMs track the newest refusal.
-  foreignContactRecord(f, ForeignContactKind::Join, "192.168.15.77", 1000);
-  foreignContactRecord(f, ForeignContactKind::Ping, "192.168.15.77", 2000);
-  foreignContactRecord(f, ForeignContactKind::Render, "192.168.15.78", 3000);
-  foreignContactRecord(f, ForeignContactKind::Join, "192.168.15.77", 4000);
-  out = "";
-  foreignContactAppendJson(out, f, 5000);
-  TEST_ASSERT_TRUE(out.indexOf("\"joins\":2") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"pings\":1") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"renders\":1") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"lastHost\":\"192.168.15.77\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"msSince\":1000") >= 0);
+static void test_unpaired_rescue_row() {
+  FollowerIdentity id = makeIdentity();
+  id.masterId = "";
+  id.masterHost = "";
+  id.linked = false;
+  id.rescue = true;
+  const String out = followerIdentityJson(id);
+  TEST_ASSERT_TRUE(out.indexOf("\"rescue\":true") >= 0);
+  TEST_ASSERT_TRUE(out.indexOf("\"master\":\"\",\"masterHost\":\"\",\"linked\":false") >= 0);
 }
 
-// --- /cluster/health ----------------------------------------------------------------
-
-static void test_cluster_health_json_shape() {
-  FollowerClusterDiag d;
-  d.msSinceRender = 4200;
-  d.secsUntilBlank = 95;
-  d.i2cTx = 1000;
-  d.i2cErr = 2;
-  d.minHeap = 21000;
-  d.stackFree = 1184;  // #435
-  d.sntpSynced = true;
-  d.hmac = true;
-  String out = followerClusterHealthJson("grace", "wall-leader",
-                                         "192.168.15.22", 2, 7, 3,
-                                         "ROW THREE       ", "abc1234", 8, 8,
-                                         0, d);
-  TEST_ASSERT_TRUE(out.indexOf("\"state\":\"grace\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"leaderName\":\"wall-leader\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"leaderHost\":\"192.168.15.22\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"row\":2") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"epoch\":7") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"seq\":3") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"segment\":\"ROW THREE       \"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"rev\":\"abc1234\"") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"width\":8") >= 0);
-  // #358: the foreign block always rides along (zeroed here).
-  TEST_ASSERT_TRUE(out.indexOf("\"foreign\":{\"joins\":0") >= 0);
-  // Diagnostics (#306).
-  TEST_ASSERT_TRUE(out.indexOf("\"msSinceRender\":4200") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"secsUntilBlank\":95") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"i2cTx\":1000") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"i2cErr\":2") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"minHeap\":21000") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"stackFree\":1184") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"sntpSynced\":true") >= 0);
-  TEST_ASSERT_TRUE(out.indexOf("\"hmac\":true") >= 0);
-  // #488: a never-dead bus reports a quiet block.
-  TEST_ASSERT_TRUE(out.indexOf("\"bus\":{\"dead\":false,\"deadMs\":0,"
-                               "\"episodes\":0,\"recovered\":0,"
-                               "\"attempts\":0,\"lastStatus\":-1,"
-                               "\"lastDeadMs\":0}") >= 0);
+static void test_stored_strings_are_escaped() {
+  // The master's id came from another board: it is served back escaped.
+  FollowerIdentity id = makeIdentity();
+  id.masterId = "a\"b\\c";
+  const String out = followerIdentityJson(id);
+  TEST_ASSERT_TRUE(out.indexOf("\"master\":\"a\\\"b\\\\c\"") >= 0);
 }
 
-static void test_cluster_health_bus_block_while_dead() {
-  FollowerClusterDiag d;
-  d.nowMs = 50000;
-  d.bus.dead = true;
-  d.bus.deadSinceMs = 20000;
-  d.bus.episodes = 2;
-  d.bus.recovered = 1;
-  d.bus.attempts = 4;
-  d.bus.lastStatus = 3;  // I2C_SDA_HELD_LOW
-  d.bus.lastDeadMs = 7000;
-  String out = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
-                                         "abc1234", 5, 5, 0, d);
-  TEST_ASSERT_TRUE(out.indexOf("\"bus\":{\"dead\":true,\"deadMs\":30000,"
-                               "\"episodes\":2,\"recovered\":1,"
-                               "\"attempts\":4,\"lastStatus\":3,"
-                               "\"lastDeadMs\":7000}") >= 0);
+static void test_identity_fits_its_reserve() {
+  // Longest name, rev, master id and host, widest numbers: one allocation.
+  FollowerIdentity id;
+  id.name = "split-flap-ffffffff";
+  id.rev = "0123456789abcdef";
+  id.width = 16;
+  id.rescue = true;
+  id.masterId = "0123456789abcdef0123456789abcdef";
+  id.masterHost = "0123456789abcdef0123456789abcdef01234567";
+  id.linked = false;
+  id.upSeconds = 0xFFFFFFFFUL;
+  id.heapBytes = 0xFFFFFFFFUL;
+  id.sketchBytes = 0xFFFFFFFFUL;
+  id.sketchFreeBytes = 0xFFFFFFFFUL;
+  id.flashMode = 255;
+  id.flashId = 0xFFFFFFFFUL;
+  TEST_ASSERT_TRUE(followerIdentityJson(id).length() <= 352);
 }
 
-// --- string escaping ----------------------------------------------------------------
-
-static void test_wire_strings_are_escaped() {
-  // Leader name/host come off an unauthenticated LAN POST — a quote must
-  // not break the JSON (same rule as every other builder in the fleet).
-  FollowerClusterDiag d;
-  String out = followerClusterHealthJson("clustered", "evil\"name",
-                                         "10.0.0.9", 0, 1, 1, "X", "r", 1, 1,
-                                         0, d);
-  TEST_ASSERT_TRUE(out.indexOf("evil\\\"name") >= 0);
-}
-
-// --- CORS gates (#294 copies) ---------------------------------------------------------
-
-static void test_cors_origin_gate_lan_only() {
-  TEST_ASSERT_TRUE(lanOriginAllowed("http://192.168.15.90"));
-  TEST_ASSERT_TRUE(lanOriginAllowed("http://10.1.2.3:8080"));
-  TEST_ASSERT_TRUE(lanOriginAllowed("http://leader.local"));
-  TEST_ASSERT_TRUE(lanOriginAllowed("http://localhost:8000"));
-  TEST_ASSERT_FALSE(lanOriginAllowed("https://192.168.15.90"));
-  TEST_ASSERT_FALSE(lanOriginAllowed("http://8.8.8.8"));
-  TEST_ASSERT_FALSE(lanOriginAllowed("http://evil.example.com"));
-}
-
-static void test_cors_path_gate_matches_served_surface() {
-  // The wall-pane management surface; /cluster/* stays closed (leader wire,
-  // not a browser surface). #304 opens /reflash-units (board-level unit
-  // reflash from the wall). /firmware/* stays CLOSED, in lockstep with the
-  // S3's clusterCorsPathAllowed copy: the ESP-01's firmware is pushed by the
-  // S3 relay (stored image, server-to-server), not a browser POST.
-  TEST_ASSERT_TRUE(followerCorsPathAllowed("/settings"));
-  TEST_ASSERT_TRUE(followerCorsPathAllowed("/units/health"));
-  TEST_ASSERT_TRUE(followerCorsPathAllowed("/units/health/refresh"));
-  TEST_ASSERT_TRUE(followerCorsPathAllowed("/unit/jog"));
-  TEST_ASSERT_TRUE(followerCorsPathAllowed("/unit/op-result"));
-  TEST_ASSERT_TRUE(followerCorsPathAllowed("/reboot"));
-  TEST_ASSERT_TRUE(followerCorsPathAllowed("/reflash-units"));
-  TEST_ASSERT_FALSE(followerCorsPathAllowed("/firmware/master"));
-  TEST_ASSERT_FALSE(followerCorsPathAllowed("/cluster/join"));
-}
-
-static void test_csrf_gate_matches_master() {
-  // #313: a mutating POST with a public/https origin is cross-site forgery.
+static void test_post_from_a_website_is_refused() {
+  // The rule POST /pair and the upload apply (shared LanOrigin.h): a POST
+  // with a public or https origin is a website driving the owner's browser.
   TEST_ASSERT_TRUE(lanCsrfRejectPost(true, true, "http://evil.example.com"));
   TEST_ASSERT_TRUE(lanCsrfRejectPost(true, true, "https://192.168.15.90"));
-  // The board's own LAN UI and server-to-server (no Origin) both pass; GETs
-  // are never blocked.
-  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, true, "http://192.168.15.90"));
+  // A master and ota-flash.sh send no Origin.
   TEST_ASSERT_FALSE(lanCsrfRejectPost(true, false, ""));
-  TEST_ASSERT_FALSE(lanCsrfRejectPost(false, true, "http://evil.example.com"));
-}
-
-// #503: the reset history rides /cluster/health, newest boot first, and the
-// key is absent (not empty) when the caller has none to offer.
-static void test_cluster_health_carries_reset_history() {
-  FollowerClusterDiag d;
-  String without = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
-                                             "abc1234", 5, 5, 0, d);
-  TEST_ASSERT_TRUE(without.indexOf("\"resets\"") < 0);
-  TEST_ASSERT_TRUE(without.endsWith("}}"));
-
-  FollowerResetLogBlob log;
-  followerResetLogPush(log, 2, 28, 0x40201234UL, 4);  // the crash
-  followerResetLogPush(log, 4, 0, 0, 0);              // then a clean reboot
-  d.resets = &log;
-  String with = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
-                                          "abc1234", 5, 5, 0, d);
-  TEST_ASSERT_TRUE(with.indexOf(
-      "},\"resets\":[\"4:0:00000000:00000000\",\"2:28:40201234:00000004\"]}") >= 0);
-}
-
-// #503: the self-restart record rides in /cluster/health, and the reply with
-// a full reset ring and this block still fits what the builder reserves.
-static void test_cluster_health_carries_the_escalation_record() {
-  FollowerClusterDiag d;
-  String without = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
-                                             "abc1234", 5, 5, 0, d);
-  TEST_ASSERT_NULL(strstr(without.c_str(), "\"esc\""));
-  EscalationRecord rec;
-  for (int m = 0; m < 42; m++) escalationRecordMinute(rec);
-  d.escalation = &rec;
-  String none = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
-                                          "abc1234", 5, 5, 0, d);
-  TEST_ASSERT_NOT_NULL(strstr(none.c_str(),
-                              "\"esc\":{\"n\":0,\"last\":\"none\",\"upMin\":42}}"));
-  escalationRecordTaken(rec, EscalationCause::BusDead);
-  escalationRecordMinute(rec);
-  String taken = followerClusterHealthJson("clustered", "l", "h", 0, 1, 1, "",
-                                           "abc1234", 5, 5, 0, d);
-  TEST_ASSERT_NOT_NULL(strstr(
-      taken.c_str(), "\"esc\":{\"n\":1,\"last\":\"bus-dead\",\"upMin\":1}}"));
+  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, true, "http://192.168.15.90"));
 }
 
 int main(int, char**) {
   UNITY_BEGIN();
-  RUN_TEST(test_cors_origin_gate_lan_only);
-  RUN_TEST(test_cors_path_gate_matches_served_surface);
-  RUN_TEST(test_csrf_gate_matches_master);
-  RUN_TEST(test_fault_mask_width_sets_nibble_count);
-  RUN_TEST(test_fault_mask_zero_width_is_empty);
-  RUN_TEST(test_fault_mask_flags_lost_unit);
-  RUN_TEST(test_health_keys_carry_lost_and_bus_dead);
-  RUN_TEST(test_join_reply_carries_identity_health_plat_vitals);
-  RUN_TEST(test_join_and_ping_replies_carry_rescue_marker);
-  RUN_TEST(test_ping_reply_carries_state_and_health_and_plat);
-  RUN_TEST(test_settings_json_shape);
-  RUN_TEST(test_foreign_contact_record_and_json);
-  RUN_TEST(test_cluster_health_json_shape);
-  RUN_TEST(test_cluster_health_bus_block_while_dead);
-  RUN_TEST(test_wire_strings_are_escaped);
-  RUN_TEST(test_cluster_health_carries_reset_history);
-  RUN_TEST(test_cluster_health_carries_the_escalation_record);
+  RUN_TEST(test_identity_json_shape);
+  RUN_TEST(test_identity_carries_what_ota_flash_reads);
+  RUN_TEST(test_unpaired_rescue_row);
+  RUN_TEST(test_stored_strings_are_escaped);
+  RUN_TEST(test_identity_fits_its_reserve);
+  RUN_TEST(test_post_from_a_website_is_refused);
   return UNITY_END();
 }

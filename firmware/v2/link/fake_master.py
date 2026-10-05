@@ -11,7 +11,7 @@ file (wall_link_pb2.py):
 Every message a row sends is printed as one JSON line with a timestamp.
 --clock shows HH:MM on the row at each minute change, sent 2 s ahead.
 --commands names a file that is read as it grows, one command per line:
-    show TEXT | quiet on|off | ping | restart | release
+    show TEXT | quiet on|off | ping | restart | release | log on|off
     config blank|time|date on|off [TZ]     (on|off: update units at start)
     op NAME ADDRESS [ARG]                  (NAME as in OpCode, without OPC_)
     update [REV]                           (offer --image; REV overrides its rev)
@@ -127,6 +127,8 @@ class Row:
             self.send(restart=pb.Restart())
         elif word == "release":
             self.send(release=pb.Release())
+        elif word == "log":
+            self.send(log_ctl=pb.LogCtl(on=rest == "on"))
         elif word == "config":
             fallback, units_at_start, *tz = rest.split(maxsplit=2)
             self.send(config=pb.Config(fallback=pb.Fallback.Value("FALLBACK_" + fallback.upper()),
@@ -162,6 +164,9 @@ class Row:
             if len(self.units) == piece.total:
                 log("got", peer=self.peer, type="units", doc_id=piece.doc_id, bytes=piece.total,
                     units=json.loads(self.units))
+            return
+        if kind == "log_line":
+            log("got", peer=self.peer, type="log", line=message.log_line.text.decode(errors="replace"))
             return
         fields = MessageToDict(message, preserving_proto_field_name=True)
         if kind == "op_state":

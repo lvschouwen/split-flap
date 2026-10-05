@@ -57,9 +57,9 @@ void busInit() {
   // buffer is bumped to 256 via -DI2C_BUFFER_LENGTH for twiboot's
   // 132-byte page writes.
   Wire.begin(1, 3);
-  // #488: a warm reboot (OTA, /reboot) leaves the Nanos powered, so one held
-  // SDA mid-byte survives it and the boot probe finds nothing. Clock it free
-  // before anything scans.
+  // #488: a warm restart (new firmware, the master's Restart) leaves the
+  // Nanos powered, so one held SDA mid-byte survives it and the boot probe
+  // finds nothing. Clock it free before anything scans.
   uint8_t status = Wire.status();
   if (status != 0) {
     SerialPrint(F("bus: line held at boot, state "));
@@ -68,8 +68,8 @@ void busInit() {
 #endif
 }
 
-// Bus health counters (#306), surfaced in /cluster/health so a curl-only
-// operator can see a flaky row. Same scope as the S3's i2cTx/i2cErr: every
+// Bus health counters (#306), sent to the master in Status so a flaky row
+// shows. Same scope as the S3's i2cTx/i2cErr: every
 // sketch-protocol write transaction (frames, queries, maintenance ops) counts
 // as tx; err counts failed writes AND failed read legs. Not counted: the
 // ~10 Hz rotation polls, the bus-scan probe and the twiboot page stream.
@@ -226,10 +226,10 @@ void busProbe() { busProbeQuiet(false); }
 void busProbeQuiet(bool quiet) {
 #if SERIAL_ENABLE == false
   if (!quiet) SerialPrintln(F("Scanning I2C bus for units..."));
-  // #468: async handlers (/units/health, /unit/offset, /settings) read
-  // unitFacts / detectedUnitCount live, and the I2C reads below yield —
-  // zeroing a slot up front and refilling it field by field would let a GET
-  // landing mid-probe see the unit as absent/unversioned. Each slot is
+  // #468: the I2C reads below yield, and a web handler (GET /settings reads
+  // the row width) or the link can run in between — zeroing a slot up front
+  // and refilling it field by field would let a reader landing mid-probe see
+  // the unit as absent/unversioned. Each slot is
   // therefore probed into a scratch struct and published with one
   // assignment (no yield inside a struct copy on this single-core part),
   // and the count is published once at the end.
@@ -793,10 +793,9 @@ void followerBootHome() {
 // through a probe taken with the targets sitting in twiboot, where the offset
 // / odometer / lifetime reads cannot succeed — so those facts come back
 // INVALID and nothing else repopulates them: busPollHealth is a health poll,
-// not a probe, and it never reads the offset. GET /unit/offset then served
-// "no valid offset" for a whole freshly-flashed row whose calibration was
-// perfectly intact, at the exact moment an operator checks it, and
-// restore-unit-offsets.sh read the same cache and called the row UNREADABLE.
+// not a probe, and it never reads the offset. The unit facts then carried
+// no offset for a whole freshly-flashed row whose calibration was perfectly
+// intact, at the exact moment an operator checks it.
 // The invalidation is right (UnitHealth.h's documented lifecycle: reads drop
 // when a bootloader reboot invalidates them) — the repopulation was missing.
 // This is what the S3 already does at the end of runReflashJob.
@@ -911,8 +910,8 @@ void busRunReflashJob(uint8_t onlyAddr, bool force) {
 #if SERIAL_ENABLE == false
   SerialPrintln(F("Unit reflash starting (throttled)..."));
   // The gate closes here and reopens at the single Finish below: every wait
-  // in between yields to the web handlers, and a master OTA or a unit op let
-  // in halfway would reboot or drive a row that has units in twiboot.
+  // in between yields to the web handlers, and a firmware upload let in
+  // halfway would restart a row that has units in twiboot.
   reflashProgressBegin(reflashProgress, 0);  // total known after the rescan
   // Let the row finish what it was doing before the first unit leaves for
   // its bootloader. Idle, not homed — a home is a full turn per unit and

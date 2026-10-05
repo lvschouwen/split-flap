@@ -7,10 +7,9 @@
 
 // One ring, in a buffer of FollowerMem.h, claimed by the first line logged
 // (the heaps exist before any constructor runs). The ESP-01 is a cooperative
-// single-core superloop: async web handlers run inside loop()'s yield, so the
-// GET /log reader and the SerialPrint writers never truly preempt each other
-// — no lock needed (the follower's "async handlers stage, loop() mutates"
-// discipline).
+// single-core superloop: a web handler that logs runs inside loop()'s yield,
+// so the link's reader and the SerialPrint writers never truly preempt each
+// other — no lock needed.
 static FollowerLogRing* g_ring = nullptr;
 
 static FollowerLogRing& ring() {

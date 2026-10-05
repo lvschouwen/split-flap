@@ -19,16 +19,17 @@ def test_s3_reads_the_report_and_serves_the_slot():
     assert "buildBootInfoJson(buf, sizeof(buf), snap.lastBootInfo, (uint32_t)seq);" in web
 
 
-def test_esp01_reads_the_report_and_serves_the_slot():
-    web = (V2 / "FollowerEsp01" / "FollowerWeb.cpp").read_text()
-    case = web[web.index("case FollowerOpKind::BootInfo: {"):]
+def test_esp01_reads_the_report_and_sends_the_slot():
+    jobs = (V2 / "FollowerEsp01" / "FollowerUnitJobs.cpp").read_text()
+    case = jobs[jobs.index("case FollowerOpKind::BootInfo: {"):]
     case = case[:case.index("break;")]
     assert "slot.ok = busReadBootInfo(op.addr, slot.report);" in case
     assert "bootInfoSlot = slot;" in case
     for forbidden in ("busBootUpdate", "busRebootToBootloader", "busHome",
                       "busRunBootUpdate"):
         assert forbidden not in case, f"the info op must not call {forbidden}"
-    assert "buildBootInfoJson(buf, sizeof(buf), bootInfoSlot, (uint32_t)seq);" in web
+    link = (V2 / "FollowerEsp01" / "FollowerLink.cpp").read_text()
+    assert "buildBootInfoJson(text, BOOT_INFO_JSON_CAP, unitOpBootInfo()," in link
 
 
 def test_unit_detects_an_unreadable_lock_and_gates_on_the_effective_byte():

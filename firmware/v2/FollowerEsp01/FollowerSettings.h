@@ -1,39 +1,32 @@
 #pragma once
-// FollowerSettings.h — the follower's EEPROM records, natively tested by
+// FollowerSettings.h — the row's EEPROM records, natively tested by
 // test_follower_settings. Besides the SDK's WiFi credentials the board
-// persists two things: the `clusteredBy` membership marker (#298: leader
-// name/host + row, so a reboot boots into Grace instead of flashing stale
-// standalone content) and, behind it, the operator preferences (#513). Pure
-// encode/decode over fixed blobs; the EEPROM glue lives in FollowerCluster.cpp
-// and FollowerPrefs.cpp.
+// persists two things: its pairing (the master's id, address and tz rule, so
+// a restart lands in Grace and dials the master again) and, behind it, the
+// operator preferences (#513). Pure encode/decode over fixed blobs; the
+// EEPROM glue lives in FollowerCluster.cpp and FollowerPrefs.cpp.
 
 #include <stdint.h>
 #include <string.h>
 
-#include "ClusterWireGuards.h"  // CLUSTER_HOST_MAX_LEN, CLUSTER_HMAC_KEY_LEN
-
 #define FOLLOWER_NAME_MAX 32
-#define FOLLOWER_HOST_MAX CLUSTER_HOST_MAX_LEN
+#define FOLLOWER_HOST_MAX 40
 #define FOLLOWER_TZ_MAX 64
-#define FOLLOWER_HMAC_KEY_LEN CLUSTER_HMAC_KEY_LEN
 
-// magic u32 LE | row u8 | keyPresent u8 | key[32] | lastTs u64 LE |
-// name[NAME_MAX+1] | host[HOST_MAX+1] | tz[TZ_MAX+1] | xor checksum. The
-// #313-follow-on key field bumped the magic to 2FFS; the follow-on
-// replay-mark (lastTs, HIGH#1) to 3FFS; the #342 clock-fallback tz (the
-// leader's POSIX zone, sent on the join) to 4FFS — an old-format record
-// fails to decode and the follower boots standalone (harmless: it re-joins
-// and gets key + tz fresh).
-#define FOLLOWER_MEMBERSHIP_MAGIC 0x53464634UL  // "4FFS" LE (was 3FFS/2FFS/1FFS)
-#define FOLLOWER_MEMBERSHIP_BLOB_LEN                                       \
-  (4 + 1 + 1 + FOLLOWER_HMAC_KEY_LEN + 8 + (FOLLOWER_NAME_MAX + 1) +       \
-   (FOLLOWER_HOST_MAX + 1) + (FOLLOWER_TZ_MAX + 1) + 1)
-#define FOLLOWER_MEMBERSHIP_LASTTS_OFF (4 + 1 + 1 + FOLLOWER_HMAC_KEY_LEN)
-#define FOLLOWER_MEMBERSHIP_NAME_OFF (FOLLOWER_MEMBERSHIP_LASTTS_OFF + 8)
+// magic u32 LE | 42 bytes written as zero | name[NAME_MAX+1] |
+// host[HOST_MAX+1] | tz[TZ_MAX+1] | xor checksum. The layout is per-device
+// truth: the zero bytes held a row index and a message key the board no
+// longer has, and stay so that the name, host and tz fields and the
+// preferences record behind this one keep their place across images. A
+// record that fails to decode leaves the row unpaired.
+#define FOLLOWER_MEMBERSHIP_MAGIC 0x53464634UL  // "4FFS" LE
+#define FOLLOWER_MEMBERSHIP_NAME_OFF (4 + 42)
 #define FOLLOWER_MEMBERSHIP_HOST_OFF \
   (FOLLOWER_MEMBERSHIP_NAME_OFF + FOLLOWER_NAME_MAX + 1)
 #define FOLLOWER_MEMBERSHIP_TZ_OFF \
   (FOLLOWER_MEMBERSHIP_HOST_OFF + FOLLOWER_HOST_MAX + 1)
+#define FOLLOWER_MEMBERSHIP_BLOB_LEN \
+  (FOLLOWER_MEMBERSHIP_TZ_OFF + FOLLOWER_TZ_MAX + 1 + 1)
 
 // XOR of the payload ^ 0x7A: factory-fresh flash (all 0xFF / all 0x00)
 // must never decode as a membership.
@@ -43,15 +36,11 @@ inline uint8_t followerMembershipChecksum(const uint8_t* blob) {
   return (uint8_t)(x ^ 0x7A);
 }
 
-// Encodes a membership. Rejects (returns false, blob untouched) an empty
-// host — a membership without a reachable leader host is not a membership
-// (v2 follower's leaderHost sentinel rule) — and oversized fields. keyValid
-// carries the #313-follow-on wire-auth key (key32 read only when keyValid);
-// tz is the leader's POSIX zone for the clock fallback (#342, may be "").
+// Encodes a pairing. Rejects (returns false, blob untouched) an empty host —
+// a pairing without an address to dial is not a pairing — and oversized
+// fields. tz is the master's POSIX zone for the clock fallback (may be "").
 inline bool followerMembershipEncode(const char* leaderName,
                                      const char* leaderHost, const char* tz,
-                                     uint8_t row, bool keyValid,
-                                     const uint8_t* key32, uint64_t lastTs,
                                      uint8_t* blob) {
   size_t nameLen = strlen(leaderName);
   size_t hostLen = strlen(leaderHost);
@@ -64,12 +53,6 @@ inline bool followerMembershipEncode(const char* leaderName,
   blob[1] = (uint8_t)((FOLLOWER_MEMBERSHIP_MAGIC >> 8) & 0xFF);
   blob[2] = (uint8_t)((FOLLOWER_MEMBERSHIP_MAGIC >> 16) & 0xFF);
   blob[3] = (uint8_t)((FOLLOWER_MEMBERSHIP_MAGIC >> 24) & 0xFF);
-  blob[4] = row;
-  blob[5] = keyValid ? 1 : 0;
-  if (keyValid && key32 != nullptr) memcpy(blob + 6, key32, FOLLOWER_HMAC_KEY_LEN);
-  for (int i = 0; i < 8; i++) {
-    blob[FOLLOWER_MEMBERSHIP_LASTTS_OFF + i] = (uint8_t)(lastTs >> (i * 8));
-  }
   memcpy(blob + FOLLOWER_MEMBERSHIP_NAME_OFF, leaderName, nameLen);
   memcpy(blob + FOLLOWER_MEMBERSHIP_HOST_OFF, leaderHost, hostLen);
   memcpy(blob + FOLLOWER_MEMBERSHIP_TZ_OFF, tz, tzLen);
@@ -78,12 +61,9 @@ inline bool followerMembershipEncode(const char* leaderName,
 }
 
 // Decodes the blob; false on bad magic/checksum (out params untouched).
-// name/host/tz buffers must hold FOLLOWER_*_MAX + 1; key32 must hold 32
-// bytes.
+// name/host/tz buffers must hold FOLLOWER_*_MAX + 1.
 inline bool followerMembershipDecode(const uint8_t* blob, char* leaderName,
-                                     char* leaderHost, char* tz, uint8_t& row,
-                                     bool& keyValid, uint8_t* key32,
-                                     uint64_t& lastTs) {
+                                     char* leaderHost, char* tz) {
   uint32_t magic = (uint32_t)blob[0] | ((uint32_t)blob[1] << 8) |
                    ((uint32_t)blob[2] << 16) | ((uint32_t)blob[3] << 24);
   if (magic != FOLLOWER_MEMBERSHIP_MAGIC) return false;
@@ -91,22 +71,15 @@ inline bool followerMembershipDecode(const uint8_t* blob, char* leaderName,
       followerMembershipChecksum(blob)) {
     return false;
   }
+  if (blob[FOLLOWER_MEMBERSHIP_HOST_OFF] == '\0') return false;
   // Bounded copies — the terminators were zeroed at encode time, but a
   // corrupted-yet-checksum-colliding blob must still not run past the field.
   memcpy(leaderName, blob + FOLLOWER_MEMBERSHIP_NAME_OFF, FOLLOWER_NAME_MAX);
   leaderName[FOLLOWER_NAME_MAX] = '\0';
   memcpy(leaderHost, blob + FOLLOWER_MEMBERSHIP_HOST_OFF, FOLLOWER_HOST_MAX);
   leaderHost[FOLLOWER_HOST_MAX] = '\0';
-  if (leaderHost[0] == '\0') return false;
   memcpy(tz, blob + FOLLOWER_MEMBERSHIP_TZ_OFF, FOLLOWER_TZ_MAX);
   tz[FOLLOWER_TZ_MAX] = '\0';
-  row = blob[4];
-  keyValid = blob[5] != 0;
-  if (key32 != nullptr) memcpy(key32, blob + 6, FOLLOWER_HMAC_KEY_LEN);
-  lastTs = 0;
-  for (int i = 0; i < 8; i++) {
-    lastTs |= (uint64_t)blob[FOLLOWER_MEMBERSHIP_LASTTS_OFF + i] << (i * 8);
-  }
   return true;
 }
 
@@ -115,9 +88,8 @@ inline void followerMembershipClear(uint8_t* blob) {
 }
 
 // --- operator preferences (#513) ----------------------------------------------
-// A second, independent record directly behind the membership blob, so adding
-// it leaves that blob's layout and magic alone — a change there drops the
-// follower out of its cluster. magic | flags | check. Bytes a firmware
+// A second, independent record directly behind the pairing, whose layout and
+// magic it leaves alone. magic | flags | check. Bytes a firmware
 // predating the record never wrote read back erased (0xFF) and fail the check,
 // which yields the defaults.
 #define FOLLOWER_PREFS_OFF FOLLOWER_MEMBERSHIP_BLOB_LEN
@@ -139,7 +111,7 @@ struct FollowerPrefs {
   FollowerFallback fallback = FollowerFallback::Time;
   // Boot auto-install of bootloader-mode units and auto-update of outdated
   // ones. Off = a gated campaign: nothing is flashed until an operator asks,
-  // one unit at a time (the S3's #412 setting, same name on the wire).
+  // one unit at a time.
   bool reflashOnBoot = true;
 };
 
@@ -166,18 +138,4 @@ inline FollowerPrefs followerPrefsDecode(const uint8_t rec[FOLLOWER_PREFS_LEN]) 
   const uint8_t stored = (rec[1] & FOLLOWER_PREF_FALLBACK_MASK) >> FOLLOWER_PREF_FALLBACK_SHIFT;
   if (stored != 0) p.fallback = (FollowerFallback)(stored - 1);
   return p;
-}
-
-// Strict: a setting that gates unit flashing takes exactly "true" or "false".
-inline bool followerParseBool(const char* s, bool& out) {
-  if (s == nullptr) return false;
-  if (strcmp(s, "true") == 0) {
-    out = true;
-    return true;
-  }
-  if (strcmp(s, "false") == 0) {
-    out = false;
-    return true;
-  }
-  return false;
 }

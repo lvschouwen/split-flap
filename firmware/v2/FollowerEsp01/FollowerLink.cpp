@@ -1,8 +1,7 @@
 // FollowerLink.cpp — socket glue of the wall link on the row board. Timing
-// rules in FollowerLinkPolicy.h; message handling reuses FollowerCluster's
-// handlers, so the phase machine, flip timing and fallback clock are the ones
-// the HTTP wire already drives. Unit jobs go through the staged-op slot the
-// routes use (FollowerWeb.h); which checks a job takes is FollowerLinkOps.h.
+// rules in FollowerLinkPolicy.h; pairing, phase machine, flip timing and
+// fallback clock are FollowerCluster's. Unit jobs go through the one staged
+// slot (FollowerUnitJobs.h); which checks a job takes is FollowerLinkOps.h.
 // An offered image is fetched by FollowerUpdate.cpp.
 #include "FollowerLink.h"
 
@@ -16,9 +15,11 @@
 #include "FollowerEscalation.h"
 #include "FollowerLinkOps.h"
 #include "FollowerLinkPolicy.h"
+#include "FollowerLog.h"
 #include "FollowerMem.h"
 #include "FollowerPrefs.h"
 #include "FollowerRescue.h"
+#include "FollowerUnitJobs.h"
 #include "FollowerUpdate.h"
 #include "FollowerUpdatePolicy.h"
 #include "FollowerWeb.h"
@@ -70,6 +71,17 @@ bool offerPending = false;
 wl_UpdateState updateReport;
 bool updateReportPending = false;
 
+// The log goes up while the master asks for it (LogCtl), per connection. The
+// cursor outlives a connection: lines logged while the master was away
+// follow the ones it already has.
+bool logOn = false;
+uint32_t logCursor = 0;
+
+// Who the current connection was opened to. A pairing that changes under it
+// (POST /pair) closes it: the row then dials the master it now obeys.
+char dialledId[33];
+char dialledHost[48];
+
 static_assert((int)FollowerFallback::Blank == wl_Fallback_FALLBACK_BLANK &&
                   (int)FollowerFallback::Time == wl_Fallback_FALLBACK_TIME &&
                   (int)FollowerFallback::Date == wl_Fallback_FALLBACK_DATE,
@@ -89,6 +101,7 @@ void drop(const __FlashStringHelper* why) {
   reader.reset();
   releaseUnitsDoc();
   welcomed = false;
+  logOn = false;
   offerPending = false;  // the master offers again on the next connection
   dropCount++;
   backoffMs = followerLinkNextBackoffMs(backoffMs);
@@ -331,6 +344,22 @@ void unitsTick() {
   if (unitsOffset >= unitsTotal) releaseUnitsDoc();
 }
 
+// One log line per loop pass, so a full ring does not hold up a text.
+void logTick() {
+  if (!logOn) return;
+  wlClear(out);
+  wl_LogLine& l = out.body.log_line;
+  size_t len = 0;
+  uint32_t next = logCursor;
+  if (!followerLogRing().nextLine(next, (char*)l.text.bytes, sizeof(l.text.bytes), len)) {
+    return;
+  }
+  out.which_body = wl_ToMaster_log_line_tag;
+  l.text.size = (pb_size_t)len;
+  // A line that did not get out is sent again on the next connection.
+  if (send()) logCursor = next;
+}
+
 void handle(const wl_ToRow& m, const FollowerClusterView& view) {
   if (!welcomed) {
     if (m.which_body != wl_ToRow_welcome_tag ||
@@ -343,8 +372,7 @@ void handle(const wl_ToRow& m, const FollowerClusterView& view) {
     backoffMs = 0;
     // A new connection is a new render sequence: the master numbers renders
     // per connection, and the phase machine accepts any new epoch.
-    clusterHandleJoin(view.leaderName, view.leaderHost, view.row, bootId + connectCount,
-                      String(), String());
+    clusterMasterConnected(bootId + connectCount);
     SerialPrintln(F("link: connected to the master"));
     sendStatus(view.sntpSynced);
     unitsDue = true;
@@ -385,6 +413,9 @@ void handle(const wl_ToRow& m, const FollowerClusterView& view) {
       offer = m.body.update;
       offerPending = true;
       break;
+    case wl_ToRow_log_ctl_tag:
+      logOn = m.body.log_ctl.on;
+      break;
     case wl_ToRow_ping_tag:
       wlClear(out);
       out.which_body = wl_ToMaster_pong_tag;
@@ -414,6 +445,12 @@ void linkLoopTick() {
     return;
   }
 
+  if (sock.connected() && (strcmp(dialledId, view.leaderName.c_str()) != 0 ||
+                           strcmp(dialledHost, view.leaderHost.c_str()) != 0)) {
+    drop(F("paired with another master"));
+    return;
+  }
+
   if (!sock.connected()) {
     if (welcomed) drop(F("connection lost"));
     if ((int32_t)(millis() - nextDialMs) < 0) return;
@@ -429,6 +466,8 @@ void linkLoopTick() {
     // closes it for us (idle 15 s, 3 probes 5 s apart).
     sock.keepAlive(15, 5, 3);
     reader.reset();
+    strlcpy(dialledId, view.leaderName.c_str(), sizeof(dialledId));
+    strlcpy(dialledHost, view.leaderHost.c_str(), sizeof(dialledHost));
     connectedAtMs = millis();
     sendHello();
     return;
@@ -469,6 +508,7 @@ void linkLoopTick() {
     sendStatus(view.sntpSynced);
   }
   if (welcomed) unitsTick();
+  if (welcomed) logTick();
   if (welcomed) updateTick(view);
 }
 

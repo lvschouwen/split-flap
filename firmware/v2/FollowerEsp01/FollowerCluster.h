@@ -1,11 +1,12 @@
 #pragma once
-// FollowerCluster.h — cluster membership + render staging glue (#298).
-// Decisions live in FollowerPolicy.h; the EEPROM record in
-// FollowerSettings.h. Context rule (v1 verbatim): async handlers run the
-// pure policy + stage work; loop() (clusterLoopTick) does the EEPROM
-// commits and the blocking segment renders. On the single-core non-RTOS
-// ESP8266 the async callbacks interleave with loop() only at yield points,
-// which is the same contract every v1 flag handoff relies on.
+// FollowerCluster.h — the row's tie to its master: the stored pairing, the
+// phase machine (shared ClusterMemberPhase.h: Clustered → Grace → LeaderLost)
+// and the text waiting for its flip instant. Decisions live in
+// FollowerPolicy.h; the EEPROM record in FollowerSettings.h. Context rule: a
+// web handler may pair (pure policy + staging only); loop()
+// (clusterLoopTick) does the EEPROM commits and the blocking renders. On the
+// single-core non-RTOS ESP8266 the async callbacks interleave with loop()
+// only at yield points.
 
 #include <Arduino.h>
 
@@ -13,60 +14,42 @@
 
 struct FollowerClusterView {
   ClusterFollowerPhase phase = ClusterFollowerPhase::Standalone;
-  String leaderName;
-  String leaderHost;
-  int row = 0;
-  uint32_t epoch = 0;
-  uint32_t lastSeq = 0;
-  String heldSegment;
-  // Diagnostics for /cluster/health (#306) so a curl-only operator can see
-  // WHY a row is blank/stale. -1 = not applicable (no render yet / already
-  // blank/standalone). sntpSynced gates commitAt flip timing.
-  int32_t msSinceRender = -1;
-  int32_t secsUntilBlank = -1;
-  bool sntpSynced = false;
+  String leaderName;  // the master's id; "" = unpaired
+  String leaderHost;  // its address when it paired
+  bool sntpSynced = false;  // gates flip-instant timing
 };
 
-// setup(): EEPROM.begin + membership load; boots the phase machine (Grace
-// when a membership is stored).
+// setup(): EEPROM.begin + pairing load; starts the phase machine (Grace when
+// a pairing is stored).
 void clusterInit();
 
-// The leader's requests are arriving and being answered right now (#515).
+// The master's messages are arriving right now (#515).
 bool clusterLeaderContactFresh();
-// The master's POSIX tz rule from a Config message (#564). An empty one keeps
-// the zone already held; a new one is stored with the pairing. loop() only.
+// The master's POSIX tz rule from a Config message. An empty one keeps the
+// zone already held; a new one is stored with the pairing. loop() only.
 void clusterSetTz(const String& tz);
-// #227: the quiet flag of an accepted leader ping (shared/ClusterQuiet.h).
+// #227: the master's quiet flag (shared/ClusterQuiet.h for what it means).
 void clusterNoteLeaderQuiet(bool quiet);
 
-// loop(): ~1 Hz phase decay (blank on Blank/Standalone transitions), due
-// render drain, staged EEPROM persist. Blocking I2C happens in here only.
+// loop(): ~1 Hz phase decay (blank or fallback clock once the master is
+// written off), due render drain, staged EEPROM persist. Blocking I2C happens
+// in here only.
 void clusterLoopTick();
 
-// Handler-facing (async context — pure policy + staging only).
-bool clusterJoinWouldConflict(const String& joiningLeaderHost,
-                              String& currentName, String& currentHost);
-void clusterHandleJoin(const String& leaderName, const String& leaderHost,
-                       int row, uint32_t epoch, const String& key,
-                       const String& tz);
+// Stores `masterId` at `masterHost` as this row's master (POST /pair, once
+// FollowerPairPolicy.h said Store) and starts the contact window.
+void clusterPair(const String& masterId, const String& masterHost);
+// The link reached Welcome: contact, and a new render sequence under `epoch`.
+void clusterMasterConnected(uint32_t epoch);
 ClusterRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
                                           const String& text, int speed,
                                           uint64_t commitAtMs);
 bool clusterHandlePing();
+// Release by the master: forgets the pairing and blanks the row. Idempotent.
 void clusterHandleLeave();
-
-// Cluster-wire auth (#313 follow-on). Enforced == a key is held (negotiated
-// at join): every leader-wire request must then carry a valid ts+mac; the web
-// handlers rebuild the canonical message and call verify, 403 on failure.
-bool clusterHmacEnforced();
-// #227: does `macHex` sign `msg` with this row's key? No replay state — only
-// for the quiet flag's mac on a ping whose own signature was accepted.
-bool clusterMacMatches(const String& msg, const String& macHex);
-bool clusterVerifySigned(const String& canonicalMsg, uint64_t ts,
-                         const String& macHex);
 
 FollowerClusterView clusterViewGet();
 
-// True while a staged render is waiting for its commitAt — the ops drain
-// defers behind it (mutual 409 discipline lives at the web boundary).
+// True while a text waits for its flip instant — unit jobs and the unit
+// facts wait behind it.
 bool clusterRenderPending();

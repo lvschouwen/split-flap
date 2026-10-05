@@ -12,7 +12,7 @@
 // off the bundled firmware, unreadable, in its bootloader, on a protocol this
 // build does not speak, or gone since the previous scan. A unit on the
 // bundled firmware produces nothing, so a healthy scan stays the one summary
-// line — the ring is small and the leader pulls it into the fleet log.
+// line — the ring is small.
 //
 // The wording is the S3 master's scan log (Master/UnitBus.cpp), so one grep
 // over the fleet log finds the same fact on either kind of row. The text

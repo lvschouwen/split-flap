@@ -17,9 +17,8 @@ inline bool followerPhaseShowsBlank(ClusterFollowerPhase p) {
          p == ClusterFollowerPhase::LeaderLost;
 }
 
-// /cluster/health + /settings state vocabulary: "blank" is this firmware's
-// word for a leader written off. Nothing parses it; humans and the member
-// panel just display it.
+// The phase as the log words it: "blank" is this firmware's word for a
+// master written off.
 inline const char* followerPhaseName(ClusterFollowerPhase p) {
   return clusterFollowerPhaseName(p, "blank");
 }

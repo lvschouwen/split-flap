@@ -6,10 +6,9 @@
 // is zeroed only by (a) FOLLOWER_RESCUE_HEALTHY_MS of stable uptime or
 // (b) the deliberate-reboot path (which the OTA-complete flow also takes) —
 // so only unexpected early deaths accumulate. At the cap the next boot
-// comes up as a minimal "rescue beacon": WiFi + cluster wire + OTA only,
-// no I2C/render, advertising rescue:1 in the join/ping replies so the
-// leader auto re-pushes the stored follower image (#343 leader side rides
-// the #344 convergence machine). The flash's reboot clears the counter.
+// comes up in rescue mode: WiFi, the wall link and the web routes only, no
+// I2C/render, saying so in Hello so the master offers its stored row image.
+// The install's restart clears the counter.
 //
 // RTC user memory survives crash/soft resets but NOT a power cycle — a
 // power glitch never counts as a bad boot, by design.

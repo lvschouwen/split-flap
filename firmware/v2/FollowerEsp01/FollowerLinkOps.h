@@ -1,7 +1,8 @@
 #pragma once
 // FollowerLinkOps.h — what a unit job from the wall link means on this row
 // (#564), pure and natively tested by test_follower_link_ops. Every check is
-// the shared one the routes use (MaintenancePolicy.h, ReflashPlan.h); this
+// the shared one the master's own row takes (MaintenancePolicy.h,
+// ReflashPlan.h); this
 // only says which checks a job code takes and names the refusal.
 
 #include <stdio.h>

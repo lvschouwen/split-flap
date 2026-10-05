@@ -96,14 +96,11 @@ def test_both_member_implementations_read_the_flag_and_hold_their_frame():
     s3 = _code(MASTER / "WebCluster.cpp")
     assert "clusterQuietAccept(" in s3 and "clusterFollowerMacMatches(" in s3
     assert "clusterQuietMsg(pingTs," in s3, "the mac must be checked against this ping's timestamp"
-    esp = _code(V2 / "FollowerEsp01" / "FollowerWeb.cpp")
-    assert "clusterQuietAccept(" in esp and "clusterMacMatches(" in esp
-    assert "clusterQuietMsg(pingTs," in esp
-    handled = esp.index("if (!clusterHandlePing())")
-    noted = esp.index("clusterNoteLeaderQuiet(")
-    assert handled < noted, "only an accepted ping may set the flag"
-    # The refusal branch returns before the flag is noted.
-    assert "return;" in esp[handled:noted]
+    # The ESP-01 row takes the flag from its master over the wall link, and
+    # only on a connection that reached Welcome.
+    esp = _code(V2 / "FollowerEsp01" / "FollowerLink.cpp")
+    handle = esp[esp.index("void handle(const wl_ToRow& m"):]
+    assert handle.index("if (!welcomed) {") < handle.index("clusterNoteLeaderQuiet(m.body.quiet.on);")
     fallback = _code(V2 / "FollowerEsp01" / "FollowerCluster.cpp")
     blank = fallback.index("if (followerPhaseShowsBlank(policyState.phase)) {")
     assert fallback.index("if (leaderQuiet) return;", blank) < fallback.index("followerClockEligible(", blank)

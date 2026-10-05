@@ -111,21 +111,3 @@ def test_targeted_run_flashes_only_the_planned_list():
     assert job.count("reflashFilterToAddress(") == 2  # reboot sweep + planned total
     narrowed = job.index("n = reflashFilterToAddress(flashTargets, n, onlyAddr);")
     assert narrowed < job.index("flashBootloaderUnits(flashTargets, n);")
-
-
-def test_reflash_route_never_falls_through_to_the_bulk_job_on_a_bad_address():
-    code = _code(TREE / "FollowerWeb.cpp")
-    route = code[code.index('server.on("/reflash-units"'):]
-    route = route[:route.index("reflashPending = true;")]
-    body_refusal = route.index('request->hasParam("address", true)')
-    query = route.index('request->hasParam("address")')
-    assert body_refusal < query
-    assert "reflashParseAddress(" in route and "reflashAddressInRange(" in route
-    assert "queryRequireLong" not in route, "strtol base 0 must not pick the unit"
-    # Both address branches end in a return before the bulk path.
-    assert route[body_refusal:query].count("return;") == 1
-    assert route[query:].count("return;") >= 2
-    # force without an address is refused before the bulk path: it must never
-    # turn into a whole-row reflash of healthy units.
-    assert "'force' needs 'address'" in route
-    assert "reflashParseForce(" in route

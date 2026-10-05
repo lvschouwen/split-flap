@@ -1,10 +1,9 @@
-// Host-side tests for the follower's EEPROM membership record (#298) — the
-// only on-ESP persisted setting besides WiFi credentials (the `clusteredBy`
-// marker: leader name/host + row + the #313-follow-on wire-auth key + replay
-// high-water mark, so a reboot lands in Grace still enforcing and does not
-// forgive a captured signed request).
+// Host-side tests for the row's EEPROM records: the pairing (the master's
+// id, address and tz rule, so a restart lands in Grace and dials the master
+// again) and the operator preferences behind it.
 
 #include <cstring>
+#include <initializer_list>
 
 #include <unity.h>
 
@@ -13,134 +12,81 @@
 void setUp() {}
 void tearDown() {}
 
-static void test_v4_magic_pins_the_tz_format_bump() {
-  // #342 added the tz field: the magic MUST have bumped 3FFS -> 4FFS so a
-  // pre-#342 blob fails decode (harmless standalone boot + fresh join)
-  // instead of misreading shifted fields.
-  TEST_ASSERT_EQUAL_UINT32(0x53464634UL, FOLLOWER_MEMBERSHIP_MAGIC);
+static bool decode(const uint8_t* blob, char* name, char* host, char* tz) {
+  return followerMembershipDecode(blob, name, host, tz);
 }
 
-static void test_tz_round_trips() {
-  // #342: the leader's POSIX tz rides the join and persists with the
-  // membership so a reboot straight into a dead-leader window can still
-  // run the clock fallback.
+static void test_layout_is_the_one_boards_in_the_field_hold() {
+  // Per-device truth: the fields and the preferences record behind them keep
+  // their place across images.
+  TEST_ASSERT_EQUAL_UINT32(0x53464634UL, FOLLOWER_MEMBERSHIP_MAGIC);
+  TEST_ASSERT_EQUAL(46, FOLLOWER_MEMBERSHIP_NAME_OFF);
+  TEST_ASSERT_EQUAL(79, FOLLOWER_MEMBERSHIP_HOST_OFF);
+  TEST_ASSERT_EQUAL(120, FOLLOWER_MEMBERSHIP_TZ_OFF);
+  TEST_ASSERT_EQUAL(186, FOLLOWER_MEMBERSHIP_BLOB_LEN);
+  TEST_ASSERT_EQUAL(186, FOLLOWER_PREFS_OFF);
+  TEST_ASSERT_EQUAL(189, FOLLOWER_EEPROM_LEN);
+}
+
+static void test_pairing_round_trips() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
   TEST_ASSERT_TRUE(followerMembershipEncode(
-      "wall-leader", "192.168.15.22", "CET-1CEST,M3.5.0,M10.5.0/3", 3, false,
-      nullptr, 0, blob));
+      "split-flap-master", "192.168.15.22", "CET-1CEST,M3.5.0,M10.5.0/3", blob));
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
-  char tzBuf[FOLLOWER_TZ_MAX + 1];
-  uint8_t row = 0;
-  bool keyValid = false;
-  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
-  uint64_t ts = 0;
-  TEST_ASSERT_TRUE(followerMembershipDecode(blob, name, host, tzBuf, row,
-                                            keyValid, key, ts));
-  TEST_ASSERT_EQUAL_STRING("CET-1CEST,M3.5.0,M10.5.0/3", tzBuf);
-}
-
-static void test_oversized_tz_rejects_at_encode() {
-  char longTz[FOLLOWER_TZ_MAX + 2];
-  memset(longTz, 'X', sizeof(longTz) - 1);
-  longTz[sizeof(longTz) - 1] = '\0';
-  uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  TEST_ASSERT_FALSE(followerMembershipEncode("n", "10.0.0.9", longTz, 0,
-                                             false, nullptr, 0, blob));
-}
-
-static void test_membership_round_trips_without_key() {
-  uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  TEST_ASSERT_TRUE(followerMembershipEncode("wall-leader", "192.168.15.22", "", 3,
-                                            false, nullptr, 0, blob));
-  char name[FOLLOWER_NAME_MAX + 1];
-  char host[FOLLOWER_HOST_MAX + 1];
-  char tzBuf[FOLLOWER_TZ_MAX + 1];
-  uint8_t row = 0;
-  bool keyValid = true;  // must be cleared to false by decode
-  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
-  uint64_t ts = 999;
-  TEST_ASSERT_TRUE(
-      followerMembershipDecode(blob, name, host, tzBuf, row, keyValid, key, ts));
-  TEST_ASSERT_EQUAL_STRING("wall-leader", name);
+  char tz[FOLLOWER_TZ_MAX + 1];
+  TEST_ASSERT_TRUE(decode(blob, name, host, tz));
+  TEST_ASSERT_EQUAL_STRING("split-flap-master", name);
   TEST_ASSERT_EQUAL_STRING("192.168.15.22", host);
-  TEST_ASSERT_EQUAL_UINT8(3, row);
-  TEST_ASSERT_FALSE(keyValid);
-  TEST_ASSERT_EQUAL_UINT64(0, ts);
+  TEST_ASSERT_EQUAL_STRING("CET-1CEST,M3.5.0,M10.5.0/3", tz);
 }
 
-static void test_membership_round_trips_with_key_and_mark() {
-  uint8_t inKey[FOLLOWER_HMAC_KEY_LEN];
-  for (int i = 0; i < FOLLOWER_HMAC_KEY_LEN; i++) inKey[i] = (uint8_t)(i * 3 + 1);
+static void test_bytes_no_longer_used_are_written_as_zero() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  // A realistic epoch-ms mark exercises the full 8-byte little-endian field.
-  const uint64_t mark = 1720000123456ULL;
-  TEST_ASSERT_TRUE(followerMembershipEncode("ldr", "10.0.0.9", "", 1, true, inKey,
-                                            mark, blob));
+  memset(blob, 0xEE, sizeof(blob));
+  TEST_ASSERT_TRUE(followerMembershipEncode("m", "10.0.0.9", "", blob));
+  for (int i = 4; i < FOLLOWER_MEMBERSHIP_NAME_OFF; i++) {
+    TEST_ASSERT_EQUAL_UINT8(0, blob[i]);
+  }
+}
+
+static void test_a_record_with_those_bytes_set_still_decodes() {
+  // What an image that used them left behind: the name, host and tz are
+  // where they were, and the checksum covers the whole record.
+  uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
+  TEST_ASSERT_TRUE(followerMembershipEncode("ldr", "10.0.0.9", "UTC0", blob));
+  for (int i = 4; i < FOLLOWER_MEMBERSHIP_NAME_OFF; i++) blob[i] = (uint8_t)(i * 3 + 1);
+  blob[FOLLOWER_MEMBERSHIP_BLOB_LEN - 1] = followerMembershipChecksum(blob);
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
-  char tzBuf[FOLLOWER_TZ_MAX + 1];
-  uint8_t row = 0;
-  bool keyValid = false;
-  uint8_t outKey[FOLLOWER_HMAC_KEY_LEN];
-  uint64_t ts = 0;
-  TEST_ASSERT_TRUE(
-      followerMembershipDecode(blob, name, host, tzBuf, row, keyValid, outKey, ts));
+  char tz[FOLLOWER_TZ_MAX + 1];
+  TEST_ASSERT_TRUE(decode(blob, name, host, tz));
   TEST_ASSERT_EQUAL_STRING("ldr", name);
   TEST_ASSERT_EQUAL_STRING("10.0.0.9", host);
-  TEST_ASSERT_TRUE(keyValid);
-  TEST_ASSERT_EQUAL_MEMORY(inKey, outKey, FOLLOWER_HMAC_KEY_LEN);
-  TEST_ASSERT_EQUAL_UINT64(mark, ts);
+  TEST_ASSERT_EQUAL_STRING("UTC0", tz);
 }
 
-static void test_blank_eeprom_decodes_to_no_membership() {
+static void test_blank_eeprom_decodes_to_no_pairing() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
-  char tzBuf[FOLLOWER_TZ_MAX + 1];
-  uint8_t row = 0;
-  bool keyValid = false;
-  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
-  uint64_t ts = 0;
+  char tz[FOLLOWER_TZ_MAX + 1];
   memset(blob, 0xFF, sizeof(blob));  // factory-fresh flash
-  TEST_ASSERT_FALSE(
-      followerMembershipDecode(blob, name, host, tzBuf, row, keyValid, key, ts));
+  TEST_ASSERT_FALSE(decode(blob, name, host, tz));
   memset(blob, 0x00, sizeof(blob));
-  TEST_ASSERT_FALSE(
-      followerMembershipDecode(blob, name, host, tzBuf, row, keyValid, key, ts));
+  TEST_ASSERT_FALSE(decode(blob, name, host, tz));
 }
 
-static void test_corrupt_checksum_rejects() {
-  uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  followerMembershipEncode("leader", "10.0.0.9", "", 1, false, nullptr, 0, blob);
-  blob[10] ^= 0x40;
+static void test_corrupt_byte_rejects() {
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
-  char tzBuf[FOLLOWER_TZ_MAX + 1];
-  uint8_t row = 0;
-  bool keyValid = false;
-  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
-  uint64_t ts = 0;
-  TEST_ASSERT_FALSE(
-      followerMembershipDecode(blob, name, host, tzBuf, row, keyValid, key, ts));
-}
-
-static void test_mark_change_is_checksum_protected() {
-  // A flipped byte in the lastTs field must fail the checksum too — the mark
-  // is security state, not free-floating.
-  uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  followerMembershipEncode("leader", "10.0.0.9", "", 1, false, nullptr,
-                           1720000000000ULL, blob);
-  blob[FOLLOWER_MEMBERSHIP_LASTTS_OFF] ^= 0x11;
-  char name[FOLLOWER_NAME_MAX + 1];
-  char host[FOLLOWER_HOST_MAX + 1];
-  char tzBuf[FOLLOWER_TZ_MAX + 1];
-  uint8_t row = 0;
-  bool keyValid = false;
-  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
-  uint64_t ts = 0;
-  TEST_ASSERT_FALSE(
-      followerMembershipDecode(blob, name, host, tzBuf, row, keyValid, key, ts));
+  char tz[FOLLOWER_TZ_MAX + 1];
+  for (int at : {10, FOLLOWER_MEMBERSHIP_NAME_OFF, FOLLOWER_MEMBERSHIP_TZ_OFF + 2}) {
+    uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
+    followerMembershipEncode("master", "10.0.0.9", "UTC0", blob);
+    blob[at] ^= 0x40;
+    TEST_ASSERT_FALSE(decode(blob, name, host, tz));
+  }
 }
 
 static void test_oversized_fields_reject_at_encode() {
@@ -148,36 +94,31 @@ static void test_oversized_fields_reject_at_encode() {
   char longHost[FOLLOWER_HOST_MAX + 8];
   memset(longHost, 'a', sizeof(longHost) - 1);
   longHost[sizeof(longHost) - 1] = '\0';
-  TEST_ASSERT_FALSE(
-      followerMembershipEncode("n", longHost, "", 0, false, nullptr, 0, blob));
+  TEST_ASSERT_FALSE(followerMembershipEncode("n", longHost, "", blob));
   char longName[FOLLOWER_NAME_MAX + 8];
   memset(longName, 'b', sizeof(longName) - 1);
   longName[sizeof(longName) - 1] = '\0';
-  TEST_ASSERT_FALSE(
-      followerMembershipEncode(longName, "10.0.0.9", "", 0, false, nullptr, 0, blob));
+  TEST_ASSERT_FALSE(followerMembershipEncode(longName, "10.0.0.9", "", blob));
+  char longTz[FOLLOWER_TZ_MAX + 2];
+  memset(longTz, 'X', sizeof(longTz) - 1);
+  longTz[sizeof(longTz) - 1] = '\0';
+  TEST_ASSERT_FALSE(followerMembershipEncode("n", "10.0.0.9", longTz, blob));
 }
 
 static void test_empty_host_rejects_at_encode() {
-  // A membership without a reachable leader host is not a membership
-  // (mirrors the v2 follower's leaderHost sentinel rule).
+  // A pairing without an address to dial is not a pairing.
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  TEST_ASSERT_FALSE(
-      followerMembershipEncode("leader", "", "", 0, false, nullptr, 0, blob));
+  TEST_ASSERT_FALSE(followerMembershipEncode("master", "", "", blob));
 }
 
 static void test_clear_makes_blob_undecodable() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
-  followerMembershipEncode("leader", "10.0.0.9", "", 1, false, nullptr, 0, blob);
+  followerMembershipEncode("master", "10.0.0.9", "", blob);
   followerMembershipClear(blob);
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
-  char tzBuf[FOLLOWER_TZ_MAX + 1];
-  uint8_t row = 0;
-  bool keyValid = false;
-  uint8_t key[FOLLOWER_HMAC_KEY_LEN];
-  uint64_t ts = 0;
-  TEST_ASSERT_FALSE(
-      followerMembershipDecode(blob, name, host, tzBuf, row, keyValid, key, ts));
+  char tz[FOLLOWER_TZ_MAX + 1];
+  TEST_ASSERT_FALSE(decode(blob, name, host, tz));
 }
 
 // --- operator preferences (#513) ---
@@ -193,7 +134,7 @@ static void test_prefs_roundtrip_both_values() {
 }
 
 static void test_prefs_unwritten_eeprom_means_defaults() {
-  // What a firmware predating the record leaves behind the membership blob.
+  // What a firmware predating the record leaves behind the pairing.
   uint8_t erased[FOLLOWER_PREFS_LEN] = {0xFF, 0xFF, 0xFF};
   TEST_ASSERT_TRUE(followerPrefsDecode(erased).reflashOnBoot);
   uint8_t zeroed[FOLLOWER_PREFS_LEN] = {0, 0, 0};
@@ -251,29 +192,14 @@ static void test_prefs_sit_behind_the_membership_blob() {
                         FOLLOWER_EEPROM_LEN);
 }
 
-static void test_parse_bool_is_strict() {
-  bool v = false;
-  TEST_ASSERT_TRUE(followerParseBool("true", v));
-  TEST_ASSERT_TRUE(v);
-  TEST_ASSERT_TRUE(followerParseBool("false", v));
-  TEST_ASSERT_FALSE(v);
-  v = true;
-  const char* bad[] = {"", "0", "1", "True", "FALSE", "false ", "no", "off"};
-  for (const char* b : bad) TEST_ASSERT_FALSE(followerParseBool(b, v));
-  TEST_ASSERT_FALSE(followerParseBool(nullptr, v));
-  TEST_ASSERT_TRUE(v);  // untouched on rejection
-}
-
 int main(int, char**) {
   UNITY_BEGIN();
-  RUN_TEST(test_v4_magic_pins_the_tz_format_bump);
-  RUN_TEST(test_tz_round_trips);
-  RUN_TEST(test_oversized_tz_rejects_at_encode);
-  RUN_TEST(test_membership_round_trips_without_key);
-  RUN_TEST(test_membership_round_trips_with_key_and_mark);
-  RUN_TEST(test_blank_eeprom_decodes_to_no_membership);
-  RUN_TEST(test_corrupt_checksum_rejects);
-  RUN_TEST(test_mark_change_is_checksum_protected);
+  RUN_TEST(test_layout_is_the_one_boards_in_the_field_hold);
+  RUN_TEST(test_pairing_round_trips);
+  RUN_TEST(test_bytes_no_longer_used_are_written_as_zero);
+  RUN_TEST(test_a_record_with_those_bytes_set_still_decodes);
+  RUN_TEST(test_blank_eeprom_decodes_to_no_pairing);
+  RUN_TEST(test_corrupt_byte_rejects);
   RUN_TEST(test_oversized_fields_reject_at_encode);
   RUN_TEST(test_empty_host_rejects_at_encode);
   RUN_TEST(test_clear_makes_blob_undecodable);
@@ -283,6 +209,5 @@ int main(int, char**) {
   RUN_TEST(test_prefs_keep_the_fallback_beside_the_boot_brake);
   RUN_TEST(test_a_record_from_before_the_fallback_field_shows_the_time);
   RUN_TEST(test_prefs_sit_behind_the_membership_blob);
-  RUN_TEST(test_parse_bool_is_strict);
   return UNITY_END();
 }

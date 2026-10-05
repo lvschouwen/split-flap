@@ -29,15 +29,15 @@ def test_one_file_selects_the_second_heap():
 
 def test_the_large_buffers_come_from_it():
     assert "unitsDoc = (char*)followerBufAlloc(cap);" in _code("FollowerLink.cpp")
-    assert "bootDumpBytes = (uint8_t*)followerBufAlloc(BOOT_SECTION_LEN);" in _code("FollowerWeb.cpp")
+    assert "bootDumpBytes = (uint8_t*)followerBufAlloc(BOOT_SECTION_LEN);" in _code("FollowerUnitJobs.cpp")
     assert "followerBufAlloc(sizeof(FollowerLogRing))" in _code("FollowerLog.cpp")
     # The ring is no longer part of the fixed memory.
     assert not re.search(r"static\s+FollowerLogRing\s+\w+;", _code("FollowerLog.cpp"))
 
 
 def test_a_buffer_goes_back_through_the_same_file():
-    for name in ("FollowerLink.cpp", "FollowerWeb.cpp"):
+    for name in ("FollowerLink.cpp", "FollowerUnitJobs.cpp"):
         code = _code(name)
         assert "delete[] unitsDoc" not in code and "delete[] bootDumpBytes" not in code
     assert "followerBufFree(unitsDoc);" in _code("FollowerLink.cpp")
-    assert "followerBufFree(bootDumpBytes);" in _code("FollowerWeb.cpp")
+    assert "followerBufFree(bootDumpBytes);" in _code("FollowerUnitJobs.cpp")

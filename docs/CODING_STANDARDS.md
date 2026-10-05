@@ -243,7 +243,7 @@ from "our own" peers (a peer may be compromised or a different firmware rev):
 ### 5.3 Browser-origin defense (CSRF/XSS)
 
 - Every mutating HTTP route **MUST** call the CSRF gate: non-LAN-`Origin` POSTs are 403'd
-  (`clusterCsrfRejectPost` / `followerCsrfRejectPost`); upload routes that write flash gate
+  (`lanCsrfRejectPost`, shared `LanOrigin.h`); upload routes that write flash gate
   **inline at `index == 0`** in `onUpload` (`webUploadCsrfRejected`).
 - Adding a route means adding it to the CSRF audit surface — in **both** header copies where the
   follower carries the endpoint.
@@ -297,8 +297,9 @@ Any user-configurable host/URL the firmware will connect to **MUST** pass the LA
   bench-proven.
 - **Regression pinning:** every bug fix lands with a test that failed before the fix — in every
   tree that carries the copied header.
-- **Wire twins:** protocol sides are pinned by paired fakes (`fake_follower.py` ↔ `fake_leader.py`)
-  run under pytest so the two ends cannot drift. New wire fields join the twins in the same PR.
+- **Wire twins:** protocol sides are pinned by fakes run under pytest so the two ends cannot
+  drift: `fake_follower.py` for the cluster wire, `link/fake_master.py` + stock protobuf for the
+  wall link. New wire fields join them in the same PR.
 - **ArduinoFake quirks** (documented in CLAUDE.md): `map()` must be wired in each test's `setUp()`;
   `EEPROM` etc. re-wire via `ArduinoFake(EEPROM)`.
 - CI green (all builds + native suites + pytest + drift gates) is a merge precondition.
@@ -387,7 +388,7 @@ Any user-configurable host/URL the firmware will connect to **MUST** pass the LA
 - [ ] Leader-wire: HMAC + source-IP binding, both trees (§5.4)
 - [ ] No secret can appear in the response or logs (§5.7)
 - [ ] Fails closed on any validation error (§5.7)
-- [ ] Wire twins (`fake_follower`/`fake_leader`) extended in the same PR (§6)
+- [ ] Wire twins (`fake_follower`, `link/fake_master`) extended in the same PR (§6)
 
 ### Risk-tiered review triggers (always get a dedicated review pass)
 

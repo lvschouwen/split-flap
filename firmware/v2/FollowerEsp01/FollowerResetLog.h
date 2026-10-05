@@ -1,7 +1,7 @@
 #pragma once
 // FollowerResetLog.h — why this board restarted, and the restarts before it
 // (#503). The SDK's reset info describes only the LATEST reset, so a crash
-// followed by an operator reboot or a leader re-push leaves no trace. Each
+// followed by a restart or a new image leaves no trace. Each
 // boot pushes the SDK's record into a small ring in RTC user memory, which
 // survives crash and soft resets but not a power cycle — after one the ring
 // starts over, and its single entry says so. Pure logic, natively tested by
@@ -64,8 +64,7 @@ inline int followerResetLogCount(const FollowerResetLogBlob& b) {
 }
 
 // One entry as "<reason>:<exccause>:<epc1 hex>:<excvaddr hex>", the form
-// /cluster/health serves (newest first). Kept terse: the reply is built on a
-// board with a few KB of free heap.
+// the boot log prints the earlier restarts in (newest first).
 inline int followerResetEntryFormat(const FollowerResetEntry& e, char* buf,
                                     size_t cap) {
   return snprintf(buf, cap, "%u:%u:%08lx:%08lx",
@@ -76,6 +75,5 @@ inline int followerResetEntryFormat(const FollowerResetEntry& e, char* buf,
 
 #ifdef ARDUINO
 // --- glue (FollowerResetLog.cpp, ESP.rtcUserMemory + SDK reset info) -----------
-void resetLogBootInit();  // record + log this boot; early in setup()
-const FollowerResetLogBlob& resetLogGet();
+void resetLogBootInit();  // record this boot, log it and the ones before; early in setup()
 #endif

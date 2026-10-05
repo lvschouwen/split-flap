@@ -23,9 +23,9 @@
 #include <stdint.h>
 
 #define ESCALATION_BUS_DEAD_MS (10UL * 60UL * 1000UL)
-// A handler asks for its block plus 1.5 KB before it allocates; below this
-// the board answers 503 to almost everything and a throwing allocation is
-// one request away.
+// A large buffer is taken only with 1.5 KB left beside it (FollowerMem.h);
+// below this the board can serve almost none of them and a throwing
+// allocation is one request away.
 #define ESCALATION_LOW_BLOCK_BYTES 4096U
 #define ESCALATION_LOW_HEAP_LOG_MS (60UL * 1000UL)
 #define ESCALATION_LOW_HEAP_MS (5UL * 60UL * 1000UL)

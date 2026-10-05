@@ -1,41 +1,31 @@
-// FollowerCluster.cpp — cluster glue (#298). Contract in FollowerCluster.h.
+// FollowerCluster.cpp — pairing, phase and render glue. Contract in
+// FollowerCluster.h.
 
 #include "FollowerCluster.h"
 
 #include <EEPROM.h>
 #include <time.h>
 
-#include "ClusterHmac.h"  // cluster-wire auth: key storage + verify (#313 follow-on)
+#include "ClusterWireGuards.h"  // clusterWirePrintable
 #include "FollowerBus.h"
-#include "FollowerClock.h"  // #342: local clock fallback when the leader dies
+#include "FollowerClock.h"  // #342: local clock fallback when the master is lost
 #include "FollowerConfig.h"
 #include "FollowerPrefs.h"
-#include "FollowerRescue.h"  // #343: rescue beacon never touches the bus
+#include "FollowerRescue.h"  // #343: rescue mode never touches the bus
 #include "FollowerSettings.h"
 
-// #227: what the leader last said about quiet mode (the ping's quiet flag).
-// RAM only — it describes a leader's state.
+// #227: what the master last said about quiet mode. RAM only — it describes
+// the master's state.
 static volatile bool leaderQuiet = false;
 
 static ClusterFollowerState policyState;
 static String leaderName;
 static String leaderHost;
-// #342: the leader's POSIX zone (join body, persisted with the membership)
-// — fuels the Blank-phase clock fallback. "" = pre-#342 leader, no clock.
+// #342: the master's POSIX zone (a Config message, stored with the pairing)
+// — fuels the clock fallback. "" = none known yet, no clock.
 static String leaderTz;
-static int memberRow = 0;
-static String heldSegment;
 static int heldSpeed = 80;
 static volatile bool membershipDirty = false;
-// Cluster-wire auth (#313 follow-on): the leader's negotiated key. Present ⇒
-// every leader-wire request must carry a valid ts+mac; absent (pre-HMAC
-// leader) ⇒ fall back to #313 source-IP binding.
-static ClusterMemberAuth auth;  // key + replay mark (ClusterWireGuards.h)
-// Monotonic replay high-water mark (#313 follow-on HIGH#1): every accepted
-// signed request must carry a strictly newer ts. Persisted coarsely in the
-// EEPROM membership blob (hmacLastPersistedTs = last written value) so a
-// reboot reloads it; reset durably on (re)key at join and on leave so a
-// rebooted leader's fresh signing epoch is re-accepted.
 
 // Single staged render slot — a newer accepted render replaces an
 // undelivered older one (seq acceptance upstream keeps ordering honest).
@@ -55,11 +45,6 @@ static bool clockShowing = false;
 static int shownClockMinute = -1;
 static bool clockShowsDate = false;  // shownClockMinute is then the day of the year
 
-// millis() when a leader render was last APPLIED (#306 diagnostics). Distinct
-// from policyState.lastContactMs, which any ping also bumps.
-static uint32_t lastRenderMs = 0;
-static bool haveRender = false;
-
 static uint64_t nowEpochMs(bool& synced) {
   time_t t = time(nullptr);
   // SNTP epoch-only sync (spec): anything before ~2001 is the unset RTC.
@@ -74,15 +59,12 @@ static uint64_t nowEpochMs(bool& synced) {
 // It also must run AFTER wifiServicesInit's configTime(0,0) (which resets the
 // zone to UTC) — the loop is, clusterInit isn't. This just marks a (re)install
 // as needed; clusterLoopTick does it lazily once SNTP is synced.
-// volatile: cleared from the async-handler context (clusterHandleJoin ->
-// applyLeaderTz), read+set from loop context — same cross-context idiom as
-// membershipDirty/renderPending above.
 static volatile bool tzInstalled = false;
 static void applyLeaderTz() { tzInstalled = false; }
 
 void clusterInit() {
-  // One mirror for both records: the membership blob and, behind it, the
-  // operator preferences (#513, read by prefsInit()).
+  // One mirror for both records: the pairing and, behind it, the operator
+  // preferences (#513, read by prefsInit()).
   EEPROM.begin(FOLLOWER_EEPROM_LEN);
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
   for (int i = 0; i < FOLLOWER_MEMBERSHIP_BLOB_LEN; i++) {
@@ -91,21 +73,15 @@ void clusterInit() {
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
   char tz[FOLLOWER_TZ_MAX + 1];
-  uint8_t row = 0;
-  bool keyValid = false;
-  uint64_t mark = 0;
-  bool stored = followerMembershipDecode(blob, name, host, tz, row, keyValid,
-                                         auth.key, mark);
-  auth.restored(stored && keyValid, mark);
+  bool stored = followerMembershipDecode(blob, name, host, tz);
   if (stored) {
     leaderName = name;
     leaderHost = host;
     leaderTz = tz;
-    applyLeaderTz();  // #342: a reboot into a dead-leader window still clocks
-    memberRow = row;
-    SerialPrint(F("Clustered by "));
+    applyLeaderTz();  // #342: a start with the master gone still clocks
+    SerialPrint(F("Paired with "));
     SerialPrint(leaderName);
-    SerialPrintln(F(" — booting into grace, holding for the leader"));
+    SerialPrintln(F(" — starting in grace, waiting for the master"));
   }
   clusterFollowerBoot(policyState, millis(), stored);
 }
@@ -114,9 +90,7 @@ static void persistMembership() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
   if (leaderHost.length() == 0 ||
       !followerMembershipEncode(leaderName.c_str(), leaderHost.c_str(),
-                                leaderTz.c_str(), (uint8_t)memberRow,
-                                auth.keyed, auth.key, auth.lastAcceptedTs,
-                                blob)) {
+                                leaderTz.c_str(), blob)) {
     followerMembershipClear(blob);
   }
   for (int i = 0; i < FOLLOWER_MEMBERSHIP_BLOB_LEN; i++) {
@@ -144,9 +118,8 @@ void clusterLoopTick() {
     }
   }
 
-  // Rescue beacon (#343): membership/phase bookkeeping above stays live so
-  // the leader sees us and the marker, but the bus is untouchable — drop
-  // any accepted render unshown (the leader's re-push is the point).
+  // Rescue mode (#343): pairing and phase bookkeeping above stay live, but
+  // the bus is untouchable — an accepted text is dropped unshown.
   if (rescueActive()) {
     renderPending = false;
     return;
@@ -232,75 +205,38 @@ void clusterLoopTick() {
   }
 }
 
-bool clusterJoinWouldConflict(const String& joiningLeaderHost,
-                              String& currentName, String& currentHost) {
-  bool sameLeader = leaderHost == joiningLeaderHost;
-  if (!clusterFollowerJoinConflicts(policyState, millis(), sameLeader)) {
-    return false;
+void clusterPair(const String& masterId, const String& masterHost) {
+  // The contact window starts now: the new master has that long to connect
+  // before the row counts it as silent.
+  clusterFollowerJoin(policyState, millis(), 0);
+  if (leaderName != masterId) {
+    // Another master: what the old one said goes with it, as on a Release.
+    leaderTz = "";
+    applyLeaderTz();
+    leaderQuiet = false;
+    renderPending = false;
   }
-  currentName = leaderName;
-  currentHost = leaderHost;
-  return true;
+  leaderName = masterId;
+  leaderHost = masterHost;
+  membershipDirty = true;
+  SerialPrint(F("cluster: paired with "));
+  SerialPrint(masterId);
+  SerialPrint(F(" at "));
+  SerialPrintln(masterHost);
 }
 
-void clusterHandleJoin(const String& name, const String& host, int row,
-                       uint32_t epoch, const String& key, const String& tz) {
+void clusterMasterConnected(uint32_t epoch) {
+  if (policyState.phase == ClusterFollowerPhase::Standalone) return;
   clusterFollowerJoin(policyState, millis(), epoch);
-  // Adopt the negotiated wire-auth key (#313 follow-on): a valid key turns
-  // enforcement ON; a pre-HMAC leader sends none.
-  // Fresh key material resets the replay mark (ClusterMemberAuth::adoptKey);
-  // the `changed` persist below rewrites the blob with that reset mark, so a
-  // follower reboot after the rekey won't reload a stale-high mark.
-  bool keyChanged = auth.adoptKey(key);
-  // NVS/EEPROM-flood guard (#313, parity with the S3 follower): persist the
-  // membership blob only when a field actually moved — a leader re-joining
-  // on its cadence must not burn EEPROM on every accepted join.
-  // #342: tz is additive — a pre-#342 leader sends none and an emptied one
-  // keeps the last known zone (a zone is better than a dark row).
-  bool tzChanged = tz.length() > 0 && tz != leaderTz;
-  bool changed = leaderName != name || leaderHost != host ||
-                 memberRow != row || keyChanged || tzChanged;
-  leaderName = name;
-  leaderHost = host;
-  if (tzChanged) {
-    leaderTz = tz;
-    applyLeaderTz();
-  }
-  memberRow = row;
-  if (changed) {
-    membershipDirty = true;
-    SerialPrint(F("cluster: joined by "));
-    SerialPrint(name);
-    SerialPrintln(auth.keyed ? F(" [authenticated]") : F(""));
-  }
 }
 
 void clusterSetTz(const String& tz) {
   if (tz.length() == 0 || tz == leaderTz || leaderHost.length() == 0) return;
-  // Stored and handed to the C library: the same rule as the join's tz.
+  // Stored and handed to the C library: printable, no spaces.
   if (tz.length() > FOLLOWER_TZ_MAX || !clusterWirePrintable(tz, 0x21)) return;
   leaderTz = tz;
   applyLeaderTz();
   membershipDirty = true;
-}
-
-bool clusterHmacEnforced() { return auth.keyed; }
-
-bool clusterMacMatches(const String& msg, const String& macHex) {
-  return auth.macMatches(msg, macHex);
-}
-
-bool clusterVerifySigned(const String& canonicalMsg, uint64_t ts,
-                         const String& macHex) {
-  bool synced = false;
-  uint64_t nowMs = nowEpochMs(synced);
-  bool markDue = false;
-  bool ok = auth.accept(canonicalMsg, ts, macHex, nowMs, synced, markDue);
-  if (markDue) {
-    auth.markPersisted();
-    membershipDirty = true;  // loop() rewrites the blob (mark included)
-  }
-  return ok;
 }
 
 ClusterRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
@@ -311,14 +247,11 @@ ClusterRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
   if (verdict == ClusterRenderVerdict::Apply) {
     bool synced = false;
     uint64_t nowMs = nowEpochMs(synced);
-    heldSegment = text;
     heldSpeed = speed;
     renderText = text;
     renderSpeed = speed;
     renderDueMs = millis() + clusterRenderDelayMs(commitAtMs, nowMs, synced);
     renderPending = true;
-    lastRenderMs = millis();
-    haveRender = true;
   }
   return verdict;
 }
@@ -334,16 +267,13 @@ void clusterHandleLeave() {
   clusterFollowerLeave(policyState);
   leaderName = "";
   leaderHost = "";
-  leaderTz = "";  // #342: the zone leaves with the leader that owned it
-  leaderQuiet = false;  // #227: it described the leader we left
+  leaderTz = "";  // #342: the zone leaves with the master that owned it
+  leaderQuiet = false;  // #227: it described the master we left
   applyLeaderTz();  // #362: re-arm the tz latch (defensive — eligibility also
                     // gates on leaderTz, but this survives a future refactor)
-  memberRow = 0;
-  heldSegment = "";
   renderPending = false;
-  auth.drop();  // #313 follow-on: the wire-auth key and its replay mark
-  membershipDirty = true;  // persistMembership clears the blob (mark included)
-  SerialPrintln(F("cluster: left — standalone (blank)"));
+  membershipDirty = true;  // persistMembership clears the record
+  SerialPrintln(F("cluster: released — unpaired (blank)"));
 }
 
 FollowerClusterView clusterViewGet() {
@@ -351,23 +281,6 @@ FollowerClusterView clusterViewGet() {
   v.phase = policyState.phase;
   v.leaderName = leaderName;
   v.leaderHost = leaderHost;
-  v.row = memberRow;
-  v.epoch = policyState.epoch;
-  v.lastSeq = policyState.lastSeq;
-  v.heldSegment = heldSegment;
-  // Diagnostics (#306).
-  v.msSinceRender = haveRender ? (int32_t)(millis() - lastRenderMs) : -1;
-  // Total silence blanks the row at lastContactMs + CLUSTER_GRACE_MS (the
-  // tick cascades Clustered->Grace->Blank on cumulative silence). Only
-  // meaningful while still showing content.
-  if (policyState.phase == ClusterFollowerPhase::Clustered ||
-      policyState.phase == ClusterFollowerPhase::Grace) {
-    int32_t remainMs =
-        (int32_t)(policyState.lastContactMs + CLUSTER_GRACE_MS - millis());
-    v.secsUntilBlank = remainMs > 0 ? remainMs / 1000 : 0;
-  } else {
-    v.secsUntilBlank = -1;  // already blank / standalone
-  }
   bool synced = false;
   (void)nowEpochMs(synced);
   v.sntpSynced = synced;

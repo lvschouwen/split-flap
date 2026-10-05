@@ -82,6 +82,8 @@ message Update {
   uint32 http_port = 5;           // where the master serves it; 0 = 80
 }
 
+// Asks for the row's log, for this connection: what the row still holds that
+// it has not sent before, then each new line as LogLine.
 message LogCtl {
   bool on = 1;
 }
@@ -212,6 +214,8 @@ message Event {
   uint32 up_s = 5;
 }
 
+// One line of the row's log without its newline, opened by the row's uptime
+// in seconds ("[123] ..."). A longer line comes in pieces.
 message LogLine {
   bytes text = 1;
 }

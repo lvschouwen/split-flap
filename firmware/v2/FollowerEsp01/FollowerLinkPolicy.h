@@ -29,8 +29,9 @@ inline bool followerLinkElapsed(uint32_t nowMs, uint32_t sinceMs, uint32_t inter
   return (uint32_t)(nowMs - sinceMs) >= intervalMs;
 }
 
-// The stored master address may carry a port ("host:8801") from the HTTP
-// wire; the link always dials its own port, so only the host part counts.
+// A stored master address may carry a port ("host:8801", a record written
+// by an image before the link); the link always dials its own port, so only
+// the host part counts.
 // Copies it into out (cap bytes); false when there is none or it does not fit.
 inline bool followerLinkHostPart(const char* stored, char* out, size_t cap) {
   const char* colon = strchr(stored, ':');

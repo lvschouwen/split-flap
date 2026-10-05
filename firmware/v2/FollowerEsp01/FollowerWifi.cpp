@@ -84,7 +84,7 @@ void followerTxOtaCap(bool on) {
   txOtaCapped = on;
   // Capped at the join ceiling, below the 10 dBm this guard used before the
   // ladder: a row that climbed past it for a weak link may stall the upload,
-  // which the 30 s thaw and the leader's retry recover; a sagging rail during
+  // which the 30 s thaw and a retry recover; a sagging rail during
   // flash writes is the worse failure.
   uint8_t index = txState.index;
   if (on && index > WIFI_TX_JOIN_CEILING_INDEX) {
@@ -228,8 +228,7 @@ void wifiServicesInit(int rowWidth) {
     MDNS.addServiceTxt("splitflap", "tcp", "rev", GIT_REV);
     MDNS.addServiceTxt("splitflap", "tcp", "width",
                        String(rowWidth).c_str());
-    // #297: the plat tag is what keeps the S3 leader's firmware rollout
-    // away from this board and tags it in the discovery scan.
+    // The plat tag tells a master's scan for boards to pair what this is.
     MDNS.addServiceTxt("splitflap", "tcp", "plat", FOLLOWER_PLAT);
     SerialPrintln(F("mDNS responder started"));
   } else {

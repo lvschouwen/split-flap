@@ -4,27 +4,23 @@
 #include <Arduino.h>
 #include <Print.h>
 
-// In-RAM log ring for the ESP-01 follower (#318 E). The follower has NO
-// serial console — GPIO1/3 are the unit bus (FollowerConfig.h), so this ring
-// is the ONLY way to see what the row is doing. It is served at GET /log and,
-// more usefully, pulled by the S3 leader into the fleet-wide log so the whole
-// wall's activity lands in one place (/log/flash on the master).
+// In-RAM log ring for the ESP-01 row (#318 E). The board has NO serial
+// console — GPIO1/3 are the unit bus (FollowerConfig.h), so this ring is the
+// ONLY way to see what the row is doing. It goes up the wall link as LogLine
+// messages while the master asks for it (FollowerLink.cpp).
 //
-// 4 KB: the leader pulls the ring every LOG_PULL_INTERVAL_MS, so it has to
-// hold what a row writes between two pulls — and at boot, before any leader
-// is talking to it, the banner plus the scans of a full row. Lines carry the
-// board's own uptime in seconds (#503), not a wall clock — the leader stamps
-// each line on ingest, giving the fleet log one coherent clock (the ESP-01's
-// own clock is SNTP-epoch-only and often unset). The stamp costs up to 13
-// bytes a line out of that budget.
+// 4 KB: it has to hold what a row writes while no master is reading — at
+// boot, the banner plus the scans of a full row. Lines carry the board's own
+// uptime in seconds (#503), not a wall clock (the ESP-01's own clock is often
+// unset); the stamp costs up to 13 bytes a line out of that budget.
 
 #ifndef FOLLOWER_LOG_SIZE
 #define FOLLOWER_LOG_SIZE 4096
 #endif
 
-// Byte ring with a monotonic write cursor so the leader can fetch only the
-// bytes it has not ingested yet (GET /log?after=<cursor>). Pure logic — no
-// Print/Wire dependency — so it is exercised host-side (test_follower_log).
+// Byte ring with a monotonic write cursor, so a reader takes only the bytes
+// it has not had yet. Pure logic — no Print/Wire dependency — so it is
+// exercised host-side (test_follower_log).
 struct FollowerLogRing {
   char buf[FOLLOWER_LOG_SIZE];
   size_t head = 0;         // next write position
@@ -44,8 +40,8 @@ struct FollowerLogRing {
   }
 
   // Append with an "[<uptime seconds>] " stamp opening every line (#503): the
-  // ring is pulled into the fleet log long after the fact, and without it a
-  // line cannot be placed against a reset or a bus-death episode.
+  // ring is read long after the fact, and without it a line cannot be placed
+  // against a reset or a bus-death episode.
   bool atLineStart = true;
   void appendStamped(const char* data, size_t len, uint32_t seconds) {
     if (data == nullptr) return;
@@ -67,47 +63,34 @@ struct FollowerLogRing {
   // Oldest cursor value still recoverable from the ring.
   uint32_t oldestCursor() const { return written - (uint32_t)fill(); }
 
-  // The same bytes readSince() appends, handed to `sink(data, len)` as at most
-  // two contiguous spans straight out of the ring — no copy (#503/#519).
-  // Returns the next cursor.
-  template <typename Sink>
-  uint32_t readSinceInto(uint32_t after, Sink&& sink) const {
-    uint32_t start = after;
+  // The next whole line at `cursor` into out, without its newline; `cursor`
+  // moves past it. A cursor older than the ring holds starts at the oldest
+  // byte; one past `written` (a reader that outlived a restart) at `written`.
+  // A line longer than cap comes in pieces. False, with nothing changed,
+  // while no whole line is waiting.
+  bool nextLine(uint32_t& cursor, char* out, size_t cap, size_t& len) const {
+    uint32_t start = cursor;
     if (start < oldestCursor()) start = oldestCursor();
     if (start > written) start = written;
-    size_t count = (size_t)(written - start);
-    size_t idx = (head + (size_t)FOLLOWER_LOG_SIZE - count) % FOLLOWER_LOG_SIZE;
-    size_t first = count;
-    if (idx + first > (size_t)FOLLOWER_LOG_SIZE) first = (size_t)FOLLOWER_LOG_SIZE - idx;
-    if (first > 0) sink(buf + idx, first);
-    if (count > first) sink(buf, count - first);
-    return written;
-  }
-
-  // Bytes readSinceInto() would hand out for `after`.
-  size_t countSince(uint32_t after) const {
-    uint32_t start = after;
-    if (start < oldestCursor()) start = oldestCursor();
-    if (start > written) start = written;
-    return (size_t)(written - start);
-  }
-
-  // Append the retained bytes with cursor >= `after` (clamped to what the ring
-  // still holds), oldest first, to `out`; return the next cursor (== written).
-  // A stale `after` past `written` — the leader outlived a follower reboot —
-  // yields nothing and rewinds the leader to `written`, so a reboot can't
-  // trigger a re-dump storm.
-  uint32_t readSince(uint32_t after, String& out) const {
-    uint32_t start = after;
-    if (start < oldestCursor()) start = oldestCursor();
-    if (start > written) start = written;
-    size_t count = (size_t)(written - start);
-    size_t idx = (head + (size_t)FOLLOWER_LOG_SIZE - count) % FOLLOWER_LOG_SIZE;
-    for (size_t i = 0; i < count; i++) {
-      out += buf[idx++];
+    const size_t waiting = (size_t)(written - start);
+    size_t idx = (head + (size_t)FOLLOWER_LOG_SIZE - waiting) % FOLLOWER_LOG_SIZE;
+    size_t n = 0;
+    for (size_t i = 0; i < waiting; i++) {
+      const char c = buf[idx++];
       if (idx >= FOLLOWER_LOG_SIZE) idx = 0;
+      if (c == '\n') {
+        cursor = start + (uint32_t)i + 1;
+        len = n;
+        return true;
+      }
+      if (n == cap) {
+        cursor = start + (uint32_t)i;
+        len = n;
+        return true;
+      }
+      out[n++] = c;
     }
-    return written;
+    return false;
   }
 };
 
@@ -121,6 +104,5 @@ class FollowerLogPrinter : public Print {
 
 extern FollowerLogPrinter followerLogPrinter;
 
-// The ring itself, for a reader that streams it (GET /log). Single-core
-// superloop: a handler runs to completion between writers.
+// The ring itself, for the reader that sends it up the link.
 const FollowerLogRing& followerLogRing();

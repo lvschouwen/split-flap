@@ -44,7 +44,6 @@ NOTED_COPIES = [
     (MASTER / "SlotRecord.h", RESCUE / "RescueSlotRecord.h"),
     (MASTER / "DeviceIdentity.h", RESCUE / "RescueIdentity.h"),
     (MASTER / "WifiPolicy.h", RESCUE / "RescueWifiPolicy.h"),
-    (MASTER / "ApiIndex.h", FOLLOWER / "ApiIndex.h"),
 ]
 
 COPY_NOTE_RE = re.compile(r"\b(copy|copied|copies)\b", re.IGNORECASE)

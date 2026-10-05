@@ -124,7 +124,7 @@ def test_no_tree_judges_self_test_replies_itself():
                           r"#define\s+SELF_TEST_\w+|"
                           r"\bconstexpr\s+\w+\s+SELF_TEST_\w+", ROW_MASTERS), (
         "the self-test wait is shared/SelfTestPoll.h")
-    for path in ("Master/DisplayTask.cpp", "FollowerEsp01/FollowerWeb.cpp"):
+    for path in ("Master/DisplayTask.cpp", "FollowerEsp01/FollowerUnitJobs.cpp"):
         assert "selfTestPollObserve(" in (V2 / path).read_text(), path
 
 
@@ -156,7 +156,7 @@ def test_the_lan_origin_rule_exists_once():
 def test_the_follower_reprobes_a_unit_whose_reads_it_invalidated():
     """Only a probe re-reads the offset on the ESP-01 row, and nothing probes
     periodically there: an op that invalidates a unit's reads must queue one."""
-    web = _strip_comments((V2 / "FollowerEsp01/FollowerWeb.cpp").read_text())
+    web = _strip_comments((V2 / "FollowerEsp01/FollowerUnitJobs.cpp").read_text())
     body = web[web.index("static void executeStagedOp()"):
                web.index("static void pollSelfTest()")]
     for kind in ("RebootToBootloader", "BootUpdate", "BootDump"):
@@ -217,20 +217,25 @@ def test_upload_paths_decide_through_the_shared_gate():
 
 
 def test_every_row_master_refuses_an_upload_during_a_unit_reflash():
-    for path in ("Master/WebFirmware.cpp", "FollowerEsp01/FollowerWeb.cpp"):
-        body = _strip_comments((V2 / path).read_text())
-        gate = body[body.index("otaUploadGate("):]
-        gate = gate[:gate.index(";")]
-        assert "reflashInProgress(" in gate, path
+    body = _strip_comments((V2 / "Master/WebFirmware.cpp").read_text())
+    gate = body[body.index("otaUploadGate("):]
+    assert "reflashInProgress(" in gate[:gate.index(";")]
+    # The row asks its unit-job module, which also counts a job still queued.
+    body = _strip_comments((V2 / "FollowerEsp01/FollowerWeb.cpp").read_text())
+    gate = body[body.index("otaUploadGate("):]
+    assert "unitUpdateQueuedOrRunning()" in gate[:gate.index(";")]
+    jobs = _strip_comments((V2 / "FollowerEsp01/FollowerUnitJobs.cpp").read_text())
+    rule = jobs[jobs.index("bool unitUpdateQueuedOrRunning() {"):]
+    assert "reflashInProgress(reflashProgress)" in rule[:rule.index("\n}\n")]
 
 
 # --- #533: cluster-wire member guards -----------------------------------------
 
-MEMBER_HANDLERS = ["Master/WebCluster.cpp", "FollowerEsp01/FollowerWeb.cpp"]
+MEMBER_HANDLERS = ["Master/WebCluster.cpp"]
 
 
 def test_member_handlers_decide_through_the_shared_guards():
-    """The two member implementations bounded the row differently and built
+    """Two member implementations once bounded the row differently and built
     different join replies."""
     for path in MEMBER_HANDLERS:
         body = _strip_comments((V2 / path).read_text())
@@ -241,20 +246,17 @@ def test_member_handlers_decide_through_the_shared_guards():
         for own in ("leaderHost != request->client()", "Row out of range",
                     "leaderHost.length() > 0 &&"):
             assert own not in body, f"{path}: {own!r} belongs to the shared guard"
-    for path in ("Master/WebCluster.cpp", "FollowerEsp01/FollowerJson.h"):
-        assert "clusterAppendHealthKeys(" in (V2 / path).read_text(), path
+    assert "clusterAppendHealthKeys(" in (V2 / "Master/WebCluster.cpp").read_text()
     assert not _offenders(r"#define\s+CLUSTER_MAX_MEMBERS\b|"
                           r"clusterHmacAccept\(|"
                           r"clusterHmacMarkNeedsPersist\(")
 
 
-def test_both_members_keep_their_wire_auth_in_the_shared_struct():
-    for path in ("Master/ClusterFollower.cpp",
-                 "FollowerEsp01/FollowerCluster.cpp"):
-        body = _strip_comments((V2 / path).read_text())
-        for call in ("ClusterMemberAuth auth;", "auth.adoptKey(",
-                     "auth.accept(", "auth.drop()", "auth.restored("):
-            assert call in body, f"{path}: {call}"
+def test_the_member_keeps_its_wire_auth_in_the_shared_struct():
+    body = _strip_comments((V2 / "Master/ClusterFollower.cpp").read_text())
+    for call in ("ClusterMemberAuth auth;", "auth.adoptKey(",
+                 "auth.accept(", "auth.drop()", "auth.restored("):
+        assert call in body, call
 
 
 # --- #535: python build helpers -----------------------------------------------
@@ -368,26 +370,3 @@ def test_both_row_masters_run_the_shared_bootloader_sequences():
         src = _strip_comments(path.read_text())
         for call in ("bootDumpRun(hooks, ", "bootUpdateRun(hooks, "):
             assert call in src, f"{path.name}: {call}"
-
-
-# --- API legend: one meaning per key ---------------------------------------------
-
-def _api_legend(path):
-    src = path.read_text()
-    table = src[src.index("API_LEGEND"):]
-    return dict(re.findall(r'\{"([^"]+)",\s*"((?:[^"\\]|\\.)*)"\}', table))
-
-
-def test_a_legend_key_means_the_same_on_both_row_masters():
-    """The route gates never looked at the legend text, and i2cTx / i2cErr /
-    minHeap had drifted in meaning between the two GET /api replies."""
-    master = _api_legend(V2 / "Master/ApiIndex.h")
-    follower = _api_legend(V2 / "FollowerEsp01/ApiIndex.h")
-    # Same word, different object: the leader's view of a member vs the
-    # member's own state.
-    different_object = {"hmac", "row", "seq"}
-    common = (set(master) & set(follower)) - different_object
-    assert len(common) > 50
-    drift = {k: (master[k], follower[k]) for k in sorted(common)
-             if master[k] != follower[k]}
-    assert not drift, drift

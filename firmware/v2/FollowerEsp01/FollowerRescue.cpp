@@ -38,8 +38,8 @@ void rescueMarkHealthy() {
 }
 
 void rescueHealthyTick() {
-  // A beacon boot never self-forgives — only a completed firmware push
-  // (whose reboot runs through rescueMarkHealthy) ends the rescue state,
+  // A rescue boot never self-forgives — only a deliberate restart
+  // (which runs through rescueMarkHealthy) ends the rescue state,
   // so a transient-crash row still converges back to a proven image.
   if (beaconActive || healthyMarked) return;
   if (millis() >= FOLLOWER_RESCUE_HEALTHY_MS) rescueMarkHealthy();

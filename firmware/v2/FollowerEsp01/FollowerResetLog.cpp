@@ -20,6 +20,12 @@ void resetLogBootInit() {
                          sizeof(resetLog));
   SerialPrint(F("Reset: "));
   SerialPrintln(ESP.getResetInfo());
+  // The restarts before this one: the log is where the history is read.
+  const int count = followerResetLogCount(resetLog);
+  for (int i = 1; i < count; i++) {
+    char entry[32];
+    followerResetEntryFormat(resetLog.e[i], entry, sizeof(entry));
+    SerialPrint(F("Reset before that: "));
+    SerialPrintln(entry);
+  }
 }
-
-const FollowerResetLogBlob& resetLogGet() { return resetLog; }

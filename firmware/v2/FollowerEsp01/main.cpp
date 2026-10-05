@@ -1,12 +1,11 @@
-// main.cpp — ESP-01 cluster follower "dumb row" (#298, epic #270). One
-// single-core superloop, no RTOS: async web handlers stage, loop() mutates
-// (v1's context rule verbatim — the superloop plays both v2 roles: it
-// drains staged work like netTask and owns the I2C bus like displayTask).
-// Spec: docs/superpowers/specs/2026-07-14-v2-esp01-follower-design.md.
+// main.cpp — ESP-01 row board (#298; wall link #559). One single-core
+// superloop, no RTOS: web handlers stage, loop() mutates — it reads the wall
+// link, runs unit jobs and owns the I2C bus.
+// Spec: docs/superpowers/specs/2026-10-05-wall-link-and-console-design.md.
 //
 // Boot: I2C probe (post-twiboot window) + unit provisioning → WiFi (portal
-// fallback) → SNTP + mDNS (plat=esp01 TXT) → endpoints. The row is blank
-// until a leader joins it; a persisted membership boots into Grace.
+// fallback) → SNTP + mDNS (plat=esp01 TXT) → routes. The row is blank until
+// a master pairs it; a stored pairing boots into Grace and dials the master.
 
 #include <Arduino.h>
 #include <ESP8266mDNS.h>
@@ -21,6 +20,7 @@
 #include "FollowerPrefs.h"
 #include "FollowerRescue.h"
 #include "FollowerResetLog.h"
+#include "FollowerUnitJobs.h"
 #include "FollowerWeb.h"
 #include "FollowerWifi.h"
 
@@ -42,7 +42,7 @@ void setup() {
   escalationBootInit();  // #503: self-restarts taken, for the rate limit
 
   busInit();
-  clusterInit();  // EEPROM membership → Grace/Standalone
+  clusterInit();  // stored pairing → Grace, none → Standalone
   prefsInit();    // #513: needs clusterInit()'s EEPROM.begin
   if (!prefsReflashOnBoot()) {
     // Deliberately suppressed for a gated campaign. Say so loudly — a skipped
@@ -54,9 +54,9 @@ void setup() {
   if (!rescueActive()) {
 #ifdef RESCUE_CRASH_TEST
     // #343 bench-drill hook (build with -DRESCUE_CRASH_TEST; never a real
-    // build): simulates a poisoned image dying in a beacon-skipped path —
-    // 3 fast crash cycles, then the beacon engages and the leader
-    // re-pushes the stored image.
+    // build): simulates a poisoned image dying in a path rescue mode skips —
+    // 3 fast crash cycles, then rescue mode engages and the master offers
+    // its stored image.
     SerialPrintln(F("RESCUE_CRASH_TEST: crashing this boot on purpose"));
     delay(100);
     abort();
@@ -95,12 +95,11 @@ void setup() {
 
   if (!rescueActive()) {
     // Staggered boot-home (#309): the units boot UNHOMED, so home the row in
-    // bounded batches instead of letting the leader's first render home the whole
+    // bounded batches instead of letting the master's first text home the whole
     // row at once (the #305 power-up brownout class). Run AFTER webServer.begin()
-    // so the ESPAsync stack can answer /cluster/{join,ping} and /settings from
-    // the SDK/LWIP context during followerBootHome()'s delay()s — this is a
-    // single-core board, so a slow homing sweep (bad halls) would otherwise leave
-    // it unreachable. Staged renders that arrive meanwhile wait for loop().
+    // so the upload route answers from the SDK/LWIP context during
+    // followerBootHome()'s delay()s — this is a single-core board, so a slow
+    // homing sweep (bad halls) would otherwise leave it unreachable.
     followerBootHome();
     // Boot sections after the boot-home: stage 2 needs a homed unit, and one
     // homed here is not homed again for it (UnitUpdateJob.h). Same brake as
@@ -109,17 +108,17 @@ void setup() {
   }
 
   SerialPrintln(rescueActive()
-                    ? F("ESP-01 follower in RESCUE BEACON — OTA/cluster wire only")
-                    : F("ESP-01 follower ready — waiting for a leader"));
+                    ? F("ESP-01 row in RESCUE MODE — WiFi, link and upload only")
+                    : F("ESP-01 row ready — waiting for its master"));
   SerialPrintln(F("#######################################################"));
 }
 
 void loop() {
   if (isPendingReboot) {
     SerialPrintln(F("Rebooting now..."));
-    // Deliberate restart (operator /reboot or a completed firmware upload):
+    // Deliberate restart (the master's Restart or a stored firmware image):
     // zero the bad-boot tally so the next image gets fresh chances — this is
-    // also the rescue beacon's one exit (#343).
+    // also rescue mode's one exit (#343).
     rescueMarkHealthy();
     // A setting accepted moments ago must not die with this restart (#513).
     prefsLoopTick(true);
@@ -137,7 +136,7 @@ void loop() {
 
   MDNS.update();
 
-  // Freeze all display/unit work while a master firmware image streams in
+  // Freeze all display/unit work while a firmware upload streams in
   // (v1 #116); the stalled-upload auto-thaw (incl. freeing the Update
   // session slot, v1 #191) lives with the session state in FollowerWeb.
   if (webOtaUploadFrozen()) {
@@ -146,14 +145,14 @@ void loop() {
   }
 
   followerTxTick();     // #508: WiFi TX power ladder, 1 Hz
-  prefsLoopTick();      // #513: persist a staged settings change
+  prefsLoopTick();      // #513: persist a changed setting
   rescueHealthyTick();  // #343: a stable minute proves this boot good
   if (!rescueActive()) {
-    webLoopTick();            // staged ops / reflash / health refresh
+    unitJobsLoopTick();       // the staged unit job, self-test poll, rescan
     followerHeartbeatTick();  // one scheduled unit-health read per tick (#310)
   }
-  // #564: the wall link to the master. Runs in rescue mode too: the master
-  // sees the rescue flag in Hello and offers the image that ends it.
+  // The wall link to the master. Runs in rescue mode too: the master sees
+  // the rescue flag in Hello and offers the image that ends it.
   linkLoopTick();
   clusterLoopTick();  // phase decay, blanking, due renders (bus-gated in rescue)
   followerDiagTick(); // fold current heap into the since-boot min (#306)

@@ -52,9 +52,14 @@ def _same_method(a, b):
     return a == b or "HTTP_ANY" in (a, b)
 
 
+# The row board keeps three routes; the others serve many.
+FEWEST_ROUTES = {"FollowerEsp01": 3}
+
+
 def test_every_board_registers_routes():
     for board, files in BOARDS.items():
-        assert len(_routes(files())) >= 5, f"{board}: route scan found almost nothing"
+        assert len(_routes(files())) >= FEWEST_ROUTES.get(board, 5), (
+            f"{board}: route scan found almost nothing")
 
 
 def test_no_route_is_shadowed_by_an_earlier_prefix():

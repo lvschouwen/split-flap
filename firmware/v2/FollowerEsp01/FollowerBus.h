@@ -2,8 +2,7 @@
 // FollowerBus.h — the follower's I2C unit bus (#298): trimmed port of v1's
 // ServiceFlapFunctions.ino + ServiceFirmwareFunctions.ino onto the v2
 // UnitFacts model. The superloop (loop() in main.cpp) is the ONLY caller —
-// async web handlers never touch Wire; they stage work the loop drains
-// (v1's context rule verbatim).
+// async web handlers never touch Wire.
 //
 // Twiboot quirks honored (v1 #88): the boot probe waits out the 1500 ms
 // twiboot window (main.cpp), and busProbeInhibitedUntilMs() arms after a
@@ -68,7 +67,7 @@ void busShowSegment(const String& segment, int webSpeed);
 uint32_t busProbeInhibitedUntilMs();
 void busArmProbeInhibit(uint32_t untilMs);
 
-// Diagnostics counters for /cluster/health (#306): sketch-protocol read
+// Diagnostics counters for the master's Status (#306): sketch-protocol read
 // transactions + failures since boot, and the since-boot minimum free heap.
 // followerDiagTick() folds the current heap into the min each loop pass.
 uint32_t followerBusTxCount();

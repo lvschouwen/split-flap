@@ -16,9 +16,9 @@ extern bool isWifiConfigured;
 // portal (may set the pending-reboot flag after a portal save/timeout).
 void wifiInit(AsyncWebServer& server);
 
-// SNTP (epoch only — commitAt flip sync needs no timezone) + the
-// _splitflap._tcp advertisement (TXT name/rev/width/plat=esp01, #297) so
-// the leader's Cluster-card scan finds this row.
+// SNTP (epoch only — flip instants need no timezone) + the _splitflap._tcp
+// advertisement (TXT name/rev/width/plat=esp01, #297) so a master's scan
+// for boards to pair finds this row.
 void wifiServicesInit(int rowWidth);
 
 // #508: the WiFi TX power ladder (shared WifiTxPolicy.h) — every boot starts
