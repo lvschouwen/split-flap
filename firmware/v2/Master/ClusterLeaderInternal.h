@@ -95,6 +95,8 @@ void clusterMintKey(uint8_t key[32]);
 String urlEncode(const String& value);
 int clusterHttpRequest(const String& url, const String& postBody,
                        String& outBody);
+// Largest /log reply a follower can send: its ring, a cursor line, a NUL.
+#define CLUSTER_FOLLOWER_LOG_REPLY_MAX (4096 + 32)
 int clusterHttpGetBody(const String& url, String& outBody);
 
 // ClusterLeaderGrid.cpp

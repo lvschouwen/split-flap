@@ -46,3 +46,19 @@ def test_probes_run_on_the_cluster_task_only():
     for name in ("WifiService.cpp", "WebEndpoints.cpp", "MqttService.cpp",
                  "DisplayTask.cpp"):
         assert "netLivenessProbeTick" not in _code(name), name
+
+
+def test_leader_can_hold_a_whole_follower_log_ring():
+    """A follower answers /log?after=0 with its whole ring once this leader
+    has restarted. A read buffer smaller than that drops the newest lines and
+    still advances the cursor past them (seen after the ring grew to 4 KB)."""
+    follower = (MASTER.parent / "FollowerEsp01" / "FollowerLog.h").read_text()
+    ring = int(re.search(r"#define FOLLOWER_LOG_SIZE (\d+)", follower).group(1))
+    internal = (MASTER / "ClusterLeaderInternal.h").read_text()
+    m = re.search(r"#define CLUSTER_FOLLOWER_LOG_REPLY_MAX \((\d+) \+ (\d+)\)",
+                  internal)
+    assert m, "CLUSTER_FOLLOWER_LOG_REPLY_MAX not found"
+    cap = int(m.group(1)) + int(m.group(2))
+    assert cap >= ring + 16, f"leader buffer {cap} B < follower ring {ring} B + cursor line"
+    assert "static char buf[CLUSTER_FOLLOWER_LOG_REPLY_MAX];" in \
+        (MASTER / "ClusterLeader.cpp").read_text()

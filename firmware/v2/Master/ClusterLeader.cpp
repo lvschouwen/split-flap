@@ -179,8 +179,10 @@ int clusterHttpRequest(const String& url, const String& postBody,
 }
 
 // One blocking GET for a follower's log ring (#318 E). Separate from the POST
-// helper above because the reply is far larger (the ESP-01 ring is 2 KB, vs
-// the ~180 B join/ping replies) — a bigger read buffer, not the 513 B one.
+// helper above because the reply is far larger (a whole ESP-01 log ring after
+// this leader restarted, vs the ~180 B join/ping replies) — its own read
+// buffer, not the 513 B one. A reply that does not fit loses its NEWEST lines
+// for good, because the cursor line at its head still advances.
 // Returns -1 on transport failure, else the HTTP status; `outBody` gets the
 // (bounded) reply. clusterTask-only caller, so the read buffer is static.
 int clusterHttpGetBody(const String& url, String& outBody) {
@@ -197,7 +199,9 @@ int clusterHttpGetBody(const String& url, String& outBody) {
   if (esp_http_client_open(client, 0) == ESP_OK &&
       esp_http_client_fetch_headers(client) >= 0) {
     status = esp_http_client_get_status_code(client);
-    static char buf[2200];  // 2 KB follower ring + cursor line + headroom
+    // The follower's whole ring + the cursor line (tests/test_net_liveness_
+    // glue.py holds this to FollowerEsp01's FOLLOWER_LOG_SIZE).
+    static char buf[CLUSTER_FOLLOWER_LOG_REPLY_MAX];
     int got = esp_http_client_read_response(client, buf, sizeof(buf) - 1);
     if (got > 0) {
       buf[got] = '\0';
