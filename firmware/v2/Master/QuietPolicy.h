@@ -11,8 +11,9 @@
 //     quiet. The MQTT command is expected RETAINED by its sender, so a board
 //     that was offline for the change still receives it on reconnect.
 //   - In a cluster the leader owns the state and passes it to its members on
-//     every ping (`quiet=1|0`, additive and unsigned): a row that loses its
-//     leader at night would otherwise start its own clock.
+//     every ping (shared/ClusterQuiet.h — additive, with its own mac for a
+//     keyed member): a row that loses its leader at night would otherwise
+//     start its own clock.
 //
 // Pure logic, natively tested (test_quiet_policy). v2-only — MqttHelpers.h
 // stays the v1-tracking copy, so this entity is not part of its discovery

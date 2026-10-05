@@ -68,11 +68,15 @@ void rebootHoldBuildTargets() {
       RebootHoldTarget& t = rebootHoldTargets[rebootHoldCount++];
       t.host = table.members[i].host;
       t.body = "digest=" + encoded + "&you=" + String(i);
-      t.body += clusterQuietPingSuffix(tasksQuiet());  // #227
+      const bool pingQuiet = tasksQuiet();  // #227: flag and mac must agree
+      t.body += clusterQuietPingSuffix(pingQuiet);
       if (runtimes[i].hmacKeyValid) {
         String msg = clusterHmacPingMsg(ts, digest, i);
         t.body += "&ts=" + clusterU64ToStr(ts) + "&mac=" +
                   clusterHmacSign(runtimes[i].hmacKey, msg);
+        t.body += "&" CLUSTER_PING_QUIET_MAC_PARAM "=" +
+                  clusterHmacSign(runtimes[i].hmacKey,
+                                  clusterQuietMsg(ts, pingQuiet));
       }
     }
   }

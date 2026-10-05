@@ -716,7 +716,9 @@ void webEndpointsInit(AsyncWebServer& server) {
     int youIndex = paramString(request, "you", youStr) ? youStr.toInt() : -1;
     // Wire-auth (#313 follow-on): a keyed follower requires a valid ts+mac
     // before contact is refreshed.
-    if (clusterHmacEnforced()) {
+    const bool keyed = clusterHmacEnforced();
+    uint64_t pingTs = 0;
+    if (keyed) {
       String tsStr, mac;
       if (!paramString(request, "ts", tsStr) ||
           !paramString(request, "mac", mac)) {
@@ -727,6 +729,7 @@ void webEndpointsInit(AsyncWebServer& server) {
         return;
       }
       uint64_t ts = strtoull(tsStr.c_str(), nullptr, 10);
+      pingTs = ts;
       if (!clusterVerifySigned(clusterHmacPingMsg(ts, digest, youIndex), ts,
                                mac)) {
 #if CLUSTER_WIRE_DEBUG
@@ -748,11 +751,23 @@ void webEndpointsInit(AsyncWebServer& server) {
                     F("{\"error\":\"not clustered\"}"));
       return;
     }
-    // #227: only an accepted ping speaks for the leader.
-    String quietStr;
-    clusterNoteLeaderQuiet(
-        paramString(request, CLUSTER_PING_QUIET_PARAM, quietStr) &&
-        clusterQuietFromPing(quietStr.c_str()));
+    // #227: only an accepted ping speaks for the leader, and a keyed row
+    // takes the quiet flag only with its own mac over this ping's timestamp.
+    String quietStr, quietMac;
+    const bool quietPresent =
+        paramString(request, CLUSTER_PING_QUIET_PARAM, quietStr);
+    bool quietMacOk = false;
+    if (keyed && quietPresent &&
+        paramString(request, CLUSTER_PING_QUIET_MAC_PARAM, quietMac)) {
+      quietMacOk = clusterMacMatches(
+          clusterQuietMsg(pingTs, clusterQuietFromPing(quietStr.c_str())),
+          quietMac);
+    }
+    bool leaderQuiet = false;
+    if (clusterQuietAccept(quietPresent, quietStr.c_str(), keyed, quietMacOk,
+                           leaderQuiet)) {
+      clusterNoteLeaderQuiet(leaderQuiet);
+    }
     FollowerClusterView cv = clusterViewGet();
     char mask[16];
     ClusterRowHealth h = healthNow(mask, sizeof(mask));

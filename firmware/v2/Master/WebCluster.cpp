@@ -302,13 +302,16 @@ void webClusterRegister(AsyncWebServer& server) {
                        : -1;
     // Wire-auth (#313 follow-on): a keyed follower requires a valid ts+mac
     // before the digest/you piggyback is trusted or contact is refreshed.
-    if (clusterFollowerHmacEnforced()) {
+    const bool keyed = clusterFollowerHmacEnforced();
+    uint64_t pingTs = 0;
+    if (keyed) {
       if (!request->hasParam("ts", true) || !request->hasParam("mac", true)) {
         request->send(403, "text/plain", F("cluster signature required"));
         return;
       }
       uint64_t ts = strtoull(request->getParam("ts", true)->value().c_str(),
                              nullptr, 10);
+      pingTs = ts;
       String mac = request->getParam("mac", true)->value();
       if (!clusterFollowerVerifySigned(clusterHmacPingMsg(ts, digest, youIndex),
                                        ts, mac)) {
@@ -324,12 +327,23 @@ void webClusterRegister(AsyncWebServer& server) {
         return;
       }
     }
-    // #227: the leader's quiet flag — additive, outside the signature.
-    bool leaderQuiet =
-        request->hasParam(CLUSTER_PING_QUIET_PARAM, true) &&
-        clusterQuietFromPing(
-            request->getParam(CLUSTER_PING_QUIET_PARAM, true)->value().c_str());
-    if (!clusterFollowerHandlePing(digest, youIndex, leaderQuiet,
+    // #227: the leader's quiet flag. A keyed member takes it only with its
+    // own mac over this ping's (already verified) timestamp.
+    const bool quietPresent = request->hasParam(CLUSTER_PING_QUIET_PARAM, true);
+    String quietValue = quietPresent
+                            ? request->getParam(CLUSTER_PING_QUIET_PARAM, true)->value()
+                            : String();
+    bool quietMacOk = false;
+    if (keyed && quietPresent &&
+        request->hasParam(CLUSTER_PING_QUIET_MAC_PARAM, true)) {
+      quietMacOk = clusterFollowerMacMatches(
+          clusterQuietMsg(pingTs, clusterQuietFromPing(quietValue.c_str())),
+          request->getParam(CLUSTER_PING_QUIET_MAC_PARAM, true)->value());
+    }
+    bool leaderQuiet = false;
+    const bool quietKnown = clusterQuietAccept(
+        quietPresent, quietValue.c_str(), keyed, quietMacOk, leaderQuiet);
+    if (!clusterFollowerHandlePing(digest, youIndex, quietKnown, leaderQuiet,
                                    request->client()->remoteIP().toString())) {
 #if CLUSTER_WIRE_DEBUG
       SerialPrintln("dbg/wire: ping REJECT 409 — handlePing declined (from " +

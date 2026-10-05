@@ -114,6 +114,14 @@ struct ClusterMemberAuth {
   uint64_t lastAcceptedTs = 0;   // monotonic replay mark
   uint64_t lastPersistedTs = 0;  // the mark as last written to storage
 
+  // A bare mac check with this member's key — no window, no replay mark. Only
+  // for a second signature riding a request whose own signature has already
+  // been accepted through accept() below (the quiet flag, #227).
+  bool macMatches(const String& msg, const String& macHex) const {
+    return keyed &&
+           clusterHmacConstTimeHexEqual(clusterHmacSign(key, msg), macHex);
+  }
+
   // A join's key (empty or malformed = none). Returns true when the key
   // material changed. Fresh material is a fresh signing epoch (a rebooted
   // leader re-mints), so the mark resets — and the caller must persist that

@@ -62,6 +62,9 @@ void clusterFollowerHandleJoin(const ClusterJoinRequest& req);
 // verify; a false verdict is a 403. When not enforced, the caller falls back
 // to #313 source-IP binding.
 bool clusterFollowerHmacEnforced();
+// #227: does `macHex` sign `msg` with this member's key? No replay state —
+// only for the quiet flag's mac on a ping whose own signature was accepted.
+bool clusterFollowerMacMatches(const String& msg, const String& macHex);
 bool clusterFollowerVerifySigned(const String& canonicalMsg, uint64_t ts,
                                  const String& macHex);
 
@@ -77,9 +80,10 @@ ClusterRenderVerdict clusterFollowerHandleRender(uint32_t epoch, uint32_t seq,
 // the digest is one balanced JSON object (it is re-served raw and feeds
 // #295 promote); the promote-critical bits (table spec + selfIndex)
 // persist to NVS only when they change, so #295 survives a reboot.
-// `leaderQuiet`: the ping's quiet flag (#227, shared/ClusterQuiet.h).
+// `quietKnown` + `leaderQuiet`: the ping's quiet flag when it was accepted
+// (#227, shared/ClusterQuiet.h); not known = keep what was last heard.
 bool clusterFollowerHandlePing(const String& digest, int youIndex,
-                               bool leaderQuiet,
+                               bool quietKnown, bool leaderQuiet,
                                const String& remoteIp);
 
 void clusterFollowerHandleLeave();

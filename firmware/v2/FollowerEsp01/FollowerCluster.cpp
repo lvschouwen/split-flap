@@ -267,6 +267,10 @@ void clusterHandleJoin(const String& name, const String& host, int row,
 
 bool clusterHmacEnforced() { return auth.keyed; }
 
+bool clusterMacMatches(const String& msg, const String& macHex) {
+  return auth.macMatches(msg, macHex);
+}
+
 bool clusterVerifySigned(const String& canonicalMsg, uint64_t ts,
                          const String& macHex) {
   bool synced = false;

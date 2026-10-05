@@ -56,6 +56,9 @@ void clusterHandleLeave();
 // at join): every leader-wire request must then carry a valid ts+mac; the web
 // handlers rebuild the canonical message and call verify, 403 on failure.
 bool clusterHmacEnforced();
+// #227: does `macHex` sign `msg` with this row's key? No replay state — only
+// for the quiet flag's mac on a ping whose own signature was accepted.
+bool clusterMacMatches(const String& msg, const String& macHex);
 bool clusterVerifySigned(const String& canonicalMsg, uint64_t ts,
                          const String& macHex);
 

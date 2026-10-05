@@ -49,12 +49,17 @@ def test_web_drain_drops_text_after_applying_a_quiet_toggle():
 def test_every_leader_ping_carries_the_quiet_flag_before_the_signature():
     for name in ("ClusterLeaderFanout.cpp", "ClusterLeaderMaintenance.cpp"):
         code = _code(MASTER / name)
-        suffix = code.index("clusterQuietPingSuffix(tasksQuiet())")
+        assert "const bool pingQuiet = tasksQuiet();" in code, name
+        suffix = code.index("clusterQuietPingSuffix(pingQuiet)")
         # ts/mac close the body: the flag goes in before them, in the same
         # block that builds this ping.
         sign = code.index('"&ts="', suffix)
         assert sign - suffix < 900, f"{name}: the quiet flag is not part of the ping it should ride"
         assert "you=" in code[suffix - 400:suffix], f"{name}: the flag must follow the ping's own fields"
+        # A keyed member gets a mac for the flag, over the same value and ts.
+        mac = code.index("CLUSTER_PING_QUIET_MAC_PARAM", suffix)
+        assert "clusterQuietMsg(" in code[mac:mac + 300], name
+        assert "pingQuiet" in code[mac:mac + 300], f"{name}: flag and mac must use one read of the state"
 
 
 def test_leader_does_not_restore_its_own_row_while_quiet():
@@ -89,8 +94,11 @@ def test_a_change_is_written_back_to_the_retained_command():
 
 def test_both_member_implementations_read_the_flag_and_hold_their_frame():
     s3 = _code(MASTER / "WebCluster.cpp")
-    assert "clusterQuietFromPing(" in s3 and "CLUSTER_PING_QUIET_PARAM" in s3
+    assert "clusterQuietAccept(" in s3 and "clusterFollowerMacMatches(" in s3
+    assert "clusterQuietMsg(pingTs," in s3, "the mac must be checked against this ping's timestamp"
     esp = _code(V2 / "FollowerEsp01" / "FollowerWeb.cpp")
+    assert "clusterQuietAccept(" in esp and "clusterMacMatches(" in esp
+    assert "clusterQuietMsg(pingTs," in esp
     handled = esp.index("if (!clusterHandlePing())")
     noted = esp.index("clusterNoteLeaderQuiet(")
     assert handled < noted, "only an accepted ping may set the flag"

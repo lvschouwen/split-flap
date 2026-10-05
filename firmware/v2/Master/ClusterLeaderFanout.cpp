@@ -308,8 +308,10 @@ int collectMemberWork(MemberWorkItem* items) {
                           ? ("digest=" + encoded + "&you=" +
                              String(items[i].index))
                           : ("you=" + String(items[i].index));
-      // #227: every ping tells the member whether the wall is quiet.
-      items[i].body += clusterQuietPingSuffix(tasksQuiet());
+      // #227: every ping tells the member whether the wall is quiet. Read
+      // once: the flag and its mac must agree.
+      const bool pingQuiet = tasksQuiet();
+      items[i].body += clusterQuietPingSuffix(pingQuiet);
       // Sign the ping per member (#313 follow-on): its own key, so the
       // digest/you piggyback rides an authenticated request.
       int mi = items[i].index;
@@ -320,6 +322,11 @@ int collectMemberWork(MemberWorkItem* items) {
         String msg = clusterHmacPingMsg(signTs, digest, mi);
         items[i].body += "&ts=" + clusterU64ToStr(signTs) + "&mac=" +
                          clusterHmacSign(runtimes[mi].hmacKey, msg);
+        // #227: the quiet flag gets its own mac over the same ts, so the
+        // ping's canonical stays what an older member expects.
+        items[i].body += "&" CLUSTER_PING_QUIET_MAC_PARAM "=" +
+                         clusterHmacSign(runtimes[mi].hmacKey,
+                                         clusterQuietMsg(signTs, pingQuiet));
       }
 #if CLUSTER_WIRE_DEBUG
       // #386: the ping body is the one request whose size scales with member

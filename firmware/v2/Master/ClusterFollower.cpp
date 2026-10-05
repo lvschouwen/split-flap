@@ -344,8 +344,14 @@ ClusterRenderVerdict clusterFollowerHandleRender(uint32_t epoch, uint32_t seq,
   return verdict;
 }
 
+bool clusterFollowerMacMatches(const String& msg, const String& macHex) {
+  ClusterLock lock;
+  return auth.macMatches(msg, macHex);
+}
+
 bool clusterFollowerHandlePing(const String& digest, int youIndex,
-                               bool leaderQuiet, const String& remoteIp) {
+                               bool quietKnown, bool leaderQuiet,
+                               const String& remoteIp) {
   ClusterLock lock;
   // Source-IP binding (#313): only the joined leader keeps us alive. A
   // foreign LAN host's ping must not refresh the contact-fresh window — that
@@ -354,7 +360,7 @@ bool clusterFollowerHandlePing(const String& digest, int youIndex,
   if (leaderHost.length() > 0 && remoteIp != leaderHost) return false;
   if (!clusterFollowerContact(policyState, millis())) return false;
   wifiNoteConfirmedTraffic();  // #515: a leader ping served
-  memberQuiet = leaderQuiet;   // #227: kept through LeaderLost
+  if (quietKnown) memberQuiet = leaderQuiet;  // #227: kept through LeaderLost
   // The digest becomes served-back state and the #295 promote input — the
   // IP is already bound to the leader above, so accept it only as one
   // balanced JSON object and persist the table only when it parses as a
