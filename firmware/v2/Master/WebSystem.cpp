@@ -48,12 +48,6 @@ void webSystemRegister(AsyncWebServer& server) {
     request->send(200, "text/plain", "Healthy");
   });
 
-  server.on("/log", HTTP_GET, [](AsyncWebServerRequest* request) {
-    // Don't SerialPrintln here; every log request would otherwise stamp
-    // itself into the buffer on every poll and drown out real activity.
-    request->send(200, "text/plain", webLogRead());
-  });
-
   // --- persistent flash log (#206) ------------------------------------------
   // Serves the LittleFS log files directly (chunked by the async layer;
   // esp_littlefs serializes fs access internally, and the flush path
@@ -87,6 +81,16 @@ void webSystemRegister(AsyncWebServer& server) {
     }
     flashLogRequestClear();
     request->send(202, "text/plain", F("Flash log clear queued"));
+  });
+
+  // Registered AFTER the /log/flash routes: a path also matches every
+  // "<path>/..." request, and the first registered handler wins — in the
+  // other order this one answers /log/flash with the RAM ring
+  // (tests/test_route_shadowing.py).
+  server.on("/log", HTTP_GET, [](AsyncWebServerRequest* request) {
+    // Don't SerialPrintln here; every log request would otherwise stamp
+    // itself into the buffer on every poll and drown out real activity.
+    request->send(200, "text/plain", webLogRead());
   });
 
   // --- odometer historian (#465) --------------------------------------------
