@@ -78,3 +78,7 @@ cfd9948 79b8235899693bc5508825de93760629aab5580b74b5aaad8672be706b084a12
 # when the cluster ping gained its quiet flag (#227), a shared header the
 # unit does not compile.
 d360e2b da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
+#
+# 10292ed: the bundle rev while the units still ran d360e2b's image (quiet
+# flag, crash-count wording: shared headers the unit does not compile).
+10292ed da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
