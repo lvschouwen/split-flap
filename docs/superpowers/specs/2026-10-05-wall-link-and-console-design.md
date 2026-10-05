@@ -35,36 +35,36 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 
 **Finding the master.** The row board stores the master's id and last address at pairing. If the address stops answering it looks the id up over mDNS (`_splitflap._tcp`). A DHCP move of the master needs no operator action.
 
-**Frame.** `length u16 | type u8 | payload`. Payload at most 512 B, fixed buffers on both sides, so there is no size ceiling to tune per message. A frame that does not parse closes the connection.
+**Format.** Messages are described once in `firmware/v2/link/wall_link.proto` and generated for both boards with nanopb (Protocol Buffers; fixed-size fields, no heap). Each message on the connection is one envelope, `ToRow` or `ToMaster`, length-delimited. This is the pattern ESPHome's native API uses on the same chips. Field numbers are the contract; messages grow only at the end.
 
-**Pairing (once).** The operator adds a row in Wall settings. The master posts its own id to the row board's `POST /pair`. An unpaired row board stores it and dials that master from then on; a paired one refuses. A row is released by a `RELEASE` frame from its master, or by the row's WiFi reset (which clears the pairing with the credentials).
+**Pairing (once).** The operator adds a row in Wall settings. The master posts its own id to the row board's `POST /pair`. An unpaired row board stores it and dials that master from then on; a paired one refuses. A row is released by a `Release` message from its master, or by the row's WiFi reset (which clears the pairing with the credentials).
 
-**Hello (every connection).** `HELLO{row id, protocol, rev, boot id, rescue flag}` → `WELCOME{master id}`. A row that reaches a master it is not paired with closes the connection.
+**Hello (every connection).** `Hello{row id, protocol, rev, boot id, rescue flag}` → `Welcome{master id}`. A row that reaches a master it is not paired with closes the connection.
 
-**Pacing.** A row board in a long unit job does not read its socket (measured: up to 12.4 s during one unit update), and every unread frame costs it memory (section 9). The master therefore keeps at most 4 unanswered frames per row; a newer `SHOW` replaces a waiting one, and `PING` is not sent to a row with a job running.
+**Pacing.** A row board in a long unit job does not read its socket (measured: up to 12.4 s during one unit update), and unread messages cost it memory until TCP's own receive window stops the sender (section 9). There are no message counters. The master keeps only the latest text per row, never a queue; it sends a ping only when the connection has been idle; and it holds pings while a row reports itself busy.
 
-**Messages.** One job each. Codec and constants live once in `shared/WallLink.h`, natively tested, with host twins (`fake_row.py`, `fake_master.py`) pinned by pytest as today.
+**Messages.** One job each, as listed in the schema file. Host-side stand-ins (`fake_master.py`, `fake_row.py`) use stock Python protobuf generated from the same file.
 
 | Direction | Message | Carries |
 |---|---|---|
-| master → row | `TIME` | answer to `TIME_REQ`: the row's own timestamp echoed, the master's link clock, wall-clock time |
-| | `SHOW` | render id, text for this row, speed, flip instant on the link clock |
-| | `QUIET` | on/off |
-| | `CONFIG` | what to show when the master is lost (blank, time, date), update-units-at-start, tz rule |
-| | `OP` | op id, opcode, unit address, arguments |
-| | `UPDATE` | rev, size, MD5, packed flag |
-| | `LOG` on/off, `PING`, `RESTART`, `RELEASE` | |
-| row → master | `TIME_REQ` | the row's timestamp; the round trip gives the row the master's clock |
-| | `STATUS` | vitals: memory, signal, TX level, uptime, reset ring, bus state, escalation record, image sizes. Every 10 s and on change |
-| | `UNITS` | unit facts as the binary struct, a few units per frame. On change and every 30 s |
-| | `SHOWN` | render id applied |
-| | `OP_STATE` | op id, state, result data (boot dump bytes in chunks) |
-| | `EVENT` | code, unit, arguments, row uptime |
-| | `LOGLINE`, `PONG` | log lines only while the master asked for them |
+| master → row | `Welcome` | master id |
+| | `Show` | render id, text for this row, speed, flip instant (Unix ms) |
+| | `Quiet` | on/off |
+| | `Config` | what to show when the master is lost (blank, time, date), update-units-at-start, tz rule |
+| | `Op` | op id, opcode, unit address, arguments |
+| | `Update` | rev, size, MD5, packed flag |
+| | `LogCtl`, `Ping`, `Restart`, `Release` | |
+| row → master | `Hello` | row id, protocol, rev, boot id, rescue flag, width |
+| | `Status` | vitals: memory, signal, TX level, uptime, bus state, escalations, busy flag, image size, time synced. Every 10 s and on change |
+| | `UnitsJson` | the row's `/units/health` JSON exactly as the shared serializer writes it, in pieces. On change and every 30 s. The master reads values out with ArduinoJson |
+| | `Shown` | render id applied, and how late if it missed its instant |
+| | `OpState` | op id, phase, reason, result data (boot dump bytes in pieces) |
+| | `Event` | code, unit, arguments, row uptime |
+| | `LogLine`, `Pong` | log lines only while the master asked for them |
 
-**Liveness.** Any frame counts. `PING` after 5 s of silence. The proven numbers stay: the master marks a row lost after 30 s without contact (#385); the row holds its text for 25 s, then is in grace, then at 120 s shows its fallback. A dropped connection is redialled with 1–8 s backoff. The row board's long unit-bus waits (about 1.1 s) no longer matter: nothing has a per-request deadline.
+**Liveness.** Any message counts. `Ping` after 10 s of silence, not while the row is busy. The proven numbers stay: the master marks a row lost after 30 s without contact (#385); the row holds its text for 25 s, then is in grace, then at 120 s shows its fallback. A dropped connection is redialled with 1–8 s backoff. The row board's long unit-bus waits (about 1.1 s) no longer matter: nothing has a per-request deadline.
 
-**Time.** The master is the wall's clock. The row estimates the offset from its own `TIME_REQ`/`TIME` round trips, taking the lowest round trip of the last 25 (measured accuracy better than 1 ms, section 9), and flips at the instant named in `SHOW`. Content the master knows in advance (the clock's minute change) is sent at least 2 s ahead, so a slow frame cannot make a row flip late; typed text keeps the 400 ms lead, and a frame that arrives after its instant flips on arrival. The row board no longer needs its own network time. A master without network time still flips rows together; only the wall-clock display needs it.
+**Time.** The row board takes its time from the master: its built-in SNTP client is pointed at the master, which answers time requests. Rows flip at an instant the master names in `Show` (Unix milliseconds), so flipping together needs the row to agree with the master, not with the internet. Content the master knows in advance (the clock's minute change) is sent at least 2 s ahead; typed text keeps the 400 ms lead, and a message that arrives after its instant flips on arrival. The accuracy of the built-in client against the master is to be measured on the row; if rows visibly flip apart, the fallback is round-trip timing inside the connection, which measured under 1 ms (#560). Not used: ESPNtpClient (no release since June 2022, and it crashes on current ESP32 cores, arduino-esp32 #10902).
 
 **Unit jobs.** The master names every job with its own op id; the row echoes it. A row that restarts sends a new boot id in `HELLO`, and the master fails every open job on that row as "row restarted". (Today the row numbers jobs itself and restarts at zero, so a forwarded job can be answered with another job's result.) Opcodes cover the full present set: home one / all, identify, jog, read and set offset, self-test, restart unit, set / clear address, burn all addresses, reset odometer, feature gates, boot info, boot dump, boot update, update one / all units (with force), re-probe, stop. Validation stays in `shared/MaintenancePolicy.h`; the unit bundle stays baked into the row image and the bundle drift gate is unchanged.
 
@@ -82,6 +82,7 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 
 - **One row interface.** The master's own units and an ESP-01 row sit behind the same `RowPort` (own row: the `DisplayCommand` queue; remote row: the link). Nothing above it branches on the kind of row.
 - **Wall state.** A `WallState` module (one mutex, snapshot copies) holds rows, unit facts for every row in the one `UnitFacts` struct, open jobs, and firmware state. The API reads snapshots; it never owns state.
+- **JSON on the master.** New API responses are built with ArduinoJson, and a row's unit facts are read with it. The MQTT text parser moves to it as well (its hand-written parser appears to mis-decode `\u` escapes; a test confirms that first).
 - **Verdicts.** Pure headers in `shared/` (`UnitVerdict.h`, `BoardVerdict.h`) turn facts into a level (working / note / fault) and a reason code with arguments. Natively tested. Home Assistant and the TUI use the same result.
 - **Event record.** Fixed-size binary records (time, board, unit, code, two arguments) in a ring file on the `storage` LittleFS, written by netTask only. Sources: the edges already detected in `UnitEventLog.h`, starts and their causes, firmware changes, rows lost and back, job results, and `EVENT` frames from rows. Wording happens in the browser from the code.
 - **Kept as they are:** grid layout (`ClusterLayout.h`), the display task and its command queue, producer gates, OTA, WiFi, TX ladder, quiet, MQTT (the cluster sensors become a wall problem sensor; `leader_lost` goes).
@@ -104,7 +105,7 @@ Derived from the screens. Readable keys; per-unit tables are columnar (`fields` 
 | `POST /firmware/master`, `/firmware/row`, `/firmware/rescue` | Uploads, gates unchanged |
 | `GET /api/v2/log?row=&kind=` | Raw log; the reply names the board and whether it is the RAM or the flash log |
 
-The TUI and the `flashing/` scripts move to this surface and talk to the master only, also for units on an ESP-01 row. The old routes and the old page are deleted in the last step; there is no period with two web pages.
+The TUI and the `flashing/` scripts move to this surface and talk to the master only, also for units on an ESP-01 row. The unit-campaign scripts are rewritten in Python on the client library; `ota-flash.sh` stays curl-only, because recovery must need nothing else. The command-line tool gets typed models (pydantic) for the new responses. The old routes and the old page are deleted in the last step; there is no period with two web pages.
 
 ## 6. Web UI
 
@@ -115,7 +116,7 @@ As the approved mock-up. Vanilla JS in a few modules, system fonts, colour token
 On a branch until bench-proven (it must not land half-built), one stage commit rule as usual.
 
 0. **Measurements** (section 9).
-1. `shared/WallLink.h`: codec, handshake, message set; native tests and host twins.
+1. `firmware/v2/link/`: the schema, the stream reader, unit facts in pieces; native tests; stock protobuf reads the boards' bytes. **Done (#562).**
 2. Row firmware: link client, download-and-install, rescue, break-glass routes. Every unit job proven over the link on the bench.
 3. Master: `linkTask`, `RowPort`, `WallState`, pairing, update-by-offer. Old cluster code deleted.
 4. Verdicts and the event record.
@@ -138,8 +139,9 @@ Phase timings and contact-age degrade; rollout attempt cap, rescue accounting an
 | Web stack, like-for-like reference builds with the three routes the row keeps (flash / fixed memory over a bare WiFi sketch) | in-core `ESP8266WebServer` +31.4 KB / +0.4 KB; async server +30.2 KB / +1.4 KB; async server with its WiFi manager (today) +56.0 KB / +2.0 KB; hand-written on `WiFiServer` +15.3 KB / +0.1 KB; hand-written with setup form and DNS +21.9 KB / +0.2 KB; `ArduinoOTA` +42.8 KB / +0.5 KB | A hand-written server would free 34 KB and 1.8 KB of fixed memory, but neither is needed, and it would mean rewriting the setup portal and the upload route. The present stack stays. Separately, the present route handlers are 35.3 KB and the API index 7.6 KB, of a 468 KB image (ceiling 511 KB plain, 602 KB packed). |
 | mDNS, SNTP | mDNS 20 KB, SNTP 1 KB | Dropping SNTP is a simplification, not a saving. mDNS stays unless flash runs short. |
 | Checksum | SHA-256 would cost nothing extra today, but with signing gone the built-in MD5 is enough | MD5. |
+| nanopb on the ESP-01 | about 11 KB of flash, no heap; the largest message the row must buffer is 72 B | Affordable; the row's receive buffer is tiny. |
 | Round trip of a small frame, idle row, wired peer | median 10.5 ms, 90 % under 55 ms, 99 % under 307 ms, worst 772 ms (976 frames) | A single frame can be late against a 400 ms lead about once in a hundred: hence the 2 s lead for scheduled content. |
-| Link clock accuracy | Lowest round trip of 25: spread 0.35 ms, worst 0.9 ms; of 8: spread 1.2 ms, worst 10 ms. Drift 15 ppm. | Rows can flip together to within a few ms. |
+| Round-trip timing inside the connection | Lowest round trip of 25: spread 0.35 ms, worst 0.9 ms; of 8: spread 1.2 ms, worst 10 ms. Drift 15 ppm. | Kept as the fallback for flip timing; the first choice is the built-in time client pointed at the master. |
 
 The peer in these runs was a wired machine on the LAN; with the S3 as the other end both ends are on WiFi, so round trips will be somewhat longer. The clock method does not depend on that.
 
