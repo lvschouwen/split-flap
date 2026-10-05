@@ -62,7 +62,7 @@ def test_splitter_reassembles_messages_fed_one_byte_at_a_time():
 
 
 def test_the_native_test_carries_the_vectors_this_file_checks():
-    assert set(VEC) == {"hello", "show", "update", "op", "status", "ping", "pong"}
+    assert set(VEC) == {"hello", "show", "update", "update_state", "op", "status", "ping", "pong"}
 
 
 def test_hello(pb):
@@ -85,7 +85,13 @@ def test_update_and_op(pb):
     m = pb.ToRow.FromString(delimited(VEC["update"]))
     assert (m.update.rev, m.update.size, m.update.md5, m.update.packed) == (
         "3f1a516", 323047, bytes(range(16)), True)
+    assert m.update.http_port == 8080
     assert frame(m) == VEC["update"]
+    m = pb.ToMaster.FromString(delimited(VEC["update_state"]))
+    assert m.WhichOneof("body") == "update_state"
+    assert (m.update_state.rev, m.update_state.phase, m.update_state.reason,
+            m.update_state.detail) == ("3f1a516", pb.UPDATE_FAILED, pb.UPDATE_HTTP_STATUS, 404)
+    assert frame(m) == VEC["update_state"]
     m = pb.ToRow.FromString(delimited(VEC["op"]))
     assert (m.op.op_id, m.op.opcode, m.op.address, m.op.arg) == (
         0xA1B20007, pb.OPC_SET_OFFSET, 6, -500)

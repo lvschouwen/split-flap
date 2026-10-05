@@ -152,9 +152,9 @@ void loop() {
     webLoopTick();            // staged ops / reflash / health refresh
     followerHeartbeatTick();  // one scheduled unit-health read per tick (#310)
   }
-  // #564: the wall link to the master. Not in rescue mode until the link has
-  // proven itself on the wall: rescue must stay the known-good path.
-  if (!rescueActive()) linkLoopTick();
+  // #564: the wall link to the master. Runs in rescue mode too: the master
+  // sees the rescue flag in Hello and offers the image that ends it.
+  linkLoopTick();
   clusterLoopTick();  // phase decay, blanking, due renders (bus-gated in rescue)
   followerDiagTick(); // fold current heap into the since-boot min (#306)
   escalationTick();   // #503: a fault that did not heal ends in a restart

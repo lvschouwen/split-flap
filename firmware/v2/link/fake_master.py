@@ -2,6 +2,7 @@
 """A stand-in master for the bench: a row board dials it over the wall link.
 
     python fake_master.py --id split-flap-bench [--clock] [--commands FILE]
+                          [--image FILE [--image-rev REV] [--http-port N]]
 
 Needs the stock protobuf module generated from wall_link.proto next to this
 file (wall_link_pb2.py):
@@ -13,6 +14,13 @@ Every message a row sends is printed as one JSON line with a timestamp.
     show TEXT | quiet on|off | ping | restart | release
     config blank|time|date on|off [TZ]     (on|off: update units at start)
     op NAME ADDRESS [ARG]                  (NAME as in OpCode, without OPC_)
+    update [REV]                           (offer --image; REV overrides its rev)
+    update-bad size|md5|port               (an offer that must fail safely)
+
+--image is the row image this master stores: it is served at GET /firmware/row
+on --http-port and offered with `update`. Its rev is read from a file name
+like follower-<rev>-gz.bin unless --image-rev names it. A row that says Hello
+in rescue mode is offered it at once.
 
 The unit facts and a boot dump arrive in pieces; they are printed once, whole.
 """
@@ -20,9 +28,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import re
 import time
 import zlib
+from pathlib import Path
 
 from google.protobuf.json_format import MessageToDict
 
@@ -35,6 +46,46 @@ CLOCK_LEAD_S = 2
 
 def log(kind: str, **fields) -> None:
     print(json.dumps({"t": round(time.time(), 3), "kind": kind, **fields}), flush=True)
+
+
+class Image:
+    """The row image this master stores."""
+
+    def __init__(self, path: str, rev: str | None, http_port: int) -> None:
+        self.data = Path(path).read_bytes()
+        named = re.fullmatch(r"follower-(.+?)(-gz)?\.bin", Path(path).name)
+        if not rev and not named:
+            raise SystemExit("--image-rev is needed: the file name does not carry the rev")
+        self.rev = rev or named.group(1)
+        self.md5 = hashlib.md5(self.data).digest()
+        self.packed = self.data[:1] == b"\x1f"
+        self.http_port = http_port
+
+    def offer(self, rev: str | None = None, bad: str | None = None):
+        return pb.Update(rev=rev or self.rev,
+                         size=len(self.data) + (1 if bad == "size" else 0),
+                         md5=bytes(16 * [0xAA]) if bad == "md5" else self.md5,
+                         packed=self.packed,
+                         http_port=self.http_port + (1 if bad == "port" else 0))
+
+    async def serve(self, reader, writer) -> None:
+        peer = writer.get_extra_info("peername")[0]
+        try:
+            request = (await reader.readuntil(b"\r\n\r\n")).split(b"\r\n")[0].decode()
+            ok = request.split()[:2] == ["GET", "/firmware/row"]
+            body = self.data if ok else b"not found\n"
+            writer.write((f"HTTP/1.0 {'200 OK' if ok else '404 Not Found'}\r\n"
+                          f"Content-Type: application/octet-stream\r\n"
+                          f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode())
+            started = time.monotonic()
+            writer.write(body)
+            await writer.drain()
+            log("http", peer=peer, request=request, bytes=len(body),
+                seconds=round(time.monotonic() - started, 1))
+        except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError) as error:
+            log("http-error", peer=peer, error=repr(error))
+        finally:
+            writer.close()
 
 
 class Row:
@@ -86,6 +137,11 @@ class Row:
             self.op_id += 1
             self.send(op=pb.Op(op_id=self.op_id, opcode=pb.OpCode.Value("OPC_" + name.upper()),
                                address=int(address), arg=int(arg[0]) if arg else 0))
+        elif word in ("update", "update-bad"):
+            if not self.args.image:
+                raise ValueError("no --image to offer")
+            bad = rest if word == "update-bad" else None
+            self.send(update=self.args.image.offer(rev=None if bad else rest or None, bad=bad))
         elif word:
             log("bad-command", line=line)
             return
@@ -136,6 +192,9 @@ class Row:
                     if kind == "hello" and not welcomed:
                         self.send(welcome=pb.Welcome(protocol=io.PROTOCOL, master_id=self.args.id))
                         welcomed = True
+                        if message.hello.rescue and self.args.image:
+                            self.send(update=self.args.image.offer())
+                            log("sent", peer=self.peer, command="update (row is in rescue mode)")
                     elif kind == "status":
                         self.busy = message.status.busy
         except (ConnectionError, ValueError) as error:
@@ -177,7 +236,16 @@ async def main() -> None:
     parser.add_argument("--speed", type=int, default=80)
     parser.add_argument("--clock", action="store_true")
     parser.add_argument("--commands")
+    parser.add_argument("--image", help="the row image to serve and offer")
+    parser.add_argument("--image-rev")
+    parser.add_argument("--http-port", type=int, default=7480)
     args = parser.parse_args()
+    http = None
+    if args.image:
+        args.image = Image(args.image, args.image_rev, args.http_port)
+        http = await asyncio.start_server(args.image.serve, "0.0.0.0", args.http_port)
+        log("image", rev=args.image.rev, bytes=len(args.image.data), packed=args.image.packed,
+            md5=args.image.md5.hex(), http_port=args.http_port)
 
     async def on_row(reader, writer):
         await Row(reader, writer, args).run()

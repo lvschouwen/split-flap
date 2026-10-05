@@ -30,6 +30,7 @@
 #include "FollowerPrefs.h"     // #513: reflashOnBoot
 #include "FollowerResetLog.h"  // #503: reset history in /cluster/health
 #include "FollowerRescue.h"  // #343: beacon marker + op lockout
+#include "FollowerUpdate.h"  // the wall link's download owns the updater meanwhile
 #include "FollowerSettings.h"
 #include "FollowerWifi.h"
 #include "OtaUploadGate.h"  // shared gate / completion / stall rules
@@ -93,7 +94,7 @@ static OtaGzipTail otaGzipTail;
 static uint32_t otaReservedBytes = 0;  // what Update.begin was given
 
 // Running image + stored upload share [0, this); the EEPROM sector follows.
-static uint32_t appAreaBytes() { return FS_start - 0x40200000; }
+uint32_t appAreaBytes() { return FS_start - 0x40200000; }
 
 // --- helpers ------------------------------------------------------------------------
 
@@ -420,6 +421,13 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
         otaRejection.clear();
         if (gate != OtaGate::Pass) {
           otaRejection.set(gate);
+          return;
+        }
+        // The wall link is fetching an image, or has stored one and is about
+        // to restart into it: one updater, one writer.
+        if (updateDownloadActive()) {
+          otaRejection.set(409, F("The row is installing an image from its "
+                                  "master — retry when it has restarted"));
           return;
         }
         // #540: a gzip image is refused here unless it shows the flash

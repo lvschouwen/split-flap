@@ -4,6 +4,7 @@ wl.Welcome.master_id   max_size:33
 wl.Hello.id            max_size:33
 wl.Hello.rev           max_size:17
 wl.Update.rev          max_size:17
+wl.UpdateState.rev     max_size:17
 wl.Update.md5          max_size:16 fixed_length:true
 wl.Show.text           max_size:17
 wl.Config.tz           max_size:65

@@ -3,6 +3,7 @@
 // handlers, so the phase machine, flip timing and fallback clock are the ones
 // the HTTP wire already drives. Unit jobs go through the staged-op slot the
 // routes use (FollowerWeb.h); which checks a job takes is FollowerLinkOps.h.
+// An offered image is fetched by FollowerUpdate.cpp.
 #include "FollowerLink.h"
 
 #include <Arduino.h>
@@ -18,6 +19,8 @@
 #include "FollowerLinkPolicy.h"
 #include "FollowerPrefs.h"
 #include "FollowerRescue.h"
+#include "FollowerUpdate.h"
+#include "FollowerUpdatePolicy.h"
 #include "FollowerWeb.h"
 #include "FollowerWifi.h"
 #include "WallLinkStream.h"
@@ -60,6 +63,13 @@ uint32_t unitsDocId = 0;
 uint32_t lastUnitsMs = 0;
 bool unitsDue = false;
 
+// The image the master last offered, taken up after the messages in hand
+// are read; and what became of the last one, kept until the master has it.
+wl_Update offer;
+bool offerPending = false;
+wl_UpdateState updateReport;
+bool updateReportPending = false;
+
 static_assert((int)FollowerFallback::Blank == wl_Fallback_FALLBACK_BLANK &&
                   (int)FollowerFallback::Time == wl_Fallback_FALLBACK_TIME &&
                   (int)FollowerFallback::Date == wl_Fallback_FALLBACK_DATE,
@@ -79,6 +89,7 @@ void drop(const __FlashStringHelper* why) {
   reader.reset();
   releaseUnitsDoc();
   welcomed = false;
+  offerPending = false;  // the master offers again on the next connection
   dropCount++;
   backoffMs = followerLinkNextBackoffMs(backoffMs);
   nextDialMs = millis() + backoffMs;
@@ -148,6 +159,10 @@ void refuseOp(uint32_t opId, wl_OpRefusal why) {
 }
 
 void handleOp(const wl_Op& o) {
+  if (rescueActive()) {
+    refuseOp(o.op_id, wl_OpRefusal_REFUSAL_RESCUE);
+    return;
+  }
   if (linkOp.active) {
     refuseOp(o.op_id, wl_OpRefusal_REFUSAL_BUSY);
     return;
@@ -240,9 +255,57 @@ void opTick() {
   unitsDue = true;  // what the job changed
 }
 
+void reportUpdate(wl_UpdatePhase phase, wl_UpdateReason reason, uint32_t detail) {
+  memset(&updateReport, 0, sizeof(updateReport));
+  strlcpy(updateReport.rev, offer.rev, sizeof(updateReport.rev));
+  updateReport.phase = phase;
+  updateReport.reason = reason;
+  updateReport.detail = detail;
+  updateReportPending = true;
+}
+
+bool sendUpdateReport() {
+  wlClear(out);
+  out.which_body = wl_ToMaster_update_state_tag;
+  out.body.update_state = updateReport;
+  return send();
+}
+
+// Takes up an offered image: refused at once, or fetched and stored while
+// loop() waits here. The master is told before the silence and after it; an
+// answer that did not get out goes on the next connection.
+void updateTick(const FollowerClusterView& view) {
+  if (offerPending) {
+    offerPending = false;
+    const uint32_t maxSpace = followerUpdateMaxSpace(ESP.getFreeSketchSpace());
+    const wl_UpdateReason refusal = followerUpdateAdmit(
+        offer, GIT_REV, rescueActive(), unitOpsBusy() || linkOp.active, maxSpace);
+    char host[48];
+    if (refusal != wl_UpdateReason_UPDATE_REASON_NONE) {
+      reportUpdate(wl_UpdatePhase_UPDATE_REFUSED, refusal,
+                   refusal == wl_UpdateReason_UPDATE_TOO_LARGE ? maxSpace : 0);
+    } else if (!followerLinkHostPart(view.leaderHost.c_str(), host, sizeof(host))) {
+      reportUpdate(wl_UpdatePhase_UPDATE_REFUSED, wl_UpdateReason_UPDATE_UNREACHABLE, 0);
+    } else {
+      releaseUnitsDoc();  // the download needs the memory
+      reportUpdate(wl_UpdatePhase_UPDATE_DOWNLOADING, wl_UpdateReason_UPDATE_REASON_NONE, 0);
+      if (!sendUpdateReport()) {
+        // The master never heard that this row goes silent; it offers again.
+        updateReportPending = false;
+        return;
+      }
+      const FollowerUpdateResult result = updateDownloadAndInstall(offer, host);
+      reportUpdate(result.phase, result.reason, result.detail);
+      if (result.phase == wl_UpdatePhase_UPDATE_INSTALLED) isPendingReboot = true;
+    }
+  }
+  if (updateReportPending && welcomed && sendUpdateReport()) updateReportPending = false;
+}
+
 // The unit facts, on connect, after a job and every 30 s. Not started while
 // a job runs or a text waits for its flip instant.
 void unitsTick() {
+  if (rescueActive()) return;  // rescue mode never reads the units
   if (unitsDoc == nullptr) {
     if (!unitsDue && !followerLinkElapsed(millis(), lastUnitsMs, FOLLOWER_LINK_UNITS_INTERVAL_MS)) {
       return;
@@ -317,6 +380,11 @@ void handle(const wl_ToRow& m, const FollowerClusterView& view) {
     }
     case wl_ToRow_op_tag:
       handleOp(m.body.op);
+      break;
+    case wl_ToRow_update_tag:
+      // The latest offer wins; it is taken up by updateTick().
+      offer = m.body.update;
+      offerPending = true;
       break;
     case wl_ToRow_ping_tag:
       wlClear(out);
@@ -402,6 +470,7 @@ void linkLoopTick() {
     sendStatus(view.sntpSynced);
   }
   if (welcomed) unitsTick();
+  if (welcomed) updateTick(view);
 }
 
 FollowerLinkView linkViewGet() {

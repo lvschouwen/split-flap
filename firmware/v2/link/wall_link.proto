@@ -72,12 +72,14 @@ message Op {
 }
 
 // "This is the image you should run": the row downloads it from the master
-// over HTTP and checks it against md5 before installing.
+// with HTTP GET /firmware/row and checks it against size and md5 before
+// installing. Every Update is answered with UpdateState.
 message Update {
   string rev = 1;
   uint32 size = 2;
   bytes md5 = 3;
   bool packed = 4;                // gzip image for eboot
+  uint32 http_port = 5;           // where the master serves it; 0 = 80
 }
 
 message LogCtl {
@@ -168,6 +170,39 @@ message OpState {
   uint32 outcome = 6;             // OP_FAILED: MaintOutcome
 }
 
+enum UpdatePhase {
+  UPDATE_DOWNLOADING = 0;         // expect silence until the next message
+  UPDATE_INSTALLED = 1;           // stored and checked; the row restarts into it
+  UPDATE_FAILED = 2;              // the running image is untouched
+  UPDATE_REFUSED = 3;             // not started
+}
+
+enum UpdateReason {
+  UPDATE_REASON_NONE = 0;
+  UPDATE_CURRENT = 1;             // this row already runs that rev
+  UPDATE_UNITS_BUSY = 2;          // a unit job holds the row
+  UPDATE_BAD_OFFER = 3;           // no rev, size or md5
+  UPDATE_TOO_LARGE = 4;           // detail = the bytes this row can store
+  UPDATE_NO_MEMORY = 5;
+  UPDATE_UNREACHABLE = 6;         // no HTTP answer from the master
+  UPDATE_HTTP_STATUS = 7;         // detail = the status
+  UPDATE_SIZE_DIFFERS = 8;        // detail = the length the master's answer gave
+  UPDATE_IMAGE = 9;               // not an image this board may install;
+                                  // detail = OtaImageCheck, 100 = would not unpack clear of itself,
+                                  // 101 = packed flag and file disagree
+  UPDATE_STALLED = 10;            // detail = bytes received
+  UPDATE_FLASH = 11;              // write or md5 check failed; detail = the updater's error
+}
+
+// What became of an Update, named by its rev. A result that could not be
+// delivered is sent again on the next connection.
+message UpdateState {
+  string rev = 1;
+  UpdatePhase phase = 2;
+  UpdateReason reason = 3;
+  uint32 detail = 4;
+}
+
 message Event {
   uint32 code = 1;
   uint32 unit = 2;
@@ -202,5 +237,6 @@ message ToMaster {
     LogLine log_line = 6;
     UnitsJson units_json = 7;
     Pong pong = 8;
+    UpdateState update_state = 9;
   }
 }

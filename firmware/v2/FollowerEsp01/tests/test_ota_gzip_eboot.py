@@ -217,6 +217,27 @@ def test_max_upload_matches_the_upload_handler():
     assert "return otaSectorCeil(n) <= appArea - reserved;" in header
 
 
+def test_the_wall_link_download_stores_an_image_the_way_the_upload_does():
+    """The download (wl.Update) is a second writer of the same flash session:
+    same reserve, same unpack check, and never both at once."""
+    update = (PROJECT / "FollowerUpdate.cpp").read_text()
+    assert "offer.packed ? otaGzipReserve(offer.size, maxSpace) : maxSpace;" in update
+    assert "Update.begin(reserved, U_FLASH)" in update
+    assert "!otaGzipUnpackFits(tail, appAreaBytes(), reserved)" in update
+    assert "followerUpdateFirstBytes(buf, got, offer.packed," in update
+    # Judged before anything is erased.
+    assert update.index("followerUpdateFirstBytes(") < update.index("Update.begin(")
+    assert update.index("followerUpdateAnswer(") < update.index("fetch(offer, *body)")
+    # HTTPClient connects a copy of the client it is given: the body is only
+    # readable through its own stream.
+    assert "http.getStreamPtr()" in update and "fetch(offer, conn)" not in update
+    policy = (PROJECT / "FollowerUpdatePolicy.h").read_text()
+    assert "(freeSketchSpace - OTA_FLASH_SECTOR) & ~(OTA_FLASH_SECTOR - 1)" in policy
+    web = (PROJECT / "FollowerWeb.cpp").read_text()
+    guard = web.index("if (updateDownloadActive()) {")
+    assert web.index("otaUploadGate(") < guard < web.index("masterOtaUploadActive = true;")
+
+
 def test_image_offset_matches_the_firmware_header():
     header = (PROJECT / "FollowerOtaImage.h").read_text()
     offset = int(re.search(r"OTA_GZIP_IMAGE_OFFSET\s*=\s*(\d+);", header).group(1))

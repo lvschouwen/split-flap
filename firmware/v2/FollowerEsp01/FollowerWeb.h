@@ -24,6 +24,9 @@ void webEndpointsInit(AsyncWebServer& server);
 // would 409 every later upload forever).
 bool webOtaUploadFrozen();
 
+// Running image + stored upload share [0, this) of the flash.
+uint32_t appAreaBytes();
+
 // loop() drain: staged unit op execution, self-test polling, unit-health
 // refresh (+ probe-inhibit wait), the blocking reflash job.
 void webLoopTick();

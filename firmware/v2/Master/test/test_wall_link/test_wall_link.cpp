@@ -80,8 +80,18 @@ static void test_update_and_op_round_trip_and_bytes() {
   m.body.update.size = 323047;
   for (uint8_t i = 0; i < 16; i++) m.body.update.md5[i] = i;
   m.body.update.packed = true;
+  m.body.update.http_port = 8080;
   size_t n = wlEncodeToRow(wire, sizeof wire, m);
-  assertWire(n, VEC("update", "2332210a073366316135313610e7db131a10000102030405060708090a0b0c0d0e0f2001"));
+  assertWire(n, VEC("update", "2632240a073366316135313610e7db131a10000102030405060708090a0b0c0d0e0f200128903f"));
+
+  wl_ToMaster st = wl_ToMaster_init_zero;
+  st.which_body = wl_ToMaster_update_state_tag;
+  strcpy(st.body.update_state.rev, "3f1a516");
+  st.body.update_state.phase = wl_UpdatePhase_UPDATE_FAILED;
+  st.body.update_state.reason = wl_UpdateReason_UPDATE_HTTP_STATUS;
+  st.body.update_state.detail = 404;
+  n = wlEncodeToMaster(wire, sizeof wire, st);
+  assertWire(n, VEC("update_state", "124a100a073366316135313610021807209403"));
 
   wl_ToRow op = wl_ToRow_init_zero;
   op.which_body = wl_ToRow_op_tag;
