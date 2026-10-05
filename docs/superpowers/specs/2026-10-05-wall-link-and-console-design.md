@@ -71,6 +71,8 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 
 **Row board stack.** The async web server and its WiFi manager are replaced by a hand-written server on the core's `WiFiServer`, polled from `loop()`: three routes (`GET /id`, `POST /pair`, `POST /firmware` with a plain body and `Content-Length`, no multipart) and the WiFi setup form with its DNS catch-all. Measured saving: 34 KB of flash and 1.8 KB of fixed memory (section 9). The request parser is a pure header with host tests, because `POST /firmware` is the recovery path. The link is a `WiFiClient` polled from the same `loop()`, so only `loop()` touches state and the unit bus, with no handler-context rule left on this board. A request waits while the row is in a unit job.
 
+**Second heap (to be tried in step 2).** The core can hand unused code memory to the program as a second heap (`PIO_FRAMEWORK_ARDUINO_MMU_CACHE16_IRAM48_SECHEAP_SHARED`). The present image builds with it (+1.1 KB flash) and uses 29.4 KB of the 48 KB block, leaving about 19 KB. The price is half the flash-code cache and slow byte-wise access to that heap, so it is adopted only after a trial on the row shows renders, unit updates and bus error counts unchanged, and only large fill-and-send buffers (link frames, the boot dump block, the log ring if writes stay cheap) are placed there.
+
 **Break-glass, never removed.** The row board keeps two HTTP routes whatever else changes: `POST /firmware` (direct upload, same gate as today) and `GET /id`. Rescue mode (3 early deaths) runs WiFi, the link, the download and those two routes, nothing else. The master keeps `POST /firmware/master`, its A/B rollback and the rescue slot unchanged.
 
 ## 4. Master internals
