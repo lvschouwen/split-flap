@@ -16,6 +16,19 @@ std::atomic<uint8_t> gatewayResult{(uint8_t)NetProbe::Unknown};
 std::atomic<uint8_t> selfResult{(uint8_t)NetProbe::Unknown};
 std::atomic<uint32_t> resultAtMs{0};
 std::atomic<bool> everProbed{false};
+// Where the last own-server probe stopped (ProbeStep) and its errno: a "fail"
+// alone does not say whether the connect, the send or the reply was missing.
+std::atomic<uint8_t> selfStep{0};
+std::atomic<int> selfErrno{0};
+
+enum ProbeStep : uint8_t {
+  STEP_OK = 0,
+  STEP_SOCKET,
+  STEP_CONNECT,
+  STEP_SEND,
+  STEP_NO_REPLY,
+  STEP_BAD_REPLY,
+};
 
 struct StrikeRecord {
   uint32_t magic;
@@ -34,7 +47,9 @@ RTC_NOINIT_ATTR StrikeRecord strikeRecord;
 //
 // Unknown when the shortage is this board's own (no socket, no memory): that
 // is not evidence about the network.
-NetProbe tcpProbe(IPAddress ip, uint16_t port, const char* request) {
+NetProbe tcpProbe(IPAddress ip, uint16_t port, const char* request,
+                  uint8_t& step) {
+  step = STEP_SOCKET;
   int s = lwip_socket(AF_INET, SOCK_STREAM, 0);
   if (s < 0) return NetProbe::Unknown;
   int flags = lwip_fcntl(s, F_GETFL, 0);
@@ -77,23 +92,31 @@ NetProbe tcpProbe(IPAddress ip, uint16_t port, const char* request) {
   }
 
   NetProbe result = NetProbe::Fail;
+  step = STEP_CONNECT;
   if (err == ENOMEM || err == ENOBUFS) {
     result = NetProbe::Unknown;
   } else if (request == nullptr) {
     result = (connected || err == ECONNREFUSED) ? NetProbe::Ok : NetProbe::Fail;
   } else if (connected) {
+    step = STEP_SEND;
     size_t len = strlen(request);
     if (lwip_send(s, request, len, 0) == (int)len) {
+      step = STEP_NO_REPLY;
       fd_set readable;
       FD_ZERO(&readable);
       FD_SET(s, &readable);
       char head[8] = {};
-      if (lwip_select(s + 1, &readable, nullptr, nullptr, &tv) > 0 &&
-          lwip_recv(s, head, 5, 0) == 5 && memcmp(head, "HTTP/", 5) == 0) {
-        result = NetProbe::Ok;
+      if (lwip_select(s + 1, &readable, nullptr, nullptr, &tv) > 0) {
+        step = STEP_BAD_REPLY;
+        if (lwip_recv(s, head, 5, 0) == 5 && memcmp(head, "HTTP/", 5) == 0) {
+          result = NetProbe::Ok;
+        }
       }
     }
+    if (result != NetProbe::Ok) err = errno;
   }
+  if (result == NetProbe::Ok) step = STEP_OK;
+  if (request != nullptr) selfErrno.store(err);
   lwip_close(s);
   return result;
 }
@@ -112,12 +135,16 @@ void netLivenessProbeTick() {
   IPAddress self = WiFi.localIP();
   IPAddress gateway = WiFi.gatewayIP();
   if ((uint32_t)self == 0 || (uint32_t)gateway == 0) return;
-  NetProbe gw = tcpProbe(gateway, 80, nullptr);
+  uint8_t gwStep = 0;
+  uint8_t ownStep = 0;
+  NetProbe gw = tcpProbe(gateway, 80, nullptr, gwStep);
   // A path nothing serves: the 404 comes from the web server's own task, so
   // it proves that task runs — at the cost of the smallest reply there is.
   NetProbe own = tcpProbe(self, 80,
                           "GET /net-liveness HTTP/1.0\r\n"
-                          "Connection: close\r\n\r\n");
+                          "Connection: close\r\n\r\n",
+                          ownStep);
+  selfStep.store(ownStep);
   gatewayResult.store((uint8_t)gw);
   selfResult.store((uint8_t)own);
   resultAtMs.store(millis());
@@ -158,7 +185,13 @@ String netLivenessJson() {
   out += netProbeName(netLivenessGateway(now));
   out += "\",\"self\":\"";
   out += netProbeName(netLivenessSelf(now));
-  out += "\",\"strikes\":";
+  // selfStep: 0 answered, 1 no socket, 2 connect, 3 send, 4 no reply, 5 not
+  // an HTTP reply; selfErr = errno at that step.
+  out += "\",\"selfStep\":";
+  out += (unsigned)selfStep.load();
+  out += ",\"selfErr\":";
+  out += selfErrno.load();
+  out += ",\"strikes\":";
   out += (unsigned)netLivenessStrikes();
   out += ",\"limitMin\":";
   out += (unsigned long)(netLivenessThresholdMs(netLivenessStrikes()) / 60000UL);
