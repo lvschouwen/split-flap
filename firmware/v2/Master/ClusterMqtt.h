@@ -14,6 +14,7 @@
 #include <Arduino.h>
 
 #include "ClusterLeader.h"
+#include "ClusterMemberPhase.h"  // ClusterFollowerPhase (#500)
 #include "MqttHelpers.h"   // MQTT_FMT/mqttSnprintf + MQTT_DEVICE_BLOCK
 #include "SettingsJson.h"  // appendJsonString
 
@@ -123,6 +124,37 @@ inline size_t buildClusterDegradedDiscovery(char* buf, size_t bufLen,
                "\"dev_cla\":\"problem\",\"ent_cat\":\"diagnostic\","
                "\"pl_on\":\"ON\",\"pl_off\":\"OFF\"," MQTT_DEVICE_BLOCK "}"),
       deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+}
+
+// --- leader lost, as seen by a member (#500) ---------------------------------
+// The leader's own sensor above dies with the leader. A joined member — a row
+// follower, or a unit-less board enrolled as `backup` — is what is left to
+// say so: -1 = not a member (no entity), 0 = leader in contact or merely
+// quiet, 1 = written off (silent past CLUSTER_GRACE_MS).
+inline int clusterLeaderLostState(ClusterFollowerPhase phase) {
+  if (phase == ClusterFollowerPhase::Standalone) return -1;
+  return phase == ClusterFollowerPhase::LeaderLost ? 1 : 0;
+}
+
+inline size_t buildLeaderLostDiscoveryTopic(char* buf, size_t bufLen,
+                                            const char* deviceId) {
+  return (size_t)mqttSnprintf(
+      buf, bufLen,
+      MQTT_FMT("homeassistant/binary_sensor/%s_leader_lost/config"), deviceId);
+}
+
+inline size_t buildLeaderLostDiscovery(char* buf, size_t bufLen,
+                                       const char* deviceId,
+                                       const char* fwVersion) {
+  return (size_t)mqttSnprintf(
+      buf, bufLen,
+      MQTT_FMT("{\"name\":\"Leader lost\","
+               "\"stat_t\":\"splitflap/%s/leader_lost\","
+               "\"avty_t\":\"splitflap/%s/availability\","
+               "\"uniq_id\":\"%s_leader_lost\","
+               "\"dev_cla\":\"problem\",\"ent_cat\":\"diagnostic\","
+               "\"pl_on\":\"ON\",\"pl_off\":\"OFF\"," MQTT_DEVICE_BLOCK "}"),
+      deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
 }
 
 // text/state while leading: the wall's logical content — every grid row,

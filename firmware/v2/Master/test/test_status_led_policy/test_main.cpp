@@ -136,6 +136,23 @@ static void test_color_equality_helper() {
 
 // ---------------------------------------------------------------------------
 
+// #500: a cluster member whose leader has gone silent shows it — below every
+// state of its own (OTA, an unconfirmed image, WiFi), above the heartbeat.
+static void test_leader_lost_is_cyan_only_when_otherwise_healthy() {
+  StatusLedInput in;
+  in.wifiPhase = WifiPhase::Connected;
+  in.leaderLost = true;
+  StatusLedColor c = decideStatusLed(in);
+  TEST_ASSERT_EQUAL_UINT8(0, c.r);
+  TEST_ASSERT_EQUAL_UINT8(STATUS_LED_ATTENTION, c.g);
+  TEST_ASSERT_EQUAL_UINT8(STATUS_LED_ATTENTION, c.b);
+  in.otaPendingVerify = true;
+  TEST_ASSERT_EQUAL_UINT8(STATUS_LED_ATTENTION, decideStatusLed(in).r);  // orange wins
+  in.otaPendingVerify = false;
+  in.wifiPhase = WifiPhase::Joining;
+  TEST_ASSERT_EQUAL_UINT8(48, decideStatusLed(in).g);  // yellow wins
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_boot_is_white);
@@ -149,5 +166,6 @@ int main(int, char**) {
   RUN_TEST(test_connected_ramp_is_symmetric_and_bounded);
   RUN_TEST(test_connected_heartbeat_survives_millis_rollover);
   RUN_TEST(test_color_equality_helper);
+  RUN_TEST(test_leader_lost_is_cyan_only_when_otherwise_healthy);
   return UNITY_END();
 }

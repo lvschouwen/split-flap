@@ -155,6 +155,34 @@ static void test_discovery_payload_fields() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"ids\":[\"flap\"]"));  // shared device block
 }
 
+// --- leader lost, as seen by a member (#500) ---------------------------------
+
+static void test_only_a_member_has_a_leader_lost_entity() {
+  TEST_ASSERT_EQUAL(-1, clusterLeaderLostState(ClusterFollowerPhase::Standalone));
+  TEST_ASSERT_EQUAL(0, clusterLeaderLostState(ClusterFollowerPhase::Clustered));
+  // Grace is the leader rebooting or a WiFi blip: not an alert yet.
+  TEST_ASSERT_EQUAL(0, clusterLeaderLostState(ClusterFollowerPhase::Grace));
+  TEST_ASSERT_EQUAL(1, clusterLeaderLostState(ClusterFollowerPhase::LeaderLost));
+}
+
+static void test_leader_lost_discovery_payload_fields() {
+  char topic[96];
+  size_t t = buildLeaderLostDiscoveryTopic(topic, sizeof(topic), "flap");
+  TEST_ASSERT_TRUE(t > 0 && t < sizeof(topic));
+  TEST_ASSERT_EQUAL_STRING(
+      "homeassistant/binary_sensor/flap_leader_lost/config", topic);
+  char buf[512];
+  size_t n = buildLeaderLostDiscovery(buf, sizeof(buf), "flap", "abc1234");
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"name\":\"Leader lost\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"stat_t\":\"splitflap/flap/leader_lost\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"avty_t\":\"splitflap/flap/availability\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"uniq_id\":\"flap_leader_lost\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"dev_cla\":\"problem\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"pl_on\":\"ON\",\"pl_off\":\"OFF\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"ids\":[\"flap\"]"));
+}
+
 // --- wall text/state -------------------------------------------------------------
 
 static void test_wall_state_joins_rows_with_newlines() {
@@ -213,6 +241,8 @@ int main(int, char**) {
   RUN_TEST(test_attrs_json_carries_member_health_when_valid);
   RUN_TEST(test_discovery_topic);
   RUN_TEST(test_discovery_payload_fields);
+  RUN_TEST(test_only_a_member_has_a_leader_lost_entity);
+  RUN_TEST(test_leader_lost_discovery_payload_fields);
   RUN_TEST(test_wall_state_joins_rows_with_newlines);
   RUN_TEST(test_wall_state_truncates_to_ha_state_limit);
   return UNITY_END();

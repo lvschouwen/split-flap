@@ -118,6 +118,10 @@ static String mqttLastPublishedAlignment = "\x01";
 // passes for the width publish below.
 static int mqttLastClusterConfigured = -1;
 static int mqttLastClusterState = -1;
+// Leader-lost sensor of a cluster member (#500): same reconcile-on-a-fresh-
+// session rule — configured while a member, blanked when not.
+static int mqttLastLeaderLostConfigured = -1;
+static int mqttLastLeaderLostState = -1;
 static String mqttLastClusterAttrs = "\x01";
 static uint32_t mqttNextClusterMs = 0;
 static int mqttClusterCapacity = 0;
@@ -283,7 +287,8 @@ static void publishDiscoveryClear() {
       "mode",     "text/state", "notification", "width",     "units",
       "speed",    "alignment",  "units_faulty", "units/attrs",
       "diag/ip",  "diag/ssid",  "diag/reset",   "diag/boots",
-      "diag/ota", "diag/tz",    "cluster_degraded", "cluster/attrs"};
+      "diag/ota", "diag/tz",    "cluster_degraded", "cluster/attrs",
+      "leader_lost"};
   for (unsigned i = 0; i < sizeof(stateSuffixes) / sizeof(stateSuffixes[0]);
        i++) {
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, stateSuffixes[i]).c_str(),
@@ -495,6 +500,41 @@ if (content.alignment != mqttLastPublishedAlignment) {
   mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "alignment").c_str(), 0,
                      true, content.alignment.c_str());
 }
+}
+
+// Leader-lost sensor (#500). `state` is clusterLeaderLostState(): the entity
+// exists only while this board is a cluster member. Runs on the
+// availability-only path too — it is the one state a member still owes HA.
+static void mqttPublishLeaderLost(int state) {
+  int configured = state >= 0 ? 1 : 0;
+  if (configured != mqttLastLeaderLostConfigured) {
+    char topicBuf[96];
+    size_t tLen = buildLeaderLostDiscoveryTopic(topicBuf, sizeof(topicBuf),
+                                                mqttResolvedDeviceId.c_str());
+    if (tLen > 0 && tLen < sizeof(topicBuf)) {
+      if (configured) {
+        char payloadBuf[512];
+        size_t pLen = buildLeaderLostDiscovery(payloadBuf, sizeof(payloadBuf),
+                                               mqttResolvedDeviceId.c_str(),
+                                               mqttFwVersion.c_str());
+        if (pLen > 0 && pLen < sizeof(payloadBuf)) {
+          mqttClient.publish(topicBuf, 0, true, payloadBuf);
+        }
+      } else {
+        mqttClient.publish(topicBuf, 0, true, "");
+        mqttClient.publish(
+            mqttTopic(mqttResolvedDeviceId, "leader_lost").c_str(), 0, true, "");
+      }
+    }
+    mqttLastLeaderLostConfigured = configured;
+    mqttLastLeaderLostState = -1;
+  }
+  if (state >= 0 && state != mqttLastLeaderLostState) {
+    mqttLastLeaderLostState = state;
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "leader_lost").c_str(),
+                       0, true, state ? "ON" : "OFF");
+    if (state) SerialPrintln(F("MQTT: leader lost — alert published"));
+  }
 }
 
 // Cluster surfacing (#277): degraded sensor + member/rollout attrs + the
@@ -716,6 +756,8 @@ void mqttServiceTick() {
     mqttLastClusterState = -1;
     mqttLastClusterAttrs = "\x01";
     mqttNextClusterMs = millis();
+    mqttLastLeaderLostConfigured = -1;
+    mqttLastLeaderLostState = -1;
   }
 
   if (!mqttClient.connected()) return;
@@ -728,10 +770,14 @@ void mqttServiceTick() {
   // 1 s cache: the view copy takes the follower mutex.
   static uint32_t mqttNextGateCheckMs = 0;
   static bool mqttAvailabilityOnly = false;
+  static int mqttLeaderLost = -1;
   if ((int32_t)(millis() - mqttNextGateCheckMs) >= 0) {
     mqttNextGateCheckMs = millis() + 1000;
-    mqttAvailabilityOnly = clusterFollowerViewGet().gated;
+    ClusterFollowerView view = clusterFollowerViewGet();
+    mqttAvailabilityOnly = view.gated;
+    mqttLeaderLost = clusterLeaderLostState(view.phase);
   }
+  mqttPublishLeaderLost(mqttLeaderLost);
   if (mqttAvailabilityOnly) {
     if (discoveryClearRequested.exchange(false)) publishDiscoveryClear();
     return;
