@@ -18,6 +18,7 @@
 // that boots the application, which then resumes stage 2 (bootAutoResume).
 
 #include <stdint.h>
+#include "CrashRecordApp.h"
 #include <avr/eeprom.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -152,6 +153,7 @@ static void bootStage1InstallDoSpm() {
   // and disables this watchdog in setup(). Its timeout countdown cannot exit:
   // expiry stores r10 as the command, and r10 is zeroed below. All three cases
   // are exercised by sim/prove.sh (A1-A3).
+  crashRecordClear();
   wdt_reset();
   wdt_enable(WDTO_250MS);
 

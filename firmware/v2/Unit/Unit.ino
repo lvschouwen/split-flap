@@ -29,6 +29,7 @@
 #include "BootSectionClassify.h"  // pure boot-section state classifier (#499)
 #include "BootUpdateReport.h"     // pure GET_BOOT_INFO reply codec (#499)
 #include "BootIntegrity.h"        // boot-report refresh schedule (#520)
+#include "CrashRecordApp.h"       // crash record clear for twiboot (#542)
 #include "twiboot-new-progmem.h"  // generated new-twiboot image + CRCs (#499)
 #include "BootUpdateAvr.h"      // AVR self-program core (#499; glue in UnitBootUpdate.ino)
 // Single source of truth for the master<->unit I2C contract (opcodes, address
@@ -679,6 +680,13 @@ void loop() {
   vitalsRefreshReplyBuffer();  // publish latest Vcc/RAM/cmdPos (#306)
   refreshExtDiagReply();       // publish latest ext-diag measurements (#365)
 
+  // #542: after ~20 s of healthy loop, tell twiboot the app is stable.
+  static bool crashRecCleared = false;
+  if (!crashRecCleared && millis() >= 20000UL) {
+    crashRecordClear();
+    crashRecCleared = true;
+  }
+
   //If an enter-bootloader command arrived, give Wire a beat to finish any
   //in-flight transaction, then let the watchdog reset us. Twiboot takes over
   //from there and the master can push a new sketch over I2C.
@@ -689,6 +697,7 @@ void loop() {
 #endif
     delay(10);
     markResetRequested();
+    crashRecordClear();
     wdt_enable(WDTO_15MS);
     while (true) {}
   }

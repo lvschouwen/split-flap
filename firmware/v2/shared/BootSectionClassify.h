@@ -32,7 +32,7 @@ enum BootSectionState {
 // expects every unit to carry (BootIntegrity.h). The generated image header's
 // NEW_TWIBOOT_CRC32 is the source; the unit build asserts the two equal and
 // tests/test_new_twiboot_image pins it for the trees that never see that header.
-#define BOOT_CURRENT_CRC32 0xc65e3dbfUL
+#define BOOT_CURRENT_CRC32 0x506b3970UL
 // crc32 of each previous new image still deployed on units. Their page 7
 // (do_spm) is byte-identical to the current image's, so stage 2 alone takes a
 // unit from any of them to the current image; bootPage7HoldsDoSpm() in
@@ -41,6 +41,7 @@ enum BootSectionState {
 // Replacing the current image means adding its CRC here and keeping its hex.
 #define BOOT_PREV_NEW_CRC32  0xe422a668UL
 #define BOOT_PREV_NEW2_CRC32 0x081c2954UL
+#define BOOT_PREV_NEW3_CRC32 0xc65e3dbfUL
 // crc32 of just the fielded pages 0-6 (0x7C00-0x7F7F, the twiboot core, page 7
 // excluded). Stage 1 only writes page 7, so this is what survives a half-done or
 // retried stage 1 — see the retriable case in classifyBootSection. Also pinned
@@ -71,7 +72,8 @@ inline BootSectionState classifyBootSection(const BootSectionFacts& f,
                                             uint32_t page7InstalledCrc32) {
   if (f.fullCrc32 == newFullCrc32) return BOOT_STATE_NEW;
   if (f.fullCrc32 == BOOT_PREV_NEW_CRC32 ||
-      f.fullCrc32 == BOOT_PREV_NEW2_CRC32) return BOOT_STATE_PREV_NEW;
+      f.fullCrc32 == BOOT_PREV_NEW2_CRC32 ||
+      f.fullCrc32 == BOOT_PREV_NEW3_CRC32) return BOOT_STATE_PREV_NEW;
   if (f.fullCrc32 == BOOT_FIELDED_CRC32) return BOOT_STATE_OLD;
   if (f.fullCrc32 == page7InstalledCrc32) return BOOT_STATE_PAGE7_INSTALLED;
   if (f.page0Word0 == BOOT_TRAMPOLINE_WORD0 &&

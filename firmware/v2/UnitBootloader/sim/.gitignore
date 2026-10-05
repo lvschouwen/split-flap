@@ -4,3 +4,4 @@
 *.o
 runtest
 crash_test
+crash_test_real
