@@ -11,6 +11,7 @@
 static FollowerPrefs prefs;
 static volatile bool stagedWrite = false;
 static volatile bool stagedReflashOnBoot = true;
+static volatile FollowerFallback stagedFallback = FollowerFallback::Time;
 
 void prefsInit() {
   uint8_t rec[FOLLOWER_PREFS_LEN];
@@ -18,6 +19,8 @@ void prefsInit() {
     rec[i] = EEPROM.read(FOLLOWER_PREFS_OFF + i);
   }
   prefs = followerPrefsDecode(rec);
+  stagedReflashOnBoot = prefs.reflashOnBoot;
+  stagedFallback = prefs.fallback;
 }
 
 bool prefsReflashOnBoot() { return prefs.reflashOnBoot; }
@@ -25,6 +28,13 @@ bool prefsReflashOnBoot() { return prefs.reflashOnBoot; }
 void prefsStageReflashOnBoot(bool on) {
   stagedReflashOnBoot = on;
   stagedWrite = true;  // set last (flag-handoff rule)
+}
+
+FollowerFallback prefsFallback() { return prefs.fallback; }
+
+void prefsStageFallback(FollowerFallback fallback) {
+  stagedFallback = fallback;
+  stagedWrite = true;
 }
 
 #define PREFS_COMMIT_MIN_GAP_MS 10000UL
@@ -39,9 +49,11 @@ void prefsLoopTick(bool force) {
   }
   stagedWrite = false;
   bool want = stagedReflashOnBoot;
-  if (prefs.reflashOnBoot == want) return;
+  FollowerFallback wantFallback = stagedFallback;
+  if (prefs.reflashOnBoot == want && prefs.fallback == wantFallback) return;
   FollowerPrefs next = prefs;
   next.reflashOnBoot = want;
+  next.fallback = wantFallback;
   uint8_t rec[FOLLOWER_PREFS_LEN];
   followerPrefsEncode(next, rec);
   for (int i = 0; i < FOLLOWER_PREFS_LEN; i++) {
@@ -51,11 +63,16 @@ void prefsLoopTick(bool force) {
   lastCommitMs = millis();
   if (!EEPROM.commit()) {
     // GET /settings keeps reporting the value that is actually on flash.
-    SerialPrintln(F("reflashOnBoot: EEPROM commit FAILED — will retry"));
+    SerialPrintln(F("settings: EEPROM commit FAILED — will retry"));
     stagedWrite = true;
     return;
   }
+  const bool reflashChanged = prefs.reflashOnBoot != want;
   prefs = next;
-  SerialPrint(F("reflashOnBoot set to "));
-  SerialPrintln(want ? F("true") : F("false"));
+  if (reflashChanged) {
+    SerialPrint(F("reflashOnBoot set to "));
+    SerialPrintln(want ? F("true") : F("false"));
+  } else {
+    SerialPrintln(F("settings: fallback stored"));
+  }
 }

@@ -9,6 +9,7 @@
 #include "FollowerBus.h"
 #include "FollowerClock.h"  // #342: local clock fallback when the leader dies
 #include "FollowerConfig.h"
+#include "FollowerPrefs.h"
 #include "FollowerRescue.h"  // #343: rescue beacon never touches the bus
 #include "FollowerSettings.h"
 
@@ -52,6 +53,7 @@ static bool rowIsBlank = true;
 // one flap tick per minute, not per loop pass).
 static bool clockShowing = false;
 static int shownClockMinute = -1;
+static bool clockShowsDate = false;  // shownClockMinute is then the day of the year
 
 // millis() when a leader render was last APPLIED (#306 diagnostics). Distinct
 // from policyState.lastContactMs, which any ping also bumps.
@@ -160,8 +162,10 @@ void clusterLoopTick() {
     if (leaderQuiet) return;
     bool synced = false;
     (void)nowEpochMs(synced);
+    const FollowerFallback fallback = prefsFallback();
     if (followerClockEligible(policyState.phase, leaderHost.length() > 0,
-                              leaderTz.length() > 0, synced)) {
+                              leaderTz.length() > 0, synced,
+                              fallback != FollowerFallback::Blank)) {
       // #362: install the leader's zone lazily, here in loop context, the
       // first time a fallback actually needs it (and after any zone change).
       // configTime installs it synchronously via setTZ before returning, so
@@ -174,18 +178,24 @@ void clusterLoopTick() {
       time_t nowT = time(nullptr);
       struct tm lt;
       localtime_r(&nowT, &lt);
-      int hour = lt.tm_hour, minute = lt.tm_min;
-      if ((!clockShowing || minute != shownClockMinute) &&
+      const bool asDate = fallback == FollowerFallback::Date;
+      int hour = lt.tm_hour, minute = asDate ? lt.tm_yday : lt.tm_min;
+      if ((!clockShowing || minute != shownClockMinute || asDate != clockShowsDate) &&
           !renderPending && !reflashInProgress(reflashProgress)) {
         if (!clockShowing) {
           SerialPrintln(F("cluster: leader lost — local clock fallback"));
         }
         int width = displayWidth > 0 ? displayWidth : UNITS_AMOUNT;
         char text[UNITS_AMOUNT + 1];
-        followerClockText(hour, minute, width, text);
+        if (asDate) {
+          followerDateText(lt.tm_mday, lt.tm_mon + 1, lt.tm_year % 100, width, text);
+        } else {
+          followerClockText(hour, minute, width, text);
+        }
         busShowSegment(String(text), heldSpeed > 0 ? heldSpeed : 80);
         clockShowing = true;
         shownClockMinute = minute;
+        clockShowsDate = asDate;
         rowIsBlank = false;
       }
       return;
@@ -263,6 +273,15 @@ void clusterHandleJoin(const String& name, const String& host, int row,
     SerialPrint(name);
     SerialPrintln(auth.keyed ? F(" [authenticated]") : F(""));
   }
+}
+
+void clusterSetTz(const String& tz) {
+  if (tz.length() == 0 || tz == leaderTz || leaderHost.length() == 0) return;
+  // Stored and handed to the C library: the same rule as the join's tz.
+  if (tz.length() > FOLLOWER_TZ_MAX || !clusterWirePrintable(tz, 0x21)) return;
+  leaderTz = tz;
+  applyLeaderTz();
+  membershipDirty = true;
 }
 
 bool clusterHmacEnforced() { return auth.keyed; }

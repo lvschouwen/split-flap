@@ -11,6 +11,10 @@ Every message a row sends is printed as one JSON line with a timestamp.
 --clock shows HH:MM on the row at each minute change, sent 2 s ahead.
 --commands names a file that is read as it grows, one command per line:
     show TEXT | quiet on|off | ping | restart | release
+    config blank|time|date on|off [TZ]     (on|off: update units at start)
+    op NAME ADDRESS [ARG]                  (NAME as in OpCode, without OPC_)
+
+The unit facts and a boot dump arrive in pieces; they are printed once, whole.
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ import argparse
 import asyncio
 import json
 import time
+import zlib
 
 from google.protobuf.json_format import MessageToDict
 
@@ -37,6 +42,9 @@ class Row:
         self.reader, self.writer, self.args = reader, writer, args
         self.peer = writer.get_extra_info("peername")[0]
         self.render_id = 0
+        self.op_id = 0
+        self.units = bytearray()
+        self.result = bytearray()
         self.busy = False
         self.last_sent = time.monotonic()
 
@@ -51,6 +59,12 @@ class Row:
         log("sent", peer=self.peer, show=text, render_id=self.render_id, commit_at_ms=commit_at_ms)
 
     def command(self, line: str) -> None:
+        try:
+            self.run_command(line)
+        except (ValueError, KeyError, IndexError) as error:
+            log("bad-command", line=line.strip(), error=str(error))
+
+    def run_command(self, line: str) -> None:
         word, _, rest = line.strip().partition(" ")
         if word == "show":
             self.show(rest.upper())
@@ -62,11 +76,51 @@ class Row:
             self.send(restart=pb.Restart())
         elif word == "release":
             self.send(release=pb.Release())
+        elif word == "config":
+            fallback, units_at_start, *tz = rest.split(maxsplit=2)
+            self.send(config=pb.Config(fallback=pb.Fallback.Value("FALLBACK_" + fallback.upper()),
+                                       update_units_at_start=units_at_start == "on",
+                                       tz=tz[0] if tz else ""))
+        elif word == "op":
+            name, address, *arg = rest.split()
+            self.op_id += 1
+            self.send(op=pb.Op(op_id=self.op_id, opcode=pb.OpCode.Value("OPC_" + name.upper()),
+                               address=int(address), arg=int(arg[0]) if arg else 0))
         elif word:
             log("bad-command", line=line)
             return
         if word and word != "show":
             log("sent", peer=self.peer, command=line.strip())
+
+    def got(self, message) -> None:
+        kind = message.WhichOneof("body") or "unknown"
+        if kind == "units_json":
+            piece = message.units_json
+            if piece.offset == 0:
+                self.units.clear()
+            if piece.offset != len(self.units):
+                log("units-out-of-order", peer=self.peer, offset=piece.offset, have=len(self.units))
+                return
+            self.units += piece.data
+            if len(self.units) == piece.total:
+                log("got", peer=self.peer, type="units", doc_id=piece.doc_id, bytes=piece.total,
+                    units=json.loads(self.units))
+            return
+        fields = MessageToDict(message, preserving_proto_field_name=True)
+        if kind == "op_state":
+            state = message.op_state
+            if state.data_offset == 0:
+                self.result.clear()
+            self.result += state.data
+            fields = fields["op_state"]
+            fields.pop("data", None)
+            if state.phase != pb.OP_RUNNING and self.result:
+                try:
+                    fields["result"] = json.loads(self.result)
+                except ValueError:
+                    fields["result_bytes"] = len(self.result)
+                    fields["result_crc32"] = f"{zlib.crc32(self.result):08x}"
+        log("got", peer=self.peer, type=kind, **fields)
 
     async def run(self) -> None:
         splitter = io.Splitter()
@@ -78,8 +132,7 @@ class Row:
                 for body in splitter.feed(data):
                     message = pb.ToMaster.FromString(body)
                     kind = message.WhichOneof("body") or "unknown"
-                    log("got", peer=self.peer, type=kind,
-                        **MessageToDict(message, preserving_proto_field_name=True))
+                    self.got(message)
                     if kind == "hello" and not welcomed:
                         self.send(welcome=pb.Welcome(protocol=io.PROTOCOL, master_id=self.args.id))
                         welcomed = True

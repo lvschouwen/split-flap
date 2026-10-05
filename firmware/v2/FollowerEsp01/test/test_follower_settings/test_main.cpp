@@ -215,6 +215,36 @@ static void test_prefs_corruption_never_decodes_to_off() {
   }
 }
 
+static void test_prefs_keep_the_fallback_beside_the_boot_brake() {
+  const FollowerFallback all[] = {FollowerFallback::Blank, FollowerFallback::Time,
+                                  FollowerFallback::Date};
+  for (FollowerFallback f : all) {
+    for (int on = 0; on <= 1; on++) {
+      FollowerPrefs in;
+      in.fallback = f;
+      in.reflashOnBoot = on != 0;
+      uint8_t rec[FOLLOWER_PREFS_LEN];
+      followerPrefsEncode(in, rec);
+      FollowerPrefs back = followerPrefsDecode(rec);
+      TEST_ASSERT_EQUAL((int)f, (int)back.fallback);
+      TEST_ASSERT_EQUAL(in.reflashOnBoot, back.reflashOnBoot);
+    }
+  }
+}
+
+static void test_a_record_from_before_the_fallback_field_shows_the_time() {
+  // What a build without the field wrote: magic, the boot-brake bit, check.
+  for (uint8_t flags = 0; flags <= 1; flags++) {
+    uint8_t rec[FOLLOWER_PREFS_LEN] = {FOLLOWER_PREFS_MAGIC, flags, 0};
+    rec[2] = followerPrefsCheck(rec);
+    FollowerPrefs p = followerPrefsDecode(rec);
+    TEST_ASSERT_EQUAL((int)FollowerFallback::Time, (int)p.fallback);
+    TEST_ASSERT_EQUAL(flags != 0, p.reflashOnBoot);
+  }
+  uint8_t erased[FOLLOWER_PREFS_LEN] = {0xFF, 0xFF, 0xFF};
+  TEST_ASSERT_EQUAL((int)FollowerFallback::Time, (int)followerPrefsDecode(erased).fallback);
+}
+
 static void test_prefs_sit_behind_the_membership_blob() {
   TEST_ASSERT_EQUAL_INT(FOLLOWER_MEMBERSHIP_BLOB_LEN, FOLLOWER_PREFS_OFF);
   TEST_ASSERT_EQUAL_INT(FOLLOWER_MEMBERSHIP_BLOB_LEN + FOLLOWER_PREFS_LEN,
@@ -250,6 +280,8 @@ int main(int, char**) {
   RUN_TEST(test_prefs_roundtrip_both_values);
   RUN_TEST(test_prefs_unwritten_eeprom_means_defaults);
   RUN_TEST(test_prefs_corruption_never_decodes_to_off);
+  RUN_TEST(test_prefs_keep_the_fallback_beside_the_boot_brake);
+  RUN_TEST(test_a_record_from_before_the_fallback_field_shows_the_time);
   RUN_TEST(test_prefs_sit_behind_the_membership_blob);
   RUN_TEST(test_parse_bool_is_strict);
   return UNITY_END();

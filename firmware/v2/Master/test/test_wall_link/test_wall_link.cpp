@@ -86,20 +86,18 @@ static void test_update_and_op_round_trip_and_bytes() {
   wl_ToRow op = wl_ToRow_init_zero;
   op.which_body = wl_ToRow_op_tag;
   op.body.op.op_id = 0xA1B20007;
-  op.body.op.opcode = 5;
+  op.body.op.opcode = wl_OpCode_OPC_SET_OFFSET;
   op.body.op.address = 6;
-  op.body.op.args.size = 2;
-  op.body.op.args.bytes[0] = 0x01;
-  op.body.op.args.bytes[1] = 0xF4;
+  op.body.op.arg = -500;
   n = wlEncodeToRow(wire, sizeof wire, op);
-  assertWire(n, VEC("op", "102a0e088780c88d0a10051806220201f4"));
+  assertWire(n, VEC("op", "0f2a0d088780c88d0a1004180620e707"));
   WlRowReader r;
   r.feed(wire, n);
   wl_ToRow d = wl_ToRow_init_zero;
   TEST_ASSERT_TRUE(r.decode(wl_ToRow_fields, &d));
   TEST_ASSERT_EQUAL_HEX32(0xA1B20007, d.body.op.op_id);
-  TEST_ASSERT_EQUAL(2, d.body.op.args.size);
-  TEST_ASSERT_EQUAL_HEX8(0xF4, d.body.op.args.bytes[1]);
+  TEST_ASSERT_EQUAL(wl_OpCode_OPC_SET_OFFSET, d.body.op.opcode);
+  TEST_ASSERT_EQUAL(-500, d.body.op.arg);
 }
 
 static void test_status_with_a_negative_signal_and_empty_messages() {

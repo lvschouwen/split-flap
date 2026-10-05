@@ -1,18 +1,22 @@
 // FollowerLink.cpp — socket glue of the wall link on the row board. Timing
 // rules in FollowerLinkPolicy.h; message handling reuses FollowerCluster's
 // handlers, so the phase machine, flip timing and fallback clock are the ones
-// the HTTP wire already drives.
+// the HTTP wire already drives. Unit jobs go through the staged-op slot the
+// routes use (FollowerWeb.h); which checks a job takes is FollowerLinkOps.h.
 #include "FollowerLink.h"
 
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
+#include <new>
 
 #include "BuildVersion.h"
 #include "FollowerBus.h"
 #include "FollowerBusRecovery.h"
 #include "FollowerCluster.h"
 #include "FollowerEscalation.h"
+#include "FollowerLinkOps.h"
 #include "FollowerLinkPolicy.h"
+#include "FollowerPrefs.h"
 #include "FollowerRescue.h"
 #include "FollowerWeb.h"
 #include "FollowerWifi.h"
@@ -35,10 +39,35 @@ uint32_t backoffMs = 0;
 uint32_t nextDialMs = 0;
 uint32_t connectedAtMs = 0;
 uint32_t lastStatusMs = 0;
+bool busySent = false;
 
-bool send() {
-  const size_t n = wlEncodeToMaster(wire, sizeof(wire), out);
-  return n != 0 && sock.write(wire, n) == n;
+// The one unit job the master has running here. It outlives a dropped
+// connection: the job keeps running and its end is reported on the next one.
+struct LinkOp {
+  bool active = false;
+  uint32_t opId = 0;
+  uint32_t seq = 0;  // its name in the staged-op and result slots
+  FollowerOpKind kind = FollowerOpKind::None;
+};
+LinkOp linkOp;
+
+// The unit facts document being sent, one piece per loop pass. Heap, held
+// only while it travels.
+char* unitsDoc = nullptr;
+uint32_t unitsTotal = 0;
+uint32_t unitsOffset = 0;
+uint32_t unitsDocId = 0;
+uint32_t lastUnitsMs = 0;
+bool unitsDue = false;
+
+static_assert((int)FollowerFallback::Blank == wl_Fallback_FALLBACK_BLANK &&
+                  (int)FollowerFallback::Time == wl_Fallback_FALLBACK_TIME &&
+                  (int)FollowerFallback::Date == wl_Fallback_FALLBACK_DATE,
+              "FollowerFallback is stored with the numbers of wl.Fallback");
+
+void releaseUnitsDoc() {
+  delete[] unitsDoc;
+  unitsDoc = nullptr;
 }
 
 void drop(const __FlashStringHelper* why) {
@@ -48,10 +77,20 @@ void drop(const __FlashStringHelper* why) {
   }
   sock.stop();
   reader.reset();
+  releaseUnitsDoc();
   welcomed = false;
   dropCount++;
   backoffMs = followerLinkNextBackoffMs(backoffMs);
   nextDialMs = millis() + backoffMs;
+}
+
+// A message that cannot be written means a master that stopped reading:
+// the connection is closed rather than left to block loop() on every write.
+bool send() {
+  const size_t n = wlEncodeToMaster(wire, sizeof(wire), out);
+  if (n != 0 && sock.write(wire, n) == n) return true;
+  drop(F("write failed"));
+  return false;
 }
 
 void sendHello() {
@@ -83,10 +122,151 @@ void sendStatus(bool timeSynced) {
   s.bus_dead = bus.dead;
   s.bus_episodes = bus.episodes;
   s.escalations = escalationCount(escalationRecordGet());
-  s.busy = false;
+  s.busy = unitOpsBusy();
   s.image_size = ESP.getSketchSize();
   s.time_synced = timeSynced;
-  if (send()) lastStatusMs = millis();
+  if (send()) {
+    lastStatusMs = millis();
+    busySent = s.busy;
+  }
+}
+
+// An OpState without result data; `out` is left ready for a caller to add some.
+void fillOpState(uint32_t opId, wl_OpPhase phase, uint32_t reason, uint32_t outcome) {
+  wlClear(out);
+  out.which_body = wl_ToMaster_op_state_tag;
+  wl_OpState& o = out.body.op_state;
+  o.op_id = opId;
+  o.phase = phase;
+  o.reason = reason;
+  o.outcome = outcome;
+}
+
+void refuseOp(uint32_t opId, wl_OpRefusal why) {
+  fillOpState(opId, wl_OpPhase_OP_REFUSED, (uint32_t)why, 0);
+  send();
+}
+
+void handleOp(const wl_Op& o) {
+  if (linkOp.active) {
+    refuseOp(o.op_id, wl_OpRefusal_REFUSAL_BUSY);
+    return;
+  }
+  const FollowerLinkOpPlan plan =
+      followerLinkPlanOp((uint32_t)o.opcode, o.address, (long)o.arg, unitFacts, UNITS_AMOUNT);
+  if (plan.refusal != wl_OpRefusal_REFUSAL_NONE) {
+    refuseOp(o.op_id, plan.refusal);
+    return;
+  }
+  uint32_t seq = 0;
+  switch (unitOpStage(plan.kind, plan.addr, plan.arg, seq)) {
+    case UnitOpStaged::Rescue:
+      refuseOp(o.op_id, wl_OpRefusal_REFUSAL_RESCUE);
+      return;
+    case UnitOpStaged::Busy:
+      refuseOp(o.op_id, wl_OpRefusal_REFUSAL_BUSY);
+      return;
+    case UnitOpStaged::NoMemory:
+      refuseOp(o.op_id, wl_OpRefusal_REFUSAL_NO_MEMORY);
+      return;
+    case UnitOpStaged::Yes:
+      break;
+  }
+  releaseUnitsDoc();  // a unit update is this board's memory low point
+  unitsDue = true;
+  linkOp.active = true;
+  linkOp.opId = o.op_id;
+  linkOp.seq = seq;
+  linkOp.kind = plan.kind;
+  fillOpState(o.op_id, wl_OpPhase_OP_RUNNING, 0, 0);
+  send();
+}
+
+// Reports the end of the master's job once its result is in the slot. A
+// failed send (which closes the connection) leaves the job open, so the end
+// goes out again on the next one.
+void opTick() {
+  if (!linkOp.active) return;
+  const MaintResult& result = unitOpResult();
+  const OpResultState state = opResultQuery(result, linkOp.seq);
+  if (state == OpResultState::Pending) return;
+
+  bool sent = false;
+  if (state == OpResultState::Expired) {
+    // Another job has used the result slot since; how this one ended is gone.
+    fillOpState(linkOp.opId, wl_OpPhase_OP_FAILED, 0, (uint32_t)MaintOutcome::Pending);
+    sent = send();
+  } else {
+    const wl_OpPhase phase = followerLinkPhaseFor(result.outcome);
+    const uint32_t reason = (uint32_t)result.reason;
+    const uint32_t outcome = phase == wl_OpPhase_OP_OK ? 0 : (uint32_t)result.outcome;
+    const uint8_t* dump = linkOp.kind == FollowerOpKind::BootDump && phase == wl_OpPhase_OP_OK
+                              ? unitOpBootDumpBytes(linkOp.seq)
+                              : nullptr;
+    if (dump == nullptr && linkOp.kind == FollowerOpKind::BootDump && phase == wl_OpPhase_OP_OK) {
+      // Read, but the bytes were given back before they could be sent.
+      fillOpState(linkOp.opId, wl_OpPhase_OP_FAILED, 0, (uint32_t)MaintOutcome::Pending);
+      sent = send();
+    } else if (dump != nullptr) {
+      sent = true;
+      for (uint32_t offset = 0; sent && offset < BOOT_SECTION_LEN;) {
+        const uint32_t n = followerLinkPieceLen(BOOT_SECTION_LEN, offset,
+                                                sizeof(out.body.op_state.data.bytes));
+        const bool last = offset + n >= BOOT_SECTION_LEN;
+        fillOpState(linkOp.opId, last ? wl_OpPhase_OP_OK : wl_OpPhase_OP_RUNNING, reason, 0);
+        wl_OpState& o = out.body.op_state;
+        o.data_offset = offset;
+        memcpy(o.data.bytes, dump + offset, n);
+        o.data.size = (pb_size_t)n;
+        sent = send();
+        offset += n;
+      }
+    } else {
+      fillOpState(linkOp.opId, phase, reason, outcome);
+      wl_OpState& o = out.body.op_state;
+      char* text = (char*)o.data.bytes;
+      if (linkOp.kind == FollowerOpKind::SelfTest) {
+        buildSelfTestJson(text, 128, unitOpSelfTest(), linkOp.seq);
+        o.data.size = (pb_size_t)strlen(text);
+      } else if (linkOp.kind == FollowerOpKind::BootInfo) {
+        o.data.size = (pb_size_t)buildBootInfoJson(text, BOOT_INFO_JSON_CAP, unitOpBootInfo(),
+                                                    linkOp.seq);
+      }
+      sent = send();
+    }
+  }
+  if (!sent) return;
+  linkOp.active = false;
+  unitsDue = true;  // what the job changed
+}
+
+// The unit facts, on connect, after a job and every 30 s. Not started while
+// a job runs or a text waits for its flip instant.
+void unitsTick() {
+  if (unitsDoc == nullptr) {
+    if (!unitsDue && !followerLinkElapsed(millis(), lastUnitsMs, FOLLOWER_LINK_UNITS_INTERVAL_MS)) {
+      return;
+    }
+    if (unitOpsBusy() || clusterRenderPending()) return;
+    const size_t cap = followerHealthBufCap(displayWidth, UNITS_AMOUNT);
+    lastUnitsMs = millis();
+    unitsDue = false;
+    // operator new resets this board when it cannot serve; ask first.
+    if (ESP.getMaxFreeBlockSize() < cap + FOLLOWER_LINK_HEAP_MARGIN) return;
+    unitsDoc = new (std::nothrow) char[cap];
+    if (unitsDoc == nullptr) return;
+    unitsTotal = (uint32_t)unitsHealthJson(unitsDoc, cap);
+    unitsOffset = 0;
+    unitsDocId++;
+    if (unitsTotal == 0) {
+      releaseUnitsDoc();
+      return;
+    }
+  }
+  const uint32_t next = wlUnitsPiece(out, unitsDocId, unitsDoc, unitsTotal, unitsOffset);
+  if (!send()) return;
+  unitsOffset = next;
+  if (unitsOffset >= unitsTotal) releaseUnitsDoc();
 }
 
 void handle(const wl_ToRow& m, const FollowerClusterView& view) {
@@ -105,6 +285,7 @@ void handle(const wl_ToRow& m, const FollowerClusterView& view) {
                       String(), String());
     SerialPrintln(F("link: connected to the master"));
     sendStatus(view.sntpSynced);
+    unitsDue = true;
     return;
   }
   clusterHandlePing();  // any message from the master is contact
@@ -122,6 +303,20 @@ void handle(const wl_ToRow& m, const FollowerClusterView& view) {
     }
     case wl_ToRow_quiet_tag:
       clusterNoteLeaderQuiet(m.body.quiet.on);
+      break;
+    case wl_ToRow_config_tag: {
+      // Each setting is written to flash only when it differs from the stored
+      // one, so a master may repeat this on every connection.
+      const wl_Config& c = m.body.config;
+      if (c.fallback <= wl_Fallback_FALLBACK_DATE) {
+        prefsStageFallback((FollowerFallback)c.fallback);
+      }
+      prefsStageReflashOnBoot(c.update_units_at_start);
+      clusterSetTz(String(c.tz));
+      break;
+    }
+    case wl_ToRow_op_tag:
+      handleOp(m.body.op);
       break;
     case wl_ToRow_ping_tag:
       wlClear(out);
@@ -200,9 +395,13 @@ void linkLoopTick() {
     }
     return;
   }
-  if (followerLinkElapsed(millis(), lastStatusMs, FOLLOWER_LINK_STATUS_INTERVAL_MS)) {
+  opTick();
+  if (!welcomed) return;
+  if (unitOpsBusy() != busySent ||
+      followerLinkElapsed(millis(), lastStatusMs, FOLLOWER_LINK_STATUS_INTERVAL_MS)) {
     sendStatus(view.sntpSynced);
   }
+  if (welcomed) unitsTick();
 }
 
 FollowerLinkView linkViewGet() {

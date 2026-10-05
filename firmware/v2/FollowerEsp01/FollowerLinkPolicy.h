@@ -13,6 +13,10 @@
 #define FOLLOWER_LINK_CONNECT_TIMEOUT_MS 1000UL
 // Vitals go up this often while connected.
 #define FOLLOWER_LINK_STATUS_INTERVAL_MS 10000UL
+// The unit facts go up this often while connected, and after every job.
+#define FOLLOWER_LINK_UNITS_INTERVAL_MS 30000UL
+// Free memory that must remain beside a buffer the link allocates.
+#define FOLLOWER_LINK_HEAP_MARGIN 1536
 // A master that has not answered Hello within this is not a master.
 #define FOLLOWER_LINK_WELCOME_TIMEOUT_MS 5000UL
 

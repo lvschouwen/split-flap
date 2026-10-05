@@ -67,6 +67,8 @@ static uint32_t bootDumpBytesSeq = 0;  // seq that wrote bootDumpBytes
 static uint32_t bootDumpBytesAtMs = 0;  // claimed or last written
 #define BOOT_DUMP_KEEP_MS (5UL * 60UL * 1000UL)
 static uint32_t maintSeqCounter = 0;
+// A staged Probe op waiting for its scan (0 = none): stamped when it has run.
+static uint32_t probeOpSeq = 0;
 
 // Self-test poll state (the unit measures ~2 revolutions; we poll its
 // GET_SELF_TEST until it stops reporting "running").
@@ -228,31 +230,89 @@ static bool queryRequireLong(AsyncWebServerRequest* request, const char* name,
 // a waiting render own the bus first (mutual 409/503 discipline).
 static bool opSlotBusy() {
   return stagedOp.pending || selfTestPolling || reflashPending ||
-         reflashInProgress(reflashProgress);
+         probeOpSeq != 0 || reflashInProgress(reflashProgress);
 }
 
-static void stageOp(AsyncWebServerRequest* request, FollowerOpKind kind,
-                    uint8_t addr, long arg) {
-  if (rescueActive()) {
-    // #343: the beacon never touches the bus — flash new firmware first.
-    sendWithCors(request, 409, "text/plain",
-                 F("Rescue beacon active — unit ops disabled until a "
-                   "firmware push"));
-    return;
-  }
-  if (opSlotBusy()) {
-    sendWithCors(request, 503, "text/plain",
-                 F("Another unit operation is in progress — try again"));
-    return;
+UnitOpStaged unitOpStage(FollowerOpKind kind, uint8_t addr, long arg,
+                         uint32_t& seq) {
+  // #343: the beacon never touches the bus — flash new firmware first.
+  if (rescueActive()) return UnitOpStaged::Rescue;
+  if (opSlotBusy()) return UnitOpStaged::Busy;
+  if (kind == FollowerOpKind::BootDump) {
+    // Claimed only when the op will be staged: a refused request must not
+    // leave 1 KB held through the reflash that made the slot busy.
+    if (bootDumpBytes == nullptr) {
+      if (!heapCanHold(BOOT_SECTION_LEN)) return UnitOpStaged::NoMemory;
+      bootDumpBytes = new (std::nothrow) uint8_t[BOOT_SECTION_LEN];
+      if (bootDumpBytes == nullptr) return UnitOpStaged::NoMemory;
+    }
+    bootDumpBytesAtMs = millis();
   }
   stagedOp.seq = ++maintSeqCounter;
   stagedOp.kind = kind;
   stagedOp.addr = addr;
   stagedOp.arg = arg;
   stagedOp.pending = true;  // set last (v1 flag-handoff rule)
+  seq = stagedOp.seq;
+  return UnitOpStaged::Yes;
+}
+
+bool unitOpsBusy() { return opSlotBusy(); }
+const MaintResult& unitOpResult() { return opResult; }
+const SelfTestSlot& unitOpSelfTest() { return selfTestSlot; }
+const BootInfoSlot& unitOpBootInfo() { return bootInfoSlot; }
+const uint8_t* unitOpBootDumpBytes(uint32_t seq) {
+  return bootDumpBytesSeq == seq ? bootDumpBytes : nullptr;
+}
+
+static void stageOp(AsyncWebServerRequest* request, FollowerOpKind kind,
+                    uint8_t addr, long arg) {
+  uint32_t seq = 0;
+  switch (unitOpStage(kind, addr, arg, seq)) {
+    case UnitOpStaged::Rescue:
+      sendWithCors(request, 409, "text/plain",
+                   F("Rescue beacon active — unit ops disabled until a "
+                     "firmware push"));
+      return;
+    case UnitOpStaged::Busy:
+      sendWithCors(request, 503, "text/plain",
+                   F("Another unit operation is in progress — try again"));
+      return;
+    case UnitOpStaged::NoMemory:
+      sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
+      return;
+    case UnitOpStaged::Yes:
+      break;
+  }
   char buf[24];
-  snprintf(buf, sizeof(buf), "{\"seq\":%lu}", (unsigned long)stagedOp.seq);
+  snprintf(buf, sizeof(buf), "{\"seq\":%lu}", (unsigned long)seq);
   sendWithCors(request, 200, "application/json", buf);
+}
+
+size_t unitsHealthJson(char* buf, size_t cap) {
+  int faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
+  size_t n = buildUnitHealthJson(buf, cap, unitFacts, displayWidth, faulty,
+                                 SFP_I2C_ADDRESS_BASE, millis());
+  if (n == 0 || n >= cap) {
+    n = (size_t)snprintf(buf, cap, "{\"width\":%d,\"faulty\":%d,\"units\":[]}",
+                         displayWidth, faulty);
+  }
+  // Wear + reflash progress splices (v2 additive keys — same payload the
+  // S3 member panel reads).
+  WearAssessment wear;
+  assessWear(unitFacts, UNITS_AMOUNT, wear);
+  char wearJson[96];
+  size_t wearLen = buildWearJson(wear, wearJson, sizeof(wearJson));
+  if (n > 0 && wearLen < sizeof(wearJson) && n + wearLen + 2 < cap) {
+    n += (size_t)snprintf(buf + n - 1, cap - n + 1, ",%s}", wearJson) - 1;
+  }
+  char reflashJson[REFLASH_JSON_CAP];
+  buildReflashJson(reflashJson, sizeof(reflashJson), reflashProgress);
+  if (n > 0 && n + strlen(reflashJson) + 13 < cap) {
+    n += (size_t)snprintf(buf + n - 1, cap - n + 1, ",\"reflash\":%s}",
+                          reflashJson) - 1;
+  }
+  return n;
 }
 
 // Query-string address (v2 parity — see queryRequireLong).
@@ -853,28 +913,7 @@ void webEndpointsInit(AsyncWebServer& server) {
       sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
       return;
     }
-    int faulty = computeFaultyUnitCount(unitFacts, UNITS_AMOUNT);
-    size_t n = buildUnitHealthJson(buf, cap, unitFacts, displayWidth, faulty,
-                                   SFP_I2C_ADDRESS_BASE, millis());
-    if (n == 0 || n >= cap) {
-      n = (size_t)snprintf(buf, cap, "{\"width\":%d,\"faulty\":%d,\"units\":[]}",
-                           displayWidth, faulty);
-    }
-    // Wear + reflash progress splices (v2 additive keys — same payload the
-    // S3 member panel reads).
-    WearAssessment wear;
-    assessWear(unitFacts, UNITS_AMOUNT, wear);
-    char wearJson[96];
-    size_t wearLen = buildWearJson(wear, wearJson, sizeof(wearJson));
-    if (n > 0 && wearLen < sizeof(wearJson) && n + wearLen + 2 < cap) {
-      n += (size_t)snprintf(buf + n - 1, cap - n + 1, ",%s}", wearJson) - 1;
-    }
-    char reflashJson[REFLASH_JSON_CAP];
-    buildReflashJson(reflashJson, sizeof(reflashJson), reflashProgress);
-    if (n > 0 && n + strlen(reflashJson) + 13 < cap) {
-      n += (size_t)snprintf(buf + n - 1, cap - n + 1, ",\"reflash\":%s}",
-                            reflashJson) - 1;
-    }
+    size_t n = unitsHealthJson(buf, cap);
     sendResponseWithCors(
         request,
         request->beginResponse(
@@ -1050,20 +1089,6 @@ void webEndpointsInit(AsyncWebServer& server) {
     if (followerRejectCsrf(request)) return;
     int addr = 0;
     if (!checkAddressParam(request, addr)) return;
-    // Claimed only when the op will be staged: a refused request must not
-    // leave 1 KB held through the reflash that made the slot busy.
-    if (bootDumpBytes == nullptr && !rescueActive() && !opSlotBusy()) {
-      if (!heapCanHold(BOOT_SECTION_LEN)) {
-        sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
-        return;
-      }
-      bootDumpBytes = new (std::nothrow) uint8_t[BOOT_SECTION_LEN];
-      if (bootDumpBytes == nullptr) {
-        sendWithCors(request, 503, "text/plain", F("out of memory — retry"));
-        return;
-      }
-    }
-    bootDumpBytesAtMs = millis();
     stageOp(request, FollowerOpKind::BootDump, (uint8_t)addr, 0);
   });
 
@@ -1339,6 +1364,12 @@ static void executeStagedOp() {
       grade = maintGradeObserved(bootDumpSlot.outcome == BootDumpOutcome::Ok);
       unitHealthRefreshPending = true;  // its reads were invalidated
       break;
+    case FollowerOpKind::Probe:
+      // Runs with the health refresh below, once any twiboot window is over.
+      unitHealthRefreshPending = true;
+      probeOpSeq = op.seq;
+      stagedOp.pending = false;
+      return;
     case FollowerOpKind::BootInfo: {
       BootInfoSlot slot;
       slot.seq = op.seq;
@@ -1391,6 +1422,10 @@ void webLoopTick() {
       unitHealthRefreshPending = false;
       busProbe();
       busPollHealth();
+      if (probeOpSeq != 0) {
+        stampOpResult(probeOpSeq, maintGradeWire(0));
+        probeOpSeq = 0;
+      }
     }
   }
 }

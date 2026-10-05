@@ -43,12 +43,32 @@ message Config {
   string tz = 3;                  // POSIX tz rule
 }
 
-// A unit job, named by the master. address 0 = the whole row.
+// The unit jobs a row board runs. What `arg` means is noted per job; a job
+// that takes none ignores it.
+enum OpCode {
+  OPC_NONE = 0;
+  OPC_HOME = 1;
+  OPC_IDENTIFY = 2;
+  OPC_JOG = 3;                    // arg = steps, -127..127
+  OPC_SET_OFFSET = 4;             // arg = offset in steps
+  OPC_SELF_TEST = 5;              // result: the self-test JSON in OpState.data
+  OPC_RESTART_UNIT = 6;           // through its bootloader and back
+  OPC_RESET_ODOMETER = 7;
+  OPC_SET_GATES = 8;              // arg = feature gate bits
+  OPC_BOOT_INFO = 9;              // result: the boot-info JSON in OpState.data
+  OPC_BOOT_DUMP = 10;             // result: the 1024 boot-section bytes, in pieces
+  OPC_BOOT_UPDATE = 11;
+  OPC_UPDATE_UNITS = 12;          // address 0 = every unit that needs it;
+                                  // arg 1 = even when current (one unit only)
+  OPC_PROBE = 13;                 // rescan the row; address is ignored
+}
+
+// A unit job, named by the master. One job at a time per row.
 message Op {
   uint32 op_id = 1;
-  uint32 opcode = 2;
-  uint32 address = 3;
-  bytes args = 4;
+  OpCode opcode = 2;
+  uint32 address = 3;             // the unit's bus address
+  sint32 arg = 4;
 }
 
 // "This is the image you should run": the row downloads it from the master
@@ -123,12 +143,29 @@ enum OpPhase {
   OP_REFUSED = 3;
 }
 
+// Why a row did not start a job.
+enum OpRefusal {
+  REFUSAL_NONE = 0;
+  REFUSAL_UNKNOWN_OP = 1;         // this build has no such job
+  REFUSAL_BUSY = 2;               // another unit job holds the row
+  REFUSAL_RESCUE = 3;             // rescue mode never touches the units
+  REFUSAL_BAD_ADDRESS = 4;        // outside the addresses a row can hold
+  REFUSAL_NO_UNIT = 5;            // no running unit at that address
+  REFUSAL_UNIT_PROTOCOL = 6;      // the unit speaks a protocol this build does not
+  REFUSAL_BAD_ARG = 7;
+  REFUSAL_NO_MEMORY = 8;
+}
+
+// A job is answered with OP_RUNNING when it starts (or OP_REFUSED at once)
+// and with OP_OK or OP_FAILED when it ends. Result data longer than one
+// message comes as OP_RUNNING pieces in order, the last piece on the OP_OK.
 message OpState {
   uint32 op_id = 1;
   OpPhase phase = 2;
-  uint32 reason = 3;              // MaintReason vocabulary
-  uint32 data_offset = 4;         // for results sent in pieces (boot dump)
+  uint32 reason = 3;              // OP_FAILED: MaintReason; OP_REFUSED: OpRefusal
+  uint32 data_offset = 4;         // where this piece of the result starts
   bytes data = 5;
+  uint32 outcome = 6;             // OP_FAILED: MaintOutcome
 }
 
 message Event {

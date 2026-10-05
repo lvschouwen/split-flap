@@ -7,7 +7,6 @@ wl.Update.rev          max_size:17
 wl.Update.md5          max_size:16 fixed_length:true
 wl.Show.text           max_size:17
 wl.Config.tz           max_size:65
-wl.Op.args             max_size:16
 wl.OpState.data        max_size:480
 wl.LogLine.text        max_size:256
 wl.UnitsJson.data      max_size:480

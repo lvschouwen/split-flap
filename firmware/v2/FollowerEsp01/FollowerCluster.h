@@ -33,6 +33,9 @@ void clusterInit();
 
 // The leader's requests are arriving and being answered right now (#515).
 bool clusterLeaderContactFresh();
+// The master's POSIX tz rule from a Config message (#564). An empty one keeps
+// the zone already held; a new one is stored with the pairing. loop() only.
+void clusterSetTz(const String& tz);
 // #227: the quiet flag of an accepted leader ping (shared/ClusterQuiet.h).
 void clusterNoteLeaderQuiet(bool quiet);
 

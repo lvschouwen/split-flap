@@ -87,7 +87,8 @@ def test_update_and_op(pb):
         "3f1a516", 323047, bytes(range(16)), True)
     assert frame(m) == VEC["update"]
     m = pb.ToRow.FromString(delimited(VEC["op"]))
-    assert (m.op.op_id, m.op.opcode, m.op.address, m.op.args) == (0xA1B20007, 5, 6, b"\x01\xf4")
+    assert (m.op.op_id, m.op.opcode, m.op.address, m.op.arg) == (
+        0xA1B20007, pb.OPC_SET_OFFSET, 6, -500)
     assert frame(m) == VEC["op"]
 
 

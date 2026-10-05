@@ -126,8 +126,17 @@ inline void followerMembershipClear(uint8_t* blob) {
 #define FOLLOWER_PREFS_MAGIC 0xB7
 #define FOLLOWER_PREFS_CHECK_MASK 0x5C
 #define FOLLOWER_PREF_REFLASH_ON_BOOT 0x01
+// Bits 1-2: what the row shows once its master is written off, stored as the
+// value + 1 so a record written before the field existed (0) reads as Time —
+// what such a row did.
+#define FOLLOWER_PREF_FALLBACK_SHIFT 1
+#define FOLLOWER_PREF_FALLBACK_MASK 0x06
+
+// Same numbers as wl.Fallback (wall_link.proto).
+enum class FollowerFallback : uint8_t { Blank = 0, Time = 1, Date = 2 };
 
 struct FollowerPrefs {
+  FollowerFallback fallback = FollowerFallback::Time;
   // Boot auto-install of bootloader-mode units and auto-update of outdated
   // ones. Off = a gated campaign: nothing is flashed until an operator asks,
   // one unit at a time (the S3's #412 setting, same name on the wire).
@@ -141,7 +150,8 @@ inline uint8_t followerPrefsCheck(const uint8_t* rec) {
 inline void followerPrefsEncode(const FollowerPrefs& p,
                                 uint8_t rec[FOLLOWER_PREFS_LEN]) {
   rec[0] = FOLLOWER_PREFS_MAGIC;
-  rec[1] = p.reflashOnBoot ? FOLLOWER_PREF_REFLASH_ON_BOOT : 0;
+  rec[1] = (uint8_t)((p.reflashOnBoot ? FOLLOWER_PREF_REFLASH_ON_BOOT : 0) |
+                     (((uint8_t)p.fallback + 1) << FOLLOWER_PREF_FALLBACK_SHIFT));
   rec[2] = followerPrefsCheck(rec);
 }
 
@@ -153,6 +163,8 @@ inline FollowerPrefs followerPrefsDecode(const uint8_t rec[FOLLOWER_PREFS_LEN]) 
     return p;
   }
   p.reflashOnBoot = (rec[1] & FOLLOWER_PREF_REFLASH_ON_BOOT) != 0;
+  const uint8_t stored = (rec[1] & FOLLOWER_PREF_FALLBACK_MASK) >> FOLLOWER_PREF_FALLBACK_SHIFT;
+  if (stored != 0) p.fallback = (FollowerFallback)(stored - 1);
   return p;
 }
 

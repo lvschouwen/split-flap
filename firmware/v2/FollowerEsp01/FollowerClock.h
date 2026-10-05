@@ -33,6 +33,38 @@ inline void followerClockText(int hour, int minute, int width, char* out) {
   for (int i = 0; i < 5 && left + i < width; i++) out[left + i] = hhmm[i];
 }
 
+// Centered date in a width-char space-padded field: "DD MON YY" (the master's
+// date row) where it fits, "DD-MM" on a narrower row. month is 1..12. out
+// must hold width + 1.
+inline void followerDateText(int day, int month, int year, int width, char* out) {
+  static const char kMonths[] = "JANFEBMARAPRMAYJUNJULAUGSEPOCTNOVDEC";
+  char text[10];
+  text[0] = (char)('0' + (day / 10) % 10);
+  text[1] = (char)('0' + day % 10);
+  int len;
+  if (width >= 9 && month >= 1 && month <= 12) {
+    text[2] = ' ';
+    memcpy(text + 3, kMonths + (month - 1) * 3, 3);
+    text[6] = ' ';
+    text[7] = (char)('0' + (year / 10) % 10);
+    text[8] = (char)('0' + year % 10);
+    len = 9;
+  } else {
+    text[2] = '-';
+    text[3] = (char)('0' + (month / 10) % 10);
+    text[4] = (char)('0' + month % 10);
+    len = 5;
+  }
+  if (width <= 0) {
+    out[0] = '\0';
+    return;
+  }
+  memset(out, ' ', width);
+  out[width] = '\0';
+  int left = width > len ? (width - len) / 2 : 0;
+  for (int i = 0; i < len && left + i < width; i++) out[left + i] = text[i];
+}
+
 // #362: the epoch→local-HH:MM conversion is NOT here — it is target libc
 // glue (bench tier). On the ESP8266, setenv("TZ")+tzset() is INERT for
 // localtime_r; the zone must be installed via the core's configTime(tz)
@@ -45,8 +77,10 @@ inline void followerClockText(int hour, int minute, int width, char* out) {
 // The fallback runs ONLY in Blank with a held membership (the tz belongs
 // to a leader we still expect back), a known zone, and synced time.
 // Standalone (never joined / left) stays dark — no membership, no zone.
+// A row set to fall back to blank never runs it.
 inline bool followerClockEligible(ClusterFollowerPhase phase, bool membershipHeld,
-                                  bool tzKnown, bool timeSynced) {
+                                  bool tzKnown, bool timeSynced,
+                                  bool fallbackShowsClock = true) {
   return phase == ClusterFollowerPhase::LeaderLost && membershipHeld && tzKnown &&
-         timeSynced;
+         timeSynced && fallbackShowsClock;
 }
