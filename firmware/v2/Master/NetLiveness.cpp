@@ -146,12 +146,16 @@ void netLivenessProbeTick() {
   // The server listens on every address. Its station address is the honest
   // target; where the stack does not loop that back, the loopback interface
   // reaches the same listener and the same task.
-  NetProbe own = tcpProbe(self, 80, kRequest, ownStep);
-  bool viaLoopback = false;
-  if (own == NetProbe::Fail && ownStep == STEP_CONNECT) {
+  // Once the loopback route is known to be the one that works, it is asked
+  // first: the station-address attempt costs its full timeout every time.
+  bool viaLoopback = selfViaLoopback.load();
+  NetProbe own = viaLoopback
+                     ? tcpProbe(IPAddress(127, 0, 0, 1), 80, kRequest, ownStep)
+                     : tcpProbe(self, 80, kRequest, ownStep);
+  if (!viaLoopback && own == NetProbe::Fail && ownStep == STEP_CONNECT) {
     uint8_t loStep = 0;
     NetProbe lo = tcpProbe(IPAddress(127, 0, 0, 1), 80, kRequest, loStep);
-    if (lo == NetProbe::Ok || selfViaLoopback.load()) {
+    if (lo == NetProbe::Ok) {
       own = lo;
       ownStep = loStep;
       viaLoopback = true;

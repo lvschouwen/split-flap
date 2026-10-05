@@ -35,7 +35,7 @@ def test_own_server_probe_needs_an_answered_request():
     assert 'memcmp(head, "HTTP/", 5) == 0' in probe
     tick = code[code.index("void netLivenessProbeTick()"):]
     assert "tcpProbe(gateway, 80, nullptr, gwStep)" in tick
-    assert "tcpProbe(self, 80, kRequest, ownStep)" in tick
+    assert ": tcpProbe(self, 80, kRequest, ownStep)" in tick
     assert re.search(r'kRequest\[\] =\s*"GET ', tick)
 
 
