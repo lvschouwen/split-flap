@@ -115,6 +115,10 @@ jobs:
       - name: Install flasher deps
         run: pip install pyserial==3.5 esptool==5.4.0
 
+      - name: Wall link codec twin (python)
+        working-directory: firmware/v2/link
+        run: python -m pytest tests/
+
       - name: Run flasher tests
         working-directory: flashing
         run: python -m pytest flasher/tests/ -v
