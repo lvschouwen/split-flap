@@ -54,6 +54,10 @@ void clockTaskMain(void*) {
       notifWasActive = false;
       lastQueued = "";
     }
+    // Quiet (#227): no content from this board's own modes. A cluster member
+    // follows its leader's flag instead, further down.
+    ClusterFollowerView membership = clusterFollowerViewGet();
+    if (!membership.gated && tasksQuiet()) continue;
     // Leader reroute (#273): with the cluster enabled the ticker's product
     // becomes LOGICAL grid content handed to the cluster layer — which
     // dedups, slices, and stages this master's own row on the shared
@@ -92,8 +96,12 @@ void clockTaskMain(void*) {
     // commitAt render is in flight it stands down entirely so a re-show
     // can't preempt the synchronized flip. LeaderLost (leader silent ~2
     // min) shows the follower's OWN clock through the normal clock path.
-    ClusterFollowerView cluster = clusterFollowerViewGet();
+    const ClusterFollowerView& cluster = membership;
     if (cluster.gated && cluster.renderPending) continue;
+    // Quiet (#227): a member of a quiet wall moves nothing by itself — not its
+    // own clock when the leader goes silent, and not the re-show that would
+    // restore its segment after a Stop either.
+    if (cluster.gated && cluster.quiet) continue;
 
     ClockTickInput in;
     if (cluster.gated && !cluster.forcesLocalClock) {

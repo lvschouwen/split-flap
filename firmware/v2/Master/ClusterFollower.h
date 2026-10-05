@@ -21,6 +21,7 @@ struct ClusterFollowerView {
   ClusterFollowerPhase phase = ClusterFollowerPhase::Standalone;
   bool gated = false;            // producer gate (any membership)
   bool forcesLocalClock = false; // LeaderLost: show own clock
+  bool quiet = false;            // #227: the leader's quiet flag, from its ping
   bool renderPending = false;    // a commitAt render is staged, in flight
   String leaderName;
   String leaderHost;
@@ -76,7 +77,9 @@ ClusterRenderVerdict clusterFollowerHandleRender(uint32_t epoch, uint32_t seq,
 // the digest is one balanced JSON object (it is re-served raw and feeds
 // #295 promote); the promote-critical bits (table spec + selfIndex)
 // persist to NVS only when they change, so #295 survives a reboot.
+// `leaderQuiet`: the ping's quiet flag (#227, shared/ClusterQuiet.h).
 bool clusterFollowerHandlePing(const String& digest, int youIndex,
+                               bool leaderQuiet,
                                const String& remoteIp);
 
 void clusterFollowerHandleLeave();

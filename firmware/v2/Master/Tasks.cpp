@@ -26,6 +26,15 @@ static std::atomic<bool> deviceRoleHeadless{false};
 // unit by unit. Read once by displayTask at boot; pushed live by the settings
 // drain so a mid-session change lands without a reboot.
 static std::atomic<bool> reflashOnBootEnabled{true};
+// #227: this board's own quiet setting, read by every content producer. A
+// cluster member follows its leader's instead (ClusterFollowerView::quiet).
+static std::atomic<bool> quietEnabled{false};
+
+void tasksSetQuiet(bool quiet) {
+  quietEnabled.store(quiet, std::memory_order_relaxed);
+}
+
+bool tasksQuiet() { return quietEnabled.load(std::memory_order_relaxed); }
 
 void tasksSetUnitCountOverride(int count) {
   unitWidthOverride.store(count, std::memory_order_relaxed);
@@ -268,6 +277,7 @@ void tasksInit(MasterSettings& settings, SettingsStore& store) {
   // seeded here would let the fleet converge on exactly the reboot the
   // operator set it to prevent.
   reflashOnBootEnabled.store(settings.reflashOnBoot, std::memory_order_relaxed);
+  quietEnabled.store(settings.quiet, std::memory_order_relaxed);  // #227
   deviceRoleHeadless.store(isHeadlessRole(settings.deviceRole),
                            std::memory_order_relaxed);  // #331
   snapshotMutex = xSemaphoreCreateMutex();

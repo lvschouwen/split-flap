@@ -453,6 +453,7 @@ function applySettings(s) {
 	refreshLiveStatus();
 	document.getElementById("labelLastMessageReceived").textContent = s.lastTimeReceivedMessageDateTime || "—";
 	setSegValue("segMode", currentMode);
+	setSegValue("segQuiet", s.quiet ? "true" : "false");  //#227
 	setSegValue("segAlignment", currentAlignment);
 
 	//Calibration rows follow the bus (a reflash can re-probe), but never
@@ -915,6 +916,9 @@ function sendMessage() {
 		button.disabled = false;
 		if (!ok) {
 			showStatus("sendStatus", "✘ Send failed — check the message.", "error");
+		} else if (window.lastSettings && window.lastSettings.quiet) {
+			//#227: the board drops content while quiet.
+			showStatus("sendStatus", "Quiet is on — the message was not shown. Switch Quiet off first.", "error", 8000);
 		} else if (dwell) {
 			showStatus("sendStatus", "✔ Showing for " + (dwell / 60) + " min, then back to " + currentMode + ".", "success", 6000);
 		} else {
@@ -984,6 +988,15 @@ function initSegControls() {
 			setSegValue("segMode", b.dataset.value);
 			postSettingsFields({ deviceMode: b.dataset.value }, function(ok) {
 				showStatus("displayStatus", ok ? "✔ Mode saved." : "✘ Mode save failed.", ok ? "success" : "error", 4000);
+			});
+		});
+	});
+	//Quiet (#227): no flap commands while on. Posts only its own field.
+	document.querySelectorAll("#segQuiet button").forEach(function(b) {
+		b.addEventListener("click", function() {
+			setSegValue("segQuiet", b.dataset.value);
+			postSettingsFields({ quiet: b.dataset.value }, function(ok) {
+				showStatus("displayStatus", ok ? (b.dataset.value === "true" ? "✔ Quiet on: the wall stays as it is." : "✔ Quiet off.") : "✘ Quiet save failed.", ok ? "success" : "error", 4000);
 			});
 		});
 	});

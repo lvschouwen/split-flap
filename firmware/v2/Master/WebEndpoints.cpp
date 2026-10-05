@@ -15,6 +15,7 @@
 #include "WebEndpoints.h"
 #include "WebEndpointsInternal.h"
 
+#include "QuietPolicy.h"  // quietBlocksContent (#227)
 #include "BootTrace.h"  // bootTraceJson (#504)
 #include "NetLiveness.h"  // netLivenessJson (#501)
 #include "CrashContext.h"  // crashCtxReportJson (#504)
@@ -151,6 +152,7 @@ String buildCurrentSettingsJson() {
     f.timezonePosix = liveSettings->timezonePosix;
     f.unitCountOverride = liveSettings->unitCountOverride;
     f.reflashOnBoot = liveSettings->reflashOnBoot;
+    f.quiet = liveSettings->quiet;  // #227
     f.deviceName = liveSettings->deviceName;
     f.effectiveDeviceName = effectiveName;
     f.mqttHost = liveSettings->mqttHost;
@@ -275,6 +277,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       String timezoneBefore = settings.timezonePosix;
       int unitCountBefore = settings.unitCountOverride;
       bool reflashOnBootBefore = settings.reflashOnBoot;
+      bool quietBefore = settings.quiet;
       String deviceRoleBefore = settings.deviceRole;
       applySettingsPost(pendingPost, settings, store);
       timezoneChanged = settings.timezonePosix != timezoneBefore;
@@ -291,6 +294,20 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // sets this BEFORE rebooting into the campaign.
       if (settings.reflashOnBoot != reflashOnBootBefore) {
         tasksSetReflashOnBoot(settings.reflashOnBoot);
+      }
+      if (settings.quiet != quietBefore) {
+        tasksSetQuiet(settings.quiet);  // #227
+        SerialPrintln(settings.quiet ? F("quiet: ON (web) — no flap commands")
+                                     : F("quiet: OFF (web)"));
+      }
+      // #227: content that arrives while quiet is dropped, not queued. A
+      // quiet toggle riding the same POST has been applied above, so "wake
+      // and show this" works in one request.
+      if (quietBlocksContent(settings.quiet, false) &&
+          (messageProvided || transientProvided)) {
+        SerialPrintln(F("web: text dropped (quiet)"));
+        messageProvided = false;
+        transientProvided = false;
       }
       if (settings.deviceRole != deviceRoleBefore) {
         tasksSetDeviceRole(settings.deviceRole);
@@ -494,6 +511,17 @@ bool webMqttApplyMode(const String& mode) {
   if (liveSettings->deviceMode == mode) return false;
   liveSettings->deviceMode = mode;
   saveDeviceMode(*liveStore, mode);
+  return true;
+}
+
+// #227: the HA Quiet switch. Same write-through as a mode change.
+bool webMqttApplyQuiet(bool quiet) {
+  if (!webStateReady()) return false;
+  WebStateLock lock;
+  if (liveSettings->quiet == quiet) return false;
+  liveSettings->quiet = quiet;
+  saveQuiet(*liveStore, quiet);
+  tasksSetQuiet(quiet);
   return true;
 }
 

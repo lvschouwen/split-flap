@@ -156,6 +156,9 @@ void serviceSelfRow() {
   }
   if (selfText.length() == 0) return;
   if (mqttNotificationActive()) return;  // overlay owns the row for now
+  // Quiet (#227): the frame that is up stays up — also a forced alert whose
+  // dwell has ended. The re-show resumes when quiet ends.
+  if (tasksQuiet()) return;
   DisplaySnapshot snap = displaySnapshotGet();
   if (snap.busy || reflashInProgress(snap.reflash)) return;
   if (selfText == String(snap.currentText)) return;

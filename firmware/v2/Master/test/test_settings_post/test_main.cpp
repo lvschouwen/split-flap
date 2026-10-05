@@ -454,6 +454,41 @@ static void test_apply_persists_reflash_on_boot_both_ways() {
   TEST_ASSERT_TRUE(loadSettings(store).reflashOnBoot);
 }
 
+// --- quiet mode (#227) -------------------------------------------------------
+
+static void test_quiet_defaults_off_and_takes_only_true_or_false() {
+  FakeSettingsStore store;
+  TEST_ASSERT_FALSE(loadSettings(store).quiet);
+  PendingSettingsPost post;
+  TEST_ASSERT_EQUAL((int)SettingsParamResult::Accepted,
+                    (int)stageSettingsParam(post, PARAM_QUIET, " true "));
+  TEST_ASSERT_TRUE(post.quietProvided);
+  TEST_ASSERT_EQUAL_STRING("true", post.quiet.c_str());
+  // A typo must neither silence nor wake the wall.
+  PendingSettingsPost bad;
+  const char* rejected[] = {"0", "1", "on", "off", "True", ""};
+  for (unsigned i = 0; i < sizeof(rejected) / sizeof(rejected[0]); i++) {
+    TEST_ASSERT_EQUAL((int)SettingsParamResult::Invalid,
+                      (int)stageSettingsParam(bad, PARAM_QUIET, rejected[i]));
+  }
+  TEST_ASSERT_FALSE(bad.quietProvided);
+}
+
+// Stored, so a board that restarts at night without a broker stays quiet.
+static void test_apply_persists_quiet_both_ways() {
+  FakeSettingsStore store;
+  MasterSettings settings = loadSettings(store);
+  PendingSettingsPost post;
+  stageSettingsParam(post, PARAM_QUIET, "true");
+  applySettingsPost(post, settings, store);
+  TEST_ASSERT_TRUE(settings.quiet);
+  TEST_ASSERT_TRUE(loadSettings(store).quiet);
+  stageSettingsParam(post, PARAM_QUIET, "false");
+  applySettingsPost(post, settings, store);
+  TEST_ASSERT_FALSE(settings.quiet);
+  TEST_ASSERT_FALSE(loadSettings(store).quiet);
+}
+
 // --- device role (#329 headless mode) --------------------------------------
 
 static void test_device_role_defaults_to_display() {
@@ -531,6 +566,8 @@ int main(int, char**) {
   RUN_TEST(test_stage_reflash_on_boot_rejects_near_misses);
   RUN_TEST(test_apply_persists_reflash_on_boot_both_ways);
   RUN_TEST(test_device_role_defaults_to_display);
+  RUN_TEST(test_quiet_defaults_off_and_takes_only_true_or_false);
+  RUN_TEST(test_apply_persists_quiet_both_ways);
   RUN_TEST(test_stage_device_role_accepts_the_headless_roles);
   RUN_TEST(test_stage_device_role_rejects_unknown);
   RUN_TEST(test_apply_persists_device_role);

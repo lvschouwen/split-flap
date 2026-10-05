@@ -73,6 +73,7 @@ struct SettingsJsonFields {
   // effective width already carried by unitCount.
   int unitCountOverride = 0;
   bool reflashOnBoot = true;  // #412 boot auto-install brake
+  bool quiet = false;         // #227 quiet mode
 
   // Per-board vitals (#335) so cluster members surface heap/rssi/uptime in
   // the System-tab panel — same keys/units as the ESP-01 follower's #297
@@ -166,6 +167,7 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   appendJsonBool(out, f.wifiSettingsResettable);
   out += ",\"unitCountOverride\":"; out += f.unitCountOverride;
   out += ",\"reflashOnBoot\":";     out += f.reflashOnBoot ? "true" : "false";
+  out += ",\"quiet\":";             out += f.quiet ? "true" : "false";
   out += ",\"clusterState\":";      appendJsonString(out, f.clusterState);
   out += ",\"clusterLeaderName\":"; appendJsonString(out, f.clusterLeaderName);
   out += ",\"clusterLeaderHost\":"; appendJsonString(out, f.clusterLeaderHost);

@@ -5,6 +5,7 @@
 // the follower-image upload accumulates in PSRAM here and netTask commits it
 // to flash (single-writer rule).
 
+#include "ClusterQuiet.h"  // the ping's quiet flag (#227)
 #include "WebEndpoints.h"
 #include "WebEndpointsInternal.h"
 
@@ -323,7 +324,12 @@ void webClusterRegister(AsyncWebServer& server) {
         return;
       }
     }
-    if (!clusterFollowerHandlePing(digest, youIndex,
+    // #227: the leader's quiet flag — additive, outside the signature.
+    bool leaderQuiet =
+        request->hasParam(CLUSTER_PING_QUIET_PARAM, true) &&
+        clusterQuietFromPing(
+            request->getParam(CLUSTER_PING_QUIET_PARAM, true)->value().c_str());
+    if (!clusterFollowerHandlePing(digest, youIndex, leaderQuiet,
                                    request->client()->remoteIP().toString())) {
 #if CLUSTER_WIRE_DEBUG
       SerialPrintln("dbg/wire: ping REJECT 409 — handlePing declined (from " +

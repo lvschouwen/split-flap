@@ -15,6 +15,7 @@
 #include "ClockPolicy.h"
 #include "ClusterFollower.h"
 #include "ClusterLeader.h"
+#include "QuietPolicy.h"  // #227
 #include "ClusterMqtt.h"
 #include "DisplayCommand.h"
 #include "DisplayIpc.h"
@@ -120,6 +121,10 @@ static int mqttLastClusterConfigured = -1;
 static int mqttLastClusterState = -1;
 // Leader-lost sensor of a cluster member (#500): same reconcile-on-a-fresh-
 // session rule — configured while a member, blanked when not.
+// Quiet switch (#227, QuietPolicy.h): command topic, last published state
+// (-1 = not yet this session).
+static String mqttQuietCmdTopic;
+static int mqttLastQuietState = -1;
 static int mqttLastLeaderLostConfigured = -1;
 static int mqttLastLeaderLostState = -1;
 static String mqttLastClusterAttrs = "\x01";
@@ -194,6 +199,7 @@ void mqttServiceInit(MasterSettings& settings, SettingsStore& store,
   mqttResolvedDeviceId = effectiveDeviceName;
   mqttFwVersion = GIT_REV;
   mqttCmdTopics = makeMqttCommandTopics(mqttResolvedDeviceId);
+  mqttQuietCmdTopic = mqttTopic(mqttResolvedDeviceId, "quiet/set");
   mqttTopicAvailability = mqttTopic(mqttResolvedDeviceId, "availability");
   mqttTopicTelemetry = mqttTopic(mqttResolvedDeviceId, "telemetry");
   mqttTopicModeState = mqttTopic(mqttResolvedDeviceId, "mode");
@@ -283,12 +289,25 @@ static void publishDiscoveryClear() {
   if (cLen > 0 && cLen < sizeof(topicBuf)) {
     mqttClient.publish(topicBuf, 0, true, "");
   }
+  // So do the leader-lost sensor (#500) and the quiet switch (#227), the
+  // latter with its retained command.
+  cLen = buildLeaderLostDiscoveryTopic(topicBuf, sizeof(topicBuf),
+                                       mqttResolvedDeviceId.c_str());
+  if (cLen > 0 && cLen < sizeof(topicBuf)) {
+    mqttClient.publish(topicBuf, 0, true, "");
+  }
+  cLen = buildQuietDiscoveryTopic(topicBuf, sizeof(topicBuf),
+                                  mqttResolvedDeviceId.c_str());
+  if (cLen > 0 && cLen < sizeof(topicBuf)) {
+    mqttClient.publish(topicBuf, 0, true, "");
+  }
+  mqttClient.publish(mqttQuietCmdTopic.c_str(), 0, true, "");
   static const char* const stateSuffixes[] = {
       "mode",     "text/state", "notification", "width",     "units",
       "speed",    "alignment",  "units_faulty", "units/attrs",
       "diag/ip",  "diag/ssid",  "diag/reset",   "diag/boots",
       "diag/ota", "diag/tz",    "cluster_degraded", "cluster/attrs",
-      "leader_lost"};
+      "leader_lost",  "quiet"};
   for (unsigned i = 0; i < sizeof(stateSuffixes) / sizeof(stateSuffixes[0]);
        i++) {
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, stateSuffixes[i]).c_str(),
@@ -301,6 +320,19 @@ static void publishDiscoveryClear() {
 void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
   if (!mqttInitialised) return;
   String payload(msg.payload);
+  // Quiet (#227): its own topic, outside the shared command table.
+  if (mqttQuietCmdTopic == msg.topic) {
+    bool want = false;
+    if (clusterFollowerViewGet().gated) {
+      SerialPrintln("MQTT: quiet command dropped (clustered): " + payload);
+    } else if (!quietParseCommand(payload, want)) {
+      SerialPrintln("MQTT: ignored invalid quiet command: " + payload);
+    } else if (webMqttApplyQuiet(want)) {
+      SerialPrintln(want ? F("quiet: ON (MQTT) — no flap commands")
+                         : F("quiet: OFF (MQTT)"));
+    }
+    return;
+  }
   switch (classifyMqttCommandTopic(mqttCmdTopics, msg.topic)) {
     case MqttCommand::Mode: {
       // Cluster gate (#272): mode belongs to the leader while clustered.
@@ -364,6 +396,11 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
       // Cluster gate (#272): the wall's content belongs to the leader.
       if (clusterFollowerViewGet().gated) {
         SerialPrintln("MQTT: notification dropped (clustered): " + text);
+        break;
+      }
+      // Quiet (#227): dropped, not deferred — unless the sender forces it.
+      if (quietBlocksContent(tasksQuiet(), quietTextForced(payload))) {
+        SerialPrintln("MQTT: notification dropped (quiet): " + text);
         break;
       }
       // On a cluster LEADER the notification deliberately stays on this
@@ -500,6 +537,38 @@ if (content.alignment != mqttLastPublishedAlignment) {
   mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "alignment").c_str(), 0,
                      true, content.alignment.c_str());
 }
+}
+
+// Quiet switch (#227): the discovery config once per session, the state
+// retained on every change — Home Assistant reads back what the board did.
+static void mqttPublishQuiet() {
+  int state = tasksQuiet() ? 1 : 0;
+  if (state == mqttLastQuietState) return;
+  if (mqttLastQuietState < 0) {
+    char topicBuf[96];
+    char payloadBuf[512];
+    size_t tLen = buildQuietDiscoveryTopic(topicBuf, sizeof(topicBuf),
+                                           mqttResolvedDeviceId.c_str());
+    size_t pLen = buildQuietDiscovery(payloadBuf, sizeof(payloadBuf),
+                                      mqttResolvedDeviceId.c_str(),
+                                      mqttFwVersion.c_str());
+    if (tLen > 0 && tLen < sizeof(topicBuf) && pLen > 0 &&
+        pLen < sizeof(payloadBuf)) {
+      mqttClient.publish(topicBuf, 0, true, payloadBuf);
+    }
+  }
+  // A change made anywhere but on the command topic (the web toggle, a
+  // takeover) is written back to it, retained: the broker redelivers the
+  // retained command on every reconnect, and a stale one would undo the
+  // change. Not on the first publish of a session — the retained command HA
+  // sent while this board was offline has not arrived yet and must win.
+  if (mqttLastQuietState >= 0) {
+    mqttClient.publish(mqttQuietCmdTopic.c_str(), 0, true,
+                       state ? "ON" : "OFF");
+  }
+  mqttLastQuietState = state;
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "quiet").c_str(), 0, true,
+                     state ? "ON" : "OFF");
 }
 
 // Leader-lost sensor (#500). `state` is clusterLeaderLostState(): the entity
@@ -738,6 +807,7 @@ void mqttServiceTick() {
     mqttClient.subscribe(mqttCmdTopics.speed.c_str(), 0);
     mqttClient.subscribe(mqttCmdTopics.alignment.c_str(), 0);
     mqttClient.subscribe(mqttCmdTopics.restart.c_str(), 0);
+    mqttClient.subscribe(mqttQuietCmdTopic.c_str(), 0);  // #227
     mqttClient.publish(mqttTopicAvailability.c_str(), 1, true, "online");
     publishMqttDiscovery();
     publishMqttDiagnostics();
@@ -758,6 +828,7 @@ void mqttServiceTick() {
     mqttNextClusterMs = millis();
     mqttLastLeaderLostConfigured = -1;
     mqttLastLeaderLostState = -1;
+    mqttLastQuietState = -1;
   }
 
   if (!mqttClient.connected()) return;
@@ -789,6 +860,7 @@ void mqttServiceTick() {
 
   mqttPublishEventDrivenState(snap, content, leading);
   mqttPublishClusterSurfacing(snap, content, leading);
+  mqttPublishQuiet();
 
   if (discoveryClearRequested.exchange(false)) publishDiscoveryClear();
 

@@ -33,6 +33,8 @@ void clusterInit();
 
 // The leader's requests are arriving and being answered right now (#515).
 bool clusterLeaderContactFresh();
+// #227: the quiet flag of an accepted leader ping (shared/ClusterQuiet.h).
+void clusterNoteLeaderQuiet(bool quiet);
 
 // loop(): ~1 Hz phase decay (blank on Blank/Standalone transitions), due
 // render drain, staged EEPROM persist. Blocking I2C happens in here only.

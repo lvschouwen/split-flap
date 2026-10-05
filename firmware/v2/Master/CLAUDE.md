@@ -56,3 +56,4 @@ N-row wall of v2 masters over LAN HTTP/JSON — spec `2026-07-13-multi-display-c
 
 Rescue app itself: `firmware/v2/Rescue/CLAUDE.md`.
 - **Network liveness (#501):** restarts the board when traffic is dead behind a live WiFi link — rules in `NetLivenessPolicy.h`, probes on clusterTask (`NetLiveness.cpp`), stepped in `WifiService.cpp`; glue pinned by `tests/test_net_liveness_glue.py`.
+- **Quiet mode (#227):** no flap commands while set — rules in `QuietPolicy.h`, state in NVS + `tasksQuiet()`, HA switch `quiet`, passed to members on the ping (`shared/ClusterQuiet.h`); every content producer is pinned by `tests/test_quiet_glue.py`.

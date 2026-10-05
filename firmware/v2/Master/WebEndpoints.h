@@ -47,6 +47,7 @@ WebContentSnapshot webDisplayContentSnapshot();
 // under webStateMutex with NVS write-through — the same invariants as the
 // settings drain. Each returns true when the value actually changed.
 bool webMqttApplyMode(const String& mode);
+bool webMqttApplyQuiet(bool quiet);  // #227
 bool webMqttApplySpeed(int speed);
 bool webMqttApplyAlignment(const String& alignment);
 

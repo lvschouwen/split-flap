@@ -73,3 +73,8 @@ cfd9948 79b8235899693bc5508825de93760629aab5580b74b5aaad8672be706b084a12
 # when the row masters learned to read the bootloader identity (#541/#543),
 # a shared-header change the unit does not compile.
 661621f cde7878f82f84969c885ffe21901892ff40e7f999abd89328ed823fba810066d
+#
+# d360e2b: the image on all 21 units since the 2026-10-05 campaign. Recorded
+# when the cluster ping gained its quiet flag (#227), a shared header the
+# unit does not compile.
+d360e2b da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810

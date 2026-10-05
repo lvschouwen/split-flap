@@ -81,6 +81,9 @@ static bool tableDirty = false;
 // (-1 = not a designated successor), and the deadline until which an announced
 // leader hold suppresses takeover. Both live under the ClusterLock.
 static int successorRank = -1;
+// #227: what the leader last said about quiet mode. RAM only: it describes a
+// leader's state, and after this board's own restart there is none yet.
+static bool memberQuiet = false;
 static uint32_t autoTakeoverHoldUntilMs = 0;
 // Backoff gate for a FAILED auto-promote (netTask-only): the promote-due inputs
 // don't change on a non-gate failure, so without this the attempt would re-fire
@@ -268,6 +271,7 @@ ClusterFollowerView clusterFollowerViewGet() {
   v.phase = policyState.phase;
   v.gated = clusterFollowerGatesProducers(policyState);
   v.forcesLocalClock = clusterFollowerForcesLocalClock(policyState);
+  v.quiet = v.gated && memberQuiet;
   v.renderPending = renderPending;
   v.leaderName = leaderName;
   v.leaderHost = leaderHost;
@@ -341,7 +345,7 @@ ClusterRenderVerdict clusterFollowerHandleRender(uint32_t epoch, uint32_t seq,
 }
 
 bool clusterFollowerHandlePing(const String& digest, int youIndex,
-                               const String& remoteIp) {
+                               bool leaderQuiet, const String& remoteIp) {
   ClusterLock lock;
   // Source-IP binding (#313): only the joined leader keeps us alive. A
   // foreign LAN host's ping must not refresh the contact-fresh window — that
@@ -350,6 +354,7 @@ bool clusterFollowerHandlePing(const String& digest, int youIndex,
   if (leaderHost.length() > 0 && remoteIp != leaderHost) return false;
   if (!clusterFollowerContact(policyState, millis())) return false;
   wifiNoteConfirmedTraffic();  // #515: a leader ping served
+  memberQuiet = leaderQuiet;   // #227: kept through LeaderLost
   // The digest becomes served-back state and the #295 promote input — the
   // IP is already bound to the leader above, so accept it only as one
   // balanced JSON object and persist the table only when it parses as a
@@ -430,6 +435,7 @@ static void followerLeaveLocked() {
   digestTable = "";
   digestSelfIndex = -1;
   successorRank = -1;          // #321: no longer a successor once we leave
+  memberQuiet = false;         // #227: it described the leader we left
   autoTakeoverHoldUntilMs = 0;
   tableDirty = true;
   SerialPrintln(F("cluster: left — standalone again"));
@@ -471,6 +477,7 @@ static ClusterPromoteVerdict clusterFollowerPromoteImpl(bool autoPath) {
   if (clusterMutex == nullptr) return {500, "cluster service not running"};
   String tableSpec, oldLeaderHost, mode;
   int selfIndex;
+  bool wasQuiet = false;
   {
     ClusterLock lock;
     if (!promoteGatePasses(autoPath)) {
@@ -486,6 +493,7 @@ static ClusterPromoteVerdict clusterFollowerPromoteImpl(bool autoPath) {
     selfIndex = digestSelfIndex;
     oldLeaderHost = leaderHost;
     mode = digestMode;  // #337: adopt the cluster mode after taking over
+    wasQuiet = memberQuiet;  // #227: read before the leave below clears it
   }
 
   // Outside the lock: the leader module's calls take LeaderLock — the two
@@ -517,6 +525,10 @@ static ClusterPromoteVerdict clusterFollowerPromoteImpl(bool autoPath) {
   // to drive the grid; without this the successor falls back to its own NVS
   // mode and the wall changes. Outside every lock (WebStateLock only).
   if (mode.length() > 0) webMqttApplyMode(mode);
+  // #227: and its quiet state — a leader that died at night must not be
+  // succeeded by a wall that wakes up. Only ever towards quiet: this board's
+  // own stored setting stands when the old leader had none.
+  if (wasQuiet) webMqttApplyQuiet(true);
   SerialPrintln(String("cluster: ") +
                 (autoPath ? "AUTO-PROMOTED" : "PROMOTED") +
                 " — taking over the wall as leader (" + newSpec + ")");

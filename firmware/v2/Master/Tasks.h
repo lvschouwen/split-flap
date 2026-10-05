@@ -61,6 +61,9 @@ void tasksSetDeviceRole(const String& role);
 // off-bundle units converges them unattended. False skips it so an operator
 // can drive the campaign one unit at a time and inspect each result.
 void tasksSetReflashOnBoot(bool enabled);
+// #227 quiet mode: this board's own setting (QuietPolicy.h). Any task.
+void tasksSetQuiet(bool quiet);
+bool tasksQuiet();
 
 // Non-blocking enqueue into the display task; false = queue full (callers
 // report, never wait — network context must not block on the display).

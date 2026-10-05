@@ -12,6 +12,10 @@
 #include "FollowerRescue.h"  // #343: rescue beacon never touches the bus
 #include "FollowerSettings.h"
 
+// #227: what the leader last said about quiet mode (the ping's quiet flag).
+// RAM only — it describes a leader's state.
+static volatile bool leaderQuiet = false;
+
 static ClusterFollowerState policyState;
 static String leaderName;
 static String leaderHost;
@@ -151,6 +155,9 @@ void clusterLoopTick() {
   // held membership, a known zone and synced time shows local HH:MM
   // instead — the wall keeps telling the time while the leader is down.
   if (followerPhaseShowsBlank(policyState.phase)) {
+    // Quiet (#227): the leader said the wall is quiet and has since gone
+    // silent. Neither blank the row nor start the fallback clock — both flap.
+    if (leaderQuiet) return;
     bool synced = false;
     (void)nowEpochMs(synced);
     if (followerClockEligible(policyState.phase, leaderHost.length() > 0,
@@ -193,7 +200,8 @@ void clusterLoopTick() {
     return;
   }
 
-  if (clockShowing && !renderPending && !reflashInProgress(reflashProgress)) {
+  if (clockShowing && !leaderQuiet && !renderPending &&
+      !reflashInProgress(reflashProgress)) {
     // The leader came back but hasn't re-rendered (its segment for this
     // row is empty): a frozen clock must not pose as leader content.
     busShowSegment("", heldSpeed > 0 ? heldSpeed : 80);
@@ -292,6 +300,8 @@ ClusterRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
   return verdict;
 }
 
+void clusterNoteLeaderQuiet(bool quiet) { leaderQuiet = quiet; }
+
 bool clusterHandlePing() {
   return clusterFollowerContact(policyState, millis());
 }
@@ -302,6 +312,7 @@ void clusterHandleLeave() {
   leaderName = "";
   leaderHost = "";
   leaderTz = "";  // #342: the zone leaves with the leader that owned it
+  leaderQuiet = false;  // #227: it described the leader we left
   applyLeaderTz();  // #362: re-arm the tz latch (defensive — eligibility also
                     // gates on leaderTz, but this survives a future refactor)
   memberRow = 0;

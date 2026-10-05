@@ -2,6 +2,8 @@
 // Split out of ClusterLeader.cpp (#352); contract in ClusterLeader.h,
 // shared seams in ClusterLeaderInternal.h.
 
+#include "ClusterQuiet.h"  // quiet flag on the ping (#227)
+#include "Tasks.h"         // tasksQuiet
 #include "ClusterLeader.h"
 
 #include <LittleFS.h>
@@ -276,8 +278,9 @@ int collectMemberWork(MemberWorkItem* items) {
     // cluster stays alive. Clearing `digest` too keeps the signed canonical
     // equal to what is actually sent (both follower copies reconstruct "" from
     // an absent param).
-    // Overhead = "you=" + index + "&ts=" + 13 + "&mac=" + 64 + separators.
-    const size_t kPingOverheadBytes = 128;
+    // Overhead = "digest=" + "&you=" + index + "&quiet=N" + "&ts=" + 13 +
+    // "&mac=" + 64, about 110 B.
+    const size_t kPingOverheadBytes = 144;
     const bool sendDigest =
         pingBodyDigestFits(encoded.length(), kPingOverheadBytes);
     // Transition-only, BOTH edges (#322 philosophy): a wall that grows past
@@ -305,6 +308,8 @@ int collectMemberWork(MemberWorkItem* items) {
                           ? ("digest=" + encoded + "&you=" +
                              String(items[i].index))
                           : ("you=" + String(items[i].index));
+      // #227: every ping tells the member whether the wall is quiet.
+      items[i].body += clusterQuietPingSuffix(tasksQuiet());
       // Sign the ping per member (#313 follow-on): its own key, so the
       // digest/you piggyback rides an authenticated request.
       int mi = items[i].index;

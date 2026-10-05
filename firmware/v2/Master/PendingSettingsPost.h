@@ -41,6 +41,7 @@
 #define PARAM_MQTT_PASSWORD   "mqttPassword"
 #define PARAM_UNIT_COUNT      "unitCount"
 #define PARAM_REFLASH_ON_BOOT "reflashOnBoot"
+#define PARAM_QUIET           "quiet"
 
 struct PendingSettingsPost {
   bool pending = false;
@@ -61,6 +62,7 @@ struct PendingSettingsPost {
   String mqttPassword;  bool mqttPasswordProvided = false;
   String unitCount;     bool unitCountProvided = false;
   String reflashOnBoot; bool reflashOnBootProvided = false;  // #412
+  String quiet;         bool quietProvided = false;          // #227
 };
 
 enum class SettingsParamResult {
@@ -183,6 +185,18 @@ inline SettingsParamResult stageSettingsParam(PendingSettingsPost& post,
     return SettingsParamResult::Accepted;
   }
 
+  // #227: the same strict rule — a typo must not silence or wake the wall.
+  if (name == PARAM_QUIET) {
+    String trimmed = rawValue;
+    trimmed.trim();
+    if (trimmed != "true" && trimmed != "false") {
+      return SettingsParamResult::Invalid;
+    }
+    post.quiet = trimmed;
+    post.quietProvided = true;
+    return SettingsParamResult::Accepted;
+  }
+
   if (name == PARAM_UNIT_COUNT) {
     String trimmed = rawValue;
     trimmed.trim();
@@ -251,6 +265,7 @@ inline void mergeSettingsPost(PendingSettingsPost& shared,
   if (accepted.mqttPasswordProvided) { shared.mqttPassword = accepted.mqttPassword; shared.mqttPasswordProvided = true; }
   if (accepted.unitCountProvided)  { shared.unitCount  = accepted.unitCount;  shared.unitCountProvided  = true; }
   if (accepted.reflashOnBootProvided) { shared.reflashOnBoot = accepted.reflashOnBoot; shared.reflashOnBootProvided = true; }
+  if (accepted.quietProvided)      { shared.quiet      = accepted.quiet;      shared.quietProvided      = true; }
   shared.pending = true;
 }
 
@@ -309,6 +324,14 @@ inline void applySettingsPost(PendingSettingsPost& post,
     if (settings.reflashOnBoot != want) {
       settings.reflashOnBoot = want;
       saveReflashOnBoot(store, settings.reflashOnBoot);
+    }
+  }
+
+  if (post.quietProvided) {
+    bool want = (post.quiet == "true");
+    if (settings.quiet != want) {
+      settings.quiet = want;
+      saveQuiet(store, settings.quiet);
     }
   }
 

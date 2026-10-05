@@ -2,6 +2,8 @@
 // Split out of ClusterLeader.cpp (#352); contract in ClusterLeader.h,
 // shared seams in ClusterLeaderInternal.h.
 
+#include "ClusterQuiet.h"  // quiet flag on the ping (#227)
+#include "Tasks.h"         // tasksQuiet
 #include "ClusterLeader.h"
 
 #include <LittleFS.h>
@@ -66,6 +68,7 @@ void rebootHoldBuildTargets() {
       RebootHoldTarget& t = rebootHoldTargets[rebootHoldCount++];
       t.host = table.members[i].host;
       t.body = "digest=" + encoded + "&you=" + String(i);
+      t.body += clusterQuietPingSuffix(tasksQuiet());  // #227
       if (runtimes[i].hmacKeyValid) {
         String msg = clusterHmacPingMsg(ts, digest, i);
         t.body += "&ts=" + clusterU64ToStr(ts) + "&mac=" +

@@ -49,6 +49,7 @@ struct MasterSettings {
                            // state (OtaService), never persisted here
   int unitCountOverride;   // #289 dummy mode: 0 = auto (probe-derived
                            // width), 1..UNITS_AMOUNT pins the width
+  bool quiet = false;      // #227: no flap commands while set (QuietPolicy.h)
   bool reflashOnBoot;      // #412: false suppresses the boot auto-install so
                            // an operator can converge the fleet unit by unit.
                            // Defaults TRUE — the auto-install is the
@@ -75,6 +76,7 @@ struct MasterSettings {
 #define SETTINGS_KEY_INTENDED_VER "intendedVer"
 #define SETTINGS_KEY_UNIT_COUNT   "unitCount"
 #define SETTINGS_KEY_REFLASH_BOOT "reflashOnBoot"
+#define SETTINGS_KEY_QUIET "quiet"
 
 // Bounded free-text sanitation: printable ASCII and shorter than the
 // limit, else default.
@@ -149,6 +151,7 @@ inline MasterSettings loadSettings(SettingsStore& store) {
       sanitizeIntendedVersion(store.getString(SETTINGS_KEY_INTENDED_VER, ""));
 
   s.reflashOnBoot = store.getInt(SETTINGS_KEY_REFLASH_BOOT, 1) != 0;
+  s.quiet = store.getInt(SETTINGS_KEY_QUIET, 0) != 0;
   s.unitCountOverride = store.getInt(SETTINGS_KEY_UNIT_COUNT, 0);
   if (s.unitCountOverride < 0 || s.unitCountOverride > UNITS_AMOUNT) {
     s.unitCountOverride = 0;  // auto
@@ -191,6 +194,10 @@ inline void saveUnitCountOverride(SettingsStore& store, int v) {
 
 inline void saveReflashOnBoot(SettingsStore& store, bool v) {
   store.putInt(SETTINGS_KEY_REFLASH_BOOT, v ? 1 : 0);
+}
+
+inline void saveQuiet(SettingsStore& store, bool v) {
+  store.putInt(SETTINGS_KEY_QUIET, v ? 1 : 0);
 }
 
 // WiFi credentials (#188): always written as a pair — the portal submits

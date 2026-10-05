@@ -4,6 +4,7 @@
 // v1's ESP8266 Update flow trimmed (no RTC verdict cookie — ota-flash.sh's
 // version comparison is the revert detector on this board).
 
+#include "ClusterQuiet.h"  // the ping's quiet flag (#227)
 #include "FollowerEscalation.h"
 #include "FollowerWeb.h"
 
@@ -747,6 +748,11 @@ void webEndpointsInit(AsyncWebServer& server) {
                     F("{\"error\":\"not clustered\"}"));
       return;
     }
+    // #227: only an accepted ping speaks for the leader.
+    String quietStr;
+    clusterNoteLeaderQuiet(
+        paramString(request, CLUSTER_PING_QUIET_PARAM, quietStr) &&
+        clusterQuietFromPing(quietStr.c_str()));
     FollowerClusterView cv = clusterViewGet();
     char mask[16];
     ClusterRowHealth h = healthNow(mask, sizeof(mask));
