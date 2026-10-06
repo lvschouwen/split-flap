@@ -12,7 +12,15 @@
 namespace {
 
 SemaphoreHandle_t wallMutex = nullptr;
-WallSnapshot wall;
+
+// Everything this module holds, taken once from PSRAM (LargeAlloc.h): a few
+// kilobytes that internal RAM is better spent without.
+struct Held {
+  WallSnapshot wall;
+  WallOps ops;
+  WallRequest staged;
+};
+Held* held = nullptr;
 std::atomic<uint32_t> rowsGeneration{0};
 SettingsStore* wallStore = nullptr;
 
@@ -24,8 +32,6 @@ struct RowUnits {
 };
 RowUnits* rowUnits = nullptr;  // CLUSTER_MAX_MEMBERS of them
 
-WallOps ops;
-WallRequest staged;
 bool requestRunning = false;
 char releaseId[WALL_ROW_ID_MAX + 1] = {0};
 
@@ -43,6 +49,12 @@ void wallStateInit(SettingsStore& store) {
     abort();
   }
   wallStore = &store;
+  held = (Held*)largeAlloc(sizeof(Held));
+  if (held == nullptr) {
+    Serial.println(F("FATAL: wall state allocation failed"));
+    abort();
+  }
+  new (held) Held();
   rowUnits = (RowUnits*)largeAlloc(sizeof(RowUnits) * CLUSTER_MAX_MEMBERS);
   if (rowUnits == nullptr) {
     Serial.println(F("FATAL: wall state unit facts allocation failed"));
@@ -62,19 +74,19 @@ void wallStateInit(SettingsStore& store) {
     SerialPrintf("wall: stored rows table not used: %s\n", verdict.message);
     return;
   }
-  wall.rows = table;
+  held->wall.rows = table;
   SerialPrintf("wall: %d board(s) on %d grid row(s)\n", (int)table.count, (int)grid.rows);
 }
 
 WallSnapshot wallStateGet() {
   Locked lock;
-  return wall;
+  return held->wall;
 }
 
 WallRowsTable wallStateRows(uint32_t& generation) {
   Locked lock;
   generation = rowsGeneration.load(std::memory_order_relaxed);
-  return wall.rows;
+  return held->wall.rows;
 }
 
 uint32_t wallStateRowsGeneration() { return rowsGeneration.load(std::memory_order_relaxed); }
@@ -82,7 +94,7 @@ uint32_t wallStateRowsGeneration() { return rowsGeneration.load(std::memory_orde
 void wallStatePublishLink(int row, const WallRowLink& link) {
   if (row < 0 || row >= CLUSTER_MAX_MEMBERS) return;
   Locked lock;
-  wall.link[row] = link;
+  held->wall.link[row] = link;
   // Facts of an earlier connection are not this one's.
   if (!link.contact.connected) rowUnits[row].have = false;
 }
@@ -106,17 +118,17 @@ bool wallStateRowUnits(int row, UnitFactsDoc& out, uint32_t& atMs) {
 
 uint32_t wallOpBegin(const char* name, int row) {
   Locked lock;
-  return ops.begin(name, row);
+  return held->ops.begin(name, row);
 }
 
 void wallOpFinish(uint32_t id, bool ok, const char* detail) {
   Locked lock;
-  ops.finish(id, ok, detail);
+  held->ops.finish(id, ok, detail);
 }
 
 bool wallOpGet(uint32_t id, WallOp& out) {
   Locked lock;
-  const WallOp* op = ops.find(id);
+  const WallOp* op = held->ops.find(id);
   if (op == nullptr) return false;
   out = *op;
   return true;
@@ -124,21 +136,21 @@ bool wallOpGet(uint32_t id, WallOp& out) {
 
 void wallOpsFailRow(int row, const char* reason) {
   Locked lock;
-  ops.failRow(row, reason);
+  held->ops.failRow(row, reason);
 }
 
 bool wallStateStage(const WallRequest& request) {
   Locked lock;
-  if (requestRunning || staged.kind != WallRequestKind::None) return false;
-  staged = request;
+  if (requestRunning || held->staged.kind != WallRequestKind::None) return false;
+  held->staged = request;
   return true;
 }
 
 bool wallStateTakeRequest(WallRequest& out) {
   Locked lock;
-  if (staged.kind == WallRequestKind::None) return false;
-  out = staged;
-  staged = WallRequest{};
+  if (held->staged.kind == WallRequestKind::None) return false;
+  out = held->staged;
+  held->staged = WallRequest{};
   requestRunning = true;
   return true;
 }
@@ -159,9 +171,9 @@ ClusterVerdict wallStateSetRows(const WallRowsTable& table) {
   wallStore->putString(WALL_ROWS_NVS_KEY, wallRowsToString(table));
   {
     Locked lock;
-    wall.rows = table;
+    held->wall.rows = table;
     for (int i = 0; i < CLUSTER_MAX_MEMBERS; i++) {
-      wall.link[i] = WallRowLink{};
+      held->wall.link[i] = WallRowLink{};
       rowUnits[i].have = false;
     }
     // Inside the lock, after the table: a reader that sees the new number

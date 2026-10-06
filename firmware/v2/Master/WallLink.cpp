@@ -28,10 +28,12 @@ constexpr uint32_t STRANGER_NOTE_MS = 10000;
 
 char masterName[sizeof(((wl_Welcome*)0)->master_id)] = {0};
 
-WallLinkCore core;
+// The link's working state is some 15 KB: taken once from PSRAM in
+// wallLinkInit (LargeAlloc.h), not from internal RAM.
+WallLinkCore* core = nullptr;
 WallRowsTable rowsTable;
 uint32_t rowsGeneration = 0;
-WallRowLink facts[WALL_LINK_MAX_ROWS];
+WallRowLink* facts = nullptr;  // WALL_LINK_MAX_ROWS
 bool factsDirty[WALL_LINK_MAX_ROWS] = {false};
 
 int listenFd = -1;
@@ -45,7 +47,7 @@ struct Socket {
   uint8_t tail[wl_ToRow_size + WL_PREFIX_MAX];
   size_t tailLen = 0;
 };
-Socket sockets[WALL_LINK_MAX_CONNS];
+Socket* sockets = nullptr;  // WALL_LINK_MAX_CONNS
 
 uint8_t readBuf[512];
 
@@ -174,7 +176,7 @@ struct Hooks : WallLinkHooks {
     f.address[0] = 0;
     struct sockaddr_in peer = {};
     socklen_t len = sizeof(peer);
-    if (lwip_getpeername(sockets[core.rows[row].conn].fd, (struct sockaddr*)&peer, &len) == 0) {
+    if (lwip_getpeername(sockets[core->rows[row].conn].fd, (struct sockaddr*)&peer, &len) == 0) {
       lwip_inet_ntop(AF_INET, &peer.sin_addr, f.address, sizeof(f.address));
     }
     factsDirty[row] = true;
@@ -260,7 +262,7 @@ void acceptRows(uint32_t nowMs) {
         lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count)) == 0;
     // Messages are small and each is wanted now: do not wait to fill a segment.
     lwip_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
-    const int conn = ready ? core.accept(nowMs, hooks) : -1;
+    const int conn = ready ? core->accept(nowMs, hooks) : -1;
     if (conn < 0) {
       hooks.note(-1, -1, ready ? "refused, no room" : "refused, socket options failed");
       lwip_close(fd);
@@ -273,8 +275,8 @@ void acceptRows(uint32_t nowMs) {
 
 // The socket of `conn` is gone or useless: tell the core, then close it.
 void lost(int conn, const char* why) {
-  hooks.note(conn, core.conns[conn].row, why);
-  core.closed(conn);
+  hooks.note(conn, core->conns[conn].row, why);
+  core->closed(conn);
   closeSocket(sockets[conn]);
 }
 
@@ -285,7 +287,7 @@ void readRows(const fd_set& readable, uint32_t nowMs) {
       if (s.fd < 0 || (i == 0 && !FD_ISSET(s.fd, &readable))) break;
       const int n = lwip_recv(s.fd, readBuf, sizeof(readBuf), MSG_DONTWAIT);
       if (n > 0) {
-        core.bytes(conn, readBuf, (size_t)n, nowMs, hooks);
+        core->bytes(conn, readBuf, (size_t)n, nowMs, hooks);
         continue;
       }
       if (n == 0) {
@@ -303,10 +305,10 @@ void publish(uint32_t nowMs) {
   const bool contactDue = wallLinkElapsed(nowMs, contactPublishedAtMs, CONTACT_PUBLISH_MS);
   if (contactDue) contactPublishedAtMs = nowMs;
   for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
-    if (contactDue && core.rows[row].conn >= 0) factsDirty[row] = true;
+    if (contactDue && core->rows[row].conn >= 0) factsDirty[row] = true;
     if (!factsDirty[row]) continue;
     factsDirty[row] = false;
-    facts[row].contact = core.rows[row].contact;
+    facts[row].contact = core->rows[row].contact;
     wallStatePublishLink(row, facts[row]);
   }
 }
@@ -314,7 +316,7 @@ void publish(uint32_t nowMs) {
 void pass() {
   const uint32_t nowMs = millis();
   if (wallStateRowsGeneration() != rowsGeneration) {
-    core.reset(hooks);
+    core->reset(hooks);
     rowsTable = wallStateRows(rowsGeneration);
     for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
       facts[row] = WallRowLink{};
@@ -331,7 +333,8 @@ void pass() {
   FD_ZERO(&readable);
   FD_SET(listenFd, &readable);
   int maxFd = listenFd;
-  for (const Socket& s : sockets) {
+  for (int conn = 0; conn < WALL_LINK_MAX_CONNS; conn++) {
+    const Socket& s = sockets[conn];
     if (s.fd < 0) continue;
     FD_SET(s.fd, &readable);
     if (s.fd > maxFd) maxFd = s.fd;
@@ -344,7 +347,7 @@ void pass() {
   }
   if (FD_ISSET(listenFd, &readable)) acceptRows(nowMs);
   readRows(readable, nowMs);
-  core.tick(nowMs, hooks);
+  core->tick(nowMs, hooks);
   char releasing[WALL_ROW_ID_MAX + 1];
   if (wallStateReleaseAsked(releasing, sizeof(releasing))) {
     const int row = wallRowsFind(rowsTable, releasing);
@@ -352,7 +355,7 @@ void pass() {
       static wl_ToRow release;
       wlClear(release);
       release.which_body = wl_ToRow_release_tag;
-      if (core.send(row, release, nowMs, hooks)) SerialPrintf("link: %s released\n", releasing);
+      if (core->send(row, release, nowMs, hooks)) SerialPrintf("link: %s released\n", releasing);
     }
     wallStateReleaseAnswered();
   }
@@ -369,6 +372,16 @@ void pass() {
 
 void wallLinkInit(const String& masterId) {
   strlcpy(masterName, masterId.c_str(), sizeof(masterName));
+  core = (WallLinkCore*)largeAlloc(sizeof(WallLinkCore));
+  facts = (WallRowLink*)largeAlloc(sizeof(WallRowLink) * WALL_LINK_MAX_ROWS);
+  sockets = (Socket*)largeAlloc(sizeof(Socket) * WALL_LINK_MAX_CONNS);
+  if (core == nullptr || facts == nullptr || sockets == nullptr) {
+    Serial.println(F("FATAL: link state allocation failed"));
+    abort();
+  }
+  new (core) WallLinkCore();
+  for (int i = 0; i < WALL_LINK_MAX_ROWS; i++) new (&facts[i]) WallRowLink();
+  for (int i = 0; i < WALL_LINK_MAX_CONNS; i++) new (&sockets[i]) Socket();
   rowsTable = wallStateRows(rowsGeneration);
 }
 
