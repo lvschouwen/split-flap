@@ -28,6 +28,7 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 | Per-member keys, HMAC on every request, epoch, NTP time window, persisted replay mark, `ClusterHmac.h` | Trusted LAN (section 1). |
 | Leader pushing firmware (multipart) | #292, #340, #419. |
 | ~30 HTTP routes and JSON building on the ESP-01 | The row board sends unit facts as data; the master words them. |
+| The terminal tool (`cli/`: TUI and client library) | Retired by the owner; one console (the web UI) and curl. |
 
 ## 3. The link
 
@@ -83,7 +84,7 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 - **One row interface.** The master's own units and an ESP-01 row sit behind the same `RowPort` (own row: the `DisplayCommand` queue; remote row: the link). Nothing above it branches on the kind of row.
 - **Wall state.** A `WallState` module (one mutex, snapshot copies) holds rows, unit facts for every row in the one `UnitFacts` struct, open jobs, and firmware state. The API reads snapshots; it never owns state.
 - **JSON on the master.** New API responses are built with ArduinoJson, and a row's unit facts are read with it. The MQTT text parser moves to it as well (its hand-written parser appears to mis-decode `\u` escapes; a test confirms that first).
-- **Verdicts.** Pure headers in `shared/` (`UnitVerdict.h`, `BoardVerdict.h`) turn facts into a level (working / note / fault) and a reason code with arguments. Natively tested. Home Assistant and the TUI use the same result.
+- **Verdicts.** Pure headers in `shared/` (`UnitVerdict.h`, `BoardVerdict.h`) turn facts into a level (working / note / fault) and a reason code with arguments. Natively tested. Home Assistant uses the same result.
 - **Event record.** Fixed-size binary records (time, board, unit, code, two arguments) in a ring file on the `storage` LittleFS, written by netTask only. Sources: the edges already detected in `UnitEventLog.h`, starts and their causes, firmware changes, rows lost and back, job results, and `EVENT` frames from rows. Wording happens in the browser from the code.
 - **Kept as they are:** grid layout (`ClusterLayout.h`), the display task and its command queue, producer gates, OTA, WiFi, TX ladder, quiet, MQTT (the cluster sensors become a wall problem sensor; `leader_lost` goes).
 
@@ -105,7 +106,7 @@ Derived from the screens. Readable keys; per-unit tables are columnar (`fields` 
 | `POST /firmware/master`, `/firmware/row`, `/firmware/rescue` | Uploads, gates unchanged |
 | `GET /api/v2/log?row=&kind=` | Raw log; the reply names the board and whether it is the RAM or the flash log |
 
-The TUI and the `flashing/` scripts move to this surface and talk to the master only, also for units on an ESP-01 row. The unit-campaign scripts are rewritten in Python on the client library; `ota-flash.sh` stays curl-only, because recovery must need nothing else. The command-line tool gets typed models (pydantic) for the new responses. The old routes and the old page are deleted in the last step; there is no period with two web pages.
+The `flashing/` scripts move to this surface and talk to the master only, also for units on an ESP-01 row; they stay curl-only, like `ota-flash.sh`, because recovery must need nothing else. The terminal tool (`cli/`: the TUI and its client library) is retired (owner, 2026-10-06): the web UI and curl are the operator surfaces. The old routes and the old page are deleted in the last step; there is no period with two web pages.
 
 ## 6. Web UI
 
@@ -118,13 +119,13 @@ On a branch until bench-proven (it must not land half-built), one stage commit r
 0. **Measurements** (section 9).
 1. `firmware/v2/link/`: the schema, the stream reader, unit facts in pieces; native tests; stock protobuf reads the boards' bytes. **Done (#562).**
 2. Row firmware: link client, download-and-install, rescue, break-glass routes. Every unit job proven over the link on the bench.
-3. Master: `linkTask`, `RowPort`, `WallState`, pairing, update-by-offer. Old cluster code deleted.
+3. Master: `linkTask`, `RowPort`, `WallState`, pairing, update-by-offer. Old cluster code and `cli/` deleted. The first part of `/api/v2` lands here (`POST /api/v2/action` for pairing, release and unit jobs, `GET /api/v2/op/{id}`), so rows and their units have an operator path, by curl, before the new page exists; the present page loses its cluster parts and keeps working for the master's own row.
 4. Verdicts and the event record.
-5. `/api/v2`; TUI and scripts moved.
+5. `/api/v2`; scripts moved.
 6. Web UI.
 7. Old routes and page deleted. Release `— BREAKING`.
 
-**Moving the installed wall** (once, at the end of step 3): store the new row image on the old master and let the present rollout install it; the row then shows its fallback. OTA the master. Pair the row from Wall settings. If the new row image fails, it is replaced by a direct upload to the row's `POST /firmware`, which works in normal and in rescue mode and needs no master.
+**Moving the installed wall** (once, at the end of step 3): store the new row image on the old master and let the present rollout install it; the row then shows its fallback. OTA the master. Pair the row with the `pair` action (by curl until the new page has Wall settings). If the new row image fails, it is replaced by a direct upload to the row's `POST /firmware`, which works in normal and in rescue mode and needs no master.
 
 ## 8. Kept on purpose
 
