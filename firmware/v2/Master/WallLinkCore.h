@@ -61,6 +61,9 @@ struct WallLinkRow {
   int8_t conn = -1;
   WallRowContact contact;
   WallRowText text;
+  // Has this connection been told the wall's quiet state and settings?
+  bool quietSent = false;
+  bool configSent = false;
 };
 
 struct WallLinkCore {
@@ -149,6 +152,8 @@ struct WallLinkCore {
         drop(row.conn, "not heard from", hooks);
         continue;
       }
+      // How to behave comes before what to show.
+      if (!tellSettings(r, nowMs, hooks)) continue;
       if (wallRowTextDue(row.text, row.contact)) {
         wlClear(out);
         out.which_body = wl_ToRow_show_tag;
@@ -169,6 +174,26 @@ struct WallLinkCore {
   // The latest text for a row; it goes out when the row can take it.
   void setText(int row, const char* text, uint16_t speed, uint64_t commitAtMs) {
     wallRowTextSet(rows[row].text, text, speed, commitAtMs);
+  }
+
+  // Quiet for the whole wall, and the settings every row gets (what to show
+  // when the master is lost, the time zone). Each reaches a row when it
+  // connects and when it changes, held while the row is busy.
+  void setQuiet(bool on) {
+    if (on == quiet) return;
+    quiet = on;
+    for (WallLinkRow& row : rows) row.quietSent = false;
+  }
+  void setConfig(const wl_Config& next) {
+    if (haveConfig && memcmp(&next, &config, sizeof(config)) == 0) return;
+    // Byte-compared above: start from zeroes so padding and the bytes behind
+    // the tz terminator never differ by accident.
+    memset(&config, 0, sizeof(config));
+    config.fallback = next.fallback;
+    config.update_units_at_start = next.update_units_at_start;
+    strncpy(config.tz, next.tz, sizeof(config.tz) - 1);
+    haveConfig = true;
+    for (WallLinkRow& row : rows) row.configSent = false;
   }
 
   // Writes one message to a welcomed row now. False when the row is not
@@ -192,9 +217,35 @@ struct WallLinkCore {
   }
 
  private:
+  bool quiet = false;
+  bool haveConfig = false;
+  wl_Config config = wl_Config_init_zero;
   wl_ToMaster in;
   wl_ToRow out;
   uint8_t frame[wl_ToRow_size + WL_PREFIX_MAX];
+
+  // True when the row has been told everything; false when something is
+  // still owed (it is busy, or its socket takes nothing now).
+  bool tellSettings(int r, uint32_t nowMs, WallLinkHooks& hooks) {
+    WallLinkRow& row = rows[r];
+    if (row.quietSent && (row.configSent || !haveConfig)) return true;
+    if (row.contact.busy) return false;
+    if (haveConfig && !row.configSent) {
+      wlClear(out);
+      out.which_body = wl_ToRow_config_tag;
+      out.body.config = config;
+      if (!send(r, out, nowMs, hooks)) return false;
+      row.configSent = true;
+    }
+    if (!row.quietSent) {
+      wlClear(out);
+      out.which_body = wl_ToRow_quiet_tag;
+      out.body.quiet.on = quiet;
+      if (!send(r, out, nowMs, hooks)) return false;
+      row.quietSent = true;
+    }
+    return true;
+  }
 
   void drop(int conn, const char* why, WallLinkHooks& hooks) {
     hooks.note(conn, conns[conn].row, why);
@@ -256,6 +307,11 @@ struct WallLinkCore {
     wallRowHeard(row.contact, nowMs);
     const bool restarted = wallRowNoteBoot(row.contact, h.boot_id);
     wallRowTextResend(row.text);
+    // The row's Hello is copied out before `in` could be reused; telling the
+    // settings only writes `out`.
+    row.quietSent = false;
+    row.configSent = false;
     hooks.rowHello(r, h, restarted);
+    tellSettings(r, nowMs, hooks);
   }
 };

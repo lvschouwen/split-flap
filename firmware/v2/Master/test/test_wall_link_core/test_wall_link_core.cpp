@@ -107,11 +107,12 @@ static int joined(const char* id, uint32_t now, uint32_t bootId = 7) {
 
 static void test_a_known_row_is_welcomed_by_name() {
   const int conn = joined("row-b", 1000);
-  TEST_ASSERT_EQUAL(1, rec->written.size());
+  TEST_ASSERT_EQUAL(2, rec->written.size());  // Welcome, then the wall's quiet state
   TEST_ASSERT_EQUAL(conn, rec->written[0].first);
-  TEST_ASSERT_EQUAL(wl_ToRow_welcome_tag, rec->last().which_body);
-  TEST_ASSERT_EQUAL_STRING("the-master", rec->last().body.welcome.master_id);
-  TEST_ASSERT_EQUAL_UINT32(WALL_LINK_PROTOCOL, rec->last().body.welcome.protocol);
+  TEST_ASSERT_EQUAL(wl_ToRow_welcome_tag, rec->written[0].second.which_body);
+  TEST_ASSERT_EQUAL_STRING("the-master", rec->written[0].second.body.welcome.master_id);
+  TEST_ASSERT_EQUAL_UINT32(WALL_LINK_PROTOCOL, rec->written[0].second.body.welcome.protocol);
+  TEST_ASSERT_EQUAL(wl_ToRow_quiet_tag, rec->written[1].second.which_body);
   TEST_ASSERT_EQUAL(1, rec->hellos);
   TEST_ASSERT_EQUAL(1, rec->lastHelloRow);
   TEST_ASSERT_EQUAL(conn, core.rows[1].conn);
@@ -411,7 +412,7 @@ static void test_a_text_is_held_while_the_row_is_busy_and_a_ping_is_not_sent_wit
   feed(conn, status(true), 1100);
   core.setText(0, "WAIT", 80, 0);
   core.tick(20000, *rec);
-  TEST_ASSERT_EQUAL(1, rec->written.size());  // the Welcome only
+  TEST_ASSERT_EQUAL(2, rec->written.size());  // Welcome and quiet, at the Hello
   feed(conn, status(false), 21000);
   core.tick(21020, *rec);
   TEST_ASSERT_EQUAL(1, rec->count(wl_ToRow_show_tag));
@@ -459,6 +460,79 @@ static void test_a_message_to_a_row_goes_out_only_while_it_is_connected() {
   TEST_ASSERT_EQUAL(1, rec->count(wl_ToRow_ping_tag));
 }
 
+// ---- quiet and settings ----------------------------------------------------------
+
+static wl_Config config(const char* tz, bool unitsAtStart = false) {
+  wl_Config c = wl_Config_init_zero;
+  c.fallback = wl_Fallback_FALLBACK_TIME;
+  c.update_units_at_start = unitsAtStart;
+  strcpy(c.tz, tz);
+  return c;
+}
+
+// A row that connects is told how to behave before it is given a text.
+static void test_a_connecting_row_gets_its_settings_then_quiet_then_the_text() {
+  core.setConfig(config("CET-1CEST,M3.5.0,M10.5.0/3"));
+  core.setQuiet(true);
+  core.setText(0, "HELLO", 80, 0);
+  joined("row-a", 1000);
+  TEST_ASSERT_EQUAL(3, rec->written.size());  // all of it at the Hello, the text at the next pass
+  core.tick(1020, *rec);
+  TEST_ASSERT_EQUAL(4, rec->written.size());
+  TEST_ASSERT_EQUAL(wl_ToRow_welcome_tag, rec->written[0].second.which_body);
+  TEST_ASSERT_EQUAL(wl_ToRow_config_tag, rec->written[1].second.which_body);
+  TEST_ASSERT_EQUAL_STRING("CET-1CEST,M3.5.0,M10.5.0/3", rec->written[1].second.body.config.tz);
+  TEST_ASSERT_EQUAL(wl_Fallback_FALLBACK_TIME, rec->written[1].second.body.config.fallback);
+  TEST_ASSERT_EQUAL(wl_ToRow_quiet_tag, rec->written[2].second.which_body);
+  TEST_ASSERT_TRUE(rec->written[2].second.body.quiet.on);
+  TEST_ASSERT_EQUAL(wl_ToRow_show_tag, rec->written[3].second.which_body);
+}
+
+static void test_a_change_of_quiet_or_settings_reaches_every_connected_row_once() {
+  joined("row-a", 1000);
+  joined("row-b", 1000);
+  for (uint32_t t = 1020; t <= 1100; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(2, rec->count(wl_ToRow_quiet_tag));  // the state at connect: not quiet
+  TEST_ASSERT_EQUAL(0, rec->count(wl_ToRow_config_tag));  // none was ever set
+  core.setQuiet(true);
+  core.setQuiet(true);
+  core.setConfig(config("UTC0"));
+  core.setConfig(config("UTC0"));
+  for (uint32_t t = 1120; t <= 1300; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(4, rec->count(wl_ToRow_quiet_tag));
+  TEST_ASSERT_EQUAL(2, rec->count(wl_ToRow_config_tag));
+  core.setConfig(config("UTC0", true));
+  for (uint32_t t = 1320; t <= 1400; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(4, rec->count(wl_ToRow_config_tag));
+}
+
+static void test_quiet_and_settings_wait_for_a_busy_row_and_are_sent_again_after_a_redial() {
+  const int conn = joined("row-a", 1000);
+  feed(conn, status(true), 1200);
+  core.setQuiet(true);
+  core.tick(1300, *rec);
+  TEST_ASSERT_EQUAL(1, rec->count(wl_ToRow_quiet_tag));
+  feed(conn, status(false), 1400);
+  core.tick(1420, *rec);
+  TEST_ASSERT_EQUAL(2, rec->count(wl_ToRow_quiet_tag));
+  core.closed(conn);
+  joined("row-a", 5000);
+  for (uint32_t t = 5020; t <= 5100; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(3, rec->count(wl_ToRow_quiet_tag));
+  TEST_ASSERT_TRUE(rec->last().body.quiet.on);
+}
+
+static void test_a_setting_the_socket_did_not_take_is_tried_again() {
+  joined("row-a", 1000);
+  rec->refuseWrites = true;
+  core.setQuiet(true);
+  core.tick(1020, *rec);
+  rec->refuseWrites = false;
+  for (uint32_t t = 1040; t <= 1100; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(2, rec->count(wl_ToRow_quiet_tag));  // "off" at the Hello, "on" once it fits
+  TEST_ASSERT_TRUE(rec->last().body.quiet.on);
+}
+
 // A changed rows table renumbers the rows: every connection goes, and the rows
 // dial again into the new table.
 static void test_reset_closes_everything() {
@@ -504,6 +578,10 @@ int main(int, char**) {
   RUN_TEST(test_a_connection_that_takes_nothing_keeps_the_text_for_later);
   RUN_TEST(test_a_welcome_that_cannot_be_written_closes_the_connection);
   RUN_TEST(test_a_message_to_a_row_goes_out_only_while_it_is_connected);
+  RUN_TEST(test_a_connecting_row_gets_its_settings_then_quiet_then_the_text);
+  RUN_TEST(test_a_change_of_quiet_or_settings_reaches_every_connected_row_once);
+  RUN_TEST(test_quiet_and_settings_wait_for_a_busy_row_and_are_sent_again_after_a_redial);
+  RUN_TEST(test_a_setting_the_socket_did_not_take_is_tried_again);
   RUN_TEST(test_reset_closes_everything);
   return UNITY_END();
 }
