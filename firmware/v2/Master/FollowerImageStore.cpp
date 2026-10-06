@@ -30,6 +30,10 @@ static int relayClaims = 0;
 static FollowerImageFacts facts;
 static bool factsKnown = false;
 static bool factsOwed = false;
+// A read off flash that failed is tried again, this far apart.
+static const uint32_t FACTS_RETRY_MS = 60000UL;
+static uint32_t factsTriedAtMs = 0;
+static bool factsTried = false;
 static std::atomic<uint32_t> factsGeneration{0};
 
 // Accumulator (async handler context, one upload at a time).
@@ -151,8 +155,11 @@ static void readFactsOffFlash() {
     md5.getBytes(read.md5);
   }
   ImgLock lock;
-  factsOwed = false;
+  factsTried = true;
+  factsTriedAtMs = millis();
+  if (!storedPresent) factsOwed = false;
   if (!ok || !storedPresent) return;
+  factsOwed = false;
   strlcpy(read.rev, storedRev.c_str(), sizeof(read.rev));
   facts = read;
   factsKnown = true;
@@ -295,7 +302,8 @@ void followerImageFlushTick() {
     bool owed;
     {
       ImgLock lock;
-      owed = factsOwed && !flushPending;
+      owed = factsOwed && !flushPending &&
+             (!factsTried || millis() - factsTriedAtMs >= FACTS_RETRY_MS);
     }
     if (owed) readFactsOffFlash();
   }

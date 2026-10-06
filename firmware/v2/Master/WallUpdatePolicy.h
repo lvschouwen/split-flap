@@ -71,7 +71,12 @@ struct WallUpdater {
                     uint32_t nowMs) const {
     if (phase != WallUpdatePhase::Idle || storedRev == nullptr || storedRev[0] == 0) return -1;
     if (heldOff && !wallLinkElapsed(nowMs, heldOffAtMs, WALL_UPDATE_HOLDOFF_MS)) return -1;
-    for (int i = 0; i < count && i < WALL_LINK_MAX_ROWS; i++) {
+    if (count > WALL_LINK_MAX_ROWS) count = WALL_LINK_MAX_ROWS;
+    // The rows take turns, from the one after the last offer: a row that
+    // never answers, or is always busy, costs nothing and so is never
+    // blocked, and must not keep the others waiting behind it.
+    for (int n = 1; n <= count; n++) {
+      const int i = (lastOffered + n) % count;
       const WallUpdateRow& r = rows[i];
       if (!r.reachable || blocked[i] || r.rev[0] == 0) continue;
       if (strcmp(r.rev, storedRev) == 0 && !r.rescue) continue;
@@ -84,6 +89,7 @@ struct WallUpdater {
   void offered(int r, bool rescue, uint32_t nowMs) {
     phase = WallUpdatePhase::Offered;
     row = (int8_t)r;
+    lastOffered = (int8_t)r;
     sinceMs = nowMs;
     rescueOffer = rescue;
     charged = false;
@@ -189,6 +195,7 @@ struct WallUpdater {
   bool rescueOffer = false;
   bool charged = false;  // this offer has cost its attempt
   bool heldOff = false;
+  int8_t lastOffered = -1;
   uint32_t sinceMs = 0;  // when the current phase began
   uint32_t heldOffAtMs = 0;
   bool healthy[WALL_LINK_MAX_ROWS] = {false};

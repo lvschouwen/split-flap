@@ -25,6 +25,8 @@ static wl_UpdateState state(wl_UpdatePhase phase, wl_UpdateReason reason = wl_Up
 }
 
 static int candidate(uint32_t now) { return up.nextCandidate(rows, 3, STORED, now); }
+// A wall with the one row board: who is next is not in question.
+static int again(uint32_t now) { return up.nextCandidate(rows, 1, STORED, now); }
 
 // An offer to `row` that the row reports as failed.
 static void failOnce(int row, uint32_t now) {
@@ -109,7 +111,7 @@ static void test_a_failed_download_costs_an_attempt_and_holds_every_offer_off() 
   TEST_ASSERT_EQUAL(1, up.attempts[0]);
   TEST_ASSERT_FALSE(up.blocked[0]);
   TEST_ASSERT_EQUAL(-1, candidate(1100 + WALL_UPDATE_HOLDOFF_MS - 1));
-  TEST_ASSERT_EQUAL(0, candidate(1100 + WALL_UPDATE_HOLDOFF_MS));
+  TEST_ASSERT_EQUAL(0, again(1100 + WALL_UPDATE_HOLDOFF_MS));
 }
 
 static void test_three_failed_offers_block_the_row_and_the_next_row_is_served() {
@@ -125,7 +127,7 @@ static void test_a_row_busy_with_its_units_is_asked_again_later_at_no_cost() {
                                       wl_UpdateReason_UPDATE_UNITS_BUSY), STORED, 1100));
   TEST_ASSERT_EQUAL(0, up.attempts[0]);
   TEST_ASSERT_EQUAL(-1, candidate(2000));
-  TEST_ASSERT_EQUAL(0, candidate(1100 + WALL_UPDATE_HOLDOFF_MS));
+  TEST_ASSERT_EQUAL(0, again(1100 + WALL_UPDATE_HOLDOFF_MS));
 }
 
 static void test_any_other_refusal_costs_an_attempt() {
@@ -233,7 +235,7 @@ static void test_a_new_stored_image_forgives_every_row_and_lifts_the_hold() {
   up.newImage();
   TEST_ASSERT_FALSE(up.blocked[0]);
   TEST_ASSERT_EQUAL(0, up.attempts[0]);
-  TEST_ASSERT_EQUAL(0, candidate(300200));
+  TEST_ASSERT_EQUAL(0, again(300200));
 }
 
 static void test_a_row_reporting_another_rev_than_before_is_forgiven() {
@@ -293,11 +295,26 @@ static void test_times_survive_the_millisecond_counter_wrapping() {
   const uint32_t nearWrap = 0xFFFFFF00UL;
   failOnce(0, nearWrap);
   TEST_ASSERT_EQUAL(-1, candidate(nearWrap + 1000));
-  TEST_ASSERT_EQUAL(0, candidate(nearWrap + 100 + WALL_UPDATE_HOLDOFF_MS));
+  TEST_ASSERT_EQUAL(0, again(nearWrap + 100 + WALL_UPDATE_HOLDOFF_MS));
+}
+
+static void test_a_row_that_never_answers_does_not_keep_the_others_waiting() {
+  up.offered(candidate(0), false, 0);
+  TEST_ASSERT_TRUE(WallUpdateEnd::NoAnswer == up.tick(WALL_UPDATE_ANSWER_MS));
+  // Row 0 is still on the old rev and has cost nothing: the turn passes on.
+  const uint32_t later = WALL_UPDATE_ANSWER_MS + WALL_UPDATE_HOLDOFF_MS;
+  TEST_ASSERT_EQUAL(1, candidate(later));
+  up.offered(1, false, later);
+  up.tick(later + WALL_UPDATE_ANSWER_MS);
+  TEST_ASSERT_EQUAL(2, candidate(2 * later));
+  up.offered(2, false, 2 * later);
+  up.tick(2 * later + WALL_UPDATE_ANSWER_MS);
+  TEST_ASSERT_EQUAL(0, candidate(3 * later));  // and round again
 }
 
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_a_row_that_never_answers_does_not_keep_the_others_waiting);
   RUN_TEST(test_the_first_row_on_another_rev_is_offered_in_either_direction);
   RUN_TEST(test_nothing_is_offered_without_a_stored_image);
   RUN_TEST(test_a_row_that_cannot_take_it_now_or_never_said_its_rev_is_passed_over);

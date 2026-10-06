@@ -448,6 +448,9 @@ void showAndSettings(uint32_t nowMs) {
 // when its row can take it.
 void takeJobs(uint32_t nowMs) {
   static wl_Op op;
+  // A job staged against a newer table than this pass runs on names its row
+  // by that table's numbers: it waits for the pass that has taken the table.
+  if (wallStateRowsGeneration() != rowsGeneration) return;
   for (int row = 0; row < rowsTable.count && row < WALL_LINK_MAX_ROWS; row++) {
     if (!wallJobTake(row, op)) continue;
     // An update ends in the row's restart, which would cut the job short.

@@ -280,10 +280,12 @@ void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   // Static: a rows table does not belong on the web server task's stack. The
   // web state lock makes it one request at a time.
   static WallRequest staged;
-  WebStateLock lock;
+  // Before the web state lock: a job needs none of what it guards, and
+  // building an own-row unit update takes that lock itself.
   if (const WallJobKind* job = wallJobFind(name)) {
     return handleJob(request, body, *job, table, generation);
   }
+  WebStateLock lock;
   staged = WallRequest{};
   const char* refusal = "no such action";
   if (strcmp(name, "pair") == 0) refusal = buildPair(body, staged);

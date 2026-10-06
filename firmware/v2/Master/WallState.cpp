@@ -160,7 +160,8 @@ void wallOpDataPut(uint32_t id, uint32_t offset, const uint8_t* data, size_t n) 
   // Pieces come in order; one that leaves a gap is not kept.
   if (offset > d.len) return;
   memcpy(d.bytes + offset, data, n);
-  d.len = (uint16_t)(offset + n);
+  // A piece that comes twice never shortens what is held.
+  if (offset + n > d.len) d.len = (uint16_t)(offset + n);
 }
 
 size_t wallOpDataGet(uint32_t id, uint8_t* out, size_t cap) {
