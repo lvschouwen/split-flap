@@ -20,6 +20,7 @@
 #include "UnitBus.h"
 #include "WearPolicy.h"
 #include "ClusterLeader.h"  // clusterLeaderBlankWall (/stop propagation #317)
+#include "WallShow.h"
 
 // v1 parseCalibrationAddress as a seam: policy verdicts come from the pure
 // MaintenancePolicy.h, this only translates request → verdict → response.
@@ -438,6 +439,7 @@ void webMaintenanceRegister(AsyncWebServer& server) {
     // the local command above handles this board's own row; blank the
     // followers in sync (no-op when standalone).
     clusterLeaderBlankWall();
+    wallShowBlank();
     char buf[24];
     snprintf(buf, sizeof(buf), "{\"seq\":%lu}", (unsigned long)cmd.seq);
     request->send(200, "application/json", buf);

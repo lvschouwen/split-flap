@@ -17,6 +17,7 @@
 #include "ClusterLeader.h"
 #include "WallLink.h"
 #include "WallPair.h"
+#include "WallShow.h"
 #include "WallState.h"
 #include "DeviceIdentity.h"
 #include "FactorySlot.h"
@@ -161,6 +162,7 @@ void setup() {
   wallStateInit(settingsStore);
   wallLinkInit(deviceName);
   wallPairInit(deviceName);
+  wallShowInit();
 
   SerialPrintln(F(""));
   SerialPrintln(F("split-flap v2 master — " GIT_REV));

@@ -20,6 +20,7 @@
 #include "BuildVersion.h"
 #include "JsonCopied.h"
 #include "Tasks.h"
+#include "WallShow.h"
 #include "WallState.h"
 #include "WebEndpointsInternal.h"
 
@@ -190,6 +191,8 @@ void handleWall(AsyncWebServerRequest* request) {
     row["row"] = def.row;
     row["col"] = def.col;
     row["width"] = def.width;
+    char text[WALL_ROW_TEXT_MAX + 1];
+    if (wallShowRowText(i, text, sizeof(text))) row["text"] = jsonCopied(text);
     if (wallRowIsOwn(def)) continue;
     const WallRowLink& link = wall->link[i];
     row["pairedAt"] = jsonCopied(def.host);

@@ -21,6 +21,7 @@ def test_clock_ticker_stands_down_before_any_content_path():
     code = _code(MASTER / "ClockTask.cpp")
     own = code.index("if (!membership.gated && tasksQuiet()) continue;")
     assert own < code.index("clusterLeaderEnabled()"), "the leader reroute must come after the quiet gate"
+    assert own < code.index("wallShowActive()"), "the wall reroute must come after the quiet gate"
     assert own < code.index("decideClockTick(")
     # A member of a quiet wall moves nothing itself: no own clock in LeaderLost,
     # no segment re-show.
@@ -105,3 +106,13 @@ def test_both_member_implementations_read_the_flag_and_hold_their_frame():
     blank = fallback.index("if (followerPhaseShowsBlank(policyState.phase)) {")
     assert fallback.index("if (leaderQuiet) return;", blank) < fallback.index("followerClockEligible(", blank)
     assert "if (clockShowing && !leaderQuiet && !renderPending" in fallback
+
+
+def test_the_web_drain_hands_text_to_the_wall_only_after_the_quiet_drop():
+    code = _code(MASTER / "WebEndpoints.cpp")
+    assert code.index("quietBlocksContent(settings.quiet, false)") < code.index("wallShowText(")
+
+
+def test_the_link_task_tells_the_rows_the_quiet_state_every_pass():
+    code = _code(MASTER / "WallLink.cpp")
+    assert "core->setQuiet(tasksQuiet());" in code

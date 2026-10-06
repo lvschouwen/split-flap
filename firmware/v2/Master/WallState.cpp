@@ -33,6 +33,8 @@ struct RowUnits {
 RowUnits* rowUnits = nullptr;  // CLUSTER_MAX_MEMBERS of them
 
 bool requestRunning = false;
+wl_Config rowSettings = wl_Config_init_zero;
+std::atomic<uint32_t> rowSettingsGeneration{0};
 char releaseId[WALL_ROW_ID_MAX + 1] = {0};
 
 struct Locked {
@@ -182,6 +184,26 @@ ClusterVerdict wallStateSetRows(const WallRowsTable& table) {
   }
   SerialPrintf("wall: rows table is now \"%s\"\n", wallRowsToString(table).c_str());
   return {true, ""};
+}
+
+void wallStateSetRowSettings(const String& tzPosix, bool updateUnitsAtStart) {
+  Locked lock;
+  // A row without its master shows the time: what an ESP-01 row has always
+  // done. Per-row choices come with the board settings of the API.
+  rowSettings.fallback = wl_Fallback_FALLBACK_TIME;
+  rowSettings.update_units_at_start = updateUnitsAtStart;
+  strlcpy(rowSettings.tz, tzPosix.c_str(), sizeof(rowSettings.tz));
+  rowSettingsGeneration.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint32_t wallStateRowSettings(wl_Config& out) {
+  Locked lock;
+  out = rowSettings;
+  return rowSettingsGeneration.load(std::memory_order_relaxed);
+}
+
+uint32_t wallStateRowSettingsGeneration() {
+  return rowSettingsGeneration.load(std::memory_order_relaxed);
 }
 
 void wallStateAskRelease(const char* id) {

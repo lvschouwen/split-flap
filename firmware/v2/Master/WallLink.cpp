@@ -7,7 +7,9 @@
 #include "HelpersSerialHandling.h"
 #include "LargeAlloc.h"
 #include "TaskWatchdog.h"
+#include "Tasks.h"
 #include "WallLinkCore.h"
+#include "WallShow.h"
 #include "WallState.h"
 
 namespace {
@@ -300,6 +302,23 @@ void readRows(const fd_set& readable, uint32_t nowMs) {
   }
 }
 
+// What the rows are to show and how they are to behave, handed to the core,
+// which sends it when each row can take it.
+void showAndSettings(uint32_t nowMs) {
+  static uint32_t settingsGeneration = 0;
+  static WallRowShow show;
+  wallShowServiceOwnRow(nowMs);
+  for (int row = 0; row < rowsTable.count; row++) {
+    if (wallShowTakeRow(row, show)) core->setText(row, show.text, show.speed, show.commitAtMs);
+  }
+  core->setQuiet(tasksQuiet());
+  if (wallStateRowSettingsGeneration() != settingsGeneration) {
+    static wl_Config settings;
+    settingsGeneration = wallStateRowSettings(settings);
+    core->setConfig(settings);
+  }
+}
+
 void publish(uint32_t nowMs) {
   static uint32_t contactPublishedAtMs = 0;
   const bool contactDue = wallLinkElapsed(nowMs, contactPublishedAtMs, CONTACT_PUBLISH_MS);
@@ -318,6 +337,7 @@ void pass() {
   if (wallStateRowsGeneration() != rowsGeneration) {
     core->reset(hooks);
     rowsTable = wallStateRows(rowsGeneration);
+    wallShowRowsChanged(rowsTable);
     for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
       facts[row] = WallRowLink{};
       factsDirty[row] = true;
@@ -347,6 +367,7 @@ void pass() {
   }
   if (FD_ISSET(listenFd, &readable)) acceptRows(nowMs);
   readRows(readable, nowMs);
+  showAndSettings(nowMs);
   core->tick(nowMs, hooks);
   char releasing[WALL_ROW_ID_MAX + 1];
   if (wallStateReleaseAsked(releasing, sizeof(releasing))) {

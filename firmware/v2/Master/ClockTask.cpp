@@ -9,6 +9,7 @@
 #include <freertos/task.h>
 
 #include <ctime>
+#include <sys/time.h>
 
 #include "ClockPolicy.h"
 #include "ClusterFollower.h"
@@ -17,6 +18,7 @@
 #include "MqttService.h"
 #include "TaskWatchdog.h"
 #include "TasksInternal.h"
+#include "WallShow.h"
 #include "WebEndpoints.h"
 
 // 1 Hz mode ticker (#192): re-shows the active mode's content — clock time
@@ -64,6 +66,27 @@ void clockTaskMain(void*) {
     // commitAt clock — so nothing enqueues from here. Overlays still win:
     // the gates above run first, and the self-row re-show after an overlay
     // belongs to clusterTask.
+    // A wall with row boards (#566): the logical content goes to the wall,
+    // which lays it out and flips every row at one instant. The clock's next
+    // minute is handed over ahead of the boundary (WallShowPolicy.h).
+    if (wallShowActive()) {
+      WebContentSnapshot wallContent = webDisplayContentSnapshot();
+      struct timeval tv;
+      gettimeofday(&tv, nullptr);
+      if (wallContent.deviceMode == "clock") {
+        if (clockIsTimeSynced(tv.tv_sec)) {
+          const WallClockTarget target = wallClockTarget(
+              (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL);
+          wallShowClock(formatDateTime(target.minuteEpochS, CLOCK_FORMAT),
+                        formatDateTime(target.minuteEpochS, CLUSTER_DATE_FORMAT),
+                        wallContent.alignment, wallContent.flapSpeed, target.commitAtMs);
+        }
+      } else if (wallContent.deviceMode == "text" && wallContent.inputText.length() > 0) {
+        wallShowText(wallContent.inputText, wallContent.alignment, wallContent.flapSpeed);
+      }
+      lastQueued = "";  // the ticker owns nothing while the wall shows
+      continue;
+    }
     if (clusterLeaderEnabled()) {
       WebContentSnapshot leaderContent = webDisplayContentSnapshot();
       time_t leaderNow = time(nullptr);

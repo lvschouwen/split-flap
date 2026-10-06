@@ -75,6 +75,7 @@ bool tasksUnitCountOverridePinned() {
 #include "TaskWatchdog.h"
 #include "WallLink.h"
 #include "WallPair.h"
+#include "WallShow.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
 
@@ -267,7 +268,9 @@ static void clusterTaskMain(void*) {
   for (;;) {
     wdtFeed();
     crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_CLUSTER);
-    clusterLeaderTick();
+    // A wall with rows of its own (the wall link) has taken the old cluster's
+    // place: the leader stands down and its members fall back by themselves.
+    if (!wallShowActive()) clusterLeaderTick();
     netLivenessProbeTick();  // #501: the gateway and own-server probes
     wallPairTick();          // #566: pairing and the other rows-table requests
     crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_IDLE);

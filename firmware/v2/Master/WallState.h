@@ -94,6 +94,14 @@ void wallStateRequestDone();
 // Worker: judges the table, stores it and makes it the live one.
 ClusterVerdict wallStateSetRows(const WallRowsTable& table);
 
+// What every row board is told about how to behave (Config on the link): the
+// time zone and whether it updates its units when it starts. Set from the
+// settings at start and when they change; the link task sends it on.
+void wallStateSetRowSettings(const String& tzPosix, bool updateUnitsAtStart);
+// The settings and a number that changes whenever they do.
+uint32_t wallStateRowSettings(wl_Config& out);
+uint32_t wallStateRowSettingsGeneration();
+
 // Worker asks, link task answers: say Release to this row if it is connected.
 void wallStateAskRelease(const char* id);
 bool wallStateReleaseAsked(char* idOut, size_t cap);

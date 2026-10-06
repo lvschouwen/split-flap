@@ -13,6 +13,8 @@
 // loop() via webEndpointsLoop().
 
 #include "WebEndpoints.h"
+#include "WallShow.h"
+#include "WallState.h"
 #include "WebEndpointsInternal.h"
 
 #include "QuietPolicy.h"  // quietBlocksContent (#227)
@@ -200,6 +202,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // setup(), so LeaderLock is safe); the settings drain pushes changes.
   clusterLeaderSetSelfRole(settings.deviceRole);
   clusterLeaderSetTz(settings.timezonePosix);  // #342: rides the join body
+  wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot);
   // Handlers never write the store; the loop drain and the mqttTask-called
   // setters below do (both hold webStateMutex).
   webStateMutex = xSemaphoreCreateMutex();
@@ -295,6 +298,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // sets this BEFORE rebooting into the campaign.
       if (settings.reflashOnBoot != reflashOnBootBefore) {
         tasksSetReflashOnBoot(settings.reflashOnBoot);
+        wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot);
       }
       if (settings.quiet != quietBefore) {
         tasksSetQuiet(settings.quiet);  // #227
@@ -337,7 +341,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
         // against snapshot text, which makeShowTextCommand truncates. A
         // LEADING master retains untruncated — the grid holds more than
         // one row's width, and its ticker path never enters that dedup.
-        currentInputText = clusterLeaderEnabled()
+        currentInputText = (wallShowActive() || clusterLeaderEnabled())
                                ? messageText
                                : truncateForDisplay(messageText);
         // Reflash gate re-check at drain time (#205, Codex review): the
@@ -352,6 +356,10 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
             clusterFollowerViewGet().gated) {
           SerialPrintln("Message retained, not queued (reflash/cluster): " +
                         messageText);
+        } else if (wallShowActive()) {
+          // A wall with row boards (#566): the logical text goes to the wall.
+          wallShowText(messageText, settings.alignment, settings.flapSpeed);
+          SerialPrintln("Message routed to the wall: " + messageText);
         } else if (clusterLeaderEnabled()) {
           // Leader reroute (#273): the LOGICAL text goes to the cluster
           // layer — it slices the grid, stages our own row, and fans the
@@ -454,6 +462,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   if (timezoneChanged) {
     clockServiceApplyTz(settings);
     clusterLeaderSetTz(settings.timezonePosix);  // #342: next join carries it
+    wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot);
   }
 
   // mDNS discovery drains (#224 MQTT, #274 cluster): blocking queries take
