@@ -109,5 +109,5 @@ inline size_t buildQuietDiscovery(char* buf, size_t bufLen,
                "\"uniq_id\":\"%s_quiet\",\"ic\":\"mdi:sleep\","
                "\"pl_on\":\"ON\",\"pl_off\":\"OFF\",\"ret\":true,"
                MQTT_DEVICE_BLOCK "}"),
-      deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+      deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
 }

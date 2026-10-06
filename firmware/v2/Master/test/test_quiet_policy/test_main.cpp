@@ -78,6 +78,10 @@ static void test_discovery_is_a_retained_command_switch() {
   // The board is often offline for the change: the command must be retained.
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"ret\":true"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"ids\":[\"flap\"]"));
+  // The device block takes the id twice and the firmware rev: one argument
+  // short and the rev is read from whatever lies behind the last one.
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"name\":\"Split-Flap flap\""));
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sw\":\"abc1234\""));
 }
 
 int main(int, char**) {
