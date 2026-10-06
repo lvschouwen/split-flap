@@ -105,7 +105,7 @@ def test_hello_welcome_status_and_unit_facts(pair):
     assert pair.wait("row", got("welcome"))["master_id"] == "bench-master"
     assert pair.wait("master", got("status"))["status"]["heap"] == 33000
     units = pair.wait("master", got("units"))["units"]
-    assert units["width"] == 5 and [u["addr"] for u in units["units"]] == [1, 2, 3, 4, 5]
+    assert units["width"] == 5 and [u["a"] for u in units["units"]] == [1, 2, 3, 4, 5]
 
 
 def test_show_is_answered_with_shown_and_ping_with_pong(pair):

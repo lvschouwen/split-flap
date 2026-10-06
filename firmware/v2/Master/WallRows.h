@@ -55,7 +55,8 @@ inline bool wallRowHostParse(const char* host, uint8_t out[4]) {
     if (octet == 4) break;
     if (*p++ != '.') return false;
   }
-  return *p == 0 && lanPrivateIpv4(String(host));
+  // Not this board itself: the master posts a pairing to this address.
+  return *p == 0 && out[0] != 127 && lanPrivateIpv4(String(host));
 }
 
 // Index of the row board with this id, -1 when there is none.

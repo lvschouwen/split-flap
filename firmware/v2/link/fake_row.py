@@ -21,7 +21,8 @@ name is refused with 409 while this row is paired, as on the board. Without
 --master the row starts unpaired and dials nobody until it is paired.
 
 --units names a captured /units/health document to send as the unit facts;
-without it a plain one for --width working units is made up.
+without it a plain one for --width units is made up, in the keys of the shared
+serializer (buildUnitHealthJson).
 --commands names a file that is read as it grows, one command per line:
     busy SECONDS        a unit job the master did not ask for: silent that long
     drop                close the connection and dial again (same boot id)
@@ -109,7 +110,7 @@ class Row:
             doc = Path(self.args.units).read_bytes().strip()
         else:
             doc = json.dumps({"width": self.args.width, "faulty": 0, "units": [
-                {"index": i, "addr": i + 1, "state": "ok", "ofs": 0}
+                {"i": i, "a": i + 1, "st": 1, "v": 0, "ofs": 0, "age": 1000, "hs2": 2}
                 for i in range(self.args.width)]}, separators=(",", ":")).encode()
         self.doc_id += 1
         for offset in range(0, len(doc), PIECE):

@@ -106,12 +106,13 @@ static void test_json_now_and_history_shape() {
   strcpy(now.resetReason, "POWERON");
   // #415: stack low-water marks (bytes still free at the worst point).
   now.hwmDisplay = 9000; now.hwmClock = 1200; now.hwmNet = 2100;
-  now.hwmMqtt = 1800; now.hwmCluster = 3300;
+  now.hwmMqtt = 1800; now.hwmCluster = 3300; now.hwmLink = 5100;
 
   char buf[2048];
   size_t n = buildSystemStatsJson(buf, sizeof(buf), smp, now);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"rssi\":-60"));         // now = latest
+  TEST_ASSERT_NOT_NULL(strstr(buf, "\"cluster\":3300,\"link\":5100}"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"heap\":200000"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"maxAlloc\":100000"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"psram\":8000000"));

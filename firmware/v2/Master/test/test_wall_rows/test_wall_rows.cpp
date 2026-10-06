@@ -96,7 +96,7 @@ static void test_what_makes_a_table_unsound() {
   // The address is compared with where a connection comes from: only one way
   // of writing it is taken, and never a name.
   for (const char* host : {"row-a.local", "localhost", "192.168.001.050", "192.168.1.50.", "192.168.1",
-                           "192.168.1.256", " 192.168.1.50", "0xC0.168.1.50"}) {
+                           "192.168.1.256", " 192.168.1.50", "0xC0.168.1.50", "127.0.0.1", "127.8.8.8"}) {
     WallRowsTable t;
     strcpy(t.rows[0].id, "row-a");
     strcpy(t.rows[0].host, host);
