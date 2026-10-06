@@ -32,6 +32,15 @@ Loaded when working in this tree; root CLAUDE.md holds build commands, workflow 
 
 Partition table `partitions_splitflap_16MB.csv` is immutable over OTA. `board_upload.arduino.boot_app0` must equal the CSV's otadata offset (0x19000); layout + factory-reset invariants pinned by `tests/test_partition_table.py`.
 
+## Wall link (#559, master side #566 — being built beside the cluster code below, which it replaces)
+
+- **Link task:** listens on port 7411 for the ESP-01 row boards, one TCP connection per row, opened by the row (`WallLink.cpp`, sole toucher of those sockets; lwIP `select`, state in PSRAM). What a connection means is pure `WallLinkCore.h` (who is behind it, one per row, the paired address wins a row's place, latest text only, ping only when idle, never to a busy row) on the timing rules of `WallLinkPolicy.h`. Messages: `../link/wall_link.proto`.
+- **Rows table:** `WallRows.h` — the boards of this Split-Flap with their grid place (`id|host|row|col|width;…`, NVS `wallRows`; empty = a master on its own); grid rules stay `ClusterLayout.h`'s.
+- **Wall state:** `WallState.cpp` — one leaf mutex, snapshot copies: rows table, per-row link facts and unit facts (a row's `/units/health` JSON read back into `UnitFacts` by `UnitFactsJson.h`; `tests/test_unit_facts_keys.py` gates its keys against the shared serializer), the job table (`WallOps.h`).
+- **Pairing:** the web side stages, the worker (`WallPair.cpp`, on clusterTask) posts `master=<id>` to the row's `POST /pair` and changes the table; a row the link has lost is posted the pairing again every 30 s (a master whose address moved).
+- **API:** `WebWall.cpp` — `POST /api/v2/action` (`pair`, `release`, `arrange`) → `{op}`, `GET /api/v2/op/<id>`, `GET /api/v2/wall`. Strings from a snapshot go into a response through `jsonCopied()` (`JsonCopied.h`). A route with served routes below it is registered `AsyncURIMatcher::exact` (gate in `tests/test_api_index.py`).
+- **Bench:** `../link/fake_row.py` dials a master as a row does (`--pair-port` to be paired); `../link/fake_master.py` is the other end.
+
 ## Cluster (epic #270)
 
 N-row wall of v2 masters over LAN HTTP/JSON — spec `2026-07-13-multi-display-cluster-design.md`; single pane spec `2026-07-14-cluster-single-pane-design.md`; follower relay spec `2026-07-14-v2-esp01-follower-firmware-relay.md`.
