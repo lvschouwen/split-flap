@@ -87,3 +87,9 @@ d360e2b da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
 # ESP-01 row was reflashed from it and reports it. Recorded when the unit
 # facts gained the offset (#564), a shared header the unit does not compile.
 8fe5d6a da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
+#
+# 1e9dc29: the bundle rev since the unit facts gained the offset (#564); any
+# unit a row board or the master reflashed since reports it. Recorded when the
+# old cluster's shared headers were deleted (#566), none of which the unit
+# compiles.
+1e9dc29 da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
