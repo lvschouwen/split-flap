@@ -100,8 +100,8 @@ staged copy fresh alongside the bins.
 
 The ESP-01 follower build writes two images: `follower-<rev>.bin` (plain)
 and `follower-<rev>-gz.bin` (the same image, gzip-packed — the row's
-bootloader unpacks it). Either is a valid upload for the leader's
-`POST /cluster/follower-firmware` and for `ota-flash.sh -l`; the packed one
+bootloader unpacks it). Either is a valid upload for the master's
+`POST /firmware/row` and for `ota-flash.sh -l`; the packed one
 is the only one that still fits once the image passes about 511 KB (the
 build log prints the margin). The packed image is the default: stage both
 and `ota-flash.sh` takes the packed file of the newest build, falling back

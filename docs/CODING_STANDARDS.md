@@ -53,7 +53,7 @@ its owner in the owning file's header comment.
 
 Cross-task interaction is *enqueue a command* / *read a mutex-copied snapshot*:
 
-- Producers (web, MQTT, cluster, clock) **MUST NOT** touch display or device state directly —
+- Producers (web, MQTT, the wall, clock) **MUST NOT** touch display or device state directly —
   they enqueue a `DisplayCommand` with all parameters baked in by the sender.
 - Readers get a consistent copy (`DisplaySnapshot`) taken under the mutex — never a live reference.
 - Async callbacks (web handlers, MQTT callbacks) **MUST NOT** perform blocking device I/O; they
@@ -117,7 +117,7 @@ failure path **MUST** leave state consistent:
 ```cpp
 // The failure path resets the state machine — never just `return`.
 if (!settingsStore.putU32(KEY_EPOCH, epoch)) {
-    log("cluster: epoch persist failed");
+    log("wall: rows table persist failed");
     membershipDirty = true;   // retry next tick instead of wedging
     return false;
 }
@@ -154,7 +154,7 @@ file's style exactly (indent, brace placement, naming).
 
 ### 3.1 Task topology (ESP32-S3 Master)
 
-The topology is fixed: display domain pinned to core 1, network domain (net/mqtt/cluster tasks) on
+The topology is fixed: display domain pinned to core 1, network domain (net/mqtt/link/worker tasks) on
 core 0. New work **SHOULD** join an existing task's tick. A genuinely new task **MUST** justify
 itself and its stack size in its header comment (deepest call path, measured high-water mark).
 
@@ -231,7 +231,7 @@ signed images or app-level signature check) *before* it ships. MD5 is never an a
 ### 5.2 Input validation
 
 Every wire input **MUST** be validated at the boundary before use — HTTP params and bodies, MQTT
-payloads, cluster JSON, I2C replies, mDNS TXT records. External data is hostile even when it comes
+payloads, row-board messages, I2C replies, mDNS TXT records. External data is hostile even when it comes
 from "our own" peers (a peer may be compromised or a different firmware rev):
 
 - Length-cap **before** parse; reject oversized bodies outright.
@@ -263,7 +263,7 @@ from "our own" peers (a peer may be compromised or a different firmware rev):
 ### 5.5 SSRF and outbound requests
 
 Any user-configurable host/URL the firmware will connect to **MUST** pass the LAN-target check
-(`clusterHostIsLanTarget`), and every embedded HTTP client **MUST** set `disable_auto_redirect`.
+(a row board's address is a plain private IPv4, `wallRowHostParse`), and every embedded HTTP client **MUST** set `disable_auto_redirect`.
 
 ### 5.6 Firmware update safety
 
@@ -298,8 +298,7 @@ Any user-configurable host/URL the firmware will connect to **MUST** pass the LA
 - **Regression pinning:** every bug fix lands with a test that failed before the fix — in every
   tree that carries the copied header.
 - **Wire twins:** protocol sides are pinned by fakes run under pytest so the two ends cannot
-  drift: `fake_follower.py` for the cluster wire, `link/fake_master.py` + stock protobuf for the
-  wall link. New wire fields join them in the same PR.
+  drift: `link/fake_master.py` and `link/fake_row.py` + stock protobuf for the wall link. New wire fields join them in the same PR.
 - **ArduinoFake quirks** (documented in CLAUDE.md): `map()` must be wired in each test's `setUp()`;
   `EEPROM` etc. re-wire via `ArduinoFake(EEPROM)`.
 - CI green (all builds + native suites + pytest + drift gates) is a merge precondition.
@@ -392,7 +391,7 @@ Any user-configurable host/URL the firmware will connect to **MUST** pass the LA
 
 ### Risk-tiered review triggers (always get a dedicated review pass)
 
-OTA / boot / flash-write / concurrency / credentials / cluster-wire changes.
+OTA / boot / flash-write / concurrency / credentials / wall-link changes.
 
 ---
 

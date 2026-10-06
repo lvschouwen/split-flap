@@ -2,7 +2,6 @@
 
 #include <Update.h>
 
-#include "ClusterFollower.h"  // leader-lost view (#500)
 #include "OtaService.h"
 #include "StatusLedPolicy.h"
 #include "WifiService.h"
@@ -49,14 +48,6 @@ void statusLedTick() {
   // tick miscolors the LED for 100 ms, nothing more.
   in.otaUploadActive = Update.isRunning();
   in.otaPendingVerify = pendingVerify;
-  // The view copy takes the follower mutex: once a second is plenty.
-  static uint32_t nextLeaderCheckMs = 0;
-  static bool leaderLost = false;
-  if ((int32_t)(now - nextLeaderCheckMs) >= 0) {
-    nextLeaderCheckMs = now + 1000;
-    leaderLost = clusterFollowerViewGet().phase == ClusterFollowerPhase::LeaderLost;
-  }
-  in.leaderLost = leaderLost;
   in.nowMs = now;
 
   const StatusLedColor c = decideStatusLed(in);

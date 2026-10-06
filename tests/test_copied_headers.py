@@ -179,14 +179,14 @@ def test_lookalike_detector_sees_a_renamed_copy(tmp_path, monkeypatch):
     """The detector must catch a copy whose identifiers were all renamed in
     their declarations but whose bodies survived — the FollowerPolicy.h
     shape. Build one from a real header and expect it flagged."""
-    source = MASTER / "ClusterFollowerPolicy.h"
+    source = MASTER / "WallShowPolicy.h"
     fake_tree = tmp_path / "Fake"
     fake_tree.mkdir()
-    body = source.read_text().replace("clusterFollower", "fakeMember")
+    body = source.read_text().replace("wall", "fake").replace("Wall", "Fake")
     (fake_tree / "FakePolicy.h").write_text(body)
     this = __import__(__name__)
     monkeypatch.setattr(this, "V2_TREES", [MASTER, fake_tree])
     monkeypatch.setattr(this, "_rel", lambda p: p.name)
     names = {(a, b) for a, b, _ in lookalike_pairs()}
-    assert ("FakePolicy.h", "ClusterFollowerPolicy.h") in names or \
-        ("ClusterFollowerPolicy.h", "FakePolicy.h") in names
+    assert ("FakePolicy.h", "WallShowPolicy.h") in names or \
+        ("WallShowPolicy.h", "FakePolicy.h") in names

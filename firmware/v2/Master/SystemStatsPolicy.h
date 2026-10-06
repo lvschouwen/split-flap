@@ -90,7 +90,7 @@ struct SystemNow {
   uint32_t hwmClock = 0;
   uint32_t hwmNet = 0;
   uint32_t hwmMqtt = 0;
-  uint32_t hwmCluster = 0;
+  uint32_t hwmWorker = 0;
   uint32_t hwmLink = 0;
 };
 
@@ -116,7 +116,7 @@ inline size_t buildSystemNowJson(char* buf, size_t cap,
       "\"cpu0\":%u,\"cpu1\":%u,\"temp\":%d,\"uptime\":%lu,\"minHeap\":%lu,"
       "\"i2cTx\":%lu,\"i2cErr\":%lu,\"mqttDrops\":%lu,\"ntpAge\":%ld,"
       "\"reset\":\"%s\",\"hwm\":{\"display\":%lu,\"clock\":%lu,\"net\":%lu,"
-      "\"mqtt\":%lu,\"cluster\":%lu,\"link\":%lu}}",
+      "\"mqtt\":%lu,\"worker\":%lu,\"link\":%lu}}",
       (int)newest.rssi, (int)now.txPowerDbm10,
       (unsigned long)newest.freeHeap,
       (unsigned long)newest.maxAlloc, (unsigned long)newest.psramFree,
@@ -126,7 +126,7 @@ inline size_t buildSystemNowJson(char* buf, size_t cap,
       (unsigned long)now.mqttDrops, (long)now.ntpAgeS, now.resetReason,
       (unsigned long)now.hwmDisplay, (unsigned long)now.hwmClock,
       (unsigned long)now.hwmNet, (unsigned long)now.hwmMqtt,
-      (unsigned long)now.hwmCluster, (unsigned long)now.hwmLink);
+      (unsigned long)now.hwmWorker, (unsigned long)now.hwmLink);
   return o;
 }
 

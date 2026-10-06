@@ -490,26 +490,6 @@ static void test_width_override_out_of_range_is_ignored() {
   TEST_ASSERT_EQUAL(1, snap.displayWidth);
 }
 
-// #331 headless: a -1 override (deviceRole=headless-*) forces displayWidth 0
-// — the board renders nothing, beating even a full probe.
-static void test_width_override_headless_forces_zero_with_units() {
-  DisplaySnapshot snap;
-  UnitFacts facts[UNITS_AMOUNT];
-  for (int i = 0; i < UNITS_AMOUNT; i++) facts[i].state = 1;  // all present
-  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT, -1);
-  TEST_ASSERT_EQUAL(0, snap.displayWidth);
-}
-
-// The .20 case: 0 units detected. Headless forces width 0 instead of the
-// ceiling fallback, so the board stops reporting a phantom full row.
-static void test_width_override_headless_zero_when_unitless() {
-  DisplaySnapshot snap;
-  UnitFacts facts[UNITS_AMOUNT];  // all silent
-  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT, -1);
-  TEST_ASSERT_EQUAL(0, snap.displayWidth);
-  TEST_ASSERT_EQUAL(0, snap.detectedUnitCount);
-}
-
 // #516: an ok can carry a reason — "already new" must not read as "updated" —
 // and every boot-update reason has a name of its own.
 static void test_op_result_ok_carries_its_reason() {
@@ -599,8 +579,6 @@ int main(int, char**) {
   RUN_TEST(test_width_override_pins_width_with_no_units);
   RUN_TEST(test_width_override_zero_keeps_probe_behavior);
   RUN_TEST(test_width_override_out_of_range_is_ignored);
-  RUN_TEST(test_width_override_headless_forces_zero_with_units);
-  RUN_TEST(test_width_override_headless_zero_when_unitless);
   RUN_TEST(test_op_result_ok_carries_its_reason);
   RUN_TEST(test_boot_reasons_have_distinct_names);
   RUN_TEST(test_boot_failure_maps_to_its_own_reason);

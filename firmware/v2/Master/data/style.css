@@ -93,10 +93,6 @@ body {
 @keyframes pulse { 50% { opacity: .4; } }
 .health-note { text-align: center; font-size: 12px; color: var(--muted); margin-top: 8px; font-family: var(--mono); }
 .health-note b { color: var(--amber); font-weight: 600; }
-.mirror.wall { flex-direction: column; gap: 6px; }
-.mirror.wall .mrow { display: flex; gap: 4px; }
-.mirror.wall .tile { font-size: clamp(10px, calc(86.4cqw / var(--wallcols)), 46px); }
-.mirror.wall .health { margin-top: 0; justify-content: flex-start; }
 @media (prefers-reduced-motion: reduce) {
 	.tile.flip .top, .health span.bad, .health span.flashing.cur { animation: none; }
 }
@@ -200,16 +196,6 @@ input[type=range] { width: 100%; accent-color: var(--amber); margin: 12px 0 4px;
 .pill.bad { color: var(--warn); } .pill.bad::before { background: var(--warn); }
 .pill.warn { color: var(--amber); } .pill.warn::before { background: var(--amber); }
 
-/* #478: Wall-at-a-glance strip (totals + member pills, Wall tab) */
-.glance {
-	display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-	background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-	padding: 10px 14px; margin-top: 14px; font-size: 13px;
-}
-.glance-line { color: var(--ink); }
-.glance-act { color: var(--muted); font-style: italic; }
-.perrow-count { margin-left: 10px; }
-
 .status { font-size: 14px; margin: 12px 0 0; }
 .status.pending { color: var(--muted); }
 .status.success { color: var(--ok); }
@@ -300,11 +286,6 @@ summary {
 .kv span:first-child { color: var(--muted); }
 .kv span:last-child { font-family: var(--mono); }
 
-#clusterMemberTable { margin-top: 10px; }
-#clusterMemberBody input[type=number] { width: 64px; }
-#clusterMemberBody .btn { padding: 4px 9px; }
-#clusterMemberBody td { white-space: nowrap; }
-
 @media (max-width: 640px) {
 	.tab-btn { letter-spacing: 0.02em; font-size: 9px; padding: 11px 2px; }
 	.btn { padding: 10px 12px; }
@@ -319,13 +300,3 @@ summary {
 	}
 	body { padding-bottom: 56px; }
 }
-
-.mirror.wall .rowhealth { margin-top: 0; justify-content: flex-start; }
-.member-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
-.member-pill { cursor: pointer; border: 0; font: inherit; }
-.member-panel { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
-.member-panel h3 { margin: 0; font-size: 15px; }
-.member-panel .health { justify-content: flex-start; margin-top: 8px; }
-.member-panel .health span { cursor: default; }
-.member-unit-actions { margin-top: 8px; }
-.mirror.stale { opacity: .45; filter: grayscale(.8); transition: opacity .4s; }

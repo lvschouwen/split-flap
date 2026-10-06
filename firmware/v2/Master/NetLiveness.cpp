@@ -11,7 +11,7 @@ namespace {
 constexpr uint32_t PROBE_CONNECT_TIMEOUT_MS = 1500;
 constexpr uint32_t STRIKES_MAGIC = 0x4E4C5631UL;  // "NLV1"
 
-// Written by clusterTask, read by netTask and the web layer.
+// Written by workerTask, read by netTask and the web layer.
 std::atomic<uint8_t> gatewayResult{(uint8_t)NetProbe::Unknown};
 std::atomic<uint8_t> selfResult{(uint8_t)NetProbe::Unknown};
 std::atomic<uint32_t> resultAtMs{0};

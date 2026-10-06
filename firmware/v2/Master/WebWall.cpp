@@ -11,6 +11,8 @@
 //   {"name":"release","target":{"row":"<row id>"}}
 //   {"name":"arrange","args":{"rows":[{"id":"","row":0,"col":0,"width":16}, ...]}}
 //       every board of the table once, "" = the master's own row
+//   {"name":"update","target":{"row":"<row id>"}}
+//       offer the row the stored image again, whatever was held against it
 // Unit jobs, the same call for the master's own units and a row board's
 // (names and values: WallJobs.h):
 //   {"name":"home","target":{"row":"<row id>","unit":3}}
@@ -271,6 +273,24 @@ void handleJob(AsyncWebServerRequest* request, JsonVariantConst body, const Wall
   startRowJob(request, kind, op, row, generation);
 }
 
+// Not a change to the table and not a unit job: the link task is told, and
+// the row is offered the image at its next turn (GET /api/v2/wall shows it).
+void handleUpdateRetry(AsyncWebServerRequest* request, JsonVariantConst body,
+                       const WallRowsTable& table, uint32_t generation) {
+  const char* id = body["target"]["row"].as<const char*>();
+  const int row = id == nullptr || id[0] == 0 ? -1 : wallRowsFind(table, id);
+  if (row < 0) return sendError(request, 400, "target.row is not a row board of this wall");
+  if (!followerImageStored()) return sendError(request, 409, "no row image is stored");
+  const uint32_t op = wallOpBegin("update", row);
+  if (op == 0) return sendError(request, 503, "too many jobs are running");
+  if (!wallStateAskUpdateRetry(row, generation)) {
+    wallOpFinish(op, false, "the wall changed meanwhile");
+    return sendError(request, 409, "the wall changed meanwhile, ask again");
+  }
+  wallOpFinish(op, true, "the row is offered the stored image again");
+  sendOp(request, op);
+}
+
 void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   JsonVariantConst body = json;
   const char* name = body["name"].as<const char*>();
@@ -285,6 +305,7 @@ void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   if (const WallJobKind* job = wallJobFind(name)) {
     return handleJob(request, body, *job, table, generation);
   }
+  if (strcmp(name, "update") == 0) return handleUpdateRetry(request, body, table, generation);
   WebStateLock lock;
   staged = WallRequest{};
   const char* refusal = "no such action";
@@ -352,17 +373,6 @@ void handleOp(AsyncWebServerRequest* request) {
   request->send(response);
 }
 
-const char* reachName(WallRowReach reach) {
-  switch (reach) {
-    case WallRowReach::Never: return "never";
-    case WallRowReach::Up: return "up";
-    case WallRowReach::Busy: return "busy";
-    case WallRowReach::Away: return "away";
-    case WallRowReach::Lost: return "lost";
-  }
-  return "?";
-}
-
 void handleWall(AsyncWebServerRequest* request) {
   // Heap, not this task's stack: the snapshot and one row's unit facts.
   std::unique_ptr<WallSnapshot> wall(new WallSnapshot(wallStateGet()));
@@ -403,7 +413,7 @@ void handleWall(AsyncWebServerRequest* request) {
     }
     const WallRowLink& link = wall->link[i];
     row["pairedAt"] = jsonCopied(def.host);
-    row["reach"] = reachName(wallRowReach(link.contact, nowMs));
+    row["reach"] = wallRowReachName(wallRowReach(link.contact, nowMs));
     row["connects"] = link.connects;
     row["restarts"] = link.restarts;
     if (link.contact.everHeard) row["heardMsAgo"] = (uint32_t)(nowMs - link.contact.lastHeardMs);

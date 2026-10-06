@@ -22,7 +22,6 @@
 		</header>
 
 		<div id="banner" class="banner hidden"></div>
-		<div id="clusterBanner" class="banner hidden"></div>
 
 		<div id="loadError" class="load-error hidden">
 			Could not reach the display.
@@ -31,7 +30,6 @@
 
 		<nav id="tabbar" class="tabbar hidden" role="tablist" aria-label="Main">
 			<button type="button" class="tab-btn" data-tab="home" role="tab">Home</button>
-			<button type="button" class="tab-btn" data-tab="wall" role="tab">Wall</button>
 			<button type="button" class="tab-btn" data-tab="maintenance" role="tab">Maintain</button>
 			<button type="button" class="tab-btn" data-tab="settings" role="tab">Settings</button>
 			<button type="button" class="tab-btn" data-tab="system" role="tab">System</button>
@@ -44,15 +42,8 @@
 			<section id="section-home" class="panel" role="tabpanel">
 				<div class="card card-primary">
 					<h2>Send a message</h2>
-					<!-- #478: while this board is a follower row the leader owns the
-					     content — this note explains the disabled controls in place
-					     (the banner is reserved for grace/fallback alerts). -->
-					<p class="note hidden" id="composerFollowerNote"></p>
-					<!-- #318: per-row inputs (one per wall row) while leading; the
-					     single box + newline marker below is the standalone path. -->
-					<div id="perRowInputs" class="hidden"></div>
 					<div class="row">
-						<div class="grow" id="singleInputWrap">
+						<div class="grow">
 							<input type="text" id="inputText" maxlength="75" autocomplete="off"
 								placeholder="Type a message…" onkeyup="updateCharacterCount()" />
 						</div>
@@ -64,7 +55,7 @@
 						</select>
 						<button type="button" class="btn primary" id="buttonSend" onclick="sendMessage()">Send</button>
 					</div>
-					<div class="row meta-row" id="messageMetaRow">
+					<div class="row meta-row">
 						<span class="meta"><span id="labelCharacterCount">0</span> chars · <span id="labelLineCount">1</span> line(s)</span>
 						<button type="button" class="btn ghost" id="buttonNewline" onclick="addNewline()">+ Newline</button>
 						<span class="grow"></span>
@@ -108,53 +99,6 @@
 						<button type="button" class="btn danger" id="buttonStop" onclick="stopDisplay()">Stop &amp; blank display</button>
 					</div>
 					<p id="displayStatus" class="status hidden"></p>
-				</div>
-			</section>
-
-			<!-- ============ WALL (cluster) ============ -->
-			<section id="section-wall" class="panel" role="tabpanel">
-				<!-- #478: at-a-glance strip — totals + a pill per member off the
-				     same /cluster/status poll as the table below. -->
-				<div id="wallGlance" class="glance hidden"></div>
-				<div class="card" id="cardCluster">
-					<h2>Cluster <span class="pill off" id="labelClusterStatus">off</span></h2>
-					<div id="clusterFollowerView" class="hidden">
-						<p class="note" id="clusterFollowerLine"></p>
-						<div class="member-pills" id="clusterFollowerPills"></div>
-						<div class="row">
-							<button type="button" class="btn danger" id="buttonClusterLeave" onclick="leaveCluster()">Leave cluster…</button>
-						</div>
-					</div>
-					<div id="clusterLeaderView">
-						<p class="note">Drive several masters as one multi-row wall. This board becomes the leader; each member renders its slice. Followers receive this board’s firmware automatically — uncluster a board before bench-testing another build on it.</p>
-						<table id="clusterMemberTable" class="uh-table hidden">
-							<thead><tr><th>Row</th><th>Host</th><th>Col</th><th>Width</th><th>State</th><th>Rev</th><th></th></tr></thead>
-							<tbody id="clusterMemberBody"></tbody>
-						</table>
-						<div id="clusterSuggestions" class="suggestions hidden"></div>
-						<div class="row" style="margin-top:10px">
-							<div class="grow">
-								<label class="small" for="inputClusterManualHost">Add a board (Scan finds them; manual host for cross-subnet)</label>
-								<input type="text" id="inputClusterManualHost" maxlength="40" autocomplete="off" placeholder="e.g. 192.168.1.42 or host:8801" />
-							</div>
-							<button type="button" class="btn" id="buttonClusterManualAdd" onclick="addClusterManualHost()">Add</button>
-							<button type="button" class="btn" id="buttonClusterScan" onclick="scanClusterBoards()">Scan</button>
-						</div>
-						<div class="row" style="margin-top:10px">
-							<button type="button" class="btn primary" id="buttonClusterSave" onclick="saveClusterCard()">Save cluster</button>
-							<button type="button" class="btn" id="buttonClusterDisable" onclick="disableCluster()">Disable cluster…</button>
-						</div>
-						<div class="row" style="margin-top:10px">
-							<div class="grow">
-								<label class="small">ESP-01 row firmware — stored on this board, pushed to a row from its ⚙ panel</label>
-								<p class="note" id="clusterFollowerFwStored">No follower image stored yet.</p>
-							</div>
-							<input type="file" id="inputClusterFollowerFw" accept=".bin" />
-							<button type="button" class="btn" id="buttonClusterFollowerFwUpload" onclick="uploadFollowerFirmware()">Upload follower-*.bin</button>
-						</div>
-					</div>
-					<div class="member-panel hidden" id="clusterMemberPanel"></div>
-					<p id="clusterCardStatus" class="status hidden"></p>
 				</div>
 			</section>
 
@@ -223,16 +167,6 @@
 
 			<!-- ============ MAINTENANCE ============ -->
 			<section id="section-maintenance" class="panel" role="tabpanel">
-				<!-- Cluster members (#318 C): only while this board leads a wall —
-				     manage every row's units/firmware from here, same ⚙ panel as
-				     the Wall tab's cluster card. -->
-				<div class="card hidden" id="maintClusterCard">
-					<h2>Cluster members</h2>
-					<p class="note">This board is driving a wall. Open a row’s ⚙ panel to calibrate, reflash or reboot without leaving this page.</p>
-					<div class="member-pills" id="maintClusterList"></div>
-					<div class="member-panel hidden" id="maintClusterMemberPanel"></div>
-				</div>
-
 				<div class="card" id="calibrationCard">
 					<h2>Calibration</h2>
 					<p class="note">Send a test letter to every unit (shown as a transient — the clock comes back by itself), then type what each drum is <em>actually</em> showing. Apply All writes the corrected offset to each unit and re-homes it.</p>
@@ -297,21 +231,6 @@
 				</div>
 
 				<div class="card">
-					<h2>Device role <span id="labelDeviceRole" class="pill off">display</span></h2>
-					<p class="note">What this board is for. A master with no flap units on its I2C bus can take a non-display role instead of showing a blank wall row. Detection only <em>suggests</em> — you confirm the role here; it never switches on its own.</p>
-					<div id="deviceRoleSuggestion" class="banner hidden">This master detects no units — it looks unit-less. Pick a headless role below, or leave it as <b>Display</b>.</div>
-					<div class="row" style="margin-top:12px">
-						<div class="seg" id="segDeviceRole">
-							<button type="button" data-value="display">Display</button>
-							<button type="button" data-value="headless-backup">Backup master</button>
-							<button type="button" data-value="headless-monitor">Monitor</button>
-							<button type="button" data-value="headless-spare">Spare</button>
-						</div>
-					</div>
-					<p id="deviceRoleStatus" class="status hidden"></p>
-				</div>
-
-				<div class="card">
 					<h2>Master firmware <span id="labelVersion" class="pill off">—</span></h2>
 					<p class="note">Upload a compiled <code>firmware.bin</code> to flash the ESP itself. It reboots into the new firmware on success.</p>
 					<form id="masterFirmwareForm">
@@ -364,21 +283,6 @@
 					</div>
 				</div>
 
-				<!-- Cluster members (#318 D): per-row vitals fanned out from each
-				     member's /settings. ESP-01 rows carry heap/rssi/up; an S3 row's
-				     /settings has none, so it shows its rev and a dash. -->
-				<div class="card hidden" id="sysClusterCard">
-					<h2>Cluster members</h2>
-					<p class="note">Live vitals of every row this board drives, read straight from each board.</p>
-					<div class="scroll-x">
-						<table id="sysClusterTable" class="uh-table">
-							<thead>
-								<tr><th>Row</th><th>Host</th><th>FW</th><th>Free&nbsp;heap</th><th>RSSI</th><th>Uptime</th></tr>
-							</thead>
-							<tbody id="sysClusterBody"></tbody>
-						</table>
-					</div>
-				</div>
 			</section>
 
 			<section id="section-logs" class="panel" role="tabpanel">

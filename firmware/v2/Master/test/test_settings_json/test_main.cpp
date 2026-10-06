@@ -143,33 +143,6 @@ static void test_unit_arrays_carry_supplied_data() {
   TEST_ASSERT_TRUE(contains(json, "\"detectedUnitVersions\":[\"aa11\",\"bb22\",\"\",\"cc33\"]"));
 }
 
-
-static void test_cluster_fields_carry_membership() {
-  // #272: the UI banner + card gating key off these; "standalone" is the
-  // cluster-disabled default so old UIs simply ignore the block.
-  SettingsJsonFields f;
-  String json = buildSettingsJson(f);
-  TEST_ASSERT_TRUE(contains(json, "\"clusterState\":\"standalone\""));
-  TEST_ASSERT_TRUE(contains(json, "\"clusterRow\":0"));
-
-  f.clusterState = "grace";
-  f.clusterLeaderName = "wall-leader";
-  f.clusterLeaderHost = "192.168.15.22";
-  f.clusterRow = 2;
-  json = buildSettingsJson(f);
-  TEST_ASSERT_TRUE(contains(json, "\"clusterState\":\"grace\""));
-  TEST_ASSERT_TRUE(contains(json, "\"clusterLeaderName\":\"wall-leader\""));
-  TEST_ASSERT_TRUE(contains(json, "\"clusterLeaderHost\":\"192.168.15.22\""));
-  TEST_ASSERT_TRUE(contains(json, "\"clusterRow\":2"));
-
-  // #277: the poll is the wall mirror's collapse fallback when the SSE
-  // stream misses the uncluster transition.
-  TEST_ASSERT_TRUE(contains(json, "\"clusterLeading\":false"));
-  f.clusterLeading = true;
-  json = buildSettingsJson(f);
-  TEST_ASSERT_TRUE(contains(json, "\"clusterLeading\":true"));
-}
-
 static void test_unit_count_override_field_serializes() {
   SettingsJsonFields f;
   String json = buildSettingsJson(f);
@@ -179,26 +152,8 @@ static void test_unit_count_override_field_serializes() {
   TEST_ASSERT_TRUE(contains(json, "\"unitCountOverride\":8"));
 }
 
-static void test_device_role_defaults_to_display_and_no_suggestion() {
-  // #329: old UIs are unaffected — role defaults to "display" and the nudge
-  // is off until detection latches on a genuinely unit-less board.
-  SettingsJsonFields f;
-  String json = buildSettingsJson(f);
-  TEST_ASSERT_TRUE(contains(json, "\"deviceRole\":\"display\""));
-  TEST_ASSERT_TRUE(contains(json, "\"headlessSuggested\":false"));
-}
-
-static void test_device_role_and_suggestion_serialize() {
-  SettingsJsonFields f;
-  f.deviceRole = "headless-backup";
-  f.headlessSuggested = true;
-  String json = buildSettingsJson(f);
-  TEST_ASSERT_TRUE(contains(json, "\"deviceRole\":\"headless-backup\""));
-  TEST_ASSERT_TRUE(contains(json, "\"headlessSuggested\":true"));
-}
-
-// #335: per-board vitals so S3 cluster members surface in the System-tab
-// panel — same keys/units as the ESP-01 (heap/rssi/up), plus the plat tag.
+// #335: per-board vitals — same keys/units as the ESP-01 (heap/rssi/up),
+// plus the plat tag.
 static void test_vitals_default_to_esp32s3_plat() {
   SettingsJsonFields f;
   String json = buildSettingsJson(f);
@@ -227,10 +182,7 @@ int main(int, char**) {
   RUN_TEST(test_string_values_are_json_escaped);
   RUN_TEST(test_control_characters_use_unicode_escapes);
   RUN_TEST(test_unit_arrays_carry_supplied_data);
-  RUN_TEST(test_cluster_fields_carry_membership);
   RUN_TEST(test_unit_count_override_field_serializes);
-  RUN_TEST(test_device_role_defaults_to_display_and_no_suggestion);
-  RUN_TEST(test_device_role_and_suggestion_serialize);
   RUN_TEST(test_vitals_default_to_esp32s3_plat);
   RUN_TEST(test_vitals_serialize_values);
   RUN_TEST(test_rescue_slot_defaults_to_empty_rev);

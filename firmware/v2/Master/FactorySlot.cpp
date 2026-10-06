@@ -209,7 +209,7 @@ String factoryWriteError() { return lastError; }
 // deliberately happens OUTSIDE the lock, and rescueSlotCurrent() never
 // computes: a reader that arrives before the first refresh gets the
 // conservative default (absent + warn), never a stale all-clear and never a
-// 60 ms stall on the task serving the cluster wire.
+// 60 ms stall on the task serving every web request.
 static portMUX_TYPE rescueFactsMux = portMUX_INITIALIZER_UNLOCKED;
 static bool rescueFactsValid = false;
 static RescueSlotFacts rescueFacts;

@@ -1,4 +1,4 @@
-#include "NetLiveness.h"  // #501 probes (clusterTask)
+#include "NetLiveness.h"  // #501 probes (workerTask)
 #include "Tasks.h"
 
 #include <Arduino.h>
@@ -16,18 +16,11 @@
 // reads it at every fold; 0 = auto (probe-derived width).
 static std::atomic<int> unitWidthOverride{0};
 
-// #331 headless mode: true while deviceRole is a headless role. It forces
-// displayWidth 0 (the board renders nothing, no phantom row), overriding the
-// probe ceiling AND the #289 override — passed to displayApplyUnitFacts as
-// the -1 sentinel via effectiveWidthOverride(). Seeded by tasksInit(),
-// pushed live by the settings drain (netTask).
-static std::atomic<bool> deviceRoleHeadless{false};
 // #412: false suppresses the boot auto-install so the fleet can be converged
 // unit by unit. Read once by displayTask at boot; pushed live by the settings
 // drain so a mid-session change lands without a reboot.
 static std::atomic<bool> reflashOnBootEnabled{true};
-// #227: this board's own quiet setting, read by every content producer. A
-// cluster member follows its leader's instead (ClusterFollowerView::quiet).
+// #227: the wall's quiet setting, read by every content producer.
 static std::atomic<bool> quietEnabled{false};
 
 void tasksSetQuiet(bool quiet) {
@@ -40,10 +33,6 @@ void tasksSetUnitCountOverride(int count) {
   unitWidthOverride.store(count, std::memory_order_relaxed);
 }
 
-void tasksSetDeviceRole(const String& role) {
-  deviceRoleHeadless.store(isHeadlessRole(role), std::memory_order_relaxed);
-}
-
 void tasksSetReflashOnBoot(bool enabled) {
   reflashOnBootEnabled.store(enabled, std::memory_order_relaxed);
 }
@@ -52,21 +41,16 @@ bool tasksReflashOnBoot() {
   return reflashOnBootEnabled.load(std::memory_order_relaxed);
 }
 
-// The width-override value handed to displayApplyUnitFacts: -1 (force width 0)
-// while headless, else the #289 unit-count override (0 = auto).
+// The width-override value handed to displayApplyUnitFacts: the #289
+// unit-count override (0 = auto).
 int effectiveWidthOverride() {
-  return deviceRoleHeadless.load(std::memory_order_relaxed)
-             ? -1
-             : unitWidthOverride.load(std::memory_order_relaxed);
+  return unitWidthOverride.load(std::memory_order_relaxed);
 }
 
 bool tasksUnitCountOverridePinned() {
   return unitWidthOverride.load(std::memory_order_relaxed) > 0;
 }
 
-#include "ClusterFollower.h"
-#include "ClusterLeader.h"
-#include "HeadlessPolicy.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "OdometerLog.h"
@@ -98,11 +82,11 @@ static constexpr uint32_t DISPLAY_TASK_STACK = 16384;
 // tzset/localtime parse of the POSIX TZ string runs deep in the ticker.
 // 4096 fared little better: 364 B HWM on BOTH wall masters (#434, first
 // /system/stats hwm readout — deterministic, not noise), one deeper library
-// path away from the #414 canary-panic class. 8192 matches net/cluster;
+// path away from the #414 canary-panic class. 8192 matches the other domain tasks;
 // static BSS, RAM is plentiful.
 static constexpr uint32_t CLOCK_TASK_STACK = 8192;
-// netTask is the heaviest domain task: wifi + web + flashLog + cluster
-// follower + SSE + system-stats all share one loop. 4096 overflowed the
+// netTask is the heaviest domain task: wifi + web + flashLog + SSE +
+// system-stats all share one loop. 4096 overflowed the
 // canary on real hardware (split-flap-c8a746) inside flashLogTick's
 // LittleFS.open → fopen → esp_flash_read, whose cross-core cache-disable
 // IPC is the deepest chain netTask ever runs; the #294-era SSE/stats work
@@ -116,15 +100,10 @@ static constexpr uint32_t NET_TASK_STACK = 12288;
 // Sizing policy since then (#480): >=50% margin at the measured peak — a
 // never-exercised path can need far more than the busiest observed one.
 static constexpr uint32_t MQTT_TASK_STACK = 16384;
-// esp_http_client + String assembly for the cluster fan-out (#273). The digest
-// build puts a full ClusterLeaderStatus (8 members x 4 Strings) + String
-// mirror[8] on the stack; the same objects are rebuilt by the reboot-hold
-// fan-out. This is the DEEPEST call stack on the board — HTTP client, SHA-256
-// HMAC signing on every leader-wire request, and the rollout chunk pump all
-// nest under it — and the field HWM confirms it: 8192 left only 1016 B free on
-// a leader whose boot included a follower rollout (#437). RAM is plentiful
-// (110 KB+ free heap), so buy the margin rather than run this one close.
-static constexpr uint32_t CLUSTER_TASK_STACK = 16384;
+// Everything that blocks on the network and so may not run on the link task
+// or netTask: the pairing POST to a row board (HTTP client, 1.5 s timeouts)
+// and the two liveness probes. Measured 8.8 KB at its peak.
+static constexpr uint32_t WORKER_TASK_STACK = 16384;
 // lwIP socket calls, one log line's vsnprintf, nanopb's decode, and the own
 // row's service with its copy of the display snapshot; the message structs
 // and the read buffer are static, not on this stack. Measured peak 4.2 KB
@@ -142,12 +121,12 @@ static constexpr UBaseType_t DISPLAY_QUEUE_DEPTH = 16;
 static constexpr UBaseType_t MQTT_INBOX_DEPTH = 8;
 
 static StaticTask_t displayTaskBuf, clockTaskBuf, netTaskBuf, mqttTaskBuf,
-    clusterTaskBuf, linkTaskBuf;
+    workerTaskBuf, linkTaskBuf;
 static StackType_t displayTaskStack[DISPLAY_TASK_STACK];
 static StackType_t clockTaskStack[CLOCK_TASK_STACK];
 static StackType_t netTaskStack[NET_TASK_STACK];
 static StackType_t mqttTaskStack[MQTT_TASK_STACK];
-static StackType_t clusterTaskStack[CLUSTER_TASK_STACK];
+static StackType_t workerTaskStack[WORKER_TASK_STACK];
 static StackType_t linkTaskStack[LINK_TASK_STACK];
 
 static StaticQueue_t displayQueueBuf;
@@ -159,7 +138,7 @@ static uint8_t mqttInboxStorage[MQTT_INBOX_DEPTH * sizeof(MqttInboxMessage)];
 static QueueHandle_t mqttInbox = nullptr;
 
 static TaskHandle_t displayTaskHandle, clockTaskHandle, netTaskHandle,
-    mqttTaskHandle, clusterTaskHandle, linkTaskHandle;
+    mqttTaskHandle, workerTaskHandle, linkTaskHandle;
 
 // --- display snapshot (single writer: displayTask) ---------------------------
 
@@ -229,7 +208,6 @@ static void netTaskMain(void* arg) {
     wifiServiceTick();
     crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_WEB_LOOP);
     webEndpointsLoop(*ctx->settings, *ctx->store);
-    clusterFollowerServiceTick(*ctx->store);  // #272: decay + NVS + renders
     webDisplayEventsTick();  // #251: SSE push on display text change
     statusLedTick();
     systemStatsTick();  // #245/#251: self-throttled, 1 s fast + 5 s ring
@@ -260,24 +238,19 @@ static void mqttTaskMain(void*) {
   }
 }
 
-// Leader-side cluster fan-out (#273): ALL outbound cluster HTTP lives in
-// this task (esp_http_client, 1.5 s timeouts) — a dead follower stalls
-// only the fan-out, never netTask. The body is clusterLeaderTick()
-// (ClusterLeader.cpp); disabled clusters make it a no-op read.
-static void clusterTaskMain(void*) {
-  SerialPrintf("clusterTask up on core %d\n", xPortGetCoreID());
+// Blocking network jobs (see WORKER_TASK_STACK): a row that does not answer
+// stalls only this task, never the link or netTask.
+static void workerTaskMain(void*) {
+  SerialPrintf("workerTask up on core %d\n", xPortGetCoreID());
   if (esp_err_t e = wdtSubscribeSelf(); e != ESP_OK)
-    SerialPrintf("wdt: cluster subscribe -> %s\n", esp_err_to_name(e));
+    SerialPrintf("wdt: worker subscribe -> %s\n", esp_err_to_name(e));
   for (;;) {
     wdtFeed();
-    crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_CLUSTER);
-    // A wall with rows of its own (the wall link) has taken the old cluster's
-    // place: the leader stands down and its members fall back by themselves.
-    if (!wallShowActive()) clusterLeaderTick();
+    crashCtxMark(CRASH_SLOT_WORKER, CRASH_ACT_WORKER);
     netLivenessProbeTick();  // #501: the gateway and own-server probes
     wallPairTick();          // #566: pairing and the other rows-table requests
     wallOwnJobTick();        // #566: the end of a unit job on the own row
-    crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_IDLE);
+    crashCtxMark(CRASH_SLOT_WORKER, CRASH_ACT_IDLE);
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
@@ -293,8 +266,6 @@ void tasksInit(MasterSettings& settings, SettingsStore& store) {
   // operator set it to prevent.
   reflashOnBootEnabled.store(settings.reflashOnBoot, std::memory_order_relaxed);
   quietEnabled.store(settings.quiet, std::memory_order_relaxed);  // #227
-  deviceRoleHeadless.store(isHeadlessRole(settings.deviceRole),
-                           std::memory_order_relaxed);  // #331
   snapshotMutex = xSemaphoreCreateMutex();
   if (snapshotMutex == nullptr) {
     // Boot-time OOM: taking a null handle is UB, so fail loudly instead —
@@ -323,9 +294,9 @@ void tasksInit(MasterSettings& settings, SettingsStore& store) {
   mqttTaskHandle = xTaskCreateStaticPinnedToCore(
       mqttTaskMain, "mqtt", MQTT_TASK_STACK, nullptr, DOMAIN_TASK_PRIORITY,
       mqttTaskStack, &mqttTaskBuf, NETWORK_CORE);
-  clusterTaskHandle = xTaskCreateStaticPinnedToCore(
-      clusterTaskMain, "cluster", CLUSTER_TASK_STACK, nullptr,
-      DOMAIN_TASK_PRIORITY, clusterTaskStack, &clusterTaskBuf, NETWORK_CORE);
+  workerTaskHandle = xTaskCreateStaticPinnedToCore(
+      workerTaskMain, "worker", WORKER_TASK_STACK, nullptr,
+      DOMAIN_TASK_PRIORITY, workerTaskStack, &workerTaskBuf, NETWORK_CORE);
   linkTaskHandle = xTaskCreateStaticPinnedToCore(
       wallLinkTaskMain, "link", LINK_TASK_STACK, nullptr, DOMAIN_TASK_PRIORITY,
       linkTaskStack, &linkTaskBuf, NETWORK_CORE);
@@ -341,8 +312,8 @@ TasksStackHwm tasksStackHwm() {
     h.net = (uint32_t)uxTaskGetStackHighWaterMark(netTaskHandle);
   if (mqttTaskHandle)
     h.mqtt = (uint32_t)uxTaskGetStackHighWaterMark(mqttTaskHandle);
-  if (clusterTaskHandle)
-    h.cluster = (uint32_t)uxTaskGetStackHighWaterMark(clusterTaskHandle);
+  if (workerTaskHandle)
+    h.worker = (uint32_t)uxTaskGetStackHighWaterMark(workerTaskHandle);
   if (linkTaskHandle)
     h.link = (uint32_t)uxTaskGetStackHighWaterMark(linkTaskHandle);
   return h;
@@ -351,14 +322,14 @@ TasksStackHwm tasksStackHwm() {
 void tasksHeartbeatReport() {
   Serial.printf(
       "[%8lu ms] heap %u KB free (min %u KB), psram %u KB free | stack HWM: "
-      "display %u, clock %u, net %u, mqtt %u, cluster %u, link %u, loop %u\n",
+      "display %u, clock %u, net %u, mqtt %u, worker %u, link %u, loop %u\n",
       (unsigned long)millis(), ESP.getFreeHeap() / 1024,
       ESP.getMinFreeHeap() / 1024, ESP.getFreePsram() / 1024,
       (unsigned)uxTaskGetStackHighWaterMark(displayTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(clockTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(netTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(mqttTaskHandle),
-      (unsigned)uxTaskGetStackHighWaterMark(clusterTaskHandle),
+      (unsigned)uxTaskGetStackHighWaterMark(workerTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(linkTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 }

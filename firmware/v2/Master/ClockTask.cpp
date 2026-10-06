@@ -1,8 +1,7 @@
 // ClockTask.cpp — the 1 Hz mode ticker (#192), split out of Tasks.cpp
 // (#352). Re-shows the active mode's content — clock time or the retained
-// message — via the pure decideClockTick(); reroutes LOGICAL grid content to
-// the cluster leader while leading (#273) and re-shows the held segment
-// while clustered (#272).
+// message — via the pure decideClockTick(); with row boards the logical
+// content goes to the wall instead (WallShow.h).
 
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -12,8 +11,6 @@
 #include <sys/time.h>
 
 #include "ClockPolicy.h"
-#include "ClusterFollower.h"
-#include "ClusterLeader.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "TaskWatchdog.h"
@@ -57,16 +54,8 @@ void clockTaskMain(void*) {
       notifWasActive = false;
       lastQueued = "";
     }
-    // Quiet (#227): no content from this board's own modes. A cluster member
-    // follows its leader's flag instead, further down.
-    ClusterFollowerView membership = clusterFollowerViewGet();
-    if (!membership.gated && tasksQuiet()) continue;
-    // Leader reroute (#273): with the cluster enabled the ticker's product
-    // becomes LOGICAL grid content handed to the cluster layer — which
-    // dedups, slices, and stages this master's own row on the shared
-    // commitAt clock — so nothing enqueues from here. Overlays still win:
-    // the gates above run first, and the self-row re-show after an overlay
-    // belongs to clusterTask.
+    // Quiet (#227): no content from the modes.
+    if (tasksQuiet()) continue;
     // A wall with row boards (#566): the logical content goes to the wall,
     // which lays it out and flips every row at one instant. The clock's next
     // minute is handed over ahead of the boundary (WallShowPolicy.h).
@@ -88,55 +77,15 @@ void clockTaskMain(void*) {
       lastQueued = "";  // the ticker owns nothing while the wall shows
       continue;
     }
-    if (clusterLeaderEnabled()) {
-      WebContentSnapshot leaderContent = webDisplayContentSnapshot();
-      time_t leaderNow = time(nullptr);
-      if (leaderContent.deviceMode == "clock") {
-        // Un-synced clock holds (v1 deviation, same as decideClockTick).
-        if (clockIsTimeSynced(leaderNow)) {
-          clusterLeaderSubmitClock(
-              formatDateTime(leaderNow, CLOCK_FORMAT),
-              formatDateTime(leaderNow, CLUSTER_DATE_FORMAT),
-              leaderContent.alignment, leaderContent.flapSpeed);
-        }
-      } else if (leaderContent.deviceMode == "text" &&
-                 leaderContent.inputText.length() > 0) {
-        clusterLeaderSubmitText(leaderContent.inputText,
-                                leaderContent.alignment,
-                                leaderContent.flapSpeed);
-      }
-      lastQueued = "";  // the ticker owns nothing while leading
-      continue;
-    }
 
     clockTickObserve(lastQueued, String(snap.currentText));
 
     WebContentSnapshot content = webDisplayContentSnapshot();
     time_t now = time(nullptr);
 
-    // Cluster gate (#272): while this board is a cluster member the leader
-    // owns the content — the ticker's job becomes re-showing the held
-    // segment (restores the wall after transients and reset-units). While a
-    // commitAt render is in flight it stands down entirely so a re-show
-    // can't preempt the synchronized flip. LeaderLost (leader silent ~2
-    // min) shows the follower's OWN clock through the normal clock path.
-    const ClusterFollowerView& cluster = membership;
-    if (cluster.gated && cluster.renderPending) continue;
-    // Quiet (#227): a member of a quiet wall moves nothing by itself — not its
-    // own clock when the leader goes silent, and not the re-show that would
-    // restore its segment after a Stop either.
-    if (cluster.gated && cluster.quiet) continue;
-
     ClockTickInput in;
-    if (cluster.gated && !cluster.forcesLocalClock) {
-      in.deviceMode = "text";
-      in.inputText = cluster.heldSegment;  // "" until a render arrives → no-op
-    } else if (cluster.gated) {
-      in.deviceMode = "clock";
-    } else {
-      in.deviceMode = content.deviceMode;
-      in.inputText = content.inputText;
-    }
+    in.deviceMode = content.deviceMode;
+    in.inputText = content.inputText;
     in.timeSynced = clockIsTimeSynced(now);
     in.formattedTime = in.timeSynced ? formatDateTime(now, CLOCK_FORMAT) : "";
     in.displayBusy = snap.busy;
@@ -145,14 +94,8 @@ void clockTaskMain(void*) {
 
     ClockTickDecision d = decideClockTick(in);
     if (d.enqueue) {
-      // Segment re-shows are pre-positioned by the leader: rendered Left at
-      // the speed the render arrived with, like the original enqueue.
-      bool segmentReshow = cluster.gated && !cluster.forcesLocalClock;
       DisplayCommand cmd =
-          segmentReshow
-              ? makeShowTextCommand(d.text, "left", cluster.heldSpeed)
-              : makeShowTextCommand(d.text, content.alignment,
-                                    content.flapSpeed);
+          makeShowTextCommand(d.text, content.alignment, content.flapSpeed);
       if (displayEnqueue(cmd)) {
         lastQueued = d.text;
       }

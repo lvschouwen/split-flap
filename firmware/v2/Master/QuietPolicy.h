@@ -10,10 +10,9 @@
 //   - Stored in NVS, so a board that restarts at night without a broker stays
 //     quiet. The MQTT command is expected RETAINED by its sender, so a board
 //     that was offline for the change still receives it on reconnect.
-//   - In a cluster the leader owns the state and passes it to its members on
-//     every ping (shared/ClusterQuiet.h — additive, with its own mac for a
-//     keyed member): a row that loses its leader at night would otherwise
-//     start its own clock.
+//   - The master owns the state and tells every row board (Quiet on the wall
+//     link, at its Hello and on every change): a row that loses its master at
+//     night would otherwise start its own clock.
 //
 // Pure logic, natively tested (test_quiet_policy). v2-only — MqttHelpers.h
 // stays the v1-tracking copy, so this entity is not part of its discovery
@@ -21,7 +20,6 @@
 #include <Arduino.h>
 #include <ctype.h>
 
-#include "ClusterQuiet.h"  // the ping key the leader passes it on with
 #include "MqttHelpers.h"  // MQTT_FMT/mqttSnprintf + MQTT_DEVICE_BLOCK
 
 // "ON"/"OFF" as Home Assistant's switch sends them; also 1/0 and true/false.

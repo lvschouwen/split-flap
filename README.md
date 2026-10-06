@@ -27,9 +27,9 @@ This project has been forked from the brilliant [Split Flap Project](https://git
 
 A mechanical split-flap display driven by an **ESP32-S3 master** that talks over I2C to a chain of **Arduino-Nano flap units** (one Nano per flap drum). The master hosts the web UI, WiFi portal, NTP clock, MQTT/Home-Assistant integration, and pushes both master and unit firmware over the air.
 
-Multiple masters can be joined into a **multi-display cluster** — a wall of N rows driven as one logical display over your LAN, with automatic leader/follower coordination and firmware convergence across the fleet.
+A Split-Flap can have more rows than the master drives itself: each further row hangs on a cheap **ESP-01 row board** that the master pairs with over your LAN. The master lays the text out over all rows, flips them at one instant, and keeps the row boards on its stored row image.
 
-> **Release:** the current stack is **v2** — the full port of the original ESP8266 firmware onto the ESP32-S3 plus the multi-display cluster. Releases are date-versioned (`vYYYY.MM.DD`); see the [releases page](https://github.com/lvschouwen/split-flap/releases) for notes and firmware binaries.
+> **Release:** the current stack is **v2** — the full port of the original ESP8266 firmware onto the ESP32-S3 plus row boards for multi-row walls. Releases are date-versioned (`vYYYY.MM.DD`); see the [releases page](https://github.com/lvschouwen/split-flap/releases) for notes and firmware binaries.
 
 ## Firmware layout
 
@@ -37,9 +37,9 @@ Everything is built with [PlatformIO](https://platformio.org/) — no Arduino ID
 
 | Folder | Target | Role |
 |---|---|---|
-| `firmware/v2/Master/` | ESP32-S3-WROOM-1 (N16R8) | **The master.** Web UI, WiFi, NTP, MQTT/HA, I2C unit bus, OTA, cluster leader/follower. |
+| `firmware/v2/Master/` | ESP32-S3-WROOM-1 (N16R8) | **The master.** Web UI, WiFi, NTP, MQTT/HA, I2C unit bus, OTA, the wall link to its row boards. |
 | `firmware/v2/Unit/` | Arduino Nano | Per-flap unit: stepper homing, I2C slave, EEPROM offset/address. |
-| `firmware/v2/FollowerEsp01/` | ESP8266 ESP-01 | Optional "dumb row" — turns legacy ESP-01 master hardware into a cheap cluster follower row under an S3 leader. |
+| `firmware/v2/FollowerEsp01/` | ESP8266 ESP-01 | Optional row board — turns legacy ESP-01 master hardware into a further row of an S3 master's wall. |
 | `firmware/v2/Rescue/` | ESP32-S3 (factory slot) | Break-glass recovery image; installs a good master image when the app slots are bad. |
 | `firmware/v2/Bootloader/` | ESP32-S3 | Custom second-stage bootloader (adds a factory-reset button on GPIO 4). |
 | `firmware/v2/UnitBootloader/` | Arduino Nano | Vendored + patched **twiboot** for reflashing units over I2C (see its README). |
@@ -125,19 +125,20 @@ Units carry the [patched twiboot bootloader](./firmware/v2/UnitBootloader/README
 - auto-installs it on any Nano it finds sitting in twiboot (e.g. a freshly ICSP-flashed one), and
 - reflashes every unit on demand via **Maintenance → Actions → Flash all units** (or automatically for out-of-date units after a master OTA).
 
-## Multi-display cluster
+## Walls of several rows
 
-Several masters on the same LAN can be joined into one logical wall. One master is the **leader**; the others are **followers** (either full S3 masters or cheap ESP-01 "dumb rows" running `firmware/v2/FollowerEsp01`). The leader wraps/aligns your text across the grid and drives every row in sync; followers render their assigned segment.
+One ESP32-S3 master per Split-Flap; every further row is an ESP-01 row board (`firmware/v2/FollowerEsp01`) on the same LAN. The row board dials its master and keeps one connection open (the wall link); the master wraps and aligns your text across the grid and names the instant all rows flip.
 
-- Configure it from **Settings → Cluster** (member editor, network scan, live status pills, rollout progress).
-- The leader converges follower firmware to its own build automatically (rev mismatch in the join handshake triggers a streamed OTA), so the fleet stays on one image.
-- Leader/follower wire traffic is authenticated (per-member HMAC) and LAN-scoped; if the leader dies, a follower can be promoted.
+- Pair a row from the master: `curl -X POST http://<master>/api/v2/action -H 'Content-Type: application/json' -d '{"name":"pair","target":{"host":"<row address>"}}'`; `release` and `arrange` change the wall the same way, and `GET /api/v2/wall` shows every board.
+- Unit jobs (home, calibrate, self-test, unit firmware, bootloader) go through the same call for the master's own units and a row board's.
+- Upload a `follower-<rev>.bin` once to the master (`POST /firmware/row?md5=`); every row board on another rev is offered it and fetches it.
+- All boards are assumed to be on your own LAN: the link is not authenticated.
 
-Design details: [`docs/superpowers/specs/2026-07-13-multi-display-cluster-design.md`](./docs/superpowers/specs/2026-07-13-multi-display-cluster-design.md) and the sibling cluster specs.
+Design: [`docs/superpowers/specs/2026-10-05-wall-link-and-console-design.md`](./docs/superpowers/specs/2026-10-05-wall-link-and-console-design.md).
 
 ## MQTT / Home Assistant
 
-The display joins Home Assistant over MQTT with automatic discovery: inbound notification text (shown for a dwell, then reverts), a **Mode** select (text/clock), and health telemetry — including per-unit wear and cluster health when leading. Configure it entirely from **Settings → MQTT Broker** (host, port, username, password); leave the host empty to keep MQTT off. If a broker is advertised over mDNS on your LAN, **Detect broker** prefills host/port. Create a dedicated HA user for the display rather than reusing your own login.
+The display joins Home Assistant over MQTT with automatic discovery: inbound notification text (shown for a dwell, then reverts), a **Mode** select (text/clock), and health telemetry — including per-unit wear and a wall problem sensor when the master has row boards. Configure it entirely from **Settings → MQTT Broker** (host, port, username, password); leave the host empty to keep MQTT off. If a broker is advertised over mDNS on your LAN, **Detect broker** prefills host/port. Create a dedicated HA user for the display rather than reusing your own login.
 
 ## Device name & running multiple displays
 

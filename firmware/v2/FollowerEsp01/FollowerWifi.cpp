@@ -215,11 +215,6 @@ void wifiInit(AsyncWebServer& server) {
 }
 
 void wifiServicesInit(int rowWidth) {
-  // Epoch-only SNTP: commitAt flips stay in unison with the wall; unsynced
-  // renders fall back to immediate (FollowerPolicy rule). No blocking wait
-  // — the row is useful before sync.
-  configTime(0, 0, "pool.ntp.org");
-
   if (MDNS.begin(effectiveDeviceName.c_str())) {
     MDNS.addService("http", "tcp", 80);
     MDNS.addService("splitflap", "tcp", 80);

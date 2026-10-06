@@ -14,7 +14,6 @@
 #include "JsonEscape.h"  // appendJsonString
 #include <Arduino.h>
 
-#include "HeadlessPolicy.h"
 
 struct SettingsJsonFields {
   // Bus/probe results. unitsAmount is the per-unit array length (the
@@ -30,11 +29,6 @@ struct SettingsJsonFields {
   String alignment;
   String flapSpeed;  // string-typed on the wire, v1 parity
   String deviceMode;
-  // #329 headless mode: the stored role + the auto-detect nudge. "display"
-  // (default) keeps old UIs unaffected; headlessSuggested drives the "you
-  // look unit-less — pick a role" banner (detection only ever suggests).
-  String deviceRole = DEVICE_ROLE_DISPLAY;
-  bool headlessSuggested = false;
   String timezonePosix;
   String deviceName;           // raw stored value ("" = unset)
   String effectiveDeviceName;  // what the device actually uses right now
@@ -75,24 +69,13 @@ struct SettingsJsonFields {
   bool reflashOnBoot = true;  // #412 boot auto-install brake
   bool quiet = false;         // #227 quiet mode
 
-  // Per-board vitals (#335) so cluster members surface heap/rssi/uptime in
-  // the System-tab panel — same keys/units as the ESP-01 follower's #297
-  // block. `plat` is this board's platform tag (esp32s3), the S3 counterpart
-  // to the ESP-01's "esp01"; the member UI keys the model label off it.
+  // Per-board vitals (#335), same keys/units as the ESP-01 row board's
+  // /settings. `plat` is this board's platform tag (esp32s3), the S3
+  // counterpart to the ESP-01's "esp01"; ota-flash.sh picks the image by it.
   uint32_t heapBytes = 0;
   int rssiDbm = 0;
   uint32_t upSeconds = 0;
-  String plat = "esp32s3";  // mirrors ClusterLeaderPolicy.h CLUSTER_LEADER_PLAT
-
-  // Cluster membership (#272): drives the follower banner + card gating.
-  // "standalone" = not clustered (the cluster-disabled default).
-  String clusterState = "standalone";
-  String clusterLeaderName;
-  String clusterLeaderHost;
-  int clusterRow = 0;
-  // Leader side (#277): the browser's wall mirror collapses on the poll
-  // when this drops and the SSE stream missed the transition.
-  bool clusterLeading = false;
+  String plat = "esp32s3";
 };
 
 
@@ -133,8 +116,6 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"alignment\":";           appendJsonString(out, f.alignment);
   out += ",\"flapSpeed\":";           appendJsonString(out, f.flapSpeed);
   out += ",\"deviceMode\":";          appendJsonString(out, f.deviceMode);
-  out += ",\"deviceRole\":";          appendJsonString(out, f.deviceRole);
-  out += ",\"headlessSuggested\":";   appendJsonBool(out, f.headlessSuggested);
   out += ",\"timezonePosix\":";       appendJsonString(out, f.timezonePosix);
   out += ",\"deviceName\":";          appendJsonString(out, f.deviceName);
   out += ",\"effectiveDeviceName\":"; appendJsonString(out, f.effectiveDeviceName);
@@ -168,13 +149,7 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"unitCountOverride\":"; out += f.unitCountOverride;
   out += ",\"reflashOnBoot\":";     out += f.reflashOnBoot ? "true" : "false";
   out += ",\"quiet\":";             out += f.quiet ? "true" : "false";
-  out += ",\"clusterState\":";      appendJsonString(out, f.clusterState);
-  out += ",\"clusterLeaderName\":"; appendJsonString(out, f.clusterLeaderName);
-  out += ",\"clusterLeaderHost\":"; appendJsonString(out, f.clusterLeaderHost);
-  out += ",\"clusterRow\":";        out += f.clusterRow;
-  out += ",\"clusterLeading\":";    appendJsonBool(out, f.clusterLeading);
-  // #335 per-board vitals — same keys/units as the ESP-01 follower so the
-  // cluster member panel renders S3 rows identically.
+  // #335 per-board vitals — same keys/units as the ESP-01 row board.
   out += ",\"heap\":";              out += String(f.heapBytes);
   out += ",\"rssi\":";              out += f.rssiDbm;
   out += ",\"up\":";                out += String(f.upSeconds);

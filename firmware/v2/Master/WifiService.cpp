@@ -323,10 +323,8 @@ static void startOnline() {
   clockServiceApplyTz(*liveSettings);  // v1 parity: NTP kicked after join
   if (MDNS.begin(deviceName.c_str())) {
     MDNS.addService("http", "tcp", 80);
-    // Cluster discovery (#274): every v2 master advertises itself so a
-    // leader's Cluster card can browse for candidates. TXT width is the
-    // at-advertise-time hint only (0 if the boot probe hasn't finished);
-    // the join handshake stays the authoritative width fact.
+    // Every board of a Split-Flap advertises itself; TXT width is the
+    // at-advertise-time hint only (0 if the boot probe hasn't finished).
     MDNS.addService("splitflap", "tcp", 80);
     MDNS.addServiceTxt("splitflap", "tcp", "name", deviceName.c_str());
     MDNS.addServiceTxt("splitflap", "tcp", "rev", GIT_REV);
@@ -468,7 +466,7 @@ void wifiServiceTick() {
   }
 
   // #501: is traffic actually moving while the link says it is up? Once a
-  // second; the probes themselves run on clusterTask.
+  // second; the probes themselves run on workerTask.
   static uint32_t livenessNextMs = 0;
   static NetLivenessState liveness;
   if (!restartPending && (int32_t)(millis() - livenessNextMs) >= 0) {

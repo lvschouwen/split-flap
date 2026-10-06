@@ -23,7 +23,7 @@
 
 #define NET_LIVENESS_PROBE_INTERVAL_MS 30000UL
 // A result older than this says nothing about now (the prober shares its task
-// with the cluster fan-out and can be busy for a while).
+// with the pairing requests and can be busy for a while).
 #define NET_LIVENESS_PROBE_STALE_MS 120000UL
 #define NET_LIVENESS_BASE_MS (10UL * 60UL * 1000UL)
 #define NET_LIVENESS_MAX_MS (6UL * 60UL * 60UL * 1000UL)

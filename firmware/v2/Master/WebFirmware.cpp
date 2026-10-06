@@ -15,6 +15,7 @@
 #include <LittleFS.h>
 
 #include "FactorySlot.h"
+#include "FollowerImagePolicy.h"  // followerImageUploadAccepts
 #include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
@@ -63,6 +64,11 @@ static OtaRejection rescueRejection;
 // never reports "installed" for a POST that carried no file part.
 static AsyncWebServerRequest* rescueOwnerRequest = nullptr;
 
+// Same rejection pattern for POST /firmware/row, the stored row image.
+// Independent of the two flows above.
+static int rowImageRejectStatus = 0;
+static String rowImageRejectReason;
+
 void webFirmwareRegister(AsyncWebServer& server) {
   // --- the stored row image, for the row boards (#559/#566) -------------------
   // A row that was offered the image over the wall link (wl.Update) fetches
@@ -82,6 +88,79 @@ void webFirmwareRegister(AsyncWebServer& server) {
     request->onDisconnect([]() { followerImageReleaseRelay(); });
     request->send(LittleFS, FOLLOWER_IMAGE_PATH, "application/octet-stream");
   });
+
+  // Upload a follower-<rev>.bin ONCE; it is held on the `storage` LittleFS and
+  // offered to every row board on another rev (WallUpdatePolicy.h). Same
+  // async-context exception as the master OTA: the stream is accumulated in
+  // PSRAM here, MD5-verified, then handed to netTask. The follower-*.bin
+  // prefix guard mirrors ota-flash.sh (an S3 image bricks the ESP-01).
+  server.on(
+      "/firmware/row", HTTP_POST,
+      [](AsyncWebServerRequest* request) {
+        if (rowImageRejectStatus != 0) {
+          int s = rowImageRejectStatus;
+          String r = rowImageRejectReason;
+          rowImageRejectStatus = 0;
+          rowImageRejectReason = "";
+          request->send(s, "text/plain", r);
+          return;
+        }
+        if (!followerImageWriteEnd()) {
+          request->send(500, "text/plain",
+                        "Row image store failed: " + followerImageWriteError());
+          return;
+        }
+        request->send(200, "text/plain",
+                      F("Row image stored; rows on another rev are offered it."));
+      },
+      [](AsyncWebServerRequest* request, String filename, size_t index,
+         uint8_t* data, size_t len, bool final) {
+        if (index == 0) {
+          rowImageRejectStatus = 0;
+          rowImageRejectReason = "";
+          // CSRF gate (#313), INLINE before followerImageWriteBegin — the
+          // middleware fires post-body, too late for an upload route.
+          if (webUploadCsrfRejected(request)) {
+            rowImageRejectStatus = 403;
+            rowImageRejectReason =
+                "Cross-origin row-image upload refused (CSRF guard)";
+            return;
+          }
+          String rev;
+          if (!followerImageUploadAccepts(filename, rev)) {
+            rowImageRejectStatus = 400;
+            rowImageRejectReason =
+                "expected a follower-<rev>.bin (an S3 image would brick the "
+                "ESP-01)";
+            return;
+          }
+          String md5 = request->hasParam("md5")
+                           ? request->getParam("md5")->value()
+                           : String();
+          if (md5.length() == 0) {
+            rowImageRejectStatus = 400;
+            rowImageRejectReason = "md5 query parameter is required";
+            return;
+          }
+          if (!normalizeOtaMd5(md5)) {
+            rowImageRejectStatus = 400;
+            rowImageRejectReason = "md5 must be exactly 32 hex characters";
+            return;
+          }
+          if (!followerImageWriteBegin(md5, rev)) {
+            rowImageRejectStatus = 409;
+            rowImageRejectReason = "cannot start: " + followerImageWriteError();
+            return;
+          }
+        }
+        if (rowImageRejectStatus != 0) return;
+        if (len > 0 && !followerImageWriteChunk(data, len, index)) {
+          rowImageRejectStatus = 400;
+          rowImageRejectReason = "upload failed: " + followerImageWriteError();
+          return;
+        }
+        // final: the completion handler calls followerImageWriteEnd().
+      });
 
   // --- master OTA (#190) -----------------------------------------------------
   // v1 wire contract: POST multipart field "firmware" + mandatory ?md5=

@@ -22,17 +22,17 @@ struct ApiLegendEntry { const char* key; const char* meaning; };
 // tests/test_api_index.py diffs this against the routes actually registered
 // across the Web*.cpp family in BOTH directions (#448), so a served route is
 // either listed here or named in that gate's deliberate-exclusion set — the
-// browser-UI assets and the server-to-server cluster wire. Neither an
+// browser-UI assets. Neither an
 // undeclared endpoint nor a phantom one can survive CI.
 static const ApiRoute API_ROUTES[] = {
   {"GET",  "/api",                    "this self-documenting index"},
-  {"POST", "/api/v2/action",          "start a job: JSON {name,target,args} -> {op}; names: pair, release, arrange, and the unit jobs (home, identify, jog, set-offset, self-test, restart-unit, reset-odometer, set-gates, boot-info, boot-dump, boot-update, update-units, probe) with target {row,unit}"},
+  {"POST", "/api/v2/action",          "start a job: JSON {name,target,args} -> {op}; names: pair, release, arrange, update (offer a row board the stored image again), and the unit jobs (home, identify, jog, set-offset, self-test, restart-unit, reset-odometer, set-gates, boot-info, boot-dump, boot-update, update-units, probe) with target {row,unit}"},
   {"GET",  "/api/v2/op",              "what became of a job: /api/v2/op/<id> (202 running, 200 finished, 404 unknown)"},
   {"GET",  "/api/v2/wall",            "the boards of this Split-Flap and what each row board last said"},
-  {"GET",  "/settings",               "full device + cluster settings snapshot"},
+  {"GET",  "/settings",               "full device settings snapshot"},
   {"GET",  "/system/info",            "static hardware/partition inventory"},
   {"GET",  "/system/stats",           "live vitals + ~10 min history ring"},
-  {"GET",  "/status",                 "one-shot aggregate: settings+stats.now+units+cluster+ota"},
+  {"GET",  "/status",                 "one-shot aggregate: settings+stats.now+units+ota"},
   {"GET",  "/units/health",           "per-unit health/diagnostics table"},
   {"POST", "/units/health/refresh",   "re-probe the bus + re-poll health"},
   {"GET",  "/health",                 "liveness text"},
@@ -41,7 +41,7 @@ static const ApiRoute API_ROUTES[] = {
   {"GET",  "/units/odometer-log",     "append-only odometer history CSV: epoch,addr,revs[,R=reset] (?prev=1 = rotated file)"},
   {"POST", "/log/flash/clear",        "truncate the flash log"},
   {"GET",  "/tz.json",                "IANA timezone table"},
-  {"GET",  "/events",                 "SSE display + cluster-wall stream"},
+  {"GET",  "/events",                 "SSE display text stream"},
   {"POST", "/",                       "set display text / mode (per-card fields)"},
   {"POST", "/reboot",                 "soft reboot the master"},
   {"POST", "/stop",                   "blank + halt the display"},
@@ -52,6 +52,7 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/reset-wifi",             "erase WiFi credentials"},
   {"POST", "/firmware/master",        "OTA the master (?md5= required)"},
   {"GET",  "/firmware/row",           "the stored row image, as the row boards fetch it"},
+  {"POST", "/firmware/row",           "store a follower-<rev>.bin for the row boards (?md5= required); rows on another rev are offered it"},
   {"GET",  "/debug/ota",              "OTA/partition state"},
   {"POST", "/firmware/rescue",        "install the rescue image"},
   {"POST", "/firmware/rescue-boot",   "boot into the rescue slot"},
@@ -77,22 +78,13 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/reflash-units",          "update units: firmware, then bootloader (?address=N for one, &force=1 to reflash it regardless)"},
   {"POST", "/mqtt/discover",          "start an mDNS MQTT broker scan"},
   {"GET",  "/mqtt/discover",          "mDNS MQTT broker scan result"},
-  {"POST", "/cluster/config",         "set cluster leader member table"},
-  {"GET",  "/cluster/status",         "cluster leader supervision status"},
-  {"GET",  "/cluster/health",         "this board's follower/unit health"},
-  {"GET",  "/cluster/digest",         "cluster-wide digest (follower copy)"},
-  {"POST", "/cluster/promote",        "promote this follower to leader"},
-  {"POST", "/cluster/leave",          "drop this board's cluster membership"},
-  {"POST", "/cluster/discover",       "start a cluster mDNS scan"},
-  {"GET",  "/cluster/discover",       "cluster mDNS scan result"},
-  {"POST", "/cluster/follower-firmware", "store an ESP-01 follower image for relay"},
   {"GET",  "/coredump/summary",       "last-crash task + backtrace + dump ELF sha"},
   {"GET",  "/coredump/raw",           "raw ELF coredump for esp-coredump (#431)"},
   {"POST", "/coredump/erase",         "queue a coredump partition purge"},
 };
 static const int API_ROUTES_COUNT = (int)(sizeof(API_ROUTES) / sizeof(API_ROUTES[0]));
 
-// Terse-key legend, covering /units/health, /system/stats and /cluster/status.
+// Terse-key legend, covering /units/health and /system/stats.
 // The /units/health block is machine-guarded by test_api against
 // buildUnitHealthJson's actual output.
 static const ApiLegendEntry API_LEGEND[] = {
@@ -180,31 +172,6 @@ static const ApiLegendEntry API_LEGEND[] = {
   {"reset",    "last reset reason"},
   {"hist",     "history ring of the spark series"},
   {"interval", "history sample interval (s)"},
-  // --- /cluster/status ---
-  {"enabled",   "cluster leader mode on"},
-  {"epoch",     "leader epoch"},
-  {"seq",       "render sequence number"},
-  {"members",   "leader member table"},
-  {"host",      "member host (empty = own row)"},
-  {"self",      "1 = this board's own row"},
-  {"row",       "grid row"},
-  {"col",       "grid column offset"},
-  {"joined",    "member has joined"},
-  {"degraded",  "member marked degraded (30 s without a successful contact, #385)"},
-  {"suspect",   "member failing contacts but not yet degraded (#385 quiet tier)"},
-  {"renderStuck", "member alive but its segment undeliverable for 30 s (#385)"},
-  {"failures",  "contact failures since the last success"},
-  {"plat",      "member platform (esp01/esp32; absent = leader's)"},
-  {"role",      "member deviceRole (#332 tiers; absent = pre-#332 peer, keeps the old width-0-preferred slot)"},
-  {"rollout",   "fleet firmware rollout state"},
-  {"updating",  "a member firmware push is in flight"},
-  {"updateBlocked", "rollout gave up after the attempt cap"},
-  {"hmac",      "leader is signing wire-auth (HMAC) to this member (#313)"},
-  {"imageVerifyFailed", "the running image failed self-verify for streaming"},
-  {"followerImage", "a stored ESP-01 follower image is present"},
-  {"followerPush",  "an ESP-01 follower image push is in flight"},
-  {"digestOmitted", "the cluster digest no longer fits the ping: the rows' own wall view is stale (#387)"},
-  {"gen",       "grid generation counter"},
 };
 static const int API_LEGEND_COUNT = (int)(sizeof(API_LEGEND) / sizeof(API_LEGEND[0]));
 

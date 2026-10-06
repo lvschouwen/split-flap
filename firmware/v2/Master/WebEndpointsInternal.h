@@ -61,9 +61,8 @@ String buildCurrentSettingsJson();
 // middleware fires post-body, too late). True = forged cross-site POST.
 bool webUploadCsrfRejected(AsyncWebServerRequest* request);
 
-// #294/#313 CORS+CSRF middleware (owned by WebCluster.cpp), attached once in
-// webEndpointsInit().
-AsyncMiddlewareFunction& webClusterCorsMiddleware();
+// #313 CSRF middleware, attached once in webEndpointsInit().
+AsyncMiddlewareFunction& webCsrfMiddleware();
 
 // Per-module route registrars, called once from webEndpointsInit(). Routes
 // are matched per path+method, so cross-module registration order is not
@@ -79,11 +78,9 @@ void webSystemCoredumpEraseTick();
 bool webFirmwareOtaUploadActive();
 void webFirmwareRegister(AsyncWebServer& server);
 void webMaintenanceRegister(AsyncWebServer& server);
-void webClusterRegister(AsyncWebServer& server);
 void webWallRegister(AsyncWebServer& server);
 
 // Loop hooks drained by webEndpointsLoop() — call order is load-bearing,
 // see the webEndpointsLoop() call site.
 void webFirmwareLoop();
 void webSettingsDiscoverLoop();
-void webClusterDiscoverLoop();

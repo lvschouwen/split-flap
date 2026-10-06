@@ -18,7 +18,6 @@
 #include "BootUpdatePlan.h"  // #499 decision logic
 #include "CrashContext.h"  // #504
 #include "FlapFrame.h"
-#include "HeadlessPolicy.h"
 #include "HeartbeatPolicy.h"
 #include "HelpersSerialHandling.h"
 #include "MotionBudget.h"  // motion admission (#505)
@@ -106,19 +105,6 @@ static void motionBudgetFold(const UnitFacts& u, int i) {
 static void settleBeforeProbe() {
   int32_t remaining = (int32_t)(twibootRiskUntilMs - millis());
   if (remaining > 0) delay((uint32_t)remaining);
-}
-
-// No-units detection (#329). displayTask owns this exclusively (single core-1
-// task), so a plain static needs no lock. Fed only at the STEADY observation
-// points — boot probe, explicit Probe, idle heartbeat tick — not the transient
-// maintenance/reflash reprobes, so the streak tracks real bus cadence. Latches
-// headlessUnitless after HEADLESS_ZERO_PROBE_THRESHOLD consecutive 0-unit
-// reads; a single responding unit resets it (never flips a real display).
-static HeadlessDetector headlessDetector;
-
-static void headlessTrack(DisplaySnapshot& local) {
-  local.headlessUnitless =
-      headlessObserveProbe(headlessDetector, local.detectedUnitCount);
 }
 
 // --- heartbeat freshness + batched boot-home (#309/#310) ---------------------
@@ -372,7 +358,6 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
   logUnitReboot(local, busFacts, i);  // #368
   motionBudgetFold(busFacts[i], i);  // #505
   rescueTick(local, busFacts, i);  // #498
-  headlessTrack(local);  // #329: idle-tick observation feeds the debounce
   snapshotPublish(local);
 }
 
@@ -738,7 +723,6 @@ static void execProbe(DisplaySnapshot& local, UnitFacts* busFacts,
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                 effectiveWidthOverride());
-  headlessTrack(local);  // #329: explicit-probe observation
 }
 
 static void execWriteOffset(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -1126,16 +1110,11 @@ void displayTaskMain(void*) {
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         effectiveWidthOverride());
-  headlessTrack(local);  // #329: first (boot) observation
   snapshotPublish(local);
   bootTraceMarkStage(BOOT_STAGE_UNITS);  // #504
   if (local.detectedUnitCount == 0) {
-    if (local.displayWidth == 0) {
-      SerialPrintln("display: no units — headless role, display disabled");  // #331
-    } else {
-      SerialPrintf("display: no units responding — assuming full width %d\n",
-                   local.displayWidth);
-    }
+    SerialPrintf("display: no units responding — assuming full width %d\n",
+                 local.displayWidth);
   } else {
     SerialPrintf("display: probe done, width %d\n", local.displayWidth);
   }

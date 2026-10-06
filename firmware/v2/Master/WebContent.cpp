@@ -12,8 +12,6 @@
 
 #include <ESPAsyncWebServer.h>
 
-#include "ClusterLayout.h"  // CLUSTER_MAX_MEMBERS
-#include "ClusterLeader.h"
 #include "DisplayEvents.h"
 #include "Tasks.h"
 #include "WebAssets.h"
@@ -38,32 +36,13 @@ static void serveGzipAsset(AsyncWebServerRequest* request,
   request->send(resp);
 }
 
-// Wall-aware /events payload (#277): while leading a cluster, the display
-// event carries every reconstructed grid row; rowsKeyOut feeds the tick's
-// change tracker. Locks run strictly sequentially — the content snapshot
-// (webStateMutex) is taken and RELEASED before the leader mutex, never
-// nested.
-static String sseDisplayPayload(const DisplaySnapshot& snap,
-                                String* rowsKeyOut) {
-  String rows[CLUSTER_MAX_MEMBERS];
-  int selfRow = 0;
-  int rowCount = 0;
-  if (clusterLeaderEnabled()) {
-    WebContentSnapshot content = webDisplayContentSnapshot();
-    rowCount = clusterLeaderMirrorRows(rows, selfRow, String(snap.currentText),
-                                       content.alignment);
-  }
-  if (rowsKeyOut != nullptr) *rowsKeyOut = displayEventRowsKey(rows, rowCount);
-  return buildDisplayEventJson(snap.currentText, rows, rowCount, selfRow);
-}
-
 void webContentRegister(AsyncWebServer& server) {
   // --- SSE (#251) ----------------------------------------------------------
   // A fresh client gets the current display text immediately; every later
   // change is pushed by webDisplayEventsTick() from netTask.
   sseEvents.onConnect([](AsyncEventSourceClient* client) {
     DisplaySnapshot snap = displaySnapshotGet();
-    client->send(sseDisplayPayload(snap, nullptr).c_str(), "display",
+    client->send(buildDisplayEventJson(snap.currentText).c_str(), "display",
                  millis());
   });
   server.addHandler(&sseEvents);
@@ -120,25 +99,9 @@ void webDisplayEventsTick() {
   if (sseEvents.count() == 0) return;
   DisplaySnapshot snap = displaySnapshotGet();
 
-  // Cheap pre-check before paying for the wall reconstruction (mutex +
-  // String churn, every 100 ms otherwise): only rebuild when the own text
-  // changed, the grid generation moved, or leading flipped. The rows-key
-  // due-check below stays authoritative for what actually gets pushed.
-  static uint32_t lastGridGen = 0;
-  static bool lastLeading = false;
-  bool leading = clusterLeaderEnabled();
-  uint32_t gridGen = leading ? clusterLeaderGridGeneration() : 0;
-  if (strncmp(tracker.lastText, snap.currentText, DISPLAY_CMD_TEXT_LEN) == 0 &&
-      leading == lastLeading && gridGen == lastGridGen) {
-    return;
-  }
-  lastLeading = leading;
-  lastGridGen = gridGen;
-
-  String rowsKey;
-  String payload = sseDisplayPayload(snap, &rowsKey);
-  if (!displayEventDue(tracker, snap.currentText, rowsKey)) return;
-  sseEvents.send(payload.c_str(), "display", millis());
+  if (!displayEventDue(tracker, snap.currentText)) return;
+  sseEvents.send(buildDisplayEventJson(snap.currentText).c_str(), "display",
+                 millis());
 }
 
 // Bundled unit firmware accessors (#205) — see the header comment above for

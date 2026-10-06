@@ -17,7 +17,7 @@ enum CrashSlot : int {
   CRASH_SLOT_DISPLAY = 0,  // displayTask: every unit-bus transaction
   CRASH_SLOT_NET = 1,      // netTask: WiFi / web drain / flash flushes
   CRASH_SLOT_MQTT = 2,
-  CRASH_SLOT_CLUSTER = 3,
+  CRASH_SLOT_WORKER = 3,
   CRASH_CTX_SLOTS = 4,
 };
 
@@ -32,7 +32,7 @@ enum CrashAct : uint8_t {
   CRASH_ACT_WIFI = 7,
   CRASH_ACT_WEB_LOOP = 8,     // settings drain, reboot, flushes
   CRASH_ACT_MQTT = 9,
-  CRASH_ACT_CLUSTER = 10,
+  CRASH_ACT_WORKER = 10,
   CRASH_ACT_FLASH_WRITE = 11,  // LittleFS flush: flash cache off meanwhile
   CRASH_ACT_LAST = CRASH_ACT_FLASH_WRITE,
 };
@@ -123,7 +123,7 @@ inline const char* crashSlotName(int slot) {
     case CRASH_SLOT_DISPLAY: return "display";
     case CRASH_SLOT_NET: return "net";
     case CRASH_SLOT_MQTT: return "mqtt";
-    case CRASH_SLOT_CLUSTER: return "cluster";
+    case CRASH_SLOT_WORKER: return "worker";
     default: return "?";
   }
 }
@@ -140,7 +140,7 @@ inline const char* crashActName(uint32_t act) {
     case CRASH_ACT_WIFI: return "wifi";
     case CRASH_ACT_WEB_LOOP: return "web-loop";
     case CRASH_ACT_MQTT: return "mqtt";
-    case CRASH_ACT_CLUSTER: return "cluster";
+    case CRASH_ACT_WORKER: return "worker";
     case CRASH_ACT_FLASH_WRITE: return "flash-write";
     default: return "?";
   }

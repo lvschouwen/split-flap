@@ -33,8 +33,12 @@
 
 #include <Arduino.h>
 
-#include "ClusterWireGuards.h"  // CLUSTER_MAX_MEMBERS, CLUSTER_HOST_MAX_LEN
 #include "DisplayCommand.h"     // DisplayAlignment
+
+// Boards a Split-Flap can be made of (the rows table holds this many), and
+// the longest address one is reached at.
+#define CLUSTER_MAX_MEMBERS 8
+#define CLUSTER_HOST_MAX_LEN 40
 
 // Cluster clock date row: v1's message-stamp date shape (%d %b %y).
 // flapFrameBuild uppercases at render time, so "13 Jul 26" flips as

@@ -6,11 +6,11 @@
 #include <EEPROM.h>
 #include <time.h>
 
-#include "ClusterWireGuards.h"  // clusterWirePrintable
 #include "FollowerBus.h"
 #include "FollowerClock.h"  // #342: local clock fallback when the master is lost
 #include "FollowerConfig.h"
 #include "FollowerPrefs.h"
+#include "PrintableAscii.h"
 #include "FollowerRescue.h"  // #343: rescue mode never touches the bus
 #include "FollowerSettings.h"
 
@@ -52,15 +52,24 @@ static uint64_t nowEpochMs(bool& synced) {
   return (uint64_t)t * 1000ULL + (millis() % 1000);
 }
 
-// #342/#362: the leader's zone is installed via the ESP8266 core's
-// configTime(tz) (which drives newlib's __gettzinfo) from LOOP context —
-// bench-proven that a bare setenv+tzset is INERT for localtime_r here, and
-// that configTime re-inits SNTP so it must never run from an async handler.
-// It also must run AFTER wifiServicesInit's configTime(0,0) (which resets the
-// zone to UTC) — the loop is, clusterInit isn't. This just marks a (re)install
-// as needed; clusterLoopTick does it lazily once SNTP is synced.
-static volatile bool tzInstalled = false;
-static void applyLeaderTz() { tzInstalled = false; }
+// Where the row's time comes from and which zone it is read in (#566): the
+// master answers time requests, so its address is the first server — rows
+// flip at an instant the master names, and agreeing with the master matters
+// more than agreeing with the internet. The public pool stays second, for a
+// row whose master is gone and for one that is not paired. The zone is the
+// master's (#342), for the fallback clock.
+//
+// configTime() restarts SNTP and must never run from an async handler
+// (#362: a bare setenv+tzset is INERT for localtime_r here), so a change only
+// marks the setup as due and clusterLoopTick() does it.
+static volatile bool clockSetupDue = true;
+static void clockSetupChanged() { clockSetupDue = true; }
+
+static void installClock() {
+  configTime(leaderTz.length() > 0 ? leaderTz.c_str() : "UTC0",
+             leaderHost.length() > 0 ? leaderHost : String(F("pool.ntp.org")),
+             leaderHost.length() > 0 ? String(F("pool.ntp.org")) : String());
+}
 
 void clusterInit() {
   // One mirror for both records: the pairing and, behind it, the operator
@@ -78,7 +87,7 @@ void clusterInit() {
     leaderName = name;
     leaderHost = host;
     leaderTz = tz;
-    applyLeaderTz();  // #342: a start with the master gone still clocks
+    clockSetupChanged();
     SerialPrint(F("Paired with "));
     SerialPrint(leaderName);
     SerialPrintln(F(" — starting in grace, waiting for the master"));
@@ -107,6 +116,10 @@ void clusterLoopTick() {
   if (membershipDirty) {
     membershipDirty = false;
     persistMembership();
+  }
+  if (clockSetupDue) {
+    clockSetupDue = false;
+    installClock();
   }
 
   static uint32_t lastPhaseTickMs = 0;
@@ -139,15 +152,6 @@ void clusterLoopTick() {
     if (followerClockEligible(policyState.phase, leaderHost.length() > 0,
                               leaderTz.length() > 0, synced,
                               fallback != FollowerFallback::Blank)) {
-      // #362: install the leader's zone lazily, here in loop context, the
-      // first time a fallback actually needs it (and after any zone change).
-      // configTime installs it synchronously via setTZ before returning, so
-      // the localtime_r below is already correct this same tick. Latched, so
-      // the SNTP re-init cost is paid once per fallback episode, not per tick.
-      if (!tzInstalled) {
-        configTime(leaderTz.c_str(), "pool.ntp.org");
-        tzInstalled = true;
-      }
       time_t nowT = time(nullptr);
       struct tm lt;
       localtime_r(&nowT, &lt);
@@ -212,10 +216,11 @@ void clusterPair(const String& masterId, const String& masterHost) {
   if (leaderName != masterId) {
     // Another master: what the old one said goes with it, as on a Release.
     leaderTz = "";
-    applyLeaderTz();
+    clockSetupChanged();
     leaderQuiet = false;
     renderPending = false;
   }
+  if (leaderHost != masterHost) clockSetupChanged();  // the time server moved with it
   leaderName = masterId;
   leaderHost = masterHost;
   membershipDirty = true;
@@ -233,9 +238,9 @@ void clusterMasterConnected(uint32_t epoch) {
 void clusterSetTz(const String& tz) {
   if (tz.length() == 0 || tz == leaderTz || leaderHost.length() == 0) return;
   // Stored and handed to the C library: printable, no spaces.
-  if (tz.length() > FOLLOWER_TZ_MAX || !clusterWirePrintable(tz, 0x21)) return;
+  if (tz.length() > FOLLOWER_TZ_MAX || !printableAscii(tz, 0x21)) return;
   leaderTz = tz;
-  applyLeaderTz();
+  clockSetupChanged();
   membershipDirty = true;
 }
 
@@ -269,8 +274,7 @@ void clusterHandleLeave() {
   leaderHost = "";
   leaderTz = "";  // #342: the zone leaves with the master that owned it
   leaderQuiet = false;  // #227: it described the master we left
-  applyLeaderTz();  // #362: re-arm the tz latch (defensive — eligibility also
-                    // gates on leaderTz, but this survives a future refactor)
+  clockSetupChanged();
   renderPending = false;
   membershipDirty = true;  // persistMembership clears the record
   SerialPrintln(F("cluster: released — unpaired (blank)"));

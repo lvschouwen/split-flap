@@ -4,7 +4,7 @@ The follower has had a bidirectional gate since #358; the master only ever
 had the native test_api legend guard, which checks that the index is
 well-formed and its legend is complete — not that it is COMPLETE with
 respect to the routes actually registered. That one-directional check is
-how POST /cluster/leave stayed served-but-undeclared.
+how a served route once stayed undeclared.
 
 This diffs the (method, path) pairs registered across the Web*.cpp TU family
 against ApiIndex.h's API_ROUTES table. Pure text, no build needed.
@@ -40,10 +40,6 @@ INDEX_RE = re.compile(r'\{"(GET|POST)",\s*"([^"]+)",')
 #
 #   BROWSER UI — the HTML/CSS/JS/icon the web app loads for itself. GET / is
 #       the page; POST / is the display-text API and IS indexed.
-#   CLUSTER WIRE — server-to-server only: HMAC-signed, source-IP bound to the
-#       leader (#313). An operator never calls these by hand, and documenting
-#       them in the curl-facing index would invite exactly that.
-#
 # Adding a route to this list is a deliberate, reviewed act. Anything not in
 # API_ROUTES and not here fails the gate.
 UNDOCUMENTED = {
@@ -53,10 +49,6 @@ UNDOCUMENTED = {
     ("GET", "/script.js"),
     ("GET", "/md5.js"),
     ("GET", "/favicon.png"),
-    ("POST", "/cluster/join"),
-    ("POST", "/cluster/ping"),
-    ("POST", "/cluster/render"),
-    ("POST", "/cluster/member/update"),
 }
 
 

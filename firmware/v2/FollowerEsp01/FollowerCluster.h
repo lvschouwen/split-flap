@@ -28,7 +28,8 @@ bool clusterLeaderContactFresh();
 // The master's POSIX tz rule from a Config message. An empty one keeps the
 // zone already held; a new one is stored with the pairing. loop() only.
 void clusterSetTz(const String& tz);
-// #227: the master's quiet flag (shared/ClusterQuiet.h for what it means).
+// #227: the master's quiet flag: a row of a quiet wall moves nothing by
+// itself, also not once its master has gone silent.
 void clusterNoteLeaderQuiet(bool quiet);
 
 // loop(): ~1 Hz phase decay (blank or fallback clock once the master is

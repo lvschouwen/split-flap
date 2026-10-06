@@ -7,7 +7,7 @@
 
 #include "NetLivenessPolicy.h"
 
-// clusterTask, every pass: runs the two probes when one is due (self-throttled
+// workerTask, every pass: runs the two probes when one is due (self-throttled
 // to NET_LIVENESS_PROBE_INTERVAL_MS; each step of a probe waits at most
 // 1.5 s). The one task that already makes blocking outbound calls.
 void netLivenessProbeTick();

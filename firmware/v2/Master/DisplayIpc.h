@@ -49,11 +49,6 @@ struct DisplaySnapshot {
   // displayApplyUnitFacts(), never patched individually.
   uint8_t detectedUnitCount = 0;
   uint8_t faultyUnitCount = 0;
-  // #329 headless mode: latched by displayTask's HeadlessDetector after N
-  // consecutive 0-unit probes — NOT derived by displayApplyUnitFacts (a
-  // single probe's 0 must not flip a real display). Drives /settings'
-  // headlessSuggested nudge.
-  bool headlessUnitless = false;
   UnitFacts units[UNITS_AMOUNT];
   MaintResult lastMaint;
   // Reflash job progress (#205) — published at unit boundaries and settle
@@ -153,12 +148,7 @@ inline void displayApplyUnitFacts(DisplaySnapshot& snap,
                  u.physLetter != snap.lastFrameLetters[i];
   }
   int width = computeDisplayWidth(states, maxUnits);
-  if (widthOverride == -1) {
-    // #331 headless: deviceRole=headless-* forces displayWidth 0 — the board
-    // renders nothing and reports no phantom row, overriding both the probe
-    // ceiling fallback and the #289 unit-count override.
-    width = 0;
-  } else if (widthOverride >= 1 && widthOverride <= maxUnits) {
+  if (widthOverride >= 1 && widthOverride <= maxUnits) {
     width = widthOverride;
   }
   snap.displayWidth = (uint8_t)width;

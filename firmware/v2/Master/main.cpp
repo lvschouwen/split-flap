@@ -13,8 +13,6 @@
 
 #include "BuildVersion.h"  // GIT_REV — boot banner
 #include "ClockService.h"
-#include "ClusterFollower.h"
-#include "ClusterLeader.h"
 #include "WallLink.h"
 #include "WallPair.h"
 #include "WallShow.h"
@@ -150,13 +148,6 @@ void setup() {
                                  chipIdFromEfuseMac());
   statusLedInit(settings);  // boot white from here on (#199)
   systemStatsInit();        // #245: before tasksInit() starts netTask
-  // #272: loads the persisted cluster membership — a clustered follower
-  // boots gated in Grace. Before tasksInit(): netTask ticks the service
-  // and clockTask reads its view.
-  clusterFollowerInit(settingsStore);
-  // #273: loads the member table if this master leads a cluster wall, and
-  // mints the boot epoch. Before tasksInit() — clusterTask ticks it.
-  clusterLeaderInit(settingsStore, deviceName);
   // The boards of this Split-Flap and the link its row boards dial (#566).
   // Before tasksInit(): the link task reads both.
   wallStateInit(settingsStore);

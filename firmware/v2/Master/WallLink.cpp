@@ -18,6 +18,7 @@
 #include "WallShow.h"
 #include "WallState.h"
 #include "WallUpdatePolicy.h"
+#include "WifiService.h"  // wifiNoteConfirmedTraffic
 
 namespace {
 
@@ -251,6 +252,8 @@ struct Hooks : WallLinkHooks {
   }
 
   void rowMessage(int row, const wl_ToMaster& message) override {
+    // #515: a paired row answering is traffic that went both ways.
+    wifiNoteConfirmedTraffic();
     if (message.which_body == wl_ToMaster_status_tag) {
       facts[row].status = message.body.status;
       facts[row].haveStatus = true;
@@ -472,6 +475,10 @@ void offerImage(uint32_t nowMs) {
       SerialPrintf("link: row image to offer: rev %s, %u bytes%s\n", image.rev,
                    (unsigned)image.size, image.packed ? ", packed" : "");
     }
+  }
+  const uint32_t retries = wallStateTakeUpdateRetries();
+  for (int row = 0; row < rowsTable.count && row < WALL_LINK_MAX_ROWS; row++) {
+    if (retries & (1UL << row)) updater.retry(row);
   }
   if (updater.phase != WallUpdatePhase::Idle) {
     const int offeredTo = updater.row;  // tick() forgets it when the offer ends

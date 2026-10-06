@@ -19,7 +19,6 @@
 #include "Tasks.h"
 #include "UnitBus.h"
 #include "WearPolicy.h"
-#include "ClusterLeader.h"  // clusterLeaderBlankWall (/stop propagation #317)
 #include "WallShow.h"
 #include "WallState.h"
 
@@ -438,10 +437,8 @@ void webMaintenanceRegister(AsyncWebServer& server) {
                     F("Display queue full — try again in a moment"));
       return;
     }
-    // Cluster propagation (#317): when leading, Stop blanks the WHOLE wall —
-    // the local command above handles this board's own row; blank the
-    // followers in sync (no-op when standalone).
-    clusterLeaderBlankWall();
+    // Stop blanks the WHOLE wall: the command above handles this board's own
+    // row, this the row boards (a no-op without any).
     wallShowBlank();
     char buf[24];
     snprintf(buf, sizeof(buf), "{\"seq\":%lu}", (unsigned long)cmd.seq);

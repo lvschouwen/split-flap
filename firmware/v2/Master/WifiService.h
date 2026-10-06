@@ -33,8 +33,8 @@ bool wifiRadioBusy();
 // (WifiTxPolicy.h ladder). Any task.
 int wifiTxPowerDbm10();
 
-// #515: a two-way exchange with a cluster peer just completed (a member
-// contact answered, a leader request served). While these keep coming the TX
+// #515: a two-way exchange with a row board just completed (a message from
+// one read on the wall link). While these keep coming the TX
 // ladder does not treat a weak signal estimate as a reason to step up.
 // Any task.
 void wifiNoteConfirmedTraffic();

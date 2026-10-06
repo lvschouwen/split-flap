@@ -29,7 +29,6 @@
 #define PARAM_ALIGNMENT       "alignment"
 #define PARAM_FLAP_SPEED      "flapSpeed"
 #define PARAM_DEVICEMODE      "deviceMode"
-#define PARAM_DEVICE_ROLE     "deviceRole"
 #define PARAM_INPUT_TEXT      "inputText"
 #define PARAM_TRANSIENT_TEXT  "transientText"
 #define PARAM_TRANSIENT_DWELL "transientDwell"
@@ -49,7 +48,6 @@ struct PendingSettingsPost {
   String alignment;     bool alignmentProvided = false;
   String flapSpeed;     bool flapSpeedProvided = false;
   String deviceMode;    bool deviceModeProvided = false;
-  String deviceRole;    bool deviceRoleProvided = false;
   String inputText;     bool inputTextProvided = false;
   String transientText; bool transientTextProvided = false;
   long transientDwell = 0;
@@ -95,13 +93,6 @@ inline SettingsParamResult stageSettingsParam(PendingSettingsPost& post,
     if (!isValidDeviceModeValue(rawValue)) return SettingsParamResult::Invalid;
     post.deviceMode = rawValue;
     post.deviceModeProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_DEVICE_ROLE) {
-    if (!isValidDeviceRoleValue(rawValue)) return SettingsParamResult::Invalid;
-    post.deviceRole = rawValue;
-    post.deviceRoleProvided = true;
     return SettingsParamResult::Accepted;
   }
 
@@ -249,7 +240,6 @@ inline void mergeSettingsPost(PendingSettingsPost& shared,
   if (accepted.alignmentProvided)  { shared.alignment  = accepted.alignment;  shared.alignmentProvided  = true; }
   if (accepted.flapSpeedProvided)  { shared.flapSpeed  = accepted.flapSpeed;  shared.flapSpeedProvided  = true; }
   if (accepted.deviceModeProvided) { shared.deviceMode = accepted.deviceMode; shared.deviceModeProvided = true; }
-  if (accepted.deviceRoleProvided) { shared.deviceRole = accepted.deviceRole; shared.deviceRoleProvided = true; }
   if (accepted.inputTextProvided)  { shared.inputText  = accepted.inputText;  shared.inputTextProvided  = true; }
   if (accepted.transientTextProvided) {
     shared.transientText = accepted.transientText;
@@ -296,11 +286,6 @@ inline void applySettingsPost(PendingSettingsPost& post,
   if (post.deviceModeProvided && settings.deviceMode != post.deviceMode) {
     settings.deviceMode = post.deviceMode;
     saveDeviceMode(store, settings.deviceMode);
-  }
-
-  if (post.deviceRoleProvided && settings.deviceRole != post.deviceRole) {
-    settings.deviceRole = post.deviceRole;
-    saveDeviceRole(store, settings.deviceRole);
   }
 
   if (post.timezoneProvided && settings.timezonePosix != post.timezone) {

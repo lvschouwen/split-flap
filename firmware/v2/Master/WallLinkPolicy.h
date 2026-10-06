@@ -107,6 +107,17 @@ inline WallRowReach wallRowReach(const WallRowContact& c, uint32_t nowMs) {
   return c.connected ? WallRowReach::Up : WallRowReach::Away;
 }
 
+inline const char* wallRowReachName(WallRowReach reach) {
+  switch (reach) {
+    case WallRowReach::Never: return "never";
+    case WallRowReach::Up: return "up";
+    case WallRowReach::Busy: return "busy";
+    case WallRowReach::Away: return "away";
+    case WallRowReach::Lost: return "lost";
+  }
+  return "?";
+}
+
 // Records the boot id of a Hello; true when the row has restarted since the
 // last one, which fails every job the master still holds open on it.
 inline bool wallRowNoteBoot(WallRowContact& c, uint32_t bootId) {

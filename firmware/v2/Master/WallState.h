@@ -154,3 +154,10 @@ void wallStateAskRelease(const char* id);
 bool wallStateReleaseAsked(char* idOut, size_t cap);
 void wallStateReleaseAnswered();
 bool wallStateReleasePending();
+
+// Web side asks, link task takes: offer this row the stored image again,
+// whatever was held against it. `generation` is the rows table's the caller
+// found `row` in; false when the table has changed since.
+bool wallStateAskUpdateRetry(int row, uint32_t generation);
+// A bit per row index, cleared by the call.
+uint32_t wallStateTakeUpdateRetries();

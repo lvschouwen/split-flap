@@ -188,6 +188,12 @@ struct WallUpdater {
     heldOff = false;
   }
 
+  // An operator asked for this row to be offered the image again.
+  void retry(int r) {
+    forgive(r);
+    heldOff = false;
+  }
+
   // The rows table changed.
   void reset() { *this = WallUpdater{}; }
 

@@ -77,7 +77,7 @@ size_t systemStatsJson(char* buf, size_t cap) {
            webResetReasonString());
   TasksStackHwm hwm = tasksStackHwm();  // #415
   now.hwmDisplay = hwm.display; now.hwmClock = hwm.clock;
-  now.hwmNet = hwm.net; now.hwmMqtt = hwm.mqtt; now.hwmCluster = hwm.cluster;
+  now.hwmNet = hwm.net; now.hwmMqtt = hwm.mqtt; now.hwmWorker = hwm.worker;
   now.hwmLink = hwm.link;
 
   xSemaphoreTake(ringMutex, portMAX_DELAY);
@@ -99,7 +99,7 @@ size_t systemStatsNowJson(char* buf, size_t cap) {
            webResetReasonString());
   TasksStackHwm hwm = tasksStackHwm();  // #415
   now.hwmDisplay = hwm.display; now.hwmClock = hwm.clock;
-  now.hwmNet = hwm.net; now.hwmMqtt = hwm.mqtt; now.hwmCluster = hwm.cluster;
+  now.hwmNet = hwm.net; now.hwmMqtt = hwm.mqtt; now.hwmWorker = hwm.worker;
   now.hwmLink = hwm.link;
 
   xSemaphoreTake(ringMutex, portMAX_DELAY);

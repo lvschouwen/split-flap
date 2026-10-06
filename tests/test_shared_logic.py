@@ -130,9 +130,11 @@ def test_no_tree_judges_self_test_replies_itself():
 
 def test_unit_read_validity_is_patched_through_the_shared_helpers():
     hits = _offenders(r"\b(?:offsetValid|odometerValid)\s*=(?!=)", ROW_MASTERS)
-    # The bus files set them where they READ the value; nothing else may.
+    # The bus files set them where they READ the value, and the master where
+    # it reads a row board's unit facts off the link; nothing else may.
     readers = {"firmware/v2/Master/UnitBus.cpp",
-               "firmware/v2/FollowerEsp01/FollowerBus.cpp"}
+               "firmware/v2/FollowerEsp01/FollowerBus.cpp",
+               "firmware/v2/Master/UnitFactsJson.h"}
     assert set(hits) <= readers, hits
     for path in ("Master/DisplayIpc.h", "FollowerEsp01/FollowerBus.cpp"):
         assert "unitFactsInvalidateReads(" in (V2 / path).read_text(), path
@@ -147,7 +149,7 @@ def test_the_lan_origin_rule_exists_once():
                           r"inline bool \w+(?:PrivateIpv4|OriginAllowed|"
                           r"CsrfRejectPost|IsLanTarget)\b"), (
         "LAN host/origin checks and the CSRF reject live in shared/LanOrigin.h")
-    users = {"Master/WebCluster.cpp", "Master/WebEndpoints.cpp",
+    users = {"Master/WebEndpoints.cpp",
              "FollowerEsp01/FollowerWeb.cpp", "Rescue/RescueWeb.cpp"}
     for path in users:
         assert "lanCsrfRejectPost(" in (V2 / path).read_text(), path
@@ -227,36 +229,6 @@ def test_every_row_master_refuses_an_upload_during_a_unit_reflash():
     jobs = _strip_comments((V2 / "FollowerEsp01/FollowerUnitJobs.cpp").read_text())
     rule = jobs[jobs.index("bool unitUpdateQueuedOrRunning() {"):]
     assert "reflashInProgress(reflashProgress)" in rule[:rule.index("\n}\n")]
-
-
-# --- #533: cluster-wire member guards -----------------------------------------
-
-MEMBER_HANDLERS = ["Master/WebCluster.cpp"]
-
-
-def test_member_handlers_decide_through_the_shared_guards():
-    """Two member implementations once bounded the row differently and built
-    different join replies."""
-    for path in MEMBER_HANDLERS:
-        body = _strip_comments((V2 / path).read_text())
-        for call in ("clusterJoinValidate(", "clusterCallerIsForeign(",
-                     "clusterLeaveAllowed("):
-            assert call in body, f"{path}: {call}"
-        # The guards' own comparisons must not be restated beside them.
-        for own in ("leaderHost != request->client()", "Row out of range",
-                    "leaderHost.length() > 0 &&"):
-            assert own not in body, f"{path}: {own!r} belongs to the shared guard"
-    assert "clusterAppendHealthKeys(" in (V2 / "Master/WebCluster.cpp").read_text()
-    assert not _offenders(r"#define\s+CLUSTER_MAX_MEMBERS\b|"
-                          r"clusterHmacAccept\(|"
-                          r"clusterHmacMarkNeedsPersist\(")
-
-
-def test_the_member_keeps_its_wire_auth_in_the_shared_struct():
-    body = _strip_comments((V2 / "Master/ClusterFollower.cpp").read_text())
-    for call in ("ClusterMemberAuth auth;", "auth.adoptKey(",
-                 "auth.accept(", "auth.drop()", "auth.restored("):
-        assert call in body, call
 
 
 # --- #535: python build helpers -----------------------------------------------

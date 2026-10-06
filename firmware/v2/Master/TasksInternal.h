@@ -18,8 +18,8 @@ extern QueueHandle_t displayQueue;
 // Single-writer snapshot publish (displayTask only — the #187 contract).
 void snapshotPublish(const DisplaySnapshot& next);
 
-// The width-override value handed to displayApplyUnitFacts: -1 (force width
-// 0) while headless (#331), else the #289 unit-count override (0 = auto).
+// The width-override value handed to displayApplyUnitFacts: the #289
+// unit-count override (0 = auto).
 int effectiveWidthOverride();
 
 // True while the #289 unit-count override pins the width (boot log line).

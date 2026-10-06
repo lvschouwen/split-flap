@@ -38,7 +38,6 @@ struct StatusLedInput {
   bool credsStored = false;       // Portal + stored creds = failed join
   bool otaUploadActive = false;   // Update.isRunning()
   bool otaPendingVerify = false;  // this boot unconfirmed, rollback armed
-  bool leaderLost = false;        // cluster member, leader written off (#500)
   uint32_t nowMs = 0;             // drives the healthy breathing ramp
 };
 
@@ -73,9 +72,6 @@ static inline StatusLedColor decideStatusLed(const StatusLedInput& in) {
       return {0, 0, STATUS_LED_ATTENTION};  // blue: first-boot setup
     case WifiPhase::Connected:
     default:
-      if (in.leaderLost) {
-        return {0, STATUS_LED_ATTENTION, STATUS_LED_ATTENTION};  // cyan
-      }
       return {0, statusLedBreathLevel(in.nowMs), 0};  // dim green heartbeat
   }
 }

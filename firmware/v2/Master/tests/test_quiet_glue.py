@@ -2,8 +2,8 @@
 
 QuietPolicy.h decides what passes (natively tested). What a native test cannot
 reach is that every producer of display content actually asks: the clock
-ticker, the MQTT text path, the web drain, the leader's ping, and both member
-implementations' fallback clocks. One of them missing is a wall that flaps at
+ticker, the MQTT text path, the web drain, the link task telling the rows, and
+the row board's fallback clock. One of them missing is a wall that flaps at
 night.
 """
 import re
@@ -19,14 +19,9 @@ def _code(path):
 
 def test_clock_ticker_stands_down_before_any_content_path():
     code = _code(MASTER / "ClockTask.cpp")
-    own = code.index("if (!membership.gated && tasksQuiet()) continue;")
-    assert own < code.index("clusterLeaderEnabled()"), "the leader reroute must come after the quiet gate"
+    own = code.index("if (tasksQuiet()) continue;")
     assert own < code.index("wallShowActive()"), "the wall reroute must come after the quiet gate"
     assert own < code.index("decideClockTick(")
-    # A member of a quiet wall moves nothing itself: no own clock in LeaderLost,
-    # no segment re-show.
-    member = code.index("if (cluster.gated && cluster.quiet) continue;")
-    assert member < code.index("decideClockTick(")
 
 
 def test_mqtt_text_is_dropped_unless_forced():
@@ -47,41 +42,6 @@ def test_web_drain_drops_text_after_applying_a_quiet_toggle():
     assert "messageProvided = false;" in block and "transientProvided = false;" in block
 
 
-def test_every_leader_ping_carries_the_quiet_flag_before_the_signature():
-    for name in ("ClusterLeaderFanout.cpp", "ClusterLeaderMaintenance.cpp"):
-        code = _code(MASTER / name)
-        assert "const bool pingQuiet = tasksQuiet();" in code, name
-        suffix = code.index("clusterQuietPingSuffix(pingQuiet)")
-        # ts/mac close the body: the flag goes in before them, in the same
-        # block that builds this ping.
-        sign = code.index('"&ts="', suffix)
-        assert sign - suffix < 900, f"{name}: the quiet flag is not part of the ping it should ride"
-        assert "you=" in code[suffix - 400:suffix], f"{name}: the flag must follow the ping's own fields"
-        # A keyed member gets a mac for the flag, over the same value and ts.
-        mac = code.index("CLUSTER_PING_QUIET_MAC_PARAM", suffix)
-        assert "clusterQuietMsg(" in code[mac:mac + 300], name
-        assert "pingQuiet" in code[mac:mac + 300], f"{name}: flag and mac must use one read of the state"
-
-
-def test_leader_does_not_restore_its_own_row_while_quiet():
-    code = _code(MASTER / "ClusterLeaderGrid.cpp")
-    body = code[code.index("void serviceSelfRow()"):]
-    body = body[:body.index("\n}\n")]
-    gate = body.index("if (tasksQuiet()) return;")
-    # After the in-flight render (already committed to the members), before
-    # the re-show.
-    assert body.index("if (selfPending)") < gate < body.rindex("displayEnqueue(")
-
-
-def test_a_promoted_member_keeps_the_wall_quiet():
-    code = _code(MASTER / "ClusterFollower.cpp")
-    impl = code[code.index("static ClusterPromoteVerdict clusterFollowerPromoteImpl(bool autoPath) {"):]
-    read = impl.index("wasQuiet = memberQuiet;")
-    leave = impl.index("followerLeaveLocked();")
-    apply = impl.index("if (wasQuiet) webMqttApplyQuiet(true);")
-    assert read < leave < apply, "read the flag before the leave clears it, apply after"
-
-
 def test_a_change_is_written_back_to_the_retained_command():
     code = _code(MASTER / "MqttService.cpp")
     body = code[code.index("static void mqttPublishQuiet()"):]
@@ -93,10 +53,7 @@ def test_a_change_is_written_back_to_the_retained_command():
     assert body.index("if (mqttLastQuietState >= 0) {") < mirror < body.index("mqttLastQuietState = state;")
 
 
-def test_both_member_implementations_read_the_flag_and_hold_their_frame():
-    s3 = _code(MASTER / "WebCluster.cpp")
-    assert "clusterQuietAccept(" in s3 and "clusterFollowerMacMatches(" in s3
-    assert "clusterQuietMsg(pingTs," in s3, "the mac must be checked against this ping's timestamp"
+def test_the_row_board_reads_the_flag_and_holds_its_frame():
     # The ESP-01 row takes the flag from its master over the wall link, and
     # only on a connection that reached Welcome.
     esp = _code(V2 / "FollowerEsp01" / "FollowerLink.cpp")

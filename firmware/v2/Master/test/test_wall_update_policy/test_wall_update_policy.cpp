@@ -238,6 +238,16 @@ static void test_a_new_stored_image_forgives_every_row_and_lifts_the_hold() {
   TEST_ASSERT_EQUAL(0, again(300200));
 }
 
+static void test_an_operators_retry_forgives_that_row_only() {
+  block(0);
+  block(1);
+  up.retry(0);
+  TEST_ASSERT_FALSE(up.blocked[0]);
+  TEST_ASSERT_EQUAL(0, up.attempts[0]);
+  TEST_ASSERT_TRUE(up.blocked[1]);
+  TEST_ASSERT_EQUAL(0, again(700200));
+}
+
 static void test_a_row_reporting_another_rev_than_before_is_forgiven() {
   block(0);
   up.noteRev(0, "old0000", "old0000");
@@ -337,6 +347,7 @@ int main(int, char**) {
   RUN_TEST(test_an_image_that_crashes_after_its_hello_is_offered_three_times_only);
   RUN_TEST(test_a_row_back_still_in_rescue_mode_did_not_take_the_image);
   RUN_TEST(test_a_new_stored_image_forgives_every_row_and_lifts_the_hold);
+  RUN_TEST(test_an_operators_retry_forgives_that_row_only);
   RUN_TEST(test_a_row_reporting_another_rev_than_before_is_forgiven);
   RUN_TEST(test_the_rev_change_of_its_own_offer_forgives_nothing);
   RUN_TEST(test_ten_minutes_of_unbroken_health_forgive_a_row);

@@ -51,11 +51,6 @@ void tasksInit(MasterSettings& settings, SettingsStore& store);
 // queues a Probe right after calling this.
 void tasksSetUnitCountOverride(int count);
 
-// #331 headless: push a changed deviceRole to displayTask. A headless role
-// forces displayWidth 0 (no display, no phantom row) at the next fold — the
-// settings drain queues a Probe right after calling this.
-void tasksSetDeviceRole(const String& role);
-
 // #412 boot auto-install brake, pushed by the settings drain on netTask. True
 // (the default) keeps the historical behaviour: a master booting with
 // off-bundle units converges them unattended. False skips it so an operator
@@ -96,6 +91,6 @@ void tasksHeartbeatReport();
 // data, for /system/stats — the heartbeat line above only reaches USB-CDC.
 // Safe from any task; a not-yet-started task reads 0.
 struct TasksStackHwm {
-  uint32_t display = 0, clock = 0, net = 0, mqtt = 0, cluster = 0, link = 0;
+  uint32_t display = 0, clock = 0, net = 0, mqtt = 0, worker = 0, link = 0;
 };
 TasksStackHwm tasksStackHwm();

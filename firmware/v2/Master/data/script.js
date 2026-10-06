@@ -27,19 +27,6 @@ var initialised = false;
 var mirrorTiles = [];
 var lastHealthUnits = [];
 var mirrorShown = "";
-//Cluster wall (#277): non-null while the SSE stream carries grid rows —
-//the leader's mirror then renders the WHOLE wall, one strip per row.
-var wallWidths = null;
-var wallSelfRow = 0;
-//Who built the wall (#294): "sse" = this board leads (rows ride /events),
-//"digest" = this board follows and mirrors the leader's ping-piggybacked
-//digest. Each source owns its own collapse rule in applySettings.
-var wallSource = null;
-//Per-row health strips for rows that are NOT this board's own (#294) —
-//null for the self row (the physical healthStrip covers it).
-var wallRowStrips = [];
-var mirrorRowTiles = [];
-
 //The device stores umlauts as $ & # on the wire; show the real glyphs.
 function wireToGlyph(ch) {
 	if (ch === '$') return 'Ä';
@@ -68,8 +55,8 @@ function buildTile() {
 	return t;
 }
 
-//The health strip tracks THIS board's physical units (never remote wall
-//rows), so it rebuilds from unitCount alone.
+//The health strip tracks this board's physical units, so it rebuilds from
+//unitCount alone.
 function buildStrip(n) {
 	var strip = document.getElementById("healthStrip");
 	while (strip.firstChild) strip.removeChild(strip.firstChild);
@@ -78,10 +65,6 @@ function buildStrip(n) {
 
 function clearMirror() {
 	var mirror = document.getElementById("mirror");
-	//The wall build reparents the health strip under the own row — put it
-	//back before clearing or the rebuild would delete it.
-	var note = document.getElementById("healthNote");
-	note.parentNode.insertBefore(document.getElementById("healthStrip"), note);
 	//Discarded tiles must not keep riffling against detached DOM nodes —
 	//kill their timers before the rebuild drops the references.
 	mirrorTiles.forEach(function(tile) {
@@ -90,120 +73,18 @@ function clearMirror() {
 	});
 	while (mirror.firstChild) mirror.removeChild(mirror.firstChild);
 	mirrorTiles = [];
-	mirrorRowTiles = [];
-	wallRowStrips = [];
 	mirrorShown = "";
 }
 
 function buildMirror(width) {
 	clearMirror();
-	wallWidths = null;
-	wallSource = null;
-	document.getElementById("mirror").classList.remove("stale");
 	var mirror = document.getElementById("mirror");
-	mirror.classList.remove("wall");
-	mirror.style.removeProperty("--wallcols");
-	document.getElementById("healthStrip").style.removeProperty("width");
 	for (var i = 0; i < width; i++) {
 		var t = buildTile();
 		mirror.appendChild(t);
 		mirrorTiles.push(t);
 	}
 	buildStrip(width);
-}
-
-//Cluster wall (#277): one strip per grid row, every row sharing the tile
-//size of the widest row (--wallcols), left-aligned at col 0. The health
-//strip moves under the own row — it shows this board's units only.
-function buildWall(widths, selfRow) {
-	clearMirror();
-	wallWidths = widths.slice();
-	wallSelfRow = selfRow;
-	var mirror = document.getElementById("mirror");
-	mirror.classList.add("wall");
-	var maxW = Math.max.apply(null, widths);
-	mirror.style.setProperty("--wallcols", maxW);
-	wallRowStrips = [];
-	for (var r = 0; r < widths.length; r++) {
-		var rowEl = document.createElement("div");
-		rowEl.className = "mrow";
-		rowEl.style.width = (widths[r] / maxW * 100) + "%";
-		var tiles = [];
-		for (var i = 0; i < widths[r]; i++) {
-			var t = buildTile();
-			rowEl.appendChild(t);
-			tiles.push(t);
-			mirrorTiles.push(t);
-		}
-		mirror.appendChild(rowEl);
-		mirrorRowTiles.push(tiles);
-		if (r === selfRow) {
-			var strip = document.getElementById("healthStrip");
-			strip.style.width = (widths[r] / maxW * 100) + "%";
-			mirror.appendChild(strip);
-			wallRowStrips.push(null);
-		} else {
-			//Remote rows get their own strip (#294), fed by the 5 s
-			///cluster/status poll (leader) or the digest (follower) —
-			//hidden until that row's board reports health.
-			var rs = document.createElement("div");
-			rs.className = "health rowhealth hidden";
-			rs.style.width = (widths[r] / maxW * 100) + "%";
-			for (var c = 0; c < widths[r]; c++) rs.appendChild(document.createElement("span"));
-			mirror.appendChild(rs);
-			wallRowStrips.push(rs);
-		}
-	}
-	buildStrip(unitCount || 0);
-	refreshLiveStatus();
-}
-
-//Row strips from cluster member health (#294): bit i of a member's hex
-//faultMask = its unit at position col+i is faulty (amber, like the local
-//strip's flagged state); an unjoined member's whole span goes red. Rows
-//where nobody reported health keep their strip hidden — absence is
-//"unknown", never "all good". Coincident mirror members merge worst-wins.
-function updateWallHealth(members) {
-	if (!wallWidths || wallRowStrips.length === 0) return;
-	var byRow = {};
-	(members || []).forEach(function(m) {
-		//No self-skip here: on a FOLLOWER pane the digest's self member is
-		//the LEADER's row, which needs its strip. The local pane's own row
-		//is skipped naturally — its wallRowStrips slot is null (the
-		//physical healthStrip owns it).
-		(byRow[m.row] = byRow[m.row] || []).push(m);
-	});
-	for (var r = 0; r < wallRowStrips.length; r++) {
-		var strip = wallRowStrips[r];
-		if (!strip) continue;
-		var rowMembers = (byRow[r] || []).filter(function(m) {
-			return typeof m.faultMask === "string" || !m.joined;
-		});
-		strip.classList.toggle("hidden", rowMembers.length === 0);
-		if (rowMembers.length === 0) continue;
-		var cls = [], titles = [];
-		rowMembers.forEach(function(m) {
-			var mask = parseInt(m.faultMask || "0", 16) || 0;
-			for (var i = 0; i < m.width; i++) {
-				var cell = m.col + i;
-				if (cell >= strip.children.length) break;
-				if (!m.joined) {
-					cls[cell] = "bad";
-					titles[cell] = "board unreachable";
-				} else if ((mask >>> i) & 1) {
-					if (cls[cell] !== "bad") cls[cell] = "warn";
-					titles[cell] = "unit flagged faulty";
-				} else if (cls[cell] === undefined) {
-					cls[cell] = "";
-				}
-				if (m.joined && m.wear && !titles[cell]) titles[cell] = "wear flagged on this row";
-			}
-		});
-		for (var c = 0; c < strip.children.length; c++) {
-			strip.children[c].className = cls[c] || "";
-			strip.children[c].title = titles[c] || "";
-		}
-	}
 }
 
 //Pad the way the firmware lays out a single frame: honour the persisted
@@ -291,17 +172,6 @@ function riffleTileTo(tile, wireChar, staggerIndex) {
 
 function renderMirror(text) {
 	if (mirrorTiles.length === 0) return;
-	if (wallWidths) {
-		//Follower digest wall (#294): the board's own SSE text overlays just
-		//the own row — the leader's digest rows own the rest. Riffle's
-		//per-tile glyph dedup absorbs the digest re-paint of the same text.
-		if (wallSource !== "digest" || wallSelfRow < 0) return;
-		var row = mirrorRowTiles[wallSelfRow];
-		if (!row) return;
-		var overlay = padForMirror(text, row.length, currentAlignment);
-		for (var i = 0; i < row.length; i++) riffleTileTo(row[i], overlay[i], i);
-		return;
-	}
 	var frame = padForMirror(text, mirrorTiles.length, currentAlignment);
 	if (frame === mirrorShown) return;
 	mirrorShown = frame;
@@ -310,92 +180,14 @@ function renderMirror(text) {
 	});
 }
 
-//Wall rows arrive pre-positioned (padded, sliced server-side) — render
-//verbatim, no alignment math. Stagger restarts per row so the rows
-//animate in parallel like the physical wall.
-function renderWall(rows) {
-	if (!wallWidths) return;
-	var frame = rows.join("\n");
-	if (frame === mirrorShown) return;
-	if (wallSource !== "digest") mirrorShown = frame;
-	for (var r = 0; r < mirrorRowTiles.length; r++) {
-		var text = String(rows[r] || "").toUpperCase();
-		for (var i = 0; i < mirrorRowTiles[r].length; i++) {
-			riffleTileTo(mirrorRowTiles[r][i], i < text.length ? text[i] : " ", i);
-		}
-	}
-}
-
-//Follower pane of glass (#294): mirror the leader's ping-piggybacked
-//digest — wall rows, per-row health, member pills — from THIS board's page.
-//Rides the 5 s /settings poll; riffle's per-tile dedup absorbs repaints.
-function wallWidthsFromMembers(members) {
-	//Digest content is only as trustworthy as the LAN — clamp the geometry
-	//(8 rows / 255 units mirror the firmware's own table limits) so a
-	//hostile value can never build a runaway wall and hang this tab.
-	var widths = [];
-	members.forEach(function(m) {
-		var row = Number(m.row), extent = Number(m.col) + Number(m.width);
-		if (!(row >= 0 && row < 8) || !(extent >= 1 && extent <= 255)) return;
-		if (!(widths[row] >= extent)) widths[row] = extent;
-	});
-	for (var r = 0; r < widths.length; r++) widths[r] = widths[r] || 0;
-	return widths;
-}
-
-function pollClusterDigest(s) {
-	fetch("/cluster/digest", { cache: "no-store" })
-		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
-		.then(function(d) {
-			var digest = d.digest || {};
-			var st = digest.status || {};
-			var members = st.members || [];
-			if (members.length === 0 || !digest.rows) return;
-			window.lastDigestLeaderHost = (digest.leader || {}).host || s.clusterLeaderHost || "";
-			var widths = wallWidthsFromMembers(members);
-			if (widths.length === 0) return;
-			var selfRow = Number(s.clusterRow);
-			if (!wallWidths || wallSource !== "digest" ||
-				wallWidths.join() !== widths.join() || wallSelfRow !== selfRow) {
-				buildWall(widths, selfRow);
-				wallSource = "digest";
-				refreshLiveStatus();
-			}
-			renderWall(digest.rows);
-			updateWallHealth(members);
-			renderFollowerPills(members);
-			//Stale digest (spec): a silent leader freezes this mirror — grey
-			//it and say how old the picture is instead of looking live.
-			var stale = Number(d.ageMs) > 30000;
-			document.getElementById("mirror").classList.toggle("stale", stale);
-			if (stale) {
-				setBoardStatus("● CLUSTER · last seen " +
-					Math.round(Number(d.ageMs) / 1000) + "s ago", true);
-			}
-		})
-		.catch(function() {});
-}
-
 function setBoardStatus(text, offline) {
 	var el = document.getElementById("boardStatus");
 	el.textContent = text;
 	el.style.color = offline ? "var(--warn)" : "";
 }
 
-//#478: the leading state rides the sticky chrome instead of a banner —
-//row count from the cached /cluster/status (absent until its first poll).
 function refreshLiveStatus() {
-	var s = window.lastSettings || {};
-	var extra = "";
-	if (s.clusterLeading) {
-		var rows = 0;
-		var members = (window.lastClusterStatus || {}).members || [];
-		members.forEach(function(m) { rows = Math.max(rows, m.row + 1); });
-		extra = rows ? "LEADING " + rows + " ROW" + (rows === 1 ? "" : "S") + " · " : "LEADING · ";
-	} else if (wallWidths) {
-		extra = "CLUSTER · ";
-	}
-	setBoardStatus("● LIVE · " + extra + (currentMode === "clock" ? "CLOCK" : "TEXT"), false);
+	setBoardStatus("● LIVE · " + (currentMode === "clock" ? "CLOCK" : "TEXT"), false);
 }
 
 // ===================== settings poll =====================
@@ -406,23 +198,8 @@ function applySettings(s) {
 	currentAlignment = s.alignment || "left";
 	currentMode = s.deviceMode || "text";
 
-	//Collapse fallback (#277): if the SSE stream died and missed the
-	//uncluster transition, the poll is the authority — tear the wall down.
-	//Each wall source has its own collapse rule (#294): the SSE wall dies
-	//with leadership, the digest wall with the follower membership.
-	var followerClustered = !!s.clusterState && s.clusterState !== "standalone";
-	if (wallWidths && wallSource !== "digest" && !s.clusterLeading) buildMirror(unitCount);
-	if (wallWidths && wallSource === "digest" && !followerClustered) buildMirror(unitCount);
-	//Follower pane of glass (#294): while clustered, mirror the leader's
-	//digest — the whole wall on THIS board's page, 5 s cadence.
-	if (followerClustered && !s.clusterLeading) pollClusterDigest(s);
-	if (!wallWidths) {
-		if (mirrorTiles.length !== unitCount) buildMirror(unitCount);
-		renderMirror(s.lastWrittenText || "");
-	} else if (document.getElementById("healthStrip").children.length !== unitCount) {
-		//SSE built the wall before the first poll delivered unitCount.
-		buildStrip(unitCount);
-	}
+	if (mirrorTiles.length !== unitCount) buildMirror(unitCount);
+	renderMirror(s.lastWrittenText || "");
 
 	//#289 dummy mode: reflect the stored override (never while the user is
 	//editing the field).
@@ -436,18 +213,6 @@ function applySettings(s) {
 		overridePill.textContent = overrideValue > 0 ? "pinned: " + overrideValue : "auto";
 		overridePill.className = "pill " + (overrideValue > 0 ? "ok" : "off");
 	}
-
-	//#330 headless mode: reflect the stored deviceRole and the unit-less
-	//suggestion. Detection only nudges (banner) — the user picks the role.
-	var role = s.deviceRole || "display";
-	setSegValue("segDeviceRole", role);
-	var rolePill = document.getElementById("labelDeviceRole");
-	if (rolePill) {
-		rolePill.textContent = role === "display" ? "display" : role.replace("headless-", "");
-		rolePill.className = "pill " + (role === "display" ? "off" : "ok");
-	}
-	var roleBanner = document.getElementById("deviceRoleSuggestion");
-	if (roleBanner) roleBanner.classList.toggle("hidden", !s.headlessSuggested);
 
 	document.getElementById("boardName").textContent = (s.effectiveDeviceName || "split-flap").toUpperCase();
 	refreshLiveStatus();
@@ -477,8 +242,6 @@ function applySettings(s) {
 		setCalibrationUnitsFromSettings(s);
 	}
 	setMqttPill(s.mqttHost || "", s.mqttConnected === true);
-	updateClusterBanner(s);
-	updateClusterFollowerCard(s);
 	updateRescueSlot(s);
 }
 
@@ -511,205 +274,6 @@ function updateRescueSlot(s) {
 	pill.textContent = label;
 }
 
-//Cluster membership (#272): while this board renders a row of a cluster
-//wall, the leader owns text/mode/clock — show a persistent banner with a
-//link to the leader and disable the content controls (the backend answers
-//409 regardless; maintenance stays live). Everything comes off /settings,
-//so the state survives reboots and poll-recovers after leader changes.
-function updateClusterBanner(s) {
-	var el = document.getElementById("clusterBanner");
-	if (!el) return;
-	var clustered = !!s.clusterState && s.clusterState !== "standalone";
-	var leading = !clustered && !!s.clusterLeading;
-	//#478: the banner is an ALERT surface — the leading state lives in the
-	//sticky chrome (refreshLiveStatus), healthy membership in the composer
-	//note; only a follower whose wall is dark or at risk banners here.
-	var alerting = clustered &&
-		(s.clusterState === "grace" || s.clusterState === "local-fallback");
-	el.classList.toggle("hidden", !alerting);
-	if (alerting) {
-		//leaderName/leaderHost come off an unauthenticated LAN POST — build
-		//the banner with DOM nodes, never markup strings.
-		var leader = s.clusterLeaderName || s.clusterLeaderHost || "leader";
-		var text = "Clustered — row " + (Number(s.clusterRow) + 1) + " of " + leader;
-		if (s.clusterState === "local-fallback") text += " (leader unreachable — showing local clock)";
-		else if (s.clusterState === "grace") text += " (waiting for leader)";
-		el.textContent = text;
-		//Strict hostname[:port] allowlist — anything else gets no link at all.
-		var host = String(s.clusterLeaderHost || "");
-		if (/^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {
-			el.appendChild(document.createTextNode(" · "));
-			var link = document.createElement("a");
-			link.href = "http://" + host + "/";
-			link.textContent = "open leader";
-			el.appendChild(link);
-		}
-		//#295: a follower that has written the leader off can take over —
-		//it holds the member table from the ping digest.
-		if (s.clusterState === "local-fallback") {
-			el.appendChild(document.createTextNode(" · "));
-			var promote = document.createElement("button");
-			promote.type = "button";
-			promote.className = "btn";
-			promote.id = "buttonClusterPromote";
-			promote.textContent = "Promote this board to leader…";
-			promote.addEventListener("click", promoteCluster);
-			el.appendChild(promote);
-		}
-	}
-	updateComposerFollowerNote(s, clustered);
-	["inputText", "buttonSend", "selectDuration"].forEach(function(id) {
-		var control = document.getElementById(id);
-		if (control) control.disabled = clustered;
-	});
-	document.querySelectorAll("#segMode button").forEach(function(b) {
-		b.disabled = clustered;
-	});
-	applyWallLabels(leading);
-	updateMessageInputs(leading);
-}
-
-//#478: while clustered the composer card explains its own disabled state —
-//row, leader, link — instead of a page-wide banner. Hidden during grace/
-//local-fallback: the alert banner owns those states (the display is NOT
-//showing leader content then, so this wording would contradict it). DOM
-//nodes only (leaderName/leaderHost come off an unauthenticated LAN POST).
-function updateComposerFollowerNote(s, clustered) {
-	var note = document.getElementById("composerFollowerNote");
-	if (!note) return;
-	var show = clustered &&
-		s.clusterState !== "grace" && s.clusterState !== "local-fallback";
-	note.classList.toggle("hidden", !show);
-	if (!show) return;
-	var leader = s.clusterLeaderName || s.clusterLeaderHost || "the leader";
-	//#332: a monitor renders nothing — its mirror IS the product, so the
-	//row wording would be wrong for it.
-	note.textContent = s.deviceRole === "headless-monitor"
-		? "This board monitors " + leader + "'s wall — the mirror above is the live dashboard."
-		: "This board renders row " + (Number(s.clusterRow) + 1) + " of " + leader +
-		  " — text, mode and clock come from the leader.";
-	//Strict hostname[:port] allowlist — anything else gets no link at all.
-	var host = String(s.clusterLeaderHost || "");
-	if (/^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {
-		note.appendChild(document.createTextNode(" "));
-		var link = document.createElement("a");
-		link.href = "http://" + host + "/";
-		link.textContent = "Open the leader";
-		note.appendChild(link);
-	}
-}
-
-//#317: relabel the command buttons to signal wall-wide reach while leading.
-function applyWallLabels(leading) {
-	var send = document.getElementById("buttonSend");
-	if (send) send.textContent = leading ? "Send to wall" : "Send";
-	var stop = document.getElementById("buttonStop");
-	if (stop) stop.textContent = leading ? "Stop & blank the wall" : "Stop & blank display";
-}
-
-//#318: per-row text widths from the cached /cluster/status — a row holds as
-//many characters as it has flaps: the widths of its members, mirror twins
-//(same col) counted once. Columns no member owns are gaps in the wall, not
-//capacity (#303). Returns [w0,w1,…] or null.
-function clusterRowWidths() {
-	var st = window.lastClusterStatus;
-	if (!st || !st.members || !st.members.length) return null;
-	var widths = {}, seen = {};
-	st.members.forEach(function(m) {
-		var w = m.width || 0;
-		if (!w) return;
-		var span = m.row + "|" + (m.col || 0);
-		if (seen[span]) return;
-		seen[span] = true;
-		widths[m.row] = (widths[m.row] || 0) + w;
-	});
-	var rows = Object.keys(widths).map(Number);
-	if (!rows.length) return null;
-	var maxRow = Math.max.apply(null, rows);
-	var arr = [];
-	for (var r = 0; r <= maxRow; r++) arr.push(widths[r] || 0);
-	return arr;
-}
-
-//#318: one input per wall row (maxlength = that row's width) while leading a
-//multi-row wall — replaces the single box + literal-\n marker. The shape
-//string gates rebuilds so typed text survives the /cluster/status poll.
-var perRowShape = null;
-function updateMessageInputs(leading) {
-	var perRow = document.getElementById("perRowInputs");
-	if (!perRow) return;
-	var wrap = document.getElementById("singleInputWrap");
-	var meta = document.getElementById("messageMetaRow");
-	var widths = leading ? clusterRowWidths() : null;
-	var usePerRow = !!(widths && widths.length > 1);
-	if (wrap) wrap.classList.toggle("hidden", usePerRow);
-	if (meta) meta.classList.toggle("hidden", usePerRow);
-	perRow.classList.toggle("hidden", !usePerRow);
-	if (!usePerRow) { perRowShape = null; return; }
-	var shape = widths.join(",");
-	if (shape === perRowShape) return;
-	perRowShape = shape;
-	removeAllChildren(perRow);
-	widths.forEach(function(w, r) {
-		var row = document.createElement("div");
-		row.className = "row";
-		var cell = document.createElement("div");
-		cell.className = "grow";
-		var lbl = document.createElement("label");
-		lbl.className = "small";
-		lbl.textContent = "Row " + (r + 1) + " — " + w + " units";
-		//#478: live per-row count, same duty as the single box's char counter.
-		var count = document.createElement("span");
-		count.className = "meta perrow-count";
-		count.textContent = "0 / " + w;
-		lbl.appendChild(count);
-		var input = document.createElement("input");
-		input.type = "text";
-		input.className = "perrow-input";
-		input.maxLength = w;
-		input.autocomplete = "off";
-		input.placeholder = "up to " + w + " characters";
-		input.addEventListener("input", function() {
-			count.textContent = input.value.length + " / " + w;
-		});
-		cell.appendChild(lbl);
-		cell.appendChild(input);
-		row.appendChild(cell);
-		perRow.appendChild(row);
-	});
-}
-
-//#318: compose the wall text from the per-row inputs — joined with real
-//newlines, which the grid composer treats as row breaks (#290).
-function perRowCompose() {
-	var inputs = document.querySelectorAll("#perRowInputs .perrow-input");
-	return Array.prototype.map.call(inputs, function(i) {
-		return normalizeUmlauts(i.value);
-	}).join("\n");
-}
-
-//#295 one-click takeover: the firmware validates (local-fallback + held
-//digest) and stages the transformed member table; the old leader demotes
-//itself via the sticky-leadership join 409 when it returns.
-function promoteCluster() {
-	if (!confirm("Take over as the wall\u2019s leader?\n\nThis board starts driving every member; the old leader joins as a plain member when it comes back.")) return;
-	var button = document.getElementById("buttonClusterPromote");
-	if (button) button.disabled = true;
-	fetch("/cluster/promote", { method: "POST" })
-		.then(function(r) {
-			return r.json().then(function(j) { return { ok: r.ok, message: j.message }; });
-		})
-		.then(function(res) {
-			alert(res.message || (res.ok ? "Promoted." : "Promote failed."));
-			if (res.ok) location.reload();
-			else if (button) button.disabled = false;
-		})
-		.catch(function() {
-			alert("Promote failed \u2014 board unreachable.");
-			if (button) button.disabled = false;
-		});
-}
-
 function loadPage() {
 	document.getElementById("loadError").classList.add("hidden");
 	fetch("/settings", { cache: "no-store" })
@@ -732,7 +296,6 @@ function startUi(s) {
 	initSegControls();
 	initLogPanel();
 	initSystemTab();
-	initClusterCard();
 	initDisplayEvents();
 	initMasterFirmwareUpload();
 	loadUnitHealth();
@@ -762,36 +325,13 @@ function startUi(s) {
 }
 
 //SSE display push (#251): the mirror flips the moment displayTask executes
-//a command instead of waiting on the 5 s poll. The poll backstops the
-//single-row mirror's CONTENT and the wall's collapse (clusterLeading),
-//but not wall content — a dead stream freezes the remote rows until
-//EventSource auto-reconnects and onConnect resends the full wall (#277).
+//a command instead of waiting on the 5 s poll, which backstops it.
 function initDisplayEvents() {
 	if (!window.EventSource) return;
 	var es = new EventSource("/events");
 	es.addEventListener("display", function(event) {
 		try {
-			var d = JSON.parse(event.data);
-			if (d.rows && d.rows.length) {
-				var widths = d.rows.map(function(row) { return String(row).length; });
-				var selfRow = d.selfRow || 0;
-				if (!wallWidths || wallSource !== "sse" ||
-					wallWidths.join() !== widths.join() || wallSelfRow !== selfRow) {
-					buildWall(widths, selfRow);
-					wallSource = "sse";
-				}
-				renderWall(d.rows);
-			} else {
-				//Rows only ride the stream while this board LEADS — a
-				//follower's own-text events must not collapse its digest
-				//wall (#294); renderMirror overlays just the own row there.
-				if (wallWidths && wallSource === "sse") {
-					//Cluster disabled — collapse to the single-row mirror.
-					buildMirror(unitCount || 0);
-					refreshLiveStatus();
-				}
-				renderMirror(d.text || "");
-			}
+			renderMirror(JSON.parse(event.data).text || "");
 		} catch (e) { /* malformed event — the poll catches up */ }
 	});
 }
@@ -800,7 +340,7 @@ window.addEventListener("load", loadPage);
 
 // ===================== views / tabs =====================
 
-var TAB_NAMES = ["home", "wall", "settings", "maintenance", "system", "logs"];
+var TAB_NAMES = ["home", "settings", "maintenance", "system", "logs"];
 
 function currentTabFromHash() {
 	var name = location.hash.replace("#", "");
@@ -809,7 +349,7 @@ function currentTabFromHash() {
 
 //"setup" is a view but not a tab: the tabbar stays hidden while it's up.
 function showView(name) {
-	["home", "wall", "settings", "maintenance", "system", "logs", "setup"].forEach(function(view) {
+	["home", "settings", "maintenance", "system", "logs", "setup"].forEach(function(view) {
 		var section = document.getElementById("section-" + view);
 		if (section) section.classList.toggle("on", view === name);
 	});
@@ -838,11 +378,11 @@ function initTabs() {
 //backend answers "ok" / "ok-reboot" / 400 instead of redirecting. Only the
 //posted fields are applied server-side (provided-gating), so each card can
 //save independently.
-function postSettingsFields(fields, callback, base) {
+function postSettingsFields(fields, callback) {
 	var body = new URLSearchParams();
 	Object.keys(fields).forEach(function(key) { body.append(key, fields[key]); });
 	body.append("ajax", "1");
-	fetch((base || "") + "/", { method: "POST", body: body })
+	fetch("/", { method: "POST", body: body })
 		.then(function(response) {
 			return response.text().then(function(text) {
 				callback(response.ok, text.trim());
@@ -901,12 +441,7 @@ function normalizeUmlauts(text) {
 }
 
 function sendMessage() {
-	//#318: per-row inputs (leading a multi-row wall) compose the wall text;
-	//otherwise the single box.
-	var perRow = document.getElementById("perRowInputs");
-	var text = (perRow && !perRow.classList.contains("hidden"))
-		? perRowCompose()
-		: normalizeUmlauts(document.getElementById("inputText").value);
+	var text = normalizeUmlauts(document.getElementById("inputText").value);
 	var dwell = document.getElementById("selectDuration").value;
 	var button = document.getElementById("buttonSend");
 	button.disabled = true;
@@ -1006,16 +541,6 @@ function initSegControls() {
 			currentAlignment = b.dataset.value;
 			postSettingsFields({ alignment: b.dataset.value }, function(ok) {
 				showStatus("displayStatus", ok ? "✔ Alignment saved." : "✘ Alignment save failed.", ok ? "success" : "error", 4000);
-			});
-		});
-	});
-	//#330 headless mode: deviceRole selector — posts only its own field, the
-	//poll loop reflects the device's answer back like the other segments.
-	document.querySelectorAll("#segDeviceRole button").forEach(function(b) {
-		b.addEventListener("click", function() {
-			setSegValue("segDeviceRole", b.dataset.value);
-			postSettingsFields({ deviceRole: b.dataset.value }, function(ok) {
-				showStatus("deviceRoleStatus", ok ? "✔ Role saved." : "✘ Role save failed.", ok ? "success" : "error", 4000);
 			});
 		});
 	});
@@ -1988,22 +1513,14 @@ function initSystemTab() {
 			});
 	}
 
-	//Cluster vitals fan out to each row's /settings — slower than the local
-	//2 s stats poll so a wall of boards isn't hammered (#318 D).
-	var clusterVitalsHandle = null;
-
 	function syncPolling() {
 		var want = onSystemTab && !document.hidden;
 		if (want && pollHandle === null) {
 			fetchStats();
 			pollHandle = setInterval(fetchStats, 2000);
-			refreshSysClusterVitals();
-			clusterVitalsHandle = setInterval(refreshSysClusterVitals, 8000);
 		} else if (!want && pollHandle !== null) {
 			clearInterval(pollHandle);
 			pollHandle = null;
-			clearInterval(clusterVitalsHandle);
-			clusterVitalsHandle = null;
 		}
 	}
 
@@ -2418,17 +1935,17 @@ function setMaintenanceBusy(busy) {
 
 //callback(ok, reason): ok=true means the op EXECUTED successfully (wire ACK
 //+ postcondition for address ops), not merely that it queued.
-function postCalibrationAwait(path, params, callback, base) {
+function postCalibrationAwait(path, params, callback) {
 	var query = Object.keys(params).map(function(k) {
 		return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
 	}).join("&");
 	setMaintenanceBusy(true);
-	fetch((base || "") + path + (query ? "?" + query : ""), { method: "POST" })
+	fetch(path + (query ? "?" + query : ""), { method: "POST" })
 		.then(function(r) {
 			if (!r.ok) return r.text().then(function(t) { throw new Error(t || ("HTTP " + r.status)); });
 			return r.json();
 		})
-		.then(function(data) { pollOpResult(data.seq, 30, callback, base); })
+		.then(function(data) { pollOpResult(data.seq, 30, callback); })
 		.catch(function(e) {
 			setMaintenanceBusy(false);
 			callback(false, e && e.message ? e.message : "request failed");
@@ -2437,12 +1954,12 @@ function postCalibrationAwait(path, params, callback, base) {
 
 //Address ops settle ~3 s + reprobe before their result lands; 30 × 500 ms
 //also survives a queued show frame ahead of the op.
-function pollOpResult(seq, remaining, callback, base) {
-	fetch((base || "") + "/unit/op-result?seq=" + seq, { cache: "no-store" })
+function pollOpResult(seq, remaining, callback) {
+	fetch("/unit/op-result?seq=" + seq, { cache: "no-store" })
 		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
 		.then(function(res) {
 			if (res.state === "pending" && remaining > 0) {
-				setTimeout(function() { pollOpResult(seq, remaining - 1, callback, base); }, 500);
+				setTimeout(function() { pollOpResult(seq, remaining - 1, callback); }, 500);
 				return;
 			}
 			setMaintenanceBusy(false);
@@ -2455,7 +1972,7 @@ function pollOpResult(seq, remaining, callback, base) {
 		})
 		.catch(function() {
 			if (remaining > 0) {
-				setTimeout(function() { pollOpResult(seq, remaining - 1, callback, base); }, 500);
+				setTimeout(function() { pollOpResult(seq, remaining - 1, callback); }, 500);
 				return;
 			}
 			setMaintenanceBusy(false);
@@ -2524,1064 +2041,4 @@ function wizardFinish(savedMqtt) {
 	showBanner(savedMqtt
 		? "Setup complete. Name and MQTT apply after a reboot — Maintenance → Reboot when ready."
 		: "Setup complete. You can name the display or connect MQTT any time under Settings.", 10000);
-}
-
-
-// ===================== cluster card (#274) =====================
-
-//Leader-side member editor + discovery browse. clusterMembers is the
-//editor's source of truth: mirrored once from /cluster/status, then only
-//user edits touch it — the 5 s status poll refreshes state/rev cells only
-//(and only while the editor still mirrors the saved table), so it can
-//never stomp a row mid-edit.
-var clusterMembers = null;
-var clusterStatusTimer = null;
-var clusterRolloutSeen = false;
-
-function initClusterCard() {
-	var tabActive = false;
-	document.addEventListener("sf-tabchange", function(event) {
-		//Wall hosts the member editor + rollout; Maintenance (#318 C) and
-		//System (#318 D) need the live member list to render their cards.
-		tabActive = event.detail === "wall" || event.detail === "maintenance" ||
-			event.detail === "system";
-		if (tabActive) loadClusterStatus();
-	});
-	//One steady 5 s timer: the wall tab needs pills/rollout, and the
-	//home tab's mirror needs per-row health (#294) while this board leads.
-	clusterStatusTimer = setInterval(function() {
-		if (document.hidden) return;
-		if (tabActive || (wallWidths && wallSource === "sse")) loadClusterStatus();
-	}, 5000);
-}
-
-function setClusterPill(text, kind) {
-	var pill = document.getElementById("labelClusterStatus");
-	pill.className = "pill " + kind;
-	pill.textContent = text;
-}
-
-//Follower collapse: driven off the same /settings poll as the banner —
-//while this board is someone's row the leader editor makes no sense here.
-function updateClusterFollowerCard(s) {
-	var followerView = document.getElementById("clusterFollowerView");
-	if (!followerView) return;
-	var clustered = !!s.clusterState && s.clusterState !== "standalone";
-	followerView.classList.toggle("hidden", !clustered);
-	document.getElementById("clusterLeaderView").classList.toggle("hidden", clustered);
-	if (clustered) {
-		//leaderName/leaderHost come off an unauthenticated LAN POST — text
-		//nodes only (same rule as the banner).
-		var leader = s.clusterLeaderName || s.clusterLeaderHost || "the leader";
-		//#332: a monitor renders nothing — its wall mirror above IS the
-		//product. Other roles keep the row wording.
-		document.getElementById("clusterFollowerLine").textContent =
-			s.deviceRole === "headless-monitor"
-			? "This board monitors " + leader + "'s wall — the mirror above is " +
-			  "the live dashboard (greyed when the leader goes silent). It " +
-			  "promotes only as a last resort."
-			: "This board renders row " + (Number(s.clusterRow) + 1) + " of " + leader +
-			  " — text, mode and clock come from the leader; maintenance stays local.";
-		//Same health the banner reports: grace/fallback must not read green.
-		if (s.clusterState === "grace") setClusterPill("waiting for leader", "off");
-		else if (s.clusterState === "local-fallback") setClusterPill("leader lost", "bad");
-		else setClusterPill("clustered", "ok");
-	}
-}
-
-function loadClusterStatus() {
-	fetch("/cluster/status", { cache: "no-store" })
-		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
-		.then(updateClusterFromStatus)
-		.catch(function() {});
-}
-
-//follower-<rev>[-dirty].bin → "&v=<rev>" (parity with ota-flash.sh; the
-//follower records it as intendedVersion).
-function followerFwVersionParam(fileName) {
-	var m = fileName.match(/^follower-([0-9a-f]{7,40}(?:-dirty)?)/i);
-	return m ? "&v=" + encodeURIComponent(m[1]) : "";
-}
-
-//Upload a follower-*.bin to THIS board's storage (#304 Part B), same-origin
-//(no CORS). Client-side MD5 (SparkMD5) + the follower- prefix guard mirror the
-//master upload / ota-flash.sh #299. The S3 later streams it to esp01 rows.
-function uploadFollowerFirmware() {
-	var input = document.getElementById("inputClusterFollowerFw");
-	var file = input.files[0];
-	if (!file) { showStatus("clusterCardStatus", "✘ Pick a follower-*.bin first.", "error", 5000); return; }
-	if (!/^follower-/i.test(file.name)) {
-		showStatus("clusterCardStatus", "✘ " + escapeHtml(file.name) + " is not a follower-*.bin (an S3 image would brick an ESP-01).", "error", 8000);
-		return;
-	}
-	var btn = document.getElementById("buttonClusterFollowerFwUpload");
-	btn.disabled = true;
-	input.disabled = true;
-	showStatus("clusterCardStatus", "Computing MD5…", "pending");
-	var reader = new FileReader();
-	reader.onerror = function() {
-		btn.disabled = false;
-		input.disabled = false;
-		showStatus("clusterCardStatus", "✘ Could not read the file.", "error", 5000);
-	};
-	reader.onload = function() {
-		var md5 = SparkMD5.ArrayBuffer.hash(reader.result);
-		showStatus("clusterCardStatus", "Uploading follower image (" + Math.round(file.size / 1024) + " KB)…", "pending");
-		var formData = new FormData();
-		formData.append("firmware", file);
-		var xhr = new XMLHttpRequest();
-		xhr.open("POST", "/cluster/follower-firmware?md5=" + md5 + followerFwVersionParam(file.name));
-		xhr.onreadystatechange = function() {
-			if (xhr.readyState !== 4) return;
-			btn.disabled = false;
-			input.disabled = false;
-			if (xhr.status === 200) {
-				showStatus("clusterCardStatus", "✔ " + escapeHtml(xhr.responseText), "success", 8000);
-				loadClusterStatus();
-			} else if (xhr.status === 0) {
-				showStatus("clusterCardStatus", "✘ Upload failed — lost connection.", "error", 6000);
-			} else {
-				showStatus("clusterCardStatus", "✘ HTTP " + xhr.status + ": " + escapeHtml(xhr.responseText), "error", 8000);
-			}
-		};
-		xhr.send(formData);
-	};
-	reader.readAsArrayBuffer(file);
-}
-
-function clusterStateLabel(m) {
-	if (m.updating) return { text: "updating", kind: "off" };
-	//#343: the member is boot-looping and beaconing for a firmware re-push.
-	if (m.rescue) return { text: "rescue", kind: "bad" };
-	if (m.updateBlocked) return { text: "update blocked", kind: "bad" };
-	if (m.self) return { text: "ok", kind: "ok" };
-	if (m.degraded) return { text: "degraded", kind: "bad" };
-	//#385: quiet tier — failing contacts but not yet 30 s silent; and the
-	//alive-but-undeliverable-segment flag. Amber, never red.
-	if (m.suspect) return { text: "suspect", kind: "warn" };
-	if (m.renderStuck) return { text: "render stuck", kind: "warn" };
-	if (m.joined) return { text: "ok", kind: "ok" };
-	return { text: "joining", kind: "off" };
-}
-
-//#478: Wall-at-a-glance — totals + one pill per member above the editor,
-//off the same /cluster/status poll as the table. Leader-side only (a
-//follower's Wall tab shows the follower view). Member hosts come off the
-//LAN wire — text nodes only.
-function renderWallGlance(st) {
-	var el = document.getElementById("wallGlance");
-	if (!el) return;
-	var followerVisible = !document.getElementById("clusterFollowerView").classList.contains("hidden");
-	var members = (st && st.members) || [];
-	var show = !!(st && st.enabled) && !followerVisible && members.length > 0;
-	el.classList.toggle("hidden", !show);
-	removeAllChildren(el);
-	if (!show) return;
-	var rows = 0, units = 0, faulty = 0, joined = 0;
-	members.forEach(function(m) {
-		rows = Math.max(rows, m.row + 1);
-		units += m.detected || 0;
-		faulty += m.faulty || 0;
-		if (m.joined) joined++;
-	});
-	var line = document.createElement("span");
-	line.className = "glance-line";
-	line.textContent = "Leading " + rows + " row" + (rows === 1 ? "" : "s") +
-		" · " + units + " units · " +
-		(faulty ? faulty + " faulty" : "no faults") + " · " +
-		(joined === members.length ? "all joined" : joined + "/" + members.length + " joined");
-	el.appendChild(line);
-	members.slice().sort(function(a, b) { return a.row - b.row; }).forEach(function(m) {
-		var label = clusterStateLabel(m);
-		var pill = document.createElement("span");
-		pill.className = "pill " + label.kind;
-		pill.textContent = "R" + (m.row + 1) + " · " +
-			(m.self ? "this board" : m.host) + " · " + label.text;
-		el.appendChild(pill);
-	});
-	//Wire-auth summary over the FOLLOWER links only (the leader's own row is
-	//not a wire link); none authed = legacy auto-negotiate, off not red.
-	var followers = members.filter(function(m) { return !m.self; });
-	if (followers.length) {
-		var authed = followers.filter(function(m) { return m.hmac; }).length;
-		var chip = document.createElement("span");
-		if (authed === followers.length) { chip.className = "pill ok"; chip.textContent = "auth · all links"; }
-		else if (authed > 0) { chip.className = "pill bad"; chip.textContent = "auth · " + authed + "/" + followers.length; }
-		else { chip.className = "pill off"; chip.textContent = "unauthenticated"; }
-		el.appendChild(chip);
-	}
-	//Convergence activity — a short line only while something moves; the
-	//card status below keeps the detailed progress text.
-	var rollout = st.rollout || {}, push = st.followerPush || {};
-	var act = "";
-	if (rollout.phase === "uploading" && rollout.total > 0) {
-		act = "updating " + rollout.host + " — " + Math.floor(rollout.sent * 100 / rollout.total) + "%";
-	} else if (rollout.phase === "waiting") {
-		act = "flashed " + rollout.host + " — waiting for rejoin";
-	} else if (push.phase === "uploading" && push.total > 0) {
-		act = "pushing follower firmware to " + push.host + " — " + Math.floor(push.sent * 100 / push.total) + "%";
-	}
-	if (act) {
-		var actEl = document.createElement("span");
-		actEl.className = "glance-act";
-		actEl.textContent = act;
-		el.appendChild(actEl);
-	}
-}
-
-function updateClusterFromStatus(st) {
-	//Cache for the chrome status line + glance strip: they run off the
-	///settings poll but need member data from here.
-	window.lastClusterStatus = st;
-	updateClusterBanner(window.lastSettings || {});
-	//Maintenance-tab member list (#318 C): shown only while leading.
-	renderMaintClusterMembers(st);
-	renderWallGlance(st);
-	//Wall row strips (#294) — the leader's own SSE wall colors its remote
-	//rows from the same member health the pills use.
-	if (wallSource === "sse") updateWallHealth(st.members || []);
-	var followerVisible = !document.getElementById("clusterFollowerView").classList.contains("hidden");
-	if (!followerVisible) {
-		if (st.enabled) {
-			var rows = 0;
-			(st.members || []).forEach(function(m) { rows = Math.max(rows, m.row + 1); });
-			setClusterPill("leading · " + rows + " row" + (rows === 1 ? "" : "s"), "ok");
-		} else {
-			setClusterPill("off", "off");
-		}
-	}
-
-	if (clusterMembers === null) {
-		clusterMembers = (st.members || []).map(function(m) {
-			return { host: m.host, row: m.row, col: m.col, width: m.width };
-		});
-		renderClusterMembers();
-	}
-
-	//Live cells refresh only while the editor mirrors the saved table
-	//(same hosts, same order) — rows with unsaved edits show a dash.
-	var saved = st.members || [];
-	var mirrors = clusterMembers.length === saved.length && clusterMembers.every(function(m, i) {
-		return m.host === saved[i].host && m.row === saved[i].row &&
-			m.col === saved[i].col && m.width === saved[i].width;
-	});
-	var body = document.getElementById("clusterMemberBody");
-	Array.prototype.forEach.call(body.rows, function(tr, i) {
-		var pill = tr.querySelector(".cl-state");
-		var rev = tr.querySelector(".cl-rev");
-		if (!mirrors || !saved[i]) {
-			pill.className = "pill off cl-state";
-			pill.textContent = "—";
-			rev.textContent = "";
-			return;
-		}
-		var label = clusterStateLabel(saved[i]);
-		pill.className = "pill " + label.kind + " cl-state";
-		pill.textContent = label.text;
-		//#334: rev + platform for EVERY member incl. (this board). plat is
-		//sent only by ESP-01 (#297) — absent means the S3 fleet, so fall back
-		//to esp32s3. The #317 wire-auth chip stays non-self only (the leader's
-		//own row is not a wire link). hmac = leader signs to it.
-		rev.textContent = "";
-		//#332: headless role tag (succession tier driver) — absent or
-		//"display" stays untagged; wire strings are text nodes ONLY.
-		var roleTag = saved[i].role && saved[i].role !== "display"
-			? " · " + saved[i].role.replace("headless-", "") : "";
-		rev.appendChild(document.createTextNode(
-			(saved[i].rev || "—") + " · " + (saved[i].plat || "esp32s3") +
-			roleTag + "  "));
-		if (!saved[i].self) {
-			var authChip = document.createElement("span");
-			authChip.className = "pill " + (saved[i].hmac ? "ok" : "off");
-			authChip.style.fontSize = "10px";
-			authChip.textContent = saved[i].hmac ? "auth" : "no-auth";
-			rev.appendChild(authChip);
-		}
-	});
-
-	//Fleet rollout (#276) surfacing: progress while it runs, one success
-	//line when it finishes, a persistent warning if convergence is dead.
-	var rollout = st.rollout || {};
-	if (st.digestOmitted) {
-		//#387: the pings stay alive without it; only the rows' own wall view lags.
-		showStatus("clusterCardStatus", "⚠ The wall is too large for the cluster ping: the rows’ own wall view is not being updated. Displays are unaffected.", "error");
-	} else if (rollout.imageVerifyFailed) {
-		showStatus("clusterCardStatus", "⚠ This board’s running image failed its verify pass — automatic follower updates are off until a reboot.", "error");
-	} else if (rollout.phase === "uploading" && rollout.total > 0) {
-		clusterRolloutSeen = true;
-		//#344: src "esp01" = the stored follower image, absent = this board's slot.
-		var rolloutWhat = rollout.src === "esp01" ? "the stored follower firmware" : "this board’s firmware";
-		showStatus("clusterCardStatus", "Updating " + escapeHtml(rollout.host) + " to " + rolloutWhat + " — " +
-			Math.floor(rollout.sent * 100 / rollout.total) + "% of " + Math.round(rollout.total / 1024) + " KB…", "pending");
-	} else if (rollout.phase === "waiting") {
-		clusterRolloutSeen = true;
-		showStatus("clusterCardStatus", "Flashed " + escapeHtml(rollout.host) + " — waiting for it to reboot and rejoin…", "pending");
-	} else if (clusterRolloutSeen) {
-		clusterRolloutSeen = false;
-		showStatus("clusterCardStatus", "✔ Firmware update round finished.", "success", 8000);
-	}
-
-	//ESP-01 firmware store (#304 Part B): the stored image + live push. Push
-	//progress is mutually exclusive with the rollout above, so it never fights
-	//that status line.
-	var fwStored = document.getElementById("clusterFollowerFwStored");
-	if (fwStored) {
-		var fi = st.followerImage || {};
-		fwStored.textContent = fi.present
-			? "Stored follower image: " + (fi.rev || "unknown rev") + " — push it from a row’s ⚙ panel."
-			: "No follower image stored yet.";
-	}
-	var fp = st.followerPush || {};
-	if (fp.phase === "uploading" && fp.total > 0) {
-		showStatus("clusterCardStatus", "Pushing ESP-01 firmware to " + escapeHtml(fp.host) + " — " +
-			Math.floor(fp.sent * 100 / fp.total) + "% of " + Math.round(fp.total / 1024) + " KB…", "pending");
-	}
-}
-
-function renderClusterMembers() {
-	var table = document.getElementById("clusterMemberTable");
-	var body = document.getElementById("clusterMemberBody");
-	while (body.firstChild) body.removeChild(body.firstChild);
-	table.classList.toggle("hidden", !clusterMembers || clusterMembers.length === 0);
-	if (!clusterMembers) return;
-
-	clusterMembers.forEach(function(member, index) {
-		var tr = document.createElement("tr");
-
-		function numberCell(field, min, max) {
-			var td = document.createElement("td");
-			var input = document.createElement("input");
-			input.type = "number";
-			input.min = min;
-			input.max = max;
-			input.value = member[field];
-			input.addEventListener("change", function() {
-				var value = parseInt(input.value, 10);
-				if (!isNaN(value)) member[field] = value;
-			});
-			td.appendChild(input);
-			return td;
-		}
-
-		tr.appendChild(numberCell("row", 0, 7));
-
-		//Hosts come off the mDNS wire / user input — text nodes only.
-		var hostTd = document.createElement("td");
-		hostTd.textContent = member.host === "" ? "(this board)" : member.host;
-		tr.appendChild(hostTd);
-
-		tr.appendChild(numberCell("col", 0, 254));
-		//#333 warm-standby: width 0 = an off-grid backup member (no columns,
-		//non-rendering, promote-eligible) — the leader accepts it.
-		tr.appendChild(numberCell("width", 0, 255));
-
-		var stateTd = document.createElement("td");
-		var pill = document.createElement("span");
-		pill.className = "pill off cl-state";
-		pill.textContent = "—";
-		stateTd.appendChild(pill);
-		tr.appendChild(stateTd);
-
-		var revTd = document.createElement("td");
-		revTd.className = "cl-rev meta";
-		tr.appendChild(revTd);
-
-		var removeTd = document.createElement("td");
-		var manageButton = document.createElement("button");
-		manageButton.type = "button";
-		manageButton.className = "btn";
-		manageButton.textContent = "⚙";
-		manageButton.title = "Health + maintenance for this board (#294)";
-		manageButton.addEventListener("click", function() {
-			openMemberPanel(member.host, member.host === "");
-		});
-		removeTd.appendChild(manageButton);
-		var removeButton = document.createElement("button");
-		removeButton.type = "button";
-		removeButton.className = "btn";
-		removeButton.textContent = "✕";
-		removeButton.title = "Remove this member";
-		removeButton.addEventListener("click", function() {
-			clusterMembers.splice(index, 1);
-			renderClusterMembers();
-		});
-		removeTd.appendChild(removeButton);
-		tr.appendChild(removeTd);
-
-		body.appendChild(tr);
-	});
-}
-
-//Member pills on the follower card (#294): the digest carries the same
-//status shape the leader's card reads, so any pane shows the whole wall's
-//members — and opens the same management panel.
-function renderFollowerPills(members) {
-	var box = document.getElementById("clusterFollowerPills");
-	if (!box) return;
-	removeAllChildren(box);
-	members.forEach(function(m) {
-		var pill = document.createElement("button");
-		pill.type = "button";
-		var label = clusterStateLabel(m);
-		pill.className = "pill " + label.kind + " member-pill";
-		//host comes off the LAN wire — text nodes only.
-		pill.textContent = "row " + (Number(m.row) + 1) + " · " +
-			(m.host === "" ? "leader" : m.host) + " · " + label.text;
-		pill.addEventListener("click", function() {
-			//The digest's empty host = the LEADER's own row — reach it via
-			//its host, not ours.
-			openMemberPanel(m.host === "" ? (window.lastDigestLeaderHost || "") : m.host, false);
-		});
-		box.appendChild(pill);
-	});
-}
-
-//Cluster members on the Maintenance tab (#318 C): while this board leads,
-//list every row as a pill that opens the SAME management panel used on the
-//Settings card — calibrate/reflash/reboot any board without leaving the tab.
-function renderMaintClusterMembers(st) {
-	var card = document.getElementById("maintClusterCard");
-	var list = document.getElementById("maintClusterList");
-	if (!card || !list) return;
-	var members = (st && st.enabled) ? (st.members || []) : [];
-	card.classList.toggle("hidden", members.length === 0);
-	removeAllChildren(list);
-	if (members.length === 0) {
-		//Tidy up any panel left open when the wall goes away.
-		var panel = document.getElementById("maintClusterMemberPanel");
-		if (panel) { panel.classList.add("hidden"); removeAllChildren(panel); }
-		return;
-	}
-	members.forEach(function(m) {
-		var pill = document.createElement("button");
-		pill.type = "button";
-		var label = clusterStateLabel(m);
-		pill.className = "pill " + label.kind + " member-pill";
-		//host comes off the LAN wire — text nodes only.
-		pill.textContent = "⚙ row " + (Number(m.row) + 1) + " · " +
-			(m.host === "" ? "this board" : m.host) + " · " + label.text;
-		pill.addEventListener("click", function() {
-			openMemberPanel(m.host, m.host === "" || !!m.self, "maintClusterMemberPanel");
-		});
-		list.appendChild(pill);
-	});
-}
-
-//Cluster members on the System tab (#318 D): a per-row vitals table fanned
-//out to each board's /settings. ESP-01 rows carry heap/rssi/up (#297); an S3
-//row's /settings has none, so it shows its rev and dashes. Called on the
-//System tab's poll cadence off the cached /cluster/status member list.
-function refreshSysClusterVitals() {
-	var card = document.getElementById("sysClusterCard");
-	var body = document.getElementById("sysClusterBody");
-	if (!card || !body) return;
-	var st = window.lastClusterStatus;
-	var members = (st && st.enabled) ? (st.members || []) : [];
-	card.classList.toggle("hidden", members.length === 0);
-	if (members.length === 0) { removeAllChildren(body); return; }
-	removeAllChildren(body);
-	members.forEach(function(m) {
-		var tr = document.createElement("tr");
-		function cell(text) {
-			var td = document.createElement("td");
-			td.textContent = text;
-			tr.appendChild(td);
-			return td;
-		}
-		cell("row " + (Number(m.row) + 1));
-		//host is LAN-wire text — text node only.
-		cell(m.host === "" ? "(this board)" : m.host);
-		var revC = cell(m.rev || "—");
-		var heapC = cell("…");
-		var rssiC = cell("…");
-		var upC = cell("…");
-		body.appendChild(tr);
-
-		var base = (m.self || m.host === "") ? "" : "http://" + m.host;
-		if (base && !/^[A-Za-z0-9.\-]+(:\d+)?$/.test(m.host)) {
-			heapC.textContent = rssiC.textContent = upC.textContent = "—";
-			return;
-		}
-		fetch(base + "/settings", { cache: "no-store" })
-			.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
-			.then(function(s) {
-				if (s.version) revC.textContent = s.version;
-				//Both S3 (#335) and ESP-01 (#297) rows carry these now; a member
-				//on older firmware omits them and its vitals stay dashed.
-				heapC.textContent = s.heap !== undefined ? Math.round(s.heap / 1024) + " KB" : "—";
-				rssiC.textContent = s.rssi !== undefined ? s.rssi + " dBm" : "—";
-				upC.textContent = s.up !== undefined ? formatUptime(s.up) : "—";
-			})
-			.catch(function() {
-				heapC.textContent = "unreachable";
-				rssiC.textContent = "—";
-				upC.textContent = "—";
-			});
-	});
-}
-
-//Per-member management panel (#294 rung 3): the browser fans out STRAIGHT
-//to the member (CORS-gated on its side; the leader never proxies). Wire
-//strings render as text nodes only. A member on pre-#294 firmware sends no
-//CORS header — the fetch fails and the panel degrades to a plain link.
-function openMemberPanel(host, isSelf, panelId) {
-	//The panel machinery is panel-relative (every sub-fn takes the element),
-	//so the same code drives the Settings card and the Maintenance card (#318
-	//C) — only the container id differs.
-	var panel = document.getElementById(panelId || "clusterMemberPanel");
-	if (!panel) return;
-	//Hosts originate on the LAN wire (digest / status) — the fetch target
-	//gets the same hostname[:port] allowlist as every visible link.
-	if (host !== "" && !/^[A-Za-z0-9.\-]+(:\d+)?$/.test(String(host))) return;
-	removeAllChildren(panel);
-	panel.classList.remove("hidden");
-	var base = isSelf || host === "" ? "" : "http://" + host;
-
-	var head = document.createElement("div");
-	head.className = "row";
-	var title = document.createElement("h3");
-	title.textContent = isSelf || host === "" ? "This board" : host;
-	head.appendChild(title);
-	var grow = document.createElement("span");
-	grow.className = "grow";
-	head.appendChild(grow);
-	if (base && /^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {
-		var full = document.createElement("a");
-		full.href = "http://" + host + "/";
-		full.target = "_blank";
-		full.rel = "noopener";
-		full.textContent = "open full UI";
-		head.appendChild(full);
-	}
-	var close = document.createElement("button");
-	close.type = "button";
-	close.className = "btn";
-	close.textContent = "✕";
-	close.addEventListener("click", function() {
-		panel.classList.add("hidden");
-		removeAllChildren(panel);
-	});
-	head.appendChild(close);
-	panel.appendChild(head);
-
-	var note = document.createElement("p");
-	note.className = "note";
-	note.textContent = "Loading " + (base ? host : "this board") + "…";
-	panel.appendChild(note);
-
-	Promise.all([
-		fetch(base + "/settings", { cache: "no-store" }).then(function(r) { if (!r.ok) throw new Error(); return r.json(); }),
-		fetch(base + "/units/health", { cache: "no-store" }).then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
-	]).then(function(results) {
-		note.remove();
-		renderMemberPanelBody(panel, base, host, results[0], results[1]);
-	}).catch(function() {
-		note.textContent = "Unreachable from this browser — the board may be offline or on pre-#294 firmware without cross-pane management. ";
-		if (base && /^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {
-			var link = document.createElement("a");
-			link.href = "http://" + host + "/";
-			link.textContent = "Open its own page";
-			note.appendChild(link);
-		}
-	});
-}
-
-function memberPanelStatus(panel, message, kind) {
-	var el = panel.querySelector(".member-panel-status");
-	//A poll (self-test / reflash / firmware) can land after the panel was
-	//closed or re-rendered for another member — no status node then, no-op.
-	if (!el) return;
-	el.className = "status member-panel-status " + (kind || "");
-	el.classList.remove("hidden");
-	el.textContent = message;
-}
-
-//Pollers stop when the panel is gone (closed → hidden, or re-rendered so the
-//status node is detached). Guards cross-member status bleed on the bench.
-function memberPanelLive(panel) {
-	return !panel.classList.contains("hidden") &&
-		!!panel.querySelector(".member-panel-status");
-}
-
-function renderMemberPanelBody(panel, base, host, settings, health) {
-	//Identity + firmware line.
-	var meta = document.createElement("p");
-	meta.className = "note";
-	meta.textContent = (settings.effectiveDeviceName || settings.deviceName || host) +
-		" · fw " + (settings.version || "?") +
-		(settings.plat ? " · " + settings.plat : "") +
-		" · " + (health.units || []).filter(function(u) { return u.st === 1; }).length +
-		"/" + (health.width || 0) + " units responding" +
-		(health.faulty > 0 ? " · " + health.faulty + " flagged" : "");
-	panel.appendChild(meta);
-
-	//ESP-01 vitals (#297): the dumb row's /settings carries heap/rssi/up —
-	//show them when present (an S3 member's /settings has none of these).
-	if (settings.heap !== undefined || settings.rssi !== undefined || settings.up !== undefined) {
-		var vitals = document.createElement("p");
-		vitals.className = "note";
-		var parts = [];
-		if (settings.heap !== undefined) parts.push("heap " + Math.round(settings.heap / 1024) + " KB");
-		if (settings.rssi !== undefined) parts.push("rssi " + settings.rssi + " dBm");
-		if (settings.up !== undefined) parts.push("up " + formatUptime(settings.up));
-		vitals.textContent = parts.join(" · ");
-		panel.appendChild(vitals);
-	}
-
-	//Device name (the one genuinely per-board setting the wall UI owns).
-	var nameRow = document.createElement("div");
-	nameRow.className = "row";
-	var nameInput = document.createElement("input");
-	nameInput.type = "text";
-	nameInput.maxLength = 32;
-	nameInput.value = settings.deviceName || "";
-	nameInput.placeholder = "device name";
-	nameRow.appendChild(nameInput);
-	var nameSave = document.createElement("button");
-	nameSave.type = "button";
-	nameSave.className = "btn";
-	nameSave.textContent = "Save name";
-	nameSave.addEventListener("click", function() {
-		postSettingsFields({ deviceName: nameInput.value }, function(ok, text) {
-			memberPanelStatus(panel, ok ? "✔ Name saved" + (text === "ok-reboot" ? " — takes effect after its next reboot" : "") : "✘ Save failed", ok ? "success" : "error");
-		}, base);
-	});
-	nameRow.appendChild(nameSave);
-	panel.appendChild(nameRow);
-
-	//Unit strip — same color language as the local board strip; click a
-	//unit for its remote maintenance ops.
-	var strip = document.createElement("div");
-	strip.className = "health member-strip";
-	var actions = document.createElement("div");
-	actions.className = "row member-unit-actions hidden";
-	(health.units || []).forEach(function(u, i) {
-		var cell = document.createElement("span");
-		if (!u || u.st !== 1) cell.className = "bad";
-		else if (unitRowIsFaulty(u) || u.fw === 1 || u.mm) cell.className = "warn";
-		cell.title = "unit " + (i + 1) + (u && u.st === 1 ? "" : " — silent");
-		if (u && u.st === 1) {
-			cell.style.cursor = "pointer";
-			cell.addEventListener("click", function() {
-				renderMemberUnitActions(panel, actions, base, u);
-			});
-		}
-		strip.appendChild(cell);
-	});
-	panel.appendChild(strip);
-	panel.appendChild(actions);
-
-	//Board-level ops.
-	var ops = document.createElement("div");
-	ops.className = "row";
-	function opButton(text, handler, danger) {
-		var b = document.createElement("button");
-		b.type = "button";
-		b.className = "btn" + (danger ? " danger" : "");
-		b.textContent = text;
-		b.addEventListener("click", handler);
-		ops.appendChild(b);
-	}
-	opButton("Re-probe units", function() {
-		fetch(base + "/units/health/refresh", { method: "POST" })
-			.then(function(r) { memberPanelStatus(panel, r.ok ? "Probing — reopen the panel in a few seconds for fresh facts." : "✘ Probe refused (busy?)", r.ok ? "success" : "error"); })
-			.catch(function() { memberPanelStatus(panel, "✘ Probe request failed", "error"); });
-	});
-	opButton("Reflash units…", function() {
-		if (!confirm("Reflash the Nano units of " + (host || "this board") + " from its bundled hex?\n\nUnits go dark ~1 min each (2 at a time); the row is unusable until it finishes.")) return;
-		fetch(base + "/reflash-units", { method: "POST" })
-			.then(function(r) {
-				if (r.status === 409 || r.status === 503) { memberPanelStatus(panel, "✘ A reflash is already running.", "error"); return; }
-				if (!r.ok) { memberPanelStatus(panel, "✘ Reflash refused (HTTP " + r.status + ").", "error"); return; }
-				memberPanelStatus(panel, "Reflash queued…", "success");
-				memberReflashPoll(panel, base);
-			})
-			.catch(function() { memberPanelStatus(panel, "✘ Reflash request failed.", "error"); });
-	}, true);
-	opButton("Reboot board…", function() {
-		if (!confirm("Reboot " + (host || "this board") + "? Its row goes dark for a few seconds; the leader re-joins it automatically.")) return;
-		fetch(base + "/reboot", { method: "POST" })
-			.then(function(r) { memberPanelStatus(panel, r.ok ? "Rebooting…" : "✘ Reboot refused", r.ok ? "success" : "error"); })
-			.catch(function() { memberPanelStatus(panel, "Rebooting…", "success"); });
-	}, true);
-	panel.appendChild(ops);
-
-	//ESP-01 firmware (#304 Part B): push the S3-stored follower image to this
-	//row. Upload the image on Settings → Cluster first; the server refuses
-	//(409) if none is stored. Shown only for esp01 members (S3 members
-	//converge via #276 fleet updates, not this path).
-	if (settings.plat === "esp01") {
-		var fwRow = document.createElement("div");
-		fwRow.className = "row";
-		var fwLabel = document.createElement("span");
-		fwLabel.className = "calibration-label";
-		fwLabel.textContent = "Firmware (esp01)";
-		fwRow.appendChild(fwLabel);
-		var fwBtn = document.createElement("button");
-		fwBtn.type = "button";
-		fwBtn.className = "btn danger";
-		fwBtn.textContent = "Update firmware…";
-		fwBtn.addEventListener("click", function() {
-			if (!confirm("Push the S3-stored ESP-01 firmware to " + (host || "this board") + "?\n\nUpload it on the Settings → Cluster card first. The row goes dark ~15 s while it reboots; the leader re-joins it. On failure the current firmware keeps running.")) return;
-			fetch("/cluster/member/update?host=" + encodeURIComponent(host), { method: "POST" })
-				.then(function(r) {
-					return r.text().then(function(t) {
-						if (!r.ok) { memberPanelStatus(panel, "✘ " + (t || ("HTTP " + r.status)), "error"); return; }
-						memberPanelStatus(panel, "Firmware push queued…", "success");
-						memberFirmwarePushPoll(panel, host);
-					});
-				})
-				.catch(function() { memberPanelStatus(panel, "✘ Push request failed.", "error"); });
-		});
-		fwRow.appendChild(fwBtn);
-		panel.appendChild(fwRow);
-	}
-
-	var status = document.createElement("div");
-	status.className = "status member-panel-status hidden";
-	panel.appendChild(status);
-}
-
-//Firmware push progress: the relay runs on the leader (clusterTask), so poll
-//the leader's own /cluster/status followerPush object. The stage reset
-//lastResult, so a stale terminal verdict can't show before this push starts.
-function memberFirmwarePushPoll(panel, host) {
-	if (!memberPanelLive(panel)) return;
-	fetch("/cluster/status", { cache: "no-store" })
-		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
-		.then(function(st) {
-			if (!memberPanelLive(panel)) return;
-			var fp = st.followerPush || {};
-			if (fp.phase === "uploading") {
-				var pct = fp.total > 0 ? Math.floor(fp.sent * 100 / fp.total) : 0;
-				memberPanelStatus(panel, "Pushing firmware to " + host + " — " + pct + "% of " + Math.round((fp.total || 0) / 1024) + " KB…", "");
-				setTimeout(function() { memberFirmwarePushPoll(panel, host); }, 1500);
-			} else if (fp.result === "done") {
-				memberPanelStatus(panel, "✔ Firmware flashed — the row is rebooting and will rejoin.", "success");
-			} else if (fp.result === "failed" || fp.result === "rejected") {
-				memberPanelStatus(panel, "✘ Firmware push " + fp.result + ".", "error");
-			} else {
-				//staged, clusterTask hasn't picked it up yet.
-				setTimeout(function() { memberFirmwarePushPoll(panel, host); }, 1500);
-			}
-		})
-		.catch(function() {
-			if (memberPanelLive(panel)) setTimeout(function() { memberFirmwarePushPoll(panel, host); }, 1500);
-		});
-}
-
-//Board-level reflash progress: poll the member's /units/health reflash
-//object, reusing the local-board label/running helpers (#205 shape).
-function memberReflashPoll(panel, base) {
-	if (!memberPanelLive(panel)) return;
-	fetch(base + "/units/health", { cache: "no-store" })
-		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
-		.then(function(json) {
-			if (!memberPanelLive(panel)) return;
-			var rf = json.reflash;
-			if (rf && reflashIsRunning(rf)) {
-				memberPanelStatus(panel, reflashProgressLabel(rf), "");
-				setTimeout(function() { memberReflashPoll(panel, base); }, 2000);
-			} else if (rf) {
-				memberPanelStatus(panel, reflashProgressLabel(rf), "success");
-			} else {
-				memberPanelStatus(panel, "Reflash finished.", "success");
-			}
-		})
-		.catch(function() {
-			if (memberPanelLive(panel)) setTimeout(function() { memberReflashPoll(panel, base); }, 2000);
-		});
-}
-
-function renderMemberUnitActions(panel, actions, base, u) {
-	removeAllChildren(actions);
-	actions.classList.remove("hidden");
-	var label = document.createElement("span");
-	label.className = "calibration-label";
-	label.textContent = "Unit " + formatHexAddress(u.a) + (u.rev ? " (fw " + u.rev + ")" : "");
-	actions.appendChild(label);
-	function actButton(text, handler) {
-		var b = document.createElement("button");
-		b.type = "button";
-		b.className = "btn";
-		b.textContent = text;
-		b.addEventListener("click", handler);
-		actions.appendChild(b);
-	}
-	actButton("Identify", function() {
-		postCalibration(base + "/unit/identify", { address: u.a }, function(ok) {
-			memberPanelStatus(panel, ok ? "Unit " + formatHexAddress(u.a) + " is blinking its LED." : "✘ Identify failed", ok ? "success" : "error");
-		});
-	});
-	actButton("Home", function() {
-		postCalibration(base + "/unit/home", { address: u.a }, function(ok) {
-			memberPanelStatus(panel, ok ? "Homing unit " + formatHexAddress(u.a) + "." : "✘ Home failed", ok ? "success" : "error");
-		});
-	});
-	actButton("Self-test", function() {
-		memberSelfTest(panel, base, u.a);
-	});
-	actButton("Reset odo…", function() {
-		if (!confirm("Reset the revolution odometer of unit " + formatHexAddress(u.a) + "? Do this only after replacing its drum/motor.")) return;
-		postCalibrationAwait("/unit/reset-odometer", { address: u.a }, function(ok, reason) {
-			memberPanelStatus(panel, ok ? "✔ Odometer reset." : "✘ " + reason, ok ? "success" : "error");
-		}, base);
-	});
-
-	//Jog: relative nudge, fire-and-forget (operator watches the flap).
-	var jogRow = document.createElement("div");
-	jogRow.className = "row";
-	var jogLabel = document.createElement("span");
-	jogLabel.textContent = "Jog steps: ";
-	jogRow.appendChild(jogLabel);
-	var jogInput = document.createElement("input");
-	jogInput.type = "number";
-	jogInput.className = "calibration-offset";
-	jogInput.step = "1";
-	jogInput.placeholder = "±steps";
-	jogRow.appendChild(jogInput);
-	var jogBtn = document.createElement("button");
-	jogBtn.type = "button";
-	jogBtn.className = "btn";
-	jogBtn.textContent = "Jog";
-	jogBtn.addEventListener("click", function() {
-		var n = parseInt(jogInput.value, 10);
-		if (isNaN(n) || n === 0) { memberPanelStatus(panel, "✘ Enter a non-zero step count.", "error"); return; }
-		postCalibration(base + "/unit/jog", { address: u.a, steps: n }, function(ok) {
-			memberPanelStatus(panel, ok ? "Jogged unit " + formatHexAddress(u.a) + " by " + n + " steps." : "✘ Jog failed", ok ? "success" : "error");
-		});
-	});
-	jogRow.appendChild(jogBtn);
-	actions.appendChild(jogRow);
-
-	//Offset: read current, edit, write (EEPROM-mutating → await the outcome).
-	var offRow = document.createElement("div");
-	offRow.className = "row";
-	var offLabel = document.createElement("span");
-	offLabel.textContent = "Offset: ";
-	offRow.appendChild(offLabel);
-	var offInput = document.createElement("input");
-	offInput.type = "number";
-	offInput.className = "calibration-offset";
-	offInput.step = "1";
-	offInput.placeholder = "?";
-	offRow.appendChild(offInput);
-	var offGet = document.createElement("button");
-	offGet.type = "button";
-	offGet.className = "btn";
-	offGet.textContent = "Get";
-	offGet.addEventListener("click", function() {
-		fetch(base + "/unit/offset?address=" + u.a, { cache: "no-store" })
-			.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
-			.then(function(data) {
-				offInput.value = data.offset;
-				memberPanelStatus(panel, "Read offset " + data.offset + " from " + formatHexAddress(u.a), "success");
-			})
-			.catch(function() { memberPanelStatus(panel, "✘ Read offset failed for " + formatHexAddress(u.a), "error"); });
-	});
-	offRow.appendChild(offGet);
-	var offSet = document.createElement("button");
-	offSet.type = "button";
-	offSet.className = "btn";
-	offSet.textContent = "Set";
-	offSet.addEventListener("click", function() {
-		var value = parseInt(offInput.value, 10);
-		if (isNaN(value)) { memberPanelStatus(panel, "✘ Enter an offset value first.", "error"); return; }
-		postCalibrationAwait("/unit/offset", { address: u.a, value: value }, function(ok, reason) {
-			memberPanelStatus(panel, ok ? "✔ Saved offset " + value + " to " + formatHexAddress(u.a) : "✘ Save offset failed: " + reason, ok ? "success" : "error");
-		}, base);
-	});
-	offRow.appendChild(offSet);
-	actions.appendChild(offRow);
-}
-
-//Member self-test (#304): mirrors the local selfTestUnitUi flow but reports
-//through the panel status line and targets the member via `base`. The single
-//result slot serves one self-test at a time.
-function memberSelfTest(panel, base, address) {
-	memberPanelStatus(panel, "Self-test on unit " + formatHexAddress(address) + " — about 15 s of motion…", "");
-	fetch(base + "/unit/self-test?address=" + address, { method: "POST" })
-		.then(function(r) {
-			if (!r.ok) return r.text().then(function(t) { throw new Error(t || ("HTTP " + r.status)); });
-			return r.json();
-		})
-		.then(function(data) { memberPollSelfTest(panel, base, address, data.seq, 100); })
-		.catch(function(e) { memberPanelStatus(panel, "✘ Self-test failed to queue: " + (e && e.message ? e.message : "request failed"), "error"); });
-}
-
-function memberPollSelfTest(panel, base, address, seq, remaining) {
-	if (!memberPanelLive(panel)) return;
-	fetch(base + "/unit/self-test-result?seq=" + seq, { cache: "no-store" })
-		.then(function(r) { if (!r.ok) throw new Error(); return r.json(); })
-		.then(function(res) {
-			if (!memberPanelLive(panel)) return;
-			if (res.state === "pending" && remaining > 0) {
-				setTimeout(function() { memberPollSelfTest(panel, base, address, seq, remaining - 1); }, 1000);
-				return;
-			}
-			if (res.state === "ok") {
-				var delta = res.steps_per_rev - 2038;
-				memberPanelStatus(panel, "Unit " + formatHexAddress(address) + " self-test: " +
-					res.steps_per_rev + " steps/rev (" + (delta >= 0 ? "+" : "") + delta +
-					" vs nominal), hall window " + res.hall_window + " steps, " +
-					(res.rev_time_ms / 1000).toFixed(1) + " s/rev.", "success");
-			} else if (res.state === "pending") {
-				memberPanelStatus(panel, "Self-test still queued — display busy; check again in a moment.", "");
-			} else if (res.state === "expired") {
-				memberPanelStatus(panel, "Self-test outcome superseded — run it again.", "error");
-			} else {
-				memberPanelStatus(panel, "✘ Self-test failed: " + (res.reason || "unknown") + ".", "error");
-			}
-		})
-		.catch(function() { memberPanelStatus(panel, "✘ Self-test result poll failed.", "error"); });
-}
-
-function clusterNextFreeRow() {
-	var used = {};
-	clusterMembers.forEach(function(m) { used[m.row] = true; });
-	var row = 0;
-	while (used[row]) row++;
-	return row;
-}
-
-function addClusterBoard(host, width) {
-	if (clusterMembers === null) clusterMembers = [];
-	var duplicate = clusterMembers.some(function(m) { return m.host === host; });
-	if (duplicate) {
-		showStatus("clusterCardStatus", "✘ " + escapeHtml(host) + " is already in the member table.", "error", 5000);
-		return;
-	}
-	//First member: this board takes row 0 (a wall without the leader's own
-	//row is legal but rarely wanted — remove the row if so).
-	if (clusterMembers.length === 0) {
-		clusterMembers.push({ host: "", row: 0, col: 0, width: unitCount || 16 });
-	}
-	clusterMembers.push({ host: host, row: clusterNextFreeRow(), col: 0, width: width || 16 });
-	renderClusterMembers();
-	showStatus("clusterCardStatus", "Added — adjust row/col/width, then Save cluster.", "success", 6000);
-}
-
-function addClusterManualHost() {
-	var input = document.getElementById("inputClusterManualHost");
-	var host = input.value.trim();
-	//Same hostname[:port] allowlist as the follower banner link.
-	if (!/^[A-Za-z0-9.\-]+(:\d+)?$/.test(host)) {
-		showStatus("clusterCardStatus", "✘ Enter a hostname, IP, or host:port.", "error", 5000);
-		return;
-	}
-	input.value = "";
-	addClusterBoard(host, 16);
-}
-
-function setClusterCardBusy(busy) {
-	["buttonClusterScan", "buttonClusterManualAdd", "buttonClusterSave", "buttonClusterDisable"].forEach(function(id) {
-		document.getElementById(id).disabled = busy;
-	});
-}
-
-//Board discovery (#274): POST arms the browse on the master (the blocking
-//mDNS query runs in netTask's drain), then poll GET until it answers 200.
-function scanClusterBoards() {
-	var suggestions = document.getElementById("clusterSuggestions");
-	setClusterCardBusy(true);
-	suggestions.classList.add("hidden");
-	showStatus("clusterCardStatus", "Browsing the LAN for split-flap boards…", "pending");
-
-	function fail() {
-		showStatus("clusterCardStatus", "✘ Discovery failed.", "error", 5000);
-		setClusterCardBusy(false);
-	}
-	fetch("/cluster/discover", { method: "POST" })
-		.then(function(response) {
-			if (!response.ok) throw new Error();
-			var deadline = Date.now() + 10000;
-			(function poll() {
-				fetch("/cluster/discover", { cache: "no-store" })
-					.then(function(r) {
-						if (r.status === 202) {
-							if (Date.now() > deadline) { fail(); return null; }
-							setTimeout(poll, 500);
-							return null;
-						}
-						if (!r.ok) throw new Error();
-						return r.json();
-					})
-					.then(function(result) {
-						if (result) {
-							renderClusterSuggestions(result.boards || []);
-							setClusterCardBusy(false);
-						}
-					})
-					.catch(fail);
-			})();
-		})
-		.catch(fail);
-}
-
-function renderClusterSuggestions(boards) {
-	var suggestions = document.getElementById("clusterSuggestions");
-	while (suggestions.firstChild) suggestions.removeChild(suggestions.firstChild);
-	if (boards.length === 0) {
-		showStatus("clusterCardStatus", "No other split-flap boards found (they advertise once online, v2 firmware). Use the manual host field for other subnets.", "error", 9000);
-		return;
-	}
-	boards.forEach(function(board) {
-		var chip = document.createElement("button");
-		chip.type = "button";
-		chip.textContent = board.name + " (" + board.host + (board.width ? ", " + board.width + " units" : "") + (board.plat ? ", " + board.plat : "") + ")";
-		chip.addEventListener("click", function() {
-			addClusterBoard(board.host, board.width || 16);
-		});
-		suggestions.appendChild(chip);
-	});
-	suggestions.classList.remove("hidden");
-	showStatus("clusterCardStatus", "Found " + boards.length + " board(s) — click one to add it.", "success", 6000);
-}
-
-function postClusterConfig(spec, doneMessage) {
-	var body = new URLSearchParams();
-	body.append("members", spec);
-	fetch("/cluster/config", { method: "POST", body: body })
-		.then(function(r) {
-			return r.text().then(function(text) {
-				if (!r.ok) {
-					showStatus("clusterCardStatus", "✘ " + escapeHtml(text || "Rejected."), "error");
-					return;
-				}
-				showStatus("clusterCardStatus", doneMessage, "success", 6000);
-				clusterMembers = null;  // re-mirror the applied table
-				setTimeout(loadClusterStatus, 1000);
-			});
-		})
-		.catch(function() { showStatus("clusterCardStatus", "✘ No connection.", "error", 5000); });
-}
-
-function saveClusterCard() {
-	if (!clusterMembers || clusterMembers.length === 0) {
-		showStatus("clusterCardStatus", "✘ Add at least one member first (Scan or a manual host).", "error", 5000);
-		return;
-	}
-	var spec = clusterMembers.map(function(m) {
-		return m.host + "|" + m.row + "|" + m.col + "|" + m.width;
-	}).join(";");
-	showStatus("clusterCardStatus", "Saving…", "pending");
-	postClusterConfig(spec, "✔ Cluster config applied — members join within seconds.");
-}
-
-function disableCluster() {
-	if (!confirm("Disable the cluster? Members revert to standalone (their own clock) after their grace period.")) return;
-	showStatus("clusterCardStatus", "Disabling…", "pending");
-	postClusterConfig("", "✔ Cluster disabled.");
-}
-
-//Follower-side escape hatch. The leader re-joins this board within seconds
-//unless its member table drops the row too — the confirm says so.
-function leaveCluster() {
-	if (!confirm("Leave the cluster? The leader will re-join this board within seconds unless you also remove it from the leader’s member table first.")) return;
-	fetch("/cluster/leave", { method: "POST" })
-		.then(function() {
-			showStatus("clusterCardStatus", "✔ Left the cluster.", "success", 6000);
-			loadPage();
-		})
-		.catch(function() { showStatus("clusterCardStatus", "✘ No connection.", "error", 5000); });
 }

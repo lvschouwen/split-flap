@@ -18,17 +18,11 @@ def test_s3_ladder_is_fed_the_confirmation():
     assert step.index("in.trafficConfirmed") < step.index("wifiTxPolicyStep(")
 
 
-def test_s3_cluster_paths_report_completed_exchanges():
-    # Leader side: both places a member contact is recorded as answered.
-    fanout = _src("Master/ClusterLeaderFanout.cpp")
-    assert len(re.findall(
-        r"clusterMemberOnSuccess\(m, nowMs\);\s*wifiNoteConfirmedTraffic\(\);", fanout)) == 2
-    # Follower side: a served join and a served ping.
-    follower = _src("Master/ClusterFollower.cpp")
-    assert follower.count("wifiNoteConfirmedTraffic();") == 2
-    assert re.search(
-        r"if \(!clusterFollowerContact\(policyState, millis\(\)\)\) return false;\s*"
-        r"wifiNoteConfirmedTraffic\(\);", follower)
+def test_the_wall_link_reports_completed_exchanges():
+    # Every message read from a paired row board.
+    link = _src("Master/WallLink.cpp")
+    hook = link[link.index("void rowMessage(int row, const wl_ToMaster& message) override {"):]
+    assert "wifiNoteConfirmedTraffic();" in hook[:hook.index("\n  }\n")]
 
 
 def test_esp01_ladder_is_fed_the_confirmation():

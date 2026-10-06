@@ -46,6 +46,7 @@ wl_Config rowSettings = wl_Config_init_zero;
 std::atomic<uint32_t> rowSettingsGeneration{0};
 // Jobs waiting for the link task: it looks only when there are any.
 std::atomic<int> jobsStaged{0};
+uint32_t updateRetries = 0;  // a bit per row index, under the mutex
 char releaseId[WALL_ROW_ID_MAX + 1] = {0};
 
 struct Locked {
@@ -328,4 +329,19 @@ void wallStateReleaseAnswered() {
 bool wallStateReleasePending() {
   Locked lock;
   return releaseId[0] != 0;
+}
+
+bool wallStateAskUpdateRetry(int row, uint32_t generation) {
+  Locked lock;
+  if (generation != rowsGeneration.load(std::memory_order_relaxed)) return false;
+  if (row < 0 || row >= CLUSTER_MAX_MEMBERS) return false;
+  updateRetries |= 1UL << row;
+  return true;
+}
+
+uint32_t wallStateTakeUpdateRetries() {
+  Locked lock;
+  const uint32_t asked = updateRetries;
+  updateRetries = 0;
+  return asked;
 }

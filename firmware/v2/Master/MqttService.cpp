@@ -13,10 +13,7 @@
 
 #include "BuildVersion.h"  // GIT_REV — the discovery device block's sw field
 #include "ClockPolicy.h"
-#include "ClusterFollower.h"
-#include "ClusterLeader.h"
 #include "QuietPolicy.h"  // #227
-#include "ClusterMqtt.h"
 #include "DisplayCommand.h"
 #include "DisplayIpc.h"
 #include "HelpersSerialHandling.h"
@@ -26,16 +23,21 @@
 #include "OtaService.h"
 #include "SplitFlapProtocol.h"
 #include "UnitHealth.h"
-#include "WebEndpoints.h"
+#include "WallMqtt.h"
+#include "WallShow.h"
 #include "WallState.h"
+#include "WallUpdatePolicy.h"  // wallUpdatePhaseName
+#include "WebEndpoints.h"
+
+#include <memory>
 
 #define MQTT_TELEMETRY_INTERVAL_S 60
 #define MQTT_MAX_TEXT_LEN 256
 
-// Cluster surfacing cadence (#277): statusGet copies the member table
-// under the leader mutex — too heavy for every ~10 ms pass, and HA needs
-// nothing faster for supervision state.
-#define MQTT_CLUSTER_INTERVAL_MS 5000
+// Wall surfacing cadence: it copies the wall snapshot and every row's unit
+// facts — too heavy for every ~10 ms pass, and Home Assistant needs nothing
+// faster for supervision state.
+#define MQTT_WALL_INTERVAL_MS 5000
 
 // A frozen session must never outlive a torn upload forever (v1 resumed
 // from loop() when the display thawed; v2's upload callbacks resume on
@@ -110,27 +112,22 @@ static int mqttLastPublishedUnits = -1;
 static int mqttLastPublishedSpeed = -1;
 static String mqttLastPublishedAlignment = "\x01";
 
-// Cluster surfacing trackers (#277). mqttLastClusterConfigured is -1 on
-// every fresh session: the first cluster pass RECONCILES — publish the
-// discovery config when leading, blank the retained cluster topics when
-// not (a former leader may have disabled/rebooted while the broker was
-// unreachable, leaving a stale retained config only this sweep can
-// remove; blanking never-set retained topics is a broker no-op).
-// mqttClusterCapacity caches the grid's total units between 5 s cluster
-// passes for the width publish below.
-static int mqttLastClusterConfigured = -1;
-static int mqttLastClusterState = -1;
-// Leader-lost sensor of a cluster member (#500): same reconcile-on-a-fresh-
-// session rule — configured while a member, blanked when not.
+// Wall surfacing trackers. mqttLastWallConfigured is -1 on every fresh
+// session: the first wall pass RECONCILES — publish the discovery config
+// when the rows table has rows, blank the retained wall topics when not (the
+// last row may have been released while the broker was unreachable, leaving
+// a stale retained config only this sweep can remove; blanking never-set
+// retained topics is a broker no-op). mqttWallCapacity caches the wall's
+// total units between 5 s wall passes for the width publish below.
+static int mqttLastWallConfigured = -1;
+static int mqttLastWallState = -1;
 // Quiet switch (#227, QuietPolicy.h): command topic, last published state
 // (-1 = not yet this session).
 static String mqttQuietCmdTopic;
 static int mqttLastQuietState = -1;
-static int mqttLastLeaderLostConfigured = -1;
-static int mqttLastLeaderLostState = -1;
-static String mqttLastClusterAttrs = "\x01";
-static uint32_t mqttNextClusterMs = 0;
-static int mqttClusterCapacity = 0;
+static String mqttLastWallAttrs = "\x01";
+static uint32_t mqttNextWallMs = 0;
+static int mqttWallCapacity = 0;
 
 // Inbound chunk assembly (callback context). MQTT delivers one message at a
 // time per connection, so a single staging pair suffices; payloads past the
@@ -283,20 +280,14 @@ static void publishDiscoveryClear() {
     if (tLen == 0 || tLen >= sizeof(topicBuf)) continue;
     mqttClient.publish(topicBuf, 0, true, "");
   }
-  // The cluster entity (#277) lives outside the shared enum — clear its
-  // config too (blanking a never-set retained topic is harmless).
-  size_t cLen = buildClusterDegradedDiscoveryTopic(
+  // The wall sensor lives outside the shared enum — clear its config too
+  // (blanking a never-set retained topic is harmless).
+  size_t cLen = buildWallProblemDiscoveryTopic(
       topicBuf, sizeof(topicBuf), mqttResolvedDeviceId.c_str());
   if (cLen > 0 && cLen < sizeof(topicBuf)) {
     mqttClient.publish(topicBuf, 0, true, "");
   }
-  // So do the leader-lost sensor (#500) and the quiet switch (#227), the
-  // latter with its retained command.
-  cLen = buildLeaderLostDiscoveryTopic(topicBuf, sizeof(topicBuf),
-                                       mqttResolvedDeviceId.c_str());
-  if (cLen > 0 && cLen < sizeof(topicBuf)) {
-    mqttClient.publish(topicBuf, 0, true, "");
-  }
+  // So does the quiet switch (#227), with its retained command.
   cLen = buildQuietDiscoveryTopic(topicBuf, sizeof(topicBuf),
                                   mqttResolvedDeviceId.c_str());
   if (cLen > 0 && cLen < sizeof(topicBuf)) {
@@ -307,8 +298,8 @@ static void publishDiscoveryClear() {
       "mode",     "text/state", "notification", "width",     "units",
       "speed",    "alignment",  "units_faulty", "units/attrs",
       "diag/ip",  "diag/ssid",  "diag/reset",   "diag/boots",
-      "diag/ota", "diag/tz",    "cluster_degraded", "cluster/attrs",
-      "leader_lost",  "quiet"};
+      "diag/ota", "diag/tz",    "wall_problem", "wall/attrs",
+      "quiet"};
   for (unsigned i = 0; i < sizeof(stateSuffixes) / sizeof(stateSuffixes[0]);
        i++) {
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, stateSuffixes[i]).c_str(),
@@ -324,9 +315,7 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
   // Quiet (#227): its own topic, outside the shared command table.
   if (mqttQuietCmdTopic == msg.topic) {
     bool want = false;
-    if (clusterFollowerViewGet().gated) {
-      SerialPrintln("MQTT: quiet command dropped (clustered): " + payload);
-    } else if (!quietParseCommand(payload, want)) {
+    if (!quietParseCommand(payload, want)) {
       SerialPrintln("MQTT: ignored invalid quiet command: " + payload);
     } else if (webMqttApplyQuiet(want)) {
       SerialPrintln(want ? F("quiet: ON (MQTT) — no flap commands")
@@ -336,11 +325,6 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
   }
   switch (classifyMqttCommandTopic(mqttCmdTopics, msg.topic)) {
     case MqttCommand::Mode: {
-      // Cluster gate (#272): mode belongs to the leader while clustered.
-      if (clusterFollowerViewGet().gated) {
-        SerialPrintln("MQTT: mode command dropped (clustered): " + payload);
-        break;
-      }
       String requested = parseModeCommand(payload);
       if (requested.length() == 0) {
         SerialPrintln("MQTT: ignored invalid mode command: " + payload);
@@ -394,20 +378,13 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
         SerialPrintln("MQTT: notification dropped (reflash running): " + text);
         break;
       }
-      // Cluster gate (#272): the wall's content belongs to the leader.
-      if (clusterFollowerViewGet().gated) {
-        SerialPrintln("MQTT: notification dropped (clustered): " + text);
-        break;
-      }
       // Quiet (#227): dropped, not deferred — unless the sender forces it.
       if (quietBlocksContent(tasksQuiet(), quietTextForced(payload))) {
         SerialPrintln("MQTT: notification dropped (quiet): " + text);
         break;
       }
-      // On a cluster LEADER the notification deliberately stays on this
-      // master's own row (launch scope: grid text + cluster clock);
-      // clusterTask's self-row re-show restores the segment after the
-      // dwell.
+      // With row boards the notification deliberately stays on this master's
+      // own row; the wall's own-row re-show restores its piece after the dwell.
       WebContentSnapshot content = webDisplayContentSnapshot();
       DisplayCommand cmd =
           makeShowTextCommand(text, content.alignment, content.flapSpeed);
@@ -431,7 +408,7 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
 }
 
 // --- mqttServiceTick stages (#353): one static helper per mechanism the
-// tick interleaves — OTA freeze, event-driven state, cluster surfacing,
+// tick interleaves — OTA freeze, event-driven state, wall surfacing,
 // periodic telemetry. All file-scope state; mqttTask-only execution.
 
 // OTA freeze/resume (#116 semantics). Returns true while frozen — the
@@ -486,8 +463,8 @@ if (content.deviceMode != mqttLastPublishedMode &&
                      content.deviceMode.c_str());
   mqttLastPublishedMode = content.deviceMode;
 }
-// While leading (#277), text/state carries the whole wall (published in
-// the cluster block below) — the own-row slice alone would be a lie.
+// With row boards, text/state carries the whole wall (published in
+// the wall block below) — the own-row slice alone would be a lie.
 // Shared-tracker contract: mqttLastPublishedText/Width track the TOPIC's
 // last retained value, not a mode — this own-facts path and the wall
 // path below share them ON PURPOSE (one topic, one dedup), and the
@@ -506,12 +483,11 @@ if (notif != mqttLastPublishedNotif) {
   mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "notification").c_str(),
                      0, true, notif ? "ON" : "OFF");
 }
-// Text capacity = grid size (#277): a leading master's display width IS
-// the wall. Capacity is the 5 s cluster pass's cached fact, so the first
-// publish after enabling may briefly show the own width — retained,
-// self-corrects next pass.
-int widthValue = (leading && mqttClusterCapacity > 0) ? mqttClusterCapacity
-                                                      : snap.displayWidth;
+// Text capacity = the whole wall's units. Capacity is the 5 s wall pass's
+// cached fact, so the first publish after pairing may briefly show the own
+// width — retained, self-corrects next pass.
+int widthValue = (leading && mqttWallCapacity > 0) ? mqttWallCapacity
+                                                   : snap.displayWidth;
 if (widthValue != mqttLastPublishedWidth) {
   mqttLastPublishedWidth = widthValue;
   char n[12];
@@ -572,121 +548,142 @@ static void mqttPublishQuiet() {
                      state ? "ON" : "OFF");
 }
 
-// Leader-lost sensor (#500). `state` is clusterLeaderLostState(): the entity
-// exists only while this board is a cluster member. Runs on the
-// availability-only path too — it is the one state a member still owes HA.
-static void mqttPublishLeaderLost(int state) {
-  int configured = state >= 0 ? 1 : 0;
-  if (configured != mqttLastLeaderLostConfigured) {
-    char topicBuf[96];
-    size_t tLen = buildLeaderLostDiscoveryTopic(topicBuf, sizeof(topicBuf),
-                                                mqttResolvedDeviceId.c_str());
-    if (tLen > 0 && tLen < sizeof(topicBuf)) {
-      if (configured) {
-        char payloadBuf[512];
-        size_t pLen = buildLeaderLostDiscovery(payloadBuf, sizeof(payloadBuf),
-                                               mqttResolvedDeviceId.c_str(),
-                                               mqttFwVersion.c_str());
-        if (pLen > 0 && pLen < sizeof(payloadBuf)) {
-          mqttClient.publish(topicBuf, 0, true, payloadBuf);
-        }
-      } else {
-        mqttClient.publish(topicBuf, 0, true, "");
-        mqttClient.publish(
-            mqttTopic(mqttResolvedDeviceId, "leader_lost").c_str(), 0, true, "");
-      }
-    }
-    mqttLastLeaderLostConfigured = configured;
-    mqttLastLeaderLostState = -1;
+// Entities of the firmware before the wall link: blanked once per session.
+static bool mqttRetiredCleared = false;
+
+static void mqttClearRetiredEntities() {
+  char topicBuf[96];
+  for (int i = 0;; i++) {
+    size_t n = buildRetiredDiscoveryTopic(topicBuf, sizeof(topicBuf),
+                                          mqttResolvedDeviceId.c_str(), i);
+    if (n == 0) break;
+    if (n < sizeof(topicBuf)) mqttClient.publish(topicBuf, 0, true, "");
   }
-  if (state >= 0 && state != mqttLastLeaderLostState) {
-    mqttLastLeaderLostState = state;
-    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "leader_lost").c_str(),
-                       0, true, state ? "ON" : "OFF");
-    if (state) SerialPrintln(F("MQTT: leader lost — alert published"));
+  static const char* const retiredState[] = {"cluster_degraded", "cluster/attrs",
+                                             "leader_lost"};
+  for (const char* suffix : retiredState) {
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, suffix).c_str(), 0, true, "");
   }
 }
 
-// Cluster surfacing (#277): degraded sensor + member/rollout attrs + the
-// wall text/state, 5 s cadence (MQTT_CLUSTER_INTERVAL_MS; cadence check
-// lives inside).
-static void mqttPublishClusterSurfacing(const DisplaySnapshot& snap,
-                                        const WebContentSnapshot& content,
-                                        bool leading) {
-// Cluster surfacing (#277): degraded sensor + member/rollout attrs +
-// the wall text/state, 5 s cadence (see MQTT_CLUSTER_INTERVAL_MS).
-if ((int32_t)(millis() - mqttNextClusterMs) >= 0) {
-  mqttNextClusterMs = millis() + MQTT_CLUSTER_INTERVAL_MS;
-  int leadingNow = leading ? 1 : 0;
-  if (leadingNow != mqttLastClusterConfigured) {
+// Wall surfacing: the problem sensor, the boards as its attributes and the
+// wall's text/state, 5 s cadence (MQTT_WALL_INTERVAL_MS; cadence check lives
+// inside). `active` = the rows table has rows.
+static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
+  if ((int32_t)(millis() - mqttNextWallMs) < 0) return;
+  mqttNextWallMs = millis() + MQTT_WALL_INTERVAL_MS;
+  if (!mqttRetiredCleared) {
+    mqttRetiredCleared = true;
+    mqttClearRetiredEntities();
+  }
+  int activeNow = active ? 1 : 0;
+  if (activeNow != mqttLastWallConfigured) {
     char topicBuf[96];
-    size_t tLen = buildClusterDegradedDiscoveryTopic(
-        topicBuf, sizeof(topicBuf), mqttResolvedDeviceId.c_str());
+    size_t tLen = buildWallProblemDiscoveryTopic(topicBuf, sizeof(topicBuf),
+                                                 mqttResolvedDeviceId.c_str());
     if (tLen > 0 && tLen < sizeof(topicBuf)) {
-      if (leadingNow) {
+      if (activeNow) {
         char payloadBuf[512];
-        size_t pLen = buildClusterDegradedDiscovery(
-            payloadBuf, sizeof(payloadBuf), mqttResolvedDeviceId.c_str(),
-            mqttFwVersion.c_str());
+        size_t pLen = buildWallProblemDiscovery(payloadBuf, sizeof(payloadBuf),
+                                                mqttResolvedDeviceId.c_str(),
+                                                mqttFwVersion.c_str());
         if (pLen > 0 && pLen < sizeof(payloadBuf)) {
           mqttClient.publish(topicBuf, 0, true, payloadBuf);
         } else {
-          SerialPrintln(
-              F("MQTT: cluster discovery skipped — would truncate"));
+          SerialPrintln(F("MQTT: wall discovery skipped — would truncate"));
         }
       } else {
-        // Not leading (runtime disable OR the reconcile sweep of a fresh
-        // session): blank the retained config + topics so HA drops the
-        // entity instead of showing it stale, and force the width/text
-        // publishes back onto this board's own facts.
+        // No rows (the last one released, OR the reconcile sweep of a fresh
+        // session): blank the retained config + topics so Home Assistant
+        // drops the entity instead of showing it stale, and force the
+        // width/text publishes back onto this board's own facts.
         mqttClient.publish(topicBuf, 0, true, "");
-        mqttClient.publish(
-            mqttTopic(mqttResolvedDeviceId, "cluster_degraded").c_str(), 0,
-            true, "");
-        mqttClient.publish(
-            mqttTopic(mqttResolvedDeviceId, "cluster/attrs").c_str(), 0,
-            true, "");
-        mqttClusterCapacity = 0;
+        mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "wall_problem").c_str(), 0, true,
+                           "");
+        mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "wall/attrs").c_str(), 0, true, "");
+        mqttWallCapacity = 0;
         mqttLastPublishedWidth = -1;
         mqttLastPublishedText = "\x01";
       }
     }
-    mqttLastClusterState = -1;
-    mqttLastClusterAttrs = "\x01";
-    mqttLastClusterConfigured = leadingNow;
+    mqttLastWallState = -1;
+    mqttLastWallAttrs = "\x01";
+    mqttLastWallConfigured = activeNow;
   }
-  if (leading) {
-    ClusterLeaderStatus cst = clusterLeaderStatusGet();
-    mqttClusterCapacity = cst.gridCapacity;
-    int degraded = clusterDegraded(cst) ? 1 : 0;
-    if (degraded != mqttLastClusterState) {
-      mqttLastClusterState = degraded;
-      mqttClient.publish(
-          mqttTopic(mqttResolvedDeviceId, "cluster_degraded").c_str(), 0,
-          true, degraded ? "ON" : "OFF");
+  if (!active) return;
+
+  // Heap, not this task's stack: the snapshot and one row's unit facts.
+  std::unique_ptr<WallSnapshot> wall(new WallSnapshot(wallStateGet()));
+  std::unique_ptr<UnitFactsDoc> units(new UnitFactsDoc);
+  WallMqttRow rows[CLUSTER_MAX_MEMBERS];
+  char texts[CLUSTER_MAX_MEMBERS][WALL_ROW_TEXT_MAX + 1];
+  const uint32_t nowMs = millis();
+  const int count = wall->rows.count;
+  for (int i = 0; i < count; i++) {
+    const WallRowDef& def = wall->rows.rows[i];
+    const WallRowLink& link = wall->link[i];
+    WallMqttRow& r = rows[i];
+    r.id = def.id;
+    r.row = def.row;
+    r.col = def.col;
+    r.width = def.width;
+    r.own = wallRowIsOwn(def);
+    texts[i][0] = '\0';
+    wallShowRowText(i, texts[i], sizeof(texts[i]));
+    r.text = texts[i];
+    if (r.own) {
+      r.text = snap.currentText;  // what is on the flaps, as for a master on its own
+      r.unitsKnown = true;
+      r.unitsFound = snap.detectedUnitCount;
+      r.unitsFaulty = snap.faultyUnitCount;
+      r.unitsLost = (uint8_t)computeLostUnitCount(snap.units, snap.displayWidth);
+      continue;
     }
-    String attrs = buildClusterAttrsJson(cst);
-    if (attrs != mqttLastClusterAttrs) {
-      mqttLastClusterAttrs = attrs;
-      mqttClient.publish(
-          mqttTopic(mqttResolvedDeviceId, "cluster/attrs").c_str(), 0, true,
-          attrs.c_str());
-    }
-    // Wall text/state — shares mqttLastPublishedText with the own-facts
-    // path (same topic; see the contract note above the leading gate).
-    String rows[CLUSTER_MAX_MEMBERS];
-    int selfRow = 0;
-    int rowCount = clusterLeaderMirrorRows(
-        rows, selfRow, String(snap.currentText), content.alignment);
-    String wall = clusterWallStateText(rows, rowCount);
-    if (rowCount > 0 && wall != mqttLastPublishedText) {
-      mqttLastPublishedText = wall;
-      mqttClient.publish(
-          mqttTopic(mqttResolvedDeviceId, "text/state").c_str(), 0, true,
-          wall.c_str());
+    const WallRowReach reach = wallRowReach(link.contact, nowMs);
+    r.reach = wallRowReachName(reach);
+    // A row never heard since this master started is gone once the time a
+    // connected one would have been written off has passed.
+    r.lost = reach == WallRowReach::Lost ||
+             (reach == WallRowReach::Never && nowMs >= WALL_LINK_LOST_MS);
+    r.welcomed = link.everWelcomed;
+    r.rev = link.rev;
+    r.rescue = link.rescue;
+    r.updateBlocked = link.updateBlocked;
+    r.busDead = link.haveStatus && link.status.bus_dead;
+    uint32_t atMs = 0;
+    if (wallStateRowUnits(i, *units, atMs)) {
+      r.unitsKnown = true;
+      int found = 0;
+      for (int u = 0; u < units->width && u < UNITS_AMOUNT; u++) {
+        if (units->units[u].state != 0) found++;
+      }
+      r.unitsFound = (uint8_t)found;
+      r.unitsFaulty = (uint8_t)units->faulty;
+      r.unitsLost = (uint8_t)computeLostUnitCount(units->units, units->width);
     }
   }
-}
+  mqttWallCapacity = wallMqttCapacity(rows, count);
+  int problem = wallMqttProblem(rows, count) ? 1 : 0;
+  if (problem != mqttLastWallState) {
+    mqttLastWallState = problem;
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "wall_problem").c_str(), 0, true,
+                       problem ? "ON" : "OFF");
+  }
+  String attrs = wallMqttAttrsJson(
+      rows, count, wallUpdatePhaseName((WallUpdatePhase)wall->updatePhase));
+  if (attrs != mqttLastWallAttrs) {
+    mqttLastWallAttrs = attrs;
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "wall/attrs").c_str(), 0, true,
+                       attrs.c_str());
+  }
+  // Wall text/state — shares mqttLastPublishedText with the own-facts path
+  // (same topic; see the contract note above the leading gate).
+  String text = wallMqttStateText(rows, count);
+  if (text != mqttLastPublishedText) {
+    mqttLastPublishedText = text;
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "text/state").c_str(), 0, true,
+                       text.c_str());
+  }
 }
 
 // Periodic telemetry + per-unit health, 60 s (wraparound-safe; cadence
@@ -821,46 +818,24 @@ void mqttServiceTick() {
     mqttLastPublishedUnits = -1;
     mqttLastPublishedSpeed = -1;
     mqttLastPublishedAlignment = "\x01";
-    // Cluster (#277): a fresh session reconciles the retained config and
-    // re-publishes state/attrs on the first cluster pass.
-    mqttLastClusterConfigured = -1;
-    mqttLastClusterState = -1;
-    mqttLastClusterAttrs = "\x01";
-    mqttNextClusterMs = millis();
-    mqttLastLeaderLostConfigured = -1;
-    mqttLastLeaderLostState = -1;
+    // A fresh session reconciles the wall sensor's retained config and
+    // re-publishes state/attrs on the first wall pass.
+    mqttLastWallConfigured = -1;
+    mqttLastWallState = -1;
+    mqttLastWallAttrs = "\x01";
+    mqttNextWallMs = millis();
+    mqttRetiredCleared = false;
     mqttLastQuietState = -1;
   }
 
   if (!mqttClient.connected()) return;
 
-  // Followers publish availability only while clustered (#277): the wall's
-  // content and this board's vitals belong to the leader's HA device — a
-  // frozen entity beats a misleading one, and commands are already
-  // dropped by the #272 gate. Availability/LWT, discovery and the rename
-  // clear stay live; every state/telemetry publish below stands down.
-  // 1 s cache: the view copy takes the follower mutex.
-  static uint32_t mqttNextGateCheckMs = 0;
-  static bool mqttAvailabilityOnly = false;
-  static int mqttLeaderLost = -1;
-  if ((int32_t)(millis() - mqttNextGateCheckMs) >= 0) {
-    mqttNextGateCheckMs = millis() + 1000;
-    ClusterFollowerView view = clusterFollowerViewGet();
-    mqttAvailabilityOnly = view.gated;
-    mqttLeaderLost = clusterLeaderLostState(view.phase);
-  }
-  mqttPublishLeaderLost(mqttLeaderLost);
-  if (mqttAvailabilityOnly) {
-    if (discoveryClearRequested.exchange(false)) publishDiscoveryClear();
-    return;
-  }
-
   DisplaySnapshot snap = displaySnapshotGet();
   WebContentSnapshot content = webDisplayContentSnapshot();
-  bool leading = clusterLeaderEnabled();
+  bool leading = wallShowActive();
 
   mqttPublishEventDrivenState(snap, content, leading);
-  mqttPublishClusterSurfacing(snap, content, leading);
+  mqttPublishWallSurfacing(snap, leading);
   mqttPublishQuiet();
 
   if (discoveryClearRequested.exchange(false)) publishDiscoveryClear();

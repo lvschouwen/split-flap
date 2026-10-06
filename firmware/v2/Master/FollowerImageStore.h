@@ -1,17 +1,16 @@
 #pragma once
-// FollowerImageStore — the S3 side of the ESP-01 follower-image relay
-// (#304 Part B). Holds ONE staged follower-*.bin on the shared `storage`
-// LittleFS (/follower-fw.bin + /follower-fw.rev) so the leader can stream it
-// to esp01 rows on demand (ClusterLeader.cpp), reusing #276's machinery but
-// sourcing the file instead of the running slot.
+// FollowerImageStore — the row image the master keeps for its ESP-01 row
+// boards. Holds ONE follower-*.bin on the shared `storage` LittleFS
+// (/follower-fw.bin + /follower-fw.rev); a row on another rev is offered it
+// (WallUpdatePolicy.h) and downloads it with GET /firmware/row.
 //
 // Writer discipline (Hard rule: netTask is the SOLE `storage` flash writer):
 // the async upload handler accumulates the whole image into a PSRAM buffer
 // and verifies its MD5; the actual file write happens in
-// followerImageFlushTick() on netTask. The relay READS the file from
-// clusterTask — the same cross-task LittleFS read the /log/flash handler
-// already relies on (esp_littlefs VFS lock). Upload and relay are mutually
-// exclusive so the file can't be rewritten mid-stream.
+// followerImageFlushTick() on netTask. A download READS the file from the
+// web server's task — the same cross-task LittleFS read the /log/flash
+// handler already relies on (esp_littlefs VFS lock). Upload and download are
+// mutually exclusive so the file can't be rewritten mid-stream.
 //
 // Pure decisions (filename guard, chunk cursor/bounds) live in
 // FollowerImagePolicy.h; this module is the LittleFS + MD5 glue (bench-tier).

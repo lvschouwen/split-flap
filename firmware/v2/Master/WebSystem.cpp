@@ -18,8 +18,6 @@
 
 #include "ApiIndex.h"
 #include "BuildVersion.h"
-#include "ClusterDigest.h"  // clusterStatusJson (/status aggregate)
-#include "ClusterLeader.h"
 #include "FactorySlot.h"
 #include "FlashLog.h"
 #include "OdometerLog.h"
@@ -115,8 +113,7 @@ void webSystemRegister(AsyncWebServer& server) {
   // The SUMMARY (task name + code addresses + backtrace PCs) carries NO
   // secrets, so an unauthenticated GET is fine — same posture as /settings,
   // /log/flash. The RAW image is a task-stack dump that CAN transiently hold
-  // HMAC key material / WiFi-cred fragments (a key mid-sign on clusterTask's
-  // stack); #431 ships it anyway — accepted risk for this internal LAN-only
+  // WiFi-credential fragments; #431 ships it anyway — accepted risk for this internal LAN-only
   // deployment, where a dump that cannot be pulled costs more than the
   // exposure (the surface stays CSRF/CORS-closed like every other route).
   // The partition is written by the panic handler and erased only via the
@@ -336,7 +333,7 @@ void webSystemRegister(AsyncWebServer& server) {
   });
 
   // One-shot aggregate for a single curl (#307): settings + stats.now + units
-  // + cluster + ota, composed from the existing serializers. History stays at
+  // + ota, composed from the existing serializers. History stays at
   // /system/stats to keep this bounded.
   server.on("/status", HTTP_GET, [](AsyncWebServerRequest* request) {
     std::unique_ptr<char[]> nowBuf(new char[SYSTEM_STATS_JSON_CAP]);
@@ -363,8 +360,6 @@ void webSystemRegister(AsyncWebServer& server) {
     out += nowBuf.get();
     out += "},\"units\":";
     out += unitsBuf.get();
-    out += ",\"cluster\":";
-    out += clusterStatusJson(clusterLeaderStatusGet());
     out += ",\"ota\":";
     out += otaDebugJson();
     out += "}";

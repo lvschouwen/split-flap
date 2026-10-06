@@ -9,7 +9,6 @@
 #include <ESPAsyncWebServer.h>
 #include <ESPmDNS.h>
 
-#include "ClusterFollower.h"
 #include "HelpersSerialHandling.h"
 #include "MdnsDiscovery.h"
 #include "MqttService.h"
@@ -78,16 +77,6 @@ void webSettingsRegister(AsyncWebServer& server) {
       } else {
         request->redirect("/?display-busy=true");
       }
-      return;
-    }
-    // Cluster producer gate (#272): a clustered follower's text/mode belong
-    // to the leader — 409; the banner explains why. Transients stay allowed
-    // (they are the calibration vehicle — maintenance is local), and so do
-    // pure settings saves.
-    if ((local.inputTextProvided || local.deviceModeProvided) &&
-        clusterFollowerViewGet().gated) {
-      if (isAjax) request->send(409, "text/plain", F("clustered"));
-      else request->redirect("/?clustered=true");
       return;
     }
     if ((local.inputTextProvided || local.transientTextProvided) &&
