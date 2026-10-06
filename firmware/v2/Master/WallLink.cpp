@@ -4,8 +4,12 @@
 #include <WiFi.h>
 #include <lwip/sockets.h>
 
+#include <sys/time.h>
+
+#include "ClockPolicy.h"  // clockIsTimeSynced
 #include "HelpersSerialHandling.h"
 #include "LargeAlloc.h"
+#include "SntpReply.h"
 #include "TaskWatchdog.h"
 #include "Tasks.h"
 #include "WallLinkCore.h"
@@ -40,6 +44,10 @@ bool factsDirty[WALL_LINK_MAX_ROWS] = {false};
 
 int listenFd = -1;
 uint32_t listenRetryAtMs = 0;
+// The rows' time requests (SntpReply.h). Same task, same select.
+int timeFd = -1;
+// Requests answered per pass: a flood must not hold the rows off.
+constexpr int TIME_REPLIES_PER_PASS = 4;
 
 struct Socket {
   int fd = -1;
@@ -253,6 +261,49 @@ void openListener(uint32_t nowMs) {
   SerialPrintf("link: listening on port %d\n", (int)WALL_LINK_PORT);
 }
 
+void openTimeSocket() {
+  if (timeFd >= 0) return;
+  const int fd = lwip_socket(AF_INET, SOCK_DGRAM, 0);
+  if (fd < 0) return;
+  struct sockaddr_in addr = {};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(SNTP_PORT);
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  const int flags = lwip_fcntl(fd, F_GETFL, 0);
+  if (flags < 0 || lwip_fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 ||
+      lwip_bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    lwip_close(fd);
+    return;
+  }
+  timeFd = fd;
+  SerialPrintf("link: answering time requests on port %d\n", (int)SNTP_PORT);
+}
+
+uint64_t epochNowUs(bool& synced) {
+  struct timeval tv;
+  gettimeofday(&tv, nullptr);
+  synced = clockIsTimeSynced(tv.tv_sec);
+  return (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
+}
+
+// A master without synced time stays silent: it names no flip instants
+// either, and a wrong time is worse for a row than none.
+void answerTime() {
+  for (int i = 0; i < TIME_REPLIES_PER_PASS; i++) {
+    struct sockaddr_in from = {};
+    socklen_t fromLen = sizeof(from);
+    uint8_t request[SNTP_PACKET_LEN];
+    const int n = lwip_recvfrom(timeFd, request, sizeof(request), MSG_DONTWAIT,
+                                (struct sockaddr*)&from, &fromLen);
+    if (n < 0) return;
+    bool synced = false;
+    const uint64_t rxUs = epochNowUs(synced);
+    uint8_t reply[SNTP_PACKET_LEN];
+    if (!synced || !sntpBuildReply(request, (size_t)n, rxUs, epochNowUs(synced), reply)) continue;
+    lwip_sendto(timeFd, reply, sizeof(reply), MSG_DONTWAIT, (struct sockaddr*)&from, fromLen);
+  }
+}
+
 void acceptRows(uint32_t nowMs) {
   for (;;) {
     const int fd = lwip_accept(listenFd, nullptr, nullptr);
@@ -351,6 +402,7 @@ void pass() {
     }
   }
   openListener(nowMs);
+  if (listenFd >= 0) openTimeSocket();
   if (listenFd < 0) {
     vTaskDelay(pdMS_TO_TICKS(PASS_WAIT_MS));
     return;
@@ -360,6 +412,10 @@ void pass() {
   FD_ZERO(&readable);
   FD_SET(listenFd, &readable);
   int maxFd = listenFd;
+  if (timeFd >= 0) {
+    FD_SET(timeFd, &readable);
+    if (timeFd > maxFd) maxFd = timeFd;
+  }
   for (int conn = 0; conn < WALL_LINK_MAX_CONNS; conn++) {
     const Socket& s = sockets[conn];
     if (s.fd < 0) continue;
@@ -372,6 +428,7 @@ void pass() {
     vTaskDelay(pdMS_TO_TICKS(PASS_WAIT_MS));
     FD_ZERO(&readable);
   }
+  if (timeFd >= 0 && FD_ISSET(timeFd, &readable)) answerTime();
   if (FD_ISSET(listenFd, &readable)) acceptRows(nowMs);
   readRows(readable, nowMs);
   showAndSettings(nowMs);
