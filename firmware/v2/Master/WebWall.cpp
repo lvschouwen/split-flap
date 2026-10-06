@@ -193,7 +193,10 @@ void handleWall(AsyncWebServerRequest* request) {
     row["width"] = def.width;
     char text[WALL_ROW_TEXT_MAX + 1];
     if (wallShowRowText(i, text, sizeof(text))) row["text"] = jsonCopied(text);
-    if (wallRowIsOwn(def)) continue;
+    if (wallRowIsOwn(def)) {
+      row["showing"] = jsonCopied(own.currentText);
+      continue;
+    }
     const WallRowLink& link = wall->link[i];
     row["pairedAt"] = jsonCopied(def.host);
     row["reach"] = reachName(wallRowReach(link.contact, nowMs));
@@ -205,6 +208,10 @@ void handleWall(AsyncWebServerRequest* request) {
     row["rev"] = jsonCopied(link.rev);
     row["rescue"] = link.rescue;
     row["units"] = link.reportedWidth;
+    row["textShown"] = link.textApplied;
+    row["shownCount"] = link.shownCount;
+    row["lastLateMs"] = link.lastLateMs;
+    row["worstLateMs"] = link.worstLateMs;
     if (link.haveStatus) {
       JsonObject s = row["status"].to<JsonObject>();
       s["uptimeS"] = link.status.up_s;

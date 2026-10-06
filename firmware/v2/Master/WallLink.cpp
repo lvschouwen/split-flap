@@ -175,6 +175,7 @@ struct Hooks : WallLinkHooks {
     }
     if (unitsAssembler[row] != nullptr) unitsAssembler[row]->active = false;
     f.haveStatus = false;
+    f.worstLateMs = 0;
     f.address[0] = 0;
     struct sockaddr_in peer = {};
     socklen_t len = sizeof(peer);
@@ -191,6 +192,11 @@ struct Hooks : WallLinkHooks {
     if (message.which_body == wl_ToMaster_status_tag) {
       facts[row].status = message.body.status;
       facts[row].haveStatus = true;
+    } else if (message.which_body == wl_ToMaster_shown_tag) {
+      WallRowLink& f = facts[row];
+      f.shownCount++;
+      f.lastLateMs = message.body.shown.late_ms;
+      if (f.lastLateMs > f.worstLateMs) f.worstLateMs = f.lastLateMs;
     } else if (message.which_body == wl_ToMaster_units_json_tag) {
       takeUnitsPiece(row, message.body.units_json, rowName(row));
     }
@@ -328,6 +334,7 @@ void publish(uint32_t nowMs) {
     if (!factsDirty[row]) continue;
     factsDirty[row] = false;
     facts[row].contact = core->rows[row].contact;
+    facts[row].textApplied = wallRowTextApplied(core->rows[row].text);
     wallStatePublishLink(row, facts[row]);
   }
 }

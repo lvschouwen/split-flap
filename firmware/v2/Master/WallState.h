@@ -32,6 +32,10 @@ struct WallRowLink {
   uint32_t connects = 0;      // connections welcomed since this master started
   uint32_t restarts = 0;      // of the row, seen as a new boot id
   bool haveStatus = false;    // on the current connection
+  bool textApplied = false;   // the row reported the latest text as shown
+  uint32_t shownCount = 0;    // texts the row reported shown, since this master started
+  uint32_t lastLateMs = 0;    // how far past its instant the last one flipped (0 = on time)
+  uint32_t worstLateMs = 0;   // the worst of them on the current connection
   wl_Status status = wl_Status_init_zero;
 };
 
