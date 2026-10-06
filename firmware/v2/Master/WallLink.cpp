@@ -112,6 +112,10 @@ const char* rowName(int row) {
 // ---- the stored row image, offered to rows on another rev (WallUpdatePolicy.h) ----
 
 WallUpdater updater;
+// The time of the pass being run. The offer rule is fed from the hooks and
+// from the pass itself, and must see one clock: a later millis() in a hook
+// would lie ahead of the pass's own "now" and read as a wrapped, huge age.
+uint32_t passNowMs = 0;
 FollowerImageFacts image;
 bool imageKnown = false;
 uint32_t imageGeneration = 0;
@@ -221,7 +225,7 @@ struct Hooks : WallLinkHooks {
     // Before the offer rule hears of the Hello: a rev that changed while no
     // offer was out to this row.
     updater.noteRev(row, f.rev, hello.rev);
-    updateEnded(row, updater.hello(row, hello.rev, hello.rescue, restarted, offeredRev(), millis()));
+    updateEnded(row, updater.hello(row, hello.rev, hello.rescue, restarted, offeredRev(), passNowMs));
     f.everWelcomed = true;
     f.rescue = hello.rescue;
     f.reportedWidth = (uint8_t)hello.width;
@@ -263,7 +267,7 @@ struct Hooks : WallLinkHooks {
       const wl_UpdateState& u = message.body.update_state;
       SerialPrintf("link: %s: update to %s: phase %d, reason %d, detail %u\n", rowName(row), u.rev,
                    (int)u.phase, (int)u.reason, (unsigned)u.detail);
-      updateEnded(row, updater.answer(row, u, offeredRev(), millis()));
+      updateEnded(row, updater.answer(row, u, offeredRev(), passNowMs));
     }
     factsDirty[row] = true;
   }
@@ -528,6 +532,7 @@ void publish(uint32_t nowMs) {
 
 void pass() {
   const uint32_t nowMs = millis();
+  passNowMs = nowMs;
   if (wallStateRowsGeneration() != rowsGeneration) {
     core->reset(hooks);
     updater.reset();

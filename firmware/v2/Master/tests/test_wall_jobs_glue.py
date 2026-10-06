@@ -74,3 +74,14 @@ def test_the_row_image_is_served_with_its_file_claimed():
     release = route.index("onDisconnect([]() { followerImageReleaseRelay(); })")
     send = route.index("request->send(LittleFS, FOLLOWER_IMAGE_PATH")
     assert claim < release < send
+
+
+def test_the_offer_rule_sees_one_clock():
+    # Fed a later millis() from a hook, its ages against the pass's own "now"
+    # go negative, which unsigned arithmetic reads as overdue.
+    code = _code(MASTER / "WallLink.cpp")
+    calls = re.findall(r"updater\.(?:hello|answer|tick|health|offered|nextCandidate)\([^;]*;", code)
+    assert len(calls) >= 6
+    for call in calls:
+        assert "millis()" not in call, call
+        assert "nowMs" in call or "passNowMs" in call, call
