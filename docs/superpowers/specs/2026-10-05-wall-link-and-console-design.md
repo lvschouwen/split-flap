@@ -33,11 +33,11 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 
 **Transport.** One TCP connection per row board, opened by the row board to the master, kept open. The master listens; it never dials a row. A dedicated `linkTask` on the master owns the listening socket and all row sockets (plain lwIP sockets with `select`), replacing `clusterTask`.
 
-**Finding the master.** The row board stores the master's id and last address at pairing. If the address stops answering it looks the id up over mDNS (`_splitflap._tcp`). A DHCP move of the master needs no operator action.
+**Finding the master.** The row board stores the master's id and address at pairing and dials that address. A master whose address moved posts its pairing again from the new one (see Pairing); the row takes it once the old address has been silent for 25 s. A lookup of the id over mDNS (`_splitflap._tcp`) on the row is not built: the re-pair covers a DHCP move without it.
 
 **Format.** Messages are described once in `firmware/v2/link/wall_link.proto` and generated for both boards with nanopb (Protocol Buffers; fixed-size fields, no heap). Each message on the connection is one envelope, `ToRow` or `ToMaster`, length-delimited. This is the pattern ESPHome's native API uses on the same chips. Field numbers are the contract; messages grow only at the end.
 
-**Pairing (once).** The operator adds a row in Wall settings. The master posts its own id to the row board's `POST /pair`. An unpaired row board stores it and dials that master from then on; a paired one refuses. A row is released by a `Release` message from its master, or by the row's WiFi reset (which clears the pairing with the credentials).
+**Pairing (once).** The operator adds a row in Wall settings. The master posts its own id to the row board's `POST /pair` (form field `master`); its address is the caller's, and the answer is the row's identity. The row obeys one master, known by id and address (`FollowerPairPolicy.h`): an unpaired row stores the caller; its own master at its own address changes nothing; its own master's id from another address is taken only once the master has been out of contact for 25 s, because the id is no secret and must not be enough to redirect a working row; another master is refused (409, naming the present one) until the row has written its own off (120 s without contact), so a replaced master needs no step on the row. A stored pairing starts the contact window afresh: the new master has those 25 s to connect, and the 120 s count from there. A row is released by a `Release` message from its master. The ESP-01 has no reset button and its setup portal opens only when the WiFi cannot be joined, so there is no reset that clears a pairing; the lost-master rule is what frees a row.
 
 **Hello (every connection).** `Hello{row id, protocol, rev, boot id, rescue flag}` → `Welcome{master id}`. A row that reaches a master it is not paired with closes the connection.
 
@@ -56,11 +56,11 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 | | `LogCtl`, `Ping`, `Restart`, `Release` | |
 | row → master | `Hello` | row id, protocol, rev, boot id, rescue flag, width |
 | | `Status` | vitals: memory, signal, TX level, uptime, bus state, escalations, busy flag, image size, time synced. Every 10 s and on change |
-| | `UnitsJson` | the row's `/units/health` JSON exactly as the shared serializer writes it, in pieces. On change and every 30 s. The master reads values out with ArduinoJson |
+| | `UnitsJson` | the row's unit facts as JSON, exactly as the shared serializer writes them (calibration offset included as `ofs`), in pieces. On change and every 30 s. The master reads values out with ArduinoJson |
 | | `Shown` | render id applied, and how late if it missed its instant |
 | | `OpState` | op id, phase, reason, result data (boot dump bytes in pieces) |
 | | `Event` | code, unit, arguments, row uptime |
-| | `LogLine`, `Pong` | log lines only while the master asked for them |
+| | `LogLine`, `Pong` | log lines only while the master asked for them with `LogCtl`, per connection: first what the row's 4 KB ring still holds and has not sent before, then each new line. Lines logged while the master was away follow after the reconnect |
 
 **Liveness.** Any message counts. `Ping` after 10 s of silence, not while the row is busy. The proven numbers stay: the master marks a row lost after 30 s without contact (#385); the row holds its text for 25 s, then is in grace, then at 120 s shows its fallback. A dropped connection is redialled with 1–8 s backoff. The row board's long unit-bus waits (about 1.1 s) no longer matter: nothing has a per-request deadline.
 
@@ -76,7 +76,7 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 
 **Two-stage update (not built; the way out if the image outgrows one step).** The 511 KB plain and 602 KB packed limits belong to the one-step update, where the running image and the downloaded copy share the 1,028 KB firmware area. A small helper image (WiFi and fetch only, about 270 KB; the rescue mode is close to one) installed first leaves room for a packed download of about 750 KB, i.e. a full image approaching the whole area — the pattern Tasmota uses on 1 MB devices. Before anything relies on it: the build's guard that the unpacked image must end below its stored copy has to be replaced by a check of the real overlap, proven with the host test that runs the core's boot copier (`tests/test_ota_gzip_eboot.py`); the master has to store two images; and a row left in the helper by a power cut has to be finished by the master. Trigger: the row image passing about 600 KB. The rebuilt image is expected around 435 KB.
 
-**Break-glass, never removed.** The row board keeps the routes it needs without a master: the firmware upload (`POST /firmware/master`, unchanged, so `ota-flash.sh` keeps working), a small identity read, `POST /pair`, and the WiFi setup portal. Rescue mode (3 early deaths) runs WiFi, the link, the download and those two routes, nothing else. The master keeps `POST /firmware/master`, its A/B rollback and the rescue slot unchanged.
+**Break-glass, never removed.** The row board keeps the routes it needs without a master, and no others: the firmware upload (`POST /firmware/master`, unchanged, so `ota-flash.sh` keeps working), the identity read (`GET /settings`: name, rev as `version`, `plat`, width, rescue flag, master id and address, link up, uptime, free memory, image size and free space, flash mode and chip id; `ota-flash.sh` reads `version` and `plat`), `POST /pair`, and the WiFi setup portal. Rescue mode (3 early deaths) runs WiFi, the link, the download and the same routes, nothing else. Without a master there is no way to restart the row short of its power, and its log, reset history and bus detail are read only over the link. The master keeps `POST /firmware/master`, its A/B rollback and the rescue slot unchanged.
 
 ## 4. Master internals
 
