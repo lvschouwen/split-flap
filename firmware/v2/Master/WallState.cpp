@@ -49,8 +49,9 @@ WallSnapshot wallStateGet() {
   return wall;
 }
 
-WallRowsTable wallStateRows() {
+WallRowsTable wallStateRows(uint32_t& generation) {
   Locked lock;
+  generation = rowsGeneration.load(std::memory_order_relaxed);
   return wall.rows;
 }
 

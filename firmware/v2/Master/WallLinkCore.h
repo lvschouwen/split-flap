@@ -6,10 +6,14 @@
 // timing rules are WallLinkPolicy.h.
 //
 // A connection is nobody until its first message, which must be a Hello from
-// a row in this master's table. A row has one connection: a newer one replaces
-// the older (a row that restarted dials while the master still holds the old
-// socket). Rows are named by their index in the table, so a changed table
-// means reset(): every row dials again.
+// a row in this master's table. A row has one connection: a newer one from the
+// same address replaces the older (a row that restarted dials while the master
+// still holds the old socket). From another address it is refused while the
+// older stands: a row's id is no secret and must not be enough to take a
+// working row's place. A connection that is not heard for the lost mark is
+// closed unless the row is busy, which also frees a row whose address moved.
+// Rows are named by their index in the table, so a changed table means
+// reset(): every row dials again.
 //
 // One task only. Nothing here blocks or allocates.
 
@@ -32,6 +36,8 @@ struct WallLinkHooks {
   virtual bool write(int conn, const uint8_t* data, size_t n) = 0;
   // Closes the socket of a connection the core has let go of.
   virtual void close(int conn) = 0;
+  // Do these two connections come from the same address?
+  virtual bool samePeer(int a, int b) = 0;
   // A row was welcomed. `restarted`: its boot id differs from the last one.
   virtual void rowHello(int row, const wl_Hello& hello, bool restarted) = 0;
   // Every later message of a welcomed row except Pong.
@@ -58,16 +64,29 @@ struct WallLinkCore {
   WallLinkRow rows[WALL_LINK_MAX_ROWS];
 
   // A socket was accepted: its connection number, -1 when there is no room
-  // (the caller closes the socket).
-  int accept(uint32_t nowMs) {
-    for (int i = 0; i < WALL_LINK_MAX_CONNS; i++) {
-      if (conns[i].open) continue;
-      conns[i] = WallLinkConn{};
-      conns[i].open = true;
-      conns[i].openedAtMs = nowMs;
-      return i;
+  // (the caller closes the socket). When every slot is taken, the connection
+  // that has been nobody the longest makes way, so sockets that say nothing
+  // cannot keep the rows out.
+  int accept(uint32_t nowMs, WallLinkHooks& hooks) {
+    int slot = -1;
+    for (int i = 0; i < WALL_LINK_MAX_CONNS && slot < 0; i++) {
+      if (!conns[i].open) slot = i;
     }
-    return -1;
+    if (slot < 0) {
+      for (int i = 0; i < WALL_LINK_MAX_CONNS; i++) {
+        if (conns[i].row >= 0) continue;
+        if (slot < 0 || (uint32_t)(nowMs - conns[i].openedAtMs) >
+                            (uint32_t)(nowMs - conns[slot].openedAtMs)) {
+          slot = i;
+        }
+      }
+      if (slot < 0) return -1;
+      drop(slot, "made way for a newer connection", hooks);
+    }
+    conns[slot] = WallLinkConn{};
+    conns[slot].open = true;
+    conns[slot].openedAtMs = nowMs;
+    return slot;
   }
 
   // The socket of this connection is gone (closed by the row, or failed).
@@ -94,7 +113,11 @@ struct WallLinkCore {
         // A message this build cannot read (a newer row's) is skipped.
         const bool readable = c.reader.decode(wl_ToMaster_fields, &in);
         c.reader.pop();
-        if (readable) message(conn, nowMs, hooks);
+        if (readable) {
+          message(conn, nowMs, hooks);
+        } else if (c.row < 0) {
+          hooks.note(conn, -1, "a first message this build cannot read");
+        }
       }
       if (!c.open) return;
       if (state == WlFeed::Bad) return drop(conn, "not a link message", hooks);
@@ -113,6 +136,12 @@ struct WallLinkCore {
     for (int r = 0; r < WALL_LINK_MAX_ROWS; r++) {
       WallLinkRow& row = rows[r];
       if (row.conn < 0) continue;
+      // Keepalive only proves the row's TCP stack: a row that is not busy
+      // answers pings, so silence means its program is stuck or gone.
+      if (!row.contact.busy && wallLinkElapsed(nowMs, row.contact.lastHeardMs, WALL_LINK_LOST_MS)) {
+        drop(row.conn, "not heard from", hooks);
+        continue;
+      }
       if (wallRowTextDue(row.text, row.contact)) {
         wlClear(out);
         out.which_body = wl_ToRow_show_tag;
@@ -178,6 +207,11 @@ struct WallLinkCore {
     wallRowHeard(row.contact, nowMs);
     if (in.which_body == wl_ToMaster_pong_tag) return;
     if (in.which_body == wl_ToMaster_status_tag) row.contact.busy = in.body.status.busy;
+    // A download holds the row as a unit job does, but its Status does not
+    // say so: the row announces it with this message instead.
+    if (in.which_body == wl_ToMaster_update_state_tag) {
+      row.contact.busy = in.body.update_state.phase == wl_UpdatePhase_UPDATE_DOWNLOADING;
+    }
     if (in.which_body == wl_ToMaster_shown_tag) {
       wallRowTextShown(row.text, in.body.shown.render_id);
     }
@@ -195,7 +229,12 @@ struct WallLinkCore {
       case WallHello::NotPaired: return drop(conn, "a row this master does not know", hooks);
     }
     WallLinkRow& row = rows[r];
-    if (row.conn >= 0) drop(row.conn, "replaced by a newer connection", hooks);
+    if (row.conn >= 0) {
+      if (!hooks.samePeer(row.conn, conn)) {
+        return drop(conn, "its row is connected from another address", hooks);
+      }
+      drop(row.conn, "replaced by a newer connection", hooks);
+    }
     row.conn = (int8_t)conn;
     conns[conn].row = (int8_t)r;
     wallRowConnected(row.contact, nowMs);

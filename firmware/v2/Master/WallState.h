@@ -40,9 +40,10 @@ struct WallSnapshot {
 void wallStateInit(SettingsStore& store);
 
 WallSnapshot wallStateGet();
-WallRowsTable wallStateRows();
-// Changes whenever the rows table does; the link task drops every connection
-// then, because rows are named by their index in it.
+// The table together with its generation, which changes whenever the table
+// does: the link task drops every connection then, because rows are named by
+// their index in it.
+WallRowsTable wallStateRows(uint32_t& generation);
 uint32_t wallStateRowsGeneration();
 
 // Link task only.

@@ -15,6 +15,7 @@ struct Recorder : WallLinkHooks {
   int hellos = 0, restarts = 0, lastHelloRow = -1;
   std::vector<pb_size_t> messages;
   bool refuseWrites = false;
+  int peerOf[WALL_LINK_MAX_CONNS] = {0};  // an address per connection; all the same by default
 
   int rowForId(const char* id) override {
     for (size_t i = 0; i < known.size(); i++) {
@@ -33,6 +34,7 @@ struct Recorder : WallLinkHooks {
     return true;
   }
   void close(int conn) override { closed.push_back(conn); }
+  bool samePeer(int a, int b) override { return peerOf[a] == peerOf[b]; }
   void rowHello(int row, const wl_Hello&, bool restarted) override {
     hellos++;
     lastHelloRow = row;
@@ -93,7 +95,7 @@ static wl_ToMaster status(bool busy) {
 
 // A row connected and greeted at `now`.
 static int joined(const char* id, uint32_t now, uint32_t bootId = 7) {
-  const int conn = core.accept(now);
+  const int conn = core.accept(now, *rec);
   TEST_ASSERT_TRUE(conn >= 0);
   feed(conn, hello(id, bootId), now);
   return conn;
@@ -125,21 +127,21 @@ static void test_a_row_this_master_does_not_know_is_closed_without_a_welcome() {
 }
 
 static void test_another_protocol_is_closed() {
-  const int conn = core.accept(0);
+  const int conn = core.accept(0, *rec);
   feed(conn, hello("row-a", 7, WALL_LINK_PROTOCOL + 1), 0);
   TEST_ASSERT_EQUAL(1, rec->closed.size());
   TEST_ASSERT_TRUE(rec->written.empty());
 }
 
 static void test_anything_before_hello_closes_the_connection() {
-  const int conn = core.accept(0);
+  const int conn = core.accept(0, *rec);
   feed(conn, plain(wl_ToMaster_pong_tag), 10);
   TEST_ASSERT_EQUAL(1, rec->closed.size());
   TEST_ASSERT_TRUE(rec->messages.empty());
 }
 
 static void test_a_connection_that_never_says_hello_is_closed_after_five_seconds() {
-  const int conn = core.accept(1000);
+  const int conn = core.accept(1000, *rec);
   core.tick(5999, *rec);
   TEST_ASSERT_TRUE(rec->closed.empty());
   core.tick(6000, *rec);
@@ -149,15 +151,108 @@ static void test_a_connection_that_never_says_hello_is_closed_after_five_seconds
 }
 
 static void test_bytes_that_are_no_message_close_the_connection() {
-  const int conn = core.accept(0);
+  const int conn = core.accept(0, *rec);
   const uint8_t junk[] = {0xFF, 0xFF, 0xFF, 0xFF};
   core.bytes(conn, junk, sizeof junk, 5, *rec);
   TEST_ASSERT_EQUAL(1, rec->closed.size());
 }
 
-static void test_there_are_only_so_many_connections() {
-  for (int i = 0; i < WALL_LINK_MAX_CONNS; i++) TEST_ASSERT_TRUE(core.accept(0) >= 0);
-  TEST_ASSERT_EQUAL(-1, core.accept(0));
+// Connections that say nothing must not keep the rows out: when there is no
+// room, the one that has been nobody the longest makes way.
+static void test_a_full_house_evicts_the_oldest_connection_that_is_nobody() {
+  joined("row-a", 0);
+  for (int i = 1; i < WALL_LINK_MAX_CONNS; i++) TEST_ASSERT_TRUE(core.accept(100 + i, *rec) >= 0);
+  TEST_ASSERT_TRUE(rec->closed.empty());
+  const int next = core.accept(500, *rec);
+  TEST_ASSERT_EQUAL(1, next);  // the slot of the oldest nobody, opened at 101
+  TEST_ASSERT_EQUAL(1, rec->closed.size());
+  TEST_ASSERT_EQUAL(1, rec->closed[0]);
+  TEST_ASSERT_EQUAL_UINT32(500, core.conns[next].openedAtMs);
+  TEST_ASSERT_EQUAL(0, core.rows[0].conn);  // a welcomed row is never the one to go
+}
+
+static void test_a_house_full_of_rows_takes_no_more() {
+  rec->known.clear();
+  for (int i = 0; i < WALL_LINK_MAX_CONNS; i++) rec->known.push_back("row-" + std::to_string(i));
+  for (int i = 0; i < WALL_LINK_MAX_ROWS; i++) joined(rec->known[i].c_str(), 0);
+  TEST_ASSERT_TRUE(core.accept(0, *rec) >= 0);
+  TEST_ASSERT_TRUE(core.accept(0, *rec) >= 0);
+  // Ten open, eight of them rows: the next one evicts a nobody, not a row.
+  const int next = core.accept(10, *rec);
+  TEST_ASSERT_TRUE(next >= 0);
+  for (int r = 0; r < WALL_LINK_MAX_ROWS; r++) TEST_ASSERT_TRUE(core.rows[r].conn >= 0);
+}
+
+// The id is no secret: it must not be enough to take a working row's place
+// from somewhere else. (The row applies the same rule to masters.)
+static void test_a_working_row_is_not_replaced_from_another_address() {
+  const int first = joined("row-a", 1000);
+  const int intruder = core.accept(2000, *rec);
+  rec->peerOf[intruder] = 99;
+  feed(intruder, hello("row-a"), 2000);
+  TEST_ASSERT_EQUAL(1, rec->closed.size());
+  TEST_ASSERT_EQUAL(intruder, rec->closed[0]);
+  TEST_ASSERT_EQUAL(first, core.rows[0].conn);
+  TEST_ASSERT_EQUAL(1, rec->count(wl_ToRow_welcome_tag));
+  TEST_ASSERT_EQUAL(1, rec->hellos);
+}
+
+// A row whose address changed: its old connection falls silent and is closed
+// at the lost mark, and the row's next dial is taken.
+static void test_a_row_at_a_new_address_is_taken_once_the_old_connection_is_gone() {
+  joined("row-a", 1000);
+  core.tick(31000, *rec);  // nothing heard for 30 s: closed
+  TEST_ASSERT_EQUAL(-1, core.rows[0].conn);
+  const int moved = core.accept(32000, *rec);
+  rec->peerOf[moved] = 99;
+  feed(moved, hello("row-a"), 32000);
+  TEST_ASSERT_EQUAL(moved, core.rows[0].conn);
+}
+
+// The row's TCP stack may answer while its program does not: a row that is
+// not busy has to be heard.
+static void test_a_silent_row_that_is_not_busy_is_closed_at_the_lost_mark() {
+  const int conn = joined("row-a", 1000);
+  core.tick(30999, *rec);
+  TEST_ASSERT_TRUE(rec->closed.empty());
+  core.tick(31000, *rec);
+  TEST_ASSERT_EQUAL(1, rec->closed.size());
+  TEST_ASSERT_EQUAL(conn, rec->closed[0]);
+  TEST_ASSERT_TRUE(WallRowReach::Lost == wallRowReach(core.rows[0].contact, 31000));
+}
+
+static void test_a_silent_busy_row_keeps_its_connection() {
+  const int conn = joined("row-a", 1000);
+  feed(conn, status(true), 2000);
+  core.tick(400000, *rec);
+  TEST_ASSERT_TRUE(rec->closed.empty());
+  TEST_ASSERT_EQUAL(conn, core.rows[0].conn);
+}
+
+// A row downloading its image reads and writes nothing on the link for about
+// 25 s, and says so first.
+static void test_a_row_downloading_an_image_counts_as_busy_until_it_says_otherwise() {
+  const int conn = joined("row-a", 1000);
+  wl_ToMaster m = plain(wl_ToMaster_update_state_tag);
+  m.body.update_state.phase = wl_UpdatePhase_UPDATE_DOWNLOADING;
+  feed(conn, m, 2000);
+  core.tick(60000, *rec);
+  TEST_ASSERT_TRUE(rec->closed.empty());
+  TEST_ASSERT_EQUAL(0, rec->count(wl_ToRow_ping_tag));
+  m.body.update_state.phase = wl_UpdatePhase_UPDATE_FAILED;
+  feed(conn, m, 61000);
+  TEST_ASSERT_FALSE(core.rows[0].contact.busy);
+}
+
+static void test_a_first_message_that_cannot_be_read_is_noted() {
+  const int conn = core.accept(0, *rec);
+  // A Hello whose id is longer than the field: nanopb refuses it.
+  const uint8_t frame[] = {44, 0x0A, 42, 0x12, 40, 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a',
+                           'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a',
+                           'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a'};
+  core.bytes(conn, frame, sizeof frame, 5, *rec);
+  TEST_ASSERT_EQUAL(1, rec->notes.size());
+  TEST_ASSERT_TRUE(core.conns[conn].open);  // skipped, as a newer build's message would be
 }
 
 // ---- one connection per row ----------------------------------------------------
@@ -342,7 +437,14 @@ int main(int, char**) {
   RUN_TEST(test_anything_before_hello_closes_the_connection);
   RUN_TEST(test_a_connection_that_never_says_hello_is_closed_after_five_seconds);
   RUN_TEST(test_bytes_that_are_no_message_close_the_connection);
-  RUN_TEST(test_there_are_only_so_many_connections);
+  RUN_TEST(test_a_full_house_evicts_the_oldest_connection_that_is_nobody);
+  RUN_TEST(test_a_house_full_of_rows_takes_no_more);
+  RUN_TEST(test_a_working_row_is_not_replaced_from_another_address);
+  RUN_TEST(test_a_row_at_a_new_address_is_taken_once_the_old_connection_is_gone);
+  RUN_TEST(test_a_silent_row_that_is_not_busy_is_closed_at_the_lost_mark);
+  RUN_TEST(test_a_silent_busy_row_keeps_its_connection);
+  RUN_TEST(test_a_row_downloading_an_image_counts_as_busy_until_it_says_otherwise);
+  RUN_TEST(test_a_first_message_that_cannot_be_read_is_noted);
   RUN_TEST(test_a_second_connection_of_a_row_replaces_the_first);
   RUN_TEST(test_a_new_boot_id_is_reported_as_a_restart);
   RUN_TEST(test_a_second_hello_on_a_connection_closes_it);

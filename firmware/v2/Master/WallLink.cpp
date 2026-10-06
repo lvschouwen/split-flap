@@ -19,6 +19,9 @@ constexpr uint32_t LISTEN_RETRY_MS = 1000;
 // Reads taken from one connection per pass, so one chatty row cannot hold the
 // others (or the watchdog feed) off.
 constexpr int READS_PER_PASS = 4;
+// A connected row's contact times are published this often even when nothing
+// else changed: a Pong moves "last heard", and readers judge reach from it.
+constexpr uint32_t CONTACT_PUBLISH_MS = 1000;
 
 char masterName[sizeof(((wl_Welcome*)0)->master_id)] = {0};
 
@@ -52,12 +55,18 @@ void closeSocket(Socket& s) {
   s = Socket{};
 }
 
+// "Not now": the socket's buffer is full, or lwIP is short of memory for the
+// moment (a row that is not reading is exactly when that happens).
+bool wouldBlock(int error) {
+  return error == EAGAIN || error == EWOULDBLOCK || error == ENOMEM || error == ENOBUFS;
+}
+
 // True when nothing is left waiting. Marks the socket broken on a real error.
 bool flushTail(Socket& s) {
   if (s.tailLen == 0) return true;
   const int sent = lwip_send(s.fd, s.tail, s.tailLen, MSG_DONTWAIT);
   if (sent < 0) {
-    if (errno != EAGAIN && errno != EWOULDBLOCK) s.broken = true;
+    if (!wouldBlock(errno)) s.broken = true;
     return false;
   }
   memmove(s.tail, s.tail + sent, s.tailLen - sent);
@@ -74,7 +83,7 @@ struct Hooks : WallLinkHooks {
     if (s.fd < 0 || s.broken || !flushTail(s)) return false;
     const int sent = lwip_send(s.fd, data, n, MSG_DONTWAIT);
     if (sent < 0) {
-      if (errno != EAGAIN && errno != EWOULDBLOCK) s.broken = true;
+      if (!wouldBlock(errno)) s.broken = true;
       return false;
     }
     if ((size_t)sent < n) {
@@ -85,6 +94,14 @@ struct Hooks : WallLinkHooks {
   }
 
   void close(int conn) override { closeSocket(sockets[conn]); }
+
+  bool samePeer(int a, int b) override {
+    struct sockaddr_in pa = {}, pb = {};
+    socklen_t la = sizeof(pa), lb = sizeof(pb);
+    return lwip_getpeername(sockets[a].fd, (struct sockaddr*)&pa, &la) == 0 &&
+           lwip_getpeername(sockets[b].fd, (struct sockaddr*)&pb, &lb) == 0 &&
+           pa.sin_addr.s_addr == pb.sin_addr.s_addr;
+  }
 
   void rowHello(int row, const wl_Hello& hello, bool restarted) override {
     WallRowLink& f = facts[row];
@@ -163,7 +180,7 @@ void acceptRows(uint32_t nowMs) {
         lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count)) == 0;
     // Messages are small and each is wanted now: do not wait to fill a segment.
     lwip_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
-    const int conn = ready ? core.accept(nowMs) : -1;
+    const int conn = ready ? core.accept(nowMs, hooks) : -1;
     if (conn < 0) {
       SerialPrintln(ready ? F("link: a connection refused, no room")
                           : F("link: a connection refused, socket options failed"));
@@ -196,7 +213,7 @@ void readRows(const fd_set& readable, uint32_t nowMs) {
       }
       if (n == 0) {
         lost(conn, "connection closed by the row");
-      } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+      } else if (!wouldBlock(errno)) {
         lost(conn, "connection lost");
       }
       break;
@@ -204,8 +221,12 @@ void readRows(const fd_set& readable, uint32_t nowMs) {
   }
 }
 
-void publish() {
+void publish(uint32_t nowMs) {
+  static uint32_t contactPublishedAtMs = 0;
+  const bool contactDue = wallLinkElapsed(nowMs, contactPublishedAtMs, CONTACT_PUBLISH_MS);
+  if (contactDue) contactPublishedAtMs = nowMs;
   for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
+    if (contactDue && core.rows[row].conn >= 0) factsDirty[row] = true;
     if (!factsDirty[row]) continue;
     factsDirty[row] = false;
     facts[row].contact = core.rows[row].contact;
@@ -215,11 +236,9 @@ void publish() {
 
 void pass() {
   const uint32_t nowMs = millis();
-  const uint32_t generation = wallStateRowsGeneration();
-  if (generation != rowsGeneration) {
-    rowsGeneration = generation;
+  if (wallStateRowsGeneration() != rowsGeneration) {
     core.reset(hooks);
-    rowsTable = wallStateRows();
+    rowsTable = wallStateRows(rowsGeneration);
     for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
       facts[row] = WallRowLink{};
       factsDirty[row] = true;
@@ -255,15 +274,14 @@ void pass() {
     flushTail(s);
     if (s.broken) lost(conn, "connection lost while writing");
   }
-  publish();
+  publish(nowMs);
 }
 
 }  // namespace
 
 void wallLinkInit(const String& masterId) {
   strlcpy(masterName, masterId.c_str(), sizeof(masterName));
-  rowsTable = wallStateRows();
-  rowsGeneration = wallStateRowsGeneration();
+  rowsTable = wallStateRows(rowsGeneration);
 }
 
 void wallLinkTaskMain(void*) {
