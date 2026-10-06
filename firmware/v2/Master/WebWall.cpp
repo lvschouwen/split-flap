@@ -18,6 +18,7 @@
 #include <AsyncJson.h>
 
 #include "BuildVersion.h"
+#include "JsonCopied.h"
 #include "Tasks.h"
 #include "WallState.h"
 #include "WebEndpointsInternal.h"
@@ -147,12 +148,12 @@ void handleOp(AsyncWebServerRequest* request) {
   AsyncJsonResponse* response = new AsyncJsonResponse();
   JsonVariant root = response->getRoot();
   root["op"] = op.id;
-  root["name"] = op.name;
+  root["name"] = jsonCopied(op.name);
   root["state"] = op.phase == WallOpPhase::Running ? "running"
                   : op.phase == WallOpPhase::Done  ? "done"
                                                    : "failed";
-  if (op.phase == WallOpPhase::Done) root["result"] = op.detail;
-  if (op.phase == WallOpPhase::Failed) root["reason"] = op.detail;
+  if (op.phase == WallOpPhase::Done) root["result"] = jsonCopied(op.detail);
+  if (op.phase == WallOpPhase::Failed) root["reason"] = jsonCopied(op.detail);
   response->setCode(op.phase == WallOpPhase::Running ? 202 : 200);
   response->setLength();
   request->send(response);
@@ -184,21 +185,21 @@ void handleWall(AsyncWebServerRequest* request) {
   for (int i = 0; i < wall->rows.count; i++) {
     const WallRowDef& def = wall->rows.rows[i];
     JsonObject row = rows.add<JsonObject>();
-    row["id"] = def.id;
+    row["id"] = jsonCopied(def.id);
     row["own"] = wallRowIsOwn(def);
     row["row"] = def.row;
     row["col"] = def.col;
     row["width"] = def.width;
     if (wallRowIsOwn(def)) continue;
     const WallRowLink& link = wall->link[i];
-    row["pairedAt"] = def.host;
+    row["pairedAt"] = jsonCopied(def.host);
     row["reach"] = reachName(wallRowReach(link.contact, nowMs));
     row["connects"] = link.connects;
     row["restarts"] = link.restarts;
     if (link.contact.everHeard) row["heardMsAgo"] = (uint32_t)(nowMs - link.contact.lastHeardMs);
     if (!link.everWelcomed) continue;
-    row["address"] = link.address;
-    row["rev"] = link.rev;
+    row["address"] = jsonCopied(link.address);
+    row["rev"] = jsonCopied(link.rev);
     row["rescue"] = link.rescue;
     row["units"] = link.reportedWidth;
     if (link.haveStatus) {
