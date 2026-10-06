@@ -35,6 +35,8 @@ struct Recorder : WallLinkHooks {
   }
   void close(int conn) override { closed.push_back(conn); }
   bool samePeer(int a, int b) override { return peerOf[a] == peerOf[b]; }
+  // Address 0 (the default of every connection here) is where rows were paired.
+  bool fromPairedAddress(int conn, int) override { return peerOf[conn] == 0; }
   void rowHello(int row, const wl_Hello&, bool restarted) override {
     hellos++;
     lastHelloRow = row;
@@ -244,15 +246,56 @@ static void test_a_row_downloading_an_image_counts_as_busy_until_it_says_otherwi
   TEST_ASSERT_FALSE(core.rows[0].contact.busy);
 }
 
-static void test_a_first_message_that_cannot_be_read_is_noted() {
+// Whoever holds a row's place from elsewhere (and may claim to be busy for
+// ever) cannot keep out the board at the address the row was paired at.
+static void test_the_paired_address_always_takes_its_rows_place() {
+  const int squatter = core.accept(1000, *rec);
+  rec->peerOf[squatter] = 99;
+  feed(squatter, hello("row-a"), 1000);
+  feed(squatter, status(true), 1100);
+  TEST_ASSERT_EQUAL(squatter, core.rows[0].conn);  // nobody else was there
+  const int real = joined("row-a", 5000);
+  TEST_ASSERT_EQUAL(real, core.rows[0].conn);
+  TEST_ASSERT_EQUAL(1, rec->closed.size());
+  TEST_ASSERT_EQUAL(squatter, rec->closed[0]);
+  // And the other way round it stays out.
+  const int again = core.accept(6000, *rec);
+  rec->peerOf[again] = 99;
+  feed(again, hello("row-a"), 6000);
+  TEST_ASSERT_EQUAL(real, core.rows[0].conn);
+}
+
+// A row that moved to a new address and restarts there replaces itself.
+static void test_a_row_away_from_its_paired_address_still_replaces_itself() {
+  const int first = core.accept(1000, *rec);
+  rec->peerOf[first] = 50;
+  feed(first, hello("row-a"), 1000);
+  const int second = core.accept(2000, *rec);
+  rec->peerOf[second] = 50;
+  feed(second, hello("row-a", 8), 2000);
+  TEST_ASSERT_EQUAL(second, core.rows[0].conn);
+  TEST_ASSERT_EQUAL(1, rec->restarts);
+}
+
+static void test_a_first_message_that_cannot_be_read_closes_the_connection() {
   const int conn = core.accept(0, *rec);
   // A Hello whose id is longer than the field: nanopb refuses it.
   const uint8_t frame[] = {44, 0x0A, 42, 0x12, 40, 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a',
                            'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a',
                            'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a'};
   core.bytes(conn, frame, sizeof frame, 5, *rec);
-  TEST_ASSERT_EQUAL(1, rec->notes.size());
-  TEST_ASSERT_TRUE(core.conns[conn].open);  // skipped, as a newer build's message would be
+  TEST_ASSERT_EQUAL(1, rec->closed.size());
+  TEST_ASSERT_FALSE(core.conns[conn].open);
+}
+
+// From a welcomed row it is a newer build's message, and skipped.
+static void test_a_later_message_that_cannot_be_read_is_skipped() {
+  const int conn = joined("row-a", 1000);
+  const uint8_t frame[] = {3, 0x12, 1, 0x80};  // a Status cut short
+  core.bytes(conn, frame, sizeof frame, 1500, *rec);
+  TEST_ASSERT_TRUE(rec->closed.empty());
+  feed(conn, plain(wl_ToMaster_pong_tag), 2000);
+  TEST_ASSERT_TRUE(core.conns[conn].open);
 }
 
 // ---- one connection per row ----------------------------------------------------
@@ -444,7 +487,10 @@ int main(int, char**) {
   RUN_TEST(test_a_silent_row_that_is_not_busy_is_closed_at_the_lost_mark);
   RUN_TEST(test_a_silent_busy_row_keeps_its_connection);
   RUN_TEST(test_a_row_downloading_an_image_counts_as_busy_until_it_says_otherwise);
-  RUN_TEST(test_a_first_message_that_cannot_be_read_is_noted);
+  RUN_TEST(test_the_paired_address_always_takes_its_rows_place);
+  RUN_TEST(test_a_row_away_from_its_paired_address_still_replaces_itself);
+  RUN_TEST(test_a_first_message_that_cannot_be_read_closes_the_connection);
+  RUN_TEST(test_a_later_message_that_cannot_be_read_is_skipped);
   RUN_TEST(test_a_second_connection_of_a_row_replaces_the_first);
   RUN_TEST(test_a_new_boot_id_is_reported_as_a_restart);
   RUN_TEST(test_a_second_hello_on_a_connection_closes_it);

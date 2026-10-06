@@ -22,6 +22,8 @@ constexpr int READS_PER_PASS = 4;
 // A connected row's contact times are published this often even when nothing
 // else changed: a Pong moves "last heard", and readers judge reach from it.
 constexpr uint32_t CONTACT_PUBLISH_MS = 1000;
+// At most one log line per this about connections that are not a row.
+constexpr uint32_t STRANGER_NOTE_MS = 10000;
 
 char masterName[sizeof(((wl_Welcome*)0)->master_id)] = {0};
 
@@ -103,6 +105,15 @@ struct Hooks : WallLinkHooks {
            pa.sin_addr.s_addr == pb.sin_addr.s_addr;
   }
 
+  bool fromPairedAddress(int conn, int row) override {
+    struct sockaddr_in peer = {};
+    socklen_t len = sizeof(peer);
+    char address[16] = {0};
+    if (lwip_getpeername(sockets[conn].fd, (struct sockaddr*)&peer, &len) != 0) return false;
+    lwip_inet_ntop(AF_INET, &peer.sin_addr, address, sizeof(address));
+    return row >= 0 && row < rowsTable.count && strcmp(rowsTable.rows[row].host, address) == 0;
+  }
+
   void rowHello(int row, const wl_Hello& hello, bool restarted) override {
     WallRowLink& f = facts[row];
     f.everWelcomed = true;
@@ -134,9 +145,28 @@ struct Hooks : WallLinkHooks {
 
   void note(int conn, int row, const char* what) override {
     (void)conn;
-    SerialPrintf("link: %s: %s\n", row >= 0 ? rowName(row) : "a connection", what);
-    if (row >= 0) factsDirty[row] = true;
+    if (row >= 0) {
+      SerialPrintf("link: %s: %s\n", rowName(row), what);
+      factsDirty[row] = true;
+      return;
+    }
+    // Anyone on the network can open connections that are nobody: their
+    // lines are held to one per interval, so they cannot fill the log.
+    const uint32_t nowMs = millis();
+    if (strangerNotes != 0 && !wallLinkElapsed(nowMs, strangerNoteAtMs, STRANGER_NOTE_MS)) {
+      strangerNotesHeld++;
+      return;
+    }
+    SerialPrintf("link: a connection: %s (%u more since the last such line)\n", what,
+                 (unsigned)strangerNotesHeld);
+    strangerNotes++;
+    strangerNotesHeld = 0;
+    strangerNoteAtMs = nowMs;
   }
+
+  uint32_t strangerNotes = 0;
+  uint32_t strangerNotesHeld = 0;
+  uint32_t strangerNoteAtMs = 0;
 };
 Hooks hooks;
 
@@ -182,8 +212,7 @@ void acceptRows(uint32_t nowMs) {
     lwip_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
     const int conn = ready ? core.accept(nowMs, hooks) : -1;
     if (conn < 0) {
-      SerialPrintln(ready ? F("link: a connection refused, no room")
-                          : F("link: a connection refused, socket options failed"));
+      hooks.note(-1, -1, ready ? "refused, no room" : "refused, socket options failed");
       lwip_close(fd);
       continue;
     }
@@ -194,9 +223,7 @@ void acceptRows(uint32_t nowMs) {
 
 // The socket of `conn` is gone or useless: tell the core, then close it.
 void lost(int conn, const char* why) {
-  const int row = core.conns[conn].row;
-  SerialPrintf("link: %s: %s\n", row >= 0 ? rowName(row) : "a connection", why);
-  if (row >= 0) factsDirty[row] = true;
+  hooks.note(conn, core.conns[conn].row, why);
   core.closed(conn);
   closeSocket(sockets[conn]);
 }

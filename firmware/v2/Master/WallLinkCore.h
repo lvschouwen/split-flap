@@ -6,12 +6,14 @@
 // timing rules are WallLinkPolicy.h.
 //
 // A connection is nobody until its first message, which must be a Hello from
-// a row in this master's table. A row has one connection: a newer one from the
-// same address replaces the older (a row that restarted dials while the master
-// still holds the old socket). From another address it is refused while the
-// older stands: a row's id is no secret and must not be enough to take a
-// working row's place. A connection that is not heard for the lost mark is
-// closed unless the row is busy, which also frees a row whose address moved.
+// a row in this master's table. A row has one connection. A newer one replaces
+// the older (a row that restarted dials while the master still holds the old
+// socket) when it comes from the address the row was paired at, or from the
+// same address as the older. From anywhere else it is refused while the older
+// stands: a row's id is no secret and must not be enough to take a working
+// row's place, and whoever holds the place from elsewhere cannot keep the
+// paired address out. A connection that is not heard for the lost mark is
+// closed unless the row is busy.
 // Rows are named by their index in the table, so a changed table means
 // reset(): every row dials again.
 //
@@ -38,6 +40,8 @@ struct WallLinkHooks {
   virtual void close(int conn) = 0;
   // Do these two connections come from the same address?
   virtual bool samePeer(int a, int b) = 0;
+  // Does this connection come from the address the row was paired at?
+  virtual bool fromPairedAddress(int conn, int row) = 0;
   // A row was welcomed. `restarted`: its boot id differs from the last one.
   virtual void rowHello(int row, const wl_Hello& hello, bool restarted) = 0;
   // Every later message of a welcomed row except Pong.
@@ -113,10 +117,13 @@ struct WallLinkCore {
         // A message this build cannot read (a newer row's) is skipped.
         const bool readable = c.reader.decode(wl_ToMaster_fields, &in);
         c.reader.pop();
+        // A newer row may send what this build cannot read: skipped. But a
+        // Hello only ever grows at its end, so an unreadable first message
+        // is not from a row.
         if (readable) {
           message(conn, nowMs, hooks);
         } else if (c.row < 0) {
-          hooks.note(conn, -1, "a first message this build cannot read");
+          return drop(conn, "a first message that is no Hello", hooks);
         }
       }
       if (!c.open) return;
@@ -230,7 +237,7 @@ struct WallLinkCore {
     }
     WallLinkRow& row = rows[r];
     if (row.conn >= 0) {
-      if (!hooks.samePeer(row.conn, conn)) {
+      if (!hooks.fromPairedAddress(conn, r) && !hooks.samePeer(row.conn, conn)) {
         return drop(conn, "its row is connected from another address", hooks);
       }
       drop(row.conn, "replaced by a newer connection", hooks);
