@@ -80,6 +80,7 @@ bool webFirmwareOtaUploadActive();
 void webFirmwareRegister(AsyncWebServer& server);
 void webMaintenanceRegister(AsyncWebServer& server);
 void webClusterRegister(AsyncWebServer& server);
+void webWallRegister(AsyncWebServer& server);
 
 // Loop hooks drained by webEndpointsLoop() — call order is load-bearing,
 // see the webEndpointsLoop() call site.

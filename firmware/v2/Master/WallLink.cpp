@@ -5,6 +5,7 @@
 #include <lwip/sockets.h>
 
 #include "HelpersSerialHandling.h"
+#include "LargeAlloc.h"
 #include "TaskWatchdog.h"
 #include "WallLinkCore.h"
 #include "WallState.h"
@@ -47,6 +48,47 @@ struct Socket {
 Socket sockets[WALL_LINK_MAX_CONNS];
 
 uint8_t readBuf[512];
+
+// A row's unit facts arrive in pieces; one buffer per row, taken the first
+// time a row sends any and kept. The parsed result is too large for this
+// task's stack.
+char* unitsText[WALL_LINK_MAX_ROWS] = {nullptr};
+WlDocAssembler* unitsAssembler[WALL_LINK_MAX_ROWS] = {nullptr};
+UnitFactsDoc* unitsParsed = nullptr;
+
+// ArduinoJson's tree for a unit facts document, outside internal RAM.
+struct LargeAllocator : ArduinoJson::Allocator {
+  void* allocate(size_t size) override { return largeAlloc(size); }
+  void deallocate(void* pointer) override { free(pointer); }
+  void* reallocate(void* pointer, size_t size) override {
+    return heap_caps_realloc(pointer, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+};
+LargeAllocator largeAllocator;
+
+void takeUnitsPiece(int row, const wl_UnitsJson& piece, const char* name) {
+  if (unitsText[row] == nullptr) {
+    unitsText[row] = (char*)largeAlloc(UNIT_HEALTH_JSON_CAP);
+    unitsAssembler[row] = (WlDocAssembler*)largeAlloc(sizeof(WlDocAssembler));
+    if (unitsParsed == nullptr) unitsParsed = (UnitFactsDoc*)largeAlloc(sizeof(UnitFactsDoc));
+    if (unitsText[row] == nullptr || unitsAssembler[row] == nullptr || unitsParsed == nullptr) {
+      free(unitsText[row]);
+      free(unitsAssembler[row]);
+      unitsText[row] = nullptr;
+      unitsAssembler[row] = nullptr;
+      return;
+    }
+    new (unitsAssembler[row]) WlDocAssembler(unitsText[row], UNIT_HEALTH_JSON_CAP);
+  }
+  if (unitsAssembler[row]->add(piece) != WlDocAssembler::Result::Complete) return;
+  const uint32_t nowMs = millis();
+  if (unitFactsFromJson(unitsText[row], piece.total, nowMs, *unitsParsed, &largeAllocator)) {
+    wallStatePublishUnits(row, *unitsParsed, nowMs);
+  } else {
+    SerialPrintf("link: %s: unit facts of %u bytes could not be read\n", name,
+                 (unsigned)piece.total);
+  }
+}
 
 const char* rowName(int row) {
   return row >= 0 && row < rowsTable.count ? rowsTable.rows[row].id : "?";
@@ -123,7 +165,11 @@ struct Hooks : WallLinkHooks {
     f.reportedWidth = (uint8_t)hello.width;
     strlcpy(f.rev, hello.rev, sizeof(f.rev));
     f.connects++;
-    if (restarted) f.restarts++;
+    if (restarted) {
+      f.restarts++;
+      wallOpsFailRow(row, "the row restarted");
+    }
+    if (unitsAssembler[row] != nullptr) unitsAssembler[row]->active = false;
     f.haveStatus = false;
     f.address[0] = 0;
     struct sockaddr_in peer = {};
@@ -141,6 +187,8 @@ struct Hooks : WallLinkHooks {
     if (message.which_body == wl_ToMaster_status_tag) {
       facts[row].status = message.body.status;
       facts[row].haveStatus = true;
+    } else if (message.which_body == wl_ToMaster_units_json_tag) {
+      takeUnitsPiece(row, message.body.units_json, rowName(row));
     }
     factsDirty[row] = true;
   }
@@ -297,6 +345,17 @@ void pass() {
   if (FD_ISSET(listenFd, &readable)) acceptRows(nowMs);
   readRows(readable, nowMs);
   core.tick(nowMs, hooks);
+  char releasing[WALL_ROW_ID_MAX + 1];
+  if (wallStateReleaseAsked(releasing, sizeof(releasing))) {
+    const int row = wallRowsFind(rowsTable, releasing);
+    if (row >= 0) {
+      static wl_ToRow release;
+      wlClear(release);
+      release.which_body = wl_ToRow_release_tag;
+      if (core.send(row, release, nowMs, hooks)) SerialPrintf("link: %s released\n", releasing);
+    }
+    wallStateReleaseAnswered();
+  }
   for (int conn = 0; conn < WALL_LINK_MAX_CONNS; conn++) {
     Socket& s = sockets[conn];
     if (s.fd < 0) continue;

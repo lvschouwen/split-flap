@@ -16,6 +16,7 @@
 #include "ClusterFollower.h"
 #include "ClusterLeader.h"
 #include "WallLink.h"
+#include "WallPair.h"
 #include "WallState.h"
 #include "DeviceIdentity.h"
 #include "FactorySlot.h"
@@ -159,6 +160,7 @@ void setup() {
   // Before tasksInit(): the link task reads both.
   wallStateInit(settingsStore);
   wallLinkInit(deviceName);
+  wallPairInit(deviceName);
 
   SerialPrintln(F(""));
   SerialPrintln(F("split-flap v2 master — " GIT_REV));

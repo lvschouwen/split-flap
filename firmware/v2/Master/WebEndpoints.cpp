@@ -223,6 +223,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   webFirmwareRegister(server);
   webMaintenanceRegister(server);
   webClusterRegister(server);
+  webWallRegister(server);
 }
 
 void webEndpointsStart(AsyncWebServer& server) {

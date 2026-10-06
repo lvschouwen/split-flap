@@ -5,12 +5,17 @@
 // and never hold a pointer into it. Its mutex is a leaf: nothing is called
 // while it is held.
 //
-// Writers: the link task publishes each row's link facts; the rows table is
-// loaded at start (NVS key "wallRows", WallRows.h's stored form).
+// Writers: the link task publishes each row's link facts and unit facts. The
+// rows table is loaded at start (NVS key "wallRows", WallRows.h's stored
+// form) and changed only by the worker that runs an operator's request
+// (WallPair.cpp): the web side stages a request here, it never changes the
+// table itself. Jobs an operator started are WallOps.h.
 
 #include <Arduino.h>
 
 #include "SettingsStore.h"
+#include "UnitFactsJson.h"
+#include "WallOps.h"
 #include "WallLinkPolicy.h"
 #include "WallRows.h"
 
@@ -48,3 +53,48 @@ uint32_t wallStateRowsGeneration();
 
 // Link task only.
 void wallStatePublishLink(int row, const WallRowLink& link);
+void wallStatePublishUnits(int row, const UnitFactsDoc& units, uint32_t nowMs);
+
+// A row board's unit facts as it last sent them. False when it has sent none
+// since it was last welcomed. `atMs` is millis() at their arrival.
+bool wallStateRowUnits(int row, UnitFactsDoc& out, uint32_t& atMs);
+
+// ---- jobs ------------------------------------------------------------------------
+
+// 0 when no job can be started now (WallOps.h).
+uint32_t wallOpBegin(const char* name, int row);
+void wallOpFinish(uint32_t id, bool ok, const char* detail);
+bool wallOpGet(uint32_t id, WallOp& out);
+// Link task: a row came back with a new boot id.
+void wallOpsFailRow(int row, const char* reason);
+
+// ---- changing the rows table -----------------------------------------------------
+
+enum class WallRequestKind : uint8_t { None, Pair, Release, Arrange };
+
+// One operator request that changes the table. Staged by the web side, run by
+// the worker; one at a time.
+struct WallRequest {
+  WallRequestKind kind = WallRequestKind::None;
+  uint32_t opId = 0;
+  char host[CLUSTER_HOST_MAX_LEN + 1] = {0};  // Pair: where the row is
+  char id[WALL_ROW_ID_MAX + 1] = {0};         // Release: which row
+  WallRowPlace place;                         // Pair
+  WallRowsTable table;                        // Arrange: the whole new table
+};
+
+// False when another request is still waiting or running.
+bool wallStateStage(const WallRequest& request);
+// Worker: the staged request, if any. It stays "running" until
+// wallStateRequestDone().
+bool wallStateTakeRequest(WallRequest& out);
+void wallStateRequestDone();
+
+// Worker: judges the table, stores it and makes it the live one.
+ClusterVerdict wallStateSetRows(const WallRowsTable& table);
+
+// Worker asks, link task answers: say Release to this row if it is connected.
+void wallStateAskRelease(const char* id);
+bool wallStateReleaseAsked(char* idOut, size_t cap);
+void wallStateReleaseAnswered();
+bool wallStateReleasePending();

@@ -74,6 +74,7 @@ bool tasksUnitCountOverridePinned() {
 #include "SystemStats.h"
 #include "TaskWatchdog.h"
 #include "WallLink.h"
+#include "WallPair.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
 
@@ -268,6 +269,7 @@ static void clusterTaskMain(void*) {
     crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_CLUSTER);
     clusterLeaderTick();
     netLivenessProbeTick();  // #501: the gateway and own-server probes
+    wallPairTick();          // #566: pairing and the other rows-table requests
     crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_IDLE);
     vTaskDelay(pdMS_TO_TICKS(100));
   }
