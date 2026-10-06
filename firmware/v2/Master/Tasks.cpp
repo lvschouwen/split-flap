@@ -73,6 +73,7 @@ bool tasksUnitCountOverridePinned() {
 #include "StatusLed.h"
 #include "SystemStats.h"
 #include "TaskWatchdog.h"
+#include "WallLink.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
 
@@ -121,6 +122,10 @@ static constexpr uint32_t MQTT_TASK_STACK = 16384;
 // a leader whose boot included a follower rollout (#437). RAM is plentiful
 // (110 KB+ free heap), so buy the margin rather than run this one close.
 static constexpr uint32_t CLUSTER_TASK_STACK = 16384;
+// lwIP socket calls, one log line's vsnprintf and nanopb's decode; the
+// message structs and the read buffer are static, not on this stack. The
+// heartbeat's HWM column is the evidence to size it by.
+static constexpr uint32_t LINK_TASK_STACK = 8192;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
 static constexpr UBaseType_t DOMAIN_TASK_PRIORITY = 1;   // everything else
@@ -132,12 +137,13 @@ static constexpr UBaseType_t DISPLAY_QUEUE_DEPTH = 16;
 static constexpr UBaseType_t MQTT_INBOX_DEPTH = 8;
 
 static StaticTask_t displayTaskBuf, clockTaskBuf, netTaskBuf, mqttTaskBuf,
-    clusterTaskBuf;
+    clusterTaskBuf, linkTaskBuf;
 static StackType_t displayTaskStack[DISPLAY_TASK_STACK];
 static StackType_t clockTaskStack[CLOCK_TASK_STACK];
 static StackType_t netTaskStack[NET_TASK_STACK];
 static StackType_t mqttTaskStack[MQTT_TASK_STACK];
 static StackType_t clusterTaskStack[CLUSTER_TASK_STACK];
+static StackType_t linkTaskStack[LINK_TASK_STACK];
 
 static StaticQueue_t displayQueueBuf;
 static uint8_t displayQueueStorage[DISPLAY_QUEUE_DEPTH * sizeof(DisplayCommand)];
@@ -148,7 +154,7 @@ static uint8_t mqttInboxStorage[MQTT_INBOX_DEPTH * sizeof(MqttInboxMessage)];
 static QueueHandle_t mqttInbox = nullptr;
 
 static TaskHandle_t displayTaskHandle, clockTaskHandle, netTaskHandle,
-    mqttTaskHandle, clusterTaskHandle;
+    mqttTaskHandle, clusterTaskHandle, linkTaskHandle;
 
 // --- display snapshot (single writer: displayTask) ---------------------------
 
@@ -311,6 +317,9 @@ void tasksInit(MasterSettings& settings, SettingsStore& store) {
   clusterTaskHandle = xTaskCreateStaticPinnedToCore(
       clusterTaskMain, "cluster", CLUSTER_TASK_STACK, nullptr,
       DOMAIN_TASK_PRIORITY, clusterTaskStack, &clusterTaskBuf, NETWORK_CORE);
+  linkTaskHandle = xTaskCreateStaticPinnedToCore(
+      wallLinkTaskMain, "link", LINK_TASK_STACK, nullptr, DOMAIN_TASK_PRIORITY,
+      linkTaskStack, &linkTaskBuf, NETWORK_CORE);
 }
 
 TasksStackHwm tasksStackHwm() {
@@ -325,13 +334,15 @@ TasksStackHwm tasksStackHwm() {
     h.mqtt = (uint32_t)uxTaskGetStackHighWaterMark(mqttTaskHandle);
   if (clusterTaskHandle)
     h.cluster = (uint32_t)uxTaskGetStackHighWaterMark(clusterTaskHandle);
+  if (linkTaskHandle)
+    h.link = (uint32_t)uxTaskGetStackHighWaterMark(linkTaskHandle);
   return h;
 }
 
 void tasksHeartbeatReport() {
   Serial.printf(
       "[%8lu ms] heap %u KB free (min %u KB), psram %u KB free | stack HWM: "
-      "display %u, clock %u, net %u, mqtt %u, cluster %u, loop %u\n",
+      "display %u, clock %u, net %u, mqtt %u, cluster %u, link %u, loop %u\n",
       (unsigned long)millis(), ESP.getFreeHeap() / 1024,
       ESP.getMinFreeHeap() / 1024, ESP.getFreePsram() / 1024,
       (unsigned)uxTaskGetStackHighWaterMark(displayTaskHandle),
@@ -339,5 +350,6 @@ void tasksHeartbeatReport() {
       (unsigned)uxTaskGetStackHighWaterMark(netTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(mqttTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(clusterTaskHandle),
+      (unsigned)uxTaskGetStackHighWaterMark(linkTaskHandle),
       (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 }

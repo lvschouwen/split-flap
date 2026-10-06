@@ -96,6 +96,6 @@ void tasksHeartbeatReport();
 // data, for /system/stats — the heartbeat line above only reaches USB-CDC.
 // Safe from any task; a not-yet-started task reads 0.
 struct TasksStackHwm {
-  uint32_t display = 0, clock = 0, net = 0, mqtt = 0, cluster = 0;
+  uint32_t display = 0, clock = 0, net = 0, mqtt = 0, cluster = 0, link = 0;
 };
 TasksStackHwm tasksStackHwm();

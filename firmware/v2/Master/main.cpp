@@ -15,6 +15,8 @@
 #include "ClockService.h"
 #include "ClusterFollower.h"
 #include "ClusterLeader.h"
+#include "WallLink.h"
+#include "WallState.h"
 #include "DeviceIdentity.h"
 #include "FactorySlot.h"
 #include "FlashLog.h"
@@ -153,6 +155,10 @@ void setup() {
   // #273: loads the member table if this master leads a cluster wall, and
   // mints the boot epoch. Before tasksInit() — clusterTask ticks it.
   clusterLeaderInit(settingsStore, deviceName);
+  // The boards of this Split-Flap and the link its row boards dial (#566).
+  // Before tasksInit(): the link task reads both.
+  wallStateInit(settingsStore);
+  wallLinkInit(deviceName);
 
   SerialPrintln(F(""));
   SerialPrintln(F("split-flap v2 master — " GIT_REV));
