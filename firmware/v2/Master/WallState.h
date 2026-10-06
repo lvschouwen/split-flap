@@ -78,6 +78,7 @@ struct WallRequest {
   WallRequestKind kind = WallRequestKind::None;
   uint32_t opId = 0;
   char host[CLUSTER_HOST_MAX_LEN + 1] = {0};  // Pair: where the row is
+  uint16_t port = 80;                         // Pair: its web port (a bench stand-in's differs)
   char id[WALL_ROW_ID_MAX + 1] = {0};         // Release: which row
   WallRowPlace place;                         // Pair
   WallRowsTable table;                        // Arrange: the whole new table

@@ -6,7 +6,8 @@
 //
 // Actions so far, all about which boards make up the wall:
 //   {"name":"pair","target":{"host":"192.168.1.50"},"args":{"row":1,"col":0,"width":5}}
-//       args are optional: below the last row, left edge, as wide as the row says
+//       args are optional: below the last row, left edge, as wide as the row says;
+//       target.port is the row's web port when it is not 80 (a bench stand-in)
 //   {"name":"release","target":{"row":"<row id>"}}
 //   {"name":"arrange","args":{"rows":[{"id":"","row":0,"col":0,"width":16}, ...]}}
 //       every board of the table once, "" = the master's own row
@@ -51,6 +52,13 @@ const char* buildPair(JsonVariantConst body, WallRequest& request) {
     return "target.host must be the row's address on the local network, like 192.168.1.50";
   }
   strcpy(request.host, host);
+  JsonVariantConst port = body["target"]["port"];
+  if (!port.isNull()) {
+    if (!port.is<int>() || port.as<int>() < 1 || port.as<int>() > 65535) {
+      return "target.port is the row's web port, 1 to 65535";
+    }
+    request.port = (uint16_t)port.as<int>();
+  }
   JsonVariantConst args = body["args"];
   if (!readPlace(args, "row", request.place.row) || !readPlace(args, "col", request.place.col) ||
       !readPlace(args, "width", request.place.width)) {

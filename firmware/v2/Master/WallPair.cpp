@@ -22,11 +22,11 @@ uint32_t lastRepairMs[CLUSTER_MAX_MEMBERS] = {0};
 
 // POST master=<id> to the row's /pair. -1 = no answer; else the HTTP status,
 // with the start of the body in `body`.
-int postPair(const char* host, char* body, size_t cap) {
+int postPair(const char* host, uint16_t port, char* body, size_t cap) {
   body[0] = 0;
   uint8_t address[4];
   if (!wallRowHostParse(host, address)) return -1;  // the local network only
-  const String url = String("http://") + host + "/pair";
+  const String url = String("http://") + host + ":" + port + "/pair";
   const String form = "master=" + masterName;  // a board name: nothing to escape
   esp_http_client_config_t cfg = {};
   cfg.url = url.c_str();
@@ -57,7 +57,7 @@ void finish(const WallRequest& request, bool ok, const String& detail) {
 
 void runPair(const WallRequest& request) {
   static char body[640];
-  const int status = postPair(request.host, body, sizeof(body));
+  const int status = postPair(request.host, request.port, body, sizeof(body));
   if (status < 0) return finish(request, false, "no answer from the row");
   JsonDocument doc;
   const bool json = deserializeJson(doc, body) == DeserializationError::Ok;
@@ -132,7 +132,7 @@ void repairLostRows() {
     if (!lost || !wallLinkElapsed(nowMs, lastRepairMs[i], WALL_LINK_LOST_MS)) continue;
     lastRepairMs[i] = nowMs;
     static char body[640];
-    const int status = postPair(row.host, body, sizeof(body));
+    const int status = postPair(row.host, 80, body, sizeof(body));
     SerialPrintf("wall: %s is lost, pairing posted again to %s: %d\n", row.id, row.host, status);
     return;  // one blocking call per pass
   }
