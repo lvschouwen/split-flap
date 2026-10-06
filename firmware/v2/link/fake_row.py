@@ -104,6 +104,7 @@ class Row:
         self.last_status = time.monotonic()
 
     def send_units(self) -> None:
+        self.last_units = time.monotonic()
         if self.rescue:
             return
         if self.args.units:
