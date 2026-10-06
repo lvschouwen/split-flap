@@ -124,10 +124,12 @@ static constexpr uint32_t MQTT_TASK_STACK = 16384;
 // a leader whose boot included a follower rollout (#437). RAM is plentiful
 // (110 KB+ free heap), so buy the margin rather than run this one close.
 static constexpr uint32_t CLUSTER_TASK_STACK = 16384;
-// lwIP socket calls, one log line's vsnprintf and nanopb's decode; the
-// message structs and the read buffer are static, not on this stack. The
-// heartbeat's HWM column is the evidence to size it by.
-static constexpr uint32_t LINK_TASK_STACK = 8192;
+// lwIP socket calls, one log line's vsnprintf, nanopb's decode, and the own
+// row's service with its copy of the display snapshot; the message structs
+// and the read buffer are static, not on this stack. Measured peak 4.2 KB
+// with a row connected and the wall showing the clock (#566): sized for the
+// >=50% margin of #480. /system/stats hwm.link is the evidence.
+static constexpr uint32_t LINK_TASK_STACK = 12288;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
 static constexpr UBaseType_t DOMAIN_TASK_PRIORITY = 1;   // everything else
