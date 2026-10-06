@@ -174,3 +174,54 @@ def test_a_released_row_stops_dialling(pair):
     pair.master("release")
     pair.wait("row", lambda e: e["kind"] == "released")
     assert pair.procs[1].wait(5) == 0
+
+
+def test_an_unpaired_row_dials_whoever_pairs_it_and_refuses_another_master(tmp_path):
+    import urllib.error
+    import urllib.request
+    subprocess.run([sys.executable, "-m", "grpc_tools.protoc", f"--proto_path={LINK}",
+                    f"--python_out={tmp_path}", "wall_link.proto"], check=True)
+    link_port, pair_port = free_port(), free_port()
+    env = {**os.environ, "PYTHONPATH": f"{tmp_path}{os.pathsep}{LINK}", "PYTHONUNBUFFERED": "1"}
+    logs = {name: tmp_path / f"{name}.log" for name in ("master", "row")}
+    procs = [
+        subprocess.Popen([sys.executable, str(LINK / "fake_master.py"), "--id", "bench-master",
+                          "--port", str(link_port)], stdout=logs["master"].open("w"),
+                         stderr=subprocess.STDOUT, env=env),
+        subprocess.Popen([sys.executable, str(LINK / "fake_row.py"), "--id", "row-bench",
+                          "--port", str(link_port), "--pair-port", str(pair_port), "--width", "5"],
+                         stdout=logs["row"].open("w"), stderr=subprocess.STDOUT, env=env),
+    ]
+
+    def pair(master: str):
+        request = urllib.request.Request(f"http://127.0.0.1:{pair_port}/pair",
+                                         data=f"master={master}".encode(), method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=5) as answer:
+                return answer.status, json.loads(answer.read())
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def seen(who: str, text: str, timeout: float = 10) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if text in logs[who].read_text():
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"{text!r} not in the {who} log:\n{logs[who].read_text()}")
+
+    try:
+        seen("row", '"pairing"')
+        seen("master", '"listening"')
+        time.sleep(0.5)
+        assert '"connected"' not in logs["master"].read_text()  # unpaired: it dials nobody
+        status, identity = pair("bench-master")
+        assert status == 200 and identity["name"] == "row-bench" and identity["plat"] == "esp01"
+        seen("master", '"type": "hello"')
+        status, refusal = pair("another-master")
+        assert status == 409 and refusal == {"error": "paired", "master": "bench-master"}
+    finally:
+        for proc in procs:
+            proc.terminate()
+        for proc in procs:
+            proc.wait(5)

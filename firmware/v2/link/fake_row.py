@@ -3,6 +3,7 @@
 
     python fake_row.py --master HOST --id row-bench [--width 16] [--rev REV]
                        [--rescue] [--units FILE] [--commands FILE]
+    python fake_row.py --pair-port 80 --id row-bench ...    (unpaired: waits for a master)
 
 Needs wall_link_pb2.py next to this file (see fake_master.py).
 
@@ -13,6 +14,11 @@ or a download runs it reads nothing from the connection, as the real row does.
 An offered image is downloaded from the master and checked; the row then comes
 back as a restarted board on that rev. Every message from the master is printed
 as one JSON line with a timestamp.
+
+--pair-port serves the row's POST /pair (form field `master`): the caller
+becomes this row's master and is dialled from then on. A master of another
+name is refused with 409 while this row is paired, as on the board. Without
+--master the row starts unpaired and dials nobody until it is paired.
 
 --units names a captured /units/health document to send as the unit facts;
 without it a plain one for --width working units is made up.
@@ -76,6 +82,8 @@ class Row:
         self.doc_id = 0
         self.pending_update_state = None
         self.writer = None
+        self.master = args.master        # the address this row dials; None = unpaired
+        self.master_id = args.paired_with
         try:
             self.commands_at = Path(args.commands).stat().st_size if args.commands else 0
         except FileNotFoundError:
@@ -162,11 +170,11 @@ class Row:
         port = offer.http_port or 80
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.args.master, port), 5)
+                asyncio.open_connection(self.master, port), 5)
         except (OSError, asyncio.TimeoutError):
             return state(pb.UPDATE_FAILED, pb.UPDATE_UNREACHABLE)
         try:
-            writer.write(f"GET /firmware/row HTTP/1.0\r\nHost: {self.args.master}\r\n\r\n".encode())
+            writer.write(f"GET /firmware/row HTTP/1.0\r\nHost: {self.master}\r\n\r\n".encode())
             head = (await reader.readuntil(b"\r\n\r\n")).decode(errors="replace")
             status = int(head.split()[1])
             if status != 200:
@@ -218,6 +226,7 @@ class Row:
         elif kind == "restart":
             self.restart()
         elif kind == "release":
+            self.master = self.master_id = None
             raise Released()
 
     async def command(self, line: str) -> None:
@@ -261,8 +270,8 @@ class Row:
 
     async def connection(self) -> None:
         reader, self.writer = await asyncio.wait_for(
-            asyncio.open_connection(self.args.master, self.args.port), 1)
-        log("connected", master=self.args.master)
+            asyncio.open_connection(self.master, self.args.port), 1)
+        log("connected", master=self.master)
         try:
             self.send(hello=pb.Hello(protocol=self.args.protocol, id=self.args.id, rev=self.rev,
                                      boot_id=self.boot_id, rescue=self.rescue,
@@ -283,7 +292,7 @@ class Row:
                         if message.WhichOneof("body") != "welcome":
                             raise ConnectionResetError("no Welcome first")
                         log("got", type="welcome", master_id=message.welcome.master_id)
-                        if self.args.paired_with and message.welcome.master_id != self.args.paired_with:
+                        if self.master_id and message.welcome.master_id != self.master_id:
                             raise ConnectionResetError("not the master this row is paired with")
                         welcomed = True
                         self.send_status()
@@ -308,14 +317,54 @@ class Row:
             self.busy = False
             self.writer.close()
 
+    # ---- pairing ----
+
+    async def serve_pair(self, reader, writer) -> None:
+        caller = writer.get_extra_info("peername")[0]
+        try:
+            head = (await reader.readuntil(b"\r\n\r\n")).decode(errors="replace")
+            length = next((int(line.split(":")[1]) for line in head.split("\r\n")
+                           if line.lower().startswith("content-length:")), 0)
+            form = (await reader.readexactly(length)).decode(errors="replace")
+            master = dict(pair.split("=", 1) for pair in form.split("&") if "=" in pair).get("master", "")
+            if head.split()[:2] != ["POST", "/pair"]:
+                status, answer = "404 Not Found", {"error": "not found"}
+            elif not master:
+                status, answer = "400 Bad Request", {"error": "master"}
+            elif self.master_id and master != self.master_id:
+                status, answer = "409 Conflict", {"error": "paired", "master": self.master_id}
+            else:
+                self.master, self.master_id = caller, master
+                status = "200 OK"
+                answer = {"name": self.args.id, "version": self.rev, "plat": "esp01",
+                          "width": self.args.width, "rescue": self.rescue, "master": master,
+                          "masterHost": caller, "linked": False}
+            log("pair", caller=caller, master=master, status=status)
+            body = json.dumps(answer).encode()
+            writer.write((f"HTTP/1.0 {status}\r\nContent-Type: application/json\r\n"
+                          f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode() + body)
+            await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError) as error:
+            log("pair-error", caller=caller, error=repr(error))
+        finally:
+            writer.close()
+
     async def run(self) -> None:
+        if self.args.pair_port:
+            await asyncio.start_server(self.serve_pair, "0.0.0.0", self.args.pair_port)
+            log("pairing", port=self.args.pair_port)
         backoff = 0
         while True:
+            if self.master is None:
+                await asyncio.sleep(0.2)
+                continue
             try:
                 await self.connection()
             except Released:
                 log("released")
-                return
+                if not self.args.pair_port:
+                    return
+                continue
             except (OSError, asyncio.TimeoutError, ValueError) as error:
                 reason = str(error) or type(error).__name__
                 log("disconnected", reason=reason)
@@ -328,7 +377,8 @@ class Row:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--master", required=True, help="the master's address")
+    parser.add_argument("--master", help="the master's address; without it the row is unpaired")
+    parser.add_argument("--pair-port", type=int, default=0, help="serve POST /pair on this port")
     parser.add_argument("--port", type=int, default=io.PORT)
     parser.add_argument("--id", required=True, help="this row's name")
     parser.add_argument("--paired-with", help="close the connection to a master of another name")
@@ -341,7 +391,10 @@ def main() -> None:
     parser.add_argument("--render-s", type=float, default=4.0, help="how long a render holds the row")
     parser.add_argument("--job-scale", type=float, default=1.0, help="multiplies every job's duration")
     parser.add_argument("--backoff-scale", type=float, default=1.0)
-    asyncio.run(Row(parser.parse_args()).run())
+    args = parser.parse_args()
+    if not args.master and not args.pair_port:
+        parser.error("give --master, or --pair-port to wait for one")
+    asyncio.run(Row(args).run())
 
 
 if __name__ == "__main__":
