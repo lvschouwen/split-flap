@@ -352,7 +352,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
         // Same re-check for the cluster gate (#272): a membership that
         // arrived between handler and drain must not slip a ShowText in.
         // (Lock order: webStateMutex → clusterMutex, never the reverse.)
-        if (reflashInProgress(displaySnapshotGet().reflash) ||
+        if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning() ||
             clusterFollowerViewGet().gated) {
           SerialPrintln("Message retained, not queued (reflash/cluster): " +
                         messageText);
@@ -393,7 +393,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // and the overlay arm (which drains behind the #130 cancel above)
       // keeps the transient alive when that same POST also switched mode.
       if (transientProvided) {
-        if (reflashInProgress(displaySnapshotGet().reflash)) {
+        if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
           SerialPrintln("Transient text dropped (reflash running): " +
                         transientText);
         } else if (displayEnqueue(makeShowTextCommand(

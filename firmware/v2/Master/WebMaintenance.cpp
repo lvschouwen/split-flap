@@ -21,6 +21,7 @@
 #include "WearPolicy.h"
 #include "ClusterLeader.h"  // clusterLeaderBlankWall (/stop propagation #317)
 #include "WallShow.h"
+#include "WallState.h"
 
 // v1 parseCalibrationAddress as a seam: policy verdicts come from the pure
 // MaintenancePolicy.h, this only translates request → verdict → response.
@@ -78,7 +79,9 @@ static bool maintRequireLongParam(AsyncWebServerRequest* request,
 // burst-drain afterwards. /stop is the ONE exception (it is the cancel)
 // and deliberately does not call this.
 static bool rejectWhileReflashing(AsyncWebServerRequest* request) {
-  if (!reflashInProgress(displaySnapshotGet().reflash)) return false;
+  if (!reflashInProgress(displaySnapshotGet().reflash) && !wallUnitUpdateRunning()) {
+    return false;
+  }
   request->send(409, "text/plain",
                 F("Unit reflash in progress — retry when it finishes"));
   return true;

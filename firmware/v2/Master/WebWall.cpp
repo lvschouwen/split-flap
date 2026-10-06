@@ -4,24 +4,38 @@
 // the boards. Async context: handlers read WallState snapshots and stage
 // requests, they never change anything themselves (WebEndpoints.cpp rules).
 //
-// Actions so far, all about which boards make up the wall:
+// Which boards make up the wall:
 //   {"name":"pair","target":{"host":"192.168.1.50"},"args":{"row":1,"col":0,"width":5}}
 //       args are optional: below the last row, left edge, as wide as the row says;
 //       target.port is the row's web port when it is not 80 (a bench stand-in)
 //   {"name":"release","target":{"row":"<row id>"}}
 //   {"name":"arrange","args":{"rows":[{"id":"","row":0,"col":0,"width":16}, ...]}}
 //       every board of the table once, "" = the master's own row
+// Unit jobs, the same call for the master's own units and a row board's
+// (names and values: WallJobs.h):
+//   {"name":"home","target":{"row":"<row id>","unit":3}}
+//   {"name":"jog","target":{"unit":3},"args":{"steps":-4}}
+//       target.row "" or absent = the master's own row; one job at a time per row
 // Answers: 202 {"op":N}; 400 with the reason; 409 while another such request
-// runs; 503 when no job can be started.
+// runs, the row cannot take a job, or a unit update is running; 503 when no
+// job can be started.
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
 
+#include <memory>
+
+#include "BootDump.h"
 #include "BuildVersion.h"
+#include "FollowerImageStore.h"
 #include "JsonCopied.h"
+#include "ReflashPlan.h"
 #include "Tasks.h"
+#include "WallJobs.h"
 #include "WallShow.h"
 #include "WallState.h"
+#include "WallUpdatePolicy.h"
+#include "WebEndpoints.h"
 #include "WebEndpointsInternal.h"
 
 namespace {
@@ -108,6 +122,155 @@ const char* buildArrange(JsonVariantConst body, const WallRowsTable& table, Wall
   return nullptr;
 }
 
+void sendOp(AsyncWebServerRequest* request, uint32_t opId) {
+  AsyncJsonResponse* response = new AsyncJsonResponse();
+  response->getRoot()["op"] = opId;
+  response->setCode(202);
+  response->setLength();
+  request->send(response);
+}
+
+// The DisplayCommand of a job on the master's own units. Probe has no seq:
+// the display reports nothing back for it.
+DisplayCommand ownCommand(const wl_Op& op, uint32_t seq) {
+  const uint8_t unit = (uint8_t)op.address;
+  switch (op.opcode) {
+    case wl_OpCode_OPC_HOME: return makeHomeCommand(seq, unit);
+    case wl_OpCode_OPC_IDENTIFY: return makeIdentifyCommand(seq, unit);
+    case wl_OpCode_OPC_JOG: return makeJogCommand(seq, unit, (int)op.arg);
+    case wl_OpCode_OPC_SET_OFFSET: return makeWriteOffsetCommand(seq, unit, (int16_t)op.arg);
+    case wl_OpCode_OPC_SELF_TEST: return makeSelfTestCommand(seq, unit);
+    case wl_OpCode_OPC_RESTART_UNIT: return makeRebootToBootloaderCommand(seq, unit);
+    case wl_OpCode_OPC_RESET_ODOMETER: return makeResetOdometerCommand(seq, unit);
+    case wl_OpCode_OPC_SET_GATES: return makeSetGatesCommand(seq, unit, (uint8_t)op.arg);
+    case wl_OpCode_OPC_BOOT_INFO: return makeBootInfoCommand(seq, unit);
+    case wl_OpCode_OPC_BOOT_DUMP: return makeBootDumpCommand(seq, unit);
+    case wl_OpCode_OPC_BOOT_UPDATE: return makeBootUpdateCommand(seq, unit);
+    case wl_OpCode_OPC_UPDATE_UNITS: {
+      // The job shows the present text again when it is done.
+      const WebContentSnapshot content = webDisplayContentSnapshot();
+      return makeReflashUnitsCommand(seq, String(displaySnapshotGet().currentText),
+                                     content.alignment, content.flapSpeed, unit, op.arg != 0);
+    }
+    default: return makeProbeCommand();
+  }
+}
+
+// Which of its units a job may address is the board's to say: here, for the
+// master's own. The checks are the ones the /unit/... routes make.
+const char* checkOwnUnit(const WallJobKind& kind, const wl_Op& op, int& status) {
+  status = 400;
+  if (op.address == 0 || kind.opcode == wl_OpCode_OPC_RESTART_UNIT) return nullptr;
+  if (kind.opcode == wl_OpCode_OPC_UPDATE_UNITS) {
+    // No running-unit check: a unit on another protocol is updated to get it back.
+    return reflashAddressInRange((long)op.address, SFP_I2C_ADDRESS_BASE, UNITS_AMOUNT)
+               ? nullptr
+               : "target.unit is not an address this row can hold";
+  }
+  std::unique_ptr<DisplaySnapshot> own(new DisplaySnapshot(displaySnapshotGet()));
+  char raw[12];
+  snprintf(raw, sizeof(raw), "%lu", (unsigned long)op.address);
+  int parsed = 0;
+  const MaintVerdict verdict = maintValidateAddress(raw, own->units, UNITS_AMOUNT, parsed);
+  if (verdict.httpStatus == 200) return nullptr;
+  status = verdict.httpStatus;
+  return verdict.message;
+}
+
+void startOwnJob(AsyncWebServerRequest* request, const WallJobKind& kind, wl_Op& op) {
+  int status = 400;
+  if (const char* refusal = checkOwnUnit(kind, op, status)) {
+    return sendError(request, status, refusal);
+  }
+  bool rowBusy = false;
+  op.op_id = wallJobBegin(kind.name, WALL_OP_OWN_ROW, rowBusy);
+  if (op.op_id == 0) {
+    return rowBusy ? sendError(request, 409, "another unit job is running on that row")
+                   : sendError(request, 503, "too many jobs are running");
+  }
+  const bool reported = kind.opcode != wl_OpCode_OPC_PROBE;
+  const uint32_t seq = reported ? displayNextMaintSeq() : 0;
+  if (!displayEnqueue(ownCommand(op, seq))) {
+    wallOpFinish(op.op_id, false, "the display queue was full");
+    return sendError(request, 503, "the display queue is full, try again in a moment");
+  }
+  if (reported) {
+    WallOwnJob job;
+    job.opId = op.op_id;
+    job.seq = seq;
+    job.startedMs = millis();
+    job.op = op;
+    wallOwnJobSet(job);
+  } else {
+    wallOpFinish(op.op_id, true, "rescan asked for");
+  }
+  sendOp(request, op.op_id);
+}
+
+void startRowJob(AsyncWebServerRequest* request, const WallJobKind& kind, wl_Op& op, int row,
+                 uint32_t generation) {
+  {
+    std::unique_ptr<WallSnapshot> wall(new WallSnapshot(wallStateGet()));
+    const WallRowLink& link = wall->link[row];
+    if (!link.contact.connected || !link.contact.helloSeen) {
+      return sendError(request, 409, "that row is not connected");
+    }
+    if (link.rescue) {
+      return sendError(request, 409, wallJobRefusalText(wl_OpRefusal_REFUSAL_RESCUE));
+    }
+    if (wall->updatePhase != (uint8_t)WallUpdatePhase::Idle && wall->updateRow == row) {
+      return sendError(request, 409, "that row is taking a firmware update");
+    }
+  }
+  bool rowBusy = false;
+  op.op_id = wallJobBegin(kind.name, row, rowBusy);
+  if (op.op_id == 0) {
+    return rowBusy ? sendError(request, 409, "another unit job is running on that row")
+                   : sendError(request, 503, "too many jobs are running");
+  }
+  if (!wallJobStage(row, op, generation)) {
+    wallOpFinish(op.op_id, false, "the row could not be handed the job");
+    return sendError(request, 409, "the row cannot be handed a job right now");
+  }
+  sendOp(request, op.op_id);
+}
+
+void handleJob(AsyncWebServerRequest* request, JsonVariantConst body, const WallJobKind& kind,
+               const WallRowsTable& table, uint32_t generation) {
+  JsonVariantConst unit = body["target"]["unit"];
+  if (!unit.isNull() && !unit.is<long>()) {
+    return sendError(request, 400, "target.unit is the unit's address, a whole number");
+  }
+  JsonVariantConst arg;
+  if (kind.arg != nullptr) arg = body["args"][kind.arg];
+  const bool haveArg = !arg.isNull();
+  if (haveArg && !arg.is<long>() && !arg.is<bool>()) {
+    return sendError(request, 400, "the job's value under args is a whole number");
+  }
+  // "No args" is judged by the job: any other key under args is not for it.
+  const bool strayArgs = kind.arg == nullptr && body["args"].as<JsonObjectConst>().size() > 0;
+  const long value = arg.is<bool>() ? (arg.as<bool>() ? 1 : 0) : arg.as<long>();
+  wl_Op op;
+  if (const char* refusal = wallJobBuild(kind, !unit.isNull(), unit.as<long>(),
+                                         haveArg || strayArgs, value, op)) {
+    return sendError(request, 400, refusal);
+  }
+  JsonVariantConst rowId = body["target"]["row"];
+  if (!rowId.isNull() && !rowId.is<const char*>()) {
+    return sendError(request, 400, "target.row is a row's id (\"\" = the master's own row)");
+  }
+  const char* id = rowId.isNull() ? "" : rowId.as<const char*>();
+  const int row = id[0] == 0 ? -1 : wallRowsFind(table, id);
+  if (id[0] != 0 && row < 0) return sendError(request, 400, "target.row is not a row of this wall");
+  // The producer gate of a unit update (#205), on whichever row it runs:
+  // nothing else touches the units meanwhile.
+  if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
+    return sendError(request, 409, "a unit update is running, retry when it has finished");
+  }
+  if (row < 0) return startOwnJob(request, kind, op);
+  startRowJob(request, kind, op, row, generation);
+}
+
 void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   JsonVariantConst body = json;
   const char* name = body["name"].as<const char*>();
@@ -118,6 +281,9 @@ void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   // web state lock makes it one request at a time.
   static WallRequest staged;
   WebStateLock lock;
+  if (const WallJobKind* job = wallJobFind(name)) {
+    return handleJob(request, body, *job, table, generation);
+  }
   staged = WallRequest{};
   const char* refusal = "no such action";
   if (strcmp(name, "pair") == 0) refusal = buildPair(body, staged);
@@ -130,11 +296,7 @@ void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
     wallOpFinish(staged.opId, false, "another change to the wall was still running");
     return sendError(request, 409, "another change to the wall is still running");
   }
-  AsyncJsonResponse* response = new AsyncJsonResponse();
-  response->getRoot()["op"] = staged.opId;
-  response->setCode(202);
-  response->setLength();
-  request->send(response);
+  sendOp(request, staged.opId);
 }
 
 void handleOp(AsyncWebServerRequest* request) {
@@ -155,6 +317,34 @@ void handleOp(AsyncWebServerRequest* request) {
                                                    : "failed";
   if (op.phase == WallOpPhase::Done) root["result"] = jsonCopied(op.detail);
   if (op.phase == WallOpPhase::Failed) root["reason"] = jsonCopied(op.detail);
+  // What the job handed back: a JSON object as the board wrote it, or the
+  // bytes of a boot section.
+  const WallJobKind* kind = wallJobFind(op.name);
+  if (kind != nullptr && kind->data != WallJobData::None && op.phase != WallOpPhase::Running) {
+    std::unique_ptr<uint8_t[]> data(new uint8_t[WALL_OP_DATA_MAX]);
+    const size_t n = wallOpDataGet(op.id, data.get(), WALL_OP_DATA_MAX);
+    if (n > 0 && kind->data == WallJobData::Json) {
+      String text;
+      text.concat((const char*)data.get(), n);
+      JsonDocument parsed;
+      // Embedded only when it reads as JSON: a cut document must not break this answer.
+      if (deserializeJson(parsed, text) == DeserializationError::Ok) root["data"] = parsed;
+    } else if (n > 0) {
+      static const char digits[] = "0123456789abcdef";
+      String hex;
+      hex.reserve(2 * n);
+      for (size_t i = 0; i < n; i++) {
+        hex += digits[data[i] >> 4];
+        hex += digits[data[i] & 0x0F];
+      }
+      char crc[9];
+      snprintf(crc, sizeof(crc), "%08lx", (unsigned long)bootDumpCrc32(data.get(), n));
+      JsonObject bytes = root["data"].to<JsonObject>();
+      bytes["len"] = n;
+      bytes["crc32"] = jsonCopied(crc);
+      bytes["hex"] = hex;
+    }
+  }
   response->setCode(op.phase == WallOpPhase::Running ? 202 : 200);
   response->setLength();
   request->send(response);
@@ -182,6 +372,18 @@ void handleWall(AsyncWebServerRequest* request) {
   root["master"]["id"] = effectiveName;
   root["master"]["rev"] = GIT_REV;
   root["master"]["units"] = own.displayWidth;
+  // The image the rows are to run, and the offer of it that is out now.
+  FollowerImageFacts image;
+  if (followerImageFacts(image)) {
+    JsonObject stored = root["rowImage"].to<JsonObject>();
+    stored["rev"] = jsonCopied(image.rev);
+    stored["size"] = image.size;
+    stored["packed"] = image.packed;
+  }
+  root["update"]["phase"] = wallUpdatePhaseName((WallUpdatePhase)wall->updatePhase);
+  if (wall->updateRow >= 0 && wall->updateRow < wall->rows.count) {
+    root["update"]["row"] = jsonCopied(wall->rows.rows[wall->updateRow].id);
+  }
   JsonArray rows = root["rows"].to<JsonArray>();
   for (int i = 0; i < wall->rows.count; i++) {
     const WallRowDef& def = wall->rows.rows[i];
@@ -212,6 +414,8 @@ void handleWall(AsyncWebServerRequest* request) {
     row["shownCount"] = link.shownCount;
     row["lastLateMs"] = link.lastLateMs;
     row["worstLateMs"] = link.worstLateMs;
+    row["updateAttempts"] = link.updateAttempts;
+    row["updateBlocked"] = link.updateBlocked;
     if (link.haveStatus) {
       JsonObject s = row["status"].to<JsonObject>();
       s["uptimeS"] = link.status.up_s;

@@ -15,10 +15,19 @@ SemaphoreHandle_t wallMutex = nullptr;
 
 // Everything this module holds, taken once from PSRAM (LargeAlloc.h): a few
 // kilobytes that internal RAM is better spent without.
+struct OpData {
+  uint16_t len = 0;
+  uint8_t bytes[WALL_OP_DATA_MAX];
+};
+
 struct Held {
   WallSnapshot wall;
   WallOps ops;
+  OpData opData[WALL_OPS_KEPT];  // by a job's place in `ops`
   WallRequest staged;
+  bool jobStaged[CLUSTER_MAX_MEMBERS] = {false};
+  wl_Op jobs[CLUSTER_MAX_MEMBERS];  // staged for the link task, by row
+  WallOwnJob ownJob;
 };
 Held* held = nullptr;
 std::atomic<uint32_t> rowsGeneration{0};
@@ -35,6 +44,8 @@ RowUnits* rowUnits = nullptr;  // CLUSTER_MAX_MEMBERS of them
 bool requestRunning = false;
 wl_Config rowSettings = wl_Config_init_zero;
 std::atomic<uint32_t> rowSettingsGeneration{0};
+// Jobs waiting for the link task: it looks only when there are any.
+std::atomic<int> jobsStaged{0};
 char releaseId[WALL_ROW_ID_MAX + 1] = {0};
 
 struct Locked {
@@ -101,6 +112,12 @@ void wallStatePublishLink(int row, const WallRowLink& link) {
   if (!link.contact.connected) rowUnits[row].have = false;
 }
 
+void wallStatePublishUpdate(uint8_t phase, int row) {
+  Locked lock;
+  held->wall.updatePhase = phase;
+  held->wall.updateRow = (int8_t)row;
+}
+
 void wallStatePublishUnits(int row, const UnitFactsDoc& units, uint32_t nowMs) {
   if (row < 0 || row >= CLUSTER_MAX_MEMBERS) return;
   Locked lock;
@@ -120,7 +137,85 @@ bool wallStateRowUnits(int row, UnitFactsDoc& out, uint32_t& atMs) {
 
 uint32_t wallOpBegin(const char* name, int row) {
   Locked lock;
-  return held->ops.begin(name, row);
+  const uint32_t id = held->ops.begin(name, row);
+  // The place may have held another job's result.
+  if (id != 0) held->opData[held->ops.placeOf(id)].len = 0;
+  return id;
+}
+
+uint32_t wallJobBegin(const char* name, int row, bool& rowBusy) {
+  Locked lock;
+  rowBusy = held->ops.runningOn(row);
+  if (rowBusy) return 0;
+  const uint32_t id = held->ops.begin(name, row);
+  if (id != 0) held->opData[held->ops.placeOf(id)].len = 0;
+  return id;
+}
+
+void wallOpDataPut(uint32_t id, uint32_t offset, const uint8_t* data, size_t n) {
+  Locked lock;
+  const int place = held->ops.placeOf(id);
+  if (place < 0 || offset > WALL_OP_DATA_MAX || n > WALL_OP_DATA_MAX - offset) return;
+  OpData& d = held->opData[place];
+  // Pieces come in order; one that leaves a gap is not kept.
+  if (offset > d.len) return;
+  memcpy(d.bytes + offset, data, n);
+  d.len = (uint16_t)(offset + n);
+}
+
+size_t wallOpDataGet(uint32_t id, uint8_t* out, size_t cap) {
+  Locked lock;
+  const int place = held->ops.placeOf(id);
+  if (place < 0) return 0;
+  const OpData& d = held->opData[place];
+  const size_t n = d.len < cap ? d.len : cap;
+  memcpy(out, d.bytes, n);
+  return n;
+}
+
+bool wallJobStage(int row, const wl_Op& op, uint32_t generation) {
+  if (row < 0 || row >= CLUSTER_MAX_MEMBERS) return false;
+  Locked lock;
+  if (held->jobStaged[row] || generation != rowsGeneration.load(std::memory_order_relaxed)) {
+    return false;
+  }
+  held->jobs[row] = op;
+  held->jobStaged[row] = true;
+  jobsStaged.fetch_add(1, std::memory_order_relaxed);
+  return true;
+}
+
+bool wallJobTake(int row, wl_Op& out) {
+  if (jobsStaged.load(std::memory_order_relaxed) == 0) return false;
+  if (row < 0 || row >= CLUSTER_MAX_MEMBERS) return false;
+  Locked lock;
+  if (!held->jobStaged[row]) return false;
+  out = held->jobs[row];
+  held->jobStaged[row] = false;
+  jobsStaged.fetch_sub(1, std::memory_order_relaxed);
+  return true;
+}
+
+void wallOwnJobSet(const WallOwnJob& job) {
+  Locked lock;
+  held->ownJob = job;
+}
+
+bool wallOwnJobGet(WallOwnJob& out) {
+  Locked lock;
+  if (held->ownJob.opId == 0) return false;
+  out = held->ownJob;
+  return true;
+}
+
+void wallOwnJobClear(uint32_t opId) {
+  Locked lock;
+  if (held->ownJob.opId == opId) held->ownJob = WallOwnJob{};
+}
+
+bool wallUnitUpdateRunning() {
+  Locked lock;
+  return held->ops.runningOnARowBoard("update-units");
 }
 
 void wallOpFinish(uint32_t id, bool ok, const char* detail) {
@@ -177,7 +272,13 @@ ClusterVerdict wallStateSetRows(const WallRowsTable& table) {
     for (int i = 0; i < CLUSTER_MAX_MEMBERS; i++) {
       held->wall.link[i] = WallRowLink{};
       rowUnits[i].have = false;
+      if (held->jobStaged[i]) jobsStaged.fetch_sub(1, std::memory_order_relaxed);
+      held->jobStaged[i] = false;
     }
+    held->wall.updatePhase = 0;
+    held->wall.updateRow = -1;
+    // A row's number means another board now, or none.
+    held->ops.failRowBoards("the boards of the wall changed");
     // Inside the lock, after the table: a reader that sees the new number
     // gets the new table.
     rowsGeneration.fetch_add(1, std::memory_order_relaxed);

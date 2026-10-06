@@ -7,14 +7,17 @@
 #include <sys/time.h>
 
 #include "ClockPolicy.h"  // clockIsTimeSynced
+#include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
 #include "LargeAlloc.h"
 #include "SntpReply.h"
 #include "TaskWatchdog.h"
 #include "Tasks.h"
+#include "WallJobs.h"
 #include "WallLinkCore.h"
 #include "WallShow.h"
 #include "WallState.h"
+#include "WallUpdatePolicy.h"
 
 namespace {
 
@@ -106,6 +109,49 @@ const char* rowName(int row) {
   return row >= 0 && row < rowsTable.count ? rowsTable.rows[row].id : "?";
 }
 
+// ---- the stored row image, offered to rows on another rev (WallUpdatePolicy.h) ----
+
+WallUpdater updater;
+FollowerImageFacts image;
+bool imageKnown = false;
+uint32_t imageGeneration = 0;
+
+// "" while there is nothing to offer. A rev too long for the link's messages
+// could never match what a row reports back, so such an image is not offered.
+const char* offeredRev() {
+  return imageKnown && strlen(image.rev) < sizeof(((wl_Update*)0)->rev) ? image.rev : "";
+}
+
+void updateEnded(int row, WallUpdateEnd how) {
+  if (how == WallUpdateEnd::None || row < 0 || row >= WALL_LINK_MAX_ROWS) return;
+  SerialPrintf("link: %s %s (rev %s, %u of %u failed offers%s)\n", rowName(row),
+               wallUpdateEndText(how), image.rev, (unsigned)updater.attempts[row],
+               (unsigned)WALL_UPDATE_ATTEMPT_CAP, updater.blocked[row] ? ", given up on" : "");
+}
+
+// A row's answer about a job the master holds open on it.
+void takeOpState(const wl_OpState& state) {
+  if (state.data.size > 0) {
+    wallOpDataPut(state.op_id, state.data_offset, state.data.bytes, state.data.size);
+  }
+  char text[sizeof(((WallOp*)0)->detail)];
+  switch (state.phase) {
+    case wl_OpPhase_OP_RUNNING:
+      return;
+    case wl_OpPhase_OP_REFUSED:
+      wallOpFinish(state.op_id, false, wallJobRefusalText(state.reason));
+      return;
+    case wl_OpPhase_OP_OK:
+      wallJobOutcomeText(text, sizeof(text), true, 0, state.reason);
+      wallOpFinish(state.op_id, true, text);
+      return;
+    default:
+      wallJobOutcomeText(text, sizeof(text), false, state.outcome, state.reason);
+      wallOpFinish(state.op_id, false, text);
+      return;
+  }
+}
+
 void closeSocket(Socket& s) {
   if (s.fd >= 0) lwip_close(s.fd);
   s = Socket{};
@@ -172,6 +218,10 @@ struct Hooks : WallLinkHooks {
 
   void rowHello(int row, const wl_Hello& hello, bool restarted) override {
     WallRowLink& f = facts[row];
+    // Before the offer rule hears of the Hello: a rev that changed while no
+    // offer was out to this row.
+    updater.noteRev(row, f.rev, hello.rev);
+    updateEnded(row, updater.hello(row, hello.rev, hello.rescue, restarted, offeredRev(), millis()));
     f.everWelcomed = true;
     f.rescue = hello.rescue;
     f.reportedWidth = (uint8_t)hello.width;
@@ -207,8 +257,22 @@ struct Hooks : WallLinkHooks {
       if (f.lastLateMs > f.worstLateMs) f.worstLateMs = f.lastLateMs;
     } else if (message.which_body == wl_ToMaster_units_json_tag) {
       takeUnitsPiece(row, message.body.units_json, rowName(row));
+    } else if (message.which_body == wl_ToMaster_op_state_tag) {
+      takeOpState(message.body.op_state);
+    } else if (message.which_body == wl_ToMaster_update_state_tag) {
+      const wl_UpdateState& u = message.body.update_state;
+      SerialPrintf("link: %s: update to %s: phase %d, reason %d, detail %u\n", rowName(row), u.rev,
+                   (int)u.phase, (int)u.reason, (unsigned)u.detail);
+      updateEnded(row, updater.answer(row, u, offeredRev(), millis()));
     }
     factsDirty[row] = true;
+  }
+
+  void jobEnded(int row, uint32_t opId, WallJobEnd why) override {
+    (void)row;
+    wallOpFinish(opId, false,
+                 why == WallJobEnd::NotHandedOver ? "the row did not take the job in time"
+                                                  : "no result from the row in time");
   }
 
   void note(int conn, int row, const char* what) override {
@@ -376,6 +440,78 @@ void showAndSettings(uint32_t nowMs) {
   }
 }
 
+// Jobs the web side staged for a row board go to the core, which writes each
+// when its row can take it.
+void takeJobs(uint32_t nowMs) {
+  static wl_Op op;
+  for (int row = 0; row < rowsTable.count && row < WALL_LINK_MAX_ROWS; row++) {
+    if (!wallJobTake(row, op)) continue;
+    // An update ends in the row's restart, which would cut the job short.
+    const bool updating = updater.phase != WallUpdatePhase::Idle && updater.row == row;
+    if (updating) {
+      wallOpFinish(op.op_id, false, "the row is taking a firmware update");
+    } else if (!core->startJob(row, op, nowMs)) {
+      wallOpFinish(op.op_id, false, "another unit job holds the row");
+    }
+  }
+}
+
+void offerImage(uint32_t nowMs) {
+  if (followerImageFactsGeneration() != imageGeneration) {
+    imageGeneration = followerImageFactsGeneration();
+    imageKnown = followerImageFacts(image);
+    updater.newImage();
+    if (imageKnown) {
+      SerialPrintf("link: row image to offer: rev %s, %u bytes%s\n", image.rev,
+                   (unsigned)image.size, image.packed ? ", packed" : "");
+    }
+  }
+  if (updater.phase != WallUpdatePhase::Idle) {
+    const int offeredTo = updater.row;  // tick() forgets it when the offer ends
+    updateEnded(offeredTo, updater.tick(nowMs));
+  }
+
+  static WallUpdateRow views[WALL_LINK_MAX_ROWS];
+  for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
+    const WallLinkRow& r = core->rows[row];
+    const bool welcomed = row < rowsTable.count && r.conn >= 0 && r.contact.helloSeen;
+    views[row].reachable = welcomed && !r.contact.busy && r.job.stage == WallJobStage::None;
+    views[row].rescue = facts[row].rescue;
+    views[row].rev = facts[row].rev;
+    updater.health(row, welcomed && !facts[row].rescue, nowMs);
+    if (facts[row].updateAttempts != updater.attempts[row] ||
+        facts[row].updateBlocked != updater.blocked[row]) {
+      facts[row].updateAttempts = updater.attempts[row];
+      facts[row].updateBlocked = updater.blocked[row];
+      factsDirty[row] = true;
+    }
+  }
+  const int row = updater.nextCandidate(views, WALL_LINK_MAX_ROWS, offeredRev(), nowMs);
+  if (row >= 0) {
+    static wl_ToRow offer;
+    wlClear(offer);
+    offer.which_body = wl_ToRow_update_tag;
+    wl_Update& u = offer.body.update;
+    strlcpy(u.rev, image.rev, sizeof(u.rev));
+    u.size = image.size;
+    memcpy(u.md5, image.md5, sizeof(u.md5));
+    u.packed = image.packed;
+    // http_port stays 0: the web server's own port.
+    if (core->send(row, offer, nowMs, hooks)) {
+      updater.offered(row, views[row].rescue, nowMs);
+      SerialPrintf("link: %s runs %s%s: offered the stored image, rev %s\n", rowName(row),
+                   views[row].rev, views[row].rescue ? " in RESCUE MODE" : "", image.rev);
+    }
+  }
+  static uint8_t publishedPhase = 0xFF;
+  static int publishedRow = -2;
+  if ((uint8_t)updater.phase != publishedPhase || updater.row != publishedRow) {
+    publishedPhase = (uint8_t)updater.phase;
+    publishedRow = updater.row;
+    wallStatePublishUpdate(publishedPhase, publishedRow);
+  }
+}
+
 void publish(uint32_t nowMs) {
   static uint32_t contactPublishedAtMs = 0;
   const bool contactDue = wallLinkElapsed(nowMs, contactPublishedAtMs, CONTACT_PUBLISH_MS);
@@ -394,6 +530,7 @@ void pass() {
   const uint32_t nowMs = millis();
   if (wallStateRowsGeneration() != rowsGeneration) {
     core->reset(hooks);
+    updater.reset();
     rowsTable = wallStateRows(rowsGeneration);
     wallShowRowsChanged(rowsTable);
     for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
@@ -432,7 +569,9 @@ void pass() {
   if (FD_ISSET(listenFd, &readable)) acceptRows(nowMs);
   readRows(readable, nowMs);
   showAndSettings(nowMs);
+  takeJobs(nowMs);
   core->tick(nowMs, hooks);
+  offerImage(nowMs);
   char releasing[WALL_ROW_ID_MAX + 1];
   if (wallStateReleaseAsked(releasing, sizeof(releasing))) {
     const int row = wallRowsFind(rowsTable, releasing);

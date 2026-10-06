@@ -10,6 +10,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include <atomic>
+
 #include "FlashLog.h"          // flashLogAvailable() — LittleFS mount owner
 #include "FollowerImagePolicy.h"  // followerImageChunkOk
 #include "HelpersSerialHandling.h"
@@ -21,7 +23,14 @@ static SemaphoreHandle_t imgMutex = nullptr;
 
 static bool storedPresent = false;
 static String storedRev;
-static bool relayActive = false;
+static int relayClaims = 0;
+
+// What a row is told about the stored image. Known at once for an image that
+// was just uploaded; after a start it is read off flash by netTask.
+static FollowerImageFacts facts;
+static bool factsKnown = false;
+static bool factsOwed = false;
+static std::atomic<uint32_t> factsGeneration{0};
 
 // Accumulator (async handler context, one upload at a time).
 static bool accumulating = false;
@@ -65,6 +74,7 @@ void followerImageStoreInit() {
   // Presence follows the image file alone; a missing/failed .rev just leaves
   // the rev label blank (the image is still usable — the push recomputes MD5).
   storedPresent = LittleFS.exists(FOLLOWER_IMAGE_PATH);
+  factsOwed = storedPresent;
   if (storedPresent && LittleFS.exists(FOLLOWER_IMAGE_REV_PATH)) {
     File f = LittleFS.open(FOLLOWER_IMAGE_REV_PATH, FILE_READ);
     if (f) {
@@ -93,14 +103,60 @@ bool followerImageTryClaimRelay() {
   // Busy = a stale/about-to-change file; claim atomically with the check so a
   // writeEnd can't slip flushPending true between check and set.
   if (accumulating || flushPending) return false;
-  relayActive = true;
+  relayClaims++;
   return true;
 }
 
 void followerImageReleaseRelay() {
   if (imgMutex == nullptr) return;
   ImgLock lock;
-  relayActive = false;
+  if (relayClaims > 0) relayClaims--;
+}
+
+bool followerImageFacts(FollowerImageFacts& out) {
+  if (imgMutex == nullptr) return false;
+  ImgLock lock;
+  if (!storedPresent || !factsKnown) return false;
+  out = facts;
+  return true;
+}
+
+uint32_t followerImageFactsGeneration() {
+  return factsGeneration.load(std::memory_order_relaxed);
+}
+
+// gzip's two magic bytes: the packed image the ESP-01's boot copier unpacks.
+static bool imageIsPacked(const uint8_t* head, size_t len) {
+  return len >= 2 && head[0] == 0x1F && head[1] == 0x8B;
+}
+
+// netTask, after a start: size and checksum of the image as it is on flash.
+static void readFactsOffFlash() {
+  FollowerImageFacts read;
+  bool ok = false;
+  File f = LittleFS.open(FOLLOWER_IMAGE_PATH, FILE_READ);
+  if (f) {
+    static uint8_t chunk[2048];  // netTask only
+    MD5Builder md5;
+    md5.begin();
+    int n;
+    while ((n = f.read(chunk, sizeof(chunk))) > 0) {
+      if (read.size == 0) read.packed = imageIsPacked(chunk, (size_t)n);
+      md5.add(chunk, (size_t)n);
+      read.size += (uint32_t)n;
+    }
+    ok = read.size > 0 && read.size == f.size();
+    f.close();
+    md5.calculate();
+    md5.getBytes(read.md5);
+  }
+  ImgLock lock;
+  factsOwed = false;
+  if (!ok || !storedPresent) return;
+  strlcpy(read.rev, storedRev.c_str(), sizeof(read.rev));
+  facts = read;
+  factsKnown = true;
+  factsGeneration.fetch_add(1, std::memory_order_relaxed);
 }
 
 String followerImageWriteError() {
@@ -236,12 +292,32 @@ void followerImageFlushTick() {
   size_t len = 0;
   String rev;
   {
+    bool owed;
+    {
+      ImgLock lock;
+      owed = factsOwed && !flushPending;
+    }
+    if (owed) readFactsOffFlash();
+  }
+  {
     ImgLock lock;
     if (!flushPending) return;
-    if (relayActive) return;  // don't rewrite the file the relay is streaming
+    if (relayClaims > 0) return;  // don't rewrite the file a row is reading
     buf = flushBuf;
     len = flushLen;
     rev = flushRev;
+  }
+
+  // The buffer is what was uploaded and checked: its facts need no read-back.
+  FollowerImageFacts written;
+  written.size = (uint32_t)len;
+  written.packed = imageIsPacked(buf, len);
+  {
+    MD5Builder md5;
+    md5.begin();
+    md5.add(buf, len);
+    md5.calculate();
+    md5.getBytes(written.md5);
   }
 
   bool ok = false;
@@ -276,4 +352,9 @@ void followerImageFlushTick() {
   // or every eligibility check passes and every push then fails to read it.
   storedPresent = ok;
   storedRev = (ok && revOk) ? rev : String();
+  strlcpy(written.rev, storedRev.c_str(), sizeof(written.rev));
+  facts = written;
+  factsKnown = ok;
+  factsOwed = false;
+  factsGeneration.fetch_add(1, std::memory_order_relaxed);
 }

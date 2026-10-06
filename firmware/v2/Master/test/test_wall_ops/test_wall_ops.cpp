@@ -95,8 +95,58 @@ static void test_long_words_are_cut_not_overrun() {
   TEST_ASSERT_EQUAL(sizeof(ops.find(id)->detail) - 1, strlen(ops.find(id)->detail));
 }
 
+static void test_one_row_runs_one_job_and_the_own_row_is_a_row_too() {
+  WallOps ops;
+  TEST_ASSERT_FALSE(ops.runningOn(1));
+  const uint32_t a = ops.begin("home", 1);
+  const uint32_t own = ops.begin("home", WALL_OP_OWN_ROW);
+  TEST_ASSERT_TRUE(ops.runningOn(1));
+  TEST_ASSERT_TRUE(ops.runningOn(WALL_OP_OWN_ROW));
+  TEST_ASSERT_FALSE(ops.runningOn(2));
+  ops.finish(a, true, "ok");
+  TEST_ASSERT_FALSE(ops.runningOn(1));
+  ops.finish(own, true, "ok");
+  TEST_ASSERT_FALSE(ops.runningOn(WALL_OP_OWN_ROW));
+}
+
+static void test_a_changed_table_fails_the_jobs_on_row_boards_only() {
+  WallOps ops;
+  const uint32_t remote = ops.begin("home", 0);
+  const uint32_t own = ops.begin("self-test", WALL_OP_OWN_ROW);
+  const uint32_t pair = ops.begin("pair", -1);
+  TEST_ASSERT_EQUAL(1, ops.failRowBoards("the wall's boards changed"));
+  TEST_ASSERT_TRUE(WallOpPhase::Failed == ops.find(remote)->phase);
+  TEST_ASSERT_TRUE(WallOpPhase::Running == ops.find(own)->phase);
+  TEST_ASSERT_TRUE(WallOpPhase::Running == ops.find(pair)->phase);
+}
+
+static void test_a_unit_update_on_a_row_board_is_seen_while_it_runs() {
+  WallOps ops;
+  ops.begin("update-units", WALL_OP_OWN_ROW);  // the own row's is the display's to report
+  ops.begin("home", 1);
+  TEST_ASSERT_FALSE(ops.runningOnARowBoard("update-units"));
+  const uint32_t id = ops.begin("update-units", 1);
+  TEST_ASSERT_TRUE(ops.runningOnARowBoard("update-units"));
+  ops.finish(id, false, "wire-fail");
+  TEST_ASSERT_FALSE(ops.runningOnARowBoard("update-units"));
+}
+
+static void test_a_job_has_a_place_while_it_is_kept() {
+  WallOps ops;
+  const uint32_t a = ops.begin("a", -1);
+  const uint32_t b = ops.begin("b", -1);
+  TEST_ASSERT_EQUAL(0, ops.placeOf(a));
+  TEST_ASSERT_EQUAL(1, ops.placeOf(b));
+  TEST_ASSERT_EQUAL(-1, ops.placeOf(0));
+  TEST_ASSERT_EQUAL(-1, ops.placeOf(99));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_one_row_runs_one_job_and_the_own_row_is_a_row_too);
+  RUN_TEST(test_a_changed_table_fails_the_jobs_on_row_boards_only);
+  RUN_TEST(test_a_unit_update_on_a_row_board_is_seen_while_it_runs);
+  RUN_TEST(test_a_job_has_a_place_while_it_is_kept);
   RUN_TEST(test_a_job_is_running_until_it_is_finished);
   RUN_TEST(test_a_failed_job_keeps_its_reason);
   RUN_TEST(test_a_job_is_finished_once);

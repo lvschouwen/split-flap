@@ -34,13 +34,29 @@ void followerImageStoreInit();
 bool followerImageStored();
 String followerImageStoredRev();
 
+// What a row board is told about the stored image when it is offered over
+// the wall link (wl.Update), and checks its download against.
+struct FollowerImageFacts {
+  char rev[41] = {0};
+  uint32_t size = 0;
+  uint8_t md5[16] = {0};
+  bool packed = false;  // a gzip image for the row's boot copier
+};
+
+// False while there is no stored image, or its checksum is not known yet (it
+// is read off flash by netTask after a start). The generation changes
+// whenever the answer does.
+bool followerImageFacts(FollowerImageFacts& out);
+uint32_t followerImageFactsGeneration();
+
 // Atomically claim the file for a relay stream: fails (returns false) if the
 // accumulator is mid-upload or a write is pending to flush — i.e. the file is
 // stale or about to change. On success sets the relay-active flag so the
 // netTask flush defers until followerImageReleaseRelay(). Checking "busy" and
 // setting the flag must be ONE critical section, else a writeEnd can slip a
 // pending flush in between and race the relay's read (esp_littlefs serializes
-// each VFS call, not a whole multi-tick read/write session).
+// each VFS call, not a whole multi-tick read/write session). Claims count:
+// several rows may download the file (GET /firmware/row) at once.
 bool followerImageTryClaimRelay();
 
 // Release the relay claim (every terminal path of a push MUST call this — a

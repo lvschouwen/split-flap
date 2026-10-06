@@ -160,3 +160,70 @@ inline void wallRowTextShown(WallRowText& t, uint32_t renderId) { t.shownId = re
 inline bool wallRowTextApplied(const WallRowText& t) {
   return !t.pending && t.renderId != 0 && t.shownId == t.renderId;
 }
+
+// ---- a unit job: one at a time per row -------------------------------------------
+
+// A job the row was not handed within this is given up. The master never
+// wrote it, so the row cannot be running it.
+#define WALL_JOB_HAND_OVER_MS 20000UL
+// A job on one unit: four times the longest measured (a self-test, 29 s).
+#define WALL_JOB_UNIT_MS 120000UL
+// Updating every unit of a row: a minute for each (12.3 s measured) of the 16
+// a row can hold.
+#define WALL_JOB_ALL_UNITS_MS 960000UL
+
+enum class WallJobStage : uint8_t { None, Waiting, Sent };
+enum class WallJobEnd : uint8_t { NotHandedOver, NoResult };
+
+// The job the master holds open on a row. The row answers every Op it reads
+// with OpState; the master names the job (op.op_id) and the row echoes it.
+struct WallRowJob {
+  WallJobStage stage = WallJobStage::None;
+  uint32_t sinceMs = 0;  // Waiting: when it was asked for; Sent: when it was written
+  wl_Op op = wl_Op_init_zero;
+};
+
+inline uint32_t wallJobRunMs(const wl_Op& op) {
+  const bool everyUnit = op.opcode == wl_OpCode_OPC_UPDATE_UNITS && op.address == 0;
+  return everyUnit ? WALL_JOB_ALL_UNITS_MS : WALL_JOB_UNIT_MS;
+}
+
+// False when the row already has a job.
+inline bool wallJobStart(WallRowJob& j, const wl_Op& op, uint32_t nowMs) {
+  if (j.stage != WallJobStage::None) return false;
+  j.stage = WallJobStage::Waiting;
+  j.sinceMs = nowMs;
+  j.op = op;
+  return true;
+}
+
+inline bool wallJobDue(const WallRowJob& j, const WallRowContact& c) {
+  return j.stage == WallJobStage::Waiting && c.connected && c.helloSeen && !c.busy;
+}
+
+inline void wallJobSent(WallRowJob& j, uint32_t nowMs) {
+  j.stage = WallJobStage::Sent;
+  j.sinceMs = nowMs;
+}
+
+// A written job is waited for through a dropped connection: the row reports
+// the end again on the next one. Only time ends it without an answer.
+inline bool wallJobOverdue(const WallRowJob& j, uint32_t nowMs, WallJobEnd& why) {
+  if (j.stage == WallJobStage::Waiting && wallLinkElapsed(nowMs, j.sinceMs, WALL_JOB_HAND_OVER_MS)) {
+    why = WallJobEnd::NotHandedOver;
+    return true;
+  }
+  if (j.stage == WallJobStage::Sent && wallLinkElapsed(nowMs, j.sinceMs, wallJobRunMs(j.op))) {
+    why = WallJobEnd::NoResult;
+    return true;
+  }
+  return false;
+}
+
+// Is this OpState about the row's open job? An ending one closes it. Anything
+// else is the echo of a job the master has already given up.
+inline bool wallJobAnswer(WallRowJob& j, const wl_OpState& state) {
+  if (j.stage != WallJobStage::Sent || state.op_id != j.op.op_id) return false;
+  if (state.phase != wl_OpPhase_OP_RUNNING) j = WallRowJob{};
+  return true;
+}

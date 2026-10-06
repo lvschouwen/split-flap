@@ -44,8 +44,11 @@ struct WallLinkHooks {
   virtual bool fromPairedAddress(int conn, int row) = 0;
   // A row was welcomed. `restarted`: its boot id differs from the last one.
   virtual void rowHello(int row, const wl_Hello& hello, bool restarted) = 0;
-  // Every later message of a welcomed row except Pong.
+  // Every later message of a welcomed row except Pong, and except an OpState
+  // that is not about the row's open job.
   virtual void rowMessage(int row, const wl_ToMaster& message) = 0;
+  // A job ended without the row's answer.
+  virtual void jobEnded(int row, uint32_t opId, WallJobEnd why) = 0;
   // A line for the log; row is -1 for a connection that is nobody yet.
   virtual void note(int conn, int row, const char* what) = 0;
 };
@@ -61,6 +64,7 @@ struct WallLinkRow {
   int8_t conn = -1;
   WallRowContact contact;
   WallRowText text;
+  WallRowJob job;
   // Has this connection been told the wall's quiet state and settings?
   bool quietSent = false;
   bool configSent = false;
@@ -145,6 +149,12 @@ struct WallLinkCore {
     }
     for (int r = 0; r < WALL_LINK_MAX_ROWS; r++) {
       WallLinkRow& row = rows[r];
+      WallJobEnd why;
+      if (wallJobOverdue(row.job, nowMs, why)) {
+        const uint32_t opId = row.job.op.op_id;
+        row.job = WallRowJob{};
+        hooks.jobEnded(r, opId, why);
+      }
       if (row.conn < 0) continue;
       // Keepalive only proves the row's TCP stack: a row that is not busy
       // answers pings, so silence means its program is stuck or gone.
@@ -163,6 +173,11 @@ struct WallLinkCore {
         show.speed = row.text.speed;
         memcpy(show.text, row.text.text, sizeof(show.text));
         if (send(r, out, nowMs, hooks)) wallRowTextSent(row.text);
+      } else if (wallJobDue(row.job, row.contact)) {
+        wlClear(out);
+        out.which_body = wl_ToRow_op_tag;
+        out.body.op = row.job.op;
+        if (send(r, out, nowMs, hooks)) wallJobSent(row.job, nowMs);
       } else if (wallLinkPingDue(row.contact, nowMs)) {
         wlClear(out);
         out.which_body = wl_ToRow_ping_tag;
@@ -174,6 +189,13 @@ struct WallLinkCore {
   // The latest text for a row; it goes out when the row can take it.
   void setText(int row, const char* text, uint16_t speed, uint64_t commitAtMs) {
     wallRowTextSet(rows[row].text, text, speed, commitAtMs);
+  }
+
+  // A unit job for a row, named by op.op_id. It is written when the row can
+  // take it and held open until the row reports its end, or time does
+  // (WallLinkPolicy.h). False when the row already has one.
+  bool startJob(int row, const wl_Op& op, uint32_t nowMs) {
+    return wallJobStart(rows[row].job, op, nowMs);
   }
 
   // Quiet for the whole wall, and the settings every row gets (what to show
@@ -273,6 +295,9 @@ struct WallLinkCore {
     if (in.which_body == wl_ToMaster_shown_tag) {
       wallRowTextShown(row.text, in.body.shown.render_id);
     }
+    if (in.which_body == wl_ToMaster_op_state_tag && !wallJobAnswer(row.job, in.body.op_state)) {
+      return;
+    }
     hooks.rowMessage(c.row, in);
   }
 
@@ -306,6 +331,8 @@ struct WallLinkCore {
 
     wallRowHeard(row.contact, nowMs);
     const bool restarted = wallRowNoteBoot(row.contact, h.boot_id);
+    // No job outlives the row's restart: the caller fails them all.
+    if (restarted) row.job = WallRowJob{};
     wallRowTextResend(row.text);
     // The row's Hello is copied out before `in` could be reused; telling the
     // settings only writes `out`.

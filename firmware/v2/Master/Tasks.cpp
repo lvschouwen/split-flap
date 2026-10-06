@@ -73,6 +73,7 @@ bool tasksUnitCountOverridePinned() {
 #include "StatusLed.h"
 #include "SystemStats.h"
 #include "TaskWatchdog.h"
+#include "WallJobs.h"
 #include "WallLink.h"
 #include "WallPair.h"
 #include "WallShow.h"
@@ -275,6 +276,7 @@ static void clusterTaskMain(void*) {
     if (!wallShowActive()) clusterLeaderTick();
     netLivenessProbeTick();  // #501: the gateway and own-server probes
     wallPairTick();          // #566: pairing and the other rows-table requests
+    wallOwnJobTick();        // #566: the end of a unit job on the own row
     crashCtxMark(CRASH_SLOT_CLUSTER, CRASH_ACT_IDLE);
     vTaskDelay(pdMS_TO_TICKS(100));
   }

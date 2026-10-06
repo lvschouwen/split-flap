@@ -27,6 +27,7 @@
 #include "SplitFlapProtocol.h"
 #include "UnitHealth.h"
 #include "WebEndpoints.h"
+#include "WallState.h"
 
 #define MQTT_TELEMETRY_INTERVAL_S 60
 #define MQTT_MAX_TEXT_LEN 256
@@ -389,7 +390,7 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
       }
       // Producer gate (#205): while a reflash job runs nothing display-
       // mutating queues. HA commands are live-only — drop, don't defer.
-      if (reflashInProgress(displaySnapshotGet().reflash)) {
+      if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
         SerialPrintln("MQTT: notification dropped (reflash running): " + text);
         break;
       }

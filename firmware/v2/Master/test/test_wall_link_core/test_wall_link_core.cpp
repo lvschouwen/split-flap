@@ -44,6 +44,15 @@ struct Recorder : WallLinkHooks {
   }
   void rowMessage(int, const wl_ToMaster& m) override { messages.push_back(m.which_body); }
   void note(int, int, const char* what) override { notes.push_back(what); }
+  void jobEnded(int row, uint32_t opId, WallJobEnd why) override {
+    ended.push_back({row, opId, why});
+  }
+  struct Ended {
+    int row;
+    uint32_t opId;
+    WallJobEnd why;
+  };
+  std::vector<Ended> ended;
 
   int count(pb_size_t tag) const {
     int n = 0;
@@ -546,8 +555,135 @@ static void test_reset_closes_everything() {
   TEST_ASSERT_TRUE(WallRowReach::Never == wallRowReach(core.rows[0].contact, 2000));
 }
 
+// ---- unit jobs -------------------------------------------------------------------
+
+static wl_Op job(uint32_t id, wl_OpCode opcode = wl_OpCode_OPC_HOME, uint32_t address = 3) {
+  wl_Op op = wl_Op_init_zero;
+  op.op_id = id;
+  op.opcode = opcode;
+  op.address = address;
+  return op;
+}
+
+static wl_ToMaster opState(uint32_t id, wl_OpPhase phase) {
+  wl_ToMaster m = plain(wl_ToMaster_op_state_tag);
+  m.body.op_state.op_id = id;
+  m.body.op_state.phase = phase;
+  return m;
+}
+
+static void test_a_job_is_written_once_and_open_until_the_row_ends_it() {
+  const int conn = joined("row-a", 1000);
+  TEST_ASSERT_TRUE(core.startJob(0, job(41), 1000));
+  core.tick(1020, *rec);
+  TEST_ASSERT_EQUAL(1, rec->count(wl_ToRow_op_tag));
+  TEST_ASSERT_EQUAL_UINT32(41, rec->last().body.op.op_id);
+  TEST_ASSERT_EQUAL_UINT32(3, rec->last().body.op.address);
+  core.tick(1040, *rec);
+  TEST_ASSERT_EQUAL(1, rec->count(wl_ToRow_op_tag));
+  TEST_ASSERT_FALSE(core.startJob(0, job(42), 1050));  // one at a time per row
+
+  const size_t before = rec->messages.size();
+  feed(conn, opState(41, wl_OpPhase_OP_RUNNING), 1100);
+  TEST_ASSERT_EQUAL(before + 1, rec->messages.size());
+  TEST_ASSERT_FALSE(core.startJob(0, job(42), 1100));
+  feed(conn, opState(41, wl_OpPhase_OP_OK), 6000);
+  TEST_ASSERT_EQUAL(before + 2, rec->messages.size());
+  TEST_ASSERT_TRUE(core.startJob(0, job(42), 6000));
+  TEST_ASSERT_EQUAL(0, rec->ended.size());
+}
+
+static void test_the_echo_of_a_job_the_master_does_not_hold_is_dropped() {
+  const int conn = joined("row-a", 1000);
+  const size_t before = rec->messages.size();
+  feed(conn, opState(7, wl_OpPhase_OP_OK), 1100);  // nothing open
+  core.startJob(0, job(41), 1200);
+  core.tick(1220, *rec);
+  feed(conn, opState(40, wl_OpPhase_OP_FAILED), 1300);  // an older job's end
+  TEST_ASSERT_EQUAL(before, rec->messages.size());
+  TEST_ASSERT_FALSE(core.startJob(0, job(42), 1300));  // 41 is still open
+  // It still counts as hearing from the row.
+  TEST_ASSERT_EQUAL_UINT32(1300, core.rows[0].contact.lastHeardMs);
+}
+
+static void test_a_job_waits_for_a_busy_row_and_text_goes_first() {
+  const int conn = joined("row-a", 1000);
+  feed(conn, status(true), 1100);
+  core.startJob(0, job(41), 1200);
+  core.tick(1220, *rec);
+  TEST_ASSERT_EQUAL(0, rec->count(wl_ToRow_op_tag));
+  feed(conn, status(false), 5000);
+  core.setText(0, "HELLO", 80, 0);
+  core.tick(5020, *rec);
+  TEST_ASSERT_EQUAL(wl_ToRow_show_tag, rec->last().which_body);
+  core.tick(5040, *rec);
+  TEST_ASSERT_EQUAL(wl_ToRow_op_tag, rec->last().which_body);
+}
+
+static void test_a_job_the_row_was_never_handed_is_given_up_after_twenty_seconds() {
+  core.startJob(0, job(41), 1000);  // row-a is not connected
+  core.tick(1000 + WALL_JOB_HAND_OVER_MS - 1, *rec);
+  TEST_ASSERT_EQUAL(0, rec->ended.size());
+  core.tick(1000 + WALL_JOB_HAND_OVER_MS, *rec);
+  TEST_ASSERT_EQUAL(1, rec->ended.size());
+  TEST_ASSERT_EQUAL_UINT32(41, rec->ended[0].opId);
+  TEST_ASSERT_TRUE(WallJobEnd::NotHandedOver == rec->ended[0].why);
+  TEST_ASSERT_TRUE(core.startJob(0, job(42), 30000));
+}
+
+static void test_a_written_job_is_waited_for_through_a_dropped_connection() {
+  const int conn = joined("row-a", 1000);
+  core.startJob(0, job(41), 1000);
+  core.tick(1020, *rec);
+  core.closed(conn);
+  core.tick(60000, *rec);
+  TEST_ASSERT_EQUAL(0, rec->ended.size());
+  const int again = joined("row-a", 61000);  // the same boot id
+  feed(again, opState(41, wl_OpPhase_OP_OK), 61100);
+  TEST_ASSERT_EQUAL(wl_ToMaster_op_state_tag, rec->messages.back());
+  TEST_ASSERT_TRUE(core.startJob(0, job(42), 61200));
+}
+
+static void test_a_written_job_without_an_end_fails_at_its_time() {
+  joined("row-a", 1000);
+  core.startJob(0, job(41), 1000);
+  core.tick(1020, *rec);  // written at 1020
+  // The row stays busy and silent: not closed, but the job's time runs.
+  core.rows[0].contact.busy = true;
+  core.tick(1020 + WALL_JOB_UNIT_MS - 1, *rec);
+  TEST_ASSERT_EQUAL(0, rec->ended.size());
+  core.tick(1020 + WALL_JOB_UNIT_MS, *rec);
+  TEST_ASSERT_EQUAL(1, rec->ended.size());
+  TEST_ASSERT_TRUE(WallJobEnd::NoResult == rec->ended[0].why);
+}
+
+static void test_updating_every_unit_gets_the_long_time() {
+  TEST_ASSERT_EQUAL_UINT32(WALL_JOB_ALL_UNITS_MS,
+                           wallJobRunMs(job(1, wl_OpCode_OPC_UPDATE_UNITS, 0)));
+  TEST_ASSERT_EQUAL_UINT32(WALL_JOB_UNIT_MS, wallJobRunMs(job(1, wl_OpCode_OPC_UPDATE_UNITS, 4)));
+  TEST_ASSERT_EQUAL_UINT32(WALL_JOB_UNIT_MS, wallJobRunMs(job(1, wl_OpCode_OPC_SELF_TEST, 4)));
+}
+
+static void test_a_restarted_row_has_no_job_left() {
+  const int conn = joined("row-a", 1000, 7);
+  core.startJob(0, job(41), 1000);
+  core.tick(1020, *rec);
+  core.closed(conn);
+  joined("row-a", 9000, 8);  // another boot id
+  TEST_ASSERT_EQUAL(1, rec->restarts);
+  TEST_ASSERT_TRUE(core.startJob(0, job(42), 9000));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_a_job_is_written_once_and_open_until_the_row_ends_it);
+  RUN_TEST(test_the_echo_of_a_job_the_master_does_not_hold_is_dropped);
+  RUN_TEST(test_a_job_waits_for_a_busy_row_and_text_goes_first);
+  RUN_TEST(test_a_job_the_row_was_never_handed_is_given_up_after_twenty_seconds);
+  RUN_TEST(test_a_written_job_is_waited_for_through_a_dropped_connection);
+  RUN_TEST(test_a_written_job_without_an_end_fails_at_its_time);
+  RUN_TEST(test_updating_every_unit_gets_the_long_time);
+  RUN_TEST(test_a_restarted_row_has_no_job_left);
   RUN_TEST(test_a_known_row_is_welcomed_by_name);
   RUN_TEST(test_a_row_this_master_does_not_know_is_closed_without_a_welcome);
   RUN_TEST(test_another_protocol_is_closed);

@@ -12,13 +12,17 @@
 
 #include <atomic>
 
+#include <LittleFS.h>
+
 #include "FactorySlot.h"
+#include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "OtaService.h"
 #include "OtaUploadGate.h"  // shared gate / completion / stall rules
 #include "ReflashPlan.h"
 #include "Tasks.h"
+#include "WallState.h"
 
 // OTA upload rejection state (v1 ServiceBootModes pattern): the upload
 // callback can't respond, so it records the rejection and the completion
@@ -60,6 +64,25 @@ static OtaRejection rescueRejection;
 static AsyncWebServerRequest* rescueOwnerRequest = nullptr;
 
 void webFirmwareRegister(AsyncWebServer& server) {
+  // --- the stored row image, for the row boards (#559/#566) -------------------
+  // A row that was offered the image over the wall link (wl.Update) fetches
+  // it here and checks it against the size and md5 of the offer. The answer
+  // carries its length: the row judges that before it erases anything. The
+  // file is claimed for as long as the connection lives, so netTask does
+  // not replace it under a download.
+  server.on("/firmware/row", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (!followerImageStored()) {
+      request->send(404, "text/plain", F("no row image is stored"));
+      return;
+    }
+    if (!followerImageTryClaimRelay()) {
+      request->send(503, "text/plain", F("the row image is being replaced"));
+      return;
+    }
+    request->onDisconnect([]() { followerImageReleaseRelay(); });
+    request->send(LittleFS, FOLLOWER_IMAGE_PATH, "application/octet-stream");
+  });
+
   // --- master OTA (#190) -----------------------------------------------------
   // v1 wire contract: POST multipart field "firmware" + mandatory ?md5=
   // (v1 #144) + optional ?v= intended-version diagnostic. Update targets
@@ -145,7 +168,8 @@ void webFirmwareRegister(AsyncWebServer& server) {
                            : String();
           OtaGate gate = otaUploadGate(
               webUploadCsrfRejected(request),
-              reflashInProgress(displaySnapshotGet().reflash), md5);
+              reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning(),
+              md5);
           if (gate != OtaGate::Pass) {
             otaRejection.set(gate);
             return;

@@ -36,12 +36,17 @@ struct WallRowLink {
   uint32_t shownCount = 0;    // texts the row reported shown, since this master started
   uint32_t lastLateMs = 0;    // how far past its instant the last one flipped (0 = on time)
   uint32_t worstLateMs = 0;   // the worst of them on the current connection
+  uint8_t updateAttempts = 0; // failed offers of the stored image held against it
+  bool updateBlocked = false; // given up on until something speaks for a fresh look
   wl_Status status = wl_Status_init_zero;
 };
 
 struct WallSnapshot {
   WallRowsTable rows;
   WallRowLink link[CLUSTER_MAX_MEMBERS];  // by index in `rows`
+  // The offer of the stored row image that is out now (WallUpdatePolicy.h).
+  uint8_t updatePhase = 0;  // WallUpdatePhase
+  int8_t updateRow = -1;    // index in `rows`, -1 = none
 };
 
 // setup(), before tasksInit(): loads the rows table. A stored table that does
@@ -58,6 +63,7 @@ uint32_t wallStateRowsGeneration();
 // Link task only.
 void wallStatePublishLink(int row, const WallRowLink& link);
 void wallStatePublishUnits(int row, const UnitFactsDoc& units, uint32_t nowMs);
+void wallStatePublishUpdate(uint8_t phase, int row);
 
 // A row board's unit facts as it last sent them. False when it has sent none
 // since it was last welcomed. `atMs` is millis() at their arrival.
@@ -71,6 +77,43 @@ void wallOpFinish(uint32_t id, bool ok, const char* detail);
 bool wallOpGet(uint32_t id, WallOp& out);
 // Link task: a row came back with a new boot id.
 void wallOpsFailRow(int row, const char* reason);
+
+// ---- unit jobs -------------------------------------------------------------------
+// One at a time per row. `row` is the index in the rows table, or
+// WALL_OP_OWN_ROW for the master's own units.
+
+// The largest result a job hands back: a unit's boot section.
+#define WALL_OP_DATA_MAX 1024
+
+// A job on a row: 0 when no job can be started now; `rowBusy` says whether
+// that is because the row already runs one.
+uint32_t wallJobBegin(const char* name, int row, bool& rowBusy);
+// What a job handed back besides its outcome, in the pieces it arrived in.
+void wallOpDataPut(uint32_t id, uint32_t offset, const uint8_t* data, size_t n);
+size_t wallOpDataGet(uint32_t id, uint8_t* out, size_t cap);
+
+// Web side: hands a job for a row board to the link task, which writes it.
+// `generation` is the rows table's the caller found `row` in. False when one
+// is still waiting to be taken for that row, or the table has changed since.
+bool wallJobStage(int row, const wl_Op& op, uint32_t generation);
+// Link task, every pass.
+bool wallJobTake(int row, wl_Op& out);
+
+// The job on the master's own units whose end the worker is watching for
+// (WallJobs.cpp): `seq` is its DisplayCommand's.
+struct WallOwnJob {
+  uint32_t opId = 0;  // 0 = none
+  uint32_t seq = 0;
+  uint32_t startedMs = 0;
+  wl_Op op = wl_Op_init_zero;
+};
+void wallOwnJobSet(const WallOwnJob& job);
+bool wallOwnJobGet(WallOwnJob& out);
+void wallOwnJobClear(uint32_t opId);
+
+// Is a row board updating its units? The producer gate of the master's own
+// unit update covers this too: nothing display-mutating starts meanwhile.
+bool wallUnitUpdateRunning();
 
 // ---- changing the rows table -----------------------------------------------------
 

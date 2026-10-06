@@ -17,6 +17,7 @@
 #include "SettingsJson.h"
 #include "Tasks.h"
 #include "WifiService.h"
+#include "WallState.h"
 
 // MQTT broker mDNS discovery staging (#224, v1 /mqtt/discover contract):
 // the POST arms the flag, netTask's drain runs the blocking query and
@@ -71,7 +72,7 @@ void webSettingsRegister(AsyncWebServer& server) {
     // The reflash gate (#205) applies only to the display-bound part — pure
     // settings saves don't touch the display queue and stay allowed.
     if ((local.inputTextProvided || local.transientTextProvided) &&
-        reflashInProgress(displaySnapshotGet().reflash)) {
+        (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning())) {
       if (isAjax) {
         request->send(409, "text/plain", F("reflash in progress"));
       } else {
@@ -130,7 +131,7 @@ void webSettingsRegister(AsyncWebServer& server) {
     // #395: a reboot mid-unit-reflash leaves the Nano row parked in twiboot;
     // mid-master-OTA it tears the upload session. 409 like every producer
     // gate — /stop remains the only cancel path.
-    if (reflashInProgress(displaySnapshotGet().reflash)) {
+    if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
       request->send(409, "text/plain",
                     F("Unit reflash in progress — retry when it finishes"));
       return;

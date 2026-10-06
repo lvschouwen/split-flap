@@ -20,6 +20,7 @@
 #include "TasksInternal.h"
 #include "WallShow.h"
 #include "WebEndpoints.h"
+#include "WallState.h"
 
 // 1 Hz mode ticker (#192): re-shows the active mode's content — clock time
 // or the retained message — whenever the display drifts away from it (mode
@@ -39,7 +40,7 @@ void clockTaskMain(void*) {
     // Producer gate (#205): while a reflash runs, skip the whole tick —
     // nothing queues, nothing burst-drains after, and lastQueued stays
     // untouched so the first post-job tick re-sends fresh content.
-    if (reflashInProgress(snap.reflash)) continue;
+    if (reflashInProgress(snap.reflash) || wallUnitUpdateRunning()) continue;
     // Notification gate (#224): while an MQTT notification owns the
     // display, don't tick over it — the overlay's expiry releases this
     // gate and the next tick re-shows the active mode's content (v1

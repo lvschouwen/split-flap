@@ -26,7 +26,7 @@ struct ApiLegendEntry { const char* key; const char* meaning; };
 // undeclared endpoint nor a phantom one can survive CI.
 static const ApiRoute API_ROUTES[] = {
   {"GET",  "/api",                    "this self-documenting index"},
-  {"POST", "/api/v2/action",          "start a job: JSON {name,target,args} -> {op}; names: pair, release, arrange"},
+  {"POST", "/api/v2/action",          "start a job: JSON {name,target,args} -> {op}; names: pair, release, arrange, and the unit jobs (home, identify, jog, set-offset, self-test, restart-unit, reset-odometer, set-gates, boot-info, boot-dump, boot-update, update-units, probe) with target {row,unit}"},
   {"GET",  "/api/v2/op",              "what became of a job: /api/v2/op/<id> (202 running, 200 finished, 404 unknown)"},
   {"GET",  "/api/v2/wall",            "the boards of this Split-Flap and what each row board last said"},
   {"GET",  "/settings",               "full device + cluster settings snapshot"},
@@ -51,6 +51,7 @@ static const ApiRoute API_ROUTES[] = {
   {"POST", "/wifi/config",            "set WiFi credentials"},
   {"POST", "/reset-wifi",             "erase WiFi credentials"},
   {"POST", "/firmware/master",        "OTA the master (?md5= required)"},
+  {"GET",  "/firmware/row",           "the stored row image, as the row boards fetch it"},
   {"GET",  "/debug/ota",              "OTA/partition state"},
   {"POST", "/firmware/rescue",        "install the rescue image"},
   {"POST", "/firmware/rescue-boot",   "boot into the rescue slot"},

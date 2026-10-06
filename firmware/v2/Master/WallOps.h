@@ -12,13 +12,18 @@
 #include <string.h>
 
 #define WALL_OPS_KEPT 16
+// WallOp.row of a job on the master's own units (which need not be in the
+// rows table at all).
+#define WALL_OP_OWN_ROW (-2)
 
 enum class WallOpPhase : uint8_t { Running, Done, Failed };
 
 struct WallOp {
   uint32_t id = 0;  // 0 = this place is empty
   WallOpPhase phase = WallOpPhase::Running;
-  int8_t row = -1;  // the row it runs on, -1 = none (index in the rows table)
+  // The row it runs on: its index in the rows table, WALL_OP_OWN_ROW, or -1
+  // for a job that is not about one row.
+  int8_t row = -1;
   char name[16] = {0};
   char detail[96] = {0};  // Done: the result; Failed: the reason
 };
@@ -65,6 +70,47 @@ struct WallOps {
       }
     }
     return failed;
+  }
+
+  // Fails every job still running on a row board: the rows table changed, and
+  // with it what a row's number means.
+  int failRowBoards(const char* reason) {
+    int failed = 0;
+    for (WallOp& op : ops) {
+      if (op.id != 0 && op.row >= 0 && op.phase == WallOpPhase::Running) {
+        finish(op.id, false, reason);
+        failed++;
+      }
+    }
+    return failed;
+  }
+
+  // One unit job at a time per row.
+  bool runningOn(int row) const {
+    for (const WallOp& op : ops) {
+      if (op.id != 0 && op.row == row && op.phase == WallOpPhase::Running) return true;
+    }
+    return false;
+  }
+
+  // Is a job of this name running on any row board?
+  bool runningOnARowBoard(const char* name) const {
+    for (const WallOp& op : ops) {
+      if (op.id != 0 && op.row >= 0 && op.phase == WallOpPhase::Running &&
+          strcmp(op.name, name) == 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Where a job is kept, for what is held beside the table; -1 when unknown.
+  int placeOf(uint32_t id) const {
+    if (id == 0) return -1;
+    for (int i = 0; i < WALL_OPS_KEPT; i++) {
+      if (ops[i].id == id) return i;
+    }
+    return -1;
   }
 
   const WallOp* find(uint32_t id) const { return const_cast<WallOps*>(this)->findMutable(id); }
