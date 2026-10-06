@@ -41,6 +41,7 @@ uint32_t connectCount = 0;
 uint32_t dropCount = 0;
 uint32_t backoffMs = 0;
 uint32_t nextDialMs = 0;
+bool dialled = false;  // a connection was opened and has not been dropped yet
 uint32_t connectedAtMs = 0;
 uint32_t lastStatusMs = 0;
 bool busySent = false;
@@ -93,7 +94,7 @@ void releaseUnitsDoc() {
 }
 
 void drop(const __FlashStringHelper* why) {
-  if (sock.connected() || welcomed) {
+  if (sock.connected() || welcomed || dialled) {
     SerialPrint(F("link: closed — "));
     SerialPrintln(why);
   }
@@ -101,6 +102,7 @@ void drop(const __FlashStringHelper* why) {
   reader.reset();
   releaseUnitsDoc();
   welcomed = false;
+  dialled = false;
   logOn = false;
   offerPending = false;  // the master offers again on the next connection
   dropCount++;
@@ -452,7 +454,9 @@ void linkLoopTick() {
   }
 
   if (!sock.connected()) {
-    if (welcomed) drop(F("connection lost"));
+    // Also a connection the master closed before any Welcome (it does not
+    // know this row): without the drop the next pass would dial again at once.
+    if (dialled) drop(welcomed ? F("connection lost") : F("closed by the master before Welcome"));
     if ((int32_t)(millis() - nextDialMs) < 0) return;
     char host[48];
     if (!followerLinkHostPart(view.leaderHost.c_str(), host, sizeof(host))) return;
@@ -469,6 +473,7 @@ void linkLoopTick() {
     strlcpy(dialledId, view.leaderName.c_str(), sizeof(dialledId));
     strlcpy(dialledHost, view.leaderHost.c_str(), sizeof(dialledHost));
     connectedAtMs = millis();
+    dialled = true;
     sendHello();
     return;
   }
