@@ -476,7 +476,10 @@ void offerImage(uint32_t nowMs) {
                    (unsigned)image.size, image.packed ? ", packed" : "");
     }
   }
-  const uint32_t retries = wallStateTakeUpdateRetries();
+  // Asked for by the current table's row numbers: left waiting for the pass
+  // that has taken that table.
+  const uint32_t retries =
+      wallStateRowsGeneration() == rowsGeneration ? wallStateTakeUpdateRetries() : 0;
   for (int row = 0; row < rowsTable.count && row < WALL_LINK_MAX_ROWS; row++) {
     if (retries & (1UL << row)) updater.retry(row);
   }

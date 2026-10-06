@@ -3,8 +3,8 @@
 // and the CSRF rule built on it. One definition for every board that serves
 // HTTP (Master, ESP-01 follower, Rescue): this is a security boundary, so a
 // fix must reach all of them. Each tree keeps only its own CORS path
-// allowlist. Natively tested by test_cluster_digest (Master),
-// test_follower_json (FollowerEsp01) and test_rescue_cors (Rescue).
+// allowlist. Natively tested by test_follower_json (FollowerEsp01) and
+// test_rescue_cors (Rescue).
 
 #include <Arduino.h>
 

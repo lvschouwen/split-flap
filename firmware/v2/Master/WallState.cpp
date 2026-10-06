@@ -280,6 +280,7 @@ ClusterVerdict wallStateSetRows(const WallRowsTable& table) {
     held->wall.updatePhase = 0;
     held->wall.updateRow = -1;
     // A row's number means another board now, or none.
+    updateRetries = 0;
     held->ops.failRowBoards("the boards of the wall changed");
     // Inside the lock, after the table: a reader that sees the new number
     // gets the new table.

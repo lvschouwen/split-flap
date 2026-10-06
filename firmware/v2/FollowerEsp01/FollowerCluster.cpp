@@ -66,9 +66,11 @@ static volatile bool clockSetupDue = true;
 static void clockSetupChanged() { clockSetupDue = true; }
 
 static void installClock() {
+  // Both names every time: the core keeps them in its own Strings and skips
+  // an empty one, which would leave lwIP holding the name it just freed.
   configTime(leaderTz.length() > 0 ? leaderTz.c_str() : "UTC0",
              leaderHost.length() > 0 ? leaderHost : String(F("pool.ntp.org")),
-             leaderHost.length() > 0 ? String(F("pool.ntp.org")) : String());
+             String(F("pool.ntp.org")));
 }
 
 void clusterInit() {

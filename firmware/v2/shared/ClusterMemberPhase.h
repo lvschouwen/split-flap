@@ -1,14 +1,13 @@
 #pragma once
-// ClusterMemberPhase.h — the phase machine every cluster member runs under a
-// leader (#272, epic #270), S3 and ESP-01 alike. Pure: the tree's web and
-// service glue feeds events in and executes what the phase implies. Natively
-// tested by test_cluster_follower_policy (Master) and test_follower_policy
-// (FollowerEsp01).
+// ClusterMemberPhase.h — the phase machine a row board runs under its master
+// (#272). Pure: the row's link and service glue feeds events in and executes
+// what the phase implies. Natively tested by test_follower_policy
+// (FollowerEsp01). The master reads the flip-instant rule from here.
 //
 // Phases: Standalone (not a member) → Clustered (leader feeding) → Grace
 // (leader silent, HOLD the last segment) → LeaderLost (silent ~2 min). What
-// LeaderLost shows is the tree's choice — an S3 falls back to its own clock,
-// an ESP-01 row blanks. Any leader contact reclaims straight to Clustered. A
+// LeaderLost shows is the row's choice (blank, or its fallback clock). Any
+// master contact reclaims straight to Clustered. A
 // reboot with a persisted membership boots into Grace, never into stale
 // standalone content.
 //
@@ -39,7 +38,7 @@ enum class ClusterFollowerPhase : uint8_t {
 enum class ClusterRenderVerdict : uint8_t {
   Apply = 0,     // fresh: render the segment
   Duplicate,     // stale epoch/seq pair: contact only, don't re-render
-  NotClustered,  // no membership: leader must POST /cluster/join first
+  NotClustered,  // not paired: nothing is shown
 };
 
 struct ClusterFollowerState {
@@ -61,7 +60,7 @@ inline void clusterFollowerBoot(ClusterFollowerState& st, uint32_t nowMs,
   }
 }
 
-// Accepted POST /cluster/join. Seq tracking resets ONLY on a new epoch: a
+// Paired, or the link reached Welcome. Seq tracking resets ONLY on a new epoch: a
 // same-epoch re-join (leader recovering a degraded member, no reboot) must
 // keep rejecting delayed retries of old renders — the leader mints fresh,
 // higher seqs, so its post-rejoin re-send still applies.
@@ -85,7 +84,7 @@ inline bool clusterFollowerContact(ClusterFollowerState& st, uint32_t nowMs) {
   return true;
 }
 
-// POST /cluster/render acceptance. Duplicates still feed the grace timer.
+// A text from the master. Duplicates still feed the grace timer.
 inline ClusterRenderVerdict clusterFollowerAcceptRender(
     ClusterFollowerState& st, uint32_t nowMs, uint32_t epoch, uint32_t seq) {
   if (st.phase == ClusterFollowerPhase::Standalone) {
@@ -101,7 +100,7 @@ inline ClusterRenderVerdict clusterFollowerAcceptRender(
   return ClusterRenderVerdict::Apply;
 }
 
-// POST /cluster/leave (or local uncluster): back to Standalone.
+// Released by the master: back to Standalone.
 inline void clusterFollowerLeave(ClusterFollowerState& st) {
   st = ClusterFollowerState{};
 }
@@ -156,7 +155,7 @@ inline uint32_t clusterRenderDelayMs(uint64_t commitAtMs, uint64_t nowEpochMs,
   return (uint32_t)delay;
 }
 
-// /cluster/health state vocabulary. The tree names its own LeaderLost
+// The phase's name in logs and status. The tree names its own LeaderLost
 // behaviour ("local-fallback" on an S3, "blank" on an ESP-01 row).
 inline const char* clusterFollowerPhaseName(ClusterFollowerPhase p,
                                             const char* leaderLostName) {
