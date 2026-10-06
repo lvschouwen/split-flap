@@ -87,7 +87,7 @@ void webSystemRegister(AsyncWebServer& server) {
   // "<path>/..." request, and the first registered handler wins — in the
   // other order this one answers /log/flash with the RAM ring
   // (tests/test_route_shadowing.py).
-  server.on("/log", HTTP_GET, [](AsyncWebServerRequest* request) {
+  server.on(AsyncURIMatcher::exact("/log"), HTTP_GET, [](AsyncWebServerRequest* request) {
     // Don't SerialPrintln here; every log request would otherwise stamp
     // itself into the buffer on every poll and drown out real activity.
     request->send(200, "text/plain", webLogRead());
@@ -268,7 +268,7 @@ void webSystemRegister(AsyncWebServer& server) {
 
   // Self-documenting route + terse-key legend index for the headless
   // (curl-only) operator (#307). Static data, heap-rendered per request.
-  server.on("/api", HTTP_GET, [](AsyncWebServerRequest* request) {
+  server.on(AsyncURIMatcher::exact("/api"), HTTP_GET, [](AsyncWebServerRequest* request) {
     std::unique_ptr<char[]> buf(new char[API_JSON_CAP]);
     size_t n = buildApiJson(buf.get(), API_JSON_CAP);
     if (n == 0 || n >= API_JSON_CAP) {

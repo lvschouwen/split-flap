@@ -25,7 +25,10 @@ PROJECT = Path(__file__).resolve().parent.parent
 
 METHOD_MAP = {"HTTP_GET": "GET", "HTTP_POST": "POST"}
 
-ROUTE_RE = re.compile(r'server\.on\(\s*"([^"]+)"\s*,\s*(HTTP_GET|HTTP_POST)')
+ROUTE_RE = re.compile(
+    r'server\.on\(\s*(?:AsyncURIMatcher::exact\()?"([^"]+)"\)?\s*,\s*(HTTP_GET|HTTP_POST)')
+# A route registered as a plain string also answers every path below it.
+PREFIX_ROUTE_RE = re.compile(r'server\.on\(\s*"([^"]+)"\s*,\s*(HTTP_GET|HTTP_POST)')
 SSE_RE = re.compile(r'AsyncEventSource\s+\w+\(\s*"([^"]+)"\s*\)')
 # A route with a JSON body is its own handler object, always a POST.
 JSON_RE = re.compile(r'new\s+AsyncCallbackJsonWebHandler\(\s*"([^"]+)"')
@@ -111,3 +114,20 @@ def test_sse_stream_is_recognised():
     ever breaks, test_index_declares_no_phantom_routes would fail for a
     bogus reason, so pin it directly."""
     assert ("GET", "/events") in registered_routes()
+
+
+def test_no_route_swallows_the_routes_below_it():
+    """`server.on("/api", ...)` also answers /api/v2/wall, whichever handler
+    is registered first. A path with served routes below it must be
+    registered with AsyncURIMatcher::exact."""
+    prefix_routes = set()
+    for src in sorted(PROJECT.glob("Web*.cpp")):
+        for path, method in PREFIX_ROUTE_RE.findall(src.read_text()):
+            prefix_routes.add((METHOD_MAP[method], path))
+    swallowed = sorted(
+        (method, path, other)
+        for method, path in prefix_routes if path != "/"
+        for other_method, other in registered_routes()
+        if other_method == method and other.startswith(path + "/")
+    )
+    assert not swallowed, f"(method, route, route it swallows): {swallowed}"
