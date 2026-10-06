@@ -93,6 +93,19 @@ static void test_what_makes_a_table_unsound() {
                            verdict("row-a|8.8.8.8|0|0|5"));
   TEST_ASSERT_EQUAL_STRING("A row's address is not on the local network",
                            verdict("row-a||0|0|5"));
+  // The address is compared with where a connection comes from: only one way
+  // of writing it is taken, and never a name.
+  for (const char* host : {"row-a.local", "localhost", "192.168.001.050", "192.168.1.50.", "192.168.1",
+                           "192.168.1.256", " 192.168.1.50", "0xC0.168.1.50"}) {
+    WallRowsTable t;
+    strcpy(t.rows[0].id, "row-a");
+    strcpy(t.rows[0].host, host);
+    t.rows[0].width = 5;
+    t.count = 1;
+    ClusterGrid grid;
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("A row's address is not on the local network",
+                                     wallRowsValidate(t, grid).message, host);
+  }
   TEST_ASSERT_EQUAL_STRING("The master's own row has no address",
                            verdict("|192.168.1.50|0|0|5"));
   TEST_ASSERT_EQUAL_STRING("Members overlap",
@@ -113,6 +126,93 @@ static void test_the_layout_table_keeps_order_and_marks_only_the_own_row_as_self
   TEST_ASSERT_EQUAL(16, m.members[1].width);
 }
 
+// ---- pairing a row into the table ------------------------------------------------
+
+static WallRowPlace anywhere() { return WallRowPlace{}; }
+
+static void test_the_first_row_paired_brings_the_masters_own_row_with_it() {
+  WallRowsTable out;
+  ClusterVerdict v = wallRowsWithPaired(parsed(""), "row-a", "192.168.1.50", 5, anywhere(), 16, out);
+  TEST_ASSERT_TRUE_MESSAGE(v.ok, v.message);
+  TEST_ASSERT_EQUAL_STRING("||0|0|16;row-a|192.168.1.50|1|0|5", wallRowsToString(out).c_str());
+}
+
+static void test_a_master_without_units_gets_no_row_of_its_own() {
+  WallRowsTable out;
+  TEST_ASSERT_TRUE(wallRowsWithPaired(parsed(""), "row-a", "192.168.1.50", 5, anywhere(), 0, out).ok);
+  TEST_ASSERT_EQUAL_STRING("row-a|192.168.1.50|0|0|5", wallRowsToString(out).c_str());
+}
+
+static void test_the_next_row_goes_below_the_last() {
+  WallRowsTable out;
+  TEST_ASSERT_TRUE(wallRowsWithPaired(parsed("||0|0|16;row-a|192.168.1.50|1|0|5"), "row-b",
+                                      "192.168.1.51", 8, anywhere(), 16, out).ok);
+  TEST_ASSERT_EQUAL_STRING("||0|0|16;row-a|192.168.1.50|1|0|5;row-b|192.168.1.51|2|0|8",
+                           wallRowsToString(out).c_str());
+}
+
+static void test_a_place_can_be_named() {
+  WallRowsTable out;
+  WallRowPlace place;
+  place.row = 0;
+  place.col = 18;
+  place.width = 4;
+  TEST_ASSERT_TRUE(wallRowsWithPaired(parsed("||0|0|16"), "row-a", "192.168.1.50", 5, place, 16, out).ok);
+  TEST_ASSERT_EQUAL_STRING("||0|0|16;row-a|192.168.1.50|0|18|4", wallRowsToString(out).c_str());
+}
+
+// Pairing a row that is already in the table (its address moved, or the
+// operator pairs it again) keeps its place and takes the new address.
+static void test_pairing_a_known_row_again_keeps_its_place() {
+  WallRowsTable out;
+  TEST_ASSERT_TRUE(wallRowsWithPaired(parsed("||0|0|16;row-a|192.168.1.50|1|3|5"), "row-a",
+                                      "192.168.1.77", 5, anywhere(), 16, out).ok);
+  TEST_ASSERT_EQUAL_STRING("||0|0|16;row-a|192.168.1.77|1|3|5", wallRowsToString(out).c_str());
+}
+
+static void test_a_pairing_that_makes_the_table_unsound_is_refused_whole() {
+  WallRowsTable out;
+  WallRowPlace place;
+  place.row = 0;
+  place.col = 8;  // into the master's own 16
+  TEST_ASSERT_EQUAL_STRING("Members overlap",
+                           wallRowsWithPaired(parsed("||0|0|16"), "row-a", "192.168.1.50", 5, place,
+                                              16, out).message);
+  TEST_ASSERT_EQUAL_STRING("A row without units has no place on the wall",
+                           wallRowsWithPaired(parsed("||0|0|16"), "row-a", "192.168.1.50", 0,
+                                              anywhere(), 16, out).message);
+  WallRowsTable full = parsed(
+      "||0|0|1;b|10.0.0.2|1|0|1;c|10.0.0.3|2|0|1;d|10.0.0.4|3|0|1;e|10.0.0.5|4|0|1;"
+      "f|10.0.0.6|5|0|1;g|10.0.0.7|6|0|1;h|10.0.0.8|7|0|1");
+  TEST_ASSERT_EQUAL_STRING("A Split-Flap has at most 8 boards",
+                           wallRowsWithPaired(full, "row-a", "192.168.1.50", 5, anywhere(), 1, out)
+                               .message);
+}
+
+// ---- letting a row go --------------------------------------------------------------
+
+static void test_a_released_row_leaves_and_the_last_one_leaves_a_master_on_its_own() {
+  WallRowsTable out;
+  TEST_ASSERT_TRUE(wallRowsWithout(parsed("||0|0|16;row-a|192.168.1.50|1|0|5;row-b|192.168.1.51|2|0|5"),
+                                   "row-b", out).ok);
+  TEST_ASSERT_EQUAL_STRING("||0|0|16;row-a|192.168.1.50|1|0|5", wallRowsToString(out).c_str());
+  TEST_ASSERT_TRUE(wallRowsWithout(out, "row-a", out).ok);
+  TEST_ASSERT_EQUAL_STRING("", wallRowsToString(out).c_str());
+}
+
+// A grid row left empty closes up: the rows below it move up one.
+static void test_releasing_a_row_from_the_middle_moves_the_rows_below_it_up() {
+  WallRowsTable out;
+  TEST_ASSERT_TRUE(wallRowsWithout(
+      parsed("||0|0|16;row-a|192.168.1.50|1|0|5;row-b|192.168.1.51|2|0|5"), "row-a", out).ok);
+  TEST_ASSERT_EQUAL_STRING("||0|0|16;row-b|192.168.1.51|1|0|5", wallRowsToString(out).c_str());
+  // A neighbour on the same grid row keeps that row in place.
+  TEST_ASSERT_TRUE(wallRowsWithout(
+      parsed("||0|0|8;row-a|192.168.1.50|0|10|8;row-b|192.168.1.51|1|0|5"), "row-a", out).ok);
+  TEST_ASSERT_EQUAL_STRING("||0|0|8;row-b|192.168.1.51|1|0|5", wallRowsToString(out).c_str());
+  TEST_ASSERT_EQUAL_STRING("No such row", wallRowsWithout(parsed("||0|0|16"), "row-x", out).message);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_an_empty_string_is_a_master_on_its_own);
@@ -123,5 +223,13 @@ int main(int, char**) {
   RUN_TEST(test_boards_side_by_side_on_one_grid_row_are_allowed);
   RUN_TEST(test_what_makes_a_table_unsound);
   RUN_TEST(test_the_layout_table_keeps_order_and_marks_only_the_own_row_as_self);
+  RUN_TEST(test_the_first_row_paired_brings_the_masters_own_row_with_it);
+  RUN_TEST(test_a_master_without_units_gets_no_row_of_its_own);
+  RUN_TEST(test_the_next_row_goes_below_the_last);
+  RUN_TEST(test_a_place_can_be_named);
+  RUN_TEST(test_pairing_a_known_row_again_keeps_its_place);
+  RUN_TEST(test_a_pairing_that_makes_the_table_unsound_is_refused_whole);
+  RUN_TEST(test_a_released_row_leaves_and_the_last_one_leaves_a_master_on_its_own);
+  RUN_TEST(test_releasing_a_row_from_the_middle_moves_the_rows_below_it_up);
   return UNITY_END();
 }

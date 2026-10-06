@@ -108,10 +108,12 @@ struct Hooks : WallLinkHooks {
   bool fromPairedAddress(int conn, int row) override {
     struct sockaddr_in peer = {};
     socklen_t len = sizeof(peer);
-    char address[16] = {0};
-    if (lwip_getpeername(sockets[conn].fd, (struct sockaddr*)&peer, &len) != 0) return false;
-    lwip_inet_ntop(AF_INET, &peer.sin_addr, address, sizeof(address));
-    return row >= 0 && row < rowsTable.count && strcmp(rowsTable.rows[row].host, address) == 0;
+    uint8_t paired[4];
+    if (row < 0 || row >= rowsTable.count || !wallRowHostParse(rowsTable.rows[row].host, paired) ||
+        lwip_getpeername(sockets[conn].fd, (struct sockaddr*)&peer, &len) != 0) {
+      return false;
+    }
+    return memcmp(&peer.sin_addr.s_addr, paired, sizeof(paired)) == 0;
   }
 
   void rowHello(int row, const wl_Hello& hello, bool restarted) override {
