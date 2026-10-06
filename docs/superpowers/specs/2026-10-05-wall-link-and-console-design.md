@@ -32,7 +32,7 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 
 ## 3. The link
 
-**Transport.** One TCP connection per row board, opened by the row board to the master, kept open. The master listens; it never dials a row. A dedicated `linkTask` on the master owns the listening socket and all row sockets (plain lwIP sockets with `select`), replacing `clusterTask`.
+**Transport.** One TCP connection per row board, opened by the row board to the master, kept open. The master listens; it never dials a row. A dedicated `linkTask` on the master owns the listening socket and all row sockets (plain lwIP sockets with `select`). It never blocks on the network: the pairing POST to a row board and the network liveness probes run on a separate worker task (what `clusterTask` was).
 
 **Finding the master.** The row board stores the master's id and address at pairing and dials that address. A master whose address moved posts its pairing again from the new one (see Pairing); the row takes it once the old address has been silent for 25 s. A lookup of the id over mDNS (`_splitflap._tcp`) on the row is not built: the re-pair covers a DHCP move without it.
 
@@ -125,7 +125,7 @@ On a branch until bench-proven (it must not land half-built), one stage commit r
 6. Web UI.
 7. Old routes and page deleted. Release `— BREAKING`.
 
-**Moving the installed wall** (once, at the end of step 3): store the new row image on the old master and let the present rollout install it; the row then shows its fallback. OTA the master. Pair the row with the `pair` action (by curl until the new page has Wall settings). If the new row image fails, it is replaced by a direct upload to the row's `POST /firmware`, which works in normal and in rescue mode and needs no master.
+**Moving the installed wall** (once, at the end of step 3): store the new row image on the old master and let the present rollout install it; the row then shows its fallback. OTA the master. Pair the row with the `pair` action (by curl until the new page has Wall settings). If the new row image fails, it is replaced by a direct upload to the row's `POST /firmware/master`, which works in normal and in rescue mode and needs no master.
 
 ## 8. Kept on purpose
 
