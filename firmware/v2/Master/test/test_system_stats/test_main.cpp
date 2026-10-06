@@ -112,7 +112,6 @@ static void test_json_now_and_history_shape() {
   size_t n = buildSystemStatsJson(buf, sizeof(buf), smp, now);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"rssi\":-60"));         // now = latest
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"cluster\":3300,\"link\":5100}"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"heap\":200000"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"maxAlloc\":100000"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"psram\":8000000"));
@@ -127,7 +126,7 @@ static void test_json_now_and_history_shape() {
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"reset\":\"POWERON\""));
   TEST_ASSERT_NOT_NULL(strstr(
       buf, "\"hwm\":{\"display\":9000,\"clock\":1200,\"net\":2100,"
-           "\"mqtt\":1800,\"cluster\":3300}"));
+           "\"mqtt\":1800,\"cluster\":3300,\"link\":5100}"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"rssi\":[-55,-60]"));   // hist oldest-first
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"cpu0\":[12,15]"));
   TEST_ASSERT_NOT_NULL(strstr(buf, "\"cpu1\":[99,99]"));
