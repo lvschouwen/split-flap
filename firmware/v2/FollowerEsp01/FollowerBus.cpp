@@ -709,24 +709,10 @@ struct FlashWatch {
 };
 }  // namespace
 
-// Flashes the bundled image to one unit (shared unitFlashImage: size guard →
-// liveness → chip check → pages → exit → sketch wait → restart). A target
-// still in its sketch is sent into twiboot first. On failure `flashError`
-// says why.
+// Flashes the bundled image to one unit that sits in twiboot (shared
+// unitFlashImage: size guard → liveness → chip check → pages → exit → sketch
+// wait → restart). On failure `flashError` says why.
 static bool flashUnitSteps(uint8_t i2cAddress) {
-  // Before the unit is sent anywhere: an image that cannot be flashed must
-  // not cost it a trip through its bootloader.
-  if (!twibootImageFits(UNIT_FIRMWARE_BIN_LEN)) {
-    flashError = F("image too large — would overwrite twiboot");
-    return false;
-  }
-  if (!isUnitInBootloader((int)i2cAddress)) {
-    if (busRebootToBootloader(i2cAddress) != 0) {
-      flashError = F("unit did not ack enter-bootloader");
-      return false;
-    }
-    delay(TWIBOOT_STARTUP_MS);
-  }
   FlashWatch watch;
   UnitFlashReport report = unitFlashImage(
       unitBus, i2cAddress, UNIT_FIRMWARE_BIN_LEN,
@@ -835,6 +821,19 @@ void followerBootHome() {
 namespace {
 struct ReflashLoopHooks {
   bool stopRequested() { return false; }
+  bool imageFits() { return twibootImageFits(UNIT_FIRMWARE_BIN_LEN); }
+  bool inBootloader(uint8_t addr) { return isUnitInBootloader(addr); }
+  int enterBootloader(uint8_t addr) {
+    int status = busRebootToBootloader(addr);
+    if (status == 0) busInvalidateUnitReads(addr);
+    return status;
+  }
+  void pause(uint32_t ms) { delay(ms); }
+  void unitNotEntered(uint8_t addr) {
+    SerialPrint(F("Unit "));
+    SerialPrint(addr);
+    SerialPrintln(F(": not in its bootloader — not flashed"));
+  }
   ReflashUnitOutcome flashUnit(uint8_t addr) {
     return flashUnitFromProgmem(addr) ? ReflashUnitOutcome::Flashed
                                       : ReflashUnitOutcome::Failed;
@@ -898,28 +897,33 @@ static bool flashBootloaderUnits(const uint8_t* targets, int count) {
   return halted;
 }
 
-void busAutoInstallBootloaderUnits() {
+// The boot passes: the units already in twiboot, plus `sweep` (sketch units
+// to bring up to date). Each unit enters its bootloader in the flash loop.
 #if SERIAL_ENABLE == false
+static void runBootFlash(const uint8_t* sweep, int sweepCount) {
   uint8_t targets[UNITS_AMOUNT];
-  int n = reflashCollectFlashTargets(unitFacts, UNITS_AMOUNT,
-                                     SFP_I2C_ADDRESS_BASE, targets);
+  int n = reflashPlanTargets(unitFacts, UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE,
+                             sweep, sweepCount, targets);
   if (n == 0) return;
   reflashProgressBegin(reflashProgress, n);
   bool halted = flashBootloaderUnits(targets, n);
   reflashProgressFinish(reflashProgress, false, halted);
+}
+#endif
+
+void busAutoInstallBootloaderUnits() {
+#if SERIAL_ENABLE == false
+  runBootFlash(nullptr, 0);
 #endif
 }
 
 void busAutoUpdateOutdatedUnits() {
 #if SERIAL_ENABLE == false
-  uint8_t targets[UNITS_AMOUNT];
+  uint8_t outdated[UNITS_AMOUNT];
   int n = reflashCollectOutdatedTargets(unitFacts, UNITS_AMOUNT,
-                                        SFP_I2C_ADDRESS_BASE, targets);
+                                        SFP_I2C_ADDRESS_BASE, outdated);
   if (n == 0) return;
-  for (int k = 0; k < n; k++) busRebootToBootloader(targets[k]);
-  delay(TWIBOOT_STARTUP_MS);
-  busProbe();  // reflash-internal probe: pinned units are flashed right away
-  busAutoInstallBootloaderUnits();
+  runBootFlash(outdated, n);
 #endif
 }
 
@@ -939,7 +943,7 @@ void busRunReflashJob(uint8_t onlyAddr, bool force) {
   // The gate closes here and reopens at the single Finish below: every wait
   // in between yields to the web handlers, and a firmware upload let in
   // halfway would restart a row that has units in twiboot.
-  reflashProgressBegin(reflashProgress, 0);  // total known after the rescan
+  reflashProgressBegin(reflashProgress, 0);  // total known once planned
   // Let the row finish what it was doing before the first unit leaves for
   // its bootloader. Idle, not homed — a home is a full turn per unit and
   // nothing here needs one (UnitUpdateJob.h).
@@ -952,20 +956,18 @@ void busRunReflashJob(uint8_t onlyAddr, bool force) {
       SerialPrintln(F("reflash: row still moving after the quiet wait"));
     }
   }
-  uint8_t targets[UNITS_AMOUNT];
-  int rebooted =
+  // The flash list: the sweep's sketch units and whoever already sits in
+  // twiboot. The loop sends each unit into its bootloader right before its
+  // own pages (reflashEnterUnit).
+  uint8_t sweep[UNITS_AMOUNT];
+  int sweepCount =
       force ? reflashCollectForcedTarget(unitFacts, UNITS_AMOUNT,
-                                         SFP_I2C_ADDRESS_BASE, onlyAddr,
-                                         targets)
+                                         SFP_I2C_ADDRESS_BASE, onlyAddr, sweep)
             : reflashCollectRebootTargets(unitFacts, UNITS_AMOUNT,
-                                          SFP_I2C_ADDRESS_BASE, targets);
-  rebooted = reflashFilterToAddress(targets, rebooted, onlyAddr);
-  for (int k = 0; k < rebooted; k++) busRebootToBootloader(targets[k]);
-  if (rebooted > 0) delay(TWIBOOT_STARTUP_MS);
-  busProbe();  // reflash-internal probe (#205 exception to the inhibit)
+                                          SFP_I2C_ADDRESS_BASE, sweep);
   uint8_t flashTargets[UNITS_AMOUNT];
-  int n = reflashCollectFlashTargets(unitFacts, UNITS_AMOUNT,
-                                     SFP_I2C_ADDRESS_BASE, flashTargets);
+  int n = reflashPlanTargets(unitFacts, UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE,
+                             sweep, sweepCount, flashTargets);
   n = reflashFilterToAddress(flashTargets, n, onlyAddr);
   reflashProgress.total = (uint8_t)n;
   bool halted = flashBootloaderUnits(flashTargets, n);

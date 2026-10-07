@@ -118,8 +118,8 @@ MaintGrade busLastReflashGrade();
 void busRunBootDump(uint32_t seq, uint8_t addr,
                     BootDumpSlot& slot, uint8_t* outBytes);
 
-// The full bundled-hex reflash job (v1 #138 flow: enter-bootloader sweep,
-// throttled PROGMEM flash, batch settle). Blocking for many seconds —
+// The full bundled-hex reflash job (each unit into its bootloader for its
+// own flash, throttled PROGMEM flash, batch settle). Blocking for many seconds —
 // loop() only; progress lands in reflashProgress.
 // onlyAddr 0 = every unit that needs it; otherwise exactly that unit (#513).
 // force: reflash `onlyAddr` even when it reports the bundled rev; ignored

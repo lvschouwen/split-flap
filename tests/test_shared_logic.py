@@ -109,6 +109,22 @@ def test_both_reflash_jobs_run_the_shared_loop():
         assert "reflashShouldHalt(" not in body, path.name
 
 
+def test_a_unit_enters_its_bootloader_for_its_own_flash_only():
+    """The bootloader goes back to the firmware when it is left alone, so a
+    row sent in up front loses the units whose turn comes late (#577)."""
+    loop = _strip_comments((SHARED / "ReflashPlan.h").read_text())
+    run = loop[loop.index("inline ReflashRunEnd reflashRunTargets("):]
+    assert run.index("reflashEnterUnit(h, addr)") < run.index("h.flashUnit(addr)")
+    for path in (V2 / "Master/DisplayTask.cpp",
+                 V2 / "FollowerEsp01/FollowerBus.cpp"):
+        body = _strip_comments(path.read_text())
+        assert "reflashPlanTargets(" in body, path.name
+        # The one order a flash job sends is the loop's hook.
+        swept = re.findall(r"for\s*\([^)]*\)[^;{]*\{?[^;]*RebootToBootloader\(",
+                           body)
+        assert not swept, f"{path.name}: units sent in ahead of their flash"
+
+
 # --- #529/#530: self-test wait, op grading, fact patches ---------------------
 
 def test_no_tree_grades_an_op_outcome_by_hand():
