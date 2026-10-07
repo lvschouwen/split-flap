@@ -18,9 +18,14 @@ MODULES = [
     "model/format.js",
     "model/verdict.js",
     "model/wall.js",
+    "model/board.js",
+    "model/unit.js",
     "app/dom.js",
     "app/api.js",
+    "app/jobs.js",
     "app/view_wall.js",
+    "app/view_board.js",
+    "app/view_unit.js",
     "app/main.js",
 ]
 

@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import { ALPHABET } from '../gen/constants.js';
 import { dur, volt, listOf, flapName, plural } from '../model/format.js';
 import { unitVerdictText, boardVerdictText, wallVerdictText, letterClass } from '../model/verdict.js';
+import { boardUnits, tileLines, supplyBars, sparkPoints, boardFacts, startMarks } from '../model/board.js';
+import { showsText, unitFacts, correctedOffset, selfTestText } from '../model/unit.js';
 import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId, noFlapFor,
          composeLines, composeText } from '../model/wall.js';
 
@@ -164,4 +166,130 @@ test('the text sent is a line a row, without empty lines at the end', () => {
   assert.equal(composeText(['', 'DINNER']), '\nDINNER');
   assert.equal(composeText(['HELLO', ' ']), 'HELLO');
   assert.equal(composeText(['', '']), '');
+});
+
+test('a tile says what the unit shows, or why it cannot', () => {
+  const [working, , , silent] = boardUnits({ units: { fields: FIELDS, rows: [
+    unitRow(1, 'working', 'working'), unitRow(2, 'note', 'jammed'), unitRow(3, 'fault', 'hall-never'),
+    [4, 'fault', 'not-answering', 9, 9, 'running', null, null, null, null, null, null, 7, null]] } });
+  assert.deepEqual(tileLines(working, ALPHABET), ['shows blank', '5.00 V']);
+  assert.deepEqual(tileLines({ ...working, shows: 1 }, ALPHABET), ['shows A', '5.00 V']);
+  assert.deepEqual(tileLines({ ...working, shows: null }, ALPHABET), ['flap unknown', '5.00 V']);
+  assert.deepEqual(tileLines(silent, ALPHABET), ['no reply']);
+  assert.deepEqual(tileLines({ ...working, state: 'bootloader' }, ALPHABET), ['in bootloader', '5.00 V']);
+});
+
+test('the supply chart marks the weakest unit and never draws an empty bar', () => {
+  const units = [{ address: 1, supplyMinMv: 5300 }, { address: 2, supplyMinMv: 4650 },
+                 { address: 3, supplyMinMv: 3900 }, { address: 4, supplyMinMv: null }];
+  const chart = supplyBars(units);
+  assert.equal(chart.lowestMv, 3900);
+  assert.deepEqual(chart.bars.map((b) => [b.address, b.percent, b.lowest]),
+                   [[1, 100, false], [2, 50, false], [3, 6, true]]);
+  assert.deepEqual(supplyBars([]), { lowestMv: null, bars: [] });
+});
+
+test('a history ring becomes a line from left to right', () => {
+  assert.equal(sparkPoints([0, 10], 300, 40), '0.0,36.0 300.0,4.0');
+  assert.equal(sparkPoints([5, 5, 5], 300, 40), '0.0,36.0 150.0,36.0 300.0,36.0');
+  assert.equal(sparkPoints([1], 300, 40), '');
+});
+
+test('the facts of the master and of a row board answer the same four questions', () => {
+  const master = boardFacts({ kind: 'master', address: '10.0.0.2', rev: 'aaa1111', mqttConnected: true,
+    stats: { now: { rssi: -52, txPower: 20, heap: 61440, minHeap: 36864, temp: 316, uptime: 5620,
+                    i2cTx: 13780, i2cErr: 0, ntpAge: 5611 } },
+    network: { gw: 'ok', self: 'fail' }, lastStart: { reset: 'Software reset', cause: 'asked for' },
+    rescue: { rev: 'bbb2222', state: 'stale', warn: false } }, [{ address: 1, supplyMinMv: 4850 }]);
+  assert.deepEqual(master.map((g) => g.title), ['Connection', 'Unit bus', 'Running', 'Firmware']);
+  const find = (groups, label) => groups.flatMap((g) => g.rows).find((r) => r[0] === label);
+  assert.deepEqual(find(master, 'Transmit power'), ['Transmit power', '5 dBm']);
+  assert.deepEqual(find(master, 'Own web server answers'), ['Own web server answers', 'no']);
+  assert.deepEqual(find(master, 'Exchanges since start'), ['Exchanges since start', '13,780']);
+  assert.deepEqual(find(master, 'Chip temperature'), ['Chip temperature', '31.6 °C']);
+  assert.deepEqual(find(master, 'Last start'), ['Last start', 'Software reset', 'asked for']);
+  assert.deepEqual(find(master, 'Lowest unit supply'), ['Lowest unit supply', '4.85 V']);
+
+  const row = boardFacts({ kind: 'row', pairedAt: '10.0.0.3', reach: 'up', heardMsAgo: 1400, rev: 'aaa1111',
+    rescue: false, connects: 2, restarts: 1, lastLateMs: 0, worstLateMs: 12, updateAttempts: 0,
+    status: { uptimeS: 5223, heap: 35000, heapMin: 32120, rssi: -57, txPowerDbm: 2, busTx: 12326,
+              busErrors: 11514, busDead: true, busEpisodes: 6, escalations: 1, imageSize: 460752,
+              timeSynced: true } }, []);
+  assert.deepEqual(row.map((g) => g.title), ['Connection', 'Unit bus', 'Running', 'Firmware']);
+  assert.deepEqual(find(row, 'Address'), ['Address', '10.0.0.3']);
+  assert.deepEqual(find(row, 'Dead now'), ['Dead now', 'yes']);
+  assert.deepEqual(find(row, 'Row flips late by'), ['Row flips late by', '0 ms', 'Worst since it connected: 12 ms.']);
+  assert.equal(find(row, 'Lowest unit supply'), undefined);
+});
+
+test('a fact the board did not give is left out, not shown as zero', () => {
+  const groups = boardFacts({ kind: 'row' }, []);
+  assert.deepEqual(groups.flatMap((g) => g.rows), []);
+});
+
+test('starts are marked by whether the power was cut', () => {
+  assert.deepEqual(startMarks({ starts: [{ reset: 'Software reset', stage: 'online' },
+                                         { reset: 'Power on', stage: 'online' },
+                                         { reset: 'Panic', stage: 'wifi' }] }),
+    [{ cls: '', title: 'Software reset' }, { cls: 'pwr', title: 'Power on' },
+     { cls: 'odd', title: 'Panic, reached wifi' }]);
+});
+
+test('what a unit shows is said against what it was sent to', () => {
+  const unit = { state: 'running', drum: { shows: 30, commanded: 30, wrongLetter: false } };
+  assert.equal(showsText(unit, ALPHABET), 'Shows 0, as it should.');
+  assert.equal(showsText({ state: 'running', drum: { shows: 0, commanded: 30, wrongLetter: true } }, ALPHABET),
+               'Shows blank; it was sent to 0.');
+  assert.equal(showsText({ state: 'running', drum: {} }, ALPHABET), 'Where its drum stands is not known.');
+  assert.match(showsText({ state: 'silent', drum: { shows: 3 } }, ALPHABET), /not running/);
+});
+
+test('a unit that was read for nothing has no groups, one read in full has four', () => {
+  assert.deepEqual(unitFacts({ state: 'silent', firmware: {}, power: {}, link: {}, drum: {}, bootloader: {} }), []);
+  const groups = unitFacts({
+    addressStored: false,
+    firmware: { rev: 'd360e2b', status: 'current', uptimeS: 182333, protocol: 1, protocolSupported: true },
+    power: { brownouts: 2, watchdogResets: 1, lastStart: 'requested', restartedWhileWatched: false,
+             supplyMv: 5091, supplyMinMv: 5091, freeRamMin: 1490 },
+    link: { badCommands: 87, received: 29696, answered: 41254, heardMsAgo: 38222, missed: 0, failed: 0 },
+    drum: { home: 'not-homed', homeSteps: 256, homeFailures: 0, slips: 0, jammed: true, turns: 1092, offset: 70,
+            selfTest: { firstHallWindow: 38, lastHallWindow: 35, firstStepsPerTurn: 2057, lastStepsPerTurn: 2050 } },
+    bootloader: { verdict: 'ok' } });
+  assert.deepEqual(groups.map((g) => g.title), ['Power', 'Link to its board', 'Drum', 'Firmware']);
+  const find = (label) => groups.flatMap((g) => g.rows).find((r) => r[0] === label);
+  assert.deepEqual(find('Unit firmware'), ['Unit firmware', 'd360e2b (current)']);
+  assert.deepEqual(find('Home'), ['Home', 'not homed', 'The last search took 256 steps.']);
+  assert.deepEqual(find('Turns of the drum, lifetime'), ['Turns of the drum, lifetime', '1,092']);
+  assert.deepEqual(find('Last move stalled'), ['Last move stalled', 'yes']);
+  assert.deepEqual(find('Slipped and corrected itself'), ['Slipped and corrected itself', 0, null]);
+  assert.deepEqual(find('Address kept in its memory'),
+                   ['Address kept in its memory', 'no', 'It takes its address from its switches.']);
+});
+
+test('a flap too far is corrected by stopping a flap of steps earlier', () => {
+  // 2038 steps a turn, 45 flaps: 45.3 steps a flap.
+  assert.deepEqual(correctedOffset(70, 1, 2, 45, 2038, 2038), { offset: 25 });
+  assert.deepEqual(correctedOffset(70, 2, 1, 45, 2038, 2038), { offset: 115 });
+  assert.deepEqual(correctedOffset(70, 5, 5, 45, 2038, 2038), { offset: 70 });
+});
+
+test('the correction goes the shorter way round the drum', () => {
+  // Should show the last flap, shows the blank one: one flap too far, not 44 short.
+  assert.deepEqual(correctedOffset(0, 44, 0, 45, 2038, 2038), { offset: -45 });
+  assert.deepEqual(correctedOffset(0, 0, 44, 45, 2038, 2038), { offset: 45 });
+});
+
+test('a correction past what a unit accepts is refused in words', () => {
+  // 22 flaps too far is 996 steps earlier.
+  assert.deepEqual(correctedOffset(1900, 0, 22, 45, 2038, 2038), { offset: 904 });
+  assert.deepEqual(correctedOffset(-1900, 0, 22, 45, 2038, 2038),
+    { error: 'That needs an offset of -2896 steps; a unit takes -2038 to 2038.' });
+});
+
+test('a self-test result reads as a sentence', () => {
+  assert.equal(selfTestText({ state: 'ok', steps_per_rev: 2050, hall_window: 49, rev_time_ms: 6039 }),
+    'Self-test passed: 2050 steps a turn, home sensor 49 steps wide, 6.0 s a turn.');
+  assert.equal(selfTestText({ state: 'failed', reason: 'timeout', unit_reason: 'no-hall' }),
+    'The self-test failed: no-hall.');
+  assert.equal(selfTestText(undefined), 'The self-test failed.');
 });

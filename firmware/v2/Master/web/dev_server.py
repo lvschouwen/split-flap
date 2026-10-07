@@ -4,7 +4,9 @@
 For working on the page without flashing: the page is rebuilt on every load,
 its requests go to the real master.
 
-    python3 web/dev_server.py 192.168.15.88 [--port 8088] [--read-only]
+    python3 web/dev_server.py 192.168.15.88 [--port 8088] [--read-only] [--minutes 120]
+
+It stops by itself after --minutes, so a forgotten one does not stay open.
 
 The master takes changing requests from its own page only, so this server
 applies that rule in its place before passing a request on without its
@@ -15,8 +17,10 @@ changing request.
 """
 import argparse
 import http.client
+import importlib
 import pathlib
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PROJECT = pathlib.Path(__file__).resolve().parent.parent
@@ -48,6 +52,8 @@ def handler(master, read_only, port):
 
         def page(self):
             try:
+                # The module list is part of what is being worked on.
+                importlib.reload(web_bundle)
                 body = web_bundle.build_page(PROJECT)
                 status = 200
             except ValueError as error:
@@ -106,9 +112,13 @@ def main():
     ap.add_argument("master", help="the master's address")
     ap.add_argument("--port", type=int, default=8088)
     ap.add_argument("--read-only", action="store_true")
+    ap.add_argument("--minutes", type=float, default=120, help="stop after this long")
     args = ap.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler(args.master, args.read_only, args.port))
     print(f"http://127.0.0.1:{args.port}/ -> {args.master}")
+    stop = threading.Timer(args.minutes * 60, server.shutdown)
+    stop.daemon = True
+    stop.start()
     server.serve_forever()
 
 

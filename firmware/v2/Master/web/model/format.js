@@ -32,3 +32,11 @@ export function flapName(alphabet, place) {
   if (ch === undefined) return '?';
   return ch === ' ' ? 'blank' : ch;
 }
+
+export function count(n) {
+  return Number(n).toLocaleString('en');
+}
+
+export function yesNo(flag) {
+  return flag ? 'yes' : 'no';
+}

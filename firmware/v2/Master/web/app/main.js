@@ -2,20 +2,25 @@
 import { h, fill, pill } from './dom.js';
 import { getJson, followStream } from './api.js';
 import { wallView } from './view_wall.js';
+import { boardView } from './view_board.js';
+import { unitView } from './view_unit.js';
+import { jobsChanged } from './jobs.js';
 import { boardId } from '../model/wall.js';
 
 const app = {
   // wall: GET /api/v2/wall. boards: id -> GET /api/v2/board/<id>, for those read.
   // show: the stream's "wall" topic (mode, quiet, every row's text).
-  state: { wall: null, boards: {}, show: null, link: true },
+  // jobs: the stream's "jobs" topic, the job table.
+  state: { wall: null, boards: {}, show: null, jobs: [], link: true },
   view: null,
 };
 
-const VIEWS = { wall: wallView };
+const VIEWS = { wall: wallView, board: boardView, unit: unitView };
 
 function route() {
   const parts = (location.hash || '#wall').slice(1).split('/').map(decodeURIComponent);
   const make = VIEWS[parts[0]] || VIEWS.wall;
+  if (app.view && app.view.leave) app.view.leave();
   app.view = make(app, ...parts.slice(1));
   fill(document.getElementById('view'), app.view.root);
   for (const link of document.querySelectorAll('#nav a')) {
@@ -75,6 +80,13 @@ readWall();
 followStream((topic, data) => {
   if (topic === 'wall') app.state.show = data;
   if (topic === 'wall' || topic === 'verdict') readWall();
+  if (topic === 'jobs') {
+    app.state.jobs = data;
+    jobsChanged(data);
+  }
+  // A view of one board or unit reads its document again when anything about
+  // the wall's verdicts or jobs moved.
+  if ((topic === 'verdict' || topic === 'jobs') && app.view && app.view.reread) app.view.reread();
 }, (up) => {
   app.state.link = up;
   refresh();
