@@ -95,3 +95,4 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:9px 12px
 th{font-size:13px;color:var(--muted);font-weight:600;border-top:0}
 .scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
 .rowwrap:empty{display:none}
+.log{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px;font:12px/1.45 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:70vh;overflow:auto}

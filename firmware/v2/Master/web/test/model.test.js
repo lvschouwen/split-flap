@@ -10,6 +10,7 @@ import { boardUnits, tileLines, supplyBars, sparkPoints, boardFacts, startMarks 
 import { showsText, unitFacts, correctedOffset, selfTestText } from '../model/unit.js';
 import { firmwareRows, firmwareVerdict, firmwareFile, installQuestion, firmwareJobs } from '../model/firmware.js';
 import { md5Hex } from '../model/md5.js';
+import { whenText, eventText, eventBoardId } from '../model/events.js';
 import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId, noFlapFor,
          composeLines, composeText } from '../model/wall.js';
 
@@ -369,4 +370,54 @@ test('the question before installing says what will happen', () => {
   assert.match(installQuestion(firmwareFile('firmware-9618d55-master.bin')), /^Install 9618d55 on the master\? It restarts/);
   assert.match(installQuestion(firmwareFile('follower-de38289-gz.bin')), /row boards/);
   assert.match(installQuestion(firmwareFile('rescue-f8da0fa.bin')), /not touched/);
+});
+
+test('when an entry was written is said as near as it needs to be', () => {
+  const now = new Date(2026, 9, 7, 21, 0);  // Wednesday 7 October 2026
+  const at = (...parts) => Math.floor(new Date(...parts).getTime() / 1000);
+  assert.equal(whenText(at(2026, 9, 7, 18, 5), now), 'Today 18:05');
+  assert.equal(whenText(at(2026, 9, 7, 0, 0), now), 'Today 00:00');
+  assert.equal(whenText(at(2026, 9, 6, 23, 59), now), 'Tue 23:59');
+  assert.equal(whenText(at(2026, 9, 1, 9, 30), now), 'Thu 09:30');
+  assert.equal(whenText(at(2026, 8, 30, 9, 30), now), '30 Sep 09:30');
+  assert.equal(whenText(undefined, now), 'no clock');
+});
+
+test('an entry of the record reads as what happened', () => {
+  const say = (event) => eventText(event, 'Row 1', ALPHABET);
+  assert.deepEqual(say({ kind: 'unit-reason-on', unit: 3, reason: 'not-answering', a: 21, b: 6 }),
+    { cls: 'note', title: 'Row 1, unit 3: not answering', why: 'No reply for 21 s, 6 reads missed.' });
+  assert.deepEqual(say({ kind: 'unit-reason-off', unit: 3, reason: 'not-answering', a: 0, b: 0 }),
+    { cls: 'ok', title: 'Row 1, unit 3: no longer “not answering”', why: '' });
+  assert.equal(say({ kind: 'board-reason-on', unit: 0, reason: 'bus-dead', a: 6, b: 0 }).title, 'Row 1: unit bus dead');
+  assert.equal(say({ kind: 'board-reason-off', unit: 0, reason: 'bus-dead' }).title, 'Row 1: no longer “unit bus dead”');
+  assert.deepEqual(say({ kind: 'job-failed', unit: 3, job: 'home' }), { cls: 'bad', title: 'Row 1, unit 3: home failed', why: '' });
+  assert.equal(say({ kind: 'job-done', unit: 0, job: 'home-all' }).title, 'Row 1: home-all done');
+  assert.deepEqual(say({ kind: 'unit-restarted', unit: 2, cause: 'brownout', a: 3, b: 1 }),
+    { cls: 'note', title: 'Row 1, unit 2: restarted (brownout)',
+      why: 'Over its lifetime: 3 restarts from low voltage, 1 watchdog reset.' });
+});
+
+test('a start names the firmware that started', () => {
+  assert.deepEqual(eventText({ kind: 'master-started', a: 0xebb6f64, detail: 3 }, 'The master', ALPHABET),
+    { cls: 'info', title: 'The master started', why: 'Firmware ebb6f64.' });
+  assert.equal(eventText({ kind: 'row-started', a: 0x0e38289, detail: 0 }, 'Row 1', ALPHABET).why, 'Firmware 0e38289.');
+  assert.equal(eventText({ kind: 'row-started', a: 1, detail: 1 }, 'Row 1', ALPHABET).title, 'Row 1: connected in rescue mode');
+});
+
+test('what a row board reports about itself is put in words, and a new code by its name', () => {
+  const say = (event) => eventText({ kind: 'row-event', unit: 0, ...event }, 'Row 1', ALPHABET);
+  assert.equal(say({ event: 'self-restart', a: 1, b: 2 }).why, 'Because its unit bus was dead; 2 times so far.');
+  assert.equal(say({ event: 'low-memory', a: 5120 }).why, 'Largest free block 5120 bytes.');
+  assert.equal(say({ event: 'started', b: 1 }).why, '1 start since its power came on.');
+  assert.equal(say({ event: '?' }).title, 'Row 1: ?');
+  assert.equal(eventText({ kind: 'brand-new', unit: 0 }, 'Row 1', ALPHABET).title, 'Row 1: brand-new');
+  assert.equal(eventText({ kind: 'events-dropped', a: 1 }, '', ALPHABET).title, '1 entry was lost');
+  assert.equal(eventText({ kind: 'events-dropped', a: 4 }, '', ALPHABET).title, '4 entries were lost');
+});
+
+test('the record names the master\u2019s own row "" and no board for the master itself', () => {
+  assert.equal(eventBoardId({ board: '' }, 'wall-master'), 'wall-master');
+  assert.equal(eventBoardId({ board: 'wall-row' }, 'wall-master'), 'wall-row');
+  assert.equal(eventBoardId({}, 'wall-master'), null);
 });

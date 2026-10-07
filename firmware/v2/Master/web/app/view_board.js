@@ -142,6 +142,8 @@ export function boardView(app, id) {
         'Update units'),
       h('button', { type: 'button', class: 'btn',
                     onclick: job('Restarting the board', 'restart', 'Restart this board?') }, 'Restart board'),
+      h('a', { class: 'btn quiet', href: '#history/' + id }, 'What happened on this board'),
+      h('a', { class: 'btn quiet', href: '#log/' + id }, 'Raw log'),
       busy && h('span', { class: 'muted small' }, 'A job is running on this row.'));
 
     if (board.kind === 'master' && board.settings && settingsFor !== id) {

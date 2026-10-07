@@ -5,6 +5,7 @@ import { wallView } from './view_wall.js';
 import { boardView } from './view_board.js';
 import { unitView } from './view_unit.js';
 import { firmwareView } from './view_firmware.js';
+import { historyView, logView } from './view_history.js';
 import { jobsChanged } from './jobs.js';
 import { boardId } from '../model/wall.js';
 
@@ -16,7 +17,8 @@ const app = {
   view: null,
 };
 
-const VIEWS = { wall: wallView, board: boardView, unit: unitView, firmware: firmwareView };
+const VIEWS = { wall: wallView, board: boardView, unit: unitView, firmware: firmwareView,
+                history: historyView, log: logView };
 
 function route() {
   const parts = (location.hash || '#wall').slice(1).split('/').map(decodeURIComponent);
@@ -88,6 +90,7 @@ followStream((topic, data) => {
   // A view of one board or unit reads its document again when anything about
   // the wall's verdicts or jobs moved.
   if ((topic === 'verdict' || topic === 'jobs') && app.view && app.view.reread) app.view.reread();
+  if (topic === 'history' && app.view && app.view.historyMoved) app.view.historyMoved();
 }, (up) => {
   app.state.link = up;
   refresh();
