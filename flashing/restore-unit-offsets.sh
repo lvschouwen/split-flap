@@ -47,6 +47,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -f "$JSON" ]] || { echo "missing $JSON" >&2; exit 1; }
+[[ -z "$ONLY_BOARD" ]] || wall_is_board "$ONLY_BOARD" || {
+  echo "--board is a board id: letters, digits, . _ -" >&2; exit 2; }
 if [[ -z "$MASTER" ]]; then
   MASTER="$(jqf "d['master']" < "$JSON")"
 fi
@@ -80,6 +82,12 @@ if [[ -z "$ROWS" ]]; then
   exit 1
 fi
 BOARDS="$(cut -f1 <<< "$ROWS" | uniq)"
+while IFS=$'\t' read -r board addr want; do
+  if ! wall_is_board "$board" || ! wall_is_number "$addr" || ! [[ "$want" =~ ^-?[0-9]+$ ]]; then
+    echo "not a board id, a unit address and an offset in $JSON: '$board' '$addr' '$want'" >&2
+    exit 1
+  fi
+done <<< "$ROWS"
 
 # One read per board: LIVE holds "board<TAB>addr<TAB>offset" lines.
 read_live() {
@@ -98,11 +106,11 @@ live_offset() {  # board addr -> the offset, or nothing when it was not read
 if [[ "$MODE" == capture ]]; then
   echo "Re-capturing from the wall into $JSON"
   read_live
-  python3 - "$JSON" "$ONLY_BOARD" "$MASTER" <<PY
-import json, sys, datetime
+  LIVE="$LIVE" python3 - "$JSON" "$ONLY_BOARD" "$MASTER" <<'PY'
+import json, os, sys, datetime
 path, only, master = sys.argv[1:4]
 live = {}
-for line in """$LIVE""".splitlines():
+for line in os.environ["LIVE"].splitlines():
     board, addr, offset = line.split("\t")
     live[(board, addr)] = int(offset)
 data = json.load(open(path))

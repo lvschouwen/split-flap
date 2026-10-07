@@ -12,6 +12,11 @@
 WALL_POLL_S="${WALL_POLL_S:-2}"
 WALL_MASTER_ID=""
 
+# What comes from the command line or the capture file goes into URLs, into
+# bash arithmetic and into JSON: nothing but these shapes gets that far.
+wall_is_board() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }
+wall_is_number() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
 jqf() {  # json on stdin, python expression over `d` -> value, or nothing
   python3 -c "import sys,json
 try: d=json.load(sys.stdin)

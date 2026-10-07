@@ -348,3 +348,30 @@ def test_commission_stops_at_a_unit_that_is_not_there(wall, capture):
     assert done.returncode == 1
     assert "STOPPED at a2" in done.stdout
     assert all(a["target"]["unit"] == 2 for a in wall.actions)
+
+
+# --- what comes from the command line -----------------------------------------
+
+@pytest.mark.parametrize("args", [
+    ["--board", MASTER_ID, "--from", "a[$(touch INJECTED)]"],
+    ["--board", MASTER_ID, "--only", "1;touch INJECTED"],
+    ["--board", MASTER_ID, "--skip", "1,$(touch INJECTED)"],
+    ["--board", "x/../../settings/wall"],
+])
+def test_commission_takes_only_ids_and_numbers(wall, capture, tmp_path, args):
+    done = subprocess.run(["bash", str(HERE / "commission-units.sh"), *args], cwd=tmp_path,
+                          env=dict(os.environ, UNIT_OFFSETS_JSON=str(capture)),
+                          capture_output=True, text=True, timeout=30)
+    assert done.returncode == 2, done.stdout + done.stderr
+    assert not (tmp_path / "INJECTED").exists()
+    assert wall.actions == []
+
+
+def test_restore_refuses_a_capture_whose_board_is_not_an_id(wall, capture):
+    data = json.loads(capture.read_text())
+    data["rows"][0]["board"] = "x/../y"
+    capture.write_text(json.dumps(data))
+    done = run("restore-unit-offsets.sh", capture, "--apply")
+    assert done.returncode == 1
+    assert "not a board id" in done.stderr
+    assert wall.actions == []

@@ -66,6 +66,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$BOARD" ]]     || { echo "--board is required" >&2; exit 2; }
+wall_is_board "$BOARD" || { echo "--board is a board id: letters, digits, . _ -" >&2; exit 2; }
+[[ -z "$ONLY" ]] || wall_is_number "$ONLY" || { echo "--only is a unit address, a number" >&2; exit 2; }
+[[ -z "$FROM" ]] || wall_is_number "$FROM" || { echo "--from is a unit address, a number" >&2; exit 2; }
+[[ -z "$SKIP" || "$SKIP" =~ ^[0-9]+(,[0-9]+)*$ ]] || { echo "--skip is unit addresses with commas between" >&2; exit 2; }
 [[ -f "$JSON" ]]      || { echo "missing $JSON" >&2; exit 1; }
 if [[ -z "$MASTER" ]]; then
   MASTER="$(jqf "d['master']" < "$JSON")"
@@ -137,6 +141,7 @@ PY
 
 PLAN=()
 for a in $ADDRS; do
+  wall_is_number "$a" || { echo "unit address '$a' in $JSON is not a number" >&2; exit 1; }
   [[ -n "$ONLY" && "$a" != "$ONLY" ]] && continue
   [[ -n "$FROM" && "$a" -lt "$FROM" ]] && continue
   [[ ",$SKIP," == *",$a,"* ]] && { echo "skipping a$a (--skip)"; continue; }
