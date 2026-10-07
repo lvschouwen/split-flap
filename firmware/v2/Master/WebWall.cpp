@@ -559,6 +559,19 @@ void handleWall(AsyncWebServerRequest* request) {
     root["update"]["row"] = jsonCopied(wall->rows.rows[wall->updateRow].id);
   }
   JsonArray rows = root["rows"].to<JsonArray>();
+  if (wall->rows.count == 0 && own.displayWidth > 0) {
+    // A master on its own keeps no table: its units are the wall's one row
+    // (as the stream's "wall" topic has it).
+    JsonObject row = rows.add<JsonObject>();
+    row["id"] = "";
+    row["own"] = true;
+    row["row"] = 0;
+    row["col"] = 0;
+    row["width"] = own.displayWidth;
+    row["text"] = jsonCopied(own.currentText);
+    if (judged) writeVerdict(row, verdicts->own());
+    row["showing"] = jsonCopied(own.currentText);
+  }
   for (int i = 0; i < wall->rows.count; i++) {
     const WallRowDef& def = wall->rows.rows[i];
     JsonObject row = rows.add<JsonObject>();
@@ -687,8 +700,9 @@ void webWallFindRowsLoop() {
     board.units = (int)MDNS.txt(i, "width").toInt();
     wallFoundAdd(*found, board, table);
   }
-  std::unique_ptr<char[]> json(new char[WALL_OP_DATA_MAX]);
-  const size_t length = wallFoundJson(*found, json.get(), WALL_OP_DATA_MAX);
+  static_assert(WALL_FIND_JSON_MAX <= WALL_OP_DATA_MAX, "a full list must fit a job's result");
+  std::unique_ptr<char[]> json(new char[WALL_FIND_JSON_MAX]);
+  const size_t length = wallFoundJson(*found, json.get(), WALL_FIND_JSON_MAX);
   SerialPrintf("Row search: %d answer(s), %u to pair\n", answers, (unsigned)found->count);
   if (length > 0) {
     wallOpDataPut(op, 0, (const uint8_t*)json.get(), length);

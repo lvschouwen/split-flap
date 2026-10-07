@@ -19,17 +19,18 @@ function save(status, body) {
   });
 }
 
-// Which board drives which row. Built again when the wall's rows change.
-function rowsPart(app, draft) {
-  const status = statusLine();
-  const found = h('div', {});
+// Which board drives which row. Built again when the wall's rows change;
+// `status` and `found` (what a search listed) outlive that.
+function rowsPart(app, draft, status, found) {
+  // A master on its own has nothing to arrange.
+  const alone = draft.length < 2;
   const done = (job) => {
     if (job && job.state === 'done') app.readWall();
     return job;
   };
-  const place = (line, key, label) => h('input', {
+  const place = (line, key, label) => (alone ? line[key] : h('input', {
     type: 'number', min: 1, max: 255, value: line[key], 'aria-label': `${label} of ${line.name}`,
-    oninput: (event) => { line[key] = Number(event.target.value); } });
+    oninput: (event) => { line[key] = Number(event.target.value); } }));
   const pair = (host) => runJob(status, 'Pairing with the board', 'pair', { host }).then(done)
     .then((job) => { if (job && job.state === 'done') fill(found); });
   const look = async () => {
@@ -69,7 +70,7 @@ function rowsPart(app, draft) {
         } }, 'Remove'))))))),
     h('div', { class: 'rowwrap' },
       h('button', { type: 'button', class: 'btn', onclick: look }, 'Look for more boards'),
-      h('button', { type: 'button', class: 'btn primary', onclick: () => {
+      !alone && h('button', { type: 'button', class: 'btn primary', onclick: () => {
         const problem = arrangeProblem(draft);
         if (problem) status.say(problem, true);
         else runJob(status, 'Arranging the wall', 'arrange', null, arrangeArgs(draft)).then(done);
@@ -153,6 +154,8 @@ function brokerPart(settings, line, saved) {
 
 export function settingsView(app) {
   const rows = h('div', {});
+  const rowsStatus = statusLine();
+  const found = h('div', {});
   const parts = h('div', { class: 'view-part' }, h('p', { class: 'muted small' }, 'Reading the settings…'));
   const broker = h('p', {});
   const root = h('div', { class: 'view' }, h('div', { class: 'head' }, h('h1', {}, 'Wall settings')), rows, parts);
@@ -167,7 +170,7 @@ export function settingsView(app) {
       const draft = rowsDraft(wall);
       if (JSON.stringify(draft) !== rowsShape) {
         rowsShape = JSON.stringify(draft);
-        fill(rows, rowsPart(app, draft));
+        fill(rows, rowsPart(app, draft, rowsStatus, found));
       }
       if (!asked) {
         asked = true;
