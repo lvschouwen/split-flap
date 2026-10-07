@@ -60,7 +60,7 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 | | `UnitsJson` | the row's unit facts as JSON, exactly as the shared serializer writes them (calibration offset included as `ofs`), in pieces. On change and every 30 s. The master reads values out with ArduinoJson |
 | | `Shown` | render id applied, and how late if it missed its instant |
 | | `OpState` | op id, phase, reason, result data (boot dump bytes in pieces) |
-| | `Event` | code, unit, arguments, row uptime |
+| | `Event` | code, unit, arguments, row uptime, and how long ago it happened (a start is known long before the master is reached). The master records at most eight at once, then one per half minute, from any one row |
 | | `LogLine`, `Pong` | log lines only while the master asked for them with `LogCtl`, per connection: first what the row's 4 KB ring still holds and has not sent before, then each new line. Lines logged while the master was away follow after the reconnect |
 
 **Liveness.** Any message counts. `Ping` after 10 s of silence, not while the row is busy. The proven numbers stay: the master marks a row lost after 30 s without contact (#385); the row holds its text for 25 s, then is in grace, then at 120 s shows its fallback. A dropped connection is redialled with 1–8 s backoff. The row board's long unit-bus waits (about 1.1 s) no longer matter: nothing has a per-request deadline.
@@ -84,8 +84,8 @@ Rebuilds three things together: how the boards of one Split-Flap talk to each ot
 - **One row interface.** The master's own units and an ESP-01 row sit behind the same `RowPort` (own row: the `DisplayCommand` queue; remote row: the link). Nothing above it branches on the kind of row.
 - **Wall state.** A `WallState` module (one mutex, snapshot copies) holds rows, unit facts for every row in the one `UnitFacts` struct, open jobs, and firmware state. The API reads snapshots; it never owns state.
 - **JSON on the master.** New API responses are built with ArduinoJson, and a row's unit facts are read with it. The MQTT text parser moves to it as well (its hand-written parser appears to mis-decode `\u` escapes; a test confirms that first).
-- **Verdicts.** Pure headers in `shared/` (`UnitVerdict.h`, `BoardVerdict.h`) turn facts into a level (working / note / fault) and a reason code with arguments. Natively tested. Home Assistant uses the same result.
-- **Event record.** Fixed-size binary records (time, board, unit, code, two arguments) in a ring file on the `storage` LittleFS, written by netTask only. Sources: the edges already detected in `UnitEventLog.h`, starts and their causes, firmware changes, rows lost and back, job results, and `EVENT` frames from rows. Wording happens in the browser from the code.
+- **Verdicts.** Pure headers in the master's tree (`UnitVerdict.h`, `BoardVerdict.h`) turn facts into a level (working / note / fault), the reason that leads with two numbers, and every reason that applies. Natively tested. They are not in `shared/`: only the master judges, and no unit or row compiles them. A fault is something wrong now; history is a note, so a unit that restarted by itself and runs again is a note. One watcher on the master judges every board once a second; the page, the event record and Home Assistant all read its result. The earlier `units_faulty` count keeps its rule until the old routes go (step 7).
+- **Event record.** Fixed-size binary records (time, board, unit, kind, two numbers; 24 bytes) on the `storage` LittleFS, written by netTask only. Two files, appended to and rotated at 2,048 records, as the flash log does: LittleFS copies the rest of a file when its middle is rewritten, so a ring written in place is the costly form. A board is named by a 16-bit key of its id, which needs no name table; a board that has left the wall reads as one no longer on it. A record made before the clock is set waits for it and is dated back. Sources: a verdict's reason starting and a fault ending, unit and row restarts, the master's start with its cause and rev, rows lost and back, updates, job results, and `Event` messages from rows. Wording happens in the browser from the numbers. Not built: damping of one thing that keeps repeating, which can shorten the history; to be sized on real data.
 - **Kept as they are:** grid layout (`ClusterLayout.h`), the display task and its command queue, producer gates, OTA, WiFi, TX ladder, quiet, MQTT (the cluster sensors become a wall problem sensor; `leader_lost` goes).
 
 ## 5. Operator API (master only)
@@ -120,7 +120,7 @@ On a branch until bench-proven (it must not land half-built), one stage commit r
 1. `firmware/v2/link/`: the schema, the stream reader, unit facts in pieces; native tests; stock protobuf reads the boards' bytes. **Done (#562).**
 2. Row firmware: link client, download-and-install, rescue, break-glass routes. Every unit job proven over the link on the bench.
 3. Master: `linkTask`, `RowPort`, `WallState`, pairing, update-by-offer. Old cluster code and `cli/` deleted. The first part of `/api/v2` lands here (`POST /api/v2/action` for pairing, release and unit jobs, `GET /api/v2/op/{id}`), so rows and their units have an operator path, by curl, before the new page exists; the present page loses its cluster parts and keeps working for the master's own row.
-4. Verdicts and the event record.
+4. Verdicts and the event record. **Done (#570).**
 5. `/api/v2`; scripts moved.
 6. Web UI.
 7. Old routes and page deleted. Release `— BREAKING`.
