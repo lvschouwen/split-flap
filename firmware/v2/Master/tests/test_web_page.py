@@ -22,11 +22,15 @@ node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not inst
 @node
 def test_the_pure_model_passes_its_node_tests():
     web_bundle.write_constants(PROJECT)
-    done = subprocess.run(["node", "--test", "web/test/"], cwd=PROJECT,
+    # The files by name and the reporter by name: what a directory argument
+    # means and which reporter is the default both differ between Node versions.
+    files = sorted(str(p.relative_to(PROJECT)) for p in (PROJECT / "web" / "test").glob("*.test.js"))
+    assert files, "no test files under web/test"
+    done = subprocess.run(["node", "--test", "--test-reporter=tap", *files], cwd=PROJECT,
                           capture_output=True, text=True)
     assert done.returncode == 0, done.stdout + done.stderr
-    # An empty or misnamed test directory also exits 0.
-    assert "\nℹ fail 0" in done.stdout and "\nℹ tests 0" not in done.stdout, done.stdout
+    # A file without a test in it also exits 0.
+    assert "\n# fail 0" in done.stdout and "\n# tests 0" not in done.stdout, done.stdout
 
 
 @node
