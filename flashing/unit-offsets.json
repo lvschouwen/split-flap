@@ -1,24 +1,20 @@
 {
   "_comment": [
-    "Per-unit hall-sensor calibration offsets, in stepper steps. Captured live",
-    "from the running wall before the #406 day-0 EEPROM erase, which is the one",
-    "value on a unit that is NOT reconstructible: the I2C address falls back to",
-    "the DIP switches and every counter legitimately restarts at zero, but an",
+    "Per-unit hall-sensor calibration offsets, in stepper steps: the one value",
+    "on a unit that is not reconstructible. An erase of a unit's EEPROM leaves",
+    "its address to the DIP switches and restarts every counter at zero, but an",
     "offset only exists because somebody calibrated that drum by hand.",
     "",
-    "Restore with flashing/restore-unit-offsets.sh after the reflash.",
-    "",
-    "Re-capture (values are served from the master's last probe, so refresh",
-    "first if a unit was recalibrated since):",
-    "  curl -s 'http://<host>/units/health?refresh=1' >/dev/null",
-    "  curl -s 'http://<host>/unit/offset?address=<N>'"
+    "A board is named by its id (GET /api/v2/wall); every board is reached",
+    "through the master. restore-unit-offsets.sh compares, --apply writes the",
+    "captured values back, --capture overwrites this file from the wall."
   ],
   "capturedUtc": "2026-07-26T15:23:05Z",
+  "master": "192.168.15.88",
   "rows": [
     {
-      "host": "192.168.15.88",
-      "row": 1,
-      "note": "S3 leader, 16 units. Unit at address 15 was hall-dead at capture time; its offset is still the calibrated value and stays worth restoring after the sensor is repaired.",
+      "board": "split-flap-c8a746",
+      "note": "The master's own row, 16 units.",
       "offsets": {
         "1": 69,
         "2": 79,
@@ -39,9 +35,8 @@
       }
     },
     {
-      "host": "192.168.15.121",
-      "row": 0,
-      "note": "ESP-01 follower, 5 units.",
+      "board": "split-flap-261bb6",
+      "note": "ESP-01 row board, 5 units.",
       "offsets": {
         "1": 63,
         "2": 54,

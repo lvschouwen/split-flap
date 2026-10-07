@@ -126,6 +126,11 @@ jobs:
         working-directory: flashing
         run: python -m pytest flasher/tests/ -v
 
+      # The campaign scripts (bash + curl) run against a stand-in master.
+      - name: Run campaign script tests
+        working-directory: flashing
+        run: python -m pytest tests/ -v
+
       # #205 drift gate (previously flasher.yml's collect step): a Unit code
       # change committed without re-staging the bundle must fail CI, or the
       # v2 master ships auto-pushing stale unit firmware.

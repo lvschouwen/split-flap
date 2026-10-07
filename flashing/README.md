@@ -113,6 +113,26 @@ flash of a new row, read `flashId` from its `/settings`: the ESP8266 core
 has open reports of OTA trouble on Puya and XMC flash chips, and only the
 chip of the existing row is proven.
 
+## Unit campaigns and diagnostics
+
+All of these talk to the master's `/api/v2` only, also for the units of a row
+board, and need bash, curl and python3. A board is named by its id: the
+master by its own name, a row board by the id it paired under
+(`curl http://<master>/api/v2/wall`). `unit-offsets.json` holds the master's
+address and the captured calibration offset of every unit, per board;
+`--master <addr>` overrides the address.
+
+| Script | What it does |
+| --- | --- |
+| `restore-unit-offsets.sh` | compares the wall's offsets with the capture; `--apply` writes the captured ones back and reads them back, `--capture` overwrites the file from the wall |
+| `commission-units.sh --board <id>` | per unit: update, identity, offset, odometer reset, home, exercise, two self-tests compared; stops at the first failure. It zeroes the unit's odometer |
+| `ext-diag-monitor.py` | every unit of the wall with the master's verdict, redrawn every few seconds; `--tail` follows the wall's history |
+| `ext-diag-benchcheck.py --board <id>` | baseline of a board's verdicts, and guided power-cycle and jam checks of one unit |
+
+`wall-api.sh` is what the two shell scripts share: start a job with
+`POST /api/v2/action`, wait for it on `GET /api/v2/op/<id>`, read a unit or a
+board. `python -m pytest tests/` runs both scripts against a stand-in master.
+
 ## Legacy: the Windows flasher exe (retired)
 
 The guided provisioning exe (`split-flap-flasher.exe`) is retired (#284) —

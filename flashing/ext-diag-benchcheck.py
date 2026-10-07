@@ -1,33 +1,34 @@
 #!/usr/bin/env python3
-"""ext-diag-benchcheck — guided validation of the #365 unit diagnostics on hardware.
+"""ext-diag-benchcheck — guided check that the wall notices what happens to a unit.
 
-Read-only over HTTP. Auto-verifies the signals that can be checked from data alone
-(baseline: no false jam/hall/drag, sane reset-cause, ext-diag live), then walks the
-operator through the physical-action checks the data can't induce (power-cycle a
-unit → confirm the reboot line + decoded reset-cause; stall a flap → confirm the JAM
-bit + jam log line). Emits a pass/observe checklist.
+Read-only, through the master's /api/v2 (a row board's units too). The
+baseline lists every unit of a board with the master's verdict on it; the
+guided checks walk through the two things only a hand can do — cutting a
+unit's power, holding a flap — and then look for what the master should show:
+the unit's own counters, its verdict, and the entry in the wall's history.
 
-The tool confirms the *resulting signal*; the physical action (pulling power, jamming
-a flap) is yours.
+The tool confirms the resulting signal; the physical action is yours.
 
 Usage:
-  ext-diag-benchcheck.py --board 192.168.15.91            # baseline + guided menu
-  ext-diag-benchcheck.py --board 192.168.15.91 --baseline # auto checks only, exit
-  ext-diag-benchcheck.py --board 192.168.15.91 --reboot 3 # guided reboot check, unit 3
-  ext-diag-benchcheck.py --board 192.168.15.91 --jam 7    # guided jam check, unit 7
+  ext-diag-benchcheck.py --board <id>              # baseline + menu
+  ext-diag-benchcheck.py --board <id> --baseline   # baseline only, exit code says clean
+  ext-diag-benchcheck.py --board <id> --reboot 3   # guided power-cycle check, unit 3
+  ext-diag-benchcheck.py --board <id> --jam 7      # guided jam check, unit 7
+  ext-diag-benchcheck.py --master <addr> ...       # not the master in unit-offsets.json
 
-/units/health and /log/flash are browser-facing (no auth).
+A board's id is the master's own name or the id a row board paired under
+(GET /api/v2/wall); without --board the master's own row is checked.
 """
 import argparse
 import json
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
 
-DRAG_EXCESS_STEPS = 200
-VCC_FLOOR_MV = 4000
-HTTP_TIMEOUT = 5.0
+HTTP_TIMEOUT = 8.0
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -41,212 +42,145 @@ FAIL = f"{RED}FAIL{RESET}"
 OBS = f"{YEL}OBSERVE{RESET}"
 
 
-def http_get(ip, path):
-    req = urllib.request.Request(f"http://{ip}{path}", headers={"Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
-        return r.read().decode("utf-8", "replace")
+class Wall:
+    def __init__(self, master, board):
+        self.master = master
+        self.master_id = self.get("/api/v2/wall")["master"]["id"]
+        self.board = board or self.master_id
+
+    def get(self, path):
+        with urllib.request.urlopen(f"http://{self.master}{path}", timeout=HTTP_TIMEOUT) as reply:
+            return json.loads(reply.read().decode("utf-8", "replace"))
+
+    def units(self):
+        table = self.get("/api/v2/board/" + urllib.parse.quote(self.board)).get("units") or {}
+        return [dict(zip(table["fields"], row)) for row in table.get("rows", [])]
+
+    def unit(self, address):
+        """The unit's document, or None when the master has no such unit."""
+        try:
+            return self.get(f"/api/v2/unit/{urllib.parse.quote(self.board)}/{address}")
+        except urllib.error.HTTPError:
+            return None
+
+    def newest_seq(self):
+        events = self.get("/api/v2/history?limit=1")["events"]
+        return events[0]["seq"] if events else 0
+
+    def events_since(self, seq, address):
+        """This unit's history entries after `seq`, oldest first."""
+        # The history names the master's own row "".
+        board = "" if self.board == self.master_id else self.board
+        events = self.get("/api/v2/history?limit=50")["events"]
+        return [e for e in reversed(events)
+                if e["seq"] > seq and e.get("board") == board and e.get("unit") == address]
 
 
-def get_health(ip):
-    return json.loads(http_get(ip, "/units/health"))
-
-
-def get_log(ip):
+def default_master():
     try:
-        return http_get(ip, "/log/flash")
-    except (urllib.error.URLError, OSError, urllib.error.HTTPError):
-        return ""
+        return json.loads((Path(__file__).parent / "unit-offsets.json").read_text())["master"]
+    except (OSError, ValueError, KeyError):
+        return None
 
 
-def decode_reset(mc):
-    if mc is None:
-        return "-"
-    if mc & (1 << 2):
-        return "brownout"
-    if mc & (1 << 3):
-        return "watchdog"
-    if mc & (1 << 1):
-        return "external"
-    if mc & (1 << 0):
-        return "power-on"
-    return "unknown"
+def event_text(event):
+    return f"{event['kind']} {event.get('reason') or event.get('job') or ''}".strip()
 
 
-def unit_by_index(data, idx):
-    for u in data.get("units", []):
-        if u.get("i") == idx:
-            return u
-    return None
-
-
-def addr_hex(u):
-    a = u.get("a")
-    return f"0x{a:02x}" if isinstance(a, int) else "?"
-
-
-# --------------------------------------------------------------------------- #
-# Baseline (auto)                                                             #
-# --------------------------------------------------------------------------- #
-def run_baseline(ip):
-    print(f"{BOLD}Baseline check — {ip}{RESET}")
+def run_baseline(wall):
+    print(f"{BOLD}Baseline — {wall.board} through {wall.master}{RESET}")
     try:
-        data = get_health(ip)
-    except Exception as e:  # noqa: BLE001 - operator-facing tool
-        print(f"  {FAIL} could not fetch /units/health: {e}")
+        units = wall.units()
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
+        print(f"  {FAIL} the board was not read: {error}")
         return False
-
-    units = data.get("units", [])
     if not units:
-        print(f"  {OBS} width 0 / no units (headless row?) — nothing to baseline")
+        print(f"  {OBS} the master has no unit facts of this board")
         return True
-
-    any_ext = any("sb" in u for u in units)
-    if not any_ext:
-        print(f"  {OBS} no unit reports ext-diag yet (pre-#365 firmware) — "
-              f"baseline of se/sx/sag/he/dw/sb deferred until reflash")
-
-    ok = True
-    print(f"  {DIM}unit addr   reset      ext  stall he  sx   sag  flags{RESET}")
+    clean = True
+    print(f"  {DIM}        addr state      firmware  verdict{RESET}")
     for u in units:
-        idx = u.get("i")
-        if u.get("st") != 1:
-            print(f"   {idx:>2}  {addr_hex(u):<5} {DIM}state={u.get('st')} (not running) — skipped{RESET}")
-            continue
-        reset = decode_reset(u.get("mc"))
-        has_ext = "sb" in u
-        sb = u.get("sb", 0)
-        he = u.get("he")
-        sx = u.get("sx")
-        sag = u.get("sag")
-        fl = u.get("fl", 0)
-
-        problems = []
-        if has_ext and (sb & 0x01):
-            problems.append("JAM bit set")
-        if has_ext and isinstance(he, int) and he != 1:
-            problems.append(f"hall={he}")
-        if isinstance(sx, int) and sx > DRAG_EXCESS_STEPS:
-            problems.append(f"drag sx={sx}")
-        if isinstance(sag, int) and 0 < sag < VCC_FLOOR_MV:
-            problems.append(f"low sag={sag}mV")
-        if isinstance(fl, int) and fl & (1 << 1):
-            problems.append("home-failed")
-        if isinstance(fl, int) and fl & (1 << 2):
-            problems.append("hall-never")
-        if reset in ("brownout", "watchdog"):
-            problems.append(f"reset={reset}")
-
-        verdict = PASS if not problems else (FAIL if any(
-            p.startswith(("JAM", "home", "hall-never")) for p in problems) else OBS)
-        if verdict != PASS:
-            ok = ok and (verdict != FAIL)
-        ext_s = "yes" if has_ext else "no"
-        line = (f"   {idx:>2}  {addr_hex(u):<5} {reset:<9}  {ext_s:<3}  "
-                f"{('JAM' if sb & 1 else 'ok'):<5} "
-                f"{str(he) if he is not None else '-':<3} "
-                f"{str(sx) if sx is not None else '-':<4} "
-                f"{str(sag) if sag is not None else '-':<4} 0x{fl:02x}"
-                if isinstance(fl, int) else "")
-        print(f"  {verdict} {line}")
-        if problems:
-            print(f"          {YEL}→ {', '.join(problems)}{RESET}")
-    print(f"  {BOLD}baseline: {'clean' if ok else 'issues above'}{RESET}\n")
-    return ok
+        mark = {"working": PASS, "note": OBS, "fault": FAIL}.get(u["level"], OBS)
+        clean = clean and u["level"] != "fault"
+        why = "" if u["level"] == "working" else f"{u['reason']} ({u['a']}, {u['b']})"
+        print(f"  {mark:<16} {u['address']:>3}  {u['state'] or '-':<10} "
+              f"{u['firmware'] or '-':<9} {u['level'] or '-'} {why}")
+    print(f"  {BOLD}baseline: {'no fault' if clean else 'faults above'}{RESET}\n")
+    return clean
 
 
-# --------------------------------------------------------------------------- #
-# Guided physical checks                                                      #
-# --------------------------------------------------------------------------- #
-def _log_has(ip, needles, since_text):
-    """True if any new /log/flash line since since_text contains all-of-any needle set."""
-    text = get_log(ip)
-    old = set(since_text.splitlines())
-    new = [ln for ln in text.splitlines() if ln not in old]
-    for ln in new:
-        low = ln.lower()
-        if any(all(n in low for n in group) if isinstance(group, tuple) else group in low
-               for group in needles):
-            return ln
-    return None
-
-
-def guided_reboot(ip, idx):
-    print(f"{BOLD}Guided reboot check — unit {idx} @ {ip}{RESET}")
-    data = get_health(ip)
-    u0 = unit_by_index(data, idx)
-    if not u0 or u0.get("st") != 1:
-        print(f"  {FAIL} unit {idx} not present/running; aborting")
+def guided_reboot(wall, address):
+    print(f"{BOLD}Guided power-cycle check — unit {address} of {wall.board}{RESET}")
+    before = wall.unit(address)
+    if not before or before.get("state") != "running":
+        print(f"  {FAIL} unit {address} is not running; nothing to check")
         return False
-    up0, br0, wd0 = u0.get("up"), u0.get("br"), u0.get("wd")
-    log0 = get_log(ip)
-    print(f"  before: up={up0}s brownouts={br0} watchdogs={wd0} "
-          f"reset={decode_reset(u0.get('mc'))}")
-    input(f"  {YEL}ACTION:{RESET} power-cycle unit {idx} ({addr_hex(u0)}), "
-          f"wait for it to re-home, then press Enter…")
-    time.sleep(2.0)
-    # give the master a couple of heartbeat rounds to re-poll this unit
-    for _ in range(20):
-        data = get_health(ip)
-        u1 = unit_by_index(data, idx)
-        if u1 and u1.get("st") == 1 and u1.get("up") is not None and (
-                up0 is None or u1.get("up") < up0):
+    up0 = before["firmware"].get("uptimeS")
+    br0, wd0 = before["power"].get("brownouts"), before["power"].get("watchdogResets")
+    seq0 = wall.newest_seq()
+    print(f"  before: up {up0} s, brownouts {br0}, watchdog resets {wd0}, "
+          f"last start {before['power'].get('lastStart')}")
+    input(f"  {YEL}ACTION:{RESET} cut and restore the power of unit {address}, wait until "
+          f"it has found home, then press Enter…")
+    after = {}
+    for _ in range(40):  # the master reads each unit in turn: a round takes most of a minute
+        after = wall.unit(address) or {}
+        up1 = after.get("firmware", {}).get("uptimeS")
+        if after.get("state") == "running" and up1 is not None and (up0 is None or up1 < up0):
             break
-        time.sleep(2.0)
-    u1 = unit_by_index(data, idx) or {}
-    up1, br1, wd1 = u1.get("up"), u1.get("br"), u1.get("wd")
-    reset1 = decode_reset(u1.get("mc"))
-    print(f"  after:  up={up1}s brownouts={br1} watchdogs={wd1} reset={reset1}")
-
-    dropped = isinstance(up1, int) and isinstance(up0, int) and up1 < up0
-    counted = (isinstance(br1, int) and br1 != br0) or (isinstance(wd1, int) and wd1 != wd0)
-    logline = _log_has(ip, [("unit", "reboot"), ("rebooted",)], log0)
-
-    ok = dropped or counted
-    print(f"  {PASS if dropped else OBS} uptime reset detected: {dropped}")
-    print(f"  {PASS if counted else OBS} brownout/watchdog counter changed: {counted} "
-          f"(power-cycle counts as brownout on the AVR)")
-    print(f"  {PASS if logline else OBS} reboot log line: "
-          f"{logline if logline else 'not seen in /log/flash (check window/rate)'}")
-    print(f"  {BOLD}reboot check: {'PASS' if ok else 'inconclusive — re-check'}{RESET}\n")
+        time.sleep(3.0)
+    up1 = after.get("firmware", {}).get("uptimeS")
+    power = after.get("power", {})
+    br1, wd1 = power.get("brownouts"), power.get("watchdogResets")
+    print(f"  after:  up {up1} s, brownouts {br1}, watchdog resets {wd1}, "
+          f"last start {power.get('lastStart')}")
+    restarted = isinstance(up1, int) and isinstance(up0, int) and up1 < up0
+    counted = br1 != br0 or wd1 != wd0
+    noted = [e for e in wall.events_since(seq0, address)
+             if e["kind"] == "unit-restarted" or e.get("reason") == "restarted-by-itself"]
+    print(f"  {PASS if restarted else OBS} uptime started again: {restarted}")
+    print(f"  {PASS if counted else OBS} brownout or watchdog counter moved: {counted} "
+          f"(a power cut counts as a brownout on the unit)")
+    print(f"  {PASS if noted else OBS} entry in the wall's history: "
+          f"{event_text(noted[-1]) if noted else 'none yet'}")
+    ok = restarted or counted
+    print(f"  {BOLD}power-cycle check: {'PASS' if ok else 'inconclusive — check again'}{RESET}\n")
     return ok
 
 
-def guided_jam(ip, idx):
-    print(f"{BOLD}Guided jam check — unit {idx} @ {ip}{RESET}")
-    data = get_health(ip)
-    u0 = unit_by_index(data, idx)
-    if not u0 or u0.get("st") != 1:
-        print(f"  {FAIL} unit {idx} not present/running; aborting")
+def guided_jam(wall, address):
+    print(f"{BOLD}Guided jam check — unit {address} of {wall.board}{RESET}")
+    before = wall.unit(address)
+    if not before or before.get("state") != "running":
+        print(f"  {FAIL} unit {address} is not running; nothing to check")
         return False
-    if "sb" not in u0:
-        print(f"  {FAIL} unit {idx} reports no ext-diag (pre-#365 fw) — reflash first")
+    if "jammed" not in before["drum"]:
+        print(f"  {FAIL} unit {address} does not report its drum's diagnostics — update it first")
         return False
-    log0 = get_log(ip)
-    print(f"  before: stall bit = {'set' if u0.get('sb', 0) & 1 else 'clear'}")
-    input(f"  {YEL}ACTION:{RESET} gently hold/jam a flap on unit {idx} "
-          f"({addr_hex(u0)}) and command it a move (change the displayed text), "
-          f"then press Enter…")
-    time.sleep(1.5)
+    seq0 = wall.newest_seq()
+    print(f"  before: jammed = {before['drum']['jammed']}")
+    input(f"  {YEL}ACTION:{RESET} gently hold a flap of unit {address} and have it move "
+          f"(change the text shown), then press Enter…")
     hit = False
-    for _ in range(15):
-        data = get_health(ip)
-        u1 = unit_by_index(data, idx) or {}
-        if u1.get("sb", 0) & 0x01:
+    for _ in range(30):
+        now = wall.unit(address) or {}
+        if now.get("drum", {}).get("jammed"):
             hit = True
             break
-        time.sleep(2.0)
-    logline = _log_has(ip, [("jam",), ("stalled",)], log0)
-    print(f"  {PASS if hit else OBS} stall/JAM bit (sb bit0) set: {hit}")
-    print(f"  {PASS if logline else OBS} jam log line: "
-          f"{logline if logline else 'not seen (a single stalled move may clear before poll)'}")
-    print(f"  {BOLD}jam check: {'PASS' if hit else 'inconclusive — retry with a firmer, sustained hold'}{RESET}\n")
+        time.sleep(3.0)
+    noted = [e for e in wall.events_since(seq0, address) if e.get("reason") == "jammed"]
+    print(f"  {PASS if hit else OBS} the unit reports a jam: {hit}")
+    print(f"  {PASS if noted else OBS} entry in the wall's history: "
+          f"{event_text(noted[-1]) if noted else 'none (a unit already jammed before adds none)'}")
+    print(f"  {BOLD}jam check: {'PASS' if hit else 'inconclusive — hold longer and firmer'}"
+          f"{RESET}\n")
     return hit
 
 
-def menu(ip):
+def menu(wall):
     while True:
-        print(f"{BOLD}Guided checks — {ip}{RESET}")
-        print("  [b] baseline   [r N] reboot unit N   [j N] jam unit N   [q] quit")
+        print(f"{BOLD}Guided checks — {wall.board}{RESET}")
+        print("  [b] baseline   [r N] power-cycle unit N   [j N] jam unit N   [q] quit")
         try:
             choice = input("  > ").strip().split()
         except EOFError:
@@ -257,32 +191,39 @@ def menu(ip):
         if c == "q":
             return
         if c == "b":
-            run_baseline(ip)
+            run_baseline(wall)
         elif c == "r" and len(choice) > 1 and choice[1].isdigit():
-            guided_reboot(ip, int(choice[1]))
+            guided_reboot(wall, int(choice[1]))
         elif c == "j" and len(choice) > 1 and choice[1].isdigit():
-            guided_jam(ip, int(choice[1]))
+            guided_jam(wall, int(choice[1]))
         else:
             print(f"  {YEL}usage: b | r <unit> | j <unit> | q{RESET}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Guided bench validation for #365 ext-diag")
-    ap.add_argument("--board", default="192.168.15.91", help="board IP (default leader)")
-    ap.add_argument("--baseline", action="store_true", help="auto baseline only, then exit")
-    ap.add_argument("--reboot", type=int, metavar="UNIT", help="guided reboot check for UNIT")
-    ap.add_argument("--jam", type=int, metavar="UNIT", help="guided jam check for UNIT")
+    ap = argparse.ArgumentParser(description="Guided check of what the wall notices about a unit")
+    ap.add_argument("--master", default=default_master(), help="the master's address")
+    ap.add_argument("--board", help="board id (default: the master's own row)")
+    ap.add_argument("--baseline", action="store_true", help="baseline only, then exit")
+    ap.add_argument("--reboot", type=int, metavar="UNIT", help="guided power-cycle check")
+    ap.add_argument("--jam", type=int, metavar="UNIT", help="guided jam check")
     args = ap.parse_args()
+    if not args.master:
+        ap.error("no master: give --master")
+    try:
+        wall = Wall(args.master, args.board)
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
+        print(f"{FAIL} no /api/v2 answer from the master at {args.master}: {error}")
+        return 1
 
     if args.reboot is not None:
-        return 0 if guided_reboot(args.board, args.reboot) else 1
+        return 0 if guided_reboot(wall, args.reboot) else 1
     if args.jam is not None:
-        return 0 if guided_jam(args.board, args.jam) else 1
-
-    ok = run_baseline(args.board)
+        return 0 if guided_jam(wall, args.jam) else 1
+    clean = run_baseline(wall)
     if args.baseline:
-        return 0 if ok else 1
-    menu(args.board)
+        return 0 if clean else 1
+    menu(wall)
     return 0
 
 

@@ -1,93 +1,124 @@
 #!/usr/bin/env bash
 # Restore per-unit calibration offsets from unit-offsets.json.
 #
-# The #406 day-0 EEPROM re-layout erases and re-initialises every unit's
-# EEPROM. Everything in there is reconstructible EXCEPT the hall-sensor
-# calibration offset: the I2C address falls back to the DIP switches (which
-# is what twiboot uses anyway) and the counters legitimately restart at zero,
-# but an offset only exists because somebody calibrated that drum by hand.
+# An erase of a unit's EEPROM loses nothing that cannot be rebuilt EXCEPT the
+# hall-sensor calibration offset: the address falls back to the DIP switches
+# and the counters legitimately restart at zero, but an offset only exists
+# because somebody calibrated that drum by hand.
 #
-# Capture lives in unit-offsets.json next to this script. Re-capture with
-# --capture before a reflash; replay with --apply after it.
+# The capture lives in unit-offsets.json next to this script. Re-capture with
+# --capture before an erase; replay with --apply after it.
 #
-# Each write goes through the master's async maintenance contract
-# (POST /unit/offset -> {"seq":N} -> GET /unit/op-result), and every unit is
-# read back afterwards — a silent SET_OFFSET is exactly the unverified path
-# #405 exists to close, so this script does not assume the write landed.
+# Everything goes through the master's /api/v2, also for units on a row board
+# (wall-api.sh). Each write is a `set-offset` job that is waited for, and
+# every unit is read back afterwards: this script does not assume a write
+# landed. A row board's units are read from the facts it sends the master, so
+# their read-back is waited for (WALL_READBACK_S, 90 s).
 #
 # Usage:
 #   restore-unit-offsets.sh                  dry run: compare live vs captured
 #   restore-unit-offsets.sh --apply          write the captured offsets back
 #   restore-unit-offsets.sh --capture        overwrite the JSON from the wall
-#   restore-unit-offsets.sh --host <ip>      limit to one row
+#   restore-unit-offsets.sh --board <id>     limit to one board
+#   restore-unit-offsets.sh --master <addr>  not the master named in the JSON
 #
 # Exit is non-zero if any unit ends up not matching its captured value.
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JSON="$HERE/unit-offsets.json"
+JSON="${UNIT_OFFSETS_JSON:-$HERE/unit-offsets.json}"
+# shellcheck source=wall-api.sh
+source "$HERE/wall-api.sh"
 
 MODE=verify
-ONLY_HOST=""
+ONLY_BOARD=""
+MASTER=""
+READBACK_S="${WALL_READBACK_S:-90}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --apply)   MODE=apply; shift ;;
     --capture) MODE=capture; shift ;;
-    --host)    ONLY_HOST="${2:?--host needs an address}"; shift 2 ;;
-    -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --board)   ONLY_BOARD="${2:?--board needs a board id}"; shift 2 ;;
+    --master)  MASTER="${2:?--master needs an address}"; shift 2 ;;
+    -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 [[ -f "$JSON" ]] || { echo "missing $JSON" >&2; exit 1; }
+if [[ -z "$MASTER" ]]; then
+  MASTER="$(jqf "d['master']" < "$JSON")"
+fi
+[[ -n "$MASTER" ]] || { echo "no master: give --master, or \"master\" in $JSON" >&2; exit 1; }
+wall_init
 
-# rows() emits "host<TAB>row<TAB>addr<TAB>offset" for every captured unit,
-# addresses in numeric order.
+# rows() emits "board<TAB>addr<TAB>offset" for every captured unit, addresses
+# in numeric order.
 rows() {
-  python3 - "$JSON" "$ONLY_HOST" <<'PY'
+  python3 - "$JSON" "$ONLY_BOARD" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 only = sys.argv[2]
 for row in data["rows"]:
-    if only and row["host"] != only:
+    if only and row["board"] != only:
         continue
     for addr in sorted(row["offsets"], key=int):
-        print(f"{row['host']}\t{row['row']}\t{addr}\t{row['offsets'][addr]}")
+        print(f"{row['board']}\t{addr}\t{row['offsets'][addr]}")
 PY
 }
 
-get_offset() {  # host addr -> prints the integer, or nothing on failure
-  curl -sf --max-time 8 "http://$1/unit/offset?address=$2" 2>/dev/null |
-    python3 -c 'import sys,json; print(json.load(sys.stdin)["offset"])' 2>/dev/null || true
+# Materialise the row list BEFORE any loop. Fed in as `done < <(rows)` the
+# generator sits in a process substitution, where a failure — malformed JSON,
+# a schema change, no python3 — never trips errexit: the loop runs zero times
+# and the script exits 0 having printed nothing. A typo'd --board does the
+# same. Both are indistinguishable from "all units verified", the worst lie
+# from the script that restores calibration after an erase.
+ROWS="$(rows)"
+if [[ -z "$ROWS" ]]; then
+  echo "no units matched${ONLY_BOARD:+ --board $ONLY_BOARD} in $JSON" >&2
+  exit 1
+fi
+BOARDS="$(cut -f1 <<< "$ROWS" | uniq)"
+
+# One read per board: LIVE holds "board<TAB>addr<TAB>offset" lines.
+read_live() {
+  local board out
+  LIVE=""
+  for board in $BOARDS; do
+    out="$(wall_offsets "$board")" || out=""
+    if [[ -n "$out" ]]; then LIVE+="$(sed "s/^/$board\t/" <<< "$out")"$'\n'; fi
+  done
+}
+
+live_offset() {  # board addr -> the offset, or nothing when it was not read
+  awk -F'\t' -v b="$1" -v a="$2" '$1==b && $2==a {print $3}' <<< "$LIVE"
 }
 
 if [[ "$MODE" == capture ]]; then
   echo "Re-capturing from the wall into $JSON"
-  python3 - "$JSON" "$ONLY_HOST" <<'PY'
-import json, subprocess, sys, datetime
-path, only = sys.argv[1], sys.argv[2]
+  read_live
+  python3 - "$JSON" "$ONLY_BOARD" "$MASTER" <<PY
+import json, sys, datetime
+path, only, master = sys.argv[1:4]
+live = {}
+for line in """$LIVE""".splitlines():
+    board, addr, offset = line.split("\t")
+    live[(board, addr)] = int(offset)
 data = json.load(open(path))
 for row in data["rows"]:
-    if only and row["host"] != only:
+    if only and row["board"] != only:
         continue
-    host = row["host"]
-    subprocess.run(["curl", "-sf", "--max-time", "20",
-                    f"http://{host}/units/health?refresh=1"],
-                   stdout=subprocess.DEVNULL, check=False)
     fresh = {}
     for addr in sorted(row["offsets"], key=int):
-        out = subprocess.run(
-            ["curl", "-sf", "--max-time", "8",
-             f"http://{host}/unit/offset?address={addr}"],
-            capture_output=True, text=True, check=False)
-        try:
-            fresh[addr] = json.loads(out.stdout)["offset"]
-        except Exception:
-            print(f"  {host} a{addr}: READ FAILED - keeping captured value")
+        if (row["board"], addr) in live:
+            fresh[addr] = live[(row["board"], addr)]
+        else:
+            print(f"  {row['board']} a{addr}: NOT READ - keeping the captured value")
             fresh[addr] = row["offsets"][addr]
     row["offsets"] = fresh
-    print(f"  {host}: {fresh}")
+    print(f"  {row['board']}: {fresh}")
+data["master"] = master
 data["capturedUtc"] = datetime.datetime.now(datetime.timezone.utc) \
     .replace(microsecond=0).isoformat().replace("+00:00", "Z")
 json.dump(data, open(path, "w"), indent=2)
@@ -97,35 +128,24 @@ PY
   exit 0
 fi
 
-# Materialise the row list BEFORE the loop. Feeding it in as `done < <(rows)`
-# put rows() inside a process substitution, where a failure — malformed JSON, a
-# schema change, no python3 — never trips errexit: the loop just ran zero times,
-# `fail` stayed 0, and the script exited 0 having printed nothing. A typo'd
-# --host did exactly the same. Both are indistinguishable from "all units
-# verified", which is the worst possible lie from the one script that restores
-# calibration after a destructive erase.
-ROWS="$(rows)"
-if [[ -z "$ROWS" ]]; then
-  echo "no units matched${ONLY_HOST:+ --host $ONLY_HOST} in $JSON" >&2
-  exit 1
-fi
-
+read_live
 fail=0
 changed=0
 matched=0
-while IFS=$'\t' read -r host row addr want; do
+WRITTEN=""
+while IFS=$'\t' read -r board addr want; do
   matched=$((matched + 1))
-  have="$(get_offset "$host" "$addr")"
+  have="$(live_offset "$board" "$addr")"
 
   if [[ "$MODE" == verify ]]; then
     if [[ -z "$have" ]]; then
-      printf 'row %s  a%-3s  captured %4s  live UNREADABLE\n' "$row" "$addr" "$want"
+      printf '%s  a%-3s  captured %4s  live UNREADABLE\n' "$board" "$addr" "$want"
       fail=1
     elif [[ "$have" == "$want" ]]; then
-      printf 'row %s  a%-3s  %4s  ok\n' "$row" "$addr" "$want"
+      printf '%s  a%-3s  %4s  ok\n' "$board" "$addr" "$want"
     else
-      printf 'row %s  a%-3s  captured %4s  live %4s  DIFFERS\n' \
-        "$row" "$addr" "$want" "$have"
+      printf '%s  a%-3s  captured %4s  live %4s  DIFFERS\n' \
+        "$board" "$addr" "$want" "$have"
       changed=1
       fail=1  # not verified IS a failure — see the exit contract in the header
     fi
@@ -134,27 +154,43 @@ while IFS=$'\t' read -r host row addr want; do
 
   # apply
   if [[ "$have" == "$want" ]]; then
-    printf 'row %s  a%-3s  %4s  already set\n' "$row" "$addr" "$want"
+    printf '%s  a%-3s  %4s  already set\n' "$board" "$addr" "$want"
     continue
   fi
-  if ! curl -sf --max-time 10 -X POST \
-        "http://$host/unit/offset?address=$addr&value=$want" >/dev/null; then
-    printf 'row %s  a%-3s  POST FAILED\n' "$row" "$addr"
+  if ! why="$(wall_job "$(wall_job_json set-offset "$board" "$addr" offset "$want")" 60)"; then
+    printf '%s  a%-3s  WRITE FAILED: %s\n' "$board" "$addr" "$why"
     fail=1
     continue
   fi
-  # The unit persists the offset in loop context, not in the Wire ISR — give
-  # the write a beat before reading it back through the next probe.
-  sleep 2
-  back="$(get_offset "$host" "$addr")"
-  if [[ "$back" == "$want" ]]; then
-    printf 'row %s  a%-3s  %4s  restored\n' "$row" "$addr" "$want"
-  else
-    printf 'row %s  a%-3s  wanted %4s  read back %4s  MISMATCH\n' \
-      "$row" "$addr" "$want" "${back:-<unreadable>}"
-    fail=1
-  fi
+  WRITTEN+="$board"$'\t'"$addr"$'\t'"$want"$'\n'
 done <<< "$ROWS"
+
+# Read back what was written, waiting for the units a row board has yet to
+# report again.
+if [[ -n "$WRITTEN" ]]; then
+  deadline=$(( SECONDS + READBACK_S ))
+  while :; do
+    read_live
+    pending=0
+    while IFS=$'\t' read -r board addr want; do
+      [[ -n "$board" ]] || continue
+      [[ "$(live_offset "$board" "$addr")" == "$want" ]] || pending=1
+    done <<< "$WRITTEN"
+    if (( pending == 0 || SECONDS >= deadline )); then break; fi
+    sleep "$WALL_POLL_S"
+  done
+  while IFS=$'\t' read -r board addr want; do
+    [[ -n "$board" ]] || continue
+    back="$(live_offset "$board" "$addr")"
+    if [[ "$back" == "$want" ]]; then
+      printf '%s  a%-3s  %4s  restored\n' "$board" "$addr" "$want"
+    else
+      printf '%s  a%-3s  wanted %4s  read back %4s  MISMATCH\n' \
+        "$board" "$addr" "$want" "${back:-<unreadable>}"
+      fail=1
+    fi
+  done <<< "$WRITTEN"
+fi
 
 # Belt and braces: the non-empty guard above should make this unreachable.
 if [[ "$matched" == 0 ]]; then
