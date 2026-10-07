@@ -20,12 +20,15 @@ MODULES = [
     "model/wall.js",
     "model/board.js",
     "model/unit.js",
+    "model/firmware.js",
+    "model/md5.js",
     "app/dom.js",
     "app/api.js",
     "app/jobs.js",
     "app/view_wall.js",
     "app/view_board.js",
     "app/view_unit.js",
+    "app/view_firmware.js",
     "app/main.js",
 ]
 

@@ -91,3 +91,7 @@ details>.in{padding:0 14px 14px;display:flex;flex-direction:column;gap:10px}
 input[type=number]{width:84px}input:disabled{opacity:.5}
 .wall.single{width:92px;padding:10px 10px 14px;flex:none}.wall.single .flap{cursor:default}
 .top-align{align-items:flex-start}.grow{flex:1;min-width:220px}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:9px 12px;border-top:1px solid var(--line);vertical-align:top}
+th{font-size:13px;color:var(--muted);font-weight:600;border-top:0}
+.scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
+.rowwrap:empty{display:none}

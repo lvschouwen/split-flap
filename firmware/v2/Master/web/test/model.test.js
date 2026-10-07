@@ -1,5 +1,6 @@
 // The page's pure model, run by `node --test` (under pytest: tests/test_web_page.py).
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 
 import { ALPHABET } from '../gen/constants.js';
@@ -7,6 +8,8 @@ import { dur, volt, listOf, flapName, plural } from '../model/format.js';
 import { unitVerdictText, boardVerdictText, wallVerdictText, letterClass } from '../model/verdict.js';
 import { boardUnits, tileLines, supplyBars, sparkPoints, boardFacts, startMarks } from '../model/board.js';
 import { showsText, unitFacts, correctedOffset, selfTestText } from '../model/unit.js';
+import { firmwareRows, firmwareVerdict, firmwareFile, installQuestion, firmwareJobs } from '../model/firmware.js';
+import { md5Hex } from '../model/md5.js';
 import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId, noFlapFor,
          composeLines, composeText } from '../model/wall.js';
 
@@ -292,4 +295,78 @@ test('a self-test result reads as a sentence', () => {
   assert.equal(selfTestText({ state: 'failed', reason: 'timeout', unit_reason: 'no-hall' }),
     'The self-test failed: no-hall.');
   assert.equal(selfTestText(undefined), 'The self-test failed.');
+});
+
+const FIRMWARE = {
+  master: { id: 'wall-master', rev: 'aaa1111' },
+  rescue: { rev: 'f8da0fa', state: 'stale', warn: false },
+  rowImage: { rev: 'aaa1111', size: 325351, packed: true },
+  boards: [
+    { id: 'wall-master', kind: 'master', rev: 'aaa1111', current: true,
+      units: { total: 16, current: 16, outdated: 0, unknown: 0 } },
+    { id: 'wall-row', kind: 'row', rev: 'aaa1111', current: true, updateBlocked: false,
+      units: { total: 5, current: 5, outdated: 0, unknown: 0 } },
+  ],
+  units: { shouldBe: '68b94c5', total: 21, current: 21, outdated: 0, unknown: 0 },
+  bootloaders: { shouldBe: '506b3970', total: 21, ok: 21, outdated: 0, damaged: 0, unread: 0 },
+};
+
+test('md5 matches the reference for every length around a block edge', () => {
+  for (const length of [0, 1, 3, 55, 56, 57, 63, 64, 65, 119, 120, 1000, 70000]) {
+    const bytes = Uint8Array.from({ length }, (_, i) => (i * 31 + length) & 255);
+    assert.equal(md5Hex(bytes), createHash('md5').update(bytes).digest('hex'), `length ${length}`);
+  }
+});
+
+test('a wall that is up to date says so line by line', () => {
+  const rows = firmwareRows(FIRMWARE);
+  assert.deepEqual(rows.map((r) => [r.what, r.shouldBe, r.is, r.state]), [
+    ['Master firmware', '', 'aaa1111', 'running'],
+    ['Row board firmware', 'aaa1111', '1 of 1 row board', 'current'],
+    ['Stored image for row boards', 'aaa1111', 'aaa1111', 'matches'],
+    ['Unit firmware', '68b94c5', '21 of 21 units', 'current'],
+    ['Unit bootloader', '506b3970', '21 of 21 units intact', 'current'],
+    ['Rescue image (master)', '', 'f8da0fa', 'older, fine'],
+  ]);
+  assert.deepEqual(firmwareVerdict(rows), { cls: 'ok', title: 'Everything is up to date' });
+  assert.deepEqual(firmwareJobs(FIRMWARE), []);
+});
+
+test('what is behind is counted, and what can be started about it is offered', () => {
+  const fw = structuredClone(FIRMWARE);
+  fw.boards[1].current = false;
+  fw.boards[1].updateBlocked = true;
+  fw.boards[0].units.outdated = 3;
+  fw.units = { shouldBe: '68b94c5', total: 17, current: 13, outdated: 3, unknown: 1 };
+  fw.bootloaders.damaged = 1;
+  fw.rowImage.rev = 'bbb2222';
+  const rows = firmwareRows(fw);
+  assert.deepEqual(rows.map((r) => [r.cls, r.state]), [
+    ['ok', 'running'], ['note', '1 board behind'], ['note', 'another build'], ['note', '3 units behind'],
+    ['bad', '1 unit damaged'], ['ok', 'older, fine']]);
+  assert.equal(rows[1].shouldBe, 'bbb2222');
+  fw.rowImage = null;
+  assert.equal(firmwareRows(fw)[2].state, 'missing');
+  assert.equal(firmwareVerdict(rows).cls, 'bad');
+  assert.deepEqual(firmwareJobs(fw).map((j) => [j.id, j.name, j.target, j.label]), [
+    ['wall-master', 'update-units', { row: '' }, 'Update 3 units'],
+    ['wall-row', 'update', { row: 'wall-row' }, 'Offer the stored image again']]);
+});
+
+test('a firmware file is known by the name the build gives it', () => {
+  assert.deepEqual(firmwareFile('firmware-9618d55-master.bin'),
+    { kind: 'master', rev: '9618d55', route: '/firmware/master', label: 'the master’s firmware' });
+  assert.equal(firmwareFile('follower-de38289-gz.bin').route, '/firmware/row');
+  assert.equal(firmwareFile('follower-de38289.bin').kind, 'row');
+  assert.equal(firmwareFile('rescue-f8da0fa.bin').route, '/firmware/rescue');
+  assert.equal(firmwareFile('firmware-9618d55-dirty-master.bin').rev, '9618d55-dirty');
+  assert.equal(firmwareFile('firmware.bin'), null);
+  assert.equal(firmwareFile('firmware-9618d55-master.bin.txt'), null);
+  assert.equal(firmwareFile('holiday.jpg'), null);
+});
+
+test('the question before installing says what will happen', () => {
+  assert.match(installQuestion(firmwareFile('firmware-9618d55-master.bin')), /^Install 9618d55 on the master\? It restarts/);
+  assert.match(installQuestion(firmwareFile('follower-de38289-gz.bin')), /row boards/);
+  assert.match(installQuestion(firmwareFile('rescue-f8da0fa.bin')), /not touched/);
 });

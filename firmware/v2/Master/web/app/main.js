@@ -4,6 +4,7 @@ import { getJson, followStream } from './api.js';
 import { wallView } from './view_wall.js';
 import { boardView } from './view_board.js';
 import { unitView } from './view_unit.js';
+import { firmwareView } from './view_firmware.js';
 import { jobsChanged } from './jobs.js';
 import { boardId } from '../model/wall.js';
 
@@ -15,7 +16,7 @@ const app = {
   view: null,
 };
 
-const VIEWS = { wall: wallView, board: boardView, unit: unitView };
+const VIEWS = { wall: wallView, board: boardView, unit: unitView, firmware: firmwareView };
 
 function route() {
   const parts = (location.hash || '#wall').slice(1).split('/').map(decodeURIComponent);
