@@ -51,6 +51,11 @@ void webContentRegister(AsyncWebServer& server) {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
     serveGzipAsset(request, "text/html", INDEX_HTML_GZ, INDEX_HTML_GZ_LEN);
   });
+  // The new page (#574), built from web/ as one document; it takes over "/"
+  // when the old page goes.
+  server.on("/console", HTTP_GET, [](AsyncWebServerRequest* request) {
+    serveGzipAsset(request, "text/html", CONSOLE_HTML_GZ, CONSOLE_HTML_GZ_LEN);
+  });
   server.on("/index.html", HTTP_GET, [](AsyncWebServerRequest* request) {
     serveGzipAsset(request, "text/html", INDEX_HTML_GZ, INDEX_HTML_GZ_LEN);
   });

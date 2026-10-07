@@ -1,0 +1,82 @@
+// The page: one state, one view at a time, kept current by the stream.
+import { h, fill, pill } from './dom.js';
+import { getJson, followStream } from './api.js';
+import { wallView } from './view_wall.js';
+import { boardId } from '../model/wall.js';
+
+const app = {
+  // wall: GET /api/v2/wall. boards: id -> GET /api/v2/board/<id>, for those read.
+  // show: the stream's "wall" topic (mode, quiet, every row's text).
+  state: { wall: null, boards: {}, show: null, link: true },
+  view: null,
+};
+
+const VIEWS = { wall: wallView };
+
+function route() {
+  const parts = (location.hash || '#wall').slice(1).split('/').map(decodeURIComponent);
+  const make = VIEWS[parts[0]] || VIEWS.wall;
+  app.view = make(app, ...parts.slice(1));
+  fill(document.getElementById('view'), app.view.root);
+  for (const link of document.querySelectorAll('#nav a')) {
+    if (link.getAttribute('href') === '#' + parts[0]) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
+  refresh();
+  readBoards();
+}
+
+function refresh() {
+  const wall = app.state.wall;
+  const top = document.getElementById('topPill');
+  if (!app.state.link) fill(top, pill('bad', 'No contact with the master'));
+  else if (wall) fill(top, pill(wall.verdict === 'fault' ? 'bad' : 'ok', wall.verdict === 'fault' ? 'Needs attention' : 'Working'));
+  if (wall) document.getElementById('name').textContent = wall.master.id;
+  if (app.view) app.view.refresh();
+}
+
+let wallAsked = false;
+async function readWall() {
+  if (wallAsked) return;  // one read answers every event that came meanwhile
+  wallAsked = true;
+  try {
+    app.state.wall = await getJson('/api/v2/wall');
+  } catch (error) {
+    // The stream's own state says whether the master is there.
+  }
+  wallAsked = false;
+  refresh();
+  readBoards();
+}
+
+// A board's document is read when the view shows something of it and what
+// the wall says about the board has changed since it was read.
+const boardSeen = {};
+async function readBoards() {
+  if (!app.view || !app.view.boardsWanted) return;
+  for (const row of app.view.boardsWanted()) {
+    const id = boardId(app.state.wall, row);
+    const mark = JSON.stringify([row.verdict, row.unitLevels]);
+    if (boardSeen[id] === mark) continue;
+    boardSeen[id] = mark;
+    try {
+      app.state.boards[id] = await getJson('/api/v2/board/' + encodeURIComponent(id));
+    } catch (error) {
+      delete boardSeen[id];
+      continue;
+    }
+    refresh();
+  }
+}
+
+window.addEventListener('hashchange', route);
+route();
+readWall();
+followStream((topic, data) => {
+  if (topic === 'wall') app.state.show = data;
+  if (topic === 'wall' || topic === 'verdict') readWall();
+}, (up) => {
+  app.state.link = up;
+  refresh();
+  if (up) readWall();
+});

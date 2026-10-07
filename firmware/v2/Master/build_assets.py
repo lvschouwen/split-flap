@@ -34,6 +34,8 @@ except NameError:
 
 # The helpers every tree shares (hex parsing, rev stamping, PROGMEM arrays).
 sys.path.insert(0, str(_PROJECT_DIR.parent / "buildtools"))
+sys.path.insert(0, str(_PROJECT_DIR))
+import web_bundle  # noqa: E402
 from fwbuild import (  # noqa: E402
     GENERATED_BANNER,
     bundled_unit_equivalent_revs,
@@ -136,6 +138,8 @@ def build_header(project_dir: pathlib.Path) -> None:
     unit_hex = data_dir / "unit-firmware.hex"
     unit_bin = unit_firmware_image(project_dir)
     tz_json = build_tz_json(data_dir / "zones.csv")
+    # The new page (#574): web/ joined into one document.
+    console_html = web_bundle.build_page(project_dir)
 
     with output_header.open("w", encoding="utf-8") as fh:
         fh.write(GENERATED_BANNER)
@@ -147,6 +151,7 @@ def build_header(project_dir: pathlib.Path) -> None:
                 varname = varname + "_GZ"
             emit_array(fh, varname, data)
         emit_array(fh, "TZ_JSON_GZ", compress_asset(tz_json))
+        emit_array(fh, "CONSOLE_HTML_GZ", compress_asset(console_html))
         emit_array(fh, "UNIT_FIRMWARE_BIN", unit_bin)
 
     print(f"[build_assets] wrote {output_header.name}")
@@ -157,6 +162,7 @@ def build_header(project_dir: pathlib.Path) -> None:
         else:
             print(f"  {filename:<16} raw {len(data):>5}")
     print(f"  tz.json          gz {len(tz_json):>5} -> {len(compress_asset(tz_json)):>5}")
+    print(f"  web/ (console)   gz {len(console_html):>5} -> {len(compress_asset(console_html)):>5}")
     print(f"  unit-firmware    hex {unit_hex.stat().st_size:>5} -> bin {len(unit_bin):>5}")
 
 

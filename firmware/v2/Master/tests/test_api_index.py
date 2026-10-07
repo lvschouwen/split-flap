@@ -46,6 +46,7 @@ INDEX_RE = re.compile(r'\{"(GET|POST|PUT)",\s*"([^"]+)",')
 # API_ROUTES and not here fails the gate.
 UNDOCUMENTED = {
     ("GET", "/"),
+    ("GET", "/console"),
     ("GET", "/index.html"),
     ("GET", "/style.css"),
     ("GET", "/script.js"),
