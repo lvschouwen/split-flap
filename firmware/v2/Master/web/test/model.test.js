@@ -458,6 +458,8 @@ test('rows that cannot be saved say why', () => {
   draft[0].row = 2;
   draft[0].width = 16;  // the same place as the master: shows the same text
   assert.equal(arrangeProblem(draft), '');
+  draft[0].width = 0;
+  assert.equal(arrangeProblem(draft), 'wall-row: the number of units is a whole number from 1.');
 });
 
 test('the time zone is named by the browser\u2019s zone when that has the wall\u2019s rule', () => {
@@ -480,6 +482,6 @@ test('the broker line says whether Home Assistant is reached, and where', () => 
 
 test('a row board that was found is a line with what it said about itself', () => {
   assert.deepEqual(foundLine({ id: 'split-flap-aaaaaa', address: '192.168.1.51', rev: 'de38289', units: 5 }),
-    { title: 'split-flap-aaaaaa', why: '5 units, firmware de38289, at 192.168.1.51' });
+    { title: 'split-flap-aaaaaa', why: 'firmware de38289, at 192.168.1.51' });
   assert.equal(foundLine({ id: 'x', address: '192.168.1.51', rev: '', units: 0 }).why, 'at 192.168.1.51');
 });

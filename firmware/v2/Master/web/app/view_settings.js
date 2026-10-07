@@ -55,14 +55,14 @@ function rowsPart(app, draft, status, found) {
   const address = h('input', { type: 'text', id: 'pairAddress', placeholder: '192.168.1.50',
                                maxlength: 15, autocomplete: 'off', inputmode: 'decimal' });
   return h('div', { class: 'section' }, h('h2', {}, 'Rows'),
-    h('p', { class: 'muted small' }, 'Which board drives which row, top to bottom, and where each row starts. Boards with the same row number hang side by side.'),
+    h('p', { class: 'muted small' }, 'Which board drives which row, top to bottom, how many units it has, and where the row starts. Boards with the same row number hang side by side.'),
     h('div', { class: 'scroll' }, h('table', {},
       h('thead', {}, h('tr', {}, ['Row', 'Board', 'Units', 'Starts at column', ''].map((t) => h('th', {}, t)))),
       h('tbody', {}, draft.map((line) => h('tr', {},
         h('td', {}, place(line, 'row', 'Row')),
         h('td', {}, h('a', { href: '#board/' + line.name }, line.name),
           h('div', { class: 'muted small' }, line.own ? 'master' : 'row board')),
-        h('td', {}, line.width),
+        h('td', {}, place(line, 'width', 'Number of units')),
         h('td', {}, place(line, 'col', 'Start column')),
         h('td', {}, !line.own && h('button', { type: 'button', class: 'btn quiet', onclick: () => {
           if (!window.confirm(`Remove ${line.name} from the wall? It shows nothing of the wall until it is added again.`)) return;

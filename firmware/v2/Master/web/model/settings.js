@@ -1,7 +1,6 @@
 // Wall settings: the rows as the operator arranges them, the time zone by
 // its name, the broker in a line. Pure.
 import { boardId } from './wall.js';
-import { plural } from './format.js';
 
 // A line a board, top to bottom and left to right. Row and column count from
 // 1, as the page shows them; `id` is the board's name in an action ("" for
@@ -17,7 +16,7 @@ export function rowsDraft(wall) {
 // share a row side by side, or show the same text at the same place.
 export function arrangeProblem(draft) {
   for (const line of draft) {
-    for (const [what, value] of [['row', line.row], ['column', line.col]]) {
+    for (const [what, value] of [['row', line.row], ['number of units', line.width], ['column', line.col]]) {
       if (!Number.isInteger(value) || value < 1) return `${line.name}: the ${what} is a whole number from 1.`;
     }
   }
@@ -62,7 +61,5 @@ export function brokerText(mqtt, connected) {
 
 // A row board a search found, as a line.
 export function foundLine(board) {
-  return { title: board.id,
-           why: [board.units ? plural(board.units, 'unit') : null,
-                 board.rev ? 'firmware ' + board.rev : null, 'at ' + board.address].filter(Boolean).join(', ') };
+  return { title: board.id, why: (board.rev ? `firmware ${board.rev}, ` : '') + 'at ' + board.address };
 }
