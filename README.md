@@ -61,7 +61,7 @@ pio test -e native       # host-side unit tests
 python -m pytest tests/  # python-side tests (where present)
 ```
 
-The web UI and the bundled unit firmware are gzipped and compiled into the master binary at build time by `firmware/v2/Master/build_assets.py` — there is no separate filesystem-flash step; `pio run -t upload` lands the whole thing.
+The operator page and the bundled unit firmware are gzipped and compiled into the master binary at build time by `firmware/v2/Master/build_assets.py` — there is no separate filesystem-flash step; `pio run -t upload` lands the whole thing.
 
 For a Nano whose upload fails on the stock bootloader, use the fallback env:
 
@@ -71,16 +71,16 @@ pio run -e unit_old_bootloader -t upload
 
 ## The master (ESP32-S3)
 
-The master is an **ESP32-S3-WROOM-1-N16R8 devkit**. It drives the units over I2C (SDA = GPIO 8, SCL = GPIO 9, 100 kHz) and exposes everything through a three-tab web UI.
+The master is an **ESP32-S3-WROOM-1-N16R8 devkit**. It drives the units over I2C (SDA = GPIO 8, SCL = GPIO 9, 100 kHz) and serves one operator page: the wall, then each board, then each unit, with everything about one thing on its own screen. The same surface is open to scripts as `/api/v2` (`GET /api` lists every route).
 
 Highlights:
 
 - **WiFi portal** — on first boot (or when the stored network can't be reached for ~30 s) the master brings up a `<device-name>-setup` access point. Connect, pick your network, done. Credentials live in NVS and survive reboots and firmware updates.
 - **Clock / NTP** — full IANA timezone picker (baked table served at `/tz.json`); the time is set at boot, on WiFi join, and whenever you change the zone.
-- **OTA** — upload a new `firmware-<rev>.bin` from **Maintenance → Master Firmware (OTA)** (mandatory `?md5=` integrity check). The S3's A/B slots mean a bad image rolls back automatically. The same flow can reflash every detected unit right after.
+- **OTA** — upload a new `firmware-<rev>.bin` from **Firmware → Install an update** (mandatory `?md5=` integrity check). The S3's A/B slots mean a bad image rolls back automatically. The Firmware screen shows what every board, unit and bootloader should run and does run.
 - **Rescue / factory reset** — hold the GPIO 4 button for 5 s through reset to boot the rescue app from the factory slot, or `POST /firmware/rescue-boot`. WiFi credentials always survive a factory reset.
 - **MQTT / Home Assistant** — see below.
-- **Live vitals** — the System tab shows heap, load, I2C traffic, MQTT state, and NTP sync age; live display changes stream over SSE.
+- **Verdicts and history** — every board and unit is judged working, worth knowing or needing attention, with the reason; what happened on the wall is kept as a history. The master's board screen shows heap, load, I2C traffic, MQTT state and NTP sync age.
 
 ## The units (Arduino Nano)
 
@@ -105,31 +105,31 @@ Each unit's address comes from a 4-way DIP switch (the firmware adds 1 so DIP `0
 | 5    | 0100 | 0x05        |
 | …    | …    | …           |
 
-The master scans the bus at boot and derives the display width from the highest responding address. A dead unit keeps its slot (the layout doesn't shift), but a unit parked on a high address with nothing below it widens the display. The web UI's **Units: N / W** field shows detected responders vs. derived width. A unit count can also be pinned manually (Maintenance → Display width) for headless/dummy setups.
+The master scans the bus at boot and derives the display width from the highest responding address. A dead unit keeps its slot (the layout doesn't shift), but a unit parked on a high address with nothing below it widens the display. A unit count can also be pinned manually (the master's board screen → **Settings for this board** → **Number of units**) for headless/dummy setups.
 
 ### Calibrate the zero position
 
-The zero (blank-flaps) position is set by homing to the hall sensor and stepping a few steps forward — an offset unique to each unit, stored in EEPROM. Calibrate from the web UI, no reflashing:
+The zero (blank-flaps) position is set by homing to the hall sensor and stepping a few steps forward — an offset unique to each unit, stored in EEPROM. Calibrate from the page, no reflashing:
 
-1. Open **Maintenance → Calibration**.
-2. Pick a test letter; the master sends it to every unit.
-3. For each unit, type what the drum is *actually* showing.
-4. **Apply All** — the master reads each offset, computes the corrective delta, writes EEPROM, and re-homes, all over I2C.
+1. Open **Calibrate the wall** (under the wall picture).
+2. Pick a test letter; the master shows it on every unit.
+3. Mark the flaps that show something else, and say what each one actually shows.
+4. The master corrects each marked unit's offset, stores it in the unit and finds home again, over I2C; repeat until the wall is right.
 
-Expand **Advanced** for raw offset + jog controls and half-flap fine tuning.
+A single unit is lined up on its own screen (**Line up this flap**), which also has the raw offset and nudge controls.
 
 ### Reflash units over I2C
 
 Units carry the [patched twiboot bootloader](./firmware/v2/UnitBootloader/README.md) (flashed once per unit via ICSP). The master ships the compiled unit sketch in its own binary and:
 
 - auto-installs it on any Nano it finds sitting in twiboot (e.g. a freshly ICSP-flashed one), and
-- reflashes every unit on demand via **Maintenance → Actions → Flash all units** (or automatically for out-of-date units after a master OTA).
+- updates every unit on demand from a board's screen (**Update units**), or automatically for out-of-date units when a board starts.
 
 ## Walls of several rows
 
 One ESP32-S3 master per Split-Flap; every further row is an ESP-01 row board (`firmware/v2/FollowerEsp01`) on the same LAN. The row board dials its master and keeps one connection open (the wall link); the master wraps and aligns your text across the grid and names the instant all rows flip.
 
-- Pair a row from the master: `curl -X POST http://<master>/api/v2/action -H 'Content-Type: application/json' -d '{"name":"pair","target":{"host":"<row address>"}}'`; `release` and `arrange` change the wall the same way, and `GET /api/v2/wall` shows every board.
+- Pair a row in **Wall settings → Rows** (**Look for more boards**, or add one by its address), and arrange the rows there. By script: `curl -X POST http://<master>/api/v2/action -H 'Content-Type: application/json' -d '{"name":"pair","target":{"host":"<row address>"}}'`; `release` and `arrange` change the wall the same way, and `GET /api/v2/wall` shows every board.
 - Unit jobs (home, calibrate, self-test, unit firmware, bootloader) go through the same call for the master's own units and a row board's.
 - Upload a `follower-<rev>.bin` once to the master (`POST /firmware/row?md5=`); every row board on another rev is offered it and fetches it.
 - All boards are assumed to be on your own LAN: the link is not authenticated.
@@ -138,16 +138,16 @@ Design: [`docs/superpowers/specs/2026-10-05-wall-link-and-console-design.md`](./
 
 ## MQTT / Home Assistant
 
-The display joins Home Assistant over MQTT with automatic discovery: inbound notification text (shown for a dwell, then reverts), a **Mode** select (text/clock), and health telemetry — including per-unit wear and a wall problem sensor when the master has row boards. Configure it entirely from **Settings → MQTT Broker** (host, port, username, password); leave the host empty to keep MQTT off. If a broker is advertised over mDNS on your LAN, **Detect broker** prefills host/port. Create a dedicated HA user for the display rather than reusing your own login.
+The display joins Home Assistant over MQTT with automatic discovery: inbound notification text (shown for a dwell, then reverts), a **Mode** select (text/clock), and health telemetry — including per-unit wear and a wall problem sensor when the master has row boards. Configure it in **Wall settings → Home Assistant** (host, port, user, password); leave the host empty to keep MQTT off. Create a dedicated HA user for the display rather than reusing your own login.
 
 ## Device name & running multiple displays
 
-Every network-facing name (mDNS `<name>.local`, DHCP hostname, MQTT client id/topics, AP SSIDs) derives from one per-device identity. Out of the box it's `split-flap-<hex chip id>` — unique per board, so several displays can share a LAN running the **same image** with no per-device edits. Set a friendly name in **Settings → Device → Device Name** (lowercase letters/digits/hyphens, ≤24 chars). Use a **DHCP reservation** on the board's MAC for a fixed IP.
+Every network-facing name (mDNS `<name>.local`, DHCP hostname, MQTT client id/topics, AP SSIDs) derives from one per-device identity. Out of the box it's `split-flap-<hex chip id>` — unique per board, so several displays can share a LAN running the **same image** with no per-device edits. Set a friendly name on the master's board screen (**Settings for this board** → **Name**; lowercase letters/digits/hyphens, ≤24 chars). Use a **DHCP reservation** on the board's MAC for a fixed IP.
 
 ## Flashing & provisioning
 
 - **First flash** of an S3 is a USB job (`pio run -t upload`, or the merged factory-bin recipe in [`flashing/README.md`](./flashing/README.md) which lands the custom bootloader + rescue slot in one shot).
-- **Subsequent flashes** go over the air — from the web UI, or scripted with [`flashing/ota-flash.sh`](./flashing/ota-flash.sh) (fetches the latest staged bin, OTAs master/follower/rescue targets, reads the verdict back from `/settings`).
+- **Subsequent flashes** go over the air — from the page's Firmware screen, or scripted with [`flashing/ota-flash.sh`](./flashing/ota-flash.sh) (fetches the latest staged bin, OTAs master/follower/rescue targets, reads the verdict back from `/settings`).
 - The bundled unit firmware is staged into the master (and follower) `data/` dirs by `flashing/flasher/make_manifest.py stage`; CI's `gate` step enforces that it never drifts from the built Unit hex.
 
 See [`flashing/README.md`](./flashing/README.md) for the full recipe (DIP address table, esptool factory-bin, OTA flags).

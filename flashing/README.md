@@ -32,7 +32,7 @@ Maintenance tab).
 
 **Units:** Nanos carrying only twiboot get the bundled unit firmware pushed
 automatically when the master probes them; **Flash all unit(s)** /
-`/reflash-units` re-pushes on demand. Only the one-time twiboot ICSP flash
+the `update-units` job (`POST /api/v2/action`) re-pushes on demand. Only the one-time twiboot ICSP flash
 per Nano happens off-master (see `firmware/v2/UnitBootloader/`).
 
 ## Only one ICSP flash per Nano — twiboot only

@@ -32,7 +32,7 @@ Because every unit listens on `0x29` when in bootloader mode, and only one unit 
 
 The sketch-side handshake and the master-side flash client shipped long ago:
 the master auto-installs the bundled unit firmware on boot for any Nano it
-sees in bootloader mode, and `/reflash-units` forces a re-push (see issue #10).
+sees in bootloader mode, and the master's `update-units` job forces a re-push (see issue #10).
 
 ## Building
 
@@ -156,7 +156,7 @@ everything else (auto-install on its next boot scan).
 - [x] Phase 0 — design in the issue body.
 - [x] Phase 1 — this directory. Vendored twiboot, patched for 16 MHz Nano, `.hex` builds and is checked in.
 - [x] Phase 2 — sketch-side: EEPROM identity + DIP fallback, jump-to-bootloader I2C opcode.
-- [x] Phase 3 — master-side: twiboot protocol client, PROGMEM-bundled hex, auto-install on boot + `/reflash-units`.
+- [x] Phase 3 — master-side: twiboot protocol client, PROGMEM-bundled hex, auto-install on boot + the `update-units` job.
 - [x] Phase 4 — web UI reflash controls (Maintenance tab).
 - [x] Phase 5 — EEPROM layout versioned in `SettingsEepromLayout.h` (natively tested).
 

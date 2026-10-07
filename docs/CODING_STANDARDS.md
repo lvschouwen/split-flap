@@ -346,7 +346,7 @@ Any user-configurable host/URL the firmware will connect to **MUST** pass the LA
 - No destructive operation (erase, overwrite, mass fan-out) without an explicit flag or prompt.
 - Exit codes tell the truth: a failed flash **MUST NOT** exit 0.
 
-### Web assets (`data/style.css`, `data/script.js`)
+### The page (`firmware/v2/Master/web/`)
 
 - Wire strings become text nodes only (§5.3).
 - UI changes are mockup-gated (design-confirm rule) — no unreviewed visual changes.
