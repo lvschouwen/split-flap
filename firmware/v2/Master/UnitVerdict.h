@@ -147,6 +147,15 @@ struct UnitVerdict {
   uint32_t all = 0;  // unitReasonBit() of every reason that applies
 };
 
+// How many of these units are at fault now: the count Home Assistant shows.
+inline int unitFaultCount(const UnitVerdict* units, int count) {
+  int faults = 0;
+  for (int i = 0; i < count; i++) {
+    if (units[i].level == VerdictLevel::Fault) faults++;
+  }
+  return faults;
+}
+
 inline uint32_t unitVerdictUptimeS(const UnitFacts& u) {
   if (u.linkValid) return u.link.uptimeSeconds;
   return u.statusValid ? u.status.uptimeSeconds : 0;

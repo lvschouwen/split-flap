@@ -293,6 +293,17 @@ static void test_the_level_names() {
   TEST_ASSERT_EQUAL_STRING("fault", verdictLevelName(VerdictLevel::Fault));
 }
 
+static void test_the_fault_count_counts_faults_only() {
+  UnitVerdict units[4];
+  units[0].level = VerdictLevel::Fault;
+  units[1].level = VerdictLevel::Note;
+  units[2].level = VerdictLevel::Working;
+  units[3].level = VerdictLevel::Fault;
+  TEST_ASSERT_EQUAL(2, unitFaultCount(units, 4));
+  TEST_ASSERT_EQUAL(1, unitFaultCount(units, 3));
+  TEST_ASSERT_EQUAL(0, unitFaultCount(units, 0));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_healthy_unit_is_working_and_says_how_long);
@@ -315,5 +326,6 @@ int main(int, char**) {
   RUN_TEST(test_the_reason_numbers_and_names_are_fixed);
   RUN_TEST(test_every_reason_is_ranked_once_and_faults_come_first);
   RUN_TEST(test_the_level_names);
+  RUN_TEST(test_the_fault_count_counts_faults_only);
   return UNITY_END();
 }

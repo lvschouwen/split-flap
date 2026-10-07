@@ -198,6 +198,23 @@ void wallWatchTick() {
   xSemaphoreGive(verdictsMutex);
 }
 
+WallFaultCounts wallFaultCounts() {
+  WallFaultCounts out;
+  if (published == nullptr) return out;
+  xSemaphoreTake(verdictsMutex, portMAX_DELAY);
+  if (published->valid) {
+    out.wall = 0;
+    for (int i = 0; i < published->count; i++) {
+      const WallVerdictBoard& board = published->boards[i];
+      const int faults = unitFaultCount(board.unit, board.units);
+      out.wall += faults;
+      if (board.own) out.own = faults;
+    }
+  }
+  xSemaphoreGive(verdictsMutex);
+  return out;
+}
+
 bool wallVerdictsGet(WallVerdicts& out, uint32_t rowsGeneration) {
   if (published == nullptr) return false;
   bool ok = false;

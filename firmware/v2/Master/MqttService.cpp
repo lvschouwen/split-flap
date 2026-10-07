@@ -138,7 +138,7 @@ static char rxPayload[sizeof(MqttInboxMessage::payload)];
 
 static void onMqttConnect(bool /*sessionPresent*/) { mqttJustConnected = true; }
 
-static std::atomic<uint32_t> mqttDropCounter{0};  // System tab (#245);
+static std::atomic<uint32_t> mqttDropCounter{0};  // the board page (#245);
                                                   // mqttTask writes, sampler reads
 
 uint32_t mqttDropCount() { return mqttDropCounter.load(); }
@@ -638,6 +638,7 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
       r.fault = board->verdict.level == VerdictLevel::Fault;
       r.level = verdictLevelName(board->verdict.level);
       r.reason = boardReasonName(board->verdict.reason);
+      r.unitsFaulty = (uint8_t)unitFaultCount(board->unit, board->units);
     }
     texts[i][0] = '\0';
     wallShowRowText(i, texts[i], sizeof(texts[i]));
@@ -646,7 +647,6 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
       r.text = snap.currentText;  // what is on the flaps, as for a master on its own
       r.unitsKnown = true;
       r.unitsFound = snap.detectedUnitCount;
-      r.unitsFaulty = snap.faultyUnitCount;
       r.unitsLost = (uint8_t)computeLostUnitCount(snap.units, snap.displayWidth);
       continue;
     }
@@ -669,7 +669,6 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
         if (units->units[u].state != 0) found++;
       }
       r.unitsFound = (uint8_t)found;
-      r.unitsFaulty = (uint8_t)units->faulty;
       r.unitsLost = (uint8_t)computeLostUnitCount(units->units, units->width);
     }
   }
@@ -699,12 +698,9 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
 
 // Periodic telemetry + per-unit health, 60 s (wraparound-safe; cadence
 // check lives inside). Deviation from v1 (spec): no blocking bus poll from
-// here — displayTask owns the bus; faulty counts/attrs are probe-time
-// facts from the snapshot.
+// here — displayTask owns the bus; the attrs are probe-time facts from the
+// snapshot, the faulty count is the wall's verdicts.
 static void mqttPublishTelemetry(const DisplaySnapshot& snap) {
-  // Periodic telemetry + per-unit health, 60 s (wraparound-safe). Deviation
-  // from v1 (spec): no blocking bus poll from here — displayTask owns the
-  // bus; faulty counts/attrs are probe-time facts from the snapshot.
   if ((int32_t)(millis() - mqttNextTelemetryMs) >= 0) {
     mqttNextTelemetryMs = millis() + MQTT_TELEMETRY_INTERVAL_S * 1000UL;
     uint32_t freeHeap = ESP.getFreeHeap();
@@ -725,10 +721,15 @@ static void mqttPublishTelemetry(const DisplaySnapshot& snap) {
       mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
     }
 
-    char fc[12];
-    snprintf(fc, sizeof(fc), "%d", (int)snap.faultyUnitCount);
-    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units_faulty").c_str(),
-                       0, true, fc);
+    // The units at fault by the wall's verdicts (WallWatch), on every board;
+    // nothing is said before the first look.
+    const WallFaultCounts faults = wallFaultCounts();
+    if (faults.wall >= 0) {
+      char fc[12];
+      snprintf(fc, sizeof(fc), "%d", faults.wall);
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units_faulty").c_str(),
+                         0, true, fc);
+    }
     // Wear warning (#231): binary problem state + median/flagged attrs, both
     // computed from the same snapshot the health payload uses.
     WearAssessment wear;
@@ -749,7 +750,7 @@ static void mqttPublishTelemetry(const DisplaySnapshot& snap) {
     // forbids). mqttTask-only access, so no guard needed.
     static char health[UNIT_HEALTH_JSON_CAP];
     size_t hn = buildUnitHealthJson(health, UNIT_HEALTH_JSON_CAP, snap.units,
-                                    snap.displayWidth, snap.faultyUnitCount,
+                                    snap.displayWidth, faults.own >= 0 ? faults.own : 0,
                                     SFP_I2C_ADDRESS_BASE, millis());
     if (hn > 0 && hn < UNIT_HEALTH_JSON_CAP) {
       mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "units/attrs").c_str(),

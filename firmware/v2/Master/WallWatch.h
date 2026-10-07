@@ -51,6 +51,14 @@ void wallWatchInit();
 // Worker task only: self-throttled to one look a second.
 void wallWatchTick();
 
+// Any task: the units at fault now, on the master's own row and on every
+// board of the wall together. -1 before the first look.
+struct WallFaultCounts {
+  int own = -1;
+  int wall = -1;
+};
+WallFaultCounts wallFaultCounts();
+
 // Any task: a copy of the latest verdicts into `out`. False (and `out`
 // untouched) before the first look, or when they are of another rows table
 // than `rowsGeneration`.

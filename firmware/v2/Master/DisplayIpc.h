@@ -23,7 +23,7 @@
 #include "BootDump.h"      // BootDumpSlot (#511)
 #include "BootInfo.h"      // BootInfoSlot (#499)
 
-// Execution result of the LAST maintenance op (#204) — the /unit/op-result
+// Execution result of the LAST maintenance op (#204) — the job result
 // contract. A single slot, not a log: it is a best-effort acknowledgement
 // channel for one active critical op (the UI serializes those and disables
 // the Maintenance controls while awaiting); an older seq answering
@@ -52,7 +52,6 @@ struct DisplaySnapshot {
   // Probe/health facts (#203). Derived fields are recomputed by
   // displayApplyUnitFacts(), never patched individually.
   uint8_t detectedUnitCount = 0;
-  uint8_t faultyUnitCount = 0;
   UnitFacts units[UNITS_AMOUNT];
   MaintResult lastMaint;
   // Reflash job progress (#205) — published at unit boundaries and settle
@@ -123,7 +122,7 @@ inline bool displayApplyCommand(DisplaySnapshot& snap,
 
 // Folds a bus scan's per-unit facts into the snapshot and recomputes the
 // derived fields: width (highest responder + 1, ceiling fallback — #123
-// rules in DisplayWidth.h), responding-unit count, faulty count.
+// rules in DisplayWidth.h), responding-unit count.
 // widthOverride (#289 dummy mode): 1..maxUnits pins the width regardless of
 // the probe (0/out-of-range = probe-derived); counts stay probe truth.
 inline void displayApplyUnitFacts(DisplaySnapshot& snap,
@@ -157,7 +156,6 @@ inline void displayApplyUnitFacts(DisplaySnapshot& snap,
   }
   snap.displayWidth = (uint8_t)width;
   snap.detectedUnitCount = (uint8_t)countRespondingUnits(states, maxUnits);
-  snap.faultyUnitCount = (uint8_t)computeFaultyUnitCount(snap.units, maxUnits);
   snap.probed = true;
 }
 
@@ -219,7 +217,7 @@ inline void displayApplyOdometerReset(DisplaySnapshot& snap, int i2cAddress) {
   unitFactsApplyOdometerReset(snap.units[idx]);
 }
 
-// A verified SET_GATES landed (#409) — patch the fact so /units/health shows
+// A verified SET_GATES landed (#409) — patch the fact so the unit facts shows
 // the new gates immediately instead of the pre-write value until the next
 // lifetime poll. Only ever called after the read-back confirmed it, so this
 // cannot invent a gate the unit did not accept.
