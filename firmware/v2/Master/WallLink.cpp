@@ -47,6 +47,9 @@ WallRowsTable rowsTable;
 uint32_t rowsGeneration = 0;
 WallRowLink* facts = nullptr;  // WALL_LINK_MAX_ROWS
 bool factsDirty[WALL_LINK_MAX_ROWS] = {false};
+// How many entries each row may still add to the event record (WallRowEvents.h).
+WallRowEventBudget eventBudget[WALL_LINK_MAX_ROWS];
+bool eventBudgetLogged[WALL_LINK_MAX_ROWS] = {false};
 
 int listenFd = -1;
 uint32_t listenRetryAtMs = 0;
@@ -276,8 +279,15 @@ struct Hooks : WallLinkHooks {
     } else if (message.which_body == wl_ToMaster_event_tag) {
       // #570: what the row says happened on it goes into the event record.
       const wl_Event& e = message.body.event;
-      eventRecord(EventKind::RowEvent, wallRowEventDetail(e.code), rowName(row),
-                  e.unit <= 255 ? (uint8_t)e.unit : 0, e.a, e.b, e.age_s);
+      if (eventBudget[row].take(passNowMs)) {
+        eventBudgetLogged[row] = false;
+        eventRecord(EventKind::RowEvent, wallRowEventDetail(e.code), rowName(row),
+                    e.unit <= 255 ? (uint8_t)e.unit : 0, e.a, e.b, e.age_s);
+      } else if (!eventBudgetLogged[row]) {
+        eventBudgetLogged[row] = true;
+        SerialPrintf("link: %s sends events faster than they are recorded — dropping\n",
+                     rowName(row));
+      }
     }
     factsDirty[row] = true;
   }
