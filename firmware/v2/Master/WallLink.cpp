@@ -10,6 +10,7 @@
 #include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
 #include "LargeAlloc.h"
+#include "RowLog.h"
 #include "SntpReply.h"
 #include "TaskWatchdog.h"
 #include "Tasks.h"
@@ -276,6 +277,9 @@ struct Hooks : WallLinkHooks {
       SerialPrintf("link: %s: update to %s: phase %d, reason %d, detail %u\n", rowName(row), u.rev,
                    (int)u.phase, (int)u.reason, (unsigned)u.detail);
       updateEnded(row, updater.answer(row, u, offeredRev(), passNowMs));
+    } else if (message.which_body == wl_ToMaster_log_line_tag) {
+      rowLogAppend(row, message.body.log_line.text.bytes, message.body.log_line.text.size);
+      return;  // nothing about the row itself changed
     } else if (message.which_body == wl_ToMaster_event_tag) {
       // #570: what the row says happened on it goes into the event record.
       const wl_Event& e = message.body.event;
@@ -457,6 +461,9 @@ void showAndSettings(uint32_t nowMs) {
     if (wallShowTakeRow(row, show)) core->setText(row, show.text, show.speed, show.commitAtMs);
   }
   core->setQuiet(tasksQuiet());
+  for (int row = 0; row < rowsTable.count && row < WALL_LINK_MAX_ROWS; row++) {
+    core->setLogWanted(row, rowLogWanted(row, nowMs));
+  }
   if (wallStateRowSettingsGeneration() != settingsGeneration) {
     static wl_Config settings;
     settingsGeneration = wallStateRowSettings(settings);
@@ -568,6 +575,7 @@ void pass() {
     updater.reset();
     rowsTable = wallStateRows(rowsGeneration);
     wallShowRowsChanged(rowsTable);
+    rowLogRowsChanged(rowsGeneration);
     for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
       facts[row] = WallRowLink{};
       factsDirty[row] = true;
@@ -656,6 +664,7 @@ void wallLinkInit(const String& masterId) {
   for (int i = 0; i < WALL_LINK_MAX_ROWS; i++) new (&facts[i]) WallRowLink();
   for (int i = 0; i < WALL_LINK_MAX_CONNS; i++) new (&sockets[i]) Socket();
   rowsTable = wallStateRows(rowsGeneration);
+  rowLogRowsChanged(rowsGeneration);
 }
 
 void wallLinkTaskMain(void*) {

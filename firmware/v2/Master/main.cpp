@@ -15,6 +15,7 @@
 #include "ClockService.h"
 #include "WallLink.h"
 #include "WallPair.h"
+#include "RowLog.h"
 #include "WallShow.h"
 #include "WallState.h"
 #include "WallWatch.h"
@@ -158,6 +159,7 @@ void setup() {
   // Before tasksInit(): the link task reads both.
   wallStateInit(settingsStore);
   wallWatchInit();  // #570: verdicts and the changes worth recording
+  rowLogInit();  // before the link, which tells it the rows table
   wallLinkInit(deviceName);
   wallPairInit(deviceName);
   wallShowInit();

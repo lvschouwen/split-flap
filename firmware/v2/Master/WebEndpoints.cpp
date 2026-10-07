@@ -122,10 +122,13 @@ bool webUploadCsrfRejected(AsyncWebServerRequest* request) {
 static AsyncMiddlewareFunction csrfMiddleware(
     [](AsyncWebServerRequest* request, ArMiddlewareNext next) {
       bool hasOrigin = request->hasHeader("Origin");
-      if (lanCsrfRejectPost(request->method() == HTTP_POST, hasOrigin,
+      // Every method that changes something, not POST alone.
+      const bool mutating = request->method() != HTTP_GET && request->method() != HTTP_HEAD &&
+                            request->method() != HTTP_OPTIONS;
+      if (lanCsrfRejectPost(mutating, hasOrigin,
                             hasOrigin ? request->header("Origin") : String())) {
         request->send(403, "text/plain",
-                      F("Cross-origin POST refused (CSRF guard)"));
+                      F("Cross-origin request refused (CSRF guard)"));
         return;  // handler chain stops — next() is never called
       }
       next();

@@ -30,9 +30,11 @@ ROUTE_RE = re.compile(
 # A route registered as a plain string also answers every path below it.
 PREFIX_ROUTE_RE = re.compile(r'server\.on\(\s*"([^"]+)"\s*,\s*(HTTP_GET|HTTP_POST)')
 SSE_RE = re.compile(r'AsyncEventSource\s+\w+\(\s*"([^"]+)"\s*\)')
-# A route with a JSON body is its own handler object, always a POST.
-JSON_RE = re.compile(r'new\s+AsyncCallbackJsonWebHandler\(\s*"([^"]+)"')
-INDEX_RE = re.compile(r'\{"(GET|POST)",\s*"([^"]+)",')
+# A route with a JSON body is its own handler object; its method is set on it
+# right after.
+JSON_RE = re.compile(
+    r'new\s+AsyncCallbackJsonWebHandler\(\s*"([^"]+)".*?->setMethod\(HTTP_(POST|PUT)\)', re.S)
+INDEX_RE = re.compile(r'\{"(GET|POST|PUT)",\s*"([^"]+)",')
 
 # Served on purpose, and deliberately absent from the operator-facing index.
 # Kept here rather than in ApiIndex.h so it costs the firmware nothing — it
@@ -60,8 +62,8 @@ def registered_routes():
             routes.add((METHOD_MAP[method], path))
         for path in SSE_RE.findall(text):
             routes.add(("GET", path))
-        for path in JSON_RE.findall(text):
-            routes.add(("POST", path))
+        for path, method in JSON_RE.findall(text):
+            routes.add((method, path))
     return routes
 
 

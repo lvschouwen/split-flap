@@ -68,6 +68,10 @@ struct WallLinkRow {
   // Has this connection been told the wall's quiet state and settings?
   bool quietSent = false;
   bool configSent = false;
+  // Is this row's log wanted, and what was this connection last told? A
+  // connection starts with its log off (the row's rule).
+  bool logWanted = false;
+  bool logTold = false;
 };
 
 struct WallLinkCore {
@@ -164,6 +168,12 @@ struct WallLinkCore {
       }
       // How to behave comes before what to show.
       if (!tellSettings(r, nowMs, hooks)) continue;
+      if (row.logWanted != row.logTold && !row.contact.busy) {
+        wlClear(out);
+        out.which_body = wl_ToRow_log_ctl_tag;
+        out.body.log_ctl.on = row.logWanted;
+        if (send(r, out, nowMs, hooks)) row.logTold = row.logWanted;
+      }
       if (wallRowTextDue(row.text, row.contact)) {
         wlClear(out);
         out.which_body = wl_ToRow_show_tag;
@@ -217,6 +227,9 @@ struct WallLinkCore {
     haveConfig = true;
     for (WallLinkRow& row : rows) row.configSent = false;
   }
+
+  // A row's log lines are asked for while someone reads them (RowLogPolicy.h).
+  void setLogWanted(int row, bool wanted) { rows[row].logWanted = wanted; }
 
   // Writes one message to a welcomed row now. False when the row is not
   // connected or its socket takes nothing: the caller keeps what it wanted
@@ -338,6 +351,7 @@ struct WallLinkCore {
     // settings only writes `out`.
     row.quietSent = false;
     row.configSent = false;
+    row.logTold = false;
     hooks.rowHello(r, h, restarted);
     tellSettings(r, nowMs, hooks);
   }

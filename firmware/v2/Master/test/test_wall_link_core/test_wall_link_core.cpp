@@ -531,6 +531,41 @@ static void test_quiet_and_settings_wait_for_a_busy_row_and_are_sent_again_after
   TEST_ASSERT_TRUE(rec->last().body.quiet.on);
 }
 
+static void test_a_row_is_asked_for_its_log_only_while_it_is_wanted_and_again_after_a_redial() {
+  const int conn = joined("row-a", 1000);
+  joined("row-b", 1000);
+  for (uint32_t t = 1020; t <= 1100; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(0, rec->count(wl_ToRow_log_ctl_tag));  // a connection starts with it off
+  core.setLogWanted(0, true);
+  core.setLogWanted(0, true);
+  for (uint32_t t = 1120; t <= 1200; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(1, rec->count(wl_ToRow_log_ctl_tag));  // row-a only, once
+  TEST_ASSERT_TRUE(rec->last().body.log_ctl.on);
+  core.setLogWanted(0, false);
+  core.tick(1220, *rec);
+  TEST_ASSERT_EQUAL(2, rec->count(wl_ToRow_log_ctl_tag));
+  TEST_ASSERT_FALSE(rec->last().body.log_ctl.on);
+  // Wanted across a redial: the new connection is told again.
+  core.setLogWanted(0, true);
+  core.tick(1240, *rec);
+  core.closed(conn);
+  joined("row-a", 5000);
+  for (uint32_t t = 5020; t <= 5100; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(4, rec->count(wl_ToRow_log_ctl_tag));
+  TEST_ASSERT_TRUE(rec->last().body.log_ctl.on);
+}
+
+static void test_a_busy_row_is_not_asked_for_its_log_until_it_is_free() {
+  const int conn = joined("row-a", 1000);
+  feed(conn, status(true), 1200);
+  core.setLogWanted(0, true);
+  core.tick(1300, *rec);
+  TEST_ASSERT_EQUAL(0, rec->count(wl_ToRow_log_ctl_tag));
+  feed(conn, status(false), 1400);
+  core.tick(1420, *rec);
+  TEST_ASSERT_EQUAL(1, rec->count(wl_ToRow_log_ctl_tag));
+}
+
 static void test_a_setting_the_socket_did_not_take_is_tried_again() {
   joined("row-a", 1000);
   rec->refuseWrites = true;
@@ -718,6 +753,8 @@ int main(int, char**) {
   RUN_TEST(test_a_connecting_row_gets_its_settings_then_quiet_then_the_text);
   RUN_TEST(test_a_change_of_quiet_or_settings_reaches_every_connected_row_once);
   RUN_TEST(test_quiet_and_settings_wait_for_a_busy_row_and_are_sent_again_after_a_redial);
+  RUN_TEST(test_a_row_is_asked_for_its_log_only_while_it_is_wanted_and_again_after_a_redial);
+  RUN_TEST(test_a_busy_row_is_not_asked_for_its_log_until_it_is_free);
   RUN_TEST(test_a_setting_the_socket_did_not_take_is_tried_again);
   RUN_TEST(test_reset_closes_everything);
   return UNITY_END();
