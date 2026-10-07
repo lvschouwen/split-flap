@@ -54,9 +54,9 @@ p{margin:0}a{color:var(--link)}button{font:inherit;color:inherit}
 .dot.note{background:var(--note)}.dot.bad{background:var(--bad)}.dot.info,.dot.unknown{background:var(--muted)}
 .compose{display:flex;flex-direction:column;gap:10px}
 .field{display:flex;gap:8px;align-items:center}
-.field label{width:52px;color:var(--muted);font-size:13px;flex:none}
-input[type=text],select,input[type=number]{font:inherit;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:9px 11px;min-width:0}
-.field input[type=text]{flex:1}.compose input[type=text]{text-transform:uppercase}
+.field label{width:52px;color:var(--muted);font-size:13px;flex:none}.field.wide label{width:76px}[hidden]{display:none!important}.section>div:empty{display:none}td a{white-space:nowrap}td input[type=number]{width:68px}
+input[type=text],input[type=password],select,input[type=number]{font:inherit;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:9px 11px;min-width:0}
+.field input[type=text],.field input[type=password]{flex:1}.compose input[type=text]{text-transform:uppercase}
 .count{font-size:12px;color:var(--muted);width:52px;text-align:right;flex:none}
 .rowwrap{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .btn{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer;min-height:40px;text-decoration:none;color:var(--fg);display:inline-flex;align-items:center}

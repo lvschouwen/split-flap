@@ -99,3 +99,13 @@ def test_the_offer_rule_sees_one_clock():
     for call in calls:
         assert "millis()" not in call, call
         assert "nowMs" in call or "passNowMs" in call, call
+
+
+def test_forgetting_the_wifi_waits_for_what_a_restart_waits_for():
+    code = _code(MASTER / "WebWall.cpp")
+    body = code[code.index("void handleForgetWifi("):]
+    body = body[:body.index("\n}\n")]
+    assert body.index("webRestartRefusal()") < body.index("wifiStageReset()")
+    restart = _code(MASTER / "WebEndpoints.cpp")
+    restart = restart[restart.index("const char* webStageReboot("):]
+    assert "webRestartRefusal()" in restart[:restart.index("\n}\n")]

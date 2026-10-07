@@ -6,6 +6,7 @@ import { boardView } from './view_board.js';
 import { unitView } from './view_unit.js';
 import { firmwareView } from './view_firmware.js';
 import { historyView, logView } from './view_history.js';
+import { settingsView } from './view_settings.js';
 import { jobsChanged } from './jobs.js';
 import { boardId } from '../model/wall.js';
 
@@ -18,7 +19,7 @@ const app = {
 };
 
 const VIEWS = { wall: wallView, board: boardView, unit: unitView, firmware: firmwareView,
-                history: historyView, log: logView };
+                history: historyView, log: logView, settings: settingsView };
 
 function route() {
   const parts = (location.hash || '#wall').slice(1).split('/').map(decodeURIComponent);
@@ -77,9 +78,25 @@ async function readBoards() {
   }
 }
 
+// A view asks for this after a job that changed which boards the wall has.
+app.readWall = readWall;
+
+// A master without a broker, opened by this browser for the first time,
+// starts on its settings: that is where a new wall is put together.
+async function firstVisit() {
+  try {
+    if (location.hash || localStorage.getItem('sf-setup-done')) return;
+    localStorage.setItem('sf-setup-done', '1');
+    if (!(await getJson('/api/v2/settings/wall')).mqtt.host) location.hash = '#settings';
+  } catch (error) {
+    // Without storage or an answer the page opens on the wall.
+  }
+}
+
 window.addEventListener('hashchange', route);
 route();
 readWall();
+firstVisit();
 followStream((topic, data) => {
   if (topic === 'wall') app.state.show = data;
   if (topic === 'wall' || topic === 'verdict') readWall();

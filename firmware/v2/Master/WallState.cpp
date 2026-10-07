@@ -81,7 +81,8 @@ JobEnd jobEndOf(const WallOp& op) {
 }
 
 void recordJobEnd(const JobEnd& end) {
-  if (!end.ended) return;
+  // A job without a number (WallJobs.h) only looked: nothing happened to the wall.
+  if (!end.ended || end.number == 0) return;
   eventRecord(end.ok ? EventKind::JobDone : EventKind::JobFailed, end.number, end.board, end.unit,
               0, 0);
 }

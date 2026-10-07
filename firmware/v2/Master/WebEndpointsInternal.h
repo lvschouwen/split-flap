@@ -75,8 +75,11 @@ enum class WebStage : uint8_t {
 // `deviceNameChanged` are judged against the live settings.
 WebStage webStagePost(const PendingSettingsPost& local, bool& needsReboot,
                       bool& deviceNameChanged);
-// Restart this board once the answer has gone out. Returns why not (a unit
-// update or a firmware upload is running), nullptr when staged.
+// Why this board must not restart now (a unit update or a firmware upload is
+// running), nullptr when it may.
+const char* webRestartRefusal();
+// Restart this board once the answer has gone out. Returns why not
+// (webRestartRefusal), nullptr when staged.
 const char* webStageReboot(const char* cause);
 // The kill switch: aborts what the units are doing and blanks every row.
 // False when the display queue is full (nothing was stopped).
@@ -110,3 +113,4 @@ void webStreamRegister(AsyncWebServer& server);
 // see the webEndpointsLoop() call site.
 void webFirmwareLoop();
 void webSettingsDiscoverLoop();
+void webWallFindRowsLoop();

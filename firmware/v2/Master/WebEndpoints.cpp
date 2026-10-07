@@ -447,6 +447,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   // mDNS discovery drain (#224 MQTT): blocking queries take LWIP locks, so
   // they run out here in netTask, outside webStateMutex.
   webSettingsDiscoverLoop();
+  webWallFindRowsLoop();
 
   // Flash-log drain (#206): netTask is the single flash writer.
   flashLogTick(rebootDue);  // force on reboot so the last lines land
@@ -495,7 +496,7 @@ WebStage webStagePost(const PendingSettingsPost& local, bool& needsReboot,
   return WebStage::Staged;
 }
 
-const char* webStageReboot(const char* cause) {
+const char* webRestartRefusal() {
   // #395: a reboot mid-unit-reflash leaves the Nano row parked in twiboot;
   // mid-master-OTA it tears the upload session. /stop remains the only
   // cancel path.
@@ -506,6 +507,11 @@ const char* webStageReboot(const char* cause) {
     return "a firmware upload is running, retry when it has finished "
            "(a stalled one clears in 30 s)";
   }
+  return nullptr;
+}
+
+const char* webStageReboot(const char* cause) {
+  if (const char* refusal = webRestartRefusal()) return refusal;
   webRequestReboot(cause);
   return nullptr;
 }

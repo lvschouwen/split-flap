@@ -23,6 +23,7 @@ MODULES = [
     "model/firmware.js",
     "model/md5.js",
     "model/events.js",
+    "model/settings.js",
     "app/dom.js",
     "app/api.js",
     "app/jobs.js",
@@ -31,6 +32,7 @@ MODULES = [
     "app/view_unit.js",
     "app/view_firmware.js",
     "app/view_history.js",
+    "app/view_settings.js",
     "app/main.js",
 ]
 

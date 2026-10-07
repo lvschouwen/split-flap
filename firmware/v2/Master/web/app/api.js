@@ -23,16 +23,13 @@ export function followStream(onTopic, onLink) {
   return source;
 }
 
-// POST /api/v2/action. Resolves with the master's answer ({done} or {op});
-// rejects with the master's own words when it refuses.
-export async function action(name, target, args) {
-  const body = { name };
-  if (target) body.target = target;
-  if (args) body.args = args;
+// Sends a JSON body. Resolves with the master's answer; rejects with the
+// master's own words when it refuses.
+async function send(method, path, body) {
   let reply;
   try {
-    reply = await fetch('/api/v2/action', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    reply = await fetch(path, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
   } catch (error) {
     throw new Error('The master did not answer.');
@@ -41,4 +38,18 @@ export async function action(name, target, args) {
   try { answer = await reply.json(); } catch (error) { /* an answer without a body */ }
   if (!reply.ok) throw new Error(answer.error || `The master refused (${reply.status}).`);
   return answer;
+}
+
+// POST /api/v2/action: the answer is {done} or {op}.
+export function action(name, target, args) {
+  const body = { name };
+  if (target) body.target = target;
+  if (args) body.args = args;
+  return send('POST', '/api/v2/action', body);
+}
+
+// PUT /api/v2/settings/...: the answer is {done} and, when the change waits
+// for a restart, {restart}.
+export function putJson(path, body) {
+  return send('PUT', path, body);
 }

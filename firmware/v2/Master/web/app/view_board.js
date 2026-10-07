@@ -2,7 +2,7 @@
 // jobs on its row, and (the master) its settings.
 import { ALPHABET } from '../gen/constants.js';
 import { h, fill, pill, statusLine, segmented } from './dom.js';
-import { getJson } from './api.js';
+import { getJson, putJson, action } from './api.js';
 import { runJob, targetRow } from './jobs.js';
 import { wallLayout, boardTitle } from '../model/wall.js';
 import { boardVerdictText, levelClass } from '../model/verdict.js';
@@ -52,20 +52,24 @@ function settingsForm(id, settings) {
     event.preventDefault();
     const body = { name: name.value.trim(), unitCount: fixed.disabled ? 0 : Number(fixed.value) };
     try {
-      const reply = await fetch('/api/v2/settings/board/' + encodeURIComponent(id), {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const answer = await reply.json().catch(() => ({}));
-      if (!reply.ok) throw new Error(answer.error || `The master refused (${reply.status}).`);
+      const answer = await putJson('/api/v2/settings/board/' + encodeURIComponent(id), body);
       status.say(answer.restart ? 'Saved. It takes effect when the board restarts.' : 'Saved.');
     } catch (error) {
       status.say(error.message, true);
     }
   };
+  const forget = () => {
+    if (!window.confirm('Forget this board\u2019s WiFi? It restarts and opens its own setup network; the wall is out of reach until it has been given a WiFi there.')) return;
+    action('forget-wifi').then(
+      () => status.say('Forgotten. The board restarts into its setup network.'),
+      (error) => status.say(error.message, true));
+  };
   return h('details', {}, h('summary', {}, 'Settings for this board'),
     h('form', { class: 'in', onsubmit: save },
       h('div', { class: 'field' }, h('label', { for: 'boardName' }, 'Name'), name),
       h('div', { class: 'rowwrap' }, h('span', {}, 'Number of units'), counting, fixed),
-      h('div', { class: 'rowwrap' }, h('button', { type: 'submit', class: 'btn' }, 'Save')),
+      h('div', { class: 'rowwrap' }, h('button', { type: 'submit', class: 'btn' }, 'Save'),
+        h('button', { type: 'button', class: 'btn danger', onclick: forget }, 'Forget WiFi\u2026')),
       status));
 }
 

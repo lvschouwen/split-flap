@@ -26,7 +26,7 @@ struct ApiLegendEntry { const char* key; const char* meaning; };
 // undeclared endpoint nor a phantom one can survive CI.
 static const ApiRoute API_ROUTES[] = {
   {"GET",  "/api",                    "this self-documenting index"},
-  {"POST", "/api/v2/action",          "JSON {name,target,args}. Done when accepted, 200 {done}: show (args text, forS), mode, quiet, stop, restart (target row, none = this master). Jobs, 202 {op}: pair, release, arrange, update (offer a row board the stored image again), and the unit jobs (home, identify, jog, set-offset, self-test, restart-unit, reset-odometer, set-gates, boot-info, boot-dump, boot-update, update-units, probe, set-address, clear-address, home-all) with target {row,unit}"},
+  {"POST", "/api/v2/action",          "JSON {name,target,args}. Done when accepted, 200 {done}: show (args text, forS), mode, quiet, stop, restart (target row, none = this master), forget-wifi. Jobs, 202 {op}: pair, release, arrange, update (offer a row board the stored image again), find-rows (data: row boards to pair), and the unit jobs (home, identify, jog, set-offset, self-test, restart-unit, reset-odometer, set-gates, boot-info, boot-dump, boot-update, update-units, probe, set-address, clear-address, home-all) with target {row,unit}"},
   {"GET",  "/api/v2/board",           "one board: /api/v2/board/<id> (a row board's id, or the master's name): place, verdict, how it is reached, what it runs, its vitals, and its units as a table {fields, rows}"},
   {"GET",  "/api/v2/firmware",        "should be / is for the whole wall: boards, the stored row image, unit firmware, bootloaders, the rescue image"},
   {"GET",  "/api/v2/history",         "what happened on the wall, newest first: ?before=<seq> for the page after one (its \"next\"), ?limit=<1..50>"},
@@ -194,10 +194,9 @@ inline bool legendHasKey(const char* key) {
   return false;
 }
 
-// Sized to the reply (just over 10 KB with the bootloader legend rows) plus
-// room for a few more; heap-built by the handler, so the cost is transient,
-// not BSS.
-#define API_JSON_CAP 11264
+// Sized to the reply (just over 11 KB) plus room for a few more routes;
+// heap-built by the handler, so the cost is transient, not BSS.
+#define API_JSON_CAP 12288
 
 #define API_APPEND(...) do { \
     if (o >= cap) return o; \

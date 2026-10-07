@@ -13,6 +13,10 @@
 //       every board of the table once, "" = the master's own row
 //   {"name":"update","target":{"row":"<row id>"}}
 //       offer the row the stored image again, whatever was held against it
+//   {"name":"find-rows"}
+//       search the network for row boards that can be paired (WallFind.h);
+//       the list is the job's "data". It changes nothing and leaves no entry
+//       in the event record
 // Unit jobs, the same call for the master's own units and a row board's
 // (names and values: WallJobs.h):
 //   {"name":"home","target":{"row":"<row id>","unit":3}}
@@ -24,6 +28,8 @@
 //   {"name":"quiet","args":{"on":true}}
 //   {"name":"stop"}                                      abort and blank every row
 //   {"name":"restart","target":{"row":"<row id>"}}       "" or absent = this master
+//   {"name":"forget-wifi"}
+//       this master forgets its WiFi and restarts into its setup network
 // GET /api/v2/history[?before=<seq>][&limit=<n>] reads the event record newest
 // first: {"events":[{seq,time,kind,detail,board,unit,a,b}...],"next":<seq>}.
 // The reason, job or restart cause an entry is about is also given by name.
@@ -37,6 +43,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
+#include <ESPmDNS.h>
 
 #include <memory>
 
@@ -49,6 +56,7 @@
 #include "ReflashPlan.h"
 #include "Tasks.h"
 #include "WallActions.h"
+#include "WallFind.h"
 #include "WallJobs.h"
 #include "WallRowEvents.h"
 #include "WallShow.h"
@@ -58,6 +66,7 @@
 #include "WebEndpoints.h"
 #include "WebEndpointsInternal.h"
 #include "WebWallJson.h"
+#include "WifiService.h"
 
 namespace {
 
@@ -401,6 +410,31 @@ void handleRestart(AsyncWebServerRequest* request, JsonVariantConst body,
   sendDone(request);
 }
 
+// The job of a search for row boards that was asked for and has not run yet,
+// 0 = none. Under the web state lock; netTask runs the search.
+uint32_t findRowsOp = 0;
+
+void handleFindRows(AsyncWebServerRequest* request) {
+  uint32_t op = 0;
+  bool looking;
+  {
+    WebStateLock lock;
+    looking = findRowsOp != 0;
+    if (!looking) op = findRowsOp = wallOpBegin("find-rows", -1);
+  }
+  if (looking) return sendError(request, 409, "a search for row boards is still running");
+  if (op == 0) return sendError(request, 503, "too many jobs are running");
+  sendOp(request, op);
+}
+
+// It ends in a restart, so it waits for what a restart waits for.
+void handleForgetWifi(AsyncWebServerRequest* request) {
+  if (const char* refusal = webRestartRefusal()) return sendError(request, 409, refusal);
+  SerialPrintln(F("Forgetting the WiFi asked for through the API"));
+  sendDone(request);
+  wifiStageReset();
+}
+
 void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   JsonVariantConst body = json;
   const char* name = body["name"].as<const char*>();
@@ -419,6 +453,8 @@ void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   if (wallActionIsContent(name)) return handleContent(request, name, body);
   if (strcmp(name, "stop") == 0) return handleStop(request);
   if (strcmp(name, "restart") == 0) return handleRestart(request, body, table, generation);
+  if (strcmp(name, "find-rows") == 0) return handleFindRows(request);
+  if (strcmp(name, "forget-wifi") == 0) return handleForgetWifi(request);
   WebStateLock lock;
   staged = WallRequest{};
   const char* refusal = "no such action";
@@ -453,13 +489,16 @@ void handleOp(AsyncWebServerRequest* request) {
                                                    : "failed";
   if (op.phase == WallOpPhase::Done) root["result"] = jsonCopied(op.detail);
   if (op.phase == WallOpPhase::Failed) root["reason"] = jsonCopied(op.detail);
-  // What the job handed back: a JSON object as the board wrote it, or the
-  // bytes of a boot section.
+  // What the job handed back: a JSON object as the board wrote it, the bytes
+  // of a boot section, or the row boards a search found.
   const WallJobKind* kind = wallJobFind(op.name);
-  if (kind != nullptr && kind->data != WallJobData::None && op.phase != WallOpPhase::Running) {
+  const WallJobData handed = strcmp(op.name, "find-rows") == 0 ? WallJobData::Json
+                             : kind != nullptr                 ? kind->data
+                                                               : WallJobData::None;
+  if (handed != WallJobData::None && op.phase != WallOpPhase::Running) {
     std::unique_ptr<uint8_t[]> data(new uint8_t[WALL_OP_DATA_MAX]);
     const size_t n = wallOpDataGet(op.id, data.get(), WALL_OP_DATA_MAX);
-    if (n > 0 && kind->data == WallJobData::Json) {
+    if (n > 0 && handed == WallJobData::Json) {
       String text;
       text.concat((const char*)data.get(), n);
       JsonDocument parsed;
@@ -623,6 +662,45 @@ void handleHistory(AsyncWebServerRequest* request) {
 }
 
 }  // namespace
+
+// The search a find-rows job asked for. In netTask: the query blocks for a
+// few seconds and takes LWIP locks, which must never nest inside the web
+// state lock (as webSettingsDiscoverLoop).
+void webWallFindRowsLoop() {
+  uint32_t op;
+  {
+    WebStateLock lock;
+    op = findRowsOp;
+  }
+  if (op == 0) return;
+  uint32_t generation;
+  const WallRowsTable table = wallStateRows(generation);
+  std::unique_ptr<WallFound> found(new WallFound);
+  const int answers = MDNS.queryService("splitflap", "tcp");
+  for (int i = 0; i < answers; i++) {
+    WallFoundBoard board;
+    board.id = MDNS.txt(i, "name");
+    const IPAddress address = MDNS.address(i);
+    board.address = address == IPAddress() ? String() : address.toString();
+    board.rev = MDNS.txt(i, "rev");
+    board.plat = MDNS.txt(i, "plat");
+    board.units = (int)MDNS.txt(i, "width").toInt();
+    wallFoundAdd(*found, board, table);
+  }
+  std::unique_ptr<char[]> json(new char[WALL_OP_DATA_MAX]);
+  const size_t length = wallFoundJson(*found, json.get(), WALL_OP_DATA_MAX);
+  SerialPrintf("Row search: %d answer(s), %u to pair\n", answers, (unsigned)found->count);
+  if (length > 0) {
+    wallOpDataPut(op, 0, (const uint8_t*)json.get(), length);
+    char detail[24];
+    snprintf(detail, sizeof(detail), "%u found", (unsigned)found->count);
+    wallOpFinish(op, true, detail);
+  } else {
+    wallOpFinish(op, false, "the list did not fit");
+  }
+  WebStateLock lock;
+  findRowsOp = 0;
+}
 
 void webWallRegister(AsyncWebServer& server) {
   AsyncCallbackJsonWebHandler* action =

@@ -13,6 +13,7 @@ import { md5Hex } from '../model/md5.js';
 import { whenText, eventText, eventBoardId } from '../model/events.js';
 import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId, noFlapFor,
          composeLines, composeText } from '../model/wall.js';
+import { rowsDraft, arrangeProblem, arrangeArgs, zoneFor, brokerText, foundLine } from '../model/settings.js';
 
 const FIELDS = ['address', 'level', 'reason', 'a', 'b', 'state', 'rev', 'firmware',
                 'bootloader', 'supplyMv', 'supplyMinMv', 'shows', 'turns', 'offset'];
@@ -420,4 +421,65 @@ test('the record names the master\u2019s own row "" and no board for the master 
   assert.equal(eventBoardId({ board: '' }, 'wall-master'), 'wall-master');
   assert.equal(eventBoardId({ board: 'wall-row' }, 'wall-master'), 'wall-row');
   assert.equal(eventBoardId({}, 'wall-master'), null);
+});
+
+const TWO_ROWS = { master: { id: 'wall-master' }, rows: [
+  { id: '', own: true, row: 1, col: 0, width: 16 },
+  { id: 'wall-row', own: false, row: 0, col: 0, width: 5 }] };
+
+test('the rows are listed top to bottom, counted from 1, and saved counted from 0', () => {
+  const draft = rowsDraft(TWO_ROWS);
+  assert.deepEqual(draft.map((line) => [line.name, line.id, line.row, line.col, line.width]),
+    [['wall-row', 'wall-row', 1, 1, 5], ['wall-master', '', 2, 1, 16]]);
+  assert.deepEqual(arrangeArgs(draft), { rows: [
+    { id: 'wall-row', row: 0, col: 0, width: 5 }, { id: '', row: 1, col: 0, width: 16 }] });
+});
+
+test('row numbers with a gap or in another order become rows without a gap', () => {
+  const draft = rowsDraft(TWO_ROWS);
+  draft[0].row = 7;
+  draft[1].row = 3;
+  draft[0].col = 6;
+  assert.deepEqual(arrangeArgs(draft).rows.map((r) => [r.id, r.row, r.col]), [['wall-row', 1, 5], ['', 0, 0]]);
+});
+
+test('rows that cannot be saved say why', () => {
+  const draft = rowsDraft(TWO_ROWS);
+  assert.equal(arrangeProblem(draft), '');
+  draft[0].row = 2;  // beside the master, over its first units
+  assert.equal(arrangeProblem(draft), 'wall-row and wall-master would overlap on row 2.');
+  draft[0].col = 17;  // to the right of it
+  assert.equal(arrangeProblem(draft), '');
+  draft[0].col = 0;
+  assert.equal(arrangeProblem(draft), 'wall-row: the column is a whole number from 1.');
+  draft[0].col = 1;
+  draft[0].row = NaN;
+  assert.equal(arrangeProblem(draft), 'wall-row: the row is a whole number from 1.');
+  draft[0].row = 2;
+  draft[0].width = 16;  // the same place as the master: shows the same text
+  assert.equal(arrangeProblem(draft), '');
+});
+
+test('the time zone is named by the browser\u2019s zone when that has the wall\u2019s rule', () => {
+  const zones = { 'Europe/Amsterdam': 'CET-1CEST,M3.5.0,M10.5.0/3', 'Europe/Berlin': 'CET-1CEST,M3.5.0,M10.5.0/3',
+                  'Etc/UTC': 'UTC0' };
+  assert.equal(zoneFor(zones, 'CET-1CEST,M3.5.0,M10.5.0/3', 'Europe/Berlin'), 'Europe/Berlin');
+  assert.equal(zoneFor(zones, 'CET-1CEST,M3.5.0,M10.5.0/3', 'America/New_York'), 'Europe/Amsterdam');
+  assert.equal(zoneFor(zones, 'UTC0', 'Europe/Berlin'), 'Etc/UTC');
+  assert.equal(zoneFor(zones, 'XYZ5', 'Europe/Berlin'), '');
+});
+
+test('the broker line says whether Home Assistant is reached, and where', () => {
+  const mqtt = { host: '192.168.1.4', port: 1883, user: 'splitflap' };
+  assert.deepEqual(brokerText(mqtt, true), { cls: 'ok', title: 'Connected', why: '192.168.1.4, port 1883, user splitflap' });
+  assert.equal(brokerText(mqtt, false).title, 'Not connected');
+  assert.equal(brokerText(mqtt, undefined).title, 'Checking');
+  assert.equal(brokerText({ host: '10.0.0.2', port: 1884, user: '' }, true).why, '10.0.0.2, port 1884');
+  assert.equal(brokerText({ host: '', port: 1883, user: '' }, false).title, 'Not set up');
+});
+
+test('a row board that was found is a line with what it said about itself', () => {
+  assert.deepEqual(foundLine({ id: 'split-flap-aaaaaa', address: '192.168.1.51', rev: 'de38289', units: 5 }),
+    { title: 'split-flap-aaaaaa', why: '5 units, firmware de38289, at 192.168.1.51' });
+  assert.equal(foundLine({ id: 'x', address: '192.168.1.51', rev: '', units: 0 }).why, 'at 192.168.1.51');
 });
