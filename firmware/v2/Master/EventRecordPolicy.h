@@ -49,7 +49,7 @@ enum class EventKind : uint8_t {
   RowStarted = 22,         // 1 = rescue     rev as a number
   JobDone = 30,            // job number
   JobFailed = 31,          // job number
-  RowEvent = 40,           // the row's code its numbers
+  RowEvent = 40,           // RowEventCode   its numbers (wall_link.proto)
 };
 
 inline const char* eventKindName(uint8_t kind) {
@@ -159,6 +159,14 @@ inline uint32_t eventRevNumber(const char* rev) {
     n = (n << 4) | d;
   }
   return n;
+}
+
+// How far back on the uptime clock an entry is placed that happened `agoS`
+// ago. The clock wraps after 49 days, so what is older than a week is placed
+// a week back: its order is kept and its time is not believed anyway.
+#define EVENT_AGO_MAX_S (7UL * 24UL * 3600UL)
+inline uint32_t eventAgoMs(uint32_t agoS) {
+  return (agoS > EVENT_AGO_MAX_S ? EVENT_AGO_MAX_S : agoS) * 1000UL;
 }
 
 // ---- holding entries until they are written ---------------------------------------

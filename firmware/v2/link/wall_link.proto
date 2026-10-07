@@ -206,12 +206,27 @@ message UpdateState {
   uint32 detail = 4;
 }
 
+// What a row board has to say about itself, in Event.code. The master keeps
+// the number in its event record: a code keeps its meaning for good.
+enum RowEventCode {
+  ROW_EVT_NONE = 0;
+  ROW_EVT_STARTED = 1;            // a = reset reason | exception cause << 8,
+                                  // b = starts since its power came on
+  ROW_EVT_SELF_RESTART = 2;       // this start follows a restart the row forced on
+                                  // itself: a = why (1 bus dead, 2 low memory),
+                                  // b = how many of those so far
+  ROW_EVT_LOW_MEMORY = 3;         // a = largest free block, bytes
+}
+
+// Something that happened on the row. Kept by the row until it can be sent,
+// so `age_s` says how long ago that was when it is.
 message Event {
-  uint32 code = 1;
-  uint32 unit = 2;
+  uint32 code = 1;                // RowEventCode
+  uint32 unit = 2;                // bus address, 0 = the board itself
   uint32 a = 3;
   uint32 b = 4;
-  uint32 up_s = 5;
+  uint32 up_s = 5;                // the row's uptime when it happened
+  uint32 age_s = 6;
 }
 
 // One line of the row's log without its newline, opened by the row's uptime

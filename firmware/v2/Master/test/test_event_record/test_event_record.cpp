@@ -238,6 +238,21 @@ static void test_the_count_of_lost_entries_waits_for_room_to_be_written() {
   TEST_ASSERT_EQUAL_UINT32(3, out[0].a);
 }
 
+static void test_an_entry_that_happened_a_while_ago_is_dated_back() {
+  TEST_ASSERT_EQUAL_UINT32(0, eventAgoMs(0));
+  TEST_ASSERT_EQUAL_UINT32(43000, eventAgoMs(43));
+  TEST_ASSERT_EQUAL_UINT32(EVENT_AGO_MAX_S * 1000UL, eventAgoMs(0xFFFFFFFFUL));
+  // A row tells of its start 43 s after it: placed that far back, also when
+  // the master has run for less than that.
+  EventStage stage;
+  const uint32_t nowMs = 20000;
+  stage.put(kind(EventKind::RowEvent), nowMs - eventAgoMs(43));
+  EventRecord out[2];
+  uint32_t seq = 1;
+  TEST_ASSERT_EQUAL(1, stage.take(1791230000UL, true, nowMs, false, seq, out, 2));
+  TEST_ASSERT_EQUAL_UINT32(1791229957UL, out[0].timeS);
+}
+
 // ---- the files ---------------------------------------------------------------
 
 static void test_padding_and_rotation() {
@@ -353,6 +368,7 @@ int main(int, char**) {
   RUN_TEST(test_the_uptime_clock_may_wrap_while_an_entry_waits);
   RUN_TEST(test_entries_without_room_are_counted_and_owned_up_to);
   RUN_TEST(test_the_count_of_lost_entries_waits_for_room_to_be_written);
+  RUN_TEST(test_an_entry_that_happened_a_while_ago_is_dated_back);
   RUN_TEST(test_padding_and_rotation);
   RUN_TEST(test_the_newest_seq_of_a_file);
   RUN_TEST(test_a_page_is_the_newest_entries_first);

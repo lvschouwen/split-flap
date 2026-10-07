@@ -19,12 +19,13 @@ void eventRecordInit();
 
 // Any task: something happened now. `boardId` is the board's id in the rows
 // table, "" or nullptr for the master; `unit` a bus address, 0 for the board
-// itself. Never blocks on flash.
+// itself; `agoS`: it happened that long ago (a row board tells of its start
+// once it is connected). Never blocks on flash.
 void eventRecord(EventKind kind, uint8_t detail, const char* boardId, uint8_t unit, uint32_t a,
-                 uint32_t b);
+                 uint32_t b, uint32_t agoS = 0);
 // The same for a caller that holds the board's key already.
 void eventRecordKeyed(EventKind kind, uint8_t detail, uint16_t boardKey, uint8_t unit, uint32_t a,
-                      uint32_t b);
+                      uint32_t b, uint32_t agoS = 0);
 
 // netTask only: writes the staged entries that may be written (all of them
 // when `force`: the board is about to restart).

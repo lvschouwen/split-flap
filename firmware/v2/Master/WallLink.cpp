@@ -13,8 +13,10 @@
 #include "SntpReply.h"
 #include "TaskWatchdog.h"
 #include "Tasks.h"
+#include "EventRecord.h"
 #include "WallJobs.h"
 #include "WallLinkCore.h"
+#include "WallRowEvents.h"
 #include "WallShow.h"
 #include "WallState.h"
 #include "WallUpdatePolicy.h"
@@ -271,6 +273,11 @@ struct Hooks : WallLinkHooks {
       SerialPrintf("link: %s: update to %s: phase %d, reason %d, detail %u\n", rowName(row), u.rev,
                    (int)u.phase, (int)u.reason, (unsigned)u.detail);
       updateEnded(row, updater.answer(row, u, offeredRev(), passNowMs));
+    } else if (message.which_body == wl_ToMaster_event_tag) {
+      // #570: what the row says happened on it goes into the event record.
+      const wl_Event& e = message.body.event;
+      eventRecord(EventKind::RowEvent, wallRowEventDetail(e.code), rowName(row),
+                  e.unit <= 255 ? (uint8_t)e.unit : 0, e.a, e.b, e.age_s);
     }
     factsDirty[row] = true;
   }

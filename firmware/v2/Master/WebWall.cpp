@@ -41,6 +41,7 @@
 #include "ReflashPlan.h"
 #include "Tasks.h"
 #include "WallJobs.h"
+#include "WallRowEvents.h"
 #include "WallShow.h"
 #include "WallState.h"
 #include "WallUpdatePolicy.h"
@@ -561,6 +562,9 @@ void handleHistory(AsyncWebServerRequest* request) {
         break;
       case EventKind::UnitRestarted:
         e["cause"] = unitResetKindName(unitResetFromStatusByte(r.detail));
+        break;
+      case EventKind::RowEvent:
+        e["event"] = wallRowEventName(r.detail);
         break;
       default:
         break;

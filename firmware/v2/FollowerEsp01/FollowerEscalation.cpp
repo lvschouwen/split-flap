@@ -8,9 +8,11 @@
 #include "FollowerBus.h"      // followerBusRecovery, reflashProgress
 #include "FollowerBusRecovery.h"
 #include "FollowerConfig.h"
+#include "FollowerEvents.h"
 #include "FollowerRescue.h"   // rescueActive, its RTC words
 #include "FollowerResetLog.h" // its RTC words
 #include "FollowerWeb.h"      // isPendingReboot
+#include "wall_link.pb.h"     // RowEventCode
 
 // RTC user memory is shared by word offset; a new tenant must not land on an
 // old one, and the whole area is 512 bytes.
@@ -42,6 +44,9 @@ void escalationBootInit() {
       escalationRecord.minutesSince == 0) {
     SerialPrint(F("escalation: this boot follows a self-restart for "));
     SerialPrintln(escalationCauseName(escalationLastCause(escalationRecord)));
+    followerEvents().put(wl_RowEventCode_ROW_EVT_SELF_RESTART, 0,
+                         escalationLastCause(escalationRecord),
+                         escalationCount(escalationRecord), millis() / 1000);
   }
 }
 
@@ -75,6 +80,8 @@ void escalationTick() {
     SerialPrint(F("heap: largest free block "));
     SerialPrint(in.largestFreeBlock);
     SerialPrintln(F(" B for a minute — restart if it stays"));
+    followerEvents().put(wl_RowEventCode_ROW_EVT_LOW_MEMORY, 0, in.largestFreeBlock, 0,
+                         now / 1000);
   }
   if (v.cause == EscalationCause::None) {
     suppressedLogged = false;

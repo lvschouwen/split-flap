@@ -83,7 +83,7 @@ void eventRecordInit() {
 }
 
 void eventRecordKeyed(EventKind kind, uint8_t detail, uint16_t boardKey, uint8_t unit, uint32_t a,
-                      uint32_t b) {
+                      uint32_t b, uint32_t agoS) {
   if (!ready) return;
   EventRecord r;
   r.kind = (uint8_t)kind;
@@ -92,15 +92,15 @@ void eventRecordKeyed(EventKind kind, uint8_t detail, uint16_t boardKey, uint8_t
   r.unit = unit;
   r.a = a;
   r.b = b;
-  const uint32_t nowMs = millis();
+  const uint32_t atMs = millis() - eventAgoMs(agoS);
   xSemaphoreTake(stageMutex, portMAX_DELAY);
-  stage.put(r, nowMs);
+  stage.put(r, atMs);
   xSemaphoreGive(stageMutex);
 }
 
 void eventRecord(EventKind kind, uint8_t detail, const char* boardId, uint8_t unit, uint32_t a,
-                 uint32_t b) {
-  eventRecordKeyed(kind, detail, eventBoardKey(boardId), unit, a, b);
+                 uint32_t b, uint32_t agoS) {
+  eventRecordKeyed(kind, detail, eventBoardKey(boardId), unit, a, b, agoS);
 }
 
 void eventRecordTick(bool force) {

@@ -28,7 +28,7 @@ serializer (buildUnitHealthJson).
     drop                close the connection and dial again (same boot id)
     restart             come back as a restarted board (new boot id)
     rescue on|off       restart into, or out of, rescue mode
-    event CODE [UNIT [A [B]]]
+    event CODE [UNIT [A [B [AGE_S]]]]
     units               send the unit facts now
     log TEXT            a log line (sent only while the master asked for the log)
 """
@@ -245,9 +245,10 @@ class Row:
             self.rescue = rest == "on"
             self.restart()
         elif word == "event":
-            code, unit, a, b = ([int(x) for x in rest.split()] + [0, 0, 0])[:4]
+            code, unit, a, b, age = ([int(x) for x in rest.split()] + [0, 0, 0, 0])[:5]
+            up = int(time.monotonic() - self.started)
             self.send(event=pb.Event(code=code, unit=unit, a=a, b=b,
-                                     up_s=int(time.monotonic() - self.started)))
+                                     up_s=max(0, up - age), age_s=age))
         elif word == "units":
             self.send_units()
         elif word == "log" and self.log_on:

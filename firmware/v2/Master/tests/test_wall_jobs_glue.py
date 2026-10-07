@@ -35,6 +35,20 @@ def test_every_job_code_of_the_link_has_a_job_name():
     assert len({name for name, _ in named}) == len(named)
 
 
+def test_every_event_code_of_a_row_has_a_name():
+    proto = (V2 / "link" / "wall_link.proto").read_text()
+    enum = proto[proto.index("enum RowEventCode {"):]
+    enum = enum[:enum.index("}")]
+    codes = set(re.findall(r"\b(ROW_EVT_[A-Z_]+)\s*=", enum)) - {"ROW_EVT_NONE"}
+    assert len(codes) >= 3
+    table = _code(MASTER / "WallRowEvents.h")
+    table = table[table.index("WALL_ROW_EVENT_NAMES[]"):]
+    table = table[:table.index("};")]
+    named = re.findall(r'\{wl_RowEventCode_(ROW_EVT_[A-Z_]+),\s*"([a-z-]+)"', table)
+    assert sorted(code for code, _ in named) == sorted(codes)
+    assert len({name for _, name in named}) == len(named)
+
+
 def test_the_api_index_names_every_job():
     index = (MASTER / "ApiIndex.h").read_text()
     line = next(l for l in index.splitlines() if '"/api/v2/action"' in l)

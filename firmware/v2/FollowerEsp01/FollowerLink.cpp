@@ -13,6 +13,7 @@
 #include "FollowerBusRecovery.h"
 #include "FollowerCluster.h"
 #include "FollowerEscalation.h"
+#include "FollowerEvents.h"
 #include "FollowerLinkOps.h"
 #include "FollowerLinkPolicy.h"
 #include "FollowerLog.h"
@@ -362,6 +363,23 @@ void logTick() {
   if (send()) logCursor = next;
 }
 
+// One event a pass, the oldest first. It leaves the queue once written.
+void eventsTick() {
+  const FollowerEvent* e = followerEvents().front();
+  if (e == nullptr) return;
+  const uint32_t nowS = millis() / 1000;
+  wlClear(out);
+  out.which_body = wl_ToMaster_event_tag;
+  wl_Event& ev = out.body.event;
+  ev.code = e->code;
+  ev.unit = e->unit;
+  ev.a = e->a;
+  ev.b = e->b;
+  ev.up_s = e->atS;
+  ev.age_s = followerEventAgeS(*e, nowS);
+  if (send()) followerEvents().pop();
+}
+
 void handle(const wl_ToRow& m, const FollowerClusterView& view) {
   if (!welcomed) {
     if (m.which_body != wl_ToRow_welcome_tag ||
@@ -515,6 +533,7 @@ void linkLoopTick() {
   if (welcomed) unitsTick();
   if (welcomed) logTick();
   if (welcomed) updateTick(view);
+  if (welcomed) eventsTick();
 }
 
 FollowerLinkView linkViewGet() {
