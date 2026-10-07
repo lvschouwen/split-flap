@@ -51,7 +51,9 @@ static void test_unit_facts_derive_width_and_counts() {
   UnitFacts facts[UNITS_AMOUNT];
   facts[0].state = 1;
   facts[2].state = 2;  // bootloader counts as present (#123 width rule)
+  TEST_ASSERT_FALSE(snap.probed);
   displayApplyUnitFacts(snap, facts, UNITS_AMOUNT);
+  TEST_ASSERT_TRUE(snap.probed);
   // Highest responder + 1; the silent gap at index 1 keeps its slot.
   TEST_ASSERT_EQUAL(3, snap.displayWidth);
   TEST_ASSERT_EQUAL(2, snap.detectedUnitCount);

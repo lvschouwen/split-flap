@@ -18,6 +18,9 @@ static void makeHealthy(WallMqttRow rows[2]) {
   rows[0].text = "12:34";
   rows[0].unitsKnown = true;
   rows[0].unitsFound = 16;
+  rows[0].judged = true;
+  rows[0].level = "working";
+  rows[0].reason = "working";
   rows[1] = WallMqttRow{};
   rows[1].id = "row-1";
   rows[1].row = 1;
@@ -28,6 +31,9 @@ static void makeHealthy(WallMqttRow rows[2]) {
   rows[1].text = "06.10";
   rows[1].unitsKnown = true;
   rows[1].unitsFound = 5;
+  rows[1].judged = true;
+  rows[1].level = "note";
+  rows[1].reason = "units-note";
 }
 
 static bool contains(const String& s, const char* needle) {
@@ -40,46 +46,33 @@ static void test_a_healthy_wall_is_no_problem() {
   TEST_ASSERT_FALSE(wallMqttProblem(rows, 2));
 }
 
-static void test_each_row_board_trouble_is_a_problem() {
+static void test_a_board_at_fault_is_a_problem_whichever_board() {
+  WallMqttRow rows[2];
+  makeHealthy(rows);
+  rows[1].fault = true;
+  TEST_ASSERT_TRUE(wallMqttProblem(rows, 2));
+  makeHealthy(rows);
+  rows[0].fault = true;  // the master's own row
+  TEST_ASSERT_TRUE(wallMqttProblem(rows, 2));
+}
+
+static void test_a_board_not_judged_yet_is_no_problem() {
+  WallMqttRow rows[2];
+  makeHealthy(rows);
+  rows[1].judged = false;
+  rows[1].fault = true;  // left over: nothing stands behind it
+  TEST_ASSERT_FALSE(wallMqttProblem(rows, 2));
+}
+
+static void test_the_facts_alone_trip_nothing() {
+  // What is wrong is the verdict's to say (BoardVerdict.h), not this sensor's.
   WallMqttRow rows[2];
   makeHealthy(rows);
   rows[1].lost = true;
-  TEST_ASSERT_TRUE(wallMqttProblem(rows, 2));
-  makeHealthy(rows);
   rows[1].rescue = true;
-  TEST_ASSERT_TRUE(wallMqttProblem(rows, 2));
-  makeHealthy(rows);
-  rows[1].updateBlocked = true;
-  TEST_ASSERT_TRUE(wallMqttProblem(rows, 2));
-  makeHealthy(rows);
   rows[1].busDead = true;
-  TEST_ASSERT_TRUE(wallMqttProblem(rows, 2));
-  makeHealthy(rows);
-  rows[1].unitsLost = 1;
-  TEST_ASSERT_TRUE(wallMqttProblem(rows, 2));
-}
-
-static void test_faulty_units_and_a_busy_row_are_no_problem() {
-  WallMqttRow rows[2];
-  makeHealthy(rows);
-  rows[1].unitsFaulty = 3;  // sticky lifetime counters: attributes only
-  rows[1].reach = "busy";
-  TEST_ASSERT_FALSE(wallMqttProblem(rows, 2));
-}
-
-static void test_lost_units_count_only_when_the_row_reported_them() {
-  WallMqttRow rows[2];
-  makeHealthy(rows);
-  rows[1].unitsKnown = false;
-  rows[1].unitsLost = 2;  // stale: no report since it was welcomed
-  TEST_ASSERT_FALSE(wallMqttProblem(rows, 2));
-}
-
-static void test_the_own_row_never_trips_the_sensor() {
-  // The master's own units have their own entities (units_faulty).
-  WallMqttRow rows[2];
-  makeHealthy(rows);
-  rows[0].unitsLost = 4;
+  rows[1].unitsFaulty = 3;
+  rows[1].unitsLost = 2;
   TEST_ASSERT_FALSE(wallMqttProblem(rows, 2));
 }
 
@@ -95,9 +88,11 @@ static void test_attrs_carry_the_boards() {
   String json = wallMqttAttrsJson(rows, 2, "idle");
   TEST_ASSERT_EQUAL_STRING(
       "{\"boards\":[{\"id\":\"\",\"own\":true,\"row\":0,\"col\":0,\"width\":16,"
+      "\"level\":\"working\",\"reason\":\"working\","
       "\"found\":16,\"faulty\":0,\"lost\":0},"
       "{\"id\":\"row-1\",\"own\":false,\"row\":1,\"col\":0,\"width\":5,\"reach\":\"up\","
       "\"rev\":\"abc1234\",\"rescue\":false,\"updateBlocked\":false,\"busDead\":false,"
+      "\"level\":\"note\",\"reason\":\"units-note\","
       "\"found\":5,\"faulty\":0,\"lost\":0}],\"update\":\"idle\"}",
       json.c_str());
 }
@@ -108,8 +103,11 @@ static void test_attrs_of_a_row_never_spoken_to_stop_at_its_reach() {
   rows[1].welcomed = false;
   rows[1].unitsKnown = false;
   rows[1].reach = "never";
+  rows[1].level = "fault";
+  rows[1].reason = "never-seen";
   String json = wallMqttAttrsJson(rows, 2, "idle");
-  TEST_ASSERT_TRUE(contains(json, "\"reach\":\"never\"}"));
+  TEST_ASSERT_TRUE(contains(
+      json, "\"reach\":\"never\",\"level\":\"fault\",\"reason\":\"never-seen\"}"));
   TEST_ASSERT_FALSE(contains(json, "\"rev\""));
 }
 
@@ -180,10 +178,9 @@ static void test_the_retired_entities_are_the_two_old_sensors() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_healthy_wall_is_no_problem);
-  RUN_TEST(test_each_row_board_trouble_is_a_problem);
-  RUN_TEST(test_faulty_units_and_a_busy_row_are_no_problem);
-  RUN_TEST(test_lost_units_count_only_when_the_row_reported_them);
-  RUN_TEST(test_the_own_row_never_trips_the_sensor);
+  RUN_TEST(test_a_board_at_fault_is_a_problem_whichever_board);
+  RUN_TEST(test_a_board_not_judged_yet_is_no_problem);
+  RUN_TEST(test_the_facts_alone_trip_nothing);
   RUN_TEST(test_capacity_is_every_boards_units);
   RUN_TEST(test_attrs_carry_the_boards);
   RUN_TEST(test_attrs_of_a_row_never_spoken_to_stop_at_its_reach);

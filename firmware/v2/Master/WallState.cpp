@@ -6,8 +6,10 @@
 
 #include <atomic>
 
+#include "EventRecord.h"
 #include "HelpersSerialHandling.h"
 #include "LargeAlloc.h"
+#include "WallJobs.h"
 
 namespace {
 
@@ -53,6 +55,46 @@ struct Locked {
   Locked() { xSemaphoreTake(wallMutex, portMAX_DELAY); }
   ~Locked() { xSemaphoreGive(wallMutex); }
 };
+
+// How a job ended goes into the event record (#570). Taken under the lock,
+// recorded after it: eventRecord() has its own.
+struct JobEnd {
+  bool ended = false;
+  bool ok = false;
+  uint8_t number = 0;
+  uint8_t unit = 0;
+  char board[WALL_ROW_ID_MAX + 1] = {0};
+};
+
+// Lock held. `op` has just been finished.
+JobEnd jobEndOf(const WallOp& op) {
+  JobEnd end;
+  end.ended = true;
+  end.ok = op.phase == WallOpPhase::Done;
+  end.number = wallJobNumber(op.name);
+  end.unit = op.unit;
+  if (op.row >= 0 && op.row < held->wall.rows.count) {
+    strncpy(end.board, held->wall.rows.rows[op.row].id, sizeof(end.board) - 1);
+  }
+  return end;
+}
+
+void recordJobEnd(const JobEnd& end) {
+  if (!end.ended) return;
+  eventRecord(end.ok ? EventKind::JobDone : EventKind::JobFailed, end.number, end.board, end.unit,
+              0, 0);
+}
+
+// Lock held. Fails the running jobs `which` picks and returns how they ended.
+template <class Pick>
+int failJobs(Pick which, const char* reason, JobEnd* ends) {
+  int n = 0;
+  for (const WallOp& op : held->ops.ops) {
+    if (op.id == 0 || op.phase != WallOpPhase::Running || !which(op)) continue;
+    if (held->ops.finish(op.id, false, reason)) ends[n++] = jobEndOf(op);
+  }
+  return n;
+}
 
 }  // namespace
 
@@ -144,11 +186,11 @@ uint32_t wallOpBegin(const char* name, int row) {
   return id;
 }
 
-uint32_t wallJobBegin(const char* name, int row, bool& rowBusy) {
+uint32_t wallJobBegin(const char* name, int row, bool& rowBusy, uint8_t unit) {
   Locked lock;
   rowBusy = held->ops.runningOn(row);
   if (rowBusy) return 0;
-  const uint32_t id = held->ops.begin(name, row);
+  const uint32_t id = held->ops.begin(name, row, unit);
   if (id != 0) held->opData[held->ops.placeOf(id)].len = 0;
   return id;
 }
@@ -220,9 +262,23 @@ bool wallUnitUpdateRunning() {
   return held->ops.runningOnARowBoard("update-units");
 }
 
-void wallOpFinish(uint32_t id, bool ok, const char* detail) {
+bool wallJobRunningOn(int row) {
   Locked lock;
-  held->ops.finish(id, ok, detail);
+  return held->ops.runningOn(row);
+}
+
+bool wallUnitUpdateRunningOn(int row) {
+  Locked lock;
+  return held->ops.runningOn(row, "update-units");
+}
+
+void wallOpFinish(uint32_t id, bool ok, const char* detail) {
+  JobEnd end;
+  {
+    Locked lock;
+    if (held->ops.finish(id, ok, detail)) end = jobEndOf(*held->ops.find(id));
+  }
+  recordJobEnd(end);
 }
 
 bool wallOpGet(uint32_t id, WallOp& out) {
@@ -234,8 +290,13 @@ bool wallOpGet(uint32_t id, WallOp& out) {
 }
 
 void wallOpsFailRow(int row, const char* reason) {
-  Locked lock;
-  held->ops.failRow(row, reason);
+  JobEnd ends[WALL_OPS_KEPT];
+  int n = 0;
+  {
+    Locked lock;
+    n = failJobs([row](const WallOp& op) { return op.row == row; }, reason, ends);
+  }
+  for (int i = 0; i < n; i++) recordJobEnd(ends[i]);
 }
 
 bool wallStateStage(const WallRequest& request) {
@@ -268,8 +329,14 @@ ClusterVerdict wallStateSetRows(const WallRowsTable& table) {
   // Stored first: a table that is live but not stored would be gone at the
   // next start, with rows still paired to this master.
   wallStore->putString(WALL_ROWS_NVS_KEY, wallRowsToString(table));
+  JobEnd ends[WALL_OPS_KEPT];
+  int ended = 0;
   {
     Locked lock;
+    // Before the table goes: a row's number means another board after it, or
+    // none, and each job is recorded against the board it ran on.
+    ended = failJobs([](const WallOp& op) { return op.row >= 0; },
+                     "the boards of the wall changed", ends);
     held->wall.rows = table;
     for (int i = 0; i < CLUSTER_MAX_MEMBERS; i++) {
       held->wall.link[i] = WallRowLink{};
@@ -279,13 +346,12 @@ ClusterVerdict wallStateSetRows(const WallRowsTable& table) {
     }
     held->wall.updatePhase = 0;
     held->wall.updateRow = -1;
-    // A row's number means another board now, or none.
     updateRetries = 0;
-    held->ops.failRowBoards("the boards of the wall changed");
     // Inside the lock, after the table: a reader that sees the new number
     // gets the new table.
     rowsGeneration.fetch_add(1, std::memory_order_relaxed);
   }
+  for (int i = 0; i < ended; i++) recordJobEnd(ends[i]);
   SerialPrintf("wall: rows table is now \"%s\"\n", wallRowsToString(table).c_str());
   return {true, ""};
 }

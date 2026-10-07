@@ -1,7 +1,7 @@
 // WebWall.cpp — the first routes of the operator API that covers the whole
 // Split-Flap (#559/#566): POST /api/v2/action starts a job and answers with
 // its id, GET /api/v2/op/{id} says what became of it, GET /api/v2/wall lists
-// the boards. Async context: handlers read WallState snapshots and stage
+// the boards with the master's verdict on each (WallWatch.h). Async context: handlers read WallState snapshots and stage
 // requests, they never change anything themselves (WebEndpoints.cpp rules).
 //
 // Which boards make up the wall:
@@ -20,6 +20,7 @@
 //       target.row "" or absent = the master's own row; one job at a time per row
 // GET /api/v2/history[?before=<seq>][&limit=<n>] reads the event record newest
 // first: {"events":[{seq,time,kind,detail,board,unit,a,b}...],"next":<seq>}.
+// The reason, job or restart cause an entry is about is also given by name.
 // "next" is the `before` of the following page and is absent on the last one;
 // "time" is Unix seconds, absent when the clock was not set; "board" is the
 // row's id, "" for the master, absent for a board no longer on the wall.
@@ -43,6 +44,7 @@
 #include "WallShow.h"
 #include "WallState.h"
 #include "WallUpdatePolicy.h"
+#include "WallWatch.h"
 #include "WebEndpoints.h"
 #include "WebEndpointsInternal.h"
 
@@ -191,7 +193,7 @@ void startOwnJob(AsyncWebServerRequest* request, const WallJobKind& kind, wl_Op&
     return sendError(request, status, refusal);
   }
   bool rowBusy = false;
-  op.op_id = wallJobBegin(kind.name, WALL_OP_OWN_ROW, rowBusy);
+  op.op_id = wallJobBegin(kind.name, WALL_OP_OWN_ROW, rowBusy, (uint8_t)op.address);
   if (op.op_id == 0) {
     return rowBusy ? sendError(request, 409, "another unit job is running on that row")
                    : sendError(request, 503, "too many jobs are running");
@@ -231,7 +233,7 @@ void startRowJob(AsyncWebServerRequest* request, const WallJobKind& kind, wl_Op&
     }
   }
   bool rowBusy = false;
-  op.op_id = wallJobBegin(kind.name, row, rowBusy);
+  op.op_id = wallJobBegin(kind.name, row, rowBusy, (uint8_t)op.address);
   if (op.op_id == 0) {
     return rowBusy ? sendError(request, 409, "another unit job is running on that row")
                    : sendError(request, 503, "too many jobs are running");
@@ -379,9 +381,40 @@ void handleOp(AsyncWebServerRequest* request) {
   request->send(response);
 }
 
+// A board's verdict: {"level","reason","a","b","also":[...]} and, when its
+// units are judged, "unitLevels": one letter a unit in bus order (w working,
+// n note, f fault). The reasons and what their two numbers mean are
+// BoardVerdict.h's.
+void writeVerdict(JsonObject into, const WallVerdictBoard* board) {
+  if (board == nullptr) return;
+  JsonObject v = into["verdict"].to<JsonObject>();
+  v["level"] = verdictLevelName(board->verdict.level);
+  v["reason"] = boardReasonName(board->verdict.reason);
+  v["a"] = board->verdict.a;
+  v["b"] = board->verdict.b;
+  JsonArray also = v["also"].to<JsonArray>();
+  for (BoardReason r : BOARD_REASON_ORDER) {
+    if (r != board->verdict.reason && (board->verdict.all & boardReasonBit(r))) {
+      also.add(boardReasonName(r));
+    }
+  }
+  if (board->units == 0) return;
+  char levels[UNITS_AMOUNT + 1] = {0};
+  for (int i = 0; i < board->units && i < UNITS_AMOUNT; i++) {
+    levels[i] = verdictLevelName(board->unit[i].level)[0];
+  }
+  into["unitLevels"] = jsonCopied(levels);
+}
+
 void handleWall(AsyncWebServerRequest* request) {
   // Heap, not this task's stack: the snapshot and one row's unit facts.
+  const uint32_t generation = wallStateRowsGeneration();
   std::unique_ptr<WallSnapshot> wall(new WallSnapshot(wallStateGet()));
+  // Verdicts of the same rows table, or none: a row's number must mean the
+  // same board in both.
+  std::unique_ptr<WallVerdicts> verdicts(new WallVerdicts);
+  const bool judged = wallVerdictsGet(*verdicts, generation) &&
+                      generation == wallStateRowsGeneration();
   std::unique_ptr<UnitFactsDoc> units(new UnitFactsDoc);
   const DisplaySnapshot own = displaySnapshotGet();
   const uint32_t nowMs = millis();
@@ -390,6 +423,10 @@ void handleWall(AsyncWebServerRequest* request) {
   root["master"]["id"] = effectiveName;
   root["master"]["rev"] = GIT_REV;
   root["master"]["units"] = own.displayWidth;
+  if (judged) {
+    root["verdict"] = verdictLevelName(verdicts->wall);
+    writeVerdict(root["master"], verdicts->own());
+  }
   // The image the rows are to run, and the offer of it that is out now.
   FollowerImageFacts image;
   if (followerImageFacts(image)) {
@@ -413,6 +450,7 @@ void handleWall(AsyncWebServerRequest* request) {
     row["width"] = def.width;
     char text[WALL_ROW_TEXT_MAX + 1];
     if (wallShowRowText(i, text, sizeof(text))) row["text"] = jsonCopied(text);
+    if (judged) writeVerdict(row, verdicts->ofRow(i));
     if (wallRowIsOwn(def)) {
       row["showing"] = jsonCopied(own.currentText);
       continue;
@@ -507,6 +545,26 @@ void handleHistory(AsyncWebServerRequest* request) {
     e["unit"] = r.unit;
     e["a"] = r.a;
     e["b"] = r.b;
+    // What the numbers stand for, by name, so the record reads without a table.
+    switch ((EventKind)r.kind) {
+      case EventKind::UnitReasonOn:
+      case EventKind::UnitReasonOff:
+        e["reason"] = unitReasonName((UnitReason)r.detail);
+        break;
+      case EventKind::BoardReasonOn:
+      case EventKind::BoardReasonOff:
+        e["reason"] = boardReasonName((BoardReason)r.detail);
+        break;
+      case EventKind::JobDone:
+      case EventKind::JobFailed:
+        e["job"] = wallJobNumberName(r.detail);
+        break;
+      case EventKind::UnitRestarted:
+        e["cause"] = unitResetKindName(unitResetFromStatusByte(r.detail));
+        break;
+      default:
+        break;
+    }
   }
   if (found > limit) root["next"] = page[count - 1].seq;
   response->setLength();

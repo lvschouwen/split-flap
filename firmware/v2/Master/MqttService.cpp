@@ -26,6 +26,7 @@
 #include "WallMqtt.h"
 #include "WallShow.h"
 #include "WallState.h"
+#include "WallWatch.h"
 #include "WallUpdatePolicy.h"  // wallUpdatePhaseName
 #include "WebEndpoints.h"
 
@@ -615,6 +616,10 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
   // Heap, not this task's stack: the snapshot and one row's unit facts.
   std::unique_ptr<WallSnapshot> wall(new WallSnapshot(wallStateGet()));
   std::unique_ptr<UnitFactsDoc> units(new UnitFactsDoc);
+  // The verdicts of this very table, or none this round.
+  std::unique_ptr<WallVerdicts> verdicts(new WallVerdicts);
+  const uint32_t generation = wallStateRowsGeneration();
+  const bool judged = wallVerdictsGet(*verdicts, generation);
   WallMqttRow rows[CLUSTER_MAX_MEMBERS];
   char texts[CLUSTER_MAX_MEMBERS][WALL_ROW_TEXT_MAX + 1];
   const uint32_t nowMs = millis();
@@ -628,6 +633,12 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
     r.col = def.col;
     r.width = def.width;
     r.own = wallRowIsOwn(def);
+    if (const WallVerdictBoard* board = judged ? verdicts->ofRow(i) : nullptr) {
+      r.judged = true;
+      r.fault = board->verdict.level == VerdictLevel::Fault;
+      r.level = verdictLevelName(board->verdict.level);
+      r.reason = boardReasonName(board->verdict.reason);
+    }
     texts[i][0] = '\0';
     wallShowRowText(i, texts[i], sizeof(texts[i]));
     r.text = texts[i];

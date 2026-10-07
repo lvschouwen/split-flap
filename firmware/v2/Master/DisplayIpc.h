@@ -39,6 +39,10 @@ struct MaintResult {
 struct DisplaySnapshot {
   // v1 probe-fallback parity: until a probe answers, assume the ceiling.
   uint8_t displayWidth = UNITS_AMOUNT;
+  // The unit facts below are a bus scan's, not the defaults of a display
+  // task that has not looked yet (an unscanned row reads as sixteen empty
+  // places).
+  bool probed = false;
   bool busy = false;
   uint32_t commandsProcessed = 0;
   char currentText[DISPLAY_CMD_TEXT_LEN + 1] = {0};
@@ -154,6 +158,7 @@ inline void displayApplyUnitFacts(DisplaySnapshot& snap,
   snap.displayWidth = (uint8_t)width;
   snap.detectedUnitCount = (uint8_t)countRespondingUnits(states, maxUnits);
   snap.faultyUnitCount = (uint8_t)computeFaultyUnitCount(snap.units, maxUnits);
+  snap.probed = true;
 }
 
 // --- maintenance results (#204) --------------------------------------------------

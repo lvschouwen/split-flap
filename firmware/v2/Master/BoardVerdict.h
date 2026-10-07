@@ -161,6 +161,32 @@ inline uint32_t boardReasonsOf(const BoardFacts& f) {
   return all;
 }
 
+// The reasons these facts can speak for, as bits (unitReasonsObservable's
+// rule): a board that cannot be reached says nothing about its bus or units.
+inline uint32_t boardReasonsObservable(const BoardFacts& f) {
+  const auto flag = boardReasonBit;
+  const uint32_t reach = flag(BoardReason::Lost) | flag(BoardReason::NeverSeen) |
+                         flag(BoardReason::Away) | flag(BoardReason::Updating);
+  uint32_t seen = reach;
+  if (!f.own) {
+    if (f.updating || f.reach == BoardReach::Lost || f.reach == BoardReach::Never ||
+        f.reach == BoardReach::Away) {
+      return seen;
+    }
+    seen |= flag(BoardReason::Rescue);
+    if (f.rescue) return seen;
+    seen |= flag(BoardReason::BusDead) | flag(BoardReason::UpdateBlocked) |
+            flag(BoardReason::FirmwareDiffers);
+  }
+  seen |= flag(BoardReason::UpdatingUnits) | flag(BoardReason::ClockNotSet) |
+          flag(BoardReason::UnitsUnknown);
+  if (f.unitsKnown && !f.busDead && !f.updatingUnits) {
+    seen |= flag(BoardReason::UnitsMissing) | flag(BoardReason::UnitsFault) |
+            flag(BoardReason::UnitsNote);
+  }
+  return seen;
+}
+
 inline void boardReasonNumbers(BoardReason r, const BoardFacts& f, uint32_t& a, uint32_t& b) {
   a = 0;
   b = 0;

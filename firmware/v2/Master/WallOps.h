@@ -24,6 +24,7 @@ struct WallOp {
   // The row it runs on: its index in the rows table, WALL_OP_OWN_ROW, or -1
   // for a job that is not about one row.
   int8_t row = -1;
+  uint8_t unit = 0;  // the unit's bus address, 0 = not about one unit
   char name[16] = {0};
   char detail[96] = {0};  // Done: the result; Failed: the reason
 };
@@ -33,7 +34,7 @@ struct WallOps {
   uint32_t nextId = 1;
 
   // The new job's id, 0 when every place holds a running job.
-  uint32_t begin(const char* name, int row) {
+  uint32_t begin(const char* name, int row, uint8_t unit = 0) {
     WallOp* place = nullptr;
     for (WallOp& op : ops) {
       if (op.id == 0) {
@@ -47,6 +48,7 @@ struct WallOps {
     *place = WallOp{};
     place->id = nextId++;
     place->row = (int8_t)row;
+    place->unit = unit;
     strncpy(place->name, name, sizeof(place->name) - 1);
     return place->id;
   }
@@ -89,6 +91,17 @@ struct WallOps {
   bool runningOn(int row) const {
     for (const WallOp& op : ops) {
       if (op.id != 0 && op.row == row && op.phase == WallOpPhase::Running) return true;
+    }
+    return false;
+  }
+
+  // Is a job of this name running on this row?
+  bool runningOn(int row, const char* name) const {
+    for (const WallOp& op : ops) {
+      if (op.id != 0 && op.row == row && op.phase == WallOpPhase::Running &&
+          strcmp(op.name, name) == 0) {
+        return true;
+      }
     }
     return false;
   }

@@ -17,6 +17,7 @@
 #include "WallPair.h"
 #include "WallShow.h"
 #include "WallState.h"
+#include "WallWatch.h"
 #include "DeviceIdentity.h"
 #include "FactorySlot.h"
 #include "EventRecord.h"
@@ -156,6 +157,7 @@ void setup() {
   // The boards of this Split-Flap and the link its row boards dial (#566).
   // Before tasksInit(): the link task reads both.
   wallStateInit(settingsStore);
+  wallWatchInit();  // #570: verdicts and the changes worth recording
   wallLinkInit(deviceName);
   wallPairInit(deviceName);
   wallShowInit();

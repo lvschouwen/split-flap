@@ -195,6 +195,37 @@ inline uint32_t unitReasonsOf(const UnitFacts& u, const UnitVerdictContext& ctx)
   return all;
 }
 
+// The reasons this read of the unit can speak for, as bits. One it cannot
+// (a status that did not arrive, a unit gone quiet) is neither there nor
+// gone: whoever follows a unit over time keeps what it knew.
+inline uint32_t unitReasonsObservable(const UnitFacts& u) {
+  const auto flag = unitReasonBit;
+  // What kind of thing answers at the address is always known.
+  const uint32_t standing = flag(UnitReason::NoUnit) | flag(UnitReason::NotAnswering) |
+                            flag(UnitReason::HeldInBootloader) | flag(UnitReason::InBootloader) |
+                            flag(UnitReason::WrongProtocol) | flag(UnitReason::BeingUpdated);
+  const uint32_t every = (1UL << UNIT_REASON_COUNT) - 1;
+  // Nothing runs there, so nothing about a running unit holds any more.
+  if (u.state != 1) return every;
+  if (unitIsLost(u) || !unitDrivable(u)) return standing;
+  uint32_t seen = standing | flag(UnitReason::NotRead) | flag(UnitReason::FirmwareOutdated) |
+                  flag(UnitReason::Worn);
+  if (u.statusValid) {
+    seen |= flag(UnitReason::HomeFailed) | flag(UnitReason::HallNever) |
+            flag(UnitReason::FindingHome) | flag(UnitReason::RestartedByItself);
+  }
+  if (u.bootVerdict != BOOT_INTEGRITY_UNREAD) {
+    seen |= flag(UnitReason::BootloaderDamaged) | flag(UnitReason::BootloaderOutdated);
+  }
+  if (u.extDiagValid) {
+    seen |= flag(UnitReason::Jammed) | flag(UnitReason::Dragging) | flag(UnitReason::HallAnomaly);
+  }
+  if (u.diagValid) seen |= flag(UnitReason::WrongLetter);
+  if (u.vitalsValid) seen |= flag(UnitReason::LowSupply);
+  if (u.statusValid && u.lifetimeValid) seen |= flag(UnitReason::HomeFailedBefore);
+  return seen;
+}
+
 // The two numbers that belong to a reason (the table at UnitReason).
 inline void unitReasonNumbers(UnitReason r, const UnitFacts& u, const UnitVerdictContext& ctx,
                               uint32_t& a, uint32_t& b) {

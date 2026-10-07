@@ -60,6 +60,7 @@ bool tasksUnitCountOverridePinned() {
 #include "WallJobs.h"
 #include "WallLink.h"
 #include "WallPair.h"
+#include "WallWatch.h"
 #include "WallShow.h"
 #include "WebEndpoints.h"
 #include "WifiService.h"
@@ -250,6 +251,7 @@ static void workerTaskMain(void*) {
     netLivenessProbeTick();  // #501: the gateway and own-server probes
     wallPairTick();          // #566: pairing and the other rows-table requests
     wallOwnJobTick();        // #566: the end of a unit job on the own row
+    wallWatchTick();         // #570: judge the wall, record what changed
     crashCtxMark(CRASH_SLOT_WORKER, CRASH_ACT_IDLE);
     vTaskDelay(pdMS_TO_TICKS(100));
   }

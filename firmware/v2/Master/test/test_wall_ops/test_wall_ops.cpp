@@ -103,8 +103,14 @@ static void test_one_row_runs_one_job_and_the_own_row_is_a_row_too() {
   TEST_ASSERT_TRUE(ops.runningOn(1));
   TEST_ASSERT_TRUE(ops.runningOn(WALL_OP_OWN_ROW));
   TEST_ASSERT_FALSE(ops.runningOn(2));
+  TEST_ASSERT_TRUE(ops.runningOn(1, "home"));
+  TEST_ASSERT_FALSE(ops.runningOn(1, "update-units"));
+  TEST_ASSERT_FALSE(ops.runningOn(2, "home"));
   ops.finish(a, true, "ok");
   TEST_ASSERT_FALSE(ops.runningOn(1));
+  TEST_ASSERT_FALSE(ops.runningOn(1, "home"));
+  TEST_ASSERT_EQUAL_UINT8(0, ops.find(a)->unit);
+  TEST_ASSERT_EQUAL_UINT8(7, ops.find(ops.begin("jog", 1, 7))->unit);
   ops.finish(own, true, "ok");
   TEST_ASSERT_FALSE(ops.runningOn(WALL_OP_OWN_ROW));
 }

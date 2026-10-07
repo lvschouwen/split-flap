@@ -87,7 +87,8 @@ void wallOpsFailRow(int row, const char* reason);
 
 // A job on a row: 0 when no job can be started now; `rowBusy` says whether
 // that is because the row already runs one.
-uint32_t wallJobBegin(const char* name, int row, bool& rowBusy);
+// `unit` is the bus address the job is about, 0 for a job on the whole row.
+uint32_t wallJobBegin(const char* name, int row, bool& rowBusy, uint8_t unit = 0);
 // What a job handed back besides its outcome, in the pieces it arrived in.
 void wallOpDataPut(uint32_t id, uint32_t offset, const uint8_t* data, size_t n);
 size_t wallOpDataGet(uint32_t id, uint8_t* out, size_t cap);
@@ -110,6 +111,11 @@ struct WallOwnJob {
 void wallOwnJobSet(const WallOwnJob& job);
 bool wallOwnJobGet(WallOwnJob& out);
 void wallOwnJobClear(uint32_t opId);
+
+// Is a job running on this row (an index in the rows table, or
+// WALL_OP_OWN_ROW), and is it the update of its units?
+bool wallJobRunningOn(int row);
+bool wallUnitUpdateRunningOn(int row);
 
 // Is a row board updating its units? The producer gate of the master's own
 // unit update covers this too: nothing display-mutating starts meanwhile.

@@ -95,6 +95,24 @@ static void test_every_refusal_has_its_own_words() {
   }
 }
 
+static void test_every_job_has_a_number_for_the_event_record() {
+  TEST_ASSERT_EQUAL_UINT8(1, wallJobNumber("home"));
+  TEST_ASSERT_EQUAL_UINT8(12, wallJobNumber("update-units"));
+  TEST_ASSERT_EQUAL_UINT8(200, wallJobNumber("pair"));
+  TEST_ASSERT_EQUAL_UINT8(201, wallJobNumber("release"));
+  TEST_ASSERT_EQUAL_UINT8(202, wallJobNumber("arrange"));
+  TEST_ASSERT_EQUAL_UINT8(203, wallJobNumber("update"));
+  TEST_ASSERT_EQUAL_UINT8(0, wallJobNumber("no-such-job"));
+  for (const WallJobKind& kind : WALL_JOB_KINDS) {
+    const uint8_t number = wallJobNumber(kind.name);
+    TEST_ASSERT_TRUE(number > 0 && number < 200);
+    TEST_ASSERT_EQUAL_STRING(kind.name, wallJobNumberName(number));
+  }
+  TEST_ASSERT_EQUAL_STRING("pair", wallJobNumberName(200));
+  TEST_ASSERT_EQUAL_STRING("?", wallJobNumberName(0));
+  TEST_ASSERT_EQUAL_STRING("?", wallJobNumberName(250));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_job_is_found_by_its_name_and_by_its_code);
@@ -105,5 +123,6 @@ int main(int, char**) {
   RUN_TEST(test_a_rescan_is_for_the_whole_row);
   RUN_TEST(test_how_a_job_ended_reads_as_the_op_result_words);
   RUN_TEST(test_every_refusal_has_its_own_words);
+  RUN_TEST(test_every_job_has_a_number_for_the_event_record);
   return UNITY_END();
 }

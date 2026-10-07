@@ -72,6 +72,36 @@ inline const WallJobKind* wallJobFind(wl_OpCode opcode) {
   return nullptr;
 }
 
+// A job's number in the event record: a unit job's is its OpCode on the link,
+// the jobs that change the wall count from 200. Fixed, like the OpCodes.
+struct WallTableJob {
+  const char* name;
+  uint8_t number;
+};
+static const WallTableJob WALL_TABLE_JOBS[] = {
+    {"pair", 200},
+    {"release", 201},
+    {"arrange", 202},
+    {"update", 203},
+};
+
+// 0 for a name that is no job.
+inline uint8_t wallJobNumber(const char* name) {
+  if (const WallJobKind* kind = wallJobFind(name)) return (uint8_t)kind->opcode;
+  for (const WallTableJob& job : WALL_TABLE_JOBS) {
+    if (strcmp(job.name, name) == 0) return job.number;
+  }
+  return 0;
+}
+
+inline const char* wallJobNumberName(uint8_t number) {
+  for (const WallTableJob& job : WALL_TABLE_JOBS) {
+    if (job.number == number) return job.name;
+  }
+  if (const WallJobKind* kind = wallJobFind((wl_OpCode)number)) return kind->name;
+  return "?";
+}
+
 // Fills `op` (all but its id) from what the operator asked for. Returns why
 // not, nullptr when the job can be handed to the row.
 inline const char* wallJobBuild(const WallJobKind& kind, bool haveUnit, long unit, bool haveArg,

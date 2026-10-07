@@ -30,22 +30,22 @@ struct WallMqttRow {
   bool rescue = false;        // runs its rescue mode
   bool updateBlocked = false; // the stored image was given up on for it
   bool busDead = false;       // its unit bus is dead
+  bool judged = false;        // the master has a verdict on it (BoardVerdict.h)
+  bool fault = false;         // and it is a fault
+  const char* level = "";     // the verdict's level and leading reason, by name
+  const char* reason = "";
   bool unitsKnown = false;    // the three counts below are its own report
   uint8_t unitsFound = 0;
   uint8_t unitsFaulty = 0;
   uint8_t unitsLost = 0;
 };
 
-// ON = somebody has to look: a row board that is gone, in rescue mode or
-// given up on by the update, or one whose units went dark. A row merely busy
-// or briefly away is normal; so is an update in progress. Faulty units fold
-// sticky lifetime counters and would latch, so they are attributes only.
+// ON = somebody has to look: a board whose verdict is a fault, the master's
+// own row included. A fault is something wrong now, so the sensor clears
+// when the trouble does; notes never trip it.
 inline bool wallMqttProblem(const WallMqttRow* rows, int count) {
   for (int i = 0; i < count; i++) {
-    const WallMqttRow& r = rows[i];
-    if (r.own) continue;
-    if (r.lost || r.rescue || r.updateBlocked || r.busDead) return true;
-    if (r.unitsKnown && r.unitsLost > 0) return true;
+    if (rows[i].judged && rows[i].fault) return true;
   }
   return false;
 }
@@ -61,7 +61,7 @@ inline int wallMqttCapacity(const WallMqttRow* rows, int count) {
 // revs arrive from the boards, so both get real JSON escaping.
 inline String wallMqttAttrsJson(const WallMqttRow* rows, int count, const char* updatePhase) {
   String out;
-  out.reserve(96 + count * 170);
+  out.reserve(96 + count * 220);
   out += "{\"boards\":[";
   for (int i = 0; i < count; i++) {
     const WallMqttRow& r = rows[i];
@@ -89,6 +89,12 @@ inline String wallMqttAttrsJson(const WallMqttRow* rows, int count, const char* 
         out += ",\"busDead\":";
         out += r.busDead ? "true" : "false";
       }
+    }
+    if (r.judged) {
+      out += ",\"level\":";
+      appendJsonString(out, String(r.level));
+      out += ",\"reason\":";
+      appendJsonString(out, String(r.reason));
     }
     if (r.unitsKnown) {
       out += ",\"found\":";
