@@ -36,8 +36,16 @@ static uint32_t bootDumpBytesSeq = 0;  // seq that wrote bootDumpBytes
 static uint32_t bootDumpBytesAtMs = 0;  // claimed or last written
 #define BOOT_DUMP_KEEP_MS (5UL * 60UL * 1000UL)
 static uint32_t maintSeqCounter = 0;
-// A staged Probe op waiting for its scan (0 = none): stamped when it has run.
-static uint32_t probeOpSeq = 0;
+// A job whose outcome is read off the rescan it waits for (seq 0 = none): a
+// Probe is done once the scan has run, an address job is judged by what the
+// scan finds (MaintenancePolicy.h).
+struct AwaitingScan {
+  uint32_t seq = 0;
+  FollowerOpKind kind = FollowerOpKind::None;
+  uint8_t target = 0;   // SetAddress: where the unit must answer
+  int countBefore = 0;  // ClearAddress: the units that answered before
+};
+static AwaitingScan awaitingScan;
 
 // Self-test poll state (the unit measures ~2 revolutions; we poll its
 // GET_SELF_TEST until it stops reporting "running").
@@ -55,7 +63,7 @@ static void releaseBootDumpBytes() {
 // One job at a time: the staged slot, a self-test being waited on, a queued
 // rescan and a running unit update all hold the row.
 static bool opSlotBusy() {
-  return stagedOp.pending || selfTestPolling || probeOpSeq != 0 ||
+  return stagedOp.pending || selfTestPolling || awaitingScan.seq != 0 ||
          reflashInProgress(reflashProgress);
 }
 
@@ -209,9 +217,47 @@ static void executeStagedOp() {
     case FollowerOpKind::Probe:
       // Runs with the health refresh below, once any twiboot window is over.
       unitHealthRefreshPending = true;
-      probeOpSeq = op.seq;
+      awaitingScan = AwaitingScan{};
+      awaitingScan.seq = op.seq;
+      awaitingScan.kind = op.kind;
       stagedOp.pending = false;
       return;
+    case FollowerOpKind::SetAddress:
+    case FollowerOpKind::ClearAddress: {
+      const bool set = op.kind == FollowerOpKind::SetAddress;
+      // Judged again here: the plan was made a loop pass ago.
+      if (set && maintValidateSetAddressTarget(op.arg, op.addr, unitFacts, UNITS_AMOUNT)
+                         .httpStatus != 200) {
+        grade = {MaintOutcome::ExecValidationFail, MaintReason::TargetAddressOccupied};
+        break;
+      }
+      const int countBefore = detectedUnitCount;
+      const int status = set ? busSetAddress(op.addr, (uint8_t)op.arg) : busClearAddress(op.addr);
+      if (status != 0) {
+        // A lost ACK does not prove the unit stayed in its sketch: keep the
+        // probes out of the window all the same, and look afterwards.
+        busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
+        unitHealthRefreshPending = true;
+        grade = maintGradeWire(status);
+        break;
+      }
+      // The unit restarts through its bootloader: no probe inside that
+      // window (v1 #88), and the scan after it says how the job ended.
+      busInvalidateUnitReads(op.addr);
+      busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
+      unitHealthRefreshPending = true;
+      awaitingScan = AwaitingScan{};
+      awaitingScan.seq = op.seq;
+      awaitingScan.kind = op.kind;
+      awaitingScan.target = (uint8_t)op.arg;
+      awaitingScan.countBefore = countBefore;
+      stagedOp.pending = false;
+      return;
+    }
+    case FollowerOpKind::HomeAll:
+      busHomeAll();
+      grade = maintGradeWire(0);
+      break;
     case FollowerOpKind::BootInfo: {
       BootInfoSlot slot;
       slot.seq = op.seq;
@@ -265,9 +311,17 @@ void unitJobsLoopTick() {
       unitHealthRefreshPending = false;
       busProbe();
       busPollHealth();
-      if (probeOpSeq != 0) {
-        stampOpResult(probeOpSeq, maintGradeWire(0));
-        probeOpSeq = 0;
+      if (awaitingScan.seq != 0) {
+        MaintGrade grade = maintGradeWire(0);
+        if (awaitingScan.kind == FollowerOpKind::SetAddress) {
+          grade.outcome = classifySetAddressOutcome(unitFacts, UNITS_AMOUNT, awaitingScan.target,
+                                                    grade.reason);
+        } else if (awaitingScan.kind == FollowerOpKind::ClearAddress) {
+          grade.outcome = classifyClearAddressOutcome(awaitingScan.countBefore,
+                                                      detectedUnitCount, grade.reason);
+        }
+        stampOpResult(awaitingScan.seq, grade);
+        awaitingScan = AwaitingScan{};
       }
     }
   }

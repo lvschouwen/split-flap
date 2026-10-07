@@ -195,7 +195,8 @@ struct WallRowJob {
 };
 
 inline uint32_t wallJobRunMs(const wl_Op& op) {
-  const bool everyUnit = op.opcode == wl_OpCode_OPC_UPDATE_UNITS && op.address == 0;
+  const bool everyUnit = (op.opcode == wl_OpCode_OPC_UPDATE_UNITS && op.address == 0) ||
+                         op.opcode == wl_OpCode_OPC_HOME_ALL;
   return everyUnit ? WALL_JOB_ALL_UNITS_MS : WALL_JOB_UNIT_MS;
 }
 

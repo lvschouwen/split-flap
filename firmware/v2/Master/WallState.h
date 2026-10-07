@@ -172,3 +172,8 @@ bool wallStateReleasePending();
 bool wallStateAskUpdateRetry(int row, uint32_t generation);
 // A bit per row index, cleared by the call.
 uint32_t wallStateTakeUpdateRetries();
+
+// Web side asks, link task takes: tell this row board to restart. The same
+// rule for `generation`.
+bool wallStateAskRestart(int row, uint32_t generation);
+uint32_t wallStateTakeRestarts();

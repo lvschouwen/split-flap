@@ -429,19 +429,14 @@ void webMaintenanceRegister(AsyncWebServer& server) {
   // every future wait. A 503 rolls the flag back (nothing queued to abort).
   server.on("/stop", HTTP_POST, [](AsyncWebServerRequest* request) {
     SerialPrintln(F("Stop requested from web UI"));
-    DisplayCommand cmd = makeStopCommand(displayNextMaintSeq());
-    unitBusRequestAbort();
-    if (!displayEnqueue(cmd)) {
-      unitBusClearAbort();
+    uint32_t seq = 0;
+    if (!webStopWall(seq)) {
       request->send(503, "text/plain",
                     F("Display queue full — try again in a moment"));
       return;
     }
-    // Stop blanks the WHOLE wall: the command above handles this board's own
-    // row, this the row boards (a no-op without any).
-    wallShowBlank();
     char buf[24];
-    snprintf(buf, sizeof(buf), "{\"seq\":%lu}", (unsigned long)cmd.seq);
+    snprintf(buf, sizeof(buf), "{\"seq\":%lu}", (unsigned long)seq);
     request->send(200, "application/json", buf);
   });
 

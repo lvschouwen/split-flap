@@ -50,6 +50,7 @@ void clockTaskMain(void*) {
       notifWasActive = true;
       continue;
     }
+    const bool overlayEnded = notifWasActive;
     if (notifWasActive) {
       notifWasActive = false;
       lastQueued = "";
@@ -71,7 +72,10 @@ void clockTaskMain(void*) {
                         formatDateTime(target.minuteEpochS, CLUSTER_DATE_FORMAT),
                         wallContent.alignment, wallContent.flapSpeed, target.commitAtMs);
         }
-      } else if (wallContent.deviceMode == "text" && wallContent.inputText.length() > 0) {
+      } else if (wallContent.deviceMode == "text" &&
+                 (wallContent.inputText.length() > 0 || overlayEnded)) {
+        // Text mode with nothing to show still takes a text shown for a time
+        // off the rows again: blank.
         wallShowText(wallContent.inputText, wallContent.alignment, wallContent.flapSpeed);
       }
       lastQueued = "";  // the ticker owns nothing while the wall shows

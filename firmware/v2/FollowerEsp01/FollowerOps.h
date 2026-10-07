@@ -27,6 +27,9 @@ enum class FollowerOpKind : uint8_t {
   BootInfo,     // #499: read-only boot report; result in the BootInfoSlot
   BootDump,     // #522: read the unit's twiboot image over I2C
   Probe,        // rescan the row; done once the scan has run
+  SetAddress,   // arg = the address the unit stores; judged by the rescan
+  ClearAddress, // back to its switches; judged by the rescan
+  HomeAll,      // every unit finds home again, then the row's text returns
 };
 
 struct MaintResult {

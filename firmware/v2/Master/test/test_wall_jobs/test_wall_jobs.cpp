@@ -72,6 +72,29 @@ static void test_a_rescan_is_for_the_whole_row() {
   TEST_ASSERT_NOT_NULL(build("probe", true, 3, false, 0, op));
 }
 
+static void test_homing_every_unit_is_for_the_whole_row() {
+  wl_Op op;
+  TEST_ASSERT_NULL(build("home-all", false, 0, false, 0, op));
+  TEST_ASSERT_EQUAL(wl_OpCode_OPC_HOME_ALL, op.opcode);
+  TEST_ASSERT_NOT_NULL(build("home-all", true, 3, false, 0, op));
+  TEST_ASSERT_NOT_NULL(build("home-all", false, 0, true, 1, op));
+}
+
+static void test_a_units_address_is_set_to_one_a_unit_can_have_and_cleared_without_a_value() {
+  wl_Op op;
+  TEST_ASSERT_NULL(build("set-address", true, 3, true, 9, op));
+  TEST_ASSERT_EQUAL(wl_OpCode_OPC_SET_ADDRESS, op.opcode);
+  TEST_ASSERT_EQUAL_UINT32(3, op.address);
+  TEST_ASSERT_EQUAL_INT32(9, op.arg);
+  TEST_ASSERT_NOT_NULL(build("set-address", true, 3, false, 0, op));  // the address is required
+  TEST_ASSERT_NOT_NULL(build("set-address", true, 3, true, 0, op));
+  TEST_ASSERT_NOT_NULL(build("set-address", true, 3, true, 127, op));
+  TEST_ASSERT_NOT_NULL(build("set-address", false, 0, true, 9, op));
+  TEST_ASSERT_NULL(build("clear-address", true, 3, false, 0, op));
+  TEST_ASSERT_EQUAL(wl_OpCode_OPC_CLEAR_ADDRESS, op.opcode);
+  TEST_ASSERT_NOT_NULL(build("clear-address", true, 3, true, 9, op));
+}
+
 static void test_how_a_job_ended_reads_as_the_op_result_words() {
   char text[96];
   wallJobOutcomeText(text, sizeof text, true, 0, 0);
@@ -89,7 +112,7 @@ static void test_how_a_job_ended_reads_as_the_op_result_words() {
 
 static void test_every_refusal_has_its_own_words() {
   const char* fallback = wallJobRefusalText(999);
-  for (uint32_t r = wl_OpRefusal_REFUSAL_UNKNOWN_OP; r <= wl_OpRefusal_REFUSAL_NO_MEMORY; r++) {
+  for (uint32_t r = wl_OpRefusal_REFUSAL_UNKNOWN_OP; r <= wl_OpRefusal_REFUSAL_ADDRESS_TAKEN; r++) {
     TEST_ASSERT_TRUE(strcmp(fallback, wallJobRefusalText(r)) != 0);
     TEST_ASSERT_TRUE(strlen(wallJobRefusalText(r)) < 96);  // fits WallOp.detail
   }
@@ -121,6 +144,8 @@ int main(int, char**) {
   RUN_TEST(test_values_take_the_shared_checks);
   RUN_TEST(test_updating_units_is_one_or_all_and_forced_only_one_at_a_time);
   RUN_TEST(test_a_rescan_is_for_the_whole_row);
+  RUN_TEST(test_homing_every_unit_is_for_the_whole_row);
+  RUN_TEST(test_a_units_address_is_set_to_one_a_unit_can_have_and_cleared_without_a_value);
   RUN_TEST(test_how_a_job_ended_reads_as_the_op_result_words);
   RUN_TEST(test_every_refusal_has_its_own_words);
   RUN_TEST(test_every_job_has_a_number_for_the_event_record);

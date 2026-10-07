@@ -56,6 +56,14 @@ static const WallJobKind WALL_JOB_KINDS[] = {
     {"update-units", wl_OpCode_OPC_UPDATE_UNITS, WallJobUnit::OneOrAll, "force", false,
      WallJobData::None},
     {"probe", wl_OpCode_OPC_PROBE, WallJobUnit::None, nullptr, false, WallJobData::None},
+    // args.address: where the unit answers from now on. Its present address
+    // stores what its switches give; "burn all" is this for every unit.
+    {"set-address", wl_OpCode_OPC_SET_ADDRESS, WallJobUnit::One, "address", true,
+     WallJobData::None},
+    {"clear-address", wl_OpCode_OPC_CLEAR_ADDRESS, WallJobUnit::One, nullptr, false,
+     WallJobData::None},
+    // Every unit of the row finds home again, then the row's text returns.
+    {"home-all", wl_OpCode_OPC_HOME_ALL, WallJobUnit::None, nullptr, false, WallJobData::None},
 };
 
 inline const WallJobKind* wallJobFind(const char* name) {
@@ -131,6 +139,11 @@ inline const char* wallJobBuild(const WallJobKind& kind, bool haveUnit, long uni
     case wl_OpCode_OPC_JOG: verdict = maintValidateJog(arg); break;
     case wl_OpCode_OPC_SET_OFFSET: verdict = maintValidateOffset(arg); break;
     case wl_OpCode_OPC_SET_GATES: verdict = maintValidateGates(arg); break;
+    case wl_OpCode_OPC_SET_ADDRESS:
+      // What a unit address can be at all; which of them this row can reach
+      // and which are free is the row's to say.
+      if (arg < 1 || arg > 126) return "args.address is the new address, 1 to 126";
+      break;
     case wl_OpCode_OPC_UPDATE_UNITS:
       if (arg != 0 && arg != 1) return "args.force is 1 or 0";
       // Never a whole-row erase of units that are current.
@@ -159,6 +172,8 @@ inline const char* wallJobRefusalText(uint32_t refusal) {
       return "the unit speaks another protocol version: update it";
     case wl_OpRefusal_REFUSAL_BAD_ARG: return "the row refused the job's value";
     case wl_OpRefusal_REFUSAL_NO_MEMORY: return "the row is out of memory for this job";
+    case wl_OpRefusal_REFUSAL_ADDRESS_TAKEN:
+      return "another unit already answers at that address";
     default: return "the row refused the job";
   }
 }

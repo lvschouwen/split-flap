@@ -49,6 +49,7 @@ std::atomic<uint32_t> rowSettingsGeneration{0};
 // Jobs waiting for the link task: it looks only when there are any.
 std::atomic<int> jobsStaged{0};
 uint32_t updateRetries = 0;  // a bit per row index, under the mutex
+uint32_t restartsAsked = 0;  // the same
 char releaseId[WALL_ROW_ID_MAX + 1] = {0};
 
 struct Locked {
@@ -352,6 +353,7 @@ ClusterVerdict wallStateSetRows(const WallRowsTable& table) {
     held->wall.updateRow = -1;
     held->wall.rowsSinceMs = millis();
     updateRetries = 0;
+    restartsAsked = 0;
     // Inside the lock, after the table: a reader that sees the new number
     // gets the new table.
     rowsGeneration.fetch_add(1, std::memory_order_relaxed);
@@ -415,5 +417,20 @@ uint32_t wallStateTakeUpdateRetries() {
   Locked lock;
   const uint32_t asked = updateRetries;
   updateRetries = 0;
+  return asked;
+}
+
+bool wallStateAskRestart(int row, uint32_t generation) {
+  Locked lock;
+  if (generation != rowsGeneration.load(std::memory_order_relaxed)) return false;
+  if (row < 0 || row >= CLUSTER_MAX_MEMBERS) return false;
+  restartsAsked |= 1UL << row;
+  return true;
+}
+
+uint32_t wallStateTakeRestarts() {
+  Locked lock;
+  const uint32_t asked = restartsAsked;
+  restartsAsked = 0;
   return asked;
 }

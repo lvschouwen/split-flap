@@ -69,8 +69,8 @@ def test_a_row_boards_unit_update_holds_the_producers_back():
     # Every site that stands down for the master's own unit update, except
     # the ones that guard this board's own restart.
     sites = {
-        "ClockTask.cpp": 1, "WebFirmware.cpp": 1, "WebSettings.cpp": 2, "MqttService.cpp": 1,
-        "WebMaintenance.cpp": 1, "WebEndpoints.cpp": 2, "WebWall.cpp": 1,
+        "ClockTask.cpp": 1, "WebFirmware.cpp": 1, "WebSettings.cpp": 0, "MqttService.cpp": 1,
+        "WebMaintenance.cpp": 1, "WebEndpoints.cpp": 4, "WebWall.cpp": 1,
     }
     for name, count in sites.items():
         code = _code(MASTER / name)

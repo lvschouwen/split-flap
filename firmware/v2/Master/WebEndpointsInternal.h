@@ -64,6 +64,26 @@ bool webUploadCsrfRejected(AsyncWebServerRequest* request);
 // #313 CSRF middleware, attached once in webEndpointsInit().
 AsyncMiddlewareFunction& webCsrfMiddleware();
 
+// What the settings form and the /api/v2 actions share, so a gate cannot hold
+// on one and be missing on the other.
+enum class WebStage : uint8_t {
+  Staged,
+  UnitUpdate,  // text while a unit update runs (the producer gate, #205)
+  QueueFull,   // text while the display queue is full
+};
+// Merges a fully validated post into the pending one. `needsReboot` and
+// `deviceNameChanged` are judged against the live settings.
+WebStage webStagePost(const PendingSettingsPost& local, bool& needsReboot,
+                      bool& deviceNameChanged);
+// Restart this board once the answer has gone out. Returns why not (a unit
+// update or a firmware upload is running), nullptr when staged.
+const char* webStageReboot(const char* cause);
+// The kill switch: aborts what the units are doing and blanks every row.
+// False when the display queue is full (nothing was stopped).
+bool webStopWall(uint32_t& seq);
+// Is the wall quiet now?
+bool webQuietNow();
+
 // Per-module route registrars, called once from webEndpointsInit(). Routes
 // are matched per path+method, so cross-module registration order is not
 // semantic; same-path method pairs stay within one module.

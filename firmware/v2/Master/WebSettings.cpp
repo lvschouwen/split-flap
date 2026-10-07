@@ -65,45 +65,22 @@ void webSettingsRegister(AsyncWebServer& server) {
       return;
     }
 
-    // Message/transient sends become display commands at drain time; report
-    // a full queue now instead of accepting one that would be dropped. (The
-    // stub worker drains instantly, so this only fires if something wedges.)
-    // The reflash gate (#205) applies only to the display-bound part — pure
-    // settings saves don't touch the display queue and stay allowed.
-    if ((local.inputTextProvided || local.transientTextProvided) &&
-        (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning())) {
-      if (isAjax) {
-        request->send(409, "text/plain", F("reflash in progress"));
-      } else {
-        request->redirect("/?display-busy=true");
-      }
-      return;
+    // Gates, verdict against the live values, then stage; the apply itself
+    // runs in webEndpointsLoop().
+    bool needsReboot = false;
+    bool deviceNameChanged = false;
+    switch (webStagePost(local, needsReboot, deviceNameChanged)) {
+      case WebStage::Staged: break;
+      case WebStage::UnitUpdate:
+        if (isAjax) request->send(409, "text/plain", F("reflash in progress"));
+        else request->redirect("/?display-busy=true");
+        return;
+      case WebStage::QueueFull:
+        SerialPrintln(F("Display command queue full — message rejected."));
+        if (isAjax) request->send(503, "text/plain", F("display busy"));
+        else request->redirect("/?display-busy=true");
+        return;
     }
-    if ((local.inputTextProvided || local.transientTextProvided) &&
-        displayQueueFull()) {
-      SerialPrintln(F("Display command queue full — message rejected."));
-      if (isAjax) request->send(503, "text/plain", F("display busy"));
-      else request->redirect("/?display-busy=true");
-      return;
-    }
-
-    // Verdict against the live values, then stage; the apply itself runs in
-    // webEndpointsLoop(). Verdict + merge sit in one locked section so the
-    // comparison can't race a half-applied post.
-    bool needsReboot;
-    bool deviceNameChanged;
-    {
-      WebStateLock lock;
-      needsReboot = settingsPostNeedsReboot(local, *liveSettings);
-      deviceNameChanged = local.deviceNameProvided &&
-                          local.deviceName != liveSettings->deviceName;
-      mergeSettingsPost(pendingPost, local);
-    }
-
-    // Device renamed (#125): flag only from async context — mqttTask blanks
-    // the old identity's retained discovery configs before the reboot swaps
-    // identities.
-    if (deviceNameChanged) mqttRequestDiscoveryClear();
 
     if (isAjax) {
       request->send(200, "text/plain", needsReboot ? F("ok-reboot") : F("ok"));
@@ -117,28 +94,15 @@ void webSettingsRegister(AsyncWebServer& server) {
   // POST, not GET (v1 #145): state-changing actions must not be triggerable
   // by a drive-by <img src> on the LAN.
   server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
-    // #395: a reboot mid-unit-reflash leaves the Nano row parked in twiboot;
-    // mid-master-OTA it tears the upload session. 409 like every producer
-    // gate — /stop remains the only cancel path.
-    if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
-      request->send(409, "text/plain",
-                    F("Unit reflash in progress — retry when it finishes"));
-      return;
-    }
-    if (webFirmwareOtaUploadActive()) {
-      request->send(409, "text/plain",
-                    F("Master OTA upload in progress — retry when it "
-                      "finishes (stalled sessions clear in 30 s)"));
+    // 409 like every producer gate (webStageReboot).
+    if (const char* refusal = webStageReboot("reboot requested from the web UI")) {
+      request->send(409, "text/plain", refusal);
       return;
     }
     SerialPrintln(F("Reboot requested from web UI"));
     request->send(200, "text/plain",
                   "Reboot pending — this takes a few seconds. Reload the home "
                   "page afterwards.");
-    WebStateLock lock;
-    pendingReboot = true;
-    pendingRebootCause = F("reboot requested from the web UI");  // #432
-    rebootRequestedAtMs = millis();
   });
 
   // --- WiFi portal + credentials (#188) -------------------------------------

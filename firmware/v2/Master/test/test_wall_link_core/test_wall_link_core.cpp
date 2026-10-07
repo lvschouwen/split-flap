@@ -662,6 +662,7 @@ static void test_updating_every_unit_gets_the_long_time() {
                            wallJobRunMs(job(1, wl_OpCode_OPC_UPDATE_UNITS, 0)));
   TEST_ASSERT_EQUAL_UINT32(WALL_JOB_UNIT_MS, wallJobRunMs(job(1, wl_OpCode_OPC_UPDATE_UNITS, 4)));
   TEST_ASSERT_EQUAL_UINT32(WALL_JOB_UNIT_MS, wallJobRunMs(job(1, wl_OpCode_OPC_SELF_TEST, 4)));
+  TEST_ASSERT_EQUAL_UINT32(WALL_JOB_ALL_UNITS_MS, wallJobRunMs(job(1, wl_OpCode_OPC_HOME_ALL, 0)));
 }
 
 static void test_a_restarted_row_has_no_job_left() {

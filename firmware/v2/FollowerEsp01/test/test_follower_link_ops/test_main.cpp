@@ -22,7 +22,7 @@ static FollowerLinkOpPlan plan(uint32_t opcode, uint32_t address, long arg = 0) 
 }
 
 static void test_every_job_code_has_its_op() {
-  struct { wl_OpCode code; FollowerOpKind kind; } table[] = {
+  struct { wl_OpCode code; FollowerOpKind kind; long arg = 0; } table[] = {
       {wl_OpCode_OPC_HOME, FollowerOpKind::Home},
       {wl_OpCode_OPC_IDENTIFY, FollowerOpKind::Identify},
       {wl_OpCode_OPC_JOG, FollowerOpKind::Jog},
@@ -36,11 +36,14 @@ static void test_every_job_code_has_its_op() {
       {wl_OpCode_OPC_BOOT_UPDATE, FollowerOpKind::BootUpdate},
       {wl_OpCode_OPC_UPDATE_UNITS, FollowerOpKind::ReflashUnit},
       {wl_OpCode_OPC_PROBE, FollowerOpKind::Probe},
+      {wl_OpCode_OPC_SET_ADDRESS, FollowerOpKind::SetAddress, 1},
+      {wl_OpCode_OPC_CLEAR_ADDRESS, FollowerOpKind::ClearAddress},
+      {wl_OpCode_OPC_HOME_ALL, FollowerOpKind::HomeAll},
   };
   // Every code the schema names is in the table: a new one must be planned.
   TEST_ASSERT_EQUAL(_wl_OpCode_MAX, sizeof(table) / sizeof(table[0]));
   for (const auto& row : table) {
-    FollowerLinkOpPlan p = plan(row.code, 1);
+    FollowerLinkOpPlan p = plan(row.code, 1, row.arg);
     TEST_ASSERT_EQUAL_MESSAGE(wl_OpRefusal_REFUSAL_NONE, p.refusal, "refused");
     TEST_ASSERT_EQUAL((int)row.kind, (int)p.kind);
   }
@@ -110,6 +113,37 @@ static void test_updating_units_is_the_whole_row_or_one_unit() {
                     plan(wl_OpCode_OPC_UPDATE_UNITS, UNITS_AMOUNT + 1).refusal);
 }
 
+static void test_a_new_address_must_be_free_and_one_this_row_can_reach() {
+  // Unit 1 runs, address 2 holds a unit in its bootloader, 3 a unit on
+  // another protocol, 4 and up are empty.
+  FollowerLinkOpPlan p = plan(wl_OpCode_OPC_SET_ADDRESS, 1, 4);
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_NONE, p.refusal);
+  TEST_ASSERT_EQUAL(1, p.addr);
+  TEST_ASSERT_EQUAL(4, p.arg);
+  // Its own address again is the way to store what its switches give.
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_NONE, plan(wl_OpCode_OPC_SET_ADDRESS, 1, 1).refusal);
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_ADDRESS_TAKEN,
+                    plan(wl_OpCode_OPC_SET_ADDRESS, 1, 2).refusal);
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_ADDRESS_TAKEN,
+                    plan(wl_OpCode_OPC_SET_ADDRESS, 1, 3).refusal);
+  // Beyond the row a unit could never be reached again.
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_BAD_ARG,
+                    plan(wl_OpCode_OPC_SET_ADDRESS, 1, UNITS_AMOUNT + 1).refusal);
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_BAD_ARG, plan(wl_OpCode_OPC_SET_ADDRESS, 1, 0).refusal);
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_BAD_ARG, plan(wl_OpCode_OPC_SET_ADDRESS, 1, -1).refusal);
+  // Only a running unit takes the command.
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_NO_UNIT, plan(wl_OpCode_OPC_SET_ADDRESS, 4, 5).refusal);
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_NO_UNIT, plan(wl_OpCode_OPC_CLEAR_ADDRESS, 2).refusal);
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_NONE, plan(wl_OpCode_OPC_CLEAR_ADDRESS, 1).refusal);
+}
+
+static void test_homing_every_unit_ignores_the_address() {
+  FollowerLinkOpPlan p = plan(wl_OpCode_OPC_HOME_ALL, 99, 7);
+  TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_NONE, p.refusal);
+  TEST_ASSERT_EQUAL((int)FollowerOpKind::HomeAll, (int)p.kind);
+  TEST_ASSERT_EQUAL(0, p.addr);
+}
+
 static void test_a_probe_ignores_the_address() {
   TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_NONE, plan(wl_OpCode_OPC_PROBE, 0).refusal);
   TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_NONE, plan(wl_OpCode_OPC_PROBE, 200).refusal);
@@ -144,6 +178,8 @@ int main(int, char**) {
   RUN_TEST(test_arguments_take_the_shared_limits);
   RUN_TEST(test_restarting_a_unit_needs_no_running_unit);
   RUN_TEST(test_updating_units_is_the_whole_row_or_one_unit);
+  RUN_TEST(test_a_new_address_must_be_free_and_one_this_row_can_reach);
+  RUN_TEST(test_homing_every_unit_ignores_the_address);
   RUN_TEST(test_a_probe_ignores_the_address);
   RUN_TEST(test_how_a_job_ended_becomes_a_phase);
   RUN_TEST(test_a_boot_section_travels_in_three_pieces);

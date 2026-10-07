@@ -89,6 +89,15 @@ int busResetOdometer(uint8_t i2cAddress);
 // (#409) — UNIT_BUS_GATES_UNVERIFIED / _MISMATCH when it did not land.
 int busSetGates(uint8_t i2cAddress, uint8_t gates);
 int busRebootToBootloader(uint8_t i2cAddress);
+// Stores a bus address in the unit, or clears the stored one (back to its
+// switches). The unit restarts through its bootloader either way: the caller
+// arms the probe-inhibit and judges the outcome by a rescan.
+int busSetAddress(uint8_t i2cAddress, uint8_t newAddress);
+int busClearAddress(uint8_t i2cAddress);
+// Every unit finds home again: a full row of '-', two seconds, a full row of
+// '.' (the way round takes each drum past its home position), then the text
+// the row was showing. Blocking for three renders — loop() only.
+void busHomeAll();
 int busStartSelfTest(uint8_t i2cAddress);
 bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out);
 

@@ -18,15 +18,22 @@
 //   {"name":"home","target":{"row":"<row id>","unit":3}}
 //   {"name":"jog","target":{"unit":3},"args":{"steps":-4}}
 //       target.row "" or absent = the master's own row; one job at a time per row
+// What the wall shows (WallActions.h), done when accepted, 200 {"done":true}:
+//   {"name":"show","args":{"text":"HELLO\nWORLD"}}      and "forS":300 for a time
+//   {"name":"mode","args":{"mode":"clock"}}
+//   {"name":"quiet","args":{"on":true}}
+//   {"name":"stop"}                                      abort and blank every row
+//   {"name":"restart","target":{"row":"<row id>"}}       "" or absent = this master
 // GET /api/v2/history[?before=<seq>][&limit=<n>] reads the event record newest
 // first: {"events":[{seq,time,kind,detail,board,unit,a,b}...],"next":<seq>}.
 // The reason, job or restart cause an entry is about is also given by name.
 // "next" is the `before` of the following page and is absent on the last one;
 // "time" is Unix seconds, absent when the clock was not set; "board" is the
 // row's id, "" for the master, absent for a board no longer on the wall.
-// Answers: 202 {"op":N}; 400 with the reason; 409 while another such request
-// runs, the row cannot take a job, or a unit update is running; 503 when no
-// job can be started.
+// Answers: 202 {"op":N} for a job, 200 {"done":true} for what is done when
+// accepted; 400 with the reason; 409 while another such request runs, the row
+// cannot take it, the wall is quiet, or a unit update is running; 503 when
+// no job can be started or the display queue is full.
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
@@ -37,9 +44,11 @@
 #include "BuildVersion.h"
 #include "EventRecord.h"
 #include "FollowerImageStore.h"
+#include "HelpersSerialHandling.h"
 #include "JsonCopied.h"
 #include "ReflashPlan.h"
 #include "Tasks.h"
+#include "WallActions.h"
 #include "WallJobs.h"
 #include "WallRowEvents.h"
 #include "WallShow.h"
@@ -163,6 +172,14 @@ DisplayCommand ownCommand(const wl_Op& op, uint32_t seq) {
       return makeReflashUnitsCommand(seq, String(displaySnapshotGet().currentText),
                                      content.alignment, content.flapSpeed, unit, op.arg != 0);
     }
+    case wl_OpCode_OPC_SET_ADDRESS: return makeSetAddressCommand(seq, unit, (uint8_t)op.arg);
+    case wl_OpCode_OPC_CLEAR_ADDRESS: return makeClearAddressCommand(seq, unit);
+    case wl_OpCode_OPC_HOME_ALL: {
+      // The row shows the present text again once every unit is home.
+      const WebContentSnapshot content = webDisplayContentSnapshot();
+      return makeResetUnitsCommand(seq, String(displaySnapshotGet().currentText),
+                                   content.alignment, content.flapSpeed);
+    }
     default: return makeProbeCommand();
   }
 }
@@ -182,7 +199,11 @@ const char* checkOwnUnit(const WallJobKind& kind, const wl_Op& op, int& status) 
   char raw[12];
   snprintf(raw, sizeof(raw), "%lu", (unsigned long)op.address);
   int parsed = 0;
-  const MaintVerdict verdict = maintValidateAddress(raw, own->units, UNITS_AMOUNT, parsed);
+  MaintVerdict verdict = maintValidateAddress(raw, own->units, UNITS_AMOUNT, parsed);
+  if (verdict.httpStatus == 200 && kind.opcode == wl_OpCode_OPC_SET_ADDRESS) {
+    // The display task judges it again against the units of that moment.
+    verdict = maintValidateSetAddressTarget((long)op.arg, parsed, own->units, UNITS_AMOUNT);
+  }
   if (verdict.httpStatus == 200) return nullptr;
   status = verdict.httpStatus;
   return verdict.message;
@@ -300,6 +321,85 @@ void handleUpdateRetry(AsyncWebServerRequest* request, JsonVariantConst body,
   sendOp(request, op);
 }
 
+void sendDone(AsyncWebServerRequest* request) {
+  AsyncJsonResponse* response = new AsyncJsonResponse();
+  response->getRoot()["done"] = true;
+  response->setLength();
+  request->send(response);
+}
+
+void handleContent(AsyncWebServerRequest* request, const char* name, JsonVariantConst body) {
+  PendingSettingsPost post;
+  if (const char* refusal = wallActionBuild(name, body["args"], post)) {
+    return sendError(request, 400, refusal);
+  }
+  // Text for a quiet wall is dropped when it is drained: say so here rather
+  // than accept what will not be shown.
+  if ((post.inputTextProvided || post.transientTextProvided) && webQuietNow()) {
+    return sendError(request, 409, "the wall is quiet: turn quiet off to show text");
+  }
+  bool needsReboot = false;
+  bool deviceNameChanged = false;
+  switch (webStagePost(post, needsReboot, deviceNameChanged)) {
+    case WebStage::Staged: return sendDone(request);
+    case WebStage::UnitUpdate:
+      return sendError(request, 409, "a unit update is running, retry when it has finished");
+    case WebStage::QueueFull:
+      return sendError(request, 503, "the display queue is full, try again in a moment");
+  }
+}
+
+void handleStop(AsyncWebServerRequest* request) {
+  SerialPrintln(F("Stop asked for through the API"));
+  uint32_t seq = 0;
+  if (!webStopWall(seq)) {
+    return sendError(request, 503, "the display queue is full, try again in a moment");
+  }
+  sendDone(request);
+}
+
+// The master restarts itself; a row board is told to over the link.
+void handleRestart(AsyncWebServerRequest* request, JsonVariantConst body,
+                   const WallRowsTable& table, uint32_t generation) {
+  // Only a request that plainly means the master restarts it: no target at
+  // all, or target.row "". A target that cannot be read is refused, never
+  // taken for "this board".
+  JsonVariantConst target = body["target"];
+  JsonVariantConst rowId = target["row"];
+  if (!target.isNull() && !rowId.is<const char*>()) {
+    return sendError(request, 400,
+                     "target is {\"row\":\"<row id>\"} (\"\" or no target = this master)");
+  }
+  const char* id = target.isNull() ? "" : rowId.as<const char*>();
+  if (id[0] == 0) {
+    if (const char* refusal = webStageReboot("restart asked for through the API")) {
+      return sendError(request, 409, refusal);
+    }
+    SerialPrintln(F("Restart asked for through the API"));
+    return sendDone(request);
+  }
+  const int row = wallRowsFind(table, id);
+  if (row < 0) return sendError(request, 400, "target.row is not a row of this wall");
+  {
+    std::unique_ptr<WallSnapshot> wall(new WallSnapshot(wallStateGet()));
+    const WallRowLink& link = wall->link[row];
+    if (!link.contact.connected || !link.contact.helloSeen) {
+      return sendError(request, 409, "that row is not connected");
+    }
+    if (wall->updatePhase != (uint8_t)WallUpdatePhase::Idle && wall->updateRow == row) {
+      return sendError(request, 409, "that row is taking a firmware update");
+    }
+  }
+  // A restart in the middle of a unit job leaves a unit half done.
+  if (wallJobRunningOn(row)) {
+    return sendError(request, 409, "a unit job is running on that row");
+  }
+  if (!wallStateAskRestart(row, generation)) {
+    return sendError(request, 409, "the wall changed meanwhile, ask again");
+  }
+  sendDone(request);
+}
+
 void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   JsonVariantConst body = json;
   const char* name = body["name"].as<const char*>();
@@ -315,6 +415,9 @@ void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
     return handleJob(request, body, *job, table, generation);
   }
   if (strcmp(name, "update") == 0) return handleUpdateRetry(request, body, table, generation);
+  if (wallActionIsContent(name)) return handleContent(request, name, body);
+  if (strcmp(name, "stop") == 0) return handleStop(request);
+  if (strcmp(name, "restart") == 0) return handleRestart(request, body, table, generation);
   WebStateLock lock;
   staged = WallRequest{};
   const char* refusal = "no such action";

@@ -607,6 +607,20 @@ void pass() {
   takeJobs(nowMs);
   core->tick(nowMs, hooks);
   offerImage(nowMs);
+  // Asked for by the current table's row numbers, like an update retry. Said
+  // once: a row that cannot be written to now is not restarted later, when
+  // nobody expects it any more.
+  const uint32_t restarts =
+      wallStateRowsGeneration() == rowsGeneration ? wallStateTakeRestarts() : 0;
+  for (int row = 0; row < rowsTable.count && row < WALL_LINK_MAX_ROWS; row++) {
+    if (!(restarts & (1UL << row))) continue;
+    static wl_ToRow restart;
+    wlClear(restart);
+    restart.which_body = wl_ToRow_restart_tag;
+    SerialPrintf("link: %s %s\n", rowsTable.rows[row].id,
+                 core->send(row, restart, nowMs, hooks) ? "told to restart"
+                                                        : "could not be told to restart");
+  }
   char releasing[WALL_ROW_ID_MAX + 1];
   if (wallStateReleaseAsked(releasing, sizeof(releasing))) {
     const int row = wallRowsFind(rowsTable, releasing);

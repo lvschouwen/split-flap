@@ -52,6 +52,8 @@ struct PendingSettingsPost {
   String transientText; bool transientTextProvided = false;
   long transientDwell = 0;
   bool transientDwellProvided = false;
+  // On every row of a wall with row boards, not on this board's row only.
+  bool transientWall = false;
   String timezone;      bool timezoneProvided = false;
   String deviceName;    bool deviceNameProvided = false;
   String mqttHost;      bool mqttHostProvided = false;
@@ -246,6 +248,7 @@ inline void mergeSettingsPost(PendingSettingsPost& shared,
     shared.transientDwell = accepted.transientDwell;
     shared.transientTextProvided = true;
     shared.transientDwellProvided = accepted.transientDwellProvided;
+    shared.transientWall = accepted.transientWall;
   }
   if (accepted.timezoneProvided)   { shared.timezone   = accepted.timezone;   shared.timezoneProvided   = true; }
   if (accepted.deviceNameProvided) { shared.deviceName = accepted.deviceName; shared.deviceNameProvided = true; }

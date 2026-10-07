@@ -40,6 +40,8 @@
 #include "SettingsJson.h"
 #include "SplitFlapProtocol.h"
 #include "Tasks.h"
+#include "UnitBus.h"  // the abort flag of Stop
+#include "ReflashPlan.h"
 #include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
 
 // Staged mutations, owned here; drained by webEndpointsLoop(). External
@@ -268,6 +270,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       String transientText = pendingPost.transientText;
       long transientDwell = pendingPost.transientDwell;
       bool transientProvided = pendingPost.transientTextProvided;
+      bool transientWall = pendingPost.transientWall;
       bool modeProvided = pendingPost.deviceModeProvided;
 
       // "Last Received" tracks messages/mode switches, not settings saves —
@@ -367,9 +370,12 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // Transient text (#219, v1 #165/#176): calibration patterns and
       // clock-mode messages show regardless of mode and revert via the
       // overlay dwell — nothing persists, a clock display stays a clock
-      // display. With row boards this stays deliberately local: the
-      // overlay shows on this master's own row only, and the wall's own-row
-      // re-show restores the segment after the dwell. Ordering matters twice: after applySettingsPost so an
+      // display. With row boards the form's transient stays deliberately
+      // local (a calibration pattern for this board's row: the overlay shows
+      // on the own row only, and the wall's own-row re-show restores the
+      // segment after the dwell); the `show` action's goes to every row, and
+      // the clock ticker, held back for the dwell, hands the wall its content
+      // again afterwards. Ordering matters twice: after applySettingsPost so an
       // alignment/speed change riding the same POST applies to this show,
       // and the overlay arm (which drains behind the #130 cancel above)
       // keeps the transient alive when that same POST also switched mode.
@@ -377,6 +383,10 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
         if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
           SerialPrintln("Transient text dropped (reflash running): " +
                         transientText);
+        } else if (transientWall && wallShowActive()) {
+          wallShowText(transientText, settings.alignment, settings.flapSpeed);
+          mqttStartNotificationDwell(transientDwell);
+          SerialPrintln("Transient text routed to the wall: " + transientText);
         } else if (displayEnqueue(makeShowTextCommand(
                        transientText, settings.alignment,
                        settings.flapSpeed))) {
@@ -451,6 +461,72 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
     flashLogTick(true);  // catch the reboot line itself
     ESP.restart();
   }
+}
+
+WebStage webStagePost(const PendingSettingsPost& local, bool& needsReboot,
+                      bool& deviceNameChanged) {
+  // The reflash gate (#205) applies only to the display-bound part — pure
+  // settings saves don't touch the display queue and stay allowed.
+  const bool text = local.inputTextProvided || local.transientTextProvided;
+  if (text && (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning())) {
+    return WebStage::UnitUpdate;
+  }
+  // Message/transient sends become display commands at drain time; report
+  // a full queue now instead of accepting one that would be dropped.
+  if (text && displayQueueFull()) return WebStage::QueueFull;
+  {
+    // Verdict + merge sit in one locked section so the comparison can't race
+    // a half-applied post.
+    WebStateLock lock;
+    needsReboot = settingsPostNeedsReboot(local, *liveSettings);
+    deviceNameChanged = local.deviceNameProvided && local.deviceName != liveSettings->deviceName;
+    mergeSettingsPost(pendingPost, local);
+  }
+  // Device renamed (#125): flag only from async context — mqttTask blanks
+  // the old identity's retained discovery configs before the reboot swaps
+  // identities.
+  if (deviceNameChanged) mqttRequestDiscoveryClear();
+  return WebStage::Staged;
+}
+
+const char* webStageReboot(const char* cause) {
+  // #395: a reboot mid-unit-reflash leaves the Nano row parked in twiboot;
+  // mid-master-OTA it tears the upload session. /stop remains the only
+  // cancel path.
+  if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
+    return "a unit update is running, retry when it has finished";
+  }
+  if (webFirmwareOtaUploadActive()) {
+    return "a firmware upload is running, retry when it has finished "
+           "(a stalled one clears in 30 s)";
+  }
+  webRequestReboot(cause);
+  return nullptr;
+}
+
+bool webStopWall(uint32_t& seq) {
+  // Order is load-bearing: the abort flag is set BEFORE the enqueue so the
+  // queue's happens-before guarantees displayTask's Stop always finds it
+  // set — set-after-enqueue races an idle displayTask clearing it first,
+  // stranding the flag ON for every future wait. A full queue rolls the flag
+  // back (nothing queued to abort).
+  DisplayCommand cmd = makeStopCommand(displayNextMaintSeq());
+  unitBusRequestAbort();
+  if (!displayEnqueue(cmd)) {
+    unitBusClearAbort();
+    return false;
+  }
+  // Stop blanks the WHOLE wall: the command above handles this board's own
+  // row, this the row boards (a no-op without any).
+  wallShowBlank();
+  seq = cmd.seq;
+  return true;
+}
+
+bool webQuietNow() {
+  if (webStateMutex == nullptr || liveSettings == nullptr) return false;
+  WebStateLock lock;
+  return liveSettings->quiet;
 }
 
 WebContentSnapshot webDisplayContentSnapshot() {

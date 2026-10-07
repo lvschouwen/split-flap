@@ -562,6 +562,33 @@ int busHome(uint8_t i2cAddress) {
 
 int busIdentify(uint8_t i2cAddress) { return unitIdentify(unitBus, i2cAddress); }
 
+int busSetAddress(uint8_t i2cAddress, uint8_t newAddress) {
+  return unitSetAddress(unitBus, i2cAddress, newAddress);
+}
+
+int busClearAddress(uint8_t i2cAddress) { return unitClearAddress(unitBus, i2cAddress); }
+
+// The speed a row shows at before the master has named one.
+#define HOME_ALL_SPEED 80
+
+void busHomeAll() {
+  const bool hadText = lastFrameValid;
+  const String text = lastFrame;
+  // A row that has shown nothing yet has no speed of its own.
+  const int speed = hadText ? lastFrameSpeed : HOME_ALL_SPEED;
+  String row;
+  for (int i = 0; i < displayWidth; i++) row += '-';
+  busShowSegment(row, speed);
+  delay(2000);
+  for (int i = 0; i < displayWidth; i++) row[i] = '.';
+  busShowSegment(row, speed);
+  if (hadText) {
+    busShowSegment(text, speed);
+  } else {
+    lastFrameValid = false;  // the dots are not this row's text
+  }
+}
+
 int busResetOdometer(uint8_t i2cAddress) {
   return unitResetOdometer(unitBus, i2cAddress);
 }

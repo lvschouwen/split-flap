@@ -56,7 +56,8 @@ BOOT_SECTION = bytes(range(256)) * 4
 
 # How long each job holds the row, in seconds (the real row: section 9 of the spec).
 JOB_SECONDS = {pb.OPC_SELF_TEST: 29, pb.OPC_UPDATE_UNITS: 12, pb.OPC_BOOT_DUMP: 6,
-               pb.OPC_BOOT_UPDATE: 8, pb.OPC_HOME: 5, pb.OPC_PROBE: 3}
+               pb.OPC_BOOT_UPDATE: 8, pb.OPC_HOME: 5, pb.OPC_PROBE: 3,
+               pb.OPC_SET_ADDRESS: 4, pb.OPC_CLEAR_ADDRESS: 4, pb.OPC_HOME_ALL: 20}
 JOB_RESULT = {pb.OPC_SELF_TEST: b'{"ok":true,"steps":2038}',
               pb.OPC_BOOT_INFO: b'{"crc":"e422a668","verdict":"current"}',
               pb.OPC_BOOT_DUMP: BOOT_SECTION}
@@ -141,10 +142,13 @@ class Row:
             return state(pb.OP_REFUSED, reason=pb.REFUSAL_RESCUE)
         if op.opcode not in pb.OpCode.values() or op.opcode == pb.OPC_NONE:
             return state(pb.OP_REFUSED, reason=pb.REFUSAL_UNKNOWN_OP)
-        if op.opcode != pb.OPC_PROBE and not (
-                op.opcode == pb.OPC_UPDATE_UNITS and op.address == 0) and not (
-                1 <= op.address <= self.args.width):
+        whole_row = op.opcode in (pb.OPC_PROBE, pb.OPC_HOME_ALL) or (
+            op.opcode == pb.OPC_UPDATE_UNITS and op.address == 0)
+        if not whole_row and not 1 <= op.address <= self.args.width:
             return state(pb.OP_REFUSED, reason=pb.REFUSAL_NO_UNIT)
+        if op.opcode == pb.OPC_SET_ADDRESS and op.arg != op.address and (
+                1 <= op.arg <= self.args.width):
+            return state(pb.OP_REFUSED, reason=pb.REFUSAL_ADDRESS_TAKEN)
         state(pb.OP_RUNNING)
         await self.hold(self.args.job_scale * JOB_SECONDS.get(op.opcode, 1))
         result = JOB_RESULT.get(op.opcode, b"")

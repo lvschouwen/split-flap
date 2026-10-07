@@ -61,6 +61,11 @@ enum OpCode {
   OPC_UPDATE_UNITS = 12;          // address 0 = every unit that needs it;
                                   // arg 1 = even when current (one unit only)
   OPC_PROBE = 13;                 // rescan the row; address is ignored
+  OPC_SET_ADDRESS = 14;           // arg = the address the unit stores and answers at
+                                  // from now on (its own = keep what its switches give)
+  OPC_CLEAR_ADDRESS = 15;         // forget the stored address: back to its switches
+  OPC_HOME_ALL = 16;              // every unit of the row finds home again, then the
+                                  // row shows its text again; address is ignored
 }
 
 // A unit job, named by the master. One job at a time per row.
@@ -159,6 +164,7 @@ enum OpRefusal {
   REFUSAL_UNIT_PROTOCOL = 6;      // the unit speaks a protocol this build does not
   REFUSAL_BAD_ARG = 7;
   REFUSAL_NO_MEMORY = 8;
+  REFUSAL_ADDRESS_TAKEN = 9;      // another unit answers at the address asked for
 }
 
 // A job is answered with OP_RUNNING when it starts (or OP_REFUSED at once)

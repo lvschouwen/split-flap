@@ -84,6 +84,23 @@ inline FollowerLinkOpPlan followerLinkPlanOp(uint32_t opcode, uint32_t address, 
     case wl_OpCode_OPC_PROBE:
       plan.kind = FollowerOpKind::Probe;
       return plan;
+    case wl_OpCode_OPC_SET_ADDRESS: {
+      const wl_OpRefusal unit = followerLinkCheckUnit(address, units, maxUnits);
+      if (unit != wl_OpRefusal_REFUSAL_NONE) return refuse(unit);
+      switch (maintValidateSetAddressTarget(arg, (int)address, units, maxUnits).httpStatus) {
+        case 200: break;
+        case 409: return refuse(wl_OpRefusal_REFUSAL_ADDRESS_TAKEN);
+        default:  return refuse(wl_OpRefusal_REFUSAL_BAD_ARG);
+      }
+      plan.kind = FollowerOpKind::SetAddress;
+      plan.addr = (uint8_t)address;
+      plan.arg = arg;
+      return plan;
+    }
+    case wl_OpCode_OPC_CLEAR_ADDRESS:  return onUnit(FollowerOpKind::ClearAddress, noArg);
+    case wl_OpCode_OPC_HOME_ALL:
+      plan.kind = FollowerOpKind::HomeAll;
+      return plan;
     default:
       return refuse(wl_OpRefusal_REFUSAL_UNKNOWN_OP);
   }
