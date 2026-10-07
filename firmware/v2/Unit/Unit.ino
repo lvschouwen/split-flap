@@ -25,6 +25,7 @@
 #include "UnitTwiHeal.h"   // pure TWI self-heal policy (#489; glue in UnitI2CProtocol.ino)
 #include "BootHomePolicy.h"  // pure staggered boot-home decision (#309)
 #include "UnitHomePolicy.h"  // pure failed-home retry policy (#502)
+#include "UnitStallPolicy.h"  // pure timing rule of the stall bit (#374)
 #include "UnitResetCause.h"  // pure reset-cause rules, shared with the masters (#502)
 #include "BootSectionClassify.h"  // pure boot-section state classifier (#499)
 #include "BootUpdateReport.h"     // pure GET_BOOT_INFO reply codec (#499)

@@ -89,16 +89,6 @@ void stepFlaps(int flaps) {
   }
 }
 
-// Wall-time a healthy move of `steps` commanded steps should take at `speedRpm`
-// (#374). Arduino Stepper blocks step_delay = 60e6 / (STEPS * RPM) us per step;
-// the per-step digitalRead/wdt overhead is ~us against a >=2 ms step, so the
-// prediction is tight. Products stay < ~78M — uint32 is enough, no AVR int64.
-uint32_t extExpectedMoveMs(uint32_t steps, int speedRpm) {
-  if (speedRpm < 1) speedRpm = 1;
-  uint32_t stepUs = 60000000UL / ((uint32_t)STEPS * (uint32_t)speedRpm);
-  return steps * stepUs / 1000UL;
-}
-
 //rotate to letter
 void rotateToLetter(int toLetter) {
   // Defensive bounds check (#136): receiveLetter() already constrains letter
@@ -154,8 +144,8 @@ void rotateToLetter(int toLetter) {
     startMotor();
     stepper.setSpeed(stepperSpeed);
     int flaps = toLetter - posCurrentLetter;
-    extExpectedMs = extExpectedMoveMs((uint32_t)flaps * STEPS / AMOUNTFLAPS,
-                                      stepperSpeed);  // #374
+    extExpectedMs = stallExpectedMoveMs((uint32_t)flaps * STEPS / AMOUNTFLAPS,
+                                        stepperSpeed, STEPS);  // #374
     stepFlaps(flaps);
   }
   else {
@@ -172,21 +162,20 @@ void rotateToLetter(int toLetter) {
       return;
     }
     stepper.setSpeed(stepperSpeed);
-    // #374: the commanded steps here are the homing seek (at HOMING_RPM) plus
-    // the flap move (at the commanded speed).
-    extExpectedMs =
-        extExpectedMoveMs((uint32_t)homingSteps, HOMING_RPM) +
-        extExpectedMoveMs((uint32_t)toLetter * STEPS / AMOUNTFLAPS, stepperSpeed);
+    // #374: the homing seek and the offset steps calibrate() made after it
+    // (at HOMING_RPM) plus the flap move (at the commanded speed).
+    extExpectedMs = stallExpectedSeekMoveMs(
+        (uint32_t)homingSteps, (int16_t)calOffset,
+        (uint32_t)toLetter * STEPS / AMOUNTFLAPS, HOMING_RPM, stepperSpeed, STEPS);
     stepFlaps(toLetter);
   }
   //store new position
   displayedLetter = toLetter;
-  // Stall detection (#374): the move's wall time exceeded the commanded-steps
-  // prediction by more than 25%. Note the stepper blocks a fixed period per
-  // step regardless of mechanical load, so this catches abnormal wall-time
-  // stretch, not a silently-slipping drum — bench-tier heuristic.
+  // Stall detection (#374, UnitStallPolicy.h). The stepper blocks a fixed
+  // period per step regardless of mechanical load, so this catches abnormal
+  // wall-time stretch, not a silently-slipping drum — bench-tier heuristic.
   unsigned long extActualMs = millis() - extMoveStartMs;
-  if (extActualMs > extExpectedMs + (extExpectedMs >> 2)) {
+  if (stallExceeded(extActualMs, extExpectedMs)) {
     extStatusBits |= EXT_DIAG_STATUS_STALL;
   } else {
     extStatusBits &= ~EXT_DIAG_STATUS_STALL;
