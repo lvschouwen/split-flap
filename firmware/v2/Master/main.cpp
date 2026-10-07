@@ -19,6 +19,7 @@
 #include "WallState.h"
 #include "DeviceIdentity.h"
 #include "FactorySlot.h"
+#include "EventRecord.h"
 #include "FlashLog.h"
 #include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
@@ -137,6 +138,10 @@ void setup() {
   flashLogInit();  // #206: mounts `storage`, writes the boot marker; from
                    // here every SerialPrint* also lands in /log.txt
   followerImageStoreInit();  // #304: read the stored ESP-01 image rev/presence
+  // #570: the record of what happened on the wall, and this start in it.
+  eventRecordInit();
+  eventRecord(EventKind::MasterStarted, (uint8_t)esp_reset_reason(), "", 0,
+              eventRevNumber(GIT_REV), 0);
 
   settingsStore.begin();
   settings = loadSettings(settingsStore);

@@ -29,6 +29,7 @@
 #include "ClockPolicy.h"
 #include "ClockService.h"
 #include "FactorySlot.h"
+#include "EventRecord.h"
 #include "FlashLog.h"
 #include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
@@ -433,6 +434,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
 
   // Flash-log drain (#206): netTask is the single flash writer.
   flashLogTick(rebootDue);  // force on reboot so the last lines land
+  eventRecordTick(rebootDue);  // #570: the same writer, the same rule
   // Staged row-image write (#304): same single-writer discipline — the
   // async upload handler accumulates in PSRAM, netTask commits it to flash.
   followerImageFlushTick();

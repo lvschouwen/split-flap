@@ -27,6 +27,7 @@ struct ApiLegendEntry { const char* key; const char* meaning; };
 static const ApiRoute API_ROUTES[] = {
   {"GET",  "/api",                    "this self-documenting index"},
   {"POST", "/api/v2/action",          "start a job: JSON {name,target,args} -> {op}; names: pair, release, arrange, update (offer a row board the stored image again), and the unit jobs (home, identify, jog, set-offset, self-test, restart-unit, reset-odometer, set-gates, boot-info, boot-dump, boot-update, update-units, probe) with target {row,unit}"},
+  {"GET",  "/api/v2/history",         "what happened on the wall, newest first: ?before=<seq> for the page after one (its \"next\"), ?limit=<1..50>"},
   {"GET",  "/api/v2/op",              "what became of a job: /api/v2/op/<id> (202 running, 200 finished, 404 unknown)"},
   {"GET",  "/api/v2/wall",            "the boards of this Split-Flap and what each row board last said"},
   {"GET",  "/settings",               "full device settings snapshot"},

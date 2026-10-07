@@ -18,6 +18,11 @@
 //   {"name":"home","target":{"row":"<row id>","unit":3}}
 //   {"name":"jog","target":{"unit":3},"args":{"steps":-4}}
 //       target.row "" or absent = the master's own row; one job at a time per row
+// GET /api/v2/history[?before=<seq>][&limit=<n>] reads the event record newest
+// first: {"events":[{seq,time,kind,detail,board,unit,a,b}...],"next":<seq>}.
+// "next" is the `before` of the following page and is absent on the last one;
+// "time" is Unix seconds, absent when the clock was not set; "board" is the
+// row's id, "" for the master, absent for a board no longer on the wall.
 // Answers: 202 {"op":N}; 400 with the reason; 409 while another such request
 // runs, the row cannot take a job, or a unit update is running; 503 when no
 // job can be started.
@@ -29,6 +34,7 @@
 
 #include "BootDump.h"
 #include "BuildVersion.h"
+#include "EventRecord.h"
 #include "FollowerImageStore.h"
 #include "JsonCopied.h"
 #include "ReflashPlan.h"
@@ -458,6 +464,55 @@ void handleWall(AsyncWebServerRequest* request) {
   request->send(response);
 }
 
+void handleHistory(AsyncWebServerRequest* request) {
+  if (!eventRecordAvailable()) return sendError(request, 503, "the storage is not mounted");
+  uint32_t before = 0;
+  int limit = EVENT_PAGE_MAX;
+  if (request->hasParam("before")) {
+    before = (uint32_t)strtoul(request->getParam("before")->value().c_str(), nullptr, 10);
+  }
+  if (request->hasParam("limit")) {
+    const long asked = strtol(request->getParam("limit")->value().c_str(), nullptr, 10);
+    if (asked < 1 || asked > EVENT_PAGE_MAX) {
+      return sendError(request, 400, "limit is 1 to 50");
+    }
+    limit = (int)asked;
+  }
+  // One more than asked for says whether a further page exists.
+  std::unique_ptr<EventRecord[]> page(new EventRecord[EVENT_PAGE_MAX + 1]);
+  const int found = eventRecordPage(before, page.get(), limit + 1);
+  const int count = found > limit ? limit : found;
+  uint32_t generation = 0;
+  std::unique_ptr<WallRowsTable> table(new WallRowsTable(wallStateRows(generation)));
+  AsyncJsonResponse* response = new AsyncJsonResponse();
+  JsonVariant root = response->getRoot();
+  JsonArray events = root["events"].to<JsonArray>();
+  for (int i = 0; i < count; i++) {
+    const EventRecord& r = page[i];
+    JsonObject e = events.add<JsonObject>();
+    e["seq"] = r.seq;
+    if (r.timeS != 0) e["time"] = r.timeS;
+    e["kind"] = eventKindName(r.kind);
+    e["detail"] = r.detail;
+    if (r.board == 0) {
+      e["board"] = "";
+    } else {
+      for (int row = 0; row < table->count; row++) {
+        if (eventBoardKey(table->rows[row].id) == r.board) {
+          e["board"] = jsonCopied(table->rows[row].id);
+          break;
+        }
+      }
+    }
+    e["unit"] = r.unit;
+    e["a"] = r.a;
+    e["b"] = r.b;
+  }
+  if (found > limit) root["next"] = page[count - 1].seq;
+  response->setLength();
+  request->send(response);
+}
+
 }  // namespace
 
 void webWallRegister(AsyncWebServer& server) {
@@ -468,4 +523,5 @@ void webWallRegister(AsyncWebServer& server) {
   server.addHandler(action);
   server.on("/api/v2/op", HTTP_GET, handleOp);
   server.on("/api/v2/wall", HTTP_GET, handleWall);
+  server.on("/api/v2/history", HTTP_GET, handleHistory);
 }
