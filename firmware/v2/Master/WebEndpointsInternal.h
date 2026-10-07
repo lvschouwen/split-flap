@@ -53,8 +53,7 @@ extern bool pendingRescueRecord;
 extern String currentInputText;
 extern String lastMessageStamp;
 
-// Full /settings JSON gather — GET /settings and the /status aggregate (#307)
-// render the identical object through this.
+// The /settings JSON gather.
 String buildCurrentSettingsJson();
 
 // #313 inline CSRF gate for routes that write flash inside onUpload (the
@@ -64,8 +63,7 @@ bool webUploadCsrfRejected(AsyncWebServerRequest* request);
 // #313 CSRF middleware, attached once in webEndpointsInit().
 AsyncMiddlewareFunction& webCsrfMiddleware();
 
-// What the settings form and the /api/v2 actions share, so a gate cannot hold
-// on one and be missing on the other.
+// The gates every /api/v2 action and settings change goes through.
 enum class WebStage : uint8_t {
   Staged,
   UnitUpdate,  // text while a unit update runs (the producer gate, #205)
@@ -101,10 +99,9 @@ void webSystemRegister(AsyncWebServer& server);
 // webEndpointsLoop — netTask is the sole flash writer).
 void webSystemCoredumpEraseTick();
 // #395: live master-OTA upload session (owned by WebFirmware.cpp) — the
-// /reboot gate consults it so a restart can't tear a mid-flight flash write.
+// restart gate consults it so a restart can't tear a mid-flight flash write.
 bool webFirmwareOtaUploadActive();
 void webFirmwareRegister(AsyncWebServer& server);
-void webMaintenanceRegister(AsyncWebServer& server);
 void webWallRegister(AsyncWebServer& server);
 void webBoardRegister(AsyncWebServer& server);
 void webStreamRegister(AsyncWebServer& server);
@@ -112,5 +109,4 @@ void webStreamRegister(AsyncWebServer& server);
 // Loop hooks drained by webEndpointsLoop() — call order is load-bearing,
 // see the webEndpointsLoop() call site.
 void webFirmwareLoop();
-void webSettingsDiscoverLoop();
 void webWallFindRowsLoop();

@@ -140,7 +140,7 @@ bool unitBusWaitBatchIdle(const uint8_t* addrs, int count,
                           uint32_t timeoutMs);
 
 // Stop-abort signal (#204): the ONE cross-task entry into this module — an
-// atomic flag, not bus state. The /stop handler sets it BEFORE enqueuing the
+// atomic flag, not bus state. The stop action sets it BEFORE enqueuing the
 // Stop command and rolls it back if the enqueue 503s (set-after-enqueue races
 // an idle displayTask clearing it first, stranding the flag ON); every wait
 // loop polls it and returns early, which cuts the command AHEAD of Stop

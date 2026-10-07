@@ -1,10 +1,11 @@
 // Web endpoint core for the v2 master (#186) — shared state, init/loop
 // lifecycle and the cross-task accessors. The route handlers live in the
-// Web*.cpp family (#338 split): WebContent (assets/SSE), WebSettings
-// (settings/wifi/mqtt-discover), WebSystem (diagnostics reads), WebFirmware
-// (master OTA/rescue, row image), WebMaintenance (unit ops), WebWall (rows,
-// pairing, unit jobs). Shared internals cross that family through
-// WebEndpointsInternal.h ONLY.
+// Web*.cpp family (#338 split): WebContent (the page and its assets),
+// WebSettings (the settings document, the WiFi portal), WebSystem
+// (diagnostics reads, the route index), WebFirmware (master OTA/rescue, row
+// image), WebWall (actions, jobs, the wall, history), WebBoard (board, unit,
+// firmware and settings reads, logs), WebStream (the event stream). Shared
+// internals cross that family through WebEndpointsInternal.h ONLY.
 //
 // Async-context rule (v1 #150) carries over verbatim: handlers run in the
 // async_tcp task. They may parse, validate, read state and respond — they
@@ -137,9 +138,8 @@ static AsyncMiddlewareFunction csrfMiddleware(
 
 AsyncMiddlewareFunction& webCsrfMiddleware() { return csrfMiddleware; }
 
-// Gathers the full /settings JSON from the display snapshot, live settings and
-// the OTA/MQTT services. Extracted so both GET /settings and the
-// /status one-shot aggregate (#307) render the identical object.
+// Gathers the /settings JSON from the display snapshot, live settings and
+// the OTA/MQTT services.
 String buildCurrentSettingsJson() {
   SettingsJsonFields f;
   DisplaySnapshot snap = displaySnapshotGet();
@@ -232,7 +232,6 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   webSettingsRegister(server);
   webSystemRegister(server);
   webFirmwareRegister(server);
-  webMaintenanceRegister(server);
   webWallRegister(server);
   webBoardRegister(server);
   webStreamRegister(server);
@@ -276,7 +275,6 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       String transientText = pendingPost.transientText;
       long transientDwell = pendingPost.transientDwell;
       bool transientProvided = pendingPost.transientTextProvided;
-      bool transientWall = pendingPost.transientWall;
       bool modeProvided = pendingPost.deviceModeProvided;
 
       // "Last Received" tracks messages/mode switches, not settings saves —
@@ -373,15 +371,11 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
                       messageText);
       }
 
-      // Transient text (#219, v1 #165/#176): calibration patterns and
-      // clock-mode messages show regardless of mode and revert via the
-      // overlay dwell — nothing persists, a clock display stays a clock
-      // display. With row boards the form's transient stays deliberately
-      // local (a calibration pattern for this board's row: the overlay shows
-      // on the own row only, and the wall's own-row re-show restores the
-      // segment after the dwell); the `show` action's goes to every row, and
-      // the clock ticker, held back for the dwell, hands the wall its content
-      // again afterwards. Ordering matters twice: after applySettingsPost so an
+      // Transient text (#219): a text shown for a time shows regardless of
+      // mode and reverts via the overlay dwell — nothing persists, a clock
+      // display stays a clock display. With row boards it goes to every row,
+      // and the clock ticker, held back for the dwell, hands the wall its
+      // content again afterwards. Ordering matters twice: after applySettingsPost so an
       // alignment/speed change riding the same POST applies to this show,
       // and the overlay arm (which drains behind the #130 cancel above)
       // keeps the transient alive when that same POST also switched mode.
@@ -389,7 +383,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
         if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
           SerialPrintln("Transient text dropped (reflash running): " +
                         transientText);
-        } else if (transientWall && wallShowActive()) {
+        } else if (wallShowActive()) {
           wallShowText(transientText, settings.alignment, settings.flapSpeed);
           mqttStartNotificationDwell(transientDwell);
           SerialPrintln("Transient text routed to the wall: " + transientText);
@@ -444,9 +438,8 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
     wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot);
   }
 
-  // mDNS discovery drain (#224 MQTT): blocking queries take LWIP locks, so
-  // they run out here in netTask, outside webStateMutex.
-  webSettingsDiscoverLoop();
+  // The row search: blocking mDNS queries take LWIP locks, so they run out
+  // here in netTask, outside webStateMutex.
   webWallFindRowsLoop();
 
   // Flash-log drain (#206): netTask is the single flash writer.
@@ -498,7 +491,7 @@ WebStage webStagePost(const PendingSettingsPost& local, bool& needsReboot,
 
 const char* webRestartRefusal() {
   // #395: a reboot mid-unit-reflash leaves the Nano row parked in twiboot;
-  // mid-master-OTA it tears the upload session. /stop remains the only
+  // mid-master-OTA it tears the upload session. stop remains the only
   // cancel path.
   if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
     return "a unit update is running, retry when it has finished";

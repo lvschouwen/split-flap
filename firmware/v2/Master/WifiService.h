@@ -1,6 +1,6 @@
 #pragma once
 // WifiService — the v2 master's WiFi bring-up (#188): stored-credential
-// join, captive-portal fallback, mDNS, /reset-wifi. All radio work runs in
+// join, captive-portal fallback, mDNS, forget-wifi. All radio work runs in
 // netTask via wifiServiceTick(); the decision logic is WifiPolicy.h (pure,
 // natively tested), this layer only executes its actions.
 //
@@ -49,7 +49,7 @@ WifiPhase wifiServicePhase();
 // tick persists them and reboots (v1 portal-save semantics).
 void wifiStagePortalConfig(const String& ssid, const String& pass);
 
-// POST /reset-wifi: the tick deletes both NVS keys and reboots into the
+// forget-wifi: the tick deletes both NVS keys and reboots into the
 // portal.
 void wifiStageReset();
 

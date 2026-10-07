@@ -38,7 +38,7 @@ static OtaRejection otaRejection;
 // rejection state above, which belongs to the owner. Compared only, never
 // dereferenced. Atomic (#395): the async_tcp callbacks AND netTask touch it
 // (webFirmwareLoop's stall watchdog clears it; webFirmwareOtaUploadActive
-// reads it from the /reboot handler) — a stale read costs one spurious 409,
+// reads it from the restart gate) — a stale read costs one spurious 409,
 // but the pointer itself must never tear.
 static std::atomic<AsyncWebServerRequest*> otaOwnerRequest{nullptr};
 

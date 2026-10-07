@@ -1,6 +1,6 @@
 #pragma once
 // UnitFactsJson.h — reads a row board's unit facts back into the one
-// UnitFacts struct (#559/#566). The row sends the /units/health document
+// UnitFacts struct (#559/#566). The row sends the unit facts document
 // exactly as the shared buildUnitHealthJson writes it (UnitHealth.h); this is
 // its inverse, so the master judges and words a remote row's units with the
 // same code as its own. Pure, natively tested by test_unit_facts_json: a

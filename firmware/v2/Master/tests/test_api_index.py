@@ -36,21 +36,13 @@ JSON_RE = re.compile(
     r'new\s+AsyncCallbackJsonWebHandler\(\s*"([^"]+)".*?->setMethod\(HTTP_(POST|PUT)\)', re.S)
 INDEX_RE = re.compile(r'\{"(GET|POST|PUT)",\s*"([^"]+)",')
 
-# Served on purpose, and deliberately absent from the operator-facing index.
-# Kept here rather than in ApiIndex.h so it costs the firmware nothing — it
-# has no runtime consumer, only this gate. Two classes:
-#
-#   BROWSER UI — the HTML/CSS/JS/icon the web app loads for itself. GET / is
-#       the page; POST / is the display-text API and IS indexed.
+# Served on purpose, and deliberately absent from the operator-facing index:
+# what the browser loads for itself. Kept here rather than in ApiIndex.h so it
+# costs the firmware nothing — it has no runtime consumer, only this gate.
 # Adding a route to this list is a deliberate, reviewed act. Anything not in
 # API_ROUTES and not here fails the gate.
 UNDOCUMENTED = {
     ("GET", "/"),
-    ("GET", "/console"),
-    ("GET", "/index.html"),
-    ("GET", "/style.css"),
-    ("GET", "/script.js"),
-    ("GET", "/md5.js"),
     ("GET", "/favicon.png"),
 }
 
@@ -105,10 +97,25 @@ def test_undocumented_and_indexed_are_disjoint():
 
 
 def test_sse_stream_is_recognised():
-    """/events is registered via addHandler, not server.on — if that parse
+    """The stream is registered via addHandler, not server.on — if that parse
     ever breaks, test_index_declares_no_phantom_routes would fail for a
     bogus reason, so pin it directly."""
-    assert ("GET", "/events") in registered_routes()
+    assert ("GET", "/api/v2/stream") in registered_routes()
+
+
+# The old page's routes, each replaced by /api/v2 (#576). One of them served
+# again is a second way to do one thing.
+RETIRED = ["/console", "/index.html", "/script.js", "/style.css", "/md5.js", "/events",
+           "/reboot", "/stop", "/reset-wifi", "/reset-units", "/reflash-units",
+           "/units/health", "/units/health/refresh", "/log", "/log/flash", "/status",
+           "/system/stats", "/system/info", "/mqtt/discover"]
+
+
+def test_no_retired_route_is_served():
+    served = registered_routes()
+    back = sorted(r for r in served if r[1] in RETIRED or r[1].startswith("/unit/")
+                  or r == ("POST", "/"))
+    assert not back, f"retired routes served again: {back}"
 
 
 def test_no_route_swallows_the_routes_below_it():

@@ -8,7 +8,7 @@
 // the async upload handler accumulates the whole image into a PSRAM buffer
 // and verifies its MD5; the actual file write happens in
 // followerImageFlushTick() on netTask. A download READS the file from the
-// web server's task — the same cross-task LittleFS read the /log/flash
+// web server's task — the same cross-task LittleFS read the flash log
 // handler already relies on (esp_littlefs VFS lock). Upload and download are
 // mutually exclusive so the file can't be rewritten mid-stream.
 //

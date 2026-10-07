@@ -67,7 +67,7 @@ bool displayQueueFull();
 
 // Monotonic sequence for maintenance ops (#204): stamp into the command at
 // enqueue, hand to the client, correlate via the snapshot's MaintResult
-// (GET /unit/op-result). Starts at 1 — seq 0 means "nothing executed yet".
+// (GET /api/v2/op). Starts at 1 — seq 0 means "nothing executed yet".
 uint32_t displayNextMaintSeq();
 
 // Mutex-guarded copy of the display task's published state. Safe from any
@@ -88,7 +88,7 @@ bool mqttInboxPost(const MqttInboxMessage& msg);
 void tasksHeartbeatReport();
 
 // #415: the same five HWMs (bytes still free at the stack's worst point) as
-// data, for /system/stats — the heartbeat line above only reaches USB-CDC.
+// data, for the board's stats — the heartbeat line above only reaches USB-CDC.
 // Safe from any task; a not-yet-started task reads 0.
 struct TasksStackHwm {
   uint32_t display = 0, clock = 0, net = 0, mqtt = 0, worker = 0, link = 0;

@@ -94,7 +94,7 @@ def handler(master, read_only, port):
             why = refusal(self.command, self.headers, port, read_only)
             if why:
                 self.send_error(403, why)
-            elif self.command == "GET" and self.path in ("/", "/console"):
+            elif self.command == "GET" and self.path == "/":
                 self.page()
             else:
                 self.relay()

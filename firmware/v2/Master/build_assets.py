@@ -1,7 +1,8 @@
 """PlatformIO pre-build script for the v2 master (#186).
 
 Generates:
-  - WebAssets.h: PROGMEM arrays for the web UI assets.
+  - WebAssets.h: PROGMEM arrays for the page (web/, joined by web_bundle.py),
+    the WiFi portal page and the icon.
   - BuildVersion.h: #define for the current git commit (short hash +
     dirty flag), so the master firmware can report the version that
     was actually built into it.
@@ -49,11 +50,7 @@ from fwbuild import (  # noqa: E402
 )
 
 ASSETS = [
-    ("index.html", "INDEX_HTML", True),
     ("portal.html","PORTAL_HTML",True),
-    ("script.js",  "SCRIPT_JS",  True),
-    ("md5.js",     "MD5_JS",     True),
-    ("style.css",  "STYLE_CSS",  True),
     ("favicon.png","FAVICON_PNG",False),
 ]
 
@@ -73,61 +70,7 @@ def build_tz_json(csv_path: pathlib.Path) -> bytes:
     return json.dumps(table, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def parse_header_alphabet(header_text: str) -> str:
-    """Extract the SFP_ALPHABET string literal from SplitFlapProtocol.h.
-
-    Raises ValueError if the #define is missing so a botched header edit
-    fails the build loudly instead of silently skipping the drift check.
-    See issue #149.
-    """
-    m = re.search(r'#define\s+SFP_ALPHABET\s+"((?:[^"\\]|\\.)*)"', header_text)
-    if not m:
-        raise ValueError("SFP_ALPHABET #define not found in SplitFlapProtocol.h")
-    return m.group(1)
-
-
-def parse_js_calibration_letters(script_js_text: str) -> str:
-    """Extract data/script.js's CALIBRATION_LETTERS array as a plain string.
-
-    The array is `['<char>', '<char>', ...]`; each element is one character.
-    Returns the concatenation so it can be compared to the header alphabet
-    byte-for-byte. Raises ValueError if the array can't be located.
-    """
-    m = re.search(r"CALIBRATION_LETTERS\s*=\s*\[(.*?)\]", script_js_text, re.DOTALL)
-    if not m:
-        raise ValueError("CALIBRATION_LETTERS array not found in script.js")
-    return "".join(re.findall(r"'([^']*)'", m.group(1)))
-
-
-def shared_protocol_header(project_dir: pathlib.Path) -> pathlib.Path:
-    """The master<->unit protocol contract, shared with the Nano unit
-    firmware. Lives in firmware/v2/shared (migrated from v1 at #311) —
-    matching the -I ../shared include path in platformio.ini."""
-    return project_dir.parent / "shared" / "SplitFlapProtocol.h"
-
-
-def verify_js_alphabet(project_dir: pathlib.Path) -> None:
-    """Fail the build if data/script.js's alphabet has drifted from the
-    shared SplitFlapProtocol.h (single source of truth, #149). The C side
-    can't drift because both firmwares #include the header; the JS side has
-    no compiler to enforce it, so this is where CI catches it."""
-    header = shared_protocol_header(project_dir)
-    script_js = project_dir / "data" / "script.js"
-    header_alphabet = parse_header_alphabet(header.read_text(encoding="utf-8"))
-    js_alphabet = parse_js_calibration_letters(script_js.read_text(encoding="utf-8"))
-    if header_alphabet != js_alphabet:
-        raise ValueError(
-            "Alphabet drift: script.js CALIBRATION_LETTERS does not match "
-            "SplitFlapProtocol.h SFP_ALPHABET (#149).\n"
-            f"  header: {header_alphabet!r}\n"
-            f"  script: {js_alphabet!r}"
-        )
-    print(f"[build_assets] alphabet OK — script.js matches SFP_ALPHABET ({len(header_alphabet)} chars)")
-
-
 def build_header(project_dir: pathlib.Path) -> None:
-    verify_js_alphabet(project_dir)
-
     data_dir = project_dir / "data"
     output_header = project_dir / "WebAssets.h"
 
@@ -138,8 +81,8 @@ def build_header(project_dir: pathlib.Path) -> None:
     unit_hex = data_dir / "unit-firmware.hex"
     unit_bin = unit_firmware_image(project_dir)
     tz_json = build_tz_json(data_dir / "zones.csv")
-    # The new page (#574): web/ joined into one document.
-    console_html = web_bundle.build_page(project_dir)
+    # The page: web/ joined into one document.
+    page_html = web_bundle.build_page(project_dir)
 
     with output_header.open("w", encoding="utf-8") as fh:
         fh.write(GENERATED_BANNER)
@@ -151,7 +94,7 @@ def build_header(project_dir: pathlib.Path) -> None:
                 varname = varname + "_GZ"
             emit_array(fh, varname, data)
         emit_array(fh, "TZ_JSON_GZ", compress_asset(tz_json))
-        emit_array(fh, "CONSOLE_HTML_GZ", compress_asset(console_html))
+        emit_array(fh, "PAGE_HTML_GZ", compress_asset(page_html))
         emit_array(fh, "UNIT_FIRMWARE_BIN", unit_bin)
 
     print(f"[build_assets] wrote {output_header.name}")
@@ -162,7 +105,7 @@ def build_header(project_dir: pathlib.Path) -> None:
         else:
             print(f"  {filename:<16} raw {len(data):>5}")
     print(f"  tz.json          gz {len(tz_json):>5} -> {len(compress_asset(tz_json)):>5}")
-    print(f"  web/ (console)   gz {len(console_html):>5} -> {len(compress_asset(console_html)):>5}")
+    print(f"  web/ (the page)  gz {len(page_html):>5} -> {len(compress_asset(page_html)):>5}")
     print(f"  unit-firmware    hex {unit_hex.stat().st_size:>5} -> bin {len(unit_bin):>5}")
 
 

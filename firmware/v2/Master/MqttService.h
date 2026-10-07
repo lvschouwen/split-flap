@@ -36,7 +36,7 @@ void mqttServiceTick();
 // Any task: broker session state for GET /settings.
 bool mqttIsConnected();
 
-// Any task: broker disconnects since boot (#245 System tab).
+// Any task: broker disconnects since boot (#245 the board page).
 uint32_t mqttDropCount();
 
 // Any task: true while an MQTT notification owns the display — clockTask's

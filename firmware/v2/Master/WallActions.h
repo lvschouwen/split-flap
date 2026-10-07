@@ -2,8 +2,8 @@
 // WallActions.h — the actions of POST /api/v2/action that are done the moment
 // they are accepted (#559/#572): what the wall shows, its mode, quiet. Pure,
 // natively tested by test_wall_actions. Each becomes the same staged post the
-// settings form makes (PendingSettingsPost.h), so the checks and the drain
-// are the form's.
+// settings change makes (PendingSettingsPost.h), so the checks and the drain
+// are the same.
 //
 //   {"name":"show","args":{"text":"HELLO\nWORLD"}}
 //       the wall's text until something else is shown; switches to text mode.
@@ -55,7 +55,6 @@ inline const char* wallActionBuild(const char* name, JsonVariantConst args,
         return "args.forS is a whole number of seconds, 5 to 3600";
       }
       stageSettingsParam(built, PARAM_TRANSIENT_TEXT, String(text.as<const char*>()));
-      built.transientWall = true;
     }
   } else if (strcmp(name, "mode") == 0) {
     if (!wallActionOnlyKeys(args, "mode", nullptr)) return "mode takes args.mode only";

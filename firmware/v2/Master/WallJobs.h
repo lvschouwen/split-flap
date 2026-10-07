@@ -178,7 +178,7 @@ inline const char* wallJobRefusalText(uint32_t refusal) {
   }
 }
 
-// How a job that ran ended, in the words /unit/op-result uses: the outcome
+// How a job that ran ended, in the words of the job results: the outcome
 // and, where there is one, the reason. A failure without an outcome is a
 // result the board no longer had.
 inline void wallJobOutcomeText(char* out, size_t cap, bool ok, uint32_t outcome, uint32_t reason) {

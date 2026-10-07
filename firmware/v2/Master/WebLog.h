@@ -4,7 +4,7 @@
 #include <Print.h>
 
 // In-RAM ring buffer capturing the tail of every SerialPrint* call on the
-// master, exposed to the web UI via `GET /log`. v2 copy of the v1 helper
+// master, exposed to the web UI via `GET /api/v2/log`. v2 copy of the v1 helper
 // (#133) — v1 stays stable for OTA maintenance, so this is a copy, not a
 // shared include.
 //

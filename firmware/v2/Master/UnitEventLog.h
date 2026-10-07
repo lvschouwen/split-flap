@@ -1,6 +1,6 @@
 #pragma once
 // Pure edge-detection for the master-side unit-health event log (#322). The
-// master surfaces per-unit health only as passive /units/health JSON counters;
+// master surfaces per-unit health only as passive counters in the unit facts;
 // a unit going faulty (last home failed / hall never fired), falling off the
 // bus (#310 heartbeat), or disagreeing with its intended letter (#264 mm) never
 // reaches the flash/web log an operator actually watches — the same silent gap

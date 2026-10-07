@@ -44,7 +44,6 @@ static void test_show_for_a_time_leaves_the_mode_alone() {
   TEST_ASSERT_EQUAL_STRING("DINNER", post.transientText.c_str());
   TEST_ASSERT_TRUE(post.transientDwellProvided);
   TEST_ASSERT_EQUAL(300, post.transientDwell);
-  TEST_ASSERT_TRUE(post.transientWall);
   TEST_ASSERT_FALSE(post.inputTextProvided);
   TEST_ASSERT_FALSE(post.deviceModeProvided);
   TEST_ASSERT_TRUE(settingsPostConsistent(post));

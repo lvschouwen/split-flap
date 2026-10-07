@@ -5,7 +5,7 @@
 // GET /api/v2/board/<id>          <id> = a row board's id, or the master's
 //     own name for the master and its own row. The board's place and verdict,
 //     how it is reached and what it runs; for the master its vitals with
-//     their history ("stats", as GET /system/stats), its last starts, its
+//     their history ("stats"), its last starts, its
 //     network checks and its rescue image; "settings"; and "units": the
 //     table {"fields":[...],"rows":[[...],...]} (UnitApiJson.h), one row a
 //     unit in bus order.

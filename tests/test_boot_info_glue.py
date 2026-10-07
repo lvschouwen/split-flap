@@ -15,8 +15,8 @@ def test_s3_reads_the_report_and_serves_the_slot():
     for forbidden in ("unitBusBootUpdate", "RebootToBootloader", "unitBusHome",
                       "unitBusReboot"):
         assert forbidden not in exec_fn, f"the info op must not call {forbidden}"
-    web = (V2 / "Master" / "WebMaintenance.cpp").read_text()
-    assert "buildBootInfoJson(buf, sizeof(buf), snap.lastBootInfo, (uint32_t)seq);" in web
+    jobs = (V2 / "Master" / "WallJobs.cpp").read_text()
+    assert "buildBootInfoJson(json, sizeof(json), snap.lastBootInfo, job.seq);" in jobs
 
 
 def test_esp01_reads_the_report_and_sends_the_slot():

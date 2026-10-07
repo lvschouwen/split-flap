@@ -27,7 +27,6 @@ static SemaphoreHandle_t stageMutex = nullptr;
 static char* stageBuf = nullptr;      // producers append here
 static char* flushBuf = nullptr;      // netTask's copy-out, written lock-free
 static FlashLogStageState stage;
-static bool clearRequested = false;
 static uint32_t lastFlushMs = 0;
 
 const char* flashLogCurrentPath() { return LOG_PATH; }
@@ -94,13 +93,6 @@ void flashLogStage(const char* data, size_t len) {
   xSemaphoreGive(stageMutex);
 }
 
-void flashLogRequestClear() {
-  if (!available) return;
-  xSemaphoreTake(stageMutex, portMAX_DELAY);
-  clearRequested = true;
-  xSemaphoreGive(stageMutex);
-}
-
 void flashLogTick(bool force) {
   if (!available) return;
 
@@ -108,17 +100,10 @@ void flashLogTick(bool force) {
   // lock-free so producers never wait on flash latency.
   size_t len = 0;
   uint32_t droppedNow = 0;
-  bool doClear = false;
   xSemaphoreTake(stageMutex, portMAX_DELAY);
-  doClear = clearRequested;
-  clearRequested = false;
-  if (doClear) {
-    // Staged-but-unflushed bytes predate the clear — discard with it.
-    stage.used = 0;
-    stage.dropped = 0;
-  } else if (force || flashLogShouldFlush(stage.used, FLASH_LOG_STAGE_CAP,
-                                          millis() - lastFlushMs,
-                                          FLASH_LOG_FLUSH_INTERVAL_MS)) {
+  if (force || flashLogShouldFlush(stage.used, FLASH_LOG_STAGE_CAP,
+                                   millis() - lastFlushMs,
+                                   FLASH_LOG_FLUSH_INTERVAL_MS)) {
     len = stage.used;
     droppedNow = stage.dropped;
     memcpy(flushBuf, stageBuf, len);
@@ -127,12 +112,6 @@ void flashLogTick(bool force) {
   }
   xSemaphoreGive(stageMutex);
 
-  if (doClear) {
-    LittleFS.remove(LOG_PATH);
-    LittleFS.remove(LOG_PREV_PATH);
-    lastFlushMs = millis();
-    return;
-  }
   if (len == 0 && droppedNow == 0) return;
 
   // #504: netTask is the only caller; its loop re-marks on the next pass.

@@ -1,6 +1,6 @@
 #pragma once
-// SystemStatsPolicy.h — pure logic for the System tab (#245): the S3-vitals
-// sample ring, CPU-load math and the /system/stats JSON. Natively tested by
+// SystemStatsPolicy.h — pure logic for the board page (#245): the S3-vitals
+// sample ring, CPU-load math and the stats JSON (`stats` in GET /api/v2/board). Natively tested by
 // test_system_stats; the netTask sampler glue lives in SystemStats.cpp.
 //
 // Dual-rate (#251): the sampler ticks every SYSTEM_STATS_FAST_INTERVAL_S and
@@ -95,7 +95,7 @@ struct SystemNow {
 };
 
 // Worst case measured by test_system_stats' saturated-ring test; headroom
-// pinned there. Heap-allocated per request like /units/health.
+// pinned there. Heap-allocated per request.
 #define SYSTEM_STATS_JSON_CAP 6144
 
 #define SYSTEM_STATS_APPEND(...) do { \
@@ -103,9 +103,8 @@ struct SystemNow {
     o += (size_t)snprintf(buf + o, cap - o, __VA_ARGS__); \
   } while (0)
 
-// Emits just the "now" object {...} — the current vitals, no history. Shared
-// by buildSystemStatsJson below and /status's one-shot aggregate (#307) so
-// the two can never disagree on the field set. `newest` is the FAST sample;
+// Emits just the "now" object {...} — the current vitals, no history.
+// `newest` is the FAST sample;
 // temp is x10 (the UI divides). Returns the would-be length like snprintf.
 inline size_t buildSystemNowJson(char* buf, size_t cap,
                                  const SystemSample& newest,

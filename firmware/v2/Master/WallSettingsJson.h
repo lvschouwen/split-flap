@@ -1,7 +1,7 @@
 #pragma once
 // WallSettingsJson.h — the settings as the operator API reads and writes
 // them (#559/#572). Pure, natively tested by test_wall_settings_json. A PUT
-// carries any part of what the GET gives; every value takes the form's check
+// carries any part of what the GET gives; every value takes its field's check
 // (PendingSettingsPost.h) and one that fails refuses the whole request.
 //
 // GET / PUT /api/v2/settings/wall
@@ -29,7 +29,7 @@ enum class Kind : uint8_t { Text, Number, Flag };
 
 struct Key {
   const char* json;
-  const char* param;  // the form field it is checked and staged as
+  const char* param;  // the field it is checked and staged as
   Kind kind;
 };
 

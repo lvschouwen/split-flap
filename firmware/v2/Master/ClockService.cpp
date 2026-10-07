@@ -11,7 +11,7 @@
 // v1 timezoneServer parity: compile-time const, no settings knob.
 static const char* NTP_SERVER = "pool.ntp.org";
 
-// NTP sync age for the System tab (#245). The notification callback runs in
+// NTP sync age for the board page (#245). The notification callback runs in
 // the SNTP/LWIP task; any task reads the age accessor — std::atomic per the
 // codebase's cross-task idiom. 0 = never synced (a sync landing in
 // boot-second zero still records 1).

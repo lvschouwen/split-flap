@@ -85,25 +85,3 @@ size_t systemStatsJson(char* buf, size_t cap) {
   xSemaphoreGive(ringMutex);
   return n;
 }
-
-size_t systemStatsNowJson(char* buf, size_t cap) {
-  SystemNow now;
-  now.uptimeS = (uint32_t)(esp_timer_get_time() / 1000000LL);
-  now.minFreeHeap = ESP.getMinFreeHeap();
-  now.i2cTx = unitBusTxCount();
-  now.i2cErr = unitBusErrCount();
-  now.mqttDrops = mqttDropCount();
-  now.ntpAgeS = clockNtpAgeS();
-  now.txPowerDbm10 = (int16_t)wifiTxPowerDbm10();
-  snprintf(now.resetReason, sizeof(now.resetReason), "%s",
-           webResetReasonString());
-  TasksStackHwm hwm = tasksStackHwm();  // #415
-  now.hwmDisplay = hwm.display; now.hwmClock = hwm.clock;
-  now.hwmNet = hwm.net; now.hwmMqtt = hwm.mqtt; now.hwmWorker = hwm.worker;
-  now.hwmLink = hwm.link;
-
-  xSemaphoreTake(ringMutex, portMAX_DELAY);
-  size_t n = buildSystemNowJson(buf, cap, sampler.latest, now);
-  xSemaphoreGive(ringMutex);
-  return n;
-}

@@ -203,7 +203,7 @@ String factoryWriteError() { return lastError; }
 // Task affinity is the whole safety argument here, so state it: the cache is
 // WRITTEN only by rescueSlotRefresh() on loopTask (setup(), and the
 // webEndpointsLoop drain after an install) and READ by rescueSlotCurrent()
-// from the async_tcp task (GET /settings, GET /status). That is a genuine
+// from the async_tcp task (GET /settings). That is a genuine
 // cross-task hand-off of a multi-field struct, so it is not assumed atomic —
 // a spinlock guards the copy at both ends. The expensive computation
 // deliberately happens OUTSIDE the lock, and rescueSlotCurrent() never

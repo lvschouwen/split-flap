@@ -41,7 +41,7 @@
 // Probe inhibit after any op that reboots a unit THROUGH its twiboot window
 // (v1 #88 hard rule: the probe's CHIPINFO query pins twiboot alive). Owned
 // by displayTask exclusively; every runtime probe waits this deadline out —
-// including a Probe that was already queued behind a /unit/reboot.
+// including a Probe that was already queued behind a unit restart.
 static uint32_t twibootRiskUntilMs = 0;
 // A unit was sent through its bootloader outside the reflash job, so its
 // probe-time reads (offset, odometer, version) are void. Only a probe reads
@@ -111,7 +111,7 @@ static void settleBeforeProbe() {
 
 // A full health poll + a freshness stamp for every slot (#310, HeartbeatPolicy).
 // Used by boot, the explicit Probe and every post-op reprobe so a refresh
-// resets the miss counters and makes /units/health "age" truthful immediately
+// resets the miss counters and makes the unit facts "age" truthful immediately
 // after. The read outcome per slot is its statusValid (set by unitBusPollHealth).
 static void pollHealthWithFreshness(UnitFacts* busFacts) {
   unitBusPollHealth(busFacts, UNITS_AMOUNT);
@@ -128,7 +128,7 @@ static void pollHealthWithFreshness(UnitFacts* busFacts) {
 // verify-boot brownout). Targets only unhomed sketch units, so it serves both
 // a cold boot (home all) and a post-reflash top-up (home just the flashed
 // units) without re-homing good ones. Status-driven waits (homed-or-faulted)
-// come from unitBusWaitBatchIdle; abort (/stop) bails between batches.
+// come from unitBusWaitBatchIdle; abort (stop) bails between batches.
 static void runBootHomeSequence(DisplaySnapshot& local, UnitFacts* busFacts) {
   uint8_t targets[UNITS_AMOUNT];
   int n = bootHomeCollectTargets(local.units, local.displayWidth,
@@ -159,7 +159,7 @@ static void runBootHomeSequence(DisplaySnapshot& local, UnitFacts* busFacts) {
 
 // #322: surface a unit's health TRANSITIONS on the operator log. The master
 // otherwise folds home-failed / hall-never / stale / mismatch into passive
-// /units/health JSON, so a unit going bad (or recovering) never reaches the
+// the unit facts JSON, so a unit going bad (or recovering) never reaches the
 // flash/web log an operator watches — the same silent gap as the drift auto
 // re-home (logged in refreshUnitDiag). Evaluated per unit right after ITS own
 // heartbeat poll, so every signal (incl. the #264 mismatch verdict, coherent
@@ -715,7 +715,7 @@ static void execProbe(DisplaySnapshot& local, UnitFacts* busFacts,
   (void)cmd;
   // Re-scan + health refresh: an address change moves a unit to a
   // slot only a probe can see (v1 #56 semantics). A refresh queued
-  // right behind a /unit/reboot must not scan into the twiboot
+  // right behind a unit restart must not scan into the twiboot
   // window — wait the risk deadline out first.
   settleBeforeProbe();
   probeOwedAfterRiskWindow = false;
@@ -825,7 +825,7 @@ static void execSetGates(DisplaySnapshot& local, UnitFacts* busFacts,
   int status = unitBusSetGates(cmd.unitAddress, (uint8_t)cmd.value);
   if (status == 0) {
     // Verified by the read-back inside unitBusSetGates — patch the fact so
-    // /units/health stops reporting the pre-write gates (#409).
+    // the unit facts stop reporting the pre-write gates (#409).
     displayApplyGatesWrite(local, cmd.unitAddress, (uint8_t)cmd.value);
   }
   // A unit that refused the bits answers with its old gates, which the
@@ -1048,7 +1048,7 @@ static void execStop(DisplaySnapshot& local, UnitFacts* busFacts,
                     const DisplayCommand& cmd) {
   (void)busFacts;
   (void)cmd;
-  // The abort flag (set by the /stop handler at enqueue) already
+  // The abort flag (set by the stop action at enqueue) already
   // short-circuited every wait ahead of us. Clear it BEFORE parking: the
   // park is a budgeted blank frame (#505) whose admission waits must run —
   // a broadcast HOME started every stepper at once.
@@ -1177,7 +1177,7 @@ void displayTaskMain(void*) {
           execProbe(local, busFacts, cmd);
           break;
         // --- calibration + provisioning (#204). Every op grades a
-        // MaintResult; the web layer serves it via /unit/op-result.
+        // MaintResult; the web layer serves it as the job's result.
         case DisplayOpcode::WriteOffset:
           execWriteOffset(local, busFacts, cmd);
           break;

@@ -195,7 +195,7 @@ DisplayCommand ownCommand(const wl_Op& op, uint32_t seq) {
 }
 
 // Which of its units a job may address is the board's to say: here, for the
-// master's own. The checks are the ones the /unit/... routes make.
+// master's own. The checks are MaintenancePolicy.h's.
 const char* checkOwnUnit(const WallJobKind& kind, const wl_Op& op, int& status) {
   status = 400;
   if (op.address == 0 || kind.opcode == wl_OpCode_OPC_RESTART_UNIT) return nullptr;
@@ -594,7 +594,6 @@ void handleWall(AsyncWebServerRequest* request) {
     if (wallStateRowUnits(i, *units, atMs)) {
       JsonObject u = row["unitFacts"].to<JsonObject>();
       u["width"] = units->width;
-      u["faulty"] = units->faulty;
       u["msAgo"] = (uint32_t)(nowMs - atMs);
     }
   }

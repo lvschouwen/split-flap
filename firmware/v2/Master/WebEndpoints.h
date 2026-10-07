@@ -7,12 +7,9 @@
 
 class AsyncWebServer;
 
-// Web endpoint layer for the v2 master (#186) — the v1 endpoint surface on
-// the ESP32Async server stack, plus the WiFi portal/credential routes
-// (#188). Registers the PROGMEM-served UI, the settings read/write pair,
-// health/log/reboot, /wifi-setup + /wifi/scan + /wifi/config + /reset-wifi,
-// and explicit 501 stubs for every endpoint whose backing service hasn't
-// been ported yet (units/I2C, firmware/OTA, MQTT discovery).
+// Web endpoint layer for the v2 master (#186) on the ESP32Async server
+// stack: the PROGMEM-served page, /api/v2, the firmware uploads, the WiFi
+// portal routes (#188) and the diagnostics reads. GET /api lists them.
 //
 // Lifecycle: webEndpointsInit() registers routes only. webEndpointsStart()
 // calls server.begin() — WifiService invokes it (idempotently) once a netif
@@ -24,9 +21,6 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
 void webEndpointsStart(AsyncWebServer& server);
 void webEndpointsLoop(MasterSettings& settings, SettingsStore& store);
 
-// SSE display push (#251), netTask only: sends a "display" event when the
-// snapshot's text changes. Change detection pure in DisplayEvents.h.
-void webDisplayEventsTick();
 // netTask only: pushes what changed to the readers of GET /api/v2/stream.
 void webStreamTick();
 
@@ -54,7 +48,7 @@ bool webMqttApplySpeed(int speed);
 bool webMqttApplyAlignment(const String& alignment);
 
 // Stage the standard graceful reboot (drain flushes logs, then restarts) —
-// the HA restart button rides the same dispatcher as POST /reboot. The cause
+// the HA restart button rides the same dispatcher as the restart action. The cause
 // is stamped to NVS at the drain and served as lastRebootCause next boot
 // (#432).
 void webRequestReboot(const char* cause);

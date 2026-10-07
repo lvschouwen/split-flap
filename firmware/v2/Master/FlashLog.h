@@ -11,8 +11,7 @@
 // handle. Policy (capacities, cadence, rotation) is pure FlashLogPolicy.h.
 //
 // Files: /log.txt (current) → renamed to /log.prev.txt at the size cap.
-// Web: GET /log/flash [?prev=1], POST /log/flash/clear (staged, drained by
-// the tick — handlers never write flash).
+// Read by GET /api/v2/log?kind=flash [&prev=1].
 
 #include <stddef.h>
 
@@ -26,15 +25,12 @@ void flashLogInit();
 void flashLogStage(const char* data, size_t len);
 
 // netTask only: flush per policy (or immediately when `force`), rotate at
-// the file cap, drain a staged clear. `force` is for the pre-reboot drain
+// the file cap. `force` is for the pre-reboot drain
 // so the last lines land before ESP.restart().
 void flashLogTick(bool force = false);
 
 // True when the mount succeeded and logging is live (web layer's 503 gate).
 bool flashLogAvailable();
-
-// Stages a clear (both files deleted on the next tick). Handler-safe.
-void flashLogRequestClear();
 
 // Absolute LittleFS paths for the web layer's file responses.
 const char* flashLogCurrentPath();

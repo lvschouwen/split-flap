@@ -1,7 +1,7 @@
-// System/diagnostics read endpoints — split from WebEndpoints.cpp (#338);
-// async-context rules in WebEndpoints.cpp's header. Everything here is
-// read-only against snapshots/services except /log/flash/clear, which stages
-// for netTask's flashLogTick (handlers never write flash).
+// Diagnostics with no /api/v2 counterpart (liveness, the crash dump, the
+// odometer history) and the route index — split from WebEndpoints.cpp (#338);
+// async-context rules in WebEndpoints.cpp's header. Handlers never write
+// flash: /coredump/erase stages for netTask.
 
 #include "WebEndpoints.h"
 #include "WebEndpointsInternal.h"
@@ -46,54 +46,12 @@ void webSystemRegister(AsyncWebServer& server) {
     request->send(200, "text/plain", "Healthy");
   });
 
-  // --- persistent flash log (#206) ------------------------------------------
-  // Serves the LittleFS log files directly (chunked by the async layer;
-  // esp_littlefs serializes fs access internally, and the flush path
-  // open→append→closes so no write handle is ever shared). Known-benign
-  // race: between the exists() check and the response's real open(), a
-  // rotation or drained clear can remove the file — AsyncFileResponse then
-  // degrades to a 404, so a request racing a rotate occasionally 404s;
-  // retry. ?prev=1 = the rotated file. Content up to the last ~5 s flush.
-  server.on("/log/flash", HTTP_GET, [](AsyncWebServerRequest* request) {
-    if (!flashLogAvailable()) {
-      request->send(503, "text/plain",
-                    F("Flash log unavailable (storage mount failed)"));
-      return;
-    }
-    const char* path = request->hasParam("prev") ? flashLogPreviousPath()
-                                                 : flashLogCurrentPath();
-    if (!LittleFS.exists(path)) {
-      request->send(404, "text/plain", F("No flash log yet"));
-      return;
-    }
-    request->send(LittleFS, path, "text/plain");
-  });
-
-  // Clear is staged and drained by netTask's flashLogTick — handlers never
-  // write flash (async rule).
-  server.on("/log/flash/clear", HTTP_POST, [](AsyncWebServerRequest* request) {
-    if (!flashLogAvailable()) {
-      request->send(503, "text/plain",
-                    F("Flash log unavailable (storage mount failed)"));
-      return;
-    }
-    flashLogRequestClear();
-    request->send(202, "text/plain", F("Flash log clear queued"));
-  });
-
-  // Registered AFTER the /log/flash routes: a path also matches every
-  // "<path>/..." request, and the first registered handler wins — in the
-  // other order this one answers /log/flash with the RAM ring
-  // (tests/test_route_shadowing.py).
-  server.on(AsyncURIMatcher::exact("/log"), HTTP_GET, [](AsyncWebServerRequest* request) {
-    // Don't SerialPrintln here; every log request would otherwise stamp
-    // itself into the buffer on every poll and drown out real activity.
-    request->send(200, "text/plain", webLogRead());
-  });
-
   // --- odometer historian (#465) --------------------------------------------
-  // Same serving pattern (and known-benign exists/open race) as /log/flash
-  // above; the file is appended by netTask's odometerLogTick.
+  // Serves the LittleFS file directly (chunked by the async layer;
+  // esp_littlefs serializes fs access internally). Known-benign race:
+  // between the exists() check and the response's real open() a rotation
+  // can remove the file — the response then degrades to a 404; retry.
+  // ?prev=1 = the rotated file. Appended by netTask's odometerLogTick.
   server.on("/units/odometer-log", HTTP_GET, [](AsyncWebServerRequest* request) {
     if (!odometerLogAvailable()) {
       request->send(503, "text/plain",
@@ -111,8 +69,8 @@ void webSystemRegister(AsyncWebServer& server) {
 
   // --- coredump (#319/#431) — remote crash diagnostics ---------------------
   // The SUMMARY (task name + code addresses + backtrace PCs) carries NO
-  // secrets, so an unauthenticated GET is fine — same posture as /settings,
-  // /log/flash. The RAW image is a task-stack dump that CAN transiently hold
+  // secrets, so an unauthenticated GET is fine — same posture as /settings.
+  // The RAW image is a task-stack dump that CAN transiently hold
   // WiFi-credential fragments; #431 ships it anyway — accepted risk for this internal LAN-only
   // deployment, where a dump that cannot be pulled costs more than the
   // exposure (the surface stays CSRF/CORS-closed like every other route).
@@ -238,7 +196,7 @@ void webSystemRegister(AsyncWebServer& server) {
   // route a dump could only ever be replaced by the next panic, and the
   // fossils muddied every later forensics pass (both wall masters carried
   // one on 2026-08-05). Handlers never write flash: stage the request and
-  // let netTask's drain run the erase — same pattern as /log/flash/clear.
+  // let netTask's drain run the erase.
   server.on("/coredump/erase", HTTP_POST, [](AsyncWebServerRequest* request) {
     if (esp_core_dump_image_check() != ESP_OK) {
       request->send(404, "text/plain", F("no coredump"));
@@ -250,21 +208,8 @@ void webSystemRegister(AsyncWebServer& server) {
                     "present:false once it lands"));
   });
 
-  // System tab (#245): current vitals + ~10 min sparkline history in one
-  // JSON. History is server-side (netTask's sample ring) so a freshly
-  // opened tab has depth immediately; the browser polls at 2 s.
-  server.on("/system/stats", HTTP_GET, [](AsyncWebServerRequest* request) {
-    std::unique_ptr<char[]> buf(new char[SYSTEM_STATS_JSON_CAP]);
-    size_t n = systemStatsJson(buf.get(), SYSTEM_STATS_JSON_CAP);
-    if (n == 0 || n >= SYSTEM_STATS_JSON_CAP) {
-      request->send(500, "text/plain", F("stats unavailable"));
-      return;
-    }
-    request->send(200, "application/json", buf.get());
-  });
-
-  // Self-documenting route + terse-key legend index for the headless
-  // (curl-only) operator (#307). Static data, heap-rendered per request.
+  // Self-documenting route index for the curl-only operator (#307). Static
+  // data, heap-rendered per request.
   server.on(AsyncURIMatcher::exact("/api"), HTTP_GET, [](AsyncWebServerRequest* request) {
     std::unique_ptr<char[]> buf(new char[API_JSON_CAP]);
     size_t n = buildApiJson(buf.get(), API_JSON_CAP);
@@ -273,97 +218,6 @@ void webSystemRegister(AsyncWebServer& server) {
       return;
     }
     request->send(200, "application/json", buf.get());
-  });
-
-  // Static hardware/partition inventory (#307). Reuses existing accessors; no
-  // new sampling. bootCount comes from the NVS counter main.cpp bumps.
-  server.on("/system/info", HTTP_GET, [](AsyncWebServerRequest* request) {
-    String out;
-    out.reserve(1024);
-    out += "{\"chip\":\"";
-    out += ESP.getChipModel();
-    out += "\",\"chipRev\":";
-    out += String(ESP.getChipRevision());
-    out += ",\"cores\":";
-    out += String(ESP.getChipCores());
-    out += ",\"cpuMHz\":";
-    out += String(ESP.getCpuFreqMHz());
-    out += ",\"flashKB\":";
-    out += String(ESP.getFlashChipSize() / 1024);
-    out += ",\"psramKB\":";
-    out += String(ESP.getPsramSize() / 1024);
-    out += ",\"rev\":\"";
-    out += GIT_REV;
-    out += "\",\"bundledUnitRev\":\"";
-    out += BUNDLED_UNIT_REV;
-    out += "\",\"sketchMd5\":\"";
-    out += ESP.getSketchMD5();
-    out += "\",\"bootCount\":";
-    out += String(liveStore != nullptr ? liveStore->getInt("bootCount", 0) : 0);
-    out += ",\"resetReason\":\"";
-    out += webResetReasonString();
-    out += "\",\"factoryPresent\":";
-    out += factorySlotPresent() ? "true" : "false";
-    out += ",\"rescueValid\":";  // factory slot holds a bootable rescue image
-    out += factorySlotImageValid() ? "true" : "false";
-    out += ",\"partitions\":[";
-    esp_partition_iterator_t it = esp_partition_find(
-        ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, nullptr);
-    bool first = true;
-    while (it != nullptr) {
-      const esp_partition_t* p = esp_partition_get(it);
-      if (!first) out += ',';
-      first = false;
-      out += "{\"label\":\"";
-      out += p->label;
-      out += "\",\"type\":";
-      out += String(p->type);
-      out += ",\"subtype\":";
-      out += String(p->subtype);
-      out += ",\"offset\":";
-      out += String((unsigned long)p->address);
-      out += ",\"size\":";
-      out += String((unsigned long)p->size);
-      out += '}';
-      it = esp_partition_next(it);
-    }
-    esp_partition_iterator_release(it);
-    out += "]}";
-    request->send(200, "application/json", out);
-  });
-
-  // One-shot aggregate for a single curl (#307): settings + stats.now + units
-  // + ota, composed from the existing serializers. History stays at
-  // /system/stats to keep this bounded.
-  server.on("/status", HTTP_GET, [](AsyncWebServerRequest* request) {
-    std::unique_ptr<char[]> nowBuf(new char[SYSTEM_STATS_JSON_CAP]);
-    size_t nowN = systemStatsNowJson(nowBuf.get(), SYSTEM_STATS_JSON_CAP);
-    if (nowN >= SYSTEM_STATS_JSON_CAP) nowBuf[0] = '\0';
-
-    DisplaySnapshot snap = displaySnapshotGet();
-    std::unique_ptr<char[]> unitsBuf(new char[UNIT_HEALTH_JSON_CAP]);
-    size_t unitsN =
-        buildUnitHealthJson(unitsBuf.get(), UNIT_HEALTH_JSON_CAP, snap.units,
-                            snap.displayWidth, snap.faultyUnitCount,
-                            SFP_I2C_ADDRESS_BASE, millis());
-    if (unitsN == 0 || unitsN >= UNIT_HEALTH_JSON_CAP) {
-      snprintf(unitsBuf.get(), UNIT_HEALTH_JSON_CAP,
-               "{\"width\":%d,\"faulty\":%d,\"units\":[]}", snap.displayWidth,
-               snap.faultyUnitCount);
-    }
-
-    String out;
-    out.reserve(6144);
-    out += "{\"settings\":";
-    out += buildCurrentSettingsJson();
-    out += ",\"stats\":{\"now\":";
-    out += nowBuf.get();
-    out += "},\"units\":";
-    out += unitsBuf.get();
-    out += ",\"ota\":";
-    out += otaDebugJson();
-    out += "}";
-    request->send(200, "application/json", out);
   });
 }
 

@@ -69,7 +69,7 @@ struct DisplayCommand {
   DisplayAlignment alignment = DisplayAlignment::Left;
   uint8_t speed = 0;  // web-scale 1..100 (v1 slider contract)
   // Maintenance fields (#204): seq correlates the queued op with the
-  // snapshot's MaintResult (the /unit/op-result contract); unitAddress is
+  // snapshot's MaintResult (the job result contract); unitAddress is
   // the wire target; value carries offset steps, jog steps, or the new
   // address — the opcode disambiguates. Built only through the makers.
   uint32_t seq = 0;

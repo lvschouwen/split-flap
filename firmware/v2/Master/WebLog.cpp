@@ -89,7 +89,7 @@ void webLogInit() {
   if (webLogMutex == nullptr) {
     // Degrade to serial-only logging: the buffer stays null, so every entry
     // point no-ops and never reaches WEBLOG_LOCK() on a null handle.
-    Serial.println(F("WebLog: mutex allocation failed — GET /log disabled"));
+    Serial.println(F("WebLog: mutex allocation failed — GET /api/v2/log disabled"));
     return;
   }
 #endif
@@ -99,7 +99,7 @@ void webLogInit() {
 #if defined(ARDUINO_ARCH_ESP32)
   if (webLogBuffer == nullptr) {
     // Loud on purpose: a silent failure here reads as "web log empty".
-    Serial.printf("WebLog: %u-byte ring allocation failed — GET /log disabled\n",
+    Serial.printf("WebLog: %u-byte ring allocation failed — GET /api/v2/log disabled\n",
                   (unsigned)WEBLOG_SIZE);
   }
 #endif
@@ -138,8 +138,8 @@ void webLogAppend(const char* data, size_t len) {
   webLogPrefixer.expand(stamp, data, len, expanded);
   // The flash log (#206) applies its OWN independent per-line stamper
   // (FlashLog.cpp), so it must get the RAW bytes — handing it the expanded
-  // copy would double-stamp /log/flash. The #318E prefix is for the RAM ring
-  // (GET /log) only, which carried no timestamps before. Flash tee still runs
+  // copy would double-stamp the flash log. The #318E prefix is for the RAM ring
+  // (GET /api/v2/log) only, which carried no timestamps before. Flash tee still runs
   // BEFORE the ring gate so a failed ring allocation can't silence it.
   flashLogStage(data, len);
   webLogRingWrite(expanded.c_str(), expanded.length());

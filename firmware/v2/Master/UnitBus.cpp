@@ -73,7 +73,7 @@ static void recoverBusAfterFailedRead() {
   unitBusInit();
 }
 
-// Bus transaction counters for the System tab (#245). displayTask is the
+// Bus transaction counters for the board page (#245). displayTask is the
 // only writer (sole Wire toucher); netTask's stats sampler reads them.
 // Scope: sketch-protocol traffic only — frames, queries and maintenance
 // ops. Deliberately NOT counted: the ~10 Hz checkIfMoving() idle polls
@@ -91,7 +91,7 @@ uint32_t unitBusErrCount() { return busErrCount.load(); }
 // can't say WHICH unit's transactions fail, the exact signal the 400 kHz bump
 // (#375) has to be validated against. These parallel per-address counters
 // charge a failed render write or health-poll read to its column; displayTask
-// folds them into the snapshot's UnitFacts (foldUnitErrors) so /units/health
+// folds them into the snapshot's UnitFacts (foldUnitErrors) so the unit facts
 // attributes err/errAge per unit. Lifetime since boot — deliberately NOT reset
 // by a probe rescan (a reliability trend, unlike the re-baselined health masks).
 // displayTask is the sole writer (sole Wire toucher, Hard rules), so plain
@@ -189,7 +189,7 @@ static bool isUnitInBootloader(int i2cAddress) {
 }
 
 // Checks if a single unit is moving (1-byte rotation status). Called ~10x/s
-// from isDisplayMoving() — must be quiet on /log when nothing is wrong.
+// from isDisplayMoving() — must be quiet in the log when nothing is wrong.
 static int checkIfMoving(int unitIndex) {
   return unitMovingStatus(unitBus, (uint8_t)toI2cAddress(unitIndex));
 }
@@ -219,7 +219,7 @@ static void admitMotion() {
 }
 
 // Blocks until fewer than motionCap tracked units are still moving. Returns
-// false when /stop aborted the wait.
+// false when the stop action aborted the wait.
 static bool waitForMotionSlot(MotionTracker& movers) {
   while (motionTrackerFull(movers, motionCap)) {
     wdtFeed();
@@ -242,7 +242,7 @@ static void waitForDisplayToStop(const UnitFacts* facts, int width) {
   while (isDisplayMoving(facts, width)) {
     wdtFeed();  // #314: feed the TWDT through a legitimate stuck-flap wait
     if (abortRequested.load()) {
-      SerialPrintln(F("Display-stop wait aborted by /stop"));
+      SerialPrintln(F("Display-stop wait aborted by stop"));
       break;
     }
     if (millis() - waitStart > UNIT_SHOW_STUCK_TIMEOUT_MS) {
@@ -377,7 +377,7 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i) {
   facts[i].bootVerdict = BOOT_INTEGRITY_UNREAD;
   // #367: refresh every column's attributed error counters into the facts BEFORE
   // the state gate below, so a render-time write failure (charged in
-  // unitBusShowFrame) surfaces in the next published /units/health within one
+  // unitBusShowFrame) surfaces in the next published unit facts within one
   // heartbeat tick — even on a tick whose round-robin slot lands on a silent /
   // bootloader unit that returns early.
   foldUnitErrors(facts, UNITS_AMOUNT);
@@ -595,7 +595,7 @@ UnitBootReadResult unitBusReadBootSection(int i2cAddress, uint8_t* out) {
 
 namespace {
 // displayTask's side of a unit flash: feed the task watchdog between pages
-// (#314) and stop when /stop asked for it.
+// (#314) and stop when the stop action asked for it.
 struct FlashWatch {
   uint8_t addr;
   bool keepGoing() {
@@ -648,7 +648,7 @@ UnitFlashResult unitBusFlashUnit(int i2cAddress, const uint8_t* image,
       SerialPrintf("Unit 0x%02x not responding post-flash\n", i2cAddress);
       break;
     case UnitFlashResult::Aborted:
-      SerialPrintln(F("Unit flash aborted by /stop — unit left in twiboot"));
+      SerialPrintln(F("Unit flash aborted by stop — unit left in twiboot"));
       break;
     default:
       break;

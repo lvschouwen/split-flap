@@ -197,7 +197,7 @@ inline void saveWifiCredentials(SettingsStore& store, const String& ssid,
   store.putString(SETTINGS_KEY_WIFI_PASS, password);
 }
 
-// /reset-wifi: our NVS namespace is the single credential store (esp_wifi
+// forget-wifi: our NVS namespace is the single credential store (esp_wifi
 // persistence is off), so two key deletes ARE the factory-fresh WiFi state.
 inline void clearWifiCredentials(SettingsStore& store) {
   store.remove(SETTINGS_KEY_WIFI_SSID);

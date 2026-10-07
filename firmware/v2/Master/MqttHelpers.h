@@ -167,7 +167,7 @@ inline String mqttTopic(const String& deviceId, const char* suffix) {
 // reset counts across every unit we hold a valid CMD_GET_STATUS read for —
 // mirrors unitFleetVccMin's statusValid gate (UnitHealth.h). Unlike vccMin,
 // 0 is a real "no reboots since boot" reading, not a sentinel — the caller
-// always emits it. MQTT-only derived stat (no /units/health consumer), so it
+// always emits it. MQTT-only derived stat (nothing else reads it), so it
 // lives here rather than in the copied UnitHealth.h.
 inline uint32_t unitFleetRebootTotal(const UnitFacts* units, int width) {
   uint32_t total = 0;
@@ -184,8 +184,8 @@ inline uint32_t unitFleetRebootTotal(const UnitFacts* units, int width) {
 // valid CMD_GET_EXT_DIAG read for flagged EXT_DIAG_STATUS_STALL on its last
 // move. Gates on extDiagValid like unitFleetVccMin gates on vitalsValid — a
 // unit that hasn't reported ext-diag (old firmware, or a read this epoch
-// failed) contributes no jam. MQTT-only derived stat (no /units/health
-// consumer — the per-unit "sb" field already carries this), so it lives
+// failed) contributes no jam. MQTT-only derived stat (nothing else
+// reads it — the per-unit "sb" field already carries this), so it lives
 // here rather than in the copied UnitHealth.h, same as unitFleetRebootTotal.
 inline bool unitFleetAnyJam(const UnitFacts* units, int width) {
   for (int i = 0; i < width; i++) {

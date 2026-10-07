@@ -1,8 +1,8 @@
 """Host-side tests for v2 Master/build_assets.py (#186, #205).
 
-Covered here: the alphabet drift gate (#149) against the v1 shared protocol
-header the v2 master speaks, deterministic gzip (#168), the UTF-8 pinning
-guard, and the unit-bundle sidecars as this tree's script sees them. The
+Covered here: deterministic gzip (#168), the UTF-8 pinning guard, the
+timezone table, and the unit-bundle sidecars as this tree's script sees them.
+The page's alphabet is generated from the protocol header (test_web_page.py). The
 shared helpers (Intel-HEX parse, page pad, rev stamping) are tested in
 firmware/v2/buildtools/tests.
 
@@ -20,74 +20,6 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import build_assets  # noqa: E402
-
-
-# --- alphabet drift check (#149) ------------------------------------------
-
-EXPECTED_ALPHABET = " ABCDEFGHIJKLMNOPQRSTUVWXYZ$&#0123456789:.-?!"
-
-
-def test_parse_header_alphabet_extracts_literal():
-    header = f'#define SFP_ALPHABET "{EXPECTED_ALPHABET}"\n'
-    assert build_assets.parse_header_alphabet(header) == EXPECTED_ALPHABET
-
-
-def test_parse_header_alphabet_raises_when_missing():
-    with pytest.raises(ValueError):
-        build_assets.parse_header_alphabet("#define SOMETHING_ELSE 1\n")
-
-
-def test_parse_js_calibration_letters_joins_chars():
-    js = "const CALIBRATION_LETTERS = [' ','A','B','$','&','#','?','!'];"
-    assert build_assets.parse_js_calibration_letters(js) == " AB$&#?!"
-
-
-def test_parse_js_calibration_letters_raises_when_missing():
-    with pytest.raises(ValueError):
-        build_assets.parse_js_calibration_letters("const OTHER = [1,2,3];")
-
-
-def _make_tree(tmp_path, alphabet_header: str, alphabet_js: str) -> pathlib.Path:
-    """Recreate the firmware/v2/shared + firmware/v2/Master layout the
-    verify step resolves against (shared_protocol_header)."""
-    shared = tmp_path / "v2" / "shared"
-    shared.mkdir(parents=True)
-    (shared / "SplitFlapProtocol.h").write_text(
-        f'#define SFP_ALPHABET "{alphabet_header}"\n', encoding="utf-8"
-    )
-    project = tmp_path / "v2" / "Master"
-    (project / "data").mkdir(parents=True)
-    js_array = ",".join(f"'{c}'" for c in alphabet_js)
-    (project / "data" / "script.js").write_text(
-        f"const CALIBRATION_LETTERS = [{js_array}];\n", encoding="utf-8"
-    )
-    return project
-
-
-def test_shared_protocol_header_points_into_v2_shared(tmp_path):
-    project = tmp_path / "v2" / "Master"
-    header = build_assets.shared_protocol_header(project)
-    assert header == tmp_path / "v2" / "shared" / "SplitFlapProtocol.h"
-
-
-def test_verify_js_alphabet_passes_on_match(tmp_path):
-    project = _make_tree(tmp_path, EXPECTED_ALPHABET, EXPECTED_ALPHABET)
-    build_assets.verify_js_alphabet(project)  # must not raise
-
-
-def test_verify_js_alphabet_fails_on_drift(tmp_path):
-    # Drop the trailing '!' so the JS drifts from the header.
-    project = _make_tree(tmp_path, EXPECTED_ALPHABET, EXPECTED_ALPHABET[:-1])
-    with pytest.raises(ValueError, match="drift"):
-        build_assets.verify_js_alphabet(project)
-
-
-def test_real_tree_alphabet_is_in_sync():
-    # The v2 data/ is a copy of v1's UI and both masters speak the same
-    # protocol header — run the actual gate against the working tree so a
-    # drifted copy fails in pytest before it fails the firmware build.
-    project = pathlib.Path(build_assets.__file__).resolve().parent
-    build_assets.verify_js_alphabet(project)
 
 
 # --- unit-firmware bundling (#205) -----------------------------------------

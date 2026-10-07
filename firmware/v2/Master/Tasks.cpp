@@ -82,7 +82,7 @@ static constexpr uint32_t DISPLAY_TASK_STACK = 16384;
 // 2048 leaves only ~124 B HWM on real hardware — newlib's first
 // tzset/localtime parse of the POSIX TZ string runs deep in the ticker.
 // 4096 fared little better: 364 B HWM on BOTH wall masters (#434, first
-// /system/stats hwm readout — deterministic, not noise), one deeper library
+// the board's stats hwm readout — deterministic, not noise), one deeper library
 // path away from the #414 canary-panic class. 8192 matches the other domain tasks;
 // static BSS, RAM is plentiful.
 static constexpr uint32_t CLOCK_TASK_STACK = 8192;
@@ -109,7 +109,7 @@ static constexpr uint32_t WORKER_TASK_STACK = 16384;
 // row's service with its copy of the display snapshot; the message structs
 // and the read buffer are static, not on this stack. Measured peak 4.2 KB
 // with a row connected and the wall showing the clock (#566): sized for the
-// >=50% margin of #480. /system/stats hwm.link is the evidence.
+// >=50% margin of #480. hwm.link in the board's stats is the evidence.
 static constexpr uint32_t LINK_TASK_STACK = 12288;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
@@ -209,8 +209,7 @@ static void netTaskMain(void* arg) {
     wifiServiceTick();
     crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_WEB_LOOP);
     webEndpointsLoop(*ctx->settings, *ctx->store);
-    webDisplayEventsTick();  // #251: SSE push on display text change
-    webStreamTick();         // #572: the same for /api/v2/stream
+    webStreamTick();  // pushes what changed to /api/v2/stream
     statusLedTick();
     systemStatsTick();  // #245/#251: self-throttled, 1 s fast + 5 s ring
     odometerLogTick();  // #465: self-throttled odometer historian append

@@ -1,8 +1,8 @@
 #pragma once
-// SystemStats.h — the System tab's sampler service (#245). netTask ticks
+// SystemStats.h — the board page's sampler service (#245). netTask ticks
 // the sampler (self-throttled to SYSTEM_STATS_FAST_INTERVAL_S; the history
 // ring decimates back to SYSTEM_STATS_INTERVAL_S, #251); sampler state
-// lives behind a mutex because GET /system/stats renders from the
+// lives behind a mutex because GET /api/v2/board renders from the
 // async_tcp task. Pure intake/ring/JSON logic in SystemStatsPolicy.h
 // (natively tested).
 
@@ -19,7 +19,3 @@ void systemStatsTick();
 // Any task (async web handler): renders current + history JSON into buf.
 // Returns the would-be length like snprintf; callers reject >= cap.
 size_t systemStatsJson(char* buf, size_t cap);
-
-// Renders just the current-vitals "now" object (no history) for the /status
-// one-shot aggregate (#307). Same would-be-length contract.
-size_t systemStatsNowJson(char* buf, size_t cap);
