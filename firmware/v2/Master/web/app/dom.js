@@ -42,3 +42,25 @@ export function itemList(items) {
         item.why && h('div', { class: 'd' }, item.why)),
       item.pill)));
 }
+
+// A row of buttons of which one is pressed. `options` is [[value, label]];
+// `onPick(value)` runs on a press of another one. set(value) marks the
+// pressed one from outside.
+export function segmented(label, options, onPick) {
+  const buttons = options.map(([value, text]) =>
+    h('button', { type: 'button', 'aria-pressed': 'false', onclick: () => onPick(value) }, text));
+  const root = h('div', { class: 'seg', role: 'group', 'aria-label': label }, buttons);
+  root.set = (value) => buttons.forEach((button, i) =>
+    button.setAttribute('aria-pressed', String(options[i][0] === value)));
+  return root;
+}
+
+// A line that says how the last thing asked for went.
+export function statusLine() {
+  const root = h('p', { class: 'status small', role: 'status' });
+  root.say = (text, bad) => {
+    root.textContent = text;
+    root.classList.toggle('bad', !!bad);
+  };
+  return root;
+}

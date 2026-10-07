@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import { ALPHABET } from '../gen/constants.js';
 import { dur, volt, listOf, flapName, plural } from '../model/format.js';
 import { unitVerdictText, boardVerdictText, wallVerdictText, letterClass } from '../model/verdict.js';
-import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId } from '../model/wall.js';
+import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId, noFlapFor,
+         composeLines, composeText } from '../model/wall.js';
 
 const FIELDS = ['address', 'level', 'reason', 'a', 'b', 'state', 'rev', 'firmware',
                 'bootloader', 'supplyMv', 'supplyMinMv', 'shows', 'turns', 'offset'];
@@ -17,7 +18,7 @@ const WALL = {
   verdict: 'fault',
   mode: 'clock',
   rows: [
-    { id: '', own: true, row: 1, col: 0, width: 4, text: 'ab d', showing: 'ab d',
+    { id: '', own: true, row: 1, col: 0, width: 4, text: 'ab d', showing: 'zzzz',
       verdict: { level: 'fault', reason: 'units-fault', a: 1, b: 4 }, unitLevels: 'wnfn' },
     { id: 'wall-row', own: false, row: 0, col: 1, width: 3, text: '12:', rev: 'aaa1111',
       verdict: { level: 'fault', reason: 'bus-dead', a: 6, b: 0 }, unitLevels: 'f',
@@ -146,4 +147,21 @@ test('a board line carries its verdict and what it runs', () => {
   assert.equal(line.verdict, 'Unit bus dead');
   assert.match(line.why, /Firmware aaa1111 WiFi -57 dBm$/);
   assert.equal(boardLine(WALL, layout, WALL.rows[0]).kind, 'master');
+});
+
+test('the characters the drum has no flap for are named once each', () => {
+  assert.deepEqual(noFlapFor('Hello, wörld, ok', ALPHABET), [',', 'Ö']);
+  assert.deepEqual(noFlapFor('dinner 18:30!', ALPHABET), []);
+});
+
+test('the compose form has a line a grid row, as wide as the wall is there', () => {
+  assert.deepEqual(composeLines(wallLayout(WALL)),
+                   [{ title: 'Row 1', width: 4 }, { title: 'Row 2', width: 4 }]);
+});
+
+test('the text sent is a line a row, without empty lines at the end', () => {
+  assert.equal(composeText(['12:00', 'DINNER']), '12:00\nDINNER');
+  assert.equal(composeText(['', 'DINNER']), '\nDINNER');
+  assert.equal(composeText(['HELLO', ' ']), 'HELLO');
+  assert.equal(composeText(['', '']), '');
 });

@@ -2,6 +2,7 @@
 bundler that joins web/ into the one document the master serves."""
 import gzip
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -50,10 +51,7 @@ def test_a_module_comes_after_what_it_imports():
     web_bundle.write_constants(PROJECT)
     for at, name in enumerate(web_bundle.MODULES):
         source = (web / name).read_text(encoding="utf-8")
-        for line in source.splitlines():
-            if not line.startswith("import "):
-                continue
-            target = line.split("from")[1].strip(" ;'\"")
+        for target in re.findall(r"^import\s[^;]*?from\s+'([^']+)';", source, re.MULTILINE):
             wanted = (web / name).parent.joinpath(target).resolve().relative_to(web).as_posix()
             assert wanted in web_bundle.MODULES[:at], f"{name} imports {wanted} before it is joined"
 
@@ -89,3 +87,29 @@ def test_the_page_never_parses_a_string_as_html():
         source = path.read_text(encoding="utf-8")
         for banned in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
             assert banned not in source, f"{path.name} uses {banned}"
+
+
+# --- the preview server -------------------------------------------------------
+
+def _dev_server():
+    sys.path.insert(0, str(PROJECT / "web"))
+    import dev_server
+    return dev_server
+
+
+@pytest.mark.parametrize("command, headers, read_only, served", [
+    ("GET", {"Host": "127.0.0.1:8088"}, False, True),
+    ("GET", {"Host": "localhost:8088"}, True, True),
+    # A name that was made to resolve to this machine.
+    ("GET", {"Host": "evil.example:8088"}, False, False),
+    ("POST", {"Host": "127.0.0.1:8088", "Origin": "http://127.0.0.1:8088"}, False, True),
+    # Another page open in the same browser.
+    ("POST", {"Host": "127.0.0.1:8088", "Origin": "https://evil.example"}, False, False),
+    ("POST", {"Host": "127.0.0.1:8088"}, False, False),
+    ("PUT", {"Host": "127.0.0.1:8088", "Origin": "http://127.0.0.1:9999"}, False, False),
+    ("POST", {"Host": "127.0.0.1:8088", "Origin": "http://127.0.0.1:8088"}, True, False),
+])
+def test_the_preview_server_passes_on_only_its_own_pages_requests(command, headers, read_only,
+                                                                  served):
+    why = _dev_server().refusal(command, headers, 8088, read_only)
+    assert (why is None) == served, why

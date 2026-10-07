@@ -22,3 +22,23 @@ export function followStream(onTopic, onLink) {
   source.onerror = () => onLink(false);
   return source;
 }
+
+// POST /api/v2/action. Resolves with the master's answer ({done} or {op});
+// rejects with the master's own words when it refuses.
+export async function action(name, target, args) {
+  const body = { name };
+  if (target) body.target = target;
+  if (args) body.args = args;
+  let reply;
+  try {
+    reply = await fetch('/api/v2/action', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+  } catch (error) {
+    throw new Error('The master did not answer.');
+  }
+  let answer = {};
+  try { answer = await reply.json(); } catch (error) { /* an answer without a body */ }
+  if (!reply.ok) throw new Error(answer.error || `The master refused (${reply.status}).`);
+  return answer;
+}

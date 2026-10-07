@@ -13,7 +13,9 @@ export function boardId(wall, row) {
 // level. `cols` is the widest row.
 export function wallLayout(wall) {
   const boards = wall.rows.slice().sort((x, y) => x.row - y.row || x.col - y.col).map((row) => {
-    const text = (row.own && row.showing != null ? row.showing : row.text || '').toUpperCase();
+    // The text the row was told to show: it changes with the stream. What the
+    // master's own flaps stand at meanwhile ("showing") changes without an event.
+    const text = (row.text || '').toUpperCase();
     const levels = row.unitLevels || '';
     const cells = [];
     for (let i = 0; i < row.width; i++) {
@@ -118,4 +120,31 @@ export function boardLine(wall, layout, row) {
   return { id, title: boardTitle(layout, id), kind: row.own ? 'master' : 'row board',
            cls: text.cls, verdict: text.title, why: [text.why].concat(facts).filter(Boolean).join(' '),
            href: '#board/' + id };
+}
+
+// The characters of `text` the drum has no flap for, each once.
+export function noFlapFor(text, alphabet) {
+  const missing = [];
+  for (const ch of text.toUpperCase()) {
+    if (!alphabet.includes(ch) && !missing.includes(ch)) missing.push(ch);
+  }
+  return missing;
+}
+
+// What the compose form needs to know of the wall: a line a grid row, as
+// wide as the wall is there. Compared as text to see whether the form must
+// be built again.
+export function composeLines(layout) {
+  return layout.lines.map((line) => ({
+    title: line.title,
+    width: Math.max(...line.boards.map((b) => b.col + b.cells.length)),
+  }));
+}
+
+// The show action's text: one line a row, top to bottom, without the empty
+// lines at the end.
+export function composeText(values) {
+  const lines = values.slice();
+  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+  return lines.join('\n');
 }

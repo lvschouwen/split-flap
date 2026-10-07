@@ -6,8 +6,12 @@ its requests go to the real master.
 
     python3 web/dev_server.py 192.168.15.88 [--port 8088] [--read-only]
 
-The master takes changing requests from its own page only, so the Origin
-header is not passed on; --read-only refuses every changing request here.
+The master takes changing requests from its own page only, so this server
+applies that rule in its place before passing a request on without its
+Origin: a changing request must come from the page served here, and every
+request must be addressed to this server by its loopback name (a web page
+elsewhere cannot use it to reach the master). --read-only refuses every
+changing request.
 """
 import argparse
 import http.client
@@ -20,7 +24,25 @@ sys.path.insert(0, str(PROJECT))
 import web_bundle  # noqa: E402
 
 
-def handler(master, read_only):
+def own_hosts(port):
+    return {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+
+def refusal(command, headers, port, read_only):
+    """Why this request is not served, or None."""
+    hosts = own_hosts(port)
+    if headers.get("Host") not in hosts:
+        return "this server answers to its loopback name only"
+    if command == "GET":
+        return None
+    if read_only:
+        return "the dev server was started --read-only"
+    if headers.get("Origin") not in {"http://" + host for host in hosts}:
+        return "changing requests are taken from the page served here only"
+    return None
+
+
+def handler(master, read_only, port):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -37,9 +59,6 @@ def handler(master, read_only):
             self.wfile.write(body)
 
         def relay(self):
-            if read_only and self.command != "GET":
-                self.send_error(403, "the dev server was started --read-only")
-                return
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length) if length else None
             headers = {k: v for k, v in self.headers.items()
@@ -65,13 +84,16 @@ def handler(master, read_only):
                 upstream.close()
                 self.close_connection = True
 
-        def do_GET(self):
-            if self.path in ("/", "/console"):
+        def serve(self):
+            why = refusal(self.command, self.headers, port, read_only)
+            if why:
+                self.send_error(403, why)
+            elif self.command == "GET" and self.path in ("/", "/console"):
                 self.page()
             else:
                 self.relay()
 
-        do_POST = do_PUT = relay
+        do_GET = do_POST = do_PUT = serve
 
         def log_message(self, *args):
             pass
@@ -85,7 +107,7 @@ def main():
     ap.add_argument("--port", type=int, default=8088)
     ap.add_argument("--read-only", action="store_true")
     args = ap.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler(args.master, args.read_only))
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler(args.master, args.read_only, args.port))
     print(f"http://127.0.0.1:{args.port}/ -> {args.master}")
     server.serve_forever()
 
