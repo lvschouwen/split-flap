@@ -8,8 +8,9 @@ import { wallLayout, attentionList, notesList, boardLine, noFlapFor, composeLine
 import { wallVerdictText } from '../model/verdict.js';
 import { plural } from '../model/format.js';
 
-// The wall as flaps. A row's name opens its board, a flap its unit.
-export function wallPicture(layout) {
+// The wall as flaps. A row's name opens its board, a flap its unit; with
+// `flap(board, cell, attrs)` the caller builds each flap itself.
+export function wallPicture(layout, flap) {
   return h('div', { class: 'wall' }, layout.lines.map((line) =>
     h('div', {},
       h('div', { class: 'rowlabel' }, line.boards.map((board, i) =>
@@ -17,11 +18,14 @@ export function wallPicture(layout) {
           line.boards.length === 1 ? line.title : `${line.title}, board ${i + 1}`)),
         h('span', {}, plural(line.boards.reduce((n, b) => n + b.cells.length, 0), 'unit'))),
       h('div', { class: 'wallrow', style: `--cols:${layout.cols}` }, line.boards.map((board) =>
-        board.cells.map((cell, i) =>
-          h('a', { class: 'flap ' + cell.cls, href: `#unit/${board.id}/${cell.unit}`,
-                   style: i === 0 ? `grid-column-start:${board.col + 1}` : null,
-                   'aria-label': `${line.title} unit ${cell.unit}` },
-            h('span', {}, cell.cls === 'bad' ? '' : cell.ch))))))));
+        board.cells.map((cell, i) => {
+          const attrs = { class: 'flap ' + cell.cls,
+                          style: i === 0 ? `grid-column-start:${board.col + 1}` : null,
+                          'aria-label': `${line.title} unit ${cell.unit}` };
+          return flap ? flap(board, cell, attrs)
+            : h('a', { ...attrs, href: `#unit/${board.id}/${cell.unit}` },
+                h('span', {}, cell.cls === 'bad' ? '' : cell.ch));
+        }))))));
 }
 
 // state.show is the stream's "wall" topic: {mode, quiet, rows}.
@@ -90,7 +94,8 @@ export function wallView(app) {
   const attention = h('div', { class: 'section' });
   const boards = h('div', { class: 'section' });
   const notes = h('div', { class: 'section' });
-  const root = h('div', { class: 'view' }, head, picture, compose, attention, boards, notes);
+  const root = h('div', { class: 'view' }, head, picture, compose, attention, boards, notes,
+    h('div', { class: 'rowwrap' }, h('a', { class: 'btn', href: '#calibrate' }, 'Calibrate the wall')));
 
   function refresh() {
     const wall = app.state.wall;

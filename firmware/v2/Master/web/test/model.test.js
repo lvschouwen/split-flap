@@ -13,6 +13,7 @@ import { md5Hex } from '../model/md5.js';
 import { whenText, eventText, eventBoardId } from '../model/events.js';
 import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId, noFlapFor,
          composeLines, composeText } from '../model/wall.js';
+import { testText, calibrationPlan } from '../model/calibrate.js';
 import { rowsDraft, arrangeProblem, arrangeArgs, zoneFor, brokerText, foundLine } from '../model/settings.js';
 
 const FIELDS = ['address', 'level', 'reason', 'a', 'b', 'state', 'rev', 'firmware',
@@ -484,4 +485,39 @@ test('a row board that was found is a line with what it said about itself', () =
   assert.deepEqual(foundLine({ id: 'split-flap-aaaaaa', address: '192.168.1.51', rev: 'de38289', units: 5 }),
     { title: 'split-flap-aaaaaa', why: 'firmware de38289, at 192.168.1.51' });
   assert.equal(foundLine({ id: 'x', address: '192.168.1.51', rev: '', units: 0 }).why, 'at 192.168.1.51');
+});
+
+test('the test letter fills every row of the wall, as wide as the wall is there', () => {
+  assert.equal(testText(composeLines(wallLayout(WALL)), 'A'), 'AAAA\nAAAA');
+  assert.equal(testText([{ title: 'Row 1', width: 2 }], '8'), '88');
+});
+
+test('every marked unit gets the offset that turns what it shows into the test letter', () => {
+  const marks = [
+    { id: 'wall-row', title: 'Row 1', unit: 2, shows: 2, offset: 70 },
+    { id: 'wall-master', title: 'Row 2', unit: 5, shows: 44, offset: 0 },
+    { id: 'wall-row', title: 'Row 1', unit: 3, shows: 3, offset: 10 },
+  ];
+  // Should show A (place 1). 2038 steps a turn, 45 flaps.
+  assert.deepEqual(calibrationPlan(marks, 1, 45, 2038, 2038), {
+    sets: [{ id: 'wall-row', title: 'Row 1', unit: 2, offset: 25 },
+           { id: 'wall-master', title: 'Row 2', unit: 5, offset: 91 },
+           { id: 'wall-row', title: 'Row 1', unit: 3, offset: -81 }],
+    problems: [],
+  });
+});
+
+test('a marked unit that cannot be corrected is named with the reason, the others go on', () => {
+  const marks = [
+    { id: 'a', title: 'Row 1', unit: 1, shows: 1, offset: 5 },
+    { id: 'a', title: 'Row 1', unit: 2, shows: 2, offset: null },
+    { id: 'a', title: 'Row 1', unit: 3, shows: 23, offset: -1900 },
+    { id: 'a', title: 'Row 1', unit: 4, shows: 0, offset: 0 },
+  ];
+  assert.deepEqual(calibrationPlan(marks, 1, 45, 2038, 2038), {
+    sets: [{ id: 'a', title: 'Row 1', unit: 4, offset: 45 }],
+    problems: ['Row 1, unit 1 shows the test letter already.',
+               'Row 1, unit 2: its offset could not be read.',
+               'Row 1, unit 3: That needs an offset of -2896 steps; a unit takes -2038 to 2038.'],
+  });
 });

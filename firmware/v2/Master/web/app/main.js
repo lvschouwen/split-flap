@@ -7,6 +7,7 @@ import { unitView } from './view_unit.js';
 import { firmwareView } from './view_firmware.js';
 import { historyView, logView } from './view_history.js';
 import { settingsView } from './view_settings.js';
+import { calibrateView } from './view_calibrate.js';
 import { jobsChanged } from './jobs.js';
 import { boardId } from '../model/wall.js';
 
@@ -19,7 +20,8 @@ const app = {
 };
 
 const VIEWS = { wall: wallView, board: boardView, unit: unitView, firmware: firmwareView,
-                history: historyView, log: logView, settings: settingsView };
+                history: historyView, log: logView, settings: settingsView,
+                calibrate: calibrateView };
 
 function route() {
   const parts = (location.hash || '#wall').slice(1).split('/').map(decodeURIComponent);

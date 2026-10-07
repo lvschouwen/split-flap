@@ -20,6 +20,7 @@ MODULES = [
     "model/wall.js",
     "model/board.js",
     "model/unit.js",
+    "model/calibrate.js",
     "model/firmware.js",
     "model/md5.js",
     "model/events.js",
@@ -33,6 +34,7 @@ MODULES = [
     "app/view_firmware.js",
     "app/view_history.js",
     "app/view_settings.js",
+    "app/view_calibrate.js",
     "app/main.js",
 ]
 
