@@ -147,12 +147,12 @@ def test_the_lan_origin_rule_exists_once():
     fourth private-IPv4 parser for the SSRF guard)."""
     assert not _offenders(r"\boctets\[|startsWith\(\"http://\"\)|"
                           r"inline bool \w+(?:PrivateIpv4|OriginAllowed|"
-                          r"CsrfRejectPost|IsLanTarget)\b"), (
+                          r"CsrfReject\w*|SameOrigin|IsLanTarget)\b"), (
         "LAN host/origin checks and the CSRF reject live in shared/LanOrigin.h")
     users = {"Master/WebEndpoints.cpp",
              "FollowerEsp01/FollowerWeb.cpp", "Rescue/RescueWeb.cpp"}
     for path in users:
-        assert "lanCsrfRejectPost(" in (V2 / path).read_text(), path
+        assert "lanCsrfReject(" in (V2 / path).read_text(), path
 
 
 def test_the_follower_reprobes_a_unit_whose_reads_it_invalidated():

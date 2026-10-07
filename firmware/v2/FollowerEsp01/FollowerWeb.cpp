@@ -46,13 +46,13 @@ uint32_t appAreaBytes() { return FS_start - 0x40200000; }
 // --- helpers ------------------------------------------------------------------------
 
 // A website must not be able to drive this board through the owner's browser:
-// a POST whose Origin is not a LAN page is refused (403, answered here). The
-// master and ota-flash.sh send no Origin and pass.
+// this board serves no page, so a POST with an Origin is refused (403,
+// answered here). The master and ota-flash.sh send no Origin and pass.
 static bool followerRejectCsrf(AsyncWebServerRequest* request) {
   bool hasOrigin = request->hasHeader("Origin");
   String origin = hasOrigin ? request->header("Origin") : String();
-  if (lanCsrfRejectPost(request->method() == HTTP_POST, hasOrigin,
-                             origin)) {
+  if (lanCsrfReject(request->method() == HTTP_POST, hasOrigin, origin,
+                    request->host())) {
     request->send(403, "text/plain",
                   F("Cross-origin POST refused (CSRF guard)"));
     return true;
@@ -161,8 +161,9 @@ static void registerMasterFirmwareEndpoint(AsyncWebServer& server) {
                          ? request->getParam("md5")->value()
                          : String();
         OtaGate gate = otaUploadGate(
-            lanCsrfRejectPost(true, hasOrigin,
-                              hasOrigin ? request->header("Origin") : String()),
+            lanCsrfReject(true, hasOrigin,
+                          hasOrigin ? request->header("Origin") : String(),
+                          request->host()),
             unitUpdateQueuedOrRunning(), md5);
         otaRejection.clear();
         if (gate != OtaGate::Pass) {

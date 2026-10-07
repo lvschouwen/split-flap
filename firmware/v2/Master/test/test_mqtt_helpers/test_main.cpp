@@ -76,6 +76,21 @@ static void test_parse_malformed_json_returns_false() {
   TEST_ASSERT_FALSE(parseMqttTextPayload(String("{\"text\":\"UNTERMINATED}"), text, dwell)); // unterminated string
   TEST_ASSERT_FALSE(parseMqttTextPayload(String("{\"text\":42}"), text, dwell));          // non-string text
 }
+static void test_parse_unicode_escape_is_decoded() {
+  String text; long dwell = -1;
+  // Home Assistant's JSON encoder writes every non-ASCII character this way.
+  TEST_ASSERT_TRUE(parseMqttTextPayload(String("{\"text\":\"CAF\\u00c9 \\u0041\"}"), text, dwell));
+  TEST_ASSERT_EQUAL_STRING("CAF\xC3\x89 A", text.c_str());
+}
+static void test_parse_reads_the_objects_own_members_only() {
+  String text = "x"; long dwell = -1;
+  // A "text" inside another member is not the text to show.
+  TEST_ASSERT_FALSE(parseMqttTextPayload(String("{\"extra\":{\"text\":\"INNER\"}}"), text, dwell));
+  TEST_ASSERT_TRUE(parseMqttTextPayload(
+      String("{\"extra\":{\"text\":\"INNER\",\"dwell\":900},\"text\":\"OUTER\"}"), text, dwell));
+  TEST_ASSERT_EQUAL_STRING("OUTER", text.c_str());
+  TEST_ASSERT_EQUAL(MQTT_TEXT_DWELL_S, dwell);
+}
 static void test_parse_empty_text_is_valid() {
   String text = "x"; long dwell = -1;
   TEST_ASSERT_TRUE(parseMqttTextPayload(String("{\"text\":\"\"}"), text, dwell));
@@ -584,6 +599,8 @@ int main(int, char**) {
   RUN_TEST(test_parse_escaped_quote_and_backslash);
   RUN_TEST(test_parse_escaped_newline);
   RUN_TEST(test_parse_malformed_json_returns_false);
+  RUN_TEST(test_parse_unicode_escape_is_decoded);
+  RUN_TEST(test_parse_reads_the_objects_own_members_only);
   RUN_TEST(test_parse_empty_text_is_valid);
   RUN_TEST(test_notification_inactive_by_default);
   RUN_TEST(test_notification_active_until_deadline);

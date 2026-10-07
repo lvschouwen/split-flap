@@ -28,20 +28,43 @@ static void test_foreign_origins_rejected() {
   TEST_ASSERT_FALSE(lanOriginAllowed("null"));
 }
 
-static void test_csrf_reject_post() {
-  // No Origin (curl / ota-flash.sh / same-origin fetch) always passes.
-  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, false, ""));
-  // LAN origin passes; foreign origin on a POST is refused.
-  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, true, "http://192.168.4.1"));
-  TEST_ASSERT_TRUE(lanCsrfRejectPost(true, true, "https://evil.example.com"));
-  // Non-POST is never the CSRF gate's business.
-  TEST_ASSERT_FALSE(lanCsrfRejectPost(false, true, "https://evil.example.com"));
+static void test_same_origin() {
+  TEST_ASSERT_TRUE(lanSameOrigin("http://192.168.15.90", "192.168.15.90"));
+  TEST_ASSERT_TRUE(lanSameOrigin("http://split-flap.local", "Split-Flap.LOCAL"));
+  TEST_ASSERT_TRUE(lanSameOrigin("http://10.1.2.3:8080", "10.1.2.3:8080"));
+  // The default port may be written out on either side.
+  TEST_ASSERT_TRUE(lanSameOrigin("http://192.168.4.1:80", "192.168.4.1"));
+  TEST_ASSERT_TRUE(lanSameOrigin("http://192.168.4.1", "192.168.4.1:80"));
+  // Another board, another port, a longer or shorter name: not this page.
+  TEST_ASSERT_FALSE(lanSameOrigin("http://192.168.15.91", "192.168.15.90"));
+  TEST_ASSERT_FALSE(lanSameOrigin("http://10.1.2.3:8080", "10.1.2.3"));
+  TEST_ASSERT_FALSE(lanSameOrigin("http://192.168.15.9", "192.168.15.90"));
+  TEST_ASSERT_FALSE(lanSameOrigin("http://192.168.15.90", ""));
+  TEST_ASSERT_FALSE(lanSameOrigin("null", "null"));
+  TEST_ASSERT_FALSE(lanSameOrigin("https://192.168.15.90", "192.168.15.90"));
+}
+
+static void test_csrf_reject() {
+  // No Origin (curl / ota-flash.sh / the master) always passes.
+  TEST_ASSERT_FALSE(lanCsrfReject(true, false, "", "192.168.4.1"));
+  // The board's own page passes.
+  TEST_ASSERT_FALSE(lanCsrfReject(true, true, "http://192.168.4.1", "192.168.4.1"));
+  // A website is refused, and so is a page served by another LAN host.
+  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "https://evil.example.com", "192.168.4.1"));
+  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "http://192.168.15.7", "192.168.4.1"));
+  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "http://192.168.4.1", ""));
+  // A public name pointed at the board's address (DNS rebinding) is its own
+  // origin, but not a LAN one.
+  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "http://evil.example.com", "evil.example.com"));
+  // A request that changes nothing is never the gate's business.
+  TEST_ASSERT_FALSE(lanCsrfReject(false, true, "https://evil.example.com", "192.168.4.1"));
 }
 
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_lan_origins_allowed);
   RUN_TEST(test_foreign_origins_rejected);
-  RUN_TEST(test_csrf_reject_post);
+  RUN_TEST(test_same_origin);
+  RUN_TEST(test_csrf_reject);
   return UNITY_END();
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 
 #include "UnitHealth.h"  // UnitFacts/UnitStatus for unitFleetRebootTotal (#368)
 
@@ -34,56 +35,23 @@ inline long clampDwellSeconds(long dwellSeconds) {
   return dwellSeconds;
 }
 
-// Minimal parser for {"text":"…","dwell":N}. Hand-rolled on purpose — the
-// design doc rejects ArduinoJson (~30 KB flash) for a two-field object.
-// Returns true iff `payload` is a JSON object with a string "text" member;
-// textOut/dwellSecondsOut are written only on success. "dwell" is optional
-// (default MQTT_TEXT_DWELL_S) and clamped. Escapes: \" \\ \n are decoded;
-// any other \x yields the literal x. On false the caller treats the whole
-// payload as plain text.
+// Reads {"text":"…","dwell":N}. Returns true iff `payload` is a JSON object
+// with a string "text" member of its own; textOut/dwellSecondsOut are written
+// only on success. "dwell" is optional (default MQTT_TEXT_DWELL_S) and
+// clamped; a dwell that is not a positive number counts as absent. On false
+// the caller treats the whole payload as plain text.
 inline bool parseMqttTextPayload(const String& payload, String& textOut, long& dwellSecondsOut) {
-  String trimmed = payload;
-  trimmed.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return false;
+  JsonDocument doc;
+  if (deserializeJson(doc, payload.c_str(), payload.length())) return false;
+  JsonObjectConst object = doc.as<JsonObjectConst>();
+  if (object.isNull()) return false;
+  JsonVariantConst text = object["text"];
+  if (!text.is<const char*>()) return false;
 
-  int keyIndex = trimmed.indexOf("\"text\"");
-  if (keyIndex < 0) return false;
-  int colonIndex = trimmed.indexOf(':', keyIndex + 6);
-  if (colonIndex < 0) return false;
-  unsigned int cursor = colonIndex + 1;
-  while (cursor < trimmed.length() && (trimmed[cursor] == ' ' || trimmed[cursor] == '\t')) cursor++;
-  if (cursor >= trimmed.length() || trimmed[cursor] != '"') return false;
+  long dwellSeconds = object["dwell"] | 0L;
+  if (dwellSeconds <= 0) dwellSeconds = MQTT_TEXT_DWELL_S;
 
-  String text;
-  // One-shot reservation: worst case the value runs to the end of the
-  // payload. Avoids per-character realloc churn on the ~42 KB ESP-01 heap.
-  text.reserve(trimmed.length() - cursor);
-  bool closed = false;
-  for (unsigned int i = cursor + 1; i < trimmed.length(); i++) {
-    char c = trimmed[i];
-    if (c == '\\' && i + 1 < trimmed.length()) {
-      char next = trimmed[++i];
-      if (next == 'n') text += '\n';
-      else text += next;
-      continue;
-    }
-    if (c == '"') { closed = true; break; }
-    text += c;
-  }
-  if (!closed) return false;
-
-  long dwellSeconds = MQTT_TEXT_DWELL_S;
-  int dwellIndex = trimmed.indexOf("\"dwell\"");
-  if (dwellIndex >= 0) {
-    int dwellColon = trimmed.indexOf(':', dwellIndex + 7);
-    if (dwellColon >= 0) {
-      // toInt() skips leading whitespace and stops at the first non-digit.
-      long parsed = trimmed.substring(dwellColon + 1).toInt();
-      if (parsed > 0) dwellSeconds = parsed;
-    }
-  }
-
-  textOut = text;
+  textOut = text.as<const char*>();
   dwellSecondsOut = clampDwellSeconds(dwellSeconds);
   return true;
 }

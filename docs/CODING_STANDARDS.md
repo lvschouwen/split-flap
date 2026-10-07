@@ -242,8 +242,8 @@ from "our own" peers (a peer may be compromised or a different firmware rev):
 
 ### 5.3 Browser-origin defense (CSRF/XSS)
 
-- Every mutating HTTP route **MUST** call the CSRF gate: non-LAN-`Origin` POSTs are 403'd
-  (`lanCsrfRejectPost`, shared `LanOrigin.h`); upload routes that write flash gate
+- Every mutating HTTP route **MUST** call the CSRF gate: a changing request whose `Origin` is not
+  the board's own LAN page is 403'd (`lanCsrfReject`, shared `LanOrigin.h`); upload routes that write flash gate
   **inline at `index == 0`** in `onUpload` (`webUploadCsrfRejected`).
 - Adding a route means adding it to the CSRF audit surface — in **both** header copies where the
   follower carries the endpoint.

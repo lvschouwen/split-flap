@@ -46,7 +46,7 @@ def test_every_post_route_refuses_a_website():
     pair = web[web.index('server.on("/pair"'):]
     assert pair.index("followerRejectCsrf(request)") < pair.index("clusterPair(")
     upload = web[web.index('server.on("/firmware/master"'):web.index("void webEndpointsInit(")]
-    assert upload.index("lanCsrfRejectPost(") < upload.index("Update.begin(")
+    assert upload.index("lanCsrfReject(") < upload.index("Update.begin(")
 
 
 def test_pairing_goes_through_the_policy_and_loop_writes_the_record():

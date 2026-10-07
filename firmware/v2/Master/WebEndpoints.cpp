@@ -33,7 +33,7 @@
 #include "FlashLog.h"
 #include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
-#include "LanOrigin.h"  // lanCsrfRejectPost
+#include "LanOrigin.h"  // lanCsrfReject
 #include "MqttService.h"
 #include "OtaService.h"
 #include "RebootCause.h"  // #432
@@ -109,24 +109,25 @@ const char* webResetReasonName(int reason) {
 // cross-site POST; the caller marks its own per-request rejection state.
 bool webUploadCsrfRejected(AsyncWebServerRequest* request) {
   bool hasOrigin = request->hasHeader("Origin");
-  return lanCsrfRejectPost(true, hasOrigin,
-                               hasOrigin ? request->header("Origin") : String());
+  return lanCsrfReject(true, hasOrigin,
+                       hasOrigin ? request->header("Origin") : String(),
+                       request->host());
 }
 
-// #313 CSRF gate: a mutating POST carrying a browser Origin that is not a LAN
-// pane is cross-site forgery — 403 BEFORE the handler runs, so the whole
-// class of mutating routes is covered without a per-route allowlist to
-// drift. curl sends no Origin and passes; the board's own page sends a LAN
-// origin and passes. No route answers another origin's read: the browser
-// talks to this board only.
+// #313 CSRF gate: a changing request carrying a browser Origin that is not
+// this board's own page is cross-site forgery — 403 BEFORE the handler runs,
+// so the whole class of changing routes is covered without a per-route
+// allowlist to drift. curl sends no Origin and passes. No route answers
+// another origin's read: the browser talks to this board only.
 static AsyncMiddlewareFunction csrfMiddleware(
     [](AsyncWebServerRequest* request, ArMiddlewareNext next) {
       bool hasOrigin = request->hasHeader("Origin");
       // Every method that changes something, not POST alone.
       const bool mutating = request->method() != HTTP_GET && request->method() != HTTP_HEAD &&
                             request->method() != HTTP_OPTIONS;
-      if (lanCsrfRejectPost(mutating, hasOrigin,
-                            hasOrigin ? request->header("Origin") : String())) {
+      if (lanCsrfReject(mutating, hasOrigin,
+                        hasOrigin ? request->header("Origin") : String(),
+                        request->host())) {
         request->send(403, "text/plain",
                       F("Cross-origin request refused (CSRF guard)"));
         return;  // handler chain stops — next() is never called

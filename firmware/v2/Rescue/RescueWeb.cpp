@@ -46,8 +46,9 @@ static uint32_t otaLastChunkMs = 0;
 // blind-flash firmware or force a reboot while rescue is STA-joined.
 static bool rescueUploadCsrfRejected(AsyncWebServerRequest* request) {
   bool hasOrigin = request->hasHeader("Origin");
-  return lanCsrfRejectPost(true, hasOrigin,
-                              hasOrigin ? request->header("Origin") : String());
+  return lanCsrfReject(true, hasOrigin,
+                       hasOrigin ? request->header("Origin") : String(),
+                       request->host());
 }
 
 static void stageReboot() {

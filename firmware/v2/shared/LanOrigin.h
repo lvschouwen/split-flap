@@ -2,8 +2,7 @@
 // LanOrigin.h — which hosts and browser origins count as "inside the LAN",
 // and the CSRF rule built on it. One definition for every board that serves
 // HTTP (Master, ESP-01 follower, Rescue): this is a security boundary, so a
-// fix must reach all of them. Each tree keeps only its own CORS path
-// allowlist. Natively tested by test_follower_json (FollowerEsp01) and
+// fix must reach all of them. Natively tested by test_follower_json (FollowerEsp01) and
 // test_rescue_cors (Rescue).
 
 #include <Arduino.h>
@@ -57,15 +56,33 @@ inline bool lanOriginAllowed(const String& origin) {
   return lanHostIsLocal(host);
 }
 
+// Host and port as a browser compares them: lower case, the default port
+// left out.
+inline String lanHostPort(const String& hostPort) {
+  String out = hostPort;
+  out.toLowerCase();
+  if (out.endsWith(":80")) out.remove(out.length() - 3);
+  return out;
+}
+
+// The Origin names the very host and port the request was sent to: the page
+// that sends it was served by this board.
+inline bool lanSameOrigin(const String& origin, const String& host) {
+  if (!origin.startsWith("http://") || host.length() == 0) return false;
+  return lanHostPort(origin.substring(7)) == lanHostPort(host);
+}
+
 // CSRF gate (#313). A CORS header only decorates a response — it never
-// blocks the request, so any web page a LAN user opened could drive a
-// mutating form-POST (multipart triggers no preflight) at a board. Browsers
-// attach `Origin` to every POST, so: a POST carrying an Origin that is NOT a
-// LAN pane is cross-site forgery and is refused before the handler runs.
-// Server-to-server traffic and curl send no Origin and pass; a board's own
-// LAN web UI sends a LAN origin and passes. Method-based, so every mutating
-// POST — present and future — is covered without a path allowlist to drift.
-inline bool lanCsrfRejectPost(bool isPost, bool hasOrigin,
-                              const String& origin) {
-  return isPost && hasOrigin && !lanOriginAllowed(origin);
+// blocks the request, so any page the owner's browser has open could drive a
+// changing request (a multipart POST triggers no preflight) at a board.
+// Browsers attach `Origin` to every such request, so: one whose Origin is
+// not this board's own page is refused before the handler runs. The origin
+// must also be a LAN one, or a public name pointed at the board's address
+// would count as its own page. Traffic between boards and curl send no
+// Origin and pass. Method-based, so every changing route — present and
+// future — is covered without a path allowlist to drift.
+inline bool lanCsrfReject(bool changes, bool hasOrigin, const String& origin,
+                          const String& host) {
+  if (!changes || !hasOrigin) return false;
+  return !(lanOriginAllowed(origin) && lanSameOrigin(origin, host));
 }

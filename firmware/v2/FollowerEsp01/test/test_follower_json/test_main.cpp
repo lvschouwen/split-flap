@@ -85,12 +85,13 @@ static void test_identity_fits_its_reserve() {
 
 static void test_post_from_a_website_is_refused() {
   // The rule POST /pair and the upload apply (shared LanOrigin.h): a POST
-  // with a public or https origin is a website driving the owner's browser.
-  TEST_ASSERT_TRUE(lanCsrfRejectPost(true, true, "http://evil.example.com"));
-  TEST_ASSERT_TRUE(lanCsrfRejectPost(true, true, "https://192.168.15.90"));
+  // with an Origin comes from a browser, and this board serves no page.
+  const String self = "192.168.15.121";
+  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "http://evil.example.com", self));
+  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "https://192.168.15.121", self));
+  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "http://192.168.15.90", self));
   // A master and ota-flash.sh send no Origin.
-  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, false, ""));
-  TEST_ASSERT_FALSE(lanCsrfRejectPost(true, true, "http://192.168.15.90"));
+  TEST_ASSERT_FALSE(lanCsrfReject(true, false, "", self));
 }
 
 int main(int, char**) {
