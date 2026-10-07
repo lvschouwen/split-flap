@@ -93,3 +93,8 @@ d360e2b da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
 # old cluster's shared headers were deleted (#566), none of which the unit
 # compiles.
 1e9dc29 da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
+#
+# 8631c22: the bundle rev since the old cluster went (#566); any unit a row
+# board or the master reflashed since reports it. Recorded when the origin
+# rule changed (#572), a shared header the unit does not compile.
+8631c22 da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
