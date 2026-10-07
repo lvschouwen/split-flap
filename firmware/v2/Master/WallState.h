@@ -44,6 +44,9 @@ struct WallRowLink {
 struct WallSnapshot {
   WallRowsTable rows;
   WallRowLink link[CLUSTER_MAX_MEMBERS];  // by index in `rows`
+  // millis() when this table became the live one (0 = at start). Every
+  // connection is dropped then, so a row's silence is counted from here.
+  uint32_t rowsSinceMs = 0;
   // The offer of the stored row image that is out now (WallUpdatePolicy.h).
   uint8_t updatePhase = 0;  // WallUpdatePhase
   int8_t updateRow = -1;    // index in `rows`, -1 = none
@@ -73,7 +76,9 @@ bool wallStateRowUnits(int row, UnitFactsDoc& out, uint32_t& atMs);
 
 // 0 when no job can be started now (WallOps.h).
 uint32_t wallOpBegin(const char* name, int row);
-void wallOpFinish(uint32_t id, bool ok, const char* detail);
+// `board`: the id of the board the job was about, for a job that is not tied
+// to a place in the rows table (a row being paired or released).
+void wallOpFinish(uint32_t id, bool ok, const char* detail, const char* board = nullptr);
 bool wallOpGet(uint32_t id, WallOp& out);
 // Link task: a row came back with a new boot id.
 void wallOpsFailRow(int row, const char* reason);

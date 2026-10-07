@@ -49,10 +49,12 @@ int postPair(const char* host, uint16_t port, char* body, size_t cap) {
   return status;
 }
 
-void finish(const WallRequest& request, bool ok, const String& detail) {
+// `board`: the row the job was about, when it has a name by then.
+void finish(const WallRequest& request, bool ok, const String& detail,
+            const char* board = nullptr) {
   SerialPrintf("wall: job %u %s: %s\n", (unsigned)request.opId, ok ? "done" : "failed",
                detail.c_str());
-  wallOpFinish(request.opId, ok, detail.c_str());
+  wallOpFinish(request.opId, ok, detail.c_str(), board);
 }
 
 void runPair(const WallRequest& request) {
@@ -92,8 +94,8 @@ void runPair(const WallRequest& request) {
   if (verdict.ok) verdict = wallStateSetRows(next);
   // On a refusal the row stays paired with this master but is in no table: it
   // frees itself by the lost-master rule (120 s).
-  if (!verdict.ok) return finish(request, false, verdict.message);
-  finish(request, true, id);
+  if (!verdict.ok) return finish(request, false, verdict.message, id);
+  finish(request, true, id, id);
 }
 
 void runRelease(const WallRequest& request) {
@@ -110,7 +112,7 @@ void runRelease(const WallRequest& request) {
   }
   wallStateReleaseAnswered();
   const ClusterVerdict stored = wallStateSetRows(next);
-  finish(request, stored.ok, stored.ok ? request.id : stored.message);
+  finish(request, stored.ok, stored.ok ? request.id : stored.message, request.id);
 }
 
 void runArrange(const WallRequest& request) {

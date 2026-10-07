@@ -272,11 +272,15 @@ bool wallUnitUpdateRunningOn(int row) {
   return held->ops.runningOn(row, "update-units");
 }
 
-void wallOpFinish(uint32_t id, bool ok, const char* detail) {
+void wallOpFinish(uint32_t id, bool ok, const char* detail, const char* board) {
   JobEnd end;
   {
     Locked lock;
     if (held->ops.finish(id, ok, detail)) end = jobEndOf(*held->ops.find(id));
+  }
+  if (board != nullptr) {
+    strncpy(end.board, board, sizeof(end.board) - 1);
+    end.board[sizeof(end.board) - 1] = 0;
   }
   recordJobEnd(end);
 }
@@ -346,6 +350,7 @@ ClusterVerdict wallStateSetRows(const WallRowsTable& table) {
     }
     held->wall.updatePhase = 0;
     held->wall.updateRow = -1;
+    held->wall.rowsSinceMs = millis();
     updateRetries = 0;
     // Inside the lock, after the table: a reader that sees the new number
     // gets the new table.

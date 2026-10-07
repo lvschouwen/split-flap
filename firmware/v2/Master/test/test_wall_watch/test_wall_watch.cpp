@@ -320,15 +320,31 @@ static void test_the_units_own_troubles_are_not_the_boards_entries() {
   TEST_ASSERT_EQUAL_UINT32(5, b.sink.entries[0].b);
 }
 
-static void test_the_first_look_at_a_board_records_faults_only() {
+static void test_the_first_look_at_a_board_records_what_is_wrong_or_going_on() {
   Board b;
   b.facts.updatingUnits = true;
   b.look();
-  TEST_ASSERT_EQUAL(0, (int)b.sink.entries.size());
+  TEST_ASSERT_EQUAL(1, b.sink.count(EventKind::BoardReasonOn, (uint8_t)BoardReason::UpdatingUnits));
   Board c;
   c.facts.rescue = true;
   c.look();
   TEST_ASSERT_EQUAL(1, c.sink.count(EventKind::BoardReasonOn, (uint8_t)BoardReason::Rescue));
+  Board d;
+  d.facts.unitsNote = 2;
+  d.facts.firmwareDiffers = true;
+  d.look();
+  TEST_ASSERT_EQUAL(0, (int)d.sink.entries.size());
+}
+
+// What ends was recorded as started: an end never stands alone.
+static void test_a_board_paired_while_it_takes_its_image_has_both_ends_recorded() {
+  Board b;
+  b.facts.updating = true;
+  b.look();
+  TEST_ASSERT_EQUAL(1, b.sink.count(EventKind::BoardReasonOn, (uint8_t)BoardReason::Updating));
+  b.facts.updating = false;
+  b.look();
+  TEST_ASSERT_EQUAL(1, b.sink.count(EventKind::BoardReasonOff, (uint8_t)BoardReason::Updating));
 }
 
 static void test_a_row_restart_is_recorded_with_its_rev() {
@@ -379,7 +395,7 @@ static void test_the_table_follows_boards_by_key_and_forgets_those_that_left() {
   WatchBoard* fresh = table.find(0x3333);
   TEST_ASSERT_NOT_NULL(fresh);
   TEST_ASSERT_EQUAL_UINT32(0, fresh->boardReasons);
-  TEST_ASSERT_FALSE(fresh->boardSeen);
+  TEST_ASSERT_FALSE(fresh->unitsSeen);
 }
 
 int main(int, char**) {
@@ -400,7 +416,8 @@ int main(int, char**) {
   RUN_TEST(test_a_lost_row_keeps_its_dead_bus);
   RUN_TEST(test_an_update_is_recorded_from_start_to_end);
   RUN_TEST(test_the_units_own_troubles_are_not_the_boards_entries);
-  RUN_TEST(test_the_first_look_at_a_board_records_faults_only);
+  RUN_TEST(test_the_first_look_at_a_board_records_what_is_wrong_or_going_on);
+  RUN_TEST(test_a_board_paired_while_it_takes_its_image_has_both_ends_recorded);
   RUN_TEST(test_a_row_restart_is_recorded_with_its_rev);
   RUN_TEST(test_every_recorded_reason_is_a_reason);
   RUN_TEST(test_the_table_follows_boards_by_key_and_forgets_those_that_left);

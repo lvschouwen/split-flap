@@ -7,8 +7,10 @@
 // could not speak for keeps what was known (unitReasonsObservable), so a
 // unit that goes quiet does not "recover" from its failed home.
 //
-// The first look at a board after this master started records only what is
-// wrong: its notes were there before and are not news.
+// The first look at a row's units after this master started records only what
+// is wrong: their notes were there before and are not news. A board's
+// recorded reasons are all news at any time: they are faults, or something
+// it is doing now.
 //
 // Left out on purpose, as reasons that come and go by design or are another
 // screen's subject: a unit finding home or being updated, a status that did
@@ -79,7 +81,6 @@ inline ReasonEdges watchReasonEdges(uint32_t prior, uint32_t now, uint32_t obser
 struct WatchBoard {
   uint16_t key = 0;
   bool used = false;
-  bool boardSeen = false;
   uint32_t boardReasons = 0;
   bool linkSeen = false;
   uint32_t restarts = 0;
@@ -148,10 +149,9 @@ template <class Sink>
 void watchBoard(WatchBoard& w, const BoardFacts& facts, const BoardVerdict& verdict, Sink& sink) {
   const uint32_t recorded = boardRecordedReasons();
   const ReasonEdges e =
-      watchReasonEdges(w.boardReasons, verdict.all, boardReasonsObservable(facts),
-                       w.boardSeen ? recorded : (recorded & boardFaultReasons()), recorded);
+      watchReasonEdges(w.boardReasons, verdict.all, boardReasonsObservable(facts), recorded,
+                       recorded);
   w.boardReasons = e.state;
-  w.boardSeen = true;
   for (BoardReason r : BOARD_REASON_ORDER) {
     if (e.on & boardReasonBit(r)) {
       uint32_t a = 0, b = 0;

@@ -112,8 +112,9 @@ void lookAtRow(int row, uint32_t nowMs, bool haveImage, const FollowerImageFacts
   facts.silentS =
       (link.contact.everHeard ? (uint32_t)(nowMs - link.contact.lastHeardMs) : nowMs) / 1000UL;
   // A row never heard is gone once the time a connected one would have been
-  // written off has passed since this master started.
-  facts.startGraceOver = nowMs >= WALL_LINK_LOST_MS;
+  // written off has passed since this master started, or since the rows table
+  // changed (which drops every connection).
+  facts.startGraceOver = (uint32_t)(nowMs - work->wall.rowsSinceMs) >= WALL_LINK_LOST_MS;
   facts.rescue = link.everWelcomed && link.rescue;
   facts.busDead = link.haveStatus && link.status.bus_dead;
   facts.busEpisodes = link.status.bus_episodes;
