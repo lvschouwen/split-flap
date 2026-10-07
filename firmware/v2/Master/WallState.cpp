@@ -294,6 +294,15 @@ bool wallOpGet(uint32_t id, WallOp& out) {
   return true;
 }
 
+int wallOpsCopy(WallOp out[WALL_OPS_KEPT]) {
+  Locked lock;
+  int n = 0;
+  for (const WallOp& op : held->ops.ops) {
+    if (op.id != 0) out[n++] = op;
+  }
+  return n;
+}
+
 void wallOpsFailRow(int row, const char* reason) {
   JobEnd ends[WALL_OPS_KEPT];
   int n = 0;

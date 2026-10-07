@@ -234,6 +234,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   webMaintenanceRegister(server);
   webWallRegister(server);
   webBoardRegister(server);
+  webStreamRegister(server);
 }
 
 void webEndpointsStart(AsyncWebServer& server) {

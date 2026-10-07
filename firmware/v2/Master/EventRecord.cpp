@@ -103,6 +103,8 @@ void eventRecord(EventKind kind, uint8_t detail, const char* boardId, uint8_t un
   eventRecordKeyed(kind, detail, eventBoardKey(boardId), unit, a, b, agoS);
 }
 
+uint32_t eventRecordNewestSeq() { return ready ? nextSeq - 1 : 0; }
+
 void eventRecordTick(bool force) {
   if (!ready) return;
   const uint32_t nowMs = millis();

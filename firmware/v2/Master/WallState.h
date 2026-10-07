@@ -80,6 +80,8 @@ uint32_t wallOpBegin(const char* name, int row);
 // to a place in the rows table (a row being paired or released).
 void wallOpFinish(uint32_t id, bool ok, const char* detail, const char* board = nullptr);
 bool wallOpGet(uint32_t id, WallOp& out);
+// Every job the table holds, running and finished, in no order; returns how many.
+int wallOpsCopy(WallOp out[WALL_OPS_KEPT]);
 // Link task: a row came back with a new boot id.
 void wallOpsFailRow(int row, const char* reason);
 

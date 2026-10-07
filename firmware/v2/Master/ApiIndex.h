@@ -36,6 +36,7 @@ static const ApiRoute API_ROUTES[] = {
   {"PUT",  "/api/v2/settings/board",  "change them: any part of what the GET gives -> {done, restart}"},
   {"GET",  "/api/v2/settings/wall",   "the wall's settings: mode, quiet, alignment, speed, timezone (POSIX rule), updateUnitsAtStart, mqtt {host, port, user, passwordSet}"},
   {"PUT",  "/api/v2/settings/wall",   "change them: any part of what the GET gives (mqtt.password is write-only) -> {done, restart}; 400 names the key that was refused"},
+  {"GET",  "/api/v2/stream",          "server-sent events, each topic when it changes and all of them to a new reader: wall (mode, quiet, every row's text), verdict (the wall's and every board's), jobs (the job table), history (the newest seq)"},
   {"GET",  "/api/v2/unit",            "one unit: /api/v2/unit/<board id>/<address>: its verdict with every reason, and its facts grouped as firmware, power, link, drum, bootloader (a flap is its place on the drum, 0 = blank)"},
   {"GET",  "/api/v2/wall",            "the boards of this Split-Flap and what each row board last said"},
   {"GET",  "/settings",               "full device settings snapshot"},

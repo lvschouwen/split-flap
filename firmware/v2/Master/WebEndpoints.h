@@ -27,6 +27,8 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store);
 // SSE display push (#251), netTask only: sends a "display" event when the
 // snapshot's text changes. Change detection pure in DisplayEvents.h.
 void webDisplayEventsTick();
+// netTask only: pushes what changed to the readers of GET /api/v2/stream.
+void webStreamTick();
 
 // What the 1 Hz mode ticker needs from the web domain (#192): the active
 // mode plus the parameters it bakes into DisplayCommands. inputText is the

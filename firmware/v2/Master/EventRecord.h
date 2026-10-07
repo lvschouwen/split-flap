@@ -35,5 +35,8 @@ void eventRecordTick(bool force = false);
 // newest), newest first. Returns how many.
 int eventRecordPage(uint32_t before, EventRecord* out, int cap);
 
+// netTask only: the seq of the newest entry written, 0 when there is none.
+uint32_t eventRecordNewestSeq();
+
 // True when the storage mount succeeded (web layer's 503 gate).
 bool eventRecordAvailable();

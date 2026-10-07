@@ -210,6 +210,7 @@ static void netTaskMain(void* arg) {
     crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_WEB_LOOP);
     webEndpointsLoop(*ctx->settings, *ctx->store);
     webDisplayEventsTick();  // #251: SSE push on display text change
+    webStreamTick();         // #572: the same for /api/v2/stream
     statusLedTick();
     systemStatsTick();  // #245/#251: self-throttled, 1 s fast + 5 s ring
     odometerLogTick();  // #465: self-throttled odometer historian append

@@ -104,6 +104,7 @@ void webFirmwareRegister(AsyncWebServer& server);
 void webMaintenanceRegister(AsyncWebServer& server);
 void webWallRegister(AsyncWebServer& server);
 void webBoardRegister(AsyncWebServer& server);
+void webStreamRegister(AsyncWebServer& server);
 
 // Loop hooks drained by webEndpointsLoop() — call order is load-bearing,
 // see the webEndpointsLoop() call site.
