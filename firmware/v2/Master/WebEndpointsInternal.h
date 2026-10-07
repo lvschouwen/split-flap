@@ -83,6 +83,10 @@ const char* webStageReboot(const char* cause);
 bool webStopWall(uint32_t& seq);
 // Is the wall quiet now?
 bool webQuietNow();
+// Do the boards update their units when they start?
+bool webUpdateUnitsAtStart();
+// Why this board last restarted on purpose; "" when it did not (#432).
+const String& webBootRebootCause();
 
 // Per-module route registrars, called once from webEndpointsInit(). Routes
 // are matched per path+method, so cross-module registration order is not
@@ -99,6 +103,7 @@ bool webFirmwareOtaUploadActive();
 void webFirmwareRegister(AsyncWebServer& server);
 void webMaintenanceRegister(AsyncWebServer& server);
 void webWallRegister(AsyncWebServer& server);
+void webBoardRegister(AsyncWebServer& server);
 
 // Loop hooks drained by webEndpointsLoop() — call order is load-bearing,
 // see the webEndpointsLoop() call site.

@@ -27,8 +27,11 @@ struct ApiLegendEntry { const char* key; const char* meaning; };
 static const ApiRoute API_ROUTES[] = {
   {"GET",  "/api",                    "this self-documenting index"},
   {"POST", "/api/v2/action",          "JSON {name,target,args}. Done when accepted, 200 {done}: show (args text, forS), mode, quiet, stop, restart (target row, none = this master). Jobs, 202 {op}: pair, release, arrange, update (offer a row board the stored image again), and the unit jobs (home, identify, jog, set-offset, self-test, restart-unit, reset-odometer, set-gates, boot-info, boot-dump, boot-update, update-units, probe, set-address, clear-address, home-all) with target {row,unit}"},
+  {"GET",  "/api/v2/board",           "one board: /api/v2/board/<id> (a row board's id, or the master's name): place, verdict, how it is reached, what it runs, its vitals, and its units as a table {fields, rows}"},
+  {"GET",  "/api/v2/firmware",        "should be / is for the whole wall: boards, the stored row image, unit firmware, bootloaders, the rescue image"},
   {"GET",  "/api/v2/history",         "what happened on the wall, newest first: ?before=<seq> for the page after one (its \"next\"), ?limit=<1..50>"},
   {"GET",  "/api/v2/op",              "what became of a job: /api/v2/op/<id> (202 running, 200 finished, 404 unknown)"},
+  {"GET",  "/api/v2/unit",            "one unit: /api/v2/unit/<board id>/<address>: its verdict with every reason, and its facts grouped as firmware, power, link, drum, bootloader (a flap is its place on the drum, 0 = blank)"},
   {"GET",  "/api/v2/wall",            "the boards of this Split-Flap and what each row board last said"},
   {"GET",  "/settings",               "full device settings snapshot"},
   {"GET",  "/system/info",            "static hardware/partition inventory"},

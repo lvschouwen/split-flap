@@ -230,6 +230,7 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   webFirmwareRegister(server);
   webMaintenanceRegister(server);
   webWallRegister(server);
+  webBoardRegister(server);
 }
 
 void webEndpointsStart(AsyncWebServer& server) {
@@ -526,8 +527,19 @@ bool webStopWall(uint32_t& seq) {
 bool webQuietNow() {
   if (webStateMutex == nullptr || liveSettings == nullptr) return false;
   WebStateLock lock;
+  // A quiet change that is accepted and not yet drained already counts: the
+  // text that follows it must get the answer the drain will give it.
+  if (pendingPost.pending && pendingPost.quietProvided) return pendingPost.quiet == "true";
   return liveSettings->quiet;
 }
+
+bool webUpdateUnitsAtStart() {
+  if (webStateMutex == nullptr || liveSettings == nullptr) return false;
+  WebStateLock lock;
+  return liveSettings->reflashOnBoot;
+}
+
+const String& webBootRebootCause() { return bootRebootCause; }
 
 WebContentSnapshot webDisplayContentSnapshot() {
   WebContentSnapshot c;
