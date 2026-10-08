@@ -182,10 +182,14 @@ struct WallUpdater {
   }
 
   // Another image was stored: what was held against the rows was held
-  // against the old one.
-  void newImage() {
+  // against the old one. Nothing is offered in the hold-off after it: an
+  // offer made in the second the image was stored found the master not
+  // answering the download, twice, and the one a hold-off later went through
+  // (#568; why it does not answer then is not established).
+  void newImage(uint32_t nowMs) {
     for (int i = 0; i < WALL_LINK_MAX_ROWS; i++) forgive(i);
-    heldOff = false;
+    heldOff = true;
+    heldOffAtMs = nowMs;
   }
 
   // An operator asked for this row to be offered the image again.

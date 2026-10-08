@@ -494,7 +494,7 @@ void offerImage(uint32_t nowMs) {
   if (followerImageFactsGeneration() != imageGeneration) {
     imageGeneration = followerImageFactsGeneration();
     imageKnown = followerImageFacts(image);
-    updater.newImage();
+    updater.newImage(nowMs);
     if (imageKnown) {
       SerialPrintf("link: row image to offer: rev %s, %u bytes%s\n", image.rev,
                    (unsigned)image.size, image.packed ? ", packed" : "");

@@ -230,12 +230,15 @@ static void block(int row) {
   TEST_ASSERT_TRUE(up.blocked[row]);
 }
 
-static void test_a_new_stored_image_forgives_every_row_and_lifts_the_hold() {
+static void test_a_new_stored_image_forgives_every_row_and_is_offered_a_hold_off_later() {
   block(0);
-  up.newImage();
+  up.newImage(300200);
   TEST_ASSERT_FALSE(up.blocked[0]);
   TEST_ASSERT_EQUAL(0, up.attempts[0]);
-  TEST_ASSERT_EQUAL(0, again(300200));
+  // Not in the second it was stored (#568).
+  TEST_ASSERT_EQUAL(-1, again(300200));
+  TEST_ASSERT_EQUAL(-1, again(300200 + WALL_UPDATE_HOLDOFF_MS - 1));
+  TEST_ASSERT_EQUAL(0, again(300200 + WALL_UPDATE_HOLDOFF_MS));
 }
 
 static void test_an_operators_retry_forgives_that_row_only() {
@@ -346,7 +349,7 @@ int main(int, char**) {
   RUN_TEST(test_a_rescue_offer_costs_its_attempt_when_made_and_coming_back_well_keeps_it);
   RUN_TEST(test_an_image_that_crashes_after_its_hello_is_offered_three_times_only);
   RUN_TEST(test_a_row_back_still_in_rescue_mode_did_not_take_the_image);
-  RUN_TEST(test_a_new_stored_image_forgives_every_row_and_lifts_the_hold);
+  RUN_TEST(test_a_new_stored_image_forgives_every_row_and_is_offered_a_hold_off_later);
   RUN_TEST(test_an_operators_retry_forgives_that_row_only);
   RUN_TEST(test_a_row_reporting_another_rev_than_before_is_forgiven);
   RUN_TEST(test_the_rev_change_of_its_own_offer_forgives_nothing);
