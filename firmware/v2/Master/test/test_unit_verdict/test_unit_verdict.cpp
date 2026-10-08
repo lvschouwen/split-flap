@@ -210,19 +210,54 @@ static void test_the_remaining_notes() {
   TEST_ASSERT_TRUE(UnitReason::NotRead == judge(u).reason);
 }
 
-static void test_a_home_failure_in_the_past_is_the_weakest_note() {
+static void test_a_lifetime_count_of_failed_homes_alone_is_no_note() {
+  UnitFacts u = healthy();
+  u.lifetimeValid = true;
+  u.lifetime.homeFailedCount = 51;
+  const UnitVerdict v = judge(u);
+  TEST_ASSERT_TRUE(VerdictLevel::Working == v.level);
+  TEST_ASSERT_FALSE(has(v, UnitReason::HomeFailedBefore));
+}
+
+static void test_a_home_failure_this_master_saw_is_the_weakest_note() {
   UnitFacts u = healthy();
   u.lifetimeValid = true;
   u.lifetime.homeFailedCount = 10;
-  UnitVerdict v = judge(u);
+  UnitVerdictContext ctx;
+  ctx.homeFailedSince = 2;
+  UnitVerdict v = judge(u, ctx);
   TEST_ASSERT_TRUE(VerdictLevel::Note == v.level);
   TEST_ASSERT_TRUE(UnitReason::HomeFailedBefore == v.reason);
-  TEST_ASSERT_EQUAL_UINT32(10, v.a);
-  TEST_ASSERT_EQUAL_UINT32(600, v.b);
+  TEST_ASSERT_EQUAL_UINT32(2, v.a);
+  TEST_ASSERT_EQUAL_UINT32(10, v.b);
   u.fwStatus = 1;
-  v = judge(u);
+  v = judge(u, ctx);
   TEST_ASSERT_TRUE(UnitReason::FirmwareOutdated == v.reason);
   TEST_ASSERT_TRUE(has(v, UnitReason::HomeFailedBefore));
+  // While the home is failing, that is the reason, not the earlier ones.
+  u.status.flags |= UNIT_FLAG_LAST_HOME_FAILED;
+  TEST_ASSERT_FALSE(has(judge(u, ctx), UnitReason::HomeFailedBefore));
+}
+
+static void test_the_count_of_failed_homes_is_followed_from_the_first_look() {
+  HomeFailWatch w;
+  TEST_ASSERT_EQUAL(0, homeFailObserve(w, 51));  // what it brought along
+  TEST_ASSERT_EQUAL(0, w.since);
+  TEST_ASSERT_EQUAL(0, homeFailObserve(w, 51));
+  TEST_ASSERT_EQUAL(2, homeFailObserve(w, 53));
+  TEST_ASSERT_EQUAL(2, w.since);
+  TEST_ASSERT_EQUAL(1, homeFailObserve(w, 54));
+  TEST_ASSERT_EQUAL(3, w.since);
+  // A lower count is another unit at this address: nothing is held against it.
+  TEST_ASSERT_EQUAL(0, homeFailObserve(w, 4));
+  TEST_ASSERT_EQUAL(0, w.since);
+  TEST_ASSERT_EQUAL(1, homeFailObserve(w, 5));
+  // The unit's own count stops at 255; what was seen stays.
+  HomeFailWatch full;
+  homeFailObserve(full, 0);
+  TEST_ASSERT_EQUAL(255, homeFailObserve(full, 255));
+  TEST_ASSERT_EQUAL(0, homeFailObserve(full, 255));
+  TEST_ASSERT_EQUAL(255, full.since);
 }
 
 static void test_a_fault_leads_over_any_note() {
@@ -321,7 +356,9 @@ int main(int, char**) {
   RUN_TEST(test_low_supply_carries_the_reading_and_the_floor);
   RUN_TEST(test_the_drum_measurements_are_notes);
   RUN_TEST(test_the_remaining_notes);
-  RUN_TEST(test_a_home_failure_in_the_past_is_the_weakest_note);
+  RUN_TEST(test_a_lifetime_count_of_failed_homes_alone_is_no_note);
+  RUN_TEST(test_a_home_failure_this_master_saw_is_the_weakest_note);
+  RUN_TEST(test_the_count_of_failed_homes_is_followed_from_the_first_look);
   RUN_TEST(test_a_fault_leads_over_any_note);
   RUN_TEST(test_the_reason_numbers_and_names_are_fixed);
   RUN_TEST(test_every_reason_is_ranked_once_and_faults_come_first);

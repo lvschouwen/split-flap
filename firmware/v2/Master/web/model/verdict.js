@@ -53,8 +53,8 @@ const UNIT = {
     `${plural(a, 'edge')} seen in the last turn; one is expected.`],
   'worn': (a) => ['Many turns', `${a} turns of the drum, far more than the others on its row.`],
   'not-read': () => ['Not read yet', 'The master has not read this unit since it started.'],
-  'home-failed-before': (a, b) => ['Failed to find home before',
-    `${plural(a, 'time')} over its lifetime, none in the ${dur(b)} it has been running.`],
+  'home-failed-before': (a, b) => ['Failed to find home earlier',
+    `${plural(a, 'time')} since the master started, ${b} over its lifetime. It is at home now.`],
 };
 
 const BOARD = {

@@ -55,7 +55,7 @@ enum class UnitReason : uint8_t {
   HallAnomaly = 18,        // hall edges in the last turn
   Worn = 19,               // turns of the drum
   NotRead = 20,
-  HomeFailedBefore = 21,   // lifetime failures             seconds it has run
+  HomeFailedBefore = 21,   // failures since the master started   over its lifetime
 };
 #define UNIT_REASON_COUNT 22
 
@@ -137,7 +137,33 @@ struct UnitVerdictContext {
   uint32_t nowMs = 0;     // on the clock UnitFacts::lastSeenMs counts on
   bool updating = false;  // its board is updating units: a bootloader is expected
   bool worn = false;      // its drum has turned far more than its row's (WearPolicy.h)
+  // Failed homes counted while this master watched (HomeFailWatch). The
+  // unit's lifetime count alone is history: no command clears it, so a unit
+  // noted for it would be noted for good (#579).
+  uint8_t homeFailedSince = 0;
 };
+
+// A unit's lifetime count of failed homes, followed from the first look.
+struct HomeFailWatch {
+  bool known = false;
+  uint8_t last = 0;
+  uint8_t since = 0;
+};
+
+// Takes the count a look read; returns how much it rose by. A count that
+// fell is another unit, or one whose memory was erased: it starts afresh.
+inline uint8_t homeFailObserve(HomeFailWatch& w, uint8_t count) {
+  if (!w.known || count < w.last) {
+    w = HomeFailWatch();
+    w.known = true;
+    w.last = count;
+    return 0;
+  }
+  const uint8_t rise = (uint8_t)(count - w.last);
+  w.last = count;
+  w.since = (uint8_t)((w.since + rise > 255) ? 255 : w.since + rise);
+  return rise;
+}
 
 struct UnitVerdict {
   VerdictLevel level = VerdictLevel::Working;
@@ -198,9 +224,7 @@ inline uint32_t unitReasonsOf(const UnitFacts& u, const UnitVerdictContext& ctx)
   }
   if (u.fwStatus == 1) add(UnitReason::FirmwareOutdated);
   if (ctx.worn) add(UnitReason::Worn);
-  if (!homeFailedNow && u.lifetimeValid && u.lifetime.homeFailedCount > 0) {
-    add(UnitReason::HomeFailedBefore);
-  }
+  if (!homeFailedNow && ctx.homeFailedSince > 0) add(UnitReason::HomeFailedBefore);
   return all;
 }
 
@@ -286,8 +310,8 @@ inline void unitReasonNumbers(UnitReason r, const UnitFacts& u, const UnitVerdic
       a = u.odometer;
       break;
     case UnitReason::HomeFailedBefore:
-      a = u.lifetime.homeFailedCount;
-      b = unitVerdictUptimeS(u);
+      a = ctx.homeFailedSince;
+      b = u.lifetimeValid ? u.lifetime.homeFailedCount : 0;
       break;
     default:
       break;

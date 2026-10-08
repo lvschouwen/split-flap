@@ -158,10 +158,58 @@ static void test_reasons_that_come_and_go_by_design_are_not_recorded() {
   row.units[0].status.flags = UNIT_FLAG_MOVING;  // finding home
   row.units[1].fwStatus = 1;                     // firmware behind
   row.units[2].bootVerdict = BOOT_INTEGRITY_OUTDATED;
-  row.units[2].lifetime.homeFailedCount = 2;
   row.look();
   TEST_ASSERT_EQUAL(0, (int)row.sink.entries.size());
   TEST_ASSERT_TRUE(VerdictLevel::Note == row.verdicts[0].level);
+}
+
+static void test_failed_homes_from_before_this_master_started_note_nothing() {
+  Row row;
+  row.units[1].lifetime.homeFailedCount = 51;
+  row.look();
+  row.look();
+  TEST_ASSERT_EQUAL(0, (int)row.sink.entries.size());
+  TEST_ASSERT_TRUE(VerdictLevel::Working == row.verdicts[1].level);
+}
+
+static void test_every_rise_of_the_failed_home_count_is_recorded_and_notes_the_unit() {
+  Row row;
+  row.units[1].lifetime.homeFailedCount = 51;
+  row.look();
+  row.units[1].lifetime.homeFailedCount = 53;
+  row.look();
+  TEST_ASSERT_EQUAL(1, (int)row.sink.entries.size());
+  const Entry& first = row.sink.entries[0];
+  TEST_ASSERT_TRUE(EventKind::UnitReasonOn == first.kind);
+  TEST_ASSERT_EQUAL((int)UnitReason::HomeFailedBefore, first.detail);
+  TEST_ASSERT_EQUAL(SFP_I2C_ADDRESS_BASE + 1, first.unit);
+  TEST_ASSERT_EQUAL_UINT32(2, first.a);
+  TEST_ASSERT_EQUAL_UINT32(53, first.b);
+  TEST_ASSERT_TRUE(UnitReason::HomeFailedBefore == row.verdicts[1].reason);
+  // It stays noted while nothing more happens, without another entry.
+  row.look();
+  TEST_ASSERT_EQUAL(0, (int)row.sink.entries.size());
+  TEST_ASSERT_TRUE(UnitReason::HomeFailedBefore == row.verdicts[1].reason);
+  // The next one is an entry of its own.
+  row.units[1].lifetime.homeFailedCount = 54;
+  row.look();
+  TEST_ASSERT_EQUAL(1, (int)row.sink.entries.size());
+  TEST_ASSERT_EQUAL_UINT32(3, row.sink.entries[0].a);
+}
+
+static void test_a_unit_that_went_quiet_keeps_its_failed_home_count() {
+  Row row;
+  row.units[0].lifetime.homeFailedCount = 7;
+  row.look();
+  // Its reads are gone: that is not a count of zero.
+  row.units[0].lifetimeValid = false;
+  row.units[0].lifetime.homeFailedCount = 0;
+  row.look();
+  row.units[0].lifetimeValid = true;
+  row.units[0].lifetime.homeFailedCount = 7;
+  row.look();
+  TEST_ASSERT_EQUAL(0, row.sink.count(EventKind::UnitReasonOn, (uint8_t)UnitReason::HomeFailedBefore));
+  TEST_ASSERT_FALSE(row.verdicts[0].all & unitReasonBit(UnitReason::HomeFailedBefore));
 }
 
 static void test_a_unit_restart_is_recorded_with_its_cause() {
@@ -407,6 +455,9 @@ int main(int, char**) {
   RUN_TEST(test_the_first_look_records_faults_and_not_notes);
   RUN_TEST(test_a_note_that_starts_later_is_recorded_once_and_its_end_is_not);
   RUN_TEST(test_reasons_that_come_and_go_by_design_are_not_recorded);
+  RUN_TEST(test_failed_homes_from_before_this_master_started_note_nothing);
+  RUN_TEST(test_every_rise_of_the_failed_home_count_is_recorded_and_notes_the_unit);
+  RUN_TEST(test_a_unit_that_went_quiet_keeps_its_failed_home_count);
   RUN_TEST(test_a_unit_restart_is_recorded_with_its_cause);
   RUN_TEST(test_the_first_look_is_no_restart);
   RUN_TEST(test_a_unit_update_is_watched_in_silence);

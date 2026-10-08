@@ -14,9 +14,14 @@
 //
 // Left out on purpose, as reasons that come and go by design or are another
 // screen's subject: a unit finding home or being updated, a status that did
-// not arrive, firmware and bootloader that are behind, a past home failure
-// (its count growing is a home failure now); a board briefly away, its units'
-// own faults and notes (each unit has its entry), its clock, its rev.
+// not arrive, firmware and bootloader that are behind; a board briefly away,
+// its units' own faults and notes (each unit has its entry), its clock, its
+// rev.
+//
+// A failed home the unit got over between two looks leaves only its lifetime
+// count one higher. Every rise of that count is recorded by itself, with how
+// many this master has seen and the lifetime count, and notes the unit until
+// this master starts again (#579).
 
 #include <stdint.h>
 
@@ -87,6 +92,7 @@ struct WatchBoard {
   bool unitsSeen = false;
   uint32_t unitReasons[UNITS_AMOUNT] = {0};
   UnitRebootWatch reboot[UNITS_AMOUNT];
+  HomeFailWatch homeFail[UNITS_AMOUNT];
 };
 
 // A sink is anything with
@@ -105,10 +111,16 @@ void watchUnits(WatchBoard& w, const UnitFacts* units, int width, uint32_t nowMs
   const uint32_t recorded = unitRecordedReasons();
   for (int i = 0; i < width; i++) {
     const UnitFacts& u = units[i];
+    // Only a read of the unit's firmware carries the count.
+    uint8_t homeFailRise = 0;
+    if (u.state == 1 && u.lifetimeValid && !unitIsLost(u)) {
+      homeFailRise = homeFailObserve(w.homeFail[i], u.lifetime.homeFailedCount);
+    }
     UnitVerdictContext ctx;
     ctx.nowMs = nowMs;
     ctx.updating = hold;
     ctx.worn = wear.flagged[i];
+    ctx.homeFailedSince = w.homeFail[i].since;
     verdicts[i] = unitVerdict(u, ctx);
     const uint8_t address = (uint8_t)(SFP_I2C_ADDRESS_BASE + i);
 
@@ -128,6 +140,10 @@ void watchUnits(WatchBoard& w, const UnitFacts* units, int width, uint32_t nowMs
     if (restarted && w.unitsSeen) {
       sink.event(EventKind::UnitRestarted, u.status.mcusrAtBoot, address,
                  u.status.lifetimeBrownoutCount, u.status.lifetimeWatchdogCount);
+    }
+    if (homeFailRise > 0) {
+      sink.event(EventKind::UnitReasonOn, (uint8_t)UnitReason::HomeFailedBefore, address,
+                 w.homeFail[i].since, u.lifetime.homeFailedCount);
     }
     const ReasonEdges e =
         watchReasonEdges(w.unitReasons[i], verdicts[i].all, unitReasonsObservable(u),

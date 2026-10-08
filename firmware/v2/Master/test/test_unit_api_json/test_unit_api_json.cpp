@@ -80,7 +80,9 @@ static void test_the_detail_groups_the_facts_and_names_the_verdict() {
   u.lifetime.homeFailedCount = 4;
   u.i2cErrors = 2;
   u.lastErrorMs = 8000;
-  const UnitVerdict v = unitVerdict(u, UnitVerdictContext());
+  UnitVerdictContext ctx;
+  ctx.homeFailedSince = 4;
+  const UnitVerdict v = unitVerdict(u, ctx);
   unitApiDetail(doc.to<JsonObject>(), u, 3, 10000, &v);
   TEST_ASSERT_EQUAL(3, doc["address"].as<int>());
   TEST_ASSERT_EQUAL_STRING("running", doc["state"]);
