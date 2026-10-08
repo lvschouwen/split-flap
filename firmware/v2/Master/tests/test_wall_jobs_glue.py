@@ -60,8 +60,9 @@ def test_the_api_index_names_every_job():
 def test_the_master_outwaits_the_rows_own_download_limit():
     row = _code(V2 / "FollowerEsp01" / "FollowerUpdatePolicy.h")
     master = _code(MASTER / "WallUpdatePolicy.h")
+    # The timeout runs twice: for the connection, then for the answer.
     row_limit = (_define(row, "FOLLOWER_UPDATE_TOTAL_MS")
-                 + _define(row, "FOLLOWER_UPDATE_HTTP_TIMEOUT_MS"))
+                 + 2 * _define(row, "FOLLOWER_UPDATE_HTTP_TIMEOUT_MS"))
     assert _define(master, "WALL_UPDATE_DOWNLOAD_MS") > row_limit
 
 

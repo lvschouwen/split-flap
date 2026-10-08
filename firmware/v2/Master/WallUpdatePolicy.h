@@ -29,10 +29,11 @@
 #define WALL_UPDATE_HOLDOFF_MS 30000UL
 // A row answers an offer when it next reads its connection.
 #define WALL_UPDATE_ANSWER_MS 20000UL
-// The row gives a download up after 180 s by itself (FOLLOWER_UPDATE_TOTAL_MS,
-// gated by tests/test_wall_update_glue.py); this only catches a row that
-// never said how it ended.
-#define WALL_UPDATE_DOWNLOAD_MS 200000UL
+// The row gives a download up by itself: 180 s for the bytes
+// (FOLLOWER_UPDATE_TOTAL_MS) after 15 s each for the connection and the answer
+// (FOLLOWER_UPDATE_HTTP_TIMEOUT_MS), gated by tests/test_wall_jobs_glue.py;
+// this only catches a row that never said how it ended.
+#define WALL_UPDATE_DOWNLOAD_MS 220000UL
 // From "installed" to the row's Hello on the new image.
 #define WALL_UPDATE_RETURN_MS 120000UL
 // Unbroken health that forgives a row its failed offers.

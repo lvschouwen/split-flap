@@ -13,8 +13,10 @@
 
 // Where the master serves the row image.
 #define FOLLOWER_UPDATE_PATH "/firmware/row"
-// The master must answer the GET within this.
-#define FOLLOWER_UPDATE_HTTP_TIMEOUT_MS 5000
+// The connection must stand within this, and the master's answer to the GET
+// arrive within this again. A first packet lost twice is resent after 3 s and
+// 9 s, and the row has nothing else to do meanwhile.
+#define FOLLOWER_UPDATE_HTTP_TIMEOUT_MS 15000
 // No byte for this long ends the download.
 #define FOLLOWER_UPDATE_STALL_MS 10000UL
 // However it trickles, the row is not held longer than this.
