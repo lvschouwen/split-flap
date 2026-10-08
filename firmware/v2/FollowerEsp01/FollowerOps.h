@@ -8,6 +8,7 @@
 
 #include "MaintenancePolicy.h"
 #include "ReflashPlan.h"
+#include "UnitHealth.h"
 
 // --- staged op (superloop single slot) ---------------------------------------------
 
@@ -39,18 +40,11 @@ struct MaintResult {
 };
 
 // --- unit facts buffer (#519) ---------------------------------------------------
-// Sized for the row this board drives, not for a 16-unit worst case: 8 KB on
-// an 82 KB chip for a document that is 1.6 KB on a 5-unit row. The per-unit
-// figure is the saturated worst case of buildUnitHealthJson (every key family
-// present, every value at its widest);
-// test_health_json_follower_worst_case_fits_local_buf holds it to that for
-// every width.
-#define FOLLOWER_HEALTH_BASE_BYTES     448  // headline + wear + reflash splices
-#define FOLLOWER_HEALTH_PER_UNIT_BYTES 552
-
+// Sized for the row this board drives, not for a 16-unit worst case: 9.8 KB on
+// an 82 KB chip for a document that is 1.6 KB on a 5-unit row. The figure is
+// the shared worst case (UNIT_FACTS_DOC_CAP in UnitHealth.h).
 inline size_t followerHealthBufCap(int width, int maxUnits) {
   if (width < 0) width = 0;
   if (width > maxUnits) width = maxUnits;
-  return (size_t)FOLLOWER_HEALTH_BASE_BYTES +
-         (size_t)width * FOLLOWER_HEALTH_PER_UNIT_BYTES;
+  return UNIT_FACTS_DOC_CAP(width);
 }

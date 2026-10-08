@@ -94,11 +94,9 @@ static UnitFacts saturated() {
 }
 
 static void test_every_key_family_at_its_widest_survives_the_round_trip() {
-  // Twelve of them: sixteen units with every family at its widest at once do
-  // not fit UNIT_HEALTH_JSON_CAP (#567).
   static UnitFacts units[UNITS_AMOUNT];
   for (auto& u : units) u = saturated();
-  assertRoundTrip(units, 12, 12, 0xFFFFFFF0UL);
+  assertRoundTrip(units, 16, 16, 0xFFFFFFF0UL);
 }
 
 static void test_a_plain_working_unit_and_empty_columns() {

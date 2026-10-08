@@ -443,27 +443,18 @@ inline size_t unitFaultMaskHex(const UnitFacts* units, int width,
   return (size_t)n < cap ? (size_t)n : cap - 1;
 }
 
-// Worst case (16 valid units, all counters saturated, 10-digit odometers,
-// full drift blocks) measures ~3020 B — same truncation contract as v1, cap
-// raised over v1's 2048 for the spliced reflash progress object (#205,
-// ~70 B), the per-unit "ae" field (#215), the per-unit "odo" field and the
-// spliced wear object (#231, ~45 B), the per-unit drift fields
-// phys/de/dp/ds/mm (#263/#264, ~43 B/unit), the per-unit vitals block
-// vcc/vmin/cp/ram (#306, ~44 B/unit + the headline "vccMin"), the per-unit
-// heartbeat-freshness keys age/hs2/misses/stale (#310, ~44 B/unit), the
-// per-unit I2C-reliability keys err/errAge (#367, ~32 B/unit) and the
-// per-unit ext-diag keys se/sx/sag/he/dw/sb (#365, ~63 B/unit) and the
-// per-unit lifetime keys hf/gates/sxl/stw0/str0/stw1/str1 (#406, ~60 B/unit
-// worst case — each rides an emit-when-nonzero guard, so a fresh unit adds
-// nothing) and the per-unit idle-hall keys fr/frd (#460, ~18 B/unit, same
-// guard) and the per-unit link-health keys ut/rx/tx/dh (#502, ~45 B/unit)
-// so a full display can't push the payload into the headline-only
-// fallback, and the per-unit boot-verdict keys bv/bcrc (#520, ~27 B/unit,
-// bcrc only off the expected image). The saturated 16-unit payload measures
-// 8383 B before the wear and reflash splices.
-// test_unit_health pins the worst case + headroom (a full 16-unit payload
-// with the wear + reflash splices).
-#define UNIT_HEALTH_JSON_CAP 9216
+// How large the facts document of a row can get, with the wear and the
+// unit-update objects a board splices in behind the units. The two figures
+// are the measured worst case — every key the serializer writes, every value
+// at its widest (UnitFactsWidest.h) — and test_unit_facts_widest holds them
+// to it from both sides: the document fits at every width, and no width
+// leaves more than a few bytes over. A document that does not fit is not
+// sent at all, so a key added to the serializer moves these.
+#define UNIT_FACTS_DOC_BASE_BYTES     252
+#define UNIT_FACTS_DOC_PER_UNIT_BYTES 599
+#define UNIT_FACTS_DOC_CAP(width) \
+  ((size_t)UNIT_FACTS_DOC_BASE_BYTES + (size_t)(width) * UNIT_FACTS_DOC_PER_UNIT_BYTES)
+#define UNIT_HEALTH_JSON_CAP UNIT_FACTS_DOC_CAP(16)
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload whose returned length >= cap.

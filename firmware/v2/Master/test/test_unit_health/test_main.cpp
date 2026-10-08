@@ -589,92 +589,6 @@ static void test_health_json_no_mismatch_without_position() {
   TEST_ASSERT_NULL(strstr(buf, "\"mm\""));
 }
 
-static void test_health_json_worst_case_fits_cap_with_reflash_headroom() {
-  // The endpoint splices a ~70 B reflash progress object (#205) into the
-  // same cap-sized buffer — a fully saturated 16-unit payload must leave at
-  // least that much headroom or the endpoint degrades to headline-only.
-  UnitFacts units[16];
-  for (int i = 0; i < 16; i++) {
-    units[i].state = 1;
-    units[i].statusValid = true;
-    units[i].fwStatus = 2;
-    strcpy(units[i].version, "abc12345");
-    units[i].status.flags = 0xFF;
-    units[i].status.mcusrAtBoot = 255;
-    units[i].status.lifetimeBrownoutCount = 255;
-    units[i].status.lifetimeWatchdogCount = 255;
-    units[i].status.uptimeSeconds = 65535;
-    units[i].status.badCommandCount = 255;
-    units[i].status.lastHomingStepCount = 65520;
-    units[i].odometer = 0xFFFFFFFEUL;  // widest possible "odo" field (#231)
-    units[i].odometerValid = true;
-    units[i].offset = -32768;  // widest "ofs" field
-    units[i].offsetValid = true;
-    units[i].diagValid = true;         // widest drift block (#263/#264)
-    units[i].physLetter = 44;
-    units[i].driftFlags = 0x03;
-    units[i].driftEvents = 255;
-    units[i].lastDriftSteps = -127;
-    units[i].mismatch = true;  // widest drift block on every unit
-    units[i].misses = 255;     // widest heartbeat block (#310)
-    units[i].stale = true;
-    units[i].lastSeenMs = 0;   // with the wide nowMs below -> 10-digit "age"
-    units[i].i2cErrors = 0xFFFF;  // widest err/errAge block (#367)
-    units[i].rescueExits = 0xFFFF;  // widest rsx key (#498)
-    units[i].lastErrorMs = 0;     // 10-digit errAge against the wide nowMs
-    // Widest ext-diag block (#365): all fields saturated.
-    units[i].extDiagValid = true;
-    units[i].extDiag.stepExcessLast = 0xFFFF;
-    units[i].extDiag.stepExcessMax = 0xFFFF;
-    units[i].extDiag.vccSagLastMove = 0xFFFF;
-    units[i].extDiag.hallEdgesLastRev = 0xFF;
-    units[i].extDiag.dutyWindow = 0xFFFF;
-    units[i].extDiag.statusBits = 0xFF;
-    // Widest link-health block (#502).
-    units[i].linkValid = true;
-    units[i].resetSeen = true;  // #502: the rs key
-    units[i].link.uptimeSeconds = 0xFFFFFFFFUL;
-    units[i].link.rxFrames = 0xFFFF;
-    units[i].link.txReplies = 0xFFFF;
-    units[i].link.deafHeals = 0xFF;
-    units[i].bootVerdict = BOOT_INTEGRITY_CORRUPT;  // #520: bv + bcrc
-    units[i].bootCrc32 = 0xFFFFFFFFUL;
-    // Widest lifetime block (#406): all fields saturated.
-    units[i].lifetimeValid = true;
-    units[i].lifetime.homeFailedCount = 0xFF;
-    units[i].lifetime.featureGates = 0xFF;
-    units[i].lifetime.stepExcessLifetimeMax = 0xFFFF;
-    units[i].lifetime.selfTestFirstHallWindow = 0xFFFF;
-    units[i].lifetime.selfTestFirstStepsPerRev = 0xFFFF;
-    units[i].lifetime.selfTestLastHallWindow = 0xFFFF;
-    units[i].lifetime.selfTestLastStepsPerRev = 0xFFFF;
-    units[i].lifetime.idleHallFutileRehomes = LIFETIME_FUTILE_REHOME_MAX;
-    units[i].lifetime.idleHallStoodDown = true;
-  }
-  char buf[UNIT_HEALTH_JSON_CAP];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
-                                 0xFFFFFFFFUL);
-  TEST_ASSERT_TRUE(n < sizeof(buf));
-  TEST_ASSERT_TRUE(n + 96 <= UNIT_HEALTH_JSON_CAP);
-  // The ext-diag block (#365) must actually be present at this saturation —
-  // otherwise the headroom assertion above is vacuous.
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"se\":65535"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sx\":65535"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sag\":65535"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"he\":255"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"dw\":65535"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sb\":255"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"ut\":4294967295,\"rx\":65535,\"tx\":65535,\"dh\":255"));
-  // Same for the lifetime block (#406).
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"hf\":255"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"gates\":255"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"sxl\":65535"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"stw0\":65535,\"stw1\":65535"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"str0\":65535,\"str1\":65535"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"fr\":127"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"frd\":1"));
-}
-
 // --- lifetime block (#406) ---------------------------------------------------
 
 static void test_health_json_lifetime_emitted_when_valid() {
@@ -875,107 +789,6 @@ static void test_health_json_link_keys_only_when_valid() {
   TEST_ASSERT_NOT_NULL(second);
   TEST_ASSERT_NULL(strstr(second, "\"ut\""));
   TEST_ASSERT_NOT_NULL(strstr(second, "\"se\""));
-}
-
-static void test_health_json_combined_splices_fit_cap() {
-  // WebEndpoints splices BOTH the wear object (#231) and the reflash object
-  // (#205) into the same cap-sized buffer, each before the closing brace.
-  // Rebuild that combination at its worst case with the endpoint's exact
-  // arithmetic: all three keys must survive, or a future growth of any one
-  // piece silently drops the later splice.
-  UnitFacts units[16];
-  for (int i = 0; i < 16; i++) {
-    units[i].state = 1;
-    units[i].statusValid = true;
-    units[i].fwStatus = 2;
-    strcpy(units[i].version, "abc12345");
-    units[i].status.flags = 0xFF;
-    units[i].status.mcusrAtBoot = 255;
-    units[i].status.lifetimeBrownoutCount = 255;
-    units[i].status.lifetimeWatchdogCount = 255;
-    units[i].status.uptimeSeconds = 65535;
-    units[i].status.badCommandCount = 255;
-    units[i].status.lastHomingStepCount = 65520;
-    units[i].odometer = 0xFFFFFFFEUL;
-    units[i].odometerValid = true;
-    units[i].offset = -32768;  // widest "ofs" field
-    units[i].offsetValid = true;
-    units[i].diagValid = true;
-    units[i].physLetter = 44;
-    units[i].driftFlags = 0x03;
-    units[i].driftEvents = 255;
-    units[i].lastDriftSteps = -127;
-    units[i].mismatch = true;
-    units[i].vitals.vccNow_mV = 65535;
-    units[i].vitals.vccMin_mV = 65535;
-    units[i].vitals.cmdPos = 44;
-    units[i].vitals.freeRamMin = 65535;
-    units[i].vitalsValid = true;
-    units[i].bootVerdict = BOOT_INTEGRITY_CORRUPT;  // #520
-    units[i].bootCrc32 = 0xFFFFFFFFUL;
-    units[i].misses = 255;     // widest heartbeat block (#310)
-    units[i].stale = true;
-    units[i].lastSeenMs = 0;
-    units[i].i2cErrors = 0xFFFF;  // widest err/errAge block (#367)
-    units[i].rescueExits = 0xFFFF;  // widest rsx key (#498)
-    units[i].lastErrorMs = 0;
-    // Widest ext-diag block (#365): all fields saturated.
-    units[i].extDiagValid = true;
-    units[i].extDiag.stepExcessLast = 0xFFFF;
-    units[i].extDiag.stepExcessMax = 0xFFFF;
-    units[i].extDiag.vccSagLastMove = 0xFFFF;
-    units[i].extDiag.hallEdgesLastRev = 0xFF;
-    units[i].extDiag.dutyWindow = 0xFFFF;
-    units[i].extDiag.statusBits = 0xFF;
-    // Widest lifetime block (#406): all fields saturated.
-    units[i].lifetimeValid = true;
-    units[i].lifetime.homeFailedCount = 0xFF;
-    units[i].lifetime.featureGates = 0xFF;
-    units[i].lifetime.stepExcessLifetimeMax = 0xFFFF;
-    units[i].lifetime.selfTestFirstHallWindow = 0xFFFF;
-    units[i].lifetime.selfTestFirstStepsPerRev = 0xFFFF;
-    units[i].lifetime.selfTestLastHallWindow = 0xFFFF;
-    units[i].lifetime.selfTestLastStepsPerRev = 0xFFFF;
-    units[i].lifetime.idleHallFutileRehomes = LIFETIME_FUTILE_REHOME_MAX;
-    units[i].lifetime.idleHallStoodDown = true;
-  }
-  char buf[UNIT_HEALTH_JSON_CAP];
-  size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 16, 16, 1,
-                                 0xFFFFFFFFUL);
-  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
-
-  // Worst wear fragment: 10-digit median, every unit flagged (hand-filled —
-  // assessWear can never flag all 16, but the buffer must survive it).
-  WearAssessment w;
-  w.median = 0xFFFFFFFFUL;
-  for (int i = 0; i < 16; i++) w.flagged[i] = true;
-  w.flaggedCount = 16;
-  char wearJson[96];
-  size_t wearLen = buildWearJson(w, wearJson, sizeof(wearJson));
-  TEST_ASSERT_TRUE(wearLen > 0 && wearLen < sizeof(wearJson));
-  TEST_ASSERT_TRUE(n + wearLen + 2 < UNIT_HEALTH_JSON_CAP);
-  n += (size_t)snprintf(buf + n - 1, UNIT_HEALTH_JSON_CAP - n + 1, ",%s}",
-                        wearJson) - 1;
-
-  // Worst reflash fragment: the real builder, every field saturated and the
-  // longest state name.
-  ReflashProgress worst;
-  worst.state = ReflashState::BootUpdate;
-  worst.total = worst.done = worst.failed = 255;
-  worst.currentAddr = 127;
-  worst.bootDone = worst.bootFailed = 255;
-  char reflashJson[REFLASH_JSON_CAP];
-  buildReflashJson(reflashJson, sizeof(reflashJson), worst);
-  TEST_ASSERT_EQUAL_CHAR('}', reflashJson[strlen(reflashJson) - 1]);
-  TEST_ASSERT_TRUE(n + strlen(reflashJson) + 13 < UNIT_HEALTH_JSON_CAP);
-  snprintf(buf + n - 1, UNIT_HEALTH_JSON_CAP - n + 1, ",\"reflash\":%s}",
-           reflashJson);
-
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"odo\":"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"wear\":{"));
-  TEST_ASSERT_NOT_NULL(strstr(buf, "\"reflash\":{"));
-  TEST_ASSERT_EQUAL_CHAR('}', buf[strlen(buf) - 1]);
-  TEST_ASSERT_TRUE(strlen(buf) < UNIT_HEALTH_JSON_CAP);
 }
 
 // --- vitals block (#306) ----------------------------------------------------
@@ -1236,7 +1049,6 @@ int main(int, char**) {
   RUN_TEST(test_health_json_phys_omitted_when_position_unknown);
   RUN_TEST(test_health_json_emits_stamped_mismatch_only);
   RUN_TEST(test_health_json_no_mismatch_without_position);
-  RUN_TEST(test_health_json_worst_case_fits_cap_with_reflash_headroom);
   RUN_TEST(test_a_corrupt_bootloader_makes_a_unit_faulty);
   RUN_TEST(test_health_json_boot_verdict_keys);
   RUN_TEST(test_health_json_bootloader_identity_keys);
@@ -1250,7 +1062,6 @@ int main(int, char**) {
   RUN_TEST(test_health_json_says_plainly_when_the_check_is_disarmed);
   RUN_TEST(test_health_json_fresh_unit_emits_no_lifetime_keys);
   RUN_TEST(test_health_json_self_test_pair_emits_when_only_one_is_set);
-  RUN_TEST(test_health_json_combined_splices_fit_cap);
   RUN_TEST(test_health_json_vitals_emitted_when_valid);
   RUN_TEST(test_health_json_headline_vccmin_is_min_across_units);
   RUN_TEST(test_health_json_no_vccmin_without_any_vitals);
