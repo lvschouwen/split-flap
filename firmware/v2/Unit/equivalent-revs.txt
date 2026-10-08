@@ -98,3 +98,9 @@ d360e2b da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
 # board or the master reflashed since reports it. Recorded when the origin
 # rule changed (#572), a shared header the unit does not compile.
 8631c22 da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
+#
+# 8cea404: the bundle rev since the stall-timing fix (#573); any unit a row
+# board or the master reflashed since reports it. Recorded when the flash loop
+# began sending each unit into its bootloader for its own flash (#577), a
+# shared header the unit does not compile.
+8cea404 b8f637b0681e94d909b0f575e6aca7d304ea2a3af90f2552415ba722ac751ccc

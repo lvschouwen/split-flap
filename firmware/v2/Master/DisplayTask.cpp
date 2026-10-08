@@ -470,7 +470,7 @@ static bool bootSweepHasWork(const DisplaySnapshot& snap) {
 // unit 2 exists (#412).
 static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
                           ReflashSweep sweep, uint8_t onlyAddr) {
-  reflashProgressBegin(local.reflash, 0);  // total known after the rescan
+  reflashProgressBegin(local.reflash, 0);  // total known once planned
   snapshotPublish(local);                  // gate closes here
 
   // With the gate closed, drain whatever slipped into the queue earlier —
@@ -510,8 +510,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
     }
     wdtFeed();
   }
-  // A Stop during the wait ends the job here, before any unit is sent into
-  // its bootloader: past this point a cancel leaves them parked there.
+  // A Stop during the wait ends the job here, before any unit is touched.
   if (unitBusAbortRequested()) {
     reflashProgressFinish(local.reflash, true, false);
     snapshotPublish(local);  // gate reopens here
@@ -519,47 +518,32 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
     return;
   }
 
-  // Push sweep-matching sketch units into twiboot (v1's
-  // enterBootloaderAllDetected), then wait out the watchdog reset +
-  // twiboot init before talking to anyone.
-  uint8_t addrs[UNITS_AMOUNT];
-  int rebooted = 0;
+  // The flash list: the sweep's sketch units and whoever already sits in
+  // twiboot. Nobody is sent into the bootloader here — the loop does that
+  // for each unit right before its own pages (reflashEnterUnit).
+  uint8_t sweepAddrs[UNITS_AMOUNT];
   int sweepCount = 0;
   switch (sweep) {
     case ReflashSweep::OffBundle:
       sweepCount = reflashCollectRebootTargets(local.units, UNITS_AMOUNT,
-                                               SFP_I2C_ADDRESS_BASE, addrs);
+                                               SFP_I2C_ADDRESS_BASE,
+                                               sweepAddrs);
       break;
     case ReflashSweep::OutdatedOnly:
       sweepCount = reflashCollectOutdatedTargets(local.units, UNITS_AMOUNT,
-                                                 SFP_I2C_ADDRESS_BASE, addrs);
+                                                 SFP_I2C_ADDRESS_BASE,
+                                                 sweepAddrs);
       break;
     case ReflashSweep::ForcedOne:
       sweepCount = reflashCollectForcedTarget(local.units, UNITS_AMOUNT,
                                               SFP_I2C_ADDRESS_BASE, onlyAddr,
-                                              addrs);
+                                              sweepAddrs);
       break;
   }
-  sweepCount = reflashFilterToAddress(addrs, sweepCount, onlyAddr);
-  for (int i = 0; i < sweepCount; i++) {
-    if (unitBusRebootToBootloader(addrs[i]) == 0) {
-      displayInvalidateUnitReads(local, addrs[i]);
-      rebooted++;
-    }
-  }
-  if (rebooted > 0) {
-    SerialPrintf("reflash: sent %d unit(s) into the bootloader\n", rebooted);
-    delay(TWIBOOT_STARTUP_MS);
-  }
-
-  // Rescan (inhibit bypassed by design, see block comment) to see who
-  // actually sits in twiboot, then plan the flash list from live truth.
-  unitBusProbe(busFacts, UNITS_AMOUNT);
-  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
-                        effectiveWidthOverride());
   uint8_t targets[UNITS_AMOUNT];
-  int total = reflashCollectFlashTargets(local.units, UNITS_AMOUNT,
-                                         SFP_I2C_ADDRESS_BASE, targets);
+  int total = reflashPlanTargets(local.units, UNITS_AMOUNT,
+                                 SFP_I2C_ADDRESS_BASE, sweepAddrs, sweepCount,
+                                 targets);
   total = reflashFilterToAddress(targets, total, onlyAddr);
   local.reflash.total = (uint8_t)total;
   snapshotPublish(local);
@@ -576,6 +560,18 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
     bool stopRequested() {
       wdtFeed();  // #314: I2C page-streaming is the longest displayTask op
       return unitBusAbortRequested();
+    }
+    bool imageFits() { return twibootImageFits(imageLen); }
+    bool inBootloader(uint8_t addr) { return unitBusIsBootloader(addr); }
+    int enterBootloader(uint8_t addr) {
+      int status = unitBusRebootToBootloader(addr);
+      if (status == 0) displayInvalidateUnitReads(local, addr);
+      return status;
+    }
+    void pause(uint32_t ms) { delay(ms); }
+    void unitNotEntered(uint8_t addr) {
+      SerialPrintf("reflash: unit 0x%02x is not in its bootloader — "
+                   "not flashed\n", addr);
     }
     ReflashUnitOutcome flashUnit(uint8_t addr) {
       UnitFlashResult r = unitBusFlashUnit(addr, image, imageLen);

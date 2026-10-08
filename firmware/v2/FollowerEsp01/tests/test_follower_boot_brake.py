@@ -108,6 +108,6 @@ def test_targeted_run_flashes_only_the_planned_list():
     assert "unitFacts[" not in loop, "the loop must not re-derive targets from the facts"
     job = _function_body(_code(TREE / "FollowerBus.cpp"),
                          "void busRunReflashJob(uint8_t onlyAddr, bool force)")
-    assert job.count("reflashFilterToAddress(") == 2  # reboot sweep + planned total
+    assert "reflashPlanTargets(" in job
     narrowed = job.index("n = reflashFilterToAddress(flashTargets, n, onlyAddr);")
     assert narrowed < job.index("flashBootloaderUnits(flashTargets, n);")

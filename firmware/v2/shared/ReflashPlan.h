@@ -1,8 +1,8 @@
 #pragma once
 
 // ReflashPlan.h — pure planning + progress core of the unit reflash job
-// (#205, slice C of the I2C port). Who gets the enter-bootloader opcode,
-// who gets flashed, the per-unit progress a row master publishes, and the
+// (#205, slice C of the I2C port). Who gets flashed, when a unit is sent into
+// its bootloader, the per-unit progress a row master publishes, and the
 // job-level op grading. No Wire, no RTOS — natively tested by
 // test_reflash_plan (Master) and test_follower_ops (FollowerEsp01). The
 // hardware execution lives in each row master's bus file.
@@ -99,6 +99,22 @@ inline int reflashCollectFlashTargets(const UnitFacts* facts, int maxUnits,
   return n;
 }
 
+// The job's flash list, in address order: the sweep's sketch units and
+// whoever already sits in twiboot. Nobody is sent anywhere here — a unit
+// enters its bootloader when its own turn comes (reflashEnterUnit).
+inline int reflashPlanTargets(const UnitFacts* facts, int maxUnits, int base,
+                              const uint8_t* sweep, int sweepCount,
+                              uint8_t* outAddrs) {
+  int n = 0;
+  for (int i = 0; i < maxUnits; i++) {
+    uint8_t addr = (uint8_t)(base + i);
+    bool planned = facts[i].state == 2;
+    for (int k = 0; k < sweepCount && !planned; k++) planned = sweep[k] == addr;
+    if (planned) outAddrs[n++] = addr;
+  }
+  return n;
+}
+
 // Narrow any collected target list to a single address; 0 means "no filter"
 // and returns the list untouched (0 is the general-call address, never a
 // unit's, so it is free to use as the sentinel).
@@ -106,9 +122,8 @@ inline int reflashCollectFlashTargets(const UnitFacts* facts, int maxUnits,
 // A filter rather than three extra parameters: all three collectors above
 // answer "who matches this predicate", and "…and is this one unit" is a
 // separate question that composes with each of them identically. It is
-// applied to BOTH the reboot sweep and the post-rescan flash list, so a unit
-// stranded in twiboot by an earlier attempt is not swept up by a run aimed at
-// a different address.
+// applied to the planned flash list, so a unit stranded in twiboot by an
+// earlier attempt is not swept up by a run aimed at a different address.
 //
 // Exists for the #407 campaign (#412): a day-0 EEPROM erase on a wire contract
 // that has never run on hardware is not something to hand a 21-unit sweep. The
@@ -184,7 +199,7 @@ inline bool reflashParseAddress(const char* raw, long& out) {
 
 enum class ReflashState : uint8_t {
   Idle = 0,   // no job since boot (snapshot default)
-  Entering,   // enter-bootloader sweep + twiboot settle + rescan
+  Entering,   // waiting for the row to stand still before the first unit
   Flashing,   // streaming pages to currentAddr
   Settling,   // waiting for a flashed batch to come back online + home
   BootUpdate, // bringing boot sections to the current image (UnitUpdateJob.h)
@@ -294,26 +309,60 @@ enum class ReflashUnitOutcome : uint8_t {
   Flashed = 0,
   Failed,   // this unit did not take the image; it stays in twiboot
   Stopped,  // the flash was aborted mid-unit — the run ends here
+  NotEntered,  // the unit is not in its bootloader: nothing was sent to it
 };
 
 struct ReflashRunEnd {
   bool cancelled = false;  // the tree asked to stop
   bool halted = false;     // consecutive failures stopped the run (#412)
   uint8_t flashed = 0;
+  uint8_t notEntered = 0;
 };
+
+// Gets one unit into twiboot for its own pages. A unit waits there only for
+// its own flash: the bootloader goes back to the unit's firmware once it has
+// not been addressed for SF_PIN_TIMEOUT_MS (UnitBootloader/main.c), which is
+// shorter than the flash of a row. A unit already there gets no order. Both
+// answers are asked of the unit, never read from the facts, so pages are
+// never sent to a unit that is running its firmware.
+//
+// A unit that took the order may reach its reset late, so it is asked a few
+// times. The last question still falls inside the bootloader's start window
+// (TIMEOUT_MS, 1000 ms from the reset) of a unit that entered on time: asked
+// later, such a unit would be back in its firmware and read as never entered.
+#define REFLASH_ENTER_PROBES 4
+#define REFLASH_ENTER_PROBE_GAP_MS 100UL
+template <typename Hooks>
+inline bool reflashEnterUnit(Hooks& h, uint8_t addr) {
+  if (h.inBootloader(addr)) return true;
+  if (h.enterBootloader(addr) != 0) return false;
+  h.pause(TWIBOOT_STARTUP_MS);
+  for (int attempt = 1;; attempt++) {
+    if (h.inBootloader(addr)) return true;
+    if (attempt >= REFLASH_ENTER_PROBES) return false;
+    h.pause(REFLASH_ENTER_PROBE_GAP_MS);
+  }
+}
 
 // Flashes the planned targets in batches and keeps the progress object
 // current. v1 #138 brownout throttle: once REFLASH_BATCH_SIZE units have been
 // flashed, wait for them to come back online and finish homing before
 // flashing more — post-flash homing current shares a supply with the
 // steppers. Two failures back to back end the run (#412); one success in
-// between resets the count.
+// between resets the count. A unit that is not in its bootloader when its
+// turn comes is not flashed and counts as failed for the job, but says
+// nothing about the image: it neither adds to that count nor resets it.
 //
 // The trailing settle runs on EVERY exit: it is brownout pacing and is never
 // shortened, so even a cancelled or halted run waits out the homing of the
 // units it already flashed before the row is handed back.
 //
 //   bool stopRequested()                        checked before each unit
+//   bool imageFits()                            the image leaves twiboot alone
+//   bool inBootloader(uint8_t addr)             asks the unit
+//   int enterBootloader(uint8_t addr)           0 = the unit took the order
+//   void pause(uint32_t ms)
+//   void unitNotEntered(uint8_t addr)           worth a log line
 //   ReflashUnitOutcome flashUnit(uint8_t addr)
 //   void unitFlashed(uint8_t addr)              the unit runs its sketch again
 //   void progressChanged()                      publish the progress object
@@ -335,7 +384,12 @@ inline ReflashRunEnd reflashRunTargets(Hooks& h, const uint8_t* targets,
     reflashProgressUnitStart(progress, addr);
     h.progressChanged();
 
-    ReflashUnitOutcome outcome = h.flashUnit(addr);
+    // An image that cannot be flashed costs no unit a trip through its
+    // bootloader: flashUnit refuses it before anything is sent.
+    ReflashUnitOutcome outcome =
+        (h.imageFits() && !reflashEnterUnit(h, addr))
+            ? ReflashUnitOutcome::NotEntered
+            : h.flashUnit(addr);
     bool ok = outcome == ReflashUnitOutcome::Flashed;
     reflashProgressUnitResult(progress, ok);
     if (outcome == ReflashUnitOutcome::Stopped) {
@@ -348,6 +402,9 @@ inline ReflashRunEnd reflashRunTargets(Hooks& h, const uint8_t* targets,
       h.unitFlashed(addr);
       batch[inBatch++] = addr;
       end.flashed++;
+    } else if (outcome == ReflashUnitOutcome::NotEntered) {
+      h.unitNotEntered(addr);
+      end.notEntered++;
     } else if (consecutiveFailures < 0xFF) {
       consecutiveFailures++;
     }

@@ -395,6 +395,15 @@ struct LoopHooks {
   int failCount = 0;
   uint8_t stopAtAddr = 0;      // flashUnit reports Stopped for this unit
   int stopBeforeUnit = -1;     // stopRequested() turns true at this call
+  uint8_t sketchAddrs[8] = {0};  // units running their firmware at the start
+  int sketchCount = 0;
+  uint8_t deafAddrs[8] = {0};    // do not take the enter-bootloader order
+  int deafCount = 0;
+  uint8_t stayAddrs[8] = {0};    // take the order and come back in the sketch
+  int stayCount = 0;
+  uint8_t lateAddr = 0;          // takes the order, answers as a bootloader
+  int lateProbes = 0;            // only after this many more questions
+  bool fits = true;
   // observations
   int asked = 0;
   int flashCalls = 0;
@@ -404,14 +413,61 @@ struct LoopHooks {
   int haltedLeft = -1;
   uint8_t flashedAddrs[16] = {0};
   int flashedCount = 0;
+  int enterCalls = 0;
+  int probes = 0;
+  bool lateOrdered = false;
+  uint32_t pausedMs = 0;
+  uint8_t notEnteredAddrs[16] = {0};
+  int notEnteredCount = 0;
+  char order[96] = "";  // "e<addr>" an order sent, "f<addr>" a flash started
+
+  static bool has(const uint8_t* list, int n, uint8_t addr) {
+    for (int i = 0; i < n; i++) {
+      if (list[i] == addr) return true;
+    }
+    return false;
+  }
+  void note(char what, uint8_t addr) {
+    size_t at = strlen(order);
+    snprintf(order + at, sizeof(order) - at, "%s%c%u", at ? " " : "", what,
+             (unsigned)addr);
+  }
 
   bool stopRequested() { return stopBeforeUnit >= 0 && asked++ >= stopBeforeUnit; }
+  bool imageFits() { return fits; }
+  bool inBootloader(uint8_t addr) {
+    probes++;
+    if (addr == lateAddr && lateOrdered) {
+      if (lateProbes-- > 0) return false;
+      forget(addr);
+    }
+    return !has(sketchAddrs, sketchCount, addr);
+  }
+  void forget(uint8_t addr) {
+    for (int i = 0; i < sketchCount; i++) {
+      if (sketchAddrs[i] == addr) sketchAddrs[i] = 0;
+    }
+  }
+  int enterBootloader(uint8_t addr) {
+    enterCalls++;
+    note('e', addr);
+    if (has(deafAddrs, deafCount, addr)) return 2;
+    if (has(stayAddrs, stayCount, addr)) return 0;
+    if (addr == lateAddr) {
+      lateOrdered = true;
+      return 0;
+    }
+    forget(addr);
+    return 0;
+  }
+  void pause(uint32_t ms) { pausedMs += ms; }
+  void unitNotEntered(uint8_t addr) { notEnteredAddrs[notEnteredCount++] = addr; }
   ReflashUnitOutcome flashUnit(uint8_t addr) {
     flashCalls++;
+    note('f', addr);
+    if (!fits) return ReflashUnitOutcome::Failed;
     if (addr == stopAtAddr) return ReflashUnitOutcome::Stopped;
-    for (int i = 0; i < failCount; i++) {
-      if (failAddrs[i] == addr) return ReflashUnitOutcome::Failed;
-    }
+    if (has(failAddrs, failCount, addr)) return ReflashUnitOutcome::Failed;
     return ReflashUnitOutcome::Flashed;
   }
   void unitFlashed(uint8_t addr) { flashedAddrs[flashedCount++] = addr; }
@@ -509,6 +565,166 @@ static void test_loop_with_no_targets_does_nothing() {
   TEST_ASSERT_EQUAL(0, h.settles);
 }
 
+// --- a unit enters its bootloader for its own flash only (#577) ---------------
+
+static void test_loop_enters_each_unit_right_before_its_own_flash() {
+  LoopHooks h;
+  for (uint8_t a = 1; a <= 5; a++) h.sketchAddrs[h.sketchCount++] = a;
+  ReflashProgress p;
+  uint8_t targets[5] = {1, 2, 3, 4, 5};
+  reflashProgressBegin(p, 5);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 5, p);
+  // No unit waits in its bootloader while another one is flashed.
+  TEST_ASSERT_EQUAL_STRING("e1 f1 e2 f2 e3 f3 e4 f4 e5 f5", h.order);
+  TEST_ASSERT_EQUAL_UINT32(5 * TWIBOOT_STARTUP_MS, h.pausedMs);
+  TEST_ASSERT_EQUAL_UINT8(5, end.flashed);
+  TEST_ASSERT_EQUAL_UINT8(0, end.notEntered);
+}
+
+static void test_loop_sends_no_order_to_a_unit_already_in_its_bootloader() {
+  LoopHooks h;
+  h.sketchAddrs[h.sketchCount++] = 2;
+  ReflashProgress p;
+  uint8_t targets[3] = {1, 2, 3};
+  reflashProgressBegin(p, 3);
+  reflashRunTargets(h, targets, 3, p);
+  TEST_ASSERT_EQUAL_STRING("f1 e2 f2 f3", h.order);
+  TEST_ASSERT_EQUAL_UINT32(TWIBOOT_STARTUP_MS, h.pausedMs);
+}
+
+static void test_loop_unit_that_refuses_the_order_is_not_flashed() {
+  LoopHooks h;
+  h.sketchAddrs[h.sketchCount++] = 2;
+  h.deafAddrs[h.deafCount++] = 2;
+  ReflashProgress p;
+  uint8_t targets[3] = {1, 2, 3};
+  reflashProgressBegin(p, 3);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 3, p);
+  TEST_ASSERT_EQUAL_STRING("f1 e2 f3", h.order);
+  TEST_ASSERT_EQUAL_UINT32(0, h.pausedMs);  // nothing to wait for
+  TEST_ASSERT_EQUAL_UINT8(2, end.flashed);
+  TEST_ASSERT_EQUAL_UINT8(1, end.notEntered);
+  TEST_ASSERT_EQUAL_UINT8(1, p.failed);  // the job did not bring it up to date
+  TEST_ASSERT_EQUAL(1, h.notEnteredCount);
+  TEST_ASSERT_EQUAL_UINT8(2, h.notEnteredAddrs[0]);
+}
+
+static void test_loop_unit_back_in_its_sketch_after_the_order_is_not_flashed() {
+  LoopHooks h;
+  h.sketchAddrs[h.sketchCount++] = 2;
+  h.stayAddrs[h.stayCount++] = 2;
+  ReflashProgress p;
+  uint8_t targets[2] = {1, 2};
+  reflashProgressBegin(p, 2);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 2, p);
+  // Pages are never sent to a unit that is running its firmware.
+  TEST_ASSERT_EQUAL_STRING("f1 e2", h.order);
+  TEST_ASSERT_EQUAL_UINT8(1, end.notEntered);
+}
+
+static void test_loop_asks_a_slow_unit_again_before_giving_it_up() {
+  LoopHooks h;
+  h.sketchAddrs[h.sketchCount++] = 2;
+  h.lateAddr = 2;
+  h.lateProbes = REFLASH_ENTER_PROBES - 1;  // answers the last question
+  ReflashProgress p;
+  uint8_t targets[1] = {2};
+  reflashProgressBegin(p, 1);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 1, p);
+  TEST_ASSERT_EQUAL_UINT8(1, end.flashed);
+  TEST_ASSERT_EQUAL_STRING("e2 f2", h.order);
+  TEST_ASSERT_EQUAL_UINT32(
+      TWIBOOT_STARTUP_MS + (REFLASH_ENTER_PROBES - 1) * REFLASH_ENTER_PROBE_GAP_MS,
+      h.pausedMs);
+}
+
+static void test_loop_stops_asking_inside_the_bootloader_window() {
+  LoopHooks h;
+  h.sketchAddrs[h.sketchCount++] = 2;
+  h.stayAddrs[h.stayCount++] = 2;
+  ReflashProgress p;
+  uint8_t targets[1] = {2};
+  reflashProgressBegin(p, 1);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 1, p);
+  TEST_ASSERT_EQUAL_UINT8(1, end.notEntered);
+  TEST_ASSERT_EQUAL(1 + REFLASH_ENTER_PROBES, h.probes);  // one before the order
+  // A unit that entered on time is asked while its bootloader still listens:
+  // a question after it went back to its firmware could not be told from one
+  // that never entered.
+  TEST_ASSERT_TRUE(h.pausedMs < 1000);
+}
+
+static void test_loop_units_that_do_not_enter_never_halt_the_run() {
+  // A unit that is not there to be flashed says nothing about the image.
+  LoopHooks h;
+  for (uint8_t a = 2; a <= 4; a++) {
+    h.sketchAddrs[h.sketchCount++] = a;
+    h.deafAddrs[h.deafCount++] = a;
+  }
+  ReflashProgress p;
+  uint8_t targets[5] = {1, 2, 3, 4, 5};
+  reflashProgressBegin(p, 5);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 5, p);
+  TEST_ASSERT_FALSE(end.halted);
+  TEST_ASSERT_EQUAL(-1, h.haltedLeft);
+  TEST_ASSERT_EQUAL_UINT8(2, end.flashed);
+  TEST_ASSERT_EQUAL_UINT8(3, end.notEntered);
+  TEST_ASSERT_EQUAL_UINT8(3, p.failed);
+}
+
+static void test_loop_unit_that_does_not_enter_keeps_a_failure_streak() {
+  // Only a flashed unit speaks for the image.
+  LoopHooks h;
+  h.failAddrs[h.failCount++] = 1;
+  h.failAddrs[h.failCount++] = 3;
+  h.sketchAddrs[h.sketchCount++] = 2;
+  h.deafAddrs[h.deafCount++] = 2;
+  ReflashProgress p;
+  uint8_t targets[4] = {1, 2, 3, 4};
+  reflashProgressBegin(p, 4);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 4, p);
+  TEST_ASSERT_TRUE(end.halted);
+  TEST_ASSERT_EQUAL(1, h.haltedLeft);
+  TEST_ASSERT_EQUAL_STRING("f1 e2 f3", h.order);
+}
+
+static void test_loop_image_that_does_not_fit_sends_no_unit_anywhere() {
+  LoopHooks h;
+  h.fits = false;
+  for (uint8_t a = 1; a <= 4; a++) h.sketchAddrs[h.sketchCount++] = a;
+  ReflashProgress p;
+  uint8_t targets[4] = {1, 2, 3, 4};
+  reflashProgressBegin(p, 4);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 4, p);
+  TEST_ASSERT_EQUAL(0, h.enterCalls);
+  TEST_ASSERT_TRUE(end.halted);
+  TEST_ASSERT_EQUAL(2, h.flashCalls);
+}
+
+static void test_plan_targets_joins_the_sweep_and_bootloader_units_in_order() {
+  UnitFacts facts[6] = {};
+  facts[0].state = 1;  // unit 1: sketch, not in the sweep
+  facts[1].state = 2;  // unit 2: already in its bootloader
+  facts[2].state = 1;  // unit 3: sketch, in the sweep
+  facts[4].state = 2;  // unit 5: in its bootloader AND named by the sweep
+  facts[5].state = 1;  // unit 6: sketch, in the sweep
+  uint8_t sweep[3] = {6, 3, 5};
+  uint8_t out[6] = {0};
+  int n = reflashPlanTargets(facts, 6, 1, sweep, 3, out);
+  TEST_ASSERT_EQUAL(4, n);
+  uint8_t want[4] = {2, 3, 5, 6};
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(want, out, 4);
+}
+
+static void test_plan_targets_without_a_sweep_is_the_bootloader_units() {
+  UnitFacts facts[4] = {};
+  facts[0].state = 1;
+  facts[2].state = 2;
+  uint8_t out[4] = {0};
+  TEST_ASSERT_EQUAL(1, reflashPlanTargets(facts, 4, 1, nullptr, 0, out));
+  TEST_ASSERT_EQUAL_UINT8(3, out[0]);
+}
+
 // --- force (#545): one named unit, whatever revision it reports ------------
 
 static void test_force_targets_a_current_sketch_unit() {
@@ -556,6 +772,17 @@ int main(int, char**) {
   RUN_TEST(test_loop_stop_request_before_a_unit_cancels);
   RUN_TEST(test_loop_unit_stopped_mid_flash_counts_as_failed_and_cancels);
   RUN_TEST(test_loop_with_no_targets_does_nothing);
+  RUN_TEST(test_loop_enters_each_unit_right_before_its_own_flash);
+  RUN_TEST(test_loop_sends_no_order_to_a_unit_already_in_its_bootloader);
+  RUN_TEST(test_loop_unit_that_refuses_the_order_is_not_flashed);
+  RUN_TEST(test_loop_unit_back_in_its_sketch_after_the_order_is_not_flashed);
+  RUN_TEST(test_loop_asks_a_slow_unit_again_before_giving_it_up);
+  RUN_TEST(test_loop_stops_asking_inside_the_bootloader_window);
+  RUN_TEST(test_loop_units_that_do_not_enter_never_halt_the_run);
+  RUN_TEST(test_loop_unit_that_does_not_enter_keeps_a_failure_streak);
+  RUN_TEST(test_loop_image_that_does_not_fit_sends_no_unit_anywhere);
+  RUN_TEST(test_plan_targets_joins_the_sweep_and_bootloader_units_in_order);
+  RUN_TEST(test_plan_targets_without_a_sweep_is_the_bootloader_units);
   RUN_TEST(test_needs_reboot_only_for_sketch_units_off_the_bundle);
   RUN_TEST(test_protocol_mismatch_needs_a_successful_read);
   RUN_TEST(test_protocol_mismatch_forces_reboot_even_on_the_bundled_rev);
