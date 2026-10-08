@@ -154,9 +154,7 @@ See [`flashing/README.md`](./flashing/README.md) for the full recipe (DIP addres
 
 ## PCB
 
-The **currently deployed** hardware uses the original per-unit Arduino-Nano PCB (Gerbers under `PCB/`), one board per unit. Services like [JLCPCB](https://jlcpcb.com/) or [PCBWay](https://www.pcbway.com/) can fabricate and assemble them — some surface-mount parts are best flow-soldered by the fab.
-
-A ground-up **v2 hardware redesign** is documented (not yet built) under [`PCB/v2/`](./PCB/v2/README.md): a custom STM32G030K8 unit board with an RS-485 multidrop bus, card-edge backplane, and silicon-UID addressing, plus a minimal ESP32-S3 master carrier. See `PCB/v2/OPEN_DECISIONS.md` for the locked decisions and open items.
+The **currently deployed** hardware uses the original per-unit Arduino-Nano PCB (Gerbers under `PCB/v1/`), one board per unit. Services like [JLCPCB](https://jlcpcb.com/) or [PCBWay](https://www.pcbway.com/) can fabricate and assemble them — some surface-mount parts are best flow-soldered by the fab.
 
 ## Common problems
 

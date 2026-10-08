@@ -145,11 +145,6 @@ One board per flap unit. From the committed BOM and EasyEDA schematic: ✅
 > **5 V** variant. **`README.md` is wrong on this point and should be
 > corrected.**
 
-> 🚫 **`PCB/v2/` is not evidence about this machine.** It documents a
-> cancelled paper redesign (RS-485, STM32 units, custom boards) that was
-> never built and never will be. It is cited nowhere in this document and
-> must not be used to reason about the deployed hardware.
-
 **Nano pin assignment (from `Unit.ino`):** ✅
 
 | Pin | Use |
@@ -679,7 +674,6 @@ decisions about the software.
 | ICSP access to the Nanos? | Physically reachable, but a 21-unit ICSP campaign is **not acceptable**. Treat twiboot's contract as fixed; a one-time flag day is possible only for a large payoff |
 | How does the S3 join the bus? | Wired into a unit board's **ESP-01 socket** — behind that board's BSS138 level shifter (§2.1, §3.1) |
 | Why two controllers? | The 16-unit DIP ceiling. The ESP-01 is the **second bus master**, not a leftover (§1, §3.2) |
-| Is `PCB/v2/` relevant? | **No.** Cancelled paper design, never built. Struck from this document |
 
 ### A. Gating — the design cannot be finished without these
 
@@ -751,6 +745,5 @@ decisions about the software.
 | Build sizes | `.pio` build artifacts + `avr-size`, 2026-07-27 |
 | Power, ESP-01→ESP32 swap, ICSP policy | operator, 2026-07-27 |
 
-**Deliberately not cited:** `PCB/v2/` — a cancelled paper redesign of hardware
-that was never built. `README.md` — contains at least one hardware error
+**Deliberately not cited:** `README.md` — contains at least one hardware error
 (§2.3); the schematic and the running boards win.
