@@ -67,3 +67,15 @@ def test_row_scan_after_a_bootloader_window_shows_the_frame_again():
 
 def test_row_reshow_is_staged_not_run_in_the_job():
     assert re.search(r"void busReshowLastFrame\(\) \{ reshowPending = lastFrameValid; \}", ROW_BUS)
+
+
+def test_master_frames_wait_out_a_bootloader_window():
+    """Every frame the master writes outside a unit update waits the window out (#581)."""
+    wait = body(MASTER, "static int showFrameOutsideBootloaderWindow(")
+    assert wait.index("twibootRiskUntilMs - millis()") < wait.index("unitBusShowFrame(")
+    raw = [m.start() for m in re.finditer(r"unitBusShowFrame\(", MASTER)]
+    # The wait itself, the re-show (which defers instead), and the two re-shows
+    # inside the unit update and bootloader update jobs, which own the window.
+    assert len(raw) == 4, len(raw)
+    for name in ("execShowText", "execResetUnits", "execStop", "execReflashUnits"):
+        assert "showFrameOutsideBootloaderWindow(" in body(MASTER, f"static void {name}(")

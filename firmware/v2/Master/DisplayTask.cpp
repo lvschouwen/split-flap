@@ -53,6 +53,18 @@ static void armTwibootRiskWindow() {
   twibootRiskUntilMs = millis() + UNIT_PROBE_INHIBIT_MS;
 }
 
+// A frame writes to every unit of the row, and a letter that reaches a unit
+// in its bootloader is read there as a bootloader command (#581). So a frame
+// waits the window out; what armed it is over in UNIT_PROBE_INHIBIT_MS.
+static int showFrameOutsideBootloaderWindow(const DisplaySnapshot& local,
+                                            const uint8_t* letters, int unitSpeed) {
+  while ((int32_t)(twibootRiskUntilMs - millis()) > 0) {
+    wdtFeed();
+    delay(20);
+  }
+  return unitBusShowFrame(local.units, local.displayWidth, letters, unitSpeed);
+}
+
 // Wire speed of the last text frame, so a rescued unit (#498) gets its
 // letter back at the speed the wall was last driven at.
 static int lastFrameUnitSpeed = convertSpeedToUnit(SETTINGS_DEFAULT_FLAP_SPEED);
@@ -710,8 +722,7 @@ static void execShowText(DisplaySnapshot& local, UnitFacts* busFacts,
   flapFrameBuild(cmd.text, local.displayWidth, cmd.alignment,
                  letters);
   lastFrameUnitSpeed = convertSpeedToUnit(cmd.speed);
-  int errs = unitBusShowFrame(local.units, local.displayWidth,
-                              letters, lastFrameUnitSpeed);
+  int errs = showFrameOutsideBootloaderWindow(local, letters, lastFrameUnitSpeed);
   // v1's lastShowUnitWriteErrors — the MQTT unitErrors telemetry
   // input (#224).
   local.lastShowWriteErrors = errs > 0 ? (uint8_t)errs : 0;
@@ -1030,19 +1041,16 @@ static void execResetUnits(DisplaySnapshot& local, UnitFacts* busFacts,
   row[local.displayWidth] = '\0';
   flapFrameBuild(row, local.displayWidth, DisplayAlignment::Left,
                  letters);
-  unitBusShowFrame(local.units, local.displayWidth, letters,
-                   unitSpeed);
+  showFrameOutsideBootloaderWindow(local, letters, unitSpeed);
   delay(2000);
   memset(row, '.', local.displayWidth);
   row[local.displayWidth] = '\0';
   flapFrameBuild(row, local.displayWidth, DisplayAlignment::Left,
                  letters);
-  unitBusShowFrame(local.units, local.displayWidth, letters,
-                   unitSpeed);
+  showFrameOutsideBootloaderWindow(local, letters, unitSpeed);
   flapFrameBuild(cmd.text, local.displayWidth, cmd.alignment,
                  letters);
-  unitBusShowFrame(local.units, local.displayWidth, letters,
-                   unitSpeed);
+  showFrameOutsideBootloaderWindow(local, letters, unitSpeed);
   memcpy(local.lastFrameLetters, letters, sizeof(letters));  // #264
   local.lastFrameValid = true;
   displayApplyMaintResult(local, cmd, MaintOutcome::Ok,
@@ -1059,8 +1067,7 @@ static void execStop(DisplaySnapshot& local, UnitFacts* busFacts,
   // a broadcast HOME started every stepper at once.
   unitBusClearAbort();
   uint8_t blanks[UNITS_AMOUNT] = {0};
-  int errs = unitBusShowFrame(local.units, local.displayWidth, blanks,
-                              lastFrameUnitSpeed);
+  int errs = showFrameOutsideBootloaderWindow(local, blanks, lastFrameUnitSpeed);
   // Every unit parks at blank — the intended frame follows (#264).
   memset(local.lastFrameLetters, 0, sizeof(local.lastFrameLetters));
   local.lastFrameValid = true;
@@ -1085,8 +1092,7 @@ static void execReflashUnits(DisplaySnapshot& local, UnitFacts* busFacts,
     uint8_t letters[UNITS_AMOUNT];
     flapFrameBuild(cmd.text, local.displayWidth, cmd.alignment,
                    letters);
-    unitBusShowFrame(local.units, local.displayWidth, letters,
-                     convertSpeedToUnit(cmd.speed));
+    showFrameOutsideBootloaderWindow(local, letters, convertSpeedToUnit(cmd.speed));
     memcpy(local.currentText, cmd.text, sizeof(local.currentText));
     memcpy(local.lastFrameLetters, letters, sizeof(letters));  // #264
     local.lastFrameValid = true;
