@@ -193,7 +193,9 @@ enum UpdateReason {
   UPDATE_BAD_OFFER = 3;           // no rev, size or md5
   UPDATE_TOO_LARGE = 4;           // detail = the bytes this row can store
   UPDATE_NO_MEMORY = 5;
-  UPDATE_UNREACHABLE = 6;         // no HTTP answer from the master
+  UPDATE_UNREACHABLE = 6;         // no HTTP answer from the master; detail = the row's
+                                  // HTTP client error without its sign (1 = no
+                                  // connection, 11 = no answer in time), 0 = none
   UPDATE_HTTP_STATUS = 7;         // detail = the status
   UPDATE_SIZE_DIFFERS = 8;        // detail = the length the master's answer gave
   UPDATE_IMAGE = 9;               // not an image this board may install;

@@ -69,7 +69,10 @@ inline uint16_t followerUpdatePort(uint32_t offered) {
 inline wl_UpdateReason followerUpdateAnswer(int httpCode, int contentLength, uint32_t offeredSize,
                                             uint32_t& detail) {
   detail = 0;
-  if (httpCode <= 0) return wl_UpdateReason_UPDATE_UNREACHABLE;
+  if (httpCode <= 0) {
+    detail = (uint32_t)(-httpCode);  // the HTTP client's error, without its sign
+    return wl_UpdateReason_UPDATE_UNREACHABLE;
+  }
   if (httpCode != 200) {
     detail = (uint32_t)httpCode;
     return wl_UpdateReason_UPDATE_HTTP_STATUS;

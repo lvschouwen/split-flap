@@ -81,6 +81,11 @@ static void test_only_a_200_with_the_offered_length_is_downloaded() {
                     followerUpdateAnswer(200, 340000, 340000, detail));
   TEST_ASSERT_EQUAL(wl_UpdateReason_UPDATE_UNREACHABLE,
                     followerUpdateAnswer(-1, 0, 340000, detail));
+  TEST_ASSERT_EQUAL_UINT32(1, detail);
+  // The client's own error says where it stopped: -11 = no answer in time.
+  TEST_ASSERT_EQUAL(wl_UpdateReason_UPDATE_UNREACHABLE,
+                    followerUpdateAnswer(-11, 0, 340000, detail));
+  TEST_ASSERT_EQUAL_UINT32(11, detail);
   TEST_ASSERT_EQUAL(wl_UpdateReason_UPDATE_HTTP_STATUS,
                     followerUpdateAnswer(404, 9, 340000, detail));
   TEST_ASSERT_EQUAL_UINT32(404, detail);
