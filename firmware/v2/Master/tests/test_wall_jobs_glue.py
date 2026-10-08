@@ -85,7 +85,7 @@ def test_the_row_image_is_served_with_its_file_claimed():
     route = code[code.index('"/firmware/row", HTTP_GET'):]
     route = route[:route.index('"/firmware/master", HTTP_POST')]
     claim = route.index("followerImageTryClaimRelay()")
-    release = route.index("onDisconnect([]() { followerImageReleaseRelay(); })")
+    release = route.index("followerImageReleaseRelay();", route.index("onDisconnect("))
     send = route.index("request->send(LittleFS, FOLLOWER_IMAGE_PATH")
     assert claim < release < send
 

@@ -85,7 +85,16 @@ void webFirmwareRegister(AsyncWebServer& server) {
       request->send(503, "text/plain", F("the row image is being replaced"));
       return;
     }
-    request->onDisconnect([]() { followerImageReleaseRelay(); });
+    // Both ends of a download in the log: a row that reports no answer either
+    // never got here or was not served in its time.
+    const String from = request->client()->remoteIP().toString();
+    const uint32_t askedMs = millis();
+    SerialPrintln("row image: asked for by " + from);
+    request->onDisconnect([from, askedMs]() {
+      followerImageReleaseRelay();
+      SerialPrintf("row image: connection from %s closed after %u ms\n", from.c_str(),
+                   (unsigned)(millis() - askedMs));
+    });
     request->send(LittleFS, FOLLOWER_IMAGE_PATH, "application/octet-stream");
   });
 
