@@ -101,9 +101,12 @@ inline void crashCtxSet(CrashContext& c, int slot, uint8_t act, uint8_t arg,
 
 inline void crashCtxTick(CrashContext& c, uint32_t nowMs) { c.lastTickMs = nowMs; }
 
+// A slot marked after the last tick started later than the clock its age is
+// measured against: that reads as no age, not as 49 days.
 inline uint32_t crashCtxAgeMs(const CrashContext& c, int slot) {
   if (slot < 0 || slot >= CRASH_CTX_SLOTS) return 0;
-  return c.lastTickMs - c.slot[slot].sinceMs;
+  const int32_t age = (int32_t)(c.lastTickMs - c.slot[slot].sinceMs);
+  return age < 0 ? 0 : (uint32_t)age;
 }
 
 inline bool crashCtxWorthReporting(int resetReason) {

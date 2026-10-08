@@ -29,16 +29,20 @@ void crashCtxBoot() {
     report = rtcCtx;
     reportReason = reason;
     haveReport = true;
-    SerialPrintf("crash: reset by %s — tasks at the time:\n",
-                 webResetReasonName(reason));
-    for (int i = 0; i < CRASH_CTX_SLOTS; i++) {
-      SerialPrintf("crash:   %-8s %-12s arg 0x%02x for %lu ms\n",
-                   crashSlotName(i), crashActName(report.slot[i].act),
-                   (unsigned)report.slot[i].arg,
-                   (unsigned long)crashCtxAgeMs(report, i));
-    }
   }
   crashCtxArm(rtcCtx);
+}
+
+void crashCtxLogReport() {
+  if (!haveReport) return;
+  SerialPrintf("crash: reset by %s — tasks at the time:\n",
+               webResetReasonName(reportReason));
+  for (int i = 0; i < CRASH_CTX_SLOTS; i++) {
+    SerialPrintf("crash:   %-8s %-12s arg 0x%02x for %lu ms\n",
+                 crashSlotName(i), crashActName(report.slot[i].act),
+                 (unsigned)report.slot[i].arg,
+                 (unsigned long)crashCtxAgeMs(report, i));
+  }
 }
 
 void crashCtxMark(int slot, uint8_t act, uint8_t arg) {

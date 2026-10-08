@@ -13,6 +13,10 @@
 // With no rescue image to start it logs that and lets the boot go on.
 void bootGuardBoot();
 
+// Once the log is up (after flashLogInit()): what bootGuardBoot() found, when
+// it is worth a line — crashes counted, or a trip that could not be made.
+void bootGuardLogReport();
+
 // netTask each loop: forgives the count once this boot has run long enough.
 void bootGuardTick();
 

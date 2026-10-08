@@ -57,6 +57,24 @@ static void test_age_uses_last_tick() {
   TEST_ASSERT_EQUAL_UINT32(3500, crashCtxAgeMs(c, CRASH_SLOT_DISPLAY));
 }
 
+static void test_age_of_a_slot_marked_after_the_last_tick_is_zero() {
+  // A task marks between two net heartbeats: its start is newer than the
+  // clock the age is measured against.
+  CrashContext c;
+  crashCtxArm(c);
+  crashCtxTick(c, 4500);
+  crashCtxSet(c, CRASH_SLOT_MQTT, CRASH_ACT_MQTT, 0, 4507);
+  TEST_ASSERT_EQUAL_UINT32(0, crashCtxAgeMs(c, CRASH_SLOT_MQTT));
+}
+
+static void test_age_spans_the_millis_wrap() {
+  CrashContext c;
+  crashCtxArm(c);
+  crashCtxSet(c, CRASH_SLOT_NET, CRASH_ACT_WIFI, 0, 0xFFFFFF00UL);
+  crashCtxTick(c, 0x00000100UL);
+  TEST_ASSERT_EQUAL_UINT32(0x200, crashCtxAgeMs(c, CRASH_SLOT_NET));
+}
+
 static void test_static_init_leaves_the_record_intact() {
   // The RTC_NOINIT instance is a global: any constructor (default member
   // initializers included) runs at every boot, before setup(), and wipes
@@ -97,6 +115,8 @@ int main() {
   RUN_TEST(test_repeating_the_same_activity_keeps_its_start_time);
   RUN_TEST(test_out_of_range_slot_is_ignored);
   RUN_TEST(test_age_uses_last_tick);
+  RUN_TEST(test_age_of_a_slot_marked_after_the_last_tick_is_zero);
+  RUN_TEST(test_age_spans_the_millis_wrap);
   RUN_TEST(test_static_init_leaves_the_record_intact);
   RUN_TEST(test_names);
   RUN_TEST(test_crash_reset_classification);

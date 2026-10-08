@@ -35,6 +35,9 @@ void bootTraceInit() {
   }
   bootTraceBegin(trace, (uint8_t)esp_reset_reason());
   persistLocked();  // single-threaded here: no tasks yet
+}
+
+void bootTraceLogReport() {
   int failed = bootTraceFailedStreak(trace);
   if (failed == 0) return;
   SerialPrintf("boot: %d previous boot(s) never came online:\n", failed);

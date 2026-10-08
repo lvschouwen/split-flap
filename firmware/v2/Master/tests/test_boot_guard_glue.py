@@ -74,3 +74,14 @@ def test_a_running_net_task_forgives_and_nothing_else_does():
     assert "!bootGuardHealthy(millis())" in tick
     # Three writes: this boot's count, the trip, the healthy run.
     assert len(re.findall(r"bootGuardEncode\(guardRecord", _code("BootGuard.cpp"))) == 3
+
+
+def test_what_the_boot_found_is_logged_once_the_log_is_up():
+    # The boot records run before the log exists; a line printed there
+    # reaches the serial console only (#510).
+    setup = _body(_code("main.cpp"), "void setup(")
+    log_up = setup.index("flashLogInit();")
+    for report in ("bootTraceLogReport();", "crashCtxLogReport();", "bootGuardLogReport();"):
+        assert log_up < setup.index(report) < setup.index("tasksInit(")
+    assert "SerialPrint" not in _body(_code("BootTrace.cpp"), "void bootTraceInit(")
+    assert "SerialPrint" not in _body(_code("CrashContext.cpp"), "void crashCtxBoot(")

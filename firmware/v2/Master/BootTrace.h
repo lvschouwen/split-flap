@@ -8,9 +8,12 @@
 
 #include "BootTracePolicy.h"
 
-// Top of setup(), single-threaded: loads the ring, appends this boot, logs
-// the previous boots when any of them failed to come online.
+// Top of setup(), single-threaded: loads the ring and appends this boot.
 void bootTraceInit();
+
+// Once the log is up (after flashLogInit()), still single-threaded: the
+// previous boots, when any of them failed to come online.
+void bootTraceLogReport();
 
 // Any task: records that this boot reached `stage` (writes NVS only when the
 // stage advances — at most once per stage per boot).

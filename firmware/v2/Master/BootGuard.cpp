@@ -29,6 +29,12 @@ static uint32_t trips = 0;
 static uint8_t tripReason = 0;
 static String tripRev;
 
+// What bootGuardBoot() found, for bootGuardLogReport(): it runs before the
+// log exists.
+static uint8_t crashesAtBoot = 0;
+static int resetAtBoot = 0;
+static bool rescueUnverified = false;
+
 static void loadTrip() {
   Preferences prefs;
   if (!prefs.begin(kNamespace, /*readOnly=*/true)) return;
@@ -55,16 +61,15 @@ void bootGuardBoot() {
   const uint8_t crashes = bootGuardStep(bootGuardDecode(guardRecord), reason);
   bootGuardEncode(guardRecord, crashes);
   crashesNow.store(crashes, std::memory_order_relaxed);
+  crashesAtBoot = crashes;
+  resetAtBoot = reason;
   loadTrip();
   if (!bootGuardShouldTrip(crashes)) return;
 
-  SerialPrintf("boot guard: %u crashes in a row (last: %s)\n", (unsigned)crashes,
-               webResetReasonName(reason));
   // A slot that would not start is no way out: the bootloader would come
   // straight back to this image, with otadata gone.
   if (!factorySlotImageVerified()) {
-    SerialPrintln(F("boot guard: no rescue image that verifies — staying on "
-                    "this image"));
+    rescueUnverified = true;  // said by bootGuardLogReport()
     return;
   }
   if (!rescueBootArm()) return;
@@ -75,6 +80,17 @@ void bootGuardBoot() {
   SerialPrintln(F("boot guard: restarting into the rescue image"));
   Serial.flush();
   esp_restart();
+}
+
+void bootGuardLogReport() {
+  if (crashesAtBoot == 0) return;
+  SerialPrintf("boot guard: %u of %d crashes in a row (last: %s)\n",
+               (unsigned)crashesAtBoot, BOOT_GUARD_CRASH_LIMIT,
+               webResetReasonName(resetAtBoot));
+  if (rescueUnverified) {
+    SerialPrintln(F("boot guard: no rescue image that verifies — staying on "
+                    "this image"));
+  }
 }
 
 void bootGuardTick() {

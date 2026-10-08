@@ -142,6 +142,10 @@ void setup() {
                  // reach GET /api/v2/log
   flashLogInit();  // #206: mounts `storage`, writes the boot marker; from
                    // here every SerialPrint* also lands in /log.txt
+  // What the three above found, now that a line is kept (#510).
+  bootTraceLogReport();
+  crashCtxLogReport();
+  bootGuardLogReport();
   followerImageStoreInit();  // #304: read the stored ESP-01 image rev/presence
   // #570: the record of what happened on the wall, and this start in it.
   eventRecordInit();
