@@ -77,11 +77,9 @@ function renderStatus(st) {
                         : '<span class="bad">empty/invalid</span>';
     if (s.running) state += ' <span class="muted">(running)</span>';
     if (s.label === st.exit) state += ' <span class="muted">(exit target)</span>';
-    // s.rev = git rev from the firmware's confirm record. The descriptor's
-    // version/built are frozen into the framework libraries and repeat on
-    // every image, so they are not shown as if they described this one. The
-    // running slot is this rescue image, whose rev is st.rescue.
-    var rev = !s.valid ? "—" : s.rev ? s.rev : s.running ? st.rescue : "not recorded";
+    // s.rev = git rev from the firmware's confirm record, or this rescue
+    // image's own for the slot it runs from.
+    var rev = !s.valid ? "—" : s.rev ? s.rev : "not recorded";
     rows += "<tr><td>" + esc(s.label) + "</td><td>" + state + "</td><td>" +
             esc(rev) + "</td></tr>";
   });

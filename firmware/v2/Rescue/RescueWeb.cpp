@@ -56,17 +56,6 @@ static void stageReboot() {
   rebootPending.store(true);
 }
 
-// esp_app_desc strings are compiler-controlled but a hand-flashed image
-// could hold anything: keep JSON output printable-ASCII, drop quote/backslash.
-static String jsonSanitize(const char* raw, size_t maxLen) {
-  String out;
-  for (size_t i = 0; i < maxLen && raw[i] != '\0'; i++) {
-    char c = raw[i];
-    if (c >= 0x20 && c <= 0x7E && c != '"' && c != '\\') out += c;
-  }
-  return out;
-}
-
 struct SlotProbe {
   const esp_partition_t* part = nullptr;
   bool valid = false;
@@ -130,20 +119,17 @@ static void appendSlotJson(String& out, const SlotProbe& p, const char* label,
   out += ",\"running\":";
   out += running ? "true" : "false";
   if (p.valid) {
-    out += ",\"version\":\"";
-    out += jsonSanitize(p.desc.version, sizeof(p.desc.version));
-    out += "\",\"built\":\"";
-    out += jsonSanitize(p.desc.date, sizeof(p.desc.date));
-    out += ' ';
-    out += jsonSanitize(p.desc.time, sizeof(p.desc.time));
-    out += '"';
-    // The descriptor version/built are frozen at framework-assembly time
-    // (#200) — the confirm record's rev is the trustworthy per-build label.
+    // Not the app descriptor's version/date: those are frozen into the
+    // framework libraries when they are compiled and repeat on every image
+    // (#200). A slot's rev is its confirm record's; the running slot is this
+    // image.
     if (slotIdx >= 0 && slotRecMatches[slotIdx]) {
       out += ",\"rev\":\"";
       out += slotRec[slotIdx].rev;  // parse enforces JSON-safe charset
       out += "\",\"seq\":";
       out += String((unsigned long)slotRec[slotIdx].seq);
+    } else if (running) {
+      out += ",\"rev\":\"" GIT_REV "\"";
     }
   }
   out += '}';
