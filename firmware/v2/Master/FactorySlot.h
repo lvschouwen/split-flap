@@ -43,6 +43,13 @@ void rescueSlotRecordInstall(const String& rev);
 // here — in flash, across reboots.
 bool factorySlotImageValid();
 
+// The whole image checks out the way the bootloader will check it before
+// starting it (header, segments, checksum, appended hash) — reads the image
+// once, so setup() only. The gate for arming the rescue boot with nobody
+// watching (#281): a descriptor alone does not say the rest of the slot is
+// intact.
+bool factorySlotImageVerified();
+
 // An install started and hasn't reached a determinate outcome yet — and its
 // stream showed activity within the last 30 s (a dropped connection never
 // delivers a terminal callback; without the expiry it would wedge both

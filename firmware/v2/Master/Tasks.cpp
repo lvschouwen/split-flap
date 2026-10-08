@@ -9,6 +9,7 @@
 
 #include <atomic>
 
+#include "BootGuard.h"  // forgives the crash count (#281)
 #include "CrashContext.h"  // task activity breadcrumb (#504)
 
 // #289 dummy mode: the settings-stored unit-count override, seeded by
@@ -205,6 +206,7 @@ static void netTaskMain(void* arg) {
   for (;;) {
     wdtFeed();
     crashCtxHeartbeat();  // #504: the clock crash "ages" are measured against
+    bootGuardTick();      // #281: a boot that ran this long forgives its crashes
     crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_WIFI);
     wifiServiceTick();
     crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_WEB_LOOP);

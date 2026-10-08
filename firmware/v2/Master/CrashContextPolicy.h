@@ -47,6 +47,7 @@ enum CrashReset : int {
   CRASH_RESET_TASK_WDT = 6,
   CRASH_RESET_WDT = 7,
   CRASH_RESET_BROWNOUT = 9,
+  CRASH_RESET_CPU_LOCKUP = 15,  // double exception
 };
 
 // No constructor and no default member initializers: the RTC_NOINIT instance

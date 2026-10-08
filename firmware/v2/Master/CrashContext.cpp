@@ -13,7 +13,8 @@ static_assert(ESP_RST_POWERON == CRASH_RESET_POWERON &&
                   ESP_RST_INT_WDT == CRASH_RESET_INT_WDT &&
                   ESP_RST_TASK_WDT == CRASH_RESET_TASK_WDT &&
                   ESP_RST_WDT == CRASH_RESET_WDT &&
-                  ESP_RST_BROWNOUT == CRASH_RESET_BROWNOUT,
+                  ESP_RST_BROWNOUT == CRASH_RESET_BROWNOUT &&
+                  ESP_RST_CPU_LOCKUP == CRASH_RESET_CPU_LOCKUP,
               "CrashReset mirrors esp_reset_reason_t");
 
 RTC_NOINIT_ATTR static CrashContext rtcCtx;

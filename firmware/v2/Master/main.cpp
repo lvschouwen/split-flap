@@ -28,6 +28,7 @@
 #include "MqttService.h"
 #include "NvsSettingsStore.h"
 #include "OtaService.h"
+#include "BootGuard.h"  // #281
 #include "BootTrace.h"  // #504
 #include "CrashContext.h"  // #504
 #include "RebootCause.h"  // #432
@@ -135,6 +136,8 @@ void setup() {
   rebootCauseConsume();
   bootTraceInit();  // #504: after the consume, before anything that can die
   crashCtxBoot();   // #504: report + re-arm the RTC task breadcrumb
+  bootGuardBoot();  // #281: may restart into the rescue image, before any
+                    // init that could be what crashes
   webLogInit();  // before the first SerialPrint*, or those lines never
                  // reach GET /api/v2/log
   flashLogInit();  // #206: mounts `storage`, writes the boot marker; from

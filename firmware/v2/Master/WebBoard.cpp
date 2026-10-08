@@ -38,6 +38,7 @@
 #include <memory>
 
 #include "BootSectionClassify.h"
+#include "BootGuard.h"
 #include "BootTrace.h"
 #include "BuildVersion.h"
 #include "CrashContext.h"
@@ -167,6 +168,7 @@ void writeMaster(JsonObject root, const Gathered& g) {
   root["lastStart"]["cause"] = webBootRebootCause();
   root["network"] = serialized(netLivenessJson());
   root["crash"] = serialized(crashCtxReportJson());
+  root["guard"] = serialized(bootGuardJson());
   const RescueSlotFacts rescue = rescueSlotCurrent();
   JsonObject r = root["rescue"].to<JsonObject>();
   r["rev"] = jsonCopied(rescue.rev);

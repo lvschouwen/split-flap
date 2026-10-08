@@ -19,6 +19,7 @@
 #include "WebEndpointsInternal.h"
 
 #include "QuietPolicy.h"  // quietBlocksContent (#227)
+#include "BootGuard.h"  // bootGuardJson (#281)
 #include "BootTrace.h"  // bootTraceJson (#504)
 #include "NetLiveness.h"  // netLivenessJson (#501)
 #include "CrashContext.h"  // crashCtxReportJson (#504)
@@ -200,6 +201,7 @@ String buildCurrentSettingsJson() {
   f.bootTrace = bootTraceJson();         // #504
   f.netLiveness = netLivenessJson();     // #501
   f.crashContext = crashCtxReportJson(); // #504
+  f.bootGuard = bootGuardJson();         // #281
   return buildSettingsJson(f);
 }
 

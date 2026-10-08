@@ -54,6 +54,7 @@ struct SettingsJsonFields {
   String bootTrace = "[]";  // #504: raw JSON array, oldest boot first
   String netLiveness = "{}";  // #501: raw JSON object, probe results + strikes
   String crashContext = "{}";  // #504: raw JSON, tasks at the last crash
+  String bootGuard = "{}";  // #281: raw JSON, crashes in a row + rescue trips
   uint32_t bootCounter = 0;
   bool recoveryMode = false;
   bool flashConfigMismatch = false;
@@ -137,6 +138,7 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"bootTrace\":";           out += f.bootTrace;
   out += ",\"netLiveness\":";         out += f.netLiveness;
   out += ",\"crashContext\":";        out += f.crashContext;
+  out += ",\"bootGuard\":";           out += f.bootGuard;
   out += ",\"bootCounter\":";         out += String(f.bootCounter);
   out += ",\"recoveryMode\":";        appendJsonBool(out, f.recoveryMode);
   out += ",\"flashConfigMismatch\":"; appendJsonBool(out, f.flashConfigMismatch);

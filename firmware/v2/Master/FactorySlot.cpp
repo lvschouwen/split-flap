@@ -3,6 +3,7 @@
 
 #include <MD5Builder.h>
 #include <Preferences.h>
+#include <esp_image_format.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 
@@ -53,6 +54,14 @@ bool factorySlotImageValid() {
   if (part == nullptr) return false;
   esp_app_desc_t desc;
   return esp_ota_get_partition_description(part, &desc) == ESP_OK;
+}
+
+bool factorySlotImageVerified() {
+  const esp_partition_t* part = findFactory();
+  if (part == nullptr) return false;
+  const esp_partition_pos_t pos = {part->address, part->size};
+  esp_image_metadata_t meta;
+  return esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &pos, &meta) == ESP_OK;
 }
 
 bool factoryInstallInProgress() {
