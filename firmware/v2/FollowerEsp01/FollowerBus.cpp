@@ -569,6 +569,8 @@ int busSetAddress(uint8_t i2cAddress, uint8_t newAddress) {
 int busClearAddress(uint8_t i2cAddress) { return unitClearAddress(unitBus, i2cAddress); }
 
 // The speed a row shows at before the master has named one.
+void busReshowLastFrame() { reshowPending = lastFrameValid; }
+
 #define HOME_ALL_SPEED 80
 
 void busHomeAll() {

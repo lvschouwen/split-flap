@@ -240,6 +240,16 @@ static void test_clear_address_fails_when_a_unit_vanished() {
   TEST_ASSERT_EQUAL(MaintReason::UnitMissingAfterReprobe, reason);
 }
 
+static void test_self_test_moved_the_drum_only_when_the_unit_ran_it() {
+  TEST_ASSERT_TRUE(selfTestMovedTheDrum(SelfTestOutcome::Ok));
+  TEST_ASSERT_TRUE(selfTestMovedTheDrum(SelfTestOutcome::UnitFailed));
+  TEST_ASSERT_TRUE(selfTestMovedTheDrum(SelfTestOutcome::Timeout));
+  TEST_ASSERT_FALSE(selfTestMovedTheDrum(SelfTestOutcome::Pending));
+  TEST_ASSERT_FALSE(selfTestMovedTheDrum(SelfTestOutcome::WireFail));
+  TEST_ASSERT_FALSE(selfTestMovedTheDrum(SelfTestOutcome::Unsupported));
+  TEST_ASSERT_FALSE(selfTestMovedTheDrum(SelfTestOutcome::Aborted));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_missing_address_is_400);
@@ -264,5 +274,6 @@ int main(int, char**) {
   RUN_TEST(test_set_address_fails_when_target_silent_after_reprobe);
   RUN_TEST(test_clear_address_ok_when_unit_count_holds);
   RUN_TEST(test_clear_address_fails_when_a_unit_vanished);
+  RUN_TEST(test_self_test_moved_the_drum_only_when_the_unit_ran_it);
   return UNITY_END();
 }

@@ -148,6 +148,8 @@ static void executeStagedOp() {
       break;
     case FollowerOpKind::Home:
       grade = maintGradeWire(busHome(op.addr));
+      // The unit parks at blank: back to the flap its row is showing.
+      if (grade.outcome == MaintOutcome::Ok) busReshowLastFrame();
       break;
     case FollowerOpKind::Identify:
       grade = maintGradeWire(busIdentify(op.addr));
@@ -288,6 +290,7 @@ static void pollSelfTest() {
   if (outcome == SelfTestOutcome::Pending) return;
   selfTestSlot.outcome = outcome;
   selfTestPolling = false;
+  if (selfTestMovedTheDrum(outcome)) busReshowLastFrame();
   stampOpResult(selfTestSlot.seq,
                 maintGradeObserved(outcome == SelfTestOutcome::Ok));
 }
@@ -310,6 +313,8 @@ void unitJobsLoopTick() {
     if ((int32_t)(millis() - busProbeInhibitedUntilMs()) >= 0) {
       unitHealthRefreshPending = false;
       busProbe();
+      // What sent a unit through its bootloader left it unhomed.
+      busReshowLastFrame();
       busPollHealth();
       if (awaitingScan.seq != 0) {
         MaintGrade grade = maintGradeWire(0);

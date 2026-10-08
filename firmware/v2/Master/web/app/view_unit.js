@@ -56,7 +56,7 @@ export function unitView(app, id, addressText) {
     if (!set || set.state !== 'done') return;
     const home = await job('Finding home with the new offset', 'home');
     if (home && home.state === 'done') {
-      status.say(`Offset ${drum.offset} → ${next.offset}. It stands at home now and turns to its flap when the row's text next changes.`);
+      status.say(`Offset ${drum.offset} → ${next.offset}. It found home and turned back to the flap its row shows.`);
     }
   }
 

@@ -258,6 +258,26 @@ static void logUnitReboot(const DisplaySnapshot& local, UnitFacts* busFacts,
                (unsigned)s.lifetimeWatchdogCount);
 }
 
+// Shows the row's present frame again: after a unit came back, and after a
+// job that left a drum at home (#575). It waits for the row to stand still
+// first; a letter command homes an unhomed unit before it turns, and a unit
+// already on its letter does not move.
+static void reshowLastFrame(DisplaySnapshot& local) {
+  if (!local.lastFrameValid) return;
+  // Nothing is written while a unit may sit in its bootloader: the scan owed
+  // after that window shows the frame.
+  if ((int32_t)(twibootRiskUntilMs - millis()) > 0) {
+    probeOwedAfterRiskWindow = true;
+    return;
+  }
+  const bool wasBusy = local.busy;
+  local.busy = true;
+  snapshotPublish(local);
+  unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
+                   lastFrameUnitSpeed);
+  local.busy = wasBusy;
+}
+
 // Runtime rescue of lost units (#498, UnitRescuePolicy.h). Runs from the
 // heartbeat tick, so never inside the twiboot risk window (heartbeatTick
 // returns before reaching here) and never during a reflash (inline job).
@@ -271,15 +291,7 @@ static void rescueTick(DisplaySnapshot& local, UnitFacts* busFacts, int i) {
   local.units[i].rescueExits = rs.exits;
   if (unitRescueObserve(rs, busFacts[i])) {
     SerialPrintf("Unit 0x%02x answering again — re-showing the frame\n", addr);
-    if (local.lastFrameValid) {
-      // A letter command homes an unhomed unit first; units already on
-      // their letter don't move.
-      local.busy = true;
-      snapshotPublish(local);
-      unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
-                       lastFrameUnitSpeed);
-      local.busy = false;
-    }
+    reshowLastFrame(local);
     return;
   }
   if (unitHeldRecheckDue(busFacts[i], rs, millis())) {
@@ -345,6 +357,8 @@ static void heartbeatTick(DisplaySnapshot& local, UnitFacts* busFacts,
     pollHealthWithFreshness(busFacts);
     displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                           effectiveWidthOverride());
+    // What sent a unit through its bootloader left it unhomed.
+    reshowLastFrame(local);
     snapshotPublish(local);
     return;
   }
@@ -746,14 +760,8 @@ static void execHome(DisplaySnapshot& local, UnitFacts* busFacts,
   (void)busFacts;
   (void)cmd;
   int status = unitBusHome(cmd.unitAddress);
-  if (status == 0 && local.lastFrameValid) {
-    // The unit parks at blank — keep the intended frame truthful so
-    // the #264 mismatch check doesn't flag the deliberate home.
-    int idx = cmd.unitAddress - SFP_I2C_ADDRESS_BASE;
-    if (idx >= 0 && idx < UNITS_AMOUNT) {
-      local.lastFrameLetters[idx] = 0;
-    }
-  }
+  // The unit parks at blank: back to the flap its row is showing.
+  if (status == 0) reshowLastFrame(local);
   displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
 
@@ -796,6 +804,7 @@ static void execSelfTest(DisplaySnapshot& local, UnitFacts* busFacts,
                slot.unitReason != SELFTEST_REASON_NONE ? " / " : "",
                slot.unitReason != SELFTEST_REASON_NONE
                    ? selfTestReasonName(slot.unitReason) : "");
+  if (selfTestMovedTheDrum(slot.outcome)) reshowLastFrame(local);
   displayApplySelfTestResult(local, slot);
   displayApplyMaintResult(
       local, cmd, maintGradeObserved(slot.outcome == SelfTestOutcome::Ok));

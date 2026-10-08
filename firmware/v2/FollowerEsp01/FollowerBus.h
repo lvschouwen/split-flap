@@ -98,6 +98,9 @@ int busClearAddress(uint8_t i2cAddress);
 // '.' (the way round takes each drum past its home position), then the text
 // the row was showing. Blocking for three renders — loop() only.
 void busHomeAll();
+// Shows the row's present frame again on the next loop pass: after a job that
+// left a drum at home (#575). The show waits for the row to stand still.
+void busReshowLastFrame();
 int busStartSelfTest(uint8_t i2cAddress);
 bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out);
 

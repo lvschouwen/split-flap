@@ -326,6 +326,14 @@ enum class SelfTestOutcome : uint8_t {
   Aborted,      // /stop arrived while waiting
 };
 
+// Did the unit turn its drum for this test? Then it stands at home, not at
+// the flap its row shows. A start that was never taken, a unit that does not
+// know the test and a wait cut short say nothing about the drum.
+inline bool selfTestMovedTheDrum(SelfTestOutcome o) {
+  return o == SelfTestOutcome::Ok || o == SelfTestOutcome::UnitFailed ||
+         o == SelfTestOutcome::Timeout;
+}
+
 struct SelfTestSlot {
   uint32_t seq = 0;
   uint8_t addr = 0;
