@@ -200,20 +200,24 @@ inline void displayApplyBootInfoResult(DisplaySnapshot& snap,
 }
 
 // A successful SET_OFFSET is the only in-place offset mutation; everything
-// else flows through a probe's wholesale fact rewrite.
-inline void displayApplyOffsetWrite(DisplaySnapshot& snap, int i2cAddress,
-                                    int16_t value) {
+// else flows through a probe's wholesale fact rewrite. The bus facts take it
+// too: every health poll copies them over the snapshot's.
+inline void displayApplyOffsetWrite(DisplaySnapshot& snap, UnitFacts* busFacts,
+                                    int i2cAddress, int16_t value) {
   int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
   if (idx < 0 || idx >= UNITS_AMOUNT) return;
+  unitFactsApplyOffsetWrite(busFacts[idx], value);
   unitFactsApplyOffsetWrite(snap.units[idx], value);
 }
 
 // A successful RESET_ODOMETER zeroes the unit's count; patch the fact in
 // place like the offset write so the wear view doesn't show the stale
 // count until the next probe (#231).
-inline void displayApplyOdometerReset(DisplaySnapshot& snap, int i2cAddress) {
+inline void displayApplyOdometerReset(DisplaySnapshot& snap, UnitFacts* busFacts,
+                                     int i2cAddress) {
   int idx = i2cAddress - SFP_I2C_ADDRESS_BASE;
   if (idx < 0 || idx >= UNITS_AMOUNT) return;
+  unitFactsApplyOdometerReset(busFacts[idx]);
   unitFactsApplyOdometerReset(snap.units[idx]);
 }
 

@@ -197,9 +197,33 @@ static void test_apply_offset_write_patches_the_fact_in_place() {
   UnitFacts facts[UNITS_AMOUNT];
   facts[2].state = 1;
   displayApplyUnitFacts(snap, facts, UNITS_AMOUNT);
-  displayApplyOffsetWrite(snap, 3, -450);
+  displayApplyOffsetWrite(snap, facts, 3, -450);
   TEST_ASSERT_TRUE(snap.units[2].offsetValid);
   TEST_ASSERT_EQUAL_INT16(-450, snap.units[2].offset);
+}
+
+static void test_a_written_offset_outlives_the_next_health_poll() {
+  DisplaySnapshot snap;
+  UnitFacts facts[UNITS_AMOUNT];
+  facts[2].state = 1;
+  facts[2].offset = 42;
+  facts[2].offsetValid = true;
+  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT);
+  displayApplyOffsetWrite(snap, facts, 3, 87);
+  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT);
+  TEST_ASSERT_EQUAL_INT16(87, snap.units[2].offset);
+}
+
+static void test_a_reset_odometer_outlives_the_next_health_poll() {
+  DisplaySnapshot snap;
+  UnitFacts facts[UNITS_AMOUNT];
+  facts[2].state = 1;
+  facts[2].odometer = 183;
+  facts[2].odometerValid = true;
+  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT);
+  displayApplyOdometerReset(snap, facts, 3);
+  displayApplyUnitFacts(snap, facts, UNITS_AMOUNT);
+  TEST_ASSERT_EQUAL_UINT32(0, snap.units[2].odometer);
 }
 
 static void test_invalidate_unit_reads_after_bootloader_reboot() {
@@ -545,6 +569,8 @@ int main(int, char**) {
   RUN_TEST(test_op_result_json_shapes);
   RUN_TEST(test_offset_fact_defaults_invalid);
   RUN_TEST(test_apply_offset_write_patches_the_fact_in_place);
+  RUN_TEST(test_a_written_offset_outlives_the_next_health_poll);
+  RUN_TEST(test_a_reset_odometer_outlives_the_next_health_poll);
   RUN_TEST(test_invalidate_unit_reads_after_bootloader_reboot);
   RUN_TEST(test_fresh_snapshot_reflash_is_idle_and_accepts_commands);
   RUN_TEST(test_gate_blocks_everything_but_stop_while_reflashing);

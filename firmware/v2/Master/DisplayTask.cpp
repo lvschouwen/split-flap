@@ -748,12 +748,10 @@ static void execProbe(DisplaySnapshot& local, UnitFacts* busFacts,
 
 static void execWriteOffset(DisplaySnapshot& local, UnitFacts* busFacts,
                            const DisplayCommand& cmd) {
-  (void)busFacts;
-  (void)cmd;
   int status = unitBusWriteOffset(cmd.unitAddress, cmd.value);
   if (status == 0) {
     // The only in-place offset mutation — probes own everything else.
-    displayApplyOffsetWrite(local, cmd.unitAddress, cmd.value);
+    displayApplyOffsetWrite(local, busFacts, cmd.unitAddress, cmd.value);
   }
   displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
@@ -823,14 +821,12 @@ static void execSelfTest(DisplaySnapshot& local, UnitFacts* busFacts,
 
 static void execResetOdometer(DisplaySnapshot& local, UnitFacts* busFacts,
                              const DisplayCommand& cmd) {
-  (void)busFacts;
-  (void)cmd;
   int status = unitBusResetOdometer(cmd.unitAddress);
   if (status == 0) {
     // Patch the fact in place like a successful offset write —
     // the wear view must not show the stale count until the next
     // probe (#231).
-    displayApplyOdometerReset(local, cmd.unitAddress);
+    displayApplyOdometerReset(local, busFacts, cmd.unitAddress);
   }
   displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
