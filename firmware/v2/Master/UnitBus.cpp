@@ -542,6 +542,30 @@ bool unitBusIsBootloader(int i2cAddress) {
   return isUnitInBootloader(i2cAddress);
 }
 
+namespace {
+// The adapter without its crash breadcrumbs, for the questions asked before
+// the previous start's breadcrumb has been read.
+struct EarlyTwibootBus : WireTwibootBus {
+  void readFailed() {
+    Wire.end();
+    unitBusInit();
+  }
+};
+}  // namespace
+
+bool unitBusCatchAtPowerOn(int i2cAddress, uint32_t windowMs, uint32_t gapMs) {
+  unitBusInit();
+  EarlyTwibootBus bus;
+  bool caught = false;
+  const uint32_t start = millis();
+  do {
+    caught = twibootIsBootloader(bus, (uint8_t)i2cAddress);
+    if (!caught) delay(gapMs);
+  } while (!caught && millis() - start < windowMs);
+  Wire.end();
+  return caught;
+}
+
 UnitRescueProbe unitBusRescueProbe(int i2cAddress, TwibootIdentity& id) {
   return unitRescueProbe(unitBus, (uint8_t)i2cAddress, id);
 }

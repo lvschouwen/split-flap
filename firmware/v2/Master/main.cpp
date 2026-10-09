@@ -29,6 +29,7 @@
 #include "NvsSettingsStore.h"
 #include "OtaService.h"
 #include "BootGuard.h"  // #281
+#include "UnitCatch.h"  // #554
 #include "BootTrace.h"  // #504
 #include "CrashContext.h"  // #504
 #include "RebootCause.h"  // #432
@@ -129,7 +130,6 @@ static AsyncWebServer webServer(80);
 
 void setup() {
   Serial.begin(115200);
-  delay(2000);  // native USB-CDC needs a moment before the first prints land
   // #432: consume the deliberate-reboot breadcrumb before ANYTHING that can
   // panic — a stamp surviving a crashed init would be blamed on the wrong
   // boot. Caches; webEndpointsInit reads the cached copy.
@@ -138,6 +138,15 @@ void setup() {
   crashCtxBoot();   // #504: report + re-arm the RTC task breadcrumb
   bootGuardBoot();  // #281: may restart into the rescue image, before any
                     // init that could be what crashes
+  // #554: next, and before the start-up delay. A unit reset together with
+  // this board is in its bootloader for one second only; armed, this is
+  // where it is asked. After the boot guard, so a start that dies here is
+  // counted like any other.
+  const uint32_t catchMs = unitCatchAtPowerOn();
+  // Native USB-CDC needs a moment before the first prints land. The calls
+  // above report once the log is up; the few lines they print on the spot
+  // (the boot guard's restart into the rescue image) may not reach a console.
+  if (catchMs < 2000) delay(2000 - catchMs);
   webLogInit();  // before the first SerialPrint*, or those lines never
                  // reach GET /api/v2/log
   flashLogInit();  // #206: mounts `storage`, writes the boot marker; from
@@ -146,6 +155,7 @@ void setup() {
   bootTraceLogReport();
   crashCtxLogReport();
   bootGuardLogReport();
+  unitCatchLogReport();
   followerImageStoreInit();  // #304: read the stored ESP-01 image rev/presence
   // #570: the record of what happened on the wall, and this start in it.
   eventRecordInit();

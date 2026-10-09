@@ -25,6 +25,8 @@
 #include "TaskWatchdog.h"
 #include "TasksInternal.h"
 #include "UnitBus.h"
+#include "UnitCatch.h"        // #554
+#include "UnitCatchPolicy.h"
 #include "UnitEventLog.h"  // per-unit health transition log decision (#322)
 #include "UnitTimings.h"
 #include "UnitRescuePolicy.h"  // runtime rescue of lost units (#498)
@@ -646,6 +648,14 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
                             : 0);
   bool cancelled = runEnd.cancelled;
   bool halted = runEnd.halted;
+  // #554: a unit that would not enter is asked again at the next power-on.
+  if (total == 1) {
+    uint8_t toCatch = unitCatchAfterForcedRun(
+        unitCatchArmed(), sweep == ReflashSweep::ForcedOne, cancelled,
+        runEnd.notEntered, targets[0]);
+    if (toCatch != unitCatchArmed()) unitCatchArm(toCatch);
+  }
+  const uint8_t armedBefore = unitCatchArmed();
 
   // Final reprobe + health poll: published topology and fw grades are
   // execution-time truth (a failed/cancelled unit shows as bootloader and
@@ -655,6 +665,13 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   pollHealthWithFreshness(busFacts);
   displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
                         effectiveWidthOverride());
+  // #554: the armed unit reads again (this run flashed it, or it was reset
+  // by hand): nothing left to catch.
+  if (armedBefore != 0 &&
+      unitCatchAfterProbe(armedBefore, busFacts[armedBefore - SFP_I2C_ADDRESS_BASE]) ==
+          UnitCatchStep::Disarm) {
+    unitCatchDisarm();
+  }
   // Staggered boot-home of the just-flashed units (#309): a reflashed unit
   // reboots UNHOMED, so without this the caller's re-show (or the next cluster
   // render) would home every flashed unit at once — the #305 inrush #309
@@ -1172,6 +1189,20 @@ void displayTaskMain(void*) {
   // whole row's steppers spike the shared rail at once (the #305 verify-boot
   // brownout). runReflashJob ends with its own boot-home of the units it
   // flashed, so only home here when no boot reflash ran.
+  // #554: the unit this board was armed to catch. In its bootloader it is
+  // flashed now, whatever the start-up update setting says: an operator asked
+  // for exactly this unit, and it leaves its bootloader again in seconds.
+  if (uint8_t armedAddr = unitCatchArmed()) {
+    const int armedIndex = armedAddr - SFP_I2C_ADDRESS_BASE;
+    if (unitCatchAfterProbe(armedAddr, busFacts[armedIndex]) == UnitCatchStep::Flash) {
+      SerialPrintf("unit catch: unit 0x%02x is in its bootloader — flashing it\n",
+                   armedAddr);
+      runReflashJob(local, busFacts, ReflashSweep::ForcedOne, armedAddr);
+    }
+    if (unitCatchAfterProbe(armedAddr, busFacts[armedIndex]) == UnitCatchStep::Disarm) {
+      unitCatchDisarm();
+    }
+  }
   if (!tasksReflashOnBoot()) {
     // #412: deliberately suppressed for a gated campaign. Say so loudly — a
     // silently-skipped auto-install looks exactly like a healthy display, and

@@ -104,6 +104,15 @@ uint32_t unitBusErrCount();
 // Is a bootloader answering at that address right now? Pins it, like every
 // chipinfo request.
 bool unitBusIsBootloader(int i2cAddress);
+
+// The one bus call that is not displayTask's (#554, UnitCatchPolicy.h):
+// setup() makes it before any task exists and before anything else has run,
+// to keep a unit that was reset together with this board in its bootloader.
+// Brings the bus up, asks `i2cAddress` for its bootloader every `gapMs` for
+// `windowMs`, and takes the bus down again for displayTask's own start.
+// True as soon as a bootloader answered. Writes no crash breadcrumb: the
+// previous start's has not been read yet.
+bool unitBusCatchAtPowerOn(int i2cAddress, uint32_t windowMs, uint32_t gapMs);
 // `id`: what a bootloader at that address said about itself.
 UnitRescueProbe unitBusRescueProbe(int i2cAddress, TwibootIdentity& id);
 
