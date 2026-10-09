@@ -110,3 +110,8 @@ d360e2b da3f3c731d437fd8030cd7c222a8eef134c0c9816a886ec97e2c97033198c810
 # report it. Recorded when the facts buffer was resized and the self-test rule
 # added (#567, #575), shared headers the unit does not compile.
 822dd17 b8f637b0681e94d909b0f575e6aca7d304ea2a3af90f2552415ba722ac751ccc
+#
+# f4fcbdc: the bundle rev since a unit sent home by a job turns back to its
+# flap (#575). Recorded when the health poll stopped asking a unit that keeps
+# missing its status (#503), a shared header the unit does not compile.
+f4fcbdc b8f637b0681e94d909b0f575e6aca7d304ea2a3af90f2552415ba722ac751ccc
