@@ -3,8 +3,8 @@
 // with its own row (#559/#566). Pure, natively tested by
 // test_wall_show_policy; the glue is WallShow.cpp.
 //
-// Every row of a wall flips at one instant the master names (Unix ms, in
-// Show.commit_at_ms and for its own row alike). Typed text gets a short lead.
+// The rows of a wall flip at instants the master names (Unix ms, in
+// Show.commit_at_ms and for its own row alike), a step apart per board. Typed text gets a short lead.
 // The clock's minute change is known in advance, so it is given to the rows
 // seconds ahead, to flip at the boundary itself: one late message in a
 // hundred (spec section 9) then no longer shows.
@@ -26,6 +26,17 @@
 // master's clock is not synced.
 inline uint64_t wallCommitAtMs(uint64_t nowEpochMs, bool synced) {
   return synced ? nowEpochMs + WALL_COMMIT_LEAD_MS : 0;
+}
+
+// The boards of a wall do not start their flaps in the same instant (#505):
+// each flips this long after the one before it in the rows table, so the
+// start of a whole wall's move is spread over the boards' supplies. A flip
+// on arrival (0) stays one.
+#define WALL_ROW_STAGGER_MS 150UL
+
+inline uint64_t wallRowFlipAtMs(uint64_t commitAtMs, int tableIndex) {
+  if (commitAtMs == 0 || tableIndex <= 0) return commitAtMs;
+  return commitAtMs + (uint64_t)tableIndex * WALL_ROW_STAGGER_MS;
 }
 
 struct WallClockTarget {

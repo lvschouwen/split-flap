@@ -3,6 +3,7 @@
 #include <unity.h>
 
 #include "../../WallShowPolicy.h"
+#include "../../ClusterLayout.h"  // CLUSTER_MAX_MEMBERS
 
 void setUp() {}
 void tearDown() {}
@@ -47,6 +48,21 @@ static void test_the_next_minute_is_given_ahead_to_flip_at_the_boundary() {
 static void test_the_lead_is_within_what_a_row_will_wait() {
   TEST_ASSERT_TRUE(WALL_CLOCK_AHEAD_MS >= 2000 + 1000);  // 2 s, and the ticker's one second
   TEST_ASSERT_TRUE(WALL_CLOCK_AHEAD_MS <= CLUSTER_COMMIT_MAX_DELAY_MS);
+}
+
+// Each board flips a step after the one before it; the last one of a full
+// table must still be inside what a row will wait for a clock minute.
+static void test_boards_flip_a_step_apart() {
+  TEST_ASSERT_TRUE(wallRowFlipAtMs(MINUTE, 0) == MINUTE);
+  TEST_ASSERT_TRUE(wallRowFlipAtMs(MINUTE, 1) == MINUTE + WALL_ROW_STAGGER_MS);
+  TEST_ASSERT_TRUE(wallRowFlipAtMs(MINUTE, 3) == MINUTE + 3 * WALL_ROW_STAGGER_MS);
+  TEST_ASSERT_TRUE(WALL_CLOCK_AHEAD_MS + (CLUSTER_MAX_MEMBERS - 1) * WALL_ROW_STAGGER_MS <=
+                   CLUSTER_COMMIT_MAX_DELAY_MS);
+}
+
+static void test_a_flip_on_arrival_stays_on_arrival() {
+  TEST_ASSERT_TRUE(wallRowFlipAtMs(0, 0) == 0);
+  TEST_ASSERT_TRUE(wallRowFlipAtMs(0, 5) == 0);
 }
 
 // ---- the master's own row ----------------------------------------------------------
@@ -128,6 +144,8 @@ int main(int, char**) {
   RUN_TEST(test_inside_a_minute_the_clock_shows_that_minute_soon);
   RUN_TEST(test_the_next_minute_is_given_ahead_to_flip_at_the_boundary);
   RUN_TEST(test_the_lead_is_within_what_a_row_will_wait);
+  RUN_TEST(test_boards_flip_a_step_apart);
+  RUN_TEST(test_a_flip_on_arrival_stays_on_arrival);
   RUN_TEST(test_a_new_text_waits_for_its_instant_then_is_queued);
   RUN_TEST(test_a_unit_update_holds_the_new_text_back);
   RUN_TEST(test_a_row_showing_its_text_is_left_alone);

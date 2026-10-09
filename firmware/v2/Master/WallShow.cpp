@@ -76,7 +76,8 @@ void submit(const String& contentKey, bool isClock, const String& textOrTime, co
     segments[i] = pieces[i];
     if (i == ownRow) {
       ownPending = true;
-      ownDueMs = millis() + clusterRenderDelayMs(commitAtMs, nowE, synced);
+      ownDueMs = millis() +
+                 clusterRenderDelayMs(wallRowFlipAtMs(commitAtMs, i), nowE, synced);
     } else {
       rowChanged[i] = true;
     }
@@ -186,6 +187,6 @@ bool wallShowTakeRow(int row, WallRowShow& out) {
   rowChanged[row] = false;
   strlcpy(out.text, segments[row].c_str(), sizeof(out.text));
   out.speed = (uint16_t)speed;
-  out.commitAtMs = commitAtMs;
+  out.commitAtMs = wallRowFlipAtMs(commitAtMs, row);
   return true;
 }

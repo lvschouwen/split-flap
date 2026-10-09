@@ -110,3 +110,14 @@ def test_forgetting_the_wifi_waits_for_what_a_restart_waits_for():
     restart = _code(MASTER / "WebEndpoints.cpp")
     restart = restart[restart.index("const char* webStageReboot("):]
     assert "webRestartRefusal()" in restart[:restart.index("\n}\n")]
+
+
+def test_every_flip_instant_handed_out_is_the_boards_own():
+    """#505: the boards flip a step apart (WallShowPolicy.h). Both ways an
+    instant leaves WallShow.cpp — the own row's due time and what the link
+    task takes for a row board — go through the one rule."""
+    code = re.sub(r"//[^\n]*", "", (MASTER / "WallShow.cpp").read_text())
+    assert "clusterRenderDelayMs(wallRowFlipAtMs(commitAtMs, i), nowE, synced)" in code
+    assert "out.commitAtMs = wallRowFlipAtMs(commitAtMs, row);" in code
+    assert "clusterRenderDelayMs(commitAtMs" not in code
+    assert "out.commitAtMs = commitAtMs;" not in code
