@@ -40,6 +40,7 @@ struct BusRecoveryState {
   uint32_t recovered = 0;           // episodes closed by a good read
   uint32_t lastDeadMs = 0;          // duration of the last closed episode
   int8_t lastStatus = -1;           // Wire.status() of the last attempt; -1 never
+  bool reprobeUnverified = false;   // a re-probe found units; none has answered
 };
 
 inline uint32_t busRecoveryBackoffMs(uint8_t attemptsSoFar) {
@@ -69,6 +70,7 @@ inline BusRecoveryEvent busRecoveryObserve(BusRecoveryState& s, int unitIndex,
   if (ok) {
     s.failMask = 0;
     s.consecutiveFails = 0;
+    s.reprobeUnverified = false;
     if (!s.dead) return BusRecoveryEvent::None;
     s.dead = false;
     s.attemptsThisEpisode = 0;
@@ -93,14 +95,27 @@ inline BusRecoveryEvent busRecoveryObserve(BusRecoveryState& s, int unitIndex,
 
 // A row whose probe found no unit at all is a dead bus too: a follower row is
 // never legitimately empty, and a slave-held SDA NACKs every probe address, so
-// the liveness path above has nothing to poll. Opens an episode (idempotent);
-// a re-probe that finds units closes it through busRecoveryObserve(ok=true).
+// the liveness path above has nothing to poll. Opens an episode (idempotent).
 inline void busRecoveryNoteEmptyRow(BusRecoveryState& s, uint32_t nowMs) {
   if (s.dead) return;
   s.dead = true;
   s.deadSinceMs = nowMs;
   s.nextAttemptMs = nowMs;
   s.episodes++;
+}
+
+// An address can ACK a probe with no unit behind it (a floating line), so
+// what a re-probe found is not a recovery by the ACK alone: the caller
+// closes the episode when a found unit sent a reply that checked out, and
+// otherwise notes the find here — then the first status read that answers
+// closes it, and until then the row is probed again on every attempt. A row whose known units
+// stopped answering is never re-probed — that would forget them.
+inline void busRecoveryNoteReprobe(BusRecoveryState& s, int unitsFound) {
+  s.reprobeUnverified = unitsFound > 0;
+}
+
+inline bool busRecoveryReprobeDue(const BusRecoveryState& s, int unitsKnown) {
+  return unitsKnown == 0 || s.reprobeUnverified;
 }
 
 inline bool busRecoveryDue(const BusRecoveryState& s, uint32_t nowMs) {

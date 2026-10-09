@@ -340,9 +340,13 @@ bool webOtaUploadFrozen() {
       followerTxOtaCap(false);
       otaTxPowerReduced = false;
     }
-    // Free the session slot too (v1 #191) — the next upload's begin()
-    // retry recovers the abandoned Update session instead of a 409 wedge.
+    // Free the session slot too (v1 #191): a late chunk of the abandoned
+    // request is then ignored, and the updater's buffer goes back to the heap
+    // now instead of at the next upload.
     masterOtaOwnerRequest = nullptr;
+    Update.end(false);
+    Update.end(false);  // an end() on a latched error skips the reset (v1 #162)
+    Update.clearError();
     return false;
   }
   return true;

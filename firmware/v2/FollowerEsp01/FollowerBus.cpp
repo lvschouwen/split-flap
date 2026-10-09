@@ -187,14 +187,28 @@ static void followerBusRecoveryTick() {
     SerialPrintln(status);
   }
   // An empty row has no liveness reads to close the episode: re-probe
-  // (quietly — this repeats every backoff step) and close it here.
-  if (detectedUnitCount == 0) {
+  // (quietly — this repeats every backoff step). What it finds is left to
+  // the heartbeat's status reads to confirm (FollowerBusRecovery.h).
+  if (busRecoveryReprobeDue(busRecovery, detectedUnitCount)) {
+    const int before = detectedUnitCount;
     busProbeQuiet(true);
-    if (detectedUnitCount > 0) {
+    if (detectedUnitCount != before) {
       SerialPrint(F("bus: re-probe found "));
       SerialPrint(detectedUnitCount);
       SerialPrintln(F(" unit(s)"));
+    }
+    // A unit in its bootloader, or one whose version was read, sent a reply
+    // that checked out: that is a read that answered. Neither need be a unit
+    // the heartbeat polls (a bootloader has no status, another protocol is
+    // not read), so the episode closes here.
+    bool unitReplied = false;
+    for (int i = 0; i < UNITS_AMOUNT; i++) {
+      if (unitFacts[i].state == 2 || unitFacts[i].protocolKnown) unitReplied = true;
+    }
+    if (unitReplied) {
       observeLiveness(0, true);
+    } else {
+      busRecoveryNoteReprobe(busRecovery, detectedUnitCount);
     }
   }
 }
@@ -665,6 +679,11 @@ static void rescueTick(int i) {
     SerialPrint(F(": lost — found in twiboot, started its app (rescue #"));
     SerialPrint(rs.exits);
     busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);  // let the sketch boot
+  } else if (probe == UnitRescueProbe::ExitRefused) {
+    SerialPrint(F(": lost — in twiboot, did not take the order to start its "
+                  "app (attempt "));
+    SerialPrint(rs.attempts);
+    busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);  // still in twiboot
   } else if (probe == UnitRescueProbe::NoAck) {
     SerialPrint(F(": lost — no ACK (attempt "));
     SerialPrint(rs.attempts);

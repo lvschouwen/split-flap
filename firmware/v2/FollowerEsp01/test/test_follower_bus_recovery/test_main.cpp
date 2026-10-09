@@ -91,6 +91,37 @@ static void test_wide_row_with_one_polled_unit_never_trips() {
   TEST_ASSERT_FALSE(s.dead);
 }
 
+// An address can ACK a probe with no unit behind it (#496): what a re-probe
+// found closes nothing until one of them answers a status read, and the row
+// is probed again until then.
+static void test_a_reprobe_that_found_units_does_not_close_the_episode() {
+  BusRecoveryState s;
+  busRecoveryNoteEmptyRow(s, 500);
+  TEST_ASSERT_TRUE(busRecoveryReprobeDue(s, 0));
+  busRecoveryNoteReprobe(s, 1);
+  TEST_ASSERT_TRUE(s.dead);
+  TEST_ASSERT_EQUAL_UINT32(0, s.recovered);
+  TEST_ASSERT_TRUE(busRecoveryReprobeDue(s, 1));
+  TEST_ASSERT_TRUE(BusRecoveryEvent::None ==
+                   busRecoveryObserve(s, 0, false, 4000, 1));
+  TEST_ASSERT_TRUE(busRecoveryReprobeDue(s, 1));
+  TEST_ASSERT_TRUE(BusRecoveryEvent::Recovered ==
+                   busRecoveryObserve(s, 0, true, 9000, 5));
+  TEST_ASSERT_FALSE(busRecoveryReprobeDue(s, 5));
+}
+
+// Units the row knows and that stopped answering are kept, not probed away.
+static void test_a_row_with_known_units_is_not_reprobed() {
+  BusRecoveryState s;
+  for (int n = 0; n < BUS_DEAD_MIN_FAILS; n++) {
+    busRecoveryObserve(s, n % 2, false, 1000 + n, 5);
+  }
+  TEST_ASSERT_TRUE(s.dead);
+  TEST_ASSERT_FALSE(busRecoveryReprobeDue(s, 5));
+  busRecoveryNoteReprobe(s, 0);  // found nothing: nothing to verify
+  TEST_ASSERT_FALSE(busRecoveryReprobeDue(s, 5));
+}
+
 static void test_empty_row_opens_one_episode_due_now() {
   BusRecoveryState s;
   busRecoveryNoteEmptyRow(s, 500);
@@ -199,6 +230,8 @@ int main(int, char**) {
   RUN_TEST(test_trips_after_threshold_not_before);
   RUN_TEST(test_one_unit_row_trips_on_its_own_failures);
   RUN_TEST(test_wide_row_with_one_polled_unit_never_trips);
+  RUN_TEST(test_a_reprobe_that_found_units_does_not_close_the_episode);
+  RUN_TEST(test_a_row_with_known_units_is_not_reprobed);
   RUN_TEST(test_empty_row_opens_one_episode_due_now);
   RUN_TEST(test_success_resets_the_run);
   RUN_TEST(test_due_immediately_then_backs_off);
