@@ -212,11 +212,15 @@ static_assert(EE_RESERVED_BASE <= EE_ODO_RING_BASE,
 // master predating the guard sends still run; a WRONG guard byte is refused
 // either way. A bare ENTER_BOOTLOADER is never refused.
 #define UNIT_GATE_STRICT_OPCODES    0x04
+// Hold a letter move back while the unit's own supply reads low (#505,
+// UnitSupplyWait.h).
+#define UNIT_GATE_SUPPLY_WAIT       0x08
 
 // Every bit this firmware has code for. SET_GATES (#409) refuses anything
 // outside it: a unit must never persist a gate it will not act on, or
 // /units/health reports a feature as enabled that does not exist here.
-#define UNIT_GATE_ALL  (UNIT_GATE_IDLE_HALL_CHECK | UNIT_GATE_STRICT_OPCODES)
+#define UNIT_GATE_ALL \
+  (UNIT_GATE_IDLE_HALL_CHECK | UNIT_GATE_STRICT_OPCODES | UNIT_GATE_SUPPLY_WAIT)
 
 inline bool unitGateEnabled(uint8_t gates, uint8_t gate) {
   return (gates & gate) != 0;

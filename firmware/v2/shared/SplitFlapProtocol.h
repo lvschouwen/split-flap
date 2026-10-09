@@ -212,8 +212,13 @@
                                              //     (UnitWireContract.h).
                                              //     Turn on only once every
                                              //     master on that row sends it.
-#define SFP_UNIT_GATE_IMPLEMENTED \
-  (SFP_UNIT_GATE_IDLE_HALL_CHECK | SFP_UNIT_GATE_STRICT_OPCODES)
+#define SFP_UNIT_GATE_SUPPLY_WAIT      0x08  // #505 a letter move waits while
+                                             //     the unit's own supply reads
+                                             //     low. A unit without the
+                                             //     code refuses the bit.
+#define SFP_UNIT_GATE_IMPLEMENTED                                 \
+  (SFP_UNIT_GATE_IDLE_HALL_CHECK | SFP_UNIT_GATE_STRICT_OPCODES | \
+   SFP_UNIT_GATE_SUPPLY_WAIT)
 
 // SET_OFFSET's accepted range (#171). The bound is one full revolution of the
 // unit's 28BYJ-48 drum (its STEPS constant — a static_assert there pins the

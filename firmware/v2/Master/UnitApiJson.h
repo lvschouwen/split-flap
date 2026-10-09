@@ -147,7 +147,8 @@ inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint3
     drum["homeExcessStepsMax"] = e.stepExcessMax;
     drum["hallEdgesLastTurn"] = e.hallEdgesLastRev;
     drum["movesInWindow"] = e.dutyWindow;
-    drum["jammed"] = (e.statusBits & 1) != 0;
+    drum["jammed"] = (e.statusBits & EXT_DIAG_STATUS_STALL) != 0;
+    drum["heldForSupply"] = (e.statusBits & EXT_DIAG_STATUS_SUPPLY_WAIT) != 0;
   }
   if (u.linkValid) {
     link["received"] = u.link.rxFrames;

@@ -26,6 +26,7 @@
 #include "BootHomePolicy.h"  // pure staggered boot-home decision (#309)
 #include "UnitHomePolicy.h"  // pure failed-home retry policy (#502)
 #include "UnitStallPolicy.h"  // pure timing rule of the stall bit (#374)
+#include "UnitSupplyWait.h"  // pure hold of a move on a low supply (#505)
 #include "UnitResetCause.h"  // pure reset-cause rules, shared with the masters (#502)
 #include "BootSectionClassify.h"  // pure boot-section state classifier (#499)
 #include "BootUpdateReport.h"     // pure GET_BOOT_INFO reply codec (#499)
@@ -341,6 +342,8 @@ uint16_t          bootHomeJitterMs          = 0;      // 0..BOOT_HOME_JITTER_MAX
 // seek also drops `homed`, so the drum is never stepped from a position nobody
 // knows. Loop-context.
 HomeBackoff       homeBackoff               = {0, 0};
+// Hold of a letter move on a low supply (#505, UnitSupplyWait.h). Loop context.
+SupplyWait        supplyWait;
 // Status flag bit surfaced to the master (mirrors UnitHealth.h UNIT_FLAG_HOMED).
 #define UNIT_STATUS_FLAG_HOMED (1 << 5)
 
@@ -1131,6 +1134,8 @@ void loop() {
     // Nothing is moving here — every move blocks and ends in stopMotor(). The
     // flag can only still be set by the overheat gate holding a letter the
     // master has since withdrawn; left alone it reports the unit busy forever.
+    // The supply hold answers busy the same way and ends the same way.
     currentlyrotating = 0;
+    supplyWaitReset(supplyWait);
   }
 }

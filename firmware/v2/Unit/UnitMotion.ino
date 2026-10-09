@@ -120,6 +120,23 @@ void rotateToLetter(int toLetter) {
     return;
   }
 
+  // Supply hold (#505, UnitSupplyWait.h), behind its gate: with the rail under
+  // the line the coils stay off and the unit answers busy, like the overheat
+  // gate above; loop() calls back every pass. Bounded, so a rail that stays
+  // low delays the move and never parks it.
+  if (unitGateEnabled(lifetime.featureGates, UNIT_GATE_SUPPLY_WAIT)) {
+    vitalsSample(false);
+    if (supplyWaitHold(supplyWait, vitalsVccNow, millis())) {
+      currentlyrotating = 1;
+      return;
+    }
+  }
+  if (supplyWaitTakeHeld(supplyWait)) {
+    extStatusBits |= EXT_DIAG_STATUS_SUPPLY_WAIT;
+  } else {
+    extStatusBits &= ~EXT_DIAG_STATUS_SUPPLY_WAIT;
+  }
+
   lastRotation = millis();
   if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
   // Committed to a move now (past the overheat/unhomed gates): arm the per-move

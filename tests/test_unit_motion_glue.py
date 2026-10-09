@@ -38,6 +38,26 @@ def test_a_letter_waits_out_the_retry_gap_without_reporting_busy():
     assert "return;" in gate_body and "receivedNumber" not in gate_body
 
 
+def test_a_low_supply_holds_a_letter_move_only_behind_its_gate():
+    body = _function_body(_code("UnitMotion.ino"), "void rotateToLetter(")
+    gate = body.index(
+        "if (unitGateEnabled(lifetime.featureGates, UNIT_GATE_SUPPLY_WAIT)) {")
+    hold = body.index("if (supplyWaitHold(supplyWait, vitalsVccNow, millis())) {")
+    commit = body.index("lastRotation = millis();")
+    # After the overheat gate, before the move is committed and timed.
+    assert body.index("OVERHEATINGTIMEOUT") < gate < hold < commit
+    assert commit < body.index("extMoveStartMs = millis()")
+    held = body[hold:body.index("}", hold)]
+    assert "currentlyrotating = 1;" in held and "return;" in held
+    # A fresh reading every time it asks, and the outcome told to the master.
+    assert "vitalsSample(false);" in body[gate:hold]
+    assert "EXT_DIAG_STATUS_SUPPLY_WAIT" in body[hold:commit]
+    # A withdrawn letter ends the hold with the busy flag.
+    loop = _function_body(_code("Unit.ino"), "void loop(")
+    idle = loop.index("else if (currentlyrotating) {")
+    assert "supplyWaitReset(supplyWait);" in loop[idle:idle + 500]
+
+
 def test_loop_pays_the_owed_retry_and_never_leaves_busy_latched():
     loop = _function_body(_code("Unit.ino"), "void loop(")
     want = loop.index(

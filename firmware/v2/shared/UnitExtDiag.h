@@ -52,6 +52,8 @@
 #define EXT_DIAG_STATUS_STALL         (1 << 0)
 #define EXT_DIAG_STATUS_TWI_HEAL_SHIFT 1
 #define EXT_DIAG_STATUS_TWI_HEAL_MASK  (0x07 << EXT_DIAG_STATUS_TWI_HEAL_SHIFT)
+// The last move was held back for a low supply before it started (#505).
+#define EXT_DIAG_STATUS_SUPPLY_WAIT   (1 << 4)
 
 // #489: replaces bits1-3 of statusBits with the (saturated) self-heal count.
 inline uint8_t extDiagWithTwiHeal(uint8_t statusBits, uint8_t count) {
