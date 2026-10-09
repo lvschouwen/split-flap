@@ -401,6 +401,11 @@ struct LoopHooks {
   int deafCount = 0;
   uint8_t stayAddrs[8] = {0};    // take the order and come back in the sketch
   int stayCount = 0;
+  uint8_t flakyAddr = 0;         // its flash fails this many times, then works
+  int flakyFails = 0;
+  uint8_t leavesAddr = 0;        // after a failed flash it is in its sketch again
+  uint8_t resetAddr = 0;         // deaf to the order; reset by hand after
+  int resetAfterProbes = -1;     // this many more questions
   uint8_t lateAddr = 0;          // takes the order, answers as a bootloader
   int lateProbes = 0;            // only after this many more questions
   bool fits = true;
@@ -419,6 +424,8 @@ struct LoopHooks {
   uint32_t pausedMs = 0;
   uint8_t notEnteredAddrs[16] = {0};
   int notEnteredCount = 0;
+  int retries = 0;
+  int waitCues = 0;
   char order[96] = "";  // "e<addr>" an order sent, "f<addr>" a flash started
 
   static bool has(const uint8_t* list, int n, uint8_t addr) {
@@ -437,6 +444,9 @@ struct LoopHooks {
   bool imageFits() { return fits; }
   bool inBootloader(uint8_t addr) {
     probes++;
+    if (addr == resetAddr && resetAfterProbes >= 0 && resetAfterProbes-- == 0) {
+      forget(addr);
+    }
     if (addr == lateAddr && lateOrdered) {
       if (lateProbes-- > 0) return false;
       forget(addr);
@@ -462,11 +472,21 @@ struct LoopHooks {
   }
   void pause(uint32_t ms) { pausedMs += ms; }
   void unitNotEntered(uint8_t addr) { notEnteredAddrs[notEnteredCount++] = addr; }
+  void waitingForReset(uint8_t) { waitCues++; }
+  void unitRetried(uint8_t, int) { retries++; }
   ReflashUnitOutcome flashUnit(uint8_t addr) {
     flashCalls++;
     note('f', addr);
     if (!fits) return ReflashUnitOutcome::Failed;
     if (addr == stopAtAddr) return ReflashUnitOutcome::Stopped;
+    if (addr == flakyAddr && flakyFails > 0) {
+      flakyFails--;
+      return ReflashUnitOutcome::Failed;
+    }
+    if (addr == leavesAddr) {
+      sketchAddrs[sketchCount++] = addr;
+      return ReflashUnitOutcome::Failed;
+    }
     if (has(failAddrs, failCount, addr)) return ReflashUnitOutcome::Failed;
     return ReflashUnitOutcome::Flashed;
   }
@@ -507,7 +527,9 @@ static void test_loop_halts_on_two_failures_in_a_row_and_touches_no_more() {
   reflashProgressBegin(p, 5);
   ReflashRunEnd end = reflashRunTargets(h, targets, 5, p);
   TEST_ASSERT_TRUE(end.halted);
-  TEST_ASSERT_EQUAL(3, h.flashCalls);  // units 4 and 5 were never touched
+  // Unit 1 once, units 2 and 3 as often as a failing unit is tried; units 4
+  // and 5 were never touched.
+  TEST_ASSERT_EQUAL(1 + 2 * REFLASH_UNIT_ATTEMPTS, h.flashCalls);
   TEST_ASSERT_EQUAL(2, h.haltedLeft);
   TEST_ASSERT_EQUAL_UINT8(2, p.failed);
   // The unit flashed before the halt still gets its settle.
@@ -524,7 +546,7 @@ static void test_loop_isolated_failure_does_not_halt() {
   reflashProgressBegin(p, 5);
   ReflashRunEnd end = reflashRunTargets(h, targets, 5, p);
   TEST_ASSERT_FALSE(end.halted);
-  TEST_ASSERT_EQUAL(5, h.flashCalls);
+  TEST_ASSERT_EQUAL(3 + 2 * REFLASH_UNIT_ATTEMPTS, h.flashCalls);
   TEST_ASSERT_EQUAL_UINT8(3, p.done);
   TEST_ASSERT_EQUAL_UINT8(2, p.failed);
 }
@@ -638,6 +660,109 @@ static void test_loop_asks_a_slow_unit_again_before_giving_it_up() {
       h.pausedMs);
 }
 
+// A unit whose flash failed holds a part of the image and would start it:
+// it is flashed again while it is still in its bootloader.
+static void test_loop_flashes_a_failed_unit_again_at_once() {
+  LoopHooks h;
+  h.flakyAddr = 3;
+  h.flakyFails = 2;
+  ReflashProgress p;
+  uint8_t targets[3] = {2, 3, 4};
+  reflashProgressBegin(p, 3);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 3, p);
+  TEST_ASSERT_EQUAL_UINT8(3, end.flashed);
+  TEST_ASSERT_EQUAL(2, h.retries);
+  TEST_ASSERT_EQUAL_STRING("f2 f3 f3 f3 f4", h.order);
+  TEST_ASSERT_EQUAL_UINT8(0, p.failed);
+}
+
+static void test_loop_gives_a_unit_up_after_its_attempts() {
+  LoopHooks h;
+  h.failAddrs[h.failCount++] = 3;
+  ReflashProgress p;
+  uint8_t targets[2] = {3, 4};
+  reflashProgressBegin(p, 2);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 2, p);
+  TEST_ASSERT_EQUAL_UINT8(1, end.flashed);
+  TEST_ASSERT_EQUAL(REFLASH_UNIT_ATTEMPTS - 1, h.retries);
+  TEST_ASSERT_EQUAL_UINT8(1, p.failed);  // one unit, however often it was tried
+}
+
+// Pages are only ever sent to a unit that says it is in its bootloader.
+static void test_loop_does_not_flash_again_a_unit_that_left_its_bootloader() {
+  LoopHooks h;
+  h.leavesAddr = 3;
+  ReflashProgress p;
+  uint8_t targets[1] = {3};
+  reflashProgressBegin(p, 1);
+  reflashRunTargets(h, targets, 1, p);
+  TEST_ASSERT_EQUAL(1, h.flashCalls);
+  TEST_ASSERT_EQUAL(0, h.retries);
+}
+
+// A unit that no longer listens to the order: a run for that one unit waits
+// for a reset by hand and catches the bootloader in its first second.
+static void test_a_forced_run_waits_for_a_reset_by_hand() {
+  LoopHooks h;
+  h.sketchAddrs[h.sketchCount++] = 6;
+  h.deafAddrs[h.deafCount++] = 6;
+  h.resetAddr = 6;
+  h.resetAfterProbes = 40;
+  ReflashProgress p;
+  uint8_t targets[1] = {6};
+  reflashProgressBegin(p, 1);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 1, p, REFLASH_HAND_RESET_WAIT_MS);
+  TEST_ASSERT_EQUAL(1, h.waitCues);
+  TEST_ASSERT_EQUAL_UINT8(1, end.flashed);
+  TEST_ASSERT_EQUAL_UINT8(0, end.notEntered);
+  // Often enough that one question lands in the bootloader's one second.
+  TEST_ASSERT_TRUE(REFLASH_HAND_RESET_GAP_MS * 3 <= 1000);
+}
+
+static void test_a_forced_run_gives_up_when_no_reset_comes() {
+  LoopHooks h;
+  h.sketchAddrs[h.sketchCount++] = 6;
+  h.deafAddrs[h.deafCount++] = 6;
+  ReflashProgress p;
+  uint8_t targets[1] = {6};
+  reflashProgressBegin(p, 1);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 1, p, REFLASH_HAND_RESET_WAIT_MS);
+  TEST_ASSERT_EQUAL_UINT8(1, end.notEntered);
+  TEST_ASSERT_EQUAL(0, h.flashCalls);
+  TEST_ASSERT_TRUE(h.pausedMs >= REFLASH_HAND_RESET_WAIT_MS);
+  TEST_ASSERT_TRUE(h.pausedMs < REFLASH_HAND_RESET_WAIT_MS + 2000);
+}
+
+// A stop during the wait cancels the run; the unit did not refuse anything.
+static void test_a_stop_during_the_wait_cancels_the_run() {
+  LoopHooks h;
+  h.sketchAddrs[h.sketchCount++] = 6;
+  h.deafAddrs[h.deafCount++] = 6;
+  h.stopBeforeUnit = 5;  // the fifth time it is asked: well into the wait
+  ReflashProgress p;
+  uint8_t targets[1] = {6};
+  reflashProgressBegin(p, 1);
+  ReflashRunEnd end = reflashRunTargets(h, targets, 1, p, REFLASH_HAND_RESET_WAIT_MS);
+  TEST_ASSERT_TRUE(end.cancelled);
+  TEST_ASSERT_EQUAL_UINT8(0, end.notEntered);
+  TEST_ASSERT_EQUAL(0, h.notEnteredCount);
+  TEST_ASSERT_EQUAL(0, h.flashCalls);
+  TEST_ASSERT_TRUE(h.pausedMs < 5000);
+}
+
+// A sweep of a row does not stand still for a unit that will not enter.
+static void test_a_row_run_does_not_wait_for_a_reset() {
+  LoopHooks h;
+  h.sketchAddrs[h.sketchCount++] = 6;
+  h.deafAddrs[h.deafCount++] = 6;
+  ReflashProgress p;
+  uint8_t targets[1] = {6};
+  reflashProgressBegin(p, 1);
+  reflashRunTargets(h, targets, 1, p);
+  TEST_ASSERT_EQUAL(0, h.waitCues);
+  TEST_ASSERT_TRUE(h.pausedMs < 1000);
+}
+
 static void test_loop_stops_asking_inside_the_bootloader_window() {
   LoopHooks h;
   h.sketchAddrs[h.sketchCount++] = 2;
@@ -685,7 +810,7 @@ static void test_loop_unit_that_does_not_enter_keeps_a_failure_streak() {
   ReflashRunEnd end = reflashRunTargets(h, targets, 4, p);
   TEST_ASSERT_TRUE(end.halted);
   TEST_ASSERT_EQUAL(1, h.haltedLeft);
-  TEST_ASSERT_EQUAL_STRING("f1 e2 f3", h.order);
+  TEST_ASSERT_EQUAL_STRING("f1 f1 f1 e2 f3 f3 f3", h.order);
 }
 
 static void test_loop_image_that_does_not_fit_sends_no_unit_anywhere() {
@@ -777,6 +902,13 @@ int main(int, char**) {
   RUN_TEST(test_loop_unit_that_refuses_the_order_is_not_flashed);
   RUN_TEST(test_loop_unit_back_in_its_sketch_after_the_order_is_not_flashed);
   RUN_TEST(test_loop_asks_a_slow_unit_again_before_giving_it_up);
+  RUN_TEST(test_loop_flashes_a_failed_unit_again_at_once);
+  RUN_TEST(test_loop_gives_a_unit_up_after_its_attempts);
+  RUN_TEST(test_loop_does_not_flash_again_a_unit_that_left_its_bootloader);
+  RUN_TEST(test_a_forced_run_waits_for_a_reset_by_hand);
+  RUN_TEST(test_a_forced_run_gives_up_when_no_reset_comes);
+  RUN_TEST(test_a_stop_during_the_wait_cancels_the_run);
+  RUN_TEST(test_a_row_run_does_not_wait_for_a_reset);
   RUN_TEST(test_loop_stops_asking_inside_the_bootloader_window);
   RUN_TEST(test_loop_units_that_do_not_enter_never_halt_the_run);
   RUN_TEST(test_loop_unit_that_does_not_enter_keeps_a_failure_streak);

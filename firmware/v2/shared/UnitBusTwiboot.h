@@ -131,6 +131,11 @@ struct UnitFlashReport {
 // guard → bootloader liveness → chip check → write + read-back per page (one
 // rewrite, v1 #110) → exit → wait for the sketch → clean restart (v1 #113).
 //
+// Page order (#554): the hold page goes to address 0 first, then every page
+// after the first, and the image's own first page last. Until that last
+// write a unit that starts by itself resets into its bootloader's hold
+// (twibootFillHoldPage) instead of running a part-written program.
+//
 //   pages(pageIndex, buf)   fills buf with TWIBOOT_PAGE_SIZE bytes of the
 //                           image (a pointer on the S3, PROGMEM on the ESP-01)
 //   watch.keepGoing()       called before every page; false aborts
@@ -156,13 +161,19 @@ inline UnitFlashReport unitFlashImage(Bus& bus, uint8_t i2cAddress,
   }
   size_t pageCount = imageLen / TWIBOOT_PAGE_SIZE;
   uint8_t pageBuf[TWIBOOT_PAGE_SIZE];
-  for (size_t pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+  // One write more than the image has pages: address 0 is written twice.
+  for (size_t step = 0; pageCount > 0 && step <= pageCount; step++) {
     if (!watch.keepGoing()) {
       report.result = UnitFlashResult::Aborted;
       return report;
     }
+    size_t pageIndex = step == pageCount ? 0 : step;
     uint16_t flashAddr = (uint16_t)(pageIndex * TWIBOOT_PAGE_SIZE);
-    pages(pageIndex, pageBuf);
+    if (step == 0) {
+      twibootFillHoldPage(pageBuf);
+    } else {
+      pages(pageIndex, pageBuf);
+    }
     uint8_t rewrites = 0;
     report.step = twibootFlashAndVerifyPage(bus, i2cAddress, flashAddr,
                                             pageBuf, &rewrites);

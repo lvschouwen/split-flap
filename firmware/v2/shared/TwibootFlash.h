@@ -41,6 +41,10 @@
 #define TWIBOOT_READY_AFTER_MS     50
 // A page is written at most this many times before the flash gives up.
 #define TWIBOOT_PAGE_WRITE_ATTEMPTS 2
+// The read-back of a written page is asked for at most this many times: a
+// read that fails on the bus says nothing about the page, and giving the
+// unit up for it leaves a part-written image behind.
+#define TWIBOOT_PAGE_READ_ATTEMPTS 3
 // Fresh-sketch liveness after the exit: a slow-booting unit (marginal supply,
 // cold start) can need more than 2 s after twiboot's jump_to_app().
 #define TWIBOOT_SKETCH_ATTEMPTS    5
@@ -307,6 +311,34 @@ TwibootStep twibootVerifyChip(Bus& bus, uint8_t addr) {
   return TwibootStep::Ok;
 }
 
+// The page a flash puts at address 0 until the image is whole (#554). A unit
+// whose flash stops short leaves its bootloader SF_PIN_TIMEOUT_MS after it
+// was last addressed and starts whatever is in flash. With the old program's
+// first page, or the new one's, that is a mix of two images, which may run
+// and never answer on the bus again. With this page it is sixteen bytes that
+// do one thing: switch the watchdog on at its shortest period and wait for
+// it. The bootloader counts watchdog resets and keeps a unit that makes
+// CRASH_REC_THRESHOLD of them in a row (#542), where the row board finds it
+// and flashes it again. It touches no memory, so the count survives.
+//
+//   f8 94        cli
+//   88 e1        ldi  r24, 0x18      ; WDCE | WDE
+//   80 93 60 00  sts  WDTCSR, r24    ; open the timed change
+//   88 e0        ldi  r24, 0x08      ; WDE, 16 ms
+//   80 93 60 00  sts  WDTCSR, r24
+//   ff cf        rjmp .-2
+//
+// (avr-gcc -mmcu=atmega328p output; the second write is inside the four
+// cycles the first one allows.)
+#define TWIBOOT_HOLD_CODE_LEN 16
+inline void twibootFillHoldPage(uint8_t* page) {
+  static const uint8_t code[TWIBOOT_HOLD_CODE_LEN] = {
+      0xF8, 0x94, 0x88, 0xE1, 0x80, 0x93, 0x60, 0x00,
+      0x88, 0xE0, 0x80, 0x93, 0x60, 0x00, 0xFF, 0xCF};
+  memset(page, 0xFF, TWIBOOT_PAGE_SIZE);
+  memcpy(page, code, TWIBOOT_HOLD_CODE_LEN);
+}
+
 // Reads one page: the write framing with no payload, then a repeated-start
 // read — the flow twiboot's own host tool uses. `out` holds TWIBOOT_PAGE_SIZE.
 template <typename Bus>
@@ -365,9 +397,11 @@ TwibootStep twibootFlashAndVerifyPage(Bus& bus, uint8_t addr,
       return TwibootStep::PageStuckBusy;
     }
     uint8_t readBuf[TWIBOOT_PAGE_SIZE];
-    if (!twibootReadFlashPage(bus, addr, flashAddr, readBuf)) {
-      return TwibootStep::PageReadFailed;
+    bool readBack = false;
+    for (int r = 0; r < TWIBOOT_PAGE_READ_ATTEMPTS && !readBack; r++) {
+      readBack = twibootReadFlashPage(bus, addr, flashAddr, readBuf);
     }
+    if (!readBack) return TwibootStep::PageReadFailed;
     if (memcmp(readBuf, page, TWIBOOT_PAGE_SIZE) == 0) return TwibootStep::Ok;
     if (rewrites) (*rewrites)++;
   }

@@ -344,6 +344,34 @@ inline bool reflashEnterUnit(Hooks& h, uint8_t addr) {
   }
 }
 
+// A unit whose flash failed still sits in its bootloader holding a part of
+// the image, and starts that part once nothing has addressed it for
+// SF_PIN_TIMEOUT_MS — a program that may not answer on the bus again. So it
+// is flashed again at once, this many times in all, before the run moves on.
+#define REFLASH_UNIT_ATTEMPTS 3
+
+// A unit that does not go into its bootloader by order (it runs something
+// that no longer listens) gets there by a reset by hand. The bootloader then
+// listens for TIMEOUT_MS (1000 ms) only, so the run asks every
+// REFLASH_HAND_RESET_GAP_MS for REFLASH_HAND_RESET_WAIT_MS: a question inside
+// that second keeps the unit there. Counted in pauses; the questions
+// themselves come on top. False also when the tree asked to stop.
+// Kept to 30 s: with the quiet wait before, the flash attempts and the
+// settle after, the job still ends inside what a job for one unit is given
+// (WALL_JOB_UNIT_MS, Master/WallLinkPolicy.h).
+#define REFLASH_HAND_RESET_WAIT_MS 30000UL
+#define REFLASH_HAND_RESET_GAP_MS 200UL
+
+template <typename Hooks>
+inline bool reflashAwaitHandReset(Hooks& h, uint8_t addr, uint32_t waitMs) {
+  for (uint32_t waited = 0; waited < waitMs; waited += REFLASH_HAND_RESET_GAP_MS) {
+    if (h.stopRequested()) return false;
+    h.pause(REFLASH_HAND_RESET_GAP_MS);
+    if (h.inBootloader(addr)) return true;
+  }
+  return false;
+}
+
 // Flashes the planned targets in batches and keeps the progress object
 // current. v1 #138 brownout throttle: once REFLASH_BATCH_SIZE units have been
 // flashed, wait for them to come back online and finish homing before
@@ -363,14 +391,20 @@ inline bool reflashEnterUnit(Hooks& h, uint8_t addr) {
 //   int enterBootloader(uint8_t addr)           0 = the unit took the order
 //   void pause(uint32_t ms)
 //   void unitNotEntered(uint8_t addr)           worth a log line
+//   void waitingForReset(uint8_t addr)          the operator's cue (a log line)
+//   void unitRetried(uint8_t addr, int attempt) flashing it again (a log line)
 //   ReflashUnitOutcome flashUnit(uint8_t addr)
 //   void unitFlashed(uint8_t addr)              the unit runs its sketch again
 //   void progressChanged()                      publish the progress object
 //   void settleBatch(const uint8_t* addrs, int n)
 //   void runHalted(uint8_t consecutiveFailures, int unitsLeftUntouched)
+//
+// `handResetWaitMs` > 0 (a run for one unit an operator asked for): a unit
+// that does not enter by order is waited for, see reflashAwaitHandReset.
 template <typename Hooks>
 inline ReflashRunEnd reflashRunTargets(Hooks& h, const uint8_t* targets,
-                                       int total, ReflashProgress& progress) {
+                                       int total, ReflashProgress& progress,
+                                       uint32_t handResetWaitMs = 0) {
   ReflashRunEnd end;
   uint8_t consecutiveFailures = 0;
   uint8_t batch[REFLASH_BATCH_SIZE];
@@ -386,10 +420,27 @@ inline ReflashRunEnd reflashRunTargets(Hooks& h, const uint8_t* targets,
 
     // An image that cannot be flashed costs no unit a trip through its
     // bootloader: flashUnit refuses it before anything is sent.
+    bool notEntered = h.imageFits() && !reflashEnterUnit(h, addr);
+    if (notEntered && handResetWaitMs > 0) {
+      h.waitingForReset(addr);
+      notEntered = !reflashAwaitHandReset(h, addr, handResetWaitMs);
+      if (notEntered && h.stopRequested()) {
+        // A stop ended the wait: the run was cancelled, not refused by the unit.
+        reflashProgressUnitResult(progress, false);
+        h.progressChanged();
+        end.cancelled = true;
+        break;
+      }
+    }
     ReflashUnitOutcome outcome =
-        (h.imageFits() && !reflashEnterUnit(h, addr))
-            ? ReflashUnitOutcome::NotEntered
-            : h.flashUnit(addr);
+        notEntered ? ReflashUnitOutcome::NotEntered : h.flashUnit(addr);
+    for (int attempt = 2;
+         outcome == ReflashUnitOutcome::Failed && attempt <= REFLASH_UNIT_ATTEMPTS &&
+         h.imageFits() && h.inBootloader(addr);
+         attempt++) {
+      h.unitRetried(addr, attempt);
+      outcome = h.flashUnit(addr);
+    }
     bool ok = outcome == ReflashUnitOutcome::Flashed;
     reflashProgressUnitResult(progress, ok);
     if (outcome == ReflashUnitOutcome::Stopped) {

@@ -605,6 +605,16 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
       SerialPrintf("reflash: unit 0x%02x is not in its bootloader — "
                    "not flashed\n", addr);
     }
+    void waitingForReset(uint8_t addr) {
+      SerialPrintf("reflash: unit 0x%02x does not enter its bootloader — "
+                   "waiting %lu s for a reset of the unit by hand\n", addr,
+                   (unsigned long)(REFLASH_HAND_RESET_WAIT_MS / 1000UL));
+    }
+    void unitRetried(uint8_t addr, int attempt) {
+      SerialPrintf("reflash: unit 0x%02x still in its bootloader — flashing "
+                   "it again (attempt %d of %d)\n", addr, attempt,
+                   REFLASH_UNIT_ATTEMPTS);
+    }
     ReflashUnitOutcome flashUnit(uint8_t addr) {
       UnitFlashResult r = unitBusFlashUnit(addr, image, imageLen);
       if (r == UnitFlashResult::Aborted) return ReflashUnitOutcome::Stopped;
@@ -630,7 +640,10 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   };
   JobHooks jobHooks{local, image, imageLen};
   ReflashRunEnd runEnd =
-      reflashRunTargets(jobHooks, targets, total, local.reflash);
+      reflashRunTargets(jobHooks, targets, total, local.reflash,
+                        sweep == ReflashSweep::ForcedOne
+                            ? REFLASH_HAND_RESET_WAIT_MS
+                            : 0);
   bool cancelled = runEnd.cancelled;
   bool halted = runEnd.halted;
 

@@ -31,6 +31,8 @@ struct FakeTwiboot {
   size_t txCap = 256;           // bus buffer size
   bool nackChipRequest = false;
   bool nackExit = false;        // the order to start the application is refused
+  int nackPageWriteAt = -1;     // a page write to this address or above is refused
+  std::vector<uint16_t> writeAddrs;  // every page write, in order
   // Identity (#541/#543). The original image answers the version read with
   // its stock string and wraps chipinfo at 8 bytes.
   uint8_t info[16] = {'T', 'W', 'I', 'B', 'O', 'O', 'T', ' ',
@@ -111,6 +113,8 @@ struct FakeTwiboot {
         return NACK;
       }
       if (tx.size() == 4 + TWIBOOT_PAGE_SIZE) {
+        if (nackPageWriteAt >= 0 && memAddr >= (uint16_t)nackPageWriteAt) return NACK;
+        writeAddrs.push_back(memAddr);
         memcpy(flash + memAddr, tx.data() + 4, TWIBOOT_PAGE_SIZE);
         if (corruptWrites > 0) { corruptWrites--; flash[memAddr + 7] ^= 0x01; }
         pageWrites++;
@@ -235,14 +239,29 @@ static void test_truncated_burst_never_reaches_the_bus() {
   TEST_ASSERT_EQUAL_HEX8(0xFF, bus.flash[0]);
 }
 
-static void test_short_verify_read_fails_and_reports_the_bus() {
+// One read that fails on the bus says nothing about the page: it is asked
+// for again, and the page is neither rewritten nor given up.
+static void test_one_failed_verify_read_is_asked_again() {
   FakeTwiboot bus;
   bus.shortReads = 1;
   uint8_t page[TWIBOOT_PAGE_SIZE];
   fillPage(page, 0x44);
+  uint8_t rewrites = 9;
+  TEST_ASSERT_TRUE(TwibootStep::Ok ==
+      twibootFlashAndVerifyPage(bus, ADDR, 0x0000, page, &rewrites));
+  TEST_ASSERT_EQUAL(1, bus.pageWrites);
+  TEST_ASSERT_EQUAL_UINT8(0, rewrites);
+  TEST_ASSERT_EQUAL(1, bus.readFailedCalls);
+}
+
+static void test_short_verify_read_fails_and_reports_the_bus() {
+  FakeTwiboot bus;
+  bus.shortReads = TWIBOOT_PAGE_READ_ATTEMPTS;
+  uint8_t page[TWIBOOT_PAGE_SIZE];
+  fillPage(page, 0x44);
   TEST_ASSERT_TRUE(TwibootStep::PageReadFailed ==
       twibootFlashAndVerifyPage(bus, ADDR, 0x0000, page));
-  TEST_ASSERT_EQUAL(1, bus.readFailedCalls);
+  TEST_ASSERT_EQUAL(TWIBOOT_PAGE_READ_ATTEMPTS, bus.readFailedCalls);
   TEST_ASSERT_EQUAL(0, bus.available());
 }
 
@@ -451,6 +470,73 @@ static void test_flash_image_writes_every_page_and_restarts_the_unit() {
   TEST_ASSERT_EQUAL_UINT8(SFP_CMD_REBOOT, bus.sketchOps[0]);
   TEST_ASSERT_EQUAL(0, r.rebootStatus);
   TEST_ASSERT_EQUAL(0, bus.framingErrors);
+}
+
+// --- the hold page (#554) -----------------------------------------------------------
+
+static const uint8_t HOLD_CODE[TWIBOOT_HOLD_CODE_LEN] = {
+    0xF8, 0x94,              // cli
+    0x88, 0xE1,              // ldi r24, 0x18
+    0x80, 0x93, 0x60, 0x00,  // sts WDTCSR, r24
+    0x88, 0xE0,              // ldi r24, 0x08
+    0x80, 0x93, 0x60, 0x00,  // sts WDTCSR, r24
+    0xFF, 0xCF};             // rjmp .-2
+
+// These bytes are machine code run by every unit whose flash stops short.
+static void test_the_hold_page_is_the_assembled_watchdog_loop() {
+  uint8_t page[TWIBOOT_PAGE_SIZE];
+  memset(page, 0x55, sizeof(page));
+  twibootFillHoldPage(page);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(HOLD_CODE, page, TWIBOOT_HOLD_CODE_LEN);
+  for (int i = TWIBOOT_HOLD_CODE_LEN; i < TWIBOOT_PAGE_SIZE; i++) {
+    TEST_ASSERT_EQUAL_HEX8(0xFF, page[i]);
+  }
+  // Not blank: the bootloader must take the unit for one with a program.
+  TEST_ASSERT_FALSE(page[0] == 0xFF && page[1] == 0xFF);
+}
+
+// Address 0 holds the hold page from the first write to the last.
+static void test_flash_image_writes_the_first_page_last() {
+  FakeTwiboot bus;
+  Image image;
+  Watch watch;
+  UnitFlashReport r = unitFlashImage(bus, ADDR, IMAGE_LEN, image, watch);
+  TEST_ASSERT_TRUE(UnitFlashResult::Ok == r.result);
+  const size_t pages = IMAGE_LEN / TWIBOOT_PAGE_SIZE;
+  TEST_ASSERT_EQUAL(pages + 1, bus.writeAddrs.size());
+  TEST_ASSERT_EQUAL_UINT16(0, bus.writeAddrs.front());
+  TEST_ASSERT_EQUAL_UINT16(0, bus.writeAddrs.back());
+  for (size_t i = 1; i < pages; i++) {
+    TEST_ASSERT_EQUAL_UINT16(i * TWIBOOT_PAGE_SIZE, bus.writeAddrs[i]);
+  }
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(image.bytes, bus.flash, IMAGE_LEN);
+}
+
+// The 2026-10-09 case: a page partway fails. What the unit would start is
+// the hold page, and every page before the failure is the new image's.
+static void test_a_flash_that_fails_partway_leaves_the_hold_page() {
+  FakeTwiboot bus;
+  Image image;
+  Watch watch;
+  bus.nackPageWriteAt = 2 * TWIBOOT_PAGE_SIZE;
+  UnitFlashReport r = unitFlashImage(bus, ADDR, IMAGE_LEN, image, watch);
+  TEST_ASSERT_TRUE(UnitFlashResult::PageFailed == r.result);
+  TEST_ASSERT_EQUAL_UINT16(2 * TWIBOOT_PAGE_SIZE, r.pageAddr);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(HOLD_CODE, bus.flash, TWIBOOT_HOLD_CODE_LEN);
+  TEST_ASSERT_EQUAL(0, bus.exits);
+}
+
+static void test_a_stopped_flash_leaves_the_hold_page() {
+  FakeTwiboot bus;
+  Image image;
+  Watch watch;
+  watch.pagesBeforeStop = (int)(IMAGE_LEN / TWIBOOT_PAGE_SIZE);  // all but the last write
+  UnitFlashReport r = unitFlashImage(bus, ADDR, IMAGE_LEN, image, watch);
+  TEST_ASSERT_TRUE(UnitFlashResult::Aborted == r.result);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(HOLD_CODE, bus.flash, TWIBOOT_HOLD_CODE_LEN);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(image.bytes + TWIBOOT_PAGE_SIZE,
+                                bus.flash + TWIBOOT_PAGE_SIZE,
+                                IMAGE_LEN - TWIBOOT_PAGE_SIZE);
 }
 
 static void test_flash_image_too_large_sends_nothing() {
@@ -857,6 +943,7 @@ int main(int, char**) {
   RUN_TEST(test_one_verify_mismatch_is_rewritten);
   RUN_TEST(test_persistent_mismatch_gives_up_after_the_attempt_cap);
   RUN_TEST(test_truncated_burst_never_reaches_the_bus);
+  RUN_TEST(test_one_failed_verify_read_is_asked_again);
   RUN_TEST(test_short_verify_read_fails_and_reports_the_bus);
   RUN_TEST(test_page_write_waits_out_a_busy_bootloader);
   RUN_TEST(test_chip_check_accepts_only_the_328p_with_our_page_size);
@@ -870,6 +957,10 @@ int main(int, char**) {
   RUN_TEST(test_a_whole_flash_frames_every_transaction_correctly);
   RUN_TEST(test_every_step_has_a_distinct_name);
   RUN_TEST(test_flash_image_writes_every_page_and_restarts_the_unit);
+  RUN_TEST(test_the_hold_page_is_the_assembled_watchdog_loop);
+  RUN_TEST(test_flash_image_writes_the_first_page_last);
+  RUN_TEST(test_a_flash_that_fails_partway_leaves_the_hold_page);
+  RUN_TEST(test_a_stopped_flash_leaves_the_hold_page);
   RUN_TEST(test_flash_image_too_large_sends_nothing);
   RUN_TEST(test_flash_image_silent_bootloader);
   RUN_TEST(test_flash_image_refuses_a_foreign_chip);

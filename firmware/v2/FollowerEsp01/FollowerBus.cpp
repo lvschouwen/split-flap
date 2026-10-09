@@ -855,6 +855,18 @@ struct ReflashLoopHooks {
     SerialPrint(addr);
     SerialPrintln(F(": not in its bootloader — not flashed"));
   }
+  void waitingForReset(uint8_t addr) {
+    SerialPrint(F("Unit "));
+    SerialPrint(addr);
+    SerialPrintln(F(": does not enter its bootloader — waiting for a reset "
+                    "of the unit by hand"));
+  }
+  void unitRetried(uint8_t addr, int attempt) {
+    SerialPrint(F("Unit "));
+    SerialPrint(addr);
+    SerialPrint(F(": still in its bootloader — flashing it again, attempt "));
+    SerialPrintln(attempt);
+  }
   ReflashUnitOutcome flashUnit(uint8_t addr) {
     return flashUnitFromProgmem(addr) ? ReflashUnitOutcome::Flashed
                                       : ReflashUnitOutcome::Failed;
@@ -877,10 +889,11 @@ struct ReflashLoopHooks {
 };
 }  // namespace
 
-static bool flashBootloaderUnits(const uint8_t* targets, int count) {
+static bool flashBootloaderUnits(const uint8_t* targets, int count,
+                                 uint32_t handResetWaitMs = 0) {
   ReflashLoopHooks hooks;
-  ReflashRunEnd end =
-      reflashRunTargets(hooks, targets, count, reflashProgress);
+  ReflashRunEnd end = reflashRunTargets(hooks, targets, count, reflashProgress,
+                                        handResetWaitMs);
   bool halted = end.halted;
   int flashed = end.flashed;
   // Runs only when something was actually flashed — a no-op sweep leaves the
@@ -991,7 +1004,8 @@ void busRunReflashJob(uint8_t onlyAddr, bool force) {
                              sweep, sweepCount, flashTargets);
   n = reflashFilterToAddress(flashTargets, n, onlyAddr);
   reflashProgress.total = (uint8_t)n;
-  bool halted = flashBootloaderUnits(flashTargets, n);
+  const uint32_t handResetWaitMs = force ? REFLASH_HAND_RESET_WAIT_MS : 0;
+  bool halted = flashBootloaderUnits(flashTargets, n, handResetWaitMs);
   reflashProgressSettling(reflashProgress);
   jobPollHealth();
   // Staggered boot-home of the just-flashed units (#309): a reflashed unit

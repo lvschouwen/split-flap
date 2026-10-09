@@ -104,10 +104,10 @@ def test_targeted_run_flashes_only_the_planned_list():
     # bootloader-mode units.
     loop = _function_body(_code(TREE / "FollowerBus.cpp"),
                           "static bool flashBootloaderUnits(const uint8_t* targets")
-    assert "reflashRunTargets(hooks, targets, count, reflashProgress)" in loop
+    assert "reflashRunTargets(hooks, targets, count, reflashProgress," in loop
     assert "unitFacts[" not in loop, "the loop must not re-derive targets from the facts"
     job = _function_body(_code(TREE / "FollowerBus.cpp"),
                          "void busRunReflashJob(uint8_t onlyAddr, bool force)")
     assert "reflashPlanTargets(" in job
     narrowed = job.index("n = reflashFilterToAddress(flashTargets, n, onlyAddr);")
-    assert narrowed < job.index("flashBootloaderUnits(flashTargets, n);")
+    assert narrowed < job.index("flashBootloaderUnits(flashTargets, n, handResetWaitMs);")
