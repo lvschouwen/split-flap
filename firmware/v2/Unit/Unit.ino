@@ -344,6 +344,7 @@ uint16_t          bootHomeJitterMs          = 0;      // 0..BOOT_HOME_JITTER_MAX
 HomeBackoff       homeBackoff               = {0, 0};
 // Hold of a letter move on a low supply (#505, UnitSupplyWait.h). Loop context.
 SupplyWait        supplyWait;
+uint16_t          supplyIdleLevelMv         = 0;  // the rail at rest, as this chip reads it
 // Status flag bit surfaced to the master (mirrors UnitHealth.h UNIT_FLAG_HOMED).
 #define UNIT_STATUS_FLAG_HOMED (1 << 5)
 
@@ -987,6 +988,7 @@ void loop() {
   if (currentMillis - vitalsLastSampleMs >= 1000UL) {
     vitalsLastSampleMs = currentMillis;
     vitalsSample(false);
+    supplyIdleLevelFold(supplyIdleLevelMv, vitalsVccNow);  // #505
   }
 
   // Duty-window decay (#373): halve the rolling move counter on a coarse ~60 s

@@ -42,7 +42,8 @@ def test_a_low_supply_holds_a_letter_move_only_behind_its_gate():
     body = _function_body(_code("UnitMotion.ino"), "void rotateToLetter(")
     gate = body.index(
         "if (unitGateEnabled(lifetime.featureGates, UNIT_GATE_SUPPLY_WAIT)) {")
-    hold = body.index("if (supplyWaitHold(supplyWait, vitalsVccNow, millis())) {")
+    hold = body.index(
+        "if (supplyWaitHold(supplyWait, vitalsVccNow, supplyIdleLevelMv, millis())) {")
     commit = body.index("lastRotation = millis();")
     # After the overheat gate, before the move is committed and timed.
     assert body.index("OVERHEATINGTIMEOUT") < gate < hold < commit
@@ -56,6 +57,11 @@ def test_a_low_supply_holds_a_letter_move_only_behind_its_gate():
     loop = _function_body(_code("Unit.ino"), "void loop(")
     idle = loop.index("else if (currentlyrotating) {")
     assert "supplyWaitReset(supplyWait);" in loop[idle:idle + 500]
+    # The idle level is fed by the once-a-second reading, never by the one a
+    # move is judged on.
+    sample = loop.index("vitalsLastSampleMs = currentMillis;")
+    assert "supplyIdleLevelFold(supplyIdleLevelMv, vitalsVccNow);" in loop[sample:sample + 200]
+    assert "supplyIdleLevelFold" not in body
 
 
 def test_loop_pays_the_owed_retry_and_never_leaves_busy_latched():

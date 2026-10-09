@@ -120,13 +120,13 @@ void rotateToLetter(int toLetter) {
     return;
   }
 
-  // Supply hold (#505, UnitSupplyWait.h), behind its gate: with the rail under
-  // the line the coils stay off and the unit answers busy, like the overheat
+  // Supply hold (#505, UnitSupplyWait.h), behind its gate: with the rail well
+  // under this unit's idle level the coils stay off and the unit answers busy, like the overheat
   // gate above; loop() calls back every pass. Bounded, so a rail that stays
   // low delays the move and never parks it.
   if (unitGateEnabled(lifetime.featureGates, UNIT_GATE_SUPPLY_WAIT)) {
     vitalsSample(false);
-    if (supplyWaitHold(supplyWait, vitalsVccNow, millis())) {
+    if (supplyWaitHold(supplyWait, vitalsVccNow, supplyIdleLevelMv, millis())) {
       currentlyrotating = 1;
       return;
     }
