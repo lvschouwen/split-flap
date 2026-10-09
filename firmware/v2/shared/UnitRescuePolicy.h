@@ -7,6 +7,8 @@
 //
 //   no ACK            -> still lost; retry after UNIT_RESCUE_RETRY_MS
 //   ACK + twiboot     -> CMD_SWITCH_APPLICATION exits to the sketch
+//   ACK + twiboot that did not take that order
+//                     -> still lost; retry
 //   ACK + twiboot holding after repeated crash resets (#542)
 //                     -> left there; the unit becomes a bootloader unit in
 //                        the facts, which ends the loss episode and makes it
@@ -36,6 +38,7 @@ enum class UnitRescueProbe : uint8_t {
   Bootloader,    // twiboot answered and was told to start the application
   SketchSilent,  // address ACKs, not twiboot, but status reads still fail
   CrashHeld,     // twiboot holds it after repeated crash resets; not started
+  ExitRefused,   // twiboot answered but did not take the order to start
 };
 
 struct UnitRescueState {

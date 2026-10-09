@@ -149,6 +149,10 @@ bool unitBusWaitBatchIdle(const uint8_t* addrs, int count,
 // in-flight rotation to end (stuck-unit cap) and for the radio-quiet gate.
 // The bus itself stays displayTask-exclusive. The reflash orchestration polls
 // it between units and batches via unitBusAbortRequested() (#205).
+// What unitBusJog / unitBusHome / unitBusStartSelfTest return instead of a
+// transaction status when a stop was pending at the motion gate: nothing was
+// sent. (unitBusShowFrame abandons its frame and returns 0 write errors.)
+#define UNIT_BUS_STOPPED 30
 void unitBusRequestAbort();
 void unitBusClearAbort();
 bool unitBusAbortRequested();

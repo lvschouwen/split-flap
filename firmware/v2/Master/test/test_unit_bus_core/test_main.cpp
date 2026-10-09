@@ -526,8 +526,37 @@ static void test_poll_returns_liveness_and_refreshes_the_diagnostics() {
   TEST_ASSERT_EQUAL_UINT8(BOOT_INTEGRITY_UNREAD, f.bootVerdict);
 }
 
+// A unit that keeps missing its status is asked nothing else: five more
+// transactions would each fail the same way and count as a bus error. The
+// first miss still asks — a unit that is there keeps its facts through one
+// bad read.
+static void test_poll_of_a_silent_unit_is_one_read() {
+  FakeUnit u;
+  NotesSpy notes;
+  UnitFacts f;
+  UnitResetBaseline baseline;
+  uint8_t bootLogged = 0;
+  unitPollHealth(u, notes, f, ADDR, baseline, bootLogged);
+  u.present = false;
+  int countedBefore = u.counted;
+  TEST_ASSERT_FALSE(unitPollHealth(u, notes, f, ADDR, baseline, bootLogged));
+  TEST_ASSERT_GREATER_THAN(1, u.counted - countedBefore);
+  f.misses = 1;  // what the heartbeat made of that
+  countedBefore = u.counted;
+  TEST_ASSERT_FALSE(unitPollHealth(u, notes, f, ADDR, baseline, bootLogged));
+  TEST_ASSERT_EQUAL(1, u.counted - countedBefore);
+  // Nothing it said before is served as current.
+  TEST_ASSERT_FALSE(f.diagValid);
+  TEST_ASSERT_FALSE(f.vitalsValid);
+  TEST_ASSERT_FALSE(f.extDiagValid);
+  TEST_ASSERT_FALSE(f.linkValid);
+  TEST_ASSERT_FALSE(f.lifetimeValid);
+  TEST_ASSERT_EQUAL_UINT8(BOOT_INTEGRITY_UNREAD, f.bootVerdict);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_poll_of_a_silent_unit_is_one_read);
   RUN_TEST(test_no_argument_mutations_carry_the_guard_byte);
   RUN_TEST(test_enter_bootloader_is_one_bare_byte);
   RUN_TEST(test_letter_write_is_index_and_speed);

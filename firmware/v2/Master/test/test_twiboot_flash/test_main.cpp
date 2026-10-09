@@ -30,6 +30,7 @@ struct FakeTwiboot {
   int replyLen = -1;            // >= 0: every read returns this many bytes
   size_t txCap = 256;           // bus buffer size
   bool nackChipRequest = false;
+  bool nackExit = false;        // the order to start the application is refused
   // Identity (#541/#543). The original image answers the version read with
   // its stock string and wraps chipinfo at 8 bytes.
   uint8_t info[16] = {'T', 'W', 'I', 'B', 'O', 'O', 'T', ' ',
@@ -96,6 +97,7 @@ struct FakeTwiboot {
       return 0;
     }
     if (tx[0] == TWIBOOT_CMD_SWITCH_APPLICATION) {
+      if (nackExit) return NACK;
       if (tx.size() == 2 && tx[1] == TWIBOOT_BOOTTYPE_APPLICATION) exits++;
       else framingErrors++;
       return 0;
@@ -579,6 +581,15 @@ static void test_rescue_probe_of_an_absent_unit_is_no_ack() {
   TEST_ASSERT_EQUAL(0, bus.exits);
 }
 
+// A bootloader that did not take the order is still in it: not an exit.
+static void test_rescue_probe_reports_a_refused_exit() {
+  FakeTwiboot bus;
+  TwibootIdentity rescueId;
+  bus.nackExit = true;
+  TEST_ASSERT_TRUE(UnitRescueProbe::ExitRefused == unitRescueProbe(bus, ADDR, rescueId));
+  TEST_ASSERT_EQUAL(0, bus.exits);
+}
+
 // ACKs but is not twiboot: a sketch that cannot be read. Never sent an exit.
 static void test_rescue_probe_of_a_silent_sketch() {
   FakeTwiboot bus;
@@ -869,6 +880,7 @@ int main(int, char**) {
   RUN_TEST(test_boot_section_read_from_a_silent_unit_sends_no_exit);
   RUN_TEST(test_rescue_probe_starts_a_unit_parked_in_twiboot);
   RUN_TEST(test_rescue_probe_of_an_absent_unit_is_no_ack);
+  RUN_TEST(test_rescue_probe_reports_a_refused_exit);
   RUN_TEST(test_rescue_probe_of_a_silent_sketch);
   RUN_TEST(test_identity_of_an_image_with_identity_and_fuse_bytes);
   RUN_TEST(test_identity_of_an_image_without_identity_bytes);

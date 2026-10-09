@@ -154,9 +154,10 @@ static void runBootHomeSequence(DisplaySnapshot& local, UnitFacts* busFacts) {
     uint8_t batch[BOOT_HOME_BATCH_SIZE];
     int batchN = 0;
     for (int j = i; j < n && batchN < BOOT_HOME_BATCH_SIZE; j++) {
-      unitBusHome(targets[j]);
+      if (unitBusHome(targets[j]) == UNIT_BUS_STOPPED) break;
       batch[batchN++] = targets[j];
     }
+    if (batchN == 0) break;  // stopped before anything moved: nothing to wait for
     // Status-driven: wait for each commanded unit to report homed-or-faulted
     // (not moving) before settling the rail for the next batch.
     unitBusWaitBatchIdle(batch, batchN, BOOT_HOME_BATCH_TIMEOUT_MS);
@@ -335,6 +336,11 @@ static void rescueTick(DisplaySnapshot& local, UnitFacts* busFacts, int i) {
     case UnitRescueProbe::NoAck:
       SerialPrintf("Unit 0x%02x lost — no ACK (attempt %u)\n", addr,
                    (unsigned)rs.attempts);
+      break;
+    case UnitRescueProbe::ExitRefused:
+      SerialPrintf("Unit 0x%02x lost — in twiboot, did not take the order to "
+                   "start its app (attempt %u)\n", addr, (unsigned)rs.attempts);
+      armTwibootRiskWindow();  // still in its bootloader: no read just yet
       break;
     case UnitRescueProbe::SketchSilent:
       SerialPrintf("Unit 0x%02x lost — ACKs but status reads fail "
@@ -756,12 +762,21 @@ static void execWriteOffset(DisplaySnapshot& local, UnitFacts* busFacts,
   displayApplyMaintResult(local, cmd, maintGradeWire(status));
 }
 
+// A mover a pending stop kept from starting was refused here, not failed on
+// the bus.
+static MaintGrade gradeMover(int status) {
+  if (status == UNIT_BUS_STOPPED) {
+    return {MaintOutcome::ExecValidationFail, MaintReason::None};
+  }
+  return maintGradeWire(status);
+}
+
 static void execJog(DisplaySnapshot& local, UnitFacts* busFacts,
                    const DisplayCommand& cmd) {
   (void)busFacts;
   (void)cmd;
   int status = unitBusJog(cmd.unitAddress, cmd.value);
-  displayApplyMaintResult(local, cmd, maintGradeWire(status));
+  displayApplyMaintResult(local, cmd, gradeMover(status));
 }
 
 static void execHome(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -771,7 +786,7 @@ static void execHome(DisplaySnapshot& local, UnitFacts* busFacts,
   int status = unitBusHome(cmd.unitAddress);
   // The unit parks at blank: back to the flap its row is showing.
   if (status == 0) reshowLastFrame(local);
-  displayApplyMaintResult(local, cmd, maintGradeWire(status));
+  displayApplyMaintResult(local, cmd, gradeMover(status));
 }
 
 static void execIdentify(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -791,7 +806,10 @@ static void execSelfTest(DisplaySnapshot& local, UnitFacts* busFacts,
   SelfTestSlot slot;
   slot.seq = cmd.seq;
   slot.addr = cmd.unitAddress;
-  if (unitBusStartSelfTest(cmd.unitAddress) != 0) {
+  int started = unitBusStartSelfTest(cmd.unitAddress);
+  if (started == UNIT_BUS_STOPPED) {
+    slot.outcome = SelfTestOutcome::Aborted;
+  } else if (started != 0) {
     slot.outcome = SelfTestOutcome::WireFail;
   } else {
     SelfTestPoll poll;

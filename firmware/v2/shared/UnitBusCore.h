@@ -474,13 +474,31 @@ inline bool unitProbeSketchUnit(Bus& bus, Notes& notes, UnitFacts& fact,
   return versionOk;
 }
 
+// What unitRefreshDiagnostics would leave behind had every read failed.
+inline void unitForgetDiagnostics(UnitFacts& fact) {
+  fact.diagValid = false;
+  fact.vitalsValid = false;
+  fact.extDiagValid = false;
+  fact.linkValid = false;
+  fact.lifetimeValid = false;
+  fact.bootVerdict = BOOT_INTEGRITY_UNREAD;
+}
+
 // One unit's health poll: the status read (the heartbeat's liveness signal,
-// returned) and the diagnostics on the same cadence.
+// returned) and the diagnostics on the same cadence. A unit that missed its
+// status before (`misses`, the heartbeat's count) and misses it again is asked
+// nothing else: each further transaction would fail the same way and count as
+// a bus error. One miss alone still reads the diagnostics — a unit that is
+// there keeps its facts through a single bad read.
 template <typename Bus, typename Notes>
 inline bool unitPollHealth(Bus& bus, Notes& notes, UnitFacts& fact,
                            uint8_t i2cAddress, UnitResetBaseline& baseline,
                            uint8_t& bootLogged) {
   bool ok = unitPollStatus(bus, fact, i2cAddress, baseline);
+  if (!ok && fact.misses > 0) {
+    unitForgetDiagnostics(fact);
+    return false;
+  }
   unitRefreshDiagnostics(bus, notes, fact, i2cAddress, bootLogged);
   return ok;
 }

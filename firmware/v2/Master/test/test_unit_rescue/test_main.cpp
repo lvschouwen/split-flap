@@ -56,6 +56,15 @@ static void test_retry_survives_millis_wrap() {
                                  0xFFFFFF00UL + UNIT_RESCUE_RETRY_MS));
 }
 
+static void test_a_refused_exit_is_an_attempt_not_an_exit() {
+  UnitRescueState r;
+  unitRescueNoteAttempt(r, 1000, UnitRescueProbe::ExitRefused);
+  TEST_ASSERT_EQUAL_UINT16(0, r.exits);
+  TEST_ASSERT_EQUAL_UINT16(1, r.attempts);
+  TEST_ASSERT_FALSE(unitRescueDue(lostUnit(), r, 1000 + UNIT_RESCUE_RETRY_MS - 1));
+  TEST_ASSERT_TRUE(unitRescueDue(lostUnit(), r, 1000 + UNIT_RESCUE_RETRY_MS));
+}
+
 static void test_bootloader_exit_counts_and_arms_restore() {
   UnitRescueState r;
   unitRescueNoteAttempt(r, 1000, UnitRescueProbe::Bootloader);
@@ -168,6 +177,7 @@ static void test_a_held_unit_is_rechecked_on_the_rescue_cadence() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_healthy_unit_is_never_due);
+  RUN_TEST(test_a_refused_exit_is_an_attempt_not_an_exit);
   RUN_TEST(test_lost_unit_is_due_immediately);
   RUN_TEST(test_non_sketch_slots_are_never_due);
   RUN_TEST(test_retry_is_rate_limited);

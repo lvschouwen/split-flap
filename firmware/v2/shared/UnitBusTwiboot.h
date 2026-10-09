@@ -37,7 +37,7 @@ inline UnitRescueProbe unitRescueProbe(Bus& bus, uint8_t i2cAddress,
     twibootReadIdentity(bus, i2cAddress, id);
   }
   if (twibootHeldForCrashing(id)) return UnitRescueProbe::CrashHeld;
-  twibootExit(bus, i2cAddress);
+  if (twibootExit(bus, i2cAddress) != 0) return UnitRescueProbe::ExitRefused;
   return UnitRescueProbe::Bootloader;
 }
 

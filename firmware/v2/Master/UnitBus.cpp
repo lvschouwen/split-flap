@@ -214,8 +214,11 @@ static void (*motionGate)() = nullptr;
 void unitBusSetMotionCap(int cap) { motionCap = cap; }
 void unitBusSetMotionGate(void (*gate)()) { motionGate = gate; }
 
-static void admitMotion() {
+// False when a stop is pending once the gate returns (the gate itself cuts
+// its wait short for one): the caller starts no motion.
+static bool admitMotion() {
   if (motionGate) motionGate();
+  return !abortRequested.load();
 }
 
 // Blocks until fewer than motionCap tracked units are still moving. Returns
@@ -409,7 +412,7 @@ int unitBusShowFrame(const UnitFacts* facts, int width,
                      const uint8_t* letters, int unitSpeed) {
   // Entry wait: never interleave a new frame into a still-rotating display.
   waitForDisplayToStop(facts, width);
-  admitMotion();
+  if (!admitMotion()) return 0;  // abandoned like any aborted frame
 
   int writeErrors = 0;
   int commanded = 0;
@@ -465,12 +468,12 @@ int unitBusWriteOffset(int i2cAddress, int16_t value) {
 }
 
 int unitBusJog(int i2cAddress, int steps) {
-  admitMotion();
+  if (!admitMotion()) return UNIT_BUS_STOPPED;
   return unitJog(unitBus, (uint8_t)i2cAddress, steps);
 }
 
 int unitBusHome(int i2cAddress) {
-  admitMotion();
+  if (!admitMotion()) return UNIT_BUS_STOPPED;
   return unitHome(unitBus, (uint8_t)i2cAddress);
 }
 
@@ -491,7 +494,7 @@ int unitBusSetGates(int i2cAddress, uint8_t gates) {
 }
 
 int unitBusStartSelfTest(int i2cAddress) {
-  admitMotion();
+  if (!admitMotion()) return UNIT_BUS_STOPPED;
   return unitStartSelfTest(unitBus, (uint8_t)i2cAddress);
 }
 
