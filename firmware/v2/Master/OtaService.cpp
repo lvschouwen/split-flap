@@ -97,9 +97,10 @@ static void ensureSlotRecord() {
   SlotRecord rec0 = parseSlotRecord(prefs.getString(SF_NVS_KEY_SLOT_REC_APP0, "").c_str());
   SlotRecord rec1 = parseSlotRecord(prefs.getString(SF_NVS_KEY_SLOT_REC_APP1, "").c_str());
   const SlotRecord& mine = (slot == 0) ? rec0 : rec1;
-  if (slotRecordShaMatches(mine, sha)) {
+  const SlotRecord& other = (slot == 0) ? rec1 : rec0;
+  if (slotRecordStands(mine, other, sha)) {
     prefs.end();
-    // This exact image already holds the slot's record.
+    // This exact image already holds the slot's record, and the newest one.
     SerialPrintln("slot record: app" + String(slot) + " current, seq " +
                   String(mine.seq) + " (sha " + String(shaMs) + " ms)");
     return;

@@ -141,8 +141,50 @@ static void test_next_seq_is_max_plus_one() {
   TEST_ASSERT_EQUAL_UINT32(4, nextSlotRecordSeq(a, none));
 }
 
+// --- slotRecordStands ---------------------------------------------------------
+
+static SlotRecord recordWith(uint32_t seq, const uint8_t sha[32]) {
+  char buf[SLOT_RECORD_BUF_LEN];
+  TEST_ASSERT_TRUE(formatSlotRecord(buf, sizeof(buf), seq, sha, "rev"));
+  return parseSlotRecord(buf);
+}
+
+static void test_record_stands_for_the_newest_confirm_of_this_image() {
+  uint8_t mineSha[32], otherSha[32];
+  memset(mineSha, 0x11, 32);
+  memset(otherSha, 0x22, 32);
+  SlotRecord none;
+  TEST_ASSERT_TRUE(slotRecordStands(recordWith(5, mineSha), recordWith(4, otherSha), mineSha));
+  TEST_ASSERT_TRUE(slotRecordStands(recordWith(5, mineSha), none, mineSha));
+}
+
+static void test_record_of_another_image_does_not_stand() {
+  uint8_t mineSha[32], otherSha[32];
+  memset(mineSha, 0x11, 32);
+  memset(otherSha, 0x22, 32);
+  SlotRecord none;
+  TEST_ASSERT_FALSE(slotRecordStands(recordWith(5, otherSha), recordWith(4, otherSha), mineSha));
+  TEST_ASSERT_FALSE(slotRecordStands(none, none, mineSha));
+}
+
+static void test_record_does_not_stand_once_the_other_slot_was_confirmed_later() {
+  // #586: the same image installed into its slot again, after the other
+  // slot was confirmed in between. Rescue exits to the highest number, so
+  // the slot that runs now must get a new one.
+  uint8_t mineSha[32], otherSha[32];
+  memset(mineSha, 0x11, 32);
+  memset(otherSha, 0x22, 32);
+  SlotRecord mine = recordWith(163, mineSha);
+  SlotRecord other = recordWith(164, otherSha);
+  TEST_ASSERT_FALSE(slotRecordStands(mine, other, mineSha));
+  TEST_ASSERT_EQUAL_UINT32(165, nextSlotRecordSeq(mine, other));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_record_stands_for_the_newest_confirm_of_this_image);
+  RUN_TEST(test_record_of_another_image_does_not_stand);
+  RUN_TEST(test_record_does_not_stand_once_the_other_slot_was_confirmed_later);
   RUN_TEST(test_format_produces_versioned_record);
   RUN_TEST(test_format_rejects_short_buffer);
   RUN_TEST(test_format_truncates_long_rev);

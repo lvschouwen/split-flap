@@ -119,6 +119,16 @@ static inline bool slotRecordShaMatches(const SlotRecord& r,
   return true;
 }
 
+// Does the running slot's record stand as it is? Only when it describes this
+// exact image and no later confirm is on record for the other slot: Rescue
+// exits to the highest sequence, so an image installed into its slot again
+// after the other slot was confirmed needs a new one (#586).
+static inline bool slotRecordStands(const SlotRecord& mine, const SlotRecord& other,
+                                    const uint8_t sha[32]) {
+  if (!slotRecordShaMatches(mine, sha)) return false;
+  return !other.ok || mine.seq > other.seq;
+}
+
 // The next confirm sequence: one past the highest recorded, 1 on a fresh
 // device. Both records count even when their sha no longer matches the slot
 // — monotonicity must survive reflashes.
