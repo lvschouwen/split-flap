@@ -258,8 +258,14 @@ def check_tag_free(repo: Path, tag: str) -> None:
 
 
 def default_esptool() -> list[str]:
-    penv = Path.home() / ".platformio/penv/bin/python"
-    return [str(penv), "-m", "esptool"] if penv.exists() else [sys.executable, "-m", "esptool"]
+    """An esptool that knows the S3 and `merge-bin` (v4.7 or later). The one in
+    PlatformIO's own environment is too old."""
+    if os.environ.get("ESPTOOL"):
+        return os.environ["ESPTOOL"].split()
+    found = shutil.which("esptool")
+    if found:
+        return [found]
+    return ["uv", "run", "--no-project", "--with", "esptool", "python", "-m", "esptool"]
 
 
 # --- the run -----------------------------------------------------------------
