@@ -33,17 +33,15 @@ const DURATIONS = [['', 'Until I change it'], ['300', '5 minutes, then back'],
 
 // Text per row, for how long, mode, quiet, stop. Built once for a shape of
 // the wall and kept across refreshes, so typing is never interrupted.
-// `texts` is what the rows show when a text is up: the boxes open with it.
-function composeForm(app, lines, texts) {
+function composeForm(app, lines) {
   const status = statusLine();
   const ask = (name, args, done) => action(name, null, args)
     .then(() => status.say(done), (error) => status.say(error.message, true));
   const inputs = lines.map((line, i) => {
-    const value = (texts && texts[i]) || '';
-    const count = h('span', { class: 'count' }, `${value.length} / ${line.width}`);
+    const count = h('span', { class: 'count' }, `0 / ${line.width}`);
     const note = h('div', { class: 'why bad' });
     const input = h('input', {
-      type: 'text', id: 'compose' + i, maxlength: line.width, autocomplete: 'off', value,
+      type: 'text', id: 'compose' + i, maxlength: line.width, autocomplete: 'off',
       placeholder: `up to ${line.width} characters`,
       oninput: () => {
         count.textContent = `${input.value.length} / ${line.width}`;
@@ -51,7 +49,7 @@ function composeForm(app, lines, texts) {
         status.say(missing.length ? 'The wall has no flap for: ' + missing.join(' ') : '');
       },
     });
-    return { input, note,
+    return { input, note, count,
              row: [h('div', { class: 'field' }, h('label', { for: 'compose' + i }, line.title), input, count), note] };
   });
   const length = h('select', { 'aria-label': 'How long' },
@@ -74,6 +72,14 @@ function composeForm(app, lines, texts) {
       h('button', { type: 'button', class: 'btn danger',
                     onclick: () => ask('stop', null, 'Stopped and blanked.') }, 'Stop and blank')),
     status);
+  // The text that is up, into the boxes nothing was typed in.
+  root.fill = (texts) => {
+    if (inputs.some((x) => x.input.value !== '')) return;
+    inputs.forEach((x, i) => {
+      x.input.value = texts[i] || '';
+      x.count.textContent = `${x.input.value.length} / ${lines[i].width}`;
+    });
+  };
   root.set = (show, notes) => {
     inputs.forEach((x, i) => { x.note.textContent = notes[i] || ''; });
     if (!show) return;
@@ -90,6 +96,7 @@ export function wallView(app) {
   const compose = h('div', {});
   let composeShape = '';
   let form = null;
+  let formFilled = false;
   const found = h('div', {});
   const attention = h('div', { class: 'section' });
   const boards = h('div', { class: 'section' });
@@ -112,12 +119,17 @@ export function wallView(app) {
     const lines = composeLines(layout);
     if (JSON.stringify(lines) !== composeShape) {
       composeShape = JSON.stringify(lines);
-      // The clock's own text is not something to send again.
-      const up = show && (show.timed || show.mode === 'text');
-      form = composeForm(app, lines, up ? layout.lines.map(lineText) : null);
+      form = composeForm(app, lines);
+      formFilled = false;
       fill(compose, form);
     }
     form.set(show, composeNotes(layout));
+    // Once, when what is showing is known: the wall document is read before
+    // the stream says so. The clock's own text is not something to send again.
+    if (show && !formFilled) {
+      formFilled = true;
+      if (show.timed || show.mode === 'text') form.fill(layout.lines.map(lineText));
+    }
     fill(found, wall.release ? itemList([{ cls: 'note', href: '#firmware',
       title: `New release ${wall.release} found`, why: 'Firmware has what it would change, and the button.' }]) : null);
     fill(attention, needs.length ? [h('h2', {}, 'Needs attention'), itemList(needs)] : null);
