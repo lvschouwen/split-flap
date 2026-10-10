@@ -74,7 +74,9 @@ function settingsForm(id, settings) {
   return h('details', {}, h('summary', {}, 'Settings for this board'),
     h('form', { class: 'in', onsubmit: save },
       h('div', { class: 'field' }, h('label', { for: 'boardName' }, 'Name'), name),
-      h('div', { class: 'rowwrap' }, h('span', {}, 'Number of units'), counting, fixed),
+      h('div', { class: 'rowwrap' }, h('span', {}, 'Units it should find'), counting, fixed),
+      h('p', { class: 'muted small' }, 'Fix the number only for a row that runs with a unit missing or without units. How many flaps the row has on the wall is set under Rows in ',
+        h('a', { href: '#settings' }, 'Wall settings'), '.'),
       h('div', { class: 'rowwrap' }, h('button', { type: 'submit', class: 'btn' }, 'Save'),
         h('button', { type: 'button', class: 'btn danger', onclick: forget }, 'Forget WiFi\u2026')),
       status));

@@ -17,7 +17,7 @@ import { whenText, eventText, eventBoardId, historyGroups, needingAttention } fr
 import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId, noFlapFor,
          composeLines, composeText, showingText, composeNotes } from '../model/wall.js';
 import { testText, calibrationPlan } from '../model/calibrate.js';
-import { rowsDraft, arrangeProblem, arrangeArgs, zoneFor, brokerText, foundLine } from '../model/settings.js';
+import { rowsDraft, arrangeProblem, arrangeArgs, zoneFor, brokerText, foundLine, pairProblem } from '../model/settings.js';
 
 const FIELDS = ['address', 'level', 'reason', 'a', 'b', 'state', 'rev', 'firmware',
                 'bootloader', 'supplyMv', 'supplyMinMv', 'shows', 'turns', 'offset'];
@@ -804,8 +804,24 @@ test('the rows are listed top to bottom, counted from 1, and saved counted from 
   const draft = rowsDraft(TWO_ROWS);
   assert.deepEqual(draft.map((line) => [line.name, line.id, line.row, line.col, line.width]),
     [['wall-row', 'wall-row', 1, 1, 5], ['wall-master', '', 2, 1, 16]]);
+  // A board is called by its place on the wall; its id tells the hardware apart.
+  assert.deepEqual(draft.map((line) => line.title), ['Row 1', 'Row 2']);
   assert.deepEqual(arrangeArgs(draft), { rows: [
     { id: 'wall-row', row: 0, col: 0, width: 5 }, { id: '', row: 1, col: 0, width: 16 }] });
+});
+
+test('an address a row board cannot have is refused in words before it is sent', () => {
+  assert.equal(pairProblem('192.168.1.50'), '');
+  assert.equal(pairProblem('10.0.0.7'), '');
+  assert.equal(pairProblem('172.16.4.2'), '');
+  const shape = 'That is not an address. A row board’s address looks like 192.168.1.50.';
+  assert.equal(pairProblem(''), shape);
+  assert.equal(pairProblem('row-board.local'), shape);
+  assert.equal(pairProblem('192.168.1'), shape);
+  assert.equal(pairProblem('192.168.1.256'), shape);
+  const local = 'A row board is on the local network: its address starts with 192.168., 10. or 172.16. to 172.31.';
+  assert.equal(pairProblem('8.8.8.8'), local);
+  assert.equal(pairProblem('172.32.0.1'), local);
 });
 
 test('row numbers with a gap or in another order become rows without a gap', () => {
@@ -820,19 +836,19 @@ test('rows that cannot be saved say why', () => {
   const draft = rowsDraft(TWO_ROWS);
   assert.equal(arrangeProblem(draft), '');
   draft[0].row = 2;  // beside the master, over its first units
-  assert.equal(arrangeProblem(draft), 'wall-row and wall-master would overlap on row 2.');
+  assert.equal(arrangeProblem(draft), 'Row 1 and Row 2 would overlap on row 2.');
   draft[0].col = 17;  // to the right of it
   assert.equal(arrangeProblem(draft), '');
   draft[0].col = 0;
-  assert.equal(arrangeProblem(draft), 'wall-row: the column is a whole number from 1.');
+  assert.equal(arrangeProblem(draft), 'Row 1: the column is a whole number from 1.');
   draft[0].col = 1;
   draft[0].row = NaN;
-  assert.equal(arrangeProblem(draft), 'wall-row: the row is a whole number from 1.');
+  assert.equal(arrangeProblem(draft), 'Row 1: the row is a whole number from 1.');
   draft[0].row = 2;
   draft[0].width = 16;  // the same place as the master: shows the same text
   assert.equal(arrangeProblem(draft), '');
   draft[0].width = 0;
-  assert.equal(arrangeProblem(draft), 'wall-row: the number of units is a whole number from 1.');
+  assert.equal(arrangeProblem(draft), 'Row 1: the number of flaps is a whole number from 1.');
 });
 
 test('the time zone is named by the browser\u2019s zone when that has the wall\u2019s rule', () => {

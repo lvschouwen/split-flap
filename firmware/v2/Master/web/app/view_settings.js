@@ -3,7 +3,7 @@
 import { h, fill, pill, segmented, statusLine } from './dom.js';
 import { getJson, putJson, action } from './api.js';
 import { runJob } from './jobs.js';
-import { rowsDraft, arrangeProblem, arrangeArgs, zoneFor, brokerText, foundLine } from '../model/settings.js';
+import { rowsDraft, arrangeProblem, arrangeArgs, zoneFor, brokerText, foundLine, pairProblem } from '../model/settings.js';
 
 const WALL_SETTINGS = '/api/v2/settings/wall';
 
@@ -29,10 +29,14 @@ function rowsPart(app, draft, status, found) {
     return job;
   };
   const place = (line, key, label) => (alone ? line[key] : h('input', {
-    type: 'number', min: 1, max: 255, value: line[key], 'aria-label': `${label} of ${line.name}`,
+    type: 'number', min: 1, max: 255, value: line[key], 'aria-label': `${label} of ${line.title}`,
     oninput: (event) => { line[key] = Number(event.target.value); } }));
-  const pair = (host) => runJob(status, 'Pairing with the board', 'pair', { host }).then(done)
-    .then((job) => { if (job && job.state === 'done') fill(found); });
+  const pair = (host) => {
+    const problem = pairProblem(host);
+    if (problem) return status.say(problem, true);
+    return runJob(status, 'Pairing with the board', 'pair', { host }).then(done)
+      .then((job) => { if (job && job.state === 'done') fill(found); });
+  };
   const look = async () => {
     fill(found);
     const job = await runJob(status, 'Looking for row boards', 'find-rows');
@@ -55,17 +59,17 @@ function rowsPart(app, draft, status, found) {
   const address = h('input', { type: 'text', id: 'pairAddress', placeholder: '192.168.1.50',
                                maxlength: 15, autocomplete: 'off', inputmode: 'decimal' });
   return h('div', { class: 'section' }, h('h2', {}, 'Rows'),
-    h('p', { class: 'muted small' }, 'Which board drives which row, top to bottom, how many units it has, and where the row starts. Boards with the same row number hang side by side.'),
+    h('p', { class: 'muted small' }, 'Which board drives which row, top to bottom, how many flaps the row has on the wall, and where it starts. Boards with the same row number hang side by side. How many units a board should find on its bus is set on the board’s own page.'),
     h('div', { class: 'scroll' }, h('table', { class: 'cards' },
-      h('thead', {}, h('tr', {}, ['Row', 'Board', 'Units', 'Starts at column', ''].map((t) => h('th', {}, t)))),
+      h('thead', {}, h('tr', {}, ['Row', 'Board', 'Flaps in the row', 'Starts at column', ''].map((t) => h('th', {}, t)))),
       h('tbody', {}, draft.map((line) => h('tr', {},
         h('td', { 'data-l': 'Row' }, place(line, 'row', 'Row')),
-        h('td', { class: 'lead' }, h('a', { href: '#board/' + line.name }, line.name),
-          h('div', { class: 'muted small' }, line.own ? 'master' : 'row board')),
-        h('td', { 'data-l': 'Units' }, place(line, 'width', 'Number of units')),
+        h('td', { class: 'lead' }, h('a', { href: '#board/' + line.name }, line.title),
+          h('div', { class: 'muted small' }, (line.own ? 'master, ' : 'row board, ') + line.name)),
+        h('td', { 'data-l': 'Flaps in the row' }, place(line, 'width', 'Number of flaps')),
         h('td', { 'data-l': 'Starts at column' }, place(line, 'col', 'Start column')),
         h('td', { class: 'side' }, !line.own && h('button', { type: 'button', class: 'btn quiet', onclick: () => {
-          if (!window.confirm(`Remove ${line.name} from the wall? It shows nothing of the wall until it is added again.`)) return;
+          if (!window.confirm(`Remove ${line.title} (${line.name}) from the wall? It shows nothing of the wall until it is added again.`)) return;
           runJob(status, 'Removing the board', 'release', { row: line.id }).then(done);
         } }, 'Remove'))))))),
     h('div', { class: 'rowwrap' },
@@ -193,10 +197,9 @@ export function settingsView(app) {
         asked = false;
         refresh();
       }),
-      h('div', { class: 'section' }, h('h2', {}, 'WiFi'),
-        h('p', { class: 'muted small' }, 'Each board remembers its own WiFi. The master’s is changed under “Settings for this board” on ',
-          h('a', { href: '#board/' + (app.state.wall ? app.state.wall.master.id : '') }, 'its page'),
-          '. A row board that cannot join its WiFi opens its own setup network.')));
+      h('p', { class: 'muted small' }, 'WiFi is not set here: ',
+        h('a', { href: '#board/' + (app.state.wall ? app.state.wall.master.id : '') }, 'the master’s own page'),
+        ' forgets its WiFi, and a row board that cannot join its WiFi opens its own setup network.'));
     refresh();
   }, () => fill(parts, h('p', { class: 'status bad' }, 'The settings could not be read.')));
 

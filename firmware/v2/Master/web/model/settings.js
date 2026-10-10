@@ -1,30 +1,43 @@
 // Wall settings: the rows as the operator arranges them, the time zone by
 // its name, the broker in a line. Pure.
-import { boardId } from './wall.js';
+import { boardId, wallLayout, boardTitle } from './wall.js';
 
 // A line a board, top to bottom and left to right. Row and column count from
 // 1, as the page shows them; `id` is the board's name in an action ("" for
 // the master's own row).
 export function rowsDraft(wall) {
+  const layout = wallLayout(wall);
   return wall.rows.slice().sort((x, y) => x.row - y.row || x.col - y.col).map((row) => ({
-    id: row.own ? '' : row.id, name: boardId(wall, row), own: !!row.own,
-    row: row.row + 1, col: row.col + 1, width: row.width,
+    id: row.own ? '' : row.id, name: boardId(wall, row), title: boardTitle(layout, boardId(wall, row)),
+    own: !!row.own, row: row.row + 1, col: row.col + 1, width: row.width,
   }));
+}
+
+// Why an address cannot be a row board's, '' when it can: the master takes a
+// plain address of the local network only.
+export function pairProblem(host) {
+  const parts = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!parts || parts.slice(1).some((n) => Number(n) > 255)) {
+    return 'That is not an address. A row board’s address looks like 192.168.1.50.';
+  }
+  const [a, b] = parts.slice(1).map(Number);
+  if (a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)) return '';
+  return 'A row board is on the local network: its address starts with 192.168., 10. or 172.16. to 172.31.';
 }
 
 // Why the rows cannot be saved as entered, '' when they can. Two boards may
 // share a row side by side, or show the same text at the same place.
 export function arrangeProblem(draft) {
   for (const line of draft) {
-    for (const [what, value] of [['row', line.row], ['number of units', line.width], ['column', line.col]]) {
-      if (!Number.isInteger(value) || value < 1) return `${line.name}: the ${what} is a whole number from 1.`;
+    for (const [what, value] of [['row', line.row], ['number of flaps', line.width], ['column', line.col]]) {
+      if (!Number.isInteger(value) || value < 1) return `${line.title}: the ${what} is a whole number from 1.`;
     }
   }
   for (const a of draft) {
     for (const b of draft) {
       if (a === b || a.row !== b.row || (a.col === b.col && a.width === b.width)) continue;
       if (a.col < b.col + b.width && b.col < a.col + a.width) {
-        return `${a.name} and ${b.name} would overlap on row ${a.row}.`;
+        return `${a.title} and ${b.title} would overlap on row ${a.row}.`;
       }
     }
   }
