@@ -290,6 +290,7 @@ static void reshowLastFrame(DisplaySnapshot& local) {
   snapshotPublish(local);
   unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
                    lastFrameUnitSpeed);
+  displayApplyReshow(local, millis());
   local.busy = wasBusy;
 }
 
@@ -471,6 +472,7 @@ struct BootUpdateHooks {
     if (!reshowAfter || !local.lastFrameValid) return;
     unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
                      lastFrameUnitSpeed);
+    displayApplyReshow(local, millis());
   }
   void note(BootUpdateStep step, MaintReason why,
             const BootUpdateReport& info) {
@@ -762,8 +764,7 @@ static void execShowText(DisplaySnapshot& local, UnitFacts* busFacts,
   // input (#224).
   local.lastShowWriteErrors = errs > 0 ? (uint8_t)errs : 0;
   // The "intended" side of the displayed==intended check (#264).
-  memcpy(local.lastFrameLetters, letters, sizeof(letters));
-  local.lastFrameValid = true;
+  displayApplyFrame(local, letters, millis());
 }
 
 static void execProbe(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -930,6 +931,7 @@ struct BootDumpHooks {
     if (!local.lastFrameValid) return;
     unitBusShowFrame(local.units, local.displayWidth, local.lastFrameLetters,
                      lastFrameUnitSpeed);
+    displayApplyReshow(local, millis());
   }
 };
 
@@ -1094,8 +1096,7 @@ static void execResetUnits(DisplaySnapshot& local, UnitFacts* busFacts,
   flapFrameBuild(cmd.text, local.displayWidth, cmd.alignment,
                  letters);
   showFrameOutsideBootloaderWindow(local, letters, unitSpeed);
-  memcpy(local.lastFrameLetters, letters, sizeof(letters));  // #264
-  local.lastFrameValid = true;
+  displayApplyFrame(local, letters, millis());  // #264
   displayApplyMaintResult(local, cmd, MaintOutcome::Ok,
                           MaintReason::None);
 }
@@ -1112,8 +1113,7 @@ static void execStop(DisplaySnapshot& local, UnitFacts* busFacts,
   uint8_t blanks[UNITS_AMOUNT] = {0};
   int errs = showFrameOutsideBootloaderWindow(local, blanks, lastFrameUnitSpeed);
   // Every unit parks at blank — the intended frame follows (#264).
-  memset(local.lastFrameLetters, 0, sizeof(local.lastFrameLetters));
-  local.lastFrameValid = true;
+  displayApplyFrame(local, blanks, millis());
   displayApplyMaintResult(local, cmd, maintGradeWire(errs));
 }
 
@@ -1137,8 +1137,7 @@ static void execReflashUnits(DisplaySnapshot& local, UnitFacts* busFacts,
                    letters);
     showFrameOutsideBootloaderWindow(local, letters, convertSpeedToUnit(cmd.speed));
     memcpy(local.currentText, cmd.text, sizeof(local.currentText));
-    memcpy(local.lastFrameLetters, letters, sizeof(letters));  // #264
-    local.lastFrameValid = true;
+    displayApplyFrame(local, letters, millis());  // #264
   }
   MaintReason reason = MaintReason::None;
   MaintOutcome outcome = classifyReflashOutcome(local.reflash, reason);

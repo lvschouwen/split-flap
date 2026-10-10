@@ -66,7 +66,39 @@ struct DisplaySnapshot {
   // displayTask at every frame-shaping site.
   uint8_t lastFrameLetters[UNITS_AMOUNT] = {0};
   bool lastFrameValid = false;
+  // When that frame went out, and the units not read since (bit = slot): one
+  // unit is read per heartbeat, so the others' facts are older than the frame
+  // for a while and say nothing about it.
+  uint32_t lastFrameAtMs = 0;
+  uint32_t frameUnreadMask = 0;
 };
+
+static_assert(UNITS_AMOUNT <= 32, "frameUnreadMask holds one bit a unit");
+
+// Records the frame that was just put on the bus as what the wall should show.
+// Every frame-shaping site ends here. A unit whose flap the frame changes
+// loses its wrong-letter verdict until it is read again; the others keep
+// theirs. `nowMs` is on the clock UnitFacts::lastSeenMs counts on.
+inline void displayApplyFrame(DisplaySnapshot& snap, const uint8_t* letters,
+                              uint32_t nowMs) {
+  for (int i = 0; i < UNITS_AMOUNT; i++) {
+    if (!snap.lastFrameValid || snap.lastFrameLetters[i] != letters[i]) {
+      snap.units[i].mismatch = false;
+    }
+    snap.lastFrameLetters[i] = letters[i];
+  }
+  snap.lastFrameValid = true;
+  snap.lastFrameAtMs = nowMs;
+  snap.frameUnreadMask = 0xFFFFFFFFUL;
+}
+
+// The same frame was sent again because a job or a restart took drums off
+// their flap: what was read of any unit before this says nothing any more.
+inline void displayApplyReshow(DisplaySnapshot& snap, uint32_t nowMs) {
+  for (int i = 0; i < UNITS_AMOUNT; i++) snap.units[i].mismatch = false;
+  snap.lastFrameAtMs = nowMs;
+  snap.frameUnreadMask = 0xFFFFFFFFUL;
+}
 
 // The producer gate (#205): while a reflash job runs, Stop is the ONLY
 // command allowed into the display queue — it is the cancel. Everything
@@ -133,16 +165,26 @@ inline void displayApplyUnitFacts(DisplaySnapshot& snap,
   if (maxUnits > UNITS_AMOUNT) maxUnits = UNITS_AMOUNT;
   int states[UNITS_AMOUNT];
   for (int i = 0; i < maxUnits; i++) {
+    const bool verdictBefore = snap.units[i].mismatch;
     snap.units[i] = facts[i];
     states[i] = facts[i].state;
     // displayed==intended verdict (#264), stamped HERE and only here (#267):
-    // this fold runs right after a diag poll, in displayTask — the polled
-    // phys and lastFrameLetters describe the same instant (frames and polls
-    // are serialized). A render-time comparison would race newer frames
-    // against stale phys and flag phantom mismatches. No verdict against a
-    // rotating drum (self-resolving by definition) or
-    // before any frame exists.
+    // a render-time comparison would race newer frames against stale phys.
+    // The fold takes every unit, but a heartbeat reads one: only a unit read
+    // after the frame went out is judged against it (#582), the others keep
+    // the verdict they had. No verdict against a rotating drum
+    // (self-resolving by definition) or before any frame exists.
     UnitFacts& u = snap.units[i];
+    const uint32_t bit = 1UL << i;
+    // lastSeenMs 0 = never read: not a read after anything.
+    if ((snap.frameUnreadMask & bit) && u.lastSeenMs != 0 &&
+        (int32_t)(u.lastSeenMs - snap.lastFrameAtMs) > 0) {
+      snap.frameUnreadMask &= ~bit;
+    }
+    if (snap.frameUnreadMask & bit) {
+      u.mismatch = verdictBefore;
+      continue;
+    }
     bool physKnown = u.diagValid &&
                      (u.driftFlags & UNIT_DRIFT_FLAG_POSITION_KNOWN) &&
                      u.physLetter != 0xFF;

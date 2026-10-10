@@ -551,6 +551,86 @@ static void test_boot_failure_maps_to_its_own_reason() {
                            maintReasonName(MaintReason::BootNotStarted));
 }
 
+// --- a verdict needs a read taken after the frame (#582) -------------------------
+
+static UnitFacts diagFactReadAt(uint8_t phys, uint32_t readAtMs) {
+  UnitFacts f = diagFact(phys, false);
+  f.lastSeenMs = readAtMs;
+  return f;
+}
+
+static void test_a_new_frame_is_not_judged_against_what_was_read_before_it() {
+  DisplaySnapshot snap;
+  const uint8_t first[UNITS_AMOUNT] = {7, 9};
+  displayApplyFrame(snap, first, 1000);
+  UnitFacts facts[2] = {diagFactReadAt(7, 2000), diagFactReadAt(9, 2000)};
+  displayApplyUnitFacts(snap, facts, 2);
+  TEST_ASSERT_FALSE(snap.units[0].mismatch);
+  TEST_ASSERT_FALSE(snap.units[1].mismatch);
+  // The text changes unit 0's flap. One unit is read per heartbeat, so the
+  // next fold still holds unit 0 as it stood before the frame: on its old flap.
+  const uint8_t second[UNITS_AMOUNT] = {12, 9};
+  displayApplyFrame(snap, second, 5000);
+  facts[1] = diagFactReadAt(9, 6000);
+  displayApplyUnitFacts(snap, facts, 2);
+  TEST_ASSERT_FALSE(snap.units[0].mismatch);
+  // Read after the frame and still on the old flap: that is a wrong letter.
+  facts[0] = diagFactReadAt(7, 9000);
+  displayApplyUnitFacts(snap, facts, 2);
+  TEST_ASSERT_TRUE(snap.units[0].mismatch);
+  // Read on the new flap: right.
+  facts[0] = diagFactReadAt(12, 12000);
+  displayApplyUnitFacts(snap, facts, 2);
+  TEST_ASSERT_FALSE(snap.units[0].mismatch);
+}
+
+static void test_a_wrong_unit_stays_wrong_over_a_frame_that_leaves_it_alone() {
+  DisplaySnapshot snap;
+  const uint8_t first[UNITS_AMOUNT] = {7, 9};
+  displayApplyFrame(snap, first, 1000);
+  UnitFacts facts[2] = {diagFactReadAt(3, 2000), diagFactReadAt(9, 2000)};
+  displayApplyUnitFacts(snap, facts, 2);
+  TEST_ASSERT_TRUE(snap.units[0].mismatch);
+  // Unit 1 gets another flap; unit 0 keeps its verdict until it is read again,
+  // so one stuck drum is not noted afresh at every change of the text.
+  const uint8_t second[UNITS_AMOUNT] = {7, 10};
+  displayApplyFrame(snap, second, 5000);
+  TEST_ASSERT_TRUE(snap.units[0].mismatch);
+  displayApplyUnitFacts(snap, facts, 2);
+  TEST_ASSERT_TRUE(snap.units[0].mismatch);
+  TEST_ASSERT_FALSE(snap.units[1].mismatch);
+}
+
+static void test_a_frame_sent_again_after_a_job_is_not_judged_on_the_drum_at_home() {
+  DisplaySnapshot snap;
+  const uint8_t frame[UNITS_AMOUNT] = {7};
+  displayApplyFrame(snap, frame, 1000);
+  // The home job left the drum at blank; that was read, then the frame went again.
+  UnitFacts facts[1] = {diagFactReadAt(0, 2000)};
+  displayApplyUnitFacts(snap, facts, 1);
+  TEST_ASSERT_TRUE(snap.units[0].mismatch);
+  displayApplyReshow(snap, 3000);
+  TEST_ASSERT_FALSE(snap.units[0].mismatch);
+  displayApplyUnitFacts(snap, facts, 1);
+  TEST_ASSERT_FALSE(snap.units[0].mismatch);
+  facts[0] = diagFactReadAt(7, 9000);
+  displayApplyUnitFacts(snap, facts, 1);
+  TEST_ASSERT_FALSE(snap.units[0].mismatch);
+}
+
+static void test_the_read_owed_after_a_frame_survives_the_clock_wrapping() {
+  DisplaySnapshot snap;
+  const uint8_t frame[UNITS_AMOUNT] = {7};
+  displayApplyFrame(snap, frame, 0xFFFFFF00UL);
+  UnitFacts facts[1] = {diagFactReadAt(3, 0x00000100UL)};  // 512 ms later
+  displayApplyUnitFacts(snap, facts, 1);
+  TEST_ASSERT_TRUE(snap.units[0].mismatch);
+  // Once read, it stays judged however long the frame stands.
+  facts[0] = diagFactReadAt(7, 0x90000000UL);
+  displayApplyUnitFacts(snap, facts, 1);
+  TEST_ASSERT_FALSE(snap.units[0].mismatch);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_snapshot_defaults);
@@ -586,6 +666,10 @@ int main(int, char**) {
   RUN_TEST(test_apply_facts_stamps_mismatch_against_poll_time_frame);
   RUN_TEST(test_apply_facts_no_mismatch_before_first_frame);
   RUN_TEST(test_apply_facts_no_mismatch_while_moving_or_unknown);
+  RUN_TEST(test_a_new_frame_is_not_judged_against_what_was_read_before_it);
+  RUN_TEST(test_a_wrong_unit_stays_wrong_over_a_frame_that_leaves_it_alone);
+  RUN_TEST(test_a_frame_sent_again_after_a_job_is_not_judged_on_the_drum_at_home);
+  RUN_TEST(test_the_read_owed_after_a_frame_survives_the_clock_wrapping);
   RUN_TEST(test_width_override_pins_width_over_probe);
   RUN_TEST(test_width_override_pins_width_with_no_units);
   RUN_TEST(test_width_override_zero_keeps_probe_behavior);
