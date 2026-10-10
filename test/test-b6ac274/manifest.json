@@ -1,0 +1,32 @@
+{
+ "format": 1,
+ "channel": "test",
+ "tag": "test-b6ac274",
+ "notes": "https://github.com/lvschouwen/split-flap/commit/b6ac274b1d9b1f4456ce783ec393452524de2d77",
+ "commitTime": 1791657769,
+ "master": {
+  "rev": "b6ac274",
+  "path": "test-b6ac274/firmware-b6ac274-master.bin",
+  "size": 1722288,
+  "sha256": "d391e8b6b2571cf4e0e6628dc2426ed72de6726880473243d7e9fd522596f577"
+ },
+ "row": {
+  "rev": "b6ac274",
+  "path": "test-b6ac274/follower-b6ac274-gz.bin",
+  "size": 328975,
+  "sha256": "99633be68160c3e73f86dbaf397feb0c7376b2825e139ed8f996c0c2b3b8ceca",
+  "md5": "b25e5c5988fa8a3403a0d47c55b5aa49"
+ },
+ "rescue": {
+  "rev": "ee6abc0",
+  "path": "test-b6ac274/rescue-ee6abc0.bin",
+  "size": 1207600,
+  "sha256": "fefd6c74b7b4b2cffff5a5a3a1c9ded853e08ce6daee0143f92212427bf64bc7"
+ },
+ "units": {
+  "revs": [
+   "cbb71d6",
+   "0d90815"
+  ]
+ }
+}

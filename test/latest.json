@@ -1,30 +1,31 @@
 {
  "format": 1,
  "channel": "test",
- "tag": "test-ee6abc0",
- "notes": "https://github.com/lvschouwen/split-flap/commit/ee6abc073c95b2cb6952af5922c1ce35de019255",
- "commitTime": 1791642628,
+ "tag": "test-b6ac274",
+ "notes": "https://github.com/lvschouwen/split-flap/commit/b6ac274b1d9b1f4456ce783ec393452524de2d77",
+ "commitTime": 1791657769,
  "master": {
-  "rev": "ee6abc0",
-  "path": "test-ee6abc0/firmware-ee6abc0-master.bin",
-  "size": 1711904,
-  "sha256": "21e3553e9903cc53ae43d7a6f021db1798a1e66522eb0e43598879b8f8af0142"
+  "rev": "b6ac274",
+  "path": "test-b6ac274/firmware-b6ac274-master.bin",
+  "size": 1722288,
+  "sha256": "d391e8b6b2571cf4e0e6628dc2426ed72de6726880473243d7e9fd522596f577"
  },
  "row": {
-  "rev": "ee6abc0",
-  "path": "test-ee6abc0/follower-ee6abc0-gz.bin",
-  "size": 328491,
-  "sha256": "0d258ca62fb569e123b52793277bb785aad9c2e2c2286e1a05fb7b89393d2040",
-  "md5": "6e2befc1b347a0326627213082481c08"
+  "rev": "b6ac274",
+  "path": "test-b6ac274/follower-b6ac274-gz.bin",
+  "size": 328975,
+  "sha256": "99633be68160c3e73f86dbaf397feb0c7376b2825e139ed8f996c0c2b3b8ceca",
+  "md5": "b25e5c5988fa8a3403a0d47c55b5aa49"
  },
  "rescue": {
   "rev": "ee6abc0",
-  "path": "test-ee6abc0/rescue-ee6abc0.bin",
+  "path": "test-b6ac274/rescue-ee6abc0.bin",
   "size": 1207600,
   "sha256": "fefd6c74b7b4b2cffff5a5a3a1c9ded853e08ce6daee0143f92212427bf64bc7"
  },
  "units": {
   "revs": [
+   "cbb71d6",
    "0d90815"
   ]
  }
