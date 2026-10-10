@@ -64,15 +64,32 @@ static const int API_ROUTES_COUNT = (int)(sizeof(API_ROUTES) / sizeof(API_ROUTES
     o += (size_t)snprintf(buf + o, cap - o, __VA_ARGS__); \
   } while (0)
 
+// Appends `text` at `o` as the inside of a JSON string, `"` and `\` escaped,
+// and returns where it ends. Like snprintf it keeps counting past `cap` and
+// writes only what fits, always terminated.
+inline size_t apiJsonEscape(char* buf, size_t cap, size_t o, const char* text) {
+  for (const char* c = text; *c != 0; c++) {
+    if (*c == '"' || *c == '\\') {
+      if (o + 1 < cap) buf[o] = '\\';
+      o++;
+    }
+    if (o + 1 < cap) buf[o] = *c;
+    o++;
+  }
+  if (cap > 0) buf[o < cap ? o : cap - 1] = 0;
+  return o;
+}
+
 // Serializes the route index. Returns the would-be length like snprintf; the
-// caller rejects >= cap. Descriptions are curated literals here (no `"`/`\`),
-// so they never break the JSON.
+// caller rejects >= cap.
 inline size_t buildApiJson(char* buf, size_t cap) {
   size_t o = 0;
   API_APPEND("{\"routes\":[");
   for (int i = 0; i < API_ROUTES_COUNT; i++) {
-    API_APPEND("%s{\"m\":\"%s\",\"p\":\"%s\",\"d\":\"%s\"}", i == 0 ? "" : ",",
-               API_ROUTES[i].m, API_ROUTES[i].p, API_ROUTES[i].d);
+    API_APPEND("%s{\"m\":\"%s\",\"p\":\"%s\",\"d\":\"", i == 0 ? "" : ",",
+               API_ROUTES[i].m, API_ROUTES[i].p);
+    o = apiJsonEscape(buf, cap, o, API_ROUTES[i].d);
+    API_APPEND("\"}");
   }
   API_APPEND("]}");
   return o;
