@@ -12,6 +12,7 @@
 
 #include "EventRecord.h"
 #include "JsonCopied.h"
+#include "MqttService.h"
 #include "StreamPolicy.h"
 #include "Tasks.h"
 #include "WallJobs.h"
@@ -41,6 +42,11 @@ void buildWall(JsonDocument& doc, const WallSnapshot& wall, const DisplaySnapsho
   const WebContentSnapshot content = webDisplayContentSnapshot();
   doc["mode"] = content.deviceMode;
   doc["quiet"] = tasksQuiet();
+  // A text shown for a time over the mode; when it ends, once the clock knows.
+  if (mqttNotificationActive()) {
+    doc["timed"] = true;
+    if (const uint32_t until = mqttNotificationEndsEpoch()) doc["until"] = until;
+  }
   JsonArray rows = doc["rows"].to<JsonArray>();
   if (wall.rows.count == 0) {
     // A master on its own: its row is the wall.

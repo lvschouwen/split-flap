@@ -144,10 +144,9 @@ export function boardVerdictText(verdict) {
   return say(BOARD, verdict);
 }
 
-// The one line for the whole wall.
-export function wallVerdictText(level, attention) {
-  if (level === 'fault') {
-    return { cls: 'bad', title: plural(attention, 'thing needs', 'things need') + ' attention' };
-  }
-  return { cls: 'ok', title: 'Everything is working' };
+// The one verdict of the whole wall, in the top bar; `short` is for a phone.
+export function wallVerdictText(level) {
+  if (level === 'fault') return { cls: 'bad', title: 'Needs attention', short: 'Attention' };
+  if (level === 'note') return { cls: 'note', title: 'Working, with notes', short: 'Notes' };
+  return { cls: 'ok', title: 'Working', short: 'Working' };
 }

@@ -98,6 +98,12 @@ inline void transientTextStart(MqttNotification& n, const String& text, long dwe
   notificationStart(n, text, dwellSeconds > 0 ? dwellSeconds : TRANSIENT_TEXT_DEFAULT_DWELL_SECONDS, nowMs);
 }
 
+// When a notification that starts now ends, as Unix seconds, for whoever
+// shows it to a reader; 0 while the clock is not set.
+inline uint32_t notificationEndsEpoch(uint32_t nowEpoch, bool clockSet, long dwellSeconds) {
+  return clockSet ? nowEpoch + (uint32_t)clampDwellSeconds(dwellSeconds) : 0;
+}
+
 // millis()-wraparound-safe via signed difference of fixed-width unsigned.
 inline bool notificationTick(MqttNotification& n, uint32_t nowMs) {
   if (!n.active) return false;

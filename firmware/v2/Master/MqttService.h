@@ -43,6 +43,10 @@ uint32_t mqttDropCount();
 // gate (v1 gated loop()'s mode block via mqttNotificationTick()).
 bool mqttNotificationActive();
 
+// Any task: when the notification that owns the display ends, as Unix
+// seconds; 0 when there is none or the clock was not set when it began.
+uint32_t mqttNotificationEndsEpoch();
+
 // Any task: cancel a running notification (explicit mode switch or message
 // send trumps it, v1 #130 rule). Staged; the tick applies it.
 void mqttCancelNotification();

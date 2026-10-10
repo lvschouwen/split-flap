@@ -4,7 +4,9 @@
 // each a small JSON document; a topic is sent when its document differs from
 // the one last sent, and all of them again when a reader connects.
 //
-//   event: wall     {"mode","quiet","rows":[{"id","text"},...]}
+//   event: wall     {"mode","quiet","rows":[{"id","text"},...]} and, while a
+//                   text is shown for a time, "timed" with "until" (Unix
+//                   seconds; left out while the clock is not set)
 //   event: verdict  {"wall":"note","boards":[{"id","level","reason","unitLevels"},...]}
 //   event: jobs     [{"op","name","state","board","unit","detail"},...]
 //   event: history  {"seq":N}     the newest entry of GET /api/v2/history

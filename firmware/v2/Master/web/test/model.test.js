@@ -15,7 +15,7 @@ import { firmwareRows, firmwareVerdict, firmwareFile, installQuestion, firmwareJ
 import { md5Hex } from '../model/md5.js';
 import { whenText, eventText, eventBoardId, historyGroups, needingAttention } from '../model/events.js';
 import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId, noFlapFor,
-         composeLines, composeText } from '../model/wall.js';
+         composeLines, composeText, showingText, composeNotes } from '../model/wall.js';
 import { testText, calibrationPlan } from '../model/calibrate.js';
 import { rowsDraft, arrangeProblem, arrangeArgs, zoneFor, brokerText, foundLine } from '../model/settings.js';
 
@@ -88,10 +88,36 @@ test('a board verdict counts its units', () => {
                '14 of 16 units working.');
 });
 
-test('the wall verdict counts what needs attention', () => {
-  assert.deepEqual(wallVerdictText('fault', 1), { cls: 'bad', title: '1 thing needs attention' });
-  assert.equal(wallVerdictText('fault', 3).title, '3 things need attention');
-  assert.equal(wallVerdictText('working', 0).title, 'Everything is working');
+test('the one verdict of the wall has a word for every level, and a short one for a phone', () => {
+  assert.deepEqual(wallVerdictText('fault'), { cls: 'bad', title: 'Needs attention', short: 'Attention' });
+  assert.deepEqual(wallVerdictText('note'), { cls: 'note', title: 'Working, with notes', short: 'Notes' });
+  assert.deepEqual(wallVerdictText('working'), { cls: 'ok', title: 'Working', short: 'Working' });
+});
+
+test('the wall says what it is showing, and when a text shown for a time ends', () => {
+  const until = Math.floor(new Date(2026, 9, 10, 20, 5).getTime() / 1000);
+  assert.equal(showingText(null), '');
+  assert.equal(showingText({ mode: 'clock', quiet: false }), 'Showing the clock.');
+  assert.equal(showingText({ mode: 'text', quiet: false }), 'Showing a text.');
+  assert.equal(showingText({ mode: 'clock', quiet: false, timed: true, until }),
+               'Showing a text until 20:05, then the clock again.');
+  assert.equal(showingText({ mode: 'text', quiet: false, timed: true, until }),
+               'Showing a text until 20:05, then the text before it again.');
+  // The master's clock was not set when the text went up.
+  assert.equal(showingText({ mode: 'clock', quiet: false, timed: true }),
+               'Showing a text for a time, then the clock again.');
+  assert.equal(showingText({ mode: 'clock', quiet: true, timed: true, until }),
+               'Quiet: no flap moves until you switch Quiet off. The wall keeps what it shows.');
+});
+
+test('a row whose board cannot show a text is marked in the picture and at its text box', () => {
+  const layout = wallLayout(WALL);
+  // Row 1 is the row board with a dead bus, row 2 the master with one faulty unit.
+  assert.deepEqual(layout.lines.map((l) => l.boards.map((b) => b.down)), [['unit bus dead'], [null]]);
+  assert.deepEqual(composeNotes(layout), ['Row 1: unit bus dead. A text does not show there.', '']);
+  const blocked = wallLayout({ ...WALL, rows: [{ ...WALL.rows[1],
+    verdict: { level: 'fault', reason: 'update-blocked', a: 3, b: 0 } }] });
+  assert.deepEqual(composeNotes(blocked), ['']);
 });
 
 test('the layout puts rows top to bottom and boards at their column', () => {
@@ -123,9 +149,23 @@ test('boards that share a grid row are named by their place in it', () => {
 test('needs attention lists a board in trouble and every unit with a fault', () => {
   const layout = wallLayout(WALL);
   const items = attentionList(WALL, layout, BOARDS, ALPHABET);
+  // A board in trouble first, wherever it hangs.
   assert.deepEqual(items.map((i) => [i.title, i.href]), [
-    ['Row 2, unit 3: never saw its home sensor', '#unit/wall-master/3'],
     ['Row 1: unit bus dead', '#board/wall-row'],
+    ['Row 2: unit 3, never saw its home sensor', '#unit/wall-master/3'],
+  ]);
+});
+
+test('units of a row that share a fault are one line', () => {
+  const layout = wallLayout(WALL);
+  const boards = { 'wall-master': { units: { fields: FIELDS, rows: [
+    unitRow(1, 'fault', 'not-answering', 60, 9), unitRow(2, 'fault', 'not-answering', 60, 9),
+    unitRow(3, 'fault', 'hall-never'), unitRow(4, 'fault', 'not-answering', 60, 9)] } } };
+  const items = attentionList(WALL, layout, boards, ALPHABET).filter((i) => i.title.startsWith('Row 2'));
+  assert.deepEqual(items.map((i) => [i.cls, i.title, i.why, i.href]), [
+    ['bad', 'Row 2: 3 units, not answering', 'Units 1, 2 and 4.', '#board/wall-master'],
+    ['bad', 'Row 2: unit 3, never saw its home sensor',
+     'The sensor has not triggered once since the unit started.', '#unit/wall-master/3'],
   ]);
 });
 
@@ -142,12 +182,11 @@ test('the missed-reads count is not quoted past where it stops', () => {
   assert.equal(text.why, 'No reply for 1 h 30 min, at least 255 reads missed.');
 });
 
-test('worth knowing groups the units that share a note, then the lowest supply', () => {
+test('worth knowing groups the units that share a note', () => {
   const layout = wallLayout(WALL);
   const items = notesList(WALL, layout, BOARDS, ALPHABET);
   assert.deepEqual(items.map((i) => [i.cls, i.title, i.why, i.href]), [
     ['note', 'Row 2: 2 units, last move stalled', 'Units 2 and 4.', '#board/wall-master'],
-    ['info', 'Lowest supply seen: 4.70 V', 'Row 2, unit 3.', '#unit/wall-master/3'],
   ]);
 });
 

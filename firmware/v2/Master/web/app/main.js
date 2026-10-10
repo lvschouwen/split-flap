@@ -10,6 +10,7 @@ import { settingsView } from './view_settings.js';
 import { calibrateView } from './view_calibrate.js';
 import { jobsChanged } from './jobs.js';
 import { boardId } from '../model/wall.js';
+import { wallVerdictText } from '../model/verdict.js';
 
 const app = {
   // wall: GET /api/v2/wall. boards: id -> GET /api/v2/board/<id>, for those read.
@@ -43,7 +44,10 @@ function refresh() {
   // A phone has room for one word next to the links.
   const words = (wide, narrow) => [h('span', { class: 'w' }, wide), h('span', { class: 'n' }, narrow)];
   if (!app.state.link) fill(top, pill('bad', words('No contact with the master', 'No contact')));
-  else if (wall) fill(top, pill(wall.verdict === 'fault' ? 'bad' : 'ok', wall.verdict === 'fault' ? words('Needs attention', 'Attention') : 'Working'));
+  else if (wall) {
+    const verdict = wallVerdictText(wall.verdict);
+    fill(top, pill(verdict.cls, words(verdict.title, verdict.short)));
+  }
   if (wall) document.getElementById('name').textContent = wall.master.id;
   if (app.view) app.view.refresh();
 }

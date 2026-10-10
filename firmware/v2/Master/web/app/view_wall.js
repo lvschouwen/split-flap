@@ -3,9 +3,8 @@
 import { ALPHABET } from '../gen/constants.js';
 import { h, fill, pill, itemList, segmented, statusLine } from './dom.js';
 import { action } from './api.js';
-import { wallLayout, attentionList, notesList, boardLine, noFlapFor, composeLines, composeText }
-  from '../model/wall.js';
-import { wallVerdictText } from '../model/verdict.js';
+import { wallLayout, attentionList, notesList, boardLine, noFlapFor, composeLines, composeText, showingText,
+         composeNotes, lineText } from '../model/wall.js';
 import { plural } from '../model/format.js';
 
 // The wall as flaps. A row's name opens its board, a flap its unit; with
@@ -15,11 +14,12 @@ export function wallPicture(layout, flap) {
     h('div', {},
       h('div', { class: 'rowlabel' }, line.boards.map((board, i) =>
         h('a', { href: '#board/' + board.id },
-          line.boards.length === 1 ? line.title : `${line.title}, board ${i + 1}`)),
+          line.boards.length === 1 ? line.title : `${line.title}, board ${i + 1}`,
+          board.down && h('b', {}, ' ' + board.down))),
         h('span', {}, plural(line.boards.reduce((n, b) => n + b.cells.length, 0), 'unit'))),
       h('div', { class: 'wallrow', style: `--cols:${layout.cols}` }, line.boards.map((board) =>
         board.cells.map((cell, i) => {
-          const attrs = { class: 'flap ' + cell.cls,
+          const attrs = { class: 'flap ' + cell.cls + (board.down ? ' down' : ''),
                           style: i === 0 ? `grid-column-start:${board.col + 1}` : null,
                           'aria-label': `${line.title} unit ${cell.unit}` };
           return flap ? flap(board, cell, attrs)
@@ -28,26 +28,22 @@ export function wallPicture(layout, flap) {
         }))))));
 }
 
-// state.show is the stream's "wall" topic: {mode, quiet, rows}.
-function showingText(show) {
-  if (!show) return '';
-  if (show.quiet) return 'Quiet: the flaps stand still.';
-  return show.mode === 'clock' ? 'Showing the clock.' : 'Showing text.';
-}
-
 const DURATIONS = [['', 'Until I change it'], ['300', '5 minutes, then back'],
                    ['900', '15 minutes, then back'], ['3600', '1 hour, then back']];
 
 // Text per row, for how long, mode, quiet, stop. Built once for a shape of
 // the wall and kept across refreshes, so typing is never interrupted.
-function composeForm(app, lines) {
+// `texts` is what the rows show when a text is up: the boxes open with it.
+function composeForm(app, lines, texts) {
   const status = statusLine();
   const ask = (name, args, done) => action(name, null, args)
     .then(() => status.say(done), (error) => status.say(error.message, true));
   const inputs = lines.map((line, i) => {
-    const count = h('span', { class: 'count' }, `0 / ${line.width}`);
+    const value = (texts && texts[i]) || '';
+    const count = h('span', { class: 'count' }, `${value.length} / ${line.width}`);
+    const note = h('div', { class: 'why bad' });
     const input = h('input', {
-      type: 'text', id: 'compose' + i, maxlength: line.width, autocomplete: 'off',
+      type: 'text', id: 'compose' + i, maxlength: line.width, autocomplete: 'off', value,
       placeholder: `up to ${line.width} characters`,
       oninput: () => {
         count.textContent = `${input.value.length} / ${line.width}`;
@@ -55,7 +51,8 @@ function composeForm(app, lines) {
         status.say(missing.length ? 'The wall has no flap for: ' + missing.join(' ') : '');
       },
     });
-    return { input, row: h('div', { class: 'field' }, h('label', { for: 'compose' + i }, line.title), input, count) };
+    return { input, note,
+             row: [h('div', { class: 'field' }, h('label', { for: 'compose' + i }, line.title), input, count), note] };
   });
   const length = h('select', { 'aria-label': 'How long' },
     DURATIONS.map(([value, text]) => h('option', { value }, text)));
@@ -77,7 +74,8 @@ function composeForm(app, lines) {
       h('button', { type: 'button', class: 'btn danger',
                     onclick: () => ask('stop', null, 'Stopped and blanked.') }, 'Stop and blank')),
     status);
-  root.set = (show) => {
+  root.set = (show, notes) => {
+    inputs.forEach((x, i) => { x.note.textContent = notes[i] || ''; });
     if (!show) return;
     mode.set(show.mode);
     quiet.set(!!show.quiet);
@@ -87,6 +85,7 @@ function composeForm(app, lines) {
 
 export function wallView(app) {
   const head = h('div', { class: 'head' });
+  const calibrate = h('a', { class: 'btn', href: '#calibrate', hidden: true }, 'Calibrate the wall');
   const picture = h('div', {});
   const compose = h('div', {});
   let composeShape = '';
@@ -95,8 +94,8 @@ export function wallView(app) {
   const attention = h('div', { class: 'section' });
   const boards = h('div', { class: 'section' });
   const notes = h('div', { class: 'section' });
-  const root = h('div', { class: 'view' }, head, picture, compose, found, attention, boards, notes,
-    h('div', { class: 'rowwrap' }, h('a', { class: 'btn', href: '#calibrate' }, 'Calibrate the wall')));
+  const root = h('div', { class: 'view' }, h('div', { class: 'rowwrap' }, head, h('span', { class: 'spacer' }), calibrate),
+    picture, compose, found, attention, boards, notes);
 
   function refresh() {
     const wall = app.state.wall;
@@ -106,18 +105,19 @@ export function wallView(app) {
     }
     const layout = wallLayout(wall);
     const needs = attentionList(wall, layout, app.state.boards, ALPHABET);
-    const verdict = wallVerdictText(wall.verdict, needs.length);
-    fill(head, h('h1', {}, 'Wall'), pill(verdict.cls, verdict.title),
-      h('span', { class: 'muted small' },
-        showingText(app.state.show)));
+    const show = app.state.show;
+    fill(head, h('h1', {}, 'Wall'), h('span', { class: 'muted small' }, showingText(show)));
+    calibrate.hidden = false;
     fill(picture, wallPicture(layout));
     const lines = composeLines(layout);
     if (JSON.stringify(lines) !== composeShape) {
       composeShape = JSON.stringify(lines);
-      form = composeForm(app, lines);
+      // The clock's own text is not something to send again.
+      const up = show && (show.timed || show.mode === 'text');
+      form = composeForm(app, lines, up ? layout.lines.map(lineText) : null);
       fill(compose, form);
     }
-    form.set(app.state.show);
+    form.set(show, composeNotes(layout));
     fill(found, wall.release ? itemList([{ cls: 'note', href: '#firmware',
       title: `New release ${wall.release} found`, why: 'Firmware has what it would change, and the button.' }]) : null);
     fill(attention, needs.length ? [h('h2', {}, 'Needs attention'), itemList(needs)] : null);

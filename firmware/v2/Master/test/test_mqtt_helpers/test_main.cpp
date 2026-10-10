@@ -165,6 +165,16 @@ static void test_transient_text_cancelled_by_mode_change() {
   notificationCancel(n);
   TEST_ASSERT_FALSE(notificationTick(n, 1UL));
 }
+static void test_notification_end_is_a_clock_time_once_the_clock_is_set() {
+  // 5 min from 12 Oct 2026 10:00:00 UTC.
+  TEST_ASSERT_EQUAL_UINT32(1791799200UL + 300UL, notificationEndsEpoch(1791799200UL, true, 300));
+  // The dwell is clamped the way the deadline is.
+  TEST_ASSERT_EQUAL_UINT32(1791799200UL + (uint32_t)clampDwellSeconds(999999),
+                           notificationEndsEpoch(1791799200UL, true, 999999));
+  // No clock yet: when it ends cannot be said.
+  TEST_ASSERT_EQUAL_UINT32(0, notificationEndsEpoch(42, false, 300));
+}
+
 static void test_notification_survives_millis_wraparound() {
   MqttNotification n;
   // Start 5 s before millis() wraps; a 60 s dwell must stay active across 0.
@@ -612,6 +622,7 @@ int main(int, char**) {
   RUN_TEST(test_transient_default_dwell_within_notification_clamp);
   RUN_TEST(test_transient_text_cancelled_by_mode_change);
   RUN_TEST(test_notification_survives_millis_wraparound);
+  RUN_TEST(test_notification_end_is_a_clock_time_once_the_clock_is_set);
   RUN_TEST(test_mqttTopic_builds_expected_paths);
   RUN_TEST(test_telemetry_payload_exact_shape);
   RUN_TEST(test_telemetry_vccmin_omitted_when_zero);

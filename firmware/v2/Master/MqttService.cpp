@@ -78,6 +78,7 @@ static std::atomic<long> transientDwellRequested{0};
 static std::atomic<bool> discoveryClearRequested{false};
 static std::atomic<bool> connectedAtomic{false};
 static std::atomic<bool> notifActiveAtomic{false};
+static std::atomic<uint32_t> notifEndsAtomic{0};
 
 // Callback -> tick hand-off (same task here, but callbacks stay dumb —
 // v1's copy+flag rule kept structural).
@@ -268,6 +269,13 @@ static void publishMqttDiagnostics() {
 static void cancelNotificationLocal() {
   notificationCancel(mqttNotification);
   notifActiveAtomic.store(false);
+  notifEndsAtomic.store(0);
+}
+
+// mqttTask: a notification of `dwellSeconds` has just been started.
+static void noteNotificationEnd(long dwellSeconds) {
+  const time_t now = time(nullptr);
+  notifEndsAtomic.store(notificationEndsEpoch((uint32_t)now, clockIsTimeSynced(now), dwellSeconds));
 }
 
 // Device renamed (#125): while this run still IS the old identity, blank
@@ -397,6 +405,7 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
       SerialPrintf("MQTT: notification (dwell %ld s): %s\n", dwellSeconds,
                    text.c_str());
       notificationStart(mqttNotification, text, dwellSeconds, millis());
+      noteNotificationEnd(dwellSeconds);
       notifActiveAtomic.store(true);
       break;
     }
@@ -773,11 +782,13 @@ void mqttServiceTick() {
   long transientDwell = transientDwellRequested.exchange(0);
   if (transientDwell > 0) {
     transientTextStart(mqttNotification, String(), transientDwell, millis());
+    noteNotificationEnd(transientDwell);
     notifActiveAtomic.store(true);
   }
   if (mqttNotification.active &&
       !notificationTick(mqttNotification, millis())) {
     notifActiveAtomic.store(false);
+    notifEndsAtomic.store(0);
     SerialPrintln(F("Notification/transient expired — reverting"));
   }
 
@@ -858,6 +869,8 @@ void mqttServiceTick() {
 bool mqttIsConnected() { return mqttInitialised && connectedAtomic.load(); }
 
 bool mqttNotificationActive() { return notifActiveAtomic.load(); }
+
+uint32_t mqttNotificationEndsEpoch() { return notifEndsAtomic.load(); }
 
 // Must NOT be gated on mqttInitialised: broker-less devices still clear the
 // (never-set) overlay harmlessly, and the web drain calls this untangled
