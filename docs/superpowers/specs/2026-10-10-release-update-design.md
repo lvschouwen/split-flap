@@ -83,11 +83,11 @@ The rescue slot and the stored row image are compared by rev against the manifes
 
 `flashing/release.py`, run on the build machine, replaces the manual tag-and-notes steps:
 
-1. Refuses unless: the tree is clean; `HEAD` is on `master` and pushed; CI is green on `HEAD`; the staged master and row images carry `HEAD`'s rev; no release exists for today.
+1. Takes the commit the staged images were built from (`--rev`, `HEAD` by default) and refuses unless: the tree is clean; that commit is on the pushed `master`; CI is green on it; the master and row images staged in `~/bench-bins` carry its rev, and the Master build directory holds that same build (the whole-flash image is merged from its bootloader and partition table); no tag exists for today. The rescue image is the newest staged one built from a commit that the release contains.
 2. Builds the whole-flash master image and writes `flasher.json`.
 3. Writes the manifest, signs it, and checks the signature with the public key from `ReleaseSource.h` — a key pair that does not match stops here.
 4. Commits to `gh-pages` (new directory, `latest.json` and its signature last, old directories pruned) and pushes.
-5. Creates the annotated tag and the GitHub release with the notes file it was given. The images are attached to the GitHub release as well.
+5. Creates the annotated tag at that commit and the GitHub release with the notes file it was given. The images are attached to the GitHub release as well.
 
 `--channel test` does steps 2 to 4 under `/test/`, with no tag and no GitHub release. A wall is pointed at the test channel by a setting (section 6), so a release can be tried on the wall before it is cut.
 
