@@ -214,6 +214,9 @@ def _firmware(scenario, boards, now):
             entry.update({"rescue": board["rescue"], "updateAttempts": board["updateAttempts"],
                           "updateBlocked": board["updateBlocked"]})
         listed.append(entry)
+    # The boards that carry what the wall's bootloader tally counts.
+    listed[1]["bootloaders"].update({"ok": listed[1]["bootloaders"]["ok"] - 1, "damaged": 1})
+    listed[2]["bootloaders"].update({"outdated": 2})
     release = {"state": "newer", "check": True, "lookedAt": now - 7200, "channel": "stable",
                "tag": "v2099.01.02", "notes": "https://example.org/notes", "commitTime": now,
                "master": "ddddddd", "rowImage": "ddddddd", "rescue": "ddddddd", "unitRevs": "eeeeeee"}

@@ -97,15 +97,6 @@ function displayPart(settings) {
   const speed = h('input', { type: 'range', min: 1, max: 100, value: settings.speed, 'aria-label': 'Flap speed',
     oninput: () => { percent.textContent = speed.value + '%'; },
     onchange: () => save(status, { speed: Number(speed.value) }) });
-  const atStart = segmented('Update units when a board starts', [[true, 'On'], [false, 'Off']],
-    (on) => { atStart.set(on); save(status, { updateUnitsAtStart: on }); });
-  atStart.set(settings.updateUnitsAtStart);
-  const daily = segmented('Look for a new release every day', [[true, 'On'], [false, 'Off']],
-    (on) => { daily.set(on); save(status, { releaseCheck: on }); });
-  daily.set(settings.releaseCheck);
-  const channel = segmented('Releases to look for', [['stable', 'Releases'], ['test', 'Trial releases']],
-    (which) => { channel.set(which); save(status, { releaseChannel: which }); });
-  channel.set(settings.releaseChannel);
   // The wall keeps a zone's rule, not its name.
   const zone = h('select', { id: 'zone', disabled: true }, h('option', {}, settings.timezone || 'UTC'));
   getJson('/tz.json').then((zones) => {
@@ -119,10 +110,8 @@ function displayPart(settings) {
     h('div', { class: 'rowwrap' }, h('span', {}, 'Text sits'), sits,
       h('span', {}, 'Flap speed'), speed, percent),
     h('div', { class: 'field wide' }, h('label', { for: 'zone' }, 'Time zone'), zone),
-    h('div', { class: 'rowwrap' }, h('span', {}, 'Update units when a board starts'), atStart),
-    h('p', { class: 'muted small' }, 'On: every board installs the unit firmware it carries on the units that run another one, each time it starts.'),
-    h('div', { class: 'rowwrap' }, h('span', {}, 'Look for a new release every day'), daily, channel),
-    h('p', { class: 'muted small' }, 'Looking never installs: an update always starts with the button on Firmware.'),
+    h('p', { class: 'muted small' }, 'Looking for releases and updating units are set on ',
+      h('a', { href: '#firmware' }, 'Firmware'), '.'),
     status);
 }
 

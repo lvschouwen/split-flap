@@ -69,7 +69,7 @@ input[type=text],input[type=password],select,input[type=number]{font:inherit;col
 .seg button{border:0;background:none;padding:8px 14px;cursor:pointer;font-weight:600;color:var(--muted);min-height:40px}
 .seg button[aria-pressed=true]{background:var(--fg);color:var(--bg)}
 .spacer{flex:1}
-.status{color:var(--muted);min-height:1.5em}.status.bad{color:var(--bad)}
+.status{color:var(--muted);min-height:1.5em}.cards .status{margin:0}.cards .status:empty{display:none}.cards .rowwrap{margin-top:6px}.status.bad{color:var(--bad)}
 .compose input::placeholder{text-transform:none}
 .crumbs{font-size:13px;color:var(--muted)}.crumbs a{color:var(--muted)}
 .view-part{display:flex;flex-direction:column;gap:22px}

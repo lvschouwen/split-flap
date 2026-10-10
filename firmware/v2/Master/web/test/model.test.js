@@ -370,13 +370,14 @@ test('md5 matches the reference for every length around a block edge', () => {
 test('a wall that is up to date says so line by line', () => {
   const rows = firmwareRows(FIRMWARE);
   assert.deepEqual(rows.map((r) => [r.what, r.shouldBe, r.is, r.state]), [
-    ['Master firmware', '', 'aaa1111', 'running'],
+    ['Master firmware', 'no release known', 'aaa1111', 'running'],
     ['Row board firmware', 'aaa1111', '1 of 1 row board', 'current'],
-    ['Stored image for row boards', '', 'aaa1111', 'the master’s build'],
+    ['Stored image for row boards', 'no release known', 'aaa1111', 'the master’s build'],
     ['Unit firmware', '68b94c5', '21 of 21 units', 'current'],
     ['Unit bootloader', '506b3970', '21 of 21 units intact', 'current'],
-    ['Rescue image (master)', '', 'f8da0fa', 'older, fine'],
+    ['Rescue image (master)', 'no release known', 'f8da0fa', 'older, fine'],
   ]);
+  assert.deepEqual(rows.flatMap((r) => r.actions), []);
   assert.deepEqual(firmwareVerdict(rows), { cls: 'ok', title: 'Everything is up to date', why: '' });
   assert.deepEqual(firmwareJobs(FIRMWARE), []);
 });
@@ -388,9 +389,15 @@ test('a master ahead of the release, with everything else current, is up to date
   fw.release = { state: 'up-to-date', tag: 'v2026.10.10', master: 'aaa1111', rowImage: 'aaa1111', rescue: 'aaa1111' };
   const rows = firmwareRows(fw);
   assert.deepEqual(rows.find((r) => r.what === 'Stored image for row boards'),
-    { what: 'Stored image for row boards', shouldBe: '', is: 'aaa1111', cls: 'ok', state: 'release v2026.10.10',
-      note: 'Kept on the master, 318 KB packed. The row boards install this one.' });
+    { what: 'Stored image for row boards', shouldBe: 'aaa1111', is: 'aaa1111', cls: 'ok', state: 'release v2026.10.10',
+      note: 'Kept on the master, 318 KB packed. The row boards install this one.', actions: [] });
+  assert.deepEqual([rows[0].shouldBe, rows[0].is, rows[0].cls, rows[0].state, rows[0].note],
+    ['aaa1111', 'ccc3333', 'ok', 'newer than the release',
+     'Runs a build newer than the newest release, v2026.10.10. Nothing to do.']);
   assert.equal(firmwareVerdict(rows).title, 'Everything is up to date');
+  // On the release itself the row reads current.
+  fw.release.master = 'ccc3333';
+  assert.equal(firmwareRows(fw)[0].state, 'current');
   // A stored image that is nobody's release is as good while the row boards run it.
   fw.release = undefined;
   assert.equal(firmwareRows(fw)[2].state, 'another build, fine');
@@ -410,7 +417,10 @@ test('what is behind is counted, and what can be started about it is offered', (
     ['ok', 'running'], ['note', '1 board behind'], ['ok', 'another build, fine'], ['note', '3 units behind'],
     ['bad', '1 unit damaged'], ['ok', 'older, fine']]);
   assert.equal(rows[1].shouldBe, 'bbb2222');
-  assert.match(rows[1].todo, /offer the stored image again/);
+  assert.match(rows[1].todo, /failed to install three times/);
+  assert.deepEqual(rows.map((r) => r.actions.map((a) => [a.type, a.id, a.label, !!a.primary])), [
+    [], [['job', 'wall-row', 'Offer the stored image again', false]], [],
+    [['job', 'wall-master', 'Update 3 units', true]], [], []]);
   assert.deepEqual(firmwareVerdict(rows), { cls: 'bad', title: 'Something needs installing',
     why: 'Row board firmware: 1 board behind; Unit firmware: 3 units behind; Unit bootloader: 1 unit damaged.' });
   assert.deepEqual(firmwareJobs(fw).map((j) => [j.id, j.name, j.target, j.label]), [
@@ -432,6 +442,30 @@ test('without a stored image the row boards are not called behind', () => {
   const held = firmwareRows(fw)[2];
   assert.deepEqual([held.is, held.cls, held.state], ['bbb2222', 'note', 'waiting']);
   assert.match(held.note, /until the master runs bbb2222/);
+});
+
+test('a newer release fills what should run, and its update is the one thing that stands out', () => {
+  const fw = structuredClone(FIRMWARE);
+  fw.release = { state: 'newer', tag: 'v2026.10.12', master: 'bbb2222', rowImage: 'bbb2222', rescue: 'f8da0fa' };
+  fw.boards[0].units.outdated = 3;
+  fw.boards[0].bootloaders = { damaged: 1, outdated: 2 };
+  fw.bootloaders.damaged = 1;
+  const rows = firmwareRows(fw);
+  assert.deepEqual([rows[0].shouldBe, rows[0].cls, rows[0].state], ['bbb2222', 'note', 'update available']);
+  assert.equal(rows[0].todo, 'Release v2026.10.12 is newer. Image for row boards: aaa1111 becomes bbb2222; '
+    + 'the row boards install it once the master runs bbb2222.');
+  assert.deepEqual(rows[0].actions, [{ type: 'release', tag: 'v2026.10.12', primary: true }]);
+  assert.deepEqual([rows[2].shouldBe, rows[5].shouldBe], ['bbb2222', 'f8da0fa']);
+  // The units' update is offered, and does not stand out next to the release.
+  assert.deepEqual(rows[3].actions.map((a) => [a.name, !!a.primary]), [['update-units', false]]);
+  // A bootloader that is not intact leads to the page of its board.
+  assert.deepEqual(rows[4].actions, [{ type: 'link', id: 'wall-master', label: '1 unit damaged, 2 units behind' }]);
+  // What mends a red row comes before the release.
+  fw.rescue = { rev: '', state: 'missing', warn: true };
+  const red = firmwareRows(fw);
+  assert.deepEqual(red[5].actions, [{ type: 'file', label: 'Choose rescue-….bin…', primary: true }]);
+  assert.equal(red[0].actions[0].primary, undefined);
+  assert.equal(red.flatMap((r) => r.actions).filter((a) => a.primary).length, 1);
 });
 
 test('every line that is not green says what to do, and the headline names it', () => {
@@ -699,7 +733,7 @@ test('every other answer of a look offers no update', () => {
   assert.equal(say(undefined).title, 'Not looked for a release yet');
   assert.equal(say({ state: 'not-looked', check: false }).why, 'The daily look is off.');
   const same = say({ ...RELEASE, state: 'up-to-date' });
-  assert.deepEqual([same.cls, same.why, same.canUpdate], ['ok', 'The newest release is v2026.10.10. Looked 10 minutes ago.', undefined]);
+  assert.deepEqual([same.cls, same.why, same.canUpdate], ['ok', 'The master runs a newer build. Looked 10 minutes ago.', undefined]);
   const failed = say({ state: 'failed', check: true, why: 'the signature does not check out', lookedAt: 1791629990 });
   assert.deepEqual([failed.cls, failed.why, failed.canUpdate],
     ['note', 'the signature does not check out. Looked just now.', undefined]);

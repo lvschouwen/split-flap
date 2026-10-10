@@ -2,16 +2,33 @@
 import { plural, kb } from './format.js';
 
 // What should be running and what is: rows of {what, note, shouldBe, is, cls,
-// state, todo}. A row that is not `ok` says in `todo` what to do about it, or
-// that there is nothing to do.
+// state, todo, actions}. A row that is not `ok` says in `todo` what to do
+// about it, or that there is nothing to do. `actions` is what can be started
+// from the row: {type: 'release'}, {type: 'job', id, name, target, label,
+// doing}, {type: 'file', label} or {type: 'link', id, label}; `id` is the
+// board it is about. At most one of the whole table is `primary`.
 export function firmwareRows(fw) {
   const rows = [];
+  const jobs = firmwareJobs(fw);
   const rowBoards = (fw.boards || []).filter((b) => b.kind === 'row');
   const image = fw.rowImage;
   const held = fw.rowImageHeld;
   const release = fw.release || {};
-  rows.push({ what: 'Master firmware', shouldBe: '', is: fw.master.rev, cls: 'ok', state: 'running',
-              note: 'What was last installed on the master.' });
+  // What a release says should run; without one there is nothing to hold against.
+  const known = release.state === 'newer' || release.state === 'up-to-date';
+  const released = (rev) => (known ? rev : 'no release known');
+  const master = { what: 'Master firmware', shouldBe: released(release.master), is: fw.master.rev, cls: 'ok',
+                   state: 'running', note: 'What was last installed on the master.' };
+  if (release.state === 'newer') {
+    Object.assign(master, { cls: 'note', state: 'update available', actions: [{ type: 'release', tag: release.tag }],
+      todo: [`Release ${release.tag} is newer.`, ...releaseChanges(fw).slice(1)].join(' ') });
+  } else if (known && release.master === fw.master.rev) {
+    master.state = 'current';
+  } else if (known) {
+    master.state = 'newer than the release';
+    master.note = `Runs a build newer than the newest release, ${release.tag}. Nothing to do.`;
+  }
+  rows.push(master);
   if (rowBoards.length && image) {
     // A row board should run the image the master holds for it.
     const behind = rowBoards.filter((b) => !b.current);
@@ -22,8 +39,9 @@ export function firmwareRows(fw) {
       cls: behind.length ? 'note' : 'ok',
       state: behind.length ? plural(behind.length, 'board') + ' behind' : 'current',
       note: 'Row boards get their copy from the master by themselves.',
+      actions: jobs.filter((job) => job.name === 'update'),
       todo: !behind.length ? '' : blocked
-        ? `On ${plural(blocked, 'board')} the stored image failed to install three times: press “offer the stored image again” below.`
+        ? `On ${plural(blocked, 'board')} the stored image failed to install three times.`
           + (blocked < behind.length ? ' The others are offered it by the master, one at a time.' : '')
         : 'Nothing to do: the master offers the stored image by itself, one board at a time.',
     });
@@ -37,23 +55,27 @@ export function firmwareRows(fw) {
     // No rev is the right one: the row boards run this image whatever build
     // the master is on, and a board that cannot talk to the master reads lost.
     const same = image.rev === fw.master.rev;
-    const released = release.tag && release.rowImage === image.rev;
+    const ofRelease = release.tag && release.rowImage === image.rev;
     rows.push({
-      what: 'Stored image for row boards', shouldBe: '', is: image.rev, cls: 'ok',
-      state: same ? 'the master’s build' : released ? `release ${release.tag}` : 'another build, fine',
+      what: 'Stored image for row boards', shouldBe: released(release.rowImage), is: image.rev, cls: 'ok',
+      state: same ? 'the master’s build' : ofRelease ? `release ${release.tag}` : 'another build, fine',
       note: `Kept on the master, ${kb(image.size)}${image.packed ? ' packed' : ''}. The row boards install this one.`,
     });
   } else if (held) {
     rows.push({
-      what: 'Stored image for row boards', shouldBe: '', is: held.rev, cls: 'note', state: 'waiting',
+      what: 'Stored image for row boards', shouldBe: released(release.rowImage), is: held.rev, cls: 'note',
+      state: 'waiting',
       note: `A release stored it; it is kept back until the master runs ${held.until}.`,
-      todo: 'Update to the release under Release, or store a row board image from a file below.',
+      todo: 'Update the master to the release, or store a row board image from a file.',
+      actions: [{ type: 'file', label: 'Choose follower-…-gz.bin…' }],
     });
   } else if (rowBoards.length) {
     rows.push({
-      what: 'Stored image for row boards', shouldBe: '', is: 'none', cls: 'note', state: 'missing',
+      what: 'Stored image for row boards', shouldBe: released(release.rowImage), is: 'none', cls: 'note',
+      state: 'missing',
       note: 'Without it the master cannot bring a row board back to working firmware.',
-      todo: 'Choose follower-…-gz.bin under “Install an update” below.',
+      todo: 'Store one from a file of the build.',
+      actions: [{ type: 'file', label: 'Choose follower-…-gz.bin…' }],
     });
   }
   const units = fw.units || {};
@@ -63,7 +85,8 @@ export function firmwareRows(fw) {
       cls: units.outdated ? 'note' : units.unknown ? 'unknown' : 'ok',
       state: units.outdated ? plural(units.outdated, 'unit') + ' behind' : units.unknown ? 'not all read' : 'current',
       note: units.unknown ? `${plural(units.unknown, 'unit')} could not be read.` : 'The same image on every unit.',
-      todo: units.outdated ? 'Press the update button of each board below.'
+      actions: jobs.filter((job) => job.name === 'update-units'),
+      todo: units.outdated ? 'Update them board by board; the flaps of that board stand still meanwhile.'
         : units.unknown ? 'Nothing to do here: the page of their board says why those units do not answer.' : '',
     });
   }
@@ -75,6 +98,11 @@ export function firmwareRows(fw) {
       state: boot.damaged ? plural(boot.damaged, 'unit') + ' damaged'
         : boot.outdated ? plural(boot.outdated, 'unit') + ' behind' : boot.unread ? 'not all read' : 'current',
       note: 'Every unit checks its own bootloader every 10 minutes.',
+      actions: (fw.boards || []).filter((b) => b.bootloaders && (b.bootloaders.damaged || b.bootloaders.outdated))
+        .map((b) => ({ type: 'link', id: b.id, label: [
+          b.bootloaders.damaged ? plural(b.bootloaders.damaged, 'unit') + ' damaged' : '',
+          b.bootloaders.outdated ? plural(b.bootloaders.outdated, 'unit') + ' behind' : '',
+        ].filter(Boolean).join(', ') })),
       todo: boot.damaged || boot.outdated
         ? 'The page of its board marks the unit; “Update bootloader” is on the unit’s own page, under Service.'
         : boot.unread ? 'Nothing to do: a unit that answers is read within 10 minutes.' : '',
@@ -83,14 +111,40 @@ export function firmwareRows(fw) {
   const rescue = fw.rescue || {};
   rows.push({
     // No rev is the right one: an older rescue image that starts is a good one.
-    what: 'Rescue image (master)', shouldBe: '', is: rescue.rev || 'none',
+    what: 'Rescue image (master)', shouldBe: released(release.rescue), is: rescue.rev || 'none',
     cls: rescue.warn ? 'bad' : 'ok',
     state: rescue.warn ? 'install again' : rescue.state === 'stale' ? 'older, fine' : rescue.state || 'unknown',
     note: rescue.warn ? 'The rescue image is missing or does not match what the master expects.'
       : 'What the master starts when its own firmware does not.',
-    todo: rescue.warn ? 'Choose rescue-….bin under “Install an update” below.' : '',
+    todo: rescue.warn ? 'Install it from a file of the build. The running firmware is not touched.' : '',
+    actions: rescue.warn ? [{ type: 'file', label: 'Choose rescue-….bin…' }] : [],
   });
+  for (const row of rows) row.actions = row.actions || [];
+  // One thing stands out: what mends a red row, else the release, else the units.
+  const all = rows.flatMap((row) => row.actions.map((action) => ({ row, action })));
+  const first = all.find((a) => a.row.cls === 'bad' && a.action.type === 'file')
+    || all.find((a) => a.action.type === 'release')
+    || all.find((a) => a.action.name === 'update-units');
+  if (first) first.action.primary = true;
   return rows;
+}
+
+// What an update to the release the master found would install, a sentence each.
+function releaseChanges(fw) {
+  const r = fw.release || {};
+  const changes = [`Master firmware: ${fw.master.rev} becomes ${r.master}.`];
+  const stored = fw.rowImageHeld ? fw.rowImageHeld.rev : fw.rowImage ? fw.rowImage.rev : '';
+  if (r.rowImage !== stored) {
+    changes.push(`Image for row boards: ${stored || 'none'} becomes ${r.rowImage}; the row boards install it once the master runs ${r.master}.`);
+  }
+  if (r.rescue !== (fw.rescue || {}).rev) {
+    changes.push(`Rescue image: ${(fw.rescue || {}).rev || 'none'} becomes ${r.rescue}.`);
+  }
+  const unitsNow = (fw.units || {}).shouldBe;
+  if (r.unitRevs && unitsNow && !r.unitRevs.split(',').includes(unitsNow)) {
+    changes.push('Unit firmware: the units will read behind afterwards. Updating them stays a press of its own.');
+  }
+  return changes;
 }
 
 // The release the master found, from the `release` part: {cls, title, why,
@@ -109,23 +163,12 @@ export function releaseText(fw, now) {
              changes: [] };
   }
   if (r.state === 'up-to-date') {
-    return { cls: 'ok', title: `Nothing newer than what runs`, tag: r.tag, notes: r.notes,
-             why: `The newest release is ${r.tag}.${looked}${daily}`, changes: [] };
-  }
-  const changes = [`Master firmware: ${fw.master.rev} becomes ${r.master}.`];
-  const stored = fw.rowImageHeld ? fw.rowImageHeld.rev : fw.rowImage ? fw.rowImage.rev : '';
-  if (r.rowImage !== stored) {
-    changes.push(`Image for row boards: ${stored || 'none'} becomes ${r.rowImage}; the row boards install it once the master runs ${r.master}.`);
-  }
-  if (r.rescue !== (fw.rescue || {}).rev) {
-    changes.push(`Rescue image: ${(fw.rescue || {}).rev || 'none'} becomes ${r.rescue}.`);
-  }
-  const unitsNow = (fw.units || {}).shouldBe;
-  if (r.unitRevs && unitsNow && !r.unitRevs.split(',').includes(unitsNow)) {
-    changes.push('Unit firmware: the units will read behind afterwards. Updating them stays a press of its own.');
+    return { cls: 'ok', title: `The newest release is ${r.tag}`, tag: r.tag, notes: r.notes,
+             why: `${r.master === fw.master.rev ? 'The master runs it.' : 'The master runs a newer build.'}${looked}${daily}`,
+             changes: [] };
   }
   return { cls: 'note', title: `New release ${r.tag}`, tag: r.tag, notes: r.notes,
-           why: `${looked.trim()}${daily}`, changes, canUpdate: true };
+           why: `${looked.trim()}${daily}`, changes: releaseChanges(fw), canUpdate: true };
 }
 
 function ago(seconds) {
@@ -191,11 +234,11 @@ export function firmwareJobs(fw) {
   for (const board of fw.boards || []) {
     const row = board.kind === 'master' ? '' : board.id;
     if (board.units && board.units.outdated) {
-      jobs.push({ id: board.id, name: 'update-units', target: { row },
+      jobs.push({ type: 'job', id: board.id, name: 'update-units', target: { row },
                   label: `Update ${plural(board.units.outdated, 'unit')}`, doing: 'Updating units' });
     }
     if (board.updateBlocked) {
-      jobs.push({ id: board.id, name: 'update', target: { row: board.id },
+      jobs.push({ type: 'job', id: board.id, name: 'update', target: { row: board.id },
                   label: 'Offer the stored image again', doing: 'Offering the image' });
     }
   }
