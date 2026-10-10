@@ -25,6 +25,9 @@ if [ -e "$key" ] || [ -e "$pub" ]; then
   echo "A release key already exists in $dir — not replacing it." >&2
   exit 1
 fi
+# openssl's default is 2048 rounds, which makes a copied key file cheap to
+# guess passphrases against.
+KDF_ROUNDS=600000
 plainKey=0
 case "${1:-}" in
   "") ;;
@@ -44,7 +47,8 @@ plain=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256)
 if [ "$plainKey" = 1 ]; then
   openssl pkey -out "$key" <<<"$plain"
 elif ! { echo "Choose a passphrase for the release key (asked twice)."; \
-         openssl pkey -aes256 -out "$key" <<<"$plain"; }; then
+         openssl pkcs8 -topk8 -v2 aes-256-cbc -v2prf hmacWithSHA256 \
+           -iter "$KDF_ROUNDS" -out "$key" <<<"$plain"; }; then
   rm -f "$key"
   echo "No key written." >&2
   exit 1
