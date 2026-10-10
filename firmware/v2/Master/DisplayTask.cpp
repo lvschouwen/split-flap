@@ -569,9 +569,8 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
                                                  sweepAddrs);
       break;
     case ReflashSweep::ForcedOne:
-      sweepCount = reflashCollectForcedTarget(local.units, UNITS_AMOUNT,
-                                              SFP_I2C_ADDRESS_BASE, onlyAddr,
-                                              sweepAddrs);
+      sweepCount = reflashCollectForcedTarget(
+          UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE, onlyAddr, sweepAddrs);
       break;
   }
   uint8_t targets[UNITS_AMOUNT];

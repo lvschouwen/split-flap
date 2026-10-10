@@ -45,6 +45,17 @@ per-page verify fails C, dropping the trampoline restore fails D, dropping the p
 the real page 0 first (no trampoline) makes every B kill point inside pages 1–6
 fail.
 
+## Stopped flash (#554)
+
+`./prove-torn-flash.sh` (needs the Unit firmware built) runs what a flash that
+stopped short leaves behind: the hold page at address 0
+(`twibootFillHoldPage`, built from `shared/TwibootFlash.h` by `hold_page.cpp`)
+under the units' bootloader. With the rest of the unit image above it, and with
+blank flash above it, the program is reset by its watchdog 16 ms after each
+start and the bootloader keeps the unit at the third reset, for longer than
+`SF_PIN_TIMEOUT_MS`; the program counter never leaves the hold code. The whole
+image, as the control, starts and stays up. Prints `STOPPED FLASH PROOF PASSED`.
+
 ## Not modelled
 
 - SPM duration: simavr executes an erase/write atomically. A real power loss

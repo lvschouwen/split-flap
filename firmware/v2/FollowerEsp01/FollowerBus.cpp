@@ -995,8 +995,8 @@ void busRunReflashJob(uint8_t onlyAddr, bool force) {
   // own pages (reflashEnterUnit).
   uint8_t sweep[UNITS_AMOUNT];
   int sweepCount =
-      force ? reflashCollectForcedTarget(unitFacts, UNITS_AMOUNT,
-                                         SFP_I2C_ADDRESS_BASE, onlyAddr, sweep)
+      force ? reflashCollectForcedTarget(UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE,
+                                         onlyAddr, sweep)
             : reflashCollectRebootTargets(unitFacts, UNITS_AMOUNT,
                                           SFP_I2C_ADDRESS_BASE, sweep);
   uint8_t flashTargets[UNITS_AMOUNT];

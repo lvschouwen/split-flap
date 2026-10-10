@@ -139,17 +139,16 @@ inline int reflashFilterToAddress(uint8_t* addrs, int n, uint8_t onlyAddr) {
   return 0;
 }
 
-// /reflash-units?address=N&force=1: the named unit is sent into its bootloader
-// whatever revision it reports — an image can be damaged under a version
-// string that still matches. One unit by construction: without an address it
-// plans nothing, so a forced job can never turn into a whole-row reflash. A
-// unit already in twiboot is a flash target without this, and an absent one
-// stays absent.
-inline int reflashCollectForcedTarget(const UnitFacts* facts, int maxUnits,
-                                      int base, uint8_t onlyAddr,
+// A forced run (`force` with an address): the named unit is flashed whatever
+// revision it reports — an image can be damaged under a version string that
+// still matches — and whatever the scan saw at its address: a unit whose
+// program no longer listens reads as absent, and it is the one the wait for
+// a reset by hand is for (reflashAwaitHandReset). One unit by construction:
+// without an address it plans nothing, so a forced job can never turn into a
+// whole-row reflash.
+inline int reflashCollectForcedTarget(int maxUnits, int base, uint8_t onlyAddr,
                                       uint8_t* outAddrs) {
   if (onlyAddr < base || onlyAddr >= base + maxUnits) return 0;
-  if (facts[onlyAddr - base].state != 1) return 0;
   outAddrs[0] = onlyAddr;
   return 1;
 }
@@ -172,10 +171,10 @@ inline bool reflashParseForce(const char* raw, bool& out) {
 
 // /reflash-units?address=N bound: the managed range only. Deliberately not
 // maintValidateAddress — a unit in twiboot or on a protocol we do not speak
-// must still be reflashable; converging it is the point. A target that is
-// current, silent or absent plans nothing: the op still reports ok and the
-// progress object's total is 0, which is what a caller must check (what
-// commission-units.sh reads).
+// must still be reflashable; converging it is the point. Without
+// `force`, a target that is current, silent or absent plans nothing: the op
+// still reports ok and the progress object's total is 0, which is what a
+// caller must check (what commission-units.sh reads).
 inline bool reflashAddressInRange(long addr, int base, int maxUnits) {
   return addr >= base && addr < (long)base + maxUnits;
 }

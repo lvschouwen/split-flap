@@ -858,19 +858,33 @@ static void test_force_targets_a_current_sketch_unit() {
   facts[1].fwStatus = 0;  // on the bundled rev: no ordinary sweep takes it
   uint8_t out[4];
   TEST_ASSERT_EQUAL(0, reflashCollectRebootTargets(facts, 4, 1, out));
-  TEST_ASSERT_EQUAL(1, reflashCollectForcedTarget(facts, 4, 1, 2, out));
+  TEST_ASSERT_EQUAL(1, reflashCollectForcedTarget(4, 1, 2, out));
   TEST_ASSERT_EQUAL_UINT8(2, out[0]);
 }
 
-static void test_force_plans_nothing_without_one_reachable_sketch_unit() {
-  UnitFacts facts[4] = {};
-  facts[0].state = 1;
-  facts[2].state = 2;  // already in twiboot: a flash target without a reboot
+// A unit that answers nothing is the one a forced run exists for: its program
+// no longer listens, and the run waits for a reset by hand (#554).
+static void test_force_targets_the_address_whatever_the_scan_saw() {
   uint8_t out[4];
-  TEST_ASSERT_EQUAL(0, reflashCollectForcedTarget(facts, 4, 1, 0, out));  // no address = never the row
-  TEST_ASSERT_EQUAL(0, reflashCollectForcedTarget(facts, 4, 1, 2, out));  // absent
-  TEST_ASSERT_EQUAL(0, reflashCollectForcedTarget(facts, 4, 1, 3, out));  // in twiboot
-  TEST_ASSERT_EQUAL(0, reflashCollectForcedTarget(facts, 4, 1, 5, out));  // past the row
+  TEST_ASSERT_EQUAL(1, reflashCollectForcedTarget(4, 1, 2, out));
+  TEST_ASSERT_EQUAL_UINT8(2, out[0]);
+}
+
+static void test_force_plans_nothing_outside_the_row() {
+  uint8_t out[4];
+  TEST_ASSERT_EQUAL(0, reflashCollectForcedTarget(4, 1, 0, out));  // no address = never the row
+  TEST_ASSERT_EQUAL(0, reflashCollectForcedTarget(4, 1, 5, out));  // past the row
+}
+
+// A forced unit already in twiboot is on the flash list once, not twice.
+static void test_forced_twiboot_unit_is_planned_once() {
+  UnitFacts facts[4] = {};
+  facts[2].state = 2;
+  uint8_t sweep[4];
+  int sweepCount = reflashCollectForcedTarget(4, 1, 3, sweep);
+  uint8_t targets[4];
+  TEST_ASSERT_EQUAL(1, reflashPlanTargets(facts, 4, 1, sweep, sweepCount, targets));
+  TEST_ASSERT_EQUAL_UINT8(3, targets[0]);
 }
 
 static void test_force_value_parses_strictly() {
@@ -946,7 +960,9 @@ int main(int, char**) {
   RUN_TEST(test_classify_failed_and_cancelled_jobs);
   RUN_TEST(test_empty_plan_finishes_done_and_ok);
   RUN_TEST(test_force_targets_a_current_sketch_unit);
-  RUN_TEST(test_force_plans_nothing_without_one_reachable_sketch_unit);
+  RUN_TEST(test_force_targets_the_address_whatever_the_scan_saw);
+  RUN_TEST(test_force_plans_nothing_outside_the_row);
+  RUN_TEST(test_forced_twiboot_unit_is_planned_once);
   RUN_TEST(test_force_value_parses_strictly);
   return UNITY_END();
 }

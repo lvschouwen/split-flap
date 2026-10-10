@@ -5,3 +5,5 @@
 runtest
 crash_test
 crash_test_real
+torn_flash_test
+hold_page
