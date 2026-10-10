@@ -91,10 +91,11 @@ export function wallView(app) {
   const compose = h('div', {});
   let composeShape = '';
   let form = null;
+  const found = h('div', {});
   const attention = h('div', { class: 'section' });
   const boards = h('div', { class: 'section' });
   const notes = h('div', { class: 'section' });
-  const root = h('div', { class: 'view' }, head, picture, compose, attention, boards, notes,
+  const root = h('div', { class: 'view' }, head, picture, compose, found, attention, boards, notes,
     h('div', { class: 'rowwrap' }, h('a', { class: 'btn', href: '#calibrate' }, 'Calibrate the wall')));
 
   function refresh() {
@@ -117,6 +118,8 @@ export function wallView(app) {
       fill(compose, form);
     }
     form.set(app.state.show);
+    fill(found, wall.release ? itemList([{ cls: 'note', href: '#firmware',
+      title: `New release ${wall.release} found`, why: 'Firmware has what it would change, and the button.' }]) : null);
     fill(attention, needs.length ? [h('h2', {}, 'Needs attention'), itemList(needs)] : null);
     fill(boards, h('h2', {}, 'Boards'), itemList(wall.rows.map((row) => {
       const line = boardLine(wall, layout, row);

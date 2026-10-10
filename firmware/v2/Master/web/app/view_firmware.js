@@ -1,9 +1,10 @@
 // Firmware: what should be running and what is, and installing an update.
-import { h, fill, pill, statusLine } from './dom.js';
+import { h, fill, pill, statusLine, itemList } from './dom.js';
 import { getJson } from './api.js';
 import { runJob } from './jobs.js';
 import { wallLayout, boardTitle } from '../model/wall.js';
-import { firmwareRows, firmwareVerdict, firmwareFile, installQuestion, firmwareJobs } from '../model/firmware.js';
+import { firmwareRows, firmwareVerdict, firmwareFile, installQuestion, firmwareJobs,
+         releaseText, releaseProgress, updateQuestion } from '../model/firmware.js';
 import { md5Hex } from '../model/md5.js';
 
 // Sends a file to an upload route; `onProgress(fraction)` while it goes.
@@ -30,14 +31,55 @@ export function firmwareView(app) {
   const picker = h('input', { type: 'file', accept: '.bin', hidden: true, onchange: () => chosen() });
   const choose = h('button', { type: 'button', class: 'btn primary', onclick: () => picker.click() },
     'Choose a firmware file…');
+  const releaseLine = h('div', {});
+  const releaseStatus = statusLine();
+  const check = h('button', { type: 'button', class: 'btn', onclick: () => look() }, 'Check firmware');
+  const update = h('button', { type: 'button', class: 'btn primary', hidden: true, onclick: () => updateNow() });
   const root = h('div', { class: 'view' }, head,
     h('p', { class: 'muted' }, 'What should be running, and what is.'), table, jobs,
+    h('div', { class: 'section' }, h('h2', {}, 'Release'), releaseLine,
+      h('div', { class: 'rowwrap' }, check, update), releaseStatus),
     h('div', { class: 'section' }, h('h2', {}, 'Install an update'),
       h('p', { class: 'muted small' },
         'Choose a file from the build: firmware-…-master.bin, follower-…-gz.bin or rescue-….bin. ',
         'The page knows from its name what it is for and checks it before it is sent.'),
       h('div', { class: 'rowwrap' }, choose, picker), status));
   let fw = null;
+  let updating = false;
+
+  // Rereads while `during` is pending, so the page follows what it does.
+  async function following(during) {
+    const timer = setInterval(read, 2000);
+    try { return await during; } finally { clearInterval(timer); }
+  }
+
+  async function look() {
+    check.disabled = true;
+    await following(runJob(releaseStatus, 'Looking for a release', 'check-release'));
+    check.disabled = false;
+    read();
+  }
+
+  async function updateNow() {
+    const release = releaseText(fw, Date.now());
+    if (!release.canUpdate || !window.confirm(updateQuestion(release))) return;
+    const before = fw.master.rev;
+    updating = true;
+    refresh();
+    const job = await following(runJob(releaseStatus, 'Updating', 'update-from-release'));
+    if (job && job.state === 'done' && /restarting/.test(job.detail || '')) {
+      // The page is part of the firmware: load the new one once it answers.
+      for (let tries = 0; tries < 60; tries++) {
+        await new Promise((wait) => setTimeout(wait, 3000));
+        try {
+          if ((await getJson('/api/v2/firmware')).master.rev !== before) return window.location.reload();
+        } catch (error) { /* restarting */ }
+      }
+      releaseStatus.say('The master did not come back on the release. What it runs is shown above.', true);
+    }
+    updating = false;
+    read();
+  }
 
   async function chosen() {
     const file = picker.files[0];
@@ -75,6 +117,14 @@ export function firmwareView(app) {
       h('tbody', {}, rows.map((row) => h('tr', {},
         h('td', {}, h('b', {}, row.what), h('div', { class: 'muted small' }, row.note)),
         h('td', {}, row.shouldBe), h('td', {}, row.is), h('td', {}, pill(row.cls, row.state))))))));
+    const release = releaseText(fw, Date.now());
+    const progress = releaseProgress(fw);
+    fill(releaseLine, itemList([{ cls: release.cls, title: release.title, why: progress || release.why,
+      pill: release.notes && h('a', { class: 'btn', href: release.notes, target: '_blank', rel: 'noopener' }, 'Release notes') }]),
+      release.changes.length ? h('ul', { class: 'muted small' }, release.changes.map((line) => h('li', {}, line))) : null);
+    update.hidden = !release.canUpdate;
+    update.textContent = release.canUpdate ? `Update to ${release.tag}` : '';
+    update.disabled = check.disabled = updating || !!progress;
     const layout = app.state.wall && wallLayout(app.state.wall);
     fill(jobs, firmwareJobs(fw).map((job) =>
       h('button', { type: 'button', class: 'btn', onclick: () => {

@@ -62,6 +62,22 @@ static void test_an_uploaded_image_is_never_held() {
   TEST_ASSERT_FALSE(followerImageHeld(nullptr, "abc1234"));
 }
 
+static void test_a_release_stores_its_row_image_unless_the_same_one_waits_for_it() {
+  // Another image than the release's.
+  TEST_ASSERT_TRUE(followerImageReleaseStores("old1111", "", "run0000", "new2222", "rel3333"));
+  // The release's image, on offer: nothing to do.
+  TEST_ASSERT_FALSE(followerImageReleaseStores("new2222", "", "run0000", "new2222", "rel3333"));
+  // The release's image, held for this release's master: nothing to do.
+  TEST_ASSERT_FALSE(followerImageReleaseStores("new2222", "rel3333", "run0000", "new2222", "rel3333"));
+  // The same image, held for the master of a release that never got to run:
+  // without storing it again that hold would never end.
+  TEST_ASSERT_TRUE(followerImageReleaseStores("new2222", "gone999", "run0000", "new2222", "rel3333"));
+  // A hold that has ended (this master runs what it waited for) is no hold.
+  TEST_ASSERT_FALSE(followerImageReleaseStores("new2222", "run0000", "run0000", "new2222", "rel3333"));
+  // Nothing stored.
+  TEST_ASSERT_TRUE(followerImageReleaseStores("", "", "run0000", "new2222", "rel3333"));
+}
+
 static void test_a_release_image_is_held_until_the_master_runs_that_release() {
   TEST_ASSERT_TRUE(followerImageHeld("def5678", "abc1234"));
   TEST_ASSERT_FALSE(followerImageHeld("def5678", "def5678"));
@@ -80,5 +96,6 @@ int main(int, char**) {
   RUN_TEST(test_chunk_rejects_cursor_gap_and_overflow);
   RUN_TEST(test_an_uploaded_image_is_never_held);
   RUN_TEST(test_a_release_image_is_held_until_the_master_runs_that_release);
+  RUN_TEST(test_a_release_stores_its_row_image_unless_the_same_one_waits_for_it);
   return UNITY_END();
 }

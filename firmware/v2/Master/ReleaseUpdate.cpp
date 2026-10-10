@@ -10,11 +10,14 @@
 #include <freertos/semphr.h>
 
 #include <atomic>
+#include <memory>
+#include <new>
 
 #include "BuildVersion.h"
 #include "ClockPolicy.h"
 #include "EventRecord.h"
 #include "FactorySlot.h"
+#include "FollowerImagePolicy.h"
 #include "FollowerImageStore.h"
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
@@ -63,8 +66,22 @@ void setStep(ReleaseStep step, uint32_t size = 0) {
   status.size = size;
 }
 
+// The task watchdog is fed around every call that waits for the site: a name
+// lookup, a connection and a read each wait up to RELEASE_HTTP_TIMEOUT_MS.
 class Site : public ReleaseSite {
  public:
+  int get(const char* url, uint8_t* out, size_t cap) override {
+    wdtFeed();
+    const int n = ReleaseSite::get(url, out, cap);
+    wdtFeed();
+    return n;
+  }
+  long open(const char* url) override {
+    wdtFeed();
+    const long length = ReleaseSite::open(url);
+    wdtFeed();
+    return length;
+  }
   void progress(uint32_t done, uint32_t size) override {
     wdtFeed();
     Lock lock;
@@ -205,11 +222,30 @@ const char* update(char* why, size_t cap, bool& nothingToDo) {
   if (buffer == nullptr) return failed(why, cap, "the download", ReleaseError::Memory);
   std::unique_ptr<uint8_t, void (*)(void*)> owned(buffer, heap_caps_free);
 
+  const bool rescueDiffers = releaseImageDiffers(release.rescue, rescueSlotCurrent().rev);
+  const bool rowDiffers = followerImageReleaseStores(
+      followerImageStoredRev().c_str(), followerImageStoredHeldFor().c_str(), GIT_REV,
+      release.row.rev, release.master.rev);
+  // Every image first: the rescue slot is erased as its download begins, and
+  // that is not worth it for a release whose master image is not there.
+  const struct {
+    bool wanted;
+    const ReleaseImage& image;
+    const char* what;
+  } wanted[] = {{rescueDiffers, release.rescue, "the rescue image"},
+                {rowDiffers, release.row, "the row image"},
+                {true, release.master, "the master's firmware"}};
+  for (const auto& w : wanted) {
+    if (!w.wanted) continue;
+    const ReleaseError e = releaseReachable(site, release.channel, w.image);
+    if (e != ReleaseError::Ok) return failed(why, cap, w.what, e);
+  }
+
   SerialPrintf("release: updating to %s\n", release.tag);
   eventRecord(EventKind::UpdateStarted, 0, "", 0, eventRevNumber(release.master.rev),
               release.commitTime);
 
-  if (releaseImageDiffers(release.rescue, rescueSlotCurrent().rev)) {
+  if (rescueDiffers) {
     setStep(ReleaseStep::Rescue, release.rescue.size);
     RescueWriter writer;
     const ReleaseError e =
@@ -220,7 +256,7 @@ const char* update(char* why, size_t cap, bool& nothingToDo) {
     webNoteRescueInstalled(release.rescue.rev);
   }
 
-  if (releaseImageDiffers(release.row, followerImageStoredRev().c_str())) {
+  if (rowDiffers) {
     setStep(ReleaseStep::RowImage, release.row.size);
     RowImageWriter writer;
     writer.md5 = hexOf(release.rowMd5, sizeof(release.rowMd5));
@@ -294,6 +330,9 @@ void runLook(uint32_t op) {
   Site site;
   ReleaseManifest found;
   const ReleaseError result = look(site, found);
+  // The deepest the worker goes (a TLS handshake): how much of its stack was left.
+  SerialPrintf("release: the worker's stack kept %u bytes free\n",
+               (unsigned)uxTaskGetStackHighWaterMark(nullptr));
   if (op != 0) {
     if (result != ReleaseError::Ok) {
       wallOpFinish(op, false, releaseErrorText(result));
@@ -336,6 +375,13 @@ void releaseSetSettings(bool check, const String& wanted) {
 ReleaseStatus releaseStatusGet() {
   Lock lock;
   return status;
+}
+
+bool releaseNewerTag(char* out, size_t cap) {
+  Lock lock;
+  if (status.look != ReleaseLookState::Newer) return false;
+  strlcpy(out, status.release.tag, cap);
+  return true;
 }
 
 bool releaseCheckEnabled() { return checkEnabled.load(); }

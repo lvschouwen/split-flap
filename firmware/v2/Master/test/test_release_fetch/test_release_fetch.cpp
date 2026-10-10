@@ -216,6 +216,29 @@ static void test_a_download_cut_off_is_never_committed() {
   TEST_ASSERT_EQUAL(1, second.aborts);
 }
 
+static void test_an_image_is_reachable_when_the_site_announces_the_manifests_size() {
+  const std::string data = "0123456789";
+  Site site;
+  site.files[BASE "t1/m.bin"] = data;
+  TEST_ASSERT_EQUAL((int)ReleaseError::Ok, (int)releaseReachable(site, "test", imageOf(data)));
+  // Asked and let go: nothing is read, hashed or written.
+  TEST_ASSERT_EQUAL(2, (int)site.log.size());
+  TEST_ASSERT_EQUAL_STRING("close", site.log[1].c_str());
+  TEST_ASSERT_EQUAL(0, (int)site.at);
+
+  Site other;
+  other.files[BASE "t1/m.bin"] = "01234";
+  TEST_ASSERT_EQUAL((int)ReleaseError::Length, (int)releaseReachable(other, "test", imageOf(data)));
+  Site missing;
+  TEST_ASSERT_EQUAL((int)ReleaseError::NoAnswer, (int)releaseReachable(missing, "test", imageOf(data)));
+  TEST_ASSERT_EQUAL_STRING("close", missing.log.back().c_str());
+  ReleaseImage outside = imageOf(data);
+  strcpy(outside.path, "../m.bin");
+  Site never;
+  TEST_ASSERT_EQUAL((int)ReleaseError::Path, (int)releaseReachable(never, "test", outside));
+  TEST_ASSERT_EQUAL(0, (int)never.log.size());
+}
+
 static void test_another_size_than_the_manifests_touches_nothing() {
   const std::string data = "0123456789";
   for (const char* served : {"0123456789ab", "01234"}) {
@@ -286,6 +309,7 @@ int main(int, char**) {
   RUN_TEST(test_an_image_is_committed_only_after_every_byte_matched);
   RUN_TEST(test_an_image_with_a_changed_byte_is_never_committed);
   RUN_TEST(test_a_download_cut_off_is_never_committed);
+  RUN_TEST(test_an_image_is_reachable_when_the_site_announces_the_manifests_size);
   RUN_TEST(test_another_size_than_the_manifests_touches_nothing);
   RUN_TEST(test_a_writer_that_refuses_ends_the_install);
   RUN_TEST(test_a_path_outside_the_directory_is_never_opened);

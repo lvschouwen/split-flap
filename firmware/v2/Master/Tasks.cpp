@@ -55,6 +55,7 @@ bool tasksUnitCountOverridePinned() {
 #include "HelpersSerialHandling.h"
 #include "MqttService.h"
 #include "OdometerLog.h"
+#include "ReleaseUpdate.h"
 #include "StatusLed.h"
 #include "SystemStats.h"
 #include "TaskWatchdog.h"
@@ -254,6 +255,7 @@ static void workerTaskMain(void*) {
     wallPairTick();          // #566: pairing and the other rows-table requests
     wallOwnJobTick();        // #566: the end of a unit job on the own row
     wallWatchTick();         // #570: judge the wall, record what changed
+    releaseTick();           // #583: the look for a release, an update from one
     crashCtxMark(CRASH_SLOT_WORKER, CRASH_ACT_IDLE);
     vTaskDelay(pdMS_TO_TICKS(100));
   }

@@ -113,6 +113,8 @@ static void test_the_kind_numbers_and_names_are_fixed() {
       {EventKind::JobDone, 30, "job-done"},
       {EventKind::JobFailed, 31, "job-failed"},
       {EventKind::RowEvent, 40, "row-event"},
+      {EventKind::ReleaseFound, 50, "release-found"},
+      {EventKind::UpdateStarted, 51, "update-started"},
   };
   int named = 0;
   for (int k = 0; k < 256; k++) {

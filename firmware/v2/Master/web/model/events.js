@@ -52,6 +52,10 @@ export function eventText(event, where, alphabet) {
       return { cls: event.detail === 1 ? 'note' : 'info',
                title: `${where}: connected` + (event.detail === 1 ? ' in rescue mode' : ''),
                why: `Firmware ${revText(event.a)}.` };
+    case 'release-found':
+      return { cls: 'info', title: 'A newer release was found', why: `Master firmware ${revText(event.a)}.` };
+    case 'update-started':
+      return { cls: 'info', title: 'An update from a release started', why: `To master firmware ${revText(event.a)}.` };
     case 'job-done':
       return { cls: 'info', title: `${unit}: ${event.job} done`, why: '' };
     case 'job-failed':

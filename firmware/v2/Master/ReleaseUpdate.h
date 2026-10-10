@@ -30,6 +30,8 @@ void releaseTick();
 
 // Any task: a copy of what is known.
 ReleaseStatus releaseStatusGet();
+// The tag of a release newer than what runs; false when none is known.
+bool releaseNewerTag(char* out, size_t cap);
 // The settings as the worker last saw them, for the reads.
 bool releaseCheckEnabled();
 

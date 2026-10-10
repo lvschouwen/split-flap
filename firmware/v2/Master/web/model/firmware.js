@@ -61,6 +61,65 @@ export function firmwareRows(fw) {
   return rows;
 }
 
+// The release the master found, from the `release` part: {cls, title, why,
+// notes, tag, changes, canUpdate}. `changes` is what an update would install.
+const LOOK_FAILED = 'The master could not look for a release';
+export function releaseText(fw, now) {
+  const r = fw.release || {};
+  const looked = r.lookedAt ? ` Looked ${ago(now / 1000 - r.lookedAt)}.` : '';
+  const daily = r.check === false ? ' The daily look is off.' : '';
+  if (r.state === 'failed') {
+    return { cls: 'note', title: LOOK_FAILED, why: `${r.why || 'no reason given'}.${looked}${daily}`, changes: [] };
+  }
+  if (r.state !== 'newer' && r.state !== 'up-to-date') {
+    return { cls: 'unknown', title: 'Not looked for a release yet',
+             why: (r.check === false ? 'The daily look is off.' : 'The master looks two minutes after it starts, then once a day.'),
+             changes: [] };
+  }
+  if (r.state === 'up-to-date') {
+    return { cls: 'ok', title: `Nothing newer than what runs`, tag: r.tag, notes: r.notes,
+             why: `The newest release is ${r.tag}.${looked}${daily}`, changes: [] };
+  }
+  const changes = [`Master firmware: ${fw.master.rev} becomes ${r.master}.`];
+  const stored = fw.rowImageHeld ? fw.rowImageHeld.rev : fw.rowImage ? fw.rowImage.rev : '';
+  if (r.rowImage !== stored) {
+    changes.push(`Image for row boards: ${stored || 'none'} becomes ${r.rowImage}; the row boards install it once the master runs ${r.master}.`);
+  }
+  if (r.rescue !== (fw.rescue || {}).rev) {
+    changes.push(`Rescue image: ${(fw.rescue || {}).rev || 'none'} becomes ${r.rescue}.`);
+  }
+  const unitsNow = (fw.units || {}).shouldBe;
+  if (r.unitRevs && unitsNow && !r.unitRevs.split(',').includes(unitsNow)) {
+    changes.push('Unit firmware: the units will read behind afterwards. Updating them stays a press of its own.');
+  }
+  return { cls: 'note', title: `New release ${r.tag}`, tag: r.tag, notes: r.notes,
+           why: `${looked.trim()}${daily}`, changes, canUpdate: true };
+}
+
+function ago(seconds) {
+  if (seconds < 90) return 'just now';
+  if (seconds < 5400) return `${Math.round(seconds / 60)} minutes ago`;
+  if (seconds < 129600) return `${Math.round(seconds / 3600)} hours ago`;
+  return `${Math.round(seconds / 86400)} days ago`;
+}
+
+// What an update from a release is doing, '' when none runs.
+const UPDATE_STEPS = {
+  looking: 'Looking at the release', rescue: 'Downloading the rescue image',
+  'row-image': 'Downloading the image for row boards', master: 'Downloading the master’s firmware',
+  restarting: 'Restarting into the release',
+};
+export function releaseProgress(fw) {
+  const update = (fw.release || {}).update;
+  if (!update) return '';
+  const step = UPDATE_STEPS[update.step] || 'Updating';
+  return update.size ? `${step}: ${Math.floor(100 * update.done / update.size)} %` : `${step}…`;
+}
+
+export function updateQuestion(release) {
+  return `Update to ${release.tag}? ${release.changes.join(' ')} The master restarts, and the wall is blank for about half a minute.`;
+}
+
 export function firmwareVerdict(rows) {
   if (rows.some((r) => r.cls === 'bad')) return { cls: 'bad', title: 'Something needs installing' };
   if (rows.some((r) => r.cls === 'note')) return { cls: 'note', title: 'Not everything is up to date' };

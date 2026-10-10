@@ -91,6 +91,7 @@ static const WallTableJob WALL_TABLE_JOBS[] = {
     {"release", 201},
     {"arrange", 202},
     {"update", 203},
+    {"update-from-release", 204},
 };
 
 // 0 for a name that is no job.

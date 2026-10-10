@@ -49,6 +49,7 @@
 #include "MqttService.h"
 #include "NetLiveness.h"
 #include "ReflashPlan.h"
+#include "ReleaseUpdate.h"
 #include "RowLog.h"
 #include "SystemStats.h"
 #include "SystemStatsPolicy.h"
@@ -296,6 +297,36 @@ struct Tally {
   }
 };
 
+// What the look for a release knows and what an update from it is doing
+// (#583). The revs are the release's: what the three images would become.
+void writeRelease(JsonObject out) {
+  // Static: a manifest does not belong on the web server task's stack, and
+  // that task serves one request at a time.
+  static ReleaseStatus s;
+  s = releaseStatusGet();
+  out["state"] = releaseLookStateName(s.look);
+  out["check"] = releaseCheckEnabled();
+  if (s.lookedAtS != 0) out["lookedAt"] = s.lookedAtS;
+  if (s.look == ReleaseLookState::Failed) out["why"] = releaseErrorText(s.why);
+  if (s.look == ReleaseLookState::UpToDate || s.look == ReleaseLookState::Newer) {
+    out["channel"] = jsonCopied(s.release.channel);
+    out["tag"] = jsonCopied(s.release.tag);
+    out["notes"] = jsonCopied(s.release.notes);
+    out["commitTime"] = s.release.commitTime;
+    out["master"] = jsonCopied(s.release.master.rev);
+    out["rowImage"] = jsonCopied(s.release.row.rev);
+    out["rescue"] = jsonCopied(s.release.rescue.rev);
+    if (s.release.unitRevs[0] != 0) out["unitRevs"] = jsonCopied(s.release.unitRevs);
+  }
+  if (s.op != 0) {
+    JsonObject u = out["update"].to<JsonObject>();
+    u["op"] = s.op;
+    u["step"] = releaseStepName(s.step);
+    u["done"] = s.done;
+    u["size"] = s.size;
+  }
+}
+
 void handleFirmware(AsyncWebServerRequest* request) {
   std::unique_ptr<Gathered> g = gather();
   AsyncJsonResponse* response = new AsyncJsonResponse();
@@ -315,6 +346,15 @@ void handleFirmware(AsyncWebServerRequest* request) {
     i["size"] = image.size;
     i["packed"] = image.packed;
   }
+  // An image a release stored waits for this master to run that release.
+  String heldFor;
+  if (!stored && followerImageStoredFacts(image, heldFor) && heldFor.length() > 0) {
+    JsonObject i = root["rowImageHeld"].to<JsonObject>();
+    i["rev"] = jsonCopied(image.rev);
+    i["until"] = jsonCopied(heldFor.c_str());
+  }
+  root["running"]["commitTime"] = (uint32_t)GIT_COMMIT_TIME;
+  writeRelease(root["release"].to<JsonObject>());
   root["update"]["phase"] = wallUpdatePhaseName((WallUpdatePhase)g->wall.updatePhase);
   if (g->wall.updateRow >= 0 && g->wall.updateRow < g->wall.rows.count) {
     root["update"]["row"] = jsonCopied(g->wall.rows.rows[g->wall.updateRow].id);

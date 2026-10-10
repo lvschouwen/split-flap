@@ -53,6 +53,11 @@ bool webMqttApplyAlignment(const String& alignment);
 // (#432).
 void webRequestReboot(const char* cause);
 
+// An update from a release (#583) put an image where an upload would have:
+// the same notes, staged for the drain like an upload's ?v=.
+void webNoteRescueInstalled(const char* rev);
+void webNoteIntendedVersion(const char* rev);
+
 // Mutex-guarded reads for MQTT's retained diagnostics.
 String webTimezoneSnapshot();
 const char* webResetReasonString();

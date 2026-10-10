@@ -35,6 +35,8 @@ void followerImageStoreInit();
 // Stored-image queries (leaderTask eligibility, web status). Thread-safe.
 bool followerImageStored();
 String followerImageStoredRev();
+// The master rev the stored image waits for as it is on flash, "" for none.
+String followerImageStoredHeldFor();
 
 // What a row board is told about the stored image when it is offered over
 // the wall link (wl.Update), and checks its download against.

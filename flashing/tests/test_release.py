@@ -211,6 +211,26 @@ def test_the_manifest_is_refused_past_what_a_board_takes(world):
         release.build_manifest(images, "test", "t", "https://example.org/" + "x" * 2048, 1)
 
 
+def test_the_manifest_names_the_unit_firmware_that_reads_current_on_the_release(world):
+    assert release.unit_revs(world.repo, "HEAD") == []
+    data = world.repo / "firmware/v2/Master/data"
+    data.mkdir(parents=True)
+    (data / "unit-firmware.rev").write_text("0d90815\n")
+    (data / "unit-firmware.equiv").write_text("# the same image\n4fc4816\n0d90815\n")
+    git(world.repo, "add", "-A")
+    git(world.repo, "commit", "--quiet", "-m", "bundle")
+    revs = release.unit_revs(world.repo, "HEAD")
+    assert revs == ["0d90815", "4fc4816"]
+    images = release.Images(world.bins, world.rev, world.rev)
+    manifest = json.loads(release.build_manifest(images, "test", "t", "https://example.org/n", 1, revs))
+    assert manifest["units"] == {"revs": ["0d90815", "4fc4816"]}
+    assert "units" not in json.loads(release.build_manifest(images, "test", "t", "https://example.org/n", 1))
+    # More than a board keeps: not said at all, never cut short.
+    (data / "unit-firmware.equiv").write_text("\n".join(f"{i:07x}" for i in range(20)) + "\n")
+    git(world.repo, "commit", "--quiet", "-am", "many")
+    assert release.unit_revs(world.repo, "HEAD") == []
+
+
 def test_the_header_of_this_repository_carries_a_p256_key_and_a_host():
     header = HERE.parent / "firmware/v2/release/ReleaseSource.h"
     assert len(release.public_key_der_from_header(header)) == 91

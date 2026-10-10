@@ -22,6 +22,7 @@
 #include "OtaService.h"
 #include "OtaUploadGate.h"  // shared gate / completion / stall rules
 #include "ReflashPlan.h"
+#include "ReleaseUpdate.h"
 #include "Tasks.h"
 #include "WallState.h"
 
@@ -68,6 +69,14 @@ static AsyncWebServerRequest* rescueOwnerRequest = nullptr;
 // Independent of the two flows above.
 static int rowImageRejectStatus = 0;
 static String rowImageRejectReason;
+// The request whose row image is being accumulated, nullptr when none.
+static AsyncWebServerRequest* rowImageOwnerRequest = nullptr;
+
+// An update from a release (#583) feeds the same three writers, so while one
+// runs no upload may begin (tests/test_release_glue.py holds every upload
+// route to this).
+static const char RELEASE_UPDATE_RUNNING[] =
+    "an update from a release is running, retry after the restart";
 
 void webFirmwareRegister(AsyncWebServer& server) {
   // --- the stored row image, for the row boards (#559/#566) -------------------
@@ -106,6 +115,7 @@ void webFirmwareRegister(AsyncWebServer& server) {
   server.on(
       "/firmware/row", HTTP_POST,
       [](AsyncWebServerRequest* request) {
+        if (rowImageOwnerRequest == request) rowImageOwnerRequest = nullptr;
         if (rowImageRejectStatus != 0) {
           int s = rowImageRejectStatus;
           String r = rowImageRejectReason;
@@ -135,6 +145,11 @@ void webFirmwareRegister(AsyncWebServer& server) {
                 "Cross-origin row-image upload refused (CSRF guard)";
             return;
           }
+          if (releaseUpdateRunning()) {
+            rowImageRejectStatus = 409;
+            rowImageRejectReason = RELEASE_UPDATE_RUNNING;
+            return;
+          }
           String rev;
           if (!followerImageUploadAccepts(filename, rev)) {
             rowImageRejectStatus = 400;
@@ -161,6 +176,10 @@ void webFirmwareRegister(AsyncWebServer& server) {
             rowImageRejectReason = "cannot start: " + followerImageWriteError();
             return;
           }
+          rowImageOwnerRequest = request;
+          request->onDisconnect([request]() {
+            if (rowImageOwnerRequest == request) rowImageOwnerRequest = nullptr;
+          });
         }
         if (rowImageRejectStatus != 0) return;
         if (len > 0 && !followerImageWriteChunk(data, len, index)) {
@@ -245,6 +264,10 @@ void webFirmwareRegister(AsyncWebServer& server) {
             return;
           }
           otaRejection.clear();
+          if (releaseUpdateRunning()) {
+            otaRejection.set(409, String(RELEASE_UPDATE_RUNNING));
+            return;
+          }
 
           // INLINE before Update.begin: the CSRF middleware runs too late for
           // upload routes (post-body), so a forged cross-site POST would
@@ -425,6 +448,10 @@ void webFirmwareRegister(AsyncWebServer& server) {
             return;
           }
           rescueRejection.clear();
+          if (releaseUpdateRunning()) {
+            rescueRejection.set(409, String(RELEASE_UPDATE_RUNNING));
+            return;
+          }
 
           // INLINE before factoryWriteBegin — the CSRF middleware fires
           // post-body, too late for an upload route. No reflash gate: an
@@ -479,6 +506,10 @@ void webFirmwareRegister(AsyncWebServer& server) {
                                 "it finish, then retry."));
                 return;
               }
+              if (releaseUpdateRunning()) {
+                request->send(409, "text/plain", RELEASE_UPDATE_RUNNING);
+                return;
+              }
               if (!factorySlotImageValid()) {
                 request->send(409, "text/plain",
                               F("Factory slot holds no valid rescue image — "
@@ -512,6 +543,11 @@ void webFirmwareRegister(AsyncWebServer& server) {
 // owner marker the #313 stall watchdog clears, so a dead client stops
 // blocking after at most OTA_STALL_TIMEOUT_MS.
 bool webFirmwareOtaUploadActive() { return otaOwnerRequest != nullptr; }
+
+bool webFirmwareUploadActive() {
+  return otaOwnerRequest != nullptr || factoryInstallInProgress() ||
+         rowImageOwnerRequest != nullptr;
+}
 
 void webFirmwareLoop() {
   AsyncWebServerRequest* stalled = otaOwnerRequest.load();

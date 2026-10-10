@@ -44,6 +44,7 @@
 #include "Tasks.h"
 #include "UnitBus.h"  // the abort flag of Stop
 #include "ReflashPlan.h"
+#include "ReleaseUpdate.h"
 #include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
 
 // Staged mutations, owned here; drained by webEndpointsLoop(). External
@@ -291,7 +292,13 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       int unitCountBefore = settings.unitCountOverride;
       bool reflashOnBootBefore = settings.reflashOnBoot;
       bool quietBefore = settings.quiet;
+      bool releaseCheckBefore = settings.releaseCheck;
+      String releaseChannelBefore = settings.releaseChannel;
       applySettingsPost(pendingPost, settings, store);
+      if (settings.releaseCheck != releaseCheckBefore ||
+          settings.releaseChannel != releaseChannelBefore) {
+        releaseSetSettings(settings.releaseCheck, settings.releaseChannel);  // #583
+      }
       timezoneChanged = settings.timezonePosix != timezoneBefore;
 
       // #289 dummy mode: push a changed override to displayTask and queue a
@@ -502,6 +509,9 @@ const char* webRestartRefusal() {
     return "a firmware upload is running, retry when it has finished "
            "(a stalled one clears in 30 s)";
   }
+  if (releaseUpdateRunning()) {
+    return "an update from a release is running, retry when it has finished";
+  }
   return nullptr;
 }
 
@@ -616,6 +626,18 @@ void webRequestReboot(const char* cause) {
   pendingReboot = true;
   pendingRebootCause = cause;
   rebootRequestedAtMs = millis();
+}
+
+void webNoteRescueInstalled(const char* rev) {
+  WebStateLock lock;
+  pendingRescueRev = sanitizeIntendedVersion(String(rev));
+  pendingRescueRecord = true;
+}
+
+void webNoteIntendedVersion(const char* rev) {
+  WebStateLock lock;
+  pendingIntendedVersion = sanitizeIntendedVersion(String(rev));
+  pendingIntendedVersionProvided = true;
 }
 
 String webTimezoneSnapshot() {

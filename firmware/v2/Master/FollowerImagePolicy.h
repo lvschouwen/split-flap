@@ -60,3 +60,14 @@ inline bool followerImageChunkOk(size_t index, size_t accumulated, size_t len,
 inline bool followerImageHeld(const char* heldFor, const char* runningRev) {
   return heldFor != nullptr && heldFor[0] != 0 && strcmp(heldFor, runningRev) != 0;
 }
+
+// Does an update from a release store the release's row image? Not when that
+// image is stored already and on offer, or waiting for this very release. The
+// same image held for another master rev is stored again: that hold belongs
+// to a release that never got to run, and nothing else would end it.
+inline bool followerImageReleaseStores(const char* storedRev, const char* heldFor,
+                                       const char* runningRev, const char* releaseRowRev,
+                                       const char* releaseMasterRev) {
+  if (strcmp(storedRev, releaseRowRev) != 0) return true;
+  return followerImageHeld(heldFor, runningRev) && strcmp(heldFor, releaseMasterRev) != 0;
+}

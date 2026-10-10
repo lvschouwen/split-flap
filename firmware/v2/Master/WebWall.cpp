@@ -54,6 +54,7 @@
 #include "HelpersSerialHandling.h"
 #include "JsonCopied.h"
 #include "ReflashPlan.h"
+#include "ReleaseUpdate.h"
 #include "Tasks.h"
 #include "WallActions.h"
 #include "WallFind.h"
@@ -309,6 +310,10 @@ void handleJob(AsyncWebServerRequest* request, JsonVariantConst body, const Wall
   if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
     return sendError(request, 409, "a unit update is running, retry when it has finished");
   }
+  // It ends in a restart of this master, which would strand a unit mid-job.
+  if (releaseUpdateRunning()) {
+    return sendError(request, 409, "an update from a release is running, retry after the restart");
+  }
   if (row < 0) return startOwnJob(request, kind, op);
   startRowJob(request, kind, op, row, generation);
 }
@@ -435,6 +440,31 @@ void handleForgetWifi(AsyncWebServerRequest* request) {
   wifiStageReset();
 }
 
+// A look at the release site, or an update from what it has (#583). The
+// worker does both (ReleaseUpdate.h), one at a time. An update is refused
+// while anything else writes firmware; once it runs, the upload routes and
+// the unit jobs refuse in turn (releaseUpdateRunning()).
+void handleRelease(AsyncWebServerRequest* request, bool update) {
+  if (update) {
+    if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
+      return sendError(request, 409, "a unit update is running, retry when it has finished");
+    }
+    if (webFirmwareUploadActive()) {
+      return sendError(request, 409, "a firmware upload is running, retry when it has finished");
+    }
+  }
+  if (releaseBusy()) {
+    return sendError(request, 409, "a look for a release or an update from one is still running");
+  }
+  const uint32_t op = wallOpBegin(update ? "update-from-release" : "check-release", -1);
+  if (op == 0) return sendError(request, 503, "too many jobs are running");
+  if (!(update ? releaseAskUpdate(op) : releaseAskLook(op))) {
+    wallOpFinish(op, false, "a look for a release was still running");
+    return sendError(request, 409, "a look for a release or an update from one is still running");
+  }
+  sendOp(request, op);
+}
+
 void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   JsonVariantConst body = json;
   const char* name = body["name"].as<const char*>();
@@ -455,6 +485,8 @@ void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   if (strcmp(name, "restart") == 0) return handleRestart(request, body, table, generation);
   if (strcmp(name, "find-rows") == 0) return handleFindRows(request);
   if (strcmp(name, "forget-wifi") == 0) return handleForgetWifi(request);
+  if (strcmp(name, "check-release") == 0) return handleRelease(request, false);
+  if (strcmp(name, "update-from-release") == 0) return handleRelease(request, true);
   WebStateLock lock;
   staged = WallRequest{};
   const char* refusal = "no such action";
@@ -558,6 +590,9 @@ void handleWall(AsyncWebServerRequest* request) {
   if (wall->updateRow >= 0 && wall->updateRow < wall->rows.count) {
     root["update"]["row"] = jsonCopied(wall->rows.rows[wall->updateRow].id);
   }
+  // Only a release newer than what runs is worth a line on the wall's page.
+  char newer[RELEASE_TAG_MAX + 1];
+  if (releaseNewerTag(newer, sizeof(newer))) root["release"] = jsonCopied(newer);
   JsonArray rows = root["rows"].to<JsonArray>();
   if (wall->rows.count == 0 && own.displayWidth > 0) {
     // A master on its own keeps no table: its units are the wall's one row

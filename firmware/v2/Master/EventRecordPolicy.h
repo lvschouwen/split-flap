@@ -50,6 +50,8 @@ enum class EventKind : uint8_t {
   JobDone = 30,            // job number
   JobFailed = 31,          // job number
   RowEvent = 40,           // RowEventCode   its numbers (wall_link.proto)
+  ReleaseFound = 50,       //                master rev as a number   its commit time
+  UpdateStarted = 51,      //                master rev as a number   its commit time
 };
 
 inline const char* eventKindName(uint8_t kind) {
@@ -65,6 +67,8 @@ inline const char* eventKindName(uint8_t kind) {
     case EventKind::JobDone: return "job-done";
     case EventKind::JobFailed: return "job-failed";
     case EventKind::RowEvent: return "row-event";
+    case EventKind::ReleaseFound: return "release-found";
+    case EventKind::UpdateStarted: return "update-started";
   }
   return "?";
 }

@@ -8,7 +8,8 @@ import { dur, volt, listOf, flapName, plural } from '../model/format.js';
 import { unitVerdictText, boardVerdictText, wallVerdictText, letterClass } from '../model/verdict.js';
 import { boardUnits, tileLines, supplyBars, sparkPoints, boardFacts, startMarks } from '../model/board.js';
 import { showsText, unitFacts, correctedOffset, selfTestText } from '../model/unit.js';
-import { firmwareRows, firmwareVerdict, firmwareFile, installQuestion, firmwareJobs } from '../model/firmware.js';
+import { firmwareRows, firmwareVerdict, firmwareFile, installQuestion, firmwareJobs,
+         releaseText, releaseProgress, updateQuestion } from '../model/firmware.js';
 import { md5Hex } from '../model/md5.js';
 import { whenText, eventText, eventBoardId } from '../model/events.js';
 import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId, noFlapFor,
@@ -562,4 +563,60 @@ test('what a row board read off its dead unit bus reads as a sentence', () => {
   assert.equal(lines.why, 'Dead: SDA no rise, SCL 1.2 µs. Working: SDA 1.0 µs, SCL 1.1 µs.');
   assert.equal(eventText({ kind: 'row-event', event: 'bus-lines', a: 0, b: 0 }, 'Row 1', ALPHABET).why,
     'Dead: SDA not measured, SCL not measured. Not measured on the working bus yet.');
+});
+
+const NOW = 1791630000000;
+const RELEASE = { state: 'newer', check: true, lookedAt: 1791629400, channel: 'stable', tag: 'v2026.10.10',
+                  notes: 'https://example.org/notes', commitTime: 1791619200,
+                  master: 'bbb2222', rowImage: 'bbb2222', rescue: 'f8da0fa', unitRevs: '68b94c5,0d90815' };
+
+test('a newer release says what an update would change', () => {
+  const text = releaseText({ ...FIRMWARE, release: RELEASE }, NOW);
+  assert.equal(text.title, 'New release v2026.10.10');
+  assert.equal(text.canUpdate, true);
+  assert.equal(text.why, 'Looked 10 minutes ago.');
+  assert.deepEqual(text.changes, [
+    'Master firmware: aaa1111 becomes bbb2222.',
+    'Image for row boards: aaa1111 becomes bbb2222; the row boards install it once the master runs bbb2222.',
+  ]);
+  assert.match(updateQuestion(text), /^Update to v2026\.10\.10\? Master firmware: aaa1111 becomes bbb2222\./);
+});
+
+test('a release names the rescue image and the units only when they would change', () => {
+  const fw = { ...FIRMWARE, rowImageHeld: { rev: 'bbb2222', until: 'bbb2222' }, rowImage: undefined,
+               release: { ...RELEASE, rescue: 'ccc3333', unitRevs: 'ddd4444' } };
+  assert.deepEqual(releaseText(fw, NOW).changes, [
+    'Master firmware: aaa1111 becomes bbb2222.',
+    'Rescue image: f8da0fa becomes ccc3333.',
+    'Unit firmware: the units will read behind afterwards. Updating them stays a press of its own.',
+  ]);
+  // A release that does not say which unit firmware it counts as current says nothing about the units.
+  assert.equal(releaseText({ ...FIRMWARE, release: { ...RELEASE, unitRevs: undefined } }, NOW).changes.length, 2);
+});
+
+test('every other answer of a look offers no update', () => {
+  const say = (release) => releaseText({ ...FIRMWARE, release }, NOW);
+  assert.equal(say(undefined).title, 'Not looked for a release yet');
+  assert.equal(say({ state: 'not-looked', check: false }).why, 'The daily look is off.');
+  const same = say({ ...RELEASE, state: 'up-to-date' });
+  assert.deepEqual([same.cls, same.why, same.canUpdate], ['ok', 'The newest release is v2026.10.10. Looked 10 minutes ago.', undefined]);
+  const failed = say({ state: 'failed', check: true, why: 'the signature does not check out', lookedAt: 1791629990 });
+  assert.deepEqual([failed.cls, failed.why, failed.canUpdate],
+    ['note', 'the signature does not check out. Looked just now.', undefined]);
+});
+
+test('an update says which image it is downloading and how far it is', () => {
+  const at = (update) => releaseProgress({ release: { ...RELEASE, update } });
+  assert.equal(releaseProgress({ release: RELEASE }), '');
+  assert.equal(releaseProgress({}), '');
+  assert.equal(at({ op: 3, step: 'looking', done: 0, size: 0 }), 'Looking at the release\u2026');
+  assert.equal(at({ op: 3, step: 'master', done: 806192, size: 1612384 }), 'Downloading the master\u2019s firmware: 50 %');
+  assert.equal(at({ op: 3, step: 'restarting', done: 0, size: 0 }), 'Restarting into the release\u2026');
+});
+
+test('the history says a release was found and an update started', () => {
+  assert.deepEqual(eventText({ kind: 'release-found', a: 0x0bbb222 }, 'The master', ALPHABET),
+    { cls: 'info', title: 'A newer release was found', why: 'Master firmware 0bbb222.' });
+  assert.equal(eventText({ kind: 'update-started', a: 0x0bbb222 }, 'The master', ALPHABET).why,
+    'To master firmware 0bbb222.');
 });

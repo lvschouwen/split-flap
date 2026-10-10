@@ -101,6 +101,8 @@ void webSystemCoredumpEraseTick();
 // #395: live master-OTA upload session (owned by WebFirmware.cpp) — the
 // restart gate consults it so a restart can't tear a mid-flight flash write.
 bool webFirmwareOtaUploadActive();
+// Any of the three firmware uploads is writing (master, rescue, row image).
+bool webFirmwareUploadActive();
 void webFirmwareRegister(AsyncWebServer& server);
 void webWallRegister(AsyncWebServer& server);
 void webBoardRegister(AsyncWebServer& server);

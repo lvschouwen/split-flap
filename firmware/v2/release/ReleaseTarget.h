@@ -20,7 +20,7 @@
 #include "ReleaseFetch.h"
 
 // For the connection and for every read of it.
-#define RELEASE_HTTP_TIMEOUT_MS 15000
+#define RELEASE_HTTP_TIMEOUT_MS 10000
 
 class ReleaseSite : public ReleaseHooks {
  public:

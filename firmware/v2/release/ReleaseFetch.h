@@ -79,6 +79,21 @@ inline ReleaseError releaseLook(ReleaseHooks& hooks, const char* channel, Releas
   return releaseManifestRead(work.json, (size_t)jsonLen, channel, out);
 }
 
+// Is an image there, as long as the manifest says? Asked for every image of
+// an update before the first of them is written: a slot is erased as its
+// download begins, so what cannot be fetched is found out before that.
+inline ReleaseError releaseReachable(ReleaseHooks& hooks, const char* channel,
+                                     const ReleaseImage& image) {
+  char url[RELEASE_URL_MAX];
+  if (!releasePathOk(image.path) || !releaseUrl(url, sizeof(url), channel, image.path)) {
+    return ReleaseError::Path;
+  }
+  const long announced = hooks.open(url);
+  hooks.close();
+  if (announced < 0) return ReleaseError::NoAnswer;
+  return (uint32_t)announced == image.size ? ReleaseError::Ok : ReleaseError::Length;
+}
+
 // Downloads one image of a release into `writer`, through `buffer`.
 inline ReleaseError releaseInstall(ReleaseHooks& hooks, const char* channel,
                                    const ReleaseImage& image, ReleaseWriter& writer,

@@ -157,8 +157,31 @@ def entry(path: Path, rev: str, tag: str, with_md5: bool = False) -> dict:
     return item
 
 
+# A board keeps no longer list (RELEASE_UNIT_REVS_MAX in ReleaseManifest.h).
+UNIT_REVS_MAX_CHARS = 127
+
+
+def unit_revs(repo: Path, commit: str) -> list[str]:
+    """The unit firmware revs that read current on the release's master: the
+    bundle the commit carries and the revs recorded as the same image. Empty
+    when the commit carries none, or more than a board keeps: the page then
+    says nothing about the units."""
+    data = "firmware/v2/Master/data/unit-firmware"
+    revs: list[str] = []
+    for name in (f"{data}.rev", f"{data}.equiv"):
+        try:
+            text = run("git", "show", f"{commit}:{name}", cwd=repo)
+        except Refused:
+            continue
+        for line in text.splitlines():
+            rev = line.strip()
+            if rev and not rev.startswith("#") and rev not in revs:
+                revs.append(rev)
+    return revs if len(",".join(revs)) <= UNIT_REVS_MAX_CHARS else []
+
+
 def build_manifest(images: Images, channel: str, tag: str, notes_url: str,
-                   commit_time: int) -> bytes:
+                   commit_time: int, units: list[str] | None = None) -> bytes:
     """`channel` is inside what is signed: a board refuses a manifest of
     another channel, so a trial release cannot be served as a release."""
     manifest = {
@@ -171,6 +194,8 @@ def build_manifest(images: Images, channel: str, tag: str, notes_url: str,
         "row": entry(images.row_packed, images.rev, tag, with_md5=True),
         "rescue": entry(images.rescue, images.rescue_rev, tag),
     }
+    if units:
+        manifest["units"] = {"revs": units}
     data = (json.dumps(manifest, indent=1) + "\n").encode()
     if len(data) > MANIFEST_MAX_BYTES:
         raise Refused(f"the manifest is {len(data)} bytes; a board takes {MANIFEST_MAX_BYTES}")
@@ -320,7 +345,8 @@ def release(args: argparse.Namespace) -> str:
     notes_url = (f"https://github.com/{slug}/releases/tag/{tag}" if stable
                  else f"https://github.com/{slug}/commit/{commit}")
 
-    manifest = build_manifest(images, args.channel, tag, notes_url, commit_time)
+    manifest = build_manifest(images, args.channel, tag, notes_url, commit_time,
+                              unit_revs(repo, commit))
     key = args.key_dir / "release-key.pem"
     passphrase = args.key_dir / "release-key.pass"
     signature = sign(manifest, key, passphrase if passphrase.is_file() else None)

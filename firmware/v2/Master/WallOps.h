@@ -12,6 +12,7 @@
 #include <string.h>
 
 #define WALL_OPS_KEPT 16
+#define WALL_OP_DETAIL_MAX 96
 // WallOp.row of a job on the master's own units (which need not be in the
 // rows table at all).
 #define WALL_OP_OWN_ROW (-2)
@@ -25,8 +26,8 @@ struct WallOp {
   // for a job that is not about one row.
   int8_t row = -1;
   uint8_t unit = 0;  // the unit's bus address, 0 = not about one unit
-  char name[16] = {0};
-  char detail[96] = {0};  // Done: the result; Failed: the reason
+  char name[24] = {0};
+  char detail[WALL_OP_DETAIL_MAX] = {0};  // Done: the result; Failed: the reason
 };
 
 struct WallOps {

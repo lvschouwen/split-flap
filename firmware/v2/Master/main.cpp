@@ -33,6 +33,7 @@
 #include "BootTrace.h"  // #504
 #include "CrashContext.h"  // #504
 #include "RebootCause.h"  // #432
+#include "ReleaseUpdate.h"
 #include "Settings.h"
 #include "StatusLed.h"
 #include "SystemStats.h"
@@ -254,6 +255,7 @@ void setup() {
 
   // After webEndpointsInit/wifiServiceInit: netTask ticks both and needs
   // their mutexes to exist before its first pass.
+  releaseInit(settings.releaseCheck, settings.releaseChannel);  // #583: the worker reads it
   tasksInit(settings, settingsStore);
   SerialPrintln(F("task skeleton up: display+clock on core 1, net+mqtt on core 0"));
 }

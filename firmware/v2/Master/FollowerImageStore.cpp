@@ -117,6 +117,12 @@ String followerImageStoredRev() {
   return storedRev;
 }
 
+String followerImageStoredHeldFor() {
+  if (imgMutex == nullptr) return String();
+  ImgLock lock;
+  return storedHeldFor;
+}
+
 bool followerImageTryClaimRelay() {
   if (imgMutex == nullptr) return false;
   ImgLock lock;
