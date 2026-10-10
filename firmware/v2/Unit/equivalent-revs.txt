@@ -127,3 +127,8 @@ f4fcbdc b8f637b0681e94d909b0f575e6aca7d304ea2a3af90f2552415ba722ac751ccc
 # update began to take an address the scan did not see (#554), a shared header
 # the unit does not compile.
 4fc4816 3d6f16ede09c438c374e748f9ef59372f7bfa71610d8f6efe45abc0b5e8d2d2e
+#
+# 0d90815: the bundle rev since a unit keeps its own record of its master's
+# silences (#584); all 21 units report it. Recorded when a home job began to
+# end on the unit's own word (#605), a shared header the unit does not compile.
+0d90815 683f7073addc63f77ec2839ed5e8750b3bdca4f5343a1266502d74d6be224165
