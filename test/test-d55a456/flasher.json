@@ -1,0 +1,25 @@
+{
+ "name": "Split-Flap",
+ "version": "test-d55a456",
+ "new_install_prompt_erase": true,
+ "builds": [
+  {
+   "chipFamily": "ESP32-S3",
+   "parts": [
+    {
+     "path": "factory-d55a456-master.bin",
+     "offset": 0
+    }
+   ]
+  },
+  {
+   "chipFamily": "ESP8266",
+   "parts": [
+    {
+     "path": "follower-d55a456.bin",
+     "offset": 0
+    }
+   ]
+  }
+ ]
+}
