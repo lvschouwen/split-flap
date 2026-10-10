@@ -121,3 +121,9 @@ f4fcbdc b8f637b0681e94d909b0f575e6aca7d304ea2a3af90f2552415ba722ac751ccc
 # writing a hold page first and the first page last (#554), shared headers
 # the unit does not compile.
 3636a95 3d6f16ede09c438c374e748f9ef59372f7bfa71610d8f6efe45abc0b5e8d2d2e
+#
+# 4fc4816: the bundle rev since a stopped flash resets into the bootloader's
+# hold (#554); unit 6 of the master's row reports it. Recorded when a forced
+# update began to take an address the scan did not see (#554), a shared header
+# the unit does not compile.
+4fc4816 3d6f16ede09c438c374e748f9ef59372f7bfa71610d8f6efe45abc0b5e8d2d2e
