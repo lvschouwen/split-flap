@@ -1,0 +1,26 @@
+{
+ "format": 1,
+ "channel": "test",
+ "tag": "test-18e3be0",
+ "notes": "https://github.com/lvschouwen/split-flap/commit/18e3be0de3d9cdfe268eba00142c79623f749ea3",
+ "commitTime": 1791622102,
+ "master": {
+  "rev": "18e3be0",
+  "path": "test-18e3be0/firmware-18e3be0-master.bin",
+  "size": 1612384,
+  "sha256": "a808ec127945aee4919c447b1adf1a19509a3f1d9ba606433f49df205d9aa68f"
+ },
+ "row": {
+  "rev": "18e3be0",
+  "path": "test-18e3be0/follower-18e3be0-gz.bin",
+  "size": 326333,
+  "sha256": "111e97b1bc443cc87347f5a55d2792d06f07a8c7877f90d0b1fd5a086958c9ab",
+  "md5": "00eb07effbdd46ccab01b9f639c481e5"
+ },
+ "rescue": {
+  "rev": "47640a1",
+  "path": "test-18e3be0/rescue-47640a1.bin",
+  "size": 997696,
+  "sha256": "7ed7232f144008d4c2d05b53f3643130946f8942236dd84c68762a152cb9f8fb"
+ }
+}

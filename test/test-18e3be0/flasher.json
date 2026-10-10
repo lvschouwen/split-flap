@@ -1,0 +1,25 @@
+{
+ "name": "Split-Flap",
+ "version": "test-18e3be0",
+ "new_install_prompt_erase": true,
+ "builds": [
+  {
+   "chipFamily": "ESP32-S3",
+   "parts": [
+    {
+     "path": "factory-18e3be0-master.bin",
+     "offset": 0
+    }
+   ]
+  },
+  {
+   "chipFamily": "ESP8266",
+   "parts": [
+    {
+     "path": "follower-18e3be0.bin",
+     "offset": 0
+    }
+   ]
+  }
+ ]
+}
