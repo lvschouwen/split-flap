@@ -41,6 +41,9 @@ ESP_WEB_TOOLS_VERSION = "10.4.0"
 ESP_WEB_TOOLS_INTEGRITY = ("sha512-3pwkeFFm5Fj7UQo8SJNYK5RXrtNCpq6X9QoI6bMT4GBZWgrJqjn0YvM9ihG74BtM"
                            "oSFYXfmDtkehuxe50PTMPQ==")
 ESP_WEB_TOOLS_DIR = "esp-web-tools"
+# Where the installer leaves its loader for the page, which takes it there to
+# show what the loader says and to set the speed of the link.
+ESP_WEB_TOOLS_LOADER_HANDLE = b"window.esploader="
 
 
 class Refused(Exception):
@@ -141,18 +144,16 @@ def newest_rescue_rev(bins: Path, repo: Path, rev: str) -> str:
     return best[1]
 
 
-def merge_factory(images: Images, master_build: Path, out: Path, esptool: list[str]) -> None:
-    """Whole-flash image of a master: the build's bootloader + partition table +
-    application, and the rescue image in the factory slot."""
+def factory_image(images: Images, master_build: Path) -> Path:
+    """A master's flash up to the end of its application: the build's
+    bootloader, partition table and application in one image for offset 0."""
     base = master_build / "firmware.factory.bin"
     app = master_build / "firmware.bin"
     if not base.is_file() or not app.is_file() or sha256(app) != sha256(images.master):
         raise Refused(
             f"{master_build} does not hold the build of {images.rev}: build the Master "
-            "at that commit (the whole-flash image is merged from its bootloader and "
-            "partition table)")
-    run(*esptool, "--chip", "esp32s3", "merge-bin", "-o", str(out),
-        "0x0", str(base), hex(RESCUE_OFFSET), str(images.rescue))
+            "at that commit (its bootloader and partition table are published from there)")
+    return base
 
 
 # --- what is published -------------------------------------------------------
@@ -212,13 +213,16 @@ def build_manifest(images: Images, channel: str, tag: str, notes_url: str,
 
 
 def flasher_manifest(images: Images, tag: str, factory_name: str) -> bytes:
-    """What ESP Web Tools reads: one build per chip, each one file at offset 0."""
+    """What ESP Web Tools reads: one build per chip. A master's two pieces go
+    each to its own offset, so nothing is written to the flash between them."""
     return (json.dumps({
         "name": "Split-Flap",
         "version": tag,
         "new_install_prompt_erase": True,
         "builds": [
-            {"chipFamily": "ESP32-S3", "parts": [{"path": factory_name, "offset": 0}]},
+            {"chipFamily": "ESP32-S3", "parts": [
+                {"path": factory_name, "offset": 0},
+                {"path": images.rescue.name, "offset": RESCUE_OFFSET}]},
             {"chipFamily": "ESP8266", "parts": [{"path": images.row_plain.name, "offset": 0}]},
         ],
     }, indent=1) + "\n").encode()
@@ -245,10 +249,8 @@ def write_esp_web_tools(site: Path) -> None:
     digest = "sha512-" + base64.b64encode(hashlib.sha512(package).digest()).decode()
     if digest != ESP_WEB_TOOLS_INTEGRITY:
         raise Refused("the ESP Web Tools package is not the pinned one")
-    if target.exists():
-        shutil.rmtree(target)
-    target.mkdir(parents=True)
     prefix = "package/dist/web/"
+    scripts: dict[str, bytes] = {}
     with tarfile.open(fileobj=io.BytesIO(package), mode="r:gz") as archive:
         for member in archive.getmembers():
             name = member.name[len(prefix):]
@@ -256,9 +258,17 @@ def write_esp_web_tools(site: Path) -> None:
             if (not member.isfile() or not member.name.startswith(prefix)
                     or not re.fullmatch(r"[A-Za-z0-9._-]+\.js", name)):
                 continue
-            (target / name).write_bytes(archive.extractfile(member).read())
-    if not (target / "install-button.js").is_file():
+            scripts[name] = archive.extractfile(member).read()
+    if "install-button.js" not in scripts:
         raise Refused("the ESP Web Tools package holds no install-button.js")
+    if not any(ESP_WEB_TOOLS_LOADER_HANDLE in script for script in scripts.values()):
+        raise Refused("this ESP Web Tools no longer hands the page its loader: the page's "
+                      "install log and link speed depend on it")
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+    for name, script in scripts.items():
+        (target / name).write_bytes(script)
     marker.write_text(ESP_WEB_TOOLS_VERSION + "\n")
 
 
@@ -337,24 +347,6 @@ def check_tag_free(repo: Path, tag: str) -> None:
         raise Refused(f"{tag} exists: one release a day")
 
 
-def default_esptool() -> list[str]:
-    """An esptool that runs and is recent enough for the S3 and `merge-bin`
-    (v4.7). PlatformIO's own is v3; one on PATH may be a broken install."""
-    candidates = [["esptool"], ["uv", "run", "--no-project", "--with", "esptool>=4.7",
-                                "python", "-m", "esptool"]]
-    if os.environ.get("ESPTOOL"):
-        candidates.insert(0, os.environ["ESPTOOL"].split())
-    for candidate in candidates:
-        try:
-            done = subprocess.run(candidate + ["version"], capture_output=True, text=True)
-        except OSError:
-            continue
-        version = re.search(r"(\d+)\.(\d+)", done.stdout.splitlines()[-1] if done.stdout else "")
-        if done.returncode == 0 and version and (int(version[1]), int(version[2])) >= (4, 7):
-            return candidate
-    raise Refused("no esptool of v4.7 or later (install it, or set ESPTOOL)")
-
-
 # --- the run -----------------------------------------------------------------
 
 def parse(argv: list[str]) -> argparse.Namespace:
@@ -409,8 +401,7 @@ def release(args: argparse.Namespace) -> str:
         raise Refused("the key that signed is not the one in ReleaseSource.h: no wall would accept this")
 
     with tempfile.TemporaryDirectory() as tmp:
-        factory = Path(tmp) / "factory.bin"
-        merge_factory(images, repo / "firmware/v2/Master/.pio/build/master", factory, default_esptool())
+        factory = factory_image(images, repo / "firmware/v2/Master/.pio/build/master")
         site = Path(tmp) / "site"
         run("git", "clone", "--quiet", "--branch", "gh-pages", "--single-branch", "--depth", "1",
             args.site_remote or origin, str(site))

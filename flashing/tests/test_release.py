@@ -2,7 +2,7 @@
 
 What a release must never do is publish something a wall will refuse, or
 something that is not what was staged. Each test runs the real steps (git,
-openssl) in a temporary directory; only esptool's merge is stood in for.
+openssl) in a temporary directory.
 """
 import base64
 import hashlib
@@ -127,7 +127,7 @@ def pin(monkeypatch, package: bytes) -> list[int]:
 
 TOOLS = {
     "package/dist/web/install-button.js": b"button",
-    "package/dist/web/install-dialog-im156JnI.js": b"dialog",
+    "package/dist/web/install-dialog-im156JnI.js": b"dialog;window.esploader=h,more",
     "package/dist/web/../../../escaped.js": b"outside",
     "package/dist/web/deeper/other.js": b"not flat",
     "package/dist/install-button.js": b"another build",
@@ -138,14 +138,6 @@ TOOLS = {
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     pin(monkeypatch, tools_package(TOOLS))
-    merge = tmp_path / "merge.py"
-    merge.write_text(
-        "import sys\n"
-        "a = sys.argv[1:]\n"
-        "out = a[a.index('-o') + 1]\n"
-        "parts = a[a.index('-o') + 2:]\n"
-        "open(out, 'wb').write(b'|'.join(open(p, 'rb').read() for p in parts[1::2]))\n")
-    monkeypatch.setattr(release, "default_esptool", lambda: [sys.executable, str(merge)])
     return World(tmp_path)
 
 
@@ -172,9 +164,15 @@ def test_test_channel_publishes_what_was_staged_under_a_signature_that_checks_ou
     assert not release.verifies(manifest_bytes.replace(b"master", b"mastes", 1), signature, public)
     flasher = json.loads((site / "test" / tag / "flasher.json").read_text())
     for build in flasher["builds"]:
-        assert (site / "test" / tag / build["parts"][0]["path"]).is_file()
+        for part in build["parts"]:
+            assert (site / "test" / tag / part["path"]).is_file()
+    # Each piece of a master goes where it lives: nothing is written between them.
+    master = next(b for b in flasher["builds"] if b["chipFamily"] == "ESP32-S3")
+    assert master["parts"] == [
+        {"path": f"factory-{world.rev}-master.bin", "offset": 0},
+        {"path": f"rescue-{world.rev}.bin", "offset": release.RESCUE_OFFSET}]
     factory = (site / "test" / tag / f"factory-{world.rev}-master.bin").read_bytes()
-    assert factory == b"bootloader+table+master image|rescue image"
+    assert factory == b"bootloader+table+master image"
     assert not (site / "releases").exists()
     assert git(world.repo, "tag") == ""
 
@@ -337,6 +335,15 @@ def test_a_package_that_is_not_the_pinned_one_stops_the_release(world, monkeypat
     assert not (site / "esp-web-tools").exists() and not (site / "test").exists()
 
 
+def test_a_package_that_does_not_hand_the_page_its_loader_stops_the_release(world, monkeypatch):
+    pin(monkeypatch, tools_package({"package/dist/web/install-button.js": b"button",
+                                    "package/dist/web/install-dialog-x.js": b"dialog"}))
+    with pytest.raises(release.Refused, match="loader"):
+        release.release(world.args())
+    site = world.published()
+    assert not (site / "esp-web-tools").exists() and not (site / "test").exists()
+
+
 # --- the page, the script and the boards agree (spec, section 11) -------------
 
 REAL_REPO = HERE.parent
@@ -349,6 +356,11 @@ def test_the_page_reads_what_the_script_publishes():
     assert f'"{release.ESP_WEB_TOOLS_DIR}/install-button.js"' in page
     assert f'"{release.CHANNEL_DIR["stable"]}/"' in page
     assert f"/{release.CHANNEL_DIR['test']}\\/" in page
+
+
+def test_the_page_takes_the_loader_where_the_script_checks_it_is_handed_over():
+    name = re.fullmatch(rb"window\.(\w+)=", release.ESP_WEB_TOOLS_LOADER_HANDLE)[1].decode()
+    assert f'Object.defineProperty(window, "{name}"' in PAGE.read_text()
 
 
 def test_the_page_loads_no_script_from_another_site():

@@ -29,7 +29,7 @@ A `gh-pages` branch of this repository, served as `split-flap.vanschouwen.nl`:
 | `/releases/<tag>/firmware-<rev>-master.bin` | Master image (what `POST /firmware/master` takes) |
 | `/releases/<tag>/follower-<rev>-gz.bin` | Row image, packed (what `POST /firmware/row` takes) |
 | `/releases/<tag>/rescue-<rev>.bin` | Rescue image (what `POST /firmware/rescue` takes) |
-| `/releases/<tag>/factory-<rev>-master.bin` | Whole-flash image of a master for USB: bootloader, partition table, application, rescue |
+| `/releases/<tag>/factory-<rev>-master.bin` | A master's flash up to the end of its application, for USB: bootloader, partition table, application. The flasher writes the rescue image beside it at its own offset |
 | `/releases/<tag>/follower-<rev>.bin` | Row image, plain, for USB |
 | `/releases/<tag>/flasher.json` | What the flasher page reads for this release |
 | `/test/...` | The same layout for a trial release (section 5) |
@@ -85,8 +85,8 @@ The rescue slot and the stored row image are compared by rev against the manifes
 
 `flashing/release.py`, run on the build machine, replaces the manual tag-and-notes steps:
 
-1. Takes the commit the staged images were built from (`--rev`, `HEAD` by default) and refuses unless: the tree is clean; that commit is on the pushed `master`; CI is green on it; the master and row images staged in `~/bench-bins` carry its rev, and the Master build directory holds that same build (the whole-flash image is merged from its bootloader and partition table); no tag exists for today. The rescue image is the newest staged one built from a commit that the release contains.
-2. Builds the whole-flash master image and writes `flasher.json`.
+1. Takes the commit the staged images were built from (`--rev`, `HEAD` by default) and refuses unless: the tree is clean; that commit is on the pushed `master`; CI is green on it; the master and row images staged in `~/bench-bins` carry its rev, and the Master build directory holds that same build (its bootloader and partition table are published from there); no tag exists for today. The rescue image is the newest staged one built from a commit that the release contains.
+2. Takes the master's USB image from that build directory and writes `flasher.json`.
 3. Writes the manifest, signs it, and checks the signature with the public key from `ReleaseSource.h` — a key pair that does not match stops here.
 4. Commits to `gh-pages` (new directory, `latest.json` and its signature last, old directories pruned) and pushes.
 5. Creates the annotated tag at that commit and the GitHub release with the notes file it was given. The images are attached to the GitHub release as well.
@@ -152,10 +152,12 @@ The page looks first (`POST /rescue/release/look`) and then installs the release
 
 A static page at `/` using ESP Web Tools (a pinned version; Chrome and Edge only, since it needs Web Serial). ESP Web Tools is served from the site itself, under `/esp-web-tools/`: the release script unpacks it from the npm package of one exact version, after checking the package against the registry's hash for it. The page loads no script from another site. Its source is `flashing/site/index.html`; a trial release publishes its copy at `/test/` and leaves `/` alone. Two buttons:
 
-- **Master (ESP32-S3, 16 MB)** — the whole-flash image at offset 0.
+- **Master (ESP32-S3, 16 MB)** — the USB image at offset 0 and the rescue image at its slot (0x830000), as two parts: the 6.8 MB between them is not written.
 - **Row board (ESP-01, 1 MB)** — the plain row image at offset 0.
 
 Both buttons hand ESP Web Tools the release's one `flasher.json`: it reads which chip is connected and takes the image made for it.
+
+**Install log and link speed.** ESP Web Tools shows a percentage only and fixes the link at 115200 baud, with no setting for either. Its loader (esptool-js) says every step to a terminal when it has one, and the installer leaves the loader on `window.esploader` before the first step. The page takes it there: it gives the loader a log panel at the foot of the page as its terminal, with the time of each line, and sets the link to 460800 baud (`?baud=115200` on the page's address falls back). The panel also lists what the installer itself reports: the board found, the images taken for it, and why an install stopped. The release script refuses an ESP Web Tools that no longer leaves the loader there.
 
 After flashing, each board is set up through its own WiFi portal as today. The page also carries the short "what next" text: join WiFi, open the master, pair the rows.
 
