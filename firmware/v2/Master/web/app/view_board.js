@@ -6,9 +6,9 @@ import { getJson, putJson, action } from './api.js';
 import { runJob, targetRow } from './jobs.js';
 import { wallLayout, boardTitle } from '../model/wall.js';
 import { boardVerdictText, levelClass } from '../model/verdict.js';
-import { boardUnits, tileLines, supplyBars, sparkPoints, boardFacts, startMarks,
-         SUPPLY_FLOOR_MV, SUPPLY_TOP_MV } from '../model/board.js';
-import { volt } from '../model/format.js';
+import { boardUnits, tileLines, sparkPoints, boardFacts, startMarks, unitsBehind,
+         boardReach } from '../model/board.js';
+import { plural } from '../model/format.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 
@@ -29,12 +29,19 @@ function spark(values, label) {
   return svg;
 }
 
+// Groups of [label, value, why, class] rows; a folded group goes under the
+// others, closed.
 export function factGroups(groups, extra) {
-  return h('div', { class: 'facts' }, groups.map((group) =>
-    h('dl', {}, h('h3', {}, group.title),
-      group.rows.map(([label, value, why]) => [
-        h('dt', {}, label), h('dd', {}, value), why && h('div', { class: 'why' }, why)]),
-      extra && extra[group.title])));
+  const list = (group) => h('dl', {}, group.folded ? null : h('h3', {}, group.title),
+    group.rows.map(([label, value, why, cls]) => [
+      h('dt', {}, label), h('dd', { class: cls }, value), why && h('div', { class: 'why' }, why)]),
+    extra && extra[group.title]);
+  return [h('div', { class: 'facts' }, groups.filter((g) => !g.folded).map(list)),
+    groups.filter((g) => g.folded).map((group) =>
+      h('details', {}, h('summary', {}, group.title),
+        h('div', { class: 'in' },
+          h('p', { class: 'muted small' }, 'Numbers the master keeps but does not judge.'),
+          h('div', { class: 'facts' }, list(group)))))];
 }
 
 // The master's own settings. Kept across refreshes while it is being edited.
@@ -102,10 +109,10 @@ export function boardView(app, id) {
       h('div', { class: 'head' }, h('h1', {}, title), pill(verdict.cls, verdict.title),
         h('span', { class: 'muted small' },
           [board.id, board.kind === 'master' ? 'master' : 'row board', board.address].filter(Boolean).join(', '))),
-      h('p', { class: 'muted' }, verdict.why));
+      h('p', { class: 'muted' }, verdict.why),
+      verdict.todo ? h('p', {}, verdict.todo) : null);
 
     const units = boardUnits(board);
-    const supply = supplyBars(units);
     // A place of the ring that was not filled yet reads 0.
     const rssi = ((board.stats && board.stats.hist && board.stats.hist.rssi) || []).filter((v) => v !== 0);
     const marks = startMarks(board);
@@ -117,14 +124,6 @@ export function boardView(app, id) {
                 h('b', {}, 'Unit ' + unit.address),
                 tileLines(unit, ALPHABET).map((line) => h('span', {}, line)))))
           : h('p', { class: 'muted small' }, 'The master has no unit facts of this board.')),
-      supply.bars.length > 0 && h('div', { class: 'section' }, h('h2', {}, 'Supply voltage per unit'),
-        h('div', { class: 'bars' }, supply.bars.map((bar) =>
-          h('i', { class: bar.lowest ? 'low' : null, style: `height:${bar.percent}%`,
-                   title: `Unit ${bar.address}: lowest ${volt(bar.mv)}` }))),
-        h('div', { class: 'axis' },
-          h('span', {}, 'Unit ' + supply.bars[0].address),
-          h('span', {}, `Lowest seen since each unit started, ${volt(SUPPLY_FLOOR_MV)} to ${volt(SUPPLY_TOP_MV)}. Lowest here ${volt(supply.lowestMv)}, marked dark.`),
-          h('span', {}, 'Unit ' + supply.bars[supply.bars.length - 1].address))),
       factGroups(boardFacts(board, units), {
         Connection: rssi.length > 1 && h('div', { class: 'why' },
           spark(rssi, 'WiFi signal, last 10 minutes'),
@@ -137,18 +136,29 @@ export function boardView(app, id) {
       }));
 
     const busy = !!board.jobRunning;
+    const reach = boardReach(board);
+    const behind = unitsBehind(units);
+    const reason = (board.verdict || {}).reason;
     fill(actions,
-      h('button', { type: 'button', class: 'btn', disabled: busy,
+      reach.units && h('button', { type: 'button', class: 'btn', disabled: busy,
                     onclick: job('Finding home on all units', 'home-all') }, 'Find home on all units'),
-      h('button', { type: 'button', class: 'btn', disabled: busy,
+      reach.units && behind > 0 && h('button', { type: 'button', class: 'btn primary', disabled: busy,
                     onclick: job('Updating the units that need it', 'update-units',
-                      'Update every unit of this row that runs other firmware? The row shows nothing meanwhile.') },
-        'Update units'),
-      h('button', { type: 'button', class: 'btn',
+                      `Update ${plural(behind, 'unit')} of this row to the unit firmware the board holds? The row shows nothing meanwhile.`) },
+        `Update ${plural(behind, 'unit')}`),
+      reach.board && board.updateBlocked && h('button', { type: 'button', class: 'btn primary',
+                    onclick: () => runJob(status, 'Offering the image', 'update', { row: id }) },
+        'Offer the stored image again'),
+      reach.board && h('button', { type: 'button', class: 'btn',
                     onclick: job('Restarting the board', 'restart', 'Restart this board?') }, 'Restart board'),
+      ['rescue', 'update-blocked', 'firmware-differs'].includes(reason)
+        && h('a', { class: 'btn quiet', href: '#firmware' }, 'Firmware'),
       h('a', { class: 'btn quiet', href: '#history/' + id }, 'What happened on this board'),
       h('a', { class: 'btn quiet', href: '#log/' + id }, 'Raw log'),
-      busy && h('span', { class: 'muted small' }, 'A job is running on this row.'));
+      busy && h('span', { class: 'muted small' }, 'A job is running on this row.'),
+      reach.why && h('span', { class: 'muted small' }, reach.why),
+      reach.units && units.length > 0 && behind === 0
+        && h('span', { class: 'muted small' }, 'Every unit runs the unit firmware this board holds: nothing to update.'));
 
     if (board.kind === 'master' && board.settings && settingsFor !== id) {
       settingsFor = id;

@@ -57,30 +57,43 @@ const UNIT = {
     `${plural(a, 'time')} since the master started, ${b} over its lifetime. It is at home now.`],
 };
 
+// A third sentence says what to do about it, or that there is nothing to do.
 const BOARD = {
   'working': (a, b) => ['Working', `${plural(a, 'unit')} found. Running for ${dur(b)}.`],
-  'lost': (a) => ['Lost', `Not heard for ${dur(a)}.`],
-  'never-seen': () => ['Never seen', 'It has not connected since the master started.'],
-  'rescue': () => ['In rescue mode', 'It runs its rescue image and leaves its units alone until it is updated.'],
+  'lost': (a) => ['Lost', `Not heard for ${dur(a)}.`,
+    'Check that it has power and is in reach of the WiFi. It connects again by itself.'],
+  'never-seen': () => ['Never seen', 'It has not connected since the master started.',
+    'Check that it has power and is in reach of the WiFi. It connects by itself.'],
+  'rescue': () => ['In rescue mode', 'It runs its rescue image and leaves its units alone until it is updated.',
+    'Nothing to do while the master holds an image for row boards: it is offered that by itself. Firmware shows whether one is stored.'],
   'bus-dead': (a) => ['Unit bus dead',
-    `None of its units answer. The bus has gone dead ${plural(a, 'time')} since the board started.`],
-  'update-blocked': (a) => ['Update blocked', `${plural(a, 'offer')} of the stored image failed.`],
-  'units-missing': (a, b) => ['Units missing', `${a} of ${plural(b, 'unit')} found.`],
+    `None of its units answer. The bus has gone dead ${plural(a, 'time')} since the board started.`,
+    'Check the cable from the board to its first unit and the units’ power. The board keeps asking, and the row comes back by itself.'],
+  'update-blocked': (a) => ['Update blocked', `${plural(a, 'offer')} of the stored image failed.`,
+    'Press “Offer the stored image again” below.'],
+  'units-missing': (a, b) => ['Units missing', `${a} of ${plural(b, 'unit')} found.`,
+    'Check the cable to the first place that does not answer; the page of that place says what the master sees.'],
   'units-fault': (a, b) => [a === 1 ? '1 unit has a fault' : `${a} units have a fault`,
-    `${b - a} of ${plural(b, 'unit')} working.`],
-  'updating': () => ['Updating', 'It is installing new firmware.'],
-  'updating-units': () => ['Updating its units', 'Unit firmware is being written; the row shows nothing meanwhile.'],
-  'away': (a) => ['Away', `Not heard for ${dur(a)}; it may be restarting.`],
-  'units-unknown': () => ['Units not read yet', 'It has not sent its unit facts yet.'],
-  'clock-not-set': () => ['Clock not set', 'It has no time yet, so its row may flip late.'],
-  'firmware-differs': () => ['Other firmware than the master', 'It will be offered the stored image.'],
-  'units-note': (a, b) => ['Working', `All ${plural(b, 'unit')} answer, ${a} with a note.`],
+    `${b - a} of ${plural(b, 'unit')} working.`, 'Open a unit marked red below: its page says what is wrong.'],
+  'updating': () => ['Updating', 'It is installing new firmware.', 'Nothing to do: it is back in about a minute.'],
+  'updating-units': () => ['Updating its units', 'Unit firmware is being written; the row shows nothing meanwhile.',
+    'Nothing to do until it is done.'],
+  'away': (a) => ['Away', `Not heard for ${dur(a)}; it may be restarting.`, 'Nothing to do yet.'],
+  'units-unknown': () => ['Units not read yet', 'It has not sent its unit facts yet.', 'Nothing to do: they follow.'],
+  'clock-not-set': () => ['Clock not set', 'It has no time yet, so its row may flip late.',
+    'Nothing to do: it asks the master for the time by itself.'],
+  'firmware-differs': () => ['Other firmware than the master holds for it', 'It will be offered the stored image.',
+    'Nothing to do: the master offers it by itself.'],
+  'units-note': (a, b) => ['Working, with notes', `All ${plural(b, 'unit')} answer, ${a} with a note.`,
+    'Nothing to do: a unit marked amber below says what was noted.'],
 };
+
+export const BOARD_REASON_NAMES = Object.keys(BOARD);
 
 function say(table, verdict, alphabet) {
   const words = table[verdict.reason];
-  const [title, why] = words ? words(verdict.a, verdict.b, alphabet) : [verdict.reason, ''];
-  return { cls: levelClass(verdict.level), title, why };
+  const [title, why, todo] = words ? words(verdict.a, verdict.b, alphabet) : [verdict.reason, ''];
+  return { cls: levelClass(verdict.level), title, why, todo: todo || '' };
 }
 
 // {level, reason, a, b} -> {cls, title, why}

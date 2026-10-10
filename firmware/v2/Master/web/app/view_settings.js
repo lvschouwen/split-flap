@@ -56,15 +56,15 @@ function rowsPart(app, draft, status, found) {
                                maxlength: 15, autocomplete: 'off', inputmode: 'decimal' });
   return h('div', { class: 'section' }, h('h2', {}, 'Rows'),
     h('p', { class: 'muted small' }, 'Which board drives which row, top to bottom, how many units it has, and where the row starts. Boards with the same row number hang side by side.'),
-    h('div', { class: 'scroll' }, h('table', {},
+    h('div', { class: 'scroll' }, h('table', { class: 'cards' },
       h('thead', {}, h('tr', {}, ['Row', 'Board', 'Units', 'Starts at column', ''].map((t) => h('th', {}, t)))),
       h('tbody', {}, draft.map((line) => h('tr', {},
-        h('td', {}, place(line, 'row', 'Row')),
-        h('td', {}, h('a', { href: '#board/' + line.name }, line.name),
+        h('td', { 'data-l': 'Row' }, place(line, 'row', 'Row')),
+        h('td', { class: 'lead' }, h('a', { href: '#board/' + line.name }, line.name),
           h('div', { class: 'muted small' }, line.own ? 'master' : 'row board')),
-        h('td', {}, place(line, 'width', 'Number of units')),
-        h('td', {}, place(line, 'col', 'Start column')),
-        h('td', {}, !line.own && h('button', { type: 'button', class: 'btn quiet', onclick: () => {
+        h('td', { 'data-l': 'Units' }, place(line, 'width', 'Number of units')),
+        h('td', { 'data-l': 'Starts at column' }, place(line, 'col', 'Start column')),
+        h('td', { class: 'side' }, !line.own && h('button', { type: 'button', class: 'btn quiet', onclick: () => {
           if (!window.confirm(`Remove ${line.name} from the wall? It shows nothing of the wall until it is added again.`)) return;
           runJob(status, 'Removing the board', 'release', { row: line.id }).then(done);
         } }, 'Remove'))))))),

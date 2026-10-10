@@ -32,7 +32,8 @@ export function calibrateView(app) {
   const button = (text, run, cls) =>
     h('button', { type: 'button', class: 'btn' + (cls ? ' ' + cls : ''),
                   onclick: () => { if (!busy) run(); } }, text);
-  const go = (to) => { step = to; draw(); };
+  // What was said belongs to the step that is left.
+  const go = (to) => { step = to; status.say(''); draw(); };
 
   // Also asked for again after a correction: the same text changes nothing
   // on the wall and starts its time anew.
@@ -46,7 +47,6 @@ export function calibrateView(app) {
     try {
       await showLetter();
       marked.clear();
-      status.say('');
       go(2);
     } catch (error) {
       status.say(error.message, true);
@@ -118,7 +118,9 @@ export function calibrateView(app) {
       const key = `${board.id}/${cell.unit}`;
       const dead = cell.cls === 'bad';
       return h('button', {
-        ...attrs, type: 'button', disabled: dead, class: attrs.class + (marked.has(key) ? ' sel' : ''),
+        // No verdict colours here: the only mark on this picture is the reader's.
+        ...attrs, type: 'button', disabled: dead,
+        class: 'flap plain' + (dead ? ' bad' : '') + (marked.has(key) ? ' sel' : ''),
         'aria-pressed': String(marked.has(key)),
         onclick: () => {
           if (!marked.delete(key)) marked.add(key);
@@ -161,8 +163,8 @@ export function calibrateView(app) {
       const n = marked.size;
       fill(picture, pickPicture());
       fill(body,
-        h('p', { class: 'muted' }, `The wall should now show ${name} everywhere. ` +
-          'Tap each flap here that shows something else on the real wall.'),
+        h('p', { class: 'muted' }, `The drums are turning to ${name}: wait until the real wall stands still. ` +
+          'Then mark each flap here that shows something else on the real wall.'),
         picture,
         h('div', { class: 'rowwrap' },
           n ? button(`Continue with ${plural(n, 'unit')}`, () => go(3), 'primary')

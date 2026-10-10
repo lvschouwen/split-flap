@@ -111,12 +111,15 @@ export function firmwareView(app) {
     }
     const rows = firmwareRows(fw);
     const verdict = firmwareVerdict(rows);
-    fill(head, h('h1', {}, 'Firmware'), pill(verdict.cls, verdict.title));
-    fill(table, h('div', { class: 'scroll' }, h('table', {},
+    fill(head, h('h1', {}, 'Firmware'), pill(verdict.cls, verdict.title),
+      verdict.why ? h('span', { class: 'muted small' }, verdict.why) : null);
+    fill(table, h('div', { class: 'scroll' }, h('table', { class: 'cards' },
       h('thead', {}, h('tr', {}, ['What', 'Should be', 'Is', ''].map((t) => h('th', {}, t)))),
       h('tbody', {}, rows.map((row) => h('tr', {},
-        h('td', {}, h('b', {}, row.what), h('div', { class: 'muted small' }, row.note)),
-        h('td', {}, row.shouldBe), h('td', {}, row.is), h('td', {}, pill(row.cls, row.state))))))));
+        h('td', { class: 'lead' }, h('b', {}, row.what), h('div', { class: 'muted small' }, row.note),
+          row.todo ? h('div', { class: 'small' }, row.todo) : null),
+        h('td', { 'data-l': 'Should be' }, row.shouldBe), h('td', { 'data-l': 'Is' }, row.is),
+        h('td', { class: 'side' }, pill(row.cls, row.state))))))));
     const release = releaseText(fw, Date.now());
     const progress = releaseProgress(fw);
     fill(releaseLine, itemList([{ cls: release.cls, title: release.title, why: progress || release.why,

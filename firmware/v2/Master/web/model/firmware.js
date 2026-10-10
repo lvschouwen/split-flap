@@ -1,33 +1,59 @@
 // The Firmware view, from GET /api/v2/firmware. Pure.
 import { plural, kb } from './format.js';
 
-// What should be running and what is: rows of {what, note, shouldBe, is, cls, state}.
+// What should be running and what is: rows of {what, note, shouldBe, is, cls,
+// state, todo}. A row that is not `ok` says in `todo` what to do about it, or
+// that there is nothing to do.
 export function firmwareRows(fw) {
   const rows = [];
   const rowBoards = (fw.boards || []).filter((b) => b.kind === 'row');
   const image = fw.rowImage;
+  const held = fw.rowImageHeld;
+  const release = fw.release || {};
   rows.push({ what: 'Master firmware', shouldBe: '', is: fw.master.rev, cls: 'ok', state: 'running',
               note: 'What was last installed on the master.' });
-  if (rowBoards.length) {
+  if (rowBoards.length && image) {
     // A row board should run the image the master holds for it.
-    const behind = rowBoards.filter((b) => !b.current).length;
+    const behind = rowBoards.filter((b) => !b.current);
+    const blocked = behind.filter((b) => b.updateBlocked).length;
     rows.push({
-      what: 'Row board firmware', shouldBe: image ? image.rev : '',
-      is: `${rowBoards.length - behind} of ${plural(rowBoards.length, 'row board')}`,
-      cls: behind ? 'note' : 'ok', state: behind ? plural(behind, 'board') + ' behind' : 'current',
-      note: behind ? 'A row board on other firmware is offered the stored image by itself.'
-        : 'Row boards get their copy from the master by themselves.',
+      what: 'Row board firmware', shouldBe: image.rev,
+      is: `${rowBoards.length - behind.length} of ${plural(rowBoards.length, 'row board')}`,
+      cls: behind.length ? 'note' : 'ok',
+      state: behind.length ? plural(behind.length, 'board') + ' behind' : 'current',
+      note: 'Row boards get their copy from the master by themselves.',
+      todo: !behind.length ? '' : blocked
+        ? `On ${plural(blocked, 'board')} the stored image failed to install three times: press “offer the stored image again” below.`
+          + (blocked < behind.length ? ' The others are offered it by the master, one at a time.' : '')
+        : 'Nothing to do: the master offers the stored image by itself, one board at a time.',
     });
+  } else if (rowBoards.length) {
+    // Nothing to hold them against: what they run is all there is to say.
+    rows.push({ what: 'Row board firmware', shouldBe: '', cls: 'ok', state: 'running',
+                is: [...new Set(rowBoards.map((b) => b.rev || 'not heard yet'))].join(', '),
+                note: 'Row boards get their copy from the master by themselves.' });
   }
-  if (rowBoards.length || image) {
-    // Built from the same commit, the two speak the same link.
-    const same = image && image.rev === fw.master.rev;
+  if (image) {
+    // No rev is the right one: the row boards run this image whatever build
+    // the master is on, and a board that cannot talk to the master reads lost.
+    const same = image.rev === fw.master.rev;
+    const released = release.tag && release.rowImage === image.rev;
     rows.push({
-      what: 'Stored image for row boards', shouldBe: fw.master.rev, is: image ? image.rev : 'none',
-      cls: same ? 'ok' : 'note', state: same ? 'matches' : image ? 'another build' : 'missing',
-      note: image ? `Kept on the master, ${kb(image.size)}${image.packed ? ' packed' : ''}.`
-        + (same ? '' : ' It is from another build than the master\u2019s firmware.')
-        : 'Upload a row board image so the master can hand it out.',
+      what: 'Stored image for row boards', shouldBe: '', is: image.rev, cls: 'ok',
+      state: same ? 'the master’s build' : released ? `release ${release.tag}` : 'another build, fine',
+      note: `Kept on the master, ${kb(image.size)}${image.packed ? ' packed' : ''}. The row boards install this one.`,
+    });
+  } else if (held) {
+    rows.push({
+      what: 'Stored image for row boards', shouldBe: '', is: held.rev, cls: 'note', state: 'waiting',
+      note: `A release stored it; it is kept back until the master runs ${held.until}.`,
+      todo: 'Update to the release under Release, or store a row board image from a file below.',
+    });
+  } else if (rowBoards.length) {
+    rows.push({
+      what: 'Stored image for row boards', shouldBe: '', is: 'none', cls: 'note', state: 'missing',
+      note: 'Without it the master cannot bring a row board back to working firmware.',
+      todo: 'Choose follower-…-gz.bin under “Install an update” below.',
     });
   }
   const units = fw.units || {};
@@ -37,6 +63,8 @@ export function firmwareRows(fw) {
       cls: units.outdated ? 'note' : units.unknown ? 'unknown' : 'ok',
       state: units.outdated ? plural(units.outdated, 'unit') + ' behind' : units.unknown ? 'not all read' : 'current',
       note: units.unknown ? `${plural(units.unknown, 'unit')} could not be read.` : 'The same image on every unit.',
+      todo: units.outdated ? 'Press the update button of each board below.'
+        : units.unknown ? 'Nothing to do here: the page of their board says why those units do not answer.' : '',
     });
   }
   const boot = fw.bootloaders || {};
@@ -47,6 +75,9 @@ export function firmwareRows(fw) {
       state: boot.damaged ? plural(boot.damaged, 'unit') + ' damaged'
         : boot.outdated ? plural(boot.outdated, 'unit') + ' behind' : boot.unread ? 'not all read' : 'current',
       note: 'Every unit checks its own bootloader every 10 minutes.',
+      todo: boot.damaged || boot.outdated
+        ? 'The page of its board marks the unit; “Update bootloader” is on the unit’s own page, under Service.'
+        : boot.unread ? 'Nothing to do: a unit that answers is read within 10 minutes.' : '',
     });
   }
   const rescue = fw.rescue || {};
@@ -57,6 +88,7 @@ export function firmwareRows(fw) {
     state: rescue.warn ? 'install again' : rescue.state === 'stale' ? 'older, fine' : rescue.state || 'unknown',
     note: rescue.warn ? 'The rescue image is missing or does not match what the master expects.'
       : 'What the master starts when its own firmware does not.',
+    todo: rescue.warn ? 'Choose rescue-….bin under “Install an update” below.' : '',
   });
   return rows;
 }
@@ -120,11 +152,15 @@ export function updateQuestion(release) {
   return `Update to ${release.tag}? ${release.changes.join(' ')} The master restarts, and the wall is blank for about half a minute.`;
 }
 
+// The headline says no more than its rows: `why` names each row that is not
+// green, with its state.
+const VERDICT_TITLES = { bad: 'Something needs installing', note: 'Not everything is up to date',
+                         unknown: 'Not everything could be read' };
 export function firmwareVerdict(rows) {
-  if (rows.some((r) => r.cls === 'bad')) return { cls: 'bad', title: 'Something needs installing' };
-  if (rows.some((r) => r.cls === 'note')) return { cls: 'note', title: 'Not everything is up to date' };
-  if (rows.some((r) => r.cls === 'unknown')) return { cls: 'unknown', title: 'Not everything could be read' };
-  return { cls: 'ok', title: 'Everything is up to date' };
+  const cause = rows.filter((r) => r.cls !== 'ok');
+  const cls = ['bad', 'note', 'unknown'].find((level) => cause.some((r) => r.cls === level));
+  if (!cls) return { cls: 'ok', title: 'Everything is up to date', why: '' };
+  return { cls, title: VERDICT_TITLES[cls], why: cause.map((r) => `${r.what}: ${r.state}`).join('; ') + '.' };
 }
 
 // What a firmware file is for, from the name the build gives it:

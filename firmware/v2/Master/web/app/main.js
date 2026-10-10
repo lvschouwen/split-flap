@@ -40,8 +40,10 @@ function route() {
 function refresh() {
   const wall = app.state.wall;
   const top = document.getElementById('topPill');
-  if (!app.state.link) fill(top, pill('bad', 'No contact with the master'));
-  else if (wall) fill(top, pill(wall.verdict === 'fault' ? 'bad' : 'ok', wall.verdict === 'fault' ? 'Needs attention' : 'Working'));
+  // A phone has room for one word next to the links.
+  const words = (wide, narrow) => [h('span', { class: 'w' }, wide), h('span', { class: 'n' }, narrow)];
+  if (!app.state.link) fill(top, pill('bad', words('No contact with the master', 'No contact')));
+  else if (wall) fill(top, pill(wall.verdict === 'fault' ? 'bad' : 'ok', wall.verdict === 'fault' ? words('Needs attention', 'Attention') : 'Working'));
   if (wall) document.getElementById('name').textContent = wall.master.id;
   if (app.view) app.view.refresh();
 }

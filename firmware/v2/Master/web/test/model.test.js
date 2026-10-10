@@ -5,8 +5,10 @@ import assert from 'node:assert/strict';
 
 import { ALPHABET } from '../gen/constants.js';
 import { dur, volt, listOf, flapName, plural } from '../model/format.js';
-import { unitVerdictText, boardVerdictText, wallVerdictText, letterClass } from '../model/verdict.js';
-import { boardUnits, tileLines, supplyBars, sparkPoints, boardFacts, startMarks } from '../model/board.js';
+import { unitVerdictText, boardVerdictText, wallVerdictText, letterClass,
+         BOARD_REASON_NAMES } from '../model/verdict.js';
+import { boardUnits, tileLines, lowestSupply, unitsBehind, boardReach, startWords, sparkPoints, boardFacts,
+         startMarks } from '../model/board.js';
 import { showsText, unitFacts, correctedOffset, selfTestText } from '../model/unit.js';
 import { firmwareRows, firmwareVerdict, firmwareFile, installQuestion, firmwareJobs,
          releaseText, releaseProgress, updateQuestion } from '../model/firmware.js';
@@ -65,7 +67,7 @@ test('a flap is named by the character at its place on the drum', () => {
 test('a unit verdict says what its two numbers mean', () => {
   const low = unitVerdictText({ level: 'fault', reason: 'low-supply', a: 3900, b: 4000 }, ALPHABET);
   assert.deepEqual(low, { cls: 'bad', title: 'Low supply',
-    why: 'Lowest supply since it started: 3.90 V. Units warn below 4.00 V.' });
+    why: 'Lowest supply since it started: 3.90 V. Units warn below 4.00 V.', todo: '' });
   const wrong = unitVerdictText({ level: 'note', reason: 'wrong-letter', a: 30, b: 0 }, ALPHABET);
   assert.match(wrong.why, /stands at 0,/);
   assert.equal(wrong.cls, 'note');
@@ -73,7 +75,7 @@ test('a unit verdict says what its two numbers mean', () => {
 
 test('a reason the page does not know is shown by its wire name', () => {
   const text = unitVerdictText({ level: 'note', reason: 'brand-new', a: 1, b: 2 }, ALPHABET);
-  assert.deepEqual(text, { cls: 'note', title: 'brand-new', why: '' });
+  assert.deepEqual(text, { cls: 'note', title: 'brand-new', why: '', todo: '' });
   assert.equal(boardVerdictText({ level: 'fault', reason: 'brand-new' }).title, 'brand-new');
   assert.equal(letterClass('x'), 'unknown');
 });
@@ -176,24 +178,48 @@ test('the text sent is a line a row, without empty lines at the end', () => {
 });
 
 test('a tile says what the unit shows, or why it cannot', () => {
-  const [working, , , silent] = boardUnits({ units: { fields: FIELDS, rows: [
+  const [working, , faulty, silent] = boardUnits({ units: { fields: FIELDS, rows: [
     unitRow(1, 'working', 'working'), unitRow(2, 'note', 'jammed'), unitRow(3, 'fault', 'hall-never'),
     [4, 'fault', 'not-answering', 9, 9, 'running', null, null, null, null, null, null, 7, null]] } });
   assert.deepEqual(tileLines(working, ALPHABET), ['shows blank', '5.00 V']);
   assert.deepEqual(tileLines({ ...working, shows: 1 }, ALPHABET), ['shows A', '5.00 V']);
   assert.deepEqual(tileLines({ ...working, shows: null }, ALPHABET), ['flap unknown', '5.00 V']);
-  assert.deepEqual(tileLines(silent, ALPHABET), ['no reply']);
   assert.deepEqual(tileLines({ ...working, state: 'bootloader' }, ALPHABET), ['in bootloader', '5.00 V']);
+  // A unit with a fault says the fault, not the flap it stands at.
+  assert.equal(tileLines(faulty, ALPHABET)[0], 'Never saw its home sensor');
+  assert.deepEqual(tileLines(silent, ALPHABET), ['Not answering']);
 });
 
-test('the supply chart marks the weakest unit and never draws an empty bar', () => {
+test('the weakest supply is named with its unit', () => {
   const units = [{ address: 1, supplyMinMv: 5300 }, { address: 2, supplyMinMv: 4650 },
                  { address: 3, supplyMinMv: 3900 }, { address: 4, supplyMinMv: null }];
-  const chart = supplyBars(units);
-  assert.equal(chart.lowestMv, 3900);
-  assert.deepEqual(chart.bars.map((b) => [b.address, b.percent, b.lowest]),
-                   [[1, 100, false], [2, 50, false], [3, 6, true]]);
-  assert.deepEqual(supplyBars([]), { lowestMv: null, bars: [] });
+  assert.deepEqual(lowestSupply(units), { mv: 3900, address: 3 });
+  assert.equal(lowestSupply([{ address: 4, supplyMinMv: null }]), null);
+});
+
+test('a button is offered when it has something to do', () => {
+  assert.equal(unitsBehind([{ firmware: 'current' }, { firmware: 'outdated' }, { firmware: null }]), 1);
+  assert.deepEqual(boardReach({ verdict: { reason: 'working' } }), { board: true, units: true, why: '' });
+  for (const reason of ['lost', 'never-seen', 'away']) {
+    const reach = boardReach({ verdict: { reason } });
+    assert.deepEqual([reach.board, reach.units], [false, false], reason);
+    assert.ok(reach.why);
+  }
+  const rescue = boardReach({ verdict: { reason: 'rescue' } });
+  assert.deepEqual([rescue.board, rescue.units], [true, false]);
+  assert.ok(rescue.why);
+});
+
+test('why a board started is said in words, with what the board said under it', () => {
+  assert.deepEqual(startWords('Software reset', 'reboot requested (unattributed)'),
+    ['It was restarted on purpose', 'As the board says it: Software reset.']);
+  assert.deepEqual(startWords('Panic', 'LoadProhibited in displayTask'),
+    ['Its firmware crashed', 'As the board says it: Panic: LoadProhibited in displayTask.']);
+  assert.equal(startWords('Power on')[0], 'The power was switched on');
+  assert.equal(startWords('Brownout')[0], 'Its supply voltage dropped too low');
+  assert.equal(startWords('Task watchdog')[0], 'It hung and its watchdog restarted it');
+  assert.deepEqual(startWords('Something new', 'x'), ['Something new: x', null]);
+  assert.equal(startWords(undefined), null);
 });
 
 test('a history ring becomes a line from left to right', () => {
@@ -202,36 +228,55 @@ test('a history ring becomes a line from left to right', () => {
   assert.equal(sparkPoints([1], 300, 40), '');
 });
 
-test('the facts of the master and of a row board answer the same four questions', () => {
+test('the facts of the master and of a row board answer the same questions, counters last and folded', () => {
   const master = boardFacts({ kind: 'master', address: '10.0.0.2', rev: 'aaa1111', mqttConnected: true,
     stats: { now: { rssi: -52, txPower: 20, heap: 61440, minHeap: 36864, temp: 316, uptime: 5620,
                     i2cTx: 13780, i2cErr: 0, ntpAge: 5611 } },
-    network: { gw: 'ok', self: 'fail' }, lastStart: { reset: 'Software reset', cause: 'asked for' },
+    network: { gw: 'fail', self: 'ok' }, lastStart: { reset: 'Software reset', cause: 'asked for' },
     rescue: { rev: 'bbb2222', state: 'stale', warn: false } }, [{ address: 1, supplyMinMv: 4850 }]);
-  assert.deepEqual(master.map((g) => g.title), ['Connection', 'Unit bus', 'Running', 'Firmware']);
+  assert.deepEqual(master.map((g) => [g.title, g.folded]),
+    [['Connection', false], ['Unit bus', false], ['Running', false], ['Firmware', false], ['Counters', true]]);
   const find = (groups, label) => groups.flatMap((g) => g.rows).find((r) => r[0] === label);
+  assert.deepEqual(find(master, 'WiFi signal'), ['WiFi signal', '-52 dBm, good']);
+  // What the page itself proves is not listed; what is plainly wrong is marked.
+  assert.equal(find(master, 'Own web server answers'), undefined);
+  assert.deepEqual(find(master, 'Router reachable'), ['Router reachable', 'no', null, 'bad']);
+  assert.deepEqual(find(master, 'Last start'),
+    ['Last start', 'It was restarted on purpose', 'As the board says it: Software reset: asked for.', undefined]);
+  assert.deepEqual(find(master, 'Lowest unit supply').slice(0, 2), ['Lowest unit supply', '4.85 V (unit 1)']);
+  assert.deepEqual(master[4].rows.map((r) => r[0]), ['Unit bus exchanges since start', 'of which failed',
+    'Free memory', 'Lowest it has been', 'Chip temperature', 'Transmit power']);
   assert.deepEqual(find(master, 'Transmit power'), ['Transmit power', '5 dBm']);
-  assert.deepEqual(find(master, 'Own web server answers'), ['Own web server answers', 'no']);
-  assert.deepEqual(find(master, 'Exchanges since start'), ['Exchanges since start', '13,780']);
-  assert.deepEqual(find(master, 'Chip temperature'), ['Chip temperature', '31.6 °C']);
-  assert.deepEqual(find(master, 'Last start'), ['Last start', 'Software reset', 'asked for']);
-  assert.deepEqual(find(master, 'Lowest unit supply'), ['Lowest unit supply', '4.85 V']);
 
-  const row = boardFacts({ kind: 'row', pairedAt: '10.0.0.3', reach: 'up', heardMsAgo: 1400, rev: 'aaa1111',
+  const row = boardFacts({ kind: 'row', pairedAt: '10.0.0.3', reach: 'down', heardMsAgo: 1400, rev: 'aaa1111',
     rescue: false, connects: 2, restarts: 1, lastLateMs: 0, worstLateMs: 12, updateAttempts: 0,
-    status: { uptimeS: 5223, heap: 35000, heapMin: 32120, rssi: -57, txPowerDbm: 2, busTx: 12326,
+    status: { uptimeS: 5223, heap: 35000, heapMin: 32120, rssi: -77, txPowerDbm: 2, busTx: 12326,
               busErrors: 11514, busDead: true, busEpisodes: 6, escalations: 1, imageSize: 460752,
               timeSynced: true } }, []);
-  assert.deepEqual(row.map((g) => g.title), ['Connection', 'Unit bus', 'Running', 'Firmware']);
+  assert.deepEqual(row.map((g) => g.title), ['Connection', 'Unit bus', 'Running', 'Firmware', 'Counters']);
   assert.deepEqual(find(row, 'Address'), ['Address', '10.0.0.3']);
-  assert.deepEqual(find(row, 'Dead now'), ['Dead now', 'yes']);
+  assert.deepEqual(find(row, 'Link to the master'), ['Link to the master', 'down', null, 'bad']);
+  assert.deepEqual(find(row, 'WiFi signal'), ['WiFi signal', '-77 dBm, weak']);
+  assert.deepEqual(find(row, 'Answers now'), ['Answers now', 'no', null, 'bad']);
   assert.deepEqual(find(row, 'Row flips late by'), ['Row flips late by', '0 ms', 'Worst since it connected: 12 ms.']);
   assert.equal(find(row, 'Lowest unit supply'), undefined);
+  assert.equal(row[4].rows.length, 11);
 });
 
 test('a fact the board did not give is left out, not shown as zero', () => {
   const groups = boardFacts({ kind: 'row' }, []);
   assert.deepEqual(groups.flatMap((g) => g.rows), []);
+  assert.equal(groups.some((g) => g.folded), false);
+});
+
+test('a board verdict that is not plain working says what to do, or that there is nothing to do', () => {
+  assert.ok(BOARD_REASON_NAMES.length >= 15);
+  for (const reason of BOARD_REASON_NAMES) {
+    const text = boardVerdictText({ level: 'fault', reason, a: 2, b: 16 });
+    if (reason !== 'working') assert.ok(text.todo, reason + ' says nothing to do about it');
+  }
+  assert.equal(boardVerdictText({ level: 'note', reason: 'units-note', a: 1, b: 16 }).title, 'Working, with notes');
+  assert.equal(boardVerdictText({ level: 'working', reason: 'working', a: 16, b: 60 }).todo, '');
 });
 
 test('starts are marked by whether the power was cut', () => {
@@ -327,13 +372,29 @@ test('a wall that is up to date says so line by line', () => {
   assert.deepEqual(rows.map((r) => [r.what, r.shouldBe, r.is, r.state]), [
     ['Master firmware', '', 'aaa1111', 'running'],
     ['Row board firmware', 'aaa1111', '1 of 1 row board', 'current'],
-    ['Stored image for row boards', 'aaa1111', 'aaa1111', 'matches'],
+    ['Stored image for row boards', '', 'aaa1111', 'the master’s build'],
     ['Unit firmware', '68b94c5', '21 of 21 units', 'current'],
     ['Unit bootloader', '506b3970', '21 of 21 units intact', 'current'],
     ['Rescue image (master)', '', 'f8da0fa', 'older, fine'],
   ]);
-  assert.deepEqual(firmwareVerdict(rows), { cls: 'ok', title: 'Everything is up to date' });
+  assert.deepEqual(firmwareVerdict(rows), { cls: 'ok', title: 'Everything is up to date', why: '' });
   assert.deepEqual(firmwareJobs(FIRMWARE), []);
+});
+
+test('a master ahead of the release, with everything else current, is up to date', () => {
+  // The wall after a master-only fix on top of a release (#587).
+  const fw = structuredClone(FIRMWARE);
+  fw.master.rev = fw.boards[0].rev = 'ccc3333';
+  fw.release = { state: 'up-to-date', tag: 'v2026.10.10', master: 'aaa1111', rowImage: 'aaa1111', rescue: 'aaa1111' };
+  const rows = firmwareRows(fw);
+  assert.deepEqual(rows.find((r) => r.what === 'Stored image for row boards'),
+    { what: 'Stored image for row boards', shouldBe: '', is: 'aaa1111', cls: 'ok', state: 'release v2026.10.10',
+      note: 'Kept on the master, 318 KB packed. The row boards install this one.' });
+  assert.equal(firmwareVerdict(rows).title, 'Everything is up to date');
+  // A stored image that is nobody's release is as good while the row boards run it.
+  fw.release = undefined;
+  assert.equal(firmwareRows(fw)[2].state, 'another build, fine');
+  assert.equal(firmwareVerdict(firmwareRows(fw)).cls, 'ok');
 });
 
 test('what is behind is counted, and what can be started about it is offered', () => {
@@ -346,17 +407,56 @@ test('what is behind is counted, and what can be started about it is offered', (
   fw.rowImage.rev = 'bbb2222';
   const rows = firmwareRows(fw);
   assert.deepEqual(rows.map((r) => [r.cls, r.state]), [
-    ['ok', 'running'], ['note', '1 board behind'], ['note', 'another build'], ['note', '3 units behind'],
+    ['ok', 'running'], ['note', '1 board behind'], ['ok', 'another build, fine'], ['note', '3 units behind'],
     ['bad', '1 unit damaged'], ['ok', 'older, fine']]);
   assert.equal(rows[1].shouldBe, 'bbb2222');
-  fw.rowImage = null;
-  assert.equal(firmwareRows(fw)[2].state, 'missing');
-  assert.equal(firmwareVerdict(rows).cls, 'bad');
+  assert.match(rows[1].todo, /offer the stored image again/);
+  assert.deepEqual(firmwareVerdict(rows), { cls: 'bad', title: 'Something needs installing',
+    why: 'Row board firmware: 1 board behind; Unit firmware: 3 units behind; Unit bootloader: 1 unit damaged.' });
   assert.deepEqual(firmwareJobs(fw).map((j) => [j.id, j.name, j.target, j.label]), [
     ['wall-master', 'update-units', { row: '' }, 'Update 3 units'],
     ['wall-row', 'update', { row: 'wall-row' }, 'Offer the stored image again']]);
+  fw.boards[1].updateBlocked = false;
+  assert.match(firmwareRows(fw)[1].todo, /^Nothing to do/);
 });
 
+test('without a stored image the row boards are not called behind', () => {
+  const fw = structuredClone(FIRMWARE);
+  fw.rowImage = undefined;
+  delete fw.boards[1].current;
+  assert.deepEqual(firmwareRows(fw).slice(1, 3).map((r) => [r.what, r.is, r.cls, r.state]), [
+    ['Row board firmware', 'aaa1111', 'ok', 'running'],
+    ['Stored image for row boards', 'none', 'note', 'missing']]);
+  // One a release stored waits for the master to run that release.
+  fw.rowImageHeld = { rev: 'bbb2222', until: 'bbb2222' };
+  const held = firmwareRows(fw)[2];
+  assert.deepEqual([held.is, held.cls, held.state], ['bbb2222', 'note', 'waiting']);
+  assert.match(held.note, /until the master runs bbb2222/);
+});
+
+test('every line that is not green says what to do, and the headline names it', () => {
+  const shapes = [
+    { rescue: { rev: '', state: 'missing', warn: true } },
+    { rowImage: undefined },
+    { rowImage: undefined, rowImageHeld: { rev: 'bbb2222', until: 'bbb2222' } },
+    { units: { shouldBe: '68b94c5', total: 21, current: 18, outdated: 3, unknown: 0 } },
+    { units: { shouldBe: '68b94c5', total: 21, current: 19, outdated: 0, unknown: 2 } },
+    { bootloaders: { shouldBe: '506b3970', total: 21, ok: 20, outdated: 0, damaged: 1, unread: 0 } },
+    { bootloaders: { shouldBe: '506b3970', total: 21, ok: 20, outdated: 1, damaged: 0, unread: 0 } },
+    { bootloaders: { shouldBe: '506b3970', total: 21, ok: 20, outdated: 0, damaged: 0, unread: 1 } },
+    { boards: [FIRMWARE.boards[0], { ...FIRMWARE.boards[1], current: false }] },
+    { boards: [FIRMWARE.boards[0], { ...FIRMWARE.boards[1], current: false, updateBlocked: true }] },
+  ];
+  for (const shape of shapes) {
+    const rows = firmwareRows({ ...FIRMWARE, ...shape });
+    const cause = rows.filter((r) => r.cls !== 'ok');
+    assert.equal(cause.length, 1, JSON.stringify(shape));
+    assert.ok(cause[0].todo, `${cause[0].what} is ${cause[0].state} and says nothing to do about it`);
+    const verdict = firmwareVerdict(rows);
+    assert.equal(verdict.cls, cause[0].cls);
+    assert.equal(verdict.why, `${cause[0].what}: ${cause[0].state}.`);
+  }
+});
 test('a firmware file is known by the name the build gives it', () => {
   assert.deepEqual(firmwareFile('firmware-9618d55-master.bin'),
     { kind: 'master', rev: '9618d55', route: '/firmware/master', label: 'the master’s firmware' });
