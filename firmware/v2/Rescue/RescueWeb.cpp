@@ -1,6 +1,7 @@
 #include "RescueWeb.h"
 
 #include <Update.h>
+#include <WiFi.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 
@@ -8,6 +9,7 @@
 
 #include "BuildVersion.h"
 #include "RescueAssets.h"
+#include "RescueReleaseJob.h"  // the release site as a second source for app0
 #include "LanOrigin.h"  // CSRF origin gate on mutating POSTs (#349)
 #include "OtaUploadGate.h"  // shared gate / completion / stall rules
 #include "RescueSlotRecord.h"
@@ -54,6 +56,38 @@ static bool rescueUploadCsrfRejected(AsyncWebServerRequest* request) {
 static void stageReboot() {
   rebootRequestedAtMs.store(millis());
   rebootPending.store(true);
+}
+
+// Joined to the owner's WiFi. In its own access point this board has no way
+// to the release site.
+static bool rescueOnline() {
+  return WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED;
+}
+
+// POST /rescue/release/look and /install: the job is admitted here, on the
+// web server's task, where an upload is admitted too.
+static void handleReleaseAsk(AsyncWebServerRequest* request, bool install) {
+  // An install is for the release the page showed: the board looks again,
+  // and writes nothing when the site has another one by then.
+  if (rescueUploadCsrfRejected(request)) {
+    request->send(403, "text/plain", F("Cross-origin request refused (CSRF guard)"));
+    return;
+  }
+  const String channel =
+      request->hasParam("channel") ? request->getParam("channel")->value() : String("stable");
+  const String tag = request->hasParam("tag") ? request->getParam("tag")->value() : String();
+  const RescueReleaseRefusal refusal = rescueReleaseRefusal(
+      rescueOnline(), masterOtaOwnerRequest != nullptr, rescueReleaseRunning(),
+      rebootPending.load(), channel.c_str(), install ? tag.c_str() : nullptr);
+  if (refusal.status != 0) {
+    request->send(refusal.status, "text/plain", refusal.why);
+    return;
+  }
+  if (!rescueReleaseAsk(channel.c_str(), install ? tag.c_str() : nullptr)) {
+    request->send(409, "text/plain", F("Already looking at or installing a release"));
+    return;
+  }
+  request->send(202, "text/plain", install ? F("Installing") : F("Looking"));
 }
 
 struct SlotProbe {
@@ -146,12 +180,19 @@ static String statusJson() {
   int exitSlot = pickExitSlot(exitCandidate(app0, 0), exitCandidate(app1, 1));
 
   String out;
-  out.reserve(512);
+  out.reserve(512 + RESCUE_RELEASE_JSON_MAX);
   out += "{\"name\":\"";
   out += deviceName;  // validated identity ([a-z0-9-]) — JSON-safe as-is
   out += "\",\"rescue\":\"";
   out += GIT_REV;
-  out += "\",\"slots\":[";
+  out += "\",\"online\":";
+  out += rescueOnline() ? "true" : "false";
+  char release[RESCUE_RELEASE_JSON_MAX];
+  if (rescueReleaseJson(rescueReleaseStatusGet(), release, sizeof(release))) {
+    out += ",\"release\":";
+    out += release;
+  }
+  out += ",\"slots\":[";
   appendSlotJson(out, app0, "app0", running == app0.part, 0);
   out += ',';
   appendSlotJson(out, app1, "app1", running == app1.part, 1);
@@ -182,6 +223,7 @@ static void serveGzipAsset(AsyncWebServerRequest* request,
 void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
                    const String& slotRec0, const String& slotRec1) {
   deviceName = effectiveDeviceName;
+  rescueReleaseInit();
   pinSlotRecord(0, probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_0), slotRec0);
   pinSlotRecord(1, probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_1), slotRec1);
 
@@ -270,6 +312,13 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
             return;
           }
           otaRejection.clear();
+          // A release is being written to the same slot through the same
+          // Update session.
+          if (rescueReleaseInstalling()) {
+            otaRejection.set(409, F("A release is being installed — retry "
+                                    "when it finishes"));
+            return;
+          }
 
           // INLINE before Update.begin (#349): the body-parsing upload
           // callback is the first code to run for this route, so a forged
@@ -342,6 +391,12 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
                     F("Cross-origin request refused (CSRF guard)"));
       return;
     }
+    // A restart would cut a slot write short.
+    if (rescueReleaseInstalling() || masterOtaOwnerRequest != nullptr) {
+      request->send(409, "text/plain",
+                    F("An install is running — retry when it finishes"));
+      return;
+    }
     SlotProbe app0 = probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_0);
     SlotProbe app1 = probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_1);
     int slot = pickExitSlot(exitCandidate(app0, 0), exitCandidate(app1, 1));
@@ -363,6 +418,15 @@ void rescueWebInit(AsyncWebServer& server, const String& effectiveDeviceName,
     request->send(200, "text/plain",
                   String("Rebooting into ") + target->label + "…");
     stageReboot();
+  });
+
+  // The release site as a second source for app0 (#583): look says what the
+  // release is, install looks again and writes its master image.
+  server.on("/rescue/release/look", HTTP_POST, [](AsyncWebServerRequest* request) {
+    handleReleaseAsk(request, false);
+  });
+  server.on("/rescue/release/install", HTTP_POST, [](AsyncWebServerRequest* request) {
+    handleReleaseAsk(request, true);
   });
 
   server.onNotFound([](AsyncWebServerRequest* request) {
@@ -397,6 +461,8 @@ void rescueWebTick() {
     // Release only the session judged stalled, never one that began since.
     masterOtaOwnerRequest.compare_exchange_strong(stalled, nullptr);
   }
+  // A look or an install that was asked for runs here, to its end.
+  if (rescueReleaseTick()) stageReboot();
   if (rebootPending.load() &&
       millis() - rebootRequestedAtMs.load() > REBOOT_GRACE_MS) {
     Serial.flush();

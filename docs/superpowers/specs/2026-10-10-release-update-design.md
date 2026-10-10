@@ -146,12 +146,16 @@ A "Get the latest release" button on its page: the same look and verify, then th
 
 Rescue has no clock of its own to rely on, and "newer" needs none: it shows what the release is and what the slots hold, and the person decides.
 
+The page looks first (`POST /rescue/release/look`) and then installs the release it showed (`POST /rescue/release/install?tag=`). The install looks again, so the signature is checked in the run that writes; when the site has another release by then, nothing is written and the page shows that one. The channel is chosen on the page (release or trial release): rescue reads no setting of the master's for it. An install and an upload refuse each other, and leaving rescue waits for both.
+
 ## 9. Web flasher
 
-A static page at `/` using ESP Web Tools (a pinned version; Chrome and Edge only, since it needs Web Serial). Two buttons:
+A static page at `/` using ESP Web Tools (a pinned version; Chrome and Edge only, since it needs Web Serial). ESP Web Tools is served from the site itself, under `/esp-web-tools/`: the release script unpacks it from the npm package of one exact version, after checking the package against the registry's hash for it. The page loads no script from another site. Its source is `flashing/site/index.html`; a trial release publishes its copy at `/test/` and leaves `/` alone. Two buttons:
 
 - **Master (ESP32-S3, 16 MB)** — the whole-flash image at offset 0.
 - **Row board (ESP-01, 1 MB)** — the plain row image at offset 0.
+
+Both buttons hand ESP Web Tools the release's one `flasher.json`: it reads which chip is connected and takes the image made for it.
 
 After flashing, each board is set up through its own WiFi portal as today. The page also carries the short "what next" text: join WiFi, open the master, pair the rows.
 
@@ -177,7 +181,7 @@ If 1 fails with PSRAM as well, the design goes back to the owner before anything
 | Image size | +75 KB on the master (1 612 384 to 1 687 472 bytes) with the client, the check and the trial code; 4 MB slot. |
 | GitHub Pages | 200 with `content-length`, `application/octet-stream`, no redirect. |
 
-So the master is built with `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`. It moves every TLS-library allocation to PSRAM, including what joining WiFi uses; the trial build joined and ran normally with it. The rescue image needs the same setting and is measured when it is built (order of work, step 4). Not measured: a download while it is also written to flash.
+So the master is built with `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`. It moves every TLS-library allocation to PSRAM, including what joining WiFi uses; the trial build joined and ran normally with it. The rescue image has the same setting; with the client and the check it is 1 207 616 bytes (was 997 696) in its 2 MB slot. Not measured: a download while it is also written to flash.
 
 ## 11. Tests
 

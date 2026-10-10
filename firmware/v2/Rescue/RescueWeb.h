@@ -1,9 +1,12 @@
 #pragma once
 // RescueWeb — the rescue app's entire web surface (#195): the self-contained
-// page, GET /rescue/status (slot inventory), POST /firmware/master (same
-// wire contract as normal firmware: multipart + mandatory ?md5=, target
-// app0), and POST /rescue/exit (boot the most recently confirmed valid OTA
-// slot per Master's #200 NVS records, no flash write beyond otadata).
+// page, GET /rescue/status (slot inventory, the release job), POST
+// /firmware/master (same wire contract as normal firmware: multipart +
+// mandatory ?md5=, target app0), POST /rescue/release/look and /install
+// (?channel=; the release site as a second source for app0, #583 —
+// RescueReleaseJob.h), and POST /rescue/exit (boot the most recently
+// confirmed valid OTA slot per Master's #200 NVS records, no flash write
+// beyond otadata).
 // Decision logic lives in the natively-tested shared OtaUploadGate.h, RescueSlots.h /
 // RescueSlotRecord.h; this TU is target glue.
 
@@ -24,6 +27,7 @@ void rescueWebStart(AsyncWebServer& server);
 // every hostname here ("" = no redirect, plain 404).
 void rescueWebSetCaptiveRedirect(const String& url);
 
-// loop() context: executes a staged reboot after a grace period so the
-// HTTP response that triggered it flushes first.
+// loop() context: runs a release job that was asked for, and executes a
+// staged reboot after a grace period so the HTTP response that triggered it
+// flushes first.
 void rescueWebTick();

@@ -8,6 +8,8 @@
 // "<deviceName>-rescue" AP with a captive redirect, and serves RescueWeb's
 // upload/exit surface. Single-loop by design: no task decomposition, no
 // display/I2C, no MQTT, no clock, no settings UI, no OTA-of-itself.
+// Joined to WiFi it can also fetch the master image of a signed release
+// (#583, RescueReleaseJob.h).
 
 #include <Arduino.h>
 #include <DNSServer.h>
@@ -24,6 +26,10 @@
 #include "RescueWifiPolicy.h"
 
 static const char* NAME_PREFIX = "split-flap";
+
+// loop() makes the HTTPS connection to the release site: a TLS handshake
+// does not fit the framework's 8 KB.
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
 static AsyncWebServer webServer(80);
 static DNSServer dnsServer;
@@ -150,6 +156,6 @@ void loop() {
       break;
   }
 
-  rescueWebTick();  // staged reboot after upload/exit
+  rescueWebTick();  // a release job; the staged reboot after an install or exit
   delay(20);
 }

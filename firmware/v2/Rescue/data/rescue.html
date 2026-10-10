@@ -2,7 +2,10 @@
 <!-- Rescue page (#195): the break-glass UI served from the factory slot.
      Self-contained on purpose — no shared assets with the normal web UI
      except the vendored SparkMD5 copy at /md5.js (the ?md5= wire contract
-     needs client-side hashing). Fills itself from GET /rescue/status. -->
+     needs client-side hashing). Fills itself from GET /rescue/status.
+     The release card (#583) asks this board to fetch the master image of a
+     signed release; the board checks the signature, the page only shows
+     what it found. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -22,19 +25,41 @@
   button:disabled { opacity: 0.4; cursor: default; }
   button.secondary { background: #3a3e46; color: #e8e8e8; }
   input[type=file] { margin: 0.5rem 0; max-width: 100%; }
-  #uploadStatus, #exitStatus { margin-top: 0.6rem; font-size: 0.9rem; min-height: 1.2em; }
+  #uploadStatus, #exitStatus, #relStatus { margin-top: 0.6rem; font-size: 0.9rem; min-height: 1.2em; }
+  select { background: #3a3e46; color: #e8e8e8; border: 0; border-radius: 6px; padding: 0.45rem; }
+  a { color: #e2a33d; }
+  [hidden] { display: none !important; }
   progress { width: 100%; height: 0.7rem; }
 </style>
 </head>
 <body>
 <h1>split-flap <span>rescue</span> <small class="muted" id="ident"></small></h1>
 <p class="muted">Break-glass recovery image running from the factory partition.
-Upload a master firmware <code>.bin</code> to restore the display, or boot
-back into an existing image.</p>
+Get the latest release or upload a master firmware <code>.bin</code> to
+restore the display, or boot back into an existing image.</p>
 
 <div class="card">
   <h2>Installed images</h2>
   <table id="slots"><tr><td class="muted">loading…</td></tr></table>
+</div>
+
+<div class="card">
+  <h2>Get the latest release</h2>
+  <p class="muted" id="relOffline" hidden>This board runs its own access
+  point and has no internet. Upload a file below instead.</p>
+  <div id="relOnline" hidden>
+    <p class="muted">Downloads the master firmware of the latest release
+    from the release site, checks its signature,
+    writes it to slot <code>app0</code> and restarts into it.</p>
+    <select id="relChannel" aria-label="Channel">
+      <option value="stable">Release</option>
+      <option value="test">Trial release</option>
+    </select>
+    <button id="relLookBtn" class="secondary">Look for the latest release</button>
+    <button id="relInstallBtn" hidden></button>
+    <progress id="relProg" value="0" max="100" hidden></progress>
+    <div id="relStatus"></div>
+  </div>
 </div>
 
 <div class="card">
@@ -60,6 +85,9 @@ back into an existing image.</p>
 <script>
 "use strict";
 var exitTarget = null;
+var channelShown = false;
+var foundTag = null;
+var relBusy = false;
 
 function el(id) { return document.getElementById(id); }
 
@@ -69,7 +97,71 @@ function esc(s) {
   });
 }
 
+// The release a look found, by what this board said; the board looks again
+// and checks the signature itself before it writes anything.
+function renderRelease(st) {
+  el("relOffline").hidden = !!st.online;
+  el("relOnline").hidden = !st.online;
+  var rel = st.release || { state: "idle" };
+  var busy = rel.state === "looking" || rel.state === "installing";
+  var named = rel.tag
+    ? "Release " + esc(rel.tag) + " (master " + esc(rel.master) + ")" +
+      (/^https:\/\//.test(rel.notes)
+        ? ' · <a href="' + esc(rel.notes) + '" target="_blank" rel="noopener">notes</a>' : "")
+    : "";
+  var text = "";
+  if (rel.state === "looking") text = "Looking…";
+  else if (rel.state === "found") {
+    text = (rel.changed ? "The latest release changed, nothing was installed. It is now: " : "") + named;
+  }
+  else if (rel.state === "installing") {
+    text = "Installing" + (rel.size ? " — " + Math.round(rel.done / 1024) + " of " +
+           Math.round(rel.size / 1024) + " KB" : "…");
+  } else if (rel.state === "installed") {
+    text = '<span class="ok">' + named + " is installed — restarting into it. " +
+           "This page will stop responding; reconnect to the display's normal " +
+           "address in ~30 s.</span>";
+  } else if (rel.state === "failed") {
+    text = '<span class="bad">' + (named ? named + ": " : "") + esc(rel.error) + "</span>";
+  }
+  el("relStatus").innerHTML = text;
+  el("relProg").hidden = rel.state !== "installing";
+  el("relProg").value = rel.size ? (rel.done / rel.size) * 100 : 0;
+  el("relLookBtn").disabled = busy || rel.state === "installed";
+  el("relChannel").disabled = busy || rel.state === "installed";
+  // What the board is on, once: a page opened later shows the same release.
+  if (rel.channel && (busy || !channelShown)) el("relChannel").value = rel.channel;
+  channelShown = true;
+  var offer = rel.state === "found" && rel.channel === el("relChannel").value;
+  el("relInstallBtn").hidden = !offer;
+  if (offer) el("relInstallBtn").textContent = "Install " + rel.tag + " and restart";
+  foundTag = offer ? rel.tag : null;
+  relBusy = busy;
+  if (busy) setTimeout(loadStatus, 1000);
+}
+
+function askRelease(what) {
+  el("relLookBtn").disabled = true;
+  el("relInstallBtn").hidden = true;
+  var query = "?channel=" + el("relChannel").value +
+              (what === "install" ? "&tag=" + encodeURIComponent(foundTag || "") : "");
+  fetch("/rescue/release/" + what + query, { method: "POST" })
+    .then(function (r) {
+      if (r.ok) { relBusy = true; return loadStatus(); }
+      return r.text().then(function (t) {
+        el("relStatus").innerHTML =
+          '<span class="bad">Refused (' + r.status + "): " + esc(t) + "</span>";
+        el("relLookBtn").disabled = false;
+      });
+    })
+    .catch(function () {
+      el("relStatus").innerHTML = '<span class="bad">Request failed.</span>';
+      el("relLookBtn").disabled = false;
+    });
+}
+
 function renderStatus(st) {
+  renderRelease(st);
   el("ident").textContent = st.name + " · rescue " + st.rescue;
   var rows = "<tr><th>Slot</th><th>State</th><th>Rev</th></tr>";
   st.slots.forEach(function (s) {
@@ -93,8 +185,19 @@ function loadStatus() {
     .then(renderStatus)
     .catch(function () {
       el("slots").innerHTML = '<tr><td class="bad">status unavailable</td></tr>';
+      // A job is followed to its end: one answer lost (the board writes
+      // flash, or restarts) must not leave the page on "Installing".
+      if (relBusy) setTimeout(loadStatus, 2000);
     });
 }
+
+el("relLookBtn").addEventListener("click", function () { askRelease("look"); });
+el("relChannel").addEventListener("change", function () { el("relInstallBtn").hidden = true; });
+el("relInstallBtn").addEventListener("click", function () {
+  if (confirm(el("relInstallBtn").textContent + "? This overwrites slot app0.")) {
+    askRelease("install");
+  }
+});
 
 el("fw").addEventListener("change", function () {
   el("uploadBtn").disabled = !el("fw").files.length;
