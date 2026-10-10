@@ -1,4 +1,5 @@
 #include "RebootCause.h"
+#include "NvsRead.h"
 
 #include <Preferences.h>
 
@@ -27,7 +28,7 @@ String rebootCauseConsume() {
   consumed = true;
   Preferences prefs;
   if (!prefs.begin(kNamespace, /*readOnly=*/false)) return cached;
-  cached = prefs.getString(kCauseKey, "");
+  cached = nvsReadString(prefs, kCauseKey, "");
   if (cached.length() > 0) prefs.remove(kCauseKey);
   prefs.end();
   return cached;

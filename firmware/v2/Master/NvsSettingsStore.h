@@ -10,6 +10,7 @@
 #include <Preferences.h>
 
 #include "SettingsStore.h"
+#include "NvsRead.h"
 
 class NvsSettingsStore : public SettingsStore {
  public:
@@ -17,7 +18,7 @@ class NvsSettingsStore : public SettingsStore {
   void begin() { prefs_.begin(SF_NVS_NAMESPACE, false); }
 
   String getString(const char* key, const String& def) override {
-    return prefs_.getString(key, def);
+    return nvsReadString(prefs_, key, def);
   }
   void putString(const char* key, const String& value) override {
     prefs_.putString(key, value);

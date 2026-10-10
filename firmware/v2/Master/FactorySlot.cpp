@@ -12,6 +12,7 @@
 #include "BuildVersion.h"
 #include "FactoryChunkPlan.h"
 #include "HelpersSerialHandling.h"
+#include "NvsRead.h"
 
 // Upload state. Only the async_tcp task touches it (uploads are serialized
 // by the TCP stream, same rationale as WebEndpoints' otaRejection state).
@@ -252,7 +253,7 @@ static RescueSlotFacts computeRescueSlotFacts() {
   if (valid) {
     Preferences prefs;
     if (prefs.begin(SF_NVS_NAMESPACE, true)) {
-      rec = parseSlotRecord(prefs.getString(SF_NVS_KEY_SLOT_REC_FACTORY, "").c_str());
+      rec = parseSlotRecord(nvsReadString(prefs, SF_NVS_KEY_SLOT_REC_FACTORY, "").c_str());
       prefs.end();
     }
     uint8_t sha[32];
@@ -309,7 +310,7 @@ void rescueSlotRecordInstall(const String& rev) {
     // Skip a redundant write when this exact image already holds the
     // record — same NVS-wear guard as ensureSlotRecord() (#200).
     SlotRecord existing =
-        parseSlotRecord(prefs.getString(SF_NVS_KEY_SLOT_REC_FACTORY, "").c_str());
+        parseSlotRecord(nvsReadString(prefs, SF_NVS_KEY_SLOT_REC_FACTORY, "").c_str());
     bool unchanged = slotRecordShaMatches(existing, sha) &&
                      strcmp(existing.rev, rev.c_str()) == 0;
     if (!unchanged) {

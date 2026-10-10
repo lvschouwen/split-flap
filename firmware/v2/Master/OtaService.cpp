@@ -11,6 +11,7 @@
 #include "FactorySlot.h"
 #include "HelpersSerialHandling.h"
 #include "SlotRecord.h"
+#include "NvsRead.h"
 
 // Snapshotted once in otaServiceInit() (single-threaded setup); `confirmed`
 // is the only field that changes afterwards (netTask writes, async /settings
@@ -94,8 +95,8 @@ static void ensureSlotRecord() {
     SerialPrintln(F("slot record: NVS open failed"));
     return;
   }
-  SlotRecord rec0 = parseSlotRecord(prefs.getString(SF_NVS_KEY_SLOT_REC_APP0, "").c_str());
-  SlotRecord rec1 = parseSlotRecord(prefs.getString(SF_NVS_KEY_SLOT_REC_APP1, "").c_str());
+  SlotRecord rec0 = parseSlotRecord(nvsReadString(prefs, SF_NVS_KEY_SLOT_REC_APP0, "").c_str());
+  SlotRecord rec1 = parseSlotRecord(nvsReadString(prefs, SF_NVS_KEY_SLOT_REC_APP1, "").c_str());
   const SlotRecord& mine = (slot == 0) ? rec0 : rec1;
   const SlotRecord& other = (slot == 0) ? rec1 : rec0;
   if (slotRecordStands(mine, other, sha)) {

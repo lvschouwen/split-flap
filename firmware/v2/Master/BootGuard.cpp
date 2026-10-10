@@ -11,6 +11,7 @@
 #include "HelpersSerialHandling.h"
 #include "SettingsJson.h"  // appendJsonString
 #include "WebEndpoints.h"  // webResetReasonName
+#include "NvsRead.h"
 
 static const char* kNamespace = "sfboot";  // shared with RebootCause.cpp
 static const char* kTripsKey = "gTrips";
@@ -40,7 +41,7 @@ static void loadTrip() {
   if (!prefs.begin(kNamespace, /*readOnly=*/true)) return;
   trips = prefs.getUInt(kTripsKey, 0);
   tripReason = prefs.getUChar(kReasonKey, 0);
-  tripRev = prefs.getString(kRevKey, "");
+  tripRev = nvsReadString(prefs, kRevKey, "");
   prefs.end();
 }
 
