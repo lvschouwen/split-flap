@@ -113,10 +113,10 @@ The result is kept in memory: not looked yet / up to date / newer release (tag, 
 
 ### Installing
 
-Action `update-from-release`: a job with a number, read at `GET /api/v2/op/<id>`. It looks again first, so it never installs from a result that is a day old. Then, in this order:
+Action `update-from-release`: a job with a number, read at `GET /api/v2/op/<id>`. It looks again first, so it never installs from a result that is a day old. It then asks the site for every image it is about to install and compares the announced length with the manifest's: a slot is erased as its download begins, so an image that is not there is found out before anything is touched. Then, in this order:
 
 1. **Rescue**, when its rev differs: downloaded into the factory slot through the writer `POST /firmware/rescue` uses, which holds the first sector back until the image checked out.
-2. **Row image**, when its rev differs: downloaded into the store `POST /firmware/row` uses. An image stored by this job is **held**: it is offered to the rows only once the master itself runs the release's master rev. A master that fell back to its old image keeps the rows where they are.
+2. **Row image**, when its rev differs, or when the same image is still held for a release whose master never got to run: downloaded into the store `POST /firmware/row` uses. An image stored by this job is **held**: it is offered to the rows only once the master itself runs the release's master rev. A master that fell back to its old image keeps the rows where they are.
 3. **Master**: downloaded into the other slot through the writer `POST /firmware/master` uses, hashed while it is written. The slot is made the next to start only when the SHA-256 matches. Then the ordinary restart.
 
 Each download is checked against its size and SHA-256 from the manifest. Anything that does not match is thrown away and ends the job as failed, with the reason. A failure at any step before the restart leaves the running image running.
