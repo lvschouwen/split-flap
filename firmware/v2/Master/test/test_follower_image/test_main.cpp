@@ -87,6 +87,16 @@ static void test_a_release_image_is_held_until_the_master_runs_that_release() {
   TEST_ASSERT_TRUE(followerImageHeld("def5678", "def5678-dirty"));
 }
 
+static void test_the_hold_is_spent_once_the_master_runs_the_release() {
+  TEST_ASSERT_TRUE(followerImageHoldSpent("def5678", "def5678"));
+  // Dropped then, a later build of the master does not hold the image again.
+  TEST_ASSERT_FALSE(followerImageHeld("", "fed9876"));
+  // Not spent while the master still runs something else, nor without a hold.
+  TEST_ASSERT_FALSE(followerImageHoldSpent("def5678", "abc1234"));
+  TEST_ASSERT_FALSE(followerImageHoldSpent("", "abc1234"));
+  TEST_ASSERT_FALSE(followerImageHoldSpent(nullptr, "abc1234"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_upload_accepts_follower_bin_and_extracts_rev);
@@ -97,5 +107,6 @@ int main(int, char**) {
   RUN_TEST(test_an_uploaded_image_is_never_held);
   RUN_TEST(test_a_release_image_is_held_until_the_master_runs_that_release);
   RUN_TEST(test_a_release_stores_its_row_image_unless_the_same_one_waits_for_it);
+  RUN_TEST(test_the_hold_is_spent_once_the_master_runs_the_release);
   return UNITY_END();
 }

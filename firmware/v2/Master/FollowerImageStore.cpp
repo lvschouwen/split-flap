@@ -14,7 +14,7 @@
 
 #include "FlashLog.h"          // flashLogAvailable() — LittleFS mount owner
 #include "BuildVersion.h"
-#include "FollowerImagePolicy.h"  // followerImageChunkOk, followerImageHeld
+#include "FollowerImagePolicy.h"  // followerImageChunkOk, followerImageHeld, followerImageHoldSpent
 #include "HelpersSerialHandling.h"
 #include "LargeAlloc.h"
 
@@ -25,6 +25,7 @@ static SemaphoreHandle_t imgMutex = nullptr;
 static bool storedPresent = false;
 static String storedRev;
 static String storedHeldFor;  // "" = on offer
+static bool holdFileSpent = false;  // netTask owes the hold file's removal
 static int relayClaims = 0;
 
 // What a row is told about the stored image. Known at once for an image that
@@ -98,7 +99,10 @@ void followerImageStoreInit() {
       storedHeldFor.trim();
       f.close();
     }
-    if (followerImageHeld(storedHeldFor.c_str(), GIT_REV)) {
+    if (followerImageHoldSpent(storedHeldFor.c_str(), GIT_REV)) {
+      storedHeldFor = String();
+      holdFileSpent = true;
+    } else if (followerImageHeld(storedHeldFor.c_str(), GIT_REV)) {
       SerialPrintln("FollowerImageStore: the stored image " + storedRev +
                     " is held until this master runs " + storedHeldFor);
     }
@@ -341,6 +345,15 @@ void followerImageFlushTick() {
       lastError = "upload stalled — store reclaimed";
       SerialPrintln(F("FollowerImageStore: stalled upload reclaimed (#419)"));
     }
+  }
+  {
+    bool spent;
+    {
+      ImgLock lock;
+      spent = holdFileSpent && !flushPending;
+      holdFileSpent = false;
+    }
+    if (spent) LittleFS.remove(FOLLOWER_IMAGE_HOLD_PATH);
   }
   uint8_t* buf = nullptr;
   size_t len = 0;

@@ -61,6 +61,13 @@ inline bool followerImageHeld(const char* heldFor, const char* runningRev) {
   return heldFor != nullptr && heldFor[0] != 0 && strcmp(heldFor, runningRev) != 0;
 }
 
+// The hold has done its work once the master runs the release: it is dropped
+// then, so a later build of the master does not put the rows' image back on
+// hold.
+inline bool followerImageHoldSpent(const char* heldFor, const char* runningRev) {
+  return heldFor != nullptr && heldFor[0] != 0 && strcmp(heldFor, runningRev) == 0;
+}
+
 // Does an update from a release store the release's row image? Not when that
 // image is stored already and on offer, or waiting for this very release. The
 // same image held for another master rev is stored again: that hold belongs

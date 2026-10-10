@@ -101,8 +101,7 @@ static void printBootDiagnostics() {
     RescueSlotFacts rescue = rescueSlotCurrent();
     if (rescue.identified) {
       SerialPrintf("rescue: image rev %s%s\n", rescue.rev,
-                   rescue.stale ? " — OLDER than the running app, reinstall "
-                                  "via POST /firmware/rescue"
+                   rescue.stale ? " — older than the running app, which is fine"
                                 : "");
     } else if (rescue.valid) {
       SerialPrintln(F("rescue: image rev unknown (installed out of band) — "
