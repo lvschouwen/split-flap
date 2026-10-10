@@ -6,9 +6,12 @@ openssl) in a temporary directory; only esptool's merge is stood in for.
 """
 import base64
 import hashlib
+import io
 import json
+import re
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -58,6 +61,9 @@ class World:
         header.parent.mkdir(parents=True)
         header.write_text(header_for(self.keys / "release-key.pub.pem"))
         (self.repo / ".gitignore").write_text(".pio/\n")
+        page = self.repo / "flashing/site/index.html"
+        page.parent.mkdir(parents=True)
+        page.write_text("the flasher page\n")
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "--quiet", "-m", "first")
         git(self.repo, "push", "--quiet", "origin", "master")
@@ -94,8 +100,44 @@ class World:
         return out
 
 
+def tools_package(files: dict[str, bytes]) -> bytes:
+    """A package shaped like the npm tarball of ESP Web Tools."""
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz") as archive:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    return out.getvalue()
+
+
+def pin(monkeypatch, package: bytes) -> list[int]:
+    """Makes `package` what the registry serves and what is pinned. The list
+    grows by one for every fetch."""
+    fetches: list[int] = []
+
+    def fetch() -> bytes:
+        fetches.append(1)
+        return package
+    monkeypatch.setattr(release, "fetch_esp_web_tools", fetch)
+    monkeypatch.setattr(release, "ESP_WEB_TOOLS_INTEGRITY",
+                        "sha512-" + base64.b64encode(hashlib.sha512(package).digest()).decode())
+    return fetches
+
+
+TOOLS = {
+    "package/dist/web/install-button.js": b"button",
+    "package/dist/web/install-dialog-im156JnI.js": b"dialog",
+    "package/dist/web/../../../escaped.js": b"outside",
+    "package/dist/web/deeper/other.js": b"not flat",
+    "package/dist/install-button.js": b"another build",
+    "package/README.md": b"readme",
+}
+
+
 @pytest.fixture
 def world(tmp_path, monkeypatch):
+    pin(monkeypatch, tools_package(TOOLS))
     merge = tmp_path / "merge.py"
     merge.write_text(
         "import sys\n"
@@ -242,3 +284,99 @@ def test_a_header_with_another_kind_of_key_is_refused(tmp_path):
     header.write_text("static const uint8_t RELEASE_PUBLIC_KEY_DER[] = {0x30, 0x2a, 0x30};\n")
     with pytest.raises(release.Refused, match="not a P-256"):
         release.public_key_der_from_header(header)
+
+
+# --- the flasher page and its installer ---------------------------------------
+
+def test_a_trial_release_brings_its_own_page_and_leaves_the_sites_alone(world):
+    release.release(world.args())
+    site = world.published()
+    assert (site / "test/index.html").read_text() == "the flasher page\n"
+    assert (site / "index.html").read_text() == "site\n"
+
+
+def test_a_release_puts_the_page_at_the_top_of_the_site(world, tmp_path):
+    site = tmp_path / "laid-out"
+    release.write_page(site, "stable", world.repo / "flashing/site/index.html")
+    assert (site / "index.html").read_text() == "the flasher page\n"
+    assert not (site / "releases").exists()
+
+
+def test_the_installer_is_served_from_the_site_and_only_its_scripts(world):
+    release.release(world.args())
+    tools = world.published() / "esp-web-tools"
+    assert sorted(p.name for p in tools.iterdir()) == [
+        "VERSION", "install-button.js", "install-dialog-im156JnI.js"]
+    assert (tools / "install-button.js").read_bytes() == b"button"
+    assert (tools / "VERSION").read_text().strip() == release.ESP_WEB_TOOLS_VERSION
+    assert not list(world.tmp.rglob("escaped.js"))
+
+
+def test_the_installer_is_fetched_once_per_version(world, monkeypatch):
+    fetches = pin(monkeypatch, tools_package(TOOLS))
+    release.release(world.args())
+    assert len(fetches) == 1
+    (world.repo / "more.txt").write_text("x")
+    git(world.repo, "add", "-A")
+    git(world.repo, "commit", "--quiet", "-m", "second")
+    world.stage(git(world.repo, "rev-parse", "--short=7", "HEAD"))
+    release.release(world.args())
+    assert len(fetches) == 1
+    monkeypatch.setattr(release, "ESP_WEB_TOOLS_VERSION", "99.0.0")
+    with pytest.raises(release.Refused, match="already published"):
+        release.release(world.args())
+    assert len(fetches) == 2
+
+
+def test_a_package_that_is_not_the_pinned_one_stops_the_release(world, monkeypatch):
+    monkeypatch.setattr(release, "fetch_esp_web_tools",
+                        lambda: tools_package({"package/dist/web/install-button.js": b"evil"}))
+    with pytest.raises(release.Refused, match="not the pinned one"):
+        release.release(world.args())
+    site = world.published()
+    assert not (site / "esp-web-tools").exists() and not (site / "test").exists()
+
+
+# --- the page, the script and the boards agree (spec, section 11) -------------
+
+REAL_REPO = HERE.parent
+PAGE = REAL_REPO / "flashing/site/index.html"
+
+
+def test_the_page_reads_what_the_script_publishes():
+    page = PAGE.read_text()
+    assert '"latest.json"' in page and '"/flasher.json"' in page
+    assert f'"{release.ESP_WEB_TOOLS_DIR}/install-button.js"' in page
+    assert f'"{release.CHANNEL_DIR["stable"]}/"' in page
+    assert f"/{release.CHANNEL_DIR['test']}\\/" in page
+
+
+def test_the_page_loads_no_script_from_another_site():
+    page = PAGE.read_text()
+    assert not re.search(r"<script[^>]*\ssrc=", page)
+    script = page[page.index("<script>"):]
+    assert not re.search(r"[\"']https?://", script)
+    assert "import(" not in script
+
+
+def test_the_boards_look_where_the_script_publishes():
+    header = (REAL_REPO / "firmware/v2/release/ReleaseManifest.h").read_text()
+    dirs = dict(re.findall(r'strcmp\(channel, "(\w+)"\) == 0\) return "(\w+)";', header))
+    assert dirs == release.CHANNEL_DIR
+    fetch = (REAL_REPO / "firmware/v2/release/ReleaseFetch.h").read_text()
+    assert '"latest.json"' in fetch and '"latest.json.sig"' in fetch
+
+
+def test_the_pinned_installer_is_one_exact_version():
+    assert re.fullmatch(r"\d+\.\d+\.\d+", release.ESP_WEB_TOOLS_VERSION)
+    assert re.fullmatch(r"sha512-[A-Za-z0-9+/]{86}==", release.ESP_WEB_TOOLS_INTEGRITY)
+
+
+def test_nothing_of_the_package_is_written_outside_its_directory(tmp_path, monkeypatch):
+    pin(monkeypatch, tools_package(TOOLS))
+    site = tmp_path / "a/b/c/site"
+    site.mkdir(parents=True)
+    release.write_esp_web_tools(site)
+    written = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*") if p.is_file())
+    assert written == [f"a/b/c/site/esp-web-tools/{name}" for name in
+                       ("VERSION", "install-button.js", "install-dialog-im156JnI.js")]

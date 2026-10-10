@@ -16,13 +16,16 @@ import argparse
 import base64
 import datetime
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
+import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -32,6 +35,12 @@ RESCUE_OFFSET = 0x830000
 # DER SubjectPublicKeyInfo of a P-256 key: this prefix, then the 65-byte point.
 P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
 CHANNEL_DIR = {"stable": "releases", "test": "test"}
+# The flasher page's installer, served from the site itself: this version of
+# the npm package, and the registry's integrity value for its tarball.
+ESP_WEB_TOOLS_VERSION = "10.4.0"
+ESP_WEB_TOOLS_INTEGRITY = ("sha512-3pwkeFFm5Fj7UQo8SJNYK5RXrtNCpq6X9QoI6bMT4GBZWgrJqjn0YvM9ihG74BtM"
+                           "oSFYXfmDtkehuxe50PTMPQ==")
+ESP_WEB_TOOLS_DIR = "esp-web-tools"
 
 
 class Refused(Exception):
@@ -215,6 +224,52 @@ def flasher_manifest(images: Images, tag: str, factory_name: str) -> bytes:
     }, indent=1) + "\n").encode()
 
 
+def fetch_esp_web_tools() -> bytes:
+    url = (f"https://registry.npmjs.org/esp-web-tools/-/"
+           f"esp-web-tools-{ESP_WEB_TOOLS_VERSION}.tgz")
+    try:
+        with urllib.request.urlopen(url, timeout=60) as answer:
+            return answer.read()
+    except OSError as why:
+        raise Refused(f"ESP Web Tools {ESP_WEB_TOOLS_VERSION} could not be fetched: {why}")
+
+
+def write_esp_web_tools(site: Path) -> None:
+    """Puts the pinned ESP Web Tools build under the site, once per version.
+    Nothing of a package whose hash is not the pinned one is unpacked."""
+    target = site / ESP_WEB_TOOLS_DIR
+    marker = target / "VERSION"
+    if marker.is_file() and marker.read_text().strip() == ESP_WEB_TOOLS_VERSION:
+        return
+    package = fetch_esp_web_tools()
+    digest = "sha512-" + base64.b64encode(hashlib.sha512(package).digest()).decode()
+    if digest != ESP_WEB_TOOLS_INTEGRITY:
+        raise Refused("the ESP Web Tools package is not the pinned one")
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+    prefix = "package/dist/web/"
+    with tarfile.open(fileobj=io.BytesIO(package), mode="r:gz") as archive:
+        for member in archive.getmembers():
+            name = member.name[len(prefix):]
+            # The build is one flat directory of scripts.
+            if (not member.isfile() or not member.name.startswith(prefix)
+                    or not re.fullmatch(r"[A-Za-z0-9._-]+\.js", name)):
+                continue
+            (target / name).write_bytes(archive.extractfile(member).read())
+    if not (target / "install-button.js").is_file():
+        raise Refused("the ESP Web Tools package holds no install-button.js")
+    marker.write_text(ESP_WEB_TOOLS_VERSION + "\n")
+
+
+def write_page(site: Path, channel: str, page: Path) -> None:
+    """The flasher page: at / for a release, beside latest.json for a trial
+    release, which never changes what a visitor of the site is given."""
+    target = site if channel == "stable" else site / CHANNEL_DIR[channel]
+    target.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(page, target / "index.html")
+
+
 def prune(channel_dir: Path, keep: int = KEEP_RELEASES) -> list[str]:
     """Removes all but the newest `keep` release directories; newest = written
     last, by the commit time each one's manifest copy records."""
@@ -359,6 +414,8 @@ def release(args: argparse.Namespace) -> str:
         site = Path(tmp) / "site"
         run("git", "clone", "--quiet", "--branch", "gh-pages", "--single-branch", "--depth", "1",
             args.site_remote or origin, str(site))
+        write_esp_web_tools(site)
+        write_page(site, args.channel, repo / "flashing/site/index.html")
         release_dir = write_release(site, args.channel, tag, images, factory, manifest, signature)
         files = sorted(p.name for p in release_dir.iterdir())
         if args.dry_run:
