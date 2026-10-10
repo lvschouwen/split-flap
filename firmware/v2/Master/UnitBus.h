@@ -88,6 +88,8 @@ bool unitBusReadBootInfo(int i2cAddress, BootUpdateReport& out);
 // A fresh status read: has the unit homed since its last boot? false also
 // when it does not answer.
 bool unitBusIsHomed(int i2cAddress);
+// A fresh status read of one unit. False when no checked reply came.
+bool unitBusReadStatus(int i2cAddress, UnitStatus& out);
 
 // Sends CMD_BOOT_UPDATE with stage (1 or 2) + ~stage (#499). Stage 1 causes a
 // WDT reset (~250 ms later); stage 2 disables TWI for ~100 ms while rewriting

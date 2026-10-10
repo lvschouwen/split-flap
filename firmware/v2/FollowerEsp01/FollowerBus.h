@@ -101,6 +101,11 @@ void busHomeAll();
 // Shows the row's present frame again on the next loop pass: after a job that
 // left a drum at home (#575). The show waits for the row to stand still.
 void busReshowLastFrame();
+// A fresh status read of one unit. False when no checked reply came.
+bool busReadStatus(uint8_t i2cAddress, UnitStatus& out);
+// Every drivable unit's own word on its home (HomeWait.h), for the job that
+// sent the whole row home.
+MaintGrade busGradeHomeAll();
 int busStartSelfTest(uint8_t i2cAddress);
 bool busReadSelfTest(uint8_t i2cAddress, UnitSelfTestReading& out);
 

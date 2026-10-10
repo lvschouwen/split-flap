@@ -14,6 +14,7 @@
 #include "BootUpdateOp.h"   // the shared in-system twiboot update
 #include "UnitUpdateJob.h"  // quiet wait + boot sweep around the flash loop
 #include "SelfTestPoll.h"   // the shared self-test wait
+#include "HomeWait.h"       // the shared wait for a home search
 #include "BootTrace.h"  // #504
 #include "BootUpdatePlan.h"  // #499 decision logic
 #include "CrashContext.h"  // #504
@@ -809,14 +810,48 @@ static void execJog(DisplaySnapshot& local, UnitFacts* busFacts,
   displayApplyMaintResult(local, cmd, gradeMover(status));
 }
 
+// Polls the unit until HomeWait.h calls its search (#605): the command's
+// acknowledgement says nothing of it. A stop ends the wait as a refusal.
+static MaintGrade waitForHome(uint8_t unitAddress) {
+  HomeWait wait;
+  homeWaitBegin(wait, millis());
+  for (;;) {
+    wdtFeed();  // a failed search turns the drum for about 20 s
+    if (unitBusAbortRequested()) {
+      return {MaintOutcome::ExecValidationFail, MaintReason::None};
+    }
+    delay(HOME_WAIT_POLL_MS);
+    UnitStatus status;
+    const bool readOk = unitBusReadStatus(unitAddress, status);
+    const HomeWaitOutcome outcome =
+        homeWaitObserve(wait, readOk, status.flags, millis());
+    if (outcome != HomeWaitOutcome::Pending) return maintGradeHome(outcome);
+  }
+}
+
+// Every drivable unit's own word on its home, read once the row stands still.
+static MaintGrade gradeHomeAll(const DisplaySnapshot& local) {
+  HomeAllTally tally;
+  for (int i = 0; i < local.displayWidth; i++) {
+    if (!unitDrivable(local.units[i])) continue;
+    UnitStatus status;
+    const bool readOk = unitBusReadStatus(SFP_I2C_ADDRESS_BASE + i, status);
+    homeAllTallyAdd(tally, readOk, status.flags);
+  }
+  return maintGradeHomeAll(tally);
+}
+
 static void execHome(DisplaySnapshot& local, UnitFacts* busFacts,
                     const DisplayCommand& cmd) {
   (void)busFacts;
-  (void)cmd;
   int status = unitBusHome(cmd.unitAddress);
-  // The unit parks at blank: back to the flap its row is showing.
-  if (status == 0) reshowLastFrame(local);
-  displayApplyMaintResult(local, cmd, gradeMover(status));
+  MaintGrade grade = gradeMover(status);
+  if (status == 0) {
+    grade = waitForHome(cmd.unitAddress);
+    // The unit parks at blank: back to the flap its row is showing.
+    reshowLastFrame(local);
+  }
+  displayApplyMaintResult(local, cmd, grade);
 }
 
 static void execIdentify(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -1097,8 +1132,7 @@ static void execResetUnits(DisplaySnapshot& local, UnitFacts* busFacts,
                  letters);
   showFrameOutsideBootloaderWindow(local, letters, unitSpeed);
   displayApplyFrame(local, letters, millis());  // #264
-  displayApplyMaintResult(local, cmd, MaintOutcome::Ok,
-                          MaintReason::None);
+  displayApplyMaintResult(local, cmd, gradeHomeAll(local));
 }
 
 static void execStop(DisplaySnapshot& local, UnitFacts* busFacts,

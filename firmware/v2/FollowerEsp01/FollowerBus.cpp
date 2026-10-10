@@ -15,6 +15,7 @@
 #include "FollowerConfig.h"
 #include "FollowerWifi.h"  // followerRadioBusy (#505)
 #include "HeartbeatPolicy.h"  // pure heartbeat miss/schedule logic (#310)
+#include "HomeWait.h"  // what a row sent home says of it (#605)
 #include "MotionBudget.h"  // motion admission (#505)
 #include "RenderStagger.h"  // sub-frame inrush stagger (#324)
 #include "SplitFlapProtocol.h"
@@ -696,6 +697,21 @@ void busHomeAll() {
   } else {
     lastFrameValid = false;  // the dots are not this row's text
   }
+}
+
+bool busReadStatus(uint8_t i2cAddress, UnitStatus& out) {
+  return unitReadStatus(unitBus, i2cAddress, out);
+}
+
+MaintGrade busGradeHomeAll() {
+  HomeAllTally tally;
+  for (int i = 0; i < displayWidth; i++) {
+    if (!unitDrivable(unitFacts[i])) continue;
+    UnitStatus status;
+    const bool readOk = busReadStatus((uint8_t)toI2cAddress(i), status);
+    homeAllTallyAdd(tally, readOk, status.flags);
+  }
+  return maintGradeHomeAll(tally);
 }
 
 int busResetOdometer(uint8_t i2cAddress) {

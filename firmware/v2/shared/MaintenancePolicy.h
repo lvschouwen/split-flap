@@ -179,6 +179,8 @@ enum class MaintReason : uint8_t {
   BootUnitBusy,             // unit refused: drum moving or not homed
   BootNotStarted,           // stage 1 was requested and the unit never left the
                             // bus, without recording a refusal
+  HomeNotFound,             // the unit reports that its home search failed
+  HomeNotEnded,             // the drum was still turning when the wait ran out
 };
 
 // The reason for a failure the unit itself reported. BOOT_FAIL_NONE means it
@@ -305,6 +307,10 @@ inline const char* maintReasonName(MaintReason r) {
       return "boot-unit-busy";
     case MaintReason::BootNotStarted:
       return "boot-not-started";
+    case MaintReason::HomeNotFound:
+      return "home-not-found";
+    case MaintReason::HomeNotEnded:
+      return "home-not-ended";
     default:
       return "";
   }

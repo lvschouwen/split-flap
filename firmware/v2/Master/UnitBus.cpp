@@ -512,6 +512,10 @@ bool unitBusIsHomed(int i2cAddress) {
          (s.flags & UNIT_FLAG_HOMED) != 0;
 }
 
+bool unitBusReadStatus(int i2cAddress, UnitStatus& out) {
+  return unitReadStatus(unitBus, (uint8_t)i2cAddress, out);
+}
+
 int unitBusBootUpdate(int i2cAddress, uint8_t stage) {
   return unitSendBootUpdate(unitBus, (uint8_t)i2cAddress, stage);
 }

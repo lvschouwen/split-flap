@@ -10,6 +10,7 @@
 #include "FollowerConfig.h"
 #include "FollowerMem.h"
 #include "FollowerRescue.h"
+#include "HomeWait.h"
 #include "SelfTestPoll.h"
 #include "UnitTimings.h"
 #include "WearPolicy.h"
@@ -53,6 +54,16 @@ static bool selfTestPolling = false;
 static SelfTestPoll selfTestPoll;
 static uint32_t selfTestPollLastMs = 0;
 
+// A home job being waited on (seq 0 = none): the unit's status is polled
+// until HomeWait.h calls the search.
+struct HomePoll {
+  uint32_t seq = 0;
+  uint8_t addr = 0;
+  uint32_t lastMs = 0;
+  HomeWait wait;
+};
+static HomePoll homePoll;
+
 static void releaseBootDumpBytes() {
   if (bootDumpBytes == nullptr) return;
   followerBufFree(bootDumpBytes);
@@ -60,11 +71,11 @@ static void releaseBootDumpBytes() {
   bootDumpBytesSeq = 0;
 }
 
-// One job at a time: the staged slot, a self-test being waited on, a queued
-// rescan and a running unit update all hold the row.
+// One job at a time: the staged slot, a self-test or a home being waited on,
+// a queued rescan and a running unit update all hold the row.
 static bool opSlotBusy() {
-  return stagedOp.pending || selfTestPolling || awaitingScan.seq != 0 ||
-         reflashInProgress(reflashProgress);
+  return stagedOp.pending || selfTestPolling || homePoll.seq != 0 ||
+         awaitingScan.seq != 0 || reflashInProgress(reflashProgress);
 }
 
 UnitOpStaged unitOpStage(FollowerOpKind kind, uint8_t addr, long arg,
@@ -148,8 +159,18 @@ static void executeStagedOp() {
       break;
     case FollowerOpKind::Home:
       grade = maintGradeWire(busHome(op.addr));
-      // The unit parks at blank: back to the flap its row is showing.
-      if (grade.outcome == MaintOutcome::Ok) busReshowLastFrame();
+      if (grade.outcome == MaintOutcome::Ok) {
+        // The acknowledgement says nothing of the search: the op result is
+        // stamped by pollHome once the unit reports, and reads pending until
+        // then.
+        homePoll = HomePoll{};
+        homePoll.seq = op.seq;
+        homePoll.addr = op.addr;
+        homePoll.lastMs = millis();
+        homeWaitBegin(homePoll.wait, homePoll.lastMs);
+        stagedOp.pending = false;
+        return;
+      }
       break;
     case FollowerOpKind::Identify:
       grade = maintGradeWire(busIdentify(op.addr));
@@ -258,7 +279,7 @@ static void executeStagedOp() {
     }
     case FollowerOpKind::HomeAll:
       busHomeAll();
-      grade = maintGradeWire(0);
+      grade = busGradeHomeAll();
       break;
     case FollowerOpKind::BootInfo: {
       BootInfoSlot slot;
@@ -295,6 +316,22 @@ static void pollSelfTest() {
                 maintGradeObserved(outcome == SelfTestOutcome::Ok));
 }
 
+// One status read per HOME_WAIT_POLL_MS until the search is called.
+static void pollHome() {
+  if (homePoll.seq == 0) return;
+  if (millis() - homePoll.lastMs < HOME_WAIT_POLL_MS) return;
+  homePoll.lastMs = millis();
+  UnitStatus status;
+  const bool readOk = busReadStatus(homePoll.addr, status);
+  const HomeWaitOutcome outcome =
+      homeWaitObserve(homePoll.wait, readOk, status.flags, homePoll.lastMs);
+  if (outcome == HomeWaitOutcome::Pending) return;
+  // The unit parks at blank: back to the flap its row is showing.
+  busReshowLastFrame();
+  stampOpResult(homePoll.seq, maintGradeHome(outcome));
+  homePoll = HomePoll{};
+}
+
 bool unitUpdateQueuedOrRunning() {
   return (stagedOp.pending && (stagedOp.kind == FollowerOpKind::ReflashUnit ||
                                stagedOp.kind == FollowerOpKind::BootUpdate)) ||
@@ -308,6 +345,7 @@ void unitJobsLoopTick() {
     releaseBootDumpBytes();
   }
   pollSelfTest();
+  pollHome();
   if (unitHealthRefreshPending) {
     // Probe-inhibit (v1 #88): wait out any twiboot window before scanning.
     if ((int32_t)(millis() - busProbeInhibitedUntilMs()) >= 0) {

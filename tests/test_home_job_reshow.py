@@ -51,8 +51,8 @@ def test_both_boards_ask_the_shared_rule_after_a_self_test():
 
 
 def test_row_home_shows_the_frame_again():
-    case = ROW_JOBS[ROW_JOBS.index("case FollowerOpKind::Home:"):]
-    assert "busReshowLastFrame()" in case[:case.index("break;")]
+    """Once the search has ended: the show waits for the row to stand still."""
+    assert "busReshowLastFrame()" in body(ROW_JOBS, "static void pollHome(")
 
 
 def test_row_self_test_shows_the_frame_again():
