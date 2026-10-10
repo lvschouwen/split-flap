@@ -1,8 +1,8 @@
 #pragma once
 // FollowerImagePolicy.h — pure rules for the stored row image (the
 // follower-<rev>.bin the master keeps and offers to its ESP-01 row boards),
-// natively tested by test_follower_image: the upload filename guard and the
-// PSRAM accumulator cursor check. No flash or HTTP here: the upload route is
+// natively tested by test_follower_image: the upload filename guard, the
+// PSRAM accumulator cursor check and the hold on an image a release stored. No flash or HTTP here: the upload route is
 // WebFirmware.cpp, the store FollowerImageStore.cpp.
 
 #include <Arduino.h>
@@ -49,4 +49,14 @@ inline bool followerImageChunkOk(size_t index, size_t accumulated, size_t len,
   if (index != accumulated) return false;      // no gaps / rewinds
   if (accumulated + len > cap) return false;    // must fit the PSRAM buffer
   return true;
+}
+
+// --- an image stored by an update from a release (#583) ------------------------------
+
+// Such an image is held: it is offered to the rows only once the master
+// itself runs the release's master rev (`heldFor`, "" for an image that was
+// uploaded). A master that fell back to its old image keeps the rows where
+// they are.
+inline bool followerImageHeld(const char* heldFor, const char* runningRev) {
+  return heldFor != nullptr && heldFor[0] != 0 && strcmp(heldFor, runningRev) != 0;
 }

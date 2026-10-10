@@ -41,6 +41,8 @@
 #define PARAM_UNIT_COUNT      "unitCount"
 #define PARAM_REFLASH_ON_BOOT "reflashOnBoot"
 #define PARAM_QUIET           "quiet"
+#define PARAM_RELEASE_CHECK   "releaseCheck"
+#define PARAM_RELEASE_CHANNEL "releaseChannel"
 
 struct PendingSettingsPost {
   bool pending = false;
@@ -61,6 +63,8 @@ struct PendingSettingsPost {
   String unitCount;     bool unitCountProvided = false;
   String reflashOnBoot; bool reflashOnBootProvided = false;  // #412
   String quiet;         bool quietProvided = false;          // #227
+  String releaseCheck;   bool releaseCheckProvided = false;   // #583
+  String releaseChannel; bool releaseChannelProvided = false; // #583
 };
 
 enum class SettingsParamResult {
@@ -188,6 +192,27 @@ inline SettingsParamResult stageSettingsParam(PendingSettingsPost& post,
     return SettingsParamResult::Accepted;
   }
 
+  // #583: the same strict rule for the daily look.
+  if (name == PARAM_RELEASE_CHECK) {
+    String trimmed = rawValue;
+    trimmed.trim();
+    if (trimmed != "true" && trimmed != "false") {
+      return SettingsParamResult::Invalid;
+    }
+    post.releaseCheck = trimmed;
+    post.releaseCheckProvided = true;
+    return SettingsParamResult::Accepted;
+  }
+
+  if (name == PARAM_RELEASE_CHANNEL) {
+    if (!isValidReleaseChannelValue(rawValue)) {
+      return SettingsParamResult::Invalid;
+    }
+    post.releaseChannel = rawValue;
+    post.releaseChannelProvided = true;
+    return SettingsParamResult::Accepted;
+  }
+
   if (name == PARAM_UNIT_COUNT) {
     String trimmed = rawValue;
     trimmed.trim();
@@ -256,6 +281,8 @@ inline void mergeSettingsPost(PendingSettingsPost& shared,
   if (accepted.unitCountProvided)  { shared.unitCount  = accepted.unitCount;  shared.unitCountProvided  = true; }
   if (accepted.reflashOnBootProvided) { shared.reflashOnBoot = accepted.reflashOnBoot; shared.reflashOnBootProvided = true; }
   if (accepted.quietProvided)      { shared.quiet      = accepted.quiet;      shared.quietProvided      = true; }
+  if (accepted.releaseCheckProvided) { shared.releaseCheck = accepted.releaseCheck; shared.releaseCheckProvided = true; }
+  if (accepted.releaseChannelProvided) { shared.releaseChannel = accepted.releaseChannel; shared.releaseChannelProvided = true; }
   shared.pending = true;
 }
 
@@ -318,6 +345,19 @@ inline void applySettingsPost(PendingSettingsPost& post,
       settings.quiet = want;
       saveQuiet(store, settings.quiet);
     }
+  }
+
+  if (post.releaseCheckProvided) {
+    bool want = (post.releaseCheck == "true");
+    if (settings.releaseCheck != want) {
+      settings.releaseCheck = want;
+      saveReleaseCheck(store, settings.releaseCheck);
+    }
+  }
+
+  if (post.releaseChannelProvided && settings.releaseChannel != post.releaseChannel) {
+    settings.releaseChannel = post.releaseChannel;
+    saveReleaseChannel(store, settings.releaseChannel);
   }
 
   bool mqttChanged = false;

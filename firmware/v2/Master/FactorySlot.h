@@ -67,6 +67,15 @@ bool factoryInstallInProgress();
 // the header sector erased, so a torn upload can never be booted; failures
 // before it (bad magic, oversize first chunk) leave a previous image intact.
 bool factoryWriteBegin(const String& expectedMd5);
+// The same install for a caller that checks the stream itself (the update
+// from a release, against the SHA-256 of a signed manifest, #583): no MD5 is
+// compared. Such a caller ends with factoryWriteEnd() only when its own check
+// passed, and with factoryWriteAbort() otherwise — the header sector is held
+// back until then all the same.
+bool factoryWriteBeginChecked();
+// Gives an install up: what it touched is left without a header, never as an
+// image that could be started. A no-op when none runs.
+void factoryWriteAbort();
 // streamOffset = the request's byte offset for this chunk (the framework's
 // upload `index`); a mismatch with the install's own cursor means a foreign
 // or out-of-order stream and fails the install instead of corrupting it.

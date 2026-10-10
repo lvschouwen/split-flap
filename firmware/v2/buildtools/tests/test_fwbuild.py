@@ -5,6 +5,7 @@ Run from firmware/v2/buildtools: python -m pytest tests/
 import gzip
 import io
 import pathlib
+import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -113,9 +114,20 @@ def test_version_header_without_and_with_a_unit_bundle():
     plain = fwbuild.version_header_text("abc1234")
     assert '#define GIT_REV "abc1234"' in plain
     assert "BUNDLED_UNIT_REV" not in plain
+    assert "#define GIT_COMMIT_TIME 0UL" in plain
+    assert "#define GIT_COMMIT_TIME 1791622102UL" in fwbuild.version_header_text(
+        "abc1234", commit_time=1791622102)
     bundled = fwbuild.version_header_text("abc1234", "0fd341f", "a,b")
     assert '#define BUNDLED_UNIT_REV "0fd341f"' in bundled
     assert '#define BUNDLED_UNIT_REV_EQUIV "a,b"' in bundled
+
+
+def test_commit_time_is_the_head_commits_and_zero_without_git(tmp_path):
+    here = pathlib.Path(__file__).resolve().parent
+    head = int(subprocess.check_output(
+        ["git", "log", "-1", "--format=%ct"], cwd=here).decode())
+    assert fwbuild.git_commit_time(here) == head > 1_700_000_000
+    assert fwbuild.git_commit_time(tmp_path) == 0
 
 
 def test_compress_asset_is_reproducible():

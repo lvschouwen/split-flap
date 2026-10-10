@@ -20,6 +20,8 @@ static size_t writeOffset = 0;
 static size_t erasedUpTo = 0;
 static MD5Builder md5;
 static String expectedMd5;
+// The stream is checked by the caller, not against expectedMd5.
+static bool callerChecks = false;
 static String lastError;
 
 // True from factoryWriteBegin() until the install reaches a determinate
@@ -83,13 +85,14 @@ static bool fail(const String& why) {
   return false;
 }
 
-bool factoryWriteBegin(const String& md5Param) {
+static bool beginInstall(const String& md5Param, bool checkedByCaller) {
   // Guard before touching any state: a second upload must not reclaim the
   // in-flight one's cursor/digest (the caller turns this into a 409).
   if (factoryInstallInProgress()) {
     lastError = "another rescue install is in flight";
     return false;
   }
+  callerChecks = checkedByCaller;
   lastError = "";
   target = findFactory();
   if (target == nullptr) {
@@ -103,8 +106,18 @@ bool factoryWriteBegin(const String& md5Param) {
   installInProgress = true;
   lastChunkMs = millis();
   md5.begin();
-  SerialPrintln("Rescue install started (md5 " + md5Param + ")");
+  SerialPrintln(checkedByCaller ? String("Rescue install started (from a release)")
+                                : "Rescue install started (md5 " + md5Param + ")");
   return true;
+}
+
+bool factoryWriteBegin(const String& md5Param) { return beginInstall(md5Param, false); }
+
+bool factoryWriteBeginChecked() { return beginInstall(String(), true); }
+
+void factoryWriteAbort() {
+  if (target == nullptr) return;
+  fail("given up before the image was whole");
 }
 
 bool factoryWriteChunk(const uint8_t* data, size_t len, size_t streamOffset) {
@@ -179,7 +192,7 @@ bool factoryWriteEnd() {
   }
   md5.calculate();
   String actual = md5.toString();
-  if (actual != expectedMd5) {
+  if (!callerChecks && actual != expectedMd5) {
     return fail("md5 mismatch (upload corrupted): got " + actual);
   }
   // Commit: the digest checked out, so the held-back header sector may land.

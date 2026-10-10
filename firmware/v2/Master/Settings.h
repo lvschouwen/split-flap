@@ -27,6 +27,7 @@
 #define SETTINGS_DEFAULT_DEVICE_MODE "text"
 #define SETTINGS_DEFAULT_TIMEZONE    "CET-1CEST,M3.5.0,M10.5.0/3"
 #define SETTINGS_DEFAULT_MQTT_PORT   1883
+#define SETTINGS_DEFAULT_RELEASE_CHANNEL "stable"
 
 struct MasterSettings {
   String alignment;
@@ -52,6 +53,9 @@ struct MasterSettings {
                            // unattended recovery path for a unit that came
                            // back from a failed flash, and defaulting it off
                            // would silently strand those.
+  bool releaseCheck = true;  // #583: look for a release once a day. Looking
+                             // never installs.
+  String releaseChannel;     // #583: "stable", or "test" for a trial release
 };
 
 // NVS keys (hard 15-char limit).
@@ -72,6 +76,8 @@ struct MasterSettings {
 #define SETTINGS_KEY_UNIT_COUNT   "unitCount"
 #define SETTINGS_KEY_REFLASH_BOOT "reflashOnBoot"
 #define SETTINGS_KEY_QUIET "quiet"
+#define SETTINGS_KEY_RELEASE_CHECK "relCheck"
+#define SETTINGS_KEY_RELEASE_CHANNEL "relChannel"
 
 // Bounded free-text sanitation: printable ASCII and shorter than the
 // limit, else default.
@@ -144,6 +150,12 @@ inline MasterSettings loadSettings(SettingsStore& store) {
 
   s.reflashOnBoot = store.getInt(SETTINGS_KEY_REFLASH_BOOT, 1) != 0;
   s.quiet = store.getInt(SETTINGS_KEY_QUIET, 0) != 0;
+  s.releaseCheck = store.getInt(SETTINGS_KEY_RELEASE_CHECK, 1) != 0;
+  s.releaseChannel =
+      store.getString(SETTINGS_KEY_RELEASE_CHANNEL, SETTINGS_DEFAULT_RELEASE_CHANNEL);
+  if (!isValidReleaseChannelValue(s.releaseChannel)) {
+    s.releaseChannel = SETTINGS_DEFAULT_RELEASE_CHANNEL;
+  }
   s.unitCountOverride = store.getInt(SETTINGS_KEY_UNIT_COUNT, 0);
   if (s.unitCountOverride < 0 || s.unitCountOverride > UNITS_AMOUNT) {
     s.unitCountOverride = 0;  // auto
@@ -186,6 +198,14 @@ inline void saveReflashOnBoot(SettingsStore& store, bool v) {
 
 inline void saveQuiet(SettingsStore& store, bool v) {
   store.putInt(SETTINGS_KEY_QUIET, v ? 1 : 0);
+}
+
+inline void saveReleaseCheck(SettingsStore& store, bool v) {
+  store.putInt(SETTINGS_KEY_RELEASE_CHECK, v ? 1 : 0);
+}
+
+inline void saveReleaseChannel(SettingsStore& store, const String& v) {
+  store.putString(SETTINGS_KEY_RELEASE_CHANNEL, v);
 }
 
 // WiFi credentials (#188): always written as a pair — the portal submits

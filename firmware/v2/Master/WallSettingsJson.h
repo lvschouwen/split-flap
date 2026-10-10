@@ -7,11 +7,13 @@
 // GET / PUT /api/v2/settings/wall
 //   {"mode":"clock","quiet":false,"alignment":"center","speed":80,
 //    "timezone":"CET-1CEST,M3.5.0,M10.5.0/3","updateUnitsAtStart":true,
+//    "releaseCheck":true,"releaseChannel":"stable",
 //    "mqtt":{"host":"192.168.1.4","port":1883,"user":"splitflap",
 //            "passwordSet":true}}
 //       timezone is the POSIX rule (GET /tz.json has one for every zone
 //       name); mqtt.password is write-only, "" keeps the stored one;
-//       updateUnitsAtStart is for every board of the wall
+//       updateUnitsAtStart is for every board of the wall; releaseCheck is
+//       the daily look for a release, releaseChannel "stable" or "test"
 // GET / PUT /api/v2/settings/board/<master's name>
 //   {"name":"","unitCount":0}
 //       name "" = the name from the chip's id; unitCount 0 = as many as answer
@@ -40,6 +42,8 @@ static const Key WALL_KEYS[] = {
     {"speed", PARAM_FLAP_SPEED, Kind::Number},
     {"timezone", PARAM_TIMEZONE, Kind::Text},
     {"updateUnitsAtStart", PARAM_REFLASH_ON_BOOT, Kind::Flag},
+    {"releaseCheck", PARAM_RELEASE_CHECK, Kind::Flag},
+    {"releaseChannel", PARAM_RELEASE_CHANNEL, Kind::Text},
 };
 static const Key MQTT_KEYS[] = {
     {"host", PARAM_MQTT_HOST, Kind::Text},
@@ -149,6 +153,8 @@ inline void wallSettingsWrite(JsonObject out, const MasterSettings& s) {
   out["speed"] = s.flapSpeed;
   out["timezone"] = s.timezonePosix;
   out["updateUnitsAtStart"] = s.reflashOnBoot;
+  out["releaseCheck"] = s.releaseCheck;
+  out["releaseChannel"] = s.releaseChannel;
   JsonObject mqtt = out["mqtt"].to<JsonObject>();
   mqtt["host"] = s.mqttHost;
   mqtt["port"] = s.mqttPort;

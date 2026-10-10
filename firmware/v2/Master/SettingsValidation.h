@@ -43,6 +43,13 @@ static inline bool isValidDeviceModeValue(const String& v) {
   return v == "text" || v == "clock";
 }
 
+// Where the master looks for a release (#583): the two channels the site
+// has (ReleaseManifest.h's releaseChannelDir; test_release_policy holds the
+// two to each other).
+static inline bool isValidReleaseChannelValue(const String& v) {
+  return v == "stable" || v == "test";
+}
+
 // The HTML slider enforces 1..100 client-side only; this is the server-side
 // bound so a raw POST can't persist an out-of-range speed (#95).
 static inline bool isValidFlapSpeedValue(const String& v) {

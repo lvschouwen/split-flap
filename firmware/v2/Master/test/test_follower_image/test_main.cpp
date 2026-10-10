@@ -55,6 +55,22 @@ static void test_chunk_rejects_cursor_gap_and_overflow() {
 
 // --- one-shot push phase machine ----------------------------------------------------
 
+// --- the hold on an image a release stored ------------------------------------------
+
+static void test_an_uploaded_image_is_never_held() {
+  TEST_ASSERT_FALSE(followerImageHeld("", "abc1234"));
+  TEST_ASSERT_FALSE(followerImageHeld(nullptr, "abc1234"));
+}
+
+static void test_a_release_image_is_held_until_the_master_runs_that_release() {
+  TEST_ASSERT_TRUE(followerImageHeld("def5678", "abc1234"));
+  TEST_ASSERT_FALSE(followerImageHeld("def5678", "def5678"));
+  // A master that fell back runs its old rev again: still held.
+  TEST_ASSERT_TRUE(followerImageHeld("def5678", "abc1234"));
+  // A build with changes on top of the release is not the release.
+  TEST_ASSERT_TRUE(followerImageHeld("def5678", "def5678-dirty"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_upload_accepts_follower_bin_and_extracts_rev);
@@ -62,5 +78,7 @@ int main(int, char**) {
   RUN_TEST(test_upload_rejects_s3_and_garbage_names);
   RUN_TEST(test_chunk_ok_sequential_appends);
   RUN_TEST(test_chunk_rejects_cursor_gap_and_overflow);
+  RUN_TEST(test_an_uploaded_image_is_never_held);
+  RUN_TEST(test_a_release_image_is_held_until_the_master_runs_that_release);
   return UNITY_END();
 }

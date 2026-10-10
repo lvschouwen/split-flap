@@ -104,6 +104,19 @@ def git_short_rev(project_dir) -> tuple:
     return (rev, dirty)
 
 
+def git_commit_time(project_dir) -> int:
+    """Committer time, in seconds, of the commit the build is made from; 0
+    when git cannot say. What a board compares a release's commit time with
+    (#583): a release is offered only when it was committed later."""
+    try:
+        return int(subprocess.check_output(
+            ["git", "log", "-1", "--format=%ct"],
+            cwd=project_dir, stderr=subprocess.DEVNULL,
+        ).decode().strip())
+    except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
+        return 0
+
+
 def version_tag(rev: str, dirty: bool) -> str:
     """The GIT_REV tag: short hash, '-dirty' when the tree has uncommitted
     changes."""
@@ -141,10 +154,11 @@ def bundled_unit_equivalent_revs(project_dir) -> str:
                     if s and not s.startswith("#"))
 
 
-def version_header_text(tag: str, unit_rev=None, unit_equiv=None) -> str:
-    """BuildVersion.h: GIT_REV, plus the bundled unit identity for the trees
-    that embed a unit image."""
+def version_header_text(tag: str, unit_rev=None, unit_equiv=None, commit_time: int = 0) -> str:
+    """BuildVersion.h: GIT_REV and the commit's time, plus the bundled unit
+    identity for the trees that embed a unit image."""
     text = GENERATED_BANNER + "#pragma once\n" + f'#define GIT_REV "{tag}"\n'
+    text += f"#define GIT_COMMIT_TIME {int(commit_time)}UL\n"
     if unit_rev is not None:
         text += f'#define BUNDLED_UNIT_REV "{unit_rev}"\n'
         text += f'#define BUNDLED_UNIT_REV_EQUIV "{unit_equiv or ""}"\n'
@@ -160,7 +174,8 @@ def write_version_header(project_dir, with_unit_bundle: bool) -> str:
         unit_rev = bundled_unit_rev(project_dir, fallback=tag)
         unit_equiv = bundled_unit_equivalent_revs(project_dir)
     (project_dir / "BuildVersion.h").write_text(
-        version_header_text(tag, unit_rev, unit_equiv), encoding="utf-8")
+        version_header_text(tag, unit_rev, unit_equiv, git_commit_time(project_dir)),
+        encoding="utf-8")
     line = f"[build_assets] wrote BuildVersion.h  GIT_REV={tag}"
     if with_unit_bundle:
         line += f"  BUNDLED_UNIT_REV={unit_rev}  EQUIV=[{unit_equiv}]"

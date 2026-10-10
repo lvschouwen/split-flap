@@ -489,6 +489,48 @@ static void test_apply_persists_quiet_both_ways() {
   TEST_ASSERT_FALSE(loadSettings(store).quiet);
 }
 
+// --- looking for a release (#583) ---------------------------------------------
+
+static void test_the_release_look_defaults_on_and_to_the_stable_channel() {
+  FakeSettingsStore store;
+  TEST_ASSERT_TRUE(loadSettings(store).releaseCheck);
+  TEST_ASSERT_EQUAL_STRING("stable", loadSettings(store).releaseChannel.c_str());
+  // A stored value that is no channel reads as the default.
+  store.putString(SETTINGS_KEY_RELEASE_CHANNEL, "nightly");
+  TEST_ASSERT_EQUAL_STRING("stable", loadSettings(store).releaseChannel.c_str());
+}
+
+static void test_the_release_settings_take_only_their_values() {
+  PendingSettingsPost post;
+  const char* noFlag[] = {"0", "1", "yes", "", "True"};
+  for (const char* v : noFlag) {
+    TEST_ASSERT_EQUAL((int)SettingsParamResult::Invalid,
+                      (int)stageSettingsParam(post, PARAM_RELEASE_CHECK, v));
+  }
+  const char* noChannel[] = {"", "Stable", "nightly", " test", "../test", "releases"};
+  for (const char* v : noChannel) {
+    TEST_ASSERT_EQUAL((int)SettingsParamResult::Invalid,
+                      (int)stageSettingsParam(post, PARAM_RELEASE_CHANNEL, v));
+  }
+  TEST_ASSERT_FALSE(post.releaseCheckProvided);
+  TEST_ASSERT_FALSE(post.releaseChannelProvided);
+}
+
+static void test_apply_persists_the_release_settings() {
+  FakeSettingsStore store;
+  MasterSettings settings = loadSettings(store);
+  PendingSettingsPost post;
+  stageSettingsParam(post, PARAM_RELEASE_CHECK, "false");
+  stageSettingsParam(post, PARAM_RELEASE_CHANNEL, "test");
+  PendingSettingsPost shared;
+  mergeSettingsPost(shared, post);
+  applySettingsPost(shared, settings, store);
+  TEST_ASSERT_FALSE(settings.releaseCheck);
+  TEST_ASSERT_EQUAL_STRING("test", settings.releaseChannel.c_str());
+  TEST_ASSERT_FALSE(loadSettings(store).releaseCheck);
+  TEST_ASSERT_EQUAL_STRING("test", loadSettings(store).releaseChannel.c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_unknown_param_is_ignored);
@@ -531,5 +573,8 @@ int main(int, char**) {
   RUN_TEST(test_apply_persists_reflash_on_boot_both_ways);
   RUN_TEST(test_quiet_defaults_off_and_takes_only_true_or_false);
   RUN_TEST(test_apply_persists_quiet_both_ways);
+  RUN_TEST(test_the_release_look_defaults_on_and_to_the_stable_channel);
+  RUN_TEST(test_the_release_settings_take_only_their_values);
+  RUN_TEST(test_apply_persists_the_release_settings);
   return UNITY_END();
 }

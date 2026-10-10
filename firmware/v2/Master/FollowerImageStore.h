@@ -20,6 +20,9 @@
 // Absolute LittleFS paths.
 #define FOLLOWER_IMAGE_PATH "/follower-fw.bin"
 #define FOLLOWER_IMAGE_REV_PATH "/follower-fw.rev"
+// The master rev an image stored by an update from a release waits for
+// (FollowerImagePolicy.h, followerImageHeld). Absent for an uploaded image.
+#define FOLLOWER_IMAGE_HOLD_PATH "/follower-fw.hold"
 
 // PSRAM accumulation ceiling — well over a real ~384 KB follower image, well
 // under the ESP-01's own sketch space, so an absurd upload is refused early.
@@ -42,10 +45,13 @@ struct FollowerImageFacts {
   bool packed = false;  // a gzip image for the row's boot copier
 };
 
-// False while there is no stored image, or its checksum is not known yet (it
-// is read off flash by netTask after a start). The generation changes
-// whenever the answer does.
+// The image the rows are offered. False while there is no stored image, its
+// checksum is not known yet (it is read off flash by netTask after a start),
+// or it is held. The generation changes whenever the answer does.
 bool followerImageFacts(FollowerImageFacts& out);
+// The stored image whether it is held or not, for the operator. `heldFor` is
+// the master rev it waits for, "" when it is on offer.
+bool followerImageStoredFacts(FollowerImageFacts& out, String& heldFor);
 uint32_t followerImageFactsGeneration();
 
 // Atomically claim the file for a relay stream: fails (returns false) if the
@@ -71,7 +77,10 @@ void followerImageReleaseRelay();
 // accumulating or its flush is still pending; allocates the PSRAM buffer,
 // stores the expected md5 + rev. A concurrent relay stream is fine — the new
 // image just accumulates in PSRAM and its flush defers behind the relay.
-bool followerImageWriteBegin(const String& expectedMd5, const String& rev);
+// `heldFor`: the master rev that must run before the rows are offered this
+// image; "" for an upload, which is offered at once.
+bool followerImageWriteBegin(const String& expectedMd5, const String& rev,
+                             const String& heldFor = String());
 // chunk: cursor-matched append (FollowerImagePolicy.h).
 bool followerImageWriteChunk(const uint8_t* data, size_t len, size_t streamOffset);
 // end: MD5-verifies the buffer; on success stages it for netTask to write and
@@ -79,6 +88,10 @@ bool followerImageWriteChunk(const uint8_t* data, size_t len, size_t streamOffse
 bool followerImageWriteEnd();
 // "" while the last begin/chunk/end sequence has no error.
 String followerImageWriteError();
+// Gives up what begin started; nothing of it is stored.
+void followerImageWriteAbort();
+// A checked image is still waiting for netTask to write it.
+bool followerImageWritePending();
 
 // --- netTask flush ------------------------------------------------------------------
 // Writes the staged buffer to FOLLOWER_IMAGE_PATH + FOLLOWER_IMAGE_REV_PATH

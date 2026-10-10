@@ -13,7 +13,8 @@
 #include <atomic>
 
 #include "FlashLog.h"          // flashLogAvailable() — LittleFS mount owner
-#include "FollowerImagePolicy.h"  // followerImageChunkOk
+#include "BuildVersion.h"
+#include "FollowerImagePolicy.h"  // followerImageChunkOk, followerImageHeld
 #include "HelpersSerialHandling.h"
 #include "LargeAlloc.h"
 
@@ -23,6 +24,7 @@ static SemaphoreHandle_t imgMutex = nullptr;
 
 static bool storedPresent = false;
 static String storedRev;
+static String storedHeldFor;  // "" = on offer
 static int relayClaims = 0;
 
 // What a row is told about the stored image. Known at once for an image that
@@ -49,6 +51,7 @@ static String accMd5;   // expected, lower-hex 32
 static const uint32_t FOLLOWER_IMAGE_STALL_TIMEOUT_MS = 30000UL;
 static uint32_t accLastProgressMs = 0;
 static String accRev;
+static String accHeldFor;
 static String lastError;
 
 // Flush handoff: the accumulator hands its buffer to netTask.
@@ -56,6 +59,7 @@ static bool flushPending = false;
 static uint8_t* flushBuf = nullptr;
 static size_t flushLen = 0;
 static String flushRev;
+static String flushHeldFor;
 
 struct ImgLock {
   ImgLock() { xSemaphoreTake(imgMutex, portMAX_DELAY); }
@@ -85,6 +89,18 @@ void followerImageStoreInit() {
       storedRev = f.readString();
       storedRev.trim();
       f.close();
+    }
+  }
+  if (storedPresent && LittleFS.exists(FOLLOWER_IMAGE_HOLD_PATH)) {
+    File f = LittleFS.open(FOLLOWER_IMAGE_HOLD_PATH, FILE_READ);
+    if (f) {
+      storedHeldFor = f.readString();
+      storedHeldFor.trim();
+      f.close();
+    }
+    if (followerImageHeld(storedHeldFor.c_str(), GIT_REV)) {
+      SerialPrintln("FollowerImageStore: the stored image " + storedRev +
+                    " is held until this master runs " + storedHeldFor);
     }
   }
 }
@@ -121,8 +137,24 @@ bool followerImageFacts(FollowerImageFacts& out) {
   if (imgMutex == nullptr) return false;
   ImgLock lock;
   if (!storedPresent || !factsKnown) return false;
+  if (followerImageHeld(storedHeldFor.c_str(), GIT_REV)) return false;
   out = facts;
   return true;
+}
+
+bool followerImageStoredFacts(FollowerImageFacts& out, String& heldFor) {
+  if (imgMutex == nullptr) return false;
+  ImgLock lock;
+  if (!storedPresent || !factsKnown) return false;
+  out = facts;
+  heldFor = followerImageHeld(storedHeldFor.c_str(), GIT_REV) ? storedHeldFor : String();
+  return true;
+}
+
+bool followerImageWritePending() {
+  if (imgMutex == nullptr) return false;
+  ImgLock lock;
+  return flushPending;
 }
 
 uint32_t followerImageFactsGeneration() {
@@ -183,7 +215,14 @@ static void accFree() {
   accumulating = false;
 }
 
-bool followerImageWriteBegin(const String& expectedMd5, const String& rev) {
+void followerImageWriteAbort() {
+  if (imgMutex == nullptr) return;
+  ImgLock lock;
+  if (accumulating) accFree();
+}
+
+bool followerImageWriteBegin(const String& expectedMd5, const String& rev,
+                             const String& heldFor) {
   if (imgMutex == nullptr) return false;
   {
     ImgLock lock;
@@ -204,6 +243,7 @@ bool followerImageWriteBegin(const String& expectedMd5, const String& rev) {
     accMd5 = expectedMd5;
     accMd5.toLowerCase();
     accRev = rev;
+    accHeldFor = heldFor;
     accLen = 0;
     accLastProgressMs = millis();  // #419: arms the stall reclaim
   }
@@ -269,6 +309,7 @@ bool followerImageWriteEnd() {
   flushBuf = accBuf;
   flushLen = accLen;
   flushRev = accRev;
+  flushHeldFor = accHeldFor;
   flushPending = true;
   accBuf = nullptr;
   accLen = 0;
@@ -298,6 +339,7 @@ void followerImageFlushTick() {
   uint8_t* buf = nullptr;
   size_t len = 0;
   String rev;
+  String heldFor;
   {
     bool owed;
     {
@@ -314,6 +356,7 @@ void followerImageFlushTick() {
     buf = flushBuf;
     len = flushLen;
     rev = flushRev;
+    heldFor = flushHeldFor;
   }
 
   // The buffer is what was uploaded and checked: its facts need no read-back.
@@ -330,11 +373,21 @@ void followerImageFlushTick() {
 
   bool ok = false;
   bool revOk = false;
-  File f = LittleFS.open(FOLLOWER_IMAGE_PATH, FILE_WRITE);
+  // The hold goes first and the image last: a restart in between leaves the
+  // old image held, never the new one on offer before its master runs.
+  bool holdOk = true;
+  if (heldFor.length() > 0) {
+    File hf = LittleFS.open(FOLLOWER_IMAGE_HOLD_PATH, FILE_WRITE);
+    holdOk = hf && hf.print(heldFor) == heldFor.length();
+    if (hf) hf.close();
+  }
+  File f;
+  if (holdOk) f = LittleFS.open(FOLLOWER_IMAGE_PATH, FILE_WRITE);
   if (f) {
     ok = (f.write(buf, len) == len);
     f.close();
   }
+  if (ok && heldFor.length() == 0) LittleFS.remove(FOLLOWER_IMAGE_HOLD_PATH);
   if (ok) {
     File rf = LittleFS.open(FOLLOWER_IMAGE_REV_PATH, FILE_WRITE);
     if (rf) {
@@ -348,6 +401,10 @@ void followerImageFlushTick() {
     SerialPrintln(F("FollowerImageStore: flash write failed"));
     LittleFS.remove(FOLLOWER_IMAGE_PATH);  // no torn image left bootable
     LittleFS.remove(FOLLOWER_IMAGE_REV_PATH);
+    LittleFS.remove(FOLLOWER_IMAGE_HOLD_PATH);
+  }
+  if (ok && heldFor.length() > 0) {
+    SerialPrintln("FollowerImageStore: held until this master runs " + heldFor);
   }
 
   ImgLock lock;
@@ -360,6 +417,7 @@ void followerImageFlushTick() {
   // or every eligibility check passes and every push then fails to read it.
   storedPresent = ok;
   storedRev = (ok && revOk) ? rev : String();
+  storedHeldFor = ok ? heldFor : String();
   strlcpy(written.rev, storedRev.c_str(), sizeof(written.rev));
   facts = written;
   factsKnown = ok;

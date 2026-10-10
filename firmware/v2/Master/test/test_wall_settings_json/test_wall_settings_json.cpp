@@ -33,6 +33,8 @@ static MasterSettings live() {
   s.mqttPassword = "secret";
   s.unitCountOverride = 0;
   s.reflashOnBoot = true;
+  s.releaseCheck = true;
+  s.releaseChannel = "stable";
   return s;
 }
 
@@ -59,6 +61,13 @@ static void test_every_wall_setting_is_taken_with_its_own_type() {
   TEST_ASSERT_EQUAL_STRING("true", post.quiet.c_str());
   TEST_ASSERT_EQUAL_STRING("UTC0", post.timezone.c_str());
   TEST_ASSERT_EQUAL_STRING("false", post.reflashOnBoot.c_str());
+  TEST_ASSERT_FALSE(post.releaseCheckProvided);
+  PendingSettingsPost release;
+  TEST_ASSERT_NULL(put("{\"releaseCheck\":false,\"releaseChannel\":\"test\"}", release));
+  TEST_ASSERT_EQUAL_STRING("false", release.releaseCheck.c_str());
+  TEST_ASSERT_EQUAL_STRING("test", release.releaseChannel.c_str());
+  TEST_ASSERT_EQUAL_STRING("releaseChannel", put("{\"releaseChannel\":\"nightly\"}", release));
+  TEST_ASSERT_EQUAL_STRING("releaseCheck", put("{\"releaseCheck\":\"on\"}", release));
   TEST_ASSERT_EQUAL_STRING("broker.lan", post.mqttHost.c_str());
   TEST_ASSERT_EQUAL_STRING("1884", post.mqttPort.c_str());
   TEST_ASSERT_TRUE(post.mqttPasswordProvided);
