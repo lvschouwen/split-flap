@@ -1,1 +1,131 @@
-<!doctype html><meta charset="utf-8"><title>Split-Flap</title><p>Split-Flap firmware releases. Nothing here yet.</p>
+<!doctype html>
+<!-- The web flasher (#583; docs/superpowers/specs/2026-10-10-release-update-design.md,
+     section 9). flashing/release.py publishes this file with every release:
+     at / for a release, at /test/ for a trial release. It reads latest.json
+     of its own channel and hands that release's flasher.json to ESP Web
+     Tools, which recognises the board and takes the image made for it.
+     ESP Web Tools is served from this site (/esp-web-tools/, put there by
+     release.py from a pinned, checked package): what writes a board's flash
+     is loaded from nowhere else. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Split-Flap — install firmware</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #1c1e22; color: #e8e8e8;
+         max-width: 720px; margin: 0 auto; padding: 1.25rem 1rem 3rem; line-height: 1.5; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.2rem; }
+  h2 { font-size: 1.05rem; margin: 0 0 0.4rem; }
+  a { color: #e2a33d; }
+  code { background: #33373f; border-radius: 4px; padding: 0.05rem 0.3rem; white-space: nowrap; }
+  .muted { color: #a3a3a3; }
+  .bad { color: #e2706c; }
+  .boards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+            gap: 1rem; margin: 1.25rem 0; }
+  .card { background: #26292f; border-radius: 8px; padding: 1rem; }
+  .card p { margin: 0.4rem 0 0.9rem; font-size: 0.92rem; }
+  button { background: #e2a33d; color: #1c1e22; border: 0; border-radius: 6px;
+           padding: 0.6rem 1.1rem; font-size: 0.95rem; font-weight: 600; cursor: pointer; }
+  button:focus-visible, a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  ol { padding-left: 1.3rem; } li { margin: 0.35rem 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<h1>Split-Flap</h1>
+<p class="muted" id="release">Looking for the latest release…</p>
+
+<p>Install the firmware on a new board from this page. It needs Chrome or Edge
+on a computer: the browser talks to the board over USB.</p>
+
+<p class="bad" id="noSerial" hidden>This browser cannot reach a USB serial
+port. Open this page in Chrome or Edge on a computer.</p>
+
+<div class="boards" id="boards" hidden>
+  <div class="card">
+    <h2>Master</h2>
+    <p>ESP32-S3 with 16 MB flash. Plug its USB port into this computer. This
+    writes the whole flash: bootloader, firmware and the rescue image.</p>
+    <esp-web-install-button class="install">
+      <button slot="activate">Install on a master</button>
+      <span slot="unsupported"></span>
+      <span slot="not-allowed" class="bad">This page must be opened over HTTPS.</span>
+    </esp-web-install-button>
+  </div>
+  <div class="card">
+    <h2>Row board</h2>
+    <p>ESP-01 with 1 MB flash, in a USB programmer that starts it in flash
+    mode (GPIO0 held low while it powers up).</p>
+    <esp-web-install-button class="install">
+      <button slot="activate">Install on a row board</button>
+      <span slot="unsupported"></span>
+      <span slot="not-allowed" class="bad">This page must be opened over HTTPS.</span>
+    </esp-web-install-button>
+  </div>
+</div>
+<p class="muted" id="boardsNote" hidden>The installer reads which board is
+connected and takes the image made for it, so a row board is never given the
+master's firmware or the other way round.</p>
+
+<h2>What next</h2>
+<ol>
+  <li>A new board opens its own WiFi network, named after the board and ending
+  in <code>-setup</code>. Join it and give the board your WiFi name and
+  password.</li>
+  <li>Open the master in a browser, by the name it shows on your network
+  (<code>split-flap-xxxxxx.local</code>) or by its address.</li>
+  <li>In <strong>Wall settings</strong> on the master, add the row boards: the
+  master finds them on the network and pairs with them.</li>
+</ol>
+<p class="muted">A wall that already runs finds new releases by itself and
+installs one from its <strong>Firmware</strong> screen; it does not need this
+page.</p>
+
+<script>
+"use strict";
+(function () {
+  // A trial release is published under /test/ with this page beside its
+  // latest.json; a release has this page at / and its files under /releases/.
+  var trial = /\/test\/(index\.html)?$/.test(location.pathname);
+  var dir = new URL(trial ? "./" : "releases/", location.href);
+  var tools = document.createElement("script");
+  tools.type = "module";
+  tools.src = new URL((trial ? "../" : "") + "esp-web-tools/install-button.js", location.href);
+  document.head.append(tools);
+  var line = document.getElementById("release");
+
+  if (!("serial" in navigator)) document.getElementById("noSerial").hidden = false;
+
+  fetch(new URL("latest.json", dir), { cache: "no-store" })
+    .then(function (r) {
+      if (!r.ok) throw new Error("no release");
+      return r.json();
+    })
+    .then(function (latest) {
+      // The tag names a directory of this site and nothing else.
+      if (!/^[A-Za-z0-9._-]+$/.test(latest.tag) || latest.tag.indexOf("..") >= 0) {
+        throw new Error("bad tag");
+      }
+      var manifest = new URL(latest.tag + "/flasher.json", dir).href;
+      document.querySelectorAll("esp-web-install-button.install").forEach(function (b) {
+        b.setAttribute("manifest", manifest);
+      });
+      line.textContent = (trial ? "Trial release " : "Release ") + latest.tag;
+      if (/^https:\/\//.test(latest.notes)) {
+        var notes = document.createElement("a");
+        notes.href = latest.notes;
+        notes.textContent = "what is in it";
+        line.append(" · ", notes);
+      }
+      document.getElementById("boards").hidden = false;
+      document.getElementById("boardsNote").hidden = false;
+    })
+    .catch(function () {
+      line.textContent = "No release is published here yet.";
+    });
+})();
+</script>
+</body>
+</html>

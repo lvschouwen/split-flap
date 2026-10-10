@@ -1,0 +1,31 @@
+{
+ "format": 1,
+ "channel": "stable",
+ "tag": "v2026.10.10-hotfix.1",
+ "notes": "https://github.com/lvschouwen/split-flap/releases/tag/v2026.10.10-hotfix.1",
+ "commitTime": 1791642628,
+ "master": {
+  "rev": "ee6abc0",
+  "path": "v2026.10.10-hotfix.1/firmware-ee6abc0-master.bin",
+  "size": 1711904,
+  "sha256": "21e3553e9903cc53ae43d7a6f021db1798a1e66522eb0e43598879b8f8af0142"
+ },
+ "row": {
+  "rev": "ee6abc0",
+  "path": "v2026.10.10-hotfix.1/follower-ee6abc0-gz.bin",
+  "size": 328491,
+  "sha256": "0d258ca62fb569e123b52793277bb785aad9c2e2c2286e1a05fb7b89393d2040",
+  "md5": "6e2befc1b347a0326627213082481c08"
+ },
+ "rescue": {
+  "rev": "ee6abc0",
+  "path": "v2026.10.10-hotfix.1/rescue-ee6abc0.bin",
+  "size": 1207600,
+  "sha256": "fefd6c74b7b4b2cffff5a5a3a1c9ded853e08ce6daee0143f92212427bf64bc7"
+ },
+ "units": {
+  "revs": [
+   "0d90815"
+  ]
+ }
+}
