@@ -157,9 +157,13 @@ def entry(path: Path, rev: str, tag: str, with_md5: bool = False) -> dict:
     return item
 
 
-def build_manifest(images: Images, tag: str, notes_url: str, commit_time: int) -> bytes:
+def build_manifest(images: Images, channel: str, tag: str, notes_url: str,
+                   commit_time: int) -> bytes:
+    """`channel` is inside what is signed: a board refuses a manifest of
+    another channel, so a trial release cannot be served as a release."""
     manifest = {
         "format": 1,
+        "channel": channel,
         "tag": tag,
         "notes": notes_url,
         "commitTime": commit_time,
@@ -303,7 +307,7 @@ def release(args: argparse.Namespace) -> str:
     notes_url = (f"https://github.com/{slug}/releases/tag/{tag}" if stable
                  else f"https://github.com/{slug}/commit/{commit}")
 
-    manifest = build_manifest(images, tag, notes_url, commit_time)
+    manifest = build_manifest(images, args.channel, tag, notes_url, commit_time)
     key = args.key_dir / "release-key.pem"
     passphrase = args.key_dir / "release-key.pass"
     signature = sign(manifest, key, passphrase if passphrase.is_file() else None)

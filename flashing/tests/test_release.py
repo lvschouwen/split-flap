@@ -114,6 +114,7 @@ def test_test_channel_publishes_what_was_staged_under_a_signature_that_checks_ou
     manifest_bytes = (site / "test/latest.json").read_bytes()
     manifest = json.loads(manifest_bytes)
     assert manifest["tag"] == tag and manifest["format"] == 1
+    assert manifest["channel"] == "test"
     assert manifest["commitTime"] == int(git(world.repo, "log", "-1", "--format=%ct"))
     for part, name in (("master", f"firmware-{world.rev}-master.bin"),
                        ("row", f"follower-{world.rev}-gz.bin"),
@@ -207,7 +208,7 @@ def test_prune_keeps_the_newest_three(tmp_path):
 def test_the_manifest_is_refused_past_what_a_board_takes(world):
     images = release.Images(world.bins, world.rev, world.rev)
     with pytest.raises(release.Refused, match="a board takes"):
-        release.build_manifest(images, "t", "https://example.org/" + "x" * 2048, 1)
+        release.build_manifest(images, "test", "t", "https://example.org/" + "x" * 2048, 1)
 
 
 def test_the_header_of_this_repository_carries_a_p256_key_and_a_host():

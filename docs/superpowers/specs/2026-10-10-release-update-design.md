@@ -41,6 +41,7 @@ The newest three releases are kept; older directories are removed by the release
 ```json
 {
   "format": 1,
+  "channel": "stable",
   "tag": "v2026.10.10",
   "notes": "https://github.com/lvschouwen/split-flap/releases/tag/v2026.10.10",
   "commitTime": 1791619200,
@@ -50,6 +51,7 @@ The newest three releases are kept; older directories are removed by the release
 }
 ```
 
+- `channel` is `stable` or `test`. A board refuses a manifest whose channel is not the one it asked for: both channels are signed with the same key, and without this a trial release could be served to every wall as a release.
 - `commitTime` is the committer time, in seconds, of the commit the release is tagged at.
 - `path` is relative to `/releases/` (or `/test/`). A board refuses a path that is not relative or that leaves that directory.
 - `md5` on the row image is what the row board checks today; it stays.
