@@ -2,10 +2,13 @@
 # Creates the key a release is signed with (#583): ECDSA P-256, the private
 # half protected by a passphrase that openssl asks for on the terminal.
 #
-#   flashing/make-release-key.sh
+#   flashing/make-release-key.sh [--no-passphrase]
+#
+# --no-passphrase writes the private half unencrypted: a release can then be
+# signed with nobody at the keyboard, and the file alone is enough to sign.
 #
 # Writes, in ~/.config/split-flap (or $SPLITFLAP_KEY_DIR):
-#   release-key.pem      private, encrypted, mode 600 — never leaves this machine
+#   release-key.pem      private, mode 600 — never leaves this machine
 #                        except as a backup
 #   release-key.pub.pem  public — what the firmware carries
 #
@@ -22,7 +25,13 @@ if [ -e "$key" ] || [ -e "$pub" ]; then
   echo "A release key already exists in $dir — not replacing it." >&2
   exit 1
 fi
-if [ ! -t 0 ]; then
+plainKey=0
+case "${1:-}" in
+  "") ;;
+  --no-passphrase) plainKey=1 ;;
+  *) echo "usage: $0 [--no-passphrase]" >&2; exit 2 ;;
+esac
+if [ "$plainKey" = 0 ] && [ ! -t 0 ]; then
   echo "Run this from a terminal: openssl has to ask for the passphrase." >&2
   exit 1
 fi
@@ -32,8 +41,10 @@ chmod 700 "$dir"
 
 plain=$(openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256)
 
-echo "Choose a passphrase for the release key (asked twice)."
-if ! openssl pkey -aes256 -out "$key" <<<"$plain"; then
+if [ "$plainKey" = 1 ]; then
+  openssl pkey -out "$key" <<<"$plain"
+elif ! { echo "Choose a passphrase for the release key (asked twice)."; \
+         openssl pkey -aes256 -out "$key" <<<"$plain"; }; then
   rm -f "$key"
   echo "No key written." >&2
   exit 1
