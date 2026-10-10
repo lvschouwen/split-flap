@@ -1,6 +1,7 @@
 """The operator page (#574): its pure model under `node --test`, and the
 bundler that joins web/ into the one document the master serves."""
 import gzip
+import json
 import pathlib
 import re
 import shutil
@@ -117,3 +118,69 @@ def test_the_preview_server_passes_on_only_its_own_pages_requests(command, heade
                                                                   served):
     why = _dev_server().refusal(command, headers, 8088, read_only)
     assert (why is None) == served, why
+
+
+# --- the preview server's saved documents ------------------------------------
+
+def _fixtures():
+    sys.path.insert(0, str(PROJECT / "web"))
+    import fixtures
+    return fixtures
+
+
+def _reasons(header, enum):
+    """The wire names of an enum's reasons, from its to-string switch."""
+    source = (PROJECT / header).read_text(encoding="utf-8")
+    return set(re.findall(r"case %s::\w+:\s*return \"([a-z-]+)\";" % enum, source))
+
+
+@pytest.mark.parametrize("header, enum, key", [
+    ("UnitVerdict.h", "UnitReason", "unit"),
+    ("BoardVerdict.h", "BoardReason", "board"),
+])
+def test_the_faults_wall_shows_every_reason_the_master_knows(header, enum, key):
+    docs = _fixtures().documents("faults")
+    shown = {doc["verdict"]["reason"] for path, doc in docs.items()
+             if path.startswith(f"/api/v2/{key}/")}
+    known = _reasons(header, enum)
+    assert known, f"no reasons read from {header}"
+    assert shown == known
+
+
+def test_a_fixture_reason_carries_the_level_the_master_gives_it():
+    fixtures = _fixtures()
+    for header, enum, table in (("UnitVerdict.h", "UnitReason", fixtures.UNIT_REASONS),
+                                ("BoardVerdict.h", "BoardReason", fixtures.BOARD_REASONS)):
+        source = (PROJECT / header).read_text(encoding="utf-8")
+        names = dict(re.findall(r"case %s::(\w+):\s*return \"([a-z-]+)\";" % enum, source))
+        switch = source.split("ReasonLevel(%s r) {" % enum)[1].split("\n}")[0]
+        faults = {names[n] for n in re.findall(r"case %s::(\w+):" % enum,
+                                               switch.split("VerdictLevel::Working;")[1]
+                                               .split("VerdictLevel::Fault;")[0])}
+        for reason, entry in table.items():
+            wanted = "working" if reason == "working" else "fault" if reason in faults else "note"
+            assert entry[0] == wanted, reason
+
+
+def test_the_fixtures_name_no_real_network():
+    text = json.dumps(_fixtures().documents("faults"))
+    for address in re.findall(r"\d+\.\d+\.\d+\.\d+", text):
+        assert address.startswith("192.0.2."), address  # the range kept for documents
+
+
+def test_the_preview_server_refuses_every_change_when_it_serves_fixtures():
+    headers = {"Host": "127.0.0.1:8088", "Origin": "http://127.0.0.1:8088"}
+    assert _dev_server().refusal("POST", headers, 8088, False, fixtures=True)
+    assert _dev_server().refusal("GET", headers, 8088, False, fixtures=True) is None
+
+
+@pytest.mark.parametrize("path, status", [
+    ("/api/v2/wall", 200), ("/api/v2/history?limit=50", 200), ("/api/v2/board/nope", 404),
+    ("/api/v2/log?kind=ram", 200),
+])
+def test_the_preview_server_answers_a_path_from_the_fixtures(path, status):
+    docs = _fixtures().documents("faults")
+    got, body, kind = _dev_server().fixture_answer(docs, path)
+    assert got == status
+    if status == 200 and kind == "application/json":
+        json.loads(body)
