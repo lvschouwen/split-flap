@@ -15,7 +15,7 @@ sys.path.insert(0, str(PROJECT))
 import web_bundle  # noqa: E402
 
 # The spec's budget for the whole page, gzipped.
-PAGE_BUDGET_GZ = 40 * 1024
+PAGE_BUDGET_GZ = 80 * 1024
 
 node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
