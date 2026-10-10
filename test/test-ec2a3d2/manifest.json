@@ -1,0 +1,32 @@
+{
+ "format": 1,
+ "channel": "test",
+ "tag": "test-ec2a3d2",
+ "notes": "https://github.com/lvschouwen/split-flap/commit/ec2a3d229549af65e2b6deb4c2efe186c7d29740",
+ "commitTime": 1791666855,
+ "master": {
+  "rev": "ec2a3d2",
+  "path": "test-ec2a3d2/firmware-ec2a3d2-master.bin",
+  "size": 1747904,
+  "sha256": "7c86cdb59608f3de8db3dc692f367af53de80c503e8e3e81fa399ddbfb1b8d29"
+ },
+ "row": {
+  "rev": "ec2a3d2",
+  "path": "test-ec2a3d2/follower-ec2a3d2-gz.bin",
+  "size": 328974,
+  "sha256": "382e494d12f684e6d2ad5bd4585268ccb1c7a8da451eeaeedea77db524cca4b0",
+  "md5": "e1c04e0b100542d8a3316375e8ed34eb"
+ },
+ "rescue": {
+  "rev": "ee6abc0",
+  "path": "test-ec2a3d2/rescue-ee6abc0.bin",
+  "size": 1207600,
+  "sha256": "fefd6c74b7b4b2cffff5a5a3a1c9ded853e08ce6daee0143f92212427bf64bc7"
+ },
+ "units": {
+  "revs": [
+   "cbb71d6",
+   "0d90815"
+  ]
+ }
+}
