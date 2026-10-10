@@ -3,7 +3,7 @@
  "channel": "test",
  "tag": "test-ee6abc0",
  "notes": "https://github.com/lvschouwen/split-flap/commit/ee6abc073c95b2cb6952af5922c1ce35de019255",
- "commitTime": 1791642629,
+ "commitTime": 1791642628,
  "master": {
   "rev": "ee6abc0",
   "path": "test-ee6abc0/firmware-ee6abc0-master.bin",
