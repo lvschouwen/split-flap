@@ -168,6 +168,9 @@ def test_the_page_calls_a_fault_what_the_master_calls_a_fault():
     listed = source.split("export const UNIT_FAULT_REASONS = [")[1].split("];")[0]
     faults = {reason for reason, entry in _fixtures().UNIT_REASONS.items() if entry[0] == "fault"}
     assert set(re.findall(r"'([a-z-]+)'", listed)) == faults
+    listed = source.split("export const BOARD_FAULT_REASONS = [")[1].split("];")[0]
+    faults = {reason for reason, entry in _fixtures().BOARD_REASONS.items() if entry[0] == "fault"}
+    assert set(re.findall(r"'([a-z-]+)'", listed)) == faults
 
 
 def test_the_fixtures_name_no_real_network():

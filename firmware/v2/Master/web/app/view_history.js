@@ -1,19 +1,26 @@
 // History: what happened on the wall, newest first; and a board's raw log.
 import { ALPHABET } from '../gen/constants.js';
-import { h, fill, itemList } from './dom.js';
+import { h, fill, itemList, itemLine, segmented } from './dom.js';
 import { getJson } from './api.js';
 import { wallLayout, boardTitle, boardId } from '../model/wall.js';
-import { whenText, eventText, eventBoardId } from '../model/events.js';
+import { whenText, eventText, eventBoardId, historyGroups, needingAttention } from '../model/events.js';
+import { plural } from '../model/format.js';
 
 // `only` is a board id, for "what happened on this board".
 export function historyView(app, only) {
   const head = h('div', {});
   const list = h('div', {});
+  let attention = false;
+  const which = segmented('Show', [[false, 'Everything'], [true, 'Needs attention']], (on) => {
+    attention = on;
+    refresh();
+  });
   const more = h('button', { type: 'button', class: 'btn', onclick: () => older() }, 'Show older');
-  const root = h('div', { class: 'view' }, head, list, h('div', { class: 'rowwrap' }, more,
+  const root = h('div', { class: 'view' }, head, which, list, h('div', { class: 'rowwrap' }, more,
     h('a', { class: 'btn quiet', href: '#log/' + (only || '') }, 'Show the raw log instead')));
   let events = [];
   let next = null;
+  const opened = new Set();  // the starts that were opened, by seq
 
   function refresh() {
     const wall = app.state.wall;
@@ -22,19 +29,35 @@ export function historyView(app, only) {
     fill(head, only && h('div', { class: 'crumbs' }, h('a', { href: '#history' }, 'History'), ' / ', title(only)),
       h('div', { class: 'head' }, h('h1', {}, only ? `What happened on ${title(only)}` : 'History')),
       h('p', { class: 'muted' }, 'What changed on the wall, newest first.'));
+    which.set(attention);
     const masterId = wall ? wall.master.id : '';
     const now = new Date();
-    const items = [];
-    for (const event of events) {
+    const line = (event) => {
       const id = eventBoardId(event, masterId);
-      if (only && id !== only) continue;
       const text = eventText(event, id == null ? 'The master' : title(id), ALPHABET);
       const known = id != null && layout && layout.lines.some((l) => l.boards.some((b) => b.id === id));
-      items.push({ ...text, when: whenText(event.time, now),
-                   href: known ? (event.unit ? `#unit/${id}/${event.unit}` : '#board/' + id) : null });
-    }
-    fill(list, items.length ? itemList(items)
-      : h('p', { class: 'muted' }, events.length ? 'Nothing about this board in what was read; show older.' : 'Nothing was recorded yet.'));
+      return { ...text, when: whenText(event.time, now),
+               href: known ? (event.unit ? `#unit/${id}/${event.unit}` : '#board/' + id) : null };
+    };
+    const mine = only ? events.filter((event) => eventBoardId(event, masterId) === only) : events;
+    const groups = attention ? needingAttention(mine, ALPHABET) : historyGroups(mine);
+    const rows = groups.map(({ event, after }) => {
+      const start = line(event);
+      if (!after.length) return itemLine(start);
+      // A start is as bad as the worst thing that followed it.
+      const lines = after.map(line);
+      const cls = lines.some((l) => l.cls === 'bad') ? 'bad' : start.cls;
+      const fold = h('details', { open: opened.has(event.seq) },
+        itemLine({ ...start, cls, href: null,
+                   why: `${start.why} ${plural(after.length, 'thing')} noted right after it.` }, 'summary'),
+        itemList(lines));
+      fold.addEventListener('toggle', () => (fold.open ? opened.add(event.seq) : opened.delete(event.seq)));
+      return fold;
+    });
+    fill(list, rows.length ? h('div', { class: 'list' }, rows)
+      : h('p', { class: 'muted' }, attention
+          ? (next == null ? 'Nothing in the record needs attention.' : 'Nothing that needs attention in what was read; show older.')
+          : events.length ? 'Nothing about this board in what was read; show older.' : 'Nothing was recorded yet.'));
     more.hidden = next == null;
   }
 

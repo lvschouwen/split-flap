@@ -6,14 +6,14 @@ import assert from 'node:assert/strict';
 import { ALPHABET } from '../gen/constants.js';
 import { dur, volt, listOf, flapName, plural } from '../model/format.js';
 import { unitVerdictText, boardVerdictText, wallVerdictText, letterClass,
-         BOARD_REASON_NAMES, UNIT_REASON_NAMES } from '../model/verdict.js';
+         BOARD_REASON_NAMES, UNIT_REASON_NAMES, UNIT_FAULT_REASONS, BOARD_FAULT_REASONS } from '../model/verdict.js';
 import { boardUnits, tileLines, lowestSupply, unitsBehind, boardReach, startWords, sparkPoints, boardFacts,
          startMarks } from '../model/board.js';
 import { showsText, unitNow, unitFacts, unitConcerns, unitCan, correctedOffset, selfTestText } from '../model/unit.js';
 import { firmwareRows, firmwareVerdict, firmwareFile, installQuestion, firmwareJobs,
          releaseText, releaseProgress, updateQuestion } from '../model/firmware.js';
 import { md5Hex } from '../model/md5.js';
-import { whenText, eventText, eventBoardId } from '../model/events.js';
+import { whenText, eventText, eventBoardId, historyGroups, needingAttention } from '../model/events.js';
 import { wallLayout, boardTitle, attentionList, notesList, boardLine, boardId, noFlapFor,
          composeLines, composeText } from '../model/wall.js';
 import { testText, calibrationPlan } from '../model/calibrate.js';
@@ -611,23 +611,133 @@ test('when an entry was written is said as near as it needs to be', () => {
 test('an entry of the record reads as what happened', () => {
   const say = (event) => eventText(event, 'Row 1', ALPHABET);
   assert.deepEqual(say({ kind: 'unit-reason-on', unit: 3, reason: 'not-answering', a: 21, b: 6 }),
-    { cls: 'note', title: 'Row 1, unit 3: not answering', why: 'No reply for 21 s, 6 reads missed.' });
-  assert.deepEqual(say({ kind: 'unit-reason-off', unit: 3, reason: 'not-answering', a: 0, b: 0 }),
-    { cls: 'ok', title: 'Row 1, unit 3: no longer “not answering”', why: '' });
+    { cls: 'bad', title: 'Row 1, unit 3: not answering', why: 'No reply for 21 s, 6 reads missed.' });
+  // What is worth knowing is not what needs attention.
+  assert.equal(say({ kind: 'unit-reason-on', unit: 3, reason: 'jammed' }).cls, 'note');
   assert.equal(say({ kind: 'board-reason-on', unit: 0, reason: 'bus-dead', a: 6, b: 0 }).title, 'Row 1: unit bus dead');
-  assert.equal(say({ kind: 'board-reason-off', unit: 0, reason: 'bus-dead' }).title, 'Row 1: no longer “unit bus dead”');
-  assert.deepEqual(say({ kind: 'job-failed', unit: 3, job: 'home' }), { cls: 'bad', title: 'Row 1, unit 3: home failed', why: '' });
-  assert.equal(say({ kind: 'job-done', unit: 0, job: 'home-all' }).title, 'Row 1: home-all done');
+  assert.equal(say({ kind: 'board-reason-on', unit: 0, reason: 'bus-dead', a: 6, b: 0 }).cls, 'bad');
+  assert.equal(say({ kind: 'board-reason-on', unit: 0, reason: 'away', a: 45 }).cls, 'note');
   assert.deepEqual(say({ kind: 'unit-restarted', unit: 2, cause: 'brownout', a: 3, b: 1 }),
     { cls: 'note', title: 'Row 1, unit 2: restarted (brownout)',
       why: 'Over its lifetime: 3 restarts from low voltage, 1 watchdog reset.' });
 });
 
-test('a start names the firmware that started', () => {
-  assert.deepEqual(eventText({ kind: 'master-started', a: 0xebb6f64, detail: 3 }, 'The master', ALPHABET),
-    { cls: 'info', title: 'The master started', why: 'Firmware ebb6f64.' });
+test('a fault that ended is said as what is so now', () => {
+  const say = (event) => eventText(event, 'Row 1', ALPHABET);
+  assert.deepEqual(say({ kind: 'unit-reason-off', unit: 3, reason: 'not-answering', a: 0, b: 0 }),
+    { cls: 'ok', title: 'Row 1, unit 3: answers again', why: '' });
+  assert.equal(say({ kind: 'unit-reason-off', unit: 3, reason: 'no-unit' }).title, 'Row 1, unit 3: a unit answers here now');
+  assert.equal(say({ kind: 'board-reason-off', unit: 0, reason: 'bus-dead' }).title, 'Row 1: its unit bus works again');
+  assert.equal(say({ kind: 'board-reason-off', unit: 0, reason: 'lost' }).title, 'Row 1: is back');
+  // Every fault has its own words; any other reason says that it is over.
+  for (const reason of UNIT_FAULT_REASONS) {
+    assert.doesNotMatch(say({ kind: 'unit-reason-off', unit: 1, reason }).title, /is over|no longer/, reason);
+  }
+  for (const reason of BOARD_FAULT_REASONS) {
+    assert.doesNotMatch(say({ kind: 'board-reason-off', unit: 0, reason }).title, /is over|no longer/, reason);
+  }
+  assert.equal(say({ kind: 'unit-reason-off', unit: 3, reason: 'jammed' }).title, 'Row 1, unit 3: “last move stalled” is over');
+  assert.equal(say({ kind: 'unit-reason-off', unit: 3, reason: 'brand-new' }).title, 'Row 1, unit 3: “brand-new” is over');
+});
+
+test('a job reads as what was done, not by its wire name', () => {
+  const say = (event) => eventText(event, 'Row 1', ALPHABET);
+  assert.deepEqual(say({ kind: 'job-failed', unit: 3, job: 'home' }),
+    { cls: 'bad', title: 'Row 1, unit 3: did not find home', why: '' });
+  assert.deepEqual(say({ kind: 'job-done', unit: 3, job: 'home' }), { cls: 'info', title: 'Row 1, unit 3: found home', why: '' });
+  assert.equal(say({ kind: 'job-done', unit: 0, job: 'home-all' }).title, 'Row 1: all its units found home');
+  assert.equal(say({ kind: 'job-failed', unit: 3, job: 'self-test' }).title, 'Row 1, unit 3: failed its self-test');
+  assert.equal(say({ kind: 'job-done', unit: 0, job: 'update-units' }).title, 'Row 1: its units were updated');
+  assert.equal(say({ kind: 'job-done', unit: 4, job: 'update-units' }).title, 'Row 1, unit 4: its firmware was written');
+  // A job of the wall as a whole is not something a row did.
+  assert.equal(say({ kind: 'job-failed', unit: 0, board: '', job: 'update-from-release' }).title,
+               'The update from a release failed');
+  assert.equal(say({ kind: 'job-done', unit: 0, board: '', job: 'pair' }).title, 'A row board was added');
+  assert.equal(eventBoardId({ kind: 'job-done', board: '', job: 'arrange' }, 'wall-master'), null);
+  assert.equal(eventBoardId({ kind: 'job-done', board: '', job: 'home-all' }, 'wall-master'), 'wall-master');
+  // A job this page does not know keeps its wire name.
+  assert.equal(say({ kind: 'job-done', unit: 2, job: 'brand-new' }).title, 'Row 1, unit 2: brand-new done');
+  assert.equal(say({ kind: 'job-failed', unit: 2, job: 'brand-new' }).title, 'Row 1, unit 2: brand-new failed');
+});
+
+test('a start says why the board started and the firmware that started', () => {
+  const master = (detail) => eventText({ kind: 'master-started', a: 0xebb6f64, detail }, 'The master', ALPHABET);
+  assert.deepEqual(master(3), { cls: 'info', title: 'The master started',
+    why: 'It was restarted on purpose: an update or a restart that was asked for. Firmware ebb6f64.' });
+  assert.match(master(1).why, /^Its power came on\./);
+  assert.deepEqual([master(4).cls, master(4).why], ['bad', 'Its firmware crashed. Firmware ebb6f64.']);
+  assert.match(master(6).why, /^It hung and its watchdog restarted it\./);
+  assert.equal(master(6).cls, 'bad');
+  assert.match(master(9).why, /^Its supply voltage dropped too low\./);
+  assert.equal(master(9).cls, 'bad');
+  assert.equal(master(0).why, 'Firmware ebb6f64.');
   assert.equal(eventText({ kind: 'row-started', a: 0x0e38289, detail: 0 }, 'Row 1', ALPHABET).why, 'Firmware 0e38289.');
   assert.equal(eventText({ kind: 'row-started', a: 1, detail: 1 }, 'Row 1', ALPHABET).title, 'Row 1: connected in rescue mode');
+  // The two entries of one start of a row board, read as one.
+  assert.deepEqual(eventText({ kind: 'row-started', a: 0x0e38289, detail: 0, starts: 2 }, 'Row 1', ALPHABET),
+    { cls: 'info', title: 'Row 1: the board started and connected',
+      why: 'Firmware 0e38289. 2 starts since its power came on.' });
+});
+
+const at = (seq, time, kind, more) => ({ seq, time, kind, board: '', unit: 0, detail: 0, a: 0, b: 0, ...more });
+
+test('a start and what was noted right after it are one entry that opens', () => {
+  // Newest first, as the record is read.
+  const events = [
+    at(9, 2000, 'unit-reason-on', { unit: 2, reason: 'jammed' }),
+    at(8, 1097, 'unit-reason-on', { unit: 15, reason: 'home-failed-before' }),  // 97 s after: its own entry
+    at(7, 1096, 'unit-reason-on', { unit: 15, reason: 'home-failed' }),
+    at(6, 1003, 'unit-reason-on', { unit: 15, reason: 'hall-never' }),
+    at(5, 1000, 'master-started', { detail: 3 }),
+    at(4, 990, 'job-done', { unit: 3, job: 'home' }),
+    at(3, 500, 'unit-reason-on', { unit: 1, reason: 'jammed' }),
+    at(2, 480, 'master-started', { detail: 3 }),
+    at(1, 470, 'master-started', { detail: 1 }),
+  ];
+  const groups = historyGroups(events);
+  assert.deepEqual(groups.map((g) => [g.event.seq, g.after.map((e) => e.seq)]),
+    [[9, []], [8, []], [5, [7, 6]], [4, []], [2, [3]], [1, []]]);
+});
+
+test('a row board that started and connected is one entry, with what followed on that board', () => {
+  const row = 'wall-row';
+  const groups = historyGroups([
+    at(6, 1500, 'unit-reason-on', { board: row, unit: 2, reason: 'jammed' }),
+    at(5, 1030, 'unit-reason-on', { board: '', unit: 2, reason: 'jammed' }),
+    at(4, 1020, 'unit-reason-on', { board: row, unit: 1, reason: 'finding-home' }),
+    at(3, 1010, 'row-started', { board: row, a: 7 }),
+    at(2, 1005, 'row-event', { board: row, event: 'started', b: 3 }),
+    at(1, 900, 'row-event', { board: row, event: 'low-memory', a: 2000 }),
+  ]);
+  assert.deepEqual(groups.map((g) => [g.event.seq, g.after.map((e) => e.seq)]),
+    [[6, []], [5, []], [3, [4]], [1, []]]);
+  assert.equal(groups[2].event.starts, 3);
+  // The same within what followed a start of the master.
+  const under = historyGroups([
+    at(3, 1010, 'row-started', { board: row, a: 7 }),
+    at(2, 1005, 'row-event', { board: row, event: 'started', b: 1 }),
+    at(1, 1000, 'master-started', { detail: 1 })]);
+  assert.deepEqual(under.map((g) => [g.event.seq, g.after.map((e) => [e.seq, e.starts])]), [[1, [[3, 1]]]]);
+  // A start that never connected, and a connection without a start, stay as they are.
+  assert.deepEqual(historyGroups([at(2, 1005, 'row-event', { board: row, event: 'started', b: 3 })])
+    .map((g) => [g.event.seq, g.event.starts]), [[2, undefined]]);
+  assert.equal(historyGroups([at(3, 1010, 'row-started', { board: row })])[0].event.starts, undefined);
+  // An entry without a time belongs to no start.
+  assert.deepEqual(historyGroups([at(2, 0, 'unit-reason-on', { unit: 1, reason: 'jammed' }), at(1, 0, 'master-started')])
+    .map((g) => g.after.length), [0, 0]);
+});
+
+test('what needs attention is every fault and failure, out of its group', () => {
+  const events = [
+    at(7, 1096, 'unit-reason-on', { unit: 15, reason: 'home-failed' }),
+    at(6, 1003, 'unit-reason-on', { unit: 15, reason: 'finding-home' }),
+    at(5, 1000, 'master-started', { detail: 3 }),
+    at(4, 990, 'job-failed', { unit: 3, job: 'home' }),
+    at(3, 980, 'job-done', { unit: 3, job: 'home' }),
+    at(2, 480, 'master-started', { detail: 4 }),
+  ];
+  assert.deepEqual(needingAttention(events, ALPHABET).map((g) => [g.event.seq, g.after.length]),
+    [[7, 0], [4, 0], [2, 0]]);
 });
 
 test('what a row board reports about itself is put in words, and a new code by its name', () => {
@@ -777,15 +887,16 @@ test('what a row board read off its dead unit bus reads as a sentence', () => {
   const a = 0 | (1 << 4) | (15 << 9) | (0 << 14) | (5 << 19);
   const dead = eventText({ kind: 'row-event', event: 'bus-dead', a, b: 24 }, 'Row 1', ALPHABET);
   assert.equal(dead.cls, 'bad');
-  assert.equal(dead.title, 'Row 1: read off its dead unit bus');
-  assert.match(dead.why, /^5 units had answered before; both lines free; of 16 addresses 1 acknowledged, 15 did not, 0 could not be asked\. Its last move started .* before\.$/);
-  const held = eventText({ kind: 'row-event', event: 'bus-dead', a: 3, b: 0xFFFF }, 'Row 1', ALPHABET);
-  assert.match(held.why, /SDA held low/);
+  assert.equal(dead.title, 'Row 1: its unit bus went dead');
+  assert.match(dead.why, /^1 of the 5 units that had answered still did\. Both bus lines were free\. Its last move started .* before\.$/);
+  const held = eventText({ kind: 'row-event', event: 'bus-dead', a: 3 | (5 << 19), b: 0xFFFF }, 'Row 1', ALPHABET);
+  assert.match(held.why, /^None of the 5 units that had answered still did\. The SDA line was held low\./);
   assert.match(held.why, /It had not moved a flap since its start\.$/);
   const lines = eventText({ kind: 'row-event', event: 'bus-lines', a: 0xFFFF | (12 << 16), b: 10 | (11 << 16) }, 'Row 1', ALPHABET);
-  assert.equal(lines.why, 'Dead: SDA no rise, SCL 1.2 µs. Working: SDA 1.0 µs, SCL 1.1 µs.');
+  assert.equal(lines.title, 'Row 1: measured its bus lines');
+  assert.equal(lines.why, 'For whoever looks into the dead bus. Dead: SDA no rise, SCL 1.2 µs. Working: SDA 1.0 µs, SCL 1.1 µs.');
   assert.equal(eventText({ kind: 'row-event', event: 'bus-lines', a: 0, b: 0 }, 'Row 1', ALPHABET).why,
-    'Dead: SDA not measured, SCL not measured. Not measured on the working bus yet.');
+    'For whoever looks into the dead bus. Dead: SDA not measured, SCL not measured. Not measured on the working bus yet.');
 });
 
 const NOW = 1791630000000;

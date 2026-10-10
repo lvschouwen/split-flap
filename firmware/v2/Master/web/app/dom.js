@@ -31,16 +31,19 @@ export function pill(cls, text) {
   return h('span', { class: 'pill ' + cls }, text);
 }
 
-// A list of {cls, title, why, href, when} as linked lines.
+// One {cls, title, why, href, when} as a line, linked when it has an href.
+export function itemLine(item, tag) {
+  return h(tag || (item.href ? 'a' : 'div'), { class: 'item', href: item.href },
+    item.when && h('span', { class: 'when' }, item.when),
+    h('span', { class: 'dot ' + item.cls }),
+    h('span', { class: 'main' },
+      h('div', { class: 't' }, item.title),
+      item.why && h('div', { class: 'd' }, item.why)),
+    item.pill);
+}
+
 export function itemList(items) {
-  return h('div', { class: 'list' }, items.map((item) =>
-    h(item.href ? 'a' : 'div', { class: 'item', href: item.href },
-      item.when && h('span', { class: 'when' }, item.when),
-      h('span', { class: 'dot ' + item.cls }),
-      h('span', { class: 'main' },
-        h('div', { class: 't' }, item.title),
-        item.why && h('div', { class: 'd' }, item.why)),
-      item.pill)));
+  return h('div', { class: 'list' }, items.map((item) => itemLine(item)));
 }
 
 // A row of buttons of which one is pressed. `options` is [[value, label]];

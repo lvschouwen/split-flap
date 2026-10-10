@@ -122,6 +122,11 @@ const BOARD = {
 
 export const BOARD_REASON_NAMES = Object.keys(BOARD);
 
+// The reasons the master calls a fault (boardReasonLevel in BoardVerdict.h):
+// an entry of the record names its reason without its level.
+export const BOARD_FAULT_REASONS = ['lost', 'never-seen', 'rescue', 'bus-dead', 'update-blocked',
+  'units-missing', 'units-fault'];
+
 function say(table, verdict, alphabet) {
   const words = table[verdict.reason];
   const [title, why, todo, cure] = words ? words(verdict.a, verdict.b, alphabet) : [verdict.reason, ''];

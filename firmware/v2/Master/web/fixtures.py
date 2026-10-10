@@ -251,10 +251,14 @@ def _history(boards, now):
         {"kind": "row-event", "board": row, "event": "bus-lines", "a": (31 << 16) | 0xFFFF, "b": 0},
         {"kind": "row-event", "board": row, "event": "self-restart", "a": 1, "b": 3},
         {"kind": "row-event", "board": row, "event": "low-memory", "a": 2104},
+        # A row board's start is two entries, seconds apart.
+        {"kind": "row-started", "board": row, "detail": 1, "a": 0xBBBBBBB, "after": 5},
         {"kind": "row-event", "board": row, "event": "started", "a": 4, "b": 4},
-        {"kind": "row-started", "board": row, "detail": 1, "a": 0xBBBBBBB},
-        {"kind": "unit-restarted", "board": "", "unit": 4, "cause": "brownout", "a": 5, "b": 1},
-        {"kind": "master-started", "board": "", "a": 0xAAAAAAA},
+        # What follows a start of the master within a minute and a half.
+        {"kind": "unit-reason-on", "board": "", "unit": 15, "reason": "home-failed", "a": 63, "after": 75},
+        {"kind": "unit-restarted", "board": "", "unit": 4, "cause": "brownout", "a": 5, "b": 1, "after": 20},
+        {"kind": "unit-reason-on", "board": "", "unit": 15, "reason": "hall-never", "after": 3},
+        {"kind": "master-started", "board": "", "detail": 9, "a": 0xAAAAAAA},
         {"kind": "something-new", "board": "split-flap-999999", "unit": 2},
     ]
     for reason, (_level, a, b, _state) in UNIT_REASONS.items():
@@ -272,6 +276,13 @@ def _history(boards, now):
         # The oldest entries were written before the clock was set, and days ago.
         age = 0 if i > len(kinds) - 3 else now - i * 5400
         events.append({"seq": len(kinds) - i, "time": age, "detail": 0, "unit": 0, "a": 0, "b": 0, **event})
+    # "after": so many seconds after the next entry that says no such thing.
+    for i, event in enumerate(events):
+        if "after" in event:
+            anchor = next(e for e in events[i + 1:] if "after" not in e)
+            event["time"] = anchor["time"] + event["after"]
+    for event in events:
+        event.pop("after", None)
     return {"events": events}
 
 

@@ -88,6 +88,11 @@ input[type=text],input[type=password],select,input[type=number]{font:inherit;col
 .boots i.pwr{background:var(--note)}.boots i.odd{background:var(--bad)}
 details{border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}summary{padding:10px 14px;cursor:pointer;font-weight:600}
 details>.in{padding:0 14px 14px;display:flex;flex-direction:column;gap:10px}
+/* A line of a list that opens: what followed a start. */
+.list details{border:0;border-radius:0;border-top:1px solid var(--line);background:none}.list details:first-child{border-top:0}
+.list summary.item{border-top:0;font-weight:400;list-style:none}.list summary.item::-webkit-details-marker{display:none}
+.list summary.item::after{content:"▸";color:var(--muted)}.list details[open]>summary.item::after{content:"▾"}
+.list details>.list{border:0;border-radius:0;border-top:1px solid var(--line);background:var(--bg);padding-left:14px}
 input[type=number]{width:84px}input:disabled{opacity:.5}
 .wall.single{width:92px;padding:10px 10px 14px;flex:none}.wall.single .flap{cursor:default}
 .top-align{align-items:flex-start}.grow{flex:1;min-width:220px}
