@@ -135,6 +135,12 @@ static inline WifiAction wifiPolicyStep(WifiPolicyState& st, uint32_t nowMs,
         st.phase = WifiPhase::Connected;
         return WifiAction::StartOnline;
       }
+      // Credentials handed over under a join (over USB, #601 — no page is up
+      // yet): saved now. Waiting out the join would lose them to its retry
+      // restart, and they are what replaces a network that is gone.
+      if (portalSubmitted) {
+        return WifiAction::SaveAndReboot;
+      }
       if (wifiDeadlineReached(nowMs, st.deadlineMs)) {
         // Returned on every step past the deadline, like the portal's Reboot:
         // the caller restarts and stops stepping.

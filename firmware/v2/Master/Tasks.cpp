@@ -65,6 +65,7 @@ bool tasksUnitCountOverridePinned() {
 #include "WallWatch.h"
 #include "WallShow.h"
 #include "WebEndpoints.h"
+#include "ImprovService.h"
 #include "WifiService.h"
 
 // --- static RTOS allocation (memory policy rule 1) ---------------------------
@@ -210,6 +211,7 @@ static void netTaskMain(void* arg) {
     bootGuardTick();      // #281: a boot that ran this long forgives its crashes
     crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_WIFI);
     wifiServiceTick();
+    improvServiceTick();  // #601: WiFi credentials over USB
     crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_WEB_LOOP);
     webEndpointsLoop(*ctx->settings, *ctx->store);
     webStreamTick();  // pushes what changed to /api/v2/stream

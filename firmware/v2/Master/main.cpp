@@ -39,6 +39,8 @@
 #include "SystemStats.h"
 #include "Tasks.h"
 #include "WebEndpoints.h"
+#include "ImprovService.h"
+#include "UartLog.h"
 #include "WebLog.h"
 #include "WifiService.h"
 
@@ -143,6 +145,7 @@ void setup() {
   // where it is asked. After the boot guard, so a start that dies here is
   // counted like any other.
   const uint32_t catchMs = unitCatchAtPowerOn();
+  uartLogBegin();  // after the catch: nothing may delay that
   // Native USB-CDC needs a moment before the first prints land. The calls
   // above report once the log is up; the few lines they print on the spot
   // (the boot guard's restart into the rescue image) may not reach a console.
@@ -239,6 +242,8 @@ void setup() {
   SerialPrintf("wifi: %s\n", settings.wifiSsid.length()
                                  ? ("join \"" + settings.wifiSsid + "\"").c_str()
                                  : "unprovisioned -> setup portal");
+
+  improvServiceInit(deviceName);  // #601: netTask ticks it
 
   // #305: confirm a PENDING_VERIFY image HERE — after the whole
   // single-threaded init sequence proved it doesn't hard-crash, but BEFORE

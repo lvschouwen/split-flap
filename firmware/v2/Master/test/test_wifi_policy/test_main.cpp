@@ -54,6 +54,19 @@ static void test_join_window_still_open_just_before_timeout() {
   TEST_ASSERT_EQUAL(WifiPhase::Joining, st.phase);
 }
 
+// Credentials can arrive under a join: over USB (#601), for a board whose
+// stored network is gone. They must not wait out the join attempts, whose
+// restarts would lose them.
+static void test_credentials_submitted_under_a_join_are_saved_at_once() {
+  WifiPolicyState st;
+  quietStep(st, 1000, true);
+  TEST_ASSERT_EQUAL(WifiAction::SaveAndReboot,
+                    wifiPolicyStep(st, 5000, false, true, true));
+  // Also past the window: the save wins over the retry restart.
+  TEST_ASSERT_EQUAL(WifiAction::SaveAndReboot,
+                    wifiPolicyStep(st, 1000 + WIFI_JOIN_TIMEOUT_MS, false, true, true));
+}
+
 // One failed association must not park the board in the portal for five
 // minutes (#524): the first windows that close ask for a restart instead.
 static void test_first_join_timeout_asks_for_a_retry_not_the_portal() {
@@ -323,6 +336,7 @@ int main(int, char**) {
   RUN_TEST(test_boot_without_creds_goes_straight_to_portal);
   RUN_TEST(test_join_success_goes_online);
   RUN_TEST(test_join_window_still_open_just_before_timeout);
+  RUN_TEST(test_credentials_submitted_under_a_join_are_saved_at_once);
   RUN_TEST(test_first_join_timeout_asks_for_a_retry_not_the_portal);
   RUN_TEST(test_every_attempt_before_the_last_retries);
   RUN_TEST(test_last_attempt_timeout_opens_portal);

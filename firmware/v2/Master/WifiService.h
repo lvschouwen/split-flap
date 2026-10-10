@@ -43,6 +43,10 @@ void wifiNoteConfirmedTraffic();
 // policy's current phase, for the status LED (#199).
 WifiPhase wifiServicePhase();
 
+// netTask context only: this board's page ("http://<ip>/") while it is online
+// with the link up; "" otherwise.
+String wifiServiceUrl();
+
 // --- staging + reads for async handlers -------------------------------------
 
 // POST /wifi/config: pre-validated ssid/pass, copied under the mutex; the

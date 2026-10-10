@@ -387,6 +387,13 @@ static void pumpScan() {
 
 WifiPhase wifiServicePhase() { return policy.phase; }
 
+String wifiServiceUrl() {
+  if (policy.phase != WifiPhase::Connected || WiFi.status() != WL_CONNECTED) {
+    return String();
+  }
+  return "http://" + WiFi.localIP().toString() + "/";
+}
+
 void wifiServiceTick() {
   if (liveSettings == nullptr) return;  // init hasn't run
 

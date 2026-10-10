@@ -159,7 +159,7 @@ Both buttons hand ESP Web Tools the release's one `flasher.json`: it reads which
 
 **Install log and link speed.** ESP Web Tools shows a percentage only and fixes the link at 115200 baud, with no setting for either. Its loader (esptool-js) says every step to a terminal when it has one, and the installer leaves the loader on `window.esploader` before the first step. The page takes it there: it gives the loader a log panel at the foot of the page as its terminal, with the time of each line, and sets the link to 921600 baud (`?baud=115200` on the page's address falls back). The panel also lists what the installer itself reports: the board found, the images taken for it, and why an install stopped. The release script refuses an ESP Web Tools that no longer leaves the loader there.
 
-After flashing, each board is set up through its own WiFi portal as today. The page also carries the short "what next" text: join WiFi, open the master, pair the rows.
+After flashing a master the installer offers *Connect to Wi-Fi*: the master answers the Improv serial protocol on both of its USB ports (#601, `ImprovPolicy.h`), so its WiFi is set from this page. A row board is set up through its own WiFi portal, which every board keeps (the ESP-01's serial pins are its unit bus). The page also carries the short "what next" text: join WiFi, open the master, pair the rows.
 
 ## 10. Measured before code
 

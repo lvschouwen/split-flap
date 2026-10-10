@@ -11,6 +11,7 @@
 
 #include "ClockPolicy.h"  // clockIsTimeSynced — same sync cutoff as FlashLog
 #include "FlashLog.h"
+#include "UartLog.h"
 #endif
 
 #ifndef WEBLOG_DISABLE
@@ -142,6 +143,7 @@ void webLogAppend(const char* data, size_t len) {
   // (GET /api/v2/log) only, which carried no timestamps before. Flash tee still runs
   // BEFORE the ring gate so a failed ring allocation can't silence it.
   flashLogStage(data, len);
+  uartLogWrite(data, len);
   webLogRingWrite(expanded.c_str(), expanded.length());
 }
 #else
