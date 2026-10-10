@@ -162,6 +162,14 @@ def test_a_fixture_reason_carries_the_level_the_master_gives_it():
             assert entry[0] == wanted, reason
 
 
+def test_the_page_calls_a_fault_what_the_master_calls_a_fault():
+    # A reason that applies without leading comes without its level.
+    source = (PROJECT / "web" / "model" / "verdict.js").read_text(encoding="utf-8")
+    listed = source.split("export const UNIT_FAULT_REASONS = [")[1].split("];")[0]
+    faults = {reason for reason, entry in _fixtures().UNIT_REASONS.items() if entry[0] == "fault"}
+    assert set(re.findall(r"'([a-z-]+)'", listed)) == faults
+
+
 def test_the_fixtures_name_no_real_network():
     text = json.dumps(_fixtures().documents("faults"))
     for address in re.findall(r"\d+\.\d+\.\d+\.\d+", text):

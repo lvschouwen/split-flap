@@ -6,10 +6,10 @@ import assert from 'node:assert/strict';
 import { ALPHABET } from '../gen/constants.js';
 import { dur, volt, listOf, flapName, plural } from '../model/format.js';
 import { unitVerdictText, boardVerdictText, wallVerdictText, letterClass,
-         BOARD_REASON_NAMES } from '../model/verdict.js';
+         BOARD_REASON_NAMES, UNIT_REASON_NAMES } from '../model/verdict.js';
 import { boardUnits, tileLines, lowestSupply, unitsBehind, boardReach, startWords, sparkPoints, boardFacts,
          startMarks } from '../model/board.js';
-import { showsText, unitFacts, correctedOffset, selfTestText } from '../model/unit.js';
+import { showsText, unitNow, unitFacts, unitConcerns, unitCan, correctedOffset, selfTestText } from '../model/unit.js';
 import { firmwareRows, firmwareVerdict, firmwareFile, installQuestion, firmwareJobs,
          releaseText, releaseProgress, updateQuestion } from '../model/firmware.js';
 import { md5Hex } from '../model/md5.js';
@@ -66,8 +66,9 @@ test('a flap is named by the character at its place on the drum', () => {
 
 test('a unit verdict says what its two numbers mean', () => {
   const low = unitVerdictText({ level: 'fault', reason: 'low-supply', a: 3900, b: 4000 }, ALPHABET);
-  assert.deepEqual(low, { cls: 'bad', title: 'Low supply',
-    why: 'Lowest supply since it started: 3.90 V. Units warn below 4.00 V.', todo: '' });
+  assert.equal(low.cls, 'bad');
+  assert.equal(low.title, 'Low supply');
+  assert.equal(low.why, 'Lowest supply since it started: 3.90 V. Units warn below 4.00 V.');
   const wrong = unitVerdictText({ level: 'note', reason: 'wrong-letter', a: 30, b: 0 }, ALPHABET);
   assert.match(wrong.why, /stands at 0,/);
   assert.equal(wrong.cls, 'note');
@@ -296,26 +297,113 @@ test('what a unit shows is said against what it was sent to', () => {
   assert.match(showsText({ state: 'silent', drum: { shows: 3 } }, ALPHABET), /not running/);
 });
 
-test('a unit that was read for nothing has no groups, one read in full has four', () => {
-  assert.deepEqual(unitFacts({ state: 'silent', firmware: {}, power: {}, link: {}, drum: {}, bootloader: {} }), []);
-  const groups = unitFacts({
-    addressStored: false,
-    firmware: { rev: 'd360e2b', status: 'current', uptimeS: 182333, protocol: 1, protocolSupported: true },
-    power: { brownouts: 2, watchdogResets: 1, lastStart: 'requested', restartedWhileWatched: false,
-             supplyMv: 5091, supplyMinMv: 5091, freeRamMin: 1490 },
-    link: { badCommands: 87, received: 29696, answered: 41254, heardMsAgo: 38222, missed: 0, failed: 0 },
-    drum: { home: 'not-homed', homeSteps: 256, homeFailures: 0, slips: 0, jammed: true, turns: 1092, offset: 70,
-            selfTest: { firstHallWindow: 38, lastHallWindow: 35, firstStepsPerTurn: 2057, lastStepsPerTurn: 2050 } },
-    bootloader: { verdict: 'ok' } });
-  assert.deepEqual(groups.map((g) => g.title), ['Power', 'Link to its board', 'Drum', 'Firmware']);
+test('a unit that was read for nothing has no facts', () => {
+  const silent = { state: 'silent', firmware: {}, power: {}, link: {}, drum: {}, bootloader: {} };
+  assert.deepEqual(unitNow(silent), []);
+  assert.deepEqual(unitFacts(silent), []);
+});
+
+const READ_IN_FULL = {
+  state: 'running', addressStored: false,
+  firmware: { rev: 'd360e2b', status: 'current', uptimeS: 182333, protocol: 1, protocolSupported: true },
+  power: { brownouts: 2, watchdogResets: 1, lastStart: 'requested', restartedWhileWatched: false,
+           supplyMv: 5091, supplyMinMv: 4979, freeRamMin: 1490, supplyDuringLastMoveMv: 5001 },
+  link: { badCommands: 87, received: 29696, answered: 41254, heardMsAgo: 38222, missed: 0, failed: 0 },
+  drum: { home: 'not-homed', homeSteps: 256, homeFailures: 0, slips: 0, jammed: true, turns: 1092, offset: 70,
+          homeExcessSteps: 0, homeExcessStepsMax: 61, homeExcessStepsEver: 80,
+          selfTest: { firstHallWindow: 38, lastHallWindow: 35, firstStepsPerTurn: 2057, lastStepsPerTurn: 2050 } },
+  bootloader: { verdict: 'ok' } };
+
+test('the few facts of now stand on the page, the rest is under all facts', () => {
+  assert.deepEqual(unitNow(READ_IN_FULL), [
+    ['Supply', '5.09 V', 'Lowest since it started: 4.98 V.'],
+    ['Last heard', '38 s ago'],
+    ['Home', 'not homed'],
+    ['Firmware', 'd360e2b (current)'],
+    ['Offset', '70 steps'],
+  ]);
+  const groups = unitFacts(READ_IN_FULL);
+  assert.deepEqual(groups.map((g) => g.title),
+                   ['Power', 'Link to its board', 'Drum', 'Firmware', 'Over its lifetime']);
   const find = (label) => groups.flatMap((g) => g.rows).find((r) => r[0] === label);
-  assert.deepEqual(find('Unit firmware'), ['Unit firmware', 'd360e2b (current)']);
-  assert.deepEqual(find('Home'), ['Home', 'not homed', 'The last search took 256 steps.']);
-  assert.deepEqual(find('Turns of the drum, lifetime'), ['Turns of the drum, lifetime', '1,092']);
+  assert.deepEqual(find('Last search for home'), ['Last search for home', '256 steps']);
+  assert.deepEqual(find('Overshot home'), ['Overshot home', '0 steps', 'At worst since it started: 61 steps.']);
   assert.deepEqual(find('Last move stalled'), ['Last move stalled', 'yes']);
   assert.deepEqual(find('Slipped and corrected itself'), ['Slipped and corrected itself', 0, null]);
   assert.deepEqual(find('Address kept in its memory'),
                    ['Address kept in its memory', 'no', 'It takes its address from its switches.']);
+  // What a self-test measured is said against the unit's first one.
+  assert.deepEqual(find('Self-test, steps a turn'), ['Self-test, steps a turn', 2050, 'At its first test: 2057.']);
+  assert.deepEqual(unitFacts({ ...READ_IN_FULL, drum: { selfTest: { firstHallWindow: 38, lastHallWindow: 38,
+    firstStepsPerTurn: 2050, lastStepsPerTurn: 2050 } } }).flatMap((g) => g.rows)
+    .filter((r) => r[0].startsWith('Self-test')).map((r) => r[2]), ['As at its first test.', 'As at its first test.']);
+});
+
+test('what a unit counted over its whole life is a group of its own', () => {
+  const life = unitFacts(READ_IN_FULL).find((g) => g.title === 'Over its lifetime');
+  assert.deepEqual(life.rows, [
+    ['Restarts from low voltage', 2],
+    ['Watchdog resets', 1],
+    ['Failed to find home', 0],
+    ['Worst overshoot of home', '80 steps'],
+    ['Turns of the drum', '1,092'],
+  ]);
+  const now = unitFacts(READ_IN_FULL).filter((g) => g.title !== 'Over its lifetime').flatMap((g) => g.rows);
+  assert.equal(now.some((r) => /lifetime/i.test(r[0])), false);
+});
+
+test('every reason a unit can have says what to do about it, or that there is nothing to do', () => {
+  assert.ok(UNIT_REASON_NAMES.length >= 22);
+  for (const reason of UNIT_REASON_NAMES) {
+    const text = unitVerdictText({ level: 'note', reason, a: 2, b: 16 }, ALPHABET);
+    if (reason !== 'working') assert.ok(text.todo, reason + ' says nothing to do about it');
+  }
+  const cure = (reason) => unitVerdictText({ level: 'fault', reason, a: 1, b: 0 }, ALPHABET).cure;
+  assert.equal(cure('wrong-protocol'), 'firmware');
+  assert.equal(cure('held-in-bootloader'), 'firmware');
+  assert.equal(cure('in-bootloader'), 'firmware');
+  assert.equal(cure('firmware-outdated'), 'firmware');
+  assert.equal(cure('bootloader-outdated'), 'boot-update');
+  assert.equal(cure('home-failed'), 'home');
+  assert.equal(cure('jammed'), 'home');
+  assert.equal(cure('wrong-letter'), 'home');
+  // An update refuses a boot section it does not know: nothing to press.
+  assert.equal(cure('bootloader-damaged'), undefined);
+  assert.equal(cure('low-supply'), undefined);
+});
+
+test('what is out of the ordinary is the reason that leads and every other that applies', () => {
+  assert.deepEqual(unitConcerns({ verdict: { level: 'working', reason: 'working', a: 60, b: 0, also: [] } }, ALPHABET), []);
+  assert.deepEqual(unitConcerns({}, ALPHABET), []);
+  const unit = { state: 'running',
+    verdict: { level: 'fault', reason: 'home-failed', a: 4, b: 0, also: ['hall-never', 'low-supply', 'dragging', 'worn'] },
+    power: { supplyMinMv: 4210 }, drum: { homeExcessStepsMax: 61, turns: 48211 } };
+  const concerns = unitConcerns(unit, ALPHABET);
+  assert.deepEqual(concerns.map((c) => [c.cls, c.title]), [
+    ['bad', 'Cannot find home'], ['bad', 'Never saw its home sensor'], ['note', 'Low supply'],
+    ['note', 'Drum drags'], ['note', 'Many turns']]);
+  // The numbers of a reason that does not lead are the unit's own facts; a
+  // limit only the master knows is left out, not made up.
+  assert.equal(concerns[2].why, 'Lowest supply since it started: 4.21 V.');
+  assert.equal(concerns[3].why, 'It needed 61 steps more than expected to reach home.');
+  assert.match(concerns[4].why, /^48211 turns/);
+  for (const c of concerns) assert.ok(c.todo);
+  const before = unitConcerns({ verdict: { level: 'note', reason: 'worn', a: 9, b: 0, also: ['home-failed-before'] },
+                                drum: { homeFailures: 9 } }, ALPHABET)[1];
+  assert.equal(before.why, '9 times over its lifetime. It is at home now.');
+});
+
+test('a button is on a unit page only when the unit can do it', () => {
+  const can = (state, reason) => unitCan({ state, verdict: { reason } });
+  assert.deepEqual(can('running', 'working'), { act: true, firmware: true });
+  assert.deepEqual(can('running', 'jammed'), { act: true, firmware: true });
+  assert.deepEqual(can('running', 'not-answering'), { act: false, firmware: false });
+  assert.deepEqual(can('silent', 'no-unit'), { act: false, firmware: false });
+  assert.deepEqual(can('running', 'wrong-protocol'), { act: false, firmware: true });
+  assert.deepEqual(can('bootloader', 'in-bootloader'), { act: false, firmware: true });
+  assert.deepEqual(can('bootloader', 'held-in-bootloader'), { act: false, firmware: true });
+  assert.deepEqual(can('bootloader', 'being-updated'), { act: false, firmware: false });
+  assert.deepEqual(unitCan({ state: 'running' }), { act: true, firmware: true });
 });
 
 test('a flap too far is corrected by stopping a flap of steps earlier', () => {
@@ -659,16 +747,16 @@ test('a marked unit that cannot be corrected is named with the reason, the other
 
 test('a unit says what it wrote down about the silences of its board', () => {
   const lines = (silences) => {
-    const group = unitFacts({ state: 'running', link: { silences } }).find((g) => g.title === 'Link to its board');
+    const group = unitFacts({ state: 'running', link: { silences } }).find((g) => g.title === 'Over its lifetime');
     return group ? Object.fromEntries(group.rows.map((r) => [r[0], r.slice(1)])) : {};
   };
   // A record without a silence says so and nothing more.
   assert.deepEqual(lines({ count: 0, lastMinutes: 0, longestMinutes: 0, busRestarts: 0, unitRestarts: 0, nowMinutes: 0 }),
-    { 'Times its board went silent, lifetime': [0, null] });
+    { 'Times its board went silent': [0, null] });
   const dead = lines({ count: 2, lastMinutes: 120, longestMinutes: 200, busRestarts: 119, heardAfterBusRestart: 0,
                        unitRestarts: 1, lastSawTraffic: false, lastLineHeldLow: false, lastEnded: false,
                        lastRestartedUnit: true, nowMinutes: 0 });
-  assert.deepEqual(dead['Times its board went silent, lifetime'],
+  assert.deepEqual(dead['Times its board went silent'],
     [2, 'The last for 120 minutes, the longest for 200 minutes.']);
   assert.equal(dead['During the last silence'][0], 'no traffic');
   assert.match(dead['During the last silence'][1], /nothing on the lines at all.*still going on.*restarted itself/);
@@ -678,7 +766,8 @@ test('a unit says what it wrote down about the silences of its board', () => {
                        unitRestarts: 0, lastSawTraffic: true, lastEnded: true, nowMinutes: 4 });
   assert.equal(deaf['During the last silence'][0], 'traffic for others');
   assert.equal(deaf['Restarted its bus on silence'][1], '1 time its board was heard again right after.');
-  assert.deepEqual(deaf['Silent now'], ['4 minutes']);
+  assert.deepEqual(unitFacts({ state: 'running', link: { silences: { count: 1, nowMinutes: 4 } } })
+    .find((g) => g.title === 'Link to its board').rows, [['Silent now', '4 minutes']]);
   // A unit on older firmware has no record: no lines.
   assert.deepEqual(lines(undefined), {});
 });

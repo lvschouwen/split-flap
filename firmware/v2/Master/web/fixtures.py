@@ -17,8 +17,8 @@ REV, OLD_REV, UNIT_REV = "aaaaaaa", "bbbbbbb", "ccccccc"
 # UnitVerdict.h says they mean for the reason.
 UNIT_REASONS = {
     "working": ("working", 19557, 0, "running"),
-    "no-unit": ("fault", 0, 0, "absent"),
-    "not-answering": ("fault", 340, 255, "absent"),
+    "no-unit": ("fault", 0, 0, "silent"),
+    "not-answering": ("fault", 340, 255, "running"),
     "held-in-bootloader": ("fault", 3, 0, "bootloader"),
     "in-bootloader": ("fault", 0, 0, "bootloader"),
     "wrong-protocol": ("fault", 2, 0, "running"),
@@ -104,6 +104,8 @@ def _unit_doc(board, address, reason):
                                 "heardAfterBusRestart": 1, "unitRestarts": 1, "lastSawTraffic": True,
                                 "lastLineHeldLow": True, "lastEnded": False,
                                 "lastRestartedUnit": True, "nowMinutes": 0}}
+    if reason == "not-answering":
+        doc["link"].update({"heardMsAgo": 340000, "missed": 255, "lost": True})
     failed = reason in ("home-failed", "hall-never")
     doc["drum"] = {"homeSteps": 1984, "homeFailed": failed, "hallNeverSeen": reason == "hall-never",
                    "moving": reason == "finding-home", "commanded": 3,
