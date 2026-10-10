@@ -1,6 +1,6 @@
 # Update from a signed release, and a web flasher (#583)
 
-Status: **design agreed with the owner 2026-10-10; awaiting review of this document.** Nothing here is built. Section 10 lists what is measured before any code.
+Status: **approved by the owner 2026-10-10; section 10 measured the same day and passed.** Nothing else is built.
 
 ## 1. Purpose
 
@@ -163,6 +163,19 @@ On the installed master, with the clock running and the row linked:
 4. **GitHub Pages** serves the images with a length and without a redirect to another host.
 
 If 1 fails with PSRAM as well, the design goes back to the owner before anything else is built.
+
+### Results (2026-10-10, master on a trial build of 9509ccc)
+
+| | Result |
+|---|---|
+| HTTPS download, TLS memory internal (the framework default) | **Fails.** The TLS library cannot allocate (`MBEDTLS_ERR_SSL_ALLOC_FAILED`) with 58 KB free and a largest block of 31.7 KB. |
+| HTTPS download, TLS memory in PSRAM (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`) | **5 of 5.** 1 612 384 bytes each, SHA-256 right every time, 8.6 to 20 s, handshake about 0.5 s. Internal memory never under 52 KB free during a download; the lowest ever seen on that start stayed 40 KB, where it is without the download. No restart, the row stayed linked. |
+| Stack | 3.5 KB used by connect, download and hash. |
+| Signature check | Present. One check of a P-256 signature takes 0.28 s; a message with one changed bit is refused. |
+| Image size | +75 KB on the master (1 612 384 to 1 687 472 bytes) with the client, the check and the trial code; 4 MB slot. |
+| GitHub Pages | 200 with `content-length`, `application/octet-stream`, no redirect. |
+
+So the master is built with `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`. It moves every TLS-library allocation to PSRAM, including what joining WiFi uses; the trial build joined and ran normally with it. The rescue image needs the same setting and is measured when it is built (order of work, step 4). Not measured: a download while it is also written to flash.
 
 ## 11. Tests
 
