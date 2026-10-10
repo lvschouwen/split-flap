@@ -521,3 +521,45 @@ test('a marked unit that cannot be corrected is named with the reason, the other
                'Row 1, unit 3: That needs an offset of -2896 steps; a unit takes -2038 to 2038.'],
   });
 });
+
+test('a unit says what it wrote down about the silences of its board', () => {
+  const lines = (silences) => {
+    const group = unitFacts({ state: 'running', link: { silences } }).find((g) => g.title === 'Link to its board');
+    return group ? Object.fromEntries(group.rows.map((r) => [r[0], r.slice(1)])) : {};
+  };
+  // A record without a silence says so and nothing more.
+  assert.deepEqual(lines({ count: 0, lastMinutes: 0, longestMinutes: 0, busRestarts: 0, unitRestarts: 0, nowMinutes: 0 }),
+    { 'Times its board went silent, lifetime': [0, null] });
+  const dead = lines({ count: 2, lastMinutes: 120, longestMinutes: 200, busRestarts: 119, heardAfterBusRestart: 0,
+                       unitRestarts: 1, lastSawTraffic: false, lastLineHeldLow: false, lastEnded: false,
+                       lastRestartedUnit: true, nowMinutes: 0 });
+  assert.deepEqual(dead['Times its board went silent, lifetime'],
+    [2, 'The last for 120 minutes, the longest for 200 minutes.']);
+  assert.equal(dead['During the last silence'][0], 'no traffic');
+  assert.match(dead['During the last silence'][1], /nothing on the lines at all.*still going on.*restarted itself/);
+  assert.deepEqual(dead['Restarted its bus on silence'], [119, null]);
+  assert.deepEqual(dead['Restarted itself on silence'], [1]);
+  const deaf = lines({ count: 1, lastMinutes: 3, longestMinutes: 3, busRestarts: 3, heardAfterBusRestart: 1,
+                       unitRestarts: 0, lastSawTraffic: true, lastEnded: true, nowMinutes: 4 });
+  assert.equal(deaf['During the last silence'][0], 'traffic for others');
+  assert.equal(deaf['Restarted its bus on silence'][1], '1 time its board was heard again right after.');
+  assert.deepEqual(deaf['Silent now'], ['4 minutes']);
+  // A unit on older firmware has no record: no lines.
+  assert.deepEqual(lines(undefined), {});
+});
+
+test('what a row board read off its dead unit bus reads as a sentence', () => {
+  // 5 units had answered, lines free, 1 address acknowledged, 15 did not, last move 24 s before.
+  const a = 0 | (1 << 4) | (15 << 9) | (0 << 14) | (5 << 19);
+  const dead = eventText({ kind: 'row-event', event: 'bus-dead', a, b: 24 }, 'Row 1', ALPHABET);
+  assert.equal(dead.cls, 'bad');
+  assert.equal(dead.title, 'Row 1: read off its dead unit bus');
+  assert.match(dead.why, /^5 units had answered before; both lines free; of 16 addresses 1 acknowledged, 15 did not, 0 could not be asked\. Its last move started .* before\.$/);
+  const held = eventText({ kind: 'row-event', event: 'bus-dead', a: 3, b: 0xFFFF }, 'Row 1', ALPHABET);
+  assert.match(held.why, /SDA held low/);
+  assert.match(held.why, /It had not moved a flap since its start\.$/);
+  const lines = eventText({ kind: 'row-event', event: 'bus-lines', a: 0xFFFF | (12 << 16), b: 10 | (11 << 16) }, 'Row 1', ALPHABET);
+  assert.equal(lines.why, 'Dead: SDA no rise, SCL 1.2 µs. Working: SDA 1.0 µs, SCL 1.1 µs.');
+  assert.equal(eventText({ kind: 'row-event', event: 'bus-lines', a: 0, b: 0 }, 'Row 1', ALPHABET).why,
+    'Dead: SDA not measured, SCL not measured. Not measured on the working bus yet.');
+});

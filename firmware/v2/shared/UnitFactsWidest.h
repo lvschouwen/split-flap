@@ -29,7 +29,8 @@ static const char* const UNIT_FACTS_KEYS[] = {
     "se",    "sx",     "sag",    "he",    "dw",   "sb",    "ut",   "rx",   "tx",   "dh",
     "pv",    "pmm",    "hf",     "gates", "sxl",  "stw0",  "stw1", "str0", "str1", "fr",
     "frd",   "age",    "hs2",    "misses", "stale", "err", "errAge", "rsx", "bv",  "bcrc",
-    "blv",   "blc",    "blk",    "blf",   "blx",
+    "blv",   "blc",    "blk",    "blf",   "blx",    "bsn", "bsl",    "bsx", "bsr", "bsh",
+    "bss",   "bsf",    "bsq",
 };
 #define UNIT_FACTS_KEY_COUNT (sizeof(UNIT_FACTS_KEYS) / sizeof(UNIT_FACTS_KEYS[0]))
 
@@ -86,6 +87,15 @@ inline UnitFacts unitFactsWidestCommon() {
   u.lifetime.selfTestLastStepsPerRev = 0xFFFF;
   u.lifetime.idleHallFutileRehomes = 0xFF;
   u.lifetime.idleHallStoodDown = true;
+  u.busRecordValid = true;
+  u.busRecord.silences = 0xFF;
+  u.busRecord.lastMinutes = 0xFF;
+  u.busRecord.longestMinutes = 0xFF;
+  u.busRecord.reinits = 0xFF;
+  u.busRecord.reinitsHeard = 0xFF;
+  u.busRecord.selfRestarts = 0xFF;
+  u.busRecord.flags = 0xFF;
+  u.busSilentNowMinutes = 0xFF;
   u.bootVerdict = BOOT_INTEGRITY_CORRUPT;
   u.bootCrc32 = 0xFFFFFFFFUL;
   return u;

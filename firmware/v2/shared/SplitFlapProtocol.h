@@ -149,6 +149,14 @@
                                          //     master see each unit's bootloader
                                          //     generation + whether a twiboot
                                          //     update is safe. Closes #502 item 8.
+#define SFP_CMD_GET_BUS_RECORD     0x8C  // reply: 9 bytes — the silences the
+                                         //     unit lived through (how often,
+                                         //     how long, what it tried, whether
+                                         //     it saw traffic) + XOR checksum
+                                         //     ^ 0xD4 (wire format in
+                                         //     UnitBusRecord.h, #584). Kept in
+                                         //     EEPROM: it survives the power
+                                         //     cycle that ends a silence.
 
 // --- 0x9X mutations ---
 // The no-argument ones travel as opcode + ~opcode (#512); the acceptance
@@ -216,9 +224,15 @@
                                              //     the unit's own supply reads
                                              //     low. A unit without the
                                              //     code refuses the bit.
+#define SFP_UNIT_GATE_SILENCE_RESTART  0x10  // #584 a unit that is not
+                                             //     addressed for twenty minutes
+                                             //     restarts itself, once (it
+                                             //     then finds home: the drum
+                                             //     moves). A unit without the
+                                             //     code refuses the bit.
 #define SFP_UNIT_GATE_IMPLEMENTED                                 \
   (SFP_UNIT_GATE_IDLE_HALL_CHECK | SFP_UNIT_GATE_STRICT_OPCODES | \
-   SFP_UNIT_GATE_SUPPLY_WAIT)
+   SFP_UNIT_GATE_SUPPLY_WAIT | SFP_UNIT_GATE_SILENCE_RESTART)
 
 // SET_OFFSET's accepted range (#171). The bound is one full revolution of the
 // unit's 28BYJ-48 drum (its STEPS constant — a static_assert there pins the

@@ -10,6 +10,8 @@ static void test_the_codes_have_their_names() {
   TEST_ASSERT_EQUAL_STRING("started", wallRowEventName(1));
   TEST_ASSERT_EQUAL_STRING("self-restart", wallRowEventName(2));
   TEST_ASSERT_EQUAL_STRING("low-memory", wallRowEventName(3));
+  TEST_ASSERT_EQUAL_STRING("bus-dead", wallRowEventName(4));
+  TEST_ASSERT_EQUAL_STRING("bus-lines", wallRowEventName(5));
 }
 
 static void test_a_code_this_build_does_not_know_has_none() {

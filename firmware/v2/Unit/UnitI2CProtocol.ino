@@ -88,6 +88,9 @@ void receiveLetter(int numBytes) {
       case SFP_CMD_GET_BOOT_INFO:
         pendingReply = REPLY_BOOT_INFO;  // #499; cached reply streamed by requestEvent
         break;
+      case SFP_CMD_GET_BUS_RECORD:
+        pendingReply = REPLY_BUS_RECORD;  // #584; pre-encoded by loop()
+        break;
       case SFP_CMD_START_SELF_TEST:
         pendingSelfTest = true;
         break;
@@ -326,6 +329,12 @@ void requestEvent() {
     Wire.write((const uint8_t*)bootInfoReplyBuf, BOOT_INFO_REPLY_LEN);
     return;
   }
+  if (reply == REPLY_BUS_RECORD) {
+    // 9 bytes (#584), pre-encoded by refreshBusRecordReply() under
+    // noInterrupts() — streamed verbatim.
+    Wire.write((const uint8_t*)busRecordReplyBuf, BUS_RECORD_REPLY_LEN);
+    return;
+  }
   if (reply == REPLY_STATUS) {
     // Issue #47. 8-byte health/diag payload + a #405 checksum byte. Master
     // parses it into UnitStatus.
@@ -419,11 +428,80 @@ void twiDeafTick() {
   bool linesFree = (PINC & lines) == lines;
   bool intact = twiListenConfigIntact(TWCR, TWAR, (uint8_t)i2cAddress);
   if (!twiDeafShouldReset(twiDeaf, intact, linesFree, now)) return;
-  TWCR = _BV(TWINT);  // TWEN off, stale flag cleared — see twiHealTick()
+  twiReinit();
+  twiDeafNoteReset(twiDeaf, now);
+}
+
+//The bus hardware off and on again: TWEN off with a stale flag cleared (see
+//twiHealTick()), then Wire.begin(), which keeps the handlers, and the
+//general-call enable setup() arms.
+void twiReinit() {
+  TWCR = _BV(TWINT);
   pendingReply = REPLY_NONE;
   Wire.begin(i2cAddress);
   TWAR |= (1 << TWGCE);
-  twiDeafNoteReset(twiDeaf, now);
+}
+
+//A unit nobody addresses (#584, rules in UnitBusSilence.h). The watch on the
+//lines is the pin-change interrupt of SDA (PC4) and SCL (PC5), which sees
+//their edges whoever owns the pins. It is armed only in a silence and takes
+//itself off at the first edge, so a working bus never pays for it.
+ISR(PCINT1_vect) {
+  PCICR &= (uint8_t)~_BV(PCIE1);
+  busTrafficSeen = true;
+}
+
+void refreshBusRecordReply() {
+  uint8_t buf[BUS_RECORD_REPLY_LEN];
+  busRecordEncodeReply(busRecord, busSilenceNowMinutes(busSilence, millis()), buf);
+  noInterrupts();
+  for (uint8_t i = 0; i < BUS_RECORD_REPLY_LEN; i++) busRecordReplyBuf[i] = buf[i];
+  interrupts();
+}
+
+void loadBusRecord() {
+  uint8_t block[EE_BUS_RECORD_BLOCK_LEN];
+  for (uint8_t i = 0; i < EE_BUS_RECORD_BLOCK_LEN; i++) block[i] = EEPROM.read(EE_BUS_RECORD + i);
+  unitEeBusRecordDecode(block, busRecord);  // blank or torn: the empty record
+  refreshBusRecordReply();
+}
+
+//EEPROM.update: a byte that did not change costs nothing.
+static void persistBusRecord() {
+  uint8_t block[EE_BUS_RECORD_BLOCK_LEN];
+  unitEeBusRecordEncode(busRecord, block);
+  for (uint8_t i = 0; i < EE_BUS_RECORD_BLOCK_LEN; i++) EEPROM.update(EE_BUS_RECORD + i, block[i]);
+}
+
+void busSilenceLoop() {
+  noInterrupts();
+  uint16_t frames = linkRxFrames;
+  bool traffic = busTrafficSeen;
+  busTrafficSeen = false;
+  interrupts();
+  const uint8_t lines = _BV(PC4) | _BV(PC5);
+  bool lineLow = (PINC & lines) != lines;
+  uint8_t minutesBefore = busRecordReplyBuf[7];  // loop() is its only writer
+  uint8_t todo = busSilenceTick(
+      busSilence, busRecord, frames, lineLow, traffic,
+      unitGateEnabled(lifetime.featureGates, UNIT_GATE_SILENCE_RESTART), millis());
+  if (!busSilence.silent) PCICR &= (uint8_t)~_BV(PCIE1);
+  if (todo & BUS_SILENCE_DO_WATCH_TRAFFIC) {
+    PCMSK1 |= _BV(PCINT12) | _BV(PCINT13);
+    PCIFR = _BV(PCIF1);  // an edge from before the watch does not count
+    PCICR |= _BV(PCIE1);
+  }
+  if (todo & BUS_SILENCE_DO_REINIT) twiReinit();
+  if (todo & BUS_SILENCE_DO_SAVE) persistBusRecord();
+  if (todo != 0 || busSilenceNowMinutes(busSilence, millis()) != minutesBefore) {
+    refreshBusRecordReply();
+  }
+  //The restart is the one a master asks for: loop() stamps the reset as
+  //requested and lets the watchdog take the unit down.
+  if (todo & BUS_SILENCE_DO_RESTART) {
+    eeprom_busy_wait();
+    pendingBootloader = true;
+  }
 }
 
 //Returns the I2C address of the unit. EEPROM takes precedence (set by the

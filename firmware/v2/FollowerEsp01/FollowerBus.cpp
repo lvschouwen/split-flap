@@ -29,6 +29,10 @@
 #include "UnitUpdateJob.h"    // quiet wait + boot sweep around the flash loop
 #include "FollowerScanLog.h"  // which units a scan logs
 #include "BootDumpOp.h"       // the shared boot-section dump (#511)
+#include "FollowerBusDeath.h"  // which units count, the record of a bus death (#496)
+#include "FollowerEvents.h"
+#include "FollowerLineTest.h"
+#include "wall_link.pb.h"     // RowEventCode
 
 UnitFacts unitFacts[UNITS_AMOUNT];
 int displayWidth = UNITS_AMOUNT;
@@ -149,6 +153,14 @@ static bool lastFrameValid = false;
 
 const BusRecoveryState& followerBusRecovery() { return busRecovery; }
 
+// What a bus death is compared with (#496): the lines as last measured while
+// units answered, and when this row last started a move.
+static FollowerLineReading healthyLines;
+static uint32_t lastMoveMs = 0;
+static bool everMoved = false;
+// How often the lines are measured on a working bus.
+#define BUS_LINES_HEALTHY_EVERY_MS 600000UL
+
 #if SERIAL_ENABLE == false
 // Only drivable units feed the detector: busPollHealthOne() returns false for
 // the rest without touching the bus, which is no evidence either way. The
@@ -166,6 +178,77 @@ static void observeLiveness(int i, bool ok) {
   }
 }
 
+static void logLines(const __FlashStringHelper* what, const FollowerLineReading& r) {
+  char sda[16], scl[16];
+  followerLineText(sda, sizeof(sda), r.sda);
+  followerLineText(scl, sizeof(scl), r.scl);
+  SerialPrint(what);
+  SerialPrint(F(" SDA "));
+  SerialPrint(sda);
+  SerialPrint(F(", SCL "));
+  SerialPrintln(scl);
+}
+
+// On a working, idle bus: the reading a death is held against.
+static void busLinesHealthyTick(uint32_t now) {
+  static uint32_t measuredMs = 0;
+  static bool measured = false;
+  if (busRecovery.dead || followerUnitsAnswering(unitFacts, UNITS_AMOUNT) == 0) return;
+  if (measured && now - measuredMs < BUS_LINES_HEALTHY_EVERY_MS) return;
+  if (busRowMoving()) return;
+  const bool first = !measured;
+  measured = true;
+  measuredMs = now;
+  const FollowerLineReading r = followerLineTest();
+  if (r.sda == FOLLOWER_LINE_NOT_MEASURED || r.scl == FOLLOWER_LINE_NOT_MEASURED) return;
+  healthyLines = r;
+  if (first) logLines(F("bus: on the working bus the lines rise in"), r);
+}
+
+// Once per episode, at its first recovery attempt (#496): what the bus looks
+// like now, into the log and to the master (FollowerBusDeath.h). Every
+// address a unit can have is asked for an acknowledge only.
+static void recordBusDeath(uint8_t lineState, int hadAnswered) {
+  FollowerBusDeath d;
+  d.lineState = lineState;
+  d.hadAnswered = (uint8_t)hadAnswered;
+  if (everMoved) d.sinceMoveS = (millis() - lastMoveMs) / 1000UL;
+  // Only with both lines free: under a held line every address would be
+  // refused, each after the bus's own wait for the line.
+  if (lineState == 0) {
+    for (int i = 0; i < UNITS_AMOUNT; i++) {
+      Wire.beginTransmission(toI2cAddress(i));
+      const int status = Wire.endTransmission();
+      if (status == 0) d.acked++;
+      else if (status == 2) d.notAcked++;
+      else d.refused++;
+      yield();
+    }
+  }
+  const FollowerLineReading lines = followerLineTest();
+  char line[136];
+  snprintf_P(line, sizeof(line),
+             PSTR("bus: at its death %u unit(s) had answered; of %u addresses %u acknowledge, "
+                  "%u do not, %u refused; last move "),
+             (unsigned)d.hadAnswered, (unsigned)UNITS_AMOUNT, (unsigned)d.acked,
+             (unsigned)d.notAcked, (unsigned)d.refused);
+  SerialPrint(line);
+  if (everMoved) {
+    SerialPrint(d.sinceMoveS);
+    SerialPrintln(F(" s ago"));
+  } else {
+    SerialPrintln(F("none since the start"));
+  }
+  logLines(F("bus: the lines now rise in"), lines);
+  logLines(F("bus: on the working bus they rose in"), healthyLines);
+  const uint32_t nowS = millis() / 1000UL;
+  followerEvents().put(wl_RowEventCode_ROW_EVT_BUS_DEAD, 0, followerBusDeathA(d),
+                       followerBusDeathB(d), nowS);
+  followerEvents().put(wl_RowEventCode_ROW_EVT_BUS_LINES, 0,
+                       followerLinesPack(lines.sda, lines.scl),
+                       followerLinesPack(healthyLines.sda, healthyLines.scl), nowS);
+}
+
 // Clocks a slave-held SDA free: Wire.status() reads up to 20 bits, releasing
 // a Nano stuck mid-byte, and leaves both lines released so the next START
 // resets every slave's TWI state machine. No Wire.begin() re-init — Twi::init
@@ -179,7 +262,9 @@ static void followerBusRecoveryTick() {
   }
   if (!busRecoveryDue(busRecovery, now)) return;
   uint8_t status = Wire.status();
+  const int answering = followerUnitsAnswering(unitFacts, UNITS_AMOUNT);
   busRecoveryNoteAttempt(busRecovery, now, status);
+  if (busRecovery.attemptsThisEpisode == 1) recordBusDeath(status, answering);
   if (busRecovery.attemptsThisEpisode <= BUS_RECOVERY_LOGGED_ATTEMPTS) {
     SerialPrint(F("bus: recovery attempt "));
     SerialPrint(busRecovery.attemptsThisEpisode);
@@ -189,7 +274,9 @@ static void followerBusRecoveryTick() {
   // An empty row has no liveness reads to close the episode: re-probe
   // (quietly — this repeats every backoff step). What it finds is left to
   // the heartbeat's status reads to confirm (FollowerBusRecovery.h).
-  if (busRecoveryReprobeDue(busRecovery, detectedUnitCount)) {
+  // A row is empty while none of its units has answered: an address that
+  // only acknowledged at a scan does not make it a row (FollowerBusDeath.h).
+  if (busRecoveryReprobeDue(busRecovery, answering)) {
     const int before = detectedUnitCount;
     busProbeQuiet(true);
     if (detectedUnitCount != before) {
@@ -379,8 +466,11 @@ void followerHeartbeatTick() {
   // be in its twiboot window (v1 #88) or a reflash is streaming.
   if ((int32_t)(now - busProbeInhibitedUntilMs()) < 0) return;
   if (reflashInProgress(reflashProgress)) return;
-  if (detectedUnitCount == 0) busRecoveryNoteEmptyRow(busRecovery, now);
+  if (followerUnitsAnswering(unitFacts, UNITS_AMOUNT) == 0) {
+    busRecoveryNoteEmptyRow(busRecovery, now);
+  }
   followerBusRecoveryTick();
+  busLinesHealthyTick(now);
   if (displayWidth <= 0 || detectedUnitCount == 0) return;
   int i = slot;
   slot = heartbeatNextSlot(slot, displayWidth);
@@ -432,6 +522,9 @@ static MotionBudgetState motionBudget;
 
 // No motion while the radio is in a high-draw phase, bounded.
 static void admitMotion() {
+  // Every move this row starts passes here: what a bus death is dated against.
+  lastMoveMs = millis();
+  everMoved = true;
   uint32_t holdStart = millis();
   bool logged = false;
   for (;;) {

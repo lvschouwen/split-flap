@@ -18,6 +18,7 @@
 #include "UnitVitals.h"  // shared supply-Vcc/ram/cmd-pos diag packet (#306)
 #include "UnitExtDiag.h"  // shared new-measurement diag packet (#365)
 #include "UnitLifetime.h"  // shared across-power-cycle health packet (#406)
+#include "UnitBusRecord.h"  // what a unit remembers of its master's silences (#584)
 #include "UnitWireContract.h"  // shared core read/write wire formats (#405)
 #include "BootIntegrity.h"  // boot-section verdict vocabulary (#520)
 #include "TwibootProtocol.h"  // TwibootIdentity (#541)
@@ -148,6 +149,12 @@ struct UnitFacts {
   // reboot forgets it, this one is what the unit's EEPROM remembers.
   UnitLifetimeFacts lifetime{};
   bool lifetimeValid = false;
+  // The silences the unit lived through (#584, UnitBusRecord.h): its EEPROM's
+  // count of the times nobody addressed it, read with the diagnostics. Same
+  // checksum-rejected-on-old-firmware lifecycle as lifetime.
+  UnitBusRecord busRecord{};
+  uint8_t busSilentNowMinutes = 0;
+  bool busRecordValid = false;
   // Heartbeat freshness (#310), maintained by displayTask's scheduled poll.
   // lastSeenMs is millis() at the last good CMD_GET_STATUS read; misses is the
   // consecutive-miss counter (NACK/checksum/timeout increments, a good read
@@ -451,7 +458,7 @@ inline size_t unitFaultMaskHex(const UnitFacts* units, int width,
 // leaves more than a few bytes over. A document that does not fit is not
 // sent at all, so a key added to the serializer moves these.
 #define UNIT_FACTS_DOC_BASE_BYTES     252
-#define UNIT_FACTS_DOC_PER_UNIT_BYTES 599
+#define UNIT_FACTS_DOC_PER_UNIT_BYTES 679
 #define UNIT_FACTS_DOC_CAP(width) \
   ((size_t)UNIT_FACTS_DOC_BASE_BYTES + (size_t)(width) * UNIT_FACTS_DOC_PER_UNIT_BYTES)
 #define UNIT_HEALTH_JSON_CAP UNIT_FACTS_DOC_CAP(16)
@@ -620,6 +627,25 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
         UNIT_HEALTH_APPEND(",\"fr\":%u", (unsigned)lt.idleHallFutileRehomes);
       }
       if (lt.idleHallStoodDown) UNIT_HEALTH_APPEND(",\"frd\":1");
+    }
+    if (u.busRecordValid) {
+      // The unit's own record of its master's silences (#584). bsn = how many,
+      // always there when the record was read, so "none" and "cannot say"
+      // differ; the rest only when not zero: bsl/bsx = minutes of the latest
+      // and the longest, bsr = restarts of its bus hardware, bsh = of those,
+      // the ones contact followed, bss = restarts of the whole unit, bsf =
+      // BUS_RECORD_FLAG_* of the latest, bsq = minutes of one going on now.
+      const UnitBusRecord& br = u.busRecord;
+      UNIT_HEALTH_APPEND(",\"bsn\":%u", (unsigned)br.silences);
+      if (br.lastMinutes) UNIT_HEALTH_APPEND(",\"bsl\":%u", (unsigned)br.lastMinutes);
+      if (br.longestMinutes) UNIT_HEALTH_APPEND(",\"bsx\":%u", (unsigned)br.longestMinutes);
+      if (br.reinits) UNIT_HEALTH_APPEND(",\"bsr\":%u", (unsigned)br.reinits);
+      if (br.reinitsHeard) UNIT_HEALTH_APPEND(",\"bsh\":%u", (unsigned)br.reinitsHeard);
+      if (br.selfRestarts) UNIT_HEALTH_APPEND(",\"bss\":%u", (unsigned)br.selfRestarts);
+      if (br.flags) UNIT_HEALTH_APPEND(",\"bsf\":%u", (unsigned)br.flags);
+      if (u.busSilentNowMinutes) {
+        UNIT_HEALTH_APPEND(",\"bsq\":%u", (unsigned)u.busSilentNowMinutes);
+      }
     }
     if (u.state == 1) {
       // Heartbeat freshness (#310): age = ms since the last good scheduled

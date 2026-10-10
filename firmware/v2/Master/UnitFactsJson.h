@@ -160,6 +160,18 @@ inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u)
   lt.idleHallStoodDown = r.flag("frd");
   u.lifetimeValid = r.has("hf") || r.has("gates") || r.has("sxl") || r.has("stw0") ||
                     r.has("str0") || r.has("fr") || r.has("frd");
+  u.busRecordValid = r.has("bsn");
+  if (u.busRecordValid) {
+    UnitBusRecord& br = u.busRecord;
+    br.silences = (uint8_t)r.number("bsn", 0xFF);
+    br.lastMinutes = r.has("bsl") ? (uint8_t)r.number("bsl", 0xFF) : 0;
+    br.longestMinutes = r.has("bsx") ? (uint8_t)r.number("bsx", 0xFF) : 0;
+    br.reinits = r.has("bsr") ? (uint8_t)r.number("bsr", 0xFF) : 0;
+    br.reinitsHeard = r.has("bsh") ? (uint8_t)r.number("bsh", 0xFF) : 0;
+    br.selfRestarts = r.has("bss") ? (uint8_t)r.number("bss", 0xFF) : 0;
+    br.flags = r.has("bsf") ? (uint8_t)r.number("bsf", 0xFF) : 0;
+    u.busSilentNowMinutes = r.has("bsq") ? (uint8_t)r.number("bsq", 0xFF) : 0;
+  }
   if (u.state == 1) {
     u.lastSeenMs = nowMs - (r.has("age") ? r.number("age", 0xFFFFFFFFUL) : 0);
     // Without a status read "fl" is absent, and "hs2" is what is left of it.

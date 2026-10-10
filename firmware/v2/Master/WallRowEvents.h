@@ -17,6 +17,8 @@ static const WallRowEventName WALL_ROW_EVENT_NAMES[] = {
     {wl_RowEventCode_ROW_EVT_STARTED, "started"},
     {wl_RowEventCode_ROW_EVT_SELF_RESTART, "self-restart"},
     {wl_RowEventCode_ROW_EVT_LOW_MEMORY, "low-memory"},
+    {wl_RowEventCode_ROW_EVT_BUS_DEAD, "bus-dead"},
+    {wl_RowEventCode_ROW_EVT_BUS_LINES, "bus-lines"},
 };
 
 // "?" for a code this build does not know (a newer row).

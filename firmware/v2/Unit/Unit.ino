@@ -23,6 +23,7 @@
 #include "UnitVitals.h"    // pure supply-Vcc/ram/cmd-pos diag packet (#306)
 #include "UnitExtDiag.h"   // pure ext-diag reply encode (#365; AVR glue below)
 #include "UnitTwiHeal.h"   // pure TWI self-heal policy (#489; glue in UnitI2CProtocol.ino)
+#include "UnitBusSilence.h"  // pure rules for a unit nobody addresses (#584)
 #include "BootHomePolicy.h"  // pure staggered boot-home decision (#309)
 #include "UnitHomePolicy.h"  // pure failed-home retry policy (#502)
 #include "UnitStallPolicy.h"  // pure timing rule of the stall bit (#374)
@@ -127,6 +128,14 @@ TwiHealState twiHeal;
 // Deaf-slave check (#502): loop-only; the re-init count rides the ext-diag
 // link extension.
 TwiDeafState twiDeaf;
+// A unit that stops being addressed (#584, UnitBusSilence.h): loop-only. The
+// record is what GET_BUS_RECORD reads back and what the EEPROM keeps.
+BusSilence busSilence;
+UnitBusRecord busRecord;
+// Set by the one-shot pin-change watch on SDA/SCL, armed only in a silence.
+volatile bool busTrafficSeen = false;
+// ISR-visible GET_BUS_RECORD reply, re-encoded by refreshBusRecordReply().
+volatile uint8_t busRecordReplyBuf[BUS_RECORD_REPLY_LEN] = {0};
 // True when getaddress() returned the EEPROM-provisioned address instead of
 // the DIP-derived one. Surfaced as GET_STATUS flags bit 4 (#215): twiboot only
 // listens on the DIP-derived address, so the master needs to know a unit may
@@ -159,6 +168,7 @@ enum UnitReply : uint8_t {
   REPLY_EXT_DIAG,
   REPLY_LIFETIME,
   REPLY_BOOT_INFO,
+  REPLY_BUS_RECORD,
 };
 volatile uint8_t pendingReply = REPLY_NONE;
 
@@ -628,6 +638,9 @@ void setup() {
   // all-zero buffer whose checksum byte is 0, which the master rejects as
   // padding rather than reading as a genuinely fresh unit.
   refreshLifetimeReply();
+  // Bus record (#584): what earlier silences left in EEPROM, published under
+  // the same #173 ordering rule.
+  loadBusRecord();
   // Boot-info reply (#499): same #173 ordering rule — a GET_BOOT_INFO right
   // after boot must stream a coherent lock/fuse/CRC/state packet, and this also
   // publishes the result of any auto-resume that just ran.
@@ -677,6 +690,7 @@ void loop() {
   wdt_reset(); //see wdt_enable(WDTO_8S) in setup() (issue #107)
   twiHealTick(); //release a wedged TWI holding SDA before anything else (#489)
   twiDeafTick(); //re-arm a TWI whose registers stopped listening (#502)
+  busSilenceLoop(); //note and try to end a silence of the master (#584)
 
   // Keep the ISR-visible diag/self-test replies current (#263/#265). Cheap
   // (two small encodes + an interrupt-guarded copy) and unconditional, so

@@ -29,9 +29,12 @@ NAMES = {
     "misses": "missed", "stale": "lost", "err": "failed", "errAge": "failedMsAgo",
     "bv": "verdict", "bcrc": "crc32", "blv": "generation",
     "rsx": "rescuedFromBootloader", "blc": "capabilities", "blk": "lock", "blf": "fuses", "blx": "crashes",
+    "bsn": "count", "bsl": "lastMinutes", "bsx": "longestMinutes", "bsr": "busRestarts",
+    "bsh": "heardAfterBusRestart", "bss": "unitRestarts", "bsq": "nowMinutes",
 }
 # "fl" is given bit by bit; the rest is the document's frame, not a unit's fact.
-SPLIT = {"fl": ["homeFailed", "hallNeverSeen", "moving"]}
+SPLIT = {"fl": ["homeFailed", "hallNeverSeen", "moving"],
+         "bsf": ["lastSawTraffic", "lastLineHeldLow", "lastEnded", "lastRestartedUnit"]}
 FRAME = {"width", "faulty", "vccMin", "units", "i", "v"}
 
 

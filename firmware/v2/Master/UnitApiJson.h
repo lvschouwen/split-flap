@@ -191,6 +191,22 @@ inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint3
       test["lastStepsPerTurn"] = lt.selfTestLastStepsPerRev;
     }
   }
+  if (u.busRecordValid) {
+    // The unit's own record of the times nobody addressed it (#584).
+    const UnitBusRecord& br = u.busRecord;
+    JsonObject silence = link["silences"].to<JsonObject>();
+    silence["count"] = br.silences;
+    silence["lastMinutes"] = br.lastMinutes;
+    silence["longestMinutes"] = br.longestMinutes;
+    silence["busRestarts"] = br.reinits;
+    silence["heardAfterBusRestart"] = br.reinitsHeard;
+    silence["unitRestarts"] = br.selfRestarts;
+    silence["lastSawTraffic"] = (br.flags & BUS_RECORD_FLAG_TRAFFIC) != 0;
+    silence["lastLineHeldLow"] = (br.flags & BUS_RECORD_FLAG_LINE_LOW) != 0;
+    silence["lastEnded"] = (br.flags & BUS_RECORD_FLAG_ENDED) != 0;
+    silence["lastRestartedUnit"] = (br.flags & BUS_RECORD_FLAG_RESTARTED) != 0;
+    silence["nowMinutes"] = u.busSilentNowMinutes;
+  }
   if (u.bootVerdict != BOOT_INTEGRITY_UNREAD) {
     boot["verdict"] = bootIntegrityName(u.bootVerdict);
     char crc[9];

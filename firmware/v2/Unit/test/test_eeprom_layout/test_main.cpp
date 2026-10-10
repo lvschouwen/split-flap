@@ -36,6 +36,7 @@ static const EeBlock kClaimedBlocks[] = {
     {EE_HEALTH_BASE,       EE_HEALTH_BLOCK_LEN,    "lifetime health"},
     {EE_RING_INIT_VERSION, EE_RING_INIT_BLOCK_LEN, "odometer ring marker"},
     {EE_RESET_MARK,        EE_RESET_MARK_BLOCK_LEN, "requested-reset marker"},
+    {EE_BUS_RECORD,        EE_BUS_RECORD_BLOCK_LEN, "bus record"},
     {EE_ODO_RING_BASE,     ODO_RING_BYTES,         "odometer ring"},
 };
 static const int kClaimedBlockCount =
@@ -75,7 +76,7 @@ static void test_reserved_scalar_headroom_counts_down_as_fields_land() {
   // The header states where the next field lands; the table states what is
   // already taken. Either one going stale on its own fails here.
   TEST_ASSERT_EQUAL_INT(EE_RESERVED_NEXT_FREE, highestClaimedEnd);
-  TEST_ASSERT_EQUAL_INT(36, EE_ODO_RING_BASE - highestClaimedEnd);
+  TEST_ASSERT_EQUAL_INT(28, EE_ODO_RING_BASE - highestClaimedEnd);
 }
 
 static void test_ring_fits_the_device() {
@@ -122,6 +123,7 @@ static void test_block_masks_are_distinct() {
       EE_ID_CHECKSUM_MASK,        EE_CAL_CHECKSUM_MASK,
       EE_HEALTH_CHECKSUM_MASK,    EE_RING_INIT_CHECKSUM_MASK,
       EE_RESET_MARK_CHECKSUM_MASK, ODO_SLOT_CHECKSUM_MASK,
+      EE_BUS_RECORD_CHECKSUM_MASK,
   };
   const int n = (int)(sizeof(masks) / sizeof(masks[0]));
   for (int i = 0; i < n; i++) {
@@ -320,7 +322,8 @@ static void test_only_gates_this_firmware_implements_are_accepted() {
   TEST_ASSERT_TRUE(unitGateBitsKnown(UNIT_GATE_STRICT_OPCODES));
   TEST_ASSERT_TRUE(unitGateBitsKnown(UNIT_GATE_SUPPLY_WAIT));
   TEST_ASSERT_TRUE(unitGateBitsKnown(UNIT_GATE_ALL));
-  TEST_ASSERT_FALSE(unitGateBitsKnown(0x10));
+  TEST_ASSERT_TRUE(unitGateBitsKnown(UNIT_GATE_SILENCE_RESTART));
+  TEST_ASSERT_FALSE(unitGateBitsKnown(0x20));
   TEST_ASSERT_FALSE(unitGateBitsKnown(0xFF));
   TEST_ASSERT_FALSE(unitGateBitsKnown(UNIT_GATE_IDLE_HALL_CHECK | 0x80));
 }

@@ -177,6 +177,11 @@ EEPROM_CONSTANTS = {
     "EE_RESET_MARK_CHECKSUM": "reset marker checksum",
     "EE_RESET_MARK_BLOCK_LEN": "reset marker length",
     "EE_RESET_MARK_CHECKSUM_MASK": "reset marker mask",
+
+    "EE_BUS_RECORD": "bus record field",
+    "EE_BUS_RECORD_LEN": "bus record payload length",
+    "EE_BUS_RECORD_BLOCK_LEN": "bus record length",
+    "EE_BUS_RECORD_CHECKSUM_MASK": "bus record mask",
 }
 
 
@@ -199,13 +204,14 @@ def test_every_eeprom_constant_is_accounted_for():
 def test_the_gate_knows_the_blocks_that_exist_today(claimed_block_rows, mask_array):
     """Pins the parse itself: a regex that silently matched nothing would make
     every assertion above vacuously true."""
-    assert len(claimed_block_rows) == 6
-    assert len(mask_array) == 6
+    assert len(claimed_block_rows) == 7
+    assert len(mask_array) == 7
     assert {row[2] for row in claimed_block_rows} == {
         "identity",
         "calibration",
         "lifetime health",
         "odometer ring marker",
         "requested-reset marker",
+        "bus record",
         "odometer ring",
     }

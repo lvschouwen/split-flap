@@ -224,6 +224,10 @@ enum RowEventCode {
                                   // itself: a = why (1 bus dead, 2 low memory),
                                   // b = how many of those so far
   ROW_EVT_LOW_MEMORY = 3;         // a = largest free block, bytes
+  ROW_EVT_BUS_DEAD = 4;           // its unit bus went dead: what was read off the
+                                  // bus at that moment (FollowerBusDeath.h)
+  ROW_EVT_BUS_LINES = 5;          // with it: how the two lines rose then, and on
+                                  // the working bus (FollowerBusDeath.h)
 }
 
 // Something that happened on the row. Kept by the row until it can be sent,

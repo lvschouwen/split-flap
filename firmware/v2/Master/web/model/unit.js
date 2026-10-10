@@ -26,6 +26,26 @@ export function unitFacts(unit) {
   const link = unit.link || {};
   const drum = unit.drum || {};
   const firmware = unit.firmware || {};
+  // What the unit itself wrote down about the times nobody addressed it. It
+  // keeps this across a power cycle, so it reads after a dead row is back.
+  const silenceLines = (s) => {
+    if (!s) return [];
+    const last = !s.count ? null
+      : (s.lastSawTraffic ? 'It saw traffic on the lines that was not for it.'
+        : 'It saw nothing on the lines at all.')
+        + (s.lastLineHeldLow ? ' A line was held low when it began.' : '')
+        + (s.lastEnded ? '' : ' It was still going on when the unit lost power or restarted.')
+        + (s.lastRestartedUnit ? ' The unit restarted itself in it.' : '');
+    return [
+      ['Times its board went silent, lifetime', s.count,
+        s.count ? `The last for ${plural(s.lastMinutes, 'minute')}, the longest for ${plural(s.longestMinutes, 'minute')}.` : null],
+      ['During the last silence', s.count ? (s.lastSawTraffic ? 'traffic for others' : 'no traffic') : null, last],
+      ['Restarted its bus on silence', s.count ? s.busRestarts : null,
+        s.heardAfterBusRestart ? `${plural(s.heardAfterBusRestart, 'time')} its board was heard again right after.` : null],
+      ['Restarted itself on silence', s.count ? s.unitRestarts : null],
+      ['Silent now', s.nowMinutes ? plural(s.nowMinutes, 'minute') : null],
+    ];
+  };
   const boot = unit.bootloader || {};
   const mv = (v) => (v != null ? volt(v) : null);
   group('Power', [
@@ -47,6 +67,7 @@ export function unitFacts(unit) {
       link.failedMsAgo != null ? `The last one ${dur(link.failedMsAgo / 1000)} ago.` : null],
     ['Garbled commands, lifetime', link.badCommands],
     ['Repaired its own bus', link.selfRepairs],
+    ...silenceLines(link.silences),
     ['Rescued from its bootloader', link.rescuedFromBootloader],
   ]);
   const test = drum.selfTest;

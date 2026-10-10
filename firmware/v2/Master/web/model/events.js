@@ -1,6 +1,6 @@
 // The wall's history in words, from GET /api/v2/history. Pure.
 import { unitVerdictText, boardVerdictText } from './verdict.js';
-import { plural } from './format.js';
+import { plural, dur } from './format.js';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -68,6 +68,24 @@ export function eventText(event, where, alphabet) {
       if (event.event === 'low-memory') {
         return { cls: 'note', title: `${where}: the board ran low on memory`,
                  why: `Largest free block ${event.a} bytes.` };
+      }
+      // What a row board read off its unit bus when it went dead; the fields
+      // are FollowerBusDeath.h's.
+      if (event.event === 'bus-dead') {
+        const a = event.a;
+        const lines = ['both lines free', 'SCL held low', 'SCL held low', 'SDA held low', 'SDA held low'][a & 15]
+          || 'lines in an unknown state';
+        const moved = event.b >= 0xFFFF ? 'It had not moved a flap since its start.'
+          : `Its last move started ${dur(event.b)} before.`;
+        return { cls: 'bad', title: `${where}: read off its dead unit bus`,
+                 why: `${plural((a >> 19) & 31, 'unit')} had answered before; ${lines}; of 16 addresses `
+                   + `${(a >> 4) & 31} acknowledged, ${(a >> 9) & 31} did not, ${(a >> 14) & 31} could not be asked. ${moved}` };
+      }
+      if (event.event === 'bus-lines') {
+        const rise = (t) => (t === 0 ? 'not measured' : t === 0xFFFF ? 'no rise' : `${(t / 10).toFixed(1)} µs`);
+        const pair = (v) => `SDA ${rise(v & 0xFFFF)}, SCL ${rise(v >>> 16)}`;
+        return { cls: 'info', title: `${where}: how its bus lines rise`,
+                 why: `Dead: ${pair(event.a)}. ` + (event.b ? `Working: ${pair(event.b)}.` : 'Not measured on the working bus yet.') };
       }
       return { cls: 'info', title: `${where}: ${event.event}`, why: '' };
     case 'events-dropped':

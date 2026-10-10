@@ -37,7 +37,11 @@
 //                                            a reset the sketch asked for is
 //                                            pending (#502)
 //   27       u8    checksum over 26
-//   28..63         36 B — EE_RESERVED_NEXT_FREE, the ring never moves again
+//   28..34   7xu8  busRecord                 what the unit remembers of the
+//                                            times it stopped being addressed
+//                                            (#584, shared/UnitBusRecord.h)
+//   35       u8    checksum over 28..34
+//   36..63         28 B — EE_RESERVED_NEXT_FREE, the ring never moves again
 //
 //  -- odometer ring ---------------------------------------------------------
 //   64..143        ODO_RING_SLOTS x ODO_SLOT_STRIDE, interleaved
@@ -92,6 +96,7 @@
 
 #include <stdint.h>
 
+#include "UnitBusRecord.h"
 #include "UnitOdometer.h"
 
 #define UNIT_EE_LAYOUT_VERSION 1
@@ -169,12 +174,19 @@
 #define EE_RESET_MARK_CHECKSUM_MASK 0x96
 #define UNIT_EE_RESET_MARK_REQUESTED 0xA5
 
+// Bus record (#584): the silences a unit lived through, kept across the power
+// cycle that usually ends one. A blank or torn block reads as no record.
+#define EE_BUS_RECORD               (EE_RESET_MARK + EE_RESET_MARK_BLOCK_LEN)
+#define EE_BUS_RECORD_LEN           7
+#define EE_BUS_RECORD_BLOCK_LEN     (EE_BUS_RECORD_LEN + 1)
+#define EE_BUS_RECORD_CHECKSUM_MASK 0xB3
+
 // Where the NEXT reserved scalar lands, and therefore what is left ahead of
 // the ring. Claiming bytes means re-pointing this at the end of the new block
 // — the same edit the test's claimed-block table demands, so a field that
 // updates only one of the two fails test_eeprom_layout rather than colliding
 // on a unit.
-#define EE_RESERVED_NEXT_FREE  (EE_RESET_MARK + EE_RESET_MARK_BLOCK_LEN)
+#define EE_RESERVED_NEXT_FREE  (EE_BUS_RECORD + EE_BUS_RECORD_BLOCK_LEN)
 
 static_assert(EE_RESERVED_NEXT_FREE <= EE_ODO_RING_BASE,
               "the reserved scalars have run into the ring");
@@ -219,8 +231,14 @@ static_assert(EE_RESERVED_BASE <= EE_ODO_RING_BASE,
 // Every bit this firmware has code for. SET_GATES (#409) refuses anything
 // outside it: a unit must never persist a gate it will not act on, or
 // /units/health reports a feature as enabled that does not exist here.
-#define UNIT_GATE_ALL \
-  (UNIT_GATE_IDLE_HALL_CHECK | UNIT_GATE_STRICT_OPCODES | UNIT_GATE_SUPPLY_WAIT)
+// Restart the whole unit once in a silence that outlasts the restarts of its
+// bus hardware (#584, UnitBusSilence.h). The unit comes back unhomed and finds
+// home: the drum moves.
+#define UNIT_GATE_SILENCE_RESTART   0x10
+
+#define UNIT_GATE_ALL                                                      \
+  (UNIT_GATE_IDLE_HALL_CHECK | UNIT_GATE_STRICT_OPCODES | UNIT_GATE_SUPPLY_WAIT | \
+   UNIT_GATE_SILENCE_RESTART)
 
 inline bool unitGateEnabled(uint8_t gates, uint8_t gate) {
   return (gates & gate) != 0;
@@ -297,6 +315,38 @@ inline bool unitEeResetMarkRequested(
     return false;
   }
   return block[0] == UNIT_EE_RESET_MARK_REQUESTED;
+}
+
+inline void unitEeBusRecordEncode(const UnitBusRecord& r,
+                                  uint8_t block[EE_BUS_RECORD_BLOCK_LEN]) {
+  block[0] = r.silences;
+  block[1] = r.lastMinutes;
+  block[2] = r.longestMinutes;
+  block[3] = r.reinits;
+  block[4] = r.reinitsHeard;
+  block[5] = r.selfRestarts;
+  block[6] = r.flags;
+  block[EE_BUS_RECORD_LEN] =
+      unitEeBlockChecksum(block, EE_BUS_RECORD_LEN, EE_BUS_RECORD_CHECKSUM_MASK);
+}
+
+// False means blank or torn: `out` is the empty record, never the raw bytes
+// (erased EEPROM would read as 255 silences).
+inline bool unitEeBusRecordDecode(const uint8_t block[EE_BUS_RECORD_BLOCK_LEN],
+                                  UnitBusRecord& out) {
+  out = UnitBusRecord();
+  if (block[EE_BUS_RECORD_LEN] !=
+      unitEeBlockChecksum(block, EE_BUS_RECORD_LEN, EE_BUS_RECORD_CHECKSUM_MASK)) {
+    return false;
+  }
+  out.silences = block[0];
+  out.lastMinutes = block[1];
+  out.longestMinutes = block[2];
+  out.reinits = block[3];
+  out.reinitsHeard = block[4];
+  out.selfRestarts = block[5];
+  out.flags = block[6];
+  return true;
 }
 
 inline void unitEeRingInitEncode(uint8_t block[EE_RING_INIT_BLOCK_LEN]) {

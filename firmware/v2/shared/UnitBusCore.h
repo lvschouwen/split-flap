@@ -179,6 +179,17 @@ inline bool unitReadLifetime(Bus& bus, uint8_t i2cAddress,
 }
 
 template <typename Bus>
+inline bool unitReadBusRecord(Bus& bus, uint8_t i2cAddress, UnitBusRecord& out,
+                              uint8_t& silentNowMinutes) {
+  uint8_t buf[BUS_RECORD_REPLY_LEN];
+  if (!unitQuery(bus, i2cAddress, (uint8_t)SFP_CMD_GET_BUS_RECORD, buf,
+                 BUS_RECORD_REPLY_LEN)) {
+    return false;
+  }
+  return busRecordReadbackValid(buf, BUS_RECORD_REPLY_LEN, out, silentNowMinutes);
+}
+
+template <typename Bus>
 inline bool unitReadOffset(Bus& bus, uint8_t i2cAddress, int16_t& out) {
   uint8_t buf[OFFSET_REPLY_LEN];
   if (!unitQuery(bus, i2cAddress, (uint8_t)SFP_CMD_GET_OFFSET, buf,
@@ -359,6 +370,17 @@ inline void unitRefreshLifetime(Bus& bus, UnitFacts& fact, uint8_t i2cAddress) {
   fact.lifetimeValid = true;
 }
 
+template <typename Bus>
+inline void unitRefreshBusRecord(Bus& bus, UnitFacts& fact, uint8_t i2cAddress) {
+  fact.busRecordValid = false;
+  UnitBusRecord record;
+  uint8_t silentNow = 0;
+  if (!unitReadBusRecord(bus, i2cAddress, record, silentNow)) return;
+  fact.busRecord = record;
+  fact.busSilentNowMinutes = silentNow;
+  fact.busRecordValid = true;
+}
+
 // Boot-section integrity (BootIntegrity.h, #520), judged on every health
 // poll. `logged` is the tree's per-unit memory of the last verdict it logged
 // — kept outside the facts so a probe rescan, which rebuilds them, does not
@@ -436,7 +458,8 @@ inline void unitRefreshOdometer(Bus& bus, UnitFacts& fact, uint8_t i2cAddress) {
 // `bootLogged` is the tree's per-unit memory for unitRefreshBootVerdict.
 
 // Everything beyond the status that both a probe and a poll refresh:
-// odometer, drift diagnostics, vitals, ext-diag, lifetime, boot verdict.
+// odometer, drift diagnostics, vitals, ext-diag, lifetime, bus record, boot
+// verdict.
 // Firmware predating an opcode fails its checksum and the matching valid flag
 // stays false. None of these is a liveness signal: they fail routinely on old
 // firmware and must not be charged to a unit as bus errors (#367).
@@ -450,6 +473,7 @@ inline void unitRefreshDiagnostics(Bus& bus, Notes& notes, UnitFacts& fact,
   unitRefreshVitals(bus, fact, i2cAddress);
   unitRefreshExtDiag(bus, fact, i2cAddress);
   unitRefreshLifetime(bus, fact, i2cAddress);
+  unitRefreshBusRecord(bus, fact, i2cAddress);
   BootUpdateReport report;
   if (unitRefreshBootVerdict(bus, fact, i2cAddress, bootLogged, report)) {
     notes.bootVerdictChanged(i2cAddress, fact, report);
@@ -481,6 +505,7 @@ inline void unitForgetDiagnostics(UnitFacts& fact) {
   fact.extDiagValid = false;
   fact.linkValid = false;
   fact.lifetimeValid = false;
+  fact.busRecordValid = false;
   fact.bootVerdict = BOOT_INTEGRITY_UNREAD;
 }
 

@@ -149,7 +149,8 @@ static void test_gates_reject_bits_no_firmware_implements() {
   TEST_ASSERT_EQUAL(200, maintValidateGates(SFP_UNIT_GATE_STRICT_OPCODES).httpStatus);
   TEST_ASSERT_EQUAL(200, maintValidateGates(SFP_UNIT_GATE_SUPPLY_WAIT).httpStatus);
   TEST_ASSERT_EQUAL(200, maintValidateGates(SFP_UNIT_GATE_IMPLEMENTED).httpStatus);
-  TEST_ASSERT_EQUAL(400, maintValidateGates(0x10).httpStatus);
+  TEST_ASSERT_EQUAL(200, maintValidateGates(SFP_UNIT_GATE_SILENCE_RESTART).httpStatus);
+  TEST_ASSERT_EQUAL(400, maintValidateGates(0x20).httpStatus);
   // 0x02 is declared in UnitEeprom.h and implemented nowhere — the #458 case.
   TEST_ASSERT_EQUAL(400, maintValidateGates(0x02).httpStatus);
   // Mixed with a legal bit it must still fail: a partially-honoured write
