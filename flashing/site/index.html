@@ -129,7 +129,7 @@ page.</p>
   // --- the install log --------------------------------------------------------
   var SPEEDS = [115200, 230400, 460800, 921600];
   var asked = Number(new URLSearchParams(location.search).get("baud"));
-  var speed = SPEEDS.indexOf(asked) >= 0 ? asked : 460800;
+  var speed = SPEEDS.indexOf(asked) >= 0 ? asked : 921600;
   var panel = document.getElementById("logPanel");
   var out = document.getElementById("log");
   var started = 0, tail = null, release = "", loader;
@@ -178,9 +178,17 @@ page.</p>
   // takes for it, and why an install stopped.
   function follow(dialog) {
     var last = "", listed = false;
+    // A browser runs a page it does not show at one step a second, which
+    // is what an install then waits for between blocks.
+    function shown() {
+      if (last) say(document.hidden ? "This page is hidden: the browser slows the install until it shows again."
+                                    : "This page shows again.");
+    }
+    document.addEventListener("visibilitychange", shown);
     var timer = setInterval(function () {
       if (!dialog.isConnected) {
         clearInterval(timer);
+        document.removeEventListener("visibilitychange", shown);
         if (last) say("The installer was closed.");
         return;
       }
