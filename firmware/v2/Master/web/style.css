@@ -104,8 +104,9 @@ th{font-size:13px;color:var(--muted);font-weight:600;border-top:0}
 .n{display:none}
 /* A phone: a row of a table is a small card, its name and state on the first line. */
 @media (max-width:600px){
-  .top{padding-inline:8px;gap:6px;flex-wrap:nowrap}.top .name{display:none}.top #topPill{margin-right:auto}
-  .nav{flex-wrap:nowrap}.nav a{padding:6px 5px;font-size:14px;white-space:nowrap}
+  /* The links fit beside the longest pill at 390 px; on a narrower screen they take a line of their own. */
+  .top{padding-inline:6px;gap:4px}.top .name{display:none}.top #topPill{margin-right:auto}
+  .nav{flex-wrap:nowrap;gap:0}.nav a{padding:6px 4px;font-size:14px;white-space:nowrap}.top .pill{padding-inline:8px}
   .w{display:none}.n{display:inline}
   .cards thead{display:none}
   .cards tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:10px 12px;border-top:1px solid var(--line)}
