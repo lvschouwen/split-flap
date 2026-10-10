@@ -12,8 +12,8 @@
 #                        except as a backup
 #   release-key.pub.pem  public — what the firmware carries
 #
-# The private key exists unencrypted only in this process's memory. An
-# existing key is never replaced: every wall trusts the one it was built with.
+# With a passphrase the private key exists unencrypted only in this process's
+# memory. An existing key is never replaced: every wall trusts the one it was built with.
 set -euo pipefail
 umask 077
 
@@ -59,4 +59,4 @@ echo "Private key : $key"
 echo "Public key  : $pub"
 echo "Fingerprint : $(openssl pkey -pubin -in "$pub" -outform DER | sha256sum | cut -d' ' -f1)"
 echo
-echo "Keep a copy of the private key and its passphrase off this machine."
+echo "Keep a copy of the private key (and its passphrase, if it has one) off this machine."
