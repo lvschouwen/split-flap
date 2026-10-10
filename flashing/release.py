@@ -258,14 +258,21 @@ def check_tag_free(repo: Path, tag: str) -> None:
 
 
 def default_esptool() -> list[str]:
-    """An esptool that knows the S3 and `merge-bin` (v4.7 or later). The one in
-    PlatformIO's own environment is too old."""
+    """An esptool that runs and is recent enough for the S3 and `merge-bin`
+    (v4.7). PlatformIO's own is v3; one on PATH may be a broken install."""
+    candidates = [["esptool"], ["uv", "run", "--no-project", "--with", "esptool>=4.7",
+                                "python", "-m", "esptool"]]
     if os.environ.get("ESPTOOL"):
-        return os.environ["ESPTOOL"].split()
-    found = shutil.which("esptool")
-    if found:
-        return [found]
-    return ["uv", "run", "--no-project", "--with", "esptool", "python", "-m", "esptool"]
+        candidates.insert(0, os.environ["ESPTOOL"].split())
+    for candidate in candidates:
+        try:
+            done = subprocess.run(candidate + ["version"], capture_output=True, text=True)
+        except OSError:
+            continue
+        version = re.search(r"(\d+)\.(\d+)", done.stdout.splitlines()[-1] if done.stdout else "")
+        if done.returncode == 0 and version and (int(version[1]), int(version[2])) >= (4, 7):
+            return candidate
+    raise Refused("no esptool of v4.7 or later (install it, or set ESPTOOL)")
 
 
 # --- the run -----------------------------------------------------------------
