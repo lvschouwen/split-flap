@@ -78,7 +78,7 @@ def test_a_log_line_that_did_not_get_out_is_kept():
     link = _code("FollowerLink.cpp")
     tick = link[link.index("void logTick()"):]
     tick = tick[:tick.index("\n}\n")]
-    assert "nextLine(next," in tick and "if (send()) logCursor = next;" in tick
+    assert "nextLine(next," in tick and "if (sendWhenRoom()) logCursor = next;" in tick
 
 
 def test_the_log_goes_up_only_while_the_master_asks():

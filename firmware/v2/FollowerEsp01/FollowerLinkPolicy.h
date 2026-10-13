@@ -18,6 +18,20 @@
 // A master that has not answered Hello within this is not a master.
 #define FOLLOWER_LINK_WELCOME_TIMEOUT_MS 5000UL
 
+// A write waits this long for the master to acknowledge what is in the way.
+// A segment lost on the air comes back with its retransmission, a second or
+// more later: a shorter wait closes the connection over one lost frame.
+#define FOLLOWER_LINK_WRITE_TIMEOUT_MS 5000UL
+// What can wait leaves this much of the send buffer free, so an answer the
+// master waits for (Shown, Pong, a job's state) never finds it full.
+#define FOLLOWER_LINK_REPLY_RESERVE 128U
+// The master writes at least every 10 s (its Ping) to a row that is not busy;
+// nothing from it for this long means it is gone or cannot reach this row,
+// and the row dials again.
+#define FOLLOWER_LINK_SILENT_MS 30000UL
+// A pass of the link this late means loop() stood still.
+#define FOLLOWER_LINK_STALL_MS 2000UL
+
 inline uint32_t followerLinkNextBackoffMs(uint32_t previousMs) {
   if (previousMs < FOLLOWER_LINK_BACKOFF_MIN_MS) return FOLLOWER_LINK_BACKOFF_MIN_MS;
   const uint32_t next = previousMs * 2;
@@ -27,6 +41,27 @@ inline uint32_t followerLinkNextBackoffMs(uint32_t previousMs) {
 // millis()-wrap-safe "has `intervalMs` passed since `sinceMs`".
 inline bool followerLinkElapsed(uint32_t nowMs, uint32_t sinceMs, uint32_t intervalMs) {
   return (uint32_t)(nowMs - sinceMs) >= intervalMs;
+}
+
+// May a message that can wait (vitals, unit facts, a log line, an event) be
+// written now? Only when the send buffer takes it whole: such a write never
+// waits for the master, so late acknowledgements cost nothing but time.
+inline bool followerLinkRoomFor(size_t freeBytes, size_t messageBytes) {
+  return freeBytes >= messageBytes + FOLLOWER_LINK_REPLY_RESERVE;
+}
+
+inline bool followerLinkMasterSilent(uint32_t nowMs, uint32_t heardMs) {
+  return followerLinkElapsed(nowMs, heardMs, FOLLOWER_LINK_SILENT_MS);
+}
+
+// The instant the master counts as last heard, after a pass of the link.
+// The count starts again while this row is busy with a unit job (the master
+// does not ping a busy row), and after a late pass: while loop() stood still
+// (a unit update, a download) what the master sent waits unread.
+inline uint32_t followerLinkHeardAfterPass(uint32_t heardMs, uint32_t lastPassMs, uint32_t nowMs,
+                                           bool busy) {
+  if (busy || followerLinkElapsed(nowMs, lastPassMs, FOLLOWER_LINK_STALL_MS)) return nowMs;
+  return heardMs;
 }
 
 // A stored master address may carry a port ("host:8801", a record written

@@ -25,6 +25,7 @@
 #include "FollowerUpdatePolicy.h"
 #include "FollowerWeb.h"
 #include "FollowerWifi.h"
+#include "WallLinkLogDamp.h"
 #include "WallLinkStream.h"
 
 namespace {
@@ -44,6 +45,8 @@ uint32_t backoffMs = 0;
 uint32_t nextDialMs = 0;
 bool dialled = false;  // a connection was opened and has not been dropped yet
 uint32_t connectedAtMs = 0;
+uint32_t lastHeardMs = 0;  // the master's last message on this connection
+uint32_t lastPassMs = 0;
 uint32_t lastStatusMs = 0;
 bool busySent = false;
 
@@ -94,11 +97,58 @@ void releaseUnitsDoc() {
   unitsDoc = nullptr;
 }
 
-void drop(const __FlashStringHelper* why) {
-  if (sock.connected() || welcomed || dialled) {
-    SerialPrint(F("link: closed — "));
-    SerialPrintln(why);
+// A connection that closes over and over is written in full a few times a
+// period and counted after that (WallLinkLogDamp.h).
+WlLogDamp closeDamp;
+
+void reportHeldCloses(uint32_t nowMs) {
+  const uint16_t held = wlLogDampEnded(closeDamp, nowMs);
+  if (held == 0) return;
+  SerialPrint(F("link: closed "));
+  SerialPrint(held);
+  SerialPrint(F(" more time(s) in "));
+  SerialPrint(WL_LOG_DAMP_PERIOD_MS / 60000UL);
+  SerialPrintln(F(" min"));
+}
+
+// The close, with what is needed to read it afterwards: how long the
+// connection lasted, how much it had written that the master had not
+// acknowledged, when the master was last heard, and which access point this
+// board hangs on.
+void logClosed(const __FlashStringHelper* why) {
+  const uint32_t nowMs = millis();
+  reportHeldCloses(nowMs);
+  if (!wlLogDampWrite(closeDamp, nowMs)) return;
+  SerialPrint(F("link: closed — "));
+  SerialPrint(why);
+  SerialPrint(F(" (up "));
+  SerialPrint((nowMs - connectedAtMs) / 1000);
+  SerialPrint(F(" s"));
+  if (sock.status() == ESTABLISHED) {  // else there is no send buffer to read
+    SerialPrint(F(", "));
+    SerialPrint((int)TCP_SND_BUF - (int)sock.availableForWrite());
+    SerialPrint(F(" B unacknowledged"));
   }
+  if (welcomed) {
+    SerialPrint(F(", master heard "));
+    SerialPrint((nowMs - lastHeardMs) / 1000);
+    SerialPrint(F(" s ago"));
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    SerialPrint(F(", rssi "));
+    SerialPrint(WiFi.RSSI());
+    SerialPrint(F(", AP "));
+    SerialPrint(WiFi.BSSIDstr());
+    SerialPrint(F(" ch "));
+    SerialPrint(WiFi.channel());
+  } else {
+    SerialPrint(F(", WiFi down"));
+  }
+  SerialPrintln(F(")"));
+}
+
+void drop(const __FlashStringHelper* why) {
+  if (sock.connected() || welcomed || dialled) logClosed(why);
   sock.stop();
   reader.reset();
   releaseUnitsDoc();
@@ -111,13 +161,32 @@ void drop(const __FlashStringHelper* why) {
   nextDialMs = millis() + backoffMs;
 }
 
-// A message that cannot be written means a master that stopped reading:
-// the connection is closed rather than left to block loop() on every write.
-bool send() {
-  const size_t n = wlEncodeToMaster(wire, sizeof(wire), out);
+// The send buffer must take the largest message beside the reserve, or what
+// can wait would never be written.
+static_assert(sizeof(wire) + FOLLOWER_LINK_REPLY_RESERVE <= TCP_SND_BUF,
+              "a full-size message and the reply reserve must fit the send buffer");
+
+bool writeWire(size_t n) {
   if (n != 0 && sock.write(wire, n) == n) return true;
   drop(F("write failed"));
   return false;
+}
+
+// An answer the master waits for. The write waits for room
+// (FOLLOWER_LINK_WRITE_TIMEOUT_MS); a message that still cannot be written
+// means a master that stopped reading: the connection is closed rather than
+// left to block loop() on every write.
+bool send() {
+  return writeWire(wlEncodeToMaster(wire, sizeof(wire), out));
+}
+
+// What can wait — vitals, unit facts, a log line, an event: written only
+// when the send buffer takes it whole, so it never waits for the master.
+// False = not written; every caller offers it again on a later pass.
+bool sendWhenRoom() {
+  const size_t n = wlEncodeToMaster(wire, sizeof(wire), out);
+  if (n != 0 && !followerLinkRoomFor((size_t)sock.availableForWrite(), n)) return false;
+  return writeWire(n);
 }
 
 void sendHello() {
@@ -153,7 +222,7 @@ void sendStatus(bool timeSynced) {
   s.busy = unitOpsBusy();
   s.image_size = ESP.getSketchSize();
   s.time_synced = timeSynced;
-  if (send()) {
+  if (sendWhenRoom()) {
     lastStatusMs = millis();
     busySent = s.busy;
   }
@@ -342,7 +411,7 @@ void unitsTick() {
     }
   }
   const uint32_t next = wlUnitsPiece(out, unitsDocId, unitsDoc, unitsTotal, unitsOffset);
-  if (!send()) return;
+  if (!sendWhenRoom()) return;
   unitsOffset = next;
   if (unitsOffset >= unitsTotal) releaseUnitsDoc();
 }
@@ -359,8 +428,8 @@ void logTick() {
   }
   out.which_body = wl_ToMaster_log_line_tag;
   l.text.size = (pb_size_t)len;
-  // A line that did not get out is sent again on the next connection.
-  if (send()) logCursor = next;
+  // A line that did not get out is offered again.
+  if (sendWhenRoom()) logCursor = next;
 }
 
 // One event a pass, the oldest first. It leaves the queue once written.
@@ -377,10 +446,11 @@ void eventsTick() {
   ev.b = e->b;
   ev.up_s = e->atS;
   ev.age_s = followerEventAgeS(*e, nowS);
-  if (send()) followerEvents().pop();
+  if (sendWhenRoom()) followerEvents().pop();
 }
 
 void handle(const wl_ToRow& m, const FollowerClusterView& view) {
+  lastHeardMs = millis();
   if (!welcomed) {
     if (m.which_body != wl_ToRow_welcome_tag ||
         !followerLinkMasterAccepted(view.leaderName.c_str(), m.body.welcome.master_id)) {
@@ -393,7 +463,7 @@ void handle(const wl_ToRow& m, const FollowerClusterView& view) {
     // A new connection is a new render sequence: the master numbers renders
     // per connection, and the phase machine accepts any new epoch.
     clusterMasterConnected(bootId + connectCount);
-    SerialPrintln(F("link: connected to the master"));
+    if (!wlLogDampHolding(closeDamp)) SerialPrintln(F("link: connected to the master"));
     sendStatus(view.sntpSynced);
     unitsDue = true;
     return;
@@ -459,6 +529,10 @@ void linkLoopTick() {
   if (bootId == 0) bootId = ESP.random() | 1;
   const FollowerClusterView view = clusterViewGet();
   const bool paired = view.phase != ClusterFollowerPhase::Standalone && view.leaderHost.length() > 0;
+  const uint32_t passMs = millis();
+  reportHeldCloses(passMs);
+  lastHeardMs = followerLinkHeardAfterPass(lastHeardMs, lastPassMs, passMs, unitOpsBusy());
+  lastPassMs = passMs;
 
   if (!paired || WiFi.status() != WL_CONNECTED) {
     if (sock.connected() || welcomed) drop(F("no master to talk to"));
@@ -483,6 +557,7 @@ void linkLoopTick() {
       drop(F("master not reachable"));
       return;
     }
+    sock.setTimeout(FOLLOWER_LINK_WRITE_TIMEOUT_MS);
     sock.setNoDelay(true);
     // The core's connected() can stay true on a dead link; TCP keepalive
     // closes it for us (idle 15 s, 3 probes 5 s apart).
@@ -491,6 +566,7 @@ void linkLoopTick() {
     strlcpy(dialledId, view.leaderName.c_str(), sizeof(dialledId));
     strlcpy(dialledHost, view.leaderHost.c_str(), sizeof(dialledHost));
     connectedAtMs = millis();
+    lastHeardMs = connectedAtMs;
     dialled = true;
     sendHello();
     return;
@@ -522,6 +598,10 @@ void linkLoopTick() {
     if (followerLinkElapsed(millis(), connectedAtMs, FOLLOWER_LINK_WELCOME_TIMEOUT_MS)) {
       drop(F("no Welcome"));
     }
+    return;
+  }
+  if (followerLinkMasterSilent(millis(), lastHeardMs)) {
+    drop(F("master not heard from"));
     return;
   }
   opTick();

@@ -17,6 +17,7 @@
 #include "EventRecord.h"
 #include "WallJobs.h"
 #include "WallLinkCore.h"
+#include "WallLinkLogDamp.h"
 #include "WallRowEvents.h"
 #include "WallShow.h"
 #include "WallState.h"
@@ -252,6 +253,9 @@ struct Hooks : WallLinkHooks {
       lwip_inet_ntop(AF_INET, &peer.sin_addr, f.address, sizeof(f.address));
     }
     factsDirty[row] = true;
+    // A row that restarted, or runs its rescue image, is always said.
+    reportHeld(row, passNowMs);
+    if (wlLogDampHolding(rowDamp[row]) && !restarted && !hello.rescue) return;
     SerialPrintf("link: %s connected from %s, rev %s, %d unit(s)%s%s\n", rowName(row), f.address,
                  f.rev, (int)f.reportedWidth, hello.rescue ? ", RESCUE MODE" : "",
                  restarted ? ", it restarted" : "");
@@ -305,14 +309,24 @@ struct Hooks : WallLinkHooks {
 
   void note(int conn, int row, const char* what) override {
     (void)conn;
+    const uint32_t nowMs = millis();
     if (row >= 0) {
-      SerialPrintf("link: %s: %s\n", rowName(row), what);
       factsDirty[row] = true;
+      // A row that drops and returns over and over is written in full a few
+      // times a period and counted after that (WallLinkLogDamp.h).
+      reportHeld(row, nowMs);
+      if (!wlLogDampWrite(rowDamp[row], nowMs)) return;
+      const WallRowContact& contact = core->rows[row].contact;
+      if (contact.helloSeen) {
+        SerialPrintf("link: %s: %s (heard %u s ago)\n", rowName(row), what,
+                     (unsigned)((nowMs - contact.lastHeardMs) / 1000));
+      } else {
+        SerialPrintf("link: %s: %s\n", rowName(row), what);
+      }
       return;
     }
     // Anyone on the network can open connections that are nobody: their
     // lines are held to one per interval, so they cannot fill the log.
-    const uint32_t nowMs = millis();
     if (strangerNotes != 0 && !wallLinkElapsed(nowMs, strangerNoteAtMs, STRANGER_NOTE_MS)) {
       strangerNotesHeld++;
       return;
@@ -327,6 +341,15 @@ struct Hooks : WallLinkHooks {
   uint32_t strangerNotes = 0;
   uint32_t strangerNotesHeld = 0;
   uint32_t strangerNoteAtMs = 0;
+
+  WlLogDamp rowDamp[WALL_LINK_MAX_ROWS];
+
+  void reportHeld(int row, uint32_t nowMs) {
+    const uint16_t held = wlLogDampEnded(rowDamp[row], nowMs);
+    if (held == 0) return;
+    SerialPrintf("link: %s: lost and back %u more time(s) in %u min\n", rowName(row),
+                 (unsigned)held, (unsigned)(WL_LOG_DAMP_PERIOD_MS / 60000UL));
+  }
 };
 Hooks hooks;
 
@@ -444,7 +467,9 @@ void readRows(const fd_set& readable, uint32_t nowMs) {
       if (n == 0) {
         lost(conn, "connection closed by the row");
       } else if (!wouldBlock(errno)) {
-        lost(conn, "connection lost");
+        char why[40];
+        snprintf(why, sizeof(why), "connection lost (errno %d)", errno);
+        lost(conn, why);
       }
       break;
     }
@@ -614,6 +639,7 @@ void pass() {
   showAndSettings(nowMs);
   takeJobs(nowMs);
   core->tick(nowMs, hooks);
+  for (int r = 0; r < WALL_LINK_MAX_ROWS; r++) hooks.reportHeld(r, nowMs);
   offerImage(nowMs);
   // Asked for by the current table's row numbers, like an update retry. Said
   // once: a row that cannot be written to now is not restarted later, when
