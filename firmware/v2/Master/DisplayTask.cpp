@@ -1184,6 +1184,12 @@ void displayTaskMain(void*) {
   // Static: ~400 B that would otherwise sit on the task stack forever.
   static UnitFacts busFacts[UNITS_AMOUNT];
 
+  // Busy until the command loop: nothing is taken from the queue during the
+  // scan and the start-up homes, and a producer that sees an idle display
+  // showing nothing queues its text again at every look.
+  local.busy = true;
+  snapshotPublish(local);
+
   unitBusInit();
   unitBusSetMotionGate(waitRadioQuiet);  // #505: before boot-home can move
   unitBusSetMotionCap(motionBudget.cap);
@@ -1248,6 +1254,9 @@ void displayTaskMain(void*) {
   } else {
     runBootHomeSequence(local, busFacts);
   }
+
+  local.busy = false;
+  snapshotPublish(local);
 
   DisplayCommand cmd;
   int heartbeatSlot = 0;  // round-robin cursor for the scheduled poll (#310)
