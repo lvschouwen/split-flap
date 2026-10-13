@@ -288,6 +288,17 @@ static void test_a_board_is_keyed_by_its_id_and_named_by_its_place() {
   TEST_ASSERT_FALSE(contains(own, "\"address\""));
 }
 
+// The real ids are chip ids (split-flap-<6 hex>) on both sides: the config
+// outgrows the 512 bytes the shared entities fit in, and must fit its own.
+static void test_a_board_config_with_chip_ids_fits_its_buffer() {
+  char payload[WALL_MQTT_BOARD_DISCOVERY_MAX];
+  size_t n = buildBoardProblemDiscovery(payload, sizeof(payload), "split-flap-c8a746", "55fd69a",
+                                        "split-flap-9f2b1c", "split-flap-row1");
+  TEST_ASSERT_TRUE(n > 512);
+  TEST_ASSERT_TRUE(n < sizeof(payload));
+  TEST_ASSERT_EQUAL_CHAR('}', payload[n - 1]);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_healthy_wall_is_no_problem);
@@ -306,6 +317,7 @@ int main(int, char**) {
   RUN_TEST(test_the_weakest_unit_and_the_count_under_the_floor_are_found_across_boards);
   RUN_TEST(test_flips_wait_for_every_found_unit_and_never_drop_for_a_silence);
   RUN_TEST(test_a_board_is_keyed_by_its_id_and_named_by_its_place);
+  RUN_TEST(test_a_board_config_with_chip_ids_fits_its_buffer);
   UNITY_END();
   return 0;
 }

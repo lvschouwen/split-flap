@@ -146,6 +146,9 @@ inline size_t buildBoardProblemDiscoveryTopic(char* buf, size_t bufLen, const ch
                               deviceId, key);
 }
 
+// The longest config: a chip-id device id and board id in every topic.
+#define WALL_MQTT_BOARD_DISCOVERY_MAX 640
+
 // Named by the board's hostname, which is its place on the wall.
 inline size_t buildBoardProblemDiscovery(char* buf, size_t bufLen, const char* deviceId,
                                          const char* fwVersion, const char* key,

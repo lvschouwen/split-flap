@@ -748,7 +748,9 @@ static uint16_t mqttSupplyMinMv = 0;
 
 static void mqttPublishBoardConfigs(const WallMqttRow* rows, int count) {
   char topicBuf[128];
-  char payloadBuf[512];
+  // Wider than the shared entities' 512: the board's id sits in four of the
+  // fields beside the device id (WALL_MQTT_BOARD_DISCOVERY_MAX, tested).
+  char payloadBuf[WALL_MQTT_BOARD_DISCOVERY_MAX];
   // Boards that left the table.
   for (int k = 0; k < mqttBoardKeyCount; k++) {
     bool present = false;
