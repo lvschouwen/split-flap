@@ -218,6 +218,14 @@ inline bool parseRestartCommand(const String& payload) {
   return trimmed == "PRESS";
 }
 
+// ---- The Text entity's attributes (#618) ----
+// {"charset":"…","width":N}: what a text may be made of and how many flaps
+// the wall has, so an automation can check and wrap before it sends. The
+// charset holds no character JSON needs escaped (SplitFlapProtocol.h).
+inline size_t buildTextAttrsJson(char* buf, size_t bufLen, const char* charset, int width) {
+  return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("{\"charset\":\"%s\",\"width\":%d}"), charset, width);
+}
+
 // ---- Topics ----
 inline String mqttTopic(const String& deviceId, const char* suffix) {
   return String("splitflap/") + deviceId + "/" + suffix;
@@ -454,8 +462,8 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
   switch (entity) {
     case DISCOVERY_TEXT:
       return (size_t)mqttSnprintf(buf, bufLen,
-        MQTT_FMT("{\"name\":\"Text\",\"cmd_t\":\"splitflap/%s/text/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_text\",\"max\":255," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+        MQTT_FMT("{\"name\":\"Text\",\"cmd_t\":\"splitflap/%s/text/set\",\"json_attr_t\":\"splitflap/%s/text/attrs\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_text\",\"max\":255," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
     case DISCOVERY_MODE:
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Mode\",\"cmd_t\":\"splitflap/%s/mode/set\",\"stat_t\":\"splitflap/%s/mode\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_mode\",\"ops\":[\"text\",\"clock\"]," MQTT_DEVICE_BLOCK "}"),

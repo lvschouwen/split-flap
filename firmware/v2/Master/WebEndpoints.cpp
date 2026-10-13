@@ -14,6 +14,7 @@
 // loop() via webEndpointsLoop().
 
 #include "WebEndpoints.h"
+#include "TextTransliterate.h"  // #618
 #include "WallShow.h"
 #include "WallState.h"
 #include "WifiService.h"
@@ -277,7 +278,10 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // Display-bound fields are read off the post before apply resets it.
       String messageText = pendingPost.inputText;
       bool messageProvided = pendingPost.inputTextProvided;
-      String transientText = pendingPost.transientText;
+      // #618: accents become flaps here, once, before the text is retained
+      // or laid out.
+      if (messageProvided) messageText = transliterateForFlaps(messageText);
+      String transientText = transliterateForFlaps(pendingPost.transientText);
       long transientDwell = pendingPost.transientDwell;
       bool transientProvided = pendingPost.transientTextProvided;
       const bool transientHold = pendingPost.transientHoldProvided && pendingPost.transientHold;  // #616

@@ -316,6 +316,14 @@ static void test_priority_admits_equal_or_higher_and_resets_with_the_text() {
   TEST_ASSERT_TRUE(notificationAdmits(n, 0));
 }
 
+// #618: the Text entity's attributes say what a text may be made of.
+static void test_text_attrs_carry_the_charset_and_the_width() {
+  char buf[128];
+  size_t n = buildTextAttrsJson(buf, sizeof(buf), " ABC$&#0-", 21);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("{\"charset\":\" ABC$&#0-\",\"width\":21}", buf);
+}
+
 static void test_discovery_topics_per_entity() {
   char buf[64];
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_TEXT, "flappy");
@@ -341,6 +349,7 @@ static void test_discovery_text_payload_fragments() {
   TEST_ASSERT_EQUAL_CHAR('{', buf[0]);
   TEST_ASSERT_EQUAL_CHAR('}', buf[n - 1]);
   assert_contains(buf, "\"cmd_t\":\"splitflap/flappy/text/set\"");
+  assert_contains(buf, "\"json_attr_t\":\"splitflap/flappy/text/attrs\"");  // #618
   assert_contains(buf, "\"avty_t\":\"splitflap/flappy/availability\"");
   assert_contains(buf, "\"uniq_id\":\"flappy_text\"");
   assert_contains(buf, "\"ids\":[\"flappy\"]");
@@ -705,6 +714,7 @@ int main(int, char**) {
   RUN_TEST(test_mode_command_trims_whitespace);
   RUN_TEST(test_mode_command_rejects_case_variants_and_garbage);
   RUN_TEST(test_notification_cancel_mid_dwell);
+  RUN_TEST(test_text_attrs_carry_the_charset_and_the_width);
   RUN_TEST(test_discovery_topics_per_entity);
   RUN_TEST(test_discovery_text_payload_fragments);
   RUN_TEST(test_discovery_sensor_payload_fragments);

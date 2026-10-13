@@ -24,6 +24,7 @@
 #include "SplitFlapProtocol.h"
 #include "UnitHealth.h"
 #include "WallMqtt.h"
+#include "TextTransliterate.h"  // #618
 #include "WallShow.h"
 #include "WallState.h"
 #include "WallWatch.h"
@@ -280,6 +281,18 @@ static void mirrorNotification() {
   if (!mqttNotification.active || mqttNotification.held) notifEndsAtomic.store(0);
 }
 
+// #618: what a text may be made of, beside the Text entity. The character
+// set is the drum's (SplitFlapProtocol.h); the width is the wall's units.
+static void publishMqttTextAttrs() {
+  char buf[128];
+  const size_t n = buildTextAttrsJson(buf, sizeof(buf), SFP_ALPHABET,
+                                      mqttWallCapacity > 0 ? mqttWallCapacity
+                                                           : displaySnapshotGet().displayWidth);
+  if (n > 0 && n < sizeof(buf)) {
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "text/attrs").c_str(), 0, true, buf);
+  }
+}
+
 static void cancelNotificationLocal() {
   notificationCancel(mqttNotification);
   mirrorNotification();
@@ -341,7 +354,7 @@ static void publishDiscoveryClear() {
   }
   mqttClient.publish(mqttQuietCmdTopic.c_str(), 0, true, "");
   static const char* const stateSuffixes[] = {
-      "mode",     "text/state", "notification", "width",     "units",
+      "mode",     "text/state", "notification", "width",     "units", "text/attrs",
       "speed",    "alignment",  "units_faulty", "units/attrs",
       "diag/ip",  "diag/ssid",  "diag/reset",   "diag/boots",
       "diag/ota", "diag/tz",    "wall_problem", "wall/attrs",
@@ -423,6 +436,7 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
         req = MqttTextRequest();
         req.text = payload;
       }
+      req.text = transliterateForFlaps(req.text);  // #618
       if (req.text.length() == 0) {  // #616: an empty text is a clear
         SerialPrintln(F("MQTT: text cleared (empty text)"));
         cancelNotificationLocal();
@@ -555,6 +569,7 @@ if (widthValue != mqttLastPublishedWidth) {
   snprintf(n, sizeof(n), "%d", widthValue);
   mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "width").c_str(), 0,
                      true, n);
+  publishMqttTextAttrs();  // #618: the width is one of the text's attributes
 }
 if (snap.detectedUnitCount != mqttLastPublishedUnits) {
   mqttLastPublishedUnits = snap.detectedUnitCount;
@@ -884,6 +899,7 @@ void mqttServiceTick() {
     mqttClient.publish(mqttTopicAvailability.c_str(), 1, true, "online");
     publishMqttDiscovery();
     publishMqttDiagnostics();
+    publishMqttTextAttrs();  // #618
     mqttNextTelemetryMs = millis();  // first telemetry immediately
     // Force a fresh publish of all event-driven state on this connection.
     mqttLastPublishedMode = "";
