@@ -600,7 +600,11 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
         MQTT_FMT("{\"name\":\"Firmware\",\"stat_t\":\"splitflap/%s/update\",\"cmd_t\":\"splitflap/%s/update/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_firmware\",\"pl_inst\":\"INSTALL\",\"dev_cla\":\"firmware\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     case DISCOVERY_VCC_MIN_UNIT:    return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_vcc_min_unit",    "Weakest unit",             "telemetry", "{{ value_json.vccMinBoard }} #{{ value_json.vccMinUnit }}", nullptr, nullptr, "diagnostic", nullptr, nullptr);
-    case DISCOVERY_VCC_UNDER_FLOOR: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_vcc_under_floor", "Units under supply floor", "telemetry", "{{ value_json.vccUnder }}", nullptr, nullptr, "diagnostic", nullptr, nullptr);
+    case DISCOVERY_VCC_UNDER_FLOOR:
+      // A count with a state class, so Home Assistant keeps its statistics.
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Units under supply floor\",\"stat_t\":\"splitflap/%s/telemetry\",\"val_tpl\":\"{{ value_json.vccUnder }}\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_vcc_under_floor\",\"stat_cla\":\"measurement\",\"ent_cat\":\"diagnostic\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     case DISCOVERY_FLIPS:
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Flips\",\"stat_t\":\"splitflap/%s/flips\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_flips\",\"stat_cla\":\"total_increasing\",\"ic\":\"mdi:counter\"," MQTT_DEVICE_BLOCK "}"),

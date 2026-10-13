@@ -264,6 +264,7 @@ static void test_discovery_flips_and_supply_sensors() {
   assert_contains(pbuf, "{{ value_json.vccMinBoard }} #{{ value_json.vccMinUnit }}");
   buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_VCC_UNDER_FLOOR, "flappy", "abc1234");
   assert_contains(pbuf, "{{ value_json.vccUnder }}");
+  assert_contains(pbuf, "\"stat_cla\":\"measurement\"");
 }
 
 static void test_telemetry_vccmin_omitted_when_zero() {
