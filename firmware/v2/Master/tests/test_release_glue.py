@@ -36,10 +36,13 @@ def test_no_upload_begins_while_an_update_from_a_release_runs():
 
 
 def test_an_update_is_not_started_over_an_upload_or_a_unit_update():
-    code = _code("WebWall.cpp")
-    handler = code[code.index("void handleRelease("):]
+    # The one start for the API's action and the HA update entity (#620).
+    code = _code("WebEndpoints.cpp")
+    handler = code[code.index("const char* webStartRelease("):]
     handler = handler[:handler.index("\n}\n")]
     ask = handler.index("releaseAskUpdate(")
+    assert "webStartRelease(" in _code("WebWall.cpp")
+    assert "webStartRelease(true" in _code("MqttService.cpp")
     for gate in ("reflashInProgress(", "wallUnitUpdateRunning()", "webFirmwareUploadActive()"):
         assert handler.index(gate) < ask, gate
     active = _code("WebFirmware.cpp")

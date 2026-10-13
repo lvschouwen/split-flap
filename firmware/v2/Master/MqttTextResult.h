@@ -110,6 +110,6 @@ inline size_t buildTextResultDiscovery(char* buf, size_t bufLen, const char* dev
   }
   if (o >= bufLen) return o;
   o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT("]," MQTT_DEVICE_BLOCK "}"), deviceId,
-                            deviceId, fwVersion);
+                            deviceId, fwVersion, deviceId);
   return o;
 }

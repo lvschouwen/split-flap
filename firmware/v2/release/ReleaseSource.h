@@ -14,6 +14,10 @@
 // 2026-10-10-release-update-design.md, section 3).
 #define RELEASE_HOST "split-flap.vanschouwen.nl"
 
+// Where a release's notes are read, the tag appended (#620: Home Assistant's
+// update entity links there).
+#define RELEASE_NOTES_URL_PREFIX "https://github.com/lvschouwen/split-flap/releases/tag/"
+
 // The release key's public half: ECDSA P-256, DER SubjectPublicKeyInfo.
 static const uint8_t RELEASE_PUBLIC_KEY_DER[] = {
     0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02,

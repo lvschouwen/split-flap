@@ -47,6 +47,14 @@ bool webMqttApplyQuiet(bool quiet);  // #227
 bool webMqttApplySpeed(int speed);
 bool webMqttApplyAlignment(const String& alignment);
 
+// Any task: start a look at the release site, or an update from what it has
+// (#583; the API's check-release / update-from-release and the HA update
+// entity's install, #620). The worker does both, one at a time. An update is
+// refused while anything else writes firmware; once it runs, the upload
+// routes and the unit jobs refuse in turn (releaseUpdateRunning()). Returns
+// the refusal with its HTTP status, nullptr with the job's op when started.
+const char* webStartRelease(bool update, uint32_t& op, int& status);
+
 // Stage the standard graceful reboot (drain flushes logs, then restarts) —
 // the HA restart button rides the same dispatcher as the restart action. The cause
 // is stamped to NVS at the drain and served as lastRebootCause next boot

@@ -59,7 +59,7 @@ inline void mqttBackoffAttemptStarted(MqttBackoffState& st) {
 
 // ---- inbound command-topic dispatch ----
 
-enum class MqttCommand : uint8_t { None, Text, Mode, Speed, Alignment, Restart, Clear };
+enum class MqttCommand : uint8_t { None, Text, Mode, Speed, Alignment, Restart, Clear, Install };
 
 // The five subscribed command topics, resolved once from the device id (the
 // same stable-copy rule as the broker identity: never rebuilt per message).
@@ -69,7 +69,8 @@ struct MqttCommandTopics {
   String speed;
   String alignment;
   String restart;
-  String clear;  // #616: takes the text down, whatever the payload
+  String clear;    // #616: takes the text down, whatever the payload
+  String install;  // #620: INSTALL runs the update from the release found
 };
 
 inline MqttCommandTopics makeMqttCommandTopics(const String& deviceId) {
@@ -80,6 +81,7 @@ inline MqttCommandTopics makeMqttCommandTopics(const String& deviceId) {
   t.alignment = mqttTopic(deviceId, "alignment/set");
   t.restart = mqttTopic(deviceId, "restart/set");
   t.clear = mqttTopic(deviceId, "text/clear");
+  t.install = mqttTopic(deviceId, "update/set");
   return t;
 }
 
@@ -93,5 +95,6 @@ inline MqttCommand classifyMqttCommandTopic(const MqttCommandTopics& t,
   if (strcmp(topic, t.restart.c_str()) == 0) return MqttCommand::Restart;
   if (strcmp(topic, t.text.c_str()) == 0) return MqttCommand::Text;
   if (strcmp(topic, t.clear.c_str()) == 0) return MqttCommand::Clear;
+  if (strcmp(topic, t.install.c_str()) == 0) return MqttCommand::Install;
   return MqttCommand::None;
 }

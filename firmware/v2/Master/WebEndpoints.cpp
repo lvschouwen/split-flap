@@ -537,6 +537,30 @@ WebStage webStagePost(const PendingSettingsPost& local, bool& needsReboot,
   return WebStage::Staged;
 }
 
+const char* webStartRelease(bool update, uint32_t& op, int& status) {
+  status = 409;
+  if (update) {
+    if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
+      return "a unit update is running, retry when it has finished";
+    }
+    if (webFirmwareUploadActive()) {
+      return "a firmware upload is running, retry when it has finished";
+    }
+  }
+  if (releaseBusy()) return "a look for a release or an update from one is still running";
+  op = wallOpBegin(update ? "update-from-release" : "check-release", -1);
+  if (op == 0) {
+    status = 503;
+    return "too many jobs are running";
+  }
+  if (!(update ? releaseAskUpdate(op) : releaseAskLook(op))) {
+    wallOpFinish(op, false, "a look for a release was still running");
+    return "a look for a release or an update from one is still running";
+  }
+  status = 202;
+  return nullptr;
+}
+
 const char* webRestartRefusal() {
   // #395: a reboot mid-unit-reflash leaves the Nano row parked in twiboot;
   // mid-master-OTA it tears the upload session. stop remains the only

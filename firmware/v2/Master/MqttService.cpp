@@ -14,6 +14,8 @@
 #include "BuildVersion.h"  // GIT_REV — the discovery device block's sw field
 #include "ClockPolicy.h"
 #include "QuietPolicy.h"  // #227
+#include "ReleaseSource.h"  // RELEASE_NOTES_URL_PREFIX (#620)
+#include "ReleaseUpdate.h"  // releaseStatusGet (#620)
 #include "DisplayCommand.h"
 #include "DisplayIpc.h"
 #include "HelpersSerialHandling.h"
@@ -139,6 +141,10 @@ static String mqttLastPublishedAlignment = "\x01";
 // a stale retained config only this sweep can remove; blanking never-set
 // retained topics is a broker no-op). mqttWallCapacity caches the wall's
 // total units between 5 s wall passes for the width publish below.
+// The update entity's state (#620): published when what it says changes,
+// looked at every MQTT_WALL_INTERVAL_MS.
+static String mqttLastUpdateState = "\x01";
+static uint32_t mqttNextUpdateMs = 0;
 static int mqttLastWallConfigured = -1;
 static int mqttLastWallState = -1;
 // Quiet switch (#227, QuietPolicy.h): command topic, last published state
@@ -289,6 +295,25 @@ static void mqttPublishTextResults(const DisplaySnapshot& snap, bool connected) 
   }
 }
 
+// The update entity's state (#620): the running rev against the release the
+// worker found; in progress while its update runs.
+static void mqttPublishUpdateState() {
+  if ((int32_t)(millis() - mqttNextUpdateMs) < 0) return;
+  mqttNextUpdateMs = millis() + MQTT_WALL_INTERVAL_MS;
+  const ReleaseStatus status = releaseStatusGet();
+  const bool found = status.look == ReleaseLookState::Newer || status.look == ReleaseLookState::UpToDate;
+  char buf[256];
+  const size_t n = buildUpdateStateJson(buf, sizeof(buf), mqttFwVersion.c_str(),
+                                        found ? status.release.master.rev : "",
+                                        found ? status.release.tag : "", RELEASE_NOTES_URL_PREFIX,
+                                        status.op != 0 && status.step != ReleaseStep::None &&
+                                            status.step != ReleaseStep::Looking);
+  if (n == 0 || n >= sizeof(buf)) return;
+  if (mqttLastUpdateState == buf) return;
+  mqttLastUpdateState = buf;
+  mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "update").c_str(), 0, true, buf);
+}
+
 // Retained, static-ish diagnostics — once per connect (they change only on
 // reboot/reconfig). Plain per-field payloads, no JSON escaping (v1 #132).
 static void publishMqttDiagnostics() {
@@ -398,7 +423,7 @@ static void publishDiscoveryClear() {
       "speed",    "alignment",  "units_faulty", "units/attrs",
       "diag/ip",  "diag/ssid",  "diag/reset",   "diag/boots",
       "diag/ota", "diag/tz",    "wall_problem", "wall/attrs",
-      "quiet"};
+      "quiet",    "update"};
   for (unsigned i = 0; i < sizeof(stateSuffixes) / sizeof(stateSuffixes[0]);
        i++) {
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, stateSuffixes[i]).c_str(),
@@ -461,6 +486,19 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
         SerialPrintln(
             F("MQTT: restart requested via HA button — reboot pending"));
         webRequestReboot("restart command via MQTT/HA");
+      }
+      break;
+    case MqttCommand::Install:
+      // #620: the update entity's install runs the update-from-release job,
+      // under the gates the API's action has.
+      if (parseInstallCommand(payload)) {
+        uint32_t op = 0;
+        int status = 0;
+        if (const char* refusal = webStartRelease(true, op, status)) {
+          SerialPrintln("MQTT: update from the release refused: " + String(refusal));
+        } else {
+          SerialPrintf("MQTT: update from the release started (op %lu)\n", (unsigned long)op);
+        }
       }
       break;
     case MqttCommand::Clear:
@@ -944,6 +982,7 @@ void mqttServiceTick() {
     mqttClient.subscribe(mqttCmdTopics.alignment.c_str(), 0);
     mqttClient.subscribe(mqttCmdTopics.restart.c_str(), 0);
     mqttClient.subscribe(mqttCmdTopics.clear.c_str(), 0);  // #616
+    mqttClient.subscribe(mqttCmdTopics.install.c_str(), 0);  // #620
     mqttClient.subscribe(mqttQuietCmdTopic.c_str(), 0);  // #227
     mqttClient.publish(mqttTopicAvailability.c_str(), 1, true, "online");
     publishMqttDiscovery();
@@ -966,6 +1005,8 @@ void mqttServiceTick() {
     mqttNextWallMs = millis();
     mqttRetiredCleared = false;
     mqttLastQuietState = -1;
+    mqttLastUpdateState = "\x01";
+    mqttNextUpdateMs = millis();
   }
 
   DisplaySnapshot snap = displaySnapshotGet();
@@ -978,6 +1019,7 @@ void mqttServiceTick() {
   mqttPublishEventDrivenState(snap, content, leading);
   mqttPublishWallSurfacing(snap, leading);
   mqttPublishQuiet();
+  mqttPublishUpdateState();  // #620
 
   if (discoveryClearRequested.exchange(false)) publishDiscoveryClear();
 

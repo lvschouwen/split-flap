@@ -593,7 +593,54 @@ static void test_all_discovery_entities_wellformed() {
     TEST_ASSERT_EQUAL_CHAR('{', pbuf[0]);
     TEST_ASSERT_EQUAL_CHAR('}', pbuf[pn - 1]);
     assert_contains(pbuf, "\"ids\":[\"split-flap-9a3c1f\"]");  // device block present
+    assert_contains(pbuf, "\"cu\":\"http://split-flap-9a3c1f.local/\"");  // #617: the master's own name
   }
+}
+
+// #615/#616/#620: the message, clear and firmware entities.
+static void test_discovery_notify_clear_and_update_entities() {
+  char tbuf[96];
+  char pbuf[512];
+  buildDiscoveryTopic(tbuf, sizeof(tbuf), DISCOVERY_NOTIFY, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/notify/flappy/config", tbuf);
+  buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_NOTIFY, "flappy", "abc1234");
+  assert_contains(pbuf, "\"cmd_t\":\"splitflap/flappy/text/set\"");
+  assert_contains(pbuf, "\"uniq_id\":\"flappy_notify\"");
+  buildDiscoveryTopic(tbuf, sizeof(tbuf), DISCOVERY_TEXT_CLEAR, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/button/flappy_text_clear/config", tbuf);
+  buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_TEXT_CLEAR, "flappy", "abc1234");
+  assert_contains(pbuf, "\"cmd_t\":\"splitflap/flappy/text/clear\"");
+  assert_contains(pbuf, "\"pl_prs\":\"PRESS\"");
+  buildDiscoveryTopic(tbuf, sizeof(tbuf), DISCOVERY_FIRMWARE_UPDATE, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/update/flappy_firmware/config", tbuf);
+  buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_FIRMWARE_UPDATE, "flappy", "abc1234");
+  assert_contains(pbuf, "\"stat_t\":\"splitflap/flappy/update\"");
+  assert_contains(pbuf, "\"cmd_t\":\"splitflap/flappy/update/set\"");
+  assert_contains(pbuf, "\"pl_inst\":\"INSTALL\"");
+  assert_contains(pbuf, "\"dev_cla\":\"firmware\"");
+  // The restart button is a diagnostic (#620).
+  buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_RESTART, "flappy", "abc1234");
+  assert_contains(pbuf, "\"ent_cat\":\"diagnostic\"");
+}
+
+static void test_update_state_names_the_release_or_says_up_to_date() {
+  char buf[256];
+  size_t n = buildUpdateStateJson(buf, sizeof(buf), "abc1234", "def5678", "v2026.10.14",
+                                  "https://x/tag/", false);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"installed_version\":\"abc1234\",\"latest_version\":\"def5678\",\"in_progress\":false,"
+      "\"title\":\"Split-Flap v2026.10.14\",\"release_url\":\"https://x/tag/v2026.10.14\"}",
+      buf);
+  // Nothing found yet: the running rev is the latest, so HA says up to date.
+  n = buildUpdateStateJson(buf, sizeof(buf), "abc1234", "", "", "https://x/tag/", true);
+  TEST_ASSERT_EQUAL_STRING(
+      "{\"installed_version\":\"abc1234\",\"latest_version\":\"abc1234\",\"in_progress\":true,"
+      "\"title\":\"Split-Flap firmware\"}",
+      buf);
+  TEST_ASSERT_TRUE(parseInstallCommand(" INSTALL "));
+  TEST_ASSERT_FALSE(parseInstallCommand("install"));
+  TEST_ASSERT_FALSE(parseInstallCommand(""));
 }
 
 // ---- Stage B control parsers + discovery (#132) ----
@@ -724,6 +771,8 @@ int main(int, char**) {
   RUN_TEST(test_discovery_own_topic_fragments);
   RUN_TEST(test_discovery_diagnostics_fragments);
   RUN_TEST(test_all_discovery_entities_wellformed);
+  RUN_TEST(test_discovery_notify_clear_and_update_entities);
+  RUN_TEST(test_update_state_names_the_release_or_says_up_to_date);
   RUN_TEST(test_speed_command_accepts_in_range);
   RUN_TEST(test_speed_command_rejects_out_of_range_and_garbage);
   RUN_TEST(test_alignment_command_accepts_options_rejects_rest);

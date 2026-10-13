@@ -157,7 +157,7 @@ inline size_t buildWallProblemDiscovery(char* buf, size_t bufLen, const char* de
                "\"uniq_id\":\"%s_wall_problem\","
                "\"dev_cla\":\"problem\",\"ent_cat\":\"diagnostic\","
                "\"pl_on\":\"ON\",\"pl_off\":\"OFF\"," MQTT_DEVICE_BLOCK "}"),
-      deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+      deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
 }
 
 // Entities this firmware published before the wall link and no longer does.

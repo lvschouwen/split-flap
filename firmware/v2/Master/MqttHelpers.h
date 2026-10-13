@@ -226,6 +226,35 @@ inline size_t buildTextAttrsJson(char* buf, size_t bufLen, const char* charset, 
   return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("{\"charset\":\"%s\",\"width\":%d}"), charset, width);
 }
 
+// ---- The update entity's state (#620) ----
+// installed = the running rev, latest = the release's master rev when one
+// was found (else the running rev: up to date, not unknown). The title and
+// the release URL name the tag when there is one. The revs and the tag are
+// hex and [A-Za-z0-9.-] by construction (ReleaseManifest.h), so no escaping.
+inline size_t buildUpdateStateJson(char* buf, size_t bufLen, const char* runningRev,
+                                   const char* releaseRev, const char* tag,
+                                   const char* notesUrlPrefix, bool inProgress) {
+  const bool known = releaseRev != nullptr && releaseRev[0] != 0;
+  size_t o = (size_t)mqttSnprintf(buf, bufLen,
+      MQTT_FMT("{\"installed_version\":\"%s\",\"latest_version\":\"%s\",\"in_progress\":%s"),
+      runningRev, known ? releaseRev : runningRev, inProgress ? "true" : "false");
+  if (known && tag != nullptr && tag[0] != 0 && o < bufLen) {
+    o += (size_t)mqttSnprintf(buf + o, bufLen - o,
+        MQTT_FMT(",\"title\":\"Split-Flap %s\",\"release_url\":\"%s%s\""), tag, notesUrlPrefix, tag);
+  } else if (o < bufLen) {
+    o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"title\":\"Split-Flap firmware\""));
+  }
+  if (o < bufLen) o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT("}"));
+  return o;
+}
+
+// Install button of the update entity: HA publishes payload_install verbatim.
+inline bool parseInstallCommand(const String& payload) {
+  String trimmed = payload;
+  trimmed.trim();
+  return trimmed == "INSTALL";
+}
+
 // ---- Topics ----
 inline String mqttTopic(const String& deviceId, const char* suffix) {
   return String("splitflap/") + deviceId + "/" + suffix;
@@ -374,6 +403,15 @@ enum MqttDiscoveryEntity {
   // the largest stepExcessMax any extDiagValid unit reports
   // (unitFleetMaxExcess); the drag/binding alarm CMD_GET_EXT_DIAG exists for.
   DISCOVERY_STEPS_EXCESS,
+  // A notify entity (#615): notify.send_message lands on text/set as plain
+  // text (dwell 60 s, priority 0); hold and priority ride the JSON form.
+  DISCOVERY_NOTIFY,
+  // A button that takes the text down (#616).
+  DISCOVERY_TEXT_CLEAR,
+  // The release the master looked up, as an update entity (#620): its state
+  // JSON rides splitflap/<id>/update, INSTALL on update/set runs the
+  // update-from-release job.
+  DISCOVERY_FIRMWARE_UPDATE,
   DISCOVERY_ENTITY_COUNT
 };
 
@@ -409,6 +447,9 @@ inline MqttDiscMeta mqttDiscMeta(int entity) {
     case DISCOVERY_REBOOT_TOTAL: return { "sensor",        "_reboot_total" };
     case DISCOVERY_UNIT_JAM:     return { "binary_sensor", "_unit_jam" };
     case DISCOVERY_STEPS_EXCESS: return { "sensor",        "_steps_excess" };
+    case DISCOVERY_NOTIFY:       return { "notify",        "" };
+    case DISCOVERY_TEXT_CLEAR:   return { "button",        "_text_clear" };
+    case DISCOVERY_FIRMWARE_UPDATE: return { "update",     "_firmware" };
   }
   return { nullptr, nullptr };
 }
@@ -424,14 +465,17 @@ inline size_t buildDiscoveryTopic(char* buf, size_t bufLen, int entity, const ch
   return (size_t)mqttSnprintf(buf, bufLen, MQTT_FMT("homeassistant/%s/%s%s/config"), m.comp, deviceId, m.obj);
 }
 
-// Shared device block; %s slots are (deviceId, deviceId, fwVersion).
+// Shared device block; %s slots are (deviceId, deviceId, fwVersion, deviceId).
+// The configuration URL (#617) is the master's OWN mDNS name, which is its
+// device id — never a row's name from its place (#611): that may be an ESP-01
+// row board, which serves no page.
 // The model string in HA's device registry defaults to the v1 label; the v2
 // master overrides it via build flag (-D MQTT_DEVICE_MODEL=...) so this
 // header stays a byte-identical copy in both trees.
 #ifndef MQTT_DEVICE_MODEL
 #define MQTT_DEVICE_MODEL "v1 ESPMaster"
 #endif
-#define MQTT_DEVICE_BLOCK "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Split-Flap %s\",\"mf\":\"split-flap\",\"mdl\":\"" MQTT_DEVICE_MODEL "\",\"sw\":\"%s\"}"
+#define MQTT_DEVICE_BLOCK "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Split-Flap %s\",\"mf\":\"split-flap\",\"mdl\":\"" MQTT_DEVICE_MODEL "\",\"sw\":\"%s\",\"cu\":\"http://%s.local/\"}"
 
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload with returned length >= bufLen.
@@ -454,7 +498,7 @@ inline size_t buildEntityDiscovery(char* buf, size_t bufLen, const char* deviceI
   if (unit)   MQTT_DISC_APPEND(MQTT_FMT(",\"unit_of_meas\":\"%s\""), unit);
   if (entCat) MQTT_DISC_APPEND(MQTT_FMT(",\"ent_cat\":\"%s\""), entCat);
   if (pOn)    MQTT_DISC_APPEND(MQTT_FMT(",\"pl_on\":\"%s\",\"pl_off\":\"%s\""), pOn, pOff);
-  MQTT_DISC_APPEND(MQTT_FMT("," MQTT_DEVICE_BLOCK "}"), deviceId, deviceId, fw);
+  MQTT_DISC_APPEND(MQTT_FMT("," MQTT_DEVICE_BLOCK "}"), deviceId, deviceId, fw, deviceId);
   return o;
 }
 
@@ -463,11 +507,11 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
     case DISCOVERY_TEXT:
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Text\",\"cmd_t\":\"splitflap/%s/text/set\",\"json_attr_t\":\"splitflap/%s/text/attrs\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_text\",\"max\":255," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     case DISCOVERY_MODE:
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Mode\",\"cmd_t\":\"splitflap/%s/mode/set\",\"stat_t\":\"splitflap/%s/mode\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_mode\",\"ops\":[\"text\",\"clock\"]," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     //                        obj             name                 stat_t          val_tpl                        dev_cla       unit    ent_cat        pOn    pOff
     case DISCOVERY_HEAP:         return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_heap",         "Free heap",           "telemetry",   "{{ value_json.heap }}",      nullptr,       "B",   nullptr,      nullptr, nullptr);
     case DISCOVERY_RSSI:         return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_rssi",         "WiFi RSSI",           "telemetry",   "{{ value_json.rssi }}",      "signal_strength", "dBm", nullptr,  nullptr, nullptr);
@@ -488,29 +532,29 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
     case DISCOVERY_SPEED:
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Flap speed\",\"cmd_t\":\"splitflap/%s/speed/set\",\"stat_t\":\"splitflap/%s/speed\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_speed\",\"min\":1,\"max\":100,\"step\":1,\"mode\":\"slider\"," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     case DISCOVERY_ALIGNMENT:
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Alignment\",\"cmd_t\":\"splitflap/%s/alignment/set\",\"stat_t\":\"splitflap/%s/alignment\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_alignment\",\"ops\":[\"left\",\"center\",\"right\"]," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     case DISCOVERY_RESTART:
       return (size_t)mqttSnprintf(buf, bufLen,
-        MQTT_FMT("{\"name\":\"Restart\",\"cmd_t\":\"splitflap/%s/restart/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_restart\",\"pl_prs\":\"PRESS\",\"dev_cla\":\"restart\"," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+        MQTT_FMT("{\"name\":\"Restart\",\"cmd_t\":\"splitflap/%s/restart/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_restart\",\"pl_prs\":\"PRESS\",\"dev_cla\":\"restart\",\"ent_cat\":\"diagnostic\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     case DISCOVERY_UNITS_FAULTY:
       //State is the integer faulty count (great for HA automations); the full
       //per-unit breakdown rides json_attr_t so it isn't bound by the 255-char
       //sensor-state limit (#137).
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Faulty units\",\"stat_t\":\"splitflap/%s/units_faulty\",\"json_attr_t\":\"splitflap/%s/units/attrs\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_units_faulty\",\"ent_cat\":\"diagnostic\"," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     case DISCOVERY_UNIT_WEAR:
       //Binary problem sensor (#231): ON when any unit wears past the relative
       //threshold. The median + flagged unit list ride a dedicated attrs topic
       //so an automation can name the offender without parsing units/attrs.
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Unit wear warning\",\"stat_t\":\"splitflap/%s/units_wear\",\"json_attr_t\":\"splitflap/%s/units/wear\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_unit_wear\",\"dev_cla\":\"problem\",\"ent_cat\":\"diagnostic\",\"pl_on\":\"ON\",\"pl_off\":\"OFF\"," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion);
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     //                        obj             name                 stat_t          val_tpl                       dev_cla    unit    ent_cat        pOn    pOff
     case DISCOVERY_VCC_MIN:      return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_vcc_min",      "Unit supply Vcc (min)", "telemetry", "{{ value_json.vccMin }}",  "voltage", "mV",  "diagnostic", nullptr, nullptr);
     case DISCOVERY_REBOOT_TOTAL: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_reboot_total", "Unit reboots (fleet)",  "telemetry", "{{ value_json.reboots }}", nullptr,   nullptr, "diagnostic", nullptr, nullptr);
@@ -520,6 +564,18 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
     // telemetry key is a quoted "ON"/"OFF" string, not NTP's bare 1/0).
     case DISCOVERY_UNIT_JAM:     return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_unit_jam",     "Unit jam",              "telemetry", "{{ value_json.jam }}",         "problem", nullptr, "diagnostic", "ON", "OFF");
     case DISCOVERY_STEPS_EXCESS: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_steps_excess", "Unit steps excess (max)", "telemetry", "{{ value_json.stepsExcess }}", nullptr, "steps", "diagnostic", nullptr, nullptr);
+    case DISCOVERY_NOTIFY:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Message\",\"cmd_t\":\"splitflap/%s/text/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_notify\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
+    case DISCOVERY_TEXT_CLEAR:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Clear text\",\"cmd_t\":\"splitflap/%s/text/clear\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_text_clear\",\"pl_prs\":\"PRESS\",\"ic\":\"mdi:close-box-outline\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
+    case DISCOVERY_FIRMWARE_UPDATE:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Firmware\",\"stat_t\":\"splitflap/%s/update\",\"cmd_t\":\"splitflap/%s/update/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_firmware\",\"pl_inst\":\"INSTALL\",\"dev_cla\":\"firmware\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
   }
   if (bufLen > 0) buf[0] = '\0';
   return 0;

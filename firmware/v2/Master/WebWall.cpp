@@ -467,23 +467,9 @@ void handleForgetWifi(AsyncWebServerRequest* request) {
 // while anything else writes firmware; once it runs, the upload routes and
 // the unit jobs refuse in turn (releaseUpdateRunning()).
 void handleRelease(AsyncWebServerRequest* request, bool update) {
-  if (update) {
-    if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
-      return sendError(request, 409, "a unit update is running, retry when it has finished");
-    }
-    if (webFirmwareUploadActive()) {
-      return sendError(request, 409, "a firmware upload is running, retry when it has finished");
-    }
-  }
-  if (releaseBusy()) {
-    return sendError(request, 409, "a look for a release or an update from one is still running");
-  }
-  const uint32_t op = wallOpBegin(update ? "update-from-release" : "check-release", -1);
-  if (op == 0) return sendError(request, 503, "too many jobs are running");
-  if (!(update ? releaseAskUpdate(op) : releaseAskLook(op))) {
-    wallOpFinish(op, false, "a look for a release was still running");
-    return sendError(request, 409, "a look for a release or an update from one is still running");
-  }
+  uint32_t op = 0;
+  int status = 0;
+  if (const char* refusal = webStartRelease(update, op, status)) return sendError(request, status, refusal);
   sendOp(request, op);
 }
 
