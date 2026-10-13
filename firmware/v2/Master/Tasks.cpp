@@ -116,6 +116,10 @@ static constexpr uint32_t WORKER_TASK_STACK = 16384;
 static constexpr uint32_t LINK_TASK_STACK = 12288;
 
 static constexpr UBaseType_t DISPLAY_TASK_PRIORITY = 3;  // flap timing wins
+// The link task answers the rows' time requests and hands out flip instants
+// with a 400 ms lead (WallShowPolicy.h): it goes before the worker's TLS
+// download and an MQTT burst on the same core (#614).
+static constexpr UBaseType_t LINK_TASK_PRIORITY = 2;
 static constexpr UBaseType_t DOMAIN_TASK_PRIORITY = 1;   // everything else
 
 static constexpr BaseType_t DISPLAY_CORE = 1;  // with loopTask (heartbeat)
@@ -306,7 +310,7 @@ void tasksInit(MasterSettings& settings, SettingsStore& store) {
       workerTaskMain, "worker", WORKER_TASK_STACK, nullptr,
       DOMAIN_TASK_PRIORITY, workerTaskStack, &workerTaskBuf, NETWORK_CORE);
   linkTaskHandle = xTaskCreateStaticPinnedToCore(
-      wallLinkTaskMain, "link", LINK_TASK_STACK, nullptr, DOMAIN_TASK_PRIORITY,
+      wallLinkTaskMain, "link", LINK_TASK_STACK, nullptr, LINK_TASK_PRIORITY,
       linkTaskStack, &linkTaskBuf, NETWORK_CORE);
 }
 
