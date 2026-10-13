@@ -355,10 +355,15 @@ void handleContent(AsyncWebServerRequest* request, const char* name, JsonVariant
   // than accept what will not be shown. The top priority passes (#625).
   const bool text = post.inputTextProvided || post.transientTextProvided;
   const int priority = post.textPriorityProvided ? (int)post.textPriority : 0;
+  const String& asked = post.transientTextProvided ? post.transientText : post.inputText;
+  const bool hold = post.transientHoldProvided && post.transientHold;
+  const long dwell = post.transientDwellProvided ? post.transientDwell : 0;
   if (text && priority < TEXT_PRIORITY_MAX && webQuietNow()) {
+    mqttNoteTextResult(MqttTextResultKind::DroppedQuiet, asked, priority, hold, dwell);  // #622
     return sendError(request, 409, "the wall is quiet: turn quiet off to show text");
   }
   if (text && !mqttNotificationAdmits(priority)) {
+    mqttNoteTextResult(MqttTextResultKind::Refused, asked, priority, hold, dwell);
     return sendError(request, 409, "a text of higher priority is showing");
   }
   bool needsReboot = false;
@@ -377,6 +382,7 @@ void handleContent(AsyncWebServerRequest* request, const char* name, JsonVariant
 void handleClear(AsyncWebServerRequest* request) {
   SerialPrintln(F("Text cleared through the API"));
   mqttCancelNotification();
+  mqttNoteTextResult(MqttTextResultKind::Cleared, String());
   sendDone(request);
 }
 

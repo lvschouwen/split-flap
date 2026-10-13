@@ -36,6 +36,8 @@
 #define MQTT_TELEMETRY_INTERVAL_S 60
 #define MQTT_MAX_TEXT_LEN 256
 
+#include "MqttTextResult.h"  // #622, after the length above
+
 // Wall surfacing cadence: it copies the wall snapshot and every row's unit
 // facts — too heavy for every ~10 ms pass, and Home Assistant needs nothing
 // faster for supervision state.
@@ -86,6 +88,15 @@ static std::atomic<bool> notifActiveAtomic{false};
 static std::atomic<bool> notifHeldAtomic{false};
 static std::atomic<int> notifPriorityAtomic{0};
 static std::atomic<uint32_t> notifEndsAtomic{0};
+
+// Text results (#622): noted from any task, published by the tick. Static
+// queue, a few deep — a burst past that loses its oldest-but-unsent, never
+// blocks a producer.
+static constexpr UBaseType_t TEXT_RESULT_DEPTH = 4;
+static StaticQueue_t textResultQueueBuf;
+static uint8_t textResultQueueStorage[TEXT_RESULT_DEPTH * sizeof(MqttTextResult)];
+static QueueHandle_t textResultQueue = nullptr;
+static uint32_t textResultSeq = 0;
 
 // Callback -> tick hand-off (same task here, but callbacks stay dumb —
 // v1's copy+flag rule kept structural).
@@ -190,6 +201,8 @@ void mqttServiceInit(MasterSettings& settings, SettingsStore& store,
                      const String& effectiveDeviceName, uint32_t bootCount) {
   (void)store;
   mqttBootCount = bootCount;
+  textResultQueue = xQueueCreateStatic(TEXT_RESULT_DEPTH, sizeof(MqttTextResult),
+                                       textResultQueueStorage, &textResultQueueBuf);
   if (settings.mqttHost.length() == 0) {
     SerialPrintln(
         F("MQTT: no broker configured (web UI, General card) — MQTT disabled"));
@@ -251,6 +264,28 @@ static void publishMqttDiscovery() {
       continue;
     }
     mqttClient.publish(topicBuf, 0, true, payloadBuf);
+  }
+  // The text result event (#622), outside the shared enum.
+  size_t tLen = buildTextResultDiscoveryTopic(topicBuf, sizeof(topicBuf), mqttResolvedDeviceId.c_str());
+  size_t pLen = buildTextResultDiscovery(payloadBuf, sizeof(payloadBuf), mqttResolvedDeviceId.c_str(),
+                                         mqttFwVersion.c_str());
+  if (tLen > 0 && tLen < sizeof(topicBuf) && pLen > 0 && pLen < sizeof(payloadBuf)) {
+    mqttClient.publish(topicBuf, 0, true, payloadBuf);
+  } else {
+    SerialPrintln(F("MQTT: text result discovery skipped — would truncate"));
+  }
+}
+
+// What became of the texts since the last pass (#622): published as events
+// while connected, dropped while not — a result is about now.
+static void mqttPublishTextResults(const DisplaySnapshot& snap, bool connected) {
+  if (textResultQueue == nullptr) return;
+  MqttTextResult r;
+  while (xQueueReceive(textResultQueue, &r, 0) == pdTRUE) {
+    if (!connected) continue;
+    const int width = mqttWallCapacity > 0 ? mqttWallCapacity : snap.displayWidth;
+    const String json = buildTextResultJson(r, ++textResultSeq, width, unsupportedFlapCount(String(r.text)));
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "text/result").c_str(), 0, false, json.c_str());
   }
 }
 
@@ -346,6 +381,11 @@ static void publishDiscoveryClear() {
   if (cLen > 0 && cLen < sizeof(topicBuf)) {
     mqttClient.publish(topicBuf, 0, true, "");
   }
+  // So does the text result event (#622).
+  cLen = buildTextResultDiscoveryTopic(topicBuf, sizeof(topicBuf), mqttResolvedDeviceId.c_str());
+  if (cLen > 0 && cLen < sizeof(topicBuf)) {
+    mqttClient.publish(topicBuf, 0, true, "");
+  }
   // So does the quiet switch (#227), with its retained command.
   cLen = buildQuietDiscoveryTopic(topicBuf, sizeof(topicBuf),
                                   mqttResolvedDeviceId.c_str());
@@ -428,6 +468,7 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
       // flaps do not move for it, the mode content returns when they may.
       SerialPrintln(F("MQTT: text cleared"));
       cancelNotificationLocal();
+      mqttNoteTextResult(MqttTextResultKind::Cleared, String());
       break;
     case MqttCommand::Text: {
       MqttTextRequest req;
@@ -440,29 +481,35 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
       if (req.text.length() == 0) {  // #616: an empty text is a clear
         SerialPrintln(F("MQTT: text cleared (empty text)"));
         cancelNotificationLocal();
+        mqttNoteTextResult(MqttTextResultKind::Cleared, String());
         break;
       }
       const String& text = req.text;
+      const long dwell = req.hold ? 0 : req.dwellSeconds;
       // Producer gate (#205): while a reflash job runs nothing display-
       // mutating queues. HA commands are live-only — drop, don't defer.
       if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
         SerialPrintln("MQTT: text dropped (unit update running): " + text);
+        mqttNoteTextResult(MqttTextResultKind::DroppedBusy, text, req.priority, req.hold, dwell);
         break;
       }
       // Quiet (#227): dropped, not deferred — unless the sender forces it,
       // which is the top priority (#625).
       if (quietBlocksContent(tasksQuiet(), req.priority >= MQTT_TEXT_PRIORITY_MAX)) {
         SerialPrintln("MQTT: text dropped (quiet): " + text);
+        mqttNoteTextResult(MqttTextResultKind::DroppedQuiet, text, req.priority, req.hold, dwell);
         break;
       }
       // #625: a lower priority than the text showing is refused.
       if (!notificationAdmits(mqttNotification, req.priority)) {
         SerialPrintf("MQTT: text refused (priority %d under the %d showing): %s\n",
                      req.priority, mqttNotification.priority, text.c_str());
+        mqttNoteTextResult(MqttTextResultKind::Refused, text, req.priority, req.hold, dwell);
         break;
       }
       if (!showTextNow(text)) {
         SerialPrintln("MQTT: text dropped (display queue full): " + text);
+        mqttNoteTextResult(MqttTextResultKind::DroppedBusy, text, req.priority, req.hold, dwell);
         break;
       }
       if (req.hold) {
@@ -472,6 +519,8 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
                      req.priority, text.c_str());
       }
       startNotificationLocal(text, req);
+      mqttNoteTextResult(req.hold ? MqttTextResultKind::Held : MqttTextResultKind::Shown, text,
+                         req.priority, req.hold, dwell);
       break;
     }
     case MqttCommand::None:
@@ -919,9 +968,10 @@ void mqttServiceTick() {
     mqttLastQuietState = -1;
   }
 
+  DisplaySnapshot snap = displaySnapshotGet();
+  mqttPublishTextResults(snap, mqttClient.connected());  // #622
   if (!mqttClient.connected()) return;
 
-  DisplaySnapshot snap = displaySnapshotGet();
   WebContentSnapshot content = webDisplayContentSnapshot();
   bool leading = wallShowActive();
 
@@ -975,6 +1025,23 @@ void mqttStopForOta() {
 void mqttResumeAfterOta() {
   if (!mqttInitialised) return;
   resumeAfterOtaRequested.store(true);
+}
+
+void mqttNoteTextResult(MqttTextResultKind kind, const String& text, int priority, bool hold,
+                        long dwellSeconds) {
+  if (textResultQueue == nullptr) return;
+  MqttTextResult r;
+  r.kind = kind;
+  r.priority = priority;
+  r.hold = hold;
+  r.dwellSeconds = dwellSeconds;
+  strlcpy(r.text, text.c_str(), sizeof(r.text));
+  if (xQueueSend(textResultQueue, &r, 0) != pdTRUE) {
+    // Full: the oldest waits for a broker that is not there; make room.
+    MqttTextResult dropped;
+    xQueueReceive(textResultQueue, &dropped, 0);
+    xQueueSend(textResultQueue, &r, 0);
+  }
 }
 
 void mqttRequestDiscoveryClear() {

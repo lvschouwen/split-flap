@@ -39,7 +39,7 @@ def test_web_drain_drops_text_after_applying_a_quiet_toggle():
     applied = code.index("applySettingsPost(pendingPost, settings, store);")
     drop = code.index("quietBlocksContent(settings.quiet, textPriority >= TEXT_PRIORITY_MAX)")
     assert applied < drop, "a quiet toggle riding the POST must be applied first"
-    block = code[drop:drop + 400]
+    block = code[drop:drop + 600]
     assert "messageProvided = false;" in block and "transientProvided = false;" in block
 
 

@@ -335,9 +335,12 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // #227: content that arrives while quiet is dropped, not queued. A
       // quiet toggle riding the same POST has been applied above, so "wake
       // and show this" works in one request.
+      const long resultDwell = transientProvided && !transientHold ? transientDwell : 0;  // #622
       if (quietBlocksContent(settings.quiet, textPriority >= TEXT_PRIORITY_MAX) &&
           (messageProvided || transientProvided)) {
         SerialPrintln(F("web: text dropped (quiet)"));
+        mqttNoteTextResult(MqttTextResultKind::DroppedQuiet, transientProvided ? transientText : messageText,
+                           textPriority, transientHold, resultDwell);
         messageProvided = false;
         transientProvided = false;
       }
@@ -346,6 +349,8 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // its check and this drain is judged again.
       if ((messageProvided || transientProvided) && !mqttNotificationAdmits(textPriority)) {
         SerialPrintf("web: text refused (priority %d under the one showing)\n", textPriority);
+        mqttNoteTextResult(MqttTextResultKind::Refused, transientProvided ? transientText : messageText,
+                           textPriority, transientHold, resultDwell);
         messageProvided = false;
         transientProvided = false;
       }
@@ -382,19 +387,23 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
         if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
           SerialPrintln("Message retained, not queued (reflash): " +
                         messageText);
+          mqttNoteTextResult(MqttTextResultKind::DroppedBusy, messageText, textPriority);
         } else if (wallShowActive()) {
           // A wall with row boards (#566): the logical text goes to the wall.
           wallShowText(messageText, settings.alignment, settings.flapSpeed);
           SerialPrintln("Message routed to the wall: " + messageText);
+          mqttNoteTextResult(MqttTextResultKind::Shown, messageText, textPriority);
         } else if (displayEnqueue(makeShowTextCommand(
                        messageText, settings.alignment,
                        settings.flapSpeed))) {
           SerialPrintln("Message queued for display: " + messageText);
+          mqttNoteTextResult(MqttTextResultKind::Shown, messageText, textPriority);
         } else {
           // The handler's 503 pre-check makes this a wedged-queue signal,
           // not a normal path.
           SerialPrintln("Display queue full at drain — message DROPPED: " +
                         messageText);
+          mqttNoteTextResult(MqttTextResultKind::DroppedBusy, messageText, textPriority);
         }
       } else if (messageProvided) {
         SerialPrintln("Message ignored (device in clock mode, v1 parity): " +
@@ -410,17 +419,23 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // and the overlay arm (which drains behind the #130 cancel above)
       // keeps the transient alive when that same POST also switched mode.
       if (transientProvided) {
+        const MqttTextResultKind shown =
+            transientHold ? MqttTextResultKind::Held : MqttTextResultKind::Shown;
         if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
           SerialPrintln("Transient text dropped (reflash running): " +
                         transientText);
+          mqttNoteTextResult(MqttTextResultKind::DroppedBusy, transientText, textPriority,
+                             transientHold, resultDwell);
         } else if (wallShowActive()) {
           wallShowText(transientText, settings.alignment, settings.flapSpeed);
           mqttStartNotification(transientDwell, transientHold, textPriority);
+          mqttNoteTextResult(shown, transientText, textPriority, transientHold, resultDwell);
           SerialPrintln("Transient text routed to the wall: " + transientText);
         } else if (displayEnqueue(makeShowTextCommand(
                        transientText, settings.alignment,
                        settings.flapSpeed))) {
           mqttStartNotification(transientDwell, transientHold, textPriority);
+          mqttNoteTextResult(shown, transientText, textPriority, transientHold, resultDwell);
           SerialPrintln(
               "Transient text (" +
               (transientHold ? String("held")
@@ -430,6 +445,8 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
         } else {
           SerialPrintln("Display queue full at drain — transient DROPPED: " +
                         transientText);
+          mqttNoteTextResult(MqttTextResultKind::DroppedBusy, transientText, textPriority,
+                             transientHold, resultDwell);
         }
       }
     }

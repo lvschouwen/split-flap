@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 
+#include "MqttTextResult.h"  // MqttTextResultKind (#622)
 #include "Settings.h"
 #include "SettingsStore.h"
 #include "Tasks.h"
@@ -73,6 +74,12 @@ void mqttStopForOta();
 
 // Any task: resume after an upload that ended without a reboot.
 void mqttResumeAfterOta();
+
+// Any task: what became of a text (#622), published as an event on
+// text/result by the next tick. Every text command from MQTT or the API
+// notes one; a few may wait while the broker is away, then they are dropped.
+void mqttNoteTextResult(MqttTextResultKind kind, const String& text, int priority = 0,
+                        bool hold = false, long dwellSeconds = 0);
 
 // Any task: device renamed (#125) — while this run still IS the old MQTT
 // identity, blank the old retained discovery configs + state topics so the
