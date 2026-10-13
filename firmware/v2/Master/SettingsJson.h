@@ -47,7 +47,8 @@ struct SettingsJsonFields {
   // #391 rescue slot: what the factory partition actually holds. rescueRev
   // is "" whenever the image cannot be identified — never a guess.
   String rescueRev;
-  String rescueSlot;  // ok | absent | empty | unidentified | stale
+  String rescueSlot;  // ok | absent | empty | unidentified | outdated | unknown-vintage (#613)
+  String rescueSourceHead;  // the slot image's rescue source head, "" = none
   bool rescueSlotWarn = false;
   String lastResetReason;
   String lastRebootCause;  // #432: "" unless the last reset was a stamped deliberate reboot
@@ -132,6 +133,7 @@ inline String buildSettingsJson(const SettingsJsonFields& f) {
   out += ",\"otaReverted\":";         appendJsonBool(out, f.otaReverted);
   out += ",\"rescueRev\":";           appendJsonString(out, f.rescueRev);
   out += ",\"rescueSlot\":";          appendJsonString(out, f.rescueSlot);
+  out += ",\"rescueSourceHead\":";    appendJsonString(out, f.rescueSourceHead);
   out += ",\"rescueSlotWarn\":";      appendJsonBool(out, f.rescueSlotWarn);
   out += ",\"lastResetReason\":";     appendJsonString(out, f.lastResetReason);
   out += ",\"lastRebootCause\":";     appendJsonString(out, f.lastRebootCause);

@@ -84,6 +84,31 @@ def emit_array(fh, name: str, data: bytes) -> None:
 
 # --- build identity ---------------------------------------------------------------
 
+# The rescue image's inputs (#613): a commit touching any of these moves the
+# rescue source head every board image carries, and the marker the rescue
+# image embeds (release/RescueSourceHead.h).
+RESCUE_SOURCE_PATHS = ("firmware/v2/Rescue", "firmware/v2/release",
+                       "firmware/v2/shared", "firmware/v2/buildtools")
+
+
+def rescue_source_head(project_dir) -> str:
+    """Short rev of the last commit touching the rescue image's inputs;
+    "unknown" when git cannot say. Hex only, so it reads as a marker."""
+    try:
+        top = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=project_dir, stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        head = subprocess.check_output(
+            ["git", "log", "-1", "--format=%h", "--",
+             *(str(pathlib.Path(top) / p) for p in RESCUE_SOURCE_PATHS)],
+            cwd=project_dir, stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return "unknown"
+    return head if head and all(c in "0123456789abcdef" for c in head) else "unknown"
+
+
 def git_short_rev(project_dir) -> tuple:
     """(short commit hash, dirty?) for the repo that contains project_dir.
     Falls back to ("unknown", False) if git isn't available."""
@@ -154,11 +179,14 @@ def bundled_unit_equivalent_revs(project_dir) -> str:
                     if s and not s.startswith("#"))
 
 
-def version_header_text(tag: str, unit_rev=None, unit_equiv=None, commit_time: int = 0) -> str:
-    """BuildVersion.h: GIT_REV and the commit's time, plus the bundled unit
-    identity for the trees that embed a unit image."""
+def version_header_text(tag: str, unit_rev=None, unit_equiv=None, commit_time: int = 0,
+                        rescue_head: str = "unknown") -> str:
+    """BuildVersion.h: GIT_REV and the commit's time, the rescue source head
+    (#613), plus the bundled unit identity for the trees that embed a unit
+    image."""
     text = GENERATED_BANNER + "#pragma once\n" + f'#define GIT_REV "{tag}"\n'
     text += f"#define GIT_COMMIT_TIME {int(commit_time)}UL\n"
+    text += f'#define RESCUE_SOURCE_HEAD "{rescue_head}"\n'
     if unit_rev is not None:
         text += f'#define BUNDLED_UNIT_REV "{unit_rev}"\n'
         text += f'#define BUNDLED_UNIT_REV_EQUIV "{unit_equiv or ""}"\n'
@@ -173,10 +201,11 @@ def write_version_header(project_dir, with_unit_bundle: bool) -> str:
     if with_unit_bundle:
         unit_rev = bundled_unit_rev(project_dir, fallback=tag)
         unit_equiv = bundled_unit_equivalent_revs(project_dir)
+    rescue_head = rescue_source_head(project_dir)
     (project_dir / "BuildVersion.h").write_text(
-        version_header_text(tag, unit_rev, unit_equiv, git_commit_time(project_dir)),
+        version_header_text(tag, unit_rev, unit_equiv, git_commit_time(project_dir), rescue_head),
         encoding="utf-8")
-    line = f"[build_assets] wrote BuildVersion.h  GIT_REV={tag}"
+    line = f"[build_assets] wrote BuildVersion.h  GIT_REV={tag}  RESCUE_SOURCE_HEAD={rescue_head}"
     if with_unit_bundle:
         line += f"  BUNDLED_UNIT_REV={unit_rev}  EQUIV=[{unit_equiv}]"
     print(line)

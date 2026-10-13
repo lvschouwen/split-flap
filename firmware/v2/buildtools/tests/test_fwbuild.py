@@ -122,6 +122,25 @@ def test_version_header_without_and_with_a_unit_bundle():
     assert '#define BUNDLED_UNIT_REV_EQUIV "a,b"' in bundled
 
 
+def test_version_header_carries_the_rescue_source_head():
+    text = fwbuild.version_header_text("abc1234", rescue_head="0fd341f")
+    assert '#define RESCUE_SOURCE_HEAD "0fd341f"' in text
+    assert '#define RESCUE_SOURCE_HEAD "unknown"' in fwbuild.version_header_text("abc1234")
+
+
+def test_rescue_source_head_is_the_last_commit_touching_the_rescue_inputs(tmp_path):
+    # In this repository: a hex rev, and the one git names for the inputs.
+    here = pathlib.Path(__file__).resolve().parent
+    head = fwbuild.rescue_source_head(here)
+    assert head != "unknown" and all(c in "0123456789abcdef" for c in head)
+    top = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=here).decode().strip()
+    expected = subprocess.check_output(
+        ["git", "log", "-1", "--format=%h", "--", *fwbuild.RESCUE_SOURCE_PATHS], cwd=top).decode().strip()
+    assert head == expected
+    # No git: unknown, never a crash.
+    assert fwbuild.rescue_source_head(tmp_path) == "unknown"
+
+
 def test_commit_time_is_the_head_commits_and_zero_without_git(tmp_path):
     here = pathlib.Path(__file__).resolve().parent
     head = int(subprocess.check_output(

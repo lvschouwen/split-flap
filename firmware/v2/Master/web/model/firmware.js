@@ -109,15 +109,21 @@ export function firmwareRows(fw) {
     });
   }
   const rescue = fw.rescue || {};
+  // Judged by the rescue sources it was built from, not its rev (#613): a
+  // rescue image that starts is a good one, the current one is better.
+  const RESCUE_STATES = { ok: 'current', outdated: 'outdated', 'unknown-vintage': 'vintage unknown' };
+  const rescueOld = !rescue.warn && (rescue.state === 'outdated' || rescue.state === 'unknown-vintage');
   rows.push({
-    // No rev is the right one: an older rescue image that starts is a good one.
     what: 'Rescue image (master)', shouldBe: released(release.rescue), is: rescue.rev || 'none',
-    cls: rescue.warn ? 'bad' : 'ok',
-    state: rescue.warn ? 'install again' : rescue.state === 'stale' ? 'older, fine' : rescue.state || 'unknown',
+    cls: rescue.warn ? 'bad' : rescueOld ? 'note' : 'ok',
+    state: rescue.warn ? 'install again' : RESCUE_STATES[rescue.state] || rescue.state || 'unknown',
     note: rescue.warn ? 'The rescue image is missing or does not match what the master expects.'
+      : rescue.state === 'outdated' ? 'It starts, but it was built from other rescue sources than this firmware knows.'
+      : rescue.state === 'unknown-vintage' ? 'It starts, but it is from before the master could tell its sources.'
       : 'What the master starts when its own firmware does not.',
-    todo: rescue.warn ? 'Install it from a file of the build. The running firmware is not touched.' : '',
-    actions: rescue.warn ? [{ type: 'file', label: 'Choose rescue-….bin…' }] : [],
+    todo: rescue.warn ? 'Install it from a file of the build. The running firmware is not touched.'
+      : rescueOld ? 'Install the current rescue, from a file of the build or with the release. The running firmware is not touched.' : '',
+    actions: rescue.warn || rescueOld ? [{ type: 'file', label: 'Choose rescue-….bin…' }] : [],
   });
   for (const row of rows) row.actions = row.actions || [];
   // One thing stands out: what mends a red row, else the release, else the units.

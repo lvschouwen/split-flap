@@ -198,6 +198,7 @@ String buildCurrentSettingsJson() {
   RescueSlotFacts rescue = rescueSlotCurrent();
   f.rescueRev = rescue.rev;
   f.rescueSlot = rescueSlotStateLabel(rescue.state);
+  f.rescueSourceHead = rescue.sourceHead;
   f.rescueSlotWarn = rescue.warn;
   f.lastResetReason = webResetReasonString();
   f.lastRebootCause = bootRebootCause;  // #432

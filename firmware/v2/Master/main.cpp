@@ -100,14 +100,13 @@ static void printBootDiagnostics() {
                  magic == 0xE9 ? "image present" : "empty");
     // #391: "image present" alone hid a months-old rescue build. Say what it
     // is. The cache is warmed just below, unconditionally.
+    // #613: judged by the rescue sources it was built from, not its repo rev.
     RescueSlotFacts rescue = rescueSlotCurrent();
-    if (rescue.identified) {
-      SerialPrintf("rescue: image rev %s%s\n", rescue.rev,
-                   rescue.stale ? " — older than the running app, which is fine"
-                                : "");
-    } else if (rescue.valid) {
-      SerialPrintln(F("rescue: image rev unknown (installed out of band) — "
-                      "reinstall via POST /firmware/rescue to record it"));
+    if (rescue.valid) {
+      SerialPrintf("rescue: image rev %s, %s%s%s\n",
+                   rescue.identified ? rescue.rev : "unknown (installed out of band)",
+                   rescueSlotStateLabel(rescue.state), rescue.todo[0] ? " — " : "",
+                   rescue.todo);
     }
   } else {
     SerialPrintln(F("rescue: no factory partition (!)"));

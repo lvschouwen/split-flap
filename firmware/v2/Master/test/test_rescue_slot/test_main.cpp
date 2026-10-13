@@ -1,10 +1,10 @@
-// Host-side unit tests for RescueSlotStatus.h (#391) — the factory
-// rescue-slot verdict Master reports without booting into rescue.
+// Host-side unit tests for RescueSlotStatus.h (#391, #613) — the factory
+// rescue-slot verdict Master reports without booting into rescue — and for
+// the marker the rescue image carries (../release/RescueSourceHead.h).
 //
-// The slot's own app descriptor cannot identify the image (pioarduino
-// freezes the build stamp at framework-assembly time, #200), so the rev
-// comes from an NVS record written at install time and is only trusted
-// while its sha256 still matches the partition's actual content.
+// The rev comes from an NVS record written at install time, trusted only
+// while its sha256 still matches the partition; the vintage from the rescue
+// source head the image embeds, against the one this build knows.
 
 #include <ArduinoFake.h>
 #include <unity.h>
@@ -13,6 +13,8 @@
 
 void setUp() {}
 void tearDown() {}
+
+#define OWN "f14a7b6"
 
 static SlotRecord recordFor(const char* rev) {
   SlotRecord r;
@@ -27,198 +29,196 @@ static SlotRecord noRecord() { return SlotRecord(); }
 // --- absent / empty slot ------------------------------------------------------
 
 static void test_absent_partition_reports_absent() {
-  RescueSlotFacts f =
-      rescueSlotFacts(false, false, noRecord(), false, "f14a7b6");
-  TEST_ASSERT_FALSE(f.present);
-  TEST_ASSERT_FALSE(f.valid);
-  TEST_ASSERT_FALSE(f.identified);
-  TEST_ASSERT_FALSE(f.stale);
-  TEST_ASSERT_EQUAL_STRING("", f.rev);
-  TEST_ASSERT_TRUE(f.warn);
+  RescueSlotFacts f = rescueSlotFacts(false, false, noRecord(), false, OWN, OWN);
   TEST_ASSERT_EQUAL(RESCUE_SLOT_ABSENT, f.state);
+  TEST_ASSERT_FALSE(f.present);
+  TEST_ASSERT_TRUE(f.warn);
+  TEST_ASSERT_EQUAL_STRING("", f.rev);
 }
 
 static void test_present_but_no_valid_image_reports_empty() {
-  RescueSlotFacts f =
-      rescueSlotFacts(true, false, noRecord(), false, "f14a7b6");
-  TEST_ASSERT_TRUE(f.present);
-  TEST_ASSERT_FALSE(f.valid);
-  TEST_ASSERT_TRUE(f.warn);
+  RescueSlotFacts f = rescueSlotFacts(true, false, noRecord(), false, OWN, OWN);
   TEST_ASSERT_EQUAL(RESCUE_SLOT_EMPTY, f.state);
+  TEST_ASSERT_TRUE(f.warn);
+  TEST_ASSERT_EQUAL_STRING("install the current rescue", f.todo);
 }
 
-// A record left over from a previous image must never make an EMPTY slot
-// look identified — the image is what matters, not the bookkeeping.
-static void test_invalid_image_never_inherits_a_matching_record() {
-  RescueSlotFacts f =
-      rescueSlotFacts(true, false, recordFor("b0e3fe6"), true, "f14a7b6");
+static void test_invalid_image_never_inherits_a_matching_record_or_marker() {
+  RescueSlotFacts f = rescueSlotFacts(true, false, recordFor("b0e3fe6"), true, OWN, OWN);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_EMPTY, f.state);
   TEST_ASSERT_FALSE(f.identified);
   TEST_ASSERT_EQUAL_STRING("", f.rev);
-  TEST_ASSERT_EQUAL(RESCUE_SLOT_EMPTY, f.state);
+  TEST_ASSERT_EQUAL_STRING("", f.sourceHead);
 }
 
-// --- identified slot ----------------------------------------------------------
+// --- the verdict is the source head's ---------------------------------------
 
-static void test_matching_record_at_running_rev_is_ok() {
-  RescueSlotFacts f =
-      rescueSlotFacts(true, true, recordFor("f14a7b6"), true, "f14a7b6");
-  TEST_ASSERT_TRUE(f.valid);
-  TEST_ASSERT_TRUE(f.identified);
-  TEST_ASSERT_FALSE(f.stale);
-  TEST_ASSERT_FALSE(f.warn);
-  TEST_ASSERT_EQUAL_STRING("f14a7b6", f.rev);
+static void test_the_same_source_head_is_ok_whatever_the_revs() {
+  RescueSlotFacts f = rescueSlotFacts(true, true, recordFor("b0e3fe6"), true, OWN, OWN);
   TEST_ASSERT_EQUAL(RESCUE_SLOT_OK, f.state);
-}
-
-// The #391 case observed on .20: a Jul-13 rescue image under a Jul-25 app.
-// STALE is reported, but it does NOT warn (#438). The rescue image is
-// compared against the RUNNING APP's rev, and the two diverge by
-// construction: Rescue is installed rarely (break-glass, POST
-// /firmware/rescue) while Master is OTA'd often, so the revs part company on
-// the very next unrelated OTA and never re-converge on their own. Warning on
-// that made rescueSlotWarn permanently true in normal operation — and a
-// warning that is always on is one nobody reads.
-static void test_matching_record_behind_running_rev_is_stale_but_not_a_warning() {
-  RescueSlotFacts f =
-      rescueSlotFacts(true, true, recordFor("b0e3fe6"), true, "f14a7b6");
   TEST_ASSERT_TRUE(f.identified);
-  TEST_ASSERT_TRUE(f.stale);
+  TEST_ASSERT_FALSE(f.outdated);
   TEST_ASSERT_FALSE(f.warn);
   TEST_ASSERT_EQUAL_STRING("b0e3fe6", f.rev);
-  TEST_ASSERT_EQUAL(RESCUE_SLOT_STALE, f.state);
+  TEST_ASSERT_EQUAL_STRING(OWN, f.sourceHead);
+  TEST_ASSERT_EQUAL_STRING("", f.todo);
 }
 
-// The other half of #438: demoting the staleness warn must not disarm the
-// states that genuinely mean "this board cannot be recovered". Those are the
-// only things rescueSlotWarn now claims.
+static void test_another_source_head_is_outdated_but_not_a_warning() {
+  RescueSlotFacts f = rescueSlotFacts(true, true, recordFor(OWN), true, "0123abc", OWN);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_OUTDATED, f.state);
+  TEST_ASSERT_TRUE(f.outdated);
+  TEST_ASSERT_FALSE(f.warn);
+  TEST_ASSERT_EQUAL_STRING("0123abc", f.sourceHead);
+  TEST_ASSERT_EQUAL_STRING("install the current rescue", f.todo);
+}
+
+static void test_a_marker_identifies_the_image_without_a_record() {
+  RescueSlotFacts f = rescueSlotFacts(true, true, noRecord(), false, OWN, OWN);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_OK, f.state);
+  TEST_ASSERT_FALSE(f.identified);
+  TEST_ASSERT_EQUAL_STRING("", f.rev);
+  TEST_ASSERT_FALSE(f.warn);
+}
+
+static void test_a_recorded_image_without_a_marker_is_of_unknown_vintage() {
+  RescueSlotFacts f = rescueSlotFacts(true, true, recordFor("b0e3fe6"), true, "", OWN);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_UNKNOWN_VINTAGE, f.state);
+  TEST_ASSERT_TRUE(f.identified);
+  TEST_ASSERT_FALSE(f.outdated);
+  TEST_ASSERT_FALSE(f.warn);
+  TEST_ASSERT_EQUAL_STRING("install the current rescue to be sure", f.todo);
+  RescueSlotFacts g = rescueSlotFacts(true, true, recordFor("b0e3fe6"), true, nullptr, OWN);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_UNKNOWN_VINTAGE, g.state);
+}
+
+static void test_nothing_known_is_unidentified_and_a_warning() {
+  RescueSlotFacts f = rescueSlotFacts(true, true, noRecord(), false, "", OWN);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, f.state);
+  TEST_ASSERT_TRUE(f.warn);
+  TEST_ASSERT_EQUAL_STRING("", f.rev);
+}
+
+static void test_sha_mismatch_drops_the_rev_not_the_marker() {
+  RescueSlotFacts f = rescueSlotFacts(true, true, recordFor("b0e3fe6"), false, OWN, OWN);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_OK, f.state);
+  TEST_ASSERT_FALSE(f.identified);
+  TEST_ASSERT_EQUAL_STRING("", f.rev);
+  RescueSlotFacts g = rescueSlotFacts(true, true, recordFor("b0e3fe6"), false, "", OWN);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, g.state);
+}
+
+static void test_a_build_without_its_own_head_cannot_call_a_slot_current() {
+  RescueSlotFacts f = rescueSlotFacts(true, true, recordFor(OWN), true, OWN, "");
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_OUTDATED, f.state);
+  RescueSlotFacts g = rescueSlotFacts(true, true, recordFor(OWN), true, OWN, nullptr);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_OUTDATED, g.state);
+}
+
 static void test_only_recovery_blocking_states_warn() {
-  // Bootable and identified — recoverable, whatever its vintage.
-  TEST_ASSERT_FALSE(
-      rescueSlotFacts(true, true, recordFor("f14a7b6"), true, "f14a7b6").warn);
-  TEST_ASSERT_FALSE(
-      rescueSlotFacts(true, true, recordFor("b0e3fe6"), true, "f14a7b6").warn);
-  // No factory partition at all.
-  TEST_ASSERT_TRUE(
-      rescueSlotFacts(false, false, noRecord(), false, "f14a7b6").warn);
-  // Partition present, nothing bootable in it.
-  TEST_ASSERT_TRUE(
-      rescueSlotFacts(true, false, noRecord(), false, "f14a7b6").warn);
-  // Bootable but unnameable — a finding, not a neutral state.
-  TEST_ASSERT_TRUE(
-      rescueSlotFacts(true, true, noRecord(), false, "f14a7b6").warn);
+  TEST_ASSERT_TRUE(rescueSlotFacts(false, false, noRecord(), false, OWN, OWN).warn);
+  TEST_ASSERT_TRUE(rescueSlotFacts(true, false, noRecord(), false, OWN, OWN).warn);
+  TEST_ASSERT_TRUE(rescueSlotFacts(true, true, noRecord(), false, "", OWN).warn);
+  TEST_ASSERT_FALSE(rescueSlotFacts(true, true, recordFor("b0e3fe6"), true, "", OWN).warn);
+  TEST_ASSERT_FALSE(rescueSlotFacts(true, true, noRecord(), false, "0123abc", OWN).warn);
 }
 
-// --- unidentified slot --------------------------------------------------------
+// --- the record's placeholder shapes -----------------------------------------
 
-// Installed out of band (esptool, or a build predating the record): the
-// image is bootable but we cannot say what it is. Never guess a rev.
-static void test_no_record_is_unidentified_not_stale() {
-  RescueSlotFacts f = rescueSlotFacts(true, true, noRecord(), false, "f14a7b6");
-  TEST_ASSERT_TRUE(f.valid);
-  TEST_ASSERT_FALSE(f.identified);
-  TEST_ASSERT_FALSE(f.stale);
-  TEST_ASSERT_TRUE(f.warn);
-  TEST_ASSERT_EQUAL_STRING("", f.rev);
+static void test_record_with_empty_rev_is_not_identified() {
+  RescueSlotFacts f = rescueSlotFacts(true, true, recordFor(""), true, "", OWN);
   TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, f.state);
-}
-
-// Slot rewritten behind the record's back — the sha guard must demote it
-// rather than report the stale record's rev as truth.
-static void test_sha_mismatch_demotes_to_unidentified() {
-  RescueSlotFacts f =
-      rescueSlotFacts(true, true, recordFor("b0e3fe6"), false, "f14a7b6");
   TEST_ASSERT_FALSE(f.identified);
-  TEST_ASSERT_EQUAL_STRING("", f.rev);
-  TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, f.state);
 }
 
-// --- running-rev edge cases ---------------------------------------------------
-
-// Without a running rev to compare against, staleness is unknowable —
-// report the rev but never claim it is behind.
-static void test_missing_running_rev_reports_rev_without_staleness() {
-  RescueSlotFacts f = rescueSlotFacts(true, true, recordFor("b0e3fe6"), true, "");
-  TEST_ASSERT_TRUE(f.identified);
-  TEST_ASSERT_FALSE(f.stale);
-  TEST_ASSERT_EQUAL_STRING("b0e3fe6", f.rev);
-  TEST_ASSERT_EQUAL(RESCUE_SLOT_OK, f.state);
-}
-
-static void test_null_running_rev_is_safe() {
-  RescueSlotFacts f =
-      rescueSlotFacts(true, true, recordFor("b0e3fe6"), true, nullptr);
-  TEST_ASSERT_TRUE(f.identified);
-  TEST_ASSERT_FALSE(f.stale);
-  TEST_ASSERT_EQUAL_STRING("b0e3fe6", f.rev);
-}
-
-// A record whose rev field is empty carries no identity even though the
-// record itself parsed — treat it as unidentified, not as rev "".
-static void test_record_with_empty_rev_is_unidentified() {
-  RescueSlotFacts f = rescueSlotFacts(true, true, recordFor(""), true, "f14a7b6");
-  TEST_ASSERT_FALSE(f.identified);
-  TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, f.state);
-}
-
-// Round-trip through the REAL formatter, not a hand-built record. The
-// hand-built variants above cannot reach this: formatSlotRecord guarantees
-// a non-empty rev by substituting "?" for one that filters to nothing, so
-// an identity-less record actually arrives here as rev "?" — which must
-// read UNIDENTIFIED, never STALE against the running rev.
 static void test_formatter_placeholder_rev_round_trips_as_unidentified() {
-  static const uint8_t sha[32] = {0};
   char buf[SLOT_RECORD_BUF_LEN];
+  uint8_t sha[32] = {0};
   TEST_ASSERT_TRUE(formatSlotRecord(buf, sizeof(buf), 0, sha, ""));
   SlotRecord parsed = parseSlotRecord(buf);
   TEST_ASSERT_TRUE(parsed.ok);
-  TEST_ASSERT_EQUAL_STRING("?", parsed.rev);  // pins the formatter's behaviour
-
-  RescueSlotFacts f = rescueSlotFacts(true, true, parsed, true, "f14a7b6");
-  TEST_ASSERT_FALSE(f.identified);
-  TEST_ASSERT_FALSE(f.stale);
+  TEST_ASSERT_EQUAL_STRING("?", parsed.rev);
+  RescueSlotFacts f = rescueSlotFacts(true, true, parsed, true, "", OWN);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, f.state);
   TEST_ASSERT_EQUAL_STRING("", f.rev);
-  TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, f.state);
 }
 
-// A rev made entirely of characters the formatter drops collapses to the
-// same placeholder — same verdict, via a different route.
 static void test_formatter_all_filtered_rev_is_unidentified() {
-  static const uint8_t sha[32] = {0};
   char buf[SLOT_RECORD_BUF_LEN];
-  TEST_ASSERT_TRUE(formatSlotRecord(buf, sizeof(buf), 0, sha, "|||\\\"|||"));
-  RescueSlotFacts f =
-      rescueSlotFacts(true, true, parseSlotRecord(buf), true, "f14a7b6");
+  uint8_t sha[32] = {0};
+  TEST_ASSERT_TRUE(formatSlotRecord(buf, sizeof(buf), 0, sha, "|||\"|||"));
+  RescueSlotFacts f = rescueSlotFacts(true, true, parseSlotRecord(buf), true, "", OWN);
   TEST_ASSERT_EQUAL(RESCUE_SLOT_UNIDENTIFIED, f.state);
 }
 
-// A real rev must still survive the same round trip — the guard above must
-// not swallow legitimate identities.
 static void test_formatter_real_rev_round_trips_as_identified() {
-  static const uint8_t sha[32] = {0};
   char buf[SLOT_RECORD_BUF_LEN];
+  uint8_t sha[32] = {0};
   TEST_ASSERT_TRUE(formatSlotRecord(buf, sizeof(buf), 0, sha, "b0e3fe6"));
-  RescueSlotFacts f =
-      rescueSlotFacts(true, true, parseSlotRecord(buf), true, "f14a7b6");
+  RescueSlotFacts f = rescueSlotFacts(true, true, parseSlotRecord(buf), true, OWN, OWN);
   TEST_ASSERT_TRUE(f.identified);
-  TEST_ASSERT_TRUE(f.stale);
   TEST_ASSERT_EQUAL_STRING("b0e3fe6", f.rev);
+  TEST_ASSERT_EQUAL(RESCUE_SLOT_OK, f.state);
+}
+
+// --- the marker in the binary --------------------------------------------------
+
+static void test_the_marker_is_found_in_a_window_and_read_whole() {
+  const char image[] = "\xe9\x03junk SFRESCUE-SRC:f14a7b6:END more";
+  char head[RESCUE_SOURCE_HEAD_MAX + 1];
+  long at = rescueSourceHeadFind((const uint8_t*)image, sizeof(image) - 1, head, sizeof(head));
+  TEST_ASSERT_EQUAL(7, at);
+  TEST_ASSERT_EQUAL_STRING("f14a7b6", head);
+  // A longer head, as a big repository abbreviates.
+  const char longer[] = "SFRESCUE-SRC:f14a7b6c9d2:END";
+  TEST_ASSERT_EQUAL(0, rescueSourceHeadFind((const uint8_t*)longer, sizeof(longer) - 1, head, sizeof(head)));
+  TEST_ASSERT_EQUAL_STRING("f14a7b6c9d2", head);
+}
+
+static void test_the_prefix_alone_or_a_cut_marker_is_not_one() {
+  char head[RESCUE_SOURCE_HEAD_MAX + 1] = "x";
+  // The prefix as a literal of its own, then a real marker after it.
+  const char two[] = "SFRESCUE-SRC:\0 SFRESCUE-SRC:0123abc:END";
+  TEST_ASSERT_EQUAL(15, rescueSourceHeadFind((const uint8_t*)two, sizeof(two) - 1, head, sizeof(head)));
+  TEST_ASSERT_EQUAL_STRING("0123abc", head);
+  // Not hex, too short, no suffix, or the window ends inside it.
+  const char bad1[] = "SFRESCUE-SRC:zzzzzzz:END";
+  const char bad2[] = "SFRESCUE-SRC:abc:END";
+  const char bad3[] = "SFRESCUE-SRC:f14a7b6:EN";
+  TEST_ASSERT_EQUAL(-1, rescueSourceHeadFind((const uint8_t*)bad1, sizeof(bad1) - 1, head, sizeof(head)));
+  TEST_ASSERT_EQUAL(-1, rescueSourceHeadFind((const uint8_t*)bad2, sizeof(bad2) - 1, head, sizeof(head)));
+  TEST_ASSERT_EQUAL(-1, rescueSourceHeadFind((const uint8_t*)bad3, sizeof(bad3) - 1, head, sizeof(head)));
+  const char cut[] = "SFRESCUE-SRC:f14a7b6:END";
+  TEST_ASSERT_EQUAL(-1, rescueSourceHeadFind((const uint8_t*)cut, sizeof(cut) - 3, head, sizeof(head)));
+  TEST_ASSERT_EQUAL(-1, rescueSourceHeadFind((const uint8_t*)"", 0, head, sizeof(head)));
+}
+
+static void test_an_image_reads_its_own_marker() {
+  const char marker[] = RESCUE_SOURCE_MARKER_PREFIX "f14a7b6" RESCUE_SOURCE_MARKER_SUFFIX;
+  TEST_ASSERT_EQUAL(7, rescueSourceHeadLen(marker));
+  TEST_ASSERT_EQUAL_STRING_LEN("f14a7b6", rescueSourceHeadOfMarker(marker), 7);
+  TEST_ASSERT_TRUE(RESCUE_SOURCE_MARKER_MAX >= sizeof(marker) - 1);
 }
 
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_absent_partition_reports_absent);
   RUN_TEST(test_present_but_no_valid_image_reports_empty);
-  RUN_TEST(test_invalid_image_never_inherits_a_matching_record);
-  RUN_TEST(test_matching_record_at_running_rev_is_ok);
-  RUN_TEST(test_matching_record_behind_running_rev_is_stale_but_not_a_warning);
+  RUN_TEST(test_invalid_image_never_inherits_a_matching_record_or_marker);
+  RUN_TEST(test_the_same_source_head_is_ok_whatever_the_revs);
+  RUN_TEST(test_another_source_head_is_outdated_but_not_a_warning);
+  RUN_TEST(test_a_marker_identifies_the_image_without_a_record);
+  RUN_TEST(test_a_recorded_image_without_a_marker_is_of_unknown_vintage);
+  RUN_TEST(test_nothing_known_is_unidentified_and_a_warning);
+  RUN_TEST(test_sha_mismatch_drops_the_rev_not_the_marker);
+  RUN_TEST(test_a_build_without_its_own_head_cannot_call_a_slot_current);
   RUN_TEST(test_only_recovery_blocking_states_warn);
-  RUN_TEST(test_no_record_is_unidentified_not_stale);
-  RUN_TEST(test_sha_mismatch_demotes_to_unidentified);
-  RUN_TEST(test_missing_running_rev_reports_rev_without_staleness);
-  RUN_TEST(test_null_running_rev_is_safe);
-  RUN_TEST(test_record_with_empty_rev_is_unidentified);
+  RUN_TEST(test_record_with_empty_rev_is_not_identified);
   RUN_TEST(test_formatter_placeholder_rev_round_trips_as_unidentified);
   RUN_TEST(test_formatter_all_filtered_rev_is_unidentified);
   RUN_TEST(test_formatter_real_rev_round_trips_as_identified);
+  RUN_TEST(test_the_marker_is_found_in_a_window_and_read_whole);
+  RUN_TEST(test_the_prefix_alone_or_a_cut_marker_is_not_one);
+  RUN_TEST(test_an_image_reads_its_own_marker);
   return UNITY_END();
 }

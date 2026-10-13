@@ -241,16 +241,42 @@ static bool factoryImageSha(const esp_partition_t* part, uint8_t sha[32]) {
   return part != nullptr && esp_partition_get_sha256(part, sha) == ESP_OK;
 }
 
+// The rescue source head the image in the slot carries (#613), read off the
+// partition in 4 KB windows that overlap by a marker's length. Stops at the
+// marker, or at two erased windows in a row (the image has ended), or at the
+// end of the partition. Costs a read of the image at most, at refresh time.
+static bool factorySlotSourceHead(const esp_partition_t* part, char* out, size_t cap) {
+  out[0] = 0;
+  static uint8_t window[4096 + RESCUE_SOURCE_MARKER_MAX];
+  size_t carried = 0;  // the tail of the last window, for a marker that straddles two
+  int erasedRuns = 0;
+  for (size_t offset = 0; offset < part->size; offset += 4096) {
+    const size_t n = part->size - offset < 4096 ? part->size - offset : 4096;
+    if (esp_partition_read(part, offset, window + carried, n) != ESP_OK) return false;
+    bool erased = true;
+    for (size_t i = 0; i < n && erased; i++) erased = window[carried + i] == 0xFF;
+    if (erased && ++erasedRuns >= 2) return false;
+    if (!erased) erasedRuns = 0;
+    const size_t total = carried + n;
+    if (rescueSourceHeadFind(window, total, out, cap) >= 0) return true;
+    carried = total < RESCUE_SOURCE_MARKER_MAX ? total : RESCUE_SOURCE_MARKER_MAX;
+    memmove(window, window + total - carried, carried);
+  }
+  return false;
+}
+
 static RescueSlotFacts computeRescueSlotFacts() {
   const esp_partition_t* part = findFactory();
   if (part == nullptr) {
-    return rescueSlotFacts(false, false, SlotRecord(), false, GIT_REV);
+    return rescueSlotFacts(false, false, SlotRecord(), false, "", RESCUE_SOURCE_HEAD);
   }
 
   bool valid = factorySlotImageValid();
   SlotRecord rec;
   bool shaMatches = false;
+  char head[RESCUE_SOURCE_HEAD_MAX + 1] = {0};
   if (valid) {
+    factorySlotSourceHead(part, head, sizeof(head));
     Preferences prefs;
     if (prefs.begin(SF_NVS_NAMESPACE, true)) {
       rec = parseSlotRecord(nvsReadString(prefs, SF_NVS_KEY_SLOT_REC_FACTORY, "").c_str());
@@ -261,7 +287,7 @@ static RescueSlotFacts computeRescueSlotFacts() {
       shaMatches = slotRecordShaMatches(rec, sha);
     }
   }
-  return rescueSlotFacts(true, valid, rec, shaMatches, GIT_REV);
+  return rescueSlotFacts(true, valid, rec, shaMatches, head, RESCUE_SOURCE_HEAD);
 }
 
 void rescueSlotRefresh() {

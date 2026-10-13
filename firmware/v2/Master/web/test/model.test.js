@@ -276,7 +276,7 @@ test('the facts of the master and of a row board answer the same questions, coun
     stats: { now: { rssi: -52, txPower: 20, heap: 61440, minHeap: 36864, temp: 316, uptime: 5620,
                     i2cTx: 13780, i2cErr: 0, ntpAge: 5611 } },
     network: { gw: 'fail', self: 'ok' }, lastStart: { reset: 'Software reset', cause: 'asked for' },
-    rescue: { rev: 'bbb2222', state: 'stale', warn: false } }, [{ address: 1, supplyMinMv: 4850 }]);
+    rescue: { rev: 'bbb2222', state: 'ok', warn: false } }, [{ address: 1, supplyMinMv: 4850 }]);
   assert.deepEqual(master.map((g) => [g.title, g.folded]),
     [['Connection', false], ['Unit bus', false], ['Running', false], ['Firmware', false], ['Counters', true]]);
   const find = (groups, label) => groups.flatMap((g) => g.rows).find((r) => r[0] === label);
@@ -478,7 +478,7 @@ test('a self-test result reads as a sentence', () => {
 
 const FIRMWARE = {
   master: { id: 'wall-master', rev: 'aaa1111' },
-  rescue: { rev: 'f8da0fa', state: 'stale', warn: false },
+  rescue: { rev: 'f8da0fa', state: 'ok', warn: false },
   rowImage: { rev: 'aaa1111', size: 325351, packed: true },
   boards: [
     { id: 'wall-master', kind: 'master', rev: 'aaa1111', current: true,
@@ -505,7 +505,7 @@ test('a wall that is up to date says so line by line', () => {
     ['Stored image for row boards', 'no release known', 'aaa1111', 'the master’s build'],
     ['Unit firmware', '68b94c5', '21 of 21 units', 'current'],
     ['Unit bootloader', '506b3970', '21 of 21 units intact', 'current'],
-    ['Rescue image (master)', 'no release known', 'f8da0fa', 'older, fine'],
+    ['Rescue image (master)', 'no release known', 'f8da0fa', 'current'],
   ]);
   assert.deepEqual(rows.flatMap((r) => r.actions), []);
   assert.deepEqual(firmwareVerdict(rows), { cls: 'ok', title: 'Everything is up to date', why: '' });
@@ -545,7 +545,7 @@ test('what is behind is counted, and what can be started about it is offered', (
   const rows = firmwareRows(fw);
   assert.deepEqual(rows.map((r) => [r.cls, r.state]), [
     ['ok', 'running'], ['note', '1 board behind'], ['ok', 'another build, fine'], ['note', '3 units behind'],
-    ['bad', '1 unit damaged'], ['ok', 'older, fine']]);
+    ['bad', '1 unit damaged'], ['ok', 'current']]);
   assert.equal(rows[1].shouldBe, 'bbb2222');
   assert.match(rows[1].todo, /failed to install three times/);
   assert.deepEqual(rows.map((r) => r.actions.map((a) => [a.type, a.id, a.label, !!a.primary])), [

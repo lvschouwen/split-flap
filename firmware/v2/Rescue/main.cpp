@@ -22,8 +22,16 @@
 #include "NvsContract.h"  // namespace + keys shared with the other image
 #include "BuildVersion.h"
 #include "RescueIdentity.h"
+#include "RescueSourceHead.h"
 #include "RescueWeb.h"
 #include "RescueWifiPolicy.h"
+
+// #613: the rescue sources this image was built from, as a marker the master
+// finds in the factory slot (FactorySlot.cpp scans for it). Referenced by
+// RescueWeb.cpp, so the linker keeps it whole.
+extern const char RESCUE_SOURCE_MARKER[];
+const char RESCUE_SOURCE_MARKER[] =
+    RESCUE_SOURCE_MARKER_PREFIX RESCUE_SOURCE_HEAD RESCUE_SOURCE_MARKER_SUFFIX;
 
 static const char* NAME_PREFIX = "split-flap";
 

@@ -14,6 +14,7 @@
 #include "OtaUploadGate.h"  // shared gate / completion / stall rules
 #include "RescueSlotRecord.h"
 #include "RescueSlots.h"
+#include "RescueSourceHead.h"  // the marker this image carries (#613)
 #include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
 
 static String deviceName;
@@ -172,6 +173,8 @@ static void appendSlotJson(String& out, const SlotProbe& p, const char* label,
 // Slot inventory + exit target for the page. Flash reads from the async
 // task — quick bounded reads, same accepted exception class as the upload
 // path's flash writes (there is no other task to stage through here).
+extern const char RESCUE_SOURCE_MARKER[];  // main.cpp (#613)
+
 static String statusJson() {
   const esp_partition_t* running = esp_ota_get_running_partition();
   SlotProbe app0 = probeSlot(ESP_PARTITION_SUBTYPE_APP_OTA_0);
@@ -185,6 +188,9 @@ static String statusJson() {
   out += deviceName;  // validated identity ([a-z0-9-]) — JSON-safe as-is
   out += "\",\"rescue\":\"";
   out += GIT_REV;
+  // #613: the rescue sources this image was built from, off its own marker.
+  out += "\",\"sourceHead\":\"";
+  out.concat(rescueSourceHeadOfMarker(RESCUE_SOURCE_MARKER), rescueSourceHeadLen(RESCUE_SOURCE_MARKER));
   out += "\",\"online\":";
   out += rescueOnline() ? "true" : "false";
   char release[RESCUE_RELEASE_JSON_MAX];

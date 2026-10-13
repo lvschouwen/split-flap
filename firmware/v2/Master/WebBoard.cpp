@@ -175,6 +175,9 @@ void writeMaster(JsonObject root, const Gathered& g) {
   r["rev"] = jsonCopied(rescue.rev);
   r["state"] = rescueSlotStateLabel(rescue.state);
   r["warn"] = rescue.warn;
+  r["sourceHead"] = jsonCopied(rescue.sourceHead);  // #613
+  r["ownSourceHead"] = RESCUE_SOURCE_HEAD;
+  r["todo"] = rescue.todo;
   char reflash[REFLASH_JSON_CAP];
   buildReflashJson(reflash, sizeof(reflash), g.own.reflash);
   root["unitUpdate"] = serialized(String(reflash));
@@ -347,6 +350,9 @@ void handleFirmware(AsyncWebServerRequest* request) {
   r["rev"] = jsonCopied(rescue.rev);
   r["state"] = rescueSlotStateLabel(rescue.state);
   r["warn"] = rescue.warn;
+  r["sourceHead"] = jsonCopied(rescue.sourceHead);  // #613
+  r["ownSourceHead"] = RESCUE_SOURCE_HEAD;
+  r["todo"] = rescue.todo;
   FollowerImageFacts image;
   const bool stored = followerImageFacts(image);
   if (stored) {
