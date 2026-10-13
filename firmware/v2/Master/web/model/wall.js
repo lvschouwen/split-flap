@@ -106,10 +106,14 @@ export function notesList(wall, layout, boards, alphabet) {
 }
 
 // What the wall is showing, from the stream's "wall" topic: {mode, quiet,
-// timed, until}. A text shown for a time lies over the mode and ends by itself.
+// timed, held, until}. A text shown for a time lies over the mode and ends by
+// itself; a held one stays until the next text or a clear.
 export function showingText(show) {
   if (!show) return '';
   if (show.quiet) return 'Quiet: no flap moves until you switch Quiet off. The wall keeps what it shows.';
+  if (show.timed && show.held) {
+    return `Showing a text until the next one or a clear, then ${show.mode === 'clock' ? 'the clock' : 'the text before it'} again.`;
+  }
   if (show.timed) {
     const at = show.until && new Date(show.until * 1000);
     const two = (n) => String(n).padStart(2, '0');

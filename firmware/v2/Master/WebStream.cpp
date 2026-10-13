@@ -45,6 +45,7 @@ void buildWall(JsonDocument& doc, const WallSnapshot& wall, const DisplaySnapsho
   // A text shown for a time over the mode; when it ends, once the clock knows.
   if (mqttNotificationActive()) {
     doc["timed"] = true;
+    if (mqttNotificationHeld()) doc["held"] = true;  // #616: until the next text or a clear
     if (const uint32_t until = mqttNotificationEndsEpoch()) doc["until"] = until;
   }
   JsonArray rows = doc["rows"].to<JsonArray>();

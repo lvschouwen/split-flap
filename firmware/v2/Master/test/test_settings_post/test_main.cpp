@@ -208,6 +208,47 @@ static void test_dwell_with_text_is_consistent() {
   TEST_ASSERT_TRUE(settingsPostConsistent(post));
 }
 
+// #616: a hold is strictly true/false, needs its text, and not beside a dwell.
+static void test_hold_is_a_flag_of_a_transient_text_without_a_dwell() {
+  PendingSettingsPost post;
+  TEST_ASSERT_EQUAL(SettingsParamResult::Invalid, stageSettingsParam(post, PARAM_TRANSIENT_HOLD, "yes"));
+  TEST_ASSERT_EQUAL(SettingsParamResult::Accepted, stageSettingsParam(post, PARAM_TRANSIENT_HOLD, " true "));
+  TEST_ASSERT_TRUE(post.transientHoldProvided);
+  TEST_ASSERT_TRUE(post.transientHold);
+  TEST_ASSERT_FALSE(settingsPostConsistent(post));
+  stageSettingsParam(post, PARAM_TRANSIENT_TEXT, "LEAK");
+  TEST_ASSERT_TRUE(settingsPostConsistent(post));
+  stageSettingsParam(post, PARAM_TRANSIENT_DWELL, "60");
+  TEST_ASSERT_FALSE(settingsPostConsistent(post));
+  // "false" is no hold at all.
+  PendingSettingsPost none;
+  stageSettingsParam(none, PARAM_TRANSIENT_HOLD, "false");
+  TEST_ASSERT_TRUE(settingsPostConsistent(none));
+}
+
+// #625: a whole number 0..255 that belongs to a text.
+static void test_priority_is_a_small_whole_number_of_a_text() {
+  PendingSettingsPost post;
+  TEST_ASSERT_EQUAL(SettingsParamResult::Invalid, stageSettingsParam(post, PARAM_TEXT_PRIORITY, "-1"));
+  TEST_ASSERT_EQUAL(SettingsParamResult::Invalid, stageSettingsParam(post, PARAM_TEXT_PRIORITY, "256"));
+  TEST_ASSERT_EQUAL(SettingsParamResult::Invalid, stageSettingsParam(post, PARAM_TEXT_PRIORITY, "1.5"));
+  TEST_ASSERT_EQUAL(SettingsParamResult::Invalid, stageSettingsParam(post, PARAM_TEXT_PRIORITY, ""));
+  TEST_ASSERT_EQUAL(SettingsParamResult::Accepted, stageSettingsParam(post, PARAM_TEXT_PRIORITY, "255"));
+  TEST_ASSERT_EQUAL(255, post.textPriority);
+  TEST_ASSERT_FALSE(settingsPostConsistent(post));
+  stageSettingsParam(post, PARAM_INPUT_TEXT, "HELLO");
+  TEST_ASSERT_TRUE(settingsPostConsistent(post));
+  // Merged with its text, and carried by the transient block.
+  PendingSettingsPost shared, held;
+  stageSettingsParam(held, PARAM_TRANSIENT_TEXT, "LEAK");
+  stageSettingsParam(held, PARAM_TRANSIENT_HOLD, "true");
+  stageSettingsParam(held, PARAM_TEXT_PRIORITY, "100");
+  mergeSettingsPost(shared, held);
+  TEST_ASSERT_TRUE(shared.transientHold);
+  TEST_ASSERT_EQUAL(100, shared.textPriority);
+  TEST_ASSERT_TRUE(shared.textPriorityProvided);
+}
+
 // ---------------------------------------------------------------------------
 // settingsPostNeedsReboot: verdict for the "ok-reboot" response (#128).
 // ---------------------------------------------------------------------------
@@ -578,6 +619,8 @@ int main(int, char**) {
   RUN_TEST(test_transient_dwell_trimmed_and_bounded);
   RUN_TEST(test_dwell_without_text_is_inconsistent);
   RUN_TEST(test_dwell_with_text_is_consistent);
+  RUN_TEST(test_hold_is_a_flag_of_a_transient_text_without_a_dwell);
+  RUN_TEST(test_priority_is_a_small_whole_number_of_a_text);
   RUN_TEST(test_alignment_only_needs_no_reboot);
   RUN_TEST(test_device_name_change_needs_reboot);
   RUN_TEST(test_same_device_name_needs_no_reboot);

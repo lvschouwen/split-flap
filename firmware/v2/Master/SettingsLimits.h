@@ -21,3 +21,7 @@
 // sector): 802.11 SSID ceiling 32 bytes, WPA2-PSK passphrase ceiling 63.
 #define LEN_WIFI_SSID          33
 #define LEN_WIFI_PASSWORD      64
+
+// A text's priority (#625): 0..TEXT_PRIORITY_MAX, the top one is what
+// "force" meant (MqttHelpers.h).
+#define TEXT_PRIORITY_MAX     255

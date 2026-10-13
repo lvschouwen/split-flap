@@ -110,6 +110,8 @@ static void test_classifies_every_command_topic() {
   TEST_ASSERT_EQUAL(
       MqttCommand::Restart,
       classifyMqttCommandTopic(t, "splitflap/kitchen/restart/set"));
+  TEST_ASSERT_EQUAL(MqttCommand::Clear,
+                    classifyMqttCommandTopic(t, "splitflap/kitchen/text/clear"));  // #616
 }
 
 static void test_unknown_topics_fail_closed() {

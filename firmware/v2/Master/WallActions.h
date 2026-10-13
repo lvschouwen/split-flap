@@ -11,6 +11,11 @@
 //   {"name":"show","args":{"text":"DINNER","forS":300}}
 //       for 5 to 3600 seconds, then back to what the mode shows; on every
 //       row of the wall
+//   {"name":"show","args":{"text":"LEAK","hold":true}}
+//       over the mode until the next text or a clear (#616)
+//   {"name":"show","args":{"text":"FIRE","forS":60,"priority":255}}
+//       0..TEXT_PRIORITY_MAX (#625): a text lower than the one showing is
+//       refused; equal or higher replaces it; default 0
 //   {"name":"mode","args":{"mode":"clock"}}        clock | text
 //   {"name":"quiet","args":{"on":true}}
 // How long a text may be is the request body's limit; the wall shows what
@@ -25,11 +30,16 @@ inline bool wallActionIsContent(const char* name) {
   return strcmp(name, "show") == 0 || strcmp(name, "mode") == 0 || strcmp(name, "quiet") == 0;
 }
 
-// Is every key under args one of these two (nullptr = not used)?
-inline bool wallActionOnlyKeys(JsonVariantConst args, const char* a, const char* b) {
+// Is every key under args one of these (nullptr = not used)?
+inline bool wallActionOnlyKeys(JsonVariantConst args, const char* a, const char* b,
+                               const char* c = nullptr, const char* d = nullptr) {
   for (JsonPairConst pair : args.as<JsonObjectConst>()) {
     const char* key = pair.key().c_str();
-    if (strcmp(key, a) != 0 && (b == nullptr || strcmp(key, b) != 0)) return false;
+    if (strcmp(key, a) == 0) continue;
+    if (b != nullptr && strcmp(key, b) == 0) continue;
+    if (c != nullptr && strcmp(key, c) == 0) continue;
+    if (d != nullptr && strcmp(key, d) == 0) continue;
+    return false;
   }
   return true;
 }
@@ -40,11 +50,27 @@ inline const char* wallActionBuild(const char* name, JsonVariantConst args,
                                    PendingSettingsPost& post) {
   PendingSettingsPost built;
   if (strcmp(name, "show") == 0) {
-    if (!wallActionOnlyKeys(args, "text", "forS")) return "show takes args.text and args.forS";
+    if (!wallActionOnlyKeys(args, "text", "forS", "hold", "priority")) {
+      return "show takes args.text, args.forS or args.hold, and args.priority";
+    }
     JsonVariantConst text = args["text"];
     if (!text.is<const char*>()) return "args.text is the text to show";
     JsonVariantConst forS = args["forS"];
-    if (forS.isNull()) {
+    JsonVariantConst hold = args["hold"];
+    JsonVariantConst priority = args["priority"];
+    if (!hold.isNull() && !hold.is<bool>()) return "args.hold is true or false";
+    const bool held = hold | false;
+    if (held && !forS.isNull()) return "args.hold and args.forS do not go together";
+    if (!priority.isNull() &&
+        (!priority.is<long>() ||
+         stageSettingsParam(built, PARAM_TEXT_PRIORITY, String(priority.as<long>())) !=
+             SettingsParamResult::Accepted)) {
+      return "args.priority is a whole number, 0 to 255";
+    }
+    if (held) {
+      stageSettingsParam(built, PARAM_TRANSIENT_TEXT, String(text.as<const char*>()));
+      stageSettingsParam(built, PARAM_TRANSIENT_HOLD, String("true"));
+    } else if (forS.isNull()) {
       stageSettingsParam(built, PARAM_INPUT_TEXT, String(text.as<const char*>()));
       stageSettingsParam(built, PARAM_DEVICEMODE, String("text"));
     } else {

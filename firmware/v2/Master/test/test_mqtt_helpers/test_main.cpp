@@ -97,6 +97,43 @@ static void test_parse_empty_text_is_valid() {
   TEST_ASSERT_EQUAL_STRING("", text.c_str());
 }
 
+// ---- parseMqttTextRequest: hold and priority (#616/#625) ----
+static void test_request_defaults_are_a_dwell_at_priority_zero() {
+  MqttTextRequest r;
+  TEST_ASSERT_TRUE(parseMqttTextRequest(String("{\"text\":\"HI\"}"), r));
+  TEST_ASSERT_EQUAL_STRING("HI", r.text.c_str());
+  TEST_ASSERT_FALSE(r.hold);
+  TEST_ASSERT_EQUAL(0, r.priority);
+  TEST_ASSERT_EQUAL_INT32(MQTT_TEXT_DWELL_S, r.dwellSeconds);
+}
+static void test_request_hold_by_flag_or_zero_dwell() {
+  MqttTextRequest r;
+  TEST_ASSERT_TRUE(parseMqttTextRequest(String("{\"text\":\"LEAK\",\"hold\":true}"), r));
+  TEST_ASSERT_TRUE(r.hold);
+  TEST_ASSERT_TRUE(parseMqttTextRequest(String("{\"text\":\"LEAK\",\"dwell\":0}"), r));
+  TEST_ASSERT_TRUE(r.hold);
+  TEST_ASSERT_TRUE(parseMqttTextRequest(String("{\"text\":\"LEAK\",\"hold\":false,\"dwell\":30}"), r));
+  TEST_ASSERT_FALSE(r.hold);
+  TEST_ASSERT_EQUAL_INT32(30, r.dwellSeconds);
+  // A negative dwell is absent, not a hold.
+  TEST_ASSERT_TRUE(parseMqttTextRequest(String("{\"text\":\"A\",\"dwell\":-5}"), r));
+  TEST_ASSERT_FALSE(r.hold);
+  TEST_ASSERT_EQUAL_INT32(MQTT_TEXT_DWELL_S, r.dwellSeconds);
+}
+static void test_request_priority_is_clamped_and_force_is_the_top() {
+  MqttTextRequest r;
+  TEST_ASSERT_TRUE(parseMqttTextRequest(String("{\"text\":\"A\",\"priority\":100}"), r));
+  TEST_ASSERT_EQUAL(100, r.priority);
+  TEST_ASSERT_TRUE(parseMqttTextRequest(String("{\"text\":\"A\",\"priority\":999}"), r));
+  TEST_ASSERT_EQUAL(MQTT_TEXT_PRIORITY_MAX, r.priority);
+  TEST_ASSERT_TRUE(parseMqttTextRequest(String("{\"text\":\"A\",\"priority\":-3}"), r));
+  TEST_ASSERT_EQUAL(0, r.priority);
+  TEST_ASSERT_TRUE(parseMqttTextRequest(String("{\"text\":\"A\",\"force\":true,\"priority\":1}"), r));
+  TEST_ASSERT_EQUAL(MQTT_TEXT_PRIORITY_MAX, r.priority);
+  TEST_ASSERT_TRUE(parseMqttTextRequest(String("{\"text\":\"A\",\"force\":false}"), r));
+  TEST_ASSERT_EQUAL(0, r.priority);
+}
+
 // ---- MqttNotification state machine ----
 static void test_notification_inactive_by_default() {
   MqttNotification n;
@@ -245,6 +282,38 @@ static void test_notification_cancel_mid_dwell() {
   notificationCancel(n);
   TEST_ASSERT_FALSE(notificationTick(n, 2000));
   TEST_ASSERT_EQUAL_STRING("", n.text.c_str());
+}
+
+// #616: a held text has no deadline; a clear ends it and its priority.
+static void test_held_notification_stays_until_cancelled() {
+  MqttNotification n;
+  notificationHold(n, String("LEAK"), 100);
+  TEST_ASSERT_TRUE(notificationTick(n, 0UL));
+  TEST_ASSERT_TRUE(notificationTick(n, 4000000000UL));
+  TEST_ASSERT_TRUE(n.held);
+  TEST_ASSERT_EQUAL(100, n.priority);
+  notificationCancel(n);
+  TEST_ASSERT_FALSE(notificationTick(n, 4000000000UL));
+  TEST_ASSERT_FALSE(n.held);
+  TEST_ASSERT_EQUAL(0, n.priority);
+}
+
+// #625: one comparison, no queue.
+static void test_priority_admits_equal_or_higher_and_resets_with_the_text() {
+  MqttNotification n;
+  TEST_ASSERT_TRUE(notificationAdmits(n, 0));
+  notificationStart(n, String("BRAND"), 600, 1000UL, 100);
+  TEST_ASSERT_FALSE(notificationAdmits(n, 0));
+  TEST_ASSERT_FALSE(notificationAdmits(n, 99));
+  TEST_ASSERT_TRUE(notificationAdmits(n, 100));
+  TEST_ASSERT_TRUE(notificationAdmits(n, MQTT_TEXT_PRIORITY_MAX));
+  // The dwell ran out: anything goes again.
+  TEST_ASSERT_FALSE(notificationTick(n, 1000UL + 600000UL));
+  TEST_ASSERT_EQUAL(0, n.priority);
+  TEST_ASSERT_TRUE(notificationAdmits(n, 0));
+  // A text without a priority against one without: latest wins, as before.
+  notificationStart(n, String("A"), 60, 0UL);
+  TEST_ASSERT_TRUE(notificationAdmits(n, 0));
 }
 
 static void test_discovery_topics_per_entity() {
@@ -612,6 +681,11 @@ int main(int, char**) {
   RUN_TEST(test_parse_unicode_escape_is_decoded);
   RUN_TEST(test_parse_reads_the_objects_own_members_only);
   RUN_TEST(test_parse_empty_text_is_valid);
+  RUN_TEST(test_request_defaults_are_a_dwell_at_priority_zero);
+  RUN_TEST(test_request_hold_by_flag_or_zero_dwell);
+  RUN_TEST(test_request_priority_is_clamped_and_force_is_the_top);
+  RUN_TEST(test_held_notification_stays_until_cancelled);
+  RUN_TEST(test_priority_admits_equal_or_higher_and_resets_with_the_text);
   RUN_TEST(test_notification_inactive_by_default);
   RUN_TEST(test_notification_active_until_deadline);
   RUN_TEST(test_notification_expires_at_deadline);

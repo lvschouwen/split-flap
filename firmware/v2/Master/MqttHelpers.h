@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
+#include "SettingsLimits.h"  // TEXT_PRIORITY_MAX
 #include "UnitHealth.h"  // UnitFacts/UnitStatus for unitFleetRebootTotal (#368)
 
 // Pure MQTT logic for the Home Assistant integration (issue #121): payload
@@ -35,12 +36,35 @@ inline long clampDwellSeconds(long dwellSeconds) {
   return dwellSeconds;
 }
 
-// Reads {"text":"…","dwell":N}. Returns true iff `payload` is a JSON object
-// with a string "text" member of its own; textOut/dwellSecondsOut are written
-// only on success. "dwell" is optional (default MQTT_TEXT_DWELL_S) and
-// clamped; a dwell that is not a positive number counts as absent. On false
-// the caller treats the whole payload as plain text.
-inline bool parseMqttTextPayload(const String& payload, String& textOut, long& dwellSecondsOut) {
+// A text's priority (#625): 0..MQTT_TEXT_PRIORITY_MAX. A text with a lower
+// priority than the one showing (held or dwelling) is refused; equal or
+// higher replaces it, so callers that never set one see today's behaviour
+// (latest wins). The top priority is what "force" meant: it is the one
+// priority that passes quiet.
+#define MQTT_TEXT_PRIORITY_MAX TEXT_PRIORITY_MAX
+
+inline int clampTextPriority(long priority) {
+  if (priority < 0) return 0;
+  if (priority > MQTT_TEXT_PRIORITY_MAX) return MQTT_TEXT_PRIORITY_MAX;
+  return (int)priority;
+}
+
+// What a text/set payload asks for (#616/#625).
+struct MqttTextRequest {
+  String text;
+  long dwellSeconds = MQTT_TEXT_DWELL_S;  // clamped; meaningless while held
+  bool hold = false;                       // until the next text or a clear
+  int priority = 0;
+};
+
+// Reads {"text":"…","dwell":N,"hold":true,"priority":N,"force":true}.
+// Returns true iff `payload` is a JSON object with a string "text" member of
+// its own; `out` is written only on success. "dwell" is optional (default
+// MQTT_TEXT_DWELL_S) and clamped; a dwell of exactly 0 holds the text, as
+// "hold":true does; a dwell that is otherwise not a positive number counts as
+// absent. "force":true is the top priority. On false the caller treats the
+// whole payload as plain text.
+inline bool parseMqttTextRequest(const String& payload, MqttTextRequest& out) {
   JsonDocument doc;
   if (deserializeJson(doc, payload.c_str(), payload.length())) return false;
   JsonObjectConst object = doc.as<JsonObjectConst>();
@@ -48,11 +72,25 @@ inline bool parseMqttTextPayload(const String& payload, String& textOut, long& d
   JsonVariantConst text = object["text"];
   if (!text.is<const char*>()) return false;
 
-  long dwellSeconds = object["dwell"] | 0L;
+  MqttTextRequest r;
+  r.text = text.as<const char*>();
+  JsonVariantConst dwell = object["dwell"];
+  long dwellSeconds = dwell | 0L;
+  r.hold = (object["hold"] | false) || (dwell.is<long>() && dwellSeconds == 0);
   if (dwellSeconds <= 0) dwellSeconds = MQTT_TEXT_DWELL_S;
+  r.dwellSeconds = clampDwellSeconds(dwellSeconds);
+  r.priority = (object["force"] | false) ? MQTT_TEXT_PRIORITY_MAX
+                                         : clampTextPriority(object["priority"] | 0L);
+  out = r;
+  return true;
+}
 
-  textOut = text.as<const char*>();
-  dwellSecondsOut = clampDwellSeconds(dwellSeconds);
+// The text and dwell only (the callers that predate hold and priority).
+inline bool parseMqttTextPayload(const String& payload, String& textOut, long& dwellSecondsOut) {
+  MqttTextRequest r;
+  if (!parseMqttTextRequest(payload, r)) return false;
+  textOut = r.text;
+  dwellSecondsOut = r.dwellSeconds;
   return true;
 }
 
@@ -69,20 +107,43 @@ inline bool parseMqttTextPayload(const String& payload, String& textOut, long& d
 // both environments.
 struct MqttNotification {
   bool active = false;
+  bool held = false;  // #616: no deadline, until the next text or a clear
+  int priority = 0;   // #625: of the text showing; 0 again when it ends
   String text;
   uint32_t deadlineMs = 0;
 };
 
-inline void notificationStart(MqttNotification& n, const String& text, long dwellSeconds, uint32_t nowMs) {
+inline void notificationStart(MqttNotification& n, const String& text, long dwellSeconds, uint32_t nowMs,
+                              int priority = 0) {
   n.active = true;
+  n.held = false;
+  n.priority = priority;
   n.text = text;
   n.deadlineMs = nowMs + (uint32_t)clampDwellSeconds(dwellSeconds) * 1000UL;
 }
 
+// A text that stays until the next text or a clear (#616).
+inline void notificationHold(MqttNotification& n, const String& text, int priority) {
+  n.active = true;
+  n.held = true;
+  n.priority = priority;
+  n.text = text;
+  n.deadlineMs = 0;
+}
+
+// May a text of `priority` take the display (#625)? Always when nothing is
+// showing; otherwise only one of equal or higher priority.
+inline bool notificationAdmits(const MqttNotification& n, int priority) {
+  return !n.active || priority >= n.priority;
+}
+
 // Explicit mode change cancels an active notification (#130): a user who
 // just switched text/clock wants that NOW, not after the dwell runs out.
+// So does a clear (#616). The priority ends with the text.
 inline void notificationCancel(MqttNotification& n) {
   n.active = false;
+  n.held = false;
+  n.priority = 0;
   n.text = "";
 }
 
@@ -107,9 +168,9 @@ inline uint32_t notificationEndsEpoch(uint32_t nowEpoch, bool clockSet, long dwe
 // millis()-wraparound-safe via signed difference of fixed-width unsigned.
 inline bool notificationTick(MqttNotification& n, uint32_t nowMs) {
   if (!n.active) return false;
+  if (n.held) return true;
   if ((int32_t)(nowMs - n.deadlineMs) >= 0) {
-    n.active = false;
-    n.text = "";
+    notificationCancel(n);
     return false;
   }
   return true;

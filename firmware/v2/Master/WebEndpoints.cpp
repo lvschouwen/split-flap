@@ -280,6 +280,8 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       String transientText = pendingPost.transientText;
       long transientDwell = pendingPost.transientDwell;
       bool transientProvided = pendingPost.transientTextProvided;
+      const bool transientHold = pendingPost.transientHoldProvided && pendingPost.transientHold;  // #616
+      const int textPriority = pendingPost.textPriorityProvided ? (int)pendingPost.textPriority : 0;  // #625
       bool modeProvided = pendingPost.deviceModeProvided;
 
       // "Last Received" tracks messages/mode switches, not settings saves —
@@ -329,9 +331,17 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // #227: content that arrives while quiet is dropped, not queued. A
       // quiet toggle riding the same POST has been applied above, so "wake
       // and show this" works in one request.
-      if (quietBlocksContent(settings.quiet, false) &&
+      if (quietBlocksContent(settings.quiet, textPriority >= TEXT_PRIORITY_MAX) &&
           (messageProvided || transientProvided)) {
         SerialPrintln(F("web: text dropped (quiet)"));
+        messageProvided = false;
+        transientProvided = false;
+      }
+      // #625: a text under the priority of the one showing is refused. The
+      // handler answered 409 for this already; a text that arrived between
+      // its check and this drain is judged again.
+      if ((messageProvided || transientProvided) && !mqttNotificationAdmits(textPriority)) {
+        SerialPrintf("web: text refused (priority %d under the one showing)\n", textPriority);
         messageProvided = false;
         transientProvided = false;
       }
@@ -401,17 +411,18 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
                         transientText);
         } else if (wallShowActive()) {
           wallShowText(transientText, settings.alignment, settings.flapSpeed);
-          mqttStartNotificationDwell(transientDwell);
+          mqttStartNotification(transientDwell, transientHold, textPriority);
           SerialPrintln("Transient text routed to the wall: " + transientText);
         } else if (displayEnqueue(makeShowTextCommand(
                        transientText, settings.alignment,
                        settings.flapSpeed))) {
-          mqttStartNotificationDwell(transientDwell);
+          mqttStartNotification(transientDwell, transientHold, textPriority);
           SerialPrintln(
-              "Transient text (dwell " +
-              (transientDwell > 0 ? String(transientDwell) + " s"
-                                  : String("default")) +
-              "): " + transientText);
+              "Transient text (" +
+              (transientHold ? String("held")
+               : transientDwell > 0 ? "dwell " + String(transientDwell) + " s"
+                                    : String("default dwell")) +
+              ", priority " + String(textPriority) + "): " + transientText);
         } else {
           SerialPrintln("Display queue full at drain — transient DROPPED: " +
                         transientText);

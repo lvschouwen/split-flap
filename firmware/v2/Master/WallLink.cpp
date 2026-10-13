@@ -725,5 +725,9 @@ void wallLinkTaskMain(void*) {
   for (;;) {
     wdtFeed();
     pass();
+    // This task runs above the other network tasks on its core (#614): a
+    // socket that never stops being readable must not keep them from
+    // running. One tick a pass; an idle pass waits in select anyway.
+    vTaskDelay(1);
   }
 }

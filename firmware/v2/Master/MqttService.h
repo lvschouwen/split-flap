@@ -47,16 +47,24 @@ bool mqttNotificationActive();
 // seconds; 0 when there is none or the clock was not set when it began.
 uint32_t mqttNotificationEndsEpoch();
 
+// Any task: the text showing is held until the next text or a clear (#616).
+bool mqttNotificationHeld();
+
+// Any task: may a text of `priority` take the display (#625)? Always when
+// nothing is showing over the mode; otherwise only equal or higher.
+bool mqttNotificationAdmits(int priority);
+
 // Any task: cancel a running notification (explicit mode switch or message
-// send trumps it, v1 #130 rule). Staged; the tick applies it.
+// send trumps it, v1 #130 rule; a clear, #616). Staged; the tick applies it.
 void mqttCancelNotification();
 
 // Any task: arm the show-then-revert overlay for web transient text (#219)
 // the caller just queued to the display. The clockTask gate flips
 // immediately in the caller's task; the dwell deadline is stamped by the
-// next tick. dwellSeconds <= 0 -> the 600 s default. Works broker-less
-// (v1 rule: calibration transients exist without a broker).
-void mqttStartNotificationDwell(long dwellSeconds);
+// next tick. dwellSeconds <= 0 -> the 600 s default; `hold` keeps the text
+// until the next one or a clear (#616); `priority` is the text's (#625).
+// Works broker-less (v1 rule: calibration transients exist without a broker).
+void mqttStartNotification(long dwellSeconds, bool hold, int priority);
 
 // Any task: force-close the session before OTA flash writes begin (#116
 // freeze). Abrupt on purpose — the broker fires the retained "offline" LWT,

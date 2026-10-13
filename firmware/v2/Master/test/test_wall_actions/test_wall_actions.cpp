@@ -63,6 +63,36 @@ static void test_show_refuses_what_it_cannot_read() {
   TEST_ASSERT_NULL(build("show", "{\"text\":\"A\",\"forS\":3600}", post));
 }
 
+// #616/#625: a held text and a priority ride the show action.
+static void test_show_held_and_with_a_priority() {
+  PendingSettingsPost post;
+  TEST_ASSERT_NULL(build("show", "{\"text\":\"LEAK\",\"hold\":true,\"priority\":100}", post));
+  TEST_ASSERT_TRUE(post.transientTextProvided);
+  TEST_ASSERT_EQUAL_STRING("LEAK", post.transientText.c_str());
+  TEST_ASSERT_TRUE(post.transientHoldProvided);
+  TEST_ASSERT_TRUE(post.transientHold);
+  TEST_ASSERT_FALSE(post.transientDwellProvided);
+  TEST_ASSERT_FALSE(post.deviceModeProvided);
+  TEST_ASSERT_EQUAL(100, post.textPriority);
+  TEST_ASSERT_TRUE(post.textPriorityProvided);
+  TEST_ASSERT_TRUE(settingsPostConsistent(post));
+  // hold:false is a plain show; a priority goes with it too.
+  TEST_ASSERT_NULL(build("show", "{\"text\":\"A\",\"hold\":false,\"priority\":255}", post));
+  TEST_ASSERT_TRUE(post.inputTextProvided);
+  TEST_ASSERT_EQUAL(255, post.textPriority);
+  TEST_ASSERT_NULL(build("show", "{\"text\":\"A\",\"forS\":60,\"priority\":1}", post));
+  TEST_ASSERT_TRUE(post.transientDwellProvided);
+  TEST_ASSERT_EQUAL(1, post.textPriority);
+  // Not both, and only real values.
+  TEST_ASSERT_NOT_NULL(build("show", "{\"text\":\"A\",\"hold\":true,\"forS\":60}", post));
+  TEST_ASSERT_NOT_NULL(build("show", "{\"text\":\"A\",\"hold\":\"yes\"}", post));
+  TEST_ASSERT_NOT_NULL(build("show", "{\"text\":\"A\",\"priority\":256}", post));
+  TEST_ASSERT_NOT_NULL(build("show", "{\"text\":\"A\",\"priority\":-1}", post));
+  TEST_ASSERT_NOT_NULL(build("show", "{\"text\":\"A\",\"priority\":\"5\"}", post));
+  TEST_ASSERT_NOT_NULL(build("show", "{\"text\":\"A\",\"priority\":1.5}", post));
+  TEST_ASSERT_FALSE(post.pending);
+}
+
 static void test_mode_is_clock_or_text() {
   PendingSettingsPost post;
   TEST_ASSERT_NULL(build("mode", "{\"mode\":\"clock\"}", post));
@@ -94,6 +124,7 @@ int main(int, char**) {
   RUN_TEST(test_show_switches_to_text_and_carries_the_text);
   RUN_TEST(test_show_for_a_time_leaves_the_mode_alone);
   RUN_TEST(test_show_refuses_what_it_cannot_read);
+  RUN_TEST(test_show_held_and_with_a_priority);
   RUN_TEST(test_mode_is_clock_or_text);
   RUN_TEST(test_quiet_takes_a_real_boolean_only);
   return UNITY_END();

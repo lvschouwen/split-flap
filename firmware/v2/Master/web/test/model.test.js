@@ -106,6 +106,9 @@ test('the wall says what it is showing, and when a text shown for a time ends', 
   // The master's clock was not set when the text went up.
   assert.equal(showingText({ mode: 'clock', quiet: false, timed: true }),
                'Showing a text for a time, then the clock again.');
+  // Held until the next text or a clear (#616).
+  assert.equal(showingText({ mode: 'clock', quiet: false, timed: true, held: true }),
+               'Showing a text until the next one or a clear, then the clock again.');
   assert.equal(showingText({ mode: 'clock', quiet: true, timed: true, until }),
                'Quiet: no flap moves until you switch Quiet off. The wall keeps what it shows.');
 });

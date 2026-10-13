@@ -30,30 +30,6 @@ static void test_command_accepts_the_switch_payloads_only() {
   TEST_ASSERT_TRUE(q);
 }
 
-static void test_only_a_literal_json_true_forces_a_text() {
-  TEST_ASSERT_TRUE(quietTextForced("{\"text\":\"BRAND KEUKEN\",\"dwell\":600,\"force\":true}"));
-  TEST_ASSERT_TRUE(quietTextForced("{\"force\": true, \"text\":\"X\"}"));
-  TEST_ASSERT_TRUE(quietTextForced(" {\"text\":\"X\",\"force\":true } "));
-  TEST_ASSERT_FALSE(quietTextForced("{\"text\":\"X\",\"dwell\":60}"));
-  TEST_ASSERT_FALSE(quietTextForced("{\"text\":\"X\",\"force\":false}"));
-  TEST_ASSERT_FALSE(quietTextForced("{\"text\":\"X\",\"force\":\"true\"}"));
-  TEST_ASSERT_FALSE(quietTextForced("{\"text\":\"X\",\"force\":1}"));
-  TEST_ASSERT_FALSE(quietTextForced("{\"text\":\"X\",\"force\":trueish}"));
-  // Only the top-level key counts: not the word as a value, not a nested
-  // key, not the text itself.
-  TEST_ASSERT_FALSE(quietTextForced("{\"note\":\"force\",\"x\":true}"));
-  TEST_ASSERT_FALSE(quietTextForced("{\"meta\":{\"force\":true},\"text\":\"x\"}"));
-  TEST_ASSERT_FALSE(quietTextForced("{\"text\":\"\\\"force\\\":true\"}"));
-  TEST_ASSERT_FALSE(quietTextForced("{\"text\":\"force\"}"));
-  TEST_ASSERT_TRUE(quietTextForced("{\"a\":\"force\",\"b\":\"z\",\"force\":true}"));
-  TEST_ASSERT_TRUE(quietTextForced("{\n  \"text\": \"X\",\n  \"force\":\n    true\n}"));
-  TEST_ASSERT_TRUE(quietTextForced("{\"text\":\"a } b\",\"force\":true}"));
-  // A plain-text payload cannot force, whatever it says.
-  TEST_ASSERT_FALSE(quietTextForced("\"force\":true"));
-  TEST_ASSERT_FALSE(quietTextForced("force true"));
-  TEST_ASSERT_FALSE(quietTextForced(""));
-}
-
 static void test_quiet_drops_everything_but_a_forced_text() {
   TEST_ASSERT_FALSE(quietBlocksContent(false, false));
   TEST_ASSERT_FALSE(quietBlocksContent(false, true));
@@ -87,7 +63,6 @@ static void test_discovery_is_a_retained_command_switch() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_command_accepts_the_switch_payloads_only);
-  RUN_TEST(test_only_a_literal_json_true_forces_a_text);
   RUN_TEST(test_quiet_drops_everything_but_a_forced_text);
   RUN_TEST(test_discovery_is_a_retained_command_switch);
   return UNITY_END();

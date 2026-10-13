@@ -23,7 +23,9 @@
 //   {"name":"jog","target":{"unit":3},"args":{"steps":-4}}
 //       target.row "" or absent = the master's own row; one job at a time per row
 // What the wall shows (WallActions.h), done when accepted, 200 {"done":true}:
-//   {"name":"show","args":{"text":"HELLO\nWORLD"}}      and "forS":300 for a time
+//   {"name":"show","args":{"text":"HELLO\nWORLD"}}      and "forS":300 for a time,
+//       "hold":true until the next text or a clear, "priority":0..255 (#616/#625)
+//   {"name":"clear"}                                     the text over the mode comes down
 //   {"name":"mode","args":{"mode":"clock"}}
 //   {"name":"quiet","args":{"on":true}}
 //   {"name":"stop"}                                      abort and blank every row
@@ -56,6 +58,7 @@
 #include "ReflashPlan.h"
 #include "ReleaseUpdate.h"
 #include "Tasks.h"
+#include "MqttService.h"  // the overlay: priority, clear (#616/#625)
 #include "WallActions.h"
 #include "WallFind.h"
 #include "WallJobs.h"
@@ -349,9 +352,14 @@ void handleContent(AsyncWebServerRequest* request, const char* name, JsonVariant
     return sendError(request, 400, refusal);
   }
   // Text for a quiet wall is dropped when it is drained: say so here rather
-  // than accept what will not be shown.
-  if ((post.inputTextProvided || post.transientTextProvided) && webQuietNow()) {
+  // than accept what will not be shown. The top priority passes (#625).
+  const bool text = post.inputTextProvided || post.transientTextProvided;
+  const int priority = post.textPriorityProvided ? (int)post.textPriority : 0;
+  if (text && priority < TEXT_PRIORITY_MAX && webQuietNow()) {
     return sendError(request, 409, "the wall is quiet: turn quiet off to show text");
+  }
+  if (text && !mqttNotificationAdmits(priority)) {
+    return sendError(request, 409, "a text of higher priority is showing");
   }
   bool needsReboot = false;
   bool deviceNameChanged = false;
@@ -362,6 +370,14 @@ void handleContent(AsyncWebServerRequest* request, const char* name, JsonVariant
     case WebStage::QueueFull:
       return sendError(request, 503, "the display queue is full, try again in a moment");
   }
+}
+
+// #616: the text shown over the mode comes down; the mode content returns
+// when the flaps may move. Passes quiet, as it moves nothing itself.
+void handleClear(AsyncWebServerRequest* request) {
+  SerialPrintln(F("Text cleared through the API"));
+  mqttCancelNotification();
+  sendDone(request);
 }
 
 void handleStop(AsyncWebServerRequest* request) {
@@ -481,6 +497,7 @@ void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   }
   if (strcmp(name, "update") == 0) return handleUpdateRetry(request, body, table, generation);
   if (wallActionIsContent(name)) return handleContent(request, name, body);
+  if (strcmp(name, "clear") == 0) return handleClear(request);
   if (strcmp(name, "stop") == 0) return handleStop(request);
   if (strcmp(name, "restart") == 0) return handleRestart(request, body, table, generation);
   if (strcmp(name, "find-rows") == 0) return handleFindRows(request);

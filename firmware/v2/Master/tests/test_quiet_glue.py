@@ -27,8 +27,9 @@ def test_clock_ticker_stands_down_before_any_content_path():
 def test_mqtt_text_is_dropped_unless_forced():
     code = _code(MASTER / "MqttService.cpp")
     text = code[code.index("case MqttCommand::Text:"):]
-    gate = text.index("quietBlocksContent(tasksQuiet(), quietTextForced(payload))")
-    assert gate < text.index("notificationStart("), "the gate must sit before the notification is shown"
+    # The top priority is what "force" meant (#625).
+    gate = text.index("quietBlocksContent(tasksQuiet(), req.priority >= MQTT_TEXT_PRIORITY_MAX)")
+    assert gate < text.index("showTextNow("), "the gate must sit before the text is shown"
     assert "subscribe(mqttQuietCmdTopic" in code
     assert "webMqttApplyQuiet(" in code
 
@@ -36,7 +37,7 @@ def test_mqtt_text_is_dropped_unless_forced():
 def test_web_drain_drops_text_after_applying_a_quiet_toggle():
     code = _code(MASTER / "WebEndpoints.cpp")
     applied = code.index("applySettingsPost(pendingPost, settings, store);")
-    drop = code.index("quietBlocksContent(settings.quiet, false)")
+    drop = code.index("quietBlocksContent(settings.quiet, textPriority >= TEXT_PRIORITY_MAX)")
     assert applied < drop, "a quiet toggle riding the POST must be applied first"
     block = code[drop:drop + 400]
     assert "messageProvided = false;" in block and "transientProvided = false;" in block
@@ -67,7 +68,7 @@ def test_the_row_board_reads_the_flag_and_holds_its_frame():
 
 def test_the_web_drain_hands_text_to_the_wall_only_after_the_quiet_drop():
     code = _code(MASTER / "WebEndpoints.cpp")
-    assert code.index("quietBlocksContent(settings.quiet, false)") < code.index("wallShowText(")
+    assert code.index("quietBlocksContent(settings.quiet, textPriority >= TEXT_PRIORITY_MAX)") < code.index("wallShowText(")
 
 
 def test_the_link_task_tells_the_rows_the_quiet_state_every_pass():

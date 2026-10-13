@@ -72,12 +72,18 @@ static uint32_t mqttNextTelemetryMs = 0;
 static std::atomic<bool> stopForOtaRequested{false};
 static std::atomic<bool> resumeAfterOtaRequested{false};
 static std::atomic<bool> cancelNotificationRequested{false};
-// Web transient dwell request (#219), seconds; 0 = none. The requester
-// pre-applies the 600 s default so 0 stays an unambiguous "no request".
+// Web transient request (#219/#616/#625): the fields are written before the
+// flag (release) and read after it (acquire). The dwell is pre-applied to
+// the 600 s default by the requester.
+static std::atomic<bool> transientRequested{false};
 static std::atomic<long> transientDwellRequested{0};
+static std::atomic<bool> transientHoldRequested{false};
+static std::atomic<int> transientPriorityRequested{0};
 static std::atomic<bool> discoveryClearRequested{false};
 static std::atomic<bool> connectedAtomic{false};
 static std::atomic<bool> notifActiveAtomic{false};
+static std::atomic<bool> notifHeldAtomic{false};
+static std::atomic<int> notifPriorityAtomic{0};
 static std::atomic<uint32_t> notifEndsAtomic{0};
 
 // Callback -> tick hand-off (same task here, but callbacks stay dumb —
@@ -266,16 +272,47 @@ static void publishMqttDiagnostics() {
                      true, webTimezoneSnapshot().c_str());
 }
 
+// mqttTask: the overlay's mirrors for the other tasks, from its state.
+static void mirrorNotification() {
+  notifPriorityAtomic.store(mqttNotification.priority);
+  notifHeldAtomic.store(mqttNotification.held);
+  notifActiveAtomic.store(mqttNotification.active);
+  if (!mqttNotification.active || mqttNotification.held) notifEndsAtomic.store(0);
+}
+
 static void cancelNotificationLocal() {
   notificationCancel(mqttNotification);
-  notifActiveAtomic.store(false);
-  notifEndsAtomic.store(0);
+  mirrorNotification();
 }
 
 // mqttTask: a notification of `dwellSeconds` has just been started.
 static void noteNotificationEnd(long dwellSeconds) {
   const time_t now = time(nullptr);
   notifEndsAtomic.store(notificationEndsEpoch((uint32_t)now, clockIsTimeSynced(now), dwellSeconds));
+}
+
+// mqttTask: the overlay takes `text` as asked (#616/#625). The text itself
+// was handed to the display or the wall by the caller.
+static void startNotificationLocal(const String& text, const MqttTextRequest& req) {
+  if (req.hold) {
+    notificationHold(mqttNotification, text, req.priority);
+    mirrorNotification();
+  } else {
+    notificationStart(mqttNotification, text, req.dwellSeconds, millis(), req.priority);
+    mirrorNotification();
+    noteNotificationEnd(req.dwellSeconds);
+  }
+}
+
+// mqttTask: hands a text to the wall (every row board, #566) or, on a master
+// on its own, to the display. False when the display queue is full.
+static bool showTextNow(const String& text) {
+  WebContentSnapshot content = webDisplayContentSnapshot();
+  if (wallShowActive()) {
+    wallShowText(text, content.alignment, content.flapSpeed);
+    return true;
+  }
+  return displayEnqueue(makeShowTextCommand(text, content.alignment, content.flapSpeed));
 }
 
 // Device renamed (#125): while this run still IS the old identity, blank
@@ -373,40 +410,54 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
         webRequestReboot("restart command via MQTT/HA");
       }
       break;
+    case MqttCommand::Clear:
+      // #616: takes the text down, whatever the payload. Passes quiet: the
+      // flaps do not move for it, the mode content returns when they may.
+      SerialPrintln(F("MQTT: text cleared"));
+      cancelNotificationLocal();
+      break;
     case MqttCommand::Text: {
-      String text;
-      long dwellSeconds = MQTT_TEXT_DWELL_S;
-      if (!parseMqttTextPayload(payload, text, dwellSeconds)) {
+      MqttTextRequest req;
+      if (!parseMqttTextRequest(payload, req)) {
         // Malformed/plain payload → show it verbatim with the default dwell.
-        text = payload;
-        dwellSeconds = MQTT_TEXT_DWELL_S;
+        req = MqttTextRequest();
+        req.text = payload;
       }
+      if (req.text.length() == 0) {  // #616: an empty text is a clear
+        SerialPrintln(F("MQTT: text cleared (empty text)"));
+        cancelNotificationLocal();
+        break;
+      }
+      const String& text = req.text;
       // Producer gate (#205): while a reflash job runs nothing display-
       // mutating queues. HA commands are live-only — drop, don't defer.
       if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
-        SerialPrintln("MQTT: notification dropped (reflash running): " + text);
+        SerialPrintln("MQTT: text dropped (unit update running): " + text);
         break;
       }
-      // Quiet (#227): dropped, not deferred — unless the sender forces it.
-      if (quietBlocksContent(tasksQuiet(), quietTextForced(payload))) {
-        SerialPrintln("MQTT: notification dropped (quiet): " + text);
+      // Quiet (#227): dropped, not deferred — unless the sender forces it,
+      // which is the top priority (#625).
+      if (quietBlocksContent(tasksQuiet(), req.priority >= MQTT_TEXT_PRIORITY_MAX)) {
+        SerialPrintln("MQTT: text dropped (quiet): " + text);
         break;
       }
-      // With row boards the notification deliberately stays on this master's
-      // own row; the wall's own-row re-show restores its piece after the dwell.
-      WebContentSnapshot content = webDisplayContentSnapshot();
-      DisplayCommand cmd =
-          makeShowTextCommand(text, content.alignment, content.flapSpeed);
-      if (!displayEnqueue(cmd)) {
-        SerialPrintln("MQTT: notification dropped (display queue full): " +
-                      text);
+      // #625: a lower priority than the text showing is refused.
+      if (!notificationAdmits(mqttNotification, req.priority)) {
+        SerialPrintf("MQTT: text refused (priority %d under the %d showing): %s\n",
+                     req.priority, mqttNotification.priority, text.c_str());
         break;
       }
-      SerialPrintf("MQTT: notification (dwell %ld s): %s\n", dwellSeconds,
-                   text.c_str());
-      notificationStart(mqttNotification, text, dwellSeconds, millis());
-      noteNotificationEnd(dwellSeconds);
-      notifActiveAtomic.store(true);
+      if (!showTextNow(text)) {
+        SerialPrintln("MQTT: text dropped (display queue full): " + text);
+        break;
+      }
+      if (req.hold) {
+        SerialPrintf("MQTT: text held (priority %d): %s\n", req.priority, text.c_str());
+      } else {
+        SerialPrintf("MQTT: text for %ld s (priority %d): %s\n", req.dwellSeconds,
+                     req.priority, text.c_str());
+      }
+      startNotificationLocal(text, req);
       break;
     }
     case MqttCommand::None:
@@ -779,16 +830,16 @@ void mqttServiceTick() {
   // dwell/text — v1's single-notification-slot last-write-wins, with the
   // tick boundary deciding "later" — an accepted race.
   if (cancelNotificationRequested.exchange(false)) cancelNotificationLocal();
-  long transientDwell = transientDwellRequested.exchange(0);
-  if (transientDwell > 0) {
-    transientTextStart(mqttNotification, String(), transientDwell, millis());
-    noteNotificationEnd(transientDwell);
-    notifActiveAtomic.store(true);
+  if (transientRequested.exchange(false, std::memory_order_acquire)) {
+    MqttTextRequest req;
+    req.hold = transientHoldRequested.load();
+    req.priority = transientPriorityRequested.load();
+    req.dwellSeconds = transientDwellRequested.load();
+    startNotificationLocal(String(), req);
   }
   if (mqttNotification.active &&
       !notificationTick(mqttNotification, millis())) {
-    notifActiveAtomic.store(false);
-    notifEndsAtomic.store(0);
+    mirrorNotification();
     SerialPrintln(F("Notification/transient expired — reverting"));
   }
 
@@ -828,6 +879,7 @@ void mqttServiceTick() {
     mqttClient.subscribe(mqttCmdTopics.speed.c_str(), 0);
     mqttClient.subscribe(mqttCmdTopics.alignment.c_str(), 0);
     mqttClient.subscribe(mqttCmdTopics.restart.c_str(), 0);
+    mqttClient.subscribe(mqttCmdTopics.clear.c_str(), 0);  // #616
     mqttClient.subscribe(mqttQuietCmdTopic.c_str(), 0);  // #227
     mqttClient.publish(mqttTopicAvailability.c_str(), 1, true, "online");
     publishMqttDiscovery();
@@ -870,6 +922,12 @@ bool mqttIsConnected() { return mqttInitialised && connectedAtomic.load(); }
 
 bool mqttNotificationActive() { return notifActiveAtomic.load(); }
 
+bool mqttNotificationHeld() { return notifHeldAtomic.load(); }
+
+bool mqttNotificationAdmits(int priority) {
+  return !notifActiveAtomic.load() || priority >= notifPriorityAtomic.load();
+}
+
 uint32_t mqttNotificationEndsEpoch() { return notifEndsAtomic.load(); }
 
 // Must NOT be gated on mqttInitialised: broker-less devices still clear the
@@ -877,15 +935,20 @@ uint32_t mqttNotificationEndsEpoch() { return notifEndsAtomic.load(); }
 // from MQTT state (v1 cancelActiveNotification rule).
 void mqttCancelNotification() { cancelNotificationRequested.store(true); }
 
-// See MqttService.h (#219). The default is pre-applied here because 0 is
-// the staging atomic's "no request" sentinel.
-void mqttStartNotificationDwell(long dwellSeconds) {
+// See MqttService.h (#219/#616/#625).
+void mqttStartNotification(long dwellSeconds, bool hold, int priority) {
   transientDwellRequested.store(
       dwellSeconds > 0 ? dwellSeconds : TRANSIENT_TEXT_DEFAULT_DWELL_SECONDS);
-  // Gate flips from the caller's task, not the tick: the 1 Hz clock ticker
-  // must not sneak a mode re-show in behind the just-queued transient
-  // during the <=10 ms until the tick stamps the deadline.
+  transientHoldRequested.store(hold);
+  transientPriorityRequested.store(priority);
+  // The gate and the priority flip from the caller's task, not the tick: the
+  // 1 Hz clock ticker must not sneak a mode re-show in behind the
+  // just-queued transient during the <=10 ms until the tick stamps the
+  // deadline, and a second text in that window is judged against this one.
+  notifPriorityAtomic.store(priority);
+  notifHeldAtomic.store(hold);
   notifActiveAtomic.store(true);
+  transientRequested.store(true, std::memory_order_release);
 }
 
 void mqttStopForOta() {

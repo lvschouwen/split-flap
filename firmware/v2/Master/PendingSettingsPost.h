@@ -32,6 +32,8 @@
 #define PARAM_INPUT_TEXT      "inputText"
 #define PARAM_TRANSIENT_TEXT  "transientText"
 #define PARAM_TRANSIENT_DWELL "transientDwell"
+#define PARAM_TRANSIENT_HOLD  "transientHold"   // #616: until the next text or a clear
+#define PARAM_TEXT_PRIORITY   "textPriority"    // #625: 0..TEXT_PRIORITY_MAX
 #define PARAM_TIMEZONE        "timezone"
 #define PARAM_DEVICE_NAME     "deviceName"
 #define PARAM_MQTT_HOST       "mqttHost"
@@ -55,6 +57,10 @@ struct PendingSettingsPost {
   String transientText; bool transientTextProvided = false;
   long transientDwell = 0;
   bool transientDwellProvided = false;
+  bool transientHold = false;  // #616
+  bool transientHoldProvided = false;
+  long textPriority = 0;       // #625
+  bool textPriorityProvided = false;
   String timezone;      bool timezoneProvided = false;
   String deviceName;    bool deviceNameProvided = false;
   String mqttHost;      bool mqttHostProvided = false;
@@ -120,6 +126,31 @@ inline SettingsParamResult stageSettingsParam(PendingSettingsPost& post,
     if (!isValidTransientDwellValue(trimmed)) return SettingsParamResult::Invalid;
     post.transientDwell = trimmed.toInt();
     post.transientDwellProvided = true;
+    return SettingsParamResult::Accepted;
+  }
+
+  // #616: strictly "true"/"false", like every flag below.
+  if (name == PARAM_TRANSIENT_HOLD) {
+    String trimmed = rawValue;
+    trimmed.trim();
+    if (trimmed != "true" && trimmed != "false") return SettingsParamResult::Invalid;
+    post.transientHold = trimmed == "true";
+    post.transientHoldProvided = true;
+    return SettingsParamResult::Accepted;
+  }
+
+  // #625: a whole number 0..MQTT_TEXT_PRIORITY_MAX, digits only.
+  if (name == PARAM_TEXT_PRIORITY) {
+    String trimmed = rawValue;
+    trimmed.trim();
+    if (trimmed.length() == 0 || trimmed.length() > 3) return SettingsParamResult::Invalid;
+    for (unsigned int i = 0; i < trimmed.length(); i++) {
+      if (trimmed[i] < '0' || trimmed[i] > '9') return SettingsParamResult::Invalid;
+    }
+    const long value = trimmed.toInt();
+    if (value > TEXT_PRIORITY_MAX) return SettingsParamResult::Invalid;
+    post.textPriority = value;
+    post.textPriorityProvided = true;
     return SettingsParamResult::Accepted;
   }
 
@@ -257,7 +288,17 @@ inline SettingsParamResult stageSettingsParam(PendingSettingsPost& post,
 // post — accepting a text-less dwell and silently dropping it would report
 // a false ok.
 inline bool settingsPostConsistent(const PendingSettingsPost& post) {
-  return !(post.transientDwellProvided && !post.transientTextProvided);
+  if (post.transientDwellProvided && !post.transientTextProvided) return false;
+  // #616: a hold belongs to a text shown over the mode, and not beside a dwell.
+  if (post.transientHoldProvided && post.transientHold &&
+      (!post.transientTextProvided || post.transientDwellProvided)) {
+    return false;
+  }
+  // #625: a priority belongs to a text.
+  if (post.textPriorityProvided && !post.transientTextProvided && !post.inputTextProvided) {
+    return false;
+  }
+  return true;
 }
 
 // Verdict for the "ok-reboot" response (#128): identity and MQTT changes
@@ -285,7 +326,10 @@ inline void mergeSettingsPost(PendingSettingsPost& shared,
     shared.transientDwell = accepted.transientDwell;
     shared.transientTextProvided = true;
     shared.transientDwellProvided = accepted.transientDwellProvided;
+    shared.transientHold = accepted.transientHold;
+    shared.transientHoldProvided = accepted.transientHoldProvided;
   }
+  if (accepted.textPriorityProvided) { shared.textPriority = accepted.textPriority; shared.textPriorityProvided = true; }
   if (accepted.timezoneProvided)   { shared.timezone   = accepted.timezone;   shared.timezoneProvided   = true; }
   if (accepted.deviceNameProvided) { shared.deviceName = accepted.deviceName; shared.deviceNameProvided = true; }
   if (accepted.mqttHostProvided)   { shared.mqttHost   = accepted.mqttHost;   shared.mqttHostProvided   = true; }
