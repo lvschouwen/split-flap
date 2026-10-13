@@ -28,6 +28,39 @@ static void test_foreign_origins_rejected() {
   TEST_ASSERT_FALSE(lanOriginAllowed("null"));
 }
 
+// #612: the board's own IPv6 address, in brackets as a URL carries it.
+static void test_ipv6_literals_of_the_boards_own() {
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://[fe80::1a2b:3c4d:5e6f:7a8b]"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://[fe80::1]:8080"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://[fd12:3456::7]"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://[2a02:1234:5678::9]"));
+  TEST_ASSERT_TRUE(lanOriginAllowed("http://[::1]"));
+  TEST_ASSERT_TRUE(lanHostIsLocal("[FE80::1%25wlan0]"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("https://[fe80::1]"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://[::]"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://[::ffff:8.8.8.8]"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://[fe80::1"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://[fe80:::1]"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://[fe80::1::2]"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://[fe80::12345]"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://[1:2:3:4:5:6:7:8:9]"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://[1:2:3:4:5:6:7]"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://[fe80::g]"));
+  TEST_ASSERT_FALSE(lanOriginAllowed("http://fe80::1"));
+  uint8_t a[16];
+  TEST_ASSERT_TRUE(lanParseIpv6("1:2:3:4:5:6:7:8", a));
+  TEST_ASSERT_EQUAL_HEX8(0x08, a[15]);
+  TEST_ASSERT_TRUE(lanParseIpv6("fe80::", a));
+  TEST_ASSERT_EQUAL_HEX8(0xfe, a[0]);
+  TEST_ASSERT_EQUAL_HEX8(0x00, a[15]);
+  TEST_ASSERT_TRUE(lanParseIpv6("::1", a));
+  TEST_ASSERT_TRUE(lanPrivateIpv6(a));
+  // Same origin holds for a bracketed host too.
+  TEST_ASSERT_TRUE(lanSameOrigin("http://[FE80::1]", "[fe80::1]:80"));
+  TEST_ASSERT_FALSE(lanCsrfReject(true, true, "http://[fe80::1]", "[fe80::1]"));
+  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "http://[fe80::2]", "[fe80::1]"));
+}
+
 static void test_same_origin() {
   TEST_ASSERT_TRUE(lanSameOrigin("http://192.168.15.90", "192.168.15.90"));
   TEST_ASSERT_TRUE(lanSameOrigin("http://split-flap.local", "Split-Flap.LOCAL"));
@@ -64,6 +97,7 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_lan_origins_allowed);
   RUN_TEST(test_foreign_origins_rejected);
+  RUN_TEST(test_ipv6_literals_of_the_boards_own);
   RUN_TEST(test_same_origin);
   RUN_TEST(test_csrf_reject);
   return UNITY_END();

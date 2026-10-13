@@ -82,6 +82,8 @@ Highlights:
 - **MQTT / Home Assistant** — see below.
 - **Verdicts and history** — every board and unit is judged working, worth knowing or needing attention, with the reason; what happened on the wall is kept as a history. The master's board screen shows heap, load, I2C traffic, MQTT state and NTP sync age.
 
+The master takes IPv6 addresses beside its IPv4 one when the network hands them out — a link-local one always, a global one when the router announces a prefix — and the page and the API answer on them; `GET /api/v2/board/<master>` lists them under `ipv6`. The operator API has no login: it relies on the network's firewall, for IPv6 as for IPv4. A global IPv6 address is reachable from the internet unless the router blocks inbound connections, as most do by default; check yours before relying on it. The row boards and the rescue image stay on IPv4.
+
 ## The units (Arduino Nano)
 
 Each split-flap unit is an Arduino Nano on a custom PCB, driving a **28BYJ-48** 12 V stepper through a **ULN2003** and homing the drum against a **KY-003 hall sensor** + magnet. Per-unit calibration (step offset) and the I2C address live in the Nano's EEPROM.

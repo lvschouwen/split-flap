@@ -88,6 +88,35 @@ static std::atomic<bool> radioBusyFlag{true};
 
 bool wifiRadioBusy() { return radioBusyFlag.load(std::memory_order_relaxed); }
 
+// #612: an IPv6 address arrived (the global one can come after the board
+// reported connected). Counted here, read by the tick on netTask.
+static std::atomic<uint32_t> ip6Arrivals{0};
+static uint32_t ip6Seen = 0;
+
+static void onWifiIp6Event(WiFiEvent_t event, WiFiEventInfo_t) {
+  if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP6) ip6Arrivals.fetch_add(1, std::memory_order_relaxed);
+}
+
+String wifiIpv6LinkLocal() {
+  return WiFi.STA.hasLinkLocalIPv6() ? WiFi.STA.linkLocalIPv6().toString() : String();
+}
+
+String wifiIpv6Global() {
+  return WiFi.STA.hasGlobalIPv6() ? WiFi.STA.globalIPv6().toString() : String();
+}
+
+// Says what arrived, once per arrival, from netTask.
+static bool ip6Tick() {
+  const uint32_t arrivals = ip6Arrivals.load(std::memory_order_relaxed);
+  if (arrivals == ip6Seen) return false;
+  ip6Seen = arrivals;
+  const String linkLocal = wifiIpv6LinkLocal();
+  const String global = wifiIpv6Global();
+  SerialPrintln("IPv6: link-local " + (linkLocal.length() ? linkLocal : String("none")) +
+                ", global " + (global.length() ? global : String("none")));
+  return true;
+}
+
 static void onWifiStaEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   if (event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED) return;
   lastJoinDisconnectReason.store((uint8_t)info.wifi_sta_disconnected.reason,
@@ -123,6 +152,7 @@ void wifiServiceInit(AsyncWebServer& server, MasterSettings& settings,
   }
   // #328: supplement setAutoReconnect with the event-driven re-kick above.
   WiFi.onEvent(onWifiStaEvent, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  WiFi.onEvent(onWifiIp6Event, ARDUINO_EVENT_WIFI_STA_GOT_IP6);  // #612
 }
 
 void wifiStagePortalConfig(const String& ssid, const String& pass) {
@@ -290,6 +320,11 @@ static void startJoin() {
   lastJoinDisconnectReason.store(0, std::memory_order_relaxed);  // 0 = none seen
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  // #612: addresses beside the IPv4 one — link-local always, a global one by
+  // SLAAC when the router announces a prefix. Before begin(), on the station
+  // interface only; the page and the API answer on them (the server listens
+  // on any address type) and mDNS answers AAAA for them.
+  WiFi.enableIPv6();
   // Before begin(): no join burst above the ladder. A refusal is retried
   // briefly; joining at the SDK default beats a board with no network.
   for (int attempt = 0; attempt < 3 && !txPowerStep(WifiTxPhase::Joining);
@@ -376,8 +411,11 @@ static void ownRowNameTick() {
   const uint32_t ip = (uint32_t)WiFi.localIP();
   if (ip == 0) return;  // between links: nothing to answer with
   const bool retryDue = retryAtMs != 0 && (int32_t)(millis() - retryAtMs) >= 0;
-  if (seenAny && generation == seenGeneration && ip == ownRowIp && !retryDue) return;
+  static uint32_t seenIp6 = 0;
+  const uint32_t ip6 = ip6Arrivals.load(std::memory_order_relaxed);
+  if (seenAny && generation == seenGeneration && ip == ownRowIp && ip6 == seenIp6 && !retryDue) return;
   seenGeneration = generation;
+  seenIp6 = ip6;
   seenAny = true;
   retryAtMs = 0;
   static WallRowsTable table;
@@ -388,9 +426,26 @@ static void ownRowNameTick() {
   // The component matches names without case and quietly drops a delegate
   // that is its own hostname.
   if (strcasecmp(want, deviceName.c_str()) == 0) want[0] = 0;
-  mdns_ip_addr_t address = {};  // copied by the component
-  address.addr.type = ESP_IPADDR_TYPE_V4;
-  address.addr.u_addr.ip4.addr = ip;
+  // Every address of this board, copied by the component: the IPv4 one and
+  // the IPv6 ones it has (#612), so the own row's name answers AAAA too.
+  mdns_ip_addr_t addresses[3] = {};
+  int addressCount = 0;
+  addresses[addressCount].addr.type = ESP_IPADDR_TYPE_V4;
+  addresses[addressCount].addr.u_addr.ip4.addr = ip;
+  addressCount++;
+  const IPAddress v6[2] = {WiFi.STA.hasLinkLocalIPv6() ? WiFi.STA.linkLocalIPv6() : IPAddress(),
+                           WiFi.STA.hasGlobalIPv6() ? WiFi.STA.globalIPv6() : IPAddress()};
+  for (const IPAddress& a : v6) {
+    if (a.type() != IPv6) continue;
+    ip_addr_t lw;
+    a.to_ip_addr_t(&lw);
+    addresses[addressCount].addr.type = ESP_IPADDR_TYPE_V6;
+    memcpy(addresses[addressCount].addr.u_addr.ip6.addr, lw.u_addr.ip6.addr,
+           sizeof(addresses[addressCount].addr.u_addr.ip6.addr));
+    addressCount++;
+  }
+  for (int i = 0; i + 1 < addressCount; i++) addresses[i].next = &addresses[i + 1];
+  mdns_ip_addr_t& address = addresses[0];
   if (strcmp(want, ownRowHost) != 0) {
     if (ownRowHost[0] != 0) mdns_delegate_hostname_remove(ownRowHost);
     ownRowHost[0] = 0;
@@ -404,7 +459,7 @@ static void ownRowNameTick() {
         if (retryAtMs == 0) retryAtMs = 1;
       }
     }
-  } else if (ownRowHost[0] != 0 && ip != ownRowIp) {
+  } else if (ownRowHost[0] != 0) {
     mdns_delegate_hostname_set_address(ownRowHost, &address);
   }
   ownRowIp = ip;
@@ -469,6 +524,7 @@ String wifiServiceUrl() {
 }
 
 void wifiServiceTick() {
+  ip6Tick();  // #612
   powerSaveTick();
   ownRowNameTick();
   if (liveSettings == nullptr) return;  // init hasn't run

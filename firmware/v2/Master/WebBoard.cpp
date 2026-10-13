@@ -60,6 +60,7 @@
 #include "WallState.h"
 #include "WallUpdatePolicy.h"
 #include "WallWatch.h"
+#include "WifiService.h"  // wifiIpv6* (#612)
 #include "WearPolicy.h"
 #include "WebEndpoints.h"
 #include "WebEndpointsInternal.h"
@@ -158,6 +159,15 @@ void writeUnitsTable(JsonObject into, const BoardUnits& units) {
 void writeMaster(JsonObject root, const Gathered& g) {
   root["kind"] = "master";
   root["address"] = WiFi.localIP().toString();
+  {  // #612
+    const String linkLocal = wifiIpv6LinkLocal();
+    const String global = wifiIpv6Global();
+    if (linkLocal.length() > 0 || global.length() > 0) {
+      JsonObject v6 = root["ipv6"].to<JsonObject>();
+      if (linkLocal.length() > 0) v6["linkLocal"] = linkLocal;
+      if (global.length() > 0) v6["global"] = global;
+    }
+  }
   root["rev"] = GIT_REV;
   root["showing"] = jsonCopied(g.own.currentText);
   root["mqttConnected"] = mqttIsConnected();

@@ -51,6 +51,10 @@ WifiPhase wifiServicePhase();
 // with the link up; "" otherwise.
 String wifiServiceUrl();
 
+// Any task: this board's IPv6 addresses (#612), "" while it has none.
+String wifiIpv6LinkLocal();
+String wifiIpv6Global();
+
 // --- staging + reads for async handlers -------------------------------------
 
 // POST /wifi/config: pre-validated ssid/pass, copied under the mutex; the
