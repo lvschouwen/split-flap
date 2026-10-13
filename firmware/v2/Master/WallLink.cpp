@@ -253,9 +253,12 @@ struct Hooks : WallLinkHooks {
       lwip_inet_ntop(AF_INET, &peer.sin_addr, f.address, sizeof(f.address));
     }
     factsDirty[row] = true;
-    // A row that restarted, or runs its rescue image, is always said.
+    // Held back with the drops it follows, but only from the address already
+    // written: a row's place taken from another address is always said. (A
+    // restart is in the event record whether or not its line is written.)
     reportHeld(row, passNowMs);
-    if (wlLogDampHolding(rowDamp[row]) && !restarted && !hello.rescue) return;
+    if (wlLogDampHolding(rowDamp[row]) && strcmp(f.address, saidAddress[row]) == 0) return;
+    strlcpy(saidAddress[row], f.address, sizeof(saidAddress[row]));
     SerialPrintf("link: %s connected from %s, rev %s, %d unit(s)%s%s\n", rowName(row), f.address,
                  f.rev, (int)f.reportedWidth, hello.rescue ? ", RESCUE MODE" : "",
                  restarted ? ", it restarted" : "");
@@ -343,6 +346,16 @@ struct Hooks : WallLinkHooks {
   uint32_t strangerNoteAtMs = 0;
 
   WlLogDamp rowDamp[WALL_LINK_MAX_ROWS];
+  char saidAddress[WALL_LINK_MAX_ROWS][16] = {};  // in each row's last "connected from" line
+
+  // The rows table changed: a place may now be another board's, which must
+  // not inherit what was held back for the one before.
+  void forgetRows() {
+    for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
+      rowDamp[row] = WlLogDamp{};
+      saidAddress[row][0] = 0;
+    }
+  }
 
   void reportHeld(int row, uint32_t nowMs) {
     const uint16_t held = wlLogDampEnded(rowDamp[row], nowMs);
@@ -601,6 +614,7 @@ void pass() {
     rowsTable = wallStateRows(rowsGeneration);
     wallShowRowsChanged(rowsTable);
     rowLogRowsChanged(rowsGeneration);
+    hooks.forgetRows();
     for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
       facts[row] = WallRowLink{};
       factsDirty[row] = true;
