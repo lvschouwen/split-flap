@@ -66,6 +66,37 @@ static void test_a_record_with_those_bytes_set_still_decodes() {
   TEST_ASSERT_EQUAL_STRING("UTC0", tz);
 }
 
+// The hostname the master gave this row (#611) lives in the bytes once
+// reserved, so every other field keeps its place: an older image leaves them
+// zero (no name), and a record from an older image reads as no name.
+static void test_the_hostname_lives_in_the_reserved_bytes() {
+  uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
+  char name[FOLLOWER_NAME_MAX + 1];
+  char host[FOLLOWER_HOST_MAX + 1];
+  char tz[FOLLOWER_TZ_MAX + 1];
+  char hostname[FOLLOWER_HOSTNAME_MAX + 1];
+  TEST_ASSERT_EQUAL(4, FOLLOWER_MEMBERSHIP_HOSTNAME_OFF);
+  TEST_ASSERT_EQUAL(24, FOLLOWER_HOSTNAME_MAX);
+  TEST_ASSERT_TRUE(FOLLOWER_MEMBERSHIP_HOSTNAME_OFF + FOLLOWER_HOSTNAME_MAX + 1 <=
+                   FOLLOWER_MEMBERSHIP_NAME_OFF);
+  TEST_ASSERT_TRUE(followerMembershipEncode("ldr", "10.0.0.9", "UTC0", blob, "split-flap-row2-c3"));
+  TEST_ASSERT_TRUE(decode(blob, name, host, tz));
+  TEST_ASSERT_EQUAL_STRING("ldr", name);
+  followerMembershipHostname(blob, hostname);
+  TEST_ASSERT_EQUAL_STRING("split-flap-row2-c3", hostname);
+  // Without one, and from before the field: no name.
+  TEST_ASSERT_TRUE(followerMembershipEncode("ldr", "10.0.0.9", "UTC0", blob));
+  followerMembershipHostname(blob, hostname);
+  TEST_ASSERT_EQUAL_STRING("", hostname);
+  // Bytes that are no name (an image that used them otherwise) read as none.
+  for (int i = 4; i < FOLLOWER_MEMBERSHIP_NAME_OFF; i++) blob[i] = (uint8_t)(i * 3 + 1);
+  followerMembershipHostname(blob, hostname);
+  TEST_ASSERT_EQUAL_STRING("", hostname);
+  // Too long, or no label: refused at encode.
+  TEST_ASSERT_FALSE(followerMembershipEncode("ldr", "10.0.0.9", "UTC0", blob, "abcdefghijklmnopqrstuvwxy"));
+  TEST_ASSERT_FALSE(followerMembershipEncode("ldr", "10.0.0.9", "UTC0", blob, "Row 2"));
+}
+
 static void test_blank_eeprom_decodes_to_no_pairing() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
   char name[FOLLOWER_NAME_MAX + 1];
@@ -198,6 +229,7 @@ int main(int, char**) {
   RUN_TEST(test_pairing_round_trips);
   RUN_TEST(test_bytes_no_longer_used_are_written_as_zero);
   RUN_TEST(test_a_record_with_those_bytes_set_still_decodes);
+  RUN_TEST(test_the_hostname_lives_in_the_reserved_bytes);
   RUN_TEST(test_blank_eeprom_decodes_to_no_pairing);
   RUN_TEST(test_corrupt_byte_rejects);
   RUN_TEST(test_oversized_fields_reject_at_encode);

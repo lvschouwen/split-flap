@@ -98,6 +98,13 @@ message Ping {}
 message Restart {}
 message Release {}
 
+// The hostname the row carries from its place on the wall (#611): what it
+// sends with its DHCP request and answers for on mDNS. Its id stays what it
+// is. Empty = its own default name. Rules: WallLinkNames.h.
+message Name {
+  string host = 1;
+}
+
 message ToRow {
   oneof body {
     Welcome welcome = 1;
@@ -110,6 +117,7 @@ message ToRow {
     Ping ping = 8;
     Restart restart = 9;
     Release release = 10;
+    Name name = 11;
   }
 }
 

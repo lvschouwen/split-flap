@@ -522,6 +522,41 @@ static void test_a_change_of_quiet_or_settings_reaches_every_connected_row_once(
   TEST_ASSERT_TRUE(rec->written.back().second.body.config.wifi_awake);
 }
 
+// A row is told the hostname of its place (#611) with its settings: once per
+// connection, and again when the name changes. An empty name is a name too
+// (the row goes back to its own).
+static void test_a_row_is_told_its_name_with_its_settings_and_again_when_it_changes() {
+  core.setConfig(config("UTC0"));
+  core.setHost(0, "split-flap-row2");
+  joined("row-a", 1000);
+  joined("row-b", 1000);
+  for (uint32_t t = 1020; t <= 1100; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(1, rec->count(wl_ToRow_name_tag));  // row-b was never given one
+  TEST_ASSERT_EQUAL(wl_ToRow_config_tag, rec->written[1].second.which_body);
+  TEST_ASSERT_EQUAL(wl_ToRow_name_tag, rec->written[2].second.which_body);
+  TEST_ASSERT_EQUAL_STRING("split-flap-row2", rec->written[2].second.body.name.host);
+  TEST_ASSERT_EQUAL(wl_ToRow_quiet_tag, rec->written[3].second.which_body);
+  core.setHost(0, "split-flap-row2");
+  core.setHost(1, "");
+  for (uint32_t t = 1120; t <= 1200; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(2, rec->count(wl_ToRow_name_tag));  // row-a unchanged; row-b told "none"
+  TEST_ASSERT_EQUAL_STRING("", rec->written.back().second.body.name.host);
+  core.setHost(0, "split-flap-row3");
+  for (uint32_t t = 1220; t <= 1300; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(3, rec->count(wl_ToRow_name_tag));
+  TEST_ASSERT_EQUAL_STRING("split-flap-row3", rec->written.back().second.body.name.host);
+  // A busy row is told once it is free.
+  const int conn = rec->written.back().first;
+  feed(conn, status(true), 1320);
+  core.setHost(0, "split-flap-row4");
+  for (uint32_t t = 1340; t <= 1400; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(3, rec->count(wl_ToRow_name_tag));
+  feed(conn, status(false), 1420);
+  core.tick(1440, *rec);
+  TEST_ASSERT_EQUAL(4, rec->count(wl_ToRow_name_tag));
+  TEST_ASSERT_EQUAL_STRING("split-flap-row4", rec->written.back().second.body.name.host);
+}
+
 static void test_quiet_and_settings_wait_for_a_busy_row_and_are_sent_again_after_a_redial() {
   const int conn = joined("row-a", 1000);
   feed(conn, status(true), 1200);
@@ -763,6 +798,7 @@ int main(int, char**) {
   RUN_TEST(test_a_row_is_asked_for_its_log_only_while_it_is_wanted_and_again_after_a_redial);
   RUN_TEST(test_a_busy_row_is_not_asked_for_its_log_until_it_is_free);
   RUN_TEST(test_a_setting_the_socket_did_not_take_is_tried_again);
+  RUN_TEST(test_a_row_is_told_its_name_with_its_settings_and_again_when_it_changes);
   RUN_TEST(test_reset_closes_everything);
   return UNITY_END();
 }

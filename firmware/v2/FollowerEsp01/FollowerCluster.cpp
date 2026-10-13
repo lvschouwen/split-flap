@@ -24,6 +24,7 @@ static String leaderHost;
 // #342: the master's POSIX zone (a Config message, stored with the pairing)
 // — fuels the clock fallback. "" = none known yet, no clock.
 static String leaderTz;
+static String givenHostName;  // #611: the name of this row's place, "" = none
 static int heldSpeed = 80;
 static volatile bool membershipDirty = false;
 
@@ -89,6 +90,9 @@ void clusterInit() {
     leaderName = name;
     leaderHost = host;
     leaderTz = tz;
+    char hostname[FOLLOWER_HOSTNAME_MAX + 1];
+    followerMembershipHostname(blob, hostname);
+    givenHostName = hostname;
     clockSetupChanged();
     SerialPrint(F("Paired with "));
     SerialPrint(leaderName);
@@ -101,7 +105,7 @@ static void persistMembership() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
   if (leaderHost.length() == 0 ||
       !followerMembershipEncode(leaderName.c_str(), leaderHost.c_str(),
-                                leaderTz.c_str(), blob)) {
+                                leaderTz.c_str(), blob, givenHostName.c_str())) {
     followerMembershipClear(blob);
   }
   for (int i = 0; i < FOLLOWER_MEMBERSHIP_BLOB_LEN; i++) {
@@ -217,7 +221,10 @@ void clusterPair(const String& masterId, const String& masterHost) {
   clusterFollowerJoin(policyState, millis(), 0);
   if (leaderName != masterId) {
     // Another master: what the old one said goes with it, as on a Release.
+    // (The name of the place too, in the record; the board carries it until
+    // the new master names the row — one reconnect, not two.)
     leaderTz = "";
+    givenHostName = "";
     clockSetupChanged();
     leaderQuiet = false;
     renderPending = false;
@@ -244,6 +251,14 @@ void clusterSetTz(const String& tz) {
   leaderTz = tz;
   clockSetupChanged();
   membershipDirty = true;
+}
+
+bool clusterSetHostName(const String& hostName) {
+  if (hostName.length() != 0 && !wallHostNameValid(hostName.c_str())) return false;
+  if (hostName == givenHostName) return false;
+  givenHostName = hostName;
+  membershipDirty = true;
+  return true;
 }
 
 ClusterRenderVerdict clusterHandleRender(uint32_t epoch, uint32_t seq,
@@ -275,6 +290,7 @@ void clusterHandleLeave() {
   leaderName = "";
   leaderHost = "";
   leaderTz = "";  // #342: the zone leaves with the master that owned it
+  givenHostName = "";  // #611: so does the name of the place it gave
   leaderQuiet = false;  // #227: it described the master we left
   clockSetupChanged();
   renderPending = false;
@@ -287,6 +303,7 @@ FollowerClusterView clusterViewGet() {
   v.phase = policyState.phase;
   v.leaderName = leaderName;
   v.leaderHost = leaderHost;
+  v.hostName = givenHostName;
   bool synced = false;
   (void)nowEpochMs(synced);
   v.sntpSynced = synced;

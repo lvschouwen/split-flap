@@ -213,8 +213,27 @@ static void test_releasing_a_row_from_the_middle_moves_the_rows_below_it_up() {
   TEST_ASSERT_EQUAL_STRING("No such row", wallRowsWithout(parsed("||0|0|16"), "row-x", out).message);
 }
 
+// Every board carries a hostname from its place (#611): the grid row from 1,
+// the column too when boards share a grid row. The own row has one as well.
+static void test_each_board_is_named_by_its_place() {
+  char out[WALL_HOST_NAME_MAX + 1];
+  WallRowsTable t = parsed("||0|0|16;row-a|192.168.1.50|1|0|5;row-b|192.168.1.51|1|10|5");
+  TEST_ASSERT_EQUAL_STRING("split-flap-row1", wallRowsHostName(t, 0, out, sizeof out));
+  TEST_ASSERT_EQUAL_STRING("split-flap-row2-c1", wallRowsHostName(t, 1, out, sizeof out));
+  TEST_ASSERT_EQUAL_STRING("split-flap-row2-c11", wallRowsHostName(t, 2, out, sizeof out));
+  // Out of the table: no name. A master on its own is grid row 1.
+  TEST_ASSERT_EQUAL_STRING("", wallRowsHostName(t, 3, out, sizeof out));
+  TEST_ASSERT_EQUAL_STRING("", wallRowsHostName(t, -1, out, sizeof out));
+  WallRowsTable alone = parsed("");
+  TEST_ASSERT_EQUAL_STRING("split-flap-row1", wallRowsOwnHostName(alone, out, sizeof out));
+  TEST_ASSERT_EQUAL_STRING("split-flap-row1", wallRowsOwnHostName(t, out, sizeof out));
+  WallRowsTable noOwn = parsed("row-a|192.168.1.50|0|0|5");
+  TEST_ASSERT_EQUAL_STRING("", wallRowsOwnHostName(noOwn, out, sizeof out));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_each_board_is_named_by_its_place);
   RUN_TEST(test_an_empty_string_is_a_master_on_its_own);
   RUN_TEST(test_a_table_survives_storing_and_reading_back);
   RUN_TEST(test_a_damaged_string_is_refused);

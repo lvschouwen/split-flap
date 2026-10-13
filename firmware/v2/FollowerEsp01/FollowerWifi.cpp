@@ -21,6 +21,27 @@
 #include "WifiTxPolicy.h"
 
 String effectiveDeviceName;
+static String hostName;  // #611: what DHCP and mDNS answer to
+
+const String& followerHostName() { return hostName; }
+
+static String hostNameFor(const String& given) {
+  return given.length() > 0 ? given : effectiveDeviceName;
+}
+
+void followerWifiSetHostName(const String& given) {
+  const String next = hostNameFor(given);
+  if (next == hostName) return;
+  hostName = next;
+  WiFi.hostname(hostName.c_str());
+  MDNS.setHostname(hostName.c_str());  // probes and announces the new name
+  SerialPrint(F("hostname: "));
+  SerialPrintln(hostName);
+  // The router learns a DHCP hostname from a request: a reconnect sends one
+  // now rather than at the lease's renewal. Not disconnect(): on this SDK
+  // that can erase the stored credentials.
+  if (WiFi.status() == WL_CONNECTED) WiFi.reconnect();
+}
 bool isWifiConfigured = false;
 
 static DNSServer dnsServer;
@@ -169,7 +190,7 @@ static bool waitForWifiConnected(int timeoutSeconds) {
 static bool tryJoinKnownWifi(int timeoutSeconds) {
   WiFi.mode(WIFI_STA);  // the radio is off until here (core 3.x boot default)
   txBringUpStep(WifiTxPhase::Joining);  // before any join burst
-  WiFi.hostname(effectiveDeviceName.c_str());
+  WiFi.hostname(hostName.c_str());
   WiFi.setAutoReconnect(true);
   if (WiFi.SSID().length() == 0) {
     SerialPrintln(F("No WiFi credentials persisted in SDK flash"));
@@ -184,6 +205,13 @@ void wifiInit(AsyncWebServer& server) {
   effectiveDeviceName = "split-flap-" + String(ESP.getChipId(), HEX);
   SerialPrint(F("Device identity: "));
   SerialPrintln(effectiveDeviceName);
+  // #611: the stored name of the row's place, read with the pairing before
+  // this (clusterInit), is the hostname from the first DHCP request on.
+  hostName = hostNameFor(clusterViewGet().hostName);
+  if (hostName != effectiveDeviceName) {
+    SerialPrint(F("hostname: "));
+    SerialPrintln(hostName);
+  }
 
   // One failed association must not park the row in the portal for five
   // minutes (#524): the join gets FOLLOWER_JOIN_ATTEMPTS windows first. Each
@@ -226,7 +254,9 @@ void wifiInit(AsyncWebServer& server) {
 }
 
 void wifiServicesInit(int rowWidth) {
-  if (MDNS.begin(effectiveDeviceName.c_str())) {
+  // The hostname is the place's name (#611); the `name` TXT stays the
+  // identity, which is what a master's scan pairs with.
+  if (MDNS.begin(hostName.c_str())) {
     MDNS.addService("http", "tcp", 80);
     MDNS.addService("splitflap", "tcp", 80);
     MDNS.addServiceTxt("splitflap", "tcp", "name",

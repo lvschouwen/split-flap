@@ -18,6 +18,7 @@
 #include "ClusterLayout.h"
 #include "DeviceIdentity.h"
 #include "LanOrigin.h"
+#include "WallLinkNames.h"
 
 #define WALL_ROW_ID_MAX 32  // Hello.id without its terminator
 
@@ -270,4 +271,31 @@ inline ClusterVerdict wallRowsWithout(const WallRowsTable& table, const char* id
   const ClusterVerdict verdict = wallRowsValidate(next, grid);
   if (verdict.ok) out = next;
   return verdict;
+}
+
+// ---- names from places (#611) ---------------------------------------------------------
+// Every board carries a hostname from its grid place (WallLinkNames.h): the
+// grid row from 1, the column too only when another board hangs on that grid
+// row. `out` is returned; empty when `at` is no row of the table.
+inline const char* wallRowsHostName(const WallRowsTable& table, int at, char* out, size_t cap) {
+  if (cap == 0) return out;
+  out[0] = 0;
+  if (at < 0 || at >= table.count) return out;
+  const WallRowDef& def = table.rows[at];
+  bool shared = false;
+  for (int i = 0; i < table.count && !shared; i++) {
+    shared = i != at && table.rows[i].row == def.row;
+  }
+  wallRowHostName(def.row + 1, def.col + 1, shared, out, cap);
+  return out;
+}
+
+// The name of the master's own row: grid row 1 for a master on its own,
+// empty when the table has no own row.
+inline const char* wallRowsOwnHostName(const WallRowsTable& table, char* out, size_t cap) {
+  if (table.count == 0) {
+    wallRowHostName(1, 1, false, out, cap);
+    return out;
+  }
+  return wallRowsHostName(table, wallRowsOwn(table), out, cap);
 }

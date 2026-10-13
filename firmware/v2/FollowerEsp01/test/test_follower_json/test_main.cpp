@@ -13,6 +13,7 @@ void tearDown() {}
 static FollowerIdentity makeIdentity() {
   FollowerIdentity id;
   id.name = "split-flap-ab12cd";
+  id.host = "split-flap-row2";
   id.rev = "abc1234";
   id.width = 5;
   id.masterId = "split-flap-master";
@@ -29,7 +30,7 @@ static FollowerIdentity makeIdentity() {
 
 static void test_identity_json_shape() {
   TEST_ASSERT_EQUAL_STRING(
-      "{\"name\":\"split-flap-ab12cd\",\"version\":\"abc1234\",\"plat\":\"esp01\","
+      "{\"name\":\"split-flap-ab12cd\",\"host\":\"split-flap-row2\",\"version\":\"abc1234\",\"plat\":\"esp01\","
       "\"width\":5,\"rescue\":false,\"master\":\"split-flap-master\","
       "\"masterHost\":\"192.168.15.22\",\"linked\":true,\"up\":1200,"
       "\"heap\":28000,\"sketch\":458752,\"sketchFree\":569344,\"flashMode\":3,"

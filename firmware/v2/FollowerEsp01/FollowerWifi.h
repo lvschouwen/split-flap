@@ -8,13 +8,25 @@
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
 
-// "split-flap-<hex chip id>" — no rename on this firmware.
+// "split-flap-<hex chip id>": the board's identity (Hello, the pairing, the
+// mDNS `name` TXT, the setup AP). Never renamed.
 extern String effectiveDeviceName;
 extern bool isWifiConfigured;
 
 // Resolves the identity, joins the stored WiFi (30 s) or opens the setup
-// portal (may set the pending-reboot flag after a portal save/timeout).
+// portal (may set the pending-reboot flag after a portal save/timeout). The
+// DHCP hostname is the stored name of the row's place (#611), else the
+// identity.
 void wifiInit(AsyncWebServer& server);
+
+// #611: the hostname this board carries now — the name the master gave its
+// place (split-flap-row<N>), else the identity. It is what DHCP and mDNS
+// answer to; the identity stays what it is.
+const String& followerHostName();
+// A new name from the master ("" = back to the identity): mDNS is renamed at
+// once and the WiFi reconnected so the router's DNS learns the DHCP hostname
+// now. Nothing happens when the board already carries it. loop() context.
+void followerWifiSetHostName(const String& given);
 
 // SNTP (epoch only — flip instants need no timezone) + the _splitflap._tcp
 // advertisement (TXT name/rev/width/plat=esp01, #297) so a master's scan

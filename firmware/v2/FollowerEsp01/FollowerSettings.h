@@ -9,17 +9,24 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "WallLinkNames.h"  // wallHostNameValid, WALL_HOST_NAME_MAX
+
 #define FOLLOWER_NAME_MAX 32
 #define FOLLOWER_HOST_MAX 40
 #define FOLLOWER_TZ_MAX 64
+#define FOLLOWER_HOSTNAME_MAX WALL_HOST_NAME_MAX
 
-// magic u32 LE | 42 bytes written as zero | name[NAME_MAX+1] |
-// host[HOST_MAX+1] | tz[TZ_MAX+1] | xor checksum. The layout is per-device
-// truth: the zero bytes held a row index and a message key the board no
-// longer has, and stay so that the name, host and tz fields and the
-// preferences record behind this one keep their place across images. A
-// record that fails to decode leaves the row unpaired.
+// magic u32 LE | hostname[HOSTNAME_MAX+1] | 17 bytes written as zero |
+// name[NAME_MAX+1] | host[HOST_MAX+1] | tz[TZ_MAX+1] | xor checksum. The
+// layout is per-device truth: the 42 bytes behind the magic once held a row
+// index and a message key the board no longer has; the hostname the master
+// gave this row (#611) now takes the first 25 of them, so the name, host and
+// tz fields and the preferences record behind this one keep their place
+// across images (an older image leaves them zero = no hostname; bytes that
+// are no label read as none). A record that fails to decode leaves the row
+// unpaired.
 #define FOLLOWER_MEMBERSHIP_MAGIC 0x53464634UL  // "4FFS" LE
+#define FOLLOWER_MEMBERSHIP_HOSTNAME_OFF 4
 #define FOLLOWER_MEMBERSHIP_NAME_OFF (4 + 42)
 #define FOLLOWER_MEMBERSHIP_HOST_OFF \
   (FOLLOWER_MEMBERSHIP_NAME_OFF + FOLLOWER_NAME_MAX + 1)
@@ -39,16 +46,21 @@ inline uint8_t followerMembershipChecksum(const uint8_t* blob) {
 // Encodes a pairing. Rejects (returns false, blob untouched) an empty host —
 // a pairing without an address to dial is not a pairing — and oversized
 // fields. tz is the master's POSIX zone for the clock fallback (may be "").
+// hostname is the name the master gave this row's place (#611): "" = none,
+// otherwise one label (WallLinkNames.h).
 inline bool followerMembershipEncode(const char* leaderName,
                                      const char* leaderHost, const char* tz,
-                                     uint8_t* blob) {
+                                     uint8_t* blob, const char* hostname = "") {
   size_t nameLen = strlen(leaderName);
   size_t hostLen = strlen(leaderHost);
   size_t tzLen = strlen(tz);
+  size_t hostnameLen = strlen(hostname);
   if (hostLen == 0 || hostLen > FOLLOWER_HOST_MAX) return false;
   if (nameLen > FOLLOWER_NAME_MAX) return false;
   if (tzLen > FOLLOWER_TZ_MAX) return false;
+  if (hostnameLen != 0 && !wallHostNameValid(hostname)) return false;
   memset(blob, 0, FOLLOWER_MEMBERSHIP_BLOB_LEN);
+  memcpy(blob + FOLLOWER_MEMBERSHIP_HOSTNAME_OFF, hostname, hostnameLen);
   blob[0] = (uint8_t)(FOLLOWER_MEMBERSHIP_MAGIC & 0xFF);
   blob[1] = (uint8_t)((FOLLOWER_MEMBERSHIP_MAGIC >> 8) & 0xFF);
   blob[2] = (uint8_t)((FOLLOWER_MEMBERSHIP_MAGIC >> 16) & 0xFF);
@@ -81,6 +93,15 @@ inline bool followerMembershipDecode(const uint8_t* blob, char* leaderName,
   memcpy(tz, blob + FOLLOWER_MEMBERSHIP_TZ_OFF, FOLLOWER_TZ_MAX);
   tz[FOLLOWER_TZ_MAX] = '\0';
   return true;
+}
+
+// The hostname of a decoded record; "" when there is none or the bytes are no
+// label (left by an image that used them otherwise). out holds
+// FOLLOWER_HOSTNAME_MAX + 1.
+inline void followerMembershipHostname(const uint8_t* blob, char* out) {
+  memcpy(out, blob + FOLLOWER_MEMBERSHIP_HOSTNAME_OFF, FOLLOWER_HOSTNAME_MAX);
+  out[FOLLOWER_HOSTNAME_MAX] = '\0';
+  if (!wallHostNameValid(out)) out[0] = '\0';
 }
 
 inline void followerMembershipClear(uint8_t* blob) {

@@ -62,7 +62,14 @@ def test_splitter_reassembles_messages_fed_one_byte_at_a_time():
 
 
 def test_the_native_test_carries_the_vectors_this_file_checks():
-    assert set(VEC) == {"hello", "show", "update", "update_state", "op", "status", "ping", "pong"}
+    assert set(VEC) == {"hello", "show", "update", "update_state", "op", "status", "ping", "pong", "name"}
+
+
+def test_name(pb):
+    m = pb.ToRow.FromString(delimited(VEC["name"]))
+    assert m.WhichOneof("body") == "name"
+    assert m.name.host == "split-flap-row2"
+    assert frame(m) == VEC["name"]
 
 
 def test_hello(pb):

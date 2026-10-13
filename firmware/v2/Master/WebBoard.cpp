@@ -205,6 +205,15 @@ void handleBoard(AsyncWebServerRequest* request) {
   JsonObject root = response->getRoot().to<JsonObject>();
   root["id"] = id;
   root["own"] = own;
+  // The name the board's row answers to on mDNS (#611): a row board's
+  // hostname; the master's second name beside its own.
+  char host[WALL_HOST_NAME_MAX + 1];
+  if (own) {
+    wallRowsOwnHostName(g->wall.rows, host, sizeof(host));
+  } else {
+    wallRowsHostName(g->wall.rows, board, host, sizeof(host));
+  }
+  if (host[0] != 0) root["host"] = jsonCopied(host);
   if (place >= 0) {
     const WallRowDef& def = g->wall.rows.rows[place];
     root["row"] = def.row;

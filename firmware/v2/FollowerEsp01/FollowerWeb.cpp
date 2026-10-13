@@ -64,6 +64,7 @@ static String identityJsonNow() {
   const FollowerClusterView cv = clusterViewGet();
   FollowerIdentity id;
   id.name = effectiveDeviceName.c_str();
+  id.host = followerHostName().c_str();
   id.rev = GIT_REV;
   id.width = displayWidth;
   id.rescue = rescueActive();

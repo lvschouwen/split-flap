@@ -16,6 +16,7 @@ struct FollowerClusterView {
   ClusterFollowerPhase phase = ClusterFollowerPhase::Standalone;
   String leaderName;  // the master's id; "" = unpaired
   String leaderHost;  // its address when it paired
+  String hostName;    // the name the master gave this row's place (#611); "" = none
   bool sntpSynced = false;  // gates flip-instant timing
 };
 
@@ -28,6 +29,11 @@ bool clusterLeaderContactFresh();
 // The master's POSIX tz rule from a Config message. An empty one keeps the
 // zone already held; a new one is stored with the pairing. loop() only.
 void clusterSetTz(const String& tz);
+// #611: the hostname of this row's place, from the master's Name message
+// ("" = none). Stored with the pairing when it differs; true then, so the
+// caller renames the board (FollowerWifi.h). loop() only. A name that is no
+// label is ignored.
+bool clusterSetHostName(const String& hostName);
 // #227: the master's quiet flag: a row of a quiet wall moves nothing by
 // itself, also not once its master has gone silent.
 void clusterNoteLeaderQuiet(bool quiet);

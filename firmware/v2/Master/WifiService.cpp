@@ -4,6 +4,7 @@
 #include <DNSServer.h>
 #include <ESPmDNS.h>
 #include <Update.h>
+#include <mdns.h>  // #611: a delegated hostname, which the wrapper does not expose
 #include <WiFi.h>
 #include <atomic>
 #include <freertos/FreeRTOS.h>
@@ -18,6 +19,8 @@
 #include "RebootCause.h"  // #432
 #include "ReflashPlan.h"  // reflashInProgress: no retry restart mid-reflash
 #include "Tasks.h"
+#include "WallRows.h"   // #611: the own row's name
+#include "WallState.h"
 #include "WebEndpoints.h"
 #include "WifiPolicy.h"
 #include "WifiScanJson.h"
@@ -28,6 +31,11 @@ static AsyncWebServer* webServer = nullptr;
 static MasterSettings* liveSettings = nullptr;
 static SettingsStore* settingsStore = nullptr;
 static String deviceName;
+// #611: the own row's delegated mDNS name, and the address it was given.
+static bool mdnsUp = false;
+static char ownRowHost[WALL_HOST_NAME_MAX + 1] = {0};
+static uint32_t ownRowIp = 0;
+static void ownRowNameTick();
 
 static WifiPolicyState policy;
 // Failed-join tally across software resets (WifiPolicy.h). netTask only.
@@ -348,9 +356,58 @@ static void startOnline() {
     MDNS.addServiceTxt("splitflap", "tcp", "width",
                        String((int)displaySnapshotGet().displayWidth).c_str());
     SerialPrintln("mDNS up: " + deviceName + ".local");
+    mdnsUp = true;
+    ownRowNameTick();
   } else {
     SerialPrintln(F("mDNS start failed"));
   }
+}
+
+// #611: the master answers for its own row's name (split-flap-row<N>.local,
+// WallRows.h) beside its own, as a delegated mDNS hostname with this board's
+// address. Followed when the rows table or the address changes; the name is
+// not the master's own, which stays the one hostname DHCP carries.
+static void ownRowNameTick() {
+  if (!mdnsUp) return;
+  static uint32_t seenGeneration = 0;
+  static bool seenAny = false;
+  static uint32_t retryAtMs = 0;  // after an add the component refused
+  const uint32_t generation = wallStateRowsGeneration();
+  const uint32_t ip = (uint32_t)WiFi.localIP();
+  if (ip == 0) return;  // between links: nothing to answer with
+  const bool retryDue = retryAtMs != 0 && (int32_t)(millis() - retryAtMs) >= 0;
+  if (seenAny && generation == seenGeneration && ip == ownRowIp && !retryDue) return;
+  seenGeneration = generation;
+  seenAny = true;
+  retryAtMs = 0;
+  static WallRowsTable table;
+  char want[WALL_HOST_NAME_MAX + 1];
+  uint32_t ignored;
+  table = wallStateRows(ignored);
+  wallRowsOwnHostName(table, want, sizeof(want));
+  // The component matches names without case and quietly drops a delegate
+  // that is its own hostname.
+  if (strcasecmp(want, deviceName.c_str()) == 0) want[0] = 0;
+  mdns_ip_addr_t address = {};  // copied by the component
+  address.addr.type = ESP_IPADDR_TYPE_V4;
+  address.addr.u_addr.ip4.addr = ip;
+  if (strcmp(want, ownRowHost) != 0) {
+    if (ownRowHost[0] != 0) mdns_delegate_hostname_remove(ownRowHost);
+    ownRowHost[0] = 0;
+    if (want[0] != 0) {
+      if (mdns_delegate_hostname_add(want, &address) == ESP_OK) {
+        strlcpy(ownRowHost, want, sizeof(ownRowHost));
+        SerialPrintln("mDNS also answers " + String(ownRowHost) + ".local for the own row");
+      } else {
+        SerialPrintln(F("mDNS: the own row's name could not be added; trying again later"));
+        retryAtMs = millis() + 30000;
+        if (retryAtMs == 0) retryAtMs = 1;
+      }
+    }
+  } else if (ownRowHost[0] != 0 && ip != ownRowIp) {
+    mdns_delegate_hostname_set_address(ownRowHost, &address);
+  }
+  ownRowIp = ip;
 }
 
 static void pumpScan() {
@@ -413,6 +470,7 @@ String wifiServiceUrl() {
 
 void wifiServiceTick() {
   powerSaveTick();
+  ownRowNameTick();
   if (liveSettings == nullptr) return;  // init hasn't run
 
   if (portalUp) dnsServer.processNextRequest();

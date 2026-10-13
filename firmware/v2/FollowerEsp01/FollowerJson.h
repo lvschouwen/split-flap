@@ -18,6 +18,7 @@
 // flash.
 struct FollowerIdentity {
   const char* name = "";
+  const char* host = "";  // the hostname it carries (#611); name = its identity
   const char* rev = "";
   int width = 0;
   bool rescue = false;
@@ -37,6 +38,8 @@ inline String followerIdentityJson(const FollowerIdentity& id) {
   out.reserve(352);
   out += "{\"name\":";
   appendJsonString(out, String(id.name));
+  out += ",\"host\":";
+  appendJsonString(out, String(id.host));
   out += ",\"version\":";
   appendJsonString(out, String(id.rev));
   out += ",\"plat\":\"" FOLLOWER_PLAT "\",\"width\":";

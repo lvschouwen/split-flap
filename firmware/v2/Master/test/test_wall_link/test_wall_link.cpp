@@ -10,6 +10,7 @@
 
 #include <stdio.h>
 
+#include "WallLinkNames.h"
 #include "WallLinkStream.h"
 
 #define VEC(name, hex) hex
@@ -51,6 +52,54 @@ static void test_hello_round_trip_and_bytes() {
   TEST_ASSERT_EQUAL_HEX32(0xDEADBEEF, d.body.hello.boot_id);
   TEST_ASSERT_TRUE(d.body.hello.rescue);
   TEST_ASSERT_EQUAL(5, d.body.hello.width);
+}
+
+// A row is told the hostname it carries from its place (#611); the name
+// itself is derived here and checked on the row by the same rules.
+static void test_name_round_trip_and_bytes() {
+  wl_ToRow m = wl_ToRow_init_zero;
+  m.which_body = wl_ToRow_name_tag;
+  strcpy(m.body.name.host, "split-flap-row2");
+  size_t n = wlEncodeToRow(wire, sizeof wire, m);
+  assertWire(n, VEC("name", "135a110a0f73706c69742d666c61702d726f7732"));
+  WlRowReader r;
+  TEST_ASSERT_EQUAL(n, r.feed(wire, n));
+  wl_ToRow d = wl_ToRow_init_zero;
+  TEST_ASSERT_TRUE(r.decode(wl_ToRow_fields, &d));
+  TEST_ASSERT_EQUAL(wl_ToRow_name_tag, d.which_body);
+  TEST_ASSERT_EQUAL_STRING("split-flap-row2", d.body.name.host);
+  // The longest name there is fits the field with its terminator.
+  TEST_ASSERT_EQUAL(WALL_HOST_NAME_MAX + 1, sizeof(m.body.name.host));
+}
+
+static void test_a_board_is_named_by_its_grid_row_and_only_shares_say_the_column() {
+  char out[WALL_HOST_NAME_MAX + 1];
+  TEST_ASSERT_EQUAL(15, wallRowHostName(2, 1, false, out, sizeof out));
+  TEST_ASSERT_EQUAL_STRING("split-flap-row2", out);
+  TEST_ASSERT_EQUAL(18, wallRowHostName(2, 9, true, out, sizeof out));
+  TEST_ASSERT_EQUAL_STRING("split-flap-row2-c9", out);
+  TEST_ASSERT_EQUAL(22, wallRowHostName(256, 256, true, out, sizeof out));
+  TEST_ASSERT_EQUAL_STRING("split-flap-row256-c256", out);
+  TEST_ASSERT_TRUE(wallHostNameValid(out));
+  // No place, or no room: no name.
+  TEST_ASSERT_EQUAL(0, wallRowHostName(0, 1, false, out, sizeof out));
+  TEST_ASSERT_EQUAL_STRING("", out);
+  TEST_ASSERT_EQUAL(0, wallRowHostName(2, 1, false, out, 8));
+  TEST_ASSERT_EQUAL_STRING("", out);
+}
+
+static void test_a_hostname_is_one_lowercase_label() {
+  TEST_ASSERT_TRUE(wallHostNameValid("split-flap-row1"));
+  TEST_ASSERT_TRUE(wallHostNameValid("a"));
+  TEST_ASSERT_TRUE(wallHostNameValid("split-flap-row256-c256"));
+  TEST_ASSERT_FALSE(wallHostNameValid(""));
+  TEST_ASSERT_FALSE(wallHostNameValid(nullptr));
+  TEST_ASSERT_FALSE(wallHostNameValid("Split-Flap"));
+  TEST_ASSERT_FALSE(wallHostNameValid("split flap"));
+  TEST_ASSERT_FALSE(wallHostNameValid("split.flap"));
+  TEST_ASSERT_FALSE(wallHostNameValid("-row1"));
+  TEST_ASSERT_FALSE(wallHostNameValid("row1-"));
+  TEST_ASSERT_FALSE(wallHostNameValid("abcdefghijklmnopqrstuvwxy"));  // 25
 }
 
 static void test_show_round_trip_and_bytes() {
@@ -388,6 +437,9 @@ static void test_a_short_document_is_complete_in_one_piece() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_hello_round_trip_and_bytes);
+  RUN_TEST(test_name_round_trip_and_bytes);
+  RUN_TEST(test_a_board_is_named_by_its_grid_row_and_only_shares_say_the_column);
+  RUN_TEST(test_a_hostname_is_one_lowercase_label);
   RUN_TEST(test_show_round_trip_and_bytes);
   RUN_TEST(test_update_and_op_round_trip_and_bytes);
   RUN_TEST(test_status_with_a_negative_signal_and_empty_messages);

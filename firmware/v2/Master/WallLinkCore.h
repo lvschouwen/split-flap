@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "WallLinkNames.h"
 #include "WallLinkPolicy.h"
 
 #define WALL_LINK_MAX_ROWS 8
@@ -68,6 +69,11 @@ struct WallLinkRow {
   // Has this connection been told the wall's quiet state and settings?
   bool quietSent = false;
   bool configSent = false;
+  // The hostname of the row's place (#611), once the caller has said it; an
+  // empty one is the row's own default name.
+  bool hostKnown = false;
+  bool hostSent = false;
+  char host[WALL_HOST_NAME_MAX + 1] = {0};
   // Is this row's log wanted, and what was this connection last told? A
   // connection starts with its log off (the row's rule).
   bool logWanted = false;
@@ -229,6 +235,17 @@ struct WallLinkCore {
     for (WallLinkRow& row : rows) row.configSent = false;
   }
 
+  // The hostname a row carries from its place (#611): told with its settings
+  // at every connection and again when it changes.
+  void setHost(int row, const char* host) {
+    WallLinkRow& r = rows[row];
+    if (r.hostKnown && strcmp(r.host, host) == 0) return;
+    strncpy(r.host, host, sizeof(r.host) - 1);
+    r.host[sizeof(r.host) - 1] = 0;
+    r.hostKnown = true;
+    r.hostSent = false;
+  }
+
   // A row's log lines are asked for while someone reads them (RowLogPolicy.h).
   void setLogWanted(int row, bool wanted) { rows[row].logWanted = wanted; }
 
@@ -264,7 +281,9 @@ struct WallLinkCore {
   // still owed (it is busy, or its socket takes nothing now).
   bool tellSettings(int r, uint32_t nowMs, WallLinkHooks& hooks) {
     WallLinkRow& row = rows[r];
-    if (row.quietSent && (row.configSent || !haveConfig)) return true;
+    if (row.quietSent && (row.configSent || !haveConfig) && (row.hostSent || !row.hostKnown)) {
+      return true;
+    }
     if (row.contact.busy) return false;
     if (haveConfig && !row.configSent) {
       wlClear(out);
@@ -272,6 +291,13 @@ struct WallLinkCore {
       out.body.config = config;
       if (!send(r, out, nowMs, hooks)) return false;
       row.configSent = true;
+    }
+    if (row.hostKnown && !row.hostSent) {
+      wlClear(out);
+      out.which_body = wl_ToRow_name_tag;
+      memcpy(out.body.name.host, row.host, sizeof(out.body.name.host));
+      if (!send(r, out, nowMs, hooks)) return false;
+      row.hostSent = true;
     }
     if (!row.quietSent) {
       wlClear(out);
@@ -352,6 +378,7 @@ struct WallLinkCore {
     // settings only writes `out`.
     row.quietSent = false;
     row.configSent = false;
+    row.hostSent = false;
     row.logTold = false;
     hooks.rowHello(r, h, restarted);
     tellSettings(r, nowMs, hooks);

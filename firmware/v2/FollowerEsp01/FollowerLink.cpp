@@ -516,8 +516,16 @@ void handle(const wl_ToRow& m, const FollowerClusterView& view) {
     case wl_ToRow_restart_tag:
       isPendingReboot = true;
       break;
+    case wl_ToRow_name_tag: {
+      // #611: the hostname of this row's place. Stored with the pairing;
+      // a changed one renames the board, which reconnects the WiFi.
+      const String host(m.body.name.host);
+      if (clusterSetHostName(host)) followerWifiSetHostName(host);
+      break;
+    }
     case wl_ToRow_release_tag:
       clusterHandleLeave();
+      followerWifiSetHostName("");  // #611: the place's name leaves with the master
       drop(F("released by the master"));
       break;
     default:

@@ -509,6 +509,15 @@ void showAndSettings(uint32_t nowMs) {
   }
 }
 
+// The hostname of each row's place (#611), from the table in hand; the core
+// says it once per connection, and again only when it changes.
+void tellNames() {
+  char host[WALL_HOST_NAME_MAX + 1];
+  for (int row = 0; row < rowsTable.count && row < WALL_LINK_MAX_ROWS; row++) {
+    core->setHost(row, wallRowsHostName(rowsTable, row, host, sizeof(host)));
+  }
+}
+
 // Jobs the web side staged for a row board go to the core, which writes each
 // when its row can take it.
 void takeJobs(uint32_t nowMs) {
@@ -612,6 +621,7 @@ void pass() {
     core->reset(hooks);
     updater.reset();
     rowsTable = wallStateRows(rowsGeneration);
+    tellNames();
     wallShowRowsChanged(rowsTable);
     rowLogRowsChanged(rowsGeneration);
     hooks.forgetRows();
@@ -704,6 +714,7 @@ void wallLinkInit(const String& masterId) {
   for (int i = 0; i < WALL_LINK_MAX_ROWS; i++) new (&facts[i]) WallRowLink();
   for (int i = 0; i < WALL_LINK_MAX_CONNS; i++) new (&sockets[i]) Socket();
   rowsTable = wallStateRows(rowsGeneration);
+  tellNames();
   rowLogRowsChanged(rowsGeneration);
 }
 
