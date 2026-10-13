@@ -26,6 +26,12 @@ void wifiServicesInit(int rowWidth);
 // step it inside wifiInit(); loop() calls the tick for the online half.
 void followerTxTick();
 
+// #609: WiFi power save off (the radio stays awake) or on (modem sleep, the
+// SDK's default), as the master's Config says. loop() context; nothing is
+// done when it already is so.
+void followerWifiStayAwake(bool awake);
+bool followerWifiAwake();
+
 // The level the radio was last set to, tenths of a dBm (0 before the first).
 int followerTxPowerDbm10();
 

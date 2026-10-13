@@ -373,12 +373,13 @@ ClusterVerdict wallStateSetRows(const WallRowsTable& table) {
   return {true, ""};
 }
 
-void wallStateSetRowSettings(const String& tzPosix, bool updateUnitsAtStart) {
+void wallStateSetRowSettings(const String& tzPosix, bool updateUnitsAtStart, bool wifiPowerSave) {
   Locked lock;
   // A row without its master shows the time: what an ESP-01 row has always
   // done. Per-row choices come with the board settings of the API.
   rowSettings.fallback = wl_Fallback_FALLBACK_TIME;
   rowSettings.update_units_at_start = updateUnitsAtStart;
+  rowSettings.wifi_awake = !wifiPowerSave;
   strlcpy(rowSettings.tz, tzPosix.c_str(), sizeof(rowSettings.tz));
   rowSettingsGeneration.fetch_add(1, std::memory_order_relaxed);
 }

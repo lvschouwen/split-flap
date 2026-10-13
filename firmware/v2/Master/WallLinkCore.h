@@ -223,6 +223,7 @@ struct WallLinkCore {
     memset(&config, 0, sizeof(config));
     config.fallback = next.fallback;
     config.update_units_at_start = next.update_units_at_start;
+    config.wifi_awake = next.wifi_awake;
     strncpy(config.tz, next.tz, sizeof(config.tz) - 1);
     haveConfig = true;
     for (WallLinkRow& row : rows) row.configSent = false;

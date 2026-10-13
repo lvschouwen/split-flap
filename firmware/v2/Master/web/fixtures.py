@@ -302,6 +302,7 @@ def documents(scenario):
                 "timezone": "CET-1CEST,M3.5.0,M10.5.0/3", "updateUnitsAtStart": True,
                 "releaseCheck": scenario != "not-looked",
                 "releaseChannel": "test" if scenario == "not-looked" else "stable",
+                "wifiPowerSave": True,
                 "mqtt": {"host": "broker.example", "port": 1883, "user": "wall", "passwordSet": True}},
             "/api/v2/settings/board/" + MASTER: {"name": "", "unitCount": 0},
             "/api/v2/log": "[12] a line of a board's log\n[13] another one\n",

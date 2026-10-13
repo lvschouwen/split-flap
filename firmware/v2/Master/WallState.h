@@ -157,7 +157,7 @@ ClusterVerdict wallStateSetRows(const WallRowsTable& table);
 // What every row board is told about how to behave (Config on the link): the
 // time zone and whether it updates its units when it starts. Set from the
 // settings at start and when they change; the link task sends it on.
-void wallStateSetRowSettings(const String& tzPosix, bool updateUnitsAtStart);
+void wallStateSetRowSettings(const String& tzPosix, bool updateUnitsAtStart, bool wifiPowerSave);
 // The settings and a number that changes whenever they do.
 uint32_t wallStateRowSettings(wl_Config& out);
 uint32_t wallStateRowSettingsGeneration();

@@ -513,6 +513,13 @@ static void test_a_change_of_quiet_or_settings_reaches_every_connected_row_once(
   core.setConfig(config("UTC0", true));
   for (uint32_t t = 1320; t <= 1400; t += 20) core.tick(t, *rec);
   TEST_ASSERT_EQUAL(4, rec->count(wl_ToRow_config_tag));
+  // The radio's power save is one of the settings a row is told.
+  wl_Config awake = config("UTC0", true);
+  awake.wifi_awake = true;
+  core.setConfig(awake);
+  for (uint32_t t = 1420; t <= 1500; t += 20) core.tick(t, *rec);
+  TEST_ASSERT_EQUAL(6, rec->count(wl_ToRow_config_tag));
+  TEST_ASSERT_TRUE(rec->written.back().second.body.config.wifi_awake);
 }
 
 static void test_quiet_and_settings_wait_for_a_busy_row_and_are_sent_again_after_a_redial() {

@@ -53,6 +53,8 @@ struct MasterSettings {
                            // unattended recovery path for a unit that came
                            // back from a failed flash, and defaulting it off
                            // would silently strand those.
+  bool wifiPowerSave = true;  // #609: false keeps the radio awake, on this
+                              // board and on every row board (Config)
   bool releaseCheck = true;  // #583: look for a release once a day. Looking
                              // never installs.
   String releaseChannel;     // #583: "stable", or "test" for a trial release
@@ -76,6 +78,7 @@ struct MasterSettings {
 #define SETTINGS_KEY_UNIT_COUNT   "unitCount"
 #define SETTINGS_KEY_REFLASH_BOOT "reflashOnBoot"
 #define SETTINGS_KEY_QUIET "quiet"
+#define SETTINGS_KEY_WIFI_PS "wifiPs"
 #define SETTINGS_KEY_RELEASE_CHECK "relCheck"
 #define SETTINGS_KEY_RELEASE_CHANNEL "relChannel"
 
@@ -150,6 +153,7 @@ inline MasterSettings loadSettings(SettingsStore& store) {
 
   s.reflashOnBoot = store.getInt(SETTINGS_KEY_REFLASH_BOOT, 1) != 0;
   s.quiet = store.getInt(SETTINGS_KEY_QUIET, 0) != 0;
+  s.wifiPowerSave = store.getInt(SETTINGS_KEY_WIFI_PS, 1) != 0;
   s.releaseCheck = store.getInt(SETTINGS_KEY_RELEASE_CHECK, 1) != 0;
   s.releaseChannel =
       store.getString(SETTINGS_KEY_RELEASE_CHANNEL, SETTINGS_DEFAULT_RELEASE_CHANNEL);
@@ -194,6 +198,10 @@ inline void saveUnitCountOverride(SettingsStore& store, int v) {
 
 inline void saveReflashOnBoot(SettingsStore& store, bool v) {
   store.putInt(SETTINGS_KEY_REFLASH_BOOT, v ? 1 : 0);
+}
+
+inline void saveWifiPowerSave(SettingsStore& store, bool v) {
+  store.putInt(SETTINGS_KEY_WIFI_PS, v ? 1 : 0);
 }
 
 inline void saveQuiet(SettingsStore& store, bool v) {

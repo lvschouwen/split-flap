@@ -489,6 +489,33 @@ static void test_apply_persists_quiet_both_ways() {
   TEST_ASSERT_FALSE(loadSettings(store).quiet);
 }
 
+// --- WiFi power save (#609) ---------------------------------------------------
+
+static void test_wifi_power_save_defaults_on_and_takes_only_true_or_false() {
+  FakeSettingsStore store;
+  TEST_ASSERT_TRUE(loadSettings(store).wifiPowerSave);
+  PendingSettingsPost post;
+  const char* noFlag[] = {"0", "1", "off", "", "False"};
+  for (const char* v : noFlag) {
+    TEST_ASSERT_EQUAL((int)SettingsParamResult::Invalid,
+                      (int)stageSettingsParam(post, PARAM_WIFI_POWER_SAVE, v));
+  }
+  TEST_ASSERT_FALSE(post.wifiPowerSaveProvided);
+}
+
+static void test_apply_persists_wifi_power_save() {
+  FakeSettingsStore store;
+  MasterSettings settings = loadSettings(store);
+  PendingSettingsPost post;
+  TEST_ASSERT_EQUAL((int)SettingsParamResult::Accepted,
+                    (int)stageSettingsParam(post, PARAM_WIFI_POWER_SAVE, "false"));
+  PendingSettingsPost shared;
+  mergeSettingsPost(shared, post);
+  applySettingsPost(shared, settings, store);
+  TEST_ASSERT_FALSE(settings.wifiPowerSave);
+  TEST_ASSERT_FALSE(loadSettings(store).wifiPowerSave);
+}
+
 // --- looking for a release (#583) ---------------------------------------------
 
 static void test_the_release_look_defaults_on_and_to_the_stable_channel() {
@@ -573,6 +600,8 @@ int main(int, char**) {
   RUN_TEST(test_apply_persists_reflash_on_boot_both_ways);
   RUN_TEST(test_quiet_defaults_off_and_takes_only_true_or_false);
   RUN_TEST(test_apply_persists_quiet_both_ways);
+  RUN_TEST(test_wifi_power_save_defaults_on_and_takes_only_true_or_false);
+  RUN_TEST(test_apply_persists_wifi_power_save);
   RUN_TEST(test_the_release_look_defaults_on_and_to_the_stable_channel);
   RUN_TEST(test_the_release_settings_take_only_their_values);
   RUN_TEST(test_apply_persists_the_release_settings);

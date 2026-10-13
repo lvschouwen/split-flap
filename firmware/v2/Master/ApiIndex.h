@@ -30,7 +30,7 @@ static const ApiRoute API_ROUTES[] = {
   {"GET",  "/api/v2/op",              "what became of a job: /api/v2/op/<id> (202 running, 200 finished, 404 unknown)"},
   {"GET",  "/api/v2/settings/board",  "a board's own settings: /api/v2/settings/board/<master's name> -> {name, unitCount}; a row board has none ({})"},
   {"PUT",  "/api/v2/settings/board",  "change them: any part of what the GET gives -> {done, restart}"},
-  {"GET",  "/api/v2/settings/wall",   "the wall's settings: mode, quiet, alignment, speed, timezone (POSIX rule), updateUnitsAtStart, releaseCheck (the daily look), releaseChannel (stable|test), mqtt {host, port, user, passwordSet}"},
+  {"GET",  "/api/v2/settings/wall",   "the wall's settings: mode, quiet, alignment, speed, timezone (POSIX rule), updateUnitsAtStart, releaseCheck (the daily look), releaseChannel (stable|test), wifiPowerSave (false keeps every board's radio awake), mqtt {host, port, user, passwordSet}"},
   {"PUT",  "/api/v2/settings/wall",   "change them: any part of what the GET gives (mqtt.password is write-only) -> {done, restart}; 400 names the key that was refused"},
   {"GET",  "/api/v2/stream",          "server-sent events (ask with Accept: text/event-stream), each topic when it changes and all of them to a new reader: wall (mode, quiet, every row's text), verdict (the wall's and every board's), jobs (the job table), history (the newest seq)"},
   {"GET",  "/api/v2/unit",            "one unit: /api/v2/unit/<board id>/<address>: its verdict with every reason, and its facts grouped as firmware, power, link, drum, bootloader (a flap is its place on the drum, 0 = blank)"},

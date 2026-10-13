@@ -177,6 +177,23 @@ static const uint8_t TX_INDEX_UNKNOWN = 0xFF;
 static std::atomic<uint8_t> txPublishedIndex{TX_INDEX_UNKNOWN};
 static std::atomic<uint32_t> txConfirmedAtMs{0};  // 0 = never (#515)
 
+// #609: power save as asked for (any task) and as the radio was last told
+// (netTask). The station starts with it on.
+static std::atomic<bool> powerSaveWanted{true};
+static bool powerSaveApplied = true;
+
+void wifiSetPowerSave(bool on) {
+  powerSaveWanted.store(on, std::memory_order_relaxed);
+}
+
+static void powerSaveTick() {
+  const bool want = powerSaveWanted.load(std::memory_order_relaxed);
+  if (want == powerSaveApplied || (WiFi.getMode() & WIFI_MODE_STA) == 0) return;
+  if (!WiFi.setSleep(want)) return;  // refused: asked again on the next tick
+  powerSaveApplied = want;
+  SerialPrintln(want ? F("wifi: power save on") : F("wifi: power save off, the radio stays awake"));
+}
+
 void wifiNoteConfirmedTraffic() {
   uint32_t now = millis();
   txConfirmedAtMs.store(now != 0 ? now : 1, std::memory_order_relaxed);
@@ -395,6 +412,7 @@ String wifiServiceUrl() {
 }
 
 void wifiServiceTick() {
+  powerSaveTick();
   if (liveSettings == nullptr) return;  // init hasn't run
 
   if (portalUp) dnsServer.processNextRequest();

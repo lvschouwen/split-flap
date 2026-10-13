@@ -54,3 +54,15 @@ def test_a_close_is_logged_with_its_facts_and_a_run_of_them_is_damped() -> None:
                  "WiFi.BSSIDstr()"):
         assert fact in closed, fact
     assert "logClosed(why);" in _body(code, "void drop(const __FlashStringHelper* why) {")
+
+
+def test_the_row_takes_its_radio_power_save_from_the_master_and_reports_it() -> None:
+    code = _code()
+    handle = _body(code, "void handle(const wl_ToRow& m, const FollowerClusterView& view) {")
+    config = handle[handle.index("case wl_ToRow_config_tag:"):handle.index("case wl_ToRow_op_tag:")]
+    assert "followerWifiStayAwake(c.wifi_awake);" in config
+    assert "s.wifi_awake = followerWifiAwake();" in _body(code, "void sendStatus(bool timeSynced) {")
+    wifi = re.sub(r"//[^\n]*", "", (LINK.parent / "FollowerWifi.cpp").read_text())
+    stay = _body(wifi, "void followerWifiStayAwake(bool awake) {")
+    assert "if (awake == radioAwake) return;" in stay
+    assert "WiFi.setSleepMode(awake ? WIFI_NONE_SLEEP : WIFI_MODEM_SLEEP)" in stay

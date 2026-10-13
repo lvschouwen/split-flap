@@ -69,6 +69,17 @@ static void txApply(uint8_t index, bool log, bool force = false) {
   txAppliedIndex = (int8_t)index;
 }
 
+static bool radioAwake = false;  // the SDK starts a station in modem sleep
+
+void followerWifiStayAwake(bool awake) {
+  if (awake == radioAwake) return;
+  if (!WiFi.setSleepMode(awake ? WIFI_NONE_SLEEP : WIFI_MODEM_SLEEP)) return;
+  radioAwake = awake;
+  SerialPrintln(awake ? F("wifi: power save off, the radio stays awake") : F("wifi: power save on"));
+}
+
+bool followerWifiAwake() { return radioAwake; }
+
 int followerTxPowerDbm10() {
   return txAppliedIndex < 0 ? 0 : wifiTxLevelDbm10((uint8_t)txAppliedIndex);
 }

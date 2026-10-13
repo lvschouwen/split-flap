@@ -39,6 +39,10 @@ int wifiTxPowerDbm10();
 // Any task.
 void wifiNoteConfirmedTraffic();
 
+// #609: WiFi power save on (the core's default) or off, as the wall setting
+// says. Any task; the tick applies it.
+void wifiSetPowerSave(bool on);
+
 // netTask context only (same task as the tick that mutates it): the
 // policy's current phase, for the status LED (#199).
 WifiPhase wifiServicePhase();

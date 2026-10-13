@@ -71,5 +71,6 @@ inline void writeRowLink(JsonObject row, const WallRowDef& def, const WallRowLin
     s["busy"] = link.status.busy;
     s["imageSize"] = link.status.image_size;
     s["timeSynced"] = link.status.time_synced;
+    s["wifiAwake"] = link.status.wifi_awake;
   }
 }

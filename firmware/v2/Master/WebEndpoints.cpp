@@ -16,6 +16,7 @@
 #include "WebEndpoints.h"
 #include "WallShow.h"
 #include "WallState.h"
+#include "WifiService.h"
 #include "WebEndpointsInternal.h"
 
 #include "QuietPolicy.h"  // quietBlocksContent (#227)
@@ -213,7 +214,8 @@ void webEndpointsInit(AsyncWebServer& server, MasterSettings& settings,
   // Pre-auth body-size guard (#347) — before any route so it wins the
   // first-match-wins scan for an oversized body.
   attachBodyLimitGuard(server);
-  wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot);
+  wifiSetPowerSave(settings.wifiPowerSave);
+  wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot, settings.wifiPowerSave);
   // Handlers never write the store; the loop drain and the mqttTask-called
   // setters below do (both hold webStateMutex).
   webStateMutex = xSemaphoreCreateMutex();
@@ -292,6 +294,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       int unitCountBefore = settings.unitCountOverride;
       bool reflashOnBootBefore = settings.reflashOnBoot;
       bool quietBefore = settings.quiet;
+      bool wifiPowerSaveBefore = settings.wifiPowerSave;
       bool releaseCheckBefore = settings.releaseCheck;
       String releaseChannelBefore = settings.releaseChannel;
       applySettingsPost(pendingPost, settings, store);
@@ -312,7 +315,11 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
       // sets this BEFORE rebooting into the campaign.
       if (settings.reflashOnBoot != reflashOnBootBefore) {
         tasksSetReflashOnBoot(settings.reflashOnBoot);
-        wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot);
+        wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot, settings.wifiPowerSave);
+      }
+      if (settings.wifiPowerSave != wifiPowerSaveBefore) {  // #609
+        wifiSetPowerSave(settings.wifiPowerSave);
+        wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot, settings.wifiPowerSave);
       }
       if (settings.quiet != quietBefore) {
         tasksSetQuiet(settings.quiet);  // #227
@@ -444,7 +451,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   // lock domains from ever nesting (v1 #48 parity: TZ applies rebootless).
   if (timezoneChanged) {
     clockServiceApplyTz(settings);
-    wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot);
+    wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot, settings.wifiPowerSave);
   }
 
   // The row search: blocking mDNS queries take LWIP locks, so they run out

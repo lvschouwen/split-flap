@@ -41,6 +41,7 @@ message Config {
   Fallback fallback = 1;          // what to show when the master is lost
   bool update_units_at_start = 2;
   string tz = 3;                  // POSIX tz rule
+  bool wifi_awake = 4;            // keep the radio awake: no WiFi power save
 }
 
 // The unit jobs a row board runs. What `arg` means is noted per job; a job
@@ -139,6 +140,7 @@ message Status {
   uint32 image_size = 13;
   bool time_synced = 14;
   uint32 heap2 = 15;              // free bytes in the second heap; 0 = the image has none
+  bool wifi_awake = 16;           // WiFi power save is off
 }
 
 message Shown {

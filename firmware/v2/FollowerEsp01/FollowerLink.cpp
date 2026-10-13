@@ -222,6 +222,7 @@ void sendStatus(bool timeSynced) {
   s.busy = unitOpsBusy();
   s.image_size = ESP.getSketchSize();
   s.time_synced = timeSynced;
+  s.wifi_awake = followerWifiAwake();
   if (sendWhenRoom()) {
     lastStatusMs = millis();
     busySent = s.busy;
@@ -492,6 +493,7 @@ void handle(const wl_ToRow& m, const FollowerClusterView& view) {
         prefsStageFallback((FollowerFallback)c.fallback);
       }
       prefsStageReflashOnBoot(c.update_units_at_start);
+      followerWifiStayAwake(c.wifi_awake);
       clusterSetTz(String(c.tz));
       break;
     }

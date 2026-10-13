@@ -40,6 +40,7 @@
 #define PARAM_MQTT_PASSWORD   "mqttPassword"
 #define PARAM_UNIT_COUNT      "unitCount"
 #define PARAM_REFLASH_ON_BOOT "reflashOnBoot"
+#define PARAM_WIFI_POWER_SAVE "wifiPowerSave"
 #define PARAM_QUIET           "quiet"
 #define PARAM_RELEASE_CHECK   "releaseCheck"
 #define PARAM_RELEASE_CHANNEL "releaseChannel"
@@ -63,6 +64,7 @@ struct PendingSettingsPost {
   String unitCount;     bool unitCountProvided = false;
   String reflashOnBoot; bool reflashOnBootProvided = false;  // #412
   String quiet;         bool quietProvided = false;          // #227
+  String wifiPowerSave; bool wifiPowerSaveProvided = false;  // #609
   String releaseCheck;   bool releaseCheckProvided = false;   // #583
   String releaseChannel; bool releaseChannelProvided = false; // #583
 };
@@ -162,6 +164,18 @@ inline SettingsParamResult stageSettingsParam(PendingSettingsPost& post,
     }
     post.mqttPort = trimmed;
     post.mqttPortProvided = true;
+    return SettingsParamResult::Accepted;
+  }
+
+  // #609 WiFi power save, strictly "true"/"false".
+  if (name == PARAM_WIFI_POWER_SAVE) {
+    String trimmed = rawValue;
+    trimmed.trim();
+    if (trimmed != "true" && trimmed != "false") {
+      return SettingsParamResult::Invalid;
+    }
+    post.wifiPowerSave = trimmed;
+    post.wifiPowerSaveProvided = true;
     return SettingsParamResult::Accepted;
   }
 
@@ -281,6 +295,7 @@ inline void mergeSettingsPost(PendingSettingsPost& shared,
   if (accepted.unitCountProvided)  { shared.unitCount  = accepted.unitCount;  shared.unitCountProvided  = true; }
   if (accepted.reflashOnBootProvided) { shared.reflashOnBoot = accepted.reflashOnBoot; shared.reflashOnBootProvided = true; }
   if (accepted.quietProvided)      { shared.quiet      = accepted.quiet;      shared.quietProvided      = true; }
+  if (accepted.wifiPowerSaveProvided) { shared.wifiPowerSave = accepted.wifiPowerSave; shared.wifiPowerSaveProvided = true; }
   if (accepted.releaseCheckProvided) { shared.releaseCheck = accepted.releaseCheck; shared.releaseCheckProvided = true; }
   if (accepted.releaseChannelProvided) { shared.releaseChannel = accepted.releaseChannel; shared.releaseChannelProvided = true; }
   shared.pending = true;
@@ -336,6 +351,14 @@ inline void applySettingsPost(PendingSettingsPost& post,
     if (settings.reflashOnBoot != want) {
       settings.reflashOnBoot = want;
       saveReflashOnBoot(store, settings.reflashOnBoot);
+    }
+  }
+
+  if (post.wifiPowerSaveProvided) {
+    bool want = (post.wifiPowerSave == "true");
+    if (settings.wifiPowerSave != want) {
+      settings.wifiPowerSave = want;
+      saveWifiPowerSave(store, settings.wifiPowerSave);
     }
   }
 
