@@ -316,10 +316,19 @@ inline uint16_t unitFleetMaxExcess(const UnitFacts* units, int width) {
   return worst;
 }
 
+// The weakest unit and the units under the floor (#623), beside vccMin:
+// present only when vccMin is. `board` is a hostname ([a-z0-9-], no escaping).
+struct MqttSupplyFacts {
+  uint8_t unit = 0;
+  const char* board = "";
+  uint8_t under = 0;
+};
+
 inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap, int heapFragPct,
                                     long rssi, int unitErrors, unsigned long uptimeSec,
                                     bool ntpSynced, uint16_t vccMin_mV, uint32_t rebootTotal,
-                                    bool anyJam, uint16_t maxExcess) {
+                                    bool anyJam, uint16_t maxExcess,
+                                    const MqttSupplyFacts* supply = nullptr) {
   size_t o = (size_t)mqttSnprintf(buf, bufLen,
       MQTT_FMT("{\"heap\":%lu,\"heapFrag\":%d,\"rssi\":%ld,\"unitErrors\":%d,\"uptime\":%lu,\"ntp\":%d"),
       (unsigned long)freeHeap, heapFragPct, rssi, unitErrors, uptimeSec, ntpSynced ? 1 : 0);
@@ -327,6 +336,10 @@ inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap,
   // so the HA sensor reads unavailable instead of a phantom 0 mV.
   if (vccMin_mV > 0 && o < bufLen)
     o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"vccMin\":%u"), (unsigned)vccMin_mV);
+  if (vccMin_mV > 0 && supply != nullptr && o < bufLen)
+    o += (size_t)mqttSnprintf(buf + o, bufLen - o,
+                              MQTT_FMT(",\"vccMinUnit\":%u,\"vccMinBoard\":\"%s\",\"vccUnder\":%u"),
+                              (unsigned)supply->unit, supply->board, (unsigned)supply->under);
   // Fleet reboot odometer (#368): always emitted, see unitFleetRebootTotal.
   if (o < bufLen)
     o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"reboots\":%u"), (unsigned)rebootTotal);
@@ -412,6 +425,13 @@ enum MqttDiscoveryEntity {
   // JSON rides splitflap/<id>/update, INSTALL on update/set runs the
   // update-from-release job.
   DISCOVERY_FIRMWARE_UPDATE,
+  // The weakest unit and the units under the supply floor (#623), beside
+  // vccMin in the telemetry packet.
+  DISCOVERY_VCC_MIN_UNIT,
+  DISCOVERY_VCC_UNDER_FLOOR,
+  // The wall's flips (#619): every unit's lifetime revolutions summed, a
+  // rising counter on splitflap/<id>/flips.
+  DISCOVERY_FLIPS,
   DISCOVERY_ENTITY_COUNT
 };
 
@@ -450,6 +470,9 @@ inline MqttDiscMeta mqttDiscMeta(int entity) {
     case DISCOVERY_NOTIFY:       return { "notify",        "" };
     case DISCOVERY_TEXT_CLEAR:   return { "button",        "_text_clear" };
     case DISCOVERY_FIRMWARE_UPDATE: return { "update",     "_firmware" };
+    case DISCOVERY_VCC_MIN_UNIT:    return { "sensor",     "_vcc_min_unit" };
+    case DISCOVERY_VCC_UNDER_FLOOR: return { "sensor",     "_vcc_under_floor" };
+    case DISCOVERY_FLIPS:           return { "sensor",     "_flips" };
   }
   return { nullptr, nullptr };
 }
@@ -576,6 +599,12 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Firmware\",\"stat_t\":\"splitflap/%s/update\",\"cmd_t\":\"splitflap/%s/update/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_firmware\",\"pl_inst\":\"INSTALL\",\"dev_cla\":\"firmware\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
+    case DISCOVERY_VCC_MIN_UNIT:    return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_vcc_min_unit",    "Weakest unit",             "telemetry", "{{ value_json.vccMinBoard }} #{{ value_json.vccMinUnit }}", nullptr, nullptr, "diagnostic", nullptr, nullptr);
+    case DISCOVERY_VCC_UNDER_FLOOR: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_vcc_under_floor", "Units under supply floor", "telemetry", "{{ value_json.vccUnder }}", nullptr, nullptr, "diagnostic", nullptr, nullptr);
+    case DISCOVERY_FLIPS:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Flips\",\"stat_t\":\"splitflap/%s/flips\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_flips\",\"stat_cla\":\"total_increasing\",\"ic\":\"mdi:counter\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
   }
   if (bufLen > 0) buf[0] = '\0';
   return 0;

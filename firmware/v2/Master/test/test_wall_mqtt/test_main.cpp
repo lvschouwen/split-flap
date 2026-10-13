@@ -175,6 +175,119 @@ static void test_the_retired_entities_are_the_two_old_sensors() {
   TEST_ASSERT_EQUAL(0, (int)buildRetiredDiscoveryTopic(topic, sizeof(topic), "sf1", 2));
 }
 
+// ---- #623: the wall's supply ----
+static UnitFacts unitWithVcc(uint16_t mV) {
+  UnitFacts u;
+  u.state = 1;
+  u.vitalsValid = true;
+  u.vitals.vccMin_mV = mV;
+  return u;
+}
+
+static void test_the_weakest_unit_and_the_count_under_the_floor_are_found_across_boards() {
+  UnitFacts own[3] = {unitWithVcc(4300), unitWithVcc(3900), unitWithVcc(0)};
+  UnitFacts theirs[2] = {unitWithVcc(3800), unitWithVcc(3950)};
+  own[2].vitalsValid = false;
+  WallMqttRow rows[2];
+  makeHealthy(rows);
+  wallMqttUnitAggregates(own, 3, 0x20, rows[0]);
+  wallMqttUnitAggregates(theirs, 2, 0x20, rows[1]);
+  TEST_ASSERT_EQUAL(3900, rows[0].vccMin);
+  TEST_ASSERT_EQUAL(0x21, rows[0].vccMinUnit);
+  TEST_ASSERT_EQUAL(1, rows[0].vccUnder);
+  const WallMqttSupply s = wallMqttSupply(rows, 2);
+  TEST_ASSERT_EQUAL(3800, s.mV);
+  TEST_ASSERT_EQUAL(0x20, s.unit);
+  TEST_ASSERT_EQUAL(1, s.board);
+  TEST_ASSERT_EQUAL(3, s.under);
+  // No supply known anywhere.
+  WallMqttRow none[1];
+  none[0] = WallMqttRow{};
+  TEST_ASSERT_EQUAL(0, wallMqttSupply(none, 1).mV);
+  TEST_ASSERT_EQUAL(-1, wallMqttSupply(none, 1).board);
+}
+
+// ---- #619: the wall's flips ----
+static UnitFacts unitWithOdometer(uint32_t turns, bool valid) {
+  UnitFacts u;
+  u.state = 1;
+  u.odometerValid = valid;
+  u.odometer = turns;
+  return u;
+}
+
+static void test_flips_wait_for_every_found_unit_and_never_drop_for_a_silence() {
+  WallMqttFlips f;
+  UnitFacts a[2] = {unitWithOdometer(100, true), unitWithOdometer(50, false)};
+  // A found unit without a reading yet: not complete.
+  TEST_ASSERT_FALSE(wallMqttFlipsNote(f, 0, a, 2));
+  a[1].odometerValid = true;
+  TEST_ASSERT_TRUE(wallMqttFlipsNote(f, 0, a, 2));
+  TEST_ASSERT_EQUAL_UINT32(150, wallMqttFlipsTotal(f, 1));
+  // The second unit goes silent: it keeps the count it last gave.
+  a[1].state = 0;
+  a[1].odometerValid = false;
+  TEST_ASSERT_TRUE(wallMqttFlipsNote(f, 0, a, 2));
+  a[0].odometer = 120;
+  TEST_ASSERT_TRUE(wallMqttFlipsNote(f, 0, a, 2));
+  TEST_ASSERT_EQUAL_UINT32(170, wallMqttFlipsTotal(f, 1));
+  // A unit never read and not found counts nothing and blocks nothing.
+  UnitFacts b[1] = {unitWithOdometer(0, false)};
+  b[0].state = 0;
+  TEST_ASSERT_TRUE(wallMqttFlipsNote(f, 1, b, 1));
+  TEST_ASSERT_EQUAL_UINT32(170, wallMqttFlipsTotal(f, 2));
+  // A reset odometer is a drop, as it should be.
+  a[0].odometer = 0;
+  wallMqttFlipsNote(f, 0, a, 2);
+  TEST_ASSERT_EQUAL_UINT32(50, wallMqttFlipsTotal(f, 2));
+  wallMqttFlipsReset(f);
+  TEST_ASSERT_EQUAL_UINT32(0, wallMqttFlipsTotal(f, 2));
+  TEST_ASSERT_FALSE(wallMqttFlipsNote(f, WALL_VERDICT_BOARDS, a, 2));
+}
+
+// ---- #621: one problem sensor a board ----
+static void test_a_board_is_keyed_by_its_id_and_named_by_its_place() {
+  WallMqttRow rows[2];
+  makeHealthy(rows);
+  rows[0].host = "split-flap-row1";
+  rows[1].host = "split-flap-row2";
+  rows[1].address = "192.168.1.50";
+  rows[1].rssiKnown = true;
+  rows[1].rssi = -61;
+  TEST_ASSERT_EQUAL_STRING("own", wallMqttBoardKey(rows[0]));
+  TEST_ASSERT_EQUAL_STRING("row-1", wallMqttBoardKey(rows[1]));
+  TEST_ASSERT_FALSE(wallMqttBoardProblem(rows[1]));
+  rows[1].fault = true;
+  TEST_ASSERT_TRUE(wallMqttBoardProblem(rows[1]));
+  char topic[128];
+  buildBoardProblemDiscoveryTopic(topic, sizeof(topic), "flappy", wallMqttBoardKey(rows[1]));
+  TEST_ASSERT_EQUAL_STRING("homeassistant/binary_sensor/flappy_board_row-1/config", topic);
+  char payload[512];
+  size_t n = buildBoardProblemDiscovery(payload, sizeof(payload), "flappy", "abc1234", "row-1",
+                                        "split-flap-row2");
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(payload));
+  TEST_ASSERT_TRUE(contains(payload, "\"name\":\"split-flap-row2\""));
+  TEST_ASSERT_TRUE(contains(payload, "\"stat_t\":\"splitflap/flappy/board/row-1/problem\""));
+  TEST_ASSERT_TRUE(contains(payload, "\"json_attr_t\":\"splitflap/flappy/board/row-1/attrs\""));
+  TEST_ASSERT_TRUE(contains(payload, "\"uniq_id\":\"flappy_board_row-1\""));
+  TEST_ASSERT_TRUE(contains(payload, "\"dev_cla\":\"problem\""));
+  TEST_ASSERT_TRUE(contains(payload, "\"ids\":[\"flappy\"]"));
+  const String attrs = wallMqttBoardAttrsJson(rows[1]);
+  TEST_ASSERT_TRUE(contains(attrs, "\"id\":\"row-1\""));
+  TEST_ASSERT_TRUE(contains(attrs, "\"host\":\"split-flap-row2\""));
+  TEST_ASSERT_TRUE(contains(attrs, "\"address\":\"192.168.1.50\""));
+  TEST_ASSERT_TRUE(contains(attrs, "\"rssi\":-61"));
+  TEST_ASSERT_TRUE(contains(attrs, "\"rev\":\"abc1234\""));
+  TEST_ASSERT_TRUE(contains(attrs, "\"reach\":\"up\""));
+  TEST_ASSERT_TRUE(contains(attrs, "\"level\":\"note\",\"reason\":\"units-note\""));
+  TEST_ASSERT_TRUE(contains(attrs, "\"found\":5"));
+  // The own row: no reach, no address until given.
+  const String own = wallMqttBoardAttrsJson(rows[0]);
+  TEST_ASSERT_TRUE(contains(own, "\"own\":true"));
+  TEST_ASSERT_FALSE(contains(own, "\"reach\""));
+  TEST_ASSERT_FALSE(contains(own, "\"address\""));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_healthy_wall_is_no_problem);
@@ -190,6 +303,9 @@ int main(int, char**) {
   RUN_TEST(test_state_text_keeps_to_255_characters);
   RUN_TEST(test_discovery_names_the_new_topics);
   RUN_TEST(test_the_retired_entities_are_the_two_old_sensors);
+  RUN_TEST(test_the_weakest_unit_and_the_count_under_the_floor_are_found_across_boards);
+  RUN_TEST(test_flips_wait_for_every_found_unit_and_never_drop_for_a_silence);
+  RUN_TEST(test_a_board_is_keyed_by_its_id_and_named_by_its_place);
   UNITY_END();
   return 0;
 }

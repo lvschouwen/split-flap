@@ -236,6 +236,36 @@ static void test_telemetry_payload_exact_shape() {
     "{\"heap\":25048,\"heapFrag\":12,\"rssi\":-61,\"unitErrors\":2,\"uptime\":3600,\"ntp\":1,\"vccMin\":4210,\"reboots\":6,\"jam\":\"ON\",\"stepsExcess\":340}", buf);
   TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
 }
+// #623: the weakest unit and the count under the floor ride beside vccMin.
+static void test_telemetry_supply_facts_follow_vccmin() {
+  char buf[224];
+  MqttSupplyFacts supply;
+  supply.unit = 0x27;
+  supply.board = "split-flap-row1";
+  supply.under = 2;
+  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 3900, 6UL, false, 0, &supply);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  assert_contains(buf, "\"vccMin\":3900,\"vccMinUnit\":39,\"vccMinBoard\":\"split-flap-row1\",\"vccUnder\":2,\"reboots\":6");
+  // Without a vccMin there is no weakest unit either.
+  n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0, 6UL, false, 0, &supply);
+  TEST_ASSERT_NULL(strstr(buf, "vccMinUnit"));
+}
+
+// #619: flips, a rising counter.
+static void test_discovery_flips_and_supply_sensors() {
+  char tbuf[96];
+  char pbuf[512];
+  buildDiscoveryTopic(tbuf, sizeof(tbuf), DISCOVERY_FLIPS, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_flips/config", tbuf);
+  buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_FLIPS, "flappy", "abc1234");
+  assert_contains(pbuf, "\"stat_t\":\"splitflap/flappy/flips\"");
+  assert_contains(pbuf, "\"stat_cla\":\"total_increasing\"");
+  buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_VCC_MIN_UNIT, "flappy", "abc1234");
+  assert_contains(pbuf, "{{ value_json.vccMinBoard }} #{{ value_json.vccMinUnit }}");
+  buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_VCC_UNDER_FLOOR, "flappy", "abc1234");
+  assert_contains(pbuf, "{{ value_json.vccUnder }}");
+}
+
 static void test_telemetry_vccmin_omitted_when_zero() {
   // #366: no unit reports vitals -> vccMin 0 -> the key is dropped so the HA
   // sensor reads unavailable instead of a phantom 0 mV. Object still closes.
@@ -756,6 +786,8 @@ int main(int, char**) {
   RUN_TEST(test_mqttTopic_builds_expected_paths);
   RUN_TEST(test_telemetry_payload_exact_shape);
   RUN_TEST(test_telemetry_vccmin_omitted_when_zero);
+  RUN_TEST(test_telemetry_supply_facts_follow_vccmin);
+  RUN_TEST(test_discovery_flips_and_supply_sensors);
   RUN_TEST(test_telemetry_ntp_false_renders_zero);
   RUN_TEST(test_mode_command_accepts_exact_options);
   RUN_TEST(test_mode_command_trims_whitespace);

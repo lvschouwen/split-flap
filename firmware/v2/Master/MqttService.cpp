@@ -423,7 +423,7 @@ static void publishDiscoveryClear() {
       "speed",    "alignment",  "units_faulty", "units/attrs",
       "diag/ip",  "diag/ssid",  "diag/reset",   "diag/boots",
       "diag/ota", "diag/tz",    "wall_problem", "wall/attrs",
-      "quiet",    "update"};
+      "quiet",    "update",     "flips"};
   for (unsigned i = 0; i < sizeof(stateSuffixes) / sizeof(stateSuffixes[0]);
        i++) {
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, stateSuffixes[i]).c_str(),
@@ -729,9 +729,82 @@ static void mqttClearRetiredEntities() {
   }
 }
 
-// Wall surfacing: the problem sensor, the boards as its attributes and the
-// wall's text/state, 5 s cadence (MQTT_WALL_INTERVAL_MS; cadence check lives
-// inside). `active` = the rows table has rows.
+// Per-board state (#619/#621/#623), mqttTask-owned. The boards' discovery
+// configs follow the rows table: on a fresh session and whenever the table
+// changes, configs of boards no longer in it are blanked and every board's is
+// published (its name may have changed with its place).
+static WallMqttFlips mqttFlips;
+static uint32_t mqttLastFlips = 0xFFFFFFFFUL;
+static uint32_t mqttBoardsGeneration = 0;
+static bool mqttBoardsPublished = false;
+static int mqttBoardKeyCount = 0;
+static char mqttBoardKeys[WALL_VERDICT_BOARDS][WALL_ROW_ID_MAX + 1];
+static String mqttLastBoardAttrs[WALL_VERDICT_BOARDS];
+static int mqttLastBoardProblem[WALL_VERDICT_BOARDS];
+// The wall's supply, for the telemetry packet (its own cadence).
+static MqttSupplyFacts mqttSupply;
+static char mqttSupplyBoard[CLUSTER_HOST_MAX_LEN + 1] = {0};
+static uint16_t mqttSupplyMinMv = 0;
+
+static void mqttPublishBoardConfigs(const WallMqttRow* rows, int count) {
+  char topicBuf[128];
+  char payloadBuf[512];
+  // Boards that left the table.
+  for (int k = 0; k < mqttBoardKeyCount; k++) {
+    bool present = false;
+    for (int i = 0; i < count && !present; i++) {
+      present = strcmp(wallMqttBoardKey(rows[i]), mqttBoardKeys[k]) == 0;
+    }
+    if (present) continue;
+    size_t tLen = buildBoardProblemDiscoveryTopic(topicBuf, sizeof(topicBuf),
+                                                  mqttResolvedDeviceId.c_str(), mqttBoardKeys[k]);
+    if (tLen > 0 && tLen < sizeof(topicBuf)) mqttClient.publish(topicBuf, 0, true, "");
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, (String("board/") + mqttBoardKeys[k] + "/problem").c_str()).c_str(), 0, true, "");
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, (String("board/") + mqttBoardKeys[k] + "/attrs").c_str()).c_str(), 0, true, "");
+  }
+  mqttBoardKeyCount = 0;
+  for (int i = 0; i < count && i < WALL_VERDICT_BOARDS; i++) {
+    const char* key = wallMqttBoardKey(rows[i]);
+    strlcpy(mqttBoardKeys[mqttBoardKeyCount++], key, sizeof(mqttBoardKeys[0]));
+    size_t tLen = buildBoardProblemDiscoveryTopic(topicBuf, sizeof(topicBuf),
+                                                  mqttResolvedDeviceId.c_str(), key);
+    size_t pLen = buildBoardProblemDiscovery(payloadBuf, sizeof(payloadBuf),
+                                             mqttResolvedDeviceId.c_str(), mqttFwVersion.c_str(),
+                                             key, rows[i].host);
+    if (tLen > 0 && tLen < sizeof(topicBuf) && pLen > 0 && pLen < sizeof(payloadBuf)) {
+      mqttClient.publish(topicBuf, 0, true, payloadBuf);
+    } else {
+      SerialPrintln(F("MQTT: board discovery skipped — would truncate"));
+    }
+    mqttLastBoardAttrs[i] = "\x01";
+    mqttLastBoardProblem[i] = -1;
+  }
+}
+
+// One problem sensor a board (#621), its facts as attributes: on change.
+static void mqttPublishBoards(const WallMqttRow* rows, int count) {
+  for (int i = 0; i < count && i < WALL_VERDICT_BOARDS; i++) {
+    const String base = String("board/") + wallMqttBoardKey(rows[i]);
+    const int problem = wallMqttBoardProblem(rows[i]) ? 1 : 0;
+    if (problem != mqttLastBoardProblem[i]) {
+      mqttLastBoardProblem[i] = problem;
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, (base + "/problem").c_str()).c_str(), 0,
+                         true, problem ? "ON" : "OFF");
+    }
+    const String attrs = wallMqttBoardAttrsJson(rows[i]);
+    if (attrs != mqttLastBoardAttrs[i]) {
+      mqttLastBoardAttrs[i] = attrs;
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, (base + "/attrs").c_str()).c_str(), 0,
+                         true, attrs.c_str());
+    }
+  }
+}
+
+// Wall surfacing, 5 s cadence (MQTT_WALL_INTERVAL_MS; cadence check lives
+// inside): every board's problem sensor (#621), the wall's supply (#623) and
+// flips (#619) — on a master on its own too, its row being the wall — and,
+// with row boards (`active` = the rows table has rows), the wall problem
+// sensor with the boards as its attributes and the wall's text/state.
 static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
   if ((int32_t)(millis() - mqttNextWallMs) < 0) return;
   mqttNextWallMs = millis() + MQTT_WALL_INTERVAL_MS;
@@ -773,7 +846,6 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
     mqttLastWallAttrs = "\x01";
     mqttLastWallConfigured = activeNow;
   }
-  if (!active) return;
 
   // Heap, not this task's stack: the snapshot and one row's unit facts.
   std::unique_ptr<WallSnapshot> wall(new WallSnapshot(wallStateGet()));
@@ -782,36 +854,69 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
   std::unique_ptr<WallVerdicts> verdicts(new WallVerdicts);
   const uint32_t generation = wallStateRowsGeneration();
   const bool judged = wallVerdictsGet(*verdicts, generation);
-  WallMqttRow rows[CLUSTER_MAX_MEMBERS];
-  char texts[CLUSTER_MAX_MEMBERS][WALL_ROW_TEXT_MAX + 1];
+  WallMqttRow rows[WALL_VERDICT_BOARDS];
+  char texts[WALL_VERDICT_BOARDS][WALL_ROW_TEXT_MAX + 1];
+  char hosts[WALL_VERDICT_BOARDS][CLUSTER_HOST_MAX_LEN + 1];
   const uint32_t nowMs = millis();
-  const int count = wall->rows.count;
+  const String ownAddress = WiFi.localIP().toString();
+  const int ownRssi = WiFi.RSSI();
+  // A master on its own: its row is the wall.
+  const bool alone = wall->rows.count == 0;
+  const int count = alone ? 1 : wall->rows.count;
+  if (generation != mqttBoardsGeneration) {
+    wallMqttFlipsReset(mqttFlips);  // the boards are numbered by the table
+    mqttBoardsGeneration = generation;
+    mqttBoardsPublished = false;
+  }
+  bool flipsComplete = true;
   for (int i = 0; i < count; i++) {
-    const WallRowDef& def = wall->rows.rows[i];
-    const WallRowLink& link = wall->link[i];
     WallMqttRow& r = rows[i];
-    r.id = def.id;
-    r.row = def.row;
-    r.col = def.col;
-    r.width = def.width;
-    r.own = wallRowIsOwn(def);
-    if (const WallVerdictBoard* board = judged ? verdicts->ofRow(i) : nullptr) {
-      r.judged = true;
-      r.fault = board->verdict.level == VerdictLevel::Fault;
-      r.level = verdictLevelName(board->verdict.level);
-      r.reason = boardReasonName(board->verdict.reason);
-      r.unitsFaulty = (uint8_t)unitFaultCount(board->unit, board->units);
-    }
+    r = WallMqttRow{};
     texts[i][0] = '\0';
-    wallShowRowText(i, texts[i], sizeof(texts[i]));
+    if (alone) {
+      r.own = true;
+      r.width = (uint8_t)snap.displayWidth;
+      wallRowsOwnHostName(wall->rows, hosts[i], sizeof(hosts[i]));
+      if (const WallVerdictBoard* board = judged ? verdicts->own() : nullptr) {
+        r.judged = true;
+        r.fault = board->verdict.level == VerdictLevel::Fault;
+        r.level = verdictLevelName(board->verdict.level);
+        r.reason = boardReasonName(board->verdict.reason);
+        r.unitsFaulty = (uint8_t)unitFaultCount(board->unit, board->units);
+      }
+    } else {
+      const WallRowDef& def = wall->rows.rows[i];
+      r.id = def.id;
+      r.row = def.row;
+      r.col = def.col;
+      r.width = def.width;
+      r.own = wallRowIsOwn(def);
+      wallRowsHostName(wall->rows, i, hosts[i], sizeof(hosts[i]));
+      if (const WallVerdictBoard* board = judged ? verdicts->ofRow(i) : nullptr) {
+        r.judged = true;
+        r.fault = board->verdict.level == VerdictLevel::Fault;
+        r.level = verdictLevelName(board->verdict.level);
+        r.reason = boardReasonName(board->verdict.reason);
+        r.unitsFaulty = (uint8_t)unitFaultCount(board->unit, board->units);
+      }
+      wallShowRowText(i, texts[i], sizeof(texts[i]));
+    }
+    r.host = hosts[i];
     r.text = texts[i];
     if (r.own) {
       r.text = snap.currentText;  // what is on the flaps, as for a master on its own
+      r.rev = mqttFwVersion.c_str();
+      r.address = ownAddress.c_str();
+      r.rssiKnown = true;
+      r.rssi = ownRssi;
       r.unitsKnown = true;
       r.unitsFound = snap.detectedUnitCount;
       r.unitsLost = (uint8_t)computeLostUnitCount(snap.units, snap.displayWidth);
+      wallMqttUnitAggregates(snap.units, snap.displayWidth, SFP_I2C_ADDRESS_BASE, r);
+      if (!wallMqttFlipsNote(mqttFlips, i, snap.units, snap.displayWidth)) flipsComplete = false;
       continue;
     }
+    const WallRowLink& link = wall->link[i];
     const WallRowReach reach = wallRowReach(link.contact, nowMs);
     r.reach = wallRowReachName(reach);
     // A row never heard since this master started is gone once the time a
@@ -823,6 +928,11 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
     r.rescue = link.rescue;
     r.updateBlocked = link.updateBlocked;
     r.busDead = link.haveStatus && link.status.bus_dead;
+    r.address = link.address;
+    if (link.haveStatus) {
+      r.rssiKnown = true;
+      r.rssi = link.status.rssi;
+    }
     uint32_t atMs = 0;
     if (wallStateRowUnits(i, *units, atMs)) {
       r.unitsKnown = true;
@@ -832,8 +942,38 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
       }
       r.unitsFound = (uint8_t)found;
       r.unitsLost = (uint8_t)computeLostUnitCount(units->units, units->width);
+      wallMqttUnitAggregates(units->units, units->width, SFP_I2C_ADDRESS_BASE, r);
+      if (!wallMqttFlipsNote(mqttFlips, i, units->units, units->width)) flipsComplete = false;
+    } else {
+      flipsComplete = false;  // its units are not known yet
     }
   }
+
+  // The boards (#621).
+  if (!mqttBoardsPublished) {
+    mqttBoardsPublished = true;
+    mqttPublishBoardConfigs(rows, count);
+  }
+  mqttPublishBoards(rows, count);
+  // The supply (#623), for the telemetry packet.
+  const WallMqttSupply supply = wallMqttSupply(rows, count);
+  mqttSupplyMinMv = supply.mV;
+  mqttSupply.unit = supply.unit;
+  mqttSupply.under = supply.under;
+  strlcpy(mqttSupplyBoard, supply.board >= 0 ? rows[supply.board].host : "", sizeof(mqttSupplyBoard));
+  mqttSupply.board = mqttSupplyBoard;
+  // The flips (#619), once every found unit has been read.
+  if (flipsComplete) {
+    const uint32_t flips = wallMqttFlipsTotal(mqttFlips, count);
+    if (flips != mqttLastFlips) {
+      mqttLastFlips = flips;
+      char n[12];
+      snprintf(n, sizeof(n), "%lu", (unsigned long)flips);
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "flips").c_str(), 0, true, n);
+    }
+  }
+  if (!active) return;
+
   mqttWallCapacity = wallMqttCapacity(rows, count);
   int problem = wallMqttProblem(rows, count) ? 1 : 0;
   if (problem != mqttLastWallState) {
@@ -870,15 +1010,16 @@ static void mqttPublishTelemetry(const DisplaySnapshot& snap) {
     int heapFragPct = (freeHeap > 0 && maxBlock <= freeHeap)
                           ? (int)(100 - (maxBlock * 100ULL) / freeHeap)
                           : 0;
-    char buf[160];
+    char buf[224];
     size_t tn = buildTelemetryPayload(
         buf, sizeof(buf), freeHeap, heapFragPct, WiFi.RSSI(),
         snap.lastShowWriteErrors, millis() / 1000UL,
         clockIsTimeSynced(time(nullptr)),
-        unitFleetVccMin(snap.units, snap.displayWidth),      // #366 HA vccMin sensor
+        mqttSupplyMinMv,  // #366 vccMin, every board's units since #623 (the 5 s wall pass)
         unitFleetRebootTotal(snap.units, snap.displayWidth),  // #368 HA reboot-total sensor
         unitFleetAnyJam(snap.units, snap.displayWidth),      // #365 HA jam binary_sensor
-        unitFleetMaxExcess(snap.units, snap.displayWidth));  // #365 HA steps-excess sensor
+        unitFleetMaxExcess(snap.units, snap.displayWidth),   // #365 HA steps-excess sensor
+        &mqttSupply);                                         // #623 weakest unit, under the floor
     if (tn > 0 && tn < sizeof(buf)) {
       mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
     }
@@ -1007,6 +1148,8 @@ void mqttServiceTick() {
     mqttLastQuietState = -1;
     mqttLastUpdateState = "\x01";
     mqttNextUpdateMs = millis();
+    mqttBoardsPublished = false;  // #621: the boards' configs again
+    mqttLastFlips = 0xFFFFFFFFUL;
   }
 
   DisplaySnapshot snap = displaySnapshotGet();
