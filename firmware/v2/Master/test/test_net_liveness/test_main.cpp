@@ -77,17 +77,19 @@ static void test_link_down_is_not_this_watchdogs_business() {
   TEST_ASSERT_TRUE(NetLivenessCause::None == run(st, 4320000, 9, true, FAIL, OK));
 }
 
-// No fresh result is no evidence: the prober may be busy with a rollout. The
-// count starts over — an outage is only ever measured on unbroken evidence.
+// No fresh result is no evidence for the bad clock: the prober may be busy
+// with a rollout. That count starts over — an outage is only ever measured
+// on unbroken evidence. (Silence for the whole patience is its own verdict
+// since #628, tested below; here it stays inside it.)
 static void test_unknown_starts_the_count_over() {
   NetLivenessState st;
   run(st, 0, 1, true, OK, OK);
   run(st, 120000, 8, true, FAIL, OK);
   TEST_ASSERT_TRUE(NetLivenessCause::None ==
-                   run(st, 660000, 120, true, UNKNOWN, UNKNOWN));
+                   run(st, 660000, 8, true, UNKNOWN, UNKNOWN));
   TEST_ASSERT_FALSE(st.gateway.bad);
   // Failing again afterwards needs the full time once more.
-  uint32_t t = 660000 + 121 * 60000UL;
+  uint32_t t = 660000 + 9 * 60000UL;
   TEST_ASSERT_TRUE(NetLivenessCause::None == run(st, t, 9, true, FAIL, OK));
   TEST_ASSERT_TRUE(NetLivenessCause::Gateway == run(st, t, 10, true, FAIL, OK));
 }
@@ -177,6 +179,71 @@ static void test_bad_clock_survives_millis_wrap() {
   TEST_ASSERT_TRUE(NetLivenessCause::Gateway == v.reboot);
 }
 
+// #628: the wall sat 28 hours with a frozen clock, off MQTT and the LAN,
+// while every watchdog stood still. A prober that produces nothing at all
+// for the whole patience — no socket to be had, or a task that no longer
+// comes round — is a wedged board, not the absence of evidence.
+static void test_no_result_at_all_for_the_patience_reboots() {
+  NetLivenessState st;
+  run(st, 0, 1, true, OK, OK);
+  TEST_ASSERT_TRUE(NetLivenessCause::None ==
+                   run(st, 120000, 9, true, UNKNOWN, UNKNOWN));
+  NetLivenessVerdict v = netLivenessStep(st, true, UNKNOWN, UNKNOWN,
+                                         120000 + NET_LIVENESS_BASE_MS, 0);
+  TEST_ASSERT_TRUE(NetLivenessCause::NoEvidence == v.reboot);
+  // Also from boot: a prober that never produced a first result.
+  NetLivenessState fresh;
+  TEST_ASSERT_TRUE(NetLivenessCause::NoEvidence ==
+                   run(fresh, 0, 11, true, UNKNOWN, UNKNOWN));
+}
+
+// Any result, good or bad, is the prober at work: the silence clock restarts.
+static void test_any_result_restarts_the_silence_clock() {
+  NetLivenessState st;
+  run(st, 0, 1, true, OK, OK);
+  run(st, 120000, 8, true, UNKNOWN, UNKNOWN);
+  netLivenessStep(st, true, FAIL, UNKNOWN, 660000, 0);
+  TEST_ASSERT_EQUAL_UINT32(0, st.noEvidenceSinceMs);
+  TEST_ASSERT_TRUE(NetLivenessCause::None ==
+                   run(st, 720000, 9, true, UNKNOWN, UNKNOWN));
+  TEST_ASSERT_TRUE(NetLivenessCause::NoEvidence ==
+                   run(st, 720000, 10, true, UNKNOWN, UNKNOWN));
+}
+
+// An upload or a release install owns the stack: its silence is on purpose,
+// and it does not count once the job is over either.
+static void test_paused_probes_are_not_silence() {
+  NetLivenessState st;
+  run(st, 0, 1, true, OK, OK);
+  for (int m = 0; m <= 30; m++) {
+    NetLivenessVerdict v = netLivenessStep(st, true, UNKNOWN, UNKNOWN,
+                                           120000 + m * 60000UL, 0, true);
+    TEST_ASSERT_TRUE(NetLivenessCause::None == v.reboot);
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, st.noEvidenceSinceMs);
+  TEST_ASSERT_TRUE(NetLivenessCause::None ==
+                   run(st, 2000000, 9, true, UNKNOWN, UNKNOWN));
+}
+
+// Link down belongs to the WiFi policy; the silence clock starts over too.
+static void test_link_down_clears_the_silence_clock() {
+  NetLivenessState st;
+  run(st, 0, 8, true, UNKNOWN, UNKNOWN);
+  netLivenessStep(st, false, UNKNOWN, UNKNOWN, 540000, 0);
+  TEST_ASSERT_EQUAL_UINT32(0, st.noEvidenceSinceMs);
+  TEST_ASSERT_TRUE(NetLivenessCause::None ==
+                   run(st, 600000, 9, true, UNKNOWN, UNKNOWN));
+}
+
+// The patience is the same one, doubling per strike.
+static void test_silence_patience_doubles_per_strike() {
+  NetLivenessState st;
+  TEST_ASSERT_TRUE(NetLivenessCause::None ==
+                   run(st, 1000, 19, true, UNKNOWN, UNKNOWN, 1));
+  TEST_ASSERT_TRUE(NetLivenessCause::NoEvidence ==
+                   run(st, 1000, 20, true, UNKNOWN, UNKNOWN, 1));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_healthy_network_never_reboots);
@@ -193,5 +260,10 @@ int main(int, char**) {
   RUN_TEST(test_patience_doubles_per_strike_up_to_a_ceiling);
   RUN_TEST(test_a_healthy_stretch_earns_the_patience_back);
   RUN_TEST(test_bad_clock_survives_millis_wrap);
+  RUN_TEST(test_no_result_at_all_for_the_patience_reboots);
+  RUN_TEST(test_any_result_restarts_the_silence_clock);
+  RUN_TEST(test_paused_probes_are_not_silence);
+  RUN_TEST(test_link_down_clears_the_silence_clock);
+  RUN_TEST(test_silence_patience_doubles_per_strike);
   return UNITY_END();
 }

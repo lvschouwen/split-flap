@@ -1,4 +1,5 @@
-#include "NetLiveness.h"  // #501 end-to-end liveness
+#include "NetLiveness.h"
+#include "ReleaseUpdate.h"  // releaseUpdateRunning (#628)  // #501 end-to-end liveness
 #include "WifiService.h"
 
 #include <DNSServer.h>
@@ -614,9 +615,12 @@ void wifiServiceTick() {
     bool linkUp = policy.phase == WifiPhase::Connected &&
                   WiFi.status() == WL_CONNECTED;
     bool wasBad = liveness.gateway.bad || liveness.self.bad;
+    // #628: an upload or a release install pauses the probes on purpose
+    // (the install runs on the worker, the prober's own task).
     NetLivenessVerdict v =
         netLivenessStep(liveness, linkUp, netLivenessGateway(now),
-                        netLivenessSelf(now), now, netLivenessStrikes());
+                        netLivenessSelf(now), now, netLivenessStrikes(),
+                        Update.isRunning() || releaseUpdateRunning());
     bool isBad = liveness.gateway.bad || liveness.self.bad;
     if (isBad != wasBad) {
       SerialPrintln(isBad ? String(F("net: liveness probe failing (")) +
@@ -626,6 +630,20 @@ void wifiServiceTick() {
                                            netLivenessStrikes()) / 60000UL)) +
                                 F(" min of it")
                           : String(F("net: liveness probes passing again")));
+    }
+    // #628: silence past the stale window is worth a line of its own — the
+    // next 28-hour freeze should at least say what the prober was doing.
+    static bool noEvidenceLogged = false;
+    if (liveness.noEvidenceSinceMs == 0) {
+      noEvidenceLogged = false;
+    } else if (!noEvidenceLogged &&
+               now - liveness.noEvidenceSinceMs >= NET_LIVENESS_PROBE_STALE_MS) {
+      noEvidenceLogged = true;
+      SerialPrintln(String(F("net: the liveness probes give no result (")) +
+                    netLivenessJson() + F(") — restart after ") +
+                    String((unsigned long)(netLivenessThresholdMs(
+                               netLivenessStrikes()) / 60000UL)) +
+                    F(" min of it"));
     }
     if (v.clearStrikes && netLivenessStrikes() > 0) netLivenessClearStrikes();
     // A gateway that never answers on the probed port leaves that half of

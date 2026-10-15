@@ -17,6 +17,12 @@
 //     slowly has to prove itself again first.
 //   - A link that is down is the WiFi policy's business, not this one's.
 //   - No fresh probe result is no evidence: the count starts over.
+//   - But no result at all, for the whole patience, is evidence of its own
+//     (#628): a prober that cannot get a socket (ENOMEM, ENOBUFS) or does not
+//     come round to probing is a stack or a task that has wedged behind a
+//     link that says it is up. Not while the probes are paused on purpose
+//     (an OTA upload or a release install owns the stack), and the clock
+//     starts over on any result, good or bad.
 //   - The patience doubles with every liveness reboot in a row and is given
 //     back after a healthy stretch.
 #include <stdint.h>
@@ -31,7 +37,7 @@
 
 enum class NetProbe : uint8_t { Unknown = 0, Ok, Fail };
 
-enum class NetLivenessCause : uint8_t { None = 0, Gateway, SelfServer };
+enum class NetLivenessCause : uint8_t { None = 0, Gateway, SelfServer, NoEvidence };
 
 struct NetLivenessWatch {
   bool seenOk = false;
@@ -44,6 +50,9 @@ struct NetLivenessState {
   NetLivenessWatch self;
   bool healthy = false;
   uint32_t healthySinceMs = 0;
+  // #628: millis() at which the probes last stopped producing any result
+  // while the link was up; 0 = a result arrived (or the probes are paused).
+  uint32_t noEvidenceSinceMs = 0;
 };
 
 struct NetLivenessVerdict {
@@ -74,25 +83,40 @@ inline void netLivenessFold(NetLivenessWatch& w, NetProbe result,
   }
 }
 
-// One step, about once a second. `linkUp` = associated with an address.
+// One step, about once a second. `linkUp` = associated with an address;
+// `probesPaused` = no result is to be expected right now (an upload or a
+// release install has the stack), so silence says nothing.
 inline NetLivenessVerdict netLivenessStep(NetLivenessState& st, bool linkUp,
                                           NetProbe gateway, NetProbe self,
-                                          uint32_t nowMs, uint8_t strikes) {
+                                          uint32_t nowMs, uint8_t strikes,
+                                          bool probesPaused = false) {
   NetLivenessVerdict v;
   if (!linkUp) {
     st.gateway = NetLivenessWatch{};
     st.self = NetLivenessWatch{};
     st.healthy = false;
+    st.noEvidenceSinceMs = 0;
     return v;
   }
   netLivenessFold(st.gateway, gateway, nowMs);
   netLivenessFold(st.self, self, nowMs);
+  // #628: a result of any kind, or a pause, clears the silence clock; the
+  // first silent step arms it (an exact-0 stamp is nudged to 1).
+  if (probesPaused || gateway != NetProbe::Unknown || self != NetProbe::Unknown) {
+    st.noEvidenceSinceMs = 0;
+  } else if (st.noEvidenceSinceMs == 0) {
+    st.noEvidenceSinceMs = nowMs ? nowMs : 1;
+  }
 
   const uint32_t limit = netLivenessThresholdMs(strikes);
   if (st.gateway.bad && nowMs - st.gateway.badSinceMs >= limit) {
     v.reboot = NetLivenessCause::Gateway;
   } else if (st.self.bad && nowMs - st.self.badSinceMs >= limit) {
     v.reboot = NetLivenessCause::SelfServer;
+  } else if (st.noEvidenceSinceMs != 0 &&
+             (int32_t)(nowMs - st.noEvidenceSinceMs) >= (int32_t)limit) {
+    // Signed: the stamp nudged from 0 to 1 sits a millisecond ahead of now.
+    v.reboot = NetLivenessCause::NoEvidence;
   }
 
   // Healthy = nothing failing that once worked, and something answering. A
@@ -128,5 +152,7 @@ inline const char* netProbeName(NetProbe p) {
 inline const char* netLivenessCauseText(NetLivenessCause c) {
   return c == NetLivenessCause::Gateway
              ? "gateway unreachable while the WiFi link is up"
-             : "own web server not answering";
+         : c == NetLivenessCause::SelfServer
+             ? "own web server not answering"
+             : "the liveness probes gave no result while the WiFi link is up";
 }
