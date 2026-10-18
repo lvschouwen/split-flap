@@ -1,30 +1,31 @@
 {
  "format": 1,
  "channel": "stable",
- "tag": "v2026.10.10-hotfix.1",
- "notes": "https://github.com/lvschouwen/split-flap/releases/tag/v2026.10.10-hotfix.1",
- "commitTime": 1791642628,
+ "tag": "v2026.10.18",
+ "notes": "https://github.com/lvschouwen/split-flap/releases/tag/v2026.10.18",
+ "commitTime": 1792354666,
  "master": {
-  "rev": "ee6abc0",
-  "path": "v2026.10.10-hotfix.1/firmware-ee6abc0-master.bin",
-  "size": 1711904,
-  "sha256": "21e3553e9903cc53ae43d7a6f021db1798a1e66522eb0e43598879b8f8af0142"
+  "rev": "0296a88",
+  "path": "v2026.10.18/firmware-0296a88-master.bin",
+  "size": 1779632,
+  "sha256": "9bb4f5627aa318018408336d6ae558697b94d5520bdb716dfb09aea251acbf72"
  },
  "row": {
-  "rev": "ee6abc0",
-  "path": "v2026.10.10-hotfix.1/follower-ee6abc0-gz.bin",
-  "size": 328491,
-  "sha256": "0d258ca62fb569e123b52793277bb785aad9c2e2c2286e1a05fb7b89393d2040",
-  "md5": "6e2befc1b347a0326627213082481c08"
+  "rev": "0296a88",
+  "path": "v2026.10.18/follower-0296a88-gz.bin",
+  "size": 330803,
+  "sha256": "8f286a6b22d5de02f08e9854acd146ac737be06981e7875b826f71f5a7412845",
+  "md5": "dfcb5a054787cba6e041ef72d73a5c74"
  },
  "rescue": {
-  "rev": "ee6abc0",
-  "path": "v2026.10.10-hotfix.1/rescue-ee6abc0.bin",
-  "size": 1207600,
-  "sha256": "fefd6c74b7b4b2cffff5a5a3a1c9ded853e08ce6daee0143f92212427bf64bc7"
+  "rev": "55fd69a",
+  "path": "v2026.10.18/rescue-55fd69a.bin",
+  "size": 1208624,
+  "sha256": "2ba3474251ecfcf9bb291b07400e6c726743ad58349ec0b4a990540a806e3d1d"
  },
  "units": {
   "revs": [
+   "44027bc",
    "0d90815"
   ]
  }

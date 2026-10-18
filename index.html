@@ -6,7 +6,13 @@
      Tools, which recognises the board and takes the image made for it.
      ESP Web Tools is served from this site (/esp-web-tools/, put there by
      release.py from a pinned, checked package): what writes a board's flash
-     is loaded from nowhere else. -->
+     is loaded from nowhere else.
+     ESP Web Tools shows a percentage and no more. Its loader says every step
+     to a terminal when it has one, and the installer leaves the loader on
+     window.esploader before the first step: the page takes it there, gives
+     it the install log as its terminal and sets the speed of the link
+     (ESP Web Tools has no setting for either). release.py refuses an ESP Web
+     Tools that no longer leaves the loader there. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -30,6 +36,15 @@
            padding: 0.6rem 1.1rem; font-size: 0.95rem; font-weight: 600; cursor: pointer; }
   button:focus-visible, a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
   ol { padding-left: 1.3rem; } li { margin: 0.35rem 0; }
+  #logPanel { position: fixed; left: 0; right: 0; bottom: 0; background: #14161a;
+              border-top: 1px solid #33373f; }
+  #logPanel header { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 1rem; }
+  #logPanel h2 { margin: 0 auto 0 0; font-size: 0.9rem; }
+  #logPanel button { background: #33373f; color: #e8e8e8; padding: 0.25rem 0.7rem;
+                     font-size: 0.8rem; font-weight: 500; }
+  #log { height: 30vh; overflow: auto; padding: 0 1rem 0.6rem; white-space: pre-wrap;
+         overflow-wrap: anywhere; font: 0.78rem/1.45 ui-monospace, Menlo, Consolas, monospace; }
+  body.logging { padding-bottom: calc(30vh + 5rem); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -46,8 +61,9 @@ port. Open this page in Chrome or Edge on a computer.</p>
 <div class="boards" id="boards" hidden>
   <div class="card">
     <h2>Master</h2>
-    <p>ESP32-S3 with 16 MB flash. Plug its USB port into this computer. This
-    writes the whole flash: bootloader, firmware and the rescue image.</p>
+    <p>ESP32-S3 with 16 MB flash. Plug one of its USB ports into this
+    computer; the one marked USB is quicker than the one marked UART or COM.
+    This writes the bootloader, the firmware and the rescue image.</p>
     <esp-web-install-button class="install">
       <button slot="activate">Install on a master</button>
       <span slot="unsupported"></span>
@@ -67,12 +83,18 @@ port. Open this page in Chrome or Edge on a computer.</p>
 </div>
 <p class="muted" id="boardsNote" hidden>The installer reads which board is
 connected and takes the image made for it, so a row board is never given the
-master's firmware or the other way round.</p>
+master's firmware or the other way round. Every step of an install is listed
+at the foot of this page as it happens. Afterwards, <strong>Logs &amp;
+Console</strong> in the installer shows what the board itself says as it
+starts.</p>
 
 <h2>What next</h2>
 <ol>
-  <li>A new board opens its own WiFi network, named after the board and ending
-  in <code>-setup</code>. Join it and give the board your WiFi name and
+  <li>Give the board your WiFi. After installing on a master the installer
+  offers <strong>Connect to Wi-Fi</strong>: pick your network there and the
+  board joins it. A row board, or a master you would rather set up from a
+  phone, opens its own WiFi network, named after the board and ending in
+  <code>-setup</code>: join it and give the board your WiFi name and
   password.</li>
   <li>Open the master in a browser, by the name it shows on your network
   (<code>split-flap-xxxxxx.local</code>) or by its address.</li>
@@ -82,6 +104,15 @@ master's firmware or the other way round.</p>
 <p class="muted">A wall that already runs finds new releases by itself and
 installs one from its <strong>Firmware</strong> screen; it does not need this
 page.</p>
+
+<section id="logPanel" hidden aria-label="Install log">
+  <header>
+    <h2>Install log</h2>
+    <button type="button" id="logCopy">Copy</button>
+    <button type="button" id="logClose">Close</button>
+  </header>
+  <div id="log" role="log"></div>
+</section>
 
 <script>
 "use strict";
@@ -98,6 +129,106 @@ page.</p>
 
   if (!("serial" in navigator)) document.getElementById("noSerial").hidden = false;
 
+  // --- the install log --------------------------------------------------------
+  var SPEEDS = [115200, 230400, 460800, 921600];
+  var asked = Number(new URLSearchParams(location.search).get("baud"));
+  var speed = SPEEDS.indexOf(asked) >= 0 ? asked : 921600;
+  var panel = document.getElementById("logPanel");
+  var out = document.getElementById("log");
+  var started = 0, tail = null, release = "", loader;
+
+  function show(on) {
+    panel.hidden = !on;
+    document.body.classList.toggle("logging", on);
+  }
+  // A line stays open until a newline ends it: the loader writes its dots
+  // one at a time.
+  function put(text, ends) {
+    String(text).replace(/\r/g, "").split("\n").forEach(function (piece, i) {
+      if (i > 0) tail = null;
+      if (piece === "") return;
+      if (!tail) {
+        tail = document.createElement("div");
+        tail.textContent = (((performance.now() - started) / 1000).toFixed(1) + "s").padStart(7) + "  ";
+        out.append(tail);
+      }
+      tail.textContent += piece;
+    });
+    if (ends) tail = null;
+    out.scrollTop = out.scrollHeight;
+  }
+  function say(text) { tail = null; put(text, true); }
+  var terminal = {
+    clean: function () {},
+    write: function (text) { put(text, false); },
+    writeLine: function (text) { put(text, true); }
+  };
+
+  Object.defineProperty(window, "esploader", {
+    configurable: true,
+    get: function () { return loader; },
+    set: function (made) {
+      loader = made;
+      started = performance.now();
+      show(true);
+      say("Installing " + release + " at " + speed + " baud");
+      made.terminal = terminal;
+      made.baudrate = speed;
+    }
+  });
+
+  // What the installer itself reports: the board it found, the images it
+  // takes for it, and why an install stopped.
+  function follow(dialog) {
+    var last = "", listed = false;
+    // A browser runs a page it does not show at one step a second, which
+    // is what an install then waits for between blocks.
+    function shown() {
+      if (last) say(document.hidden ? "This page is hidden: the browser slows the install until it shows again."
+                                    : "This page shows again.");
+    }
+    document.addEventListener("visibilitychange", shown);
+    var timer = setInterval(function () {
+      if (!dialog.isConnected) {
+        clearInterval(timer);
+        document.removeEventListener("visibilitychange", shown);
+        if (last) say("The installer was closed.");
+        return;
+      }
+      var state = dialog._installState;
+      if (!state || !state.message) return;
+      if (state.build && !listed) {
+        listed = true;
+        say("Images for " + state.chipFamily + ": " + state.build.parts.map(function (part) {
+          return part.path + " at 0x" + part.offset.toString(16);
+        }).join(", "));
+      }
+      if (state.state === "writing" || state.message === last) return;
+      last = state.message;
+      say(state.message);
+      if (state.state === "error") {
+        var why = state.details && state.details.details;
+        if (why && String(why.message || why) !== state.message) say(String(why.message || why));
+        if (speed !== 115200) {
+          say("If it stops here again, open this page with ?baud=115200 added to its address.");
+        }
+      }
+    }, 200);
+  }
+  new MutationObserver(function (changes) {
+    changes.forEach(function (change) {
+      change.addedNodes.forEach(function (node) {
+        if (node.nodeName === "EWT-INSTALL-DIALOG") follow(node);
+      });
+    });
+  }).observe(document.body, { childList: true });
+
+  document.getElementById("logClose").addEventListener("click", function () { show(false); });
+  document.getElementById("logCopy").addEventListener("click", function () {
+    var lines = Array.prototype.map.call(out.children, function (row) { return row.textContent; });
+    navigator.clipboard.writeText(lines.join("\n") + "\n");
+  });
+
   fetch(new URL("latest.json", dir), { cache: "no-store" })
     .then(function (r) {
       if (!r.ok) throw new Error("no release");
@@ -112,6 +243,7 @@ page.</p>
       document.querySelectorAll("esp-web-install-button.install").forEach(function (b) {
         b.setAttribute("manifest", manifest);
       });
+      release = latest.tag;
       line.textContent = (trial ? "Trial release " : "Release ") + latest.tag;
       if (/^https:\/\//.test(latest.notes)) {
         var notes = document.createElement("a");
