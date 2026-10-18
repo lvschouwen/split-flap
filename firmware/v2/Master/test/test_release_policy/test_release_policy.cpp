@@ -88,6 +88,23 @@ static void test_a_look_folds_into_newer_up_to_date_or_failed() {
   TEST_ASSERT_EQUAL_UINT32(79, status.lookedAtS);
 }
 
+// The update entity carries the release only when the master would install
+// it (#629): a release older than the build is up to date, not an offer.
+static void test_only_a_newer_release_is_offered() {
+  ReleaseStatus status;
+  ReleaseManifest found;
+  strcpy(found.tag, "v2026.10.10-hotfix.1");
+  found.commitTime = 1000;
+  TEST_ASSERT_FALSE(releaseOffered(status));
+  releaseStatusFold(status, ReleaseError::Ok, found, 2000, 1);
+  TEST_ASSERT_TRUE(ReleaseLookState::UpToDate == status.look);
+  TEST_ASSERT_FALSE(releaseOffered(status));
+  releaseStatusFold(status, ReleaseError::Ok, found, 999, 2);
+  TEST_ASSERT_TRUE(releaseOffered(status));
+  releaseStatusFold(status, ReleaseError::Signature, found, 999, 3);
+  TEST_ASSERT_FALSE(releaseOffered(status));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_first_look_waits_for_the_clock_and_two_minutes);
@@ -98,5 +115,6 @@ int main(int, char**) {
   RUN_TEST(test_another_channel_is_looked_at_afresh);
   RUN_TEST(test_only_the_two_channels_are_channels);
   RUN_TEST(test_a_look_folds_into_newer_up_to_date_or_failed);
+  RUN_TEST(test_only_a_newer_release_is_offered);
   return UNITY_END();
 }

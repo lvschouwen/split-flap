@@ -84,6 +84,13 @@ struct ReleaseStatus {
   uint32_t size = 0;
 };
 
+// The release the master would install: only one newer than what runs. A
+// release that is up to date is not an offer, so nothing names it as the
+// latest (#629).
+inline bool releaseOffered(const ReleaseStatus& status) {
+  return status.look == ReleaseLookState::Newer;
+}
+
 // What a look found, folded into the status.
 inline void releaseStatusFold(ReleaseStatus& status, ReleaseError result,
                               const ReleaseManifest& found, uint32_t runningCommitTime,

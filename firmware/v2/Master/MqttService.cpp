@@ -297,12 +297,12 @@ static void mqttPublishTextResults(const DisplaySnapshot& snap, bool connected) 
 }
 
 // The update entity's state (#620): the running rev against the release the
-// worker found; in progress while its update runs.
+// master would install (#629); in progress while its update runs.
 static void mqttPublishUpdateState() {
   if ((int32_t)(millis() - mqttNextUpdateMs) < 0) return;
   mqttNextUpdateMs = millis() + MQTT_WALL_INTERVAL_MS;
   const ReleaseStatus status = releaseStatusGet();
-  const bool found = status.look == ReleaseLookState::Newer || status.look == ReleaseLookState::UpToDate;
+  const bool found = releaseOffered(status);
   char buf[256];
   const size_t n = buildUpdateStateJson(buf, sizeof(buf), mqttFwVersion.c_str(),
                                         found ? status.release.master.rev : "",

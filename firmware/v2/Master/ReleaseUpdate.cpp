@@ -379,7 +379,7 @@ ReleaseStatus releaseStatusGet() {
 
 bool releaseNewerTag(char* out, size_t cap) {
   Lock lock;
-  if (status.look != ReleaseLookState::Newer) return false;
+  if (!releaseOffered(status)) return false;
   strlcpy(out, status.release.tag, cap);
   return true;
 }
