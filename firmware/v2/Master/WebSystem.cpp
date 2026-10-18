@@ -118,6 +118,14 @@ void webSystemRegister(AsyncWebServer& server) {
     appendJsonString(out, String(runSha));
     out += F(",\"stale\":");
     out += stale ? F("true") : F("false");
+    // #630: what the panic handler wrote — for a task watchdog reset, the
+    // task that stopped feeding (the summary struct holds no such field).
+    char reason[200];
+    if (esp_core_dump_get_panic_reason(reason, sizeof(reason)) != ESP_OK) reason[0] = '\0';
+    for (char* p = reason; *p; p++)
+      if (*p == '\n' || *p == '\r') *p = ' ';
+    out += F(",\"panicReason\":");
+    appendJsonString(out, String(reason));
     out += F(",\"task\":");
     appendJsonString(out, String(task));
     snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->exc_pc);

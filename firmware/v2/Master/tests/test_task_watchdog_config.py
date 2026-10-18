@@ -40,3 +40,37 @@ def test_task_wdt_panic_not_disabled():
     # PANIC defaults on (framework) and must not be turned off here — a
     # timeout must reboot, not just warn.
     assert "CONFIG_ESP_TASK_WDT_PANIC=n" not in custom_sdkconfig_lines()
+
+
+# ---- #630: no app task may wait on the network for longer than the TWDT ----
+
+MQTT_TRANSPORT = PROJECT_DIR / "MqttTransport.cpp"
+
+
+def test_mqtt_writes_hand_the_socket_only_what_it_takes_now():
+    # espMqttClient's own transport waits in NetworkClient::write with a budget
+    # that starts over at every partial send; one mqtt pass then outlasts the
+    # 30 s TWDT on a link that drips. The wall's transport never waits.
+    text = MQTT_TRANSPORT.read_text()
+    start = text.index("MqttNonBlockingTransport::write")
+    end = text.index("MqttWallClient::MqttWallClient")
+    write = text[start:end]
+    assert "MSG_DONTWAIT" in write
+    for waiting in ("select", "client.write", "delay(", "vTaskDelay"):
+        assert waiting not in write, f"the mqtt write must not wait: {waiting}"
+
+
+def test_mqtt_service_runs_on_the_non_waiting_client():
+    service = (PROJECT_DIR / "MqttService.cpp").read_text()
+    assert re.search(r"^static MqttWallClient mqttClient;", service, re.M)
+    assert not re.search(r"^static espMqttClient\b", service, re.M), \
+        "the stock espMqttClient waits in its writes (#630)"
+
+
+def test_crash_report_names_the_task_the_watchdog_named():
+    # The RTC crash slots cannot name the task the TWDT tripped on; the dump's
+    # panic reason can. Both the boot log and the summary route carry it.
+    assert "coredumpPanicReason(" in (PROJECT_DIR / "main.cpp").read_text()
+    web = (PROJECT_DIR / "WebSystem.cpp").read_text()
+    assert "panicReason" in web
+    assert "esp_core_dump_get_panic_reason(" in web

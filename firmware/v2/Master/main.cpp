@@ -32,6 +32,7 @@
 #include "UnitCatch.h"  // #554
 #include "BootTrace.h"  // #504
 #include "CrashContext.h"  // #504
+#include "CoredumpReason.h"  // #630
 #include "RebootCause.h"  // #432
 #include "ReleaseUpdate.h"
 #include "Settings.h"
@@ -156,6 +157,10 @@ void setup() {
   // What the three above found, now that a line is kept (#510).
   bootTraceLogReport();
   crashCtxLogReport();
+  {
+    char reason[200];  // #630: for a watchdog reset, the task that stopped feeding
+    if (coredumpPanicReason(reason, sizeof(reason))) SerialPrintf("crash: the dump says: %s\n", reason);
+  }
   bootGuardLogReport();
   unitCatchLogReport();
   followerImageStoreInit();  // #304: read the stored ESP-01 image rev/presence

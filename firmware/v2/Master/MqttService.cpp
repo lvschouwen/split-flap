@@ -22,6 +22,7 @@
 #include "MqttHelpers.h"
 #include "WearPolicy.h"
 #include "MqttLifecyclePolicy.h"
+#include "MqttTransport.h"  // #630: writes that never wait
 #include "OtaService.h"
 #include "SplitFlapProtocol.h"
 #include "UnitHealth.h"
@@ -63,7 +64,7 @@ static_assert(MQTT_MAX_TEXT_LEN + 1 <= sizeof(MqttInboxMessage::payload),
 // would spawn one on core 1 — the display core. UseInternalTask::NO means
 // loop() (and therefore every callback) runs inside mqttServiceTick() on
 // mqttTask, core 0.
-static espMqttClient mqttClient(espMqttClientTypes::UseInternalTask::NO);
+static MqttWallClient mqttClient;  // #630: its writes never wait for the broker
 
 // --- service state (mqttTask-owned unless noted) -----------------------------
 static bool mqttInitialised = false;
