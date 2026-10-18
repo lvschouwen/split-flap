@@ -54,11 +54,28 @@ def test_the_gate_reads_the_row_master_sources():
 
 # --- #528: flap letter + speed mapping --------------------------------------
 
+# The one place that passes the alphabet on whole, mapping nothing: the Text
+# entity's attributes say what a text may be made of (#618, #632).
+ALPHABET_SAID_WHOLE = {"firmware/v2/Master/MqttService.cpp"}
+
+
 def test_no_tree_maps_characters_to_flaps_itself():
     """A private walk over the alphabet is how the ESP-01 row came to skip
     lowercase and unknown characters."""
-    assert not _offenders(r"\bSFP_ALPHABET\b"), (
+    offenders = _offenders(r"\bSFP_ALPHABET\b")
+    for path in ALPHABET_SAID_WHOLE:
+        offenders.pop(path, None)
+    assert not offenders, (
         "characters map to flap indices only in shared/FlapLetters.h")
+
+
+def test_the_reader_said_whole_still_maps_nothing():
+    """The exemption holds for the name alone: an index into the alphabet, or
+    a walk over it, is a mapping wherever it is written."""
+    for path in ALPHABET_SAID_WHOLE:
+        text = _strip_comments((REPO / path).read_text())
+        assert not re.search(r"SFP_ALPHABET\s*\[", text), path
+        assert not re.search(r"=\s*SFP_ALPHABET\s*;", text), path
 
 
 def test_the_wire_speed_range_is_defined_once():
