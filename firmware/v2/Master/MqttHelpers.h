@@ -318,10 +318,16 @@ inline uint16_t unitFleetMaxExcess(const UnitFacts* units, int width) {
 
 // The weakest unit and the units under the floor (#623), beside vccMin:
 // present only when vccMin is. `board` is a hostname ([a-z0-9-], no escaping).
+// The telemetry packet at its widest: every number at its full width and the
+// longest board name a place gives (WallLinkNames.h). test_mqtt_helpers
+// builds that packet into a buffer of this size.
+#define MQTT_TELEMETRY_MAX 288
+
 struct MqttSupplyFacts {
   uint8_t unit = 0;
   const char* board = "";
   uint8_t under = 0;
+  uint32_t unitUpS = 0;  // the weakest unit's seconds since its boot (#624): since when its minimum counts
 };
 
 inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap, int heapFragPct,
@@ -338,8 +344,9 @@ inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap,
     o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"vccMin\":%u"), (unsigned)vccMin_mV);
   if (vccMin_mV > 0 && supply != nullptr && o < bufLen)
     o += (size_t)mqttSnprintf(buf + o, bufLen - o,
-                              MQTT_FMT(",\"vccMinUnit\":%u,\"vccMinBoard\":\"%s\",\"vccUnder\":%u"),
-                              (unsigned)supply->unit, supply->board, (unsigned)supply->under);
+                              MQTT_FMT(",\"vccMinUnit\":%u,\"vccMinBoard\":\"%s\",\"vccUnder\":%u,\"vccMinUnitUp\":%lu"),
+                              (unsigned)supply->unit, supply->board, (unsigned)supply->under,
+                              (unsigned long)supply->unitUpS);
   // Fleet reboot odometer (#368): always emitted, see unitFleetRebootTotal.
   if (o < bufLen)
     o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"reboots\":%u"), (unsigned)rebootTotal);
@@ -432,6 +439,9 @@ enum MqttDiscoveryEntity {
   // The wall's flips (#619): every unit's lifetime revolutions summed, a
   // rising counter on splitflap/<id>/flips.
   DISCOVERY_FLIPS,
+  // Restart every unit (#624): a diagnostic button on restart_units/set; a
+  // unit's since-boot supply minimum starts over with its restart.
+  DISCOVERY_RESTART_UNITS,
   DISCOVERY_ENTITY_COUNT
 };
 
@@ -473,6 +483,7 @@ inline MqttDiscMeta mqttDiscMeta(int entity) {
     case DISCOVERY_VCC_MIN_UNIT:    return { "sensor",     "_vcc_min_unit" };
     case DISCOVERY_VCC_UNDER_FLOOR: return { "sensor",     "_vcc_under_floor" };
     case DISCOVERY_FLIPS:           return { "sensor",     "_flips" };
+    case DISCOVERY_RESTART_UNITS:   return { "button",     "_restart_units" };
   }
   return { nullptr, nullptr };
 }
@@ -563,6 +574,11 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
     case DISCOVERY_RESTART:
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Restart\",\"cmd_t\":\"splitflap/%s/restart/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_restart\",\"pl_prs\":\"PRESS\",\"dev_cla\":\"restart\",\"ent_cat\":\"diagnostic\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
+    case DISCOVERY_RESTART_UNITS:
+      // Not device_class restart: the board stays up, its units restart.
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Restart units\",\"cmd_t\":\"splitflap/%s/restart_units/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_restart_units\",\"pl_prs\":\"PRESS\",\"ic\":\"mdi:restart\",\"ent_cat\":\"diagnostic\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     case DISCOVERY_UNITS_FAULTY:
       //State is the integer faulty count (great for HA automations); the full

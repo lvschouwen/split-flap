@@ -125,6 +125,7 @@ static void test_every_job_has_a_number_for_the_event_record() {
   TEST_ASSERT_EQUAL_UINT8(201, wallJobNumber("release"));
   TEST_ASSERT_EQUAL_UINT8(202, wallJobNumber("arrange"));
   TEST_ASSERT_EQUAL_UINT8(203, wallJobNumber("update"));
+  TEST_ASSERT_EQUAL_UINT8(205, wallJobNumber("restart-units"));
   TEST_ASSERT_EQUAL_UINT8(0, wallJobNumber("no-such-job"));
   for (const WallJobKind& kind : WALL_JOB_KINDS) {
     const uint8_t number = wallJobNumber(kind.name);

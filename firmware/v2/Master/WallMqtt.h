@@ -51,6 +51,7 @@ struct WallMqttRow {
   // are under the floor.
   uint16_t vccMin = 0;
   uint8_t vccMinUnit = 0;
+  uint32_t vccMinUnitUpS = 0;  // that unit's seconds since its boot (#624)
   uint8_t vccUnder = 0;
 };
 
@@ -59,6 +60,7 @@ inline void wallMqttUnitAggregates(const UnitFacts* units, int width, uint8_t ad
                                    WallMqttRow& r) {
   r.vccMin = 0;
   r.vccMinUnit = 0;
+  r.vccMinUnitUpS = 0;
   r.vccUnder = 0;
   for (int i = 0; i < width; i++) {
     const UnitFacts& u = units[i];
@@ -66,6 +68,8 @@ inline void wallMqttUnitAggregates(const UnitFacts* units, int width, uint8_t ad
     if (r.vccMin == 0 || u.vitals.vccMin_mV < r.vccMin) {
       r.vccMin = u.vitals.vccMin_mV;
       r.vccMinUnit = (uint8_t)(addressBase + i);
+      // The full count where the unit gives one; the status byte's saturates.
+      r.vccMinUnitUpS = u.linkValid ? u.link.uptimeSeconds : u.status.uptimeSeconds;
     }
     if (unitVccIsLow(true, u.vitals.vccMin_mV, UNIT_VCC_MIN_FLOOR_MV)) r.vccUnder++;
   }
@@ -75,6 +79,7 @@ inline void wallMqttUnitAggregates(const UnitFacts* units, int width, uint8_t ad
 struct WallMqttSupply {
   uint16_t mV = 0;   // 0 = no unit reports its supply
   uint8_t unit = 0;  // its address
+  uint32_t unitUpS = 0;  // its seconds since boot: since when its minimum counts (#624)
   int board = -1;    // its board, an index into the rows given
   uint8_t under = 0;
 };
@@ -87,6 +92,7 @@ inline WallMqttSupply wallMqttSupply(const WallMqttRow* rows, int count) {
     if (r.vccMin != 0 && (s.mV == 0 || r.vccMin < s.mV)) {
       s.mV = r.vccMin;
       s.unit = r.vccMinUnit;
+      s.unitUpS = r.vccMinUnitUpS;
       s.board = i;
     }
   }

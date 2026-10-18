@@ -47,6 +47,7 @@
 #include "UnitBus.h"  // the abort flag of Stop
 #include "ReflashPlan.h"
 #include "ReleaseUpdate.h"
+#include "RestartUnits.h"  // #624
 #include "WebBodyLimitGuard.h"  // pre-auth body-size guard (#347)
 
 // Staged mutations, owned here; drained by webEndpointsLoop(). External
@@ -546,6 +547,10 @@ const char* webStartRelease(bool update, uint32_t& op, int& status) {
     }
     if (webFirmwareUploadActive()) {
       return "a firmware upload is running, retry when it has finished";
+    }
+    // It ends in a restart of this master, which would strand a unit mid-restart (#624).
+    if (restartUnitsRunning()) {
+      return "a restart of the units is running, retry when it has finished";
     }
   }
   if (releaseBusy()) return "a look for a release or an update from one is still running";

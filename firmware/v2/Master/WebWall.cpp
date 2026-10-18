@@ -57,6 +57,7 @@
 #include "JsonCopied.h"
 #include "ReflashPlan.h"
 #include "ReleaseUpdate.h"
+#include "RestartUnits.h"
 #include "Tasks.h"
 #include "MqttService.h"  // the overlay: priority, clear (#616/#625)
 #include "WallActions.h"
@@ -317,6 +318,10 @@ void handleJob(AsyncWebServerRequest* request, JsonVariantConst body, const Wall
   if (releaseUpdateRunning()) {
     return sendError(request, 409, "an update from a release is running, retry after the restart");
   }
+  // The restart of every unit (#624) has the rows until it is done.
+  if (restartUnitsRunning()) {
+    return sendError(request, 409, "a restart of the units is running, retry when it has finished");
+  }
   if (row < 0) return startOwnJob(request, kind, op);
   startRowJob(request, kind, op, row, generation);
 }
@@ -473,6 +478,15 @@ void handleRelease(AsyncWebServerRequest* request, bool update) {
   sendOp(request, op);
 }
 
+// Every unit of the wall restarted, one at a time (#624): a job of the
+// worker's, made of restart-unit jobs.
+void handleRestartUnits(AsyncWebServerRequest* request) {
+  uint32_t op = 0;
+  int status = 0;
+  if (const char* refusal = restartUnitsStart(op, status)) return sendError(request, status, refusal);
+  sendOp(request, op);
+}
+
 void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   JsonVariantConst body = json;
   const char* name = body["name"].as<const char*>();
@@ -496,6 +510,7 @@ void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   if (strcmp(name, "forget-wifi") == 0) return handleForgetWifi(request);
   if (strcmp(name, "check-release") == 0) return handleRelease(request, false);
   if (strcmp(name, "update-from-release") == 0) return handleRelease(request, true);
+  if (strcmp(name, "restart-units") == 0) return handleRestartUnits(request);
   WebStateLock lock;
   staged = WallRequest{};
   const char* refusal = "no such action";

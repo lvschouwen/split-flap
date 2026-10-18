@@ -238,17 +238,35 @@ static void test_telemetry_payload_exact_shape() {
 }
 // #623: the weakest unit and the count under the floor ride beside vccMin.
 static void test_telemetry_supply_facts_follow_vccmin() {
-  char buf[224];
+  char buf[MQTT_TELEMETRY_MAX];
   MqttSupplyFacts supply;
   supply.unit = 0x27;
   supply.board = "split-flap-row1";
   supply.under = 2;
+  supply.unitUpS = 86401;  // since when that minimum counts (#624)
   size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 3900, 6UL, false, 0, &supply);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
-  assert_contains(buf, "\"vccMin\":3900,\"vccMinUnit\":39,\"vccMinBoard\":\"split-flap-row1\",\"vccUnder\":2,\"reboots\":6");
+  assert_contains(buf, "\"vccMin\":3900,\"vccMinUnit\":39,\"vccMinBoard\":\"split-flap-row1\",\"vccUnder\":2,\"vccMinUnitUp\":86401,\"reboots\":6");
   // Without a vccMin there is no weakest unit either.
   n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0, 6UL, false, 0, &supply);
   TEST_ASSERT_NULL(strstr(buf, "vccMinUnit"));
+}
+
+// The widest packet fits the buffer the service gives it: a packet that does
+// not fit is not published at all.
+static void test_telemetry_at_its_widest_fits_its_buffer() {
+  char buf[MQTT_TELEMETRY_MAX];
+  MqttSupplyFacts supply;
+  supply.unit = 126;
+  supply.board = "split-flap-row10-c10";
+  supply.under = 99;
+  supply.unitUpS = 0xFFFFFFFFUL;
+  const size_t n = buildTelemetryPayload(buf, sizeof(buf), 0xFFFFFFFFUL, 100, -100L, 65535,
+                                         0xFFFFFFFFUL, true, 65535, 0xFFFFFFFFUL, true, 65535,
+                                         &supply);
+  TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
+  TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
+  TEST_ASSERT_EQUAL('}', buf[n - 1]);
 }
 
 // #619: flips, a rising counter.
@@ -265,6 +283,14 @@ static void test_discovery_flips_and_supply_sensors() {
   buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_VCC_UNDER_FLOOR, "flappy", "abc1234");
   assert_contains(pbuf, "{{ value_json.vccUnder }}");
   assert_contains(pbuf, "\"stat_cla\":\"measurement\"");
+  // #624: the button that restarts every unit, so the minimum starts over.
+  buildDiscoveryTopic(tbuf, sizeof(tbuf), DISCOVERY_RESTART_UNITS, "flappy");
+  TEST_ASSERT_EQUAL_STRING("homeassistant/button/flappy_restart_units/config", tbuf);
+  buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_RESTART_UNITS, "flappy", "abc1234");
+  assert_contains(pbuf, "\"cmd_t\":\"splitflap/flappy/restart_units/set\"");
+  assert_contains(pbuf, "\"pl_prs\":\"PRESS\"");
+  assert_contains(pbuf, "\"ent_cat\":\"diagnostic\"");
+  TEST_ASSERT_NULL(strstr(pbuf, "dev_cla"));
 }
 
 static void test_telemetry_vccmin_omitted_when_zero() {
@@ -788,6 +814,7 @@ int main(int, char**) {
   RUN_TEST(test_telemetry_payload_exact_shape);
   RUN_TEST(test_telemetry_vccmin_omitted_when_zero);
   RUN_TEST(test_telemetry_supply_facts_follow_vccmin);
+  RUN_TEST(test_telemetry_at_its_widest_fits_its_buffer);
   RUN_TEST(test_discovery_flips_and_supply_sensors);
   RUN_TEST(test_telemetry_ntp_false_renders_zero);
   RUN_TEST(test_mode_command_accepts_exact_options);

@@ -1,4 +1,5 @@
 #include "NetLiveness.h"  // #501 probes (workerTask)
+#include "RestartUnits.h"  // #624 (workerTask)
 #include "Tasks.h"
 
 #include <Arduino.h>
@@ -262,6 +263,7 @@ static void workerTaskMain(void*) {
     wallOwnJobTick();        // #566: the end of a unit job on the own row
     wallWatchTick();         // #570: judge the wall, record what changed
     releaseTick();           // #583: the look for a release, an update from one
+    restartUnitsTick();      // #624: every unit restarted, one at a time
     crashCtxMark(CRASH_SLOT_WORKER, CRASH_ACT_IDLE);
     vTaskDelay(pdMS_TO_TICKS(100));
   }

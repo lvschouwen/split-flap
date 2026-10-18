@@ -16,6 +16,7 @@
 #include "QuietPolicy.h"  // #227
 #include "ReleaseSource.h"  // RELEASE_NOTES_URL_PREFIX (#620)
 #include "ReleaseUpdate.h"  // releaseStatusGet (#620)
+#include "RestartUnits.h"  // restartUnitsStart (#624)
 #include "DisplayCommand.h"
 #include "DisplayIpc.h"
 #include "HelpersSerialHandling.h"
@@ -502,6 +503,19 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
         }
       }
       break;
+    case MqttCommand::RestartUnits:
+      // #624: the button restarts every unit of the wall, one at a time,
+      // under the gates the API's action has.
+      if (parseRestartCommand(payload)) {
+        uint32_t op = 0;
+        int status = 0;
+        if (const char* refusal = restartUnitsStart(op, status)) {
+          SerialPrintln("MQTT: restart of the units refused: " + String(refusal));
+        } else {
+          SerialPrintf("MQTT: restart of the units started (op %lu)\n", (unsigned long)op);
+        }
+      }
+      break;
     case MqttCommand::Clear:
       // #616: takes the text down, whatever the payload. Passes quiet: the
       // flaps do not move for it, the mode content returns when they may.
@@ -963,6 +977,7 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
   mqttSupplyMinMv = supply.mV;
   mqttSupply.unit = supply.unit;
   mqttSupply.under = supply.under;
+  mqttSupply.unitUpS = supply.unitUpS;
   strlcpy(mqttSupplyBoard, supply.board >= 0 ? rows[supply.board].host : "", sizeof(mqttSupplyBoard));
   mqttSupply.board = mqttSupplyBoard;
   // The flips (#619), once every found unit has been read.
@@ -1013,7 +1028,7 @@ static void mqttPublishTelemetry(const DisplaySnapshot& snap) {
     int heapFragPct = (freeHeap > 0 && maxBlock <= freeHeap)
                           ? (int)(100 - (maxBlock * 100ULL) / freeHeap)
                           : 0;
-    char buf[224];
+    char buf[MQTT_TELEMETRY_MAX];
     size_t tn = buildTelemetryPayload(
         buf, sizeof(buf), freeHeap, heapFragPct, WiFi.RSSI(),
         snap.lastShowWriteErrors, millis() / 1000UL,
@@ -1127,6 +1142,7 @@ void mqttServiceTick() {
     mqttClient.subscribe(mqttCmdTopics.restart.c_str(), 0);
     mqttClient.subscribe(mqttCmdTopics.clear.c_str(), 0);  // #616
     mqttClient.subscribe(mqttCmdTopics.install.c_str(), 0);  // #620
+    mqttClient.subscribe(mqttCmdTopics.restartUnits.c_str(), 0);  // #624
     mqttClient.subscribe(mqttQuietCmdTopic.c_str(), 0);  // #227
     mqttClient.publish(mqttTopicAvailability.c_str(), 1, true, "online");
     publishMqttDiscovery();

@@ -188,16 +188,22 @@ static void test_the_weakest_unit_and_the_count_under_the_floor_are_found_across
   UnitFacts own[3] = {unitWithVcc(4300), unitWithVcc(3900), unitWithVcc(0)};
   UnitFacts theirs[2] = {unitWithVcc(3800), unitWithVcc(3950)};
   own[2].vitalsValid = false;
+  own[1].status.uptimeSeconds = 65535;  // the status byte saturates...
+  own[1].linkValid = true;
+  own[1].link.uptimeSeconds = 90000;    // ...the link extension carries the full count (#624)
+  theirs[0].status.uptimeSeconds = 120;
   WallMqttRow rows[2];
   makeHealthy(rows);
   wallMqttUnitAggregates(own, 3, 0x20, rows[0]);
   wallMqttUnitAggregates(theirs, 2, 0x20, rows[1]);
   TEST_ASSERT_EQUAL(3900, rows[0].vccMin);
   TEST_ASSERT_EQUAL(0x21, rows[0].vccMinUnit);
+  TEST_ASSERT_EQUAL_UINT32(90000, rows[0].vccMinUnitUpS);
   TEST_ASSERT_EQUAL(1, rows[0].vccUnder);
   const WallMqttSupply s = wallMqttSupply(rows, 2);
   TEST_ASSERT_EQUAL(3800, s.mV);
   TEST_ASSERT_EQUAL(0x20, s.unit);
+  TEST_ASSERT_EQUAL_UINT32(120, s.unitUpS);
   TEST_ASSERT_EQUAL(1, s.board);
   TEST_ASSERT_EQUAL(3, s.under);
   // No supply known anywhere.
