@@ -269,10 +269,21 @@ static void test_telemetry_at_its_widest_fits_its_buffer() {
   TEST_ASSERT_EQUAL('}', buf[n - 1]);
 }
 
+// #633: the widest discovery payload, with the id a board carries, fits the
+// buffer the service gives it, and would not have fit the 512 of before.
+static void test_discovery_at_its_widest_fits_its_buffer() {
+  char buf[MQTT_DISCOVERY_MAX];
+  const size_t n = buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_VCC_MIN, "split-flap-c8a746", "abc1234");
+  TEST_ASSERT_TRUE(n > 512);
+  TEST_ASSERT_TRUE(n < sizeof(buf));
+  TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
+  TEST_ASSERT_EQUAL('}', buf[n - 1]);
+}
+
 // #619: flips, a rising counter.
 static void test_discovery_flips_and_supply_sensors() {
   char tbuf[96];
-  char pbuf[512];
+  char pbuf[MQTT_DISCOVERY_MAX];
   buildDiscoveryTopic(tbuf, sizeof(tbuf), DISCOVERY_FLIPS, "flappy");
   TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_flips/config", tbuf);
   buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_FLIPS, "flappy", "abc1234");
@@ -400,7 +411,7 @@ static void assert_contains(const char* haystack, const char* needle) {
   }
 }
 static void test_discovery_text_payload_fragments() {
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   size_t n = buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_TEXT, "flappy", "abc1234");
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));  // no truncation
   TEST_ASSERT_EQUAL_CHAR('{', buf[0]);
@@ -413,7 +424,7 @@ static void test_discovery_text_payload_fragments() {
   assert_contains(buf, "\"sw\":\"abc1234\"");
 }
 static void test_discovery_sensor_payload_fragments() {
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   size_t n = buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_HEAP, "flappy", "abc1234");
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   assert_contains(buf, "\"stat_t\":\"splitflap/flappy/telemetry\"");
@@ -429,7 +440,7 @@ static void test_discovery_sensor_payload_fragments() {
 }
 
 static void test_discovery_mode_select_topic_and_payload() {
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_MODE, "flappy");
   TEST_ASSERT_EQUAL_STRING("homeassistant/select/flappy/config", buf);
 
@@ -463,7 +474,7 @@ static void test_discovery_new_topics() {
   TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_text_state/config", buf);
 }
 static void test_discovery_telemetry_backed_fragments() {
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_HEAP_FRAG, "flappy", "abc1234");
   assert_contains(buf, "\"stat_t\":\"splitflap/flappy/telemetry\"");
   assert_contains(buf, "\"val_tpl\":\"{{ value_json.heapFrag }}\"");
@@ -481,7 +492,7 @@ static void test_discovery_telemetry_backed_fragments() {
   assert_contains(buf, "\"dev_cla\":\"connectivity\"");
 }
 static void test_discovery_own_topic_fragments() {
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_CURRENT_TEXT, "flappy", "abc1234");
   assert_contains(buf, "\"stat_t\":\"splitflap/flappy/text/state\"");
   assert_contains(buf, "\"uniq_id\":\"flappy_text_state\"");
@@ -495,7 +506,7 @@ static void test_discovery_own_topic_fragments() {
   assert_contains(buf, "\"stat_t\":\"splitflap/flappy/width\"");
 }
 static void test_discovery_diagnostics_fragments() {
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_IP, "flappy", "abc1234");
   assert_contains(buf, "\"stat_t\":\"splitflap/flappy/diag/ip\"");
   assert_contains(buf, "\"ent_cat\":\"diagnostic\"");
@@ -515,7 +526,7 @@ static void test_discovery_diagnostics_fragments() {
 // relative threshold; the median + flagged list ride a dedicated attrs topic
 // (units/wear) so automations can name the offending unit.
 static void test_discovery_unit_wear_topic_and_payload() {
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_UNIT_WEAR, "flappy");
   TEST_ASSERT_EQUAL_STRING("homeassistant/binary_sensor/flappy_unit_wear/config",
                            buf);
@@ -533,14 +544,20 @@ static void test_discovery_unit_wear_topic_and_payload() {
 
 static void test_discovery_vcc_min_topic_and_payload() {
   // #366: fleet-min supply Vcc diagnostic voltage sensor, telemetry-backed.
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_VCC_MIN, "flappy");
   TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_vcc_min/config", buf);
 
-  buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_VCC_MIN, "flappy", "abc1234");
+  const size_t vn = buildDiscoveryPayload(buf, sizeof(buf), DISCOVERY_VCC_MIN, "flappy", "abc1234");
+  TEST_ASSERT_TRUE(vn > 0 && vn < sizeof(buf));
   assert_contains(buf, "\"name\":\"Unit supply Vcc (min)\"");
   assert_contains(buf, "\"stat_t\":\"splitflap/flappy/telemetry\"");
   assert_contains(buf, "\"val_tpl\":\"{{ value_json.vccMin }}\"");
+  assert_contains(buf, "\"dev_cla\":\"voltage\",\"unit_of_meas\":\"mV\",\"ent_cat\":\"diagnostic\"");
+  // #633: the weakest unit, its board, since when and the under-floor count
+  // as the sensor's attributes, from the same packet.
+  assert_contains(buf, "\"json_attr_t\":\"splitflap/flappy/telemetry\"");
+  assert_contains(buf, "\"json_attr_tpl\":\"{{ {'unit': value_json.vccMinUnit, 'board': value_json.vccMinBoard, 'since_s': value_json.vccMinUnitUp, 'under_floor': value_json.vccUnder} | to_json }}\"");
   assert_contains(buf, "\"uniq_id\":\"flappy_vcc_min\"");
   assert_contains(buf, "\"dev_cla\":\"voltage\"");
   assert_contains(buf, "\"unit_of_meas\":\"mV\"");
@@ -561,7 +578,7 @@ static void test_fleet_reboot_total_sums_valid_units() {
 
 static void test_discovery_reboot_total_topic_and_payload() {
   // #368: fleet reboot odometer diagnostic sensor, telemetry-backed.
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_REBOOT_TOTAL, "flappy");
   TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_reboot_total/config", buf);
 
@@ -607,7 +624,7 @@ static void test_discovery_unit_jam_topic_and_payload() {
   // #365: fleet jam/stall problem sensor, telemetry-backed like
   // vccMin/reboots. Binary_sensor with the same pl_on/pl_off "ON"/"OFF"
   // convention as the existing DISCOVERY_UNIT_WEAR problem sensor.
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_UNIT_JAM, "flappy");
   TEST_ASSERT_EQUAL_STRING("homeassistant/binary_sensor/flappy_unit_jam/config", buf);
 
@@ -624,7 +641,7 @@ static void test_discovery_unit_jam_topic_and_payload() {
 static void test_discovery_steps_excess_topic_and_payload() {
   // #365: fleet worst-seen home-step excess, telemetry-backed
   // diagnostic sensor (unitFleetMaxExcess).
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_STEPS_EXCESS, "flappy");
   TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_steps_excess/config", buf);
 
@@ -638,7 +655,7 @@ static void test_discovery_steps_excess_topic_and_payload() {
 }
 
 static void test_all_discovery_entities_wellformed() {
-  char pbuf[512];
+  char pbuf[MQTT_DISCOVERY_MAX];
   char tbuf[96];
   // A long-ish device id to stress the buffers (still <= the 24-char cap +).
   const char* id = "split-flap-9a3c1f";
@@ -657,7 +674,7 @@ static void test_all_discovery_entities_wellformed() {
 // #615/#616/#620: the message, clear and firmware entities.
 static void test_discovery_notify_clear_and_update_entities() {
   char tbuf[96];
-  char pbuf[512];
+  char pbuf[MQTT_DISCOVERY_MAX];
   buildDiscoveryTopic(tbuf, sizeof(tbuf), DISCOVERY_NOTIFY, "flappy");
   TEST_ASSERT_EQUAL_STRING("homeassistant/notify/flappy/config", tbuf);
   buildDiscoveryPayload(pbuf, sizeof(pbuf), DISCOVERY_NOTIFY, "flappy", "abc1234");
@@ -730,7 +747,7 @@ static void test_restart_command_only_fires_on_press() {
   TEST_ASSERT_FALSE(parseRestartCommand(String("")));
 }
 static void test_discovery_control_topics_and_payloads() {
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_SPEED, "flappy");
   TEST_ASSERT_EQUAL_STRING("homeassistant/number/flappy_speed/config", buf);
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_ALIGNMENT, "flappy");
@@ -764,7 +781,7 @@ static void test_discovery_control_topics_and_payloads() {
 // entity category. It must NOT collide with the pre-existing "Units responding"
 // count entity's _units suffix / units topic.
 static void test_discovery_units_faulty_topic_and_payload() {
-  char buf[512];
+  char buf[MQTT_DISCOVERY_MAX];
   buildDiscoveryTopic(buf, sizeof(buf), DISCOVERY_UNITS_FAULTY, "flappy");
   TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/flappy_units_faulty/config", buf);
 
@@ -815,6 +832,7 @@ int main(int, char**) {
   RUN_TEST(test_telemetry_vccmin_omitted_when_zero);
   RUN_TEST(test_telemetry_supply_facts_follow_vccmin);
   RUN_TEST(test_telemetry_at_its_widest_fits_its_buffer);
+  RUN_TEST(test_discovery_at_its_widest_fits_its_buffer);
   RUN_TEST(test_discovery_flips_and_supply_sensors);
   RUN_TEST(test_telemetry_ntp_false_renders_zero);
   RUN_TEST(test_mode_command_accepts_exact_options);

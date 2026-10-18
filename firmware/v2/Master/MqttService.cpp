@@ -255,7 +255,7 @@ void mqttServiceInit(MasterSettings& settings, SettingsStore& store,
 // poison HA's retained config — skip and log instead.
 static void publishMqttDiscovery() {
   char topicBuf[96];
-  char payloadBuf[512];
+  char payloadBuf[MQTT_DISCOVERY_MAX];
   for (int entity = 0; entity < DISCOVERY_ENTITY_COUNT; entity++) {
     size_t tLen = buildDiscoveryTopic(topicBuf, sizeof(topicBuf), entity,
                                       mqttResolvedDeviceId.c_str());
@@ -701,7 +701,7 @@ static void mqttPublishQuiet() {
   if (state == mqttLastQuietState) return;
   if (mqttLastQuietState < 0) {
     char topicBuf[96];
-    char payloadBuf[512];
+    char payloadBuf[MQTT_DISCOVERY_MAX];
     size_t tLen = buildQuietDiscoveryTopic(topicBuf, sizeof(topicBuf),
                                            mqttResolvedDeviceId.c_str());
     size_t pLen = buildQuietDiscovery(payloadBuf, sizeof(payloadBuf),
@@ -836,7 +836,7 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
                                                  mqttResolvedDeviceId.c_str());
     if (tLen > 0 && tLen < sizeof(topicBuf)) {
       if (activeNow) {
-        char payloadBuf[512];
+        char payloadBuf[MQTT_DISCOVERY_MAX];
         size_t pLen = buildWallProblemDiscovery(payloadBuf, sizeof(payloadBuf),
                                                 mqttResolvedDeviceId.c_str(),
                                                 mqttFwVersion.c_str());

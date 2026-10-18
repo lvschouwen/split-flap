@@ -511,6 +511,12 @@ inline size_t buildDiscoveryTopic(char* buf, size_t bufLen, int entity, const ch
 #endif
 #define MQTT_DEVICE_BLOCK "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Split-Flap %s\",\"mf\":\"split-flap\",\"mdl\":\"" MQTT_DEVICE_MODEL "\",\"sw\":\"%s\",\"cu\":\"http://%s.local/\"}"
 
+// A discovery payload at its widest: the supply sensor's, with its attribute
+// template and the board's id in six fields beside the device block (#633).
+// The service and test_mqtt_helpers build every shared entity into a buffer
+// of this size; a payload that does not fit is not published.
+#define MQTT_DISCOVERY_MAX 768
+
 // Append-with-guard: bail the moment the buffer is full so buf+o never runs
 // past the end. The caller rejects any payload with returned length >= bufLen.
 #define MQTT_DISC_APPEND(...) do { \
@@ -595,7 +601,13 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
         MQTT_FMT("{\"name\":\"Unit wear warning\",\"stat_t\":\"splitflap/%s/units_wear\",\"json_attr_t\":\"splitflap/%s/units/wear\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_unit_wear\",\"dev_cla\":\"problem\",\"ent_cat\":\"diagnostic\",\"pl_on\":\"ON\",\"pl_off\":\"OFF\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     //                        obj             name                 stat_t          val_tpl                       dev_cla    unit    ent_cat        pOn    pOff
-    case DISCOVERY_VCC_MIN:      return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_vcc_min",      "Unit supply Vcc (min)", "telemetry", "{{ value_json.vccMin }}",  "voltage", "mV",  "diagnostic", nullptr, nullptr);
+    case DISCOVERY_VCC_MIN:
+      // The weakest unit, its board, since when its minimum counts and the
+      // count under the floor ride as the sensor's attributes (#623/#624/#633),
+      // named for a reader: the packet's keys are the firmware's.
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Unit supply Vcc (min)\",\"stat_t\":\"splitflap/%s/telemetry\",\"val_tpl\":\"{{ value_json.vccMin }}\",\"json_attr_t\":\"splitflap/%s/telemetry\",\"json_attr_tpl\":\"{{ {'unit': value_json.vccMinUnit, 'board': value_json.vccMinBoard, 'since_s': value_json.vccMinUnitUp, 'under_floor': value_json.vccUnder} | to_json }}\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_vcc_min\",\"dev_cla\":\"voltage\",\"unit_of_meas\":\"mV\",\"ent_cat\":\"diagnostic\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
     case DISCOVERY_REBOOT_TOTAL: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_reboot_total", "Unit reboots (fleet)",  "telemetry", "{{ value_json.reboots }}", nullptr,   nullptr, "diagnostic", nullptr, nullptr);
     // #365: fleet jam/stall problem sensor + worst-seen home-step
     // excess, both telemetry-backed like vccMin/reboots. Binary_sensor
