@@ -17,9 +17,11 @@
 #define BOOT_GUARD_CRASH_LIMIT 3
 // Longer than the 30 s task watchdog: a boot that hangs must be reset, and
 // counted, before it could be called healthy. It is also the guard's reach:
-// an image that runs this long between crashes is never sent to rescue — it
-// is up most of the time and can be replaced over the network.
-#define BOOT_GUARD_HEALTHY_MS 60000UL
+// an image that runs this long between crashes is never sent to rescue. Not
+// minutes (#635): each crash restarts the WiFi join, its retries and the
+// portal, so an image crashing a few minutes into every boot is off the
+// network most of the time and cannot be replaced over it.
+#define BOOT_GUARD_HEALTHY_MS (30UL * 60UL * 1000UL)
 
 // The count lives in RAM that a reset keeps and a power cycle does not, so
 // pulling the plug always gives the image a full set of attempts — and that

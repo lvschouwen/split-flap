@@ -83,6 +83,13 @@ static void test_healthy_time_outlasts_the_task_watchdog() {
   TEST_ASSERT_TRUE(BOOT_GUARD_HEALTHY_MS > 30000UL);
 }
 
+static void test_a_crash_minutes_into_every_boot_trips() {
+  // #635: a TWDT reset 2 min into every boot kept the board off the network
+  // most of the time; three such boots must reach the rescue image.
+  TEST_ASSERT_FALSE(bootGuardHealthy(2UL * 60UL * 1000UL));
+  TEST_ASSERT_FALSE(bootGuardHealthy(10UL * 60UL * 1000UL));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_garbage_after_power_on_reads_as_no_crashes);
@@ -96,5 +103,6 @@ int main() {
   RUN_TEST(test_crashes_around_restarts_on_purpose_still_trip);
   RUN_TEST(test_healthy_only_after_the_full_time);
   RUN_TEST(test_healthy_time_outlasts_the_task_watchdog);
+  RUN_TEST(test_a_crash_minutes_into_every_boot_trips);
   return UNITY_END();
 }
