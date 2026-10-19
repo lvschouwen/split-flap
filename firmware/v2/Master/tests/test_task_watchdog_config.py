@@ -1,9 +1,10 @@
 """TWDT config guard (#314).
 
-The effective ESP_TASK_WDT_TIMEOUT_S lives in the generated (gitignored)
-sdkconfig; the tracked source is platformio.ini's custom_sdkconfig. This
+The effective ESP_TASK_WDT_TIMEOUT_S is what the shared Arduino IDF libs were
+compiled with; the tracked source is platformio.ini's custom_sdkconfig. This
 test pins that source so a future edit can't silently drop the 30 s override
-or the panic-reboot behaviour the unattended wall depends on.
+or the panic-reboot behaviour the unattended wall depends on. That the libs
+carry it is checked at build time (../buildtools/check_framework_libs.py, #634).
 
 Run with:
     pytest tests/
@@ -18,9 +19,9 @@ PROJECT_DIR = pathlib.Path(__file__).resolve().parent.parent
 INI_PATH = PROJECT_DIR / "platformio.ini"
 
 
-def custom_sdkconfig_lines() -> list[str]:
-    """Return the entries of the [env:master] custom_sdkconfig block."""
-    text = INI_PATH.read_text()
+def custom_sdkconfig_lines(ini: pathlib.Path = INI_PATH) -> list[str]:
+    """Return the entries of a project's custom_sdkconfig block."""
+    text = ini.read_text()
     m = re.search(r"^custom_sdkconfig\s*=\s*$(.*?)^\S", text,
                   re.MULTILINE | re.DOTALL)
     assert m, "custom_sdkconfig block not found in platformio.ini"
@@ -34,6 +35,19 @@ def custom_sdkconfig_lines() -> list[str]:
 
 def test_task_wdt_timeout_is_30s():
     assert "CONFIG_ESP_TASK_WDT_TIMEOUT_S=30" in custom_sdkconfig_lines()
+
+
+def test_rescue_compiles_the_same_framework_libs():
+    # #634: Master and Rescue compile one shared Arduino IDF lib build; the one
+    # that builds last decides what the other links. Equal blocks keep either
+    # order right; check_framework_libs.py catches what slips past this.
+    rescue = INI_PATH.parent.parent / "Rescue" / "platformio.ini"
+    assert custom_sdkconfig_lines(rescue) == custom_sdkconfig_lines()
+
+
+def test_both_builds_check_the_shared_libs():
+    for ini in (INI_PATH, INI_PATH.parent.parent / "Rescue" / "platformio.ini"):
+        assert "pre:../buildtools/check_framework_libs.py" in ini.read_text(), ini
 
 
 def test_task_wdt_panic_not_disabled():
