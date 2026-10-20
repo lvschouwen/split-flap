@@ -9,6 +9,14 @@
 namespace {
 
 constexpr uint32_t PROBE_CONNECT_TIMEOUT_MS = 1500;
+// The gateway is across the radio, and in modem sleep (wifiPowerSave) the
+// radio loses a frame now and then. lwIP resends a lost SYN only after its
+// initial RTO, so the wait must outlast that resend and leave the reply
+// ~1.5 s to arrive through power save's beacon delay. The own server is
+// local and needs no resend.
+constexpr uint32_t GATEWAY_CONNECT_TIMEOUT_MS = CONFIG_LWIP_TCP_RTO_TIME + 1500;
+static_assert(GATEWAY_CONNECT_TIMEOUT_MS > CONFIG_LWIP_TCP_RTO_TIME,
+              "the gateway probe must wait out one SYN resend");
 constexpr uint32_t STRIKES_MAGIC = 0x4E4C5631UL;  // "NLV1"
 
 // Written by workerTask, read by netTask and the web layer.
@@ -49,7 +57,7 @@ RTC_NOINIT_ATTR StrikeRecord strikeRecord;
 // Unknown when the shortage is this board's own (no socket, no memory): that
 // is not evidence about the network.
 NetProbe tcpProbe(IPAddress ip, uint16_t port, const char* request,
-                  uint8_t& step) {
+                  uint32_t timeoutMs, uint8_t& step) {
   step = STEP_SOCKET;
   int s = lwip_socket(AF_INET, SOCK_STREAM, 0);
   if (s < 0) return NetProbe::Unknown;
@@ -70,8 +78,8 @@ NetProbe tcpProbe(IPAddress ip, uint16_t port, const char* request,
   addr.sin_port = htons(port);
   addr.sin_addr.s_addr = (uint32_t)ip;
   struct timeval tv = {};
-  tv.tv_sec = PROBE_CONNECT_TIMEOUT_MS / 1000;
-  tv.tv_usec = (PROBE_CONNECT_TIMEOUT_MS % 1000) * 1000;
+  tv.tv_sec = timeoutMs / 1000;
+  tv.tv_usec = (timeoutMs % 1000) * 1000;
 
   int err = 0;
   bool connected = false;
@@ -138,7 +146,8 @@ void netLivenessProbeTick() {
   if ((uint32_t)self == 0 || (uint32_t)gateway == 0) return;
   uint8_t gwStep = 0;
   uint8_t ownStep = 0;
-  NetProbe gw = tcpProbe(gateway, 80, nullptr, gwStep);
+  NetProbe gw =
+      tcpProbe(gateway, 80, nullptr, GATEWAY_CONNECT_TIMEOUT_MS, gwStep);
   // A path nothing serves: the 404 comes from the web server's own task, so
   // it proves that task runs — at the cost of the smallest reply there is.
   static const char kRequest[] =
@@ -150,11 +159,14 @@ void netLivenessProbeTick() {
   // first: the station-address attempt costs its full timeout every time.
   bool viaLoopback = selfViaLoopback.load();
   NetProbe own = viaLoopback
-                     ? tcpProbe(IPAddress(127, 0, 0, 1), 80, kRequest, ownStep)
-                     : tcpProbe(self, 80, kRequest, ownStep);
+                     ? tcpProbe(IPAddress(127, 0, 0, 1), 80, kRequest,
+                                PROBE_CONNECT_TIMEOUT_MS, ownStep)
+                     : tcpProbe(self, 80, kRequest, PROBE_CONNECT_TIMEOUT_MS,
+                                ownStep);
   if (!viaLoopback && own == NetProbe::Fail && ownStep == STEP_CONNECT) {
     uint8_t loStep = 0;
-    NetProbe lo = tcpProbe(IPAddress(127, 0, 0, 1), 80, kRequest, loStep);
+    NetProbe lo = tcpProbe(IPAddress(127, 0, 0, 1), 80, kRequest,
+                           PROBE_CONNECT_TIMEOUT_MS, loStep);
     if (lo == NetProbe::Ok) {
       own = lo;
       ownStep = loStep;
