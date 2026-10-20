@@ -1,0 +1,29 @@
+{
+ "name": "Split-Flap",
+ "version": "v2026.10.20",
+ "new_install_prompt_erase": true,
+ "builds": [
+  {
+   "chipFamily": "ESP32-S3",
+   "parts": [
+    {
+     "path": "factory-0ac78f0-master.bin",
+     "offset": 0
+    },
+    {
+     "path": "rescue-0ac78f0.bin",
+     "offset": 8585216
+    }
+   ]
+  },
+  {
+   "chipFamily": "ESP8266",
+   "parts": [
+    {
+     "path": "follower-0ac78f0.bin",
+     "offset": 0
+    }
+   ]
+  }
+ ]
+}

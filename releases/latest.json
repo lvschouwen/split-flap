@@ -1,31 +1,31 @@
 {
  "format": 1,
  "channel": "stable",
- "tag": "v2026.10.18",
- "notes": "https://github.com/lvschouwen/split-flap/releases/tag/v2026.10.18",
- "commitTime": 1792354666,
+ "tag": "v2026.10.20",
+ "notes": "https://github.com/lvschouwen/split-flap/releases/tag/v2026.10.20",
+ "commitTime": 1792533107,
  "master": {
-  "rev": "0296a88",
-  "path": "v2026.10.18/firmware-0296a88-master.bin",
-  "size": 1779632,
-  "sha256": "9bb4f5627aa318018408336d6ae558697b94d5520bdb716dfb09aea251acbf72"
+  "rev": "0ac78f0",
+  "path": "v2026.10.20/firmware-0ac78f0-master.bin",
+  "size": 1780240,
+  "sha256": "50095519885c361fb92a33230ae643798065ef9b383c301ca0676f404958595a"
  },
  "row": {
-  "rev": "0296a88",
-  "path": "v2026.10.18/follower-0296a88-gz.bin",
-  "size": 330803,
-  "sha256": "8f286a6b22d5de02f08e9854acd146ac737be06981e7875b826f71f5a7412845",
-  "md5": "dfcb5a054787cba6e041ef72d73a5c74"
+  "rev": "0ac78f0",
+  "path": "v2026.10.20/follower-0ac78f0-gz.bin",
+  "size": 348019,
+  "sha256": "52f2751e6cbcbdb2d254e8b4e61d259c420f0eae14356a15d69da8f73b180705",
+  "md5": "5de6d3c26230adf99fcea24b4fc199e0"
  },
  "rescue": {
-  "rev": "55fd69a",
-  "path": "v2026.10.18/rescue-55fd69a.bin",
-  "size": 1208624,
-  "sha256": "2ba3474251ecfcf9bb291b07400e6c726743ad58349ec0b4a990540a806e3d1d"
+  "rev": "0ac78f0",
+  "path": "v2026.10.20/rescue-0ac78f0.bin",
+  "size": 1207776,
+  "sha256": "6122363b5a0ea404e95c95a748aaef331576733f4c35716276b8d92838de9ade"
  },
  "units": {
   "revs": [
-   "44027bc",
+   "2bdabc9",
    "0d90815"
   ]
  }
