@@ -19,6 +19,18 @@ fixed chunk buffer, untouched here) and no large non-file fields, so they are
 unaffected. The exact-pinned version (#357) keeps the anchors stable; if an
 anchor ever moves the patch FAILS LOUD rather than silently no-op'ing.
 
+#631: a response is marked ended (`RESPONSE_END`) the moment its last piece
+is read from the source, before the TCP queue has taken it. When that add
+fails (`tcp_write` ERR_MEM: the queue is full of segments, which a small-MSS
+peer like the ESP-01 row brings about), the piece stays in `_send_buffer`,
+the next ACK finds the response finished and closes the connection: the
+peer gets a clean FIN with the tail of the file missing. The patch keeps
+"the source has ended" apart from "the response has ended" and ends the
+response only once the buffer has gone out; it also takes an in-flight
+credit only for a pass that put bytes in flight (fixed so upstream after
+3.12.1), since a pass that sent nothing gets no ACK to give it back.
+Upstream ESP32Async/ESPAsyncWebServer PR #497 covers the same.
+
 One script for Master / Rescue / FollowerEsp01 (unified stack, #356), wired
 in each platformio.ini via `extra_scripts = pre:../buildtools/patch_asyncweb.py`.
 """
@@ -33,6 +45,8 @@ SENTINEL = "_sf347FieldBudget"
 
 _HEADER = "ESPAsyncWebServer.h"
 _REQ = "WebRequest.cpp"
+_RESP_H = "WebResponseImpl.h"
+_RESP = "WebResponses.cpp"
 
 PATCHES = [
     # 1) Budget member + tunables, right after the field-value String decl.
@@ -96,6 +110,69 @@ PATCHES = [
         "        if (_params.size() < SF347_MULTIPART_MAX_PARAMS)  // #347\n"
         "        _params.emplace_back(_itemName, _itemFilename, true, true, _itemSize);",
     ),
+    # 7) #631: the source's end, apart from the response's.
+    (
+        _RESP_H,
+        "  size_t _send_buffer_offset{0}, _send_buffer_len{0};\n",
+        "  size_t _send_buffer_offset{0}, _send_buffer_len{0};\n"
+        "  bool _sf631SourceEnded{false};  // #631: read to the end, not yet all queued\n",
+    ),
+    # 8) Nothing more to read once the source has ended.
+    (
+        _RESP,
+        "      if (tcp_win == 0 || _state == RESPONSE_END) {\n",
+        "      if (tcp_win == 0 || _sf631SourceEnded) {  // #631\n",
+    ),
+    # 9-11) The three places the source ends: the last chunk, nothing more
+    # read, the last piece of a known length.
+    (
+        _RESP,
+        "          if (!readLen) {\n"
+        "            // last chunk?\n"
+        "            _state = RESPONSE_END;\n",
+        "          if (!readLen) {\n"
+        "            // last chunk?\n"
+        "            _sf631SourceEnded = true;  // #631\n",
+    ),
+    (
+        _RESP,
+        "          // no more data to send\n"
+        "          _state = RESPONSE_END;\n",
+        "          // no more data to send\n"
+        "          _sf631SourceEnded = true;  // #631\n",
+    ),
+    (
+        _RESP,
+        "            // it was last piece of content\n"
+        "            _state = RESPONSE_END;\n",
+        "            // it was last piece of content\n"
+        "            _sf631SourceEnded = true;  // #631\n",
+    ),
+    # 12) The response ends once what was read has all gone to the queue.
+    (
+        _RESP,
+        "    } while (_send_buffer_len);  // go on till we have something in buffer pending to send\n",
+        "    } while (_send_buffer_len);  // go on till we have something in buffer pending to send\n"
+        "    if (_sf631SourceEnded && !_send_buffer_len) {\n"
+        "      _state = RESPONSE_END;  // #631: only now, with nothing left behind\n"
+        "    }\n",
+    ),
+    # 13) A credit is spent only on bytes put in flight; their ACK returns it.
+    (
+        _RESP,
+        "    _writtenLength += payloadlen;\n"
+        "#if ASYNCWEBSERVER_USE_CHUNK_INFLIGHT\n"
+        "    _in_flight += payloadlen;\n"
+        "    --_in_flight_credit;  // take a credit\n"
+        "#endif\n",
+        "    _writtenLength += payloadlen;\n"
+        "#if ASYNCWEBSERVER_USE_CHUNK_INFLIGHT\n"
+        "    if (payloadlen) {  // #631: a pass that sent nothing gets no ACK back\n"
+        "      _in_flight += payloadlen;\n"
+        "      --_in_flight_credit;  // take a credit\n"
+        "    }\n"
+        "#endif\n",
+    ),
 ]
 
 
@@ -104,12 +181,12 @@ def _lib_src_dir(env):
     return libdeps / "ESPAsyncWebServer" / "src"
 
 
-def apply_patches(src_dir):
+def apply_patches(src_dir, patches=PATCHES):
     if not src_dir.is_dir():
         # Native / non-web envs don't pull the library — nothing to do.
         print(f"[patch_asyncweb] no ESPAsyncWebServer at {src_dir} — skipping")
         return
-    for rel, anchor, repl in PATCHES:
+    for rel, anchor, repl in patches:
         path = src_dir / rel
         text = path.read_text()
         if SENTINEL in repl and repl in text:
@@ -117,9 +194,9 @@ def apply_patches(src_dir):
         # More precise idempotency: the specific replacement already present.
         if repl in text:
             continue
-        if anchor not in text:
+        if text.count(anchor) != 1:
             sys.exit(
-                f"[patch_asyncweb] FATAL: anchor not found in {path.name} — "
+                f"[patch_asyncweb] FATAL: anchor found {text.count(anchor)} times in {path.name} — "
                 f"the pinned ESPAsyncWebServer changed shape (#347). Re-verify "
                 f"the patch against the new version.\nAnchor:\n{anchor}"
             )
