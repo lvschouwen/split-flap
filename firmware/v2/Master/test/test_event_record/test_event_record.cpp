@@ -104,6 +104,7 @@ static void test_the_kind_numbers_and_names_are_fixed() {
   static const struct { EventKind k; uint8_t n; const char* name; } fixed[] = {
       {EventKind::MasterStarted, 1, "master-started"},
       {EventKind::EventsDropped, 2, "events-dropped"},
+      {EventKind::Repeated, 3, "repeated"},
       {EventKind::UnitReasonOn, 10, "unit-reason-on"},
       {EventKind::UnitReasonOff, 11, "unit-reason-off"},
       {EventKind::UnitRestarted, 12, "unit-restarted"},

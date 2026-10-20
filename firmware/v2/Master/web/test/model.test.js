@@ -791,6 +791,12 @@ test('what a row board reports about itself is put in words, and a new code by i
   assert.equal(eventText({ kind: 'brand-new', unit: 0 }, 'Row 1', ALPHABET).title, 'Row 1: brand-new');
   assert.equal(eventText({ kind: 'events-dropped', a: 1 }, '', ALPHABET).title, '1 entry was lost');
   assert.equal(eventText({ kind: 'events-dropped', a: 4 }, '', ALPHABET).title, '4 entries were lost');
+  const repeated = (event) => eventText({ kind: 'repeated', unit: 0, ...event }, 'Row 1', ALPHABET);
+  assert.equal(repeated({ repeats: 'master-started', b: 6, a: 47 }).title, 'The master started — 47 more times');
+  assert.equal(repeated({ repeats: 'master-started', b: 6, a: 47 }).cls, 'bad');
+  assert.equal(repeated({ repeats: 'board-reason-off', reason: 'never-seen', a: 1 }).title,
+    'Row 1: connected — 1 more time');
+  assert.equal(repeated({ repeats: 'board-reason-off', reason: 'never-seen', a: 1 }).cls, 'info');
 });
 
 test('the record names the master\u2019s own row "" and no board for the master itself', () => {

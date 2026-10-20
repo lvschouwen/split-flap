@@ -242,6 +242,7 @@ def _history(boards, now):
     row = [b for b in boards if b != MASTER][0]
     kinds = [
         {"kind": "events-dropped", "a": 14},
+        {"kind": "repeated", "repeats": "master-started", "detail": 1, "board": "", "unit": 0, "a": 47, "b": 6},
         {"kind": "job-failed", "board": "", "unit": 0, "job": "update-from-release"},
         {"kind": "job-failed", "board": row, "unit": 3, "job": "self-test"},
         {"kind": "job-done", "board": row, "unit": 0, "job": "home-all"},

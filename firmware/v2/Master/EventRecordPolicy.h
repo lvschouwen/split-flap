@@ -41,6 +41,7 @@
 enum class EventKind : uint8_t {
   MasterStarted = 1,       // reset reason   rev as a number
   EventsDropped = 2,       //                how many were lost
+  Repeated = 3,            // the kind       how many were not written   the entry's detail (EventDampPolicy.h)
   UnitReasonOn = 10,       // UnitReason     the reason's numbers (UnitVerdict.h)
   UnitReasonOff = 11,      // UnitReason
   UnitRestarted = 12,      // reset cause    lifetime brownouts   lifetime watchdog resets
@@ -58,6 +59,7 @@ inline const char* eventKindName(uint8_t kind) {
   switch ((EventKind)kind) {
     case EventKind::MasterStarted: return "master-started";
     case EventKind::EventsDropped: return "events-dropped";
+    case EventKind::Repeated: return "repeated";
     case EventKind::UnitReasonOn: return "unit-reason-on";
     case EventKind::UnitReasonOff: return "unit-reason-off";
     case EventKind::UnitRestarted: return "unit-restarted";

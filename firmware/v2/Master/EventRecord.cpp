@@ -5,13 +5,19 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <esp_attr.h>
+#include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
 #include <time.h>
 
+#include <memory>
+#include <new>
+
 #include "ClockPolicy.h"   // clockIsTimeSynced
 #include "CrashContext.h"  // #504 flash-write mark
+#include "EventDampPolicy.h"
 #include "FlashLog.h"      // flashLogAvailable() — same storage mount
 #include "HelpersSerialHandling.h"
 
@@ -30,6 +36,14 @@ static EventStage stage;
 static uint32_t nextSeq = 1;
 static uint32_t lastTickMs = 0;
 static EventRecord due[EVENT_STAGE_CAP + 1];
+// #571: what repeats is counted, not written. In RTC memory so a restart
+// that is not a power cut keeps the counts; netTask-only after setup().
+RTC_NOINIT_ATTR static EventDamp damp;
+// Each entry taken can bring one Repeated entry before it; windows that
+// have passed bring one a slot.
+static EventRecord toWrite[2 * (EVENT_STAGE_CAP + 1) + EVENT_DAMP_SLOTS];
+// How many of the newest entries rebuild the table after a power cut.
+#define EVENT_DAMP_SEED_ENTRIES 64
 
 namespace {
 
@@ -80,7 +94,34 @@ void eventRecordInit() {
   if (last == 0) last = lastSeqOf(EVENTS_PREV_PATH);
   nextSeq = last + 1;
   ready = true;
+  if (esp_reset_reason() == ESP_RST_POWERON || !damp.valid()) {
+    damp.clear();
+    std::unique_ptr<EventRecord[]> newest(new (std::nothrow) EventRecord[EVENT_DAMP_SEED_ENTRIES]);
+    if (newest) {
+      const int n = eventRecordPage(0, newest.get(), EVENT_DAMP_SEED_ENTRIES);
+      for (int i = n; i > 0; i--) damp.seed(newest[i - 1]);
+    }
+  }
 }
+
+namespace {
+
+// The entries taken, damped (#571), with the Repeated entries of what was not
+// written, numbered again from the first seq taken. Returns how many.
+int dampTaken(int n, uint32_t nowS, bool clockSet) {
+  int out = 0;
+  for (int i = 0; i < n; i++) {
+    EventRecord summary;
+    bool hasSummary = false;
+    const bool written = damp.admit(due[i], summary, hasSummary);
+    if (hasSummary) toWrite[out++] = summary;
+    if (written) toWrite[out++] = due[i];
+  }
+  if (clockSet) out += damp.due(nowS, toWrite + out, EVENT_DAMP_SLOTS);
+  return out;
+}
+
+}  // namespace
 
 void eventRecordKeyed(EventKind kind, uint8_t detail, uint16_t boardKey, uint8_t unit, uint32_t a,
                       uint32_t b, uint32_t agoS) {
@@ -112,10 +153,17 @@ void eventRecordTick(bool force) {
   lastTickMs = nowMs;
 
   const time_t now = time(nullptr);
+  const bool clockSet = clockIsTimeSynced(now);
+  // Numbered on a copy: damping drops some, and nextSeq only ever grows.
+  const uint32_t firstSeq = nextSeq;
+  uint32_t takenSeq = nextSeq;
   xSemaphoreTake(stageMutex, portMAX_DELAY);
-  const int n = stage.take((uint32_t)now, clockIsTimeSynced(now), nowMs, force, nextSeq, due,
-                           EVENT_STAGE_CAP + 1);
+  const int taken = stage.take((uint32_t)now, clockSet, nowMs, force, takenSeq, due,
+                               EVENT_STAGE_CAP + 1);
   xSemaphoreGive(stageMutex);
+  const int n = dampTaken(taken, (uint32_t)now, clockSet);
+  for (int i = 0; i < n; i++) toWrite[i].seq = firstSeq + (uint32_t)i;
+  nextSeq = firstSeq + (uint32_t)n;
   if (n == 0) return;
 
   // #504: netTask is the only caller; its loop re-marks on the next pass.
@@ -133,7 +181,7 @@ void eventRecordTick(bool force) {
   bool ok = pad == 0 || f.write(zeros, pad) == pad;
   for (int i = 0; ok && i < n; i++) {
     uint8_t raw[EVENT_RECORD_SIZE];
-    eventEncode(due[i], raw);
+    eventEncode(toWrite[i], raw);
     ok = f.write(raw, sizeof(raw)) == sizeof(raw);
   }
   const size_t size = f.size();

@@ -77,6 +77,33 @@ namespace {
 
 constexpr size_t ACTION_BODY_MAX = 1024;
 
+// What an entry's detail stands for, by name, so the record reads without a
+// table. A Repeated entry names the kind it repeats and that entry's detail.
+void addDetailNames(JsonObject e, uint8_t kind, uint8_t detail) {
+  switch ((EventKind)kind) {
+    case EventKind::UnitReasonOn:
+    case EventKind::UnitReasonOff:
+      e["reason"] = unitReasonName((UnitReason)detail);
+      break;
+    case EventKind::BoardReasonOn:
+    case EventKind::BoardReasonOff:
+      e["reason"] = boardReasonName((BoardReason)detail);
+      break;
+    case EventKind::JobDone:
+    case EventKind::JobFailed:
+      e["job"] = wallJobNumberName(detail);
+      break;
+    case EventKind::UnitRestarted:
+      e["cause"] = unitResetKindName(unitResetFromStatusByte(detail));
+      break;
+    case EventKind::RowEvent:
+      e["event"] = wallRowEventName(detail);
+      break;
+    default:
+      break;
+  }
+}
+
 void sendError(AsyncWebServerRequest* request, int status, const char* message) {
   AsyncJsonResponse* response = new AsyncJsonResponse();
   response->getRoot()["error"] = message;
@@ -703,28 +730,11 @@ void handleHistory(AsyncWebServerRequest* request) {
     e["unit"] = r.unit;
     e["a"] = r.a;
     e["b"] = r.b;
-    // What the numbers stand for, by name, so the record reads without a table.
-    switch ((EventKind)r.kind) {
-      case EventKind::UnitReasonOn:
-      case EventKind::UnitReasonOff:
-        e["reason"] = unitReasonName((UnitReason)r.detail);
-        break;
-      case EventKind::BoardReasonOn:
-      case EventKind::BoardReasonOff:
-        e["reason"] = boardReasonName((BoardReason)r.detail);
-        break;
-      case EventKind::JobDone:
-      case EventKind::JobFailed:
-        e["job"] = wallJobNumberName(r.detail);
-        break;
-      case EventKind::UnitRestarted:
-        e["cause"] = unitResetKindName(unitResetFromStatusByte(r.detail));
-        break;
-      case EventKind::RowEvent:
-        e["event"] = wallRowEventName(r.detail);
-        break;
-      default:
-        break;
+    if ((EventKind)r.kind == EventKind::Repeated) {
+      e["repeats"] = eventKindName(r.detail);
+      addDetailNames(e, r.detail, (uint8_t)r.b);
+    } else {
+      addDetailNames(e, r.kind, r.detail);
     }
   }
   if (found > limit) root["next"] = page[count - 1].seq;

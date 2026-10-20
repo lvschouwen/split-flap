@@ -175,6 +175,16 @@ export function eventText(event, where, alphabet) {
                    + (event.b ? `Working: ${pair(event.b)}.` : 'Not measured on the working bus yet.') };
       }
       return { cls: 'info', title: `${where}: ${event.event}`, why: '' };
+    case 'repeated': {
+      // The entry it repeats has its kind in `repeats` and its detail's name
+      // beside it; its own numbers were not kept, so only its title is said.
+      const { reason, job, cause } = event;
+      const same = eventText({ kind: event.repeats, detail: event.b, board: event.board, unit: event.unit,
+                               reason, job, cause, event: event.event }, where, alphabet);
+      return { cls: same.cls === 'ok' ? 'info' : same.cls,
+               title: `${same.title} — ${plural(event.a, 'more time')}`,
+               why: 'The same entry came again within an hour of the first; after ten an hour they are counted, not written one by one.' };
+    }
     case 'events-dropped':
       return { cls: 'note', title: `${plural(event.a, 'entry was', 'entries were')} lost`,
                why: 'More happened at once than the record takes.' };
