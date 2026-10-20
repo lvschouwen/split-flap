@@ -371,7 +371,7 @@ static void test_identity_grades_the_rev_and_reads_the_offset() {
   FakeUnit u;
   UnitFacts f;
   TEST_ASSERT_TRUE(unitReadIdentity(u, f, ADDR, "19098af", "34c72e0,795f0af"));
-  TEST_ASSERT_EQUAL_STRING("34c72e0", f.version);
+  TEST_ASSERT_EQUAL_STRING("34c72e0", f.rev);
   TEST_ASSERT_EQUAL_UINT8(0, f.fwStatus);  // content-equivalent = current
   TEST_ASSERT_TRUE(f.protocolKnown);
   TEST_ASSERT_TRUE(f.offsetValid);

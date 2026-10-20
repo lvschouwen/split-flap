@@ -157,7 +157,7 @@ String buildCurrentSettingsJson() {
       addrs[detected++] = SFP_I2C_ADDRESS_BASE + i;
     }
     fwStatus[i] = snap.units[i].fwStatus;
-    versions[i] = snap.units[i].version;
+    versions[i] = snap.units[i].rev;
   }
   f.unitsAmount = UNITS_AMOUNT;
   f.unitCount = snap.displayWidth;

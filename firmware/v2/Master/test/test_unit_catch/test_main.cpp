@@ -11,7 +11,7 @@ void tearDown() {}
 static UnitFacts unit(uint8_t state, const char* version) {
   UnitFacts u;
   u.state = state;
-  strncpy(u.version, version, sizeof(u.version) - 1);
+  strncpy(u.rev, version, sizeof(u.rev) - 1);
   return u;
 }
 

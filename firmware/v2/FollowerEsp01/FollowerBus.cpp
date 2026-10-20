@@ -983,8 +983,8 @@ struct ReflashLoopHooks {
   void unitFlashed(uint8_t addr) {
     UnitFacts& u = unitFacts[addr - SFP_I2C_ADDRESS_BASE];
     u.state = 1;
-    strncpy(u.version, BUNDLED_UNIT_REV, 8);
-    u.version[8] = '\0';
+    strncpy(u.rev, BUNDLED_UNIT_REV, 8);
+    u.rev[8] = '\0';
     u.fwStatus = 0;
   }
   void progressChanged() {}

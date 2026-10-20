@@ -408,10 +408,10 @@ inline bool unitReadIdentity(Bus& bus, UnitFacts& fact, uint8_t i2cAddress,
                              const char* bundledEquivRevs) {
   uint8_t protocolVersion = 0;
   bool versionOk =
-      unitReadVersion(bus, i2cAddress, fact.version, protocolVersion);
+      unitReadVersion(bus, i2cAddress, fact.rev, protocolVersion);
   if (versionOk) {
     fact.fwStatus =
-        unitFwStatusFromRev(fact.version, bundledRev, bundledEquivRevs);
+        unitFwStatusFromRev(fact.rev, bundledRev, bundledEquivRevs);
     fact.protocolVersion = protocolVersion;
     fact.protocolKnown = true;
   }

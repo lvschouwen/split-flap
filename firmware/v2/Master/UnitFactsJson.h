@@ -83,8 +83,8 @@ inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u)
   if (u.statusValid) {
     u.fwStatus = (uint8_t)r.number("fw", 2);
     const char* rev = o["rev"].as<const char*>();
-    if (rev == nullptr || strlen(rev) >= sizeof(u.version)) return false;
-    strcpy(u.version, rev);
+    if (rev == nullptr || strlen(rev) >= sizeof(u.rev)) return false;
+    strcpy(u.rev, rev);
     u.status.uptimeSeconds = (uint16_t)r.number("up", 0xFFFF);
     u.status.lifetimeBrownoutCount = (uint8_t)r.number("br", 0xFF);
     u.status.lifetimeWatchdogCount = (uint8_t)r.number("wd", 0xFF);

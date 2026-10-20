@@ -90,7 +90,7 @@ struct UnitRebootWatch {
 struct UnitFacts {
   uint8_t state = 0;         // 0 silent / 1 sketch / 2 bootloader
   uint8_t fwStatus = 2;      // 0 ok / 1 outdated / 2 unknown
-  char version[9] = {0};     // git short-rev; "" when the read failed
+  char rev[9] = {0};     // git short-rev; "" when the read failed
   bool statusValid = false;  // status below holds a real CMD_GET_STATUS read
   UnitStatus status{};
   // Wire contract the unit reports (#405), read from GET_VERSION alongside
@@ -503,7 +503,7 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
     if (u.statusValid) {
       const UnitStatus& s = u.status;
       UNIT_HEALTH_APPEND(",\"fw\":%d,\"rev\":\"%s\",\"up\":%u,\"br\":%u,\"wd\":%u,\"bc\":%u,\"mc\":%u,\"fl\":%u,\"hs\":%u,\"ae\":%u",
-                         u.fwStatus, u.version, (unsigned)s.uptimeSeconds,
+                         u.fwStatus, u.rev, (unsigned)s.uptimeSeconds,
                          (unsigned)s.lifetimeBrownoutCount,
                          (unsigned)s.lifetimeWatchdogCount,
                          (unsigned)s.badCommandCount, (unsigned)s.mcusrAtBoot,

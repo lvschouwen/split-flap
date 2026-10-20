@@ -149,7 +149,7 @@ EEPROM_CONSTANTS = {
     "EE_ODO_RING_BASE": "region boundary",
     "EE_RESERVED_NEXT_FREE": "region boundary",
     # identity block
-    "EE_LAYOUT_VERSION": "identity field",
+    "EE_LAYOUT_VERSION_ADDR": "identity field",
     "EE_I2C_ADDRESS": "identity field",
     "EE_ID_FLAGS": "identity field",
     "EE_ID_CHECKSUM": "identity checksum",
@@ -168,7 +168,7 @@ EEPROM_CONSTANTS = {
     "EE_HEALTH_BLOCK_LEN": "health length",
     "EE_HEALTH_CHECKSUM_MASK": "health mask",
     # odometer ring init marker
-    "EE_RING_INIT_VERSION": "ring marker field",
+    "EE_RING_INIT_ADDR": "ring marker field",
     "EE_RING_INIT_CHECKSUM": "ring marker checksum",
     "EE_RING_INIT_BLOCK_LEN": "ring marker length",
     "EE_RING_INIT_CHECKSUM_MASK": "ring marker mask",

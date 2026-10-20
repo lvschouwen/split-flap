@@ -13,7 +13,7 @@ static UnitFacts healthy() {
   u.state = 1;
   u.fwStatus = 0;
   u.statusValid = true;
-  strcpy(u.version, "d360e2b");
+  strcpy(u.rev, "d360e2b");
   u.status.flags = UNIT_FLAG_HOMED | UNIT_FLAG_ADDR_EEPROM;
   u.status.uptimeSeconds = 600;
   u.status.lastHomingStepCount = 1984;

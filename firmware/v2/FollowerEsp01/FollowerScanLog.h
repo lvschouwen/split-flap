@@ -62,7 +62,7 @@ inline uint8_t followerScanLine(char* buf, size_t cap, uint8_t i2cAddress,
   if (fact.fwStatus == 1) {
     snprintf_P(buf, cap,
                PSTR("- unit at 0x%02x is running sketch (fw %s — OUTDATED)"),
-               i2cAddress, fact.version);
+               i2cAddress, fact.rev);
     return SCAN_FINDING_OUTDATED;
   }
   snprintf_P(buf, cap,

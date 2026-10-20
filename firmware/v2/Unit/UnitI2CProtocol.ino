@@ -516,7 +516,7 @@ int getaddress() {
   //strands the unit somewhere nobody is looking and takes a physical trip.
   uint8_t block[EE_ID_BLOCK_LEN];
   for (uint8_t i = 0; i < EE_ID_BLOCK_LEN; i++) {
-    block[i] = EEPROM.read(EE_LAYOUT_VERSION + i);
+    block[i] = EEPROM.read(EE_LAYOUT_VERSION_ADDR + i);
   }
   uint8_t stored = unitEeIdentityAddress(block);
   if (stored != 0) {

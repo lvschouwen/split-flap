@@ -251,7 +251,7 @@ static void test_health_json_valid_and_bootloader_slots() {
   units[0].state = 1;
   units[0].statusValid = true;
   units[0].fwStatus = 2;
-  strcpy(units[0].version, "abc12345");
+  strcpy(units[0].rev, "abc12345");
   units[0].status.flags = 0;
   units[0].status.mcusrAtBoot = 54;
   units[0].status.uptimeSeconds = 1200;
@@ -797,7 +797,7 @@ static void test_health_json_vitals_emitted_when_valid() {
   UnitFacts units[1];
   units[0].state = 1;
   units[0].statusValid = true;
-  strcpy(units[0].version, "abc12345");
+  strcpy(units[0].rev, "abc12345");
   units[0].vitals.vccNow_mV = 4980;
   units[0].vitals.vccMin_mV = 4210;
   units[0].vitals.cmdPos = 17;
@@ -820,7 +820,7 @@ static void test_health_json_headline_vccmin_is_min_across_units() {
   for (int i = 0; i < 3; i++) {
     units[i].state = 1;
     units[i].statusValid = true;
-    strcpy(units[i].version, "abc12345");
+    strcpy(units[i].rev, "abc12345");
     units[i].vitalsValid = true;
     units[i].vitals.vccNow_mV = 5000;
   }
@@ -839,7 +839,7 @@ static void test_health_json_no_vccmin_without_any_vitals() {
   UnitFacts units[2];
   units[0].state = 1;
   units[0].statusValid = true;
-  strcpy(units[0].version, "abc12345");
+  strcpy(units[0].rev, "abc12345");
   char buf[512];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 2, 0, 1, 0);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
@@ -861,7 +861,7 @@ static void test_health_json_err_emitted_when_nonzero() {
   UnitFacts units[1];
   units[0].state = 1;
   units[0].statusValid = true;
-  strcpy(units[0].version, "abc12345");
+  strcpy(units[0].rev, "abc12345");
   units[0].i2cErrors = 7;
   units[0].lastErrorMs = 1000;
   char buf[512];
@@ -877,7 +877,7 @@ static void test_health_json_err_omitted_when_clean() {
   UnitFacts units[1];
   units[0].state = 1;
   units[0].statusValid = true;
-  strcpy(units[0].version, "abc12345");
+  strcpy(units[0].rev, "abc12345");
   char buf[512];
   size_t n = buildUnitHealthJson(buf, sizeof(buf), units, 1, 0, 1, 5000);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));

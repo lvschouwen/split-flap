@@ -154,7 +154,7 @@ struct UnitBusNotes {
                    (unsigned)fact.protocolVersion,
                    (unsigned)SFP_PROTOCOL_VERSION);
     } else {
-      SerialPrintf(" is running sketch (fw %s%s)\n", fact.version,
+      SerialPrintf(" is running sketch (fw %s%s)\n", fact.rev,
                    fact.fwStatus == 0 ? "" : " — OUTDATED");
     }
   }

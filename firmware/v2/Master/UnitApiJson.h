@@ -77,7 +77,7 @@ inline void unitApiTableRow(JsonArray row, const UnitFacts& u, int address,
   }
   row.add(unitApiStateName(u.state));
   if (u.statusValid) {
-    row.add(jsonCopied(u.version));
+    row.add(jsonCopied(u.rev));
     row.add(unitApiFirmwareName(u.fwStatus));
   } else {
     row.add(nullptr);
@@ -116,7 +116,7 @@ inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint3
 
   if (u.statusValid) {
     const UnitStatus& s = u.status;
-    fw["rev"] = jsonCopied(u.version);
+    fw["rev"] = jsonCopied(u.rev);
     fw["status"] = unitApiFirmwareName(u.fwStatus);
     fw["uptimeS"] = unitVerdictUptimeS(u);
     power["brownouts"] = s.lifetimeBrownoutCount;

@@ -39,7 +39,7 @@ inline UnitFacts unitFactsWidestCommon() {
   UnitFacts u;
   u.statusValid = true;
   u.fwStatus = 2;
-  strcpy(u.version, "abc12345");
+  strcpy(u.rev, "abc12345");
   u.status.flags = 0xFF;
   u.status.mcusrAtBoot = 255;
   u.status.lifetimeBrownoutCount = 255;

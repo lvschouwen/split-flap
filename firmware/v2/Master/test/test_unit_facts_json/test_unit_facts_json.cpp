@@ -34,7 +34,7 @@ static UnitFacts saturated() {
   u.state = 1;
   u.statusValid = true;
   u.fwStatus = 1;
-  strcpy(u.version, "abc12345");
+  strcpy(u.rev, "abc12345");
   u.status.flags = 0xFF;
   u.status.mcusrAtBoot = 255;
   u.status.lifetimeBrownoutCount = 255;
@@ -105,7 +105,7 @@ static void test_a_plain_working_unit_and_empty_columns() {
   units[0].state = 1;
   units[0].statusValid = true;
   units[0].fwStatus = 0;
-  strcpy(units[0].version, "d360e2b");
+  strcpy(units[0].rev, "d360e2b");
   units[0].status.flags = UNIT_FLAG_HOMED;
   units[0].status.lastHomingStepCount = 2032;
   units[0].lastSeenMs = 99000;

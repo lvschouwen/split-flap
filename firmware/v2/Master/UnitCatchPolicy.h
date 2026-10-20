@@ -54,6 +54,6 @@ enum class UnitCatchStep : uint8_t {
 inline UnitCatchStep unitCatchAfterProbe(uint8_t armed, const UnitFacts& unit) {
   if (armed == 0) return UnitCatchStep::Nothing;
   if (unit.state == 2) return UnitCatchStep::Flash;
-  if (unit.state == 1 && unit.version[0] != '\0') return UnitCatchStep::Disarm;
+  if (unit.state == 1 && unit.rev[0] != '\0') return UnitCatchStep::Disarm;
   return UnitCatchStep::Nothing;
 }

@@ -68,7 +68,7 @@
 //
 //   A REGION EARNS ITS OWN VERSION BYTE only when its repair action is
 //   strictly cheaper than that full erase, and only as a self-validating
-//   checksummed block. EE_RING_INIT_VERSION is the one that qualifies:
+//   checksummed block. EE_RING_INIT_ADDR is the one that qualifies:
 //   re-zeroing the ring costs a revolution count, so coupling it to byte 0
 //   would force the expensive repair for the cheap problem. Anything that
 //   cannot clear that bar is a field, not a version — otherwise the magic
@@ -103,7 +103,7 @@
 #define EE_SIZE                1024
 
 // --- identity ---------------------------------------------------------------
-#define EE_LAYOUT_VERSION       0
+#define EE_LAYOUT_VERSION_ADDR  0
 #define EE_I2C_ADDRESS          1
 #define EE_ID_FLAGS             2
 #define EE_ID_CHECKSUM          3
@@ -146,7 +146,7 @@
 // fix a lifetime counter. So the ring carries its own version marker, here in
 // the reserved scalars the erase never touches. A VERSION rather than a flag
 // because the next geometry change gets the same free self-heal.
-#define EE_RING_INIT_VERSION        24
+#define EE_RING_INIT_ADDR           24
 #define EE_RING_INIT_CHECKSUM       25
 #define EE_RING_INIT_BLOCK_LEN      2
 #define EE_RING_INIT_CHECKSUM_MASK  0x4B
@@ -168,7 +168,7 @@
 // EEPROM, the cleared block, a torn write — so a damaged marker can only
 // over-report a hang, never hide one. It lives in EEPROM, not RAM, because the
 // bootloader and a reflashed sketch both run in between.
-#define EE_RESET_MARK               (EE_RING_INIT_VERSION + EE_RING_INIT_BLOCK_LEN)
+#define EE_RESET_MARK               (EE_RING_INIT_ADDR + EE_RING_INIT_BLOCK_LEN)
 #define EE_RESET_MARK_CHECKSUM      (EE_RESET_MARK + 1)
 #define EE_RESET_MARK_BLOCK_LEN     2
 #define EE_RESET_MARK_CHECKSUM_MASK 0x96
@@ -191,9 +191,9 @@
 static_assert(EE_RESERVED_NEXT_FREE <= EE_ODO_RING_BASE,
               "the reserved scalars have run into the ring");
 
-static_assert(EE_RING_INIT_VERSION >= EE_RESERVED_BASE,
+static_assert(EE_RING_INIT_ADDR >= EE_RESERVED_BASE,
               "the ring marker is a reserved scalar");
-static_assert(EE_RING_INIT_VERSION + EE_RING_INIT_BLOCK_LEN <= EE_ODO_RING_BASE,
+static_assert(EE_RING_INIT_ADDR + EE_RING_INIT_BLOCK_LEN <= EE_ODO_RING_BASE,
               "the ring marker must not overlap the ring it guards");
 
 static_assert(EE_ODO_RING_BASE + ODO_RING_BYTES <= EE_SIZE,

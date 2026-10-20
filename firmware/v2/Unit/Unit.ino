@@ -468,7 +468,7 @@ void setup() {
   // The odometer ring is not written here — it has its own marker and its own
   // sweep further down (#417), so that healing it never costs the erase this
   // block performs.
-  if (unitEeIsBlank(EEPROM.read(EE_LAYOUT_VERSION))) {
+  if (unitEeIsBlank(EEPROM.read(EE_LAYOUT_VERSION_ADDR))) {
     uint8_t block[EE_HEALTH_BLOCK_LEN];
     unitEeCalEncode(0, block);
     for (uint8_t i = 0; i < EE_CAL_BLOCK_LEN; i++) {
@@ -481,9 +481,9 @@ void setup() {
     }
     unitEeIdentityClear(block);  // no burned address -> DIP, the safe default
     for (uint8_t i = EE_ID_BLOCK_LEN; i > 1; i--) {
-      EEPROM.update(EE_LAYOUT_VERSION + (i - 1), block[i - 1]);
+      EEPROM.update(EE_LAYOUT_VERSION_ADDR + (i - 1), block[i - 1]);
     }
-    EEPROM.update(EE_LAYOUT_VERSION, block[0]);  // version LAST
+    EEPROM.update(EE_LAYOUT_VERSION_ADDR, block[0]);  // version LAST
   }
 
   // Lifetime health: the reset counters plus the unit's own record of its
@@ -546,7 +546,7 @@ void setup() {
   {
     uint8_t marker[EE_RING_INIT_BLOCK_LEN];
     for (uint8_t i = 0; i < EE_RING_INIT_BLOCK_LEN; i++) {
-      marker[i] = EEPROM.read(EE_RING_INIT_VERSION + i);
+      marker[i] = EEPROM.read(EE_RING_INIT_ADDR + i);
     }
     if (!unitEeRingInitDone(marker)) {
       // Clear the HISTORICAL extent, not the live ring (#463). A shrink
@@ -563,9 +563,9 @@ void setup() {
       // mid-sweep simply re-runs it on the next boot.
       unitEeRingInitEncode(marker);
       for (uint8_t i = EE_RING_INIT_BLOCK_LEN; i > 1; i--) {
-        EEPROM.update(EE_RING_INIT_VERSION + (i - 1), marker[i - 1]);
+        EEPROM.update(EE_RING_INIT_ADDR + (i - 1), marker[i - 1]);
       }
-      EEPROM.update(EE_RING_INIT_VERSION, marker[0]);
+      EEPROM.update(EE_RING_INIT_ADDR, marker[0]);
     }
   }
 
@@ -837,7 +837,7 @@ void loop() {
       uint8_t block[EE_ID_BLOCK_LEN];
       unitEeIdentityEncode(v, block);
       for (uint8_t i = 0; i < EE_ID_BLOCK_LEN; i++) {
-        EEPROM.update(EE_LAYOUT_VERSION + i, block[i]);
+        EEPROM.update(EE_LAYOUT_VERSION_ADDR + i, block[i]);
       }
 #ifdef SERIAL_ENABLE
       Serial.print("I2C address burned to EEPROM: 0x");
@@ -861,7 +861,7 @@ void loop() {
     uint8_t block[EE_ID_BLOCK_LEN];
     unitEeIdentityClear(block);
     for (uint8_t i = 0; i < EE_ID_BLOCK_LEN; i++) {
-      EEPROM.update(EE_LAYOUT_VERSION + i, block[i]);
+      EEPROM.update(EE_LAYOUT_VERSION_ADDR + i, block[i]);
     }
 #ifdef SERIAL_ENABLE
     Serial.println("EEPROM I2C address cleared, falling back to DIP on reboot");

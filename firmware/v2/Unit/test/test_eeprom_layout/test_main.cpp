@@ -31,10 +31,10 @@ struct EeBlock {
 };
 
 static const EeBlock kClaimedBlocks[] = {
-    {EE_LAYOUT_VERSION,    EE_ID_BLOCK_LEN,        "identity"},
+    {EE_LAYOUT_VERSION_ADDR, EE_ID_BLOCK_LEN,        "identity"},
     {EE_CAL_OFFSET,        EE_CAL_BLOCK_LEN,       "calibration"},
     {EE_HEALTH_BASE,       EE_HEALTH_BLOCK_LEN,    "lifetime health"},
-    {EE_RING_INIT_VERSION, EE_RING_INIT_BLOCK_LEN, "odometer ring marker"},
+    {EE_RING_INIT_ADDR,    EE_RING_INIT_BLOCK_LEN, "odometer ring marker"},
     {EE_RESET_MARK,        EE_RESET_MARK_BLOCK_LEN, "requested-reset marker"},
     {EE_BUS_RECORD,        EE_BUS_RECORD_BLOCK_LEN, "bus record"},
     {EE_ODO_RING_BASE,     ODO_RING_BYTES,         "odometer ring"},
@@ -391,8 +391,8 @@ static void test_the_previous_marker_version_asks_for_the_sweep() {
 }
 
 static void test_marker_sits_in_the_reserved_region_ahead_of_the_ring() {
-  TEST_ASSERT_TRUE(EE_RING_INIT_VERSION >= EE_RESERVED_BASE);
-  TEST_ASSERT_TRUE(EE_RING_INIT_VERSION + EE_RING_INIT_BLOCK_LEN <=
+  TEST_ASSERT_TRUE(EE_RING_INIT_ADDR >= EE_RESERVED_BASE);
+  TEST_ASSERT_TRUE(EE_RING_INIT_ADDR + EE_RING_INIT_BLOCK_LEN <=
                    EE_ODO_RING_BASE);
 }
 

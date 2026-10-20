@@ -311,7 +311,7 @@ static UnitFacts scanFact(uint8_t state, uint8_t fwStatus, const char* rev) {
   UnitFacts f{};
   f.state = state;
   f.fwStatus = fwStatus;
-  strncpy(f.version, rev, sizeof(f.version) - 1);
+  strncpy(f.rev, rev, sizeof(f.rev) - 1);
   return f;
 }
 
