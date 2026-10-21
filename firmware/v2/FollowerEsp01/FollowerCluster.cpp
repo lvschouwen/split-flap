@@ -13,6 +13,7 @@
 #include "PrintableAscii.h"
 #include "FollowerRescue.h"  // #343: rescue mode never touches the bus
 #include "FollowerSettings.h"
+#include "FollowerUnitJobs.h"  // unitJobHoldsRenders (#638)
 
 // #227: what the master last said about quiet mode. RAM only — it describes
 // the master's state.
@@ -203,7 +204,7 @@ void clusterLoopTick() {
   }
 
   if (renderPending && (int32_t)(millis() - renderDueMs) >= 0 &&
-      !reflashInProgress(reflashProgress)) {
+      !reflashInProgress(reflashProgress) && !unitJobHoldsRenders()) {
     // Copy-then-clear: an accepted render landing mid-show simply leaves
     // the flag set for the next pass (latest wins).
     String text = renderText;

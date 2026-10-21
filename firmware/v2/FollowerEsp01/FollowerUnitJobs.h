@@ -17,6 +17,10 @@ UnitOpStaged unitOpStage(FollowerOpKind kind, uint8_t addr, long arg,
                          uint32_t& seq);
 // A unit job is queued, running or still being waited on.
 bool unitOpsBusy();
+// A self-test or a home is being waited on: the row holds its renders until
+// it ends. A render's row-stop wait would block loop() for the whole
+// move, and the poll that judges the job would miss it (#638).
+bool unitJobHoldsRenders();
 // A unit or bootloader update is queued or running: the board must not take
 // a firmware upload, whose restart would strand the unit being flashed.
 bool unitUpdateQueuedOrRunning();

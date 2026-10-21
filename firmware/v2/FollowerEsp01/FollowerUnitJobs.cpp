@@ -102,6 +102,7 @@ UnitOpStaged unitOpStage(FollowerOpKind kind, uint8_t addr, long arg,
 }
 
 bool unitOpsBusy() { return opSlotBusy(); }
+bool unitJobHoldsRenders() { return selfTestPolling || homePoll.seq != 0; }
 const MaintResult& unitOpResult() { return opResult; }
 const SelfTestSlot& unitOpSelfTest() { return selfTestSlot; }
 const BootInfoSlot& unitOpBootInfo() { return bootInfoSlot; }

@@ -13,6 +13,7 @@
 #include "DisplayWidth.h"
 #include "FlapLetters.h"  // shared character/speed mapping
 #include "FollowerConfig.h"
+#include "FollowerUnitJobs.h"  // unitJobHoldsRenders (#638)
 #include "FollowerWifi.h"  // followerRadioBusy (#505)
 #include "HeartbeatPolicy.h"  // pure heartbeat miss/schedule logic (#310)
 #include "HomeWait.h"  // what a row sent home says of it (#605)
@@ -257,7 +258,7 @@ static void recordBusDeath(uint8_t lineState, int hadAnswered) {
 // is reported but cannot be fixed from this side: the Nano needs a power cycle.
 static void followerBusRecoveryTick() {
   uint32_t now = millis();
-  if (reshowPending) {
+  if (reshowPending && !unitJobHoldsRenders()) {
     reshowPending = false;
     busShowSegment(String(lastFrame), lastFrameSpeed);
   }
