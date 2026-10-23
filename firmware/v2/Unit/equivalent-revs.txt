@@ -132,3 +132,8 @@ f4fcbdc b8f637b0681e94d909b0f575e6aca7d304ea2a3af90f2552415ba722ac751ccc
 # silences (#584); all 21 units report it. Recorded when a home job began to
 # end on the unit's own word (#605), a shared header the unit does not compile.
 0d90815 683f7073addc63f77ec2839ed5e8750b3bdca4f5343a1266502d74d6be224165
+#
+# 2bdabc9: the bundle rev the ESP-01 row's unit 3 was flashed at, image
+# unchanged from 0d90815. Recorded when the WiFi TX ladder kept a drop's level
+# (#639), a shared header the unit does not compile.
+2bdabc9 683f7073addc63f77ec2839ed5e8750b3bdca4f5343a1266502d74d6be224165
