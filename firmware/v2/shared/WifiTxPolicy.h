@@ -7,7 +7,9 @@
 // corrupted instruction fetch (#506). So every boot starts at the lowest real
 // level and moves ONE level at a time: up only when the link needs it, down
 // again after a long healthy period. Nothing is remembered across reboots — a
-// step-up that browns the board out cannot become a boot loop.
+// step-up that browns the board out cannot become a boot loop. A level a
+// dropped link earned is kept for the rest of the boot (#639): the signal that
+// judged the level below spare is the one the link dropped at.
 //
 // "Needs it" is judged on evidence (#515). A dropped link is evidence and
 // earns a level up to the online ceiling. A weak signal estimate is only a
@@ -94,6 +96,7 @@ struct WifiTxState {
   uint32_t upAllowedAtMs = 0;  // settle / dwell gate for the next up-step
   bool wasLinkUp = false;
   bool dropPending = false;  // a link drop not yet answered with a step
+  uint8_t dropFloor = 0;     // the highest level a drop earned; never below
   bool weakArmed = false;
   uint32_t weakSinceMs = 0;
   bool spareArmed = false;
@@ -133,6 +136,7 @@ static inline void wifiTxStepUp(WifiTxState& st, uint32_t nowMs,
   st.index++;
   st.stepsUp++;
   st.lastReason = reason;
+  if (reason == WifiTxStepReason::LinkDrop) st.dropFloor = st.index;
   st.upAllowedAtMs = nowMs + WIFI_TX_UP_DWELL_MS;
   st.weakArmed = false;
   st.spareArmed = false;
@@ -216,7 +220,7 @@ static inline uint8_t wifiTxPolicyStep(WifiTxState& st, const WifiTxInput& in,
     return st.index;
   }
 
-  bool spare = st.index > 0 && !st.dropPending &&
+  bool spare = st.index > st.dropFloor && !st.dropPending &&
                wifiTxUplinkRaw(in.rssiDbm, st.index - 1) >=
                    WIFI_TX_WEAK_UPLINK_RAW + WIFI_TX_DOWN_MARGIN_RAW;
   if (!spare) {

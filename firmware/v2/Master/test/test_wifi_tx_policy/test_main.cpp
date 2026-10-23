@@ -357,6 +357,27 @@ static void test_a_drop_at_the_ceiling_does_not_pin_the_level_there() {
   TEST_ASSERT_EQUAL(WIFI_TX_ONLINE_CEILING_INDEX - 1, st.index);
 }
 
+static void test_a_level_earned_by_a_drop_is_kept_for_the_boot() {
+  // The signal that judged the lower level spare is the one it dropped at
+  // (#639: 2 -> 5 dBm on a drop, back to 2 dBm 15 min later, drops again).
+  WifiTxState st;
+  uint32_t t = settle(st);
+  wifiTxPolicyStep(st, linkDown(), t);  // -> 1
+  runSeconds(st, online(STRONG_RSSI), t + 1000, t + 10 * WIFI_TX_HEALTHY_MS);
+  TEST_ASSERT_EQUAL(1, st.index);
+  TEST_ASSERT_EQUAL(0, st.stepsDown);
+}
+
+static void test_step_down_stops_at_the_level_a_drop_earned() {
+  // Levels above the drop's (here from the weak estimate) still come down.
+  WifiTxState st;
+  uint32_t t = settle(st);
+  wifiTxPolicyStep(st, linkDown(), t);  // -> 1, earned by the drop
+  st.index = WIFI_TX_JOIN_CEILING_INDEX;
+  runSeconds(st, online(STRONG_RSSI), t + 1000, t + 10 * WIFI_TX_HEALTHY_MS);
+  TEST_ASSERT_EQUAL(1, st.index);
+}
+
 static void test_no_step_down_onto_a_level_that_would_be_weak() {
   // Hysteresis: after climbing for a signal, the same signal must not bring
   // the level straight back down.
@@ -433,6 +454,8 @@ int main(int, char**) {
   RUN_TEST(test_a_link_drop_restarts_the_healthy_window);
   RUN_TEST(test_a_drop_that_recovers_in_the_settle_still_earns_its_step);
   RUN_TEST(test_a_drop_at_the_ceiling_does_not_pin_the_level_there);
+  RUN_TEST(test_a_level_earned_by_a_drop_is_kept_for_the_boot);
+  RUN_TEST(test_step_down_stops_at_the_level_a_drop_earned);
   RUN_TEST(test_no_step_down_onto_a_level_that_would_be_weak);
   RUN_TEST(test_portal_runs_at_the_fixed_portal_level);
   RUN_TEST(test_steps_are_counted);
