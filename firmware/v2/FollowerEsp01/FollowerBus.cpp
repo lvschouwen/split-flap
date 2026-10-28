@@ -457,8 +457,27 @@ static void rescueTick(int i);  // #498, defined after the twiboot helpers
 static void motionBudgetFold(int i);  // #505, defined with the render path
 #endif
 
+static uint32_t rendersSettled = 0;
+static bool settleReadPending = false;
+
+uint32_t busRendersSettled() { return rendersSettled; }
+
+#if SERIAL_ENABLE == false
+// A settled render's re-read of every unit, and only then the count that
+// sends the unit facts (#640): never inside a twiboot window or a reflash.
+static void settleReadTick() {
+  if (!settleReadPending) return;
+  if ((int32_t)(millis() - busProbeInhibitedUntilMs()) < 0) return;
+  if (reflashInProgress(reflashProgress)) return;
+  settleReadPending = false;
+  busPollHealth();
+  rendersSettled++;
+}
+#endif
+
 void followerHeartbeatTick() {
 #if SERIAL_ENABLE == false
+  settleReadTick();
   static uint32_t lastMs = 0;
   static int slot = 0;
   uint32_t now = millis();
@@ -588,6 +607,7 @@ static void waitForRowToStop() {
   }
 }
 
+
 void busShowSegment(const String& segment, int webSpeed) {
 #if SERIAL_ENABLE == false
   const int width = displayWidth;
@@ -643,6 +663,12 @@ void busShowSegment(const String& segment, int webSpeed) {
     resent++;
   }
   if (resent > 0) waitForRowToStop();
+
+  // #640: what the drums now read, for the master at once — the heartbeat
+  // would take a round of the row. In a twiboot window or a reflash the
+  // heartbeat reads them once the bus is free again.
+  settleReadPending = true;
+  settleReadTick();
 #else
   SerialPrint(F("Row shows: \""));
   SerialPrint(segment);

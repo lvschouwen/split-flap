@@ -74,6 +74,27 @@ static void test_a_busy_row_does_not_count_its_master_silent() {
   TEST_ASSERT_EQUAL_UINT32(20010, followerLinkHeardAfterPass(1000, 20000, 20010, true));
 }
 
+static void test_unit_facts_go_up_on_the_timer_or_when_a_job_asks() {
+  TEST_ASSERT_FALSE(followerLinkUnitsDue(20000, 0, false, 7, 7));
+  TEST_ASSERT_TRUE(followerLinkUnitsDue(30000, 0, false, 7, 7));
+  TEST_ASSERT_TRUE(followerLinkUnitsDue(1, 0, true, 7, 7));
+}
+
+static void test_a_settled_render_sends_the_unit_facts_without_waiting_for_the_timer() {
+  TEST_ASSERT_TRUE(followerLinkUnitsDue(12000, 10000, false, 8, 7));
+}
+
+static void test_settled_renders_in_quick_succession_send_once_per_gap() {
+  // A render settled 1 s after the last document went up: it waits for the
+  // gap, then goes up without another render.
+  TEST_ASSERT_FALSE(followerLinkUnitsDue(11000, 10000, false, 8, 7));
+  TEST_ASSERT_TRUE(followerLinkUnitsDue(10000 + FOLLOWER_LINK_UNITS_MIN_GAP_MS, 10000, false, 8, 7));
+}
+
+static void test_the_render_count_wrapping_still_counts_as_a_new_render() {
+  TEST_ASSERT_TRUE(followerLinkUnitsDue(12000, 10000, false, 0, 0xFFFFFFFFu));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_backoff_starts_at_one_second_and_stops_at_eight);
@@ -84,5 +105,9 @@ int main(int, char**) {
   RUN_TEST(test_a_master_that_says_nothing_for_three_pings_is_gone);
   RUN_TEST(test_a_pass_that_comes_late_starts_the_silence_count_again);
   RUN_TEST(test_a_busy_row_does_not_count_its_master_silent);
+  RUN_TEST(test_unit_facts_go_up_on_the_timer_or_when_a_job_asks);
+  RUN_TEST(test_a_settled_render_sends_the_unit_facts_without_waiting_for_the_timer);
+  RUN_TEST(test_settled_renders_in_quick_succession_send_once_per_gap);
+  RUN_TEST(test_the_render_count_wrapping_still_counts_as_a_new_render);
   return UNITY_END();
 }

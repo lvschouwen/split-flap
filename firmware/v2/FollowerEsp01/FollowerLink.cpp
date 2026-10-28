@@ -68,6 +68,7 @@ uint32_t unitsOffset = 0;
 uint32_t unitsDocId = 0;
 uint32_t lastUnitsMs = 0;
 bool unitsDue = false;
+uint32_t unitsRenderSeq = 0;  // busRendersSettled() when the last document started
 
 // The image the master last offered, taken up after the messages in hand
 // are read; and what became of the last one, kept until the master has it.
@@ -394,13 +395,15 @@ void updateTick(const FollowerClusterView& view) {
 void unitsTick() {
   if (rescueActive()) return;  // rescue mode never reads the units
   if (unitsDoc == nullptr) {
-    if (!unitsDue && !followerLinkElapsed(millis(), lastUnitsMs, FOLLOWER_LINK_UNITS_INTERVAL_MS)) {
+    const uint32_t renders = busRendersSettled();
+    if (!followerLinkUnitsDue(millis(), lastUnitsMs, unitsDue, renders, unitsRenderSeq)) {
       return;
     }
     if (unitOpsBusy() || clusterRenderPending()) return;
     const size_t cap = followerHealthBufCap(displayWidth, UNITS_AMOUNT);
     lastUnitsMs = millis();
     unitsDue = false;
+    unitsRenderSeq = renders;
     unitsDoc = (char*)followerBufAlloc(cap);
     if (unitsDoc == nullptr) return;
     unitsTotal = (uint32_t)unitsHealthJson(unitsDoc, cap);

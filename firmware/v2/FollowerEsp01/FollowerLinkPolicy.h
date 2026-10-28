@@ -13,8 +13,11 @@
 #define FOLLOWER_LINK_CONNECT_TIMEOUT_MS 1000UL
 // Vitals go up this often while connected.
 #define FOLLOWER_LINK_STATUS_INTERVAL_MS 10000UL
-// The unit facts go up this often while connected, and after every job.
+// The unit facts go up this often while connected, after every job and as
+// soon as a render has settled (#640) — but a settled render waits until this
+// long after the last document, so a burst of renders sends one per gap.
 #define FOLLOWER_LINK_UNITS_INTERVAL_MS 30000UL
+#define FOLLOWER_LINK_UNITS_MIN_GAP_MS 2000UL
 // A master that has not answered Hello within this is not a master.
 #define FOLLOWER_LINK_WELCOME_TIMEOUT_MS 5000UL
 
@@ -41,6 +44,18 @@ inline uint32_t followerLinkNextBackoffMs(uint32_t previousMs) {
 // millis()-wrap-safe "has `intervalMs` passed since `sinceMs`".
 inline bool followerLinkElapsed(uint32_t nowMs, uint32_t sinceMs, uint32_t intervalMs) {
   return (uint32_t)(nowMs - sinceMs) >= intervalMs;
+}
+
+// Is a new unit facts document due? `renderSeq` counts the renders that have
+// settled (FollowerBus.h busRendersSettled), `sentRenderSeq` is that count
+// when the last document was started.
+inline bool followerLinkUnitsDue(uint32_t nowMs, uint32_t lastUnitsMs, bool jobDue,
+                                 uint32_t renderSeq, uint32_t sentRenderSeq) {
+  if (jobDue || followerLinkElapsed(nowMs, lastUnitsMs, FOLLOWER_LINK_UNITS_INTERVAL_MS)) {
+    return true;
+  }
+  return renderSeq != sentRenderSeq &&
+         followerLinkElapsed(nowMs, lastUnitsMs, FOLLOWER_LINK_UNITS_MIN_GAP_MS);
 }
 
 // May a message that can wait (vitals, unit facts, a log line, an event) be

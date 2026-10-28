@@ -52,6 +52,12 @@ void followerHeartbeatTick();
 // bounded batches with a rail-settle between them. setup() only (blocking).
 void followerBootHome();
 
+// How many renders have settled since boot (#640): bumped once the row has
+// stopped and every drivable unit's health — its drum letter included — was
+// read again, so a unit facts document built after it shows what the row
+// shows. Wraps; compare for change only.
+uint32_t busRendersSettled();
+
 // True while any drivable unit of the row reports moving — and, without
 // touching the bus, while the probe-inhibit is armed or a reflash streams.
 // One I2C read per unit — loop() only, and not in rescue mode (no bus there).
