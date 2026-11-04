@@ -58,3 +58,6 @@ firmware/v2/*/.cache/
 
 # clangd index cache (per-machine, generated)
 firmware/v2/*/.cache/
+
+# graphify knowledge graph: local only, AST-only (#643)
+graphify-out/
