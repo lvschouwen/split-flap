@@ -20,6 +20,13 @@
 // Flush cadence: at half-full (burst protection) or on this interval when
 // anything is staged (bounded loss window on a crash).
 #define FLASH_LOG_FLUSH_INTERVAL_MS 5000
+// Floor between flushes asked for by a warning or an error line
+// (flashLogTextUrgent). A flush is an open/append/close on LittleFS: a
+// metadata commit, now and then a 4 KB sector erase, tens of ms of netTask
+// time. One per second keeps a storm of failure lines at most five times
+// the steady cadence and under a few percent of netTask, while the lines
+// before a hang or a power cut lose at most one second instead of five.
+#define FLASH_LOG_URGENT_MIN_MS 1000
 // Per-file cap; two files (current + rotated) bound the partition use at
 // 2 MB on the ~5.8 MB storage partition — always 1..2 MB of contiguous
 // history (≈2–4 weeks in clock mode at ~70–140 KB/day, ≈1 week under a
@@ -29,6 +36,7 @@
 struct FlashLogStageState {
   size_t used = 0;      // bytes currently staged
   uint32_t dropped = 0; // bytes lost since the last flush (marker line at flush)
+  bool urgent = false;  // a warning or error is staged; cleared by the flush
 };
 
 // --- per-line timestamps -----------------------------------------------------------
@@ -80,10 +88,40 @@ inline size_t logStamperApply(LogLineStamper& st, const char* stamp,
 }
 
 inline bool flashLogShouldFlush(size_t used, size_t cap,
-                                uint32_t msSinceFlush, uint32_t intervalMs) {
+                                uint32_t msSinceFlush, uint32_t intervalMs,
+                                bool urgent = false) {
   if (used == 0) return false;  // never touch the flash for nothing
   if (used >= cap / 2) return true;
+  if (urgent && msSinceFlush >= FLASH_LOG_URGENT_MIN_MS) return true;
   return msSinceFlush >= intervalMs;
+}
+
+// The log has no severity field: a warning or an error is recognised by the
+// words every failure line on this board carries. A false positive costs
+// one early flush, bounded by FLASH_LOG_URGENT_MIN_MS. Lower-case only; the
+// scan folds ASCII case and stops at len (chunks are not NUL-terminated).
+static const char* const FLASH_LOG_URGENT_WORDS[] = {
+    "fail",  "error",  "fatal",  "crash",    "panic",   "watchdog",  "lost",
+    "stall", "abort",  "refuse", "reject",   "jam",     "brownout",  "timeout",
+    "timed out",
+};
+
+inline bool flashLogTextUrgent(const char* data, size_t len) {
+  if (data == nullptr) return false;
+  for (const char* word : FLASH_LOG_URGENT_WORDS) {
+    size_t wl = strlen(word);
+    for (size_t i = 0; i + wl <= len; i++) {
+      size_t k = 0;
+      while (k < wl) {
+        char c = data[i + k];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != word[k]) break;
+        k++;
+      }
+      if (k == wl) return true;
+    }
+  }
+  return false;
 }
 
 inline bool flashLogShouldRotate(size_t fileSize) {

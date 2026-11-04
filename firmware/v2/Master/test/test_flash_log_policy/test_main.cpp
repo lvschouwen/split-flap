@@ -5,6 +5,8 @@
 
 #include <unity.h>
 
+#include <cstring>
+
 #include "../../FlashLogPolicy.h"
 
 void setUp() {}
@@ -108,6 +110,70 @@ static void test_day_marker_on_date_change_only() {
   TEST_ASSERT_TRUE(flashLogDayMarkerDue(20260711, 20260712));
 }
 
+// --- early flush on a warning or an error ----------------------------------------
+// A line that reports a failure asks netTask to flush before the 5 s period,
+// so a hang or power cut right after it keeps the line. The early flush has
+// its own floor so a storm of such lines cannot make netTask hammer flash.
+
+static void test_urgent_flushes_after_the_floor_not_before() {
+  TEST_ASSERT_FALSE(flashLogShouldFlush(1, 1024, FLASH_LOG_URGENT_MIN_MS - 1,
+                                        5000, true));
+  TEST_ASSERT_TRUE(flashLogShouldFlush(1, 1024, FLASH_LOG_URGENT_MIN_MS,
+                                       5000, true));
+}
+
+static void test_urgent_with_nothing_staged_never_flushes() {
+  TEST_ASSERT_FALSE(flashLogShouldFlush(0, 1024, 60000, 5000, true));
+}
+
+static void test_urgent_floor_is_below_the_period() {
+  TEST_ASSERT_TRUE(FLASH_LOG_URGENT_MIN_MS < FLASH_LOG_FLUSH_INTERVAL_MS);
+  TEST_ASSERT_TRUE(FLASH_LOG_URGENT_MIN_MS >= 1000);
+}
+
+// A warning on every 10 ms netTask pass for 60 s: at most one flush per floor.
+static void test_urgent_storm_is_bounded_by_the_floor() {
+  const uint32_t tickMs = 10, spanMs = 60000;
+  uint32_t lastFlush = 0, flushes = 0;
+  for (uint32_t now = tickMs; now <= spanMs; now += tickMs) {
+    if (flashLogShouldFlush(64, FLASH_LOG_STAGE_CAP, now - lastFlush,
+                            FLASH_LOG_FLUSH_INTERVAL_MS, true)) {
+      flushes++;
+      lastFlush = now;
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(spanMs / FLASH_LOG_URGENT_MIN_MS, flushes);
+}
+
+static bool urgent(const char* s) { return flashLogTextUrgent(s, strlen(s)); }
+
+static void test_failure_lines_are_urgent() {
+  TEST_ASSERT_TRUE(urgent("release: the update failed: timeout\n"));
+  TEST_ASSERT_TRUE(urgent("Unit 0x12 LOST — no heartbeat, off the bus\n"));
+  TEST_ASSERT_TRUE(urgent("crash: reset by Task watchdog — tasks at the time:\n"));
+  TEST_ASSERT_TRUE(urgent("FATAL: snapshotMutex allocation failed\n"));
+  TEST_ASSERT_TRUE(urgent("Master OTA upload stalled >30 s — aborting\n"));
+  TEST_ASSERT_TRUE(urgent("Unit 0x05: jam (stalled move)\n"));
+  TEST_ASSERT_TRUE(urgent("Unit 0x05 rebooted (BOR) — brownouts=7 watchdogs=0\n"));
+  TEST_ASSERT_TRUE(urgent("MQTT: restart of the units refused: busy\n"));
+  TEST_ASSERT_TRUE(urgent("liveness: probe Error\n"));
+}
+
+static void test_ordinary_lines_are_not_urgent() {
+  TEST_ASSERT_FALSE(urgent("netTask up on core 0\n"));
+  TEST_ASSERT_FALSE(urgent("link: row1 joined (rev 1a2b3c)\n"));
+  TEST_ASSERT_FALSE(urgent("wifi: tx 8.5 dBm (rssi -61)\n"));
+  TEST_ASSERT_FALSE(urgent(""));
+  TEST_ASSERT_FALSE(flashLogTextUrgent(nullptr, 0));
+}
+
+// Chunks are not NUL-terminated: the scan stops at len.
+static void test_urgent_scan_stops_at_len() {
+  const char buf[] = "ok then failed";
+  TEST_ASSERT_FALSE(flashLogTextUrgent(buf, 8));
+  TEST_ASSERT_TRUE(flashLogTextUrgent(buf, sizeof(buf) - 1));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_stamper_prefixes_each_line);
@@ -122,5 +188,12 @@ int main(int, char**) {
   RUN_TEST(test_day_marker_never_before_clock_sync);
   RUN_TEST(test_day_marker_on_first_synced_flush);
   RUN_TEST(test_day_marker_on_date_change_only);
+  RUN_TEST(test_urgent_flushes_after_the_floor_not_before);
+  RUN_TEST(test_urgent_with_nothing_staged_never_flushes);
+  RUN_TEST(test_urgent_floor_is_below_the_period);
+  RUN_TEST(test_urgent_storm_is_bounded_by_the_floor);
+  RUN_TEST(test_failure_lines_are_urgent);
+  RUN_TEST(test_ordinary_lines_are_not_urgent);
+  RUN_TEST(test_urgent_scan_stops_at_len);
   return UNITY_END();
 }

@@ -21,10 +21,14 @@
 void flashLogInit();
 
 // Stages bytes for the next flush. Safe from any task; drops (and counts)
-// what doesn't fit — the flush emits a dropped-bytes marker line.
+// what doesn't fit — the flush emits a dropped-bytes marker line. A warning
+// or error line (flashLogTextUrgent) asks the next tick to flush early; the
+// producer itself never writes flash.
 void flashLogStage(const char* data, size_t len);
 
-// netTask only: flush per policy (or immediately when `force`), rotate at
+// netTask only: flush per policy — half full, the 5 s period, or a staged
+// warning/error once FLASH_LOG_URGENT_MIN_MS has passed since the last flush
+// (or immediately when `force`), rotate at
 // the file cap. `force` is for the pre-reboot drain
 // so the last lines land before ESP.restart().
 void flashLogTick(bool force = false);

@@ -82,6 +82,9 @@ void flashLogStage(const char* data, size_t len) {
   } else {
     logStampBoot(stamp, millis());
   }
+  // Classified outside the lock too. The producer only raises the flag;
+  // netTask's tick decides when the flash is written.
+  const bool urgent = flashLogTextUrgent(data, len);
 
   xSemaphoreTake(stageMutex, portMAX_DELAY);
   static LogLineStamper stamper;  // guarded by stageMutex like the buffer
@@ -90,6 +93,7 @@ void flashLogStage(const char* data, size_t len) {
                                 stageBuf + stage.used,
                                 FLASH_LOG_STAGE_CAP - stage.used, consumed);
   stage.dropped += (uint32_t)(len - consumed);
+  if (urgent) stage.urgent = true;
   xSemaphoreGive(stageMutex);
 }
 
@@ -103,12 +107,14 @@ void flashLogTick(bool force) {
   xSemaphoreTake(stageMutex, portMAX_DELAY);
   if (force || flashLogShouldFlush(stage.used, FLASH_LOG_STAGE_CAP,
                                    millis() - lastFlushMs,
-                                   FLASH_LOG_FLUSH_INTERVAL_MS)) {
+                                   FLASH_LOG_FLUSH_INTERVAL_MS,
+                                   stage.urgent)) {
     len = stage.used;
     droppedNow = stage.dropped;
     memcpy(flushBuf, stageBuf, len);
     stage.used = 0;
     stage.dropped = 0;
+    stage.urgent = false;
   }
   xSemaphoreGive(stageMutex);
 
