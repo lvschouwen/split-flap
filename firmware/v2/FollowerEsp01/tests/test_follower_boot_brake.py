@@ -106,8 +106,15 @@ def test_targeted_run_flashes_only_the_planned_list():
                           "static bool flashBootloaderUnits(const uint8_t* targets")
     assert "reflashRunTargets(hooks, targets, count, reflashProgress," in loop
     assert "unitFacts[" not in loop, "the loop must not re-derive targets from the facts"
+    plan = _function_body(_code(TREE / "FollowerBusFlash.cpp"),
+                          "static int reflashPlanJobTargets(uint8_t onlyAddr, bool force")
+    assert "reflashPlanTargets(" in plan
+    narrowed = plan.index("n = reflashFilterToAddress(flashTargets, n, onlyAddr);")
+    assert narrowed < plan.index("return n;")
     job = _function_body(_code(TREE / "FollowerBusFlash.cpp"),
                          "void busRunReflashJob(uint8_t onlyAddr, bool force)")
-    assert "reflashPlanTargets(" in job
-    narrowed = job.index("n = reflashFilterToAddress(flashTargets, n, onlyAddr);")
-    assert narrowed < job.index("flashBootloaderUnits(flashTargets, n, handResetWaitMs);")
+    call = "int n = reflashPlanJobTargets(onlyAddr, force, flashTargets);"
+    planned = job.index(call)
+    assert planned < job.index("flashBootloaderUnits(flashTargets, n, handResetWaitMs);")
+    assert "reflashFilterToAddress(" not in job and "n = " not in job[planned + len(call):], (
+        "the planned list reaches the flash loop unchanged")

@@ -366,6 +366,37 @@ static void jobPollHealth() {
 }
 
 static bool runBootSweep(uint8_t onlyAddr);
+
+// Let the row finish what it was doing before the first unit leaves for
+// its bootloader. Idle, not homed — a home is a full turn per unit and
+// nothing here needs one (UnitUpdateJob.h).
+static void reflashWaitRowQuiet() {
+  uint8_t rowUnits[UNITS_AMOUNT];
+  int rowCount = unitUpdateCollectSketchUnits(unitFacts, UNITS_AMOUNT,
+                                              SFP_I2C_ADDRESS_BASE, rowUnits);
+  if (rowCount > 0 &&
+      !waitForBatchIdle(rowUnits, rowCount, UNIT_UPDATE_QUIET_MS)) {
+    SerialPrintln(F("reflash: row still moving after the quiet wait"));
+  }
+}
+
+// The flash list: the sweep's sketch units and whoever already sits in
+// twiboot, narrowed to `onlyAddr` for a targeted run. The loop sends each
+// unit into its bootloader right before its own pages (reflashEnterUnit).
+// Returns the number of targets written to `flashTargets`.
+static int reflashPlanJobTargets(uint8_t onlyAddr, bool force,
+                                 uint8_t* flashTargets) {
+  uint8_t sweep[UNITS_AMOUNT];
+  int sweepCount =
+      force ? reflashCollectForcedTarget(UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE,
+                                         onlyAddr, sweep)
+            : reflashCollectRebootTargets(unitFacts, UNITS_AMOUNT,
+                                          SFP_I2C_ADDRESS_BASE, sweep);
+  int n = reflashPlanTargets(unitFacts, UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE,
+                             sweep, sweepCount, flashTargets);
+  n = reflashFilterToAddress(flashTargets, n, onlyAddr);
+  return n;
+}
 #endif
 
 void busRunReflashJob(uint8_t onlyAddr, bool force) {
@@ -375,31 +406,9 @@ void busRunReflashJob(uint8_t onlyAddr, bool force) {
   // in between yields to the web handlers, and a firmware upload let in
   // halfway would restart a row that has units in twiboot.
   reflashProgressBegin(reflashProgress, 0);  // total known once planned
-  // Let the row finish what it was doing before the first unit leaves for
-  // its bootloader. Idle, not homed — a home is a full turn per unit and
-  // nothing here needs one (UnitUpdateJob.h).
-  {
-    uint8_t rowUnits[UNITS_AMOUNT];
-    int rowCount = unitUpdateCollectSketchUnits(unitFacts, UNITS_AMOUNT,
-                                                SFP_I2C_ADDRESS_BASE, rowUnits);
-    if (rowCount > 0 &&
-        !waitForBatchIdle(rowUnits, rowCount, UNIT_UPDATE_QUIET_MS)) {
-      SerialPrintln(F("reflash: row still moving after the quiet wait"));
-    }
-  }
-  // The flash list: the sweep's sketch units and whoever already sits in
-  // twiboot. The loop sends each unit into its bootloader right before its
-  // own pages (reflashEnterUnit).
-  uint8_t sweep[UNITS_AMOUNT];
-  int sweepCount =
-      force ? reflashCollectForcedTarget(UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE,
-                                         onlyAddr, sweep)
-            : reflashCollectRebootTargets(unitFacts, UNITS_AMOUNT,
-                                          SFP_I2C_ADDRESS_BASE, sweep);
+  reflashWaitRowQuiet();
   uint8_t flashTargets[UNITS_AMOUNT];
-  int n = reflashPlanTargets(unitFacts, UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE,
-                             sweep, sweepCount, flashTargets);
-  n = reflashFilterToAddress(flashTargets, n, onlyAddr);
+  int n = reflashPlanJobTargets(onlyAddr, force, flashTargets);
   reflashProgress.total = (uint8_t)n;
   const uint32_t handResetWaitMs = force ? REFLASH_HAND_RESET_WAIT_MS : 0;
   bool halted = flashBootloaderUnits(flashTargets, n, handResetWaitMs);

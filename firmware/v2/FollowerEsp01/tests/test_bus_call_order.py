@@ -127,6 +127,8 @@ def _flattened(code, signature):
         if step is None:
             continue
         calls = list(re.finditer(r"\b" + name + r"\s*\([^;]*;", body))
+        if not calls:
+            continue
         assert len(calls) == 1, f"{name} called {len(calls)} times in {signature!r}"
         c = calls[0]
         body = body[:c.start()] + step + body[c.end():]
