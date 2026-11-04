@@ -10,9 +10,11 @@ INPUT=$(cat)
 FILE=$(jq -r '.tool_input.file_path // empty' <<<"$INPUT" 2>/dev/null)
 SID=$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null)
 [ -z "$FILE" ] && exit 0
-SID=${SID:-$PPID}
+[[ "$SID" =~ ^[A-Za-z0-9_-]+$ ]] || exit 0
 
-REPO=${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+REPO=${CLAUDE_PROJECT_DIR:?}
+STATE="$REPO/.claude/.state"
+(umask 077; mkdir -p "$STATE") && chmod 700 "$STATE"
 V2="$REPO/firmware/v2"
 
 case "$FILE" in
@@ -42,6 +44,6 @@ case "$TOP" in
     ;;
 esac
 
-OUT="${TMPDIR:-/tmp}/sf-native-touched-${SID}"
+OUT="$STATE/sf-native-touched-${SID}"
 printf '%s\n' $ENVS >>"$OUT"
 exit 0

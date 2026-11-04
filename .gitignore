@@ -39,6 +39,7 @@ __pycache__/
 .claude/worktrees/
 .claude/scheduled_tasks.*
 .claude/routines/.state/
+.claude/.state/
 .claude/checkpoints/
 .claude/mailbox/
 .claude/agent-registry.json

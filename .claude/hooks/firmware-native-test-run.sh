@@ -6,11 +6,11 @@ set -uo pipefail
 
 INPUT=$(cat)
 SID=$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null)
-SID=${SID:-$PPID}
-TOUCHED="${TMPDIR:-/tmp}/sf-native-touched-${SID}"
-[ -s "$TOUCHED" ] || exit 0
+[[ "$SID" =~ ^[A-Za-z0-9_-]+$ ]] || exit 0
+REPO=${CLAUDE_PROJECT_DIR:?}
+TOUCHED="$REPO/.claude/.state/sf-native-touched-${SID}"
+[ -f "$TOUCHED" ] && [ ! -L "$TOUCHED" ] && [ -O "$TOUCHED" ] && [ -s "$TOUCHED" ] || exit 0
 
-REPO=${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 PIO=$(command -v pio || true)
 [ -z "$PIO" ] && [ -x "$HOME/.platformio/penv/bin/pio" ] && PIO="$HOME/.platformio/penv/bin/pio"
 if [ -z "$PIO" ]; then
@@ -23,6 +23,9 @@ rm -f "$TOUCHED"
 
 PASSED=()
 for e in "${ENVS[@]}"; do
+  [[ "$e" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+  case "$e" in Master|FollowerEsp01|Rescue|Unit) ;; *) continue ;; esac
+  [ -d "$REPO/firmware/v2/$e" ] || continue
   OUT=$("$PIO" test -e native -d "$REPO/firmware/v2/$e" 2>&1)
   if [ $? -ne 0 ]; then
     jq -n --arg r "$e: $(tail -n 30 <<<"$OUT")" '{decision: "block", reason: $r}'
@@ -31,4 +34,5 @@ for e in "${ENVS[@]}"; do
   PASSED+=("$e")
 done
 
+[ "${#PASSED[@]}" -gt 0 ] || exit 0
 jq -n --arg c "native tests passed: ${PASSED[*]}" '{additionalContext: $c}'
