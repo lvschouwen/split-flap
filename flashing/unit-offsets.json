@@ -10,7 +10,7 @@
     "captured values back, --capture overwrites this file from the wall."
   ],
   "capturedUtc": "2026-07-26T15:23:05Z",
-  "master": "192.168.15.88",
+  "master": "192.0.2.88",
   "rows": [
     {
       "board": "split-flap-c8a746",

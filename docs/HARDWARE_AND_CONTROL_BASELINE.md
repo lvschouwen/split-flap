@@ -28,9 +28,9 @@ Read live from the three boards on 2026-07-27 (`GET /settings`,
 
 | Board | IP | Platform | Role | Units | Firmware |
 |---|---|---|---|---|---|
-| `split-flap-c8a746` | 192.168.15.91 | ESP32-S3 | **leader**, drives the ESP32 row | 16 (0x01–0x10) | `eaba380` ✅ |
-| `split-flap-261bb6` | 192.168.15.121 | ESP-01 (ESP8266) | **follower**, drives the ESP-01 row | 5 (0x01–0x05) | `eaba380` ✅ |
-| `split-flap-a47dee` | 192.168.15.20 | ESP32-S3 | standalone `headless-spare` | 0 | `eaba380` ✅ |
+| `split-flap-c8a746` | 192.0.2.91 | ESP32-S3 | **leader**, drives the ESP32 row | 16 (0x01–0x10) | `eaba380` ✅ |
+| `split-flap-261bb6` | 192.0.2.121 | ESP-01 (ESP8266) | **follower**, drives the ESP-01 row | 5 (0x01–0x05) | `eaba380` ✅ |
+| `split-flap-a47dee` | 192.0.2.20 | ESP32-S3 | standalone `headless-spare` | 0 | `eaba380` ✅ |
 
 Rows are identified here by **which controller drives them**, not by index.
 

@@ -31,13 +31,13 @@ static void test_layout_is_the_one_boards_in_the_field_hold() {
 static void test_pairing_round_trips() {
   uint8_t blob[FOLLOWER_MEMBERSHIP_BLOB_LEN];
   TEST_ASSERT_TRUE(followerMembershipEncode(
-      "split-flap-master", "192.168.15.22", "CET-1CEST,M3.5.0,M10.5.0/3", blob));
+      "split-flap-master", "192.0.2.22", "CET-1CEST,M3.5.0,M10.5.0/3", blob));
   char name[FOLLOWER_NAME_MAX + 1];
   char host[FOLLOWER_HOST_MAX + 1];
   char tz[FOLLOWER_TZ_MAX + 1];
   TEST_ASSERT_TRUE(decode(blob, name, host, tz));
   TEST_ASSERT_EQUAL_STRING("split-flap-master", name);
-  TEST_ASSERT_EQUAL_STRING("192.168.15.22", host);
+  TEST_ASSERT_EQUAL_STRING("192.0.2.22", host);
   TEST_ASSERT_EQUAL_STRING("CET-1CEST,M3.5.0,M10.5.0/3", tz);
 }
 

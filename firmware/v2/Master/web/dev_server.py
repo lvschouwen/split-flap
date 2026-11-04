@@ -4,7 +4,7 @@
 For working on the page without flashing: the page is rebuilt on every load,
 its requests go to the real master.
 
-    python3 web/dev_server.py 192.168.15.88 [--port 8088] [--read-only] [--minutes 120]
+    python3 web/dev_server.py 192.0.2.88 [--port 8088] [--read-only] [--minutes 120]
 
     python3 web/dev_server.py --fixtures faults [--port 8088]
 

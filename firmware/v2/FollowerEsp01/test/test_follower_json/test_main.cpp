@@ -17,7 +17,7 @@ static FollowerIdentity makeIdentity() {
   id.rev = "abc1234";
   id.width = 5;
   id.masterId = "split-flap-master";
-  id.masterHost = "192.168.15.22";
+  id.masterHost = "192.0.2.22";
   id.linked = true;
   id.upSeconds = 1200;
   id.heapBytes = 28000;
@@ -32,7 +32,7 @@ static void test_identity_json_shape() {
   TEST_ASSERT_EQUAL_STRING(
       "{\"name\":\"split-flap-ab12cd\",\"host\":\"split-flap-row2\",\"version\":\"abc1234\",\"plat\":\"esp01\","
       "\"width\":5,\"rescue\":false,\"master\":\"split-flap-master\","
-      "\"masterHost\":\"192.168.15.22\",\"linked\":true,\"up\":1200,"
+      "\"masterHost\":\"192.0.2.22\",\"linked\":true,\"up\":1200,"
       "\"heap\":28000,\"sketch\":458752,\"sketchFree\":569344,\"flashMode\":3,"
       "\"flashId\":\"1440e0\"}",
       followerIdentityJson(makeIdentity()).c_str());
@@ -87,10 +87,10 @@ static void test_identity_fits_its_reserve() {
 static void test_post_from_a_website_is_refused() {
   // The rule POST /pair and the upload apply (shared LanOrigin.h): a POST
   // with an Origin comes from a browser, and this board serves no page.
-  const String self = "192.168.15.121";
+  const String self = "192.168.1.121";
   TEST_ASSERT_TRUE(lanCsrfReject(true, true, "http://evil.example.com", self));
-  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "https://192.168.15.121", self));
-  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "http://192.168.15.90", self));
+  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "https://192.168.1.121", self));
+  TEST_ASSERT_TRUE(lanCsrfReject(true, true, "http://192.168.1.90", self));
   // A master and ota-flash.sh send no Origin.
   TEST_ASSERT_FALSE(lanCsrfReject(true, false, "", self));
 }

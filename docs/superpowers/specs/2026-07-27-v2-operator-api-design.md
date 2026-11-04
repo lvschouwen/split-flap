@@ -163,7 +163,7 @@ Columnar encoding emits field names once and rows as value arrays:
     "rows": [
       { "row": 1, "host": "", "plat": "esp32", "self": true, "contactAge": 0,
         "units": [[1,true,"sketch","d6e8a8a",86400,1257,17,0,4720,false]] },
-      { "row": 0, "host": "192.168.15.121", "plat": "esp01", "self": false,
+      { "row": 0, "host": "192.0.2.121", "plat": "esp01", "self": false,
         "contactAge": 1840,
         "units": [[1,true,"sketch","d6e8a8a",3600,88,21,0,4810,null]] }
     ] } }

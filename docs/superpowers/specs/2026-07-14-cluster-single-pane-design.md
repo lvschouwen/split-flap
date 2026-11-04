@@ -52,7 +52,7 @@ The leader's ping POST body (today empty) gains one form param, `digest=<urlenco
 
 ```json
 {"gen":N,
- "leader":{"name":"…","host":"192.168.15.90"},
+ "leader":{"name":"…","host":"192.0.2.90"},
  "table":"host|row|col|width;…",
  "rows":["ROW 0 TEXT","ROW 1 TEXT"],
  "members":[{"host":"…","row":1,"state":"ok","rev":"…",

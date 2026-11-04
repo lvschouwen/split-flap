@@ -491,7 +491,7 @@ from splitflap_tui.widgets import DOT_BAD, DOT_OK, DOT_WARN, member_dot_style
 
 
 def member(**over):
-    d = {"host": "192.168.15.121", "row": 0, "col": 0, "width": 5,
+    d = {"host": "192.0.2.121", "row": 0, "col": 0, "width": 5,
          "joined": True, "failures": 0, "rev": "9f694dd", "plat": "esp01"}
     d.update(over)
     return ClusterMember.from_json(d)

@@ -9,7 +9,7 @@ With --tail the new entries of the wall's history are printed as they come.
 
 Usage:
   ext-diag-monitor.py                       # the master named in unit-offsets.json
-  ext-diag-monitor.py --master 192.168.15.88 --board <id>
+  ext-diag-monitor.py --master 192.0.2.88 --board <id>
   ext-diag-monitor.py -i 10 --tail
   ext-diag-monitor.py --once                # one snapshot, no redraw
 """

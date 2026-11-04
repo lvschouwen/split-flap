@@ -280,8 +280,8 @@ Write `cli/tools/capture_fixtures.py`:
 
 ```python
 """Capture live-board JSON into tests/fixtures/. Usage:
-   python tools/capture_fixtures.py http://192.168.15.88 esp32s3
-   python tools/capture_fixtures.py http://192.168.15.121 esp01
+   python tools/capture_fixtures.py http://192.0.2.88 esp32s3
+   python tools/capture_fixtures.py http://192.0.2.121 esp01
 Review captures before committing (public repo)."""
 import json
 import pathlib
@@ -322,11 +322,11 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-Run it against both live boards (VPN must be up; leader `192.168.15.88`, esp01 row `192.168.15.121`):
+Run it against both live boards (VPN must be up; leader `192.0.2.88`, esp01 row `192.0.2.121`):
 
 ```bash
-cd cli && python tools/capture_fixtures.py http://192.168.15.88 esp32s3 \
-        && python tools/capture_fixtures.py http://192.168.15.121 esp01
+cd cli && python tools/capture_fixtures.py http://192.0.2.88 esp32s3 \
+        && python tools/capture_fixtures.py http://192.0.2.121 esp01
 ```
 
 Fallback if a board is unreachable: transcribe `routes`/`notServed` by hand from `firmware/v2/Master/ApiIndex.h:22-76` / `firmware/v2/FollowerEsp01/ApiIndex.h` into the two `api_*.json` fixtures (`{"routes":[{"m":"GET","p":"/api","d":"…"},…]}`) and leave the other captures for later. Review every fixture for private strings before the commit step.
@@ -481,7 +481,7 @@ S3 = {"unitCount": 16, "deviceMode": "clock", "deviceRole": "display",
 
 ESP01 = {"deviceName": "", "effectiveDeviceName": "splitflap-01ab",
          "version": "9f694dd", "width": 5, "clusterState": "blank",
-         "clusterLeaderName": "row1", "clusterLeaderHost": "192.168.15.88",
+         "clusterLeaderName": "row1", "clusterLeaderHost": "192.0.2.88",
          "clusterRow": 0, "plat": "esp01", "heap": 21000, "rssi": -63, "up": 900}
 
 
@@ -774,7 +774,7 @@ CS = {"enabled": True, "epoch": 7, "seq": 1234,
            "joined": True, "degraded": False, "failures": 0, "rev": "817e3a9",
            "reportedWidth": 16, "updating": False, "updateBlocked": False,
            "hmac": True},
-          {"host": "192.168.15.121", "self": False, "row": 0, "col": 0,
+          {"host": "192.0.2.121", "self": False, "row": 0, "col": 0,
            "width": 5, "joined": True, "degraded": False, "failures": 1,
            "rev": "9f694dd", "plat": "esp01", "role": "display",
            "faulty": 0, "detected": 5, "faultMask": "0000", "wear": False,
@@ -809,10 +809,10 @@ def test_member_optional_health_block_absent():
 
 def test_cluster_health_both_platforms():
     esp01 = {"state": "clustered", "leaderName": "row1",
-             "leaderHost": "192.168.15.88", "row": 0, "rev": "9f694dd",
+             "leaderHost": "192.0.2.88", "row": 0, "rev": "9f694dd",
              "hmac": True, "stackFree": 1200,
              "foreign": {"joins": 2, "pings": 0, "renders": 0,
-                         "lastHost": "192.168.15.20", "msSince": 51000}}
+                         "lastHost": "192.0.2.20", "msSince": 51000}}
     h = ClusterHealth.from_json(esp01)
     assert h.stack_free == 1200 and h.foreign_joins == 2
     s3 = {"state": "standalone", "leaderName": "", "leaderHost": "", "row": 0,
@@ -1706,10 +1706,10 @@ git commit -m "test(#443): client parsing pinned against the fake_follower wire 
     default = "leader"
     [[boards]]
     name = "leader"
-    url = "http://192.168.15.88"
+    url = "http://192.0.2.88"
     [[boards]]
     name = "row0"
-    url = "http://192.168.15.121"
+    url = "http://192.0.2.121"
     ```
   - `app.py`: `SplitflapApp(App)` with `__init__(config: Config, client_factory: Callable[[str], BoardClient] = BoardClient)` — the factory is the test seam; `DashboardScreen` composing `WallPanel`, `ClusterStrip`, `UnitsTable`, `LogTail`, `StatsBar` (from `widgets.py`) + Textual `Header`/`Footer`.
   - `poller.py`: `Poller(app, client_factory, config)` with thread workers `poll_status()` (every `poll_s`: GET `/status` → `StatusAggregate`, GET `/cluster/status` → `ClusterStatus`; on `Unreachable` set `app.connected = False`, keep retrying — never exit), `poll_log()` (every `log_poll_s`: `fetch_flash_log`, last 200 lines), `sse_loop()` (run `display_events`; on iterator end/`Unreachable`: mark `app.wall_stale = True`, back off 1→2→4→…→30 s, reconnect). All UI updates via `app.call_from_thread`.
@@ -2100,7 +2100,7 @@ if __name__ == "__main__":
 - [ ] **Step 5: Run the Pilot tests** — `cd cli && python -m pytest tests/test_app.py tests/test_config.py -v`
 Expected: 4 PASS (adjust `pilot.pause` duration upward if the thread poll hasn't landed; keep it under 1 s).
 
-- [ ] **Step 6: Manual smoke against the live leader** (VPN): create the real config with leader `http://192.168.15.88`, run `cd cli && python -m splitflap_tui`, confirm: wall shows the clock rows live, cluster strip lists row0/row1, units table fills, `q` quits. This is the bench-verify tier for the read path.
+- [ ] **Step 6: Manual smoke against the live leader** (VPN): create the real config with leader `http://192.0.2.88`, run `cd cli && python -m splitflap_tui`, confirm: wall shows the clock rows live, cluster strip lists row0/row1, units table fills, `q` quits. This is the bench-verify tier for the read path.
 
 - [ ] **Step 7: Commit**
 
