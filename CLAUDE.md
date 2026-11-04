@@ -75,5 +75,6 @@ The fleet converges on the git REV (`git describe`/short SHA baked into the bina
 - **Twiboot probe-inhibit: displayTask owns a deadline armed by a unit restart and address burns — every runtime probe waits it out; never bypass it.** Sole exception: the reflash job's internal probes (pinned units are immediately flashed + exited).
 - **Producer gate: while `reflashInProgress(snapshot.reflash)`, every display-mutating producer stands down (web/MQTT 409, clockTask skips, master OTA 409) except the `stop` action.**
 - **The `storage` partition is one shared LittleFS and netTask is its sole flash writer** (producers stage under a mutex) — future storage tenants join it; never carve new partitions.
+- **The Home Assistant MQTT interface is an external contract** (`docs/HA_CONTRACT.md`): topic names, discovery unique ids, JSON attribute keys and enum values are append-only; a rename or removal needs a matching hass-config issue first.
 
 - **graphify** (`graphify-out/`, local and gitignored, AST-only): use `graphify query|path|explain` for cross-tree questions (shared/ → Master/Follower/Unit); the nested CLAUDE.md files remain the mechanism map. Never run the semantic extraction unasked.
