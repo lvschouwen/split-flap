@@ -37,6 +37,7 @@ pio test -e native           # host-side unit tests (Unit, v2 Master, Rescue, Fo
 python3 -m pytest tests/      # python-side tests (v2 Master, Rescue, FollowerEsp01)
 ```
 
+- **Pins (#648):** every platform, library and CI pip package is an exact version (no `^`/unpinned); to bump, read the new version from `pio pkg list -e <env>` / `pip index versions <pkg>`, edit the pin in the `platformio.ini` or `build.yml`, and let `pio test -e native` per project plus CI be the gate.
 - Unit envs (`firmware/v2/Unit`): `unit` (new Nano bootloader) / `unit_old_bootloader` (fallback).
 - Native env uses ArduinoFake: `map()` is a fakeit mock — wire the real formula in each test's `setUp()` or calls abort; `EEPROM` etc. re-wire via `ArduinoFake(EEPROM)`.
 - v2 first build on a clean machine is slow (pioarduino hybrid compile downloads IDF). The pioarduino platform needs PlatformIO Core ≥ 6.2.0 on the host (CI pins it in `.github/workflows/build.yml`). `managed_components/`, `sdkconfig.*`, `.dummy/` in v2 project dirs are generated artifacts (gitignored; exception: `Bootloader/sdkconfig.defaults` is a source file kept by a negation).

@@ -40,7 +40,7 @@ jobs:
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install platformio==6.2.0 uv
+        run: pip install platformio==6.2.0 uv==0.13.7
 
       - name: Build
         working-directory: firmware/${{ matrix.project }}
@@ -70,7 +70,7 @@ jobs:
           key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
 
       - name: Install PlatformIO
-        run: pip install platformio==6.2.0 uv
+        run: pip install platformio==6.2.0 uv==0.13.7
 
       - name: Run Unit native tests
         working-directory: firmware/v2/Unit
@@ -89,7 +89,7 @@ jobs:
         run: pio test -e native
 
       - name: Install pytest
-        run: pip install pytest
+        run: pip install pytest==9.2.0
 
       # #350 copied-header drift gate: the v2 copy policy prices in silent
       # divergence — this pins every declared copy pair.
@@ -119,7 +119,7 @@ jobs:
       - name: Wall link schema (python)
         working-directory: firmware/v2/link
         run: |
-          pip install grpcio-tools protobuf
+          pip install grpcio-tools==1.85.1 protobuf==7.36.2
           python -m pytest tests/
 
       - name: Run flasher tests
