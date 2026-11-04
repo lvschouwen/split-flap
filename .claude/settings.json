@@ -2,11 +2,22 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/firmware-native-test.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/firmware-native-test-mark.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/firmware-native-test-run.sh",
+            "timeout": 600
           }
         ]
       }
