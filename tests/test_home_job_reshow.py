@@ -11,7 +11,7 @@ from pathlib import Path
 V2 = Path(__file__).resolve().parents[1] / "firmware/v2"
 MASTER = (V2 / "Master/DisplayTask.cpp").read_text()
 ROW_JOBS = (V2 / "FollowerEsp01/FollowerUnitJobs.cpp").read_text()
-ROW_BUS = (V2 / "FollowerEsp01/FollowerBus.cpp").read_text()
+ROW_BUS = (V2 / "FollowerEsp01/FollowerBusOps.cpp").read_text()
 
 
 def body(source: str, signature: str) -> str:

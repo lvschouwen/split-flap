@@ -102,11 +102,11 @@ def test_targeted_run_flashes_only_the_planned_list():
     # The flash loop (shared reflashRunTargets) walks the list it is handed,
     # so narrowing that list is what keeps a ?address= run off the other
     # bootloader-mode units.
-    loop = _function_body(_code(TREE / "FollowerBus.cpp"),
+    loop = _function_body(_code(TREE / "FollowerBusFlash.cpp"),
                           "static bool flashBootloaderUnits(const uint8_t* targets")
     assert "reflashRunTargets(hooks, targets, count, reflashProgress," in loop
     assert "unitFacts[" not in loop, "the loop must not re-derive targets from the facts"
-    job = _function_body(_code(TREE / "FollowerBus.cpp"),
+    job = _function_body(_code(TREE / "FollowerBusFlash.cpp"),
                          "void busRunReflashJob(uint8_t onlyAddr, bool force)")
     assert "reflashPlanTargets(" in job
     narrowed = job.index("n = reflashFilterToAddress(flashTargets, n, onlyAddr);")

@@ -63,7 +63,7 @@ def test_update_drivers_run_the_shared_op():
     # master supplies hooks only.
     drivers = {
         "S3": _driver("Master/DisplayTask.cpp", "static void execBootUpdate("),
-        "ESP-01": _driver("FollowerEsp01/FollowerBus.cpp",
+        "ESP-01": _driver("FollowerEsp01/FollowerBusFlash.cpp",
                           "void busRunBootUpdate("),
     }
     for name, body in drivers.items():

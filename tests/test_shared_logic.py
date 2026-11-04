@@ -48,7 +48,9 @@ def _offenders(pattern, trees=TREES):
 def test_the_gate_reads_the_row_master_sources():
     seen = set(_sources(TREES))
     assert V2 / "Master/DisplayTask.cpp" in seen
-    assert V2 / "FollowerEsp01/FollowerBus.cpp" in seen
+    for name in ("FollowerBus.cpp", "FollowerBusRender.cpp", "FollowerBusOps.cpp",
+                 "FollowerBusFlash.cpp", "FollowerBusInternal.h"):
+        assert V2 / "FollowerEsp01" / name in seen, name
     assert V2 / "Master/platformio.ini" in seen
 
 
@@ -87,7 +89,7 @@ def test_the_wire_speed_range_is_defined_once():
 
 def test_the_follower_render_uses_the_shared_mapping():
     body = _strip_comments(
-        (V2 / "FollowerEsp01/FollowerBus.cpp").read_text())
+        (V2 / "FollowerEsp01/FollowerBusRender.cpp").read_text())
     assert "flapLetterOrBlank(" in body
     assert "convertSpeedToUnit(" in body
 
@@ -120,7 +122,7 @@ def test_both_reflash_jobs_run_the_shared_loop():
     loop = _strip_comments((SHARED / "ReflashPlan.h").read_text())
     assert "reflashShouldHalt(consecutiveFailures)" in loop
     for path in (V2 / "Master/DisplayTask.cpp",
-                 V2 / "FollowerEsp01/FollowerBus.cpp"):
+                 V2 / "FollowerEsp01/FollowerBusFlash.cpp"):
         body = _strip_comments(path.read_text())
         assert "reflashRunTargets(" in body, path.name
         assert "reflashShouldHalt(" not in body, path.name
@@ -133,7 +135,7 @@ def test_a_unit_enters_its_bootloader_for_its_own_flash_only():
     run = loop[loop.index("inline ReflashRunEnd reflashRunTargets("):]
     assert run.index("reflashEnterUnit(h, addr)") < run.index("h.flashUnit(addr)")
     for path in (V2 / "Master/DisplayTask.cpp",
-                 V2 / "FollowerEsp01/FollowerBus.cpp"):
+                 V2 / "FollowerEsp01/FollowerBusFlash.cpp"):
         body = _strip_comments(path.read_text())
         assert "reflashPlanTargets(" in body, path.name
         # The one order a flash job sends is the loop's hook.
@@ -169,7 +171,7 @@ def test_unit_read_validity_is_patched_through_the_shared_helpers():
                "firmware/v2/FollowerEsp01/FollowerBus.cpp",
                "firmware/v2/Master/UnitFactsJson.h"}
     assert set(hits) <= readers, hits
-    for path in ("Master/DisplayIpc.h", "FollowerEsp01/FollowerBus.cpp"):
+    for path in ("Master/DisplayIpc.h", "FollowerEsp01/FollowerBusOps.cpp"):
         assert "unitFactsInvalidateReads(" in (V2 / path).read_text(), path
 
 
@@ -336,7 +338,16 @@ def test_tests_of_shared_headers_are_not_copied_per_tree():
 
 # --- #534: the unit-bus protocol layer -----------------------------------------
 
-BUS_FILES = [V2 / "Master/UnitBus.cpp", V2 / "FollowerEsp01/FollowerBus.cpp"]
+BUS_FILES = [V2 / "Master/UnitBus.cpp", V2 / "FollowerEsp01/FollowerBus.cpp",
+             V2 / "FollowerEsp01/FollowerBusRender.cpp",
+             V2 / "FollowerEsp01/FollowerBusOps.cpp",
+             V2 / "FollowerEsp01/FollowerBusFlash.cpp",
+             V2 / "FollowerEsp01/FollowerBusInternal.h"]
+# The one file per tree that holds the Wire adapter struct.
+BUS_ADAPTERS = {V2 / "Master/UnitBus.cpp", V2 / "FollowerEsp01/FollowerBusInternal.h"}
+# Each row master's bus code, read as one source.
+BUS_TREES = {"Master": [V2 / "Master/UnitBus.cpp"],
+             "FollowerEsp01": [p for p in BUS_FILES if p.parent.name == "FollowerEsp01"]}
 
 
 def test_no_tree_speaks_the_unit_protocol_by_hand():
@@ -356,22 +367,26 @@ def test_bus_files_touch_wire_only_in_the_adapter_and_the_probe():
                          r"endTransmission)\(")
     for path in BUS_FILES:
         src = _strip_comments(path.read_text())
-        a = src.index("struct WireTwibootBus {")
-        b = src.index("};", a)
-        outside = src[:a] + src[b:]
+        if path in BUS_ADAPTERS:
+            a = src.index("struct WireTwibootBus {")
+            b = src.index("};", a)
+            outside = src[:a] + src[b:]
+        else:
+            assert "struct WireTwibootBus" not in src, f"{path.name}: a second adapter"
+            outside = src
         raw = [m for m in re.findall(r"Wire\.\w+\(", outside)
                if not allowed.fullmatch(m)]
         assert not raw, f"{path.name}: {sorted(set(raw))}"
 
 
 def test_both_row_masters_run_the_shared_bootloader_sequences():
-    for path in BUS_FILES:
-        src = _strip_comments(path.read_text())
+    for tree, paths in BUS_TREES.items():
+        src = "\n".join(_strip_comments(p.read_text()) for p in paths)
         for call in ("unitFlashImage(", "unitReadBootSection(",
                      "unitRescueProbe(", "unitWaitBatchIdle("):
-            assert call in src, f"{path.name}: {call}"
+            assert call in src, f"{tree}: {call}"
     for path in (V2 / "Master/DisplayTask.cpp",
-                 V2 / "FollowerEsp01/FollowerBus.cpp"):
+                 V2 / "FollowerEsp01/FollowerBusFlash.cpp"):
         src = _strip_comments(path.read_text())
         for call in ("bootDumpRun(hooks, ", "bootUpdateRun(hooks, "):
             assert call in src, f"{path.name}: {call}"

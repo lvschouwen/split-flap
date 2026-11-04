@@ -24,7 +24,7 @@ WIRE_TOKEN = re.compile(r"\bTWIBOOT_(?:CMD|MEMTYPE|BOOTTYPE)_\w+")
 # sequence.
 FLASH_PATHS = {
     "Master": (V2 / "Master/UnitBus.cpp", "UnitFlashResult unitBusFlashUnit("),
-    "ESP-01": (V2 / "FollowerEsp01/FollowerBus.cpp",
+    "ESP-01": (V2 / "FollowerEsp01/FollowerBusFlash.cpp",
                "static bool flashUnitSteps("),
 }
 FLASH_SEQUENCE = (V2 / "shared/UnitBusTwiboot.h",

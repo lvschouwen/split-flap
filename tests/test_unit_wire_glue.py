@@ -11,7 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 V2 = ROOT / "firmware" / "v2"
 UNIT_PROTOCOL = V2 / "Unit" / "UnitI2CProtocol.ino"
 WIRE_CONTRACT = V2 / "shared" / "UnitWireContract.h"
-MASTER_BUSES = [V2 / "Master" / "UnitBus.cpp", V2 / "FollowerEsp01" / "FollowerBus.cpp"]
+MASTER_BUSES = [V2 / "Master" / "UnitBus.cpp"] + [
+    V2 / "FollowerEsp01" / name for name in (
+        "FollowerBus.cpp", "FollowerBusRender.cpp", "FollowerBusOps.cpp",
+        "FollowerBusFlash.cpp", "FollowerBusInternal.h")]
 
 
 def _strip_comments(text):
