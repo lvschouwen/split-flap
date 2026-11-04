@@ -137,3 +137,9 @@ f4fcbdc b8f637b0681e94d909b0f575e6aca7d304ea2a3af90f2552415ba722ac751ccc
 # unchanged from 0d90815. Recorded when the WiFi TX ladder kept a drop's level
 # (#639), a shared header the unit does not compile.
 2bdabc9 683f7073addc63f77ec2839ed5e8750b3bdca4f5343a1266502d74d6be224165
+#
+# d244757: the bundle rev before the platform pin (#648). Pinning
+# platform = atmelavr@5.3.0 (the version already resolved) edits Unit's
+# platformio.ini and so moves the Unit source head, but not the Nano binary.
+# Measured, both clean builds: identical.
+d244757 683f7073addc63f77ec2839ed5e8750b3bdca4f5343a1266502d74d6be224165
