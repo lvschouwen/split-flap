@@ -1,14 +1,15 @@
 #pragma once
 
 // Internal seam of the FollowerBus*.cpp family: the Wire adapter and the
-// state the bus files share. Include from FollowerBus*.cpp ONLY — these names
-// have external linkage across the family (definitions in FollowerBus.cpp)
-// and are not part of the public FollowerBus.h surface.
+// state the bus files share. Include from FollowerBus*.cpp ONLY — the state
+// below has external linkage across the family (definitions in
+// FollowerBus.cpp) and is not part of the public FollowerBus.h surface.
 //
-// The adapter stays at global scope: the shared unit-bus templates
-// instantiated on it then fold into one copy across the family. Never include
-// UnitAssets.h here — its PROGMEM image has internal linkage and would be
-// copied into every file that includes this header.
+// The adapter is stateless and sits in an anonymous namespace: each file gets
+// its own instance, and the shared unit-bus templates instantiated on it are
+// const-propagated within that file. At global scope the image is larger.
+// Never include UnitAssets.h here — its PROGMEM image has internal linkage and
+// would be copied into every file that includes this header.
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -51,7 +52,8 @@ struct WireTwibootBus {
 };
 WireTwibootBus unitBus;
 
-bool isUnitInBootloader(int i2cAddress) {
+// Not every file of the family calls it.
+[[maybe_unused]] bool isUnitInBootloader(int i2cAddress) {
   return twibootIsBootloader(unitBus, (uint8_t)i2cAddress);
 }
 }  // namespace

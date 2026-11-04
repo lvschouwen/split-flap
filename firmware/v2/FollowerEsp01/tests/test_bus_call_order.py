@@ -15,9 +15,11 @@ from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[1]
 
-# Static helpers a pinned function calls for one of its steps: their bodies
-# are read where the call stands.
-STEPS = ("reflashWaitRowQuiet", "reflashPlanJobTargets")
+# Static helpers a pinned function calls for one of its steps, each with the
+# pinned function that must call it exactly once: their bodies are read where
+# the call stands.
+JOB = "void busRunReflashJob(uint8_t onlyAddr, bool force)"
+STEPS = {"reflashWaitRowQuiet": JOB, "reflashPlanJobTargets": JOB}
 
 PINNED = {
     "void busRunReflashJob(uint8_t onlyAddr, bool force)": (
@@ -122,12 +124,12 @@ def _step_body(code, name):
 
 def _flattened(code, signature):
     body = _definition(code, signature)
-    for name in STEPS:
+    for name, owner in STEPS.items():
         step = _step_body(code, name)
-        if step is None:
-            continue
+        assert step is not None, f"step {name} has no static definition"
         calls = list(re.finditer(r"\b" + name + r"\s*\([^;]*;", body))
-        if not calls:
+        if signature != owner:
+            assert not calls, f"{name} is a step of {owner!r} only"
             continue
         assert len(calls) == 1, f"{name} called {len(calls)} times in {signature!r}"
         c = calls[0]

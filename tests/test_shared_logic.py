@@ -345,9 +345,8 @@ BUS_FILES = [V2 / "Master/UnitBus.cpp", V2 / "FollowerEsp01/FollowerBus.cpp",
              V2 / "FollowerEsp01/FollowerBusInternal.h"]
 # The one file per tree that holds the Wire adapter struct.
 BUS_ADAPTERS = {V2 / "Master/UnitBus.cpp", V2 / "FollowerEsp01/FollowerBusInternal.h"}
-# Each row master's bus code, read as one source.
-BUS_TREES = {"Master": [V2 / "Master/UnitBus.cpp"],
-             "FollowerEsp01": [p for p in BUS_FILES if p.parent.name == "FollowerEsp01"]}
+# The file per tree that runs the bootloader sequences.
+BUS_BOOTLOADER_FILES = [V2 / "Master/UnitBus.cpp", V2 / "FollowerEsp01/FollowerBusFlash.cpp"]
 
 
 def test_no_tree_speaks_the_unit_protocol_by_hand():
@@ -380,11 +379,11 @@ def test_bus_files_touch_wire_only_in_the_adapter_and_the_probe():
 
 
 def test_both_row_masters_run_the_shared_bootloader_sequences():
-    for tree, paths in BUS_TREES.items():
-        src = "\n".join(_strip_comments(p.read_text()) for p in paths)
+    for path in BUS_BOOTLOADER_FILES:
+        src = _strip_comments(path.read_text())
         for call in ("unitFlashImage(", "unitReadBootSection(",
                      "unitRescueProbe(", "unitWaitBatchIdle("):
-            assert call in src, f"{tree}: {call}"
+            assert call in src, f"{path.name}: {call}"
     for path in (V2 / "Master/DisplayTask.cpp",
                  V2 / "FollowerEsp01/FollowerBusFlash.cpp"):
         src = _strip_comments(path.read_text())
