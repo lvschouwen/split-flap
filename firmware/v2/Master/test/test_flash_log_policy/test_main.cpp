@@ -154,8 +154,6 @@ static void test_failure_lines_are_urgent() {
   TEST_ASSERT_TRUE(urgent("FATAL: snapshotMutex allocation failed\n"));
   TEST_ASSERT_TRUE(urgent("Master OTA upload stalled >30 s — aborting\n"));
   TEST_ASSERT_TRUE(urgent("Unit 0x05: jam (stalled move)\n"));
-  TEST_ASSERT_TRUE(urgent("Unit 0x05 rebooted (BOR) — brownouts=7 watchdogs=0\n"));
-  TEST_ASSERT_TRUE(urgent("MQTT: restart of the units refused: busy\n"));
   TEST_ASSERT_TRUE(urgent("liveness: probe Error\n"));
 }
 
@@ -163,8 +161,65 @@ static void test_ordinary_lines_are_not_urgent() {
   TEST_ASSERT_FALSE(urgent("netTask up on core 0\n"));
   TEST_ASSERT_FALSE(urgent("link: row1 joined (rev 1a2b3c)\n"));
   TEST_ASSERT_FALSE(urgent("wifi: tx 8.5 dBm (rssi -61)\n"));
+  // A refusal answers a caller; it is not a fault of the board.
+  TEST_ASSERT_FALSE(urgent("MQTT: restart of the units refused: busy\n"));
   TEST_ASSERT_FALSE(urgent(""));
   TEST_ASSERT_FALSE(flashLogTextUrgent(nullptr, 0));
+}
+
+// A keyword counts only as a whole word: a longer word that contains it, or
+// starts with it, is not a failure.
+static void test_keywords_match_whole_words_only() {
+  TEST_ASSERT_FALSE(urgent("Rescue install started\n"));
+  TEST_ASSERT_FALSE(urgent("Rescue image installed\n"));
+  TEST_ASSERT_FALSE(urgent("reflash: boot auto-install/auto-update skipped\n"));
+  TEST_ASSERT_FALSE(urgent("wifi: failover to the second network\n"));
+  TEST_ASSERT_FALSE(urgent("traffic jammer off\n"));
+  TEST_ASSERT_TRUE(urgent("Unit 0x05: jam (stalled move)\n"));
+  TEST_ASSERT_TRUE(urgent("x failed\n"));
+}
+
+// A counter names a failure without reporting one: a keyword written as a
+// field (`errors=`, `error=`) or right after a number is a count.
+static void test_counters_are_not_failures() {
+  TEST_ASSERT_FALSE(urgent("Unit 0x05 rebooted (power-on) — brownouts=0 watchdogs=0\n"));
+  TEST_ASSERT_FALSE(urgent("stats: errors=0 error=0\n"));
+  TEST_ASSERT_FALSE(urgent("link: row1 updated (rev abc, 0 of 3 failed offers)\n"));
+  TEST_ASSERT_TRUE(urgent("link: row1 failed (rev abc)\n"));
+}
+
+// Generated from tests/flash_log_urgency.txt: every log literal on this
+// board that carries a keyword, with the verdict decided for it.
+#include "urgency_samples.h"
+
+static void test_every_logged_literal_gets_its_decided_verdict() {
+  TEST_ASSERT_TRUE(sizeof(FLASH_LOG_URGENCY_SAMPLES) /
+                       sizeof(FLASH_LOG_URGENCY_SAMPLES[0]) > 10);
+  for (const auto& sample : FLASH_LOG_URGENCY_SAMPLES) {
+    TEST_ASSERT_EQUAL_MESSAGE(sample.urgent, urgent(sample.text), sample.text);
+  }
+}
+
+// While the flash will not take a flush, urgency stands down: the failure
+// line the failed write itself produces must not re-arm a flush a second.
+static void test_urgency_stands_down_while_the_last_flush_failed() {
+  TEST_ASSERT_FALSE(flashLogShouldFlush(1, 1024, FLASH_LOG_URGENT_MIN_MS,
+                                        5000, true, true));
+  TEST_ASSERT_TRUE(flashLogShouldFlush(1, 1024, 5000, 5000, true, true));
+  TEST_ASSERT_TRUE(flashLogShouldFlush(512, 1024, 0, 5000, true, true));
+}
+
+static void test_failing_flash_is_tried_at_the_period_only() {
+  const uint32_t tickMs = 10, spanMs = 60000;
+  uint32_t lastFlush = 0, flushes = 0;
+  for (uint32_t now = tickMs; now <= spanMs; now += tickMs) {
+    if (flashLogShouldFlush(64, FLASH_LOG_STAGE_CAP, now - lastFlush,
+                            FLASH_LOG_FLUSH_INTERVAL_MS, true, true)) {
+      flushes++;
+      lastFlush = now;
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(spanMs / FLASH_LOG_FLUSH_INTERVAL_MS, flushes);
 }
 
 // Chunks are not NUL-terminated: the scan stops at len.
@@ -195,5 +250,10 @@ int main(int, char**) {
   RUN_TEST(test_failure_lines_are_urgent);
   RUN_TEST(test_ordinary_lines_are_not_urgent);
   RUN_TEST(test_urgent_scan_stops_at_len);
+  RUN_TEST(test_keywords_match_whole_words_only);
+  RUN_TEST(test_counters_are_not_failures);
+  RUN_TEST(test_every_logged_literal_gets_its_decided_verdict);
+  RUN_TEST(test_urgency_stands_down_while_the_last_flush_failed);
+  RUN_TEST(test_failing_flash_is_tried_at_the_period_only);
   return UNITY_END();
 }

@@ -44,8 +44,18 @@ def test_staging_classifies_outside_the_lock_and_raises_the_flag_inside():
 def test_tick_hands_the_flag_to_the_policy_and_clears_it_with_the_bytes():
     tick = _body(_code("FlashLog.cpp"), "void flashLogTick(")
     take = tick.index("xSemaphoreTake(stageMutex")
-    decide = tick.index("stage.urgent))")
+    decide = tick.index("stage.urgent, lastFlushFailed))")
     clear = tick.index("stage.urgent = false")
     give = tick.index("xSemaphoreGive(stageMutex)")
     assert take < decide < clear < give
     assert tick.index("stage.used = 0") < clear
+
+
+def test_a_failed_flush_stands_urgency_down_and_still_restarts_the_period():
+    tick = _body(_code("FlashLog.cpp"), "void flashLogTick(")
+    assert "stage.urgent, lastFlushFailed))" in tick
+    opened = tick.index("LittleFS.open(LOG_PATH")
+    failed_open = tick[opened:tick.index("return;", opened)]
+    assert "lastFlushFailed = true;" in failed_open
+    assert "lastFlushMs = millis();" in failed_open
+    assert "lastFlushFailed = written != len;" in tick

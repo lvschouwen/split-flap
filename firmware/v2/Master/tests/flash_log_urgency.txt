@@ -1,0 +1,61 @@
+# Every log literal of firmware/v2/Master that carries a word of
+# FLASH_LOG_URGENT_WORDS (FlashLogPolicy.h), with its verdict: urgent = a
+# warning or an error the flash log flushes early for, routine = not one
+# (the word is inside a longer word, or a count). Gate and generator:
+# tests/test_flash_log_urgency.py. One line: verdict<TAB>literal as in the source.
+urgent	Display-stop wait aborted by stop
+urgent	Display-stop wait timed out — assuming a unit is stuck, continuing anyway
+urgent	FATAL: systemStats mutex allocation failed
+urgent	FlashLog: allocation failed — flash log disabled
+urgent	FlashLog: storage mount failed — flash log disabled
+urgent	FollowerImageStore: flash write failed
+urgent	FollowerImageStore: mutex alloc failed — relay disabled
+urgent	FollowerImageStore: stalled upload reclaimed (#419)
+urgent	I2C unit bus init failed
+routine	MQTT: OTA freeze failsafe — resuming
+urgent	MQTT: connect attempt failed to start — rescheduled
+urgent	Master OTA upload stalled >30 s — aborting and resuming normal operation
+urgent	OTA confirm FAILED: 
+urgent	Rescue install failed: 
+urgent	Unit 0x%02x CMD_REBOOT failed (status %d)\n
+urgent	Unit 0x%02x LOST — no heartbeat, off the bus\n
+urgent	Unit 0x%02x chip check failed: %s\n
+urgent	Unit 0x%02x lost — ACKs but status reads fail (attempt %u)\n
+urgent	Unit 0x%02x lost — found in twiboot, started its app (rescue #%u)\n
+urgent	Unit 0x%02x lost — held in its bootloader after %u crash resets; left there as a reflash target\n
+urgent	Unit 0x%02x lost — in twiboot, did not take the order to start its app (attempt %u)\n
+urgent	Unit 0x%02x lost — no ACK (attempt %u)\n
+urgent	Unit 0x%02x: jam (stalled move)\n
+urgent	Unit 0x%02x: last home FAILED (faulty)\n
+urgent	Unit flash FAILED at page 0x%04x (%s) — unit left in twiboot\n
+urgent	Unit flash aborted by stop — unit left in twiboot
+routine	boot guard: %u of %d crashes in a row (last: %s)\n
+urgent	boot guard: NVS open failed — trip not noted
+urgent	crash:   %-8s %-12s arg 0x%02x for %lu ms\n
+urgent	crash: reset by %s — tasks at the time:\n
+urgent	crash: the dump says: %s\n
+urgent	display: boot-info unit 0x%02x → read fail\n
+urgent	events: allocation failed — no event record
+urgent	events: append open failed — %d entries lost\n
+urgent	events: rotate rename failed
+urgent	events: write failed
+routine	link: %s %s (rev %s, %u of %u failed offers%s)\n
+urgent	link: %s: lost and back %u more time(s) in %u min\n
+urgent	mDNS start failed
+urgent	odolog: append open failed
+urgent	odolog: rotate rename failed
+urgent	odolog: row write failed
+routine	reflash: %s — %u ok, %u failed of %u; boot sections %u updated, %u failed%s\n
+urgent	reflash: HALTED after %u consecutive failures — %d unit(s) left untouched\n
+routine	reflash: boot auto-install SUPPRESSED (reflashOnBoot=false)
+routine	reflash: boot auto-install/auto-update starting
+urgent	reflash: boot sweep HALTED after %u consecutive failures — %d unit(s) left untouched\n
+urgent	reflash: unit 0x%02x failed (%s)\n
+urgent	release: the look at the %s channel failed: %s\n
+urgent	release: the update failed: %s\n
+urgent	rescue slot: NVS open failed — rev not recorded
+urgent	rescue slot: sha256 of installed image failed — rev not recorded
+urgent	slot record: NVS open failed
+urgent	slot record: sha256 of running image failed
+urgent	unit catch: NVS open failed — not stored
+urgent	wall: %s is lost, pairing posted again to %s: %d\n

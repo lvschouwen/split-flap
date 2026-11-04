@@ -87,38 +87,75 @@ inline size_t logStamperApply(LogLineStamper& st, const char* stamp,
   return written;
 }
 
+// `lastFlushFailed`: the flash would not take the last flush. Urgency then
+// stands down to the period, or the failure line each failed write logs
+// would re-arm a flush every FLASH_LOG_URGENT_MIN_MS for as long as the
+// fault lasts.
 inline bool flashLogShouldFlush(size_t used, size_t cap,
                                 uint32_t msSinceFlush, uint32_t intervalMs,
-                                bool urgent = false) {
+                                bool urgent = false,
+                                bool lastFlushFailed = false) {
   if (used == 0) return false;  // never touch the flash for nothing
   if (used >= cap / 2) return true;
-  if (urgent && msSinceFlush >= FLASH_LOG_URGENT_MIN_MS) return true;
+  if (urgent && !lastFlushFailed && msSinceFlush >= FLASH_LOG_URGENT_MIN_MS)
+    return true;
   return msSinceFlush >= intervalMs;
 }
 
 // The log has no severity field: a warning or an error is recognised by the
-// words every failure line on this board carries. A false positive costs
-// one early flush, bounded by FLASH_LOG_URGENT_MIN_MS. Lower-case only; the
-// scan folds ASCII case and stops at len (chunks are not NUL-terminated).
+// words its failure lines carry. A word counts only whole (no letter or digit
+// on either side), so "install" is no "stall" and "failsafe" no "fail". A
+// count is no failure: a word written as a field (`error=`) or right after a
+// number ("0 of 3 failed offers") does not count. A false positive costs one
+// early flush, bounded by FLASH_LOG_URGENT_MIN_MS. The words are written in
+// lower case; the scan folds the text's ASCII case and stops at len (chunks
+// are not NUL-terminated). tests/flash_log_urgency.txt holds the verdict of
+// every log literal that carries one of these words.
 static const char* const FLASH_LOG_URGENT_WORDS[] = {
-    "fail",  "error",  "fatal",  "crash",    "panic",   "watchdog",  "lost",
-    "stall", "abort",  "refuse", "reject",   "jam",     "brownout",  "timeout",
-    "timed out",
+    "fail",    "failed",   "failing", "failure",  "failures", "error",
+    "fatal",   "crash",    "crashed", "crashes",  "panic",    "lost",
+    "stall",   "stalled",  "abort",   "aborted",  "aborting", "jam",
+    "timeout", "timed out",
 };
+
+inline bool flashLogIsWordChar(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9');
+}
+
+inline bool flashLogWordAt(const char* data, size_t len, size_t i,
+                           const char* word, size_t wl) {
+  if (i + wl > len) return false;
+  if (i > 0 && flashLogIsWordChar(data[i - 1])) return false;
+  for (size_t k = 0; k < wl; k++) {
+    char c = data[i + k];
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if (c != word[k]) return false;
+  }
+  return i + wl == len || !flashLogIsWordChar(data[i + wl]);
+}
+
+// A count: `word=`, or the word right after a number that stands alone
+// ("3 failed"; not "0x3 lost", not "row1 failed").
+inline bool flashLogWordIsCount(const char* data, size_t len, size_t i,
+                                size_t wl) {
+  if (i + wl < len && data[i + wl] == '=') return true;
+  if (i < 2 || data[i - 1] != ' ') return false;
+  size_t start = i - 1;
+  while (start > 0 && data[start - 1] >= '0' && data[start - 1] <= '9') start--;
+  if (start == i - 1) return false;  // no digits before the space
+  return start == 0 || !flashLogIsWordChar(data[start - 1]);
+}
 
 inline bool flashLogTextUrgent(const char* data, size_t len) {
   if (data == nullptr) return false;
   for (const char* word : FLASH_LOG_URGENT_WORDS) {
     size_t wl = strlen(word);
     for (size_t i = 0; i + wl <= len; i++) {
-      size_t k = 0;
-      while (k < wl) {
-        char c = data[i + k];
-        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-        if (c != word[k]) break;
-        k++;
+      if (flashLogWordAt(data, len, i, word, wl) &&
+          !flashLogWordIsCount(data, len, i, wl)) {
+        return true;
       }
-      if (k == wl) return true;
     }
   }
   return false;

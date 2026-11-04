@@ -28,6 +28,8 @@ static char* stageBuf = nullptr;      // producers append here
 static char* flushBuf = nullptr;      // netTask's copy-out, written lock-free
 static FlashLogStageState stage;
 static uint32_t lastFlushMs = 0;
+// netTask-private, like lastFlushMs: the flash would not take the last flush.
+static bool lastFlushFailed = false;
 
 const char* flashLogCurrentPath() { return LOG_PATH; }
 const char* flashLogPreviousPath() { return LOG_PREV_PATH; }
@@ -52,8 +54,7 @@ void flashLogInit() {
   stageBuf = (char*)largeAlloc(FLASH_LOG_STAGE_CAP);
   flushBuf = (char*)largeAlloc(FLASH_LOG_STAGE_CAP);
   if (stageMutex == nullptr || stageBuf == nullptr || flushBuf == nullptr) {
-    SerialPrintln(F("FlashLog: allocation failed — flash log disabled"));
-    return;
+    SerialPrintln(F("FlashLog: allocation failed — flash log disabled"));    return;
   }
 
   // Boot marker straight to flash (setup context, nothing races yet): a
@@ -108,7 +109,7 @@ void flashLogTick(bool force) {
   if (force || flashLogShouldFlush(stage.used, FLASH_LOG_STAGE_CAP,
                                    millis() - lastFlushMs,
                                    FLASH_LOG_FLUSH_INTERVAL_MS,
-                                   stage.urgent)) {
+                                   stage.urgent, lastFlushFailed)) {
     len = stage.used;
     droppedNow = stage.dropped;
     memcpy(flushBuf, stageBuf, len);
@@ -123,7 +124,13 @@ void flashLogTick(bool force) {
   // #504: netTask is the only caller; its loop re-marks on the next pass.
   crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_FLASH_WRITE);
   File f = LittleFS.open(LOG_PATH, FILE_APPEND, true);
-  if (!f) return;  // staged data already consumed; next lines still flow
+  if (!f) {
+    // Staged data already consumed; next lines still flow. The period
+    // restarts so a failing partition is tried once a period, not each pass.
+    lastFlushFailed = true;
+    lastFlushMs = millis();
+    return;
+  }
   // Day boundary marker (netTask-private state, no lock needed). Local
   // date via the configTzTime'd TZ; unsynced clock (pre-NTP) writes none.
   static uint32_t lastMarkedDay = 0;
@@ -140,7 +147,8 @@ void flashLogTick(bool force) {
              (nowDay / 100) % 100, nowDay % 100);
     lastMarkedDay = nowDay;
   }
-  if (len > 0) f.write((const uint8_t*)flushBuf, len);
+  size_t written = len > 0 ? f.write((const uint8_t*)flushBuf, len) : 0;
+  lastFlushFailed = written != len;
   if (droppedNow > 0) {
     f.printf("\n[flashlog: %lu bytes dropped]\n", (unsigned long)droppedNow);
   }
