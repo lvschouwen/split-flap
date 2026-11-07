@@ -10,18 +10,25 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / ".claude" / "hooks" / "guard-bench.sh"
 
-pytestmark = pytest.mark.skipif(shutil.which("jq") is None, reason="the guard needs jq")
+
+def test_jq_is_installed():
+    # The guard fails closed for agents without jq; a skipped suite would hide that.
+    assert shutil.which("jq"), "guard-bench.sh needs jq"
 
 
-def decision(command, *, agent, cwd=ROOT):
-    payload = json.dumps({"tool_input": {"command": command}, "cwd": str(cwd)})
+def run_guard(payload, *, agent, path="/usr/bin:/bin"):
     args = ["bash", str(GUARD)] + (["--agent"] if agent else [])
     out = subprocess.run(args, input=payload, capture_output=True, text=True,
-                         env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(ROOT)},
+                         env={"PATH": path, "CLAUDE_PROJECT_DIR": str(ROOT)},
                          check=True).stdout.strip()
     if not out:
         return "allow"
     return json.loads(out)["hookSpecificOutput"]["permissionDecision"]
+
+
+def decision(command, *, agent, cwd=ROOT):
+    payload = json.dumps({"tool_input": {"command": command}, "cwd": str(cwd)})
+    return run_guard(payload, agent=agent)
 
 
 @pytest.mark.parametrize("command", [
@@ -41,6 +48,14 @@ def decision(command, *, agent, cwd=ROOT):
     "curl -d a=1 http://board/x",
     "curl --data-binary @f http://board/x",
     "curl -F file=@a.bin http://board/firmware",
+    "curl -sd a=1 http://board/x",
+    "curl -sXPOST http://board/x",
+    "curl --json '{}' http://board/x",
+    "platformio run -t upload",
+    "pio run --target=upload",
+    "wget --post-data=a http://board/x",
+    "http POST board/x a=1",
+    "python3 -c 'import requests; requests.post(\"http://board\")'",
 ])
 def test_agent_bench_commands_are_denied(command):
     assert decision(command, agent=True) == "deny"
@@ -53,6 +68,8 @@ def test_agent_bench_commands_are_denied(command):
     "curl -s https://example.com/doc",
     "esptool image-info a.bin",
     "git -C .claude/worktrees/wt-1 commit -m x",
+    "curl -sSLf https://example.com/doc",
+    "curl -o out.html https://example.com",
 ])
 def test_agent_build_commands_pass(command):
     assert decision(command, agent=True) == "allow"
@@ -67,6 +84,10 @@ def test_main_session_keeps_the_bench():
     "git switch other",
     "git reset --hard HEAD~1",
     "git status && git reset --soft HEAD~1",
+    "git reset --hard  # /.claude/worktrees/",
+    "git -c core.x=1 switch other",
+    f"git -C {ROOT} reset --hard",
+    "git -C .claude/worktrees/wt-1 log && git reset --hard",
 ])
 def test_branch_moves_in_the_main_checkout_ask(command):
     assert decision(command, agent=False) == "ask"
@@ -76,3 +97,23 @@ def test_branch_moves_in_the_main_checkout_ask(command):
 def test_branch_moves_in_a_slot_pass():
     assert decision("git -C /x/.claude/worktrees/wt-1 reset --hard", agent=True) == "allow"
     assert decision("git status", agent=False) == "allow"
+
+
+def test_slot_in_the_pool_is_exempt():
+    slot = ROOT / ".claude" / "worktrees" / "wt-1"
+    assert decision(f"git -C {slot} reset --hard", agent=False) == "allow"
+
+
+def test_agent_fails_closed_without_jq(tmp_path):
+    (tmp_path / "bash").symlink_to(shutil.which("bash"))
+    for tool in ("cat", "git", "grep", "sed", "tail", "printf"):
+        if shutil.which(tool):
+            (tmp_path / tool).symlink_to(shutil.which(tool))
+    payload = json.dumps({"tool_input": {"command": "pio run"}, "cwd": str(ROOT)})
+    assert run_guard(payload, agent=True, path=str(tmp_path)) == "deny"
+    assert run_guard(payload, agent=False, path=str(tmp_path)) == "allow"
+
+
+def test_agent_fails_closed_on_unparsable_input():
+    assert run_guard("not json", agent=True) == "deny"
+    assert run_guard("not json", agent=False) == "allow"
