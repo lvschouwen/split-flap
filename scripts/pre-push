@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Pre-push gate (#651): scripts/check.sh over the trees the pushed range
+# touches. Installed by scripts/install-hooks.sh. Skip once with
+# `SPLITFLAP_SKIP_CHECK=1 git push` (say why in the commit or issue).
+set -euo pipefail
+[[ "${SPLITFLAP_SKIP_CHECK:-0}" == 1 ]] && { echo "pre-push: check skipped"; exit 0; }
+
+ROOT="$(git rev-parse --show-toplevel)"
+zero=0000000000000000000000000000000000000000
+base=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [[ "$local_sha" == "$zero" ]] && continue          # branch deletion
+  if [[ "$remote_sha" == "$zero" ]]; then
+    base="$(git merge-base "$local_sha" origin/master 2>/dev/null || echo origin/master)"
+  else
+    base="$remote_sha"
+  fi
+done
+[[ -n "$base" ]] || exit 0
+exec "$ROOT/scripts/check.sh" --touched "$base"
