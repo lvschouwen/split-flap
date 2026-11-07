@@ -53,20 +53,27 @@ main_checkout="${CLAUDE_PROJECT_DIR:-}"
 [ -n "$main_checkout" ] || exit 0
 pool="$main_checkout/.claude/worktrees/"
 top=$(git -C "${cwd:-.}" rev-parse --show-toplevel 2>/dev/null || true)
-gopt='((-C|-c)[[:space:]]+[^[:space:]]+[[:space:]]+)*'
-move="(^|[;&|(][[:space:]]*)git[[:space:]]+$gopt(checkout[[:space:]]+-[bB]([[:space:]]|$)|switch([[:space:]]|$)|reset([[:space:]]|$))"
-while IFS= read -r inv; do
-  [ -n "$inv" ] || continue
-  dir=$(printf '%s' "$inv" | grep -oE -- '-C[[:space:]]+[^[:space:]]+' | tail -n 1 | sed -E 's/^-C[[:space:]]+//')
+# Fails closed: a move whose target is unknown asks. Matching is per shell
+# segment and deliberately loose (`git log --grep reset` asks too): only an
+# explicit -C that resolves into the pool, with nothing redirecting git, skips.
+move='(^|[[:space:](])git([[:space:]].*)?[[:space:]](switch|reset)([[:space:]]|$)|(^|[[:space:](])git([[:space:]].*)?[[:space:]]checkout[[:space:]]+-[bB]([[:space:]]|$)'
+redirect='(^|[[:space:];&|(])(cd|pushd)[[:space:]]|GIT_DIR=|GIT_WORK_TREE=|--git-dir|--work-tree'
+ask_main() {
+  decide ask "git checkout -b/-B, switch or reset whose target is the MAIN checkout or unclear: agents work in .claude/worktrees/* via git -C, main only merges ff-only. Confirm if deliberate."
+}
+redirected=0
+printf '%s' "$cmd" | grep -qE -- "$redirect" && redirected=1
+while IFS= read -r seg || [ -n "$seg" ]; do
+  printf '%s' "$seg" | grep -qE -- "$move" || continue
+  [ "$redirected" = 1 ] && ask_main
+  dir=$(printf '%s' "$seg" | grep -oE -- '(^|[[:space:]])-C[[:space:]]+[^[:space:]]+' | tail -n 1 | sed -E 's/^[[:space:]]*-C[[:space:]]+//')
   if [ -z "$dir" ]; then
     target="$top"
   else
     case "$dir" in /*) ;; *) dir="${cwd:-.}/$dir" ;; esac
-    target=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$dir")
+    target=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || ask_main
   fi
   case "$target/" in "$pool"*) continue ;; esac
-  if [ "$target" = "$main_checkout" ] || [ -z "$target" ]; then
-    decide ask "git checkout -b/-B, switch or reset in the MAIN checkout: agents work in .claude/worktrees/*, main only merges ff-only. Confirm if deliberate."
-  fi
-done < <(printf '%s' "$cmd" | grep -oE "$move")
+  if [ -z "$target" ] || [ "$target" = "$main_checkout" ]; then ask_main; fi
+done < <(printf '%s' "$cmd" | sed -E 's/(&&|\|\||[;&|])/\n/g')
 exit 0
