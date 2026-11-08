@@ -56,6 +56,23 @@ start and the bootloader keeps the unit at the third reset, for longer than
 `SF_PIN_TIMEOUT_MS`; the program counter never leaves the hold code. The whole
 image, as the control, starts and stays up. Prints `STOPPED FLASH PROOF PASSED`.
 
+## Unit behaviour proofs (#502, #499)
+
+Single-file simavr harnesses that run the real unit image under the units'
+bootloader; each one's header comment states what must hold and its usage
+(data addresses come from `avr-nm` of the unit ELF).
+
+- `home_fail_test.c`: the hall line never fires. The unit seeks by itself
+  after ~30 s, gives up each seek after three revolutions with `homed` false
+  and the letter untouched, never steps between seeks, and spaces the seeks
+  30 s, 60 s, 120 s … capped at 16 min.
+- `pin_test.c`: a master that pins the unit in twiboot and then goes silent
+  cannot hold it there; the program starts 30 s (`SF_PIN_TIMEOUT_MS`) after
+  the last command, or after ~1 s with no master at all.
+- `speed_clamp_test.c`: a letter command with speed byte 255 leaves
+  `stepperSpeed` at 12 and no step stretch faster than 12 RPM (the homing
+  move first runs at `HOMING_RPM` 10).
+
 ## Not modelled
 
 - SPM duration: simavr executes an erase/write atomically. A real power loss
