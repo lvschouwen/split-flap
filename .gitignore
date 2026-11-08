@@ -73,3 +73,9 @@ firmware/v2/*/.cache/
 
 # graphify knowledge graph: local only, AST-only (#643)
 graphify-out/
+
+# pioarduino can generate these in the S3 project dirs (#666); Bootloader keeps its own as sources.
+firmware/v2/Master/CMakeLists.txt
+firmware/v2/Master/dependencies.lock
+firmware/v2/Rescue/CMakeLists.txt
+firmware/v2/Rescue/dependencies.lock

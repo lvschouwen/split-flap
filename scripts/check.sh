@@ -10,8 +10,10 @@
 #                                      working tree touches (base: origin/master)
 #
 # Python suites run in their own venv with the CI pins (the link schema tests
-# skip without grpcio-tools). PlatformIO shares one object cache across every
-# checkout and worktree. Builds of different ESP platforms share
+# skip without grpcio-tools). No PlatformIO build cache is shared between
+# checkouts (#666: SCons keeps one .sconsign database in it, and parallel slots
+# rename each other's temp file away); each slot's warm .pio covers rebuilds.
+# Builds of different ESP platforms share
 # ~/.platformio/packages/tool-esptoolpy and clobber it when they overlap, so the
 # ESP8266 build takes an exclusive lock and the ESP32 builds a shared one.
 set -euo pipefail
@@ -19,13 +21,13 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 V2="$ROOT/firmware/v2"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/split-flap"
-export PLATFORMIO_BUILD_CACHE_DIR="${PLATFORMIO_BUILD_CACHE_DIR:-$CACHE/pio-build-cache}"
+unset PLATFORMIO_BUILD_CACHE_DIR
 VENV="${SPLITFLAP_CHECK_VENV:-$CACHE/check-venv}"
 LOCK="$CACHE/esptoolpy.lock"
 PY_PINS=(pytest==9.2.0 pyserial==3.5 esptool==5.4.0 grpcio-tools==1.85.1 protobuf==7.36.2 lizard==1.25.1)
 ALL_TREES=(unit master rescue follower py)
 
-mkdir -p "$CACHE" "$PLATFORMIO_BUILD_CACHE_DIR"
+mkdir -p "$CACHE"
 
 die() { echo "check: $*" >&2; exit 2; }
 
