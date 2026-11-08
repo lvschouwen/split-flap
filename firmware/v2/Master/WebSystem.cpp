@@ -41,6 +41,134 @@ static std::atomic<bool> coredumpErasePending{false};
 // silent 0xFF tail read from under the ~1 s 64 KB erase.
 static std::atomic<int> coredumpRawStreamsActive{0};
 
+// The /coredump/summary document of a parsed dump.
+static String coredumpSummaryJson(const esp_core_dump_summary_t* summary) {
+  char task[17];
+  memcpy(task, summary->exc_task, 16);
+  task[16] = '\0';
+  // #416: `rev` is the RUNNING image's compile-time GIT_REV — it says
+  // nothing about which build crashed (a fossil dump survives every OTA).
+  // The truncated ELF SHA pair is what actually dates a dump: `stale`
+  // is only claimed when the dump carries a sha and it differs.
+  char dumpSha[APP_ELF_SHA256_SZ];
+  memcpy(dumpSha, summary->app_elf_sha256, sizeof(dumpSha));
+  dumpSha[sizeof(dumpSha) - 1] = '\0';
+  char runSha[APP_ELF_SHA256_SZ];
+  esp_app_get_elf_sha256(runSha, sizeof(runSha));
+  bool stale =
+      dumpSha[0] != '\0' && strncmp(dumpSha, runSha, strlen(dumpSha)) != 0;
+  char hex[11];
+  String out;
+  out.reserve(768);
+  out += F("{\"present\":true,\"rev\":\"" GIT_REV "\",\"elfSha256\":");
+  appendJsonString(out, String(dumpSha));
+  out += F(",\"runningElfSha256\":");
+  appendJsonString(out, String(runSha));
+  out += F(",\"stale\":");
+  out += stale ? F("true") : F("false");
+  // #630: what the panic handler wrote — for a task watchdog reset, the
+  // task that stopped feeding (the summary struct holds no such field).
+  char reason[200];
+  if (esp_core_dump_get_panic_reason(reason, sizeof(reason)) != ESP_OK) reason[0] = '\0';
+  for (char* p = reason; *p; p++)
+    if (*p == '\n' || *p == '\r') *p = ' ';
+  out += F(",\"panicReason\":");
+  appendJsonString(out, String(reason));
+  out += F(",\"task\":");
+  appendJsonString(out, String(task));
+  snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->exc_pc);
+  out += F(",\"pc\":\"");
+  out += hex;
+  out += F("\",\"excCause\":");
+  out += (unsigned)summary->ex_info.exc_cause;
+  snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->ex_info.exc_vaddr);
+  out += F(",\"excVaddr\":\"");
+  out += hex;
+  out += F("\",\"coreDumpVersion\":");
+  out += (unsigned)summary->core_dump_version;
+  out += F(",\"backtraceCorrupted\":");
+  out += summary->exc_bt_info.corrupted ? F("true") : F("false");
+  out += F(",\"backtrace\":[");
+  uint32_t depth = summary->exc_bt_info.depth;
+  if (depth > 16) depth = 16;
+  for (uint32_t i = 0; i < depth; i++) {
+    if (i) out += ',';
+    snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->exc_bt_info.bt[i]);
+    out += '"';
+    out += hex;
+    out += '"';
+  }
+  out += F("]}");
+  return out;
+}
+
+// GET /coredump/summary.
+static void handleCoredumpSummary(AsyncWebServerRequest* request) {
+  if (esp_core_dump_image_check() != ESP_OK) {
+    request->send(404, "application/json", F("{\"present\":false}"));
+    return;
+  }
+  // Zero-init: if a partially-corrupted-but-parseable dump leaves a field
+  // untouched, we echo a deterministic 0, not stale heap bytes.
+  auto* summary =
+      (esp_core_dump_summary_t*)calloc(1, sizeof(esp_core_dump_summary_t));
+  if (summary == nullptr) {
+    request->send(503, "application/json", F("{\"error\":\"oom\"}"));
+    return;
+  }
+  if (esp_core_dump_get_summary(summary) != ESP_OK) {
+    free(summary);
+    request->send(500, "application/json",
+                  F("{\"present\":true,\"error\":\"summary-failed\"}"));
+    return;
+  }
+  String out = coredumpSummaryJson(summary);
+  free(summary);
+  request->send(200, "application/json", out);
+}
+
+// GET /coredump/raw.
+static void handleCoredumpRaw(AsyncWebServerRequest* request) {
+  if (esp_core_dump_image_check() != ESP_OK) {
+    request->send(404, "text/plain", F("no coredump"));
+    return;
+  }
+  size_t addr = 0, size = 0;
+  if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) {
+    request->send(500, "text/plain", F("coredump image unavailable"));
+    return;
+  }
+  const esp_partition_t* part = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, nullptr);
+  if (part == nullptr) {
+    request->send(500, "text/plain", F("no coredump partition"));
+    return;
+  }
+  // image_get() returns an ABSOLUTE flash address — translate to a
+  // partition-relative offset for esp_partition_read.
+  size_t offset = addr - part->address;
+  AsyncWebServerResponse* response = request->beginChunkedResponse(
+      "application/octet-stream",
+      [part, offset, size](uint8_t* buffer, size_t maxLen,
+                           size_t index) -> size_t {
+        if (index >= size) return 0;
+        size_t remaining = size - index;
+        size_t toRead = remaining < maxLen ? remaining : maxLen;
+        if (esp_partition_read(part, offset + index, buffer, toRead) !=
+            ESP_OK) {
+          return 0;  // abort the stream
+        }
+        return toRead;
+      });
+  response->addHeader("Content-Disposition",
+                      "attachment; filename=\"coredump-" GIT_REV ".elf\"");
+  coredumpRawStreamsActive.fetch_add(1, std::memory_order_relaxed);
+  request->onDisconnect([]() {
+    coredumpRawStreamsActive.fetch_sub(1, std::memory_order_relaxed);
+  });
+  request->send(response);
+}
+
 void webSystemRegister(AsyncWebServer& server) {
   server.on("/health", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send(200, "text/plain", "Healthy");
@@ -76,129 +204,13 @@ void webSystemRegister(AsyncWebServer& server) {
   // exposure (the surface stays CSRF/CORS-closed like every other route).
   // The partition is written by the panic handler and erased only via the
   // staged /coredump/erase drain below (netTask, like every flash write).
-  server.on("/coredump/summary", HTTP_GET, [](AsyncWebServerRequest* request) {
-    if (esp_core_dump_image_check() != ESP_OK) {
-      request->send(404, "application/json", F("{\"present\":false}"));
-      return;
-    }
-    // Zero-init: if a partially-corrupted-but-parseable dump leaves a field
-    // untouched, we echo a deterministic 0, not stale heap bytes.
-    auto* summary =
-        (esp_core_dump_summary_t*)calloc(1, sizeof(esp_core_dump_summary_t));
-    if (summary == nullptr) {
-      request->send(503, "application/json", F("{\"error\":\"oom\"}"));
-      return;
-    }
-    if (esp_core_dump_get_summary(summary) != ESP_OK) {
-      free(summary);
-      request->send(500, "application/json",
-                    F("{\"present\":true,\"error\":\"summary-failed\"}"));
-      return;
-    }
-    char task[17];
-    memcpy(task, summary->exc_task, 16);
-    task[16] = '\0';
-    // #416: `rev` is the RUNNING image's compile-time GIT_REV — it says
-    // nothing about which build crashed (a fossil dump survives every OTA).
-    // The truncated ELF SHA pair is what actually dates a dump: `stale`
-    // is only claimed when the dump carries a sha and it differs.
-    char dumpSha[APP_ELF_SHA256_SZ];
-    memcpy(dumpSha, summary->app_elf_sha256, sizeof(dumpSha));
-    dumpSha[sizeof(dumpSha) - 1] = '\0';
-    char runSha[APP_ELF_SHA256_SZ];
-    esp_app_get_elf_sha256(runSha, sizeof(runSha));
-    bool stale =
-        dumpSha[0] != '\0' && strncmp(dumpSha, runSha, strlen(dumpSha)) != 0;
-    char hex[11];
-    String out;
-    out.reserve(768);
-    out += F("{\"present\":true,\"rev\":\"" GIT_REV "\",\"elfSha256\":");
-    appendJsonString(out, String(dumpSha));
-    out += F(",\"runningElfSha256\":");
-    appendJsonString(out, String(runSha));
-    out += F(",\"stale\":");
-    out += stale ? F("true") : F("false");
-    // #630: what the panic handler wrote — for a task watchdog reset, the
-    // task that stopped feeding (the summary struct holds no such field).
-    char reason[200];
-    if (esp_core_dump_get_panic_reason(reason, sizeof(reason)) != ESP_OK) reason[0] = '\0';
-    for (char* p = reason; *p; p++)
-      if (*p == '\n' || *p == '\r') *p = ' ';
-    out += F(",\"panicReason\":");
-    appendJsonString(out, String(reason));
-    out += F(",\"task\":");
-    appendJsonString(out, String(task));
-    snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->exc_pc);
-    out += F(",\"pc\":\"");
-    out += hex;
-    out += F("\",\"excCause\":");
-    out += (unsigned)summary->ex_info.exc_cause;
-    snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->ex_info.exc_vaddr);
-    out += F(",\"excVaddr\":\"");
-    out += hex;
-    out += F("\",\"coreDumpVersion\":");
-    out += (unsigned)summary->core_dump_version;
-    out += F(",\"backtraceCorrupted\":");
-    out += summary->exc_bt_info.corrupted ? F("true") : F("false");
-    out += F(",\"backtrace\":[");
-    uint32_t depth = summary->exc_bt_info.depth;
-    if (depth > 16) depth = 16;
-    for (uint32_t i = 0; i < depth; i++) {
-      if (i) out += ',';
-      snprintf(hex, sizeof(hex), "0x%08x", (unsigned)summary->exc_bt_info.bt[i]);
-      out += '"';
-      out += hex;
-      out += '"';
-    }
-    out += F("]}");
-    free(summary);
-    request->send(200, "application/json", out);
-  });
+  server.on("/coredump/summary", HTTP_GET, handleCoredumpSummary);
 
   // Raw ELF coredump for offline `esp-coredump info_corefile` — the fallback
   // when a summary backtrace reads corrupted. Streamed straight off the
   // coredump partition (flash READ only, async-safe). Always registered
   // since #431 (see the posture note above).
-  server.on("/coredump/raw", HTTP_GET, [](AsyncWebServerRequest* request) {
-    if (esp_core_dump_image_check() != ESP_OK) {
-      request->send(404, "text/plain", F("no coredump"));
-      return;
-    }
-    size_t addr = 0, size = 0;
-    if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) {
-      request->send(500, "text/plain", F("coredump image unavailable"));
-      return;
-    }
-    const esp_partition_t* part = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, nullptr);
-    if (part == nullptr) {
-      request->send(500, "text/plain", F("no coredump partition"));
-      return;
-    }
-    // image_get() returns an ABSOLUTE flash address — translate to a
-    // partition-relative offset for esp_partition_read.
-    size_t offset = addr - part->address;
-    AsyncWebServerResponse* response = request->beginChunkedResponse(
-        "application/octet-stream",
-        [part, offset, size](uint8_t* buffer, size_t maxLen,
-                             size_t index) -> size_t {
-          if (index >= size) return 0;
-          size_t remaining = size - index;
-          size_t toRead = remaining < maxLen ? remaining : maxLen;
-          if (esp_partition_read(part, offset + index, buffer, toRead) !=
-              ESP_OK) {
-            return 0;  // abort the stream
-          }
-          return toRead;
-        });
-    response->addHeader("Content-Disposition",
-                        "attachment; filename=\"coredump-" GIT_REV ".elf\"");
-    coredumpRawStreamsActive.fetch_add(1, std::memory_order_relaxed);
-    request->onDisconnect([]() {
-      coredumpRawStreamsActive.fetch_sub(1, std::memory_order_relaxed);
-    });
-    request->send(response);
-  });
+  server.on("/coredump/raw", HTTP_GET, handleCoredumpRaw);
 
   // #431: purge the partition so the NEXT dump is unambiguous. Before this
   // route a dump could only ever be replaced by the next panic, and the

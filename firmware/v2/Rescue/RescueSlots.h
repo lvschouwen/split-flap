@@ -10,59 +10,78 @@
 
 #include <stdint.h>
 
+// The pieces of parseAppBuildStamp. Each returns -1 (or false) for a field
+// that does not parse; the caller turns that into stamp 0.
+
+// True when s holds exactly n characters.
+static inline bool buildStampHasLength(const char* s, int n) {
+  for (int i = 0; i < n; i++) {
+    if (s[i] == '\0') return false;
+  }
+  return s[n] == '\0';
+}
+
+// The n digits at s as a number, -1 when one is not a digit.
+static inline int buildStampDigits(const char* s, int n) {
+  int v = 0;
+  for (int i = 0; i < n; i++) {
+    if (s[i] < '0' || s[i] > '9') return -1;
+    v = v * 10 + (s[i] - '0');
+  }
+  return v;
+}
+
+// "Mmm" as 1..12, -1 when it names no month.
+static inline int buildStampMonth(const char* date) {
+  static const char* MONTHS[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  for (int m = 0; m < 12; m++) {
+    if (date[0] == MONTHS[m][0] && date[1] == MONTHS[m][1] &&
+        date[2] == MONTHS[m][2]) {
+      return m + 1;
+    }
+  }
+  return -1;
+}
+
+// The "dd" at date[4..5], 1..31; __DATE__ pads single digits with a space
+// ("Jul  1 2026"). -1 when it does not parse.
+static inline int buildStampDay(const char* date) {
+  int day = buildStampDigits(date + 5, 1);
+  if (day < 0) return -1;
+  if (date[4] != ' ') {
+    int tens = buildStampDigits(date + 4, 1);
+    if (tens < 0) return -1;
+    day += tens * 10;
+  }
+  return (day < 1 || day > 31) ? -1 : day;
+}
+
+// "hh:mm:ss" (exactly 8 chars) into hms; false when it does not parse.
+static inline bool buildStampTime(const char* time, int hms[3]) {
+  if (!buildStampHasLength(time, 8) || time[2] != ':' || time[5] != ':') return false;
+  for (int f = 0; f < 3; f++) {
+    hms[f] = buildStampDigits(time + f * 3, 2);
+    if (hms[f] < 0) return false;
+  }
+  return hms[0] <= 23 && hms[1] <= 59 && hms[2] <= 59;
+}
+
 // Encodes __DATE__ ("Mmm dd yyyy", day space-padded) + __TIME__ ("hh:mm:ss")
 // into one comparable integer. Returns 0 for anything unparseable — callers
 // treat 0 as "no ordering signal", never as an error.
 static inline uint64_t parseAppBuildStamp(const char* date, const char* time) {
   if (date == nullptr || time == nullptr) return 0;
-
   // "Mmm dd yyyy" — exactly 11 chars.
-  for (int i = 0; i < 11; i++) {
-    if (date[i] == '\0') return 0;
-  }
-  if (date[11] != '\0') return 0;
-
-  static const char* MONTHS[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-  int month = 0;  // 1-based when found
-  for (int m = 0; m < 12; m++) {
-    if (date[0] == MONTHS[m][0] && date[1] == MONTHS[m][1] &&
-        date[2] == MONTHS[m][2]) {
-      month = m + 1;
-      break;
-    }
-  }
-  if (month == 0 || date[3] != ' ') return 0;
-
-  // Day: __DATE__ pads single digits with a space ("Jul  1 2026").
-  if (date[5] < '0' || date[5] > '9') return 0;
-  int day = date[5] - '0';
-  if (date[4] != ' ') {
-    if (date[4] < '0' || date[4] > '9') return 0;
-    day += (date[4] - '0') * 10;
-  }
-  if (day < 1 || day > 31 || date[6] != ' ') return 0;
-
-  int year = 0;
-  for (int i = 7; i < 11; i++) {
-    if (date[i] < '0' || date[i] > '9') return 0;
-    year = year * 10 + (date[i] - '0');
-  }
-
-  // "hh:mm:ss" — exactly 8 chars.
-  for (int i = 0; i < 8; i++) {
-    if (time[i] == '\0') return 0;
-  }
-  if (time[8] != '\0' || time[2] != ':' || time[5] != ':') return 0;
+  if (!buildStampHasLength(date, 11)) return 0;
+  int month = buildStampMonth(date);
+  if (month < 0 || date[3] != ' ') return 0;
+  int day = buildStampDay(date);
+  if (day < 0 || date[6] != ' ') return 0;
+  int year = buildStampDigits(date + 7, 4);
+  if (year < 0) return 0;
   int hms[3] = {0, 0, 0};
-  for (int f = 0; f < 3; f++) {
-    for (int i = 0; i < 2; i++) {
-      char c = time[f * 3 + i];
-      if (c < '0' || c > '9') return 0;
-      hms[f] = hms[f] * 10 + (c - '0');
-    }
-  }
-  if (hms[0] > 23 || hms[1] > 59 || hms[2] > 59) return 0;
+  if (!buildStampTime(time, hms)) return 0;
 
   uint64_t stamp = (uint64_t)year * 12 + (month - 1);
   stamp = stamp * 32 + day;

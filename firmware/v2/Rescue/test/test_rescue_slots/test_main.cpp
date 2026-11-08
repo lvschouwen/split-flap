@@ -4,6 +4,7 @@
 // turn that into "which slot do we boot back into": the newest valid one.
 
 #include <ArduinoFake.h>
+#include <stdio.h>
 #include <unity.h>
 
 #include "../../RescueSlots.h"
@@ -53,6 +54,60 @@ static void test_stamp_rejects_short_or_garbage() {
   TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul 10 2026", "1735:42"));
   TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul xx 2026", "17:35:42"));
   TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(nullptr, nullptr));
+}
+
+// The exact encoding and every field's bounds, pinned so a restructured
+// parser keeps the same values (the exit choice compares them).
+static uint64_t stampOf(int year, int month, int day, int h, int m, int sec) {
+  return (((((uint64_t)year * 12 + (month - 1)) * 32 + day) * 24 + h) * 60 + m) * 60 + sec;
+}
+
+static void test_stamp_exact_encoding() {
+  TEST_ASSERT_EQUAL_UINT64(stampOf(2026, 7, 10, 17, 35, 42),
+                           parseAppBuildStamp("Jul 10 2026", "17:35:42"));
+  TEST_ASSERT_EQUAL_UINT64(stampOf(2026, 7, 1, 12, 0, 0),
+                           parseAppBuildStamp("Jul  1 2026", "12:00:00"));
+  TEST_ASSERT_EQUAL_UINT64(stampOf(1999, 12, 31, 23, 59, 59),
+                           parseAppBuildStamp("Dec 31 1999", "23:59:59"));
+  TEST_ASSERT_EQUAL_UINT64(stampOf(2030, 1, 9, 0, 0, 0),
+                           parseAppBuildStamp("Jan 09 2030", "00:00:00"));
+}
+
+static void test_stamp_every_month_parses() {
+  static const char* names[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  for (int m = 0; m < 12; m++) {
+    char date[12];
+    snprintf(date, sizeof(date), "%s 15 2026", names[m]);
+    TEST_ASSERT_EQUAL_UINT64(stampOf(2026, m + 1, 15, 8, 0, 0),
+                             parseAppBuildStamp(date, "08:00:00"));
+  }
+}
+
+static void test_stamp_rejects_each_bad_field() {
+  const char* t = "17:35:42";
+  const char* d = "Jul 10 2026";
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul 10 20266", t));  // too long
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("jul 10 2026", t));   // case
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul-10 2026", t));   // separator
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul 10-2026", t));
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul  0 2026", t));   // day 0
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul 00 2026", t));
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul 32 2026", t));   // day 32
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul x1 2026", t));
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul 1  2026", t));
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp("Jul 10 20x6", t));
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(d, "24:00:00"));      // hour
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(d, "23:60:00"));      // minute
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(d, "23:59:60"));      // second
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(d, "17:35:42 "));     // too long
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(d, "17:35"));         // too short
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(d, "17.35:42"));
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(d, "17:35.42"));
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(d, "1a:35:42"));
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(d, "17:35:4z"));
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(d, nullptr));
+  TEST_ASSERT_EQUAL_UINT64(0, parseAppBuildStamp(nullptr, t));
 }
 
 // --- pickExitSlot -------------------------------------------------------------
@@ -136,6 +191,9 @@ int main(int, char**) {
   RUN_TEST(test_stamp_equal_inputs_equal);
   RUN_TEST(test_stamp_rejects_bad_month);
   RUN_TEST(test_stamp_rejects_short_or_garbage);
+  RUN_TEST(test_stamp_exact_encoding);
+  RUN_TEST(test_stamp_every_month_parses);
+  RUN_TEST(test_stamp_rejects_each_bad_field);
   RUN_TEST(test_pick_only_slot0_valid);
   RUN_TEST(test_pick_only_slot1_valid);
   RUN_TEST(test_pick_none_valid);

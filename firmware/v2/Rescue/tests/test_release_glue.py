@@ -20,9 +20,19 @@ def _body(code, start):
     return code[at:code.index("\n  });", at)]
 
 
+def _function(code, name):
+    """The body of the file's static function `name`, to its closing brace."""
+    at = re.search(r"\nstatic \w+ " + name + r"\(", code).start()
+    return code[at:code.index("\n}\n", at)]
+
+
 def test_an_upload_is_refused_while_a_release_is_installed():
     code = _code("RescueWeb.cpp")
-    upload = code[code.index('"/firmware/master", HTTP_POST'):code.index('"/rescue/exit"')]
+    route = code[code.index('"/firmware/master", HTTP_POST'):code.index('"/rescue/exit"')]
+    assert "handleMasterOtaUpload" in route
+    upload = _function(code, "handleMasterOtaUpload")
+    assert "beginMasterOtaUpload(request)" in upload
+    upload = _function(code, "beginMasterOtaUpload")
     gate = upload.index("rescueReleaseInstalling()")
     # Before anything is begun for the upload.
     assert gate < upload.index("Update.begin(")

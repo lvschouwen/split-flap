@@ -255,6 +255,232 @@ void webEndpointsStart(AsyncWebServer& server) {
   SerialPrintln(F("Web server started"));
 }
 
+// What a staged post asks to show, read off it before applySettingsPost
+// resets the post.
+struct PostedText {
+  String messageText;
+  bool messageProvided = false;
+  String transientText;
+  long transientDwell = 0;
+  bool transientProvided = false;
+  bool transientHold = false;
+  int textPriority = 0;
+  bool modeProvided = false;
+  long resultDwell = 0;  // #622: the dwell a text result reports
+};
+
+static PostedText capturePostedText() {
+  PostedText t;
+  t.messageText = pendingPost.inputText;
+  t.messageProvided = pendingPost.inputTextProvided;
+  // #618: accents become flaps here, once, before the text is retained
+  // or laid out.
+  if (t.messageProvided) t.messageText = transliterateForFlaps(t.messageText);
+  t.transientText = transliterateForFlaps(pendingPost.transientText);
+  t.transientDwell = pendingPost.transientDwell;
+  t.transientProvided = pendingPost.transientTextProvided;
+  t.transientHold = pendingPost.transientHoldProvided && pendingPost.transientHold;  // #616
+  t.textPriority = pendingPost.textPriorityProvided ? (int)pendingPost.textPriority : 0;  // #625
+  t.modeProvided = pendingPost.deviceModeProvided;
+  t.resultDwell = t.transientProvided && !t.transientHold ? t.transientDwell : 0;  // #622
+  return t;
+}
+
+// Applies the settings of the staged post and pushes each changed one to
+// whoever reads it live. True when the time zone changed.
+static bool applyPostedSettings(MasterSettings& settings, SettingsStore& store) {
+  // Settings first, command second: a speed/alignment change riding the
+  // same POST as a message must apply to that message (v1 ordering).
+  String timezoneBefore = settings.timezonePosix;
+  int unitCountBefore = settings.unitCountOverride;
+  bool reflashOnBootBefore = settings.reflashOnBoot;
+  bool quietBefore = settings.quiet;
+  bool wifiPowerSaveBefore = settings.wifiPowerSave;
+  bool releaseCheckBefore = settings.releaseCheck;
+  String releaseChannelBefore = settings.releaseChannel;
+  applySettingsPost(pendingPost, settings, store);
+  if (settings.releaseCheck != releaseCheckBefore ||
+      settings.releaseChannel != releaseChannelBefore) {
+    releaseSetSettings(settings.releaseCheck, settings.releaseChannel);  // #583
+  }
+  const bool timezoneChanged = settings.timezonePosix != timezoneBefore;
+
+  // #289 dummy mode: push a changed override to displayTask and queue a
+  // Probe so the width refolds now instead of at the next bus op.
+  if (settings.unitCountOverride != unitCountBefore) {
+    tasksSetUnitCountOverride(settings.unitCountOverride);
+    displayEnqueue(makeProbeCommand());
+  }
+  // #412: push the brake to displayTask so a mid-session change lands
+  // without a reboot — the gate is only read at boot, but the operator
+  // sets this BEFORE rebooting into the campaign.
+  if (settings.reflashOnBoot != reflashOnBootBefore) {
+    tasksSetReflashOnBoot(settings.reflashOnBoot);
+    wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot, settings.wifiPowerSave);
+  }
+  if (settings.wifiPowerSave != wifiPowerSaveBefore) {  // #609
+    wifiSetPowerSave(settings.wifiPowerSave);
+    wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot, settings.wifiPowerSave);
+  }
+  if (settings.quiet != quietBefore) {
+    tasksSetQuiet(settings.quiet);  // #227
+    SerialPrintln(settings.quiet ? F("quiet: ON (web) — no flap commands")
+                                 : F("quiet: OFF (web)"));
+  }
+  return timezoneChanged;
+}
+
+// Drops the text a quiet wall or a higher-priority text refuses.
+static void dropRefusedText(const MasterSettings& settings, PostedText& t) {
+  const int textPriority = t.textPriority;
+  // #227: content that arrives while quiet is dropped, not queued. A
+  // quiet toggle riding the same POST has been applied above, so "wake
+  // and show this" works in one request.
+  const long resultDwell = t.resultDwell;
+  if (quietBlocksContent(settings.quiet, textPriority >= TEXT_PRIORITY_MAX) &&
+      (t.messageProvided || t.transientProvided)) {
+    SerialPrintln(F("web: text dropped (quiet)"));
+    mqttNoteTextResult(MqttTextResultKind::DroppedQuiet, t.transientProvided ? t.transientText : t.messageText,
+                       textPriority, t.transientHold, resultDwell);
+    t.messageProvided = false;
+    t.transientProvided = false;
+  }
+  // #625: a text under the priority of the one showing is refused. The
+  // handler answered 409 for this already; a text that arrived between
+  // its check and this drain is judged again.
+  if ((t.messageProvided || t.transientProvided) && !mqttNotificationAdmits(textPriority)) {
+    SerialPrintf("web: text refused (priority %d under the one showing)\n", textPriority);
+    mqttNoteTextResult(MqttTextResultKind::Refused, t.transientProvided ? t.transientText : t.messageText,
+                       textPriority, t.transientHold, resultDwell);
+    t.messageProvided = false;
+    t.transientProvided = false;
+  }
+}
+
+// Shows, retains or ignores the posted message.
+static void showPostedMessage(const MasterSettings& settings, const PostedText& t) {
+  const int textPriority = t.textPriority;
+  // v1 parity: a posted message only takes effect in text mode, checked
+  // AFTER any mode field riding the same POST. In clock mode it is
+  // silently ignored — never shown, never retained.
+  if (t.messageProvided && settings.deviceMode == "text") {
+    // Retained in the display domain: ClockPolicy's dedup compares this
+    // against snapshot text, which makeShowTextCommand truncates. A
+    // master with row boards retains untruncated — the grid holds more
+    // than one row's width, and its ticker path never enters that dedup.
+    currentInputText = wallShowActive()
+                           ? t.messageText
+                           : truncateForDisplay(t.messageText);
+    // Reflash gate re-check at drain time (#205, Codex review): the
+    // handler's 409 ran when the POST arrived; a job that started in
+    // between must not get a ShowText queued behind it. Dropping is
+    // self-healing — the retained text above is what the 1 Hz mode
+    // ticker re-shows once the job ends.
+    if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
+      SerialPrintln("Message retained, not queued (reflash): " +
+                    t.messageText);
+      mqttNoteTextResult(MqttTextResultKind::DroppedBusy, t.messageText, textPriority);
+    } else if (wallShowActive()) {
+      // A wall with row boards (#566): the logical text goes to the wall.
+      wallShowText(t.messageText, settings.alignment, settings.flapSpeed);
+      SerialPrintln("Message routed to the wall: " + t.messageText);
+      mqttNoteTextResult(MqttTextResultKind::Shown, t.messageText, textPriority);
+    } else if (displayEnqueue(makeShowTextCommand(
+                   t.messageText, settings.alignment,
+                   settings.flapSpeed))) {
+      SerialPrintln("Message queued for display: " + t.messageText);
+      mqttNoteTextResult(MqttTextResultKind::Shown, t.messageText, textPriority);
+    } else {
+      // The handler's 503 pre-check makes this a wedged-queue signal,
+      // not a normal path.
+      SerialPrintln("Display queue full at drain — message DROPPED: " +
+                    t.messageText);
+      mqttNoteTextResult(MqttTextResultKind::DroppedBusy, t.messageText, textPriority);
+    }
+  } else if (t.messageProvided) {
+    SerialPrintln("Message ignored (device in clock mode, v1 parity): " +
+                  t.messageText);
+  }
+}
+
+// Shows the posted transient text for its dwell.
+static void showPostedTransient(const MasterSettings& settings, const PostedText& t) {
+  const int textPriority = t.textPriority;
+  const long resultDwell = t.resultDwell;
+  // Transient text (#219): a text shown for a time shows regardless of
+  // mode and reverts via the overlay dwell — nothing persists, a clock
+  // display stays a clock display. With row boards it goes to every row,
+  // and the clock ticker, held back for the dwell, hands the wall its
+  // content again afterwards. Ordering matters twice: after applySettingsPost so an
+  // alignment/speed change riding the same POST applies to this show,
+  // and the overlay arm (which drains behind the #130 cancel above)
+  // keeps the transient alive when that same POST also switched mode.
+  if (t.transientProvided) {
+    const MqttTextResultKind shown =
+        t.transientHold ? MqttTextResultKind::Held : MqttTextResultKind::Shown;
+    if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
+      SerialPrintln("Transient text dropped (reflash running): " +
+                    t.transientText);
+      mqttNoteTextResult(MqttTextResultKind::DroppedBusy, t.transientText, textPriority,
+                         t.transientHold, resultDwell);
+    } else if (wallShowActive()) {
+      wallShowText(t.transientText, settings.alignment, settings.flapSpeed);
+      mqttStartNotification(t.transientDwell, t.transientHold, textPriority);
+      mqttNoteTextResult(shown, t.transientText, textPriority, t.transientHold, resultDwell);
+      SerialPrintln("Transient text routed to the wall: " + t.transientText);
+    } else if (displayEnqueue(makeShowTextCommand(
+                   t.transientText, settings.alignment,
+                   settings.flapSpeed))) {
+      mqttStartNotification(t.transientDwell, t.transientHold, textPriority);
+      mqttNoteTextResult(shown, t.transientText, textPriority, t.transientHold, resultDwell);
+      SerialPrintln(
+          "Transient text (" +
+          (t.transientHold ? String("held")
+           : t.transientDwell > 0 ? "dwell " + String(t.transientDwell) + " s"
+                                : String("default dwell")) +
+          ", priority " + String(textPriority) + "): " + t.transientText);
+    } else {
+      SerialPrintln("Display queue full at drain — transient DROPPED: " +
+                    t.transientText);
+      mqttNoteTextResult(MqttTextResultKind::DroppedBusy, t.transientText, textPriority,
+                         t.transientHold, resultDwell);
+    }
+  }
+}
+
+// The staged settings post, drained under webStateMutex. True when the
+// time zone changed.
+static bool drainSettingsPost(MasterSettings& settings, SettingsStore& store) {
+  PostedText t = capturePostedText();
+
+  // "Last Received" tracks messages/mode switches, not settings saves —
+  // per-card posts (#128) mean only those submissions stamp it.
+  if (t.messageProvided || t.modeProvided) {
+    lastMessageStamp = formatDateTime(time(nullptr), CLOCK_STAMP_FORMAT);
+  }
+
+  const bool timezoneChanged = applyPostedSettings(settings, store);
+
+  dropRefusedText(settings, t);
+
+  // Explicit mode switch or message send trumps a running notification
+  // (v1 #130 rule) — cancel so the next 1 Hz tick (or the direct
+  // enqueue below) flaps the new content, not the overlay. Reads the
+  // pre-apply capture: applySettingsPost() just reset the post's
+  // provided flags (#219 fix — the reset made this condition dead for
+  // mode switches). Skipped when a transient rides the same POST: its
+  // overlay arm below supersedes the old one anyway, and a staged
+  // cancel draining one tick earlier than the arm would drop the
+  // clockTask gate for a one-frame stray re-show.
+  if ((t.modeProvided || t.messageProvided) && !t.transientProvided) {
+    mqttCancelNotification();
+  }
+
+  showPostedMessage(settings, t);
+  showPostedTransient(settings, t);
+  return timezoneChanged;
+}
+
 void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   if (webStateMutex == nullptr) return;  // init hasn't run
 
@@ -276,182 +502,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   String rebootCauseToStamp;  // #432: copied out under the lock
   {
     WebStateLock lock;
-    if (pendingPost.pending) {
-      // Display-bound fields are read off the post before apply resets it.
-      String messageText = pendingPost.inputText;
-      bool messageProvided = pendingPost.inputTextProvided;
-      // #618: accents become flaps here, once, before the text is retained
-      // or laid out.
-      if (messageProvided) messageText = transliterateForFlaps(messageText);
-      String transientText = transliterateForFlaps(pendingPost.transientText);
-      long transientDwell = pendingPost.transientDwell;
-      bool transientProvided = pendingPost.transientTextProvided;
-      const bool transientHold = pendingPost.transientHoldProvided && pendingPost.transientHold;  // #616
-      const int textPriority = pendingPost.textPriorityProvided ? (int)pendingPost.textPriority : 0;  // #625
-      bool modeProvided = pendingPost.deviceModeProvided;
-
-      // "Last Received" tracks messages/mode switches, not settings saves —
-      // per-card posts (#128) mean only those submissions stamp it.
-      if (messageProvided || modeProvided) {
-        lastMessageStamp = formatDateTime(time(nullptr), CLOCK_STAMP_FORMAT);
-      }
-
-      // Settings first, command second: a speed/alignment change riding the
-      // same POST as a message must apply to that message (v1 ordering).
-      String timezoneBefore = settings.timezonePosix;
-      int unitCountBefore = settings.unitCountOverride;
-      bool reflashOnBootBefore = settings.reflashOnBoot;
-      bool quietBefore = settings.quiet;
-      bool wifiPowerSaveBefore = settings.wifiPowerSave;
-      bool releaseCheckBefore = settings.releaseCheck;
-      String releaseChannelBefore = settings.releaseChannel;
-      applySettingsPost(pendingPost, settings, store);
-      if (settings.releaseCheck != releaseCheckBefore ||
-          settings.releaseChannel != releaseChannelBefore) {
-        releaseSetSettings(settings.releaseCheck, settings.releaseChannel);  // #583
-      }
-      timezoneChanged = settings.timezonePosix != timezoneBefore;
-
-      // #289 dummy mode: push a changed override to displayTask and queue a
-      // Probe so the width refolds now instead of at the next bus op.
-      if (settings.unitCountOverride != unitCountBefore) {
-        tasksSetUnitCountOverride(settings.unitCountOverride);
-        displayEnqueue(makeProbeCommand());
-      }
-      // #412: push the brake to displayTask so a mid-session change lands
-      // without a reboot — the gate is only read at boot, but the operator
-      // sets this BEFORE rebooting into the campaign.
-      if (settings.reflashOnBoot != reflashOnBootBefore) {
-        tasksSetReflashOnBoot(settings.reflashOnBoot);
-        wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot, settings.wifiPowerSave);
-      }
-      if (settings.wifiPowerSave != wifiPowerSaveBefore) {  // #609
-        wifiSetPowerSave(settings.wifiPowerSave);
-        wallStateSetRowSettings(settings.timezonePosix, settings.reflashOnBoot, settings.wifiPowerSave);
-      }
-      if (settings.quiet != quietBefore) {
-        tasksSetQuiet(settings.quiet);  // #227
-        SerialPrintln(settings.quiet ? F("quiet: ON (web) — no flap commands")
-                                     : F("quiet: OFF (web)"));
-      }
-      // #227: content that arrives while quiet is dropped, not queued. A
-      // quiet toggle riding the same POST has been applied above, so "wake
-      // and show this" works in one request.
-      const long resultDwell = transientProvided && !transientHold ? transientDwell : 0;  // #622
-      if (quietBlocksContent(settings.quiet, textPriority >= TEXT_PRIORITY_MAX) &&
-          (messageProvided || transientProvided)) {
-        SerialPrintln(F("web: text dropped (quiet)"));
-        mqttNoteTextResult(MqttTextResultKind::DroppedQuiet, transientProvided ? transientText : messageText,
-                           textPriority, transientHold, resultDwell);
-        messageProvided = false;
-        transientProvided = false;
-      }
-      // #625: a text under the priority of the one showing is refused. The
-      // handler answered 409 for this already; a text that arrived between
-      // its check and this drain is judged again.
-      if ((messageProvided || transientProvided) && !mqttNotificationAdmits(textPriority)) {
-        SerialPrintf("web: text refused (priority %d under the one showing)\n", textPriority);
-        mqttNoteTextResult(MqttTextResultKind::Refused, transientProvided ? transientText : messageText,
-                           textPriority, transientHold, resultDwell);
-        messageProvided = false;
-        transientProvided = false;
-      }
-
-      // Explicit mode switch or message send trumps a running notification
-      // (v1 #130 rule) — cancel so the next 1 Hz tick (or the direct
-      // enqueue below) flaps the new content, not the overlay. Reads the
-      // pre-apply capture: applySettingsPost() just reset the post's
-      // provided flags (#219 fix — the reset made this condition dead for
-      // mode switches). Skipped when a transient rides the same POST: its
-      // overlay arm below supersedes the old one anyway, and a staged
-      // cancel draining one tick earlier than the arm would drop the
-      // clockTask gate for a one-frame stray re-show.
-      if ((modeProvided || messageProvided) && !transientProvided) {
-        mqttCancelNotification();
-      }
-
-      // v1 parity: a posted message only takes effect in text mode, checked
-      // AFTER any mode field riding the same POST. In clock mode it is
-      // silently ignored — never shown, never retained.
-      if (messageProvided && settings.deviceMode == "text") {
-        // Retained in the display domain: ClockPolicy's dedup compares this
-        // against snapshot text, which makeShowTextCommand truncates. A
-        // master with row boards retains untruncated — the grid holds more
-        // than one row's width, and its ticker path never enters that dedup.
-        currentInputText = wallShowActive()
-                               ? messageText
-                               : truncateForDisplay(messageText);
-        // Reflash gate re-check at drain time (#205, Codex review): the
-        // handler's 409 ran when the POST arrived; a job that started in
-        // between must not get a ShowText queued behind it. Dropping is
-        // self-healing — the retained text above is what the 1 Hz mode
-        // ticker re-shows once the job ends.
-        if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
-          SerialPrintln("Message retained, not queued (reflash): " +
-                        messageText);
-          mqttNoteTextResult(MqttTextResultKind::DroppedBusy, messageText, textPriority);
-        } else if (wallShowActive()) {
-          // A wall with row boards (#566): the logical text goes to the wall.
-          wallShowText(messageText, settings.alignment, settings.flapSpeed);
-          SerialPrintln("Message routed to the wall: " + messageText);
-          mqttNoteTextResult(MqttTextResultKind::Shown, messageText, textPriority);
-        } else if (displayEnqueue(makeShowTextCommand(
-                       messageText, settings.alignment,
-                       settings.flapSpeed))) {
-          SerialPrintln("Message queued for display: " + messageText);
-          mqttNoteTextResult(MqttTextResultKind::Shown, messageText, textPriority);
-        } else {
-          // The handler's 503 pre-check makes this a wedged-queue signal,
-          // not a normal path.
-          SerialPrintln("Display queue full at drain — message DROPPED: " +
-                        messageText);
-          mqttNoteTextResult(MqttTextResultKind::DroppedBusy, messageText, textPriority);
-        }
-      } else if (messageProvided) {
-        SerialPrintln("Message ignored (device in clock mode, v1 parity): " +
-                      messageText);
-      }
-
-      // Transient text (#219): a text shown for a time shows regardless of
-      // mode and reverts via the overlay dwell — nothing persists, a clock
-      // display stays a clock display. With row boards it goes to every row,
-      // and the clock ticker, held back for the dwell, hands the wall its
-      // content again afterwards. Ordering matters twice: after applySettingsPost so an
-      // alignment/speed change riding the same POST applies to this show,
-      // and the overlay arm (which drains behind the #130 cancel above)
-      // keeps the transient alive when that same POST also switched mode.
-      if (transientProvided) {
-        const MqttTextResultKind shown =
-            transientHold ? MqttTextResultKind::Held : MqttTextResultKind::Shown;
-        if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
-          SerialPrintln("Transient text dropped (reflash running): " +
-                        transientText);
-          mqttNoteTextResult(MqttTextResultKind::DroppedBusy, transientText, textPriority,
-                             transientHold, resultDwell);
-        } else if (wallShowActive()) {
-          wallShowText(transientText, settings.alignment, settings.flapSpeed);
-          mqttStartNotification(transientDwell, transientHold, textPriority);
-          mqttNoteTextResult(shown, transientText, textPriority, transientHold, resultDwell);
-          SerialPrintln("Transient text routed to the wall: " + transientText);
-        } else if (displayEnqueue(makeShowTextCommand(
-                       transientText, settings.alignment,
-                       settings.flapSpeed))) {
-          mqttStartNotification(transientDwell, transientHold, textPriority);
-          mqttNoteTextResult(shown, transientText, textPriority, transientHold, resultDwell);
-          SerialPrintln(
-              "Transient text (" +
-              (transientHold ? String("held")
-               : transientDwell > 0 ? "dwell " + String(transientDwell) + " s"
-                                    : String("default dwell")) +
-              ", priority " + String(textPriority) + "): " + transientText);
-        } else {
-          SerialPrintln("Display queue full at drain — transient DROPPED: " +
-                        transientText);
-          mqttNoteTextResult(MqttTextResultKind::DroppedBusy, transientText, textPriority,
-                             transientHold, resultDwell);
-        }
-      }
-    }
+    if (pendingPost.pending) timezoneChanged = drainSettingsPost(settings, store);
     if (pendingIntendedVersionProvided) {
       pendingIntendedVersionProvided = false;
       if (settings.intendedVersion != pendingIntendedVersion) {

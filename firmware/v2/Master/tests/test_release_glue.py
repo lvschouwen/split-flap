@@ -16,10 +16,32 @@ def _code(name):
     return re.sub(r"//[^\n]*", "", (MASTER / name).read_text())
 
 
+def _function(code, name):
+    """The body of the file's static function `name`, to its closing brace."""
+    at = re.search(r"\nstatic \w+ " + name + r"\(", code).start()
+    return code[at:code.index("\n}\n", at)]
+
+
 def _route(code, path, method):
+    """A route's registration, followed by the bodies of the file's static
+    functions it hands the request to, in the order they run: a named
+    handler, then each static step it calls."""
     start = code.index(f'"{path}", {method}')
     end = code.find("server.on(", start)
-    return code[start:end if end > 0 else len(code)]
+    route = code[start:end if end > 0 else len(code)]
+    statics = set(re.findall(r"\nstatic \w+ (\w+)\(", code))
+    seen = []
+
+    def follow(text):
+        out = ""
+        for name in re.findall(r"\b(\w+)\b", text):
+            if name in statics and name not in seen:
+                seen.append(name)
+                body = _function(code, name)
+                out += body + follow(body)
+        return out
+
+    return route + follow(route)
 
 
 def test_no_upload_begins_while_an_update_from_a_release_runs():

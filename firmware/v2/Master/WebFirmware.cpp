@@ -78,6 +78,423 @@ static AsyncWebServerRequest* rowImageOwnerRequest = nullptr;
 static const char RELEASE_UPDATE_RUNNING[] =
     "an update from a release is running, retry after the restart";
 
+// POST /firmware/row, the completion: answers what the upload decided.
+static void handleRowImageRequest(AsyncWebServerRequest* request) {
+  if (rowImageOwnerRequest == request) rowImageOwnerRequest = nullptr;
+  if (rowImageRejectStatus != 0) {
+    int s = rowImageRejectStatus;
+    String r = rowImageRejectReason;
+    rowImageRejectStatus = 0;
+    rowImageRejectReason = "";
+    request->send(s, "text/plain", r);
+    return;
+  }
+  if (!followerImageWriteEnd()) {
+    request->send(500, "text/plain",
+                  "Row image store failed: " + followerImageWriteError());
+    return;
+  }
+  request->send(200, "text/plain",
+                F("Row image stored; rows on another rev are offered it."));
+}
+
+// The first chunk of a POST /firmware/row: the gates, then the stored row image
+// this request owns. False: the chunk is not written.
+static bool beginRowImageUpload(AsyncWebServerRequest* request, const String& filename) {
+  rowImageRejectStatus = 0;
+  rowImageRejectReason = "";
+  // CSRF gate (#313), INLINE before followerImageWriteBegin — the
+  // middleware fires post-body, too late for an upload route.
+  if (webUploadCsrfRejected(request)) {
+    rowImageRejectStatus = 403;
+    rowImageRejectReason =
+        "Cross-origin row-image upload refused (CSRF guard)";
+    return false;
+  }
+  if (releaseUpdateRunning()) {
+    rowImageRejectStatus = 409;
+    rowImageRejectReason = RELEASE_UPDATE_RUNNING;
+    return false;
+  }
+  String rev;
+  if (!followerImageUploadAccepts(filename, rev)) {
+    rowImageRejectStatus = 400;
+    rowImageRejectReason =
+        "expected a follower-<rev>.bin (an S3 image would brick the "
+        "ESP-01)";
+    return false;
+  }
+  String md5 = request->hasParam("md5")
+                   ? request->getParam("md5")->value()
+                   : String();
+  if (md5.length() == 0) {
+    rowImageRejectStatus = 400;
+    rowImageRejectReason = "md5 query parameter is required";
+    return false;
+  }
+  if (!normalizeOtaMd5(md5)) {
+    rowImageRejectStatus = 400;
+    rowImageRejectReason = "md5 must be exactly 32 hex characters";
+    return false;
+  }
+  if (!followerImageWriteBegin(md5, rev)) {
+    rowImageRejectStatus = 409;
+    rowImageRejectReason = "cannot start: " + followerImageWriteError();
+    return false;
+  }
+  rowImageOwnerRequest = request;
+  request->onDisconnect([request]() {
+    if (rowImageOwnerRequest == request) rowImageOwnerRequest = nullptr;
+  });
+  return true;
+}
+
+// POST /firmware/row, every chunk.
+static void handleRowImageUpload(AsyncWebServerRequest* request, String filename,
+                                 size_t index, uint8_t* data, size_t len,
+                                 bool final) {
+  if (index == 0 && !beginRowImageUpload(request, filename)) return;
+  if (rowImageRejectStatus != 0) return;
+  if (len > 0 && !followerImageWriteChunk(data, len, index)) {
+    rowImageRejectStatus = 400;
+    rowImageRejectReason = "upload failed: " + followerImageWriteError();
+    return;
+  }
+  // final: the completion handler calls followerImageWriteEnd().
+}
+
+// POST /firmware/master, the completion: answers what the upload decided.
+static void handleMasterOtaRequest(AsyncWebServerRequest* request) {
+  // Overlap-rejected upload (#191), or a bodyless POST racing a live
+  // session: answer 409 without touching the owner's shared state,
+  // MQTT freeze or Update session.
+  if (request->_tempObject != nullptr ||
+      (otaOwnerRequest != nullptr && otaOwnerRequest != request)) {
+    request->send(409, "text/plain",
+                  F("Another master OTA upload is already in progress "
+                    "— retry when it finishes"));
+    return;
+  }
+  // #347: did onUpload actually establish a session for THIS request?
+  // A POST with no multipart file part never enters onUpload, so
+  // Update.begin() and the in-onUpload CSRF/md5 gates never run — and
+  // Update.isFinished() then reports success on a never-begun Update,
+  // triggering a spurious, unauthenticated reboot. Capture before the
+  // clear below.
+  bool uploadRan = (otaOwnerRequest == request);
+  otaOwnerRequest = nullptr;  // session concluded, whatever the verdict
+  int rejStatus = 0;
+  String rejReason;
+  bool rejected = otaRejection.take(rejStatus, rejReason);
+  switch (otaUploadCompletion(rejected, Update.hasError(), uploadRan,
+                              Update.isFinished())) {
+    case OtaCompletion::Rejected:
+      request->send(rejStatus, "text/plain", rejReason);
+      return;
+    case OtaCompletion::FlashError:
+      mqttResumeAfterOta();  // no reboot coming — thaw the session (#116)
+      request->send(500, "text/plain", String("Master OTA failed: ") +
+                                           Update.errorString());
+      return;
+    case OtaCompletion::NoFile:
+      // Nothing was flashed by this request, and it froze nothing
+      // (that happens in onUpload once a session begins).
+      request->send(400, "text/plain",
+                    F("No firmware in request (a multipart file part is "
+                      "required)"));
+      return;
+    case OtaCompletion::Incomplete:
+      mqttResumeAfterOta();  // no reboot coming — thaw the session (#116)
+      request->send(500, "text/plain",
+                    F("Master OTA incomplete: upload ended before the "
+                      "image was complete."));
+      return;
+    case OtaCompletion::Flashed:
+      break;
+  }
+  request->send(200, "text/plain",
+                F("Master firmware flashed; rebooting…"));
+  WebStateLock lock;
+  pendingReboot = true;
+  rebootRequestedAtMs = millis();
+}
+
+// The first chunk of a POST /firmware/master: the gates, then the Update session
+// this request owns. False: the chunk is not written.
+static bool beginMasterOtaUpload(AsyncWebServerRequest* request) {
+  // Concurrent-upload guard (#191): a live session owns the Update
+  // singleton and the shared rejection state — mark this request
+  // rejected (per-request _tempObject; malloc pairs with the free
+  // in the request destructor) and leave both alone.
+  if (otaOwnerRequest != nullptr && otaOwnerRequest != request) {
+    request->_tempObject = malloc(1);
+    return false;
+  }
+  otaRejection.clear();
+  if (releaseUpdateRunning()) {
+    otaRejection.set(409, String(RELEASE_UPDATE_RUNNING));
+    return false;
+  }
+
+  // INLINE before Update.begin: the CSRF middleware runs too late for
+  // upload routes (post-body), so a forged cross-site POST would
+  // otherwise flash + arm its image before the 403. The reflash gate
+  // (#205): a master OTA reboots the S3 mid-unit-flash and strands
+  // the in-flight unit in twiboot for no reason.
+  String md5 = request->hasParam("md5")
+                   ? request->getParam("md5")->value()
+                   : String();
+  OtaGate gate = otaUploadGate(
+      webUploadCsrfRejected(request),
+      reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning(),
+      md5);
+  if (gate != OtaGate::Pass) {
+    otaRejection.set(gate);
+    return false;
+  }
+
+  SerialPrintln("Master OTA upload started (md5 " + md5 + ")");
+  if (Update.isRunning()) {
+    Update.abort();  // stale aborted upload must not wedge this one
+                     // (v1 #162 re-entry class)
+  }
+  if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+    otaRejection.set(500, String("Master OTA could not start: ") +
+                              Update.errorString());
+    return false;
+  }
+  Update.setMD5(md5.c_str());
+  // Freeze MQTT for the flash writes (v1 #116): staged — mqttTask
+  // force-closes the session, the broker fires the "offline" LWT.
+  mqttStopForOta();
+
+  // ?v= staged unconditionally (empty if absent) so a stale value
+  // from an earlier flash can't outlive this one (v1 #52 rationale),
+  // through the same validator as every other settings write (#191).
+  String intended = sanitizeIntendedVersion(
+      request->hasParam("v") ? request->getParam("v")->value()
+                             : String());
+  {
+    WebStateLock lock;
+    pendingIntendedVersion = intended;
+    pendingIntendedVersionProvided = true;
+  }
+
+  // Session is live from here (#191). onDisconnect is the backstop
+  // for a client that dies mid-upload: free the slot; the stale
+  // Update session is aborted by the next upload's begin path above.
+  // Stamp BEFORE the owner is published: netTask's stall watchdog
+  // keys on the owner and must never pair it with an old stamp.
+  otaUploadStartMs = millis();
+  otaLastChunkMs = otaUploadStartMs;  // #313 stall watchdog baseline
+  otaOwnerRequest = request;
+  request->onDisconnect([request]() {
+    // Still the owner here = the client died mid-upload (a finished
+    // request was released by its completion handler). The stall
+    // watchdog keys on the owner, so nothing else would thaw MQTT.
+    AsyncWebServerRequest* mine = request;
+    if (otaOwnerRequest.compare_exchange_strong(mine, nullptr)) {
+      mqttResumeAfterOta();
+    }
+  });
+  return true;
+}
+
+// POST /firmware/master, every chunk.
+static void handleMasterOtaUpload(AsyncWebServerRequest* request, String filename,
+                                  size_t index, uint8_t* data, size_t len,
+                                  bool final) {
+  if (index == 0 && !beginMasterOtaUpload(request)) return;
+
+  // Not (or no longer) the live owner (#191): covers overlap-rejected
+  // requests AND stragglers rejected via the shared flag above whose
+  // client keeps streaming — a later legitimate owner resets that
+  // flag, and without this gate their leftover chunks would write
+  // into the new owner's session.
+  if (otaOwnerRequest != request) return;
+  if (otaRejection.rejected()) return;
+  otaLastChunkMs = millis();  // #313: progress resets the stall deadline
+
+  if (len > 0 && Update.write(data, len) != len) {
+    // Error is latched inside Update; the completion callback
+    // reports it. Stop consuming flash time on further chunks.
+    return;
+  }
+  if (final) {
+    if (Update.end(true)) {
+      uint32_t elapsedMs = millis() - otaUploadStartMs;
+      uint32_t totalBytes = (uint32_t)(index + len);
+      if (elapsedMs == 0) elapsedMs = 1;
+      SerialPrintf(
+          "Master OTA received %u bytes in %u ms (%u KB/s)\n",
+          (unsigned)totalBytes, (unsigned)elapsedMs,
+          (unsigned)(((uint64_t)totalBytes * 1000ULL / 1024ULL) /
+                     elapsedMs));
+      SerialPrintln(F("Master OTA image verified and armed — reboot "
+                      "boots it PENDING_VERIFY"));
+    } else {
+      SerialPrintln(String("Master OTA failed at end: ") +
+                    Update.errorString());
+    }
+  }
+}
+
+// POST /firmware/rescue, the completion: answers what the upload decided.
+static void handleRescueInstallRequest(AsyncWebServerRequest* request) {
+  // Overlap-rejected upload: answer 409 without touching the live
+  // install's state (same per-request marker as the master OTA).
+  if (request->_tempObject != nullptr) {
+    request->send(409, "text/plain",
+                  F("another rescue install is in flight — let it "
+                    "finish (a dropped one expires after ~30 s) and "
+                    "retry"));
+    return;
+  }
+  // #347: capture/clear the per-request install marker (see master OTA).
+  // Cleared whenever it is ours, whatever the verdict: a marker left
+  // behind would match a later request allocated at the same address.
+  bool mine = (rescueOwnerRequest == request);
+  if (mine) rescueOwnerRequest = nullptr;
+  int rejStatus = 0;
+  String rejReason;
+  bool rejected = rescueRejection.take(rejStatus, rejReason);
+  bool installRan = mine && !rejected;
+  String err = factoryWriteError();
+  // The factory writer has no "finished" state of its own: an install
+  // that ran and latched no error is complete.
+  switch (otaUploadCompletion(rejected, err.length() > 0, installRan,
+                              true)) {
+    case OtaCompletion::Rejected:
+      request->send(rejStatus, "text/plain", rejReason);
+      return;
+    case OtaCompletion::FlashError:
+      request->send(500, "text/plain", "Rescue install failed: " + err);
+      return;
+    case OtaCompletion::NoFile:
+      // factoryWriteBegin never ran, the factory slot is untouched;
+      // never report a false "installed".
+      request->send(400, "text/plain",
+                    F("No rescue image in request (a multipart file part "
+                      "is required)"));
+      return;
+    default:
+      break;
+  }
+  // #391: record what was just installed so the slot's identity is
+  // readable without booting into it. Optional ?v= mirrors
+  // /firmware/master's — same sanitizer, and STAGED for the drain
+  // rather than written here: the record is an NVS commit, which the
+  // async-context rule keeps off this task (the streaming exception
+  // above covers the image bytes, not a keyed settings write).
+  // Absent/empty ?v= is staged too, so the drain clears any record
+  // left by the image this one just replaced.
+  {
+    WebStateLock lock;
+    pendingRescueRev = sanitizeIntendedVersion(
+        request->hasParam("v") ? request->getParam("v")->value()
+                               : String());
+    pendingRescueRecord = true;
+  }
+  request->send(200, "text/plain",
+                F("Rescue image installed into the factory slot. No "
+                  "reboot — POST /firmware/rescue-boot to test it."));
+}
+
+// The first chunk of a POST /firmware/rescue: the gates, then the factory-slot install
+// this request owns. False: the chunk is not written.
+static bool beginRescueInstallUpload(AsyncWebServerRequest* request) {
+  // An install is already streaming: mark THIS request rejected
+  // (malloc pairs with the free in the request destructor) and leave
+  // the live install's state alone.
+  if (factoryInstallInProgress()) {
+    request->_tempObject = malloc(1);
+    return false;
+  }
+  rescueRejection.clear();
+  if (releaseUpdateRunning()) {
+    rescueRejection.set(409, String(RELEASE_UPDATE_RUNNING));
+    return false;
+  }
+
+  // INLINE before factoryWriteBegin — the CSRF middleware fires
+  // post-body, too late for an upload route. No reflash gate: an
+  // install into the factory slot does not reboot the board.
+  String md5 = request->hasParam("md5")
+                   ? request->getParam("md5")->value()
+                   : String();
+  OtaGate gate =
+      otaUploadGate(webUploadCsrfRejected(request), false, md5);
+  if (gate != OtaGate::Pass) {
+    rescueRejection.set(gate);
+    return false;
+  }
+  if (!factoryWriteBegin(md5)) {
+    rescueRejection.set(
+        500, "Rescue install could not start: " + factoryWriteError());
+    return false;
+  }
+  rescueOwnerRequest = request;  // #347: a real install began here
+  // A client that dies mid-upload must not leave its marker behind;
+  // the install itself expires in FactorySlot.
+  request->onDisconnect([request]() {
+    if (rescueOwnerRequest == request) rescueOwnerRequest = nullptr;
+  });
+  return true;
+}
+
+// POST /firmware/rescue, every chunk.
+static void handleRescueInstallUpload(AsyncWebServerRequest* request, String filename,
+                                      size_t index, uint8_t* data, size_t len,
+                                      bool final) {
+  if (index == 0 && !beginRescueInstallUpload(request)) return;
+
+  // Only the request that began the install writes into it: an
+  // overlap-rejected or gate-rejected request whose client keeps
+  // streaming must not splice its chunks into the live one.
+  if (rescueOwnerRequest != request) return;
+  if (rescueRejection.rejected()) return;
+
+  if (len > 0 && !factoryWriteChunk(data, len, index)) {
+    return;  // error latched in FactorySlot; completion reports it
+  }
+  if (final) {
+    factoryWriteEnd();  // completion callback reads factoryWriteError()
+  }
+}
+
+// POST /firmware/rescue-boot.
+static void handleRescueBoot(AsyncWebServerRequest* request) {
+  if (factoryInstallInProgress()) {
+    request->send(409, "text/plain",
+                  F("A rescue image install is in flight — let "
+                    "it finish, then retry."));
+    return;
+  }
+  if (releaseUpdateRunning()) {
+    request->send(409, "text/plain", RELEASE_UPDATE_RUNNING);
+    return;
+  }
+  if (!factorySlotImageValid()) {
+    request->send(409, "text/plain",
+                  F("Factory slot holds no valid rescue image — "
+                    "POST it to /firmware/rescue first."));
+    return;
+  }
+  if (!rescueBootArm()) {
+    request->send(500, "text/plain",
+                  F("otadata erase failed — rescue boot not "
+                    "armed."));
+    return;
+  }
+  request->send(200, "text/plain",
+                F("Rebooting into the rescue image… it joins "
+                  "WiFi (or opens <name>-rescue) and serves the "
+                  "recovery page."));
+  WebStateLock lock;
+  pendingReboot = true;
+  rebootRequestedAtMs = millis();
+}
+
 void webFirmwareRegister(AsyncWebServer& server) {
   // --- the stored row image, for the row boards (#559/#566) -------------------
   // A row that was offered the image over the wall link (wl.Update) fetches
@@ -112,83 +529,8 @@ void webFirmwareRegister(AsyncWebServer& server) {
   // async-context exception as the master OTA: the stream is accumulated in
   // PSRAM here, MD5-verified, then handed to netTask. The follower-*.bin
   // prefix guard mirrors ota-flash.sh (an S3 image bricks the ESP-01).
-  server.on(
-      "/firmware/row", HTTP_POST,
-      [](AsyncWebServerRequest* request) {
-        if (rowImageOwnerRequest == request) rowImageOwnerRequest = nullptr;
-        if (rowImageRejectStatus != 0) {
-          int s = rowImageRejectStatus;
-          String r = rowImageRejectReason;
-          rowImageRejectStatus = 0;
-          rowImageRejectReason = "";
-          request->send(s, "text/plain", r);
-          return;
-        }
-        if (!followerImageWriteEnd()) {
-          request->send(500, "text/plain",
-                        "Row image store failed: " + followerImageWriteError());
-          return;
-        }
-        request->send(200, "text/plain",
-                      F("Row image stored; rows on another rev are offered it."));
-      },
-      [](AsyncWebServerRequest* request, String filename, size_t index,
-         uint8_t* data, size_t len, bool final) {
-        if (index == 0) {
-          rowImageRejectStatus = 0;
-          rowImageRejectReason = "";
-          // CSRF gate (#313), INLINE before followerImageWriteBegin — the
-          // middleware fires post-body, too late for an upload route.
-          if (webUploadCsrfRejected(request)) {
-            rowImageRejectStatus = 403;
-            rowImageRejectReason =
-                "Cross-origin row-image upload refused (CSRF guard)";
-            return;
-          }
-          if (releaseUpdateRunning()) {
-            rowImageRejectStatus = 409;
-            rowImageRejectReason = RELEASE_UPDATE_RUNNING;
-            return;
-          }
-          String rev;
-          if (!followerImageUploadAccepts(filename, rev)) {
-            rowImageRejectStatus = 400;
-            rowImageRejectReason =
-                "expected a follower-<rev>.bin (an S3 image would brick the "
-                "ESP-01)";
-            return;
-          }
-          String md5 = request->hasParam("md5")
-                           ? request->getParam("md5")->value()
-                           : String();
-          if (md5.length() == 0) {
-            rowImageRejectStatus = 400;
-            rowImageRejectReason = "md5 query parameter is required";
-            return;
-          }
-          if (!normalizeOtaMd5(md5)) {
-            rowImageRejectStatus = 400;
-            rowImageRejectReason = "md5 must be exactly 32 hex characters";
-            return;
-          }
-          if (!followerImageWriteBegin(md5, rev)) {
-            rowImageRejectStatus = 409;
-            rowImageRejectReason = "cannot start: " + followerImageWriteError();
-            return;
-          }
-          rowImageOwnerRequest = request;
-          request->onDisconnect([request]() {
-            if (rowImageOwnerRequest == request) rowImageOwnerRequest = nullptr;
-          });
-        }
-        if (rowImageRejectStatus != 0) return;
-        if (len > 0 && !followerImageWriteChunk(data, len, index)) {
-          rowImageRejectStatus = 400;
-          rowImageRejectReason = "upload failed: " + followerImageWriteError();
-          return;
-        }
-        // final: the completion handler calls followerImageWriteEnd().
-      });
+  server.on("/firmware/row", HTTP_POST, handleRowImageRequest,
+            handleRowImageUpload);
 
   // --- master OTA (#190) -----------------------------------------------------
   // v1 wire contract: POST multipart field "firmware" + mandatory ?md5=
@@ -196,174 +538,8 @@ void webFirmwareRegister(AsyncWebServer& server) {
   // the inactive A/B slot; the image boots PENDING_VERIFY and OtaService
   // confirms it pre-inrush near the end of setup() (#305), netif-up as
   // fallback (bootloader reverts otherwise).
-  server.on(
-      "/firmware/master", HTTP_POST,
-      [](AsyncWebServerRequest* request) {
-        // Overlap-rejected upload (#191), or a bodyless POST racing a live
-        // session: answer 409 without touching the owner's shared state,
-        // MQTT freeze or Update session.
-        if (request->_tempObject != nullptr ||
-            (otaOwnerRequest != nullptr && otaOwnerRequest != request)) {
-          request->send(409, "text/plain",
-                        F("Another master OTA upload is already in progress "
-                          "— retry when it finishes"));
-          return;
-        }
-        // #347: did onUpload actually establish a session for THIS request?
-        // A POST with no multipart file part never enters onUpload, so
-        // Update.begin() and the in-onUpload CSRF/md5 gates never run — and
-        // Update.isFinished() then reports success on a never-begun Update,
-        // triggering a spurious, unauthenticated reboot. Capture before the
-        // clear below.
-        bool uploadRan = (otaOwnerRequest == request);
-        otaOwnerRequest = nullptr;  // session concluded, whatever the verdict
-        int rejStatus = 0;
-        String rejReason;
-        bool rejected = otaRejection.take(rejStatus, rejReason);
-        switch (otaUploadCompletion(rejected, Update.hasError(), uploadRan,
-                                    Update.isFinished())) {
-          case OtaCompletion::Rejected:
-            request->send(rejStatus, "text/plain", rejReason);
-            return;
-          case OtaCompletion::FlashError:
-            mqttResumeAfterOta();  // no reboot coming — thaw the session (#116)
-            request->send(500, "text/plain", String("Master OTA failed: ") +
-                                                 Update.errorString());
-            return;
-          case OtaCompletion::NoFile:
-            // Nothing was flashed by this request, and it froze nothing
-            // (that happens in onUpload once a session begins).
-            request->send(400, "text/plain",
-                          F("No firmware in request (a multipart file part is "
-                            "required)"));
-            return;
-          case OtaCompletion::Incomplete:
-            mqttResumeAfterOta();  // no reboot coming — thaw the session (#116)
-            request->send(500, "text/plain",
-                          F("Master OTA incomplete: upload ended before the "
-                            "image was complete."));
-            return;
-          case OtaCompletion::Flashed:
-            break;
-        }
-        request->send(200, "text/plain",
-                      F("Master firmware flashed; rebooting…"));
-        WebStateLock lock;
-        pendingReboot = true;
-        rebootRequestedAtMs = millis();
-      },
-      [](AsyncWebServerRequest* request, String filename, size_t index,
-         uint8_t* data, size_t len, bool final) {
-        if (index == 0) {
-          // Concurrent-upload guard (#191): a live session owns the Update
-          // singleton and the shared rejection state — mark this request
-          // rejected (per-request _tempObject; malloc pairs with the free
-          // in the request destructor) and leave both alone.
-          if (otaOwnerRequest != nullptr && otaOwnerRequest != request) {
-            request->_tempObject = malloc(1);
-            return;
-          }
-          otaRejection.clear();
-          if (releaseUpdateRunning()) {
-            otaRejection.set(409, String(RELEASE_UPDATE_RUNNING));
-            return;
-          }
-
-          // INLINE before Update.begin: the CSRF middleware runs too late for
-          // upload routes (post-body), so a forged cross-site POST would
-          // otherwise flash + arm its image before the 403. The reflash gate
-          // (#205): a master OTA reboots the S3 mid-unit-flash and strands
-          // the in-flight unit in twiboot for no reason.
-          String md5 = request->hasParam("md5")
-                           ? request->getParam("md5")->value()
-                           : String();
-          OtaGate gate = otaUploadGate(
-              webUploadCsrfRejected(request),
-              reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning(),
-              md5);
-          if (gate != OtaGate::Pass) {
-            otaRejection.set(gate);
-            return;
-          }
-
-          SerialPrintln("Master OTA upload started (md5 " + md5 + ")");
-          if (Update.isRunning()) {
-            Update.abort();  // stale aborted upload must not wedge this one
-                             // (v1 #162 re-entry class)
-          }
-          if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
-            otaRejection.set(500, String("Master OTA could not start: ") +
-                                      Update.errorString());
-            return;
-          }
-          Update.setMD5(md5.c_str());
-          // Freeze MQTT for the flash writes (v1 #116): staged — mqttTask
-          // force-closes the session, the broker fires the "offline" LWT.
-          mqttStopForOta();
-
-          // ?v= staged unconditionally (empty if absent) so a stale value
-          // from an earlier flash can't outlive this one (v1 #52 rationale),
-          // through the same validator as every other settings write (#191).
-          String intended = sanitizeIntendedVersion(
-              request->hasParam("v") ? request->getParam("v")->value()
-                                     : String());
-          {
-            WebStateLock lock;
-            pendingIntendedVersion = intended;
-            pendingIntendedVersionProvided = true;
-          }
-
-          // Session is live from here (#191). onDisconnect is the backstop
-          // for a client that dies mid-upload: free the slot; the stale
-          // Update session is aborted by the next upload's begin path above.
-          // Stamp BEFORE the owner is published: netTask's stall watchdog
-          // keys on the owner and must never pair it with an old stamp.
-          otaUploadStartMs = millis();
-          otaLastChunkMs = otaUploadStartMs;  // #313 stall watchdog baseline
-          otaOwnerRequest = request;
-          request->onDisconnect([request]() {
-            // Still the owner here = the client died mid-upload (a finished
-            // request was released by its completion handler). The stall
-            // watchdog keys on the owner, so nothing else would thaw MQTT.
-            AsyncWebServerRequest* mine = request;
-            if (otaOwnerRequest.compare_exchange_strong(mine, nullptr)) {
-              mqttResumeAfterOta();
-            }
-          });
-        }
-
-        // Not (or no longer) the live owner (#191): covers overlap-rejected
-        // requests AND stragglers rejected via the shared flag above whose
-        // client keeps streaming — a later legitimate owner resets that
-        // flag, and without this gate their leftover chunks would write
-        // into the new owner's session.
-        if (otaOwnerRequest != request) return;
-        if (otaRejection.rejected()) return;
-        otaLastChunkMs = millis();  // #313: progress resets the stall deadline
-
-        if (len > 0 && Update.write(data, len) != len) {
-          // Error is latched inside Update; the completion callback
-          // reports it. Stop consuming flash time on further chunks.
-          return;
-        }
-        if (final) {
-          if (Update.end(true)) {
-            uint32_t elapsedMs = millis() - otaUploadStartMs;
-            uint32_t totalBytes = (uint32_t)(index + len);
-            if (elapsedMs == 0) elapsedMs = 1;
-            SerialPrintf(
-                "Master OTA received %u bytes in %u ms (%u KB/s)\n",
-                (unsigned)totalBytes, (unsigned)elapsedMs,
-                (unsigned)(((uint64_t)totalBytes * 1000ULL / 1024ULL) /
-                           elapsedMs));
-            SerialPrintln(F("Master OTA image verified and armed — reboot "
-                            "boots it PENDING_VERIFY"));
-          } else {
-            SerialPrintln(String("Master OTA failed at end: ") +
-                          Update.errorString());
-          }
-        }
-      });
+  server.on("/firmware/master", HTTP_POST, handleMasterOtaRequest,
+            handleMasterOtaUpload);
 
   server.on("/debug/ota", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send(200, "application/json", otaDebugJson());
@@ -376,121 +552,8 @@ void webFirmwareRegister(AsyncWebServer& server) {
   // Never touches otadata — installing a rescue image does not change what
   // boots next. Same async-context exception as the master OTA above: the
   // firmware stream is written right here in the async_tcp task.
-  server.on(
-      "/firmware/rescue", HTTP_POST,
-      [](AsyncWebServerRequest* request) {
-        // Overlap-rejected upload: answer 409 without touching the live
-        // install's state (same per-request marker as the master OTA).
-        if (request->_tempObject != nullptr) {
-          request->send(409, "text/plain",
-                        F("another rescue install is in flight — let it "
-                          "finish (a dropped one expires after ~30 s) and "
-                          "retry"));
-          return;
-        }
-        // #347: capture/clear the per-request install marker (see master OTA).
-        // Cleared whenever it is ours, whatever the verdict: a marker left
-        // behind would match a later request allocated at the same address.
-        bool mine = (rescueOwnerRequest == request);
-        if (mine) rescueOwnerRequest = nullptr;
-        int rejStatus = 0;
-        String rejReason;
-        bool rejected = rescueRejection.take(rejStatus, rejReason);
-        bool installRan = mine && !rejected;
-        String err = factoryWriteError();
-        // The factory writer has no "finished" state of its own: an install
-        // that ran and latched no error is complete.
-        switch (otaUploadCompletion(rejected, err.length() > 0, installRan,
-                                    true)) {
-          case OtaCompletion::Rejected:
-            request->send(rejStatus, "text/plain", rejReason);
-            return;
-          case OtaCompletion::FlashError:
-            request->send(500, "text/plain", "Rescue install failed: " + err);
-            return;
-          case OtaCompletion::NoFile:
-            // factoryWriteBegin never ran, the factory slot is untouched;
-            // never report a false "installed".
-            request->send(400, "text/plain",
-                          F("No rescue image in request (a multipart file part "
-                            "is required)"));
-            return;
-          default:
-            break;
-        }
-        // #391: record what was just installed so the slot's identity is
-        // readable without booting into it. Optional ?v= mirrors
-        // /firmware/master's — same sanitizer, and STAGED for the drain
-        // rather than written here: the record is an NVS commit, which the
-        // async-context rule keeps off this task (the streaming exception
-        // above covers the image bytes, not a keyed settings write).
-        // Absent/empty ?v= is staged too, so the drain clears any record
-        // left by the image this one just replaced.
-        {
-          WebStateLock lock;
-          pendingRescueRev = sanitizeIntendedVersion(
-              request->hasParam("v") ? request->getParam("v")->value()
-                                     : String());
-          pendingRescueRecord = true;
-        }
-        request->send(200, "text/plain",
-                      F("Rescue image installed into the factory slot. No "
-                        "reboot — POST /firmware/rescue-boot to test it."));
-      },
-      [](AsyncWebServerRequest* request, String filename, size_t index,
-         uint8_t* data, size_t len, bool final) {
-        if (index == 0) {
-          // An install is already streaming: mark THIS request rejected
-          // (malloc pairs with the free in the request destructor) and leave
-          // the live install's state alone.
-          if (factoryInstallInProgress()) {
-            request->_tempObject = malloc(1);
-            return;
-          }
-          rescueRejection.clear();
-          if (releaseUpdateRunning()) {
-            rescueRejection.set(409, String(RELEASE_UPDATE_RUNNING));
-            return;
-          }
-
-          // INLINE before factoryWriteBegin — the CSRF middleware fires
-          // post-body, too late for an upload route. No reflash gate: an
-          // install into the factory slot does not reboot the board.
-          String md5 = request->hasParam("md5")
-                           ? request->getParam("md5")->value()
-                           : String();
-          OtaGate gate =
-              otaUploadGate(webUploadCsrfRejected(request), false, md5);
-          if (gate != OtaGate::Pass) {
-            rescueRejection.set(gate);
-            return;
-          }
-          if (!factoryWriteBegin(md5)) {
-            rescueRejection.set(
-                500, "Rescue install could not start: " + factoryWriteError());
-            return;
-          }
-          rescueOwnerRequest = request;  // #347: a real install began here
-          // A client that dies mid-upload must not leave its marker behind;
-          // the install itself expires in FactorySlot.
-          request->onDisconnect([request]() {
-            if (rescueOwnerRequest == request) rescueOwnerRequest = nullptr;
-          });
-        }
-
-        // Only the request that began the install writes into it: an
-        // overlap-rejected or gate-rejected request whose client keeps
-        // streaming must not splice its chunks into the live one.
-        if (rescueOwnerRequest != request) return;
-        if (rescueRejection.rejected()) return;
-
-        if (len > 0 && !factoryWriteChunk(data, len, index)) {
-          return;  // error latched in FactorySlot; completion reports it
-        }
-        if (final) {
-          factoryWriteEnd();  // completion callback reads factoryWriteError()
-        }
-      });
+  server.on("/firmware/rescue", HTTP_POST, handleRescueInstallRequest,
+            handleRescueInstallUpload);
 
   // Software entry into the rescue image — and the periodic "prove the
   // rescue image still boots" test (#195 spec). Guarded so a wall-mounted
@@ -498,38 +561,7 @@ void webFirmwareRegister(AsyncWebServer& server) {
   // back to an OTA slot anyway, but the endpoint must stay honest as a
   // boot test). otadata erase + staged reboot; NVS untouched, so WiFi
   // credentials survive into rescue (#193 invariant).
-  server.on("/firmware/rescue-boot", HTTP_POST,
-            [](AsyncWebServerRequest* request) {
-              if (factoryInstallInProgress()) {
-                request->send(409, "text/plain",
-                              F("A rescue image install is in flight — let "
-                                "it finish, then retry."));
-                return;
-              }
-              if (releaseUpdateRunning()) {
-                request->send(409, "text/plain", RELEASE_UPDATE_RUNNING);
-                return;
-              }
-              if (!factorySlotImageValid()) {
-                request->send(409, "text/plain",
-                              F("Factory slot holds no valid rescue image — "
-                                "POST it to /firmware/rescue first."));
-                return;
-              }
-              if (!rescueBootArm()) {
-                request->send(500, "text/plain",
-                              F("otadata erase failed — rescue boot not "
-                                "armed."));
-                return;
-              }
-              request->send(200, "text/plain",
-                            F("Rebooting into the rescue image… it joins "
-                              "WiFi (or opens <name>-rescue) and serves the "
-                              "recovery page."));
-              WebStateLock lock;
-              pendingReboot = true;
-              rebootRequestedAtMs = millis();
-            });
+  server.on("/firmware/rescue-boot", HTTP_POST, handleRescueBoot);
 }
 
 // OTA stall watchdog (#313), drained first in webEndpointsLoop(): a session
