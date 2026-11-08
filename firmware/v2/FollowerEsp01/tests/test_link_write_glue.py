@@ -66,3 +66,11 @@ def test_the_row_takes_its_radio_power_save_from_the_master_and_reports_it() -> 
     stay = _body(wifi, "void followerWifiStayAwake(bool awake) {")
     assert "if (awake == radioAwake) return;" in stay
     assert "WiFi.setSleepMode(awake ? WIFI_NONE_SLEEP : WIFI_MODEM_SLEEP)" in stay
+
+
+def test_the_tick_dials_then_reads_then_serves() -> None:
+    """linkLoopTick only calls its steps; the pins above read their bodies,
+    so the order of the calls is pinned here."""
+    tick = _body(_code(), "void linkLoopTick() {")
+    assert tick.index("dialMaster(view);") < tick.index("readFromMaster(view)") \
+        < tick.index("welcomedTick(view);")
