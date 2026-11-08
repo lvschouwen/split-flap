@@ -89,8 +89,12 @@ def test_unit_checks_the_guard_before_dispatching_an_opcode():
     assert check < dispatch
     refused = body[check:dispatch]
     assert "badCommandCount++" in refused and "return;" in refused
-    assert "jogDecode(pay, extraLen, strict, steps)" in body
     assert "UNIT_GATE_STRICT_OPCODES" in body
+    # The jog payload is judged in its own ISR helper, under the same gate.
+    assert "receiveJog(remaining, strict);" in body[dispatch:]
+    jog = _function_body(_strip_comments(UNIT_PROTOCOL.read_text()),
+                         "static void receiveJog(int& remaining, bool strict)")
+    assert "jogDecode(pay, extraLen, strict, steps)" in jog
 
 
 CORE = V2 / "shared" / "UnitBusCore.h"

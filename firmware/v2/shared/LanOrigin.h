@@ -33,6 +33,53 @@ inline bool lanPrivateIpv4(const String& host) {
   return false;
 }
 
+// The value of one hex digit, -1 for any other character.
+inline int lanHexDigit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+// Reads up to four hex digits of t from i on into value, leaving i after the
+// last one. Returns how many it read.
+inline int lanIpv6HexGroup(const String& t, unsigned int& i, int& value) {
+  const unsigned int n = t.length();
+  int digits = 0;
+  value = 0;
+  while (i < n && digits < 4) {
+    const int d = lanHexDigit(t[i]);
+    if (d < 0) break;
+    value = value * 16 + d;
+    digits++;
+    i++;
+  }
+  return digits;
+}
+
+// Writes count parsed groups as 16 bytes. gap: the index of the group the
+// "::" stands before (count when it ends the literal), -1 for none; it fills
+// the groups that are missing with zeros.
+inline bool lanIpv6Expand(const uint16_t* groups, int count, int gap, uint8_t out[16]) {
+  if (gap < 0 && count != 8) return false;
+  if (gap >= 0 && count >= 8) return false;
+  int o = 0;
+  for (int g = 0; g < count; g++) {
+    if (g == gap) {
+      for (int z = 0; z < 8 - count; z++) {
+        out[o++] = 0;
+        out[o++] = 0;
+      }
+    }
+    out[o++] = (uint8_t)(groups[g] >> 8);
+    out[o++] = (uint8_t)groups[g];
+  }
+  if (gap == count) {
+    while (o < 16) out[o++] = 0;
+  }
+  return o == 16;
+}
+
 // An IPv6 literal as a URL writes it between brackets, without them: hex
 // groups of one to four digits, one "::" at most, an optional zone after
 // '%'. Fills the 16 bytes. No embedded IPv4 tail.
@@ -52,18 +99,8 @@ inline bool lanParseIpv6(const String& text, uint8_t out[16]) {
     return false;
   }
   while (i < n) {
-    int value = 0, digits = 0;
-    while (i < n && digits < 4) {
-      const char c = t[i];
-      int d;
-      if (c >= '0' && c <= '9') d = c - '0';
-      else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
-      else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
-      else break;
-      value = value * 16 + d;
-      digits++;
-      i++;
-    }
+    int value = 0;
+    const int digits = lanIpv6HexGroup(t, i, value);
     if (digits == 0 || count >= 8) return false;
     groups[count++] = (uint16_t)value;
     if (i == n) break;
@@ -78,23 +115,7 @@ inline bool lanParseIpv6(const String& text, uint8_t out[16]) {
       return false;  // a trailing single colon
     }
   }
-  if (gap < 0 && count != 8) return false;
-  if (gap >= 0 && count >= 8) return false;
-  int o = 0;
-  for (int g = 0; g < count; g++) {
-    if (g == gap) {
-      for (int z = 0; z < 8 - count; z++) {
-        out[o++] = 0;
-        out[o++] = 0;
-      }
-    }
-    out[o++] = (uint8_t)(groups[g] >> 8);
-    out[o++] = (uint8_t)groups[g];
-  }
-  if (gap == count) {
-    while (o < 16) out[o++] = 0;
-  }
-  return o == 16;
+  return lanIpv6Expand(groups, count, gap, out);
 }
 
 // Link-local (fe80::/10), unique-local (fc00::/7) or loopback (::1).

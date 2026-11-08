@@ -188,8 +188,15 @@ def test_atomic_write_replaces_and_leaves_no_temp():
 
 
 def test_committed_baseline_parses():
+    # Every offender may be fixed (#665 emptied it): what must hold is that the
+    # file parses, keeps its header, and lists only values past the fail line.
     with open(os.path.join(ROOT, *cs.BASELINE_REL.split("/"))) as f:
-        assert cs.parse_baseline(f.read())
+        text = f.read()
+    entries = cs.parse_baseline(text)
+    assert "#653" in cs.split_header(text)
+    for (metric, _key), value in entries.items():
+        if metric != cs.MOVED:
+            assert value > cs.LIMITS[metric][1], (metric, _key, value)
 
 
 # --- review follow-up -------------------------------------------------------------------------------------------

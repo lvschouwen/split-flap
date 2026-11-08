@@ -8,6 +8,188 @@
 // run in the TWI ISR: no blocking work, defer mutations to loop() via the
 // pending* flags declared in Unit.ino.
 
+// The helpers below run in the TWI ISR from receiveLetter(): no blocking work.
+
+// ISR context only: a loop-context bump guards the RMW itself (#172).
+static void noteBadCommand() {
+  if (badCommandCount < 0xFF) badCommandCount++;
+}
+
+// Reads len payload bytes the caller has checked `remaining` holds. Forced
+// inline: the outlined copy costs about 90 bytes of the Nano's flash.
+static inline __attribute__((always_inline)) void readPayload(uint8_t* pay, uint8_t len, int& remaining) {
+  for (uint8_t k = 0; k < len; k++) {
+    pay[k] = (uint8_t)Wire.read();
+  }
+  remaining -= len;
+}
+
+// A read opcode asks for its reply; anything else is an unknown opcode.
+static void queueReplyOrRefuse(uint8_t opcode) {
+  switch (opcode) {
+    case SFP_CMD_GET_VERSION:
+      pendingReply = REPLY_VERSION;
+      break;
+    case SFP_CMD_GET_OFFSET:
+      pendingReply = REPLY_OFFSET;
+      break;
+    case SFP_CMD_GET_STATUS:
+      pendingReply = REPLY_STATUS;
+      break;
+    case SFP_CMD_GET_LETTER:
+      pendingReply = REPLY_LETTER;
+      break;
+    case SFP_CMD_GET_ODOMETER:
+      pendingReply = REPLY_ODOMETER;
+      break;
+    case SFP_CMD_GET_DIAG:
+      pendingReply = REPLY_DIAG;
+      break;
+    case SFP_CMD_GET_SELF_TEST:
+      pendingReply = REPLY_SELF_TEST;
+      break;
+    case SFP_CMD_GET_VITALS:
+      pendingReply = REPLY_VITALS;
+      break;
+    case SFP_CMD_GET_EXT_DIAG:
+      pendingReply = REPLY_EXT_DIAG;
+      break;
+    case SFP_CMD_GET_LIFETIME:
+      pendingReply = REPLY_LIFETIME;
+      break;
+    case SFP_CMD_GET_BOOT_INFO:
+      pendingReply = REPLY_BOOT_INFO;  // #499; cached reply streamed by requestEvent
+      break;
+    case SFP_CMD_GET_BUS_RECORD:
+      pendingReply = REPLY_BUS_RECORD;  // #584; pre-encoded by loop()
+      break;
+    default:
+      noteBadCommand();
+      break;  // unknown opcode -> ignore
+  }
+}
+
+static void receiveSetOffset(int& remaining) {
+  if (remaining < SET_OFFSET_PAYLOAD_LEN) {
+    noteBadCommand();
+    return;
+  }
+  uint8_t pay[SET_OFFSET_PAYLOAD_LEN];
+  readPayload(pay, SET_OFFSET_PAYLOAD_LEN, remaining);
+  // Value + bitwise complement (#405): a pair that disagrees is a
+  // corrupted write, not a calibration. Previously fire-and-forget.
+  int16_t requestedOffset = 0;
+  if (!setOffsetDecode(pay, SET_OFFSET_PAYLOAD_LEN, requestedOffset)) {
+    noteBadCommand();
+    return;
+  }
+  // Drop out-of-range offsets instead of persisting them (#171):
+  // past ±STEPS the post-homing stepper.step(calOffset) — one
+  // blocking library call — outruns the 8 s watchdog window and
+  // resets the Nano mid-rotation. Mirrors getOffset()'s boot check.
+  if (requestedOffset >= -STEPS && requestedOffset <= STEPS) {
+    pendingOffsetValue = requestedOffset;
+    pendingOffsetWrite = true;
+  } else {
+    noteBadCommand();
+  }
+}
+
+static void receiveJog(int& remaining, bool strict) {
+  uint8_t extraLen = (remaining > 0xFF) ? 0xFF : (uint8_t)remaining;
+  uint8_t pay[JOG_PAYLOAD_LEN] = {0, 0};
+  for (uint8_t k = 0; k < JOG_PAYLOAD_LEN && remaining > 0; k++) {
+    pay[k] = (uint8_t)Wire.read();
+    remaining--;
+  }
+  int8_t steps = 0;
+  if (jogDecode(pay, extraLen, strict, steps)) {
+    pendingJogSteps = steps;
+  } else {
+    noteBadCommand();
+  }
+}
+
+static void receiveSetAddress(int& remaining) {
+  if (remaining < SET_ADDRESS_PAYLOAD_LEN) {
+    noteBadCommand();
+    return;
+  }
+  uint8_t pay[SET_ADDRESS_PAYLOAD_LEN];
+  readPayload(pay, SET_ADDRESS_PAYLOAD_LEN, remaining);
+  // Value + bitwise complement (#405). This was the worst hole in the
+  // contract: one unprotected byte, after which the unit persists it
+  // and reboots. A corruption landing inside 1..126 relocated the unit
+  // to an address nobody was looking at, unverifiable after the fact
+  // because the unit was gone from the address you were talking to —
+  // recovery was a physical trip to re-DIP.
+  uint8_t requestedAddress = 0;
+  if (setAddressDecode(pay, SET_ADDRESS_PAYLOAD_LEN, requestedAddress)) {
+    pendingAddressValue = requestedAddress;
+    pendingSetAddress = true;
+  } else {
+    noteBadCommand();
+  }
+}
+
+static void receiveSetGates(int& remaining) {
+  if (remaining < SET_GATES_PAYLOAD_LEN) {
+    noteBadCommand();
+    return;
+  }
+  uint8_t pay[SET_GATES_PAYLOAD_LEN];
+  readPayload(pay, SET_GATES_PAYLOAD_LEN, remaining);
+  // Value + bitwise complement (#405 discipline), then a bits check:
+  // this unit persists only gates it has code for, so a newer master
+  // cannot talk it into reporting a feature it will never run (#409).
+  uint8_t requestedGates = 0;
+  if (setGatesDecode(pay, SET_GATES_PAYLOAD_LEN, requestedGates) &&
+      unitGateBitsKnown(requestedGates)) {
+    pendingGatesValue = requestedGates;
+    pendingGatesWrite = true;
+  } else {
+    noteBadCommand();
+  }
+}
+
+// In-system twiboot update (#499). 2-byte payload: stage + ~stage
+// (#405 complement discipline — this mutation rewrites the bootloader,
+// so a corrupted stage byte must never be acted on). loop() runs it.
+static void receiveBootUpdate(int& remaining) {
+  if (remaining < 2) {
+    noteBadCommand();
+    return;
+  }
+  uint8_t stage = (uint8_t)Wire.read();
+  uint8_t comp = (uint8_t)Wire.read();
+  remaining -= 2;
+  if ((uint8_t)(stage ^ comp) == 0xFF && (stage == 1 || stage == 2)) {
+    pendingBootUpdateStage = stage;
+    pendingBootUpdate = true;
+  } else {
+    noteBadCommand();
+  }
+}
+
+// Legacy letter+speed protocol is exactly 2 bytes. Anything else is a
+// probe (the master's bootloader-detection write hits this code path)
+// or a malformed command — drain and ignore so we don't accidentally
+// rotate the drum to a random letter when probed. Single-byte empty
+// transmissions are the master's standard bus-scan probe, not errors.
+static void receiveLetterFrame(int firstByte, int numBytes, int remaining) {
+  if (numBytes != 2) {
+    if (numBytes > 2) noteBadCommand();
+    while (remaining-- > 0) Wire.read();
+    return;
+  }
+
+  receivedNumber = firstByte;
+  // Clamped into the range a master sends (unitClampSpeed): zero would make
+  // Stepper::setSpeed() divide by it, and a corrupted high byte would ask the
+  // motor for a rate it only loses steps at.
+  stepperSpeed = unitClampSpeed(Wire.read());
+}
+
 void receiveLetter(int numBytes) {
   // Every master write — a bare bus-scan probe included — supersedes whatever
   // reply the previous write asked for (#502).
@@ -24,219 +206,75 @@ void receiveLetter(int numBytes) {
   int remaining = numBytes - 1;
 
   // First byte >= AMOUNTFLAPS is a command opcode, not a letter index.
-  if (firstByte >= AMOUNTFLAPS) {
-    uint8_t opcode = (uint8_t)firstByte;
-    // #512. The gate byte is written by loop() in a single store — safe to
-    // read here.
-    bool strict = unitGateEnabled(lifetime.featureGates, UNIT_GATE_STRICT_OPCODES);
-    if (sfpIsNoArgMutation(opcode)) {
-      // These carry no payload, so the guard byte is the only thing that tells
-      // a real command from a corrupted letter or poll.
-      uint8_t extraLen = (remaining > 0xFF) ? 0xFF : (uint8_t)remaining;
-      uint8_t guard = 0;
-      if (remaining > 0) {
-        guard = (uint8_t)Wire.read();
-        remaining--;
-      }
-      if (!noArgMutationAccepted(opcode, extraLen, guard, strict)) {
-        if (badCommandCount < 0xFF) badCommandCount++;
-        while (remaining-- > 0) Wire.read();
-        return;
-      }
-    }
-    switch (opcode) {
-      case SFP_CMD_ENTER_BOOTLOADER:
-      case SFP_CMD_REBOOT:
-        // Both trigger a watchdog reset. SFP_CMD_ENTER_BOOTLOADER is the
-        // semantic "hand off to twiboot so the master can push firmware"
-        // (master keeps twiboot alive with continuous pings); SFP_CMD_REBOOT
-        // is "just restart the sketch" (master does nothing, twiboot
-        // times out after ~250 ms, sketch runs). Mechanically identical
-        // from the unit's side — only master follow-up behavior differs.
-        pendingBootloader = true;
-        break;
-      case SFP_CMD_GET_VERSION:
-        pendingReply = REPLY_VERSION;
-        break;
-      case SFP_CMD_GET_OFFSET:
-        pendingReply = REPLY_OFFSET;
-        break;
-      case SFP_CMD_GET_STATUS:
-        pendingReply = REPLY_STATUS;
-        break;
-      case SFP_CMD_GET_LETTER:
-        pendingReply = REPLY_LETTER;
-        break;
-      case SFP_CMD_GET_ODOMETER:
-        pendingReply = REPLY_ODOMETER;
-        break;
-      case SFP_CMD_GET_DIAG:
-        pendingReply = REPLY_DIAG;
-        break;
-      case SFP_CMD_GET_SELF_TEST:
-        pendingReply = REPLY_SELF_TEST;
-        break;
-      case SFP_CMD_GET_VITALS:
-        pendingReply = REPLY_VITALS;
-        break;
-      case SFP_CMD_GET_EXT_DIAG:
-        pendingReply = REPLY_EXT_DIAG;
-        break;
-      case SFP_CMD_GET_LIFETIME:
-        pendingReply = REPLY_LIFETIME;
-        break;
-      case SFP_CMD_GET_BOOT_INFO:
-        pendingReply = REPLY_BOOT_INFO;  // #499; cached reply streamed by requestEvent
-        break;
-      case SFP_CMD_GET_BUS_RECORD:
-        pendingReply = REPLY_BUS_RECORD;  // #584; pre-encoded by loop()
-        break;
-      case SFP_CMD_START_SELF_TEST:
-        pendingSelfTest = true;
-        break;
-      case SFP_CMD_SET_OFFSET:
-        if (remaining >= SET_OFFSET_PAYLOAD_LEN) {
-          uint8_t pay[SET_OFFSET_PAYLOAD_LEN];
-          for (uint8_t k = 0; k < SET_OFFSET_PAYLOAD_LEN; k++) {
-            pay[k] = (uint8_t)Wire.read();
-          }
-          remaining -= SET_OFFSET_PAYLOAD_LEN;
-          // Value + bitwise complement (#405): a pair that disagrees is a
-          // corrupted write, not a calibration. Previously fire-and-forget.
-          int16_t requestedOffset = 0;
-          if (!setOffsetDecode(pay, SET_OFFSET_PAYLOAD_LEN, requestedOffset)) {
-            if (badCommandCount < 0xFF) badCommandCount++;
-            break;
-          }
-          // Drop out-of-range offsets instead of persisting them (#171):
-          // past ±STEPS the post-homing stepper.step(calOffset) — one
-          // blocking library call — outruns the 8 s watchdog window and
-          // resets the Nano mid-rotation. Mirrors getOffset()'s boot check.
-          if (requestedOffset >= -STEPS && requestedOffset <= STEPS) {
-            pendingOffsetValue = requestedOffset;
-            pendingOffsetWrite = true;
-          } else if (badCommandCount < 0xFF) {
-            badCommandCount++;
-          }
-        } else if (badCommandCount < 0xFF) {
-          badCommandCount++;
-        }
-        break;
-      case SFP_CMD_JOG: {
-        uint8_t extraLen = (remaining > 0xFF) ? 0xFF : (uint8_t)remaining;
-        uint8_t pay[JOG_PAYLOAD_LEN] = {0, 0};
-        for (uint8_t k = 0; k < JOG_PAYLOAD_LEN && remaining > 0; k++) {
-          pay[k] = (uint8_t)Wire.read();
-          remaining--;
-        }
-        int8_t steps = 0;
-        if (jogDecode(pay, extraLen, strict, steps)) {
-          pendingJogSteps = steps;
-        } else if (badCommandCount < 0xFF) {
-          badCommandCount++;
-        }
-        break;
-      }
-      case SFP_CMD_HOME:
-        pendingHome = true;
-        break;
-      case SFP_CMD_SET_I2C_ADDRESS:
-        if (remaining >= SET_ADDRESS_PAYLOAD_LEN) {
-          uint8_t pay[SET_ADDRESS_PAYLOAD_LEN];
-          for (uint8_t k = 0; k < SET_ADDRESS_PAYLOAD_LEN; k++) {
-            pay[k] = (uint8_t)Wire.read();
-          }
-          remaining -= SET_ADDRESS_PAYLOAD_LEN;
-          // Value + bitwise complement (#405). This was the worst hole in the
-          // contract: one unprotected byte, after which the unit persists it
-          // and reboots. A corruption landing inside 1..126 relocated the unit
-          // to an address nobody was looking at, unverifiable after the fact
-          // because the unit was gone from the address you were talking to —
-          // recovery was a physical trip to re-DIP.
-          uint8_t requestedAddress = 0;
-          if (setAddressDecode(pay, SET_ADDRESS_PAYLOAD_LEN, requestedAddress)) {
-            pendingAddressValue = requestedAddress;
-            pendingSetAddress = true;
-          } else if (badCommandCount < 0xFF) {
-            badCommandCount++;
-          }
-        } else if (badCommandCount < 0xFF) {
-          badCommandCount++;
-        }
-        break;
-      case SFP_CMD_CLEAR_I2C_ADDRESS:
-        pendingClearAddress = true;
-        break;
-      case SFP_CMD_IDENTIFY:
-        pendingIdentify = true;
-        break;
-      case SFP_CMD_RESET_ODOMETER:
-        pendingOdometerReset = true;
-        break;
-      case SFP_CMD_SET_GATES:
-        if (remaining >= SET_GATES_PAYLOAD_LEN) {
-          uint8_t pay[SET_GATES_PAYLOAD_LEN];
-          for (uint8_t k = 0; k < SET_GATES_PAYLOAD_LEN; k++) {
-            pay[k] = (uint8_t)Wire.read();
-          }
-          remaining -= SET_GATES_PAYLOAD_LEN;
-          // Value + bitwise complement (#405 discipline), then a bits check:
-          // this unit persists only gates it has code for, so a newer master
-          // cannot talk it into reporting a feature it will never run (#409).
-          uint8_t requestedGates = 0;
-          if (setGatesDecode(pay, SET_GATES_PAYLOAD_LEN, requestedGates) &&
-              unitGateBitsKnown(requestedGates)) {
-            pendingGatesValue = requestedGates;
-            pendingGatesWrite = true;
-          } else if (badCommandCount < 0xFF) {
-            badCommandCount++;
-          }
-        } else if (badCommandCount < 0xFF) {
-          badCommandCount++;
-        }
-        break;
-      case SFP_CMD_BOOT_UPDATE:
-        // In-system twiboot update (#499). 2-byte payload: stage + ~stage
-        // (#405 complement discipline — this mutation rewrites the bootloader,
-        // so a corrupted stage byte must never be acted on). loop() runs it.
-        if (remaining >= 2) {
-          uint8_t stage = (uint8_t)Wire.read();
-          uint8_t comp = (uint8_t)Wire.read();
-          remaining -= 2;
-          if ((uint8_t)(stage ^ comp) == 0xFF && (stage == 1 || stage == 2)) {
-            pendingBootUpdateStage = stage;
-            pendingBootUpdate = true;
-          } else if (badCommandCount < 0xFF) {
-            badCommandCount++;
-          }
-        } else if (badCommandCount < 0xFF) {
-          badCommandCount++;
-        }
-        break;
-      default:
-        if (badCommandCount < 0xFF) badCommandCount++;
-        break;  // unknown opcode -> ignore
-    }
-    while (remaining-- > 0) Wire.read();  // drain any extra args
+  if (firstByte < AMOUNTFLAPS) {
+    receiveLetterFrame(firstByte, numBytes, remaining);
     return;
   }
-
-  // Legacy letter+speed protocol is exactly 2 bytes. Anything else is a
-  // probe (the master's bootloader-detection write hits this code path)
-  // or a malformed command — drain and ignore so we don't accidentally
-  // rotate the drum to a random letter when probed. Single-byte empty
-  // transmissions are the master's standard bus-scan probe, not errors.
-  if (numBytes != 2) {
-    if (numBytes > 2 && badCommandCount < 0xFF) badCommandCount++;
-    while (remaining-- > 0) Wire.read();
-    return;
+  uint8_t opcode = (uint8_t)firstByte;
+  // #512. The gate byte is written by loop() in a single store — safe to
+  // read here.
+  bool strict = unitGateEnabled(lifetime.featureGates, UNIT_GATE_STRICT_OPCODES);
+  if (sfpIsNoArgMutation(opcode)) {
+    // These carry no payload, so the guard byte is the only thing that tells
+    // a real command from a corrupted letter or poll.
+    uint8_t extraLen = (remaining > 0xFF) ? 0xFF : (uint8_t)remaining;
+    uint8_t guard = 0;
+    if (remaining > 0) {
+      guard = (uint8_t)Wire.read();
+      remaining--;
+    }
+    if (!noArgMutationAccepted(opcode, extraLen, guard, strict)) {
+      if (badCommandCount < 0xFF) badCommandCount++;
+      while (remaining-- > 0) Wire.read();
+      return;
+    }
   }
-
-  receivedNumber = firstByte;
-  // Clamped into the range a master sends (unitClampSpeed): zero would make
-  // Stepper::setSpeed() divide by it, and a corrupted high byte would ask the
-  // motor for a rate it only loses steps at.
-  stepperSpeed = unitClampSpeed(Wire.read());
+  switch (opcode) {
+    case SFP_CMD_ENTER_BOOTLOADER:
+    case SFP_CMD_REBOOT:
+      // Both trigger a watchdog reset. SFP_CMD_ENTER_BOOTLOADER is the
+      // semantic "hand off to twiboot so the master can push firmware"
+      // (master keeps twiboot alive with continuous pings); SFP_CMD_REBOOT
+      // is "just restart the sketch" (master does nothing, twiboot
+      // times out after ~250 ms, sketch runs). Mechanically identical
+      // from the unit's side — only master follow-up behavior differs.
+      pendingBootloader = true;
+      break;
+    case SFP_CMD_START_SELF_TEST:
+      pendingSelfTest = true;
+      break;
+    case SFP_CMD_SET_OFFSET:
+      receiveSetOffset(remaining);
+      break;
+    case SFP_CMD_JOG:
+      receiveJog(remaining, strict);
+      break;
+    case SFP_CMD_HOME:
+      pendingHome = true;
+      break;
+    case SFP_CMD_SET_I2C_ADDRESS:
+      receiveSetAddress(remaining);
+      break;
+    case SFP_CMD_CLEAR_I2C_ADDRESS:
+      pendingClearAddress = true;
+      break;
+    case SFP_CMD_IDENTIFY:
+      pendingIdentify = true;
+      break;
+    case SFP_CMD_RESET_ODOMETER:
+      pendingOdometerReset = true;
+      break;
+    case SFP_CMD_SET_GATES:
+      receiveSetGates(remaining);
+      break;
+    case SFP_CMD_BOOT_UPDATE:
+      receiveBootUpdate(remaining);
+      break;
+    default:
+      queueReplyOrRefuse(opcode);
+      break;
+  }
+  while (remaining-- > 0) Wire.read();  // drain any extra args
 }
 
 void requestEvent() {

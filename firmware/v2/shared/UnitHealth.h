@@ -470,6 +470,248 @@ inline size_t unitFaultMaskHex(const UnitFacts* units, int width,
     o += (size_t)snprintf(buf + o, cap - o, __VA_ARGS__); \
   } while (0)
 
+// Per-block appenders of buildUnitHealthJson, one key group each, in the
+// order the document carries them. UNIT_HEALTH_APPEND returns from the
+// appender once the buffer is full; every later append then returns at once,
+// so the length reported for a short buffer is the same as one function's.
+// Each appends to buf at o and returns the new o.
+
+// The status read: firmware, rev and the GET_STATUS fields.
+inline size_t unitHealthAppendStatus(char* buf, size_t cap, size_t o, const UnitFacts& u) {
+  if (u.statusValid) {
+    const UnitStatus& s = u.status;
+    UNIT_HEALTH_APPEND(",\"fw\":%d,\"rev\":\"%s\",\"up\":%u,\"br\":%u,\"wd\":%u,\"bc\":%u,\"mc\":%u,\"fl\":%u,\"hs\":%u,\"ae\":%u",
+                       u.fwStatus, u.rev, (unsigned)s.uptimeSeconds,
+                       (unsigned)s.lifetimeBrownoutCount,
+                       (unsigned)s.lifetimeWatchdogCount,
+                       (unsigned)s.badCommandCount, (unsigned)s.mcusrAtBoot,
+                       (unsigned)s.flags, (unsigned)s.lastHomingStepCount,
+                       (s.flags & UNIT_FLAG_ADDR_EEPROM) ? 1u : 0u);
+    // rs: a lifetime reset counter climbed while this master was watching —
+    // the part of br/wd that counts as a fault. Emitted only when set.
+    if (u.resetSeen) UNIT_HEALTH_APPEND(",\"rs\":1");
+  }
+  return o;
+}
+
+// Odometer, calibration offset and the drift block.
+inline size_t unitHealthAppendPosition(char* buf, size_t cap, size_t o, const UnitFacts& u) {
+  if (u.odometerValid) {
+    // Rides its own valid flag, independent of statusValid — a unit can
+    // report status but run pre-odometer firmware (#231).
+    UNIT_HEALTH_APPEND(",\"odo\":%lu", (unsigned long)u.odometer);
+  }
+  if (u.offsetValid) {
+    // Calibration offset in steps, own valid flag like "odo": the value the
+    // probe read, patched in place by a verified write.
+    UNIT_HEALTH_APPEND(",\"ofs\":%d", (int)u.offset);
+  }
+  if (u.diagValid) {
+    // Drift block (#263/#264), own valid flag like "odo": event count +
+    // last magnitude always; "dp" only while a re-home is pending; "phys"
+    // only once the unit has synced to a hall edge; "mm" only when both
+    // the physical estimate and the master's intended frame exist and
+    // disagree.
+    UNIT_HEALTH_APPEND(",\"de\":%u,\"ds\":%d", (unsigned)u.driftEvents,
+                       (int)u.lastDriftSteps);
+    if (u.driftFlags & UNIT_DRIFT_FLAG_PENDING) {
+      UNIT_HEALTH_APPEND(",\"dp\":1");
+    }
+    bool physKnown = (u.driftFlags & UNIT_DRIFT_FLAG_POSITION_KNOWN) &&
+                     u.physLetter != 0xFF;
+    if (physKnown) {
+      UNIT_HEALTH_APPEND(",\"phys\":%u", (unsigned)u.physLetter);
+      // Poll-time verdict stamped by displayApplyUnitFacts (#267) — this
+      // layer only serializes it.
+      if (u.mismatch) {
+        UNIT_HEALTH_APPEND(",\"mm\":1");
+      }
+    }
+  }
+  return o;
+}
+
+// Vitals, ext-diag, link health and the wire contract.
+inline size_t unitHealthAppendMeasurements(char* buf, size_t cap, size_t o, const UnitFacts& u) {
+  if (u.vitalsValid) {
+    // Supply-Vcc diagnostics (#306), own valid flag like "odo" — a unit can
+    // report status but run pre-vitals firmware. vcc/vmin in mV, cp = last
+    // commanded flap index, ram = since-boot min free SRAM bytes.
+    const UnitVitals& vt = u.vitals;
+    UNIT_HEALTH_APPEND(",\"vcc\":%u,\"vmin\":%u,\"cp\":%u,\"ram\":%u",
+                       (unsigned)vt.vccNow_mV, (unsigned)vt.vccMin_mV,
+                       (unsigned)vt.cmdPos, (unsigned)vt.freeRamMin);
+  }
+  if (u.extDiagValid) {
+    // New-measurement diagnostics (#365), own valid flag like "odo"/"vcc" —
+    // a unit can report status but run pre-ext-diag firmware. se/sx = last
+    // and worst-seen home step excess, sag = min Vcc during last move, he =
+    // hall edges seen in the last completed rev, dw = moves in the rolling
+    // duty window, sb = status bits (bit0 stall/jam).
+    const UnitExtDiag& e = u.extDiag;
+    UNIT_HEALTH_APPEND(",\"se\":%u,\"sx\":%u,\"sag\":%u,\"he\":%u,\"dw\":%u,\"sb\":%u",
+                       (unsigned)e.stepExcessLast, (unsigned)e.stepExcessMax,
+                       (unsigned)e.vccSagLastMove, (unsigned)e.hallEdgesLastRev,
+                       (unsigned)e.dutyWindow, (unsigned)e.statusBits);
+  }
+  if (u.linkValid) {
+    // Link health (#502), own valid flag: the extension has its own checksum.
+    // ut = full since-boot uptime in seconds (the status "up" saturates at
+    // 65535), rx/tx = master writes received / reads answered by the unit
+    // (wrapping u16 — compare deltas), dh = TWI register self-check re-inits
+    // since boot.
+    const UnitLinkStats& l = u.link;
+    UNIT_HEALTH_APPEND(",\"ut\":%lu,\"rx\":%u,\"tx\":%u,\"dh\":%u",
+                       (unsigned long)l.uptimeSeconds, (unsigned)l.rxFrames,
+                       (unsigned)l.txReplies, (unsigned)l.deafHeals);
+  }
+  if (u.protocolKnown) {
+    // Wire contract the unit reports (#405). pmm marks one we do not speak:
+    // that unit is deliberately not rendered to or polled, so without this
+    // key it would look merely silent rather than deliberately untouched.
+    UNIT_HEALTH_APPEND(",\"pv\":%u", (unsigned)u.protocolVersion);
+    if (!unitProtocolSupported(u.protocolVersion)) {
+      UNIT_HEALTH_APPEND(",\"pmm\":1");
+    }
+  }
+  return o;
+}
+
+// The across-power-cycle health record.
+inline size_t unitHealthAppendLifetime(char* buf, size_t cap, size_t o, const UnitFacts& u) {
+  if (u.lifetimeValid) {
+    // Across-power-cycle health (#406), own valid flag like "odo"/"vcc" —
+    // a unit can report status but run pre-lifetime firmware. hf = lifetime
+    // failed-homing count, gates = active UNIT_GATE_* bits, sxl = worst home
+    // step excess ever seen (the "sx" above forgets at every reboot),
+    // stw0/str0 = the unit's FIRST self-test hall window and steps/rev,
+    // stw1/str1 = its most recent. The first/last pairs are the diagnosis:
+    // "hall window 46 when new, 12 now" is the trajectory that unit 0x0f's
+    // two-hour decline had nowhere to live.
+    //
+    // Each key is emitted only when non-zero, so a healthy unit that has
+    // never failed a homing and never run a self-test stays lean — the
+    // same discipline as misses/stale below.
+    const UnitLifetimeFacts& lt = u.lifetime;
+    if (lt.homeFailedCount) UNIT_HEALTH_APPEND(",\"hf\":%u", (unsigned)lt.homeFailedCount);
+    if (lt.featureGates)    UNIT_HEALTH_APPEND(",\"gates\":%u", (unsigned)lt.featureGates);
+    if (lt.stepExcessLifetimeMax) {
+      UNIT_HEALTH_APPEND(",\"sxl\":%u", (unsigned)lt.stepExcessLifetimeMax);
+    }
+    if (lt.selfTestFirstHallWindow || lt.selfTestLastHallWindow) {
+      UNIT_HEALTH_APPEND(",\"stw0\":%u,\"stw1\":%u",
+                         (unsigned)lt.selfTestFirstHallWindow,
+                         (unsigned)lt.selfTestLastHallWindow);
+    }
+    if (lt.selfTestFirstStepsPerRev || lt.selfTestLastStepsPerRev) {
+      UNIT_HEALTH_APPEND(",\"str0\":%u,\"str1\":%u",
+                         (unsigned)lt.selfTestFirstStepsPerRev,
+                         (unsigned)lt.selfTestLastStepsPerRev);
+    }
+    // Idle hall check reporting on itself (#460). fr = futile re-homes this
+    // boot (ones that measured no drift, so they proved the WINDOW model
+    // wrong — the one false-positive class a re-home cannot fix); frd = the
+    // check has disarmed itself here and is no longer protecting this unit.
+    // frd is the unit's own verdict, not this side re-deriving it from fr
+    // against a copy of the unit's limit — that duplication is what #458
+    // was. Both ride the emit-when-nonzero guard, so an armed unit that has
+    // never argued with its model stays silent.
+    if (lt.idleHallFutileRehomes) {
+      UNIT_HEALTH_APPEND(",\"fr\":%u", (unsigned)lt.idleHallFutileRehomes);
+    }
+    if (lt.idleHallStoodDown) UNIT_HEALTH_APPEND(",\"frd\":1");
+  }
+  return o;
+}
+
+// The unit's record of its master's silences.
+inline size_t unitHealthAppendBusRecord(char* buf, size_t cap, size_t o, const UnitFacts& u) {
+  if (u.busRecordValid) {
+    // The unit's own record of its master's silences (#584). bsn = how many,
+    // always there when the record was read, so "none" and "cannot say"
+    // differ; the rest only when not zero: bsl/bsx = minutes of the latest
+    // and the longest, bsr = restarts of its bus hardware, bsh = of those,
+    // the ones contact followed, bss = restarts of the whole unit, bsf =
+    // BUS_RECORD_FLAG_* of the latest, bsq = minutes of one going on now.
+    const UnitBusRecord& br = u.busRecord;
+    UNIT_HEALTH_APPEND(",\"bsn\":%u", (unsigned)br.silences);
+    if (br.lastMinutes) UNIT_HEALTH_APPEND(",\"bsl\":%u", (unsigned)br.lastMinutes);
+    if (br.longestMinutes) UNIT_HEALTH_APPEND(",\"bsx\":%u", (unsigned)br.longestMinutes);
+    if (br.reinits) UNIT_HEALTH_APPEND(",\"bsr\":%u", (unsigned)br.reinits);
+    if (br.reinitsHeard) UNIT_HEALTH_APPEND(",\"bsh\":%u", (unsigned)br.reinitsHeard);
+    if (br.selfRestarts) UNIT_HEALTH_APPEND(",\"bss\":%u", (unsigned)br.selfRestarts);
+    if (br.flags) UNIT_HEALTH_APPEND(",\"bsf\":%u", (unsigned)br.flags);
+    if (u.busSilentNowMinutes) {
+      UNIT_HEALTH_APPEND(",\"bsq\":%u", (unsigned)u.busSilentNowMinutes);
+    }
+  }
+  return o;
+}
+
+// Heartbeat freshness and the I2C error ledger of a sketch unit.
+inline size_t unitHealthAppendLiveness(char* buf, size_t cap, size_t o, const UnitFacts& u, uint32_t nowMs) {
+  if (u.state == 1) {
+    // Heartbeat freshness (#310): age = ms since the last good scheduled
+    // read, hs2 = boot-home state (0 unhomed / 1 homing / 2 homed, #309).
+    // Gated on state==1, NOT statusValid: a lost unit's current read FAILED
+    // (statusValid=false) yet is exactly when misses/stale must surface —
+    // status.flags/lastSeenMs hold the last-known values. misses/stale ride
+    // an emit-when-nonzero guard so a healthy unit stays lean; stale latches
+    // once misses >= the threshold.
+    UNIT_HEALTH_APPEND(",\"age\":%lu,\"hs2\":%u",
+                       (unsigned long)(nowMs - u.lastSeenMs),
+                       (unsigned)unitBootHomeState(u.status.flags));
+    if (u.misses > 0) UNIT_HEALTH_APPEND(",\"misses\":%u", (unsigned)u.misses);
+    if (u.stale)      UNIT_HEALTH_APPEND(",\"stale\":1");
+    // Per-unit I2C reliability (#367): cumulative error count for this
+    // address + ms since its last error, emit-when-nonzero so a clean unit
+    // stays lean. errAge is only meaningful once an error has been charged.
+    if (u.i2cErrors > 0) {
+      UNIT_HEALTH_APPEND(",\"err\":%u,\"errAge\":%lu", (unsigned)u.i2cErrors,
+                         (unsigned long)(nowMs - u.lastErrorMs));
+    }
+    if (u.rescueExits > 0) {
+      UNIT_HEALTH_APPEND(",\"rsx\":%u", (unsigned)u.rescueExits);
+    }
+  }
+  return o;
+}
+
+// Boot-section verdict and the identity of a unit in its bootloader.
+inline size_t unitHealthAppendBoot(char* buf, size_t cap, size_t o, const UnitFacts& u) {
+  if (u.bootVerdict != BOOT_INTEGRITY_UNREAD) {
+    // Boot-section integrity (#520): bv = 1 the expected bootloader image,
+    // 2 a known other image or update step, 3 matches nothing known (counts
+    // as faulty). bcrc = the CRC the unit reported, only when it is not the
+    // expected one.
+    UNIT_HEALTH_APPEND(",\"bv\":%u", (unsigned)u.bootVerdict);
+    if (u.bootVerdict != BOOT_INTEGRITY_OK) {
+      UNIT_HEALTH_APPEND(",\"bcrc\":\"%08lx\"", (unsigned long)u.bootCrc32);
+    }
+  }
+  if (u.state == 2 && u.bootloader.generation != TWIBOOT_GEN_UNREAD) {
+    // A unit sitting in its bootloader (#541/#543): blv = 1 an image
+    // without identity bytes, 255 not recognised, else the image's version;
+    // blc = its capability bits; blk / blf = lock byte and low, high,
+    // extended fuse, only when the chip served real ones.
+    const TwibootIdentity& b = u.bootloader;
+    UNIT_HEALTH_APPEND(",\"blv\":%u,\"blc\":%u", (unsigned)b.generation,
+                       (unsigned)b.caps);
+    if (b.fusesValid) {
+      UNIT_HEALTH_APPEND(",\"blk\":\"%02x\",\"blf\":\"%02x%02x%02x\"",
+                         (unsigned)b.lock, (unsigned)b.lfuse,
+                         (unsigned)b.hfuse, (unsigned)b.efuse);
+    }
+    // blx = crash resets in a row the bootloader counted (#542), shown from
+    // 2 up (1 is the intentional reset of any reflash); at 3 it holds the
+    // unit, which counts as faulty.
+    if (b.crashValid && b.crashCount >= TWIBOOT_CRASH_REPORT_FROM) {
+      UNIT_HEALTH_APPEND(",\"blx\":%u", (unsigned)b.crashCount);
+    }
+  }
+  return o;
+}
+
 // Builds the per-unit health JSON (v1 wire shape, one wire contract for
 // /units/health across both firmware generations):
 //   {"width":W,"faulty":F,"units":[ {per-slot} , ... ]}
@@ -500,207 +742,13 @@ inline size_t buildUnitHealthJson(char* buf, size_t cap, const UnitFacts* units,
     UNIT_HEALTH_APPEND("%s{\"i\":%d,\"a\":%d,\"st\":%d,\"v\":%d",
                        i == 0 ? "" : ",", i, base + i, u.state,
                        u.statusValid ? 1 : 0);
-    if (u.statusValid) {
-      const UnitStatus& s = u.status;
-      UNIT_HEALTH_APPEND(",\"fw\":%d,\"rev\":\"%s\",\"up\":%u,\"br\":%u,\"wd\":%u,\"bc\":%u,\"mc\":%u,\"fl\":%u,\"hs\":%u,\"ae\":%u",
-                         u.fwStatus, u.rev, (unsigned)s.uptimeSeconds,
-                         (unsigned)s.lifetimeBrownoutCount,
-                         (unsigned)s.lifetimeWatchdogCount,
-                         (unsigned)s.badCommandCount, (unsigned)s.mcusrAtBoot,
-                         (unsigned)s.flags, (unsigned)s.lastHomingStepCount,
-                         (s.flags & UNIT_FLAG_ADDR_EEPROM) ? 1u : 0u);
-      // rs: a lifetime reset counter climbed while this master was watching —
-      // the part of br/wd that counts as a fault. Emitted only when set.
-      if (u.resetSeen) UNIT_HEALTH_APPEND(",\"rs\":1");
-    }
-    if (u.odometerValid) {
-      // Rides its own valid flag, independent of statusValid — a unit can
-      // report status but run pre-odometer firmware (#231).
-      UNIT_HEALTH_APPEND(",\"odo\":%lu", (unsigned long)u.odometer);
-    }
-    if (u.offsetValid) {
-      // Calibration offset in steps, own valid flag like "odo": the value the
-      // probe read, patched in place by a verified write.
-      UNIT_HEALTH_APPEND(",\"ofs\":%d", (int)u.offset);
-    }
-    if (u.diagValid) {
-      // Drift block (#263/#264), own valid flag like "odo": event count +
-      // last magnitude always; "dp" only while a re-home is pending; "phys"
-      // only once the unit has synced to a hall edge; "mm" only when both
-      // the physical estimate and the master's intended frame exist and
-      // disagree.
-      UNIT_HEALTH_APPEND(",\"de\":%u,\"ds\":%d", (unsigned)u.driftEvents,
-                         (int)u.lastDriftSteps);
-      if (u.driftFlags & UNIT_DRIFT_FLAG_PENDING) {
-        UNIT_HEALTH_APPEND(",\"dp\":1");
-      }
-      bool physKnown = (u.driftFlags & UNIT_DRIFT_FLAG_POSITION_KNOWN) &&
-                       u.physLetter != 0xFF;
-      if (physKnown) {
-        UNIT_HEALTH_APPEND(",\"phys\":%u", (unsigned)u.physLetter);
-        // Poll-time verdict stamped by displayApplyUnitFacts (#267) — this
-        // layer only serializes it.
-        if (u.mismatch) {
-          UNIT_HEALTH_APPEND(",\"mm\":1");
-        }
-      }
-    }
-    if (u.vitalsValid) {
-      // Supply-Vcc diagnostics (#306), own valid flag like "odo" — a unit can
-      // report status but run pre-vitals firmware. vcc/vmin in mV, cp = last
-      // commanded flap index, ram = since-boot min free SRAM bytes.
-      const UnitVitals& vt = u.vitals;
-      UNIT_HEALTH_APPEND(",\"vcc\":%u,\"vmin\":%u,\"cp\":%u,\"ram\":%u",
-                         (unsigned)vt.vccNow_mV, (unsigned)vt.vccMin_mV,
-                         (unsigned)vt.cmdPos, (unsigned)vt.freeRamMin);
-    }
-    if (u.extDiagValid) {
-      // New-measurement diagnostics (#365), own valid flag like "odo"/"vcc" —
-      // a unit can report status but run pre-ext-diag firmware. se/sx = last
-      // and worst-seen home step excess, sag = min Vcc during last move, he =
-      // hall edges seen in the last completed rev, dw = moves in the rolling
-      // duty window, sb = status bits (bit0 stall/jam).
-      const UnitExtDiag& e = u.extDiag;
-      UNIT_HEALTH_APPEND(",\"se\":%u,\"sx\":%u,\"sag\":%u,\"he\":%u,\"dw\":%u,\"sb\":%u",
-                         (unsigned)e.stepExcessLast, (unsigned)e.stepExcessMax,
-                         (unsigned)e.vccSagLastMove, (unsigned)e.hallEdgesLastRev,
-                         (unsigned)e.dutyWindow, (unsigned)e.statusBits);
-    }
-    if (u.linkValid) {
-      // Link health (#502), own valid flag: the extension has its own checksum.
-      // ut = full since-boot uptime in seconds (the status "up" saturates at
-      // 65535), rx/tx = master writes received / reads answered by the unit
-      // (wrapping u16 — compare deltas), dh = TWI register self-check re-inits
-      // since boot.
-      const UnitLinkStats& l = u.link;
-      UNIT_HEALTH_APPEND(",\"ut\":%lu,\"rx\":%u,\"tx\":%u,\"dh\":%u",
-                         (unsigned long)l.uptimeSeconds, (unsigned)l.rxFrames,
-                         (unsigned)l.txReplies, (unsigned)l.deafHeals);
-    }
-    if (u.protocolKnown) {
-      // Wire contract the unit reports (#405). pmm marks one we do not speak:
-      // that unit is deliberately not rendered to or polled, so without this
-      // key it would look merely silent rather than deliberately untouched.
-      UNIT_HEALTH_APPEND(",\"pv\":%u", (unsigned)u.protocolVersion);
-      if (!unitProtocolSupported(u.protocolVersion)) {
-        UNIT_HEALTH_APPEND(",\"pmm\":1");
-      }
-    }
-    if (u.lifetimeValid) {
-      // Across-power-cycle health (#406), own valid flag like "odo"/"vcc" —
-      // a unit can report status but run pre-lifetime firmware. hf = lifetime
-      // failed-homing count, gates = active UNIT_GATE_* bits, sxl = worst home
-      // step excess ever seen (the "sx" above forgets at every reboot),
-      // stw0/str0 = the unit's FIRST self-test hall window and steps/rev,
-      // stw1/str1 = its most recent. The first/last pairs are the diagnosis:
-      // "hall window 46 when new, 12 now" is the trajectory that unit 0x0f's
-      // two-hour decline had nowhere to live.
-      //
-      // Each key is emitted only when non-zero, so a healthy unit that has
-      // never failed a homing and never run a self-test stays lean — the
-      // same discipline as misses/stale below.
-      const UnitLifetimeFacts& lt = u.lifetime;
-      if (lt.homeFailedCount) UNIT_HEALTH_APPEND(",\"hf\":%u", (unsigned)lt.homeFailedCount);
-      if (lt.featureGates)    UNIT_HEALTH_APPEND(",\"gates\":%u", (unsigned)lt.featureGates);
-      if (lt.stepExcessLifetimeMax) {
-        UNIT_HEALTH_APPEND(",\"sxl\":%u", (unsigned)lt.stepExcessLifetimeMax);
-      }
-      if (lt.selfTestFirstHallWindow || lt.selfTestLastHallWindow) {
-        UNIT_HEALTH_APPEND(",\"stw0\":%u,\"stw1\":%u",
-                           (unsigned)lt.selfTestFirstHallWindow,
-                           (unsigned)lt.selfTestLastHallWindow);
-      }
-      if (lt.selfTestFirstStepsPerRev || lt.selfTestLastStepsPerRev) {
-        UNIT_HEALTH_APPEND(",\"str0\":%u,\"str1\":%u",
-                           (unsigned)lt.selfTestFirstStepsPerRev,
-                           (unsigned)lt.selfTestLastStepsPerRev);
-      }
-      // Idle hall check reporting on itself (#460). fr = futile re-homes this
-      // boot (ones that measured no drift, so they proved the WINDOW model
-      // wrong — the one false-positive class a re-home cannot fix); frd = the
-      // check has disarmed itself here and is no longer protecting this unit.
-      // frd is the unit's own verdict, not this side re-deriving it from fr
-      // against a copy of the unit's limit — that duplication is what #458
-      // was. Both ride the emit-when-nonzero guard, so an armed unit that has
-      // never argued with its model stays silent.
-      if (lt.idleHallFutileRehomes) {
-        UNIT_HEALTH_APPEND(",\"fr\":%u", (unsigned)lt.idleHallFutileRehomes);
-      }
-      if (lt.idleHallStoodDown) UNIT_HEALTH_APPEND(",\"frd\":1");
-    }
-    if (u.busRecordValid) {
-      // The unit's own record of its master's silences (#584). bsn = how many,
-      // always there when the record was read, so "none" and "cannot say"
-      // differ; the rest only when not zero: bsl/bsx = minutes of the latest
-      // and the longest, bsr = restarts of its bus hardware, bsh = of those,
-      // the ones contact followed, bss = restarts of the whole unit, bsf =
-      // BUS_RECORD_FLAG_* of the latest, bsq = minutes of one going on now.
-      const UnitBusRecord& br = u.busRecord;
-      UNIT_HEALTH_APPEND(",\"bsn\":%u", (unsigned)br.silences);
-      if (br.lastMinutes) UNIT_HEALTH_APPEND(",\"bsl\":%u", (unsigned)br.lastMinutes);
-      if (br.longestMinutes) UNIT_HEALTH_APPEND(",\"bsx\":%u", (unsigned)br.longestMinutes);
-      if (br.reinits) UNIT_HEALTH_APPEND(",\"bsr\":%u", (unsigned)br.reinits);
-      if (br.reinitsHeard) UNIT_HEALTH_APPEND(",\"bsh\":%u", (unsigned)br.reinitsHeard);
-      if (br.selfRestarts) UNIT_HEALTH_APPEND(",\"bss\":%u", (unsigned)br.selfRestarts);
-      if (br.flags) UNIT_HEALTH_APPEND(",\"bsf\":%u", (unsigned)br.flags);
-      if (u.busSilentNowMinutes) {
-        UNIT_HEALTH_APPEND(",\"bsq\":%u", (unsigned)u.busSilentNowMinutes);
-      }
-    }
-    if (u.state == 1) {
-      // Heartbeat freshness (#310): age = ms since the last good scheduled
-      // read, hs2 = boot-home state (0 unhomed / 1 homing / 2 homed, #309).
-      // Gated on state==1, NOT statusValid: a lost unit's current read FAILED
-      // (statusValid=false) yet is exactly when misses/stale must surface —
-      // status.flags/lastSeenMs hold the last-known values. misses/stale ride
-      // an emit-when-nonzero guard so a healthy unit stays lean; stale latches
-      // once misses >= the threshold.
-      UNIT_HEALTH_APPEND(",\"age\":%lu,\"hs2\":%u",
-                         (unsigned long)(nowMs - u.lastSeenMs),
-                         (unsigned)unitBootHomeState(u.status.flags));
-      if (u.misses > 0) UNIT_HEALTH_APPEND(",\"misses\":%u", (unsigned)u.misses);
-      if (u.stale)      UNIT_HEALTH_APPEND(",\"stale\":1");
-      // Per-unit I2C reliability (#367): cumulative error count for this
-      // address + ms since its last error, emit-when-nonzero so a clean unit
-      // stays lean. errAge is only meaningful once an error has been charged.
-      if (u.i2cErrors > 0) {
-        UNIT_HEALTH_APPEND(",\"err\":%u,\"errAge\":%lu", (unsigned)u.i2cErrors,
-                           (unsigned long)(nowMs - u.lastErrorMs));
-      }
-      if (u.rescueExits > 0) {
-        UNIT_HEALTH_APPEND(",\"rsx\":%u", (unsigned)u.rescueExits);
-      }
-    }
-    if (u.bootVerdict != BOOT_INTEGRITY_UNREAD) {
-      // Boot-section integrity (#520): bv = 1 the expected bootloader image,
-      // 2 a known other image or update step, 3 matches nothing known (counts
-      // as faulty). bcrc = the CRC the unit reported, only when it is not the
-      // expected one.
-      UNIT_HEALTH_APPEND(",\"bv\":%u", (unsigned)u.bootVerdict);
-      if (u.bootVerdict != BOOT_INTEGRITY_OK) {
-        UNIT_HEALTH_APPEND(",\"bcrc\":\"%08lx\"", (unsigned long)u.bootCrc32);
-      }
-    }
-    if (u.state == 2 && u.bootloader.generation != TWIBOOT_GEN_UNREAD) {
-      // A unit sitting in its bootloader (#541/#543): blv = 1 an image
-      // without identity bytes, 255 not recognised, else the image's version;
-      // blc = its capability bits; blk / blf = lock byte and low, high,
-      // extended fuse, only when the chip served real ones.
-      const TwibootIdentity& b = u.bootloader;
-      UNIT_HEALTH_APPEND(",\"blv\":%u,\"blc\":%u", (unsigned)b.generation,
-                         (unsigned)b.caps);
-      if (b.fusesValid) {
-        UNIT_HEALTH_APPEND(",\"blk\":\"%02x\",\"blf\":\"%02x%02x%02x\"",
-                           (unsigned)b.lock, (unsigned)b.lfuse,
-                           (unsigned)b.hfuse, (unsigned)b.efuse);
-      }
-      // blx = crash resets in a row the bootloader counted (#542), shown from
-      // 2 up (1 is the intentional reset of any reflash); at 3 it holds the
-      // unit, which counts as faulty.
-      if (b.crashValid && b.crashCount >= TWIBOOT_CRASH_REPORT_FROM) {
-        UNIT_HEALTH_APPEND(",\"blx\":%u", (unsigned)b.crashCount);
-      }
-    }
+    o = unitHealthAppendStatus(buf, cap, o, u);
+    o = unitHealthAppendPosition(buf, cap, o, u);
+    o = unitHealthAppendMeasurements(buf, cap, o, u);
+    o = unitHealthAppendLifetime(buf, cap, o, u);
+    o = unitHealthAppendBusRecord(buf, cap, o, u);
+    o = unitHealthAppendLiveness(buf, cap, o, u, nowMs);
+    o = unitHealthAppendBoot(buf, cap, o, u);
     UNIT_HEALTH_APPEND("}");
   }
   UNIT_HEALTH_APPEND("]}");

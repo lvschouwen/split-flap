@@ -426,6 +426,155 @@ static_assert((1 << PORF) == UNIT_MCUSR_PORF && (1 << EXTRF) == UNIT_MCUSR_EXTRF
               (1 << BORF) == UNIT_MCUSR_BORF && (1 << WDRF) == UNIT_MCUSR_WDRF,
               "UnitResetCause.h restates this chip's MCUSR bits");
 
+// Lifetime reset counters: persist across power cycles so a unit with
+// chronic power issues (brownouts) can be diagnosed even if the master
+// only polls once. Saturating at 255 — once we're there the signal is
+// already loud enough.
+//
+// Fresh/erased AVR EEPROM reads back 0xFF on every byte, which would
+// masquerade as 255 saturated resets — and the saturating guard below then
+// pins them there forever (every freshly-provisioned unit reported 255/255,
+// #139). A dedicated magic byte marks the counter block as initialised; when
+// it's absent we zero the counters once and stamp the magic.
+// Day-0 EEPROM initialisation (#406). One version byte does what three
+// magics used to: anything that is not the current layout is blank and gets
+// written fresh. The version byte is stamped LAST, so a power loss mid-init
+// simply re-runs it on the next boot rather than leaving a half-written
+// layout marked valid.
+//
+// The odometer ring is not written here — it has its own marker and its own
+// sweep further down (#417), so that healing it never costs the erase this
+// block performs.
+static void eeInitIfBlank() {
+  if (unitEeIsBlank(EEPROM.read(EE_LAYOUT_VERSION_ADDR))) {
+    uint8_t block[EE_HEALTH_BLOCK_LEN];
+    unitEeCalEncode(0, block);
+    for (uint8_t i = 0; i < EE_CAL_BLOCK_LEN; i++) {
+      EEPROM.update(EE_CAL_OFFSET + i, block[i]);
+    }
+    UnitLifetimeHealth fresh = UnitLifetimeHealth();
+    unitEeHealthEncode(fresh, block);
+    for (uint8_t i = 0; i < EE_HEALTH_BLOCK_LEN; i++) {
+      EEPROM.update(EE_HEALTH_BASE + i, block[i]);
+    }
+    unitEeIdentityClear(block);  // no burned address -> DIP, the safe default
+    for (uint8_t i = EE_ID_BLOCK_LEN; i > 1; i--) {
+      EEPROM.update(EE_LAYOUT_VERSION_ADDR + (i - 1), block[i - 1]);
+    }
+    EEPROM.update(EE_LAYOUT_VERSION_ADDR, block[0]);  // version LAST
+  }
+}
+
+// Odometer ring self-heal (#417), keyed on its own marker in the reserved
+// scalars — NOT on UNIT_EE_LAYOUT_VERSION, because bumping that re-runs the
+// erase above and destroys every per-unit calibration offset (#407's
+// restore list): a re-campaign to correct a lifetime counter.
+//
+// The day-0 init leaves the ring unwritten on the reasoning that erased
+// slots read 0xFFFFFFFF and are rejected unconditionally. That is true of a
+// factory-fresh Nano and of nothing on this wall: #406 rewrites bytes 0..22
+// only, while the ring moved from 16 slots at byte 8 to 128 at byte 64 — so
+// the scan below reads bytes the OLD ring wrote and the init never cleared.
+// One stale slot satisfied its own checksum and a1 booted claiming
+// 1010580540 revolutions, then counted up from there.
+//
+// This RESETS the count on every unit it heals, which is the correction:
+// a poisoned baseline makes the cross-unit wear comparison in WearPolicy
+// meaningless, and the count is unrecoverable rather than merely wrong.
+// Already-erased slots are skipped — the scan rejects them anyway, so
+// writing zeros over them would spend endurance to reach the same answer,
+// and a factory-fresh unit still pays nothing.
+static void odometerRingHealOnce() {
+  uint8_t marker[EE_RING_INIT_BLOCK_LEN];
+  for (uint8_t i = 0; i < EE_RING_INIT_BLOCK_LEN; i++) {
+    marker[i] = EEPROM.read(EE_RING_INIT_ADDR + i);
+  }
+  if (!unitEeRingInitDone(marker)) {
+    // Clear the HISTORICAL extent, not the live ring (#463). A shrink
+    // strands old slots past the new end; they still satisfy their own
+    // checksums, so a later grow would read them back into range — which is
+    // #417's own bug, re-armed by construction. Raw zeros rather than valid
+    // zero-slots: a zeroed slot's checksum byte no longer matches, so every
+    // stale slot is REJECTED by the boot scan rather than merely losing the
+    // max, which is the stronger property for bytes outside the live ring.
+    for (uint16_t i = 0; i < ODO_RING_SWEEP_BYTES; i++) {
+      EEPROM.update(EE_ODO_RING_BASE + (int)i, 0x00);
+    }
+    // Marker LAST, same rule as the layout version byte: a power loss
+    // mid-sweep simply re-runs it on the next boot.
+    unitEeRingInitEncode(marker);
+    for (uint8_t i = EE_RING_INIT_BLOCK_LEN; i > 1; i--) {
+      EEPROM.update(EE_RING_INIT_ADDR + (i - 1), marker[i - 1]);
+    }
+    EEPROM.update(EE_RING_INIT_ADDR, marker[0]);
+  }
+}
+
+// Revolution odometer (#231): recover the count from the EEPROM ring.
+// Folded slot by slot — a 128-slot read-at-once would need a 512-byte stack
+// buffer on a 2 KB Nano. Runs before the Wire handlers register: the ISR
+// mirror setup() fills from it must be coherent before a master can query it (same ordering
+// rule as getOffset(), #173).
+static void odometerRecoverFromRing() {
+  OdometerBootScan scan;
+  odometerBootScanInit(scan);
+  for (uint8_t s = 0; s < ODO_RING_SLOTS; s++) {
+    int at = EE_ODO_RING_BASE + (int)odometerSlotOffset(s);
+    uint32_t value;
+    EEPROM.get(at, value);
+    odometerBootScanSlot(scan, value, EEPROM.read(at + 4));
+  }
+  odometer.revolutions = odometerBootScanResult(scan);
+}
+
+// The DIP address switch, the hall sensor and the identify LED.
+static void setupPins() {
+  // i2c adress switch
+  pinMode(ADRESSSW1, INPUT_PULLUP);
+  pinMode(ADRESSSW2, INPUT_PULLUP);
+  pinMode(ADRESSSW3, INPUT_PULLUP);
+  pinMode(ADRESSSW4, INPUT_PULLUP);
+
+  //hall sensor
+  pinMode(HALLPIN, INPUT);
+
+  // Onboard LED drives SFP_CMD_IDENTIFY blink (issue #56). Without OUTPUT mode
+  // digitalWrite only toggles the pull-up, so pre-existing SERIAL_ENABLE
+  // debug LED uses were effectively no-ops. Harmless to set unconditionally.
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+// Every ISR-visible reply buffer, encoded before the Wire handlers register
+// (#173 ordering rule): a read right after boot streams a coherent packet,
+// never uninitialised bytes.
+static void publishBootReplies() {
+  // Pre-encode the diag/self-test reply buffers before the Wire handlers
+  // register (#173 ordering rule): a boot-time GET_DIAG must stream a
+  // coherent "position unknown" reply, never uninitialised bytes.
+  driftRefreshReplyBuffers();
+  // Same for the vitals reply (#306): take a boot Vcc/RAM sample and publish
+  // it so a GET_VITALS right after boot streams a real rail, not zeroes.
+  vitalsSample(false);
+  vitalsRefreshReplyBuffer();
+  // Ext-diag reply (#365): publish a coherent all-zero/sentinel packet before
+  // the Wire handlers register, same #173 ordering rule as the buffers above.
+  refreshExtDiagReply();
+  // Lifetime reply (#406): same #173 ordering rule. persistLifetimeHealth()
+  // in setup() only runs when the record actually moved, so publish unconditionally
+  // here — otherwise a GET_LIFETIME before the first persist would stream an
+  // all-zero buffer whose checksum byte is 0, which the master rejects as
+  // padding rather than reading as a genuinely fresh unit.
+  refreshLifetimeReply();
+  // Bus record (#584): what earlier silences left in EEPROM, published under
+  // the same #173 ordering rule.
+  loadBusRecord();
+  // Boot-info reply (#499): same #173 ordering rule — a GET_BOOT_INFO right
+  // after boot must stream a coherent lock/fuse/CRC/state packet, and this also
+  // publishes the result of any auto-resume that just ran.
+  refreshBootInfoReply();
+}
+
 //setup
 void setup() {
   // Why we last reset (brownout / watchdog / external / power-on). The
@@ -449,42 +598,7 @@ void setup() {
   // disables TWI). (BootUpdateAvr.h / UnitBootUpdate.ino.)
   bootUpdateAutoResume();
 
-  // Lifetime reset counters: persist across power cycles so a unit with
-  // chronic power issues (brownouts) can be diagnosed even if the master
-  // only polls once. Saturating at 255 — once we're there the signal is
-  // already loud enough.
-  //
-  // Fresh/erased AVR EEPROM reads back 0xFF on every byte, which would
-  // masquerade as 255 saturated resets — and the saturating guard below then
-  // pins them there forever (every freshly-provisioned unit reported 255/255,
-  // #139). A dedicated magic byte marks the counter block as initialised; when
-  // it's absent we zero the counters once and stamp the magic.
-  // Day-0 EEPROM initialisation (#406). One version byte does what three
-  // magics used to: anything that is not the current layout is blank and gets
-  // written fresh. The version byte is stamped LAST, so a power loss mid-init
-  // simply re-runs it on the next boot rather than leaving a half-written
-  // layout marked valid.
-  //
-  // The odometer ring is not written here — it has its own marker and its own
-  // sweep further down (#417), so that healing it never costs the erase this
-  // block performs.
-  if (unitEeIsBlank(EEPROM.read(EE_LAYOUT_VERSION_ADDR))) {
-    uint8_t block[EE_HEALTH_BLOCK_LEN];
-    unitEeCalEncode(0, block);
-    for (uint8_t i = 0; i < EE_CAL_BLOCK_LEN; i++) {
-      EEPROM.update(EE_CAL_OFFSET + i, block[i]);
-    }
-    UnitLifetimeHealth fresh = UnitLifetimeHealth();
-    unitEeHealthEncode(fresh, block);
-    for (uint8_t i = 0; i < EE_HEALTH_BLOCK_LEN; i++) {
-      EEPROM.update(EE_HEALTH_BASE + i, block[i]);
-    }
-    unitEeIdentityClear(block);  // no burned address -> DIP, the safe default
-    for (uint8_t i = EE_ID_BLOCK_LEN; i > 1; i--) {
-      EEPROM.update(EE_LAYOUT_VERSION_ADDR + (i - 1), block[i - 1]);
-    }
-    EEPROM.update(EE_LAYOUT_VERSION_ADDR, block[0]);  // version LAST
-  }
+  eeInitIfBlank();
 
   // Lifetime health: the reset counters plus the unit's own record of its
   // mechanical decline, all under one checksum. A blank or torn block decodes
@@ -524,84 +638,12 @@ void setup() {
     lifetimeWatchdogCount = lifetime.watchdogCount;
   }
 
-  // Odometer ring self-heal (#417), keyed on its own marker in the reserved
-  // scalars — NOT on UNIT_EE_LAYOUT_VERSION, because bumping that re-runs the
-  // erase above and destroys every per-unit calibration offset (#407's
-  // restore list): a re-campaign to correct a lifetime counter.
-  //
-  // The day-0 init leaves the ring unwritten on the reasoning that erased
-  // slots read 0xFFFFFFFF and are rejected unconditionally. That is true of a
-  // factory-fresh Nano and of nothing on this wall: #406 rewrites bytes 0..22
-  // only, while the ring moved from 16 slots at byte 8 to 128 at byte 64 — so
-  // the scan below reads bytes the OLD ring wrote and the init never cleared.
-  // One stale slot satisfied its own checksum and a1 booted claiming
-  // 1010580540 revolutions, then counted up from there.
-  //
-  // This RESETS the count on every unit it heals, which is the correction:
-  // a poisoned baseline makes the cross-unit wear comparison in WearPolicy
-  // meaningless, and the count is unrecoverable rather than merely wrong.
-  // Already-erased slots are skipped — the scan rejects them anyway, so
-  // writing zeros over them would spend endurance to reach the same answer,
-  // and a factory-fresh unit still pays nothing.
-  {
-    uint8_t marker[EE_RING_INIT_BLOCK_LEN];
-    for (uint8_t i = 0; i < EE_RING_INIT_BLOCK_LEN; i++) {
-      marker[i] = EEPROM.read(EE_RING_INIT_ADDR + i);
-    }
-    if (!unitEeRingInitDone(marker)) {
-      // Clear the HISTORICAL extent, not the live ring (#463). A shrink
-      // strands old slots past the new end; they still satisfy their own
-      // checksums, so a later grow would read them back into range — which is
-      // #417's own bug, re-armed by construction. Raw zeros rather than valid
-      // zero-slots: a zeroed slot's checksum byte no longer matches, so every
-      // stale slot is REJECTED by the boot scan rather than merely losing the
-      // max, which is the stronger property for bytes outside the live ring.
-      for (uint16_t i = 0; i < ODO_RING_SWEEP_BYTES; i++) {
-        EEPROM.update(EE_ODO_RING_BASE + (int)i, 0x00);
-      }
-      // Marker LAST, same rule as the layout version byte: a power loss
-      // mid-sweep simply re-runs it on the next boot.
-      unitEeRingInitEncode(marker);
-      for (uint8_t i = EE_RING_INIT_BLOCK_LEN; i > 1; i--) {
-        EEPROM.update(EE_RING_INIT_ADDR + (i - 1), marker[i - 1]);
-      }
-      EEPROM.update(EE_RING_INIT_ADDR, marker[0]);
-    }
-  }
-
-  // Revolution odometer (#231): recover the count from the EEPROM ring.
-  // Folded slot by slot — a 128-slot read-at-once would need a 512-byte stack
-  // buffer on a 2 KB Nano. Runs before the Wire handlers register: the ISR
-  // mirror below must be coherent before a master can query it (same ordering
-  // rule as getOffset(), #173).
-  {
-    OdometerBootScan scan;
-    odometerBootScanInit(scan);
-    for (uint8_t s = 0; s < ODO_RING_SLOTS; s++) {
-      int at = EE_ODO_RING_BASE + (int)odometerSlotOffset(s);
-      uint32_t value;
-      EEPROM.get(at, value);
-      odometerBootScanSlot(scan, value, EEPROM.read(at + 4));
-    }
-    odometer.revolutions = odometerBootScanResult(scan);
-  }
+  odometerRingHealOnce();
+  odometerRecoverFromRing();
   lastPersistedRevs = odometer.revolutions;
   odometerRevolutions = odometer.revolutions;
 
-  // i2c adress switch
-  pinMode(ADRESSSW1, INPUT_PULLUP);
-  pinMode(ADRESSSW2, INPUT_PULLUP);
-  pinMode(ADRESSSW3, INPUT_PULLUP);
-  pinMode(ADRESSSW4, INPUT_PULLUP);
-
-  //hall sensor
-  pinMode(HALLPIN, INPUT);
-
-  // Onboard LED drives SFP_CMD_IDENTIFY blink (issue #56). Without OUTPUT mode
-  // digitalWrite only toggles the pull-up, so pre-existing SERIAL_ENABLE
-  // debug LED uses were effectively no-ops. Harmless to set unconditionally.
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);
+  setupPins();
 
   i2cAddress = getaddress(); //get I2C Address and save in variable
 
@@ -621,30 +663,7 @@ void setup() {
   // under noInterrupts(), so this ordering closes the only unguarded one.
   getOffset();
 
-  // Pre-encode the diag/self-test reply buffers before the Wire handlers
-  // register (#173 ordering rule): a boot-time GET_DIAG must stream a
-  // coherent "position unknown" reply, never uninitialised bytes.
-  driftRefreshReplyBuffers();
-  // Same for the vitals reply (#306): take a boot Vcc/RAM sample and publish
-  // it so a GET_VITALS right after boot streams a real rail, not zeroes.
-  vitalsSample(false);
-  vitalsRefreshReplyBuffer();
-  // Ext-diag reply (#365): publish a coherent all-zero/sentinel packet before
-  // the Wire handlers register, same #173 ordering rule as the buffers above.
-  refreshExtDiagReply();
-  // Lifetime reply (#406): same #173 ordering rule. persistLifetimeHealth()
-  // above only runs when the record actually moved, so publish unconditionally
-  // here — otherwise a GET_LIFETIME before the first persist would stream an
-  // all-zero buffer whose checksum byte is 0, which the master rejects as
-  // padding rather than reading as a genuinely fresh unit.
-  refreshLifetimeReply();
-  // Bus record (#584): what earlier silences left in EEPROM, published under
-  // the same #173 ordering rule.
-  loadBusRecord();
-  // Boot-info reply (#499): same #173 ordering rule — a GET_BOOT_INFO right
-  // after boot must stream a coherent lock/fuse/CRC/state packet, and this also
-  // publishes the result of any auto-resume that just ran.
-  refreshBootInfoReply();
+  publishBootReplies();
 
   //I2C function assignment
   Wire.begin(i2cAddress); //i2c address of this unit
@@ -686,45 +705,20 @@ void setup() {
 #endif
 }
 
-void loop() {
-  wdt_reset(); //see wdt_enable(WDTO_8S) in setup() (issue #107)
-  twiHealTick(); //release a wedged TWI holding SDA before anything else (#489)
-  twiDeafTick(); //re-arm a TWI whose registers stopped listening (#502)
-  busSilenceLoop(); //note and try to end a silence of the master (#584)
-
-  // Keep the ISR-visible diag/self-test replies current (#263/#265). Cheap
-  // (two small encodes + an interrupt-guarded copy) and unconditional, so
-  // every drift/state change from the previous pass is published.
-  driftRefreshReplyBuffers();
-  vitalsRefreshReplyBuffer();  // publish latest Vcc/RAM/cmdPos (#306)
-  refreshExtDiagReply();       // publish latest ext-diag measurements (#365)
-
-  // #542: after ~20 s of healthy loop, tell twiboot the app is stable.
+// #542: after ~20 s of healthy loop, tell twiboot the app is stable.
+static void clearCrashRecordOnceStable() {
   static bool crashRecCleared = false;
   if (!crashRecCleared && millis() >= 20000UL) {
     crashRecordClear();
     crashRecCleared = true;
   }
+}
 
-  //If an enter-bootloader command arrived, give Wire a beat to finish any
-  //in-flight transaction, then let the watchdog reset us. Twiboot takes over
-  //from there and the master can push a new sketch over I2C.
-  if (pendingBootloader) {
-#ifdef SERIAL_ENABLE
-    Serial.println("Rebooting into twiboot via watchdog");
-    Serial.flush();
-#endif
-    delay(10);
-    markResetRequested();
-    crashRecordClear();
-    wdt_enable(WDTO_15MS);
-    while (true) {}
-  }
-
-  // Interactive calibration: drain the flags set by receiveLetter(). Snapshot
-  // with interrupts disabled so a second command arriving mid-handler can't
-  // interleave. The motor + EEPROM work then runs with interrupts back on so
-  // the Wire ISR can still ACK follow-up transactions.
+// Interactive calibration: drain the flags set by receiveLetter(). Snapshot
+// with interrupts disabled so a second command arriving mid-handler can't
+// interleave. The motor + EEPROM work then runs with interrupts back on so
+// the Wire ISR can still ACK follow-up transactions.
+static void drainOffsetWrite() {
   if (pendingOffsetWrite) {
     noInterrupts();
     int16_t v = pendingOffsetValue;
@@ -742,17 +736,20 @@ void loop() {
 #endif
     previousMillis = millis();  // keep awake briefly for follow-up commands
   }
-  // Feature-gate write (#409). Persisting the byte is the whole op — the gate
-  // is read live wherever it is consulted, so nothing has to be restarted for
-  // it to take effect, and persistLifetimeHealth() republishes the
-  // GET_LIFETIME reply the master verifies the write against.
-  //
-  // Drained HERE, ahead of the home/jog drains, for the same reason SET_OFFSET
-  // is: the master waits a fixed UNIT_GATES_WRITE_SETTLE_MS and then reads
-  // GET_LIFETIME back to grade the write. Behind pendingHome that read-back
-  // would land mid-calibrate() — seconds — and report a landed write as a
-  // refusal. (A re-home we started ourselves can still delay it; the master's
-  // settle window is the remaining half of that story.)
+}
+
+// Feature-gate write (#409). Persisting the byte is the whole op — the gate
+// is read live wherever it is consulted, so nothing has to be restarted for
+// it to take effect, and persistLifetimeHealth() republishes the
+// GET_LIFETIME reply the master verifies the write against.
+//
+// Drained HERE, ahead of the home/jog drains, for the same reason SET_OFFSET
+// is: the master waits a fixed UNIT_GATES_WRITE_SETTLE_MS and then reads
+// GET_LIFETIME back to grade the write. Behind pendingHome that read-back
+// would land mid-calibrate() — seconds — and report a landed write as a
+// refusal. (A re-home we started ourselves can still delay it; the master's
+// settle window is the remaining half of that story.)
+static void drainGatesWrite() {
   if (pendingGatesWrite) {
     noInterrupts();
     uint8_t v = pendingGatesValue;
@@ -769,10 +766,13 @@ void loop() {
 #endif
     previousMillis = millis();  // keep awake briefly for follow-up commands
   }
-  // In-system twiboot update (#499). Deferred here like every mutation; the
-  // guards (homed + idle, boot-section state, lock bits) and the result live in
-  // runBootUpdate() (UnitBootUpdate.ino). Heavy and rare — an operator-triggered
-  // campaign step, not a hot path.
+}
+
+// In-system twiboot update (#499). Deferred here like every mutation; the
+// guards (homed + idle, boot-section state, lock bits) and the result live in
+// runBootUpdate() (UnitBootUpdate.ino). Heavy and rare — an operator-triggered
+// campaign step, not a hot path.
+static void drainBootUpdate() {
   if (pendingBootUpdate) {
     noInterrupts();
     uint8_t stage = pendingBootUpdateStage;
@@ -781,24 +781,9 @@ void loop() {
     runBootUpdate(stage);
     previousMillis = millis();  // keep awake briefly for the result read-back
   }
-  if (pendingHome) {
-    noInterrupts();
-    pendingHome = false;
-    interrupts();
-#ifdef SERIAL_ENABLE
-    Serial.println("Home requested");
-#endif
-    // Refused for the base gap after a failed home (UnitHomePolicy.h): the
-    // status flags keep reporting that failure.
-    if (homeCommandAllowed(homeBackoff, millis())) {
-      calibrate(true);
-      // Park at blank — don't immediately rotate back to the last displayed
-      // letter when the main letter-diff check runs below.
-      receivedNumber = 0;
-      displayedLetter = 0;
-    }
-    previousMillis = millis();
-  }
+}
+
+static void drainJog() {
   if (pendingJogSteps != 0) {
     noInterrupts();
     int8_t steps = pendingJogSteps;
@@ -821,12 +806,14 @@ void loop() {
     if (lastRotation == 0) lastRotation = 1;  // 0 = "no rotation yet" sentinel
     previousMillis = millis();
   }
+}
 
-  // Provisioning wizard (issue #56). Both address-mutation paths reboot the
-  // Nano via the existing pendingBootloader mechanism — getaddress() re-reads
-  // EEPROM on the next boot, so the master sees the unit disappear then
-  // reappear at the new (or DIP-derived) address. SFP_CMD_REBOOT uses the same
-  // reset mechanism; twiboot times out after ~250 ms and the sketch runs.
+// Provisioning wizard (issue #56). Both address-mutation paths reboot the
+// Nano via the existing pendingBootloader mechanism — getaddress() re-reads
+// EEPROM on the next boot, so the master sees the unit disappear then
+// reappear at the new (or DIP-derived) address. SFP_CMD_REBOOT uses the same
+// reset mechanism; twiboot times out after ~250 ms and the sketch runs.
+static void drainSetAddress() {
   if (pendingSetAddress) {
     noInterrupts();
     uint8_t v = pendingAddressValue;
@@ -851,6 +838,9 @@ void loop() {
       interrupts();
     }
   }
+}
+
+static void drainClearAddress() {
   if (pendingClearAddress) {
     noInterrupts();
     pendingClearAddress = false;
@@ -868,14 +858,17 @@ void loop() {
 #endif
     pendingBootloader = true;
   }
-  // Odometer maintenance (#231). Reset is a physical-rebuild-only op: zero
-  // the RAM counter, the ISR mirror and every ring slot (magic stays — the
-  // ring remains initialised). The persist check below it writes the current
-  // count into its ring slot every ODO_PERSIST_INTERVAL_REVS revolutions;
-  // both EEPROM paths run here in loop context like every other EEPROM write.
-  // Accepted window: power loss mid-way through the ring zero leaves stale
-  // high slots that boot's ring-max recovery resurrects — user re-issues the
-  // reset; not worth ordering the writes for.
+}
+
+// Odometer maintenance (#231). Reset is a physical-rebuild-only op: zero
+// the RAM counter, the ISR mirror and every ring slot (magic stays — the
+// ring remains initialised). persistOdometerIfDue() writes the current
+// count into its ring slot every ODO_PERSIST_INTERVAL_REVS revolutions;
+// both EEPROM paths run here in loop context like every other EEPROM write.
+// Accepted window: power loss mid-way through the ring zero leaves stale
+// high slots that boot's ring-max recovery resurrects — user re-issues the
+// reset; not worth ordering the writes for.
+static void drainOdometerReset() {
   if (pendingOdometerReset) {
     noInterrupts();
     pendingOdometerReset = false;
@@ -899,6 +892,9 @@ void loop() {
 #endif
     previousMillis = millis();
   }
+}
+
+static void persistOdometerIfDue() {
   if (odometerShouldPersist(odometer.revolutions, lastPersistedRevs)) {
     uint32_t revs = odometer.revolutions;  // shadow for EEPROM.put
     int at = EE_ODO_RING_BASE + (int)odometerSlotOffset(odometerSlotIndex(revs));
@@ -910,11 +906,13 @@ void loop() {
     EEPROM.update(at + 4, odometerSlotChecksum(revs));
     lastPersistedRevs = revs;
   }
+}
 
-  // On-demand self-test (#265): ~2 revolutions of blocking diagnostic
-  // motion, so it drains here like every other motor op. The unit reports
-  // busy (currentlyrotating) throughout; the letter-diff check below
-  // restores the commanded letter afterwards (runSelfTest parks at blank).
+// On-demand self-test (#265): ~2 revolutions of blocking diagnostic
+// motion, so it drains here like every other motor op. The unit reports
+// busy (currentlyrotating) throughout; loop()'s letter-diff check
+// restores the commanded letter afterwards (runSelfTest parks at blank).
+static void drainSelfTest() {
   if (pendingSelfTest) {
     noInterrupts();
     pendingSelfTest = false;
@@ -925,7 +923,9 @@ void loop() {
     runSelfTest();
     previousMillis = millis();
   }
+}
 
+static void drainIdentify() {
   if (pendingIdentify) {
     noInterrupts();
     pendingIdentify = false;
@@ -938,12 +938,12 @@ void loop() {
     Serial.println("Identify");
 #endif
   }
+}
 
-  unsigned long currentMillis = millis();
-
-  // Non-blocking identify blink (issue #56). 4 Hz for 3 s, then LED off.
-  // Reset the sleep timer while blinking so SLEEP_MODE_IDLE doesn't stall
-  // the blink (CPU clock stops in idle sleep, so the toggles would pause).
+// Non-blocking identify blink (issue #56). 4 Hz for 3 s, then LED off.
+// Reset the sleep timer while blinking so SLEEP_MODE_IDLE doesn't stall
+// the blink (CPU clock stops in idle sleep, so the toggles would pause).
+static void identifyBlinkTick(unsigned long currentMillis) {
   if (identifyStartMs != 0) {
     previousMillis = currentMillis;
     unsigned long elapsed = currentMillis - identifyStartMs;
@@ -954,11 +954,13 @@ void loop() {
       digitalWrite(LED_BUILTIN, ((elapsed / 125) & 1) == 0 ? HIGH : LOW);
     }
   }
+}
 
-  // Uptime, counted in whole seconds from millis() deltas so it outlives the
-  // 49.7-day millis() wrap; a pass that blocked on a move catches up here.
-  // GET_STATUS carries the u16 view, saturating at 18 h 12 min (issue #47); the
-  // ext-diag link extension carries the full count (#502).
+// Uptime, counted in whole seconds from millis() deltas so it outlives the
+// 49.7-day millis() wrap; a pass that blocked on a move catches up here.
+// GET_STATUS carries the u16 view, saturating at 18 h 12 min (issue #47); the
+// ext-diag link extension carries the full count (#502).
+static void uptimeTick(unsigned long currentMillis) {
   uint32_t uptimeFull = uptimeSecondsFull;  // loop() is the only writer
   while (currentMillis - uptimeLastTickMs >= 1000UL) {
     uptimeLastTickMs += 1000UL;
@@ -969,15 +971,17 @@ void loop() {
   uptimeSecondsFull = uptimeFull;
   uptimeSeconds = newUptime;
   interrupts();
+}
 
-  // Staggered boot-home fallback (#309). The unit boots unhomed; if no master
-  // orchestrates a home it self-homes on a deadline — staggered by address when
-  // standalone, or the hard cap when a master is present but silent. Triggers 1
-  // (SFP_CMD_HOME via pendingHome) and 2 (a letter while unhomed, in
-  // rotateToLetter) home through their own paths and set `homed`, disabling
-  // this. Guarded to a single attempt: a unit whose hall never fires must not
-  // re-home every pass (calibrate() has no overheat gate — it would cook the
-  // motor). A later master SFP_CMD_HOME is still an explicit retry.
+// Staggered boot-home fallback (#309). The unit boots unhomed; if no master
+// orchestrates a home it self-homes on a deadline — staggered by address when
+// standalone, or the hard cap when a master is present but silent. Triggers 1
+// (SFP_CMD_HOME via pendingHome) and 2 (a letter while unhomed, in
+// rotateToLetter) home through their own paths and set `homed`, disabling
+// this. Guarded to a single attempt: a unit whose hall never fires must not
+// re-home every pass (calibrate() has no overheat gate — it would cook the
+// motor). A later master SFP_CMD_HOME is still an explicit retry.
+static void bootHomeFallbackTick(unsigned long currentMillis) {
   if (!homed && !bootHomeAttempted) {
     BootHomeInputs bh;
     bh.homed = homed;
@@ -993,21 +997,12 @@ void loop() {
       previousMillis = millis();
     }
   }
+}
 
-  // Idle Vcc/RAM sample (#306), throttled to ~1 Hz so the ADC conversion
-  // (~2 ms with settling) doesn't tax the superloop. Keeps vccNow fresh for a
-  // curl even when the drum hasn't moved; loaded samples from rotateToLetter()
-  // still own the vccMin sag. millis()==0 at boot is fine — the setup() sample
-  // already seeded vccNow, and this just refreshes on the next second.
-  if (currentMillis - vitalsLastSampleMs >= 1000UL) {
-    vitalsLastSampleMs = currentMillis;
-    vitalsSample(false);
-    supplyIdleLevelFold(supplyIdleLevelMv, vitalsVccNow);  // #505
-  }
-
-  // Duty-window decay (#373): halve the rolling move counter on a coarse ~60 s
-  // timer so it tracks recent activity, not lifetime moves. Exponential decay
-  // is a cheap rolling window — no per-move timestamp history to store.
+// Duty-window decay (#373): halve the rolling move counter on a coarse ~60 s
+// timer so it tracks recent activity, not lifetime moves. Exponential decay
+// is a cheap rolling window — no per-move timestamp history to store.
+static void dutyWindowDecayTick(unsigned long currentMillis) {
   static unsigned long extDutyDecayMs = 0;
   if (currentMillis - extDutyDecayMs >= 60000UL) {
     extDutyDecayMs = currentMillis;
@@ -1015,23 +1010,25 @@ void loop() {
     // floor to 0 below that so an idle unit's window actually reaches 0.
     extDutyWindow = (extDutyWindow > 1) ? (uint16_t)(extDutyWindow - (extDutyWindow >> 1)) : 0;
   }
+}
 
-  // Idle hall consistency check (#268), dormant unless UNIT_GATE_IDLE_HALL_CHECK
-  // is set (#407 ships both motion gates off; #409's SET_GATES turns them on).
-  // Hand-rotating a parked drum is invisible today — the hall is sampled only
-  // while stepping, so the unit keeps believing its last commanded letter until
-  // some later move happens to sweep the magnet. At rest the same one bit still
-  // polices the belief: the tracked position predicts whether the sensor should
-  // see the magnet, and a contradiction that survives the debounce means the
-  // drum moved without us. It arms the SAME driftPending a mid-move observation
-  // does, so the re-home below is the entire correction path — this adds a
-  // digitalRead every 250 ms and no new motion of its own.
-  //
-  // Suppressed unless the drum is genuinely parked and nothing is about to
-  // touch it: an unhomed or never-synced position has no expectation to
-  // contradict, and a pending op, an identify blink or an in-flight letter all
-  // mean the prediction is about to be stale. Every one of those also RESETS
-  // the streak — a streak that survived a move would be judging the old park.
+// Idle hall consistency check (#268), dormant unless UNIT_GATE_IDLE_HALL_CHECK
+// is set (#407 ships both motion gates off; #409's SET_GATES turns them on).
+// Hand-rotating a parked drum is invisible today — the hall is sampled only
+// while stepping, so the unit keeps believing its last commanded letter until
+// some later move happens to sweep the magnet. At rest the same one bit still
+// polices the belief: the tracked position predicts whether the sensor should
+// see the magnet, and a contradiction that survives the debounce means the
+// drum moved without us. It arms the SAME driftPending a mid-move observation
+// does, so driftRehomeTick() is the entire correction path — this adds a
+// digitalRead every 250 ms and no new motion of its own.
+//
+// Suppressed unless the drum is genuinely parked and nothing is about to
+// touch it: an unhomed or never-synced position has no expectation to
+// contradict, and a pending op, an identify blink or an in-flight letter all
+// mean the prediction is about to be stale. Every one of those also RESETS
+// the streak — a streak that survived a move would be judging the old park.
+static void idleHallTick(unsigned long currentMillis) {
   bool idleHallEligible =
       unitGateEnabled(lifetime.featureGates, UNIT_GATE_IDLE_HALL_CHECK) &&
       !idleHallStandDown(idleHallFutileRehomes) &&
@@ -1059,14 +1056,16 @@ void loop() {
 #endif
     }
   }
+}
 
-  // Silent drift correction (#263): a mid-move hall observation measured
-  // the drum off its belief. Re-home at idle only — the display quiet for
-  // WAIT_TIME (the same 2 s window the sleep gate below uses), no pending
-  // letter change, and the once-per-cooldown cap — then the letter-diff
-  // check below rotates back to the commanded letter (calibrate parks the
-  // belief at blank). The overheat gate is already satisfied by the quiet
-  // window, so the restore move runs immediately.
+// Silent drift correction (#263): a mid-move hall observation measured
+// the drum off its belief. Re-home at idle only — the display quiet for
+// WAIT_TIME (the same 2 s window loop()'s sleep gate uses), no pending
+// letter change, and the once-per-cooldown cap — then loop()'s letter-diff
+// check rotates back to the commanded letter (calibrate parks the
+// belief at blank). The overheat gate is already satisfied by the quiet
+// window, so the restore move runs immediately.
+static void driftRehomeTick(unsigned long currentMillis) {
   if (drift.driftPending && displayedLetter == receivedNumber &&
       currentMillis - previousMillis >= WAIT_TIME &&
       (lastAutoRehomeMs == 0 ||
@@ -1103,6 +1102,86 @@ void loop() {
     }
     previousMillis = millis();
   }
+}
+
+void loop() {
+  wdt_reset(); //see wdt_enable(WDTO_8S) in setup() (issue #107)
+  twiHealTick(); //release a wedged TWI holding SDA before anything else (#489)
+  twiDeafTick(); //re-arm a TWI whose registers stopped listening (#502)
+  busSilenceLoop(); //note and try to end a silence of the master (#584)
+
+  // Keep the ISR-visible diag/self-test replies current (#263/#265). Cheap
+  // (two small encodes + an interrupt-guarded copy) and unconditional, so
+  // every drift/state change from the previous pass is published.
+  driftRefreshReplyBuffers();
+  vitalsRefreshReplyBuffer();  // publish latest Vcc/RAM/cmdPos (#306)
+  refreshExtDiagReply();       // publish latest ext-diag measurements (#365)
+
+  clearCrashRecordOnceStable();
+
+  //If an enter-bootloader command arrived, give Wire a beat to finish any
+  //in-flight transaction, then let the watchdog reset us. Twiboot takes over
+  //from there and the master can push a new sketch over I2C.
+  if (pendingBootloader) {
+#ifdef SERIAL_ENABLE
+    Serial.println("Rebooting into twiboot via watchdog");
+    Serial.flush();
+#endif
+    delay(10);
+    markResetRequested();
+    crashRecordClear();
+    wdt_enable(WDTO_15MS);
+    while (true) {}
+  }
+
+  drainOffsetWrite();
+  drainGatesWrite();
+  drainBootUpdate();
+  if (pendingHome) {
+    noInterrupts();
+    pendingHome = false;
+    interrupts();
+#ifdef SERIAL_ENABLE
+    Serial.println("Home requested");
+#endif
+    // Refused for the base gap after a failed home (UnitHomePolicy.h): the
+    // status flags keep reporting that failure.
+    if (homeCommandAllowed(homeBackoff, millis())) {
+      calibrate(true);
+      // Park at blank — don't immediately rotate back to the last displayed
+      // letter when the main letter-diff check runs below.
+      receivedNumber = 0;
+      displayedLetter = 0;
+    }
+    previousMillis = millis();
+  }
+  drainJog();
+  drainSetAddress();
+  drainClearAddress();
+  drainOdometerReset();
+  persistOdometerIfDue();
+  drainSelfTest();
+  drainIdentify();
+
+  unsigned long currentMillis = millis();
+  identifyBlinkTick(currentMillis);
+  uptimeTick(currentMillis);
+  bootHomeFallbackTick(currentMillis);
+
+  // Idle Vcc/RAM sample (#306), throttled to ~1 Hz so the ADC conversion
+  // (~2 ms with settling) doesn't tax the superloop. Keeps vccNow fresh for a
+  // curl even when the drum hasn't moved; loaded samples from rotateToLetter()
+  // still own the vccMin sag. millis()==0 at boot is fine — the setup() sample
+  // already seeded vccNow, and this just refreshes on the next second.
+  if (currentMillis - vitalsLastSampleMs >= 1000UL) {
+    vitalsLastSampleMs = currentMillis;
+    vitalsSample(false);
+    supplyIdleLevelFold(supplyIdleLevelMv, vitalsVccNow);  // #505
+  }
+
+  dutyWindowDecayTick(currentMillis);
+  idleHallTick(currentMillis);
+  driftRehomeTick(currentMillis);
 
   // Boot-section integrity (#520, BootIntegrity.h): re-read and re-classify
   // the boot section on a timer, so the masters' GET_BOOT_INFO poll reports

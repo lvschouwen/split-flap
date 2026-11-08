@@ -100,7 +100,7 @@ def test_a_failed_self_test_drops_homed_too():
 def test_home_command_asks_before_seeking():
     body = _function_body(_code("Unit.ino"), "void loop(")
     drain = body[body.index("if (pendingHome) {"):]
-    drain = drain[:drain.index("if (pendingJogSteps != 0)")]
+    drain = drain[:drain.index("drainJog();")]
     assert drain.index("homeCommandAllowed(homeBackoff, millis())") < drain.index(
         "calibrate(true)")
 

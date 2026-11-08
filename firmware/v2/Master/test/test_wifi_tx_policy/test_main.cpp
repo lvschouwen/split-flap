@@ -418,6 +418,93 @@ static void test_survives_millis_rollover() {
       1, wifiTxPolicyStep(st, online(WEAK_RSSI), t0 + WIFI_TX_WEAK_MS));
 }
 
+// --- the phase steps wifiTxPolicyStep is made of ---------------------------
+
+static void test_joining_step_climbs_one_level_per_period_to_the_ceiling() {
+  WifiTxState st;
+  TEST_ASSERT_EQUAL_UINT8(0, wifiTxJoiningStep(st, true, 1000));
+  TEST_ASSERT_EQUAL_UINT32(1000, st.joinLevelSinceMs);
+  TEST_ASSERT_EQUAL_UINT8(0, wifiTxJoiningStep(st, false, 1000 + WIFI_TX_JOIN_STEP_MS - 1));
+  TEST_ASSERT_EQUAL_UINT8(1, wifiTxJoiningStep(st, false, 1000 + WIFI_TX_JOIN_STEP_MS));
+  TEST_ASSERT_EQUAL((int)WifiTxStepReason::JoinTimeout, (int)st.lastReason);
+  st.index = WIFI_TX_JOIN_CEILING_INDEX;
+  TEST_ASSERT_EQUAL_UINT8(WIFI_TX_JOIN_CEILING_INDEX,
+                          wifiTxJoiningStep(st, false, 1000 + 10 * WIFI_TX_JOIN_STEP_MS));
+}
+
+static void test_link_down_step_owes_a_drop_and_pays_it_when_allowed() {
+  WifiTxState st;
+  st.index = 1;
+  st.wasLinkUp = true;
+  st.weakArmed = true;
+  wifiTxLinkDownStep(st, false, false, 0);
+  TEST_ASSERT_TRUE(st.dropPending);
+  TEST_ASSERT_FALSE(st.wasLinkUp);
+  TEST_ASSERT_FALSE(st.weakArmed);
+  TEST_ASSERT_EQUAL_UINT8(1, st.index);
+  wifiTxLinkDownStep(st, false, true, 5000);
+  TEST_ASSERT_FALSE(st.dropPending);
+  TEST_ASSERT_EQUAL_UINT8(2, st.index);
+  TEST_ASSERT_EQUAL_UINT8(2, st.dropFloor);
+  TEST_ASSERT_EQUAL((int)WifiTxStepReason::LinkDrop, (int)st.lastReason);
+}
+
+static void test_link_down_step_at_the_ceiling_owes_nothing() {
+  WifiTxState st;
+  st.index = WIFI_TX_ONLINE_CEILING_INDEX;
+  st.wasLinkUp = true;
+  wifiTxLinkDownStep(st, true, false, 0);
+  TEST_ASSERT_FALSE(st.dropPending);
+  TEST_ASSERT_EQUAL_UINT8(WIFI_TX_ONLINE_CEILING_INDEX, st.index);
+}
+
+static void test_weak_step_arms_then_steps_up_after_the_weak_window() {
+  WifiTxState st;
+  WifiTxInput in = online(WEAK_RSSI);
+  TEST_ASSERT_FALSE(wifiTxWeakStep(st, in, true, 1000));
+  TEST_ASSERT_TRUE(st.weakArmed);
+  TEST_ASSERT_FALSE(wifiTxWeakStep(st, in, true, 1000 + WIFI_TX_WEAK_MS - 1));
+  TEST_ASSERT_FALSE(wifiTxWeakStep(st, in, false, 1000 + WIFI_TX_WEAK_MS));
+  TEST_ASSERT_TRUE(wifiTxWeakStep(st, in, true, 1000 + WIFI_TX_WEAK_MS));
+  TEST_ASSERT_EQUAL_UINT8(1, st.index);
+  TEST_ASSERT_EQUAL((int)WifiTxStepReason::WeakSignal, (int)st.lastReason);
+}
+
+static void test_weak_step_disarms_on_confirmed_traffic() {
+  WifiTxState st;
+  st.weakArmed = true;
+  TEST_ASSERT_FALSE(wifiTxWeakStep(st, confirmed(WEAK_RSSI), true, 1000000));
+  TEST_ASSERT_FALSE(st.weakArmed);
+  TEST_ASSERT_EQUAL_UINT8(0, st.index);
+}
+
+static void test_spare_step_arms_then_steps_down_above_the_drop_floor() {
+  WifiTxState st;
+  st.index = 2;
+  WifiTxInput in = online(STRONG_RSSI);
+  wifiTxSpareStep(st, in, 1000);
+  TEST_ASSERT_TRUE(st.spareArmed);
+  wifiTxSpareStep(st, in, 1000 + WIFI_TX_HEALTHY_MS - 1);
+  TEST_ASSERT_EQUAL_UINT8(2, st.index);
+  wifiTxSpareStep(st, in, 1000 + WIFI_TX_HEALTHY_MS);
+  TEST_ASSERT_EQUAL_UINT8(1, st.index);
+  TEST_ASSERT_EQUAL((int)WifiTxStepReason::Spare, (int)st.lastReason);
+  st.dropFloor = 1;
+  wifiTxSpareStep(st, in, 1000 + 3 * WIFI_TX_HEALTHY_MS);
+  TEST_ASSERT_FALSE(st.spareArmed);
+  TEST_ASSERT_EQUAL_UINT8(1, st.index);
+}
+
+static void test_online_step_entry_starts_the_settle_window() {
+  WifiTxState st;
+  st.dropPending = true;
+  st.index = 1;
+  TEST_ASSERT_EQUAL_UINT8(1, wifiTxOnlineStep(st, online(WEAK_RSSI), true, 2000));
+  TEST_ASSERT_EQUAL_UINT32(2000 + WIFI_TX_SETTLE_MS, st.upAllowedAtMs);
+  TEST_ASSERT_FALSE(st.dropPending);
+  TEST_ASSERT_TRUE(st.wasLinkUp);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_table_is_the_idf_real_levels_ascending);
@@ -460,5 +547,12 @@ int main(int, char**) {
   RUN_TEST(test_portal_runs_at_the_fixed_portal_level);
   RUN_TEST(test_steps_are_counted);
   RUN_TEST(test_survives_millis_rollover);
+  RUN_TEST(test_joining_step_climbs_one_level_per_period_to_the_ceiling);
+  RUN_TEST(test_link_down_step_owes_a_drop_and_pays_it_when_allowed);
+  RUN_TEST(test_link_down_step_at_the_ceiling_owes_nothing);
+  RUN_TEST(test_weak_step_arms_then_steps_up_after_the_weak_window);
+  RUN_TEST(test_weak_step_disarms_on_confirmed_traffic);
+  RUN_TEST(test_spare_step_arms_then_steps_down_above_the_drop_floor);
+  RUN_TEST(test_online_step_entry_starts_the_settle_window);
   return UNITY_END();
 }

@@ -493,27 +493,9 @@ void refreshExtDiagReply() {
   interrupts();
 }
 
-//On-demand diagnostic revolution (#265): sync to the hall entering edge
-//(calibrate's approach rules), then measure one full revolution stepping 1
-//at a time — actual steps/rev, hall window width in steps, wall time. All
-//at HOMING_RPM. Parks at the calibrated zero like calibrate() so the
-//letter-diff check in loop() restores the commanded letter; the 2 s
-//overheat gate gives the motor a breather after the ~2 revolutions of
-//continuous motion. A timeout in either phase reports FAILED and drops the
-//position estimate (same reasoning as calibrate's failure path).
-void runSelfTest() {
-  selfTest.state = SELFTEST_STATE_RUNNING;
-  bootHomeAttempted = true;  // a seek, like calibrate(): no boot self-home after it
-  selfTest.reason = SELFTEST_REASON_NONE;  //#404: never report a stale reason
-  selfTest.stepsPerRev = 0;
-  selfTest.hallWindowSteps = 0;
-  selfTest.revTimeMs = 0;
-  extHallLatchInhibit = true;  //#372: don't latch the phantom edge count below
-  driftRefreshReplyBuffers();  //publish RUNNING before the ~12 s of motion
-  startMotor();
-  stepper.setSpeed(HOMING_RPM);
-
-  //Phase 1: approach the entering edge from outside the window.
+//Phase 1: approach the entering edge from outside the window. Returns true
+//when it failed (selfTest.reason says why).
+static bool selfTestFindEdge() {
   long guard = 0;
   bool failed = false;
   if (digitalRead(HALLPIN) == 0) {
@@ -543,75 +525,106 @@ void runSelfTest() {
       selfTest.reason = SELFTEST_REASON_HALL_NEVER;
     }
   }
+  return failed;
+}
 
-  //Phase 2: one measured revolution from the edge. The window width is the
-  //initial hall-low stretch; the revolution completes when the hall goes
-  //low again after leaving it (2-sample debounce on both transitions).
-  if (!failed) {
-    driftMarkSynced(drift);  //we are AT the entering edge
-    uint16_t measuredSteps = 0;
-    //Seed 1: the entering-edge position itself (where phase 1 stopped) is
-    //inside the window but phase 2 only samples AFTER each step.
-    uint16_t windowSteps = 1;
-    unsigned long t0 = millis();
-    bool leftWindow = false;
-    uint8_t streak = 0;
-    for (;;) {
-      wdt_reset();
-      stepCounted(ROTATIONDIRECTION * 1);
-      measuredSteps++;
-      if (measuredSteps > (uint16_t)(2 * STEPS)) {  //edge never came back
-        //A drum that slips or binds part-way round (#404). windowSteps was
-        //already measured this pass — preserved below, it is the most
-        //diagnostic number available for this failure.
-        failed = true;
-        selfTest.reason = SELFTEST_REASON_REV_INCOMPLETE;
-        selfTest.hallWindowSteps = windowSteps;
-        break;
-      }
-      int hall = digitalRead(HALLPIN);
-      if (!leftWindow) {
-        if (hall == 0) {
-          windowSteps++;
-          streak = 0;
-        } else if (++streak >= 2) {
-          leftWindow = true;
-          streak = 0;
-        }
-      } else {
-        if (hall == 0) {
-          if (++streak >= 2) break;  //re-entered: revolution complete
-        } else {
-          streak = 0;
-        }
-      }
-    }
-    if (!failed) {
-      unsigned long dt = millis() - t0;
-      selfTest.revTimeMs = dt > 65535UL ? 65535 : (uint16_t)dt;
-      //The break landed on the debounce CONFIRM sample — the true edge was
-      //one step earlier (phase 1 stopped at the first low sample, so both
-      //ends of the measurement use the same edge definition).
-      selfTest.stepsPerRev = measuredSteps - 1;
+//Phase 2: one measured revolution from the edge. The window width is the
+//initial hall-low stretch; the revolution completes when the hall goes
+//low again after leaving it (2-sample debounce on both transitions).
+//Returns true when it failed; on success parks at the calibrated zero and
+//counts as a home.
+static bool selfTestMeasureRev() {
+  bool failed = false;
+  driftMarkSynced(drift);  //we are AT the entering edge
+  uint16_t measuredSteps = 0;
+  //Seed 1: the entering-edge position itself (where phase 1 stopped) is
+  //inside the window but phase 2 only samples AFTER each step.
+  uint16_t windowSteps = 1;
+  unsigned long t0 = millis();
+  bool leftWindow = false;
+  uint8_t streak = 0;
+  for (;;) {
+    wdt_reset();
+    stepCounted(ROTATIONDIRECTION * 1);
+    measuredSteps++;
+    if (measuredSteps > (uint16_t)(2 * STEPS)) {  //edge never came back
+      //A drum that slips or binds part-way round (#404). windowSteps was
+      //already measured this pass — runSelfTest keeps it, it is the most
+      //diagnostic number available for this failure.
+      failed = true;
+      selfTest.reason = SELFTEST_REASON_REV_INCOMPLETE;
       selfTest.hallWindowSteps = windowSteps;
-      selfTest.state = SELFTEST_STATE_OK;
-      //Parked <=2 steps past the entering edge (the debounce confirm) —
-      //well under the drift threshold; re-park at the calibrated zero.
-      driftMarkSynced(drift);
-      stepCounted(ROTATIONDIRECTION * calOffset);
-      displayedLetter = 0;
-      missedSteps = 0;
-      drift.driftPending = false;
-      // Parked at the calibrated zero from a freshly found edge — the state a
-      // successful home leaves, so it counts as one.
-      noInterrupts();
-      statusLastHomeFailed = false;
-      statusHallNeverTriggered = false;
-      homed = true;
-      interrupts();
-      homeNoteResult(homeBackoff, true, millis());
+      break;
+    }
+    int hall = digitalRead(HALLPIN);
+    if (!leftWindow) {
+      if (hall == 0) {
+        windowSteps++;
+        streak = 0;
+      } else if (++streak >= 2) {
+        leftWindow = true;
+        streak = 0;
+      }
+    } else {
+      if (hall == 0) {
+        if (++streak >= 2) break;  //re-entered: revolution complete
+      } else {
+        streak = 0;
+      }
     }
   }
+  if (!failed) {
+    unsigned long dt = millis() - t0;
+    selfTest.revTimeMs = dt > 65535UL ? 65535 : (uint16_t)dt;
+    //The break landed on the debounce CONFIRM sample — the true edge was
+    //one step earlier (phase 1 stopped at the first low sample, so both
+    //ends of the measurement use the same edge definition).
+    selfTest.stepsPerRev = measuredSteps - 1;
+    selfTest.hallWindowSteps = windowSteps;
+    selfTest.state = SELFTEST_STATE_OK;
+    //Parked <=2 steps past the entering edge (the debounce confirm) —
+    //well under the drift threshold; re-park at the calibrated zero.
+    driftMarkSynced(drift);
+    stepCounted(ROTATIONDIRECTION * calOffset);
+    displayedLetter = 0;
+    missedSteps = 0;
+    drift.driftPending = false;
+    // Parked at the calibrated zero from a freshly found edge — the state a
+    // successful home leaves, so it counts as one.
+    noInterrupts();
+    statusLastHomeFailed = false;
+    statusHallNeverTriggered = false;
+    homed = true;
+    interrupts();
+    homeNoteResult(homeBackoff, true, millis());
+  }
+  return failed;
+}
+
+//On-demand diagnostic revolution (#265): sync to the hall entering edge
+//(calibrate's approach rules), then measure one full revolution stepping 1
+//at a time — actual steps/rev, hall window width in steps, wall time. All
+//at HOMING_RPM. Parks at the calibrated zero like calibrate() so the
+//letter-diff check in loop() restores the commanded letter; the 2 s
+//overheat gate gives the motor a breather after the ~2 revolutions of
+//continuous motion. A timeout in either phase reports FAILED and drops the
+//position estimate (same reasoning as calibrate's failure path).
+void runSelfTest() {
+  selfTest.state = SELFTEST_STATE_RUNNING;
+  bootHomeAttempted = true;  // a seek, like calibrate(): no boot self-home after it
+  selfTest.reason = SELFTEST_REASON_NONE;  //#404: never report a stale reason
+  selfTest.stepsPerRev = 0;
+  selfTest.hallWindowSteps = 0;
+  selfTest.revTimeMs = 0;
+  extHallLatchInhibit = true;  //#372: don't latch the phantom edge count below
+  driftRefreshReplyBuffers();  //publish RUNNING before the ~12 s of motion
+  startMotor();
+  stepper.setSpeed(HOMING_RPM);
+
+  //Phase 1: approach the entering edge from outside the window, then
+  //phase 2: one measured revolution from it.
+  bool failed = selfTestFindEdge();
+  if (!failed) failed = selfTestMeasureRev();
   if (failed) {
     //#404: keep whatever WAS measured instead of zeroing it. A phase-2
     //failure already knows its hall window, and that number is exactly what

@@ -13,6 +13,8 @@
 #include "ReflashPlan.h"
 #include "TwibootProtocol.h"
 #include "UnitHealth.h"
+#include "UnitHealthGolden.h"
+#include "UnitFactsWidest.h"
 #include "UnitProtocolHelpers.h"
 #include "WearPolicy.h"
 #include "SplitFlapProtocol.h"
@@ -1011,6 +1013,33 @@ static void test_fw_status_equivalents_never_rescue_an_unknown_version() {
   TEST_ASSERT_EQUAL_UINT8(2, unitFwStatusFromRev("d6e8a8a", "", "d6e8a8a"));
 }
 
+// --- buildUnitHealthJson byte identity (UnitHealthGolden.h) ----------------
+
+static void test_health_json_rows_are_byte_identical_to_the_contract() {
+  TEST_ASSERT_EQUAL_HEX32(0xe6b47c31UL, goldenFullDocsHash(1, 64));
+  TEST_ASSERT_EQUAL_HEX32(0x422d7341UL, goldenFullDocsHash(2, 64));
+  TEST_ASSERT_EQUAL_HEX32(0x9408cd69UL, goldenFullDocsHash(3, 64));
+  TEST_ASSERT_EQUAL_HEX32(0xa601f8aeUL, goldenFullDocsHash(0xC0FFEE, 64));
+}
+
+static void test_health_json_truncates_identically_at_every_cap() {
+  TEST_ASSERT_EQUAL_HEX32(0xaafd1800UL, goldenCapSweepHash(7));
+  TEST_ASSERT_EQUAL_HEX32(0x5758df20UL, goldenCapSweepHash(8));
+  TEST_ASSERT_EQUAL_HEX32(0x9bb8535dUL, goldenCapSweepHash(9));
+  TEST_ASSERT_EQUAL_HEX32(0x7a5109fcUL, goldenCapSweepHash(10));
+  TEST_ASSERT_EQUAL_HEX32(0x2be4ca94UL, goldenCapSweepHash(11));
+}
+
+static void test_health_json_widest_row_is_byte_identical() {
+  static char buf[UNIT_HEALTH_JSON_CAP];
+  UnitFacts units[16];
+  for (int i = 0; i < 16; i++) units[i] = unitFactsWidest();
+  const size_t n = buildUnitHealthJson(buf, sizeof buf, units, 16, 16, 10,
+                                       UNIT_FACTS_WIDEST_NOW_MS);
+  TEST_ASSERT_EQUAL_UINT32(10903, n);
+  TEST_ASSERT_EQUAL_HEX32(0x761d2b42UL, goldenFnv(2166136261UL, buf, n));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_clean_status_is_not_faulty);
@@ -1085,5 +1114,8 @@ int main(int, char**) {
   RUN_TEST(test_fw_status_equivalent_entry_terminates_at_the_comma);
   RUN_TEST(test_fw_status_tolerates_empty_null_and_padded_equivalents);
   RUN_TEST(test_fw_status_equivalents_never_rescue_an_unknown_version);
+  RUN_TEST(test_health_json_rows_are_byte_identical_to_the_contract);
+  RUN_TEST(test_health_json_truncates_identically_at_every_cap);
+  RUN_TEST(test_health_json_widest_row_is_byte_identical);
   return UNITY_END();
 }

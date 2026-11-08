@@ -142,69 +142,41 @@ static inline void wifiTxStepUp(WifiTxState& st, uint32_t nowMs,
   st.spareArmed = false;
 }
 
-// One supervision step; returns the level index the radio should be at. The
-// index changes by at most one per call.
-static inline uint8_t wifiTxPolicyStep(WifiTxState& st, const WifiTxInput& in,
-                                       uint32_t nowMs) {
-  bool entered = !st.started || st.phase != in.phase;
-  st.started = true;
-  st.phase = in.phase;
-
-  switch (in.phase) {
-    case WifiTxPhase::Portal:
-      st.index = WIFI_TX_PORTAL_INDEX;
-      return st.index;
-
-    case WifiTxPhase::Joining:
-      if (entered) {
-        st.joinLevelSinceMs = nowMs;
-      } else if (st.index < WIFI_TX_JOIN_CEILING_INDEX &&
-                 wifiTxReached(nowMs,
-                               st.joinLevelSinceMs + WIFI_TX_JOIN_STEP_MS)) {
-        st.index++;
-        st.stepsUp++;
-        st.lastReason = WifiTxStepReason::JoinTimeout;
-        st.joinLevelSinceMs = nowMs;
-      }
-      return st.index;
-
-    case WifiTxPhase::Online:
-      break;
-  }
-
+// Joining: one level up per WIFI_TX_JOIN_STEP_MS without an association, to
+// the join ceiling. Returns the level index.
+static inline uint8_t wifiTxJoiningStep(WifiTxState& st, bool entered,
+                                        uint32_t nowMs) {
   if (entered) {
-    st.upAllowedAtMs = nowMs + WIFI_TX_SETTLE_MS;
-    st.wasLinkUp = in.linkUp;
-    st.dropPending = false;
-    st.weakArmed = false;
-    st.spareArmed = false;
+    st.joinLevelSinceMs = nowMs;
+  } else if (st.index < WIFI_TX_JOIN_CEILING_INDEX &&
+             wifiTxReached(nowMs, st.joinLevelSinceMs + WIFI_TX_JOIN_STEP_MS)) {
+    st.index++;
+    st.stepsUp++;
+    st.lastReason = WifiTxStepReason::JoinTimeout;
+    st.joinLevelSinceMs = nowMs;
   }
+  return st.index;
+}
 
-  bool atCeiling = st.index >= WIFI_TX_ONLINE_CEILING_INDEX;
-  bool canStepUp = !atCeiling && in.unitsIdle &&
-                   wifiTxReached(nowMs, st.upAllowedAtMs);
-
-  if (!in.linkUp) {
-    // At the ceiling a drop has nothing to buy; left pending it would hold
-    // the step-down off for the rest of the boot.
-    if (st.wasLinkUp && !atCeiling) st.dropPending = true;
-    st.wasLinkUp = false;
-    st.weakArmed = false;
-    st.spareArmed = false;
-    if (st.dropPending && canStepUp) {
-      st.dropPending = false;
-      wifiTxStepUp(st, nowMs, WifiTxStepReason::LinkDrop);
-    }
-    return st.index;
-  }
-  st.wasLinkUp = true;
-
+// Online with the link down: a drop seen while it was up is owed one step up,
+// paid once stepping up is allowed.
+static inline void wifiTxLinkDownStep(WifiTxState& st, bool atCeiling,
+                                      bool canStepUp, uint32_t nowMs) {
+  // At the ceiling a drop has nothing to buy; left pending it would hold
+  // the step-down off for the rest of the boot.
+  if (st.wasLinkUp && !atCeiling) st.dropPending = true;
+  st.wasLinkUp = false;
+  st.weakArmed = false;
+  st.spareArmed = false;
   if (st.dropPending && canStepUp) {
     st.dropPending = false;
     wifiTxStepUp(st, nowMs, WifiTxStepReason::LinkDrop);
-    return st.index;
   }
+}
 
+// A weak uplink estimate held for WIFI_TX_WEAK_MS steps up. True when it did.
+static inline bool wifiTxWeakStep(WifiTxState& st, const WifiTxInput& in,
+                                  bool canStepUp, uint32_t nowMs) {
   // The estimate is a proxy for need (see the header): ignored while traffic
   // is confirmed, and never the reason to pass the join ceiling.
   bool weak = !in.trafficConfirmed && st.index < WIFI_TX_JOIN_CEILING_INDEX &&
@@ -217,9 +189,15 @@ static inline uint8_t wifiTxPolicyStep(WifiTxState& st, const WifiTxInput& in,
   } else if (canStepUp &&
              wifiTxReached(nowMs, st.weakSinceMs + WIFI_TX_WEAK_MS)) {
     wifiTxStepUp(st, nowMs, WifiTxStepReason::WeakSignal);
-    return st.index;
+    return true;
   }
+  return false;
+}
 
+// Margin to spare one level down, held for WIFI_TX_HEALTHY_MS, steps down;
+// never below the level a drop earned.
+static inline void wifiTxSpareStep(WifiTxState& st, const WifiTxInput& in,
+                                   uint32_t nowMs) {
   bool spare = st.index > st.dropFloor && !st.dropPending &&
                wifiTxUplinkRaw(in.rssiDbm, st.index - 1) >=
                    WIFI_TX_WEAK_UPLINK_RAW + WIFI_TX_DOWN_MARGIN_RAW;
@@ -234,7 +212,58 @@ static inline uint8_t wifiTxPolicyStep(WifiTxState& st, const WifiTxInput& in,
     st.lastReason = WifiTxStepReason::Spare;
     st.spareArmed = false;
   }
+}
+
+// The Online phase of wifiTxPolicyStep. Returns the level index.
+static inline uint8_t wifiTxOnlineStep(WifiTxState& st, const WifiTxInput& in,
+                                       bool entered, uint32_t nowMs) {
+  if (entered) {
+    st.upAllowedAtMs = nowMs + WIFI_TX_SETTLE_MS;
+    st.wasLinkUp = in.linkUp;
+    st.dropPending = false;
+    st.weakArmed = false;
+    st.spareArmed = false;
+  }
+
+  bool atCeiling = st.index >= WIFI_TX_ONLINE_CEILING_INDEX;
+  bool canStepUp = !atCeiling && in.unitsIdle &&
+                   wifiTxReached(nowMs, st.upAllowedAtMs);
+
+  if (!in.linkUp) {
+    wifiTxLinkDownStep(st, atCeiling, canStepUp, nowMs);
+    return st.index;
+  }
+  st.wasLinkUp = true;
+
+  if (st.dropPending && canStepUp) {
+    st.dropPending = false;
+    wifiTxStepUp(st, nowMs, WifiTxStepReason::LinkDrop);
+    return st.index;
+  }
+
+  if (wifiTxWeakStep(st, in, canStepUp, nowMs)) return st.index;
+  wifiTxSpareStep(st, in, nowMs);
   return st.index;
+}
+
+// One supervision step; returns the level index the radio should be at. The
+// index changes by at most one per call.
+static inline uint8_t wifiTxPolicyStep(WifiTxState& st, const WifiTxInput& in,
+                                       uint32_t nowMs) {
+  bool entered = !st.started || st.phase != in.phase;
+  st.started = true;
+  st.phase = in.phase;
+
+  switch (in.phase) {
+    case WifiTxPhase::Portal:
+      st.index = WIFI_TX_PORTAL_INDEX;
+      return st.index;
+    case WifiTxPhase::Joining:
+      return wifiTxJoiningStep(st, entered, nowMs);
+    case WifiTxPhase::Online:
+      break;
+  }
+  return wifiTxOnlineStep(st, in, entered, nowMs);
 }
 
 static inline const char* wifiTxStepReasonName(WifiTxStepReason r) {

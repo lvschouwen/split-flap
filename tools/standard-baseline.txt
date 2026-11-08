@@ -9,14 +9,3 @@
 #   - Moved a file or renamed a function? `python3 -I scripts/check_standard.py --rename OLD NEW` (a path, or
 #     path:function) moves the entries keeping their values and leaves `moved` records the gate accepts.
 # First version created by --init; --init refuses when this file exists.
-ccn	firmware/v2/Unit/Unit.ino:loop	81
-ccn	firmware/v2/Unit/UnitBusSilence.h:busSilenceTick	31
-ccn	firmware/v2/Unit/UnitI2CProtocol.ino:receiveLetter	69
-ccn	firmware/v2/shared/LanOrigin.h:lanParseIpv6	32
-ccn	firmware/v2/shared/UnitHealth.h:buildUnitHealthJson	50
-ccn	firmware/v2/shared/WifiTxPolicy.h:wifiTxPolicyStep	29
-len	firmware/v2/Unit/Unit.ino:loop	469
-len	firmware/v2/Unit/Unit.ino:setup	258
-len	firmware/v2/Unit/UnitI2CProtocol.ino:receiveLetter	230
-len	firmware/v2/Unit/UnitMotion.ino:runSelfTest	162
-len	firmware/v2/shared/UnitHealth.h:buildUnitHealthJson	224

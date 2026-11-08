@@ -93,6 +93,56 @@ static void test_csrf_reject() {
   TEST_ASSERT_FALSE(lanCsrfReject(false, true, "https://evil.example.com", "192.168.4.1"));
 }
 
+static void test_hex_digit_values() {
+  TEST_ASSERT_EQUAL_INT(0, lanHexDigit('0'));
+  TEST_ASSERT_EQUAL_INT(9, lanHexDigit('9'));
+  TEST_ASSERT_EQUAL_INT(10, lanHexDigit('a'));
+  TEST_ASSERT_EQUAL_INT(15, lanHexDigit('F'));
+  TEST_ASSERT_EQUAL_INT(-1, lanHexDigit('g'));
+  TEST_ASSERT_EQUAL_INT(-1, lanHexDigit(':'));
+}
+
+static void test_ipv6_hex_group_reads_at_most_four_digits() {
+  unsigned int i = 0;
+  int value = -1;
+  TEST_ASSERT_EQUAL_INT(4, lanIpv6HexGroup("fe80:1", i, value));
+  TEST_ASSERT_EQUAL_INT(0xfe80, value);
+  TEST_ASSERT_EQUAL_UINT(4, i);
+  i = 0;
+  TEST_ASSERT_EQUAL_INT(4, lanIpv6HexGroup("12345", i, value));
+  TEST_ASSERT_EQUAL_INT(0x1234, value);
+  TEST_ASSERT_EQUAL_UINT(4, i);
+  i = 5;
+  TEST_ASSERT_EQUAL_INT(1, lanIpv6HexGroup("fe80:A", i, value));
+  TEST_ASSERT_EQUAL_INT(0xa, value);
+  i = 0;
+  TEST_ASSERT_EQUAL_INT(0, lanIpv6HexGroup(":1", i, value));
+  TEST_ASSERT_EQUAL_INT(0, value);
+  TEST_ASSERT_EQUAL_UINT(0, i);
+}
+
+static void test_ipv6_expand_fills_the_gap_with_zeros() {
+  uint8_t a[16];
+  const uint16_t full[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+  TEST_ASSERT_TRUE(lanIpv6Expand(full, 8, -1, a));
+  TEST_ASSERT_EQUAL_HEX8(0x01, a[1]);
+  TEST_ASSERT_EQUAL_HEX8(0x08, a[15]);
+  TEST_ASSERT_FALSE(lanIpv6Expand(full, 7, -1, a));  // short, no gap
+  TEST_ASSERT_FALSE(lanIpv6Expand(full, 8, 3, a));   // a gap with nothing to fill
+  const uint16_t two[2] = {0xfe80, 0x1};
+  TEST_ASSERT_TRUE(lanIpv6Expand(two, 2, 1, a));     // fe80::1
+  TEST_ASSERT_EQUAL_HEX8(0xfe, a[0]);
+  TEST_ASSERT_EQUAL_HEX8(0x80, a[1]);
+  TEST_ASSERT_EQUAL_HEX8(0x00, a[2]);
+  TEST_ASSERT_EQUAL_HEX8(0x00, a[14]);
+  TEST_ASSERT_EQUAL_HEX8(0x01, a[15]);
+  TEST_ASSERT_TRUE(lanIpv6Expand(two, 2, 2, a));     // fe80:1::
+  TEST_ASSERT_EQUAL_HEX8(0x01, a[3]);
+  TEST_ASSERT_EQUAL_HEX8(0x00, a[15]);
+  TEST_ASSERT_TRUE(lanIpv6Expand(two, 0, 0, a));     // ::
+  TEST_ASSERT_EQUAL_HEX8(0x00, a[0]);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_lan_origins_allowed);
@@ -100,5 +150,8 @@ int main(int, char**) {
   RUN_TEST(test_ipv6_literals_of_the_boards_own);
   RUN_TEST(test_same_origin);
   RUN_TEST(test_csrf_reject);
+  RUN_TEST(test_hex_digit_values);
+  RUN_TEST(test_ipv6_hex_group_reads_at_most_four_digits);
+  RUN_TEST(test_ipv6_expand_fills_the_gap_with_zeros);
   return UNITY_END();
 }

@@ -17,9 +17,15 @@ DERIVED = {"a", "ae", "pmm", "vccMin"}
 
 
 def serializer_keys() -> set[str]:
-    start = SERIALIZER.index("inline size_t buildUnitHealthJson(")
-    body = SERIALIZER[start:SERIALIZER.index("\n}\n", start)]
-    return set(re.findall(r'\\"(\w+)\\":', body))
+    # The serializer is buildUnitHealthJson plus the per-block appenders it
+    # calls, all between its append macro and its own end.
+    start = SERIALIZER.index("#define UNIT_HEALTH_APPEND(")
+    main = SERIALIZER.index("inline size_t buildUnitHealthJson(", start)
+    end = SERIALIZER.index("\n}\n", main)
+    appenders = re.findall(r"^inline size_t (unitHealthAppend\w+)\(", SERIALIZER[start:main], re.M)
+    for name in appenders:
+        assert f"o = {name}(buf, cap, o, u" in SERIALIZER[main:end], f"{name} is not called"
+    return set(re.findall(r'\\"(\w+)\\":', SERIALIZER[start:end]))
 
 
 def test_the_serializer_is_found_and_has_its_known_keys():

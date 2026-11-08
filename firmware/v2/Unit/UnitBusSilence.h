@@ -88,56 +88,67 @@ inline uint8_t busSilenceNowMinutes(const BusSilence& s, uint32_t nowMs) {
   return minutes == 0 ? 1 : minutes;
 }
 
-// One pass of loop(). `frames`: the count of frames addressed to this unit
-// (wrapping). `lineLow`: a bus line reads low now. `traffic`: the watch on
-// the lines fired since the last pass. `restartAllowed`: the gate is on.
-inline uint8_t busSilenceTick(BusSilence& s, UnitBusRecord& record, uint16_t frames, bool lineLow,
-                              bool traffic, bool restartAllowed, uint32_t nowMs) {
+// A silence's length in minutes is now `minutes`: the latest, and the longest
+// when it is.
+inline void busSilenceNoteLength(UnitBusRecord& record, uint8_t minutes) {
+  record.lastMinutes = minutes;
+  if (minutes > record.longestMinutes) record.longestMinutes = minutes;
+}
+
+// The length in minutes at which a silence is written next: twice
+// BUS_SILENCE_AFTER_MS for the first write, then each doubling of the last.
+inline uint8_t busSilenceNextMark(uint8_t savedMinutes) {
+  if (savedMinutes == 0) return busSilenceMinutes(2 * BUS_SILENCE_AFTER_MS);
+  return savedMinutes < 0x80 ? (uint8_t)(savedMinutes * 2) : 0xFF;
+}
+
+// Frames arrived (`frames` moved): contact counts up, and a silence going on
+// ends. Returns what the glue does.
+inline uint8_t busSilenceHeard(BusSilence& s, UnitBusRecord& record, uint16_t frames,
+                               uint32_t nowMs) {
   uint8_t todo = 0;
-  if (frames != s.lastFrames) {
-    const uint16_t arrived = (uint16_t)(frames - s.lastFrames);
-    s.lastFrames = frames;
-    s.contactFrames = (uint16_t)(s.contactFrames + arrived) > BUS_SILENCE_CONTACT_FRAMES
-                          ? BUS_SILENCE_CONTACT_FRAMES
-                          : (uint16_t)(s.contactFrames + arrived);
-    if (s.silent) {
-      const uint8_t minutes = busSilenceMinutes(nowMs - s.heardMs);
-      record.lastMinutes = minutes == 0 ? 1 : minutes;
-      if (record.lastMinutes > record.longestMinutes) record.longestMinutes = record.lastMinutes;
-      record.flags |= BUS_RECORD_FLAG_ENDED;
-      if (s.reinitOpen && nowMs - s.reinitMs <= BUS_SILENCE_REINIT_HEARD_MS) {
-        busSilenceBump(record.reinitsHeard);
-      }
-      // One that was never written leaves nothing to finish in EEPROM.
-      if (s.savedMinutes != 0) todo |= BUS_SILENCE_DO_SAVE;
+  const uint16_t arrived = (uint16_t)(frames - s.lastFrames);
+  s.lastFrames = frames;
+  s.contactFrames = (uint16_t)(s.contactFrames + arrived) > BUS_SILENCE_CONTACT_FRAMES
+                        ? BUS_SILENCE_CONTACT_FRAMES
+                        : (uint16_t)(s.contactFrames + arrived);
+  if (s.silent) {
+    const uint8_t minutes = busSilenceMinutes(nowMs - s.heardMs);
+    busSilenceNoteLength(record, minutes == 0 ? 1 : minutes);
+    record.flags |= BUS_RECORD_FLAG_ENDED;
+    if (s.reinitOpen && nowMs - s.reinitMs <= BUS_SILENCE_REINIT_HEARD_MS) {
+      busSilenceBump(record.reinitsHeard);
     }
-    s.heardMs = nowMs;
-    s.silent = false;
-    s.reinitOpen = false;
-    s.restarted = false;
-    s.trafficOpen = false;
-    return todo;
+    // One that was never written leaves nothing to finish in EEPROM.
+    if (s.savedMinutes != 0) todo |= BUS_SILENCE_DO_SAVE;
   }
-  if (s.contactFrames < BUS_SILENCE_CONTACT_FRAMES) {
-    // Nothing to lose yet: the wait for a silence starts at the first contact.
-    s.heardMs = nowMs;
-    return 0;
-  }
-  const uint32_t quiet = nowMs - s.heardMs;
-  if (!s.silent) {
-    if (quiet < BUS_SILENCE_AFTER_MS) return 0;
-    s.silent = true;
-    s.savedMinutes = 0;
-    s.reinitOpen = false;
-    s.restarted = false;
-    s.trafficOpen = false;
-    busSilenceBump(record.silences);
-    record.lastMinutes = busSilenceMinutes(quiet);
-    if (record.longestMinutes < record.lastMinutes) record.longestMinutes = record.lastMinutes;
-    record.flags = lineLow ? BUS_RECORD_FLAG_LINE_LOW : 0;
-    s.reinitMs = nowMs - BUS_SILENCE_AFTER_MS;  // the first restart is due now
-    todo |= BUS_SILENCE_DO_WATCH_TRAFFIC;
-  }
+  s.heardMs = nowMs;
+  s.silent = false;
+  s.reinitOpen = false;
+  s.restarted = false;
+  s.trafficOpen = false;
+  return todo;
+}
+
+// `quiet` ms without a frame have just reached BUS_SILENCE_AFTER_MS: a silence
+// starts, and the first bus hardware restart is due now.
+inline void busSilenceBegin(BusSilence& s, UnitBusRecord& record, uint32_t quiet, bool lineLow,
+                            uint32_t nowMs) {
+  s.silent = true;
+  s.savedMinutes = 0;
+  s.reinitOpen = false;
+  s.restarted = false;
+  s.trafficOpen = false;
+  busSilenceBump(record.silences);
+  busSilenceNoteLength(record, busSilenceMinutes(quiet));
+  record.flags = lineLow ? BUS_RECORD_FLAG_LINE_LOW : 0;
+  s.reinitMs = nowMs - BUS_SILENCE_AFTER_MS;
+}
+
+// In a silence, the watch on the lines fired (`traffic`): when no frame for
+// this unit follows within BUS_SILENCE_TRAFFIC_OWN_MS it was traffic for others.
+inline void busSilenceTrafficStep(BusSilence& s, UnitBusRecord& record, bool traffic,
+                                  uint32_t nowMs) {
   if (traffic && !s.trafficOpen && !(record.flags & BUS_RECORD_FLAG_TRAFFIC)) {
     s.trafficOpen = true;
     s.trafficMs = nowMs;
@@ -148,6 +159,27 @@ inline uint8_t busSilenceTick(BusSilence& s, UnitBusRecord& record, uint16_t fra
     s.trafficOpen = false;
     record.flags |= BUS_RECORD_FLAG_TRAFFIC;
   }
+}
+
+// One pass of loop(). `frames`: the count of frames addressed to this unit
+// (wrapping). `lineLow`: a bus line reads low now. `traffic`: the watch on
+// the lines fired since the last pass. `restartAllowed`: the gate is on.
+inline uint8_t busSilenceTick(BusSilence& s, UnitBusRecord& record, uint16_t frames, bool lineLow,
+                              bool traffic, bool restartAllowed, uint32_t nowMs) {
+  if (frames != s.lastFrames) return busSilenceHeard(s, record, frames, nowMs);
+  if (s.contactFrames < BUS_SILENCE_CONTACT_FRAMES) {
+    // Nothing to lose yet: the wait for a silence starts at the first contact.
+    s.heardMs = nowMs;
+    return 0;
+  }
+  uint8_t todo = 0;
+  const uint32_t quiet = nowMs - s.heardMs;
+  if (!s.silent) {
+    if (quiet < BUS_SILENCE_AFTER_MS) return 0;
+    busSilenceBegin(s, record, quiet, lineLow, nowMs);
+    todo |= BUS_SILENCE_DO_WATCH_TRAFFIC;
+  }
+  busSilenceTrafficStep(s, record, traffic, nowMs);
   // A held line is the other heal's; a restart of the hardware under it would
   // only be counted here for nothing.
   if (!lineLow && nowMs - s.reinitMs >= BUS_SILENCE_AFTER_MS) {
@@ -157,20 +189,15 @@ inline uint8_t busSilenceTick(BusSilence& s, UnitBusRecord& record, uint16_t fra
     todo |= BUS_SILENCE_DO_REINIT;
   }
   const uint8_t minutes = busSilenceMinutes(quiet);
-  const uint8_t first = busSilenceMinutes(2 * BUS_SILENCE_AFTER_MS);
-  const uint8_t mark = s.savedMinutes == 0 ? first
-                       : s.savedMinutes < 0x80 ? (uint8_t)(s.savedMinutes * 2) : 0xFF;
-  if (minutes >= mark && minutes > s.savedMinutes) {
+  if (minutes >= busSilenceNextMark(s.savedMinutes) && minutes > s.savedMinutes) {
     s.savedMinutes = minutes;
-    record.lastMinutes = minutes;
-    if (minutes > record.longestMinutes) record.longestMinutes = minutes;
+    busSilenceNoteLength(record, minutes);
     todo |= BUS_SILENCE_DO_SAVE;
   }
   if (restartAllowed && !s.restarted && quiet >= BUS_SILENCE_RESTART_MS) {
     s.restarted = true;
     s.savedMinutes = minutes == 0 ? 1 : minutes;
-    record.lastMinutes = minutes;
-    if (minutes > record.longestMinutes) record.longestMinutes = minutes;
+    busSilenceNoteLength(record, minutes);
     record.flags |= BUS_RECORD_FLAG_RESTARTED;
     busSilenceBump(record.selfRestarts);
     todo |= BUS_SILENCE_DO_SAVE | BUS_SILENCE_DO_RESTART;

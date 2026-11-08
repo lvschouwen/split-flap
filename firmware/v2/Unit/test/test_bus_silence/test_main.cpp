@@ -326,6 +326,87 @@ static void test_the_restart_gate_is_a_gate_this_firmware_knows() {
   TEST_ASSERT_EQUAL_HEX8(0, SFP_UNIT_GATE_IMPLEMENTED & (uint8_t)~UNIT_GATE_ALL);
 }
 
+// --- the steps busSilenceTick is made of ------------------------------------
+
+static void test_the_length_is_the_latest_and_the_longest_when_it_is() {
+  UnitBusRecord r;
+  busSilenceNoteLength(r, 7);
+  TEST_ASSERT_EQUAL(7, r.lastMinutes);
+  TEST_ASSERT_EQUAL(7, r.longestMinutes);
+  busSilenceNoteLength(r, 4);
+  TEST_ASSERT_EQUAL(4, r.lastMinutes);
+  TEST_ASSERT_EQUAL(7, r.longestMinutes);
+}
+
+static void test_the_next_mark_is_six_minutes_then_each_doubling() {
+  TEST_ASSERT_EQUAL(6, busSilenceNextMark(0));
+  TEST_ASSERT_EQUAL(12, busSilenceNextMark(6));
+  TEST_ASSERT_EQUAL(0xFE, busSilenceNextMark(0x7F));
+  TEST_ASSERT_EQUAL(0xFF, busSilenceNextMark(0x80));
+  TEST_ASSERT_EQUAL(0xFF, busSilenceNextMark(0xFF));
+}
+
+static void test_heard_counts_contact_and_ends_a_written_silence() {
+  BusSilence s;
+  UnitBusRecord r;
+  TEST_ASSERT_EQUAL_HEX8(0, busSilenceHeard(s, r, 3, 1000));
+  TEST_ASSERT_EQUAL(3, s.contactFrames);
+  TEST_ASSERT_EQUAL(1000, s.heardMs);
+  TEST_ASSERT_EQUAL_HEX8(0, busSilenceHeard(s, r, 40, 2000));
+  TEST_ASSERT_EQUAL(BUS_SILENCE_CONTACT_FRAMES, s.contactFrames);
+  s.silent = true;
+  s.savedMinutes = 6;
+  s.reinitOpen = true;
+  s.reinitMs = 2000 + 10 * MIN - BUS_SILENCE_REINIT_HEARD_MS;
+  TEST_ASSERT_EQUAL_HEX8(BUS_SILENCE_DO_SAVE, busSilenceHeard(s, r, 41, 2000 + 10 * MIN));
+  TEST_ASSERT_EQUAL(10, r.lastMinutes);
+  TEST_ASSERT_EQUAL(1, r.reinitsHeard);
+  TEST_ASSERT_TRUE(r.flags & BUS_RECORD_FLAG_ENDED);
+  TEST_ASSERT_FALSE(s.silent);
+  TEST_ASSERT_FALSE(s.reinitOpen);
+}
+
+static void test_heard_ends_an_unwritten_silence_without_a_write() {
+  BusSilence s;
+  UnitBusRecord r;
+  s.silent = true;
+  s.heardMs = 0;
+  TEST_ASSERT_EQUAL_HEX8(0, busSilenceHeard(s, r, 1, 30000));
+  TEST_ASSERT_EQUAL(1, r.lastMinutes);  // under a minute still reads as one
+  TEST_ASSERT_EQUAL(0, r.reinitsHeard);
+}
+
+static void test_begin_counts_the_silence_and_makes_the_first_restart_due() {
+  BusSilence s;
+  UnitBusRecord r;
+  r.flags = BUS_RECORD_FLAG_ENDED;
+  s.savedMinutes = 9;
+  s.trafficOpen = true;
+  busSilenceBegin(s, r, AFTER, true, 1000 + AFTER);
+  TEST_ASSERT_TRUE(s.silent);
+  TEST_ASSERT_EQUAL(0, s.savedMinutes);
+  TEST_ASSERT_FALSE(s.trafficOpen);
+  TEST_ASSERT_EQUAL(1, r.silences);
+  TEST_ASSERT_EQUAL(3, r.lastMinutes);
+  TEST_ASSERT_EQUAL_HEX8(BUS_RECORD_FLAG_LINE_LOW, r.flags);
+  TEST_ASSERT_EQUAL(1000, s.reinitMs);
+}
+
+static void test_traffic_not_followed_by_a_frame_is_for_others() {
+  BusSilence s;
+  UnitBusRecord r;
+  busSilenceTrafficStep(s, r, true, 5000);
+  TEST_ASSERT_TRUE(s.trafficOpen);
+  busSilenceTrafficStep(s, r, false, 5000 + BUS_SILENCE_TRAFFIC_OWN_MS - 1);
+  TEST_ASSERT_FALSE(r.flags & BUS_RECORD_FLAG_TRAFFIC);
+  busSilenceTrafficStep(s, r, false, 5000 + BUS_SILENCE_TRAFFIC_OWN_MS);
+  TEST_ASSERT_FALSE(s.trafficOpen);
+  TEST_ASSERT_TRUE(r.flags & BUS_RECORD_FLAG_TRAFFIC);
+  // Noted once: a later firing opens no new watch.
+  busSilenceTrafficStep(s, r, true, 9000);
+  TEST_ASSERT_FALSE(s.trafficOpen);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_spans_leave_room_for_what_a_master_does);
@@ -346,5 +427,11 @@ int main(int, char**) {
   RUN_TEST(test_what_an_older_unit_answers_is_no_record);
   RUN_TEST(test_the_eeprom_block_reads_back_and_a_blank_one_is_an_empty_record);
   RUN_TEST(test_the_restart_gate_is_a_gate_this_firmware_knows);
+  RUN_TEST(test_the_length_is_the_latest_and_the_longest_when_it_is);
+  RUN_TEST(test_the_next_mark_is_six_minutes_then_each_doubling);
+  RUN_TEST(test_heard_counts_contact_and_ends_a_written_silence);
+  RUN_TEST(test_heard_ends_an_unwritten_silence_without_a_write);
+  RUN_TEST(test_begin_counts_the_silence_and_makes_the_first_restart_due);
+  RUN_TEST(test_traffic_not_followed_by_a_frame_is_for_others);
   return UNITY_END();
 }
