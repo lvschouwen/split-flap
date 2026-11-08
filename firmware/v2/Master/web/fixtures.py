@@ -168,6 +168,9 @@ def _wall():
                    {"reset": "Brownout", "stage": "wifi"}, {"reset": "Panic", "stage": "boot"}],
         "lastStart": {"reset": "Panic", "cause": "LoadProhibited in displayTask"},
         "network": {"gw": "fail", "self": "ok"},
+        # Held after a brownout loop (#504): the page offers "Clear hold".
+        "brownoutGuard": {"held": True, "streak": 3, "limit": 3, "windowS": 600, "releaseAfterS": 1800},
+        "heapWatch": {"lowBytes": 12288, "lowForS": 0, "restartAfterS": 300, "restarts": 0},
         "rescue": {"rev": "", "state": "missing", "warn": True},
         "settings": {"name": "", "unitCount": 0}})
     at = 1

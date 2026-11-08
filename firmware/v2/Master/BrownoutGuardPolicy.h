@@ -6,7 +6,10 @@
 // it short of BROWNOUT_LOOP_WINDOW_MS, the board boots held: no boot-home,
 // no display command run, until an operator clears it (the API action
 // `clear-brownout-hold`); after that one unit moves at a time for the rest
-// of that boot. The hold is latched: it survives every reset until cleared.
+// of that boot. The hold is latched: it survives every reset until cleared,
+// or until a held boot has stayed up BROWNOUT_HOLD_RELEASE_MS — a boot that
+// moves nothing and survives that long lets go by itself, so a household
+// wall never stays frozen for want of an API call.
 //
 // One brownout is no evidence: a manual power cycle of the S3 reports
 // Brownout too, and that is the normal start of a leader. What tells a loop
@@ -37,6 +40,11 @@
 // Units moving at once for the rest of a held boot once it is cleared
 // (MotionBudget.h's floor; the normal ceiling is MOTION_BUDGET_MAX).
 #define BROWNOUT_HOLD_MOTION_CAP 1
+// A held boot up this long releases itself, as a clear would. Three times
+// the loop window: a supply that browns out only under motion still holds
+// still for this long, and every brownout before it starts the next boot's
+// own count from zero.
+#define BROWNOUT_HOLD_RELEASE_MS (30UL * 60UL * 1000UL)
 
 #define BROWNOUT_GUARD_MAGIC 0xB6
 #define BROWNOUT_GUARD_BLOB_LEN 4
@@ -104,4 +112,12 @@ inline bool brownoutGuardClear(BrownoutGuardRecord& r) {
   r.streak = 0;
   r.young = false;
   return true;
+}
+
+// A held boot that has stayed up the release time lets go by itself, as the
+// operator's clear (the caller persists and logs). False when not held or
+// not yet that long up.
+inline bool brownoutGuardAutoRelease(BrownoutGuardRecord& r, uint32_t uptimeMs) {
+  if (!r.held || uptimeMs < BROWNOUT_HOLD_RELEASE_MS) return false;
+  return brownoutGuardClear(r);
 }

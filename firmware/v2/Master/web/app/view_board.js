@@ -141,7 +141,15 @@ export function boardView(app, id) {
     const reach = boardReach(board);
     const behind = unitsBehind(units);
     const reason = (board.verdict || {}).reason;
+    const held = board.kind === 'master' && board.brownoutGuard && board.brownoutGuard.held === true;
+    const clearHold = () => {
+      if (!window.confirm('Clear the hold? The units of this board home one at a time; check the power supply first.')) return;
+      action('clear-brownout-hold').then(
+        () => { status.say('Cleared. The units home one at a time.'); read(); },
+        (error) => status.say(error.message, true));
+    };
     fill(actions,
+      held && h('button', { type: 'button', class: 'btn primary', onclick: clearHold }, 'Clear hold'),
       reach.units && h('button', { type: 'button', class: 'btn', disabled: busy,
                     onclick: job('Finding home on all units', 'home-all') }, 'Find home on all units'),
       reach.units && behind > 0 && h('button', { type: 'button', class: 'btn primary', disabled: busy,

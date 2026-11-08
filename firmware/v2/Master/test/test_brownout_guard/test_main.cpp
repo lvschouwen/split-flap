@@ -122,6 +122,40 @@ static void test_a_first_boot_with_no_record_starts_clean() {
   TEST_ASSERT_FALSE(r.held);
 }
 
+static void test_a_held_boot_releases_itself_after_the_release_time() {
+  BrownoutGuardRecord r = held();
+  TEST_ASSERT_FALSE(brownoutGuardAutoRelease(r, BROWNOUT_HOLD_RELEASE_MS - 1));  // 29:59.999
+  TEST_ASSERT_TRUE(r.held);
+  TEST_ASSERT_TRUE(brownoutGuardAutoRelease(r, BROWNOUT_HOLD_RELEASE_MS));  // 30:00
+  TEST_ASSERT_FALSE(r.held);
+  TEST_ASSERT_EQUAL(0, r.streak);
+  TEST_ASSERT_FALSE(r.young);  // counts as a boot that lived
+  TEST_ASSERT_FALSE(brownoutGuardAutoRelease(r, BROWNOUT_HOLD_RELEASE_MS + 1));  // once
+  r = youngBrownout(r);  // a brownout after the release starts a new count
+  TEST_ASSERT_EQUAL(0, r.streak);
+  TEST_ASSERT_FALSE(r.held);
+}
+
+static void test_a_brownout_before_the_release_keeps_the_hold_and_restarts_its_time() {
+  BrownoutGuardRecord r = held();
+  TEST_ASSERT_FALSE(brownoutGuardAutoRelease(r, BROWNOUT_HOLD_RELEASE_MS - 1));
+  r = youngBrownout(r);  // browned out at 29:59: the next boot is still held
+  TEST_ASSERT_TRUE(r.held);
+  // Its own 30 min, from its own start.
+  TEST_ASSERT_FALSE(brownoutGuardAutoRelease(r, 60UL * 1000UL));
+  TEST_ASSERT_TRUE(r.held);
+  TEST_ASSERT_TRUE(brownoutGuardAutoRelease(r, BROWNOUT_HOLD_RELEASE_MS));
+  TEST_ASSERT_FALSE(r.held);
+}
+
+static void test_auto_release_never_touches_a_boot_that_is_not_held() {
+  BrownoutGuardRecord r = youngBrownout(brownoutGuardStart(BrownoutGuardRecord{}, 1));
+  TEST_ASSERT_FALSE(brownoutGuardAutoRelease(r, 2 * BROWNOUT_HOLD_RELEASE_MS));
+  TEST_ASSERT_EQUAL(1, r.streak);
+  TEST_ASSERT_TRUE(r.young);
+  TEST_ASSERT_TRUE(BROWNOUT_HOLD_RELEASE_MS > BROWNOUT_LOOP_WINDOW_MS);
+}
+
 static void test_the_window_outlasts_the_observed_loop() {
   // #504: three failed boots inside 31 s; the boot-home of 16 units ~1 min.
   TEST_ASSERT_TRUE(BROWNOUT_LOOP_WINDOW_MS >= 5UL * 60UL * 1000UL);
@@ -140,6 +174,9 @@ int main() {
   RUN_TEST(test_record_round_trips);
   RUN_TEST(test_garbage_never_decodes_as_a_hold);
   RUN_TEST(test_a_first_boot_with_no_record_starts_clean);
+  RUN_TEST(test_a_held_boot_releases_itself_after_the_release_time);
+  RUN_TEST(test_a_brownout_before_the_release_keeps_the_hold_and_restarts_its_time);
+  RUN_TEST(test_auto_release_never_touches_a_boot_that_is_not_held);
   RUN_TEST(test_the_window_outlasts_the_observed_loop);
   return UNITY_END();
 }

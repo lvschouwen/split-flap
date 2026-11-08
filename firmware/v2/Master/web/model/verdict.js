@@ -119,7 +119,7 @@ const BOARD = {
   'units-note': (a, b) => ['Working, with notes', `All ${plural(b, 'unit')} answer, ${a} with a note.`,
     'Nothing to do: a unit marked amber below says what was noted.'],
   'brownout-hold': (a) => ['Held after brownouts', `${plural(a, 'brownout')} in a row, each soon after a start: no unit moves.`,
-    'Check the power supply, then send the action clear-brownout-hold; the units then move one at a time.'],
+    'Check the power supply, then press “Clear hold” below. It lets go by itself after 30 minutes up without a brownout; the units then move one at a time.'],
 };
 
 export const BOARD_REASON_NAMES = Object.keys(BOARD);

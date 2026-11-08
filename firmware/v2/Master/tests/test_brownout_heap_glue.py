@@ -84,3 +84,16 @@ def test_the_clear_is_an_action_and_the_state_is_in_the_board_facts() -> None:
     assert "clear-brownout-hold" in (MASTER / "ApiIndex.h").read_text(encoding="utf-8")
     watch = _code("WallWatch.cpp")
     assert "facts.brownoutHold = brownoutGuardHeld();" in watch
+
+
+def test_net_task_releases_a_held_boot_by_itself() -> None:
+    tick = _body(_code("BrownoutGuard.cpp"), "void brownoutGuardTick() {")
+    release = tick[tick.index("brownoutGuardAutoRelease(record, millis())"):]
+    assert release.index("persist();") < release.index("held.store(false);")
+
+
+def test_the_board_page_offers_the_clear_only_while_held() -> None:
+    page = (MASTER / "web" / "app" / "view_board.js").read_text(encoding="utf-8")
+    assert "board.brownoutGuard.held === true" in page
+    assert "action('clear-brownout-hold')" in page
+    assert "held && h('button'" in page

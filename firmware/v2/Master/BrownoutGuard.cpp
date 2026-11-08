@@ -50,9 +50,10 @@ void brownoutGuardLogReport() {
   if (record.held) {
     SerialPrintf("brownout guard: HELD after %u brownout resets in a row, each "
                  "within %lu min of its start — no unit moves until the action "
-                 "clear-brownout-hold; check the supply first\n",
+                 "clear-brownout-hold, or %lu min up; check the supply first\n",
                  (unsigned)record.streak,
-                 (unsigned long)(BROWNOUT_LOOP_WINDOW_MS / 60000UL));
+                 (unsigned long)(BROWNOUT_LOOP_WINDOW_MS / 60000UL),
+                 (unsigned long)(BROWNOUT_HOLD_RELEASE_MS / 60000UL));
   } else if (record.streak > 0) {
     SerialPrintf("brownout guard: %u of %d brownouts in a row cut a boot short "
                  "(last reset: %s)\n",
@@ -70,6 +71,15 @@ void brownoutGuardTick() {
       SerialPrintln(F("brownout guard: hold cleared by the operator — the "
                       "units home one at a time"));
     }
+    return;
+  }
+  if (brownoutGuardAutoRelease(record, millis())) {
+    persist();
+    streakNow.store(0);
+    held.store(false);
+    SerialPrintf("brownout guard: hold auto-released after %lu min up without a "
+                 "brownout — the units home one at a time\n",
+                 (unsigned long)(BROWNOUT_HOLD_RELEASE_MS / 60000UL));
     return;
   }
   if (brownoutGuardSettle(record, millis())) {
@@ -90,8 +100,9 @@ bool brownoutGuardRequestClear() {
 void brownoutGuardHoldDisplay() {
   if (!held.load()) return;
   unitBusSetMotionCeiling(BROWNOUT_HOLD_MOTION_CAP);
-  SerialPrintln(F("brownout guard: display held — no boot-home, no command "
-                  "runs until the hold is cleared"));
+  SerialPrintf("brownout guard: display held — no boot-home, no command runs "
+               "until the hold is cleared, or by itself after %lu min up\n",
+               (unsigned long)(BROWNOUT_HOLD_RELEASE_MS / 60000UL));
   while (held.load()) {
     wdtFeed();  // #314: a watched task waiting on an operator
     delay(200);
@@ -109,6 +120,8 @@ String brownoutGuardJson() {
   out += String(BROWNOUT_LOOP_LIMIT);
   out += ",\"windowS\":";
   out += String((unsigned long)(BROWNOUT_LOOP_WINDOW_MS / 1000UL));
+  out += ",\"releaseAfterS\":";
+  out += String((unsigned long)(BROWNOUT_HOLD_RELEASE_MS / 1000UL));
   out += '}';
   return out;
 }

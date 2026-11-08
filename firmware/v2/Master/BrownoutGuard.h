@@ -14,7 +14,8 @@ void brownoutGuardBoot();
 void brownoutGuardLogReport();
 
 // netTask each loop: ends the streak once this boot has lived the window,
-// and carries out a staged clear (NVS is written here only).
+// carries out a staged clear, and releases a held boot that has stayed up
+// BROWNOUT_HOLD_RELEASE_MS (NVS is written here only).
 void brownoutGuardTick();
 
 // Any task: whether this boot is held, and the brownouts in a row it counted.
