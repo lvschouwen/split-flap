@@ -1,7 +1,7 @@
 // DisplayTask.cpp — the core-1 display domain (#187), split out of
 // Tasks.cpp (#352). Exclusive owner of I2C/Wire (via UnitBus, #203) and the
 // single snapshot writer. Contains the boot probe/boot-home sequence, the
-// heartbeat tick, the #205 unit-reflash job and displayTaskMain's command
+// heartbeat tick, the #205 unit-reflash job and execCommand's command
 // dispatch (one static exec* helper per opcode, #353).
 
 #include <Arduino.h>
@@ -501,22 +501,14 @@ static bool bootSweepHasWork(const DisplaySnapshot& snap) {
   return false;
 }
 
-// `onlyAddr` narrows the whole job to one unit (0 = the whole fleet, today's
-// behaviour). The #407 campaign flashes a day-0 image that has never run on
-// hardware, so the operator wants to convince themselves on unit 1 before
-// unit 2 exists (#412).
-static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
-                          ReflashSweep sweep, uint8_t onlyAddr) {
-  reflashProgressBegin(local.reflash, 0);  // total known once planned
-  snapshotPublish(local);                  // gate closes here
-
-  // With the gate closed, drain whatever slipped into the queue earlier —
-  // it would burst-drain onto a display this job is about to rebuild.
-  // Stop survives (it is the cancel; its abort flag is already set — the
-  // #204 order rule) but is re-sent only AFTER the drain finishes: a
-  // mid-drain re-send would leave commands that sat behind the Stop
-  // running ahead of it after a cancelled job (Codex review finding).
-  // Multiple Stops collapse into one — supersession is the #204 contract.
+// With the gate closed, drain whatever slipped into the queue earlier —
+// it would burst-drain onto a display this job is about to rebuild.
+// Stop survives (it is the cancel; its abort flag is already set — the
+// #204 order rule) but is re-sent only AFTER the drain finishes: a
+// mid-drain re-send would leave commands that sat behind the Stop
+// running ahead of it after a cancelled job (Codex review finding).
+// Multiple Stops collapse into one — supersession is the #204 contract.
+static void drainQueueAtReflashStart() {
   DisplayCommand stale;
   bool sawStop = false;
   DisplayCommand stopCmd;
@@ -530,23 +522,167 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
                   describeDisplayCommand(stale));
   }
   if (sawStop) xQueueSend(displayQueue, &stopCmd, 0);
+}
 
-  // Let the row finish what it was doing before the first unit leaves for
-  // its bootloader: no drum turning, no rail load, while pages are streamed.
-  // Idle, not homed — a home is a full turn per unit and nothing here needs
-  // one (UnitUpdateJob.h).
-  {
-    uint8_t rowUnits[UNITS_AMOUNT];
-    int rowCount = unitUpdateCollectSketchUnits(
-        local.units, UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE, rowUnits);
-    wdtFeed();
-    if (rowCount > 0 &&
-        !unitBusWaitBatchIdle(rowUnits, rowCount, UNIT_UPDATE_QUIET_MS)) {
-      SerialPrintln(F("reflash: row still moving after the quiet wait — "
-                      "going ahead"));
-    }
-    wdtFeed();
+// Let the row finish what it was doing before the first unit leaves for
+// its bootloader: no drum turning, no rail load, while pages are streamed.
+// Idle, not homed — a home is a full turn per unit and nothing here needs
+// one (UnitUpdateJob.h).
+static void waitRowQuietBeforeReflash(const DisplaySnapshot& local) {
+  uint8_t rowUnits[UNITS_AMOUNT];
+  int rowCount = unitUpdateCollectSketchUnits(
+      local.units, UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE, rowUnits);
+  wdtFeed();
+  if (rowCount > 0 &&
+      !unitBusWaitBatchIdle(rowUnits, rowCount, UNIT_UPDATE_QUIET_MS)) {
+    SerialPrintln(F("reflash: row still moving after the quiet wait — "
+                    "going ahead"));
   }
+  wdtFeed();
+}
+
+// The sweep's sketch units for the flash list (the twiboot residents join
+// in reflashPlanTargets).
+static int reflashCollectSweepTargets(const DisplaySnapshot& local,
+                                      ReflashSweep sweep, uint8_t onlyAddr,
+                                      uint8_t* sweepAddrs) {
+  switch (sweep) {
+    case ReflashSweep::OffBundle:
+      return reflashCollectRebootTargets(local.units, UNITS_AMOUNT,
+                                         SFP_I2C_ADDRESS_BASE, sweepAddrs);
+    case ReflashSweep::OutdatedOnly:
+      return reflashCollectOutdatedTargets(local.units, UNITS_AMOUNT,
+                                           SFP_I2C_ADDRESS_BASE, sweepAddrs);
+    case ReflashSweep::ForcedOne:
+      return reflashCollectForcedTarget(UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE,
+                                        onlyAddr, sweepAddrs);
+  }
+  return 0;
+}
+
+// The loop, its batch throttle and the #412 halt are the shared
+// reflashRunTargets (ReflashPlan.h); these are displayTask's hooks.
+struct ReflashJobHooks {
+  DisplaySnapshot& local;
+  const uint8_t* image;
+  size_t imageLen;
+  bool stopRequested() {
+    wdtFeed();  // #314: I2C page-streaming is the longest displayTask op
+    return unitBusAbortRequested();
+  }
+  bool imageFits() { return twibootImageFits(imageLen); }
+  bool inBootloader(uint8_t addr) { return unitBusIsBootloader(addr); }
+  int enterBootloader(uint8_t addr) {
+    int status = unitBusRebootToBootloader(addr);
+    if (status == 0) displayInvalidateUnitReads(local, addr);
+    return status;
+  }
+  void pause(uint32_t ms) { delay(ms); }
+  void unitNotEntered(uint8_t addr) {
+    SerialPrintf("reflash: unit 0x%02x is not in its bootloader — "
+                 "not flashed\n", addr);
+  }
+  void waitingForReset(uint8_t addr) {
+    SerialPrintf("reflash: unit 0x%02x does not enter its bootloader — "
+                 "waiting %lu s for a reset of the unit by hand\n", addr,
+                 (unsigned long)(REFLASH_HAND_RESET_WAIT_MS / 1000UL));
+  }
+  void unitRetried(uint8_t addr, int attempt) {
+    SerialPrintf("reflash: unit 0x%02x still in its bootloader — flashing "
+                 "it again (attempt %d of %d)\n", addr, attempt,
+                 REFLASH_UNIT_ATTEMPTS);
+  }
+  ReflashUnitOutcome flashUnit(uint8_t addr) {
+    UnitFlashResult r = unitBusFlashUnit(addr, image, imageLen);
+    if (r == UnitFlashResult::Aborted) return ReflashUnitOutcome::Stopped;
+    if (r == UnitFlashResult::Ok) return ReflashUnitOutcome::Flashed;
+    SerialPrintf("reflash: unit 0x%02x failed (%s)\n", addr,
+                 unitFlashResultName(r));
+    return ReflashUnitOutcome::Failed;
+  }
+  // Just-flashed unit runs the sketch again; bump the fact so the batch-idle
+  // wait polls it (the final reprobe rewrites all facts wholesale anyway).
+  void unitFlashed(uint8_t addr) {
+    local.units[addr - SFP_I2C_ADDRESS_BASE].state = 1;
+  }
+  void progressChanged() { snapshotPublish(local); }
+  void settleBatch(const uint8_t* addrs, int n) {
+    unitBusWaitBatchIdle(addrs, n, REFLASH_BATCH_SETTLE_MS);
+  }
+  void runHalted(uint8_t consecutiveFailures, int untouched) {
+    SerialPrintf("reflash: HALTED after %u consecutive failures — "
+                 "%d unit(s) left untouched\n",
+                 (unsigned)consecutiveFailures, untouched);
+  }
+};
+
+// The boot-section half of the job (UnitUpdateJob.h); returns whether the
+// sweep halted. `cancelled` takes the sweep's verdict.
+static bool runBootSectionSweep(DisplaySnapshot& local, UnitFacts* busFacts,
+                                const uint8_t* bootTargets, int bootTotal,
+                                bool& cancelled) {
+  SerialPrintf("reflash: %d boot section(s) to update\n", bootTotal);
+  struct SweepHooks {
+    DisplaySnapshot& local;
+    bool stopRequested() {
+      wdtFeed();
+      return unitBusAbortRequested();
+    }
+    MaintGrade bootUpdate(uint8_t addr) {
+      BootUpdateHooks hooks{local, false};
+      MaintGrade grade = bootUpdateRun(hooks, addr);
+      SerialPrintf("reflash: boot section of unit 0x%02x → %s%s%s\n", addr,
+                   maintOutcomeName(grade.outcome),
+                   grade.reason != MaintReason::None ? " / " : "",
+                   maintReasonName(grade.reason));
+      return grade;
+    }
+    void progressChanged() { snapshotPublish(local); }
+    void sweepHalted(uint8_t consecutiveFailures, int untouched) {
+      SerialPrintf("reflash: boot sweep HALTED after %u consecutive "
+                   "failures — %d unit(s) left untouched\n",
+                   (unsigned)consecutiveFailures, untouched);
+    }
+  };
+  SweepHooks sweepHooks{local};
+  BootSweepEnd sweepEnd = unitUpdateRunBootSweep(
+      sweepHooks, bootTargets, bootTotal, local.reflash);
+  cancelled = sweepEnd.cancelled;
+  // The masters judge a boot section on their health poll: publish the
+  // new verdicts with the result, not minutes later. After the twiboot
+  // window the last unit armed — a status read inside it can pin a unit
+  // in its bootloader.
+  wdtFeed();
+  settleBeforeProbe();
+  wdtFeed();
+  pollHealthWithFreshness(busFacts);
+  displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
+                        effectiveWidthOverride());
+  return sweepEnd.halted;
+}
+
+static void logReflashEnd(const ReflashProgress& r, bool anyHalted) {
+  SerialPrintf("reflash: %s — %u ok, %u failed of %u; boot sections %u "
+               "updated, %u failed%s\n",
+               reflashStateName(r.state), (unsigned)r.done,
+               (unsigned)r.failed, (unsigned)r.total, (unsigned)r.bootDone,
+               (unsigned)r.bootFailed,
+               anyHalted ? " (HALTED — image suspect, remaining units untouched)"
+                         : "");
+}
+
+// `onlyAddr` narrows the whole job to one unit (0 = the whole fleet, today's
+// behaviour). The #407 campaign flashes a day-0 image that has never run on
+// hardware, so the operator wants to convince themselves on unit 1 before
+// unit 2 exists (#412).
+static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
+                          ReflashSweep sweep, uint8_t onlyAddr) {
+  reflashProgressBegin(local.reflash, 0);  // total known once planned
+  snapshotPublish(local);                  // gate closes here
+
+  drainQueueAtReflashStart();
+
+  waitRowQuietBeforeReflash(local);
   // A Stop during the wait ends the job here, before any unit is touched.
   if (unitBusAbortRequested()) {
     reflashProgressFinish(local.reflash, true, false);
@@ -559,23 +695,8 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
   // twiboot. Nobody is sent into the bootloader here — the loop does that
   // for each unit right before its own pages (reflashEnterUnit).
   uint8_t sweepAddrs[UNITS_AMOUNT];
-  int sweepCount = 0;
-  switch (sweep) {
-    case ReflashSweep::OffBundle:
-      sweepCount = reflashCollectRebootTargets(local.units, UNITS_AMOUNT,
-                                               SFP_I2C_ADDRESS_BASE,
-                                               sweepAddrs);
-      break;
-    case ReflashSweep::OutdatedOnly:
-      sweepCount = reflashCollectOutdatedTargets(local.units, UNITS_AMOUNT,
-                                                 SFP_I2C_ADDRESS_BASE,
-                                                 sweepAddrs);
-      break;
-    case ReflashSweep::ForcedOne:
-      sweepCount = reflashCollectForcedTarget(
-          UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE, onlyAddr, sweepAddrs);
-      break;
-  }
+  int sweepCount =
+      reflashCollectSweepTargets(local, sweep, onlyAddr, sweepAddrs);
   uint8_t targets[UNITS_AMOUNT];
   int total = reflashPlanTargets(local.units, UNITS_AMOUNT,
                                  SFP_I2C_ADDRESS_BASE, sweepAddrs, sweepCount,
@@ -587,62 +708,7 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
 
   const uint8_t* image = webUnitFirmwareBin();
   size_t imageLen = webUnitFirmwareBinLen();
-  // The loop, its batch throttle and the #412 halt are the shared
-  // reflashRunTargets (ReflashPlan.h); these are displayTask's hooks.
-  struct JobHooks {
-    DisplaySnapshot& local;
-    const uint8_t* image;
-    size_t imageLen;
-    bool stopRequested() {
-      wdtFeed();  // #314: I2C page-streaming is the longest displayTask op
-      return unitBusAbortRequested();
-    }
-    bool imageFits() { return twibootImageFits(imageLen); }
-    bool inBootloader(uint8_t addr) { return unitBusIsBootloader(addr); }
-    int enterBootloader(uint8_t addr) {
-      int status = unitBusRebootToBootloader(addr);
-      if (status == 0) displayInvalidateUnitReads(local, addr);
-      return status;
-    }
-    void pause(uint32_t ms) { delay(ms); }
-    void unitNotEntered(uint8_t addr) {
-      SerialPrintf("reflash: unit 0x%02x is not in its bootloader — "
-                   "not flashed\n", addr);
-    }
-    void waitingForReset(uint8_t addr) {
-      SerialPrintf("reflash: unit 0x%02x does not enter its bootloader — "
-                   "waiting %lu s for a reset of the unit by hand\n", addr,
-                   (unsigned long)(REFLASH_HAND_RESET_WAIT_MS / 1000UL));
-    }
-    void unitRetried(uint8_t addr, int attempt) {
-      SerialPrintf("reflash: unit 0x%02x still in its bootloader — flashing "
-                   "it again (attempt %d of %d)\n", addr, attempt,
-                   REFLASH_UNIT_ATTEMPTS);
-    }
-    ReflashUnitOutcome flashUnit(uint8_t addr) {
-      UnitFlashResult r = unitBusFlashUnit(addr, image, imageLen);
-      if (r == UnitFlashResult::Aborted) return ReflashUnitOutcome::Stopped;
-      if (r == UnitFlashResult::Ok) return ReflashUnitOutcome::Flashed;
-      SerialPrintf("reflash: unit 0x%02x failed (%s)\n", addr,
-                   unitFlashResultName(r));
-      return ReflashUnitOutcome::Failed;
-    }
-    // Just-flashed unit runs the sketch again; bump the fact so the batch-idle
-    // wait polls it (the final reprobe rewrites all facts wholesale anyway).
-    void unitFlashed(uint8_t addr) {
-      local.units[addr - SFP_I2C_ADDRESS_BASE].state = 1;
-    }
-    void progressChanged() { snapshotPublish(local); }
-    void settleBatch(const uint8_t* addrs, int n) {
-      unitBusWaitBatchIdle(addrs, n, REFLASH_BATCH_SETTLE_MS);
-    }
-    void runHalted(uint8_t consecutiveFailures, int untouched) {
-      SerialPrintf("reflash: HALTED after %u consecutive failures — "
-                   "%d unit(s) left untouched\n",
-                   (unsigned)consecutiveFailures, untouched);
-    }
-  };
-  JobHooks jobHooks{local, image, imageLen};
+  ReflashJobHooks jobHooks{local, image, imageLen};
   ReflashRunEnd runEnd =
       reflashRunTargets(jobHooks, targets, total, local.reflash,
                         sweep == ReflashSweep::ForcedOne
@@ -693,63 +759,18 @@ static void runReflashJob(DisplaySnapshot& local, UnitFacts* busFacts,
         local.units, UNITS_AMOUNT, SFP_I2C_ADDRESS_BASE, bootTargets);
     bootTotal = reflashFilterToAddress(bootTargets, bootTotal, onlyAddr);
     if (bootTotal > 0) {
-      SerialPrintf("reflash: %d boot section(s) to update\n", bootTotal);
-      struct SweepHooks {
-        DisplaySnapshot& local;
-        bool stopRequested() {
-          wdtFeed();
-          return unitBusAbortRequested();
-        }
-        MaintGrade bootUpdate(uint8_t addr) {
-          BootUpdateHooks hooks{local, false};
-          MaintGrade grade = bootUpdateRun(hooks, addr);
-          SerialPrintf("reflash: boot section of unit 0x%02x → %s%s%s\n", addr,
-                       maintOutcomeName(grade.outcome),
-                       grade.reason != MaintReason::None ? " / " : "",
-                       maintReasonName(grade.reason));
-          return grade;
-        }
-        void progressChanged() { snapshotPublish(local); }
-        void sweepHalted(uint8_t consecutiveFailures, int untouched) {
-          SerialPrintf("reflash: boot sweep HALTED after %u consecutive "
-                       "failures — %d unit(s) left untouched\n",
-                       (unsigned)consecutiveFailures, untouched);
-        }
-      };
-      SweepHooks sweepHooks{local};
-      BootSweepEnd sweepEnd = unitUpdateRunBootSweep(
-          sweepHooks, bootTargets, bootTotal, local.reflash);
-      cancelled = sweepEnd.cancelled;
-      bootHalted = sweepEnd.halted;
-      // The masters judge a boot section on their health poll: publish the
-      // new verdicts with the result, not minutes later. After the twiboot
-      // window the last unit armed — a status read inside it can pin a unit
-      // in its bootloader.
-      wdtFeed();
-      settleBeforeProbe();
-      wdtFeed();
-      pollHealthWithFreshness(busFacts);
-      displayApplyUnitFacts(local, busFacts, UNITS_AMOUNT,
-                            effectiveWidthOverride());
+      bootHalted = runBootSectionSweep(local, busFacts, bootTargets, bootTotal,
+                                       cancelled);
     }
   }
 
   reflashProgressFinish(local.reflash, cancelled, halted || bootHalted);
   snapshotPublish(local);  // gate reopens here
-  SerialPrintf("reflash: %s — %u ok, %u failed of %u; boot sections %u "
-               "updated, %u failed%s\n",
-               reflashStateName(local.reflash.state),
-               (unsigned)local.reflash.done, (unsigned)local.reflash.failed,
-               (unsigned)local.reflash.total,
-               (unsigned)local.reflash.bootDone,
-               (unsigned)local.reflash.bootFailed,
-               (halted || bootHalted)
-                   ? " (HALTED — image suspect, remaining units untouched)"
-                   : "");
+  logReflashEnd(local.reflash, halted || bootHalted);
 }
 
 // --- opcode executors (#353): one static helper per DisplayCommand opcode —
-// displayTaskMain's switch stays pure dispatch. Uniform signature by design;
+// execCommand's switch stays pure dispatch. Uniform signature by design;
 // helpers that ignore an argument cast it void.
 
 static void execShowText(DisplaySnapshot& local, UnitFacts* busFacts,
@@ -1178,6 +1199,102 @@ static void execReflashUnits(DisplaySnapshot& local, UnitFacts* busFacts,
   displayApplyMaintResult(local, cmd, outcome, reason);
 }
 
+static void logStartProbe(const DisplaySnapshot& local) {
+  if (local.detectedUnitCount == 0) {
+    SerialPrintf("display: no units responding — assuming full width %d\n",
+                 local.displayWidth);
+  } else {
+    SerialPrintf("display: probe done, width %d\n", local.displayWidth);
+  }
+  if (tasksUnitCountOverridePinned()) {
+    SerialPrintf("display: width pinned to %d (unit-count override)\n",
+                 local.displayWidth);
+  }
+}
+
+// #554: the unit this board was armed to catch. In its bootloader it is
+// flashed now, whatever the start-up update setting says: an operator asked
+// for exactly this unit, and it leaves its bootloader again in seconds.
+static void catchArmedUnitAtStart(DisplaySnapshot& local,
+                                  UnitFacts* busFacts) {
+  const uint8_t armedAddr = unitCatchArmed();
+  if (armedAddr == 0) return;
+  const int armedIndex = armedAddr - SFP_I2C_ADDRESS_BASE;
+  if (unitCatchAfterProbe(armedAddr, busFacts[armedIndex]) == UnitCatchStep::Flash) {
+    SerialPrintf("unit catch: unit 0x%02x is in its bootloader — flashing it\n",
+                 armedAddr);
+    runReflashJob(local, busFacts, ReflashSweep::ForcedOne, armedAddr);
+  }
+  if (unitCatchAfterProbe(armedAddr, busFacts[armedIndex]) == UnitCatchStep::Disarm) {
+    unitCatchDisarm();
+  }
+}
+
+// The command loop's dispatch: one executor per opcode.
+static void execCommand(DisplaySnapshot& local, UnitFacts* busFacts,
+                        const DisplayCommand& cmd) {
+  switch (cmd.opcode) {
+    case DisplayOpcode::ShowText:
+      execShowText(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::Probe:
+      execProbe(local, busFacts, cmd);
+      break;
+    // --- calibration + provisioning (#204). Every op grades a
+    // MaintResult; the web layer serves it as the job's result.
+    case DisplayOpcode::WriteOffset:
+      execWriteOffset(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::Jog:
+      execJog(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::Home:
+      execHome(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::Identify:
+      execIdentify(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::SelfTest:
+      execSelfTest(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::BootDump:
+      execBootDump(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::BootUpdate:
+      execBootUpdate(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::BootInfo:
+      execBootInfo(local, cmd);
+      break;
+    case DisplayOpcode::SetGates:
+      execSetGates(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::ResetOdometer:
+      execResetOdometer(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::RebootToBootloader:
+      execRebootToBootloader(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::SetAddress:
+      execSetAddress(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::ClearAddress:
+      execClearAddress(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::ResetUnits:
+      execResetUnits(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::Stop:
+      execStop(local, busFacts, cmd);
+      break;
+    case DisplayOpcode::ReflashUnits:
+      execReflashUnits(local, busFacts, cmd);
+      break;
+    default:
+      break;
+  }
+}
+
 void displayTaskMain(void*) {
   SerialPrintf("displayTask up on core %d\n", xPortGetCoreID());
   DisplaySnapshot local;  // task-private working state; published as copies
@@ -1205,16 +1322,7 @@ void displayTaskMain(void*) {
                         effectiveWidthOverride());
   snapshotPublish(local);
   bootTraceMarkStage(BOOT_STAGE_UNITS);  // #504
-  if (local.detectedUnitCount == 0) {
-    SerialPrintf("display: no units responding — assuming full width %d\n",
-                 local.displayWidth);
-  } else {
-    SerialPrintf("display: probe done, width %d\n", local.displayWidth);
-  }
-  if (tasksUnitCountOverridePinned()) {
-    SerialPrintf("display: width pinned to %d (unit-count override)\n",
-                 local.displayWidth);
-  }
+  logStartProbe(local);
 
   // Boot auto-install + auto-update (#205, full v1 parity): flash any unit
   // the probe found sitting in twiboot (the recovery path for a failed or
@@ -1227,20 +1335,7 @@ void displayTaskMain(void*) {
   // whole row's steppers spike the shared rail at once (the #305 verify-boot
   // brownout). runReflashJob ends with its own boot-home of the units it
   // flashed, so only home here when no boot reflash ran.
-  // #554: the unit this board was armed to catch. In its bootloader it is
-  // flashed now, whatever the start-up update setting says: an operator asked
-  // for exactly this unit, and it leaves its bootloader again in seconds.
-  if (uint8_t armedAddr = unitCatchArmed()) {
-    const int armedIndex = armedAddr - SFP_I2C_ADDRESS_BASE;
-    if (unitCatchAfterProbe(armedAddr, busFacts[armedIndex]) == UnitCatchStep::Flash) {
-      SerialPrintf("unit catch: unit 0x%02x is in its bootloader — flashing it\n",
-                   armedAddr);
-      runReflashJob(local, busFacts, ReflashSweep::ForcedOne, armedAddr);
-    }
-    if (unitCatchAfterProbe(armedAddr, busFacts[armedIndex]) == UnitCatchStep::Disarm) {
-      unitCatchDisarm();
-    }
-  }
+  catchArmedUnitAtStart(local, busFacts);
   if (!tasksReflashOnBoot()) {
     // #412: deliberately suppressed for a gated campaign. Say so loudly — a
     // silently-skipped auto-install looks exactly like a healthy display, and
@@ -1279,66 +1374,7 @@ void displayTaskMain(void*) {
     snapshotPublish(local);
     if (displayApplyCommand(local, cmd)) {
       SerialPrintln("display: " + describeDisplayCommand(cmd));
-      switch (cmd.opcode) {
-        case DisplayOpcode::ShowText:
-          execShowText(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::Probe:
-          execProbe(local, busFacts, cmd);
-          break;
-        // --- calibration + provisioning (#204). Every op grades a
-        // MaintResult; the web layer serves it as the job's result.
-        case DisplayOpcode::WriteOffset:
-          execWriteOffset(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::Jog:
-          execJog(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::Home:
-          execHome(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::Identify:
-          execIdentify(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::SelfTest:
-          execSelfTest(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::BootDump:
-          execBootDump(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::BootUpdate:
-          execBootUpdate(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::BootInfo:
-          execBootInfo(local, cmd);
-          break;
-        case DisplayOpcode::SetGates:
-          execSetGates(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::ResetOdometer:
-          execResetOdometer(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::RebootToBootloader:
-          execRebootToBootloader(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::SetAddress:
-          execSetAddress(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::ClearAddress:
-          execClearAddress(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::ResetUnits:
-          execResetUnits(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::Stop:
-          execStop(local, busFacts, cmd);
-          break;
-        case DisplayOpcode::ReflashUnits:
-          execReflashUnits(local, busFacts, cmd);
-          break;
-        default:
-          break;
-      }
+      execCommand(local, busFacts, cmd);
     } else {
       SerialPrintln("display: dropped un-executable command");
     }
