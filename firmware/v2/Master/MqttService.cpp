@@ -435,51 +435,143 @@ static void publishDiscoveryClear() {
       F("MQTT: cleared retained discovery configs for old device id (rename)"));
 }
 
+// Quiet (#227): its own topic, outside the shared command table.
+static void mqttHandleQuietCommand(const String& payload) {
+  bool want = false;
+  if (!quietParseCommand(payload, want)) {
+    SerialPrintln("MQTT: ignored invalid quiet command: " + payload);
+  } else if (webMqttApplyQuiet(want)) {
+    SerialPrintln(want ? F("quiet: ON (MQTT) — no flap commands")
+                       : F("quiet: OFF (MQTT)"));
+  }
+}
+
+static void mqttHandleModeCommand(const String& payload) {
+  String requested = parseModeCommand(payload);
+  if (requested.length() == 0) {
+    SerialPrintln("MQTT: ignored invalid mode command: " + payload);
+  } else if (webMqttApplyMode(requested)) {
+    // Explicit mode change trumps a running notification (v1 #130); the
+    // 1 Hz ticker re-shows the new mode's content by itself.
+    cancelNotificationLocal();
+    SerialPrintln("MQTT: mode set to " + requested);
+  }
+}
+
+static void mqttHandleSpeedCommand(const String& payload) {
+  int v = parseSpeedCommand(payload);
+  if (v < 0) {
+    SerialPrintln("MQTT: ignored invalid speed command: " + payload);
+  } else if (webMqttApplySpeed(v)) {
+    SerialPrintf("MQTT: flap speed set to %d\n", v);
+  }
+}
+
+static void mqttHandleAlignmentCommand(const String& payload) {
+  String a = parseAlignmentCommand(payload);
+  if (a.length() == 0) {
+    SerialPrintln("MQTT: ignored invalid alignment command: " + payload);
+  } else if (webMqttApplyAlignment(a)) {
+    SerialPrintln("MQTT: alignment set to " + a);
+  }
+}
+
+// #620: the update entity's install runs the update-from-release job, under
+// the gates the API's action has.
+static void mqttHandleInstallCommand(const String& payload) {
+  if (!parseInstallCommand(payload)) return;
+  uint32_t op = 0;
+  int status = 0;
+  if (const char* refusal = webStartRelease(true, op, status)) {
+    SerialPrintln("MQTT: update from the release refused: " + String(refusal));
+  } else {
+    SerialPrintf("MQTT: update from the release started (op %lu)\n", (unsigned long)op);
+  }
+}
+
+// #624: the button restarts every unit of the wall, one at a time, under the
+// gates the API's action has.
+static void mqttHandleRestartUnitsCommand(const String& payload) {
+  if (!parseRestartCommand(payload)) return;
+  uint32_t op = 0;
+  int status = 0;
+  if (const char* refusal = restartUnitsStart(op, status)) {
+    SerialPrintln("MQTT: restart of the units refused: " + String(refusal));
+  } else {
+    SerialPrintf("MQTT: restart of the units started (op %lu)\n", (unsigned long)op);
+  }
+}
+
+static void mqttHandleTextCommand(const String& payload) {
+  MqttTextRequest req;
+  if (!parseMqttTextRequest(payload, req)) {
+    // Malformed/plain payload → show it verbatim with the default dwell.
+    req = MqttTextRequest();
+    req.text = payload;
+  }
+  req.text = transliterateForFlaps(req.text);  // #618
+  if (req.text.length() == 0) {  // #616: an empty text is a clear
+    SerialPrintln(F("MQTT: text cleared (empty text)"));
+    cancelNotificationLocal();
+    mqttNoteTextResult(MqttTextResultKind::Cleared, String());
+    return;
+  }
+  const String& text = req.text;
+  const long dwell = req.hold ? 0 : req.dwellSeconds;
+  // Producer gate (#205): while a reflash job runs nothing display-
+  // mutating queues. HA commands are live-only — drop, don't defer.
+  if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
+    SerialPrintln("MQTT: text dropped (unit update running): " + text);
+    mqttNoteTextResult(MqttTextResultKind::DroppedBusy, text, req.priority, req.hold, dwell);
+    return;
+  }
+  // Quiet (#227): dropped, not deferred — unless the sender forces it,
+  // which is the top priority (#625).
+  if (quietBlocksContent(tasksQuiet(), req.priority >= MQTT_TEXT_PRIORITY_MAX)) {
+    SerialPrintln("MQTT: text dropped (quiet): " + text);
+    mqttNoteTextResult(MqttTextResultKind::DroppedQuiet, text, req.priority, req.hold, dwell);
+    return;
+  }
+  // #625: a lower priority than the text showing is refused.
+  if (!notificationAdmits(mqttNotification, req.priority)) {
+    SerialPrintf("MQTT: text refused (priority %d under the %d showing): %s\n",
+                 req.priority, mqttNotification.priority, text.c_str());
+    mqttNoteTextResult(MqttTextResultKind::Refused, text, req.priority, req.hold, dwell);
+    return;
+  }
+  if (!showTextNow(text)) {
+    SerialPrintln("MQTT: text dropped (display queue full): " + text);
+    mqttNoteTextResult(MqttTextResultKind::DroppedBusy, text, req.priority, req.hold, dwell);
+    return;
+  }
+  if (req.hold) {
+    SerialPrintf("MQTT: text held (priority %d): %s\n", req.priority, text.c_str());
+  } else {
+    SerialPrintf("MQTT: text for %ld s (priority %d): %s\n", req.dwellSeconds,
+                 req.priority, text.c_str());
+  }
+  startNotificationLocal(text, req);
+  mqttNoteTextResult(req.hold ? MqttTextResultKind::Held : MqttTextResultKind::Shown, text,
+                     req.priority, req.hold, dwell);
+}
+
 void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
   if (!mqttInitialised) return;
   String payload(msg.payload);
-  // Quiet (#227): its own topic, outside the shared command table.
   if (mqttQuietCmdTopic == msg.topic) {
-    bool want = false;
-    if (!quietParseCommand(payload, want)) {
-      SerialPrintln("MQTT: ignored invalid quiet command: " + payload);
-    } else if (webMqttApplyQuiet(want)) {
-      SerialPrintln(want ? F("quiet: ON (MQTT) — no flap commands")
-                         : F("quiet: OFF (MQTT)"));
-    }
+    mqttHandleQuietCommand(payload);
     return;
   }
   switch (classifyMqttCommandTopic(mqttCmdTopics, msg.topic)) {
-    case MqttCommand::Mode: {
-      String requested = parseModeCommand(payload);
-      if (requested.length() == 0) {
-        SerialPrintln("MQTT: ignored invalid mode command: " + payload);
-      } else if (webMqttApplyMode(requested)) {
-        // Explicit mode change trumps a running notification (v1 #130); the
-        // 1 Hz ticker re-shows the new mode's content by itself.
-        cancelNotificationLocal();
-        SerialPrintln("MQTT: mode set to " + requested);
-      }
+    case MqttCommand::Mode:
+      mqttHandleModeCommand(payload);
       break;
-    }
-    case MqttCommand::Speed: {
-      int v = parseSpeedCommand(payload);
-      if (v < 0) {
-        SerialPrintln("MQTT: ignored invalid speed command: " + payload);
-      } else if (webMqttApplySpeed(v)) {
-        SerialPrintf("MQTT: flap speed set to %d\n", v);
-      }
+    case MqttCommand::Speed:
+      mqttHandleSpeedCommand(payload);
       break;
-    }
-    case MqttCommand::Alignment: {
-      String a = parseAlignmentCommand(payload);
-      if (a.length() == 0) {
-        SerialPrintln("MQTT: ignored invalid alignment command: " + payload);
-      } else if (webMqttApplyAlignment(a)) {
-        SerialPrintln("MQTT: alignment set to " + a);
-      }
+    case MqttCommand::Alignment:
+      mqttHandleAlignmentCommand(payload);
       break;
-    }
     case MqttCommand::Restart:
       // Defer to the netTask reboot dispatcher like every other trigger —
       // never restart inline (v1 #116: the response/LWT story needs the
@@ -491,30 +583,10 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
       }
       break;
     case MqttCommand::Install:
-      // #620: the update entity's install runs the update-from-release job,
-      // under the gates the API's action has.
-      if (parseInstallCommand(payload)) {
-        uint32_t op = 0;
-        int status = 0;
-        if (const char* refusal = webStartRelease(true, op, status)) {
-          SerialPrintln("MQTT: update from the release refused: " + String(refusal));
-        } else {
-          SerialPrintf("MQTT: update from the release started (op %lu)\n", (unsigned long)op);
-        }
-      }
+      mqttHandleInstallCommand(payload);
       break;
     case MqttCommand::RestartUnits:
-      // #624: the button restarts every unit of the wall, one at a time,
-      // under the gates the API's action has.
-      if (parseRestartCommand(payload)) {
-        uint32_t op = 0;
-        int status = 0;
-        if (const char* refusal = restartUnitsStart(op, status)) {
-          SerialPrintln("MQTT: restart of the units refused: " + String(refusal));
-        } else {
-          SerialPrintf("MQTT: restart of the units started (op %lu)\n", (unsigned long)op);
-        }
-      }
+      mqttHandleRestartUnitsCommand(payload);
       break;
     case MqttCommand::Clear:
       // #616: takes the text down, whatever the payload. Passes quiet: the
@@ -523,59 +595,9 @@ void mqttServiceHandleInbox(const MqttInboxMessage& msg) {
       cancelNotificationLocal();
       mqttNoteTextResult(MqttTextResultKind::Cleared, String());
       break;
-    case MqttCommand::Text: {
-      MqttTextRequest req;
-      if (!parseMqttTextRequest(payload, req)) {
-        // Malformed/plain payload → show it verbatim with the default dwell.
-        req = MqttTextRequest();
-        req.text = payload;
-      }
-      req.text = transliterateForFlaps(req.text);  // #618
-      if (req.text.length() == 0) {  // #616: an empty text is a clear
-        SerialPrintln(F("MQTT: text cleared (empty text)"));
-        cancelNotificationLocal();
-        mqttNoteTextResult(MqttTextResultKind::Cleared, String());
-        break;
-      }
-      const String& text = req.text;
-      const long dwell = req.hold ? 0 : req.dwellSeconds;
-      // Producer gate (#205): while a reflash job runs nothing display-
-      // mutating queues. HA commands are live-only — drop, don't defer.
-      if (reflashInProgress(displaySnapshotGet().reflash) || wallUnitUpdateRunning()) {
-        SerialPrintln("MQTT: text dropped (unit update running): " + text);
-        mqttNoteTextResult(MqttTextResultKind::DroppedBusy, text, req.priority, req.hold, dwell);
-        break;
-      }
-      // Quiet (#227): dropped, not deferred — unless the sender forces it,
-      // which is the top priority (#625).
-      if (quietBlocksContent(tasksQuiet(), req.priority >= MQTT_TEXT_PRIORITY_MAX)) {
-        SerialPrintln("MQTT: text dropped (quiet): " + text);
-        mqttNoteTextResult(MqttTextResultKind::DroppedQuiet, text, req.priority, req.hold, dwell);
-        break;
-      }
-      // #625: a lower priority than the text showing is refused.
-      if (!notificationAdmits(mqttNotification, req.priority)) {
-        SerialPrintf("MQTT: text refused (priority %d under the %d showing): %s\n",
-                     req.priority, mqttNotification.priority, text.c_str());
-        mqttNoteTextResult(MqttTextResultKind::Refused, text, req.priority, req.hold, dwell);
-        break;
-      }
-      if (!showTextNow(text)) {
-        SerialPrintln("MQTT: text dropped (display queue full): " + text);
-        mqttNoteTextResult(MqttTextResultKind::DroppedBusy, text, req.priority, req.hold, dwell);
-        break;
-      }
-      if (req.hold) {
-        SerialPrintf("MQTT: text held (priority %d): %s\n", req.priority, text.c_str());
-      } else {
-        SerialPrintf("MQTT: text for %ld s (priority %d): %s\n", req.dwellSeconds,
-                     req.priority, text.c_str());
-      }
-      startNotificationLocal(text, req);
-      mqttNoteTextResult(req.hold ? MqttTextResultKind::Held : MqttTextResultKind::Shown, text,
-                         req.priority, req.hold, dwell);
+    case MqttCommand::Text:
+      mqttHandleTextCommand(payload);
       break;
-    }
     case MqttCommand::None:
     default:
       SerialPrintln("MQTT: message on unexpected topic dropped: " +
@@ -817,162 +839,140 @@ static void mqttPublishBoards(const WallMqttRow* rows, int count) {
   }
 }
 
-// Wall surfacing, 5 s cadence (MQTT_WALL_INTERVAL_MS; cadence check lives
-// inside): every board's problem sensor (#621), the wall's supply (#623) and
-// flips (#619) — on a master on its own too, its row being the wall — and,
-// with row boards (`active` = the rows table has rows), the wall problem
-// sensor with the boards as its attributes and the wall's text/state.
-static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
-  if ((int32_t)(millis() - mqttNextWallMs) < 0) return;
-  mqttNextWallMs = millis() + MQTT_WALL_INTERVAL_MS;
-  if (!mqttRetiredCleared) {
-    mqttRetiredCleared = true;
-    mqttClearRetiredEntities();
-  }
+// The wall problem sensor's config follows whether there are rows: published
+// when the first one appears, blanked (with its topics) when the last goes.
+static void mqttSyncWallConfig(bool active) {
   int activeNow = active ? 1 : 0;
-  if (activeNow != mqttLastWallConfigured) {
-    char topicBuf[96];
-    size_t tLen = buildWallProblemDiscoveryTopic(topicBuf, sizeof(topicBuf),
-                                                 mqttResolvedDeviceId.c_str());
-    if (tLen > 0 && tLen < sizeof(topicBuf)) {
-      if (activeNow) {
-        char payloadBuf[MQTT_DISCOVERY_MAX];
-        size_t pLen = buildWallProblemDiscovery(payloadBuf, sizeof(payloadBuf),
-                                                mqttResolvedDeviceId.c_str(),
-                                                mqttFwVersion.c_str());
-        if (pLen > 0 && pLen < sizeof(payloadBuf)) {
-          mqttClient.publish(topicBuf, 0, true, payloadBuf);
-        } else {
-          SerialPrintln(F("MQTT: wall discovery skipped — would truncate"));
-        }
+  if (activeNow == mqttLastWallConfigured) return;
+  char topicBuf[96];
+  size_t tLen = buildWallProblemDiscoveryTopic(topicBuf, sizeof(topicBuf),
+                                               mqttResolvedDeviceId.c_str());
+  if (tLen > 0 && tLen < sizeof(topicBuf)) {
+    if (activeNow) {
+      char payloadBuf[MQTT_DISCOVERY_MAX];
+      size_t pLen = buildWallProblemDiscovery(payloadBuf, sizeof(payloadBuf),
+                                              mqttResolvedDeviceId.c_str(),
+                                              mqttFwVersion.c_str());
+      if (pLen > 0 && pLen < sizeof(payloadBuf)) {
+        mqttClient.publish(topicBuf, 0, true, payloadBuf);
       } else {
-        // No rows (the last one released, OR the reconcile sweep of a fresh
-        // session): blank the retained config + topics so Home Assistant
-        // drops the entity instead of showing it stale, and force the
-        // width/text publishes back onto this board's own facts.
-        mqttClient.publish(topicBuf, 0, true, "");
-        mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "wall_problem").c_str(), 0, true,
-                           "");
-        mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "wall/attrs").c_str(), 0, true, "");
-        mqttWallCapacity = 0;
-        mqttLastPublishedWidth = -1;
-        mqttLastPublishedText = "\x01";
-      }
-    }
-    mqttLastWallState = -1;
-    mqttLastWallAttrs = "\x01";
-    mqttLastWallConfigured = activeNow;
-  }
-
-  // Heap, not this task's stack: the snapshot and one row's unit facts.
-  std::unique_ptr<WallSnapshot> wall(new WallSnapshot(wallStateGet()));
-  std::unique_ptr<UnitFactsDoc> units(new UnitFactsDoc);
-  // The verdicts of this very table, or none this round.
-  std::unique_ptr<WallVerdicts> verdicts(new WallVerdicts);
-  const uint32_t generation = wallStateRowsGeneration();
-  const bool judged = wallVerdictsGet(*verdicts, generation);
-  WallMqttRow rows[WALL_VERDICT_BOARDS];
-  char texts[WALL_VERDICT_BOARDS][WALL_ROW_TEXT_MAX + 1];
-  char hosts[WALL_VERDICT_BOARDS][CLUSTER_HOST_MAX_LEN + 1];
-  const uint32_t nowMs = millis();
-  const String ownAddress = WiFi.localIP().toString();
-  const int ownRssi = WiFi.RSSI();
-  // A master on its own: its row is the wall.
-  const bool alone = wall->rows.count == 0;
-  const int count = alone ? 1 : wall->rows.count;
-  if (generation != mqttBoardsGeneration) {
-    wallMqttFlipsReset(mqttFlips);  // the boards are numbered by the table
-    mqttBoardsGeneration = generation;
-    mqttBoardsPublished = false;
-  }
-  bool flipsComplete = true;
-  for (int i = 0; i < count; i++) {
-    WallMqttRow& r = rows[i];
-    r = WallMqttRow{};
-    texts[i][0] = '\0';
-    if (alone) {
-      r.own = true;
-      r.width = (uint8_t)snap.displayWidth;
-      wallRowsOwnHostName(wall->rows, hosts[i], sizeof(hosts[i]));
-      if (const WallVerdictBoard* board = judged ? verdicts->own() : nullptr) {
-        r.judged = true;
-        r.fault = board->verdict.level == VerdictLevel::Fault;
-        r.level = verdictLevelName(board->verdict.level);
-        r.reason = boardReasonName(board->verdict.reason);
-        r.unitsFaulty = (uint8_t)unitFaultCount(board->unit, board->units);
+        SerialPrintln(F("MQTT: wall discovery skipped — would truncate"));
       }
     } else {
-      const WallRowDef& def = wall->rows.rows[i];
-      r.id = def.id;
-      r.row = def.row;
-      r.col = def.col;
-      r.width = def.width;
-      r.own = wallRowIsOwn(def);
-      wallRowsHostName(wall->rows, i, hosts[i], sizeof(hosts[i]));
-      if (const WallVerdictBoard* board = judged ? verdicts->ofRow(i) : nullptr) {
-        r.judged = true;
-        r.fault = board->verdict.level == VerdictLevel::Fault;
-        r.level = verdictLevelName(board->verdict.level);
-        r.reason = boardReasonName(board->verdict.reason);
-        r.unitsFaulty = (uint8_t)unitFaultCount(board->unit, board->units);
-      }
-      wallShowRowText(i, texts[i], sizeof(texts[i]));
-    }
-    r.host = hosts[i];
-    r.text = texts[i];
-    if (r.own) {
-      r.text = snap.currentText;  // what is on the flaps, as for a master on its own
-      r.rev = mqttFwVersion.c_str();
-      r.address = ownAddress.c_str();
-      r.rssiKnown = true;
-      r.rssi = ownRssi;
-      r.unitsKnown = true;
-      r.unitsFound = snap.detectedUnitCount;
-      r.unitsLost = (uint8_t)computeLostUnitCount(snap.units, snap.displayWidth);
-      wallMqttUnitAggregates(snap.units, snap.displayWidth, SFP_I2C_ADDRESS_BASE, r);
-      if (!wallMqttFlipsNote(mqttFlips, i, snap.units, snap.displayWidth)) flipsComplete = false;
-      continue;
-    }
-    const WallRowLink& link = wall->link[i];
-    const WallRowReach reach = wallRowReach(link.contact, nowMs);
-    r.reach = wallRowReachName(reach);
-    // A row never heard since this master started is gone once the time a
-    // connected one would have been written off has passed.
-    r.lost = reach == WallRowReach::Lost ||
-             (reach == WallRowReach::Never && nowMs >= WALL_LINK_LOST_MS);
-    r.welcomed = link.everWelcomed;
-    r.rev = link.rev;
-    r.rescue = link.rescue;
-    r.updateBlocked = link.updateBlocked;
-    r.busDead = link.haveStatus && link.status.bus_dead;
-    r.address = link.address;
-    if (link.haveStatus) {
-      r.rssiKnown = true;
-      r.rssi = link.status.rssi;
-    }
-    uint32_t atMs = 0;
-    if (wallStateRowUnits(i, *units, atMs)) {
-      r.unitsKnown = true;
-      int found = 0;
-      for (int u = 0; u < units->width && u < UNITS_AMOUNT; u++) {
-        if (units->units[u].state != 0) found++;
-      }
-      r.unitsFound = (uint8_t)found;
-      r.unitsLost = (uint8_t)computeLostUnitCount(units->units, units->width);
-      wallMqttUnitAggregates(units->units, units->width, SFP_I2C_ADDRESS_BASE, r);
-      if (!wallMqttFlipsNote(mqttFlips, i, units->units, units->width)) flipsComplete = false;
-    } else {
-      flipsComplete = false;  // its units are not known yet
+      // No rows (the last one released, OR the reconcile sweep of a fresh
+      // session): blank the retained config + topics so Home Assistant
+      // drops the entity instead of showing it stale, and force the
+      // width/text publishes back onto this board's own facts.
+      mqttClient.publish(topicBuf, 0, true, "");
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "wall_problem").c_str(), 0, true,
+                         "");
+      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "wall/attrs").c_str(), 0, true, "");
+      mqttWallCapacity = 0;
+      mqttLastPublishedWidth = -1;
+      mqttLastPublishedText = "\x01";
     }
   }
+  mqttLastWallState = -1;
+  mqttLastWallAttrs = "\x01";
+  mqttLastWallConfigured = activeNow;
+}
 
-  // The boards (#621).
-  if (!mqttBoardsPublished) {
-    mqttBoardsPublished = true;
-    mqttPublishBoardConfigs(rows, count);
+// What one pass over the wall's rows reads from.
+struct MqttWallPass {
+  const DisplaySnapshot& snap;
+  const WallSnapshot& wall;
+  const WallVerdicts& verdicts;
+  bool judged;
+  UnitFactsDoc& units;  // scratch for one row's unit facts
+  uint32_t nowMs;
+  const char* ownAddress;
+  int ownRssi;
+};
+
+static void mqttRowVerdict(WallMqttRow& r, const WallVerdictBoard* board) {
+  if (!board) return;
+  r.judged = true;
+  r.fault = board->verdict.level == VerdictLevel::Fault;
+  r.level = verdictLevelName(board->verdict.level);
+  r.reason = boardReasonName(board->verdict.reason);
+  r.unitsFaulty = (uint8_t)unitFaultCount(board->unit, board->units);
+}
+
+// Who row i is: a master on its own is its row (`alone`), otherwise the table's.
+static void mqttRowIdentity(const MqttWallPass& p, bool alone, int i, WallMqttRow& r,
+                            char* text, char* host, size_t hostSize) {
+  if (alone) {
+    r.own = true;
+    r.width = (uint8_t)p.snap.displayWidth;
+    wallRowsOwnHostName(p.wall.rows, host, hostSize);
+    mqttRowVerdict(r, p.judged ? p.verdicts.own() : nullptr);
+    return;
   }
-  mqttPublishBoards(rows, count);
-  // The supply (#623), for the telemetry packet.
+  const WallRowDef& def = p.wall.rows.rows[i];
+  r.id = def.id;
+  r.row = def.row;
+  r.col = def.col;
+  r.width = def.width;
+  r.own = wallRowIsOwn(def);
+  wallRowsHostName(p.wall.rows, i, host, hostSize);
+  mqttRowVerdict(r, p.judged ? p.verdicts.ofRow(i) : nullptr);
+  wallShowRowText(i, text, WALL_ROW_TEXT_MAX + 1);
+}
+
+// This board's own row: what is on the flaps and the units it reads itself.
+static void mqttRowOwnFacts(const MqttWallPass& p, int i, WallMqttRow& r, bool& flipsComplete) {
+  const DisplaySnapshot& snap = p.snap;
+  r.text = snap.currentText;  // what is on the flaps, as for a master on its own
+  r.rev = mqttFwVersion.c_str();
+  r.address = p.ownAddress;
+  r.rssiKnown = true;
+  r.rssi = p.ownRssi;
+  r.unitsKnown = true;
+  r.unitsFound = snap.detectedUnitCount;
+  r.unitsLost = (uint8_t)computeLostUnitCount(snap.units, snap.displayWidth);
+  wallMqttUnitAggregates(snap.units, snap.displayWidth, SFP_I2C_ADDRESS_BASE, r);
+  if (!wallMqttFlipsNote(mqttFlips, i, snap.units, snap.displayWidth)) flipsComplete = false;
+}
+
+// A row board's row: its link and the units it last reported.
+static void mqttRowRemoteFacts(const MqttWallPass& p, int i, WallMqttRow& r, bool& flipsComplete) {
+  const WallRowLink& link = p.wall.link[i];
+  const WallRowReach reach = wallRowReach(link.contact, p.nowMs);
+  r.reach = wallRowReachName(reach);
+  // A row never heard since this master started is gone once the time a
+  // connected one would have been written off has passed.
+  r.lost = reach == WallRowReach::Lost ||
+           (reach == WallRowReach::Never && p.nowMs >= WALL_LINK_LOST_MS);
+  r.welcomed = link.everWelcomed;
+  r.rev = link.rev;
+  r.rescue = link.rescue;
+  r.updateBlocked = link.updateBlocked;
+  r.busDead = link.haveStatus && link.status.bus_dead;
+  r.address = link.address;
+  if (link.haveStatus) {
+    r.rssiKnown = true;
+    r.rssi = link.status.rssi;
+  }
+  UnitFactsDoc& units = p.units;
+  uint32_t atMs = 0;
+  if (!wallStateRowUnits(i, units, atMs)) {
+    flipsComplete = false;  // its units are not known yet
+    return;
+  }
+  r.unitsKnown = true;
+  int found = 0;
+  for (int u = 0; u < units.width && u < UNITS_AMOUNT; u++) {
+    if (units.units[u].state != 0) found++;
+  }
+  r.unitsFound = (uint8_t)found;
+  r.unitsLost = (uint8_t)computeLostUnitCount(units.units, units.width);
+  wallMqttUnitAggregates(units.units, units.width, SFP_I2C_ADDRESS_BASE, r);
+  if (!wallMqttFlipsNote(mqttFlips, i, units.units, units.width)) flipsComplete = false;
+}
+
+// The supply (#623), for the telemetry packet, and the flips (#619), once
+// every found unit has been read.
+static void mqttPublishSupplyAndFlips(const WallMqttRow* rows, int count, bool flipsComplete) {
   const WallMqttSupply supply = wallMqttSupply(rows, count);
   mqttSupplyMinMv = supply.mV;
   mqttSupply.unit = supply.unit;
@@ -980,18 +980,18 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
   mqttSupply.unitUpS = supply.unitUpS;
   strlcpy(mqttSupplyBoard, supply.board >= 0 ? rows[supply.board].host : "", sizeof(mqttSupplyBoard));
   mqttSupply.board = mqttSupplyBoard;
-  // The flips (#619), once every found unit has been read.
-  if (flipsComplete) {
-    const uint32_t flips = wallMqttFlipsTotal(mqttFlips, count);
-    if (flips != mqttLastFlips) {
-      mqttLastFlips = flips;
-      char n[12];
-      snprintf(n, sizeof(n), "%lu", (unsigned long)flips);
-      mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "flips").c_str(), 0, true, n);
-    }
+  if (!flipsComplete) return;
+  const uint32_t flips = wallMqttFlipsTotal(mqttFlips, count);
+  if (flips != mqttLastFlips) {
+    mqttLastFlips = flips;
+    char n[12];
+    snprintf(n, sizeof(n), "%lu", (unsigned long)flips);
+    mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "flips").c_str(), 0, true, n);
   }
-  if (!active) return;
+}
 
+// The wall problem sensor, its attributes and the wall's text/state.
+static void mqttPublishWallState(const WallMqttRow* rows, int count, const WallSnapshot& wall) {
   mqttWallCapacity = wallMqttCapacity(rows, count);
   int problem = wallMqttProblem(rows, count) ? 1 : 0;
   if (problem != mqttLastWallState) {
@@ -1000,7 +1000,7 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
                        problem ? "ON" : "OFF");
   }
   String attrs = wallMqttAttrsJson(
-      rows, count, wallUpdatePhaseName((WallUpdatePhase)wall->updatePhase));
+      rows, count, wallUpdatePhaseName((WallUpdatePhase)wall.updatePhase));
   if (attrs != mqttLastWallAttrs) {
     mqttLastWallAttrs = attrs;
     mqttClient.publish(mqttTopic(mqttResolvedDeviceId, "wall/attrs").c_str(), 0, true,
@@ -1016,6 +1016,67 @@ static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
   }
 }
 
+// Wall surfacing, 5 s cadence (MQTT_WALL_INTERVAL_MS; cadence check lives
+// inside): every board's problem sensor (#621), the wall's supply (#623) and
+// flips (#619) — on a master on its own too, its row being the wall — and,
+// with row boards (`active` = the rows table has rows), the wall problem
+// sensor with the boards as its attributes and the wall's text/state.
+static void mqttPublishWallSurfacing(const DisplaySnapshot& snap, bool active) {
+  if ((int32_t)(millis() - mqttNextWallMs) < 0) return;
+  mqttNextWallMs = millis() + MQTT_WALL_INTERVAL_MS;
+  if (!mqttRetiredCleared) {
+    mqttRetiredCleared = true;
+    mqttClearRetiredEntities();
+  }
+  mqttSyncWallConfig(active);
+
+  // Heap, not this task's stack: the snapshot and one row's unit facts.
+  std::unique_ptr<WallSnapshot> wall(new WallSnapshot(wallStateGet()));
+  std::unique_ptr<UnitFactsDoc> units(new UnitFactsDoc);
+  // The verdicts of this very table, or none this round.
+  std::unique_ptr<WallVerdicts> verdicts(new WallVerdicts);
+  const uint32_t generation = wallStateRowsGeneration();
+  const bool judged = wallVerdictsGet(*verdicts, generation);
+  WallMqttRow rows[WALL_VERDICT_BOARDS];
+  char texts[WALL_VERDICT_BOARDS][WALL_ROW_TEXT_MAX + 1];
+  char hosts[WALL_VERDICT_BOARDS][CLUSTER_HOST_MAX_LEN + 1];
+  const String ownAddress = WiFi.localIP().toString();
+  const MqttWallPass pass{snap, *wall, *verdicts, judged, *units, millis(),
+                          ownAddress.c_str(), WiFi.RSSI()};
+  // A master on its own: its row is the wall.
+  const bool alone = wall->rows.count == 0;
+  const int count = alone ? 1 : wall->rows.count;
+  if (generation != mqttBoardsGeneration) {
+    wallMqttFlipsReset(mqttFlips);  // the boards are numbered by the table
+    mqttBoardsGeneration = generation;
+    mqttBoardsPublished = false;
+  }
+  bool flipsComplete = true;
+  for (int i = 0; i < count; i++) {
+    WallMqttRow& r = rows[i];
+    r = WallMqttRow{};
+    texts[i][0] = '\0';
+    mqttRowIdentity(pass, alone, i, r, texts[i], hosts[i], sizeof(hosts[i]));
+    r.host = hosts[i];
+    r.text = texts[i];
+    if (r.own) {
+      mqttRowOwnFacts(pass, i, r, flipsComplete);
+    } else {
+      mqttRowRemoteFacts(pass, i, r, flipsComplete);
+    }
+  }
+
+  // The boards (#621).
+  if (!mqttBoardsPublished) {
+    mqttBoardsPublished = true;
+    mqttPublishBoardConfigs(rows, count);
+  }
+  mqttPublishBoards(rows, count);
+  mqttPublishSupplyAndFlips(rows, count, flipsComplete);
+  if (!active) return;
+  mqttPublishWallState(rows, count, *wall);
+}
+
 // Periodic telemetry + per-unit health, 60 s (wraparound-safe; cadence
 // check lives inside). Deviation from v1 (spec): no blocking bus poll from
 // here — displayTask owns the bus; the attrs are probe-time facts from the
@@ -1029,15 +1090,19 @@ static void mqttPublishTelemetry(const DisplaySnapshot& snap) {
                           ? (int)(100 - (maxBlock * 100ULL) / freeHeap)
                           : 0;
     char buf[MQTT_TELEMETRY_MAX];
-    size_t tn = buildTelemetryPayload(
-        buf, sizeof(buf), freeHeap, heapFragPct, WiFi.RSSI(),
-        snap.lastShowWriteErrors, millis() / 1000UL,
-        clockIsTimeSynced(time(nullptr)),
-        mqttSupplyMinMv,  // #366 vccMin, every board's units since #623 (the 5 s wall pass)
-        unitFleetRebootTotal(snap.units, snap.displayWidth),  // #368 HA reboot-total sensor
-        unitFleetAnyJam(snap.units, snap.displayWidth),      // #365 HA jam binary_sensor
-        unitFleetMaxExcess(snap.units, snap.displayWidth),   // #365 HA steps-excess sensor
-        &mqttSupply);                                         // #623 weakest unit, under the floor
+    MqttTelemetryFacts facts;
+    facts.freeHeap = freeHeap;
+    facts.heapFragPct = heapFragPct;
+    facts.rssi = WiFi.RSSI();
+    facts.unitErrors = snap.lastShowWriteErrors;
+    facts.uptimeSec = millis() / 1000UL;
+    facts.ntpSynced = clockIsTimeSynced(time(nullptr));
+    facts.vccMin_mV = mqttSupplyMinMv;  // #366 vccMin, every board's units since #623 (the 5 s wall pass)
+    facts.rebootTotal = unitFleetRebootTotal(snap.units, snap.displayWidth);  // #368 HA reboot-total sensor
+    facts.anyJam = unitFleetAnyJam(snap.units, snap.displayWidth);            // #365 HA jam binary_sensor
+    facts.maxExcess = unitFleetMaxExcess(snap.units, snap.displayWidth);      // #365 HA steps-excess sensor
+    facts.supply = &mqttSupply;                                               // #623 weakest unit, under the floor
+    size_t tn = buildTelemetryPayload(buf, sizeof(buf), facts);
     if (tn > 0 && tn < sizeof(buf)) {
       mqttClient.publish(mqttTopicTelemetry.c_str(), 0, false, buf);
     }

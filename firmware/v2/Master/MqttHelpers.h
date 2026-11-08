@@ -330,14 +330,27 @@ struct MqttSupplyFacts {
   uint32_t unitUpS = 0;  // the weakest unit's seconds since its boot (#624): since when its minimum counts
 };
 
-inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap, int heapFragPct,
-                                    long rssi, int unitErrors, unsigned long uptimeSec,
-                                    bool ntpSynced, uint16_t vccMin_mV, uint32_t rebootTotal,
-                                    bool anyJam, uint16_t maxExcess,
-                                    const MqttSupplyFacts* supply = nullptr) {
+// What one telemetry packet says; the builder reads it, nothing else.
+struct MqttTelemetryFacts {
+  uint32_t freeHeap = 0;
+  int heapFragPct = 0;
+  long rssi = 0;
+  int unitErrors = 0;
+  unsigned long uptimeSec = 0;
+  bool ntpSynced = false;
+  uint16_t vccMin_mV = 0;
+  uint32_t rebootTotal = 0;
+  bool anyJam = false;
+  uint16_t maxExcess = 0;
+  const MqttSupplyFacts* supply = nullptr;
+};
+
+inline size_t buildTelemetryPayload(char* buf, size_t bufLen, const MqttTelemetryFacts& f) {
+  const uint16_t vccMin_mV = f.vccMin_mV;
+  const MqttSupplyFacts* supply = f.supply;
   size_t o = (size_t)mqttSnprintf(buf, bufLen,
       MQTT_FMT("{\"heap\":%lu,\"heapFrag\":%d,\"rssi\":%ld,\"unitErrors\":%d,\"uptime\":%lu,\"ntp\":%d"),
-      (unsigned long)freeHeap, heapFragPct, rssi, unitErrors, uptimeSec, ntpSynced ? 1 : 0);
+      (unsigned long)f.freeHeap, f.heapFragPct, f.rssi, f.unitErrors, f.uptimeSec, f.ntpSynced ? 1 : 0);
   // Fleet-min supply Vcc (#366): omitted when no unit reports vitals (value 0)
   // so the HA sensor reads unavailable instead of a phantom 0 mV.
   if (vccMin_mV > 0 && o < bufLen)
@@ -349,17 +362,17 @@ inline size_t buildTelemetryPayload(char* buf, size_t bufLen, uint32_t freeHeap,
                               (unsigned long)supply->unitUpS);
   // Fleet reboot odometer (#368): always emitted, see unitFleetRebootTotal.
   if (o < bufLen)
-    o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"reboots\":%u"), (unsigned)rebootTotal);
+    o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"reboots\":%u"), (unsigned)f.rebootTotal);
   // Fleet jam/stall problem (#365): always emitted — OFF is a real
   // "no stall seen" reading, not a sentinel. Quoted string so the HA
   // binary_sensor's val_tpl renders the same "ON"/"OFF" token its pl_on/pl_off
   // expect (matching DISCOVERY_UNIT_WEAR's convention).
   if (o < bufLen)
-    o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"jam\":\"%s\""), anyJam ? "ON" : "OFF");
+    o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"jam\":\"%s\""), f.anyJam ? "ON" : "OFF");
   // Fleet worst-seen home-step excess (#365): always emitted, see
   // unitFleetMaxExcess.
   if (o < bufLen)
-    o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"stepsExcess\":%u"), (unsigned)maxExcess);
+    o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT(",\"stepsExcess\":%u"), (unsigned)f.maxExcess);
   if (o < bufLen) o += (size_t)mqttSnprintf(buf + o, bufLen - o, MQTT_FMT("}"));
   return o;
 }
@@ -448,43 +461,46 @@ enum MqttDiscoveryEntity {
 // Per-entity HA component + object-id suffix. Single source of truth so the
 // config topic and the payload's uniq_id can never drift apart.
 struct MqttDiscMeta { const char* comp; const char* obj; };
+struct MqttDiscMetaRow { int entity; MqttDiscMeta meta; };
 inline MqttDiscMeta mqttDiscMeta(int entity) {
-  switch (entity) {
-    case DISCOVERY_TEXT:         return { "text",          "" };
-    case DISCOVERY_MODE:         return { "select",        "" };
-    case DISCOVERY_HEAP:         return { "sensor",        "_heap" };
-    case DISCOVERY_RSSI:         return { "sensor",        "_rssi" };
-    case DISCOVERY_UNIT_ERRORS:  return { "sensor",        "_unit_errors" };
-    case DISCOVERY_HEAP_FRAG:    return { "sensor",        "_heap_frag" };
-    case DISCOVERY_UPTIME:       return { "sensor",        "_uptime" };
-    case DISCOVERY_NTP:          return { "binary_sensor", "_ntp" };
-    case DISCOVERY_CURRENT_TEXT: return { "sensor",        "_text_state" };
-    case DISCOVERY_NOTIFICATION: return { "binary_sensor", "_notification" };
-    case DISCOVERY_WIDTH:        return { "sensor",        "_width" };
-    case DISCOVERY_UNITS:        return { "sensor",        "_units" };
-    case DISCOVERY_IP:           return { "sensor",        "_ip" };
-    case DISCOVERY_SSID:         return { "sensor",        "_ssid" };
-    case DISCOVERY_RESET:        return { "sensor",        "_reset" };
-    case DISCOVERY_BOOTS:        return { "sensor",        "_boots" };
-    case DISCOVERY_OTA_REVERTED: return { "binary_sensor", "_ota_reverted" };
-    case DISCOVERY_TIMEZONE:     return { "sensor",        "_timezone" };
-    case DISCOVERY_SPEED:        return { "number",        "_speed" };
-    case DISCOVERY_ALIGNMENT:    return { "select",        "_alignment" };
-    case DISCOVERY_RESTART:      return { "button",        "_restart" };
-    case DISCOVERY_UNITS_FAULTY: return { "sensor",        "_units_faulty" };
-    case DISCOVERY_UNIT_WEAR:    return { "binary_sensor", "_unit_wear" };
-    case DISCOVERY_VCC_MIN:      return { "sensor",        "_vcc_min" };
-    case DISCOVERY_REBOOT_TOTAL: return { "sensor",        "_reboot_total" };
-    case DISCOVERY_UNIT_JAM:     return { "binary_sensor", "_unit_jam" };
-    case DISCOVERY_STEPS_EXCESS: return { "sensor",        "_steps_excess" };
-    case DISCOVERY_NOTIFY:       return { "notify",        "" };
-    case DISCOVERY_TEXT_CLEAR:   return { "button",        "_text_clear" };
-    case DISCOVERY_FIRMWARE_UPDATE: return { "update",     "_firmware" };
-    case DISCOVERY_VCC_MIN_UNIT:    return { "sensor",     "_vcc_min_unit" };
-    case DISCOVERY_VCC_UNDER_FLOOR: return { "sensor",     "_vcc_under_floor" };
-    case DISCOVERY_FLIPS:           return { "sensor",     "_flips" };
-    case DISCOVERY_RESTART_UNITS:   return { "button",     "_restart_units" };
-  }
+  static const MqttDiscMetaRow rows[] = {
+    { DISCOVERY_TEXT, { "text", "" } },
+    { DISCOVERY_MODE, { "select", "" } },
+    { DISCOVERY_HEAP, { "sensor", "_heap" } },
+    { DISCOVERY_RSSI, { "sensor", "_rssi" } },
+    { DISCOVERY_UNIT_ERRORS, { "sensor", "_unit_errors" } },
+    { DISCOVERY_HEAP_FRAG, { "sensor", "_heap_frag" } },
+    { DISCOVERY_UPTIME, { "sensor", "_uptime" } },
+    { DISCOVERY_NTP, { "binary_sensor", "_ntp" } },
+    { DISCOVERY_CURRENT_TEXT, { "sensor", "_text_state" } },
+    { DISCOVERY_NOTIFICATION, { "binary_sensor", "_notification" } },
+    { DISCOVERY_WIDTH, { "sensor", "_width" } },
+    { DISCOVERY_UNITS, { "sensor", "_units" } },
+    { DISCOVERY_IP, { "sensor", "_ip" } },
+    { DISCOVERY_SSID, { "sensor", "_ssid" } },
+    { DISCOVERY_RESET, { "sensor", "_reset" } },
+    { DISCOVERY_BOOTS, { "sensor", "_boots" } },
+    { DISCOVERY_OTA_REVERTED, { "binary_sensor", "_ota_reverted" } },
+    { DISCOVERY_TIMEZONE, { "sensor", "_timezone" } },
+    { DISCOVERY_SPEED, { "number", "_speed" } },
+    { DISCOVERY_ALIGNMENT, { "select", "_alignment" } },
+    { DISCOVERY_RESTART, { "button", "_restart" } },
+    { DISCOVERY_UNITS_FAULTY, { "sensor", "_units_faulty" } },
+    { DISCOVERY_UNIT_WEAR, { "binary_sensor", "_unit_wear" } },
+    { DISCOVERY_VCC_MIN, { "sensor", "_vcc_min" } },
+    { DISCOVERY_REBOOT_TOTAL, { "sensor", "_reboot_total" } },
+    { DISCOVERY_UNIT_JAM, { "binary_sensor", "_unit_jam" } },
+    { DISCOVERY_STEPS_EXCESS, { "sensor", "_steps_excess" } },
+    { DISCOVERY_NOTIFY, { "notify", "" } },
+    { DISCOVERY_TEXT_CLEAR, { "button", "_text_clear" } },
+    { DISCOVERY_FIRMWARE_UPDATE, { "update", "_firmware" } },
+    { DISCOVERY_VCC_MIN_UNIT, { "sensor", "_vcc_min_unit" } },
+    { DISCOVERY_VCC_UNDER_FLOOR, { "sensor", "_vcc_under_floor" } },
+    { DISCOVERY_FLIPS, { "sensor", "_flips" } },
+    { DISCOVERY_RESTART_UNITS, { "button", "_restart_units" } },
+  };
+  for (const MqttDiscMetaRow& r : rows)
+    if (r.entity == entity) return r.meta;
   return { nullptr, nullptr };
 }
 
@@ -527,22 +543,67 @@ inline size_t buildDiscoveryTopic(char* buf, size_t bufLen, int entity, const ch
 // Generic read-only entity (sensor / binary_sensor). Optional fragments are
 // emitted only when non-null. statSuffix is the topic under splitflap/<id>/.
 // For binary_sensor pass pOn/pOff; for a numeric/string sensor leave them null.
+struct MqttEntityDisc {
+  const char* objSuffix;
+  const char* name;
+  const char* statSuffix;
+  const char* valTpl;
+  const char* devCla;
+  const char* unit;
+  const char* entCat;
+  const char* pOn;
+  const char* pOff;
+};
+
 inline size_t buildEntityDiscovery(char* buf, size_t bufLen, const char* deviceId, const char* fw,
-    const char* objSuffix, const char* name, const char* statSuffix, const char* valTpl,
-    const char* devCla, const char* unit, const char* entCat, const char* pOn, const char* pOff) {
+                                   const MqttEntityDisc& e) {
   size_t o = 0;
   MQTT_DISC_APPEND(MQTT_FMT("{\"name\":\"%s\",\"stat_t\":\"splitflap/%s/%s\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s%s\""),
-                   name, deviceId, statSuffix, deviceId, deviceId, objSuffix);
-  if (valTpl) MQTT_DISC_APPEND(MQTT_FMT(",\"val_tpl\":\"%s\""), valTpl);
-  if (devCla) MQTT_DISC_APPEND(MQTT_FMT(",\"dev_cla\":\"%s\""), devCla);
-  if (unit)   MQTT_DISC_APPEND(MQTT_FMT(",\"unit_of_meas\":\"%s\""), unit);
-  if (entCat) MQTT_DISC_APPEND(MQTT_FMT(",\"ent_cat\":\"%s\""), entCat);
-  if (pOn)    MQTT_DISC_APPEND(MQTT_FMT(",\"pl_on\":\"%s\",\"pl_off\":\"%s\""), pOn, pOff);
+                   e.name, deviceId, e.statSuffix, deviceId, deviceId, e.objSuffix);
+  if (e.valTpl) MQTT_DISC_APPEND(MQTT_FMT(",\"val_tpl\":\"%s\""), e.valTpl);
+  if (e.devCla) MQTT_DISC_APPEND(MQTT_FMT(",\"dev_cla\":\"%s\""), e.devCla);
+  if (e.unit)   MQTT_DISC_APPEND(MQTT_FMT(",\"unit_of_meas\":\"%s\""), e.unit);
+  if (e.entCat) MQTT_DISC_APPEND(MQTT_FMT(",\"ent_cat\":\"%s\""), e.entCat);
+  if (e.pOn)    MQTT_DISC_APPEND(MQTT_FMT(",\"pl_on\":\"%s\",\"pl_off\":\"%s\""), e.pOn, e.pOff);
   MQTT_DISC_APPEND(MQTT_FMT("," MQTT_DEVICE_BLOCK "}"), deviceId, deviceId, fw, deviceId);
   return o;
 }
 
-inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const char* deviceId, const char* fwVersion) {
+// The entities that need only buildEntityDiscovery's fields, one row each.
+struct MqttEntityRow { int entity; MqttEntityDisc disc; };
+inline const MqttEntityDisc* mqttEntityDisc(int entity) {
+  static const MqttEntityRow rows[] = {
+    { DISCOVERY_HEAP, { "_heap", "Free heap", "telemetry", "{{ value_json.heap }}", nullptr, "B", nullptr, nullptr, nullptr } },
+    { DISCOVERY_RSSI, { "_rssi", "WiFi RSSI", "telemetry", "{{ value_json.rssi }}", "signal_strength", "dBm", nullptr, nullptr, nullptr } },
+    { DISCOVERY_UNIT_ERRORS, { "_unit_errors", "Unit errors", "telemetry", "{{ value_json.unitErrors }}", nullptr, nullptr, nullptr, nullptr, nullptr } },
+    { DISCOVERY_HEAP_FRAG, { "_heap_frag", "Heap fragmentation", "telemetry", "{{ value_json.heapFrag }}", nullptr, "%", "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_UPTIME, { "_uptime", "Uptime", "telemetry", "{{ value_json.uptime }}", "duration", "s", "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_NTP, { "_ntp", "NTP synced", "telemetry", "{{ value_json.ntp }}", "connectivity", nullptr, "diagnostic", "1", "0" } },
+    { DISCOVERY_CURRENT_TEXT, { "_text_state", "Current text", "text/state", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr } },
+    { DISCOVERY_NOTIFICATION, { "_notification", "Notification active", "notification", nullptr, nullptr, nullptr, nullptr, "ON", "OFF" } },
+    { DISCOVERY_WIDTH, { "_width", "Display width", "width", nullptr, nullptr, nullptr, "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_UNITS, { "_units", "Units responding", "units", nullptr, nullptr, nullptr, "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_IP, { "_ip", "IP address", "diag/ip", nullptr, nullptr, nullptr, "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_SSID, { "_ssid", "WiFi SSID", "diag/ssid", nullptr, nullptr, nullptr, "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_RESET, { "_reset", "Last reset reason", "diag/reset", nullptr, nullptr, nullptr, "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_BOOTS, { "_boots", "Boot counter", "diag/boots", nullptr, nullptr, nullptr, "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_OTA_REVERTED, { "_ota_reverted", "OTA reverted", "diag/ota", nullptr, "problem", nullptr, "diagnostic", "ON", "OFF" } },
+    { DISCOVERY_TIMEZONE, { "_timezone", "Timezone", "diag/tz", nullptr, nullptr, nullptr, "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_REBOOT_TOTAL, { "_reboot_total", "Unit reboots (fleet)", "telemetry", "{{ value_json.reboots }}", nullptr, nullptr, "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_UNIT_JAM, { "_unit_jam", "Unit jam", "telemetry", "{{ value_json.jam }}", "problem", nullptr, "diagnostic", "ON", "OFF" } },
+    { DISCOVERY_STEPS_EXCESS, { "_steps_excess", "Unit steps excess (max)", "telemetry", "{{ value_json.stepsExcess }}", nullptr, "steps", "diagnostic", nullptr, nullptr } },
+    { DISCOVERY_VCC_MIN_UNIT, { "_vcc_min_unit", "Weakest unit", "telemetry", "{{ value_json.vccMinBoard }} #{{ value_json.vccMinUnit }}", nullptr, nullptr, "diagnostic", nullptr, nullptr } },
+  };
+  for (const MqttEntityRow& r : rows)
+    if (r.entity == entity) return &r.disc;
+  return nullptr;
+}
+
+// Entities with a payload of their own, split in two so each switch stays small.
+// `hit` says whether the entity is one of this group's.
+inline size_t buildControlDiscovery(char* buf, size_t bufLen, int entity, const char* deviceId,
+                                    const char* fwVersion, bool& hit) {
+  hit = true;
   switch (entity) {
     case DISCOVERY_TEXT:
       return (size_t)mqttSnprintf(buf, bufLen,
@@ -552,23 +613,6 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Mode\",\"cmd_t\":\"splitflap/%s/mode/set\",\"stat_t\":\"splitflap/%s/mode\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_mode\",\"ops\":[\"text\",\"clock\"]," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
-    //                        obj             name                 stat_t          val_tpl                        dev_cla       unit    ent_cat        pOn    pOff
-    case DISCOVERY_HEAP:         return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_heap",         "Free heap",           "telemetry",   "{{ value_json.heap }}",      nullptr,       "B",   nullptr,      nullptr, nullptr);
-    case DISCOVERY_RSSI:         return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_rssi",         "WiFi RSSI",           "telemetry",   "{{ value_json.rssi }}",      "signal_strength", "dBm", nullptr,  nullptr, nullptr);
-    case DISCOVERY_UNIT_ERRORS:  return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_unit_errors",  "Unit errors",         "telemetry",   "{{ value_json.unitErrors }}", nullptr,      nullptr, nullptr,     nullptr, nullptr);
-    case DISCOVERY_HEAP_FRAG:    return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_heap_frag",    "Heap fragmentation",  "telemetry",   "{{ value_json.heapFrag }}",  nullptr,       "%",   "diagnostic", nullptr, nullptr);
-    case DISCOVERY_UPTIME:       return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_uptime",       "Uptime",              "telemetry",   "{{ value_json.uptime }}",    "duration",    "s",   "diagnostic", nullptr, nullptr);
-    case DISCOVERY_NTP:          return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_ntp",          "NTP synced",          "telemetry",   "{{ value_json.ntp }}",       "connectivity", nullptr, "diagnostic", "1", "0");
-    case DISCOVERY_CURRENT_TEXT: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_text_state",   "Current text",        "text/state",  nullptr,                      nullptr,       nullptr, nullptr,     nullptr, nullptr);
-    case DISCOVERY_NOTIFICATION: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_notification", "Notification active", "notification", nullptr,                     nullptr,       nullptr, nullptr,     "ON", "OFF");
-    case DISCOVERY_WIDTH:        return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_width",        "Display width",       "width",       nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
-    case DISCOVERY_UNITS:        return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_units",        "Units responding",    "units",       nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
-    case DISCOVERY_IP:           return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_ip",           "IP address",          "diag/ip",     nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
-    case DISCOVERY_SSID:         return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_ssid",         "WiFi SSID",           "diag/ssid",   nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
-    case DISCOVERY_RESET:        return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_reset",        "Last reset reason",   "diag/reset",  nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
-    case DISCOVERY_BOOTS:        return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_boots",        "Boot counter",        "diag/boots",  nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
-    case DISCOVERY_OTA_REVERTED: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_ota_reverted", "OTA reverted",        "diag/ota",    nullptr,                      "problem",     nullptr, "diagnostic", "ON", "OFF");
-    case DISCOVERY_TIMEZONE:     return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_timezone",     "Timezone",            "diag/tz",     nullptr,                      nullptr,       nullptr, "diagnostic", nullptr, nullptr);
     case DISCOVERY_SPEED:
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Flap speed\",\"cmd_t\":\"splitflap/%s/speed/set\",\"stat_t\":\"splitflap/%s/speed\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_speed\",\"min\":1,\"max\":100,\"step\":1,\"mode\":\"slider\"," MQTT_DEVICE_BLOCK "}"),
@@ -586,6 +630,27 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Restart units\",\"cmd_t\":\"splitflap/%s/restart_units/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_restart_units\",\"pl_prs\":\"PRESS\",\"ic\":\"mdi:restart\",\"ent_cat\":\"diagnostic\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
+    case DISCOVERY_NOTIFY:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Message\",\"cmd_t\":\"splitflap/%s/text/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_notify\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
+    case DISCOVERY_TEXT_CLEAR:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Clear text\",\"cmd_t\":\"splitflap/%s/text/clear\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_text_clear\",\"pl_prs\":\"PRESS\",\"ic\":\"mdi:close-box-outline\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
+    case DISCOVERY_FIRMWARE_UPDATE:
+      return (size_t)mqttSnprintf(buf, bufLen,
+        MQTT_FMT("{\"name\":\"Firmware\",\"stat_t\":\"splitflap/%s/update\",\"cmd_t\":\"splitflap/%s/update/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_firmware\",\"pl_inst\":\"INSTALL\",\"dev_cla\":\"firmware\"," MQTT_DEVICE_BLOCK "}"),
+        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
+  }
+  hit = false;
+  return 0;
+}
+
+inline size_t buildSensorDiscovery(char* buf, size_t bufLen, int entity, const char* deviceId,
+                                   const char* fwVersion, bool& hit) {
+  hit = true;
+  switch (entity) {
     case DISCOVERY_UNITS_FAULTY:
       //State is the integer faulty count (great for HA automations); the full
       //per-unit breakdown rides json_attr_t so it isn't bound by the 255-char
@@ -600,7 +665,6 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Unit wear warning\",\"stat_t\":\"splitflap/%s/units_wear\",\"json_attr_t\":\"splitflap/%s/units/wear\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_unit_wear\",\"dev_cla\":\"problem\",\"ent_cat\":\"diagnostic\",\"pl_on\":\"ON\",\"pl_off\":\"OFF\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
-    //                        obj             name                 stat_t          val_tpl                       dev_cla    unit    ent_cat        pOn    pOff
     case DISCOVERY_VCC_MIN:
       // The weakest unit, its board, since when its minimum counts and the
       // count under the floor ride as the sensor's attributes (#623/#624/#633),
@@ -608,26 +672,6 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
       return (size_t)mqttSnprintf(buf, bufLen,
         MQTT_FMT("{\"name\":\"Unit supply Vcc (min)\",\"stat_t\":\"splitflap/%s/telemetry\",\"val_tpl\":\"{{ value_json.vccMin }}\",\"json_attr_t\":\"splitflap/%s/telemetry\",\"json_attr_tpl\":\"{{ {'unit': value_json.vccMinUnit, 'board': value_json.vccMinBoard, 'since_s': value_json.vccMinUnitUp, 'under_floor': value_json.vccUnder} | to_json }}\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_vcc_min\",\"dev_cla\":\"voltage\",\"unit_of_meas\":\"mV\",\"ent_cat\":\"diagnostic\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
-    case DISCOVERY_REBOOT_TOTAL: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_reboot_total", "Unit reboots (fleet)",  "telemetry", "{{ value_json.reboots }}", nullptr,   nullptr, "diagnostic", nullptr, nullptr);
-    // #365: fleet jam/stall problem sensor + worst-seen home-step
-    // excess, both telemetry-backed like vccMin/reboots. Binary_sensor
-    // pl_on/pl_off "ON"/"OFF" matches DISCOVERY_UNIT_WEAR's convention (the
-    // telemetry key is a quoted "ON"/"OFF" string, not NTP's bare 1/0).
-    case DISCOVERY_UNIT_JAM:     return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_unit_jam",     "Unit jam",              "telemetry", "{{ value_json.jam }}",         "problem", nullptr, "diagnostic", "ON", "OFF");
-    case DISCOVERY_STEPS_EXCESS: return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_steps_excess", "Unit steps excess (max)", "telemetry", "{{ value_json.stepsExcess }}", nullptr, "steps", "diagnostic", nullptr, nullptr);
-    case DISCOVERY_NOTIFY:
-      return (size_t)mqttSnprintf(buf, bufLen,
-        MQTT_FMT("{\"name\":\"Message\",\"cmd_t\":\"splitflap/%s/text/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_notify\"," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
-    case DISCOVERY_TEXT_CLEAR:
-      return (size_t)mqttSnprintf(buf, bufLen,
-        MQTT_FMT("{\"name\":\"Clear text\",\"cmd_t\":\"splitflap/%s/text/clear\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_text_clear\",\"pl_prs\":\"PRESS\",\"ic\":\"mdi:close-box-outline\"," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
-    case DISCOVERY_FIRMWARE_UPDATE:
-      return (size_t)mqttSnprintf(buf, bufLen,
-        MQTT_FMT("{\"name\":\"Firmware\",\"stat_t\":\"splitflap/%s/update\",\"cmd_t\":\"splitflap/%s/update/set\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_firmware\",\"pl_inst\":\"INSTALL\",\"dev_cla\":\"firmware\"," MQTT_DEVICE_BLOCK "}"),
-        deviceId, deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
-    case DISCOVERY_VCC_MIN_UNIT:    return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, "_vcc_min_unit",    "Weakest unit",             "telemetry", "{{ value_json.vccMinBoard }} #{{ value_json.vccMinUnit }}", nullptr, nullptr, "diagnostic", nullptr, nullptr);
     case DISCOVERY_VCC_UNDER_FLOOR:
       // A count with a state class, so Home Assistant keeps its statistics.
       return (size_t)mqttSnprintf(buf, bufLen,
@@ -638,6 +682,20 @@ inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const 
         MQTT_FMT("{\"name\":\"Flips\",\"stat_t\":\"splitflap/%s/flips\",\"avty_t\":\"splitflap/%s/availability\",\"uniq_id\":\"%s_flips\",\"stat_cla\":\"total_increasing\",\"ic\":\"mdi:counter\"," MQTT_DEVICE_BLOCK "}"),
         deviceId, deviceId, deviceId, deviceId, deviceId, fwVersion, deviceId);
   }
+  hit = false;
+  return 0;
+}
+
+inline size_t buildDiscoveryPayload(char* buf, size_t bufLen, int entity, const char* deviceId, const char* fwVersion) {
+  // #365: the jam / steps-excess entities are telemetry-backed like vccMin and
+  // reboots; the jam binary_sensor's pl_on/pl_off "ON"/"OFF" match
+  // DISCOVERY_UNIT_WEAR's convention (its telemetry key is a quoted string).
+  if (const MqttEntityDisc* e = mqttEntityDisc(entity)) return buildEntityDiscovery(buf, bufLen, deviceId, fwVersion, *e);
+  bool hit = false;
+  size_t n = buildControlDiscovery(buf, bufLen, entity, deviceId, fwVersion, hit);
+  if (hit) return n;
+  n = buildSensorDiscovery(buf, bufLen, entity, deviceId, fwVersion, hit);
+  if (hit) return n;
   if (bufLen > 0) buf[0] = '\0';
   return 0;
 }

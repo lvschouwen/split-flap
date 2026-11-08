@@ -187,6 +187,40 @@ inline uint32_t unitVerdictUptimeS(const UnitFacts& u) {
   return u.statusValid ? u.status.uptimeSeconds : 0;
 }
 
+// The reasons the status read gives (or its absence); `homeFailedNow` is
+// whether the unit's homing has failed on this read.
+inline uint32_t unitStatusReasons(const UnitFacts& u, bool& homeFailedNow) {
+  uint32_t all = 0;
+  const auto add = [&all](UnitReason r) { all |= unitReasonBit(r); };
+  if (!u.statusValid) {
+    add(UnitReason::NotRead);
+    return all;
+  }
+  if (u.status.flags & UNIT_FLAG_HALL_NEVER) add(UnitReason::HallNever);
+  if (u.status.flags & UNIT_FLAG_LAST_HOME_FAILED) add(UnitReason::HomeFailed);
+  homeFailedNow = unitStatusIsFaulty(u.status);
+  if (!homeFailedNow && unitBootHomeState(u.status.flags) != 2) add(UnitReason::FindingHome);
+  if (u.resetSeen) add(UnitReason::RestartedByItself);
+  return all;
+}
+
+// The reasons the unit's own measurements give: extended diagnostics, the
+// letter it shows, its supply.
+inline uint32_t unitMeasuredReasons(const UnitFacts& u) {
+  uint32_t all = 0;
+  const auto add = [&all](UnitReason r) { all |= unitReasonBit(r); };
+  if (u.extDiagValid) {
+    if (u.extDiag.statusBits & EXT_DIAG_STATUS_STALL) add(UnitReason::Jammed);
+    if (u.extDiag.stepExcessMax > EXT_DIAG_DRAG_EXCESS_STEPS) add(UnitReason::Dragging);
+    if (u.extDiag.hallEdgesLastRev > 1) add(UnitReason::HallAnomaly);
+  }
+  if (u.diagValid && u.mismatch) add(UnitReason::WrongLetter);
+  if (unitVccIsLow(u.vitalsValid, u.vitals.vccMin_mV, UNIT_VCC_MIN_FLOOR_MV)) {
+    add(UnitReason::LowSupply);
+  }
+  return all;
+}
+
 // Every reason that applies to the unit, as bits.
 inline uint32_t unitReasonsOf(const UnitFacts& u, const UnitVerdictContext& ctx) {
   if (u.state == 0) return unitReasonBit(UnitReason::NoUnit);
@@ -204,24 +238,8 @@ inline uint32_t unitReasonsOf(const UnitFacts& u, const UnitVerdictContext& ctx)
   if (u.bootVerdict == BOOT_INTEGRITY_CORRUPT) add(UnitReason::BootloaderDamaged);
   if (u.bootVerdict == BOOT_INTEGRITY_OUTDATED) add(UnitReason::BootloaderOutdated);
   bool homeFailedNow = false;
-  if (u.statusValid) {
-    if (u.status.flags & UNIT_FLAG_HALL_NEVER) add(UnitReason::HallNever);
-    if (u.status.flags & UNIT_FLAG_LAST_HOME_FAILED) add(UnitReason::HomeFailed);
-    homeFailedNow = unitStatusIsFaulty(u.status);
-    if (!homeFailedNow && unitBootHomeState(u.status.flags) != 2) add(UnitReason::FindingHome);
-    if (u.resetSeen) add(UnitReason::RestartedByItself);
-  } else {
-    add(UnitReason::NotRead);
-  }
-  if (u.extDiagValid) {
-    if (u.extDiag.statusBits & EXT_DIAG_STATUS_STALL) add(UnitReason::Jammed);
-    if (u.extDiag.stepExcessMax > EXT_DIAG_DRAG_EXCESS_STEPS) add(UnitReason::Dragging);
-    if (u.extDiag.hallEdgesLastRev > 1) add(UnitReason::HallAnomaly);
-  }
-  if (u.diagValid && u.mismatch) add(UnitReason::WrongLetter);
-  if (unitVccIsLow(u.vitalsValid, u.vitals.vccMin_mV, UNIT_VCC_MIN_FLOOR_MV)) {
-    add(UnitReason::LowSupply);
-  }
+  all |= unitStatusReasons(u, homeFailedNow);
+  all |= unitMeasuredReasons(u);
   if (u.fwStatus == 1) add(UnitReason::FirmwareOutdated);
   if (ctx.worn) add(UnitReason::Worn);
   if (!homeFailedNow && ctx.homeFailedSince > 0) add(UnitReason::HomeFailedBefore);

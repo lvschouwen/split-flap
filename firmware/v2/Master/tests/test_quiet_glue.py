@@ -26,7 +26,7 @@ def test_clock_ticker_stands_down_before_any_content_path():
 
 def test_mqtt_text_is_dropped_unless_forced():
     code = _code(MASTER / "MqttService.cpp")
-    text = code[code.index("case MqttCommand::Text:"):]
+    text = code[code.index("static void mqttHandleTextCommand("):]
     # The top priority is what "force" meant (#625).
     gate = text.index("quietBlocksContent(tasksQuiet(), req.priority >= MQTT_TEXT_PRIORITY_MAX)")
     assert gate < text.index("showTextNow("), "the gate must sit before the text is shown"

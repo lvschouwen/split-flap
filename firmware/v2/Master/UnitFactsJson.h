@@ -74,10 +74,8 @@ struct Reader {
   }
 };
 
-inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u) {
-  Reader r{o};
-  u = UnitFacts{};
-  if (r.number("i", UNITS_AMOUNT) != (uint32_t)index) return false;
+// The state and, when the unit was read, its status block. False when the revision is missing or too long.
+inline bool readStatus(Reader& r, JsonObjectConst o, UnitFacts& u) {
   u.state = (uint8_t)r.number("st", 2);
   u.statusValid = r.number("v", 1) == 1;
   if (u.statusValid) {
@@ -95,6 +93,10 @@ inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u)
     // "ae" restates a bit of "fl".
     u.resetSeen = r.flag("rs");
   }
+  return true;
+}
+
+inline void readCounters(Reader& r, UnitFacts& u) {
   if (r.has("odo")) {
     u.odometer = r.number("odo", 0xFFFFFFFFUL);
     u.odometerValid = true;
@@ -121,6 +123,9 @@ inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u)
     u.vitals.cmdPos = (uint8_t)r.number("cp", 0xFF);
     u.vitals.freeRamMin = (uint16_t)r.number("ram", 0xFFFF);
   }
+}
+
+inline void readDiagnostics(Reader& r, UnitFacts& u) {
   if (r.has("se")) {
     u.extDiagValid = true;
     u.extDiag.stepExcessLast = (uint16_t)r.number("se", 0xFFFF);
@@ -142,6 +147,9 @@ inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u)
     u.protocolKnown = true;
     u.protocolVersion = (uint8_t)r.number("pv", 0xFF);
   }
+}
+
+inline void readLifetime(Reader& r, UnitFacts& u) {
   // The lifetime block: each key only when it is not zero, so a block that is
   // valid and all zero is the same document as one that was not read.
   UnitLifetimeFacts& lt = u.lifetime;
@@ -160,6 +168,9 @@ inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u)
   lt.idleHallStoodDown = r.flag("frd");
   u.lifetimeValid = r.has("hf") || r.has("gates") || r.has("sxl") || r.has("stw0") ||
                     r.has("str0") || r.has("fr") || r.has("frd");
+}
+
+inline void readBusRecord(Reader& r, UnitFacts& u) {
   u.busRecordValid = r.has("bsn");
   if (u.busRecordValid) {
     UnitBusRecord& br = u.busRecord;
@@ -172,6 +183,9 @@ inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u)
     br.flags = r.has("bsf") ? (uint8_t)r.number("bsf", 0xFF) : 0;
     u.busSilentNowMinutes = r.has("bsq") ? (uint8_t)r.number("bsq", 0xFF) : 0;
   }
+}
+
+inline void readLiveState(Reader& r, UnitFacts& u, uint32_t nowMs) {
   if (u.state == 1) {
     u.lastSeenMs = nowMs - (r.has("age") ? r.number("age", 0xFFFFFFFFUL) : 0);
     // Without a status read "fl" is absent, and "hs2" is what is left of it.
@@ -187,6 +201,9 @@ inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u)
     }
     if (r.has("rsx")) u.rescueExits = (uint16_t)r.number("rsx", 0xFFFF);
   }
+}
+
+inline void readBootloader(Reader& r, UnitFacts& u) {
   if (r.has("bv")) {
     u.bootVerdict = (uint8_t)r.number("bv", 0xFF);
     if (r.has("bcrc")) u.bootCrc32 = r.hex("bcrc", 8);
@@ -208,6 +225,19 @@ inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u)
       b.crashCount = (uint8_t)r.number("blx", 0xFF);
     }
   }
+}
+
+inline bool readUnit(JsonObjectConst o, int index, uint32_t nowMs, UnitFacts& u) {
+  Reader r{o};
+  u = UnitFacts{};
+  if (r.number("i", UNITS_AMOUNT) != (uint32_t)index) return false;
+  if (!readStatus(r, o, u)) return false;
+  readCounters(r, u);
+  readDiagnostics(r, u);
+  readLifetime(r, u);
+  readBusRecord(r, u);
+  readLiveState(r, u, nowMs);
+  readBootloader(r, u);
   return r.ok;
 }
 

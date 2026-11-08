@@ -100,20 +100,18 @@ inline void unitApiTableRow(JsonArray row, const UnitFacts& u, int address,
   else row.add(nullptr);
 }
 
-// Everything about one unit, grouped the way the unit page shows it. `nowMs`
-// is on the clock UnitFacts::lastSeenMs counts on.
-inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint32_t nowMs,
-                          const UnitVerdict* verdict) {
-  out["address"] = address;
-  out["state"] = unitApiStateName(u.state);
-  if (verdict != nullptr) unitApiVerdict(out["verdict"].to<JsonObject>(), *verdict);
+// The five groups of a unit page, filled by the parts below in order.
+struct UnitApiSections {
+  JsonObject out, fw, power, link, drum, boot;
+};
 
-  JsonObject fw = out["firmware"].to<JsonObject>();
-  JsonObject power = out["power"].to<JsonObject>();
-  JsonObject link = out["link"].to<JsonObject>();
-  JsonObject drum = out["drum"].to<JsonObject>();
-  JsonObject boot = out["bootloader"].to<JsonObject>();
-
+// Part of unitApiDetail.
+inline void unitApiStatusPart(const UnitApiSections& sec, const UnitFacts& u) {
+  JsonObject out = sec.out;
+  JsonObject fw = sec.fw;
+  JsonObject power = sec.power;
+  JsonObject link = sec.link;
+  JsonObject drum = sec.drum;
   if (u.statusValid) {
     const UnitStatus& s = u.status;
     fw["rev"] = jsonCopied(u.rev);
@@ -130,6 +128,13 @@ inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint3
     drum["moving"] = (s.flags & UNIT_FLAG_MOVING) != 0;
     out["addressStored"] = (s.flags & UNIT_FLAG_ADDR_EEPROM) != 0;
   }
+}
+
+// Part of unitApiDetail.
+inline void unitApiProtocolVitalsPart(const UnitApiSections& sec, const UnitFacts& u) {
+  JsonObject fw = sec.fw;
+  JsonObject power = sec.power;
+  JsonObject drum = sec.drum;
   if (u.protocolKnown) {
     fw["protocol"] = u.protocolVersion;
     fw["protocolSupported"] = unitProtocolSupported(u.protocolVersion);
@@ -140,6 +145,13 @@ inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint3
     power["freeRamMin"] = u.vitals.freeRamMin;
     if (unitApiFlap(u.vitals.cmdPos)) drum["commanded"] = u.vitals.cmdPos;
   }
+}
+
+// Part of unitApiDetail.
+inline void unitApiExtDiagLinkPart(const UnitApiSections& sec, const UnitFacts& u) {
+  JsonObject power = sec.power;
+  JsonObject link = sec.link;
+  JsonObject drum = sec.drum;
   if (u.extDiagValid) {
     const UnitExtDiag& e = u.extDiag;
     power["supplyDuringLastMoveMv"] = e.vccSagLastMove;
@@ -155,6 +167,12 @@ inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint3
     link["answered"] = u.link.txReplies;
     link["selfRepairs"] = u.link.deafHeals;
   }
+}
+
+// Part of unitApiDetail.
+inline void unitApiLivePart(const UnitApiSections& sec, const UnitFacts& u, uint32_t nowMs) {
+  JsonObject link = sec.link;
+  JsonObject drum = sec.drum;
   if (u.state == 1) {
     link["heardMsAgo"] = (uint32_t)(nowMs - u.lastSeenMs);
     link["missed"] = u.misses;
@@ -164,6 +182,11 @@ inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint3
     link["rescuedFromBootloader"] = u.rescueExits;
     drum["home"] = unitApiHomeName(u.status.flags);
   }
+}
+
+// Part of unitApiDetail.
+inline void unitApiDrumPart(const UnitApiSections& sec, const UnitFacts& u) {
+  JsonObject drum = sec.drum;
   if (u.offsetValid) drum["offset"] = u.offset;
   if (u.odometerValid) drum["turns"] = u.odometer;
   if (u.diagValid) {
@@ -175,6 +198,12 @@ inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint3
       drum["wrongLetter"] = u.mismatch;
     }
   }
+}
+
+// Part of unitApiDetail.
+inline void unitApiLifetimePart(const UnitApiSections& sec, const UnitFacts& u) {
+  JsonObject fw = sec.fw;
+  JsonObject drum = sec.drum;
   if (u.lifetimeValid) {
     const UnitLifetimeFacts& lt = u.lifetime;
     drum["homeFailures"] = lt.homeFailedCount;
@@ -191,6 +220,12 @@ inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint3
       test["lastStepsPerTurn"] = lt.selfTestLastStepsPerRev;
     }
   }
+}
+
+// Part of unitApiDetail.
+inline void unitApiBusBootPart(const UnitApiSections& sec, const UnitFacts& u) {
+  JsonObject link = sec.link;
+  JsonObject boot = sec.boot;
   if (u.busRecordValid) {
     // The unit's own record of the times nobody addressed it (#584).
     const UnitBusRecord& br = u.busRecord;
@@ -227,4 +262,24 @@ inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint3
     }
     if (b.crashValid) boot["crashes"] = b.crashCount;
   }
+}
+
+// Everything about one unit, grouped the way the unit page shows it. `nowMs`
+// is on the clock UnitFacts::lastSeenMs counts on.
+inline void unitApiDetail(JsonObject out, const UnitFacts& u, int address, uint32_t nowMs,
+                          const UnitVerdict* verdict) {
+  out["address"] = address;
+  out["state"] = unitApiStateName(u.state);
+  if (verdict != nullptr) unitApiVerdict(out["verdict"].to<JsonObject>(), *verdict);
+
+  const UnitApiSections s{out, out["firmware"].to<JsonObject>(), out["power"].to<JsonObject>(),
+                          out["link"].to<JsonObject>(), out["drum"].to<JsonObject>(),
+                          out["bootloader"].to<JsonObject>()};
+  unitApiStatusPart(s, u);
+  unitApiProtocolVitalsPart(s, u);
+  unitApiExtDiagLinkPart(s, u);
+  unitApiLivePart(s, u, nowMs);
+  unitApiDrumPart(s, u);
+  unitApiLifetimePart(s, u);
+  unitApiBusBootPart(s, u);
 }

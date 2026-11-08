@@ -228,10 +228,21 @@ static void test_mqttTopic_builds_expected_paths() {
   TEST_ASSERT_EQUAL_STRING("splitflap/flappy/availability", mqttTopic(String("flappy"), "availability").c_str());
   TEST_ASSERT_EQUAL_STRING("splitflap/flappy/telemetry", mqttTopic(String("flappy"), "telemetry").c_str());
 }
+// The facts struct filled from a flat argument list, so each case reads as one packet.
+static size_t telemetryFlat(char* buf, size_t bufLen, uint32_t freeHeap, int heapFragPct, long rssi,
+                            int unitErrors, unsigned long uptimeSec, bool ntpSynced, uint16_t vccMin_mV,
+                            uint32_t rebootTotal, bool anyJam, uint16_t maxExcess,
+                            const MqttSupplyFacts* supply = nullptr) {
+  MqttTelemetryFacts f;
+  f.freeHeap = freeHeap; f.heapFragPct = heapFragPct; f.rssi = rssi; f.unitErrors = unitErrors;
+  f.uptimeSec = uptimeSec; f.ntpSynced = ntpSynced; f.vccMin_mV = vccMin_mV; f.rebootTotal = rebootTotal;
+  f.anyJam = anyJam; f.maxExcess = maxExcess; f.supply = supply;
+  return buildTelemetryPayload(buf, bufLen, f);
+}
 static void test_telemetry_payload_exact_shape() {
   char buf[160];
   //                            heap    frag  rssi  errs uptime  ntp   vccMin reboots jam   stepsExcess
-  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 4210, 6UL, true, 340);
+  size_t n = telemetryFlat(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 4210, 6UL, true, 340);
   TEST_ASSERT_EQUAL_STRING(
     "{\"heap\":25048,\"heapFrag\":12,\"rssi\":-61,\"unitErrors\":2,\"uptime\":3600,\"ntp\":1,\"vccMin\":4210,\"reboots\":6,\"jam\":\"ON\",\"stepsExcess\":340}", buf);
   TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
@@ -244,11 +255,11 @@ static void test_telemetry_supply_facts_follow_vccmin() {
   supply.board = "split-flap-row1";
   supply.under = 2;
   supply.unitUpS = 86401;  // since when that minimum counts (#624)
-  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 3900, 6UL, false, 0, &supply);
+  size_t n = telemetryFlat(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 3900, 6UL, false, 0, &supply);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   assert_contains(buf, "\"vccMin\":3900,\"vccMinUnit\":39,\"vccMinBoard\":\"split-flap-row1\",\"vccUnder\":2,\"vccMinUnitUp\":86401,\"reboots\":6");
   // Without a vccMin there is no weakest unit either.
-  n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0, 6UL, false, 0, &supply);
+  n = telemetryFlat(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0, 6UL, false, 0, &supply);
   TEST_ASSERT_NULL(strstr(buf, "vccMinUnit"));
 }
 
@@ -261,9 +272,9 @@ static void test_telemetry_at_its_widest_fits_its_buffer() {
   supply.board = "split-flap-row10-c10";
   supply.under = 99;
   supply.unitUpS = 0xFFFFFFFFUL;
-  const size_t n = buildTelemetryPayload(buf, sizeof(buf), 0xFFFFFFFFUL, 100, -100L, 65535,
-                                         0xFFFFFFFFUL, true, 65535, 0xFFFFFFFFUL, true, 65535,
-                                         &supply);
+  const size_t n = telemetryFlat(buf, sizeof(buf), 0xFFFFFFFFUL, 100, -100L, 65535,
+                                      0xFFFFFFFFUL, true, 65535, 0xFFFFFFFFUL, true, 65535,
+                                      &supply);
   TEST_ASSERT_TRUE(n > 0 && n < sizeof(buf));
   TEST_ASSERT_EQUAL_UINT32(strlen(buf), (uint32_t)n);
   TEST_ASSERT_EQUAL('}', buf[n - 1]);
@@ -308,7 +319,7 @@ static void test_telemetry_vccmin_omitted_when_zero() {
   // #366: no unit reports vitals -> vccMin 0 -> the key is dropped so the HA
   // sensor reads unavailable instead of a phantom 0 mV. Object still closes.
   char buf[160];
-  size_t n = buildTelemetryPayload(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0, 0UL, false, 0);
+  size_t n = telemetryFlat(buf, sizeof(buf), 25048UL, 12, -61L, 2, 3600UL, true, 0, 0UL, false, 0);
   TEST_ASSERT_NULL(strstr(buf, "vccMin"));
   // #368: unlike vccMin, 0 reboots is a real reading, not a sentinel — the
   // key is always present.
@@ -322,7 +333,7 @@ static void test_telemetry_vccmin_omitted_when_zero() {
 }
 static void test_telemetry_ntp_false_renders_zero() {
   char buf[160];
-  buildTelemetryPayload(buf, sizeof(buf), 1UL, 0, 0L, 0, 0UL, false, 4700, 0UL, false, 0);
+  telemetryFlat(buf, sizeof(buf), 1UL, 0, 0L, 0, 0UL, false, 4700, 0UL, false, 0);
   assert_contains(buf, "\"ntp\":0");
 }
 // ---- parseModeCommand (#130) ----
