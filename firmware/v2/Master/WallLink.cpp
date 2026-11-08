@@ -267,40 +267,64 @@ struct Hooks : WallLinkHooks {
   void rowMessage(int row, const wl_ToMaster& message) override {
     // #515: a paired row answering is traffic that went both ways.
     wifiNoteConfirmedTraffic();
-    if (message.which_body == wl_ToMaster_status_tag) {
-      facts[row].status = message.body.status;
-      facts[row].haveStatus = true;
-    } else if (message.which_body == wl_ToMaster_shown_tag) {
-      WallRowLink& f = facts[row];
-      f.shownCount++;
-      f.lastLateMs = message.body.shown.late_ms;
-      if (f.lastLateMs > f.worstLateMs) f.worstLateMs = f.lastLateMs;
-    } else if (message.which_body == wl_ToMaster_units_json_tag) {
-      takeUnitsPiece(row, message.body.units_json, rowName(row));
-    } else if (message.which_body == wl_ToMaster_op_state_tag) {
-      takeOpState(message.body.op_state);
-    } else if (message.which_body == wl_ToMaster_update_state_tag) {
-      const wl_UpdateState& u = message.body.update_state;
-      SerialPrintf("link: %s: update to %s: phase %d, reason %d, detail %u\n", rowName(row), u.rev,
-                   (int)u.phase, (int)u.reason, (unsigned)u.detail);
-      updateEnded(row, updater.answer(row, u, offeredRev(), passNowMs));
-    } else if (message.which_body == wl_ToMaster_log_line_tag) {
+    if (message.which_body == wl_ToMaster_log_line_tag) {
       rowLogAppend(row, message.body.log_line.text.bytes, message.body.log_line.text.size);
       return;  // nothing about the row itself changed
-    } else if (message.which_body == wl_ToMaster_event_tag) {
-      // #570: what the row says happened on it goes into the event record.
-      const wl_Event& e = message.body.event;
-      if (eventBudget[row].take(passNowMs)) {
-        eventBudgetLogged[row] = false;
-        eventRecord(EventKind::RowEvent, wallRowEventDetail(e.code), rowName(row),
-                    e.unit <= 255 ? (uint8_t)e.unit : 0, e.a, e.b, e.age_s);
-      } else if (!eventBudgetLogged[row]) {
-        eventBudgetLogged[row] = true;
-        SerialPrintf("link: %s sends events faster than they are recorded — dropping\n",
-                     rowName(row));
-      }
     }
+    takeRowBody(row, message);
     factsDirty[row] = true;
+  }
+
+  void takeRowBody(int row, const wl_ToMaster& message) {
+    switch (message.which_body) {
+      case wl_ToMaster_status_tag:
+        facts[row].status = message.body.status;
+        facts[row].haveStatus = true;
+        break;
+      case wl_ToMaster_shown_tag:
+        takeShown(facts[row], message.body.shown);
+        break;
+      case wl_ToMaster_units_json_tag:
+        takeUnitsPiece(row, message.body.units_json, rowName(row));
+        break;
+      case wl_ToMaster_op_state_tag:
+        takeOpState(message.body.op_state);
+        break;
+      case wl_ToMaster_update_state_tag:
+        takeUpdateState(row, message.body.update_state);
+        break;
+      case wl_ToMaster_event_tag:
+        takeRowEvent(row, message.body.event);
+        break;
+      default:
+        break;
+    }
+  }
+
+  static void takeShown(WallRowLink& f, const wl_Shown& shown) {
+    f.shownCount++;
+    f.lastLateMs = shown.late_ms;
+    if (f.lastLateMs > f.worstLateMs) f.worstLateMs = f.lastLateMs;
+  }
+
+  static void takeUpdateState(int row, const wl_UpdateState& u) {
+    SerialPrintf("link: %s: update to %s: phase %d, reason %d, detail %u\n", rowName(row), u.rev,
+                 (int)u.phase, (int)u.reason, (unsigned)u.detail);
+    updateEnded(row, updater.answer(row, u, offeredRev(), passNowMs));
+  }
+
+  // #570: what the row says happened on it goes into the event record.
+  static void takeRowEvent(int row, const wl_Event& e) {
+    if (eventBudget[row].take(passNowMs)) {
+      eventBudgetLogged[row] = false;
+      eventRecord(EventKind::RowEvent, wallRowEventDetail(e.code), rowName(row),
+                  e.unit <= 255 ? (uint8_t)e.unit : 0, e.a, e.b, e.age_s);
+      return;
+    }
+    if (eventBudgetLogged[row]) return;
+    eventBudgetLogged[row] = true;
+    SerialPrintf("link: %s sends events faster than they are recorded — dropping\n",
+                 rowName(row));
   }
 
   void jobEnded(int row, uint32_t opId, WallJobEnd why) override {
@@ -614,30 +638,24 @@ void publish(uint32_t nowMs) {
   }
 }
 
-void pass() {
-  const uint32_t nowMs = millis();
-  passNowMs = nowMs;
-  if (wallStateRowsGeneration() != rowsGeneration) {
-    core->reset(hooks);
-    updater.reset();
-    rowsTable = wallStateRows(rowsGeneration);
-    tellNames();
-    wallShowRowsChanged(rowsTable);
-    rowLogRowsChanged(rowsGeneration);
-    hooks.forgetRows();
-    for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
-      facts[row] = WallRowLink{};
-      factsDirty[row] = true;
-    }
+// The rows table changed: every row starts over under its new place.
+void takeRowsTable() {
+  if (wallStateRowsGeneration() == rowsGeneration) return;
+  core->reset(hooks);
+  updater.reset();
+  rowsTable = wallStateRows(rowsGeneration);
+  tellNames();
+  wallShowRowsChanged(rowsTable);
+  rowLogRowsChanged(rowsGeneration);
+  hooks.forgetRows();
+  for (int row = 0; row < WALL_LINK_MAX_ROWS; row++) {
+    facts[row] = WallRowLink{};
+    factsDirty[row] = true;
   }
-  openListener(nowMs);
-  if (listenFd >= 0) openTimeSocket();
-  if (listenFd < 0) {
-    vTaskDelay(pdMS_TO_TICKS(PASS_WAIT_MS));
-    return;
-  }
+}
 
-  fd_set readable;
+// Waits up to a pass for any socket to have something to read.
+void waitReadable(fd_set& readable) {
   FD_ZERO(&readable);
   FD_SET(listenFd, &readable);
   int maxFd = listenFd;
@@ -657,17 +675,12 @@ void pass() {
     vTaskDelay(pdMS_TO_TICKS(PASS_WAIT_MS));
     FD_ZERO(&readable);
   }
-  if (timeFd >= 0 && FD_ISSET(timeFd, &readable)) answerTime();
-  if (FD_ISSET(listenFd, &readable)) acceptRows(nowMs);
-  readRows(readable, nowMs);
-  showAndSettings(nowMs);
-  takeJobs(nowMs);
-  core->tick(nowMs, hooks);
-  for (int r = 0; r < WALL_LINK_MAX_ROWS; r++) hooks.reportHeld(r, nowMs);
-  offerImage(nowMs);
-  // Asked for by the current table's row numbers, like an update retry. Said
-  // once: a row that cannot be written to now is not restarted later, when
-  // nobody expects it any more.
+}
+
+// Asked for by the current table's row numbers, like an update retry. Said
+// once: a row that cannot be written to now is not restarted later, when
+// nobody expects it any more.
+void sendRestarts(uint32_t nowMs) {
   const uint32_t restarts =
       wallStateRowsGeneration() == rowsGeneration ? wallStateTakeRestarts() : 0;
   for (int row = 0; row < rowsTable.count && row < WALL_LINK_MAX_ROWS; row++) {
@@ -679,23 +692,54 @@ void pass() {
                  core->send(row, restart, nowMs, hooks) ? "told to restart"
                                                         : "could not be told to restart");
   }
+}
+
+void sendRelease(uint32_t nowMs) {
   char releasing[WALL_ROW_ID_MAX + 1];
-  if (wallStateReleaseAsked(releasing, sizeof(releasing))) {
-    const int row = wallRowsFind(rowsTable, releasing);
-    if (row >= 0) {
-      static wl_ToRow release;
-      wlClear(release);
-      release.which_body = wl_ToRow_release_tag;
-      if (core->send(row, release, nowMs, hooks)) SerialPrintf("link: %s released\n", releasing);
-    }
-    wallStateReleaseAnswered();
+  if (!wallStateReleaseAsked(releasing, sizeof(releasing))) return;
+  const int row = wallRowsFind(rowsTable, releasing);
+  if (row >= 0) {
+    static wl_ToRow release;
+    wlClear(release);
+    release.which_body = wl_ToRow_release_tag;
+    if (core->send(row, release, nowMs, hooks)) SerialPrintf("link: %s released\n", releasing);
   }
+  wallStateReleaseAnswered();
+}
+
+void flushRows() {
   for (int conn = 0; conn < WALL_LINK_MAX_CONNS; conn++) {
     Socket& s = sockets[conn];
     if (s.fd < 0) continue;
     flushTail(s);
     if (s.broken) lost(conn, "connection lost while writing");
   }
+}
+
+void pass() {
+  const uint32_t nowMs = millis();
+  passNowMs = nowMs;
+  takeRowsTable();
+  openListener(nowMs);
+  if (listenFd >= 0) openTimeSocket();
+  if (listenFd < 0) {
+    vTaskDelay(pdMS_TO_TICKS(PASS_WAIT_MS));
+    return;
+  }
+
+  fd_set readable;
+  waitReadable(readable);
+  if (timeFd >= 0 && FD_ISSET(timeFd, &readable)) answerTime();
+  if (FD_ISSET(listenFd, &readable)) acceptRows(nowMs);
+  readRows(readable, nowMs);
+  showAndSettings(nowMs);
+  takeJobs(nowMs);
+  core->tick(nowMs, hooks);
+  for (int r = 0; r < WALL_LINK_MAX_ROWS; r++) hooks.reportHeld(r, nowMs);
+  offerImage(nowMs);
+  sendRestarts(nowMs);
+  sendRelease(nowMs);
+  flushRows();
   publish(nowMs);
 }
 

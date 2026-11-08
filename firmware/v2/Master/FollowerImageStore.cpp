@@ -330,101 +330,132 @@ bool followerImageWriteEnd() {
 
 // --- netTask flush ------------------------------------------------------------------
 
-void followerImageFlushTick() {
-  if (imgMutex == nullptr) return;
-  {
-    // #419: reclaim a stalled upload — no chunk for the stall window means
-    // the client is gone and writeEnd will never run. Freeing here (netTask)
-    // is safe: the async handler only touches accBuf between begin and end,
-    // and a late straggler chunk fails the `accumulating` check in
-    // followerImageWriteChunk instead of writing through a dangling pointer.
-    ImgLock lock;
-    if (accumulating &&
-        millis() - accLastProgressMs > FOLLOWER_IMAGE_STALL_TIMEOUT_MS) {
-      accFree();
-      lastError = "upload stalled — store reclaimed";
-      SerialPrintln(F("FollowerImageStore: stalled upload reclaimed (#419)"));
-    }
+// #419: reclaim a stalled upload — no chunk for the stall window means
+// the client is gone and writeEnd will never run. Freeing here (netTask)
+// is safe: the async handler only touches accBuf between begin and end,
+// and a late straggler chunk fails the `accumulating` check in
+// followerImageWriteChunk instead of writing through a dangling pointer.
+static void reclaimStalledUpload() {
+  ImgLock lock;
+  if (accumulating &&
+      millis() - accLastProgressMs > FOLLOWER_IMAGE_STALL_TIMEOUT_MS) {
+    accFree();
+    lastError = "upload stalled — store reclaimed";
+    SerialPrintln(F("FollowerImageStore: stalled upload reclaimed (#419)"));
   }
-  {
-    bool spent;
-    {
-      ImgLock lock;
-      spent = holdFileSpent && !flushPending;
-      holdFileSpent = false;
-    }
-    if (spent) LittleFS.remove(FOLLOWER_IMAGE_HOLD_PATH);
-  }
-  uint8_t* buf = nullptr;
-  size_t len = 0;
-  String rev;
-  String heldFor;
-  {
-    bool owed;
-    {
-      ImgLock lock;
-      owed = factsOwed && !flushPending &&
-             (!factsTried || millis() - factsTriedAtMs >= FACTS_RETRY_MS);
-    }
-    if (owed) readFactsOffFlash();
-  }
-  {
-    ImgLock lock;
-    if (!flushPending) return;
-    if (relayClaims > 0) return;  // don't rewrite the file a row is reading
-    buf = flushBuf;
-    len = flushLen;
-    rev = flushRev;
-    heldFor = flushHeldFor;
-  }
+}
 
-  // The buffer is what was uploaded and checked: its facts need no read-back.
+static void removeSpentHold() {
+  bool spent;
+  {
+    ImgLock lock;
+    spent = holdFileSpent && !flushPending;
+    holdFileSpent = false;
+  }
+  if (spent) LittleFS.remove(FOLLOWER_IMAGE_HOLD_PATH);
+}
+
+static void readOwedFacts() {
+  bool owed;
+  {
+    ImgLock lock;
+    owed = factsOwed && !flushPending &&
+           (!factsTried || millis() - factsTriedAtMs >= FACTS_RETRY_MS);
+  }
+  if (owed) readFactsOffFlash();
+}
+
+// The staged flush, copied out under the lock; false when there is none to
+// write now.
+static bool takeFlush(uint8_t*& buf, size_t& len, String& rev, String& heldFor) {
+  ImgLock lock;
+  if (!flushPending) return false;
+  if (relayClaims > 0) return false;  // don't rewrite the file a row is reading
+  buf = flushBuf;
+  len = flushLen;
+  rev = flushRev;
+  heldFor = flushHeldFor;
+  return true;
+}
+
+// The buffer is what was uploaded and checked: its facts need no read-back.
+static FollowerImageFacts factsOfBuffer(const uint8_t* buf, size_t len) {
   FollowerImageFacts written;
   written.size = (uint32_t)len;
   written.packed = imageIsPacked(buf, len);
-  {
-    MD5Builder md5;
-    md5.begin();
-    md5.add(buf, len);
-    md5.calculate();
-    md5.getBytes(written.md5);
-  }
+  MD5Builder md5;
+  md5.begin();
+  md5.add(buf, len);
+  md5.calculate();
+  md5.getBytes(written.md5);
+  return written;
+}
 
-  bool ok = false;
-  bool revOk = false;
-  // The hold goes first and the image last: a restart in between leaves the
-  // old image held, never the new one on offer before its master runs.
+// The hold goes first and the image last: a restart in between leaves the
+// old image held, never the new one on offer before its master runs.
+static bool writeHoldAndImage(const uint8_t* buf, size_t len, const String& heldFor) {
   bool holdOk = true;
   if (heldFor.length() > 0) {
     File hf = LittleFS.open(FOLLOWER_IMAGE_HOLD_PATH, FILE_WRITE);
     holdOk = hf && hf.print(heldFor) == heldFor.length();
     if (hf) hf.close();
   }
+  bool ok = false;
   File f;
   if (holdOk) f = LittleFS.open(FOLLOWER_IMAGE_PATH, FILE_WRITE);
   if (f) {
     ok = (f.write(buf, len) == len);
     f.close();
   }
-  if (ok && heldFor.length() == 0) LittleFS.remove(FOLLOWER_IMAGE_HOLD_PATH);
-  if (ok) {
-    File rf = LittleFS.open(FOLLOWER_IMAGE_REV_PATH, FILE_WRITE);
-    if (rf) {
-      revOk = (rf.print(rev) == rev.length());
-      rf.close();
-    }
-    if (!revOk) LittleFS.remove(FOLLOWER_IMAGE_REV_PATH);  // no half-rev
-    SerialPrintf("FollowerImageStore: stored %u bytes, rev %s\n",
-                 (unsigned)len, revOk ? rev.c_str() : "(unknown — rev write failed)");
-  } else {
+  return ok;
+}
+
+static bool writeRev(const String& rev) {
+  bool revOk = false;
+  File rf = LittleFS.open(FOLLOWER_IMAGE_REV_PATH, FILE_WRITE);
+  if (rf) {
+    revOk = (rf.print(rev) == rev.length());
+    rf.close();
+  }
+  if (!revOk) LittleFS.remove(FOLLOWER_IMAGE_REV_PATH);  // no half-rev
+  return revOk;
+}
+
+// Writes the flush to flash; `revOk` says whether its rev file made it too.
+static bool writeFlush(const uint8_t* buf, size_t len, const String& rev,
+                       const String& heldFor, bool& revOk) {
+  revOk = false;
+  if (!writeHoldAndImage(buf, len, heldFor)) {
     SerialPrintln(F("FollowerImageStore: flash write failed"));
     LittleFS.remove(FOLLOWER_IMAGE_PATH);  // no torn image left bootable
     LittleFS.remove(FOLLOWER_IMAGE_REV_PATH);
     LittleFS.remove(FOLLOWER_IMAGE_HOLD_PATH);
+    return false;
   }
-  if (ok && heldFor.length() > 0) {
+  if (heldFor.length() == 0) LittleFS.remove(FOLLOWER_IMAGE_HOLD_PATH);
+  revOk = writeRev(rev);
+  SerialPrintf("FollowerImageStore: stored %u bytes, rev %s\n",
+               (unsigned)len, revOk ? rev.c_str() : "(unknown — rev write failed)");
+  if (heldFor.length() > 0) {
     SerialPrintln("FollowerImageStore: held until this master runs " + heldFor);
   }
+  return true;
+}
+
+void followerImageFlushTick() {
+  if (imgMutex == nullptr) return;
+  reclaimStalledUpload();
+  removeSpentHold();
+  readOwedFacts();
+  uint8_t* buf = nullptr;
+  size_t len = 0;
+  String rev;
+  String heldFor;
+  if (!takeFlush(buf, len, rev, heldFor)) return;
+
+  FollowerImageFacts written = factsOfBuffer(buf, len);
+  bool revOk = false;
+  const bool ok = writeFlush(buf, len, rev, heldFor, revOk);
 
   ImgLock lock;
   free(flushBuf);

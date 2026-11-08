@@ -599,6 +599,64 @@ static void test_apply_persists_the_release_settings() {
   TEST_ASSERT_EQUAL_STRING("test", loadSettings(store).releaseChannel.c_str());
 }
 
+// --- the String field table (#663) -------------------------------------------
+
+// Each table row stages into its own member and flag, and only there.
+static void test_each_string_field_stages_into_its_own_member() {
+  struct Case {
+    const char* name;
+    const char* value;
+    String PendingSettingsPost::*member;
+    bool PendingSettingsPost::*provided;
+  };
+  using P = PendingSettingsPost;
+  const Case cases[] = {
+      {PARAM_ALIGNMENT, "center", &P::alignment, &P::alignmentProvided},
+      {PARAM_FLAP_SPEED, "50", &P::flapSpeed, &P::flapSpeedProvided},
+      {PARAM_DEVICEMODE, "clock", &P::deviceMode, &P::deviceModeProvided},
+      {PARAM_INPUT_TEXT, "HI", &P::inputText, &P::inputTextProvided},
+      {PARAM_TRANSIENT_TEXT, "YO", &P::transientText, &P::transientTextProvided},
+      {PARAM_TIMEZONE, "UTC0", &P::timezone, &P::timezoneProvided},
+      {PARAM_MQTT_HOST, "broker", &P::mqttHost, &P::mqttHostProvided},
+      {PARAM_MQTT_USER, "user", &P::mqttUser, &P::mqttUserProvided},
+      {PARAM_MQTT_PORT, "1883", &P::mqttPort, &P::mqttPortProvided},
+      {PARAM_WIFI_POWER_SAVE, "false", &P::wifiPowerSave, &P::wifiPowerSaveProvided},
+      {PARAM_REFLASH_ON_BOOT, "false", &P::reflashOnBoot, &P::reflashOnBootProvided},
+      {PARAM_QUIET, "true", &P::quiet, &P::quietProvided},
+      {PARAM_RELEASE_CHECK, "false", &P::releaseCheck, &P::releaseCheckProvided},
+      {PARAM_RELEASE_CHANNEL, "test", &P::releaseChannel, &P::releaseChannelProvided},
+      {PARAM_UNIT_COUNT, "4", &P::unitCount, &P::unitCountProvided},
+  };
+  for (const Case& c : cases) {
+    TEST_ASSERT_NOT_NULL_MESSAGE(findSettingsStringField(c.name), c.name);
+    PendingSettingsPost post;
+    TEST_ASSERT_EQUAL_MESSAGE((int)SettingsParamResult::Accepted,
+                              (int)stageSettingsParam(post, c.name, c.value), c.name);
+    TEST_ASSERT_TRUE_MESSAGE(post.*c.provided, c.name);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(c.value, (post.*c.member).c_str(), c.name);
+    // No other flag of the table was set.
+    for (const Case& other : cases) {
+      if (other.provided == c.provided) continue;
+      TEST_ASSERT_FALSE_MESSAGE(post.*other.provided, other.name);
+    }
+  }
+}
+
+static void test_the_special_fields_and_strangers_are_not_in_the_table() {
+  const char* notInTable[] = {PARAM_TRANSIENT_DWELL, PARAM_TRANSIENT_HOLD, PARAM_TEXT_PRIORITY,
+                              PARAM_DEVICE_NAME, PARAM_MQTT_PASSWORD, "bogus", ""};
+  for (const char* name : notInTable) {
+    TEST_ASSERT_NULL_MESSAGE(findSettingsStringField(name), name);
+  }
+}
+
+static void test_a_strict_flag_is_exactly_true_or_false() {
+  TEST_ASSERT_TRUE(isStrictSettingsFlag("true"));
+  TEST_ASSERT_TRUE(isStrictSettingsFlag("false"));
+  const char* near[] = {"", "TRUE", "True", "1", "0", "yes", " true", "true "};
+  for (const char* v : near) TEST_ASSERT_FALSE_MESSAGE(isStrictSettingsFlag(v), v);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_unknown_param_is_ignored);
@@ -648,5 +706,8 @@ int main(int, char**) {
   RUN_TEST(test_the_release_look_defaults_on_and_to_the_stable_channel);
   RUN_TEST(test_the_release_settings_take_only_their_values);
   RUN_TEST(test_apply_persists_the_release_settings);
+  RUN_TEST(test_each_string_field_stages_into_its_own_member);
+  RUN_TEST(test_the_special_fields_and_strangers_are_not_in_the_table);
+  RUN_TEST(test_a_strict_flag_is_exactly_true_or_false);
   return UNITY_END();
 }

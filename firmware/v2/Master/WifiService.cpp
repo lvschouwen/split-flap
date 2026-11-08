@@ -524,6 +524,166 @@ String wifiServiceUrl() {
   return "http://" + WiFi.localIP().toString() + "/";
 }
 
+// A reset-wifi request: erase the credentials and reboot into the portal.
+static void consumeStagedReset(bool doReset) {
+  if (!doReset || restartPending) return;
+  clearWifiCredentials(*settingsStore);
+  SerialPrintln(F("WiFi credentials erased."));
+  scheduleRestart(F("reset-wifi — next boot opens the setup portal"));
+  StageLock lock;
+  resetStaged = false;  // consumed — must not replay if a restart is ever cancelled
+}
+
+// The join/portal policy, stepped while no restart is pending.
+static void policyTick(bool submitted, const String& ssid, const String& pass) {
+  if (restartPending) return;
+  WifiAction action =
+      wifiPolicyStep(policy, millis(), WiFi.status() == WL_CONNECTED,
+                     liveSettings->wifiSsid.length() > 0, submitted);
+  if ((action == WifiAction::RetryJoin || action == WifiAction::Reboot) &&
+      !wifiRestartMayProceed(action, policy.phase,
+                             reflashInProgress(displaySnapshotGet().reflash))) {
+    action = WifiAction::None;  // asked again next tick, once the job is done
+  }
+  switch (action) {
+    case WifiAction::StartJoin:
+      startJoin();
+      break;
+    case WifiAction::StartPortal:
+      startPortal();
+      break;
+    case WifiAction::StartOnline:
+      startOnline();
+      break;
+    case WifiAction::RetryJoin: {
+      uint8_t attempt = (uint8_t)(policy.failedJoinBoots + 1);
+      wifiJoinRetryEncode(joinRetry, attempt);
+      uint8_t reason = lastJoinDisconnectReason.load(std::memory_order_relaxed);
+      scheduleRestart(String(F("WiFi join failed (attempt ")) + String(attempt) + F(" of ") +
+                      String(WIFI_JOIN_ATTEMPTS) + F(", last disconnect reason ") +
+                      (reason == 0 ? String(F("none")) : String(reason)) +
+                      F(") — rebooting to retry"));
+      break;
+    }
+    case WifiAction::SaveAndReboot: {
+      saveWifiCredentials(*settingsStore, ssid, pass);
+      scheduleRestart(F("new WiFi configuration saved"));
+      StageLock lock;
+      configStaged = false;  // consumed, same rationale as resetStaged
+      break;
+    }
+    case WifiAction::Reboot:
+      // Same action, two origins: a Connected-phase Reboot is the #328
+      // reconnect watchdog (link wedged after an AP power-cycle); otherwise
+      // it is the portal-timeout retry. Distinguish them in the log.
+      scheduleRestart(policy.phase == WifiPhase::Connected
+                          ? F("WiFi link lost too long — rebooting to re-join (#328)")
+                          : F("setup portal timed out — retrying stored WiFi"));
+      break;
+    case WifiAction::None:
+      break;
+  }
+}
+
+static String livenessRestartAfterText() {
+  return String(F(") — restart after ")) +
+         String((unsigned long)(netLivenessThresholdMs(netLivenessStrikes()) / 60000UL)) +
+         F(" min of it");
+}
+
+static void logLivenessFlip(const NetLivenessState& liveness, bool wasBad) {
+  bool isBad = liveness.gateway.bad || liveness.self.bad;
+  if (isBad == wasBad) return;
+  SerialPrintln(isBad ? String(F("net: liveness probe failing (")) +
+                            (liveness.gateway.bad ? F("gateway") : F("own server")) +
+                            livenessRestartAfterText()
+                      : String(F("net: liveness probes passing again")));
+}
+
+// #628: silence past the stale window is worth a line of its own — the
+// next 28-hour freeze should at least say what the prober was doing.
+static void logLivenessNoEvidence(const NetLivenessState& liveness, uint32_t now) {
+  static bool noEvidenceLogged = false;
+  if (liveness.noEvidenceSinceMs == 0) {
+    noEvidenceLogged = false;
+  } else if (!noEvidenceLogged &&
+             now - liveness.noEvidenceSinceMs >= NET_LIVENESS_PROBE_STALE_MS) {
+    noEvidenceLogged = true;
+    SerialPrintln(String(F("net: the liveness probes give no result (")) + netLivenessJson() +
+                  livenessRestartAfterText());
+  }
+}
+
+// A gateway that never answers on the probed port leaves that half of
+// the check inert. Say so once, or nobody would know.
+static void logGatewayInert(const NetLivenessState& liveness, bool linkUp, uint32_t now) {
+  static bool gatewayInertLogged = false;
+  static uint32_t linkUpSinceMs = 0;
+  if (!linkUp) {
+    linkUpSinceMs = 0;
+  } else if (linkUpSinceMs == 0) {
+    linkUpSinceMs = now | 1;
+  } else if (!gatewayInertLogged && !liveness.gateway.seenOk &&
+             now - linkUpSinceMs >= 5UL * 60UL * 1000UL) {
+    gatewayInertLogged = true;
+    SerialPrintln(F("net: the gateway does not answer a TCP connect on port "
+                    "80 — the liveness watchdog cannot see a dead radio path"));
+  }
+}
+
+// #501: is traffic actually moving while the link says it is up? Once a
+// second; the probes themselves run on workerTask.
+static void livenessTick() {
+  static uint32_t livenessNextMs = 0;
+  static NetLivenessState liveness;
+  const bool due = !restartPending && (int32_t)(millis() - livenessNextMs) >= 0;
+  if (!due) return;
+  uint32_t now = millis();
+  livenessNextMs = now + 1000;
+  bool linkUp = policy.phase == WifiPhase::Connected && WiFi.status() == WL_CONNECTED;
+  bool wasBad = liveness.gateway.bad || liveness.self.bad;
+  // #628: an upload or a release install pauses the probes on purpose
+  // (the install runs on the worker, the prober's own task).
+  NetLivenessVerdict v =
+      netLivenessStep(liveness, linkUp, netLivenessGateway(now), netLivenessSelf(now), now,
+                      netLivenessStrikes(), Update.isRunning() || releaseUpdateRunning());
+  logLivenessFlip(liveness, wasBad);
+  logLivenessNoEvidence(liveness, now);
+  if (v.clearStrikes && netLivenessStrikes() > 0) netLivenessClearStrikes();
+  logGatewayInert(liveness, linkUp, now);
+  // Never under a job a restart would cut in half; the verdict stands and
+  // is acted on once the job is done.
+  bool restartWouldCutAJob =
+      Update.isRunning() || reflashInProgress(displaySnapshotGet().reflash);
+  if (v.reboot != NetLivenessCause::None && !restartWouldCutAJob) {
+    netLivenessAddStrike();
+    scheduleRestart(String(F("network liveness: ")) + netLivenessCauseText(v.reboot) +
+                    F(" (#501)"));
+  }
+}
+
+// #507: the TX ladder, once a second. Boot has no radio to set yet.
+static void txLadderTick() {
+  if (policy.phase == WifiPhase::Boot || (int32_t)(millis() - txNextStepMs) < 0) return;
+  txNextStepMs = millis() + 1000;
+  txPowerStep(policy.phase == WifiPhase::Connected ? WifiTxPhase::Online
+              : policy.phase == WifiPhase::Portal  ? WifiTxPhase::Portal
+                                                   : WifiTxPhase::Joining);
+}
+
+// #328: publish the event-task re-kick gate (atomic hand-off) — we only want
+// the STA-disconnect handler firing while Connected and not mid-reboot.
+static void publishRadioGates() {
+  staReconnectWanted.store(policy.phase == WifiPhase::Connected && !restartPending,
+                           std::memory_order_relaxed);
+  bool linkUp = WiFi.status() == WL_CONNECTED;
+  radioBusyFlag.store(policy.phase == WifiPhase::Boot ||
+                          policy.phase == WifiPhase::Joining ||
+                          (policy.phase == WifiPhase::Connected && !linkUp) ||
+                          Update.isRunning(),
+                      std::memory_order_relaxed);
+}
+
 void wifiServiceTick() {
   ip6Tick();  // #612
   powerSaveTick();
@@ -544,157 +704,15 @@ void wifiServiceTick() {
     pass = stagedPass;
   }
 
-  if (doReset && !restartPending) {
-    clearWifiCredentials(*settingsStore);
-    SerialPrintln(F("WiFi credentials erased."));
-    scheduleRestart(F("reset-wifi — next boot opens the setup portal"));
-    StageLock lock;
-    resetStaged = false;  // consumed — must not replay if a restart is ever cancelled
-  }
-
-  if (!restartPending) {
-    WifiAction action =
-        wifiPolicyStep(policy, millis(), WiFi.status() == WL_CONNECTED,
-                       liveSettings->wifiSsid.length() > 0, submitted);
-    if ((action == WifiAction::RetryJoin || action == WifiAction::Reboot) &&
-        !wifiRestartMayProceed(
-            action, policy.phase,
-            reflashInProgress(displaySnapshotGet().reflash))) {
-      action = WifiAction::None;  // asked again next tick, once the job is done
-    }
-    switch (action) {
-      case WifiAction::StartJoin:
-        startJoin();
-        break;
-      case WifiAction::StartPortal:
-        startPortal();
-        break;
-      case WifiAction::StartOnline:
-        startOnline();
-        break;
-      case WifiAction::RetryJoin: {
-        uint8_t attempt = (uint8_t)(policy.failedJoinBoots + 1);
-        wifiJoinRetryEncode(joinRetry, attempt);
-        uint8_t reason =
-            lastJoinDisconnectReason.load(std::memory_order_relaxed);
-        scheduleRestart(
-            String(F("WiFi join failed (attempt ")) + String(attempt) +
-            F(" of ") + String(WIFI_JOIN_ATTEMPTS) +
-            F(", last disconnect reason ") +
-            (reason == 0 ? String(F("none")) : String(reason)) +
-            F(") — rebooting to retry"));
-        break;
-      }
-      case WifiAction::SaveAndReboot: {
-        saveWifiCredentials(*settingsStore, ssid, pass);
-        scheduleRestart(F("new WiFi configuration saved"));
-        StageLock lock;
-        configStaged = false;  // consumed, same rationale as resetStaged
-        break;
-      }
-      case WifiAction::Reboot:
-        // Same action, two origins: a Connected-phase Reboot is the #328
-        // reconnect watchdog (link wedged after an AP power-cycle); otherwise
-        // it is the portal-timeout retry. Distinguish them in the log.
-        scheduleRestart(policy.phase == WifiPhase::Connected
-                            ? F("WiFi link lost too long — rebooting to re-join (#328)")
-                            : F("setup portal timed out — retrying stored WiFi"));
-        break;
-      case WifiAction::None:
-        break;
-    }
-  }
-
-  // #501: is traffic actually moving while the link says it is up? Once a
-  // second; the probes themselves run on workerTask.
-  static uint32_t livenessNextMs = 0;
-  static NetLivenessState liveness;
-  if (!restartPending && (int32_t)(millis() - livenessNextMs) >= 0) {
-    uint32_t now = millis();
-    livenessNextMs = now + 1000;
-    bool linkUp = policy.phase == WifiPhase::Connected &&
-                  WiFi.status() == WL_CONNECTED;
-    bool wasBad = liveness.gateway.bad || liveness.self.bad;
-    // #628: an upload or a release install pauses the probes on purpose
-    // (the install runs on the worker, the prober's own task).
-    NetLivenessVerdict v =
-        netLivenessStep(liveness, linkUp, netLivenessGateway(now),
-                        netLivenessSelf(now), now, netLivenessStrikes(),
-                        Update.isRunning() || releaseUpdateRunning());
-    bool isBad = liveness.gateway.bad || liveness.self.bad;
-    if (isBad != wasBad) {
-      SerialPrintln(isBad ? String(F("net: liveness probe failing (")) +
-                                (liveness.gateway.bad ? F("gateway") : F("own server")) +
-                                F(") — restart after ") +
-                                String((unsigned long)(netLivenessThresholdMs(
-                                           netLivenessStrikes()) / 60000UL)) +
-                                F(" min of it")
-                          : String(F("net: liveness probes passing again")));
-    }
-    // #628: silence past the stale window is worth a line of its own — the
-    // next 28-hour freeze should at least say what the prober was doing.
-    static bool noEvidenceLogged = false;
-    if (liveness.noEvidenceSinceMs == 0) {
-      noEvidenceLogged = false;
-    } else if (!noEvidenceLogged &&
-               now - liveness.noEvidenceSinceMs >= NET_LIVENESS_PROBE_STALE_MS) {
-      noEvidenceLogged = true;
-      SerialPrintln(String(F("net: the liveness probes give no result (")) +
-                    netLivenessJson() + F(") — restart after ") +
-                    String((unsigned long)(netLivenessThresholdMs(
-                               netLivenessStrikes()) / 60000UL)) +
-                    F(" min of it"));
-    }
-    if (v.clearStrikes && netLivenessStrikes() > 0) netLivenessClearStrikes();
-    // A gateway that never answers on the probed port leaves that half of
-    // the check inert. Say so once, or nobody would know.
-    static bool gatewayInertLogged = false;
-    static uint32_t linkUpSinceMs = 0;
-    if (!linkUp) {
-      linkUpSinceMs = 0;
-    } else if (linkUpSinceMs == 0) {
-      linkUpSinceMs = now | 1;
-    } else if (!gatewayInertLogged && !liveness.gateway.seenOk &&
-               now - linkUpSinceMs >= 5UL * 60UL * 1000UL) {
-      gatewayInertLogged = true;
-      SerialPrintln(F("net: the gateway does not answer a TCP connect on port "
-                      "80 — the liveness watchdog cannot see a dead radio path"));
-    }
-    // Never under a job a restart would cut in half; the verdict stands and
-    // is acted on once the job is done.
-    bool restartWouldCutAJob =
-        Update.isRunning() || reflashInProgress(displaySnapshotGet().reflash);
-    if (v.reboot != NetLivenessCause::None && !restartWouldCutAJob) {
-      netLivenessAddStrike();
-      scheduleRestart(String(F("network liveness: ")) +
-                      netLivenessCauseText(v.reboot) + F(" (#501)"));
-    }
-  }
-
-  // #507: the TX ladder, once a second. Boot has no radio to set yet.
-  if (policy.phase != WifiPhase::Boot &&
-      (int32_t)(millis() - txNextStepMs) >= 0) {
-    txNextStepMs = millis() + 1000;
-    txPowerStep(policy.phase == WifiPhase::Connected
-                    ? WifiTxPhase::Online
-                    : policy.phase == WifiPhase::Portal ? WifiTxPhase::Portal
-                                                        : WifiTxPhase::Joining);
-  }
+  consumeStagedReset(doReset);
+  policyTick(submitted, ssid, pass);
+  livenessTick();
+  txLadderTick();
 
   if (restartPending && millis() - restartRequestedAtMs > RESTART_GRACE_MS) {
     Serial.flush();
     ESP.restart();
   }
 
-  // #328: publish the event-task re-kick gate (atomic hand-off) — we only want
-  // the STA-disconnect handler firing while Connected and not mid-reboot.
-  staReconnectWanted.store(
-      policy.phase == WifiPhase::Connected && !restartPending,
-      std::memory_order_relaxed);
-  bool linkUp = WiFi.status() == WL_CONNECTED;
-  radioBusyFlag.store(policy.phase == WifiPhase::Boot ||
-                          policy.phase == WifiPhase::Joining ||
-                          (policy.phase == WifiPhase::Connected && !linkUp) ||
-                          Update.isRunning(),
-                      std::memory_order_relaxed);
+  publishRadioGates();
 }

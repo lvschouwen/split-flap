@@ -81,206 +81,139 @@ enum class SettingsParamResult {
   Invalid,   // known field, failed validation — reject the whole POST
 };
 
+// The fields that stage as a String: the name, where the value and its
+// provided flag live, whether the value is trimmed first, and its validator
+// (nullptr = any value).
+struct SettingsStringField {
+  const char* name;
+  String PendingSettingsPost::*value;
+  bool PendingSettingsPost::*provided;
+  bool trim;
+  bool (*valid)(const String&);
+};
+
+// #412/#227/#583/#609: strictly "true"/"false" — a bare presence check or a
+// truthy-string rule would let a typo silently disarm the unattended
+// recovery path (#412), silence or wake the wall (#227), or flip the daily
+// look (#583).
+inline bool isStrictSettingsFlag(const String& v) { return v == "true" || v == "false"; }
+inline bool isValidTimezoneParam(const String& v) { return isValidTimezoneValue(v, LEN_TIMEZONE); }
+inline bool isValidMqttHostParam(const String& v) { return isValidMqttHostOrUserValue(v, LEN_MQTT_HOST); }
+inline bool isValidMqttUserParam(const String& v) { return isValidMqttHostOrUserValue(v, LEN_MQTT_USER); }
+inline bool isValidMqttPortParam(const String& v) { return isValidMqttPortValue(v, LEN_MQTT_PORT); }
+inline bool isValidAlignmentParam(const String& v) { return isValidAlignmentValue(v); }
+inline bool isValidFlapSpeedParam(const String& v) { return isValidFlapSpeedValue(v); }
+inline bool isValidDeviceModeParam(const String& v) { return isValidDeviceModeValue(v); }
+inline bool isValidReleaseChannelParam(const String& v) { return isValidReleaseChannelValue(v); }
+inline bool isValidUnitCountParam(const String& v) { return isValidUnitCountOverrideValue(v); }
+
+inline const SettingsStringField* findSettingsStringField(const String& name) {
+  using P = PendingSettingsPost;
+  static const SettingsStringField fields[] = {
+      {PARAM_ALIGNMENT, &P::alignment, &P::alignmentProvided, false, isValidAlignmentParam},
+      {PARAM_FLAP_SPEED, &P::flapSpeed, &P::flapSpeedProvided, false, isValidFlapSpeedParam},
+      {PARAM_DEVICEMODE, &P::deviceMode, &P::deviceModeProvided, false, isValidDeviceModeParam},
+      {PARAM_INPUT_TEXT, &P::inputText, &P::inputTextProvided, false, nullptr},
+      {PARAM_TRANSIENT_TEXT, &P::transientText, &P::transientTextProvided, false, nullptr},
+      {PARAM_TIMEZONE, &P::timezone, &P::timezoneProvided, false, isValidTimezoneParam},
+      {PARAM_MQTT_HOST, &P::mqttHost, &P::mqttHostProvided, true, isValidMqttHostParam},
+      {PARAM_MQTT_USER, &P::mqttUser, &P::mqttUserProvided, true, isValidMqttUserParam},
+      {PARAM_MQTT_PORT, &P::mqttPort, &P::mqttPortProvided, true, isValidMqttPortParam},
+      {PARAM_WIFI_POWER_SAVE, &P::wifiPowerSave, &P::wifiPowerSaveProvided, true, isStrictSettingsFlag},
+      {PARAM_REFLASH_ON_BOOT, &P::reflashOnBoot, &P::reflashOnBootProvided, true, isStrictSettingsFlag},
+      {PARAM_QUIET, &P::quiet, &P::quietProvided, true, isStrictSettingsFlag},
+      {PARAM_RELEASE_CHECK, &P::releaseCheck, &P::releaseCheckProvided, true, isStrictSettingsFlag},
+      {PARAM_RELEASE_CHANNEL, &P::releaseChannel, &P::releaseChannelProvided, false, isValidReleaseChannelParam},
+      {PARAM_UNIT_COUNT, &P::unitCount, &P::unitCountProvided, true, isValidUnitCountParam},
+  };
+  for (const SettingsStringField& field : fields) {
+    if (name == field.name) return &field;
+  }
+  return nullptr;
+}
+
+inline SettingsParamResult stageSettingsStringField(PendingSettingsPost& post,
+                                                    const SettingsStringField& field,
+                                                    const String& rawValue) {
+  String value = rawValue;
+  if (field.trim) value.trim();
+  if (field.valid != nullptr && !field.valid(value)) return SettingsParamResult::Invalid;
+  post.*field.value = value;
+  post.*field.provided = true;
+  return SettingsParamResult::Accepted;
+}
+
+inline SettingsParamResult stageTransientDwell(PendingSettingsPost& post, const String& rawValue) {
+  String trimmed = rawValue;
+  trimmed.trim();
+  if (!isValidTransientDwellValue(trimmed)) return SettingsParamResult::Invalid;
+  post.transientDwell = trimmed.toInt();
+  post.transientDwellProvided = true;
+  return SettingsParamResult::Accepted;
+}
+
+// #616: strictly "true"/"false", like every flag.
+inline SettingsParamResult stageTransientHold(PendingSettingsPost& post, const String& rawValue) {
+  String trimmed = rawValue;
+  trimmed.trim();
+  if (!isStrictSettingsFlag(trimmed)) return SettingsParamResult::Invalid;
+  post.transientHold = trimmed == "true";
+  post.transientHoldProvided = true;
+  return SettingsParamResult::Accepted;
+}
+
+// #625: a whole number 0..TEXT_PRIORITY_MAX, digits only.
+inline SettingsParamResult stageTextPriority(PendingSettingsPost& post, const String& rawValue) {
+  String trimmed = rawValue;
+  trimmed.trim();
+  if (trimmed.length() == 0 || trimmed.length() > 3) return SettingsParamResult::Invalid;
+  for (unsigned int i = 0; i < trimmed.length(); i++) {
+    if (trimmed[i] < '0' || trimmed[i] > '9') return SettingsParamResult::Invalid;
+  }
+  const long value = trimmed.toInt();
+  if (value > TEXT_PRIORITY_MAX) return SettingsParamResult::Invalid;
+  post.textPriority = value;
+  post.textPriorityProvided = true;
+  return SettingsParamResult::Accepted;
+}
+
+inline SettingsParamResult stageDeviceName(PendingSettingsPost& post, const String& rawValue) {
+  String normalized = normalizeDeviceName(rawValue);
+  // Empty is valid and means "reset to the chip-id default" (#125).
+  if (normalized.length() > 0 && !isValidDeviceName(normalized)) {
+    return SettingsParamResult::Invalid;
+  }
+  post.deviceName = normalized;
+  post.deviceNameProvided = true;
+  return SettingsParamResult::Accepted;
+}
+
+inline SettingsParamResult stageMqttPassword(PendingSettingsPost& post, const String& rawValue) {
+  // Write-only (#57): an empty field means "keep the stored one" and is
+  // deliberately NOT treated as provided.
+  if (rawValue.length() == 0) return SettingsParamResult::Ignored;
+  if (!isValidMqttPasswordValue(rawValue, LEN_MQTT_PASSWORD)) {
+    return SettingsParamResult::Invalid;
+  }
+  post.mqttPassword = rawValue;
+  post.mqttPasswordProvided = true;
+  return SettingsParamResult::Accepted;
+}
+
 // Validate one POST parameter and stage it into `post`. Normalization
-// mirrors v1: MQTT host/user/port and the dwell are trimmed before
-// validation, the device name is lowercased via normalizeDeviceName().
+// mirrors v1: MQTT host/user/port, the unit count, the flags and the dwell
+// are trimmed before validation, the device name is lowercased via
+// normalizeDeviceName().
 inline SettingsParamResult stageSettingsParam(PendingSettingsPost& post,
                                               const String& name,
                                               const String& rawValue) {
-  if (name == PARAM_ALIGNMENT) {
-    if (!isValidAlignmentValue(rawValue)) return SettingsParamResult::Invalid;
-    post.alignment = rawValue;
-    post.alignmentProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_FLAP_SPEED) {
-    if (!isValidFlapSpeedValue(rawValue)) return SettingsParamResult::Invalid;
-    post.flapSpeed = rawValue;
-    post.flapSpeedProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_DEVICEMODE) {
-    if (!isValidDeviceModeValue(rawValue)) return SettingsParamResult::Invalid;
-    post.deviceMode = rawValue;
-    post.deviceModeProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_INPUT_TEXT) {
-    post.inputText = rawValue;
-    post.inputTextProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_TRANSIENT_TEXT) {
-    post.transientText = rawValue;
-    post.transientTextProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_TRANSIENT_DWELL) {
-    String trimmed = rawValue;
-    trimmed.trim();
-    if (!isValidTransientDwellValue(trimmed)) return SettingsParamResult::Invalid;
-    post.transientDwell = trimmed.toInt();
-    post.transientDwellProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  // #616: strictly "true"/"false", like every flag below.
-  if (name == PARAM_TRANSIENT_HOLD) {
-    String trimmed = rawValue;
-    trimmed.trim();
-    if (trimmed != "true" && trimmed != "false") return SettingsParamResult::Invalid;
-    post.transientHold = trimmed == "true";
-    post.transientHoldProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  // #625: a whole number 0..MQTT_TEXT_PRIORITY_MAX, digits only.
-  if (name == PARAM_TEXT_PRIORITY) {
-    String trimmed = rawValue;
-    trimmed.trim();
-    if (trimmed.length() == 0 || trimmed.length() > 3) return SettingsParamResult::Invalid;
-    for (unsigned int i = 0; i < trimmed.length(); i++) {
-      if (trimmed[i] < '0' || trimmed[i] > '9') return SettingsParamResult::Invalid;
-    }
-    const long value = trimmed.toInt();
-    if (value > TEXT_PRIORITY_MAX) return SettingsParamResult::Invalid;
-    post.textPriority = value;
-    post.textPriorityProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_TIMEZONE) {
-    if (!isValidTimezoneValue(rawValue, LEN_TIMEZONE)) {
-      return SettingsParamResult::Invalid;
-    }
-    post.timezone = rawValue;
-    post.timezoneProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_DEVICE_NAME) {
-    String normalized = normalizeDeviceName(rawValue);
-    // Empty is valid and means "reset to the chip-id default" (#125).
-    if (normalized.length() > 0 && !isValidDeviceName(normalized)) {
-      return SettingsParamResult::Invalid;
-    }
-    post.deviceName = normalized;
-    post.deviceNameProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_MQTT_HOST || name == PARAM_MQTT_USER) {
-    bool isHost = name == PARAM_MQTT_HOST;
-    String trimmed = rawValue;
-    trimmed.trim();
-    if (!isValidMqttHostOrUserValue(trimmed,
-                                    isHost ? LEN_MQTT_HOST : LEN_MQTT_USER)) {
-      return SettingsParamResult::Invalid;
-    }
-    if (isHost) { post.mqttHost = trimmed; post.mqttHostProvided = true; }
-    else        { post.mqttUser = trimmed; post.mqttUserProvided = true; }
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_MQTT_PORT) {
-    String trimmed = rawValue;
-    trimmed.trim();
-    if (!isValidMqttPortValue(trimmed, LEN_MQTT_PORT)) {
-      return SettingsParamResult::Invalid;
-    }
-    post.mqttPort = trimmed;
-    post.mqttPortProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  // #609 WiFi power save, strictly "true"/"false".
-  if (name == PARAM_WIFI_POWER_SAVE) {
-    String trimmed = rawValue;
-    trimmed.trim();
-    if (trimmed != "true" && trimmed != "false") {
-      return SettingsParamResult::Invalid;
-    }
-    post.wifiPowerSave = trimmed;
-    post.wifiPowerSaveProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  // #412 boot auto-install brake. Strictly "true"/"false" — a bare presence
-  // check or a truthy-string rule would make a typo silently disarm the
-  // unattended recovery path, which is the failure this setting exists to
-  // make deliberate.
-  if (name == PARAM_REFLASH_ON_BOOT) {
-    String trimmed = rawValue;
-    trimmed.trim();
-    if (trimmed != "true" && trimmed != "false") {
-      return SettingsParamResult::Invalid;
-    }
-    post.reflashOnBoot = trimmed;
-    post.reflashOnBootProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  // #227: the same strict rule — a typo must not silence or wake the wall.
-  if (name == PARAM_QUIET) {
-    String trimmed = rawValue;
-    trimmed.trim();
-    if (trimmed != "true" && trimmed != "false") {
-      return SettingsParamResult::Invalid;
-    }
-    post.quiet = trimmed;
-    post.quietProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  // #583: the same strict rule for the daily look.
-  if (name == PARAM_RELEASE_CHECK) {
-    String trimmed = rawValue;
-    trimmed.trim();
-    if (trimmed != "true" && trimmed != "false") {
-      return SettingsParamResult::Invalid;
-    }
-    post.releaseCheck = trimmed;
-    post.releaseCheckProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_RELEASE_CHANNEL) {
-    if (!isValidReleaseChannelValue(rawValue)) {
-      return SettingsParamResult::Invalid;
-    }
-    post.releaseChannel = rawValue;
-    post.releaseChannelProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_UNIT_COUNT) {
-    String trimmed = rawValue;
-    trimmed.trim();
-    if (!isValidUnitCountOverrideValue(trimmed)) {
-      return SettingsParamResult::Invalid;
-    }
-    post.unitCount = trimmed;
-    post.unitCountProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
-  if (name == PARAM_MQTT_PASSWORD) {
-    // Write-only (#57): an empty field means "keep the stored one" and is
-    // deliberately NOT treated as provided.
-    if (rawValue.length() == 0) return SettingsParamResult::Ignored;
-    if (!isValidMqttPasswordValue(rawValue, LEN_MQTT_PASSWORD)) {
-      return SettingsParamResult::Invalid;
-    }
-    post.mqttPassword = rawValue;
-    post.mqttPasswordProvided = true;
-    return SettingsParamResult::Accepted;
-  }
-
+  const SettingsStringField* field = findSettingsStringField(name);
+  if (field != nullptr) return stageSettingsStringField(post, *field, rawValue);
+  if (name == PARAM_TRANSIENT_DWELL) return stageTransientDwell(post, rawValue);
+  if (name == PARAM_TRANSIENT_HOLD) return stageTransientHold(post, rawValue);
+  if (name == PARAM_TEXT_PRIORITY) return stageTextPriority(post, rawValue);
+  if (name == PARAM_DEVICE_NAME) return stageDeviceName(post, rawValue);
+  if (name == PARAM_MQTT_PASSWORD) return stageMqttPassword(post, rawValue);
   return SettingsParamResult::Ignored;
 }
 
@@ -351,82 +284,48 @@ inline void resetSettingsPost(PendingSettingsPost& post) {
   post = PendingSettingsPost();
 }
 
-// Drain the staged post into the live settings + store. Runs from loop()
-// context only. Persistence mirrors v1's applyPendingSettingsPost(): each
-// provided-and-changed field updates the live struct and its NVS key;
-// unchanged values don't touch flash. Display-bound fields (inputText,
-// transientText) are NOT consumed here — the caller reads them off the post
-// before calling. Clears the post afterwards, secrets included.
-inline void applySettingsPost(PendingSettingsPost& post,
-                              MasterSettings& settings, SettingsStore& store) {
+// A "true"/"false" flag of the post: provided and changed updates the live
+// bool and its NVS key.
+inline void applySettingsFlag(bool provided, const String& text, bool& live,
+                              SettingsStore& store, void (*save)(SettingsStore&, bool)) {
+  if (!provided) return;
+  const bool want = (text == "true");
+  if (live == want) return;
+  live = want;
+  save(store, live);
+}
+
+inline void applySettingsStrings(const PendingSettingsPost& post, MasterSettings& settings,
+                                 SettingsStore& store) {
   if (post.alignmentProvided && settings.alignment != post.alignment) {
     settings.alignment = post.alignment;
     saveAlignment(store, settings.alignment);
   }
-
   if (post.flapSpeedProvided && settings.flapSpeed != post.flapSpeed.toInt()) {
     settings.flapSpeed = post.flapSpeed.toInt();
     saveFlapSpeed(store, settings.flapSpeed);
   }
-
   if (post.deviceModeProvided && settings.deviceMode != post.deviceMode) {
     settings.deviceMode = post.deviceMode;
     saveDeviceMode(store, settings.deviceMode);
   }
-
   if (post.timezoneProvided && settings.timezonePosix != post.timezone) {
     settings.timezonePosix = post.timezone;
     saveTimezone(store, settings.timezonePosix);
   }
-
   if (post.deviceNameProvided && settings.deviceName != post.deviceName) {
     settings.deviceName = post.deviceName;
     saveDeviceName(store, settings.deviceName);
   }
-
   if (post.unitCountProvided &&
       settings.unitCountOverride != post.unitCount.toInt()) {
     settings.unitCountOverride = post.unitCount.toInt();
     saveUnitCountOverride(store, settings.unitCountOverride);
   }
+}
 
-  if (post.reflashOnBootProvided) {
-    bool want = (post.reflashOnBoot == "true");
-    if (settings.reflashOnBoot != want) {
-      settings.reflashOnBoot = want;
-      saveReflashOnBoot(store, settings.reflashOnBoot);
-    }
-  }
-
-  if (post.wifiPowerSaveProvided) {
-    bool want = (post.wifiPowerSave == "true");
-    if (settings.wifiPowerSave != want) {
-      settings.wifiPowerSave = want;
-      saveWifiPowerSave(store, settings.wifiPowerSave);
-    }
-  }
-
-  if (post.quietProvided) {
-    bool want = (post.quiet == "true");
-    if (settings.quiet != want) {
-      settings.quiet = want;
-      saveQuiet(store, settings.quiet);
-    }
-  }
-
-  if (post.releaseCheckProvided) {
-    bool want = (post.releaseCheck == "true");
-    if (settings.releaseCheck != want) {
-      settings.releaseCheck = want;
-      saveReleaseCheck(store, settings.releaseCheck);
-    }
-  }
-
-  if (post.releaseChannelProvided && settings.releaseChannel != post.releaseChannel) {
-    settings.releaseChannel = post.releaseChannel;
-    saveReleaseChannel(store, settings.releaseChannel);
-  }
-
+inline void applySettingsMqtt(const PendingSettingsPost& post, MasterSettings& settings,
+                              SettingsStore& store) {
   bool mqttChanged = false;
   if (post.mqttHostProvided && settings.mqttHost != post.mqttHost) {
     settings.mqttHost = post.mqttHost;
@@ -444,13 +343,34 @@ inline void applySettingsPost(PendingSettingsPost& post,
     settings.mqttPassword = post.mqttPassword;
     mqttChanged = true;
   }
-  if (mqttChanged) {
-    // Write-only password rule lives in saveMqttConfig(): it only writes the
-    // password key when a non-empty one is passed.
-    saveMqttConfig(store, settings.mqttHost, settings.mqttPort,
-                   settings.mqttUser,
-                   post.mqttPasswordProvided ? settings.mqttPassword : String());
-  }
+  if (!mqttChanged) return;
+  // Write-only password rule lives in saveMqttConfig(): it only writes the
+  // password key when a non-empty one is passed.
+  saveMqttConfig(store, settings.mqttHost, settings.mqttPort,
+                 settings.mqttUser,
+                 post.mqttPasswordProvided ? settings.mqttPassword : String());
+}
 
+// Drain the staged post into the live settings + store. Runs from loop()
+// context only. Persistence mirrors v1's applyPendingSettingsPost(): each
+// provided-and-changed field updates the live struct and its NVS key;
+// unchanged values don't touch flash. Display-bound fields (inputText,
+// transientText) are NOT consumed here — the caller reads them off the post
+// before calling. Clears the post afterwards, secrets included.
+inline void applySettingsPost(PendingSettingsPost& post,
+                              MasterSettings& settings, SettingsStore& store) {
+  applySettingsStrings(post, settings, store);
+  applySettingsFlag(post.reflashOnBootProvided, post.reflashOnBoot, settings.reflashOnBoot,
+                    store, saveReflashOnBoot);
+  applySettingsFlag(post.wifiPowerSaveProvided, post.wifiPowerSave, settings.wifiPowerSave,
+                    store, saveWifiPowerSave);
+  applySettingsFlag(post.quietProvided, post.quiet, settings.quiet, store, saveQuiet);
+  applySettingsFlag(post.releaseCheckProvided, post.releaseCheck, settings.releaseCheck,
+                    store, saveReleaseCheck);
+  if (post.releaseChannelProvided && settings.releaseChannel != post.releaseChannel) {
+    settings.releaseChannel = post.releaseChannel;
+    saveReleaseChannel(store, settings.releaseChannel);
+  }
+  applySettingsMqtt(post, settings, store);
   resetSettingsPost(post);
 }

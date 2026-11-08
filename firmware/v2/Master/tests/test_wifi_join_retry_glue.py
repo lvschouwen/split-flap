@@ -37,7 +37,7 @@ def test_policy_is_seeded_from_the_tally_before_it_first_steps():
 
 
 def test_a_retry_records_the_attempt_before_it_restarts():
-    tick = _body(_code(), "void wifiServiceTick(")
+    tick = _body(_code(), "static void policyTick(")
     case = tick[tick.index("case WifiAction::RetryJoin:"):]
     case = case[:case.index("break;")]
     encode = case.index("wifiJoinRetryEncode(joinRetry, attempt);")
@@ -58,7 +58,7 @@ def test_the_tally_is_written_nowhere_else():
 
 
 def test_no_retry_restart_while_a_unit_reflash_runs():
-    tick = _body(_code(), "void wifiServiceTick(")
+    tick = _body(_code(), "static void policyTick(")
     step = tick.index("wifiPolicyStep(policy,")
     hold = tick.index("!wifiRestartMayProceed(", step)
     assert "reflashInProgress(displaySnapshotGet().reflash)" in tick[hold:hold + 200]
@@ -73,7 +73,7 @@ def test_the_retry_reboot_cause_carries_this_windows_disconnect_reason():
     handler = _body(code, "static void onWifiStaEvent(")
     assert "lastJoinDisconnectReason.store((uint8_t)info.wifi_sta_disconnected.reason" in handler
     assert "lastJoinDisconnectReason.store(0," in _body(code, "static void startJoin(")
-    tick = _body(code, "void wifiServiceTick(")
+    tick = _body(code, "static void policyTick(")
     case = tick[tick.index("case WifiAction::RetryJoin:"):]
     case = case[:case.index("break;")]
     assert "lastJoinDisconnectReason.load(" in case
