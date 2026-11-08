@@ -16,13 +16,14 @@ static const char* kTraceKey = "trace";
 static BootTrace trace;
 static SemaphoreHandle_t traceMutex = nullptr;
 
-static void persistLocked() {
+static bool persistLocked() {
   uint8_t blob[BOOT_TRACE_BLOB_LEN];
   bootTraceEncode(trace, blob);
   Preferences prefs;
-  if (!prefs.begin(kNamespace, /*readOnly=*/false)) return;
-  prefs.putBytes(kTraceKey, blob, sizeof(blob));
+  if (!prefs.begin(kNamespace, /*readOnly=*/false)) return false;
+  bool ok = prefs.putBytes(kTraceKey, blob, sizeof(blob)) == sizeof(blob);
   prefs.end();
+  return ok;
 }
 
 void bootTraceInit() {
@@ -72,14 +73,18 @@ void bootTraceMarkStage(uint8_t stage) {
 
 void bootTraceAliveLoop() {
   if (traceMutex == nullptr) return;
-  static uint16_t lastStep = 0;  // netTask only; bootTraceBegin stored 0
+  static BootTraceAliveWriter writer;  // netTask only
   uint64_t uptimeMs = (uint64_t)esp_timer_get_time() / 1000ULL;  // no 49-day wrap
-  if (bootTraceAliveStep(uptimeMs) == lastStep) return;  // between steps: no lock
+  uint16_t step = bootTraceAliveStep(uptimeMs);
+  uint32_t nowMs = (uint32_t)uptimeMs;
+  // Between steps (and within a second of a failed write): no lock.
+  if (!bootTraceAliveDue(writer, step, nowMs)) return;
   // Never wait: a stage mark holds the lock for its own write; retry next loop.
   if (xSemaphoreTake(traceMutex, 0) != pdTRUE) return;
-  if (bootTraceAliveTick(trace, uptimeMs)) persistLocked();
-  lastStep = trace.e[trace.count - 1].aliveMin;
+  bootTraceAliveTick(trace, uptimeMs);
+  bool ok = persistLocked();
   xSemaphoreGive(traceMutex);
+  bootTraceAliveWritten(writer, step, ok, nowMs);
 }
 
 String bootTraceJson() {

@@ -145,6 +145,18 @@ static void test_alive_tick_writes_only_on_the_10_min_step() {
   TEST_ASSERT_TRUE(bootTraceAliveTick(t, 70ULL * 60000ULL));
 }
 
+static void test_failed_persist_leaves_the_step_pending() {
+  BootTraceAliveWriter w;
+  TEST_ASSERT_FALSE(bootTraceAliveDue(w, 0, 0));  // begin stored 0
+  TEST_ASSERT_TRUE(bootTraceAliveDue(w, 10, 600000));
+  bootTraceAliveWritten(w, 10, /*ok=*/false, 600000);
+  TEST_ASSERT_FALSE(bootTraceAliveDue(w, 10, 600999));  // no tight retry
+  TEST_ASSERT_TRUE(bootTraceAliveDue(w, 10, 601000));   // still pending
+  bootTraceAliveWritten(w, 10, /*ok=*/true, 601000);
+  TEST_ASSERT_FALSE(bootTraceAliveDue(w, 10, 900000));  // stored: done
+  TEST_ASSERT_TRUE(bootTraceAliveDue(w, 20, 1200000));
+}
+
 static void test_stage_names() {
   TEST_ASSERT_EQUAL_STRING("setup", bootStageName(BOOT_STAGE_SETUP));
   TEST_ASSERT_EQUAL_STRING("online", bootStageName(BOOT_STAGE_ONLINE));
@@ -165,6 +177,7 @@ int main() {
   RUN_TEST(test_blob_round_trips_alive);
   RUN_TEST(test_alive_step_saturates);
   RUN_TEST(test_alive_tick_writes_only_on_the_10_min_step);
+  RUN_TEST(test_failed_persist_leaves_the_step_pending);
   RUN_TEST(test_stage_names);
   return UNITY_END();
 }

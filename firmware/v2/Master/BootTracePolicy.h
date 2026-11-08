@@ -94,6 +94,27 @@ inline bool bootTraceAliveTick(BootTrace& t, uint64_t uptimeMs) {
   return true;
 }
 
+// netTask's view of what NVS holds: a failed write leaves the step pending
+// and is retried at most once a second, never in a tight loop.
+#define BOOT_TRACE_ALIVE_RETRY_MS 1000
+struct BootTraceAliveWriter {
+  uint16_t stored = 0;  // bootTraceBegin persisted 0
+  bool failed = false;
+  uint32_t failedAtMs = 0;
+};
+
+inline bool bootTraceAliveDue(const BootTraceAliveWriter& w, uint16_t step, uint32_t nowMs) {
+  if (step == w.stored) return false;
+  return !w.failed || (uint32_t)(nowMs - w.failedAtMs) >= BOOT_TRACE_ALIVE_RETRY_MS;
+}
+
+inline void bootTraceAliveWritten(BootTraceAliveWriter& w, uint16_t step, bool ok,
+                                  uint32_t nowMs) {
+  w.failed = !ok;
+  w.failedAtMs = nowMs;
+  if (ok) w.stored = step;
+}
+
 // Consecutive boots right before this one that never came online.
 inline int bootTraceFailedStreak(const BootTrace& t) {
   int n = 0;

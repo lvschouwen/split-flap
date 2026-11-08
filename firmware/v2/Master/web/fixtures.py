@@ -164,7 +164,7 @@ def _wall():
         "stats": {"now": {"rssi": -81, "txPower": 20, "heap": 21756, "minHeap": 9672, "temp": 712,
                           "uptime": 2135, "i2cTx": 6040, "i2cErr": 412, "ntpAge": 2127},
                   "hist": {"rssi": [-70 - (i * 7) % 15 for i in range(120)]}, "interval": 5},
-        "starts": [{"reset": "Software reset", "stage": "online"}, {"reset": "Power on", "stage": "online"},
+        "starts": [{"reset": "Software reset", "stage": "online"}, {"reset": "Power on", "stage": "online", "aliveMin": 1680},
                    {"reset": "Brownout", "stage": "wifi"}, {"reset": "Panic", "stage": "boot"}],
         "lastStart": {"reset": "Panic", "cause": "LoadProhibited in displayTask"},
         "network": {"gw": "fail", "self": "ok"},
