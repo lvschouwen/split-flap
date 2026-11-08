@@ -70,6 +70,9 @@ def test_a_caught_unit_is_flashed_at_start_whatever_the_update_setting():
     setting = task.index("if (!tasksReflashOnBoot()) {")
     assert caught < flash < setting
     assert task.index("UnitCatchStep::Disarm") < setting
+    # The catch runs in the task's start, ahead of the start-up update.
+    main = _body(task, "void displayTaskMain(void*)")
+    assert main.index("catchArmedUnitAtStart(local, busFacts);") < main.index("if (!tasksReflashOnBoot()) {")
     job = _body(task, "static void runReflashJob(")
     assert "unitCatchAfterForcedRun(" in job and "unitCatchArm(toCatch);" in job
     # A run that brought the armed unit back ends the catch there and then.
