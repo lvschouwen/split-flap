@@ -143,3 +143,51 @@ def test_boot_reads_the_cause_from_both_registers_and_consumes_the_marker():
     assert "resetKind == UNIT_RESET_WATCHDOG" in setup
     assert "resetStatusByte," in _function_body(
         _code("UnitI2CProtocol.ino"), "void requestEvent(")
+
+
+def test_loop_runs_its_drains_and_ticks_in_their_order():
+    # loop() is a sequence of drains and ticks whose order is behaviour: the
+    # gates write drains ahead of the home drain so the master's GET_LIFETIME
+    # read-back does not land mid-calibrate() (#409), every mutation drains
+    # before the timers read currentMillis, the boot report refreshes before
+    # sleep, and the letter move comes last.
+    loop = _function_body(_code("Unit.ino"), "void loop(")
+    steps = [
+        "twiHealTick();",
+        "twiDeafTick();",
+        "busSilenceLoop();",
+        "driftRefreshReplyBuffers();",
+        "vitalsRefreshReplyBuffer();",
+        "refreshExtDiagReply();",
+        "clearCrashRecordOnceStable();",
+        "if (pendingBootloader) {",
+        "drainOffsetWrite();",
+        "drainGatesWrite();",
+        "drainBootUpdate();",
+        "if (pendingHome) {",
+        "drainJog();",
+        "drainSetAddress();",
+        "drainClearAddress();",
+        "drainOdometerReset();",
+        "persistOdometerIfDue();",
+        "drainSelfTest();",
+        "drainIdentify();",
+        "unsigned long currentMillis = millis();",
+        "identifyBlinkTick(currentMillis);",
+        "uptimeTick(currentMillis);",
+        "bootHomeFallbackTick(currentMillis);",
+        "vitalsSample(false);",
+        "dutyWindowDecayTick(currentMillis);",
+        "idleHallTick(currentMillis);",
+        "driftRehomeTick(currentMillis);",
+        "refreshBootInfoReply();",
+        "sleep_cpu();",
+        "rotateToLetter(receivedNumber);",
+        "currentlyrotating = 0;",
+    ]
+    at = []
+    for step in steps:
+        assert loop.count(step) == 1, f"{step} must appear once in loop()"
+        at.append(loop.index(step))
+    order = sorted(range(len(steps)), key=lambda i: at[i])
+    assert order == list(range(len(steps))), [steps[i] for i in order]
