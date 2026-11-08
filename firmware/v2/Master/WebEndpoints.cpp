@@ -22,7 +22,7 @@
 
 #include "QuietPolicy.h"  // quietBlocksContent (#227)
 #include "BootGuard.h"  // bootGuardJson (#281)
-#include "BootTrace.h"  // bootTraceJson (#504)
+#include "BootTrace.h"  // bootTraceJson (#504), bootTraceAliveLoop (#628)
 #include "NetLiveness.h"  // netLivenessJson (#501)
 #include "CrashContext.h"  // crashCtxReportJson (#504)
 
@@ -546,6 +546,7 @@ void webEndpointsLoop(MasterSettings& settings, SettingsStore& store) {
   // Flash-log drain (#206): netTask is the single flash writer.
   flashLogTick(rebootDue);  // force on reboot so the last lines land
   eventRecordTick(rebootDue);  // #570: the same writer, the same rule
+  bootTraceAliveLoop();  // #628: last-alive minutes, NVS on the 10-min step
   // Staged row-image write (#304): same single-writer discipline — the
   // async upload handler accumulates in PSRAM, netTask commits it to flash.
   followerImageFlushTick();

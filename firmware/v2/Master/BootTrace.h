@@ -19,5 +19,10 @@ void bootTraceLogReport();
 // stage advances — at most once per stage per boot).
 void bootTraceMarkStage(uint8_t stage);
 
+// netTask only (webEndpointsLoop), every loop: stores this boot's uptime on
+// the 10-min step (#628). Writes NVS only when the step moves, never waits
+// for the lock.
+void bootTraceAliveLoop();
+
 // /settings "bootTrace": oldest first, this boot last.
 String bootTraceJson();
