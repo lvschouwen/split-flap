@@ -23,37 +23,29 @@ def _function(code, name):
 
 
 def _route(code, path, method):
-    """A route's registration, followed by the bodies of the file's static
-    functions it hands the request to, in the order they run: a named
-    handler, then each static step it calls."""
+    """A route's registration, up to the next one."""
     start = code.index(f'"{path}", {method}')
     end = code.find("server.on(", start)
-    route = code[start:end if end > 0 else len(code)]
-    statics = set(re.findall(r"\nstatic \w+ (\w+)\(", code))
-    seen = []
-
-    def follow(text):
-        out = ""
-        for name in re.findall(r"\b(\w+)\b", text):
-            if name in statics and name not in seen:
-                seen.append(name)
-                body = _function(code, name)
-                out += body + follow(body)
-        return out
-
-    return route + follow(route)
+    return code[start:end if end > 0 else len(code)]
 
 
 def test_no_upload_begins_while_an_update_from_a_release_runs():
     code = _code("WebFirmware.cpp")
-    for path, begins in (("/firmware/master", "Update.begin("),
-                         ("/firmware/rescue", "factoryWriteBegin("),
-                         ("/firmware/row", "followerImageWriteBegin(")):
-        route = _route(code, path, "HTTP_POST")
-        assert "releaseUpdateRunning()" in route, path
-        # Refused before the writer is touched.
-        assert route.index("releaseUpdateRunning()") < route.index(begins), path
-    boot = _route(code, "/firmware/rescue-boot", "HTTP_POST")
+    for path, stem, begins in (("/firmware/master", "MasterOta", "Update.begin("),
+                               ("/firmware/rescue", "RescueInstall", "factoryWriteBegin("),
+                               ("/firmware/row", "RowImage", "followerImageWriteBegin(")):
+        upload, begin = f"handle{stem}Upload", f"begin{stem}Upload"
+        assert upload in _route(code, path, "HTTP_POST"), path
+        # The first chunk goes through the begin step before anything else.
+        chunk = _function(code, upload)
+        first = chunk[chunk.index("{") + 1:].lstrip()
+        assert first.startswith(f"if (index == 0 && !{begin}(request"), path
+        # Inside that one step: refused before the writer is touched.
+        body = _function(code, begin)
+        assert "releaseUpdateRunning()" in body, path
+        assert body.index("releaseUpdateRunning()") < body.index(begins), path
+    assert "handleRescueBoot" in _route(code, "/firmware/rescue-boot", "HTTP_POST")
+    boot = _function(code, "handleRescueBoot")
     assert boot.index("releaseUpdateRunning()") < boot.index("rescueBootArm()")
 
 
