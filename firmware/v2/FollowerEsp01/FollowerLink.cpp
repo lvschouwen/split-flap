@@ -536,6 +536,11 @@ void handle(const wl_ToRow& m, const FollowerClusterView& view) {
   }
 }
 
+// The steps of linkLoopTick(), defined behind it in the order it runs them.
+void dialMaster(const FollowerClusterView& view);
+bool readFromMaster(const FollowerClusterView& view);
+void welcomedTick(const FollowerClusterView& view);
+
 }  // namespace
 
 void linkLoopTick() {
@@ -559,32 +564,44 @@ void linkLoopTick() {
   }
 
   if (!sock.connected()) {
-    // Also a connection the master closed before any Welcome (it does not
-    // know this row): without the drop the next pass would dial again at once.
-    if (dialled) drop(welcomed ? F("connection lost") : F("closed by the master before Welcome"));
-    if ((int32_t)(millis() - nextDialMs) < 0) return;
-    char host[48];
-    if (!followerLinkHostPart(view.leaderHost.c_str(), host, sizeof(host))) return;
-    sock.setTimeout(FOLLOWER_LINK_CONNECT_TIMEOUT_MS);
-    if (!sock.connect(host, WALL_LINK_PORT)) {
-      drop(F("master not reachable"));
-      return;
-    }
-    sock.setTimeout(FOLLOWER_LINK_WRITE_TIMEOUT_MS);
-    sock.setNoDelay(true);
-    // The core's connected() can stay true on a dead link; TCP keepalive
-    // closes it for us (idle 15 s, 3 probes 5 s apart).
-    sock.keepAlive(15, 5, 3);
-    reader.reset();
-    strlcpy(dialledId, view.leaderName.c_str(), sizeof(dialledId));
-    strlcpy(dialledHost, view.leaderHost.c_str(), sizeof(dialledHost));
-    connectedAtMs = millis();
-    lastHeardMs = connectedAtMs;
-    dialled = true;
-    sendHello();
+    dialMaster(view);
     return;
   }
+  if (!readFromMaster(view)) return;
+  welcomedTick(view);
+}
 
+namespace {
+
+// Also a connection the master closed before any Welcome (it does not know
+// this row): without the drop the next pass would dial again at once.
+void dialMaster(const FollowerClusterView& view) {
+  if (dialled) drop(welcomed ? F("connection lost") : F("closed by the master before Welcome"));
+  if ((int32_t)(millis() - nextDialMs) < 0) return;
+  char host[48];
+  if (!followerLinkHostPart(view.leaderHost.c_str(), host, sizeof(host))) return;
+  sock.setTimeout(FOLLOWER_LINK_CONNECT_TIMEOUT_MS);
+  if (!sock.connect(host, WALL_LINK_PORT)) {
+    drop(F("master not reachable"));
+    return;
+  }
+  sock.setTimeout(FOLLOWER_LINK_WRITE_TIMEOUT_MS);
+  sock.setNoDelay(true);
+  // The core's connected() can stay true on a dead link; TCP keepalive
+  // closes it for us (idle 15 s, 3 probes 5 s apart).
+  sock.keepAlive(15, 5, 3);
+  reader.reset();
+  strlcpy(dialledId, view.leaderName.c_str(), sizeof(dialledId));
+  strlcpy(dialledHost, view.leaderHost.c_str(), sizeof(dialledHost));
+  connectedAtMs = millis();
+  lastHeardMs = connectedAtMs;
+  dialled = true;
+  sendHello();
+}
+
+// Hands every whole message in hand to handle(). False when the connection
+// ended on the way (closed by a message, or a malformed one dropped it).
+bool readFromMaster(const FollowerClusterView& view) {
   int avail = sock.available();
   while (avail > 0) {
     uint8_t chunk[64];
@@ -598,15 +615,20 @@ void linkLoopTick() {
         wl_ToRow m = wl_ToRow_init_zero;
         if (reader.decode(wl_ToRow_fields, &m)) handle(m, view);
         reader.pop();
-        if (!sock.connected()) return;
+        if (!sock.connected()) return false;
       }
       if (reader.peek() == WlFeed::Bad) {
         drop(F("malformed message"));
-        return;
+        return false;
       }
     }
   }
+  return true;
+}
 
+// The Welcome wait, the silence check, then what goes up to the master. Any
+// step may drop the connection, so each later one asks again.
+void welcomedTick(const FollowerClusterView& view) {
   if (!welcomed) {
     if (followerLinkElapsed(millis(), connectedAtMs, FOLLOWER_LINK_WELCOME_TIMEOUT_MS)) {
       drop(F("no Welcome"));
@@ -628,6 +650,8 @@ void linkLoopTick() {
   if (welcomed) updateTick(view);
   if (welcomed) eventsTick();
 }
+
+}  // namespace
 
 FollowerLinkView linkViewGet() {
   FollowerLinkView v;

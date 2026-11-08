@@ -119,7 +119,11 @@ bool clusterLeaderContactFresh() {
   return clusterFollowerContactFresh(policyState, millis());
 }
 
-void clusterLoopTick() {
+static int heldSpeedOrDefault() { return heldSpeed > 0 ? heldSpeed : 80; }
+
+// The pairing record, the time setup and the phase clock (1 Hz): kept up in
+// rescue mode too.
+static void clusterBookkeepingTick() {
   if (membershipDirty) {
     membershipDirty = false;
     persistMembership();
@@ -137,6 +141,48 @@ void clusterLoopTick() {
       SerialPrintln(followerPhaseName(policyState.phase));
     }
   }
+}
+
+// #342: local HH:MM (or the date) on a row whose master is gone. Repainted
+// only when the minute (or day) or the choice changed.
+static void showFallbackClock(FollowerFallback fallback) {
+  time_t nowT = time(nullptr);
+  struct tm lt;
+  localtime_r(&nowT, &lt);
+  const bool asDate = fallback == FollowerFallback::Date;
+  int hour = lt.tm_hour, minute = asDate ? lt.tm_yday : lt.tm_min;
+  if ((clockShowing && minute == shownClockMinute && asDate == clockShowsDate) ||
+      renderPending || reflashInProgress(reflashProgress)) {
+    return;
+  }
+  if (!clockShowing) {
+    SerialPrintln(F("cluster: leader lost — local clock fallback"));
+  }
+  int width = displayWidth > 0 ? displayWidth : UNITS_AMOUNT;
+  char text[UNITS_AMOUNT + 1];
+  if (asDate) {
+    followerDateText(lt.tm_mday, lt.tm_mon + 1, lt.tm_year % 100, width, text);
+  } else {
+    followerClockText(hour, minute, width, text);
+  }
+  busShowSegment(String(text), heldSpeedOrDefault());
+  clockShowing = true;
+  shownClockMinute = minute;
+  clockShowsDate = asDate;
+  rowIsBlank = false;
+}
+
+// One blank frame per transition (rowIsBlank latches).
+static void blankRowOnce() {
+  if (rowIsBlank || renderPending || reflashInProgress(reflashProgress)) return;
+  SerialPrintln(F("cluster: blanking the row"));
+  busShowSegment("", heldSpeedOrDefault());
+  rowIsBlank = true;
+  clockShowing = false;
+}
+
+void clusterLoopTick() {
+  clusterBookkeepingTick();
 
   // Rescue mode (#343): pairing and phase bookkeeping above stay live, but
   // the bus is untouchable — an accepted text is dropped unshown.
@@ -145,10 +191,10 @@ void clusterLoopTick() {
     return;
   }
 
-  // Blank rule: Standalone and Blank show nothing; Grace holds. One blank
-  // frame per transition (rowIsBlank latches). #342: a Blank row with a
-  // held membership, a known zone and synced time shows local HH:MM
-  // instead — the wall keeps telling the time while the leader is down.
+  // Blank rule: Standalone and Blank show nothing; Grace holds. #342: a
+  // Blank row with a held membership, a known zone and synced time shows
+  // local HH:MM instead — the wall keeps telling the time while the leader
+  // is down.
   if (followerPhaseShowsBlank(policyState.phase)) {
     // Quiet (#227): the leader said the wall is quiet and has since gone
     // silent. Neither blank the row nor start the fallback clock — both flap.
@@ -159,38 +205,10 @@ void clusterLoopTick() {
     if (followerClockEligible(policyState.phase, leaderHost.length() > 0,
                               leaderTz.length() > 0, synced,
                               fallback != FollowerFallback::Blank)) {
-      time_t nowT = time(nullptr);
-      struct tm lt;
-      localtime_r(&nowT, &lt);
-      const bool asDate = fallback == FollowerFallback::Date;
-      int hour = lt.tm_hour, minute = asDate ? lt.tm_yday : lt.tm_min;
-      if ((!clockShowing || minute != shownClockMinute || asDate != clockShowsDate) &&
-          !renderPending && !reflashInProgress(reflashProgress)) {
-        if (!clockShowing) {
-          SerialPrintln(F("cluster: leader lost — local clock fallback"));
-        }
-        int width = displayWidth > 0 ? displayWidth : UNITS_AMOUNT;
-        char text[UNITS_AMOUNT + 1];
-        if (asDate) {
-          followerDateText(lt.tm_mday, lt.tm_mon + 1, lt.tm_year % 100, width, text);
-        } else {
-          followerClockText(hour, minute, width, text);
-        }
-        busShowSegment(String(text), heldSpeed > 0 ? heldSpeed : 80);
-        clockShowing = true;
-        shownClockMinute = minute;
-        clockShowsDate = asDate;
-        rowIsBlank = false;
-      }
+      showFallbackClock(fallback);
       return;
     }
-    if (!rowIsBlank && !renderPending &&
-        !reflashInProgress(reflashProgress)) {
-      SerialPrintln(F("cluster: blanking the row"));
-      busShowSegment("", heldSpeed > 0 ? heldSpeed : 80);
-      rowIsBlank = true;
-      clockShowing = false;
-    }
+    blankRowOnce();
     return;
   }
 
@@ -198,7 +216,7 @@ void clusterLoopTick() {
       !reflashInProgress(reflashProgress)) {
     // The leader came back but hasn't re-rendered (its segment for this
     // row is empty): a frozen clock must not pose as leader content.
-    busShowSegment("", heldSpeed > 0 ? heldSpeed : 80);
+    busShowSegment("", heldSpeedOrDefault());
     rowIsBlank = true;
     clockShowing = false;
   }

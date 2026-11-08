@@ -30,79 +30,102 @@ inline wl_OpRefusal followerLinkCheckUnit(uint32_t address, const UnitFacts* uni
   }
 }
 
+inline FollowerLinkOpPlan followerLinkRefused(wl_OpRefusal why) {
+  FollowerLinkOpPlan plan;
+  plan.refusal = why;
+  return plan;
+}
+
+inline FollowerLinkOpPlan followerLinkPlanned(FollowerOpKind kind, uint32_t address, long arg) {
+  FollowerLinkOpPlan plan;
+  plan.kind = kind;
+  plan.addr = (uint8_t)address;
+  plan.arg = arg;
+  return plan;
+}
+
+// The jobs on one running unit, with the check each argument takes. False
+// for a code that is not one of them.
+inline bool followerLinkUnitJob(uint32_t opcode, long arg, FollowerOpKind& kind,
+                                MaintVerdict& argVerdict) {
+  argVerdict = MaintVerdict();
+  switch (opcode) {
+    case wl_OpCode_OPC_HOME:           kind = FollowerOpKind::Home; return true;
+    case wl_OpCode_OPC_IDENTIFY:       kind = FollowerOpKind::Identify; return true;
+    case wl_OpCode_OPC_JOG:
+      kind = FollowerOpKind::Jog;
+      argVerdict = maintValidateJog(arg);
+      return true;
+    case wl_OpCode_OPC_SET_OFFSET:
+      kind = FollowerOpKind::WriteOffset;
+      argVerdict = maintValidateOffset(arg);
+      return true;
+    case wl_OpCode_OPC_SELF_TEST:      kind = FollowerOpKind::SelfTest; return true;
+    case wl_OpCode_OPC_RESET_ODOMETER: kind = FollowerOpKind::ResetOdometer; return true;
+    case wl_OpCode_OPC_SET_GATES:
+      kind = FollowerOpKind::SetGates;
+      argVerdict = maintValidateGates(arg);
+      return true;
+    case wl_OpCode_OPC_BOOT_INFO:      kind = FollowerOpKind::BootInfo; return true;
+    case wl_OpCode_OPC_BOOT_DUMP:      kind = FollowerOpKind::BootDump; return true;
+    case wl_OpCode_OPC_BOOT_UPDATE:    kind = FollowerOpKind::BootUpdate; return true;
+    case wl_OpCode_OPC_CLEAR_ADDRESS:  kind = FollowerOpKind::ClearAddress; return true;
+    default:                           return false;
+  }
+}
+
+inline FollowerLinkOpPlan followerLinkPlanUnitJob(FollowerOpKind kind, MaintVerdict argVerdict,
+                                                  uint32_t address, long arg,
+                                                  const UnitFacts* units, int maxUnits) {
+  const wl_OpRefusal unit = followerLinkCheckUnit(address, units, maxUnits);
+  if (unit != wl_OpRefusal_REFUSAL_NONE) return followerLinkRefused(unit);
+  if (argVerdict.httpStatus != 200) return followerLinkRefused(wl_OpRefusal_REFUSAL_BAD_ARG);
+  return followerLinkPlanned(kind, address, arg);
+}
+
+// Range only, no running-unit check: this is the way back for a unit whose
+// protocol this build does not speak.
+inline FollowerLinkOpPlan followerLinkPlanRestartUnit(uint32_t address) {
+  if (address < 1 || address > 126) return followerLinkRefused(wl_OpRefusal_REFUSAL_BAD_ADDRESS);
+  return followerLinkPlanned(FollowerOpKind::RebootToBootloader, address, 0);
+}
+
+inline FollowerLinkOpPlan followerLinkPlanUpdateUnits(uint32_t address, long arg, int maxUnits) {
+  if (arg != 0 && arg != 1) return followerLinkRefused(wl_OpRefusal_REFUSAL_BAD_ARG);
+  if (address == 0) {
+    // Never a whole-row erase of units that are current.
+    if (arg != 0) return followerLinkRefused(wl_OpRefusal_REFUSAL_BAD_ARG);
+  } else if (!reflashAddressInRange((long)address, SFP_I2C_ADDRESS_BASE, maxUnits)) {
+    return followerLinkRefused(wl_OpRefusal_REFUSAL_BAD_ADDRESS);
+  }
+  return followerLinkPlanned(FollowerOpKind::ReflashUnit, address, arg);
+}
+
+inline FollowerLinkOpPlan followerLinkPlanSetAddress(uint32_t address, long arg,
+                                                     const UnitFacts* units, int maxUnits) {
+  const wl_OpRefusal unit = followerLinkCheckUnit(address, units, maxUnits);
+  if (unit != wl_OpRefusal_REFUSAL_NONE) return followerLinkRefused(unit);
+  switch (maintValidateSetAddressTarget(arg, (int)address, units, maxUnits).httpStatus) {
+    case 200: return followerLinkPlanned(FollowerOpKind::SetAddress, address, arg);
+    case 409: return followerLinkRefused(wl_OpRefusal_REFUSAL_ADDRESS_TAKEN);
+    default:  return followerLinkRefused(wl_OpRefusal_REFUSAL_BAD_ARG);
+  }
+}
+
 inline FollowerLinkOpPlan followerLinkPlanOp(uint32_t opcode, uint32_t address, long arg,
                                              const UnitFacts* units, int maxUnits) {
-  FollowerLinkOpPlan plan;
-  auto refuse = [&plan](wl_OpRefusal why) {
-    plan.refusal = why;
-    plan.kind = FollowerOpKind::None;
-    return plan;
-  };
-  // A job on one running unit, with the check its argument takes.
-  auto onUnit = [&](FollowerOpKind kind, MaintVerdict argVerdict) {
-    const wl_OpRefusal unit = followerLinkCheckUnit(address, units, maxUnits);
-    if (unit != wl_OpRefusal_REFUSAL_NONE) return refuse(unit);
-    if (argVerdict.httpStatus != 200) return refuse(wl_OpRefusal_REFUSAL_BAD_ARG);
-    plan.kind = kind;
-    plan.addr = (uint8_t)address;
-    plan.arg = arg;
-    return plan;
-  };
-  const MaintVerdict noArg;
+  FollowerOpKind kind = FollowerOpKind::None;
+  MaintVerdict argVerdict;
+  if (followerLinkUnitJob(opcode, arg, kind, argVerdict)) {
+    return followerLinkPlanUnitJob(kind, argVerdict, address, arg, units, maxUnits);
+  }
   switch (opcode) {
-    case wl_OpCode_OPC_HOME:           return onUnit(FollowerOpKind::Home, noArg);
-    case wl_OpCode_OPC_IDENTIFY:       return onUnit(FollowerOpKind::Identify, noArg);
-    case wl_OpCode_OPC_JOG:            return onUnit(FollowerOpKind::Jog, maintValidateJog(arg));
-    case wl_OpCode_OPC_SET_OFFSET:
-      return onUnit(FollowerOpKind::WriteOffset, maintValidateOffset(arg));
-    case wl_OpCode_OPC_SELF_TEST:      return onUnit(FollowerOpKind::SelfTest, noArg);
-    case wl_OpCode_OPC_RESET_ODOMETER: return onUnit(FollowerOpKind::ResetOdometer, noArg);
-    case wl_OpCode_OPC_SET_GATES:
-      return onUnit(FollowerOpKind::SetGates, maintValidateGates(arg));
-    case wl_OpCode_OPC_BOOT_INFO:      return onUnit(FollowerOpKind::BootInfo, noArg);
-    case wl_OpCode_OPC_BOOT_DUMP:      return onUnit(FollowerOpKind::BootDump, noArg);
-    case wl_OpCode_OPC_BOOT_UPDATE:    return onUnit(FollowerOpKind::BootUpdate, noArg);
-    case wl_OpCode_OPC_RESTART_UNIT:
-      // Range only, no running-unit check: this is the way back for a unit
-      // whose protocol this build does not speak.
-      if (address < 1 || address > 126) return refuse(wl_OpRefusal_REFUSAL_BAD_ADDRESS);
-      plan.kind = FollowerOpKind::RebootToBootloader;
-      plan.addr = (uint8_t)address;
-      return plan;
-    case wl_OpCode_OPC_UPDATE_UNITS:
-      if (arg != 0 && arg != 1) return refuse(wl_OpRefusal_REFUSAL_BAD_ARG);
-      if (address == 0) {
-        // Never a whole-row erase of units that are current.
-        if (arg != 0) return refuse(wl_OpRefusal_REFUSAL_BAD_ARG);
-      } else if (!reflashAddressInRange((long)address, SFP_I2C_ADDRESS_BASE, maxUnits)) {
-        return refuse(wl_OpRefusal_REFUSAL_BAD_ADDRESS);
-      }
-      plan.kind = FollowerOpKind::ReflashUnit;
-      plan.addr = (uint8_t)address;
-      plan.arg = arg;
-      return plan;
-    case wl_OpCode_OPC_PROBE:
-      plan.kind = FollowerOpKind::Probe;
-      return plan;
-    case wl_OpCode_OPC_SET_ADDRESS: {
-      const wl_OpRefusal unit = followerLinkCheckUnit(address, units, maxUnits);
-      if (unit != wl_OpRefusal_REFUSAL_NONE) return refuse(unit);
-      switch (maintValidateSetAddressTarget(arg, (int)address, units, maxUnits).httpStatus) {
-        case 200: break;
-        case 409: return refuse(wl_OpRefusal_REFUSAL_ADDRESS_TAKEN);
-        default:  return refuse(wl_OpRefusal_REFUSAL_BAD_ARG);
-      }
-      plan.kind = FollowerOpKind::SetAddress;
-      plan.addr = (uint8_t)address;
-      plan.arg = arg;
-      return plan;
-    }
-    case wl_OpCode_OPC_CLEAR_ADDRESS:  return onUnit(FollowerOpKind::ClearAddress, noArg);
-    case wl_OpCode_OPC_HOME_ALL:
-      plan.kind = FollowerOpKind::HomeAll;
-      return plan;
-    default:
-      return refuse(wl_OpRefusal_REFUSAL_UNKNOWN_OP);
+    case wl_OpCode_OPC_RESTART_UNIT: return followerLinkPlanRestartUnit(address);
+    case wl_OpCode_OPC_UPDATE_UNITS: return followerLinkPlanUpdateUnits(address, arg, maxUnits);
+    case wl_OpCode_OPC_PROBE:        return followerLinkPlanned(FollowerOpKind::Probe, 0, 0);
+    case wl_OpCode_OPC_SET_ADDRESS:  return followerLinkPlanSetAddress(address, arg, units, maxUnits);
+    case wl_OpCode_OPC_HOME_ALL:     return followerLinkPlanned(FollowerOpKind::HomeAll, 0, 0);
+    default:                         return followerLinkRefused(wl_OpRefusal_REFUSAL_UNKNOWN_OP);
   }
 }
 

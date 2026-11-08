@@ -142,18 +142,115 @@ static void stampOpResult(uint32_t seq, MaintGrade grade) {
   opResult.reason = grade.reason;
 }
 
+// Each write patches the probe-time fact in place once the unit took it: the
+// unit facts carry the new value without a reprobe.
+static MaintGrade writeOffset(const StagedOp& op) {
+  const MaintGrade grade = maintGradeWire(busWriteOffset(op.addr, (int16_t)op.arg));
+  if (grade.outcome == MaintOutcome::Ok) {
+    unitFactsApplyOffsetWrite(unitFacts[op.addr - SFP_I2C_ADDRESS_BASE],
+                              (int16_t)op.arg);
+  }
+  return grade;
+}
+
+static MaintGrade resetOdometer(const StagedOp& op) {
+  const MaintGrade grade = maintGradeWire(busResetOdometer(op.addr));
+  if (grade.outcome == MaintOutcome::Ok) {
+    unitFactsApplyOdometerReset(unitFacts[op.addr - SFP_I2C_ADDRESS_BASE]);
+  }
+  return grade;
+}
+
+// busSetGates verifies with a read-back, so a unit that refused the bits
+// grades as a failure here rather than a phantom success.
+static MaintGrade setGates(const StagedOp& op) {
+  const MaintGrade grade = maintGradeGates(busSetGates(op.addr, (uint8_t)op.arg));
+  if (grade.outcome == MaintOutcome::Ok) {
+    unitFactsApplyGatesWrite(unitFacts[op.addr - SFP_I2C_ADDRESS_BASE],
+                             (uint8_t)op.arg);
+  }
+  return grade;
+}
+
+static MaintGrade rebootToBootloader(const StagedOp& op) {
+  const MaintGrade grade = maintGradeWire(busRebootToBootloader(op.addr));
+  if (grade.outcome == MaintOutcome::Ok) busInvalidateUnitReads(op.addr);
+  // The unit sits in twiboot for ~1 s — keep every runtime probe out of that
+  // window (v1 #88). Armed on a NACK too: it does not prove the unit stayed
+  // in its sketch.
+  busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
+  return grade;
+}
+
+static MaintGrade bootDump(const StagedOp& op) {
+  busRunBootDump(op.seq, op.addr, bootDumpSlot, bootDumpBytes);
+  const bool ok = bootDumpSlot.outcome == BootDumpOutcome::Ok;
+  bootDumpBytesSeq = ok ? op.seq : 0;
+  bootDumpBytesAtMs = millis();
+  return maintGradeObserved(ok);
+}
+
+// A job judged by the rescan it waits for (MaintenancePolicy.h).
+static void awaitScan(const StagedOp& op, uint8_t target, int countBefore) {
+  awaitingScan = AwaitingScan{};
+  awaitingScan.seq = op.seq;
+  awaitingScan.kind = op.kind;
+  awaitingScan.target = target;
+  awaitingScan.countBefore = countBefore;
+}
+
+// True when the test runs: its op result follows the test, stamped by
+// pollSelfTest once the unit reports, and reads pending until then.
+static bool startSelfTest(const StagedOp& op, MaintGrade& grade) {
+  selfTestSlot = SelfTestSlot{};
+  selfTestSlot.seq = op.seq;
+  selfTestSlot.addr = op.addr;
+  if (busStartSelfTest(op.addr) == 0) {
+    selfTestPolling = true;
+    selfTestPollLastMs = millis();
+    selfTestPollBegin(selfTestPoll, selfTestPollLastMs);
+    return true;
+  }
+  selfTestSlot.outcome = SelfTestOutcome::WireFail;
+  grade = maintGradeObserved(false);
+  return false;
+}
+
+// SetAddress / ClearAddress. True when the job waits for the rescan that
+// says how it ended; false with `grade` set when it ended here.
+static bool startAddressJob(const StagedOp& op, MaintGrade& grade) {
+  const bool set = op.kind == FollowerOpKind::SetAddress;
+  // Judged again here: the plan was made a loop pass ago.
+  if (set && maintValidateSetAddressTarget(op.arg, op.addr, unitFacts, UNITS_AMOUNT)
+                     .httpStatus != 200) {
+    grade = {MaintOutcome::ExecValidationFail, MaintReason::TargetAddressOccupied};
+    return false;
+  }
+  const int countBefore = detectedUnitCount;
+  const int status = set ? busSetAddress(op.addr, (uint8_t)op.arg) : busClearAddress(op.addr);
+  if (status != 0) {
+    // A lost ACK does not prove the unit stayed in its sketch: keep the
+    // probes out of the window all the same, and look afterwards.
+    busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
+    unitHealthRefreshPending = true;
+    grade = maintGradeWire(status);
+    return false;
+  }
+  // The unit restarts through its bootloader: no probe inside that
+  // window (v1 #88), and the scan after it says how the job ended.
+  busInvalidateUnitReads(op.addr);
+  busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
+  unitHealthRefreshPending = true;
+  awaitScan(op, (uint8_t)op.arg, countBefore);
+  return true;
+}
+
 static void executeStagedOp() {
   StagedOp op = stagedOp;  // copy, then release the slot at the end
   MaintGrade grade = maintGradeWire(-1);
   switch (op.kind) {
     case FollowerOpKind::WriteOffset:
-      grade = maintGradeWire(busWriteOffset(op.addr, (int16_t)op.arg));
-      // Patch the probe-time fact in place: the unit facts carry the new
-      // offset without a reprobe.
-      if (grade.outcome == MaintOutcome::Ok) {
-        unitFactsApplyOffsetWrite(unitFacts[op.addr - SFP_I2C_ADDRESS_BASE],
-                                  (int16_t)op.arg);
-      }
+      grade = writeOffset(op);
       break;
     case FollowerOpKind::Jog:
       grade = maintGradeWire(busJog(op.addr, (int)op.arg));
@@ -177,19 +274,10 @@ static void executeStagedOp() {
       grade = maintGradeWire(busIdentify(op.addr));
       break;
     case FollowerOpKind::ResetOdometer:
-      grade = maintGradeWire(busResetOdometer(op.addr));
-      if (grade.outcome == MaintOutcome::Ok) {
-        unitFactsApplyOdometerReset(unitFacts[op.addr - SFP_I2C_ADDRESS_BASE]);
-      }
+      grade = resetOdometer(op);
       break;
     case FollowerOpKind::SetGates:
-      // busSetGates verifies with a read-back, so a unit that refused the
-      // bits grades as a failure here rather than a phantom success.
-      grade = maintGradeGates(busSetGates(op.addr, (uint8_t)op.arg));
-      if (grade.outcome == MaintOutcome::Ok) {
-        unitFactsApplyGatesWrite(unitFacts[op.addr - SFP_I2C_ADDRESS_BASE],
-                                 (uint8_t)op.arg);
-      }
+      grade = setGates(op);
       break;
     case FollowerOpKind::ReflashUnit:
       releaseBootDumpBytes();  // the flash is this board's heap low-water mark
@@ -199,31 +287,16 @@ static void executeStagedOp() {
       grade = busLastReflashGrade();
       break;
     case FollowerOpKind::RebootToBootloader:
-      grade = maintGradeWire(busRebootToBootloader(op.addr));
-      if (grade.outcome == MaintOutcome::Ok) busInvalidateUnitReads(op.addr);
-      // The unit sits in twiboot for ~1 s — keep every runtime probe out
-      // of that window (v1 #88). Armed on a NACK too: it does not prove the
-      // unit stayed in its sketch.
-      busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
+      grade = rebootToBootloader(op);
       // Only a probe re-reads the offset; queue one for once the inhibit
       // has run out, or the unit's reads stay invalid until someone asks.
       unitHealthRefreshPending = true;
       break;
     case FollowerOpKind::SelfTest:
-      selfTestSlot = SelfTestSlot{};
-      selfTestSlot.seq = op.seq;
-      selfTestSlot.addr = op.addr;
-      if (busStartSelfTest(op.addr) == 0) {
-        // The op result follows the test: it is stamped by pollSelfTest once
-        // the unit reports, and reads pending until then.
-        selfTestPolling = true;
-        selfTestPollLastMs = millis();
-        selfTestPollBegin(selfTestPoll, selfTestPollLastMs);
+      if (startSelfTest(op, grade)) {
         stagedOp.pending = false;
         return;
       }
-      selfTestSlot.outcome = SelfTestOutcome::WireFail;
-      grade = maintGradeObserved(false);
       break;
     case FollowerOpKind::BootUpdate:
       busRunBootUpdate(op.seq, op.addr, opResult);
@@ -231,53 +304,22 @@ static void executeStagedOp() {
       stagedOp.pending = false;
       return;
     case FollowerOpKind::BootDump:
-      busRunBootDump(op.seq, op.addr, bootDumpSlot, bootDumpBytes);
-      bootDumpBytesSeq = (bootDumpSlot.outcome == BootDumpOutcome::Ok)
-                             ? op.seq : 0;
-      bootDumpBytesAtMs = millis();
-      grade = maintGradeObserved(bootDumpSlot.outcome == BootDumpOutcome::Ok);
+      grade = bootDump(op);
       unitHealthRefreshPending = true;  // its reads were invalidated
       break;
     case FollowerOpKind::Probe:
       // Runs with the health refresh below, once any twiboot window is over.
       unitHealthRefreshPending = true;
-      awaitingScan = AwaitingScan{};
-      awaitingScan.seq = op.seq;
-      awaitingScan.kind = op.kind;
+      awaitScan(op, 0, 0);
       stagedOp.pending = false;
       return;
     case FollowerOpKind::SetAddress:
-    case FollowerOpKind::ClearAddress: {
-      const bool set = op.kind == FollowerOpKind::SetAddress;
-      // Judged again here: the plan was made a loop pass ago.
-      if (set && maintValidateSetAddressTarget(op.arg, op.addr, unitFacts, UNITS_AMOUNT)
-                         .httpStatus != 200) {
-        grade = {MaintOutcome::ExecValidationFail, MaintReason::TargetAddressOccupied};
-        break;
+    case FollowerOpKind::ClearAddress:
+      if (startAddressJob(op, grade)) {
+        stagedOp.pending = false;
+        return;
       }
-      const int countBefore = detectedUnitCount;
-      const int status = set ? busSetAddress(op.addr, (uint8_t)op.arg) : busClearAddress(op.addr);
-      if (status != 0) {
-        // A lost ACK does not prove the unit stayed in its sketch: keep the
-        // probes out of the window all the same, and look afterwards.
-        busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
-        unitHealthRefreshPending = true;
-        grade = maintGradeWire(status);
-        break;
-      }
-      // The unit restarts through its bootloader: no probe inside that
-      // window (v1 #88), and the scan after it says how the job ended.
-      busInvalidateUnitReads(op.addr);
-      busArmProbeInhibit(millis() + UNIT_PROBE_INHIBIT_MS);
-      unitHealthRefreshPending = true;
-      awaitingScan = AwaitingScan{};
-      awaitingScan.seq = op.seq;
-      awaitingScan.kind = op.kind;
-      awaitingScan.target = (uint8_t)op.arg;
-      awaitingScan.countBefore = countBefore;
-      stagedOp.pending = false;
-      return;
-    }
+      break;
     case FollowerOpKind::HomeAll:
       busHomeAll();
       grade = busGradeHomeAll();

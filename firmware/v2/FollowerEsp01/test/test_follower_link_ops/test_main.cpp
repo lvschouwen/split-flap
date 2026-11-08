@@ -149,6 +149,48 @@ static void test_a_probe_ignores_the_address() {
   TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_NONE, plan(wl_OpCode_OPC_PROBE, 200).refusal);
 }
 
+// The codes that take the running-unit check, and the ones planned on their
+// own rules (followerLinkUnitJob decides which path a code goes).
+static void test_only_unit_jobs_take_the_running_unit_check() {
+  const wl_OpCode unitJobs[] = {
+      wl_OpCode_OPC_HOME, wl_OpCode_OPC_IDENTIFY, wl_OpCode_OPC_JOG,
+      wl_OpCode_OPC_SET_OFFSET, wl_OpCode_OPC_SELF_TEST, wl_OpCode_OPC_RESET_ODOMETER,
+      wl_OpCode_OPC_SET_GATES, wl_OpCode_OPC_BOOT_INFO, wl_OpCode_OPC_BOOT_DUMP,
+      wl_OpCode_OPC_BOOT_UPDATE, wl_OpCode_OPC_CLEAR_ADDRESS,
+  };
+  for (wl_OpCode code : unitJobs) {
+    FollowerOpKind kind = FollowerOpKind::None;
+    MaintVerdict verdict;
+    TEST_ASSERT_TRUE(followerLinkUnitJob(code, 0, kind, verdict));
+    TEST_ASSERT_NOT_EQUAL((int)FollowerOpKind::None, (int)kind);
+    // A unit in its bootloader is refused, whatever the job.
+    TEST_ASSERT_EQUAL(wl_OpRefusal_REFUSAL_NO_UNIT, plan(code, 2).refusal);
+  }
+  const wl_OpCode ownRules[] = {
+      wl_OpCode_OPC_NONE, wl_OpCode_OPC_RESTART_UNIT, wl_OpCode_OPC_UPDATE_UNITS,
+      wl_OpCode_OPC_PROBE, wl_OpCode_OPC_SET_ADDRESS, wl_OpCode_OPC_HOME_ALL,
+  };
+  for (wl_OpCode code : ownRules) {
+    FollowerOpKind kind = FollowerOpKind::None;
+    MaintVerdict verdict;
+    TEST_ASSERT_FALSE(followerLinkUnitJob(code, 0, kind, verdict));
+  }
+}
+
+static void test_a_refused_job_names_no_unit() {
+  const FollowerLinkOpPlan refused[] = {
+      plan(wl_OpCode_OPC_JOG, 1, 999), plan(wl_OpCode_OPC_RESTART_UNIT, 127),
+      plan(wl_OpCode_OPC_UPDATE_UNITS, 2, 2), plan(wl_OpCode_OPC_SET_ADDRESS, 1, 3),
+      plan(wl_OpCode_OPC_NONE, 1, 5),
+  };
+  for (const FollowerLinkOpPlan& p : refused) {
+    TEST_ASSERT_NOT_EQUAL(wl_OpRefusal_REFUSAL_NONE, p.refusal);
+    TEST_ASSERT_EQUAL((int)FollowerOpKind::None, (int)p.kind);
+    TEST_ASSERT_EQUAL(0, p.addr);
+    TEST_ASSERT_EQUAL(0, p.arg);
+  }
+}
+
 static void test_how_a_job_ended_becomes_a_phase() {
   TEST_ASSERT_EQUAL(wl_OpPhase_OP_RUNNING, followerLinkPhaseFor(MaintOutcome::Pending));
   TEST_ASSERT_EQUAL(wl_OpPhase_OP_OK, followerLinkPhaseFor(MaintOutcome::Ok));
@@ -181,6 +223,8 @@ int main(int, char**) {
   RUN_TEST(test_a_new_address_must_be_free_and_one_this_row_can_reach);
   RUN_TEST(test_homing_every_unit_ignores_the_address);
   RUN_TEST(test_a_probe_ignores_the_address);
+  RUN_TEST(test_only_unit_jobs_take_the_running_unit_check);
+  RUN_TEST(test_a_refused_job_names_no_unit);
   RUN_TEST(test_how_a_job_ended_becomes_a_phase);
   RUN_TEST(test_a_boot_section_travels_in_three_pieces);
   return UNITY_END();
