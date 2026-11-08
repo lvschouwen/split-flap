@@ -139,8 +139,8 @@ def _git(root, *args):
 
 def tracked_sources(root):
     """Tracked and untracked-but-not-ignored files: a new file counts before it is `git add`ed."""
-    names = set(_git(root, "ls-files").split("\n"))
-    names.update(_git(root, "ls-files", "--others", "--exclude-standard").split("\n"))
+    names = set(_git(root, "ls-files", "-z").split("\0"))
+    names.update(_git(root, "ls-files", "-z", "--others", "--exclude-standard").split("\0"))
     return sorted(f for f in names if is_ours(f) and os.path.isfile(os.path.join(root, f)))
 
 
@@ -217,14 +217,20 @@ def check_shrink_only(baseline, base_baseline):
         if metric == MOVED and "=>" in key:
             head, new = key.split("=>", 1)
             m, old = head.split(":", 1) if ":" in head else ("", head)
-            moved[(m, new)] = old
+            # a record counts only when the old entry is really gone from the current baseline
+            if (m, old) not in baseline:
+                moved.setdefault((m, new), []).append(old)
+    claimed = set()
     for (metric, key), value in sorted(baseline.items()):
         if metric not in LIMITS:
             continue
         base = base_baseline.get((metric, key))
         if base is None:
-            old = moved.get((metric, key))
+            olds = [o for o in moved.get((metric, key), []) if (metric, o) not in claimed]
+            old = olds[0] if len(olds) == 1 else None  # one old key moves to one new key
             old_val = base_baseline.get((metric, old)) if old is not None else None
+            if old_val is not None:
+                claimed.add((metric, old))
             if old_val is None or value > old_val:
                 out.append("GREW  baseline %s %s = %d is not in the merge-base baseline (new entries are not allowed; "
                            "use --rename for a moved offender)" % (metric, key, value))
@@ -294,18 +300,28 @@ def merge_base(root):
 
 def changed_since_base(root):
     base = merge_base(root)
-    names = set(_git(root, "ls-files", "--others", "--exclude-standard").split("\n"))
+    names = set(_git(root, "ls-files", "-z", "--others", "--exclude-standard").split("\0"))
     if base:
-        names.update(_git(root, "diff", "--name-only", "--diff-filter=d", base).split("\n"))
+        names.update(_git(root, "diff", "-z", "--name-only", "--diff-filter=d", base).split("\0"))
     return names
 
 
 def base_baseline_text(root):
     """The baseline at the merge base (HEAD when there is none). None when the file does not exist there yet: the
     change that introduces the baseline has nothing to be compared with."""
-    ref = merge_base(root) or "HEAD"
-    r = subprocess.run(["git", "-C", root, "show", "%s:%s" % (ref, BASELINE_REL)], capture_output=True, text=True)
-    return r.stdout if r.returncode == 0 else None
+    for ref in (merge_base(root) or "HEAD", "HEAD"):
+        r = subprocess.run(["git", "-C", root, "show", "%s:%s" % (ref, BASELINE_REL)], capture_output=True, text=True)
+        if r.returncode == 0:
+            return r.stdout
+    return None
+
+
+def unparsed_files(measured):
+    """Warn lines for big C/C++ files with no function row: lizard probably misparsed them."""
+    with_funcs = {key.rsplit(":", 1)[0] for (metric, key) in measured if metric == "len" and ":" in key}
+    return ["WARN  %s has %d NLOC and no function rows (lizard may have misparsed it)" % (key, v)
+            for (metric, key), v in sorted(measured.items())
+            if metric == "nloc" and v > 200 and key.endswith((".c", ".cpp", ".ino")) and key not in with_funcs]
 
 
 def run_check(baseline, base_baseline, measured, problems, changed):
@@ -313,6 +329,7 @@ def run_check(baseline, base_baseline, measured, problems, changed):
     fails = ["INCOMPLETE " + p for p in problems]
     notes = []
     f, warns, stale = compare_static(measured, baseline, changed)
+    warns += unparsed_files(measured)
     fails += f
     fails += ["STALE baseline %s (run: python3 -I scripts/check_standard.py --shrink)" % s for s in stale]
     if base_baseline is not None:
@@ -322,11 +339,15 @@ def run_check(baseline, base_baseline, measured, problems, changed):
     return fails, warns, notes
 
 
+def repo_root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def main(argv):
     if os.environ.get("SPLITFLAP_SKIP_STANDARD") == "1":
         print("standard: !!! SKIPPED by SPLITFLAP_SKIP_STANDARD=1: the code standard is NOT checked !!!", file=sys.stderr)
         return 0
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = repo_root()
     mode = argv[1] if len(argv) > 1 else ""
     base_path = os.path.join(root, *BASELINE_REL.split("/"))
     exists = os.path.exists(base_path)
@@ -370,6 +391,9 @@ def main(argv):
     if mode:
         raise GateError("unknown option %s" % mode)
 
+    if not merge_base(root):
+        print("standard: !!! no origin/master or master ref resolves: the GREW (shrink-only) check compares against "
+              "HEAD's baseline only !!!", file=sys.stderr)
     base_text = base_baseline_text(root)
     fails, warns, notes = run_check(baseline, parse_baseline(base_text) if base_text is not None else None,
                                     measured, problems, changed_since_base(root))

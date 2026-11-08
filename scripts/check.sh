@@ -83,7 +83,6 @@ run_follower() {
 }
 
 run_py() {
-  step "code standard gate" "$ROOT" "$VENV/bin/python" -I scripts/check_standard.py
   step "copied-header gate" "$ROOT" pytest_in tests/
   step "buildtools pytest" "$V2/buildtools" pytest_in tests/
   step "wall link pytest" "$V2/link" pytest_in tests/
@@ -130,6 +129,8 @@ fi
 
 echo "check: trees: ${trees[*]}"
 ensure_venv
+# The code standard gate runs for every selection, not only with the py tree.
+step "code standard gate" "$ROOT" "$VENV/bin/python" -I scripts/check_standard.py
 # Unit first: the drift gate and the Master/Follower bundles read its image.
 for t in "${ALL_TREES[@]}"; do
   [[ " ${trees[*]} " == *" $t "* ]] && "run_$t"

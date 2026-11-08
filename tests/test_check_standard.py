@@ -190,3 +190,84 @@ def test_atomic_write_replaces_and_leaves_no_temp():
 def test_committed_baseline_parses():
     with open(os.path.join(ROOT, *cs.BASELINE_REL.split("/"))) as f:
         assert cs.parse_baseline(f.read())
+
+
+# --- review follow-up -------------------------------------------------------------------------------------------
+
+def _git(repo, *a):
+    return subprocess.run(["git", "-C", str(repo)] + list(a), check=True, capture_output=True, text=True).stdout
+
+
+def _repo(tmp_path):
+    _git(tmp_path, "init", "-q", "-b", "master")
+    _git(tmp_path, "config", "user.email", "t@example.invalid")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "README").write_text("x\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "init")
+    return tmp_path
+
+
+def test_gate_step_runs_for_every_tree_selection():
+    lines = open(os.path.join(ROOT, "scripts", "check.sh")).read().splitlines()
+    gate = [i for i, ln in enumerate(lines) if "check_standard.py" in ln and ln.startswith('step "code standard gate"')]
+    assert len(gate) == 1, "the gate step must be a top-level (unindented) step, outside run_py"
+    loop = next(i for i, ln in enumerate(lines) if ln.startswith('for t in "${ALL_TREES[@]}"; do'))
+    venv = next(i for i, ln in enumerate(lines) if ln == "ensure_venv")
+    assert venv < gate[0] < loop
+
+
+def test_moved_record_with_old_entry_still_present_is_laundering():
+    mb = {("ccn", "a.c:f"): 30}
+    cur = {("ccn", "a.c:f"): 30, ("ccn", "b.c:g"): 30, (cs.MOVED, "ccn:a.c:f=>b.c:g"): 0}
+    assert cs.check_shrink_only(cur, mb)[0].startswith("GREW")
+
+
+def test_one_old_key_moves_to_only_one_new_key():
+    mb = {("ccn", "a.c:f"): 30}
+    cur = {("ccn", "b.c:g"): 30, ("ccn", "c.c:h"): 30,
+           (cs.MOVED, "ccn:a.c:f=>b.c:g"): 0, (cs.MOVED, "ccn:a.c:f=>c.c:h"): 0}
+    got = cs.check_shrink_only(cur, mb)
+    assert len(got) == 1 and got[0].startswith("GREW")
+
+
+def test_baseline_introduced_in_head_is_compared_against_head(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "tools").mkdir()
+    (repo / cs.BASELINE_REL).write_text("ccn\ta.c:f\t30\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "baseline")
+    _git(repo, "update-ref", "refs/remotes/origin/master", "HEAD~1")
+    assert "a.c:f" in cs.base_baseline_text(str(repo))  # merge base lacks the file: HEAD's copy is used
+
+
+def test_no_master_ref_is_loud_and_other_rules_still_run(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    _git(repo, "branch", "-m", "side")
+    d = repo / "firmware" / "v2" / "Master"
+    d.mkdir(parents=True)
+    body = "int f(int a){\n" + "".join("if(a==%d){a++;}\n" % i for i in range(30)) + "return a;}\n"
+    (d / "big.cpp").write_text(body)
+    monkeypatch.setattr(cs, "repo_root", lambda: str(repo))
+    assert cs.merge_base(str(repo)) == ""
+    assert cs.main(["x"]) == 1  # NEW offender: ccn past 25 and no baseline entry
+    err = capsys.readouterr().err
+    assert "no origin/master or master ref" in err and "NEW" in err
+
+
+def test_non_ascii_paths_are_listed(tmp_path):
+    repo = _repo(tmp_path)
+    d = repo / "firmware" / "v2" / "Master"
+    d.mkdir(parents=True)
+    (d / "café.cpp").write_text("int f(){return 1;}\n")
+    assert cs.tracked_sources(str(repo)) == ["firmware/v2/Master/café.cpp"]
+    _git(repo, "add", "-A")
+    assert cs.tracked_sources(str(repo)) == ["firmware/v2/Master/café.cpp"]
+
+
+def test_big_file_without_function_rows_warns_not_fails():
+    m = {("nloc", "firmware/v2/Master/x.cpp"): 500, ("nloc", "firmware/v2/Master/y.cpp"): 500,
+         ("len", "firmware/v2/Master/y.cpp:f"): 5, ("nloc", "firmware/v2/Master/z.h"): 500}
+    f, w, _ = cs.run_check({}, None, m, [], set())
+    assert f == []
+    assert len(w) == 1 and "x.cpp" in w[0]
