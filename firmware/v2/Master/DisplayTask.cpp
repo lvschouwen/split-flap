@@ -861,7 +861,7 @@ static MaintGrade gradeHomeAll(const DisplaySnapshot& local) {
     homeAllTallyAdd(tally, readOk, status.flags);
   }
   if (tally.stoodDown > 0) {
-    SerialPrintf("home-all: %u unit(s) stood down, left alone (#667)\n",
+    SerialPrintf("home-all: %u unit(s) stood down, no seek for a letter (#667)\n",
                  (unsigned)tally.stoodDown);
   }
   return maintGradeHomeAll(tally);

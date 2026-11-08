@@ -100,9 +100,10 @@ inline MaintGrade maintGradeHome(HomeWaitOutcome outcome) {
 
 // Every unit of a row was sent home: the job failed when any unit that
 // answered reports a failed search. A unit that does not answer is the
-// verdicts' to report, not this job's; nor is one that stood its homing down
-// (#667): the row's letters do not make it seek, so the job asked it nothing.
-// It is counted apart.
+// verdicts' to report, not this job's. A unit that stood its homing down
+// (#667) has no home either, whether this job's letters made it give up or it
+// had already: it fails the job like any other. The row's letters do not make
+// it seek, so it is also counted on its own for the log.
 struct HomeAllTally {
   uint8_t notFound = 0;
   uint8_t stoodDown = 0;
@@ -110,10 +111,7 @@ struct HomeAllTally {
 
 inline void homeAllTallyAdd(HomeAllTally& t, bool readOk, uint8_t flags) {
   if (!readOk) return;
-  if ((flags & UNIT_FLAG_HOME_STOOD_DOWN) != 0) {
-    if (t.stoodDown < 0xFF) t.stoodDown++;
-    return;
-  }
+  if ((flags & UNIT_FLAG_HOME_STOOD_DOWN) != 0 && t.stoodDown < 0xFF) t.stoodDown++;
   if (homeFlagsSayNotFound(flags) && t.notFound < 0xFF) t.notFound++;
 }
 
