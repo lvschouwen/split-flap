@@ -40,8 +40,9 @@ enum class BoardReason : uint8_t {
   ClockNotSet = 12,
   FirmwareDiffers = 13,
   UnitsNote = 14,       // units with a note           units found
+  BrownoutHold = 15,    // brownouts in a row (#504)
 };
-#define BOARD_REASON_COUNT 15
+#define BOARD_REASON_COUNT 16
 
 inline uint32_t boardReasonBit(BoardReason r) { return 1UL << (uint8_t)r; }
 
@@ -62,6 +63,7 @@ inline const char* boardReasonName(BoardReason r) {
     case BoardReason::ClockNotSet: return "clock-not-set";
     case BoardReason::FirmwareDiffers: return "firmware-differs";
     case BoardReason::UnitsNote: return "units-note";
+    case BoardReason::BrownoutHold: return "brownout-hold";
   }
   return "?";
 }
@@ -77,6 +79,7 @@ inline VerdictLevel boardReasonLevel(BoardReason r) {
     case BoardReason::UpdateBlocked:
     case BoardReason::UnitsMissing:
     case BoardReason::UnitsFault:
+    case BoardReason::BrownoutHold:
       return VerdictLevel::Fault;
     default:
       return VerdictLevel::Note;
@@ -87,6 +90,7 @@ static const BoardReason BOARD_REASON_ORDER[] = {
     BoardReason::Lost,
     BoardReason::NeverSeen,
     BoardReason::Rescue,
+    BoardReason::BrownoutHold,
     BoardReason::BusDead,
     BoardReason::UpdateBlocked,
     BoardReason::UnitsMissing,
@@ -120,6 +124,9 @@ struct BoardFacts {
   uint8_t unitsFound = 0;
   uint8_t unitsFault = 0;
   uint8_t unitsNote = 0;
+  // #504: the master's own row only — its start is held after brownouts in a row.
+  bool brownoutHold = false;
+  uint8_t brownoutStreak = 0;
 };
 
 struct BoardVerdict {
@@ -148,6 +155,7 @@ inline uint32_t boardReasonsOf(const BoardFacts& f) {
   }
   if (f.updatingUnits) add(BoardReason::UpdatingUnits);
   if (!f.clockSet) add(BoardReason::ClockNotSet);
+  if (f.brownoutHold) add(BoardReason::BrownoutHold);
   if (!f.unitsKnown) {
     add(BoardReason::UnitsUnknown);
     return all;
@@ -179,7 +187,7 @@ inline uint32_t boardReasonsObservable(const BoardFacts& f) {
             flag(BoardReason::FirmwareDiffers);
   }
   seen |= flag(BoardReason::UpdatingUnits) | flag(BoardReason::ClockNotSet) |
-          flag(BoardReason::UnitsUnknown);
+          flag(BoardReason::UnitsUnknown) | flag(BoardReason::BrownoutHold);
   if (f.unitsKnown && !f.busDead && !f.updatingUnits) {
     seen |= flag(BoardReason::UnitsMissing) | flag(BoardReason::UnitsFault) |
             flag(BoardReason::UnitsNote);
@@ -216,6 +224,9 @@ inline void boardReasonNumbers(BoardReason r, const BoardFacts& f, uint32_t& a, 
     case BoardReason::UnitsNote:
       a = f.unitsNote;
       b = f.unitsFound;
+      break;
+    case BoardReason::BrownoutHold:
+      a = f.brownoutStreak;
       break;
     default:
       break;

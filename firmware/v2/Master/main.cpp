@@ -31,6 +31,8 @@
 #include "BootGuard.h"  // #281
 #include "UnitCatch.h"  // #554
 #include "BootTrace.h"  // #504
+#include "BrownoutGuard.h"  // #504
+#include "HeapWatch.h"      // #504
 #include "CrashContext.h"  // #504
 #include "CoredumpReason.h"  // #630
 #include "RebootCause.h"  // #432
@@ -147,6 +149,9 @@ void setup() {
   // counted like any other.
   const uint32_t catchMs = unitCatchAtPowerOn();
   uartLogBegin();  // after the catch: nothing may delay that
+  // #504: after the catch, which must come first; before any task.
+  brownoutGuardBoot();  // brownouts in a row may hold this boot's display
+  heapWatchBoot();      // the low-heap restart record
   // Native USB-CDC needs a moment before the first prints land. The calls
   // above report once the log is up; the few lines they print on the spot
   // (the boot guard's restart into the rescue image) may not reach a console.
@@ -163,6 +168,8 @@ void setup() {
     if (coredumpPanicReason(reason, sizeof(reason))) SerialPrintf("crash: the dump says: %s\n", reason);
   }
   bootGuardLogReport();
+  brownoutGuardLogReport();
+  heapWatchLogReport();
   unitCatchLogReport();
   followerImageStoreInit();  // #304: read the stored ESP-01 image rev/presence
   // #570: the record of what happened on the wall, and this start in it.

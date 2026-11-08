@@ -16,6 +16,7 @@
 #include "SelfTestPoll.h"   // the shared self-test wait
 #include "HomeWait.h"       // the shared wait for a home search
 #include "BootTrace.h"  // #504
+#include "BrownoutGuard.h"  // #504: the boot hold
 #include "BootUpdatePlan.h"  // #499 decision logic
 #include "CrashContext.h"  // #504
 #include "FlapFrame.h"
@@ -1323,6 +1324,7 @@ void displayTaskMain(void*) {
   snapshotPublish(local);
   bootTraceMarkStage(BOOT_STAGE_UNITS);  // #504
   logStartProbe(local);
+  brownoutGuardHoldDisplay();  // #504: a brownout-held boot waits here
 
   // Boot auto-install + auto-update (#205, full v1 parity): flash any unit
   // the probe found sitting in twiboot (the recovery path for a failed or

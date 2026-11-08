@@ -32,6 +32,9 @@
 //   {"name":"restart","target":{"row":"<row id>"}}       "" or absent = this master
 //   {"name":"forget-wifi"}
 //       this master forgets its WiFi and restarts into its setup network
+//   {"name":"clear-brownout-hold"}
+//       this master's units move again after brownouts in a row held them
+//       (BrownoutGuardPolicy.h); 409 when nothing is held
 // GET /api/v2/history[?before=<seq>][&limit=<n>] reads the event record newest
 // first: {"events":[{seq,time,kind,detail,board,unit,a,b}...],"next":<seq>}.
 // The reason, job or restart cause an entry is about is also given by name.
@@ -50,6 +53,7 @@
 #include <memory>
 
 #include "BootDump.h"
+#include "BrownoutGuard.h"
 #include "BuildVersion.h"
 #include "EventRecord.h"
 #include "FollowerImageStore.h"
@@ -494,6 +498,13 @@ void handleForgetWifi(AsyncWebServerRequest* request) {
   wifiStageReset();
 }
 
+// #504: the operator has looked at the supply; netTask lifts the hold.
+void handleClearBrownoutHold(AsyncWebServerRequest* request) {
+  if (!brownoutGuardRequestClear()) return sendError(request, 409, "this board is not held");
+  SerialPrintln(F("Brownout hold cleared through the API"));
+  sendDone(request);
+}
+
 // A look at the release site, or an update from what it has (#583). The
 // worker does both (ReleaseUpdate.h), one at a time. An update is refused
 // while anything else writes firmware; once it runs, the upload routes and
@@ -535,6 +546,7 @@ void handleAction(AsyncWebServerRequest* request, JsonVariant& json) {
   if (strcmp(name, "restart") == 0) return handleRestart(request, body, table, generation);
   if (strcmp(name, "find-rows") == 0) return handleFindRows(request);
   if (strcmp(name, "forget-wifi") == 0) return handleForgetWifi(request);
+  if (strcmp(name, "clear-brownout-hold") == 0) return handleClearBrownoutHold(request);
   if (strcmp(name, "check-release") == 0) return handleRelease(request, false);
   if (strcmp(name, "update-from-release") == 0) return handleRelease(request, true);
   if (strcmp(name, "restart-units") == 0) return handleRestartUnits(request);

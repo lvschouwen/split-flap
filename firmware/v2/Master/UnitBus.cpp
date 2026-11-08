@@ -209,9 +209,18 @@ static bool isDisplayMoving(const UnitFacts* facts, int width) {
 // The cap is owned by displayTask (sag-adaptive) and pushed in; the gate is
 // displayTask's radio-quiet wait, called before any op that starts motion.
 static int motionCap = MOTION_BUDGET_MAX;
+static int motionCapAsked = MOTION_BUDGET_MAX;
+static int motionCeiling = MOTION_BUDGET_MAX;  // #504: a brownout-held boot's
 static void (*motionGate)() = nullptr;
 
-void unitBusSetMotionCap(int cap) { motionCap = cap; }
+void unitBusSetMotionCap(int cap) {
+  motionCapAsked = cap;
+  motionCap = cap < motionCeiling ? cap : motionCeiling;
+}
+void unitBusSetMotionCeiling(int ceiling) {
+  motionCeiling = ceiling;
+  unitBusSetMotionCap(motionCapAsked);
+}
 void unitBusSetMotionGate(void (*gate)()) { motionGate = gate; }
 
 // False when a stop is pending once the gate returns (the gate itself cuts

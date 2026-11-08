@@ -170,6 +170,26 @@ static void test_the_masters_own_row_is_judged_on_its_units_only() {
   TEST_ASSERT_TRUE(BoardReason::UnitsFault == boardVerdict(f).reason);
 }
 
+static void test_a_brownout_held_master_is_a_fault_whatever_its_units() {
+  // #504: held, it moves nothing, so its units read healthy and unhomed.
+  BoardFacts f = healthyRow();
+  f.own = true;
+  f.brownoutHold = true;
+  f.brownoutStreak = 3;
+  BoardVerdict v = boardVerdict(f);
+  TEST_ASSERT_TRUE(VerdictLevel::Fault == v.level);
+  TEST_ASSERT_TRUE(BoardReason::BrownoutHold == v.reason);
+  TEST_ASSERT_EQUAL_UINT32(3, v.a);
+  f.unitsKnown = false;  // before the probe: still the hold that leads
+  TEST_ASSERT_TRUE(BoardReason::BrownoutHold == boardVerdict(f).reason);
+  TEST_ASSERT_TRUE(boardReasonsObservable(f) & boardReasonBit(BoardReason::BrownoutHold));
+  f.unitsKnown = true;
+  f.unitsFault = 2;  // a unit fault too: the hold says why nothing moves
+  v = boardVerdict(f);
+  TEST_ASSERT_TRUE(BoardReason::BrownoutHold == v.reason);
+  TEST_ASSERT_TRUE(has(v, BoardReason::UnitsFault));
+}
+
 static void test_the_reason_numbers_and_names_are_fixed() {
   static const struct { BoardReason r; uint8_t n; const char* name; } fixed[] = {
       {BoardReason::Working, 0, "working"},
@@ -187,6 +207,7 @@ static void test_the_reason_numbers_and_names_are_fixed() {
       {BoardReason::ClockNotSet, 12, "clock-not-set"},
       {BoardReason::FirmwareDiffers, 13, "firmware-differs"},
       {BoardReason::UnitsNote, 14, "units-note"},
+      {BoardReason::BrownoutHold, 15, "brownout-hold"},
   };
   TEST_ASSERT_EQUAL(BOARD_REASON_COUNT, (int)(sizeof(fixed) / sizeof(fixed[0])));
   for (const auto& f : fixed) {
@@ -236,6 +257,7 @@ int main(int, char**) {
   RUN_TEST(test_the_notes);
   RUN_TEST(test_a_board_updating_its_units_is_not_judged_on_them);
   RUN_TEST(test_the_masters_own_row_is_judged_on_its_units_only);
+  RUN_TEST(test_a_brownout_held_master_is_a_fault_whatever_its_units);
   RUN_TEST(test_the_reason_numbers_and_names_are_fixed);
   RUN_TEST(test_every_reason_is_ranked_once_and_faults_come_first);
   RUN_TEST(test_counting_units_and_the_worse_of_two_levels);

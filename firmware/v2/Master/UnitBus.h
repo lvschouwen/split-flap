@@ -46,6 +46,8 @@ bool unitBusPollHealthOne(UnitFacts* facts, int i);
 // sag-adaptive cap and registers its radio-quiet wait; frames, homes and jogs
 // then never exceed the cap and never start while the radio is busy.
 void unitBusSetMotionCap(int cap);
+// #504: an upper bound on that cap for the rest of the boot (BrownoutGuard).
+void unitBusSetMotionCeiling(int ceiling);
 void unitBusSetMotionGate(void (*gate)());
 
 // Drives one frame onto the flaps: waits for the display to stop, sends

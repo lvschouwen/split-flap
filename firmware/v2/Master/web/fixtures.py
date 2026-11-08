@@ -57,6 +57,7 @@ BOARD_REASONS = {
     "clock-not-set": ("note", 0, 0),
     "firmware-differs": ("note", 0, 0),
     "units-note": ("note", 13, 16),
+    "brownout-hold": ("fault", 3, 0),
 }
 
 UNIT_FIELDS = ["address", "level", "reason", "a", "b", "state", "rev", "firmware", "bootloader",

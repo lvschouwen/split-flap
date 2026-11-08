@@ -40,11 +40,13 @@
 #include "BootSectionClassify.h"
 #include "BootGuard.h"
 #include "BootTrace.h"
+#include "BrownoutGuard.h"
 #include "BuildVersion.h"
 #include "CrashContext.h"
 #include "FactorySlot.h"
 #include "FlashLog.h"
 #include "FollowerImageStore.h"
+#include "HeapWatch.h"
 #include "JsonCopied.h"
 #include "MqttService.h"
 #include "NetLiveness.h"
@@ -180,6 +182,8 @@ void writeMaster(JsonObject root, const Gathered& g) {
   root["network"] = serialized(netLivenessJson());
   root["crash"] = serialized(crashCtxReportJson());
   root["guard"] = serialized(bootGuardJson());
+  root["brownoutGuard"] = serialized(brownoutGuardJson());  // #504
+  root["heapWatch"] = serialized(heapWatchJson());          // #504
   const RescueSlotFacts rescue = rescueSlotCurrent();
   JsonObject r = root["rescue"].to<JsonObject>();
   r["rev"] = jsonCopied(rescue.rev);

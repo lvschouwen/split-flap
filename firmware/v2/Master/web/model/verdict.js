@@ -118,6 +118,8 @@ const BOARD = {
     'Nothing to do: the master offers it by itself.'],
   'units-note': (a, b) => ['Working, with notes', `All ${plural(b, 'unit')} answer, ${a} with a note.`,
     'Nothing to do: a unit marked amber below says what was noted.'],
+  'brownout-hold': (a) => ['Held after brownouts', `${plural(a, 'brownout')} in a row, each soon after a start: no unit moves.`,
+    'Check the power supply, then send the action clear-brownout-hold; the units then move one at a time.'],
 };
 
 export const BOARD_REASON_NAMES = Object.keys(BOARD);
@@ -125,7 +127,7 @@ export const BOARD_REASON_NAMES = Object.keys(BOARD);
 // The reasons the master calls a fault (boardReasonLevel in BoardVerdict.h):
 // an entry of the record names its reason without its level.
 export const BOARD_FAULT_REASONS = ['lost', 'never-seen', 'rescue', 'bus-dead', 'update-blocked',
-  'units-missing', 'units-fault'];
+  'units-missing', 'units-fault', 'brownout-hold'];
 
 function say(table, verdict, alphabet) {
   const words = table[verdict.reason];

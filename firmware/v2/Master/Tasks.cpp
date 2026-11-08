@@ -11,6 +11,8 @@
 #include <atomic>
 
 #include "BootGuard.h"  // forgives the crash count (#281)
+#include "BrownoutGuard.h"  // #504
+#include "HeapWatch.h"      // #504
 #include "CrashContext.h"  // task activity breadcrumb (#504)
 
 // #289 dummy mode: the settings-stored unit-count override, seeded by
@@ -214,6 +216,8 @@ static void netTaskMain(void* arg) {
     wdtFeed();
     crashCtxHeartbeat();  // #504: the clock crash "ages" are measured against
     bootGuardTick();      // #281: a boot that ran this long forgives its crashes
+    brownoutGuardTick();  // #504: the streak ends after the window; a clear
+    heapWatchTick();      // #504: sustained low internal heap restarts
     crashCtxMark(CRASH_SLOT_NET, CRASH_ACT_WIFI);
     wifiServiceTick();
     improvServiceTick();  // #601: WiFi credentials over USB

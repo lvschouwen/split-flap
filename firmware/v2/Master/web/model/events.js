@@ -87,6 +87,7 @@ const BOARD_OVER = {
   'update-blocked': 'takes the stored image again',
   'units-missing': 'all its units answer again',
   'units-fault': 'none of its units has a fault now',
+  'brownout-hold': 'moves its units again',
 };
 const over = (table, reason, title) => table[reason] || `“${title.toLowerCase()}” is over`;
 

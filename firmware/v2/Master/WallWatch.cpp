@@ -9,6 +9,7 @@
 
 #include <time.h>
 
+#include "BrownoutGuard.h"  // #504: the own row held
 #include "ClockPolicy.h"  // clockIsTimeSynced
 #include "EventRecord.h"
 #include "FollowerImageStore.h"
@@ -86,6 +87,8 @@ void lookAtOwn(int ownRow, uint32_t nowMs, WallVerdictBoard& board) {
   facts.uptimeS = nowMs / 1000UL;
   facts.clockSet = clockIsTimeSynced(time(nullptr));
   facts.updatingUnits = reflashInProgress(own.reflash);
+  facts.brownoutHold = brownoutGuardHeld();  // #504
+  facts.brownoutStreak = brownoutGuardStreak();
   facts.unitsPlaced =
       ownRow >= 0 ? work->wall.rows.rows[ownRow].width : own.displayWidth;
   board.own = true;

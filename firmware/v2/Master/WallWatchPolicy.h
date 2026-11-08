@@ -54,7 +54,7 @@ inline uint32_t boardRecordedReasons() {
   return flag(BoardReason::Lost) | flag(BoardReason::NeverSeen) | flag(BoardReason::Rescue) |
          flag(BoardReason::BusDead) | flag(BoardReason::UpdateBlocked) |
          flag(BoardReason::UnitsMissing) | flag(BoardReason::Updating) |
-         flag(BoardReason::UpdatingUnits);
+         flag(BoardReason::UpdatingUnits) | flag(BoardReason::BrownoutHold);
 }
 
 inline uint32_t boardFaultReasons() {
