@@ -22,7 +22,7 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/split-flap"
 export PLATFORMIO_BUILD_CACHE_DIR="${PLATFORMIO_BUILD_CACHE_DIR:-$CACHE/pio-build-cache}"
 VENV="${SPLITFLAP_CHECK_VENV:-$CACHE/check-venv}"
 LOCK="$CACHE/esptoolpy.lock"
-PY_PINS=(pytest==9.2.0 pyserial==3.5 esptool==5.4.0 grpcio-tools==1.85.1 protobuf==7.36.2)
+PY_PINS=(pytest==9.2.0 pyserial==3.5 esptool==5.4.0 grpcio-tools==1.85.1 protobuf==7.36.2 lizard==1.25.1)
 ALL_TREES=(unit master rescue follower py)
 
 mkdir -p "$CACHE" "$PLATFORMIO_BUILD_CACHE_DIR"
@@ -83,6 +83,7 @@ run_follower() {
 }
 
 run_py() {
+  step "code standard gate" "$ROOT" "$VENV/bin/python" -I scripts/check_standard.py
   step "copied-header gate" "$ROOT" pytest_in tests/
   step "buildtools pytest" "$V2/buildtools" pytest_in tests/
   step "wall link pytest" "$V2/link" pytest_in tests/

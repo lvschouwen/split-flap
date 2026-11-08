@@ -25,6 +25,7 @@ Arduino-based split-flap display: a master MCU drives per-flap units over I2C. P
 
 - `pio run` · `pio test -e native` · `pio device monitor` (115200) in a project dir; Unit envs `unit` / `unit_old_bootloader`.
 - **The one check is `scripts/check.sh`** (`CHECK=` in `.claude/agent-wt.conf`, run by `agent-check`): every v2 build, native and pytest suite (own uv venv on pinned versions) and the drift gates. `check.sh <tree>...` or `--touched [base]` narrows it. The pre-push hook is the shared `agent-pre-push` (`agent-install-hooks`): it skips a tree `agent-check` stamped green, otherwise runs `PREPUSH_CHECK` (= `check.sh --touched <base>`).
+- **Code standard gate (#653):** `scripts/check_standard.py` (a `check.sh` step for every selection) ratchets file/function size, CCN, nesting and params against `tools/standard-baseline.txt`, which only shrinks (`--shrink`, `--rename`); limits and edit rules in `docs/CODING_STANDARDS.md` 1.5.
 - Every platform, library and pip package is pinned exactly (#648; `.claude/rules/buildtools.md`).
 
 ## Per-change workflow (no local app to stop)

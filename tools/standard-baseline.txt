@@ -1,0 +1,59 @@
+# Code standard baseline (#653); limits and rules in docs/CODING_STANDARDS.md 1.5.
+# Format: metric<TAB>key<TAB>value. Metrics: nloc (key = file), len ccn nest params (key = file:function, a second
+# function of the same name in a file is file:function#2), moved (a deliberate rename record).
+#
+# The entries are existing offenders past the fail line, held at their current value, and may only SHRINK. The gate
+# fails on an entry that is new or higher than in the merge-base copy of this file, and on an entry whose offender
+# was fixed or lowered (remove or lower it).
+#   - Fixed or lowered an offender? `python3 -I scripts/check_standard.py --shrink` drops or lowers entries (never adds).
+#   - Moved a file or renamed a function? `python3 -I scripts/check_standard.py --rename OLD NEW` (a path, or
+#     path:function) moves the entries keeping their values and leaves `moved` records the gate accepts.
+# First version created by --init; --init refuses when this file exists.
+ccn	firmware/v2/FollowerEsp01/FollowerCluster.cpp:clusterLoopTick	32
+ccn	firmware/v2/FollowerEsp01/FollowerLink.cpp:linkLoopTick	34
+ccn	firmware/v2/FollowerEsp01/FollowerLinkOps.h:followerLinkPlanOp	29
+ccn	firmware/v2/FollowerEsp01/FollowerUnitJobs.cpp:executeStagedOp	28
+ccn	firmware/v2/FollowerEsp01/FollowerWeb.cpp:registerMasterFirmwareEndpoint	43
+ccn	firmware/v2/Master/DisplayTask.cpp:displayTaskMain	34
+ccn	firmware/v2/Master/FollowerImageStore.cpp:followerImageFlushTick	28
+ccn	firmware/v2/Master/MqttHelpers.h:buildDiscoveryPayload	36
+ccn	firmware/v2/Master/MqttHelpers.h:mqttDiscMeta	35
+ccn	firmware/v2/Master/MqttService.cpp:mqttPublishWallSurfacing	39
+ccn	firmware/v2/Master/MqttService.cpp:mqttServiceHandleInbox	36
+ccn	firmware/v2/Master/PendingSettingsPost.h:applySettingsPost	33
+ccn	firmware/v2/Master/PendingSettingsPost.h:stageSettingsParam	52
+ccn	firmware/v2/Master/UnitApiJson.h:unitApiDetail	26
+ccn	firmware/v2/Master/UnitFactsJson.h:unitfactsjson::readUnit	48
+ccn	firmware/v2/Master/UnitVerdict.h:unitReasonsOf	26
+ccn	firmware/v2/Master/WallLink.cpp:pass	26
+ccn	firmware/v2/Master/WebEndpoints.cpp:webEndpointsLoop	53
+ccn	firmware/v2/Master/WebFirmware.cpp:webFirmwareRegister	67
+ccn	firmware/v2/Master/WebSystem.cpp:webSystemRegister	27
+ccn	firmware/v2/Master/WifiService.cpp:wifiServiceTick	51
+ccn	firmware/v2/Rescue/RescueSlots.h:parseAppBuildStamp	35
+ccn	firmware/v2/Rescue/RescueWeb.cpp:rescueWebInit	32
+ccn	firmware/v2/Unit/Unit.ino:loop	81
+ccn	firmware/v2/Unit/UnitBusSilence.h:busSilenceTick	31
+ccn	firmware/v2/Unit/UnitI2CProtocol.ino:receiveLetter	69
+ccn	firmware/v2/shared/LanOrigin.h:lanParseIpv6	32
+ccn	firmware/v2/shared/UnitHealth.h:buildUnitHealthJson	50
+ccn	firmware/v2/shared/WifiTxPolicy.h:wifiTxPolicyStep	29
+len	firmware/v2/FollowerEsp01/FollowerUnitJobs.cpp:executeStagedOp	156
+len	firmware/v2/FollowerEsp01/FollowerWeb.cpp:registerMasterFirmwareEndpoint	194
+len	firmware/v2/Master/DisplayTask.cpp:displayTaskMain	168
+len	firmware/v2/Master/DisplayTask.cpp:runReflashJob	242
+len	firmware/v2/Master/MqttService.cpp:mqttPublishWallSurfacing	193
+len	firmware/v2/Master/PendingSettingsPost.h:stageSettingsParam	199
+len	firmware/v2/Master/WebEndpoints.cpp:webEndpointsLoop	257
+len	firmware/v2/Master/WebFirmware.cpp:webFirmwareRegister	453
+len	firmware/v2/Master/WebSystem.cpp:webSystemRegister	187
+len	firmware/v2/Master/WifiService.cpp:wifiServiceTick	174
+len	firmware/v2/Rescue/RescueWeb.cpp:rescueWebInit	217
+len	firmware/v2/Unit/Unit.ino:loop	469
+len	firmware/v2/Unit/Unit.ino:setup	258
+len	firmware/v2/Unit/UnitI2CProtocol.ino:receiveLetter	230
+len	firmware/v2/Unit/UnitMotion.ino:runSelfTest	162
+len	firmware/v2/shared/UnitHealth.h:buildUnitHealthJson	224
+nest	firmware/v2/Master/WallLink.cpp:Hooks::rowMessage	9
+params	firmware/v2/Master/MqttHelpers.h:buildEntityDiscovery	13
+params	firmware/v2/Master/MqttHelpers.h:buildTelemetryPayload	13

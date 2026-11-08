@@ -77,6 +77,26 @@ There is no shared-include graph across the v2 projects; pure headers are **copi
 - Functions **SHOULD** stay under ~50 lines and do one mechanism; nesting **SHOULD** stay ≤ 4 levels.
 - Generated files (`WebAssets.h`, `UnitAssets.h`, `RescueAssets.h`) are exempt.
 
+**The gate (#653).** `scripts/check_standard.py` runs inside `scripts/check.sh` (lizard `-ENS`, pinned in the
+check venv) over C/C++/`.ino` under `firmware/v2` (not `UnitBootloader/`, `test/`, `.pio`, `managed_components`)
+and the python under `flashing/` and `firmware/v2/buildtools/`. "Past" means strictly above.
+
+| Metric | Warn | Fail |
+|---|---|---|
+| Lines per file (lizard NLOC) | 800 | 1500 |
+| Lines per function | 60 | 150 |
+| Cyclomatic complexity | 15 | 25 |
+| Nesting depth | 4 | 6 |
+| Parameters | 6 | 8 |
+
+Existing offenders are held in `tools/standard-baseline.txt` (`metric<TAB>key<TAB>value`) and may only shrink.
+Fails: NEW (past fail, not listed), WORSE (above its listed value), STALE (fixed or lowered but still listed),
+GREW (entry new or higher than in the merge-base copy), INCOMPLETE (lizard missing or failing). Warn lines print
+for files changed since the merge base and never fail. Editing the baseline: after fixing an offender run
+`python3 -I scripts/check_standard.py --shrink` (drops or lowers, never adds); after moving a file or renaming a
+function run `--rename OLD NEW`. Never raise or add an entry by hand. Only bypass: `SPLITFLAP_SKIP_STANDARD=1`
+(prints loudly).
+
 ---
 
 ## 2. C++ style — embedded profile
