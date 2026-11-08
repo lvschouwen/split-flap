@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The one check (#651): what the CI workflow ran, now that Actions is off.
-# Called by the pre-push hook (scripts/pre-push) and by every agent before its
+# Run by agent-check (CHECK=), and as `--touched <base>` by the shared
+# agent-pre-push (PREPUSH_CHECK=) and by every agent before its
 # local commit.
 #
 #   scripts/check.sh                   every tree
