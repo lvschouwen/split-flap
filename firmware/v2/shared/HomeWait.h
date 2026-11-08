@@ -15,7 +15,9 @@
 //
 // A unit refuses SFP_CMD_HOME for 30 s after a failed search
 // (Unit/UnitHomePolicy.h) and keeps reporting that failure: the job fails the
-// same way, which is what the unit's state is.
+// same way, which is what the unit's state is. A HOME sent to one unit is the
+// one seek a stood-down unit (#667) still makes, so the single-unit wait never
+// looks at that flag.
 
 #include <stdint.h>
 
@@ -98,13 +100,21 @@ inline MaintGrade maintGradeHome(HomeWaitOutcome outcome) {
 
 // Every unit of a row was sent home: the job failed when any unit that
 // answered reports a failed search. A unit that does not answer is the
-// verdicts' to report, not this job's.
+// verdicts' to report, not this job's; nor is one that stood its homing down
+// (#667): the row's letters do not make it seek, so the job asked it nothing.
+// It is counted apart.
 struct HomeAllTally {
   uint8_t notFound = 0;
+  uint8_t stoodDown = 0;
 };
 
 inline void homeAllTallyAdd(HomeAllTally& t, bool readOk, uint8_t flags) {
-  if (readOk && homeFlagsSayNotFound(flags) && t.notFound < 0xFF) t.notFound++;
+  if (!readOk) return;
+  if ((flags & UNIT_FLAG_HOME_STOOD_DOWN) != 0) {
+    if (t.stoodDown < 0xFF) t.stoodDown++;
+    return;
+  }
+  if (homeFlagsSayNotFound(flags) && t.notFound < 0xFF) t.notFound++;
 }
 
 inline MaintGrade maintGradeHomeAll(const HomeAllTally& t) {

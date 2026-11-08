@@ -126,6 +126,7 @@ inline void unitApiStatusPart(const UnitApiSections& sec, const UnitFacts& u) {
     drum["homeFailed"] = (s.flags & UNIT_FLAG_LAST_HOME_FAILED) != 0;
     drum["hallNeverSeen"] = (s.flags & UNIT_FLAG_HALL_NEVER) != 0;
     drum["moving"] = (s.flags & UNIT_FLAG_MOVING) != 0;
+    drum["homeStoodDown"] = (s.flags & UNIT_FLAG_HOME_STOOD_DOWN) != 0;
     out["addressStored"] = (s.flags & UNIT_FLAG_ADDR_EEPROM) != 0;
   }
 }

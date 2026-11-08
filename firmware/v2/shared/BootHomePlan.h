@@ -27,14 +27,18 @@
 // NOT homed and so still need a HOME. Reading the homed bit lets the same
 // sequence serve both a cold boot (every unit unhomed -> home all) and a
 // post-reflash top-up (only the just-flashed units unhomed) without re-homing
-// units that are already good. out[] must hold >= width entries; returns count.
+// units that are already good. A unit that stood its homing down (#667) is
+// left alone: a seek it gave up on would only stall its motor again, and its
+// HOME is the operator's to send. out[] must hold >= width entries; returns
+// count.
 inline int bootHomeCollectTargets(const UnitFacts* units, int width, int base,
                                   uint8_t* out) {
   int n = 0;
   for (int i = 0; i < width; i++) {
     const UnitFacts& u = units[i];
     if (u.state == 1 && u.statusValid &&
-        !(u.status.flags & UNIT_FLAG_HOMED)) {
+        !(u.status.flags & UNIT_FLAG_HOMED) &&
+        !(u.status.flags & UNIT_FLAG_HOME_STOOD_DOWN)) {
       out[n++] = (uint8_t)(base + i);
     }
   }

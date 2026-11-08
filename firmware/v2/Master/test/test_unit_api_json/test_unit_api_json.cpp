@@ -107,6 +107,19 @@ static void test_the_detail_groups_the_facts_and_names_the_verdict() {
   TEST_ASSERT_TRUE(doc["bootloader"]["crc32"].isNull());  // only when it is not the expected one
 }
 
+// #667: the stand-down bit of the status flags, under its own name.
+static void test_a_stood_down_unit_says_so_in_its_drum() {
+  JsonDocument doc;
+  UnitFacts u = healthy();
+  unitApiDetail(doc.to<JsonObject>(), u, 3, 10000, nullptr);
+  TEST_ASSERT_FALSE(doc["drum"]["homeStoodDown"].as<bool>());
+  u.status.flags = UNIT_FLAG_LAST_HOME_FAILED | UNIT_FLAG_HALL_NEVER | UNIT_FLAG_HOME_STOOD_DOWN;
+  JsonDocument down;
+  unitApiDetail(down.to<JsonObject>(), u, 3, 10000, nullptr);
+  TEST_ASSERT_TRUE(down["drum"]["homeStoodDown"].as<bool>());
+  TEST_ASSERT_TRUE(down["drum"]["hallNeverSeen"].as<bool>());
+}
+
 static void test_a_unit_in_its_bootloader_says_what_the_bootloader_said() {
   JsonDocument doc;
   UnitFacts u;
@@ -150,6 +163,7 @@ int main(int, char**) {
   RUN_TEST(test_what_was_not_read_is_null_in_the_table_and_the_row_stays_as_long);
   RUN_TEST(test_a_position_the_drum_does_not_have_is_no_letter);
   RUN_TEST(test_the_detail_groups_the_facts_and_names_the_verdict);
+  RUN_TEST(test_a_stood_down_unit_says_so_in_its_drum);
   RUN_TEST(test_a_unit_in_its_bootloader_says_what_the_bootloader_said);
   RUN_TEST(test_a_damaged_bootloader_carries_its_checksum);
   return UNITY_END();

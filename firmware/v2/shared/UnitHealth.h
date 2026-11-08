@@ -27,7 +27,7 @@
 // CMD_GET_STATUS reply. Populated by UnitBus.cpp; mirrors the 8-byte layout
 // documented in the v1 Unit.ino requestEvent().
 struct UnitStatus {
-  uint8_t  flags = 0;                    // bit0 moving, bit1 last-home-failed, bit2 hall-never-triggered
+  uint8_t  flags = 0;                    // UNIT_FLAG_* below
   uint8_t  mcusrAtBoot = 0;              // BORF / WDRF / EXTRF / PORF / JTRF snapshot
   uint8_t  lifetimeBrownoutCount = 0;    // saturating
   uint8_t  lifetimeWatchdogCount = 0;    // saturating
@@ -37,10 +37,14 @@ struct UnitStatus {
 };
 
 // Status-flag bit positions (must match the v1 Unit.ino requestEvent()).
-// Bit 3 stays reserved for the unit's earmarked stuck-drum use.
 #define UNIT_FLAG_MOVING            (1 << 0)
 #define UNIT_FLAG_LAST_HOME_FAILED  (1 << 1)
 #define UNIT_FLAG_HALL_NEVER        (1 << 2)
+// Home stood down (#667, Unit/UnitHomePolicy.h): seeks in which the hall never
+// fired stopped the unit's own retries; only an SFP_CMD_HOME sent to it seeks
+// again. The masters' batch homes leave such a unit alone. A unit from before
+// #667 never sets it, which reads as "not stood down": the old behaviour.
+#define UNIT_FLAG_HOME_STOOD_DOWN   (1 << 3)
 // Address source is EEPROM-provisioned, not DIP (#215). Informational, never
 // a fault — but twiboot only listens on the DIP-derived address, so a set bit
 // on a unit whose DIP differs means over-I2C reflash cannot reach it.

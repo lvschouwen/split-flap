@@ -229,6 +229,13 @@ void getOffset() {
 #endif
 }
 
+// Every seek's outcome goes through here, so the ISR's copy of the stand-down
+// (#667) never lags the policy.
+void recordHomeOutcome(bool found, bool hallSeen) {
+  homeNoteResult(homeBackoff, found, hallSeen, millis());
+  statusHomeStoodDown = homeStoodDown(homeBackoff);
+}
+
 //doing a calibration of the revolver using the hall sensor
 int calibrate(bool initialCalibration) {
 #ifdef SERIAL_ENABLE
@@ -322,7 +329,7 @@ int calibrate(bool initialCalibration) {
       lastHomingStepCount = (uint16_t)i;
       homed = true;  // boot-home satisfied (#309); disables the self-home drain
       interrupts();
-      homeNoteResult(homeBackoff, true, millis());
+      recordHomeOutcome(true, true);
       //Only stop motor for initial calibration
       if (initialCalibration) {
         stopMotor();
@@ -354,7 +361,9 @@ int calibrate(bool initialCalibration) {
       unitEeBumpSaturating(lifetime.homeFailedCount);
       persistLifetimeHealth();
       stopMotor();
-      homeNoteResult(homeBackoff, false, millis());  // the retry gap starts here
+      // The retry gap starts here; a third seek in a row that never saw the
+      // magnet stands the unit down (#667).
+      recordHomeOutcome(false, hallSawMagnet);
       return -1;
     }
     i++;
@@ -596,7 +605,7 @@ static bool selfTestMeasureRev() {
     statusHallNeverTriggered = false;
     homed = true;
     interrupts();
-    homeNoteResult(homeBackoff, true, millis());
+    recordHomeOutcome(true, true);
   }
   return failed;
 }
@@ -644,7 +653,7 @@ void runSelfTest() {
     noInterrupts();
     homed = false;
     interrupts();
-    homeNoteResult(homeBackoff, false, millis());
+    recordHomeOutcome(false, selfTest.reason != SELFTEST_REASON_HALL_NEVER);
   }
   // #406: carry the measurements into lifetime storage. The FIRST valid
   // reading becomes the baseline this unit is compared against forever;

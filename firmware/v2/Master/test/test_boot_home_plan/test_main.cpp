@@ -47,6 +47,23 @@ static void test_all_homed_yields_no_targets() {
   TEST_ASSERT_EQUAL_INT(0, bootHomeCollectTargets(units, 3, 1, out));
 }
 
+// #667: a stood-down unit is unhomed, but its seeks are given up on; only a
+// HOME sent to it alone (the operator's) moves it.
+static void test_a_stood_down_unit_is_not_a_target() {
+  UnitFacts units[3];
+  mkSketch(units[0], false);
+  mkSketch(units[1], false);
+  units[1].status.flags |= UNIT_FLAG_LAST_HOME_FAILED | UNIT_FLAG_HALL_NEVER |
+                           UNIT_FLAG_HOME_STOOD_DOWN;
+  mkSketch(units[2], false);
+  units[2].status.flags |= UNIT_FLAG_LAST_HOME_FAILED | UNIT_FLAG_HALL_NEVER;
+  uint8_t out[3];
+  int n = bootHomeCollectTargets(units, 3, /*base=*/1, out);
+  TEST_ASSERT_EQUAL_INT(2, n);
+  TEST_ASSERT_EQUAL_UINT8(1, out[0]);
+  TEST_ASSERT_EQUAL_UINT8(3, out[1]);  // failed but not stood down: still homed
+}
+
 static void test_base_offsets_addresses() {
   UnitFacts units[2];
   mkSketch(units[0], false);
@@ -83,6 +100,7 @@ int main(int, char**) {
   RUN_TEST(test_collects_only_unhomed_sketch_units);
   RUN_TEST(test_invalid_status_is_not_a_target);
   RUN_TEST(test_all_homed_yields_no_targets);
+  RUN_TEST(test_a_stood_down_unit_is_not_a_target);
   RUN_TEST(test_base_offsets_addresses);
   RUN_TEST(test_batch_count);
   RUN_TEST(test_batch_count_clamps_bad_size);

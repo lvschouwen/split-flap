@@ -381,7 +381,7 @@ void requestEvent() {
     //             bit 0  currentlyrotating
     //             bit 1  last home FAILED (hit 3*STEPS without marker)
     //             bit 2  hall never triggered during last home
-    //             bit 3  reserved (stuck drum, future)
+    //             bit 3  home stood down: no automatic seek (#667)
     //             bit 4  I2C address source is EEPROM, not DIP (#215) —
     //                    twiboot still listens on DIP, so a mismatch means
     //                    over-I2C reflash can't reach this unit
@@ -399,6 +399,7 @@ void requestEvent() {
     if (currentlyrotating)          flags |= (1 << 0);
     if (statusLastHomeFailed)       flags |= (1 << 1);
     if (statusHallNeverTriggered)   flags |= (1 << 2);
+    if (statusHomeStoodDown)        flags |= UNIT_STATUS_FLAG_HOME_STOOD_DOWN;
     if (addressFromEeprom)          flags |= (1 << 4);
     // Bit 5 = homed since boot (#309). With bit 0 (moving) the master derives
     // the boot-home state: !homed & !moving = unhomed, !homed & moving = homing,

@@ -860,6 +860,10 @@ static MaintGrade gradeHomeAll(const DisplaySnapshot& local) {
     const bool readOk = unitBusReadStatus(SFP_I2C_ADDRESS_BASE + i, status);
     homeAllTallyAdd(tally, readOk, status.flags);
   }
+  if (tally.stoodDown > 0) {
+    SerialPrintf("home-all: %u unit(s) stood down, left alone (#667)\n",
+                 (unsigned)tally.stoodDown);
+  }
   return maintGradeHomeAll(tally);
 }
 

@@ -351,12 +351,17 @@ uint16_t          bootHomeJitterMs          = 0;      // 0..BOOT_HOME_JITTER_MAX
 // and loop() keeps calling rotateToLetter() while a retry is owed. A failed
 // seek also drops `homed`, so the drum is never stepped from a position nobody
 // knows. Loop-context.
-HomeBackoff       homeBackoff               = {0, 0};
+HomeBackoff       homeBackoff               = {0, 0, 0};
+// homeStoodDown(homeBackoff) for the TWI ISR's status reply (#667); written by
+// recordHomeOutcome() only. Single byte, so atomic.
+volatile bool     statusHomeStoodDown       = false;
 // Hold of a letter move on a low supply (#505, UnitSupplyWait.h). Loop context.
 SupplyWait        supplyWait;
 uint16_t          supplyIdleLevelMv         = 0;  // the rail at rest, as this chip reads it
 // Status flag bit surfaced to the master (mirrors UnitHealth.h UNIT_FLAG_HOMED).
 #define UNIT_STATUS_FLAG_HOMED (1 << 5)
+// Mirrors UnitHealth.h UNIT_FLAG_HOME_STOOD_DOWN (#667).
+#define UNIT_STATUS_FLAG_HOME_STOOD_DOWN (1 << 3)
 
 //sleep globals
 //Sleep mode is SLEEP_MODE_IDLE: CPU clock stops, peripheral clocks (including
@@ -1145,7 +1150,8 @@ void loop() {
     Serial.println("Home requested");
 #endif
     // Refused for the base gap after a failed home (UnitHomePolicy.h): the
-    // status flags keep reporting that failure.
+    // status flags keep reporting that failure. The one seek a stood-down
+    // unit still makes (#667).
     if (homeCommandAllowed(homeBackoff, millis())) {
       calibrate(true);
       // Park at blank — don't immediately rotate back to the last displayed

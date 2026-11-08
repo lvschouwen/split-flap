@@ -15,6 +15,15 @@
 // reflash sequence, an operator after a repair — so it waits only the base gap
 // however long the automatic one has grown.
 //
+// A seek in which the hall never fired cannot tell a dead sensor from a
+// jammed drum, and a jammed drum takes stall torque on the 28BYJ-48's plastic
+// gear train at every attempt (#667). So HOME_STANDDOWN_FAILS such seeks in a
+// row stand the unit down: no automatic retry and no seek for a letter, coils
+// off, until somebody asks. An SFP_CMD_HOME still gets its one seek after the
+// base gap; it ends the stand-down only by finding the marker, or by a failure
+// in which the hall did fire. A failure where the hall was seen keeps the
+// backoff above.
+//
 // The state is RAM only: SFP_CMD_REBOOT (or a power cycle) clears it.
 
 #include <stdint.h>
@@ -25,11 +34,19 @@
 // unit that never finds its marker drives its motor about 2 % of the time,
 // which is what a healthy unit showing a clock does.
 #define HOME_RETRY_MAX_SHIFT  5
+// Consecutive failed seeks without a hall reading that stand the unit down.
+#define HOME_STANDDOWN_FAILS  3
 
 struct HomeBackoff {
   uint8_t consecutiveFails;  // saturating; 0 = the last attempt succeeded
   uint32_t lastFailEndMs;    // millis() when the last failed seek stopped
+  uint8_t hallNeverFails;    // saturating; the tail of those with no hall reading
 };
+
+// Only an explicit SFP_CMD_HOME seeks while this holds.
+inline bool homeStoodDown(const HomeBackoff& b) {
+  return b.hallNeverFails >= HOME_STANDDOWN_FAILS;
+}
 
 inline uint32_t homeRetryWaitMs(uint8_t consecutiveFails) {
   if (consecutiveFails == 0) return 0;
@@ -43,13 +60,15 @@ inline uint32_t homeRetryWaitMs(uint8_t consecutiveFails) {
 // millis() wrap.
 inline bool homeAttemptAllowed(const HomeBackoff& b, uint32_t nowMs) {
   if (b.consecutiveFails == 0) return true;
+  if (homeStoodDown(b)) return false;
   return (uint32_t)(nowMs - b.lastFailEndMs) >=
          homeRetryWaitMs(b.consecutiveFails);
 }
 
-// A home has failed and none has succeeded since.
+// A home has failed and none has succeeded since, and the unit has not stood
+// down.
 inline bool homeRetryOwed(const HomeBackoff& b) {
-  return b.consecutiveFails != 0;
+  return b.consecutiveFails != 0 && !homeStoodDown(b);
 }
 
 // SFP_CMD_HOME: the base wait only.
@@ -58,11 +77,20 @@ inline bool homeCommandAllowed(const HomeBackoff& b, uint32_t nowMs) {
   return (uint32_t)(nowMs - b.lastFailEndMs) >= HOME_RETRY_BASE_MS;
 }
 
-inline void homeNoteResult(HomeBackoff& b, bool found, uint32_t nowMs) {
+// `hallSeen`: the hall read the magnet at some point of the seek. Ignored when
+// the marker was found.
+inline void homeNoteResult(HomeBackoff& b, bool found, bool hallSeen,
+                           uint32_t nowMs) {
   if (found) {
     b.consecutiveFails = 0;
+    b.hallNeverFails = 0;
     return;
   }
   if (b.consecutiveFails < 0xFF) b.consecutiveFails++;
   b.lastFailEndMs = nowMs;
+  if (hallSeen) {
+    b.hallNeverFails = 0;
+  } else if (b.hallNeverFails < 0xFF) {
+    b.hallNeverFails++;
+  }
 }

@@ -109,7 +109,7 @@ def _unit_doc(board, address, reason):
         doc["link"].update({"heardMsAgo": 340000, "missed": 255, "lost": True})
     failed = reason in ("home-failed", "hall-never")
     doc["drum"] = {"homeSteps": 1984, "homeFailed": failed, "hallNeverSeen": reason == "hall-never",
-                   "moving": reason == "finding-home", "commanded": 3,
+                   "homeStoodDown": reason == "hall-never", "moving": reason == "finding-home", "commanded": 3,
                    "homeExcessSteps": 61 if reason == "dragging" else 0,
                    "homeExcessStepsMax": 61 if reason == "dragging" else 0,
                    "hallEdgesLastTurn": 3 if reason == "hall-anomaly" else 1,

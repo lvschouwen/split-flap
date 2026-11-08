@@ -33,7 +33,7 @@ NAMES = {
     "bsh": "heardAfterBusRestart", "bss": "unitRestarts", "bsq": "nowMinutes",
 }
 # "fl" is given bit by bit; the rest is the document's frame, not a unit's fact.
-SPLIT = {"fl": ["homeFailed", "hallNeverSeen", "moving"],
+SPLIT = {"fl": ["homeFailed", "hallNeverSeen", "moving", "homeStoodDown"],
          "bsf": ["lastSawTraffic", "lastLineHeldLow", "lastEnded", "lastRestartedUnit"]}
 FRAME = {"width", "faulty", "vccMin", "units", "i", "v"}
 

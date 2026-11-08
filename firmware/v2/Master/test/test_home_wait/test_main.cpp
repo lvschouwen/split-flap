@@ -137,6 +137,20 @@ static void test_home_all_fails_on_any_unit_that_answered_not_found() {
   TEST_ASSERT_EQUAL(1, t.notFound);
 }
 
+// #667: home-all is a row of letters, and a stood-down unit does not seek for
+// a letter. It still reads home-failed; it must not fail the job.
+static void test_home_all_counts_a_stood_down_unit_apart() {
+  HomeAllTally t;
+  homeAllTallyAdd(t, true, kHomedIdle);
+  homeAllTallyAdd(t, true, kFailedIdle | UNIT_FLAG_HALL_NEVER | UNIT_FLAG_HOME_STOOD_DOWN);
+  MaintGrade g = maintGradeHomeAll(t);
+  TEST_ASSERT_TRUE(g.outcome == MaintOutcome::Ok && g.reason == MaintReason::None);
+  TEST_ASSERT_EQUAL(0, t.notFound);
+  TEST_ASSERT_EQUAL(1, t.stoodDown);
+  homeAllTallyAdd(t, true, kFailedIdle);  // a unit that did seek and failed
+  TEST_ASSERT_TRUE(maintGradeHomeAll(t).outcome == MaintOutcome::PostconditionFail);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_search_that_finds_home_ends_found);
@@ -150,5 +164,6 @@ int main(int, char**) {
   RUN_TEST(test_millis_wrap_does_not_end_the_wait_early);
   RUN_TEST(test_grades);
   RUN_TEST(test_home_all_fails_on_any_unit_that_answered_not_found);
+  RUN_TEST(test_home_all_counts_a_stood_down_unit_apart);
   return UNITY_END();
 }

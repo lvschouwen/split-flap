@@ -76,14 +76,15 @@ def test_loop_pays_the_owed_retry_and_never_leaves_busy_latched():
 
 def test_calibrate_records_both_outcomes_and_drops_homed_on_failure():
     body = _function_body(_code("UnitMotion.ino"), "int calibrate(")
-    assert "homeNoteResult(homeBackoff, true, millis())" in body
+    assert "recordHomeOutcome(true, true);" in body
     fail = body.index("statusLastHomeFailed = true")
     end = body.index("return -1", fail)
     failure = body[fail:end]
     assert "homed = false" in failure
     # The gap is measured from the end of the seek, after the motor stopped.
+    # Whether the hall fired decides the stand-down (#667).
     assert failure.index("stopMotor()") < failure.index(
-        "homeNoteResult(homeBackoff, false, millis())")
+        "recordHomeOutcome(false, hallSawMagnet);")
     assert "bootHomeAttempted = true" in body
 
 
@@ -92,9 +93,35 @@ def test_a_failed_self_test_drops_homed_too():
     failed = body[body.index("selfTest.state = SELFTEST_STATE_FAILED"):]
     failed = failed[:failed.index("unitEeRecordSelfTest")]
     assert "homed = false" in failed
-    assert "homeNoteResult(homeBackoff, false, millis())" in failed
+    assert "recordHomeOutcome(false, selfTest.reason != SELFTEST_REASON_HALL_NEVER);" in failed
     # A self-test is a seek: the boot self-home must not add one behind it.
     assert "bootHomeAttempted = true" in body[:body.index("startMotor()")]
+
+
+def test_every_seek_outcome_reaches_the_isr_copy_of_the_stand_down():
+    # #667: the status reply reads statusHomeStoodDown, so the policy is only
+    # ever updated through the helper that refreshes it.
+    motion = _code("UnitMotion.ino")
+    helper = _function_body(motion, "void recordHomeOutcome(")
+    note = helper.index("homeNoteResult(homeBackoff, found, hallSeen, millis());")
+    assert note < helper.index("statusHomeStoodDown = homeStoodDown(homeBackoff);")
+    sketch = "".join(_code(n) for n in ("Unit.ino", "UnitMotion.ino",
+                                        "UnitI2CProtocol.ino", "UnitBootUpdate.ino"))
+    assert sketch.count("homeNoteResult(") == 1
+    assert sketch.count("statusHomeStoodDown =") == 1
+    reply = _function_body(_code("UnitI2CProtocol.ino"), "void requestEvent(")
+    assert "if (statusHomeStoodDown)        flags |= UNIT_STATUS_FLAG_HOME_STOOD_DOWN;" in reply
+
+
+def test_the_sketch_status_bits_match_the_masters_flag_map():
+    health = (V2 / "shared/UnitHealth.h").read_text()
+    sketch = _code("Unit.ino")
+    for unit_name, master_name in (("UNIT_STATUS_FLAG_HOMED", "UNIT_FLAG_HOMED"),
+                                   ("UNIT_STATUS_FLAG_HOME_STOOD_DOWN",
+                                    "UNIT_FLAG_HOME_STOOD_DOWN")):
+        mine = re.search(rf"#define {unit_name} (\(1 << \d\))", sketch).group(1)
+        theirs = re.search(rf"#define {master_name}\s+(\(1 << \d\))", health).group(1)
+        assert mine == theirs, (unit_name, mine, theirs)
 
 
 def test_home_command_asks_before_seeking():
