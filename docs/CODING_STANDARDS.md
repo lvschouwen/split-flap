@@ -6,7 +6,7 @@
 This document defines *how code in this project must be written*: architecture rules, language
 style, concurrency, security, testing, and tooling gates. Project *facts* (repository map, mechanism
 inventory, hard rules such as pin assignments and resource owners) live in [`CLAUDE.md`](../CLAUDE.md);
-where the two conflict, CLAUDE.md's Hard rules win.
+where the two conflict, the Hard rules (CLAUDE.md and `.claude/rules/s3-hard-rules.md`) win.
 
 The key words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are used as in RFC 2119:
 MUST is a gate (a reviewer blocks on it), SHOULD requires a stated reason to deviate,
@@ -45,7 +45,7 @@ The bench (real hardware) is the E2E tier for glue — a mechanism is not "done"
 
 Every mutable resource — a bus, a filesystem, a flash partition, a state struct — has exactly one
 owning task or translation unit. All other code goes through that owner's API or a queue.
-Existing owners are pinned in CLAUDE.md Hard rules (`UnitBus.cpp` for Wire, netTask for the
+Existing owners are pinned in `.claude/rules/s3-hard-rules.md` (`UnitBus.cpp` for Wire, netTask for the
 LittleFS `storage` partition, displayTask for display state). A new mutable resource **MUST** name
 its owner in the owning file's header comment.
 

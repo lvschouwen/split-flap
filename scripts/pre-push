@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Pre-push gate (#651): scripts/check.sh over the trees the pushed range
-# touches. Installed by scripts/install-hooks.sh. Skip once with
-# `SPLITFLAP_SKIP_CHECK=1 git push` (say why in the commit or issue).
+# Pre-push gate (#651, #656). A pushed tree that `agent-check` stamped green
+# (the full check, lvschouwen/.claude#22) passes at once; otherwise
+# scripts/check.sh runs over the trees the pushed range touches. Kept instead
+# of the shared agent-pre-push: a direct-to-master push of one tree should not
+# cost the full ~7 min check. Installed by scripts/install-hooks.sh. Skip once
+# with `SPLITFLAP_SKIP_CHECK=1 git push` (say why in the commit or issue).
 set -euo pipefail
 [[ "${SPLITFLAP_SKIP_CHECK:-0}" == 1 ]] && { echo "pre-push: check skipped"; exit 0; }
 
 ROOT="$(git rev-parse --show-toplevel)"
 zero=0000000000000000000000000000000000000000
-base=""
+base="" sha=""
 while read -r _local_ref local_sha _remote_ref remote_sha; do
   [[ "$local_sha" == "$zero" ]] && continue          # branch deletion
+  sha="$local_sha"
   if [[ "$remote_sha" == "$zero" ]]; then
     base="$(git merge-base "$local_sha" origin/master 2>/dev/null || echo origin/master)"
   else
@@ -17,4 +21,12 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   fi
 done
 [[ -n "$base" ]] || exit 0
+
+stamps="$(agent-wt conf STAMP_DIR '' 2>/dev/null || true)"
+[[ -n "$stamps" ]] || stamps="$(git rev-parse --path-format=absolute --git-common-dir)/agent-green"
+tree="$(git rev-parse "$sha^{tree}")"
+if [[ -f "$stamps/.green-$tree" ]]; then
+  echo "pre-push: tree ${tree:0:12} has a green agent-check stamp, skipping the check"
+  exit 0
+fi
 exec "$ROOT/scripts/check.sh" --touched "$base"

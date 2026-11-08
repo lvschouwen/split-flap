@@ -79,45 +79,9 @@ def test_main_session_keeps_the_bench():
     assert decision("flashing/ota-flash.sh -p esp32 board", agent=False) == "allow"
 
 
-@pytest.mark.parametrize("command", [
-    "git checkout -b foo",
-    "git switch other",
-    "git reset --hard HEAD~1",
-    "git status && git reset --soft HEAD~1",
-    "git reset --hard  # /.claude/worktrees/",
-    "git -c core.x=1 switch other",
-    f"git -C {ROOT} reset --hard",
-    "git -C .claude/worktrees/wt-1 log && git reset --hard",
-    f"cd {ROOT} && git reset --hard",
-    "GIT_DIR=.git git reset --hard",
-    "git --git-dir=.git --work-tree=. reset --hard",
-    "git --no-pager -C . switch other",
-    'git -C "$SLOT" reset --hard',
-    "git -C /nonexistent/.claude/worktrees/wt-1 reset --hard",
-])
-def test_branch_moves_in_the_main_checkout_ask(command):
-    assert decision(command, agent=False) == "ask"
-    assert decision(command, agent=True) == "ask"
-
-
-def test_non_moves_pass():
-    assert decision("git status", agent=False) == "allow"
-    assert decision("git log --oneline -3 && git diff", agent=False) == "allow"
-
-
-def test_moves_from_inside_a_slot_pass():
-    slot = ROOT / ".claude" / "worktrees" / "wt-1"
-    if not (slot / ".git").exists():
-        pytest.skip("no pool slot wt-1 on this machine")
-    assert decision("git reset --hard", agent=True, cwd=slot) == "allow"
-    assert decision(f"cd {ROOT} && git reset --hard", agent=True, cwd=slot) == "ask"
-
-
-def test_slot_in_the_pool_is_exempt():
-    slot = ROOT / ".claude" / "worktrees" / "wt-1"
-    if not (slot / ".git").exists():
-        pytest.skip("no pool slot wt-1 on this machine")
-    assert decision(f"git -C {slot} reset --hard", agent=False) == "allow"
+def test_without_agent_flag_nothing_is_checked():
+    # Branch moves in the main checkout belong to the global guard-main-checkout.sh.
+    assert decision("git reset --hard", agent=False) == "allow"
 
 
 def test_agent_fails_closed_without_jq(tmp_path):

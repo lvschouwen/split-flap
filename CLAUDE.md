@@ -1,88 +1,59 @@
 # CLAUDE.md
 
-Current state only — history lives in git and the issue tracker; per-mechanism detail lives in the header comment of the file that owns it. Issue numbers (#N) are pointers into that history, not narrative. Per-project mechanism maps live in nested `CLAUDE.md` files (`firmware/v2/{Master,Unit,FollowerEsp01,Rescue}/CLAUDE.md`), loaded when you work in that tree.
+Current state only — history lives in git and the issue tracker; per-mechanism detail lives in the header comment of the file that owns it. Issue numbers (#N) are pointers, not narrative. Mechanism maps: nested `firmware/v2/{Master,Unit,FollowerEsp01,Rescue}/CLAUDE.md`; per-area notes: `.claude/rules/*.md` (path-scoped, load with the files they cover).
 
 ## Project
 
-Arduino-based split-flap display: a master MCU drives per-flap units over I2C. Firmware builds with PlatformIO — every project directory has its own `platformio.ini`; run commands from that directory. **The one check is `scripts/check.sh`** (#651; Actions is off, `build.yml` is its old source): it builds every active firmware project (v1 excluded) and runs every native/pytest suite (own uv venv with the CI pins, `~/.cache/split-flap/check-venv`) plus the unit-bundle and header-sharing gates; `check.sh <tree>...` or `--touched [base]` narrows it. The pre-push hook (`scripts/pre-push`, installed by `scripts/install-hooks.sh`) runs `--touched` over the pushed range (`tests/test_copied_headers.py` — no tree may shadow a `shared/` header, and the deliberate trims must keep their copy notes).
+Arduino-based split-flap display: a master MCU drives per-flap units over I2C. PlatformIO; every project directory has its own `platformio.ini`, run commands from there.
 
 - **v1 is frozen** — only `firmware/v1/ESPMaster` remains, as reference. Never edit anything under `firmware/v1`.
-- **v2 is the live stack:** `Master` (ESP32-S3 N16R8 devkit), `Unit` (Arduino Nano per flap), `FollowerEsp01` (ESP-01 row board under an S3 master, driven over the wall link). Pure-logic headers live once in `firmware/v2/shared/` and are included by every project (target and native envs, `-I ../shared`) — fix a bug there and all trees get it. Only deliberate trims (a reduced derivative, not a copy) stay per-tree, each with a note pointing at its source.
+- **v2 is the live stack:** `Master` (ESP32-S3 N16R8 devkit), `Unit` (Arduino Nano per flap), `FollowerEsp01` (ESP-01 row board, driven over the wall link). Pure-logic headers live once in `firmware/v2/shared/`, included by every tree (`-I ../shared`); `tests/test_copied_headers.py` forbids a tree shadowing one. Only deliberate trims stay per-tree, each with a note pointing at its source.
 
 ## Repository map
 
-- `firmware/v2/Master/` — S3 master (plain `.cpp`, console on native USB-CDC); serves the operator page (`web/`) and the operator API (`/api/v2`, listed by `GET /api`)
+- `firmware/v2/Master/` — S3 master; operator page (`web/`) and operator API (`/api/v2`, listed by `GET /api`)
 - `firmware/v2/Unit/` — Nano unit: stepper + hall homing, I2C slave, EEPROM offset/address
-- `firmware/v2/shared/` — pure-logic headers shared across v2 trees; `SplitFlapProtocol.h` is the master↔unit I2C contract + `SFP_PROTOCOL_VERSION`
-- `firmware/v2/link/` — the master↔row-board link (#559): `wall_link.proto` + `.options` (every message, one envelope per direction; nanopb generates the C at build time via each tree's `custom_nanopb_protos`, `buildtools/ensure_nanopb_deps.py` installs the generator's Python packages where the toolchain has no pip), `WallLinkStream.h` (collects length-delimited messages from a polled socket; unit facts as JSON in pieces), `WallLinkLogDamp.h` (a link that keeps dropping is logged a few times per period, then counted — both boards) and `WallLinkNames.h` (#611: the hostname a board carries from its grid place, `split-flap-row<N>` from 1 and `-c<C>` only when boards share a grid row; the master derives it, the row checks it — a board's id `split-flap-<chip id>` stays its identity). Deliberately outside `shared/` (no unit compiles it, so an edit must not move the Unit source head). Tests: `pio test -e native -f test_wall_link` in Master; `cd firmware/v2/link && python3 -m pytest tests/` (needs `grpcio-tools`) has stock protobuf decode the bytes the native test pins; `fake_master.py` / `fake_row.py` are the bench stand-ins for either end, run against each other by `tests/test_fake_pair.py`
-- `firmware/v2/buildtools/` — python shared by every tree's build: `fwbuild.py` (Intel-HEX → image, rev stamping, PROGMEM arrays; imported by each `build_assets.py`, `make_manifest.py` and the twiboot builder), the one `patch_asyncweb.py` and `check_framework_libs.py` (#634: pioarduino compiles one shared Arduino IDF lib build per chip and never reads it back, so Master and Rescue keep the same `custom_sdkconfig` and this pre-script recompiles libs that lack it). Deliberately outside `shared/` (a build-script edit must not move the Unit source head). Tests: `cd firmware/v2/buildtools && python3 -m pytest tests/`
-- `firmware/v2/release/` — where a board looks for a release and whose signature it trusts (#583): `ReleaseSource.h` (site name + the release key's public half; a fork changes both), `ReleaseManifest.h` (what a manifest says and what a board refuses), `ReleaseFetch.h` (the order of look and install over hooks: signature before the manifest is read, size and SHA-256 before anything is made the next to run), `ReleaseTarget.h` (those hooks on the S3: HTTPS, the signature check), `RescueSourceHead.h` (#613: the marker the rescue image embeds and the master scans the factory slot for — the rescue source head, `fwbuild.py`'s rev of the last commit touching Rescue/release/shared/buildtools, stamped into every `BuildVersion.h`). Compiled into Master and Rescue. Deliberately outside `shared/` (no unit compiles it). Tests: Master's `test_release_manifest` / `test_release_fetch`. Design: `docs/superpowers/specs/2026-10-10-release-update-design.md`
-- `firmware/v2/UnitBootloader/` — vendored+patched twiboot (I2C reflash of units; see its README)
-- `firmware/v2/FollowerEsp01/` — ESP-01 row board: dials its master over the wall link; serves only firmware upload, identity (`GET /settings`) and `POST /pair`
-- `firmware/v2/Rescue/` — break-glass image for the factory slot
-- `firmware/v2/Bootloader/` — builds the S3 second-stage bootloader (see its platformio.ini)
-- `firmware/v1/ESPMaster/` — frozen ESP8266 master reference
-- `flashing/` — `ota-flash.sh` (scp-fetch staged bin + OTA + `/settings` verdict; platform autodetect via the `plat` settings key, `-p esp01|esp32` to assert it; multi-device fan-out) and `flasher/make_manifest.py` (`stage` writes the unit bundle into `firmware/v2/Master/data` and `firmware/v2/FollowerEsp01/data` — must run between the Unit build and those builds; `gate` = the CI anti-drift check). Unit campaigns: `restore-unit-offsets.sh` (capture/replay per-unit calibration offsets that a unit EEPROM layout erase destroys) and `commission-units.sh` (gated per-unit update + acceptance run — needs `updateUnitsAtStart` false; zeroes the unit's odometer; stops at the first failure); `ext-diag-monitor.py` / `ext-diag-benchcheck.py` show the master's verdicts. All four talk to the master's `/api/v2` only, also for a row board's units (boards by id, `unit-offsets.json` names the master; the shell pair shares `wall-api.sh`). Tests: `cd flashing && python3 -m pytest tests/` runs the shell pair against a stand-in master. New-board provisioning: esptool merged-factory-bin recipe in `flashing/README.md`. Releases: `release.py` publishes the staged images and a signed manifest on the `gh-pages` branch (served as the `RELEASE_HOST` of `ReleaseSource.h`), then tags and creates the GitHub release; `--channel test` publishes under `/test/` only. Every release also publishes the web flasher: `flashing/site/index.html` (at `/`, a trial release's at `/test/`) and ESP Web Tools under `/esp-web-tools/`, unpacked from the npm package pinned by version and hash in `release.py`. `make-release-key.sh` creates the signing key (it lives in `~/.config/split-flap`, never in the repository).
-- `PCB/v1/` — the unit board the wall runs on (Gerbers, BOM, EasyEDA source); no new board is planned
-- `docs/superpowers/specs/` — design docs per feature
-- `docs/CODING_STANDARDS.md` — how code must be written (architecture, C++ style, concurrency, security, testing, tooling gates); CLAUDE.md Hard rules win on conflict
+- `firmware/v2/FollowerEsp01/` — ESP-01 row board: dials its master over the wall link; serves only firmware upload, `GET /settings` and `POST /pair`
+- `firmware/v2/Rescue/` — break-glass image for the factory slot · `Bootloader/` — the S3 second-stage bootloader
+- `firmware/v2/shared/` — pure logic for every tree; `SplitFlapProtocol.h` is the master↔unit I2C contract + `SFP_PROTOCOL_VERSION`
+- `firmware/v2/link/` (wall link proto), `buildtools/` (build python), `release/` (release fetch + trust) — outside `shared/` so an edit does not move the Unit source head
+- `firmware/v2/UnitBootloader/` — vendored + patched twiboot (I2C reflash of units; see its README)
+- `flashing/` — `ota-flash.sh`, `flasher/make_manifest.py` (unit bundle `stage` / `gate`), unit campaign scripts, `release.py`
+- `PCB/v1/` — the unit board (no new board planned) · `docs/superpowers/specs/` — design docs · `docs/CODING_STANDARDS.md` — how code is written (Hard rules win)
 
-## Build / flash / test
+## Build / check
 
-```bash
-pio run                      # build (run in the project dir)
-pio run -t upload            # USB flash (Nano unit first time; v2 Master devkit)
-pio device monitor           # serial 115200
-pio test -e native           # host-side unit tests (Unit, v2 Master, Rescue, FollowerEsp01)
-python3 -m pytest tests/      # python-side tests (v2 Master, Rescue, FollowerEsp01)
-```
+- `pio run` · `pio test -e native` · `pio device monitor` (115200) in a project dir; Unit envs `unit` / `unit_old_bootloader`.
+- **The one check is `scripts/check.sh`** (`CHECK=` in `.claude/agent-wt.conf`, run by `agent-check`): every v2 build, native and pytest suite (own uv venv on pinned versions) and the drift gates. `check.sh <tree>...` or `--touched [base]` narrows it. The pre-push hook (`scripts/pre-push`, linked by `scripts/install-hooks.sh`) skips a tree `agent-check` stamped green and otherwise runs `--touched` over the pushed range.
+- Every platform, library and pip package is pinned exactly (#648; `.claude/rules/buildtools.md`).
 
-- **Pins (#648):** every platform, library and CI pip package is an exact version (no `^`/unpinned); to bump, read the new version from `pio pkg list -e <env>` / `pip index versions <pkg>`, edit the pin in the `platformio.ini` or `build.yml`, and let `pio test -e native` per project plus CI be the gate.
-- Unit envs (`firmware/v2/Unit`): `unit` (new Nano bootloader) / `unit_old_bootloader` (fallback).
-- Native env uses ArduinoFake: `map()` is a fakeit mock — wire the real formula in each test's `setUp()` or calls abort; `EEPROM` etc. re-wire via `ArduinoFake(EEPROM)`.
-- v2 first build on a clean machine is slow (pioarduino hybrid compile downloads IDF). The pioarduino platform needs PlatformIO Core ≥ 6.2.0 on the host (CI pins it in `.github/workflows/build.yml`). `managed_components/`, `sdkconfig.*`, `.dummy/` in v2 project dirs are generated artifacts (gitignored; exception: `Bootloader/sdkconfig.defaults` is a source file kept by a negation).
+## Per-change workflow (no local app to stop)
 
-## Per-change workflow (overrides the global "stop the app" flow — there is no local app)
-
-The firmware runs on bench hardware reached by OTA over the user's VPN; there is nothing to stop before editing. Per change:
+The firmware runs on bench hardware reached by OTA over the user's VPN.
 
 1. **Issue first** with `effort:`/`gain:` labels; no private data (public repo).
-2. **Commit direct to `master`.** No branch, no PR; the pre-push hook is the gate. A branch + PR is the exception — work that must not land yet (unfinished across sessions, not bench-proven), or a background session that cannot push `master`. A PR carrying a stage commit is never squash-merged (bundle drift is history).
-3. **`scripts/check.sh --touched`** before commit (the trees the diff reaches: shared/ and buildtools/ count as every firmware tree, release/ as Master + Rescue, link/ as Master + FollowerEsp01).
-4. **Unit bundle:** any commit touching `firmware/v2/Unit` or `firmware/v2/shared` moves the unit source head, and the drift gate then fails until the bundle is restaged — even when the Nano binary is unchanged. Rebuild Unit clean → `make_manifest.py stage` → rebuild Master + FollowerEsp01 → separate artifact commit (never amend the bundle in). If the image content hash is unchanged, record the deployed rev in `firmware/v2/Unit/equivalent-revs.txt` first, so fielded units do not read OUTDATED.
-5. **Review only where it pays** — cpp-reviewer for OTA / boot / flash / concurrency / credentials / cluster-wire / I2C bus-and-probe changes. Nothing else needs a reviewer, and there is no end-of-arc combined gate or cross-model review unless asked for.
-6. **Bench-verify = the E2E tier** — stage the bin to `~/bench-bins/`, `ota-flash.sh` to the board, confirm on hardware. Host tests cover pure logic only. OTA the leader first (an older-build leader downgrades followers via the rollout).
-7. **Commit + close issue** — conventional message with `Closes #N` in the commit body (a `fix(#N):` scope closes nothing). Push.
-8. **Update memory.**
+2. **Commit direct to `master`**; the pre-push hook is the gate. A branch + PR only for work that must not land yet or a session that cannot push `master`; a PR carrying a stage commit is never squash-merged.
+3. **`scripts/check.sh --touched`** before commit (shared/ and buildtools/ reach every firmware tree, release/ Master + Rescue, link/ Master + FollowerEsp01).
+4. **Unit bundle:** a commit touching `firmware/v2/Unit` or `firmware/v2/shared` moves the unit source head; the drift gate fails until restaged, even when the Nano binary is unchanged. Rebuild Unit clean → `make_manifest.py stage` → rebuild Master + FollowerEsp01 → separate artifact commit (never amended in). If the image content hash is unchanged, record the deployed rev in `firmware/v2/Unit/equivalent-revs.txt` first, so fielded units do not read OUTDATED.
+5. **Review only where it pays** — a reviewer for OTA / boot / flash / concurrency / credentials / wall-link / I2C bus-and-probe changes; nothing else.
+6. **Bench-verify = the E2E tier** — stage the bin to `~/bench-bins/`, `ota-flash.sh` to the board, confirm on hardware. OTA the leader first (an older leader downgrades followers via the rollout).
+7. **Commit + close** — `Closes #N` in the body (a `fix(#N):` scope closes nothing). Push. Update memory.
 
-## Release policy (CalVer `vYYYY.MM.DD`, ≤1/day)
-
-The fleet converges on the git REV (`git describe`/short SHA baked into the binary), never on the tag — a tag is a human changelog + rollback anchor only. There is no version file: a release = an annotated git tag + a GitHub release with notes.
-
-- At most one release per day — the date is the version. Fix-only days accumulate untagged on `master`; cut a dated release only when the day's diff is worth announcing or anchoring. Never tag inside a feature/fix commit.
-- CalVer has no MAJOR signal, so flag breaking changes in the release: title `vYYYY.MM.DD — BREAKING` plus a `## Breaking / Operator action required` section, for any change to the I2C/cluster wire, NVS/EEPROM layout, partition table, OTA contract, config semantics, or minimum bootloader.
-- Same-day critical fix after a release: OTA-deploy the fixed REV now and cut the dated release the next day. `vYYYY.MM.DD-hotfix.N` is break-glass only.
-- Frozen v1 tags (`v1.x`) stay semver; mixed tags don't version-sort, so always pass `gh release create --latest`. Never parse meaning from the tag, and never retag/rewrite a shipped release.
+Releases: CalVer `vYYYY.MM.DD`, at most one a day; read `.claude/rules/release-policy.md` before tagging (BREAKING flag, hotfix, `--latest`).
 
 ## Hard rules
 
-- **GPIO 35/36/37 are used by octal PSRAM on the S3 — never assign them.** GPIO 4 is reserved (factory-reset button), 19/20 are native USB, 48 is the devkit WS2812.
-- **Never `pio run -t upload` the Rescue project.** Install it via Master's `POST /firmware/rescue` or `esptool write-flash 0x830000`.
-- **Don't port v1's OTA verdict machinery to v2** (RTC cookie / sketchMd5 compare) — the S3's A/B boot makes it obsolete; use `esp_ota_*` state APIs and the core's weak `verifyRollbackLater()`/`verifyOta()` hooks.
-- **v2 web/MQTT code never touches display state directly** — enqueue a `DisplayCommand` (params baked in by the sender), read back mutex-copied `DisplaySnapshot`s.
-- **The partition table (S3) and EEPROM layout (Nano unit) are per-device truth** — change them only via their documented migration/invariant rules (Master and Unit CLAUDE.md).
-- **The v2 bootloader is immutable over OTA** and has no A/B slot — never write it from the running app; changes are per-board USB flashes.
-- **`UnitBus.cpp` is the only Wire toucher on v2 (through its bus adapter — the unit protocol itself is `shared/UnitBusCore.h`), and displayTask its only caller** — one exception: `unitBusCatchAtPowerOn`, which `setup()` runs before any task exists (Master CLAUDE.md, power-on catch) (SDA 8 / SCL 9, 100 kHz — 400 kHz was tried and reverted for twiboot reflash + wall signal integrity; Nano TWI slaves follow the master clock).
-- **Twiboot probe-inhibit: displayTask owns a deadline armed by a unit restart and address burns — every runtime probe waits it out; never bypass it.** Sole exception: the reflash job's internal probes (pinned units are immediately flashed + exited).
-- **Producer gate: while `reflashInProgress(snapshot.reflash)`, every display-mutating producer stands down (web/MQTT 409, clockTask skips, master OTA 409) except the `stop` action.**
-- **The `storage` partition is one shared LittleFS and netTask is its sole flash writer** (producers stage under a mutex) — future storage tenants join it; never carve new partitions.
-- **The Home Assistant MQTT interface is an external contract** (`docs/HA_CONTRACT.md`): topic names, discovery unique ids, JSON attribute keys and enum values are append-only; a rename or removal needs a matching hass-config issue first.
+- **The partition table (S3) and EEPROM layout (Nano unit) are per-device truth** — change them only via their migration/invariant rules (Master and Unit CLAUDE.md).
+- **The Home Assistant MQTT interface is an external contract** (`docs/HA_CONTRACT.md`): topic names, discovery unique ids, JSON attribute keys and enum values are append-only; a rename or removal needs a hass-config issue first.
+- **S3 rules** (PSRAM GPIOs, Rescue never USB-uploaded, no v1 OTA verdict, DisplayCommand only, immutable bootloader, `UnitBus.cpp` sole Wire toucher, twiboot probe-inhibit, reflash producer gate, netTask sole `storage` writer): `.claude/rules/s3-hard-rules.md`.
 
-- **graphify** (`graphify-out/`, local and gitignored, AST-only, refreshed by local git hooks) is the cheapest way into the code: **query it before grepping or reading whole files** for any "where does X live / how does A reach B / what calls this" question, especially across trees (shared/ → Master/Follower/Unit). `graphify query "<q>" --budget 1500` (a narrow question beats a raised budget), `graphify explain "Symbol"` for one node's neighbours, `graphify path "A" "B"` for a call chain; then read only the lines it points at. From a worktree add `--graph "$(git rev-parse --path-format=absolute --git-common-dir)/../graphify-out/graph.json"` (the graph is master's; paths match). The nested CLAUDE.md files remain the mechanism map. Never run the semantic extraction unasked.
+## graphify
 
-## Agent waves (#651)
+`graphify-out/` (local, gitignored, AST-only, refreshed by git hooks) is the cheapest way into the code: **query it before grepping or reading whole files** for "where does X live / how does A reach B / what calls this", especially across trees. `graphify query "<q>" --budget 1500` (a narrow question beats a raised budget), `graphify explain "Symbol"`, `graphify path "A" "B"`; then read only the lines it points at. Main only: agents cannot run it, so a brief carries what it found. Never run the semantic extraction unasked.
 
-- **Plan:** a read-only Plan agent (sonnet), given the graphify answers it needs, writes one table per wave — task | issue | model | reviewer y/n | files | test | depends-on — plus a collision map (who touches which file). Main posts it as an issue comment, waits for Lucas's "go", and records each decision as a `## Decision (Lucas, YYYY-MM-DD)` comment: the latest one is the spec.
-- **Size:** at most ~5 agents on disjoint files; shared/, Unit/ (bundle restage), `tests/test_copied_headers.py` pairs and route/test registries run in sequence. A wave ends with a fix slot; a bug an agent reports becomes its own issue and takes the next slot.
-- **Agents:** `splitflap-implementer` builds, `splitflap-reviewer` reviews (read-only; given the commit + issue + risk areas, never the implementer's conclusions; required where step 5 says). Model on every dispatch: opus for concurrency, I2C bus/probe, OTA/boot/flash, wall link, EEPROM/NVS/partition, credentials; sonnet otherwise. Their standing rules live in the agent files — a brief is the issue number, the slot path and the collision map. Their `guard-bench.sh --agent` hook denies board, release and wall-API commands.
-- **Slots:** `scripts/agent-wt.sh new --next` once, then `reset wt-N <branch>` per task (never removed, so `.pio` stays warm; the shared PlatformIO build cache in check.sh covers a new slot). Integrate one at a time: `git -C <slot> rebase master` → `git merge --ff-only <branch>` in main → `scripts/check.sh --touched` → push → `agent-wt.sh done wt-N`. Bench OTA happens in main after the merges, leader first.
+## Agent runs (the standard: `~/.claude/rules/common/agent-runs.md`)
+
+- Check: `agent-check` (= `scripts/check.sh`); agents iterate with `scripts/check.sh --touched master` in their slot. Slots via `agent-wt` (`wt-N`, warm `.pio`).
+- Opus for concurrency, I2C bus/probe, OTA/boot/flash, wall link, EEPROM/NVS/partition, credentials; Sonnet otherwise.
+- Guards: `splitflap-implementer` / `splitflap-reviewer` carry the global deny hook plus `guard-bench.sh --agent` (ota-flash, campaign scripts, release.py, wall-API writes).
+- Conflict files: `firmware/v2/shared/` and `firmware/v2/Unit/` (bundle restage, one agent at a time), `tests/test_copied_headers.py` pairs, route and test registries, the standard baseline.

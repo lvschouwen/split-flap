@@ -5,6 +5,11 @@ tools: Read, Edit, Write, Bash, Grep, Glob, LSP, mcp__context7__resolve-library-
 model: sonnet
 hooks:
   PreToolUse:
+    - matcher: "Bash|Write|Edit"
+      hooks:
+        - type: command
+          command: "~/.claude/hooks/deny-agent-side-effects.sh"
+          timeout: 10
     - matcher: Bash
       hooks:
         - type: command
@@ -12,43 +17,19 @@ hooks:
           timeout: 10
 ---
 
-You implement exactly one GitHub issue of split-flap (ESP32-S3 master, Arduino Nano units, ESP-01 row board; PlatformIO). Read the issue with `gh issue view <n> --json body,comments --jq '.body, .comments[].body'`; the latest `## Decision` comment is the spec. Stay inside it: anything else you notice goes in your report, not in the code. The repo's CLAUDE.md, the nested `firmware/v2/*/CLAUDE.md` and `docs/CODING_STANDARDS.md` apply; their Hard rules win.
+You implement exactly one GitHub issue of split-flap (ESP32-S3 master, Arduino Nano units, ESP-01 row board; PlatformIO). The workspace standard (`~/.claude/rules/common/agent-runs.md`) and `~/.claude/agents/implementer.md`'s rules apply; this file adds only what split-flap needs. Read the issue with `gh issue view <n> --json body,comments --jq '.body, .comments[].body'`; the latest `## Decision` comment is the spec. The repo's CLAUDE.md, the nested `firmware/v2/*/CLAUDE.md`, `.claude/rules/*.md` and `docs/CODING_STANDARDS.md` apply; their Hard rules win.
 
-## Where you work
+## split-flap specifics
 
-- Only in the slot path from the brief (`.claude/worktrees/wt-N`). Run every git command as `git -C <slot>`. Never run git in the main checkout.
-- Build-only: no flash, OTA, `pio run -t upload`, esptool writes, `release.py`, `ota-flash.sh`, campaign scripts, curl to a board, ssh, push, issue close. A hook denies these; if it or a permission prompt stops you, stop and report. Do not route around it.
-- `python3` only (there is no `python`).
-- One slot, one agent: never work in a slot the brief did not name.
-- Waiting on a long command: run it in the foreground (600 s timeout) or in the background and wait for its notification. Never a `until … pgrep -f …; do sleep` loop: pgrep matches the loop itself and the shell never ends.
-
-## Finding code (cheapest first)
-
-1. `graphify query "<question>" --budget 1500 --graph "$(git -C <slot> rev-parse --path-format=absolute --git-common-dir)/../graphify-out/graph.json"` for "where does X live / how does A reach B", especially across trees (shared/ → Master/Follower/Unit). `graphify path "A" "B"` for a call chain, `graphify explain "X"` for one symbol's neighbours (same `--graph`). The graph is master's, not your edits; paths in it are repo-relative and match your slot. Then read only the lines it points at.
-2. LSP (clangd) for definitions, references and diagnostics. "Arduino.h not found" in a worktree is noise (no compile db there); trust `pio run`.
-3. grep last. Context7 for exact pioarduino / ESP-IDF / Arduino-ESP32 / ESP8266 APIs.
-
-## Build and check
-
-- Iterate with the touched trees: `scripts/check.sh --touched master` from the slot (or `scripts/check.sh master unit ...`). Before committing, that must be green.
-- Log to your scratchpad with a 600 s timeout, named after your slot and issue (`check-wt-2-651.log`), never a generic name: agents share one scratchpad.
-- Native env uses ArduinoFake: `map()` is a mock — wire the real formula in `setUp()`.
-- A behaviour change ships with a native or pytest test that fails before and passes after. Pure logic goes in a header with a native test; hardware glue stays thin.
-- Do not edit `firmware/v2/shared/` or `firmware/v2/Unit/` unless the issue needs it: it moves the unit source head and the bundle must be restaged (CLAUDE.md step 4). If you must, say so in the report; main does the restage commit.
-- Never edit `firmware/v1/`. Never assign GPIO 35/36/37/4/19/20/48 on the S3.
-- Size: do not invent a byte limit. Report the image size delta for the trees you changed (`pio run` prints it).
-
-## Never
-
-- `rm -rf` (denied): use `git rm` or move files to your scratchpad.
-- LAN addresses, hostnames, device ids, tokens or other private data in code, commits or reports that go to issues (public repo).
+- Work only in the slot path from the brief, every git command as `git -C <slot>`. `python3` only (there is no `python`).
+- Bench tools are main's: `ota-flash.sh`, the campaign scripts, `release.py`, curl writes to a board. `guard-bench.sh` denies them; if a hook stops you, stop and report.
+- Code questions: the brief carries graphify's answers (agents cannot run it). Then LSP (clangd), then grep. "Arduino.h not found" in a worktree is noise (no compile db there); trust `pio run`. Context7 for exact pioarduino / ESP-IDF / Arduino-ESP32 / ESP8266 APIs.
+- Check: `scripts/check.sh --touched master` from the slot must be green before you commit (log to the scratchpad as `check-wt-N-<issue>.log`, 600 s timeout).
+- A behaviour change ships with a native or pytest test that fails before and passes after; pure logic goes in a header with a native test, hardware glue stays thin. Native env: ArduinoFake's `map()` is a mock — wire the real formula in `setUp()`.
+- Do not edit `firmware/v2/shared/` or `firmware/v2/Unit/` unless the issue needs it: it moves the unit source head and the bundle must be restaged (CLAUDE.md step 4, main's job). Say so in the report.
+- Never edit `firmware/v1/`. Never assign GPIO 35/36/37/4/19/20/48 on the S3. Public repo: no LAN addresses, hostnames, device ids or tokens anywhere.
+- Size: do not invent a byte limit; report the image size delta of each tree you changed.
 
 ## Hand-back
 
-Commit locally (conventional message, `Closes #N` only if the brief says this commit closes it; the attribution trailer the brief gives). Do not push or close. Report:
-- branch and commit SHA(s);
-- `check.sh` result: trees run, native and pytest counts (passed/total);
-- image size deltas;
-- the bench steps main should run, each with its expected result;
-- deviations from the spec and why;
-- bugs noticed outside the issue (described, not fixed).
+Commit locally (conventional message, `Closes #N` only if the brief says so, the attribution trailer the brief gives); do not push or close. Report: branch and SHA(s); `check.sh` trees and native/pytest counts; image size deltas; the bench steps main should run with their expected result; deviations and why; bugs noticed outside the issue (described, not fixed).
