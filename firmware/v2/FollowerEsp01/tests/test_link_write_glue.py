@@ -48,12 +48,17 @@ def test_a_silent_master_is_dialled_again_and_a_busy_row_does_not_count() -> Non
 
 def test_a_close_is_logged_with_its_facts_and_a_run_of_them_is_damped() -> None:
     code = _code()
-    closed = _body(code, "void logClosed(const __FlashStringHelper* why) {")
+    closed = _body(code, "void logClosed(const __FlashStringHelper* why, int unacked) {")
     assert closed.index("wlLogDampWrite(closeDamp, nowMs)") < closed.index("SerialPrint(why);")
-    for fact in ("connectedAtMs", "sock.availableForWrite()", "lastHeardMs", "WiFi.RSSI()",
+    for fact in ("connectedAtMs", "SerialPrint(unacked);", "lastHeardMs", "WiFi.RSSI()",
                  "WiFi.BSSIDstr()"):
         assert fact in closed, fact
-    assert "logClosed(why);" in _body(code, "void drop(const __FlashStringHelper* why) {")
+    unacked = _body(code, "int unackedBytes() {")
+    assert "if (sock.status() != ESTABLISHED) return -1;" in unacked
+    assert "TCP_SND_BUF - (int)sock.availableForWrite()" in unacked
+    drop = _body(code, "void drop(const __FlashStringHelper* why, FollowerLinkClose kind")
+    assert "logClosed(why, unacked);" in drop
+    assert drop.index("const int unacked = unackedBytes();") < drop.index("sock.stop();")
 
 
 def test_the_row_takes_its_radio_power_save_from_the_master_and_reports_it() -> None:

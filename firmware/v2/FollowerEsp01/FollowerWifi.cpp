@@ -12,7 +12,9 @@
 
 #include "BuildVersion.h"
 #include "FollowerBus.h"     // busRowMoving
-#include "FollowerCluster.h"  // clusterLeaderContactFresh (#515)
+#include "FollowerCluster.h"
+#include "FollowerLink.h"        // linkUplinkConfirmed (#668)
+#include "FollowerLinkPolicy.h"  // followerLinkOweTxStep
 #include "FollowerConfig.h"
 #include "FollowerJson.h"  // FOLLOWER_PLAT
 #include "FollowerWeb.h"   // isPendingReboot
@@ -51,6 +53,8 @@ static WifiTxState txState;
 static int8_t txAppliedIndex = -1;  // -1 = nothing applied yet
 static bool txOtaCapped = false;
 static int txLastRssiDbm = 0;  // what the last online tick fed the ladder; 0 = none
+// The wall-link close a pending link-drop step answers; null = the WiFi drop.
+static const __FlashStringHelper* txUplinkWhy = nullptr;
 
 // `force` re-sends an unchanged level: the ESP8266 cannot read the level
 // back, so it is re-asserted wherever the radio may have been re-initialised.
@@ -76,6 +80,10 @@ static void txApply(uint8_t index, bool log, bool force = false) {
       // judged, i.e. at the level it stepped FROM.
       SerialPrint(F(" ("));
       SerialPrint(wifiTxStepReasonName(txState.lastReason));
+      if (txState.lastReason == WifiTxStepReason::LinkDrop && txUplinkWhy != nullptr) {
+        SerialPrint(F(", wall link: "));
+        SerialPrint(txUplinkWhy);
+      }
       if (txLastRssiDbm < 0) {
         SerialPrint(F(", rssi "));
         SerialPrint(txLastRssiDbm);
@@ -88,6 +96,13 @@ static void txApply(uint8_t index, bool log, bool force = false) {
     SerialPrintln(F(""));
   }
   txAppliedIndex = (int8_t)index;
+  if (txState.lastReason == WifiTxStepReason::LinkDrop && !txState.dropPending) {
+    txUplinkWhy = nullptr;
+  }
+}
+
+void followerTxUplinkFailed(const __FlashStringHelper* why) {
+  if (followerLinkOweTxStep(txState)) txUplinkWhy = why;
 }
 
 static bool radioAwake = false;  // the SDK starts a station in modem sleep
@@ -145,7 +160,10 @@ void followerTxTick() {
   // calls; fed to the ladder it would count as a perfect signal.
   if (in.linkUp && in.rssiDbm >= 0) return;
   txLastRssiDbm = in.rssiDbm;
-  in.trafficConfirmed = clusterLeaderContactFresh();
+  if (!in.linkUp) txUplinkWhy = nullptr;  // the drop owed now is the association's
+  // The master acknowledged what the row wrote: the row's own frames get
+  // through. Messages from the master would only prove the downlink.
+  in.trafficConfirmed = linkUplinkConfirmed();
 
   // An up-step needs an idle row, and asking the row costs one I2C read per
   // unit — so ask only when a step is actually due.

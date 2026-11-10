@@ -38,6 +38,12 @@ void wifiServicesInit(int rowWidth);
 // step it inside wifiInit(); loop() calls the tick for the online half.
 void followerTxTick();
 
+// #668: a wall-link close that shows the row's uplink failed
+// (FollowerLinkPolicy.h followerLinkUplinkFailed) — a link drop for the
+// ladder, one level up under its usual rules. `why` is the close reason, for
+// the step's log line. loop() context.
+void followerTxUplinkFailed(const __FlashStringHelper* why);
+
 // #609: WiFi power save off (the radio stays awake) or on (modem sleep, the
 // SDK's default), as the master's Config says. loop() context; nothing is
 // done when it already is so.

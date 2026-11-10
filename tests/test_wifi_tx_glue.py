@@ -26,9 +26,40 @@ def test_the_wall_link_reports_completed_exchanges():
 
 
 def test_esp01_ladder_is_fed_the_confirmation():
+    # #668: confirmed = the master acknowledged what the row wrote (its
+    # uplink), not any message from the master (the downlink).
     wifi = _src("FollowerEsp01/FollowerWifi.cpp")
     tick = wifi[wifi.index("void followerTxTick()"):]
-    assert tick.index("in.trafficConfirmed = clusterLeaderContactFresh();") < tick.index(
+    assert tick.index("in.trafficConfirmed = linkUplinkConfirmed();") < tick.index(
         "wifiTxPolicyStep(")
-    cluster = _src("FollowerEsp01/FollowerCluster.cpp")
-    assert "return clusterFollowerContactFresh(policyState, millis());" in cluster
+    link = re.sub(r"//[^\n]*", "", _src("FollowerEsp01/FollowerLink.cpp"))
+    assert "return followerLinkUplinkConfirmed(uplinkAck, millis());" in link
+    write = link[link.index("bool writeWire(size_t n) {"):]
+    write = write[:write.index("\n}\n")]
+    assert write.index("sock.write(wire, n) == n") < write.index(
+        "followerLinkNoteWrite(uplinkAck);") < write.index("drop(")
+    tick = link[link.index("void linkLoopTick() {"):]
+    tick = tick[:tick.index("\n}\n")]
+    assert "followerLinkNoteSendBuffer(uplinkAck, (size_t)sock.availableForWrite(), TCP_SND_BUF," \
+        in tick
+    assert tick.index("followerLinkNoteSendBuffer(") < tick.index("readFromMaster(view)")
+
+
+def test_esp01_uplink_failures_feed_the_ladder_as_link_drops():
+    link = re.sub(r"//[^\n]*", "", _src("FollowerEsp01/FollowerLink.cpp"))
+    drop = link[link.index("void drop(const __FlashStringHelper* why, FollowerLinkClose kind"):]
+    drop = drop[:drop.index("\n}\n")]
+    # Judged before the socket is closed: the unacknowledged bytes go with it.
+    assert drop.index("unackedBytes()") < drop.index("followerLinkUplinkFailed(kind, unacked,") \
+        < drop.index("followerTxUplinkFailed(why);") < drop.index("sock.stop();")
+    assert "followerLinkNoteClosed(uplinkAck);" in drop
+    for close in ('drop(F("no Welcome"), FollowerLinkClose::NoWelcome);',
+                  'drop(F("connection lost"), FollowerLinkClose::Lost);',
+                  'drop(F("write failed"), FollowerLinkClose::WriteFailed);'):
+        assert close in link, close
+    assert link.count("FollowerLinkClose::NoWelcome)") == 1
+    assert link.count("FollowerLinkClose::Lost)") == 1
+    assert link.count("FollowerLinkClose::WriteFailed)") == 1
+    wifi = re.sub(r"//[^\n]*", "", _src("FollowerEsp01/FollowerWifi.cpp"))
+    owe = wifi[wifi.index("void followerTxUplinkFailed(const __FlashStringHelper* why) {"):]
+    assert "followerLinkOweTxStep(txState)" in owe[:owe.index("\n}\n")]

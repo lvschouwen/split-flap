@@ -95,6 +95,96 @@ static void test_the_render_count_wrapping_still_counts_as_a_new_render() {
   TEST_ASSERT_TRUE(followerLinkUnitsDue(12000, 10000, false, 0, 0xFFFFFFFFu));
 }
 
+static void test_a_hello_left_unacknowledged_is_an_uplink_failure() {
+  TEST_ASSERT_TRUE(followerLinkUplinkFailed(FollowerLinkClose::NoWelcome, 41, false, 5000));
+  // Acknowledged but unanswered: the master heard the row and chose not to talk.
+  TEST_ASSERT_FALSE(followerLinkUplinkFailed(FollowerLinkClose::NoWelcome, 0, false, 5000));
+  TEST_ASSERT_FALSE(followerLinkUplinkFailed(FollowerLinkClose::NoWelcome, -1, false, 5000));
+}
+
+static void test_a_close_while_the_master_is_still_heard_is_an_uplink_failure() {
+  TEST_ASSERT_TRUE(followerLinkUplinkFailed(FollowerLinkClose::Lost, -1, true, 3000));
+  TEST_ASSERT_TRUE(followerLinkUplinkFailed(FollowerLinkClose::WriteFailed, 900, true, 2000));
+  // Not heard either: both directions are gone, nothing says it is the uplink.
+  TEST_ASSERT_FALSE(
+      followerLinkUplinkFailed(FollowerLinkClose::Lost, -1, true, FOLLOWER_LINK_HEARD_RECENT_MS));
+  // Before Welcome the master was never heard on this connection.
+  TEST_ASSERT_FALSE(followerLinkUplinkFailed(FollowerLinkClose::WriteFailed, 41, false, 10));
+}
+
+static void test_a_chosen_close_is_no_uplink_failure() {
+  TEST_ASSERT_FALSE(followerLinkUplinkFailed(FollowerLinkClose::Plain, 500, true, 1000));
+}
+
+// The ladder online at `index`, past its settle window, link up.
+static WifiTxState onlineLadderAt(uint8_t index, uint32_t& nowMs) {
+  WifiTxState st;
+  WifiTxInput in;
+  in.phase = WifiTxPhase::Online;
+  in.linkUp = true;
+  in.rssiDbm = -40;  // strong: no weak-signal step of its own
+  in.trafficConfirmed = true;
+  nowMs = 1000;
+  wifiTxPolicyStep(st, in, nowMs);
+  st.index = index;
+  st.dropFloor = 0;
+  nowMs += WIFI_TX_SETTLE_MS;
+  return st;
+}
+
+static void test_an_uplink_failure_earns_one_level_and_keeps_it() {
+  uint32_t now = 0;
+  WifiTxState st = onlineLadderAt(0, now);
+  TEST_ASSERT_TRUE(followerLinkOweTxStep(st));
+  WifiTxInput in;
+  in.phase = WifiTxPhase::Online;
+  in.linkUp = true;
+  in.rssiDbm = -40;
+  in.trafficConfirmed = true;
+  TEST_ASSERT_EQUAL_UINT8(1, wifiTxPolicyStep(st, in, now));
+  TEST_ASSERT_TRUE(st.lastReason == WifiTxStepReason::LinkDrop);
+  TEST_ASSERT_EQUAL_UINT8(1, st.dropFloor);
+  // A strong signal for longer than the healthy period does not hand it back.
+  TEST_ASSERT_EQUAL_UINT8(1, wifiTxPolicyStep(st, in, now + 1000));
+  TEST_ASSERT_EQUAL_UINT8(1, wifiTxPolicyStep(st, in, now + 2000 + WIFI_TX_HEALTHY_MS));
+}
+
+static void test_an_uplink_failure_at_the_ceiling_owes_nothing() {
+  uint32_t now = 0;
+  WifiTxState st = onlineLadderAt(WIFI_TX_ONLINE_CEILING_INDEX, now);
+  TEST_ASSERT_FALSE(followerLinkOweTxStep(st));
+  TEST_ASSERT_FALSE(st.dropPending);
+}
+
+static void test_only_a_drained_send_buffer_after_a_write_confirms_the_uplink() {
+  FollowerUplinkAck a;
+  TEST_ASSERT_FALSE(followerLinkUplinkConfirmed(a, 1000));
+  followerLinkNoteSendBuffer(a, 1072, 1072, 1000);  // nothing written yet
+  TEST_ASSERT_FALSE(followerLinkUplinkConfirmed(a, 1000));
+  followerLinkNoteWrite(a);
+  followerLinkNoteSendBuffer(a, 1031, 1072, 2000);  // 41 B still in flight
+  TEST_ASSERT_FALSE(followerLinkUplinkConfirmed(a, 2000));
+  followerLinkNoteSendBuffer(a, 1072, 1072, 3000);
+  TEST_ASSERT_TRUE(followerLinkUplinkConfirmed(a, 3000));
+  TEST_ASSERT_TRUE(followerLinkUplinkConfirmed(a, 3000 + WIFI_TX_CONFIRM_FRESH_MS - 1));
+  TEST_ASSERT_FALSE(followerLinkUplinkConfirmed(a, 3000 + WIFI_TX_CONFIRM_FRESH_MS));
+}
+
+static void test_a_write_lost_with_its_connection_confirms_nothing() {
+  FollowerUplinkAck a;
+  followerLinkNoteWrite(a);
+  followerLinkNoteClosed(a);
+  followerLinkNoteSendBuffer(a, 1072, 1072, 5000);  // the next connection's empty buffer
+  TEST_ASSERT_FALSE(followerLinkUplinkConfirmed(a, 5000));
+}
+
+static void test_a_drain_at_millis_zero_still_counts() {
+  FollowerUplinkAck a;
+  followerLinkNoteWrite(a);
+  followerLinkNoteSendBuffer(a, 1072, 1072, 0);
+  TEST_ASSERT_TRUE(followerLinkUplinkConfirmed(a, 10));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_backoff_starts_at_one_second_and_stops_at_eight);
@@ -109,5 +199,13 @@ int main(int, char**) {
   RUN_TEST(test_a_settled_render_sends_the_unit_facts_without_waiting_for_the_timer);
   RUN_TEST(test_settled_renders_in_quick_succession_send_once_per_gap);
   RUN_TEST(test_the_render_count_wrapping_still_counts_as_a_new_render);
+  RUN_TEST(test_a_hello_left_unacknowledged_is_an_uplink_failure);
+  RUN_TEST(test_a_close_while_the_master_is_still_heard_is_an_uplink_failure);
+  RUN_TEST(test_a_chosen_close_is_no_uplink_failure);
+  RUN_TEST(test_an_uplink_failure_earns_one_level_and_keeps_it);
+  RUN_TEST(test_an_uplink_failure_at_the_ceiling_owes_nothing);
+  RUN_TEST(test_only_a_drained_send_buffer_after_a_write_confirms_the_uplink);
+  RUN_TEST(test_a_write_lost_with_its_connection_confirms_nothing);
+  RUN_TEST(test_a_drain_at_millis_zero_still_counts);
   return UNITY_END();
 }

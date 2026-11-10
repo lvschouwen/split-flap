@@ -15,3 +15,6 @@ struct FollowerLinkView {
 
 void linkLoopTick();
 FollowerLinkView linkViewGet();
+// The master acknowledged all the row wrote, within WIFI_TX_CONFIRM_FRESH_MS
+// (FollowerLinkPolicy.h): the TX ladder's "traffic confirmed".
+bool linkUplinkConfirmed();

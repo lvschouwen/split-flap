@@ -49,6 +49,7 @@ uint32_t lastHeardMs = 0;  // the master's last message on this connection
 uint32_t lastPassMs = 0;
 uint32_t lastStatusMs = 0;
 bool busySent = false;
+FollowerUplinkAck uplinkAck;  // the TX ladder's "traffic confirmed"
 
 // The one unit job the master has running here. It outlives a dropped
 // connection: the job keeps running and its end is reported on the next one.
@@ -112,11 +113,18 @@ void reportHeldCloses(uint32_t nowMs) {
   SerialPrintln(F(" min"));
 }
 
+// What the row wrote that the master has not acknowledged; -1 when there is
+// no send buffer to read.
+int unackedBytes() {
+  if (sock.status() != ESTABLISHED) return -1;
+  return (int)TCP_SND_BUF - (int)sock.availableForWrite();
+}
+
 // The close, with what is needed to read it afterwards: how long the
 // connection lasted, how much it had written that the master had not
 // acknowledged, when the master was last heard, and which access point this
 // board hangs on.
-void logClosed(const __FlashStringHelper* why) {
+void logClosed(const __FlashStringHelper* why, int unacked) {
   const uint32_t nowMs = millis();
   reportHeldCloses(nowMs);
   if (!wlLogDampWrite(closeDamp, nowMs)) return;
@@ -125,9 +133,9 @@ void logClosed(const __FlashStringHelper* why) {
   SerialPrint(F(" (up "));
   SerialPrint((nowMs - connectedAtMs) / 1000);
   SerialPrint(F(" s"));
-  if (sock.status() == ESTABLISHED) {  // else there is no send buffer to read
+  if (unacked >= 0) {
     SerialPrint(F(", "));
-    SerialPrint((int)TCP_SND_BUF - (int)sock.availableForWrite());
+    SerialPrint(unacked);
     SerialPrint(F(" B unacknowledged"));
   }
   if (welcomed) {
@@ -148,8 +156,13 @@ void logClosed(const __FlashStringHelper* why) {
   SerialPrintln(F(")"));
 }
 
-void drop(const __FlashStringHelper* why) {
-  if (sock.connected() || welcomed || dialled) logClosed(why);
+void drop(const __FlashStringHelper* why, FollowerLinkClose kind = FollowerLinkClose::Plain) {
+  const int unacked = unackedBytes();
+  if (sock.connected() || welcomed || dialled) logClosed(why, unacked);
+  if (followerLinkUplinkFailed(kind, unacked, welcomed, millis() - lastHeardMs)) {
+    followerTxUplinkFailed(why);
+  }
+  followerLinkNoteClosed(uplinkAck);
   sock.stop();
   reader.reset();
   releaseUnitsDoc();
@@ -168,8 +181,11 @@ static_assert(sizeof(wire) + FOLLOWER_LINK_REPLY_RESERVE <= TCP_SND_BUF,
               "a full-size message and the reply reserve must fit the send buffer");
 
 bool writeWire(size_t n) {
-  if (n != 0 && sock.write(wire, n) == n) return true;
-  drop(F("write failed"));
+  if (n != 0 && sock.write(wire, n) == n) {
+    followerLinkNoteWrite(uplinkAck);
+    return true;
+  }
+  drop(F("write failed"), FollowerLinkClose::WriteFailed);
   return false;
 }
 
@@ -567,6 +583,9 @@ void linkLoopTick() {
     dialMaster(view);
     return;
   }
+  if (sock.status() == ESTABLISHED) {
+    followerLinkNoteSendBuffer(uplinkAck, (size_t)sock.availableForWrite(), TCP_SND_BUF, passMs);
+  }
   if (!readFromMaster(view)) return;
   welcomedTick(view);
 }
@@ -576,7 +595,11 @@ namespace {
 // Also a connection the master closed before any Welcome (it does not know
 // this row): without the drop the next pass would dial again at once.
 void dialMaster(const FollowerClusterView& view) {
-  if (dialled) drop(welcomed ? F("connection lost") : F("closed by the master before Welcome"));
+  if (dialled && welcomed) {
+    drop(F("connection lost"), FollowerLinkClose::Lost);
+  } else if (dialled) {
+    drop(F("closed by the master before Welcome"));
+  }
   if ((int32_t)(millis() - nextDialMs) < 0) return;
   char host[48];
   if (!followerLinkHostPart(view.leaderHost.c_str(), host, sizeof(host))) return;
@@ -631,7 +654,7 @@ bool readFromMaster(const FollowerClusterView& view) {
 void welcomedTick(const FollowerClusterView& view) {
   if (!welcomed) {
     if (followerLinkElapsed(millis(), connectedAtMs, FOLLOWER_LINK_WELCOME_TIMEOUT_MS)) {
-      drop(F("no Welcome"));
+      drop(F("no Welcome"), FollowerLinkClose::NoWelcome);
     }
     return;
   }
@@ -652,6 +675,8 @@ void welcomedTick(const FollowerClusterView& view) {
 }
 
 }  // namespace
+
+bool linkUplinkConfirmed() { return followerLinkUplinkConfirmed(uplinkAck, millis()); }
 
 FollowerLinkView linkViewGet() {
   FollowerLinkView v;

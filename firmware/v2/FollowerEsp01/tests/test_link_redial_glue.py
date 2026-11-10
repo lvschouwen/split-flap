@@ -15,7 +15,7 @@ def _code() -> str:
 def test_a_connection_closed_before_welcome_is_dropped_before_the_next_dial() -> None:
     code = _code()
     closed = code[code.index("if (!sock.connected()) {"):]
-    dropped = closed.index("if (dialled) drop(")
+    dropped = closed.index("if (dialled && welcomed) {")
     assert dropped < closed.index("if ((int32_t)(millis() - nextDialMs) < 0) return;")
     assert dropped < closed.index("sock.connect(")
 
@@ -23,7 +23,7 @@ def test_a_connection_closed_before_welcome_is_dropped_before_the_next_dial() ->
 def test_every_opened_connection_is_marked_and_every_drop_clears_the_mark() -> None:
     code = _code()
     assert code.index("dialled = true;") < code.index("sendHello();", code.index("dialled = true;"))
-    drop = code[code.index("void drop(const __FlashStringHelper* why) {"):]
+    drop = code[code.index("void drop(const __FlashStringHelper* why, FollowerLinkClose kind"):]
     drop = drop[:drop.index("\n}\n")]
     assert "dialled = false;" in drop
     assert "backoffMs = followerLinkNextBackoffMs(backoffMs);" in drop

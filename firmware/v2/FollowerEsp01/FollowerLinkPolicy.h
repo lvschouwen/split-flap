@@ -1,10 +1,14 @@
 #pragma once
 // FollowerLinkPolicy.h — the timing rules of the row board's wall link
-// (#559/#564), pure and natively tested by test_follower_link. The socket
+// (#559/#564) and what it tells the TX ladder about the row's uplink (#668),
+// pure and natively tested by test_follower_link. The socket
 // glue lives in FollowerLink.cpp.
 
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+#include "WifiTxPolicy.h"
 
 // Redial delay after a failed or dropped connection: 1 s, doubling to 8 s.
 #define FOLLOWER_LINK_BACKOFF_MIN_MS 1000UL
@@ -34,6 +38,9 @@
 #define FOLLOWER_LINK_SILENT_MS 30000UL
 // A pass of the link this late means loop() stood still.
 #define FOLLOWER_LINK_STALL_MS 2000UL
+// The master pings every 10 s: heard within this, its messages still reach
+// this row, so a connection that ends now ended on the row's own direction.
+#define FOLLOWER_LINK_HEARD_RECENT_MS 15000UL
 
 inline uint32_t followerLinkNextBackoffMs(uint32_t previousMs) {
   if (previousMs < FOLLOWER_LINK_BACKOFF_MIN_MS) return FOLLOWER_LINK_BACKOFF_MIN_MS;
@@ -96,4 +103,65 @@ inline bool followerLinkHostPart(const char* stored, char* out, size_t cap) {
 // master gives in Welcome has to be the one stored at pairing.
 inline bool followerLinkMasterAccepted(const char* pairedName, const char* welcomeName) {
   return pairedName[0] != 0 && strcmp(pairedName, welcomeName) == 0;
+}
+
+// What ended a connection, as far as the TX ladder cares.
+enum class FollowerLinkClose : uint8_t {
+  Plain,        // the row or the master chose to end it, or there is no master to reach
+  NoWelcome,    // the master did not answer Hello in time
+  Lost,         // the connection ended under a welcomed row
+  WriteFailed,  // an answer waited its whole timeout for room
+};
+
+// Did the row's uplink demonstrably fail? That is a link drop for the TX
+// ladder, like a lost association. `unackedBytes` < 0 = no send buffer to read.
+// A Hello still unacknowledged when the Welcome wait ends never reached the
+// master; a connection lost or a write stuck while the master's messages
+// still arrive is the master not hearing this row (its own silence rule).
+inline bool followerLinkUplinkFailed(FollowerLinkClose kind, int unackedBytes, bool welcomed,
+                                     uint32_t heardAgoMs) {
+  switch (kind) {
+    case FollowerLinkClose::NoWelcome:
+      return unackedBytes > 0;
+    case FollowerLinkClose::Lost:
+    case FollowerLinkClose::WriteFailed:
+      return welcomed && heardAgoMs < FOLLOWER_LINK_HEARD_RECENT_MS;
+    case FollowerLinkClose::Plain:
+      break;
+  }
+  return false;
+}
+
+// A failed uplink is owed one level up, paid by the Online step under the
+// ladder's own rules (settle, dwell, idle units; the level kept for the boot).
+// At the online ceiling it has nothing to buy, and left pending it would hold
+// the step-down off. True when the step is owed.
+inline bool followerLinkOweTxStep(WifiTxState& st) {
+  if (st.index >= WIFI_TX_ONLINE_CEILING_INDEX) return false;
+  st.dropPending = true;
+  return true;
+}
+
+// "Traffic confirmed" for the TX ladder: the master acknowledged everything
+// the row wrote. Downlink messages prove nothing about the row's own frames.
+struct FollowerUplinkAck {
+  bool written = false;  // bytes went out that are not yet seen acknowledged
+  uint32_t ackedMs = 0;  // when the send buffer was last seen drained; 0 = never
+};
+
+inline void followerLinkNoteWrite(FollowerUplinkAck& a) { a.written = true; }
+
+// A closed connection takes its unacknowledged bytes with it.
+inline void followerLinkNoteClosed(FollowerUplinkAck& a) { a.written = false; }
+
+// Called with the send buffer's free bytes on an open connection.
+inline void followerLinkNoteSendBuffer(FollowerUplinkAck& a, size_t freeBytes, size_t bufBytes,
+                                       uint32_t nowMs) {
+  if (!a.written || freeBytes < bufBytes) return;
+  a.written = false;
+  a.ackedMs = nowMs != 0 ? nowMs : 1;
+}
+
+inline bool followerLinkUplinkConfirmed(const FollowerUplinkAck& a, uint32_t nowMs) {
+  return wifiTxTrafficFresh(a.ackedMs, nowMs);
 }
