@@ -38,9 +38,10 @@
 #define FOLLOWER_LINK_SILENT_MS 30000UL
 // A pass of the link this late means loop() stood still.
 #define FOLLOWER_LINK_STALL_MS 2000UL
-// The master pings every 10 s: heard within this, its messages still reach
-// this row, so a connection that ends now ended on the row's own direction.
-#define FOLLOWER_LINK_HEARD_RECENT_MS 15000UL
+// Bytes the master has not acknowledged for this long, while its messages
+// still arrive, are the row's uplink failing: past the write wait and any
+// retransmission of a frame lost on the air.
+#define FOLLOWER_LINK_UPLINK_STALL_MS 10000UL
 
 inline uint32_t followerLinkNextBackoffMs(uint32_t previousMs) {
   if (previousMs < FOLLOWER_LINK_BACKOFF_MIN_MS) return FOLLOWER_LINK_BACKOFF_MIN_MS;
@@ -113,19 +114,93 @@ enum class FollowerLinkClose : uint8_t {
   WriteFailed,  // an answer waited its whole timeout for room
 };
 
+// What the row's send buffer showed on one connection: the TX ladder's
+// "traffic confirmed" and the evidence that the uplink stalled. Only the
+// master's acknowledgements free the buffer, so free bytes that grew between
+// two looks are the master answering the row's own frames.
+struct FollowerUplinkAck {
+  uint32_t ackedMs = 0;      // when an acknowledgement was last seen; 0 = never
+  size_t lastFree = 0;       // the send buffer's free bytes at the last look
+  bool outstanding = false;  // bytes written that are not all acknowledged
+  uint32_t waitSinceMs = 0;  // outstanding without an acknowledgement since
+  bool stalled = false;      // this connection showed FOLLOWER_LINK_UPLINK_STALL_MS
+};
+
+inline void followerLinkNoteAcked(FollowerUplinkAck& a, uint32_t nowMs) {
+  a.ackedMs = nowMs != 0 ? nowMs : 1;
+  a.waitSinceMs = nowMs;
+}
+
+// A connection opened with an empty send buffer of `bufBytes`.
+inline void followerLinkNoteOpened(FollowerUplinkAck& a, size_t bufBytes) {
+  a.lastFree = bufBytes;
+  a.outstanding = false;
+  a.stalled = false;
+}
+
+// A closed connection takes its unacknowledged bytes, and any claim that the
+// master hears this row, with it.
+inline void followerLinkNoteClosed(FollowerUplinkAck& a) {
+  a.ackedMs = 0;
+  a.outstanding = false;
+  a.stalled = false;
+}
+
+// After a write, with the free bytes it left.
+inline void followerLinkNoteWrite(FollowerUplinkAck& a, size_t freeAfter, size_t bufBytes,
+                                  uint32_t nowMs) {
+  if (!a.outstanding) {
+    a.outstanding = true;
+    a.waitSinceMs = nowMs;
+  }
+  if (freeAfter > a.lastFree || freeAfter >= bufBytes) followerLinkNoteAcked(a, nowMs);
+  a.lastFree = freeAfter;
+  if (freeAfter >= bufBytes) a.outstanding = false;
+}
+
+// May this pass measure a stall? Not while a unit job holds the row or after
+// loop() stood still: the master holds off, and what it sent waits unread.
+inline bool followerLinkPassMeasurable(uint32_t lastPassMs, uint32_t nowMs, bool busy) {
+  return !busy && !followerLinkElapsed(nowMs, lastPassMs, FOLLOWER_LINK_STALL_MS);
+}
+
+// One look at the send buffer per pass. `msgHeardMs` is when a message from
+// the master was last read (only a real one: a stall needs the master's
+// frames arriving while the row's go unacknowledged).
+inline void followerLinkNoteSendBuffer(FollowerUplinkAck& a, size_t freeBytes, size_t bufBytes,
+                                       uint32_t nowMs, uint32_t msgHeardMs, bool measurable) {
+  if (freeBytes > a.lastFree) followerLinkNoteAcked(a, nowMs);
+  a.lastFree = freeBytes;
+  if (freeBytes >= bufBytes) a.outstanding = false;
+  if (!a.outstanding) return;
+  if (!measurable) {
+    a.waitSinceMs = nowMs;
+    return;
+  }
+  const bool heardSince = (uint32_t)(msgHeardMs - a.waitSinceMs) <= (uint32_t)(nowMs - a.waitSinceMs);
+  if (heardSince && followerLinkElapsed(nowMs, a.waitSinceMs, FOLLOWER_LINK_UPLINK_STALL_MS)) {
+    a.stalled = true;
+  }
+}
+
+inline bool followerLinkUplinkConfirmed(const FollowerUplinkAck& a, uint32_t nowMs) {
+  return wifiTxTrafficFresh(a.ackedMs, nowMs);
+}
+
 // Did the row's uplink demonstrably fail? That is a link drop for the TX
-// ladder, like a lost association. `unackedBytes` < 0 = no send buffer to read.
-// A Hello still unacknowledged when the Welcome wait ends never reached the
-// master; a connection lost or a write stuck while the master's messages
-// still arrive is the master not hearing this row (its own silence rule).
-inline bool followerLinkUplinkFailed(FollowerLinkClose kind, int unackedBytes, bool welcomed,
-                                     uint32_t heardAgoMs) {
+// ladder, like a lost association. `unackedBytes` < 0 = no send buffer to
+// read. A Hello still unacknowledged when the Welcome wait ends never reached
+// the master. A lost connection or a stuck write counts only after this
+// connection showed a stall: a master that restarts or closes on its own ends
+// a healthy connection the same way.
+inline bool followerLinkUplinkFailed(FollowerLinkClose kind, int unackedBytes,
+                                     const FollowerUplinkAck& a) {
   switch (kind) {
     case FollowerLinkClose::NoWelcome:
       return unackedBytes > 0;
     case FollowerLinkClose::Lost:
     case FollowerLinkClose::WriteFailed:
-      return welcomed && heardAgoMs < FOLLOWER_LINK_HEARD_RECENT_MS;
+      return a.stalled;
     case FollowerLinkClose::Plain:
       break;
   }
@@ -140,28 +215,4 @@ inline bool followerLinkOweTxStep(WifiTxState& st) {
   if (st.index >= WIFI_TX_ONLINE_CEILING_INDEX) return false;
   st.dropPending = true;
   return true;
-}
-
-// "Traffic confirmed" for the TX ladder: the master acknowledged everything
-// the row wrote. Downlink messages prove nothing about the row's own frames.
-struct FollowerUplinkAck {
-  bool written = false;  // bytes went out that are not yet seen acknowledged
-  uint32_t ackedMs = 0;  // when the send buffer was last seen drained; 0 = never
-};
-
-inline void followerLinkNoteWrite(FollowerUplinkAck& a) { a.written = true; }
-
-// A closed connection takes its unacknowledged bytes with it.
-inline void followerLinkNoteClosed(FollowerUplinkAck& a) { a.written = false; }
-
-// Called with the send buffer's free bytes on an open connection.
-inline void followerLinkNoteSendBuffer(FollowerUplinkAck& a, size_t freeBytes, size_t bufBytes,
-                                       uint32_t nowMs) {
-  if (!a.written || freeBytes < bufBytes) return;
-  a.written = false;
-  a.ackedMs = nowMs != 0 ? nowMs : 1;
-}
-
-inline bool followerLinkUplinkConfirmed(const FollowerUplinkAck& a, uint32_t nowMs) {
-  return wifiTxTrafficFresh(a.ackedMs, nowMs);
 }

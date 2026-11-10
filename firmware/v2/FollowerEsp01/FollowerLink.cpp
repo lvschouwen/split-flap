@@ -46,6 +46,7 @@ uint32_t nextDialMs = 0;
 bool dialled = false;  // a connection was opened and has not been dropped yet
 uint32_t connectedAtMs = 0;
 uint32_t lastHeardMs = 0;  // the master's last message on this connection
+uint32_t msgHeardMs = 0;   // the same, never moved on by a busy or late pass
 uint32_t lastPassMs = 0;
 uint32_t lastStatusMs = 0;
 bool busySent = false;
@@ -159,7 +160,7 @@ void logClosed(const __FlashStringHelper* why, int unacked) {
 void drop(const __FlashStringHelper* why, FollowerLinkClose kind = FollowerLinkClose::Plain) {
   const int unacked = unackedBytes();
   if (sock.connected() || welcomed || dialled) logClosed(why, unacked);
-  if (followerLinkUplinkFailed(kind, unacked, welcomed, millis() - lastHeardMs)) {
+  if (followerLinkUplinkFailed(kind, unacked, uplinkAck)) {
     followerTxUplinkFailed(why);
   }
   followerLinkNoteClosed(uplinkAck);
@@ -182,7 +183,7 @@ static_assert(sizeof(wire) + FOLLOWER_LINK_REPLY_RESERVE <= TCP_SND_BUF,
 
 bool writeWire(size_t n) {
   if (n != 0 && sock.write(wire, n) == n) {
-    followerLinkNoteWrite(uplinkAck);
+    followerLinkNoteWrite(uplinkAck, (size_t)sock.availableForWrite(), TCP_SND_BUF, millis());
     return true;
   }
   drop(F("write failed"), FollowerLinkClose::WriteFailed);
@@ -471,6 +472,7 @@ void eventsTick() {
 
 void handle(const wl_ToRow& m, const FollowerClusterView& view) {
   lastHeardMs = millis();
+  msgHeardMs = lastHeardMs;
   if (!welcomed) {
     if (m.which_body != wl_ToRow_welcome_tag ||
         !followerLinkMasterAccepted(view.leaderName.c_str(), m.body.welcome.master_id)) {
@@ -565,6 +567,7 @@ void linkLoopTick() {
   const bool paired = view.phase != ClusterFollowerPhase::Standalone && view.leaderHost.length() > 0;
   const uint32_t passMs = millis();
   reportHeldCloses(passMs);
+  const bool measurable = followerLinkPassMeasurable(lastPassMs, passMs, unitOpsBusy());
   lastHeardMs = followerLinkHeardAfterPass(lastHeardMs, lastPassMs, passMs, unitOpsBusy());
   lastPassMs = passMs;
 
@@ -584,7 +587,8 @@ void linkLoopTick() {
     return;
   }
   if (sock.status() == ESTABLISHED) {
-    followerLinkNoteSendBuffer(uplinkAck, (size_t)sock.availableForWrite(), TCP_SND_BUF, passMs);
+    followerLinkNoteSendBuffer(uplinkAck, (size_t)sock.availableForWrite(), TCP_SND_BUF, passMs,
+                               msgHeardMs, measurable);
   }
   if (!readFromMaster(view)) return;
   welcomedTick(view);
@@ -618,6 +622,7 @@ void dialMaster(const FollowerClusterView& view) {
   strlcpy(dialledHost, view.leaderHost.c_str(), sizeof(dialledHost));
   connectedAtMs = millis();
   lastHeardMs = connectedAtMs;
+  followerLinkNoteOpened(uplinkAck, TCP_SND_BUF);
   dialled = true;
   sendHello();
 }

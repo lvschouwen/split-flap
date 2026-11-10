@@ -12,7 +12,7 @@
 
 #include "BuildVersion.h"
 #include "FollowerBus.h"     // busRowMoving
-#include "FollowerCluster.h"
+#include "FollowerCluster.h"     // clusterViewGet (#611)
 #include "FollowerLink.h"        // linkUplinkConfirmed (#668)
 #include "FollowerLinkPolicy.h"  // followerLinkOweTxStep
 #include "FollowerConfig.h"

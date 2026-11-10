@@ -37,12 +37,21 @@ def test_esp01_ladder_is_fed_the_confirmation():
     write = link[link.index("bool writeWire(size_t n) {"):]
     write = write[:write.index("\n}\n")]
     assert write.index("sock.write(wire, n) == n") < write.index(
-        "followerLinkNoteWrite(uplinkAck);") < write.index("drop(")
+        "followerLinkNoteWrite(uplinkAck, (size_t)sock.availableForWrite(), TCP_SND_BUF, millis());") \
+        < write.index("drop(")
     tick = link[link.index("void linkLoopTick() {"):]
     tick = tick[:tick.index("\n}\n")]
     assert "followerLinkNoteSendBuffer(uplinkAck, (size_t)sock.availableForWrite(), TCP_SND_BUF," \
         in tick
+    assert "msgHeardMs, measurable);" in tick
+    # Judged before the heard time is moved on by a busy or late pass.
+    assert tick.index("followerLinkPassMeasurable(lastPassMs, passMs, unitOpsBusy())") \
+        < tick.index("followerLinkHeardAfterPass(") < tick.index("lastPassMs = passMs;")
     assert tick.index("followerLinkNoteSendBuffer(") < tick.index("readFromMaster(view)")
+    handle = link[link.index("void handle(const wl_ToRow& m, const FollowerClusterView& view) {"):]
+    assert "msgHeardMs = lastHeardMs;" in handle[:handle.index("if (!welcomed)")]
+    assert link.count("\n  msgHeardMs =") == 1  # only handle() sets it
+    assert "followerLinkNoteOpened(uplinkAck, TCP_SND_BUF);" in link
 
 
 def test_esp01_uplink_failures_feed_the_ladder_as_link_drops():
@@ -50,8 +59,9 @@ def test_esp01_uplink_failures_feed_the_ladder_as_link_drops():
     drop = link[link.index("void drop(const __FlashStringHelper* why, FollowerLinkClose kind"):]
     drop = drop[:drop.index("\n}\n")]
     # Judged before the socket is closed: the unacknowledged bytes go with it.
-    assert drop.index("unackedBytes()") < drop.index("followerLinkUplinkFailed(kind, unacked,") \
-        < drop.index("followerTxUplinkFailed(why);") < drop.index("sock.stop();")
+    assert drop.index("unackedBytes()") < drop.index("followerLinkUplinkFailed(kind, unacked, uplinkAck)") \
+        < drop.index("followerTxUplinkFailed(why);") < drop.index("followerLinkNoteClosed(uplinkAck);") \
+        < drop.index("sock.stop();")
     assert "followerLinkNoteClosed(uplinkAck);" in drop
     for close in ('drop(F("no Welcome"), FollowerLinkClose::NoWelcome);',
                   'drop(F("connection lost"), FollowerLinkClose::Lost);',
