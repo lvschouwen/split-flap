@@ -281,6 +281,64 @@ static void test_clock_on_an_offset_row_uses_its_flaps() {
   TEST_ASSERT_EQUAL_STRING("04 Oc", seg[1].c_str());
 }
 
+// --- clusterClockTextSegments: a text below the clock row (#669) -----------------
+
+static ClusterMemberTable makeFiveOver16() {
+  ClusterMemberTable t = makeRows(2, 16);
+  t.members[0].width = 5;
+  return t;
+}
+
+static void test_clock_text_keeps_the_time_and_puts_the_text_below() {
+  String seg[2];
+  TEST_ASSERT_TRUE(clusterClockTextSegments("20:35", "DROGER KLAAR", DisplayAlignment::Center,
+                                            makeFiveOver16(), seg));
+  TEST_ASSERT_EQUAL_STRING("20:35", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("  DROGER KLAAR  ", seg[1].c_str());
+}
+
+static void test_clock_text_that_fits_the_clock_row_still_goes_below() {
+  String seg[2];
+  TEST_ASSERT_TRUE(clusterClockTextSegments("20:35", "WAS KLAAR", DisplayAlignment::Left,
+                                            makeFiveOver16(), seg));
+  TEST_ASSERT_EQUAL_STRING("20:35", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("WAS KLAAR       ", seg[1].c_str());
+}
+
+static void test_clock_text_wraps_over_every_row_below() {
+  String seg[3];
+  TEST_ASSERT_TRUE(clusterClockTextSegments("20:35", "0123456789ABCDEF TODAY",
+                                            DisplayAlignment::Left, makeRows(3, 16), seg));
+  TEST_ASSERT_EQUAL_STRING("20:35           ", seg[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("0123456789ABCDEF", seg[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("TODAY           ", seg[2].c_str());
+}
+
+static void test_clock_text_too_long_for_the_rows_below_is_refused() {
+  String seg[2];
+  TEST_ASSERT_FALSE(clusterClockTextSegments("20:35", "DE DROGER IS KLAAR", DisplayAlignment::Left,
+                                             makeFiveOver16(), seg));
+  TEST_ASSERT_FALSE(clusterClockTextSegments("20:35", "0123456789ABCDEFG", DisplayAlignment::Left,
+                                             makeFiveOver16(), seg));
+  TEST_ASSERT_FALSE(clusterClockTextSegments("20:35", "ONE\\nTWO", DisplayAlignment::Left,
+                                             makeFiveOver16(), seg));
+}
+
+static void test_clock_text_of_exactly_the_row_below_fits() {
+  String seg[2];
+  TEST_ASSERT_TRUE(clusterClockTextSegments("20:35", "0123456789ABCDEF", DisplayAlignment::Left,
+                                            makeFiveOver16(), seg));
+  TEST_ASSERT_EQUAL_STRING("0123456789ABCDEF", seg[1].c_str());
+}
+
+static void test_clock_text_needs_a_row_below_the_clock() {
+  String seg[1];
+  TEST_ASSERT_FALSE(clusterClockTextSegments("20:35", "HI", DisplayAlignment::Left,
+                                             makeRows(1, 16), seg));
+  ClusterMemberTable bad;
+  TEST_ASSERT_FALSE(clusterClockTextSegments("20:35", "HI", DisplayAlignment::Left, bad, seg));
+}
+
 static void test_mirror_draws_the_wall_as_it_hangs() {
   ClusterMemberTable t = makeCentredUnder16();
   t.members[0].host[0] = '\0';  // row 0 is this master
@@ -712,6 +770,12 @@ int main(int, char**) {
   RUN_TEST(test_clock_single_row_grid_drops_date);
   RUN_TEST(test_clock_wide_row_slices_time_across_members);
   RUN_TEST(test_clock_refuses_invalid_table);
+  RUN_TEST(test_clock_text_keeps_the_time_and_puts_the_text_below);
+  RUN_TEST(test_clock_text_that_fits_the_clock_row_still_goes_below);
+  RUN_TEST(test_clock_text_wraps_over_every_row_below);
+  RUN_TEST(test_clock_text_too_long_for_the_rows_below_is_refused);
+  RUN_TEST(test_clock_text_of_exactly_the_row_below_fits);
+  RUN_TEST(test_clock_text_needs_a_row_below_the_clock);
   RUN_TEST(test_cluster_date_format_is_v1_stamp_date);
   RUN_TEST(test_mirror_rows_rebuilds_wide_rows_from_segments);
   RUN_TEST(test_mirror_rows_overlays_self_slot_with_alignment);

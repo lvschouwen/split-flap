@@ -19,6 +19,19 @@
 #include "WebEndpoints.h"
 #include "WallState.h"
 
+// The wall's clock frame for this moment (a synced clock only); the next
+// minute is handed over ahead of the boundary (WallShowPolicy.h).
+static void wallClockTick(const WebContentSnapshot& content) {
+  struct timeval tv;
+  gettimeofday(&tv, nullptr);
+  if (!clockIsTimeSynced(tv.tv_sec)) return;
+  const WallClockTarget target =
+      wallClockTarget((uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL);
+  wallShowClock(formatDateTime(target.minuteEpochS, CLOCK_FORMAT),
+                formatDateTime(target.minuteEpochS, CLUSTER_DATE_FORMAT), content.alignment,
+                content.flapSpeed, target.commitAtMs);
+}
+
 // 1 Hz mode ticker (#192): re-shows the active mode's content — clock time
 // or the retained message — whenever the display drifts away from it (mode
 // switches, drain messages, minute rollover). The whole decision is the
@@ -48,6 +61,8 @@ void clockTaskMain(void*) {
     static bool notifWasActive = false;
     if (mqttNotificationActive()) {
       notifWasActive = true;
+      // A text under the clock row (#669): the minute keeps going.
+      if (wallShowClockKept() && !tasksQuiet()) wallClockTick(webDisplayContentSnapshot());
       continue;
     }
     const bool overlayEnded = notifWasActive;
@@ -58,20 +73,11 @@ void clockTaskMain(void*) {
     // Quiet (#227): no content from the modes.
     if (tasksQuiet()) continue;
     // A wall with row boards (#566): the logical content goes to the wall,
-    // which lays it out and flips every row at one instant. The clock's next
-    // minute is handed over ahead of the boundary (WallShowPolicy.h).
+    // which lays it out and flips every row at one instant.
     if (wallShowActive()) {
       WebContentSnapshot wallContent = webDisplayContentSnapshot();
-      struct timeval tv;
-      gettimeofday(&tv, nullptr);
       if (wallContent.deviceMode == "clock") {
-        if (clockIsTimeSynced(tv.tv_sec)) {
-          const WallClockTarget target = wallClockTarget(
-              (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL);
-          wallShowClock(formatDateTime(target.minuteEpochS, CLOCK_FORMAT),
-                        formatDateTime(target.minuteEpochS, CLUSTER_DATE_FORMAT),
-                        wallContent.alignment, wallContent.flapSpeed, target.commitAtMs);
-        }
+        wallClockTick(wallContent);
       } else if (wallContent.deviceMode == "text" &&
                  (wallContent.inputText.length() > 0 || overlayEnded)) {
         // Text mode with nothing to show still takes a text shown for a time

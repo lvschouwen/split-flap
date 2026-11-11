@@ -7,7 +7,7 @@
 
 #include <atomic>
 
-#include "ClockPolicy.h"  // clockIsTimeSynced
+#include "ClockPolicy.h"  // clockIsTimeSynced, formatDateTime
 #include "ClusterLayout.h"
 #include "DisplayCommand.h"
 #include "HelpersSerialHandling.h"
@@ -34,6 +34,7 @@ struct Locked {
 WallRowsTable table;
 int ownRow = -1;
 String lastContentKey;
+String overText;  // the text under the clock row (#669); "" = none
 String segments[CLUSTER_MAX_MEMBERS];  // by index in the rows table
 bool rowChanged[CLUSTER_MAX_MEMBERS] = {false};
 uint64_t commitAtMs = 0;
@@ -58,17 +59,25 @@ void submit(const String& contentKey, bool isClock, const String& textOrTime, co
   bool synced = false;
   const uint64_t nowE = epochNowMs(synced);
   Locked lock;
-  if (contentKey == lastContentKey) return;
+  // A text under the clock lasts as long as the text itself.
+  if (!isClock || !mqttNotificationActive()) overText = "";
+  const String key = contentKey + "|" + overText;
+  if (key == lastContentKey) return;
   String pieces[CLUSTER_MAX_MEMBERS];
   const ClusterMemberTable layout = wallRowsLayout(table);
   const DisplayAlignment align = displayAlignmentFromString(alignment);
-  const bool ok = isClock ? clusterClockSegments(textOrTime, date, align, layout, pieces)
-                          : layoutGridText(textOrTime, align, layout, pieces);
+  bool ok = false;
+  if (!isClock) {
+    ok = layoutGridText(textOrTime, align, layout, pieces);
+  } else if (overText.length() > 0) {
+    ok = clusterClockTextSegments(textOrTime, overText, align, layout, pieces);
+  }
+  if (isClock && !ok) ok = clusterClockSegments(textOrTime, date, align, layout, pieces);
   if (!ok) {
     SerialPrintln(F("wall: text not shown, the rows table does not hold"));
     return;
   }
-  lastContentKey = contentKey;
+  lastContentKey = key;
   speed = flapSpeed;
   commitAtMs = !synced ? 0 : flipAtMs != 0 ? flipAtMs : wallCommitAtMs(nowE, synced);
   for (int i = 0; i < table.count; i++) {
@@ -109,6 +118,34 @@ void wallShowClock(const String& timeText, const String& dateText, const String&
          timeText, dateText, alignment, flapSpeed, flipAtMs);
 }
 
+void wallShowOverMode(const String& text, const String& alignment, int flapSpeed,
+                      bool keepClock) {
+  bool synced = false;
+  const uint64_t nowE = epochNowMs(synced);
+  bool under = false;
+  if (keepClock && synced && wallShowActive()) {
+    Locked lock;
+    String pieces[CLUSTER_MAX_MEMBERS];
+    under = clusterClockTextSegments("", text, displayAlignmentFromString(alignment),
+                                     wallRowsLayout(table), pieces);
+    if (under) overText = text;
+  }
+  if (!under) {
+    wallShowText(text, alignment, flapSpeed);
+    return;
+  }
+  // The minute the ticker gave the clock row, so that row stays as it is;
+  // the text flips after the short lead.
+  const time_t minute = wallClockTarget(nowE).minuteEpochS;
+  wallShowClock(formatDateTime(minute, CLOCK_FORMAT), formatDateTime(minute, CLUSTER_DATE_FORMAT),
+                alignment, flapSpeed, 0);
+}
+
+bool wallShowClockKept() {
+  Locked lock;
+  return overText.length() > 0;
+}
+
 // The content key is left as it is: the clock ticker's next call is the same
 // content and changes nothing, so the wall stays blank until the content
 // itself moves (the next minute, a new text), as a single board does.
@@ -123,6 +160,7 @@ void wallShowBlank() {
     segments[i] = "";
     rowChanged[i] = true;
   }
+  overText = "";
   if (ownRow >= 0) {
     segments[ownRow] = "";
     ownPending = false;
@@ -141,6 +179,7 @@ void wallShowRowsChanged(const WallRowsTable& next) {
   table = next;
   ownRow = wallRowsOwn(table);
   lastContentKey = "";
+  overText = "";
   for (int i = 0; i < CLUSTER_MAX_MEMBERS; i++) {
     segments[i] = "";
     rowChanged[i] = false;

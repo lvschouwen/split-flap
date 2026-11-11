@@ -384,7 +384,11 @@ static void startNotificationLocal(const String& text, const MqttTextRequest& re
 static bool showTextNow(const String& text) {
   WebContentSnapshot content = webDisplayContentSnapshot();
   if (wallShowActive()) {
-    wallShowText(text, content.alignment, content.flapSpeed);
+    // The gate first: a text under the clock is dropped by a clock frame that
+    // meets it without one (WallShow.h). The caller starts the overlay next.
+    notifActiveAtomic.store(true);
+    wallShowOverMode(text, content.alignment, content.flapSpeed,
+                     content.deviceMode == "clock" && !tasksQuiet());
     return true;
   }
   return displayEnqueue(makeShowTextCommand(text, content.alignment, content.flapSpeed));

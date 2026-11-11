@@ -32,6 +32,14 @@ void wallShowText(const String& text, const String& alignment, int speed);
 // the flip instant (WallShowPolicy.h's wallClockTarget).
 void wallShowClock(const String& timeText, const String& dateText, const String& alignment,
                    int speed, uint64_t commitAtMs);
+// A text shown over the mode (#616). With `keepClock` (#669: a clock wall that
+// is not quiet) the first grid row keeps the time and the text takes the rows
+// under it, when it fits there whole and the clock is synced; otherwise the
+// text takes the whole wall. The caller raises the notification gate first:
+// the clock frame drops a kept-clock text it meets without one.
+void wallShowOverMode(const String& text, const String& alignment, int speed, bool keepClock);
+// Is a text up under the clock? The ticker then keeps the minute going.
+bool wallShowClockKept();
 // Stop: every row board blank. The master's own row is blanked by its Stop.
 void wallShowBlank();
 

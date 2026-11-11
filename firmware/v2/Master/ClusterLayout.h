@@ -334,3 +334,45 @@ inline bool clusterClockSegments(const String& timeText, const String& dateText,
   }
   return true;
 }
+
+// The letters of a text: everything a wrap may place (no spaces, no breaks).
+inline int clusterTextLetters(const String& text) {
+  int letters = 0;
+  for (unsigned int i = 0; i < text.length(); i++) {
+    if (text[i] != ' ' && text[i] != '\n') letters++;
+  }
+  return letters;
+}
+
+// Clock frame with a text below it (#669): row 0 keeps the time, the text is
+// wrapped over the rows under it. False on an invalid table and when the
+// text does not fit there whole (no row below the clock, or the wrap would
+// drop letters): the caller then gives the text the whole wall.
+inline bool clusterClockTextSegments(const String& timeText, const String& text,
+                                     DisplayAlignment align,
+                                     const ClusterMemberTable& table,
+                                     String* segments) {
+  ClusterGrid grid;
+  if (!validateMemberTable(table, grid).ok || grid.rows < 2) return false;
+
+  ClusterGrid below;
+  below.rows = grid.rows - 1;
+  for (int r = 0; r < below.rows; r++) below.rowWidth[r] = grid.rowWidth[r + 1];
+
+  String rows[CLUSTER_MAX_MEMBERS];
+  clusterWrapRows(text, below, rows + 1);
+  String norm = text;
+  norm.replace("\\n", "\n");
+  int placed = 0;
+  for (int r = 1; r < grid.rows; r++) placed += clusterTextLetters(rows[r]);
+  if (placed != clusterTextLetters(norm)) return false;
+
+  rows[0] = timeText;
+  for (int r = 0; r < grid.rows; r++) {
+    rows[r] = clusterAlignRow(rows[r], grid.rowWidth[r], align);
+  }
+  for (int m = 0; m < table.count; m++) {
+    segments[m] = clusterSliceSegment(table, rows, m);
+  }
+  return true;
+}

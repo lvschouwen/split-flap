@@ -424,8 +424,10 @@ static void showPostedTransient(const MasterSettings& settings, const PostedText
       mqttNoteTextResult(MqttTextResultKind::DroppedBusy, t.transientText, textPriority,
                          t.transientHold, resultDwell);
     } else if (wallShowActive()) {
-      wallShowText(t.transientText, settings.alignment, settings.flapSpeed);
+      // The gate first (WallShow.h, #669).
       mqttStartNotification(t.transientDwell, t.transientHold, textPriority);
+      wallShowOverMode(t.transientText, settings.alignment, settings.flapSpeed,
+                       settings.deviceMode == "clock" && !tasksQuiet());
       mqttNoteTextResult(shown, t.transientText, textPriority, t.transientHold, resultDwell);
       SerialPrintln("Transient text routed to the wall: " + t.transientText);
     } else if (displayEnqueue(makeShowTextCommand(
