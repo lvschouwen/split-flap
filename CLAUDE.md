@@ -55,6 +55,6 @@ Releases: CalVer `vYYYY.MM.DD`, at most one a day; read `.claude/rules/release-p
 ## Agent runs (the standard: `~/.claude/rules/common/agent-runs.md`)
 
 - Check: `agent-check` (= `scripts/check.sh`); agents iterate with `scripts/check.sh --touched master` in their slot. Slots via `agent-wt` (`wt-N`, warm `.pio`).
-- Opus for concurrency, I2C bus/probe, OTA/boot/flash, wall link, EEPROM/NVS/partition, credentials; Sonnet otherwise.
+- Risk areas (always a reviewer pass, or keep the work in main): concurrency, I2C bus/probe, OTA/boot/flash, wall link, EEPROM/NVS/partition, credentials.
 - Guards: `splitflap-implementer` / `splitflap-reviewer` carry the global deny hook plus `guard-bench.sh --agent` (ota-flash, campaign scripts, release.py, wall-API writes).
 - Conflict files: `firmware/v2/shared/` and `firmware/v2/Unit/` (bundle restage, one agent at a time), `tests/test_copied_headers.py` pairs, route and test registries, the standard baseline.

@@ -1,6 +1,6 @@
 ---
 name: splitflap-implementer
-description: Build-only implementer for exactly one split-flap GitHub issue (firmware, host tests, python tools) in the worktree slot named in the brief. Stops at a green scripts/check.sh and a LOCAL commit; never flashes, OTAs, pushes or talks to a board. Pass model on every dispatch (opus for concurrency, I2C bus/probe, OTA/boot/flash, wall link, EEPROM/NVS/partition, credentials; sonnet otherwise).
+description: Build-only implementer for exactly one split-flap GitHub issue (firmware, host tests, python tools) in the worktree slot named in the brief. Stops at a green scripts/check.sh and a LOCAL commit; never flashes, OTAs, pushes or talks to a board.
 tools: Read, Edit, Write, Bash, Grep, Glob, LSP, mcp__context7__resolve-library-id, mcp__context7__query-docs
 model: sonnet
 hooks:
