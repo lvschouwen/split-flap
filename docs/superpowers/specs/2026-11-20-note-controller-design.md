@@ -1,6 +1,6 @@
 # Note-size wall: the controller board — design
 
-Issue: #675 (epic #676; unit board #674, flaps #670) · Status: role decided by Lucas 2026-11-20 (A1: one S3, row mux, per-row eFuse); round-2 decisions folded in; **power input (mains vs USB-C PD) compared, recommendation below, Lucas decides**; layout and BOM follow
+Issue: #675 (epic #676; unit board #674, flaps #670) · Status: role decided by Lucas 2026-11-20 (A1: one S3, row mux, per-row eFuse); round-2 and round-3 decisions folded in (slot-coded backplane replaces the chain; second I2C bus allowed); **power input: internal mains is the target, the side-by-side with USB-C PD stays below for Lucas to decide**; layout and BOM follow
 
 ## Intent and why
 
@@ -19,15 +19,20 @@ split-off issue.
   100 kHz, including twiboot reflash.
 - Keep the Home Assistant contract (`docs/HA_CONTRACT.md`, append-only) and the
   operator API unchanged for the wall.
-- A 12 V input with switched per-row eFuses and per-row power telemetry; inrush
+- A 12 V input with switched per-row eFuses, per-row power telemetry and a
+  wall-total monitor; inrush
   handled by what exists (render stagger) plus the eFuses' soft start.
-- A robust row bus: each row on its own mux channel, with a rise-time
-  accelerator, a mux reset and a per-row recovery ladder (section "Row bus
-  robustness").
+- A robust row bus: each row on its own mux channel, an accelerator footprint
+  (not populated until measured), a mux reset and a per-row recovery ladder
+  (section "Row bus robustness").
 - Bench basics on the board: USB-C for data and flashing, BOOT/RESET, a factory
-  reset button (GPIO 4), an RTC with a battery.
-- Own the unit addressing: one CHAIN head per row and the enumeration job
-  (#674 section 9), over a five-conductor row cable.
+  reset button (GPIO 4), recessed BOOT/RESET, a row service mode, a DS3231-class
+  RTC with a battery.
+- No addressing job: units take their address from slot-coded backplane pins
+  (#674), so there is no CHAIN head, no enumeration and no `CHAIN_CLEAR`; the
+  row cable is four conductors (+12 V, GND, SDA, SCL).
+- Two I2C buses with one owner each: the unit bus (`Wire`, through the mux,
+  `UnitBus.cpp`) and a system bus (`Wire1`: power monitors, RTC).
 
 ## Non-goals
 
@@ -49,16 +54,19 @@ split-off issue.
   `wall_problem` / per-board verdicts all exist because boards are separate
   devices. A one-controller wall uses none of it.
 - **Unit addressing:** 7-bit, `SFP_I2C_ADDRESS_BASE` = 1, set range 1..126
-  (`SFP_CMD_SET_I2C_ADDRESS`), kept in EEPROM (the DIP switch goes, #674).
-  Addresses are assigned by the controller in physical order over the chain line
-  (#674 section 9): row r, position p gets the global index 15r + p, 1..45, so
-  45 units fit one address space. The mux sits at 0x70 and 0x70..0x77 stays
-  reserved; a blank unit listens on 0x29 only while gated.
+  (`SFP_CMD_SET_I2C_ADDRESS`), kept in EEPROM today. On the Note unit the address
+  is read from the slot-coded backplane pins (each slot straps its position, like
+  the old DIP) with a segment id from a solder jumper on the backplane (#674
+  decides the exact coding). The controller assigns nothing and enumerates
+  nothing. Whether addresses are global 1..45 or 1..15 per mux channel is a #674
+  choice; either fits, since each row is its own channel. The mux sits at 0x70 and
+  0x70..0x77 stays reserved.
 - **Geometry:** 15 x 41.5 = 623 mm and 3 x 73 = 219 mm. **The units fill the
   whole footprint**; the unit envelope is ~95 mm deep in a 101 mm case, leaving
   ~6 mm behind them. There is no free area for a controller inside the Note
-  outline; the controller stays an **external box** until Lucas decides the power
-  input (section "Power input"); a 26 mm UHP-200-12 can sit inside (see there).
+  outline; the controller sits in an **external box** by default. Internal mains
+  is the power target (Lucas, 2026-11-20): a 26 mm UHP-200-12 can sit inside (section
+  "Power input"), and the controller moves in with it only if that fit passes.
   Behind the mechanism the drum spec leaves ~40 mm per unit (z 54..94 of 95 mm,
   `2026-11-20-note-drum-frame-design.md` section 7), but the unit boards live there.
 - **Power:** two estimates exist and differ. The unit board spec (#674 section 8) has
@@ -73,8 +81,13 @@ split-off issue.
   45-unit text change is not measured; the supply and fuse sizes below are
   starting points until it is (bench with the #306 vmin telemetry).
 - **Levels:** the S3 and ESP-01 are 3.3 V; v1 level-shifts to the 5 V Nano. #674
-  keeps the unit MCU and the bus at 5 V, so the 3.3 V to 5 V shift, the pull-ups
-  and the CHAIN head buffer all live on the controller (decided with #674).
+  keeps the unit MCU and the bus at 5 V, so the 3.3 V to 5 V shift and the
+  pull-ups live on the controller (decided with #674).
+- **Hard rule today:** `UnitBus.cpp` is the sole `Wire` toucher
+  (`.claude/rules/s3-hard-rules.md`). Decided 2026-11-20: a second I2C bus on the
+  controller is allowed with one owner per bus; `UnitBus.cpp` keeps the unit bus, a
+  new system-bus file owns `Wire1`. The rule is amended with the firmware work, not
+  by this spec.
 
 ## I2C budget (both options)
 
@@ -118,10 +131,10 @@ cluster layer are not used on this wall. Three ways to make the buses:
 - **A3, S3's two hardware I2C controllers plus one more.** Two rows on native
   ports and a third via a mux anyway, or bit-banged: not worth it. Dropped.
 
-Chosen: **A1** (isolation matters more than broadcast reach; the 3.3/5 V shift
-is a small separate stage, or a per-row PCA9517A *behind* the mux channel if the
-level margin fails, see risks). A general-call `CHAIN_CLEAR` is sent per
-channel.
+Chosen: **A1** (isolation matters more than broadcast reach). The 3.3 V to 5 V
+step is expected to come from the mux pass gates with 5 V pull-ups on the channel
+side, with no per-row BSS138 pair; that is a datasheet **verify** item (section
+"Row bus robustness"), and a PCA9517A behind the channel is the fallback.
 
 What carries over: the whole Master firmware (display, operator page, API, MQTT
 and HA discovery, OTA A/B with rollback, rescue, brownout/boot guards, unit
@@ -145,7 +158,8 @@ must reach 45. No wall link, no `FollowerEsp01` image, no rollout.
   and a 6.3 A limit may exceed it: verify in the layout issue, or pick a part that
   holds ~4-6 A with a dV/dt soft start and a fault flag per row). The firmware gets
   soft inrush, a remote power cycle of one row (the power-on catch, #554, today needs
-  a hand) and a fault it can report; the head is held low whenever a row is off. A
+  a hand) and a fault it can report. Anything on the row that could back-feed an
+  unpowered row is switched with that row's eFuse (see "Row bus robustness"). A
   12 V to 3.3 V buck feeds the S3 (peak ~0.4 A WiFi). Where the 12 V comes from
   (mains module or USB-C PD) is the section "Power input"; either way the controller
   sees the same 12 V rail, so the board does not change with that decision.
@@ -154,12 +168,13 @@ must reach 45. No wall link, no `FollowerEsp01` image, no rollout.
   three uncoordinated row schedules, which is strictly better than today's
   rows. Boot: the confirm-pre-inrush rule (Master CLAUDE.md OTA) holds.
 - **Board size and placement (external box by default):** the controller is S3
-  module (18 x 25.5 mm), mux, three eFuses, three INA226 shunts, head buffers,
+  module (18 x 25.5 mm), mux, three eFuses, four INA226 shunts, 5 V pull-up switches,
   USB-C, RTC, connectors, ~70 x 50 mm (estimate), in a box next to the 12 V supply
   unless the power decision puts both inside.
   Three row cables run from the box to the first unit of each row. Each is a
-  **five-conductor cable: +12 V, GND, SDA, SCL, CHAIN**, with the power pair gauged for the
-  eFuse limit and SDA/SCL twisted with ground. Cable length adds capacitance to
+  **four-conductor cable: +12 V, GND, SDA, SCL**, with the power pair gauged for the
+  eFuse limit and SDA/SCL twisted with ground. The slot pins live on the row
+  backplane, not in the cable (#674). Cable length adds capacitance to
   the budget above: keep it <= 0.5 m per row until measured.
 - **Cost:** one S3 N16R8 module (~EUR 6-8) + mux + eFuses + INA226s + accelerators
   + passives ~EUR 20-25 per wall (estimate), plus the box and the supply. No row
@@ -211,24 +226,33 @@ board.
   three more WiFi stations, DHCP leases, pairings and a link to keep healthy
   on a 623 mm wall that is one physical object.
 
-## Unit addressing and the CHAIN heads
+## Unit addressing
 
-The controller owns enumeration (sequence, events and the unit-side gate are in
-`2026-11-20-note-unit-board-design.md` section 9):
+The controller does not address units. Each backplane slot straps its position and a
+solder jumper sets the segment id (#674); the unit reads both at boot. Consequences
+for this board:
 
-- **One CHAIN head per row**, a GPIO through a 5 V buffer (a 74AHCT1G-class gate;
-  the ATmega's VIH at 5 V is 3.0 V, a 3.3 V drive has little margin) to the row cable's
-  CHAIN conductor, which is the first unit's CHAIN_IN. High while the row is
-  powered and settled, low when the row is off or being re-enumerated.
-- The enumeration job per row: head low, three general-call `CHAIN_CLEAR`, head
-  high, then probe 0x29 and `SET_I2C_ADDRESS` unit by unit in physical order with a
-  verified ping each, on that row's mux channel. It runs automatically on a blank
-  row and on a single swapped unit (one gap in the scan plus one listener on
-  0x29), otherwise only on the operator action "enumerate row".
-- Reports per row: `chain_break_after`, `row_long`, `row_enumeration_needed`
-  (names provisional; they extend the operator API, and any HA-visible attribute
-  follows `docs/HA_CONTRACT.md`: append-only, a hass-config issue first).
-- Reflash is unchanged: twiboot at each unit's own address, one unit at a time.
+- **No CHAIN head per row**, no head buffer, no `CHAIN_CLEAR`, no enumeration
+  job and no `chain_break_after` / `row_long` / `row_enumeration_needed` reports.
+  A swapped unit needs nothing from the controller.
+- The controller only has to probe the expected addresses per channel, as today,
+  and keep 0x70..0x77 reserved for the mux.
+- Reflash is unchanged: twiboot at each unit's own address, one unit at a time,
+  at 100 kHz. Whether a blank bootloader unit answers on its slot address is a
+  #674 / twiboot question, not a controller one.
+
+## Two I2C buses, one owner each
+
+| Bus | Pins | Devices | Owner (firmware) |
+|---|---|---|---|
+| Unit bus (`Wire`) | GPIO 8, 9 | TCA9548A mux (0x70), the units behind its three channels | `UnitBus.cpp`, sole toucher |
+| System bus (`Wire1`) | GPIO 11, 12 | INA226 x4, DS3231-class RTC | a new system-bus file, sole toucher |
+
+System devices never go on the unit bus or behind the mux: their fixed addresses
+(INA226 0x40..0x4F, RTC 0x68) can collide with unit addresses, and telemetry must
+keep working while a row channel is stuck. The hard rule in
+`.claude/rules/s3-hard-rules.md` ("`UnitBus.cpp` sole Wire toucher") is amended to
+"one owner per bus" together with the firmware work, not by this spec.
 
 ## Network
 
@@ -242,42 +266,69 @@ end clear by >= 10 mm (a layout rule, estimate).
 
 Each row is its own TCA9548A-class mux channel (A1). On top of it:
 
-- **Rise-time accelerator per row**, on the row side of the channel (an LTC4311 or
-  TCA4311A-class active pull-up; real part families, not price- or stock-checked
-  here). It lets a 330-400 pF row at 100 kHz keep a clean 5 V edge with a weaker
-  static pull-up. The 3.3 V to 5 V shift stays a separate stage (BSS138 pair or
-  PCA9517A, risk 2), upstream of the mux or per channel; pick one at layout.
-- **Series 100 ohm-class resistors and a TVS** on each row's SDA/SCL/CHAIN at the
+- **Level step and pull-ups.** The pull-ups on each channel's row side run to 5 V,
+  and the mux pass gates are expected to translate between those and the 3.3 V
+  upstream side, so no BSS138 pair per row. **Verify** in the TCA9548A datasheet
+  before layout, including which VCC to run the mux at: a 5 V VCC raises its
+  input-high threshold (a proportion of VCC) above a 3.3 V S3 drive, a 3.3 V VCC
+  limits the channel-side high level. If it does not hold, a PCA9517A behind each
+  channel is the fallback.
+- **Switch the pull-up supply with the row eFuse.** The row's 5 V pull-ups (and any
+  other slot-side supply the controller provides) are powered through a small switch
+  that follows that row's eFuse state. Otherwise an unpowered row is back-fed
+  through the unit pins' protection diodes from the pull-ups and the SDA/SCL
+  levels, and units half-wake.
+- **Accelerator footprint per channel, not populated by default**: an LTC4311 /
+  TCA4311A-class active pull-up on the row side (real part families, not price- or
+  stock-checked here). Populate it only if the far unit's rise time exceeds
+  ~1 us; measure at 100 kHz, the twiboot rate, on a prototype row.
+- **Series 100 ohm-class resistors and a TVS** on each row's SDA/SCL at the
   controller connector, mirroring the unit side (#674 round 2).
-- **Recovery ladder per row**, escalating, all existing or new GPIO-only:
-  1. UnitBus rebuild (#207): select the channel, clock SCL up to 9 times from the
-     controller's own SDA/SCL pins (the pins reach the row through the selected
-     channel), send STOP.
-  2. Pulse the mux RESET (GPIO 13): drops all channels, clears a mux that hung.
-  3. Power-cycle that row through its eFuse (GPIO 14/15/16), with the CHAIN head low
-     meanwhile; the row re-enumerates only if a unit lost its address (#674
-     section 9). The eFuse fault flag and the INA226 reading say why.
-  4. Report `row_bus_stuck` and leave the row off; the other two rows keep running.
-- A row never blocks another: the mux deselects a channel between transactions, so
-  a shorted SDA on one row cannot hold the shared upstream pair.
+- **Recovery ladder per row**, escalating; a row never blocks another:
+  1. Per-channel bus rebuild (#207): select the channel and re-initialise the
+     bus on it.
+  2. If SDA stays stuck low: clock SCL up to 9 times from the controller's own
+     pins (they reach the row through the selected channel), then STOP.
+  3. Pulse the mux RESET (GPIO 13): drops all channels and clears a hung mux.
+  4. Row eFuse off for at least 1 s, then back on and let it settle at least 2 s
+     before the first transaction. The eFuse fault flag and that row's INA226
+     reading say why.
+  5. Still failing: mark the row faulted (`row_bus_stuck`), leave it off; the
+     other rows carry on.
+- **Mux RESET is also pulsed once at boot**, before any channel is selected, so a
+  mux left mid-transaction by a reset or brownout starts clean.
+- The mux deselects a channel between transactions, so a shorted SDA on one row
+  cannot hold the shared upstream pair.
 
-## Per-row power telemetry
+## Power telemetry
 
-Chosen: **one INA226-class current/power monitor per row**, high-side, on the
-eFuse output, with a ~5 mohm shunt (estimate: 6 A x 5 mohm = 30 mV, 0.18 W; check
-the datasheet full-scale range of the part in the layout issue). Three devices at
-distinct addresses (A0/A1 straps) on a **local I2C bus** (S3 second controller,
-GPIO 1/2) shared with the RTC, so telemetry never rides the row mux; their ALERT
+Chosen: **one INA226-class monitor per row, high-side, after that row's eFuse, with a
+10 mohm shunt, plus one on the 12 V total (before the eFuses) with a ~2 mohm shunt.**
+Four devices at distinct addresses (A0/A1 straps) on the **system bus** (`Wire1`,
+GPIO 11/12), shared with the RTC, so telemetry never rides the row mux; their ALERT
 pins wire-OR into one GPIO (5).
+
+- **Why two shunt values.** The INA226 shunt input is +-81.92 mV full scale (verify
+  in the datasheet): a 10 mohm shunt overflows above ~8.2 A, so it suits one row
+  (3-6 A) but not the wall total at 7-9.6 A (or 15 A on the older estimate). A
+  2 mohm shunt reads to ~41 A at 2.5 uV per LSB. Shunt dissipation at the design
+  currents (about 0.16-0.36 W per row shunt, ~0.2 W for the total at 9.6 A;
+  estimates) sets the shunt package, a 1 W-class part.
+- **The INA226 bus-voltage reading is the primary sag input** (the #306 vmin
+  evidence and the wall-wide stagger). The unit's own rail field (#674 12 V sense)
+  is the far-end check, so the difference between the two is the cable and
+  backplane drop.
+- **Analog only on ADC1** (GPIO 1..10); ADC2 is shared with WiFi. No analog input is
+  assigned on this board today; the rule keeps the pins free for one later.
 
 | | INA226 per row | eFuse with an analog current-monitor pin |
 |---|---|---|
-| Output | current, bus voltage and power over I2C; 16-bit | an analog voltage, needs one ADC pin per row and a calibration |
+| Output | current, bus voltage and power over I2C; 16-bit | an analog voltage, needs one ADC1 pin per row and a calibration |
 | Rail sag (#306 vmin) | read per row, same chip | not available |
 | Accuracy at ~0.5 A | good (TI lists 0.1 % max gain error, 10 uV max offset) | typically a few % at low current (estimate, part-dependent) |
-| Pins | 2 shared + 1 alert | 3 ADC pins (the ADC1 pins are also the free pool) |
-| Cost | ~EUR 1.3 at 1k (Octopart, TI part) up to ~EUR 4-5 single (RS, estimate), x3 | free with the eFuse, if the part has it |
-| Extra board loss | ~0.18 W per row at 6 A | none |
+| Pins | 2 shared + 1 alert | 3 ADC1 pins |
+| Cost | ~EUR 1.3 at 1k (Octopart, TI part) up to ~EUR 4-5 single (RS, estimate), x4 | free with the eFuse, if the part has it |
+| Extra board loss | ~0.16-0.36 W per row shunt | none |
 
 It gives the firmware a wall-wide, measured stagger (hold new moves until the
 measured draw falls under a budget) and the vmin evidence the supply sizing needs.
@@ -292,14 +343,22 @@ hass-config issue first (not done here).
   the first flash and a bench console. VBUS is diode-OR'ed into the 3.3 V buck input
   only (the buck must accept 5 V in, to verify), so the board can be flashed
   without the 12 V rail; the eFuse rows stay off on USB power.
-- **BOOT** (GPIO 0, strapping, button to ground only) and **RESET** (EN, button plus
-  RC).
-- **Factory reset: GPIO 4**, active-low button, reserved and never used for anything
-  else (same meaning as the existing factory-reset rule).
-- **RTC with a battery** on the local I2C bus (PCF8563 or DS3231-class, CR1220
-  holder), SQW/INT on GPIO 6. It feeds the fallback clock when WiFi or NTP is down
-  and keeps time across power loss (the S3's internal RTC does not survive a power
-  cycle).
+- **BOOT** (GPIO 0, strapping, button to ground only), **RESET** (EN, button plus
+  RC) and the **factory reset** (GPIO 4, active-low, held 5 s, reserved and never used
+  for anything else, same meaning as the existing factory-reset rule). All three
+  are **recessed** (pinhole or sunk tactile switch) so a case contact cannot press
+  them, and reachable from the back of the box or frame.
+- **Row service mode:** an operator action per row that turns that row's eFuse off
+  (and its pull-up switch with it) before units are swapped on the backplane, and
+  turns it back on with the normal settle on exit. Unit swaps happen with the row
+  dead, never hot. The firmware part is a later issue; the board needs only the
+  per-row eFuse enable it already has.
+- **DS3231-class RTC** (temperature-compensated, with a **CR1220 holder reachable
+  from the back**, so the cell can be replaced without opening the wall) on the system
+  bus, SQW/INT on GPIO 6. Firmware reads it at boot and sets the system clock from it
+  until NTP answers, and writes it after each NTP sync. It feeds the fallback clock
+  when WiFi or NTP is down and keeps time across power loss (the S3's internal RTC
+  does not survive a power cycle).
 - A status LED (GPIO 48), a UART0 pad pair (43/44) and a JTAG pad row (39..42) stay
   as pads, not parts.
 
@@ -308,28 +367,32 @@ hass-config issue first (not done here).
 | GPIO | Use |
 |------|-----|
 | 0 | BOOT (strapping; button to ground only) |
-| 1, 2 | local I2C: SDA, SCL (INA226 x3, RTC) |
 | 4 | **factory reset button (reserved)** |
-| 5 | INA226 ALERT, wire-OR of three |
+| 5 | INA226 ALERT, wire-OR of four |
 | 6 | RTC SQW/INT |
-| 8, 9 | SDA, SCL to the row mux (the pins `UnitBus.cpp` uses today) |
-| 10, 11, 12 | CHAIN head, rows 0..2 |
+| 8, 9 | SDA, SCL of the unit bus (`Wire`) to the row mux (the pins `UnitBus.cpp` uses today) |
+| 11, 12 | SDA, SCL of the system bus (`Wire1`: INA226 x4, RTC) |
 | 13 | mux RESET |
 | 14, 15, 16 | eFuse enable, rows 0..2 (pull-downs: rows off until firmware turns them on) |
 | 17, 18, 21 | eFuse fault, rows 0..2 |
 | 19, 20 | USB D-, D+ (USB-C data, flashing) |
 | 48 | status LED |
 
-21 pins claimed. Free spares: 3 (strapping, keep free), 7, 38, 47. Never assigned:
-35/36/37 (octal PSRAM). Kept free on principle: 45, 46 (strapping), 26..34 (module
-flash and PSRAM lines), 39..42 (JTAG pads) and 43/44 (console pads). EN is the RESET
-button. Verify the list against the module datasheet in the layout issue; GPIO 1/2
-and 5..7 are chosen because they are not strapping or PSRAM pins on the N16R8.
+18 pins claimed, 3 fewer than before the backplane decision (the three CHAIN heads on
+10/11/12 are gone, and the system bus moved from GPIO 1/2 to 11/12 so the ADC1 pins
+1, 2 and 10 stay free for analog). Free spares: 1, 2, 7, 10, 38, 47, plus 3
+(strapping, keep free). Never assigned: 35/36/37 (octal PSRAM). Kept free on
+principle: 45, 46 (strapping), 26..34 (module flash and PSRAM lines), 39..42 (JTAG
+pads) and 43/44 (console pads). Analog uses ADC1 pins only (GPIO 1..10), never ADC2.
+EN is the RESET button. Verify the list against the module datasheet in the layout
+issue; GPIO 11/12 are not strapping or PSRAM pins on the N16R8, and the pull-ups for
+`Wire1` go on those two.
 
 ## Power input: mains module (A) vs USB-C PD (B)
 
 Lucas's two inputs (2026-11-20): first USB-C PD, then mains like the Vestaboard
-Note, with this comparison to settle it. The controller side is the same either
+Note. **Internal mains is the target** (latest decision on #676); this side-by-side
+stays so Lucas can confirm it before layout. The controller side is the same either
 way (12 V in, section "Options" A1), so the question is only what makes the 12 V.
 
 **Load to size for.** ~108 W worst case (9 A, #674 section 8 estimate) plus ~5 W
@@ -454,7 +517,7 @@ INA226 total, not just a fixed cap.
 | Availability | UHP-200-12 799 in stock at Digi-Key US; LRS-200-12 710 pcs at one US distributor with a 19-week factory lead time quoted there; IRM-90 and TRACO stock not checked | AP33772S and certified cables available; 140 W+ EPR chargers are fewer and marketplace-priced; TPS26750 a newer part |
 | Design effort | choose and mount; mechanical bay | new 12 A-class buck, PD firmware, EPR cable policy |
 
-### Recommendation (Lucas decides)
+### Recommendation (the target; Lucas confirms)
 
 **(A), a mains module: the Mean Well UHP-200-12 inside the wall, laid over five
 bays of the top row, with an external C14 brick as the fallback.** Numbers: ~EUR 60-75
@@ -491,7 +554,7 @@ Vestaboard Note power, dimensions and cord: <https://www.vestaboard.com/help/not
 | Boards / WiFi stations | 1 | 3-4 |
 | Per-row fuse | yes, on the board | yes, per board |
 | Inrush coordination | one wall-wide stagger | three uncoordinated |
-| Fits the 101 mm depth | external box by default; a UHP-200-12 can sit over 5 top-row bays | strip x3 or wall grows |
+| Fits the 101 mm depth | external box by default; internal mains (UHP-200-12 over 5 top-row bays) is the target | strip x3 or wall grows |
 | Failure isolation | wall-level SPOF, row-level channel/fuse | row-level |
 | Cost per wall | ~EUR 15 | ~EUR 30 + a firmware port |
 
@@ -499,16 +562,18 @@ Vestaboard Note power, dimensions and cord: <https://www.vestaboard.com/help/not
 
 **(A1), decided by Lucas 2026-11-20: one S3 controller for the whole wall on its
 own WiFi (no Ethernet), a TCA9548A-class mux giving each row its own bus with a
-rise-time accelerator and a recovery ladder, switched per-row eFuses with an INA226
-per row, one CHAIN head per row, USB-C for data and flashing, BOOT/RESET, a factory
-reset on GPIO 4 and an RTC with a battery.** The 12 V source is open: section
-"Power input" recommends a mains module (UHP-200-12 inside the top row, external
-brick as the fallback); Lucas decides.
+recovery ladder (accelerator footprint unpopulated), switched per-row eFuses with an
+INA226 per row and one on the 12 V total, a second I2C bus for system devices, USB-C
+for data and flashing, recessed BOOT/RESET, a factory reset on GPIO 4 and a DS3231-class
+RTC with a battery.** Units take their address from the slot-coded backplane, so the
+controller has no CHAIN heads and no enumeration. The 12 V source: internal mains is
+the target (UHP-200-12 inside the top row, external brick as the fallback); the
+side-by-side with USB-C PD in "Power input" stays for Lucas to decide.
 
 - It reuses the shipped Master firmware, which already has the hard parts
   (OTA with rollback, rescue, boot and brownout guards, twiboot, HA contract).
-  The only new firmware is row-indexed bus plumbing, the enumeration job, the
-  INA226 telemetry and a local multi-row layout, all small next to porting the
+  The only new firmware is row-indexed bus plumbing, a system-bus file, the
+  INA226 telemetry, the per-row recovery ladder and a local multi-row layout, all small next to porting the
   follower.
 - It removes the ESP-01 wall link from this wall: one board, one WiFi station, no
   pairing or rollout, one release image.
@@ -526,12 +591,15 @@ dies, or if the rows were separable modules; neither holds for the Note.
 
 1. **Bus capacitance and rise time** of one 15-unit row on real unit boards and
    the controller cable: measure on the first #674 prototypes with a scope;
-   decide pull-up value then. If the cable pushes a row past ~400 pF, move the
-   mux next to the row (the controller moves out of the box and into the wall) or add a PCA9517A.
+   decide pull-up value then, and whether the accelerator footprint is populated
+   (far-unit rise time > ~1 us at 100 kHz). If the cable pushes a row past ~400 pF,
+   move the mux next to the row (the controller moves out of the box and into the
+   wall) or add a PCA9517A.
 2. **3.3 V bus against 5 V ATmega inputs:** VIH(5 V) = 3.0 V against a 3.3 V
-   drive is little margin. Decided with #674: the pull-ups run to 5 V behind a
-   level shifter on the controller (BSS138 pair or PCA9517A, one per row); the
-   unit board carries no pull-ups.
+   drive is little margin. Decided with #674: the pull-ups run to 5 V on the
+   controller and the unit board carries none. Whether the TCA9548A pass gates give
+   the 3.3 V / 5 V step (and at which mux VCC) is **unverified**; fallback PCA9517A
+   behind each channel.
 3. **Moving-unit count and 12 V rail sag** for a 45-unit change: size the
    supply and fuses (36-60 W per row, 3-5 A, against the 6.3 A eFuse figure) from the
    INA226 and #306 vmin readings on a row prototype, not from the 2.4 W or 4 W
@@ -542,20 +610,20 @@ dies, or if the rows were separable modules; neither holds for the Note.
 5a. **Power input:** the open decision in the section above; the eFuse family's
    current range, the unit-board height over those five bays and the pocket
    temperature at 180 W are unverified.
-6. **CHAIN over the cable:** the level and the debounce of a slow DC line beside
-   100 kHz SDA/SCL on a ~0.5 m cable, with the head buffer; check on the first row
-   prototype with the unit's 1 k series and 100 k pull-down.
+6. **Back-feed of an unpowered row** through the unit pin diodes from the pull-ups:
+   the pull-up switch must follow the eFuse; check on the first row prototype with
+   the row off and the other rows running.
 
 ## Out of scope for the choice (decided later)
 
-PCB outline and connector choice, the exact eFuse, accelerator, level-shift and
-RTC parts, the head buffer part, the mains module and inlet (or the PD level), and
+PCB outline and connector choice, the exact eFuse, accelerator, level-shift (or its fallback) and
+RTC parts, the pull-up switch, the mains module and inlet (or the PD level), and
 the box.
 
 ## Open questions for Lucas
 
-1. **Power input:** mains module (recommended: UHP-200-12 over five top-row bays) or
-   USB-C PD (ELV-only, 140 W ceiling with the 28 V level)? If mains: accept the
+1. **Power input:** internal mains is the target; confirm the mains module
+   (UHP-200-12 over five top-row bays) against USB-C PD (ELV-only, 140 W ceiling with the 28 V level)? If mains: accept the
    #674 height gate (unit-board parts <= ~8 mm in those five bays) and the cut-back
    frame rear walls there, or keep the PSU outside?
 2. **Box and cables:** where the box sits relative to the wall and the longest row
