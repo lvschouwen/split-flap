@@ -7,7 +7,7 @@ from typing import Sequence
 from flaps.alphabet import FLAP_COUNT, Entry, load_alphabet
 from flaps.geometry import FlapParts, build_flap
 from flaps.params import FlapParams
-from flaps.plates import Placed, pack, split_by_colour
+from flaps.plates import Placed, grid, pack
 from flaps.threemf import write_plate
 
 # Fronts that stress the printer: thin strokes, small dots, wide glyphs, the heart.
@@ -45,36 +45,24 @@ def _test_plate(alphabet, p: FlapParams) -> tuple[list[tuple[int, FlapParts]], l
     return built, names
 
 
-def _write(path: Path, built, names, p: FlapParams, tower: bool) -> None:
-    (plate,) = pack([i for i, _ in built], p, tower=tower)
-    write_plate(path, [(Placed(pl.flap, pl.x, pl.y), parts) for pl, (_, parts) in zip(plate, built)],
+def _write(path: Path, built, names, placed: Sequence[Placed], p: FlapParams) -> None:
+    write_plate(path, [(pl, parts) for pl, (_, parts) in zip(placed, built)],
                 p, names=names)
     colours = sorted({c for _, parts in built for c in parts.inlays} | {"black"})
     print(f"{path}: {len(built)} flaps, colours {', '.join(colours)}")
 
 
-def _capacity(p: FlapParams, tower: bool) -> int:
-    return len(pack(list(range(FLAP_COUNT)), p, tower=tower)[0])
-
-
 def _full(alphabet, p: FlapParams, out: Path) -> None:
-    plain, coloured = split_by_colour(alphabet)
-    # Only full plates stay black + white; the remainder rides on the tower plate,
-    # whose colour changes happen anyway.
-    per_plate = _capacity(p, tower=False)
-    full = len(plain) - len(plain) % per_plate
-    groups = [(plate, False) for plate in pack(plain[:full], p, tower=False)] if full else []
-    groups += [(plate, True) for plate in pack(plain[full:] + coloured, p, tower=True)]
-    for k, (plate, tower) in enumerate(groups, start=1):
-        built = [(pl.flap, build_flap(pl.flap, alphabet, p)) for pl in plate]
-        _write(out / f"drum-plate-{k}.3mf", built, [f"flap{i:02d}" for i, _ in built], p, tower)
+    # One file: the slicer's auto-arrange spreads it over as many plates as it needs.
+    built = [(i, build_flap(i, alphabet, p)) for i in range(FLAP_COUNT)]
+    _write(out / "drum.3mf", built, [f"flap{i:02d}" for i, _ in built], grid([i for i, _ in built], p), p)
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--test-plate", action="store_true")
-    mode.add_argument("--full", action="store_true", help="every plate for one drum")
+    mode.add_argument("--full", action="store_true", help="all 64 flaps of one drum in out/drum.3mf")
     ap.add_argument("--out", type=Path, default=Path(__file__).with_name("out"))
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     args = ap.parse_args(argv)
@@ -86,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
     alphabet = load_alphabet()
     if args.test_plate:
         built, names = _test_plate(alphabet, p)
-        _write(args.out / "test-plate.3mf", built, names, p, tower=True)
+        (plate,) = pack([i for i, _ in built], p, tower=True)
+        _write(args.out / "test-plate.3mf", built, names, plate, p)
     else:
         _full(alphabet, p, args.out)
     return 0

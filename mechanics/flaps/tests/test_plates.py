@@ -1,15 +1,7 @@
 import itertools
 
-from flaps.alphabet import load_alphabet
 from flaps.params import FlapParams
-from flaps.plates import Placed, pack, split_by_colour
-
-
-def test_split_by_colour():
-    plain, coloured = split_by_colour(load_alphabet())
-    # 63 (solid white, blank back) needs only black + white
-    assert coloured == list(range(56, 63))
-    assert plain == list(range(56)) + [63]
+from flaps.plates import Placed, grid, pack
 
 
 def _rect(pl, p):
@@ -41,10 +33,19 @@ def test_pack_respects_bed_tower_and_spacing():
 
 
 def test_default_plate_counts():
-    plain, coloured = split_by_colour(load_alphabet())
     # cols = (256-2*5+3)//(36+3) = 6, rows = (256-2*5+3)//(31+3) = 7 -> 42 per plate
-    assert [len(pl) for pl in pack(plain, FlapParams(), tower=False)] == [42, 15]
-    assert len(pack(coloured, FlapParams(), tower=True)) == 1
+    assert [len(pl) for pl in pack(list(range(64)), FlapParams(), tower=False)] == [42, 22]
+
+
+def test_grid_keeps_bed_width_and_spacing_but_grows_in_y():
+    p = FlapParams()
+    placed = grid(list(range(64)), p)
+    assert [pl.flap for pl in placed] == list(range(64))
+    rects = [_rect(pl, p) for pl in placed]
+    assert all(p.bed_margin - 1e-9 <= r[0] and r[2] <= p.bed - p.bed_margin + 1e-9 for r in rects)
+    assert max(r[3] for r in rects) > p.bed
+    for a, b in itertools.combinations(rects, 2):
+        assert _gap(a, b) >= p.spacing - 1e-9
 
 
 def test_placed_is_a_value():
