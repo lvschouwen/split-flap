@@ -97,10 +97,10 @@ pivot tabs, and the full 64-flap plates are ready to slice.
   in its colour. Its back face still carries the bottom half of the next flap
   in drum order, so the white flap's back is the blank's bottom (black). The
   ♥ is white, drawn as a parametric curve.
-- **Plates by colour:** the 56 character flaps (black + white only) go on
-  their own plates, so purge stays small. The 8 colour-bearing flaps share one
-  plate per batch of drums, with the prime tower budgeted in its packing (bed
-  margin and prime-tower area are parameters).
+- **Plates by colour:** black + white flaps fill whole plates of their own, so
+  purge stays small. The plain remainder shares the prime-tower plate with the
+  colour-bearing flaps, whose colour changes happen anyway (one drum = 42 + 22
+  on two plates). Bed margin and prime-tower area are parameters.
 - **3mf:** 3MF core only, one part per colour with `pid`/`pindex` into a
   `<basematerials>` group (slot order: 1 black, 2 white, 3–8 red…violet). Bambu
   Studio loads it as a third-party file: parts kept, one colour-to-filament

@@ -11,7 +11,7 @@ uv venv --python 3.12 ~/.cache/split-flap/mech-venv
 uv pip install --python ~/.cache/split-flap/mech-venv/bin/python build123d==0.13.0 pytest==9.2.0
 cd mechanics
 ~/.cache/split-flap/mech-venv/bin/python -m flaps.generate --test-plate      # out/test-plate.3mf
-~/.cache/split-flap/mech-venv/bin/python -m flaps.generate --full            # out/drum-plate-{1,2,3}.3mf
+~/.cache/split-flap/mech-venv/bin/python -m flaps.generate --full            # out/drum-plate-{1,2}.3mf
 ~/.cache/split-flap/mech-venv/bin/python -m flaps.generate --test-plate --set cap_frac=0.65 --set inlay_depth=0.3
 ```
 
@@ -47,8 +47,9 @@ settings makes it load geometry only (no parts, no colours).
 ## Print recipe
 
 - 0.4 mm nozzle, 0.2 mm layers; front face down on the plate (smooth or textured PEI).
-- Plain plates (`drum-plate-1`, `-2`): black + white only, no prime tower needed.
-- Colour plate (`drum-plate-3`) and the test plate: enable the prime tower and
+- Plain plate (`drum-plate-1`, 42 flaps): black + white only, no prime tower needed.
+- Mixed plate (`drum-plate-2`: the other 15 plain flaps + the 7 colour flaps)
+  and the test plate: enable the prime tower and
   drag it into the top-right corner, at most 35 x 35 mm (`prime_tower`); the
   packing keeps that square plus `spacing` free. Bambu Studio picks its own
   default spot, so check it before slicing.

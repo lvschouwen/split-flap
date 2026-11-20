@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from flaps.alphabet import Entry, load_alphabet
+from flaps.alphabet import FLAP_COUNT, Entry, load_alphabet
 from flaps.geometry import FlapParts, build_flap
 from flaps.params import FlapParams
 from flaps.plates import Placed, pack, split_by_colour
@@ -50,10 +50,18 @@ def _write(path: Path, built, names, p: FlapParams, tower: bool) -> None:
     print(f"{path}: {len(built)} flaps, colours {', '.join(colours)}")
 
 
+def _capacity(p: FlapParams, tower: bool) -> int:
+    return len(pack(list(range(FLAP_COUNT)), p, tower=tower)[0])
+
+
 def _full(alphabet, p: FlapParams, out: Path) -> None:
     plain, coloured = split_by_colour(alphabet)
-    groups = [(plate, False) for plate in pack(plain, p, tower=False)]
-    groups += [(plate, True) for plate in pack(coloured, p, tower=True)]
+    # Only full plates stay black + white; the remainder rides on the tower plate,
+    # whose colour changes happen anyway.
+    per_plate = _capacity(p, tower=False)
+    full = len(plain) - len(plain) % per_plate
+    groups = [(plate, False) for plate in pack(plain[:full], p, tower=False)] if full else []
+    groups += [(plate, True) for plate in pack(plain[full:] + coloured, p, tower=True)]
     for k, (plate, tower) in enumerate(groups, start=1):
         built = [(pl.flap, build_flap(pl.flap, alphabet, p)) for pl in plate]
         _write(out / f"drum-plate-{k}.3mf", built, [f"flap{i:02d}" for i, _ in built], p, tower)
