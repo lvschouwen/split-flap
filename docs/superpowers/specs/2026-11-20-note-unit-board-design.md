@@ -736,7 +736,9 @@ backplane are not under the PSU.
 | Back wall (1.2) | 93.8 | 95.0 | plug slot |
 | Backplane strip: SMD socket (~4) + backplane (1.6) | 95.0 | 100.6 | 0.4 spare in 101 |
 
-It closes: 100.6 of 101 mm, with **0.4 mm spare at the back** and 3.1 mm of rear standoff.
+It does not close yet: -1.2 to 100.6 is **101.8 mm against 101**, and there is no rear cover. The 26 mm of extra room
+in bays without a PSU does not help the PSU bays; the fix (#673 wave 2) is to take ~1-2 mm from the clearance
+and the rear standoff and/or recess the socket into the back wall, and to decide whether the backplane is the rear skin.
 Consequences: rear-face parts other than the plug header are <= ~2.5 mm; anything tall
 (C11, inductor) sits on the PSU-facing face; the header's pins must reach the socket
 across standoff + wall + insertion (~6.8 mm of pin below the board, datasheet-verify
