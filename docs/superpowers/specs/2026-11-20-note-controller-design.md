@@ -58,7 +58,7 @@ split-off issue.
   whole footprint**; the unit envelope is ~95 mm deep in a 101 mm case, leaving
   ~6 mm behind them. There is no free area for a controller inside the Note
   outline; the controller stays an **external box** until Lucas decides the power
-  input (section "Power input"), which also decides whether a supply fits inside.
+  input (section "Power input"); a 26 mm UHP-200-12 can sit inside (see there).
   Behind the mechanism the drum spec leaves ~40 mm per unit (z 54..94 of 95 mm,
   `2026-11-20-note-drum-frame-design.md` section 7), but the unit boards live there.
 - **Power:** two estimates exist and differ. The unit board spec (#674 section 8) has
@@ -349,6 +349,7 @@ distributor listings:
 
 | Module | Rating | L x W x H (mm) | Source note |
 |---|---|---|---|
+| **Mean Well UHP-200-12** | 12 V, 16.7 A, 200.4 W, enclosed, fanless convection, 93 % typ. efficiency, PFC, -30..+70 C with derating | **194 x 55 x 26** | USD 49 single / 43.30 at 25 (Digi-Key US), GBP 37.60 ex VAT (Digi-Key UK), GBP 59.65 ex VAT (RS UK); RS calls it "Slim and Low profile (26 mm)" |
 | Mean Well LRS-200-12 | 12 V, 17 A, 204 W, enclosed (perforated metal), convection | 215 x 115 x 30, 660 g | ~USD 26-27 single (US distributors); GBP 30.56 ex VAT (RS UK) |
 | Mean Well IRM-90-12 | 12 V, 6.7 A, 80 W, encapsulated, PCB module | 87 x 52 x 29.5 | PCB type (screw-terminal IRM-90-12ST is 109 x 52 x 33.5); price not found |
 | TRACO TPP 180-112-M | 12 V, 15 A, 180 W | 76.2 x 50.8 x 34.6 | RS UK listing; price and derating (convection vs airflow at 180 W) not checked |
@@ -360,29 +361,59 @@ input rating (a slow-blow T-type, per the module datasheet), strain relief, main
 terminals behind a fixed cover, creepage kept to the PSU's own isolation. The
 LRS-class unit's input terminals are exposed, so the cover is ours to make.
 
-**Does it fit the 623 x 219 x 101 footprint?** Not as drawn. The frame is ~95 mm
-deep, leaving 6 mm to the case, and the ~40 mm behind the mechanism (z ~54..94) is
-split into per-unit frame shells with the unit board on the back face. Every module
-above is 29.5-40.6 mm thick, which is the whole remaining 40 mm minus the unit
-board's own parts (buck inductor, connector, ULN2003: ~10 mm, estimate), so a
-30 mm module clears them by ~0 mm (estimate) and also needs the frame rear walls
-of the ~2 x 3 units it covers cut away. Three ways out:
+**Does it fit the 623 x 219 x 101 mm footprint?** The LRS-200-12 and the other
+modules above do not (29.5-40.6 mm thick against the ~40 mm rear space, with the
+unit boards in it). **The UHP-200-12 can**, on paper: it is 26 mm thick and 55 mm wide.
 
-1. **Deeper rear bay:** add ~35 mm to the case (101 to ~136 mm, estimate: 30 mm
-   module + 5 mm for air and the cover) behind the unit boards. Frames untouched;
-   the wall is 35 % deeper than a Note.
-2. **Shared rear chamber:** end the unit frames at the mechanism (z ~55) and make
-   z 55..94 one 623 x 219 chamber with the boards on a row backplane. The module
-   still needs ~30 mm over the boards: ~0 to 1 mm clearance, mains and ELV in one
-   volume. Not recommended.
-3. **External mains brick with C14 (the earlier A1 box):** an enclosed 12 V brick
-   (RS lists 180 W / 12 V / 15 A adapters with a C14 inlet) beside the controller
-   box; the wall carries only 12 V. Fits trivially; two cables, so less Note-like.
+Placement (estimates, to confirm against the #674 layout):
 
-Heat (estimates): at ~88-90 % efficiency 108 W costs ~12-14 W in the module, for the
-seconds a full-wall change lasts; at idle ~10 W load is ~1-2 W of loss. A
-convection module in a sealed plastic case behind a 41-mm-pitch wall needs vents
-or a derating check against the module's datasheet curve (not fetched here).
+- **Bays:** 194 mm is 4.7 columns of 41.5 mm, so it lies along **one row over 5
+  adjacent bays** (207.5 mm) and 55 mm sits inside the 73 mm row pitch with ~18 mm
+  to spare. Take the **top row, the five bays at the end nearest the inlet**, so the
+  module's heat leaves through top vents and does not rise through other units.
+- **Height budget:** rear space 40 mm - 26 mm module = 14 mm for the unit board
+  (1.6 mm PCB), its tallest parts and the air gap. With parts <= 8 mm over the
+  board that leaves ~4 mm clearance; with the ~10 mm first estimate only ~2.4 mm.
+  This is a **go/no-go number for #674: the five boards in those bays must keep
+  their tallest part (buck inductor, 5-pin connector) at or under ~8 mm**, or
+  use a low-profile variant for those five boards, or sit lower on the backplane.
+- **Frames:** in those five bays the frame shells end at the mechanism (z ~54) so
+  the module can cross the inter-unit walls; the unit boards keep their back-face
+  position. The module is carried by a printed or sheet-metal bracket fixed to the
+  side walls of the outer two bays and to the case rear panel, with 4-5 mm
+  insulating standoffs and a 1 mm insulating sheet (FR4 or PETG) between the
+  module case and the board parts. No load on the unit boards.
+- **Mains side:** the C14 inlet module (fuse drawer, filter) sits on the rear panel
+  of the same row end, next to the module's AC terminals (short, fixed leads). The
+  AC terminal block is covered by a fixed cover; the module's DC terminals feed
+  the controller box by one 12 V cable (or the controller sits in the space beside
+  it, a layout-issue question).
+- **Earth bonding:** the inlet's earth pin goes to the module's FG terminal with a
+  ring lug and a short wire (class I); any metal frame member or bracket in reach
+  is bonded to the same point. The 12 V rail (SELV) is not bonded to earth. The
+  bonding, fuse rating and wire gauge follow the module datasheet and the inlet's
+  rating; this spec does not fix them.
+- **Other fit options if the gate fails:** (1) a rear bay of ~+35 mm for an LRS-class
+  module (101 to ~136 mm, 35 % deeper than a Note); (2) an **external 12 V brick
+  with a C14 inlet** beside the controller box (RS lists 180 W / 12 V / 15 A
+  adapters with a C14 inlet): trivially fits, two cables.
+
+**Lower-wattage UHP?** None found: the UHP-200 is the smallest UHP in what I could
+read (a Mean Well catalog excerpt shows three UHP case sizes, 194 x 55 x 26, 220 x 62 x 31
+and 233 x 81 x 31, not labelled per model; no UHP-100/120/150 listing turned up).
+Check meanwell.com for a smaller UHP before ruling it out. At a ~108 W budget the
+200 W module runs at ~54 % load, which only helps heat and lifetime, and the 180 W
+ceiling still fits inside its rating. Other series are thicker or unmeasured
+(EPP-150-12 is listed at 12 V / 8.4 A / 100.8 W by RS UK, dimensions not found; IRM-90-12
+is 29.5 mm thick), so none fits the 40 mm better than the UHP-200.
+
+Heat (estimates, 93 % typical efficiency from the listings): the module loses
+~8 W at 108 W and ~13.5 W at 180 W (~15 W at 200 W), for the seconds a full-wall
+change lasts; at ~10 W idle load ~0.7 W. The module is rated for 200 W by convection
+(RS), -30..+70 C with derating; it sits in the top row with vents in the case top
+and bottom edge, away from the flap stack. The derating curve and the temperature
+in a sealed 5-bay pocket are not verified (datasheet not fetched): measure on the
+first prototype with a thermocouple at 180 W for a few minutes.
 
 ### (B) USB-C PD
 
@@ -415,28 +446,31 @@ INA226 total, not just a fixed cap.
 
 | | (A) internal mains module | (B) USB-C PD |
 |---|---|---|
-| Function | any load to the module rating, no cap; ~12 V, 17 A (LRS-200-12) | capped by the negotiated level (table above); a drop resets the wall |
+| Function | any load to the module rating, no cap; 12 V, 16.7 A (UHP-200-12) | capped by the negotiated level (table above); a drop resets the wall |
 | User experience | one IEC cord like the Note | one USB-C cable, but must be an EPR charger and e-marked cable; wrong charger silently caps or fails |
 | Safety / compliance | class I mains product: earth, fused inlet, cover, creepage; CE LVD + EMC if sold; our PCBs stay ELV | no mains in the product (the source carries it); 28-48 V is above 12 V but below 75 V DC (LVD scope as I read it, verify); our PCBs are ELV; EMC of the new buck |
-| Space / heat | 30-40 mm thick module: does not fit 101 mm without a deeper rear bay (~+35 mm) or an external brick; ~12-14 W loss at peak | ~9 W buck loss at peak on our PCB (estimate); source is outside the wall |
-| BOM cost (estimates) | module ~EUR 25-30 + C14 filter inlet with fuse ~EUR 6-10 + cord/earth/cover ~EUR 5: **~EUR 40-50** | AP33772S ~EUR 1-2 + 12 A-class buck stage ~EUR 10-20 + EPR cable ~EUR 15-25 + EPR charger ~EUR 60-130 (240 W seen at USD 129-145): **~EUR 90-180**, more with a 48 V controller |
-| Availability | Mean Well parts widely stocked (LRS-200-12 710 pcs at one US distributor; a 19-week factory lead time quoted there); IRM-90 and TRACO stock not checked | AP33772S and certified cables available; 140 W+ EPR chargers are fewer and marketplace-priced; TPS26750 a newer part |
+| Space / heat | UHP-200-12 (194 x 55 x 26 mm) fits the rear space over 5 bays of the top row if the unit boards stay <= ~8 mm tall there (to confirm in #674); thicker modules do not (deeper bay ~+35 mm or an external brick); ~8 W loss at 108 W, ~13.5 W at 180 W | ~9 W buck loss at peak on our PCB (estimate); source is outside the wall |
+| BOM cost (estimates) | UHP-200-12 ~EUR 43-55 (GBP 37.60 ex VAT to USD 49; RS UK GBP 59.65) + C14 filter inlet with fuse ~EUR 6-10 + cord, earth, bracket, cover ~EUR 8: **~EUR 60-75**; an LRS-200-12 build is ~EUR 40-50 but does not fit | AP33772S ~EUR 1-2 + 12 A-class buck stage ~EUR 10-20 + EPR cable ~EUR 15-25 + EPR charger ~EUR 60-130 (240 W seen at USD 129-145): **~EUR 90-180**, more with a 48 V controller |
+| Availability | UHP-200-12 799 in stock at Digi-Key US; LRS-200-12 710 pcs at one US distributor with a 19-week factory lead time quoted there; IRM-90 and TRACO stock not checked | AP33772S and certified cables available; 140 W+ EPR chargers are fewer and marketplace-priced; TPS26750 a newer part |
 | Design effort | choose and mount; mechanical bay | new 12 A-class buck, PD firmware, EPR cable policy |
 
 ### Recommendation (Lucas decides)
 
-**(A), a mains module, with the PSU outside the wall first.** Numbers: ~EUR 40-50
-against ~EUR 90-180, no stagger cap forced by the source, no new power stage to
-design or EMC-test, and the stock part is proven (Mean Well LRS-200-12, 215 x 115 x
-30 mm, 204 W, ~USD 26). The one thing against it is space: no module fits the 101 mm
-case as drawn. So build the first wall with an **enclosed 12 V brick with a C14
-inlet next to the controller box** (identical electronics, zero mains in the wall,
-the wall is ELV), and take the internal Note-like variant only if Lucas accepts a
-rear bay of ~+35 mm (or a bay that shrinks once the unit frames are measured);
-the controller board is the same in both. Choose (B) only if the wall must have no
-mains at all (an ELV-only product, or sold without a mains conformity assessment);
-then use the 28 V EPR level with the AP33772S, a 12 A-class buck and a closed-loop
-stagger, accepting the 140 W ceiling.
+**(A), a mains module: the Mean Well UHP-200-12 inside the wall, laid over five
+bays of the top row, with an external C14 brick as the fallback.** Numbers: ~EUR 60-75
+for the mains input (UHP-200-12 ~EUR 43-55, estimate) against ~EUR 90-180 for PD; no
+stagger cap forced by the source; no new power stage to design or EMC-test; and the
+module is the one candidate that fits: 194 x 55 x 26 mm, 200.4 W, 93 % typical,
+fanless, so it fits the 40 mm rear space with 2-4 mm to spare (estimate). It keeps the
+Note's single IEC cord. The condition is the go/no-go gate in #674: the unit boards in
+those five bays stay <= ~8 mm tall. If that fails, or the thermal check at 180 W
+fails, fall back to an **enclosed 12 V brick with a C14 inlet next to the controller
+box** (identical electronics, zero mains in the wall); the controller board is the
+same in every case. The 200 W rating is the smallest UHP found, so no
+lower-wattage variant is a better fit at a 108 W budget. Choose (B) only if the wall
+must have no mains at all (an ELV-only product, or sold without a mains conformity
+assessment); then use the 28 V EPR level with the AP33772S, a 12 A-class buck and a
+closed-loop stagger, accepting the 140 W ceiling.
 
 Because this repo is public, a mains design carries a duty to say so: publish the
 mains side as "use a certified module and a fused, earthed inlet; no mains on
@@ -444,7 +478,7 @@ the PCBs", never as a schematic to copy.
 
 ### Sources
 
-Vestaboard Note power, dimensions and cord: <https://www.vestaboard.com/help/note-power>, <https://www.vestaboard.com/help/dimensions-note>, <https://www.vestaboard.com/help/power>. Mean Well LRS-200-12 price and size: <https://www.bravoelectro.com/lrs-200-12.html>, <https://www.masterelectronics.com/en/mean-well/lrs20012-47466823.html>, <https://uk.rs-online.com/web/p/switching-power-supplies/1065859>. IRM-90-12: <https://www.digikey.com.br/en/products/detail/mean-well-usa-inc/IRM-90-12/11562725>, <https://meanwell.com/newsInfo.aspx?c=1&i=830>. 180 W modules: <https://uk.rs-online.com/web/p/switching-power-supplies/2499835?gb=s>, <https://int.rsdelivers.com/product/tdk-lambda/nvm1-1t000-s1-c/7511223>, <https://uk.rs-online.com/web/p/ac-dc-adapters/2707384>. AP33772S: <https://www.diodes.com/assets/Datasheets/AP33772S.pdf>. TPS26750: <https://ti.com/product/TPS26750>. EPR cables and chargers: <https://cdw.com/product/startech.com-6ft-usb-c-charging-cable-usb-if-certified-usb-c-cable-240w-p/7847865>, <https://www.newegg.com/p/3C6-005Y-00YB2>. INA226: <https://www.ti.com/product/ina226>, <https://octopart.com/part/texas-instruments/INA226AIDGSR>. Distributor pages change; prices are single-unit snapshots, not quotes.
+Vestaboard Note power, dimensions and cord: <https://www.vestaboard.com/help/note-power>, <https://www.vestaboard.com/help/dimensions-note>, <https://www.vestaboard.com/help/power>. Mean Well UHP-200-12 (size, efficiency, price): <https://uk.rs-online.com/web/p/switching-power-supplies/1748124>, <https://www.digikey.co.uk/en/products/detail/mean-well-usa-inc/UHP-200-12/7707237>, <https://octopart.com/part/mean-well/UHP-200-12>; UHP case sizes: <https://www.meanwell.com/catalog/product/files/basic-html/page27.html>. Mean Well LRS-200-12 price and size: <https://www.bravoelectro.com/lrs-200-12.html>, <https://www.masterelectronics.com/en/mean-well/lrs20012-47466823.html>, <https://uk.rs-online.com/web/p/switching-power-supplies/1065859>. IRM-90-12: <https://www.digikey.com.br/en/products/detail/mean-well-usa-inc/IRM-90-12/11562725>, <https://meanwell.com/newsInfo.aspx?c=1&i=830>. 180 W modules: <https://uk.rs-online.com/web/p/switching-power-supplies/2499835?gb=s>, <https://int.rsdelivers.com/product/tdk-lambda/nvm1-1t000-s1-c/7511223>, <https://uk.rs-online.com/web/p/ac-dc-adapters/2707384>. AP33772S: <https://www.diodes.com/assets/Datasheets/AP33772S.pdf>. TPS26750: <https://ti.com/product/TPS26750>. EPR cables and chargers: <https://cdw.com/product/startech.com-6ft-usb-c-charging-cable-usb-if-certified-usb-c-cable-240w-p/7847865>, <https://www.newegg.com/p/3C6-005Y-00YB2>. INA226: <https://www.ti.com/product/ina226>, <https://octopart.com/part/texas-instruments/INA226AIDGSR>. Distributor pages change; prices are single-unit snapshots, not quotes.
 
 ## Comparison
 
@@ -457,7 +491,7 @@ Vestaboard Note power, dimensions and cord: <https://www.vestaboard.com/help/not
 | Boards / WiFi stations | 1 | 3-4 |
 | Per-row fuse | yes, on the board | yes, per board |
 | Inrush coordination | one wall-wide stagger | three uncoordinated |
-| Fits the 101 mm depth | external box by default; a PSU inside needs ~+35 mm | strip x3 or wall grows |
+| Fits the 101 mm depth | external box by default; a UHP-200-12 can sit over 5 top-row bays | strip x3 or wall grows |
 | Failure isolation | wall-level SPOF, row-level channel/fuse | row-level |
 | Cost per wall | ~EUR 15 | ~EUR 30 + a firmware port |
 
@@ -468,7 +502,8 @@ own WiFi (no Ethernet), a TCA9548A-class mux giving each row its own bus with a
 rise-time accelerator and a recovery ladder, switched per-row eFuses with an INA226
 per row, one CHAIN head per row, USB-C for data and flashing, BOOT/RESET, a factory
 reset on GPIO 4 and an RTC with a battery.** The 12 V source is open: section
-"Power input" recommends a mains module, outside the wall first; Lucas decides.
+"Power input" recommends a mains module (UHP-200-12 inside the top row, external
+brick as the fallback); Lucas decides.
 
 - It reuses the shipped Master firmware, which already has the hard parts
   (OTA with rollback, rescue, boot and brownout guards, twiboot, HA contract).
@@ -505,7 +540,8 @@ dies, or if the rows were separable modules; neither holds for the Note.
    HA unit counts) must be audited for 45; not verified here.
 5. **GPIOs:** see the budget above; 4 is reserved for factory reset, 35/36/37 never.
 5a. **Power input:** the open decision in the section above; the eFuse family's
-   current range and the rear bay depth are unverified.
+   current range, the unit-board height over those five bays and the pocket
+   temperature at 180 W are unverified.
 6. **CHAIN over the cable:** the level and the debounce of a slow DC line beside
    100 kHz SDA/SCL on a ~0.5 m cable, with the head buffer; check on the first row
    prototype with the unit's 1 k series and 100 k pull-down.
@@ -518,9 +554,10 @@ the box.
 
 ## Open questions for Lucas
 
-1. **Power input:** mains module (recommended; external brick first) or USB-C PD
-   (ELV-only, 140 W ceiling with the 28 V level)? If mains: accept a rear bay of
-   ~+35 mm for an internal module, or keep the PSU outside?
+1. **Power input:** mains module (recommended: UHP-200-12 over five top-row bays) or
+   USB-C PD (ELV-only, 140 W ceiling with the 28 V level)? If mains: accept the
+   #674 height gate (unit-board parts <= ~8 mm in those five bays) and the cut-back
+   frame rear walls there, or keep the PSU outside?
 2. **Box and cables:** where the box sits relative to the wall and the longest row
    cable it implies (the budget assumes <= 0.5 m; a longer run moves the mux next
    to the row or adds a PCA9517A).
