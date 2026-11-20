@@ -722,6 +722,27 @@ backplane are not under the PSU.
 | Plug header (1.27 mm 1 x 6, body ~2.5 mm, pins through the wall slot) | on the rear face | outside the gate if the assumption holds; if the PSU is on the plug side the header pins (~6 mm) still pass the 8 mm gate |
 | AS5600 sensor board | inside the hub, not on the unit board | not affected |
 
+**Depth stack (z from the display plane, mm; envelope 101):**
+
+| Layer | z from | z to | Note |
+|-------|--------|------|------|
+| Front wall, mechanism, flap tips | -1.2 | 53.1 | #673 section 6 |
+| Clearance (flap tips) | 53.1 | 54.1 | 1.0 |
+| PSU module (UHP-200-12 class, 26 mm) | 54.1 | 80.1 | over the boards of 5 top-row bays |
+| Insulating sheet | 80.1 | 81.1 | 1.0 |
+| Unit-board components (gate <= 8 mm; C11 is the tallest at <= 5) | 81.1 | 89.1 | gate height reserved in full |
+| Board | 89.1 | 90.7 | 1.6 |
+| Rear standoff: header body (~2.5), rear-face parts | 90.7 | 93.8 | 3.1 available |
+| Back wall (1.2) | 93.8 | 95.0 | plug slot |
+| Backplane strip: SMD socket (~4) + backplane (1.6) | 95.0 | 100.6 | 0.4 spare in 101 |
+
+It closes: 100.6 of 101 mm, with **0.4 mm spare at the back** and 3.1 mm of rear standoff.
+Consequences: rear-face parts other than the plug header are <= ~2.5 mm; anything tall
+(C11, inductor) sits on the PSU-facing face; the header's pins must reach the socket
+across standoff + wall + insertion (~6.8 mm of pin below the board, datasheet-verify
+availability; the pogo alternative in section 6 avoids it). Bays without a PSU above
+them have 26 mm more room, but one board design is used everywhere.
+
 Nothing found that cannot meet the gate; the budget is set by C11 and must be held in the
 BOM when its part is chosen. Heat: a board dissipates ~0.4-0.6 W while moving (ULN2003A,
 buck) and ~0.15 W idle, so under a PSU lid the tolerable assumption is no airflow; the
