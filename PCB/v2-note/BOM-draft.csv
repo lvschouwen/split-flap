@@ -13,16 +13,19 @@ Power,Buck input capacitor 12 V,C8,C0805 25 V or higher,1,,LCSC,TBD-verify,new,2
 Power,Buck output capacitor,C9,C0805 or C1206,1,CA45-A-10V-22uF-K,LCSC,C503893,carried,v1 part; fine on the 5 V rail only (10 V rating)
 Power,Bulk input capacitor,C1,C0805 50 V,1,GCJ219R71H334KA12D,LCSC,C527609,carried,v1 330 nF 50 V; hot-plug transient damping may need a bigger part (spec section 3)
 Power,TVS diode 12 V rail,D1,SMA or SOD-123FL,1,,LCSC,TBD-verify,new,Hot-plug and motor-inductive spikes on the bus
-Power,Reverse-polarity protection,Q1,SOT-23 P-MOSFET or Schottky,1,,LCSC,TBD-verify,new,Open question: protect the unit or rely on keyed wiring
+Power,Reverse-polarity P-MOSFET,Q1,SOT-23 or SOT-223 P-channel,1,,LCSC,TBD-verify,new,In the unit's own 12 V branch only (not in the J4-J5 through path); Vds >= 30 V; Vgs max >= 20 V; Rds(on) < 100 mohm at -10 V (spec section 3)
+Power,Reverse-polarity gate resistor 10K,R4,R0805,1,RMC080510K1%N,LCSC,C269742,carried,Gate to GND for Q1; v1 10K value
 Motor,ULN2003A (SOP-16),U3,SOP-16 10.0x3.9 P1.27,1,ULN2003A,LCSC,C107221,carried,v1 part already SMD; baseline 24BYJ48 12 V unipolar; clamp COM to 12 V
 Motor,Motor connector or pads (5 wire),J2,pads or low-profile 1.25 mm,1,,LCSC,TBD-verify,new,Pin count from the motor (5 unipolar / 4 bipolar); position from #673
 Motor,DRV8833 (alternative to U3),U3-ALT,HTSSOP-16 / WQFN-16,0,DRV8833,LCSC,TBD-verify,alternative,Not populated; only if the bipolar candidate wins in #671
 Motor,TMC2209 (alternative to U3),U3-ALT2,QFN-28 5x5,0,TMC2209,LCSC,TBD-verify,alternative,Not populated; needs a firmware rewrite of motion (spec section 4)
-Hall,SMD hall switch,U4,SOT-23 or X2SON,1,"DRV5032 family or AH3144 class (omnipolar open-drain, active low)",LCSC,TBD-verify,new,Sensitivity vs the drum magnet to be bench-verified
+Hall,Hall switch A3144 class,U4,SOT-23 or TO-92 (on the remote tail board),1,A3144 class (open-collector; same family as the fleet's KY-003),LCSC,TBD-verify,new,Needs >= 4.5 V (5 V rail); magnet pole facing must match; bench-verify with the real magnet
 Hall,Hall pull-up 10K,R2,R0805,1,RMC080510K1%N,LCSC,C269742,carried,v1 value; firmware reads the pin as plain INPUT so the pull-up must be on the board
 Hall,Remote hall pads,J3,3 pads 1.27 mm,1,,,,new,+5 V / GND / OUT; remote hall on a tail of >= 50 mm is required (#673)
-Bus,Bus connector in,J4,4-pin side entry or wire pads,1,,LCSC,TBD-verify,new,+12 V / GND / SDA / SCL; back edge; body up to ~30 mm fits (#673)
-Bus,Bus connector out,J5,4-pin side entry or wire pads,1,,LCSC,TBD-verify,new,Daisy chain; wired in parallel with J4
+Bus,Bus connector in,J4,5-pin side entry or wire pads (keyed),1,,LCSC,TBD-verify,new,+12 V / GND / SDA / SCL / CHAIN_IN; pin 5 goes to PD3 via R5 and R6; back edge; body up to ~30 mm fits (#673)
+Bus,Bus connector out,J5,5-pin side entry or wire pads (keyed),1,,LCSC,TBD-verify,new,Daisy chain; pins 1-4 wired in parallel with J4; pin 5 is CHAIN_OUT from PD4 (not in parallel)
+Bus,CHAIN_IN series resistor 1K,R5,R0805,1,,LCSC,TBD-verify,new,Between J4 pin 5 and PD3 (spec section 9)
+Bus,CHAIN_IN pull-down 100K,R6,R0805,1,,LCSC,TBD-verify,new,PD3 to GND: unplugged or unpowered neighbour reads deasserted
 UI,Identify LED,D2,LED 0603,1,,LCSC,TBD-verify,new,On PB5 (D13 = LED_BUILTIN): identify blink
 UI,LED series resistor,R3,R0805,1,,LCSC,TBD-verify,new,>= 1K so it does not load SCK during ICSP
 Not carried from v1,AMS1117-3.3,U9,,0,AMS1117-3.3,LCSC,C6186,dropped,No 3.3 V rail on the unit

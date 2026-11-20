@@ -1,10 +1,10 @@
 # Note-size drum and unit frame: a generated 64-flap drum for the X1C — design
 
-Issue: #673 · Epic: #676 · Status: draft (open questions at the end)
+Issue: #673 · Epic: #676 · Status: design settled by Lucas 2026-11-20; motor-dependent questions open at the end
 
 Project 2 of the Note-size wall; sibling of
-`2026-11-20-note-size-flaps-design.md` (#670, flaps), which fixes the flap
-outline this document builds around. #671 chooses the motor, #674 the board.
+`2026-11-20-note-size-flaps-design.md` (#670, flaps), which carries the flap
+outline (0.8 mm flap, round pivot pin) this document builds around. #671 chooses the motor, #674 the board.
 
 ## Intent and why
 
@@ -29,22 +29,23 @@ the stop one at a time.
 ## Non-goals
 
 - The board (#674) beyond its mounting points; motor choice (#671); firmware.
-- Changing the flap outline, except as a lever named under Open questions.
+- The flap outline itself: the 0.8 mm thickness and the round pin are inputs owned by #670.
 - A cover, wall mounting system or cable routing beyond the unit.
 
 ## Inputs (from `mechanics/flaps/params.py`; read, do not guess)
 
 | Symbol | Value | Source |
 |--------|-------|--------|
-| t (thickness) | 1.0 mm | `thickness` |
+| t (thickness) | 0.8 mm | `thickness` |
 | W (width) | 36.0 mm | `width` |
 | H (height) | 31.0 mm | `height` |
 | narrow width / height | 32.5 / 16.0 mm | `narrow_width`, `narrow_height` |
-| tab reach | 1.75 mm = (36.0 − 32.5)/2 | `tab_reach` |
-| tab_h | 1.2 mm (tab y 1.2–2.4) | `tab_h`, `tab_y0` |
-| y_p (pivot y) | 1.8 mm = 1.2 + 1.2/2 | `pivot_y` |
+| pin reach | 1.75 mm = (36.0 − 32.5)/2 per side | `tab_reach` |
+| pivot pin | round Ø1.0 mm, truncated top and bottom to t: flats 0.8 apart and 0.6 wide, so it prints flat; rotating envelope stays Ø1.0 | pin profile (#670) |
+| y_p (pivot y) | 1.8 mm (value carried over; #670 owns it, L moves 1:1 with it) | `pivot_y` |
 | L (pivot to free edge) | 29.2 mm = 31.0 − 1.8 | H − y_p |
 | N, pitch | 64, 5.625 deg | `alphabet.json`, 360/64 |
+| R_p, wall, screws | 18.5 mm, 1.2 mm, M2 | this document |
 | chord factor k | 0.098135 = 2·sin(π/64) | |
 
 Envelope: 41.5 x 73 x ~95 mm (Note pitch; #670). Axis along x (the column
@@ -60,15 +61,15 @@ direction), display plane at the front.
   = 3 perimeters, 0.8 mm = 2, 0.6 mm = 1.5 (Arachne variable-width, Bambu
   Studio default). Webs under 0.6 mm are not used.
 - A3. Printing round holes: FDM undersizes by roughly 0.1–0.2 mm, so the first
-  hole is the pin plus 0.2 mm (diametral). This is a guess, the #670 test print
+  hole is the pin plus 0.2 mm (diametral): Ø1.2. This is a guess, the #670 test print
   replaces it (parameter `hole_slop`).
-- A4. The 24BYJ48's output shaft is centred. The 28BYJ-48 it imitates has the
+- A4. The 24BYJ48's output shaft is centred (unconfirmed). The 28BYJ-48 it imitates has the
   shaft 8 mm off-centre, so this **must be measured when the sample arrives**;
   the bore formula below covers both.
 - A5. Wall thickness 1.2 mm for the frame (3 perimeters); the stop bar and the
   window frame may be thicker where depth allows.
 
-## 1. The pivot circle: a feasibility window, not a chosen number
+## 1. The pivot circle: R_p = 18.5 mm inside a feasibility window
 
 R_p is squeezed from both sides. All bounds below use only params.py.
 
@@ -79,16 +80,17 @@ diameter d needs a web of at least `web` mm to its neighbour:
 
     R_p ≥ (d_hole + web) / k
 
-The tab rotates in its hole, so d_hole must clear the tab's rotating
-cross-section (its diagonal), plus slop (A3):
+The pin rotates in its hole, so d_hole is the pin's rotating envelope (Ø1.0)
+plus slop (A3): 1.2 mm.
 
-| Tab form | Cross-section | d_hole | web | R_p min |
-|----------|---------------|--------|-----|---------|
-| Today: rectangular 1.0 x 1.2 | diag √(1.0² + 1.2²) = 1.562 | 1.562 + 0.2 = 1.76 | 0.8 | (1.76 + 0.8)/k = **26.1** |
-| same, web 0.6 | | 1.76 | 0.6 | 24.1 |
-| square 1.0 x 1.0 | diag 1.414 | 1.61 | 0.6 | 22.6 |
-| **round pin Ø1.0** (lever, see OQ1) | Ø1.0 | 1.2 | 0.8 | 20.4 |
-| round pin Ø1.0 | | 1.2 | 0.6 | **18.3** |
+| web | R_p min |
+|-----|---------|
+| 0.8 | (1.2 + 0.8)/k = 20.4 |
+| 0.6 | (1.2 + 0.6)/k = **18.3** |
+
+The web is therefore 0.6 mm (A2, one and a half perimeters). A rectangular
+tab (rotating diagonal 1.56 mm, hole 1.76) would need R_p ≥ 26.1, beyond the
+1c bound, which is why the pivot is a round pin.
 
 ### 1b. Lower bound: the hub
 
@@ -99,7 +101,7 @@ c = 0.2 mm radial clearance:
     r_bore = r_m + o + c          (24BYJ48 if centred: 12 + 0 + 0.2 = 12.2, bore Ø24.4)
     R_p ≥ r_bore + w_hub + web + d_hole/2 = 12.2 + 1.2 + 0.8 + 0.6 = 14.8
 
-(round pin, 0.8 web). Not binding: 1a is the harder bound. **A 24 mm motor
+(0.8 web). Not binding: 1a is the harder bound. **A 24 mm motor
 fits** in a Ø24.4 bore, with 3.9 mm radial left between hub and pivot-hole
 ring at R_p = 18.5 (13.4 hub outer radius to 17.3 hole-ring inner radius). If
 the shaft is offset like the 28BYJ-48, o = 8 and the bore becomes
@@ -123,22 +125,17 @@ at R_p = 18.5.
 
 ### 1d. Result
 
-1a (R_p ≥ 18.3 with a round pin and 0.6 web; ≥ 26.1 with today's tab) and 1c
-(R_p ≤ 19.8) **intersect only if the tab becomes a round Ø1.0 pin**. That
-tab change is a #670 follow-up (its spec: the outline is free to tune; the
-validator already allows tab_h 1.0). With today's rectangular tab the window
-is empty: see Open question 1.
-
-**Recommended (conditional on the round pin): R_p = 18.5 mm, D_p = 37.0 mm.**
+1a (R_p ≥ 18.3) and 1c (R_p ≤ 19.8) leave a window of 1.5 mm. **R_p = 18.5 mm,
+D_p = 37.0 mm.**
 
 - Chord at 18.5: 0.098135 · 18.5 = **1.816 mm** between adjacent pivots;
-  flap t = 1.0, so 0.816 mm per flap between neighbouring flaps where they run
-  parallel (top and bottom of the circle).
+  flap t = 0.8, so **1.016 mm** of air between neighbouring flaps where they
+  run parallel (top and bottom of the circle).
 - Hole ring: Ø1.2 holes with webs 1.816 − 1.2 = 0.616 mm (≥ 0.6, A2).
 - Disc outer radius R_o = R_p + d/2 + 0.6 rim web = 18.5 + 0.6 + 0.6 =
   **19.7 mm** (Ø39.4), inside the 1c bound 19.8.
 
-### 1e. A second squeeze: the guided lower pack
+### 1e. The guided lower pack and the flap thickness
 
 A guided lower pack with the tips held at the 35.3 mm floor means each hanging
 flap tilts back by α with cos α = (35.3 − R_p)/L. At the bottom of the circle
@@ -147,17 +144,13 @@ parallel tilted flaps is `chord · cos α`:
 
 | R_p | t | L | α | spacing | clearance over t |
 |-----|---|---|---|---------|------------------|
-| 18.5 | 1.0 | 29.2 | 54.9° | 1.045 | **0.045 mm** |
-| 18.5 | 0.8 | 29.2 | 54.9° | 1.045 | 0.245 |
-| 18.5 | 1.0 | 26.0 | 49.7° | 1.173 | 0.173 |
-| 18.5 | 1.0 | 24.0 | 45.6° | 1.271 | 0.271 |
+| 18.5 | 0.8 | 29.2 | 54.9° | 1.045 | **0.245 mm** |
 
 `chord·cos α` peaks at 1.047 mm over all R_p (at ≈17.7), so R_p cannot buy
-more. With today's flap the lower pack has about 0.05 mm clearance and will
-jam. This is the hardest open risk (OQ2); the hand-turn test is the proof,
-the levers are a thinner flap, a shorter flap, or a pack that does not
-tilt uniformly (e.g. a curved guide). The generator keeps floor-guide shape
-and `tip_floor` as parameters so the test settles it.
+more; the flap thickness is what sets the clearance. t must stay below 1.04 mm
+for the pack to open at all, and 0.8 leaves 0.245 mm for print error and the
+curve of the guide. The generator keeps floor-guide shape and `tip_floor` as
+parameters; the hand-turn test confirms it (section 9).
 
 ## 2. Drum
 
@@ -168,38 +161,51 @@ and `tip_floor` as parameters so the test settles it.
 - Disc inner faces at x = ±(narrow_width/2 + g) = ±(16.25 + 0.25) = ±16.5,
   `g = 0.25` axial float per side. g is the smallest value that still lets the
   flaps slide without pinching under a 0.1–0.15 mm print error each side
-  (tuned by the hand-turn). Outer faces at ±18.5 (2.0 thick). The tab tip, at
+  (tuned by the hand-turn). Outer faces at ±18.5 (2.0 thick). The pin tip, at
   ±18.0, sits 0.5 mm inside the outer face (hole stays blind to the viewer),
   and worst-case float of 0.5 mm (both sides) leaves 1.75 − 0.5 = 1.25 mm of
-  tab engaged. **Drum width 37.0 mm.**
+  pin engaged. Neither the width nor the disc holes depend on the flap
+  thickness (t only sets the air between flaps, 1.016 mm at the top and
+  bottom, and the lower-pack clearance of 1e). **Drum width 37.0 mm.**
 - **Hub:** a tube of bore Ø(2·r_bore) (24.4 for the 24BYJ48 if A4 holds), wall
   1.2, joining both discs (outer radius 13.4). The drum is two printed halves,
-  each a disc plus half the tube, joined by a spigot joint and glue (open
-  question OQ6 if screws are preferred). Half A (motor side) carries an
-  internal bulkhead with the shaft coupling; half B (far side) an axle bore.
+  each a disc plus half the tube, joined by **M2 screws**: three lugs (5 x 4 mm,
+  120° apart) on the inside of the tube at the joint plane `joint_x`, clearance
+  hole Ø2.2 in half A's lugs and a Ø1.7 pilot (self-tapping, M2 x 8) in half B's;
+  a spigot centres the halves. The lugs sit beyond the motor: the hub interior is
+  2 · 16.5 = 33.0 mm, the 24BYJ48 takes 19 and the bulkhead 1.2, leaving 12.8
+  mm for the two 4 mm lug layers. Half A (motor side) carries an internal
+  bulkhead with the shaft coupling; half B (far side) an axle bore.
 - **Motor adapter sleeve:** a separate printed insert with outer Ø24.4 and
   inner Ø = the motor body: 24 mm (24BYJ48: sleeve = 0.2 clearance only,
   or none), 15 mm + clearance (15BY25-560A), 10 mm + clearance (planetary),
   so one drum serves all three. The sleeve length is the motor length (19, 16.2,
   tbd mm).
 - Hole size, rim web, disc thickness and `g` are the parameters the #670 test
-  print (tab strength and size) tunes. A coupon plate of eight 8-hole
+  print (pin strength and size) tunes. A coupon plate of eight 8-hole
   segments with hole_slop 0.0–0.4 prints before the full discs.
 
 ## 3. Axle and bearings
 
 - **Motor end:** the motor body is clamped to the frame wall (ears removed,
   #671) and its shaft drives half A through a D-flat coupling in the bulkhead.
-  The motor shaft is therefore also the drum's bearing on that end.
+  The shaft carries torque only: the drum's radial load rides on a **printed
+  plain-bearing ring** on the motor-side wall. The ring is a cylinder on the
+  wall's inner face, axis along x, inner Ø39.8 (the disc rim Ø39.4 plus 0.4
+  running clearance), 1.2 mm wall (outer Ø42.2, inside the 70.6 mm row), 2.0
+  mm long: it runs from the wall's inner face at x = ±18.9 to ±16.9, so it
+  overlaps the disc's rim (x 16.5 to 18.5) by 1.6 mm. It sits inside the 0.4 mm
+  drum-to-wall gap plus the disc's own thickness, so it adds nothing outboard
+  (section 6), and it clears the flaps (bodies end at ±16.25, pins sit inside
+  the hole ring at R_p). The rim and ring are printed PETG on PETG; if the
+  hand-turn shows drag, the ring bore opens by 0.1 (parameter `ring_clear`).
 - **Far end:** a fixed 3 mm steel pin pressed in the far wall projects 6 mm
   into half B's axle bore. Plain bearing: a PETG/PLA bore Ø3.2 (3 + 0.2 for the
   A3 undersizing), 6 mm long. 623 ball bearings (3 x 10 x 4) do not fit the
   1.2 mm wall plus a 4 mm boss in the 4.5 mm side budget (section 6).
-- Side load: the drum weighs 64 flaps · ~1.1 g + printed halves, 100–150 g
-  total (assumption: weigh it on the print). The geared 24BYJ48 output shaft is
-  rated for light radial load; if the hand-turn shows play, the motor end
-  gains a printed plain-bearing ring on a wall boss (the hub tube turns inside
-  it), so the shaft carries only torque. OQ4.
+- Side load: the drum weighs 64 flaps · ~0.9 g + printed halves, 100–150 g
+  total (assumption: weigh it on the print), carried by the ring at the motor
+  end and the 3 mm pin at the far end.
 
 ## 4. Flap stop and release
 
@@ -240,7 +246,7 @@ reproducible).
 
 **Floor guide** (lower pack) per 1c/1e: a plate or curve under the drum in the
 frame; its profile is a parameter. Its job is to keep every flap tip within
-35.3 mm of the axis; shape settled by the hand-turn (OQ2).
+35.3 mm of the axis; shape settled by the hand-turn (1e).
 
 ## 5. Display window and visible glyph area
 
@@ -271,9 +277,10 @@ bottom rail.
 the outer drum faces of neighbouring columns holds: one 1.2 mm wall per unit
 (2.4), a 0.4 mm drum-to-wall gap each side (0.8): 3.2 mm used, **1.3 mm slack**
 for the stacking tolerance (0.65 per unit, ≥ 0.4 mm each way for 0.2 mm print
-error). So the frame is a thin shell: no room for a boss in the wall. Bearing
-bosses protrude **inboard** into the hub bore (the bore is empty beyond the
-motor), not outboard.
+error). So the frame is a thin shell: no room for a boss in the wall. The
+far-end pin boss protrudes **inboard** into the hub bore (the bore is empty
+beyond the motor), and the motor-side bearing ring (section 3) sits inboard of
+the wall, not outboard.
 
 **Rows (73 mm).** Mechanism 70.6 + walls 2 · 1.2 = 73.0 mm exactly (section 1c).
 At R_p = 18.5 the guided mechanism is 69.1 high, 1.5 mm to spare; rows stack
@@ -294,7 +301,7 @@ wall mount is out of scope.
 ## 7. Hall magnet pocket
 
 Parameters: magnet Ø3.0 x 1.0 mm disc neodymium (assumption; the existing
-unit's magnet size is the one to copy, check at implementation, OQ5), pocket
+unit's magnet size is the one to copy, check at implementation, open question 4), pocket
 Ø3.1 deep 1.1 on the **outer face of one disc**, radius 15.5 (inside the
 annulus between hub 13.4 and hole ring 17.3: 15.5 ± 1.6 = 13.9–17.1 fits),
 angle θ_m a parameter. The disc is 2.0 thick: 0.9 mm floor behind the magnet.
@@ -307,7 +314,9 @@ linked to the board outline (#674). Home flap and θ_m: firmware's concern
 
 - Drum halves: disc face down, hub tube upwards (17 mm tall, no supports; the
   tube bore is a straight cylinder). Round holes print vertical.
-- Frame: back plate down, side walls and stop lip as vertical walls. The lip's
+- Frame: back plate down, side walls and stop lip as vertical walls; the
+  bearing ring is a 2 mm stub on the motor-side wall (its top arc is a short
+  overhang, printed with a support or as a separate ring glued on). The lip's
   lower edge S would be an overhang, so the lip is a separate part printed
   flat on its face (S edge on the bed, which also makes S the sharpest, most
   reproducible edge) and glued or clipped into the frame.
@@ -365,27 +374,17 @@ a second `step "mechanics drum pytest"` for `mechanics/drum` with the same
 `pythonpath = ..`).
 
 Wave 2 order: `params` + `feasibility` (pure, testable first) → drum → frame
-→ assembly/3mf. The flap generator needs one change if OQ1 picks the round pin:
-a `tab_profile` parameter in `flaps/params.py` (separate issue on #670).
+→ assembly/3mf. The flap generator (#670) carries the round pin and the 0.8 mm thickness
+(`flaps/params.py`); the drum reads both from there.
 
-## Open questions for Lucas
+## Open questions for Lucas (all motor-dependent)
 
-1. **The window is empty with today's rectangular tab** (1a needs R_p ≥ 26.1,
-   1c allows ≤ 19.8). Recommended: change the flap tab to a round Ø1.0 pin
-   (R_p = 18.5, hole Ø1.2, web 0.6), tested on the #670 plate before the drum.
-   Alternatives: thinner web (fragile), holes in two staggered rings (the
-   pivots no longer share the midline, misaligns the glyph halves), a taller
-   row (breaks the Note footprint).
-2. **Lower pack clearance is 0.05 mm** with today's 1.0 mm flap (1e, max
-   1.047 mm spacing at any R_p). Choose the lever: thinner flap (0.8 mm gives
-   0.245), shorter flap (H 27 gives ~0.17), or accept a guide that is tuned on
-   the hand-turn (curved, not uniform).
-3. **24BYJ48 shaft offset:** if it is off-centre (like the 28BYJ-48), the bore is
-   Ø40.4 and does not fit; confirm when the sample arrives (A4).
-4. **Side load on the motor shaft:** accept the drum riding on the motor's
-   output bearing, or add the wall boss / plain-bearing ring (section 3).
-5. **Hall magnet and sensor:** which magnet size (copy the current unit's) and
-   whether the sensor sits on the wall or the board (#674).
-6. **Drum joint:** spigot + glue, or M2 screws (reworkable, 4 mm of wall room).
-7. **Gap tuning:** is a 1.3 mm width slack and 1.5 mm row slack enough for the
-   side-by-side tolerance you expect, or should the wall go from 1.2 to 0.8?
+1. **24BYJ48 shaft offset:** if the shaft is off-centre (like the 28BYJ-48),
+   the bore is Ø40.4 and does not fit; confirm when the sample arrives (A4).
+2. **1/16 batches:** a batch with a 1/16 gearbox changes `STEPS`, a protocol
+   constant (#674 section 4); reject on arrival or accept the shared change.
+3. **Motor side and connector edge:** which side wall carries the motor (the
+   bearing ring goes on that wall) and which short edge the board's bus
+   connector uses (#674).
+4. **Hall magnet and sensor:** copy the current unit's magnet size; the A3144-class
+   sensor sits on a remote tail (#674).

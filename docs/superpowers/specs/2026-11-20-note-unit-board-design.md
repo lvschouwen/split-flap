@@ -1,6 +1,6 @@
 # Note-size unit board: a compact bare-ATmega328P board — design
 
-Issue: #674 · Epic: #676 · Status: draft for review (nothing decided beyond "Decided by Lucas")
+Issue: #674 · Epic: #676 · Status: decisions of 2026-11-20 folded in; schematic and layout follow
 
 ## Intent and why
 
@@ -19,8 +19,8 @@ this board, then the firmware alphabet. `PCB/v1/` stays the deployed board.
 
 ## Goals
 
-- One board per unit: ATmega328P, motor driver, hall, 12 V to 5 V buck, I2C in
-  and out, ICSP pads. Nothing else.
+- One board per unit: ATmega328P, motor driver, hall, 12 V to 5 V buck, reverse-polarity
+  FET, I2C and chain in and out, ICSP pads. Nothing else.
 - The existing Unit firmware, I2C slave and twiboot carry over with a board
   variant (pin map, address source), not a rewrite.
 - Assembled by JLCPCB from LCSC parts, like v1.
@@ -39,7 +39,8 @@ this board, then the firmware alphabet. `PCB/v1/` stays the deployed board.
 - A part that needs a firmware rewrite on the first bring-up (TMC2209 is the
   explicit exception that only wins if #671 picks a bipolar motor).
 - An address scheme that can leave a populated row with two units on one
-  address, or that needs a physical trip to recover a unit.
+  address, or that needs a physical trip to recover a unit (a chain line fixes
+  both, section 9).
 - A board that ships with twiboot listening somewhere the sketch does not.
 
 ## Constraints
@@ -62,10 +63,11 @@ this board, then the firmware alphabet. `PCB/v1/` stays the deployed board.
   prebuilt image is `twiboot-atmega328p-16mhz.hex`). Fuses `LFUSE=0xFF`
   (full-swing crystal/resonator, 16K CK + 65 ms start-up), `HFUSE=0xDC`
   (BOOTRST set, BOOTSZ=10 = 512 words = 1 KB boot section, EESAVE not
-  programmed), `EFUSE=0xFD` (BOD 2.7 V).
+  programmed), `EFUSE=0xFD` (BOD 2.7 V). That is the fielded Nano; the note
+  board burns `HFUSE=0xD2` (section 7).
 - **Pins the firmware uses today:** stepper D8..D11 (PB0..PB3), hall D7 (PD7,
   plain `INPUT`, so the pull-up must be on the board), DIP D3..D6 (PD3..PD6,
-  to be freed), LED D13 (PB5, `LED_BUILTIN`), I2C A4/A5, A0 floating for the
+  freed: PD3 and PD4 become CHAIN_IN and CHAIN_OUT, section 9), LED D13 (PB5, `LED_BUILTIN`), I2C A4/A5, A0 floating for the
   random seed. Supply is measured against the internal bandgap, not a pin: no
   divider is needed.
 - Public repo: no addresses, hostnames or device ids in any file.
@@ -73,19 +75,17 @@ this board, then the firmware alphabet. `PCB/v1/` stays the deployed board.
 ## Block diagram
 
 ```
- 12 V bus in --+--[TVS/rev-prot]--+--------------------------+----> 12 V bus out
- GND ----------+                  |                          |
- SDA/SCL (5 V) ------------------ | -----------+-------------+----> SDA/SCL out
-                                  |            |
-                           [buck 12 V -> 5 V]  |
-                                  | 5 V        |
-                +-----------------+------------+--------------+
-                |                 |            |              |
-           [ATmega328P] --I2C--(slave)         |          [hall] -- OUT --> PD7
-            16 MHz, twiboot       |            |
-            ICSP pads, LED(PB5)   +--4 GPIO--> [driver] ---> motor
-                                                ^ 12 V (ULN2003A / TMC2209)
-                                                  or 5 V (DRV8833)
+ 12 V bus in --+--[TVS]--+--------------------------------+----> 12 V bus out (straight through)
+ GND ----------+         +--[P-MOSFET rev-prot]--+
+ SDA/SCL (5 V) ----------|-----------+----------|-------------> SDA/SCL out (straight through)
+                         |           |          |
+ CHAIN in --[1k]--+--[100k to GND]   |   [buck 12 V -> 5 V]
+                  |                  |          | 5 V
+                  +--> PD3 (CHAIN_IN)|          |
+                [ATmega328P] --I2C--(slave)     +--[A3144 hall] -- OUT --> PD7
+                 16 MHz, twiboot     |
+                 ICSP pads, LED(PB5) +--4 GPIO--> [ULN2003A] ---> motor (12 V)
+                  +--> PD4 (CHAIN_OUT) ----------------------------> CHAIN out
 ```
 
 ## 1. MCU package: TQFP-32 vs QFN-32
@@ -136,13 +136,23 @@ Buck selection rules (part left `TBD-verify` in the BOM):
   daisy chain), fixed 5 V output, synchronous, SOT-23-6 class;
 - continuous current >= logic load for the baseline, >= logic + motor for a
   5 V-motor candidate (decide after #671);
-- a TVS on the 12 V input; reverse-polarity protection is an open question;
+- a TVS on the 12 V input (also keeps the reverse-protection FET's gate-source below its 20 V limit);
 - the v1 22 uF 10 V capacitor (C503893) is only valid on the 5 V node. A
   12 V input node needs a >= 25 V capacitor.
 - Backfeed: with the 12 V bus absent and ICSP powered at 5 V, a synchronous buck
   can feed 5 V back up its high-side body diode onto the bus. ICSP powering is
   therefore done through the bus pins (the jig supplies 12 V) or through a VCC
   pad behind an open solder jumper (section 7).
+
+**Reverse polarity (decided):** a P-channel MOSFET in the unit's own 12 V branch
+(drain to the bus junction, source to the buck and the ULN2003A COM, gate to GND
+through 10 k), ~0.2 V drop at 0.2 A. It is **not** in the through path between J4 and J5: that
+trace carries the whole downstream row (~3 A) and has no FET, so one
+unit's FET only carries that unit's own ~0.2 A. A reversed cable leaves every
+unit unpowered and blocked. The 5-pin connectors are keyed; the FET covers
+the supply only, not SDA/SCL/CHAIN pulled up from the controller side, so keying
+stays the first defence. Pick a MOSFET with Vds >= 30 V, Vgs max >= 20 V,
+Rds(on) < 100 mohm at Vgs -10 V (`TBD-verify` in the BOM).
 
 ## 4. Motor driver, per #671
 
@@ -171,17 +181,19 @@ so the idle motor current is zero; keep that.
 
 ## 5. Hall sensor
 
-A SMD open-drain, active-low, omnipolar hall (DRV5032 family or an AH3144-class
-part) with a 10 k pull-up on the board (the firmware reads the pin as plain
-`INPUT`; the KY-003 module the fleet uses has its own pull-up). #673 settled
-the placement: the magnet (3.0 x 1.0 mm, assumed, copy the current unit's if it
+An **A3144-class** SMD or TO-92 open-collector hall switch (the part the KY-003
+module the fleet uses carries), 10 k pull-up on the board (the firmware reads the
+pin as plain `INPUT`). Same sensor family as the fleet, so the marker window the
+firmware sees and the homing and idle hall-consistency checks are unchanged;
+bench-verify with the real magnet anyway. A3144 is unipolar (one pole face
+operates it) and needs 4.5 V or more: the 5 V rail has the margin, and the magnet
+in its drum pocket (#673) must face the sensor with the operating pole.
+#673 settled the placement: the magnet (3.0 x 1.0 mm, assumed, copy the current unit's if it
 differs) sits at radius 15.5 mm on the outer face of one drum disc and the
 sensor faces the disc from the side wall through a 1.2 mm wall, so **a remote hall
 on a tail (>= 50 mm) is required**; a hall on the board cannot reach it. The
 board carries three tail pads (+5 V, GND, OUT) and the 10 k pull-up; the hall
-sits on a small tail board (SOT-23 / DRV5032 pad set). A DRV5032-class part is far more sensitive than
-the A3144 on the KY-003, so the marker window the firmware sees widens: bench
-re-verify homing and the idle hall consistency check with the real magnet.
+sits on a small tail board.
 
 ## 6. I2C connectors and level shifting
 
@@ -191,27 +203,41 @@ the 16 MHz firmware and twiboot). **The unit bus stays 5 V.** Proposal:
   the single 3.3 V/5 V shifter and the 5 V pull-ups for each row bus (this removes
   the v1 BSS138 pair and four 10 k resistors from every unit);
 - the bus runs at 100 kHz (twiboot reflash is only safe at 100 kHz);
-- one four-wire cable per unit, +12 V, GND, SDA, SCL, daisy-chained in and out
-  (two connector footprints wired in parallel, or one connector plus wire pads);
+- one **five-conductor** cable per unit, +12 V, GND, SDA, SCL, CHAIN, daisy-chained in and
+  out (two connector footprints, or one connector plus wire pads). Pins 1..4 are wired
+  straight through J4 to J5 in parallel; pin 5 is not: J4 pin 5 is CHAIN_IN to the
+  MCU, J5 pin 5 is CHAIN_OUT from the MCU (section 9);
 - the connector sits on the board's back edge, away from the mechanism (#673:
   a body up to ~30 mm tall fits, so JST XH-class or smaller is possible again;
   family left `TBD-verify`). Either short edge works for #673; I pick the edge
   during layout and tell #673.
 
-Interface confirmed with #675 (5 V unit bus, shifter and pull-ups on the controller, four-conductor cable, default 0x29) and #673 (board behind the mechanism).
+Interface with #675: 5 V unit bus, shifter and pull-ups on the controller, five-conductor cable (the CHAIN head is driven by the controller, one per row). Interface with #673: board behind the mechanism.
 
 ## 7. ICSP pads
 
 Six pads (1.27 mm or a Tag-Connect footprint), MISO/MOSI/SCK/RESET/GND plus VCC
-behind an open solder jumper. The first burn writes twiboot, the unit sketch,
-the fuses and the EEPROM image in one session. Notes:
+behind an open solder jumper. One burn per board, the same image for every board (a blank chip has no bootloader
+to update over I2C): twiboot, the unit sketch, the fuses and a blank-address EEPROM
+image in one session. After it the address, the sketch and the bootloader all update over I2C. Notes:
 - PB3 (MOSI) is the first stepper pin and PB5 (SCK) the LED, as on the Nano.
   Use a >= 1 k LED resistor; the ULN2003A input sees MOSI toggle during the burn,
   which is harmless with the bus 12 V absent. Power the jig through the bus pins
   or the VCC jumper, not both (section 3, backfeed).
-- `HFUSE=0xDC` leaves EESAVE unprogrammed: a chip erase (every `avrdude` flash
-  rewrite) also erases the EEPROM, including the address. The burn script
-  rewrites the address every time.
+- **Day-0 fuses: `LFUSE=0xFF`, `HFUSE=0xD2`, `EFUSE=0xFD`.** HFUSE bits (0 = programmed):
+
+  | bit | 7 RSTDISBL | 6 DWEN | 5 SPIEN | 4 WDTON | 3 EESAVE | 2 BOOTSZ1 | 1 BOOTSZ0 | 0 BOOTRST |
+  |-----|---|---|---|---|---|---|---|---|
+  | value | 1 | 1 | 0 | 1 | **0** | **0** | **1** | 0 |
+
+  `1101 0010` = **0xD2**. BOOTSZ = 01 is a 1024-word (2 KB) boot section, starting at
+  byte 0x7800 (the 1 KB section of 0xDC starts at 0x7C00); BOOTRST programmed
+  resets into it. **EESAVE programmed** keeps the EEPROM through chip erase, so an
+  ICSP reflash does not lose the address. Why 2 KB: the app is 20.5 KB of the
+  remaining 30 KB, and the lean 1 KB twiboot image has 2 B of headroom, no room for
+  the chain gate and the address read. BOOTSZ can only be changed over ICSP, so the
+  2 KB layout is permanent for the board; the image must be validated against it
+  (section 9).
 - Two test points on PD0/PD1 for `SERIAL_ENABLE` debug builds.
 
 ## 8. Current budget (estimates, verify on the bench)
@@ -224,14 +250,20 @@ the fuses and the EEPROM image in one session. Notes:
 | Buck input, logic only (85 % efficiency) | 12 V | ~15 mA |
 | Row of 15, all moving | 12 V | ~3 A, ~36 W |
 
-The render stagger limits how many units move at once; homing all 15 at once is
+The ~3 A row worst case is accepted (decided). The render stagger limits how many units
+move at once and **homing is staggered the same way** (the unit's self-home deadline
+uses the address index, section 9): homing all 15 at once is
 the worst case (the 16-unit homing inrush is the known brownout source on the S3
-leader). Size the per-row 12 V feed and the bus connectors for that worst case or
-confirm the stagger covers homing. For a 5 V-motor candidate the buck carries
+leader). Size the per-row 12 V feed and the bus connectors for 3 A. For a 5 V-motor candidate the buck carries
 that motor's current as well (datasheet value not available: the 15BY25-560A
 listing has no coil data).
 
-## 9. EEPROM-only addressing
+## 9. Addressing: a chain line and EEPROM-held addresses
+
+The unit has no DIP switch; the address lives in EEPROM and is **assigned by the
+controller in physical order** over a chain line. Address = position. Normal
+operation never depends on the chain: an addressed unit answers at its address
+whether or not the chain is intact.
 
 ### What exists today (verified)
 
@@ -243,123 +275,178 @@ listing has no coil data).
 - twiboot (`UnitBootloader/main.c`) never reads EEPROM for its address; it
   reads PD3..PD6. With `I2C_ADDRESS_BASE == 0` it falls back to stock
   `TWI_ADDRESS` 0x29.
-- The lean image the sketch carries for in-system bootloader update (#499,
-  `prebuilt/twiboot-new-progmem.h`, built `-DI2C_ADDRESS_BASE=1`) also reads the
-  DIP. It is 894 B of the 896 B of pages 0..6; page 7 is frozen (`do_spm`). It
-  has no EEPROM access (`SF_NEW_TWIBOOT`).
+- The in-system update image (#499, `prebuilt/twiboot-new-progmem.h`, built
+  `-DI2C_ADDRESS_BASE=1`) also reads the DIP, is 894 B of the 896 B of pages
+  0..6 of a 1 KB section at 0x7C00, and has no EEPROM access (`SF_NEW_TWIBOOT`).
+  Its stage 1 drives the fielded image's own write handler at addresses locked by
+  `tests/test_twiboot_entry_points.py`; page 7 holds `do_spm` (design:
+  `2026-10-02-in-system-twiboot-update-design.md`).
 - Day-0 init `eeInitIfBlank()` keys on EEPROM byte 0 (the layout version, also
-  the identity block's first byte) and **clears the identity block**; a layout
-  bump therefore wipes every address on a DIP-less row.
+  the identity block's first byte) and **clears the identity block**.
 - `SET_I2C_ADDRESS` (0x94, address + complement) exists end to end: unit,
   `unitBusSetAddress`, the display task's `SetAddress` op and the wall op
   `OPC_SET_ADDRESS`; the master guards it behind a sketch-running unit at the
-  address (range 1..126). It is unverifiable after the fact and its documented
-  recovery is a physical re-DIP, which the new board cannot do.
-- The master scans only `toI2cAddress(0..maxUnits-1)`, so a unit at an address
-  outside that range is invisible, in the sketch or in twiboot.
+  address (range 1..126). It is unverifiable after the fact.
+- The master scans only `toI2cAddress(0..maxUnits-1)`.
+
+### The chain line
+
+**Pins: CHAIN_IN = PD3 (D3), CHAIN_OUT = PD4 (D4).** PD3..PD6 are free once the DIP
+goes; PD3 is INT1, so CHAIN_IN changes raise an interrupt instead of being polled.
+Neither pin is on ICSP (PB3..PB5, RESET), I2C (PC4/PC5), the stepper (PB0..PB3), the
+hall (PD7) or the debug pads (PD0/PD1); PD2 (INT0) stays spare.
+
+- Active high, 5 V. CHAIN_IN has a 1 k series resistor and a 100 k pull-down: an
+  unplugged cable, an unpowered neighbour or a unit in reset reads **deasserted**
+  (the chain fails closed). CHAIN_OUT is a plain push-pull output; the MCU in reset or
+  blank leaves it Hi-Z, which the next unit's pull-down reads as deasserted.
+- Cable: five conductors, +12 V, GND, SDA, SCL, CHAIN. J4 pin 5 is CHAIN_IN, J5 pin 5
+  is CHAIN_OUT, pins 1..4 straight through (section 6). The CHAIN level is slow DC;
+  no more than 2 firmware samples of debounce.
+- The first unit of a row has its CHAIN_IN on the controller's CHAIN head for that
+  row (one GPIO per row through a 5 V buffer, #675). The head is held high while the
+  row is powered and low when it is off.
+
+**Unit rule (sketch and twiboot alike):**
+
+| State | Answers I2C | CHAIN_OUT |
+|-------|-------------|-----------|
+| ADDRESSED (valid pair in EEPROM) | at its own address, always | = CHAIN_IN |
+| UNADDRESSED (no valid pair, or CHAIN_CLEAR) | at 0x29 **only while CHAIN_IN is high** | low |
+
+An unaddressed unit blocks the chain behind it, so on a row at most one unit,
+the first unaddressed one, ever sees CHAIN_IN high and listens on 0x29: blank
+units do not collide, in the sketch or in twiboot. A unit is ADDRESSED after a
+verified `SET_I2C_ADDRESS` at 0x29; a **general-call `CHAIN_CLEAR`** puts every
+unit in UNADDRESSED in RAM only (the EEPROM pair stays; a reset restores it).
+Dropping the head low clears CHAIN_OUT down the whole row; raising it ripples it
+back through the addressed units in a few milliseconds.
+
+The gate lives in both programs. The sketch drives TWAR from an INT1 handler (and
+re-arms it with the existing TWI heal path, which also re-arms the general-call
+bit). twiboot polls CHAIN_IN in its main loop, honours the general call, answers at
+the stored address when it has one and asserts CHAIN_OUT by the same table, so a
+blank unit sitting in the bootloader no longer collides at 0x29.
+
+### Enumeration (run by the controller, per row)
+
+Preconditions: the row is powered and has settled (>= 2 s: boot window plus start),
+the mux channel selected.
+
+1. Head low (every CHAIN_OUT in the row falls).
+2. Broadcast `CHAIN_CLEAR` by general call, three times, for loss tolerance.
+3. Head high: only unit 1 sees CHAIN_IN high and listens on 0x29.
+4. For position p = 1..N (N configured for the row, 15), address a = the row's first
+   address + p − 1 (the global index, 1..45 over three rows):
+   a. probe 0x29; no ack means the chain ended or broke: stop and report
+      `chain_break_after = p − 1`;
+   b. `SET_I2C_ADDRESS(a)` to 0x29; the unit writes the pair only if it differs, switches
+      TWAR to a and drives CHAIN_OUT = CHAIN_IN;
+   c. verify with a ping at a (the round trip, not an ack of the write); wait >= 5 ms for
+      the ripple before the next probe.
+5. After N units probe 0x29: an answer means the row holds more than N units; report
+   `row_long`, leave the extra unit unaddressed.
+6. Scan 1..N and check each unit's identity reply.
+
+An address-keyed state (the unit's self-home stagger, `BootHomePolicy`) starts at
+the moment the unit becomes ADDRESSED, so staggered homing follows position.
+
+### Events
+
+| Event | What happens |
+|-------|--------------|
+| First power-up, row all blank | No unit is addressed: the controller runs the full enumeration automatically. |
+| Normal power-up | Stored addresses, the chain ripples through, the controller only scans and checks identity. No enumeration. |
+| **Swapped** unit (a blank board replaces unit k) | Units 1..k−1 ripple, the blank blocks, units k+1..N keep their addresses and work. The scan shows address k missing and 0x29 answering: **exactly one gap and one listener** is assigned automatically (`SET_I2C_ADDRESS(k)`, verified). Anything less clear raises `row_enumeration_needed`. |
+| **Added** unit (inserted or appended, row now N+1) | The newcomer is blank and blocks; no free address in the row's range: the controller reports `row_long` and waits for the operator to raise the row size and run a full enumeration. |
+| **Removed** unit | Its address stops answering, the chain breaks there, units behind it keep working at their addresses. Reported as absent (as an absent unit today); no renumbering. After the cable is closed up the operator runs a full enumeration. |
+| Duplicate address (a used board from elsewhere) | Collision shows as scan failures; a full enumeration heals it (`CHAIN_CLEAR` reaches both). |
+| Unit stuck in twiboot (app blank) | Same rules: addressed ones answer at their address, blank ones are gated at 0x29, so enumeration and reflash both work. |
+
+Full enumeration is an operator action (and the first-boot case), never a side
+effect of a scan. Reflash is unchanged: enter twiboot at the unit's own address;
+twiboot then listens at the stored address, so no two units share 0x29 and the
+one-unit-at-a-time constraint on the bootloader address no longer applies.
 
 ### How twiboot gets the address
 
-Three variants:
+The dedicated pair (variant B): two EEPROM bytes in the reserved area (36 and 37 by
+the current constants, after the bus record at 28..35, ring at 64; the builder
+confirms), `addr` and `~addr`, valid when `b == ~a` and the address is in range.
+The app writes it on `SET_I2C_ADDRESS`; the app and twiboot resolve it by the same
+two-byte rule, so they cannot disagree on a torn write. The existing identity
+block stays for the v1 builds, and the **factory EEPROM image leaves the pair
+blank (0xFF)**. Day-0 init never touches the pair.
 
-| | A. Read the identity block (as the app does) | B. A dedicated address pair, `addr` + `~addr` | C. A bootloader-private write by the app |
-|---|---|---|---|
-| Bootloader checks | version, flag, XOR checksum with mask, range | one compare, range | n/a |
-| Couples to | `UNIT_EE_LAYOUT_VERSION`, identity layout | nothing but two offsets | n/a |
-| Survives a layout bump | no (init clears it) | yes (init never touches it) | yes |
-| Disagreement with the app on a torn write | possible if the checks differ | none, both apply the same two-byte rule | possible |
-| Size (unmeasured) | the largest | the smallest | n/a |
+### The note board's twiboot (2 KB section)
 
-**Recommendation: B** on the note board only: two EEPROM bytes in the reserved
-area (36 and 37 by the current constants, after the bus record at 28..35, ring
-at 64; the builder confirms), written by the app on `SET_I2C_ADDRESS` and by
-the factory burn. The app and twiboot both resolve it by the same two-byte
-rule (valid when `b == ~a` and the address is in range); blank or torn resolves
-to the default address in **both** and they cannot disagree. The existing
-identity block stays for the v1 builds.
+The current in-system image is tied to the 1 KB layout (base 0x7C00, pages 0..6,
+`do_spm` page 7 at 0x7F80, stage 1 locked to the fielded image's addresses). The
+note board gets **its own image and update variant**, selected by `SF_NOTE_BOARD`:
 
-Size: the note twiboot image drops the DIP block (settle loop, four pin reads,
-~40-50 B by estimate) and adds one EEPROM byte read twice (~30-40 B by
-estimate). **Unmeasured:** the lean image has 2 B of headroom, so build it
-before committing to this; `BOOTSZ` is a fuse (ICSP only) and page 7 must stay
-byte-identical, so the fallback is a leaner address read, not a bigger boot
-section. No fielded unit takes this image: it is a board variant of twiboot
-(`SF_NOTE_BOARD`), with its own image and CRC.
-
-The unit sketch for the note board must carry **that** target image, not the DIP
-one, or an in-system bootloader update would install a DIP-reading twiboot on
-a DIP-less board (every unit on 0x01). Either the note env embeds its own
-`twiboot-new-progmem.h` variant (new CRC in `BootSectionClassify`), or the
-update gate is disabled for that env until it does. The masters' reflash path is
-unchanged: it already enters twiboot at the unit's own address.
-
-### How a blank board gets its first address
-
-**Option 1: default address plus one-at-a-time.** A blank unit (sketch or
-twiboot) listens at a default; the master assigns it with `SET_I2C_ADDRESS`.
-**Option 2: address at the ICSP burn.** The burn script writes the address (and
-the rest of the EEPROM image) with the bootloader and sketch.
-
-| Scenario | Option 1 | Option 2 |
-|---|---|---|
-| Fresh batch of N blank boards on one bus | All N answer the default and the first assign hits all of them: boards must be connected one at a time, a manual process with 45 units | Each board is born with its address, nothing to do on the bus |
-| Replacement unit in a populated row | Connect alone, assign, reconnect. If left on the bus blank it listens on the default, harmless | Burn the old unit's address on the bench first (label the boards) |
-| Torn or corrupt identity in the field | Falls to the default, visible only if the master probes it | Same fallback; the unit is recoverable by one-at-a-time assignment |
-| Layout bump | Only safe if init keeps a valid address (change below) | Same |
-| Reflash of one unit | Unchanged: enter twiboot at the unit address; twiboot listens on the EEPROM address | Same |
-| In-system bootloader update | Needs the note twiboot target image (above) | Same |
-
-Selector for one-at-a-time: there is no chain-enable line on the unit board
-(a connector decision, taken here); the selector is **physical** (plug units in
-one at a time, or a jig supplying 12 V per board). Not adding a chain pin keeps
-the four-wire bus and the connector small. The options are not either/or:
-every board goes through an ICSP session anyway.
-
-**Recommendation: both, with Option 2 as the normal path.** The factory ICSP
-session writes bootloader + sketch + fuses + the full EEPROM image including the
-address; the default address (0x29, stock `TWI_ADDRESS`, outside the 1..16 unit
-range and not scanned today) exists for blank, torn or replaced boards, with
-one-at-a-time assignment as the recovery. Option 1 alone would make a 45-unit
-build a one-by-one chore and would leave a bus of identical blank boards the
-first time anything goes wrong; Option 2 alone has no field recovery for a
-corrupt address.
+- Linked at `0x7800`: pages 0..14 (0x7800..0x7F7F, 1920 B) for twiboot, page 15
+  (0x7F80) for `do_spm` plus the generation marker at 0x7FFE. The image is **born with
+  `do_spm` installed**, so there is no stage 1.
+- Content: the address pair read, the chain gate, general-call `CHAIN_CLEAR`, no DIP
+  block; the lean image's MCUSR stash and bounded pin stay. Size is unmeasured (the
+  fielded image is 890 B, the budget 1920 B): measure before layout is frozen.
+- `make_new_twiboot.py` takes the base and page count per variant, with its own
+  prebuilt hex and generated PROGMEM header; the simavr proof is rerun on it.
+- The note unit sketch embeds **that** header. `BootSectionClassify` gains the
+  variant's CRC over 2 KB and `GET_BOOT_INFO` hashes 2 KB on this board. Stage 2
+  rewrites pages 0..14 by the existing trampoline protocol (page 0 at 0x7800).
+- Guard: stage 2 refuses unless the fuse read-back (`GET_BOOT_INFO`) shows BOOTSZ = 01
+  (HFUSE 0xD2); a 1 KB image must never reach a 2 KB board nor the reverse, and each
+  build knows only its own CRC.
 
 ### Firmware and master changes this implies (not implemented here)
 
-1. **Board variant** (`unit_note` env, `-DSF_NOTE_BOARD`): pin map (driver, hall,
-   no DIP), address read from the dedicated pair, default `0x29`. `Unit/` and
-   `shared/` change, so the **unit bundle must be restaged** (CLAUDE.md step 4).
-2. **twiboot note image:** reads the pair, default 0x29, no DIP block; new CRC;
-   `make_new_twiboot.py`, `prebuilt/`, the simavr proof and the
-   `BootSectionClassify` known-CRC list follow. Size must be measured first.
-3. **Day-0 init** must not clear a valid address, and the factory EEPROM image
-   must not look blank to it (byte 0 doubles as identity version): the factory
-   image is generated by a host tool built from `UnitEeprom.h` (not a
-   hand-rolled second checksum implementation).
-4. **`SET_I2C_ADDRESS` safety:** reject the default 0x29 as a target and require
-   a verified round trip (the unit answers at the new address) before the master
-   reports success; today it is unverifiable.
-5. **Master:** a provisioning probe of the default address (list the blank unit,
-   assign the next free address), and the `addressStored` flag
-   (`UNIT_FLAG_ADDR_EEPROM`, bit 4) is always true on the note board; the web page
-   copy that says "falls back to DIP" needs a note build wording.
-6. **Burn script** (`flashing/`): per board, takes the address, writes flash,
-   EEPROM and fuses in the correct order (chip erase first, EEPROM after).
+1. **Board variant** (`unit_note` env, `-DSF_NOTE_BOARD`): pin map (driver, hall, no
+   DIP, CHAIN_IN/OUT on PD3/PD4), address from the pair, the gate, `CHAIN_CLEAR`,
+   boot-home stagger from the address. `Unit/` and `shared/` change, so the **unit
+   bundle must be restaged** (CLAUDE.md step 4).
+2. **twiboot note image** and update variant (above): `make_new_twiboot.py`,
+   `prebuilt/`, simavr proof, `BootSectionClassify`, `BootUpdateAvr.h` page count.
+3. **Day-0 init** must not clear a valid pair, and the factory image must not look
+   blank to it (byte 0 doubles as identity version): the image is generated by a
+   host tool built from `UnitEeprom.h`, not a second checksum implementation.
+4. **Protocol:** `CHAIN_CLEAR` is a new general-call op appended to
+   `SplitFlapProtocol.h` (opcode chosen from the unused range by the builder; additive,
+   check the `SFP_PROTOCOL_VERSION` rule). `SET_I2C_ADDRESS` rejects 0x29 as a target,
+   is accepted at 0x29 only while gated, and the controller requires the verified
+   round trip.
+5. **Controller (Master firmware on #675):** one CHAIN head GPIO per row, the
+   enumeration job as a pure state machine in a header with native tests (sequence,
+   single-gap auto-assign, `row_long`, `chain_break_after`), an operator action
+   "enumerate row", and the `addressStored` flag always true on this board; page
+   wording that says "falls back to DIP" needs a note-build text.
+6. **Burn script** (`flashing/`): one identical image for every board; order: fuses
+   (`lfuse 0xFF`, `hfuse 0xD2`, `efuse 0xFD`), chip erase, flash (twiboot at 0x7800 plus
+   sketch), EEPROM image, fuse read-back check.
 
 ## Decided by Lucas (2026-11-20)
 
 - Bare ATmega328P at 16 MHz, Unit firmware, I2C slave and twiboot kept.
-- No DIP switch: the address lives only in EEPROM.
-- No ESP-01S on the unit board; the controller board (#675) drives the units.
-- 12 V bus with a per-unit buck.
+- No DIP switch: the address lives only in EEPROM, assigned in physical order over
+  a chain line (CHAIN_IN/CHAIN_OUT, five-conductor cable); the gate lives in the
+  sketch and in twiboot; a swapped unit re-enumerates.
+- One ICSP burn per board with one image for all boards; day-0 fuses 2 KB boot
+  section and EESAVE programmed; the note board has its own twiboot image and
+  in-system update variant.
+- No ESP-01S on the unit board; the controller (#675) drives the units and the heads.
+- 12 V bus with a per-unit buck; MOSFET reverse-polarity protection per unit.
+- A3144-class hall; ~3 A row worst case, homing staggered like rendering.
 - Fit the ~41.5 x 73 x ~95 mm envelope; outline from #673.
 
 ## My calls (correctable)
 
 - TQFP-32 for the first batch; crystal over resonator; buck over LDO.
 - The unit bus stays 5 V; pull-ups and the level shifter live on the controller.
-- Address pair `addr`/`~addr` read by both twiboot and the app; default 0x29;
-  factory ICSP burn is the normal path, one-at-a-time assignment the recovery.
+- CHAIN_IN = PD3, CHAIN_OUT = PD4 (section 9); ripple rule (CHAIN_OUT = CHAIN_IN when
+  addressed) so only one blank unit listens on 0x29; single-gap swap assigned
+  automatically, everything else an operator action.
+- Address pair `addr`/`~addr` read by both twiboot and the app; default 0x29 gated.
+- HFUSE 0xD2; twiboot linked at 0x7800 with `do_spm` born in the last page.
 - ICSP VCC behind an open jumper; the jig powers through the bus.
 
 ## Left to the builder
@@ -368,7 +455,7 @@ corrupt address.
   (no number in the BOM was invented), pick-and-place, a reviewer pass.
 - Measuring the note twiboot image and the EEPROM offsets (36/37 are by the
   current constants).
-- The buck and its inductor, the hall part, connectors: datasheet-check every
+- The buck and its inductor, the MOSFET, the hall, connectors: datasheet-check every
   figure marked estimate.
 
 ## Open questions for Lucas
@@ -376,17 +463,5 @@ corrupt address.
 1. **Motor:** is the 24BYJ48 12 V the final choice? That keeps the unchanged
    firmware and a motor straight from 12 V; a 5 V motor makes the buck carry it.
    Does a 1/16 batch need rejecting on arrival (`STEPS` is a protocol constant)?
-2. **Provisioning:** do you accept the factory-burn address (label each board
-   by position) as the normal path, with 0x29 plus one-at-a-time as recovery
-   only?
-3. **Bootloader size:** if the note twiboot cannot fit the EEPROM read in the
-   lean image, do you accept a fuse change to a 2 KB boot section for the new
-   board only (it breaks the in-system update layout and costs 1 KB of app
-   flash), or drop the in-system bootloader update on the note board?
-4. **Reverse-polarity protection:** protect each unit (a MOSFET, ~0.2 V drop and
-   one more part) or rely on keyed wiring?
-5. **Motor side:** the motor leads enter on the edge nearest the motor-side wall and #673 wants left or right; which side, and which short edge for the bus connector?
-6. **Hall:** a more sensitive DRV5032-class part (new magnet behaviour to
-   bench-verify) or an A3144-class part (same as the fleet)?
-7. **Per-row 12 V current:** is a ~3 A worst case at the controller acceptable,
-   or must the stagger also cover homing?
+2. **Motor side:** the motor leads enter on the edge nearest the motor-side wall and
+   #673 wants left or right; which side, and which short edge for the bus connector?
