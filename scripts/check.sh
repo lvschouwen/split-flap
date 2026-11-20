@@ -5,7 +5,7 @@
 # local commit.
 #
 #   scripts/check.sh                   every tree
-#   scripts/check.sh unit master ...   some trees (unit master rescue follower py)
+#   scripts/check.sh unit master ...   some trees (unit master rescue follower py mech)
 #   scripts/check.sh --touched [base]  the trees the diff base..HEAD + the
 #                                      working tree touches (base: origin/master)
 #
@@ -26,21 +26,26 @@ VENV="${SPLITFLAP_CHECK_VENV:-$CACHE/check-venv}"
 LOCK="$CACHE/esptoolpy.lock"
 PY_PINS=(pytest==9.2.0 pyserial==3.5 esptool==5.4.0 grpcio-tools==1.85.1 protobuf==7.36.2 lizard==1.25.1)
 ALL_TREES=(unit master rescue follower py)
+# mech (#670) runs only when mechanics/ is touched or named: build123d is large.
+KNOWN_TREES=(unit master rescue follower py mech)
+MECH_VENV="$CACHE/mech-venv"
+MECH_PINS=(build123d==0.13.0 pytest==9.2.0)
 
 mkdir -p "$CACHE"
 
 die() { echo "check: $*" >&2; exit 2; }
 
-ensure_venv() {
-  local stamp="$VENV/.pins"
-  if [[ -x "$VENV/bin/python" && -f "$stamp" && "$(cat "$stamp")" == "${PY_PINS[*]}" ]]; then
+ensure_venv() {  # $1 = venv dir, rest = exact pins
+  local venv="$1"; shift
+  local stamp="$venv/.pins"
+  if [[ -x "$venv/bin/python" && -f "$stamp" && "$(cat "$stamp")" == "$*" ]]; then
     return
   fi
   command -v uv >/dev/null || die "uv not found (needed for the pytest venv)"
-  echo "check: building the pytest venv at $VENV"
-  uv venv -q --python 3.12 --clear "$VENV"
-  uv pip install -q --python "$VENV/bin/python" "${PY_PINS[@]}"
-  echo "${PY_PINS[*]}" > "$stamp"
+  echo "check: building the pytest venv at $venv"
+  uv venv -q --python 3.12 --clear "$venv"
+  uv pip install -q --python "$venv/bin/python" "$@"
+  echo "$*" > "$stamp"
 }
 
 FAILED=()
@@ -93,6 +98,11 @@ run_py() {
   step "unit bundle drift gate" "$ROOT/flashing" "$VENV/bin/python" flasher/make_manifest.py gate
 }
 
+run_mech() {
+  ensure_venv "$MECH_VENV" "${MECH_PINS[@]}"
+  step "mechanics pytest" "$ROOT/mechanics/flaps" "$MECH_VENV/bin/python" -m pytest -q tests/
+}
+
 # Maps changed paths to trees. shared/ and buildtools/ reach every firmware
 # tree; release/ is Master + Rescue; link/ is Master + FollowerEsp01. The py
 # gates always run: they are fast and pin cross-tree drift.
@@ -109,10 +119,11 @@ touched_trees() {
         want[unit]=1; want[master]=1; want[rescue]=1; want[follower]=1 ;;
       firmware/v2/release/*) want[master]=1; want[rescue]=1 ;;
       firmware/v2/link/*) want[master]=1; want[follower]=1 ;;
+      mechanics/*) want[mech]=1 ;;
     esac
   done < <({ git -C "$ROOT" diff --name-only "$base"...HEAD; git -C "$ROOT" diff --name-only HEAD; } | sort -u)
   local t
-  for t in "${ALL_TREES[@]}"; do [[ -n "${want[$t]:-}" ]] && echo "$t"; done
+  for t in "${KNOWN_TREES[@]}"; do [[ -n "${want[$t]:-}" ]] && echo "$t"; done
 }
 
 trees=()
@@ -124,17 +135,17 @@ elif [[ $# -eq 0 ]]; then
   trees=("${ALL_TREES[@]}")
 else
   for t in "$@"; do
-    [[ " ${ALL_TREES[*]} " == *" $t "* ]] || die "unknown tree: $t (one of: ${ALL_TREES[*]})"
+    [[ " ${KNOWN_TREES[*]} " == *" $t "* ]] || die "unknown tree: $t (one of: ${KNOWN_TREES[*]})"
   done
   trees=("$@")
 fi
 
 echo "check: trees: ${trees[*]}"
-ensure_venv
+ensure_venv "$VENV" "${PY_PINS[@]}"
 # The code standard gate runs for every selection, not only with the py tree.
 step "code standard gate" "$ROOT" "$VENV/bin/python" -I scripts/check_standard.py
 # Unit first: the drift gate and the Master/Follower bundles read its image.
-for t in "${ALL_TREES[@]}"; do
+for t in "${KNOWN_TREES[@]}"; do
   [[ " ${trees[*]} " == *" $t "* ]] && "run_$t"
 done
 

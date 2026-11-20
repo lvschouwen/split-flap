@@ -79,3 +79,6 @@ firmware/v2/Master/CMakeLists.txt
 firmware/v2/Master/dependencies.lock
 firmware/v2/Rescue/CMakeLists.txt
 firmware/v2/Rescue/dependencies.lock
+
+# Mechanics generator output (#670)
+mechanics/flaps/out/

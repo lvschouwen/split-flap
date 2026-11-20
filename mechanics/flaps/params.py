@@ -1,0 +1,65 @@
+"""Every flap dimension, in mm. Nothing else in the generator holds a literal size.
+
+Flap coordinates: y = 0 is the hinge edge (the edge with the pivot tabs), the
+flap reaches to y = height; x is centred. The pivot axis is the tab centre line
+and sits on the display's horizontal midline.
+"""
+from dataclasses import dataclass, fields, replace
+
+MIN_TAB_REACH = 1.5
+MIN_TAB_H = 1.0
+MAX_CAP_FRAC = 0.9
+
+
+@dataclass(frozen=True)
+class FlapParams:
+    width: float = 36.0
+    height: float = 31.0
+    thickness: float = 1.0
+    narrow_width: float = 32.5
+    narrow_height: float = 16.0
+    tab_y0: float = 1.2
+    tab_h: float = 1.2
+    inlay_depth: float = 0.4
+    cap_frac: float = 0.70
+    edge_margin: float = 1.0
+    stroke_offset: float = 0.0
+    bed: float = 256.0
+    bed_margin: float = 5.0
+    spacing: float = 3.0
+    prime_tower: float = 35.0
+    tess_tol: float = 0.02
+
+    def __post_init__(self):
+        problems = []
+        if not 0 < self.inlay_depth < self.thickness / 2:
+            problems.append("inlay_depth must be > 0 and < thickness/2 (the faces' pockets would meet)")
+        if self.tab_reach < MIN_TAB_REACH:
+            problems.append(f"tab reach (width - narrow_width)/2 must be >= {MIN_TAB_REACH}")
+        if self.tab_h < MIN_TAB_H:
+            problems.append(f"tab_h must be >= {MIN_TAB_H}")
+        if not 0 < self.cap_frac <= MAX_CAP_FRAC:
+            problems.append(f"cap_frac must be in (0, {MAX_CAP_FRAC}]")
+        if not self.tab_y0 + self.tab_h < self.narrow_height < self.height:
+            problems.append("tabs must sit inside the narrow zone, which must be shorter than the flap")
+        if problems:
+            raise ValueError("; ".join(problems))
+
+    @property
+    def tab_reach(self) -> float:
+        return (self.width - self.narrow_width) / 2
+
+    @property
+    def pivot_y(self) -> float:
+        return self.tab_y0 + self.tab_h / 2
+
+    @property
+    def char_height(self) -> float:
+        return 2 * self.height
+
+    def with_overrides(self, **kw: float) -> "FlapParams":
+        known = {f.name for f in fields(self)}
+        unknown = sorted(set(kw) - known)
+        if unknown:
+            raise ValueError(f"unknown parameter(s): {', '.join(unknown)}")
+        return replace(self, **kw)

@@ -11,3 +11,12 @@ def test_no_build_cache_is_shared_between_checkouts():
     src = CHECK.read_text()
     assert not re.search(r"^\s*export\s+PLATFORMIO_BUILD_CACHE_DIR=", src, re.M)
     assert re.search(r"^unset PLATFORMIO_BUILD_CACHE_DIR$", src, re.M)
+
+
+def test_mech_tree_only_on_touch_or_by_name():
+    # #670: build123d is large; the mechanics tree never joins a bare check.
+    src = CHECK.read_text()
+    assert re.search(r"^ALL_TREES=\(unit master rescue follower py\)$", src, re.M)
+    assert re.search(r"^KNOWN_TREES=\(unit master rescue follower py mech\)$", src, re.M)
+    assert re.search(r"mechanics/\*\) want\[mech\]=1", src)
+    assert "build123d==0.13.0" in src

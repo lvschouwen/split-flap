@@ -1,0 +1,258 @@
+[
+ {
+  "kind": "blank",
+  "value": ""
+ },
+ {
+  "kind": "char",
+  "value": "A"
+ },
+ {
+  "kind": "char",
+  "value": "B"
+ },
+ {
+  "kind": "char",
+  "value": "C"
+ },
+ {
+  "kind": "char",
+  "value": "D"
+ },
+ {
+  "kind": "char",
+  "value": "E"
+ },
+ {
+  "kind": "char",
+  "value": "F"
+ },
+ {
+  "kind": "char",
+  "value": "G"
+ },
+ {
+  "kind": "char",
+  "value": "H"
+ },
+ {
+  "kind": "char",
+  "value": "I"
+ },
+ {
+  "kind": "char",
+  "value": "J"
+ },
+ {
+  "kind": "char",
+  "value": "K"
+ },
+ {
+  "kind": "char",
+  "value": "L"
+ },
+ {
+  "kind": "char",
+  "value": "M"
+ },
+ {
+  "kind": "char",
+  "value": "N"
+ },
+ {
+  "kind": "char",
+  "value": "O"
+ },
+ {
+  "kind": "char",
+  "value": "P"
+ },
+ {
+  "kind": "char",
+  "value": "Q"
+ },
+ {
+  "kind": "char",
+  "value": "R"
+ },
+ {
+  "kind": "char",
+  "value": "S"
+ },
+ {
+  "kind": "char",
+  "value": "T"
+ },
+ {
+  "kind": "char",
+  "value": "U"
+ },
+ {
+  "kind": "char",
+  "value": "V"
+ },
+ {
+  "kind": "char",
+  "value": "W"
+ },
+ {
+  "kind": "char",
+  "value": "X"
+ },
+ {
+  "kind": "char",
+  "value": "Y"
+ },
+ {
+  "kind": "char",
+  "value": "Z"
+ },
+ {
+  "kind": "char",
+  "value": "1"
+ },
+ {
+  "kind": "char",
+  "value": "2"
+ },
+ {
+  "kind": "char",
+  "value": "3"
+ },
+ {
+  "kind": "char",
+  "value": "4"
+ },
+ {
+  "kind": "char",
+  "value": "5"
+ },
+ {
+  "kind": "char",
+  "value": "6"
+ },
+ {
+  "kind": "char",
+  "value": "7"
+ },
+ {
+  "kind": "char",
+  "value": "8"
+ },
+ {
+  "kind": "char",
+  "value": "9"
+ },
+ {
+  "kind": "char",
+  "value": "0"
+ },
+ {
+  "kind": "char",
+  "value": "!"
+ },
+ {
+  "kind": "char",
+  "value": "@"
+ },
+ {
+  "kind": "char",
+  "value": "#"
+ },
+ {
+  "kind": "char",
+  "value": "$"
+ },
+ {
+  "kind": "char",
+  "value": "("
+ },
+ {
+  "kind": "char",
+  "value": ")"
+ },
+ {
+  "kind": "char",
+  "value": "-"
+ },
+ {
+  "kind": "char",
+  "value": "+"
+ },
+ {
+  "kind": "char",
+  "value": "&"
+ },
+ {
+  "kind": "char",
+  "value": "="
+ },
+ {
+  "kind": "char",
+  "value": ";"
+ },
+ {
+  "kind": "char",
+  "value": ":"
+ },
+ {
+  "kind": "char",
+  "value": "'"
+ },
+ {
+  "kind": "char",
+  "value": "\""
+ },
+ {
+  "kind": "char",
+  "value": "%"
+ },
+ {
+  "kind": "char",
+  "value": ","
+ },
+ {
+  "kind": "char",
+  "value": "."
+ },
+ {
+  "kind": "char",
+  "value": "/"
+ },
+ {
+  "kind": "char",
+  "value": "?"
+ },
+ {
+  "kind": "heart",
+  "value": ""
+ },
+ {
+  "kind": "colour",
+  "value": "red"
+ },
+ {
+  "kind": "colour",
+  "value": "orange"
+ },
+ {
+  "kind": "colour",
+  "value": "yellow"
+ },
+ {
+  "kind": "colour",
+  "value": "green"
+ },
+ {
+  "kind": "colour",
+  "value": "blue"
+ },
+ {
+  "kind": "colour",
+  "value": "violet"
+ },
+ {
+  "kind": "colour",
+  "value": "white"
+ }
+]

@@ -219,8 +219,8 @@ def test_gate_step_runs_for_every_tree_selection():
     lines = open(os.path.join(ROOT, "scripts", "check.sh")).read().splitlines()
     gate = [i for i, ln in enumerate(lines) if "check_standard.py" in ln and ln.startswith('step "code standard gate"')]
     assert len(gate) == 1, "the gate step must be a top-level (unindented) step, outside run_py"
-    loop = next(i for i, ln in enumerate(lines) if ln.startswith('for t in "${ALL_TREES[@]}"; do'))
-    venv = next(i for i, ln in enumerate(lines) if ln == "ensure_venv")
+    loop = next(i for i, ln in enumerate(lines) if ln.startswith('for t in "${KNOWN_TREES[@]}"; do'))
+    venv = next(i for i, ln in enumerate(lines) if ln == 'ensure_venv "$VENV" "${PY_PINS[@]}"')
     assert venv < gate[0] < loop
 
 
