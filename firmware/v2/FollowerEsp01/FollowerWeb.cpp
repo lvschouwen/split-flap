@@ -317,19 +317,32 @@ static void masterOtaFinish() {
 // FOLLOWER_LOG_CHUNK pieces straight from its buffer (no copy). The chunk
 // callback is addressed by the bytes already sent, so it holds only the
 // snapshot of the moment of the request and never touches the link's cursor.
+// One stream at a time: its progress record is static, and a second reader
+// would only spend heap the row may not have.
+static bool logStreamBusy = false;
+static FollowerLogStream logStream;
+
 static void registerLogEndpoint(AsyncWebServer& server) {
   server.on("/log", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (logStreamBusy) {
+      request->send(503, "text/plain", F("Busy"));
+      return;
+    }
     if (!followerLogServeAllowed(ESP.getMaxFreeBlockSize())) {
       request->send(503, "text/plain", F("Low memory"));
       return;
     }
+    logStreamBusy = true;  // only once the checks pass; freed when the request ends
+    logStream = FollowerLogStream();
+    request->onDisconnect([]() { logStreamBusy = false; });
     const FollowerLogRing::Snapshot snap = followerLogRing().snapshot();
     request->sendChunked("text/plain",
       [snap](uint8_t* out, size_t maxLen, size_t sent) -> size_t {
+        // The heap may have fallen since the request: end rather than add to it.
+        if (!followerLogServeAllowed(ESP.getMaxFreeBlockSize())) return 0;
         const size_t cap = maxLen < FOLLOWER_LOG_CHUNK ? maxLen : FOLLOWER_LOG_CHUNK;
-        bool overtaken = false;
-        return followerLogRing().readSnapshot(snap, sent, (char*)out, cap,
-                                              overtaken);
+        return followerLogStreamRead(followerLogRing(), snap, logStream, sent,
+                                     (char*)out, cap);
       });
   });
 }

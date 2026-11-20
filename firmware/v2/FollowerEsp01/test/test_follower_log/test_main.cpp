@@ -11,6 +11,7 @@
 // Small ring makes wrap cheap to exercise.
 #define FOLLOWER_LOG_SIZE 16
 #include "../../FollowerLog.h"
+#include "../../FollowerEscalation.h"
 
 void setUp() {}
 void tearDown() {}
@@ -253,7 +254,40 @@ static void test_serve_floor() {
   TEST_ASSERT_FALSE(followerLogServeAllowed(FOLLOWER_LOG_SERVE_MIN_BLOCK - 1));
   TEST_ASSERT_TRUE(followerLogServeAllowed(FOLLOWER_LOG_SERVE_MIN_BLOCK));
   // never below the block FollowerEscalation.h counts as low
-  TEST_ASSERT_TRUE(FOLLOWER_LOG_SERVE_MIN_BLOCK > 4096U);
+  TEST_ASSERT_TRUE(FOLLOWER_LOG_SERVE_MIN_BLOCK > ESCALATION_LOW_BLOCK_BYTES);
+}
+
+static void test_overtaken_stream_ends_with_the_marker_once() {
+  FollowerLogRing r;
+  r.append("aaa\nbbb\nccc\n", 12);
+  auto snap = r.snapshot();
+  FollowerLogStream st;
+  char out[32];
+  size_t sent = 0;
+  String all;
+  size_t n = followerLogStreamRead(r, snap, st, sent, out, 4);  // "aaa\n"
+  for (size_t i = 0; i < n; i++) all += out[i];
+  sent += n;
+  r.append("dddddddd\n", 9);  // the ring moves past the reader
+  for (;;) {
+    n = followerLogStreamRead(r, snap, st, sent, out, 5);  // marker in pieces
+    if (n == 0) break;
+    for (size_t i = 0; i < n; i++) all += out[i];
+    sent += n;
+  }
+  TEST_ASSERT_EQUAL_STRING("aaa\n\n[log overtaken]\n", all.c_str());
+  TEST_ASSERT_EQUAL_size_t(0, followerLogStreamRead(r, snap, st, sent, out, 5));
+}
+
+static void test_a_stream_not_overtaken_has_no_marker() {
+  FollowerLogRing r;
+  r.append("one\n", 4);
+  auto snap = r.snapshot();
+  FollowerLogStream st;
+  char out[32];
+  TEST_ASSERT_EQUAL_size_t(4, followerLogStreamRead(r, snap, st, 0, out, 32));
+  TEST_ASSERT_EQUAL_size_t(0, followerLogStreamRead(r, snap, st, 4, out, 32));
+  TEST_ASSERT_FALSE(st.overtaken);
 }
 
 int main(int, char**) {
@@ -278,5 +312,7 @@ int main(int, char**) {
   RUN_TEST(test_reader_untouched_by_appends_that_keep_its_bytes);
   RUN_TEST(test_one_unfinished_line_in_a_full_ring_reads_nothing);
   RUN_TEST(test_serve_floor);
+  RUN_TEST(test_overtaken_stream_ends_with_the_marker_once);
+  RUN_TEST(test_a_stream_not_overtaken_has_no_marker);
   return UNITY_END();
 }

@@ -100,7 +100,23 @@ def test_the_log_route_only_reads():
     assert 'server.on("/log", HTTP_GET' in reg
     assert "HTTP_POST" not in reg and "HTTP_ANY" not in reg
     assert "Access-Control" not in web and "addHeader" not in reg
-    assert "readSnapshot(" in reg and "nextLine(" not in reg
+    assert "followerLogStreamRead(" in reg and "nextLine(" not in reg
     assert "503" in reg and "followerLogServeAllowed(" in reg
     assert reg.index("followerLogServeAllowed(") < reg.index("snapshot()")
     assert "String" not in reg.replace("request->send(503", "")
+
+
+def test_the_log_route_serves_one_stream_at_a_time():
+    web = _code("FollowerWeb.cpp")
+    reg = web[web.index("static void registerLogEndpoint("):]
+    reg = reg[:reg.index("\n}\n")]
+    busy = reg.index("if (logStreamBusy)")
+    assert busy < reg.index("followerLogServeAllowed(") < reg.index("logStreamBusy = true;")
+    # a refusal returns before the flag is taken; the request's end frees it
+    assert reg[busy:reg.index("logStreamBusy = true;")].count("return;") == 2
+    assert reg.index("logStreamBusy = true;") < reg.index("onDisconnect(")
+    assert "logStreamBusy = false;" in reg[reg.index("onDisconnect("):]
+    assert web.count("{ logStreamBusy = false; }") == 1  # the only release
+    # the heap is looked at again for every chunk
+    chunk = reg[reg.index("sendChunked("):]
+    assert chunk.index("followerLogServeAllowed(") < chunk.index("followerLogStreamRead(")

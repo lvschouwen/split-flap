@@ -109,6 +109,9 @@ struct FollowerLogRing {
     s.end = written;
     s.start = oldestCursor();
     if (s.start == 0) return s;  // nothing evicted: the first byte is a line start
+    // After an eviction the byte before the oldest one is gone, so whether the
+    // oldest byte opens a line cannot be decided: the first line is always
+    // dropped, even when it happened to be whole.
     uint32_t c = s.start;
     for (size_t i = 0; i < fill() && c < s.end; i++, c++) {
       if (byteAt(c) == '\n') {
@@ -147,6 +150,38 @@ struct FollowerLogRing {
     return buf[(head + (size_t)FOLLOWER_LOG_SIZE - back) % FOLLOWER_LOG_SIZE];
   }
 };
+
+// What a stream the ring overtook ends with, so a truncated body shows it.
+#define FOLLOWER_LOG_OVERTAKEN_MARK "\n[log overtaken]\n"
+
+// One /log stream's progress past the snapshot: where the ring overtook it.
+struct FollowerLogStream {
+  bool overtaken = false;
+  size_t at = 0;  // stream offset the marker starts at
+};
+
+// The next piece of a stream at `offset`: the snapshot's bytes, then, if the
+// ring overtook the reader, the marker once; 0 ends the stream. Addressed by
+// offset like readSnapshot, so a retried chunk repeats itself.
+inline size_t followerLogStreamRead(const FollowerLogRing& ring,
+                                    const FollowerLogRing::Snapshot& snap,
+                                    FollowerLogStream& st, size_t offset,
+                                    char* out, size_t cap) {
+  if (!st.overtaken) {
+    bool over = false;
+    const size_t n = ring.readSnapshot(snap, offset, out, cap, over);
+    if (!over) return n;
+    st.overtaken = true;
+    st.at = offset;
+  }
+  const size_t markLen = sizeof(FOLLOWER_LOG_OVERTAKEN_MARK) - 1;
+  const size_t done = offset - st.at;
+  if (done >= markLen) return 0;
+  size_t n = markLen - done;
+  if (n > cap) n = cap;
+  for (size_t i = 0; i < n; i++) out[i] = FOLLOWER_LOG_OVERTAKEN_MARK[done + i];
+  return n;
+}
 
 // Below this largest free block GET /log answers 503 (#679). 4096 is where
 // FollowerEscalation.h starts its low-heap clock toward a self-restart, so the
