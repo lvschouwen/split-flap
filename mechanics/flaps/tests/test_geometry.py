@@ -41,7 +41,8 @@ def test_volume_is_conserved(i):
 
 
 def test_inlays_inside_outline():
-    p = P.with_overrides(cap_frac=0.80)
+    # 0.70 is the largest default-font cap height with no glyph clipped (0.75 clips Q $ ( ) ; ,)
+    p = P.with_overrides(cap_frac=0.70)
     o = _bb(flap_outline(p))
     for e in A:
         for half in ("top", "bottom"):
@@ -83,15 +84,27 @@ def test_front_inlay_sits_on_the_plate():
 
 
 def test_asymmetric_glyph_halves():
-    # 'L': the stem is left; the foot runs right. x is never mirrored on the back.
+    # 'L': stem on the display's left, foot running right. Both faces are read
+    # from -z, so display-left is flap +x on the front and on the fallen back.
     L = Entry("char", "L")
     top, bottom = _bb(half_on_flap(L, "top", P)), _bb(half_on_flap(L, "bottom", P))
-    assert (top.min.X + top.max.X) / 2 < 0
-    assert bottom.max.X > top.max.X + 5
+    assert (top.min.X + top.max.X) / 2 > 0
+    assert bottom.min.X < top.min.X - 5
+
+
+def test_clipped_glyph_fails_loudly():
+    with pytest.raises(ValueError, match="clipped"):
+        half_on_flap(Entry("char", "Q"), "bottom", P.with_overrides(cap_frac=0.9))
 
 
 def test_heart_is_white():
     assert set(build_flap(56, A, P).inlays) == {"white", "red"}
+
+
+def test_failed_stroke_offset_names_the_glyph():
+    with pytest.raises(ValueError, match="stroke_offset"):
+        for e in A:
+            glyph_display(e, P.with_overrides(stroke_offset=0.1))
 
 
 def test_stroke_offset_grows_glyphs():

@@ -25,8 +25,8 @@ unset PLATFORMIO_BUILD_CACHE_DIR
 VENV="${SPLITFLAP_CHECK_VENV:-$CACHE/check-venv}"
 LOCK="$CACHE/esptoolpy.lock"
 PY_PINS=(pytest==9.2.0 pyserial==3.5 esptool==5.4.0 grpcio-tools==1.85.1 protobuf==7.36.2 lizard==1.25.1)
-ALL_TREES=(unit master rescue follower py)
-# mech (#670) runs only when mechanics/ is touched or named: build123d is large.
+ALL_TREES=(unit master rescue follower py mech)
+# mech (#670): the flap generator; its own venv because build123d is large.
 KNOWN_TREES=(unit master rescue follower py mech)
 MECH_VENV="$CACHE/mech-venv"
 MECH_PINS=(build123d==0.13.0 pytest==9.2.0)

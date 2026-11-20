@@ -4,6 +4,7 @@ Flap coordinates: y = 0 is the hinge edge (the edge with the pivot tabs), the
 flap reaches to y = height; x is centred. The pivot axis is the tab centre line
 and sits on the display's horizontal midline.
 """
+import math
 from dataclasses import dataclass, fields, replace
 
 MIN_TAB_REACH = 1.5
@@ -32,6 +33,15 @@ class FlapParams:
 
     def __post_init__(self):
         problems = []
+        if not all(math.isfinite(getattr(self, f.name)) for f in fields(self)):
+            problems.append("every parameter must be a finite number")
+        for name in ("thickness", "spacing", "prime_tower", "tess_tol"):
+            if not getattr(self, name) > 0:
+                problems.append(f"{name} must be > 0")
+        if self.bed_margin < 0:
+            problems.append("bed_margin must be >= 0")
+        if not 0 <= self.edge_margin < self.narrow_width / 4:
+            problems.append("edge_margin must be >= 0 and leave room for a glyph")
         if not 0 < self.inlay_depth < self.thickness / 2:
             problems.append("inlay_depth must be > 0 and < thickness/2 (the faces' pockets would meet)")
         if self.tab_reach < MIN_TAB_REACH:

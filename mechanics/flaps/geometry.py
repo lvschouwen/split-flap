@@ -22,6 +22,7 @@ FONT = Path(__file__).with_name("fonts") / "BarlowCondensed-SemiBold.ttf"
 _REF_SIZE = 10.0
 _BIG = 1000.0
 _MIN_AREA = 1e-6
+_MAX_CLIP = 0.005  # fraction of a glyph half that may be trimmed by the edge
 _C, _MIN_ALIGN, _MAX_ALIGN = Align.CENTER, Align.MIN, Align.MAX
 
 Half = Literal["top", "bottom"]
@@ -67,7 +68,10 @@ def _char_sketch(c: str, p: FlapParams) -> Sketch:
     bb = text.bounding_box()
     glyph = Pos(-(bb.min.X + bb.max.X) / 2, -centre_per_size * size) * text
     if p.stroke_offset:
-        glyph = offset(glyph, p.stroke_offset)
+        try:
+            glyph = offset(glyph, p.stroke_offset)
+        except RuntimeError as e:
+            raise ValueError(f"stroke_offset {p.stroke_offset} fails on {c!r}: {e}") from e
     return glyph
 
 
@@ -114,9 +118,14 @@ def half_on_flap(entry: Entry, half: Half, p: FlapParams) -> Optional[Sketch]:
     part = glyph & Rectangle(_BIG, _BIG, align=(_C, side))
     if part.area <= _MIN_AREA:
         return None
+    part = mirror(part, Plane.YZ)  # both faces are read from -z (layout.py)
     if half == "bottom":
         part = mirror(part, Plane.XZ)
-    mapped = (Pos(0, p.pivot_y) * part) & inlay_region(p)
+    placed = Pos(0, p.pivot_y) * part
+    mapped = placed & inlay_region(p)
+    if entry.kind != "colour" and mapped.area < placed.area * (1 - _MAX_CLIP):
+        raise ValueError(f"{entry.kind} {entry.value!r} {half} half clipped by the flap edge; "
+                         "lower cap_frac or stroke_offset")
     return mapped if mapped.area > _MIN_AREA else None
 
 

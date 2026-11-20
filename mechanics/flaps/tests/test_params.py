@@ -17,6 +17,13 @@ def test_defaults_match_spec():
     {"cap_frac": 0.0},
     {"cap_frac": 0.95},
     {"tab_h": 0.8},            # tab height below 1.0
+    {"edge_margin": -0.5},     # would outset the inlay past the outline
+    {"edge_margin": 16.5},     # collapses the inlay region
+    {"spacing": -1.0},
+    {"bed_margin": -1.0},
+    {"prime_tower": 0.0},
+    {"tess_tol": 0.0},
+    {"thickness": float("nan")},
 ])
 def test_params_reject_unprintable(kw):
     with pytest.raises(ValueError):

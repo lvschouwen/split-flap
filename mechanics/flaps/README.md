@@ -40,8 +40,14 @@ filaments by hand if Bambu Studio rejects the project file).
 
 - 0.4 mm nozzle, 0.2 mm layers; front face down on the plate (smooth or textured PEI).
 - Plain plates (`drum-plate-1`, `-2`): black + white only, no prime tower needed.
-- Colour plate (`drum-plate-3`) and the test plate: enable the prime tower,
-  top-right corner (the packing keeps that 35 mm square free).
+- Colour plate (`drum-plate-3`) and the test plate: enable the prime tower and
+  drag it into the top-right corner, at most 35 x 35 mm (`prime_tower`); the
+  packing keeps that square plus `spacing` free. Bambu Studio picks its own
+  default spot, so check it before slicing.
+- The 3mf says it comes from Bambu Studio 2.0 so per-part slots load; an older
+  Studio may warn about the version. `--plain-3mf` avoids that.
+- `cap_frac` 0.70 is the largest cap height at which no Barlow glyph is clipped;
+  a clipped glyph or a failing `stroke_offset` stops the run with its name.
 - Test plate: 11 stress flaps (`% " . , : @ M W 8`, heart, red) plus `A`
   at 0.3 mm inlay (`flap01_inlay03`) and 1.2 mm thick (`flap01_t12`).
   Judge legibility, white show-through, tab strength (bend by hand).
