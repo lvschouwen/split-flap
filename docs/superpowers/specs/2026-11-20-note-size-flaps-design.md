@@ -14,8 +14,9 @@ match the Note exactly (not to keep today's 43 × 35 mm flaps).
 The effort splits into four projects, done in order, each with its own design:
 
 1. **Flaps** (this document) — generated print files, proven on the X1C.
-2. Drum + unit frame + motor mount (28BYJ-48; its 42 mm ear span exceeds the
-   column pitch, so the ears turn vertical).
+2. Drum + unit frame + motor mount (#673). The motor goes inside the drum hub
+   (#671 rules out the 28BYJ-48: its 42 mm ear span exceeds the column pitch;
+   baselines: 24BYJ48 12 V 24 x 19 mm, a 10 mm planetary, a 15BY25-560A).
 3. A new unit board (new-PCB work is reopened for this purpose).
 4. Firmware for the 64-flap alphabet (`SFP_ALPHABET` in
    `firmware/v2/shared/SplitFlapProtocol.h`, the I2C contract, the HA contract).
