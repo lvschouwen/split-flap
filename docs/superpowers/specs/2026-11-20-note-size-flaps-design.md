@@ -101,12 +101,14 @@ pivot tabs, and the full 64-flap plates are ready to slice.
   their own plates, so purge stays small. The 8 colour-bearing flaps share one
   plate per batch of drums, with the prime tower budgeted in its packing (bed
   margin and prime-tower area are parameters).
-- **3mf:** aim for Bambu Studio's project metadata
-  (`Metadata/model_settings.config`, extruder per part), so the parts open
-  already assigned to AMS slots 1–8 (1 black, 2 white, 3–8 red…violet). Plain
-  3mf with named parts is the fallback. Lucas verifies the import in Bambu
-  Studio on his machine; the generator itself checks only that the 3mf is
-  structurally valid.
+- **3mf:** 3MF core only, one part per colour with `pid`/`pindex` into a
+  `<basematerials>` group (slot order: 1 black, 2 white, 3–8 red…violet). Bambu
+  Studio loads it as a third-party file: parts kept, one colour-to-filament
+  dialog per plate. Bambu project metadata was dropped: a `BambuStudio-` stamp
+  without Studio's full `project_settings.config` loads geometry only, and
+  hand-written project settings break on Studio updates. Lucas verifies the
+  import in Bambu Studio on his machine; the generator itself checks only that
+  the 3mf is structurally valid.
 - **Glyph size:** cap height is a parameter, 70 % of 2·H by default. The
   visible window from the frame is not known until project 2, so the test plate
   is the tuning loop.

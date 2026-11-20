@@ -1,10 +1,11 @@
 import collections
+import re
 import xml.etree.ElementTree as ET
 import zipfile
 
 import pytest
 
-from flaps.alphabet import load_alphabet
+from flaps.alphabet import COLOUR_SLOTS, load_alphabet
 from flaps.geometry import build_flap
 from flaps.params import FlapParams
 from flaps.plates import Placed
@@ -12,7 +13,7 @@ from flaps.threemf import write_plate
 
 P = FlapParams()
 NS = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
-MEMBERS = {"[Content_Types].xml", "_rels/.rels", "3D/3dmodel.model", "Metadata/model_settings.config"}
+MEMBERS = {"[Content_Types].xml", "_rels/.rels", "3D/3dmodel.model"}
 
 
 @pytest.fixture(scope="module")
@@ -36,32 +37,49 @@ def test_archive_members(plate):
             ET.fromstring(z.read(n))
 
 
-def _slots(path):
-    cfg = _read(path, "Metadata/model_settings.config")
-    out = {}
-    for obj in cfg.findall("object"):
-        for part in obj.findall("part"):
-            meta = {m.get("key"): m.get("value") for m in part.findall("metadata")}
-            out[meta["name"]] = int(meta["extruder"])
-    return out
+def _part_colours(path):
+    """part name -> colour name, via the part object's pid/pindex into basematerials."""
+    model = _read(path, "3D/3dmodel.model")
+    groups = {g.get("id"): [b.get("name") for b in g.findall("m:base", NS)]
+              for g in model.findall("m:resources/m:basematerials", NS)}
+    return {o.get("name"): groups[o.get("pid")][int(o.get("pindex"))]
+            for o in model.findall("m:resources/m:object", NS) if o.find("m:mesh", NS) is not None}
 
 
-def test_every_part_has_a_slot(plate):
-    slots = _slots(plate[0])
-    assert all(1 <= s <= 8 for s in slots.values())
-    assert slots["flap00_body"] == 1 and slots["flap00_white"] == 2
-    assert slots["flap57_red"] == 3 and slots["flap57_orange"] == 4
+def test_every_part_has_its_colour(plate):
+    colours = _part_colours(plate[0])
+    assert colours["flap00_body"] == "black" and colours["flap00_white"] == "white"
+    assert colours["flap57_red"] == "red" and colours["flap57_orange"] == "orange"
 
 
-def test_part_ids_follow_component_order(plate):
+def test_colours_in_slot_order_with_opaque_display_colour(plate):
     model = _read(plate[0], "3D/3dmodel.model")
-    cfg = _read(plate[0], "Metadata/model_settings.config")
-    parents = {o.get("id"): [c.get("objectid") for c in o.findall("m:components/m:component", NS)]
-               for o in model.findall("m:resources/m:object", NS) if o.find("m:components", NS) is not None}
-    for obj in cfg.findall("object"):
-        assert [p.get("id") for p in obj.findall("part")] == parents[obj.get("id")]
+    (group,) = model.findall("m:resources/m:basematerials", NS)
+    bases = group.findall("m:base", NS)
+    assert [COLOUR_SLOTS[b.get("name")] for b in bases] == sorted(COLOUR_SLOTS[b.get("name")] for b in bases)
+    assert all(re.fullmatch(r"#[0-9A-F]{6}FF", b.get("displaycolor")) for b in bases)
+
+
+def test_resource_ids_unique(plate):
+    model = _read(plate[0], "3D/3dmodel.model")
+    ids = [r.get("id") for r in model.find("m:resources", NS)]
+    assert len(ids) == len(set(ids))
+
+
+def test_assemblies_are_build_items(plate):
+    model = _read(plate[0], "3D/3dmodel.model")
+    parents = [o.get("id") for o in model.findall("m:resources/m:object", NS)
+               if o.find("m:components", NS) is not None]
     items = [i.get("objectid") for i in model.findall("m:build/m:item", NS)]
     assert sorted(items) == sorted(parents)
+
+
+def test_no_bambu_metadata(plate):
+    # A "BambuStudio-" stamp without a full project_settings.config makes Studio
+    # load geometry only; a third-party 3mf keeps parts and colours.
+    with zipfile.ZipFile(plate[0]) as z:
+        assert not any(n.startswith("Metadata/") for n in z.namelist())
+        assert b"BambuStudio" not in z.read("3D/3dmodel.model")
 
 
 def test_meshes_are_closed(plate):
@@ -88,11 +106,3 @@ def test_items_on_bed(plate):
             for v in objs[comp.get("objectid")].findall("m:mesh/m:vertices/m:vertex", NS):
                 x, y, z = float(v.get("x")) + dx, float(v.get("y")) + dy, float(v.get("z"))
                 assert 0 <= x <= P.bed and 0 <= y <= P.bed and -1e-6 <= z <= P.thickness + 1e-6
-
-
-def test_plain_mode_has_no_bambu_metadata(tmp_path, plate):
-    path = tmp_path / "plain.3mf"
-    write_plate(path, plate[1], P, bambu=False)
-    with zipfile.ZipFile(path) as z:
-        assert "Metadata/model_settings.config" not in z.namelist()
-        assert b"BambuStudio" not in z.read("3D/3dmodel.model")

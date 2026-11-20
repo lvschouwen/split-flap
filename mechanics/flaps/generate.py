@@ -42,21 +42,21 @@ def _test_plate(alphabet, p: FlapParams) -> tuple[list[tuple[int, FlapParts]], l
     return built, names
 
 
-def _write(path: Path, built, names, p: FlapParams, tower: bool, bambu: bool) -> None:
+def _write(path: Path, built, names, p: FlapParams, tower: bool) -> None:
     (plate,) = pack([i for i, _ in built], p, tower=tower)
     write_plate(path, [(Placed(pl.flap, pl.x, pl.y), parts) for pl, (_, parts) in zip(plate, built)],
-                p, bambu=bambu, names=names)
+                p, names=names)
     colours = sorted({c for _, parts in built for c in parts.inlays} | {"black"})
     print(f"{path}: {len(built)} flaps, colours {', '.join(colours)}")
 
 
-def _full(alphabet, p: FlapParams, out: Path, bambu: bool) -> None:
+def _full(alphabet, p: FlapParams, out: Path) -> None:
     plain, coloured = split_by_colour(alphabet)
     groups = [(plate, False) for plate in pack(plain, p, tower=False)]
     groups += [(plate, True) for plate in pack(coloured, p, tower=True)]
     for k, (plate, tower) in enumerate(groups, start=1):
         built = [(pl.flap, build_flap(pl.flap, alphabet, p)) for pl in plate]
-        _write(out / f"drum-plate-{k}.3mf", built, [f"flap{i:02d}" for i, _ in built], p, tower, bambu)
+        _write(out / f"drum-plate-{k}.3mf", built, [f"flap{i:02d}" for i, _ in built], p, tower)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,7 +66,6 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--full", action="store_true", help="every plate for one drum")
     ap.add_argument("--out", type=Path, default=Path(__file__).with_name("out"))
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
-    ap.add_argument("--plain-3mf", action="store_true", help="3MF core only, no Bambu metadata")
     args = ap.parse_args(argv)
     try:
         p = FlapParams().with_overrides(**_parse_set(args.set))
@@ -74,12 +73,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"generate: {e}", file=sys.stderr)
         return 2
     alphabet = load_alphabet()
-    bambu = not args.plain_3mf
     if args.test_plate:
         built, names = _test_plate(alphabet, p)
-        _write(args.out / "test-plate.3mf", built, names, p, tower=True, bambu=bambu)
+        _write(args.out / "test-plate.3mf", built, names, p, tower=True)
     else:
-        _full(alphabet, p, args.out, bambu)
+        _full(alphabet, p, args.out)
     return 0
 
 

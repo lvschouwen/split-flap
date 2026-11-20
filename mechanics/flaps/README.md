@@ -1,7 +1,7 @@
 # Flap generator (Note-size, 64 flaps)
 
 Generates the flaps for a Vestaboard-Note-footprint wall (3 x 15, ~41.5 mm
-column / 73 mm row pitch) as Bambu-ready 3mf plates. Design:
+column / 73 mm row pitch) as multi-colour 3mf plates (3MF core colours, any slicer). Design:
 `docs/superpowers/specs/2026-11-20-note-size-flaps-design.md` (#670).
 
 ## Run
@@ -16,8 +16,16 @@ cd mechanics
 ```
 
 `scripts/check.sh mech` builds the venv itself and runs the tests. Output in
-`out/` is never committed. `--plain-3mf` drops the Bambu metadata (assign
-filaments by hand if Bambu Studio rejects the project file).
+`out/` is never committed.
+
+## Open in Bambu Studio
+
+Open the 3mf on an empty plate (File > Open). Studio warns "not from Bambu
+Lab, load geometry data and color data only" and asks to map each file colour
+to a filament: pick the slot from the table below, once per plate file. Each
+flap stays its own object with one part per colour. There is deliberately no
+Bambu project metadata: a `BambuStudio-` stamp without Studio's full project
+settings makes it load geometry only (no parts, no colours).
 
 ## What is where
 
@@ -28,7 +36,7 @@ filaments by hand if Bambu Studio rejects the project file).
 | `layout.py` | which half goes where: char i top = front of flap i, bottom = back of flap i-1 |
 | `geometry.py` | flap outline, glyph halves, flush inlay pockets |
 | `plates.py` | grid packing on the 256 mm bed, prime-tower keep-out |
-| `threemf.py` | 3mf with one part per colour and its AMS slot |
+| `threemf.py` | 3mf with one part per colour (3MF core basematerials) |
 
 ## AMS slots (X1C, two AMS)
 
@@ -44,8 +52,6 @@ filaments by hand if Bambu Studio rejects the project file).
   drag it into the top-right corner, at most 35 x 35 mm (`prime_tower`); the
   packing keeps that square plus `spacing` free. Bambu Studio picks its own
   default spot, so check it before slicing.
-- The 3mf says it comes from Bambu Studio 2.0 so per-part slots load; an older
-  Studio may warn about the version. `--plain-3mf` avoids that.
 - `cap_frac` 0.70 is the largest cap height at which no Barlow glyph is clipped;
   a clipped glyph or a failing `stroke_offset` stops the run with its name.
 - Test plate: 11 stress flaps (`% " . , : @ M W 8`, heart, red) plus `A`
