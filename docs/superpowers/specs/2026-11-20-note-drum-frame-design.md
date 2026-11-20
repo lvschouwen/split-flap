@@ -396,8 +396,13 @@ the hand-turn assembly decides.
 
 ## 8. Print orientation (Bambu X1C, 256 x 256 mm bed)
 
-- Drum halves: disc face down, hub tube upwards (17 mm tall, no supports; the
-  tube bore is a straight cylinder). Round holes print vertical.
+- Drum halves: disc face down, hub tube upwards. Round holes print vertical.
+  Half A needs tree supports (build plate only) inside its bore: the 1.2 mm bulkhead
+  at 21 mm spans the open 24.4 mm motor bore, and its D-shaped shaft hole is a
+  cantilever with nothing under it (#680). Half B has no supports planned; its three
+  lugs cantilever 5 mm into the bore at 6.8 mm and the axle boss bore closes in short
+  bridges (9.4 mm bore ceiling at 9.55 mm, 6.1 mm magnet pocket ceiling at 12.05 mm);
+  check the lug undersides and the pocket seat on the first print.
 - Frame: back plate down, side walls and stop lip as vertical walls; the
   bearing ring is a 2 mm stub on the motor-side wall (its top arc is a short
   overhang, printed with a support or as a separate ring glued on). The lip's

@@ -18,6 +18,10 @@ Objects: `flap00`..`flap63`, `drum_half_a`, `drum_half_b`, `sleeve`, `wall_motor
    1 black, 2 white, 3 red, 4 orange, 5 yellow, 6 green, 7 blue, 8 violet.
 2. Arrange (A) to spread the objects over plates.
 3. Enable the prime tower on the plates that carry coloured flaps.
+4. Supports for `drum_half_a` only: select it in the Objects list, open its per-object settings
+   (the support icon) and turn on supports, type tree, build plate only. Its bulkhead's D-shaped
+   shaft hole hangs at 21 mm over the open 24.4 mm motor bore with nothing under it. Every other
+   part prints without supports.
 
 Drum and frame parts are black only.
 
