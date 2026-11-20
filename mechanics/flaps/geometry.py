@@ -14,7 +14,7 @@ from typing import Literal, Optional, Sequence
 from build123d import (Align, Part, Plane, Polygon, Pos, Rectangle, Sketch, Text,
                        extrude, mirror, offset, scale)
 
-from flaps.alphabet import Entry
+from flaps.alphabet import Entry, inlay_colour
 from flaps.layout import faces_of_flap
 from flaps.params import FlapParams
 
@@ -118,10 +118,6 @@ def half_on_flap(entry: Entry, half: Half, p: FlapParams) -> Optional[Sketch]:
         part = mirror(part, Plane.XZ)
     mapped = (Pos(0, p.pivot_y) * part) & inlay_region(p)
     return mapped if mapped.area > _MIN_AREA else None
-
-
-def inlay_colour(entry: Entry) -> str:
-    return entry.value if entry.kind == "colour" else "white"
 
 
 def _pocket(sketch: Sketch, z0: float, p: FlapParams) -> Part:

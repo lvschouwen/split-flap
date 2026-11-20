@@ -35,3 +35,12 @@ def load_alphabet(path: Path = DEFAULT) -> tuple[Entry, ...]:
     if len(set(entries)) != FLAP_COUNT:
         raise ValueError("duplicate entries")
     return entries
+
+
+def inlay_colour(entry: Entry) -> str:
+    """The colour an entry's inlay prints in (blank entries have no inlay)."""
+    return entry.value if entry.kind == "colour" else "white"
+
+
+def uses_only_white(entry: Entry) -> bool:
+    return entry.kind == "blank" or inlay_colour(entry) == "white"
