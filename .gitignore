@@ -82,3 +82,4 @@ firmware/v2/Rescue/dependencies.lock
 
 # Mechanics generator output (#670)
 mechanics/flaps/out/
+mechanics/drum/out/
