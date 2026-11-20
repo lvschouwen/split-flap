@@ -102,6 +102,7 @@ run_mech() {
   ensure_venv "$MECH_VENV" "${MECH_PINS[@]}"
   step "mechanics pytest" "$ROOT/mechanics/flaps" "$MECH_VENV/bin/python" -m pytest -q tests/
   step "mechanics drum pytest" "$ROOT/mechanics/drum" "$MECH_VENV/bin/python" -m pytest -q tests/
+  step "mechanics unitkit pytest" "$ROOT/mechanics/unitkit" "$MECH_VENV/bin/python" -m pytest -q tests/
 }
 
 # Maps changed paths to trees. shared/ and buildtools/ reach every firmware

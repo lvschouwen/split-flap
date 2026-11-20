@@ -71,17 +71,19 @@ def _model_root(colours: Sequence[str]) -> tuple[ET.Element, ET.Element, ET.Elem
     return root, resources, ET.SubElement(root, "build")
 
 
-def write_plate(path: Path, placed: Sequence[tuple[Placed, FlapParts]], p: FlapParams,
-                names: Sequence[str] | None = None) -> None:
-    """names: optional per-flap object names (default flapNN)."""
-    flaps = [(where, _flap_parts(parts)) for where, parts in placed]
-    colours = sorted({c for _, fp in flaps for c, _ in fp}, key=COLOUR_SLOTS.__getitem__)
-    root, resources, build = _model_root(colours)
-    next_id = MATERIALS_ID + 1
-    for k, (where, flap_parts) in enumerate(flaps):
+def flap_colours(flaps: Sequence[tuple[Placed, FlapParts]]) -> list[str]:
+    """Colours used by these flaps in AMS slot order (black first)."""
+    return sorted({c for _, parts in flaps for c, _ in _flap_parts(parts)}, key=COLOUR_SLOTS.__getitem__)
+
+
+def add_flaps(resources: ET.Element, build: ET.Element, placed: Sequence[tuple[Placed, FlapParts]],
+              p: FlapParams, colours: Sequence[str], next_id: int,
+              names: Sequence[str] | None = None) -> int:
+    """Add one assembly object per flap (one part per colour) and its build item; returns the next free id."""
+    for k, (where, parts) in enumerate(placed):
         name = names[k] if names else f"flap{where.flap:02d}"
         part_ids = []
-        for colour, solid in flap_parts:
+        for colour, solid in _flap_parts(parts):
             obj = ET.SubElement(resources, "object", id=str(next_id), type="model",
                                 name=f"{name}_{'body' if not part_ids else colour}",
                                 pid=str(MATERIALS_ID), pindex=str(colours.index(colour)))
@@ -97,6 +99,15 @@ def write_plate(path: Path, placed: Sequence[tuple[Placed, FlapParts]], p: FlapP
         ET.SubElement(build, "item", objectid=str(next_id),
                       transform=f"1 0 0 0 1 0 0 0 1 {tx:.4f} {ty:.4f} 0", printable="1")
         next_id += 1
+    return next_id
+
+
+def write_plate(path: Path, placed: Sequence[tuple[Placed, FlapParts]], p: FlapParams,
+                names: Sequence[str] | None = None) -> None:
+    """names: optional per-flap object names (default flapNN)."""
+    colours = flap_colours(placed)
+    root, resources, build = _model_root(colours)
+    add_flaps(resources, build, placed, p, colours, MATERIALS_ID + 1, names)
     _write_zip(Path(path), root)
 
 

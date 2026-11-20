@@ -40,3 +40,5 @@ boss) with the reason.
 - Walls and rails: inside face up; the bottom rail is the flat floor guide.
 - Stop lip: printed on its face, the lower edge S on the bed.
 - Not generated yet: motor clamp pattern, board mounting bosses (#674 pattern), clips between frames.
+
+The whole unit in one file: [`unitkit/`](../unitkit/README.md).

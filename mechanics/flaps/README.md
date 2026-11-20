@@ -67,3 +67,5 @@ Change a value with `--set KEY=VALUE` (any field of `FlapParams`), reprint
 the test plate, and once settled make it the default in `params.py`.
 Glyphs wider than the narrow zone (`@ % W # &` in Barlow Condensed) are
 squeezed horizontally; lowering `cap_frac` reduces that.
+
+The whole unit in one file: [`unitkit/`](../unitkit/README.md).
