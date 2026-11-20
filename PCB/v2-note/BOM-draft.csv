@@ -1,0 +1,34 @@
+Group,Name,Designator,Footprint,Quantity,Manufacturer Part,Supplier,Supplier Part,Status,Note
+MCU,ATmega328P (32-pin TQFP or QFN),U1,TQFP-32 7x7 0.8 mm (QFN-32 5x5 as alternative),1,ATmega328P-AU (or -MU),LCSC,TBD-verify,new,Package choice open (spec section 1); extended JLC part
+MCU,16 MHz crystal SMD 3.2x2.5,Y1,3.2x2.5 mm,1,16 MHz 18 pF-load class,LCSC,TBD-verify,new,Resonator is the fallback (spec section 2)
+MCU,Load capacitor 18-22 pF C0G,"C3,C4",C0402 or C0603,2,,LCSC,TBD-verify,new,Value follows the crystal load capacitance
+MCU,Decoupling 100nF,"C2,C5,C6",C0805,3,GCM21BR11E104KA01L,LCSC,C521242,carried,v1 part (25 V X7R); 5 V rail only; one per VCC/AVCC pin
+MCU,AREF 100nF,C7,C0805,1,GCM21BR11E104KA01L,LCSC,C521242,carried,Optional; AVCC/AREF decoupling for the vitals ADC reads
+MCU,Reset pull-up 10K,R1,R0805,1,RMC080510K1%N,LCSC,C269742,carried,Reset line to 5 V
+MCU,ICSP pads 2x3 (no connector),J1,6 test pads 1.27 mm or Tag-Connect footprint,1,,,,new,Pads only; VCC pad behind an open solder jumper (spec section 7)
+MCU,Debug serial test points,"TP1,TP2",test pad,2,,,,new,PD0/PD1 (SERIAL_ENABLE builds)
+Power,Buck converter 12 V to 5 V,U2,SOT-23-6 class,1,"family: 32 V-input sync buck, fixed 5 V",LCSC,TBD-verify,new,Part and current rating follow the motor choice (spec section 3)
+Power,Buck inductor,L1,"4x4 mm shielded, <= 2 mm tall",1,,LCSC,TBD-verify,new,Value and Isat from the buck datasheet
+Power,Buck input capacitor 12 V,C8,C0805 25 V or higher,1,,LCSC,TBD-verify,new,22uF 10 V (C503893) does NOT carry to the 12 V node
+Power,Buck output capacitor,C9,C0805 or C1206,1,CA45-A-10V-22uF-K,LCSC,C503893,carried,v1 part; fine on the 5 V rail only (10 V rating)
+Power,Bulk input capacitor,C1,C0805 50 V,1,GCJ219R71H334KA12D,LCSC,C527609,carried,v1 330 nF 50 V; hot-plug transient damping may need a bigger part (spec section 3)
+Power,TVS diode 12 V rail,D1,SMA or SOD-123FL,1,,LCSC,TBD-verify,new,Hot-plug and motor-inductive spikes on the bus
+Power,Reverse-polarity protection,Q1,SOT-23 P-MOSFET or Schottky,1,,LCSC,TBD-verify,new,Open question: protect the unit or rely on keyed wiring
+Motor,ULN2003A (SOP-16),U3,SOP-16 10.0x3.9 P1.27,1,ULN2003A,LCSC,C107221,carried,v1 part already SMD; baseline 24BYJ48 12 V unipolar; clamp COM to 12 V
+Motor,Motor connector or pads (5 wire),J2,pads or low-profile 1.25 mm,1,,LCSC,TBD-verify,new,Pin count from the motor (5 unipolar / 4 bipolar); position from #673
+Motor,DRV8833 (alternative to U3),U3-ALT,HTSSOP-16 / WQFN-16,0,DRV8833,LCSC,TBD-verify,alternative,Not populated; only if the bipolar candidate wins in #671
+Motor,TMC2209 (alternative to U3),U3-ALT2,QFN-28 5x5,0,TMC2209,LCSC,TBD-verify,alternative,Not populated; needs a firmware rewrite of motion (spec section 4)
+Hall,SMD hall switch,U4,SOT-23 or X2SON,1,"DRV5032 family or AH3144 class (omnipolar open-drain, active low)",LCSC,TBD-verify,new,Sensitivity vs the drum magnet to be bench-verified
+Hall,Hall pull-up 10K,R2,R0805,1,RMC080510K1%N,LCSC,C269742,carried,v1 value; firmware reads the pin as plain INPUT so the pull-up must be on the board
+Hall,Remote hall pads,J3,3 pads 1.27 mm,1,,,,new,+5 V / GND / OUT; remote hall on a tail of >= 50 mm is required (#673)
+Bus,Bus connector in,J4,4-pin side entry or wire pads,1,,LCSC,TBD-verify,new,+12 V / GND / SDA / SCL; back edge; body up to ~30 mm fits (#673)
+Bus,Bus connector out,J5,4-pin side entry or wire pads,1,,LCSC,TBD-verify,new,Daisy chain; wired in parallel with J4
+UI,Identify LED,D2,LED 0603,1,,LCSC,TBD-verify,new,On PB5 (D13 = LED_BUILTIN): identify blink
+UI,LED series resistor,R3,R0805,1,,LCSC,TBD-verify,new,>= 1K so it does not load SCK during ICSP
+Not carried from v1,AMS1117-3.3,U9,,0,AMS1117-3.3,LCSC,C6186,dropped,No 3.3 V rail on the unit
+Not carried from v1,BSS138 level shifter,"Q1,Q2",,0,BSS138,LCSC,C78284,dropped,Shifter moves to the controller (#675)
+Not carried from v1,DIP switch,SW1,,0,DSWB04LHGET,LCSC,C99418,dropped,Address lives only in EEPROM
+Not carried from v1,ESP-01S,U2,,0,ESP-01S,LCSC,C111009,dropped,Row link moves to the controller (#675)
+Not carried from v1,Arduino Nano,U1,,0,,,,dropped,Replaced by the bare ATmega328P
+Not carried from v1,L7805CV,U3,,0,L7805CV,LCSC,C111887,dropped,Replaced by the buck
+Not carried from v1,JST XH connectors,"U6,U7,U8,U10",,0,B3B-XH-A / B4B-XH-AM / B5B-XH-AM,LCSC,C144394 / C161871 / C161872,dropped,Too tall for the envelope
