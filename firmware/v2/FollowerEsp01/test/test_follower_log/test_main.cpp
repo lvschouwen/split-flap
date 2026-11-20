@@ -166,6 +166,96 @@ static void test_stamp_survives_the_largest_uptime() {
   TEST_ASSERT_EQUAL_STRING("[4294967295] z\n", drain(r, cursor).c_str());
 }
 
+// --- /log reader (#679) -------------------------------------------------------------
+
+// The whole stream: chunks of `cap` from offset 0 until the reader ends.
+static String stream(const FollowerLogRing& r, const FollowerLogRing::Snapshot& snap,
+                     size_t cap, bool* overtakenOut = nullptr) {
+  String all;
+  char out[32];
+  size_t sent = 0;
+  for (;;) {
+    bool over = false;
+    size_t n = r.readSnapshot(snap, sent, out, cap, over);
+    if (overtakenOut != nullptr && over) *overtakenOut = true;
+    if (n == 0) break;
+    for (size_t i = 0; i < n; i++) all += out[i];
+    sent += n;
+  }
+  return all;
+}
+
+static void test_reader_streams_all_without_moving_the_link_cursor() {
+  FollowerLogRing r;
+  r.append("one\ntwo\n", 8);
+  uint32_t linkCursor = 4;  // the wall link has had "one"
+  auto snap = r.snapshot();
+  TEST_ASSERT_EQUAL_STRING("one\ntwo\n", stream(r, snap, 3).c_str());
+  TEST_ASSERT_EQUAL_UINT32(4, linkCursor);
+  // The link still gets "two" afterwards: reading /log took nothing from it.
+  TEST_ASSERT_EQUAL_STRING("two\n", drain(r, linkCursor).c_str());
+}
+
+static void test_reader_on_an_empty_ring_ends_at_once() {
+  FollowerLogRing r;
+  TEST_ASSERT_EQUAL_STRING("", stream(r, r.snapshot(), 8).c_str());
+}
+
+static void test_reader_wraps_and_opens_on_a_whole_line() {
+  FollowerLogRing r;  // 16 bytes
+  r.append("aaaa\nbbbb\n", 10);
+  r.append("cc\ndd\n", 7);  // 17 written: "aaaa\n" is cut, 'a' x1 gone
+  auto snap = r.snapshot();
+  // the cut first line is skipped, the rest comes whole across the wrap
+  TEST_ASSERT_EQUAL_STRING("bbbb\ncc\ndd\n", stream(r, snap, 5).c_str());
+}
+
+static void test_reader_ignores_lines_appended_after_the_snapshot() {
+  FollowerLogRing r;
+  r.append("one\n", 4);
+  auto snap = r.snapshot();
+  r.append("two\n", 4);
+  TEST_ASSERT_EQUAL_STRING("one\n", stream(r, snap, 8).c_str());
+}
+
+static void test_reader_overtaken_mid_stream_stops_cleanly() {
+  FollowerLogRing r;
+  r.append("aaa\nbbb\nccc\n", 12);
+  auto snap = r.snapshot();
+  char out[32];
+  bool over = false;
+  TEST_ASSERT_EQUAL_size_t(4, r.readSnapshot(snap, 0, out, 4, over));
+  TEST_ASSERT_FALSE(over);
+  r.append("dddddddd\n", 9);  // 21 written: the ring now starts past byte 4
+  TEST_ASSERT_EQUAL_size_t(0, r.readSnapshot(snap, 4, out, 4, over));
+  TEST_ASSERT_TRUE(over);
+}
+
+static void test_reader_untouched_by_appends_that_keep_its_bytes() {
+  FollowerLogRing r;
+  r.append("aaa\nbbb\n", 8);
+  auto snap = r.snapshot();
+  char out[32];
+  bool over = false;
+  r.append("c\n", 2);  // 10 written, nothing evicted yet
+  TEST_ASSERT_EQUAL_size_t(4, r.readSnapshot(snap, 4, out, 8, over));
+  TEST_ASSERT_FALSE(over);
+  TEST_ASSERT_EQUAL_MEMORY("bbb\n", out, 4);
+}
+
+static void test_one_unfinished_line_in_a_full_ring_reads_nothing() {
+  FollowerLogRing r;
+  r.append("abcdefghijklmnopqrs", 19);  // wrapped, no newline held
+  TEST_ASSERT_EQUAL_STRING("", stream(r, r.snapshot(), 8).c_str());
+}
+
+static void test_serve_floor() {
+  TEST_ASSERT_FALSE(followerLogServeAllowed(FOLLOWER_LOG_SERVE_MIN_BLOCK - 1));
+  TEST_ASSERT_TRUE(followerLogServeAllowed(FOLLOWER_LOG_SERVE_MIN_BLOCK));
+  // never below the block FollowerEscalation.h counts as low
+  TEST_ASSERT_TRUE(FOLLOWER_LOG_SERVE_MIN_BLOCK > 4096U);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fresh_ring_has_no_line);
@@ -180,5 +270,13 @@ int main(int, char**) {
   RUN_TEST(test_every_cursor_reads_the_same_tail);
   RUN_TEST(test_every_line_opens_with_its_uptime_stamp);
   RUN_TEST(test_stamp_survives_the_largest_uptime);
+  RUN_TEST(test_reader_streams_all_without_moving_the_link_cursor);
+  RUN_TEST(test_reader_on_an_empty_ring_ends_at_once);
+  RUN_TEST(test_reader_wraps_and_opens_on_a_whole_line);
+  RUN_TEST(test_reader_ignores_lines_appended_after_the_snapshot);
+  RUN_TEST(test_reader_overtaken_mid_stream_stops_cleanly);
+  RUN_TEST(test_reader_untouched_by_appends_that_keep_its_bytes);
+  RUN_TEST(test_one_unfinished_line_in_a_full_ring_reads_nothing);
+  RUN_TEST(test_serve_floor);
   return UNITY_END();
 }

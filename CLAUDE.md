@@ -13,7 +13,7 @@ Arduino-based split-flap display: a master MCU drives per-flap units over I2C. P
 
 - `firmware/v2/Master/` — S3 master; operator page (`web/`) and operator API (`/api/v2`, listed by `GET /api`)
 - `firmware/v2/Unit/` — Nano unit: stepper + hall homing, I2C slave, EEPROM offset/address
-- `firmware/v2/FollowerEsp01/` — ESP-01 row board: dials its master over the wall link; serves only firmware upload, `GET /settings` and `POST /pair`
+- `firmware/v2/FollowerEsp01/` — ESP-01 row board: dials its master over the wall link; serves only firmware upload, `GET /settings`, `GET /log` and `POST /pair`
 - `firmware/v2/Rescue/` — break-glass image for the factory slot · `Bootloader/` — the S3 second-stage bootloader
 - `firmware/v2/shared/` — pure logic for every tree; `SplitFlapProtocol.h` is the master↔unit I2C contract + `SFP_PROTOCOL_VERSION`
 - `firmware/v2/link/` (wall link proto), `buildtools/` (build python), `release/` (release fetch + trust) — outside `shared/` so an edit does not move the Unit source head

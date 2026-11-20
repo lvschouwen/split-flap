@@ -15,10 +15,11 @@ def _code(name):
     return re.sub(r"(?m)^\s*//[^\n]*$", "", src)
 
 
-def test_the_row_serves_three_routes():
+def test_the_row_serves_four_routes():
     served = set(ROUTE.findall(_code("FollowerWeb.cpp")))
     assert served == {("/firmware/master", "HTTP_POST"),
                       ("/settings", "HTTP_GET"),
+                      ("/log", "HTTP_GET"),
                       ("/pair", "HTTP_POST")}
 
 
@@ -88,3 +89,18 @@ def test_the_log_goes_up_only_while_the_master_asks():
     assert tick.index("if (!logOn) return;") < tick.index("nextLine(")
     drop = link[link.index("void drop("):]
     assert "logOn = false;" in drop[:drop.index("\n}\n")]
+
+
+def test_the_log_route_only_reads():
+    # #679: GET only, no state change, no CORS opening, and it reads through
+    # the snapshot reader, never the wall link's cursor.
+    web = _code("FollowerWeb.cpp")
+    reg = web[web.index("static void registerLogEndpoint("):]
+    reg = reg[:reg.index("\n}\n")]
+    assert 'server.on("/log", HTTP_GET' in reg
+    assert "HTTP_POST" not in reg and "HTTP_ANY" not in reg
+    assert "Access-Control" not in web and "addHeader" not in reg
+    assert "readSnapshot(" in reg and "nextLine(" not in reg
+    assert "503" in reg and "followerLogServeAllowed(" in reg
+    assert reg.index("followerLogServeAllowed(") < reg.index("snapshot()")
+    assert "String" not in reg.replace("request->send(503", "")

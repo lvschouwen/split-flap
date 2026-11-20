@@ -52,8 +52,8 @@ def _same_method(a, b):
     return a == b or "HTTP_ANY" in (a, b)
 
 
-# The row board keeps three routes; the others serve many.
-FEWEST_ROUTES = {"FollowerEsp01": 3}
+# The row board keeps four routes; the others serve many.
+FEWEST_ROUTES = {"FollowerEsp01": 4}
 
 
 def test_every_board_registers_routes():

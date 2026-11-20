@@ -14,6 +14,7 @@
 #include "FollowerConfig.h"
 #include "FollowerJson.h"
 #include "FollowerLink.h"
+#include "FollowerLog.h"
 #include "FollowerOtaImage.h"  // #540: gzip upload checks
 #include "FollowerPairPolicy.h"
 #include "FollowerRescue.h"
@@ -310,6 +311,29 @@ static void masterOtaFinish() {
   }
 }
 
+// --- GET /log (#679) -----------------------------------------------------------------
+
+// The row's own log, read without the wall link: the ring streams as text in
+// FOLLOWER_LOG_CHUNK pieces straight from its buffer (no copy). The chunk
+// callback is addressed by the bytes already sent, so it holds only the
+// snapshot of the moment of the request and never touches the link's cursor.
+static void registerLogEndpoint(AsyncWebServer& server) {
+  server.on("/log", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (!followerLogServeAllowed(ESP.getMaxFreeBlockSize())) {
+      request->send(503, "text/plain", F("Low memory"));
+      return;
+    }
+    const FollowerLogRing::Snapshot snap = followerLogRing().snapshot();
+    request->sendChunked("text/plain",
+      [snap](uint8_t* out, size_t maxLen, size_t sent) -> size_t {
+        const size_t cap = maxLen < FOLLOWER_LOG_CHUNK ? maxLen : FOLLOWER_LOG_CHUNK;
+        bool overtaken = false;
+        return followerLogRing().readSnapshot(snap, sent, (char*)out, cap,
+                                              overtaken);
+      });
+  });
+}
+
 // --- endpoint registration ------------------------------------------------------------
 
 void webEndpointsInit(AsyncWebServer& server) {
@@ -317,6 +341,7 @@ void webEndpointsInit(AsyncWebServer& server) {
   // first-match-wins scan for an oversized body.
   attachBodyLimitGuard(server);
   registerMasterFirmwareEndpoint(server);
+  registerLogEndpoint(server);
 
   // Who this board is and what it runs. ota-flash.sh reads `version` and
   // `plat` here before and after an upload.

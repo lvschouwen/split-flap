@@ -92,7 +92,74 @@ struct FollowerLogRing {
     }
     return false;
   }
+
+  // --- /log reader (#679): independent of nextLine's cursor ----------------
+  // A stream is a snapshot [start, end) of the monotonic cursor taken when the
+  // request arrives; every chunk is addressed by its byte offset into it, so
+  // a retried chunk reads the same bytes and nothing here keeps state that the
+  // wall link's cursor could share. `start` skips a first line the ring has
+  // already cut into, so the text opens on a whole line.
+  struct Snapshot {
+    uint32_t start = 0;
+    uint32_t end = 0;
+  };
+
+  Snapshot snapshot() const {
+    Snapshot s;
+    s.end = written;
+    s.start = oldestCursor();
+    if (s.start == 0) return s;  // nothing evicted: the first byte is a line start
+    uint32_t c = s.start;
+    for (size_t i = 0; i < fill() && c < s.end; i++, c++) {
+      if (byteAt(c) == '\n') {
+        s.start = c + 1;
+        return s;
+      }
+    }
+    s.start = s.end;  // the whole ring is one unfinished line
+    return s;
+  }
+
+  // Up to cap bytes of the snapshot from `offset` on. Returns the count (0 at
+  // the end, which is the end of the stream). If appends have since evicted
+  // the bytes wanted, `overtaken` is set and 0 returned: the stream stops
+  // there rather than send bytes that were overwritten.
+  size_t readSnapshot(const Snapshot& s, size_t offset, char* out, size_t cap,
+                      bool& overtaken) const {
+    overtaken = false;
+    const uint32_t total = s.end - s.start;
+    if (offset >= total) return 0;
+    const uint32_t cursor = s.start + (uint32_t)offset;
+    if (cursor < oldestCursor()) {
+      overtaken = true;
+      return 0;
+    }
+    size_t n = (size_t)(total - offset);
+    if (n > cap) n = cap;
+    for (size_t i = 0; i < n; i++) out[i] = byteAt(cursor + (uint32_t)i);
+    return n;
+  }
+
+ private:
+  // The byte at a cursor value the ring still holds.
+  char byteAt(uint32_t cursor) const {
+    const size_t back = (size_t)(written - cursor);
+    return buf[(head + (size_t)FOLLOWER_LOG_SIZE - back) % FOLLOWER_LOG_SIZE];
+  }
 };
+
+// Below this largest free block GET /log answers 503 (#679). 4096 is where
+// FollowerEscalation.h starts its low-heap clock toward a self-restart, so the
+// stream must never be what takes the row there; the 2048 on top covers the
+// response object, the chunk buffer and the TCP segment it is copied into.
+// A field row has ~29 KB free, so this refuses only a row already in trouble.
+#define FOLLOWER_LOG_SERVE_MIN_BLOCK 6144U
+// Bytes handed to the web library per chunk.
+#define FOLLOWER_LOG_CHUNK 256U
+
+inline bool followerLogServeAllowed(uint32_t largestFreeBlock) {
+  return largestFreeBlock >= FOLLOWER_LOG_SERVE_MIN_BLOCK;
+}
 
 // Print-derived sink so every type SerialPrint can format lands in the ring
 // without a pile of overloads (mirrors the master's WebLogPrinter).
