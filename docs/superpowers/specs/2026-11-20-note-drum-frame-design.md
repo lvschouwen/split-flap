@@ -9,7 +9,7 @@ outline (0.8 mm flap, round pivot pin) this document builds around. #671 chooses
 ## Intent and why
 
 A drum that holds 64 flaps and a unit frame that stacks at **41.5 mm** (column)
-and **73 mm** (row) within **~95 mm depth**, with the motor inside the drum
+and **73 mm** (row) within the **101 mm case depth** (99.3 mm used, section 6), with the motor inside the drum
 hub. Success test: the **hand-turn test assembly** prints on the X1C, all 64
 flaps sit in the drum, the drum turns freely by hand, and each flap falls onto
 the stop one at a time.
@@ -48,7 +48,7 @@ the stop one at a time.
 | R_p, wall, screws | 18.5 mm, 1.2 mm, M2 | this document |
 | chord factor k | 0.098135 = 2·sin(π/64) | |
 
-Envelope: 41.5 x 73 x ~95 mm (Note pitch; #670). Axis along x (the column
+Envelope: 41.5 x 73 x 99.3 mm of 101 (Note pitch; #670). Axis along x (the column
 direction), display plane at the front.
 
 ## Assumptions (stated, each one checkable)
@@ -292,12 +292,39 @@ the wall, not outboard.
 At R_p = 18.5 the guided mechanism is 69.1 high, 1.5 mm to spare; rows stack
 flush, a 0.2 mm printed tolerance per frame goes into that 1.5 mm.
 
-**Depth (~95).** Front wall at z = −1.2 … 0 (window plate). Drum axis at
-z = R_p = 18.5; the drum back at 18.5 + 19.7 = 38.2; flap reach on the rear
-side √(R_p² + L²) = 34.6 from the axis → z = 53.1. That leaves 95 − 53.1 − 1.2 =
-**~40 mm** behind the mechanism for the board (#674: ATmega328PB, driver, encoder
-connector, plug). The front of the pack is open in depth: falling flaps stay
-within z ∈ [0, ~L] ahead of the stop.
+**Depth (101 mm case, #675).** The stack runs from the front wall to the backplane,
+z from the display plane; the unit board spec (#674) counted it at 101.8 mm against 101
+with no rear cover. It closes as follows (changes from that count in the last column):
+
+| Layer | z from | z to | Change |
+|-------|--------|------|--------|
+| Front wall (1.2), mechanism, flap tips (axis z = R_p = 18.5; rear reach 18.5 + 34.6) | -1.2 | 53.1 | none |
+| Clearance, flap tips to PSU | 53.1 | 53.7 | 1.0 to 0.6 |
+| PSU module (UHP-200-12 class) over the boards of 5 top-row bays | 53.7 | 79.7 | none |
+| Insulating sheet (0.5 mm film) | 79.7 | 80.2 | 1.0 to 0.5 |
+| Unit-board component gate | 80.2 | 88.2 | none (8 mm; C11 <= 5 is the tallest) |
+| Board | 88.2 | 89.8 | none |
+| Rear standoff: plug header body 2.5 + 0.2 | 89.8 | 92.5 | 3.1 to 2.7 |
+| Back wall (1.2), with the `plug_slot` | 92.5 | 93.7 | none |
+| Socket protruding past the wall (4.0 body, 1.2 of it sunk into the slot) | 93.7 | 96.5 | socket recessed |
+| Backplane (1.6) = the rear skin | 96.5 | 98.1 | none |
+
+Total -1.2 to 98.1 = **99.3 mm, 1.7 mm spare in 101** (was 101.8). Three changes: the
+socket's body sits in the wall's `plug_slot` (the slot grows to the socket outline,
+placeholder 10 x 4 mm still holds), the header body sits flush against the socket face
+(the pin stub below the board falls from ~6.8 to ~6.2 mm, still a stock length), and
+0.9 mm comes out of the two clearances (flap tips are guided inside the frame and never
+reach the PSU side; the sheet is a film, not a board). **No rear cover on the unit:** the
+backplane is the rear skin of a row; its parts face the unit, nothing is exposed behind
+it. If the case needs a back panel (#675), it goes behind the backplane at z 98.1,
+at most 1.0 mm thick leaving 0.7 mm; a thicker one needs the PSU module recessed or
+the 26 mm part swapped. Frames without a PSU above them have 26 mm more room, but the
+frame is one design. The drum spec's `depth_budget` parameter (101.0) and a stack test
+pin these numbers.
+
+The front of the pack is open in depth: falling flaps stay within z in [0, ~L] ahead
+of the stop. Behind the mechanism the board has z 54 to 92.5 (#674: ATmega328PB, driver,
+encoder connector, plug).
 
 **Mounting points and the row backplane.** Four M2 bosses on the back plate's inner
 face for the board (hole pattern is #674's: parameters `board_hole_xy`, default none
@@ -308,8 +335,8 @@ until #674). Each frame's back plate also carries (#674 section 6):
 - two registration bosses (Ø1.7 pilots for M2 x 6 self-tapping screws) at `peg_x` either
   side of the slot; the backplane has one round hole and one slot along y for them.
 
-The backplane lies in the ~6 mm strip behind the ~95 mm envelope (#675: 101 mm case;
-backplane 1.6 mm plus an SMD socket of ~4 mm) and clamps the frames of a row: the
+The backplane lies in the ~4.4 mm strip behind the back wall (z 93.7 to 98.1) (#675: 101 mm case; see Depth above: the socket
+sits in the wall slot, the backplane is the rear skin) and clamps the frames of a row: the
 column pitch is the backplane's hole pitch (41.5 mm +-0.1 mm), not the sum of 15 print
 tolerances; the 0.65 mm of side slack per unit (above) absorbs the difference. Frames
 join to neighbours by their side walls (clip or M2); the full 15 x 3 wall mount is out
