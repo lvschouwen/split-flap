@@ -56,8 +56,9 @@ settings makes it load geometry only (no parts, no colours).
 - `cap_frac` 0.70 is the largest cap height at which no Barlow glyph is clipped;
   a clipped glyph or a failing `stroke_offset` stops the run with its name.
 - Test plate: 11 stress flaps (`% " . , : @ M W 8`, heart, red) plus `A`
-  at 0.3 mm inlay (`flap01_inlay03`) and 1.2 mm thick (`flap01_t12`).
-  Judge legibility, white show-through, tab strength (bend by hand).
+  at 0.3 mm inlay (`flap01_inlay03`), 0.7 mm thick (`flap01_t07`) and 1.0 mm
+  thick with 0.4 mm inlay (`flap01_t10`), bracketing the 0.8 mm default.
+  Judge legibility, white show-through, pin strength (bend by hand).
 
 ## Tuning loop
 

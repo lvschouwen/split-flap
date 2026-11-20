@@ -23,7 +23,7 @@ The effort splits into four projects, done in order, each with its own design:
 
 This document covers only project 1. Its success test: a test plate printed on
 the X1C with two AMS comes off with legible characters, clean inlays, intact
-pivot tabs, and the full 64-flap plates are ready to slice.
+pivot pins, and the full 64-flap plates are ready to slice.
 
 ## Goals
 
@@ -63,17 +63,19 @@ pivot tabs, and the full 64-flap plates are ready to slice.
   Characters are inlaid 0.4 mm on both faces as separate parts (`FlapN_1`,
   `FlapN_2` in the archive). The tab shape fits the current drum; the new drum
   (project 2) will be designed to the new flap, not the reverse.
-- **Target flap:** ~**36 × 31 mm**, 1.0 mm thick by default, same outline scheme
-  (narrow hinge zone + tabs, full width above). Tabs scale less than linearly:
-  keep ≥ 1.0 mm tab height and ≥ 1.5 mm tab reach so they survive.
+- **Target flap:** ~**36 × 31 mm**, 0.8 mm thick by default, same outline scheme
+  (narrow hinge zone, full width above) with **round pivot pins** instead of
+  rectangular tabs: a Ø1.0 circle on the pivot axis (mid-thickness), clipped
+  flat to the flap thickness so it prints on the bed, rotating in an envelope of
+  Ø1.0. Keep pin_d ≥ 1.0 mm, pin_d ≥ thickness and ≥ 1.5 mm reach so they survive.
 - **Split-character rule:** character *i* shows its **top half on the front of
   flap i** and its **bottom half on the back of flap i−1** (circularly), with the
   back-face half rotated 180° about the hinge axis so it reads upright when the
   flap has fallen. Glyphs are cut at the hinge line of the assembled pair, so
   the two halves meet with no offset across the gap.
 - **Hinge convention (flap coordinates):** y = 0 is the hinge edge, the edge
-  with the tabs, and the flap extends to y = H (≈31 mm). The **pivot axis** is
-  the tab centre line, y = y_p (≈1.8 mm), and it lies on the display's
+  with the pins, and the flap extends to y = H (≈31 mm). The **pivot axis** is
+  the pin axis, y = y_p (`pivot_y`, 1.8 mm), and it lies on the display's
   horizontal midline. A raised flap (front visible) has its hinge at the
   bottom. A fallen flap (back visible) hangs with its hinge at the top. The
   glyph is placed in display coordinates centred on the midline, then split
@@ -87,12 +89,12 @@ pivot tabs, and the full 64-flap plates are ready to slice.
   the same shape cut into the black body, and the parts do not overlap. This
   matches the `FlapN_1/_2` parts in the archive. Flaps print flat with the
   **front face on the build plate**. The back-face inlay is the top surface.
-  The default layer height is 0.2 mm, with 0.4 mm inlays (2 layers). The test
-  plate adds a 0.3 mm inlay variant and a 1.2 mm-thick variant, to judge
-  show-through against the black core.
+  The default layer height is 0.2 mm, with 0.2 mm inlays (1 layer, 0.4 mm black
+  core). The test plate adds a 0.3 mm inlay variant and 0.7 mm and 1.0 mm thick
+  variants, to judge show-through against the black core.
 - **Outline values are free to tune now.** Nothing mates with them yet. The
   drum (project 2) is built around whatever the test plate proves. The test
-  plate's tab check is therefore "tabs print whole, are straight, and survive
+  plate's pin check is therefore "pins print whole, are straight, and survive
   a bend by hand". Fit comes with the drum.
 - **Colour flaps:** a colour flap is a black body with a **full-face inlay**
   in its colour. Its back face still carries the bottom half of the next flap
@@ -169,7 +171,7 @@ Lucas picked 1 (no spike first).
   `params.py` (all dimensions), `alphabet.*`, `fonts/`, `tests/`, a README with
   the print recipe. Output goes to `mechanics/flaps/out/` (gitignored); generated
   files are not committed.
-- **Inlay:** 0.4 mm per face on a 1.0 mm flap (0.2 mm black core where front and
+- **Inlay:** 0.2 mm per face on a 0.8 mm flap (0.4 mm black core where front and
   back characters overlap); the test plate includes a 0.3 mm variant to compare
   show-through.
 - **Test plate (~10 flaps):** `%`, `"`, `.`, `,`, `:`, `@`, ♥, `M`/`W` (wide
@@ -180,7 +182,7 @@ Lucas picked 1 (no spike first).
 
 ## Left to the builder
 
-- The exact outline curves, tab and clearance values within the constraints.
+- The exact outline curves, pin and clearance values within the constraints.
 - 3mf structure details (one object per flap with per-colour parts, or one
   object per colour per plate) — whichever Bambu Studio imports as assignable
   parts; verify by importing one.

@@ -14,7 +14,10 @@ from flaps.threemf import write_plate
 TEST_FRONTS = ['%', '"', '.', ',', ':', '@', 'M', 'W', '8']
 TEST_COLOUR_FLAP = 57
 VARIANT_FLAP = 1
-VARIANTS = (("inlay03", {"inlay_depth": 0.3}), ("t12", {"thickness": 1.2}))
+# Thickness variants bracket the 0.8 default (pin_d caps thickness at 1.0); inlay depth stays below half.
+VARIANTS = (("inlay03", {"inlay_depth": 0.3}),
+            ("t07", {"thickness": 0.7}),
+            ("t10", {"thickness": 1.0, "inlay_depth": 0.4}))
 
 
 def _parse_set(items: Sequence[str]) -> dict[str, float]:

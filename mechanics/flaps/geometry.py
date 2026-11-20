@@ -11,8 +11,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional, Sequence
 
-from build123d import (Align, Part, Plane, Polygon, Pos, Rectangle, Sketch, Text,
-                       extrude, mirror, offset, scale)
+from build123d import (Align, Box, Cylinder, Part, Plane, Polygon, Pos, Rectangle, Rot,
+                       Sketch, Text, extrude, mirror, offset, scale)
 
 from flaps.alphabet import Entry, inlay_colour
 from flaps.layout import faces_of_flap
@@ -36,11 +36,22 @@ class FlapParts:
 
 def flap_outline(p: FlapParams) -> Sketch:
     nw, w = p.narrow_width / 2, p.width / 2
-    t0, t1 = p.tab_y0, p.tab_y0 + p.tab_h
-    right = [(nw, 0), (nw, t0), (w, t0), (w, t1), (nw, t1), (nw, p.narrow_height),
-             (w, p.narrow_height), (w, p.height)]
+    right = [(nw, 0), (nw, p.narrow_height), (w, p.narrow_height), (w, p.height)]
     left = [(-x, y) for x, y in reversed(right)]
     return Sketch() + Polygon(*right, *left, align=None)
+
+
+def pivot_pins(p: FlapParams) -> tuple[Part, Part]:
+    """(left, right) pivot pins: a pin_d circle on the pivot axis, clipped to
+    0 <= z <= thickness so each prints with flats on the bed and on top."""
+    reach = p.tab_reach
+    pins = []
+    for side in (-1, 1):
+        x = side * (p.narrow_width + reach) / 2
+        axis = Pos(x, p.pivot_y, p.thickness / 2)
+        round_pin = axis * (Rot(0, 90, 0) * Cylinder(p.pin_d / 2, reach))
+        pins.append(round_pin & (axis * Box(reach, p.pin_d, p.thickness)))
+    return pins[0], pins[1]
 
 
 def inlay_region(p: FlapParams) -> Sketch:
@@ -146,5 +157,7 @@ def build_flap(i: int, alphabet: Sequence[Entry], p: FlapParams) -> FlapParts:
         body = body - solid
         colour = inlay_colour(entry)
         inlays[colour] = inlays[colour] + solid if colour in inlays else solid
+    for pin in pivot_pins(p):
+        body = body + pin
     return FlapParts(body=body, inlays=inlays)
 

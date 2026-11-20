@@ -16,8 +16,8 @@ def _assemblies(path):
 def test_test_plate_smoke(tmp_path, capsys):
     assert main(["--test-plate", "--out", str(tmp_path)]) == 0
     names = _assemblies(tmp_path / "test-plate.3mf")
-    assert len(names) == 13
-    assert {"flap01_inlay03", "flap01_t12", "flap57"} <= set(names)
+    assert len(names) == 14
+    assert {"flap01_inlay03", "flap01_t07", "flap01_t10", "flap57"} <= set(names)
     assert "test-plate.3mf" in capsys.readouterr().out
 
 
