@@ -1,6 +1,6 @@
 # Note-size drum and unit frame: a generated 64-flap drum for the X1C — design
 
-Issue: #673 · Epic: #676 · Status: design settled by Lucas 2026-11-20; motor-dependent questions open at the end
+Issue: #673 · Epic: #676 · Status: design settled by Lucas 2026-11-20, round 2 (encoder magnet and post, row backplane) folded in; motor-dependent questions open at the end
 
 Project 2 of the Note-size wall; sibling of
 `2026-11-20-note-size-flaps-design.md` (#670, flaps), which carries the flap
@@ -175,7 +175,7 @@ parameters; the hand-turn test confirms it (section 9).
   a spigot centres the halves. The lugs sit beyond the motor: the hub interior is
   2 · 16.5 = 33.0 mm, the 24BYJ48 takes 19 and the bulkhead 1.2, leaving 12.8
   mm for the two 4 mm lug layers. Half A (motor side) carries an internal
-  bulkhead with the shaft coupling; half B (far side) an axle bore.
+  bulkhead with the shaft coupling; half B (far side) an axle boss with the magnet pocket (section 7).
 - **Motor adapter sleeve:** a separate printed insert with outer Ø24.4 and
   inner Ø = the motor body: 24 mm (24BYJ48: sleeve = 0.2 clearance only,
   or none), 15 mm + clearance (15BY25-560A), 10 mm + clearance (planetary),
@@ -199,13 +199,19 @@ parameters; the hand-turn test confirms it (section 9).
   (section 6), and it clears the flaps (bodies end at ±16.25, pins sit inside
   the hole ring at R_p). The rim and ring are printed PETG on PETG; if the
   hand-turn shows drag, the ring bore opens by 0.1 (parameter `ring_clear`).
-- **Far end:** a fixed 3 mm steel pin pressed in the far wall projects 6 mm
-  into half B's axle bore. Plain bearing: a PETG/PLA bore Ø3.2 (3 + 0.2 for the
-  A3 undersizing), 6 mm long. 623 ball bearings (3 x 10 x 4) do not fit the
-  1.2 mm wall plus a 4 mm boss in the 4.5 mm side budget (section 6).
+- **Far end:** a fixed **printed post** on the far wall plate carries the drum. A steel
+  pin would sit on the axis where the encoder magnet and sensor (section 7) must go, and
+  steel next to the magnet would disturb its field. Ø9.0 PETG journal, 6.0 mm engaged in
+  half B's axle boss (bore Ø9.4: 9.0 + 0.2 for the A3 undersizing + 0.2 running
+  clearance), printed in one piece with the far wall plate (section 7). Plain bearing, PETG on
+  PETG like the motor-side ring; the Ø9 journal carries the same side load at lower
+  pressure than the 3 mm pin did. If the hand-turn shows drag or wear, the fallback is
+  the motor-side ring mirrored on the far wall (`ring_clear`) with the post only
+  centring the sensor. 623 ball bearings (3 x 10 x 4) still do not fit the 1.2 mm wall
+  in the 4.5 mm side budget (section 6).
 - Side load: the drum weighs 64 flaps · ~0.9 g + printed halves, 100–150 g
   total (assumption: weigh it on the print), carried by the ring at the motor
-  end and the 3 mm pin at the far end.
+  end and the printed post at the far end.
 
 ## 4. Flap stop and release
 
@@ -278,8 +284,8 @@ the outer drum faces of neighbouring columns holds: one 1.2 mm wall per unit
 (2.4), a 0.4 mm drum-to-wall gap each side (0.8): 3.2 mm used, **1.3 mm slack**
 for the stacking tolerance (0.65 per unit, ≥ 0.4 mm each way for 0.2 mm print
 error). So the frame is a thin shell: no room for a boss in the wall. The
-far-end pin boss protrudes **inboard** into the hub bore (the bore is empty
-beyond the motor), and the motor-side bearing ring (section 3) sits inboard of
+far-end post and its boss (section 7) protrude **inboard** into the hub bore
+(the bore is empty beyond the motor), and the motor-side bearing ring (section 3) sits inboard of
 the wall, not outboard.
 
 **Rows (73 mm).** Mechanism 70.6 + walls 2 · 1.2 = 73.0 mm exactly (section 1c).
@@ -289,26 +295,77 @@ flush, a 0.2 mm printed tolerance per frame goes into that 1.5 mm.
 **Depth (~95).** Front wall at z = −1.2 … 0 (window plate). Drum axis at
 z = R_p = 18.5; the drum back at 18.5 + 19.7 = 38.2; flap reach on the rear
 side √(R_p² + L²) = 34.6 from the axis → z = 53.1. That leaves 95 − 53.1 − 1.2 =
-**~40 mm** behind the mechanism for the board (#674, ATmega328P, driver, hall,
-connectors). The front of the pack is open in depth: falling flaps stay
+**~40 mm** behind the mechanism for the board (#674: ATmega328PB, driver, encoder
+connector, plug). The front of the pack is open in depth: falling flaps stay
 within z ∈ [0, ~L] ahead of the stop.
 
-**Mounting points.** Four M2 bosses on the back face for the board (hole
-pattern is #674's: parameters `board_hole_xy`, default none until #674).
-Frames join to neighbours by their side walls (clip or M2); the full 15 x 3
-wall mount is out of scope.
+**Mounting points and the row backplane.** Four M2 bosses on the back plate's inner
+face for the board (hole pattern is #674's: parameters `board_hole_xy`, default none
+until #674). Each frame's back plate also carries (#674 section 6):
 
-## 7. Hall magnet pocket
+- a slot `plug_slot` (placeholder 10 x 4 mm, for a 1.27 mm 1 x 6 header until the plug family is picked) through
+  which the board's plug reaches the row backplane;
+- two registration bosses (Ø1.7 pilots for M2 x 6 self-tapping screws) at `peg_x` either
+  side of the slot; the backplane has one round hole and one slot along y for them.
 
-Parameters: magnet Ø3.0 x 1.0 mm disc neodymium (assumption; the existing
-unit's magnet size is the one to copy, check at implementation, open question 4), pocket
-Ø3.1 deep 1.1 on the **outer face of one disc**, radius 15.5 (inside the
-annulus between hub 13.4 and hole ring 17.3: 15.5 ± 1.6 = 13.9–17.1 fits),
-angle θ_m a parameter. The disc is 2.0 thick: 0.9 mm floor behind the magnet.
-Sensor (DRV5032/AH3144) sits on the side wall at the same radius; the gap
-sensor-to-magnet is the 0.4 mm drum gap plus the wall. Final placement is
-linked to the board outline (#674). Home flap and θ_m: firmware's concern
-(#675 alphabet).
+The backplane lies in the ~6 mm strip behind the ~95 mm envelope (#675: 101 mm case;
+backplane 1.6 mm plus an SMD socket of ~4 mm) and clamps the frames of a row: the
+column pitch is the backplane's hole pitch (41.5 mm +-0.1 mm), not the sum of 15 print
+tolerances; the 0.65 mm of side slack per unit (above) absorbs the difference. Frames
+join to neighbours by their side walls (clip or M2); the full 15 x 3 wall mount is out
+of scope.
+
+## 7. Encoder magnet, post and wiring groove
+
+The hall is gone (#674 section 5): an AS5600-class angle sensor reads a **diametric
+magnet on the drum's far axle end**. The magnet turns with the drum on its axis; the
+chip sits on a fixed post, coaxial and facing it. There is no room outboard of the far
+wall (section 6), so both live inside the far-end axle boss, where the hub is empty
+beyond the motor.
+
+### Stack-up (x measured inward from the far wall's inner face, mm)
+
+| Feature | from | to | Note |
+|---------|------|----|------|
+| Drum-to-wall gap | 0 | 0.4 | the disc's outer face is at 0.4 |
+| Far disc | 0.4 | 2.4 | 2.0 thick |
+| Post journal in the boss bore | 0.4 | 6.4 | 6.0 engaged; `post_d` 9.0, bore 9.4 |
+| Sensor board (0.8) and chip (1.75) on the post tip | 6.4 | 8.95 | round Ø8.4 board |
+| Air gap, chip to magnet | 8.95 | 9.95 | `encoder_gap` 1.0; AS5600 range 0.5 to 3 mm, datasheet-verify |
+| Magnet Ø6.0 x 2.5 in a Ø6.1 pocket | 9.95 | 12.45 | `magnet_d`, `magnet_t` (Ø5 x 2 fallback) |
+| Pocket floor (printed cap) | 12.45 | 13.65 | 1.2 mm |
+
+The boss is Ø12.0 (bore 9.4 plus 1.3 per side) and runs from the disc's outer face to
+13.65: it projects 11.25 mm past the disc's inner face (2.4) into the hub. The hub's
+free length beyond the motor is 12.8 mm (section 2: 33.0 - 19 - 1.2), so **1.55 mm is
+left** to the motor and bulkhead zone. Radially the boss is 6.0 against the lugs' inner
+radius 7.2 (5 mm lugs on the 12.2 mm bore radius): **1.2 mm spare**. The magnet's back
+face is 2.75 mm from the motor's steel can and the can sits behind the magnet, away from
+the chip; its effect on the angle error is a hand-turn measurement (AGC and linearity),
+not a calculation. Both margins are tight: if they do not close, the fallback is the
+Ø5 x 2 magnet (0.5 mm shorter) and a thinner cap. This section closes on paper only;
+the hand-turn assembly decides.
+
+### Post and wiring groove
+
+- **Post:** one piece with the **far wall plate**, Ø9.0 PETG, axis along x. The plate
+  is a separate part (the post cannot be one piece with a wall already closed around the
+  drum, and it reaches 9 mm inboard past a 0.4 mm side gap): the drum is seated on the
+  motor-side shaft coupling and ring, the boss slides over the post as the plate closes
+  against the frame, and the plate is fixed with M2 screws or clips. It prints plate-down
+  with the post standing, so the journal is round with no overhang.
+- **Sensor board:** round Ø8.4 mm in a shallow pocket at the post tip, chip facing the
+  magnet, held by its own FFC and a dab of adhesive.
+- **FFC:** a 5-way 0.5 mm FFC (~0.3 mm thick) leaves the board's back through a 1.0 x 4.5
+  mm slot in the post, opens sideways at the post's base into a **groove in the far
+  wall's inner face** (5.5 mm wide, 0.6 mm deep, leaving a 0.6 mm wall, A2) and runs
+  straight back (+z) from the axis to the back edge, ~70 mm, to the board's J3. It
+  crosses the rotating disc's face inside 0.4 + 0.6 = 1.0 mm of clearance; the disc's
+  outer face is flat (the pin holes are blind), so nothing catches. The fold at the post
+  base (about 1 mm radius) is the tight spot: check it on the hand-turn assembly.
+- **Magnet:** diametrically magnetised, glued in its pocket, never magnetised along the
+  axis (an axial magnet reads nothing); the pole orientation is irrelevant to the sensor
+  but the unit stores a zero for the assembly (#674 section 5).
 
 ## 8. Print orientation (Bambu X1C, 256 x 256 mm bed)
 
@@ -319,7 +376,9 @@ linked to the board outline (#674). Home flap and θ_m: firmware's concern
   overhang, printed with a support or as a separate ring glued on). The lip's
   lower edge S would be an overhang, so the lip is a separate part printed
   flat on its face (S edge on the bed, which also makes S the sharpest, most
-  reproducible edge) and glued or clipped into the frame.
+  reproducible edge) and glued or clipped into the frame. The far wall is a separate plate printed
+  flat with the post standing; it carries the FFC groove; the back plate carries the plug slot and
+  the registration bosses (section 6).
 - Material: PETG for discs and stop, PLA acceptable for the frame. One colour
   throughout: no AMS needed. The plan has the discs print with 100 % rim
   perimeters (wall count, not infill, sets web strength).
@@ -329,8 +388,10 @@ linked to the board outline (#674). Home flap and θ_m: firmware's concern
 ## 9. Hand-turn test assembly
 
 Drum (both halves) + frame with window, stop and floor guide, **no motor**: a
-3 mm pin in the hub both ends or a coupling with a hand knob replaces the
-motor. Procedure: load 64 flaps; turn the drum by hand; check (a) every flap
+3 mm pin in the hub at the motor end or a coupling with a hand knob replaces the
+motor; the far end runs on the real printed post (a printed slug stands in for the
+sensor board) with a real or dummy magnet in the pocket, and the FFC groove is checked
+with a spare FFC. Procedure: load 64 flaps; turn the drum by hand; check (a) every flap
 seats in its holes, (b) the drum turns freely (no pinch at the floor
 guide, 1e), (c) each flap falls onto the stop one at a time, one per pitch
 (5.625°), (d) the window shows 58 mm with legible split characters. Parameters
@@ -354,8 +415,9 @@ tuned by what fails: hole_slop, g, stop_dz, floor-guide profile.
                       FlapParams for t, W, H, tab_reach, tab_h, pivot_y, so the
                       flap numbers have one source
       feasibility.py  pure: chord, 1a/1b/1c/1e bounds, release overlap. No CAD.
-      drum.py         build123d: discs, hub halves, motor sleeve, magnet pocket
-      frame.py        build123d: shell, window, stop lip, floor guide, bosses
+      drum.py         build123d: discs, hub halves, motor sleeve, axle boss with magnet pocket
+      frame.py        build123d: shell, window, stop lip, floor guide, bosses,
+                      post + FFC groove, plug slot, registration bosses
       assembly.py     hand-turn test assembly (+ coupon plate of hole sizes)
       generate.py     CLI as flaps.generate: --coupon, --test-assembly, --full
       threemf.py      reuse flaps/threemf.py (import, do not copy)
@@ -363,7 +425,8 @@ tuned by what fails: hole_slop, g, stop_dz, floor-guide profile.
       tests/          feasibility numbers pinned (R_p window, o in (0, chord),
                       chord vs hole web), params validation, holes on circle,
                       assembly parts do not intersect, bounding box inside
-                      41.5 x 73 x 95, 3mf valid
+                      41.5 x 73 x 95, 3mf valid, the section 7 stack-up
+                      closes inside the free hub length, groove inside the wall
       README.md
 
 `scripts/check.sh`: `run_mech` runs the existing step for `mechanics/flaps` and
@@ -383,8 +446,12 @@ Wave 2 order: `params` + `feasibility` (pure, testable first) → drum → frame
    the bore is Ø40.4 and does not fit; confirm when the sample arrives (A4).
 2. **1/16 batches:** a batch with a 1/16 gearbox changes `STEPS`, a protocol
    constant (#674 section 4); reject on arrival or accept the shared change.
-3. **Motor side and connector edge:** which side wall carries the motor (the
-   bearing ring goes on that wall) and which short edge the board's bus
-   connector uses (#674).
-4. **Hall magnet and sensor:** copy the current unit's magnet size; the A3144-class
-   sensor sits on a remote tail (#674).
+3. **Motor side:** which side wall carries the motor (the bearing ring goes on that
+   wall; the encoder post, the groove and the far-end bearing go on the other).
+4. **Encoder magnet, post and groove:** the magnet size (Ø6 x 2.5 mm reference, Ø5 x 2
+   mm fallback), the sensor-to-magnet gap and the stack-up of section 7 are unverified,
+   and the AS5600-class figures are datasheet-verify (#674 section 5). The far-end
+   bearing is a printed post on a separate far wall plate, not a steel pin: confirm that
+   direction and the assembly order (drum first, plate closes over the boss).
+5. **Backplane slot and registration bosses:** the plug family and stack height (#674
+   section 6) fix the slot size; `plug_slot` is a placeholder until then.

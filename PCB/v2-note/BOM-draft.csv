@@ -1,37 +1,53 @@
 Group,Name,Designator,Footprint,Quantity,Manufacturer Part,Supplier,Supplier Part,Status,Note
-MCU,ATmega328P (32-pin TQFP or QFN),U1,TQFP-32 7x7 0.8 mm (QFN-32 5x5 as alternative),1,ATmega328P-AU (or -MU),LCSC,TBD-verify,new,Package choice open (spec section 1); extended JLC part
+MCU,ATmega328PB (32-pin TQFP or QFN),U1,TQFP-32 7x7 0.8 mm (QFN-32 5x5 as alternative),1,ATmega328PB-AU (or -MU),LCSC,TBD-verify,new,Round-2 decision; spec section 12 (go with conditions). Pins 3 and 6 are PE0/PE1 here (not power); extended JLC part; stock and price unchecked
 MCU,16 MHz crystal SMD 3.2x2.5,Y1,3.2x2.5 mm,1,16 MHz 18 pF-load class,LCSC,TBD-verify,new,Resonator is the fallback (spec section 2)
 MCU,Load capacitor 18-22 pF C0G,"C3,C4",C0402 or C0603,2,,LCSC,TBD-verify,new,Value follows the crystal load capacitance
-MCU,Decoupling 100nF,"C2,C5,C6",C0805,3,GCM21BR11E104KA01L,LCSC,C521242,carried,v1 part (25 V X7R); 5 V rail only; one per VCC/AVCC pin
-MCU,AREF 100nF,C7,C0805,1,GCM21BR11E104KA01L,LCSC,C521242,carried,Optional; AVCC/AREF decoupling for the vitals ADC reads
+MCU,Decoupling 100nF,"C2,C5",C0805,2,GCM21BR11E104KA01L,LCSC,C521242,carried,v1 part (25 V X7R); 5 V rail only; one per supply pin (VCC pin 4 and AVCC pin 18 on the 328PB)
+MCU,AREF 100nF,C7,C0805,1,GCM21BR11E104KA01L,LCSC,C521242,carried,AREF capacitor; needed by the 1.1 V reference of the 12 V sense (spec section 10)
 MCU,Reset pull-up 10K,R1,R0805,1,RMC080510K1%N,LCSC,C269742,carried,Reset line to 5 V
-MCU,ICSP pads 2x3 (no connector),J1,6 test pads 1.27 mm or Tag-Connect footprint,1,,,,new,Pads only; VCC pad behind an open solder jumper (spec section 7)
+MCU,Programming footprint,J1,Tag-Connect TC2030-class 6 pads 1.27 mm + alignment holes,1,,,,new,Copper only; no part. VCC pad behind an open solder jumper (spec section 7). Pinout per the Tag-Connect AVR ICSP adapter: verify
 MCU,Debug serial test points,"TP1,TP2",test pad,2,,,,new,PD0/PD1 (SERIAL_ENABLE builds)
 Power,Buck converter 12 V to 5 V,U2,SOT-23-6 class,1,"family: 32 V-input sync buck, fixed 5 V",LCSC,TBD-verify,new,Part and current rating follow the motor choice (spec section 3)
 Power,Buck inductor,L1,"4x4 mm shielded, <= 2 mm tall",1,,LCSC,TBD-verify,new,Value and Isat from the buck datasheet
 Power,Buck input capacitor 12 V,C8,C0805 25 V or higher,1,,LCSC,TBD-verify,new,22uF 10 V (C503893) does NOT carry to the 12 V node
 Power,Buck output capacitor,C9,C0805 or C1206,1,CA45-A-10V-22uF-K,LCSC,C503893,carried,v1 part; fine on the 5 V rail only (10 V rating)
-Power,Bulk input capacitor,C1,C0805 50 V,1,GCJ219R71H334KA12D,LCSC,C527609,carried,v1 330 nF 50 V; hot-plug transient damping may need a bigger part (spec section 3)
+Power,HF input capacitor,C1,C0805 50 V,1,GCJ219R71H334KA12D,LCSC,C527609,carried,v1 330 nF 50 V; HF decoupling at the 12 V entry
+Power,Bulk input capacitor 12 V,C11,"SMD polymer or electrolytic, 25 V, <= 5 mm tall",1,47 uF 25 V class,LCSC,TBD-verify,new,Local reservoir for the motor start (spec section 11); about 700 uF per row of 15
 Power,TVS diode 12 V rail,D1,SMA or SOD-123FL,1,,LCSC,TBD-verify,new,Hot-plug and motor-inductive spikes on the bus
-Power,Reverse-polarity P-MOSFET,Q1,SOT-23 or SOT-223 P-channel,1,,LCSC,TBD-verify,new,In the unit's own 12 V branch only (not in the J4-J5 through path); Vds >= 30 V; Vgs max >= 20 V; Rds(on) < 100 mohm at -10 V (spec section 3)
+Power,Reverse-polarity P-MOSFET,Q1,SOT-23 or SOT-223 P-channel,1,,LCSC,TBD-verify,new,In the unit's own 12 V branch only (not in the backplane's through path); Vds >= 30 V; Vgs max >= 20 V; Rds(on) < 100 mohm at -10 V (spec section 3)
 Power,Reverse-polarity gate resistor 10K,R4,R0805,1,RMC080510K1%N,LCSC,C269742,carried,Gate to GND for Q1; v1 10K value
+Sense,12 V sense divider high side 120K,R7,R0805 1%,1,,LCSC,TBD-verify,new,12 V node after Q1 to ADC7; ratio 1/13 with R8 (spec section 10)
+Sense,12 V sense divider low side 10K,R8,R0805 1%,1,RMC080510K1%N,LCSC,C269742,carried,v1 10K value
+Sense,12 V sense filter 100nF,C10,C0805,1,GCM21BR11E104KA01L,LCSC,C521242,carried,At the ADC pin; carries the 9.2 kohm source impedance
 Motor,ULN2003A (SOP-16),U3,SOP-16 10.0x3.9 P1.27,1,ULN2003A,LCSC,C107221,carried,v1 part already SMD; baseline 24BYJ48 12 V unipolar; clamp COM to 12 V
 Motor,Motor connector or pads (5 wire),J2,pads or low-profile 1.25 mm,1,,LCSC,TBD-verify,new,Pin count from the motor (5 unipolar / 4 bipolar); position from #673
 Motor,DRV8833 (alternative to U3),U3-ALT,HTSSOP-16 / WQFN-16,0,DRV8833,LCSC,TBD-verify,alternative,Not populated; only if the bipolar candidate wins in #671
-Motor,TMC2209 (alternative to U3),U3-ALT2,QFN-28 5x5,0,TMC2209,LCSC,TBD-verify,alternative,Not populated; needs a firmware rewrite of motion (spec section 4)
-Hall,Hall switch A3144 class,U4,SOT-23 or TO-92 (on the remote tail board),1,A3144 class (open-collector; same family as the fleet's KY-003),LCSC,TBD-verify,new,Needs >= 4.5 V (5 V rail); magnet pole facing must match; bench-verify with the real magnet
-Hall,Hall pull-up 10K,R2,R0805,1,RMC080510K1%N,LCSC,C269742,carried,v1 value; firmware reads the pin as plain INPUT so the pull-up must be on the board
-Hall,Remote hall pads,J3,3 pads 1.27 mm,1,,,,new,+5 V / GND / OUT; remote hall on a tail of >= 50 mm is required (#673)
-Bus,Bus connector in,J4,5-pin side entry or wire pads (keyed),1,,LCSC,TBD-verify,new,+12 V / GND / SDA / SCL / CHAIN_IN; pin 5 goes to PD3 via R5 and R6; back edge; body up to ~30 mm fits (#673)
-Bus,Bus connector out,J5,5-pin side entry or wire pads (keyed),1,,LCSC,TBD-verify,new,Daisy chain; pins 1-4 wired in parallel with J4; pin 5 is CHAIN_OUT from PD4 (not in parallel)
-Bus,CHAIN_IN series resistor 1K,R5,R0805,1,,LCSC,TBD-verify,new,Between J4 pin 5 and PD3 (spec section 9)
-Bus,CHAIN_IN pull-down 100K,R6,R0805,1,,LCSC,TBD-verify,new,PD3 to GND: unplugged or unpowered neighbour reads deasserted
-UI,Identify LED,D2,LED 0603,1,,LCSC,TBD-verify,new,On PB5 (D13 = LED_BUILTIN): identify blink
+Encoder,Magnetic angle sensor AS5600 class (on the sensor board),U4,SOIC-8,1,AS5600 class (I2C 0x36 on the AS5600),LCSC,TBD-verify,new,On the small sensor board at the post tip inside the hub (spec section 5); 5 V supply; datasheet-verify every figure
+Encoder,Sensor board PCB,SB1,"round 8.4 mm, 0.8 mm, 2 layers",1,,,,new,Separate small PCB; panelled; solder pads for the FFC; its own assembly job at JLC
+Encoder,Sensor board 3V3-pin capacitor,C12,C0603,1,,LCSC,TBD-verify,new,1 uF; on the sensor board
+Encoder,Sensor board decoupling 100nF,C13,C0603,1,,LCSC,TBD-verify,new,On the sensor board
+Encoder,Diametric magnet,M1,"disc, Ø6 x 2.5 mm (Ø5 x 2 mm fallback)",1,diametrically magnetised NdFeB,,,new,Mechanical part sourced with the drum parts; pocket in the drum's far axle boss (#673 section 7); verify field at the gap on the first sample
+Encoder,FFC tail,W1,"5-way 0.5 mm pitch, ~60 mm",1,,,,new,5 V / GND / SDA1 / SCL1 / OUT; length from #673
+Encoder,FFC connector,J3,5-pin FPC 0.5 mm,1,,LCSC,TBD-verify,new,On the unit board; 5 V / GND / SDA1 (PE0) / SCL1 (PE1) / OUT (ADC6 fallback)
+Encoder,TWI1 pull-ups 4.7K,"R9,R10",R0805,2,,LCSC,TBD-verify,new,On the unit board at PE0/PE1
+Plug,Backplane plug 6-pin,J4,1x6 pin header 1.27 mm through the back-wall slot,1,,LCSC,TBD-verify,new,+12 V / GND / SDA / SCL / CHAIN_IN / CHAIN_OUT; part number TBD; stack height per spec section 6; carries only the unit's own ~0.2 A
+Plug,CHAIN_IN series resistor 1K,R5,R0805,1,,LCSC,TBD-verify,new,Between plug CHAIN_IN and PD3 (spec section 9)
+Plug,CHAIN_IN pull-down 100K,R6,R0805,1,,LCSC,TBD-verify,new,PD3 to GND: an empty slot or unpowered neighbour reads deasserted
+Plug,SDA series resistor 47R,R11,R0603 or R0805,1,,LCSC,TBD-verify,new,In the stub to TWI0 SDA; starting value (spec section 11)
+Plug,SCL series resistor 47R,R12,R0603 or R0805,1,,LCSC,TBD-verify,new,In the stub to TWI0 SCL; starting value (spec section 11)
+Plug,ESD array 4-line 5 V,D4,SOT-23-6 or SOT-563 class,1,,LCSC,TBD-verify,new,"SDA / SCL / CHAIN_IN / CHAIN_OUT; <= 3 pF per line (I2C budget, spec section 6)"
+UI,Identify / status LED,D2,LED 0603,1,,LCSC,TBD-verify,new,On PB5 (D13 = LED_BUILTIN): identify and status blink codes
 UI,LED series resistor,R3,R0805,1,,LCSC,TBD-verify,new,>= 1K so it does not load SCK during ICSP
+UI,Power LED,D3,LED 0603,1,,LCSC,TBD-verify,new,Hardwired on the 5 V rail; shows the buck alive when the MCU is not
+UI,Power LED resistor 4.7K,R13,R0805,1,,LCSC,TBD-verify,new,About 0.6 mA: dim by design (45 units draw ~27 mA)
+Backplane,Backplane segment PCB (5 positions),BP,"~207.5 mm x ~20 mm, 2 layers, 2 oz",1,,,,new,"QUANTITY IS PER SEGMENT: 3 segments per row, 9 per wall; one design for all (spec section 6)"
+Backplane,Unit socket,BP-J1..J5,1x6 SMD socket 1.27 mm (~4 mm tall),5,,LCSC,TBD-verify,new,Per segment (5 per segment); backplane routes CHAIN_OUT(k) to CHAIN_IN(k+1)
+Backplane,Segment joint link,BP-JL,7 conductors board-to-board,2,,LCSC,TBD-verify,new,"Per segment (one per end; 12 V and GND doubled for 3 A); family TBD"
+Backplane,Row feed connector,BP-JF,5 conductors,1,,LCSC,TBD-verify,new,Only on the first segment of a row: row feed cable from the controller box (#675)
 Not carried from v1,AMS1117-3.3,U9,,0,AMS1117-3.3,LCSC,C6186,dropped,No 3.3 V rail on the unit
 Not carried from v1,BSS138 level shifter,"Q1,Q2",,0,BSS138,LCSC,C78284,dropped,Shifter moves to the controller (#675)
 Not carried from v1,DIP switch,SW1,,0,DSWB04LHGET,LCSC,C99418,dropped,Address lives only in EEPROM
 Not carried from v1,ESP-01S,U2,,0,ESP-01S,LCSC,C111009,dropped,Row link moves to the controller (#675)
-Not carried from v1,Arduino Nano,U1,,0,,,,dropped,Replaced by the bare ATmega328P
+Not carried from v1,Arduino Nano,U1,,0,,,,dropped,Replaced by the bare ATmega328PB
 Not carried from v1,L7805CV,U3,,0,L7805CV,LCSC,C111887,dropped,Replaced by the buck
-Not carried from v1,JST XH connectors,"U6,U7,U8,U10",,0,B3B-XH-A / B4B-XH-AM / B5B-XH-AM,LCSC,C144394 / C161871 / C161872,dropped,Too tall for the envelope
+Not carried from v1,JST XH connectors,"U6,U7,U8,U10",,0,B3B-XH-A / B4B-XH-AM / B5B-XH-AM,LCSC,C144394 / C161871 / C161872,dropped,Unit cables are gone (row backplane)
