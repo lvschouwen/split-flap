@@ -187,35 +187,40 @@ static WifiTxState onlineLadderAt(uint8_t index, uint32_t& nowMs) {
   nowMs = 1000;
   wifiTxPolicyStep(st, onlineInput(), nowMs);
   st.index = index;
-  if (st.dropFloor > index) st.dropFloor = index;
   nowMs += WIFI_TX_SETTLE_MS;
   return st;
 }
 
 static void test_an_uplink_failure_earns_one_level_and_keeps_it() {
   uint32_t now = 0;
-  WifiTxState st = onlineLadderAt(0, now);
+  WifiTxState st = onlineLadderAt(WIFI_TX_FLOOR_INDEX, now);
   TEST_ASSERT_TRUE(followerLinkOweTxStep(st));
   const WifiTxInput in = onlineInput();
-  TEST_ASSERT_EQUAL_UINT8(1, wifiTxPolicyStep(st, in, now));
+  TEST_ASSERT_EQUAL_UINT8(WIFI_TX_FLOOR_INDEX + 1, wifiTxPolicyStep(st, in, now));
   TEST_ASSERT_TRUE(st.lastReason == WifiTxStepReason::LinkDrop);
-  TEST_ASSERT_EQUAL_UINT8(1, st.dropFloor);
+  TEST_ASSERT_EQUAL_UINT8(WIFI_TX_FLOOR_INDEX + 1, st.dropFloor);
   // A strong signal for longer than the healthy period does not hand it back.
-  TEST_ASSERT_EQUAL_UINT8(1, wifiTxPolicyStep(st, in, now + 1000));
-  TEST_ASSERT_EQUAL_UINT8(1, wifiTxPolicyStep(st, in, now + 2000 + WIFI_TX_HEALTHY_MS));
+  TEST_ASSERT_EQUAL_UINT8(WIFI_TX_FLOOR_INDEX + 1, wifiTxPolicyStep(st, in, now + 1000));
+  TEST_ASSERT_EQUAL_UINT8(WIFI_TX_FLOOR_INDEX + 1, wifiTxPolicyStep(st, in, now + 2000 + WIFI_TX_HEALTHY_MS));
+}
+
+static void test_a_fresh_ladder_sits_at_the_floor() {
+  WifiTxState st;
+  TEST_ASSERT_EQUAL_UINT8(WIFI_TX_FLOOR_INDEX, st.index);
+  TEST_ASSERT_EQUAL_UINT8(WIFI_TX_FLOOR_INDEX, st.dropFloor);
 }
 
 static void test_a_run_of_uplink_failures_climbs_one_level_per_dwell() {
   uint32_t now = 0;
-  WifiTxState st = onlineLadderAt(0, now);
+  WifiTxState st = onlineLadderAt(WIFI_TX_FLOOR_INDEX, now);
   const WifiTxInput in = onlineInput();
   for (int i = 0; i < 10; i++) {  // ten evidence closes, a second apart
     followerLinkOweTxStep(st);
     wifiTxPolicyStep(st, in, now + (uint32_t)i * 1000);
   }
-  TEST_ASSERT_EQUAL_UINT8(1, st.index);
+  TEST_ASSERT_EQUAL_UINT8(WIFI_TX_FLOOR_INDEX + 1, st.index);
   TEST_ASSERT_EQUAL_UINT16(1, st.stepsUp);
-  TEST_ASSERT_EQUAL_UINT8(2, wifiTxPolicyStep(st, in, now + WIFI_TX_UP_DWELL_MS));
+  TEST_ASSERT_EQUAL_UINT8(WIFI_TX_FLOOR_INDEX + 2, wifiTxPolicyStep(st, in, now + WIFI_TX_UP_DWELL_MS));
 }
 
 static void test_an_uplink_failure_at_the_ceiling_owes_nothing() {
@@ -278,6 +283,7 @@ int main(int, char**) {
   RUN_TEST(test_a_stall_without_the_master_heard_is_no_uplink_evidence);
   RUN_TEST(test_a_stall_is_not_measured_across_a_stood_still_or_busy_loop);
   RUN_TEST(test_a_chatty_link_that_is_acknowledged_never_stalls_and_stays_confirmed);
+  RUN_TEST(test_a_fresh_ladder_sits_at_the_floor);
   RUN_TEST(test_an_uplink_failure_earns_one_level_and_keeps_it);
   RUN_TEST(test_a_run_of_uplink_failures_climbs_one_level_per_dwell);
   RUN_TEST(test_an_uplink_failure_at_the_ceiling_owes_nothing);
