@@ -1,5 +1,5 @@
 // Host-side unit tests for shared/WifiTxPolicy.h (#507) — the pure TX-power ladder:
-// every boot starts at the lowest real level and moves one level at a time,
+// every boot starts at the floor and moves one level at a time,
 // up only when the link needs it, never past the phase's ceiling.
 
 #include <ArduinoFake.h>
@@ -13,6 +13,17 @@ void tearDown() {}
 static const int STRONG_RSSI = -50;  // spare at every level
 static const int WEAK_RSSI = -85;    // weak at every level up to the ceiling
 static const int TODAY_RSSI = -73;   // the 2026-10-03 ESP-01 boot (#515)
+
+// A ladder that starts at the bottom of the table with no floor. The step
+// mechanics (join steps, weak window, spare, drop floor) are pinned from there
+// so they stay independent of where the floor sits; the floor itself is
+// pinned by the tests under "the floor".
+static WifiTxState belowFloor() {
+  WifiTxState st;
+  st.index = 0;
+  st.dropFloor = 0;
+  return st;
+}
 
 static WifiTxInput joining() {
   WifiTxInput in;
@@ -82,20 +93,21 @@ static void test_out_of_range_index_clamps_to_the_top_level() {
 
 // --- joining -----------------------------------------------------------------
 
-static void test_boot_starts_at_the_lowest_level() {
+static void test_boot_starts_at_the_floor_with_no_tick_history() {
   WifiTxState st;
-  TEST_ASSERT_EQUAL(0, wifiTxPolicyStep(st, joining(), 1000));
+  TEST_ASSERT_EQUAL(WIFI_TX_FLOOR_INDEX, st.index);
+  TEST_ASSERT_EQUAL(WIFI_TX_FLOOR_INDEX, wifiTxPolicyStep(st, joining(), 1000));
 }
 
 static void test_join_holds_the_level_until_the_step_time() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   wifiTxPolicyStep(st, joining(), 1000);
   TEST_ASSERT_EQUAL(
       0, wifiTxPolicyStep(st, joining(), 1000 + WIFI_TX_JOIN_STEP_MS - 1));
 }
 
 static void test_join_steps_one_level_after_the_step_time() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   wifiTxPolicyStep(st, joining(), 1000);
   TEST_ASSERT_EQUAL(1,
                     wifiTxPolicyStep(st, joining(), 1000 + WIFI_TX_JOIN_STEP_MS));
@@ -104,7 +116,7 @@ static void test_join_steps_one_level_after_the_step_time() {
 static void test_join_never_passes_the_join_ceiling() {
   // An access point that is simply off must not ramp the board up during
   // boot, where the supply margin is thinnest.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   runSeconds(st, joining(), 0, 600000);
   TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX, st.index);
 }
@@ -112,33 +124,33 @@ static void test_join_never_passes_the_join_ceiling() {
 static void test_join_reaches_its_ceiling_inside_the_join_window() {
   // The ladder must leave time to join at the ceiling before WifiPolicy's
   // 30 s window gives up (a join takes ~5 s on the bench).
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   runSeconds(st, joining(), 0, 30000 - 6000);
   TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX, st.index);
 }
 
 static void test_join_never_jumps() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   TEST_ASSERT_EQUAL(1, runSeconds(st, joining(), 0, 600000));
 }
 
 // --- online: stepping up -------------------------------------------------------
 
 static void test_online_keeps_the_level_it_joined_at() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   runSeconds(st, joining(), 0, WIFI_TX_JOIN_STEP_MS);  // -> level 1
   TEST_ASSERT_EQUAL(1, wifiTxPolicyStep(st, online(STRONG_RSSI), 9000));
 }
 
 static void test_strong_link_stays_at_the_lowest_level() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   wifiTxPolicyStep(st, joining(), 0);
   runSeconds(st, online(STRONG_RSSI), 1000, 3600000);
   TEST_ASSERT_EQUAL(0, st.index);
 }
 
 static void test_weak_signal_steps_up_only_after_the_weak_window() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   wifiTxPolicyStep(st, online(WEAK_RSSI), 1000);
   TEST_ASSERT_EQUAL(
       0, wifiTxPolicyStep(st, online(WEAK_RSSI), 1000 + WIFI_TX_WEAK_MS - 1));
@@ -147,7 +159,7 @@ static void test_weak_signal_steps_up_only_after_the_weak_window() {
 }
 
 static void test_a_good_sample_restarts_the_weak_window() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   wifiTxPolicyStep(st, online(WEAK_RSSI), 1000);
   wifiTxPolicyStep(st, online(STRONG_RSSI), 30000);
   TEST_ASSERT_EQUAL(
@@ -157,7 +169,7 @@ static void test_a_good_sample_restarts_the_weak_window() {
 static void test_weak_threshold_follows_the_level() {
   // -64 dBm heard from the access point: too little to be heard back at
   // 2 dBm, enough at 5 dBm — so the ladder climbs exactly one level.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   runSeconds(st, online(-64), 0, 3 * WIFI_TX_WEAK_MS);
   TEST_ASSERT_EQUAL(1, st.index);
 }
@@ -167,7 +179,7 @@ static void test_weak_threshold_follows_the_level() {
 static void test_weak_signal_alone_stops_at_the_join_ceiling() {
   // The estimate is a proxy; it never takes the board past the bench-proven
   // level, however long it stays weak.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   runSeconds(st, online(WEAK_RSSI), 0, 3600000);
   TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX, st.index);
   TEST_ASSERT_EQUAL((int)WifiTxStepReason::WeakSignal, (int)st.lastReason);
@@ -176,18 +188,18 @@ static void test_weak_signal_alone_stops_at_the_join_ceiling() {
 static void test_confirmed_traffic_never_steps_up_on_a_weak_signal() {
   // What the ESP-01 row did: -73 dBm heard, leader pings answered all along.
   // It climbed to 13 dBm; a board that is being answered stays where it is.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   wifiTxPolicyStep(st, joining(), 0);
   runSeconds(st, confirmed(TODAY_RSSI), 1000, 3600000);
   TEST_ASSERT_EQUAL(0, st.index);
   TEST_ASSERT_EQUAL(0, st.stepsUp);
-  WifiTxState worst;
+  WifiTxState worst = belowFloor();
   runSeconds(worst, confirmed(WEAK_RSSI), 0, 3600000);
   TEST_ASSERT_EQUAL(0, worst.index);
 }
 
 static void test_the_same_signal_unconfirmed_climbs_only_to_the_join_ceiling() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   runSeconds(st, online(TODAY_RSSI), 0, 3600000);
   TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX, st.index);
 }
@@ -195,7 +207,7 @@ static void test_the_same_signal_unconfirmed_climbs_only_to_the_join_ceiling() {
 static void test_weak_window_starts_when_confirmation_is_lost() {
   // Confirmed for ten minutes, then the peer goes quiet: the weak window is
   // measured from that moment, not from the first weak sample.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   runSeconds(st, confirmed(WEAK_RSSI), 0, 600000);
   TEST_ASSERT_EQUAL(0, st.index);
   uint32_t lost = 601000;
@@ -208,7 +220,7 @@ static void test_weak_window_starts_when_confirmation_is_lost() {
 
 static void test_a_link_drop_still_earns_a_step_with_confirmed_traffic() {
   // Hard evidence outranks the proxy either way.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   wifiTxPolicyStep(st, confirmed(STRONG_RSSI), 1000);
   uint32_t t = 1000 + WIFI_TX_SETTLE_MS;
   TEST_ASSERT_EQUAL(1, wifiTxPolicyStep(st, linkDown(), t));
@@ -216,7 +228,7 @@ static void test_a_link_drop_still_earns_a_step_with_confirmed_traffic() {
 }
 
 static void test_only_link_drops_reach_the_online_ceiling() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   wifiTxPolicyStep(st, online(STRONG_RSSI), 1000);
   uint32_t t = 1000 + WIFI_TX_SETTLE_MS;
   for (int i = 0; i < 20; i++) {
@@ -243,12 +255,12 @@ static void test_step_reason_names() {
 }
 
 static void test_online_never_jumps() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   TEST_ASSERT_EQUAL(1, runSeconds(st, online(WEAK_RSSI), 0, 3600000));
 }
 
 static void test_step_up_waits_for_idle_units() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   runSeconds(st, online(WEAK_RSSI, false), 0, 10 * WIFI_TX_WEAK_MS);
   TEST_ASSERT_EQUAL(0, st.index);
   // The moment the units go idle the already-earned step lands.
@@ -259,7 +271,7 @@ static void test_step_up_waits_for_idle_units() {
 static void test_no_step_up_while_the_boot_settles() {
   // The first minute online is still the boot window (units homing, supply
   // margin thinnest): a drop there is remembered, not acted on.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   wifiTxPolicyStep(st, online(STRONG_RSSI), 1000);
   TEST_ASSERT_EQUAL(0, wifiTxPolicyStep(st, linkDown(), 2000));
   TEST_ASSERT_EQUAL(
@@ -275,28 +287,28 @@ static uint32_t settle(WifiTxState& st) {
 }
 
 static void test_a_link_drop_steps_up_one_level() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   uint32_t t = settle(st);
   TEST_ASSERT_EQUAL(1, wifiTxPolicyStep(st, linkDown(), t));
 }
 
 static void test_a_long_outage_is_still_one_step() {
   // An access point reboot is one drop, however long it lasts.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   uint32_t t = settle(st);
   runSeconds(st, linkDown(), t, t + 90000);
   TEST_ASSERT_EQUAL(1, st.index);
 }
 
 static void test_a_link_drop_step_waits_for_idle_units() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   uint32_t t = settle(st);
   TEST_ASSERT_EQUAL(0, wifiTxPolicyStep(st, linkDown(false), t));
   TEST_ASSERT_EQUAL(1, wifiTxPolicyStep(st, linkDown(true), t + 1000));
 }
 
 static void test_flapping_link_is_rate_limited_by_the_up_dwell() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   uint32_t t = settle(st);
   wifiTxPolicyStep(st, linkDown(), t);  // -> 1
   wifiTxPolicyStep(st, online(STRONG_RSSI), t + 1000);
@@ -308,7 +320,7 @@ static void test_flapping_link_is_rate_limited_by_the_up_dwell() {
 
 static void test_a_drop_that_recovers_in_the_settle_still_earns_its_step() {
   // A drop is evidence whether or not the link came back by itself.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   uint32_t t = settle(st);
   wifiTxPolicyStep(st, linkDown(), 5000);
   wifiTxPolicyStep(st, online(STRONG_RSSI), 6000);
@@ -318,7 +330,7 @@ static void test_a_drop_that_recovers_in_the_settle_still_earns_its_step() {
 // --- online: stepping down -----------------------------------------------------
 
 static void test_spare_signal_steps_down_only_after_the_healthy_window() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   st.index = 4;
   wifiTxPolicyStep(st, online(STRONG_RSSI), 1000);
   TEST_ASSERT_EQUAL(4, wifiTxPolicyStep(st, online(STRONG_RSSI),
@@ -328,7 +340,7 @@ static void test_spare_signal_steps_down_only_after_the_healthy_window() {
 }
 
 static void test_step_down_never_jumps_and_ends_at_the_lowest_level() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   st.index = WIFI_TX_ONLINE_CEILING_INDEX;
   TEST_ASSERT_EQUAL(1, runSeconds(st, online(STRONG_RSSI), 0,
                                   10 * WIFI_TX_HEALTHY_MS));
@@ -336,7 +348,7 @@ static void test_step_down_never_jumps_and_ends_at_the_lowest_level() {
 }
 
 static void test_a_link_drop_restarts_the_healthy_window() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   st.index = 4;
   wifiTxPolicyStep(st, online(STRONG_RSSI), 1000);
   wifiTxPolicyStep(st, linkDown(), 300000);  // -> 5
@@ -347,7 +359,7 @@ static void test_a_link_drop_restarts_the_healthy_window() {
 static void test_a_drop_at_the_ceiling_does_not_pin_the_level_there() {
   // Nothing higher to step to: the drop is spent, and the level must still
   // come back down once the link is healthy.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   st.index = WIFI_TX_ONLINE_CEILING_INDEX;
   uint32_t t = settle(st);
   wifiTxPolicyStep(st, linkDown(), t);
@@ -360,7 +372,7 @@ static void test_a_drop_at_the_ceiling_does_not_pin_the_level_there() {
 static void test_a_level_earned_by_a_drop_is_kept_for_the_boot() {
   // The signal that judged the lower level spare is the one it dropped at
   // (#639: 2 -> 5 dBm on a drop, back to 2 dBm 15 min later, drops again).
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   uint32_t t = settle(st);
   wifiTxPolicyStep(st, linkDown(), t);  // -> 1
   runSeconds(st, online(STRONG_RSSI), t + 1000, t + 10 * WIFI_TX_HEALTHY_MS);
@@ -370,7 +382,7 @@ static void test_a_level_earned_by_a_drop_is_kept_for_the_boot() {
 
 static void test_step_down_stops_at_the_level_a_drop_earned() {
   // Levels above the drop's (here from the weak estimate) still come down.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   uint32_t t = settle(st);
   wifiTxPolicyStep(st, linkDown(), t);  // -> 1, earned by the drop
   st.index = WIFI_TX_JOIN_CEILING_INDEX;
@@ -381,7 +393,7 @@ static void test_step_down_stops_at_the_level_a_drop_earned() {
 static void test_no_step_down_onto_a_level_that_would_be_weak() {
   // Hysteresis: after climbing for a signal, the same signal must not bring
   // the level straight back down.
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   runSeconds(st, online(-64), 0, 3 * WIFI_TX_WEAK_MS);  // settles at 1
   runSeconds(st, online(-64), 3 * WIFI_TX_WEAK_MS + 1000,
              5 * WIFI_TX_HEALTHY_MS);
@@ -389,10 +401,52 @@ static void test_no_step_down_onto_a_level_that_would_be_weak() {
   TEST_ASSERT_EQUAL(0, st.stepsDown);
 }
 
+// --- the floor (#681) ----------------------------------------------------------
+
+static void test_the_floor_is_8_5_dbm_and_inside_the_ceilings() {
+  TEST_ASSERT_EQUAL(85, wifiTxLevelDbm10(WIFI_TX_FLOOR_INDEX));
+  TEST_ASSERT_TRUE(WIFI_TX_FLOOR_INDEX <= WIFI_TX_JOIN_CEILING_INDEX);
+  TEST_ASSERT_EQUAL(3, WIFI_TX_JOIN_CEILING_INDEX);
+  TEST_ASSERT_EQUAL(5, WIFI_TX_ONLINE_CEILING_INDEX);
+  TEST_ASSERT_EQUAL(WIFI_TX_FLOOR_INDEX, WIFI_TX_PORTAL_INDEX);
+}
+
+static void test_a_default_ladder_joins_and_runs_online_at_the_floor() {
+  WifiTxState st;
+  TEST_ASSERT_EQUAL(0, runSeconds(st, joining(), 0, 600000));
+  TEST_ASSERT_EQUAL(WIFI_TX_FLOOR_INDEX, st.index);
+  TEST_ASSERT_EQUAL(0, st.stepsUp);
+  TEST_ASSERT_EQUAL(0, runSeconds(st, online(WEAK_RSSI), 601000, 3600000));
+  TEST_ASSERT_EQUAL(WIFI_TX_FLOOR_INDEX, st.index);
+}
+
+static void test_spare_never_steps_below_the_floor() {
+  WifiTxState st;
+  st.index = WIFI_TX_ONLINE_CEILING_INDEX;
+  runSeconds(st, online(STRONG_RSSI), 0, 10 * WIFI_TX_HEALTHY_MS);
+  TEST_ASSERT_EQUAL(WIFI_TX_FLOOR_INDEX, st.index);
+  TEST_ASSERT_EQUAL(WIFI_TX_ONLINE_CEILING_INDEX - WIFI_TX_FLOOR_INDEX,
+                    st.stepsDown);
+}
+
+static void test_a_link_drop_from_the_floor_goes_one_level_up() {
+  WifiTxState st;
+  uint32_t t = settle(st);
+  TEST_ASSERT_EQUAL(WIFI_TX_FLOOR_INDEX + 1, wifiTxPolicyStep(st, linkDown(), t));
+}
+
+static void test_the_cap_clamps_into_floor_and_join_ceiling() {
+  TEST_ASSERT_EQUAL(WIFI_TX_FLOOR_INDEX, wifiTxCapIndex(0));
+  TEST_ASSERT_EQUAL(WIFI_TX_FLOOR_INDEX, wifiTxCapIndex(WIFI_TX_FLOOR_INDEX));
+  TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX,
+                    wifiTxCapIndex(WIFI_TX_ONLINE_CEILING_INDEX));
+  TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX, wifiTxCapIndex(200));
+}
+
 // --- portal + bookkeeping ------------------------------------------------------
 
 static void test_portal_runs_at_the_fixed_portal_level() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   WifiTxInput in;
   in.phase = WifiTxPhase::Portal;
   TEST_ASSERT_EQUAL(WIFI_TX_PORTAL_INDEX, wifiTxPolicyStep(st, in, 1000));
@@ -400,7 +454,7 @@ static void test_portal_runs_at_the_fixed_portal_level() {
 }
 
 static void test_steps_are_counted() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   runSeconds(st, online(WEAK_RSSI), 0, 3600000);
   TEST_ASSERT_EQUAL(WIFI_TX_JOIN_CEILING_INDEX, st.stepsUp);
   runSeconds(st, online(STRONG_RSSI), 3601000, 3601000 + 10 * WIFI_TX_HEALTHY_MS);
@@ -409,7 +463,7 @@ static void test_steps_are_counted() {
 }
 
 static void test_survives_millis_rollover() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   uint32_t t0 = 0xFFFFFFFFUL - 20000;
   wifiTxPolicyStep(st, online(WEAK_RSSI), t0);
   TEST_ASSERT_EQUAL(
@@ -421,7 +475,7 @@ static void test_survives_millis_rollover() {
 // --- the phase steps wifiTxPolicyStep is made of ---------------------------
 
 static void test_joining_step_climbs_one_level_per_period_to_the_ceiling() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   TEST_ASSERT_EQUAL_UINT8(0, wifiTxJoiningStep(st, true, 1000));
   TEST_ASSERT_EQUAL_UINT32(1000, st.joinLevelSinceMs);
   TEST_ASSERT_EQUAL_UINT8(0, wifiTxJoiningStep(st, false, 1000 + WIFI_TX_JOIN_STEP_MS - 1));
@@ -433,7 +487,7 @@ static void test_joining_step_climbs_one_level_per_period_to_the_ceiling() {
 }
 
 static void test_link_down_step_owes_a_drop_and_pays_it_when_allowed() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   st.index = 1;
   st.wasLinkUp = true;
   st.weakArmed = true;
@@ -450,7 +504,7 @@ static void test_link_down_step_owes_a_drop_and_pays_it_when_allowed() {
 }
 
 static void test_link_down_step_at_the_ceiling_owes_nothing() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   st.index = WIFI_TX_ONLINE_CEILING_INDEX;
   st.wasLinkUp = true;
   wifiTxLinkDownStep(st, true, false, 0);
@@ -459,7 +513,7 @@ static void test_link_down_step_at_the_ceiling_owes_nothing() {
 }
 
 static void test_weak_step_arms_then_steps_up_after_the_weak_window() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   WifiTxInput in = online(WEAK_RSSI);
   TEST_ASSERT_FALSE(wifiTxWeakStep(st, in, true, 1000));
   TEST_ASSERT_TRUE(st.weakArmed);
@@ -471,7 +525,7 @@ static void test_weak_step_arms_then_steps_up_after_the_weak_window() {
 }
 
 static void test_weak_step_disarms_on_confirmed_traffic() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   st.weakArmed = true;
   TEST_ASSERT_FALSE(wifiTxWeakStep(st, confirmed(WEAK_RSSI), true, 1000000));
   TEST_ASSERT_FALSE(st.weakArmed);
@@ -479,7 +533,7 @@ static void test_weak_step_disarms_on_confirmed_traffic() {
 }
 
 static void test_spare_step_arms_then_steps_down_above_the_drop_floor() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   st.index = 2;
   WifiTxInput in = online(STRONG_RSSI);
   wifiTxSpareStep(st, in, 1000);
@@ -496,7 +550,7 @@ static void test_spare_step_arms_then_steps_down_above_the_drop_floor() {
 }
 
 static void test_online_step_entry_starts_the_settle_window() {
-  WifiTxState st;
+  WifiTxState st = belowFloor();
   st.dropPending = true;
   st.index = 1;
   TEST_ASSERT_EQUAL_UINT8(1, wifiTxOnlineStep(st, online(WEAK_RSSI), true, 2000));
@@ -510,7 +564,7 @@ int main(int, char**) {
   RUN_TEST(test_table_is_the_idf_real_levels_ascending);
   RUN_TEST(test_level_reports_tenths_of_dbm);
   RUN_TEST(test_out_of_range_index_clamps_to_the_top_level);
-  RUN_TEST(test_boot_starts_at_the_lowest_level);
+  RUN_TEST(test_boot_starts_at_the_floor_with_no_tick_history);
   RUN_TEST(test_join_holds_the_level_until_the_step_time);
   RUN_TEST(test_join_steps_one_level_after_the_step_time);
   RUN_TEST(test_join_never_passes_the_join_ceiling);
@@ -544,6 +598,11 @@ int main(int, char**) {
   RUN_TEST(test_a_level_earned_by_a_drop_is_kept_for_the_boot);
   RUN_TEST(test_step_down_stops_at_the_level_a_drop_earned);
   RUN_TEST(test_no_step_down_onto_a_level_that_would_be_weak);
+  RUN_TEST(test_the_floor_is_8_5_dbm_and_inside_the_ceilings);
+  RUN_TEST(test_a_default_ladder_joins_and_runs_online_at_the_floor);
+  RUN_TEST(test_spare_never_steps_below_the_floor);
+  RUN_TEST(test_a_link_drop_from_the_floor_goes_one_level_up);
+  RUN_TEST(test_the_cap_clamps_into_floor_and_join_ceiling);
   RUN_TEST(test_portal_runs_at_the_fixed_portal_level);
   RUN_TEST(test_steps_are_counted);
   RUN_TEST(test_survives_millis_rollover);

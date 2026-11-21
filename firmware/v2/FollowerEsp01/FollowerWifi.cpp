@@ -134,9 +134,7 @@ void followerTxOtaCap(bool on) {
   // which the 30 s thaw and a retry recover; a sagging rail during
   // flash writes is the worse failure.
   uint8_t index = txState.index;
-  if (on && index > WIFI_TX_JOIN_CEILING_INDEX) {
-    index = WIFI_TX_JOIN_CEILING_INDEX;
-  }
+  if (on) index = wifiTxCapIndex(index);
   txApply(index, false);
 }
 

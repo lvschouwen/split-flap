@@ -187,6 +187,7 @@ static WifiTxState onlineLadderAt(uint8_t index, uint32_t& nowMs) {
   nowMs = 1000;
   wifiTxPolicyStep(st, onlineInput(), nowMs);
   st.index = index;
+  if (st.dropFloor > index) st.dropFloor = index;
   nowMs += WIFI_TX_SETTLE_MS;
   return st;
 }

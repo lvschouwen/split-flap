@@ -34,7 +34,7 @@ void followerWifiSetHostName(const String& given);
 void wifiServicesInit(int rowWidth);
 
 // #508: the WiFi TX power ladder (shared WifiTxPolicy.h) — every boot starts
-// at the lowest level and moves one level at a time. The join and the portal
+// at the floor (8.5 dBm) and moves one level at a time. The join and the portal
 // step it inside wifiInit(); loop() calls the tick for the online half.
 void followerTxTick();
 

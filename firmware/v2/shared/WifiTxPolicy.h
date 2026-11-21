@@ -4,9 +4,12 @@
 //
 // TX bursts are the board's own current peak on the 5 V rail it shares with
 // the units; an S3 boot that went straight to the SDK default died on a
-// corrupted instruction fetch (#506). So every boot starts at the lowest real
-// level and moves ONE level at a time: up only when the link needs it, down
-// again after a long healthy period. Nothing is remembered across reboots — a
+// corrupted instruction fetch (#506). So every boot starts at the floor and
+// moves ONE level at a time: up only when the link needs it, down again after
+// a long healthy period, never below the floor. The floor is 8.5 dBm: the
+// level proven on the shared supply (#506), and at 2 dBm the boards dropped
+// where an ESP8266 at the default ~20 dBm on the same access point did not
+// (#668). Nothing is remembered across reboots — a
 // step-up that browns the board out cannot become a boot loop. A level a
 // dropped link earned is kept for the rest of the boot (#639): the signal that
 // judged the level below spare is the one the link dropped at.
@@ -40,6 +43,10 @@ static const uint8_t WIFI_TX_LEVEL_COUNT =
 // climbs past it — an access point that is simply off must not ramp the board
 // up during boot, where the supply margin is thinnest.
 static const uint8_t WIFI_TX_JOIN_CEILING_INDEX = 3;
+// The lowest level a boot starts at and a step-down may reach (see the header).
+static const uint8_t WIFI_TX_FLOOR_INDEX = 3;
+static_assert(WIFI_TX_FLOOR_INDEX <= WIFI_TX_JOIN_CEILING_INDEX,
+              "the floor must not sit above the join ceiling");
 // 13 dBm, until the supply current per level is measured (18 dBm crashed).
 static const uint8_t WIFI_TX_ONLINE_CEILING_INDEX = 5;
 static const uint8_t WIFI_TX_PORTAL_INDEX = 3;
@@ -89,14 +96,16 @@ enum class WifiTxStepReason : uint8_t {
 };
 
 struct WifiTxState {
-  uint8_t index = 0;  // into WIFI_TX_LEVELS_RAW; every boot starts lowest
+  uint8_t index = WIFI_TX_FLOOR_INDEX;  // into WIFI_TX_LEVELS_RAW
   bool started = false;
   WifiTxPhase phase = WifiTxPhase::Joining;
   uint32_t joinLevelSinceMs = 0;
   uint32_t upAllowedAtMs = 0;  // settle / dwell gate for the next up-step
   bool wasLinkUp = false;
   bool dropPending = false;  // a link drop not yet answered with a step
-  uint8_t dropFloor = 0;     // the highest level a drop earned; never below
+  // The lowest level a step-down may reach: the floor, raised to the highest
+  // level a drop earned.
+  uint8_t dropFloor = WIFI_TX_FLOOR_INDEX;
   bool weakArmed = false;
   uint32_t weakSinceMs = 0;
   bool spareArmed = false;
@@ -129,6 +138,13 @@ static inline bool wifiTxReached(uint32_t nowMs, uint32_t tMs) {
 static inline int16_t wifiTxUplinkRaw(int rssiDbm, uint8_t index) {
   return (int16_t)(rssiDbm * 4 + wifiTxLevelRaw(index) -
                    WIFI_TX_AP_ASSUMED_RAW);
+}
+
+// A level held down by an external guard (a firmware upload): capped at the
+// join ceiling, and never below the floor.
+static inline uint8_t wifiTxCapIndex(uint8_t index) {
+  if (index > WIFI_TX_JOIN_CEILING_INDEX) index = WIFI_TX_JOIN_CEILING_INDEX;
+  return index < WIFI_TX_FLOOR_INDEX ? WIFI_TX_FLOOR_INDEX : index;
 }
 
 static inline void wifiTxStepUp(WifiTxState& st, uint32_t nowMs,

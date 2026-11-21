@@ -204,7 +204,7 @@ static void scheduleRestart(const __FlashStringHelper* why) {
 // a plain software restart came back as a brownout with every stepper idle,
 // and a boot that restored full power once online died on a corrupted
 // instruction fetch right after. The radio therefore starts every boot at
-// the lowest level and only ever moves one level at a time (WifiTxPolicy.h,
+// the floor (8.5 dBm) and only ever moves one level at a time (WifiTxPolicy.h,
 // #507). Can only apply after the interface starts, so the RF calibration
 // inside WiFi.mode() still runs at full power.
 static WifiTxState txState;
