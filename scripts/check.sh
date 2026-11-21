@@ -150,7 +150,7 @@ step "code standard gate" "$ROOT" "$VENV/bin/python" -I scripts/check_standard.p
 # esptool package must match the host manifest. Skipped where the tool is absent.
 TC="$HOME/.claude/bin/tc"
 if [[ -x "$TC" ]]; then
-  step "toolchain gate" "$ROOT" "$TC" check "$V2"/{Master,Rescue,Bootloader,FollowerEsp01,Unit}
+  step "toolchain gate" "$ROOT" "$TC" check "$V2"/{Master,Rescue,Bootloader,FollowerEsp01,Unit} "$ROOT/firmware/v1/ESPMaster"
 else
   echo "check: no $TC; toolchain gate skipped"
 fi
