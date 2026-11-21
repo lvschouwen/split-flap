@@ -143,3 +143,8 @@ f4fcbdc b8f637b0681e94d909b0f575e6aca7d304ea2a3af90f2552415ba722ac751ccc
 # platformio.ini and so moves the Unit source head, but not the Nano binary.
 # Measured, both clean builds: identical.
 d244757 683f7073addc63f77ec2839ed5e8750b3bdca4f5343a1266502d74d6be224165
+
+# #681 moved the Unit source head with the TX ladder floor in shared/WifiTxPolicy.h,
+# a header the Nano never compiles. Measured against the staged c142eb3 image,
+# clean build: identical.
+c142eb3 6c48f45d86f8b4134680c4e59b5180f3302e822b4a9f3d8c6aca5a16b78b58d9
