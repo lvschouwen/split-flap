@@ -51,6 +51,8 @@ Install PlatformIO Core once:
 pip install -U platformio
 ```
 
+On a fresh machine, build `firmware/v2/Master` (or run `pio pkg install` there) before `FollowerEsp01`: the follower takes its esptool from `<core>/tools/tool-esptoolpy`, which only exists once a pioarduino 55.03.313 project has installed its packages.
+
 Then, from a project directory:
 
 ```bash

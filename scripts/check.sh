@@ -24,7 +24,7 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/split-flap"
 unset PLATFORMIO_BUILD_CACHE_DIR
 VENV="${SPLITFLAP_CHECK_VENV:-$CACHE/check-venv}"
 LOCK="$CACHE/esptoolpy.lock"
-PY_PINS=(pytest==9.2.0 pyserial==3.5 esptool==5.4.0 grpcio-tools==1.85.1 protobuf==7.36.2 lizard==1.25.1)
+PY_PINS=(pytest==9.2.0 pyserial==3.5 esptool==5.6.0 grpcio-tools==1.85.1 protobuf==7.36.2 lizard==1.25.1)
 ALL_TREES=(unit master rescue follower py mech)
 # mech (#670, #673): the flap and drum generators; its own venv because build123d is large.
 KNOWN_TREES=(unit master rescue follower py mech)
@@ -146,6 +146,14 @@ echo "check: trees: ${trees[*]}"
 ensure_venv "$VENV" "${PY_PINS[@]}"
 # The code standard gate runs for every selection, not only with the py tree.
 step "code standard gate" "$ROOT" "$VENV/bin/python" -I scripts/check_standard.py
+# The maintainer's shared toolchain gate (#684): every v2 env's platform and
+# esptool package must match the host manifest. Skipped where the tool is absent.
+TC="$HOME/.claude/bin/tc"
+if [[ -x "$TC" ]]; then
+  step "toolchain gate" "$ROOT" "$TC" check "$V2"/{Master,Rescue,Bootloader,FollowerEsp01,Unit}
+else
+  echo "check: no $TC; toolchain gate skipped"
+fi
 # Unit first: the drift gate and the Master/Follower bundles read its image.
 for t in "${KNOWN_TREES[@]}"; do
   [[ " ${trees[*]} " == *" $t "* ]] && "run_$t"
